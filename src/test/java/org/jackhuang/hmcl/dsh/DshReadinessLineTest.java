@@ -59,7 +59,7 @@ class DshReadinessLineTest {
     @Test
     void aLanSuffixIsNotMistakenForTheAddress() {
         String line = "dsh web: http://127.0.0.1:3229/?token=" + TOKEN
-                + " (LAN: http://192.168.1.5:3229/?token=" + TOKEN + ")";
+                + " (LAN: http://192.0.2.5:3229/?token=" + TOKEN + ")";
 
         assertEquals("http://127.0.0.1:3229/?token=" + TOKEN,
                 DshProcess.parseWebUrl(line).orElseThrow().toString());
