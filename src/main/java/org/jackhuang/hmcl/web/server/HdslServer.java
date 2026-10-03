@@ -185,8 +185,13 @@ public final class HdslServer {
         WsGateway.install(eventBus, authService, config.auth.disabled, acpSessions);
 
         // The client behind the `/i/*` WebSocket relay; its life is the
-        // server's own.
+        // server's own. Its message limits are raised for the same reason the
+        // server-side ones are (see InstanceProxyWebSocket#MAX_MESSAGE_BYTES):
+        // Jetty's 64 KiB default fails the connection on one session history.
         WebSocketClient proxyWebSocketClient = new WebSocketClient();
+        proxyWebSocketClient.setMaxFrameSize(InstanceProxyWebSocket.MAX_MESSAGE_BYTES);
+        proxyWebSocketClient.setMaxTextMessageSize(InstanceProxyWebSocket.MAX_MESSAGE_BYTES);
+        proxyWebSocketClient.setMaxBinaryMessageSize(InstanceProxyWebSocket.MAX_MESSAGE_BYTES);
 
         // Multipart uploads (a plugin .tgz, a TLS certificate) need a staging
         // directory; 50 MiB caps the upload, anything larger is a 400. A pack
@@ -244,11 +249,19 @@ public final class HdslServer {
         // endpoint. Jakarta endpoint paths are single-segment URI templates
         // and cannot express the multi-segment wildcard `/i/<id>/<rest…>`, so
         // the relay uses the core mapping API, which can.
-        WebSocketUpgradeHandler instanceUpgrades = WebSocketUpgradeHandler.from(server, container ->
-                container.addMapping("/i/*",
-                        (upgradeRequest, upgradeResponse, callback) -> createRelay(
-                                authService, config.auth.disabled, proxyWebSocketClient,
-                                upgradeRequest, upgradeResponse, callback)));
+        WebSocketUpgradeHandler instanceUpgrades = WebSocketUpgradeHandler.from(server, container -> {
+            // Jetty's default frame and message limit is 64 KiB; a dsh payload
+            // (a session history, a tool result) is routinely larger, and the
+            // relay would fail the whole stream with 1009. Raised here as well
+            // as on the client side.
+            container.setMaxFrameSize(InstanceProxyWebSocket.MAX_MESSAGE_BYTES);
+            container.setMaxTextMessageSize(InstanceProxyWebSocket.MAX_MESSAGE_BYTES);
+            container.setMaxBinaryMessageSize(InstanceProxyWebSocket.MAX_MESSAGE_BYTES);
+            container.addMapping("/i/*",
+                    (upgradeRequest, upgradeResponse, callback) -> createRelay(
+                            authService, config.auth.disabled, proxyWebSocketClient,
+                            upgradeRequest, upgradeResponse, callback));
+        });
 
         // The jakarta container's own upgrade filter prepends itself ahead of
         // every servlet filter, so the AuthFilter never sees a `/ws` upgrade

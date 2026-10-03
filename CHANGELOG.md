@@ -18,6 +18,13 @@
   清单与安装的地方。现在启动时把 `<home>/workspace`（镜像里 `/home/hdsl/workspace`，
   可用 `HDSL_WORKSPACE` 覆盖）注册成选中目录，新实例默认落在它上面；该目录一直存在，
   挂不挂由部署决定：不挂是容器内目录，挂了就是宿主目录或命名卷。
+- **dsh 界面「历史加载失败」并一直闪**：报错是 dsh 客户端的
+  `api gateway: Remote stream WebSocket closed（gateway/internal）`。根因在面板的
+  WebSocket 中继：它用的是 Jetty 的默认上限——**单帧 / 单消息 64 KiB**，而 dsh 一份
+  会话历史、一条工具结果轻易超过；超限时中继把整条连接掐断（1009 → 继电器自己报
+  1011），dsh 客户端于是重连、重试，界面就一直闪而历史永远加载不出来。现在两侧
+  （服务端 upgrade 容器与转发用的 WebSocketClient）统一提到 32 MiB（dsh 自己的服务端
+  上限是 100 MiB），并让中继在非正常关闭时写一行日志，下次同类问题在容器日志里可见。
 
 ### 部署
 
@@ -33,6 +40,9 @@
   协议当 `kind` → 400 且点名）。
 - 实机验证：绑定挂载宿主目录后，新建实例记录 `workspace=/home/hdsl/workspace`，
   启动的 dsh 进程 `cwd` 即该目录。
+- 中继上限的 A/B 实测（假 dsh 只吐一个大帧）：修复前单个 1 MiB 帧直接断开
+  （`1011 upstream connection failed`，客户端收到 0 字节）；修复后两个方向都完整
+  收到 `1048576` 字节。
 
 ## v0.1.1 — 2026-10-03
 

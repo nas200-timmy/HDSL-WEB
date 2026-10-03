@@ -51,6 +51,19 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 @NotNullByDefault
 public final class InstanceProxyWebSocket implements Session.Listener.AutoDemanding {
 
+    /// The largest single frame and message the relay moves in either
+    /// direction.
+    ///
+    /// Jetty's default is 64 KiB for both — a limit written for chat-sized
+    /// traffic, and far below what dsh sends: one session history, one tool
+    /// result, one pasted file arrives as a single WebSocket message, and the
+    /// relay would fail the connection with 1009 the moment one exceeded it.
+    /// dsh's own server (node's `ws`) allows 100 MiB per message, so the cap
+    /// here is a bound of the same order rather than a lower one: 32 MiB, which
+    /// covers the payloads a harness produces while still refusing a peer that
+    /// tries to make the panel allocate without limit.
+    public static final long MAX_MESSAGE_BYTES = 32L * 1024 * 1024;
+
     private final WebSocketClient client;
     private final String instanceId;
     private final String targetPath;
@@ -237,9 +250,19 @@ if (error != null || upstreamSession == null) {
 
     /// Closes both ends once: a close frame with the code and reason to the
     /// other side, then the local session itself.
+    ///
+    /// An ending that is not a normal one is logged: without it a relay that
+    /// fails on a payload (the 1009 a message over the limit produces) looks
+    /// from the panel side like a client that simply went away, and the reason
+    /// only exists in the browser's console.
     private void close(int statusCode, String reason) {
         if (!closed.compareAndSet(false, true)) {
             return;
+        }
+        if (statusCode != StatusCode.NORMAL && statusCode != StatusCode.SHUTDOWN
+                && statusCode != StatusCode.NO_CODE) {
+            LOG.info("Relay for instance " + instanceId + " closed: "
+                    + statusCode + (reason == null || reason.isBlank() ? "" : " " + reason));
         }
         Session browserSession = browser;
         Session upstreamSession = upstream;
