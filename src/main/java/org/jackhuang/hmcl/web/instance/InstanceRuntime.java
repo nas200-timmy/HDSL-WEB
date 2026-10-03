@@ -22,10 +22,12 @@ import com.google.gson.JsonObject;
 import org.jackhuang.hmcl.dsh.DshAccount;
 import org.jackhuang.hmcl.dsh.DshException;
 import org.jackhuang.hmcl.dsh.DshInstance;
+import org.jackhuang.hmcl.dsh.DshInstanceManager;
 import org.jackhuang.hmcl.dsh.DshInstanceSettings;
 import org.jackhuang.hmcl.dsh.DshLauncher;
 import org.jackhuang.hmcl.dsh.DshProcess;
 import org.jackhuang.hmcl.dsh.DshProcessManager;
+import org.jackhuang.hmcl.dsh.DshVersionManager;
 import org.jackhuang.hmcl.setting.SettingsManager;
 import org.jackhuang.hmcl.util.logging.LogLine;
 import org.jackhuang.hmcl.web.event.EventBus;
@@ -102,11 +104,20 @@ public final class InstanceRuntime {
     }
 
     /// Reports what an instance is doing, in the wire spelling of the REST and
-    /// WebSocket contracts: STOPPED / STARTING / RUNNING / STOPPING / FAILED.
+    /// WebSocket contracts: NOT_INSTALLED / INSTALLING / STOPPED / STARTING /
+    /// RUNNING / STOPPING / FAILED.
     ///
-    /// FAILED is the one state [DshProcessManager#stateOf] cannot answer: a
-    /// failed process is already out of its registry, so it comes from the
-    /// ending this runtime remembered.
+    /// The order of the checks is the precedence of the answers. A live
+    /// process outranks an install task, because the launch path installs and
+    /// then starts inside one task: while the just-installed process is coming
+    /// up the truthful answer is STARTING, not INSTALLING. FAILED is the one
+    /// state [DshProcessManager#stateOf] cannot answer — a failed process is
+    /// already out of its registry, so it comes from the ending this runtime
+    /// remembered. INSTALLING is not a process state either (it is the install
+    /// task the runtime was told about), and NOT_INSTALLED is read from the
+    /// disk: an instance whose own dsh entry point is missing has nothing to
+    /// launch yet. That check comes before FAILED, so a stale ending never
+    /// masks "there is nothing here to run".
     ///
     /// @param instanceId the instance id
     /// @return the state, never `null`
@@ -118,12 +129,30 @@ public final class InstanceRuntime {
         if (DshProcessManager.isStopping(instanceId)) {
             return "STOPPING";
         }
+        if (tasks.activeInstallLike(instanceId).isPresent()) {
+            return "INSTALLING";
+        }
+        DshInstance instance = DshInstanceManager.find(instanceId);
+        if (instance == null || !DshVersionManager.isInstalled(instance)) {
+            return "NOT_INSTALLED";
+        }
         EndedState last = ended.get(instanceId);
         if (last != null && (last.launchError() != null
                 || (last.process() != null && last.process().state() == DshProcess.State.FAILED))) {
             return "FAILED";
         }
         return "STOPPED";
+    }
+
+    /// Re-announces an instance's current state on its topics.
+    ///
+    /// Installs are the reason this exists: their progress travels as `task`
+    /// events, so without a nudge the state change (into INSTALLING, and out
+    /// of it when the install ends) would only be noticed by the next poll.
+    ///
+    /// @param instanceId the instance id
+    public void announceState(String instanceId) {
+        bus.publish(topics(instanceId), statePayload(instanceId, stateOf(instanceId)));
     }
 
     /// Returns the running process of an instance, if any.

@@ -37,6 +37,7 @@ export function StateBadge({ state }: { state: string }) {
   const st = normState(state);
   if (st === "RUNNING") return <span className="tag running">{stateLabel(st)}</span>;
   if (st === "FAILED") return <span className="tag failed">{stateLabel(st)}</span>;
+  if (st === "NOT_INSTALLED") return <span className="tag">{stateLabel(st)}</span>;
   if (st === "INSTALLING" || st === "STARTING" || st === "STOPPING")
     return <span className="tag warn">{stateLabel(st)}</span>;
   return null;

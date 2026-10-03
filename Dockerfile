@@ -212,18 +212,24 @@ RUN printf '%s\n' \
       '# to the registry the operator configured.' \
       'config_dir="${XDG_CONFIG_HOME:-${HOME:-/home/hdsl}/.config}/pnpm"' \
       'mkdir -p "$config_dir"' \
+      '# Registries are habitually written with a trailing slash (the compose' \
+      '# file suggests one), but corepack joins its own "/pnpm/latest" to the' \
+      '# value: two slashes, and mirrors answer that with 404. Strip it once,' \
+      '# so both readers get the same, working URL.' \
+      'registry="${NPM_CONFIG_REGISTRY:-}"' \
+      'while [ "${registry%/}" != "$registry" ]; do registry="${registry%/}"; done' \
       '{' \
       '  printf "storeDir: %s\n" "${PNPM_STORE_DIR:-/data/pnpm-store}"' \
-      '  if [ -n "${NPM_CONFIG_REGISTRY:-}" ]; then' \
-      '    printf "registry: %s\n" "${NPM_CONFIG_REGISTRY}"' \
+      '  if [ -n "$registry" ]; then' \
+      '    printf "registry: %s\n" "$registry"' \
       '  fi' \
       '} > "$config_dir/config.yaml"' \
       '' \
       '# Corepack downloads the pnpm binary itself from its own registry' \
       '# setting, which the pnpm config file does not cover. Point corepack' \
       '# at the same mirror when one was configured.' \
-      'if [ -n "${NPM_CONFIG_REGISTRY:-}" ] && [ -z "${COREPACK_NPM_REGISTRY:-}" ]; then' \
-      '  COREPACK_NPM_REGISTRY="${NPM_CONFIG_REGISTRY}"' \
+      'if [ -n "$registry" ] && [ -z "${COREPACK_NPM_REGISTRY:-}" ]; then' \
+      '  COREPACK_NPM_REGISTRY="$registry"' \
       '  export COREPACK_NPM_REGISTRY' \
       'fi' \
       '' \
@@ -239,10 +245,15 @@ RUN printf '%s\n' \
 #                       config.yaml by the entrypoint
 # PNPM_STORE_DIR  pnpm's shared store, inside the volume so instances hard-link
 #                 from it instead of copying (same filesystem)
+# LANG            without it the JVM's console encoding is ANSI_X3.4-1968, and
+#                 every Chinese log line — the install failures among them —
+#                 reaches `docker logs` as ?????. C.UTF-8 is built into Debian's
+#                 glibc, so this costs nothing.
 ENV HDSL_DATA=/data \
     HDSL_PORT=3080 \
     NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
     PNPM_STORE_DIR=/data/pnpm-store \
+    LANG=C.UTF-8 \
     HOME=/home/hdsl
 
 VOLUME ["/data"]

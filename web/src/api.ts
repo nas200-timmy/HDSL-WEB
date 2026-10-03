@@ -114,7 +114,7 @@ export const api = {
   getInstance: (id: string) => request<Instance>(`/api/instances/${id}`),
 
   createInstance: (body: CreateInstanceBody) =>
-    request<{ instance: Instance }>("/api/instances", jsonInit("POST", body)),
+    request<{ instance: Instance; installTaskId?: string }>("/api/instances", jsonInit("POST", body)),
 
   patchInstance: (id: string, body: PatchInstanceBody) =>
     request<{ instance?: Instance }>(`/api/instances/${id}`, jsonInit("PATCH", body)),

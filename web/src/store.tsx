@@ -318,14 +318,18 @@ export function upsertInstance(inst: Instance): void {
 
 /**
  * 找到属于该实例的"当前任务"。
- * 契约中 task 事件不带实例 id，因此优先按 kind 包含实例 id 匹配，
- * 否则退回"最近活跃的非终态任务"。仅在安装中/启动中等过渡视图里调用。
+ *
+ * 归属按任务自带的 instance 字段精确匹配（WS task 事件与 REST /api/tasks
+ * 都带它）。旧实现按 `kind.includes(id)` 猜，而 kind 只是 "install"、
+ * "pack-install" 这类名字，永远匹配不上，于是退化成"最近活跃的任务"——
+ * 并发安装时进度和取消会串到别的实例上。
  */
 export function findTaskForInstance(instanceId: string): TaskRec | null {
   const all = Object.values(getState().tasks);
   if (!all.length) return null;
-  const byKind = all.filter((t) => t.kind.includes(instanceId));
-  const pool = byKind.length > 0 ? byKind : all;
+  const mine = all.filter((t) => t.instance === instanceId);
+  const pool = mine.length > 0 ? mine : all.filter((t) => t.instance == null);
+  if (!pool.length) return null;
   const active = pool.filter((t) => !isTerminalTaskState(t.state));
   const candidates = (active.length > 0 ? active : pool).slice().sort((a, b) => b.seenAt - a.seenAt);
   return candidates[0] ?? null;
@@ -399,7 +403,10 @@ export function applyWsEvent(evt: WsEvent): void {
           state: evt.state,
           message: evt.message ?? prev?.message,
           fraction: typeof evt.fraction === "number" ? evt.fraction : prev?.fraction,
-          error: prev?.error,
+          // 失败原因：终态事件带着 error，必须落库，否则安装失败只剩「卡在安装中」
+          error: evt.error ?? prev?.error,
+          // 任务归属的实例：安装进度按它归属（WS 与 REST 都带）
+          instance: evt.instance ?? prev?.instance,
           // 审批信息：等待审批期间保留，进入其它状态后清除
           approval: evt.approval ?? (waiting ? prev?.approval : undefined),
           // 完成结果（整合包 instanceId / 导出 filename）：WS 未带时保留 REST 打底值

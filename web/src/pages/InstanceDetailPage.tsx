@@ -191,10 +191,18 @@ export function InstanceDetailPage() {
         ? prev
         : next,
     );
-    if (!installVersion) setInstallVersion(instance.version);
-    if (!reinstallVersion) setReinstallVersion(instance.version);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instance?.id, instance?.name, instance?.homeMode, instance?.portMode, instance?.port, instance?.account, formDirty]);
+
+  // 版本选择器的初值跟随实例：路由 /instances/:id 不会重挂组件，换实例或实例
+  // 版本变化时必须重置，否则会把上一个实例的版本当成这个实例的「重装」目标
+  // 提交给后端 —— 版本漂移就是这么产生的。
+  useEffect(() => {
+    if (!instance) return;
+    setInstallVersion(instance.version);
+    setReinstallVersion(instance.version);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instance?.id, instance?.version]);
 
   const task = useMemo(() => findTaskForInstance(id), [s.tasks, id]);
   const st = normState(instance?.state);
@@ -312,12 +320,18 @@ export function InstanceDetailPage() {
 
   const overview = (() => {
     switch (st) {
-      case "NOT_INSTALLED":
+      case "NOT_INSTALLED": {
+        // 上一次安装为什么失败：任务终态带 error，详情接口也留了
+        // installProgress —— 不显示的话，用户只能看到"没装上"。
+        const failure =
+          task?.error
+          ?? (instance.installProgress?.state === "failed" ? instance.installProgress.message : null);
         return (
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div className="hint info" style={{ margin: 0 }}>
-              该实例尚未安装 dsh 运行时，选择版本后开始安装
+              该实例尚未安装 dsh 运行时：可以只安装，也可以「安装并启动」，装好会自动拉起
             </div>
+            {failure && <div className="hint error">{failure}</div>}
             <div style={{ display: "flex", gap: 8 }}>
               <VersionSelect
                 value={installVersion || instance.version}
@@ -331,9 +345,17 @@ export function InstanceDetailPage() {
               >
                 {installBusy ? "正在提交…" : I18N["dsh.install.start"]}
               </button>
+              <button
+                className="btn btn-outline ripple-host"
+                disabled={installBusy}
+                onClick={() => void launchInstance(instance)}
+              >
+                安装并启动
+              </button>
             </div>
           </div>
         );
+      }
       case "INSTALLING":
         return (
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -717,6 +739,11 @@ export function InstanceDetailPage() {
               <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
                 选择要安装（或更换）的 dsh 运行时版本，安装过程可在「日志」页查看。
               </div>
+              {running && (
+                <div className="hint warning" style={{ margin: 0 }}>
+                  实例正在运行：换版本要先停止，否则后端会拒绝（别在进程跑着的时候换文件）
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8 }}>
                 <VersionSelect
                   value={reinstallVersion || instance.version}
@@ -725,7 +752,7 @@ export function InstanceDetailPage() {
                 />
                 <button
                   className="btn btn-raised ripple-host"
-                  disabled={installBusy}
+                  disabled={installBusy || st === "RUNNING" || st === "STARTING" || st === "STOPPING"}
                   onClick={() => void doInstall(reinstallVersion || instance.version)}
                 >
                   {installBusy ? "正在提交…" : I18N["dsh.install.start"]}

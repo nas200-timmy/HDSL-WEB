@@ -9,6 +9,15 @@
 # so pack installs run end-to-end in tests with no network and no 400 MB
 # download. Every other call, and every call while the marker is absent, is
 # delegated to the real pnpm found further down PATH.
+#
+# The stub reports the version the manifest asked for, exactly as pnpm would:
+# the panel reads it back from the installed package.json and refuses to
+# record anything else. Two versions are special, because a stub is the only
+# way to stage what a misbehaving registry would do:
+#
+#   9.9.9-slow      waits three seconds, so a test can watch INSTALLING
+#   9.9.9-mismatch  lays down 0.0.0-other, so a test can watch the read-back
+#                   guard refuse the version
 
 if [ -n "$HDSL_FAKE_PNPM_MARKER" ] && [ -f "$HDSL_FAKE_PNPM_MARKER" ] && [ "$1" = "install" ]; then
     dir=""
@@ -20,11 +29,17 @@ if [ -n "$HDSL_FAKE_PNPM_MARKER" ] && [ -f "$HDSL_FAKE_PNPM_MARKER" ] && [ "$1" 
         prev="$arg"
     done
     if [ -n "$dir" ]; then
+        version=$(sed -n 's/.*"@deepseek-ai\/dsh"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$dir/package.json" 2>/dev/null | head -1)
+        [ -n "$version" ] || version="0.0.0-stub"
+        case "$version" in
+            9.9.9-slow) sleep 3 ;;
+            9.9.9-mismatch) version="0.0.0-other" ;;
+        esac
         pkg="$dir/node_modules/@deepseek-ai/dsh"
         boot="$dir/node_modules/@deepseek-ai/dsh-app-boot"
         mkdir -p "$pkg/lib" "$boot/lib"
-        printf '%s\n' '{"name":"@deepseek-ai/dsh","version":"0.0.0-stub","private":true}' > "$pkg/package.json"
-        printf '%s\n' '{"name":"@deepseek-ai/dsh-app-boot","version":"0.0.0-stub","private":true}' > "$boot/package.json"
+        printf '{"name":"@deepseek-ai/dsh","version":"%s","private":true}\n' "$version" > "$pkg/package.json"
+        printf '{"name":"@deepseek-ai/dsh-app-boot","version":"%s","private":true}\n' "$version" > "$boot/package.json"
         cat > "$pkg/lib/bin.js" <<'STUB'
 const [, , ...args] = process.argv;
 if (args.includes("--help")) {

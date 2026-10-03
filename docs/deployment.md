@@ -274,3 +274,26 @@ docker compose build --build-arg RELEASE_VERSION=0.2.0
 - 升级前建议按上面第 3 节做一次备份。
 - 回滚就是把旧 tag 的镜像重新 `up -d`；如果新版本写过 `server.yaml` 的新字段，旧版本会给出
   「unknown key … ignored」警告而不影响启动。
+
+## 6. 自签证书与容器健康检查（`Invalid SNI`）
+
+面板启用 HTTPS、而证书的主机名是 `dsh.example.com` 这类域名时，`curl https://127.0.0.1:3080/api/health`
+这种「按地址访问」的请求不带 SNI；Jetty 默认的 SNI 主机校验会把它判成 `400 Invalid SNI`，
+于是容器健康检查一直失败、`docker compose ps` 里永远 `unhealthy`（服务其实是好的）。
+
+HDSL-web 已经把这项校验关掉——单证书面板，这个校验只会误伤本机探针：
+
+```java
+// web/server/HdslServer.java：两个 TLS 连接器共用的定制器
+customizer.setSniHostCheck(false);   // sniRequired 保持默认 false
+```
+
+所以 compose 里的健康检查可以直接写 `https://127.0.0.1:${HDSL_PORT}/api/health`。
+若你的部署里探针仍然失败，退一步也可以让探针带上证书里的主机名：
+
+```bash
+curl -fsSk --resolve dsh.example.com:3080:127.0.0.1 https://dsh.example.com:3080/api/health
+```
+
+排查时先手动跑一次上面的命令：返回 `{"status":"ok"}` 就说明服务没问题，是探针的 SNI 不对。
+

@@ -14,6 +14,8 @@
 
 - 交付形态：**一个可执行 fat jar**（`java -jar hdsl-web.jar`）+ 一个 Debian 容器镜像。
 - jar 之外只需两样东西：**JDK 21+** 和 **Node ^22.19.0 || >=24.0.0 + pnpm**（dsh 由 pnpm 安装、由 node 运行）。
+- 启动器行为：**创建即安装**（`POST /api/instances` 默认 `autoInstall:true`），**未安装的实例点「启动」会先装再启**；
+  进度与失败原因都显示在面板上，失败还会写进容器日志。细节见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md)。
 
 <details>
 <summary>更多截图（初始化引导 / 实例列表 / 下载 / 设置）</summary>

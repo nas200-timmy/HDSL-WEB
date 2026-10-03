@@ -274,7 +274,7 @@ class AccountApiTest {
             String name = json(createdAccount).getAsJsonObject("account").get("name").getAsString();
 
             HttpResponse<String> createdInstance = post(client, base + "/api/instances",
-                    "{\"name\":\"with-account\",\"version\":\"0.1.7-rc.1\"}");
+                    "{\"name\":\"with-account\",\"version\":\"0.1.7-rc.1\",\"autoInstall\":false}");
             assertEquals(201, createdInstance.statusCode());
             JsonObject instanceJson = json(createdInstance).getAsJsonObject("instance");
             String id = instanceJson.get("id").getAsString();

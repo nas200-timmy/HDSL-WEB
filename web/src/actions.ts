@@ -7,19 +7,23 @@ import { errMsg } from "./utils";
 /**
  * 启动流程：
  * 1. 点击瞬间同步 window.open("about:blank")（popup blocker 豁免）并保存引用；
- * 2. POST launch；成功后实例状态乐观置为 STARTING；
+ * 2. POST launch；成功后实例状态乐观置为 STARTING（后端回答 installing 时说明
+ *    该实例还没装：它会先装再启动，这里就置 INSTALLING，弹窗继续等 RUNNING）；
  * 3. store 收到 RUNNING + url 的 WS 事件后自动把弹窗导航到 /i/<id>/?token=…。
  */
 export async function launchInstance(inst: Instance, onSubmitted?: () => void): Promise<boolean> {
   const win = beginLaunch(inst.id);
   try {
-    await api.launch(inst.id);
-    patchInstanceLocal(inst.id, { state: "STARTING" });
+    const r = await api.launch(inst.id);
+    const installing = r.state === "installing";
+    patchInstanceLocal(inst.id, { state: installing ? "INSTALLING" : "STARTING" });
     toast(
       "info",
-      win
-        ? `正在启动「${inst.name}」，就绪后将自动打开 dsh 标签页`
-        : "正在启动…（请允许浏览器弹窗，以便就绪后自动打开 dsh）",
+      installing
+        ? `「${inst.name}」尚未安装 dsh，正在自动安装，装好后会直接启动`
+        : win
+          ? `正在启动「${inst.name}」，就绪后将自动打开 dsh 标签页`
+          : "正在启动…（请允许浏览器弹窗，以便就绪后自动打开 dsh）",
     );
     onSubmitted?.();
     return true;

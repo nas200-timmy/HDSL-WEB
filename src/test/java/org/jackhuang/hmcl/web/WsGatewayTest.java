@@ -220,7 +220,7 @@ class WsGatewayTest {
             TestSession all = connect(running.port(), cookie);
 
             HttpResponse<String> createdResponse = api(base, cookie, "POST", "/api/instances",
-                    "{\"name\":\"" + INSTANCE + "\",\"version\":\"0.1.7-rc.1\"}");
+                    "{\"name\":\"" + INSTANCE + "\",\"version\":\"0.1.7-rc.1\",\"autoInstall\":false}");
             assertEquals(201, createdResponse.statusCode());
             String id = JsonParser.parseString(createdResponse.body()).getAsJsonObject().getAsJsonObject("instance").get("id").getAsString();
             created.add(id);
@@ -333,7 +333,7 @@ class WsGatewayTest {
             Thread.sleep(200);
 
             HttpResponse<String> createdResponse = api(base, cookie, "POST", "/api/instances",
-                    "{\"name\":\"" + INSTANCE + "\",\"version\":\"0.1.7-rc.1\"}");
+                    "{\"name\":\"" + INSTANCE + "\",\"version\":\"0.1.7-rc.1\",\"autoInstall\":false}");
             assertEquals(201, createdResponse.statusCode());
             String id = JsonParser.parseString(createdResponse.body()).getAsJsonObject().getAsJsonObject("instance").get("id").getAsString();
             created.add(id);
@@ -421,7 +421,7 @@ class WsGatewayTest {
 
     private String createInstance(String base, String cookie, String name) throws Exception {
         HttpResponse<String> response = api(base, cookie, "POST", "/api/instances",
-                "{\"name\":\"" + name + "\",\"version\":\"0.1.7-rc.1\"}");
+                "{\"name\":\"" + name + "\",\"version\":\"0.1.7-rc.1\",\"autoInstall\":false}");
         assertEquals(201, response.statusCode());
         String id = JsonParser.parseString(response.body()).getAsJsonObject().getAsJsonObject("instance").get("id").getAsString();
         created.add(id);

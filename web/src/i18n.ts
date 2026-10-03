@@ -74,6 +74,7 @@ export const I18N = {
   "dsh.instance.name": "实例名称",
   "dsh.instance.name.empty": "名称不能为空",
   "dsh.instance.created": "已创建 %s",
+  "dsh.instance.created.installing": "已创建 %s，正在自动安装 dsh…",
   "dsh.instance.icon": "图标",
   "dsh.instance.folders": "目录",
   "dsh.instance.running": "运行中",

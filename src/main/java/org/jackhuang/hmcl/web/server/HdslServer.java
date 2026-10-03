@@ -153,7 +153,7 @@ public final class HdslServer {
             HttpConfiguration httpsConfig = new HttpConfiguration(httpConfig);
             httpsConfig.setSecureScheme("https");
             httpsConfig.setSecurePort(config.port);
-            httpsConfig.addCustomizer(new SecureRequestCustomizer());
+            httpsConfig.addCustomizer(secureRequestCustomizer());
             mainConnector = new ServerConnector(server, ssl, new HttpConnectionFactory(httpsConfig));
         } else {
             mainConnector = new ServerConnector(server, new HttpConnectionFactory(httpConfig));
@@ -414,6 +414,21 @@ public final class HdslServer {
         }
     }
 
+    /// The customizer both TLS connectors install.
+    ///
+    /// Its SNI host check is deliberately off. The panel serves exactly one
+    /// identity, so the check has nothing to protect — but it does turn a
+    /// probe that reaches the port by address (`curl https://127.0.0.1:…`,
+    /// which sends no SNI and therefore matches no certificate in the
+    /// keystore) into a 400 `Invalid SNI`, which is how the container's own
+    /// health check kept failing while the server was perfectly healthy.
+    /// `sniRequired` stays at its default `false`.
+    private static SecureRequestCustomizer secureRequestCustomizer() {
+        SecureRequestCustomizer customizer = new SecureRequestCustomizer();
+        customizer.setSniHostCheck(false);
+        return customizer;
+    }
+
     /// Switches a plain-HTTP server to TLS at runtime: the plain connector is
     /// gracefully shut down — its accept socket closes immediately (an
     /// interrupted `accept()` closes the channel), freeing the port, while the
@@ -447,7 +462,7 @@ public final class HdslServer {
         HttpConfiguration httpsConfig = new HttpConfiguration(baseHttpConfig);
         httpsConfig.setSecureScheme("https");
         httpsConfig.setSecurePort(port);
-        httpsConfig.addCustomizer(new SecureRequestCustomizer());
+        httpsConfig.addCustomizer(secureRequestCustomizer());
         ServerConnector tlsConnector = new ServerConnector(server, ssl, new HttpConnectionFactory(httpsConfig));
         tlsConnector.setHost(host);
         tlsConnector.setPort(port);

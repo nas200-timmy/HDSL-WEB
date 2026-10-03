@@ -79,11 +79,15 @@ public final class TaskService {
     public record ApprovalInfo(String kind, List<String> keys) {
     }
 
-    /// The immutable view of a task, as `/api/tasks` reports it. `approval` is
+    /// The immutable view of a task, as `/api/tasks` reports it. `instanceId`
+    /// is the instance the task belongs to, or null for global work — the
+    /// panel attributes install progress by it, so it travels with every
+    /// snapshot and not only with the `task` event. `approval` is
     /// present only while the state is `waiting_approval`; `result` only when
     /// the work attached one (a pack install's `instanceId`, an export's
     /// `filename`) — it is the machine-readable half of the done message.
-    public record TaskInfo(String id, String kind, String state, String message, double fraction,
+    public record TaskInfo(String id, String kind, @Nullable String instanceId, String state, String message,
+                           double fraction,
                            @Nullable String error, @Nullable ApprovalInfo approval,
                            @Nullable JsonObject result) {
     }
@@ -222,7 +226,7 @@ public final class TaskService {
         }
 
         private TaskInfo snapshot() {
-            return new TaskInfo(id, kind, state.wireName(), message, fraction, error, approval, result);
+            return new TaskInfo(id, kind, instanceId, state.wireName(), message, fraction, error, approval, result);
         }
     }
 

@@ -56,12 +56,17 @@ import java.util.Locale;
 /// The instance half of the REST surface, mapped at `/api/instances/*`:
 ///
 /// - `GET    /api/instances`            — list
-/// - `POST   /api/instances`            — create `{name, version, homeMode?, portMode?, port?, gameDirectoryId?}`
+/// - `POST   /api/instances`            — create `{name, version, homeMode?, portMode?, port?, gameDirectoryId?, autoInstall?}`
+///   and, unless `autoInstall` is false, start installing the version right
+///   away: the answer carries the instance and `installTaskId`. A launcher's
+///   "new instance" is meant to be run, not to sit as an empty manifest.
 /// - `GET    /api/instances/{id}`       — detail, including `installProgress` and `account`
 /// - `PATCH  /api/instances/{id}`       — edit `{name?, homeMode?, portMode?, port?, autoPort?, account?}`
 /// - `DELETE /api/instances/{id}`       — remove (refused while running)
 /// - `POST   /api/instances/{id}/install` — install a version, 202 `{taskId}`
-/// - `POST   /api/instances/{id}/launch`  — start, 202 `{state}`
+/// - `POST   /api/instances/{id}/launch`  — start, 202 `{state}`; an instance
+///   that is not installed yet is installed first and launched when pnpm is
+///   done (202 `{state: "installing", taskId}`), unless `autoInstall` is false
 /// - `POST   /api/instances/{id}/stop`    — stop the process tree, 202 `{state}`
 /// - `GET    /api/instances/{id}/logs`    — the retained output, `?tail=N`
 /// - `GET    /api/instances/{id}/open`    — the running URL with its token
@@ -203,8 +208,23 @@ public final class InstancesApiServlet extends HttpServlet {
         }
 
         runtime.announceCreated(instance);
+
         JsonObject created = new JsonObject();
         created.add("instance", instanceBody(instance));
+        // The launcher behaviour: "new instance" means "I want to run this", so
+        // the install starts here instead of waiting for a second click on the
+        // detail page. The instance already exists when this runs, so a failure
+        // leaves it in place with the reason on its detail page.
+        if (!Boolean.FALSE.equals(boolField(body, "autoInstall"))) {
+            try {
+                TaskService.Task task = submitInstall(instance, version, null);
+                created.addProperty("installTaskId", task.id());
+            } catch (TaskService.InstanceBusyException e) {
+                // The instance is still created; only the head start is lost.
+                org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                        "Could not auto-install " + id + ": " + e.getMessage());
+            }
+        }
         Json.writePreservingNulls(response, HttpServletResponse.SC_CREATED, created);
     }
 
@@ -258,6 +278,14 @@ public final class InstancesApiServlet extends HttpServlet {
 
         String name = stringField(body, "name");
         if (name != null && !name.isBlank() && !name.equals(instance.id())) {
+            // Renaming moves the instance directory; an install is writing into
+            // it right now, so the rename would pull the ground out from under
+            // pnpm. Other edits are fine while pnpm runs.
+            if (state.equals("INSTALLING")) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT,
+                        "install in progress; rename once it is done");
+                return;
+            }
             instance = DshInstanceManager.rename(id, uniqueId(name));
             runtime.forget(id);
         }
@@ -354,6 +382,9 @@ public final class InstancesApiServlet extends HttpServlet {
 
     // ---------------------------------------------------------------- install --
 
+    /// How many lines of pnpm output a failure message carries.
+    private static final int INSTALL_TAIL_LINES = 20;
+
     private void install(HttpServletRequest request, HttpServletResponse response, String id)
             throws IOException {
         JsonObject body = body(request, response);
@@ -370,32 +401,163 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
             return;
         }
+        String state = runtime.stateOf(id);
+        if (state.equals("RUNNING") || state.equals("STARTING") || state.equals("STOPPING")) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "stop the instance before changing its version");
+            return;
+        }
         if (version.equals(instance.version()) && DshVersionManager.isInstalled(instance)) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "已安装该版本");
             return;
         }
         try {
-            TaskService.Task[] holder = new TaskService.Task[1];
-            TaskService.Task task = tasks.submit("install", id, () -> {
-                org.jackhuang.hmcl.dsh.DshInstallProgress progress =
-                        new org.jackhuang.hmcl.dsh.DshInstallProgress();
-                // The holder lets the progress listener reach the task whose
-                // submission created this lambda.
-                progress.addListener(p -> holder[0].update(p.getMessage(), p.getFraction()));
-                DshVersionManager.install(instance, version, progress::accept);
-                if (!version.equals(instance.version())) {
-                    DshInstance updated = instance.withVersion(version);
-                    DshInstanceManager.update(updated);
-                    runtime.announceUpdated(updated);
-                }
-                return "Installed " + version;
-            });
-            holder[0] = task;
+            TaskService.Task task = submitInstall(instance, version, null);
             JsonObject result = new JsonObject();
             result.addProperty("taskId", task.id());
             Json.write(response, HttpServletResponse.SC_ACCEPTED, result);
         } catch (TaskService.InstanceBusyException e) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+        }
+    }
+
+    /// Submits the install task every entry point shares: pnpm runs on the
+    /// task pool, its output drives the task's progress, and the manifest is
+    /// only moved to `version` after the disk agrees that is what was
+    /// installed. The last output lines ride along with a failure, so the
+    /// reason survives even when the registry is what misbehaved.
+    ///
+    /// @param instance    the instance
+    /// @param version     the version to install
+    /// @param onInstalled run on success, still inside the task — the launch
+    ///                    path uses it to start what it has just installed;
+    ///                    may be null
+    /// @return the submitted task
+    /// @throws TaskService.InstanceBusyException when an install is already in flight
+    private TaskService.Task submitInstall(DshInstance instance, String version,
+                                          @Nullable java.util.function.Consumer<DshInstance> onInstalled) {
+        String id = instance.id();
+        TaskService.Task[] holder = new TaskService.Task[1];
+        java.util.ArrayDeque<String> tail = new java.util.ArrayDeque<>();
+        TaskService.Task task = tasks.submit("install", id, () -> {
+            org.jackhuang.hmcl.dsh.DshInstallProgress progress =
+                    new org.jackhuang.hmcl.dsh.DshInstallProgress();
+            // The holder lets the progress listener reach the task whose
+            // submission created this lambda; the tail is what a failure will
+            // be explained with.
+            progress.addListener(p -> {
+                if (p.getMessage() != null && !p.getMessage().isBlank()) {
+                    if (tail.size() >= INSTALL_TAIL_LINES) {
+                        tail.removeFirst();
+                    }
+                    tail.addLast(p.getMessage().trim());
+                }
+                // The task may still be in flight to the pool while the first
+                // line arrives; a missing holder just means nobody to tell yet.
+                TaskService.Task owner = holder[0];
+                if (owner != null) {
+                    owner.update(p.getMessage(), p.getFraction());
+                }
+            });
+            try {
+                DshVersionManager.install(instance, version, progress::accept);
+            } catch (DshException | RuntimeException e) {
+                throw failedInstall(id, version, tail, e.getMessage(), e);
+            }
+            // pnpm succeeded — but the manifest must describe the disk, not the
+            // request. A successful run that landed something else (a registry
+            // serving a different tarball, a store gone strange) is recorded as
+            // what it is and reported as a failure: claiming the requested
+            // version here is exactly how an instance comes to lie about what
+            // it runs.
+            String actual = installedVersion(instance);
+            if (actual == null) {
+                throw failedInstall(id, version, tail,
+                        "pnpm reported success, but the installed version could not be read back", null);
+            }
+            DshInstance installed = instance;
+            if (!version.equals(actual)) {
+                installed = instance.withVersion(actual);
+                DshInstanceManager.update(installed);
+                runtime.announceUpdated(installed);
+                throw failedInstall(id, version, tail,
+                        "pnpm installed " + actual + " instead of the requested version; "
+                                + "the instance now records " + actual, null);
+            }
+            if (!version.equals(instance.version())) {
+                installed = instance.withVersion(version);
+                DshInstanceManager.update(installed);
+                runtime.announceUpdated(installed);
+            }
+            org.jackhuang.hmcl.util.logging.Logger.LOG.info("Installed DSH " + version + " for " + id);
+            if (onInstalled != null) {
+                onInstalled.accept(installed);
+            }
+            return "Installed " + version;
+        });
+        holder[0] = task;
+        // The task is registered by now, so stateOf() answers INSTALLING;
+        // telling the panel right away saves it a poll.
+        runtime.announceState(id);
+        return task;
+    }
+
+    /// Builds the failure an install task ends with: the reason, the last lines
+    /// pnpm printed, and a line in the container log — the task table lives in
+    /// memory and would take the explanation with it on a restart.
+    private static DshException failedInstall(String id, String version,
+                                              java.util.ArrayDeque<String> tail,
+                                              @Nullable String reason, @Nullable Throwable cause) {
+        String detail = "Installing DSH " + version + " for " + id + " failed: " + reason
+                + registryHint(reason + "\n" + String.join("\n", tail))
+                + (tail.isEmpty() ? "" : "\n" + String.join("\n", tail));
+        org.jackhuang.hmcl.util.logging.Logger.LOG.warning(detail);
+        return new DshException(detail, cause);
+    }
+
+    /// A package pnpm could not find, as pnpm itself names it.
+    private static final java.util.regex.Pattern MISSING_PACKAGE =
+            java.util.regex.Pattern.compile("([@a-zA-Z0-9._/-]+) is not in the npm registry");
+
+    /// Turns the two endings that are nobody's fault into one line of advice,
+    /// placed before the raw output: a dependency the upstream unpublished (the
+    /// version can never be installed again — the panel's own version list
+    /// cannot see this, because it only checks the companion package) and a
+    /// requirement the registry cannot satisfy. Both read as "retry" otherwise,
+    /// and retrying is exactly what does not help.
+    ///
+    /// @param output the failure reason plus pnpm's tail
+    /// @return the hint line, or an empty string when the ending needs none
+    static String registryHint(String output) {
+        java.util.regex.Matcher missing = MISSING_PACKAGE.matcher(output);
+        if (output.contains("ERR_PNPM_FETCH_404") && missing.find()) {
+            return "\n[hint] registry 上已没有 " + missing.group(1)
+                    + "：该版本依赖的包被上游删除，这个 dsh 版本再也装不上（不是本地问题，重试无用）——请换一个版本。";
+        }
+        if (output.contains("ERR_PNPM_NO_MATCHING_VERSION")) {
+            return "\n[hint] 该版本要求的配套包在 registry 上没有对应版本（上游没发布这一版）——请换一个版本。";
+        }
+        return "";
+    }
+
+    /// The version of the harness sitting in an instance's own `dsh`
+    /// directory, or null when it cannot be read.
+    private static @Nullable String installedVersion(DshInstance instance) {
+        try {
+            Path manifest = instance.dshDirectory()
+                    .resolve(org.jackhuang.hmcl.dsh.DshVersion.PACKAGE_PATH)
+                    .resolve("package.json");
+            if (!Files.isRegularFile(manifest)) {
+                return null;
+            }
+            com.google.gson.JsonElement parsed =
+                    JsonParser.parseString(Files.readString(manifest, StandardCharsets.UTF_8));
+            if (!parsed.isJsonObject()) {
+                return null;
+            }
+            return stringField(parsed.getAsJsonObject(), "version");
+        } catch (DshException | IOException | JsonParseException | IllegalStateException e) {
+            return null;
         }
     }
 
@@ -412,10 +574,6 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
             return;
         }
-        if (!DshVersionManager.isInstalled(instance)) {
-            Json.error(response, HttpServletResponse.SC_CONFLICT, "not installed");
-            return;
-        }
         String state = runtime.stateOf(id);
         if (state.equals("STOPPING")) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "instance is stopping");
@@ -423,6 +581,32 @@ public final class InstancesApiServlet extends HttpServlet {
         }
         if (state.equals("RUNNING") || state.equals("STARTING")) {
             Json.write(response, HttpServletResponse.SC_ACCEPTED, java.util.Map.of("state", state.toLowerCase(Locale.ROOT)));
+            return;
+        }
+        if (!DshVersionManager.isInstalled(instance)) {
+            if (Boolean.FALSE.equals(boolField(body, "autoInstall"))) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, "not installed");
+                return;
+            }
+            if (state.equals("INSTALLING")) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, "install in progress");
+                return;
+            }
+            // Launcher behaviour: "start this" on a version that is not here
+            // yet installs it and starts it — in one move, without a second
+            // click. The whole exchange is one task, so the panel's progress
+            // view covers both halves.
+            String host = resolvePublicHost(body, request);
+            try {
+                TaskService.Task task = submitInstall(instance, instance.version(),
+                        installed -> runtime.launchAsync(installed, host));
+                JsonObject result = new JsonObject();
+                result.addProperty("state", "installing");
+                result.addProperty("taskId", task.id());
+                Json.write(response, HttpServletResponse.SC_ACCEPTED, result);
+            } catch (TaskService.InstanceBusyException e) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+            }
             return;
         }
         String publicHost = resolvePublicHost(body, request);

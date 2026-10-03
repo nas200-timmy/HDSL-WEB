@@ -26,6 +26,16 @@ export interface Instance {
   icon?: string;
   /** 实例绑定的账户名；null/缺省 = 不使用 */
   account?: string | null;
+  /** 详情接口附带：最近一次安装的进度/结果（失败原因在这里） */
+  installProgress?: InstallProgress;
+}
+
+/** 安装进度（GET /api/instances/{id} 的 installProgress 字段）。 */
+export interface InstallProgress {
+  /** running | pending | done | failed | cancelled | none */
+  state: string;
+  message: string;
+  fraction: number;
 }
 
 export interface LogLine {
@@ -41,6 +51,8 @@ export interface Task {
   message?: string;
   fraction?: number;
   error?: string;
+  /** 任务归属的实例；null/缺省 = 全局任务（导出、插件目录刷新等） */
+  instance?: string | null;
   /** state 为 waiting_approval 时携带的审批信息（build-scripts） */
   approval?: TaskApproval;
   /** 任务完成时携带的结果（安装整合包 → instanceId；导出 → filename） */
@@ -232,7 +244,7 @@ export interface AcpSessionUpdate {
 export type WsEvent =
   | { type: "instance-state"; instance: string; state: string; url?: string; exitCode?: number; crashTail?: string }
   | { type: "log"; instance: string; level: string; line: string }
-  | { type: "task"; taskId: string; state: string; message?: string; fraction?: number; approval?: TaskApproval; result?: TaskResult }
+  | { type: "task"; taskId: string; instance?: string | null; state: string; message?: string; fraction?: number; error?: string; approval?: TaskApproval; result?: TaskResult }
   | { type: "instance-created" | "instance-deleted" | "instance-updated"; instance: Instance }
   | { type: "accounts-changed" }
   | { type: "acp-ready"; instance: string; session: string; protocolVersion?: number }

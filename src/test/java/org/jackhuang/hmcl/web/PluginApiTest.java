@@ -174,7 +174,7 @@ class PluginApiTest {
 
     private String createInstance(HttpClient client, String base, String name) throws Exception {
         HttpResponse<String> response = post(client, base + "/api/instances",
-                "{\"name\":\"" + name + "\",\"version\":\"" + VERSION + "\"}");
+                "{\"name\":\"" + name + "\",\"version\":\"" + VERSION + "\",\"autoInstall\":false}");
         assertEquals(201, response.statusCode(), response.body());
         String id = json(response).getAsJsonObject("instance").get("id").getAsString();
         created.add(id);

@@ -103,7 +103,12 @@ export function InstallInstanceWizard() {
         portMode,
         ...(portNum !== undefined ? { port: portNum } : {}),
       });
-      toast("success", I18N["dsh.instance.created"].replace("%s", trimmed));
+      toast(
+        "success",
+        r.installTaskId
+          ? I18N["dsh.instance.created.installing"].replace("%s", trimmed)
+          : I18N["dsh.instance.created"].replace("%s", trimmed),
+      );
       nav(`/instances/${r.instance.id}`, { replace: true });
     } catch (e) {
       toast("error", `创建失败：${errMsg(e)}`);

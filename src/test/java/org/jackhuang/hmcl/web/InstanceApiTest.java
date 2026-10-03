@@ -101,8 +101,11 @@ class InstanceApiTest {
             HttpClient client = TestSupport.client();
             String base = running.baseUrl();
 
+            // `autoInstall:false` asks for the bare manifest. The launcher's
+            // default would start installing right away, and this test is
+            // about the CRUD surface, not about pnpm.
             HttpResponse<String> createdResponse = send(client, base + "/api/instances", "POST",
-                    "{\"name\":\"Crud One\",\"version\":\"" + VERSION + "\"}");
+                    "{\"name\":\"Crud One\",\"version\":\"" + VERSION + "\",\"autoInstall\":false}");
             assertEquals(201, createdResponse.statusCode());
             JsonObject one = json(createdResponse).getAsJsonObject("instance");
             String id = one.get("id").getAsString();
@@ -111,7 +114,10 @@ class InstanceApiTest {
             assertEquals(VERSION, one.get("version").getAsString());
             assertEquals("isolated", one.get("homeMode").getAsString());
             assertEquals("auto", one.get("portMode").getAsString());
-            assertEquals("STOPPED", one.get("state").getAsString());
+            // Nothing is installed and no install was asked for: the state says
+            // so instead of pretending the instance is merely stopped.
+            assertEquals("NOT_INSTALLED", one.get("state").getAsString());
+            assertTrue(json(createdResponse).get("installTaskId") == null);
             int port = one.get("port").getAsInt();
             assertTrue(port >= 3081 && port <= 4081, "auto port must come from the 3081-4081 pool: " + port);
 
@@ -124,10 +130,11 @@ class InstanceApiTest {
                     .map(element -> element.getAsJsonObject())
                     .filter(object -> id.equals(object.get("id").getAsString()))
                     .findFirst().orElseThrow();
+            assertEquals("NOT_INSTALLED", listed.get("state").getAsString());
 
             // A second instance gets a different, lifetime-bound port.
             HttpResponse<String> secondResponse = send(client, base + "/api/instances", "POST",
-                    "{\"name\":\"Crud Two\",\"version\":\"" + VERSION + "\"}");
+                    "{\"name\":\"Crud Two\",\"version\":\"" + VERSION + "\",\"autoInstall\":false}");
             assertEquals(201, secondResponse.statusCode());
             String secondId = json(secondResponse).getAsJsonObject("instance").get("id").getAsString();
             create(secondId);
@@ -173,13 +180,14 @@ class InstanceApiTest {
             String base = running.baseUrl();
 
             HttpResponse<String> createdResponse = send(client, base + "/api/instances", "POST",
-                    "{\"name\":\"Lifecycle\",\"version\":\"" + VERSION + "\"}");
+                    "{\"name\":\"Lifecycle\",\"version\":\"" + VERSION + "\",\"autoInstall\":false}");
             String id = json(createdResponse).getAsJsonObject("instance").get("id").getAsString();
             create(id);
 
-            // Not installed yet: launch refuses.
+            // Not installed yet: launch refuses — but only because this call
+            // opts out of the launcher's install-and-start behaviour.
             HttpResponse<String> refused = send(client, base + "/api/instances/" + id + "/launch", "POST",
-                    "{\"publicHost\":\"panel.example.com\"}");
+                    "{\"publicHost\":\"panel.example.com\",\"autoInstall\":false}");
             assertEquals(409, refused.statusCode());
             assertEquals("not installed", json(refused).get("error").getAsString());
 
@@ -250,6 +258,160 @@ class InstanceApiTest {
             assertEquals(200, send(client, base + "/api/instances/" + id, "DELETE", null).statusCode());
             created.remove(id);
         }
+    }
+
+    // --------------------------------------------------------------- installs --
+
+    @Test
+    void createInstallsTheVersionItNames() throws Exception {
+        NodeDshStub.assumeNode();
+        TestSupport.enableFakePnpm();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            HttpResponse<String> createdResponse = send(client, base + "/api/instances", "POST",
+                    "{\"name\":\"Auto Install\",\"version\":\"" + VERSION + "\"}");
+            assertEquals(201, createdResponse.statusCode(), createdResponse.body());
+            JsonObject created = json(createdResponse);
+            String id = created.getAsJsonObject("instance").get("id").getAsString();
+            create(id);
+            assertNotNull(created.get("installTaskId"),
+                    "creating an instance must hand back the install it started");
+
+            // The task names its instance: that field is how the panel tells
+            // two concurrent installs apart.
+            JsonObject task = awaitTask(client, base, created.get("installTaskId").getAsString(), "done");
+            assertEquals(id, task.get("instanceId").getAsString());
+
+            // Installed, not running — and the manifest describes the disk.
+            JsonObject detail = awaitState(client, base, id, "STOPPED");
+            assertEquals(VERSION, detail.get("version").getAsString());
+            assertEquals(VERSION, installedVersion(id));
+        } finally {
+            TestSupport.disableFakePnpm();
+        }
+    }
+
+    @Test
+    void launchInstallsWhatIsMissingThenStarts() throws Exception {
+        NodeDshStub.assumeNode();
+        TestSupport.enableFakePnpm();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            HttpResponse<String> createdResponse = send(client, base + "/api/instances", "POST",
+                    "{\"name\":\"Install Then Start\",\"version\":\"" + VERSION + "\",\"autoInstall\":false}");
+            String id = json(createdResponse).getAsJsonObject("instance").get("id").getAsString();
+            create(id);
+
+            // The launcher behaviour: "start" on a version that is not here yet
+            // installs it and starts it, in one task.
+            HttpResponse<String> launch = send(client, base + "/api/instances/" + id + "/launch", "POST", "{}");
+            assertEquals(202, launch.statusCode(), launch.body());
+            JsonObject launchJson = json(launch);
+            assertEquals("installing", launchJson.get("state").getAsString());
+            assertNotNull(launchJson.get("taskId"));
+
+            JsonObject runningJson = awaitState(client, base, id, "RUNNING");
+            assertEquals("/i/" + id + "/?token=packstubtoken", runningJson.get("url").getAsString());
+        } finally {
+            TestSupport.disableFakePnpm();
+        }
+    }
+
+    @Test
+    void installShowsInstallingWhileItRuns() throws Exception {
+        NodeDshStub.assumeNode();
+        TestSupport.enableFakePnpm();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+            String slow = "9.9.9-slow"; // the fake pnpm waits three seconds on this one
+
+            HttpResponse<String> createdResponse = send(client, base + "/api/instances", "POST",
+                    "{\"name\":\"Slow Install\",\"version\":\"" + slow + "\",\"autoInstall\":false}");
+            String id = json(createdResponse).getAsJsonObject("instance").get("id").getAsString();
+            create(id);
+            assertEquals("NOT_INSTALLED",
+                    json(createdResponse).getAsJsonObject("instance").get("state").getAsString());
+
+            HttpResponse<String> install = send(client, base + "/api/instances/" + id + "/install", "POST",
+                    "{\"version\":\"" + slow + "\"}");
+            assertEquals(202, install.statusCode(), install.body());
+
+            // The panel can see the install for what it is while it runs, and
+            // the instance is installed (not running) once it is over.
+            awaitState(client, base, id, "INSTALLING");
+            awaitState(client, base, id, "STOPPED");
+            assertEquals(slow, installedVersion(id));
+        } finally {
+            TestSupport.disableFakePnpm();
+        }
+    }
+
+    @Test
+    void installRecordsWhatPnpmActuallyLanded() throws Exception {
+        NodeDshStub.assumeNode();
+        TestSupport.enableFakePnpm();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+            String requested = "9.9.9-mismatch"; // the fake pnpm lays down 0.0.0-other
+
+            HttpResponse<String> createdResponse = send(client, base + "/api/instances", "POST",
+                    "{\"name\":\"Mismatch\",\"version\":\"" + requested + "\",\"autoInstall\":false}");
+            String id = json(createdResponse).getAsJsonObject("instance").get("id").getAsString();
+            create(id);
+
+            HttpResponse<String> install = send(client, base + "/api/instances/" + id + "/install", "POST",
+                    "{\"version\":\"" + requested + "\"}");
+            assertEquals(202, install.statusCode());
+            JsonObject task = awaitTask(client, base, json(install).get("taskId").getAsString(), "failed");
+            String error = task.get("error").getAsString();
+            assertTrue(error.contains(requested), error);
+            assertTrue(error.contains("0.0.0-other"), error);
+
+            // The manifest describes the disk even when that is not what was
+            // asked for: an instance that lies about its version is worse than
+            // one that tells the truth about a bad install.
+            JsonObject detail = awaitState(client, base, id, "STOPPED");
+            assertEquals("0.0.0-other", detail.get("version").getAsString());
+            assertEquals("0.0.0-other", installedVersion(id));
+        } finally {
+            TestSupport.disableFakePnpm();
+        }
+    }
+
+    private static JsonObject awaitTask(HttpClient client, String base, String taskId, String state)
+            throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+        JsonObject last = null;
+        while (System.nanoTime() < deadline) {
+            HttpResponse<String> response = send(client, base + "/api/tasks/" + taskId, "GET", null);
+            assertEquals(200, response.statusCode());
+            last = json(response);
+            if (state.equals(last.get("state").getAsString())) {
+                return last;
+            }
+            Thread.sleep(100);
+        }
+        assertNotNull(last);
+        assertEquals(state, last.get("state").getAsString(), "task never reached " + state);
+        return last;
+    }
+
+    /// The version of the harness actually sitting in the instance's `dsh`
+    /// directory — the truth the manifest is supposed to describe.
+    private static String installedVersion(String id) throws Exception {
+        DshInstance instance = DshInstanceManager.find(id);
+        assertNotNull(instance);
+        Path manifest = instance.dshDirectory()
+                .resolve(org.jackhuang.hmcl.dsh.DshVersion.PACKAGE_PATH)
+                .resolve("package.json");
+        return JsonParser.parseString(java.nio.file.Files.readString(manifest))
+                .getAsJsonObject().get("version").getAsString();
     }
 
     private static JsonObject awaitState(HttpClient client, String base, String id, String state)

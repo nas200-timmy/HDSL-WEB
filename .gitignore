@@ -2,6 +2,7 @@
 **/.gradle/
 **/build/
 build/
+.pnpm-store/
 **/node_modules/
 web/dist/
 web/.cache/

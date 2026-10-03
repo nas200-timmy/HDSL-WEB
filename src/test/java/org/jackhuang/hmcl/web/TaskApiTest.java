@@ -179,7 +179,7 @@ class TaskApiTest {
             String base = running.baseUrl();
 
             HttpResponse<String> created = post(client, base + "/api/instances",
-                    "{\"name\":\"" + INSTANCE + "\",\"version\":\"0.1.7-rc.1\"}");
+                    "{\"name\":\"" + INSTANCE + "\",\"version\":\"0.1.7-rc.1\",\"autoInstall\":false}");
             assertEquals(201, created.statusCode());
 
             // A version that cannot exist: the install task must fail, not
