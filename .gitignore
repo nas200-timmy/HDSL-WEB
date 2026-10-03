@@ -12,3 +12,6 @@ web/.cache/
 *.class
 .DS_Store
 Thumbs.db
+
+# 构建产物：由 web/dist 经 syncWebDist 生成（Docker/CI/本地构建时重建）
+/src/main/resources/web/
