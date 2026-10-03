@@ -106,6 +106,64 @@ class AuthFlowTest {
     }
 
     @Test
+    void usernameChangeRenamesLoginAndRevokesOtherSessions() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir,
+                Map.of(UserStore.ENV_ADMIN_PASSWORD, PASSWORD),
+                config -> config.bindHost = "127.0.0.1")) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            // Two sessions of the same user: the one that renames survives,
+            // the other one is revoked (same semantics as a password change).
+            HttpResponse<String> login1 = post(client, base + "/api/auth/login",
+                    "{\"username\":\"admin\",\"password\":\"" + PASSWORD + "\"}");
+            String cookie1 = login1.headers().firstValue("set-cookie").orElseThrow().split(";", 2)[0];
+            HttpResponse<String> login2 = post(client, base + "/api/auth/login",
+                    "{\"username\":\"admin\",\"password\":\"" + PASSWORD + "\"}");
+            String cookie2 = login2.headers().firstValue("set-cookie").orElseThrow().split(";", 2)[0];
+
+            // Without a session the endpoint is unreachable.
+            HttpResponse<String> anonymous = post(client, base + "/api/auth/username",
+                    "{\"newUsername\":\"alice\"}");
+            assertEquals(401, anonymous.statusCode());
+
+            // An invalid name is rejected before anything is written.
+            HttpResponse<String> invalid = post(client, base + "/api/auth/username",
+                    "{\"newUsername\":\"has space\"}", cookie1);
+            assertEquals(400, invalid.statusCode());
+
+            // Rename: 200 and the new username comes back.
+            HttpResponse<String> renamed = post(client, base + "/api/auth/username",
+                    "{\"newUsername\":\"alice\"}", cookie1);
+            assertEquals(200, renamed.statusCode());
+            JsonObject body = JsonParser.parseString(renamed.body()).getAsJsonObject();
+            assertTrue(body.get("ok").getAsBoolean());
+            assertEquals("alice", body.get("username").getAsString());
+
+            // The renaming session now answers whoami with the new name…
+            HttpResponse<String> whoami = get(client, base + "/api/auth/whoami", cookie1);
+            assertEquals(200, whoami.statusCode());
+            assertEquals("alice", JsonParser.parseString(whoami.body()).getAsJsonObject().get("username").getAsString());
+
+            // …the other session is gone…
+            HttpResponse<String> revoked = get(client, base + "/api/auth/whoami", cookie2);
+            assertEquals(401, revoked.statusCode());
+
+            // …the old name no longer logs in, the new one does with the same password.
+            HttpResponse<String> oldLogin = post(client, base + "/api/auth/login",
+                    "{\"username\":\"admin\",\"password\":\"" + PASSWORD + "\"}");
+            assertEquals(401, oldLogin.statusCode());
+            HttpResponse<String> newLogin = post(client, base + "/api/auth/login",
+                    "{\"username\":\"alice\",\"password\":\"" + PASSWORD + "\"}");
+            assertEquals(200, newLogin.statusCode());
+
+            // The rename reached disk: users.json now records "alice".
+            String stored = Files.readString(dataDir.resolve("auth/users.json"));
+            assertTrue(stored.contains("\"username\": \"alice\""), stored);
+        }
+    }
+
+    @Test
     void healthIsPublicAndReportsVersionAndUptime() throws Exception {
         try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
                 config -> config.bindHost = "127.0.0.1")) {

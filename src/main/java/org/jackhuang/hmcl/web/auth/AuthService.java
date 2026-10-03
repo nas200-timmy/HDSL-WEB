@@ -94,6 +94,24 @@ public final class AuthService {
         return revoked;
     }
 
+    /// Moves every session of `oldUsername` to `newUsername`: the session
+    /// behind `keepToken` survives under the new name, every other session of
+    /// the old name is revoked — the same "this device keeps working, the
+    /// others log out" semantics as a password change.
+    public void renameUser(String oldUsername, String newUsername, @Nullable String keepToken) {
+        for (Map.Entry<String, Session> entry : sessions.entrySet()) {
+            if (!entry.getValue().username().equals(oldUsername)) {
+                continue;
+            }
+            if (entry.getKey().equals(keepToken)) {
+                sessions.replace(entry.getKey(), entry.getValue(),
+                        new Session(newUsername, entry.getValue().expiresAt()));
+            } else {
+                sessions.remove(entry.getKey(), entry.getValue());
+            }
+        }
+    }
+
     /// The store behind this service; the auth endpoints read initialization
     /// and password policy state from it.
     public UserStore userStore() {

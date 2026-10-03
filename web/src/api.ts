@@ -107,6 +107,10 @@ export const api = {
   changePassword: (currentPassword: string, newPassword: string) =>
     request<{ ok: boolean }>("/api/auth/password", jsonInit("POST", { currentPassword, newPassword })),
 
+  /** 修改当前用户名；本设备的会话保留并切换到新名，其它会话被吊销 */
+  changeUsername: (newUsername: string) =>
+    request<{ ok: boolean; username: string }>("/api/auth/username", jsonInit("POST", { newUsername })),
+
   versions: () => request<{ versions: VersionInfo[] }>("/api/versions"),
 
   instances: () => request<{ instances: Instance[] }>("/api/instances"),

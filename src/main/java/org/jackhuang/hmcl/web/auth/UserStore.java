@@ -166,6 +166,29 @@ public final class UserStore {
         return user;
     }
 
+    /// Renames the stored user: same salt, hash, iteration count and creation
+    /// time, only `username` changes — the same atomic 0600 write. Renaming to
+    /// the current name is a successful no-op.
+    ///
+    /// @return false when no user exists at all
+    /// @throws IllegalArgumentException when `newUsername` is not [valid][isValidUsername]
+    public synchronized boolean updateUsername(String newUsername) throws IOException {
+        User user = admin;
+        if (user == null) {
+            return false;
+        }
+        if (!isValidUsername(newUsername)) {
+            throw new IllegalArgumentException("invalid username");
+        }
+        if (user.username().equals(newUsername)) {
+            return true;
+        }
+        User updated = new User(newUsername, user.saltB64(), user.iterations(), user.hashB64(), user.createdAt());
+        save(file, updated);
+        admin = updated;
+        return true;
+    }
+
     /// Replaces the user's password: a fresh salt, the same PBKDF2 iteration
     /// count the file already records, the same atomic 0600 write.
     ///

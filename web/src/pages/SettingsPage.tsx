@@ -22,7 +22,7 @@ import {
 } from "../components/icons";
 import { SubSideBar } from "../components/SideBar";
 import { I18N } from "../i18n";
-import { logout, toast, useAppState } from "../store";
+import { logout, setState, toast, useAppState } from "../store";
 import { bindSystemThemeListener, setThemeMode, useThemeMode, type ThemeMode } from "../theme";
 import type { DoctorCheck, DoctorReport, Health, TlsSettings, TlsUploadResult } from "../types";
 import { errMsg, formatDateTime, formatUptime } from "../utils";
@@ -246,6 +246,12 @@ function GeneralTab() {
 
       <div className="section-caption">
         <InfoIcon size={16} />
+        修改用户名
+      </div>
+      <UsernameCard />
+
+      <div className="section-caption">
+        <InfoIcon size={16} />
         当前用户
       </div>
       <div className="card">
@@ -268,6 +274,68 @@ function GeneralTab() {
         </div>
       </div>
     </>
+  );
+}
+
+/* ---------------- 修改用户名 ---------------- */
+
+function UsernameCard() {
+  const s = useAppState();
+  const [name, setName] = useState(s.username ?? "");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // 用户名在别处变化（如重新登录）时同步输入框
+  useEffect(() => setName(s.username ?? ""), [s.username]);
+
+  const submit = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || /\s/.test(trimmed) || trimmed.length > 32) {
+      setFormError("用户名需为 1–32 位且不含空白字符");
+      return;
+    }
+    setFormError(null);
+    setBusy(true);
+    try {
+      const r = await api.changeUsername(trimmed);
+      setState((st) => ({ ...st, username: r.username }));
+      toast("success", trimmed === s.username ? "用户名未变化" : "用户名已更新");
+    } catch (e) {
+      toast("error", `修改用户名失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="comp-row">
+        <span className="comp-label">新用户名</span>
+        <span className="comp-value">
+          <input
+            className="input"
+            style={{ flex: 1, minWidth: 220, fontWeight: 400 }}
+            autoComplete="username"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={busy}
+          />
+        </span>
+      </div>
+      {formError && <div className="form-error">{formError}</div>}
+      <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 6 }}>
+        <button
+          className="btn btn-raised ripple-host"
+          disabled={busy || !s.username || name.trim() === s.username}
+          onClick={() => void submit()}
+        >
+          {busy ? "提交中…" : "更新用户名"}
+        </button>
+      </div>
+      <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0" }}>
+        修改成功后，该账号在其它浏览器中的会话会被退出。
+      </p>
+    </div>
   );
 }
 

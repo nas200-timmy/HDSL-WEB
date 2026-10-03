@@ -250,7 +250,8 @@ auth:
 
 - **登录门**：`POST /api/auth/login`、`GET /api/auth/status`、`POST /api/auth/setup`（仅无用户时可用）
   与 `GET /api/health` 是公开的（外加不含数据的 SPA 外壳，因为登录/引导页必须先能打开）。
-  `/api/*`、`/ws`、`/i/*` 一律要求会话。`POST /api/auth/password` 需会话，改密后同用户的其它会话立即失效。
+  `/api/*`、`/ws`、`/i/*` 一律要求会话。`POST /api/auth/password`（改密）与 `POST /api/auth/username`（改名）
+  需会话，成功后同用户的其它会话立即失效（改名的那个会话保留并切换到新用户名）。
 - **口令存储**：PBKDF2WithHmacSHA256（per-user 盐、21 万次迭代，参数记录在 users.json 内），文件原子写入且 0600。
 - **dsh 只绑回环**：`dsh web` 被设计成只监听 `127.0.0.1`（`--host 0.0.0.0` 会被 CLI 拒绝），
   外部能到达的只有 HDSL-web 的 3080。TLS 在边缘终结，因此天然满足这个约束。

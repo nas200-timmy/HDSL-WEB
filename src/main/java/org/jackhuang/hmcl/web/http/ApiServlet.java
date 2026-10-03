@@ -44,6 +44,9 @@ import java.util.function.LongSupplier;
 ///                               public but refuses to run twice (409)
 /// - `POST /api/auth/password` — password change, revokes the user's other
 ///                               sessions, needs a session
+/// - `POST /api/auth/username` — username change, the calling session keeps
+///                               working under the new name, other sessions
+///                               are revoked, needs a session
 /// - `POST /api/auth/logout`   — clears the cookie and the session
 /// - `GET  /api/auth/whoami`   — the session's username
 ///
@@ -82,6 +85,8 @@ public final class ApiServlet extends HttpServlet {
             setup(request, response);
         } else if ("/auth/password".equals(path) && "POST".equals(method)) {
             password(request, response);
+        } else if ("/auth/username".equals(path) && "POST".equals(method)) {
+            username(request, response);
         } else if ("/auth/logout".equals(path) && "POST".equals(method)) {
             logout(request, response);
         } else if ("/auth/whoami".equals(path) && "GET".equals(method)) {
@@ -211,6 +216,51 @@ public final class ApiServlet extends HttpServlet {
         Json.write(response, Map.of("ok", true));
     }
 
+    private void username(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
+        if (!(session instanceof AuthService.Session s)) {
+            // Same reasoning as the password endpoint: with auth off there is
+            // nothing for a rename to protect.
+            Json.error(response, authDisabled
+                    ? HttpServletResponse.SC_BAD_REQUEST
+                    : HttpServletResponse.SC_UNAUTHORIZED, authDisabled ? "authentication is disabled" : "unauthorized");
+            return;
+        }
+
+        JsonObject body;
+        try {
+            body = JsonParser.parseString(new String(request.getInputStream().readAllBytes(), StandardCharsets.UTF_8))
+                    .getAsJsonObject();
+        } catch (JsonParseException | IllegalStateException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        String newUsername = stringField(body, "newUsername");
+        if (!UserStore.isValidUsername(newUsername)) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "username must be 1-" + UserStore.USERNAME_MAX_LENGTH + " characters without whitespace");
+            return;
+        }
+
+        UserStore users = authService.userStore();
+        String oldUsername = s.username();
+        boolean renamed;
+        try {
+            renamed = users.updateUsername(newUsername);
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
+        if (!renamed) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "user no longer exists");
+            return;
+        }
+        // The session that made the change survives under the new name;
+        // every other session of the old name is logged out.
+        authService.renameUser(oldUsername, newUsername, cookieValue(request, AuthFilter.SESSION_COOKIE));
+        Json.write(response, new UsernameBody(true, newUsername));
+    }
+
     private void logout(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String token = cookieValue(request, AuthFilter.SESSION_COOKIE);
         authService.logout(token);
@@ -255,5 +305,8 @@ public final class ApiServlet extends HttpServlet {
     }
 
     private record WhoamiBody(String username) {
+    }
+
+    private record UsernameBody(boolean ok, String username) {
     }
 }
