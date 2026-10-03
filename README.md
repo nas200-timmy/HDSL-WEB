@@ -124,7 +124,14 @@ HDSL_ADMIN_PASSWORD='换成一个强口令' \
 
 ## 数据与挂载点
 
-`HDSL_DATA`（容器内固定为 `/data`）是**唯一**需要持久化的目录。dsh 实例的 `DSH_HOME`、pnpm store
+容器里有一个**必须挂**的挂载点，另有一个可选的工作区：
+
+| 挂载点 | 必须？ | 内容 |
+|---|---|---|
+| `/data` | **必须持久化** | 面板自己的全部状态：配置、口令、证书、实例、`DSH_HOME`、pnpm store —— 下表逐项列出 |
+| `/home/hdsl/workspace` | 可选 | dsh 的**工作区**：会话读写文件的地方，也是 dsh 进程的工作目录。这个目录一直存在（镜像里就建好、启动时也保证在）：**不挂**就是容器内目录（重建容器会丢），**挂了**就随你 —— 宿主目录 = dsh 直接编辑你的真实文件，命名卷 = 留在容器外持久保存 |
+
+`HDSL_DATA`（容器内固定为 `/data`）是**必须**持久化的目录。dsh 实例的 `DSH_HOME`、pnpm store
 都设计在它下面，所以「挂一个卷、备份一个目录」就覆盖全部状态。
 
 | 路径 | 内容 | 需要备份 |
@@ -136,7 +143,7 @@ HDSL_ADMIN_PASSWORD='换成一个强口令' \
 | `/data/tmp/` | multipart 上传的暂存目录（插件 `.tgz`、证书、整合包 `.dspack`） | 否 |
 | `/data/exports/` | 从面板导出的整合包产物，`GET /api/exports` 列出的就是这个目录 | 否 |
 | `/data/hdsl/` | `hdsl.home`：启动器自己的全部状态（可用 `-Dhdsl.home=` 覆盖） | 是 |
-| `/data/hdsl/launcher-settings.json` | 启动器设置（代理、下载并发、隔离模式等） | 是 |
+| `/data/hdsl/launcher-settings.json` | 启动器设置（代理、下载并发、隔离模式、游戏目录/工作区选择等） | 是 |
 | `/data/hdsl/instances/<id>/` | 每个实例：`instance.json`、`dsh/`（该实例自己的 dsh 安装）、`home/`（隔离模式的 `DSH_HOME`） | 是 |
 | `/data/hdsl/homes/<版本>/` | 共享隔离模式下多个实例共用的 home | 是 |
 | `/data/hdsl/runtimes/<版本>/` | 自下载的 Node 运行时。镜像已内置 Node，安装新运行时的路径仍可用，通常为空 | 否 |
@@ -145,7 +152,14 @@ HDSL_ADMIN_PASSWORD='换成一个强口令' \
 | `/data/pnpm-store/` | pnpm 共享内容寻址仓库（pnpm 全局配置里的 `storeDir`）。多实例安装同一个包时会硬链接复用而不是重复下载 | 否（可重建，重装会重新拉） |
 | `/data/corepack/` | corepack 缓存（`COREPACK_HOME`）。dsh 固定 `packageManager: pnpm@…` 时需要的那个 pnpm 版本会缓存在这里 | 否 |
 
-> 备份/迁移的做法很简单：**停容器 → 整个拷走 `/data`**。恢复同理。细节见 [docs/deployment.md](docs/deployment.md)。
+> **工作区**是 dsh 会话的「项目根」：会话里读写文件、跑命令都在它下面，也是 dsh 进程的工作目录。
+> 容器里它就是 **`/home/hdsl/workspace`**（这个目录一直存在，挂不挂由你决定）；**不是**面板自己放实例的那个目录。
+> 要持久化或要让 dsh 直接编辑宿主机的目录，取消注释 compose 里那两行之一：
+> `- /srv/dsh-workspace:/home/hdsl/workspace`（宿主目录，要让 uid/gid 1000 能读写）或
+> `- hdsl-workspace:/home/hdsl/workspace`（命名卷）；也可以用 `HDSL_WORKSPACE` 指到别的已挂路径。
+> 已有实例保留它创建时记录的工作区，新建的才用新的。
+
+> 备份/迁移的做法很简单：**停容器 → 整个拷走 `/data`**；工作区挂了卷的话按需一起拷，是你自己的宿主目录就更不用管。恢复同理。细节见 [docs/deployment.md](docs/deployment.md)。
 
 ## 声明式 HTTPS
 
@@ -200,6 +214,7 @@ auth:
 | `NPM_CONFIG_REGISTRY` | `https://registry.npmjs.org/` | 下载源。npm 直接读这个环境变量；pnpm 与 corepack 由入口脚本转写成它们各自的配置（见下） |
 | `JAVA_OPTS` | 空 | 追加到 `java` 命令行的 JVM 参数，例如 `-Xmx2g` |
 | `PNPM_STORE_DIR` | `/data/pnpm-store` | pnpm 共享仓库位置（本镜像的约定变量，入口脚本会写进 pnpm 全局配置）；一般不用改 |
+| `HDSL_WORKSPACE` | 空 | dsh 的工作区路径。不设时用 `$HOME/workspace`（镜像里 `/home/hdsl/workspace`）；设了就用它（不存在会创建）。新建实例默认用它，已有实例保留创建时记录的那个 |
 
 `HDSL_BIND_HOST`/`HDSL_PORT`/`HDSL_HTTPS` 之外的一切（证书路径、`auth.disabled`、`redirect_http` 等）
 都从 `server.yaml` 读。dsh 实例自己的端口从池子 **3081–4081** 里分配、终身绑定，只监听回环，**不对外发布**。

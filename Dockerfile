@@ -172,7 +172,10 @@ RUN set -eux; \
 
 # The account everything above runs as. uid/gid 1000 is what a bind-mounted
 # host directory usually expects; a named volume inherits the ownership of
-# /data as it is in this image (including the corepack cache seeded above).
+# whatever is under the mount point in this image — which is why /data and the
+# workspace folder below are created here, owned by hdsl, rather than being left
+# to Docker (a fresh volume mounted on a path that does not exist in the image
+# comes out owned by root, and the panel could not write into it).
 #
 # pnpm 11 does not take `storeDir` from an npm_config_* environment variable —
 # only auth and registry settings still come from .npmrc; everything else lives
@@ -182,7 +185,7 @@ RUN set -eux; \
 RUN set -eux; \
     groupadd --gid 1000 hdsl; \
     useradd --uid 1000 --gid 1000 --create-home --home-dir /home/hdsl --shell /bin/bash hdsl; \
-    mkdir -p /app /data "${COREPACK_HOME}" /home/hdsl/.config/pnpm; \
+    mkdir -p /app /data "${COREPACK_HOME}" /home/hdsl/.config/pnpm /home/hdsl/workspace; \
     printf 'storeDir: %s\n' "/data/pnpm-store" > /home/hdsl/.config/pnpm/config.yaml; \
     chown -R hdsl:hdsl /data /home/hdsl
 

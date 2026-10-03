@@ -47,10 +47,31 @@ services:
       JAVA_OPTS: ${JAVA_OPTS:--Xmx1g}
       # 可选：pnpm 共享仓库位置（默认 /data/pnpm-store，在卷里，便于硬链接复用）
       # PNPM_STORE_DIR: /data/pnpm-store
+      # 工作区：dsh 会话读写文件的地方，也是 dsh 进程的工作目录。
+      # 默认就是 /home/hdsl/workspace（见下面的挂载）；要换成别的已挂载路径时设这个。
+      # HDSL_WORKSPACE: /home/hdsl/workspace
 
+    # 挂载点：
+    #   1) /data                 面板自己的数据——**必须持久化**（口令、配置、证书、实例、pnpm store）
+    #   2) /home/hdsl/workspace  工作区——dsh 要一个工作区，就放在它的 home 下面。
+    #      这个目录一直存在（镜像里就建好、启动时也保证在），挂不挂都行：
+    #        不挂 → 它就是容器内的目录，重建容器时里面的文件跟着没；
+    #        挂了 → 挂什么就是什么（宿主目录 = 直接编辑你的文件；命名卷 = 持久保存）。
     volumes:
-      # 唯一需要持久化的目录：server.yaml / certs / auth / hdsl / pnpm-store …
+      # ── 1. 面板数据（必挂）────────────────────────────────────────────────
+      # <卷>/server.yaml      面板配置（端口、TLS、认证开关、public_base_url …）
+      # <卷>/auth/users.json  管理员口令（PBKDF2 哈希 + 盐）+ 会话
+      # <卷>/certs/           证书与私钥（面板上传的 PKCS#12 / PEM）
+      # <卷>/hdsl/instances/  每个实例：instance.json、dsh/（该实例的 dsh 安装）、home/（DSH_HOME：会话、凭证、profile）
+      # <卷>/pnpm-store/      pnpm 共享仓库（多实例硬链接复用，别删）
+      # <卷>/exports/         面板导出的整合包 / 会话包
       - hdsl-data:/data
+
+      # ── 2. 工作区（可选：要持久化或要直接编辑宿主机文件时，取消注释挑一行）──
+      # 宿主目录：dsh 直接编辑你的真实文件（目录要让 uid/gid 1000 能读写）
+      # - /srv/dsh-workspace:/home/hdsl/workspace
+      # 命名卷：留在容器外持久保存，重建/升级都不丢
+      # - hdsl-workspace:/home/hdsl/workspace
 
     # $$ 让变量交给容器内的 shell 解析，取的是上面 environment 里的 HDSL_PORT
     healthcheck:
@@ -66,4 +87,8 @@ services:
       retries: 3
 
 volumes:
+  # 面板数据（口令 / 配置 / 证书 / 实例 / pnpm store）
   hdsl-data:
+  # 工作区默认不建卷：不挂时就是容器内目录。要用命名卷保存工作区时，
+  # 把上面 volumes 里那行取消注释，并在这里加：
+  # hdsl-workspace:

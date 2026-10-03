@@ -31,7 +31,7 @@ export function AccountsPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [addStep, setAddStep] = useState<"vendor" | "form">("vendor");
   const [picked, setPicked] = useState<Vendor | typeof CUSTOM_VENDOR | null>(null);
-  const [form, setForm] = useState({ vendor: "", endpoint: "", apiKey: "", label: "", model: "", kind: "" });
+  const [form, setForm] = useState({ vendor: "", endpoint: "", apiKey: "", label: "", model: "" });
   const [submitBusy, setSubmitBusy] = useState(false);
   const [submitWarn, setSubmitWarn] = useState<string | null>(null);
 
@@ -50,7 +50,7 @@ export function AccountsPage() {
   const openAdd = () => {
     setPicked(null);
     setAddStep(s.vendors && s.vendors.length > 0 ? "vendor" : "form");
-    setForm({ vendor: "", endpoint: "", apiKey: "", label: "", model: "", kind: "" });
+    setForm({ vendor: "", endpoint: "", apiKey: "", label: "", model: "" });
     setSubmitWarn(null);
     setAddOpen(true);
   };
@@ -58,9 +58,9 @@ export function AccountsPage() {
   const pickVendor = (v: Vendor | typeof CUSTOM_VENDOR) => {
     setPicked(v);
     if (v === CUSTOM_VENDOR) {
-      setForm((f) => ({ ...f, vendor: "", endpoint: "", kind: "" }));
+      setForm((f) => ({ ...f, vendor: "", endpoint: "" }));
     } else {
-      setForm((f) => ({ ...f, vendor: v.id, endpoint: v.endpoint, kind: v.kinds[0] ?? "" }));
+      setForm((f) => ({ ...f, vendor: v.id, endpoint: v.endpoint }));
     }
     setAddStep("form");
   };
@@ -85,7 +85,9 @@ export function AccountsPage() {
     }
     if (form.label.trim()) body.label = form.label.trim();
     if (form.model.trim()) body.model = form.model.trim();
-    if (form.kind.trim()) body.kind = form.kind.trim();
+    // `kind` 是账户的类型（official / third-party / offline），由后端按供应商推断：
+    // 别再发它 —— 供应商列表里的 `kinds` 报的是协议（openai-completions 之类），
+    // 拿它当 kind 发过去会被 /api/accounts 拒绝（"kind must be one of …"）。
 
     setSubmitBusy(true);
     setSubmitWarn(null);
@@ -367,18 +369,10 @@ export function AccountsPage() {
             )}
             {pickedVendor && pickedVendor.kinds.length > 0 && (
               <div className="form-row">
-                <span className="form-label">类型</span>
-                <select
-                  className="input"
-                  value={form.kind}
-                  onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value }))}
-                >
-                  {pickedVendor.kinds.map((k) => (
-                    <option key={k} value={k}>
-                      {k}
-                    </option>
-                  ))}
-                </select>
+                <span className="form-label">协议</span>
+                <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                  {pickedVendor.kinds.join(" / ")}（由供应商决定；账户类型由后端推断）
+                </span>
               </div>
             )}
             <div className="form-row">

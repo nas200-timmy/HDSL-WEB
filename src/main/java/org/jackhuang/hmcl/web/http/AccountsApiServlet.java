@@ -142,8 +142,12 @@ public final class AccountsApiServlet extends HttpServlet {
                 case "third-party", "thirdparty", "third_party" -> DshAccount.AccountKind.THIRD_PARTY;
                 case "offline" -> DshAccount.AccountKind.OFFLINE;
                 default -> {
+                    // Name what arrived: the vendors API reports *protocols* in its
+                    // `kinds` (openai-completions and friends), and a client that
+                    // confuses the two sends one here.
                     Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
-                            "kind must be one of official, third-party, offline");
+                            "kind must be one of official, third-party, offline (got \""
+                                    + kindParam.trim() + "\")");
                     yield null;
                 }
             };

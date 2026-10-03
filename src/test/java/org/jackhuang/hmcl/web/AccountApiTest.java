@@ -153,6 +153,37 @@ class AccountApiTest {
         }
     }
 
+    /// The contract the panel's "add account" dialog depends on: the vendor
+    /// path sends a vendor id and a key, and the account kind is inferred.
+    /// The catalogue's `kinds` are *wire protocols* — sending one as the kind
+    /// is refused, which is exactly the mismatch that made every add fail with
+    /// "kind must be one of official, third-party, offline".
+    @Test
+    void theVendorPathInfersTheKindAndProtocolsAreNotKinds() throws Exception {
+        HttpServer vendor = vendorStub();
+        String endpoint = "http://127.0.0.1:" + vendor.getAddress().getPort();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            // What the fixed panel sends: vendor + endpoint + key, no kind.
+            HttpResponse<String> created = post(client, base + "/api/accounts",
+                    "{\"vendor\":\"deepseek\",\"endpoint\":\"" + endpoint
+                            + "\",\"apiKey\":\"" + GOOD_KEY + "\",\"label\":\"panel\"}");
+            assertEquals(201, created.statusCode(), created.body());
+            assertEquals("official",
+                    json(created).getAsJsonObject("account").get("kind").getAsString());
+
+            // What the broken panel sent: the vendor's protocol as the kind.
+            HttpResponse<String> rejected = post(client, base + "/api/accounts",
+                    "{\"vendor\":\"deepseek\",\"endpoint\":\"" + endpoint
+                            + "\",\"apiKey\":\"" + BAD_KEY + "\",\"kind\":\"openai-completions\"}");
+            assertEquals(400, rejected.statusCode(), rejected.body());
+            assertTrue(json(rejected).get("error").getAsString().contains("openai-completions"),
+                    "the refusal names what arrived: " + rejected.body());
+        }
+    }
+
     @Test
     void accountCrudMasksTheKeyAndVerifiesLive() throws Exception {
         HttpServer vendor = vendorStub();

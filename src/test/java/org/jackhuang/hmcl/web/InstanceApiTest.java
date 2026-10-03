@@ -23,6 +23,8 @@ import com.google.gson.JsonParser;
 import org.jackhuang.hmcl.dsh.DshInstance;
 import org.jackhuang.hmcl.dsh.DshInstanceManager;
 import org.jackhuang.hmcl.dsh.DshProcessManager;
+import org.jackhuang.hmcl.setting.GameDirectory;
+import org.jackhuang.hmcl.setting.GameDirectoryManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -31,6 +33,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -260,6 +263,34 @@ class InstanceApiTest {
         }
     }
 
+    /// A new instance opens on the *selected* directory: that is how a mounted
+    /// workspace reaches the harness, and why the launcher selects one at
+    /// start-up (`WorkspaceDirectory#install`).
+    @Test
+    void aNewInstanceOpensOnTheSelectedDirectory() throws Exception {
+        Path workspace = Files.createTempDirectory("hdsl-workspace");
+        try (TestSupport.RunningServer running = startServer()) {
+            GameDirectory added = GameDirectoryManager.add(workspace, "工作区");
+            try {
+                GameDirectoryManager.select(added.id());
+
+                HttpClient client = TestSupport.client();
+                String base = running.baseUrl();
+                HttpResponse<String> created = send(client, base + "/api/instances", "POST",
+                        "{\"name\":\"On Workspace\",\"version\":\"" + VERSION + "\",\"autoInstall\":false}");
+                assertEquals(201, created.statusCode(), created.body());
+                String id = json(created).getAsJsonObject("instance").get("id").getAsString();
+                create(id);
+
+                DshInstance instance = DshInstanceManager.find(id);
+                assertNotNull(instance);
+                assertEquals(workspace.toAbsolutePath().normalize(), instance.workspacePath());
+            } finally {
+                GameDirectoryManager.remove(added.id());
+            }
+        }
+    }
+
     // --------------------------------------------------------------- installs --
 
     @Test
@@ -416,7 +447,11 @@ class InstanceApiTest {
 
     private static JsonObject awaitState(HttpClient client, String base, String id, String state)
             throws Exception {
-        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        // A minute, not thirty seconds: an install + first launch spawns node
+        // and pnpm, and a machine running anything else alongside the suite
+        // (a container build, say) has been seen to take longer than half of
+        // what a quiet one needs.
+        long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
         JsonObject last = null;
         while (System.nanoTime() < deadline) {
             HttpResponse<String> detail = send(client, base + "/api/instances/" + id, "GET", null);

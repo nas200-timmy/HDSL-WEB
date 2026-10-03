@@ -23,9 +23,11 @@ import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.auth.UserStore;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.config.ServerConfigLoader;
+import org.jackhuang.hmcl.web.config.WorkspaceDirectory;
 import org.jackhuang.hmcl.web.server.HdslServer;
 import org.jackhuang.hmcl.web.tls.CertificateManager;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
 
@@ -67,6 +69,13 @@ public final class Main {
             }
 
             Logger.LOG.start(config.dataDir.resolve("logs"));
+
+            // The workspace is where a session's files live and where the
+            // harness process runs: `<home>/workspace` (what the compose file
+            // mounts), or HDSL_WORKSPACE when the operator named another
+            // folder. Not the directory the launcher keeps its instances in,
+            // which is what the domain defaults to.
+            WorkspaceDirectory.install(env, Path.of(System.getProperty("user.home")), Logger.LOG);
 
             UserStore users = UserStore.open(config.dataDir, env, Logger.LOG);
             AuthService auth = new AuthService(users, Duration.ofHours(config.auth.sessionTtlHours));
