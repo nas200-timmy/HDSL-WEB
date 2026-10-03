@@ -1,0 +1,181 @@
+HDSL
+Copyright (C) 2026  HDSL contributors
+
+This program is a modified version of Hello Minecraft! Launcher (HMCL).
+
+    Hello Minecraft! Launcher
+    Copyright (C) 2020  huangyuhui <huanghongxun2008@126.com> and contributors
+
+HMCL is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+HMCL is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program.  If not, see <https://www.gnu.org/licenses/>.
+
+--------------------------------------------------------------------------------
+
+STATEMENT OF CHANGES  (GNU GPL v3, section 5(a) and section 7)
+
+The original work has been modified as follows:
+
+1.  Renamed.  The software is distributed under the name "HDSL", not
+    "HMCL" or "Hello Minecraft! Launcher", as required by the additional
+    terms attached to HMCL under GNU GPL v3 section 7(c).
+
+2.  Scope.  All functionality related to launching, installing or managing
+    Minecraft has been removed, together with the corresponding source
+    packages (game, download, auth, modpack, addon, schematic, nbt, java,
+    launch, upgrade, terracotta, countly) and the associated user-interface
+    pages.
+
+3.  Purpose.  The application now launches and manages DeepSeek Harness
+    (`dsh`) profiles and versions, which is implemented in the new
+    `org.jackhuang.hmcl.dsh` package and the new user-interface pages under
+    `org.jackhuang.hmcl.ui.dsh`.
+
+4.  Retained.  The presentation layer -- the JavaFX window decorator, the
+    component library, the animation helpers, the theme engine, the image
+    pipeline, the asynchronous task engine, the localization framework and
+    the general-purpose utilities -- is carried over from HMCL, keeping its
+    original package names and its original copyright headers, which are
+    preserved in full as required by GNU GPL v3 section 7(b).
+
+5.  Removed.  The self-update mechanism (which used HMCL's own update server
+    and signing key), the crash-reporting submission path, the Countly
+    package name, the Terracotta integration and every hard-coded reference
+    to HMCL's servers, documentation, community links and branding have been
+    removed or replaced.
+
+6.  Platform.  Only Linux and macOS are supported.  Windows-specific code
+    paths are not maintained.
+
+The full source code of this modified version is available from the project
+repository in which this notice is distributed.
+
+--------------------------------------------------------------------------------
+
+TRADEMARKS
+
+"Hello Minecraft! Launcher", "HMCL" and their logos are the property of their
+respective owners.  They are used in this file only to give credit and to
+satisfy the attribution requirements of the GNU General Public License.  Their
+use does not imply any endorsement of HDSL by the HMCL project.
+
+"DeepSeek", "DeepSeek Harness" and "dsh" are the property of their respective
+owners.  HDSL is an independent, unofficial launcher and is not affiliated
+with or endorsed by the DeepSeek Harness project.
+
+--------------------------------------------------------------------------------
+
+THIRD-PARTY COMPONENTS
+
+This program includes or depends on third-party software, including JFoenix,
+OpenJFX, Gson, JNA, kala-compress, commonmark, jsoup, NanoHTTPD, MonetFX,
+weburl, webp, uuid-tools, pci-ids, simple-png-javafx and fxsvgimage.  The
+licenses and attributions of those components are listed in
+`src/main/resources/assets/about/deps.json` and in `assets/about/thanks.json`.
+
+HDSL-web
+Copyright (C) 2026  HDSL-web contributors
+
+HDSL-web is a web-server derivative of HDSL: its domain layer (dsh/,
+setting/, util/) is copied from HDSL and de-JavaFX-ed, and it ships as a
+single executable jar serving a browser management panel.
+
+--------------------------------------------------------------------------------
+
+HDSL-web THIRD-PARTY COMPONENTS
+
+HDSL-web ships as a single executable jar that bundles its runtime
+dependencies.  The components below are the ones bundled into that jar; the
+desktop-only components named in the section above (JFoenix, OpenJFX, JNA,
+jsoup, commonmark, NanoHTTPD, MonetFX, webp, pci-ids, ...) are not part of
+HDSL-web.
+
+  Eclipse Jetty (jetty-server, jetty-http, jetty-io, jetty-util, jetty-client,
+  jetty-security, jetty-session, jetty-alpn-client, jetty-xml, jetty-jndi,
+  jetty-plus, jetty-ee, the org.eclipse.jetty.ee10 / .ee10.websocket servlet
+  and WebSocket modules, and the org.eclipse.jetty.websocket core and jetty
+  modules)
+      Dual licensed under the Eclipse Public License 2.0 or the Apache
+      License 2.0.
+      https://eclipse.dev/jetty/
+
+  Jakarta EE APIs (jakarta.servlet-api, jakarta.websocket-api,
+  jakarta.websocket-client-api, jakarta.annotation-api, jakarta.el-api,
+  jakarta.enterprise.cdi-api, jakarta.enterprise.lang-model,
+  jakarta.inject-api, jakarta.interceptor-api, jakarta.transaction-api)
+      Eclipse Public License 2.0 or GPL-2.0 with the Classpath Exception.
+      https://jakarta.ee/
+
+  Bouncy Castle (org.bouncycastle:bcpkix-jdk18on, bcprov-jdk18on,
+  bcutil-jdk18on)
+      The Bouncy Castle Licence (MIT-style).
+      https://www.bouncycastle.org/licence.html
+
+  snakeyaml-engine (org.snakeyaml:snakeyaml-engine)
+      Apache License 2.0.
+      https://bitbucket.org/snakeyaml/snakeyaml-engine
+
+  Gson (com.google.code.gson:gson) and error_prone_annotations
+      Apache License 2.0.
+      https://github.com/google/gson
+
+  SLF4J (org.slf4j:slf4j-api, org.slf4j:slf4j-jdk14)
+      MIT License.
+      https://www.slf4j.org/license.html
+
+  JetBrains annotations (org.jetbrains:annotations) and IntelliJ language
+  annotations (org.intellij:annotations)
+      Apache License 2.0.
+      https://github.com/JetBrains/java-annotations
+
+  kala-compress (org.glavo.kala:kala-compress-base and -archivers-zip /
+  -archivers-tar / -archivers-ar)
+      Apache License 2.0.
+      https://github.com/Glavo/kala-compress
+
+  ASM (org.ow2.asm:asm and asm-commons, pulled in transitively)
+      BSD 3-Clause License.
+      https://asm.ow2.io/
+
+  XZ for Java (org.tukaani:xz)
+      0BSD.
+      https://tukaani.org/xz/java.html
+
+  weburl (org.glavo:weburl)
+      Apache License 2.0.
+      https://github.com/Glavo/weburl
+
+  kala-encoding-detector (org.glavo:kala-encoding-detector) and
+  uuid-tools (org.glavo:uuid-tools)
+      Mozilla Public License 2.0.
+      https://www.mozilla.org/en-US/MPL/2.0/
+
+  JUnit 5 (org.junit.jupiter:junit-jupiter and the JUnit Platform launcher)
+      Eclipse Public License 2.0.
+      Used by the test suite only; not bundled into the shipped jar.
+      https://junit.org/
+
+  The panel SPA under web/ is built with React, react-router-dom, Vite and
+  TypeScript (React and react-router-dom under the MIT License, Vite under the
+  MIT License, TypeScript under the Apache License 2.0).  The licence texts are
+  the ones published with those packages.
+
+--------------------------------------------------------------------------------
+
+CONTAINER IMAGE
+
+The published container image is a Debian GNU/Linux system carrying the jar
+above, an OpenJDK 21 runtime, Node.js and pnpm.  Debian and the packages
+installed from its archive (ca-certificates, curl, git, tini, zstd, xz-utils,
+util-linux and the rest) carry their own copyright and licences, recorded under
+/usr/share/doc/<package>/copyright inside the image.  Node.js and pnpm are
+distributed under the MIT License.  HDSL-web is not affiliated with, or
+endorsed by, any of these projects.

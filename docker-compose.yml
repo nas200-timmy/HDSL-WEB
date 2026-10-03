@@ -1,0 +1,69 @@
+# HDSL-web — 单容器部署示例。
+#
+#   docker compose build
+#   HDSL_ADMIN_PASSWORD='改成你的口令' docker compose up -d
+#
+# 首次启动：若未设置 HDSL_ADMIN_PASSWORD，服务器保持"待初始化"状态，打开网页会
+# 自动进入初始化引导页，创建第一个管理员账号后直接使用。默认是纯 HTTP；要启用 HTTPS，
+# 见 README「声明式 HTTPS」与 docs/deployment.md。
+
+services:
+  hdsl-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # npm 源：国内网络慢时改成 https://registry.npmmirror.com/
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
+        # 发布构建可传 -PreleaseVersion 的值；留空即开发版
+        RELEASE_VERSION: ${RELEASE_VERSION:-}
+        # Node 官方 dist 基址：国内直连 nodejs.org 会 TLS 失败，默认走腾讯镜像（与官方一致，仍校验官方 SHASUMS256）
+        NODE_DIST_MIRROR: ${NODE_DIST_MIRROR:-https://mirrors.cloud.tencent.com/nodejs-release}
+    image: hdsl-web:latest
+    container_name: hdsl-web
+    restart: unless-stopped
+
+    # SIGTERM 后 JVM 的 shutdown hook 会优雅停 Jetty（最多约 30s 排水）并停掉所有
+    # 运行中的 dsh 实例；给足时间，别让 Docker 提前 SIGKILL（默认只有 10s）。
+    stop_grace_period: 40s
+
+    # 面板端口。HTTPS 开启时同一端口直接说 TLS，不需要改这里。
+    # 改端口：在宿主机或 .env 里设 HDSL_PORT，下面三处（ports/environment/healthcheck）会一起跟着变。
+    ports:
+      - "${HDSL_PORT:-3080}:${HDSL_PORT:-3080}"
+      # 可选：同时启用 https.redirect_http 时，把 80 端口也发布出去做 HTTP→HTTPS 跳转
+      # - "80:80"
+
+    environment:
+      # 数据目录（镜像内已固定为 /data，此处显式写出便于阅读）
+      HDSL_DATA: /data
+      HDSL_PORT: "${HDSL_PORT:-3080}"
+      # 首次启动的管理员口令；留空则打开网页走初始化引导创建账号
+      HDSL_ADMIN_PASSWORD: ${HDSL_ADMIN_PASSWORD:-}
+      # 下载源。npm 读这个环境变量；入口脚本会把它写进 pnpm 的全局 config.yaml，
+      # 并导出给 corepack（下载 pnpm 本体用），所以国内设成 npmmirror 就能全链路加速。
+      NPM_CONFIG_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
+      # 额外 JVM 参数（例如限制堆上限）
+      JAVA_OPTS: ${JAVA_OPTS:--Xmx1g}
+      # 可选：pnpm 共享仓库位置（默认 /data/pnpm-store，在卷里，便于硬链接复用）
+      # PNPM_STORE_DIR: /data/pnpm-store
+
+    volumes:
+      # 唯一需要持久化的目录：server.yaml / certs / auth / hdsl / pnpm-store …
+      - hdsl-data:/data
+
+    # $$ 让变量交给容器内的 shell 解析，取的是上面 environment 里的 HDSL_PORT
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsSk "https://127.0.0.1:$${HDSL_PORT:-3080}/api/health" >/dev/null 2>&1
+          || curl -fsS "http://127.0.0.1:$${HDSL_PORT:-3080}/api/health" >/dev/null 2>&1
+          || exit 1
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  hdsl-data:

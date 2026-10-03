@@ -1,0 +1,52 @@
+#!/bin/sh
+# Fake pnpm for the HDSL-web test JVM (wired in build.gradle.kts).
+#
+# It intercepts exactly one call shape — `pnpm install --dir <staging>`, the
+# harness install DshVersionManager drives — and only while the marker file
+# named by HDSL_FAKE_PNPM_MARKER exists. Instead of downloading
+# @deepseek-ai/dsh from the registry it lays down a stub harness whose bin.js
+# speaks the one stdout contract the launcher relies on (the readiness line),
+# so pack installs run end-to-end in tests with no network and no 400 MB
+# download. Every other call, and every call while the marker is absent, is
+# delegated to the real pnpm found further down PATH.
+
+if [ -n "$HDSL_FAKE_PNPM_MARKER" ] && [ -f "$HDSL_FAKE_PNPM_MARKER" ] && [ "$1" = "install" ]; then
+    dir=""
+    prev=""
+    for arg in "$@"; do
+        if [ "$prev" = "--dir" ]; then
+            dir="$arg"
+        fi
+        prev="$arg"
+    done
+    if [ -n "$dir" ]; then
+        pkg="$dir/node_modules/@deepseek-ai/dsh"
+        boot="$dir/node_modules/@deepseek-ai/dsh-app-boot"
+        mkdir -p "$pkg/lib" "$boot/lib"
+        printf '%s\n' '{"name":"@deepseek-ai/dsh","version":"0.0.0-stub","private":true}' > "$pkg/package.json"
+        printf '%s\n' '{"name":"@deepseek-ai/dsh-app-boot","version":"0.0.0-stub","private":true}' > "$boot/package.json"
+        cat > "$pkg/lib/bin.js" <<'STUB'
+const [, , ...args] = process.argv;
+if (args.includes("--help")) {
+  console.log("Usage: dsh [--profile p] [--no-open] [--port p] [--trusted-host h]");
+  process.exit(0);
+}
+if (args[0] === "plugin") {
+  process.exit(0);
+}
+console.error("stub argv: " + args.join(" "));
+const portIndex = args.indexOf("--port");
+const port = portIndex >= 0 ? parseInt(args[portIndex + 1], 10) : 0;
+console.log("dsh web: http://127.0.0.1:" + port + "/?token=packstubtoken");
+setInterval(() => {}, 1 << 30);
+STUB
+        echo "fake pnpm: stub harness laid down in $dir"
+        exit 0
+    fi
+fi
+
+# Delegate: remove this script's own directory from PATH and re-resolve pnpm.
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vx "$SELF_DIR" | paste -sd: -)
+export PATH
+exec pnpm "$@"

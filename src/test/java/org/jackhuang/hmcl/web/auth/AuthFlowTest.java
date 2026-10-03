@@ -1,0 +1,158 @@
+/*
+ * HDSL-web
+ * Copyright (C) 2026  HDSL-web contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+package org.jackhuang.hmcl.web.auth;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import org.jackhuang.hmcl.web.TestSupport;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
+import java.util.Map;
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/// The whole login dance over real HTTP: first boot from HDSL_ADMIN_PASSWORD,
+/// wrong password rejected, session cookie issued, whoami with and without
+/// the cookie, logout kills the session.
+class AuthFlowTest {
+
+    private static final String PASSWORD = "correct horse battery staple";
+
+    @TempDir
+    Path dataDir;
+
+    @Test
+    void loginLogoutAndWhoamiFlow() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir,
+                Map.of(UserStore.ENV_ADMIN_PASSWORD, PASSWORD),
+                config -> config.bindHost = "127.0.0.1")) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            // The users file exists with the admin account, owner-only.
+            Path usersFile = dataDir.resolve("auth/users.json");
+            assertTrue(Files.exists(usersFile), "first boot must create auth/users.json");
+            Set<PosixFilePermission> perms = Files.getPosixFilePermissions(usersFile);
+            assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE), perms,
+                    "users.json must be 0600");
+
+            // Wrong password: 401, uniform error shape.
+            HttpResponse<String> bad = post(client, base + "/api/auth/login",
+                    "{\"username\":\"admin\",\"password\":\"wrong\"}");
+            assertEquals(401, bad.statusCode());
+            assertEquals("invalid username or password",
+                    JsonParser.parseString(bad.body()).getAsJsonObject().get("error").getAsString());
+
+            // Right password: 200 + session cookie with the right attributes.
+            HttpResponse<String> good = post(client, base + "/api/auth/login",
+                    "{\"username\":\"admin\",\"password\":\"" + PASSWORD + "\"}");
+            assertEquals(200, good.statusCode());
+            JsonObject body = JsonParser.parseString(good.body()).getAsJsonObject();
+            assertTrue(body.get("ok").getAsBoolean());
+            assertEquals("admin", body.get("username").getAsString());
+            String setCookie = good.headers().firstValue("set-cookie").orElseThrow();
+            assertTrue(setCookie.startsWith(AuthFilter.SESSION_COOKIE + "="), setCookie);
+            assertTrue(setCookie.contains("HttpOnly"), setCookie);
+            assertTrue(setCookie.contains("SameSite=Strict"), setCookie);
+            assertTrue(setCookie.contains("Path=/"), setCookie);
+            String cookie = setCookie.split(";", 2)[0];
+
+            // whoami with the cookie: the username comes back.
+            HttpResponse<String> whoami = get(client, base + "/api/auth/whoami", cookie);
+            assertEquals(200, whoami.statusCode());
+            assertEquals("admin", JsonParser.parseString(whoami.body()).getAsJsonObject().get("username").getAsString());
+
+            // whoami without a cookie: the session gate answers 401.
+            HttpResponse<String> anonymous = get(client, base + "/api/auth/whoami", null);
+            assertEquals(401, anonymous.statusCode());
+            assertEquals("unauthorized", JsonParser.parseString(anonymous.body()).getAsJsonObject().get("error").getAsString());
+
+            // Logout clears the cookie and the session.
+            HttpResponse<String> logout = post(client, base + "/api/auth/logout", "", cookie);
+            assertEquals(200, logout.statusCode());
+            String clear = logout.headers().firstValue("set-cookie").orElseThrow();
+            assertTrue(clear.contains(AuthFilter.SESSION_COOKIE) && clear.contains("Max-Age=0"), clear);
+
+            // The old token no longer verifies.
+            HttpResponse<String> after = get(client, base + "/api/auth/whoami", cookie);
+            assertEquals(401, after.statusCode());
+        }
+    }
+
+    @Test
+    void healthIsPublicAndReportsVersionAndUptime() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+                config -> config.bindHost = "127.0.0.1")) {
+            HttpResponse<String> response = get(TestSupport.client(), running.baseUrl() + "/api/health", null);
+            assertEquals(200, response.statusCode());
+            JsonObject body = JsonParser.parseString(response.body()).getAsJsonObject();
+            assertEquals("ok", body.get("status").getAsString());
+            assertNotNull(body.get("version"));
+            assertTrue(body.get("uptimeSec").getAsLong() >= 0);
+        }
+    }
+
+    @Test
+    void unknownApiPathsAreUniformJson404() throws Exception {
+        // Auth is off on a loopback bind so the request reaches the router;
+        // with the gate on, an unauthenticated /api/nope is a 401, which the
+        // main flow test already pins.
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+                config -> {
+                    config.bindHost = "127.0.0.1";
+                    config.auth.disabled = true;
+                })) {
+            HttpResponse<String> response = get(TestSupport.client(), running.baseUrl() + "/api/nope", null);
+            assertEquals(404, response.statusCode());
+            assertEquals("not found", JsonParser.parseString(response.body()).getAsJsonObject().get("error").getAsString());
+        }
+    }
+
+    private static HttpResponse<String> post(HttpClient client, String url, String json) throws Exception {
+        return post(client, url, json, null);
+    }
+
+    private static HttpResponse<String> post(HttpClient client, String url, String json, String cookie) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(json));
+        if (cookie != null) {
+            builder.header("Cookie", cookie);
+        }
+        return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> get(HttpClient client, String url, String cookie) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).GET();
+        if (cookie != null) {
+            builder.header("Cookie", cookie);
+        }
+        return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+}

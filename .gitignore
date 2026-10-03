@@ -1,0 +1,13 @@
+.gradle/
+**/.gradle/
+**/build/
+build/
+**/node_modules/
+web/dist/
+web/.cache/
+.idea/
+.vscode/
+*.iml
+*.class
+.DS_Store
+Thumbs.db
