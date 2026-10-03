@@ -1,11 +1,45 @@
 # HDSL-web
 
+[![build](https://github.com/nas200-timmy/HDSL-WEB/actions/workflows/build.yml/badge.svg)](https://github.com/nas200-timmy/HDSL-WEB/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/nas200-timmy/HDSL-WEB?label=release)](https://github.com/nas200-timmy/HDSL-WEB/releases)
+[![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![platform](https://img.shields.io/badge/platform-Docker%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
+
 把 [HDSL](https://github.com/MCXCC303/HDSL)（Hello DeepSeek! Launcher，桌面版）搬进浏览器的**单容器**版本：
 打开网页 → 登录 → 傻瓜式创建 dsh 实例 → 点「启动」→ 在**同域名、同端口、同一张证书**下直接使用 dsh 自己的网页界面。
-实例/版本/插件/账户/整合包/会话/技能/体检/ACP 控制台等管理功能由面板（网页重写的 HMCL 视觉语言）提供。
+界面按桌面版**像素级复刻**（HMCL 视觉语言、Material You 主题、同款图标与动画），管理功能全部保留：
+实例/版本/插件/账户/整合包/会话/技能/体检/ACP 控制台。
+
+![主界面](docs/screenshots/02-main.png)
 
 - 交付形态：**一个可执行 fat jar**（`java -jar hdsl-web.jar`）+ 一个 Debian 容器镜像。
 - jar 之外只需两样东西：**JDK 21+** 和 **Node ^22.19.0 || >=24.0.0 + pnpm**（dsh 由 pnpm 安装、由 node 运行）。
+
+<details>
+<summary>更多截图（初始化引导 / 实例列表 / 下载 / 设置）</summary>
+
+| 初始化引导（首启建号） | 实例列表 |
+|---|---|
+| ![初始化](docs/screenshots/01-setup.png) | ![实例列表](docs/screenshots/03-instances.png) |
+
+| 下载（真实 npm 版本列表） | 设置 |
+|---|---|
+| ![下载](docs/screenshots/04-download.png) | ![设置](docs/screenshots/05-settings.png) |
+
+</details>
+
+## 目录
+
+- [架构](#架构)
+- [快速开始](#快速开始)（Release 下载 / Docker Compose / 裸 `java -jar`）
+- [首次登录与初始化引导](#首次登录与初始化引导)
+- [数据与挂载点](#数据与挂载点)
+- [声明式 HTTPS](#声明式-https)
+- [环境变量](#环境变量)
+- [安全说明](#安全说明)
+- [构建与开发](#构建与开发)
+- [常见问题](#常见问题)
+- [许可](#许可)
 
 ## 架构
 
@@ -34,6 +68,17 @@
 详见 [docs/deployment.md](docs/deployment.md)。
 
 ## 快速开始
+
+### 方式零：下载 Release 产物
+
+从 [Releases](https://github.com/nas200-timmy/HDSL-WEB/releases) 下载 `hdsl-web-<版本>.jar` 与 `SHA256SUMS.txt`：
+
+```bash
+sha256sum -c SHA256SUMS.txt                       # 校验完整性
+HDSL_DATA="$PWD/data" HDSL_PORT=3080 java -jar hdsl-web-0.1.0.jar
+```
+
+jar 的运行前提见下方「方式二」（JDK 21 与 Node/pnpm）。Docker 部署推荐用方式一。
 
 ### 方式一：Docker Compose（推荐）
 
