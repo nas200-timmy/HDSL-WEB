@@ -2,6 +2,37 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.1.3 — 2026-10-03 · 暂时稳定版
+
+修好 dsh 界面「历史加载失败、界面一直闪」，并整理一份会话交接文档。**本版为当前暂时稳定版**，日常使用选它。
+
+### 修复
+
+- **反代 WebSocket 中继的 64 KiB 上限**：面板把 `/i/*` 的 WebSocket 升级中继到实例端口，
+  用的是 Jetty 默认上限（frame / text / binary 均 65536 字节）。dsh 的一份会话历史、一条
+  工具结果、一个粘贴的附件都是一整条 WS 消息，轻易超过 64 KiB——一超，中继这一跳就以
+  1009（message too large）失败、随即以 1011 掐断两端，dsh 客户端报
+  `api gateway: Remote stream WebSocket closed`（gateway/internal）并反复重连，
+  表现为「界面一直闪、历史永远加载不出来」。dsh 自己（node 的 ws）默认允许 100 MiB，
+  瓶颈一直在面板这一跳。现在两侧——服务端 upgrade 容器（浏览器→中继）与转发用的
+  WebSocketClient（中继→dsh）——的 frame / text / binary 都抬到 32 MiB（覆盖 dsh 实际
+  产生的 payload，同时仍给"让面板无限分配内存"的对端一个上限）；中继非正常关闭时写一行
+  日志（实例、状态码、原因），此类失败不再只能从浏览器控制台猜。
+
+### 文档
+
+- 新增 [`docs/session-handoff-2026-10-03.md`](docs/session-handoff-2026-10-03.md)：
+  当天的会话交接文档——问题、排查结论、五次改动、关键环境事实与复现配方、刻意没做的事、
+  当前 git 状态与待办。
+- 文档与测试里的示例域名 / 内网地址 / 宿主路径统一为示例值（`dsh.example.com`、
+  `192.0.2.x`、`/srv/...`）；`DshReadinessLineTest` 的示例私网 IP 换成 TEST-NET 段。
+
+### 验证
+
+- WS 上限 A/B（假 dsh 单发 1 MiB 帧）：修复前两个方向都 `CLOSE 1011 bytes=0`，
+  修复后都 `RECV frame #1 1048576 bytes` 完整送达。
+- 全量 **421 用例 / 0 失败 / 0 跳过**。
+
 ## v0.1.2 — 2026-10-03
 
 上手配置时暴露的两个问题：账户加不进去，dsh 的工作区落在容器自己的目录里。
