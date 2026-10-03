@@ -1,7 +1,9 @@
 # HDSL-web
 
 [![build](https://github.com/nas200-timmy/HDSL-WEB/actions/workflows/build.yml/badge.svg)](https://github.com/nas200-timmy/HDSL-WEB/actions/workflows/build.yml)
+[![docker](https://github.com/nas200-timmy/HDSL-WEB/actions/workflows/docker.yml/badge.svg)](https://github.com/nas200-timmy/HDSL-WEB/actions/workflows/docker.yml)
 [![release](https://img.shields.io/github/v/release/nas200-timmy/HDSL-WEB?label=release)](https://github.com/nas200-timmy/HDSL-WEB/releases)
+[![ghcr](https://img.shields.io/badge/ghcr.io-hdsl--web-blue?logo=docker)](https://github.com/nas200-timmy/HDSL-WEB/pkgs/container/hdsl-web)
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Docker%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 
@@ -82,7 +84,21 @@ HDSL_DATA="$PWD/data" HDSL_PORT=3080 java -jar hdsl-web-0.1.0.jar
 
 jar 的运行前提见下方「方式二」（JDK 21 与 Node/pnpm）。Docker 部署推荐用方式一。
 
-### 方式一：Docker Compose（推荐）
+### 方式一：Docker / Compose（推荐）
+
+不想自己构建镜像时，用已经发布到 **GitHub Container Registry** 的镜像（打 `v*` 标签时由 GitHub Actions 在官方 runner 上自动构建，见 [`.github/workflows/docker.yml`](.github/workflows/docker.yml)）：
+
+```bash
+docker pull ghcr.io/nas200-timmy/hdsl-web:latest
+
+docker run -d --name hdsl-web --restart unless-stopped \
+  -p 3080:3080 \
+  -v hdsl-data:/data \
+  -e HDSL_ADMIN_PASSWORD='换成一个强口令' \
+  ghcr.io/nas200-timmy/hdsl-web:latest
+```
+
+版本化标签与 Release 一一对应（`ghcr.io/nas200-timmy/hdsl-web:0.1.3` 等）。要在本地从源码构建：
 
 ```bash
 cd HDSL-web

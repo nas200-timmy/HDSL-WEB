@@ -99,6 +99,12 @@ FROM debian:trixie-slim AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# OCI 元数据：source 让 ghcr.io 把镜像包自动关联到本仓库（也是 CI 里
+# GITHUB_TOKEN 有权推送同名包的前提），description/licenses 显示在包页面。
+LABEL org.opencontainers.image.source="https://github.com/nas200-timmy/HDSL-WEB"
+LABEL org.opencontainers.image.description="DeepSeek Harness 的单容器网页版启动器：登录 → 创建实例 → 一键启动 → 同端口同证书反代出 dsh 网页"
+LABEL org.opencontainers.image.licenses="GPL-3.0-only"
+
 # ca-certificates  TLS to npm/registry, plus the JVM's own trust store
 # curl             registry downloads and the HEALTHCHECK probe
 # tini             PID 1: reaps zombies, forwards SIGTERM to the JVM
