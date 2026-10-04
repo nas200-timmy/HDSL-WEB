@@ -83,3 +83,36 @@ NOT_INSTALLED ──install──▶ INSTALLING ──▶ STOPPED ──launch�
   端口目前仍是每次读取时临时解析（`InstanceRuntime.portOf`）。
 - 桌面版共享的领域层文件（`DshVersionManager`、`DshPaths` 等）没有为了这次改动分叉，改动全部落在
   `org.jackhuang.hmcl.web.*` 与 `web/`（面板）里。
+
+## ACP 控制台也拿实例的账户
+
+面板的「控制台」是**另一个 dsh 进程**：`node <实例>/dsh/... --profile acp`，与实例的 web 进程
+各活各的。账户注入原本只做在启动 web 进程那条路上，于是控制台既没有供应商路由也没有密钥，
+每次对话都止于 dsh 自己那句
+`no API key for provider route "deepseek-official"`——点名一条用户从没选过的路由。
+
+现在同一条注入也做给控制台的 profile（`AcpAccountBridge`，web 层）：
+
+| | 启动 web 进程（`DshLauncher.plan`） | ACP 控制台（`AcpAccountBridge`） |
+| --- | --- | --- |
+| 供应商路由写进 | `profiles/<实例 profile>` 的补丁层 | `profiles/acp` 的补丁层 |
+| 密钥走 | 子进程环境（路由同名变量 + DeepSeek 的 `DEEPSEEK_API_KEY`） | 同上 |
+| 默认模型 | 仅当账户不是启动器自家厂商时写进 `settings.yaml` | 同上，同一文件、同一条件 |
+| 生命周期 | 启动开始写到启动结束整段 | 控制台起来时写，`acp-stop`/进程退出时删 |
+
+两处刻意的差别：
+
+- **不碰 `settings.yaml` 的注记**（`.hdsl-injected.json`）。那是每个 home 一份、正在运行的 web
+  实例在用的东西；控制台再去 capture/settle 会把它覆盖掉。控制台只动自己 profile 的补丁层、
+  子进程环境，以及上面那一个条件性写入。
+- **补丁层里别的账号留下的路由会被收回**：只按启动器知道的账户名（`SettingsManager` 里的账户）
+  收回，和一次启动收回的集合一致。
+
+推论与边界：
+
+- 官方 DeepSeek 账户：控制台用 dsh 自带的官方路由 + 账户的密钥（`DEEPSEEK_API_KEY`），
+  与 dsh 网页用的是同一把钥匙但不是同一条路由；第三方账户：路由与默认模型都按账户走。
+- 实例没指定账户（`accountKey` 为空）时，控制台完全按老样子启动，不做任何注入。
+- 账户注入失败（供应商拉不到模型列表等）只记 `[acp]` 警告并退回"无账户"的启动方式，
+  不会让控制台起不来；这时候对话仍会报缺密钥，原因在容器日志里。
+

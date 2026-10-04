@@ -223,7 +223,12 @@ public final class InstanceRuntime {
     /// The account an instance explicitly names, or `null` when it names none
     /// (or names one that is gone — launching with the wrong key is worse than
     /// launching with none).
-    private static @Nullable DshAccount accountOf(DshInstance instance) {
+    ///
+    /// The same answer the launch path gives, and for the same reason: the ACP
+    /// console of an instance is that instance running, so it works with the
+    /// account the instance names and with no other. See
+    /// [org.jackhuang.hmcl.web.acp.AcpAccountBridge].
+    public static @Nullable DshAccount accountOf(DshInstance instance) {
         String key = DshInstanceSettings.accountKey(instance);
         if (key == null || key.isBlank()) {
             return null;

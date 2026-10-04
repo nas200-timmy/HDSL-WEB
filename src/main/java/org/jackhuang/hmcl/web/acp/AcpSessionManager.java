@@ -70,11 +70,21 @@ public final class AcpSessionManager {
         /// @throws DshException when the child cannot start or the handshake fails
         DshAcpClient connect(DshInstance instance, Path workingDirectory, DshAcpClient.Listener listener)
                 throws DshException;
+
+        /// Gives back whatever [connect] put in the instance's home for this console.
+        ///
+        /// Called once per console that is over — stopped, failed to come up, or found dead — so a
+        /// connector that wrote something for the console can take it away again. The default does
+        /// nothing: a connector that put nothing there has nothing to give back.
+        ///
+        /// @param instance the instance the console belonged to
+        default void release(DshInstance instance) {
+        }
     }
 
-    /// The production connector: the instance's own harness, booted in ACP mode.
-    public static final Connector DEFAULT_CONNECTOR =
-            (instance, workingDirectory, listener) -> DshAcpClient.connect(instance, workingDirectory, listener);
+    /// The production connector: the instance's own harness, booted in ACP mode,
+    /// with the panel's account for that instance handed to it.
+    public static final Connector DEFAULT_CONNECTOR = new AcpAccountBridge();
 
     private final EventBus bus;
     private final Connector connector;
@@ -193,7 +203,9 @@ public final class AcpSessionManager {
     ///
     /// The process goes away through the protocol's own shutdown: closing stdin
     /// is the bounded drain the harness binds EOF to, and the client force-kills
-    /// the child if it does not oblige.
+    /// the child if it does not oblige. Afterwards the connector is asked to give
+    /// back whatever it wrote for this console — for the account bridge, the
+    /// supplier route in the console's own profile.
     ///
     /// @param instanceId the instance id
     public void stop(String instanceId) {
@@ -207,6 +219,7 @@ public final class AcpSessionManager {
             if (client != null) {
                 client.close();
             }
+            release(console);
         });
     }
 
@@ -220,7 +233,27 @@ public final class AcpSessionManager {
                 if (client != null) {
                     client.close();
                 }
+                release(console);
             }
+        }
+    }
+
+    /// Gives back what the connector wrote into an instance's home for a console
+    /// that is over.
+    ///
+    /// A console that never resolved its instance wrote nothing to give back, and
+    /// the connector's own release is idempotent for the paths that reach it
+    /// twice.
+    private void release(Console console) {
+        DshInstance instance = console.instance;
+        if (instance == null) {
+            return;
+        }
+        try {
+            connector.release(instance);
+        } catch (RuntimeException e) {
+            // Tidying up after a console must not be able to take the panel down.
+            LOG.warning("[acp] could not release the console of " + instance.id(), e);
         }
     }
 
@@ -234,6 +267,7 @@ public final class AcpSessionManager {
                 fail(console, "Instance " + console.instanceId + " does not exist");
                 return;
             }
+            console.instance = instance;
             Path entry = instance.dshEntryPoint();
             if (!Files.isRegularFile(entry)) {
                 fail(console, "Instance " + console.instanceId
@@ -270,6 +304,7 @@ public final class AcpSessionManager {
     /// Removes a console that failed to come up and tells the caller why.
     private void fail(Console console, String message) {
         consoles.remove(console.instanceId, console);
+        release(console);
         if (!console.stopping) {
             publishError(console.instanceId, message);
         }
@@ -316,6 +351,9 @@ public final class AcpSessionManager {
         private final DshAcpClient.Listener listener;
         private volatile @Nullable DshAcpClient client;
         private volatile @Nullable String sessionId;
+        /// The instance this console resolved to, kept so the connector can be asked
+        /// to give back what it wrote for it once the console is over.
+        private volatile @Nullable DshInstance instance;
         /// Set by [#stop]/[#closeAll] before the process is closed, so the
         /// listener's failure report knows the ending was asked for.
         private volatile boolean stopping;
@@ -384,6 +422,8 @@ public final class AcpSessionManager {
             }
             boolean wasReady = console.sessionId != null;
             consoles.remove(console.instanceId, console);
+            // The process is gone, so whatever it was handed goes back with it.
+            release(console);
             if (!wasReady) {
                 // The startup path reports the failure itself.
                 return;
