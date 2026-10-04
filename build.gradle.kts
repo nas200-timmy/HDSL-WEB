@@ -67,6 +67,9 @@ tasks.test {
     useJUnitPlatform()
     testLogging {
         events("passed", "failed", "skipped")
+        // Failure output carries the full exception, assertion message included: without it a
+        // red test in CI logs only its line number, and the reason is unrecoverable.
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
         showStandardStreams = true
     }
     // A bound on every test, so a machine that cannot run one fails in minutes instead of holding
