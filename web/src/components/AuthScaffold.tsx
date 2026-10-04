@@ -23,8 +23,8 @@ export function AuthScaffold({ title, children }: { title: string; children: Rea
         }}
       >
         <div
-          className="dialog"
-          style={{ minWidth: 340, width: 380, position: "static", animation: "dialog-in 200ms var(--ease)" }}
+          className="dialog auth-card"
+          style={{ position: "static", animation: "dialog-in 200ms var(--ease)" }}
         >
           <div className="dialog-title">{title}</div>
           {children}

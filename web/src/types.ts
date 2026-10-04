@@ -258,6 +258,8 @@ export interface AppState {
   username: string | null;
   authChecked: boolean;
   authError: string | null;
+  /** 移动版式下主导航抽屉是否展开；桌面版式下无意义 */
+  sidebarOpen: boolean;
   /** 服务端是否存在任何用户；false = 已有用户（或尚未询问），true = 需先走初始化引导页 */
   setupRequired: boolean;
   instances: Instance[];

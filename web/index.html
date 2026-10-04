@@ -2,11 +2,19 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover：让 env(safe-area-inset-*) 在刘海屏/手势条上生效（见 styles/mobile.css） -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#5C6BC0" />
+    <!-- 加到手机主屏幕后按独立应用打开（面板是单页应用，没有离线需求，故不注册 service worker） -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="HDSL 面板" />
+    <link rel="manifest" href="/manifest.json" />
     <title>Hello DeepSeek! Launcher</title>
-    <link rel="icon" href="./assets-img/icon.png" />
+    <link rel="icon" href="/assets-img/icon.png" />
+    <link rel="apple-touch-icon" href="/assets-img/icon.png" />
   </head>
   <body>
     <div id="root"></div>

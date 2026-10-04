@@ -1,9 +1,15 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// SPA 构建产物将来会被打进 jar 并挂载在任意路径下，因此必须使用相对 base。
+// base 必须是绝对根路径：SPA 用 BrowserRouter、API/WS/静态资源也都是绝对根路径，
+// 面板只挂在根下（HdslServer 的 contextPath 就是 "/"；README 里那个「剥前缀」指的是
+// /i/{id}/* 反代到 dsh 实例时剥前缀，与面板自身无关）。
+//
+// 曾经用相对 base "./"，那会让深链接（如 /instances/xxx）把 ./assets/… 解析成
+// /instances/assets/…，落到 SPA 兜底返回 text/html，模块脚本被浏览器拒绝执行 → 白屏。
+// 手机端刷新页面、把某个实例的链接加到主屏幕都会踩到，所以改成绝对路径。
 export default defineConfig({
-  base: "./",
+  base: "/",
   plugins: [react()],
   build: {
     outDir: "dist",

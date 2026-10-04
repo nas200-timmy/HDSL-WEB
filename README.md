@@ -16,6 +16,9 @@
 
 - 交付形态：**一个可执行 fat jar**（`java -jar hdsl-web.jar`）+ 一个 Debian 容器镜像。
 - jar 之外只需两样东西：**JDK 21+** 和 **Node ^22.19.0 || >=24.0.0 + pnpm**（dsh 由 pnpm 安装、由 node 运行）。
+- 手机可用：窄屏（≤760px）或矮屏（≤520px）自动切换移动版式——主导航收成抽屉、内页子侧栏变顶部横向标签条、
+  启动面板变成贴底整条操作栏，可点区域按触摸标准放大到 44px，支持「加到主屏幕」。
+  判定条件与规则见 [docs/ui-spec.md §14](docs/ui-spec.md)；桌面版式零变化。
 - 启动器行为：**创建即安装**（`POST /api/instances` 默认 `autoInstall:true`），**未安装的实例点「启动」会先装再启**；
   进度与失败原因都显示在面板上，失败还会写进容器日志。细节见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md)。
 

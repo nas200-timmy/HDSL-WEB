@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useMobileLayout } from "../hooks";
 import { I18N } from "../i18n";
-import { useAppState } from "../store";
+import { closeSidebar, useAppState } from "../store";
 import type { Instance } from "../types";
 import { normState } from "../utils";
 import {
@@ -36,11 +37,15 @@ export function InstanceGraphic({ inst, size = 32 }: { inst: Instance | null; si
 /**
  * 主导航侧栏（宽 200，MainPage 结构）：
  * 账户分区（账户卡片）/ 游戏分区（当前实例项、实例列表、下载）/ 通用分区（设置）。
+ *
+ * 移动版式下它变成抽屉：默认滑出屏幕外，由标题栏的汉堡按钮唤出（见 Decorator.tsx），
+ * 点条目或点遮罩收起；开合状态在 store 的 sidebarOpen。
  */
 export function MainSideBar() {
   const nav = useNavigate();
   const location = useLocation();
   const s = useAppState();
+  const mobile = useMobileLayout();
 
   const account = s.accounts && s.accounts.length > 0 ? s.accounts[0] : null;
   const current = useMemo(() => {
@@ -48,11 +53,20 @@ export function MainSideBar() {
     return running ?? s.instances[0] ?? null;
   }, [s.instances]);
 
-  const go = (path: string) => () => nav(path);
+  // 手机上选了就去目的地并把抽屉收起来（桌面版式下 closeSidebar 是空操作）
+  const goTo = (path: string) => {
+    closeSidebar();
+    nav(path);
+  };
+  const go = (path: string) => () => goTo(path);
   const selected = (path: string) => location.pathname === path;
 
   return (
-    <nav className="sidebar-main">
+    <>
+      {mobile && s.sidebarOpen && (
+        <div className="sidebar-scrim" onClick={() => closeSidebar()} aria-hidden="true" />
+      )}
+      <nav className={`sidebar-main${mobile && s.sidebarOpen ? " open" : ""}`} data-open={s.sidebarOpen ? "true" : undefined}>
       <div className="side-category">{I18N["dsh.account.list"]}</div>
       <button
         className={`side-item ripple-host${selected("/accounts") ? " selected" : ""}`}
@@ -78,7 +92,7 @@ export function MainSideBar() {
       <div className="side-category">{I18N["instance"]}</div>
       <button
         className={`side-item ripple-host${location.pathname.startsWith("/instances/") && location.pathname !== "/instances" ? " selected" : ""}`}
-        onClick={() => current && nav(`/instances/${current.id}`)}
+        onClick={() => current && goTo(`/instances/${current.id}`)}
       >
         <InstanceGraphic inst={current} />
         <span className="side-text">
@@ -124,6 +138,7 @@ export function MainSideBar() {
         </span>
       </button>
     </nav>
+    </>
   );
 }
 
@@ -153,6 +168,7 @@ export function SubSideBar({
   bottom?: React.ReactNode;
   testId?: string;
 }) {
+  const mobile = useMobileLayout();
   return (
     <nav className="sidebar-sub" data-testid={testId}>
       {sections.map((sec, i) => (
@@ -177,8 +193,15 @@ export function SubSideBar({
           })}
         </div>
       ))}
-      <div className="sidebar-spacer" />
-      {bottom && <div className="side-actions">{bottom}</div>}
+      {bottom &&
+        (mobile ? (
+          <div className="side-strip-tail">{bottom}</div>
+        ) : (
+          <>
+            <div className="sidebar-spacer" />
+            <div className="side-actions">{bottom}</div>
+          </>
+        ))}
     </nav>
   );
 }

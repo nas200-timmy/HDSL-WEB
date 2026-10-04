@@ -8,6 +8,7 @@ import "./styles/monet.css";
 import "./styles/base.css";
 import "./styles/components.css";
 import "./styles/layout.css";
+import "./styles/mobile.css";
 
 // Monet 主题：启动时用种子 #5C6BC0 生成亮/暗两套 --monet-* 变量（FIDELITY · Spec 2025）
 initTheme();

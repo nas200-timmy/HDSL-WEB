@@ -138,3 +138,27 @@
 1. 首屏登录：壁纸 + 居中 HMCL 风格登录卡片（圆角 4、surface-container-high、20px 标题"登录 HDSL-web"）。
 2. 窗口控制：帮助/最小化/关闭三键为桌面窗口系统功能，网页版不呈现；「关于」在设置页。
 3. 新增条目：设置里"HTTPS 证书"、实例子导航里"日志/控制台"、帮助里"环境体检"——全部用既有 HMCL 组件样式。
+
+## 14. 移动端适配（手机浏览器远程启停 dsh）
+
+桌面版没有这一节——它只跑在桌面窗口里。网页版要能被手机浏览器打开使用，所以多了一层版式：
+
+**判定条件**（两处必须逐字一致：`web/src/styles/mobile.css` 顶部与 `web/src/hooks.ts` 的 `MOBILE_QUERY`）
+
+| 条件 | 查询 | 用途 |
+| --- | --- | --- |
+| 移动版式 | `(max-width: 760px), (max-height: 520px)` | 抽屉、标签条、贴底操作栏（后者覆盖横屏手机，如 844×390） |
+| 触摸优化 | `(hover: none) and (pointer: coarse)` | 44px 可点区域、16px 输入框（iOS 聚焦不缩放）；与宽度无关，平板也生效 |
+
+**三条版式规则**（全部在 `styles/mobile.css` 内，桌面端零变化）
+
+1. **主导航侧栏 → 抽屉**：`position: fixed` + `translateX(-100%)`，标题栏出现汉堡按钮（`Decorator.tsx`）唤出，`.open` 类滑入；点条目、点遮罩、或路由变化都收起（开合状态在 store 的 `sidebarOpen`）。抽屉用不透明 `surface` 底色，不透明的可读性优于透出壁纸。主导航本身只挂在主页（桌面版就是这个结构），所以汉堡按钮也只在主页出现，别的页面点了没抽屉可开。
+2. **子侧栏 → 顶部横向标签条**：`.page-with-sidebar` 转列、`.sidebar-sub` 转横排可滑动；分区外层 `div` 也必须转横排（DOM 里它是每段条目的包裹层），分区之间用一条浅分隔线区分；紧凑 chip（`padding: 8px 12px`、圆角 18px）。例外：实例页在 `InstanceDetailPage.tsx` 手写了一个 `nav.sidebar-sub.sidebar-stack` 外壳，把「启动/浏览/管理」操作框和标签条装在一列里——那一层保持竖排（操作框一整行 + 标签条一整行），只让它内部的 `SubSideBar` 变标签条。
+3. **启动面板 → 贴底整条操作栏**：`.launch-pane` 改 `position: fixed` 铺满底部，主钮 56px 高、与箭头钮同高；进度/运行浮层变成它上方的底部卡片；内容区留出对应底部内边距。手机主页（壁纸上没有侧栏了）补一张「当前实例」卡片，状态 + 启动/停止 + 打开 dsh + 管理三个动作一屏可达（`MainPage.tsx` 的 `MobileHome`）。
+
+另有：`100dvh` 跟随实际可视高度（地址栏不再顶掉一屏）、`env(safe-area-inset-*)` 避让刘海与手势条（需 `index.html` 的 `viewport-fit=cover`）、弹窗 `min-width` 在窄屏解除、登录卡片宽度交给 CSS（原来内联 380px 在 360px 屏上必然溢出）。
+
+**加到主屏幕**：`web/public/manifest.json` + `apple-mobile-web-app-*` 元信息，`display: standalone`。不注册 service worker（面板是单页应用，没有离线需求）。图标沿用仓库里 32×32 的 `icon.png`；要更精致的桌面图标需要另配 192/512 尺寸的图。
+
+**顺带修掉的既有缺陷（深链接白屏）**：`vite.config.ts` 原来用相对 base `"./"`，于是直接打开或刷新形如 `/instances/xxx` 的地址时，`./assets/…` 会被解析成 `/instances/assets/…`，落到 SPA 兜底返回 `text/html`，模块脚本被浏览器拒绝执行 → 整页空白（手机上加书签、刷新、从主屏幕图标进某个实例都会踩到）。现在 base 改成 `"/"`：路由、`/api`、`/ws`、`/i/*` 本来就是绝对根路径，面板也只挂在根下（`HdslServer` 的 contextPath 就是 `/`）。`manifest.json` 与图标的引用也一并改成绝对路径。
+

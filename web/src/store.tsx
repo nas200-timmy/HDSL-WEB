@@ -15,6 +15,7 @@ const initialState: AppState = {
   username: null,
   authChecked: false,
   authError: null,
+  sidebarOpen: false,
   setupRequired: false,
   instances: [],
   instancesLoaded: false,
@@ -80,6 +81,18 @@ export function toast(kind: Toast["kind"], text: string): void {
 
 export function dismissToast(id: number): void {
   setState((s) => ({ ...s, toasts: s.toasts.filter((t) => t.id !== id) }));
+}
+
+// ---------------------------------------------------------------------------
+// 移动版式：主导航抽屉的开合（桌面版式下侧栏常驻，这个状态不起作用）
+// ---------------------------------------------------------------------------
+
+export function toggleSidebar(): void {
+  setState((s) => ({ ...s, sidebarOpen: !s.sidebarOpen }));
+}
+
+export function closeSidebar(): void {
+  setState((s) => (s.sidebarOpen ? { ...s, sidebarOpen: false } : s));
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +166,7 @@ setUnauthorizedHandler(() => {
   setState((s) => ({
     ...s,
     username: null,
+    sidebarOpen: false,
     setupRequired: false,
     instances: [],
     instancesLoaded: false,

@@ -1,9 +1,10 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useMobileLayout } from "../hooks";
 import { I18N } from "../i18n";
-import { useAppState } from "../store";
+import { closeSidebar, toggleSidebar, useAppState } from "../store";
 import { useServerVersion } from "../version";
-import { ArrowBackIcon, HomeIcon } from "./icons";
+import { ArrowBackIcon, HomeIcon, MenuIcon } from "./icons";
 
 /** 路由 → 标题栏文字（仿 MainWindowPane 的标题切换）。 */
 function useWindowTitle(): string {
@@ -44,20 +45,42 @@ const WIZARD_PATHS = ["/instances/new", "/install/modpack"];
  * 结构 = 标题栏（40px，primary-container，模仿桌面版观感）+ 内容区（铺满剩余空间）。
  * 标题栏只保留导航：返回（有历史时）与向导页的主页按钮；
  * 桌面版的最小化/关闭/帮助三键属于窗口系统，网页里不存在，已移除。
+ *
+ * 移动版式（≤760px 宽或 ≤520px 高）下额外多一个汉堡按钮：
+ * 主导航侧栏在手机上收成抽屉（见 styles/mobile.css），这里负责开合，
+ * 并在路由变化后自动收起。主导航只挂在主页（桌面版也是这个结构），
+ * 所以汉堡按钮也只在主页出现——别处点了没有抽屉可开。
  */
 export function Decorator({ children }: { children: ReactNode }) {
   const nav = useNavigate();
   const location = useLocation();
   const title = useWindowTitle();
+  const mobile = useMobileLayout();
 
   const historyIdx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
   const canGoBack = historyIdx > 0 && location.pathname !== "/login" && location.pathname !== "/setup";
   const isWizard = WIZARD_PATHS.some((w) => location.pathname.startsWith(w));
+  const hasMainNav = location.pathname === "/";
+
+  // 手机上导航之后抽屉不该留着挡内容
+  useEffect(() => {
+    closeSidebar();
+  }, [location.pathname]);
 
   return (
-    <div className="decorator">
+    <div className="decorator" data-mobile={mobile ? "true" : undefined}>
       <header className="titlebar">
         <div className="titlebar-nav">
+          {mobile && hasMainNav && (
+            <button
+              className="titlebar-btn ripple-host"
+              title="菜单"
+              aria-label="菜单"
+              onClick={() => toggleSidebar()}
+            >
+              <MenuIcon size={20} />
+            </button>
+          )}
           <button
             className="titlebar-btn ripple-host"
             disabled={!canGoBack}

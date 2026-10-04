@@ -508,7 +508,7 @@ export function InstanceDetailPage() {
 
   return (
     <div className="page-with-sidebar">
-      <nav className="sidebar-sub" style={{ paddingTop: 0 }}>
+      <nav className="sidebar-sub sidebar-stack" style={{ paddingTop: 0 }}>
         {/* 顶部操作框：启动/停止 + 浏览 + 管理 */}
         <div className="card instance-actions-box" style={{ display: "flex", padding: 4, gap: 2 }}>
           <button

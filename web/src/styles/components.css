@@ -390,6 +390,13 @@ select.input {
   width: 560px;
 }
 
+/* 认证页（登录 / 首次初始化）卡片：原来是内联 minWidth 340 / width 380，
+   在 360px 手机上必然溢出，所以挪到这里，窄屏由 mobile.css 收窄。 */
+.auth-card {
+  width: 380px;
+  min-width: 340px;
+}
+
 .dialog-title {
   font-size: 20px;
   font-weight: bold;
