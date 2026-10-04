@@ -980,6 +980,15 @@ function DoctorTab() {
 
 /* ---------------- 关于 ---------------- */
 
+/** 本项目的仓库与上游（关于页里给的是可点的链接）。 */
+const REPO_URL = "https://github.com/nas200-timmy/HDSL-WEB";
+const REPO_SLUG = "nas200-timmy/HDSL-WEB";
+const UPSTREAM_URL = "https://github.com/MCXCC303/HDSL";
+const UPSTREAM_NAME = "HDSL（Hello DeepSeek! Launcher）";
+
+/** 关于：讲清楚「这个项目是什么」——面板自己、仓库、许可证、上游与它实际用的技术栈。
+ *  桌面版那份关于页讲的是 HMCL 与 HDSL 桌面版（版权、作者、HMCL 的 GPL 链接），
+ *  照搬过来等于把别的项目的数据当自己的，所以这里不沿用旧文案。 */
 function AboutTab() {
   const [health, setHealth] = useState<Health | null>(null);
 
@@ -990,6 +999,12 @@ function AboutTab() {
       .catch(() => undefined);
   }, []);
 
+  const link = (href: string, text: string) => (
+    <a href={href} target="_blank" rel="noreferrer">
+      {text}
+    </a>
+  );
+
   return (
     <>
       <div className="section-caption">
@@ -998,28 +1013,39 @@ function AboutTab() {
       </div>
       <div className="card">
         <div className="comp-row">
-          <span className="comp-label">启动器</span>
-          <span className="comp-value">
-            {I18N.appFullName}
-            {health ? ` v${health.version}` : ""}
+          <span className="comp-label">{I18N["about.project"]}</span>
+          <span className="comp-value">HDSL-web{health ? ` v${health.version}` : ""}</span>
+        </div>
+        <div className="comp-row">
+          <span className="comp-label">说明</span>
+          <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            {I18N["about.project.description"]}
           </span>
         </div>
         <div className="comp-row">
-          <span className="comp-label">{I18N["about.copyright"]}</span>
-          <span className="comp-value">{I18N["about.copyright.statement"]}</span>
+          <span className="comp-label">{I18N["about.repo"]}</span>
+          <span className="comp-value mono" style={{ fontSize: 12 }}>
+            {link(REPO_URL, REPO_SLUG)}
+          </span>
         </div>
         <div className="comp-row">
-          <span className="comp-label">{I18N["about.author.statement"].split(" ")[0]}</span>
-          <span className="comp-value">{I18N["about.author.statement"]}</span>
+          <span className="comp-label">{I18N["about.license"]}</span>
+          <span className="comp-value">{I18N["about.license.statement"]}</span>
         </div>
         <div className="comp-row">
-          <span className="comp-label">{I18N["about.open_source"]}</span>
-          <span className="comp-value">{I18N["about.open_source.statement"]}</span>
+          <span className="comp-label">{I18N["about.upstream"]}</span>
+          <span className="comp-value" style={{ fontSize: 12 }}>
+            {link(UPSTREAM_URL, UPSTREAM_NAME)}
+            <span style={{ color: "var(--monet-on-surface-variant)" }}>
+              {" · "}
+              {I18N["about.upstream.statement"]}
+            </span>
+          </span>
         </div>
         <div className="comp-row">
-          <span className="comp-label">第三方</span>
+          <span className="comp-label">{I18N["about.stack"]}</span>
           <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-            React · Vite · @material/material-color-utilities · 图标来自 Material Symbols
+            {I18N["about.stack.statement"]}
           </span>
         </div>
       </div>

@@ -141,7 +141,9 @@ export const I18N = {
   "dsh.settings.theme_color": "主题色",
   "dsh.settings.theme_color.default": "默认",
 
-  // ---- 关于（AboutPage / about.*） ----
+  // ---- 关于（AboutTab） ----
+  // 下面几条是照搬桌面版 HDSL 的关于页文案（讲的是 HMCL 与 HDSL 桌面版），
+  // 网页版的「关于」改用 about.project.* 这一组，讲清楚这个项目本身是什么。
   "about.copyright": "版权",
   "about.copyright.statement": "版权所有 © 2013-2026 huangyuhui 及贡献者",
   "about.author.statement": "bilibili @huanghongxun",
@@ -150,6 +152,20 @@ export const I18N = {
   "about.thanks_to": "鸣谢",
   "about.dependency": "依赖",
   "dsh.about.runtime": "Java 运行时",
+
+  // ---- 关于（AboutTab，网页版自己的） ----
+  "about.project": "项目",
+  "about.project.description":
+    "把桌面版 HDSL（DeepSeek Harness 启动器）搬进浏览器的单容器实现：面板负责创建、安装、启停实例，dsh 由面板拉起并反代到 /i/<实例id>/ 下使用",
+  "about.repo": "仓库",
+  "about.license": "许可证",
+  "about.license.statement": "GPL-3.0（与所基于的上游一致）",
+  "about.upstream": "上游",
+  "about.upstream.statement":
+    "与更上游的 HMCL —— 领域层与界面样式源自它们，完整声明见仓库的 NOTICE",
+  "about.stack": "技术栈",
+  "about.stack.statement":
+    "React · Vite · Material Color Utilities · Material Symbols 图标 · Jetty · Java 21 · Node 22 + pnpm",
 
   // ---- 账户（AccountListPage / dsh.account.*） ----
   "account": "账户",
