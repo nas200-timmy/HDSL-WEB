@@ -67,8 +67,10 @@ class StaticHandlerTest {
             // "/", the path arrives as servletPath (pathInfo is null); reading
             // only getPathInfo() used to resolve every request to the shell —
             // the panel rendered as a black page because the JS was HTML.
+            // The panel is served from the root (vite `base: "/"`), so the shell
+            // references its bundles with root-absolute paths.
             var asset = java.util.regex.Pattern
-                    .compile("src=\"\\.(/assets/[^\"]+)\"")
+                    .compile("src=\"(/assets/[^\"]+)\"")
                     .matcher(index.body());
             assertTrue(asset.find(), "index.html must reference the built JS bundle");
             HttpResponse<String> bundle = client.send(
