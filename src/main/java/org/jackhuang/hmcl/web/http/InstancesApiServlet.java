@@ -752,6 +752,25 @@ public final class InstancesApiServlet extends HttpServlet {
         Json.write(response, body);
     }
 
+    /// Reports a progress line to the task whose submission created the listener.
+    ///
+    /// [TaskService.submit] hands the work to its executor before it returns the
+    /// handle, so an installer's first line can arrive while `holder[0]` is
+    /// still empty. That is a recipient not yet there, not a failure — the same
+    /// window [submitInstall] guards on its own listener.
+    ///
+    /// Package-private so the empty-holder case can be driven on purpose; the
+    /// race itself is not something a test can be made to lose on demand.
+    ///
+    /// @param holder the one-slot holder the submitter fills in
+    /// @param line   the line to report
+    static void report(TaskService.Task[] holder, String line) {
+        TaskService.Task owner = holder[0];
+        if (owner != null) {
+            owner.update(line, -1);
+        }
+    }
+
     /// Installs package specs as a task: `dsh plugin add` per spec, with the
     /// build-script approval dance when a package wants to run code.
     private void installPlugins(HttpServletRequest request, HttpServletResponse response, String id)
@@ -777,7 +796,7 @@ public final class InstancesApiServlet extends HttpServlet {
         try {
             TaskService.Task[] holder = new TaskService.Task[1];
             TaskService.Task task = tasks.submit("plugin-install", id, () -> {
-                DshPluginInstaller.installSpecs(instance, specs, line -> holder[0].update(line, -1));
+                DshPluginInstaller.installSpecs(instance, specs, line -> report(holder, line));
                 return "Installed " + specs.size() + " plugin(s)";
             }, (allow, keys) -> DshBuildScripts.answer(instance, keys, allow));
             holder[0] = task;
@@ -811,7 +830,7 @@ public final class InstancesApiServlet extends HttpServlet {
         try {
             TaskService.Task[] holder = new TaskService.Task[1];
             TaskService.Task task = tasks.submit("plugin-remove", id, () -> {
-                DshPluginInstaller.removeSpecs(instance, specs, line -> holder[0].update(line, -1));
+                DshPluginInstaller.removeSpecs(instance, specs, line -> report(holder, line));
                 return "Removed " + specs.size() + " plugin(s)";
             }, (allow, keys) -> DshBuildScripts.answer(instance, keys, allow));
             holder[0] = task;
@@ -880,7 +899,7 @@ public final class InstancesApiServlet extends HttpServlet {
         try {
             TaskService.Task[] holder = new TaskService.Task[1];
             TaskService.Task task = tasks.submit("plugin-local", id, () -> {
-                DshLocalPlugins.install(instance, target, line -> holder[0].update(line, -1));
+                DshLocalPlugins.install(instance, target, line -> report(holder, line));
                 return "Installed " + pkg.name() + " " + pkg.version();
             }, (allow, keys) -> DshBuildScripts.answer(instance, keys, allow));
             holder[0] = task;
