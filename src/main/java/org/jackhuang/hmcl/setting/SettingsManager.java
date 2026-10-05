@@ -245,6 +245,14 @@ public final class SettingsManager {
         @SerializedName("pluginCatalogUrl")
         private @Nullable String pluginCatalogUrl;
 
+        /// Which npm registry the panel was set to, or absent for the deployment's own.
+        @SerializedName("npmRegistryPreset")
+        private @Nullable String npmRegistryPreset;
+
+        /// The registry typed by hand, read only while the preset is `custom`.
+        @SerializedName("npmRegistry")
+        private @Nullable String npmRegistry;
+
         /// Where the modpack market's index is read from, or absent for the published one.
         @SerializedName("packMarketUrl")
         private @Nullable String packMarketUrl;
@@ -346,6 +354,8 @@ public final class SettingsManager {
             snapshot.globalEnvironment = new java.util.LinkedHashMap<>(settings.globalEnvironment());
             snapshot.pluginCatalogUrl = settings.getPluginCatalogUrl();
             snapshot.packMarketUrl = settings.getPackMarketUrl();
+            snapshot.npmRegistryPreset = settings.getNpmRegistryPreset();
+            snapshot.npmRegistry = settings.getNpmRegistry();
             snapshot.dependencyPolicy = settings.dependencyPolicy().name();
             snapshot.cacheDirectory = settings.getCacheDirectory();
             snapshot.cacheDirectoryCustom = settings.isCacheDirectoryCustom();
@@ -480,6 +490,12 @@ public final class SettingsManager {
             }
             if (pluginCatalogUrl != null) {
                 settings.setPluginCatalogUrl(pluginCatalogUrl);
+            }
+            if (npmRegistryPreset != null) {
+                settings.setNpmRegistryPreset(npmRegistryPreset);
+            }
+            if (npmRegistry != null) {
+                settings.setNpmRegistry(npmRegistry);
             }
             if (cacheDirectory != null) {
                 settings.setCacheDirectory(cacheDirectory);

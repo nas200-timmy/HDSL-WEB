@@ -24,6 +24,9 @@
   规则见 [docs/ui-spec.md §4](docs/ui-spec.md)。
 - 启动器行为：**创建即安装**（`POST /api/instances` 默认 `autoInstall:true`），**未安装的实例点「启动」会先装再启**；
   进度与失败原因都显示在面板上，失败还会写进容器日志。细节见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md)。
+- 下载源：设置页可选预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL，服务端校验后**真正生效**；
+  面板会把它写进 pnpm 的全局配置并显式传给 pnpm/npm 子进程（pnpm 11 不读环境变量），
+  环境变量 `NPM_CONFIG_REGISTRY` 退化成回退值。细节见 [docs/deployment.md](docs/deployment.md)。
 
 <details>
 <summary>更多截图（初始化引导 / 实例列表 / 下载 / 设置）</summary>
@@ -165,7 +168,7 @@ HDSL_ADMIN_PASSWORD='换成一个强口令' \
 | `/data/tmp/` | multipart 上传的暂存目录（插件 `.tgz`、证书、整合包 `.dspack`） | 否 |
 | `/data/exports/` | 从面板导出的整合包产物，`GET /api/exports` 列出的就是这个目录 | 否 |
 | `/data/hdsl/` | `hdsl.home`：启动器自己的全部状态（可用 `-Dhdsl.home=` 覆盖） | 是 |
-| `/data/hdsl/launcher-settings.json` | 启动器设置（代理、下载并发、隔离模式、游戏目录/工作区选择等） | 是 |
+| `/data/hdsl/launcher-settings.json` | 启动器设置（代理、下载并发、下载源、隔离模式、游戏目录/工作区选择等） | 是 |
 | `/data/hdsl/instances/<id>/` | 每个实例：`instance.json`、`dsh/`（该实例自己的 dsh 安装）、`home/`（隔离模式的 `DSH_HOME`） | 是 |
 | `/data/hdsl/homes/<版本>/` | 共享隔离模式下多个实例共用的 home | 是 |
 | `/data/hdsl/runtimes/<版本>/` | 自下载的 Node 运行时。镜像已内置 Node，安装新运行时的路径仍可用，通常为空 | 否 |
@@ -233,7 +236,7 @@ auth:
 | `HDSL_BIND_HOST` | `0.0.0.0` | 主监听地址。容器内保持 `0.0.0.0`；只想本机访问可设 `127.0.0.1` |
 | `HDSL_HTTPS` | `false` | 只接受 `true`/`false`；等价于 `https.enabled` |
 | `HDSL_ADMIN_PASSWORD` | 空 | **仅首次启动**、且数据目录里还没有任何用户时，用它创建 `admin` 账号（无人值守部署）；已存在账号时忽略。不设则首次打开网页走初始化引导创建账号 |
-| `NPM_CONFIG_REGISTRY` | `https://registry.npmjs.org/` | 下载源。npm 直接读这个环境变量；pnpm 与 corepack 由入口脚本转写成它们各自的配置（见下） |
+| `NPM_CONFIG_REGISTRY` | `https://registry.npmjs.org/` | 下载源的**回退值**，优先级是「**面板设置 → 这个环境变量 → 官方默认**」。npm 系（`npm view`、`npm install -g`、插件元数据）直接读它；pnpm 不读环境变量，由入口脚本与面板转写进 pnpm 自己的配置文件（见下）。生效时机：面板里改完保存**立即生效**（此后新建/重装的实例、面板内构建），改环境变量要重启容器 |
 | `JAVA_OPTS` | 空 | 追加到 `java` 命令行的 JVM 参数，例如 `-Xmx2g` |
 | `PNPM_STORE_DIR` | `/data/pnpm-store` | pnpm 共享仓库位置（本镜像的约定变量，入口脚本会写进 pnpm 全局配置）；一般不用改 |
 | `HDSL_WORKSPACE` | 空 | dsh 的工作区路径。不设时用 `$HOME/workspace`（镜像里 `/home/hdsl/workspace`）；设了就用它（不存在会创建）。新建实例默认用它，已有实例保留创建时记录的那个 |
@@ -251,11 +254,15 @@ auth:
 > 环境变量**（改 `server.yaml` 的 `port` 会被忽略）；同理，想用 `server.yaml` 里的 `port` 就得把 `HDSL_PORT` 显式清空。
 > `HDSL_HTTPS` 镜像没有设，`server.yaml` 的 `https.enabled` 正常生效。
 
-> **pnpm 的配置不是环境变量**：pnpm 11 只从 `.npmrc` 读认证与 registry，其余设置（含 `storeDir`）读的是它自己的全局配置文件
-> `<XDG_CONFIG_HOME>/pnpm/config.yaml`；`npm_config_*` 环境变量对 pnpm 无效。所以镜像的入口脚本每次启动会**生成**这份
-> `config.yaml`：`storeDir` 取 `PNPM_STORE_DIR`，`registry` 取 `NPM_CONFIG_REGISTRY`；同时把后者作为 `COREPACK_NPM_REGISTRY`
-> 导出（corepack 下载 pnpm 本体时用它自己的这个变量）。容器内这份文件的路径是 `/home/hdsl/.config/pnpm/config.yaml`。
-> 领域层以子进程方式启动 pnpm，继承 HDSL-web 进程的环境与 HOME，所以这些设置对实例安装/插件安装都生效。
+> **pnpm 的配置不是环境变量**：pnpm 11 的 registry 与 `storeDir` 都读它自己的全局配置文件
+> `<XDG_CONFIG_HOME>/pnpm/config.yaml`——容器内这份文件的路径是 `/home/hdsl/.config/pnpm/config.yaml`（镜像里没有任何 `.npmrc`）；
+> `npm_config_*` / `NPM_CONFIG_REGISTRY` 环境变量对 pnpm **完全无效**（`NPM_CONFIG_REGISTRY=… pnpm config get registry` 会被忽略）。
+> 所以镜像的入口脚本每次启动会**生成**这份 `config.yaml`：`storeDir` 取 `PNPM_STORE_DIR`，`registry` 取 `NPM_CONFIG_REGISTRY`；
+> 同时把后者作为 `COREPACK_NPM_REGISTRY` 导出（corepack 下载 pnpm 本体时用它自己的这个变量）。
+> 在面板上改「设置 → 下载源」会**重写这份 `config.yaml`**：保留其它设置行（`storeDir` 不会丢）、只重写 `registry` 一行
+> （值经 YAML 引号、临时文件原子替换、0600）。此外面板还给子进程注入 `npm_config_registry`/`NPM_CONFIG_REGISTRY`
+> （npm 系读它），并在自己起的 pnpm 上显式加 `--registry=`（dsh 安装与面板内构建，日志里看得见实际用的源）。
+> 领域层以子进程方式启动 pnpm，所以上述设置对实例安装/插件安装都生效。
 > 如果你绕开入口脚本直接 `--entrypoint java`，镜像里已经预置了只含 `storeDir` 的同名文件作为兜底。
 
 ## 安全说明
@@ -312,8 +319,10 @@ bash scripts/e2e-real.sh
 
 **浏览器提示证书不安全。** 首启用的是自签证书，属正常。点「继续访问」，或到「设置 → TLS 证书」上传正式证书（立即生效，无需重启）。
 
-**npm / pnpm 下载很慢。** 把 `NPM_CONFIG_REGISTRY` 设成 `https://registry.npmmirror.com/`（运行时，容器内环境变量），
-构建镜像时用 `--build-arg NPM_REGISTRY=https://registry.npmmirror.com/`。
+**npm / pnpm 下载很慢。** 首选「设置 → 下载源」：选一个预设（`npmmirror` / 中科大 / 腾讯云 / 华为云 / 官方）或填自己的镜像 URL，
+保存即生效、不用重启容器。没有面板可点的时候（裸跑、无人值守部署）再退回环境变量：运行时设 `NPM_CONFIG_REGISTRY`；
+构建镜像时用 `--build-arg NPM_REGISTRY=…`（只影响构建期，见 [docs/deployment.md](docs/deployment.md)）。注意**面板设置压过环境变量**，
+环境变量只是回退值。
 
 **端口被占用。** 面板端口冲突改 `ports` 映射和 `HDSL_PORT`；dsh 实例用的 3081–4081 只在容器内回环，不占宿主机端口。
 
@@ -329,9 +338,10 @@ bash scripts/e2e-real.sh
 **日志在哪。** 容器里看 `docker compose logs -f hdsl-web`；服务端日志同时落在 `/data/logs/`，
 实例的运行日志从面板的「日志」标签看，导出目录是 `/data/hdsl/logs/`。
 
-**装某个插件时报 node-gyp / 找不到编译器。** 镜像是刻意精简的：dsh 本体的原生模块（Landlock 启动器、flock）
-以预编译包分发，不需要编译器；`git`、`xz-utils`、`zstd` 也都装了。只有「自己用 node-gyp 从源码编译」的第三方插件
-才会需要工具链——这种情况请自行基于本镜像加一层 `apt-get install -y build-essential python3`。
+**装某个插件时报 node-gyp / 找不到编译器。** 镜像里已经带了 `python3` / `make` / `g++`（面板内构建 ZCode 时要用它编译
+`node-pty`、`cpu-features`，顺带也让这类插件能直接装）；dsh 本体的原生模块（Landlock 启动器、flock）以预编译包分发、
+本来就不需要编译器，`git`、`xz-utils`、`zstd` 也都装了。仍然报缺编译器时先看它要的是不是别的东西（`cmake`、`pkg-config` 之类），
+再基于本镜像加一层补装。
 
 **改了 `server.yaml` 要重启吗。** 手改文件需要重启。面板上传证书不需要（热重载/运行时切换）。
 

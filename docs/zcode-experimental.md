@@ -31,27 +31,42 @@ AI 编程工作台，Apache-2.0）。它与 dsh 品类**完全隔离**：实例�
 
 界面上能看到当前步骤、进度和日志（日志文件在 `<数据目录>/zcode/build/build.log`）。
 
-要求与代价：镜像里已经装好 Node 24（`/opt/node24`，只有构建用它）；要下几百 MB 源码、
+要求与代价：镜像里已经装好 Node 24（`/opt/node24`，只有构建用它），以及 `python3` / `make` / `g++`
+——ZCode 依赖里的 `node-pty`、`cpu-features` 要**现场编译**，缺了编译链会直接报
+`Could not find any Python installation` / `Unable to detect compiler type`；要下几百 MB 源码、
 装 GB 级依赖，**慢是正常的**；构建失败（环境缺失、上游改了锚点）只影响这一次构建，
-已装好的版本不受影响。
+已装好的版本不受影响——而且**失败时源码树会保留**（`<数据目录>/zcode/build/src` 与同目录的 `build.log`），
+排查完不用重下，下一次构建开始时才清掉。
 
 | 环境变量 | 说明 |
 | --- | --- |
 | `HDSL_ZCODE_SOURCE_URL` | 源码 tarball 模板（`%s` = tag/分支）；也接受 `file:` 或本地路径（离线/内网代理） |
 | `HDSL_ZCODE_BUILD_BIN` | 构建时前置到 `PATH` 的目录；镜像里默认 `/opt/node24/bin` |
 | `HDSL_ZCODE_PNPM` | 构建用的 pnpm 可执行文件；默认 `pnpm` |
-| `HDSL_ZCODE_KEEP_SOURCES` | `true` 时保留源码树与依赖（排错用，占几个 GB） |
-
+| `HDSL_ZCODE_KEEP_SOURCES` | `true` 时构建**成功**后也保留源码树与依赖（排错用，占几个 GB）；失败时无论如何都保留 |
 **慢？** 时间几乎全花在 `pnpm install` 上。三个杠杆：
 
-- **换 registry**：面板用的下载源就是环境变量 `NPM_CONFIG_REGISTRY`（镜像默认 `registry.npmjs.org`；
-  国内常用 `https://registry.npmmirror.com/`，在 compose 里加一行 `NPM_CONFIG_REGISTRY=…` 即可）。
-  构建会把它显式传给 `pnpm install --registry=…`，日志里能看到实际用的是哪个。
-- **只下本机架构**：构建会在源码目录**追加**一行 `.npmrc` 的 `supportedArchitectures`（按面板进程的
-  os/arch 推导，例如 linux/x64/glibc），跳过上游 lockfile 里 Windows / macOS / 其它架构的
-  optional 二进制——那些在你机器上纯属白下。要做交叉产物就设 `HDSL_ZCODE_ALL_PLATFORMS=1` 全下。
+- **换 registry**：首选面板的「设置 → 下载源」（预设或自填 URL，见
+  [deployment.md 的运行期下载源](deployment.md#6-运行期下载源面板设置)），保存即生效不用重启容器。
+  构建会把它显式传给 `pnpm install --registry=…`，日志里能看到实际用的是哪个。环境变量 `NPM_CONFIG_REGISTRY`
+  只是**回退**：面板没有设置时才用它（镜像默认官方 `registry.npmjs.org`，国内常用 `https://registry.npmmirror.com/`）。
+  选 `npmmirror` 预设时构建还会带上 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`——Electron 的
+  postinstall 要从 GitHub 下约 100 MB 的二进制，国内直连基本下不动；别的源不带这个镜像，走 GitHub 默认。
+- **架构过滤已取消**：曾经有一版会往源码目录追加 `.npmrc` 的 `supportedArchitectures`，只下本机架构的
+  可选依赖。它有两个问题：pnpm 是从 `pnpm-workspace.yaml` 读这个设置、**根本不看 `.npmrc`**（所以它从未生效）；
+  而一旦生效就会把构建搞坏——组包阶段要为 6 个平台收集原生资源（darwin/linux/win × x64/arm64），缺一个直接失败。
+  上游的 `pnpm-workspace.yaml` 已经写着它需要的平台，交给它即可。
 - **源码下载**：默认从 `codeload.github.com` 拉 tarball；慢的话用 `HDSL_ZCODE_SOURCE_URL` 指向镜像、
   内网缓存，或本地路径（`/path/to/ZCode.tar.gz`，也接受 `file:`）。
+- **native 编译那两段（换源管不到）**：依赖里有要现场编译的原生模块（`node-pty` 等）。node-gyp 编译前会先从
+  `nodejs.org` 下 10 MB 头文件——国内实测约 104 KB/s，且缓存在 `~/.cache/node-gyp`（**不在卷里**，重建容器后
+  第一次构建要重下）；它默认也不给 `make` 加 `-j`。用镜像源时构建会设 `NODEJS_ORG_MIRROR` /
+  `npm_config_disturl` 指向 npmmirror 的 Node 镜像，并按 CPU 数设 `JOBS` / `npm_config_jobs` 并行编译。
+
+安装之后、打包之前，构建器会额外补一步 `pnpm exec tsc -b packages/shared`：上游干净检出下
+`pnpm build:zcode` 必然停在 `Missing @zcode/shared dist files`——`packages/shared` 没有 build 脚本，
+报错里让你跑的 `pnpm build` 也不会编译它，只有项目引用构建（`tsc -b`）会产出 `dist/index.js`。
+上游补好之后这一步可以直接删。
 
 ### 方式二：手工放一个发行包
 

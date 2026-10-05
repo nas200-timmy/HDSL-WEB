@@ -575,6 +575,10 @@ public final class DshVersionManager {
                 "install",
                 "--dir", project.toString(),
                 "--reporter=append-only",
+                // Said out loud as well as written into pnpm's configuration: this is the install
+                // that takes minutes when the source is wrong, and the argument is the one line of
+                // the child's log that says which source it actually used.
+                "--registry=" + NpmRegistry.effective().registry(),
                 "--config.dangerously-allow-all-builds=true");
     }
 

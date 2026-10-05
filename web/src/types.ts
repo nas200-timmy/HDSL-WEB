@@ -206,6 +206,41 @@ export interface TlsUploadResult {
   error?: string;
 }
 
+// ---------- Phase 3：下载源（npm registry） ----------
+
+/** 服务端下发的下载源预设；界面不硬编码这张表，直接渲染 */
+export interface RegistryPreset {
+  id: string;
+  label: string;
+  url: string;
+  note?: string;
+}
+
+/** GET /api/settings/registry（POST 成功时也回同样的形状，用它回读省一次请求） */
+export interface RegistrySettings {
+  /** environment | npmjs | npmmirror | ustc | tencent | huawei | custom */
+  preset: string;
+  /** 手填的地址（规范化后）；只在 preset = custom 时生效，服务端切到预设后仍保留上次填的值 */
+  registry: string;
+  /** 最终会用的那个源：面板设置 → 环境变量 → 官方默认 */
+  effective: string;
+  /** effective 的来源："setting" | "environment" | "default" */
+  source: string;
+  presets: RegistryPreset[];
+}
+
+/** POST /api/settings/registry/test：由面板所在的那台机器实测一次源能不能用、多快 */
+export interface RegistryTestResult {
+  /** 被测的地址（服务端规范化后的） */
+  registry: string;
+  ok: boolean;
+  /** HTTP 状态码；连不上时为 null */
+  status: number | null;
+  millis: number;
+  /** ok = false 时的原因 */
+  error?: string;
+}
+
 // ---------- Phase 4：整合包 / 导出 ----------
 
 export interface MarketPack {

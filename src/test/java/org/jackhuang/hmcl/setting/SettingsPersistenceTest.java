@@ -85,6 +85,8 @@ class SettingsPersistenceTest {
         written.setNodeSource(NodeSource.MIRROR);
         written.setOpenBrowserOnLaunch(false);
         written.setDefaultLaunchArguments("--verbose");
+        written.setNpmRegistryPreset("npmmirror");
+        written.setNpmRegistry("https://nexus.example.com/repository/npm");
 
         // The same JSON the persistence layer writes: a snapshot serialised
         // with the shared Gson configuration, then read back field by field.
@@ -129,6 +131,10 @@ class SettingsPersistenceTest {
         assertEquals(written.nodeSource(), read.nodeSource());
         assertEquals(written.isOpenBrowserOnLaunch(), read.isOpenBrowserOnLaunch());
         assertEquals(written.defaultLaunchArguments(), read.defaultLaunchArguments());
+        // The download source: a mirror chosen in the panel that did not survive a restart would be
+        // a choice that looks applied and is silently back to npmjs.org at the next start.
+        assertEquals(written.getNpmRegistryPreset(), read.getNpmRegistryPreset());
+        assertEquals(written.getNpmRegistry(), read.getNpmRegistry());
     }
 
     /// The selection written before selections were kept per folder is still

@@ -64,6 +64,10 @@ public final class DshDoctor {
             out.println("  node runtime:    " + settings.defaultNodeRuntime());
             out.println("  home mode:       " + settings.defaultHomeMode());
             out.println("  open browser:    " + settings.isOpenBrowserOnLaunch());
+            NpmRegistry.Effective registry = NpmRegistry.effective();
+            // Which source the next install uses, and why: the one setting whose wrong value looks
+            // like a hang rather than like an error.
+            out.println("  npm registry:    " + registry.registry() + "  (" + registry.source() + ")");
         } catch (Throwable e) {
             out.println("  FAILED: " + e);
         }

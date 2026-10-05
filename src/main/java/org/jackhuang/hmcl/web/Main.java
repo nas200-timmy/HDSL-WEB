@@ -70,6 +70,12 @@ public final class Main {
 
             Logger.LOG.start(config.dataDir.resolve("logs"));
 
+            // pnpm reads its registry from its own configuration file rather than from the
+            // environment, so the source chosen in the panel is written there now as well as when
+            // it changes: a container whose home directory was recreated still installs from the
+            // mirror it was configured with.
+            org.jackhuang.hmcl.dsh.PnpmConfigFile.apply();
+
             // The workspace is where a session's files live and where the
             // harness process runs: `<home>/workspace` (what the compose file
             // mounts), or HDSL_WORKSPACE when the operator named another

@@ -35,6 +35,14 @@ import java.util.Map;
 /// exactly the environment it always did.
 @NotNullByDefault
 public final class DshNetworkSettings {
+
+    /// Where node-gyp reads its headers from when the registry in force is not the published one.
+    ///
+    /// The same judgement the registry setting makes, applied to the other download a native build
+    /// makes: nodejs.org publishes them at `v<version>/node-v<version>-headers.tar.gz` under this
+    /// base, which is exactly how this mirror lays them out.
+    private static final String NODE_HEADER_MIRROR = "https://npmmirror.com/mirrors/node";
+
     private DshNetworkSettings() {
     }
 
@@ -68,6 +76,33 @@ public final class DshNetworkSettings {
                     }
                 }
             }
+
+            // npm reads its registry from the environment; pnpm does not — it reads the
+            // config.yaml that PnpmConfigFile writes. Both are set: this half is what `npm view`
+            // and `npm install --global` consult, and it is the value an operator looking at a
+            // child's environment would expect to find here.
+            String registry = NpmRegistry.effective().registry();
+            environment.put("npm_config_registry", registry);
+            environment.put("NPM_CONFIG_REGISTRY", registry);
+
+            // Compiling a native module makes node-gyp download a ten-megabyte headers tarball from
+            // nodejs.org — and download it again on every container that has not built one yet,
+            // because the cache lives in the home directory, which a redeployed container does not
+            // keep. That host is as slow from here as the registry this setting exists for
+            // (measured: 104 KB/s against 5.7 MB/s from the mirror), so a machine told to use a
+            // mirror is told to use the Node mirror beside it. The published registry keeps
+            // node-gyp's own default: a machine that reaches npmjs.org reaches nodejs.org.
+            if (!NpmRegistry.DEFAULT.equals(registry)) {
+                environment.put("NODEJS_ORG_MIRROR", NODE_HEADER_MIRROR);
+                environment.put("npm_config_disturl", NODE_HEADER_MIRROR);
+            }
+
+            // node-gyp runs `make` without `-j` unless it is told how many jobs it may start, and
+            // it reads the count from here. This is the difference between compiling node-pty in
+            // seconds and in minutes on a machine with twelve cores.
+            String jobs = Integer.toString(Math.max(1, Runtime.getRuntime().availableProcessors()));
+            environment.put("JOBS", jobs);
+            environment.put("npm_config_jobs", jobs);
 
             Integer concurrency = settings.getDownloadConcurrency();
             if (concurrency != null && concurrency > 0) {

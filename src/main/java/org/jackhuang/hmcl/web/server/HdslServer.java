@@ -51,6 +51,7 @@ import org.jackhuang.hmcl.web.http.InstancesApiServlet;
 import org.jackhuang.hmcl.web.http.ModelsApiServlet;
 import org.jackhuang.hmcl.web.http.PacksApiServlet;
 import org.jackhuang.hmcl.web.http.PluginsApiServlet;
+import org.jackhuang.hmcl.web.http.RegistrySettingsApiServlet;
 import org.jackhuang.hmcl.web.http.StaticServlet;
 import org.jackhuang.hmcl.web.http.TasksApiServlet;
 import org.jackhuang.hmcl.web.http.TlsApiServlet;
@@ -237,6 +238,9 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
         context.addServlet(new ServletHolder(new ZcodeApiServlet(config)), "/api/zcode/*");
+        // Registered before the `/api/settings/*` holder below and matched by its longer prefix:
+        // the download source is a launcher setting, and TLS is the other thing this path serves.
+        context.addServlet(new ServletHolder(new RegistrySettingsApiServlet()), "/api/settings/registry/*");
         ServletHolder tlsHolder = new ServletHolder(new TlsApiServlet(config, certificates, self::get));
         tlsHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(tlsHolder, "/api/settings/*");

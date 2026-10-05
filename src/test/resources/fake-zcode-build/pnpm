@@ -1,17 +1,40 @@
 #!/bin/sh
-# Fake pnpm for the ZcodeBuilder tests. ZcodeBuilder runs two commands —
-# `pnpm install` and `pnpm build:zcode --out-dir <dir> --base-url <url>` — and
-# this stub answers both without network or a real monorepo: the first is a
-# no-op, the second lays down exactly what build-zcode.mjs promises (a release
-# tarball below <out>/releases/<v>/, its sha256.txt, and latest.json naming the
-# two), so the builder's verify-and-install path runs for real.
+# Fake pnpm for the ZcodeBuilder tests. ZcodeBuilder runs three commands —
+# `pnpm install`, `pnpm exec tsc -b packages/shared` and `pnpm build:zcode
+# --out-dir <dir> --base-url <url>` — and this stub answers all three without
+# network or a real monorepo: the first is a no-op, the second writes the
+# `packages/shared/dist/index.js` the builder refuses to continue without, and
+# the third lays down exactly what build-zcode.mjs promises (a release tarball
+# below <out>/releases/<v>/, its sha256.txt, and latest.json naming the two), so
+# the builder's verify-and-install path runs for real.
 #
 # FAKE_ZCODE_VERSION overrides the version the stub reports.
+#
+# Every invocation is recorded so a test can assert what the builder passed on
+# the command line: one line per call, the argv joined by spaces, plus a line
+# naming ELECTRON_MIRROR when the builder put one in the child's environment.
+# The file is `$HDSL_FAKE_PNPM_ARGS_FILE` when set — the convention
+# `src/test/resources/fake-zcode/bin/zcode.mjs` uses — and `<this script>.args`
+# otherwise, because the builder passes the child no environment of its own.
 set -eu
+
+args_file="${HDSL_FAKE_PNPM_ARGS_FILE:-$0.args}"
+printf '%s\n' "$*" >> "$args_file"
+if [ -n "${ELECTRON_MIRROR:-}" ]; then
+  printf 'ELECTRON_MIRROR=%s\n' "$ELECTRON_MIRROR" >> "$args_file"
+fi
 
 case "$1" in
   install)
     echo "fake pnpm install (no-op)"
+    exit 0
+    ;;
+  exec)
+    # `pnpm exec tsc -b packages/shared`: the project-reference build that produces the
+    # `packages/shared/dist/index.js` the builder checks for and upstream's own build does not make.
+    mkdir -p packages/shared/dist
+    printf 'export {};\n' > packages/shared/dist/index.js
+    echo "fake pnpm exec (no-op)"
     exit 0
     ;;
   build:zcode)

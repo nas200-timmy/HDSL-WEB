@@ -88,6 +88,15 @@ public final class LauncherSettings {
     /// Where the plugin catalogue is read from, or empty for the built-in address.
     private String pluginCatalogUrl = "";
 
+    /// Which npm registry the panel was set to, or `environment` to use the deployment's own.
+    ///
+    /// Kept as the preset's id rather than as an address so that a mirror whose URL changes can be
+    /// followed by a release rather than by everybody who chose it.
+    private String npmRegistryPreset = org.jackhuang.hmcl.dsh.NpmRegistry.ENVIRONMENT;
+
+    /// The registry somebody typed by hand, or empty. Read only while the preset is `custom`.
+    private String npmRegistry = "";
+
     /// Where the modpack market's index is read from, or empty for the one the ecosystem publishes.
     private String packMarketUrl = "";
 
@@ -263,6 +272,31 @@ public final class LauncherSettings {
 
     public void setPluginCatalogUrl(String pluginCatalogUrl) {
         this.pluginCatalogUrl = pluginCatalogUrl;
+        fireChanged();
+    }
+
+    /// Returns which npm registry the panel was set to.
+    ///
+    /// @return the preset's id, or `environment` when the deployment's own is to be used
+    public String getNpmRegistryPreset() {
+        return npmRegistryPreset == null || npmRegistryPreset.isBlank()
+                ? org.jackhuang.hmcl.dsh.NpmRegistry.ENVIRONMENT : npmRegistryPreset;
+    }
+
+    public void setNpmRegistryPreset(String npmRegistryPreset) {
+        this.npmRegistryPreset = npmRegistryPreset;
+        fireChanged();
+    }
+
+    /// Returns the registry typed by hand.
+    ///
+    /// @return the address, empty when none was typed; meaningless unless the preset is `custom`
+    public String getNpmRegistry() {
+        return npmRegistry == null ? "" : npmRegistry;
+    }
+
+    public void setNpmRegistry(String npmRegistry) {
+        this.npmRegistry = npmRegistry;
         fireChanged();
     }
 

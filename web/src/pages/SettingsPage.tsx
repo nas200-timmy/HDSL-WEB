@@ -24,8 +24,16 @@ import { SubSideBar } from "../components/SideBar";
 import { I18N } from "../i18n";
 import { logout, setState, toast, useAppState } from "../store";
 import { bindSystemThemeListener, setThemeMode, useThemeMode, type ThemeMode } from "../theme";
-import type { DoctorCheck, DoctorReport, Health, TlsSettings, TlsUploadResult } from "../types";
-import { errMsg, formatDateTime, formatUptime } from "../utils";
+import type {
+  DoctorCheck,
+  DoctorReport,
+  Health,
+  RegistrySettings,
+  RegistryTestResult,
+  TlsSettings,
+  TlsUploadResult,
+} from "../types";
+import { errMsg, formatDateTime, formatUptime, registryError } from "../utils";
 
 type SettingsTab =
   | "general"
@@ -579,18 +587,90 @@ function AppearanceTab() {
 
 /* ---------------- 下载源：npm registry ---------------- */
 
-const NPM_REGISTRY_KEY = "hdsl.npm.registry";
+/** effective 是从哪来的——用户最想知道的就是「我改的生效了没」 */
+const REGISTRY_SOURCE_LABEL: Record<string, string> = {
+  setting: "面板设置",
+  environment: "部署环境变量",
+  default: "默认",
+};
 
 function DownloadSourceTab() {
-  const [registry, setRegistry] = useState(() => localStorage.getItem(NPM_REGISTRY_KEY) ?? "");
-  const [saved, setSaved] = useState<string | null>(null);
+  const [settings, setSettings] = useState<RegistrySettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [preset, setPreset] = useState("");
+  const [custom, setCustom] = useState("");
+  /** 手填框有没有被碰过——空着又没碰过就先不报红 */
+  const [customTouched, setCustomTouched] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [probe, setProbe] = useState<RegistryTestResult | null>(null);
 
-  const save = () => {
-    const v = registry.trim();
-    if (v) localStorage.setItem(NPM_REGISTRY_KEY, v);
-    else localStorage.removeItem(NPM_REGISTRY_KEY);
-    setSaved(v || null);
-    toast("success", "下载源已保存");
+  const apply = (r: RegistrySettings) => {
+    setSettings(r);
+    setPreset(r.preset);
+    setCustom(r.registry);
+  };
+
+  const load = async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      apply(await api.getRegistry());
+    } catch (e) {
+      setLoadError(isNotImplemented(e) ? "后端尚未支持下载源设置" : errMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const customError = preset === "custom" ? registryError(custom) : null;
+  // 红字只在填过东西之后出现；保存按钮不看这个门，照旧按 customError 禁用
+  const showCustomError = customError != null && (customTouched || custom.trim() !== "");
+  const changed =
+    settings != null &&
+    (preset !== settings.preset ||
+      (preset === "custom" && custom.trim().replace(/\/+$/, "") !== settings.registry));
+  const selectedPreset = settings?.presets.find((p) => p.id === preset);
+
+  const save = async () => {
+    if (customError) return;
+    setBusy(true);
+    try {
+      // 成功时用返回体回读，不再 GET 一次
+      apply(await api.setRegistry(preset === "custom" ? { preset, registry: custom.trim() } : { preset }));
+      toast("success", "下载源已保存");
+    } catch (e) {
+      if (isNotImplemented(e)) toast("info", "后端尚未支持下载源设置");
+      else toast("error", errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** 测的是下拉框当前选中的那个源：预设用它自己的地址（不必先保存），「自定义…」用手填的地址；
+   *  两者都没有地址（跟随部署环境、或手填框还空着）时留空，交给服务端测当前生效的那个。 */
+  const runProbe = async () => {
+    const target = preset === "custom" ? custom.trim() : (selectedPreset?.url ?? "");
+    setTesting(true);
+    setProbe(null);
+    try {
+      setProbe(await api.testRegistry(target));
+    } catch (e) {
+      setProbe({
+        registry: target,
+        ok: false,
+        status: null,
+        millis: 0,
+        error: isNotImplemented(e) ? "后端尚未支持下载源测速" : errMsg(e),
+      });
+    } finally {
+      setTesting(false);
+    }
   };
 
   return (
@@ -600,32 +680,122 @@ function DownloadSourceTab() {
         {I18N["settings.launcher.download_source"]}
       </div>
       <div className="card">
-        <div className="comp-row">
-          <span className="comp-label">npm registry</span>
-          <span className="comp-value">
-            <input
-              className="input"
-              style={{ flex: 1, minWidth: 220, fontWeight: 400 }}
-              placeholder="https://registry.npmjs.org"
-              value={registry}
-              onChange={(e) => setRegistry(e.target.value)}
-            />
-          </span>
-        </div>
-        <div className="comp-row">
-          <span className="comp-label">当前</span>
-          <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-            {saved ?? "官方默认源（https://registry.npmjs.org）"}
-          </span>
-        </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 6 }}>
-          <button className="btn btn-raised ripple-host" onClick={save}>
-            {I18N["button.save"]}
-          </button>
-        </div>
-        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0" }}>
-          网页版暂未接入服务端下载源设置，此处配置保存在本地浏览器。
-        </p>
+        {loading && !settings ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 12 }}>
+            <span className="spinner" />
+            <span>正在获取下载源设置…</span>
+          </div>
+        ) : loadError && !settings ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 12 }}>
+            <ErrorIcon size={16} style={{ color: "var(--monet-error)" }} />
+            <span>{loadError}</span>
+            <button className="btn btn-outline ripple-host" style={{ marginLeft: "auto" }} onClick={() => void load()}>
+              重试
+            </button>
+          </div>
+        ) : settings ? (
+          <>
+            <div className="comp-row">
+              <span className="comp-label">{I18N["settings.launcher.download_source.preset"]}</span>
+              <span className="comp-value">
+                <select
+                  className="input"
+                  style={{ width: 260, maxWidth: "100%", fontWeight: 400 }}
+                  value={preset}
+                  disabled={busy || testing}
+                  onChange={(e) => {
+                    setPreset(e.target.value);
+                    setCustomTouched(false);
+                    setProbe(null);
+                  }}
+                >
+                  {settings.presets
+                    .filter((p) => p.id !== "custom")
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label}
+                      </option>
+                    ))}
+                  <option value="custom">{I18N["settings.launcher.download_source.custom"]}</option>
+                </select>
+                {selectedPreset?.note && (
+                  <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                    {selectedPreset.note}
+                  </span>
+                )}
+              </span>
+            </div>
+            {preset === "custom" && (
+              <div className="comp-row">
+                <span className="comp-label">{I18N["settings.launcher.download_source.custom_url"]}</span>
+                <span className="comp-value">
+                  <input
+                    className="input"
+                    style={{ flex: 1, minWidth: 0, fontWeight: 400 }}
+                    placeholder="https://registry.example.com"
+                    value={custom}
+                    disabled={busy || testing}
+                    onChange={(e) => {
+                      setCustom(e.target.value);
+                      setCustomTouched(true);
+                      setProbe(null);
+                    }}
+                    onBlur={() => setCustomTouched(true)}
+                  />
+                </span>
+              </div>
+            )}
+            {showCustomError && <div className="form-error">{customError}</div>}
+            <div className="comp-row">
+              <span className="comp-label">{I18N["settings.launcher.download_source.effective"]}</span>
+              <span className="comp-value mono">
+                <span className={`tag ${settings.source === "setting" ? "running" : "plain"}`}>
+                  {REGISTRY_SOURCE_LABEL[settings.source] ?? settings.source}
+                </span>
+                {settings.effective}
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, paddingTop: 6 }}>
+              <button
+                className="btn btn-outline ripple-host"
+                disabled={testing || busy}
+                onClick={() => void runProbe()}
+              >
+                {testing ? "测速中…" : "测速"}
+              </button>
+              {probe &&
+                (probe.ok ? (
+                  <>
+                    <span className="tag running">约 {probe.millis} ms</span>
+                    <span className="mono" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                      {probe.registry}
+                    </span>
+                  </>
+                ) : (
+                  <span className="form-error">失败（{probe.error ?? `HTTP ${probe.status ?? "无响应"}`}）</span>
+                ))}
+              <button
+                className="btn btn-raised ripple-host"
+                style={{ marginLeft: "auto" }}
+                disabled={busy || !changed || !!customError}
+                onClick={() => void save()}
+              >
+                {busy ? "保存中…" : I18N["button.save"]}
+              </button>
+            </div>
+            <p
+              style={{
+                fontSize: 12,
+                color: "var(--monet-on-surface-variant)",
+                padding: "4px 8px 0",
+                lineHeight: 1.6,
+              }}
+            >
+              {I18N["settings.launcher.download_source.priority"]}
+              保存后对新安装的实例与构建生效；选「跟随部署环境」即清空面板设置。
+            </p>
+          </>
+        ) : null}
       </div>
     </>
   );

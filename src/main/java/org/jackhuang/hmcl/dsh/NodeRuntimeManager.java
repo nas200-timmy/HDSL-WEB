@@ -326,12 +326,18 @@ public final class NodeRuntimeManager {
         }
 
         stage(onStage, "Installing pnpm " + PNPM_MAJOR + ".x");
-        List<String> command = List.of(npm.toString(), "install", "--global", "pnpm@" + PNPM_MAJOR);
+        // npm reads the registry from the environment and also takes it as an argument; both are
+        // given. This is the first thing a freshly installed runtime downloads, and a wrong source
+        // here is a wait that looks like a hang.
+        String registry = NpmRegistry.effective().registry();
+        List<String> command = List.of(npm.toString(), "install", "--global", "pnpm@" + PNPM_MAJOR,
+                "--registry=" + registry);
 
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.environment().put("PATH",
                 runtime.directory().resolve("bin") + java.io.File.pathSeparator
                         + String.valueOf(System.getenv("PATH")));
+        builder.environment().put("npm_config_registry", registry);
         builder.redirectErrorStream(true);
 
         try {

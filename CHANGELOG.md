@@ -2,6 +2,92 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.2.1 — 2026-10-05 · 面板可选下载源
+
+下载源从「只能改环境变量、改完还得重启容器」变成面板里能选、能填、能生效的一等设置；
+顺带把 ZCode 的「构建发行包」补到能真跑通——镜像缺编译链、Electron 二进制下不动，两个坎都在这一版拆掉。
+
+### 新增
+
+- **设置 → 下载源**（`web/src/pages/SettingsPage.tsx` 的 `DownloadSourceTab`）：预设下拉（跟随部署环境（默认）/
+  官方 / npmmirror / 中科大 / 腾讯云 / 华为云）+「自定义…」时才出现的手填 URL，输入即时行内校验（红字 + 保存置灰），
+  另有一行显示**当前生效的源与它的来源**（面板设置 / 环境变量 / 默认官方）；保存成功后回读服务端值。
+  此前这张卡片是个只写 `localStorage` 的摆设——无 API、无校验，刷新后「当前」还会显示错，卡片自己写着
+  「网页版暂未接入服务端下载源设置」。
+- **`GET/POST /api/settings/registry`**（`web/http/RegistrySettingsApiServlet`）：`GET` 回
+  `preset` / `registry` / `effective` / `source` / `presets[]`；`POST` 收预设 id 或自定义 URL，
+  非法输入 400 **且设置保持不变**。另有 `POST /api/settings/registry/test`：拿生效或指定的地址取一次
+  `is-number` 的元数据，回 `{ok, millis, status}`（5 秒超时）——「源通但慢得像卡死」正是这个设置要解决的问题，
+  光看界面分不出来；卡片上就有一个「测速」按钮，测的是当前选中的那个地址（选着「自定义…」时测输入框里填的，
+  否则测那个预设自己的），结果旁会回显服务端实际测的地址。`DshDoctor` 的 Settings 段顺带加一行
+  `npm registry: <有效值> (<来源>)`——卡住时不用 `docker exec` 就能判断实际用的哪个源。
+- **设置落盘**（`dsh/LauncherSettings` + `setting/SettingsManager`，落 `/data/hdsl/launcher-settings.json`，
+  0600 原子写）：新增 `npmRegistryPreset` 与 `npmRegistry` 两项。此前启动器设置没有 REST 通道，前端也没有对应控件；
+  这份快照是 `save()` 唯一的写入面、`load()` 唯一的读取面——不登记进来的设置就是「能改、下次启动就丢」，所以一次补齐。
+- **防注入校验**（`dsh/NpmRegistry.normalize`，REST 与子进程/文件写入共用）：只允许 `http`/`https`、
+  必须能解析出主机名、禁止用户名密码 / 查询串 / 片段，以及空白、控制字符与 `"` `'` `` ` `` `\` `#` `$` `;` `|` `&` `@`，
+  长度 ≤ 200，尾斜杠归一化。自定义源是管理员填的，但它要进 argv 与配置文件，写时校验、用时再规范化，两道都要。
+
+### 修复
+
+- **pnpm 系根本不读环境变量，光注入 env 覆盖不到它**：pnpm 11 的 registry 只来自它自己的全局配置
+  `~/.config/pnpm/config.yaml`——容器里没有任何 `.npmrc`，`npm_config_*` 对它完全无效
+  （实测 `NPM_CONFIG_REGISTRY=… pnpm config get registry` 被忽略）。所以面板在启动时与每次保存后**重写这份文件**
+  （`dsh/PnpmConfigFile`）：逐行保留其它设置（`storeDir` 不会丢，本来缺了还会按 `PNPM_STORE_DIR` 补一行）、
+  只重写 `registry` 一行，值经 YAML 引号、临时文件 + 原子替换、权限 0600。同时给子进程注入
+  `npm_config_registry` / `NPM_CONFIG_REGISTRY`（npm 系读它），并给面板自己起的 pnpm 显式加 `--registry=`
+  （dsh 安装、ZCode 构建，日志里看得见）。优先级定为**面板设置 > 环境变量 `NPM_CONFIG_REGISTRY` > 默认官方**，
+  预设「跟随部署环境」就是显式回退到后两者。
+- **ZCode 构建报 `Could not find any Python installation` / `Unable to detect compiler type`**：
+  `Dockerfile` 运行时阶段补上 `python3` / `make` / `g++`——ZCode 依赖里的 `node-pty`、`cpu-features`
+  要现场编译。这不是用户环境的问题，镜像里没编译链，面板自己那次也栽在同一处。
+- **Electron 的 postinstall 卡死**：构建器按所选源设置 `ELECTRON_MIRROR`（`npmmirror` 预设带
+  `https://npmmirror.com/mirrors/electron/`）——它要从 GitHub releases 下约 100 MB 二进制，实测直连 20 秒 0 字节。
+- **构建里还有两个环节不在 registry 的覆盖范围内，都不是「换源」能解决的**：
+  ① node-gyp 编译原生模块前要从 `nodejs.org` 下一份 10 MB 的 Node 头文件，那个域名跟 npmjs 一样慢
+  （实测 104 KB/s，npmmirror 的 Node 镜像 5.7 MB/s），而头文件缓存在 `~/.cache/node-gyp` —— **不在卷里**，
+  所以每次重建容器后第一次构建都要重下；现在用镜像源时会同时设 `NODEJS_ORG_MIRROR` / `npm_config_disturl`
+  指向镜像（用官方源的机器保持 node-gyp 默认——能连 npmjs.org 的机器也能连 nodejs.org）。
+  ② node-gyp 默认**不给 `make` 加 `-j`**，而构建跑在一台 12 核的机器上：现在按 CPU 数设
+  `JOBS` / `npm_config_jobs`。顺带，ZCode 构建的子进程现在会继承启动器给**所有**子进程的那套环境
+  （代理、registry、上面这些旋钮）——此前它一个都没继承，面板里配的代理对构建完全无效。
+- **构建失败的证据被删掉**：`finally` 里改成失败时**保留**源码树与 `build.log`（原来失败也照样删干净），
+  排查完不用重下，下一次构建开始时才清。
+- **ZCode 干净检出必然失败于 `Missing @zcode/shared dist files`**：上游 `packages/shared` 没有 build 脚本，
+  报错让你跑的 `pnpm build` 也不会编译它（`pnpm -r build` 跳过没有该脚本的包），只有项目引用构建（`tsc -b`）
+  会产出 `dist/index.js`——上游开发者本地「碰巧」跑过根 `typecheck` 脚本（它列了 `packages/shared`）才有这个文件。
+  构建器因此在装完依赖后补一步 `pnpm exec tsc -b packages/shared` 并检查产物存在，再继续打包。
+- **删掉了构建器往源码目录写 `supportedArchitectures` 的「平台过滤」**：pnpm 是从 `pnpm-workspace.yaml`
+  读这个设置、**不看 `.npmrc`**，所以它从未生效；而一旦生效就会把构建搞坏——组包阶段要为 6 个平台
+  （darwin/linux/win × x64/arm64）收集原生资源，缺一个直接失败。上游 `pnpm-workspace.yaml` 已经写着它需要的平台。
+- 文档修正：README 原来说「pnpm 11 只从 `.npmrc` 读认证与 registry」，实测 registry 来自 pnpm 自己的
+  `config.yaml`，且 `npm_config_*` 对 pnpm 无效——README 与 `docs/zcode-experimental.md` 一并改正，
+  并把「面板设置优先、环境变量只是回退」写进环境变量表、常见问题、功能清单与部署说明（`docs/deployment.md`
+  新增「运行期下载源（面板设置）」一节，讲清与构建期 `NPM_REGISTRY` 的区别与改写 `config.yaml` 的后果）；
+  常见问题里「要用编译器就自己加 `build-essential`」一条随编译链内置一并更新，`docs/ui-spec.md` 把下载源卡片
+  从占位补成实际控件（含窄屏行为），差异清单登记为第 4 处。
+
+### 验证
+
+- 全量 **483 用例 / 0 失败 / 0 错误 / 0 跳过**（含新增的 `NpmRegistryTest`、`PnpmConfigFileTest`、
+  `RegistrySettingsApiTest`，以及 `SettingsPersistenceTest` 与 `ZcodeBuilderTest` 的扩展）。
+- `npm run typecheck` 与 SPA 构建通过（`vite build` 不做类型检查，单独跑过）。
+- 独立端口 + 独立卷的临时容器（HTTP）跑完整验收：
+  - **界面**：预设下拉列出 6 项（含服务端下发的实测速度注记「本机实测约 25 MB/s」）；切到「自定义…」后手填框
+    才出现；非法地址 `https://a b/` 当场红字「地址里不能有空格」且保存置灰；测速按钮回「约 53 ms」；
+    保存后「当前生效」显示 *面板设置* + `https://registry.npmmirror.com`；桌面 1440×900 与手机 390×844
+    均无横向溢出（`scrollWidth === innerWidth`）。
+  - **接口**：四条注入尝试（换行注入 `https://x/\nstoreDir: /etc`、`javascript:alert(1)`、带空格、
+    带用户名密码）全部 **400** 且设置保持不变；自定义地址的尾斜杠被归一化；`POST /test` 回
+    `{"ok":true,"status":200,"millis":43}`。
+  - **落盘**：`launcher-settings.json` 出现 `npmRegistryPreset` / `npmRegistry`；容器内
+    `pnpm config get registry` 回**新值**（pnpm 不读环境变量，所以这只能来自重写的那份配置）、
+    `pnpm config get store-dir` 仍是共享仓库（`storeDir` 没被重写丢掉）、配置文件权限 0600；
+    `DshDoctor` 报 `npm registry: https://registry.npmmirror.com  (setting)`。
+  - **ZCode**：从面板设置取源（`pnpm install --registry=https://registry.npmmirror.com`）跑完整条构建，
+    **6 分半**出 `zcode-3.14.3.tar.gz`（带 sha256）并装成 release；`/data/zcode/current` 指向它、
+    `bin/zcode.mjs` 可执行、面板 `GET /api/zcode/releases` 列出 `3.14.3  current=true`。
+
 ## v0.2.0 — 2026-10-05 · models.dev 模型目录
 
 中等规模的功能更新（minor：0.1 → 0.2）。账户页接上 [models.dev](https://models.dev)

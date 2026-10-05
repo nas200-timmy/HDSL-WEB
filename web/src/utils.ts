@@ -122,3 +122,32 @@ export function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(2)} MB`;
 }
+
+/** 下载源地址里一律拒绝的符号：引号/反引号/反斜杠会破坏配置文件与命令拼接，
+ *  # $ 是模板注入面，; | & 是 shell 元字符，@ 会引入 userinfo。 */
+const REGISTRY_BAD_CHARS = /["'`\\#$;|&@]/;
+
+/**
+ * 下载源地址校验：合法返回 null，否则返回中文说明。
+ * 服务端的 NpmRegistry 才是权威（同一套规则再校验一次），这里只是提前拦下明显非法的输入。
+ */
+export function registryError(value: string): string | null {
+  const v = value.trim().replace(/\/+$/, "");
+  if (!v) return "请填写下载源地址";
+  if (v.length > 200) return "地址过长，最多 200 个字符";
+  if (/[\u0000-\u001f\u007f]/.test(v)) return "地址里不能有控制字符或换行";
+  if (/\s/.test(v)) return "地址里不能有空格";
+  if (REGISTRY_BAD_CHARS.test(v)) return "地址里不能有引号、反斜杠或 # $ ; | & @ 这些符号";
+
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return "请填写合法的 http(s) 地址";
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return "只支持 http:// 或 https:// 地址";
+  if (!u.hostname) return "请填写合法的 http(s) 地址";
+  if (u.username || u.password) return "地址里不能带用户名或密码";
+  if (u.search || u.hash) return "地址里不能带查询参数或 # 片段";
+  return null;
+}

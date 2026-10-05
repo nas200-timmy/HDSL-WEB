@@ -227,38 +227,38 @@ public final class ZcodeBuilder {
             step.set(0.22, "应用反代补丁（" + ZcodePatch.size() + " 处）");
             ZcodePatch.apply(sources);
 
-            // Two build-only knobs, env-only like the rest of this category:
+            // The registry is the one chosen in the panel's settings, which is what the settings
+            // page shows and what `NPM_CONFIG_REGISTRY` falls back to. Passing it explicitly makes
+            // the build independent of pnpm's own config.yaml, and is the one lever that matters on
+            // a network far from npmjs.org: measured from this container, the published registry
+            // answers at 28 KB/s and a mirror at 25 MB/s — the difference between an install and an
+            // afternoon.
             //
-            // - the registry is the panel's own (`NPM_CONFIG_REGISTRY`, which the
-            //   entrypoint already writes into pnpm's config.yaml) — passing it
-            //   explicitly makes the build independent of that file, and is the
-            //   one lever that matters on a network far from npmjs.org;
-            // - the platform filter goes into the checkout's `.npmrc`: upstream's
-            //   lockfile lists every platform's optional dependencies, so
-            //   Windows/macOS/other-architecture tarballs are pure download cost
-            //   on a NAS. `HDSL_ZCODE_ALL_PLATFORMS=1` turns it off.
-            String registry = System.getenv("NPM_CONFIG_REGISTRY");
+            // There was a second knob here, an `.npmrc` narrowing the install to this machine's
+            // platform. It is gone: pnpm takes `supportedArchitectures` from `pnpm-workspace.yaml`
+            // rather than from `.npmrc`, so it never took effect, and if it had it would have broken
+            // the build — the SEA staging step collects native assets for all six targets and fails
+            // outright when one is missing. Upstream's own `pnpm-workspace.yaml` already asks for
+            // exactly the platforms it needs.
+            String registry = org.jackhuang.hmcl.dsh.NpmRegistry.effective().registry();
             List<String> install = new ArrayList<>(List.of(settings.pnpm(), "install"));
-            if (registry != null && !registry.isBlank()) {
-                registry = registry.trim();
-                install.add("--registry=" + registry);
-            }
-            if (!"1".equals(System.getenv("HDSL_ZCODE_ALL_PLATFORMS"))) {
-                String osName = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
-                String platformOs = osName.contains("mac") ? "darwin" : osName.startsWith("win") ? "win32" : "linux";
-                String platformCpu = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT)
-                        .matches("aarch64|arm64") ? "arm64" : "x64";
-                String filter = "{\"os\":[\"" + platformOs + "\"],\"cpu\":[\"" + platformCpu + "\"]"
-                        + ("linux".equals(platformOs) ? ",\"libc\":[\"glibc\"]" : "") + "}";
-                Files.writeString(sources.resolve(".npmrc"),
-                        System.lineSeparator() + "supportedArchitectures=" + filter + System.lineSeparator(),
-                        StandardCharsets.UTF_8,
-                        java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
-                step.log("platform filter: " + filter);
-            }
-            step.set(0.28, "安装依赖：pnpm install（最慢的一步"
-                    + (registry == null ? "" : "，registry=" + registry) + "）");
+            install.add("--registry=" + registry);
+            step.set(0.28, "安装依赖：pnpm install（最慢的一步，registry=" + registry + "）");
             run(step, settings, sources, install, Duration.ofMinutes(90));
+
+            // Upstream's own build does not produce this, and its error message says to run
+            // `pnpm build`, which does not either: `packages/shared` declares no build script, so
+            // `pnpm -r build` skips it, while the SEA staging step later insists on its
+            // `dist/index.js` and stops the whole build there. What does produce it is the project
+            // reference build — the one the root `typecheck` runs — which is why anyone who has run
+            // that has the file and a clean checkout does not.
+            step.set(0.62, "补 packages/shared 的 dist（上游缺的一步）");
+            run(step, settings, sources, List.of(settings.pnpm(), "exec", "tsc", "-b", "packages/shared"),
+                    Duration.ofMinutes(30));
+            if (!Files.isRegularFile(sources.resolve("packages/shared/dist/index.js"))) {
+                throw new ZcodeException("packages/shared/dist/index.js was not produced,"
+                        + " and the rest of the build cannot run without it");
+            }
 
             step.set(0.68, "构建发行包：pnpm build:zcode");
             run(step, settings, sources, List.of(settings.pnpm(), "build:zcode",
@@ -277,7 +277,12 @@ public final class ZcodeBuilder {
             fail(ref, e.toString());
             LOG.warning("The ZCode build of " + ref + " failed", e);
         } finally {
-            if (!settings.keepSources()) {
+            // Kept when the build failed, whatever the setting says. The tree is the only record of
+            // why it failed — upstream's own scripts answer with their own logs, and deleting them
+            // costs a whole rebuild to ask the same question twice. `HDSL_ZCODE_KEEP_SOURCES=1`
+            // keeps it even on success.
+            boolean built = STATUS.get().state() == State.DONE;
+            if (!settings.keepSources() && built) {
                 try {
                     deleteRecursively(sources);
                     Files.deleteIfExists(tarball);
@@ -285,6 +290,9 @@ public final class ZcodeBuilder {
                 } catch (IOException e) {
                     LOG.warning("Could not clean up the ZCode build tree", e);
                 }
+            } else if (!built) {
+                // Named because the next question is always "where did it get to".
+                LOG.info("The failed ZCode build is kept at " + work);
             }
         }
     }
@@ -413,6 +421,18 @@ public final class ZcodeBuilder {
         if (!settings.buildBin().isBlank()) {
             String path = builder.environment().getOrDefault("PATH", "");
             builder.environment().put("PATH", settings.buildBin() + ":" + path);
+        }
+        // Everything a child of the launcher is given: the proxy the settings describe, the npm
+        // registry, and the knobs that keep a native build from fetching from the slow half of the
+        // internet. The build runs pnpm, node-gyp and git, and all three read these — the proxy
+        // most of all, which this build used to ignore entirely.
+        builder.environment().putAll(org.jackhuang.hmcl.dsh.DshNetworkSettings.environment());
+        // Electron's binaries are not on the registry: its postinstall fetches them from GitHub,
+        // which this network cannot read at all (measured: zero bytes in twenty seconds). A mirror
+        // that publishes them beside itself is the only way that step finishes.
+        String electronMirror = org.jackhuang.hmcl.dsh.NpmRegistry.electronMirror();
+        if (electronMirror != null) {
+            builder.environment().put("ELECTRON_MIRROR", electronMirror);
         }
         step.log("$ " + String.join(" ", command));
         Process process;

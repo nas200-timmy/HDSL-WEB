@@ -114,6 +114,11 @@ LABEL org.opencontainers.image.licenses="GPL-3.0-only"
 # procps, less     so `docker exec -it … ps/less` works while troubleshooting
 # openjdk-21-jre-headless  the runtime itself (drags in util-linux -> flock(1),
 #                  which the session-lease check shells out to)
+# g++, make, python3  what node-gyp needs, and therefore what the in-panel ZCode build needs:
+#                  its dependency tree compiles native modules (`node-pty`, `cpu-features`), and
+#                  without these it stops at "Could not find any Python installation" or "Unable to
+#                  detect compiler type" — messages that name nothing the reader can install.
+#                  About 250 MB; the price of the build button working at all.
 ARG NODE_VERSION=22.23.1
 ARG PNPM_VERSION=11.28.2
 # Node 官方 dist 的下载基址。国内网络直连 nodejs.org 会 TLS 握手失败（curl exit 35），
@@ -125,10 +130,13 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
+      g++ \
       git \
       less \
+      make \
       openjdk-21-jre-headless \
       procps \
+      python3 \
       tini \
       xz-utils \
       zstd \

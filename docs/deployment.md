@@ -7,6 +7,7 @@
 - [3. 备份与恢复](#3-备份与恢复)
 - [4. 多架构构建（buildx）](#4-多架构构建buildx)
 - [5. 升级与回滚](#5-升级与回滚)
+- [6. 运行期下载源（面板设置）](#6-运行期下载源面板设置)
 
 ---
 
@@ -275,7 +276,63 @@ docker compose build --build-arg RELEASE_VERSION=0.2.0
 - 回滚就是把旧 tag 的镜像重新 `up -d`；如果新版本写过 `server.yaml` 的新字段，旧版本会给出
   「unknown key … ignored」警告而不影响启动。
 
-## 6. 自签证书与容器健康检查（`Invalid SNI`）
+---
+
+## 6. 运行期下载源（面板设置）
+
+「设置 → 下载源」改的是**运行期**用哪个 npm registry，和构建镜像时的 `--build-arg NPM_REGISTRY` 是两回事：
+
+| | 构建期 `NPM_REGISTRY`（build-arg） | 运行期「下载源」（面板设置） |
+|---|---|---|
+| 作用范围 | `docker build` 期间：SPA 阶段的 `npm ci`、corepack 下载 pnpm 本体 | 容器运行期间：dsh 实例安装/升级、插件安装、ZCode 构建 |
+| 改完怎么生效 | 重新构建镜像（`docker compose build`） | 保存即生效，不用重启容器 |
+| 存在哪 | 只在构建过程里，不进镜像 | `/data/hdsl/launcher-settings.json`（随 `/data` 一起备份） |
+
+**优先级：面板设置 > 环境变量 `NPM_CONFIG_REGISTRY` > 官方默认 `https://registry.npmjs.org/`。**
+想在面板之外钉死一个源，就把面板里的下载源设成「跟随部署环境（默认）」——那正是「清空设置、只用环境变量」的开关。
+
+### 怎么改、什么时候生效
+
+预设给的是几个公开镜像，也可以填自己的 URL：
+
+| 预设 id | 地址 |
+|---|---|
+| `environment` | 跟随部署环境（默认；清空设置，回到环境变量 / 官方） |
+| `npmjs` | `https://registry.npmjs.org`（官方） |
+| `npmmirror` | `https://registry.npmmirror.com` |
+| `ustc` | `https://npmreg.proxy.ustclug.org`（中科大） |
+| `tencent` | `https://mirrors.cloud.tencent.com/npm`（腾讯云） |
+| `huawei` | `https://repo.huaweicloud.com/repository/npm`（华为云） |
+
+内网的 Nexus、Verdaccio 这类 `http://192.0.2.10:8081/repository/npm/` 是允许的——这一版要防的是**注入**，
+不是强制 TLS，所以 `http` 只校验、不拒绝。保存前服务端会校验：只允许 `http`/`https`、必须能解析出主机名、
+禁止用户口令 / 查询串 / 片段，以及空白、控制字符、`"` `'` `` ` `` `\` `#` `$` `;` `|` `&` `@`，长度 ≤ 200，
+尾斜杠自动去掉；不合法直接 400 且**设置保持不变**。
+
+保存后对**之后产生**的 pnpm/npm 子进程生效：新建或重装的实例、插件安装、面板内构建都会用新源；
+已经装好的实例不会因此重装（要重装/升级才会走新源）。容器重启后设置仍在，入口脚本先生成
+`config.yaml`、面板启动时再按设置重写一次。
+
+### 它会重写 pnpm 的全局配置
+
+pnpm 11 **不读环境变量**，registry 只来自它自己的全局配置 `~/.config/pnpm/config.yaml`
+（容器内是 `/home/hdsl/.config/pnpm/config.yaml`，镜像里没有任何 `.npmrc`）。所以面板在**启动时**和**每次保存**都会
+按生效值重写这份文件：逐行保留其它设置（`storeDir` 不会丢）、只重写 `registry` 一行，值经 YAML 引号、
+写临时文件后原子替换、权限 0600；若本来没有 `storeDir`，还会按 `PNPM_STORE_DIR` 补一行。
+同时面板还给子进程注入 `npm_config_registry` / `NPM_CONFIG_REGISTRY`（npm 系读它），
+并在自己起的 pnpm 上显式加 `--registry=`（dsh 安装、ZCode 构建，日志里能看到实际用的源）。
+
+**后果**：手工挂载或手改的 `config.yaml` 里的 `registry` 会被覆盖——即使面板里选的是「跟随部署环境（默认）」，
+写进去的也是环境变量或官方默认，而不是你手写的那一行（`storeDir` 等其它行原样保留）。
+想自己维护这个键，就得让这个文件别被面板碰：目前没有开关，只能改完文件后别在面板里保存下载源。
+另外这份文件在容器 home 下、**不在 `/data` 卷里**：容器重建会回到入口脚本生成的那份，所以面板每次启动都会重写一次。
+
+> corepack 下载 pnpm 本体走的是它自己的 `COREPACK_NPM_REGISTRY`（由入口脚本从 `NPM_CONFIG_REGISTRY` 派生）：
+> 面板设置只写 pnpm 那份 config.yaml、不碰这个变量，所以完全离线的内网部署仍需用环境变量把 corepack 也指到位。
+
+---
+
+## 7. 自签证书与容器健康检查（`Invalid SNI`）
 
 面板启用 HTTPS、而证书的主机名是 `dsh.example.com` 这类域名时，`curl https://127.0.0.1:3080/api/health`
 这种「按地址访问」的请求不带 SNI；Jetty 默认的 SNI 主机校验会把它判成 `400 Invalid SNI`，

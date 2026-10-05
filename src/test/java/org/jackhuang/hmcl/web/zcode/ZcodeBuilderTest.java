@@ -17,10 +17,14 @@
  */
 package org.jackhuang.hmcl.web.zcode;
 
+import org.jackhuang.hmcl.dsh.NpmRegistry;
+import org.jackhuang.hmcl.setting.LauncherSettings;
+import org.jackhuang.hmcl.setting.SettingsManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -88,10 +92,15 @@ class ZcodeBuilderTest {
         // …and the patch is visible in the tree it kept.
         String vite = Files.readString(dir.resolve("root/build/src/packages/web/vite.config.ts"));
         assertTrue(vite.contains("base: \"./\","), vite);
-        // …as is the platform filter, appended to the checkout's .npmrc so a
-        // mirror the sources already configure survives.
-        String npmrc = Files.readString(dir.resolve("root/build/src/.npmrc"));
-        assertTrue(npmrc.contains("supportedArchitectures="), npmrc);
+        // …and the platform filter is gone with the checkout's `.npmrc`: pnpm reads
+        // `supportedArchitectures` from `pnpm-workspace.yaml` rather than from `.npmrc`, so the one
+        // the builder used to append never took effect — and the effect it asked for would have
+        // broken the SEA staging step, which collects native assets for every target.
+        assertFalse(Files.exists(dir.resolve("root/build/src/.npmrc")),
+                "the builder must not narrow the install through an .npmrc of its own");
+        // The generated `packages/shared/dist` the SEA staging step insists on is the step the
+        // builder runs for itself (the stub writes what `pnpm exec tsc -b` would have).
+        assertTrue(Files.isRegularFile(dir.resolve("root/build/src/packages/shared/dist/index.js")));
     }
 
     @Test
@@ -110,6 +119,41 @@ class ZcodeBuilderTest {
         ZcodeBuilder.Settings settings = new ZcodeBuilder.Settings(
                 dir.resolve("root"), "", fakePnpm(), "%s", false);
         assertThrows(ZcodeException.class, () -> ZcodeBuilder.start(settings, "main; rm -rf /"));
+    }
+
+    /// The chosen download source reaches the child process on its own command line, and the mirror
+    /// that publishes Electron's binaries reaches its environment — the two things that decide
+    /// whether the install runs at tens of kilobytes a second or at megabytes a second.
+    @Test
+    void theInstallNamesTheChosenRegistryAndElectronMirror() throws Exception {
+        copy(Path.of("src/test/resources/fake-zcode-source"), dir.resolve("srcroot"));
+        Path tarball = dir.resolve("zcode-source.tar.gz");
+        run(List.of("tar", "-czf", tarball.toString(), "-C", dir.toString(), "srcroot"));
+
+        LauncherSettings settings = SettingsManager.settings();
+        settings.setNpmRegistryPreset("npmmirror");
+        String stub = fakePnpm();
+        try {
+            ZcodeBuilder.Settings builderSettings = new ZcodeBuilder.Settings(
+                    dir.resolve("root"), "", stub, tarball.toString(), false);
+            ZcodeBuilder.start(builderSettings, "main");
+            ZcodeBuilder.Status status = awaitTerminal(120);
+            assertEquals(ZcodeBuilder.State.DONE, status.state(),
+                    status.message() + " | log: " + String.join("\n", ZcodeBuilder.tailLog(40)));
+
+            // The stub recorded every call it was given: one line per call, the argv joined by
+            // spaces, plus a line for ELECTRON_MIRROR when the builder set one.
+            List<String> recorded = Files.readAllLines(Path.of(stub + ".args"), StandardCharsets.UTF_8);
+            String install = recorded.stream().filter(line -> line.startsWith("install "))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("the stub recorded no `pnpm install`: " + recorded));
+            assertTrue(install.contains("--registry=https://registry.npmmirror.com"),
+                    "the install must name the chosen registry: " + recorded);
+            assertTrue(recorded.contains("ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/"),
+                    "the chosen mirror's Electron copy must reach the child's environment: " + recorded);
+        } finally {
+            settings.setNpmRegistryPreset(NpmRegistry.ENVIRONMENT);
+        }
     }
 
     /// The stub `pnpm`, copied somewhere writable with its executable bit set:

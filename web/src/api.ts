@@ -15,6 +15,8 @@ import type {
   PatchAccountBody,
   PatchInstanceBody,
   PluginCatalogItem,
+  RegistrySettings,
+  RegistryTestResult,
   SessionInfo,
   SkillInfo,
   Task,
@@ -227,6 +229,18 @@ export const api = {
 
   uploadTls: (fd: FormData) =>
     request<TlsUploadResult>("/api/settings/tls", { method: "POST", body: fd }),
+
+  // ---------- 下载源（npm registry） ----------
+
+  getRegistry: () => request<RegistrySettings>("/api/settings/registry"),
+
+  /** 选预设传 { preset }；手填传 { preset: "custom", registry }。成功时回读同 GET 的形状 */
+  setRegistry: (body: { preset: string; registry?: string }) =>
+    request<RegistrySettings>("/api/settings/registry", jsonInit("POST", body)),
+
+  /** 测速：不传地址就测当前生效的那个源 */
+  testRegistry: (registry?: string) =>
+    request<RegistryTestResult>("/api/settings/registry/test", jsonInit("POST", registry ? { registry } : {})),
 
   // ---------- Phase 4：整合包市场 / 安装 / 上传 ----------
 
