@@ -23,8 +23,10 @@ import type {
   Vendor,
   VersionInfo,
   WorkspaceInfo,
+  ZcodeBuildStatus,
   ZcodeDistInfo,
   ZcodeInstance,
+  ZcodeRelease,
 } from "./types";
 
 export class ApiError extends Error {
@@ -317,4 +319,16 @@ export const api = {
 
   zcodeLogs: (id: string, tail = 200) =>
     request<{ lines: string[] }>(`/api/zcode/instances/${encodeURIComponent(id)}/logs?tail=${tail}`),
+
+  /** 已安装的发行包（构造器装出来的那些） */
+  zcodeReleases: () => request<{ releases: ZcodeRelease[] }>("/api/zcode/releases"),
+
+  /** 面板内构建：当前状态 */
+  zcodeBuild: () => request<ZcodeBuildStatus>("/api/zcode/build"),
+
+  /** 面板内构建：开始（下载源码 → 打补丁 → pnpm 构建 → 安装） */
+  startZcodeBuild: (version: string) =>
+    request<ZcodeBuildStatus>("/api/zcode/build", jsonInit("POST", { version })),
+
+  zcodeBuildLog: (tail = 400) => request<{ lines: string[] }>(`/api/zcode/build/log?tail=${tail}`),
 };

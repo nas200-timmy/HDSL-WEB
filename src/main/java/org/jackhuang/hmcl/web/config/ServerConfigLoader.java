@@ -50,6 +50,10 @@ public final class ServerConfigLoader {
     public static final String ENV_HTTPS = "HDSL_HTTPS";
     public static final String ENV_ZCODE_PACKAGE = "HDSL_ZCODE_PACKAGE";
     public static final String ENV_ZCODE_NODE = "HDSL_ZCODE_NODE";
+    public static final String ENV_ZCODE_BUILD_BIN = "HDSL_ZCODE_BUILD_BIN";
+    public static final String ENV_ZCODE_PNPM = "HDSL_ZCODE_PNPM";
+    public static final String ENV_ZCODE_SOURCE_URL = "HDSL_ZCODE_SOURCE_URL";
+    public static final String ENV_ZCODE_KEEP_SOURCES = "HDSL_ZCODE_KEEP_SOURCES";
 
     public static final String YAML_FILE_NAME = "server.yaml";
 
@@ -198,6 +202,18 @@ public final class ServerConfigLoader {
         }
         if (env.containsKey(ENV_ZCODE_NODE)) {
             config.zcode.nodePath = env.get(ENV_ZCODE_NODE);
+        }
+        if (env.containsKey(ENV_ZCODE_BUILD_BIN)) {
+            config.zcode.buildBin = env.get(ENV_ZCODE_BUILD_BIN);
+        }
+        if (env.containsKey(ENV_ZCODE_PNPM)) {
+            config.zcode.pnpm = env.get(ENV_ZCODE_PNPM);
+        }
+        if (env.containsKey(ENV_ZCODE_SOURCE_URL)) {
+            config.zcode.sourceUrl = env.get(ENV_ZCODE_SOURCE_URL);
+        }
+        if (env.containsKey(ENV_ZCODE_KEEP_SOURCES)) {
+            config.zcode.keepSources = Boolean.parseBoolean(env.get(ENV_ZCODE_KEEP_SOURCES).trim());
         }
     }
 

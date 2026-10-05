@@ -154,6 +154,31 @@ RUN set -eux; \
     rm -f "/tmp/${tarball}" /tmp/SHASUMS256.txt /tmp/node.tar.sha256; \
     /opt/node/bin/node --version
 
+# Node 24 alongside Node 22, for the experimental ZCode category only. Its
+# upstream build refuses anything older than Node 24, while the panel and dsh
+# stay on Node 22 — so this install is deliberately NOT on PATH; the ZCode
+# builder prepends /opt/node24/bin itself (HDSL_ZCODE_BUILD_BIN). corepack's
+# shims are written next to it so `PATH=/opt/node24/bin:$PATH pnpm …` picks the
+# right pnpm without disturbing the panel's own.
+ARG NODE24_VERSION=24.14.0
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "${arch}" in \
+      amd64) node_arch=x64 ;; \
+      arm64) node_arch=arm64 ;; \
+      *) echo "HDSL-web: unsupported architecture ${arch}" >&2; exit 1 ;; \
+    esac; \
+    tarball="node-v${NODE24_VERSION}-linux-${node_arch}.tar.xz"; \
+    curl -fsSLo "/tmp/${tarball}" "${NODE_DIST_MIRROR}/v${NODE24_VERSION}/${tarball}"; \
+    curl -fsSLo /tmp/SHASUMS24.txt "${NODE_DIST_MIRROR}/v${NODE24_VERSION}/SHASUMS256.txt"; \
+    grep " ${tarball}\$" /tmp/SHASUMS24.txt > /tmp/node24.tar.sha256; \
+    (cd /tmp && sha256sum -c node24.tar.sha256); \
+    mkdir -p /opt/node24; \
+    tar -xJf "/tmp/${tarball}" -C /opt/node24 --strip-components=1 --no-same-owner; \
+    rm -f "/tmp/${tarball}" /tmp/SHASUMS24.txt /tmp/node24.tar.sha256; \
+    PATH="/opt/node24/bin:${PATH}" corepack enable --install-directory /opt/node24/bin; \
+    /opt/node24/bin/node --version
+
 ENV PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # pnpm through corepack, which Node 22 bundles. `corepack enable` puts the
@@ -254,6 +279,9 @@ RUN printf '%s\n' \
 #                       config.yaml by the entrypoint
 # PNPM_STORE_DIR  pnpm's shared store, inside the volume so instances hard-link
 #                 from it instead of copying (same filesystem)
+# HDSL_ZCODE_BUILD_BIN  the Node 24 install, for the experimental ZCode
+#                 category's in-panel build only — upstream's build refuses
+#                 anything older, while the panel and dsh stay on Node 22.
 # LANG            without it the JVM's console encoding is ANSI_X3.4-1968, and
 #                 every Chinese log line — the install failures among them —
 #                 reaches `docker logs` as ?????. C.UTF-8 is built into Debian's
@@ -262,6 +290,7 @@ ENV HDSL_DATA=/data \
     HDSL_PORT=3080 \
     NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
     PNPM_STORE_DIR=/data/pnpm-store \
+    HDSL_ZCODE_BUILD_BIN=/opt/node24/bin \
     LANG=C.UTF-8 \
     HOME=/home/hdsl
 

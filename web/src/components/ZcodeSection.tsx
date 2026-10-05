@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { ConfirmDialog, Dialog } from "./Dialog";
+import { ZcodeBuildButton } from "./ZcodeBuildDialog";
 import {
   CloseIcon,
   DeleteIcon,
@@ -210,6 +211,7 @@ export function ZcodeSection() {
             {running > 0 ? ` · ${running} 个运行中` : ""}
           </span>
           <span className="spacer" />
+          <ZcodeBuildButton />
           <button className="tool-btn ripple-host" disabled={s.zcodeLoading} onClick={() => void refreshZcode(true)}>
             <RefreshIcon size={18} />
             刷新

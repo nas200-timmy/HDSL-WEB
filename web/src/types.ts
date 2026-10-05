@@ -378,3 +378,22 @@ export interface ZcodeDistInfo {
   path: string;
   version: string | null;
 }
+
+/// 已安装的 ZCode 发行包（GET /api/zcode/releases 的一项）。
+export interface ZcodeRelease {
+  version: string;
+  path: string;
+  builtAt: number;
+  /** 是否 `current` 指向它（启动用的就是它） */
+  current: boolean;
+}
+
+/// 面板内构建的状态（GET/POST /api/zcode/build）。
+export interface ZcodeBuildStatus {
+  /** idle | running | done | error */
+  state: string;
+  version: string;
+  message: string;
+  fraction: number;
+  error?: string;
+}

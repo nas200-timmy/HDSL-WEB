@@ -17,30 +17,49 @@ AI 编程工作台，Apache-2.0）。它与 dsh 品类**完全隔离**：实例�
   就失效——「能注就注，不能就算了」。
 - 上游大约周更。
 
-## 怎么提供发行包
+## 怎么得到发行包
 
-面板按这个顺序找发行包（目录内需要存在 `bin/zcode.mjs`）：
+### 方式一：面板内构建（默认）
 
-1. 环境变量 `HDSL_ZCODE_PACKAGE` 指向的目录；
-2. 否则 `<数据目录>/zcode/current/`。
+实例页 ZCode 分区里的「构建发行包」按钮：填一个上游 tag（`v3.14.3`）或分支（`main`），
+面板会
 
-构建（在一台有 Node 24 的机器或 CI 上，细节见 ZCode 仓库 README）：
+1. 从 GitHub 下载源码 tarball（`codeload.github.com/zai-org/ZCode`）；
+2. 解包后打上[反代补丁](#反代补丁)；
+3. 跑 `pnpm install` 与 `pnpm build:zcode`；
+4. 校验产物记录的 `sha256`，装到 `<数据目录>/zcode/releases/<版本>/`，并把 `current` 指过去。
 
-```bash
-git clone https://github.com/zai-org/ZCode.git
-cd ZCode
-pnpm bootstrap
-pnpm build:zcode --base-url https://your-host/zcode/   # 产出 dist/zcode/releases/<v>/zcode-<v>.tar.gz
-```
+界面上能看到当前步骤、进度和日志（日志文件在 `<数据目录>/zcode/build/build.log`）。
 
-把解包出的内层 `zcode/` 目录放到 `<数据目录>/zcode/current/`（容器里即
-`/data/zcode/current/`），或用 `HDSL_ZCODE_PACKAGE` 指过去。面板随即显示版本号并允许创建
-实例。
+要求与代价：镜像里已经装好 Node 24（`/opt/node24`，只有构建用它）；要下几百 MB 源码、
+装 GB 级依赖，**慢是正常的**；构建失败（环境缺失、上游改了锚点）只影响这一次构建，
+已装好的版本不受影响。
 
 | 环境变量 | 说明 |
 | --- | --- |
-| `HDSL_ZCODE_PACKAGE` | 发行包目录（缺省 `<数据目录>/zcode/current/`） |
+| `HDSL_ZCODE_SOURCE_URL` | 源码 tarball 模板（`%s` = tag/分支）；也接受 `file:` 或本地路径（离线/内网代理） |
+| `HDSL_ZCODE_BUILD_BIN` | 构建时前置到 `PATH` 的目录；镜像里默认 `/opt/node24/bin` |
+| `HDSL_ZCODE_PNPM` | 构建用的 pnpm 可执行文件；默认 `pnpm` |
+| `HDSL_ZCODE_KEEP_SOURCES` | `true` 时保留源码树与依赖（排错用，占几个 GB） |
+
+### 方式二：手工放一个发行包
+
+`HDSL_ZCODE_PACKAGE` 指向一个解包好的发行包目录，或直接放进
+`<数据目录>/zcode/releases/<版本>/`（需含 `bin/zcode.mjs`）。
+
+面板找发行包的顺序：`HDSL_ZCODE_PACKAGE` → `current` 指向的版本 → `releases/` 里最新的一个。
+
+| 环境变量 | 说明 |
+| --- | --- |
+| `HDSL_ZCODE_PACKAGE` | 发行包目录（覆盖上面的自动查找） |
 | `HDSL_ZCODE_NODE` | 运行 ZCode 的 node 可执行文件；缺省用 PATH 上的 `node` |
+
+### 反代补丁
+
+面板构建时把 5 处根路径改成「带 `/i/<id>/` 前缀工作」：vite 的 `base: "./"`、
+`main.tsx` 里的 `hdslBasePath()`（从浏览器路径读前缀）、WS origin、`/api/server-info`
+fetch、Z.ai OAuth 的 `tokenUrl`。上游把这些锚点挪走时构建会**明确失败**并点名文件，
+而不是产出一个指向错误地址的发行包；届时更新 `ZcodePatch` 与本文档。
 
 ## 实例怎么跑
 

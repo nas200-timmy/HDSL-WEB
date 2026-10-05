@@ -45,8 +45,17 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// session gate as every other `/api/*` route):
 ///
 /// - `GET    /api/zcode/dist`                      — `{present, path, version}`
-///   for the discovered distribution (`HDSL_ZCODE_PACKAGE` or
-///   `<dataDir>/zcode/current/`, valid when it holds `bin/zcode.mjs`)
+///   for the discovered distribution (`HDSL_ZCODE_PACKAGE`, else the newest
+///   installed release below `<dataDir>/zcode/releases/`, else
+///   `<dataDir>/zcode/current/`; valid when it holds `bin/zcode.mjs`)
+/// - `GET    /api/zcode/releases`                  — the installed releases,
+///   newest first, each flagged with whether it is the current one
+/// - `POST   /api/zcode/build`                     — `{version}`, an upstream
+///   tag or branch: starts the in-panel build (download → patch → pnpm install
+///   → pnpm build:zcode → install) and returns 202; one build at a time
+/// - `GET    /api/zcode/build`                     — the build's state, current
+///   step and fraction
+/// - `GET    /api/zcode/build/log?tail=N`          — the tail of the build log
 /// - `GET    /api/zcode/instances`                 — every instance with its
 ///   runtime state and, while running, its `openUrl`
 /// - `POST   /api/zcode/instances`                 — create `{name, baseUrl?, apiKey?}`
@@ -66,22 +75,29 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// The category is an implementation-level experiment around ZCode
 /// (zai-org/ZCode, Apache-2.0): nothing here is covered by the dsh category's
 /// compatibility promises, API keys are stored in clear text in the instance
-/// manifest, and instances are reached over plain HTTP on their own ports
-/// rather than through the `/i/<id>/` reverse proxy (ZCode's frontend writes
-/// its root path into its assets, which sub-path proxying breaks).
+/// manifest, distributions are built from upstream source with [ZcodePatch]
+/// applied, and instances are reached over plain HTTP on their own ports rather
+/// than through the `/i/<id>/` reverse proxy (ZCode's frontend writes its root
+/// path into its assets; the built distribution carries the patch that makes the
+/// proxy possible, and wiring it up is the next step).
 @NotNullByDefault
 public final class ZcodeApiServlet extends HttpServlet {
 
     private static final int DEFAULT_LOG_TAIL = 200;
     private static final int MAX_LOG_TAIL = 2000;
+    private static final int DEFAULT_BUILD_LOG_TAIL = 400;
+    private static final int MAX_BUILD_LOG_TAIL = 4000;
 
     private final ServerConfig config;
     private final ZcodeInstanceManager manager;
+    private final ZcodeBuilder.Settings buildSettings;
 
     public ZcodeApiServlet(ServerConfig config) {
         this.config = config;
-        this.manager = new ZcodeInstanceManager(
-                config.dataDir.resolve("zcode").resolve("instances"));
+        Path root = config.dataDir.resolve("zcode");
+        this.manager = new ZcodeInstanceManager(root.resolve("instances"));
+        this.buildSettings = new ZcodeBuilder.Settings(root, config.zcode.buildBin, config.zcode.pnpm,
+                config.zcode.sourceUrl, config.zcode.keepSources);
     }
 
     @Override
@@ -91,6 +107,25 @@ public final class ZcodeApiServlet extends HttpServlet {
             if (segments.length == 1 && "dist".equals(segments[0]) && "GET".equals(request.getMethod())) {
                 dist(response);
                 return;
+            }
+            if (segments.length == 1 && "releases".equals(segments[0]) && "GET".equals(request.getMethod())) {
+                releases(response);
+                return;
+            }
+            if (segments.length >= 1 && "build".equals(segments[0])) {
+                if (segments.length == 1) {
+                    switch (request.getMethod()) {
+                        case "GET" -> buildStatus(response);
+                        case "POST" -> startBuild(request, response);
+                        default -> Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED,
+                                "method not allowed");
+                    }
+                    return;
+                }
+                if (segments.length == 2 && "log".equals(segments[1]) && "GET".equals(request.getMethod())) {
+                    buildLog(request, response);
+                    return;
+                }
             }
             if (segments.length == 1 && "instances".equals(segments[0])) {
                 switch (request.getMethod()) {
@@ -146,12 +181,31 @@ public final class ZcodeApiServlet extends HttpServlet {
         Json.writePreservingNulls(response, body);
     }
 
-    /// The distribution directory: the env override, else `<dataDir>/zcode/current/`.
+    /// The installed releases, newest first.
+    private void releases(HttpServletResponse response) throws IOException {
+        JsonArray array = new JsonArray();
+        for (ZcodeBuilder.Release release : ZcodeBuilder.releases(config.dataDir.resolve("zcode"))) {
+            JsonObject item = new JsonObject();
+            item.addProperty("version", release.version());
+            item.addProperty("path", release.path());
+            item.addProperty("builtAt", release.builtAt());
+            item.addProperty("current", release.current());
+            array.add(item);
+        }
+        JsonObject body = new JsonObject();
+        body.add("releases", array);
+        Json.write(response, body);
+    }
+
+    /// The distribution directory: the `HDSL_ZCODE_PACKAGE` override, else the
+    /// newest installed release (the `current` link the builder maintains, or
+    /// whatever `releases/` holds), else where the next build would land.
     private Path packageDir() {
         String configured = config.zcode.packageDir;
-        return configured == null || configured.isBlank()
-                ? config.dataDir.resolve("zcode").resolve("current")
-                : Path.of(configured).toAbsolutePath().normalize();
+        if (configured != null && !configured.isBlank()) {
+            return Path.of(configured).toAbsolutePath().normalize();
+        }
+        return ZcodeBuilder.currentPackage(config.dataDir.resolve("zcode"));
     }
 
     /// The distribution's version, from its `package.json`; `null` when the
@@ -362,6 +416,64 @@ public final class ZcodeApiServlet extends HttpServlet {
         JsonObject body = new JsonObject();
         body.add("lines", array);
         Json.write(response, body);
+    }
+
+    // ----------------------------------------------------------------- build --
+
+    private void buildStatus(HttpServletResponse response) throws IOException {
+        Json.writePreservingNulls(response, buildJson(ZcodeBuilder.status()));
+    }
+
+    private void startBuild(HttpServletRequest request, HttpServletResponse response)
+            throws IOException, ZcodeException {
+        JsonObject body = body(request, response);
+        if (body == null) {
+            return;
+        }
+        String version = stringField(body, "version");
+        ZcodeBuilder.Status started = ZcodeBuilder.start(settingsFor(version), version);
+        Json.writePreservingNulls(response, HttpServletResponse.SC_ACCEPTED, buildJson(started));
+    }
+
+    private void buildLog(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        int tail = DEFAULT_BUILD_LOG_TAIL;
+        String parameter = request.getParameter("tail");
+        if (parameter != null) {
+            try {
+                tail = Math.min(MAX_BUILD_LOG_TAIL, Math.max(1, Integer.parseInt(parameter.trim())));
+            } catch (NumberFormatException ignored) {
+                // The default stands.
+            }
+        }
+        JsonArray array = new JsonArray();
+        ZcodeBuilder.tailLog(tail).forEach(array::add);
+        JsonObject body = new JsonObject();
+        body.add("lines", array);
+        Json.write(response, body);
+    }
+
+    /// The build settings for a ref, with the source template pointed at
+    /// `refs/heads` when the ref is a branch rather than a version tag.
+    private ZcodeBuilder.Settings settingsFor(@Nullable String version) {
+        String ref = version == null ? "" : version.trim();
+        String template = config.zcode.sourceUrl;
+        if (!ref.isEmpty() && !ref.matches("v?\\d[\\w.\\-]*") && template.contains("/refs/tags/")) {
+            template = template.replace("/refs/tags/", "/refs/heads/");
+        }
+        return new ZcodeBuilder.Settings(buildSettings.root(), buildSettings.buildBin(),
+                buildSettings.pnpm(), template, buildSettings.keepSources());
+    }
+
+    private static JsonObject buildJson(ZcodeBuilder.Status status) {
+        JsonObject body = new JsonObject();
+        body.addProperty("state", status.state().name().toLowerCase(java.util.Locale.ROOT));
+        body.addProperty("version", status.version());
+        body.addProperty("message", status.message());
+        body.addProperty("fraction", status.fraction());
+        if (status.error() != null) {
+            body.addProperty("error", status.error());
+        }
+        return body;
     }
 
     // --------------------------------------------------------------- response --

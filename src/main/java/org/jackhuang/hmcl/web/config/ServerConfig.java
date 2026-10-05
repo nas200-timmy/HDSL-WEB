@@ -55,17 +55,37 @@ public final class ServerConfig {
     /// The experimental ZCode category; see [ZcodeConfig].
     public final ZcodeConfig zcode = new ZcodeConfig();
 
-    /// ZCode category knobs. Both come from the environment only — the shape
-    /// of a ZCode distribution is not something `server.yaml` promises.
+    /// ZCode category knobs. All of them come from the environment only — the
+    /// shape of a ZCode distribution, and of the machine that builds it, is not
+    /// something `server.yaml` promises.
     public static final class ZcodeConfig {
         /// Directory holding a self-built ZCode distribution
         /// (`HDSL_ZCODE_PACKAGE`); it must contain `bin/zcode.mjs`. Empty means
-        /// `<dataDir>/zcode/current/`.
+        /// the newest installed release below `<dataDir>/zcode/releases/`.
         public String packageDir = "";
 
         /// The node executable used to run ZCode (`HDSL_ZCODE_NODE`).
         /// Empty means `node` resolved from `PATH`.
         public String nodePath = "";
+
+        /// The directory prepended to `PATH` while building
+        /// (`HDSL_ZCODE_BUILD_BIN`). The image points it at a Node 24 install,
+        /// because upstream's build refuses anything older. Empty keeps the
+        /// panel's own `PATH`.
+        public String buildBin = "";
+
+        /// The pnpm executable used for the build (`HDSL_ZCODE_PNPM`). Tests
+        /// point it at a stub; the default is whatever `PATH` resolves.
+        public String pnpm = "pnpm";
+
+        /// Source tarball template (`HDSL_ZCODE_SOURCE_URL`); `%s` is the tag or
+        /// branch name. Defaults to the GitHub codeload endpoint for tags.
+        public String sourceUrl = "https://codeload.github.com/zai-org/ZCode/tar.gz/refs/tags/%s";
+
+        /// Keeps the build's source tree and dependency install afterwards
+        /// (`HDSL_ZCODE_KEEP_SOURCES`) — for debugging a failing build, at the
+        /// cost of gigabytes.
+        public boolean keepSources = false;
     }
 
     public static final class HttpsConfig {

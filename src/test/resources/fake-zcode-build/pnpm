@@ -1,0 +1,47 @@
+#!/bin/sh
+# Fake pnpm for the ZcodeBuilder tests. ZcodeBuilder runs two commands —
+# `pnpm install` and `pnpm build:zcode --out-dir <dir> --base-url <url>` — and
+# this stub answers both without network or a real monorepo: the first is a
+# no-op, the second lays down exactly what build-zcode.mjs promises (a release
+# tarball below <out>/releases/<v>/, its sha256.txt, and latest.json naming the
+# two), so the builder's verify-and-install path runs for real.
+#
+# FAKE_ZCODE_VERSION overrides the version the stub reports.
+set -eu
+
+case "$1" in
+  install)
+    echo "fake pnpm install (no-op)"
+    exit 0
+    ;;
+  build:zcode)
+    out=""
+    prev=""
+    for arg in "$@"; do
+      if [ "$prev" = "--out-dir" ]; then
+        out="$arg"
+      fi
+      prev="$arg"
+    done
+    if [ -z "$out" ]; then
+      echo "fake pnpm: build:zcode without --out-dir" >&2
+      exit 2
+    fi
+    version="${FAKE_ZCODE_VERSION:-9.9.9}"
+    echo "fake pnpm: building zcode $version into $out"
+    mkdir -p "$out/releases/$version" "$out/staging/zcode/bin"
+    printf '#!/usr/bin/env node\nconsole.log("fake zcode web");\n' > "$out/staging/zcode/bin/zcode.mjs"
+    printf '{"name":"zcode","version":"%s"}\n' "$version" > "$out/staging/zcode/package.json"
+    tar -czf "$out/releases/$version/zcode-$version.tar.gz" -C "$out/staging" zcode
+    rm -rf "$out/staging"
+    sha="$(sha256sum "$out/releases/$version/zcode-$version.tar.gz" | cut -d' ' -f1)"
+    printf '%s\n' "$sha" > "$out/releases/$version/sha256.txt"
+    printf '{"version":"%s","tarball":"zcode-%s.tar.gz","sha256":"%s","baseUrl":"https://example.invalid/zcode/"}\n' \
+      "$version" "$version" "$sha" > "$out/latest.json"
+    echo "fake pnpm: build done"
+    exit 0
+    ;;
+esac
+
+echo "fake pnpm: unsupported command: $*" >&2
+exit 2
