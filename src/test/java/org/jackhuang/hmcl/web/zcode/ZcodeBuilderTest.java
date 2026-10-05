@@ -102,14 +102,22 @@ class ZcodeBuilderTest {
     }
 
     @Test
-    void rejectsARefNameThatIsNotARefName() {
+    void rejectsARefNameThatIsNotARefName() throws Exception {
         ZcodeBuilder.Settings settings = new ZcodeBuilder.Settings(
                 dir.resolve("root"), "", fakePnpm(), "%s", false);
         assertThrows(ZcodeException.class, () -> ZcodeBuilder.start(settings, "main; rm -rf /"));
     }
 
-    private static String fakePnpm() {
-        return Path.of("src/test/resources/fake-zcode-build/pnpm").toAbsolutePath().toString();
+    /// The stub `pnpm`, copied somewhere writable with its executable bit set:
+    /// a test must not depend on the checkout's own mode — this repository has
+    /// `core.fileMode` off, so the bit is not even recorded in git.
+    private String fakePnpm() throws IOException {
+        Path target = dir.resolve("fake-pnpm/pnpm");
+        Files.createDirectories(target.getParent());
+        Files.copy(Path.of("src/test/resources/fake-zcode-build/pnpm"), target,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        target.toFile().setExecutable(true, false);
+        return target.toAbsolutePath().toString();
     }
 
     private static ZcodeBuilder.Status awaitTerminal(long seconds) throws InterruptedException {
