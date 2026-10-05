@@ -40,6 +40,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
 import java.util.Locale;
 import java.util.Set;
@@ -48,6 +49,8 @@ import java.util.concurrent.Flow;
 import java.util.concurrent.SubmissionPublisher;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.InflaterInputStream;
 
 /// The reverse proxy behind `/i/*`: one dsh web instance per mount, reached
 /// through the loopback port its readiness line reported.
@@ -66,6 +69,12 @@ import java.util.regex.Pattern;
 /// - `Set-Cookie: ...; Path=/` becomes `Path=/i/<id>/` so the cookies of two
 ///   instances (which share their names, decided by host alone) stop
 ///   overwriting each other;
+/// - a redirect naming the instance's own address is rewritten onto the mount
+///   — the token exchange answers with `303 Location: /`, and the browser that
+///   follows it would leave the mount for the panel's own page;
+/// - the page itself is rewritten on the way past: its `<base>` and its
+///   `/plugins/` registrations are given the mount, and a small shim keeps the
+///   requests it builds at runtime inside it (see [#rewritePage]);
 /// - bodies stream in both directions (a `Flow.Publisher` over the servlet
 ///   input on the way up, `BodyHandlers.ofInputStream` on the way down), so
 ///   SSE — `/plugins/events` — works without special treatment;
@@ -74,6 +83,16 @@ import java.util.regex.Pattern;
 /// WebSocket upgrades under `/i/*` are not handled here; Jetty routes them to
 /// the [org.jackhuang.hmcl.web.proxy.InstanceProxyWebSocket] endpoint before
 /// the servlet ever sees them.
+///
+/// That reference is a fixture for the dsh repository's own test client, and that
+/// client is prefix-aware: it takes the mount as its base, follows the token
+/// exchange itself (`redirect: 'manual'`, with a `Location` of `./` meaning "in
+/// place"), and resolves every path against that base. The real web client is
+/// not — it is built to own the origin — so three things here have no
+/// counterpart upstream and are this launcher's own: the `Location` rewrite, the
+/// page rewrite, and the shim that keeps the requests the page builds at runtime
+/// inside the mount (see [#rewritePage]). A reader comparing the two should not
+/// read their absence upstream as an oversight here.
 @NotNullByDefault
 public final class InstanceProxyServlet extends HttpServlet {
 
@@ -223,13 +242,23 @@ public final class InstanceProxyServlet extends HttpServlet {
                 return;
             }
             response.setStatus(result.statusCode());
-            copyResponseHeaders(result, response, mount);
+            boolean servesPage = result.headers().firstValue("content-type").orElse("")
+                    .toLowerCase(Locale.ROOT).contains("text/html");
+            copyResponseHeaders(result, response, mount, servesPage);
             try (InputStream in = result.body(); OutputStream out = response.getOutputStream()) {
-                byte[] buffer = new byte[BUFFER_SIZE];
-                int read;
-                while ((read = in.read(buffer)) >= 0) {
-                    out.write(buffer, 0, read);
+                if (servesPage) {
+                    // Buffered and rewritten, because the page dsh generates is rooted at the origin
+                    // rather than at whatever path it is reached through — see rewritePage. Everything
+                    // else streams, which is what keeps `/plugins/events` (SSE) working.
+                    out.write(rewritePage(readPage(in, result), mount).getBytes(StandardCharsets.UTF_8));
                     out.flush();
+                } else {
+                    byte[] buffer = new byte[BUFFER_SIZE];
+                    int read;
+                    while ((read = in.read(buffer)) >= 0) {
+                        out.write(buffer, 0, read);
+                        out.flush();
+                    }
                 }
             }
         } catch (IOException e) {
@@ -260,23 +289,137 @@ public final class InstanceProxyServlet extends HttpServlet {
         }
     }
 
-    /// Copies the response headers, dropping hop-by-hop names and rewriting
-    /// the Set-Cookie paths onto the instance's mount.
+    /// Copies the response headers, dropping hop-by-hop names, pointing a
+    /// redirect back at the mount, and rewriting the Set-Cookie paths onto it.
+    ///
+    /// @param rewritesBody whether the caller is replacing the body, in which
+    ///                     case the headers that described the old one go too
     private static void copyResponseHeaders(HttpResponse<InputStream> result, HttpServletResponse response,
-                                            String mount) {
+                                            String mount, boolean rewritesBody) {
         for (var entry : result.headers().map().entrySet()) {
             String name = entry.getKey();
             String lower = name.toLowerCase(Locale.ROOT);
             if (HOP_BY_HOP.contains(lower)) {
                 continue;
             }
+            if (rewritesBody && (lower.equals("content-length") || lower.equals("content-encoding"))) {
+                continue;
+            }
             for (String value : entry.getValue()) {
                 if (lower.equals("set-cookie")) {
                     value = COOKIE_PATH.matcher(value).replaceAll("$1Path=" + mount);
+                } else if (lower.equals("location")) {
+                    value = mountLocation(value, mount);
                 }
                 response.addHeader(name, value);
             }
         }
+    }
+
+    /// Reads a page, decompressing it when the instance sent it compressed.
+    ///
+    /// The page arrives gzipped and cannot be rewritten while it is, so the answer goes back
+    /// uncompressed — which is why the caller drops the `content-encoding` header with it.
+    private static String readPage(InputStream in, HttpResponse<InputStream> result) throws IOException {
+        String encoding = result.headers().firstValue("content-encoding").orElse("").toLowerCase(Locale.ROOT);
+        if (encoding.contains("gzip")) {
+            try (GZIPInputStream gzip = new GZIPInputStream(in)) {
+                return new String(gzip.readAllBytes(), StandardCharsets.UTF_8);
+            }
+        }
+        if (encoding.contains("deflate")) {
+            try (InflaterInputStream deflate = new InflaterInputStream(in)) {
+                return new String(deflate.readAllBytes(), StandardCharsets.UTF_8);
+            }
+        }
+        return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+    }
+
+    /// The shim that keeps the page's runtime requests inside the mount.
+    ///
+    /// What the page asks for at runtime, the panel never sees in the HTML: the client calls
+    /// `/api/...`, opens its live channel at `/api/remote.mux` and subscribes to `/plugins/events`
+    /// — all as origin-absolute URLs it builds itself. Through a mount they reach the panel, which
+    /// answers 404 for names it does not have, and the interface then sits at "Reconnecting…" for
+    /// ever. These four interfaces are the ones a page can be made to go through another path at;
+    /// they are wrapped so that a same-host URL gets the mount, and anything else is left exactly
+    /// as it was. Dynamic `import()` cannot be wrapped, and does not need to be: the page's module
+    /// registrations are rewritten by [rewritePage] itself.
+    private static final String RUNTIME_SHIM = """
+            <script>(()=>{
+            const mount="__MOUNT__";
+            const fix=(value)=>{if(typeof value!=="string"||!value)return value;
+            if(value.startsWith("/i/"))return value;
+            try{const url=new URL(value,location.href);
+            if(url.host!==location.host)return value;
+            if(url.pathname.startsWith("/i/"))return value;
+            return url.protocol+"//"+location.host+mount+url.pathname.slice(1)+url.search+url.hash
+            }catch(e){return value}};
+            const f=window.fetch;
+            window.fetch=function(input,init){
+            if(typeof input==="string")return f.call(this,fix(input),init);
+            if(input instanceof URL)return f.call(this,fix(input.href),init);
+            if(input instanceof Request){const u=fix(input.url);if(u!==input.url)return f.call(this,new Request(u,input),init)}
+            return f.apply(this,arguments)};
+            const open=XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open=function(){const a=[].slice.call(arguments);a[1]=fix(String(a[1]));return open.apply(this,a)};
+            const wrap=(C)=>{try{return new Proxy(C,{construct(t,a,n){if(a.length>0)a[0]=fix(String(a[0]));return Reflect.construct(t,a,n)}})}catch(e){return C}};
+            window.WebSocket=wrap(window.WebSocket);
+            if(window.EventSource)window.EventSource=wrap(window.EventSource)})()</script>
+            """;
+
+    /// Points a page the instance generated at the mount it is reached through.
+    ///
+    /// The page is generated rather than served from a file, and it assumes it owns the origin: it
+    /// opens with `<base href="/">`, which fixes every relative reference — the bundle, the
+    /// stylesheets, the manifest, the favicon — at the root, and it lists its client plugins as
+    /// absolute `/plugins/...` URLs (fifty-two of them, inside the `<script>` it calls
+    /// `__DSH_BOOT__`). Through a mount both shapes point at the panel rather than at the instance,
+    /// and the panel answers with its own page: the browser then reports "Expected a JavaScript
+    /// module but the server responded with text/html" for every script and renders nothing. Giving
+    /// those two shapes the mount as a prefix is what lets one port serve both the panel and its
+    /// instances; a page carrying neither is passed through untouched.
+    ///
+    /// @param html  the page as the instance generated it
+    /// @param mount the mount, with its trailing slash
+    /// @return the page as the browser has to see it
+    private static String rewritePage(String html, String mount) {
+        return html.replace("<base href=\"/\">",
+                        "<base href=\"" + mount + "\">" + RUNTIME_SHIM.replace("__MOUNT__", mount))
+                .replace("=\"/plugins/", "=\"" + mount + "plugins/")
+                .replace(":\"/plugins/", ":\"" + mount + "plugins/")
+                // A manifest is fetched without credentials, so through the mount it is a 401 and
+                // nothing else — and an app served under someone else's path could not be installed
+                // from it anyway.
+                .replace("<link rel=\"manifest\" href=\"./manifest.webmanifest\" />", "");
+    }
+
+    /// Points a redirect back at the mount.
+    ///
+    /// dsh answers the token exchange with `303 Location: /`, and the browser that follows it
+    /// leaves the mount for the panel's own home page — which is what "the button just refreshes"
+    /// was. A location naming the instance's own loopback port is rewritten the same way, because
+    /// that address is not one the browser can reach.
+    ///
+    /// @param value the upstream location
+    /// @param mount the mount, with its trailing slash
+    /// @return the location the browser has to be sent to
+    private static String mountLocation(String value, String mount) {
+        if (value.startsWith("/")) {
+            return mount + value.substring(1);
+        }
+        try {
+            URI uri = URI.create(value);
+            String host = uri.getHost();
+            if (host != null && (host.equals("127.0.0.1") || host.equals("localhost") || host.equals("::1"))) {
+                String path = uri.getRawPath() == null ? "" : uri.getRawPath();
+                return mount + (path.startsWith("/") ? path.substring(1) : path)
+                        + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery());
+            }
+        } catch (IllegalArgumentException e) {
+            // Not a location this understands: passed through as it arrived.
+        }
+        return value;
     }
 
     /// A request body publisher that pumps the servlet input stream into the

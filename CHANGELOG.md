@@ -2,6 +2,44 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.2.3 — 2026-10-05 · 反代挂载下 dsh 网页能打开了
+
+修一个用不了的功能：实例改走 `/i/<id>/` 反代之后（v0.2.2），**点「打开 dsh」进不去**——
+按钮看着像在原地刷新，手动敲地址则是白屏。根因是 dsh 的网页端假定自己拥有整个 origin，
+而代理只做了上游那份参考实现里的那几件事。
+
+### 修复
+
+- **`Location` 没有重写**：dsh 的 token 兑换回 `303 Location: /`，浏览器跟着它离开挂载点、落到
+  面板首页——就是「原地跳转」。现在改回挂载点内；指向上游回环端口的绝对地址也一并改写，
+  外部地址原样放行。
+- **dsh 生成的页面把根路径写死**：页面开头是 `<base href="/">`，另有 52 处根绝对的 `/plugins/...`
+  （`<link rel=preload>`、`<script src>`，以及内联 `__DSH_BOOT__` 里每个插件条目的 `url`）。经挂载点
+  访问时它们指向面板，面板的 SPA 兜底把 `index.html` 当 JS 回，浏览器报
+  `Failed to load module script: … MIME type of "text/html"`，一个脚本都加载不了——白屏。现在把这两处
+  加上挂载点前缀，并去掉那行取不到凭证的 manifest 链接；正文是 gzip 的，**先解压再改写**，回给浏览器时
+  丢掉 `content-encoding` / `content-length`。
+- **应用运行期自己拼的 URL 也是根绝对**（`fetch("/api/…")`、`ws://<host>/api/remote.mux`、
+  `/plugins/events` 的 SSE）：改写后的页面里注入一段小 shim，把 `fetch` / `XMLHttpRequest` /
+  `WebSocket` / `EventSource` 包一层，同 host 且不在 `/i/` 下的 URL 加上挂载点（字符串、`URL` 对象、
+  `Request` 三种入参都处理）。SSE 与 WebSocket 仍然流式转发，不受影响。
+- **`ProxyBehaviorTest` 加 3 条回归用例**：页面改写（含 gzip、含「不认识就一字不改」）、`Location`
+  的四种形状。把实现换回修复前的版本跑同一批用例，新用例如期失败——测试确实钉住了这个 bug。
+
+### 验证
+
+- 全量 **486 用例 / 0 失败 / 0 错误 / 0 跳过**（新增 3 条）。
+- 临时容器里用无头 Chromium 真跑整条链路：dsh **0.1.5-alpha.2** 与 **0.2.1-alpha.1** 两个版本都能打开，
+  最终地址停在 `/i/<id>/`，所有接口变成 `/i/<id>/api/…` 并返回 200，`/i/<id>/plugins/events` 是
+  `text/event-stream`，DOM 里有完整界面，**控制台零报错、无 401/404**。
+
+### 其他
+
+- 对照上游的结论（免得以后以为我们擅自偏离）：`deepseek-ai/deepseek-harness`（**默认分支是 `master`，
+  不是 `main`**）的 `apps/web/tests/prefix-proxy.ts` 是给**它自己的测试客户端**（`scaffold.ts`：知道前缀、
+  自己处理 303、用 `baseUrl` 拼路径）用的最小件，**它本身也不重写 `Location`、不碰页面**；全仓没有
+  `X-Forwarded-Prefix`，dsh 也没有任何 base/prefix 旗标。上面那三层是本启动器自己的。
+
 ## v0.2.2 — 2026-10-05 · ZCode 实验品类 + 面板可选下载源
 
 v0.2.0 之后的第一个发布，两块内容合在一起：**ZCode**（第二个可启动品类，实验性）从零接进来——

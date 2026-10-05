@@ -29,7 +29,10 @@ import java.util.concurrent.TimeUnit;
 /// A fake dsh for tests that must launch a real process: a node script that
 /// speaks the one stdout contract the launcher relies on — the readiness line
 /// `dsh web: http://127.0.0.1:<port>/?token=…` — and, optionally, serves a
-/// small HTTP stub.
+/// small HTTP stub: an echo endpoint for the header and body contracts, a
+/// cookie endpoint, an SSE endpoint, a page shaped like the generated one
+/// (gzipped) with a plain page beside it, and redirects rooted, loopback-absolute
+/// and foreign.
 ///
 /// The script doubles as the instance's `bin.js`, so it must also answer the
 /// `--help` probe the launcher runs to decide about `--no-open`; it mentions
@@ -102,6 +105,7 @@ public final class NodeDshStub {
     private static String script(boolean serve) {
         String serveBlock = serve ? """
                 const http = require("http");
+                const zlib = require("zlib");
                 const server = http.createServer((req, res) => {
                   const url = new URL(req.url, "http://127.0.0.1");
                   if (url.pathname === "/echo") {
@@ -126,6 +130,44 @@ public final class NodeDshStub {
                     res.write("data: one\\n\\n");
                     setTimeout(() => res.write("data: two\\n\\n"), 50);
                     setTimeout(() => res.end("data: three\\n\\n"), 100);
+                  } else if (url.pathname === "/page") {
+                    // A page shaped like the one dsh generates: the base fixes
+                    // relative references at the origin, the two attributes and
+                    // the boot payload name their plugins absolutely, and the
+                    // manifest is asked for relatively. Sent gzipped, which is
+                    // how dsh sends it.
+                    const html = `<!doctype html><html><head>`
+                      + `<base href="/">`
+                      + `<link rel="manifest" href="./manifest.webmanifest" />`
+                      + `<link rel="preload" href="/plugins/one/client.js" as="script">`
+                      + `<script src="/plugins/two/client.js"></script>`
+                      + `<script>globalThis["__DSH_BOOT__"]={"entries":[{"url":"/plugins/three/client.js"}]}</script>`
+                      + `</head><body>the dsh page</body></html>`;
+                    const gzipped = zlib.gzipSync(Buffer.from(html, "utf8"));
+                    res.writeHead(200, {
+                      "content-type": "text/html; charset=utf-8",
+                      "content-encoding": "gzip",
+                      "content-length": String(gzipped.length),
+                    });
+                    res.end(gzipped);
+                  } else if (url.pathname === "/plain-page") {
+                    // Must stay identical to the expectation in
+                    // ProxyBehaviorTest#leavesAPageWithoutABaseHrefUntouched: the
+                    // proxy hands a page it does not recognize over untouched.
+                    res.writeHead(200, {"content-type": "text/html; charset=utf-8"});
+                    res.end(`<!doctype html><html><head><title>plain</title></head><body>plain page</body></html>`);
+                  } else if (url.pathname === "/redirect/root") {
+                    res.writeHead(303, {"location": "/"});
+                    res.end();
+                  } else if (url.pathname === "/redirect/self") {
+                    res.writeHead(303, {"location": "http://127.0.0.1:" + server.address().port + "/foo?x=1"});
+                    res.end();
+                  } else if (url.pathname === "/redirect/localhost") {
+                    res.writeHead(303, {"location": "http://localhost:" + server.address().port + "/bar"});
+                    res.end();
+                  } else if (url.pathname === "/redirect/external") {
+                    res.writeHead(302, {"location": "https://dsh.example.com/x"});
+                    res.end();
                   } else {
                     res.writeHead(200, {"content-type": "text/plain"});
                     res.end("stub ok: " + req.url);

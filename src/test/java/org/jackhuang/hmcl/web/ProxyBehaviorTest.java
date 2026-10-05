@@ -57,7 +57,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// The reverse proxy in front of a stub dsh: prefix stripping, Host
 /// passthrough, Set-Cookie path rewriting, the 301 for a bare mount, the 404
-/// and 502 answers, SSE streaming, and the WebSocket relay with ping/pong.
+/// and 502 answers, the rewrite that keeps a generated page and its redirects
+/// inside their mount, SSE streaming, and the WebSocket relay with ping/pong.
 ///
 /// The "dsh" is a real child process running a node stub (see [NodeDshStub]);
 /// the HTTP behaviors are served by the stub itself, and the WebSocket echo
@@ -229,6 +230,140 @@ class ProxyBehaviorTest {
         }
     }
 
+    @Test
+    void rewritesTheGeneratedPageOntoTheMountAndDropsTheStaleBodyHeaders() throws Exception {
+        NodeDshStub.assumeNode();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            DshInstance instance = createInstance();
+            NodeDshStub.install(instance, true);
+            DshProcess process = DshProcessManager.launch(instance);
+            try {
+                awaitReady(process);
+                String mount = "/i/" + INSTANCE + "/";
+
+                // The stub serves a page shaped like dsh's own — base, the two
+                // absolute plugin attributes, the boot payload and the manifest,
+                // gzipped — so this exercises the same path a real instance does.
+                HttpResponse<String> page = client.send(
+                        request(running.baseUrl() + "/i/" + INSTANCE + "/page", null, null).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertEquals(200, page.statusCode());
+                String body = page.body();
+
+                // The base fixes every relative reference at the mount instead of
+                // the origin, and the page did arrive, so the gzip was undone.
+                assertTrue(body.contains("<base href=\"" + mount + "\">"), body);
+                assertFalse(body.contains("<base href=\"/\">"), body);
+
+                // All three origin-absolute plugin registrations carry the mount —
+                // the preload attribute, the script source and the boot payload's
+                // url — and none is left rooted at the origin.
+                assertEquals(3, occurrences(body, "\"" + mount + "plugins/"), body);
+                assertFalse(body.contains("\"/plugins/"), body);
+
+                // The manifest is fetched without credentials, so through the
+                // mount it could only be a 401: the line is gone entirely.
+                assertFalse(body.contains("manifest.webmanifest"), body);
+
+                // The shim is injected behind the rewritten base, closing over the
+                // mount, and wraps the four interfaces the page builds URLs with.
+                int base = body.indexOf("<base href=\"" + mount + "\">");
+                int shim = body.indexOf("const mount=\"" + mount + "\";");
+                assertTrue(shim > base, "the shim must come after the base it mounts at: " + body);
+                assertTrue(body.contains("window.fetch=function"), body);
+                assertTrue(body.contains("XMLHttpRequest.prototype.open"), body);
+                assertTrue(body.contains("window.WebSocket=wrap(window.WebSocket)"), body);
+                assertTrue(body.contains("window.EventSource=wrap(window.EventSource)"), body);
+
+                // The body was replaced, so the headers that described the old
+                // one must not travel back with the new: the upstream's
+                // content-length and content-encoding are both dropped, while the
+                // type it declared still describes what the browser receives.
+                assertTrue(page.headers().firstValue("content-type").orElseThrow().startsWith("text/html"),
+                        String.valueOf(page.headers().map().get("content-type")));
+                assertFalse(page.headers().firstValue("content-encoding").isPresent(),
+                        "content-encoding must not survive the rewrite: " + page.headers().map());
+                assertFalse(page.headers().firstValue("content-length").isPresent(),
+                        "content-length must not survive the rewrite: " + page.headers().map());
+            } finally {
+                process.stop();
+            }
+        }
+    }
+
+    @Test
+    void leavesAPageWithoutABaseHrefUntouched() throws Exception {
+        NodeDshStub.assumeNode();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            DshInstance instance = createInstance();
+            NodeDshStub.install(instance, true);
+            DshProcess process = DshProcessManager.launch(instance);
+            try {
+                awaitReady(process);
+
+                // A page carrying neither a base nor a plugin registration is
+                // not the generated one, and goes through byte for byte.
+                HttpResponse<String> page = client.send(
+                        request(running.baseUrl() + "/i/" + INSTANCE + "/plain-page", null, null).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertEquals(200, page.statusCode());
+                assertEquals("<!doctype html><html><head><title>plain</title></head><body>plain page</body></html>",
+                        page.body());
+            } finally {
+                process.stop();
+            }
+        }
+    }
+
+    @Test
+    void rewritesRedirectsOntoTheMountAndLeavesForeignOnesAlone() throws Exception {
+        NodeDshStub.assumeNode();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            DshInstance instance = createInstance();
+            NodeDshStub.install(instance, true);
+            DshProcess process = DshProcessManager.launch(instance);
+            try {
+                awaitReady(process);
+                String mount = "/i/" + INSTANCE + "/";
+
+                // The token exchange's `303 Location: /`, which sent the browser
+                // to the panel's own home page.
+                HttpResponse<String> root = client.send(
+                        request(running.baseUrl() + "/i/" + INSTANCE + "/redirect/root", null, null).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertEquals(303, root.statusCode());
+                assertEquals(mount, root.headers().firstValue("location").orElseThrow());
+
+                // An absolute address naming the instance's own loopback port —
+                // one the browser cannot reach — becomes the mount, query kept.
+                HttpResponse<String> self = client.send(
+                        request(running.baseUrl() + "/i/" + INSTANCE + "/redirect/self", null, null).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertEquals(303, self.statusCode());
+                assertEquals(mount + "foo?x=1", self.headers().firstValue("location").orElseThrow());
+
+                // `localhost` names the loopback too.
+                HttpResponse<String> localhost = client.send(
+                        request(running.baseUrl() + "/i/" + INSTANCE + "/redirect/localhost", null, null).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertEquals(303, localhost.statusCode());
+                assertEquals(mount + "bar", localhost.headers().firstValue("location").orElseThrow());
+
+                // Somebody else's origin is none of the proxy's business.
+                HttpResponse<String> external = client.send(
+                        request(running.baseUrl() + "/i/" + INSTANCE + "/redirect/external", null, null).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertEquals(302, external.statusCode());
+                assertEquals("https://dsh.example.com/x", external.headers().firstValue("location").orElseThrow());
+            } finally {
+                process.stop();
+            }
+        }
+    }
+
     // -------------------------------------------------------------------- WS --
 
     @Test
@@ -338,6 +473,15 @@ class ProxyBehaviorTest {
         byte[] bytes = new byte[buffer.remaining()];
         buffer.get(bytes);
         return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    /// Counts the occurrences of `needle` in `haystack`, non-overlapping.
+    private static int occurrences(String haystack, String needle) {
+        int count = 0;
+        for (int at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + needle.length())) {
+            count++;
+        }
+        return count;
     }
 
     private static ByteBuffer copy(ByteBuffer source) {

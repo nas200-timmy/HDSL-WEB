@@ -10,17 +10,18 @@
 
 ## 0. 当前状态
 
-- 分支 `main`，本稿之前 HEAD 是 `b2244bf`（`perf(zcode): 构建提速`）。
-- **生产容器跑的不是最新代码**：最后两处改动（node-gyp 头文件走镜像、`JOBS` 并行、ZCode 构建继承启动器环境）
-  **尚未部署**。部署命令会重建容器，**会停掉正在跑的 ZCode 实例**（面板不会自动拉起）。
-- 当前有个 **ZCode 实例在跑**：`/data/zcode/releases/3.14.3/server/entry-http.js`。
+- 分支 `main`，本稿之前 HEAD 是 `61c24e8`（`docs(changelog): v0.2.2`）；**`v0.2.2` 已打标签发布**。
+- **本次修复已部署**：`/i/<id>/` 反代下 dsh 网页打不开（「原地跳转」+ 白屏）的 bug —— 见 §1 末行与 §2.7。
+- 部署会重建容器、**停掉正在跑的实例**（面板不会自动拉起）。本次部署时有两个在跑
+  （`dsh-0.2.1-alpha.1` 的 profile web、`instance` 的 pokemon），部署后要回面板各点一次「启动」。
 - ZCode 发行包已装成 release `3.14.3`，`/data/zcode/current` 指向它。
-- 测试基线：**483 用例 / 0 失败 / 0 错误 / 0 跳过**（本稿之前刚跑过）。
+- 测试基线：**486 用例 / 0 失败 / 0 错误 / 0 跳过**。
 
 ## 1. 这一轮做完的事
 
 | 提交 | 内容 |
 | --- | --- |
+| 本次（提交见 `git log`） | `fix(proxy)`：**反代挂载下 dsh 网页能打开了**。`Location` 重写 + 页面正文改写（`<base href="/">`、52 处 `/plugins/…`）+ 注入运行期 shim + gzip 解压；`ProxyBehaviorTest` +3 条回归用例。dsh 0.1.5-alpha.2 与 0.2.1-alpha.1 两个版本实机通过，486 用例全绿 |
 | `b8552a2` | `feat(web)`：**models.dev 模型目录**。账户页的供应商列表接上 models.dev（服务端合并 dsh 自家目录与目录里的 226 家），可搜索、可刷新；「默认模型」从手写文本框变成可搜索下拉（带上下文与价格）；新增 `/api/models/*` 与缓存。测试 443 |
 | 本次 | `feat(settings)`：**面板可选下载源（npm/pnpm 源）**；`fix(zcode)`：把「构建发行包」补到能真跑通 |
 
@@ -127,6 +128,31 @@ $ pnpm install --registry=https://x/     ← 被接受；但 pnpm list --registr
 构建实际用的工具链是 **Node 24.14（`/opt/node24/bin`，由 `HDSL_ZCODE_BUILD_BIN` 前置到 PATH）+ corepack 按
 上游 `packageManager` 拉来的 pnpm 10.33.2**，跟面板自己那个 Node 22 / pnpm 11 不是一套（排查时别用错）。
 
+### 2.7 反代挂载（`/i/<id>/`）与真实 dsh 网页端的三个不兼容
+
+**结论：dsh 的真实网页端假定自己拥有整个 origin，塞进子路径必须由代理补三层。**（三处都实测过）
+
+1. **它生成的页面把根写死**：`GET /i/<id>/` 回来的 HTML 开头是 `<base href="/">`，另有 52 处根绝对的
+   `/plugins/??<包名>/client.js&rev=…`（`<link rel=preload>`、`<script src>`，以及内联
+   `globalThis["__DSH_BOOT__"]` 里每个插件条目的 `url`）。经挂载点访问时这些请求落到**面板**头上，
+   面板的 SPA 兜底把 `index.html` 当 JS 回 → 浏览器报
+   `Failed to load module script: … responded with a MIME type of "text/html"` → **白屏**。
+   页面是 **gzip** 的，改写前必须先解压，回给浏览器时要去掉 `content-encoding`/`content-length`。
+2. **它自己拼的运行期 URL 也是根绝对**：`fetch("/api/…")`、`ws://<host>/api/remote.mux`（实时通道）、
+   `/plugins/events`（SSE）。只改页面不够，必须在页面里注入一段 shim，把
+   `fetch`/`XMLHttpRequest`/`WebSocket`/`EventSource` 包一层（入参是字符串、`URL` 对象、`Request` 三种都要处理）。
+3. **token 兑换回 `303 Location: /`**：代理不重写它，浏览器就离开挂载点落到面板首页——
+   「点打开 dsh 像在原地刷新」。`Set-Cookie: Path=/` 本来就会被改写成挂载点（这条一直没有问题）。
+
+**上游那份参考实现不是这个问题的答案**：`deepseek-ai/deepseek-harness` 的默认分支是 **`master`**（不是
+`main`，用 `main` 取 raw 会 404），`apps/web/tests/prefix-proxy.ts` 只做「剥前缀 / 保 Host / 去 hop-by-hop /
+改写 `Set-Cookie` 的 `Path` / 裸转发 WS」——**它自己也不重写 `Location`、也不碰页面**，因为它伺候的
+`apps/web/tests/scaffold.ts` 是个**知道前缀**的测试客户端：把挂载点当 `baseUrl`、自己用
+`redirect: 'manual'` 处理 303（把 `Location: './'` 当「原地」）、所有路径用 `new URL(path, baseUrl)` 解析。
+全仓没有 `X-Forwarded-Prefix`，dsh 的 Web app 也没有任何 base/prefix 旗标（旗标只有
+`--host/--no-open/--port/--trusted-host`）。**所以那三层是启动器自己必须补的，不是移植漏掉的**——
+`InstanceProxyServlet` 的类注释里也写了这段。
+
 ## 3. 环境与验证配方
 
 **测试**（宿主没有 java/node，一律走容器；基线 483）：
@@ -177,16 +203,16 @@ docker run -d --name hdsl-e2e -p 127.0.0.1:18080:3080 \
 
 ## 4. 未决与待办
 
-- **部署那两处**：node-gyp 镜像 / `JOBS` / ZCode 构建继承环境都只在代码里，生产还没吃到。
-  `NPM_REGISTRY=https://registry.npmmirror.com/ docker compose up -d --build` 即可（缓存基本全命中，十几秒），
-  但**会停掉正在跑的 ZCode 实例**。
-- **提交版本**：`CHANGELOG.md` 的 `v0.2.1` 条目已写好（含验证段）；发布要传
-  `RELEASE_VERSION=0.2.1` 这个 build arg（`docker-compose.yml` 里有透传），`docker.yml` 的触发条件没细看。
-- **CHANGELOG 版本号是我起的**（`v0.2.1`），要改就改。
+- **提交与发布**：本次修复 + 回归用例 + 文档已本地提交（`fix(proxy)` 那一条）。版本号按 `v0.2.3` 写进了
+  `CHANGELOG.md`（`v0.2.2` 已发布，所以没往那一条里塞）。发布两条路：本机
+  `RELEASE_VERSION=v0.2.3 NPM_REGISTRY=https://registry.npmmirror.com/ docker compose up -d --build`，
+  或 push 之后打 `v*` 标签，`.github/workflows/docker.yml` 会构建并推到 ghcr（触发条件就是 `v*` 或手动 dispatch）。
 - 可选加强：把 node-gyp 的头文件缓存（`devdir`）挪进数据目录，省掉每次重建容器后的那次下载
   （设了镜像之后只有 1.7 秒，所以没做）。
-- 可选回退：`b2244bf` 的平台过滤是否要留一个默认关的开关（见 §2.4）。
+- 可选回退：`b2244bf` 那个「平台过滤」是否要留一个默认关的开关（见 §2.4；现已删除，见 §1）。
 - 前端小尾巴：手填框「失焦即报红」（现在是输入过或失焦过才报红）；测速按钮的结果行在 360px 下略挤。
+- 已知但无害：挂载下 `<link rel="manifest">` 会被去掉——浏览器取 manifest 不带凭证，留着必然是 401，
+  而在别人的路径下也装不成 PWA。
 
 ## 5. 给下一个功能的提醒
 
