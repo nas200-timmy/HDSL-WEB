@@ -105,16 +105,37 @@ public record DshNodeRuntime(
                 pnpm == null ? null : versionOf(pnpm));
     }
 
+    /// How long a successful probe is reused. The toolchain does not change
+    /// while the panel runs, and every launch would otherwise pay for up to
+    /// three `--version` spawns.
+    private static final long PROBE_CACHE_NANOS = 60L * 1_000_000_000L;
+
+    /// The last successful probe, if it is still fresh. Failures are never
+    /// cached.
+    private static volatile @Nullable DshNodeRuntime lastDetected;
+    private static volatile long lastDetectedAt;
+
     /// Probes the toolchain on the current `PATH`.
+    ///
+    /// A successful result is reused for [PROBE_CACHE_NANOS] — mostly to spare
+    /// the spawns, but also because a spawn that fails on a loaded machine
+    /// would otherwise read as "no Node.js at all" and fail a launch the
+    /// toolchain was perfectly able to serve. Every `--version` probe gets one
+    /// retry for the same reason.
     ///
     /// @return the detected runtime, or empty when no usable `node` was found
     public static Optional<DshNodeRuntime> detect() {
+        DshNodeRuntime cached = lastDetected;
+        if (cached != null && System.nanoTime() - lastDetectedAt < PROBE_CACHE_NANOS) {
+            return Optional.of(cached);
+        }
+
         Path node = which("node").orElse(null);
         if (node == null) {
             return Optional.empty();
         }
 
-        String nodeVersion = versionOf(node);
+        String nodeVersion = versionOfRetrying(node);
         if (nodeVersion == null) {
             return Optional.empty();
         }
@@ -122,13 +143,24 @@ public record DshNodeRuntime(
         Path npm = which("npm").orElse(null);
         Path pnpm = which("pnpm").orElse(null);
 
-        return Optional.of(new DshNodeRuntime(
+        DshNodeRuntime runtime = new DshNodeRuntime(
                 node,
                 nodeVersion,
                 npm,
-                npm == null ? null : versionOf(npm),
+                npm == null ? null : versionOfRetrying(npm),
                 pnpm,
-                pnpm == null ? null : versionOf(pnpm)));
+                pnpm == null ? null : versionOfRetrying(pnpm));
+        lastDetected = runtime;
+        lastDetectedAt = System.nanoTime();
+        return Optional.of(runtime);
+    }
+
+    /// [versionOf] with one retry: spawning a process can fail transiently on a
+    /// loaded machine, and treating that as "the tool is not installed" fails
+    /// work the toolchain could have done.
+    private static @Nullable String versionOfRetrying(Path executable) {
+        String version = versionOf(executable);
+        return version != null ? version : versionOf(executable);
     }
 
     /// Reports whether this Node release satisfies DeepSeek Harness's `engines` range.
