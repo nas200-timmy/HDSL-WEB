@@ -23,6 +23,8 @@ import type {
   Vendor,
   VersionInfo,
   WorkspaceInfo,
+  ZcodeDistInfo,
+  ZcodeInstance,
 } from "./types";
 
 export class ApiError extends Error {
@@ -277,4 +279,42 @@ export const api = {
   // ---------- Phase 4：体检 ----------
 
   doctor: () => request<DoctorReport>("/api/doctor"),
+
+  // ---------- 实验性：ZCode 品类（见 docs/zcode-experimental.md） ----------
+
+  /** ZCode 发行包检测：HDSL_ZCODE_PACKAGE 或 <dataDir>/zcode/current/ */
+  zcodeDist: () => request<ZcodeDistInfo>("/api/zcode/dist"),
+
+  zcodeInstances: () => request<{ instances: ZcodeInstance[] }>("/api/zcode/instances"),
+
+  createZcodeInstance: (body: { name: string; baseUrl?: string; apiKey?: string }) =>
+    request<{ instance: ZcodeInstance }>("/api/zcode/instances", jsonInit("POST", body)),
+
+  patchZcodeInstance: (id: string, body: { name?: string; baseUrl?: string; apiKey?: string }) =>
+    request<{ instance: ZcodeInstance }>(
+      `/api/zcode/instances/${encodeURIComponent(id)}`,
+      jsonInit("PATCH", body),
+    ),
+
+  deleteZcodeInstance: (id: string) =>
+    request<unknown>(`/api/zcode/instances/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  /** 启动并等 ZCode 的就绪行；error 状态会带日志尾部作为原因 */
+  launchZcode: (id: string) =>
+    request<{ state: string; error?: string }>(
+      `/api/zcode/instances/${encodeURIComponent(id)}/launch`,
+      jsonInit("POST", {}),
+    ),
+
+  stopZcode: (id: string) =>
+    request<{ state: string; error?: string }>(
+      `/api/zcode/instances/${encodeURIComponent(id)}/stop`,
+      jsonInit("POST", {}),
+    ),
+
+  /** 运行中实例的打开地址（HTTP 明文 + 令牌，用请求 Host 拼出来） */
+  zcodeOpen: (id: string) => request<{ url: string }>(`/api/zcode/instances/${encodeURIComponent(id)}/open`),
+
+  zcodeLogs: (id: string, tail = 200) =>
+    request<{ lines: string[] }>(`/api/zcode/instances/${encodeURIComponent(id)}/logs?tail=${tail}`),
 };

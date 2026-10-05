@@ -34,6 +34,9 @@ const initialState: AppState = {
   modelProvidersLoading: false,
   modelProvidersError: null,
   modelProvidersAt: null,
+  zcodeDist: null,
+  zcodeInstances: [],
+  zcodeLoading: false,
   toasts: [],
 };
 
@@ -179,6 +182,8 @@ setUnauthorizedHandler(() => {
     accountsError: null,
     modelProviders: null,
     modelProvidersError: null,
+    zcodeDist: null,
+    zcodeInstances: [],
   }));
 });
 
@@ -207,6 +212,24 @@ export async function refreshInstances(showLoading = false): Promise<void> {
 }
 
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+
+/// 实验性 ZCode 品类的状态（发行包 + 实例列表）。与 dsh 实例分开拉取，
+/// 一个失败不影响另一个。
+export async function refreshZcode(showLoading = false): Promise<void> {
+  if (showLoading) setState((s) => ({ ...s, zcodeLoading: true }));
+  try {
+    const [dist, list] = await Promise.all([api.zcodeDist(), api.zcodeInstances()]);
+    setState((s) => ({
+      ...s,
+      zcodeDist: dist,
+      zcodeInstances: list.instances,
+      zcodeLoading: false,
+    }));
+  } catch (e) {
+    setState((s) => ({ ...s, zcodeLoading: false }));
+    toast("error", `获取 ZCode 状态失败：${errMsg(e)}`);
+  }
+}
 
 /** WS 事件驱动的实例列表刷新：合并短时间内的多次事件，避免请求风暴。 */
 export function scheduleInstanceRefresh(delay = 400): void {

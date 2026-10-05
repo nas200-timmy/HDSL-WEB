@@ -237,9 +237,15 @@ auth:
 | `JAVA_OPTS` | 空 | 追加到 `java` 命令行的 JVM 参数，例如 `-Xmx2g` |
 | `PNPM_STORE_DIR` | `/data/pnpm-store` | pnpm 共享仓库位置（本镜像的约定变量，入口脚本会写进 pnpm 全局配置）；一般不用改 |
 | `HDSL_WORKSPACE` | 空 | dsh 的工作区路径。不设时用 `$HOME/workspace`（镜像里 `/home/hdsl/workspace`）；设了就用它（不存在会创建）。新建实例默认用它，已有实例保留创建时记录的那个 |
+| `HDSL_ZCODE_PACKAGE` | 空 | **实验性 ZCode 品类**的发行包目录（需含 `bin/zcode.mjs`）；不设时找 `<数据目录>/zcode/current/`。见 [docs/zcode-experimental.md](docs/zcode-experimental.md) |
+| `HDSL_ZCODE_NODE` | 空 | 跑 ZCode 用的 node 可执行文件；不设时用 PATH 上的 `node` |
 
 `HDSL_BIND_HOST`/`HDSL_PORT`/`HDSL_HTTPS` 之外的一切（证书路径、`auth.disabled`、`redirect_http` 等）
 都从 `server.yaml` 读。dsh 实例自己的端口从池子 **3081–4081** 里分配、终身绑定，只监听回环，**不对外发布**。
+
+> **ZCode（实验性）不在这套承诺内**：实例进程用 `--host 0.0.0.0` 在**自己的端口**上提供明文 HTTP
+> 服务（端口由 ZCode 自选，不在固定池里），靠访问令牌鉴权，不上面板的 TLS 与登录门。定位、发行包
+> 获取方式与限制见 [docs/zcode-experimental.md](docs/zcode-experimental.md)。
 
 > **注意优先级**：环境变量盖过 `server.yaml`。镜像里已经设了 `HDSL_PORT=3080`，所以想换端口要改 **`HDSL_PORT`
 > 环境变量**（改 `server.yaml` 的 `port` 会被忽略）；同理，想用 `server.yaml` 里的 `port` 就得把 `HDSL_PORT` 显式清空。

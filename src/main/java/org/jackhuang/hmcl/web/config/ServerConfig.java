@@ -52,6 +52,22 @@ public final class ServerConfig {
     /// Authentication settings; see [AuthConfig].
     public final AuthConfig auth = new AuthConfig();
 
+    /// The experimental ZCode category; see [ZcodeConfig].
+    public final ZcodeConfig zcode = new ZcodeConfig();
+
+    /// ZCode category knobs. Both come from the environment only — the shape
+    /// of a ZCode distribution is not something `server.yaml` promises.
+    public static final class ZcodeConfig {
+        /// Directory holding a self-built ZCode distribution
+        /// (`HDSL_ZCODE_PACKAGE`); it must contain `bin/zcode.mjs`. Empty means
+        /// `<dataDir>/zcode/current/`.
+        public String packageDir = "";
+
+        /// The node executable used to run ZCode (`HDSL_ZCODE_NODE`).
+        /// Empty means `node` resolved from `PATH`.
+        public String nodePath = "";
+    }
+
     public static final class HttpsConfig {
         /// Whether the main connector speaks TLS (`HDSL_HTTPS`, default false).
         public boolean enabled = false;

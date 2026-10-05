@@ -323,6 +323,10 @@ export interface AppState {
   modelProvidersError: string | null;
   /** 目录数据的抓取时间（毫秒），用于"x 分钟前更新" */
   modelProvidersAt: number | null;
+  /** 实验性 ZCode 品类：发行包检测结果（null = 尚未加载） */
+  zcodeDist: ZcodeDistInfo | null;
+  zcodeInstances: ZcodeInstance[];
+  zcodeLoading: boolean;
   toasts: Toast[];
 }
 
@@ -344,4 +348,33 @@ export interface PatchInstanceBody {
   autoPort?: boolean;
   /** 绑定账户名；null 表示解绑（不使用） */
   account?: string | null;
+}
+
+// ---------- ZCode（实验性） ----------
+
+/// ZCode 实例（GET /api/zcode/instances 的一项）。实验性功能，
+/// 定位与限制见 docs/zcode-experimental.md。
+export interface ZcodeInstance {
+  id: string;
+  name: string;
+  workspacePath: string;
+  baseUrl: string | null;
+  /** 是否已保存 API Key；明文存在实例清单里，接口不返回原文 */
+  hasApiKey: boolean;
+  /** 访问令牌，打开实例 URL 时作为查询串带上 */
+  token: string;
+  /** 最近一次启动时 ZCode 自选的端口；0 = 未知/未启动 */
+  lastPort: number;
+  createdAt: number;
+  /** created | starting | running | stopped | error */
+  state: string;
+  /** state = error 时的原因（进程日志尾部） */
+  error?: string;
+}
+
+/// ZCode 发行包检测结果（GET /api/zcode/dist）。
+export interface ZcodeDistInfo {
+  present: boolean;
+  path: string;
+  version: string | null;
 }

@@ -21,6 +21,7 @@ import {
   SettingsFillIcon,
 } from "../components/icons";
 import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
+import { ZcodeSection } from "../components/ZcodeSection";
 import { I18N } from "../i18n";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
 import { getState, refreshInstances, toast, useAppState } from "../store";
@@ -287,6 +288,9 @@ export function InstancesPage() {
             )}
           </div>
         </div>
+
+        {/* ZCode（实验性）：独立品牌分区，与 dsh 实例互不影响 */}
+        <ZcodeSection />
       </div>
 
       {/* 更多菜单（HMCL IconedMenuItem 风格） */}
