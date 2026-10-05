@@ -88,6 +88,10 @@ class ZcodeBuilderTest {
         // …and the patch is visible in the tree it kept.
         String vite = Files.readString(dir.resolve("root/build/src/packages/web/vite.config.ts"));
         assertTrue(vite.contains("base: \"./\","), vite);
+        // …as is the platform filter, appended to the checkout's .npmrc so a
+        // mirror the sources already configure survives.
+        String npmrc = Files.readString(dir.resolve("root/build/src/.npmrc"));
+        assertTrue(npmrc.contains("supportedArchitectures="), npmrc);
     }
 
     @Test

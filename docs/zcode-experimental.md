@@ -42,6 +42,17 @@ AI 编程工作台，Apache-2.0）。它与 dsh 品类**完全隔离**：实例�
 | `HDSL_ZCODE_PNPM` | 构建用的 pnpm 可执行文件；默认 `pnpm` |
 | `HDSL_ZCODE_KEEP_SOURCES` | `true` 时保留源码树与依赖（排错用，占几个 GB） |
 
+**慢？** 时间几乎全花在 `pnpm install` 上。三个杠杆：
+
+- **换 registry**：面板用的下载源就是环境变量 `NPM_CONFIG_REGISTRY`（镜像默认 `registry.npmjs.org`；
+  国内常用 `https://registry.npmmirror.com/`，在 compose 里加一行 `NPM_CONFIG_REGISTRY=…` 即可）。
+  构建会把它显式传给 `pnpm install --registry=…`，日志里能看到实际用的是哪个。
+- **只下本机架构**：构建会在源码目录**追加**一行 `.npmrc` 的 `supportedArchitectures`（按面板进程的
+  os/arch 推导，例如 linux/x64/glibc），跳过上游 lockfile 里 Windows / macOS / 其它架构的
+  optional 二进制——那些在你机器上纯属白下。要做交叉产物就设 `HDSL_ZCODE_ALL_PLATFORMS=1` 全下。
+- **源码下载**：默认从 `codeload.github.com` 拉 tarball；慢的话用 `HDSL_ZCODE_SOURCE_URL` 指向镜像、
+  内网缓存，或本地路径（`/path/to/ZCode.tar.gz`，也接受 `file:`）。
+
 ### 方式二：手工放一个发行包
 
 `HDSL_ZCODE_PACKAGE` 指向一个解包好的发行包目录，或直接放进

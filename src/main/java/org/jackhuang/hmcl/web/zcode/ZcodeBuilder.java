@@ -227,8 +227,38 @@ public final class ZcodeBuilder {
             step.set(0.22, "应用反代补丁（" + ZcodePatch.size() + " 处）");
             ZcodePatch.apply(sources);
 
-            step.set(0.28, "安装依赖：pnpm install（最慢的一步）");
-            run(step, settings, sources, List.of(settings.pnpm(), "install"), Duration.ofMinutes(90));
+            // Two build-only knobs, env-only like the rest of this category:
+            //
+            // - the registry is the panel's own (`NPM_CONFIG_REGISTRY`, which the
+            //   entrypoint already writes into pnpm's config.yaml) — passing it
+            //   explicitly makes the build independent of that file, and is the
+            //   one lever that matters on a network far from npmjs.org;
+            // - the platform filter goes into the checkout's `.npmrc`: upstream's
+            //   lockfile lists every platform's optional dependencies, so
+            //   Windows/macOS/other-architecture tarballs are pure download cost
+            //   on a NAS. `HDSL_ZCODE_ALL_PLATFORMS=1` turns it off.
+            String registry = System.getenv("NPM_CONFIG_REGISTRY");
+            List<String> install = new ArrayList<>(List.of(settings.pnpm(), "install"));
+            if (registry != null && !registry.isBlank()) {
+                registry = registry.trim();
+                install.add("--registry=" + registry);
+            }
+            if (!"1".equals(System.getenv("HDSL_ZCODE_ALL_PLATFORMS"))) {
+                String osName = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
+                String platformOs = osName.contains("mac") ? "darwin" : osName.startsWith("win") ? "win32" : "linux";
+                String platformCpu = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT)
+                        .matches("aarch64|arm64") ? "arm64" : "x64";
+                String filter = "{\"os\":[\"" + platformOs + "\"],\"cpu\":[\"" + platformCpu + "\"]"
+                        + ("linux".equals(platformOs) ? ",\"libc\":[\"glibc\"]" : "") + "}";
+                Files.writeString(sources.resolve(".npmrc"),
+                        System.lineSeparator() + "supportedArchitectures=" + filter + System.lineSeparator(),
+                        StandardCharsets.UTF_8,
+                        java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+                step.log("platform filter: " + filter);
+            }
+            step.set(0.28, "安装依赖：pnpm install（最慢的一步"
+                    + (registry == null ? "" : "，registry=" + registry) + "）");
+            run(step, settings, sources, install, Duration.ofMinutes(90));
 
             step.set(0.68, "构建发行包：pnpm build:zcode");
             run(step, settings, sources, List.of(settings.pnpm(), "build:zcode",
