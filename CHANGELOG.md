@@ -2,6 +2,60 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.2.0 — 2026-10-05 · models.dev 模型目录
+
+中等规模的功能更新（minor：0.1 → 0.2）。账户页接上 [models.dev](https://models.dev)
+目录（226 家供应商 / 约 3500 个模型）：供应商可搜索、可刷新，选定后端点与协议自动
+带出；「默认模型」从手写文本框变成可搜索下拉（副标题带上下文与价格），手输一直保留。
+
+### 新增
+
+- **模型目录** `dsh/DshModelCatalog`：读 `https://models.dev/api.json`（`-Dhdsl.modelCatalog`
+  可指向别处，测试与内网代理用它），先解析再落盘——读不动的文档不会覆盖可用副本；
+  缓存 `/data/hdsl/catalog/models-dev-<sha256(url) 前 16 位>.json`（与插件目录同一套
+  命名与目录，尊重自定义缓存目录）。协议只认能映射到 `DshVendor.APIS` 三种的，
+  认不出返回 null——界面禁用该卡片，不假装可用。
+- **`/api/models/*`**（`ModelsApiServlet`）：
+  - `GET /api/models/providers[?refresh=1]`：dsh 自家目录（offered 13 家 + harness 37 家
+    + 本机自定义）与 models.dev 合并，**在服务端合并**；TTL 12 小时，`?refresh=1` 绕过；
+    整个目录拉不到且磁盘也没有副本时 502，有副本时降级为 `source:"cache"` 并只保留
+    5 分钟（过后再试上游）。
+  - `GET /api/models/providers/{id}`：单家供应商的模型（窗口 / 输出上限 / 推理档位 /
+    能力 / 价格）；dsh 认识而目录没有 → 200 + 空模型数组，界面退回手输，不是 404。
+- **`ModelSelect`** 组件：受控的「输入框 + 过滤下拉」，首项固定「留空（由 harness
+  决定）」——不填才是安全默认，写错模型名会让 harness 拒绝启动；目录不可用 / 这家
+  没有模型时退化成普通输入框，不挡路、不弹错；列表异步到齐时会自己弹出。
+- **账户页**：供应商步骤加搜索框 + 刷新按钮 + 计数；卡片网格去掉写死的 `minWidth: 420`
+  （360px 屏必然横向溢出）改自适应 + 内部滚动；编辑弹窗同样列出模型。
+- 数据文件 `assets/models-dev-aliases.txt`（dsh id ↔ models.dev id 别名表），其余靠
+  host 自动命中（fireworks→fireworks-ai、kimi-coding→kimi-code-plan-cn 等）。
+- 测试 16 条：`DshModelCatalogTest`（纯解析 + 容错 + 别名/host/id 三条匹配路）、
+  `ModelsApiTest`（真服务器 + JDK `HttpServer` 假目录：合并名单、刷新真重抓、失败退回
+  磁盘副本、无副本 502、字段裁剪）、`AccountApiTest` 三个新用例。
+
+### 改动
+
+- `POST /api/accounts` 新增可选 `protocol`，只对目录里**新发现**的供应商生效（dsh 自带
+  的以 dsh 的为准；已有同 id 的自定义厂商原样返回）——否则 `@ai-sdk/anthropic` 那几家
+  会被按 `openai-completions` 写进路由，而错误协议是启动时才失败的静默故障。
+- `DshVendor`：新增 `keyVariableOf(id)` 与 `discovered(id, name, baseUrl, api)` 重载；
+  密钥环境变量名仍按 harness 的推导，models.dev 的 `env` 只作界面提示（两者确实不同，
+  如 ZHIPU_API_KEY vs ZAI_API_KEY）。
+- 刻意**不碰启动链路**：`DshAccountRoute` 里的硬编码与 ACP 注入一行未动，本版只动界面
+  与它背后的目录。
+- 文档：`docs/ui-spec.md` 账户页一节改写 + 新增「模型目录（models.dev）」小节；
+  README 补 `/data/hdsl/catalog/` 一行与功能清单；新增
+  [`docs/session-handoff-2026-10-05.md`](docs/session-handoff-2026-10-05.md)。
+
+### 验证
+
+- 后端 **443 用例 / 0 失败 / 0 错误 / 0 跳过**（基线 427 + 新增 16）；`npm run typecheck`
+  与 SPA 生产构建通过。
+- 独立端口 + 独立卷的临时容器真拉 models.dev：名单 **228 家**（dsh 认识 29 + 目录独有
+  199，17 家因签名体制类协议禁用）；`?refresh=1` 后 `fetchedAt` 变化；openrouter
+  390 个模型；走完「搜 Moonshot → 选供应商（端点自动带出）→ 下拉选 kimi-k2.6 → 保存」
+  全流程，落盘与卡片显示均正确；手机 390×844 供应商弹窗与模型下拉无横向溢出。
+
 ## v0.1.61 — 2026-10-04 · 关于页改讲本项目
 
 小改动：关于页不再照搬上游（HMCL）的版权与作者，改讲 HDSL-web 自己；
