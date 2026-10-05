@@ -2,12 +2,31 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## v0.2.1 — 2026-10-05 · 面板可选下载源
+## v0.2.2 — 2026-10-05 · ZCode 实验品类 + 面板可选下载源
 
-下载源从「只能改环境变量、改完还得重启容器」变成面板里能选、能填、能生效的一等设置；
-顺带把 ZCode 的「构建发行包」补到能真跑通——镜像缺编译链、Electron 二进制下不动，两个坎都在这一版拆掉。
+v0.2.0 之后的第一个发布，两块内容合在一起：**ZCode**（第二个可启动品类，实验性）从零接进来——
+面板自己下载上游源码、打反代补丁、`pnpm` 构建、装成版本，实例只绑回环、经 `/i/<id>/` 反代访问；
+以及**面板里可选下载源**，把「换源要改环境变量、还得重启容器」变成一等设置，并顺手拆掉 ZCode
+构建链上几个必然失败的坎。（v0.2.1 未单独发布，其内容并入本版。）
 
-### 新增
+### 新增：ZCode 实验品类（实验性）
+
+- **独立品牌分区**：实例页里 ZCode 与 dsh 完全隔离，文案与 `docs/zcode-experimental.md` 都写明
+  「纯实现性验证功能：不保证可用，也不承诺与 dsh 同等的功能与兼容」。
+- **面板内构建** `POST /api/zcode/build`：下载上游 tag/分支的源码 tarball → 打 5 处反代补丁
+  （vite `base: "./"`、`main.tsx` 的 `hdslBasePath()` 与 WS origin、`/api/server-info`、OAuth
+  `tokenUrl`）→ `pnpm install` → `pnpm build:zcode` → 校验产物记录的 sha256 → 装成
+  `<数据目录>/zcode/releases/<版本>/` 并维护 `current`。界面有步骤、进度与实时日志；上游把锚点
+  挪走时构建**明确失败并点名文件**，而不是产出一个指向错误地址的发行包。
+- **反代**：实例只绑 `127.0.0.1`、`--no-token`，浏览器经面板的 `/i/<id>/` 进来——同端口、同证书、
+  同样要登录；HTTP 代理与 WebSocket 中继共用一套目标解析（`InstanceProxyTargets`），
+  未知 id 404、已知未运行 502 的语义与 dsh 一致。
+- **凭证**：保存的 API Key 按 ZCode 的 `provider_config.json` 格式写入实例目录（未文档化格式，
+  尽力而为；上游一改就可能失效）。
+- 镜像里加 Node 24（`/opt/node24`，只有构建用它，面板与 dsh 仍是 Node 22），发行包与限制见
+  `docs/zcode-experimental.md`。
+
+### 新增：面板可选下载源
 
 - **设置 → 下载源**（`web/src/pages/SettingsPage.tsx` 的 `DownloadSourceTab`）：预设下拉（跟随部署环境（默认）/
   官方 / npmmirror / 中科大 / 腾讯云 / 华为云）+「自定义…」时才出现的手填 URL，输入即时行内校验（红字 + 保存置灰），
@@ -66,6 +85,13 @@
   新增「运行期下载源（面板设置）」一节，讲清与构建期 `NPM_REGISTRY` 的区别与改写 `config.yaml` 的后果）；
   常见问题里「要用编译器就自己加 `build-essential`」一条随编译链内置一并更新，`docs/ui-spec.md` 把下载源卡片
   从占位补成实际控件（含窄屏行为），差异清单登记为第 4 处。
+- **Node 探测失败被当成「没装 Node」**（`dsh/DshNodeRuntime`）：探测内部要 spawn `node --version`，
+  负载高时那一次 spawn 失败就报成「Node.js was not found on PATH」——CI 上偶发红、重跑即过的那两条
+  插件用例正是同一个原因。现在版本探针有一次重试，成功的探测结果缓存 60 秒（失败不缓存，装好工具链
+  立刻可用），顺带每次启动少 spawn 两三个进程。
+- **测试不再依赖 stub 的可执行位**：本仓库 `core.fileMode=false`，git 根本不记录文件模式，CI 检出后
+  假 pnpm 没有可执行位就卡在「起不来」；测试改为复制到临时目录再 `setExecutable`，索引里也用
+  `update-index --chmod=+x` 把 100755 钉住。
 
 ### 验证
 
@@ -87,6 +113,11 @@
   - **ZCode**：从面板设置取源（`pnpm install --registry=https://registry.npmmirror.com`）跑完整条构建，
     **6 分半**出 `zcode-3.14.3.tar.gz`（带 sha256）并装成 release；`/data/zcode/current` 指向它、
     `bin/zcode.mjs` 可执行、面板 `GET /api/zcode/releases` 列出 `3.14.3  current=true`。
+- **ZCode 反代**（本机实跑面板 + stub 发行包）：未登录 `/i/<id>/` → **401**；登录后 → **200**（实例页面）；
+  `/i/<id>/some/route?x=1` 路径与查询串原样透传；裸挂载 `/i/<id>` → **301**；未知 id → **404**；
+  停止后 → **502**；实例进程 argv 确认为 `--host 127.0.0.1 --no-token`（对外只有面板这一条路）。
+- **界面**：桌面 1440×900 与手机 390×844 截图核对 ZCode 分区（发行包识别、构建对话框的状态与实时日志、
+  实例卡片操作），移动端 `scrollWidth === innerWidth` 无横向溢出。
 
 ## v0.2.0 — 2026-10-05 · models.dev 模型目录
 
