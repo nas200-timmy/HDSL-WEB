@@ -77,6 +77,7 @@ class DoctorApiTest {
             assertTrue(ids.contains("settings"), ids::toString);
             assertTrue(ids.contains("directories"), ids::toString);
             assertTrue(ids.contains("javascript-toolchain"), ids::toString);
+            assertTrue(ids.contains("file-watchers"), ids::toString);
             assertTrue(ids.contains("npm-registry"), ids::toString);
             assertTrue(ids.contains("overall"), ids::toString);
         }

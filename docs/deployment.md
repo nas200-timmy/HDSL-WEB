@@ -8,6 +8,8 @@
 - [4. 多架构构建（buildx）](#4-多架构构建buildx)
 - [5. 升级与回滚](#5-升级与回滚)
 - [6. 运行期下载源（面板设置）](#6-运行期下载源面板设置)
+- [7. 自签证书与容器健康检查（`Invalid SNI`）](#7-自签证书与容器健康检查invalid-sni)
+- [8. 宿主 inotify 配额（多实例）](#8-宿主-inotify-配额多实例)
 
 ---
 
@@ -353,4 +355,73 @@ curl -fsSk --resolve dsh.example.com:3080:127.0.0.1 https://dsh.example.com:3080
 ```
 
 排查时先手动跑一次上面的命令：返回 `{"status":"ok"}` 就说明服务没问题，是探针的 SNI 不对。
+
+---
+
+## 8. 宿主 inotify 配额（多实例）
+
+**跑两个以上实例之前值得先看一眼这一节**：实例启动失败的一种常见原因在这里，而它的现象完全不指向这里。
+
+### 它是什么
+
+dsh 启动时会用文件监视器（chokidar）盯着自己的 `profiles/<profile>` 目录。内核为此设了一个上限
+`fs.inotify.max_user_watches`（默认 65536），而这个数字**是按用户（uid）算的，容器之间不隔离**：
+面板容器以 `hdsl`(1000) 运行，于是宿主上**任何同样以 uid 1000 运行的程序**——编辑器/IDE 服务、
+文件同步客户端、别的容器——所监视的每一个目录，都从这个数字里扣。一个递归监视整棵工作树的程序
+就能把 65536 吃干。
+
+### 配额用尽时的现象
+
+都不像「配额不足」，所以容易查错方向：
+
+- **实例起来就消失**：进程崩了，它的日志（面板实例页的「日志」标签）里是
+  `Error: ENOSPC: System limit for number of file watchers reached, watch '…/profiles/web'`
+  ——node 的 `fs.watch` 拿不到监视器就直接退出；
+- **实例永远停在「启动中」**：进程活着、端口在监听，但启动项因为拿不到监视器而永不结束，
+  于是**就绪行一直不打印**，面板拿不到地址，`/i/<id>/` 返回 502。
+
+两种现象都跟「另一个实例先跑起来了」强相关，因为争夺的是同一个共享数字——谁先谁后决定谁被拒，
+不是某个实例本身有问题（`instance`、`dsh-…` 只是运气不同的那一个）。
+
+### 怎么看
+
+面板「设置 → 环境体检」（也就是 `GET /api/doctor`）里的 **File watchers** 一行：
+它用一次真实的注册探测给出「还剩多少」，低于阈值会标 `[SHORTAGE]` 并打印下面这条命令。
+想看原始数字也可以直接问内核：
+
+```bash
+# 上限（所有 uid 1000 的进程共用的那个数字）
+cat /proc/sys/fs/inotify/max_user_watches
+# 谁在占（容器里的进程要进各自的容器里数）
+docker exec <容器> sh -c 'for p in /proc/[0-9]*; do n=0; for f in $p/fdinfo/*; do \
+  [ -f "$f" ] && n=$((n+$(grep -c "^inotify wd:" "$f" 2>/dev/null))); done; \
+  [ "$n" -gt 0 ] && echo "$n $(tr -d "\0" < $p/cmdline | cut -c1-60)"; done'
+```
+
+### 怎么修
+
+在**宿主**上把上限调大（容器里改不动这个内核参数）：
+
+```bash
+echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-inotify.conf
+echo 'fs.inotify.max_user_instances=1024'  | sudo tee -a /etc/sysctl.d/99-inotify.conf
+sudo sysctl --system
+```
+
+- 524288 是这类工具的常见建议值，够跑若干个实例；宿主上真有一棵几十万目录的树被递归监视时再往上调。
+- 已经在监视的文件不受影响，**容器不用重启**；但已经崩掉或卡在「启动中」的实例要回面板重新启动。
+- 不想动配额，还有两条路：让那个吃配额的程序少监视一点（多数编辑器/IDE 服务都有「排除监视目录」
+  之类的设置，把 `node_modules`、构建产物这类大目录排除掉）；或者**给面板容器换一个独立的 uid**，
+  让它有自己完整的一份配额。换 uid 不只是 compose 里加一行 `user:`——实测至少还有两处要可写：
+  入口脚本要往 `$HOME`(`/home/hdsl`) 写 pnpm 配置，面板要在 `/data/auth` 下建账号文件，
+  所以 `/data` 卷得先 `chown` 给新 uid，`$HOME` 也要 chown 或者干脆挂一个属于该 uid 的卷。
+
+### 顺带一提：两个实例的 localStorage 是共用的
+
+这一条与上面的配额无关，但也是「两个实例互相影响」的一个来源，值得记下来：面板把两个实例放在**同一个
+origin** 下，而浏览器只按 origin（协议 + 域名 + 端口）隔离 `localStorage` / `sessionStorage`，
+**完全不看路径**——所以两个实例的网页端会读写同一批键（dsh 自己的客户端状态、界面偏好等）。
+面板目前只处理了 cookie 的 `Path`，没管 storage。目前没有证据表明它导致过实例起不来；
+真出现「界面串台」时再往这个方向查。
+
 

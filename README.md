@@ -326,6 +326,13 @@ bash scripts/e2e-real.sh
 
 **端口被占用。** 面板端口冲突改 `ports` 映射和 `HDSL_PORT`；dsh 实例用的 3081–4081 只在容器内回环，不占宿主机端口。
 
+**实例启动后立刻消失，或者一直停在「启动中」、打开 `/i/<id>/` 返回 502。** 先怀疑内核的文件监视器配额
+`fs.inotify.max_user_watches`：dsh 启动要监视自己的 profile 目录，内核一拒绝，node 要么当场退出、
+要么永远不打印就绪行——两种都不像「配额不足」。这个配额**按 uid 计、容器之间不隔离**，宿主上同一个
+uid 的其它程序（编辑器服务、同步客户端）会把它吃光。面板「设置 → 环境体检」的 **File watchers** 一行
+直接给答案（不够会标 `[SHORTAGE]`），调大办法见
+[部署细节 · 宿主 inotify 配额](docs/deployment.md#8-宿主-inotify-配额多实例)。
+
 **pnpm store 想放到别处。** 改 `PNPM_STORE_DIR` 环境变量（入口脚本会写进 pnpm 的 `config.yaml`）。
 注意 store 与实例目录要在**同一文件系统**上，否则 pnpm 只能复制而不能硬链接；默认两者都在 `/data` 下，正是为此。
 

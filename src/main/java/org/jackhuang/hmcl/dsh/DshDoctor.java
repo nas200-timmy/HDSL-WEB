@@ -97,6 +97,11 @@ public final class DshDoctor {
         }
         out.println();
 
+        out.println("File watchers");
+        printFileWatchers(out, org.jackhuang.hmcl.util.platform.WatcherBudget.limit(),
+                org.jackhuang.hmcl.util.platform.WatcherBudget.headroom());
+        out.println();
+
         out.println("Instances and the DeepSeek Harness each carries");
         List<DshInstance> installed = DshInstanceManager.list();
         if (installed.isEmpty()) {
@@ -135,6 +140,50 @@ public final class DshDoctor {
         out.println(runtimeOk ? "Result: ready to install DeepSeek Harness versions."
                 : "Result: the JavaScript toolchain is incomplete.");
         return runtimeOk ? 0 : 1;
+    }
+
+    /// Prints the kernel's file-watch budget as a section of the report.
+    ///
+    /// A row rather than a hard failure: the panel itself needs no watches, so
+    /// a host whose budget is gone still installs, updates and serves. What
+    /// stops working is *launching* — an instance whose watcher the kernel
+    /// refuses either exits on the spot or comes up without ever printing its
+    /// readiness line, and neither ending names this cause. This row names it
+    /// while nothing is broken yet.
+    ///
+    /// @param out   the stream to print to
+    /// @param limit the kernel's limit, or `-1` when it cannot be read
+    /// @param free  the measured headroom, or `-1` when it cannot be measured
+    static void printFileWatchers(PrintStream out, int limit, int free) {
+        if (free < 0) {
+            out.println("  inotify watches: unmeasurable on this host");
+            return;
+        }
+        out.println("  inotify watches: " + freeText(free) + " free of "
+                + (limit > 0 ? String.valueOf(limit) : "an unknown limit")
+                + (org.jackhuang.hmcl.util.platform.WatcherBudget.tooSmall(free) ? "  [SHORTAGE]" : "  [ok]"));
+        if (!org.jackhuang.hmcl.util.platform.WatcherBudget.tooSmall(free)) {
+            return;
+        }
+        out.println("  DeepSeek Harness watches its own profile directory, and the kernel counts");
+        out.println("  watches per user: every process running as this uid shares the number, in");
+        out.println("  this container or not. With the budget gone an instance dies of ENOSPC, or");
+        out.println("  starts without ever reporting ready; the panel then has nothing to open.");
+        out.println("  Raise the limit on the host — no container restart is needed:");
+        out.println("    sysctl -w " + org.jackhuang.hmcl.util.platform.WatcherBudget.LIMIT_PATH + "=524288");
+    }
+
+    /// The headroom as the report words it.
+    ///
+    /// A probe that was granted everything it asked for has only shown that
+    /// there is *at least* that much room — printing the number alone would
+    /// read as "64 of 65536 left", which is the opposite of what it means.
+    ///
+    /// @param free the measured headroom, never negative
+    /// @return the number, qualified when it is the probe's own ceiling
+    private static String freeText(int free) {
+        return free >= org.jackhuang.hmcl.util.platform.WatcherBudget.PROBE ? "at least " + free
+                : String.valueOf(free);
     }
 
     /// Renders an optional executable and its version.

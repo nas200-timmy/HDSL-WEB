@@ -44,9 +44,9 @@ import java.util.Locale;
 /// them), this runs the real report and parses it: every section heading the
 /// report prints becomes one check, its body the check's `detail`, and the
 /// report's own words decide the status — `FAILED` / `NOT FOUND` /
-/// `UNSUPPORTED` are failures, `INCOMPLETE` / `skipped` / `unavailable` are
-/// warnings. The report's exit code (its own verdict) becomes the `overall`
-/// check.
+/// `UNSUPPORTED` are failures, `INCOMPLETE` / `SHORTAGE` / `skipped` /
+/// `unavailable` are warnings. The report's exit code (its own verdict) becomes
+/// the `overall` check.
 @NotNullByDefault
 public final class DoctorApiServlet extends HttpServlet {
 
@@ -130,12 +130,20 @@ public final class DoctorApiServlet extends HttpServlet {
 
     /// The status a section's own words imply: hard failures first, then the
     /// degradations the report marks, else fine.
-    private static String statusOf(String body) {
+    ///
+    /// Package-private so the mapping can be tested without producing every
+    /// ending it has to classify — a section whose body is a shortage is not
+    /// something a test host can be made to report on demand.
+    ///
+    /// @param body the section's body
+    /// @return `fail`, `warn` or `ok`
+    static String statusOf(String body) {
         String lower = body.toLowerCase(Locale.ROOT);
         if (lower.contains("failed") || lower.contains("not found") || lower.contains("[unsupported]")) {
             return "fail";
         }
-        if (lower.contains("[incomplete]") || lower.contains("skipped") || lower.contains("unavailable")) {
+        if (lower.contains("[incomplete]") || lower.contains("[shortage]")
+                || lower.contains("skipped") || lower.contains("unavailable")) {
             return "warn";
         }
         return "ok";
