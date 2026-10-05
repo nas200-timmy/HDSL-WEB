@@ -11,8 +11,8 @@ AI 编程工作台，Apache-2.0）。它与 dsh 品类**完全隔离**：实例�
 
 - ZCode 官方**没有 CLI 发行渠道**——官网与 GitHub Releases 只有桌面安装包，命令行发行包
   得自己构建（`pnpm build:zcode`，要求 Node 24.14+）。
-- ZCode 的 Web 前端把根路径写死（`/assets`、`/api`、`/ws`），**不能挂在子路径下**被面板的
-  `/i/<id>/` 反代，因此实例走自己的 HTTP 端口 + 访问令牌。
+- ZCode 的 Web 前端把根路径写死（`/assets`、`/api`、`/ws`），所以面板构建时会打上反代补丁
+  （见下），让它按 `/i/<id>/` 前缀工作；补丁之外的行为取决于上游，随时可能变。
 - 凭证注入写的是 ZCode 的内部配置文件格式（`provider_config.json`），未文档化，上游一改
   就失效——「能注就注，不能就算了」。
 - 上游大约周更。
@@ -66,21 +66,25 @@ fetch、Z.ai OAuth 的 `tokenUrl`。上游把这些锚点挪走时构建会**明
 - 每实例一个目录 `<数据目录>/zcode/instances/<id>/`：`instance.json`（面板记录）、
   `data/`（作为 `ZCODE_DATA_BASE_DIR`——ZCode 的配置、凭据、会话都在其下）、`workspace/`、
   `logs/zcode.log`。
-- 启动命令：`node <发行包>/bin/zcode.mjs --web --no-open --host 0.0.0.0 --port 0
-  --workspace <实例>/workspace --token <令牌>`；面板从 stdout 的就绪行
-  `Local: http://127.0.0.1:<port>/` 解析真实端口。
-- 「打开」拼出 `http://<面板主机>:<端口>/?token=<令牌>`，新标签页打开。
+- 启动命令：`node <发行包>/bin/zcode.mjs --web --no-open --host 127.0.0.1 --port 0
+  --no-token --workspace <实例>/workspace`；面板从 stdout 的就绪行
+  `Local: http://127.0.0.1:<port>/` 解析真实端口。**只绑回环、不开令牌**：对外只有面板这一条路，
+  令牌认证在这里没有位置，面板的会话门就是唯一的门。
+- 「打开」= `/i/<id>/`——和 dsh 同一个挂载点，同端口、同证书、同样要登录；请求由面板剥掉前缀
+  转发到实例的回环端口，WebSocket 也走同一条中继。
 - 保存 API Key 时写入 `<实例>/data/.zcode/v2/provider_config.json`（ZCode 的个人供应商
   配置；条目 `providerId = hdsl-injected`，协议 `openai-chat-completions`）。
 
 ## 已知限制（都是有意为之）
 
-- **HTTP 明文 + 独立端口**：不走面板的 TLS 与登录门；要暴露到公网请自行评估（至少别把
-  这些端口直接映射出去）。
+- **只有面板这一条路**：实例只绑回环、不开令牌，浏览器经 `/i/<id>/` 进来（面板的会话门就是
+  唯一的门）。别去映射 ZCode 自己的端口——它也不监听外面。
 - **API Key 明文**：同时写在实例清单与 `<实例>/data/.zcode/v2/provider_config.json`。
 - **没有面板侧集成**：会话列表、插件管理、控制台（ZCode 没有 ACP）都只属于 dsh 品类。
 - **凭证注入尽力而为**：格式取自 ZCode v3.14.3 源码，换成别的版本可能不生效——那就当它
   没有这个功能。
+- **深层相对路径可能取不到资源**：补丁用 vite 的 `base: "./"`，资源按文档 URL 解析——
+  `/i/<id>/` 下正常，更深的路径（例如上游的分享页）可能失效。
 
 ## 相关代码
 

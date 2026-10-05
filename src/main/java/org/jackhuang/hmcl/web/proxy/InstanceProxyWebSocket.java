@@ -91,12 +91,13 @@ public final class InstanceProxyWebSocket implements Session.Listener.AutoDemand
     @Override
     public void onWebSocketOpen(Session session) {
         this.browser = session;
-        URI webUrl = DshProcessManager.find(instanceId).flatMap(DshProcess::webUrl).orElse(null);
-        if (webUrl == null) {
+        // The same resolution the HTTP proxy uses, so a relay can never point
+        // somewhere the page it belongs to does not.
+        int port = InstanceProxyTargets.resolveForRelay(instanceId);
+        if (port <= 0) {
             close(StatusCode.SERVER_ERROR, "instance not running");
             return;
         }
-        int port = webUrl.getPort() > 0 ? webUrl.getPort() : 0;
         URI target = URI.create("ws://127.0.0.1:" + port + targetPath);
 
         ClientUpgradeRequest upgradeRequest = new ClientUpgradeRequest();

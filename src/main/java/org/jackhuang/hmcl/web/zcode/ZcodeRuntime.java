@@ -86,6 +86,12 @@ public final class ZcodeRuntime {
     private static final Set<String> STOPPING = ConcurrentHashMap.newKeySet();
     private static final Map<String, Object> LOCKS = new ConcurrentHashMap<>();
 
+    /// The loopback port each instance announced, kept so the `/i/<id>/` proxy
+    /// can resolve a target without reading a manifest. Stale entries are
+    /// harmless — every reader asks [isRunning] first, and a relaunch overwrites
+    /// the port.
+    private static final Map<String, Integer> PORTS = new ConcurrentHashMap<>();
+
     private ZcodeRuntime() {
     }
 
@@ -114,6 +120,23 @@ public final class ZcodeRuntime {
     public static boolean isRunning(String id) {
         Process process = PROCESSES.get(id);
         return process != null && process.isAlive();
+    }
+
+    /// Whether this runtime has ever seen the id — the `/i/<id>/` proxy uses it
+    /// to tell "no such instance" (404) from "known but not running" (502).
+    ///
+    /// @param id the instance id
+    /// @return whether a launch was attempted for it in this panel run
+    public static boolean known(String id) {
+        return STATES.containsKey(id);
+    }
+
+    /// The loopback port the instance announced, or `0` when it never came up.
+    ///
+    /// @param id the instance id
+    /// @return the port, or `0`
+    public static int portOf(String id) {
+        return PORTS.getOrDefault(id, 0);
     }
 
     /// Launches the instance's process and waits for its readiness line.
@@ -157,10 +180,14 @@ public final class ZcodeRuntime {
                         nodePath,
                         packageDir.resolve("bin/zcode.mjs").toString(),
                         "--web", "--no-open",
-                        "--host", "0.0.0.0",
+                        // Loopback only, no token: the browser reaches this
+                        // instance through the panel's `/i/<id>/` mount, where
+                        // the session gate (and TLS, when enabled) already
+                        // applies. Nothing else can reach the port.
+                        "--host", "127.0.0.1",
                         "--port", "0",
-                        "--workspace", workspace.toString(),
-                        "--token", instance.token());
+                        "--no-token",
+                        "--workspace", workspace.toString());
                 builder.directory(workspace.toFile());
                 builder.redirectErrorStream(true);
                 builder.environment().putAll(envMap);
@@ -185,6 +212,7 @@ public final class ZcodeRuntime {
             Integer port = awaitReady(id, process, ready);
             READY.remove(id);
             if (port != null) {
+                PORTS.put(id, port);
                 ZcodeInstance updated = instance.withLastPort(port);
                 try {
                     manager.update(updated);

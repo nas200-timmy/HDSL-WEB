@@ -131,19 +131,29 @@ public final class InstanceProxyServlet extends HttpServlet {
         }
 
         DshInstance instance = DshInstanceManager.find(instanceId);
-        if (instance == null) {
-            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
-            return;
-        }
-
-        URI webUrl = DshProcessManager.find(instanceId).flatMap(DshProcess::webUrl).orElse(null);
-        if (webUrl == null) {
-            Json.error(response, HttpServletResponse.SC_BAD_GATEWAY, "instance not running");
-            return;
-        }
-        int port = webUrl.getPort();
-        if (port <= 0) {
-            port = instance.portOrDefault();
+        int port;
+        if (instance != null) {
+            URI webUrl = DshProcessManager.find(instanceId).flatMap(DshProcess::webUrl).orElse(null);
+            if (webUrl == null) {
+                Json.error(response, HttpServletResponse.SC_BAD_GATEWAY, "instance not running");
+                return;
+            }
+            port = webUrl.getPort();
+            if (port <= 0) {
+                port = instance.portOrDefault();
+            }
+        } else {
+            // The experimental ZCode category binds loopback too, so it reaches
+            // the browser through this same mount.
+            port = InstanceProxyTargets.resolve(instanceId);
+            if (port == InstanceProxyTargets.UNKNOWN) {
+                Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
+                return;
+            }
+            if (port == InstanceProxyTargets.NOT_RUNNING) {
+                Json.error(response, HttpServletResponse.SC_BAD_GATEWAY, "instance not running");
+                return;
+            }
         }
 
         String targetPath = rest.substring(slash);

@@ -130,12 +130,11 @@ class ZcodeApiTest {
                     "{\"apiKey\":\"sk-test-key\"}");
             assertEquals(409, refused.statusCode());
 
-            // Open: the URL carries the request's host, the port and the token.
+            // Open: the instance is reached through the panel's own mount —
+            // same origin, same certificate, same session gate as dsh.
             HttpResponse<String> open = get(client, base + "/api/zcode/instances/" + id + "/open");
             assertEquals(200, open.statusCode(), open.body());
-            String url = json(open).get("url").getAsString();
-            assertTrue(url.startsWith("http://127.0.0.1:" + port + "/?token="), url);
-            assertTrue(url.contains(token), url);
+            assertEquals("/i/" + id + "/", json(open).get("url").getAsString());
 
             // Logs: the process output is there.
             HttpResponse<String> logs = get(client, base + "/api/zcode/instances/" + id + "/logs?tail=50");

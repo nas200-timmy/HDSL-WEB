@@ -159,7 +159,6 @@ export function ZcodeSection() {
       toast("error", `打开失败：${errMsg(e)}`);
     }
   };
-
   const showLogs = async (inst: ZcodeInstance) => {
     try {
       const r = await api.zcodeLogs(inst.id, 300);
@@ -196,8 +195,8 @@ export function ZcodeSection() {
           <b style={{ color: "var(--monet-on-surface)" }}>
             纯实现性验证功能：不保证可用，也不承诺与 dsh 同等的功能与兼容
           </b>
-          ——能不能跑通取决于 ZCode 上游。实例走<b>独立 HTTP 端口 + 访问令牌</b>（不经面板反代与证书），
-          API Key 以明文保存在实例目录，请注意网络暴露与凭据安全。
+          ——能不能跑通取决于 ZCode 上游。实例只绑回环、经面板反代到 <code>/i/&lt;id&gt;/</code>（同端口同证书、
+          同样要登录），凭证以明文保存在实例目录。
         </div>
 
         <div className="toolbar-row" style={{ padding: "0 12px 6px" }}>
@@ -246,9 +245,7 @@ export function ZcodeSection() {
                     </span>
                     <span className="tlli-subtitle">
                       {inst.id}
-                      {inst.state === "running" && inst.lastPort > 0
-                        ? ` · 端口 ${inst.lastPort}（HTTP 明文）`
-                        : ""}
+                      {inst.state === "running" ? " · 经面板反代打开" : ""}
                       {inst.state === "error" && inst.error ? ` · ${inst.error}` : ""}
                     </span>
                   </span>

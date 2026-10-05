@@ -243,9 +243,9 @@ auth:
 `HDSL_BIND_HOST`/`HDSL_PORT`/`HDSL_HTTPS` 之外的一切（证书路径、`auth.disabled`、`redirect_http` 等）
 都从 `server.yaml` 读。dsh 实例自己的端口从池子 **3081–4081** 里分配、终身绑定，只监听回环，**不对外发布**。
 
-> **ZCode（实验性）不在这套承诺内**：实例进程用 `--host 0.0.0.0` 在**自己的端口**上提供明文 HTTP
-> 服务（端口由 ZCode 自选，不在固定池里），靠访问令牌鉴权，不上面板的 TLS 与登录门。定位、发行包
-> 获取方式与限制见 [docs/zcode-experimental.md](docs/zcode-experimental.md)。
+> **ZCode（实验性）不在这套承诺内**：实例只绑回环，经面板的 `/i/<id>/` 挂载点访问（同端口、
+> 同证书、同样要登录）；发行包由面板自己从上游源码构建，能不能用取决于上游。定位、构建方式与
+> 限制见 [docs/zcode-experimental.md](docs/zcode-experimental.md)。
 
 > **注意优先级**：环境变量盖过 `server.yaml`。镜像里已经设了 `HDSL_PORT=3080`，所以想换端口要改 **`HDSL_PORT`
 > 环境变量**（改 `server.yaml` 的 `port` 会被忽略）；同理，想用 `server.yaml` 里的 `port` 就得把 `HDSL_PORT` 显式清空。

@@ -355,41 +355,16 @@ public final class ZcodeApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such ZCode instance");
             return;
         }
-        if (!ZcodeRuntime.isRunning(id) || instance.lastPort() <= 0) {
+        if (!ZcodeRuntime.isRunning(id)) {
             Json.error(response, HttpServletResponse.SC_CONFLICT,
                     "the ZCode instance is not running");
             return;
         }
-        String host = request.getHeader("Host");
-        if (host == null || host.isBlank()) {
-            host = "127.0.0.1";
-        } else {
-            host = stripPort(host.trim());
-        }
-        // Deliberately plain HTTP on the instance's own port — the reverse
-        // proxy is not an option until ZCode's frontend stops hardcoding its
-        // root path, and the interface says so next to the [打开] button.
-        String url = "http://" + host + ":" + instance.lastPort() + "/?token=" + instance.token();
+        // The instance binds loopback and is reached through the panel's own
+        // mount — same origin, same certificate, same session gate as dsh.
         JsonObject body = new JsonObject();
-        body.addProperty("url", url);
+        body.addProperty("url", "/i/" + id + "/");
         Json.write(response, body);
-    }
-
-    /// Drops the `:port` suffix of a Host header, keeping IPv6 brackets intact:
-    /// `[::1]:8080` → `[::1]`, `example.com:80` → `example.com`.
-    private static String stripPort(String host) {
-        if (host.startsWith("[")) {
-            int close = host.indexOf(']');
-            return close >= 0 ? host.substring(0, close + 1) : host;
-        }
-        int colon = host.lastIndexOf(':');
-        if (colon > 0 && colon == host.indexOf(':')) {
-            String suffix = host.substring(colon + 1);
-            if (!suffix.isEmpty() && suffix.chars().allMatch(Character::isDigit)) {
-                return host.substring(0, colon);
-            }
-        }
-        return host;
     }
 
     // ------------------------------------------------------------------ logs --

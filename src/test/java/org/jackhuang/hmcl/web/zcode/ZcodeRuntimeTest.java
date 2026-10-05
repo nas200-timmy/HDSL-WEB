@@ -64,14 +64,16 @@ class ZcodeRuntimeTest {
         assertEquals(ZcodeRuntime.State.RUNNING, status.state(), "status: " + status);
 
         // The announced port was parsed from the `Local:` line and persisted
-        // into the manifest (the stub picks a random one above 20000 for `--port 0`).
+        // into the manifest (the stub asks the OS for a free one for `--port 0`).
         ZcodeInstance updated = manager.find(instance.id());
         assertNotNull(updated);
-        assertTrue(updated.lastPort() >= 20000 && updated.lastPort() < 40000,
+        assertTrue(updated.lastPort() > 0,
                 "the port must come from the stub's Local: line: " + updated.lastPort());
 
-        // The pass-through: --token, --workspace and --port 0 travel in argv,
-        // and the data directory lands in ZCODE_DATA_BASE_DIR.
+        // The pass-through: the loopback host, --no-token and --workspace travel
+        // in argv, and the data directory lands in ZCODE_DATA_BASE_DIR. The
+        // instance is reached through the panel's proxy, so it needs no token of
+        // its own and must not listen beyond loopback.
         JsonObject recorded = JsonParser.parseString(Files.readString(argsFile)).getAsJsonObject();
         JsonArray argv = recorded.getAsJsonArray("argv");
         List<String> arguments = new java.util.ArrayList<>();
@@ -79,9 +81,10 @@ class ZcodeRuntimeTest {
         assertTrue(arguments.contains("--web"), "argv: " + arguments);
         assertTrue(arguments.contains("--no-open"), "argv: " + arguments);
         assertTrue(arguments.contains("--host"), "argv: " + arguments);
-        assertEquals("0.0.0.0", valueAfter(arguments, "--host"));
+        assertEquals("127.0.0.1", valueAfter(arguments, "--host"));
         assertEquals("0", valueAfter(arguments, "--port"), "--port 0 asks the process to pick a free port");
-        assertEquals(instance.token(), valueAfter(arguments, "--token"));
+        assertTrue(arguments.contains("--no-token"), "argv: " + arguments);
+        assertTrue(!arguments.contains("--token"), "the proxied instance must not mint a token: " + arguments);
         assertEquals(manager.workspaceDirectory(instance).toString(), valueAfter(arguments, "--workspace"));
         assertEquals(manager.dataDirectory(instance).toString(), recorded.get("dataBaseDir").getAsString());
 
