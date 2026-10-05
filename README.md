@@ -19,6 +19,9 @@
 - 手机可用：窄屏（≤760px）或矮屏（≤520px）自动切换移动版式——主导航收成抽屉、内页子侧栏变顶部横向标签条、
   启动面板变成贴底整条操作栏，可点区域按触摸标准放大到 44px，支持「加到主屏幕」。
   判定条件与规则见 [docs/ui-spec.md §14](docs/ui-spec.md)；桌面版式零变化。
+- 账户：为某个模型供应商填一次 API Key。供应商与模型名来自 **[models.dev](https://models.dev) 模型目录**（200+ 家，
+  选中供应商即自动带出端点、协议与密钥环境变量提示），默认模型是可搜索下拉、也一直能手输；目录拉不到时退回纯手输。
+  规则见 [docs/ui-spec.md §4](docs/ui-spec.md)。
 - 启动器行为：**创建即安装**（`POST /api/instances` 默认 `autoInstall:true`），**未安装的实例点「启动」会先装再启**；
   进度与失败原因都显示在面板上，失败还会写进容器日志。细节见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md)。
 
@@ -166,7 +169,7 @@ HDSL_ADMIN_PASSWORD='换成一个强口令' \
 | `/data/hdsl/instances/<id>/` | 每个实例：`instance.json`、`dsh/`（该实例自己的 dsh 安装）、`home/`（隔离模式的 `DSH_HOME`） | 是 |
 | `/data/hdsl/homes/<版本>/` | 共享隔离模式下多个实例共用的 home | 是 |
 | `/data/hdsl/runtimes/<版本>/` | 自下载的 Node 运行时。镜像已内置 Node，安装新运行时的路径仍可用，通常为空 | 否 |
-| `/data/hdsl/catalog/` | 远程目录（快速安装预设等）的缓存 | 否 |
+| `/data/hdsl/catalog/` | 远程目录的缓存：快速安装预设，以及 models.dev 模型目录（12 小时 TTL） | 否 |
 | `/data/hdsl/logs/` | 从日志窗口导出的日志文件 | 否 |
 | `/data/pnpm-store/` | pnpm 共享内容寻址仓库（pnpm 全局配置里的 `storeDir`）。多实例安装同一个包时会硬链接复用而不是重复下载 | 否（可重建，重装会重新拉） |
 | `/data/corepack/` | corepack 缓存（`COREPACK_HOME`）。dsh 固定 `packageManager: pnpm@…` 时需要的那个 pnpm 版本会缓存在这里 | 否 |

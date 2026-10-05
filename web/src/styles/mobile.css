@@ -241,6 +241,19 @@
     max-height: 60dvh;
   }
 
+  /* 供应商选择：搜索行整行占满、按钮与计数换到第二行；网格给弹窗留出高度 */
+  .vendor-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .vendor-toolbar .input {
+    flex: 1 1 100%;
+  }
+
+  .vendor-grid {
+    max-height: 46dvh;
+  }
+
   /* 认证页（登录/初始化）卡片：内联 minWidth 340 在窄屏必然溢出，宽度交给这里 */
   .auth-card {
     width: min(380px, calc(100vw - 32px));
@@ -286,6 +299,15 @@
 
   .popup-item {
     min-height: 44px;
+    font-size: 14px;
+  }
+
+  /* 模型下拉的两行项：行高按触摸标准（44px）再加一点，名称放大到 14px */
+  .model-menu .popup-item {
+    min-height: 48px;
+  }
+
+  .model-option .model-option-name {
     font-size: 14px;
   }
 

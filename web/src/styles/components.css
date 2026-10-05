@@ -641,6 +641,94 @@ select.input {
   object-fit: cover;
 }
 
+/* ---------------- 供应商选择（账户弹窗）：搜索行 + 自适应卡片网格 ---------------- */
+
+.vendor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.vendor-toolbar .input {
+  flex: 1;
+}
+
+.vendor-count {
+  font-size: 12px;
+  color: var(--monet-on-surface-variant);
+  white-space: nowrap;
+}
+
+.vendor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.vendor-grid .wizard-card:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.vendor-grid .wizard-card:disabled:hover {
+  background: var(--monet-surface-container-low-transparent-80);
+}
+
+.vendor-grid .wizard-card-subtitle {
+  word-break: break-all;
+}
+
+.vendor-empty {
+  font-size: 12px;
+  color: var(--monet-on-surface-variant);
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+
+/* ---------------- 模型下拉（ModelSelect）：两行项 ---------------- */
+
+.model-select {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.model-menu {
+  min-width: min(320px, calc(100vw - 24px));
+  max-width: min(480px, calc(100vw - 24px));
+}
+
+.model-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  width: 100%;
+}
+
+.model-option .model-option-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-option .model-option-meta {
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-select-hint {
+  font-size: 12px;
+  color: var(--monet-on-surface-variant);
+  line-height: 1.5;
+}
+
 /* ---------------- 日志视图（等宽 11px，log-window 配色） ---------------- */
 
 .log-view {

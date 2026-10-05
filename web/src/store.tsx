@@ -30,9 +30,10 @@ const initialState: AppState = {
   accounts: null,
   accountsLoading: false,
   accountsError: null,
-  vendors: null,
-  vendorsLoading: false,
-  vendorsError: null,
+  modelProviders: null,
+  modelProvidersLoading: false,
+  modelProvidersError: null,
+  modelProvidersAt: null,
   toasts: [],
 };
 
@@ -176,8 +177,8 @@ setUnauthorizedHandler(() => {
     lastUptime: {},
     accounts: null,
     accountsError: null,
-    vendors: null,
-    vendorsError: null,
+    modelProviders: null,
+    modelProvidersError: null,
   }));
 });
 
@@ -247,7 +248,7 @@ export async function seedTasks(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 账户 / 供应商目录（Phase 3）
+// 账户 / 模型目录（Phase 3）
 // ---------------------------------------------------------------------------
 
 /**
@@ -269,17 +270,22 @@ export async function loadAccounts(force = false): Promise<void> {
   }
 }
 
-export async function loadVendors(force = false): Promise<void> {
+export async function loadModelProviders(force = false): Promise<void> {
   const cur = getState();
-  if (cur.vendors && !force) return;
-  if (cur.vendorsLoading) return;
-  setState((s) => ({ ...s, vendorsLoading: true, vendorsError: null }));
+  if (cur.modelProviders && !force) return;
+  if (cur.modelProvidersLoading) return;
+  setState((s) => ({ ...s, modelProvidersLoading: true, modelProvidersError: null }));
   try {
-    const r = await api.vendors();
-    setState((s) => ({ ...s, vendors: r.vendors, vendorsLoading: false }));
+    const r = await api.modelProviders(force);
+    setState((s) => ({
+      ...s,
+      modelProviders: r.providers,
+      modelProvidersLoading: false,
+      modelProvidersAt: r.fetchedAt ?? Date.now(),
+    }));
   } catch (e) {
-    const msg = isNotImplemented(e) ? "后端尚未支持供应商目录" : errMsg(e);
-    setState((s) => ({ ...s, vendorsLoading: false, vendorsError: msg }));
+    const msg = isNotImplemented(e) ? "后端尚未支持模型目录" : errMsg(e);
+    setState((s) => ({ ...s, modelProvidersLoading: false, modelProvidersError: msg }));
   }
 }
 

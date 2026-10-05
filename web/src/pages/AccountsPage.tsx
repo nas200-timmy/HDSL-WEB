@@ -9,12 +9,24 @@ import {
   RefreshIcon,
   DeleteIcon,
 } from "../components/icons";
+import { ModelSelect } from "../components/ModelSelect";
 import { I18N } from "../i18n";
-import { loadAccounts, loadVendors, toast, useAppState } from "../store";
-import type { Account, CreateAccountBody, PatchAccountBody, Vendor } from "../types";
+import { loadAccounts, loadModelProviders, toast, useAppState } from "../store";
+import type { Account, CreateAccountBody, ModelProvider, PatchAccountBody } from "../types";
 import { errMsg } from "../utils";
 
 const CUSTOM_VENDOR = "__custom";
+
+/** 目录抓取时间 → "刚刚更新" / "5 分钟前更新" */
+function agoText(at: number | null): string | null {
+  if (at === null) return null;
+  const min = Math.floor(Math.max(0, Date.now() - at) / 60000);
+  if (min < 1) return "刚刚更新";
+  if (min < 60) return `${min} 分钟前更新`;
+  const hour = Math.floor(min / 60);
+  if (hour < 24) return `${hour} 小时前更新`;
+  return `${Math.floor(hour / 24)} 天前更新`;
+}
 
 interface VerifyResult {
   ok: boolean;
@@ -30,7 +42,8 @@ export function AccountsPage() {
 
   const [addOpen, setAddOpen] = useState(false);
   const [addStep, setAddStep] = useState<"vendor" | "form">("vendor");
-  const [picked, setPicked] = useState<Vendor | typeof CUSTOM_VENDOR | null>(null);
+  const [picked, setPicked] = useState<ModelProvider | typeof CUSTOM_VENDOR | null>(null);
+  const [vendorQuery, setVendorQuery] = useState("");
   const [form, setForm] = useState({ vendor: "", endpoint: "", apiKey: "", label: "", model: "" });
   const [submitBusy, setSubmitBusy] = useState(false);
   const [submitWarn, setSubmitWarn] = useState<string | null>(null);
@@ -44,23 +57,25 @@ export function AccountsPage() {
 
   useEffect(() => {
     void loadAccounts();
-    void loadVendors();
+    void loadModelProviders();
   }, []);
 
   const openAdd = () => {
     setPicked(null);
-    setAddStep(s.vendors && s.vendors.length > 0 ? "vendor" : "form");
+    setVendorQuery("");
+    setAddStep("vendor");
     setForm({ vendor: "", endpoint: "", apiKey: "", label: "", model: "" });
     setSubmitWarn(null);
     setAddOpen(true);
   };
 
-  const pickVendor = (v: Vendor | typeof CUSTOM_VENDOR) => {
+  const pickVendor = (v: ModelProvider | typeof CUSTOM_VENDOR) => {
     setPicked(v);
     if (v === CUSTOM_VENDOR) {
       setForm((f) => ({ ...f, vendor: "", endpoint: "" }));
     } else {
-      setForm((f) => ({ ...f, vendor: v.id, endpoint: v.endpoint }));
+      // 端点自动带上；目录里没有固定端点的供应商留空等用户填
+      setForm((f) => ({ ...f, vendor: v.id, endpoint: v.endpoint ?? "" }));
     }
     setAddStep("form");
   };
@@ -80,13 +95,24 @@ export function AccountsPage() {
         toast("error", "自定义供应商需填写名称或 Endpoint");
         return;
       }
-    } else {
+    } else if (picked.known) {
+      // dsh 自家目录里的供应商：端点与协议都以 dsh 的为准
       body.vendor = picked.id;
+    } else {
+      // 目录里新发现的供应商：dsh 不认识它，必须带上端点（协议用目录推导出的那个）
+      const endpoint = form.endpoint.trim();
+      if (!endpoint) {
+        toast("error", "该供应商没有固定端点，请填写 Endpoint");
+        return;
+      }
+      body.vendor = picked.id;
+      body.endpoint = endpoint;
+      if (picked.protocol) body.protocol = picked.protocol;
     }
     if (form.label.trim()) body.label = form.label.trim();
     if (form.model.trim()) body.model = form.model.trim();
     // `kind` 是账户的类型（official / third-party / offline），由后端按供应商推断：
-    // 别再发它 —— 供应商列表里的 `kinds` 报的是协议（openai-completions 之类），
+    // 别再发它 —— 目录里的 `protocol` 报的是协议（openai-completions 之类），
     // 拿它当 kind 发过去会被 /api/accounts 拒绝（"kind must be one of …"）。
 
     setSubmitBusy(true);
@@ -172,8 +198,17 @@ export function AccountsPage() {
   };
 
   const accounts = s.accounts;
-  const vendors = s.vendors;
+  const providers = s.modelProviders ?? [];
   const pickedVendor = picked && picked !== CUSTOM_VENDOR ? picked : null;
+  const updated = agoText(s.modelProvidersAt);
+  const q = vendorQuery.trim().toLowerCase();
+  const visibleProviders = providers.filter(
+    (p) =>
+      !q ||
+      p.name.toLowerCase().includes(q) ||
+      p.id.toLowerCase().includes(q) ||
+      (p.endpoint ?? "").toLowerCase().includes(q),
+  );
 
   return (
     <div className="page-content scroll" style={{ gap: 10 }}>
@@ -305,24 +340,57 @@ export function AccountsPage() {
       >
         {addStep === "vendor" ? (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, minWidth: 420 }}>
-              {(vendors ?? []).map((v) => (
-                <button key={v.id} className="wizard-card ripple-host" onClick={() => pickVendor(v)}>
-                  <span className="wizard-card-text">
-                    <div className="wizard-card-title">{v.name}</div>
-                    <div className="wizard-card-subtitle">{v.endpoint}</div>
-                    {v.kinds.length > 0 && (
-                      <div style={{ display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
-                        {v.kinds.map((k) => (
-                          <span className="tag plain" key={k}>
-                            {k}
-                          </span>
-                        ))}
+            <div className="vendor-toolbar">
+              <input
+                className="input"
+                placeholder="搜索供应商（名称 / id / 端点）"
+                value={vendorQuery}
+                onChange={(e) => setVendorQuery(e.target.value)}
+              />
+              <button
+                className="tool-btn ripple-host"
+                disabled={s.modelProvidersLoading}
+                onClick={() => void loadModelProviders(true)}
+              >
+                <RefreshIcon size={20} />
+                {s.modelProvidersLoading ? "刷新中…" : I18N["button.refresh"]}
+              </button>
+              <span className="vendor-count">
+                {providers.length > 0
+                  ? `共 ${providers.length} 家供应商${updated ? ` · ${updated}` : ""}`
+                  : s.modelProvidersLoading
+                    ? "正在获取供应商名单…"
+                    : "共 0 家供应商"}
+              </span>
+            </div>
+            <div className="vendor-grid">
+              {visibleProviders.map((p) => {
+                const blocked = p.protocol === null;
+                return (
+                  <button
+                    key={p.id}
+                    className="wizard-card ripple-host"
+                    disabled={blocked}
+                    onClick={() => pickVendor(p)}
+                  >
+                    <span className="wizard-card-text">
+                      <div className="wizard-card-title">
+                        {p.name}
+                        {!p.known && <span className="tag plain">目录</span>}
                       </div>
-                    )}
-                  </span>
-                </button>
-              ))}
+                      <div className="wizard-card-subtitle">
+                        {blocked
+                          ? `dsh 不支持该协议（models.dev 用 ${p.npm ?? "未知协议"}）`
+                          : p.endpoint ?? "需自行填写端点"}
+                      </div>
+                      <div style={{ display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
+                        {p.protocol && <span className="tag plain">{p.protocol}</span>}
+                        <span className="tag plain">{p.modelCount} 个模型</span>
+                      </div>
+                    </span>
+                  </button>
+                );
+              })}
               <button className="wizard-card ripple-host" onClick={() => pickVendor(CUSTOM_VENDOR)}>
                 <span className="wizard-card-text">
                   <div className="wizard-card-title">{I18N["dsh.account.add.custom"]}</div>
@@ -330,9 +398,18 @@ export function AccountsPage() {
                 </span>
               </button>
             </div>
-            {s.vendorsError && (
+            {visibleProviders.length === 0 && (
+              <p className="vendor-empty">
+                {providers.length > 0
+                  ? `没有匹配「${vendorQuery.trim()}」的供应商。`
+                  : s.modelProvidersLoading
+                    ? "正在获取供应商名单…"
+                    : "供应商名单为空。"}
+              </p>
+            )}
+            {s.modelProvidersError && (
               <p style={{ fontSize: 12, marginTop: 10 }}>
-                供应商目录加载失败（{s.vendorsError}），可直接使用自定义 Endpoint。
+                模型目录加载失败（{s.modelProvidersError}），可直接使用自定义 Endpoint 手填模型名。
               </p>
             )}
           </>
@@ -356,7 +433,7 @@ export function AccountsPage() {
                 />
               )}
             </div>
-            {!pickedVendor && (
+            {(!pickedVendor || !pickedVendor.known) && (
               <div className="form-row">
                 <span className="form-label">{I18N["dsh.account.base_url"]}</span>
                 <input
@@ -367,11 +444,13 @@ export function AccountsPage() {
                 />
               </div>
             )}
-            {pickedVendor && pickedVendor.kinds.length > 0 && (
+            {pickedVendor && (
               <div className="form-row">
                 <span className="form-label">协议</span>
                 <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                  {pickedVendor.kinds.join(" / ")}（由供应商决定；账户类型由后端推断）
+                  {pickedVendor.protocol ?? "未知"}（
+                  {pickedVendor.protocolSource === "dsh" ? "取自 dsh 目录" : "取自 models.dev 目录"}
+                  ；账户类型由后端推断）
                 </span>
               </div>
             )}
@@ -397,11 +476,11 @@ export function AccountsPage() {
             </div>
             <div className="form-row">
               <span className="form-label">默认模型（选填）</span>
-              <input
-                className="input"
-                placeholder="例如：deepseek-chat"
+              <ModelSelect
                 value={form.model}
-                onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
+                onChange={(v) => setForm((f) => ({ ...f, model: v }))}
+                vendorId={pickedVendor ? pickedVendor.id : form.vendor.trim()}
+                placeholder="可搜索模型，或直接输入（留空由 harness 决定）"
               />
             </div>
             {submitWarn && (
@@ -445,10 +524,10 @@ export function AccountsPage() {
         </div>
         <div className="form-row">
           <span className="form-label">默认模型</span>
-          <input
-            className="input"
+          <ModelSelect
             value={editForm.model}
-            onChange={(e) => setEditForm((f) => ({ ...f, model: e.target.value }))}
+            onChange={(v) => setEditForm((f) => ({ ...f, model: v }))}
+            vendorId={editTarget?.vendor ?? ""}
           />
         </div>
         <div className="form-row">

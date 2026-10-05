@@ -47,9 +47,11 @@ import java.util.Locale;
 /// The account REST surface, mapped at `/api/accounts/*`:
 ///
 /// - `GET    /api/accounts`              — every account, keys masked
-/// - `POST   /api/accounts`              — create `{vendor|endpoint?, apiKey, label?, model?, kind?}`;
+/// - `POST   /api/accounts`              — create `{vendor|endpoint?, apiKey, label?, model?, kind?, protocol?}`;
 ///   the key is checked against the vendor before the answer, and a key that
-///   does not pass is still saved (`verified:false` + `verifyError`)
+///   does not pass is still saved (`verified:false` + `verifyError`). `protocol`
+///   is the wire protocol for a supplier this launcher does not ship with (see
+///   `GET /api/models/providers`), and is ignored for the ones it does.
 /// - `GET    /api/accounts/{name}/verify` — ask the vendor live: `{ok, models}` or `{ok:false, error}`
 /// - `PATCH  /api/accounts/{name}`       — edit `{label?, model?, apiKey?}`
 /// - `DELETE /api/accounts/{name}`       — remove, clearing the instance settings that name it
@@ -126,10 +128,21 @@ public final class AccountsApiServlet extends HttpServlet {
         String apiKey = stringField(body, "apiKey");
         String label = stringField(body, "label");
         String model = stringField(body, "model");
+        String protocol = stringField(body, "protocol");
 
         if (label != null && label.contains("/")) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                     "a label must not contain `/` (the account's name appears in URLs)");
+            return;
+        }
+
+        if (protocol != null && !protocol.isBlank() && !DshVendor.APIS.contains(protocol.trim())) {
+            // Refused rather than dropped: the value decides which wire the route is
+            // written with, and a route written with the wrong one fails at launch
+            // rather than here, where it can still be said.
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "protocol must be one of " + String.join(", ", DshVendor.APIS)
+                            + " (got \"" + protocol.trim() + "\")");
             return;
         }
 
@@ -164,7 +177,7 @@ public final class AccountsApiServlet extends HttpServlet {
                 Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "apiKey is required");
                 return;
             }
-            String vendorId = resolveVendor(vendor, endpoint, response);
+            String vendorId = resolveVendor(vendor, endpoint, protocol, response);
             if (vendorId == null) {
                 return; // the answer was written
             }
@@ -216,8 +229,14 @@ public final class AccountsApiServlet extends HttpServlet {
     /// Resolves the vendor id a new account is for, adding a custom vendor when
     /// the account names an address this launcher has not heard of. Writes the
     /// error answer itself and returns `null` then.
+    ///
+    /// @param protocol the wire protocol the caller worked out for a supplier this
+    ///                 launcher does not ship with, or `null` to let it be derived.
+    ///                 Ignored for the suppliers it does ship with, whose protocol
+    ///                 is the one this launcher writes into every route for them.
     private @Nullable String resolveVendor(@Nullable String vendor, @Nullable String endpoint,
-                                           HttpServletResponse response) throws IOException {
+                                           @Nullable String protocol, HttpServletResponse response)
+            throws IOException {
         if (vendor != null && !vendor.isBlank()) {
             String trimmed = vendor.trim();
             DshVendor known = DshVendor.byId(trimmed);
@@ -239,7 +258,8 @@ public final class AccountsApiServlet extends HttpServlet {
                         "vendor id `" + trimmed + "` cannot be a route name");
                 return null;
             }
-            return ensureCustomVendor(trimmed.toLowerCase(Locale.ROOT), trimmed, endpoint.trim()).id();
+            return ensureCustomVendor(trimmed.toLowerCase(Locale.ROOT), trimmed, endpoint.trim(),
+                    protocol).id();
         }
         if (endpoint == null || endpoint.isBlank()) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "vendor or endpoint is required");
@@ -262,18 +282,23 @@ public final class AccountsApiServlet extends HttpServlet {
                     "no vendor id can be derived from `" + host + "`; pass `vendor` explicitly");
             return null;
         }
-        return ensureCustomVendor(id, host, trimmed).id();
+        return ensureCustomVendor(id, host, trimmed, protocol).id();
     }
 
     /// Records a supplier the launcher did not ship with, or returns the one
     /// already recorded under the id.
-    private DshVendor ensureCustomVendor(String id, String name, String baseUrl) {
+    ///
+    /// A supplier already on record is returned as it is: its protocol is written
+    /// into the routes of every account using it, so re-deriving it from whatever a
+    /// later request passed would rewrite those routes without being asked to.
+    private DshVendor ensureCustomVendor(String id, String name, String baseUrl,
+                                         @Nullable String protocol) {
         for (DshVendor custom : settings().getCustomVendors()) {
             if (custom.id().equalsIgnoreCase(id)) {
                 return custom;
             }
         }
-        DshVendor discovered = DshVendor.discovered(id, name, baseUrl);
+        DshVendor discovered = DshVendor.discovered(id, name, baseUrl, protocol);
         settings().getCustomVendors().add(discovered);
         return discovered;
     }

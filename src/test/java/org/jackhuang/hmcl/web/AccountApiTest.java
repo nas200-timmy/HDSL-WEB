@@ -184,6 +184,99 @@ class AccountApiTest {
         }
     }
 
+    /// The wire protocol a supplier outside the launcher's own catalogue speaks is the caller's to
+    /// state, and what it states is what the route is written with at launch.
+    @Test
+    void aCustomSuppliersProtocolIsTheOneItWasCreatedWith() throws Exception {
+        HttpServer vendor = vendorStub();
+        String endpoint = "http://127.0.0.1:" + vendor.getAddress().getPort();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            HttpResponse<String> created = post(client, base + "/api/accounts",
+                    "{\"vendor\":\"my-anthropic\",\"endpoint\":\"" + endpoint
+                            + "\",\"apiKey\":\"" + GOOD_KEY + "\",\"label\":\"plan\","
+                            + "\"protocol\":\"anthropic-messages\"}");
+            assertEquals(201, created.statusCode(), created.body());
+
+            DshVendor added = null;
+            for (DshVendor custom : SettingsManager.settings().getCustomVendors()) {
+                if ("my-anthropic".equals(custom.id())) {
+                    added = custom;
+                }
+            }
+            assertNotNull(added, "a supplier this launcher had not heard of is recorded: "
+                    + created.body());
+            assertEquals("anthropic-messages", added.api());
+            assertEquals(endpoint, added.baseUrl());
+            assertEquals("MY_ANTHROPIC_API_KEY", added.apiKeyEnv());
+
+            // The account dialog reads it back, and it is on disk for the next start.
+            JsonArray vendors = json(get(client, base + "/api/vendors")).getAsJsonArray("vendors");
+            JsonObject mine = vendorById(vendors, "my-anthropic");
+            assertNotNull(mine, "the added supplier must be listed: " + vendors);
+            assertEquals("anthropic-messages", mine.getAsJsonArray("kinds").get(0).getAsString());
+
+            JsonObject saved = JsonParser.parseString(Files.readString(
+                            org.jackhuang.hmcl.Metadata.HMCL_USER_HOME.resolve("launcher-settings.json")))
+                    .getAsJsonObject();
+            JsonObject stored = vendorById(saved.getAsJsonArray("vendors"), "my-anthropic");
+            assertNotNull(stored, "the added supplier must survive a restart: " + saved);
+            assertEquals("anthropic-messages", stored.get("api").getAsString());
+        }
+    }
+
+    /// A protocol outside the three the harness accepts is refused rather than dropped: a route
+    /// written with the wrong wire fails at launch, where nothing says which value was wrong.
+    @Test
+    void aProtocolOutsideTheThreeWiresIsRefused() throws Exception {
+        HttpServer vendor = vendorStub();
+        String endpoint = "http://127.0.0.1:" + vendor.getAddress().getPort();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            HttpResponse<String> refused = post(client, base + "/api/accounts",
+                    "{\"vendor\":\"my-anthropic\",\"endpoint\":\"" + endpoint
+                            + "\",\"apiKey\":\"" + GOOD_KEY + "\",\"protocol\":\"nonsense\"}");
+            assertEquals(400, refused.statusCode(), refused.body());
+            assertTrue(json(refused).get("error").getAsString().contains("protocol must be one of"),
+                    "the refusal names the field it is about: " + refused.body());
+
+            // And nothing was written: neither an account nor the supplier it would have added.
+            assertEquals(0, json(get(client, base + "/api/accounts")).getAsJsonArray("accounts").size());
+            assertNull(vendorById(json(get(client, base + "/api/vendors")).getAsJsonArray("vendors"),
+                    "my-anthropic"), "a refused request must not register its supplier");
+        }
+    }
+
+    /// A supplier the launcher ships with carries the protocol the launcher writes into every route
+    /// for it, so a caller stating another one is ignored rather than obeyed.
+    @Test
+    void aVendorsOwnProtocolIsNotTheCallersToChange() throws Exception {
+        HttpServer vendor = vendorStub();
+        String endpoint = "http://127.0.0.1:" + vendor.getAddress().getPort();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            HttpResponse<String> created = post(client, base + "/api/accounts",
+                    "{\"vendor\":\"deepseek\",\"endpoint\":\"" + endpoint
+                            + "\",\"apiKey\":\"" + GOOD_KEY + "\",\"protocol\":\"anthropic-messages\"}");
+            assertEquals(201, created.statusCode(), created.body());
+
+            JsonObject deepseek = vendorById(
+                    json(get(client, base + "/api/vendors")).getAsJsonArray("vendors"), "deepseek");
+            assertNotNull(deepseek);
+            assertEquals("openai-completions", deepseek.getAsJsonArray("kinds").get(0).getAsString());
+            for (DshVendor custom : SettingsManager.settings().getCustomVendors()) {
+                assertFalse(custom.id().equalsIgnoreCase("deepseek"),
+                        "a supplier the launcher ships with does not become a custom one");
+            }
+        }
+    }
+
     @Test
     void accountCrudMasksTheKeyAndVerifiesLive() throws Exception {
         HttpServer vendor = vendorStub();
@@ -424,6 +517,16 @@ class AccountApiTest {
     private static HttpResponse<String> get(HttpClient client, String url) throws Exception {
         return client.send(HttpRequest.newBuilder(URI.create(url)).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static JsonObject vendorById(JsonArray vendors, String id) {
+        for (int i = 0; i < vendors.size(); i++) {
+            JsonObject vendor = vendors.get(i).getAsJsonObject();
+            if (id.equals(vendor.get("id").getAsString())) {
+                return vendor;
+            }
+        }
+        return null;
     }
 
     private static HttpResponse<String> post(HttpClient client, String url, String body) throws Exception {

@@ -10,6 +10,8 @@ import type {
   LogLine,
   MarketPack,
   MarketPackDetail,
+  ModelInfo,
+  ModelProvider,
   PatchAccountBody,
   PatchInstanceBody,
   PluginCatalogItem,
@@ -200,6 +202,20 @@ export const api = {
 
   deleteAccount: (name: string) =>
     request<unknown>(`/api/accounts/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+  // ---------- Phase 3：模型目录（models.dev） ----------
+
+  /** 供应商名单；refresh = 走后端 ?refresh=1 强制重抓（默认落 12 小时 TTL 缓存） */
+  modelProviders: (refresh = false) =>
+    request<{ fetchedAt: number | null; source: string; providers: ModelProvider[] }>(
+      `/api/models/providers${refresh ? "?refresh=1" : ""}`,
+    ),
+
+  /** 单家供应商的模型列表；dsh 认识但目录里没有 → 200 + 空数组 */
+  modelProvider: (id: string) =>
+    request<{ vendor: ModelProvider; models: ModelInfo[] }>(
+      `/api/models/providers/${encodeURIComponent(id)}`,
+    ),
 
   // ---------- Phase 3：TLS ----------
 

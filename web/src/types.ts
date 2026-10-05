@@ -115,18 +115,56 @@ export interface TaskApproval {
 export interface Vendor {
   id: string;
   name: string;
-  endpoint: string;
+  endpoint: string | null;
   envVar: string;
   kinds: string[];
+  preferred: boolean;
+}
+
+/** 模型目录里的供应商（GET /api/models/providers 的 providers[] 一条） */
+export interface ModelProvider {
+  id: string;
+  name: string;
+  /** dsh 认识的供应商才有固定端点；null = 由账户/区域决定，需用户自填 */
+  endpoint: string | null;
+  /** 密钥环境变量名，仅用于界面提示 */
+  envVar: string;
+  /** null = dsh 的三种协议都路由不了这家，卡片禁用 */
+  protocol: string | null;
+  protocolSource: "dsh" | "directory" | null;
+  modelCount: number;
+  /** false = 只在 models.dev 目录里，dsh 自家目录没有它 */
+  known: boolean;
+  preferred: boolean;
+  /** 用户以前自己加过的厂商 */
+  custom: boolean;
+  doc: string | null;
+  catalogId: string | null;
+  npm: string | null;
+}
+
+/** 模型目录里的单个模型（GET /api/models/providers/{id} 的 models[] 一条） */
+export interface ModelInfo {
+  id: string;
+  name: string;
+  context: number | null;
+  output: number | null;
+  reasoning: boolean;
+  reasoningEfforts: string[];
+  toolCall: boolean;
+  attachment: boolean;
+  costInput: number | null;
+  costOutput: number | null;
+  status: string | null;
 }
 
 export interface Account {
   name: string;
   vendor: string;
-  kind: string;
-  label: string;
-  model: string;
-  endpoint: string;
+  kind: string | null;
+  label: string | null;
+  model: string | null;
+  endpoint: string | null;
   maskedKey: string;
   skinSet?: boolean;
 }
@@ -138,6 +176,8 @@ export interface CreateAccountBody {
   label?: string;
   model?: string;
   kind?: string;
+  /** 只在供应商是「目录里新发现的」时才生效（dsh 自家目录里的厂商以 dsh 的协议为准） */
+  protocol?: string;
 }
 
 export interface PatchAccountBody {
@@ -277,9 +317,12 @@ export interface AppState {
   accounts: Account[] | null;
   accountsLoading: boolean;
   accountsError: string | null;
-  vendors: Vendor[] | null;
-  vendorsLoading: boolean;
-  vendorsError: string | null;
+  /** 合并后的供应商名单（dsh 自家目录 + models.dev）；null = 尚未加载或不可用（见 modelProvidersError） */
+  modelProviders: ModelProvider[] | null;
+  modelProvidersLoading: boolean;
+  modelProvidersError: string | null;
+  /** 目录数据的抓取时间（毫秒），用于"x 分钟前更新" */
+  modelProvidersAt: number | null;
   toasts: Toast[];
 }
 

@@ -208,17 +208,43 @@ public record DshVendor(
 
     /// Makes a vendor for a provider the catalogue does not hold.
     ///
-    /// The key's variable name and the protocol cannot be discovered — no service publishes the name
-    /// of the environment variable a launcher should use — so both are derived from the id the same
-    /// way the harness's own catalogue derives them, and the address is the one that answered.
+    /// The key's variable name still cannot be discovered — no service publishes the name of the
+    /// environment variable a launcher should use — so it is derived from the id, the same way the
+    /// harness's own catalogue derives it, and the address is the one that answered. The protocol
+    /// sometimes can be: models.dev names the SDK each supplier is published under, and
+    /// [DshModelCatalog#protocolOf] reads a wire protocol out of that name.
     ///
     /// @param id      the id, which is also the route name
     /// @param name    what the person called it
-    /// @param baseUrl the address
+    /// @param baseUrl the address, or `null` for one whose address is per account
     /// @return the vendor
-    public static DshVendor discovered(String id, String name, String baseUrl) {
-        return new DshVendor(id, name, id.toUpperCase(Locale.ROOT).replace('-', '_') + "_API_KEY",
-                APIS.get(0), baseUrl, false);
+    public static DshVendor discovered(String id, String name, @Nullable String baseUrl) {
+        return discovered(id, name, baseUrl, null);
+    }
+
+    /// Makes a vendor for a provider the catalogue does not hold, stating its protocol.
+    ///
+    /// @param id      the id, which is also the route name
+    /// @param name    what the person called it
+    /// @param baseUrl the address, or `null` for one whose address is per account
+    /// @param api     the protocol, or `null` to use the first of [APIS]
+    /// @return the vendor
+    public static DshVendor discovered(String id, String name, @Nullable String baseUrl,
+                                       @Nullable String api) {
+        String protocol = api != null && APIS.contains(api.trim()) ? api.trim() : APIS.get(0);
+        return new DshVendor(id, name, keyVariableOf(id), protocol, baseUrl, false);
+    }
+
+    /// The environment variable a key for a vendor with this id is read from.
+    ///
+    /// Nothing publishes this name, so it is derived from the id exactly as the harness's own
+    /// catalogue derives it for the suppliers it does not ship — which is the only reason
+    /// deriving it can be right.
+    ///
+    /// @param id the vendor's id
+    /// @return the variable name
+    public static String keyVariableOf(String id) {
+        return id.toUpperCase(Locale.ROOT).replace('-', '_') + "_API_KEY";
     }
 
     /// Report whether an id may be used as a route name.

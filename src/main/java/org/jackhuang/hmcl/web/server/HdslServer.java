@@ -48,6 +48,7 @@ import org.jackhuang.hmcl.web.http.ApiServlet;
 import org.jackhuang.hmcl.web.http.DoctorApiServlet;
 import org.jackhuang.hmcl.web.http.ExportsApiServlet;
 import org.jackhuang.hmcl.web.http.InstancesApiServlet;
+import org.jackhuang.hmcl.web.http.ModelsApiServlet;
 import org.jackhuang.hmcl.web.http.PacksApiServlet;
 import org.jackhuang.hmcl.web.http.PluginsApiServlet;
 import org.jackhuang.hmcl.web.http.StaticServlet;
@@ -233,6 +234,7 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new DoctorApiServlet()), "/api/doctor");
         context.addServlet(new ServletHolder(new AccountsApiServlet(eventBus)), "/api/accounts/*");
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
+        context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
         ServletHolder tlsHolder = new ServletHolder(new TlsApiServlet(config, certificates, self::get));
         tlsHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(tlsHolder, "/api/settings/*");
