@@ -38,7 +38,16 @@ RUN --mount=type=cache,target=/root/.npm \
 
 # Everything else the SPA build reads (sources, index.html, vite/ts configs).
 COPY web/ ./
+
+# prebuild 钩子（web/scripts/sync-assets.mjs）从 ../src/main/resources/assets/img
+# 同步壁纸与启动器/实例图标到 web/public/assets-img。这个阶段只 COPY 了 web/，
+# 所以必须把那份资源按它期望的相对路径一并带上——否则脚本会「资源目录不存在，跳过」
+# 静默 exit 0，构建照样成功，但 dist/jar 里没有 assets-img，线上表现为默认壁纸消失、
+# 图标全部 404（HTTP 200 其实是 SPA 兜底返回的 index.html）。
+COPY src/main/resources/assets/img /src/main/resources/assets/img
 RUN npm run build
+# 兜底断言：资源必须在 dist 里，缺了就当场构建失败，而不是等部署后才被发现。
+RUN test -f /web/dist/assets-img/wallpapers/2021-08-26.jpg
 # -> /web/dist (base "./", so it mounts at any path the proxy chooses)
 
 
