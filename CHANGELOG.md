@@ -2,6 +2,41 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.2.5 — 2026-10-06 · 容器镜像里丢失的壁纸与图标
+
+独立部署（`docker pull` 起容器）第一次打开网页就能看见：**默认壁纸不见了**，启动器与实例的图标也是坏的。
+同一份代码本机 `./gradlew shadowJar` 出来的 jar 却一切正常。
+
+根因不在前端、也不在静态服务，而是镜像构建的 web 阶段少带了一份源码目录。前端请求的
+`/assets-img/wallpapers/2021-08-26.jpg` 不是源码里现成的文件，而是 `web/scripts/sync-assets.mjs`
+（`package.json` 的 `prebuild` 钩子）从 `../src/main/resources/assets/img` 同步到 `web/public/assets-img/`
+的产物。web 阶段只 `COPY web/ ./`，那份源目录不在阶段里，脚本于是走了它自己的「资源目录不存在，跳过」分支：
+`console.warn` 之后 `process.exit(0)` —— **构建依然是绿的**。
+
+- 实测账：镜像内 jar 的 `assets-img` **0 条**，同版本 Release jar **84 条**
+  （3 张壁纸 + 约 79 个图标：`icon.png`/`icon-title.png`/`icon@4x`/`icon@8x`、`unknown_pack.png`，
+  以及 `8mi-tech`、`ShulkerSakura`、`april_fools`、`chest`、`chicken` 等实例图标）。
+- 为什么一直没被发现：这些路径**不返回 404**，而是被 SPA 外壳兜底接管 ——
+  回的是 `200 + Content-Type: text/html` 的 `index.html`（1234 字节）。浏览器拿 HTML 当图片用，
+  背景自然不显示；而只看状态码的检查会认为一切正常。
+- 只有镜像坏：CI 的 `./gradlew` 在完整仓库里构建，`sync-assets` 读得到源目录，所以 Release jar 一直是好的。
+
+### 修法
+
+- web 阶段按脚本期望的相对路径把资源源目录带上：
+  `COPY src/main/resources/assets/img /src/main/resources/assets/img`。
+- 构建末尾加一条断言 `RUN test -f /web/dist/assets-img/wallpapers/2021-08-26.jpg`：
+  资源缺失就当场失败，不让这类回归留到部署之后才被发现。
+
+### 验证
+
+- 构建上下文用 `git ls-files` 构造（等同于全新 clone，`assets-img` 0 条），在真实 docker 上双向跑：
+  带修复 `BUILD_RC=0`、`[sync-assets] 82 个文件 → public/assets-img`、阶段镜像里 `dist/assets-img` 84 条、
+  三张壁纸俱在；去掉修复则在断言处 `BUILD_RC=1`（`exit code 1`）。
+- 另有一条不需要 docker 的复现：按 web 阶段的目录布局单独跑 `npm run build`，`vite` 产出的 `dist/`
+  只有 `assets/` + `index.html`，与镜像内 jar 的内容逐项一致。
+- 全量 **499 用例 / 0 失败 / 0 错误 / 0 跳过**；`hdsl-web-0.2.5.jar` 内 `assets-img` **84 条**。
+
 ## v0.2.4 — 2026-10-06 · 环境体检：内核文件监视器配额
 
 给「实例起不来」补一个能看的病因。症状是**两个实例不能共存**：一个在另一个起来之后起不来，反过来
