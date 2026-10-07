@@ -12,7 +12,7 @@
 界面按桌面版**像素级复刻**（HMCL 视觉语言、Material You 主题、同款图标与动画），管理功能全部保留：
 实例/版本/插件/账户/整合包/会话/技能/体检/ACP 控制台。
 
-![主界面](docs/screenshots/02-main.png)
+![主界面](https://gitee.com/nas200-timmy/hdsl-web/raw/main/docs/screenshots/02-main.png)
 
 - 交付形态：**一个可执行 fat jar**（`java -jar hdsl-web.jar`）+ 一个 Debian 容器镜像。
 - jar 之外只需两样东西：**JDK 21+** 和 **Node ^22.19.0 || >=24.0.0 + pnpm**（dsh 由 pnpm 安装、由 node 运行）。
@@ -33,11 +33,11 @@
 
 | 初始化引导（首启建号） | 实例列表 |
 |---|---|
-| ![初始化](docs/screenshots/01-setup.png) | ![实例列表](docs/screenshots/03-instances.png) |
+| ![初始化](https://gitee.com/nas200-timmy/hdsl-web/raw/main/docs/screenshots/01-setup.png) | ![实例列表](https://gitee.com/nas200-timmy/hdsl-web/raw/main/docs/screenshots/03-instances.png) |
 
 | 下载（真实 npm 版本列表） | 设置 |
 |---|---|
-| ![下载](docs/screenshots/04-download.png) | ![设置](docs/screenshots/05-settings.png) |
+| ![下载](https://gitee.com/nas200-timmy/hdsl-web/raw/main/docs/screenshots/04-download.png) | ![设置](https://gitee.com/nas200-timmy/hdsl-web/raw/main/docs/screenshots/05-settings.png) |
 
 </details>
 
