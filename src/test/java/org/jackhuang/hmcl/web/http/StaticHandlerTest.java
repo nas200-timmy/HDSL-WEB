@@ -97,4 +97,33 @@ class StaticHandlerTest {
             assertTrue(api.headers().firstValue("content-type").orElse("").startsWith("application/json"));
         }
     }
+
+    /// Images the panel ships under `assets-img/`. The content-type table once
+    /// lacked `jpg`/`jpeg`, so every wallpaper went out as
+    /// `application/octet-stream` — browsers sniff and still painted it, which is
+    /// exactly why it went unnoticed until a deployment looked wrong.
+    @Test
+    void imagesKeepTheirOwnContentType() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+                config -> config.bindHost = "127.0.0.1")) {
+            var client = TestSupport.client();
+            String base = running.baseUrl();
+
+            HttpResponse<byte[]> wall = client.send(
+                    HttpRequest.newBuilder(URI.create(base + "/assets-img/wallpapers/2021-08-26.jpg")).GET().build(),
+                    HttpResponse.BodyHandlers.ofByteArray());
+            assertEquals(200, wall.statusCode(), "the default wallpaper must be served");
+            assertTrue(wall.headers().firstValue("content-type").orElse("").startsWith("image/jpeg"),
+                    "a .jpg asset must be served as image/jpeg, not as octet-stream");
+            assertTrue(wall.body().length > 1024,
+                    "the wallpaper must be its own bytes, not the HTML shell");
+
+            HttpResponse<byte[]> icon = client.send(
+                    HttpRequest.newBuilder(URI.create(base + "/assets-img/icon.png")).GET().build(),
+                    HttpResponse.BodyHandlers.ofByteArray());
+            assertEquals(200, icon.statusCode(), "the launcher icon must be served");
+            assertTrue(icon.headers().firstValue("content-type").orElse("").startsWith("image/png"),
+                    "a .png asset must keep image/png");
+        }
+    }
 }

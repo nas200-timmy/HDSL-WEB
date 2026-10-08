@@ -51,6 +51,10 @@ public final class StaticServlet extends HttpServlet {
             Map.entry("json", "application/json; charset=utf-8"),
             Map.entry("svg", "image/svg+xml"),
             Map.entry("png", "image/png"),
+            // 壁纸是 .jpg：缺这两个键时它们会以 application/octet-stream 下发。
+            // 浏览器会按内容嗅探渲染，所以功能上没坏，但类型是错的。
+            Map.entry("jpg", "image/jpeg"),
+            Map.entry("jpeg", "image/jpeg"),
             Map.entry("ico", "image/x-icon"),
             Map.entry("txt", "text/plain; charset=utf-8"),
             Map.entry("woff", "font/woff"),
