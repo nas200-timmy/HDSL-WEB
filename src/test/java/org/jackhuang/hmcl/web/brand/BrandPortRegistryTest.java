@@ -47,6 +47,10 @@ class BrandPortRegistryTest {
             int port = BrandPortRegistry.allocate();
             assertTrue(BrandPortRegistry.inRange(port), "allocated " + port);
             assertTrue(taken.add(port), "no duplicate allocation: " + port);
+            // Handed out from the start of the range upward, so the first
+            // own-origin instance always lands on 3091 — what makes forwarding
+            // a single router port possible.
+            assertEquals(BrandPortRegistry.RANGE_START + i, port);
             BrandPortRegistry.register(port, "instance-" + i);
         }
         // The range is exhausted now.

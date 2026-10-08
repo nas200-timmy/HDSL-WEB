@@ -30,12 +30,13 @@
   「就绪」以**端口真的在监听**为准（OpenCode 的就绪行比监听早一拍）。dsh 页面的既有处理一字未改，
   回归夹具是 `src/test/resources/brand-pages/` 下两个品牌的真实首页 HTML。
 - **e2e 后续实测修正**：OpenCode 的客户端**按 URL 路径路由**（bundle 直读
-  `window.location.pathname`），挂在任何子路径下都只剩壳（不经反代直连子路径即可复现）——
-  子路径挂载对它无解。改为**独立 origin**：compose 发布 `3091-3100` 段，启动时分配端口并写进
-  清单（origin 随实例固定），面板在同端口加连接器（同证书、会话 cookie 按域名跨端口携带），
-  该端口原样转发、零改写；「打开」返回 `https://<域名>:<端口>/`。Kimi Code 客户端认子路径，
-  继续走 `/i/<id>/`。新增 `BrandPortRegistry` + `BrandEdgeFilter`（按到达端口整请求转发、自带
-  会话门），连接器随启动回放持久化端口。全量 **526 用例**全绿。
+  `window.location.pathname`，且全二进制没有任何 base-path 开关），挂在任何子路径下都只剩壳
+  （不经反代直连子路径即可复现）——子路径挂载对它无解。改为**独立 origin**：compose 发布
+  `3091-3100` 段，**从 3091 起顺序分配**（只转发一个路由器端口也够用）、写进清单（origin 随实例
+  固定、启动回放），面板在同端口加连接器（同证书），该端口**nginx 式直通**——原样转发、零改写、
+  **不加面板会话门**（会话 cookie 按域名发放，拿局域网 IP 访问必然 401；保护它的是端口默认不发布）。
+  「打开」返回 `https://<访问面板的主机名>:<端口>/`。Kimi Code 客户端认子路径，继续走 `/i/<id>/`。
+  新增 `BrandPortRegistry` + `BrandEdgeFilter`。全量 **526 用例**全绿。
 - **前端**：`BrandsSection`（ZCode 页签原样保留；Kimi/OpenCode 页签带第三方警示条 + 可搜索版本
   下拉 + 安装进度 + 实例管理）；`LaunchPane` 跨品牌切换器（store 新增 `external` 状态，主页
   5 秒轮询；主按钮按种类分发启动/停止，品牌实例就绪后自动打开 `/i/<id>/`）。

@@ -229,17 +229,18 @@ public final class HdslServer {
 
         ServletContextHandler context = new ServletContextHandler();
         context.setContextPath("/");
+        // FIRST, before every panel-path filter: brand-edge requests arrive on
+        // their own port and must reach the instance untouched. The panel's
+        // AuthFilter guards `/api/*`, and OpenCode's client uses `/api/...`
+        // paths of its own — registered after this filter, it would 401 those
+        // requests before the edge ever saw them (measured: /api/session 401
+        // through the edge, 200 direct). The edge filter declines any request
+        // that did not arrive on a brand port, so the chain below is unchanged
+        // for the panel.
+        context.addFilter(new BrandEdgeFilter(), "/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(authFilter, "/api/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(authFilter, "/i/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(authFilter, "/ws/*", EnumSet.of(DispatcherType.REQUEST));
-        // Brand instances whose client routes by path (OpenCode) are published
-        // on their own port (BrandPortRegistry); this filter mapped at /* sees
-        // those requests and proxies them verbatim, declining everything else
-        // so the panel chain is untouched. The port is public-facing, so the
-        // filter carries its own session gate (the AuthFilter above does not
-        // cover /*).
-        context.addFilter(new BrandEdgeFilter(authService, config.auth.disabled),
-                "/*", EnumSet.of(DispatcherType.REQUEST));
         context.addServlet(new ServletHolder(new ApiServlet(
                 authService, authFilter, config.auth.disabled, Metadata.VERSION, startedAtMillis::get)), "/api/*");
         ServletHolder instancesHolder = new ServletHolder(new InstancesApiServlet(runtime, taskService, config));

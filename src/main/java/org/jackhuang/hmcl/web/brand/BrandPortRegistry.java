@@ -25,7 +25,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
-import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
@@ -57,12 +56,8 @@ public final class BrandPortRegistry {
     /// reach it; inside the container the panel binds it either way.
     public static final int RANGE_END = 3100;
 
-    private static final int RANDOM_ATTEMPTS = 32;
-
     /// Which instance owns which published port.
     private static final Map<Integer, String> OWNERS = new ConcurrentHashMap<>();
-
-    private static final Random RANDOM = new Random();
 
     private BrandPortRegistry() {
     }
@@ -110,15 +105,14 @@ public final class BrandPortRegistry {
     /// Allocates a free port in the range, avoiding the ones other instances
     /// hold and the ones the OS reports bound.
     ///
+    /// Handed out **from the start of the range upward**, not at random: the
+    /// port is a published one the operator forwards on their router, and
+    /// "the first own-origin instance is always 3091" is what makes forwarding
+    /// a single port possible at all.
+    ///
     /// @return the port
     /// @throws BrandException when the range is exhausted
     public static int allocate() throws BrandException {
-        for (int attempt = 0; attempt < RANDOM_ATTEMPTS; attempt++) {
-            int candidate = RANGE_START + RANDOM.nextInt(RANGE_END - RANGE_START + 1);
-            if (!OWNERS.containsKey(candidate) && DshPorts.isFree(candidate)) {
-                return candidate;
-            }
-        }
         for (int port = RANGE_START; port <= RANGE_END; port++) {
             if (!OWNERS.containsKey(port) && DshPorts.isFree(port)) {
                 return port;

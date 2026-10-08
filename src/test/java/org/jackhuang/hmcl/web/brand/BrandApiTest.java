@@ -58,6 +58,77 @@ class BrandApiTest {
         }
     }
 
+    /// The whole point of an own origin is that the browser talks to the
+    /// instance exactly as it would to `localhost:<port>`: no panel session,
+    /// no cookies, no rewriting. The panel's auth being enabled must not
+    /// change that — a host-scoped cookie would 401 every LAN-IP visit.
+    @Test
+    void theOriginPortIsAPlainPassThroughEvenWithPanelAuthOn() throws Exception {
+        Path release = dataDir.resolve("brands").resolve(Brand.OPENCODE.id())
+                .resolve("releases").resolve("1.18.35");
+        Path bin = release.resolve("node_modules/.bin/" + Brand.OPENCODE.binName());
+        Files.createDirectories(bin.getParent());
+        Files.writeString(bin,
+                "#!/bin/sh\nexec node -e \"console.log('\\u001b[94m\\u001b[1m  Web interface:     "
+                        + "\\u001b[0m http://127.0.0.1:45657/');"
+                        + " require('http').createServer((q,s)=>s.end('served')).listen(45657);"
+                        + " setInterval(()=>{},1e6)\"\n",
+                StandardCharsets.UTF_8);
+        Files.setPosixFilePermissions(bin, PosixFilePermissions.fromString("rwxr-xr-x"));
+        BrandPortRegistry.clear();
+
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir,
+                Map.of("HDSL_ADMIN_PASSWORD", "brand-edge-pass"), config -> config.bindHost = "127.0.0.1")) {
+            HttpClient client = TestSupport.client();
+            // Log in first: the API itself is gated as always.
+            HttpResponse<String> login = post(client, running, "/api/auth/login",
+                    "{\"username\":\"admin\",\"password\":\"brand-edge-pass\"}");
+            assertEquals(200, login.statusCode(), login.body());
+            String session = login.headers().allValues("Set-Cookie").stream()
+                    .filter(c -> c.startsWith("hdsl_session="))
+                    .findFirst().orElseThrow();
+            String cookie = session.substring(0, session.indexOf(';'));
+
+            HttpResponse<String> created = requestWithCookie(client, "POST", running,
+                    "/api/brands/opencode/instances", "{\"name\":\"edge\"}", cookie);
+            assertEquals(201, created.statusCode(), created.body());
+            String id = JsonParser.parseString(created.body()).getAsJsonObject()
+                    .getAsJsonObject("instance").get("id").getAsString();
+            assertEquals(200, requestWithCookie(client, "POST", running,
+                    "/api/brands/opencode/instances/" + id + "/launch", null, cookie).statusCode());
+
+            HttpResponse<String> open = requestWithCookie(client, "GET", running,
+                    "/api/brands/opencode/instances/" + id + "/open", null, cookie);
+            int publicPort = Integer.parseInt(JsonParser.parseString(open.body()).getAsJsonObject()
+                    .get("url").getAsString().replaceAll(".*:(\\d+)/$", "$1"));
+
+            // No cookie, no anything — straight through to the instance. The
+            // path deliberately collides with a panel mapping (`/api/*` is
+            // behind the panel's AuthFilter): the edge filter must run before
+            // it, or OpenCode's own `/api/...` calls 401 here.
+            HttpResponse<String> plain = client.send(HttpRequest.newBuilder(
+                            URI.create("http://127.0.0.1:" + publicPort + "/api/session?limit=5"))
+                    .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, plain.statusCode(), plain.body());
+            assertEquals("served", plain.body());
+        }
+    }
+
+    private static HttpResponse<String> requestWithCookie(HttpClient client, String method,
+                                                          TestSupport.RunningServer running, String path,
+                                                          String json, String cookie) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(running.baseUrl() + path))
+                .header("Cookie", cookie);
+        if (json == null) {
+            builder.method(method, HttpRequest.BodyPublishers.noBody());
+        } else {
+            builder.method(method, HttpRequest.BodyPublishers.ofString(json))
+                    .header("Content-Type", "application/json");
+        }
+        return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
     @Test
     void versionsEndpointHasItsShapeEvenWithoutNetwork() throws Exception {
         try (TestSupport.RunningServer running = start()) {

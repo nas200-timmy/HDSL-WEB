@@ -24,8 +24,6 @@ import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.jackhuang.hmcl.web.auth.AuthFilter;
-import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jetbrains.annotations.NotNullByDefault;
 
 import java.io.IOException;
@@ -35,7 +33,6 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
 import java.util.Locale;
 import java.util.Set;
@@ -47,17 +44,17 @@ import java.util.Set;
 /// The panel publishes one port per such instance ([BrandPortRegistry], a
 /// fixed range outside the dsh pool, persisted in the manifest). Requests that
 /// arrive on one of those ports are proxied to the owning instance's loopback
-/// port **verbatim** — path untouched, page unrewritten, no shim: the app owns
-/// `/` on its origin exactly as it would on `localhost`, and every quirk the
-/// subpath mount exists to solve (root-absolute assets, runtime URLs, CSP,
-/// routing) simply does not arise.
+/// port **verbatim** — path untouched, page unrewritten, no shim, and **no
+/// panel session gate**: the port is a straight nginx-style front for the
+/// instance, so the browser reaches it exactly as it would reach
+/// `localhost:<port>`, from any host name (a session cookie is host-scoped and
+/// would 401 every LAN-IP visit). What protects the port is the network: it is
+/// not published unless the operator forwards it, and the instance's own auth
+/// (when it has one, e.g. OpenCode's `OPENCODE_SERVER_PASSWORD`) still applies
+/// on top.
 ///
 /// This is a servlet *filter* mapped at `/*` so it can decline: a request on
-/// any other port falls through to the normal panel chain untouched. The
-/// session gate is enforced here (the AuthFilter only covers `/api/*`, `/i/*`
-/// and `/ws`) — the published port is public-facing, so it gets the same
-/// session cookie check as everything else. WebSocket upgrades are not proxied
-/// (the brands using an own origin speak SSE and fetch, not WebSocket).
+/// any other port falls through to the normal panel chain untouched.
 @NotNullByDefault
 public final class BrandEdgeFilter implements Filter {
 
@@ -75,18 +72,10 @@ public final class BrandEdgeFilter implements Filter {
 
     private static final int BUFFER_SIZE = 8192;
 
-    private final AuthService authService;
-    private final boolean authDisabled;
-    private final HttpClient client;
-
-    public BrandEdgeFilter(AuthService authService, boolean authDisabled) {
-        this.authService = authService;
-        this.authDisabled = authDisabled;
-        this.client = HttpClient.newBuilder()
-                .version(HttpClient.Version.HTTP_1_1)
-                .followRedirects(HttpClient.Redirect.NEVER)
-                .build();
-    }
+    private final HttpClient client = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build();
 
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
@@ -95,29 +84,16 @@ public final class BrandEdgeFilter implements Filter {
             chain.doFilter(request, response);
             return;
         }
-        int port = http.getLocalPort();
-        String owner = BrandPortRegistry.ownerOf(port);
+        String owner = BrandPortRegistry.ownerOf(http.getLocalPort());
         if (owner == null) {
             chain.doFilter(request, response);
-            return;
-        }
-        // The browser fetches the web manifest without credentials, so the
-        // session gate can never pass it (measured: two 401 console errors
-        // per page load). It is a static file the instance serves — letting
-        // it through unauthenticated leaks nothing and keeps the console
-        // clean; every other path on this port stays behind the gate.
-        if (!http.getRequestURI().equals("/site.webmanifest")
-                && !authDisabled && !hasSession(http)) {
-            resp.setStatus(401);
-            resp.setContentType("application/json; charset=utf-8");
-            resp.getOutputStream().write("{\"error\":\"unauthorized\"}".getBytes(StandardCharsets.UTF_8));
             return;
         }
         int target = BrandRuntime.isRunning(owner) ? BrandRuntime.portOf(owner) : 0;
         if (target <= 0) {
             resp.setStatus(502);
             resp.setContentType("application/json; charset=utf-8");
-            resp.getOutputStream().write("{\"error\":\"instance not running\"}".getBytes(StandardCharsets.UTF_8));
+            resp.getOutputStream().write("{\"error\":\"instance not running\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             return;
         }
         proxy(http, resp, target);
@@ -172,23 +148,5 @@ public final class BrandEdgeFilter implements Filter {
                 out.flush();
             }
         }
-    }
-
-    /// Whether the request carries a valid panel session cookie — the same
-    /// check the WebSocket gate performs before the context ever sees a
-    /// handshake.
-    private boolean hasSession(HttpServletRequest request) {
-        String header = request.getHeader("Cookie");
-        if (header == null) {
-            return false;
-        }
-        for (String pair : header.split(";")) {
-            String trimmed = pair.trim();
-            if (trimmed.startsWith(AuthFilter.SESSION_COOKIE + "=")) {
-                String token = trimmed.substring(AuthFilter.SESSION_COOKIE.length() + 1);
-                return authService.verify(token).isPresent();
-            }
-        }
-        return false;
     }
 }
