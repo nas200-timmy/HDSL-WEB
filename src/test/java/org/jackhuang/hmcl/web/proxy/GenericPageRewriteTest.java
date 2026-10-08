@@ -27,6 +27,8 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// The generic half of the page rewrite: single-page apps that assume they own
@@ -54,9 +56,10 @@ class GenericPageRewriteTest {
     @Test
     void opencodeIndexGetsTheMountAndBothShims() {
         // Path-routed clients get the router shim; the proxy is told so by the
-        // brand flag at serve time (see InstanceProxyServlet#needsRouterShim).
+        // brand flag at serve time (see InstanceProxyServlet#needsRouterShim),
+        // and which contract that shim carries is what the probe decided.
         String rewritten = InstanceProxyServlet.rewritePage(
-                resource("brand-pages/opencode-index.html"), MOUNT, true);
+                resource("brand-pages/opencode-index.html"), MOUNT, InstanceProxyServlet.RouterShim.MOUNT);
 
         assertTrue(rewritten.contains("src=\"" + MOUNT + "assets/index-CjbuCoME.js\""), rewritten);
         assertTrue(rewritten.contains("href=\"" + MOUNT + "assets/index-DLiUNAg_.css\""), rewritten);
@@ -66,7 +69,7 @@ class GenericPageRewriteTest {
         // and nothing else (measured: two 401s per OpenCode page load).
         assertFalse(rewritten.contains("site.webmanifest"), rewritten);
         assertShim(rewritten);
-        assertRouterShim(rewritten);
+        assertRouterShim(rewritten, InstanceProxyServlet.RouterShim.MOUNT);
         assertNoDoublePrefix(rewritten);
     }
 
@@ -102,15 +105,18 @@ class GenericPageRewriteTest {
     }
 
     @Test
-    void theRouterShimIsReferencedOnlyWhenAsked(@TempDir Path dataDir) {
+    void theRouterShimIsReferencedOnlyWhenAsked() {
         String page = "<html><head><script src=\"/assets/a.js\"></script></head></html>";
 
-        assertFalse(InstanceProxyServlet.rewritePage(page, MOUNT, true)
-                .contains(InstanceProxyServlet.ROUTER_RESOURCE + "\"></script>false"));
-        assertTrue(InstanceProxyServlet.rewritePage(page, MOUNT, true)
+        assertFalse(InstanceProxyServlet.rewritePage(page, MOUNT, InstanceProxyServlet.RouterShim.NONE)
                 .contains(InstanceProxyServlet.ROUTER_RESOURCE));
-        assertFalse(InstanceProxyServlet.rewritePage(page, MOUNT, false)
-                .contains(InstanceProxyServlet.ROUTER_RESOURCE));
+        String mounted = InstanceProxyServlet.rewritePage(page, MOUNT, InstanceProxyServlet.RouterShim.MOUNT);
+        assertTrue(mounted.contains(InstanceProxyServlet.ROUTER_RESOURCE + "\"></script>"), mounted);
+        assertFalse(mounted.contains("?mode=root"), mounted);
+        // The fallback names the same resource, with the mode that gives the
+        // address bar back to the panel root.
+        assertTrue(InstanceProxyServlet.rewritePage(page, MOUNT, InstanceProxyServlet.RouterShim.ROOT)
+                .contains(InstanceProxyServlet.ROUTER_RESOURCE + "?mode=root\"></script>"));
     }
 
     @Test
@@ -134,26 +140,86 @@ class GenericPageRewriteTest {
                     .contains("javascript"), response.headers().toString());
             assertTrue(response.body().contains("const mount=\"/i/whatever/\""), response.body());
 
-            java.net.http.HttpResponse<String> router = java.net.http.HttpClient.newHttpClient().send(
-                    java.net.http.HttpRequest.newBuilder(java.net.URI.create(
-                                    running.baseUrl() + "/i/whatever/" + InstanceProxyServlet.ROUTER_RESOURCE))
-                            .GET().build(),
-                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            // The router shim answers with the contract that keeps the mount: it
+            // defines what the patched bundle calls, and puts the mount back on
+            // what the client writes.
+            java.net.http.HttpResponse<String> router = get(running.baseUrl(),
+                    "/i/whatever/" + InstanceProxyServlet.ROUTER_RESOURCE);
             assertEquals(200, router.statusCode(), router.body());
-            assertTrue(router.body().contains("history.pushState=swallow(push)"), router.body());
+            assertTrue(router.body().contains(
+                    "__hdslUnmount=(path)=>path.indexOf(mount)===0?path.slice(mount.length-1):path"),
+                    router.body());
+            assertTrue(router.body().contains("history.pushState=wrap(push)"), router.body());
+
+            // …and, asked for the fallback, with the one that hands the address
+            // back to the panel root instead.
+            java.net.http.HttpResponse<String> rooted = get(running.baseUrl(),
+                    "/i/whatever/" + InstanceProxyServlet.ROUTER_RESOURCE + "?mode=root");
+            assertEquals(200, rooted.statusCode(), rooted.body());
+            assertTrue(rooted.body().contains("history.pushState=swallow(push)"), rooted.body());
         }
+    }
+
+    @Test
+    void patchingTheRouterBundleTurnsTheMountIntoTheOriginRoot() {
+        // The expression the patch is anchored on is Solid Router's, measured in
+        // OpenCode 1.18.32 and 1.18.35 — see InstanceProxyServlet#patchRouterBundle.
+        // The second half is the client's boot-time `auth_token` cleanup: it reads
+        // `location.pathname` too — bare, no `window.` — and has to come out of the
+        // patch untouched, because stripping the mount there would drop it from the
+        // very address that cleanup writes back.
+        byte[] bundle = ("const r=window.location.pathname.replace(/^\\/+/,\"/\")+window.location.search;"
+                + "const clean=()=>history.replaceState(null,\"\",location.pathname+location.hash);")
+                .getBytes(StandardCharsets.UTF_8);
+
+        byte[] patched = InstanceProxyServlet.patchRouterBundle(bundle);
+
+        assertNotNull(patched);
+        assertEquals("const r=(window.__hdslUnmount"
+                        + "?window.__hdslUnmount(window.location.pathname):window.location.pathname)"
+                        + ".replace(/^\\/+/,\"/\")+window.location.search;"
+                        + "const clean=()=>history.replaceState(null,\"\",location.pathname+location.hash);",
+                new String(patched, StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void aBundleWithoutThatExpressionIsServedAlone() {
+        assertNull(InstanceProxyServlet.patchRouterBundle("const a=1;".getBytes(StandardCharsets.UTF_8)));
+        // Two of them is not a bundle this servlet understands: guessing which
+        // one the router reads would be worse than handing the address back.
+        assertNull(InstanceProxyServlet.patchRouterBundle((
+                "window.location.pathname.replace( and window.location.pathname.replace(")
+                .getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void theEntryScriptOfARealPageIsWhatTheProbeWouldFetch() {
+        assertEquals("/assets/index-CjbuCoME.js",
+                InstanceProxyServlet.entryScriptSrc(resource("brand-pages/opencode-index.html")));
+        // A page naming none, or naming one on another host, cannot be probed:
+        // the caller falls back to the panel root rather than patching blind.
+        assertNull(InstanceProxyServlet.entryScriptSrc("<html><head></head></html>"));
+        assertNull(InstanceProxyServlet.entryScriptSrc(
+                "<html><head><script src=\"https://cdn.example.com/app.js\"></script></head></html>"));
+    }
+
+    private static java.net.http.HttpResponse<String> get(String baseUrl, String path) throws Exception {
+        return java.net.http.HttpClient.newHttpClient().send(
+                java.net.http.HttpRequest.newBuilder(java.net.URI.create(baseUrl + path)).GET().build(),
+                java.net.http.HttpResponse.BodyHandlers.ofString());
     }
 
     private static String rewrite(String html) {
         return InstanceProxyServlet.rewritePage(html, MOUNT);
     }
 
-    /// The router shim is referenced for path-routed clients only — see
-    /// [InstanceProxyServlet#rewritePage] and the OpenCode brand flag.
-    private static void assertRouterShim(String rewritten) {
-        assertTrue(rewritten.contains(
-                "<script src=\"" + MOUNT + InstanceProxyServlet.ROUTER_RESOURCE + "\"></script>"),
-                "router shim referenced: " + rewritten);
+    /// The router shim is referenced for path-routed clients only, under the
+    /// contract the page was served with — see [InstanceProxyServlet#rewritePage]
+    /// and the OpenCode brand flag.
+    private static void assertRouterShim(String rewritten, InstanceProxyServlet.RouterShim shim) {
+        String tag = "<script src=\"" + MOUNT + InstanceProxyServlet.ROUTER_RESOURCE
+                + (shim == InstanceProxyServlet.RouterShim.ROOT ? "?mode=root" : "") + "\"></script>";
+        assertTrue(rewritten.contains(tag), "router shim referenced: " + tag + " in " + rewritten);
     }
 
     private static void assertShim(String rewritten) {

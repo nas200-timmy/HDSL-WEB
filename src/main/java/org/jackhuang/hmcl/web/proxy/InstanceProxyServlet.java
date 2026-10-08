@@ -32,6 +32,7 @@ import org.jackhuang.hmcl.web.task.TaskService;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -41,13 +42,17 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Enumeration;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Flow;
 import java.util.concurrent.SubmissionPublisher;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.InflaterInputStream;
@@ -75,6 +80,10 @@ import java.util.zip.InflaterInputStream;
 /// - the page itself is rewritten on the way past: its `<base>` and its
 ///   `/plugins/` registrations are given the mount, and a small shim keeps the
 ///   requests it builds at runtime inside it (see [#rewritePage]);
+/// - a page whose client routes by `location.pathname` gets one thing more: its
+///   router bundle is patched to read the mount away ([#patchRouterBundle]), so
+///   the address bar can keep the mount and still match the client's routes
+///   (see [ROUTER_JS]);
 /// - bodies stream in both directions (a `Flow.Publisher` over the servlet
 ///   input on the way up, `BodyHandlers.ofInputStream` on the way down), so
 ///   SSE — `/plugins/events` — works without special treatment;
@@ -88,10 +97,11 @@ import java.util.zip.InflaterInputStream;
 /// client is prefix-aware: it takes the mount as its base, follows the token
 /// exchange itself (`redirect: 'manual'`, with a `Location` of `./` meaning "in
 /// place"), and resolves every path against that base. The real web client is
-/// not — it is built to own the origin — so three things here have no
+/// not — it is built to own the origin — so four things here have no
 /// counterpart upstream and are this launcher's own: the `Location` rewrite, the
-/// page rewrite, and the shim that keeps the requests the page builds at runtime
-/// inside the mount (see [#rewritePage]). A reader comparing the two should not
+/// page rewrite, the shim that keeps the requests the page builds at runtime
+/// inside the mount, and the router patch that teaches a path-routed client the
+/// mount it is served under (see [#rewritePage]). A reader comparing the two should not
 /// read their absence upstream as an oversight here.
 @NotNullByDefault
 public final class InstanceProxyServlet extends HttpServlet {
@@ -122,11 +132,14 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// call 404'd at the panel root.
     static final String SHIM_RESOURCE = "__hdsl-shim.js";
 
-    /// The per-mount script that hands the origin root back to a client which
-    /// routes by `location.pathname` ([Brand#needsRouterShim] — OpenCode):
-    /// the page is served under `/i/<id>/`, the client is asked to render the
-    /// root view, and it would match no route. Served as its own resource for
-    /// the same CSP reason as the runtime shim.
+    /// The per-mount script a client that routes by `location.pathname` needs
+    /// ([Brand#needsRouterShim] — OpenCode): served under `/i/<id>/`, such a
+    /// client is asked for a route it cannot match and renders an empty shell.
+    /// The resource carries both halves of the answer — keep the mount in the
+    /// address ([ROUTER_JS]) or hand it back to the panel root
+    /// ([ROUTER_ROOT_JS], named by `?mode=root` when the client's bundle cannot
+    /// be patched). Served as its own resource for the same CSP reason as the
+    /// runtime shim.
     static final String ROUTER_RESOURCE = "__hdsl-router.js";
 
     private static final int BUFFER_SIZE = 8192;
@@ -172,7 +185,14 @@ public final class InstanceProxyServlet extends HttpServlet {
         // shim answers the same way for path-routed clients.
         String restPath = rest.substring(slash);
         if (restPath.equals("/" + SHIM_RESOURCE) || restPath.equals("/" + ROUTER_RESOURCE)) {
-            String template = restPath.equals("/" + ROUTER_RESOURCE) ? ROUTER_JS : SHIM_JS;
+            boolean router = restPath.equals("/" + ROUTER_RESOURCE);
+            // The router shim has two contracts (see [ROUTER_JS]): keep the mount
+            // in the address bar, or — for a client whose bundle carries no
+            // patchable expression — hand the address back to the panel root. The
+            // page names the one it needs, because only the page knows: it probes
+            // the client's bundle before it names this script.
+            boolean backToRoot = router && "root".equals(request.getParameter("mode"));
+            String template = router ? (backToRoot ? ROUTER_ROOT_JS : ROUTER_JS) : SHIM_JS;
             response.setStatus(HttpServletResponse.SC_OK);
             response.setContentType("text/javascript; charset=utf-8");
             response.setHeader("Cache-Control", "no-store");
@@ -255,17 +275,23 @@ public final class InstanceProxyServlet extends HttpServlet {
             }
         });
 
-        boolean routerShim = needsRouterShim(instanceId);
+        boolean routerClient = needsRouterShim(instanceId);
+        int upstreamPort = port;
         upstream.whenCompleteAsync(
-                (result, error) -> pump(response, async, upstream, mount, routerShim, result, error),
+                (result, error) -> pump(response, async, upstream, mount, routerClient, upstreamPort, result, error),
                 tasks.executor());
     }
 
     /// Copies the response headers and streams the body back, running on the
     /// task pool so the client's I/O thread is never blocked on a write.
+    ///
+    /// Two bodies are not streamed but rebuilt: a page (the mount has to be in
+    /// its references — see [rewritePage]) and, for a path-routed client, the
+    /// script its router lives in ([patchRouterBundle]). Everything else streams,
+    /// which is what keeps `/plugins/events` (SSE) working.
     private static void pump(HttpServletResponse response, AsyncContext async,
                              CompletableFuture<HttpResponse<InputStream>> upstream, String mount,
-                             boolean routerShim,
+                             boolean routerClient, int port,
                              @Nullable HttpResponse<InputStream> result, @Nullable Throwable error) {
         try {
             if (error != null || result == null) {
@@ -278,16 +304,42 @@ public final class InstanceProxyServlet extends HttpServlet {
                 return;
             }
             response.setStatus(result.statusCode());
-            boolean servesPage = result.headers().firstValue("content-type").orElse("")
-                    .toLowerCase(Locale.ROOT).contains("text/html");
-            copyResponseHeaders(result, response, mount, servesPage);
+            long contentLength = result.headers().firstValueAsLong("content-length").orElse(-1);
+            String contentType = result.headers().firstValue("content-type").orElse("").toLowerCase(Locale.ROOT);
+            boolean servesPage = contentType.contains("text/html");
+            // A script is only worth rebuilding when the instance sized it in
+            // advance (the patch changes that length) and it is small enough to
+            // hold. The probe that chose the shim read the bundle under the same
+            // rule, so what the page was told and what the browser gets agree.
+            boolean servesScript = routerClient && !servesPage && contentType.contains("javascript")
+                    && contentLength >= 0 && contentLength <= MAX_SCRIPT_BYTES;
+            copyResponseHeaders(result, response, mount, servesPage || servesScript);
             try (InputStream in = result.body(); OutputStream out = response.getOutputStream()) {
                 if (servesPage) {
                     // Buffered and rewritten, because the page dsh generates is rooted at the origin
-                    // rather than at whatever path it is reached through — see rewritePage. Everything
-                    // else streams, which is what keeps `/plugins/events` (SSE) working.
-                    out.write(rewritePage(readPage(in, result), mount, routerShim)
+                    // rather than at whatever path it is reached through — see rewritePage.
+                    String html = readPage(in, result);
+                    out.write(rewritePage(html, mount,
+                                    routerClient ? routerShimFor(port, mount, html) : RouterShim.NONE)
                             .getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                } else if (servesScript) {
+                    byte[] script = readScript(in, result);
+                    byte[] patched = script == null ? null : patchRouterBundle(script);
+                    if (patched == null) {
+                        if (script != null) {
+                            out.write(script);
+                        } else {
+                            org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                                    "Script under " + mount + " outgrew its own content-length; served unpatched");
+                        }
+                    } else {
+                        // These bytes are no longer the instance's own and must not be kept
+                        // under its address: a cached copy without the patch routes the client
+                        // by the mount itself, which matches no route at all.
+                        response.setHeader("Cache-Control", "no-store");
+                        out.write(patched);
+                    }
                     out.flush();
                 } else {
                     byte[] buffer = new byte[BUFFER_SIZE];
@@ -420,28 +472,266 @@ public final class InstanceProxyServlet extends HttpServlet {
             if(window.EventSource)window.EventSource=wrap(window.EventSource)})()
             """;
 
-    /// The shim that hands the origin root back to a client which routes by
-    /// `location.pathname` ([org.jackhuang.hmcl.web.brand.Brand#needsRouterShim]
-    /// — OpenCode). Served through the mount, such a client matches no route
-    /// and renders a bare shell (measured: the same page at any subpath of its
-    /// own port does the same, so this is the client, not the proxy). The
-    /// script runs before the app bundle and makes the browser's address look
-    /// like the origin root the client expects:
+    /// What a path-routed client's page is given in place of a router that works
+    /// at the mount — see [ROUTER_JS] and [ROUTER_ROOT_JS].
+    enum RouterShim {
+        /// The client needs neither: it routes by the path it is served at, or is
+        /// the origin owner itself (Kimi Code, dsh).
+        NONE,
+        /// The client's router takes its route from `location.pathname`. Its
+        /// bundle is patched to read the mount away ([patchRouterBundle]) and
+        /// [ROUTER_JS] adds the mount back to everything the client writes: the
+        /// address bar keeps `/i/<id>/…` and survives a refresh.
+        MOUNT,
+        /// The same client, but its bundle carries no expression this servlet
+        /// knows how to patch: [ROUTER_ROOT_JS] hands the address back to the
+        /// panel root. The app works; the address does not survive a refresh.
+        ROOT
+    }
+
+    /// The largest script this servlet will hold in memory to patch. The bundles
+    /// it exists for are single files a little under 3 MB (measured 2026-10 on
+    /// both OpenCode builds); anything much larger is trusted to be something
+    /// else and is streamed untouched.
+    private static final long MAX_SCRIPT_BYTES = 16L * 1024 * 1024;
+
+    /// The one expression a path-routed client turns the browser's address into
+    /// its own route with — Solid Router's browser-history adapter, minified but
+    /// stable: the path normalised to a single leading slash, then the search
+    /// string. Measured 2026-10 in OpenCode 1.18.32 and 1.18.35
+    /// (`assets/index-*.js`, the file's only `window.location.pathname`; the other
+    /// `location.pathname` — bare, no `window.` — belongs to the client's
+    /// boot-time `auth_token` cleanup and must stay untouched, or that cleanup
+    /// would drop the mount from the address it rewrites).
+    private static final byte[] ROUTER_PATH_READ =
+            "window.location.pathname.replace(".getBytes(StandardCharsets.US_ASCII);
+
+    /// The same expression with the mount taken off it, so that under `/i/<id>/`
+    /// the client matches the routes it would match at the origin root. The
+    /// global is looked up rather than called outright: the bundle is served
+    /// alongside the shim that defines it, but a bundle that ends up without one
+    /// must still run rather than die on a `ReferenceError`.
+    private static final byte[] ROUTER_PATH_READ_PATCHED = ("(window.__hdslUnmount"
+            + "?window.__hdslUnmount(window.location.pathname):window.location.pathname)"
+            + ".replace(").getBytes(StandardCharsets.US_ASCII);
+
+    /// The client's entry script, as the page names it — what the shim decision
+    /// is probed on ([routerShimFor]). The first `<script src>` naming a `.js`
+    /// file is the one a single-page app boots from (measured 2026-10: both
+    /// brands' pages name exactly one, OpenCode's `/assets/index-<hash>.js`).
+    private static final Pattern SCRIPT_SRC = Pattern.compile("<script[^>]*\\ssrc=\"([^\"]+)\"");
+
+    /// Which shim each mount's bundle was found to take, as `<script src>|<mode>`
+    /// — remembered because a page has to name its shim before the browser ever
+    /// asks for the bundle, and the answer only changes when the client's own
+    /// asset name does (a different build of it). One entry per mount.
+    private static final Map<String, String> ROUTER_BUNDLES = new ConcurrentHashMap<>();
+
+    /// The client the probe fetches bundles with — separate from the proxying
+    /// client, which belongs to an instance and is built per servlet.
+    private static final HttpClient PROBE_CLIENT = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .connectTimeout(Duration.ofSeconds(10))
+            .build();
+
+    /// @return the bundle with the router's path read made mount-blind, or `null`
+    ///         when the expression is not there exactly once — a build this
+    ///         servlet does not recognise, which is then served untouched and
+    ///         paired with [RouterShim#ROOT].
+    static byte @Nullable [] patchRouterBundle(byte[] bundle) {
+        int at = indexOf(bundle, ROUTER_PATH_READ, 0);
+        if (at < 0 || indexOf(bundle, ROUTER_PATH_READ, at + 1) >= 0) {
+            return null;
+        }
+        byte[] patched = new byte[bundle.length - ROUTER_PATH_READ.length + ROUTER_PATH_READ_PATCHED.length];
+        System.arraycopy(bundle, 0, patched, 0, at);
+        System.arraycopy(ROUTER_PATH_READ_PATCHED, 0, patched, at, ROUTER_PATH_READ_PATCHED.length);
+        System.arraycopy(bundle, at + ROUTER_PATH_READ.length, patched,
+                at + ROUTER_PATH_READ_PATCHED.length,
+                bundle.length - at - ROUTER_PATH_READ.length);
+        return patched;
+    }
+
+    /// @return the first index of `needle` in `haystack` at or after `from`, or
+    ///         `-1`. Both are ASCII here, so a byte compare is the whole story.
+    private static int indexOf(byte[] haystack, byte[] needle, int from) {
+        outer:
+        for (int i = Math.max(from, 0); i <= haystack.length - needle.length; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (haystack[i + j] != needle[j]) {
+                    continue outer;
+                }
+            }
+            return i;
+        }
+        return -1;
+    }
+
+    /// Which router shim the page about to be served must name.
     ///
-    /// - the initial `/i/<id>/...` address is replaced with `/` (hash kept),
-    ///   so the first route match is the root view;
-    /// - `history.pushState` / `replaceState` are swallowed down to `/` as
-    ///   well, so later addresses the app writes never re-expose the mount in
-    ///   `location.pathname` — the router keeps matching what it was given.
+    /// The client's own bundle decides: if its router's path read can be patched
+    /// the address bar keeps the mount ([RouterShim#MOUNT]); if it cannot, the
+    /// page falls back to the panel root ([RouterShim#ROOT]) rather than
+    /// rendering a shell. The bundle is fetched once per mount and asset name to
+    /// answer this, because the shim is named *before* the browser asks for the
+    /// bundle and the two still have to agree on the first load. A probe that
+    /// fails says no: losing the address bar is recoverable, a page whose shim
+    /// does not match its bundle is not.
+    private static RouterShim routerShimFor(int port, String mount, String html) {
+        String src = entryScriptSrc(html);
+        if (src == null) {
+            return RouterShim.ROOT;
+        }
+        String remembered = ROUTER_BUNDLES.get(mount);
+        if (remembered != null && remembered.startsWith(src + "|")) {
+            return remembered.endsWith("|mount") ? RouterShim.MOUNT : RouterShim.ROOT;
+        }
+        boolean patchable = probeRouterBundle(port, src);
+        ROUTER_BUNDLES.put(mount, src + "|" + (patchable ? "mount" : "root"));
+        return patchable ? RouterShim.MOUNT : RouterShim.ROOT;
+    }
+
+    /// @return the path of the client's entry script as the instance serves it,
+    ///         or `null` when the page names none (or names one on another host,
+    ///         which is not the client and cannot be patched through here).
+    static @Nullable String entryScriptSrc(String html) {
+        Matcher matcher = SCRIPT_SRC.matcher(html);
+        while (matcher.find()) {
+            String src = matcher.group(1);
+            if (!src.endsWith(".js")) {
+                continue;
+            }
+            if (src.startsWith("//") || src.contains("://")) {
+                return null;
+            }
+            return src.startsWith("/") ? src : "/" + src;
+        }
+        return null;
+    }
+
+    /// @return whether the client's entry script carries the path read this
+    ///         servlet patches — see [patchRouterBundle]
+    private static boolean probeRouterBundle(int port, String src) {
+        try {
+            HttpResponse<InputStream> response = PROBE_CLIENT.send(
+                    HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + src))
+                            .timeout(Duration.ofSeconds(20))
+                            .GET()
+                            .build(),
+                    HttpResponse.BodyHandlers.ofInputStream());
+            try (InputStream in = response.body()) {
+                long length = response.headers().firstValueAsLong("content-length").orElse(-1);
+                if (response.statusCode() != 200 || length < 0 || length > MAX_SCRIPT_BYTES) {
+                    return false;
+                }
+                byte[] bundle = readBytes(in, MAX_SCRIPT_BYTES);
+                return bundle != null && patchRouterBundle(bundle) != null;
+            }
+        } catch (IOException | InterruptedException e) {
+            org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                    "Could not probe the router bundle at " + src + ": " + e);
+            return false;
+        }
+    }
+
+    /// Reads a script response into memory, decompressing it when the instance
+    /// sent it compressed: the patch is matched against the bytes the browser
+    /// would run, and a compressed body is not those bytes. The caller drops
+    /// `content-encoding` with it — see [copyResponseHeaders].
     ///
-    /// Everything the app *requests* still goes through the mount, because the
-    /// runtime shim ([SHIM_JS]) prefixes same-origin absolute URLs. The
-    /// trade-off this buys: the tab's address bar shows the panel root, and a
-    /// manual refresh lands on the panel instead of the app — the app itself
-    /// is untouched and behaves as it would on its own port.
+    /// @return the bytes, or `null` when the response holds more than
+    ///         [MAX_SCRIPT_BYTES] after all
+    private static byte @Nullable [] readScript(InputStream in, HttpResponse<InputStream> result) throws IOException {
+        String encoding = result.headers().firstValue("content-encoding").orElse("").toLowerCase(Locale.ROOT);
+        if (encoding.contains("gzip")) {
+            try (GZIPInputStream gzip = new GZIPInputStream(in)) {
+                return readBytes(gzip, MAX_SCRIPT_BYTES);
+            }
+        }
+        if (encoding.contains("deflate")) {
+            try (InflaterInputStream deflate = new InflaterInputStream(in)) {
+                return readBytes(deflate, MAX_SCRIPT_BYTES);
+            }
+        }
+        return readBytes(in, MAX_SCRIPT_BYTES);
+    }
+
+    /// @return the bytes of a stream, or `null` once it holds more than `cap`
+    private static byte @Nullable [] readBytes(InputStream in, long cap) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[BUFFER_SIZE];
+        long total = 0;
+        int read;
+        while ((read = in.read(chunk)) >= 0) {
+            total += read;
+            if (total > cap) {
+                return null;
+            }
+            buffer.write(chunk, 0, read);
+        }
+        return buffer.toByteArray();
+    }
+
+    /// The shim a path-routed client's page gets: **the client reads the mount
+    /// away, and everything it writes back gets the mount added**.
+    /// ([org.jackhuang.hmcl.web.brand.Brand#needsRouterShim] — OpenCode.)
+    ///
+    /// Served through the mount, such a client matches no route and renders a
+    /// bare shell (measured: the same page at any subpath of its own port does
+    /// the same, so this is the client, not the proxy). Its router takes the route
+    /// straight from the browser (`location.pathname`), and that read is what
+    /// [patchRouterBundle] makes mount-blind from the other side — the two halves
+    /// are one mechanism and have to agree:
+    ///
+    /// - `window.__hdslUnmount` is what the patched bundle calls; it lives here
+    ///   rather than inside the bundle so that one bundle can serve every mount;
+    /// - `history.pushState` / `replaceState` get the mount, and are not prefixed
+    ///   twice when the client hands back an address it read itself.
+    ///
+    /// What that buys over [ROUTER_ROOT_JS]: the address bar keeps `/i/<id>/…`,
+    /// a refresh re-enters the app where it was (the client's own server answers
+    /// an unknown path with its index page), and the address stays shareable.
     private static final String ROUTER_JS = """
             (()=>{
             const mount="__MOUNT__";
+            window.__hdslUnmount=(path)=>path.indexOf(mount)===0?path.slice(mount.length-1):path;
+            const fix=(value)=>{if(typeof value!=="string"||!value)return value;
+            if(value.indexOf(mount)===0)return value;
+            if(value.charAt(0)==="#"||value.charAt(0)==="?")return value;
+            try{const url=new URL(value,location.href);
+            if(url.host!==location.host)return value;
+            if(url.pathname.indexOf(mount)===0)return value;
+            return mount+url.pathname.replace(/^\\/+/,"")+url.search+url.hash
+            }catch(e){return value}};
+            const push=history.pushState,repl=history.replaceState;
+            const wrap=(fn)=>function(state,title,url){try{return fn.call(history,state,title,fix(url))}catch(e){}};
+            history.pushState=wrap(push);
+            history.replaceState=wrap(repl);
+            })()
+            """;
+
+    /// The shim for a path-routed client whose bundle could not be patched — the
+    /// fallback ([RouterShim#ROOT]). The script runs before the app bundle and
+    /// makes the browser's address look like the origin root the client expects:
+    ///
+    /// - the initial `/i/<id>/…` address is replaced with `/` (hash kept), so the
+    ///   first route match is the root view;
+    /// - `history.pushState` / `replaceState` are swallowed down to `/` as well,
+    ///   so later addresses the app writes never re-expose the mount in
+    ///   `location.pathname` — the router keeps matching what it was given.
+    ///
+    /// Everything the app *requests* still goes through the mount, because the
+    /// runtime shim ([SHIM_JS]) prefixes same-origin absolute URLs. The trade-off
+    /// is the one [ROUTER_JS] exists to remove: the tab's address bar shows the
+    /// panel root, and a manual refresh lands on the panel instead of the app.
+    /// `__hdslUnmount` is defined here too — a bundle patched by one panel build
+    /// and not by the next must not be the difference between an app and a
+    /// `ReferenceError`.
+    private static final String ROUTER_ROOT_JS = """
+            (()=>{
+            const mount="__MOUNT__";
+            window.__hdslUnmount=(path)=>path.indexOf(mount)===0?path.slice(mount.length-1):path;
             const root=()=>"/"+location.hash;
             try{if(location.pathname.indexOf(mount)===0)history.replaceState(history.state,"",root())}catch(e){}
             const push=history.pushState,repl=history.replaceState;
@@ -465,8 +755,10 @@ public final class InstanceProxyServlet extends HttpServlet {
     ///   reference gets the mount as a prefix, and the runtime shim is injected
     ///   right after `<head>` so the URLs the app builds at runtime
     ///   (`fetch("/api/…")`, WebSocket, EventSource) stay inside the mount too.
-    ///   Their manifests are *not* stripped unlike dsh's: they are fetched with
-    ///   the panel's own session, which passes the gate.
+    ///   A page that routes by path gets the router shim named by `shim` after
+    ///   it, and its own bundle patched on the way past
+    ///   ([patchRouterBundle]) — one half without the other only gets the app
+    ///   as far as a shell.
     ///
     /// A page carrying neither shape is passed through untouched.
     ///
@@ -474,12 +766,12 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// @param mount the mount, with its trailing slash
     /// @return the page as the browser has to see it
     static String rewritePage(String html, String mount) {
-        return rewritePage(html, mount, false);
+        return rewritePage(html, mount, RouterShim.NONE);
     }
 
-    /// The same, with the option of the router shim for clients that route by
-    /// path — see [ROUTER_JS].
-    static String rewritePage(String html, String mount, boolean routerShim) {
+    /// The same, for a client that routes by `location.pathname`: `shim` says
+    /// which half of [ROUTER_JS] its page must name.
+    static String rewritePage(String html, String mount, RouterShim shim) {
         if (html.contains("<base href=\"/\">")) {
             return html.replace("<base href=\"/\">",
                             "<base href=\"" + mount + "\">"
@@ -504,7 +796,7 @@ public final class InstanceProxyServlet extends HttpServlet {
             // session gate — nothing else — and an app served under someone
             // else's path could not be installed from it anyway. (Measured
             // 2026-10 on OpenCode: two 401s per page load.)
-            return injectShim(prefixed, mount, routerShim)
+            return injectShim(prefixed, mount, shim)
                     .replaceAll("<link rel=\"manifest\"[^>]*>", "");
         }
         return html;
@@ -522,10 +814,14 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// same-origin resource rather than an inline script: OpenCode's CSP
     /// (`script-src 'self'`) discards inline scripts, and a shim that never
     /// runs is worse than none — the failure is silent.
-    private static String injectShim(String html, String mount, boolean routerShim) {
+    ///
+    /// The router shim follows it, naming the contract it is wanted under: the
+    /// same resource serves both (see [ROUTER_JS] and [ROUTER_ROOT_JS]).
+    private static String injectShim(String html, String mount, RouterShim shim) {
         String tag = "<script src=\"" + mount + SHIM_RESOURCE + "\"></script>";
-        if (routerShim) {
-            tag = tag + "<script src=\"" + mount + ROUTER_RESOURCE + "\"></script>";
+        if (shim != RouterShim.NONE) {
+            tag = tag + "<script src=\"" + mount + ROUTER_RESOURCE
+                    + (shim == RouterShim.ROOT ? "?mode=root" : "") + "\"></script>";
         }
         int head = indexOfIgnoreCase(html, "<head>");
         if (head >= 0) {

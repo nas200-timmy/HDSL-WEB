@@ -44,8 +44,8 @@ public enum Brand {
     /// Its client **routes by `location.pathname`** (verified in its bundle
     /// and by serving it under any subpath: the shell renders, the content
     /// stays blank). Mounted like everything else, such a client needs the
-    /// [router shim](InstanceProxyServlet) that hands the origin root back to
-    /// it — see [needsRouterShim].
+    /// router shim that reads the mount away from the paths it routes by and
+    /// puts it back on the addresses it writes — see [needsRouterShim].
     OPENCODE("opencode", "opencode-ai", "opencode", true);
 
     private final String id;
