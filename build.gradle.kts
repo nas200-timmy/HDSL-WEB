@@ -65,6 +65,11 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    // 全套用例跑在一个 fork 的 JVM 里，而 Gradle 的默认上限是 512m——本机峰值在
+    // 256–384m 之间（256m 会 OOM），正好卡在默认值边上，于是 CI 上（核数不同、GC 行为
+    // 不同）翻过去成了 `java.lang.OutOfMemoryError: Java heap space`。给一个有富余的界：
+    // 跑得动就还是几分钟跑完，跑不动时也仍然是「堆不够」而不是随机红。
+    maxHeapSize = "2g"
     testLogging {
         events("passed", "failed", "skipped")
         // Failure output carries the full exception, assertion message included: without it a
