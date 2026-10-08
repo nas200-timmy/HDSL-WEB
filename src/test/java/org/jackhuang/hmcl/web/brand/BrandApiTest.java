@@ -45,6 +45,11 @@ class BrandApiTest {
     @TempDir
     Path dataDir;
 
+    @org.junit.jupiter.api.BeforeEach
+    void resetPorts() {
+        BrandPortRegistry.clear();
+    }
+
     @Test
     void unknownBrandAnswers404() throws Exception {
         try (TestSupport.RunningServer running = start()) {
@@ -79,11 +84,14 @@ class BrandApiTest {
     @Test
     void opencodeLifecycleOverHttp() throws Exception {
         // The banner carries ANSI colour even when piped — the readiness match
-        // must survive it.
+        // must survive it. OpenCode routes by URL path, so unlike Kimi it is
+        // published on an origin of its own: the fake serves real HTTP, and
+        // the test drives the instance through its public port.
         lifecycle(Brand.OPENCODE, "1.18.35",
                 "#!/bin/sh\nexec node -e \"console.log('\\u001b[94m\\u001b[1m  Web interface:     "
                         + "\\u001b[0m http://127.0.0.1:45655/');"
-                        + " require('net').createServer().listen(45655); setInterval(()=>{},1e6)\"\n",
+                        + " require('http').createServer((q,s)=>s.end('ok')).listen(45655);"
+                        + " setInterval(()=>{},1e6)\"\n",
                 "45655");
     }
 
@@ -130,11 +138,28 @@ class BrandApiTest {
             assertEquals(409, request(client, "DELETE", running,
                     "/api/brands/" + brand.id() + "/instances/" + id, null).statusCode());
 
-            // Open points at the shared mount.
+            // Open: mountable brands answer with the shared mount; path-routed
+            // brands (OpenCode) with an absolute URL on their own origin.
             HttpResponse<String> open = get(running, "/api/brands/" + brand.id() + "/instances/" + id + "/open");
             assertEquals(200, open.statusCode(), open.body());
-            assertEquals("/i/" + id + "/",
-                    JsonParser.parseString(open.body()).getAsJsonObject().get("url").getAsString());
+            String openUrl = JsonParser.parseString(open.body()).getAsJsonObject().get("url").getAsString();
+            if (brand.needsOwnOrigin()) {
+                assertTrue(openUrl.startsWith("http://127.0.0.1:"), openUrl);
+                int publicPort = Integer.parseInt(openUrl.substring(openUrl.lastIndexOf(':') + 1, openUrl.length() - 1));
+                // The origin actually serves the instance through the edge filter.
+                HttpResponse<String> viaOrigin = client.send(HttpRequest.newBuilder(
+                                URI.create(openUrl + "global/health")).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertEquals(200, viaOrigin.statusCode(), viaOrigin.body());
+                assertEquals("ok", viaOrigin.body());
+                // The port is in the registry and persisted in the manifest.
+                assertEquals(id, BrandPortRegistry.ownerOf(publicPort));
+                HttpResponse<String> listed2 = get(running, "/api/brands/" + brand.id() + "/instances/" + id);
+                assertEquals(publicPort, JsonParser.parseString(listed2.body()).getAsJsonObject()
+                        .getAsJsonObject("instance").get("publicPort").getAsInt());
+            } else {
+                assertEquals("/i/" + id + "/", openUrl);
+            }
 
             // The instance is listed with its brand tag.
             HttpResponse<String> list = get(running, "/api/brands/" + brand.id() + "/instances");

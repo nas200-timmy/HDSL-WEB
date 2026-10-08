@@ -31,8 +31,11 @@ services:
     # 改端口：在宿主机或 .env 里设 HDSL_PORT，下面三处（ports/environment/healthcheck）会一起跟着变。
     ports:
       - "${HDSL_PORT:-3080}:${HDSL_PORT:-3080}"
-      # 可选：同时启用 https.redirect_http 时，把 80 端口也发布出去做 HTTP→HTTPS 跳转
+      # 可选：同时启用 80 做 HTTP→HTTPS 跳转
       # - "80:80"
+      # 品牌实例「独立 origin」端口段（OpenCode 这类按路径路由的网页端不能用 /i/<id>/ 子路径挂载）。
+      # 最多 10 个这类实例；不发布则对应功能在容器外不可达（面板内部绑定照常，日志会有告警）。
+      - "3091-3100:3091-3100"
 
     environment:
       # 数据目录（镜像内已固定为 /data，此处显式写出便于阅读）

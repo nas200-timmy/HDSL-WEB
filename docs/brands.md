@@ -28,8 +28,25 @@ pnpm store 跨实例去重）；从回环端口拉起 `kimi web` / `opencode web
 | 端口 | `--port 0` 可用（内核给临时端口，就绪行播报） | **`--port 0` 不生效**（静默回落默认 4096）→ 面板预分配 |
 | 就绪行 | `Local: http://127.0.0.1:<port>/` | `Web interface: http://127.0.0.1:<port>/`（**带 ANSI 颜色码**，匹配前先剥除） |
 | 反代鉴权 | `--dangerous-bypass-auth`（官方文档写明用于 "behind your own authenticating proxy"，面板会话门就是这个代理）+ `--allowed-host <面板域名>`（防 DNS rebinding，对应 dsh 的 `--trusted-host`） | 不设 `OPENCODE_SERVER_PASSWORD`（启动日志会打印 unsecured 告警——面板门就是门） |
+| 浏览器入口 | `/i/<id>/`（Kimi 的客户端认子路径，与 dsh 同款三层改写） | **独立 origin 端口**（见下） |
 | 版本 | npm 上 82 个干净 semver 版本 | 944 个（registry 里 1.2 万个 snapshot/ci tag，面板只列 `x.y.z`） |
 | 离线安装 | ❌ postinstall 要从厂商 CDN 拉原生二进制 | ✅ 平台二进制走 registry optionalDependencies |
+
+## 为什么 OpenCode 走独立端口而不是 `/i/<id>/`
+
+OpenCode 的网页客户端**按 URL 路径路由**（bundle 里直接读 `window.location.pathname` 匹配
+路由表）。把它放在任何子路径下——直连也好、反代也好——界面都只剩左上角的壳，主内容区空白
+（2026-10 实测：不经反代、直接访问 `http://127.0.0.1:<port>/i/whatever/` 复现）。这类客户端
+没法用挂载点伺候，所以面板给它一个**自己的 origin**：
+
+- compose 把 `3091-3100` 端口段发布出去（最多 10 个这类实例；不发布则面板内部照绑、容器外不可达）；
+- 启动时从该段分配一个端口、写进实例清单（origin 随实例固定，重启不变），面板在同一端口上加一个
+  连接器：同一张证书、同一个会话门（会话 cookie 按域名生效、跨端口携带）；
+- 该端口上的请求**原样转发**到实例回环端口——路径不动、页面不改写、不注 shim，应用就像站在
+  自己的根上，子路径挂载要解决的一整类问题（根绝对资源、运行期 URL、CSP、路由）都不存在；
+- 「打开」返回绝对地址 `https://<面板域名>:<端口>/`。
+
+Kimi Code 的客户端认子路径（e2e 无头浏览器实测渲染完整），继续走 `/i/<id>/`。
 
 ## 已知限制
 

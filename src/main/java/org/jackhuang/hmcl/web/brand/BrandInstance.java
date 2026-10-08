@@ -35,17 +35,22 @@ public record BrandInstance(
         @SerializedName("name") String name,
         @SerializedName("version") String version,
         @SerializedName("lastPort") int lastPort,
+        @SerializedName("publicPort") int publicPort,
         @SerializedName("createdAt") long createdAt) {
 
     public BrandInstance withName(String newName) {
-        return new BrandInstance(id, brand, newName, version, lastPort, createdAt);
+        return new BrandInstance(id, brand, newName, version, lastPort, publicPort, createdAt);
     }
 
     public BrandInstance withVersion(String newVersion) {
-        return new BrandInstance(id, brand, name, newVersion, lastPort, createdAt);
+        return new BrandInstance(id, brand, name, newVersion, lastPort, publicPort, createdAt);
     }
 
     public BrandInstance withLastPort(int newLastPort) {
-        return new BrandInstance(id, brand, name, version, newLastPort, createdAt);
+        return new BrandInstance(id, brand, name, version, newLastPort, publicPort, createdAt);
+    }
+
+    public BrandInstance withPublicPort(int newPublicPort) {
+        return new BrandInstance(id, brand, name, version, lastPort, newPublicPort, createdAt);
     }
 }

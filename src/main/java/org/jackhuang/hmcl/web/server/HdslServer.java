@@ -65,6 +65,8 @@ import org.jackhuang.hmcl.web.tls.CertificateManager;
 import org.jackhuang.hmcl.web.ws.WsGateway;
 import org.jackhuang.hmcl.web.brand.BrandApiServlet;
 import org.jackhuang.hmcl.web.brand.BrandCatalog;
+import org.jackhuang.hmcl.web.brand.BrandEdgeFilter;
+import org.jackhuang.hmcl.web.brand.BrandPortRegistry;
 import org.jackhuang.hmcl.web.zcode.ZcodeApiServlet;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -100,6 +102,10 @@ public final class HdslServer {
 
     private final Server server;
     private final HttpConfiguration baseHttpConfig;
+    /// The interface connectors bind; brand-edge connectors use it too.
+    private final String bindHost;
+    /// `<dataDir>/brands` — the manifests that replay persisted brand ports.
+    private final java.nio.file.Path brandsRoot;
     /// The connector serving the panel — replaced wholesale when the
     /// certificate upload switches the port between plain HTTP and TLS at
     /// runtime. volatile: request threads read it while a switch is in flight.
@@ -114,12 +120,15 @@ public final class HdslServer {
     private final AtomicLong startedAtMillis;
     private final AtomicBoolean hookInstalled = new AtomicBoolean();
 
-    private HdslServer(Server server, HttpConfiguration baseHttpConfig, ServerConnector mainConnector,
+    private HdslServer(Server server, HttpConfiguration baseHttpConfig, String bindHost,
+                       java.nio.file.Path brandsRoot, ServerConnector mainConnector,
                        @Nullable ServerConnector redirectConnector,
                        @Nullable SslContextFactory.Server sslContextFactory, WebSocketClient proxyWebSocketClient,
                        AcpSessionManager acpSessions, Logger logger, AtomicLong startedAtMillis) {
         this.server = server;
         this.baseHttpConfig = baseHttpConfig;
+        this.bindHost = bindHost;
+        this.brandsRoot = brandsRoot;
         this.mainConnector = mainConnector;
         this.redirectConnector = redirectConnector;
         this.sslContextFactory = sslContextFactory;
@@ -223,6 +232,14 @@ public final class HdslServer {
         context.addFilter(authFilter, "/api/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(authFilter, "/i/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(authFilter, "/ws/*", EnumSet.of(DispatcherType.REQUEST));
+        // Brand instances whose client routes by path (OpenCode) are published
+        // on their own port (BrandPortRegistry); this filter mapped at /* sees
+        // those requests and proxies them verbatim, declining everything else
+        // so the panel chain is untouched. The port is public-facing, so the
+        // filter carries its own session gate (the AuthFilter above does not
+        // cover /*).
+        context.addFilter(new BrandEdgeFilter(authService, config.auth.disabled),
+                "/*", EnumSet.of(DispatcherType.REQUEST));
         context.addServlet(new ServletHolder(new ApiServlet(
                 authService, authFilter, config.auth.disabled, Metadata.VERSION, startedAtMillis::get)), "/api/*");
         ServletHolder instancesHolder = new ServletHolder(new InstancesApiServlet(runtime, taskService, config));
@@ -240,7 +257,7 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
         context.addServlet(new ServletHolder(new ZcodeApiServlet(config)), "/api/zcode/*");
-        context.addServlet(new ServletHolder(new BrandApiServlet(config, taskService)), "/api/brands/*");
+        context.addServlet(new ServletHolder(new BrandApiServlet(config, taskService, self::get)), "/api/brands/*");
         // Registered before the `/api/settings/*` holder below and matched by its longer prefix:
         // the download source is a launcher setting, and TLS is the other thing this path serves.
         context.addServlet(new ServletHolder(new RegistrySettingsApiServlet()), "/api/settings/registry/*");
@@ -292,10 +309,52 @@ public final class HdslServer {
         }
         server.setHandler(handler);
 
-        HdslServer built = new HdslServer(server, httpConfig, mainConnector, redirectConnector, ssl,
+        HdslServer built = new HdslServer(server, httpConfig, config.bindHost,
+                config.dataDir.resolve("brands"), mainConnector,
+                redirectConnector, ssl,
                 proxyWebSocketClient, acpSessions, logger, startedAtMillis);
         self.set(built);
         return built;
+    }
+
+    /// Binds one more edge connector for a published brand port, on demand
+    /// when an own-origin instance launches and wholesale at startup for every
+    /// port persisted in instance manifests. The connector serves the same
+    /// handler tree as the main port — same TLS identity, same session gate
+    /// ([BrandEdgeFilter] keys on the local port) — so a brand instance's
+    /// origin answers with the panel's certificate and rules.
+    ///
+    /// Safe to call repeatedly: a port that already has a connector is left
+    /// alone. A bind failure (the compose file not publishing the range, say)
+    /// is logged and swallowed — the instance still runs, only the extra
+    /// origin is missing.
+    ///
+    /// @param port the published port to bind
+    public synchronized void ensureBrandPort(int port) {
+        for (org.eclipse.jetty.server.Connector existing : server.getConnectors()) {
+            if (existing instanceof ServerConnector connector && connector.getPort() == port) {
+                return;
+            }
+        }
+        ServerConnector connector;
+        if (sslContextFactory != null) {
+            HttpConfiguration httpsConfig = new HttpConfiguration(baseHttpConfig);
+            httpsConfig.setSecureScheme("https");
+            httpsConfig.setSecurePort(port);
+            httpsConfig.addCustomizer(secureRequestCustomizer());
+            connector = new ServerConnector(server, sslContextFactory, new HttpConnectionFactory(httpsConfig));
+        } else {
+            connector = new ServerConnector(server, new HttpConnectionFactory(baseHttpConfig));
+        }
+        connector.setHost(bindHost);
+        connector.setPort(port);
+        try {
+            server.addConnector(connector);
+            connector.start();
+            logger.info("Brand instance edge listening on port " + port);
+        } catch (Exception e) {
+            logger.warning("Could not bind the brand edge port " + port, e);
+        }
     }
 
     /// The 401 gate in front of the `/ws` WebSocket endpoint: answers
@@ -386,6 +445,11 @@ public final class HdslServer {
         Thread warmBrands = new Thread(BrandCatalog::warm, "brand-catalog-warm");
         warmBrands.setDaemon(true);
         warmBrands.start();
+        // Brand instances with a path-sensitive web client keep a published
+        // port of their own; replay the persisted ownership and rebind every
+        // such port so a restart finds the same origins.
+        BrandPortRegistry.replay(brandsRoot);
+        BrandPortRegistry.ports().forEach(this::ensureBrandPort);
         if (hookInstalled.compareAndSet(false, true)) {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 try {

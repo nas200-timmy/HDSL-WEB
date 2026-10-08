@@ -35,20 +35,28 @@ import org.jetbrains.annotations.Nullable;
 public enum Brand {
     /// Kimi Code (Moonshot AI): `kimi web` serves its own web UI on a
     /// loopback port; `--port 0` yields an ephemeral port announced on stdout.
-    KIMI("kimi", "@moonshot-ai/kimi-code", "kimi"),
+    /// Its client is mount-aware, so instances are served under `/i/<id>/`
+    /// like dsh (verified end to end with a headless browser).
+    KIMI("kimi", "@moonshot-ai/kimi-code", "kimi", false),
 
     /// OpenCode: `opencode web` serves its own web UI; `--port 0` is NOT
     /// honoured (it falls back to 4096), so the panel pre-allocates a port.
-    OPENCODE("opencode", "opencode-ai", "opencode");
+    /// Its client **routes by `location.pathname`** (verified in its bundle
+    /// and by serving it under any subpath: the shell renders, the content
+    /// stays blank) — no subpath mount can ever work, so instances get an
+    /// origin of their own: a dedicated published port where the app owns `/`.
+    OPENCODE("opencode", "opencode-ai", "opencode", true);
 
     private final String id;
     private final String npmPackage;
     private final String binName;
+    private final boolean needsOwnOrigin;
 
-    Brand(String id, String npmPackage, String binName) {
+    Brand(String id, String npmPackage, String binName, boolean needsOwnOrigin) {
         this.id = id;
         this.npmPackage = npmPackage;
         this.binName = binName;
+        this.needsOwnOrigin = needsOwnOrigin;
     }
 
     /// The stable category id used in API paths and directory names.
@@ -64,6 +72,14 @@ public enum Brand {
     /// The executable inside the installed prefix's `node_modules/.bin/`.
     public String binName() {
         return binName;
+    }
+
+    /// Whether the tool's web client routes by URL path, making any subpath
+    /// mount (like `/i/<id>/`) render a broken shell. Such brands are served
+    /// on an origin of their own — a dedicated published port where the app
+    /// owns `/` — instead of through the mount.
+    public boolean needsOwnOrigin() {
+        return needsOwnOrigin;
     }
 
     /// Resolves a category id back to its brand.

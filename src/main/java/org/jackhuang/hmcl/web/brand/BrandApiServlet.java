@@ -27,6 +27,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.http.Json;
+import org.jackhuang.hmcl.web.server.HdslServer;
 import org.jackhuang.hmcl.web.task.TaskService;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -37,6 +38,7 @@ import java.nio.file.Path;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /// The REST surface of the third-party brand categories, mapped at
 /// `/api/brands/<brand>/*` (behind the same session gate as every other
@@ -71,14 +73,17 @@ public final class BrandApiServlet extends HttpServlet {
 
     private final ServerConfig config;
     private final TaskService tasks;
+    private final Supplier<@Nullable HdslServer> serverRef;
     private final Map<Brand, PathRef> brands = new EnumMap<>(Brand.class);
 
     private record PathRef(Path root, BrandInstanceManager manager) {
     }
 
-    public BrandApiServlet(ServerConfig config, TaskService tasks) {
+    public BrandApiServlet(ServerConfig config, TaskService tasks,
+                           Supplier<@Nullable HdslServer> serverRef) {
         this.config = config;
         this.tasks = tasks;
+        this.serverRef = serverRef;
         Path base = config.dataDir.resolve("brands");
         for (Brand brand : Brand.values()) {
             Path root = base.resolve(brand.id());
@@ -134,7 +139,7 @@ public final class BrandApiServlet extends HttpServlet {
         }
         if (segments.length == 1 && "instances".equals(segments[0])) {
             switch (request.getMethod()) {
-                case "GET" -> listInstances(ref, response);
+                case "GET" -> listInstances(brand, ref, request, response);
                 case "POST" -> createInstance(brand, ref, request, response);
                 default -> Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
             }
@@ -144,7 +149,7 @@ public final class BrandApiServlet extends HttpServlet {
             String id = segments[1];
             if (segments.length == 2) {
                 switch (request.getMethod()) {
-                    case "GET" -> getInstance(ref, response, id);
+                    case "GET" -> getInstance(brand, ref, request, response, id);
                     case "PATCH" -> patchInstance(brand, ref, request, response, id);
                     case "DELETE" -> deleteInstance(ref, response, id);
                     default -> Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
@@ -160,7 +165,7 @@ public final class BrandApiServlet extends HttpServlet {
                 return;
             }
             if (segments.length == 3 && "open".equals(segments[2]) && "GET".equals(request.getMethod())) {
-                open(ref, response, id);
+                open(brand, ref, request, response, id);
                 return;
             }
             if (segments.length == 3 && "logs".equals(segments[2]) && "GET".equals(request.getMethod())) {
@@ -289,10 +294,11 @@ public final class BrandApiServlet extends HttpServlet {
 
     // --------------------------------------------------------------- instances --
 
-    private void listInstances(PathRef ref, HttpServletResponse response) throws IOException {
+    private void listInstances(Brand brand, PathRef ref, HttpServletRequest request,
+                               HttpServletResponse response) throws IOException {
         JsonArray instances = new JsonArray();
         for (BrandInstance instance : ref.manager().list()) {
-            instances.add(instanceJson(instance));
+            instances.add(instanceJson(brand, instance, request));
         }
         JsonObject body = new JsonObject();
         body.add("instances", instances);
@@ -322,16 +328,17 @@ public final class BrandApiServlet extends HttpServlet {
         }
         BrandInstance created = ref.manager().create(name, version);
         Json.writePreservingNulls(response, HttpServletResponse.SC_CREATED,
-                Map.of("instance", instanceJson(created)));
+                Map.of("instance", instanceJson(brand, created, request)));
     }
 
-    private void getInstance(PathRef ref, HttpServletResponse response, String id) throws IOException {
+    private void getInstance(Brand brand, PathRef ref, HttpServletRequest request, HttpServletResponse response,
+                             String id) throws IOException {
         BrandInstance instance = ref.manager().find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
             return;
         }
-        Json.writePreservingNulls(response, Map.of("instance", instanceJson(instance)));
+        Json.writePreservingNulls(response, Map.of("instance", instanceJson(brand, instance, request)));
     }
 
     private void patchInstance(Brand brand, PathRef ref, HttpServletRequest request, HttpServletResponse response,
@@ -370,7 +377,7 @@ public final class BrandApiServlet extends HttpServlet {
             }
         }
         ref.manager().update(patched);
-        Json.writePreservingNulls(response, Map.of("instance", instanceJson(patched)));
+        Json.writePreservingNulls(response, Map.of("instance", instanceJson(brand, patched, request)));
     }
 
     private void deleteInstance(PathRef ref, HttpServletResponse response, String id)
@@ -385,6 +392,9 @@ public final class BrandApiServlet extends HttpServlet {
             return;
         }
         ref.manager().delete(id);
+        if (instance.publicPort() > 0) {
+            BrandPortRegistry.release(instance.publicPort());
+        }
         response.setStatus(204);
     }
 
@@ -402,6 +412,31 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                     brand.npmPackage() + " " + instance.version() + " is not installed");
             return;
+        }
+        // Path-sensitive clients (OpenCode) cannot live under /i/<id>/ — the
+        // brand gets an origin of its own: a published port from the registry,
+        // persisted in the manifest so the origin survives restarts.
+        if (brand.needsOwnOrigin() && instance.publicPort() <= 0) {
+            int port;
+            try {
+                port = BrandPortRegistry.allocate();
+            } catch (BrandException e) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+                return;
+            }
+            BrandPortRegistry.register(port, id);
+            try {
+                ref.manager().update(instance.withPublicPort(port));
+                instance = instance.withPublicPort(port);
+            } catch (BrandException e) {
+                BrandPortRegistry.release(port);
+                Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+                return;
+            }
+            HdslServer server = serverRef.get();
+            if (server != null) {
+                server.ensureBrandPort(port);
+            }
         }
         BrandRuntime.Status status = BrandRuntime.launch(
                 brand, ref.manager(), instance, hostOf(request), packageDir);
@@ -431,7 +466,8 @@ public final class BrandApiServlet extends HttpServlet {
 
     // ------------------------------------------------------------------ open --
 
-    private void open(PathRef ref, HttpServletResponse response, String id) throws IOException {
+    private void open(Brand brand, PathRef ref, HttpServletRequest request, HttpServletResponse response, String id)
+            throws IOException {
         BrandInstance instance = ref.manager().find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
@@ -442,7 +478,10 @@ public final class BrandApiServlet extends HttpServlet {
             return;
         }
         JsonObject body = new JsonObject();
-        body.addProperty("url", "/i/" + id + "/");
+        // An own origin is absolute: the instance owns that origin's root and
+        // the panel's session cookie (host-scoped, ports ignored) rides along;
+        // the mount keeps everything on one origin, certificate and gate.
+        body.addProperty("url", openUrl(brand, instance, request));
         Json.write(response, body);
     }
 
@@ -464,7 +503,7 @@ public final class BrandApiServlet extends HttpServlet {
 
     // --------------------------------------------------------------- response --
 
-    private JsonObject instanceJson(BrandInstance instance) {
+    private JsonObject instanceJson(Brand brand, BrandInstance instance, HttpServletRequest request) {
         BrandRuntime.Status status = BrandRuntime.status(instance.id());
         JsonObject body = new JsonObject();
         body.addProperty("id", instance.id());
@@ -472,15 +511,27 @@ public final class BrandApiServlet extends HttpServlet {
         body.addProperty("name", instance.name());
         body.addProperty("version", instance.version());
         body.addProperty("lastPort", instance.lastPort());
+        body.addProperty("publicPort", instance.publicPort());
         body.addProperty("createdAt", instance.createdAt());
         body.addProperty("state", status.state().name().toLowerCase(java.util.Locale.ROOT));
         if (status.error() != null) {
             body.addProperty("error", status.error());
         }
         if (status.state() == BrandRuntime.State.RUNNING) {
-            body.addProperty("url", "/i/" + instance.id() + "/");
+            body.addProperty("url", openUrl(brand, instance, request));
         }
         return body;
+    }
+
+    /// Where the browser reaches a running instance: the shared mount for
+    /// mount-aware clients, the absolute origin URL for path-routed ones.
+    private static String openUrl(Brand brand, BrandInstance instance, HttpServletRequest request) {
+        if (brand.needsOwnOrigin()) {
+            String scheme = request.isSecure() ? "https" : "http";
+            String host = hostOf(request);
+            return scheme + "://" + host + ":" + instance.publicPort() + "/";
+        }
+        return "/i/" + instance.id() + "/";
     }
 
     private static void writeStatus(HttpServletResponse response, BrandRuntime.Status status) throws IOException {
