@@ -52,8 +52,11 @@ class GenericPageRewriteTest {
     }
 
     @Test
-    void opencodeIndexGetsTheMountAndTheShim() {
-        String rewritten = rewrite(resource("brand-pages/opencode-index.html"));
+    void opencodeIndexGetsTheMountAndBothShims() {
+        // Path-routed clients get the router shim; the proxy is told so by the
+        // brand flag at serve time (see InstanceProxyServlet#needsRouterShim).
+        String rewritten = InstanceProxyServlet.rewritePage(
+                resource("brand-pages/opencode-index.html"), MOUNT, true);
 
         assertTrue(rewritten.contains("src=\"" + MOUNT + "assets/index-CjbuCoME.js\""), rewritten);
         assertTrue(rewritten.contains("href=\"" + MOUNT + "assets/index-DLiUNAg_.css\""), rewritten);
@@ -63,6 +66,7 @@ class GenericPageRewriteTest {
         // and nothing else (measured: two 401s per OpenCode page load).
         assertFalse(rewritten.contains("site.webmanifest"), rewritten);
         assertShim(rewritten);
+        assertRouterShim(rewritten);
         assertNoDoublePrefix(rewritten);
     }
 
@@ -98,6 +102,18 @@ class GenericPageRewriteTest {
     }
 
     @Test
+    void theRouterShimIsReferencedOnlyWhenAsked(@TempDir Path dataDir) {
+        String page = "<html><head><script src=\"/assets/a.js\"></script></head></html>";
+
+        assertFalse(InstanceProxyServlet.rewritePage(page, MOUNT, true)
+                .contains(InstanceProxyServlet.ROUTER_RESOURCE + "\"></script>false"));
+        assertTrue(InstanceProxyServlet.rewritePage(page, MOUNT, true)
+                .contains(InstanceProxyServlet.ROUTER_RESOURCE));
+        assertFalse(InstanceProxyServlet.rewritePage(page, MOUNT, false)
+                .contains(InstanceProxyServlet.ROUTER_RESOURCE));
+    }
+
+    @Test
     void theShimResourceIsServedByThePanelItself(@TempDir Path dataDir) throws Exception {
         // No instance named "whatever" exists — the endpoint must still answer,
         // because the page referencing it is only ever served alongside a
@@ -117,11 +133,27 @@ class GenericPageRewriteTest {
             assertTrue(response.headers().firstValue("Content-Type").orElse("")
                     .contains("javascript"), response.headers().toString());
             assertTrue(response.body().contains("const mount=\"/i/whatever/\""), response.body());
+
+            java.net.http.HttpResponse<String> router = java.net.http.HttpClient.newHttpClient().send(
+                    java.net.http.HttpRequest.newBuilder(java.net.URI.create(
+                                    running.baseUrl() + "/i/whatever/" + InstanceProxyServlet.ROUTER_RESOURCE))
+                            .GET().build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, router.statusCode(), router.body());
+            assertTrue(router.body().contains("history.pushState=swallow(push)"), router.body());
         }
     }
 
     private static String rewrite(String html) {
         return InstanceProxyServlet.rewritePage(html, MOUNT);
+    }
+
+    /// The router shim is referenced for path-routed clients only — see
+    /// [InstanceProxyServlet#rewritePage] and the OpenCode brand flag.
+    private static void assertRouterShim(String rewritten) {
+        assertTrue(rewritten.contains(
+                "<script src=\"" + MOUNT + InstanceProxyServlet.ROUTER_RESOURCE + "\"></script>"),
+                "router shim referenced: " + rewritten);
     }
 
     private static void assertShim(String rewritten) {

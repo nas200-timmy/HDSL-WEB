@@ -27,7 +27,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.http.Json;
-import org.jackhuang.hmcl.web.server.HdslServer;
 import org.jackhuang.hmcl.web.task.TaskService;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -38,7 +37,6 @@ import java.nio.file.Path;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Supplier;
 
 /// The REST surface of the third-party brand categories, mapped at
 /// `/api/brands/<brand>/*` (behind the same session gate as every other
@@ -73,17 +71,14 @@ public final class BrandApiServlet extends HttpServlet {
 
     private final ServerConfig config;
     private final TaskService tasks;
-    private final Supplier<@Nullable HdslServer> serverRef;
     private final Map<Brand, PathRef> brands = new EnumMap<>(Brand.class);
 
     private record PathRef(Path root, BrandInstanceManager manager) {
     }
 
-    public BrandApiServlet(ServerConfig config, TaskService tasks,
-                           Supplier<@Nullable HdslServer> serverRef) {
+    public BrandApiServlet(ServerConfig config, TaskService tasks) {
         this.config = config;
         this.tasks = tasks;
-        this.serverRef = serverRef;
         Path base = config.dataDir.resolve("brands");
         for (Brand brand : Brand.values()) {
             Path root = base.resolve(brand.id());
@@ -392,9 +387,6 @@ public final class BrandApiServlet extends HttpServlet {
             return;
         }
         ref.manager().delete(id);
-        if (instance.publicPort() > 0) {
-            BrandPortRegistry.release(instance.publicPort());
-        }
         response.setStatus(204);
     }
 
@@ -412,31 +404,6 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                     brand.npmPackage() + " " + instance.version() + " is not installed");
             return;
-        }
-        // Path-sensitive clients (OpenCode) cannot live under /i/<id>/ — the
-        // brand gets an origin of its own: a published port from the registry,
-        // persisted in the manifest so the origin survives restarts.
-        if (brand.needsOwnOrigin() && instance.publicPort() <= 0) {
-            int port;
-            try {
-                port = BrandPortRegistry.allocate();
-            } catch (BrandException e) {
-                Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
-                return;
-            }
-            BrandPortRegistry.register(port, id);
-            try {
-                ref.manager().update(instance.withPublicPort(port));
-                instance = instance.withPublicPort(port);
-            } catch (BrandException e) {
-                BrandPortRegistry.release(port);
-                Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
-                return;
-            }
-            HdslServer server = serverRef.get();
-            if (server != null) {
-                server.ensureBrandPort(port);
-            }
         }
         BrandRuntime.Status status = BrandRuntime.launch(
                 brand, ref.manager(), instance, hostOf(request), packageDir);
@@ -511,7 +478,6 @@ public final class BrandApiServlet extends HttpServlet {
         body.addProperty("name", instance.name());
         body.addProperty("version", instance.version());
         body.addProperty("lastPort", instance.lastPort());
-        body.addProperty("publicPort", instance.publicPort());
         body.addProperty("createdAt", instance.createdAt());
         body.addProperty("state", status.state().name().toLowerCase(java.util.Locale.ROOT));
         if (status.error() != null) {
@@ -523,14 +489,11 @@ public final class BrandApiServlet extends HttpServlet {
         return body;
     }
 
-    /// Where the browser reaches a running instance: the shared mount for
-    /// mount-aware clients, the absolute origin URL for path-routed ones.
+    /// Where the browser reaches a running instance: the panel's own mount —
+    /// same origin, same certificate, same session gate as dsh. Path-routed
+    /// clients (OpenCode) get the router shim injected there instead of an
+    /// origin of their own.
     private static String openUrl(Brand brand, BrandInstance instance, HttpServletRequest request) {
-        if (brand.needsOwnOrigin()) {
-            String scheme = request.isSecure() ? "https" : "http";
-            String host = hostOf(request);
-            return scheme + "://" + host + ":" + instance.publicPort() + "/";
-        }
         return "/i/" + instance.id() + "/";
     }
 

@@ -41,7 +41,7 @@ class BrandRuntimeTest {
     @Test
     void kimiCommandCarriesTheProxyContract() throws IOException {
         Path pkg = prefix(Brand.KIMI);
-        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", 0, 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", 0, 1);
 
         List<String> command = BrandRuntime.command(Brand.KIMI, pkg, instance, "dsh.example.com");
 
@@ -59,7 +59,7 @@ class BrandRuntimeTest {
     @Test
     void kimiCommandOmitsTheAllowlistWithoutAHost() throws IOException {
         Path pkg = prefix(Brand.KIMI);
-        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", 0, 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", 0, 1);
 
         List<String> command = BrandRuntime.command(Brand.KIMI, pkg, instance, null);
 
@@ -69,7 +69,7 @@ class BrandRuntimeTest {
     @Test
     void opencodeCommandUsesAPanelAllocatedPort() throws IOException {
         Path pkg = prefix(Brand.OPENCODE);
-        BrandInstance instance = new BrandInstance("abc", "opencode", "demo", "1.18.35", 0, 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "opencode", "demo", "1.18.35", 0, 1);
 
         List<String> command = BrandRuntime.command(Brand.OPENCODE, pkg, instance, null);
 
@@ -80,7 +80,7 @@ class BrandRuntimeTest {
 
     @Test
     void commandRefusesAPrefixWithoutTheExecutable() {
-        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", 0, 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", 0, 1);
 
         assertThrows(IOException.class,
                 () -> BrandRuntime.command(Brand.KIMI, dir, instance, null));

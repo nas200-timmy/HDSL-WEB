@@ -43,20 +43,21 @@ public enum Brand {
     /// honoured (it falls back to 4096), so the panel pre-allocates a port.
     /// Its client **routes by `location.pathname`** (verified in its bundle
     /// and by serving it under any subpath: the shell renders, the content
-    /// stays blank) — no subpath mount can ever work, so instances get an
-    /// origin of their own: a dedicated published port where the app owns `/`.
+    /// stays blank). Mounted like everything else, such a client needs the
+    /// [router shim](InstanceProxyServlet) that hands the origin root back to
+    /// it — see [needsRouterShim].
     OPENCODE("opencode", "opencode-ai", "opencode", true);
 
     private final String id;
     private final String npmPackage;
     private final String binName;
-    private final boolean needsOwnOrigin;
+    private final boolean needsRouterShim;
 
-    Brand(String id, String npmPackage, String binName, boolean needsOwnOrigin) {
+    Brand(String id, String npmPackage, String binName, boolean needsRouterShim) {
         this.id = id;
         this.npmPackage = npmPackage;
         this.binName = binName;
-        this.needsOwnOrigin = needsOwnOrigin;
+        this.needsRouterShim = needsRouterShim;
     }
 
     /// The stable category id used in API paths and directory names.
@@ -74,12 +75,13 @@ public enum Brand {
         return binName;
     }
 
-    /// Whether the tool's web client routes by URL path, making any subpath
-    /// mount (like `/i/<id>/`) render a broken shell. Such brands are served
-    /// on an origin of their own — a dedicated published port where the app
-    /// owns `/` — instead of through the mount.
-    public boolean needsOwnOrigin() {
-        return needsOwnOrigin;
+    /// Whether the tool's web client routes by URL path, making a subpath
+    /// mount (like `/i/<id>/`) render a broken shell unless the proxy hands
+    /// the origin root back to it. Such pages are served through the mount
+    /// with an extra script that keeps `location.pathname` at `/` while the
+    /// runtime shim keeps every request inside the mount.
+    public boolean needsRouterShim() {
+        return needsRouterShim;
     }
 
     /// Resolves a category id back to its brand.

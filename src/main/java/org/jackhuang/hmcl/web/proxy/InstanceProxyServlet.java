@@ -122,6 +122,13 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// call 404'd at the panel root.
     static final String SHIM_RESOURCE = "__hdsl-shim.js";
 
+    /// The per-mount script that hands the origin root back to a client which
+    /// routes by `location.pathname` ([Brand#needsRouterShim] — OpenCode):
+    /// the page is served under `/i/<id>/`, the client is asked to render the
+    /// root view, and it would match no route. Served as its own resource for
+    /// the same CSP reason as the runtime shim.
+    static final String ROUTER_RESOURCE = "__hdsl-router.js";
+
     private static final int BUFFER_SIZE = 8192;
 
     private final HttpClient client;
@@ -159,15 +166,19 @@ public final class InstanceProxyServlet extends HttpServlet {
             return;
         }
 
-        // The per-mount runtime shim is served by the panel itself, not by the
-        // instance: it has to exist before any page loads (CSP-safe, see
-        // [SHIM_RESOURCE]) and never depends on the instance's state.
-        if (rest.substring(slash).equals("/" + SHIM_RESOURCE)) {
+        // The per-mount scripts are served by the panel itself, not by the
+        // instance: they have to exist before any page loads (CSP-safe, see
+        // [SHIM_RESOURCE]) and never depend on the instance's state. The router
+        // shim answers the same way for path-routed clients.
+        String restPath = rest.substring(slash);
+        if (restPath.equals("/" + SHIM_RESOURCE) || restPath.equals("/" + ROUTER_RESOURCE)) {
+            String template = restPath.equals("/" + ROUTER_RESOURCE) ? ROUTER_JS : SHIM_JS;
             response.setStatus(HttpServletResponse.SC_OK);
             response.setContentType("text/javascript; charset=utf-8");
             response.setHeader("Cache-Control", "no-store");
-            response.getOutputStream().write(SHIM_JS.replace("__MOUNT__", "/i/" + instanceId + "/")
-                    .getBytes(StandardCharsets.UTF_8));
+            response.getOutputStream().write(
+                    template.replace("__MOUNT__", "/i/" + instanceId + "/")
+                            .getBytes(StandardCharsets.UTF_8));
             return;
         }
 
@@ -244,7 +255,9 @@ public final class InstanceProxyServlet extends HttpServlet {
             }
         });
 
-        upstream.whenCompleteAsync((result, error) -> pump(response, async, upstream, mount, result, error),
+        boolean routerShim = needsRouterShim(instanceId);
+        upstream.whenCompleteAsync(
+                (result, error) -> pump(response, async, upstream, mount, routerShim, result, error),
                 tasks.executor());
     }
 
@@ -252,6 +265,7 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// task pool so the client's I/O thread is never blocked on a write.
     private static void pump(HttpServletResponse response, AsyncContext async,
                              CompletableFuture<HttpResponse<InputStream>> upstream, String mount,
+                             boolean routerShim,
                              @Nullable HttpResponse<InputStream> result, @Nullable Throwable error) {
         try {
             if (error != null || result == null) {
@@ -272,7 +286,8 @@ public final class InstanceProxyServlet extends HttpServlet {
                     // Buffered and rewritten, because the page dsh generates is rooted at the origin
                     // rather than at whatever path it is reached through — see rewritePage. Everything
                     // else streams, which is what keeps `/plugins/events` (SSE) working.
-                    out.write(rewritePage(readPage(in, result), mount).getBytes(StandardCharsets.UTF_8));
+                    out.write(rewritePage(readPage(in, result), mount, routerShim)
+                            .getBytes(StandardCharsets.UTF_8));
                     out.flush();
                 } else {
                     byte[] buffer = new byte[BUFFER_SIZE];
@@ -291,6 +306,16 @@ public final class InstanceProxyServlet extends HttpServlet {
         } finally {
             async.complete();
         }
+    }
+
+    /// Whether the page's client needs the router shim: only the brands that
+    /// route by `location.pathname` do ([BrandRuntime#brandOf] is populated
+    /// when the instance launches, which is always the case for a page being
+    /// served).
+    private static boolean needsRouterShim(String instanceId) {
+        org.jackhuang.hmcl.web.brand.Brand brand =
+                org.jackhuang.hmcl.web.brand.BrandRuntime.brandOf(instanceId);
+        return brand != null && brand.needsRouterShim();
     }
 
     /// Copies the request headers, dropping hop-by-hop names and the
@@ -395,6 +420,37 @@ public final class InstanceProxyServlet extends HttpServlet {
             if(window.EventSource)window.EventSource=wrap(window.EventSource)})()
             """;
 
+    /// The shim that hands the origin root back to a client which routes by
+    /// `location.pathname` ([org.jackhuang.hmcl.web.brand.Brand#needsRouterShim]
+    /// — OpenCode). Served through the mount, such a client matches no route
+    /// and renders a bare shell (measured: the same page at any subpath of its
+    /// own port does the same, so this is the client, not the proxy). The
+    /// script runs before the app bundle and makes the browser's address look
+    /// like the origin root the client expects:
+    ///
+    /// - the initial `/i/<id>/...` address is replaced with `/` (hash kept),
+    ///   so the first route match is the root view;
+    /// - `history.pushState` / `replaceState` are swallowed down to `/` as
+    ///   well, so later addresses the app writes never re-expose the mount in
+    ///   `location.pathname` — the router keeps matching what it was given.
+    ///
+    /// Everything the app *requests* still goes through the mount, because the
+    /// runtime shim ([SHIM_JS]) prefixes same-origin absolute URLs. The
+    /// trade-off this buys: the tab's address bar shows the panel root, and a
+    /// manual refresh lands on the panel instead of the app — the app itself
+    /// is untouched and behaves as it would on its own port.
+    private static final String ROUTER_JS = """
+            (()=>{
+            const mount="__MOUNT__";
+            const root=()=>"/"+location.hash;
+            try{if(location.pathname.indexOf(mount)===0)history.replaceState(history.state,"",root())}catch(e){}
+            const push=history.pushState,repl=history.replaceState;
+            const swallow=(fn)=>function(state,title,url){try{return fn.call(history,state,title,root())}catch(e){}};
+            history.pushState=swallow(push);
+            history.replaceState=swallow(repl);
+            })()
+            """;
+
     /// Points a page the instance generated at the mount it is reached through.
     ///
     /// Two shapes of page arrive here:
@@ -418,6 +474,12 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// @param mount the mount, with its trailing slash
     /// @return the page as the browser has to see it
     static String rewritePage(String html, String mount) {
+        return rewritePage(html, mount, false);
+    }
+
+    /// The same, with the option of the router shim for clients that route by
+    /// path — see [ROUTER_JS].
+    static String rewritePage(String html, String mount, boolean routerShim) {
         if (html.contains("<base href=\"/\">")) {
             return html.replace("<base href=\"/\">",
                             "<base href=\"" + mount + "\">"
@@ -442,7 +504,7 @@ public final class InstanceProxyServlet extends HttpServlet {
             // session gate — nothing else — and an app served under someone
             // else's path could not be installed from it anyway. (Measured
             // 2026-10 on OpenCode: two 401s per page load.)
-            return injectShim(prefixed, mount)
+            return injectShim(prefixed, mount, routerShim)
                     .replaceAll("<link rel=\"manifest\"[^>]*>", "");
         }
         return html;
@@ -460,8 +522,11 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// same-origin resource rather than an inline script: OpenCode's CSP
     /// (`script-src 'self'`) discards inline scripts, and a shim that never
     /// runs is worse than none — the failure is silent.
-    private static String injectShim(String html, String mount) {
+    private static String injectShim(String html, String mount, boolean routerShim) {
         String tag = "<script src=\"" + mount + SHIM_RESOURCE + "\"></script>";
+        if (routerShim) {
+            tag = tag + "<script src=\"" + mount + ROUTER_RESOURCE + "\"></script>";
+        }
         int head = indexOfIgnoreCase(html, "<head>");
         if (head >= 0) {
             int after = head + "<head>".length();
