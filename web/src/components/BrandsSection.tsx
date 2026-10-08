@@ -278,8 +278,10 @@ function BrandPanel({ brand }: { brand: BrandId }) {
 
   return (
     <>
-      <div className="hint warning" style={{ flexShrink: 0 }}>
-        {I18N["dsh.brand.thirdparty.warning"].replace("%s", brandName)}
+      <div className="hint warning" style={{ flexShrink: 0, display: "grid", gap: 4 }}>
+        <span>{I18N["dsh.brand.thirdparty.warning"].replace("%s", brandName)}</span>
+        {/* OpenCode 是实验性接入：面板已经到极限，剩下的是上游的事——见 i18n 里的说明。 */}
+        {brand === "opencode" && <span>{I18N["dsh.brand.opencode.limit"]}</span>}
       </div>
 
       {/* 版本行：可搜索下拉 + 安装 */}

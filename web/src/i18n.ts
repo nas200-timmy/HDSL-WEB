@@ -224,10 +224,17 @@ export const I18N = {
   // ---- 第三方品牌（Kimi Code / OpenCode / ZCode） ----
   "dsh.brand.dsh": "DeepSeek Harness (dsh)",
   "dsh.brand.kimi": "Kimi Code",
-  "dsh.brand.opencode": "OpenCode",
+  "dsh.brand.opencode": "OpenCode（实验）",
   "dsh.brand.zcode": "ZCode（实验）",
   "dsh.brand.thirdparty.warning":
     "%s 为第三方工具，由各自官方分发、更新与计费；面板仅负责安装、启动与网页反代，其功能、安全与行为由各官方负责。",
+  // OpenCode 专有的能力边界声明：面板已经到了它能做的极限，剩下的问题属于上游。
+  // 写在界面上是让人在报 bug 之前就知道该找谁——面板能修的（挂载、改写、反代）
+  // 都已经修到不能再修了（见 docs/report-2026-10-08-opencode-web.md）。
+  "dsh.brand.opencode.limit":
+    "面板对它的接入不保证可用性：只做到「装指定版本 → 拉起它自带的网页端 → 经 /i/<id>/ 反代出来」，至此已经到极限。"
+    + "再往下遇到的问题基本都是它自己的——模型目录与模型 id 对不上（例如客户端挑到 deepseek/deepseek-flash，而它自己的服务器只有 deepseek-flash）、"
+    + "会话与 agent 的行为、凭据与计费；这类问题面板修不了，只能换模型、换版本或等上游修。",
   "dsh.brand.tab.zcode": "ZCode",
   "dsh.brand.state.created": "未启动",
   "dsh.brand.state.starting": "启动中",
