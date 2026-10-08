@@ -2,6 +2,53 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.2.6 — 2026-10-08 · 第三方品牌实例：Kimi Code 与 OpenCode
+
+实例列表页底部的实验框升级为「品牌区」：除 ZCode（实验声明保留）外，新增 **Kimi Code** 与
+**OpenCode** 两个第三方品牌——面板从 npm registry 安装指定版本、拉起它们自带的网页端
+（`kimi web` / `opencode web`），并像 dsh 一样经 `/i/<id>/` 反代（同端口、同证书、同登录门）。
+同时把主页启动按钮旁的实例选择菜单改为**跨品牌实例切换器**：点选 = 切换主按钮的目标实例
+（不再跳进详情页），dsh / Kimi Code / OpenCode / ZCode 混合列出并带品牌标签。
+
+### 新增
+
+- **品牌实例后端**（`web/brand/`）：`Brand` 描述符（npm 包、可执行名、就绪行、端口策略）、
+  `BrandCatalog`（registry 版本目录，过滤 snapshot/ci 噪音 tag，只留 `x.y.z`，缓存 30 分钟）、
+  `BrandInstaller`（`pnpm add <pkg>@<version>` 装进 `<数据目录>/brands/<品牌>/releases/`，
+  沿用 `--config.dangerously-allow-all-builds=true`——pnpm≥10 默认不跑依赖 postinstall，而 Kimi
+  Code 的 postinstall 要拉原生二进制）、`BrandRuntime`（进程池 + 就绪行解析 + ANSI 剥除）、
+  `BrandApiServlet`（`/api/brands/{kimi,opencode}/*`：版本/安装/实例 CRUD/启动/停止/打开/日志）。
+- **两个品牌的实测差异**（详见 [docs/brands.md](docs/brands.md)）：Kimi `--port 0` 可用；
+  OpenCode 的 `--port 0` 会静默回落默认 4096 → 面板预分配端口；Kimi 起服务时带
+  `--allowed-host <面板域名>` + `--dangerous-bypass-auth`（其官方文档写明用于 "behind your own
+  authenticating proxy"，面板会话门正是那个代理）；OpenCode 不设 basic auth（面板门即门）。
+- **反代泛化**：`InstanceProxyServlet` 的页面改写从「dsh 精确形状」扩展为「任意根绝对 SPA」——
+  非 dsh 页面里所有 `(src|href|action)="/…"` 加挂载点前缀、`<head>` 内引用运行期 shim
+  （fetch/XHR/WebSocket/EventSource 包装）。e2e 挖出三个坑都钉成了用例：shim 必须作为**同源外链
+  脚本**由面板在每个挂载点自服务（OpenCode 的 `script-src 'self'` CSP 拒内联脚本，而「shim 在
+  HTML 里却从没执行」是静默失败）；manifest 链接要剥掉（浏览器不带凭证抓它，过会话门必 401）；
+  「就绪」以**端口真的在监听**为准（OpenCode 的就绪行比监听早一拍）。dsh 页面的既有处理一字未改，
+  回归夹具是 `src/test/resources/brand-pages/` 下两个品牌的真实首页 HTML。
+- **前端**：`BrandsSection`（ZCode 页签原样保留；Kimi/OpenCode 页签带第三方警示条 + 可搜索版本
+  下拉 + 安装进度 + 实例管理）；`LaunchPane` 跨品牌切换器（store 新增 `external` 状态，主页
+  5 秒轮询；主按钮按种类分发启动/停止，品牌实例就绪后自动打开 `/i/<id>/`）。
+
+### 刻意没做
+
+- **插件管理**：两个品牌都没有可用生态。
+- **凭据注入**：登录/供应商/计费都在工具自己的网页里完成；实例状态目录（`~/.kimi-code` /
+  `~/.config/opencode`）落在实例 `home/` 里随 `/data` 持久化。第三方工具，功能/安全/行为由各官方负责。
+
+### 验证
+
+- 全量 **523 用例 / 0 失败 / 0 错误 / 0 跳过**（新增 26 条：目录解析/过滤、启动命令组装、ANSI
+  剥除、就绪行、release 簿记、API 全生命周期（fake 可执行文件真绑定端口走完 创建→启动→就绪→
+  打开→守卫→停止→删除）、真实 HTML 夹具的页面改写、shim 资源端点）。
+- spike 实测：pnpm 安装两品牌（kimi postinstall 正常）、`--port 0` 行为、就绪行、反代旗标。
+- e2e（临时容器，无头 Chromium）：真实面板装两品牌 → 启动 → 经 `/i/<id>/` 打开——Kimi Code
+  完整渲染出引导页（0 失败请求）；OpenCode 经反代建会话成功、UI 可交互（0 控制台错误、0 失败
+  请求）；期间挖出并修掉 CSP 内联拦截、manifest 401、就绪行早于监听三个真实坑。
+
 ## v0.2.5 — 2026-10-06 · 容器镜像里丢失的壁纸与图标
 
 独立部署（`docker pull` 起容器）第一次打开网页就能看见：**默认壁纸不见了**，启动器与实例的图标也是坏的。

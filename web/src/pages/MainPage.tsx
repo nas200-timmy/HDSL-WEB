@@ -9,7 +9,7 @@ import { ProgressBar } from "../components/ProgressBar";
 import { StateBadge } from "../components/InstanceIcon";
 import { useMobileLayout, useTickingUptime } from "../hooks";
 import { I18N } from "../i18n";
-import { findTaskForInstance, getState, refreshInstances, useAppState } from "../store";
+import { findTaskForInstance, getState, refreshExternal, refreshInstances, useAppState } from "../store";
 import type { Instance } from "../types";
 import { formatUptime, normState, parsePortFromUrl } from "../utils";
 
@@ -107,6 +107,14 @@ export function MainPage() {
     void refreshInstances(!getState().instancesLoaded);
   }, []);
 
+  // 跨品牌实例（kimi/opencode/zcode）没有 WS 推送，5 秒轮询一次；
+  // launch/stop 动作内会立即再刷一次
+  useEffect(() => {
+    void refreshExternal();
+    const timer = setInterval(() => void refreshExternal(), 5000);
+    return () => clearInterval(timer);
+  }, []);
+
   const current = useMemo(() => {
     const running = s.instances.find((i) => normState(i.state) === "RUNNING");
     return running ?? s.instances[0] ?? null;
@@ -122,7 +130,7 @@ export function MainPage() {
       <MainSideBar />
       <div className="wallpaper-bg" style={{ backgroundImage: `url(${wallpaper()})` }} />
       {mobile && (current ? <MobileHome inst={current} /> : <MobileHomeEmpty />)}
-      {current ? <LaunchPane current={current} /> : <LaunchPanePlaceholderInternal />}
+      <LaunchPane />
       {showProgress && current && <LaunchProgress inst={current} />}
       {showRunning && current && <RunningPane inst={current} />}
     </div>
@@ -211,8 +219,4 @@ function MobileHomeEmpty() {
       </div>
     </div>
   );
-}
-
-function LaunchPanePlaceholderInternal() {
-  return <LaunchPane current={null} />;
 }

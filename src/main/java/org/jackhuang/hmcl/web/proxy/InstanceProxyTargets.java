@@ -21,6 +21,7 @@ import org.jackhuang.hmcl.dsh.DshInstance;
 import org.jackhuang.hmcl.dsh.DshInstanceManager;
 import org.jackhuang.hmcl.dsh.DshProcess;
 import org.jackhuang.hmcl.dsh.DshProcessManager;
+import org.jackhuang.hmcl.web.brand.BrandRuntime;
 import org.jackhuang.hmcl.web.zcode.ZcodeRuntime;
 import org.jetbrains.annotations.NotNullByDefault;
 
@@ -63,7 +64,14 @@ final class InstanceProxyTargets {
             return port > 0 ? port : instance.portOrDefault();
         }
         if (!ZcodeRuntime.known(instanceId)) {
-            return UNKNOWN;
+            // Third-party brand categories (Kimi Code, OpenCode): same
+            // contract as ZCode — known ids answer with their live port or
+            // NOT_RUNNING, unknown ids fall through to UNKNOWN.
+            if (!BrandRuntime.known(instanceId)) {
+                return UNKNOWN;
+            }
+            int port = BrandRuntime.isRunning(instanceId) ? BrandRuntime.portOf(instanceId) : 0;
+            return port > 0 ? port : NOT_RUNNING;
         }
         int port = ZcodeRuntime.isRunning(instanceId) ? ZcodeRuntime.portOf(instanceId) : 0;
         return port > 0 ? port : NOT_RUNNING;
@@ -79,6 +87,10 @@ final class InstanceProxyTargets {
         URI webUrl = DshProcessManager.find(instanceId).flatMap(DshProcess::webUrl).orElse(null);
         if (webUrl != null && webUrl.getPort() > 0) {
             return webUrl.getPort();
+        }
+        if (BrandRuntime.known(instanceId)) {
+            int port = BrandRuntime.isRunning(instanceId) ? BrandRuntime.portOf(instanceId) : 0;
+            return port > 0 ? port : NOT_RUNNING;
         }
         int port = ZcodeRuntime.isRunning(instanceId) ? ZcodeRuntime.portOf(instanceId) : 0;
         return port > 0 ? port : NOT_RUNNING;

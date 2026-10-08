@@ -327,6 +327,50 @@ export type WsEvent =
   | { type: "acp-update"; instance: string; session: string; update: AcpSessionUpdate }
   | { type: "acp-finished"; instance: string; session: string; stopReason?: string };
 
+// ---------- 第三方品牌实例（kimi / opencode，REST 挂 /api/brands/<brand>/*） ----------
+
+export type BrandId = "kimi" | "opencode";
+
+/// GET /api/brands/<brand>/versions：全部干净 semver（最新在前）+ 已装列表 + 新建实例默认版本
+export interface BrandVersions {
+  versions: string[];
+  latest: string;
+  releases: { version: string; current: boolean }[];
+  /** 新建实例的推荐默认版本；一个版本都没装时为 null */
+  default: string | null;
+}
+
+/// GET /api/brands/<brand>/install：安装任务状态
+export interface BrandInstallStatus {
+  state: "running" | "done" | "failed" | "none";
+  message: string;
+  fraction: number;
+  error?: string;
+}
+
+/// GET /api/brands/<brand>/instances 的一项
+export interface BrandInstance {
+  id: string;
+  brand: BrandId;
+  name: string;
+  version: string;
+  lastPort: number;
+  createdAt: string | number;
+  state: "created" | "starting" | "running" | "stopped" | "error";
+  error?: string;
+  /** state = running 时的反代地址（/i/<id>/） */
+  url?: string;
+}
+
+/// 启动面板"跨品牌实例切换器"里的非 dsh 条目（kimi/opencode 品牌实例 + zcode 实验实例）
+export interface ExternalInstance {
+  brand: "kimi" | "opencode" | "zcode";
+  id: string;
+  name: string;
+  state: string;
+  url?: string;
+}
+
 // ---------- 全局应用状态 ----------
 
 export interface AppState {
@@ -362,6 +406,8 @@ export interface AppState {
   zcodeDist: ZcodeDistInfo | null;
   zcodeInstances: ZcodeInstance[];
   zcodeLoading: boolean;
+  /** 跨品牌实例（kimi/opencode/zcode），主页启动面板的实例选择菜单与主按钮动作用它 */
+  external: ExternalInstance[];
   toasts: Toast[];
 }
 

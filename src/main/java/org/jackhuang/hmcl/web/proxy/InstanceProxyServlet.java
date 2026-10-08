@@ -112,6 +112,16 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// separator, so it can be rewritten to the instance's mount.
     private static final Pattern COOKIE_PATH = Pattern.compile("(^|;\\s*)Path=/(?=;|$)", Pattern.CASE_INSENSITIVE);
 
+    /// The per-mount script the generic page rewrite references: served by this
+    /// servlet itself (see [service]) rather than inlined, because some brands
+    /// (OpenCode) answer their pages with a Content-Security-Policy whose
+    /// `script-src 'self'` refuses every inline script — a same-origin
+    /// `<script src>` passes that policy where an inline shim is discarded
+    /// before it ever runs. Measured 2026-10: the shim was present in the
+    /// served HTML yet `window.fetch` stayed native, and every runtime API
+    /// call 404'd at the panel root.
+    static final String SHIM_RESOURCE = "__hdsl-shim.js";
+
     private static final int BUFFER_SIZE = 8192;
 
     private final HttpClient client;
@@ -146,6 +156,18 @@ public final class InstanceProxyServlet extends HttpServlet {
             String query = request.getQueryString();
             response.setStatus(HttpServletResponse.SC_MOVED_PERMANENTLY);
             response.setHeader("Location", "/i/" + instanceId + "/" + (query == null ? "" : "?" + query));
+            return;
+        }
+
+        // The per-mount runtime shim is served by the panel itself, not by the
+        // instance: it has to exist before any page loads (CSP-safe, see
+        // [SHIM_RESOURCE]) and never depends on the instance's state.
+        if (rest.substring(slash).equals("/" + SHIM_RESOURCE)) {
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.setContentType("text/javascript; charset=utf-8");
+            response.setHeader("Cache-Control", "no-store");
+            response.getOutputStream().write(SHIM_JS.replace("__MOUNT__", "/i/" + instanceId + "/")
+                    .getBytes(StandardCharsets.UTF_8));
             return;
         }
 
@@ -345,8 +367,13 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// they are wrapped so that a same-host URL gets the mount, and anything else is left exactly
     /// as it was. Dynamic `import()` cannot be wrapped, and does not need to be: the page's module
     /// registrations are rewritten by [rewritePage] itself.
-    private static final String RUNTIME_SHIM = """
-            <script>(()=>{
+    ///
+    /// The constant is the **bare script**, without `<script>` tags: dsh's page gets it inlined
+    /// (tags added at the injection site), the generic brand pages get it as the external
+    /// [SHIM_RESOURCE] — serving the tagged form as a standalone script would be a syntax error
+    /// and the whole shim would silently never run.
+    private static final String SHIM_JS = """
+            (()=>{
             const mount="__MOUNT__";
             const fix=(value)=>{if(typeof value!=="string"||!value)return value;
             if(value.startsWith("/i/"))return value;
@@ -365,33 +392,87 @@ public final class InstanceProxyServlet extends HttpServlet {
             XMLHttpRequest.prototype.open=function(){const a=[].slice.call(arguments);a[1]=fix(String(a[1]));return open.apply(this,a)};
             const wrap=(C)=>{try{return new Proxy(C,{construct(t,a,n){if(a.length>0)a[0]=fix(String(a[0]));return Reflect.construct(t,a,n)}})}catch(e){return C}};
             window.WebSocket=wrap(window.WebSocket);
-            if(window.EventSource)window.EventSource=wrap(window.EventSource)})()</script>
+            if(window.EventSource)window.EventSource=wrap(window.EventSource)})()
             """;
 
     /// Points a page the instance generated at the mount it is reached through.
     ///
-    /// The page is generated rather than served from a file, and it assumes it owns the origin: it
-    /// opens with `<base href="/">`, which fixes every relative reference — the bundle, the
-    /// stylesheets, the manifest, the favicon — at the root, and it lists its client plugins as
-    /// absolute `/plugins/...` URLs (fifty-two of them, inside the `<script>` it calls
-    /// `__DSH_BOOT__`). Through a mount both shapes point at the panel rather than at the instance,
-    /// and the panel answers with its own page: the browser then reports "Expected a JavaScript
-    /// module but the server responded with text/html" for every script and renders nothing. Giving
-    /// those two shapes the mount as a prefix is what lets one port serve both the panel and its
-    /// instances; a page carrying neither is passed through untouched.
+    /// Two shapes of page arrive here:
+    ///
+    /// - **dsh's page** (the original case): it opens with `<base href="/">`
+    ///   and registers its client plugins as absolute `/plugins/...` URLs
+    ///   (fifty-two of them, inside the inline `__DSH_BOOT__`). Handled by the
+    ///   exact replacements below, unchanged.
+    /// - **Any other single-page app** (the third-party brand categories — Kimi
+    ///   Code, OpenCode): no `<base>` tag, but root-absolute asset references
+    ///   (`src="/boot.js"`, `href="/assets/…"`). Every `(src|href|action)="/…"`
+    ///   reference gets the mount as a prefix, and the runtime shim is injected
+    ///   right after `<head>` so the URLs the app builds at runtime
+    ///   (`fetch("/api/…")`, WebSocket, EventSource) stay inside the mount too.
+    ///   Their manifests are *not* stripped unlike dsh's: they are fetched with
+    ///   the panel's own session, which passes the gate.
+    ///
+    /// A page carrying neither shape is passed through untouched.
     ///
     /// @param html  the page as the instance generated it
     /// @param mount the mount, with its trailing slash
     /// @return the page as the browser has to see it
-    private static String rewritePage(String html, String mount) {
-        return html.replace("<base href=\"/\">",
-                        "<base href=\"" + mount + "\">" + RUNTIME_SHIM.replace("__MOUNT__", mount))
-                .replace("=\"/plugins/", "=\"" + mount + "plugins/")
-                .replace(":\"/plugins/", ":\"" + mount + "plugins/")
-                // A manifest is fetched without credentials, so through the mount it is a 401 and
-                // nothing else — and an app served under someone else's path could not be installed
-                // from it anyway.
-                .replace("<link rel=\"manifest\" href=\"./manifest.webmanifest\" />", "");
+    static String rewritePage(String html, String mount) {
+        if (html.contains("<base href=\"/\">")) {
+            return html.replace("<base href=\"/\">",
+                            "<base href=\"" + mount + "\">"
+                                    + "<script>" + SHIM_JS.replace("__MOUNT__", mount) + "</script>")
+                    .replace("=\"/plugins/", "=\"" + mount + "plugins/")
+                    .replace(":\"/plugins/", ":\"" + mount + "plugins/")
+                    // A manifest is fetched without credentials, so through the mount it is a 401 and
+                    // nothing else — and an app served under someone else's path could not be installed
+                    // from it anyway.
+                    .replace("<link rel=\"manifest\" href=\"./manifest.webmanifest\" />", "");
+        }
+        if (hasRootAbsoluteReferences(html)) {
+            // Rewrite the references first, then reference the shim — the
+            // injected tag's src is mount-absolute already and must not be
+            // rewritten a second time.
+            String prefixed = html
+                    .replace("src=\"/", "src=\"" + mount)
+                    .replace("href=\"/", "href=\"" + mount)
+                    .replace("action=\"/", "action=\"" + mount);
+            // Same rule as dsh's manifest: the browser fetches a manifest
+            // without credentials, so through the mount it is a 401 from the
+            // session gate — nothing else — and an app served under someone
+            // else's path could not be installed from it anyway. (Measured
+            // 2026-10 on OpenCode: two 401s per page load.)
+            return injectShim(prefixed, mount)
+                    .replaceAll("<link rel=\"manifest\"[^>]*>", "");
+        }
+        return html;
+    }
+
+    /// Whether the page references anything from the origin root — the signal
+    /// that it assumes it owns the origin and needs the generic rewrite.
+    private static boolean hasRootAbsoluteReferences(String html) {
+        return html.contains("src=\"/") || html.contains("href=\"/") || html.contains("action=\"/");
+    }
+
+    /// Injects a reference to the per-mount shim (see [SHIM_RESOURCE]) as the
+    /// first thing inside `<head>` (falling back to prepending it), so it runs
+    /// before any module script the page loads. The shim itself is a separate
+    /// same-origin resource rather than an inline script: OpenCode's CSP
+    /// (`script-src 'self'`) discards inline scripts, and a shim that never
+    /// runs is worse than none — the failure is silent.
+    private static String injectShim(String html, String mount) {
+        String tag = "<script src=\"" + mount + SHIM_RESOURCE + "\"></script>";
+        int head = indexOfIgnoreCase(html, "<head>");
+        if (head >= 0) {
+            int after = head + "<head>".length();
+            return html.substring(0, after) + tag + html.substring(after);
+        }
+        return tag + html;
+    }
+
+    /// A case-insensitive indexOf for the literal `<head>` opening tag.
+    private static int indexOfIgnoreCase(String html, String needle) {
+        return html.toLowerCase(Locale.ROOT).indexOf(needle);
     }
 
     /// Points a redirect back at the mount.

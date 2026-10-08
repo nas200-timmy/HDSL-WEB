@@ -29,6 +29,10 @@ import type {
   ZcodeDistInfo,
   ZcodeInstance,
   ZcodeRelease,
+  BrandId,
+  BrandInstallStatus,
+  BrandInstance,
+  BrandVersions,
 } from "./types";
 
 export class ApiError extends Error {
@@ -345,4 +349,63 @@ export const api = {
     request<ZcodeBuildStatus>("/api/zcode/build", jsonInit("POST", { version })),
 
   zcodeBuildLog: (tail = 400) => request<{ lines: string[] }>(`/api/zcode/build/log?tail=${tail}`),
+
+  // ---------- 第三方品牌实例（kimi / opencode，REST 挂 /api/brands/<brand>/*） ----------
+
+  brandVersions: (brand: BrandId) => request<BrandVersions>(`/api/brands/${brand}/versions`),
+
+  brandReleases: (brand: BrandId) =>
+    request<{ releases: { version: string; path: string; current: boolean }[] }>(
+      `/api/brands/${brand}/releases`,
+    ),
+
+  /** 开始安装指定版本；品牌内同时只允许一个安装（409） */
+  brandInstall: (brand: BrandId, version: string) =>
+    request<{ taskId: string }>(`/api/brands/${brand}/install`, jsonInit("POST", { version })),
+
+  brandInstallStatus: (brand: BrandId) =>
+    request<BrandInstallStatus>(`/api/brands/${brand}/install`),
+
+  brandInstallLog: (brand: BrandId, tail = 300) =>
+    request<{ lines: string[] }>(`/api/brands/${brand}/install/log?tail=${tail}`),
+
+  brandInstances: (brand: BrandId) =>
+    request<{ instances: BrandInstance[] }>(`/api/brands/${brand}/instances`),
+
+  /** version 缺省用已装最新；一个版本没装 → 400 */
+  createBrandInstance: (brand: BrandId, body: { name: string; version?: string }) =>
+    request<{ instance: BrandInstance }>(`/api/brands/${brand}/instances`, jsonInit("POST", body)),
+
+  /** 运行中改 version → 409；未安装的 version → 400 */
+  patchBrandInstance: (brand: BrandId, id: string, body: { name?: string; version?: string }) =>
+    request<{ instance: BrandInstance }>(
+      `/api/brands/${brand}/instances/${encodeURIComponent(id)}`,
+      jsonInit("PATCH", body),
+    ),
+
+  /** 运行中删除 → 409 */
+  deleteBrandInstance: (brand: BrandId, id: string) =>
+    request<unknown>(`/api/brands/${brand}/instances/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  /** 同步阻塞至就绪（最多 60s）；error 状态带原因 */
+  launchBrand: (brand: BrandId, id: string) =>
+    request<{ state: string; error?: string }>(
+      `/api/brands/${brand}/instances/${encodeURIComponent(id)}/launch`,
+      jsonInit("POST", {}),
+    ),
+
+  stopBrand: (brand: BrandId, id: string) =>
+    request<{ state: string }>(
+      `/api/brands/${brand}/instances/${encodeURIComponent(id)}/stop`,
+      jsonInit("POST", {}),
+    ),
+
+  /** 未运行 → 409 */
+  openBrand: (brand: BrandId, id: string) =>
+    request<{ url: string }>(`/api/brands/${brand}/instances/${encodeURIComponent(id)}/open`),
+
+  brandLogs: (brand: BrandId, id: string, tail = 300) =>
+    request<{ lines: string[] }>(
+      `/api/brands/${brand}/instances/${encodeURIComponent(id)}/logs?tail=${tail}`,
+    ),
 };

@@ -221,6 +221,33 @@ export const I18N = {
   "modpack.choose.repository": "从整合包市场下载",
   "modpack.choose.repository.detail": "浏览并安装来自本启动器整合包市场的整合包",
 
+  // ---- 第三方品牌（Kimi Code / OpenCode / ZCode） ----
+  "dsh.brand.dsh": "DeepSeek Harness (dsh)",
+  "dsh.brand.kimi": "Kimi Code",
+  "dsh.brand.opencode": "OpenCode",
+  "dsh.brand.zcode": "ZCode（实验）",
+  "dsh.brand.thirdparty.warning":
+    "%s 为第三方工具，由各自官方分发、更新与计费；面板仅负责安装、启动与网页反代，其功能、安全与行为由各官方负责。",
+  "dsh.brand.tab.zcode": "ZCode",
+  "dsh.brand.state.created": "未启动",
+  "dsh.brand.state.starting": "启动中",
+  "dsh.brand.state.running": "运行中",
+  "dsh.brand.state.stopped": "已停止",
+  "dsh.brand.state.error": "出错",
+  "dsh.brand.versions": "版本",
+  "dsh.brand.latest": "最新",
+  "dsh.brand.installed": "已安装",
+  "dsh.brand.current": "当前",
+  "dsh.brand.none_installed": "尚未安装任何版本",
+  "dsh.brand.new_instance": "新建实例",
+  "dsh.brand.create": "创建",
+  "dsh.brand.default_version": "默认（最新已装）",
+  "dsh.brand.view_log": "查看日志",
+  "dsh.brand.log.empty": "（暂无日志）",
+  "dsh.brand.open": "打开",
+  "dsh.brand.delete.confirm": "确定删除「%s」？实例数据会一并删除。",
+  "dsh.brand.installing.progress": "正在安装：%s",
+
   // ---- 通用 ----
   "message.error": "错误",
   "button.remove.confirm": "你确定要删除吗？此操作无法撤销！",

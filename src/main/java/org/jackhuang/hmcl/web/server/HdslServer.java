@@ -63,6 +63,8 @@ import org.jackhuang.hmcl.web.proxy.InstanceProxyWebSocket;
 import org.jackhuang.hmcl.web.task.TaskService;
 import org.jackhuang.hmcl.web.tls.CertificateManager;
 import org.jackhuang.hmcl.web.ws.WsGateway;
+import org.jackhuang.hmcl.web.brand.BrandApiServlet;
+import org.jackhuang.hmcl.web.brand.BrandCatalog;
 import org.jackhuang.hmcl.web.zcode.ZcodeApiServlet;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -238,6 +240,7 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
         context.addServlet(new ServletHolder(new ZcodeApiServlet(config)), "/api/zcode/*");
+        context.addServlet(new ServletHolder(new BrandApiServlet(config, taskService)), "/api/brands/*");
         // Registered before the `/api/settings/*` holder below and matched by its longer prefix:
         // the download source is a launcher setting, and TLS is the other thing this path serves.
         context.addServlet(new ServletHolder(new RegistrySettingsApiServlet()), "/api/settings/registry/*");
@@ -377,6 +380,12 @@ public final class HdslServer {
         proxyWebSocketClient.start();
         server.start();
         startedAtMillis.set(System.currentTimeMillis());
+        // The brand version pickers read the npm registries; warming the cache
+        // off-thread keeps the first picker render instant without delaying
+        // the health check.
+        Thread warmBrands = new Thread(BrandCatalog::warm, "brand-catalog-warm");
+        warmBrands.setDaemon(true);
+        warmBrands.start();
         if (hookInstalled.compareAndSet(false, true)) {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 try {

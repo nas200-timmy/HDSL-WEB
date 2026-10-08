@@ -3,7 +3,7 @@ import { api, ApiError, isNotImplemented, setUnauthorizedHandler } from "./api";
 import { ws } from "./ws";
 import { consumeLaunchPopup } from "./launch";
 import { MAX_LOG_LINES, LOG_TAIL } from "./constants";
-import type { AppState, Instance, LogLine, Task, TaskRec, Toast, WsEvent } from "./types";
+import type { AppState, ExternalInstance, Instance, LogLine, Task, TaskRec, Toast, WsEvent } from "./types";
 import { errMsg, isInstanceRunning, isTerminalTaskState, isWaitingApproval, normState } from "./utils";
 
 // ---------------------------------------------------------------------------
@@ -37,6 +37,7 @@ const initialState: AppState = {
   zcodeDist: null,
   zcodeInstances: [],
   zcodeLoading: false,
+  external: [],
   toasts: [],
 };
 
@@ -184,6 +185,7 @@ setUnauthorizedHandler(() => {
     modelProvidersError: null,
     zcodeDist: null,
     zcodeInstances: [],
+    external: [],
   }));
 });
 
@@ -229,6 +231,28 @@ export async function refreshZcode(showLoading = false): Promise<void> {
     setState((s) => ({ ...s, zcodeLoading: false }));
     toast("error", `获取 ZCode 状态失败：${errMsg(e)}`);
   }
+}
+
+/// 跨品牌实例（kimi/opencode 品牌实例 + zcode 实验实例）合并进 external，
+/// 主页启动面板的实例选择菜单与主按钮动作用它。单个品牌失败不影响其它品牌；
+/// 静默失败（不弹 toast）——主页面 5 秒轮询一次，报错会刷爆通知。
+export async function refreshExternal(): Promise<void> {
+  const [kimi, opencode, zcode] = await Promise.all([
+    api.brandInstances("kimi").then((r) => r.instances).catch(() => null),
+    api.brandInstances("opencode").then((r) => r.instances).catch(() => null),
+    api.zcodeInstances().then((r) => r.instances).catch(() => null),
+  ]);
+  const external: ExternalInstance[] = [];
+  for (const i of kimi ?? []) {
+    external.push({ brand: "kimi", id: i.id, name: i.name, state: i.state, url: i.url });
+  }
+  for (const i of opencode ?? []) {
+    external.push({ brand: "opencode", id: i.id, name: i.name, state: i.state, url: i.url });
+  }
+  for (const i of zcode ?? []) {
+    external.push({ brand: "zcode", id: i.id, name: i.name, state: i.state });
+  }
+  setState((s) => ({ ...s, external }));
 }
 
 /** WS 事件驱动的实例列表刷新：合并短时间内的多次事件，避免请求风暴。 */

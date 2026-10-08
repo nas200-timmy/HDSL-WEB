@@ -1,6 +1,7 @@
 import { api } from "./api";
-import { beginLaunch, forgetLaunch } from "./launch";
-import { patchInstanceLocal, seedTasks, toast } from "./store";
+import { beginLaunch, consumeLaunchPopup, forgetLaunch } from "./launch";
+import { I18N } from "./i18n";
+import { patchInstanceLocal, refreshExternal, seedTasks, toast } from "./store";
 import type { Instance } from "./types";
 import { errMsg } from "./utils";
 
@@ -81,4 +82,65 @@ export function openDsh(instanceId: string): void {
       if (win) win.close();
       toast("error", `打开失败：${errMsg(e)}`);
     });
+}
+
+/**
+ * 启动第三方品牌 / zcode 实例：
+ * 1. 点击瞬间同步 beginLaunch(id) 拿 about:blank 弹窗（popup blocker 豁免）；
+ * 2. launch 同步阻塞至就绪（最多 60s），返回 running 后取 open url 导航弹窗；
+ * 3. 失败关闭弹窗并提示；结束后立即刷新跨品牌实例列表。
+ */
+export async function launchBrandInstance(
+  brand: "kimi" | "opencode" | "zcode",
+  entry: { id: string; name: string },
+): Promise<boolean> {
+  beginLaunch(entry.id);
+  try {
+    let state: string;
+    if (brand === "zcode") {
+      const r = await api.launchZcode(entry.id);
+      state = r.state;
+      if (state === "error") throw new Error(r.error ?? "未知原因");
+    } else {
+      const r = await api.launchBrand(brand, entry.id);
+      state = r.state;
+      if (state === "error") throw new Error(r.error ?? "未知原因");
+    }
+    const target =
+      brand === "zcode"
+        ? (await api.zcodeOpen(entry.id)).url
+        : (await api.openBrand(brand, entry.id)).url;
+    const popup = consumeLaunchPopup(entry.id);
+    toast("success", I18N["dsh.launch.ready"].replace("%s", entry.name));
+    if (popup && !popup.closed) {
+      popup.location.href = target;
+    } else {
+      window.open(target, "_blank", "noopener");
+    }
+    return true;
+  } catch (e) {
+    const popup = consumeLaunchPopup(entry.id);
+    if (popup && !popup.closed) popup.close();
+    forgetLaunch(entry.id);
+    toast("error", `启动失败：${errMsg(e)}`);
+    return false;
+  } finally {
+    void refreshExternal();
+  }
+}
+
+export async function stopBrandInstance(
+  brand: "kimi" | "opencode" | "zcode",
+  id: string,
+): Promise<boolean> {
+  try {
+    if (brand === "zcode") await api.stopZcode(id);
+    else await api.stopBrand(brand, id);
+    toast("info", "已发送停止指令");
+    void refreshExternal();
+    return true;
+  } catch (e) {
+    toast("error", `停止失败：${errMsg(e)}`);
+    return false;
+  }
 }
