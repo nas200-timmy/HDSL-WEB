@@ -294,8 +294,10 @@ function BrandPanel({ brand }: { brand: BrandId }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+        {/* 显式高度：不设时个别引擎对 auto 高度的 select 测量有偏差，会在行内上浮 */}
         <select
           className="input"
+          style={{ height: 36 }}
           value={selectedVersion}
           onChange={(e) => setPicked(e.target.value)}
         >
@@ -375,7 +377,7 @@ function BrandPanel({ brand }: { brand: BrandId }) {
           />
           <select
             className="input"
-            style={{ flex: "none", maxWidth: 150 }}
+            style={{ flex: "none", maxWidth: 150, height: 36 }}
             value={form.version || recommendedVersion}
             onChange={(e) => setForm((f) => ({ ...f, version: e.target.value }))}
           >
