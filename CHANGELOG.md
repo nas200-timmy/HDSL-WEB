@@ -44,9 +44,22 @@
   客户端的 bundle（按挂载点 + 资源名缓存；抓不到、非 200 或过大都算探不到），探不到就改注入
   `?mode=root` 的那份 shim ——把地址还给面板根（即旧行为），应用照常可用，而不是只剩一个壳。
   Kimi Code 认子路径、不需要这段脚本（按品牌开关，注入反而与它自己的路由打架）。端口段
-  （3091-3100）、边过滤器与端口注册表全部删除，compose 恢复只发布一个端口。全量 **524 用例**全绿；
+  （3091–3100）、边过滤器与端口注册表全部删除，compose 恢复只发布一个端口。全量 **527 用例**全绿；
   e2e 无头浏览器与「直连实例」逐项对照（渲染、点击、pushState/popstate、深链、刷新）逐字一致，
   零控制台错误、零面板侧失败请求。
+- **用起来才暴露的三处代理缺陷**（用户实测「加 DeepSeek key 点继续就失败」触发，全部修掉并复验）：
+  - **客户端自己拼的根绝对 URL**：页面改写只看得见 HTML 里的引用；客户端运行时拼的 chunk、
+    worker、图标（bundle 里 `"/assets/…"` 字面量与 Vite preload 助手的 `"/"+dep` 基址）与 CSS 里的
+    `url(/…)` 全都打到面板根，拿到的是面板自己的 HTML——OpenCode 的 Settings / Providers / 所有
+    对话框都是懒加载 chunk，于是「首页能看、点进任何面板都是空的」。现在反代 JS/CSS 时一并改写
+    这三类引用（见 [docs/brands.md](docs/brands.md)）；CSS 字体回退的问题也一并消失。
+  - **shim 重包 `Request` 的方式**：`new Request(url, 原Request)` 会把请求体变成流，Chrome 对这种
+    带 body 的 `PUT` 直接以 `net::ERR_ALPN_NEGOTIATION_FAILED` 失败——面板连请求都收不到。改成从
+    原 Request 的字段显式重建、body 从 clone 读出，`PUT /auth/{provider}` 由此走通。
+  - **上游连接复用**：实例（Node/Bun）5 秒就掐掉空闲 keep-alive，池里那条死连接让请求静默失败
+    （JDK 自己抛 `Http1RequestBodySubscriber` NPE，面板对它答 502）。现在空闲连接 4 秒退休；
+    可重放的请求失败后用「从未连过实例」的 client 重试一次；带 body 的请求改为「放得下就缓冲、
+    放不下才流式」，顺带修掉「无 body 的 GET 被当成带 body」这件旧事。
 
 ### 刻意没做
 
@@ -56,10 +69,11 @@
 
 ### 验证
 
-- 全量 **524 用例 / 0 失败 / 0 错误 / 0 跳过**（相对上一版净增 25 条：目录解析/过滤、启动命令组装、
+- 全量 **527 用例 / 0 失败 / 0 错误 / 0 跳过**（相对上一版净增 28 条：目录解析/过滤、启动命令组装、
   ANSI 剥除、就绪行、release 簿记、API 全生命周期（fake 可执行文件真绑定端口走完 创建→启动→就绪→
-  打开→守卫→停止→删除）、真实 HTML 夹具的页面改写、shim 资源端点、bundle 补丁（锚点、拒绝歧义、
-  以及不碰客户端那处 `auth_token` 清理）与入口脚本解析）。
+  打开→守卫→停止→删除）、真实 HTML 夹具的页面改写、shim 资源端点、bundle 补丁（路由锚点、拒绝歧义、
+  不碰客户端那处 `auth_token` 清理、preload 基址与 `/assets/` 字面量、CSS `url(/…)`）与入口脚本解析，
+  外加一条「带 body 的请求穿过反代」（小 body 缓冲、512 KB 走流式，两端都要求逐字节到达））。
 - spike 实测：pnpm 安装两品牌（kimi postinstall 正常）、`--port 0` 行为、就绪行、反代旗标；
   OpenCode 路由读取地址的那一处表达式（1.18.32 与 1.18.35 各抓一份 bundle 核对，两版一致）。
 - e2e（临时容器，无头 Chromium）：真实面板装两品牌 → 启动 → 经 `/i/<id>/` 打开——Kimi Code
@@ -69,6 +83,12 @@
   `/i/<id>/new-session` 下都留在挂载点；页内 `pushState('/zzz')` 得到 `/i/<id>/zzz`，把带挂载点的
   地址再写一次也不会双前缀；深链 `/server/…/session/…`、失效会话、刷新各项与「直连实例」对照逐字
   一致（含应用自身那 3 个 500 `/api/reference`——直连也有，与面板无关）。
+- e2e 复验（2026-10-08 晚第二轮，同一天同一套无头浏览器）：Settings 的 Servers / Providers / Models
+  面板**完整渲染**（此前只有首屏，懒加载 chunk 全 404）；走完真实流程「Providers → Show more
+  providers → 搜索 DeepSeek → 填 key → Continue」——`PUT /auth/deepseek` 200、对话框关闭、key 落进
+  实例的 `auth.json`；**零控制台错误、零失败请求、面板日志零上游失败**，连跑两轮结果一致。修之前
+  同一套流程稳定复现两个症状：chunk 打到面板根（`Failed to load module script … text/html`）与那条
+  `PUT` 的 `net::ERR_ALPN_NEGOTIATION_FAILED`（面板根本没收到请求）。
 
 ## v0.2.5 — 2026-10-06 · 容器镜像里丢失的壁纸与图标
 

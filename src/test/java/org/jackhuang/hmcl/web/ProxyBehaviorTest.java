@@ -152,6 +152,44 @@ class ProxyBehaviorTest {
     }
 
     @Test
+    void aRequestBodyReachesTheInstanceAndItsAnswerComesBack() throws Exception {
+        NodeDshStub.assumeNode();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            DshInstance instance = createInstance();
+            NodeDshStub.install(instance, true);
+            DshProcess process = DshProcessManager.launch(instance);
+            try {
+                awaitReady(process);
+
+                // The body path, both ways it is taken: a body that fits in memory
+                // is buffered and re-sent with a content-length, a bigger one is
+                // streamed. Both have to arrive whole — measured 2026-10, a
+                // browser's `PUT` (an API key being saved) is what goes down it,
+                // and it is where the panel used to lose the request.
+                for (String payload : List.of("{\"key\":\"sk-small\"}", "{\"key\":\"sk-big\",\"pad\":\""
+                        + "x".repeat(512 * 1024) + "\"}")) {
+                    HttpResponse<String> echoed = client.send(
+                            request(running.baseUrl() + "/i/" + INSTANCE + "/echo", null, null)
+                                    .header("Content-Type", "application/json")
+                                    .PUT(HttpRequest.BodyPublishers.ofString(payload))
+                                    .build(),
+                            HttpResponse.BodyHandlers.ofString());
+
+                    assertEquals(200, echoed.statusCode(), echoed.body());
+                    JsonObject answer = JsonParser.parseString(echoed.body()).getAsJsonObject();
+                    assertEquals("PUT", answer.get("method").getAsString());
+                    assertEquals(payload.length(), answer.get("body").getAsString().length(),
+                            "the instance saw " + answer.get("body").getAsString().length()
+                                    + " of " + payload.length() + " bytes");
+                }
+            } finally {
+                DshProcessManager.stop(INSTANCE);
+            }
+        }
+    }
+
+    @Test
     void stripsPrefixPassesHostAndRewritesCookiePath() throws Exception {
         NodeDshStub.assumeNode();
         try (TestSupport.RunningServer running = startServer()) {

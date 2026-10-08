@@ -25,9 +25,9 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -161,9 +161,9 @@ class GenericPageRewriteTest {
     }
 
     @Test
-    void patchingTheRouterBundleTurnsTheMountIntoTheOriginRoot() {
+    void theRouterReadIsMadeMountBlindAndNothingElseIsTouched() {
         // The expression the patch is anchored on is Solid Router's, measured in
-        // OpenCode 1.18.32 and 1.18.35 — see InstanceProxyServlet#patchRouterBundle.
+        // OpenCode 1.18.32 and 1.18.35 — see InstanceProxyServlet#patchBrandScript.
         // The second half is the client's boot-time `auth_token` cleanup: it reads
         // `location.pathname` too — bare, no `window.` — and has to come out of the
         // patch untouched, because stripping the mount there would drop it from the
@@ -172,9 +172,8 @@ class GenericPageRewriteTest {
                 + "const clean=()=>history.replaceState(null,\"\",location.pathname+location.hash);")
                 .getBytes(StandardCharsets.UTF_8);
 
-        byte[] patched = InstanceProxyServlet.patchRouterBundle(bundle);
+        byte[] patched = InstanceProxyServlet.patchBrandScript(bundle, MOUNT);
 
-        assertNotNull(patched);
         assertEquals("const r=(window.__hdslUnmount"
                         + "?window.__hdslUnmount(window.location.pathname):window.location.pathname)"
                         + ".replace(/^\\/+/,\"/\")+window.location.search;"
@@ -183,13 +182,54 @@ class GenericPageRewriteTest {
     }
 
     @Test
-    void aBundleWithoutThatExpressionIsServedAlone() {
-        assertNull(InstanceProxyServlet.patchRouterBundle("const a=1;".getBytes(StandardCharsets.UTF_8)));
-        // Two of them is not a bundle this servlet understands: guessing which
-        // one the router reads would be worse than handing the address back.
-        assertNull(InstanceProxyServlet.patchRouterBundle((
-                "window.location.pathname.replace( and window.location.pathname.replace(")
-                .getBytes(StandardCharsets.UTF_8)));
+    void theChunkBaseAndTheAssetLiteralsAreGivenTheMount() {
+        // Both anchors as OpenCode 1.18.35 carries them: Vite's preload helper —
+        // `const ote="modulepreload",ate=function(e){return"/"+e}` — which turns
+        // every lazily imported dialog into a request at the panel root, and the
+        // root-absolute asset literals the bundle keeps for its worker and icons.
+        byte[] bundle = ("const ate=function(e){return\"/\"+e};"
+                + "const worker=\"/assets/markdown.worker-Bu_Dc9RP.js\";")
+                .getBytes(StandardCharsets.UTF_8);
+
+        byte[] patched = InstanceProxyServlet.patchBrandScript(bundle, MOUNT);
+
+        assertEquals("const ate=function(e){return\"" + MOUNT + "\"+e};"
+                        + "const worker=\"" + MOUNT + "assets/markdown.worker-Bu_Dc9RP.js\";",
+                new String(patched, StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void aBundleWithNoneOfThoseAnchorsComesBackUntouched() {
+        byte[] plain = "const a=1;".getBytes(StandardCharsets.UTF_8);
+        assertArrayEquals(plain, InstanceProxyServlet.patchBrandScript(plain, MOUNT));
+
+        // Two router reads is not a bundle this servlet understands: guessing
+        // which of them the router takes would be worse than handing the address
+        // back — so that one anchor stays untouched. The asset edits still apply
+        // on their own: a client that cannot load its chunks has no app at all,
+        // whatever its address bar does.
+        byte[] ambiguous = ("window.location.pathname.replace( and window.location.pathname.replace("
+                + "const w=\"/assets/x.js\";").getBytes(StandardCharsets.UTF_8);
+        assertFalse(InstanceProxyServlet.hasRouterPathRead(ambiguous));
+        assertEquals("window.location.pathname.replace( and window.location.pathname.replace("
+                        + "const w=\"" + MOUNT + "assets/x.js\";",
+                new String(InstanceProxyServlet.patchBrandScript(ambiguous, MOUNT), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void stylesheetRootUrlsAreGivenTheMount() {
+        byte[] css = ("@font-face{src:url(/assets/Inter.ttf)}"
+                + "a{background:url(\"/img/a.png\")}"
+                + "b{background:url('//cdn.example.com/b.png')}"
+                + "c{background:url(data:image/png;base64,AAAA)}").getBytes(StandardCharsets.UTF_8);
+
+        String patched = new String(InstanceProxyServlet.patchBrandStylesheet(css, MOUNT), StandardCharsets.UTF_8);
+
+        assertTrue(patched.contains("url(" + MOUNT + "assets/Inter.ttf)"), patched);
+        assertTrue(patched.contains("url(\"" + MOUNT + "img/a.png\")"), patched);
+        // Protocol-relative and data URLs are not the root's to move.
+        assertTrue(patched.contains("url('//cdn.example.com/b.png')"), patched);
+        assertTrue(patched.contains("url(data:image/png;base64,AAAA)"), patched);
     }
 
     @Test

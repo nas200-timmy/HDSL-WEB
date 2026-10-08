@@ -235,3 +235,29 @@ docker run -d --name hdsl-e2e -p 127.0.0.1:18080:3080 \
   前缀替换，与 bundle 补丁同一套机制——注意别碰 `data:` URI。
 - 上一轮 §4.1 里「写时加前缀 + 读时剥」的设想已按上面落地；`docs/brands.md`、`CHANGELOG.md` 的
   v0.2.6 条目已同步成最终形态。
+
+### 6.1 同日第二轮回访（用户实测反馈触发，已修）
+
+用户报「OpenCode 怎么问服务器 URL」+「加 DeepSeek key 点继续失败」。复现后挖出**三处代理缺陷**，
+全部修掉并复验（细节在 `CHANGELOG` 的 v0.2.6 条目，机制与限制在 `docs/brands.md`）：
+
+1. **运行时自己拼的根绝对 URL 没被改写**：页面改写只处理 HTML 里的引用；bundle 里的 `"/assets/…"`
+   字面量（worker、图标）、Vite preload 助手的基址（`const <name> = function (dep) { return "/" + dep }`）
+   与 CSS 里的 `url(/…)`（字体）全都打到面板根。后果是**首页能看、任何懒加载的对话框都是空白**——
+   Settings / Providers / 所有 dialog 全中招。现在反代 JS/CSS 时一并改写（`patchBrandScript`、
+   `patchBrandStylesheet`）。
+2. **shim 重包 `Request` 的方式**：`new Request(url, 原Request)` 会让请求体变成流，Chrome 对这种带
+   body 的 `PUT` 直接 `net::ERR_ALPN_NEGOTIATION_FAILED`（面板连请求都收不到）。改成按字段显式重建、
+   body 从 `clone()` 读出。
+3. **上游连接复用**：实例是 Node/Bun，5 秒掐掉空闲 keep-alive；池里那条死连接让请求静默失败
+   （JDK 抛 `Http1RequestBodySubscriber` NPE，面板对它答 502）。现在空闲连接 4 秒退休、可重放的请求
+   换一个「从未连过实例」的 client 重试一次、带 body 的请求「放得下就缓冲、放不下才流式」
+   （顺带修掉「无 body 的 GET 被当成带 body」这件旧事）。
+
+复验证据（都可复跑）：Settings 的 Servers / Providers / Models **完整渲染**；真实流程
+「Providers → Show more providers → 搜索 DeepSeek → 填 key → Continue」→ `PUT /auth/deepseek` 200、
+对话框关闭、key 落进实例的 `auth.json`；**零控制台错误、零失败请求、面板日志零上游失败**（连跑两轮
+一致）。全量 **527 用例**全绿（新增的「带 body 的请求穿过反代」用例走的是真实 node stub）。
+
+调查里省时间的两个坑：那串 ALPN 报错与面板无关（是 `Request` 重包的写法触发的 Chrome 行为）；
+`curl` 复现不了连接复用类问题（每次都是新连接），必须在同一个浏览器会话里测。

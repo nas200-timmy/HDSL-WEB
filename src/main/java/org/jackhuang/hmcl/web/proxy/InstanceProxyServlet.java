@@ -80,10 +80,13 @@ import java.util.zip.InflaterInputStream;
 /// - the page itself is rewritten on the way past: its `<base>` and its
 ///   `/plugins/` registrations are given the mount, and a small shim keeps the
 ///   requests it builds at runtime inside it (see [#rewritePage]);
-/// - a page whose client routes by `location.pathname` gets one thing more: its
-///   router bundle is patched to read the mount away ([#patchRouterBundle]), so
-///   the address bar can keep the mount and still match the client's routes
-///   (see [ROUTER_JS]);
+/// - a third-party brand client (Kimi Code, OpenCode) gets its own script and
+///   stylesheet rewritten as they pass: every root-absolute reference they build
+///   at runtime — a lazily imported chunk, an icon, a font — is given the mount
+///   it is served under ([#patchBrandScript], [#patchBrandStylesheet]);
+/// - a client that routes by `location.pathname` gets one thing more from that
+///   same rewrite: the address it reads is made mount-blind, so the address bar
+///   can keep the mount and still match the client's routes (see [ROUTER_JS]);
 /// - bodies stream in both directions (a `Flow.Publisher` over the servlet
 ///   input on the way up, `BodyHandlers.ofInputStream` on the way down), so
 ///   SSE — `/plugins/events` — works without special treatment;
@@ -112,6 +115,15 @@ public final class InstanceProxyServlet extends HttpServlet {
         // passthrough is the one contract dsh itself enforces (Origin must
         // equal Host), so it is enabled here, before any client is built.
         System.setProperty("jdk.httpclient.allowRestrictedHeaders", "host");
+        // Instance servers are Node and Bun, whose keep-alive timeout is five
+        // seconds; the pooled connection this client would otherwise hold for
+        // minutes is then a socket the other end has already closed. A request
+        // that lands on one of those has no answer coming — measured 2026-10: a
+        // `PUT` that saved an API key died that way, inside the JDK's own
+        // `Http1RequestBodySubscriber`, and the browser was told nothing at all.
+        // Retiring idle connections before the instance does keeps that rare;
+        // [service] retries the one that still slips through.
+        System.setProperty("jdk.httpclient.keepalive.timeout", "4");
     }
 
     /// Headers that describe one hop and must not reach the other side.
@@ -235,17 +247,35 @@ public final class InstanceProxyServlet extends HttpServlet {
         URI target = URI.create("http://127.0.0.1:" + port + targetPath);
         String mount = "/i/" + instanceId + "/";
 
-        // The input stream must be claimed before the request goes async.
-        boolean hasBody = request.getContentLengthLong() != 0;
-        InputStreamBodyPublisher body = hasBody
-                ? new InputStreamBodyPublisher(request.getInputStream(), tasks) : null;
+        // The input stream must be claimed before the request goes async. A body
+        // is what the client announced — by content-length or by chunked framing;
+        // `-1` with neither is a body-less request (the common GET), which must
+        // not be given a publisher: a request that carries nothing is not this
+        // panel's to turn into a chunked one, and the retry below is only for the
+        // requests that can be sent twice.
+        long announcedBody = request.getContentLengthLong();
+        boolean hasBody = announcedBody > 0
+                || (announcedBody < 0 && request.getHeader("transfer-encoding") != null);
+        // A body that fits in memory is read here and handed over as a byte array
+        // rather than streamed: that gives the upstream request a content-length,
+        // keeps the JDK's own publisher in the picture instead of this servlet's,
+        // and leaves the body replayable. Measured 2026-10: the streaming path is
+        // where a proxied `PUT` (an API key being saved) died — a pooled
+        // connection the instance had already closed took
+        // `Http1RequestBodySubscriber` down with it.
+        byte[] bufferedBody = hasBody ? readSmallBody(request) : null;
+        InputStreamBodyPublisher streamedBody = hasBody && bufferedBody == null
+                ? new InputStreamBodyPublisher(request.getInputStream(), announcedBody, tasks)
+                : null;
 
         HttpRequest.Builder builder = HttpRequest.newBuilder(target);
         copyRequestHeaders(request, builder);
-        if (body == null) {
-            builder.method(request.getMethod(), HttpRequest.BodyPublishers.noBody());
+        if (bufferedBody != null) {
+            builder.method(request.getMethod(), HttpRequest.BodyPublishers.ofByteArray(bufferedBody));
+        } else if (streamedBody != null) {
+            builder.method(request.getMethod(), streamedBody);
         } else {
-            builder.method(request.getMethod(), body);
+            builder.method(request.getMethod(), HttpRequest.BodyPublishers.noBody());
         }
         HttpRequest upstreamRequest = builder.build();
 
@@ -253,8 +283,16 @@ public final class InstanceProxyServlet extends HttpServlet {
         // SSE streams stay open indefinitely; no timeout, the client's own
         // disconnect is what ends the pump.
         async.setTimeout(0);
-        CompletableFuture<HttpResponse<InputStream>> upstream = client.sendAsync(upstreamRequest,
+        CompletableFuture<HttpResponse<InputStream>> firstAttempt = client.sendAsync(upstreamRequest,
                 HttpResponse.BodyHandlers.ofInputStream());
+        // A body that was read into memory (or none at all) can be sent twice, so
+        // such a request is retried on a client that has never spoken to the
+        // instance: the retry cannot land on the same stale connection the first
+        // attempt died on — see the keep-alive note in the static block.
+        CompletableFuture<HttpResponse<InputStream>> upstream = streamedBody == null
+                ? firstAttempt.exceptionallyCompose(error ->
+                        freshClient().sendAsync(upstreamRequest, HttpResponse.BodyHandlers.ofInputStream()))
+                : firstAttempt;
         async.addListener(new AsyncListener() {
             @Override
             public void onComplete(AsyncEvent event) {
@@ -275,23 +313,27 @@ public final class InstanceProxyServlet extends HttpServlet {
             }
         });
 
-        boolean routerClient = needsRouterShim(instanceId);
+        org.jackhuang.hmcl.web.brand.Brand brand =
+                org.jackhuang.hmcl.web.brand.BrandRuntime.brandOf(instanceId);
+        boolean brandClient = brand != null;
+        boolean routerClient = brandClient && brand.needsRouterShim();
         int upstreamPort = port;
         upstream.whenCompleteAsync(
-                (result, error) -> pump(response, async, upstream, mount, routerClient, upstreamPort, result, error),
+                (result, error) -> pump(response, async, upstream, mount, brandClient, routerClient,
+                        upstreamPort, result, error),
                 tasks.executor());
     }
 
     /// Copies the response headers and streams the body back, running on the
     /// task pool so the client's I/O thread is never blocked on a write.
     ///
-    /// Two bodies are not streamed but rebuilt: a page (the mount has to be in
-    /// its references — see [rewritePage]) and, for a path-routed client, the
-    /// script its router lives in ([patchRouterBundle]). Everything else streams,
-    /// which is what keeps `/plugins/events` (SSE) working.
+    /// Three bodies are not streamed but rebuilt: a page (the mount has to be in
+    /// its references — see [rewritePage]), and — for a third-party brand client —
+    /// its own script and stylesheet ([patchBrandScript], [patchBrandStylesheet]).
+    /// Everything else streams, which is what keeps `/plugins/events` (SSE) working.
     private static void pump(HttpServletResponse response, AsyncContext async,
                              CompletableFuture<HttpResponse<InputStream>> upstream, String mount,
-                             boolean routerClient, int port,
+                             boolean brandClient, boolean routerClient, int port,
                              @Nullable HttpResponse<InputStream> result, @Nullable Throwable error) {
         try {
             if (error != null || result == null) {
@@ -307,13 +349,14 @@ public final class InstanceProxyServlet extends HttpServlet {
             long contentLength = result.headers().firstValueAsLong("content-length").orElse(-1);
             String contentType = result.headers().firstValue("content-type").orElse("").toLowerCase(Locale.ROOT);
             boolean servesPage = contentType.contains("text/html");
-            // A script is only worth rebuilding when the instance sized it in
+            // An asset is only worth rebuilding when the instance sized it in
             // advance (the patch changes that length) and it is small enough to
-            // hold. The probe that chose the shim read the bundle under the same
-            // rule, so what the page was told and what the browser gets agree.
-            boolean servesScript = routerClient && !servesPage && contentType.contains("javascript")
-                    && contentLength >= 0 && contentLength <= MAX_SCRIPT_BYTES;
-            copyResponseHeaders(result, response, mount, servesPage || servesScript);
+            // hold. The probe that chose the shim read the entry script under the
+            // same rule, so what the page was told and what the browser gets agree.
+            boolean sized = contentLength >= 0 && contentLength <= MAX_SCRIPT_BYTES;
+            boolean servesScript = brandClient && !servesPage && sized && contentType.contains("javascript");
+            boolean servesStyle = brandClient && !servesPage && sized && contentType.contains("text/css");
+            copyResponseHeaders(result, response, mount, servesPage || servesScript || servesStyle);
             try (InputStream in = result.body(); OutputStream out = response.getOutputStream()) {
                 if (servesPage) {
                     // Buffered and rewritten, because the page dsh generates is rooted at the origin
@@ -323,22 +366,20 @@ public final class InstanceProxyServlet extends HttpServlet {
                                     routerClient ? routerShimFor(port, mount, html) : RouterShim.NONE)
                             .getBytes(StandardCharsets.UTF_8));
                     out.flush();
-                } else if (servesScript) {
-                    byte[] script = readScript(in, result);
-                    byte[] patched = script == null ? null : patchRouterBundle(script);
-                    if (patched == null) {
-                        if (script != null) {
-                            out.write(script);
-                        } else {
-                            org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
-                                    "Script under " + mount + " outgrew its own content-length; served unpatched");
-                        }
+                } else if (servesScript || servesStyle) {
+                    byte[] asset = readAsset(in, result);
+                    if (asset == null) {
+                        // The instance announced a length it did not keep. Nothing sane is left
+                        // to send — the bytes read so far cannot be un-read.
+                        org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                                "Asset under " + mount + " outgrew its own content-length");
                     } else {
                         // These bytes are no longer the instance's own and must not be kept
-                        // under its address: a cached copy without the patch routes the client
-                        // by the mount itself, which matches no route at all.
+                        // under its address: a cached copy without the patch would route the
+                        // client by the mount itself and ask for chunks at the panel root.
                         response.setHeader("Cache-Control", "no-store");
-                        out.write(patched);
+                        out.write(servesScript ? patchBrandScript(asset, mount)
+                                : patchBrandStylesheet(asset, mount));
                     }
                     out.flush();
                 } else {
@@ -358,16 +399,6 @@ public final class InstanceProxyServlet extends HttpServlet {
         } finally {
             async.complete();
         }
-    }
-
-    /// Whether the page's client needs the router shim: only the brands that
-    /// route by `location.pathname` do ([BrandRuntime#brandOf] is populated
-    /// when the instance launches, which is always the case for a page being
-    /// served).
-    private static boolean needsRouterShim(String instanceId) {
-        org.jackhuang.hmcl.web.brand.Brand brand =
-                org.jackhuang.hmcl.web.brand.BrandRuntime.brandOf(instanceId);
-        return brand != null && brand.needsRouterShim();
     }
 
     /// Copies the request headers, dropping hop-by-hop names and the
@@ -442,13 +473,20 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// answers 404 for names it does not have, and the interface then sits at "Reconnecting…" for
     /// ever. These four interfaces are the ones a page can be made to go through another path at;
     /// they are wrapped so that a same-host URL gets the mount, and anything else is left exactly
-    /// as it was. Dynamic `import()` cannot be wrapped, and does not need to be: the page's module
-    /// registrations are rewritten by [rewritePage] itself.
+    /// as it was. Dynamic `import()` cannot be wrapped, and does not need to be: the page's own
+    /// script is rewritten instead ([patchBrandScript]), so the chunks and assets it names by
+    /// absolute path are fetched through the mount rather than from the panel's root.
     ///
     /// The constant is the **bare script**, without `<script>` tags: dsh's page gets it inlined
     /// (tags added at the injection site), the generic brand pages get it as the external
     /// [SHIM_RESOURCE] — serving the tagged form as a standalone script would be a syntax error
     /// and the whole shim would silently never run.
+    /// A `Request` that needs the mount is rebuilt from its fields rather than passed as the
+    /// init of a new one — `new Request(url, someRequest)` looks like the same thing and is not:
+    /// measured 2026-10 in Chrome, a `PUT` with a body died on it with
+    /// `net::ERR_ALPN_NEGOTIATION_FAILED`, nothing reaching the panel at all (the stream body
+    /// that copy carries is what does it, and the content-length goes missing with it). The body
+    /// is read from a clone, so the caller's request stays usable if it retries.
     private static final String SHIM_JS = """
             (()=>{
             const mount="__MOUNT__";
@@ -460,10 +498,16 @@ public final class InstanceProxyServlet extends HttpServlet {
             return url.protocol+"//"+location.host+mount+url.pathname.slice(1)+url.search+url.hash
             }catch(e){return value}};
             const f=window.fetch;
+            const rewrap=(url,input,body)=>{const init={method:input.method,headers:input.headers,mode:input.mode,credentials:input.credentials,cache:input.cache,redirect:input.redirect,referrer:input.referrer,integrity:input.integrity,keepalive:input.keepalive,signal:input.signal};
+            if(body!==undefined)init.body=body;
+            return new Request(url,init)};
             window.fetch=function(input,init){
             if(typeof input==="string")return f.call(this,fix(input),init);
             if(input instanceof URL)return f.call(this,fix(input.href),init);
-            if(input instanceof Request){const u=fix(input.url);if(u!==input.url)return f.call(this,new Request(u,input),init)}
+            if(input instanceof Request){const u=fix(input.url);
+            if(u===input.url)return f.apply(this,arguments);
+            if(input.body==null)return f.call(this,rewrap(u,input),init);
+            return input.clone().arrayBuffer().then(b=>f.call(this,rewrap(u,input,b),init),()=>f.call(this,new Request(u,input),init))}
             return f.apply(this,arguments)};
             const open=XMLHttpRequest.prototype.open;
             XMLHttpRequest.prototype.open=function(){const a=[].slice.call(arguments);a[1]=fix(String(a[1]));return open.apply(this,a)};
@@ -479,7 +523,7 @@ public final class InstanceProxyServlet extends HttpServlet {
         /// the origin owner itself (Kimi Code, dsh).
         NONE,
         /// The client's router takes its route from `location.pathname`. Its
-        /// bundle is patched to read the mount away ([patchRouterBundle]) and
+        /// bundle is patched to read the mount away ([patchBrandScript]) and
         /// [ROUTER_JS] adds the mount back to everything the client writes: the
         /// address bar keeps `/i/<id>/…` and survives a refresh.
         MOUNT,
@@ -503,17 +547,39 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// `location.pathname` — bare, no `window.` — belongs to the client's
     /// boot-time `auth_token` cleanup and must stay untouched, or that cleanup
     /// would drop the mount from the address it rewrites).
-    private static final byte[] ROUTER_PATH_READ =
-            "window.location.pathname.replace(".getBytes(StandardCharsets.US_ASCII);
+    private static final String ROUTER_PATH_READ = "window.location.pathname.replace(";
 
     /// The same expression with the mount taken off it, so that under `/i/<id>/`
     /// the client matches the routes it would match at the origin root. The
     /// global is looked up rather than called outright: the bundle is served
     /// alongside the shim that defines it, but a bundle that ends up without one
     /// must still run rather than die on a `ReferenceError`.
-    private static final byte[] ROUTER_PATH_READ_PATCHED = ("(window.__hdslUnmount"
+    private static final String ROUTER_PATH_READ_PATCHED = "(window.__hdslUnmount"
             + "?window.__hdslUnmount(window.location.pathname):window.location.pathname)"
-            + ".replace(").getBytes(StandardCharsets.US_ASCII);
+            + ".replace(";
+
+    /// What a client that was built to own the origin asks for its own assets by:
+    /// every root-absolute asset reference in its bundle is a literal starting
+    /// with this (the markdown worker, the provider icons, the sprites). Through
+    /// the mount those are requests to the panel's own root, which answers them
+    /// with its page — measured 2026-10 on OpenCode, along with the two anchors
+    /// below, from a Settings dialog that never finished rendering.
+    private static final String ASSET_ROOT_REFERENCE = "\"/assets/";
+
+    /// The other half of that problem: Vite's preload helper resolves the chunk
+    /// map against the base the build was made for, baked in as
+    /// `const <name> = function (<dep>) { return "/" + <dep> }`. That is what
+    /// turns a lazily imported dialog into a request for `/assets/…` at the panel
+    /// root — the dialog never loads and the app keeps nothing but its landing
+    /// screen. Matched by shape (both identifiers are minified) and rewritten to
+    /// the mount, which is where those chunks are served.
+    private static final Pattern PRELOAD_BASE = Pattern.compile(
+            "=function\\(([A-Za-z_$][A-Za-z0-9_$]*)\\)\\{return\"/\"\\+\\1\\}");
+
+    /// Root-absolute references inside a stylesheet — `url(/assets/Inter.ttf)`,
+    /// with or without quotes. Protocol-relative URLs (`url(//host/…)`) are left
+    /// alone by the lookahead.
+    private static final Pattern STYLE_ROOT_URL = Pattern.compile("(?i)url\\(\\s*(['\"]?)/(?!/)");
 
     /// The client's entry script, as the page names it — what the shim decision
     /// is probed on ([routerShimFor]). The first `<script src>` naming a `.js`
@@ -535,37 +601,61 @@ public final class InstanceProxyServlet extends HttpServlet {
             .connectTimeout(Duration.ofSeconds(10))
             .build();
 
-    /// @return the bundle with the router's path read made mount-blind, or `null`
-    ///         when the expression is not there exactly once — a build this
-    ///         servlet does not recognise, which is then served untouched and
-    ///         paired with [RouterShim#ROOT].
-    static byte @Nullable [] patchRouterBundle(byte[] bundle) {
-        int at = indexOf(bundle, ROUTER_PATH_READ, 0);
-        if (at < 0 || indexOf(bundle, ROUTER_PATH_READ, at + 1) >= 0) {
-            return null;
+    /// Rewrites one of the client's own files so that everything it asks for by
+    /// absolute path stays under the mount, and — for a client that routes by
+    /// path — so that the address it reads is the one it would read at the origin
+    /// root.
+    ///
+    /// Three edits, each skipped when its anchor is not there (an unrecognised
+    /// build is served with the ones that do apply, never with a guess):
+    ///
+    /// - [ROUTER_PATH_READ]: the route the client matches, made mount-blind;
+    /// - [ASSET_ROOT_REFERENCE]: the asset URLs it keeps as literals;
+    /// - [PRELOAD_BASE]: the base its preload helper resolves chunk names with.
+    ///
+    /// Whether the first of them applies is also the question the shim decision is
+    /// made on ([hasRouterPathRead], [routerShimFor]). The other two are what make
+    /// a lazily imported dialog work at all, and they apply under
+    /// [RouterShim#ROOT] just as much — a client whose router could not be patched
+    /// still has to be able to load its own chunks.
+    static byte[] patchBrandScript(byte[] script, String mount) {
+        // Latin-1 maps every byte to one character and back, so whatever is not
+        // matched comes out exactly as it went in, and the anchors — all ASCII —
+        // still match.
+        String text = new String(script, StandardCharsets.ISO_8859_1);
+        if (hasRouterPathRead(text)) {
+            text = text.replace(ROUTER_PATH_READ, ROUTER_PATH_READ_PATCHED);
         }
-        byte[] patched = new byte[bundle.length - ROUTER_PATH_READ.length + ROUTER_PATH_READ_PATCHED.length];
-        System.arraycopy(bundle, 0, patched, 0, at);
-        System.arraycopy(ROUTER_PATH_READ_PATCHED, 0, patched, at, ROUTER_PATH_READ_PATCHED.length);
-        System.arraycopy(bundle, at + ROUTER_PATH_READ.length, patched,
-                at + ROUTER_PATH_READ_PATCHED.length,
-                bundle.length - at - ROUTER_PATH_READ.length);
-        return patched;
+        text = text.replace(ASSET_ROOT_REFERENCE, "\"" + mount + "assets/");
+        text = PRELOAD_BASE.matcher(text).replaceFirst(match -> "=function(" + match.group(1)
+                + "){return\"" + mount + "\"+" + match.group(1) + "}");
+        return text.getBytes(StandardCharsets.ISO_8859_1);
     }
 
-    /// @return the first index of `needle` in `haystack` at or after `from`, or
-    ///         `-1`. Both are ASCII here, so a byte compare is the whole story.
-    private static int indexOf(byte[] haystack, byte[] needle, int from) {
-        outer:
-        for (int i = Math.max(from, 0); i <= haystack.length - needle.length; i++) {
-            for (int j = 0; j < needle.length; j++) {
-                if (haystack[i + j] != needle[j]) {
-                    continue outer;
-                }
-            }
-            return i;
-        }
-        return -1;
+    /// Rewrites a stylesheet's root-absolute references onto the mount — see
+    /// [STYLE_ROOT_URL]. CSS is the one place the page rewrite cannot see, and the
+    /// fonts a page reaches through it were fetched from the panel root and
+    /// silently fell back (measured 2026-10: OpenCode's UI font and its terminal
+    /// font).
+    static byte[] patchBrandStylesheet(byte[] stylesheet, String mount) {
+        String text = new String(stylesheet, StandardCharsets.ISO_8859_1);
+        text = STYLE_ROOT_URL.matcher(text).replaceAll("url($1" + mount);
+        return text.getBytes(StandardCharsets.ISO_8859_1);
+    }
+
+    /// @return whether the client's router reads the browser address the way this
+    ///         servlet knows how to make mount-blind — the question the shim
+    ///         decision is made on. Twice is as good as never: which of the two
+    ///         the router reads is not knowable, and a wrong guess takes the app
+    ///         down with it.
+    static boolean hasRouterPathRead(String script) {
+        int at = script.indexOf(ROUTER_PATH_READ);
+        return at >= 0 && script.indexOf(ROUTER_PATH_READ, at + 1) < 0;
+    }
+
+    /// The same question over the bytes the probe read.
+    static boolean hasRouterPathRead(byte[] script) {
+        return hasRouterPathRead(new String(script, StandardCharsets.ISO_8859_1));
     }
 
     /// Which router shim the page about to be served must name.
@@ -611,7 +701,7 @@ public final class InstanceProxyServlet extends HttpServlet {
     }
 
     /// @return whether the client's entry script carries the path read this
-    ///         servlet patches — see [patchRouterBundle]
+    ///         servlet patches — see [hasRouterPathRead]
     private static boolean probeRouterBundle(int port, String src) {
         try {
             HttpResponse<InputStream> response = PROBE_CLIENT.send(
@@ -626,7 +716,7 @@ public final class InstanceProxyServlet extends HttpServlet {
                     return false;
                 }
                 byte[] bundle = readBytes(in, MAX_SCRIPT_BYTES);
-                return bundle != null && patchRouterBundle(bundle) != null;
+                return bundle != null && hasRouterPathRead(bundle);
             }
         } catch (IOException | InterruptedException e) {
             org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
@@ -635,14 +725,14 @@ public final class InstanceProxyServlet extends HttpServlet {
         }
     }
 
-    /// Reads a script response into memory, decompressing it when the instance
-    /// sent it compressed: the patch is matched against the bytes the browser
-    /// would run, and a compressed body is not those bytes. The caller drops
-    /// `content-encoding` with it — see [copyResponseHeaders].
+    /// Reads a script or stylesheet response into memory, decompressing it when
+    /// the instance sent it compressed: the patch is matched against the bytes the
+    /// browser would run, and a compressed body is not those bytes. The caller
+    /// drops `content-encoding` with it — see [copyResponseHeaders].
     ///
     /// @return the bytes, or `null` when the response holds more than
     ///         [MAX_SCRIPT_BYTES] after all
-    private static byte @Nullable [] readScript(InputStream in, HttpResponse<InputStream> result) throws IOException {
+    private static byte @Nullable [] readAsset(InputStream in, HttpResponse<InputStream> result) throws IOException {
         String encoding = result.headers().firstValue("content-encoding").orElse("").toLowerCase(Locale.ROOT);
         if (encoding.contains("gzip")) {
             try (GZIPInputStream gzip = new GZIPInputStream(in)) {
@@ -681,7 +771,7 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// bare shell (measured: the same page at any subpath of its own port does
     /// the same, so this is the client, not the proxy). Its router takes the route
     /// straight from the browser (`location.pathname`), and that read is what
-    /// [patchRouterBundle] makes mount-blind from the other side — the two halves
+    /// [patchBrandScript] makes mount-blind from the other side — the two halves
     /// are one mechanism and have to agree:
     ///
     /// - `window.__hdslUnmount` is what the patched bundle calls; it lives here
@@ -757,7 +847,7 @@ public final class InstanceProxyServlet extends HttpServlet {
     ///   (`fetch("/api/…")`, WebSocket, EventSource) stay inside the mount too.
     ///   A page that routes by path gets the router shim named by `shim` after
     ///   it, and its own bundle patched on the way past
-    ///   ([patchRouterBundle]) — one half without the other only gets the app
+    ///   ([patchBrandScript]) — one half without the other only gets the app
     ///   as far as a shell.
     ///
     /// A page carrying neither shape is passed through untouched.
@@ -864,23 +954,51 @@ public final class InstanceProxyServlet extends HttpServlet {
         return value;
     }
 
+    /// The largest request body this servlet will hold in memory to hand over as
+    /// one buffer. Bigger bodies stream ([InputStreamBodyPublisher]); smaller ones
+    /// are the API calls and form posts a client makes, and they are worth
+    /// keeping whole — see [service].
+    private static final int MAX_BUFFERED_BODY = 1 << 20;
+
+    /// @return a request body small enough to hold whole, or `null` when there is
+    ///         none or it has to be streamed — see [service]
+    private static byte @Nullable [] readSmallBody(HttpServletRequest request) throws IOException {
+        long length = request.getContentLengthLong();
+        if (length <= 0 || length > MAX_BUFFERED_BODY) {
+            return null;
+        }
+        return request.getInputStream().readNBytes((int) length);
+    }
+
+    /// A client that has never spoken to anyone, so the request it sends cannot
+    /// land on a pooled connection the instance has since closed — see the
+    /// keep-alive note in the static block.
+    private static HttpClient freshClient() {
+        return HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
+    }
+
     /// A request body publisher that pumps the servlet input stream into the
     /// upstream request, one chunk at a time, with backpressure from the
-    /// client's demand.
+    /// client's demand. Only bodies too big to hold take this path.
     private static final class InputStreamBodyPublisher implements HttpRequest.BodyPublisher {
         private final SubmissionPublisher<ByteBuffer> publisher = new SubmissionPublisher<>();
         private final InputStream input;
+        private final long length;
         private final TaskService tasks;
         private final AtomicBoolean started = new AtomicBoolean();
 
-        private InputStreamBodyPublisher(InputStream input, TaskService tasks) {
+        private InputStreamBodyPublisher(InputStream input, long length, TaskService tasks) {
             this.input = input;
+            this.length = length;
             this.tasks = tasks;
         }
 
         @Override
         public long contentLength() {
-            return -1;
+            return length;
         }
 
         @Override
