@@ -420,9 +420,10 @@ function BrandPanel({ brand }: { brand: BrandId }) {
                     </span>
                   </span>
                   {/* 切换版本：运行中禁改（后端 409） */}
+                  {/* 显式高度：height:28 时内容盒只有 28−8×2=12px，装不下 13px 的行盒，数字会被上下裁掉 */}
                   <select
                     className="input"
-                    style={{ flex: "none", maxWidth: 110, height: 28 }}
+                    style={{ flex: "none", maxWidth: 110, height: 36 }}
                     value={inst.version}
                     disabled={inst.state === "running" || inst.state === "starting"}
                     onChange={(e) => void doPatchVersion(inst, e.target.value)}
