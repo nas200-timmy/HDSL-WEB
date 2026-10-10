@@ -73,7 +73,7 @@ function Shell() {
           minHeight: 0,
           display: "flex",
           flexDirection: "column",
-          backgroundImage: `url(${import.meta.env.BASE_URL}assets-img/wallpapers/2021-08-26.jpg)`,
+          backgroundImage: `url(assets-img/wallpapers/2021-08-26.jpg)`,
           backgroundSize: "cover",
           backgroundPosition: "center bottom",
         }}

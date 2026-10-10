@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { installRipple } from "./components/Ripple";
 import { bindSystemThemeListener, initTheme } from "./theme";
+import { basePath } from "./base";
 import "./styles/monet.css";
 import "./styles/base.css";
 import "./styles/components.css";
@@ -20,7 +21,7 @@ if (!rootEl) throw new Error("找不到 #root 挂载点");
 
 createRoot(rootEl).render(
   <StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename={basePath() || undefined}>
       <App />
     </BrowserRouter>
   </StrictMode>,

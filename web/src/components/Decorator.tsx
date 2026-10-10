@@ -96,7 +96,7 @@ export function Decorator({ children }: { children: ReactNode }) {
           )}
         </div>
         <span className="titlebar-icon">
-          <img src={`${import.meta.env.BASE_URL}assets-img/icon-title.png`} alt="" />
+          <img src={`assets-img/icon-title.png`} alt="" />
         </span>
         <span className="titlebar-title">{title}</span>
       </header>

@@ -13,9 +13,10 @@ import { I18N } from "../i18n";
 import { findTaskForInstance, getState, refreshExternal, refreshInstances, toast, useAppState } from "../store";
 import type { Instance } from "../types";
 import { formatUptime, normState, parsePortFromUrl } from "../utils";
+import { withBase } from "../base";
 
 function wallpaper(): string {
-  return `${import.meta.env.BASE_URL}assets-img/wallpapers/2021-08-26.jpg`;
+  return `assets-img/wallpapers/2021-08-26.jpg`;
 }
 
 /** 启动/安装中的进度浮层（HMCL 任务对话框风格：进度条 + 消息 + 实时日志）。 */
@@ -83,7 +84,7 @@ function RunningPane({ inst }: { inst: Instance }) {
         </div>
         <div className="progress-msg">
           {inst.id} · {port != null ? `${I18N["dsh.instance.port"]} ${port}` : ""}
-          {inst.url ? ` · ${inst.url}` : ""}
+          {inst.url ? ` · ${withBase(inst.url)}` : ""}
         </div>
         <div className="progress-actions">
           <button className="btn btn-text ripple-host" onClick={() => openDsh(inst.id)}>
@@ -178,10 +179,10 @@ function MobileHomeBrand({ entry }: { entry: LaunchEntry }) {
 
   const doOpen = () => {
     if (entry.kind === "zcode") {
-      void api.zcodeOpen(entry.id).then((r) => window.open(r.url, "_blank", "noopener"));
+      void api.zcodeOpen(entry.id).then((r) => window.open(r.url, "_blank", "noopener"));  // r.url 已带挂载点前缀
       return;
     }
-    window.open(openUrl, "_blank", "noopener");
+    window.open(withBase(openUrl), "_blank", "noopener");
   };
   const doAction = () => {
     if (running) void stopBrandInstance(entry.kind as "kimi" | "opencode" | "zcode", entry.id);

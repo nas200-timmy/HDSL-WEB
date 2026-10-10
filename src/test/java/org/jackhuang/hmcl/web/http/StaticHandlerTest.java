@@ -28,6 +28,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// The SPA shell: `/` serves the built React bundle's index.html, and any
@@ -37,6 +38,41 @@ class StaticHandlerTest {
 
     @TempDir
     Path dataDir;
+
+    /// HDSL_BASE_PATH（面板被反代在子路径挂载点下）：注入的 <base> 与
+    /// window.__HDSL_BASE__ 让 SPA 的相对路径解析进挂载点，index.html 里
+    /// 根绝对的资产引用必须被加前缀——否则子路径部署白屏。
+    @Test
+    void subpathMountInjectsBaseMachinery() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir,
+                Map.of("HDSL_BASE_PATH", "/panel/"),
+                config -> config.bindHost = "127.0.0.1")) {
+            var client = TestSupport.client();
+            HttpResponse<String> index = client.send(HttpRequest.newBuilder()
+                    .uri(URI.create(running.baseUrl() + "/")).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, index.statusCode());
+            // 归一化：尾斜杠被剥掉
+            assertTrue(index.body().contains("<base href=\"/panel/\">"), "base href must be injected");
+            assertTrue(index.body().contains("window.__HDSL_BASE__=\"/panel\";"), "base script must be injected");
+            assertFalse(index.body().contains("href=\"/assets"), "asset refs must leave the root");
+            assertTrue(index.body().contains("href=\"/panel/assets"), "asset refs must carry the base");
+        }
+    }
+
+    /// 根挂载（默认）：base 标签给前端相对路径兜底，资产引用保持根绝对不变。
+    @Test
+    void rootMountKeepsRootAbsoluteAssets() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+                config -> config.bindHost = "127.0.0.1")) {
+            var client = TestSupport.client();
+            HttpResponse<String> index = client.send(HttpRequest.newBuilder()
+                    .uri(URI.create(running.baseUrl() + "/")).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, index.statusCode());
+            assertTrue(index.body().contains("<base href=\"/\">"));
+            assertTrue(index.body().contains("window.__HDSL_BASE__=\"\";"));
+            assertTrue(index.body().contains("href=\"/assets"), "root mount must not rewrite asset refs");
+        }
+    }
 
     @Test
     void indexAndSpaFallbacksServeTheShell() throws Exception {

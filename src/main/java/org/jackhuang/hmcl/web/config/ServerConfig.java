@@ -40,6 +40,15 @@ public final class ServerConfig {
     /// running connector.
     public int port = 3080;
 
+    /// Base path the panel is mounted under when a reverse proxy serves it
+    /// from a subpath (`HDSL_BASE_PATH`, default "" = root mount). Given in
+    /// "/panel" form; the empty string means root. The proxy is expected to
+    /// strip the prefix before forwarding — the same mounting style as the
+    /// panel's own `/i/<id>/` proxy. The value is injected into the served
+    /// index.html (`<base href>` + `window.__HDSL_BASE__`) so the SPA's
+    /// relative asset/API/WS paths resolve inside the mount.
+    public String basePath = "";
+
     /// HTTPS settings; see [HttpsConfig].
     public final HttpsConfig https = new HttpsConfig();
 

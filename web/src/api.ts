@@ -61,7 +61,9 @@ export function setUnauthorizedHandler(fn: () => void): void {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(path, {
+    // 相对路径：由后端注入的 <base href> 解析——根挂载解析到 /api/…，
+    // 子路径挂载解析到 <base>/api/…。两种挂载共用一个构建产物。
+    res = await fetch(path.replace(/^\//, ""), {
       credentials: "same-origin",
       cache: "no-store",
       signal: AbortSignal.timeout(30000),

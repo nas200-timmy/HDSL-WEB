@@ -72,6 +72,7 @@ export function openDsh(instanceId: string): void {
   api
     .open(instanceId)
     .then((r) => {
+      // r.url 已由后端带挂载点前缀（open 端点在 REST 边界加 base）
       if (win) {
         win.location.href = r.url;
       } else {

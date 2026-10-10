@@ -2,6 +2,33 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.3.5 — 2026-10-11 · 审查拆雷（8 颗）+ 死代码清理 + 反向代理挂载支持
+
+一次四路交叉审查定位到 8 颗确认的雷，全部拆除（每颗独立提交、逐个验证）：
+
+- **取消任务只杀自己的进程树**（最危险的一颗）：`MAX_INSTALLS=2` 下取消实例 A 的安装
+  会全局杀死实例 B 健康进行的 pnpm。进程改按工作线程归属，新增回归用例（旧行为实测失败）。
+- **compareVersions 换用 VersionNumber**：同前缀 prerelease 曾按字典序排
+  （`alpha.10 < alpha.2`），且 Node 的 `v20` 前缀被解析成 0。喂给版本选择器、lockstep
+  最老判定、插件/Node 排序的比较器从此按 Maven 优先级。
+- **Host 头解析收敛 HostHeaders**：品牌 allowlist 的 `[::1]:8080` 曾被砍成 `"["`。
+- **过时安全文档对齐现状**：Zcode 类文档/Servlet/API 文档/前端按钮还活在「独立端口
+  明文 HTTP」时代，与「回环绑定 + `/i/<id>/` 反代」的实际姿态矛盾——文档撒谎是最阴的雷。
+- **移动断点统一**：layout.css 的孤儿 `(max-width:800px),(max-height:490px)` 与
+  `MOBILE_QUERY` 对齐，760–800px 窗口不再 JS/CSS 各说各话。
+- **插件面板任务归属**：删掉被推翻的 `kind.includes(id)` 启发式（恒 false），改用
+  `t.instance` 精确匹配。
+- **品牌实例状态三份真相收敛为 `store.external` 唯一源**（删 `zcodeInstances` 双拷贝）。
+- **死代码**：DshCli（1266 行零引用）、「浏览」菜单四项死 UI、`api.vendors()` 死端点、
+  15 个死图标。
+
+**反向代理挂载支持（面板自身被反代）**：新增 `HDSL_BASE_PATH`——面板架在 nginx/Caddy
+子路径（如 `/panel/`）下时，index.html 注入 `<base href>` + `window.__HDSL_BASE__`，SPA
+的资产/API/WS/路由链接、`/i/<id>/` 打开地址、实例反代的页面改写/品牌脚本补丁/重定向
+Location/Cookie Path 全部按浏览器眼里的完整挂载点重写；反代只需剥前缀转发（与面板反代
+dsh 实例同款挂法）。根路径挂载零配置、行为不变。两种挂法均端到端实测（SPA/登录/API/
+WS/品牌页/资产全通），README 新增「反向代理」部署章节。
+
 ## v0.3.4 — 2026-10-10 · 修复桌面缩窄窗口时品牌摘要条样式失效
 
 v0.3.3 的摘要条/长说明降级样式被误放进了 `(hover: none) and (pointer: coarse)`

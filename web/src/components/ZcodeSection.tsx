@@ -162,7 +162,7 @@ export function ZcodeSection() {
   const openInBrowser = async (inst: ExternalInstance) => {
     try {
       const r = await api.zcodeOpen(inst.id);
-      window.open(r.url, "_blank", "noopener");
+      window.open(r.url, "_blank", "noopener");  // r.url 已带挂载点前缀
     } catch (e) {
       toast("error", `打开失败：${errMsg(e)}`);
     }

@@ -18,6 +18,7 @@ import { I18N } from "../i18n";
 import { refreshExternal, refreshZcode, toast, useAppState } from "../store";
 import type { BrandId, BrandInstallStatus, BrandVersions, ExternalInstance } from "../types";
 import { errMsg } from "../utils";
+import { withBase } from "../base";
 
 /// 状态徽章：与 ZcodeSection 的 STATE_TEXT/STATE_TAG 同款（文案进 I18N 字典）
 const STATE_TEXT: Record<string, string> = {
@@ -376,8 +377,7 @@ function BrandPanel({ brand }: { brand: BrandId }) {
   };
 
   const doOpen = (inst: ExternalInstance) => {
-    const url = inst.url ?? `/i/${inst.id}/`;
-    window.open(url, "_blank", "noopener");
+    window.open(withBase(inst.url ?? `/i/${inst.id}/`), "_blank", "noopener");
   };
 
   const doShowLogs = async (inst: ExternalInstance) => {

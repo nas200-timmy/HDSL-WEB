@@ -483,8 +483,10 @@ public final class BrandApiServlet extends HttpServlet {
     /// same origin, same certificate, same session gate as dsh. Path-routed
     /// clients (OpenCode) get the router shim injected there instead of an
     /// origin of their own.
-    private static String openUrl(Brand brand, BrandInstance instance, HttpServletRequest request) {
-        return "/i/" + instance.id() + "/";
+    private String openUrl(Brand brand, BrandInstance instance, HttpServletRequest request) {
+        // Browser-consumed URL: carries the mount base so a subpath-mounted
+        // panel hands out /panel/i/<id>/ instead of a root path that 404s.
+        return config.basePath + "/i/" + instance.id() + "/";
     }
 
     private static void writeStatus(HttpServletResponse response, BrandRuntime.Status status) throws IOException {

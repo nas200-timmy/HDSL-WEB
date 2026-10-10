@@ -47,6 +47,7 @@ public final class ServerConfigLoader {
     public static final String ENV_DATA_DIR = "HDSL_DATA";
     public static final String ENV_PORT = "HDSL_PORT";
     public static final String ENV_BIND_HOST = "HDSL_BIND_HOST";
+    public static final String ENV_BASE_PATH = "HDSL_BASE_PATH";
     public static final String ENV_HTTPS = "HDSL_HTTPS";
     public static final String ENV_ZCODE_PACKAGE = "HDSL_ZCODE_PACKAGE";
     public static final String ENV_ZCODE_NODE = "HDSL_ZCODE_NODE";
@@ -189,6 +190,9 @@ public final class ServerConfigLoader {
         if (env.containsKey(ENV_BIND_HOST)) {
             config.bindHost = env.get(ENV_BIND_HOST);
         }
+        if (env.containsKey(ENV_BASE_PATH)) {
+            config.basePath = env.get(ENV_BASE_PATH);
+        }
         if (env.containsKey(ENV_HTTPS)) {
             String value = env.get(ENV_HTTPS);
             config.https.enabled = switch (value) {
@@ -221,6 +225,25 @@ public final class ServerConfigLoader {
         if (config.port < 0 || config.port > 65535) {
             throw new ConfigException("port must be between 0 and 65535, got " + config.port);
         }
+        // 归一化：根 = ""，子路径 = "/panel"（无尾斜杠）。不许带引号字符——
+        // 这个值会被原样注进 index.html 的 <base href> 和 JS 字符串里。
+        String base = config.basePath == null ? "" : config.basePath.trim();
+        if (base.equals("/")) {
+            base = "";
+        }
+        if (!base.isEmpty()) {
+            if (!base.startsWith("/")) {
+                base = "/" + base;
+            }
+            if (base.endsWith("/")) {
+                base = base.substring(0, base.length() - 1);
+            }
+            if (base.contains("\\") || base.contains("\"") || base.contains("<") || base.contains("'")) {
+                throw new ConfigException("base_path must not contain quotes, apostrophes, backslashes or angle brackets, got `"
+                        + config.basePath + "`");
+            }
+        }
+        config.basePath = base;
         if (config.https.redirectPort < 1 || config.https.redirectPort > 65535) {
             throw new ConfigException("https.redirect_port must be between 1 and 65535, got " + config.https.redirectPort);
         }

@@ -687,7 +687,9 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "instance not running");
             return;
         }
-        Json.write(response, java.util.Map.of("url", url.get()));
+        // The URL is consumed by the browser, so it carries the mount base:
+        // a subpath-mounted panel must hand out /panel/i/<id>/, not /i/<id>/.
+        Json.write(response, java.util.Map.of("url", config.basePath + url.get()));
     }
 
     // ---------------------------------------------------------------- plugins --

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 function wallpaper(): string {
-  return `${import.meta.env.BASE_URL}assets-img/wallpapers/2021-08-26.jpg`;
+  return `assets-img/wallpapers/2021-08-26.jpg`;
 }
 
 /** 认证页公共骨架：壁纸背景 + 居中 HMCL 对话框式卡片（surface-container-high、圆角 4、20px 标题）。

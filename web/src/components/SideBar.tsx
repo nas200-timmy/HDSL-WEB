@@ -13,7 +13,7 @@ import {
 } from "./icons";
 
 function img(name: string): string {
-  return `${import.meta.env.BASE_URL}assets-img/${name}`;
+  return `assets-img/${name}`;
 }
 
 /** 实例图标：icon 字段是可访问 URL 时显示图片，否则用 HMCL 内置草方块图标。 */
@@ -74,7 +74,7 @@ export function MainSideBar() {
       >
         <span className="side-graphic lg">
           {account?.skinSet ? (
-            <img src={`/api/accounts/${encodeURIComponent(account.name)}/skin`} alt="" />
+            <img src={`api/accounts/${encodeURIComponent(account.name)}/skin`} alt="" />
           ) : (
             <PersonIcon size={20} />
           )}

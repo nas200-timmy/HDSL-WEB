@@ -234,6 +234,7 @@ auth:
 | `HDSL_DATA` | `./data`（镜像内 `/data`） | 数据目录；`server.yaml`、证书、实例、pnpm store 全在它下面 |
 | `HDSL_PORT` | `3080` | 主监听端口。HTTPS 启用时是同一个端口；`0` 表示让系统随机选（测试用） |
 | `HDSL_BIND_HOST` | `0.0.0.0` | 主监听地址。容器内保持 `0.0.0.0`；只想本机访问可设 `127.0.0.1` |
+| `HDSL_BASE_PATH` | 空 | 面板被反向代理在子路径挂载点下时的挂载前缀（`"/panel"` 形式，空 = 根挂载）。反代须剥前缀转发（与面板自己的 `/i/<id>/` 反代同款挂法）。面板把它注进 index.html 的 `<base href>`，SPA 的资产/API/WS/路由/`/i/<id>/` 链接自动解析进挂载点——根挂载行为零变化。见下方「反向代理」 |
 | `HDSL_HTTPS` | `false` | 只接受 `true`/`false`；等价于 `https.enabled` |
 | `HDSL_ADMIN_PASSWORD` | 空 | **仅首次启动**、且数据目录里还没有任何用户时，用它创建 `admin` 账号（无人值守部署）；已存在账号时忽略。不设则首次打开网页走初始化引导创建账号 |
 | `NPM_CONFIG_REGISTRY` | `https://registry.npmjs.org/` | 下载源的**回退值**，优先级是「**面板设置 → 这个环境变量 → 官方默认**」。npm 系（`npm view`、`npm install -g`、插件元数据）直接读它；pnpm 不读环境变量，由入口脚本与面板转写进 pnpm 自己的配置文件（见下）。生效时机：面板里改完保存**立即生效**（此后新建/重装的实例、面板内构建），改环境变量要重启容器 |
@@ -264,6 +265,45 @@ auth:
 > （npm 系读它），并在自己起的 pnpm 上显式加 `--registry=`（dsh 安装与面板内构建，日志里看得见实际用的源）。
 > 领域层以子进程方式启动 pnpm，所以上述设置对实例安装/插件安装都生效。
 > 如果你绕开入口脚本直接 `--entrypoint java`，镜像里已经预置了只含 `storeDir` 的同名文件作为兜底。
+
+## 反向代理
+
+面板可以被自己的反向代理（nginx / Caddy / 网关）架在域名后面——面板本身就是 dsh 实例的
+反代层，"反代的反代"是支持的形态，两种挂法都实测过（SPA、登录、API、WebSocket、
+品牌实例 `/i/<id>/`、壁纸资产全链路）。
+
+**根路径挂载（推荐，零配置）**：反代把 `/` 原样转给面板即可，无需任何面板侧设置：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3080;
+    proxy_set_header Host $host;          # dsh 实例的 Origin 校验按 Host 认宿主
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;   # /ws 与 /i/<id>/ 的 WebSocket 都靠它
+    proxy_set_header Connection "upgrade";
+}
+```
+
+**子路径挂载**：面板设 `HDSL_BASE_PATH=/panel`，反代**剥前缀**转发（与面板反代 dsh
+实例时剥 `/i/<id>/` 是同一挂法——前缀必须剥掉，面板内部始终按根路径路由）：
+
+```nginx
+location /panel/ {
+    proxy_pass http://127.0.0.1:3080/;    # 尾部斜杠 = 剥掉 /panel 前缀
+    proxy_set_header Host $host;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+剥前缀后，浏览器侧的地址由面板自己兜住：index.html 里注有 `<base href="/panel/">`，
+注入的 `window.__HDSL_BASE__` 让 SPA 的路由、`/i/<id>/` 打开地址都带挂载点前缀，
+实例反代的页面改写、品牌脚本补丁、重定向 Location、Cookie Path 同样以「浏览器眼里的
+完整挂载点」重写。`/panel`（无尾斜杠）这类裸挂载点由反代按惯例补斜脚重定向。
+
+> WebSocket 升级头（`Upgrade`/`Connection`）两条挂法都必须透传，否则实例列表、
+> 任务进度和品牌实例的实时状态不会刷新（页面其余功能不受影响）。
 
 ## 安全说明
 

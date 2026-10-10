@@ -27,6 +27,7 @@ import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } f
 import { getState, refreshInstances, toast, useAppState } from "../store";
 import type { Instance } from "../types";
 import { errMsg, normState } from "../utils";
+import { withBase } from "../base";
 
 /** 实例列表页（InstancesPage.java 结构）。 */
 export function InstancesPage() {
@@ -260,7 +261,7 @@ export function InstancesPage() {
                         </span>
                         <span className="tlli-subtitle">
                           {inst.id} · {inst.version}
-                          {st === "RUNNING" && inst.url ? ` · ${inst.url}` : ""}
+                          {st === "RUNNING" && inst.url ? ` · ${withBase(inst.url)}` : ""}
                         </span>
                       </span>
                       <span className="row-actions" onClick={(e) => e.stopPropagation()}>

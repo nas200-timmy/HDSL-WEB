@@ -247,8 +247,8 @@ public final class HdslServer {
         ServletHolder tlsHolder = new ServletHolder(new TlsApiServlet(config, certificates, self::get));
         tlsHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(tlsHolder, "/api/settings/*");
-        context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService)), "/i/*");
-        context.addServlet(new ServletHolder(new StaticServlet()), "/");
+        context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService, config.basePath)), "/i/*");
+        context.addServlet(new ServletHolder(new StaticServlet(config.basePath)), "/");
 
         // `/ws` rides the jakarta WebSocket container of the context, which
         // funnels upgrades through the filter chain — that is what makes the

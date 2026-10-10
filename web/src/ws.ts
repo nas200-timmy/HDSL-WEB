@@ -1,4 +1,5 @@
 import type { WsEvent } from "./types";
+import { withBase } from "./base";
 
 // WebSocket 连接管理：登录后连接、断线 3s 起指数退避重连（上限 30s）、
 // 重连后自动重新订阅全部活跃 topic。握手带 cookie（浏览器默认同源行为）。
@@ -29,7 +30,8 @@ function open(): void {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
 
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  const sock = new WebSocket(`${proto}://${window.location.host}/ws`);
+  // 子路径挂载：面板可能被反代在挂载点下，WS 同样走 withBase
+  const sock = new WebSocket(`${proto}://${window.location.host}${withBase("/ws")}`);
   socket = sock;
 
   sock.onopen = () => {

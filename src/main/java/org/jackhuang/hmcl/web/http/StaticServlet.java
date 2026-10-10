@@ -31,6 +31,14 @@ import java.util.Map;
 /// Serves the SPA shell from the classpath `web/` directory (packaged from
 /// `src/main/resources/web`, later the React build output).
 ///
+/// The built index.html carries root-absolute asset references, which a
+/// subpath-mounted deployment (the panel behind a path-stripping reverse
+/// proxy, see `HDSL_BASE_PATH`) cannot serve. The servlet therefore rewrites
+/// the shell at serve time: a `<base href>` + `window.__HDSL_BASE__` are
+/// injected and the asset URLs are prefixed with the configured base path.
+/// The frontend resolves every runtime path (API, WS, router, wallpaper)
+/// relatively or through that base, so one build serves both mounts.
+///
 /// Any path that is not a real file — `/login`, `/instances/3`, a stale
 /// hashed asset name after a deploy — falls back to `index.html` so client
 /// side routing always gets a page to boot from. The resources themselves are
@@ -42,6 +50,20 @@ public final class StaticServlet extends HttpServlet {
 
     private static final String RESOURCE_ROOT = "web/";
     private static final String INDEX = "index.html";
+
+    /// The mount the panel is served under ("" = root, "/panel" = subpath).
+    private final String basePath;
+    /// The rewritten shell, computed once per servlet (the base never changes
+    /// at runtime and the jar's index.html is immutable).
+    private volatile @org.jetbrains.annotations.Nullable String rewrittenIndex;
+
+    public StaticServlet() {
+        this("");
+    }
+
+    public StaticServlet(String basePath) {
+        this.basePath = basePath == null || basePath.equals("/") ? "" : basePath;
+    }
 
     private static final Map<String, String> CONTENT_TYPES = Map.ofEntries(
             Map.entry("html", "text/html; charset=utf-8"),
@@ -81,11 +103,52 @@ public final class StaticServlet extends HttpServlet {
         // Phase 1 ships a hand-written placeholder shell; assets are rebuilt
         // per deploy and must never be cached across versions.
         response.setHeader("Cache-Control", "no-cache");
+        if (INDEX.equals(path)) {
+            byte[] body = indexHtml(resource);
+            response.setContentLengthLong(body.length);
+            response.getOutputStream().write(body);
+            return;
+        }
         URLConnection connection = resource.openConnection();
         response.setContentLengthLong(connection.getContentLengthLong());
         try (InputStream in = connection.getInputStream()) {
             in.transferTo(response.getOutputStream());
         }
+    }
+
+    /// The shell with the base-path machinery injected. Everything the SPA
+    /// loads — hashed bundles, icons, wallpaper — is referenced root-absolute
+    /// in the build output; under a subpath mount those URLs are prefixed
+    /// here, and `<base href>` makes the frontend's relative runtime paths
+    /// (fetch("api/…"), "assets-img/…") resolve inside the mount as well.
+    private byte[] indexHtml(URL resource) throws IOException {
+        String cached = rewrittenIndex;
+        if (cached == null) {
+            try (InputStream in = resource.openStream()) {
+                cached = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            String head = "  <base href=\"" + (basePath.isEmpty() ? "/" : basePath + "/") + "\">\n"
+                    + "  <script>window.__HDSL_BASE__=" + jsonString(basePath) + ";</script>\n";
+            cached = cached.replaceFirst("<head>", "<head>\n" + head);
+            if (!basePath.isEmpty()) {
+                cached = cached.replace("=\"/assets", "=\"" + basePath + "/assets");
+            }
+            rewrittenIndex = cached;
+        }
+        return cached.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /// JSON-string escaping for the injected script literal (config
+    /// validation already rejects quotes, this covers backslashes).
+    private static String jsonString(String value) {
+        StringBuilder out = new StringBuilder(value.length() + 2).append('"');
+        for (char c : value.toCharArray()) {
+            if (c == '\\' || c == '"') {
+                out.append('\\');
+            }
+            out.append(c);
+        }
+        return out.append('"').toString();
     }
 
     /// The request path to resolve against the classpath.

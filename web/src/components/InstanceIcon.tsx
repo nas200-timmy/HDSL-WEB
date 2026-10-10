@@ -10,7 +10,7 @@ function gradFor(name: string): string {
 }
 
 function img(name: string): string {
-  return `${import.meta.env.BASE_URL}assets-img/${name}`;
+  return `assets-img/${name}`;
 }
 
 /** 实例图标：icon 是可访问 URL 时显示图片，否则显示 HMCL 内置草方块图标。 */

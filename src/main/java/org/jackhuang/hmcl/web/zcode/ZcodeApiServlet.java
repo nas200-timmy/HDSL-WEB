@@ -363,7 +363,8 @@ public final class ZcodeApiServlet extends HttpServlet {
         // The instance binds loopback and is reached through the panel's own
         // mount — same origin, same certificate, same session gate as dsh.
         JsonObject body = new JsonObject();
-        body.addProperty("url", "/i/" + id + "/");
+        // Browser-consumed URL: carries the mount base (see BrandApiServlet).
+        body.addProperty("url", config.basePath + "/i/" + id + "/");
         Json.write(response, body);
     }
 

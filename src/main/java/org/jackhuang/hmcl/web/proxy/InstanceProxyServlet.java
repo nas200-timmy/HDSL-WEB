@@ -158,9 +158,20 @@ public final class InstanceProxyServlet extends HttpServlet {
 
     private final HttpClient client;
     private final TaskService tasks;
+    /// The panel's own mount (`HDSL_BASE_PATH`): internal routing uses the
+    /// bare `/i/<id>/` mount, but every browser-facing surface — injected
+    /// base/shim references, patched asset URLs, redirect Locations, cookie
+    /// paths — must carry it, or a subpath-mounted panel leaks root paths
+    /// that its outer proxy does not serve.
+    private final String basePath;
 
     public InstanceProxyServlet(TaskService tasks) {
+        this(tasks, "");
+    }
+
+    public InstanceProxyServlet(TaskService tasks, String basePath) {
         this.tasks = tasks;
+        this.basePath = basePath == null ? "" : basePath;
         // HTTP/1.1 is forced: the default HTTP/2 makes java.net send an h2c
         // upgrade probe (Upgrade: h2c), and dsh's bare node:http server —
         // which treats every Connection: Upgrade as a WebSocket candidate —
@@ -187,7 +198,7 @@ public final class InstanceProxyServlet extends HttpServlet {
         if (slash < 0) {
             String query = request.getQueryString();
             response.setStatus(HttpServletResponse.SC_MOVED_PERMANENTLY);
-            response.setHeader("Location", "/i/" + instanceId + "/" + (query == null ? "" : "?" + query));
+            response.setHeader("Location", basePath + "/i/" + instanceId + "/" + (query == null ? "" : "?" + query));
             return;
         }
 
@@ -209,7 +220,8 @@ public final class InstanceProxyServlet extends HttpServlet {
             response.setContentType("text/javascript; charset=utf-8");
             response.setHeader("Cache-Control", "no-store");
             response.getOutputStream().write(
-                    template.replace("__MOUNT__", "/i/" + instanceId + "/")
+                    template.replace("__MOUNT__", basePath + "/i/" + instanceId + "/")
+                            .replace("__PANEL_ROOT__", basePath + "/")
                             .getBytes(StandardCharsets.UTF_8));
             return;
         }
@@ -246,6 +258,7 @@ public final class InstanceProxyServlet extends HttpServlet {
         }
         URI target = URI.create("http://127.0.0.1:" + port + targetPath);
         String mount = "/i/" + instanceId + "/";
+        String browserMount = basePath + mount;
 
         // The input stream must be claimed before the request goes async. A body
         // is what the client announced — by content-length or by chunked framing;
@@ -319,7 +332,7 @@ public final class InstanceProxyServlet extends HttpServlet {
         boolean routerClient = brandClient && brand.needsRouterShim();
         int upstreamPort = port;
         upstream.whenCompleteAsync(
-                (result, error) -> pump(response, async, upstream, mount, brandClient, routerClient,
+                (result, error) -> pump(response, async, upstream, mount, browserMount, brandClient, routerClient,
                         upstreamPort, result, error),
                 tasks.executor());
     }
@@ -331,9 +344,13 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// its references — see [rewritePage]), and — for a third-party brand client —
     /// its own script and stylesheet ([patchBrandScript], [patchBrandStylesheet]).
     /// Everything else streams, which is what keeps `/plugins/events` (SSE) working.
+    /// @param mount         the bare `/i/<id>/` — router-bundle cache key and probe
+    /// @param browserMount  `mount` under the panel's own base — every surface
+    ///                      the browser sees (injected references, patched asset
+    ///                      URLs, redirect Locations, cookie paths)
     private static void pump(HttpServletResponse response, AsyncContext async,
                              CompletableFuture<HttpResponse<InputStream>> upstream, String mount,
-                             boolean brandClient, boolean routerClient, int port,
+                             String browserMount, boolean brandClient, boolean routerClient, int port,
                              @Nullable HttpResponse<InputStream> result, @Nullable Throwable error) {
         try {
             if (error != null || result == null) {
@@ -356,13 +373,13 @@ public final class InstanceProxyServlet extends HttpServlet {
             boolean sized = contentLength >= 0 && contentLength <= MAX_SCRIPT_BYTES;
             boolean servesScript = brandClient && !servesPage && sized && contentType.contains("javascript");
             boolean servesStyle = brandClient && !servesPage && sized && contentType.contains("text/css");
-            copyResponseHeaders(result, response, mount, servesPage || servesScript || servesStyle);
+            copyResponseHeaders(result, response, browserMount, servesPage || servesScript || servesStyle);
             try (InputStream in = result.body(); OutputStream out = response.getOutputStream()) {
                 if (servesPage) {
                     // Buffered and rewritten, because the page dsh generates is rooted at the origin
                     // rather than at whatever path it is reached through — see rewritePage.
                     String html = readPage(in, result);
-                    out.write(rewritePage(html, mount,
+                    out.write(rewritePage(html, browserMount,
                                     routerClient ? routerShimFor(port, mount, html) : RouterShim.NONE)
                             .getBytes(StandardCharsets.UTF_8));
                     out.flush();
@@ -378,8 +395,8 @@ public final class InstanceProxyServlet extends HttpServlet {
                         // under its address: a cached copy without the patch would route the
                         // client by the mount itself and ask for chunks at the panel root.
                         response.setHeader("Cache-Control", "no-store");
-                        out.write(servesScript ? patchBrandScript(asset, mount)
-                                : patchBrandStylesheet(asset, mount));
+                        out.write(servesScript ? patchBrandScript(asset, browserMount)
+                                : patchBrandStylesheet(asset, browserMount));
                     }
                     out.flush();
                 } else {
@@ -822,7 +839,7 @@ public final class InstanceProxyServlet extends HttpServlet {
             (()=>{
             const mount="__MOUNT__";
             window.__hdslUnmount=(path)=>path.indexOf(mount)===0?path.slice(mount.length-1):path;
-            const root=()=>"/"+location.hash;
+            const root=()=>"__PANEL_ROOT__"+location.hash;
             try{if(location.pathname.indexOf(mount)===0)history.replaceState(history.state,"",root())}catch(e){}
             const push=history.pushState,repl=history.replaceState;
             const swallow=(fn)=>function(state,title,url){try{return fn.call(history,state,title,root())}catch(e){}};
