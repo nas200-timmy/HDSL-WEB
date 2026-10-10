@@ -20,7 +20,6 @@ import {
   ErrorIcon,
   ExtensionFillIcon,
   ExtensionIcon,
-  FolderOpenIcon,
   InfoFillIcon,
   InfoIcon,
   MenuIcon,
@@ -137,7 +136,6 @@ export function InstanceDetailPage() {
   const [renameValue, setRenameValue] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
   const [manageAnchor, setManageAnchor] = useState<HTMLElement | null>(null);
-  const [browseAnchor, setBrowseAnchor] = useState<HTMLElement | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
 
   // 挂载：订阅该实例日志 topic + 全局任务，打底数据，并周期性兜底刷新
@@ -509,7 +507,7 @@ export function InstanceDetailPage() {
   return (
     <div className="page-with-sidebar">
       <nav className="sidebar-sub sidebar-stack" style={{ paddingTop: 0 }}>
-        {/* 顶部操作框：启动/停止 + 浏览 + 管理 */}
+        {/* 顶部操作框：启动/停止 + 管理 */}
         <div className="card instance-actions-box" style={{ display: "flex", padding: 4, gap: 2 }}>
           <button
             className="tool-btn ripple-host"
@@ -523,15 +521,6 @@ export function InstanceDetailPage() {
               <RocketLaunchIcon size={18} />
             )}
             {running || st === "STARTING" ? I18N["dsh.stop"] : I18N["dsh.launch"]}
-          </button>
-          <button
-            className="tool-btn ripple-host"
-            style={{ flex: 1, justifyContent: "center" }}
-            title={I18N["settings.game.exploration"]}
-            onClick={(e) => setBrowseAnchor(e.currentTarget)}
-          >
-            <FolderOpenIcon size={18} />
-            {I18N["dsh.instance.browse"]}
           </button>
           <button
             className="tool-btn ripple-host"
@@ -872,22 +861,6 @@ export function InstanceDetailPage() {
           }}
         >
           {I18N["dsh.instance.remove"]}
-        </PopupItem>
-      </PopupMenu>
-
-      {/* 浏览菜单（网页版无法打开服务器目录，仅展示入口） */}
-      <PopupMenu open={browseAnchor !== null} anchor={browseAnchor} onClose={() => setBrowseAnchor(null)}>
-        <PopupItem icon={<FolderOpenIcon size={16} />} onClick={() => setBrowseAnchor(null)}>
-          {I18N["dsh.instance.open_home"]}
-        </PopupItem>
-        <PopupItem icon={<FolderOpenIcon size={16} />} onClick={() => setBrowseAnchor(null)}>
-          {I18N["dsh.instance.open_home.dsh"]}
-        </PopupItem>
-        <PopupItem icon={<FolderOpenIcon size={16} />} onClick={() => setBrowseAnchor(null)}>
-          {I18N["dsh.instance.open.sessions"]}
-        </PopupItem>
-        <PopupItem icon={<FolderOpenIcon size={16} />} onClick={() => setBrowseAnchor(null)}>
-          {I18N["dsh.instance.open.storages"]}
         </PopupItem>
       </PopupMenu>
 

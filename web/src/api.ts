@@ -22,7 +22,6 @@ import type {
   Task,
   TlsSettings,
   TlsUploadResult,
-  Vendor,
   VersionInfo,
   WorkspaceInfo,
   ZcodeBuildStatus,
@@ -192,7 +191,6 @@ export const api = {
 
   // ---------- Phase 3：账户 ----------
 
-  vendors: () => request<{ vendors: Vendor[] }>("/api/vendors"),
 
   accounts: () => request<{ accounts: Account[] }>("/api/accounts"),
 

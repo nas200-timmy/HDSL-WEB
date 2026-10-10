@@ -112,15 +112,6 @@ export interface TaskApproval {
 
 // ---------- Phase 3：账户 ----------
 
-export interface Vendor {
-  id: string;
-  name: string;
-  endpoint: string | null;
-  envVar: string;
-  kinds: string[];
-  preferred: boolean;
-}
-
 /** 模型目录里的供应商（GET /api/models/providers 的 providers[] 一条） */
 export interface ModelProvider {
   id: string;
