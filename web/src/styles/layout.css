@@ -15,8 +15,11 @@
   background: var(--monet-surface);
 }
 
-/* 极窄视口：内容区允许内部滚动，避免内容被裁掉 */
-@media (max-width: 800px), (max-height: 490px) {
+/* 极窄视口：内容区允许内部滚动，避免内容被裁掉。
+   条件与 web/src/hooks.ts 的 MOBILE_QUERY、mobile.css 顶部的布局查询逐字一致——
+   这里曾是 800px/490px 的孤儿断点，760–800px 窗口里 JS 认为桌面、CSS 认为极窄，
+   判定方向都不一致。 */
+@media (max-width: 760px), (max-height: 520px) {
   .decorator-content {
     overflow: auto;
   }
