@@ -40,9 +40,13 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 /// The process side of the experimental ZCode category: one OS process per
 /// instance, launched as
-/// `node <package>/bin/zcode.mjs --web --no-open --host 0.0.0.0 --port 0
-/// --workspace <dir> --token <token>` with `ZCODE_DATA_BASE_DIR` pointing at
-/// the instance's own `data/` directory.
+/// `node <package>/bin/zcode.mjs --web --no-open --host 127.0.0.1 --port 0
+/// --no-token --workspace <dir>` with `ZCODE_DATA_BASE_DIR` pointing at
+/// the instance's own `data/` directory. Loopback only and tokenless on
+/// purpose: the browser reaches the instance through the panel's `/i/<id>/`
+/// mount, where the session gate (and TLS, when enabled) already applies —
+/// do not "align" this with the old loopback-less documentation, that posture
+/// was deliberately replaced.
 ///
 /// ZCode's web mode announces itself on stdout: a `ZCode Web is running` line,
 /// then `Local:   http://127.0.0.1:<port>/` carrying the real port (`--port 0`

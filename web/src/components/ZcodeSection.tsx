@@ -270,7 +270,7 @@ export function ZcodeSection() {
                     </button>
                     <button
                       className="icon-btn on-variant ripple-host"
-                      title="在新标签页打开（HTTP 明文端口）"
+                      title="在新标签页打开（经面板 /i/003cid003e/ 反代）"
                       disabled={inst.state !== "running"}
                       onClick={() => void openInBrowser(inst)}
                     >

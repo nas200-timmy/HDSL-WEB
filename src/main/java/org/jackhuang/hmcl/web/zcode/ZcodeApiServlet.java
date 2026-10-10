@@ -67,19 +67,19 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 ///   its readiness line; idempotent while already running
 /// - `POST   /api/zcode/instances/{id}/stop`       — SIGTERM the process
 /// - `GET    /api/zcode/instances/{id}/open`       — `{url}` of the running
-///   instance, `http://<request host>:<port>/?token=<token>`; plain HTTP on an
-///   independent port, which is exactly what the interface warns about
+///   instance: `/i/<id>/`, the panel's own reverse-proxied mount — same port,
+///   same certificate and the same session gate as dsh
 /// - `GET    /api/zcode/instances/{id}/logs?tail=N`— the trailing lines of the
 ///   process log
 ///
 /// The category is an implementation-level experiment around ZCode
 /// (zai-org/ZCode, Apache-2.0): nothing here is covered by the dsh category's
 /// compatibility promises, API keys are stored in clear text in the instance
-/// manifest, distributions are built from upstream source with [ZcodePatch]
-/// applied, and instances are reached over plain HTTP on their own ports rather
-/// than through the `/i/<id>/` reverse proxy (ZCode's frontend writes its root
-/// path into its assets; the built distribution carries the patch that makes the
-/// proxy possible, and wiring it up is the next step).
+/// manifest, and distributions are built from upstream source with [ZcodePatch]
+/// applied. Instances bind loopback only and are reached through the panel's
+/// `/i/<id>/` reverse proxy — the loopback-less, plain-HTTP era documented
+/// earlier is over, and the patch in the built distribution is what makes the
+/// proxied mounting work.
 @NotNullByDefault
 public final class ZcodeApiServlet extends HttpServlet {
 
