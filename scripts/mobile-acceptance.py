@@ -191,6 +191,35 @@ with sync_playwright() as p:
     check("8 桌面端无摘要卡/长说明原样", desk["summary"] is False and desk["caption"] and desk["noteCollapse"] is False, json.dumps(desk))
     b.close()
 
+    # ---------- 回归：桌面缩窄触发移动版式（细指针，非 coarse） ----------
+    # v0.3.3 的教训：摘要条样式曾误放在 (hover:none)+(pointer:coarse) 查询里，
+    # 真机正常、桌面缩窄时摘要条退化成块级堆叠（按钮掉到第二行）。两种指针路径都要钉。
+    b = p.chromium.launch()
+    ctx = b.new_context(viewport={"width": 500, "height": 900}, has_touch=False)
+    pg = ctx.new_page()
+    pg.route("**/*", route_api)
+    ctx.request.post(API + "/api/auth/login", data={"username": USER, "password": PASS})
+    pg.goto(BASE + "/instances")
+    pg.wait_for_timeout(1500)
+    pg.get_by_role("button", name="Kimi Code").first.click()
+    pg.wait_for_timeout(1200)
+    fine = pg.evaluate("""() => {
+      const bar = document.querySelector('.brand-summary');
+      if (!bar) return null;
+      const g = e => { const r = e.getBoundingClientRect(); return {y: +r.y.toFixed(0), right: +(r.x + r.width).toFixed(0)}; };
+      const barR = g(bar);
+      const pill = g(bar.querySelector('.brand-summary-expand'));
+      const btn = g(bar.querySelector('.brand-summary-action'));
+      return {barH: +bar.getBoundingClientRect().height.toFixed(0), barRight: barR.right,
+              pillY: pill.y, pillRight: pill.right, btnY: btn.y, btnRight: btn.right,
+              pillH: +bar.querySelector('.brand-summary-expand').getBoundingClientRect().height.toFixed(0)};
+    }""")
+    same_line = fine and abs(fine["pillY"] - fine["btnY"]) < 6
+    right_anchored = fine and fine["btnRight"] >= fine["barRight"] - 8 and fine["pillRight"] < fine["btnRight"]
+    styled = fine and fine["pillH"] == 32
+    check("9 桌面缩窄（细指针）摘要条单行且按钮组右对齐", same_line and right_anchored and styled, json.dumps(fine))
+    b.close()
+
 srv.shutdown()
 fails = [n for n, ok in results if not ok]
 print("\n==>", "ALL PASS" if not fails else f"FAILED: {fails}")

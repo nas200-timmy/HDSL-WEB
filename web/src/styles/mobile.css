@@ -259,6 +259,82 @@
     width: min(380px, calc(100vw - 32px));
     min-width: 0;
   }
+
+  /* ---------------- 品牌面板移动端折叠（BrandsSection） ---------------- */
+
+  /* 折叠态摘要条：与页签行同处一张卡内，顶部分隔线分开；目标 <100px 整块
+     （两个 44px 触控目标），内容一行省略不换行 */
+  .brand-summary {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px 4px 12px;
+    min-height: 44px;
+    border-top: 1px solid var(--monet-outline-variant);
+  }
+
+  /* 点按区（文字）占满剩余宽度。用 div 而不是 button：个别引擎不按 flex:1
+     拉伸按钮项；右对齐的真正保险是下面 .brand-summary-expand 的 margin-left:auto */
+  .brand-summary-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+  }
+
+  .brand-summary-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: var(--monet-on-surface);
+  }
+
+  /* 「全部展开▾」药丸：展开入口要一眼可见。margin-left:auto 是右对齐的硬保证——
+     即使上面的 flex:1 在某个引擎里失效，药丸+按钮这组也被顶到折叠块最右侧 */
+  .brand-summary-expand {
+    margin-left: auto;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 16px;
+    background: var(--monet-secondary-container);
+    color: var(--monet-on-secondary-container);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  /* 默认操作按钮：有运行中的实例显示「停止」，否则「启动」；没有实例则禁用 */
+  .brand-summary-action {
+    flex: none;
+    height: 36px;
+    padding: 0 14px;
+    font-size: 13px;
+  }
+
+  /* 长说明降级（CollapsibleNote）：一行摘要 + 详情按钮 */
+  .note-collapse {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .note-collapse-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -337,79 +413,4 @@
     flex: none;
   }
 
-  /* ---------------- 品牌面板移动端折叠（BrandsSection） ---------------- */
-
-  /* 折叠态摘要条：与页签行同处一张卡内，顶部分隔线分开；目标 <100px 整块
-     （两个 44px 触控目标），内容一行省略不换行 */
-  .brand-summary {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 6px 4px 12px;
-    min-height: 44px;
-    border-top: 1px solid var(--monet-outline-variant);
-  }
-
-  /* 点按区（文字）占满剩余宽度。用 div 而不是 button：个别引擎不按 flex:1
-     拉伸按钮项；右对齐的真正保险是下面 .brand-summary-expand 的 margin-left:auto */
-  .brand-summary-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    cursor: pointer;
-  }
-
-  .brand-summary-text {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 13px;
-    color: var(--monet-on-surface);
-  }
-
-  /* 「全部展开▾」药丸：展开入口要一眼可见。margin-left:auto 是右对齐的硬保证——
-     即使上面的 flex:1 在某个引擎里失效，药丸+按钮这组也被顶到折叠块最右侧 */
-  .brand-summary-expand {
-    margin-left: auto;
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    height: 32px;
-    padding: 0 10px;
-    border-radius: 16px;
-    background: var(--monet-secondary-container);
-    color: var(--monet-on-secondary-container);
-    font-size: 12px;
-    font-weight: 600;
-    white-space: nowrap;
-  }
-
-  /* 默认操作按钮：有运行中的实例显示「停止」，否则「启动」；没有实例则禁用 */
-  .brand-summary-action {
-    flex: none;
-    height: 36px;
-    padding: 0 14px;
-    font-size: 13px;
-  }
-
-  /* 长说明降级（CollapsibleNote）：一行摘要 + 详情按钮 */
-  .note-collapse {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    min-width: 0;
-  }
-
-  .note-collapse-text {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
 }
