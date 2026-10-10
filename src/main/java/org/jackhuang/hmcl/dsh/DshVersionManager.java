@@ -904,45 +904,18 @@ public final class DshVersionManager {
 
     /// Compares two version strings that may carry pre-release suffixes.
     ///
-    /// This is deliberately a small numeric comparison rather than a full
-    /// implementation of semantic-version precedence: the launcher only needs a
-    /// stable, sensible ordering for its version list.
+    /// Delegates to [org.jackhuang.hmcl.util.versioning.VersionNumber] — the
+    /// Maven-precedence comparator HMCL already ships. The previous hand-rolled
+    /// implementation fell back to `String.compareTo` between pre-releases of
+    /// the same numeric prefix, which ranks `1.0.0-alpha.10` BELOW
+    /// `1.0.0-alpha.2`; that ordering feeds the version picker, the lockstep
+    /// "oldest" decision and the plugin/Node sort, so "what is newest" was
+    /// genuinely misanswered.
     ///
     /// @param left  the first version
     /// @param right the second version
     /// @return a negative value, zero or a positive value as `left` sorts before, with or after `right`
     static int compareVersions(String left, String right) {
-        int[] a = numericPrefix(left);
-        int[] b = numericPrefix(right);
-        for (int i = 0; i < 3; i++) {
-            int result = Integer.compare(a[i], b[i]);
-            if (result != 0) {
-                return result;
-            }
-        }
-        boolean leftPre = left.contains("-");
-        boolean rightPre = right.contains("-");
-        if (leftPre != rightPre) {
-            // A release outranks any pre-release with the same numeric prefix.
-            return leftPre ? -1 : 1;
-        }
-        return left.compareTo(right);
-    }
-
-    /// Extracts up to three leading numeric components from a version string.
-    ///
-    /// @param version the version string
-    /// @return a three-element array, zero-filled when components are missing
-    private static int[] numericPrefix(String version) {
-        int[] result = new int[3];
-        String[] parts = version.split("[.\\-+]");
-        for (int i = 0; i < Math.min(3, parts.length); i++) {
-            try {
-                result[i] = Integer.parseInt(parts[i]);
-            } catch (NumberFormatException e) {
-                result[i] = 0;
-            }
-        }
-        return result;
+        return org.jackhuang.hmcl.util.versioning.VersionNumber.compare(left, right);
     }
 }
