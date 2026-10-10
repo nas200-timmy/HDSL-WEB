@@ -104,13 +104,16 @@ export function InstancePluginsPanel({ instance }: { instance: Instance }) {
     void seedTasks();
   };
 
-  // 任务视图：本面板发起的任务 + 按 kind 匹配到本实例的插件任务
+  // 任务视图：本面板发起的任务 + 本实例的插件任务。
+  // 归属按任务自带的 instance 字段精确匹配——kind 只是 "plugin-install"
+  // 这类名字，kind.includes(id) 永远匹配不上（store.findTaskForInstance
+  // 的注释记载过同一处推翻，这个面板当时没跟上）。
   const tasks: TaskRec[] = useMemo(() => {
     const all = Object.values(s.tasks);
     const mine = all.filter(
       (t) =>
         tracked.includes(t.id) ||
-        (t.kind.includes(id) && t.kind.toLowerCase().includes("plugin")),
+        (t.instance === id && t.kind.toLowerCase().includes("plugin")),
     );
     return mine.sort((a, b) => b.seenAt - a.seenAt).slice(0, 5);
   }, [s.tasks, tracked, id]);
