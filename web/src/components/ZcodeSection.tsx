@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { CollapsibleNote } from "./CollapsibleNote";
 import { ConfirmDialog, Dialog } from "./Dialog";
 import { ZcodeBuildButton } from "./ZcodeBuildDialog";
 import {
@@ -191,13 +192,22 @@ export function ZcodeSection() {
         ZCode（实验性）
       </div>
       <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", maxHeight: 330 }}>
-        <div style={{ padding: "8px 12px 4px", fontSize: 12, lineHeight: 1.7, color: "var(--monet-on-surface-variant)" }}>
-          <b style={{ color: "var(--monet-on-surface)" }}>
-            纯实现性验证功能：不保证可用，也不承诺与 dsh 同等的功能与兼容
-          </b>
-          ——能不能跑通取决于 ZCode 上游。实例只绑回环、经面板反代到 <code>/i/&lt;id&gt;/</code>（同端口同证书、
-          同样要登录），凭证以明文保存在实例目录。
-        </div>
+        {/* 移动端长说明收成一行 + 详情展开；桌面端原样 */}
+        <CollapsibleNote
+          summary={
+            <b style={{ color: "var(--monet-on-surface)" }}>
+              纯实现性验证功能：不保证可用，也不承诺与 dsh 同等的功能与兼容
+            </b>
+          }
+        >
+          <div style={{ padding: "8px 12px 4px", fontSize: 12, lineHeight: 1.7, color: "var(--monet-on-surface-variant)" }}>
+            <b style={{ color: "var(--monet-on-surface)" }}>
+              纯实现性验证功能：不保证可用，也不承诺与 dsh 同等的功能与兼容
+            </b>
+            ——能不能跑通取决于 ZCode 上游。实例只绑回环、经面板反代到 <code>/i/&lt;id&gt;/</code>（同端口同证书、
+            同样要登录），凭证以明文保存在实例目录。
+          </div>
+        </CollapsibleNote>
 
         <div className="toolbar-row" style={{ padding: "0 12px 6px" }}>
           <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>

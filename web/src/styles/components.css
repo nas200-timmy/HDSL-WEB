@@ -880,6 +880,15 @@ select.input {
   flex-wrap: wrap;
 }
 
+/* 长地址单行截断（主页品牌卡的 /i/<id>/ 行）：不换行裸奔，省略号 + 复制按钮兜底 */
+.comp-row .comp-value.url-ellipsis {
+  flex-wrap: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
 .comp-row .comp-value.mono {
   font-size: 12px;
   word-break: break-all;

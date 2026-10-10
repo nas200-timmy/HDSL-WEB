@@ -1,17 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { launchBrandInstance, stopBrandInstance } from "../actions";
+import { CollapsibleNote } from "./CollapsibleNote";
 import { ConfirmDialog, Dialog } from "./Dialog";
 import { ZcodeSection } from "./ZcodeSection";
 import {
   CloseIcon,
   DeleteIcon,
   InfoIcon,
+  KeyboardArrowDownIcon,
   PublicIcon,
   RefreshIcon,
   RocketLaunchIcon,
 } from "./icons";
+import { useMobileLayout } from "../hooks";
 import { I18N } from "../i18n";
-import { toast } from "../store";
+import { refreshZcode, toast, useAppState } from "../store";
 import type { BrandId, BrandInstance, BrandInstallStatus, BrandVersions } from "../types";
 import { errMsg } from "../utils";
 
@@ -41,29 +45,176 @@ const BRAND_NAME: Record<BrandId, string> = {
 
 /// 品牌区（实例列表页底部）：ZCode 页签原样渲染现有 ZcodeSection，
 /// Kimi Code / OpenCode 页签为同构的品牌面板。
-export function BrandsSection() {
-  const [tab, setTab] = useState<"zcode" | BrandId>("zcode");
+///
+/// 移动端（≤760px 宽或 ≤520px 高，判定与 mobile.css / hooks.ts 逐字一致）默认折叠：
+/// 页签行下面只留一行摘要卡（品牌 · 已装版本 · 实例数 · 状态），点开才展开详情——
+/// 面板桌面版式 6~7 个横条原样搬进 390px 会全部折行，把 dsh 实例列表挤出首屏。
+/// 展开状态记 localStorage，别让手机用户每次进来重新折；桌面端一字不动。
+const EXPANDED_KEY = "hdsl.brand-panel.expanded";
+
+export function BrandsSection({ initialTab }: { initialTab?: string }) {
+  const mobile = useMobileLayout();
+  // 移动端无显式深链时，页签跟随上次展开的品牌——否则刷新后页签跳回 ZCode、
+  // 展开状态却对不上号，面板仍是折叠的
+  const persisted = mobile && !initialTab ? localStorage.getItem(EXPANDED_KEY) : null;
+  const [tab, setTab] = useState<"zcode" | BrandId>(
+    initialTab === "kimi" || initialTab === "opencode"
+      ? initialTab
+      : persisted === "kimi" || persisted === "opencode"
+        ? persisted
+        : "zcode",
+  );
+  // null = 折叠（只显示摘要行）；桌面端恒展开
+  const [expandedKey, setExpandedKey] = useState<string | null>(() =>
+    mobile ? localStorage.getItem(EXPANDED_KEY) : "desktop",
+  );
   const tabs: { key: "zcode" | BrandId; label: string }[] = [
     { key: "zcode", label: I18N["dsh.brand.tab.zcode"] },
     { key: "kimi", label: I18N["dsh.brand.kimi"] },
     { key: "opencode", label: I18N["dsh.brand.opencode"] },
   ];
+  const toggle = (key: "zcode" | BrandId) => {
+    if (!mobile) return;
+    const next = expandedKey === key ? null : key;
+    setExpandedKey(next);
+    if (next) localStorage.setItem(EXPANDED_KEY, next);
+    else localStorage.removeItem(EXPANDED_KEY);
+  };
+  const tabRow = (
+    <div className="toolbar-row" style={{ flexShrink: 0, padding: 4, gap: 2 }}>
+      {tabs.map((t) => (
+        <button
+          key={t.key}
+          className="tool-btn ripple-host"
+          style={tab === t.key ? { background: "var(--monet-secondary-container)", color: "var(--monet-on-secondary-container)" } : undefined}
+          title={mobile && expandedKey !== tab && tab === t.key ? "点按展开此面板" : undefined}
+          onClick={() => {
+            setTab(t.key);
+            // 移动端点当前页签 = 收起/展开手风琴（同时只开一个）
+            if (mobile && tab === t.key) toggle(t.key);
+          }}
+        >
+          {t.label}
+          {/* 移动端折叠态下给当前页签挂展开箭头，明示「这个可以展开」 */}
+          {mobile && expandedKey !== tab && tab === t.key && (
+            <KeyboardArrowDownIcon size={14} style={{ marginLeft: 2, verticalAlign: -2 }} />
+          )}
+        </button>
+      ))}
+    </div>
+  );
+  // 移动端折叠态：页签行 + 摘要卡并进一张卡（省掉卡片间距，整块 <100px 更稳），
+  // 折叠的摘要条上方画一条分隔线与页签行分开；桌面端保持页签独立卡片原样
+  if (mobile && expandedKey !== tab) {
+    return (
+      <div className="card" style={{ flexShrink: 0, padding: 0 }}>
+        {tabRow}
+        <BrandSummaryBar brand={tab} onExpand={() => toggle(tab)} />
+      </div>
+    );
+  }
   return (
     <>
-      <div className="card toolbar-row" style={{ flexShrink: 0, padding: 4, gap: 2 }}>
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            className="tool-btn ripple-host"
-            style={tab === t.key ? { background: "var(--monet-secondary-container)", color: "var(--monet-on-secondary-container)" } : undefined}
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="card" style={{ flexShrink: 0, padding: 0 }}>
+        {tabRow}
       </div>
       {tab === "zcode" ? <ZcodeSection /> : <BrandPanel key={tab} brand={tab} />}
     </>
+  );
+}
+
+/// 移动端折叠态的一行摘要卡：`Kimi Code · 已装 2.1.1 · 1 实例 · 未启动 [启动] 全部▾`。
+/// 不是光秃秃的一行字：右侧留默认操作（启动/停止第一个实例，行为与启动面板主按钮一致）
+/// 和「全部▾」展开提示；中间点按展开详情。数据自取自刷：zcode 走 store（refreshZcode
+/// 已带轮询），品牌面板单独轻量拉一次。
+function BrandSummaryBar({ brand, onExpand }: { brand: "zcode" | BrandId; onExpand: () => void }) {
+  const s = useAppState();
+  const [versions, setVersions] = useState<BrandVersions | null>(null);
+  const [instances, setInstances] = useState<BrandInstance[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const reload = () => {
+    if (brand === "zcode") {
+      void refreshZcode();
+      return;
+    }
+    void api
+      .brandInstances(brand)
+      .then((r) => setInstances(r.instances))
+      .catch(() => undefined);
+  };
+
+  useEffect(() => {
+    if (brand === "zcode") {
+      void refreshZcode();
+      return;
+    }
+    let alive = true;
+    void api
+      .brandVersions(brand)
+      .then((v) => alive && setVersions(v))
+      .catch(() => undefined);
+    void api
+      .brandInstances(brand)
+      .then((r) => alive && setInstances(r.instances))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [brand]);
+
+  let label: string;
+  let install: string;
+  let list: { state: string; id: string; name: string }[];
+  if (brand === "zcode") {
+    label = I18N["dsh.brand.zcode"];
+    install = s.zcodeDist === null ? "检测中…" : s.zcodeDist.present ? `${I18N["dsh.brand.installed"]} ${s.zcodeDist.version ?? "未知版本"}` : "未安装";
+    list = s.zcodeInstances;
+  } else {
+    label = BRAND_NAME[brand];
+    const rel = versions?.releases ?? [];
+    install = rel.length === 0 ? "未安装" : `${I18N["dsh.brand.installed"]} ${rel.find((r) => r.current)?.version ?? rel[0].version}`;
+    list = instances ?? [];
+  }
+  const runningCount = list.filter((i) => i.state === "running").length;
+  const error = list.some((i) => i.state === "error");
+  const stateText = error ? I18N["dsh.brand.state.error"] : runningCount > 0 ? `${I18N["dsh.brand.state.running"]}${list.length > 1 ? ` ${runningCount}/${list.length}` : ""}` : I18N["dsh.brand.state.stopped"];
+
+  // 默认操作对象：有运行中的先停（它），否则启动第一个——与启动面板主按钮同规则
+  const target = list.find((i) => i.state === "running") ?? list[0] ?? null;
+  const targetRunning = target?.state === "running";
+  const doAction = async () => {
+    if (!target) return;
+    setBusy(true);
+    try {
+      if (targetRunning) await stopBrandInstance(brand, target.id);
+      else await launchBrandInstance(brand, { id: target.id, name: target.name });
+    } finally {
+      reload();
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="brand-summary">
+      <div className="brand-summary-main ripple-host" role="button" onClick={onExpand} title="展开显示全部">
+        <span className="brand-summary-text">
+          {label} · {install} · {list.length} 实例 · {stateText}
+        </span>
+      </div>
+      {/* 展开入口做成明显药丸：全部展开 + 下箭头，和启动按钮成组靠最右 */}
+      <button className="brand-summary-expand ripple-host" onClick={onExpand} title="展开显示全部">
+        全部展开
+        <KeyboardArrowDownIcon size={16} />
+      </button>
+      <button
+        className="btn btn-raised ripple-host brand-summary-action"
+        disabled={busy || !target}
+        onClick={() => void doAction()}
+      >
+        {targetRunning ? "停止" : busy ? "启动中…" : "启动"}
+      </button>
+    </div>
   );
 }
 
@@ -278,10 +429,15 @@ function BrandPanel({ brand }: { brand: BrandId }) {
 
   return (
     <>
+      {/* 移动端长警示收成一行 + 详情展开（CollapsibleNote 内部分支），桌面端原样 */}
       <div className="hint warning" style={{ flexShrink: 0, display: "grid", gap: 4 }}>
-        <span>{I18N["dsh.brand.thirdparty.warning"].replace("%s", brandName)}</span>
-        {/* OpenCode 是实验性接入：面板已经到极限，剩下的是上游的事——见 i18n 里的说明。 */}
-        {brand === "opencode" && <span>{I18N["dsh.brand.opencode.limit"]}</span>}
+        <CollapsibleNote
+          summary={<span>{I18N["dsh.brand.thirdparty.warning"].replace("%s", brandName)}</span>}
+        >
+          <span>{I18N["dsh.brand.thirdparty.warning"].replace("%s", brandName)}</span>
+          {/* OpenCode 是实验性接入：面板已经到极限，剩下的是上游的事——见 i18n 里的说明。 */}
+          {brand === "opencode" && <span>{I18N["dsh.brand.opencode.limit"]}</span>}
+        </CollapsibleNote>
       </div>
 
       {/* 版本行：可搜索下拉 + 安装 */}

@@ -244,10 +244,10 @@ export async function refreshExternal(): Promise<void> {
   ]);
   const external: ExternalInstance[] = [];
   for (const i of kimi ?? []) {
-    external.push({ brand: "kimi", id: i.id, name: i.name, state: i.state, url: i.url });
+    external.push({ brand: "kimi", id: i.id, name: i.name, state: i.state, url: i.url, version: i.version });
   }
   for (const i of opencode ?? []) {
-    external.push({ brand: "opencode", id: i.id, name: i.name, state: i.state, url: i.url });
+    external.push({ brand: "opencode", id: i.id, name: i.name, state: i.state, url: i.url, version: i.version });
   }
   for (const i of zcode ?? []) {
     external.push({ brand: "zcode", id: i.id, name: i.name, state: i.state });

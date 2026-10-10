@@ -1,15 +1,16 @@
 import { useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
-import { launchInstance, openDsh, stopInstance } from "../actions";
-import { LaunchPane } from "../components/LaunchPane";
+import { launchBrandInstance, launchInstance, openDsh, stopBrandInstance, stopInstance } from "../actions";
+import { LaunchPane, BRAND_LABEL, useLaunchEntry, type LaunchEntry } from "../components/LaunchPane";
 import { LogView } from "../components/LogView";
 import { MainSideBar, InstanceGraphic } from "../components/SideBar";
 import { ProgressBar } from "../components/ProgressBar";
 import { StateBadge } from "../components/InstanceIcon";
+import { ContentCopyIcon } from "../components/icons";
 import { useMobileLayout, useTickingUptime } from "../hooks";
 import { I18N } from "../i18n";
-import { findTaskForInstance, getState, refreshExternal, refreshInstances, useAppState } from "../store";
+import { findTaskForInstance, getState, refreshExternal, refreshInstances, toast, useAppState } from "../store";
 import type { Instance } from "../types";
 import { formatUptime, normState, parsePortFromUrl } from "../utils";
 
@@ -99,9 +100,20 @@ function RunningPane({ inst }: { inst: Instance }) {
  *  移动版式（≤760px 宽或 ≤520px 高，见 styles/mobile.css）下侧栏收成抽屉，
  *  壁纸上就空了 —— 所以这里补一张「当前实例」卡片，
  *  让远程启动/停止 dsh 在手机上一屏能完成（底部操作栏仍然贴底）。 */
+/** 品牌实例状态文案（小写状态 → 中文；与 BrandsSection/ZcodeSection 同款） */
+const EXT_STATE_TEXT: Record<string, string> = {
+  created: I18N["dsh.brand.state.created"],
+  starting: I18N["dsh.brand.state.starting"],
+  running: I18N["dsh.brand.state.running"],
+  stopped: I18N["dsh.brand.state.stopped"],
+  error: I18N["dsh.brand.state.error"],
+};
+
 export function MainPage() {
   const s = useAppState();
   const mobile = useMobileLayout();
+  // 启动目标（底栏主按钮操作的那个实例，跨品牌）：主卡片跟它走，全屏只剩一个"当前实例"
+  const entry = useLaunchEntry();
 
   useEffect(() => {
     void refreshInstances(!getState().instancesLoaded);
@@ -115,24 +127,127 @@ export function MainPage() {
     return () => clearInterval(timer);
   }, []);
 
-  const current = useMemo(() => {
+  // dsh 目标的进度/运行浮层（品牌目标的启动走自己的弹窗流程，不需要浮层）；
+  // 无选中目标时退回旧行为：第一个运行中的 dsh，否则第一个 dsh
+  const overlayInst = useMemo(() => {
+    if (entry) return entry.kind === "dsh" ? entry.dsh : null;
     const running = s.instances.find((i) => normState(i.state) === "RUNNING");
     return running ?? s.instances[0] ?? null;
-  }, [s.instances]);
+  }, [entry, s.instances]);
 
-  const st = current ? normState(current.state) : "";
-  const showProgress =
-    current && (st === "INSTALLING" || st === "STARTING" || st === "STOPPING");
-  const showRunning = current && st === "RUNNING";
+  // 手机主卡片：目标 = 品牌实例 → 品牌卡；目标 = dsh → 现有卡；无目标 → 空态
+  const card = entry ? (
+    entry.kind === "dsh" && entry.dsh ? (
+      <MobileHome inst={entry.dsh} />
+    ) : (
+      <MobileHomeBrand entry={entry} />
+    )
+  ) : overlayInst ? (
+    <MobileHome inst={overlayInst} />
+  ) : (
+    <MobileHomeEmpty />
+  );
+
+  const st = overlayInst ? normState(overlayInst.state) : "";
+  const showProgress = overlayInst && (st === "INSTALLING" || st === "STARTING" || st === "STOPPING");
+  const showRunning = overlayInst && st === "RUNNING";
 
   return (
     <div className="main-page">
       <MainSideBar />
       <div className="wallpaper-bg" style={{ backgroundImage: `url(${wallpaper()})` }} />
-      {mobile && (current ? <MobileHome inst={current} /> : <MobileHomeEmpty />)}
+      {mobile && card}
       <LaunchPane />
-      {showProgress && current && <LaunchProgress inst={current} />}
-      {showRunning && current && <RunningPane inst={current} />}
+      {showProgress && overlayInst && <LaunchProgress inst={overlayInst} />}
+      {showRunning && overlayInst && <RunningPane inst={overlayInst} />}
+    </div>
+  );
+}
+
+/** 手机端品牌实例卡：品牌 Tag + 实例名 + 状态徽标 + 版本；操作 = 启动/停止、打开、管理。
+ *  打开地址规则与品牌面板一致：品牌实例没有 token 概念，就是 /i/<id>/（会话门就是门）。 */
+function MobileHomeBrand({ entry }: { entry: LaunchEntry }) {
+  const nav = useNavigate();
+  const ext = entry.external;
+  const state = entry.state;
+  const running = state === "RUNNING";
+  const busy = state === "STARTING" || state === "STOPPING";
+  const openUrl = ext?.url ?? `/i/${entry.id}/`;
+  const manageTarget =
+    entry.kind === "zcode" ? "/instances" : `/instances?brand=${entry.kind}`;
+
+  const doOpen = () => {
+    if (entry.kind === "zcode") {
+      void api.zcodeOpen(entry.id).then((r) => window.open(r.url, "_blank", "noopener"));
+      return;
+    }
+    window.open(openUrl, "_blank", "noopener");
+  };
+  const doAction = () => {
+    if (running) void stopBrandInstance(entry.kind as "kimi" | "opencode" | "zcode", entry.id);
+    else void launchBrandInstance(entry.kind as "kimi" | "opencode" | "zcode", { id: entry.id, name: entry.name });
+  };
+  const copyUrl = () => {
+    void navigator.clipboard.writeText(openUrl).then(
+      () => toast("success", "已复制"),
+      () => toast("error", "复制失败"),
+    );
+  };
+
+  return (
+    <div className="mobile-home">
+      <div className="card">
+        <div className="comp-row">
+          <span className="comp-label">{I18N["instance"]}</span>
+          <span className="comp-value">
+            <span className="tag plain" style={{ marginRight: 2 }}>{BRAND_LABEL[entry.kind]}</span>
+            {entry.name}
+            <span className={`tag ${running ? "running" : "plain"}`}>
+              {EXT_STATE_TEXT[state.toLowerCase()] ?? state}
+            </span>
+          </span>
+        </div>
+        {ext?.version && (
+          <div className="comp-row">
+            <span className="comp-label">版本</span>
+            <span className="comp-value">{ext.version}</span>
+          </div>
+        )}
+        {running && (
+          <div className="comp-row">
+            <span className="comp-label">地址</span>
+            <span className="comp-value url-ellipsis" title={openUrl}>{openUrl}</span>
+            <button className="icon-btn on-variant ripple-host" style={{ width: 26, height: 26 }} title="复制地址" onClick={copyUrl}>
+              <ContentCopyIcon size={14} />
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="card" style={{ display: "flex", gap: 6, padding: 6 }}>
+        <button
+          className="tool-btn ripple-host"
+          style={{ flex: 1, justifyContent: "center" }}
+          disabled={busy}
+          onClick={doAction}
+        >
+          {running ? I18N["dsh.stop"] : busy ? I18N["dsh.launch.launching"] : I18N["dsh.launch"]}
+        </button>
+        <button
+          className="tool-btn ripple-host"
+          style={{ flex: 1, justifyContent: "center" }}
+          disabled={!running}
+          onClick={doOpen}
+        >
+          {I18N["dsh.launch.running"]}
+        </button>
+        <button
+          className="tool-btn ripple-host"
+          style={{ flex: 1, justifyContent: "center" }}
+          onClick={() => nav(manageTarget)}
+        >
+          {I18N["settings.game.management"]}
+        </button>
+      </div>
     </div>
   );
 }

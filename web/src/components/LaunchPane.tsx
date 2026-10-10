@@ -42,13 +42,14 @@ const BRAND_LABEL: Record<string, string> = {
   opencode: I18N["dsh.brand.opencode"],
   zcode: I18N["dsh.brand.zcode"],
 };
+export { BRAND_LABEL };
 
 /**
  * 按"当前选中实例 id"解析启动面板的当前条目：
  * 先在 dsh 实例里找，再在跨品牌外部实例（kimi/opencode/zcode）里找；
  * 无选中或选中已不存在 → null（现有空态）。
  */
-function useLaunchEntry(): LaunchEntry | null {
+export function useLaunchEntry(): LaunchEntry | null {
   const s = useAppState();
   const selectedId = useSelectedInstanceId();
   return useMemo(() => {

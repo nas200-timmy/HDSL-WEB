@@ -369,6 +369,8 @@ export interface ExternalInstance {
   name: string;
   state: string;
   url?: string;
+  /** kimi/opencode 实例的版本号（zcode 无版本概念） */
+  version?: string;
 }
 
 // ---------- 全局应用状态 ----------

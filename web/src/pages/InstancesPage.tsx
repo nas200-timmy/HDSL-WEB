@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { launchInstance, openDsh, stopInstance } from "../actions";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
@@ -33,6 +33,9 @@ export function InstancesPage() {
   const nav = useNavigate();
   const s = useAppState();
   const selectedId = useSelectedInstanceId();
+  // 主页品牌卡「管理」跳进来时带 ?brand=kimi|opencode，品牌区自动切到对应页签
+  const [searchParams] = useSearchParams();
+  const brandTab = searchParams.get("brand");
 
   const [query, setQuery] = useState("");
   const [searchMode, setSearchMode] = useState(false);
@@ -290,7 +293,7 @@ export function InstancesPage() {
         </div>
 
         {/* 品牌区：ZCode（实验）+ 第三方品牌（Kimi Code / OpenCode） */}
-        <BrandsSection />
+        <BrandsSection initialTab={brandTab ?? undefined} />
       </div>
 
       {/* 更多菜单（HMCL IconedMenuItem 风格） */}
