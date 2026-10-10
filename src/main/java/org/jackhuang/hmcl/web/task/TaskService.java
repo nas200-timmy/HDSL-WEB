@@ -131,6 +131,9 @@ public final class TaskService {
         private volatile double fraction = -1;
         private volatile @Nullable String error;
         private final AtomicBoolean cancelled = new AtomicBoolean();
+        /// The worker thread executing this task; set when the run begins.
+        /// Cancellation stops the process trees this thread started — no more.
+        private volatile @Nullable Thread worker;
         /// The structured outcome the work attached, if any; published with
         /// every update once present, and part of the REST snapshot.
         private volatile @Nullable JsonObject result;
@@ -318,6 +321,7 @@ public final class TaskService {
     /// Runs a task: acquires the install slot when needed, calls the work, and
     /// records the outcome.
     private void run(Task task, Callable<String> work, @Nullable ApprovalDecider approvalDecider) {
+        task.worker = Thread.currentThread();
         boolean installBound = installLike(task.kind()) && task.instanceId() != null;
         try {
             if (installBound) {
@@ -341,7 +345,13 @@ public final class TaskService {
         } catch (InterruptedException e) {
             task.finish(TaskState.FAILED, "cancelled", "cancelled");
         } catch (Exception e) {
-            task.finish(TaskState.FAILED, "failed", e.getMessage() == null ? e.toString() : e.getMessage());
+            // A cancelled task usually dies because its process was destroyed —
+            // report the cancellation, not a scary generic failure.
+            if (task.isCancelled()) {
+                task.finish(TaskState.FAILED, "cancelled", "cancelled");
+            } else {
+                task.finish(TaskState.FAILED, "failed", e.getMessage() == null ? e.toString() : e.getMessage());
+            }
         } finally {
             if (installBound) {
                 activeInstalls.remove(task.instanceId(), "pending");
@@ -394,7 +404,10 @@ public final class TaskService {
         if (future != null) {
             future.completeExceptionally(new InterruptedException("cancelled"));
         }
-        org.jackhuang.hmcl.dsh.DshCommand.stopRunning();
+        Thread worker = task.worker;
+        if (worker != null) {
+            org.jackhuang.hmcl.dsh.DshCommand.stopRunning(worker);
+        }
         return true;
     }
 

@@ -165,6 +165,58 @@ class TaskApiTest {
         assertTrue(!tasks.cancel("no-such-task"));
     }
 
+    /// 回归：取消一个任务只杀它自己的进程树。两个任务各跑一个 `sleep`，
+    /// 取消 A 时 B 的进程必须活着（旧实现 stopRunning() 无差别全杀，
+    /// MAX_INSTALLS=2 下取消一个实例的安装会弄死另一个实例的安装）。
+    @Test
+    void cancelKillsOnlyTheCancelledTasksProcess() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                        == org.jackhuang.hmcl.util.platform.OperatingSystem.LINUX,
+                "uses the sleep(1) program");
+        EventBus bus = new EventBus();
+        TaskService tasks = new TaskService(bus);
+        CountDownLatch bothStarted = new CountDownLatch(2);
+        TaskService.Task[] holder = new TaskService.Task[2];
+        for (int i = 0; i < 2; i++) {
+            int n = i;
+            holder[i] = tasks.submit("probe", null, () -> {
+                bothStarted.countDown();
+                // Mirrors the installers: a destroyed process is a non-zero
+                // exit, and the work reports failure on it.
+                var result = org.jackhuang.hmcl.dsh.DshCommand.run(List.of("sleep", "30"));
+                if (!result.isSuccess()) {
+                    throw new IllegalStateException("killed with exit " + result.exitCode());
+                }
+                return "slept";
+            });
+        }
+        assertTrue(bothStarted.await(5, TimeUnit.SECONDS));
+        // Both processes must be registered before the cancellation lands,
+        // otherwise the regression (killing the sibling) cannot be observed.
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (org.jackhuang.hmcl.dsh.DshCommand.runningCount() < 2
+                && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+        assertEquals(2, org.jackhuang.hmcl.dsh.DshCommand.runningCount(),
+                "both sleep processes must be registered before cancelling");
+
+        assertTrue(tasks.cancel(holder[0].id()));
+        // The sibling's process tree must survive the cancellation.
+        Thread.sleep(500);
+        assertEquals("running", tasks.get(holder[1].id()).orElseThrow().state(),
+                "cancelling task A must not kill task B's process");
+        assertEquals(1, org.jackhuang.hmcl.dsh.DshCommand.runningCount(),
+                "only the cancelled task's process may be stopped");
+
+        assertTrue(tasks.cancel(holder[1].id()));
+        await(() -> !"running".equals(tasks.get(holder[0].id()).orElseThrow().state())
+                && !"running".equals(tasks.get(holder[1].id()).orElseThrow().state()));
+        assertEquals("cancelled", tasks.get(holder[0].id()).orElseThrow().message());
+        assertEquals("cancelled", tasks.get(holder[1].id()).orElseThrow().message());
+    }
+
     // ------------------------------------------------------------------- REST --
 
     @Test

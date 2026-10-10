@@ -39,7 +39,8 @@ import java.util.Optional;
 /// Tasks are the asynchronous work behind installs and launches; their
 /// progress also streams over the WebSocket gateway on the `tasks` topic.
 /// Cancelling reaches the pnpm process behind an install through
-/// [org.jackhuang.hmcl.dsh.DshCommand#stopRunning].
+/// [org.jackhuang.hmcl.dsh.DshCommand#stopRunning], scoped to the cancelled
+/// task's own worker thread so a sibling install keeps running.
 @NotNullByDefault
 public final class TasksApiServlet extends HttpServlet {
 

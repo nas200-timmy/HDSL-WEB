@@ -37,8 +37,12 @@ import java.util.function.Consumer;
 /// Long-running processes — booting a profile — use [DshProcess] instead.
 @NotNullByDefault
 public final class DshCommand {
-    /// The programs this launcher has started and is waiting on.
-    private static final java.util.Set<Process> RUNNING = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /// The programs this launcher has started and is waiting on, mapped to the
+    /// worker thread that started them. Ownership by thread is what makes a
+    /// cancellation scoped: [TaskService] can stop only the tree its task is
+    /// running, instead of every install on the panel.
+    private static final java.util.Map<Process, Thread> RUNNING =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private DshCommand() {
     }
@@ -120,7 +124,7 @@ public final class DshCommand {
         // not stop the process: npm keeps writing to a directory nothing is
         // watching any more.
         Process running = process.getProcess();
-        RUNNING.add(running);
+        RUNNING.put(running, Thread.currentThread());
         List<String> output = Collections.synchronizedList(new ArrayList<>());
         Charset charset = OperatingSystem.NATIVE_CHARSET;
 
@@ -178,15 +182,26 @@ public final class DshCommand {
     }
 
 
-    /// Stops every command this launcher is running, and waits for them to stop.
+    /// Stops the commands one worker thread started, and waits for them to stop.
     ///
-    /// Called when an install is cancelled. It waits, because the caller deletes
-    /// what the command was writing: a program that has been asked to stop is
-    /// still writing until it has.
-    public static void stopRunning() {
-        for (Process process : RUNNING) {
-            stopTree(process);
+    /// Called when a task is cancelled. Only that thread's trees are stopped —
+    /// `MAX_INSTALLS` allows two installs to run at once, and killing the
+    /// sibling's pnpm along with the cancelled one corrupts a healthy install.
+    /// It waits, because the caller deletes what the command was writing: a
+    /// program that has been asked to stop is still writing until it has.
+    ///
+    /// @param owner the worker thread whose processes are stopped
+    public static void stopRunning(Thread owner) {
+        for (Map.Entry<Process, Thread> entry : RUNNING.entrySet()) {
+            if (entry.getValue() == owner) {
+                stopTree(entry.getKey());
+            }
         }
-        RUNNING.clear();
+    }
+
+    /// How many launched programs are registered right now. Exists so tests
+    /// can wait for a process to appear before cancelling its task.
+    public static int runningCount() {
+        return RUNNING.size();
     }
 }
