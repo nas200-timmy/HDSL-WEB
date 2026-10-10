@@ -1,7 +1,7 @@
 #!/bin/bash
 # HDSL-web 真实端到端冒烟：真实 npm 安装 dsh → 启动 → 反代访问 → 停止。
 set -u
-cd /home/coder/code/dsh/HDSL-web
+cd "$(dirname "$0")/.."
 
 DATA=$(mktemp -d /tmp/hdsl-e2e-data.XXXXXX)
 PORT=13080

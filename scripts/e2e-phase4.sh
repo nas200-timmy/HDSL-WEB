@@ -1,7 +1,7 @@
 #!/bin/bash
 # HDSL-web Phase 4 端到端：整合包/会话/技能/体检 + 真实 dsh 的 ACP 控制台。
 set -u
-cd /home/coder/code/dsh/HDSL-web
+cd "$(dirname "$0")/.."
 
 DATA=$(mktemp -d /tmp/hdsl-p4-data.XXXXXX)
 PORT=13081
@@ -16,8 +16,9 @@ ok()  { PASS_COUNT=$((PASS_COUNT+1)); echo "PASS: $1"; }
 bad() { FAIL_COUNT=$((FAIL_COUNT+1)); echo "FAIL: $1"; }
 
 # 编译 ACP WS 探针（Jetty WebSocketClient 在 fat jar 里）
-if [ ! -f /tmp/acpprobe/AcpProbe.class ]; then
-  javac -cp "$JAR" -d /tmp/acpprobe /tmp/acpprobe/AcpProbe.java || { echo "probe compile failed"; exit 1; }
+# AcpProbe 源码在仓库里（scripts/acp-probe/），编译产物放 /tmp
+if [ ! -f /tmp/acpprobe/AcpProbe.class ] || [ scripts/acp-probe/AcpProbe.java -nt /tmp/acpprobe/AcpProbe.class ]; then
+  javac -cp "$JAR" -d /tmp/acpprobe scripts/acp-probe/AcpProbe.java || { echo "probe compile failed"; exit 1; }
 fi
 
 HDSL_DATA="$DATA" HDSL_PORT=$PORT HDSL_ADMIN_PASSWORD="$PASS" java -jar "$JAR" > "$LOG" 2>&1 &

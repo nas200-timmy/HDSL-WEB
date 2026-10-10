@@ -102,13 +102,18 @@ function generatePalette(isDark: boolean): Palette {
   const seed = Hct.fromInt(argbFromHex(SEED));
   // FIDELITY 风格（桌面版 HSLCToner 对应）、Contrast 0、Spec 2025
   const scheme: DynamicScheme = new SchemeFidelity(seed, isDark, 0, "2025");
-  const colors = (scheme as unknown as { colors: Record<string, () => { getArgb(s: DynamicScheme): number }> })
-    .colors;
+  // 库私有结构：升级后字段可能改名/消失。结构没了就返回空 palette——
+  // 调用方整体回落 monet.css 内嵌默认值，而不是连主题初始化一起炸掉。
+  const colors = (scheme as unknown as {
+    colors?: Record<string, () => { getArgb(s: DynamicScheme): number }>;
+  }).colors;
   const palette: Palette = {};
-  for (const role of ROLES) {
-    const accessor = colors[role];
-    if (typeof accessor === "function") {
-      palette[role] = hexFromArgb(accessor().getArgb(scheme)).toUpperCase();
+  if (colors) {
+    for (const role of ROLES) {
+      const accessor = colors[role];
+      if (typeof accessor === "function") {
+        palette[role] = hexFromArgb(accessor().getArgb(scheme)).toUpperCase();
+      }
     }
   }
   return palette;
