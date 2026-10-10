@@ -15,8 +15,8 @@ import {
 } from "./icons";
 import { useMobileLayout } from "../hooks";
 import { I18N } from "../i18n";
-import { refreshZcode, toast, useAppState } from "../store";
-import type { BrandId, BrandInstance, BrandInstallStatus, BrandVersions } from "../types";
+import { refreshExternal, refreshZcode, toast, useAppState } from "../store";
+import type { BrandId, BrandInstallStatus, BrandVersions, ExternalInstance } from "../types";
 import { errMsg } from "../utils";
 
 /// 状态徽章：与 ZcodeSection 的 STATE_TEXT/STATE_TAG 同款（文案进 I18N 字典）
@@ -123,28 +123,20 @@ export function BrandsSection({ initialTab }: { initialTab?: string }) {
   );
 }
 
-/// 移动端折叠态的一行摘要卡：`Kimi Code · 已装 2.1.1 · 1 实例 · 未启动 [启动] 全部▾`。
+/// 移动端折叠态的一行摘要卡：`Kimi Code · 已安装 2.1.1 · 1 实例 · 未启动 [启动] 全部展开▾`。
 /// 不是光秃秃的一行字：右侧留默认操作（启动/停止第一个实例，行为与启动面板主按钮一致）
-/// 和「全部▾」展开提示；中间点按展开详情。数据自取自刷：zcode 走 store（refreshZcode
-/// 已带轮询），品牌面板单独轻量拉一次。
+/// 和「全部展开▾」提示；中间点按展开详情。实例状态只读 store.external（唯一状态源），
+/// 这里只额外拉一次版本目录（安装信息，非实例状态）。
 function BrandSummaryBar({ brand, onExpand }: { brand: "zcode" | BrandId; onExpand: () => void }) {
   const s = useAppState();
   const [versions, setVersions] = useState<BrandVersions | null>(null);
-  const [instances, setInstances] = useState<BrandInstance[] | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const reload = () => {
-    if (brand === "zcode") {
-      void refreshZcode();
-      return;
-    }
-    void api
-      .brandInstances(brand)
-      .then((r) => setInstances(r.instances))
-      .catch(() => undefined);
-  };
+  const list = s.external.filter((e) => e.brand === brand);
+  const reload = () => void refreshExternal();
 
   useEffect(() => {
+    void refreshExternal();
     if (brand === "zcode") {
       void refreshZcode();
       return;
@@ -154,27 +146,28 @@ function BrandSummaryBar({ brand, onExpand }: { brand: "zcode" | BrandId; onExpa
       .brandVersions(brand)
       .then((v) => alive && setVersions(v))
       .catch(() => undefined);
-    void api
-      .brandInstances(brand)
-      .then((r) => alive && setInstances(r.instances))
-      .catch(() => undefined);
     return () => {
       alive = false;
     };
   }, [brand]);
 
+  // 有实例启动中时跟着 store 的 5 秒节奏太慢，1.5 秒轮询（与旧 BrandPanel 同节奏）
+  useEffect(() => {
+    if (!list.some((i) => i.state === "starting")) return;
+    const timer = setInterval(() => void refreshExternal(), 1500);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.external]);
+
   let label: string;
   let install: string;
-  let list: { state: string; id: string; name: string }[];
   if (brand === "zcode") {
     label = I18N["dsh.brand.zcode"];
     install = s.zcodeDist === null ? "检测中…" : s.zcodeDist.present ? `${I18N["dsh.brand.installed"]} ${s.zcodeDist.version ?? "未知版本"}` : "未安装";
-    list = s.zcodeInstances;
   } else {
     label = BRAND_NAME[brand];
     const rel = versions?.releases ?? [];
     install = rel.length === 0 ? "未安装" : `${I18N["dsh.brand.installed"]} ${rel.find((r) => r.current)?.version ?? rel[0].version}`;
-    list = instances ?? [];
   }
   const runningCount = list.filter((i) => i.state === "running").length;
   const error = list.some((i) => i.state === "error");
@@ -221,9 +214,9 @@ function BrandSummaryBar({ brand, onExpand }: { brand: "zcode" | BrandId; onExpa
 /// 单个第三方品牌面板：警示条 + 版本安装 + 实例列表（kimi / opencode 同构）
 function BrandPanel({ brand }: { brand: BrandId }) {
   const brandName = BRAND_NAME[brand];
+  const s = useAppState();
   const [versions, setVersions] = useState<BrandVersions | null>(null);
   const [versionsError, setVersionsError] = useState<string | null>(null);
-  const [instances, setInstances] = useState<BrandInstance[] | null>(null);
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -232,9 +225,9 @@ function BrandPanel({ brand }: { brand: BrandId }) {
   const [installLog, setInstallLog] = useState<string[]>([]);
   const [form, setForm] = useState({ name: "", version: "" });
   const [busy, setBusy] = useState(false);
-  const [logTarget, setLogTarget] = useState<BrandInstance | null>(null);
+  const [logTarget, setLogTarget] = useState<ExternalInstance | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
-  const [deleteTarget, setDeleteTarget] = useState<BrandInstance | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ExternalInstance | null>(null);
 
   const reloadVersions = async () => {
     try {
@@ -244,27 +237,25 @@ function BrandPanel({ brand }: { brand: BrandId }) {
       setVersionsError(errMsg(e));
     }
   };
-  const reloadInstances = async () => {
-    try {
-      setInstances(await api.brandInstances(brand).then((r) => r.instances));
-    } catch {
-      // 列表暂不可用：保持现状，下次轮询/刷新再来
-    }
-  };
+  // 实例状态唯一来源是 store.external；面板只负责触发刷新。
+  const reloadInstances = () => refreshExternal();
 
   useEffect(() => {
     setPicked(null);
     setForm({ name: "", version: "" });
     void reloadVersions();
-    void reloadInstances();
+    void refreshExternal();
   }, [brand]);
+
+  const instances = s.external.filter((e) => e.brand === brand);
 
   // 启动中的实例每 1.5 秒拉一次状态（同 ZcodeSection 的轮询模式）
   useEffect(() => {
-    if (!instances?.some((i) => i.state === "starting")) return;
-    const timer = setInterval(() => void reloadInstances(), 1500);
+    if (!instances.some((i) => i.state === "starting")) return;
+    const timer = setInterval(() => void refreshExternal(), 1500);
     return () => clearInterval(timer);
-  }, [instances]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.external]);
 
   // 安装中：每秒轮询安装状态；终态后刷新版本/实例
   useEffect(() => {
@@ -360,7 +351,7 @@ function BrandPanel({ brand }: { brand: BrandId }) {
     }
   };
 
-  const doLaunch = async (inst: BrandInstance) => {
+  const doLaunch = async (inst: ExternalInstance) => {
     setBusy(true);
     try {
       const r = await api.launchBrand(brand, inst.id);
@@ -374,7 +365,7 @@ function BrandPanel({ brand }: { brand: BrandId }) {
     }
   };
 
-  const doStop = async (inst: BrandInstance) => {
+  const doStop = async (inst: ExternalInstance) => {
     try {
       await api.stopBrand(brand, inst.id);
       toast("info", "已停止");
@@ -384,12 +375,12 @@ function BrandPanel({ brand }: { brand: BrandId }) {
     }
   };
 
-  const doOpen = (inst: BrandInstance) => {
+  const doOpen = (inst: ExternalInstance) => {
     const url = inst.url ?? `/i/${inst.id}/`;
     window.open(url, "_blank", "noopener");
   };
 
-  const doShowLogs = async (inst: BrandInstance) => {
+  const doShowLogs = async (inst: ExternalInstance) => {
     try {
       const r = await api.brandLogs(brand, inst.id, 300);
       setLogLines(r.lines);
@@ -399,7 +390,7 @@ function BrandPanel({ brand }: { brand: BrandId }) {
     }
   };
 
-  const doPatchVersion = async (inst: BrandInstance, version: string) => {
+  const doPatchVersion = async (inst: ExternalInstance, version: string) => {
     if (!version || version === inst.version) return;
     try {
       await api.patchBrandInstance(brand, inst.id, { version });
@@ -425,7 +416,7 @@ function BrandPanel({ brand }: { brand: BrandId }) {
     }
   };
 
-  const list = instances ?? [];
+  const list = instances;
 
   return (
     <>

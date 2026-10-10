@@ -362,7 +362,9 @@ export interface BrandInstance {
   url?: string;
 }
 
-/// 启动面板"跨品牌实例切换器"里的非 dsh 条目（kimi/opencode 品牌实例 + zcode 实验实例）
+/// 启动面板"跨品牌实例切换器"里的非 dsh 条目（kimi/opencode 品牌实例 + zcode 实验实例）。
+/// 这是**唯一**的跨品牌实例状态源：BrandPanel / ZcodeSection / BrandSummaryBar /
+/// LaunchPane 都从这里读，写入只发生在 refreshExternal。
 export interface ExternalInstance {
   brand: "kimi" | "opencode" | "zcode";
   id: string;
@@ -371,6 +373,12 @@ export interface ExternalInstance {
   url?: string;
   /** kimi/opencode 实例的版本号（zcode 无版本概念） */
   version?: string;
+  /** 运行出错时的错误信息（state = error） */
+  error?: string;
+  /** 仅 zcode：实例是否已配置 API Key */
+  hasApiKey?: boolean;
+  /** 仅 zcode：已保存的 API Base URL（编辑表单回填用） */
+  baseUrl?: string;
 }
 
 // ---------- 全局应用状态 ----------
@@ -406,9 +414,8 @@ export interface AppState {
   modelProvidersAt: number | null;
   /** 实验性 ZCode 品类：发行包检测结果（null = 尚未加载） */
   zcodeDist: ZcodeDistInfo | null;
-  zcodeInstances: ZcodeInstance[];
   zcodeLoading: boolean;
-  /** 跨品牌实例（kimi/opencode/zcode），主页启动面板的实例选择菜单与主按钮动作用它 */
+  /** 跨品牌实例（kimi/opencode/zcode）——唯一状态源，见 ExternalInstance 的注释 */
   external: ExternalInstance[];
   toasts: Toast[];
 }

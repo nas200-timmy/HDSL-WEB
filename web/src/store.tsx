@@ -35,7 +35,6 @@ const initialState: AppState = {
   modelProvidersError: null,
   modelProvidersAt: null,
   zcodeDist: null,
-  zcodeInstances: [],
   zcodeLoading: false,
   external: [],
   toasts: [],
@@ -184,7 +183,6 @@ setUnauthorizedHandler(() => {
     modelProviders: null,
     modelProvidersError: null,
     zcodeDist: null,
-    zcodeInstances: [],
     external: [],
   }));
 });
@@ -215,18 +213,14 @@ export async function refreshInstances(showLoading = false): Promise<void> {
 
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
-/// 实验性 ZCode 品类的状态（发行包 + 实例列表）。与 dsh 实例分开拉取，
-/// 一个失败不影响另一个。
+/// 实验性 ZCode 品类的发行包检测。实例状态不在这一层——统一归
+/// [refreshExternal] 的 `external`（唯一跨品牌实例状态源），这里只留发行包
+/// 元数据。与 dsh 实例分开拉取，一个失败不影响另一个。
 export async function refreshZcode(showLoading = false): Promise<void> {
   if (showLoading) setState((s) => ({ ...s, zcodeLoading: true }));
   try {
-    const [dist, list] = await Promise.all([api.zcodeDist(), api.zcodeInstances()]);
-    setState((s) => ({
-      ...s,
-      zcodeDist: dist,
-      zcodeInstances: list.instances,
-      zcodeLoading: false,
-    }));
+    const dist = await api.zcodeDist();
+    setState((s) => ({ ...s, zcodeDist: dist, zcodeLoading: false }));
   } catch (e) {
     setState((s) => ({ ...s, zcodeLoading: false }));
     toast("error", `获取 ZCode 状态失败：${errMsg(e)}`);
@@ -244,13 +238,16 @@ export async function refreshExternal(): Promise<void> {
   ]);
   const external: ExternalInstance[] = [];
   for (const i of kimi ?? []) {
-    external.push({ brand: "kimi", id: i.id, name: i.name, state: i.state, url: i.url, version: i.version });
+    external.push({ brand: "kimi", id: i.id, name: i.name, state: i.state, url: i.url, version: i.version, error: i.error });
   }
   for (const i of opencode ?? []) {
-    external.push({ brand: "opencode", id: i.id, name: i.name, state: i.state, url: i.url, version: i.version });
+    external.push({ brand: "opencode", id: i.id, name: i.name, state: i.state, url: i.url, version: i.version, error: i.error });
   }
   for (const i of zcode ?? []) {
-    external.push({ brand: "zcode", id: i.id, name: i.name, state: i.state });
+    external.push({
+      brand: "zcode", id: i.id, name: i.name, state: i.state,
+      error: i.error ?? undefined, hasApiKey: i.hasApiKey, baseUrl: i.baseUrl ?? undefined,
+    });
   }
   setState((s) => ({ ...s, external }));
 }

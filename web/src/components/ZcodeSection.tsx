@@ -12,8 +12,8 @@ import {
   RefreshIcon,
   RocketLaunchIcon,
 } from "./icons";
-import { refreshZcode, toast, useAppState } from "../store";
-import type { ZcodeInstance } from "../types";
+import { refreshExternal, refreshZcode, toast, useAppState } from "../store";
+import type { ExternalInstance } from "../types";
 import { errMsg } from "../utils";
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
@@ -37,9 +37,9 @@ const STATE_TAG: Record<string, string> = {
 export function ZcodeSection() {
   const s = useAppState();
   const [createOpen, setCreateOpen] = useState(false);
-  const [editTarget, setEditTarget] = useState<ZcodeInstance | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<ZcodeInstance | null>(null);
-  const [logTarget, setLogTarget] = useState<ZcodeInstance | null>(null);
+  const [editTarget, setEditTarget] = useState<ExternalInstance | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ExternalInstance | null>(null);
+  const [logTarget, setLogTarget] = useState<ExternalInstance | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ name: "", baseUrl: DEFAULT_BASE_URL, apiKey: "" });
@@ -49,15 +49,22 @@ export function ZcodeSection() {
     void refreshZcode();
   }, []);
 
-  // ZCode 冷启动要等就绪行；启动中的实例每 1.5 秒拉一次状态
+  // 实例状态唯一来源是 store.external；这里只在挂载时刷新一次，外加
+  // 启动中的实例每 1.5 秒跟一次（ZCode 冷启动要等就绪行）。
+  const instances = s.external.filter((e) => e.brand === "zcode");
   useEffect(() => {
-    if (!s.zcodeInstances.some((i) => i.state === "starting")) return;
-    const timer = setInterval(() => void refreshZcode(), 1500);
+    void refreshExternal();
+    void refreshZcode();
+  }, []);
+  useEffect(() => {
+    if (!instances.some((i) => i.state === "starting")) return;
+    const timer = setInterval(() => void refreshExternal(), 1500);
     return () => clearInterval(timer);
-  }, [s.zcodeInstances]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.external]);
 
   const dist = s.zcodeDist;
-  const running = s.zcodeInstances.filter((i) => i.state === "running").length;
+  const running = instances.filter((i) => i.state === "running").length;
 
   const closeForm = () => {
     if (busy) return;
@@ -71,7 +78,7 @@ export function ZcodeSection() {
     setCreateOpen(true);
   };
 
-  const openEdit = (inst: ZcodeInstance) => {
+  const openEdit = (inst: ExternalInstance) => {
     setForm({ name: inst.name, baseUrl: inst.baseUrl ?? DEFAULT_BASE_URL, apiKey: "" });
     setFormError(null);
     setEditTarget(inst);
@@ -100,7 +107,7 @@ export function ZcodeSection() {
       });
       toast("success", "ZCode 实例已创建（实验性功能，不保证可用）");
       setCreateOpen(false);
-      await refreshZcode();
+      await refreshExternal();
     } catch (e) {
       toast("error", `创建失败：${errMsg(e)}`);
     } finally {
@@ -120,7 +127,7 @@ export function ZcodeSection() {
       });
       toast("success", "已保存");
       setEditTarget(null);
-      await refreshZcode();
+      await refreshExternal();
     } catch (e) {
       toast("error", `保存失败：${errMsg(e)}`);
     } finally {
@@ -128,13 +135,13 @@ export function ZcodeSection() {
     }
   };
 
-  const launch = async (inst: ZcodeInstance) => {
+  const launch = async (inst: ExternalInstance) => {
     setBusy(true);
     try {
       const r = await api.launchZcode(inst.id);
       if (r.state === "error") toast("error", `启动失败：${r.error ?? "未知原因"}`);
       else toast("success", "已启动（实验性功能，不保证可用）");
-      await refreshZcode();
+      await refreshExternal();
     } catch (e) {
       toast("error", `启动失败：${errMsg(e)}`);
     } finally {
@@ -142,17 +149,17 @@ export function ZcodeSection() {
     }
   };
 
-  const stop = async (inst: ZcodeInstance) => {
+  const stop = async (inst: ExternalInstance) => {
     try {
       await api.stopZcode(inst.id);
       toast("info", "已停止");
-      await refreshZcode();
+      await refreshExternal();
     } catch (e) {
       toast("error", `停止失败：${errMsg(e)}`);
     }
   };
 
-  const openInBrowser = async (inst: ZcodeInstance) => {
+  const openInBrowser = async (inst: ExternalInstance) => {
     try {
       const r = await api.zcodeOpen(inst.id);
       window.open(r.url, "_blank", "noopener");
@@ -160,7 +167,7 @@ export function ZcodeSection() {
       toast("error", `打开失败：${errMsg(e)}`);
     }
   };
-  const showLogs = async (inst: ZcodeInstance) => {
+  const showLogs = async (inst: ExternalInstance) => {
     try {
       const r = await api.zcodeLogs(inst.id, 300);
       setLogLines(r.lines);
@@ -177,7 +184,7 @@ export function ZcodeSection() {
       await api.deleteZcodeInstance(deleteTarget.id);
       toast("success", "已删除");
       setDeleteTarget(null);
-      await refreshZcode();
+      await refreshExternal();
     } catch (e) {
       toast("error", `删除失败：${errMsg(e)}`);
     } finally {
@@ -216,7 +223,7 @@ export function ZcodeSection() {
               : dist.present
                 ? `发行包：${dist.version ?? "未知版本"} · ${dist.path}`
                 : "未检测到 ZCode 发行包"}
-            {s.zcodeInstances.length > 0 ? ` · ${s.zcodeInstances.length} 个实例` : ""}
+            {instances.length > 0 ? ` · ${instances.length} 个实例` : ""}
             {running > 0 ? ` · ${running} 个运行中` : ""}
           </span>
           <span className="spacer" />
@@ -237,12 +244,12 @@ export function ZcodeSection() {
         )}
 
         <div className="list-body scroll-hover">
-          {s.zcodeInstances.length === 0 ? (
+          {instances.length === 0 ? (
             <div className="empty-state" style={{ padding: "6px 12px" }}>
               <span>还没有 ZCode 实例</span>
             </div>
           ) : (
-            s.zcodeInstances.map((inst, idx) => (
+            instances.map((inst, idx) => (
               <div key={inst.id}>
                 <div className="tlli" style={{ padding: "6px 12px" }}>
                   <span className="tlli-text">
@@ -292,7 +299,7 @@ export function ZcodeSection() {
                     </button>
                   </span>
                 </div>
-                {idx < s.zcodeInstances.length - 1 && <div className="divider" style={{ marginLeft: 12 }} />}
+                {idx < instances.length - 1 && <div className="divider" style={{ marginLeft: 12 }} />}
               </div>
             ))
           )}
