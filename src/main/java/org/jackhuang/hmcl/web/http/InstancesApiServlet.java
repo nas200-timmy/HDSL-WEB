@@ -632,7 +632,7 @@ public final class InstancesApiServlet extends HttpServlet {
                 return host;
             }
         }
-        return stripPort(request.getHeader("Host"));
+        return HostHeaders.stripPort(request.getHeader("Host"));
     }
 
     // ------------------------------------------------------------------- stop --
@@ -1543,23 +1543,4 @@ public final class InstancesApiServlet extends HttpServlet {
         }
     }
 
-    /// Drops the `:port` suffix of a Host header, keeping IPv6 brackets.
-    private static @Nullable String stripPort(@Nullable String host) {
-        if (host == null || host.isBlank()) {
-            return null;
-        }
-        String trimmed = host.trim();
-        if (trimmed.startsWith("[")) {
-            int close = trimmed.indexOf(']');
-            return close >= 0 ? trimmed.substring(0, close + 1) : trimmed;
-        }
-        int colon = trimmed.lastIndexOf(':');
-        if (colon > 0 && colon == trimmed.indexOf(':')) {
-            String suffix = trimmed.substring(colon + 1);
-            if (!suffix.isEmpty() && suffix.chars().allMatch(Character::isDigit)) {
-                return trimmed.substring(0, colon);
-            }
-        }
-        return trimmed;
-    }
 }

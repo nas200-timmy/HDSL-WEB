@@ -406,7 +406,8 @@ public final class BrandApiServlet extends HttpServlet {
             return;
         }
         BrandRuntime.Status status = BrandRuntime.launch(
-                brand, ref.manager(), instance, hostOf(request), packageDir);
+                brand, ref.manager(), instance,
+                org.jackhuang.hmcl.web.http.HostHeaders.stripPort(request.getHeader("Host")), packageDir);
         writeStatus(response, status);
     }
 
@@ -418,17 +419,6 @@ public final class BrandApiServlet extends HttpServlet {
         }
         BrandRuntime.stop(id);
         writeStatus(response, BrandRuntime.status(id));
-    }
-
-    /// The external host for the brand's host allowlist: the request's Host
-    /// header without its port, which is exactly the name the browser will use.
-    private static @Nullable String hostOf(HttpServletRequest request) {
-        String host = request.getHeader("Host");
-        if (host == null) {
-            return null;
-        }
-        int colon = host.indexOf(':');
-        return (colon > 0 ? host.substring(0, colon) : host).trim();
     }
 
     // ------------------------------------------------------------------ open --

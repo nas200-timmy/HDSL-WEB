@@ -651,22 +651,9 @@ public final class HdslServer {
             return true;
         }
 
-        /// Drops the `:port` suffix of a Host header, keeping IPv6 brackets
-        /// intact: `[::1]:8080` → `[::1]`, `example.com:80` → `example.com`.
+        /// Drops the `:port` suffix of a Host header — shared with the servlets.
         private static String stripPort(String host) {
-            String trimmed = host.trim();
-            if (trimmed.startsWith("[")) {
-                int close = trimmed.indexOf(']');
-                return close >= 0 ? trimmed.substring(0, close + 1) : trimmed;
-            }
-            int colon = trimmed.lastIndexOf(':');
-            if (colon > 0 && colon == trimmed.indexOf(':')) {
-                String suffix = trimmed.substring(colon + 1);
-                if (!suffix.isEmpty() && suffix.chars().allMatch(Character::isDigit)) {
-                    return trimmed.substring(0, colon);
-                }
-            }
-            return trimmed;
+            return org.jackhuang.hmcl.web.http.HostHeaders.stripPort(host);
         }
     }
 }
