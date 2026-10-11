@@ -211,7 +211,7 @@ class GenericPageRewriteTest {
 
         byte[] patched = InstanceProxyServlet.patchZcodeScript(bundle);
 
-        assertEquals("function Y4n(){let e=window.location.pathname.match(/\\/i\\/[^/]+\\//);"
+        assertEquals("function Y4n(){let e=window.location.pathname.match(/^.*?\\/i\\/[^/]+\\//);"
                         + "return e?e[0].slice(0,-1):``}"
                         + "const other=window.location.pathname.replace(/^\\/+/,\"/\");",
                 new String(patched, StandardCharsets.UTF_8));

@@ -664,12 +664,13 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// 面板自身被反代在子路径时浏览器地址是 /hdsl-web/i/<id>/，检测失配，
     /// 应用把 API/WS 打到源站根（实测 2026-10：/api/server-info 404 → Web 远程
     /// 控制报 Failed；WS 打到 ws://host/ws 被宿主 nginx 404）。
-    /// 去掉 ^ 锚：路径里第一个 /i/<id>/ 即挂载点，根挂载下行为不变。
-    /// 不碰路由读法：ZCode 按 /i/<id>/ 原生路由，品牌那套 mount-blind 补丁会
-    /// 把它的路由读坏。
+    /// 正则改为从路径开头非贪婪匹配到第一个 /i/<id>/（^.*?）——match() 返回
+    /// 匹配子串，只去 ^ 锚会把 /hdsl-web 前缀丢在结果外（实测回归）。
+    /// 根挂载下行为不变。不碰路由读法：ZCode 按 /i/<id>/ 原生路由，
+    /// 品牌那套 mount-blind 补丁会把它的路由读坏。
     static byte[] patchZcodeScript(byte[] script) {
         String text = new String(script, StandardCharsets.ISO_8859_1);
-        text = text.replace("/^\\/i\\/[^/]+\\//", "/\\/i\\/[^/]+\\//");
+        text = text.replace("/^\\/i\\/[^/]+\\//", "/^.*?\\/i\\/[^/]+\\//");
         return text.getBytes(StandardCharsets.ISO_8859_1);
     }
 
