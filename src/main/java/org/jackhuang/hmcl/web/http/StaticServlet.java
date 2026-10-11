@@ -93,6 +93,12 @@ public final class StaticServlet extends HttpServlet {
             path = INDEX;
         }
         if (resource == null) {
+            // This is the build's own defect, not a client mistake: a jar
+            // without the packaged frontend answers every page with a bare
+            // "not found" and the operator is left guessing. Name it.
+            org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                    "web/index.html is not on the classpath — this build does not package the web frontend; "
+                            + "use a release jar (shadowJar) instead of a bare classes/dev build");
             response.setStatus(HttpServletResponse.SC_NOT_FOUND);
             response.getWriter().write("not found");
             return;
