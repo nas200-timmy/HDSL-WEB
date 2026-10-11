@@ -329,11 +329,14 @@ public final class InstanceProxyServlet extends HttpServlet {
         org.jackhuang.hmcl.web.brand.Brand brand =
                 org.jackhuang.hmcl.web.brand.BrandRuntime.brandOf(instanceId);
         boolean brandClient = brand != null;
+        // ZCode 与 Kimi Code 同源（共享「原生认识 /i/<id>/ 挂载」的客户端代码），
+        // 它的 bundle 同样需要运行时补丁（见 patchBrandScript 的挂载检测放宽）。
+        boolean zcodeClient = org.jackhuang.hmcl.web.zcode.ZcodeRuntime.known(instanceId);
         boolean routerClient = brandClient && brand.needsRouterShim();
         int upstreamPort = port;
         upstream.whenCompleteAsync(
-                (result, error) -> pump(response, async, upstream, mount, browserMount, brandClient, routerClient,
-                        upstreamPort, result, error),
+                (result, error) -> pump(response, async, upstream, mount, browserMount, brandClient, zcodeClient,
+                        routerClient, upstreamPort, result, error),
                 tasks.executor());
     }
 
@@ -350,8 +353,8 @@ public final class InstanceProxyServlet extends HttpServlet {
     ///                      URLs, redirect Locations, cookie paths)
     private static void pump(HttpServletResponse response, AsyncContext async,
                              CompletableFuture<HttpResponse<InputStream>> upstream, String mount,
-                             String browserMount, boolean brandClient, boolean routerClient, int port,
-                             @Nullable HttpResponse<InputStream> result, @Nullable Throwable error) {
+                             String browserMount, boolean brandClient, boolean zcodeClient, boolean routerClient,
+                             int port, @Nullable HttpResponse<InputStream> result, @Nullable Throwable error) {
         try {
             if (error != null || result == null) {
                 org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
@@ -371,7 +374,8 @@ public final class InstanceProxyServlet extends HttpServlet {
             // hold. The probe that chose the shim read the entry script under the
             // same rule, so what the page was told and what the browser gets agree.
             boolean sized = contentLength >= 0 && contentLength <= MAX_SCRIPT_BYTES;
-            boolean servesScript = brandClient && !servesPage && sized && contentType.contains("javascript");
+            boolean servesScript = (brandClient || zcodeClient) && !servesPage && sized
+                    && contentType.contains("javascript");
             boolean servesStyle = brandClient && !servesPage && sized && contentType.contains("text/css");
             copyResponseHeaders(result, response, browserMount, servesPage || servesScript || servesStyle);
             try (InputStream in = result.body(); OutputStream out = response.getOutputStream()) {
@@ -395,7 +399,11 @@ public final class InstanceProxyServlet extends HttpServlet {
                         // under its address: a cached copy without the patch would route the
                         // client by the mount itself and ask for chunks at the panel root.
                         response.setHeader("Cache-Control", "no-store");
-                        out.write(servesScript ? patchBrandScript(asset, browserMount)
+                        // ZCode 只放宽挂载检测正则：它原生按 /i/<id>/ 路由，
+                        // 品牌那套路由读法补丁会把它的路由读坏。
+                        out.write(servesScript
+                                ? (zcodeClient ? patchZcodeScript(asset)
+                                        : patchBrandScript(asset, browserMount))
                                 : patchBrandStylesheet(asset, browserMount));
                     }
                     out.flush();
@@ -643,9 +651,25 @@ public final class InstanceProxyServlet extends HttpServlet {
         if (hasRouterPathRead(text)) {
             text = text.replace(ROUTER_PATH_READ, ROUTER_PATH_READ_PATCHED);
         }
+
         text = text.replace(ASSET_ROOT_REFERENCE, "\"" + mount + "assets/");
         text = PRELOAD_BASE.matcher(text).replaceFirst(match -> "=function(" + match.group(1)
                 + "){return\"" + mount + "\"+" + match.group(1) + "}");
+        return text.getBytes(StandardCharsets.ISO_8859_1);
+    }
+
+    /// ZCode 的唯一补丁：放宽它原生的 /i/<id>/ 挂载检测正则。Kimi Code / ZCode
+    /// 的 web 端原生支持被挂在 /i/<id>/ 下（API base 来自
+    /// `location.pathname.match(/^\/i\/[^/]+\//)`），但正则锚在路径开头——
+    /// 面板自身被反代在子路径时浏览器地址是 /hdsl-web/i/<id>/，检测失配，
+    /// 应用把 API/WS 打到源站根（实测 2026-10：/api/server-info 404 → Web 远程
+    /// 控制报 Failed；WS 打到 ws://host/ws 被宿主 nginx 404）。
+    /// 去掉 ^ 锚：路径里第一个 /i/<id>/ 即挂载点，根挂载下行为不变。
+    /// 不碰路由读法：ZCode 按 /i/<id>/ 原生路由，品牌那套 mount-blind 补丁会
+    /// 把它的路由读坏。
+    static byte[] patchZcodeScript(byte[] script) {
+        String text = new String(script, StandardCharsets.ISO_8859_1);
+        text = text.replace("/^\\/i\\/[^/]+\\//", "/\\/i\\/[^/]+\\//");
         return text.getBytes(StandardCharsets.ISO_8859_1);
     }
 

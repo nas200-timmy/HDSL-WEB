@@ -199,6 +199,25 @@ class GenericPageRewriteTest {
     }
 
     @Test
+    void zcodeMountDetectionIsRelaxedWithoutTouchingAnythingElse() {
+        // ZCode / Kimi Code 的 web 端原生认识 /i/<id>/ 挂载（API base 来自
+        // location.pathname.match(/^\/i\/[^/]+\//)），但正则锚在路径开头——
+        // 面板在子路径后（/hdsl-web/i/<id>/）检测失配，API/WS 打到源站根。
+        // 只放宽这一个正则，同包里的其它代码（包括第二个不同的挂载检测实现）不动。
+        byte[] bundle = ("function Y4n(){let e=window.location.pathname.match(/^\\/i\\/[^/]+\\//);"
+                + "return e?e[0].slice(0,-1):``}"
+                + "const other=window.location.pathname.replace(/^\\/+/,\"/\");")
+                .getBytes(StandardCharsets.UTF_8);
+
+        byte[] patched = InstanceProxyServlet.patchZcodeScript(bundle);
+
+        assertEquals("function Y4n(){let e=window.location.pathname.match(/\\/i\\/[^/]+\\//);"
+                        + "return e?e[0].slice(0,-1):``}"
+                        + "const other=window.location.pathname.replace(/^\\/+/,\"/\");",
+                new String(patched, StandardCharsets.UTF_8));
+    }
+
+    @Test
     void aBundleWithNoneOfThoseAnchorsComesBackUntouched() {
         byte[] plain = "const a=1;".getBytes(StandardCharsets.UTF_8);
         assertArrayEquals(plain, InstanceProxyServlet.patchBrandScript(plain, MOUNT));
