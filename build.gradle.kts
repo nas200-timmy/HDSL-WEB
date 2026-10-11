@@ -164,8 +164,24 @@ val buildWeb by tasks.registering(Exec::class) {
     doLast { if (!npmAvailable) logger.warn("npm not on PATH; serving the web tree as it stands") }
 }
 
+// buildWeb 的 onlyIf 会在没有 npm 时静默跳过；这时若连上一次的 dist 都没有，
+// 打出来的 jar 必然缺前端、运行时每个页面都回 "not found"（Windows 裸部署实测踩过：
+// 装了 JDK、没装 Node，shadowJar 33 秒"成功"，跑起来只剩光秃秃的 not found）。
+// 所以单独设一个无输入输出的哨兵任务——这种任务永不 up-to-date、必定执行
+// （doFirst 挂在 Sync 上会被 up-to-date 短路，实测不咬人）。
+val checkWebDist by tasks.registering {
+    doLast {
+        if (!npmAvailable && !webDir.dir("dist").asFile.isDirectory) {
+            throw GradleException(
+                "web/ has no dist/ and npm is not on PATH: this jar would ship without the web frontend. " +
+                    "Install Node.js (which provides npm) and rebuild, or download a release jar instead."
+            )
+        }
+    }
+}
+
 val syncWebDist by tasks.registering(Sync::class) {
-    dependsOn(buildWeb)
+    dependsOn(buildWeb, checkWebDist)
     from(webDir.dir("dist"))
     into(layout.projectDirectory.dir("src/main/resources/web"))
 }
