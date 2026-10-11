@@ -2,6 +2,29 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.3.7 — 2026-10-12 · 子路径反代下品牌代理修复（Kimi Code / OpenCode / ZCode）
+
+面板自身被反代在子路径（`HDSL_BASE_PATH`）时，dsh 实例正常但品牌实例全崩：
+zcode 显示 "Web Remote Control Failed"、kimi 报 `WebSocket connection failed:
+ws://host/ws`。根挂载不受影响（本轮所有改动在根侧均为恒等路径，根/子路径双场景
+18+9 项验收全绿）。
+
+- **上游根因**：Kimi Code / ZCode 的 web 端原生认识 `/i/<id>/` 挂载，API base 来自
+  `location.pathname.match(/^\/i\/[^/]+\//)`——正则锚在路径开头。浏览器地址是
+  `/hdsl-web/i/<id>/` 时检测失配，API/WS 打到源站根（`/api/server-info` 404、
+  `ws://host/ws` 被宿主 nginx 404）。
+- **修复**：新 `patchZcodeScript` 把检测正则放宽为 `/^.*?\/i\/[^/]+\//`（从路径
+  开头非贪婪匹配到第一个 `/i/<id>/`；`match()` 返回匹配子串，只去 `^` 锚会丢
+  base 前缀——已实测修正一次）。zcode 走这个最小补丁（品牌那套路由读法补丁会把
+  它原生按 `/i/<id>/` 的路由读坏）；kimi 走品牌补丁通道，同一放宽覆盖。
+- **打开链接双前缀**：后端已在 REST 边界给 open/list 的 url 统一加挂载点前缀，
+  前端两处仍 `withBase(inst.url)` → `/hdsl-web/hdsl-web/i/<id>/` 落回主面板。
+  契约钉死：API 返回的 url 直接用，仅本地兜底路径 `withBase`。
+
+验证：锚点逐字节比对真实 bundle（zcode 3.15.1）；新增单测；VM（nginx + 
+`HDSL_BASE_PATH=/hdsl-web`）真浏览器 zcode/kimi/opencode 9/9 PASS（地球图标打开
+单前缀落点）；全量 528 用例绿。
+
 ## v0.3.6 — 2026-10-11 · 裸部署三道防线 + 面板托管 Node 运行时一键供给
 
 围绕「拦不住的 Windows/macOS 裸部署」体验的一轮加固，全部带反例实测：
