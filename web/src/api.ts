@@ -408,4 +408,26 @@ export const api = {
     request<{ lines: string[] }>(
       `/api/brands/${brand}/instances/${encodeURIComponent(id)}/logs?tail=${tail}`,
     ),
+
+  // ---- Node.js 工具链（裸部署一键供给，设置 → Node.js） ----
+  nodeStatus: () =>
+    request<NodeStatus>("/api/node"),
+  nodeInstall: (body: { version?: string; source?: string }) =>
+    request<{ taskId: string }>("/api/node/install", jsonInit("POST", body)),
+  nodeUninstall: (version: string) =>
+    request<{ ok: boolean }>("/api/node/uninstall", jsonInit("POST", { version })),
 };
+
+/// GET /api/node 的快照：系统 PATH 探测 + 面板托管运行时列表
+export interface NodeStatus {
+  system: {
+    node: string;
+    nodeVersion: string;
+    npm?: string;
+    npmVersion?: string;
+    pnpm?: string;
+    pnpmVersion?: string;
+  } | null;
+  managed: { version: string; suitable: boolean; node: string; pnpm: boolean }[];
+  requirement: string;
+}

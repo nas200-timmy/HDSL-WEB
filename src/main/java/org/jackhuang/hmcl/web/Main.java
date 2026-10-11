@@ -113,6 +113,8 @@ public final class Main {
             System.out.println("  redirect : http://" + config.bindHost + ":" + config.https.redirectPort + " -> https (308)");
         }
         System.out.println("  data dir : " + config.dataDir);
+        System.out.println("             (server.yaml / accounts / instances / pnpm store / certificates -");
+        System.out.println("              back up or migrate by copying this folder; keep it off the public net)");
         System.out.println("  workspace: " + WorkspaceDirectory.resolve(env, Path.of(System.getProperty("user.home"))));
         System.out.println("  auth     : " + (config.auth.disabled
                 ? "disabled (loopback bind only; do not expose this instance)"
@@ -150,9 +152,19 @@ public final class Main {
         } else {
             System.out.println("  runtime  : " + (node == null ? "node MISSING" : "node " + node)
                     + ", " + (pnpm == null ? "pnpm MISSING" : "pnpm " + pnpm));
-            System.out.println("  !! installing dsh versions / plugins / brand tools     ");
-            System.out.println("  !! needs node + pnpm on PATH. Install Node.js LTS:     ");
-            System.out.println("  !!   https://nodejs.org  (then: corepack enable)       ");
+            System.out.println("  !! installing dsh versions / plugins / brand tools needs");
+            System.out.println("  !! node + pnpm. Either:");
+            System.out.println("  !!   1. one-click a panel-managed runtime (Settings -> Node.js);");
+            System.out.println("  !!   2. or install Node.js LTS yourself: https://nodejs.org");
+        }
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            // POSIX 0600 has no NTFS equivalent: Java's setReadable maps onto
+            // ACLs unpredictably, and the credential file can be readable by
+            // other accounts on a multi-user machine. Worth saying out loud.
+            System.out.println("  note     : Windows has no POSIX 0600 semantics - the credential file");
+            System.out.println("             may be readable by other accounts on this machine. Single-");
+            System.out.println("             user machines are fine; keep the data dir off the public net.");
         }
         System.out.println();
     }

@@ -442,18 +442,125 @@ function PasswordCard() {
   );
 }
 
-/* ---------------- Node.js（网页版由服务端托管，降级展示） ---------------- */
+/* ---------------- Node.js 工具链（裸部署一键供给） ---------------- */
 
 function NodeTab() {
+  const [status, setStatus] = useState<import("../api").NodeStatus | null>(null);
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [taskMsg, setTaskMsg] = useState("");
+  const [source, setSource] = useState<"mirror" | "official">("mirror");
+  const [busy, setBusy] = useState(false);
+
+  const reload = () => void api.nodeStatus().then(setStatus).catch((e) => toast("error", `读取状态失败：${errMsg(e)}`));
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 任务轮询：node-install 走 TaskService，进度经 WS 进 store，但这里
+  // 简单起见直接轮询任务列表（此页打开时才轮询）
+  useEffect(() => {
+    if (!installing) return;
+    const timer = setInterval(() => {
+      void api.tasks().then((tasks) => {
+        const t = tasks.find((x) => x.id === installing);
+        if (!t) return;
+        setTaskMsg(`${t.state}: ${t.message ?? ""}`);
+        if (t.state === "done" || t.state === "failed") {
+          setInstalling(null);
+          setTaskMsg("");
+          toast(t.state === "done" ? "success" : "error", t.message ?? t.state);
+          reload();
+        }
+      }).catch(() => undefined);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [installing]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const doInstall = async () => {
+    setBusy(true);
+    try {
+      const r = await api.nodeInstall({ source });
+      setInstalling(r.taskId);
+      setTaskMsg("running: …");
+    } catch (e) {
+      toast("error", `启动安装失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doUninstall = async (version: string) => {
+    setBusy(true);
+    try {
+      await api.nodeUninstall(version);
+      toast("success", `已卸载 Node.js ${version}`);
+      reload();
+    } catch (e) {
+      toast("error", `卸载失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
       <div className="section-caption">
         <LocalCafeIcon size={16} />
         {I18N["dsh.node.title"]}
       </div>
-      <div className="card">
-        <div className="hint info" style={{ margin: 2 }}>
-          HDSL-web 由服务端统一托管 Node.js 运行时，网页版无需（也无法）单独安装或删除运行时。
+      <div className="card" style={{ display: "grid", gap: 8, padding: 12 }}>
+        <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+          安装 dsh 版本、插件与品牌工具需要 Node.js 工具链：{status?.requirement ?? "…"}
+        </span>
+
+        {/* 系统 node */}
+        <div className="comp-row" style={{ padding: "6px 0" }}>
+          <span className="comp-label" style={{ width: "auto", flex: "none" }}>系统 PATH</span>
+          <span className="comp-value" style={{ fontSize: 13 }}>
+            {status === null ? "检测中…" : status.system
+              ? `node ${status.system.nodeVersion}${status.system.npmVersion ? ` · npm ${status.system.npmVersion}` : ""}${status.system.pnpmVersion ? ` · pnpm ${status.system.pnpmVersion}` : " · pnpm 缺失"}`
+              : "未检测到 node"}
+          </span>
+        </div>
+
+        {/* 托管运行时 */}
+        <span style={{ fontSize: 13, fontWeight: 600 }}>面板托管的运行时（存于数据目录，PATH 没有 node 时自动使用）</span>
+        {status && status.managed.length === 0 && (
+          <span style={{ fontSize: 13, color: "var(--monet-on-surface-variant)" }}>还没有。裸部署（如 Windows 直接 java -jar）可一键安装：</span>
+        )}
+        {status?.managed.map((r) => (
+          <div key={r.version} className="toolbar-row" style={{ padding: "2px 0" }}>
+            <span style={{ fontSize: 13 }}>
+              Node.js {r.version}
+              {!r.suitable && <span className="tag plain" style={{ marginLeft: 6 }}>版本不适配</span>}
+              <span className={`tag ${r.pnpm ? "running" : "plain"}`} style={{ marginLeft: 6 }}>{r.pnpm ? "pnpm 就绪" : "无 pnpm"}</span>
+            </span>
+            <span className="spacer" />
+            <button className="btn btn-text ripple-host" style={{ height: 28 }} disabled={busy} onClick={() => void doUninstall(r.version)}>
+              卸载
+            </button>
+          </div>
+        ))}
+
+        {/* 一键安装 */}
+        <div className="toolbar-row" style={{ padding: "4px 0", flexWrap: "wrap" }}>
+          <select className="input" style={{ height: 36, maxWidth: 160 }} value={source} onChange={(e) => setSource(e.target.value as "mirror" | "official")}>
+            <option value="mirror">国内镜像（npmmirror）</option>
+            <option value="official">官方 nodejs.org</option>
+          </select>
+          <button className="btn btn-raised ripple-host" disabled={busy || installing !== null} onClick={() => void doInstall()}>
+            {installing ? "安装中…" : "一键安装最新适配版本"}
+          </button>
+        </div>
+        {taskMsg && <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>{taskMsg}</span>}
+
+        {/* 手动安装 */}
+        <div className="hint info" style={{ margin: 0 }}>
+          <span style={{ flex: 1 }}>也可以自己装：下载 Node.js LTS（nodejs.org），装完重启面板即可被探测到。</span>
+          <button className="btn btn-text ripple-host" style={{ height: 28 }} onClick={() => window.open("https://nodejs.org", "_blank", "noopener")}>
+            打开 nodejs.org
+          </button>
         </div>
       </div>
     </>

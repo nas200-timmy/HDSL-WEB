@@ -307,6 +307,14 @@ location /panel/ {
 
 ## 安全说明
 
+> **Windows 上的文件权限**：面板对凭据文件（`auth/users.json`）写 0600、临时文件原子替换——
+> 这是 POSIX 语义。NTFS 没有 umask，Java 的 `setReadable(false, …)` 映射到 ACL 的效果
+> 与预期不一定一致：**多用户的 Windows 机器上，凭据文件可能被同机其他账户读到**。
+> 缓解只有两条：Windows 面板按单用户机器对待；以及无论哪个平台，都不要把数据目录
+> 暴露到公网可访问的位置（不要给 `./data` 挂 Web 服务、不要共享出去）。其余设计
+> （PBKDF2 21 万次迭代 + per-user 盐 + 原子写）与平台无关，照常生效。
+
+
 - **登录门**：`POST /api/auth/login`、`GET /api/auth/status`、`POST /api/auth/setup`（仅无用户时可用）
   与 `GET /api/health` 是公开的（外加不含数据的 SPA 外壳，因为登录/引导页必须先能打开）。
   `/api/*`、`/ws`、`/i/*` 一律要求会话。`POST /api/auth/password`（改密）与 `POST /api/auth/username`（改名）
