@@ -101,8 +101,10 @@ public final class BrandInstaller {
         }
 
         DshNodeRuntime runtime = DshNodeRuntime.detect()
-                .orElseThrow(() -> new BrandException("Node.js was not found; installing " + brand.npmPackage()
-                        + " needs the toolchain the panel itself runs on"));
+                .or(DshNodeRuntime::detectManaged)
+                .orElseThrow(() -> new BrandException("Node.js was not found on PATH and no panel-managed runtime "
+                        + "is installed; installing " + brand.npmPackage() + " needs one. "
+                        + "Open Settings -> Node.js for a one-click managed runtime, or install Node.js yourself."));
         String pnpm = runtime.pnpm() == null
                 ? "pnpm"
                 : runtime.pnpm().toString();
@@ -132,7 +134,7 @@ public final class BrandInstaller {
 
         Path log = brandRoot.resolve(INSTALL_LOG);
         try (OutputStreamAppend output = new OutputStreamAppend(log);
-                BufferedReader reader = run(command, target, output)) {
+                BufferedReader reader = run(command, target, runtime.pathEnvironment(), output)) {
             StringBuilder tail = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
@@ -267,10 +269,12 @@ public final class BrandInstaller {
     }
 
     /// Runs one command in a directory, teeing its merged output to the log.
-    private static BufferedReader run(List<String> command, Path directory, OutputStreamAppend output)
+    private static BufferedReader run(List<String> command, Path directory,
+                                      java.util.Map<String, String> environment, OutputStreamAppend output)
             throws IOException, InterruptedException {
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.directory(directory.toFile());
+        builder.environment().putAll(environment);
         builder.redirectErrorStream(true);
         Process process = builder.start();
         output.attach(process);

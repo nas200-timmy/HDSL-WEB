@@ -464,7 +464,7 @@ public final class DshVersionManager {
         int exitCode;
         DshCommand.Result commandResult;
         try {
-            commandResult = DshCommand.run(command, null, onLine);
+            commandResult = DshCommand.run(command, null, runtime.pathEnvironment(), onLine);
             exitCode = commandResult.exitCode();
         } catch (IOException e) {
             throw new DshException("Failed to run pnpm", e);
@@ -645,7 +645,7 @@ public final class DshVersionManager {
         int exitCode;
         DshCommand.Result commandResult;
         try {
-            commandResult = DshCommand.run(command, null, onLine);
+            commandResult = DshCommand.run(command, null, runtime.pathEnvironment(), onLine);
             exitCode = commandResult.exitCode();
         } catch (IOException e) {
             throw new DshException("Failed to run pnpm", e);
@@ -689,8 +689,13 @@ public final class DshVersionManager {
     /// @return the detected runtime
     /// @throws DshException when no `node` was found at all
     public static DshNodeRuntime requireRuntime() throws DshException {
+        // PATH 上没有就走面板托管的运行时（设置 → Node.js 一键安装，
+        // 落在 <data>/hdsl/runtimes）——裸部署没有系统 Node.js 也能装实例。
         return DshNodeRuntime.detect()
-                .orElseThrow(() -> new DshException("Node.js was not found on PATH; " + DshNodeRuntime.requirement()));
+                .or(DshNodeRuntime::detectManaged)
+                .orElseThrow(() -> new DshException("Node.js was not found on PATH and no panel-managed runtime "
+                        + "is installed (" + DshNodeRuntime.requirement() + "). "
+                        + "Open Settings -> Node.js for a one-click managed runtime, or install Node.js yourself."));
     }
 
     /// Reads the published version list from the registry.
@@ -832,6 +837,15 @@ public final class DshVersionManager {
         return runNpmView(npm, PACKAGE_NAME, field);
     }
 
+    /// PATH with the npm executable's own bin first — shebang scripts resolve
+    /// `node` by name.
+    private static java.util.Map<String, String> npmPathEnvironment(Path npm) {
+        String bin = npm.getParent() == null ? "" : npm.getParent().toString();
+        String existing = System.getenv("PATH");
+        return java.util.Map.of("PATH", bin.isEmpty() ? String.valueOf(existing)
+                : bin + java.io.File.pathSeparator + (existing == null ? "" : existing));
+    }
+
     /// Runs `npm view <package> <field> --json`.
     ///
     /// @param npm   the npm executable
@@ -842,7 +856,8 @@ public final class DshVersionManager {
     private static DshCommand.Result runNpmView(Path npm, String pkg, String field) throws DshException {
         List<String> command = List.of(npm.toString(), "view", pkg, field, "--json");
         try {
-            DshCommand.Result result = DshCommand.run(command);
+            // npm 是 env-node shebang 脚本：裸部署下 spawn 必须带上运行时自己的 bin
+            DshCommand.Result result = DshCommand.run(command, null, npmPathEnvironment(npm), null);
             if (!result.isSuccess()) {
                 throw new DshException("npm view " + field + " exited with code " + result.exitCode()
                         + ": " + result.text());

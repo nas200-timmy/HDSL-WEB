@@ -48,6 +48,7 @@ import org.jackhuang.hmcl.web.http.ApiServlet;
 import org.jackhuang.hmcl.web.http.DoctorApiServlet;
 import org.jackhuang.hmcl.web.http.ExportsApiServlet;
 import org.jackhuang.hmcl.web.http.InstancesApiServlet;
+import org.jackhuang.hmcl.web.http.NodeApiServlet;
 import org.jackhuang.hmcl.web.http.ModelsApiServlet;
 import org.jackhuang.hmcl.web.http.PacksApiServlet;
 import org.jackhuang.hmcl.web.http.PluginsApiServlet;
@@ -230,6 +231,7 @@ public final class HdslServer {
         context.addServlet(instancesHolder, "/api/instances/*");
         context.addServlet(new ServletHolder(new VersionsApiServlet(taskService)), "/api/versions");
         context.addServlet(new ServletHolder(new TasksApiServlet(taskService)), "/api/tasks/*");
+        context.addServlet(new ServletHolder(new NodeApiServlet(taskService)), "/api/node/*");
         context.addServlet(new ServletHolder(new PluginsApiServlet()), "/api/plugins/*");
         ServletHolder packsHolder = new ServletHolder(new PacksApiServlet(runtime, taskService, config));
         packsHolder.getRegistration().setMultipartConfig(packMultipart);

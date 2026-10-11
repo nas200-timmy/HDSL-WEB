@@ -96,13 +96,20 @@ public record DshNodeRuntime(
             pnpm = null;
         }
 
+        // npm/pnpm 是 `#!/usr/bin/env node` 脚本：探测和日后 spawn 都得先把
+        // 这个运行时自己的 bin 塞进 PATH，否则裸部署（PATH 无 node）下
+        // 「装好了却报 npm 缺失」。
+        java.util.Map<String, String> env = java.util.Map.of("PATH",
+                bin == null ? "" : bin.toString() + java.io.File.pathSeparator
+                        + java.util.Optional.ofNullable(System.getenv("PATH")).orElse(""));
+
         return new DshNodeRuntime(
                 runtime.node(),
                 runtime.version(),
                 runtime.npm(),
-                runtime.npm() == null ? null : versionOf(runtime.npm()),
+                runtime.npm() == null ? null : versionOf(runtime.npm(), env),
                 pnpm,
-                pnpm == null ? null : versionOf(pnpm));
+                pnpm == null ? null : versionOf(pnpm, env));
     }
 
     /// How long a successful probe is reused. The toolchain does not change
@@ -114,6 +121,27 @@ public record DshNodeRuntime(
     /// cached.
     private static volatile @Nullable DshNodeRuntime lastDetected;
     private static volatile long lastDetectedAt;
+
+    /// Drops the probe cache. Called after a managed runtime is installed or
+    /// removed — a cached "no node at all" would otherwise shadow the runtime
+    /// for up to a minute.
+    public static void invalidateCache() {
+        lastDetected = null;
+        lastDetectedAt = 0;
+    }
+
+    /// The newest installed launcher-managed runtime the harness supports —
+    /// what a bare deployment (no Node.js on PATH) falls back to. Managed
+    /// runtimes are installed under `<data>/hdsl/runtimes` from the panel's
+    /// Settings → Node.js page.
+    ///
+    /// @return the managed runtime, or empty when none is installed
+    public static Optional<DshNodeRuntime> detectManaged() {
+        return org.jackhuang.hmcl.dsh.NodeRuntimeManager.listInstalled().stream()
+                .filter(runtime -> isSupportedNodeVersion(runtime.version()))
+                .findFirst()
+                .map(DshNodeRuntime::fromManaged);
+    }
 
     /// Probes the toolchain on the current `PATH`.
     ///
@@ -263,8 +291,14 @@ public record DshNodeRuntime(
     /// @param executable the program to run with `--version`
     /// @return the trimmed first output line, or `null` when the probe failed
     private static @Nullable String versionOf(Path executable) {
+        return versionOf(executable, java.util.Map.of());
+    }
+
+    /// @param environment extra variables for the probe (PATH prepends)
+    private static @Nullable String versionOf(Path executable, java.util.Map<String, String> environment) {
         try {
-            DshCommand.Result result = DshCommand.run(List.of(executable.toString(), "--version"));
+            DshCommand.Result result = DshCommand.run(List.of(executable.toString(), "--version"),
+                    null, environment, null);
             if (!result.isSuccess() || result.output().isEmpty()) {
                 return null;
             }

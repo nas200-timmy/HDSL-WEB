@@ -101,9 +101,14 @@ public final class DshLauncher {
     public static DshNodeRuntime resolveRuntime(DshInstance instance) throws DshException {
         String selection = instance.nodeRuntimeOrDefault();
         if (DshNodeRuntime.SYSTEM.equalsIgnoreCase(selection)) {
+            // PATH 上没有就走面板托管的运行时（设置 → Node.js 一键安装）——
+            // 裸部署没有系统 Node.js 也能工作。
             DshNodeRuntime runtime = DshNodeRuntime.detect()
-                    .orElseThrow(() -> new DshException("Node.js was not found on PATH; "
-                            + DshNodeRuntime.requirement()));
+                    .or(DshNodeRuntime::detectManaged)
+                    .orElseThrow(() -> new DshException("Node.js was not found on PATH and no panel-managed "
+                            + "runtime is installed (" + DshNodeRuntime.requirement()
+                            + "). Open Settings -> Node.js for a one-click managed runtime, "
+                            + "or install Node.js yourself."));
             if (!runtime.isNodeSupported()) {
                 throw new DshException("The system Node.js " + runtime.nodeVersion()
                         + " is outside the supported range (" + DshNodeRuntime.requirement()

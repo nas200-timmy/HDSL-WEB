@@ -301,6 +301,7 @@ public final class NodeRuntimeManager {
 
         provisionPnpm(runtime, onStage);
 
+        DshNodeRuntime.invalidateCache();
         LOG.info("Installed Node.js " + normalized + " into " + target);
         return runtime;
     }
@@ -462,6 +463,7 @@ public final class NodeRuntimeManager {
     /// @param version the version to remove
     /// @throws DshException when the runtime is not installed or cannot be removed
     public static void uninstall(String version) throws DshException {
+        DshNodeRuntime.invalidateCache();
         NodeRuntime runtime = findInstalled(version);
         if (runtime == null) {
             throw new DshException("Node.js " + version + " is not installed");

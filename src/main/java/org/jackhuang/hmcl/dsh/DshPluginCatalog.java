@@ -373,10 +373,11 @@ public final class DshPluginCatalog {
     /// @return the registry's base address, without a trailing slash
     static String npmRegistry() {
         try {
-            DshNodeRuntime runtime = DshNodeRuntime.detect().orElse(null);
+            DshNodeRuntime runtime = DshNodeRuntime.detect().or(DshNodeRuntime::detectManaged).orElse(null);
             if (runtime != null && runtime.npm() != null) {
                 DshCommand.Result result = DshCommand.run(
-                        List.of(runtime.npm().toString(), "config", "get", "registry"));
+                        List.of(runtime.npm().toString(), "config", "get", "registry"),
+                        null, runtime.pathEnvironment(), null);
                 if (result.isSuccess()) {
                     String configured = result.text().strip();
                     // npm prints a warning on the same stream when it dislikes something, so the
