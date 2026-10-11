@@ -2,6 +2,28 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.3.6 — 2026-10-11 · 裸部署三道防线 + 面板托管 Node 运行时一键供给
+
+围绕「拦不住的 Windows/macOS 裸部署」体验的一轮加固，全部带反例实测：
+
+- **面板托管 Node.js 运行时**：裸部署没装 Node.js 时，「设置 → Node.js」可一键安装
+  托管运行时（落 `<data>/hdsl/runtimes`，默认国内镜像源，官方源可选），装完后版本安装、
+  插件、品牌工具全部自动回退使用；也保留用户自行安装 Node.js 的权利（手动指引 +
+  nodejs.org 链接）。关键坑：npm/pnpm 是 `#!/usr/bin/env node` 脚本，探测与 spawn
+  必须把运行时自己的 bin 塞进 PATH，全部调用点已接上。新端点
+  `GET/POST /api/node(/install|/uninstall)`，安装走任务系统带进度。
+- **启动横幅升级成体检报告**：open 行直接给访问地址并注明首跑建号；data dir 带
+  内容清单与备份/别上公网提示；runtime 缺失给两条修复路；Windows 平台单独提示
+  0600 无 NTFS 语义、凭据文件可能被同机其他账户读到（README 安全说明同款）。
+- **构建期哨兵**：没有 npm 且没有可用的 web/dist 时构建直接报错（"this jar would
+  ship without the web frontend"），不再静默产出缺前端的 jar——Windows 上装了 JDK
+  没装 Node 时 33 秒"成功"、跑起来全站 not found 的事故根源。
+- **运行期可诊断**：jar 缺 index.html 时日志明确写「web/index.html 不在 classpath，
+  请用 release jar」，不再只丢光秃秃的 not found。
+
+实测：清空环境变量（PATH 无 node/npm/pnpm）下装一枚托管运行时后版本列表成功返回；
+全量 528 用例绿；设置页 UI 断言五项全 PASS。
+
 ## v0.3.5 — 2026-10-11 · 审查拆雷（8 颗）+ 死代码清理 + 反向代理挂载支持
 
 一次四路交叉审查定位到 8 颗确认的雷，全部拆除（每颗独立提交、逐个验证）：
