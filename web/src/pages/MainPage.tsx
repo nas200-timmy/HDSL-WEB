@@ -173,7 +173,8 @@ function MobileHomeBrand({ entry }: { entry: LaunchEntry }) {
   const state = entry.state;
   const running = state === "RUNNING";
   const busy = state === "STARTING" || state === "STOPPING";
-  const openUrl = ext?.url ?? `/i/${entry.id}/`;
+  // ext.url 已由后端带挂载点前缀（REST 边界统一加 base），兜底路径才 withBase
+  const openUrl = ext?.url ?? withBase(`/i/${entry.id}/`);
   const manageTarget =
     entry.kind === "zcode" ? "/instances" : `/instances?brand=${entry.kind}`;
 
@@ -182,7 +183,7 @@ function MobileHomeBrand({ entry }: { entry: LaunchEntry }) {
       void api.zcodeOpen(entry.id).then((r) => window.open(r.url, "_blank", "noopener"));  // r.url 已带挂载点前缀
       return;
     }
-    window.open(withBase(openUrl), "_blank", "noopener");
+    window.open(openUrl, "_blank", "noopener");
   };
   const doAction = () => {
     if (running) void stopBrandInstance(entry.kind as "kimi" | "opencode" | "zcode", entry.id);

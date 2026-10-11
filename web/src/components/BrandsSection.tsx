@@ -377,7 +377,9 @@ function BrandPanel({ brand }: { brand: BrandId }) {
   };
 
   const doOpen = (inst: ExternalInstance) => {
-    window.open(withBase(inst.url ?? `/i/${inst.id}/`), "_blank", "noopener");
+    // inst.url 已由后端带挂载点前缀（open/list 端点统一在 REST 边界加 base），
+    // 直接打开；只有兜底构造的本地路径才需要 withBase。
+    window.open(inst.url ?? withBase(`/i/${inst.id}/`), "_blank", "noopener");
   };
 
   const doShowLogs = async (inst: ExternalInstance) => {
