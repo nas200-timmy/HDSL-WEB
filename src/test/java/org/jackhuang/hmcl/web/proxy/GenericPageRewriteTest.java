@@ -137,6 +137,26 @@ class GenericPageRewriteTest {
                 page, MOUNT, InstanceProxyServlet.RouterShim.NONE, false));
     }
 
+    /// The real Claude Web page (0.2.1, captured 2026-10-12) — the shape the
+    /// third rewrite branch exists for: Vite `base: './'`, so every reference
+    /// is relative and neither earlier branch matches, while the client's one
+    /// channel is an absolute `wss://<host>/ws` that only the shim can keep
+    /// inside the mount.
+    @Test
+    void claudeWebIndexGetsTheRuntimeShimWithoutTouchingItsRelativeReferences() {
+        String rewritten = InstanceProxyServlet.rewritePage(
+                resource("brand-pages/claude-web-index.html"), MOUNT,
+                InstanceProxyServlet.RouterShim.NONE, true);
+
+        assertShim(rewritten);
+        // No reference rewriting happened: they were relative to begin with.
+        assertTrue(rewritten.contains("src=\"./assets/index-DY0CX39q.js\""), rewritten);
+        assertTrue(rewritten.contains("href=\"./assets/index-BuyiUOyq.css\""), rewritten);
+        // The manifest is dropped for the same reason the other branch drops it.
+        assertFalse(rewritten.contains("manifest.webmanifest"), rewritten);
+        assertNoDoublePrefix(rewritten);
+    }
+
     @Test
     void theRouterShimIsReferencedOnlyWhenAsked() {
         String page = "<html><head><script src=\"/assets/a.js\"></script></head></html>";
