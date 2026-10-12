@@ -229,7 +229,7 @@ public final class BrandApiServlet extends HttpServlet {
         String target = version.trim();
         if (!BrandCatalog.versions(brand).contains(target)) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
-                    target + " is not a published " + brand.npmPackage() + " version");
+                    target + " is not a published " + brand.sourceLabel() + " version");
             return;
         }
         if (tasks.activeInstall(brand.id()).isPresent()) {
@@ -246,7 +246,7 @@ public final class BrandApiServlet extends HttpServlet {
                         owner.update(message, -1);
                     }
                 });
-                return "Installed " + brand.npmPackage() + " " + target;
+                return "Installed " + brand.sourceLabel() + " " + target;
             } catch (BrandException e) {
                 throw new RuntimeException(e.getMessage(), e);
             }
@@ -313,12 +313,12 @@ public final class BrandApiServlet extends HttpServlet {
         }
         if (version == null || version.isBlank()) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "install a " + brand.npmPackage() + " version before creating an instance");
+                    "install a " + brand.sourceLabel() + " version before creating an instance");
             return;
         }
         if (BrandInstaller.packageDir(brand, ref.root(), version) == null) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
-                    brand.npmPackage() + " " + version + " is not installed");
+                    brand.sourceLabel() + " " + version + " is not installed");
             return;
         }
         BrandInstance created = ref.manager().create(name, version);
@@ -364,7 +364,7 @@ public final class BrandApiServlet extends HttpServlet {
             if (version != null && !version.isBlank() && !version.trim().equals(instance.version())
                     && BrandInstaller.packageDir(brand, ref.root(), version.trim()) == null) {
                 Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
-                        brand.npmPackage() + " " + version.trim() + " is not installed");
+                        brand.sourceLabel() + " " + version.trim() + " is not installed");
                 return;
             }
             if (version != null && !version.isBlank() && !version.trim().equals(instance.version())) {
@@ -402,7 +402,7 @@ public final class BrandApiServlet extends HttpServlet {
         java.nio.file.Path packageDir = BrandInstaller.packageDir(brand, ref.root(), instance.version());
         if (packageDir == null) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
-                    brand.npmPackage() + " " + instance.version() + " is not installed");
+                    brand.sourceLabel() + " " + instance.version() + " is not installed");
             return;
         }
         BrandRuntime.Status status = BrandRuntime.launch(

@@ -42,6 +42,7 @@ function stateText(state: string): string {
 const BRAND_NAME: Record<BrandId, string> = {
   kimi: I18N["dsh.brand.kimi"],
   opencode: I18N["dsh.brand.opencode"],
+  "claude-web": I18N["dsh.brand.claude-web"],
 };
 
 /// 品牌区（实例列表页底部）：ZCode 页签原样渲染现有 ZcodeSection，
@@ -53,17 +54,18 @@ const BRAND_NAME: Record<BrandId, string> = {
 /// 展开状态记 localStorage，别让手机用户每次进来重新折；桌面端一字不动。
 const EXPANDED_KEY = "hdsl.brand-panel.expanded";
 
+/// 页签深链（?brand=）与折叠记忆都按这个白名单校验，新增品牌时只改这里。
+function isBrandId(value: string | null | undefined): value is BrandId {
+  return value === "kimi" || value === "opencode" || value === "claude-web";
+}
+
 export function BrandsSection({ initialTab }: { initialTab?: string }) {
   const mobile = useMobileLayout();
   // 移动端无显式深链时，页签跟随上次展开的品牌——否则刷新后页签跳回 ZCode、
   // 展开状态却对不上号，面板仍是折叠的
   const persisted = mobile && !initialTab ? localStorage.getItem(EXPANDED_KEY) : null;
   const [tab, setTab] = useState<"zcode" | BrandId>(
-    initialTab === "kimi" || initialTab === "opencode"
-      ? initialTab
-      : persisted === "kimi" || persisted === "opencode"
-        ? persisted
-        : "zcode",
+    isBrandId(initialTab) ? initialTab : isBrandId(persisted) ? persisted : "zcode",
   );
   // null = 折叠（只显示摘要行）；桌面端恒展开
   const [expandedKey, setExpandedKey] = useState<string | null>(() =>
@@ -73,6 +75,7 @@ export function BrandsSection({ initialTab }: { initialTab?: string }) {
     { key: "zcode", label: I18N["dsh.brand.tab.zcode"] },
     { key: "kimi", label: I18N["dsh.brand.kimi"] },
     { key: "opencode", label: I18N["dsh.brand.opencode"] },
+    { key: "claude-web", label: I18N["dsh.brand.claude-web"] },
   ];
   const toggle = (key: "zcode" | BrandId) => {
     if (!mobile) return;
@@ -430,6 +433,8 @@ function BrandPanel({ brand }: { brand: BrandId }) {
           <span>{I18N["dsh.brand.thirdparty.warning"].replace("%s", brandName)}</span>
           {/* OpenCode 是实验性接入：面板已经到极限，剩下的是上游的事——见 i18n 里的说明。 */}
           {brand === "opencode" && <span>{I18N["dsh.brand.opencode.limit"]}</span>}
+          {/* Claude Web 同为实验性接入：社区引擎/中转/凭据都归上游与服务商。 */}
+          {brand === "claude-web" && <span>{I18N["dsh.brand.claude-web.limit"]}</span>}
         </CollapsibleNote>
       </div>
 

@@ -34,7 +34,7 @@ export function InstancesPage() {
   const nav = useNavigate();
   const s = useAppState();
   const selectedId = useSelectedInstanceId();
-  // 主页品牌卡「管理」跳进来时带 ?brand=kimi|opencode，品牌区自动切到对应页签
+  // 主页品牌卡「管理」跳进来时带 ?brand=kimi|opencode|claude-web，品牌区自动切到对应页签
   const [searchParams] = useSearchParams();
   const brandTab = searchParams.get("brand");
 

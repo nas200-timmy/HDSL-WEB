@@ -1,42 +1,57 @@
-# 第三方品牌实例（Kimi Code / OpenCode）
+# 第三方品牌实例（Kimi Code / OpenCode / Claude Web）
 
-> 与 ZCode 实验品类并列的另外两类「自带网页端的第三方工具」：面板负责**安装（npm 指定版本）、
+> 与 ZCode 实验品类并列的另外三类「自带网页端的第三方工具」：面板负责**安装指定版本、
 > 启动、停止、日志、以及把它们自己的网页端经 `/i/<id>/` 反代出来**（同端口、同证书、同登录门）。
-> 面板不提供插件管理（这两个工具没有可用的插件生态），也不注入任何凭据——登录、模型供应商、
+> 安装来源有两种：npm registry（Kimi Code / OpenCode）与 git 仓库 tag（Claude Web，首个 git 源品牌）。
+> 面板不提供插件管理（这些工具没有可用的插件生态），也不注入任何凭据——登录、模型供应商、
 > 计费都由工具自己的网页界面完成。
 
 ## 面板到底做了什么 / 没做什么
 
-**做了**：从 npm registry 拉指定版本装进品牌目录（`<数据目录>/brands/<品牌>/releases/<版本>/`，
-pnpm store 跨实例去重）；从回环端口拉起 `kimi web` / `opencode web`；把它们的网页端改写后挂在
-`/i/<id>/`（根绝对资源加挂载点前缀 + 注入运行期 shim，与 dsh 同一套三层改写；按路径路由的客户端
-再补一层路由修正，见下）；启动/停止/日志/删除。
+**做了**：安装指定版本进品牌目录（`<数据目录>/brands/<品牌>/releases/<版本>/`）。npm 品牌从
+registry 拉包（pnpm store 跨实例去重）；git 品牌 `git clone --depth 1 --branch <tag>` 后只装
+server/web 两个 workspace（`npm ci -w server -w web`——desktop 的 Electron 二进制不下载）再
+`npm run build -w web`。从回环端口拉起各自的网页端（`kimi web` / `opencode web` / claude-web 的
+Node 服务）；把网页端改写后挂在 `/i/<id>/`（根绝对资源加挂载点前缀 + 注入运行期 shim，与 dsh 同一套
+三层改写；按路径路由的客户端再补一层路由修正，见下）；启动/停止/日志/删除。
 
 **没做（刻意）**：
-- **插件管理**：两家都没有可用生态，不做。
+- **插件管理**：各家都没有可用生态，不做。
 - **凭据注入**：账号、API key、模型供应商都在工具自己的网页里配。每个实例的状态目录
-  （Kimi Code 的 `~/.kimi-code`、OpenCode 的 `~/.config/opencode`）落在实例自己的 `home/` 里、
-  随 `/data` 卷持久化——凭据明文在容器文件系统里，与 ZCode 品类同等待遇。
-- **行为担保**：第三方工具，由各自官方分发、更新与计费；面板仅负责安装、启动与网页反代，
-  其功能、安全与行为由各官方负责。上游周更，旗标随时可能漂移。
-  **OpenCode 在界面上标为实验性接入、不保证可用性**：面板能做的（挂载、改写、反代）已经到极限，
-  剩下遇到的问题基本都是它自己的——模型目录与模型 id 对不上（实测：客户端挑到
+  （Kimi Code 的 `~/.kimi-code`、OpenCode 的 `~/.config/opencode`、Claude Web 的 `~/.claude-web`）
+  落在实例自己的 `home/` 里、随 `/data` 卷持久化——凭据明文在容器文件系统里，与 ZCode 品类同等待遇。
+- **行为担保**：第三方工具；面板仅负责安装、启动与网页反代，其功能、安全与行为归各自官方/社区。
+  上游周更，旗标随时可能漂移。
+  **OpenCode 与 Claude Web 在界面上标为实验性接入、不保证可用性**：面板能做的（挂载、改写、反代）
+  已经到极限。OpenCode 剩下遇到的问题基本都是它自己的——模型目录与模型 id 对不上（实测：客户端挑到
   `deepseek/deepseek-flash`，而它自己的服务器只有 `deepseek-flash`，于是 agent 起不来、会话里
   只有用户消息没有任何回复）、会话与 agent 行为、凭据与计费。这类问题面板修不了，只能换模型、
   换版本或等上游修；诊断过程见 [report-2026-10-08-opencode-web.md](report-2026-10-08-opencode-web.md)。
+  Claude Web 是**社区项目**（不是 Anthropic 官方网页版）：内置社区构建的引擎，登录可用官方账号也可
+  在「设置 → 供应商」接第三方中转——引擎、供应商、凭据、计费都归上游/服务商。
 
-## 两个品牌的差异（实测记录，2026-10）
+## 三个品牌的差异（实测记录，2026-10）
 
-| | Kimi Code | OpenCode |
-|---|---|---|
-| npm 包 | `@moonshot-ai/kimi-code` | `opencode-ai` |
-| 网页端命令 | `kimi web` | `opencode web` |
-| 端口 | `--port 0` 可用（内核给临时端口，就绪行播报） | **`--port 0` 不生效**（静默回落默认 4096）→ 面板预分配 |
-| 就绪行 | `Local: http://127.0.0.1:<port>/` | `Web interface: http://127.0.0.1:<port>/`（**带 ANSI 颜色码**，匹配前先剥除） |
-| 反代鉴权 | `--dangerous-bypass-auth`（官方文档写明用于 "behind your own authenticating proxy"，面板会话门就是这个代理）+ `--allowed-host <面板域名>`（防 DNS rebinding，对应 dsh 的 `--trusted-host`） | 不设 `OPENCODE_SERVER_PASSWORD`（启动日志会打印 unsecured 告警——面板门就是门） |
-| 浏览器入口 | `/i/<id>/`（客户端认子路径，与 dsh 同款改写） | `/i/<id>/` + **路由修正脚本**（见下） |
-| 版本 | npm 上 82 个干净 semver 版本 | 944 个（registry 里 1.2 万个 snapshot/ci tag，面板只列 `x.y.z`） |
-| 离线安装 | ❌ postinstall 要从厂商 CDN 拉原生二进制 | ✅ 平台二进制走 registry optionalDependencies |
+| | Kimi Code | OpenCode | Claude Web |
+|---|---|---|---|
+| 来源 | npm 包 `@moonshot-ai/kimi-code` | npm 包 `opencode-ai` | **git 仓库** [ypyik0669/claude-web](https://github.com/ypyik0669/claude-web)（MIT，社区项目；不发 npm 包） |
+| 安装 | pnpm 拉包 | pnpm 拉包 | `git clone --depth 1 --branch v<版本>` → `npm ci -w server -w web`（**不装 desktop**，Electron 二进制不下载）→ `npm run build -w web` |
+| 版本列表 | npm registry（82 个干净 semver） | npm registry（944 个；1.2 万个 snapshot/ci tag 被滤） | `git ls-remote --tags`（剥 `v` 前缀；`engine-*`/`nightly` 等非发行 tag 被滤；注解 tag 去重） |
+| 网页端命令 | `kimi web` | `opencode web` | `tsx server/src/index.ts`（Node 直跑 TS 源码，无内置入口） |
+| 端口 | `--port 0` 可用（内核给临时端口，就绪行播报） | **`--port 0` 不生效**（静默回落默认 4096）→ 面板预分配 | 无端口参数 → **`PORT` 环境变量**预分配（源码核实 `PORT ?? 3090`） |
+| 就绪行 | `Local: http://127.0.0.1:<port>/` | `Web interface: http://127.0.0.1:<port>/`（**带 ANSI 颜色码**，匹配前先剥除） | `listening on http://127.0.0.1:<port>` |
+| 反代鉴权 | `--dangerous-bypass-auth`（官方文档写明用于 "behind your own authenticating proxy"，面板会话门就是这个代理）+ `--allowed-host <面板域名>`（防 DNS rebinding，对应 dsh 的 `--trusted-host`） | 不设 `OPENCODE_SERVER_PASSWORD`（启动日志会打印 unsecured 告警——面板门就是门） | 无 token 配置时**信任回环**（源码 `authOk`）；WS 升级校验 Origin==Host——与面板反代「Host 透传」契约一致，实测链路通 |
+| 浏览器入口 | `/i/<id>/`（客户端认子路径，与 dsh 同款改写） | `/i/<id>/` + **路由修正脚本**（见下） | `/i/<id>/` 标准 shim：前端 `base: './'` 资源全相对、单 WebSocket、无 history 路由——**零补丁** |
+| 离线安装 | ❌ postinstall 要从厂商 CDN 拉原生二进制 | ✅ 平台二进制走 registry optionalDependencies | ❌ engine tgz 从 GitHub Releases 拉；npm 依赖可走镜像 registry |
+
+### 为什么 Claude Web 是「零补丁」
+
+上游的 web 构建用的 `base: './'`（资源全部相对路径——上游注释写明是为「手机壳跑在子文件夹」场景），
+前端与服务器只通**一条 WebSocket**（`client.ts` 里 `new WebSocket(...location.host + '/ws')`，无散落的
+`fetch('/api…')`），且没有任何 history 路由（刷新即首页）。所以 `/i/<id>/` 挂载时：静态资源浏览器按
+相对路径自己拼对；WS 地址是绝对 `/ws`，由面板注入品牌页的标准运行期 shim 改写（与 Kimi/OpenCode 同款
+机制）；WS 握手的 Origin 校验（`originOk` 要求 Origin==Host 或回环）正好与面板反代一贯以来的 Host 透传
+契约吻合（这个契约本身就是 dsh 的 Origin 防护定的）。结论：**不需要上游改动，用户预备的上游 PR 用不上**。
 
 ## 为什么 OpenCode 需要一段「路由修正脚本」
 
@@ -71,6 +86,9 @@ Kimi Code 的客户端认子路径，不需要这段脚本（实验证明：注�
 
 ## 已知限制
 
+- **Claude Web 的引擎与账号**：它内置的引擎是社区构建（claude-code-best 基底），可登官方 Claude
+  账号，也可在「设置 → 供应商」里接第三方中转（DeepSeek/Kimi 等 OpenAI 兼容中转都行）。无论哪条路，
+  引擎行为、供应商可用性、凭据与计费都归上游/服务商；中转路线另有 Anthropic 服务条款的考量。
 - **同一 origin 的 localStorage 共用**：和 dsh 实例一样，多个品牌实例挂在一个 origin 下时浏览器
   storage 按 origin 隔离、不看路径（Kimi Code 的 web UI 实证使用 `kimi-web.*` 键）。同品牌开多个
   实例会互踩界面状态。需要彻底隔离时的方案见部署文档 §8 末尾的讨论。

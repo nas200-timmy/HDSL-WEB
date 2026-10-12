@@ -160,6 +160,9 @@ public final class BrandCatalog {
     /// One registry round trip: the package document's `versions` keys, filtered
     /// to clean semver and sorted newest first, plus the `latest` dist-tag.
     private static Snapshot fetch(Brand brand) {
+        if (brand.source() == Brand.Source.GIT) {
+            return fetchGit(brand);
+        }
         String registry = NpmRegistry.effective().registry();
         String encoded = brand.npmPackage().replace("/", "%2f");
         HttpRequest request = HttpRequest.newBuilder(URI.create(registry + "/" + encoded))
@@ -181,6 +184,72 @@ public final class BrandCatalog {
             LOG.warning("Could not fetch versions of " + brand.npmPackage() + " from " + registry, e);
             return new Snapshot(List.of(), "", System.currentTimeMillis());
         }
+    }
+
+    /// One `git ls-remote --tags` round trip for git brands: the tag names,
+    /// filtered to clean semver (the `v` prefix stripped) and sorted newest
+    /// first. An annotated tag appears twice — plain and peeled (`^{}`) — and
+    /// is deduplicated by the name parse.
+    private static Snapshot fetchGit(Brand brand) {
+        List<String> command = List.of("git", "ls-remote", "--tags", brand.gitUrl());
+        ProcessBuilder builder = new ProcessBuilder(command);
+        builder.redirectErrorStream(true);
+        try {
+            Process process = builder.start();
+            String body = new String(process.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            if (!process.waitFor(TIMEOUT.toSeconds(), java.util.concurrent.TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                LOG.warning("git ls-remote --tags " + brand.gitUrl() + " timed out");
+                return new Snapshot(List.of(), "", System.currentTimeMillis());
+            }
+            if (process.exitValue() != 0) {
+                LOG.warning("git ls-remote --tags " + brand.gitUrl() + " exited " + process.exitValue());
+                return new Snapshot(List.of(), "", System.currentTimeMillis());
+            }
+            return parseTags(body);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new Snapshot(List.of(), "", System.currentTimeMillis());
+        } catch (Exception e) {
+            LOG.warning("Could not list tags of " + brand.gitUrl(), e);
+            return new Snapshot(List.of(), "", System.currentTimeMillis());
+        }
+    }
+
+    /// Parses `git ls-remote --tags` output into a snapshot: each
+    /// `refs/tags/<name>` line (peeled `^{}` lines included, they share the
+    /// name), the `v` prefix stripped, only clean `x.y.z` kept, deduplicated
+    /// and sorted newest first; `latest` is the newest.
+    ///
+    /// Package-private so the filtering and ordering are testable without a
+    /// git round trip.
+    ///
+    /// @param body the command's output
+    /// @return the snapshot; empty when no clean tag exists
+    static Snapshot parseTags(String body) {
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        List<String> clean = new ArrayList<>();
+        for (String line : body.split("\\R")) {
+            int tab = line.indexOf('\t');
+            if (tab < 0) {
+                continue;
+            }
+            String ref = line.substring(tab + 1).trim();
+            if (!ref.startsWith("refs/tags/")) {
+                continue;
+            }
+            String tag = ref.substring("refs/tags/".length());
+            if (tag.endsWith("^{}")) {
+                tag = tag.substring(0, tag.length() - "^{}".length());
+            }
+            String version = tag.startsWith("v") ? tag.substring(1) : tag;
+            if (CLEAN_VERSION.matcher(version).matches() && seen.add(version)) {
+                clean.add(version);
+            }
+        }
+        clean.sort(NEWEST_FIRST);
+        String latest = clean.isEmpty() ? "" : clean.get(0);
+        return new Snapshot(List.copyOf(clean), latest, System.currentTimeMillis());
     }
 
     /// Numeric component-wise ordering: `2.10.0` sorts above `2.9.0`, which

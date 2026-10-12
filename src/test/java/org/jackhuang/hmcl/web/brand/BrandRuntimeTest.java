@@ -87,6 +87,48 @@ class BrandRuntimeTest {
     }
 
     @Test
+    void claudeWebPlanRunsTsxWithAPortEnvironment() throws IOException {
+        Path pkg = Files.createDirectories(dir.resolve("claude-web-rel"));
+        Path tsx = pkg.resolve("node_modules/.bin/tsx");
+        Path entry = pkg.resolve("server/src/index.ts");
+        Files.createDirectories(tsx.getParent());
+        Files.createDirectories(entry.getParent());
+        Files.createFile(tsx);
+        Files.createFile(entry);
+        BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1", 0, 1);
+
+        BrandRuntime.LaunchPlan plan = BrandRuntime.plan(Brand.CLAUDE_WEB, pkg, instance, null);
+
+        assertEquals(tsx.toRealPath().toString(), plan.command().get(0));
+        assertEquals(entry.toString(), plan.command().get(1));
+        assertEquals(2, plan.command().size());
+        // The pre-allocated port travels in the environment — the server reads
+        // PORT (verified in its source: PORT ?? 3090) and has no port flag.
+        int port = Integer.parseInt(plan.environment().get("PORT"));
+        assertTrue(port > 0, "a real pre-allocated port in the environment: " + plan.environment());
+    }
+
+    @Test
+    void claudeWebPlanRefusesAPrefixWithoutTheServerEntry() throws IOException {
+        Path pkg = Files.createDirectories(dir.resolve("claude-web-rel"));
+        Path tsx = pkg.resolve("node_modules/.bin/tsx");
+        Files.createDirectories(tsx.getParent());
+        Files.createFile(tsx);
+        BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1", 0, 1);
+
+        assertThrows(IOException.class,
+                () -> BrandRuntime.plan(Brand.CLAUDE_WEB, pkg, instance, null));
+    }
+
+    @Test
+    void npmBrandPlansCarryNoEnvironment() throws IOException {
+        Path pkg = prefix(Brand.KIMI);
+        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", 0, 1);
+
+        assertTrue(BrandRuntime.plan(Brand.KIMI, pkg, instance, null).environment().isEmpty());
+    }
+
+    @Test
     void ansiEscapesAreStrippedBeforeMatching() {
         String banner = "\u001B[94m\u001B[1m  Web interface:     \u001B[0m http://127.0.0.1:45678/";
         String stripped = BrandRuntime.stripAnsi(banner);

@@ -89,6 +89,11 @@ public final class BrandRuntime {
     private static final Pattern OPENCODE_WEB_INTERFACE =
             Pattern.compile("Web interface:\\s+http://127\\.0\\.0\\.1:(\\d+)/");
 
+    /// Claude Web's readiness announcement (`claude-web <version> listening on
+    /// http://127.0.0.1:<port>`, printed by its server entry).
+    private static final Pattern CLAUDE_WEB_LISTENING =
+            Pattern.compile("listening on http://127\\.0\\.0\\.1:(\\d+)");
+
     /// Where pre-allocated ports for brands that cannot pick their own are
     /// drawn from — outside the dsh pool (3081–4081) so the two never fight.
     private static final int ALLOC_RANGE_START = 20000;
@@ -193,14 +198,17 @@ public final class BrandRuntime {
                 log = Files.newOutputStream(logFile,
                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
                         StandardOpenOption.WRITE);
-                List<String> command = command(brand, packageDir, instance, publicHost);
-                ProcessBuilder builder = new ProcessBuilder(command);
+                LaunchPlan plan = plan(brand, packageDir, instance, publicHost);
+                ProcessBuilder builder = new ProcessBuilder(plan.command());
                 builder.directory(workspace.toFile());
                 builder.redirectErrorStream(true);
                 // The tool's own state lives under its HOME, which is the
                 // instance directory — credentials, sessions and config all
                 // land inside the volume, per instance.
                 builder.environment().put("HOME", home.toString());
+                // Brand-specific environment (Claude Web takes its port from
+                // PORT; it has no port flag).
+                builder.environment().putAll(plan.environment());
                 process = builder.start();
             } catch (IOException e) {
                 STATES.put(id, State.ERROR);
@@ -279,21 +287,40 @@ public final class BrandRuntime {
         return LOCKS.computeIfAbsent(id, key -> new Object());
     }
 
+    /// One brand's launch: the command to run plus any environment variables it
+    /// needs (only Claude Web today — it reads its port from `PORT` rather than
+    /// a flag).
+    ///
+    /// @param command the executable and arguments
+    /// @param environment extra environment variables, on top of the panel's
+    ///                      own (HOME etc.)
+    record LaunchPlan(List<String> command, Map<String, String> environment) {
+    }
+
     /// Builds the brand's launch command.
     ///
     /// Package-private so the flag wiring (allowlist host, port strategy,
-    /// bypass switch) is directly testable.
+    /// bypass switch) is directly testable. Prefer [plan] when the process is
+    /// actually started — it carries the environment the command needs.
     static List<String> command(Brand brand, Path packageDir, BrandInstance instance,
                                 @Nullable String publicHost) throws IOException {
-        Path bin = packageDir.resolve("node_modules/.bin/" + brand.binName());
-        if (!Files.isRegularFile(bin)) {
-            throw new IOException("executable not found: " + bin);
-        }
-        Path executable = bin.toRealPath();
+        return plan(brand, packageDir, instance, publicHost).command();
+    }
+
+    /// Builds the brand's full launch: command plus environment.
+    ///
+    /// Package-private so the flag wiring (allowlist host, port strategy,
+    /// bypass switch, port environment) is directly testable.
+    static LaunchPlan plan(Brand brand, Path packageDir, BrandInstance instance,
+                           @Nullable String publicHost) throws IOException {
         List<String> command = new ArrayList<>();
-        command.add(executable.toString());
         switch (brand) {
             case KIMI -> {
+                Path bin = packageDir.resolve(brand.installMarker());
+                if (!Files.isRegularFile(bin)) {
+                    throw new IOException("executable not found: " + bin);
+                }
+                command.add(bin.toRealPath().toString());
                 command.add("web");
                 command.add("--no-open");
                 command.add("--port");
@@ -311,18 +338,46 @@ public final class BrandRuntime {
                 // authenticating proxy this switch is documented for; no token
                 // is ever generated, printed, or handled here.
                 command.add("--dangerous-bypass-auth");
+                return new LaunchPlan(List.copyOf(command), Map.of());
             }
             case OPENCODE -> {
+                Path bin = packageDir.resolve(brand.installMarker());
+                if (!Files.isRegularFile(bin)) {
+                    throw new IOException("executable not found: " + bin);
+                }
+                command.add(bin.toRealPath().toString());
                 command.add("web");
                 command.add("--port");
                 command.add(String.valueOf(allocatePort()));
                 command.add("--hostname");
                 command.add("127.0.0.1");
                 command.add("--print-logs");
+                return new LaunchPlan(List.copyOf(command), Map.of());
+            }
+            case CLAUDE_WEB -> {
+                // The server runs under tsx straight from the checkout — there
+                // is no built entry point, and none is needed: tsx executes the
+                // TypeScript source, resolving the workspace's dependencies
+                // (including the engine package) from the cloned node_modules.
+                Path tsx = packageDir.resolve("node_modules/.bin/tsx");
+                Path entry = packageDir.resolve("server/src/index.ts");
+                if (!Files.isRegularFile(tsx)) {
+                    throw new IOException("executable not found: " + tsx);
+                }
+                if (!Files.isRegularFile(entry)) {
+                    throw new IOException("server entry not found: " + entry);
+                }
+                int port = allocatePort();
+                command.add(tsx.toRealPath().toString());
+                command.add(entry.toString());
+                // Its port comes from the environment, not a flag (verified in
+                // server/src/index.ts: PORT ?? 3090), so the pre-allocated
+                // port travels in the environment while the command stays a
+                // plain `tsx <entry>`.
+                return new LaunchPlan(List.copyOf(command), Map.of("PORT", String.valueOf(port)));
             }
             default -> throw new IOException("unknown brand " + brand);
         }
-        return command;
     }
 
     /// Picks a free loopback port for brands that cannot ask the OS for one
@@ -379,12 +434,21 @@ public final class BrandRuntime {
         return null;
     }
 
+    /// The readiness line each brand prints — matched on ANSI-stripped output.
+    private static Pattern readyPattern(Brand brand) {
+        return switch (brand) {
+            case KIMI -> KIMI_LOCAL_PORT;
+            case OPENCODE -> OPENCODE_WEB_INTERFACE;
+            case CLAUDE_WEB -> CLAUDE_WEB_LISTENING;
+        };
+    }
+
     /// Copies the process's merged output into its log file, watching every
     /// ANSI-stripped line for the readiness announcement; on EOF records the
     /// terminal state, with the log's tail as the reason for an unexpected exit.
     private static void pumpLines(Brand brand, String id, Process process, OutputStream log,
                                   Path logFile, CompletableFuture<Integer> ready) {
-        Pattern readyPattern = brand == Brand.KIMI ? KIMI_LOCAL_PORT : OPENCODE_WEB_INTERFACE;
+        Pattern readyPattern = readyPattern(brand);
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
             String line;

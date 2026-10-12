@@ -23,10 +23,11 @@ import org.jetbrains.annotations.Nullable;
 /// The third-party tool categories the panel can install and serve, beyond the
 /// dsh and ZCode ones.
 ///
-/// Each value is a static description of one upstream npm package — what the
-/// panel installs, what binary it launches, and how that binary announces its
-/// port. Behavioural differences (launch flags, port strategy, readiness line)
-/// live in [BrandRuntime] and switch on this enum; everything here is data.
+/// Each value is a static description of one upstream tool — what the panel
+/// installs (an npm package or a git repository), what it launches, and how
+/// that process announces its port. Behavioural differences (launch flags,
+/// port strategy, readiness line) live in [BrandRuntime] and switch on this
+/// enum; everything here is data.
 ///
 /// These tools are **third-party**: the panel only installs, launches and
 /// reverse-proxies them. Their functionality, security and billing belong to
@@ -37,7 +38,7 @@ public enum Brand {
     /// loopback port; `--port 0` yields an ephemeral port announced on stdout.
     /// Its client is mount-aware, so instances are served under `/i/<id>/`
     /// like dsh (verified end to end with a headless browser).
-    KIMI("kimi", "@moonshot-ai/kimi-code", "kimi", false),
+    KIMI("kimi", Source.NPM, "@moonshot-ai/kimi-code", "kimi", false),
 
     /// OpenCode: `opencode web` serves its own web UI; `--port 0` is NOT
     /// honoured (it falls back to 4096), so the panel pre-allocates a port.
@@ -46,17 +47,46 @@ public enum Brand {
     /// stays blank). Mounted like everything else, such a client needs the
     /// router shim that reads the mount away from the paths it routes by and
     /// puts it back on the addresses it writes — see [needsRouterShim].
-    OPENCODE("opencode", "opencode-ai", "opencode", true);
+    OPENCODE("opencode", Source.NPM, "opencode-ai", "opencode", true),
+
+    /// Claude Web (ypyik0669/claude-web, MIT): a community workbench around
+    /// the Claude Code CLI — and, through its bundled engine and provider
+    /// system, around relay APIs. **Not** Anthropic's hosted "Claude Code on
+    /// the web", which is a SaaS and cannot be self-hosted.
+    ///
+    /// Distributed as git tags, not an npm package, so the source is a
+    /// repository and the installer clones and builds it (see
+    /// [BrandInstaller]). The server is plain Node (`tsx server/src/index.ts`),
+    /// honours a `PORT` environment variable, defaults to `127.0.0.1`, and
+    /// prints `listening on http://127.0.0.1:<port>` — all verified in its
+    /// source. Its web client builds with relative asset URLs (`base: './'`,
+    /// chosen upstream so a phone shell can run the same build below a
+    /// folder), talks to the server over a single WebSocket at `/ws`, and
+    /// routes nothing by pathname, so a subpath mount under `/i/<id>/` works
+    /// with the standard brand shim — no router shim.
+    CLAUDE_WEB("claude-web", Source.GIT, "https://github.com/ypyik0669/claude-web", "v", false);
+
+    /// Where a brand's releases come from: an npm registry package, or a git
+    /// repository's tags (cloned and built locally).
+    public enum Source {
+        NPM,
+        GIT
+    }
 
     private final String id;
-    private final String npmPackage;
-    private final String binName;
+    private final Source source;
+    private final String locator;
+    private final String aux;
     private final boolean needsRouterShim;
 
-    Brand(String id, String npmPackage, String binName, boolean needsRouterShim) {
+    /// @param locator the npm package (NPM) or the repository URL (GIT)
+    /// @param aux the executable inside `node_modules/.bin/` (NPM) or the
+    ///            tag prefix (GIT, e.g. `"v"` for `v0.2.1`)
+    Brand(String id, Source source, String locator, String aux, boolean needsRouterShim) {
         this.id = id;
-        this.npmPackage = npmPackage;
-        this.binName = binName;
+        this.source = source;
+        this.locator = locator;
+        this.aux = aux;
         this.needsRouterShim = needsRouterShim;
     }
 
@@ -65,14 +95,43 @@ public enum Brand {
         return id;
     }
 
-    /// The upstream npm package the installer fetches.
-    public String npmPackage() {
-        return npmPackage;
+    /// Where this brand's releases come from.
+    public Source source() {
+        return source;
     }
 
-    /// The executable inside the installed prefix's `node_modules/.bin/`.
-    public String binName() {
-        return binName;
+    /// The upstream npm package the installer fetches; `null` for git brands.
+    public @Nullable String npmPackage() {
+        return source == Source.NPM ? locator : null;
+    }
+
+    /// The executable inside the installed prefix's `node_modules/.bin/`;
+    /// `null` for git brands, whose launch is not a single binary.
+    public @Nullable String binName() {
+        return source == Source.NPM ? aux : null;
+    }
+
+    /// The upstream git repository the installer clones; `null` for npm brands.
+    public @Nullable String gitUrl() {
+        return source == Source.GIT ? locator : null;
+    }
+
+    /// The tag naming one version of a git brand: the prefix plus the version
+    /// (`v` + `0.2.1` → `v0.2.1`). Empty for npm brands.
+    public String gitTag(String version) {
+        return aux + version;
+    }
+
+    /// The release-relative path whose existence proves an install: the
+    /// package's executable (NPM) or the built web app (GIT).
+    public String installMarker() {
+        return source == Source.NPM ? "node_modules/.bin/" + aux : "web/dist/index.html";
+    }
+
+    /// What the panel calls the upstream in user-facing messages: the npm
+    /// package or the repository URL.
+    public String sourceLabel() {
+        return locator;
     }
 
     /// Whether the tool's web client routes by URL path, making a subpath

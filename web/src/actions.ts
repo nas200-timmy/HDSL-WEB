@@ -92,7 +92,7 @@ export function openDsh(instanceId: string): void {
  * 3. 失败关闭弹窗并提示；结束后立即刷新跨品牌实例列表。
  */
 export async function launchBrandInstance(
-  brand: "kimi" | "opencode" | "zcode",
+  brand: "kimi" | "opencode" | "claude-web" | "zcode",
   entry: { id: string; name: string },
 ): Promise<boolean> {
   beginLaunch(entry.id);
@@ -131,7 +131,7 @@ export async function launchBrandInstance(
 }
 
 export async function stopBrandInstance(
-  brand: "kimi" | "opencode" | "zcode",
+  brand: "kimi" | "opencode" | "claude-web" | "zcode",
   id: string,
 ): Promise<boolean> {
   try {

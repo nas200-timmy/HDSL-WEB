@@ -73,6 +73,16 @@ class BrandInstallerTest {
         assertNull(BrandInstaller.packageDir(Brand.KIMI, root, "2.1.0"));
     }
 
+    /// Git brands prove their install differently: no executable, but the
+    /// built web app must be there.
+    @Test
+    void gitBrandMarkerIsTheBuiltWebApp() throws IOException {
+        install(Brand.CLAUDE_WEB, "0.2.1");
+
+        assertTrue(BrandInstaller.packageDir(Brand.CLAUDE_WEB, root, "0.2.1") != null);
+        assertNull(BrandInstaller.packageDir(Brand.CLAUDE_WEB, root, "0.2.0"));
+    }
+
     @Test
     void defaultPackageIsTheCurrentLinkElseTheNewest() throws IOException {
         assertNull(BrandInstaller.defaultPackage(Brand.KIMI, root));
@@ -87,13 +97,14 @@ class BrandInstallerTest {
         assertEquals(older.toRealPath(), BrandInstaller.defaultPackage(Brand.KIMI, root).toRealPath());
     }
 
-    /// Creates one fake installed release: a directory holding only the
-    /// executable the installer checks for.
+    /// Creates one fake installed release: a directory holding only the marker
+    /// the installer checks for — the executable (npm brands) or the built web
+    /// app (git brands).
     private Path install(Brand brand, String version) throws IOException {
         Path release = Files.createDirectories(root.resolve("releases").resolve(version));
-        Path bin = release.resolve("node_modules/.bin/" + brand.binName());
-        Files.createDirectories(bin.getParent());
-        Files.createFile(bin);
+        Path marker = release.resolve(brand.installMarker());
+        Files.createDirectories(marker.getParent());
+        Files.createFile(marker);
         return release;
     }
 }

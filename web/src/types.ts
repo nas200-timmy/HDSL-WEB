@@ -318,9 +318,9 @@ export type WsEvent =
   | { type: "acp-update"; instance: string; session: string; update: AcpSessionUpdate }
   | { type: "acp-finished"; instance: string; session: string; stopReason?: string };
 
-// ---------- 第三方品牌实例（kimi / opencode，REST 挂 /api/brands/<brand>/*） ----------
+// ---------- 第三方品牌实例（kimi / opencode / claude-web，REST 挂 /api/brands/<brand>/*） ----------
 
-export type BrandId = "kimi" | "opencode";
+export type BrandId = "kimi" | "opencode" | "claude-web";
 
 /// GET /api/brands/<brand>/versions：全部干净 semver（最新在前）+ 已装列表 + 新建实例默认版本
 export interface BrandVersions {
@@ -353,11 +353,11 @@ export interface BrandInstance {
   url?: string;
 }
 
-/// 启动面板"跨品牌实例切换器"里的非 dsh 条目（kimi/opencode 品牌实例 + zcode 实验实例）。
+/// 启动面板"跨品牌实例切换器"里的非 dsh 条目（kimi/opencode/claude-web 品牌实例 + zcode 实验实例）。
 /// 这是**唯一**的跨品牌实例状态源：BrandPanel / ZcodeSection / BrandSummaryBar /
 /// LaunchPane 都从这里读，写入只发生在 refreshExternal。
 export interface ExternalInstance {
-  brand: "kimi" | "opencode" | "zcode";
+  brand: "kimi" | "opencode" | "claude-web" | "zcode";
   id: string;
   name: string;
   state: string;

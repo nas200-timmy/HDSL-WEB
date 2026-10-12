@@ -40,18 +40,21 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 /// Installs and enumerates the tool releases of one [Brand].
 ///
-/// Where the ZCode category builds its distribution from upstream sources, the
-/// brand categories install **published npm packages** — the same mechanism the
-/// dsh installer uses, minus the lockstep machinery: one package, one version,
-/// no companion packages. The command mirrors the dsh install exactly:
+/// Two source flavours:
 ///
-/// ```
-/// pnpm add --dir <releases>/<version> <pkg>@<version> \
-///     --reporter=append-only --registry=<effective> \
-///     --config.dangerously-allow-all-builds=true
-/// ```
+/// - **npm brands** install a published package with the same command the dsh
+///   installer uses, minus the lockstep machinery:
+///   ```
+///   pnpm add --dir <releases>/<version> <pkg>@<version> \
+///       --reporter=append-only --registry=<effective> \
+///       --config.dangerously-allow-all-builds=true
+///   ```
+/// - **git brands** clone a release tag and build it: `git clone --depth 1
+///   --branch <tag>`, then `npm ci -w server -w web` (only the workspaces the
+///   web mode needs — the desktop workspace's Electron binary is never
+///   downloaded), then `npm run build -w web`.
 ///
-/// Two details are load-bearing:
+/// Two npm details are load-bearing:
 ///
 /// - `--config.dangerously-allow-all-builds=true` — pnpm 10 and newer refuse to
 ///   run dependency lifecycle scripts by default, and Kimi Code's `postinstall`
@@ -81,25 +84,33 @@ public final class BrandInstaller {
     /// Installs one version of the brand's package into `releases/<version>`.
     ///
     /// Idempotent: an already-installed version reports done without running
-    /// pnpm again. The merged output is appended to `<brandRoot>/install.log`.
+    /// the installer again. The merged output is appended to
+    /// `<brandRoot>/install.log`.
     ///
     /// @param brand the brand
     /// @param version the exact version to install
     /// @param brandRoot the brand's directory under the data directory
     /// @param message progress sink for the task record
-    /// @throws BrandException when pnpm is missing, the install fails, or the
-    ///                          installed prefix has no executable
+    /// @throws BrandException when a required tool is missing, the install
+    ///                          fails, or the installed release is incomplete
     public static void install(Brand brand, String version, Path brandRoot, Consumer<String> message)
             throws BrandException {
         Path releases = brandRoot.resolve(RELEASES_DIR);
         Path target = releases.resolve(version);
-        Path bin = target.resolve("node_modules/.bin/" + brand.binName());
-        if (Files.exists(bin)) {
-            message.accept(brand.npmPackage() + " " + version + " is already installed");
+        if (Files.exists(target.resolve(brand.installMarker()))) {
+            message.accept(brand.sourceLabel() + " " + version + " is already installed");
             pointCurrentAt(brandRoot, target);
             return;
         }
+        if (brand.source() == Brand.Source.GIT) {
+            installGit(brand, version, brandRoot, target, message);
+            pointCurrentAt(brandRoot, target);
+            message.accept("Installed " + brand.sourceLabel() + " " + version);
+            LOG.info("Installed " + brand.sourceLabel() + " " + version + " into " + target);
+            return;
+        }
 
+        Path bin = target.resolve(brand.installMarker());
         DshNodeRuntime runtime = DshNodeRuntime.detect()
                 .or(DshNodeRuntime::detectManaged)
                 .orElseThrow(() -> new BrandException("Node.js was not found on PATH and no panel-managed runtime "
@@ -169,6 +180,115 @@ public final class BrandInstaller {
         LOG.info("Installed " + brand.npmPackage() + " " + version + " into " + target);
     }
 
+    /// The git-brand install: clone the release tag, install the server and
+    /// web workspaces, build the web app. Runs three child processes (clone,
+    /// `npm ci`, `npm run build`), each teed into the install log; any nonzero
+    /// exit fails the install with the logged tail.
+    ///
+    /// The desktop workspace is deliberately **not** installed: nothing in it
+    /// serves the web UI, and its Electron dependency would download a binary
+    /// the panel never runs. (`ELECTRON_SKIP_BINARY_DOWNLOAD` is set anyway as
+    /// insurance against a future lockfile that pulls it in through another
+    /// workspace.)
+    private static void installGit(Brand brand, String version, Path brandRoot, Path target,
+                                   Consumer<String> message) throws BrandException {
+        try {
+            Process probe = new ProcessBuilder("git", "--version").redirectErrorStream(true).start();
+            if (!probe.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) || probe.exitValue() != 0) {
+                throw new BrandException("git was not found on PATH; installing " + brand.sourceLabel()
+                        + " needs it to clone the repository.");
+            }
+        } catch (IOException e) {
+            throw new BrandException("git was not found on PATH; installing " + brand.sourceLabel()
+                    + " needs it to clone the repository.", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BrandException("Installing " + brand.sourceLabel() + " was interrupted", e);
+        }
+
+        DshNodeRuntime runtime = DshNodeRuntime.detect()
+                .or(DshNodeRuntime::detectManaged)
+                .orElseThrow(() -> new BrandException("Node.js was not found on PATH and no panel-managed runtime "
+                        + "is installed; installing " + brand.sourceLabel() + " needs one. "
+                        + "Open Settings -> Node.js for a one-click managed runtime, or install Node.js yourself."));
+        String registry = NpmRegistry.effective().registry();
+        Path log = brandRoot.resolve(INSTALL_LOG);
+
+        // GitHub from some networks is flaky in mid-protocol ("expected flush
+        // after ref listing" cuts a shallow clone halfway); a fresh attempt
+        // usually goes through. Retry the clone a few times before failing.
+        List<String> clone = List.of("git", "clone", "--depth", "1", "--branch", brand.gitTag(version),
+                brand.gitUrl(), target.toString());
+        BrandException cloneFailure = null;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            if (Files.exists(target)) {
+                try {
+                    FileUtils.deleteDirectoryQuietly(target);
+                } catch (Exception ignored) {
+                    // A leftover file will fail the clone loudly below.
+                }
+            }
+            if (attempt > 1) {
+                message.accept("Clone did not finish; retrying (attempt " + attempt + " of 3)");
+            }
+            try {
+                runChecked(clone, brandRoot, java.util.Map.of(), log, message,
+                        "cloning " + brand.sourceLabel() + " " + brand.gitTag(version));
+                cloneFailure = null;
+                break;
+            } catch (BrandException e) {
+                cloneFailure = e;
+            }
+        }
+        if (cloneFailure != null) {
+            throw cloneFailure;
+        }
+
+        java.util.Map<String, String> environment = new java.util.HashMap<>(runtime.pathEnvironment());
+        environment.put("ELECTRON_SKIP_BINARY_DOWNLOAD", "1");
+        runChecked(List.of("npm", "ci", "-w", "server", "-w", "web", "--registry=" + registry),
+                target, environment, log, message, "installing dependencies");
+        runChecked(List.of("npm", "run", "build", "-w", "web"),
+                target, environment, log, message, "building the web app");
+
+        if (!Files.exists(target.resolve(brand.installMarker()))) {
+            throw new BrandException(brand.sourceLabel() + " " + version + " built without its web app ("
+                    + target.resolve(brand.installMarker()) + ") — see " + log);
+        }
+    }
+
+    /// Runs one install command, streaming its merged output to the log and
+    /// the progress sink, and fails the install on a nonzero exit.
+    private static void runChecked(List<String> command, Path directory, java.util.Map<String, String> environment,
+                                   Path log, Consumer<String> message, String what) throws BrandException {
+        message.accept("Running: " + String.join(" ", command));
+        LOG.info("Brand install step (" + what + "): " + String.join(" ", command));
+        try (OutputStreamAppend output = new OutputStreamAppend(log);
+                BufferedReader reader = run(command, directory, environment, output)) {
+            StringBuilder tail = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (tail.length() > 0) {
+                    tail.append(" | ");
+                }
+                tail.append(line);
+                if (tail.length() > 2000) {
+                    tail.delete(0, tail.length() - 1000);
+                }
+                message.accept(line);
+            }
+            int code = output.exitCode();
+            if (code != 0) {
+                throw new BrandException("Install step failed (" + what + ", exit " + code + "): " + tail);
+            }
+        } catch (IOException e) {
+            throw new BrandException("Install step failed (" + what + "): " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BrandException("Install step was interrupted (" + what + ")", e);
+        }
+    }
+
     /// The installed releases, newest version first.
     ///
     /// @param brandRoot the brand's directory
@@ -202,7 +322,7 @@ public final class BrandInstaller {
     /// @return the prefix, or `null`
     public static @Nullable Path packageDir(Brand brand, Path brandRoot, String version) {
         Path candidate = brandRoot.resolve(RELEASES_DIR).resolve(version);
-        return Files.exists(candidate.resolve("node_modules/.bin/" + brand.binName()))
+        return Files.exists(candidate.resolve(brand.installMarker()))
                 ? candidate
                 : null;
     }
@@ -215,7 +335,7 @@ public final class BrandInstaller {
     /// @return the default package directory, or `null` when nothing is installed
     public static @Nullable Path defaultPackage(Brand brand, Path brandRoot) {
         Path current = currentLink(brandRoot);
-        if (current != null && Files.exists(current.resolve("node_modules/.bin/" + brand.binName()))) {
+        if (current != null && Files.exists(current.resolve(brand.installMarker()))) {
             return current;
         }
         List<Release> releases = releases(brandRoot);

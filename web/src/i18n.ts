@@ -225,6 +225,7 @@ export const I18N = {
   "dsh.brand.dsh": "DeepSeek Harness (dsh)",
   "dsh.brand.kimi": "Kimi Code",
   "dsh.brand.opencode": "OpenCode（实验）",
+  "dsh.brand.claude-web": "Claude Web（实验）",
   "dsh.brand.zcode": "ZCode（实验）",
   "dsh.brand.thirdparty.warning":
     "%s 为第三方工具，由各自官方分发、更新与计费；面板仅负责安装、启动与网页反代，其功能、安全与行为由各官方负责。",
@@ -235,6 +236,12 @@ export const I18N = {
     "面板对它的接入不保证可用性：只做到「装指定版本 → 拉起它自带的网页端 → 经 /i/<id>/ 反代出来」，至此已经到极限。"
     + "再往下遇到的问题基本都是它自己的——模型目录与模型 id 对不上（例如客户端挑到 deepseek/deepseek-flash，而它自己的服务器只有 deepseek-flash）、"
     + "会话与 agent 的行为、凭据与计费；这类问题面板修不了，只能换模型、换版本或等上游修。",
+  // Claude Web（社区项目，非 Anthropic 官方）：引擎是社区构建、登录可用官方账号或第三方中转，
+  // 两者都归上游与对应服务商；与 OpenCode 同款边界——面板只做到装、起、反代。
+  "dsh.brand.claude-web.limit":
+    "Claude Web 是社区开源项目（不是 Anthropic 官方的网页版）：内置在社区构建的引擎上，可登官方账号，也可在"
+    + "「设置 → 供应商」里接第三方中转。面板对它的接入同样不保证可用性——只做到「克隆指定版本 → 构建 → 拉起"
+    + " → 经 /i/<id>/ 反代出来」；引擎、模型供应商、凭据与计费的问题都属上游/服务商，面板修不了。",
   "dsh.brand.tab.zcode": "ZCode",
   "dsh.brand.state.created": "未启动",
   "dsh.brand.state.starting": "启动中",
