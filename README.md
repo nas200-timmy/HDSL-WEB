@@ -24,6 +24,11 @@
   规则见 [docs/ui-spec.md §4](docs/ui-spec.md)。
 - 启动器行为：**创建即安装**（`POST /api/instances` 默认 `autoInstall:true`），**未安装的实例点「启动」会先装再启**；
   进度与失败原因都显示在面板上，失败还会写进容器日志。细节见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md)。
+- 品牌区：除 dsh 外还能装第三方网页工作台——Kimi Code、OpenCode，以及 **Claude Web**（[ypyik0669/claude-web](https://github.com/ypyik0669/claude-web)，社区开源的 Claude Code 可视化工作台，实验性接入、不保证可用性）。
+  Claude Web 是首个 **git 源品牌**：不发 npm 包，由面板从 GitHub 发行 tag 下载**源码 zip**（本网络下 git 传输成功率仅约三成，故不走 git）
+  → `npm ci`（含根项目，装齐 ccb 引擎）→ 构建 → 拉起，自带网页端经 `/i/<id>/` 反代在同域名同端口下使用。
+  面板还替它兜了三个容器环境的坑：相对路径页面的 WS shim 注入（否则界面报 "connection closed"）、无桌面时改用
+  `workspaces.add` 协议代劳「打开文件夹」、以及让 OpenAI 类供应商可用的 ccb 内核安装。细节见 [docs/brands.md](docs/brands.md)。
 - 下载源：设置页可选预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL，服务端校验后**真正生效**；
   面板会把它写进 pnpm 的全局配置并显式传给 pnpm/npm 子进程（pnpm 11 不读环境变量），
   环境变量 `NPM_CONFIG_REGISTRY` 退化成回退值。细节见 [docs/deployment.md](docs/deployment.md)。
