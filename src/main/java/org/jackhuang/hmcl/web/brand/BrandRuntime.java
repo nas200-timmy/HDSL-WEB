@@ -25,6 +25,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -235,6 +236,9 @@ public final class BrandRuntime {
                 } catch (BrandException e) {
                     LOG.warning("Instance " + id + " came up but its port could not be saved", e);
                 }
+                if (brand == Brand.CLAUDE_WEB) {
+                    registerClaudeWebWorkspace(port, workspace);
+                }
                 STATES.put(id, State.RUNNING);
                 LOG.info(brand.id() + " instance " + id + " is running on port " + port);
                 return new Status(State.RUNNING, null);
@@ -255,6 +259,87 @@ public final class BrandRuntime {
     /// @return the brand, or `null` when the id is unknown here
     public static @Nullable Brand brandOf(String id) {
         return BRANDS.get(id);
+    }
+
+    /// The `workspaces.add` request the panel sends to a freshly started Claude
+    /// Web instance — package-private so its envelope is testable.
+    ///
+    /// The envelope is the tool's own wire format: `{"type":"request",
+    /// "request":{"id":…,"req":{"kind":"workspaces.add","path":…}}}`.
+    ///
+    /// @param path the directory to register
+    /// @return the JSON text
+    static String workspaceAddRequest(String path) {
+        com.google.gson.JsonObject req = new com.google.gson.JsonObject();
+        req.addProperty("kind", "workspaces.add");
+        req.addProperty("path", path);
+        com.google.gson.JsonObject envelope = new com.google.gson.JsonObject();
+        envelope.addProperty("type", "request");
+        com.google.gson.JsonObject request = new com.google.gson.JsonObject();
+        request.addProperty("id", WORKSPACE_REQUEST_ID);
+        request.add("req", req);
+        envelope.add("request", request);
+        return envelope.toString();
+    }
+
+    /// The request id the panel uses; also how the reply is recognised.
+    private static final String WORKSPACE_REQUEST_ID = "hdsl-workspace";
+
+    /// Tells a freshly started Claude Web instance that this instance's
+    /// workspace directory is one of its projects.
+    ///
+    /// Claude Web's project picker ("打开文件夹…") asks the **server** to open a
+    /// native folder dialog — `zenity` on Linux, `osascript` on macOS,
+    /// PowerShell on Windows (its `terminal/service.ts` `pickDir`). In a
+    /// container there is no desktop and no zenity, and the failure is silent:
+    /// `pickDir` returns null and the UI simply does nothing when clicked. The
+    /// protocol's own `workspaces.add` takes a path instead, so the panel
+    /// registers the directory the instance was created with; from then on it
+    /// is right there in the project menu, and the native dialog is not needed.
+    ///
+    /// Best effort by design: a failure costs a click (the dialog button still
+    /// opens nothing), never the instance.
+    static void registerClaudeWebWorkspace(int port, Path workspace) {
+        String path = workspace.toAbsolutePath().toString();
+        String payload = workspaceAddRequest(path);
+        java.util.concurrent.CompletableFuture<Boolean> settled = new java.util.concurrent.CompletableFuture<>();
+        java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(java.time.Duration.ofSeconds(5))
+                .build();
+        try {
+            client.newWebSocketBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(5))
+                    .buildAsync(URI.create("ws://127.0.0.1:" + port + "/ws"), new java.net.http.WebSocket.Listener() {
+                        private final StringBuilder buffer = new StringBuilder();
+
+                        @Override
+                        public void onOpen(java.net.http.WebSocket socket) {
+                            socket.sendText(payload, true);
+                        }
+
+                        @Override
+                        public java.util.concurrent.CompletionStage<?> onText(
+                                java.net.http.WebSocket socket, CharSequence data, boolean last) {
+                            buffer.append(data);
+                            if (last && buffer.indexOf("\"type\":\"reply\"") >= 0
+                                    && buffer.indexOf(WORKSPACE_REQUEST_ID) >= 0) {
+                                settled.complete(buffer.indexOf("\"ok\":true") >= 0);
+                                socket.sendClose(java.net.http.WebSocket.NORMAL_CLOSURE, "bye");
+                            }
+                            return null;
+                        }
+
+                        @Override
+                        public void onError(java.net.http.WebSocket socket, Throwable error) {
+                            settled.completeExceptionally(error);
+                        }
+                    });
+            settled.get(5, TimeUnit.SECONDS);
+            LOG.info("Registered workspace " + path + " as a Claude Web project");
+        } catch (Exception e) {
+            LOG.warning("Could not register workspace " + path + " with the Claude Web instance on port "
+                    + port + " — pick the folder in the page instead", e);
+        }
     }
 
     /// Asks the instance's process to terminate and waits briefly for it.

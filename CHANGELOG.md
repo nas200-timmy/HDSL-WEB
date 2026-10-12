@@ -35,6 +35,14 @@ API 取 tags 0.6 秒 200、源码 zip 1.5 秒下完 11 MB、解包 → npm ci（
 → `PORT=<n>` 启动 → 就绪行 `claude-web 0.2.1 listening on http://127.0.0.1:<n>` → GET / 200。
 面板经 `/i/<id>/` 的浏览器全链路待人工复验。
 
+### 「打开文件夹」在容器里的绕法
+
+Claude Web 的 `打开文件夹…` 会叫**服务器端的原生目录对话框**（zenity / osascript / PowerShell）——
+容器里没有桌面，它静默返回 null，点了没反应（上游设计假定跑在有桌面的机器上，不是面板的问题）。
+面板改用它自己的协议：实例就绪后向 `ws://127.0.0.1:<端口>/ws` 发一条 `workspaces.add`，把实例的
+工作区目录登记成项目——页面里的「项目」菜单从此直接可选，无需对话框。实测回复 `ok:true` 并伴随
+`meta.changed` 事件。
+
 ## v0.3.7 — 2026-10-12 · 子路径反代下品牌代理修复（Kimi Code / OpenCode / ZCode）
 
 面板自身被反代在子路径（`HDSL_BASE_PATH`）时，dsh 实例正常但品牌实例全崩：

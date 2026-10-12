@@ -128,6 +128,22 @@ class BrandRuntimeTest {
         assertTrue(BrandRuntime.plan(Brand.KIMI, pkg, instance, null).environment().isEmpty());
     }
 
+    /// The workspace registration is the tool's own wire format — an envelope
+    /// wrapper this test pins, because getting it wrong makes the request a
+    /// silent no-op on the instance's side.
+    @Test
+    void workspaceRegistrationUsesTheToolsEnvelope() {
+        String json = BrandRuntime.workspaceAddRequest("/data/instances/abc/workspace");
+
+        com.google.gson.JsonObject envelope = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+        assertEquals("request", envelope.get("type").getAsString());
+        com.google.gson.JsonObject request = envelope.getAsJsonObject("request");
+        assertTrue(!request.get("id").getAsString().isEmpty(), json);
+        com.google.gson.JsonObject req = request.getAsJsonObject("req");
+        assertEquals("workspaces.add", req.get("kind").getAsString());
+        assertEquals("/data/instances/abc/workspace", req.get("path").getAsString());
+    }
+
     @Test
     void ansiEscapesAreStrippedBeforeMatching() {
         String banner = "\u001B[94m\u001B[1m  Web interface:     \u001B[0m http://127.0.0.1:45678/";
