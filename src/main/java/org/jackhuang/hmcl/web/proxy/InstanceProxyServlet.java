@@ -384,7 +384,8 @@ public final class InstanceProxyServlet extends HttpServlet {
                     // rather than at whatever path it is reached through — see rewritePage.
                     String html = readPage(in, result);
                     out.write(rewritePage(html, browserMount,
-                                    routerClient ? routerShimFor(port, mount, html) : RouterShim.NONE)
+                                    routerClient ? routerShimFor(port, mount, html) : RouterShim.NONE,
+                                    brandClient)
                             .getBytes(StandardCharsets.UTF_8));
                     out.flush();
                 } else if (servesScript || servesStyle) {
@@ -904,6 +905,27 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// The same, for a client that routes by `location.pathname`: `shim` says
     /// which half of [ROUTER_JS] its page must name.
     static String rewritePage(String html, String mount, RouterShim shim) {
+        return rewritePage(html, mount, shim, false);
+    }
+
+    /// The full form, for a third-party brand page: `runtimeShim` asks for the
+    /// runtime shim even when the page carries neither of the two shapes above.
+    ///
+    /// A page whose references are all relative — Vite built with `base: './'`,
+    /// as Claude Web's is — needs no reference rewriting, but its runtime still
+    /// builds same-host **absolute** URLs from `location`: Claude Web opens
+    /// `wss://<host>/ws` for its one and only channel, and without the shim that
+    /// address lands on the panel root (no such route — the UI reports
+    /// "connection closed"). Such a page gets the runtime shim and nothing
+    /// else: relative references already resolve inside the mount.
+    ///
+    /// @param html  the page as the instance generated it
+    /// @param mount the mount, with its trailing slash
+    /// @param shim  which router-shim contract the page must name, if any
+    /// @param runtimeShim whether this is a brand page that needs the runtime
+    ///                    shim even without a shape to key on
+    /// @return the page as the browser has to see it
+    static String rewritePage(String html, String mount, RouterShim shim, boolean runtimeShim) {
         if (html.contains("<base href=\"/\">")) {
             return html.replace("<base href=\"/\">",
                             "<base href=\"" + mount + "\">"
@@ -929,6 +951,12 @@ public final class InstanceProxyServlet extends HttpServlet {
             // else's path could not be installed from it anyway. (Measured
             // 2026-10 on OpenCode: two 401s per page load.)
             return injectShim(prefixed, mount, shim)
+                    .replaceAll("<link rel=\"manifest\"[^>]*>", "");
+        }
+        if (runtimeShim) {
+            // Same manifest rule: through the mount it is a credential-less
+            // fetch answered 401, so it is dropped rather than made noise.
+            return injectShim(html, mount, RouterShim.NONE)
                     .replaceAll("<link rel=\"manifest\"[^>]*>", "");
         }
         return html;

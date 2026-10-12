@@ -104,6 +104,39 @@ class GenericPageRewriteTest {
         assertEquals(plain, InstanceProxyServlet.rewritePage(plain, MOUNT));
     }
 
+    /// Claude Web's page is the mirror image of Kimi's: every reference is
+    /// relative (Vite `base: './'`), so neither rewrite shape matches — but its
+    /// one channel is an absolute `wss://<host>/ws` built at runtime, which
+    /// needs the shim. Measured 2026-10-12: without this, the page renders and
+    /// the UI reports "connection closed" while the panel's relay never sees
+    /// the upgrade at all.
+    @Test
+    void aRelativeBrandPageStillGetsTheRuntimeShim() {
+        String page = "<html><head>"
+                + "<link rel=\"manifest\" href=\"manifest.webmanifest\" />"
+                + "<script type=\"module\" crossorigin src=\"./assets/index-DY0CX39q.js\"></script>"
+                + "</head><body></body></html>";
+
+        String rewritten = InstanceProxyServlet.rewritePage(
+                page, MOUNT, InstanceProxyServlet.RouterShim.NONE, true);
+
+        assertShim(rewritten);
+        // Relative references stay untouched: they already resolve in the mount.
+        assertTrue(rewritten.contains("src=\"./assets/index-DY0CX39q.js\""), rewritten);
+        // The manifest is dropped for the same reason the other branch drops it:
+        // through the mount it is a credential-less fetch answered 401.
+        assertFalse(rewritten.contains("manifest.webmanifest"), rewritten);
+        assertNoDoublePrefix(rewritten);
+    }
+
+    @Test
+    void theRuntimeShimIsNotInjectedForNonBrandPages() {
+        String page = "<html><head><script src=\"./app.js\"></script></head></html>";
+
+        assertEquals(page, InstanceProxyServlet.rewritePage(
+                page, MOUNT, InstanceProxyServlet.RouterShim.NONE, false));
+    }
+
     @Test
     void theRouterShimIsReferencedOnlyWhenAsked() {
         String page = "<html><head><script src=\"/assets/a.js\"></script></head></html>";
