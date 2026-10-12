@@ -14,10 +14,16 @@ MIT）——社区开源的 Claude Code 可视化工作台（**不是** Anthropi
 - 安装：**不走 git**——`github.com:443` 的 git 传输在本机网络下会被拦腰切断（实测 `expected flush
   after ref listing`、GnuTLS 重置、130 秒超时，成功率约三成），而 `codeload.github.com` 的源码 zip
   1.5 秒下完 11 MB。改为 `codeload.github.com/<slug>/zip/refs/tags/<tag>` 下载源码 zip（**3 次重试**）
-  → 解包（剥掉 `<repo>-<tag>/` 根目录，含 zip-slip 防护）→ `npm ci -w server -w web`（只装网页端需要的
-  两个 workspace——desktop 的 Electron 二进制不下载，`ELECTRON_SKIP_BINARY_DOWNLOAD=1` 双保险）→
-  `npm run build -w web`。node-pty 等原生模块用镜像里现成的工具链编译；engine tgz 随 npm 依赖从
-  GitHub Releases 拉取。镜像无需任何变动（也不需要 `git` 二进制）。
+  → 解包（剥掉 `<repo>-<tag>/` 根目录，含 zip-slip 防护）→ `npm ci -w server -w web
+  --include-workspace-root`（只装网页端需要的两个 workspace + 根项目——desktop 的 Electron 二进制
+  不下载，`ELECTRON_SKIP_BINARY_DOWNLOAD=1` 双保险）→ `npm run build -w web`。node-pty 等原生模块
+  用镜像里现成的工具链编译；engine tgz 随 npm 依赖从 GitHub Releases 拉取。镜像无需任何变动
+  （也不需要 `git` 二进制）。
+- **`--include-workspace-root` 是必需的**：网页端的运行内核 `claude-web-engine`（ccb，社区构建，
+  也是唯一听得懂 OpenAI/Gemini 供应商协议的内核）是**根项目**的依赖而不是 server workspace 的。
+  只装两个 workspace 会让它缺席，应用静默回退到官方 Claude Code，于是**所有 OpenAI 类型供应商都
+  用不了**（实测 0.2.1：启动行的 `runtime: claude 2.1.283` 就是那个回退）。npm 步骤同样带
+  3 次重试与放宽的 fetch 超时（引擎 tgz 是绝对 GitHub URL，同样受网络抽风影响）。
 - 版本列表：GitHub REST `/repos/<slug>/tags`（剥离 `v` 前缀、滤掉 `engine-*`/`nightly` 等非发行 tag），
   复用 npm 通道的缓存与降噪逻辑；**空结果永不缓存**——网络抽风时抓空是常态，缓存空列表会让下拉框
   在网络恢复后仍空白 30 分钟（首次上线后「读取不出来」的原因）。

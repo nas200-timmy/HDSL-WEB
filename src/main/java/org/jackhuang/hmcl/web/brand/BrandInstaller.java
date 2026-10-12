@@ -246,8 +246,37 @@ public final class BrandInstaller {
 
         java.util.Map<String, String> environment = new java.util.HashMap<>(runtime.pathEnvironment());
         environment.put("ELECTRON_SKIP_BINARY_DOWNLOAD", "1");
-        runChecked(List.of("npm", "ci", "-w", "server", "-w", "web", "--registry=" + registry),
-                target, environment, log, message, "installing dependencies");
+        // `--include-workspace-root` is load-bearing: the engine package
+        // (`claude-web-engine`, the community Claude Code build that speaks
+        // OpenAI/Gemini provider protocols) is a dependency of the ROOT
+        // project, not of the server workspace — installing only the two
+        // workspaces leaves it out, the app silently falls back to the
+        // official Claude Code, and every OpenAI-type provider stops working
+        // (measured 2026-10-12 on 0.2.1: the startup banner reported `runtime:
+        // claude 2.1.283`, the SDK's own binary).
+        // The engine tarball is an absolute GitHub URL, and this network drops
+        // github.com mid-transfer routinely: npm's own retries plus a whole-run
+        // retry loop. `npm ci` rebuilds node_modules from scratch, so a failed
+        // run leaves nothing half-installed to reason about.
+        List<String> npmCi = List.of("npm", "ci", "-w", "server", "-w", "web", "--include-workspace-root",
+                "--registry=" + registry,
+                "--fetch-retries=5", "--fetch-retry-maxtimeout=120000", "--fetch-timeout=600000");
+        BrandException ciFailure = null;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            if (attempt > 1) {
+                message.accept("Dependency install did not finish; retrying (attempt " + attempt + " of 3)");
+            }
+            try {
+                runChecked(npmCi, target, environment, log, message, "installing dependencies");
+                ciFailure = null;
+                break;
+            } catch (BrandException e) {
+                ciFailure = e;
+            }
+        }
+        if (ciFailure != null) {
+            throw ciFailure;
+        }
         runChecked(List.of("npm", "run", "build", "-w", "web"),
                 target, environment, log, message, "building the web app");
 
