@@ -114,9 +114,12 @@ public final class BrandCatalog {
             return cached;
         }
         Snapshot fetched = fetch(brand);
-        if (fetched.versions().isEmpty() && cached != null) {
-            // The registry is down; a stale list beats an empty picker.
-            return cached;
+        if (fetched.versions().isEmpty()) {
+            // Never cache an empty list: the upstream was unreachable (a
+            // transient network blip on this deployment's route to GitHub is
+            // routine), and caching it would leave the picker blank for the
+            // whole TTL after the network came back. The next call retries.
+            return cached != null ? cached : fetched;
         }
         CACHE.put(brand, fetched);
         return fetched;
@@ -160,8 +163,8 @@ public final class BrandCatalog {
     /// One registry round trip: the package document's `versions` keys, filtered
     /// to clean semver and sorted newest first, plus the `latest` dist-tag.
     private static Snapshot fetch(Brand brand) {
-        if (brand.source() == Brand.Source.GIT) {
-            return fetchGit(brand);
+        if (brand.source() == Brand.Source.GITHUB) {
+            return fetchGitHub(brand);
         }
         String registry = NpmRegistry.effective().registry();
         String encoded = brand.npmPackage().replace("/", "%2f");
@@ -186,70 +189,79 @@ public final class BrandCatalog {
         }
     }
 
-    /// One `git ls-remote --tags` round trip for git brands: the tag names,
-    /// filtered to clean semver (the `v` prefix stripped) and sorted newest
-    /// first. An annotated tag appears twice — plain and peeled (`^{}`) — and
-    /// is deduplicated by the name parse.
-    private static Snapshot fetchGit(Brand brand) {
-        List<String> command = List.of("git", "ls-remote", "--tags", brand.gitUrl());
-        ProcessBuilder builder = new ProcessBuilder(command);
-        builder.redirectErrorStream(true);
-        try {
-            Process process = builder.start();
-            String body = new String(process.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            if (!process.waitFor(TIMEOUT.toSeconds(), java.util.concurrent.TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                LOG.warning("git ls-remote --tags " + brand.gitUrl() + " timed out");
+    /// One GitHub REST call for a GitHub brand: `/repos/<slug>/tags`, whose
+    /// array of `{name, …}` entries is parsed by [parseGitHubTags].
+    ///
+    /// Deliberately the REST API, not `git ls-remote`: this deployment's route
+    /// to `github.com:443` cuts the git transport mid-handshake routinely,
+    /// while `api.github.com` answers in well under a second. Unauthenticated
+    /// requests are rate limited (60/hour per IP), which the 30-minute cache
+    /// keeps comfortably clear of.
+    ///
+    /// Retried a few times: on this network a single fetch failing is routine,
+    /// and the alternative is a blank picker until the next refresh.
+    private static Snapshot fetchGitHub(Brand brand) {
+        String url = "https://api.github.com/repos/" + brand.githubSlug() + "/tags?per_page=100";
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(TIMEOUT)
+                .header("Accept", "application/vnd.github+json")
+                .GET()
+                .build();
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try {
+                HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() / 100 == 2) {
+                    return parseGitHubTags(response.body());
+                }
+                LOG.warning("GitHub answered " + response.statusCode() + " for " + url);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
                 return new Snapshot(List.of(), "", System.currentTimeMillis());
+            } catch (Exception e) {
+                LOG.warning("Could not fetch tags of " + brand.repoUrl()
+                        + " (attempt " + attempt + " of 3)", e);
             }
-            if (process.exitValue() != 0) {
-                LOG.warning("git ls-remote --tags " + brand.gitUrl() + " exited " + process.exitValue());
-                return new Snapshot(List.of(), "", System.currentTimeMillis());
-            }
-            return parseTags(body);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return new Snapshot(List.of(), "", System.currentTimeMillis());
-        } catch (Exception e) {
-            LOG.warning("Could not list tags of " + brand.gitUrl(), e);
-            return new Snapshot(List.of(), "", System.currentTimeMillis());
         }
+        return new Snapshot(List.of(), "", System.currentTimeMillis());
     }
 
-    /// Parses `git ls-remote --tags` output into a snapshot: each
-    /// `refs/tags/<name>` line (peeled `^{}` lines included, they share the
-    /// name), the `v` prefix stripped, only clean `x.y.z` kept, deduplicated
-    /// and sorted newest first; `latest` is the newest.
+    /// Parses the `/repos/<slug>/tags` document into a snapshot: each entry's
+    /// `name`, the brand's tag prefix stripped, only clean `x.y.z` kept,
+    /// deduplicated and sorted newest first; `latest` is the newest.
     ///
     /// Package-private so the filtering and ordering are testable without a
-    /// git round trip.
+    /// network round trip.
     ///
-    /// @param body the command's output
-    /// @return the snapshot; empty when no clean tag exists
-    static Snapshot parseTags(String body) {
-        java.util.Set<String> seen = new java.util.HashSet<>();
-        List<String> clean = new ArrayList<>();
-        for (String line : body.split("\\R")) {
-            int tab = line.indexOf('\t');
-            if (tab < 0) {
-                continue;
+    /// @param body the API's JSON array
+    /// @return the snapshot; empty on any parse failure or when no clean tag exists
+    static Snapshot parseGitHubTags(String body) {
+        return parseGitHubTags(body, "v");
+    }
+
+    /// [parseGitHubTags(String)] with an explicit tag prefix.
+    static Snapshot parseGitHubTags(String body, String tagPrefix) {
+        try {
+            com.google.gson.JsonArray array = JsonParser.parseString(body).getAsJsonArray();
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            List<String> clean = new ArrayList<>();
+            for (com.google.gson.JsonElement element : array) {
+                if (!element.isJsonObject() || !element.getAsJsonObject().has("name")) {
+                    continue;
+                }
+                String name = element.getAsJsonObject().get("name").getAsString();
+                String version = tagPrefix.isEmpty() || !name.startsWith(tagPrefix)
+                        ? name
+                        : name.substring(tagPrefix.length());
+                if (CLEAN_VERSION.matcher(version).matches() && seen.add(version)) {
+                    clean.add(version);
+                }
             }
-            String ref = line.substring(tab + 1).trim();
-            if (!ref.startsWith("refs/tags/")) {
-                continue;
-            }
-            String tag = ref.substring("refs/tags/".length());
-            if (tag.endsWith("^{}")) {
-                tag = tag.substring(0, tag.length() - "^{}".length());
-            }
-            String version = tag.startsWith("v") ? tag.substring(1) : tag;
-            if (CLEAN_VERSION.matcher(version).matches() && seen.add(version)) {
-                clean.add(version);
-            }
+            clean.sort(NEWEST_FIRST);
+            String latest = clean.isEmpty() ? "" : clean.get(0);
+            return new Snapshot(List.copyOf(clean), latest, System.currentTimeMillis());
+        } catch (RuntimeException e) {
+            return new Snapshot(List.of(), "", System.currentTimeMillis());
         }
-        clean.sort(NEWEST_FIRST);
-        String latest = clean.isEmpty() ? "" : clean.get(0);
-        return new Snapshot(List.copyOf(clean), latest, System.currentTimeMillis());
     }
 
     /// Numeric component-wise ordering: `2.10.0` sorts above `2.9.0`, which

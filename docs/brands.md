@@ -34,9 +34,9 @@ Node 服务）；把网页端改写后挂在 `/i/<id>/`（根绝对资源加挂�
 
 | | Kimi Code | OpenCode | Claude Web |
 |---|---|---|---|
-| 来源 | npm 包 `@moonshot-ai/kimi-code` | npm 包 `opencode-ai` | **git 仓库** [ypyik0669/claude-web](https://github.com/ypyik0669/claude-web)（MIT，社区项目；不发 npm 包） |
-| 安装 | pnpm 拉包 | pnpm 拉包 | `git clone --depth 1 --branch v<版本>` → `npm ci -w server -w web`（**不装 desktop**，Electron 二进制不下载）→ `npm run build -w web` |
-| 版本列表 | npm registry（82 个干净 semver） | npm registry（944 个；1.2 万个 snapshot/ci tag 被滤） | `git ls-remote --tags`（剥 `v` 前缀；`engine-*`/`nightly` 等非发行 tag 被滤；注解 tag 去重） |
+| 来源 | npm 包 `@moonshot-ai/kimi-code` | npm 包 `opencode-ai` | **GitHub 仓库** [ypyik0669/claude-web](https://github.com/ypyik0669/claude-web)（MIT，社区项目；不发 npm 包） |
+| 版本列表 | npm registry（82 个干净 semver） | npm registry（944 个；1.2 万个 snapshot/ci tag 被滤） | **GitHub REST** `/repos/<slug>/tags`（剥 `v` 前缀；`engine-*`/`nightly` 等非发行 tag 被滤） |
+| 安装 | pnpm 拉包 | pnpm 拉包 | **`codeload.github.com/<slug>/zip/refs/tags/<tag>` 下载源码 zip**（带重试）→ 解包（剥掉 `<repo>-<tag>/` 根目录）→ `npm ci -w server -w web`（**不装 desktop**，Electron 二进制不下载）→ `npm run build -w web` |
 | 网页端命令 | `kimi web` | `opencode web` | `tsx server/src/index.ts`（Node 直跑 TS 源码，无内置入口） |
 | 端口 | `--port 0` 可用（内核给临时端口，就绪行播报） | **`--port 0` 不生效**（静默回落默认 4096）→ 面板预分配 | 无端口参数 → **`PORT` 环境变量**预分配（源码核实 `PORT ?? 3090`） |
 | 就绪行 | `Local: http://127.0.0.1:<port>/` | `Web interface: http://127.0.0.1:<port>/`（**带 ANSI 颜色码**，匹配前先剥除） | `listening on http://127.0.0.1:<port>` |
@@ -52,6 +52,18 @@ Node 服务）；把网页端改写后挂在 `/i/<id>/`（根绝对资源加挂�
 相对路径自己拼对；WS 地址是绝对 `/ws`，由面板注入品牌页的标准运行期 shim 改写（与 Kimi/OpenCode 同款
 机制）；WS 握手的 Origin 校验（`originOk` 要求 Origin==Host 或回环）正好与面板反代一贯以来的 Host 透传
 契约吻合（这个契约本身就是 dsh 的 Origin 防护定的）。结论：**不需要上游改动，用户预备的上游 PR 用不上**。
+
+### 为什么下载源码而不用 `git clone`
+
+实测（2026-10-12，本机网络）：`github.com:443` 的 **git 传输会被拦腰切断**——`expected flush after ref
+listing`、GnuTLS `-110`、乃至 130 秒连接超时，成功率大约三成；而同一时刻 `api.github.com` 0.6 秒
+200，`codeload.github.com` 的源码 zip 1.5 秒下完 11 MB。于是这一品牌**完全不碰 git**：版本列表走
+REST API（未认证 60 次/小时，30 分钟缓存远够），安装走 zip 下载 + 解包，下载失败自动重试 3 次。
+附带两个好处：镜像不需要 `git` 二进制；下载是普通 HTTPS，失败信息是明确的 HTTP 状态码/超时，
+比 git 协议一堆含糊的中断好诊断。
+
+另外：版本目录**从不缓存空结果**——网络抽风时抓空是常态，缓存空列表会让下拉框在网络恢复后仍空白
+整整 30 分钟（这正是首次上线后「读取不出来」的原因）。
 
 ## 为什么 OpenCode 需要一段「路由修正脚本」
 

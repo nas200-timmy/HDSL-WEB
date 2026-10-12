@@ -27,6 +27,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// The release-directory bookkeeping of the brand installer: enumeration,
@@ -81,6 +82,47 @@ class BrandInstallerTest {
 
         assertTrue(BrandInstaller.packageDir(Brand.CLAUDE_WEB, root, "0.2.1") != null);
         assertNull(BrandInstaller.packageDir(Brand.CLAUDE_WEB, root, "0.2.0"));
+    }
+
+    /// The source zip GitHub serves has everything under one `<repo>-<tag>/`
+    /// root; unpacking drops that prefix so the release directory IS the
+    /// project root.
+    @Test
+    void sourceZipUnpacksWithoutItsRootFolder() throws IOException, BrandException {
+        byte[] zip = zipOf("claude-web-0.2.1/package.json", "{}",
+                "claude-web-0.2.1/server/src/index.ts", "// entry",
+                "claude-web-0.2.1/web/dist/index.html", "<html>");
+        Path target = root.resolve("zip-target");
+
+        BrandInstaller.extractZip(new java.io.ByteArrayInputStream(zip), target);
+
+        assertTrue(Files.exists(target.resolve("package.json")));
+        assertTrue(Files.exists(target.resolve("server/src/index.ts")));
+        assertTrue(Files.exists(target.resolve("web/dist/index.html")));
+        assertTrue(!Files.exists(target.resolve("claude-web-0.2.1")));
+        assertEquals("{}", Files.readString(target.resolve("package.json")));
+    }
+
+    @Test
+    void sourceZipRefusesEntriesThatEscapeTheTarget() throws IOException {
+        byte[] zip = zipOf("claude-web-0.2.1/../../escaped.txt", "gotcha");
+        Path target = root.resolve("zip-target");
+
+        assertThrows(BrandException.class,
+                () -> BrandInstaller.extractZip(new java.io.ByteArrayInputStream(zip), target));
+    }
+
+    /// A minimal zip holding the given path/content pairs.
+    private static byte[] zipOf(String... pathsAndContents) throws IOException {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(bytes)) {
+            for (int i = 0; i < pathsAndContents.length; i += 2) {
+                zip.putNextEntry(new java.util.zip.ZipEntry(pathsAndContents[i]));
+                zip.write(pathsAndContents[i + 1].getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                zip.closeEntry();
+            }
+        }
+        return bytes.toByteArray();
     }
 
     @Test

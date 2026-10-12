@@ -54,23 +54,30 @@ public enum Brand {
     /// system, around relay APIs. **Not** Anthropic's hosted "Claude Code on
     /// the web", which is a SaaS and cannot be self-hosted.
     ///
-    /// Distributed as git tags, not an npm package, so the source is a
-    /// repository and the installer clones and builds it (see
-    /// [BrandInstaller]). The server is plain Node (`tsx server/src/index.ts`),
-    /// honours a `PORT` environment variable, defaults to `127.0.0.1`, and
-    /// prints `listening on http://127.0.0.1:<port>` — all verified in its
-    /// source. Its web client builds with relative asset URLs (`base: './'`,
-    /// chosen upstream so a phone shell can run the same build below a
-    /// folder), talks to the server over a single WebSocket at `/ws`, and
-    /// routes nothing by pathname, so a subpath mount under `/i/<id>/` works
-    /// with the standard brand shim — no router shim.
-    CLAUDE_WEB("claude-web", Source.GIT, "https://github.com/ypyik0669/claude-web", "v", false);
+    /// Distributed as git tags, not an npm package. The panel reads them over
+    /// the **GitHub REST API** and installs by downloading the tag's source
+    /// zip — deliberately not the git protocol: on this deployment's network
+    /// `github.com:443`'s git transport is cut mid-handshake (measured:
+    /// `expected flush after ref listing`, GnuTLS resets, 130 s connect
+    /// timeouts), while `api.github.com` and `codeload.github.com` answer in
+    /// well under two seconds. Over HTTPS the whole source is a plain,
+    /// retryable download — and the panel needs no `git` at all.
+    ///
+    /// The server is plain Node (`tsx server/src/index.ts`), honours a `PORT`
+    /// environment variable, defaults to `127.0.0.1`, and prints `listening on
+    /// http://127.0.0.1:<port>` — all verified in its source. Its web client
+    /// builds with relative asset URLs (`base: './'`, chosen upstream so a
+    /// phone shell can run the same build below a folder), talks to the server
+    /// over a single WebSocket at `/ws`, and routes nothing by pathname, so a
+    /// subpath mount under `/i/<id>/` works with the standard brand shim — no
+    /// router shim.
+    CLAUDE_WEB("claude-web", Source.GITHUB, "https://github.com/ypyik0669/claude-web", "v", false);
 
-    /// Where a brand's releases come from: an npm registry package, or a git
-    /// repository's tags (cloned and built locally).
+    /// Where a brand's releases come from: an npm registry package, or a
+    /// GitHub repository's release tags (source zip over HTTPS, no git).
     public enum Source {
         NPM,
-        GIT
+        GITHUB
     }
 
     private final String id;
@@ -79,9 +86,9 @@ public enum Brand {
     private final String aux;
     private final boolean needsRouterShim;
 
-    /// @param locator the npm package (NPM) or the repository URL (GIT)
+    /// @param locator the npm package (NPM) or the repository URL (GITHUB)
     /// @param aux the executable inside `node_modules/.bin/` (NPM) or the
-    ///            tag prefix (GIT, e.g. `"v"` for `v0.2.1`)
+    ///            tag prefix (GITHUB, e.g. `"v"` for `v0.2.1`)
     Brand(String id, Source source, String locator, String aux, boolean needsRouterShim) {
         this.id = id;
         this.source = source;
@@ -100,26 +107,53 @@ public enum Brand {
         return source;
     }
 
-    /// The upstream npm package the installer fetches; `null` for git brands.
+    /// The upstream npm package the installer fetches; `null` for GitHub brands.
     public @Nullable String npmPackage() {
         return source == Source.NPM ? locator : null;
     }
 
     /// The executable inside the installed prefix's `node_modules/.bin/`;
-    /// `null` for git brands, whose launch is not a single binary.
+    /// `null` for GitHub brands, whose launch is not a single binary.
     public @Nullable String binName() {
         return source == Source.NPM ? aux : null;
     }
 
-    /// The upstream git repository the installer clones; `null` for npm brands.
-    public @Nullable String gitUrl() {
-        return source == Source.GIT ? locator : null;
+    /// The upstream repository URL the installer fetches sources from; `null`
+    /// for npm brands.
+    public @Nullable String repoUrl() {
+        return source == Source.GITHUB ? locator : null;
     }
 
-    /// The tag naming one version of a git brand: the prefix plus the version
-    /// (`v` + `0.2.1` → `v0.2.1`). Empty for npm brands.
-    public String gitTag(String version) {
-        return aux + version;
+    /// The `owner/repo` slug of the repository — the form the GitHub REST API
+    /// (`/repos/<slug>/tags`) and codeload (`/<slug>/zip/…`) address it by.
+    /// Empty for npm brands.
+    public String githubSlug() {
+        if (source != Source.GITHUB) {
+            return "";
+        }
+        String slug = locator;
+        if (slug.startsWith("https://github.com/")) {
+            slug = slug.substring("https://github.com/".length());
+        }
+        while (slug.endsWith("/")) {
+            slug = slug.substring(0, slug.length() - 1);
+        }
+        if (slug.endsWith(".git")) {
+            slug = slug.substring(0, slug.length() - ".git".length());
+        }
+        return slug;
+    }
+
+    /// The tag prefix a version is released under (`v` for `v0.2.1`). Empty
+    /// for npm brands.
+    public String tagPrefix() {
+        return source == Source.GITHUB ? aux : "";
+    }
+
+    /// The tag naming one version: the prefix plus the version (`v` + `0.2.1`
+    /// → `v0.2.1`). The version alone for npm brands.
+    public String releaseTag(String version) {
+        return source == Source.GITHUB ? aux + version : version;
     }
 
     /// The release-relative path whose existence proves an install: the

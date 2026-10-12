@@ -9,15 +9,18 @@ MIT）——社区开源的 Claude Code 可视化工作台（**不是** Anthropi
 与 Kimi Code / OpenCode 同款待遇：装指定版本 → 拉起自带网页端 → 经 `/i/<id>/` 反代（同端口、同证书、
 同登录门）；界面上标为**实验性接入、不保证可用性**（社区引擎 + 可选第三方中转，凭据与计费归上游/服务商）。
 
-**`Brand` 由此分化出两种来源**。NPM（现有两品牌不变）与 **GIT**：
+**`Brand` 由此分化出两种来源**。NPM（现有两品牌不变）与 **GITHUB**：
 
-- 安装：`git clone --depth 1 --branch v<版本>`（**3 次重试**——GitHub 从部分网络访问会半途被切断，
-  `expected flush after ref listing`，重试通常能过）→ `npm ci -w server -w web`（只装网页端需要的两个
-  workspace——desktop 的 Electron 二进制不下载，`ELECTRON_SKIP_BINARY_DOWNLOAD=1` 双保险）→
+- 安装：**不走 git**——`github.com:443` 的 git 传输在本机网络下会被拦腰切断（实测 `expected flush
+  after ref listing`、GnuTLS 重置、130 秒超时，成功率约三成），而 `codeload.github.com` 的源码 zip
+  1.5 秒下完 11 MB。改为 `codeload.github.com/<slug>/zip/refs/tags/<tag>` 下载源码 zip（**3 次重试**）
+  → 解包（剥掉 `<repo>-<tag>/` 根目录，含 zip-slip 防护）→ `npm ci -w server -w web`（只装网页端需要的
+  两个 workspace——desktop 的 Electron 二进制不下载，`ELECTRON_SKIP_BINARY_DOWNLOAD=1` 双保险）→
   `npm run build -w web`。node-pty 等原生模块用镜像里现成的工具链编译；engine tgz 随 npm 依赖从
-  GitHub Releases 拉取。镜像无需任何变动。
-- 版本列表：`git ls-remote --tags`（剥离 `v` 前缀、滤掉 `engine-*`/`nightly` 等非发行 tag、注解
-  tag 的 `^{}` 去重），复用 npm 通道的缓存与降噪逻辑。
+  GitHub Releases 拉取。镜像无需任何变动（也不需要 `git` 二进制）。
+- 版本列表：GitHub REST `/repos/<slug>/tags`（剥离 `v` 前缀、滤掉 `engine-*`/`nightly` 等非发行 tag），
+  复用 npm 通道的缓存与降噪逻辑；**空结果永不缓存**——网络抽风时抓空是常态，缓存空列表会让下拉框
+  在网络恢复后仍空白 30 分钟（首次上线后「读取不出来」的原因）。
 - 启动：`tsx server/src/index.ts` 直跑 TS 源码（无内置入口）；**端口走 `PORT` 环境变量**预分配
   （源码核实 `PORT ?? 3090`，它没有端口参数）——`BrandRuntime` 新增 `LaunchPlan`（命令+环境）
   携带；就绪行 `listening on http://127.0.0.1:<port>`。
@@ -26,8 +29,11 @@ MIT）——社区开源的 Claude Code 可视化工作台（**不是** Anthropi
 前端与服务器只通一条 WebSocket（标准 shim 改写其绝对 `/ws`）、无 history 路由；WS 握手的 Origin
 校验（Origin==Host 或回环）与面板反代一贯的 **Host 透传契约**吻合——不需要给上游提 PR。
 
-验证：新增用例（git tag 解析降噪/排序/去重、`LaunchPlan` 的 tsx+PORT 组装、git 品牌安装标记）；
-全量测试绿；`tsc --noEmit` 通过。端到端（真实克隆/安装/启动/反代打开）在本机 follow-up 验证。
+验证：新增用例（GitHub tag 解析降噪/排序、源码 zip 解包与 zip-slip 防护、`LaunchPlan` 的 tsx+PORT
+组装与缺失入口拒绝、GitHub 品牌安装标记）；全量测试绿；`tsc --noEmit` 通过。生产镜像内实测：
+API 取 tags 0.6 秒 200、源码 zip 1.5 秒下完 11 MB、解包 → npm ci（engine 与原生模块齐）→ vite 构建
+→ `PORT=<n>` 启动 → 就绪行 `claude-web 0.2.1 listening on http://127.0.0.1:<n>` → GET / 200。
+面板经 `/i/<id>/` 的浏览器全链路待人工复验。
 
 ## v0.3.7 — 2026-10-12 · 子路径反代下品牌代理修复（Kimi Code / OpenCode / ZCode）
 

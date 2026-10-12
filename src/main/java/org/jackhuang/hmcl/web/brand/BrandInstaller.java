@@ -26,10 +26,15 @@ import org.jetbrains.annotations.Nullable;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -49,10 +54,12 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 ///       --reporter=append-only --registry=<effective> \
 ///       --config.dangerously-allow-all-builds=true
 ///   ```
-/// - **git brands** clone a release tag and build it: `git clone --depth 1
-///   --branch <tag>`, then `npm ci -w server -w web` (only the workspaces the
-///   web mode needs — the desktop workspace's Electron binary is never
-///   downloaded), then `npm run build -w web`.
+/// - **GitHub brands** download the release tag's source zip over HTTPS
+///   (`codeload.github.com/<slug>/zip/refs/tags/<tag>`, retried; no `git`
+///   involved — the git transport to github.com is cut mid-handshake on this
+///   deployment's network), unpack it, then `npm ci -w server -w web` (only
+///   the workspaces the web mode needs — the desktop workspace's Electron
+///   binary is never downloaded), then `npm run build -w web`.
 ///
 /// Two npm details are load-bearing:
 ///
@@ -78,6 +85,14 @@ public final class BrandInstaller {
     private static final String CURRENT_LINK = "current";
     private static final String INSTALL_LOG = "install.log";
 
+    /// The HTTP client for GitHub source downloads — its own instance, with a
+    /// longer connect timeout than the catalog's (an 11 MB body in the default
+    /// 15 s budget would be tight on a slow route).
+    private static final HttpClient CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(30))
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .build();
+
     private BrandInstaller() {
     }
 
@@ -102,8 +117,8 @@ public final class BrandInstaller {
             pointCurrentAt(brandRoot, target);
             return;
         }
-        if (brand.source() == Brand.Source.GIT) {
-            installGit(brand, version, brandRoot, target, message);
+        if (brand.source() == Brand.Source.GITHUB) {
+            installGitHub(brand, version, brandRoot, target, message);
             pointCurrentAt(brandRoot, target);
             message.accept("Installed " + brand.sourceLabel() + " " + version);
             LOG.info("Installed " + brand.sourceLabel() + " " + version + " into " + target);
@@ -180,32 +195,21 @@ public final class BrandInstaller {
         LOG.info("Installed " + brand.npmPackage() + " " + version + " into " + target);
     }
 
-    /// The git-brand install: clone the release tag, install the server and
-    /// web workspaces, build the web app. Runs three child processes (clone,
-    /// `npm ci`, `npm run build`), each teed into the install log; any nonzero
-    /// exit fails the install with the logged tail.
+    /// The GitHub-brand install: download the tag's source zip, unpack it,
+    /// install the server and web workspaces, build the web app.
+    ///
+    /// Deliberately not `git clone`: on this deployment's network github.com's
+    /// git transport is cut mid-handshake routinely, while codeload serves the
+    /// whole source in about a second and a half — a plain, retryable HTTPS
+    /// download that also removes the `git` dependency entirely.
     ///
     /// The desktop workspace is deliberately **not** installed: nothing in it
     /// serves the web UI, and its Electron dependency would download a binary
     /// the panel never runs. (`ELECTRON_SKIP_BINARY_DOWNLOAD` is set anyway as
     /// insurance against a future lockfile that pulls it in through another
     /// workspace.)
-    private static void installGit(Brand brand, String version, Path brandRoot, Path target,
-                                   Consumer<String> message) throws BrandException {
-        try {
-            Process probe = new ProcessBuilder("git", "--version").redirectErrorStream(true).start();
-            if (!probe.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) || probe.exitValue() != 0) {
-                throw new BrandException("git was not found on PATH; installing " + brand.sourceLabel()
-                        + " needs it to clone the repository.");
-            }
-        } catch (IOException e) {
-            throw new BrandException("git was not found on PATH; installing " + brand.sourceLabel()
-                    + " needs it to clone the repository.", e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new BrandException("Installing " + brand.sourceLabel() + " was interrupted", e);
-        }
-
+    private static void installGitHub(Brand brand, String version, Path brandRoot, Path target,
+                                      Consumer<String> message) throws BrandException {
         DshNodeRuntime runtime = DshNodeRuntime.detect()
                 .or(DshNodeRuntime::detectManaged)
                 .orElseThrow(() -> new BrandException("Node.js was not found on PATH and no panel-managed runtime "
@@ -214,34 +218,30 @@ public final class BrandInstaller {
         String registry = NpmRegistry.effective().registry();
         Path log = brandRoot.resolve(INSTALL_LOG);
 
-        // GitHub from some networks is flaky in mid-protocol ("expected flush
-        // after ref listing" cuts a shallow clone halfway); a fresh attempt
-        // usually goes through. Retry the clone a few times before failing.
-        List<String> clone = List.of("git", "clone", "--depth", "1", "--branch", brand.gitTag(version),
-                brand.gitUrl(), target.toString());
-        BrandException cloneFailure = null;
+        // A leftover half-unpacked attempt would mix with the new sources.
+        if (Files.exists(target)) {
+            FileUtils.deleteDirectoryQuietly(target);
+        }
+
+        String url = "https://codeload.github.com/" + brand.githubSlug()
+                + "/zip/refs/tags/" + brand.releaseTag(version);
+        BrandException downloadFailure = null;
         for (int attempt = 1; attempt <= 3; attempt++) {
-            if (Files.exists(target)) {
-                try {
-                    FileUtils.deleteDirectoryQuietly(target);
-                } catch (Exception ignored) {
-                    // A leftover file will fail the clone loudly below.
-                }
-            }
             if (attempt > 1) {
-                message.accept("Clone did not finish; retrying (attempt " + attempt + " of 3)");
+                message.accept("Download did not finish; retrying (attempt " + attempt + " of 3)");
             }
             try {
-                runChecked(clone, brandRoot, java.util.Map.of(), log, message,
-                        "cloning " + brand.sourceLabel() + " " + brand.gitTag(version));
-                cloneFailure = null;
+                message.accept("Downloading " + url);
+                LOG.info("Downloading " + url + " (attempt " + attempt + " of 3)");
+                extractZip(download(url), target);
+                downloadFailure = null;
                 break;
             } catch (BrandException e) {
-                cloneFailure = e;
+                downloadFailure = e;
             }
         }
-        if (cloneFailure != null) {
-            throw cloneFailure;
+        if (downloadFailure != null) {
+            throw downloadFailure;
         }
 
         java.util.Map<String, String> environment = new java.util.HashMap<>(runtime.pathEnvironment());
@@ -254,6 +254,69 @@ public final class BrandInstaller {
         if (!Files.exists(target.resolve(brand.installMarker()))) {
             throw new BrandException(brand.sourceLabel() + " " + version + " built without its web app ("
                     + target.resolve(brand.installMarker()) + ") — see " + log);
+        }
+    }
+
+    /// Fetches the source zip over HTTPS. Kept separate from the unpacking so
+    /// the retry loop can wrap the download alone.
+    private static java.io.InputStream download(String url) throws BrandException {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofMinutes(5))
+                .header("Accept", "application/zip")
+                .GET()
+                .build();
+        try {
+            HttpResponse<java.io.InputStream> response =
+                    CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() / 100 != 2) {
+                throw new BrandException("Download answered " + response.statusCode() + ": " + url);
+            }
+            return response.body();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BrandException("Download was interrupted: " + url, e);
+        } catch (java.io.IOException e) {
+            throw new BrandException("Download failed: " + url + " — " + e.getMessage(), e);
+        }
+    }
+
+    /// Unpacks a GitHub source zip into `target`, dropping the archive's single
+    /// root folder (`<repo>-<tag>/…`). Entry paths are resolved against the
+    /// target and rejected when they escape it (zip-slip).
+    ///
+    /// Package-private so the unpacking is testable with an in-memory zip.
+    static void extractZip(java.io.InputStream zip, Path target) throws BrandException {
+        try {
+            Files.createDirectories(target);
+            Path root = target.toAbsolutePath().normalize();
+            try (java.util.zip.ZipInputStream in = new java.util.zip.ZipInputStream(
+                    new java.io.BufferedInputStream(zip))) {
+                java.util.zip.ZipEntry entry;
+                while ((entry = in.getNextEntry()) != null) {
+                    String name = entry.getName();
+                    int slash = name.indexOf('/');
+                    if (slash < 0) {
+                        // The archive's single root directory entry itself.
+                        continue;
+                    }
+                    String relative = name.substring(slash + 1);
+                    if (relative.isEmpty()) {
+                        continue;
+                    }
+                    Path destination = root.resolve(relative).normalize();
+                    if (!destination.startsWith(root)) {
+                        throw new BrandException("Archive entry escapes the target: " + name);
+                    }
+                    if (entry.isDirectory()) {
+                        Files.createDirectories(destination);
+                        continue;
+                    }
+                    Files.createDirectories(destination.getParent());
+                    Files.copy(in, destination, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+        } catch (java.io.IOException e) {
+            throw new BrandException("Could not unpack the source archive: " + e.getMessage(), e);
         }
     }
 

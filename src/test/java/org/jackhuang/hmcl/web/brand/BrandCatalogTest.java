@@ -80,30 +80,29 @@ class BrandCatalogTest {
         assertTrue(BrandCatalog.parse("{\"versions\":{}}").versions().isEmpty());
     }
 
-    /// Git brands list versions from `git ls-remote --tags`: annotated tags
-    /// appear twice (plain and peeled `^{}`), release tags carry a `v` prefix,
-    /// and a repo may tag non-releases (the engine, nightlies) that must not
-    /// reach the picker.
+    /// GitHub brands list versions from `/repos/<slug>/tags`: release tags
+    /// carry a `v` prefix, and a repo may tag non-releases (the engine,
+    /// nightlies) that must not reach the picker.
     @Test
-    void gitTagsBecomeCleanVersionsNewestFirst() {
+    void githubTagsBecomeCleanVersionsNewestFirst() {
         String body = """
-                49795f9\trefs/tags/v0.2.1
-                aaaa111\trefs/tags/v0.2.0
-                bbbb222\trefs/tags/v0.2.0^{}
-                cccc333\trefs/tags/engine-v2.8.4-cw.2
-                dddd444\trefs/tags/v0.10.0
-                eeee555\trefs/tags/v0.9.0
-                ffff666\trefs/tags/nightly""";
+                [{"name":"v0.2.1","commit":{"sha":"49795f9"},"zipball_url":"https://…"},
+                 {"name":"v0.2.0","commit":{"sha":"aaaa111"},"zipball_url":"https://…"},
+                 {"name":"engine-v2.8.4-cw.2","commit":{"sha":"cccc333"}},
+                 {"name":"v0.10.0","commit":{"sha":"dddd444"}},
+                 {"name":"v0.9.0","commit":{"sha":"eeee555"}},
+                 {"name":"nightly","commit":{"sha":"ffff666"}}]""";
 
-        BrandCatalog.Snapshot snapshot = BrandCatalog.parseTags(body);
+        BrandCatalog.Snapshot snapshot = BrandCatalog.parseGitHubTags(body);
 
         assertEquals(List.of("0.10.0", "0.9.0", "0.2.1", "0.2.0"), snapshot.versions());
         assertEquals("0.10.0", snapshot.latest());
     }
 
     @Test
-    void gitTagsWithoutACleanTagYieldAnEmptySnapshot() {
-        assertTrue(BrandCatalog.parseTags("ffff666\trefs/tags/nightly").versions().isEmpty());
-        assertTrue(BrandCatalog.parseTags("").versions().isEmpty());
+    void githubTagsWithoutACleanTagYieldAnEmptySnapshot() {
+        assertTrue(BrandCatalog.parseGitHubTags("[{\"name\":\"nightly\"}]").versions().isEmpty());
+        assertTrue(BrandCatalog.parseGitHubTags("").versions().isEmpty());
+        assertTrue(BrandCatalog.parseGitHubTags("{\"message\":\"Not Found\"}").versions().isEmpty());
     }
 }
