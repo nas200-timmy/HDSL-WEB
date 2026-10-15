@@ -32,6 +32,7 @@ import type {
   BrandInstallStatus,
   BrandInstance,
   BrandVersions,
+  InstancePlugins,
 } from "./types";
 
 export class ApiError extends Error {
@@ -338,6 +339,10 @@ export const api = {
   zcodeLogs: (id: string, tail = 200) =>
     request<{ lines: string[] }>(`/api/zcode/instances/${encodeURIComponent(id)}/logs?tail=${tail}`),
 
+  /** 插件通道（预留）：ZCode 品类现在不支持插件，形状与品牌实例一致 */
+  zcodePlugins: (id: string) =>
+    request<InstancePlugins>(`/api/zcode/instances/${encodeURIComponent(id)}/plugins`),
+
   /** 已安装的发行包（构造器装出来的那些） */
   zcodeReleases: () => request<{ releases: ZcodeRelease[] }>("/api/zcode/releases"),
 
@@ -408,6 +413,10 @@ export const api = {
     request<{ lines: string[] }>(
       `/api/brands/${brand}/instances/${encodeURIComponent(id)}/logs?tail=${tail}`,
     ),
+
+  /** 插件通道（预留）：品牌实例现在不支持插件，supported=false + 空列表 */
+  brandPlugins: (brand: BrandId, id: string) =>
+    request<InstancePlugins>(`/api/brands/${brand}/instances/${encodeURIComponent(id)}/plugins`),
 
   // ---- Node.js 工具链（裸部署一键供给，设置 → Node.js） ----
   nodeStatus: () =>

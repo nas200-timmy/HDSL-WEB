@@ -227,6 +227,11 @@ export const I18N = {
   "dsh.brand.opencode": "OpenCode（实验）",
   "dsh.brand.claude-web": "Claude Web（实验）",
   "dsh.brand.zcode": "ZCode（实验）",
+  // 「（实验）」是完整显示名的一部分（侧栏标题、第三方警示用），
+  // 但实例名不该背这个尾巴（新建实例时预填的就是下面这几条短名）。
+  "dsh.brand.opencode.short": "OpenCode",
+  "dsh.brand.claude-web.short": "Claude Web",
+  "dsh.brand.zcode.short": "ZCode",
   "dsh.brand.thirdparty.warning":
     "%s 为第三方工具，由各自官方分发、更新与计费；面板仅负责安装、启动与网页反代，其功能、安全与行为由各官方负责。",
   // OpenCode 专有的能力边界声明：面板已经到了它能做的极限，剩下的问题属于上游。
@@ -261,6 +266,28 @@ export const I18N = {
   "dsh.brand.open": "打开",
   "dsh.brand.delete.confirm": "确定删除「%s」？实例数据会一并删除。",
   "dsh.brand.installing.progress": "正在安装：%s",
+
+  // ---- 品牌实例页（BrandsPage）：实例是主对象，版本是共享构建 ----
+  "dsh.brand.page.title": "品牌实例",
+  "dsh.brand.side.category": "第三方品牌",
+  "dsh.brand.section.instances": "实例",
+  "dsh.brand.section.versions": "版本",
+  "dsh.brand.installed_builds": "已安装的版本构建",
+  "dsh.brand.version.shared": "版本构建按品牌共享：装过一次，该品牌其它实例都能直接切到它",
+  "dsh.brand.version.uninstalled": "未装",
+  "dsh.brand.version.installed": "已装",
+  "dsh.brand.version.install_and_switch": "先安装 %s 再切到它（版本构建按品牌共享）",
+  "dsh.brand.version.stop_and_switch": "该实例正在运行，切换版本需要先停止它",
+  "dsh.brand.version.switch": "切换版本",
+  "dsh.brand.install_new": "安装新版本",
+  "dsh.brand.instance.info": "信息",
+  "dsh.brand.instance.plugins": "插件",
+  "dsh.brand.instance.rename": "重命名",
+  "dsh.brand.instance.address": "打开地址",
+  "dsh.brand.instance.created": "创建时间",
+  "dsh.brand.plugins.unsupported":
+    "该品牌暂不支持插件。面板已为品牌实例预留插件通道：后端把 supported 置为 true 并填充 plugins 后，这里会变成可安装/启停的插件面板，与 dsh 实例同款。",
+  "dsh.brand.plugins.empty": "（暂无插件）",
 
   // ---- 通用 ----
   "message.error": "错误",

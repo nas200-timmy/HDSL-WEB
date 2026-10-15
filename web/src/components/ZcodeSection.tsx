@@ -2,18 +2,21 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { CollapsibleNote } from "./CollapsibleNote";
 import { ConfirmDialog, Dialog } from "./Dialog";
-import { ZcodeBuildButton } from "./ZcodeBuildDialog";
+import { PopupItem, PopupMenu, PopupSep } from "./PopupMenu";
 import {
   CloseIcon,
   DeleteIcon,
   EditIcon,
-  InfoIcon,
+  ExtensionIcon,
+  FormatListBulletedIcon,
+  MoreVertIcon,
   PublicIcon,
-  RefreshIcon,
   RocketLaunchIcon,
 } from "./icons";
+import { I18N } from "../i18n";
+import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
 import { refreshExternal, refreshZcode, toast, useAppState } from "../store";
-import type { ExternalInstance } from "../types";
+import type { ExternalInstance, InstancePlugins } from "../types";
 import { errMsg } from "../utils";
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
@@ -34,13 +37,21 @@ const STATE_TAG: Record<string, string> = {
 
 /// ZCode（实验性）：与 dsh 实例完全隔离的独立品牌分区。
 /// 纯实现性验证功能——不保证可用、不承诺兼容，定位与限制见 docs/zcode-experimental.md。
+///
+/// 品牌实例页（BrandsPage）里它是 zcode 分支的「实例」卡：发行包检测/构建在页面的
+/// 版本卡上（内置弹窗 ZcodeBuildButton 也在那边），这里只管实例：
+/// 创建（要填端点与密钥，所以用弹窗而不是内联的创建行）/ 编辑 / 日志 / 启停 / 删除。
+/// 导出签名保持无参：它由品牌实例页整块渲染，不需要外部传参。
 export function ZcodeSection() {
   const s = useAppState();
+  const selectedId = useSelectedInstanceId();
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<ExternalInstance | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ExternalInstance | null>(null);
   const [logTarget, setLogTarget] = useState<ExternalInstance | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
+  const [pluginsTarget, setPluginsTarget] = useState<ExternalInstance | null>(null);
+  const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; inst: ExternalInstance } | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ name: "", baseUrl: DEFAULT_BASE_URL, apiKey: "" });
   const [formError, setFormError] = useState<string | null>(null);
@@ -63,7 +74,6 @@ export function ZcodeSection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.external]);
 
-  const dist = s.zcodeDist;
   const running = instances.filter((i) => i.state === "running").length;
 
   const closeForm = () => {
@@ -73,7 +83,12 @@ export function ZcodeSection() {
   };
 
   const openCreate = () => {
-    setForm({ name: "", baseUrl: DEFAULT_BASE_URL, apiKey: "" });
+    // 一个实例都没有时预填品牌名（与品牌实例卡的创建行同规则），点一下保存就有实例
+    setForm({
+      name: instances.length === 0 ? I18N["dsh.brand.zcode.short"] : "",
+      baseUrl: DEFAULT_BASE_URL,
+      apiKey: "",
+    });
     setFormError(null);
     setCreateOpen(true);
   };
@@ -183,6 +198,8 @@ export function ZcodeSection() {
     try {
       await api.deleteZcodeInstance(deleteTarget.id);
       toast("success", "已删除");
+      // 删掉的正好是「当前实例」时把选择清掉，免得启动面板指向一个不存在的实例
+      if (getSelectedInstanceId() === deleteTarget.id) setSelectedInstanceId(null);
       setDeleteTarget(null);
       await refreshExternal();
     } catch (e) {
@@ -193,13 +210,25 @@ export function ZcodeSection() {
   };
 
   return (
-    <>
-      <div className="section-caption">
-        <InfoIcon size={16} />
-        ZCode（实验性）
+    <div
+      className="card"
+      style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", padding: 0 }}
+    >
+      <div className="toolbar-row" style={{ padding: "6px 12px", flexShrink: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, flex: "none" }}>
+          {I18N["dsh.brand.section.instances"]}
+        </span>
+        <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", whiteSpace: "nowrap" }}>
+          {instances.length} 个实例{running > 0 ? ` · ${running} 个运行中` : ""}
+        </span>
+        <span className="spacer" />
+        <button className="btn btn-outline ripple-host" onClick={openCreate}>
+          添加 ZCode 实例
+        </button>
       </div>
-      <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", maxHeight: 330 }}>
-        {/* 移动端长说明收成一行 + 详情展开；桌面端原样 */}
+
+      {/* 移动端长说明收成一行 + 详情展开；桌面端原样 */}
+      <div style={{ flexShrink: 0, padding: "0 12px 6px" }}>
         <CollapsibleNote
           summary={
             <b style={{ color: "var(--monet-on-surface)" }}>
@@ -207,7 +236,7 @@ export function ZcodeSection() {
             </b>
           }
         >
-          <div style={{ padding: "8px 12px 4px", fontSize: 12, lineHeight: 1.7, color: "var(--monet-on-surface-variant)" }}>
+          <div style={{ fontSize: 12, lineHeight: 1.7, color: "var(--monet-on-surface-variant)" }}>
             <b style={{ color: "var(--monet-on-surface)" }}>
               纯实现性验证功能：不保证可用，也不承诺与 dsh 同等的功能与兼容
             </b>
@@ -215,102 +244,122 @@ export function ZcodeSection() {
             同样要登录），凭证以明文保存在实例目录。
           </div>
         </CollapsibleNote>
-
-        <div className="toolbar-row" style={{ padding: "0 12px 6px" }}>
-          <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-            {dist === null
-              ? "检测中…"
-              : dist.present
-                ? `发行包：${dist.version ?? "未知版本"} · ${dist.path}`
-                : "未检测到 ZCode 发行包"}
-            {instances.length > 0 ? ` · ${instances.length} 个实例` : ""}
-            {running > 0 ? ` · ${running} 个运行中` : ""}
-          </span>
-          <span className="spacer" />
-          <ZcodeBuildButton />
-          <button className="tool-btn ripple-host" disabled={s.zcodeLoading} onClick={() => void refreshZcode(true)}>
-            <RefreshIcon size={18} />
-            刷新
-          </button>
-        </div>
-
-        {dist !== null && !dist.present && (
-          <div className="empty-state" style={{ padding: "6px 12px" }}>
-            <span>
-              把自建的 ZCode 发行包放到 <code>{dist.path}</code>（需含 bin/zcode.mjs）
-            </span>
-            <span className="empty-sub">或用 HDSL_ZCODE_PACKAGE 指向别处；构建方法见 docs/zcode-experimental.md</span>
-          </div>
-        )}
-
-        <div className="list-body scroll-hover">
-          {instances.length === 0 ? (
-            <div className="empty-state" style={{ padding: "6px 12px" }}>
-              <span>还没有 ZCode 实例</span>
-            </div>
-          ) : (
-            instances.map((inst, idx) => (
-              <div key={inst.id}>
-                <div className="tlli" style={{ padding: "6px 12px" }}>
-                  <span className="tlli-text">
-                    <span className="tlli-title">
-                      {inst.name}
-                      <span className={`tag ${STATE_TAG[inst.state] ?? "plain"}`}>
-                        {STATE_TEXT[inst.state] ?? inst.state}
-                      </span>
-                      {!inst.hasApiKey && <span className="tag plain">无 API Key</span>}
-                    </span>
-                    <span className="tlli-subtitle">
-                      {inst.id}
-                      {inst.state === "running" ? " · 经面板反代打开" : ""}
-                      {inst.state === "error" && inst.error ? ` · ${inst.error}` : ""}
-                    </span>
-                  </span>
-                  <span className="row-actions">
-                    <button
-                      className="icon-btn on-variant ripple-host"
-                      title={inst.state === "running" ? "停止" : "启动"}
-                      disabled={busy || inst.state === "starting"}
-                      onClick={() => (inst.state === "running" ? void stop(inst) : void launch(inst))}
-                    >
-                      {inst.state === "running" ? <CloseIcon size={18} /> : <RocketLaunchIcon size={18} />}
-                    </button>
-                    <button
-                      className="icon-btn on-variant ripple-host"
-                      title="在新标签页打开（经面板 /i/<id>/ 反代）"
-                      disabled={inst.state !== "running"}
-                      onClick={() => void openInBrowser(inst)}
-                    >
-                      <PublicIcon size={18} />
-                    </button>
-                    <button className="icon-btn on-variant ripple-host" title="日志" onClick={() => void showLogs(inst)}>
-                      <InfoIcon size={18} />
-                    </button>
-                    <button className="icon-btn on-variant ripple-host" title="编辑" onClick={() => openEdit(inst)}>
-                      <EditIcon size={18} />
-                    </button>
-                    <button
-                      className="icon-btn on-variant ripple-host"
-                      title="删除"
-                      disabled={busy || inst.state === "running" || inst.state === "starting"}
-                      onClick={() => setDeleteTarget(inst)}
-                    >
-                      <DeleteIcon size={18} />
-                    </button>
-                  </span>
-                </div>
-                {idx < instances.length - 1 && <div className="divider" style={{ marginLeft: 12 }} />}
-              </div>
-            ))
-          )}
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "flex-end", padding: 8 }}>
-          <button className="btn btn-outline ripple-host" onClick={openCreate}>
-            添加 ZCode 实例
-          </button>
-        </div>
       </div>
+
+      <div className="list-body scroll-hover">
+        {instances.length === 0 ? (
+          <div className="empty-state" style={{ padding: "6px 12px" }}>
+            <span>还没有 ZCode 实例</span>
+            <span className="empty-sub">发行包要在上面的「版本」卡里构建或放置</span>
+          </div>
+        ) : (
+          instances.map((inst, idx) => (
+            <div key={inst.id}>
+              <div className="tlli" style={{ padding: "6px 12px" }}>
+                {/* 「当前实例」与 dsh 实例列表同款：启动面板与主侧栏都认这个选择 */}
+                <label className="input-check">
+                  <input
+                    type="radio"
+                    name="brand-instance-zcode"
+                    checked={inst.id === selectedId}
+                    onChange={() => setSelectedInstanceId(inst.id)}
+                  />
+                </label>
+                <span className="tlli-text">
+                  <span className="tlli-title">
+                    {inst.name}
+                    <span className={`tag ${STATE_TAG[inst.state] ?? "plain"}`}>
+                      {STATE_TEXT[inst.state] ?? inst.state}
+                    </span>
+                    {!inst.hasApiKey && <span className="tag plain">无 API Key</span>}
+                  </span>
+                  <span className="tlli-subtitle">
+                    {inst.id}
+                    {inst.state === "running" ? " · 经面板反代打开" : ""}
+                    {inst.state === "error" && inst.error ? ` · ${inst.error}` : ""}
+                  </span>
+                </span>
+                <span className="row-actions">
+                  <button
+                    className="icon-btn on-variant ripple-host"
+                    title={inst.state === "running" ? "停止" : "启动"}
+                    disabled={busy || inst.state === "starting"}
+                    onClick={() => (inst.state === "running" ? void stop(inst) : void launch(inst))}
+                  >
+                    {inst.state === "running" ? <CloseIcon size={18} /> : <RocketLaunchIcon size={18} />}
+                  </button>
+                  <button
+                    className="icon-btn on-variant ripple-host"
+                    title="在新标签页打开（经面板 /i/<id>/ 反代）"
+                    disabled={inst.state !== "running"}
+                    onClick={() => void openInBrowser(inst)}
+                  >
+                    <PublicIcon size={18} />
+                  </button>
+                  <button
+                    className="icon-btn on-variant ripple-host"
+                    title={I18N["dsh.instance.menu"]}
+                    onClick={(e) => setMenuAnchor({ el: e.currentTarget, inst })}
+                  >
+                    <MoreVertIcon size={18} />
+                  </button>
+                </span>
+              </div>
+              {idx < instances.length - 1 && <div className="divider" style={{ marginLeft: 12 }} />}
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* 更多菜单：行里只留启停与打开（手机上一排按钮挤不下），其余进菜单 */}
+      <PopupMenu
+        open={menuAnchor !== null}
+        anchor={menuAnchor?.el ?? null}
+        onClose={() => setMenuAnchor(null)}
+      >
+        <PopupItem
+          icon={<EditIcon size={16} />}
+          onClick={() => {
+            const inst = menuAnchor?.inst;
+            setMenuAnchor(null);
+            if (inst) openEdit(inst);
+          }}
+        >
+          编辑（名称 / 端点 / 密钥）
+        </PopupItem>
+        <PopupItem
+          icon={<ExtensionIcon size={16} />}
+          onClick={() => {
+            const inst = menuAnchor?.inst;
+            setMenuAnchor(null);
+            if (inst) setPluginsTarget(inst);
+          }}
+        >
+          {I18N["dsh.brand.instance.plugins"]}
+        </PopupItem>
+        <PopupItem
+          icon={<FormatListBulletedIcon size={16} />}
+          onClick={() => {
+            const inst = menuAnchor?.inst;
+            setMenuAnchor(null);
+            if (inst) void showLogs(inst);
+          }}
+        >
+          日志
+        </PopupItem>
+        <PopupSep />
+        <PopupItem
+          danger
+          icon={<DeleteIcon size={16} />}
+          onClick={() => {
+            const inst = menuAnchor?.inst;
+            setMenuAnchor(null);
+            if (inst) setDeleteTarget(inst);
+          }}
+        >
+          删除
+        </PopupItem>
+      </PopupMenu>
 
       {/* 新建 / 编辑 */}
       <Dialog
@@ -381,6 +430,9 @@ export function ZcodeSection() {
         </div>
       </Dialog>
 
+      {/* 插件通道：形状与品牌实例卡一致（弹窗各持一份，免得两个组件文件互相引用） */}
+      <ZcodePluginsDialog inst={pluginsTarget} onClose={() => setPluginsTarget(null)} />
+
       <ConfirmDialog
         open={deleteTarget !== null}
         title="删除 ZCode 实例"
@@ -391,6 +443,75 @@ export function ZcodeSection() {
         onConfirm={() => void remove()}
         onCancel={() => setDeleteTarget(null)}
       />
-    </>
+    </div>
+  );
+}
+
+/// ZCode 的插件弹窗：走 /api/zcode/instances/<id>/plugins，回答恒为
+/// `{supported: false, plugins: []}`——如实画出来，后端填上 plugins 就按数据列。
+function ZcodePluginsDialog({
+  inst,
+  onClose,
+}: {
+  inst: ExternalInstance | null;
+  onClose: () => void;
+}) {
+  const [data, setData] = useState<InstancePlugins | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!inst) return;
+    let alive = true;
+    setData(null);
+    setError(null);
+    api
+      .zcodePlugins(inst.id)
+      .then((d) => {
+        if (alive) setData(d);
+      })
+      .catch((e) => {
+        if (alive) setError(errMsg(e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [inst]);
+
+  return (
+    <Dialog
+      open={inst !== null}
+      title={`${I18N["dsh.brand.instance.plugins"]} · ${inst?.name ?? ""}`}
+      onClose={onClose}
+    >
+      {error ? (
+        <div className="hint error">{error}</div>
+      ) : data && data.plugins.length > 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {data.plugins.map((p) => (
+            <div key={p.name} className="toolbar-row" style={{ padding: 0 }}>
+              <span style={{ fontSize: 13 }}>{p.name}</span>
+              {p.version && <span className="tag plain">{p.version}</span>}
+              <span className={`tag ${p.enabled ? "running" : "plain"}`}>
+                {p.enabled ? I18N["button.enable"] : I18N["button.disable"]}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : data?.supported ? (
+        <p style={{ lineHeight: 1.7 }}>{I18N["dsh.brand.plugins.empty"]}</p>
+      ) : data ? (
+        <p style={{ lineHeight: 1.7 }}>{I18N["dsh.brand.plugins.unsupported"]}</p>
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="spinner" />
+          <span>正在读取插件通道…</span>
+        </div>
+      )}
+      <div className="dialog-actions">
+        <button className="btn btn-text" onClick={onClose}>
+          {I18N["button.ok"]}
+        </button>
+      </div>
+    </Dialog>
   );
 }

@@ -145,6 +145,8 @@ export function MainSideBar() {
 export interface SubSideItem {
   key: string;
   title: string;
+  /** 副标题（桌面子侧栏显示，移动端 chip 里由现成 CSS 隐藏）——如「2 实例 · 运行中」 */
+  subtitle?: string;
   icon: React.ReactNode;
   iconActive?: React.ReactNode;
 }
@@ -187,6 +189,7 @@ export function SubSideBar({
                 </span>
                 <span className="side-text">
                   <span className="side-title">{it.title}</span>
+                  {it.subtitle != null && <span className="side-subtitle">{it.subtitle}</span>}
                 </span>
               </button>
             );

@@ -21,7 +21,6 @@ import {
   SettingsFillIcon,
 } from "../components/icons";
 import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
-import { BrandsSection } from "../components/BrandsSection";
 import { I18N } from "../i18n";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
 import { getState, refreshInstances, toast, useAppState } from "../store";
@@ -34,9 +33,14 @@ export function InstancesPage() {
   const nav = useNavigate();
   const s = useAppState();
   const selectedId = useSelectedInstanceId();
-  // 主页品牌卡「管理」跳进来时带 ?brand=kimi|opencode|claude-web，品牌区自动切到对应页签
+  // 旧链接兼容：品牌区早先挂在 ?brand=kimi|opencode|claude-web（主页品牌卡「管理」用过），
+  // 现在独立成 /brands/<brand>
   const [searchParams] = useSearchParams();
   const brandTab = searchParams.get("brand");
+
+  useEffect(() => {
+    if (brandTab) nav(`/brands/${encodeURIComponent(brandTab)}`, { replace: true });
+  }, [brandTab, nav]);
 
   const [query, setQuery] = useState("");
   const [searchMode, setSearchMode] = useState(false);
@@ -134,6 +138,17 @@ export function InstancesPage() {
           </span>
           <span className="side-text">
             <span className="side-title">{I18N["dsh.directory.add"]}</span>
+          </span>
+        </button>
+        {/* 第三方品牌实例页入口：单独一个分区，桌面靠 side-category 的 1px 底线分割，
+            移动端靠 .sidebar-sub > div + div 的左边线——两边都不额外写 CSS */}
+        <div className="side-category">{I18N["dsh.brand.side.category"]}</div>
+        <button className="side-item ripple-host" onClick={() => nav("/brands")}>
+          <span className="side-graphic">
+            <PublicIcon size={20} />
+          </span>
+          <span className="side-text">
+            <span className="side-title">{I18N["dsh.brand.page.title"]}</span>
           </span>
         </button>
         <div className="sidebar-spacer" />
@@ -292,9 +307,6 @@ export function InstancesPage() {
             )}
           </div>
         </div>
-
-        {/* 品牌区：ZCode（实验）+ 第三方品牌（Kimi Code / OpenCode） */}
-        <BrandsSection initialTab={brandTab ?? undefined} />
       </div>
 
       {/* 更多菜单（HMCL IconedMenuItem 风格） */}

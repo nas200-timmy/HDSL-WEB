@@ -4,6 +4,7 @@ import { ErrorIcon } from "./components/icons";
 import { Decorator } from "./components/Decorator";
 import { SnackbarHost } from "./components/Snackbar";
 import { AccountsPage } from "./pages/AccountsPage";
+import { BrandsPage } from "./pages/BrandsPage";
 import { DownloadPage } from "./pages/DownloadPage";
 import { InstallInstanceWizard } from "./pages/InstallInstanceWizard";
 import { InstallModpackWizard } from "./pages/InstallModpackWizard";
@@ -125,6 +126,8 @@ export default function App() {
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/instances/new" element={<InstallInstanceWizard />} />
             <Route path="/instances/:id" element={<InstanceDetailPage />} />
+            <Route path="/brands" element={<BrandsPage />} />
+            <Route path="/brands/:brand" element={<BrandsPage />} />
             <Route path="/download" element={<DownloadPage />} />
             <Route path="/install/modpack" element={<InstallModpackWizard />} />
             <Route path="/accounts" element={<AccountsPage />} />

@@ -353,9 +353,18 @@ export interface BrandInstance {
   url?: string;
 }
 
+/// 品牌/zcode 实例的**插件通道**（`GET …/instances/<id>/plugins`）。
+/// 现在没有任何品牌支持插件，后端一律回答 `supported: false` + 空列表；
+/// 这个形状就是给未来留的位置：后端把 supported 置真并填 `plugins` 后，
+/// 品牌实例面板的插件弹窗会直接列出可安装/启停的插件，前端不用改。
+export interface InstancePlugins {
+  supported: boolean;
+  plugins: { name: string; version?: string; enabled?: boolean }[];
+}
+
 /// 启动面板"跨品牌实例切换器"里的非 dsh 条目（kimi/opencode/claude-web 品牌实例 + zcode 实验实例）。
-/// 这是**唯一**的跨品牌实例状态源：BrandPanel / ZcodeSection / BrandSummaryBar /
-/// LaunchPane 都从这里读，写入只发生在 refreshExternal。
+/// 这是**唯一**的跨品牌实例状态源：BrandsPage / ZcodeSection / LaunchPane /
+/// MainPage 都从这里读，写入只发生在 refreshExternal。
 export interface ExternalInstance {
   brand: "kimi" | "opencode" | "claude-web" | "zcode";
   id: string;
