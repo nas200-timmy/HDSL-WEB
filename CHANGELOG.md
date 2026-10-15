@@ -2,6 +2,24 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.3.9 — 2026-10-15 · 品牌实例也有运行中浮层
+
+dsh 实例运行中时主界面有一张信息浮层（名称 + `运行中` + `id · 端口 · /i/<id>/?token=…` + [打开]），
+品牌实例（Kimi Code / OpenCode / Claude Web / ZCode）此前**完全没有对应物**：主界面选中品牌目标后，
+运行中既看不到端口也拿不到打开地址——启动那一刻自动开的标签页一关，就再无入口。
+
+- `MainPage` 新增 `RunningPaneBrand`：品牌 Tag + 名称 + 状态，运行中显示 `id · 端口 · 打开地址`
+  与 [打开]、复制地址；启动中也显示同款浮层（无地址行），补上品牌启动最长 60 秒里主界面的反馈。
+  打开规则与手机品牌卡一致：zcode 走 `api.zcodeOpen`，其余直接用后端返回的 url（已带挂载点前缀），
+  兜底 `withBase("/i/<id>/")`。
+- `refreshExternal` 把后端**一直有返回、前端却丢掉**的 `lastPort` 映射进 `ExternalInstance.port`
+  （品牌三件套与 zcode 都带）。
+- 无选中目标且没有任何 dsh 实例时，浮层退回第一个运行中的品牌实例——只用品牌实例的用户
+  主界面也能直接拿到打开链接。
+
+验证：`tsc --noEmit`、`vite build` 通过；全量 554 用例绿（Java 侧无改动）。纯增量：
+不涉及进程运行时、反代或被反代模块的任何代码。
+
 ## v0.3.8 — 2026-10-12 · Claude Web 品牌（首个 git 源品牌）
 
 品牌区新增第三个第三方品牌 **Claude Web**（[ypyik0669/claude-web](https://github.com/ypyik0669/claude-web)，
