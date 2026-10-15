@@ -37,6 +37,24 @@ jobs:
             echo "value=0.0.0-edge" >> "$GITHUB_OUTPUT"
           fi
 
+      # 只有**最新**的版本标签才移动 `latest`。
+      # 没有这道闸门时，回填一个老标签（例如补一条 v0.3.9）会把 `latest` 从当前的
+      # v0.4.1 拽回那个老镜像上——2026-10-15 补 v0.3.9 时踩到过：那次是构建失败才侥幸
+      # 没退回去。这里按「仓库里版本号最大的 v* 标签」判断，只认它。
+      - name: Is this the newest version tag?
+        id: newest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          newest=$(gh api --paginate "repos/${{ github.repository }}/tags?per_page=100" \
+                     --jq '.[].name' | grep '^v' | sort -V | tail -1)
+          if [ "$newest" = "${GITHUB_REF_NAME}" ]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${GITHUB_REF_NAME} is not the newest version tag (${newest}); latest is not moved"
+          fi
+
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -45,7 +63,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ steps.newest.outputs.value == 'true' }}
             type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push
