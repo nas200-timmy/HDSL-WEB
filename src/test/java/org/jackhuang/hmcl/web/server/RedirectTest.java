@@ -22,6 +22,7 @@ import org.jackhuang.hmcl.web.TestSupport;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -29,6 +30,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /// With `https.redirect_http` on, a second plain-HTTP connector answers every
 /// request with 308 to the same host/path over the HTTPS port.
@@ -36,6 +38,57 @@ class RedirectTest {
 
     @TempDir
     Path dataDir;
+
+    /// A bare `http://<ip>` entry — the user typed no scheme, the browser
+    /// assumed http, and the port mapping sends it to the TLS port — must land
+    /// on the panel instead of `ERR_INVALID_HTTP_RESPONSE`.
+    @Test
+    void cleartextOnTheTlsPortRedirectsToo() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+                config -> {
+                    config.bindHost = "127.0.0.1";
+                    config.https.enabled = true;   // redirect_same_port defaults to on
+                })) {
+            int mainPort = running.port();
+            var client = TestSupport.trustAllClient();
+
+            HttpResponse<String> redirect = client.send(
+                    HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + mainPort + "/instances?view=brands"))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(308, redirect.statusCode(),
+                    "cleartext on the TLS port must not be served: " + redirect.body());
+            assertEquals("https://127.0.0.1:" + mainPort + "/instances?view=brands",
+                    redirect.headers().firstValue("location").orElseThrow(),
+                    "the Location keeps the Host (minus port), the TLS port and the path");
+
+            // The same port still speaks TLS: the redirect is not a downgrade.
+            HttpResponse<String> health = client.send(
+                    HttpRequest.newBuilder(URI.create("https://127.0.0.1:" + mainPort + "/api/health"))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, health.statusCode());
+        }
+    }
+
+    /// With `redirect_same_port` off, cleartext on the TLS port is refused
+    /// outright — the behaviour that made a bare IP entry say
+    /// `ERR_INVALID_HTTP_RESPONSE`.
+    @Test
+    void cleartextOnTheTlsPortIsRefusedWhenTheRedirectIsOff() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+                config -> {
+                    config.bindHost = "127.0.0.1";
+                    config.https.enabled = true;
+                    config.https.redirectSamePort = false;
+                })) {
+            var client = TestSupport.trustAllClient();
+            assertThrows(IOException.class, () -> client.send(
+                    HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + running.port() + "/"))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString()));
+        }
+    }
 
     @Test
     void plainHttpPortRedirectsToHttps() throws Exception {

@@ -219,7 +219,9 @@ https:
   # 方式 B：PKCS#12；同时配置时 PKCS#12 优先
   pkcs12_file: certs/site.p12
   pkcs12_password: "…"
-  redirect_http: false    # true = 再开一个纯 HTTP 端口，把所有请求 308 到同主机的 HTTPS
+  redirect_same_port: true  # 默认 true：TLS 端口同时接明文请求，一律 308 跳到 HTTPS
+                            # （裸 IP 访问不会撞上 ERR_INVALID_HTTP_RESPONSE；内容绝不走明文）
+  redirect_http: false    # true = 另开一个纯 HTTP 端口，把所有请求 308 到同主机的 HTTPS
   redirect_port: 80       # 上面那个 HTTP 端口，默认 80
 
 auth:
@@ -238,8 +240,21 @@ auth:
    - 万一运行时切换失败 → 回滚成明文并在响应里带 `restartRequired: true`，重启容器即应用
      （选择已经写进 `server.yaml`，重启就是生效方式）。
 
-自签证书的 SAN 会带上 `public_base_url` 的 host（配了的话）和 `localhost`/`127.0.0.1` 等常用名，
-所以配好 `public_base_url` 后反代域名能对上名字。
+自签证书的 SAN 会带上 `public_base_url` 的 host（配了的话）、`localhost`/`127.0.0.1`、
+**本机所有网卡地址与主机名**——所以没有域名、直接用 `https://192.168.x.x:3080` 打开也不会变成
+"证书域名不匹配"。
+
+### 用 IP 直连是正常用法
+
+没有域名、没有反代、也不想暴露到公网的部署，地址就是那串 IP，而浏览器在地址栏里只看到
+`192.168.1.6` 时会**按 http 发请求**。所以 HTTPS 打开后：
+
+- **同一个 TLS 端口也接明文**（`redirect_same_port`，默认开）：明文请求一律回
+  `308 Location: https://<同主机>:<同端口><同路径>`，浏览器自动跳过去——不会再出现
+  `ERR_INVALID_HTTP_RESPONSE`（那正是明文撞上 TLS 监听时的报错）。内容永远不会以明文发出：
+  非 TLS 请求只会得到这个 308。会话 Cookie 带 `Secure`，也不会在明文请求里被带上。
+- 想要一个纯粹的、只认 TLS 的端口，把 `redirect_same_port` 设为 `false` 即可；
+  想再开一个固定的明文端口（比如容器里另映射 80）则用 `redirect_http` + `redirect_port`。
 
 ## 环境变量
 
@@ -258,8 +273,8 @@ auth:
 | `HDSL_ZCODE_PACKAGE` | 空 | **实验性 ZCode 品类**的发行包目录（需含 `bin/zcode.mjs`）；不设时找 `<数据目录>/zcode/current/`。见 [docs/zcode-experimental.md](docs/zcode-experimental.md) |
 | `HDSL_ZCODE_NODE` | 空 | 跑 ZCode 用的 node 可执行文件；不设时用 PATH 上的 `node` |
 
-`HDSL_BIND_HOST`/`HDSL_PORT`/`HDSL_HTTPS` 之外的一切（证书路径、`auth.disabled`、`redirect_http` 等）
-都从 `server.yaml` 读。dsh 实例自己的端口从池子 **3081–4081** 里分配、终身绑定，只监听回环，**不对外发布**。
+`HDSL_BIND_HOST`/`HDSL_PORT`/`HDSL_HTTPS` 之外的一切（证书路径、`auth.disabled`、
+`redirect_same_port`/`redirect_http` 等）都从 `server.yaml` 读。dsh 实例自己的端口从池子 **3081–4081** 里分配、终身绑定，只监听回环，**不对外发布**。
 
 > **ZCode（实验性）不在这套承诺内**：实例只绑回环，经面板的 `/i/<id>/` 挂载点访问（同端口、
 > 同证书、同样要登录）；发行包由面板自己从上游源码构建，能不能用取决于上游。定位、构建方式与

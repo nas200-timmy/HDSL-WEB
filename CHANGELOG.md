@@ -55,6 +55,13 @@
   而 Anthropic 商标条款写明"须事先书面许可、不得改动"。顺手删掉 `InstanceIcon` 里那段
   `grad-a`…`grad-d` 死代码——那四个类在 CSS 里从来没有定义过。
   来源、许可与商标归属见 [NOTICE](NOTICE) 的 TRADEMARKS 一节与 `docs/brands.md`。
+- **HTTPS 打开后，裸 IP 也能用**（没有域名、没有反代的部署本来就该这样）：`https.redirect_same_port`
+  （默认开）让 **TLS 端口同时接明文**，一律 308 跳到同主机同端口的 HTTPS。浏览器在地址栏里只看到
+  `192.168.1.6` 时会按 http 发请求，过去直接撞上 TLS 监听、只报 `ERR_INVALID_HTTP_RESPONSE`
+  ——既没页面也没线索；现在自动跳过去，而且内容绝不走明文（非 TLS 请求只得到这个 308，会话 Cookie
+  是 `Secure`，明文请求里也不会被带上）。自签证书的 SAN 同时补上**本机所有网卡地址与主机名**，
+  `https://192.168.1.6:3080` 从此只是"自签不受信任"这一条告警，不再是"证书主机名不匹配"。
+  想要纯 TLS 端口就设 `redirect_same_port: false`（那条老报错的行为有测试钉着）。
 - **删死代码**：`BrandsSection.tsx`（页签行 + 移动端手风琴 `BrandSummaryBar` + `EXPANDED_KEY`
   + 深链白名单）整块删除；`mobile.css` 里随之失效的 `.brand-summary*` 规则一并清掉。
 

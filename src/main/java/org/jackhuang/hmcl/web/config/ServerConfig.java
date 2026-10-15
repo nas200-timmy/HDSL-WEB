@@ -118,6 +118,22 @@ public final class ServerConfig {
         /// when HTTPS is enabled.
         public boolean redirectHttp = false;
 
+        /// Whether the **main** connector itself also answers plain-HTTP
+        /// requests with the same 308.
+        ///
+        /// On by default, because the alternative is what a bare `http://<ip>`
+        /// entry runs into: the browser speaks cleartext to the TLS port and gets
+        /// `ERR_INVALID_HTTP_RESPONSE` — no page, no hint. That is the common case
+        /// for a LAN deployment with no domain and no reverse proxy, where the
+        /// address people type is the IP and the browser assumes `http://`.
+        /// (A port mapping that sends the host's port 80 to the TLS port hits the
+        /// same wall, and a second connector cannot help there.)
+        ///
+        /// Panel content still never travels in cleartext: any request that did
+        /// not arrive over TLS is answered with the redirect and nothing else —
+        /// which is also why session cookies stay usable, being `Secure`.
+        public boolean redirectSamePort = true;
+
         /// The port of that redirect connector (default 80).
         public int redirectPort = 80;
 

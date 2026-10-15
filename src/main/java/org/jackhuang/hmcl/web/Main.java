@@ -112,6 +112,10 @@ public final class Main {
         if (config.https.enabled && config.https.redirectHttp) {
             System.out.println("  redirect : http://" + config.bindHost + ":" + config.https.redirectPort + " -> https (308)");
         }
+        if (config.https.enabled && config.https.redirectSamePort) {
+            System.out.println("  redirect : http://<any address>:" + server.getPort()
+                    + " -> https (308)  (cleartext on the TLS port)");
+        }
         System.out.println("  data dir : " + config.dataDir);
         System.out.println("             (server.yaml / accounts / instances / pnpm store / certificates -");
         System.out.println("              back up or migrate by copying this folder; keep it off the public net)");

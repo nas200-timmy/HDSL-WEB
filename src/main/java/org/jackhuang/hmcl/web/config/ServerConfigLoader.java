@@ -168,6 +168,9 @@ public final class ServerConfigLoader {
         if (https.containsKey("redirect_http")) {
             target.redirectHttp = booleanField(https, "redirect_http");
         }
+        if (https.containsKey("redirect_same_port")) {
+            target.redirectSamePort = booleanField(https, "redirect_same_port");
+        }
         if (https.containsKey("redirect_port")) {
             target.redirectPort = intField(https, "redirect_port");
         }

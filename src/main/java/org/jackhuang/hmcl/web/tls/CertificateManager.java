@@ -52,6 +52,8 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.math.BigInteger;
 import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.SocketException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
@@ -66,9 +68,11 @@ import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.Enumeration;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -329,18 +333,60 @@ public final class CertificateManager {
         return new JcaX509CertificateConverter().getCertificate(builder.build(signer));
     }
 
-    /// SAN = localhost + 127.0.0.1 + the host of `public_base_url` (if any),
-    /// so the browser's hostname check can pass for every realistic local or
-    /// proxied URL this instance is reached under.
+    /// SAN = `localhost` + `127.0.0.1` + **every address this machine answers on**
+    /// (plus its host name) + the host of `public_base_url` (if any), so the
+    /// browser's hostname check can pass for every realistic local or proxied URL
+    /// this instance is reached under.
+    ///
+    /// The machine's own addresses are the point of the exercise for a deployment
+    /// without a domain: the address people type there **is** the IP, and a
+    /// self-signed certificate without it turns "HTTPS is on" into a hostname
+    /// mismatch instead of a page.
     private GeneralNames buildSubjectAlternativeNames() {
         List<GeneralName> names = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
         names.add(new GeneralName(GeneralName.dNSName, "localhost"));
+        seen.add("dns:localhost");
         names.add(new GeneralName(GeneralName.iPAddress, new DEROctetString(new byte[]{127, 0, 0, 1})));
+        seen.add("ip:127.0.0.1");
+        addLocalNames(names, seen);
         String publicHost = publicBaseHost();
         if (publicHost != null) {
             names.add(hostGeneralName(publicHost));
         }
         return new GeneralNames(names.toArray(new GeneralName[0]));
+    }
+
+    /// Adds the machine's own addresses and host name to the SAN list, skipping
+    /// anything already there. Interfaces come and go (a VPN dials in, a phone
+    /// hotspot drops), so this is read at generation time and re-read whenever a
+    /// certificate is regenerated — a stale list is the one thing a self-signed
+    /// pair cannot fix on its own.
+    private void addLocalNames(List<GeneralName> names, Set<String> seen) {
+        try {
+            for (NetworkInterface nic : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                for (InetAddress address : Collections.list(nic.getInetAddresses())) {
+                    byte[] octets = address.getAddress();
+                    if (octets == null) {
+                        continue;
+                    }
+                    String key = "ip:" + address.getHostAddress();
+                    if (seen.add(key)) {
+                        names.add(new GeneralName(GeneralName.iPAddress, new DEROctetString(octets)));
+                    }
+                }
+            }
+        } catch (SocketException e) {
+            logger.warning("Cannot enumerate this machine's addresses; the certificate keeps the loopback names only");
+        }
+        try {
+            String hostName = InetAddress.getLocalHost().getHostName();
+            if (hostName != null && !hostName.isBlank() && !hostName.contains(":") && seen.add("dns:" + hostName)) {
+                names.add(new GeneralName(GeneralName.dNSName, hostName));
+            }
+        } catch (Exception ignored) {
+            // Host-name lookup is best-effort; the addresses above already cover the IP case.
+        }
     }
 
     private @Nullable String publicBaseHost() {

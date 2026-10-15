@@ -27,11 +27,13 @@ import org.eclipse.jetty.http.HttpURI;
 import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.HttpConfiguration;
 import org.eclipse.jetty.server.HttpConnectionFactory;
+import org.eclipse.jetty.server.OptionalSslConnectionFactory;
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.server.Response;
 import org.eclipse.jetty.server.SecureRequestCustomizer;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
+import org.eclipse.jetty.server.SslConnectionFactory;
 import org.eclipse.jetty.util.Callback;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.eclipse.jetty.websocket.client.WebSocketClient;
@@ -80,7 +82,10 @@ import java.util.concurrent.atomic.AtomicLong;
 /// The Jetty assembly behind the Phase 1 server:
 ///
 /// - the main connector on `bind_host:port`, speaking TLS when
-///   `https.enabled` (identity from [CertificateManager]);
+///   `https.enabled` (identity from [CertificateManager]); with
+///   `https.redirect_same_port` (on by default) that same port also answers
+///   cleartext requests with a 308 to HTTPS, so a bare `http://<ip>` entry
+///   reaches the panel instead of `ERR_INVALID_HTTP_RESPONSE`;
 /// - when `https.redirect_http` is on, a second plain-HTTP connector that
 ///   answers every request with 308 to the same host/path over HTTPS;
 /// - one servlet context holding the session gate ([AuthFilter] on `/api/*`,
@@ -160,7 +165,18 @@ public final class HdslServer {
             httpsConfig.setSecureScheme("https");
             httpsConfig.setSecurePort(config.port);
             httpsConfig.addCustomizer(secureRequestCustomizer());
-            mainConnector = new ServerConnector(server, ssl, new HttpConnectionFactory(httpsConfig));
+            if (config.https.redirectSamePort) {
+                // Sniff the first bytes: TLS stays TLS, and cleartext on this same
+                // port is answered by the redirect handler — never by panel
+                // content. Without this, a bare `http://<ip>` entry (or a host
+                // port 80 mapped onto this port) is `ERR_INVALID_HTTP_RESPONSE`.
+                SslConnectionFactory sslFactory = new SslConnectionFactory(ssl, "http/1.1");
+                mainConnector = new ServerConnector(server,
+                        new OptionalSslConnectionFactory(sslFactory, "http/1.1"), sslFactory,
+                        new HttpConnectionFactory(httpsConfig));
+            } else {
+                mainConnector = new ServerConnector(server, ssl, new HttpConnectionFactory(httpsConfig));
+            }
         } else {
             mainConnector = new ServerConnector(server, new HttpConnectionFactory(httpConfig));
         }
@@ -285,9 +301,12 @@ public final class HdslServer {
         WsUpgradeAuthGate wsAuthGate = new WsUpgradeAuthGate(authService, config.auth.disabled);
 
         Handler handler = new Handler.Sequence(instanceUpgrades, wsAuthGate, context);
-        if (redirectConnector != null) {
+        if (config.https.enabled) {
+            // Installed whenever TLS is on: any request that did not arrive over
+            // TLS — on the main connector's cleartext path or on the plain-HTTP
+            // redirect connector — is answered with the 308 to HTTPS.
             handler = new Handler.Sequence(
-                    new HttpsRedirectHandler(redirectConnector, mainConnector),
+                    new HttpsRedirectHandler(mainConnector),
                     instanceUpgrades,
                     wsAuthGate,
                     context);
@@ -616,21 +635,23 @@ public final class HdslServer {
         server.join();
     }
 
-    /// Answers every request arriving on the redirect connector with
-    /// `308 Location: https://<host>:<mainPort><path>`; requests on any other
-    /// connector pass through untouched.
+    /// Answers **every request that did not arrive over TLS** with
+    /// `308 Location: https://<host>:<mainPort><path>` — both the cleartext path
+    /// of the main connector (`https.redirect_same_port`, so a bare `http://<ip>`
+    /// entry lands on the panel instead of `ERR_INVALID_HTTP_RESPONSE`) and the
+    /// plain-HTTP connector (`https.redirect_http`). Installed only when TLS is
+    /// on; a request that *did* arrive over TLS passes through untouched, so
+    /// panel content never travels in cleartext.
     private static final class HttpsRedirectHandler extends Handler.Abstract {
-        private final ServerConnector redirectConnector;
         private final ServerConnector mainConnector;
 
-        private HttpsRedirectHandler(ServerConnector redirectConnector, ServerConnector mainConnector) {
-            this.redirectConnector = redirectConnector;
+        private HttpsRedirectHandler(ServerConnector mainConnector) {
             this.mainConnector = mainConnector;
         }
 
         @Override
         public boolean handle(Request request, Response response, Callback callback) {
-            if (request.getConnectionMetaData().getConnector() != redirectConnector) {
+            if (request.isSecure()) {
                 return false;
             }
             String host = request.getHeaders().get(HttpHeader.HOST);

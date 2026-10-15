@@ -32,6 +32,8 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -97,6 +99,58 @@ class SelfSignedTlsTest {
                     HttpResponse.BodyHandlers.ofString());
             assertEquals(200, after.statusCode(), "TLS must keep working after reload: " + after.body());
         }
+    }
+
+    /// The generated pair must carry this machine's own addresses: a deployment
+    /// without a domain reaches the panel at the plain IP, and "HTTPS is on"
+    /// must not turn that address into a hostname mismatch instead of a page.
+    @Test
+    void selfSignedCertificateCoversTheMachinesOwnAddresses() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+                config -> {
+                    config.bindHost = "127.0.0.1";
+                    config.https.enabled = true;
+                })) {
+            assertEquals(CertificateManager.Source.SELF_SIGNED, running.certificates().getSource(),
+                    "the certificate is generated on first use");
+            Path certFile = dataDir.resolve("certs").resolve(CertificateManager.SELF_SIGNED_CERT_FILE);
+            var certificate = (java.security.cert.X509Certificate) java.security.cert.CertificateFactory
+                    .getInstance("X.509")
+                    .generateCertificate(Files.newInputStream(certFile));
+
+            List<String> dns = new ArrayList<>();
+            List<String> addresses = new ArrayList<>();
+            for (var entry : certificate.getSubjectAlternativeNames()) {
+                int type = (Integer) entry.get(0);
+                String value = String.valueOf(entry.get(1));
+                if (type == 2) {
+                    dns.add(value);
+                } else if (type == 7) {
+                    addresses.add(value);
+                }
+            }
+            assertTrue(dns.contains("localhost"), dns.toString());
+            assertTrue(addresses.contains("127.0.0.1"), addresses.toString());
+            String lan = firstLanAddress();
+            if (lan != null) {
+                assertTrue(addresses.contains(lan),
+                        "the SAN list must carry this machine's own address " + lan + ": " + addresses);
+            }
+        }
+    }
+
+    /// The machine's first non-loopback IPv4 address, or `null` when it has none.
+    private static String firstLanAddress() throws java.net.SocketException {
+        for (java.net.NetworkInterface nic : java.util.Collections.list(
+                java.net.NetworkInterface.getNetworkInterfaces())) {
+            for (java.net.InetAddress address : java.util.Collections.list(nic.getInetAddresses())) {
+                String literal = address.getHostAddress();
+                if (!address.isLoopbackAddress() && literal != null && !literal.contains(":")) {
+                    return literal;
+                }
+            }
+        }
+        return null;
     }
 
     @Test
