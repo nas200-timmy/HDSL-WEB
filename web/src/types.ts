@@ -362,6 +362,8 @@ export interface ExternalInstance {
   name: string;
   state: string;
   url?: string;
+  /** 最近一次启动播报的端口；0/缺省 = 未知（运行中浮层展示用） */
+  port?: number;
   /** kimi/opencode 实例的版本号（zcode 无版本概念） */
   version?: string;
   /** 运行出错时的错误信息（state = error） */

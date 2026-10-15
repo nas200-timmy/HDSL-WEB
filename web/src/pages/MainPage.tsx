@@ -96,6 +96,67 @@ function RunningPane({ inst }: { inst: Instance }) {
   );
 }
 
+/** 品牌/zcode 实例的启动中·运行中浮层：与 dsh 的 RunningPane 同款信息——
+ *  品牌 Tag + 名称 + 状态、id · 端口 · 打开地址，外加 [打开] 与复制地址。
+ *  品牌实例没有 token 概念，地址就是 /i/<id>/（面板会话门就是门）。 */
+function RunningPaneBrand({ entry }: { entry: LaunchEntry }) {
+  const ext = entry.external;
+  const running = entry.state === "RUNNING";
+  const port = ext?.port;
+  // ext.url 已由后端带挂载点前缀（REST 边界统一加 base），兜底路径才 withBase
+  const openUrl = ext?.url ?? withBase(`/i/${entry.id}/`);
+
+  const doOpen = () => {
+    if (entry.kind === "zcode") {
+      void api.zcodeOpen(entry.id).then((r) => window.open(r.url, "_blank", "noopener"));  // r.url 已带挂载点前缀
+      return;
+    }
+    window.open(openUrl, "_blank", "noopener");
+  };
+  const copyUrl = () => {
+    void navigator.clipboard.writeText(openUrl).then(
+      () => toast("success", "已复制"),
+      () => toast("error", "复制失败"),
+    );
+  };
+
+  return (
+    <div className="launch-progress">
+      <div className="card">
+        <div className="progress-title">
+          <span className="tag plain" style={{ marginRight: 6 }}>{BRAND_LABEL[entry.kind]}</span>
+          {entry.name}
+          <span className={`tag ${running ? "running" : "plain"}`} style={{ marginLeft: 8 }}>
+            {running ? I18N["dsh.instance.running"] : I18N["dsh.launch.launching"]}
+          </span>
+        </div>
+        {running && (
+          <div className="progress-msg">
+            {entry.id}
+            {port ? ` · ${I18N["dsh.instance.port"]} ${port}` : ""}
+            {` · ${openUrl}`}
+          </div>
+        )}
+        <div className="progress-actions">
+          {running && (
+            <button
+              className="icon-btn on-variant ripple-host"
+              style={{ width: 26, height: 26, marginRight: 4 }}
+              title="复制地址"
+              onClick={copyUrl}
+            >
+              <ContentCopyIcon size={14} />
+            </button>
+          )}
+          <button className="btn btn-text ripple-host" disabled={!running} onClick={doOpen}>
+            {I18N["dsh.launch.running"]}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** 主页面：200px 侧边栏 + 壁纸内容区 + 右下启动面板（MainPage.java 结构）。
  *
  *  移动版式（≤760px 宽或 ≤520px 高，见 styles/mobile.css）下侧栏收成抽屉，
@@ -128,13 +189,25 @@ export function MainPage() {
     return () => clearInterval(timer);
   }, []);
 
-  // dsh 目标的进度/运行浮层（品牌目标的启动走自己的弹窗流程，不需要浮层）；
-  // 无选中目标时退回旧行为：第一个运行中的 dsh，否则第一个 dsh
+  // dsh 目标的进度/运行浮层；无选中目标时退回旧行为：第一个运行中的 dsh，否则第一个 dsh
   const overlayInst = useMemo(() => {
     if (entry) return entry.kind === "dsh" ? entry.dsh : null;
     const running = s.instances.find((i) => normState(i.state) === "RUNNING");
     return running ?? s.instances[0] ?? null;
   }, [entry, s.instances]);
+
+  // 品牌/zcode 目标的浮层：启动中与运行中都显示（运行中带端口与打开地址）；
+  // 无选中目标且没有 dsh 实例时，退回第一个运行中的品牌实例
+  const brandOverlay = useMemo<LaunchEntry | null>(() => {
+    if (entry) {
+      if (entry.kind === "dsh") return null;
+      return entry.state === "RUNNING" || entry.state === "STARTING" ? entry : null;
+    }
+    if (overlayInst) return null;
+    const ext = s.external.find((e) => normState(e.state) === "RUNNING");
+    if (!ext) return null;
+    return { id: ext.id, name: ext.name, state: normState(ext.state), kind: ext.brand, dsh: null, external: ext };
+  }, [entry, overlayInst, s.external]);
 
   // 手机主卡片：目标 = 品牌实例 → 品牌卡；目标 = dsh → 现有卡；无目标 → 空态
   const card = entry ? (
@@ -161,6 +234,7 @@ export function MainPage() {
       <LaunchPane />
       {showProgress && overlayInst && <LaunchProgress inst={overlayInst} />}
       {showRunning && overlayInst && <RunningPane inst={overlayInst} />}
+      {brandOverlay && <RunningPaneBrand entry={brandOverlay} />}
     </div>
   );
 }

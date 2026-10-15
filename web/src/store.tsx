@@ -239,17 +239,17 @@ export async function refreshExternal(): Promise<void> {
   ]);
   const external: ExternalInstance[] = [];
   for (const i of kimi ?? []) {
-    external.push({ brand: "kimi", id: i.id, name: i.name, state: i.state, url: i.url, version: i.version, error: i.error });
+    external.push({ brand: "kimi", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error });
   }
   for (const i of opencode ?? []) {
-    external.push({ brand: "opencode", id: i.id, name: i.name, state: i.state, url: i.url, version: i.version, error: i.error });
+    external.push({ brand: "opencode", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error });
   }
   for (const i of claudeWeb ?? []) {
-    external.push({ brand: "claude-web", id: i.id, name: i.name, state: i.state, url: i.url, version: i.version, error: i.error });
+    external.push({ brand: "claude-web", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error });
   }
   for (const i of zcode ?? []) {
     external.push({
-      brand: "zcode", id: i.id, name: i.name, state: i.state,
+      brand: "zcode", id: i.id, name: i.name, state: i.state, port: i.lastPort,
       error: i.error ?? undefined, hasApiKey: i.hasApiKey, baseUrl: i.baseUrl ?? undefined,
     });
   }
