@@ -168,6 +168,29 @@ class ZcodeApiTest {
         }
     }
 
+    // ---------------------------------------------------------------- plugins --
+
+    /// The plugin channel is a reserved slot with the brand categories' shape.
+    @Test
+    void pluginChannelIsReservedButEmpty() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(), this::loopbackAuthOff)) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            HttpResponse<String> created = post(client, base + "/api/zcode/instances", "{\"name\":\"plugins\"}");
+            assertEquals(201, created.statusCode(), created.body());
+            String id = json(created).getAsJsonObject("instance").get("id").getAsString();
+
+            HttpResponse<String> response = get(client, base + "/api/zcode/instances/" + id + "/plugins");
+            assertEquals(200, response.statusCode(), response.body());
+            JsonObject body = json(response);
+            assertFalse(body.get("supported").getAsBoolean());
+            assertTrue(body.getAsJsonArray("plugins").isEmpty());
+
+            assertEquals(404, get(client, base + "/api/zcode/instances/nope/plugins").statusCode());
+        }
+    }
+
     /// Asserts the injected `provider_config.json` field by field, against the
     /// shape verified in the ZCode v3.14.3 sources.
     private void assertProviderConfig(String id) throws Exception {

@@ -34,6 +34,7 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// The REST surface of the brand categories over a real (loopback, auth-off)
@@ -50,6 +51,34 @@ class BrandApiTest {
         try (TestSupport.RunningServer running = start()) {
             HttpResponse<String> response = get(running, "/api/brands/nope/versions");
             assertEquals(404, response.statusCode(), response.body());
+        }
+    }
+
+    /// The plugin channel is a reserved slot: it answers the frozen shape with
+    /// `supported: false` and no plugins, and still 404s for an instance that
+    /// does not exist.
+    @Test
+    void pluginChannelIsReservedButEmpty() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            // A release counts as installed once its marker file exists — the
+            // panel never inspects the tool itself.
+            Path release = dataDir.resolve("brands/kimi/releases/2.1.1");
+            Files.createDirectories(release.resolve("node_modules/.bin"));
+            Files.writeString(release.resolve("node_modules/.bin/kimi"), "#!/bin/sh\n");
+
+            HttpResponse<String> created = post(TestSupport.client(), running,
+                    "/api/brands/kimi/instances", "{\"name\":\"Kimi Code\",\"version\":\"2.1.1\"}");
+            assertEquals(201, created.statusCode(), created.body());
+            String id = JsonParser.parseString(created.body()).getAsJsonObject()
+                    .getAsJsonObject("instance").get("id").getAsString();
+
+            HttpResponse<String> response = get(running, "/api/brands/kimi/instances/" + id + "/plugins");
+            assertEquals(200, response.statusCode(), response.body());
+            JsonObject body = JsonParser.parseString(response.body()).getAsJsonObject();
+            assertFalse(body.get("supported").getAsBoolean());
+            assertTrue(body.getAsJsonArray("plugins").isEmpty());
+
+            assertEquals(404, get(running, "/api/brands/kimi/instances/nope/plugins").statusCode());
         }
     }
 

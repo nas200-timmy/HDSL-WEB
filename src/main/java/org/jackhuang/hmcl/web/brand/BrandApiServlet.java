@@ -57,6 +57,8 @@ import java.util.Map;
 /// - `GET  /api/brands/<brand>/instances/{id}/open` — `{url}` of the running
 ///   instance: `/i/<id>/`, same mount, certificate and session gate as dsh
 /// - `GET  /api/brands/<brand>/instances/{id}/logs?tail=N` — the process log
+/// - `GET  /api/brands/<brand>/instances/{id}/plugins` — the plugin channel:
+///   `{supported: false, plugins: []}` until a brand grows plugins
 ///
 /// These tools are third-party: the panel installs them from their npm
 /// packages, launches their own web modes and reverse-proxies them. Their
@@ -165,6 +167,10 @@ public final class BrandApiServlet extends HttpServlet {
             }
             if (segments.length == 3 && "logs".equals(segments[2]) && "GET".equals(request.getMethod())) {
                 logs(ref, request, response, id);
+                return;
+            }
+            if (segments.length == 3 && "plugins".equals(segments[2]) && "GET".equals(request.getMethod())) {
+                plugins(brand, ref, response, id);
                 return;
             }
         }
@@ -455,6 +461,27 @@ public final class BrandApiServlet extends HttpServlet {
         ref.manager().tailLog(instance, boundedTail(request, DEFAULT_LOG_TAIL, MAX_LOG_TAIL)).forEach(array::add);
         JsonObject body = new JsonObject();
         body.add("lines", array);
+        Json.write(response, body);
+    }
+
+    // ----------------------------------------------------------------- plugins --
+
+    /// The per-instance plugin channel: `{supported, plugins[]}`.
+    ///
+    /// Nothing to install, list or toggle today — no brand the panel drives has
+    /// a plugin story — so this answers `supported: false` plus an empty list.
+    /// The endpoint exists anyway: the panel's plugin dialog reads this shape,
+    /// so the day [Brand#supportsPlugins()] flips and real plugins appear here,
+    /// the UI lists them without a change.
+    private void plugins(Brand brand, PathRef ref, HttpServletResponse response, String id)
+            throws IOException {
+        if (ref.manager().find(id) == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
+            return;
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty("supported", brand.supportsPlugins());
+        body.add("plugins", new JsonArray());
         Json.write(response, body);
     }
 

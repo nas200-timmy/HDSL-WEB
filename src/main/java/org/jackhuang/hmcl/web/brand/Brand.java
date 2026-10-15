@@ -177,6 +177,20 @@ public enum Brand {
         return needsRouterShim;
     }
 
+    /// Whether instances of this brand can carry **plugins** that the panel
+    /// installs, enables and lists per instance — the capability behind
+    /// `GET /api/brands/<brand>/instances/<id>/plugins`.
+    ///
+    /// No brand has a plugin story today, so every brand answers `false` and
+    /// the panel's plugin dialog shows the reserved-slot note instead of a
+    /// list. The endpoint and the dialog are data-driven on purpose: the day a
+    /// brand grows plugins, this method (and whatever installs them) is the
+    /// only thing that changes — the UI already renders what the endpoint
+    /// returns.
+    public boolean supportsPlugins() {
+        return false;
+    }
+
     /// Resolves a category id back to its brand.
     ///
     /// @param id the id from a URL path or manifest

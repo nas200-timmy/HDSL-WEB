@@ -71,6 +71,8 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 ///   same certificate and the same session gate as dsh
 /// - `GET    /api/zcode/instances/{id}/logs?tail=N`— the trailing lines of the
 ///   process log
+/// - `GET    /api/zcode/instances/{id}/plugins`    — the plugin channel, same
+///   shape as the brand categories': `{supported: false, plugins: []}`
 ///
 /// The category is an implementation-level experiment around ZCode
 /// (zai-org/ZCode, Apache-2.0): nothing here is covered by the dsh category's
@@ -160,6 +162,10 @@ public final class ZcodeApiServlet extends HttpServlet {
                 }
                 if (segments.length == 3 && "logs".equals(segments[2]) && "GET".equals(request.getMethod())) {
                     logs(request, response, id);
+                    return;
+                }
+                if (segments.length == 3 && "plugins".equals(segments[2]) && "GET".equals(request.getMethod())) {
+                    plugins(response, id);
                     return;
                 }
             }
@@ -391,6 +397,26 @@ public final class ZcodeApiServlet extends HttpServlet {
         lines.forEach(array::add);
         JsonObject body = new JsonObject();
         body.add("lines", array);
+        Json.write(response, body);
+    }
+
+    // --------------------------------------------------------------- plugins --
+
+    /// The per-instance plugin channel, the same shape the brand categories
+    /// answer: `{supported, plugins[]}`.
+    ///
+    /// ZCode has no plugin concept, so `supported` is `false` and the list is
+    /// empty. The route exists so the panel's plugin dialog is data-driven from
+    /// day one: this is the only place that decides, and the UI already renders
+    /// whatever it returns.
+    private void plugins(HttpServletResponse response, String id) throws IOException {
+        if (manager.find(id) == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such ZCode instance");
+            return;
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty("supported", false);
+        body.add("plugins", new JsonArray());
         Json.write(response, body);
     }
 
