@@ -25,6 +25,10 @@
 - 启动器行为：**创建即安装**（`POST /api/instances` 默认 `autoInstall:true`），**未安装的实例点「启动」会先装再启**；
   进度与失败原因都显示在面板上，失败还会写进容器日志。细节见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md)。
 - 品牌区：除 dsh 外还能装第三方网页工作台——Kimi Code、OpenCode，以及 **Claude Web**（[ypyik0669/claude-web](https://github.com/ypyik0669/claude-web)，社区开源的 Claude Code 可视化工作台，实验性接入、不保证可用性）。
+  入口在**实例列表页左侧子侧栏「第三方品牌 → 品牌实例」**，独立成页 `/brands/<品牌>`：**实例是主对象**
+  （一个品牌可开多个实例、行内切版本、按需安装未装版本、重命名/信息/日志/删除），**版本是品牌级共享构建**
+  （装一次，同品牌实例都能切过去）；每实例的**插件通道已在界面与后端预留**（现在各家一律答「暂不支持」）。
+  该品牌第一个实例的名称框预填品牌名，点一下「创建」就行。
   Claude Web 是首个 **git 源品牌**：不发 npm 包，由面板从 GitHub 发行 tag 下载**源码 zip**（本网络下 git 传输成功率仅约三成，故不走 git）
   → `npm ci`（含根项目，装齐 ccb 引擎）→ 构建 → 拉起，自带网页端经 `/i/<id>/` 反代在同域名同端口下使用。
   面板还替它兜了三个容器环境的坑：相对路径页面的 WS shim 注入（否则界面报 "connection closed"）、无桌面时改用

@@ -3,17 +3,22 @@
 > 与 ZCode 实验品类并列的另外三类「自带网页端的第三方工具」：面板负责**安装指定版本、
 > 启动、停止、日志、以及把它们自己的网页端经 `/i/<id>/` 反代出来**（同端口、同证书、同登录门）。
 > 安装来源有两种：npm registry（Kimi Code / OpenCode）与 git 仓库 tag（Claude Web，首个 git 源品牌）。
-> 面板不提供插件管理（这些工具没有可用的插件生态），也不注入任何凭据——登录、模型供应商、
+> 界面在 **`/brands/<品牌>`** 独立成页（实例列表页左侧子侧栏「第三方品牌 → 品牌实例」进入）：
+> 实例是主对象，版本是品牌级共享构建。面板不提供插件管理（这些工具没有可用的插件生态），
+> 但**每实例的插件通道已在界面与后端预留**（见「实例模型」）；也不注入任何凭据——登录、模型供应商、
 > 计费都由工具自己的网页界面完成。
 
 ## 面板到底做了什么 / 没做什么
 
 **做了**：安装指定版本进品牌目录（`<数据目录>/brands/<品牌>/releases/<版本>/`）。npm 品牌从
-registry 拉包（pnpm store 跨实例去重）；git 品牌 `git clone --depth 1 --branch <tag>` 后只装
-server/web 两个 workspace（`npm ci -w server -w web`——desktop 的 Electron 二进制不下载）再
-`npm run build -w web`。从回环端口拉起各自的网页端（`kimi web` / `opencode web` / claude-web 的
-Node 服务）；把网页端改写后挂在 `/i/<id>/`（根绝对资源加挂载点前缀 + 注入运行期 shim，与 dsh 同一套
-三层改写；按路径路由的客户端再补一层路由修正，见下）；启动/停止/日志/删除。
+registry 拉包（pnpm store 跨实例去重）；git 源品牌（Claude Web）从 **GitHub 发行 tag 下载源码 zip**
+（本网络下 `github.com:443` 的 git 传输会被拦腰切断，源码 zip 1.5 秒下完 11 MB——详见 v0.3.8 的
+变更记录）后只装 server/web 两个 workspace **加根项目**（`npm ci -w server -w web
+--include-workspace-root`——漏掉根项目就少了网页端运行内核 ccb，所有 OpenAI 类型供应商都会静默
+回退到官方 Claude Code）再 `npm run build -w web`。从回环端口拉起各自的网页端（`kimi web` /
+`opencode web` / claude-web 的 Node 服务）；把网页端改写后挂在 `/i/<id>/`（根绝对资源加挂载点前缀
++ 注入运行期 shim，与 dsh 同一套三层改写；按路径路由的客户端再补一层路由修正，见下）；
+启动/停止/日志/删除。
 
 **没做（刻意）**：
 - **插件管理**：各家都没有可用生态，不做。
@@ -108,6 +113,26 @@ write 也停在 `/`），应用照常可用，代价是地址栏回到 `/`、刷
 
 Kimi Code 的客户端认子路径，不需要这段脚本（实验证明：注入反而会与它自己的路由打架，故按品牌开关）。
 
+## 实例模型：页面、版本与插件通道
+
+`/brands/<品牌>` 一页管完一个品牌的全部实例（左侧子侧栏切品牌，移动端自动变成顶部 chip 条）：
+
+- **实例是主对象**：实例卡吃掉剩余高度，行内有 radio（= 启动面板的「当前实例」，与 dsh 实例列表
+  同一套选择）、状态徽标、`id · 版本 · 端口/打开地址`，以及启动/停止、打开、版本、信息、重命名、
+  插件、日志、删除。该品牌还没有实例时，新建行的名称框**预填品牌名**（Kimi Code / OpenCode /
+  Claude Web / ZCode）——多数人一个品牌就一个实例，点一下「创建」即可。
+- **版本是品牌级共享构建**：`brands/<品牌>/releases/<版本>/` 装一次，同品牌所有实例都能切过去；
+  实例清单里只记它 pin 的版本号。面板不假装每个实例各装一份。
+- **切换版本按需安装**：行内版本下拉列的是**全量版本目录**（已装标「已装」、未装标「未装」）。
+  选已装版本 → 直接 `PATCH`；实例在跑 → 先确认「停止并切换」；选未装版本 → 确认后走品牌级安装
+  （`POST /api/brands/<brand>/install`，行内显示进度与失败原因），装完再 `PATCH`。后端那条
+  「未安装的版本 → 400」的校验原样保留，是安全网；编排放在前端，少一个会腐坏的新接口。
+- **插件通道（预留）**：`GET /api/brands/<brand>/instances/<id>/plugins` 与
+  `GET /api/zcode/instances/<id>/plugins` 返回同一形状 `{supported, plugins[]}`。现在没有任何品牌
+  支持插件，能力位（`Brand.supportsPlugins()`）一律 false、列表为空，界面显示「该品牌暂不支持插件」
+  并说明通道已预留。前端只按这个响应渲染：将来某个品牌有了真插件，后端把 `supported` 置真、把
+  `plugins` 填上，界面不用改一行。
+
 ## 已知限制
 
 - **Claude Web 的引擎与账号**：它内置的引擎是社区构建（claude-code-best 基底），可登官方 Claude
@@ -129,9 +154,12 @@ Kimi Code 的客户端认子路径，不需要这段脚本（实验证明：注�
 
 ## 相关代码
 
-- 后端：`src/main/java/org/jackhuang/hmcl/web/brand/`（`Brand` 描述符、`BrandCatalog` 版本目录、
-  `BrandInstaller` 安装器、`BrandInstanceManager`、`BrandRuntime` 进程运行时、`BrandApiServlet`
-  挂在 `/api/brands/*`）；反代目标解析在 `InstanceProxyTargets`（dsh → 品牌 → zcode 顺序）。
+- 后端：`src/main/java/org/jackhuang/hmcl/web/brand/`（`Brand` 描述符 + 插件能力位、`BrandCatalog`
+  版本目录、`BrandInstaller` 安装器、`BrandInstanceManager`、`BrandRuntime` 进程运行时、
+  `BrandApiServlet` 挂在 `/api/brands/*`）；反代目标解析在 `InstanceProxyTargets`（dsh → 品牌 →
+  zcode 顺序）。
 - 反代泛化：`InstanceProxyServlet` 的页面改写从「dsh 精确形状」扩展为「任意根绝对 SPA」，回归
-  夹具是 `src/test/resources/brand-pages/` 下的两个真实首页 HTML。
-- 前端：`web/src/components/BrandsSection.tsx`（品牌区）、`LaunchPane.tsx`（跨品牌实例切换器）。
+  夹具是 `src/test/resources/brand-pages/` 下的真实首页 HTML。
+- 前端：`web/src/pages/BrandsPage.tsx`（品牌实例页：品牌列表 + 实例卡 + 版本卡）、
+  `web/src/components/ZcodeSection.tsx`（zcode 分支的两卡内容）、`LaunchPane.tsx`
+  （跨品牌实例切换器）。入口在实例列表页子侧栏（`InstancesPage.tsx`）。
