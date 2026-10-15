@@ -122,6 +122,7 @@ Kimi Code 的客户端认子路径，不需要这段脚本（实验证明：注�
 
 | 品牌 | 文件 | 来源与许可 |
 | --- | --- | --- |
+| dsh | `assets/img/brand-dsh.svg` | DeepSeek 的鲸鱼标，Simple Icons 分发的 CC0 文件（标志取自 deepseek.com）。dsh 实例的默认图标从此是鲸鱼，不再是 HMCL 的草方块（单色 → CSS mask + `currentColor`，浅深主题自适应） |
 | Kimi Code | `assets/img/brand-kimi.svg` | `MoonshotAI/kimi-code` 的 `apps/vscode/resources/kimi-icon.svg`（MIT）。单色线稿，走 CSS mask + `currentColor`，浅深主题都自适应 |
 | OpenCode | `assets/img/brand-opencode.svg` | `anomalyco/opencode` 的 `packages/identity/mark.svg`（MIT，仓库原址 `sst/opencode`）。自带底色与描边，直接 `<img>` |
 | ZCode | `assets/img/brand-zcode.svg` | Simple Icons 分发的 Z.ai 标志（文件 CC0，标志本身来自 z.ai 官方 logo）。**故意不用 ZCode 仓库里那份**：它的 `NOTICE` 对"图标"有笼统保留条款，许可明确的那份优先 |

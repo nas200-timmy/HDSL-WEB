@@ -72,8 +72,15 @@ owners.  HDSL is an independent, unofficial launcher and is not affiliated
 with or endorsed by the DeepSeek Harness project.
 
 The panel's brand-instance section shows the logos of the third-party tools it
-manages.  Each mark is used unaltered, only to identify the tool being managed;
-no affiliation, sponsorship, endorsement or partnership is implied.
+manages, and its own dsh category uses the DeepSeek whale instead of the HMCL
+grass-block default.  Each mark is used unaltered, only to identify the tool
+being managed; no affiliation, sponsorship, endorsement or partnership is
+implied.
+
+  dsh — "DeepSeek", "DeepSeek Harness" and "dsh" are the property of their
+  respective owners.  assets/img/brand-dsh.svg is the DeepSeek whale mark
+  distributed by the Simple Icons project (the file is CC0 1.0; the mark itself
+  is DeepSeek's, drawn from its official logo at https://www.deepseek.com).
 
   Kimi Code — "Kimi", "Kimi Code" and "Moonshot AI" are trademarks of
   Moonshot AI.  assets/img/brand-kimi.svg is taken unmodified from the

@@ -1,19 +1,11 @@
 import type { Instance } from "../types";
 import { normState } from "../utils";
+import { BrandIcon } from "./BrandIcon";
 
-const GRADS = ["grad-a", "grad-b", "grad-c", "grad-d"];
-
-function gradFor(name: string): string {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return GRADS[h % GRADS.length];
-}
-
-function img(name: string): string {
-  return `assets-img/${name}`;
-}
-
-/** 实例图标：icon 是可访问 URL 时显示图片，否则显示 HMCL 内置草方块图标。 */
+/** 实例图标：icon 是可访问 URL 时显示图片，否则显示 dsh 的品牌标志（DeepSeek 鲸鱼）。
+ *
+ *  原先的兜底是 HMCL 的草方块 + 按名字取 `grad-a`…`grad-d` 做色相区分——那四个类在
+ *  CSS 里从来没有定义过（桌面版移植时的残留），这次换标志时一并删掉。 */
 export function InstanceIcon({ inst, size = 32 }: { inst: Instance; size?: number }) {
   const iconUrl = inst.icon;
   const showImg = !!iconUrl && /^(https?:|\/|data:)/.test(iconUrl);
@@ -23,11 +15,7 @@ export function InstanceIcon({ inst, size = 32 }: { inst: Instance; size?: numbe
       style={{ width: size, height: size, borderRadius: Math.max(2, Math.round(size * 0.12)) }}
       title={inst.name}
     >
-      {showImg ? (
-        <img src={iconUrl} alt="" />
-      ) : (
-        <img src={img("grass.png")} alt="" className={gradFor(inst.name)} />
-      )}
+      {showImg ? <img src={iconUrl} alt="" /> : <BrandIcon brand="dsh" size={size} />}
     </span>
   );
 }

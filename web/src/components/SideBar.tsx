@@ -5,6 +5,7 @@ import { I18N } from "../i18n";
 import { closeSidebar, useAppState } from "../store";
 import type { Instance } from "../types";
 import { normState } from "../utils";
+import { BrandIcon } from "./BrandIcon";
 import {
   DownloadIcon,
   FormatListBulletedIcon,
@@ -12,11 +13,7 @@ import {
   SettingsIcon,
 } from "./icons";
 
-function img(name: string): string {
-  return `assets-img/${name}`;
-}
-
-/** 实例图标：icon 字段是可访问 URL 时显示图片，否则用 HMCL 内置草方块图标。 */
+/** 实例图标：icon 字段是可访问 URL 时显示图片，否则用 dsh 的品牌标志（DeepSeek 鲸鱼）。 */
 export function InstanceGraphic({ inst, size = 32 }: { inst: Instance | null; size?: number }) {
   const iconUrl = inst?.icon;
   const showImg = !!iconUrl && /^(https?:|\/|data:)/.test(iconUrl);
@@ -29,7 +26,7 @@ export function InstanceGraphic({ inst, size = 32 }: { inst: Instance | null; si
   }
   return (
     <span className="side-graphic lg" style={{ width: size, height: size }}>
-      <img src={img("grass.png")} alt="" />
+      <BrandIcon brand="dsh" size={size} />
     </span>
   );
 }
