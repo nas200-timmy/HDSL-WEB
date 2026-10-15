@@ -46,6 +46,13 @@
   与 `GET /api/zcode/instances/{id}/plugins`，同一形状 `{supported, plugins[]}`；
   能力位来自 `Brand.supportsPlugins()`（现在一律 `false`）。前端只按这个响应渲染——
   将来某品牌有了真插件，后端置 `supported: true` 并填 `plugins` 即可，界面不用改一行。
+- **品牌图标（并按法律风险分档）**：页签行、启动面板的跨品牌切换器、主页品牌卡与运行浮层
+  都显示各家标志——但只上**许可清晰且不触商标红线**的三家：Kimi Code 与 OpenCode 取各自
+  MIT 仓库里的原文件（`brand-kimi.svg` / `brand-opencode.svg`，单色的走 CSS mask +
+  `currentColor` 跟主题明暗自适应），ZCode 取 Simple Icons 的 CC0 文件（**不用 ZCode 仓库
+  自己那份**：它的 `NOTICE` 对"图标"有笼统保留条款）。**Claude Web 刻意不上图**：社区仓库
+  的图标就是 Anthropic 的珊瑚色星芒标，而 Anthropic 商标条款写明"须事先书面许可、不得改动"。
+  来源、许可与商标归属见 [NOTICE](NOTICE) 的 TRADEMARKS 一节与 `docs/brands.md`。
 - **删死代码**：`BrandsSection.tsx`（页签行 + 移动端手风琴 `BrandSummaryBar` + `EXPANDED_KEY`
   + 深链白名单）整块删除；`mobile.css` 里随之失效的 `.brand-summary*` 规则一并清掉。
 

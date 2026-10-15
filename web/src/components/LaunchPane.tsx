@@ -6,6 +6,7 @@ import { setSelectedInstanceId, useSelectedInstanceId } from "../selection";
 import { useAppState } from "../store";
 import type { ExternalInstance, Instance } from "../types";
 import { normState } from "../utils";
+import { BrandIcon } from "./BrandIcon";
 import { ArrowDropUpIcon } from "./icons";
 import { PopupItem, PopupMenu, PopupSep } from "./PopupMenu";
 import { InstanceGraphic } from "./SideBar";
@@ -164,10 +165,10 @@ export function InstancePickerMenu({
           <PopupItem
             key={`${i.kind}:${i.id}`}
             icon={
-              i.dsh ? (
+              i.kind === "dsh" ? (
                 <InstanceGraphic inst={i.dsh} size={20} />
               ) : (
-                <InstanceGraphic inst={null} size={20} />
+                <BrandIcon brand={i.kind} size={20} />
               )
             }
             onClick={() => {

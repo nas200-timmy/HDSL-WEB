@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { launchBrandInstance, launchInstance, openDsh, stopBrandInstance, stopInstance } from "../actions";
 import { LaunchPane, BRAND_LABEL, useLaunchEntry, type LaunchEntry } from "../components/LaunchPane";
+import { BrandIcon } from "../components/BrandIcon";
 import { LogView } from "../components/LogView";
 import { MainSideBar, InstanceGraphic } from "../components/SideBar";
 import { ProgressBar } from "../components/ProgressBar";
@@ -124,7 +125,10 @@ function RunningPaneBrand({ entry }: { entry: LaunchEntry }) {
     <div className="launch-progress">
       <div className="card">
         <div className="progress-title">
-          <span className="tag plain" style={{ marginRight: 6 }}>{BRAND_LABEL[entry.kind]}</span>
+          <span className="tag plain" style={{ marginRight: 6 }}>
+            {entry.kind === "dsh" ? null : <BrandIcon brand={entry.kind} size={14} />}
+            {BRAND_LABEL[entry.kind]}
+          </span>
           {entry.name}
           <span className={`tag ${running ? "running" : "plain"}`} style={{ marginLeft: 8 }}>
             {running ? I18N["dsh.instance.running"] : I18N["dsh.launch.launching"]}
@@ -275,7 +279,10 @@ function MobileHomeBrand({ entry }: { entry: LaunchEntry }) {
         <div className="comp-row">
           <span className="comp-label">{I18N["instance"]}</span>
           <span className="comp-value">
-            <span className="tag plain" style={{ marginRight: 2 }}>{BRAND_LABEL[entry.kind]}</span>
+            <span className="tag plain" style={{ marginRight: 2 }}>
+              {entry.kind === "dsh" ? null : <BrandIcon brand={entry.kind} size={14} />}
+              {BRAND_LABEL[entry.kind]}
+            </span>
             {entry.name}
             <span className={`tag ${running ? "running" : "plain"}`}>
               {EXT_STATE_TEXT[state.toLowerCase()] ?? state}

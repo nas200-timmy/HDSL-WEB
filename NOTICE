@@ -71,6 +71,38 @@ use does not imply any endorsement of HDSL by the HMCL project.
 owners.  HDSL is an independent, unofficial launcher and is not affiliated
 with or endorsed by the DeepSeek Harness project.
 
+The panel's brand-instance section shows the logos of the third-party tools it
+manages.  Each mark is used unaltered, only to identify the tool being managed;
+no affiliation, sponsorship, endorsement or partnership is implied.
+
+  Kimi Code — "Kimi", "Kimi Code" and "Moonshot AI" are trademarks of
+  Moonshot AI.  assets/img/brand-kimi.svg is taken unmodified from the
+  MoonshotAI/kimi-code repository (apps/vscode/resources/kimi-icon.svg), which
+  that project publishes under the MIT License, Copyright (c) 2026 Moonshot AI.
+
+  OpenCode — "OpenCode" is a trademark of the OpenCode project.
+  assets/img/brand-opencode.svg is taken unmodified from the
+  anomalyco/opencode repository (packages/identity/mark.svg; the repository
+  moved there from sst/opencode), published under the MIT License,
+  Copyright (c) 2025 opencode.
+
+  ZCode — "ZCode" and "Z.ai" are trademarks of Z.ai.  assets/img/brand-zcode.svg
+  is the Z.ai mark distributed by the Simple Icons project (the file is
+  CC0 1.0; the mark itself is Z.ai's, drawn from its official logo at
+  https://z-cdn.chatglm.cn/z-ai/static/logo.svg).  The copy inside the
+  zai-org/ZCode repository is deliberately not used: that repository's NOTICE
+  reserves the terms of "icons" generically, so the clearly-licensed file wins.
+
+  Claude Web — "Claude", "Claude Code" and "Anthropic" are trademarks of
+  Anthropic PBC.  The Claude Web section manages the community project
+  ypyik0669/claude-web (an unofficial workbench around the Claude Code CLI that
+  is unaffiliated with Anthropic) and therefore ships **no** Anthropic mark:
+  Anthropic's trademark guidelines require prior written permission and forbid
+  any alteration.  The section is labelled with text only.
+
+If a rights holder objects to any of these uses, please open an issue: the mark
+will be removed or replaced with a neutral icon.
+
 --------------------------------------------------------------------------------
 
 THIRD-PARTY COMPONENTS

@@ -115,6 +115,23 @@ Kimi Code 的客户端认子路径，不需要这段脚本（实验证明：注�
 
 ## 实例模型：页面、版本与插件通道
 
+### 品牌图标（来源与商标）
+
+页签行上的标志取自各家**上游仓库自己发布的文件**，原样未改，只用于标识所管理的工具；
+完整声明在仓库根 [NOTICE](../NOTICE) 的 TRADEMARKS 一节：
+
+| 品牌 | 文件 | 来源与许可 |
+| --- | --- | --- |
+| Kimi Code | `assets/img/brand-kimi.svg` | `MoonshotAI/kimi-code` 的 `apps/vscode/resources/kimi-icon.svg`（MIT）。单色线稿，走 CSS mask + `currentColor`，浅深主题都自适应 |
+| OpenCode | `assets/img/brand-opencode.svg` | `anomalyco/opencode` 的 `packages/identity/mark.svg`（MIT，仓库原址 `sst/opencode`）。自带底色与描边，直接 `<img>` |
+| ZCode | `assets/img/brand-zcode.svg` | Simple Icons 分发的 Z.ai 标志（文件 CC0，标志本身来自 z.ai 官方 logo）。**故意不用 ZCode 仓库里那份**：它的 `NOTICE` 对"图标"有笼统保留条款，许可明确的那份优先 |
+| Claude Web | **不上图** | 社区仓库的图标就是 Anthropic 的珊瑚色星芒标，而 Anthropic 商标条款写明"须事先书面许可、不得改动"。故只保留文字标签 + 中性图标 |
+
+商标与著作权是两件事：上表的文件许可（MIT / CC0）解决的是**分发**，
+标志本身仍是各权利人的**商标**——声明里写明了"不表示隶属/赞助/认可"，且未改色改形。
+
+### 实例模型
+
 `/instances?view=brands`（实例列表页内**原地切换**出来的一层：左侧选「品牌实例」，右侧内容区
 换成品牌层，URL 只换查询串、页面不跳转、不重挂载；品牌之间用内容区顶部的页签行切换）
 一页管完一个品牌的全部实例：

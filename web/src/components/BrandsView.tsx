@@ -4,6 +4,7 @@ import { api } from "../api";
 import { withBase } from "../base";
 import { CollapsibleNote } from "../components/CollapsibleNote";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
+import { BrandIcon } from "../components/BrandIcon";
 import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
 import { ProgressBar } from "../components/ProgressBar";
 import { ZcodeBuildButton } from "../components/ZcodeBuildDialog";
@@ -150,6 +151,7 @@ export function BrandsView({
               }
               onClick={() => onSelect(k)}
             >
+              <BrandIcon brand={k} size={16} />
               {BRAND_TITLE[k]}
               {count > 0 && (
                 <span className="tag plain" style={{ marginLeft: 4 }}>
