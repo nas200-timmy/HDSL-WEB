@@ -43,11 +43,15 @@
   环境变量 `NPM_CONFIG_REGISTRY` 退化成回退值。细节见 [docs/deployment.md](docs/deployment.md)。
 
 <details>
-<summary>更多截图（初始化引导 / 实例列表 / 下载 / 设置）</summary>
+<summary>更多截图（初始化引导 / 实例列表 / 品牌实例 / 下载 / 设置）</summary>
 
 | 初始化引导（首启建号） | 实例列表 |
 |---|---|
 | ![初始化](docs/screenshots/01-setup.webp) | ![实例列表](docs/screenshots/03-instances.webp) |
+
+| 品牌实例（实例列表页内原地切换：品牌页签 + 版本/实例两卡） |
+|---|
+| ![品牌实例](docs/screenshots/06-brands.webp) |
 
 | 下载（真实 npm 版本列表） | 设置 |
 |---|---|
