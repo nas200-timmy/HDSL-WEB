@@ -38,10 +38,10 @@ const STATE_TAG: Record<string, string> = {
 /// ZCode（实验性）：与 dsh 实例完全隔离的独立品牌分区。
 /// 纯实现性验证功能——不保证可用、不承诺兼容，定位与限制见 docs/zcode-experimental.md。
 ///
-/// 品牌实例页（BrandsPage）里它是 zcode 分支的「实例」卡：发行包检测/构建在页面的
+/// 品牌实例层（`BrandsView`）里它是 zcode 分支的「实例」卡：发行包检测/构建在那一层的
 /// 版本卡上（内置弹窗 ZcodeBuildButton 也在那边），这里只管实例：
 /// 创建（要填端点与密钥，所以用弹窗而不是内联的创建行）/ 编辑 / 日志 / 启停 / 删除。
-/// 导出签名保持无参：它由品牌实例页整块渲染，不需要外部传参。
+/// 导出签名保持无参：它由品牌层整块渲染，不需要外部传参。
 export function ZcodeSection() {
   const s = useAppState();
   const selectedId = useSelectedInstanceId();

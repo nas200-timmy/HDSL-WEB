@@ -1,10 +1,9 @@
 import { useEffect } from "react";
-import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { ErrorIcon } from "./components/icons";
 import { Decorator } from "./components/Decorator";
 import { SnackbarHost } from "./components/Snackbar";
 import { AccountsPage } from "./pages/AccountsPage";
-import { BrandsPage } from "./pages/BrandsPage";
 import { DownloadPage } from "./pages/DownloadPage";
 import { InstallInstanceWizard } from "./pages/InstallInstanceWizard";
 import { InstallModpackWizard } from "./pages/InstallModpackWizard";
@@ -56,6 +55,13 @@ function RequireAuth() {
     );
   }
   return <Outlet />;
+}
+
+/** `/brands/<品牌>` 旧深链：品牌区现在是实例列表页内的一个视图，这里只做重定向
+ *  （URL 换成 `/instances?view=brands&brand=…`，页面不跳第二层）。 */
+function BrandDeepLink() {
+  const { brand } = useParams();
+  return <Navigate to={`/instances?view=brands&brand=${encodeURIComponent(brand ?? "")}`} replace />;
 }
 
 /** 已登录区域：浏览器内窗口（Decorator）+ 路由动画容器。
@@ -126,8 +132,8 @@ export default function App() {
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/instances/new" element={<InstallInstanceWizard />} />
             <Route path="/instances/:id" element={<InstanceDetailPage />} />
-            <Route path="/brands" element={<BrandsPage />} />
-            <Route path="/brands/:brand" element={<BrandsPage />} />
+            <Route path="/brands" element={<Navigate to="/instances?view=brands" replace />} />
+            <Route path="/brands/:brand" element={<BrandDeepLink />} />
             <Route path="/download" element={<DownloadPage />} />
             <Route path="/install/modpack" element={<InstallModpackWizard />} />
             <Route path="/accounts" element={<AccountsPage />} />

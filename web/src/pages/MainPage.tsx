@@ -162,7 +162,7 @@ function RunningPaneBrand({ entry }: { entry: LaunchEntry }) {
  *  移动版式（≤760px 宽或 ≤520px 高，见 styles/mobile.css）下侧栏收成抽屉，
  *  壁纸上就空了 —— 所以这里补一张「当前实例」卡片，
  *  让远程启动/停止 dsh 在手机上一屏能完成（底部操作栏仍然贴底）。 */
-/** 品牌实例状态文案（小写状态 → 中文；与 BrandsPage/ZcodeSection 同款） */
+/** 品牌实例状态文案（小写状态 → 中文；与 BrandsView/ZcodeSection 同款） */
 const EXT_STATE_TEXT: Record<string, string> = {
   created: I18N["dsh.brand.state.created"],
   starting: I18N["dsh.brand.state.starting"],
@@ -249,7 +249,7 @@ function MobileHomeBrand({ entry }: { entry: LaunchEntry }) {
   const busy = state === "STARTING" || state === "STOPPING";
   // ext.url 已由后端带挂载点前缀（REST 边界统一加 base），兜底路径才 withBase
   const openUrl = ext?.url ?? withBase(`/i/${entry.id}/`);
-  const manageTarget = `/brands/${entry.kind}`;
+  const manageTarget = `/instances?view=brands&brand=${entry.kind}`;
 
   const doOpen = () => {
     if (entry.kind === "zcode") {

@@ -267,9 +267,10 @@ export const I18N = {
   "dsh.brand.delete.confirm": "确定删除「%s」？实例数据会一并删除。",
   "dsh.brand.installing.progress": "正在安装：%s",
 
-  // ---- 品牌实例页（BrandsPage）：实例是主对象，版本是共享构建 ----
+  // ---- 品牌实例层（BrandsView）：实例是主对象，版本是共享构建 ----
   "dsh.brand.page.title": "品牌实例",
   "dsh.brand.side.category": "第三方品牌",
+  "dsh.brand.side.category.dsh": "dsh 实例",
   "dsh.brand.section.instances": "实例",
   "dsh.brand.section.versions": "版本",
   "dsh.brand.installed_builds": "已安装的版本构建",

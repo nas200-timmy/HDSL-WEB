@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
 import { launchBrandInstance, stopBrandInstance } from "../actions";
 import { api } from "../api";
 import { withBase } from "../base";
@@ -7,7 +6,6 @@ import { CollapsibleNote } from "../components/CollapsibleNote";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
 import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
 import { ProgressBar } from "../components/ProgressBar";
-import { SubSideBar } from "../components/SideBar";
 import { ZcodeBuildButton } from "../components/ZcodeBuildDialog";
 import { ZcodeSection } from "../components/ZcodeSection";
 import {
@@ -70,11 +68,11 @@ function versionOption(version: string, latest: boolean, installed: boolean): st
     .join(" ");
 }
 
-/// /brands/<brand> 的四个品牌：zcode 是实验品类（自己的 REST 族），
-/// 其余三个共用 /api/brands/<brand>/*。顺序 = 侧栏顺序，也是深链缺省时的挑选顺序。
-type BrandKey = "zcode" | BrandId;
+/// 四个品牌键：zcode 是实验品类（自己的 REST 族），
+/// 其余三个共用 /api/brands/<brand>/*。顺序 = 页签顺序，也是深链缺省时的挑选顺序。
+export type BrandKey = "zcode" | BrandId;
 
-const BRAND_KEYS: BrandKey[] = ["zcode", "kimi", "opencode", "claude-web"];
+export const BRAND_KEYS: BrandKey[] = ["zcode", "kimi", "opencode", "claude-web"];
 
 const BRAND_TITLE: Record<BrandKey, string> = {
   zcode: I18N["dsh.brand.zcode"],
@@ -84,7 +82,7 @@ const BRAND_TITLE: Record<BrandKey, string> = {
 };
 
 /// 短名（不带「（实验）」后缀）：写进用户的实例名与「还没有 X 实例」这类句子里，
-/// 实验标记留在侧栏标题与警示条上说一次就够了。
+/// 实验标记留在页签标题与警示条上说一次就够了。
 const BRAND_SHORT: Record<BrandKey, string> = {
   zcode: I18N["dsh.brand.zcode.short"],
   kimi: I18N["dsh.brand.kimi"],
@@ -92,12 +90,12 @@ const BRAND_SHORT: Record<BrandKey, string> = {
   "claude-web": I18N["dsh.brand.claude-web.short"],
 };
 
-function isBrandKey(value: string | undefined): value is BrandKey {
+export function isBrandKey(value: string | null | undefined): value is BrandKey {
   return BRAND_KEYS.includes(value as BrandKey);
 }
 
-/// 缺省/非法深链的落地品牌：第一个有实例的（顺序同侧栏），都没有才是 zcode
-function fallbackBrand(external: ExternalInstance[]): BrandKey {
+/// 缺省/非法深链的落地品牌：第一个有实例的（顺序同页签），都没有才是 zcode
+export function fallbackBrand(external: ExternalInstance[]): BrandKey {
   return BRAND_KEYS.find((k) => external.some((e) => e.brand === k)) ?? "zcode";
 }
 
@@ -107,82 +105,92 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * 品牌实例页（/brands 与 /brands/<brand>）。
+ * 品牌实例视图：实例列表页内**原地切换**出来的第二层内容。
  *
- * 原先这几个品牌是实例列表页底部的一个页签区，现在独立成页：
- * 左侧子侧栏选品牌（副标题是实例数与运行态），右侧从上到下是第三方警示条、
- * 版本卡（品牌共享的构建，默认折叠成一行摘要）、实例卡（吃掉剩余高度、卡内滚动）。
+ * 这几个品牌最早是实例列表页底部挤成一堆的页签区（dsh 列表只剩 529px、品牌实例列表体
+ * 只剩 48px），中间短暂独立成 /brands 一页；现在回到实例列表页里原地换视图——
+ * URL 仍是 /instances（只换查询串），页面不跳转、不重挂载：
+ * 左侧子侧栏「品牌实例」选中，右侧内容区从 dsh 实例列表换成这里。
  *
- * 实例状态一律只读 store.external（唯一状态源），本页只负责触发 refreshExternal()。
+ * 从上到下：品牌页签行（带实例数）→ 第三方警示条 → 版本卡（品牌共享的构建，
+ * 默认折叠成一行摘要）→ 实例卡（吃掉剩余高度、卡内滚动）。
+ * 实例状态一律只读 store.external（唯一状态源），本视图只负责触发 refreshExternal()。
  */
-export function BrandsPage() {
+export function BrandsView({
+  brand,
+  onSelect,
+}: {
+  brand: BrandKey;
+  /** 换品牌：由调用方写进查询串（视图自己不碰路由） */
+  onSelect: (brand: BrandKey) => void;
+}) {
   const s = useAppState();
-  const nav = useNavigate();
-  const raw = useParams().brand;
-  // 深链缺省时得先等到第一份跨品牌实例快照：不然空列表会把 /brands 一律落到 zcode，
-  // 哪怕用户其实有 kimi 实例
-  const [externalLoaded, setExternalLoaded] = useState(false);
 
   useEffect(() => {
-    void refreshExternal().then(() => setExternalLoaded(true));
+    void refreshExternal();
   }, []);
 
-  const active: BrandKey = isBrandKey(raw) ? raw : fallbackBrand(s.external);
-
-  useEffect(() => {
-    if (isBrandKey(raw) || !externalLoaded) return;
-    // 用 getState 读最新快照，别把这个 effect 挂到每次轮询上
-    nav(`/brands/${fallbackBrand(getState().external)}`, { replace: true });
-  }, [raw, externalLoaded, nav]);
-
-  const sub = (key: BrandKey): string => {
-    const list = s.external.filter((e) => e.brand === key);
-    const running = list.some((e) => e.state === "running" || e.state === "starting");
-    return `${list.length} 实例 · ${running ? I18N["dsh.brand.state.running"] : I18N["dsh.brand.state.created"]}`;
-  };
-  const warning = I18N["dsh.brand.thirdparty.warning"].replace("%s", BRAND_TITLE[active]);
+  const warning = I18N["dsh.brand.thirdparty.warning"].replace("%s", BRAND_TITLE[brand]);
 
   return (
-    <div className="page-with-sidebar">
-      <SubSideBar
-        activeKey={active}
-        onSelect={(k) => nav(`/brands/${k}`)}
-        sections={[
-          {
-            title: I18N["dsh.brand.side.category"],
-            items: BRAND_KEYS.map((k) => ({
-              key: k,
-              title: BRAND_TITLE[k],
-              subtitle: sub(k),
-              icon: <PublicIcon size={20} />,
-            })),
-          },
-        ]}
-      />
-      {/* key=品牌：换品牌即重挂载（表单、折叠态、动画都跟着重置） */}
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 }}>
+      {/* 品牌页签行：带实例数（0 个就不显示标签），换页签只换下面这块内容 */}
+      <div className="card toolbar-row" style={{ flexShrink: 0 }}>
+        {BRAND_KEYS.map((k) => {
+          const count = s.external.filter((e) => e.brand === k).length;
+          const active = k === brand;
+          return (
+            <button
+              key={k}
+              className="tool-btn ripple-host"
+              style={
+                active
+                  ? { background: "var(--monet-secondary-container)", color: "var(--monet-on-secondary-container)" }
+                  : undefined
+              }
+              onClick={() => onSelect(k)}
+            >
+              {BRAND_TITLE[k]}
+              {count > 0 && (
+                <span className="tag plain" style={{ marginLeft: 4 }}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* key=品牌：换品牌即重挂载（表单、折叠态、进场动画都跟着重置） */}
       <div
-        className="page-content"
-        key={active}
-        style={{ gap: 8, animation: "slide-up-fade-in 400ms var(--ease)" }}
+        key={brand}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          flex: 1,
+          minHeight: 0,
+          animation: "slide-up-fade-in 400ms var(--ease)",
+        }}
       >
         {/* 移动端长警示收成一行 + 详情展开（CollapsibleNote 内部分支），桌面端原样 */}
         <div className="hint warning" style={{ flexShrink: 0, display: "grid", gap: 4 }}>
           <CollapsibleNote summary={<span>{warning}</span>}>
             <span>{warning}</span>
             {/* OpenCode 是实验性接入：面板已经到极限，剩下的是上游的事——见 i18n 里的说明。 */}
-            {active === "opencode" && <span>{I18N["dsh.brand.opencode.limit"]}</span>}
+            {brand === "opencode" && <span>{I18N["dsh.brand.opencode.limit"]}</span>}
             {/* Claude Web 同为实验性接入：社区引擎/中转/凭据都归上游与服务商。 */}
-            {active === "claude-web" && <span>{I18N["dsh.brand.claude-web.limit"]}</span>}
+            {brand === "claude-web" && <span>{I18N["dsh.brand.claude-web.limit"]}</span>}
           </CollapsibleNote>
         </div>
 
-        {active === "zcode" ? (
+        {brand === "zcode" ? (
           <>
             <ZcodeVersionsCard />
             <ZcodeSection />
           </>
         ) : (
-          <BrandPane brand={active} />
+          <BrandPane brand={brand} />
         )}
       </div>
     </div>

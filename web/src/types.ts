@@ -363,7 +363,7 @@ export interface InstancePlugins {
 }
 
 /// 启动面板"跨品牌实例切换器"里的非 dsh 条目（kimi/opencode/claude-web 品牌实例 + zcode 实验实例）。
-/// 这是**唯一**的跨品牌实例状态源：BrandsPage / ZcodeSection / LaunchPane /
+/// 这是**唯一**的跨品牌实例状态源：BrandsView（品牌层）/ ZcodeSection / LaunchPane /
 /// MainPage 都从这里读，写入只发生在 refreshExternal。
 export interface ExternalInstance {
   brand: "kimi" | "opencode" | "claude-web" | "zcode";
