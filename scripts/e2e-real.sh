@@ -6,7 +6,9 @@ cd "$(dirname "$0")/.."
 DATA=$(mktemp -d /tmp/hdsl-e2e-data.XXXXXX)
 PORT=13080
 PASS="e2e-secret-pass"
-JAR=$(ls build/libs/hdsl-web-*.jar | head -1)
+# 取**最新**的那个 jar：build/libs 里通常躺着历史版本，按字母序取第一个会拿到老构建
+JAR=$(ls -t build/libs/hdsl-web-*.jar 2>/dev/null | head -1)
+[ -n "$JAR" ] || { echo "找不到 jar，先构建：./gradlew shadowJar"; exit 1; }
 LOG=/tmp/hdsl-e2e-server.log
 COOKIE=/tmp/hdsl-e2e-cookies.txt
 BASE="http://127.0.0.1:$PORT"

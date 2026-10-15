@@ -386,6 +386,7 @@ bash scripts/e2e-real.sh
 ```
 
 `scripts/e2e-real.sh` 会真的访问 npm registry、装一个 dsh 版本并启动它，耗时几分钟，需要网络。
+`scripts/` 下还有什么、各自验什么、怎么跑，见 [scripts/README.md](scripts/README.md)。
 开发时的分工是：先起后端（3080），再 `npm run dev`，浏览器开 5173；后端没起时页面会报连接/登录失败，属预期。
 
 > 本机第一次 `./gradlew build` / `shadowJar` 之前先 `cd web && npm install`：`build.gradle.kts` 只要发现
