@@ -159,13 +159,19 @@ class ZcodeBuilderTest {
     /// The stub `pnpm`, copied somewhere writable with its executable bit set:
     /// a test must not depend on the checkout's own mode — this repository has
     /// `core.fileMode` off, so the bit is not even recorded in git.
+    ///
+    /// The whole fixture directory is copied, not just the POSIX script: the stub
+    /// lives in `pnpm.mjs` with a one-line wrapper per platform, and on Windows the
+    /// launcher resolves `pnpm` to the `pnpm.cmd` wrapper beside it. Copying only
+    /// `pnpm` would leave Windows nothing to resolve, and the build would fail on a
+    /// stub it could not start rather than on anything the test is about.
     private String fakePnpm() throws IOException {
-        Path target = dir.resolve("fake-pnpm/pnpm");
-        Files.createDirectories(target.getParent());
-        Files.copy(Path.of("src/test/resources/fake-zcode-build/pnpm"), target,
-                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        target.toFile().setExecutable(true, false);
-        return target.toAbsolutePath().toString();
+        Path target = dir.resolve("fake-pnpm");
+        Files.createDirectories(target);
+        copy(Path.of("src/test/resources/fake-zcode-build"), target);
+        Path stub = target.resolve("pnpm");
+        stub.toFile().setExecutable(true, false);
+        return stub.toAbsolutePath().toString();
     }
 
     private static ZcodeBuilder.Status awaitTerminal(long seconds) throws InterruptedException {
@@ -195,7 +201,7 @@ class ZcodeBuilderTest {
                     Files.createDirectories(target);
                 } else {
                     Files.createDirectories(target.getParent());
-                    Files.copy(path, target);
+                    Files.copy(path, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 }
             }
         }

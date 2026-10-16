@@ -61,8 +61,8 @@ class SelfSignedTlsTest {
             Path keyFile = dataDir.resolve("certs").resolve(CertificateManager.SELF_SIGNED_KEY_FILE);
             assertTrue(Files.exists(certFile), "self-signed cert must be written for reuse");
             assertTrue(Files.exists(keyFile), "self-signed key must be written for reuse");
-            assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
-                    Files.getPosixFilePermissions(keyFile), "the private key must be 0600");
+            org.jackhuang.hmcl.util.PosixPermissions.assertOwnerOnly(keyFile,
+                    "the private key must be 0600");
             assertEquals(CertificateManager.Source.SELF_SIGNED, running.certificates().getSource());
 
             // A trust-all client can complete the handshake and reach /api/health.

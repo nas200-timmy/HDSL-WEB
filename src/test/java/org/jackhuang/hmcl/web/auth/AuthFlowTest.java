@@ -58,9 +58,7 @@ class AuthFlowTest {
             // The users file exists with the admin account, owner-only.
             Path usersFile = dataDir.resolve("auth/users.json");
             assertTrue(Files.exists(usersFile), "first boot must create auth/users.json");
-            Set<PosixFilePermission> perms = Files.getPosixFilePermissions(usersFile);
-            assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE), perms,
-                    "users.json must be 0600");
+            org.jackhuang.hmcl.util.PosixPermissions.assertOwnerOnly(usersFile, "users.json must be 0600");
 
             // Wrong password: 401, uniform error shape.
             HttpResponse<String> bad = post(client, base + "/api/auth/login",

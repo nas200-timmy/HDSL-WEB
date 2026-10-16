@@ -73,6 +73,23 @@ class PnpmConfigFileTest {
     @Test
     void withoutThePropertyItIsTheFilePnpmReads() {
         System.clearProperty("hdsl.pnpmConfig");
+        // The claim being tested is "the default is the file pnpm actually reads", and that
+        // file is not the same one on every platform: pnpm keeps its registry in an `auth.ini`
+        // under `%LOCALAPPDATA%` on Windows and in a YAML file under `$XDG_CONFIG_HOME`
+        // elsewhere. Both are asserted, so the claim keeps its meaning on either — and it is
+        // the measurement that made them differ (see PnpmConfigFile's class comment).
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            String localAppData = System.getenv("LOCALAPPDATA");
+            if (localAppData == null || localAppData.isBlank()) {
+                // The fallbacks below `%LOCALAPPDATA%` are a degraded path, not the intended
+                // one, and asserting them here would pin something no real machine uses.
+                return;
+            }
+            assertEquals(Path.of(localAppData.trim()).resolve("pnpm").resolve("config").resolve("auth.ini"),
+                    PnpmConfigFile.path());
+            return;
+        }
         String xdg = System.getenv("XDG_CONFIG_HOME");
         Path expected = xdg != null && !xdg.isBlank()
                 ? Path.of(xdg.trim()).resolve("pnpm/config.yaml")
@@ -126,8 +143,8 @@ class PnpmConfigFileTest {
     @Test
     void theFileIsReadableOnlyByItsOwner() throws IOException {
         assertTrue(PnpmConfigFile.write(ADDRESS));
-        assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
-                Files.getPosixFilePermissions(configFile()));
+        org.jackhuang.hmcl.util.PosixPermissions.assertOwnerOnly(configFile(),
+                "the pnpm config must be owner-only");
     }
 
     @Test

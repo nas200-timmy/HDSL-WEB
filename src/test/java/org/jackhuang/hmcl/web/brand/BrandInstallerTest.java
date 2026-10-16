@@ -43,9 +43,12 @@ class BrandInstallerTest {
         install(Brand.KIMI, "2.0.2");
         Path current = install(Brand.KIMI, "2.1.1");
         install(Brand.KIMI, "2.1.0");
-        Files.deleteIfExists(root.resolve("current"));
-        Files.createSymbolicLink(root.resolve("current"),
-                root.relativize(current));
+        // Through the same call the installer makes, not a bare `createSymbolicLink`: a
+        // symlink needs a privilege an ordinary Windows account does not have, and the
+        // production code writes a pointer file there instead. Setting the fixture up with
+        // the production call is what keeps this test about the ordering rather than about
+        // which platform it ran on.
+        org.jackhuang.hmcl.util.io.Links.pointAt(root.resolve("current"), current);
 
         List<BrandInstaller.Release> releases = BrandInstaller.releases(root);
 
@@ -134,8 +137,8 @@ class BrandInstallerTest {
         // No link yet: the newest release is the default.
         assertEquals(newest.toRealPath(), BrandInstaller.defaultPackage(Brand.KIMI, root).toRealPath());
 
-        // The link wins when it exists, even pointing at an older release.
-        Files.createSymbolicLink(root.resolve("current"), root.relativize(older));
+        // The pointer wins when it exists, even pointing at an older release.
+        org.jackhuang.hmcl.util.io.Links.pointAt(root.resolve("current"), older);
         assertEquals(older.toRealPath(), BrandInstaller.defaultPackage(Brand.KIMI, root).toRealPath());
     }
 
