@@ -20,7 +20,6 @@ package org.jackhuang.hmcl.dsh;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -96,6 +95,24 @@ public final class DshInstanceTerminal {
     /// @param account  the account it launches with, or null
     /// @throws DshException when there is no terminal to open, or it cannot be started
     public static void open(DshInstance instance, @Nullable DshAccount account) throws DshException {
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            // Not a missing-emulator error: the whole mechanism is POSIX. What is written is a
+            // `#!/usr/bin/env bash` script, it is started by handing its path to a terminal
+            // emulator from a Linux list, and the shim it puts on PATH is an extensionless shell
+            // script. Saying "no terminal emulator was found" about a machine that has Windows
+            // Terminal would be true and useless, so this says what is missing and what to do
+            // instead — with the paths, so it can be copied.
+            DshNodeRuntime runtime = DshLauncher.resolveRuntime(instance);
+            Path workspace = instance.workspacePath();
+            throw new DshException("The instance terminal is not available on Windows."
+                    + " It opens a POSIX shell through a Linux terminal emulator"
+                    + " (x-terminal-emulator, gnome-terminal, xterm …), none of which exist here."
+                    + " To work in this instance by hand, open a command prompt with"
+                    + (workspace == null ? "" : " its working directory set to " + workspace + ",")
+                    + " DSH_HOME set to " + instance.homeDirectory()
+                    + ", and " + runtime.binDirectory() + " at the front of PATH.");
+        }
         Path script = write(instance, account);
         Emulator emulator = find();
         if (emulator == null) {
@@ -203,8 +220,12 @@ public final class DshInstanceTerminal {
                     account.apiKey().trim());
         }
         String inherited = environment.getOrDefault("PATH", System.getenv("PATH"));
-        environment.put("PATH", bin + File.pathSeparator + runtime.binDirectory()
-                + (inherited == null || inherited.isBlank() ? "" : File.pathSeparator + inherited));
+        // A literal `:`, not `File.pathSeparator`: the separator belongs to the shell that
+        // reads this script, and bash reads `:` everywhere it runs — including Git Bash on
+        // Windows, where the host's own separator is `;`. Using the host's here produced a
+        // script that named one very long directory and found nothing in it.
+        environment.put("PATH", bin + ":" + runtime.binDirectory()
+                + (inherited == null || inherited.isBlank() ? "" : ":" + inherited));
 
         StringBuilder text = new StringBuilder();
         text.append("#!/usr/bin/env bash\n");

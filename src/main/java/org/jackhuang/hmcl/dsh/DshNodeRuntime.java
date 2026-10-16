@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.dsh;
 
+import org.jackhuang.hmcl.util.platform.Executables;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -88,19 +89,21 @@ public record DshNodeRuntime(
     /// @return the descriptor
     public static DshNodeRuntime fromManaged(NodeRuntime runtime) {
         // pnpm lives beside node, not in the distribution metadata, so it is
-        // probed directly. Leaving it unresolved made every managed runtime look
-        // incapable of plugin management even after pnpm was installed into it.
-        Path bin = runtime.node().getParent();
-        Path pnpm = bin == null ? null : bin.resolve("pnpm");
-        if (pnpm != null && !Files.isExecutable(pnpm)) {
+        // probed directly — through the layout, because "beside node" is `bin/` on
+        // POSIX and the distribution root on Windows. Leaving it unresolved made
+        // every managed runtime look incapable of plugin management even after
+        // pnpm was installed into it.
+        Path pnpm = runtime.pnpm();
+        if (!Files.isRegularFile(pnpm)) {
             pnpm = null;
         }
+        Path bin = runtime.binDirectory();
 
-        // npm/pnpm 是 `#!/usr/bin/env node` 脚本：探测和日后 spawn 都得先把
-        // 这个运行时自己的 bin 塞进 PATH，否则裸部署（PATH 无 node）下
-        // 「装好了却报 npm 缺失」。
+        // npm/pnpm 是 `#!/usr/bin/env node` 脚本（Windows 上是 `%~dp0\node.exe` 的
+        // 批处理）：探测和日后 spawn 都得先把运行时自己的目录塞进 PATH，否则裸部署
+        // （PATH 无 node）下「装好了却报 npm 缺失」。
         java.util.Map<String, String> env = java.util.Map.of("PATH",
-                bin == null ? "" : bin.toString() + java.io.File.pathSeparator
+                bin.toString() + java.io.File.pathSeparator
                         + java.util.Optional.ofNullable(System.getenv("PATH")).orElse(""));
 
         return new DshNodeRuntime(
@@ -314,22 +317,16 @@ public record DshNodeRuntime(
 
     /// Resolves an executable on `PATH`.
     ///
+    /// The name is completed by platform: Windows decides what is executable by its
+    /// extension, so `node` is `node.exe` and `npm` is `npm.cmd`, neither of which the
+    /// bare name names. Resolving here rather than in each caller is what makes a
+    /// hand-installed Node.js visible on Windows — without it the panel concluded
+    /// "no Node.js on this machine" about a machine that had one, and pushed the user
+    /// at a managed runtime instead.
+    ///
     /// @param name the executable name
     /// @return the resolved path, or empty when it is not on `PATH`
     public static Optional<Path> which(String name) {
-        String path = System.getenv("PATH");
-        if (path == null || path.isBlank()) {
-            return Optional.empty();
-        }
-        for (String entry : path.split(java.io.File.pathSeparator)) {
-            if (entry.isBlank()) {
-                continue;
-            }
-            Path candidate = Path.of(entry).resolve(name);
-            if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) {
-                return Optional.of(candidate);
-            }
-        }
-        return Optional.empty();
+        return Executables.resolve(name);
     }
 }

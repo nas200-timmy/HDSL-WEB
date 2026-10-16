@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.dsh;
 
+import org.jackhuang.hmcl.util.platform.Executables;
 import org.jackhuang.hmcl.util.platform.ManagedProcess;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -108,7 +109,12 @@ public final class DshCommand {
     public static Result run(List<String> command, @Nullable Path directory,
                              Map<String, String> environment, @Nullable Consumer<String> onLine)
             throws IOException, InterruptedException {
-        ProcessBuilder builder = new ProcessBuilder(command);
+        // Every npm, node and pnpm this launcher runs lands here, which is why the
+        // program name is completed by platform in this one place: on Windows those
+        // tools are `npm.cmd` / `node.exe`, and the bare names are either not found at
+        // all or — for the extensionless `npm` a Node.js installation also ships — a
+        // POSIX shell script the OS refuses to start.
+        ProcessBuilder builder = new ProcessBuilder(Executables.startable(command));
         // What the launcher is configured to download through travels with every child, so a
         // proxy covers the version lists and the plugin installs alike.
         builder.environment().putAll(DshNetworkSettings.environment());

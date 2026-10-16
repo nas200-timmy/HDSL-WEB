@@ -181,7 +181,7 @@ public final class ZcodeRuntime {
                 log = Files.newOutputStream(logFile,
                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
                 ProcessBuilder builder = new ProcessBuilder(
-                        nodePath,
+                        org.jackhuang.hmcl.util.platform.Executables.startableProgram(nodePath),
                         packageDir.resolve("bin/zcode.mjs").toString(),
                         "--web", "--no-open",
                         // Loopback only, no token: the browser reaches this

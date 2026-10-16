@@ -182,6 +182,14 @@ public final class DshLocalPluginPaths {
     /// a string. Renaming `a` must not rewrite a record that names `a-b`, for the same
     /// reason [DshPluginBundle] will not let `dsh-a` take `dsh-ab`'s files.
     ///
+    /// Both spellings of the directory are moved. A record is written by a package manager,
+    /// and those separate with `/` everywhere — including on Windows, where a `\` inside a
+    /// JSON string is an escape character and would make the manifest unparsable — while a
+    /// `Path` renders a Windows directory with `\`. The same directory therefore appears as
+    /// `file:C:/…/instances/<id>/…` in the record and as `C:\…\instances\<id>` in this
+    /// class's hands. Knowing only the second spelling left the record naming a directory
+    /// that no longer exists, which is exactly the state this class exists to prevent.
+    ///
     /// @param text the record
     /// @param from the directory the paths were recorded against
     /// @param to   the directory they belong to now
@@ -190,6 +198,21 @@ public final class DshLocalPluginPaths {
         if (from.isEmpty() || text.isEmpty()) {
             return text;
         }
+        String moved = rewriteOne(text, from, to);
+        String slashedFrom = from.replace('\\', '/');
+        if (!slashedFrom.equals(from)) {
+            moved = rewriteOne(moved, slashedFrom, to.replace('\\', '/'));
+        }
+        return moved;
+    }
+
+    /// [rewrite] for one spelling of the directory.
+    ///
+    /// @param text the record
+    /// @param from the directory, spelled as it is to be found
+    /// @param to   the directory, spelled as it is to be written
+    /// @return the record, with those paths moved
+    private static String rewriteOne(String text, String from, String to) {
         StringBuilder rewritten = new StringBuilder(text.length());
         int index = 0;
         while (true) {

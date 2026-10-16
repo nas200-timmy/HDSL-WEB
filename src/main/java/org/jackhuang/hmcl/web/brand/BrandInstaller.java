@@ -20,6 +20,7 @@ package org.jackhuang.hmcl.web.brand;
 import org.jackhuang.hmcl.dsh.DshNodeRuntime;
 import org.jackhuang.hmcl.dsh.NpmRegistry;
 import org.jackhuang.hmcl.util.io.FileUtils;
+import org.jackhuang.hmcl.util.io.Links;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -453,38 +454,36 @@ public final class BrandInstaller {
         }
     }
 
-    /// Points the `current` symlink at the given release, replacing whatever
-    /// link was there. Best effort: a broken link only affects the default for
-    /// new instances, never an instance's pinned version.
+    /// Points the `current` pointer at the given release, replacing whatever was there.
+    /// Best effort: a broken pointer only affects the default for new instances, never an
+    /// instance's pinned version.
+    ///
+    /// A link where the system permits one, a pointer file where it does not — which is
+    /// the ordinary Windows case, and the reason this used to log a warning on a machine
+    /// that had done nothing wrong.
     private static void pointCurrentAt(Path brandRoot, Path target) {
         Path link = brandRoot.resolve(CURRENT_LINK);
         try {
-            Files.createDirectories(brandRoot.resolve(RELEASES_DIR));
-            Files.deleteIfExists(link);
-            Files.createSymbolicLink(link, target.toAbsolutePath());
+            Links.pointAt(link, target);
         } catch (IOException e) {
             LOG.warning("Could not point " + link + " at " + target, e);
         }
     }
 
-    /// The release the `current` link resolves to, or `null`.
+    /// The release the `current` pointer resolves to, or `null`.
     private static @Nullable Path currentLink(Path brandRoot) {
-        Path link = brandRoot.resolve(CURRENT_LINK);
-        if (!Files.isSymbolicLink(link)) {
-            return null;
-        }
-        try {
-            return link.toRealPath();
-        } catch (IOException e) {
-            return null;
-        }
+        return Links.pointedAt(brandRoot.resolve(CURRENT_LINK)).orElse(null);
     }
 
     /// Runs one command in a directory, teeing its merged output to the log.
     private static BufferedReader run(List<String> command, Path directory,
                                       java.util.Map<String, String> environment, OutputStreamAppend output)
             throws IOException, InterruptedException {
-        ProcessBuilder builder = new ProcessBuilder(command);
+        // `npm` and `pnpm` are `npm.cmd` / `pnpm.cmd` on Windows, and the bare names do
+        // not name a file there — the clone's dependency step and build step are both
+        // program names that have to be completed before they can be started.
+        ProcessBuilder builder = new ProcessBuilder(
+                org.jackhuang.hmcl.util.platform.Executables.startable(command));
         builder.directory(directory.toFile());
         builder.environment().putAll(environment);
         builder.redirectErrorStream(true);

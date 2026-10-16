@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.brand;
 
 import org.jackhuang.hmcl.dsh.DshPorts;
+import org.jackhuang.hmcl.util.platform.Executables;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -200,13 +201,21 @@ public final class BrandRuntime {
                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
                         StandardOpenOption.WRITE);
                 LaunchPlan plan = plan(brand, packageDir, instance, publicHost);
-                ProcessBuilder builder = new ProcessBuilder(plan.command());
+                ProcessBuilder builder = new ProcessBuilder(Executables.startable(plan.command()));
                 builder.directory(workspace.toFile());
                 builder.redirectErrorStream(true);
                 // The tool's own state lives under its HOME, which is the
                 // instance directory — credentials, sessions and config all
                 // land inside the volume, per instance.
                 builder.environment().put("HOME", home.toString());
+                // Node.js resolves `~` through `USERPROFILE` on Windows and ignores `HOME`,
+                // so without this the isolation above silently does not apply there and a
+                // brand's credentials land in the real user profile — outside the instance,
+                // and outside the volume the operator backs up.
+                if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                        == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+                    builder.environment().put("USERPROFILE", home.toString());
+                }
                 // Brand-specific environment (Claude Web takes its port from
                 // PORT; it has no port flag).
                 builder.environment().putAll(plan.environment());
@@ -401,11 +410,7 @@ public final class BrandRuntime {
         List<String> command = new ArrayList<>();
         switch (brand) {
             case KIMI -> {
-                Path bin = packageDir.resolve(brand.installMarker());
-                if (!Files.isRegularFile(bin)) {
-                    throw new IOException("executable not found: " + bin);
-                }
-                command.add(bin.toRealPath().toString());
+                command.add(entryPoint(packageDir.resolve(brand.installMarker())).toString());
                 command.add("web");
                 command.add("--no-open");
                 command.add("--port");
@@ -426,11 +431,7 @@ public final class BrandRuntime {
                 return new LaunchPlan(List.copyOf(command), Map.of());
             }
             case OPENCODE -> {
-                Path bin = packageDir.resolve(brand.installMarker());
-                if (!Files.isRegularFile(bin)) {
-                    throw new IOException("executable not found: " + bin);
-                }
-                command.add(bin.toRealPath().toString());
+                command.add(entryPoint(packageDir.resolve(brand.installMarker())).toString());
                 command.add("web");
                 command.add("--port");
                 command.add(String.valueOf(allocatePort()));
@@ -444,16 +445,12 @@ public final class BrandRuntime {
                 // is no built entry point, and none is needed: tsx executes the
                 // TypeScript source, resolving the workspace's dependencies
                 // (including the engine package) from the cloned node_modules.
-                Path tsx = packageDir.resolve("node_modules/.bin/tsx");
                 Path entry = packageDir.resolve("server/src/index.ts");
-                if (!Files.isRegularFile(tsx)) {
-                    throw new IOException("executable not found: " + tsx);
-                }
                 if (!Files.isRegularFile(entry)) {
                     throw new IOException("server entry not found: " + entry);
                 }
                 int port = allocatePort();
-                command.add(tsx.toRealPath().toString());
+                command.add(entryPoint(packageDir.resolve("node_modules/.bin/tsx")).toString());
                 command.add(entry.toString());
                 // Its port comes from the environment, not a flag (verified in
                 // server/src/index.ts: PORT ?? 3090), so the pre-allocated
@@ -463,6 +460,23 @@ public final class BrandRuntime {
             }
             default -> throw new IOException("unknown brand " + brand);
         }
+    }
+
+    /// Resolves the file inside an installed package that is actually started.
+    ///
+    /// A brand's entry point is `node_modules/.bin/<tool>` on every platform, but on
+    /// Windows that file has no extension and is a POSIX shell script — the executable
+    /// form is `<tool>.cmd` beside it, and the extensionless one fails with
+    /// "not a valid Win32 application". One marker therefore has to become two
+    /// different files, which is what [Executables] decides.
+    ///
+    /// @param marker the `node_modules/.bin/<tool>` marker (or any other entry point)
+    /// @return the file to start
+    /// @throws IOException when nothing startable is there
+    private static Path entryPoint(Path marker) throws IOException {
+        return Executables.resolve(marker.toString())
+                .map(path -> path.toAbsolutePath().normalize())
+                .orElseThrow(() -> new IOException("executable not found: " + marker));
     }
 
     /// Picks a free loopback port for brands that cannot ask the OS for one

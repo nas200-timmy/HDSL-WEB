@@ -49,6 +49,22 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// The file is rewritten rather than parsed: every line that is not this setting is kept exactly
 /// as it was, so a `storeDir` an operator set by hand survives, and the value written is quoted by
 /// [YamlScalar] rather than interpolated — the difference between a URL and a second setting.
+///
+/// ## Windows keeps the same fact in two other files
+///
+/// Measured on Windows 10 with pnpm 11.28.6, by running `pnpm config set` and watching which file
+/// changed:
+///
+/// | what | where pnpm reads it |
+/// | --- | --- |
+/// | the registry | `%LOCALAPPDATA%\pnpm\config\auth.ini`, as `registry=<address>` |
+/// | everything else (`storeDir`) | `%LOCALAPPDATA%\pnpm\config\config.yaml` |
+///
+/// Neither `%LOCALAPPDATA%\pnpm\config\rc` nor `$HOME/.config/pnpm/config.yaml` is read for the
+/// registry there — a value written to either is silently ignored, which is how a Chinese mirror
+/// configured in the panel still reached npmjs.org. The registry lives in an `auth.ini` because an
+/// address may carry credentials, and that is why the two halves are separate files rather than
+/// two keys in one.
 @NotNullByDefault
 public final class PnpmConfigFile {
 
@@ -65,9 +81,12 @@ public final class PnpmConfigFile {
     private PnpmConfigFile() {
     }
 
-    /// Returns the file pnpm reads.
+    /// Returns the file pnpm reads the registry from.
     ///
-    /// The same path the entrypoint writes: `${XDG_CONFIG_HOME:-$HOME/.config}/pnpm/config.yaml`.
+    /// On POSIX that is `${XDG_CONFIG_HOME:-$HOME/.config}/pnpm/config.yaml`, the same path the
+    /// container's entrypoint writes. On Windows it is `%LOCALAPPDATA%\pnpm\config\auth.ini`,
+    /// because that is the file pnpm actually reads there — see the class comment for how that was
+    /// measured.
     ///
     /// @return the file, which may not exist
     public static Path path() {
@@ -75,11 +94,32 @@ public final class PnpmConfigFile {
         if (override != null && !override.isBlank()) {
             return Path.of(override.trim());
         }
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            return windowsConfigDirectory().resolve("auth.ini");
+        }
         String xdg = System.getenv("XDG_CONFIG_HOME");
         Path configHome = xdg != null && !xdg.isBlank()
                 ? Path.of(xdg.trim())
                 : Path.of(System.getProperty("user.home", "/home/hdsl"), ".config");
         return configHome.resolve("pnpm").resolve("config.yaml");
+    }
+
+    /// Returns pnpm's user config directory on Windows.
+    ///
+    /// @return `%LOCALAPPDATA%\pnpm\config`
+    private static Path windowsConfigDirectory() {
+        String localAppData = System.getenv("LOCALAPPDATA");
+        if (localAppData != null && !localAppData.isBlank()) {
+            return Path.of(localAppData.trim()).resolve("pnpm").resolve("config");
+        }
+        // APPDATA is the roaming half and not where pnpm looks, but a path under it is still
+        // closer than one under the home directory that pnpm provably does not read.
+        String appData = System.getenv("APPDATA");
+        if (appData != null && !appData.isBlank()) {
+            return Path.of(appData.trim()).resolve("pnpm").resolve("config");
+        }
+        return Path.of(System.getProperty("user.home", ".")).resolve("pnpm").resolve("config");
     }
 
     /// Writes the registry in force, if it is not already there.
@@ -100,21 +140,48 @@ public final class PnpmConfigFile {
     /// Writes one registry into the file, keeping every other line.
     ///
     /// @param registry the address, which must already have been through [NpmRegistry#normalize]
-    /// @return whether the file changed
+    /// @return whether a file changed
     /// @throws IOException when it cannot be read or written
     public static boolean write(String registry) throws IOException {
         Path file = path();
+        String store = System.getenv("PNPM_STORE_DIR");
+        boolean storeWanted = store != null && !store.isBlank();
+
+        if (Format.of(file) == Format.INI) {
+            // Windows: the registry and everything else are two files, so each line goes to the
+            // one pnpm reads it from. Writing the registry into the YAML half is not a smaller
+            // change — it is a change pnpm ignores.
+            Path storeFile = file.resolveSibling("config.yaml");
+            boolean changed = rewrite(storeFile, Format.YAML, null, storeWanted ? store : null);
+            return rewrite(file, Format.INI, registry, null) || changed;
+        }
+        return rewrite(file, Format.YAML, registry, storeWanted ? store : null);
+    }
+
+    /// Rewrites the settings this class owns, keeping every other line exactly as it was.
+    ///
+    /// @param file     the file to rewrite
+    /// @param format   the syntax of that file
+    /// @param registry the registry to write, or `null` to leave the file's alone
+    /// @param store    the store directory to add when the file does not name one, or `null`
+    /// @return whether the file changed
+    /// @throws IOException when it cannot be read or written
+    private static boolean rewrite(Path file, Format format, @Nullable String registry, @Nullable String store)
+            throws IOException {
         List<String> kept = new ArrayList<>();
-        boolean hadStore = false;
         boolean hadRegistry = false;
+        boolean hadStore = false;
         if (Files.isRegularFile(file)) {
             for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
                 String trimmed = line.trim();
-                if (trimmed.startsWith(REGISTRY_KEY + ":")) {
+                if (registry != null && isSetting(trimmed, REGISTRY_KEY)) {
                     hadRegistry = true;
                     continue;
                 }
-                if (trimmed.startsWith(STORE_KEY + ":")) {
+                if (isSetting(trimmed, STORE_KEY)) {
+                    // A store directory named here — by the entrypoint, by an operator — is kept
+                    // as it is: this class runs on every settings save, and taking a hand-set
+                    // value away would be a worse surprise than not having set it at all.
                     hadStore = true;
                 }
                 kept.add(line);
@@ -125,30 +192,80 @@ public final class PnpmConfigFile {
         while (!written.isEmpty() && written.get(written.size() - 1).isBlank()) {
             written.remove(written.size() - 1);
         }
-        if (!hadStore) {
-            String store = System.getenv("PNPM_STORE_DIR");
-            if (store != null && !store.isBlank()) {
-                written.add(STORE_KEY + ": " + YamlScalar.of(store.trim()));
-            }
+        if (store != null && !hadStore) {
+            written.add(format.line(STORE_KEY, store));
         }
-        written.add(REGISTRY_KEY + ": " + YamlScalar.of(registry));
+        if (registry != null) {
+            written.add(format.line(REGISTRY_KEY, registry));
+        }
         String text = String.join(System.lineSeparator(), written) + System.lineSeparator();
 
-        if (hadRegistry && text.equals(readText(file))) {
+        if (text.equals(readText(file))) {
             return false;
         }
-        Files.createDirectories(file.getParent());
+        Path parent = file.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
         Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
         Files.writeString(temporary, text, StandardCharsets.UTF_8);
         restrict(temporary);
         try {
             Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
-            // Some filesystems do not do an atomic replace; a plain one is still better than a
-            // half-written file, which is what writing in place would leave.
+            // Windows refuses `ATOMIC_MOVE` across volumes, and some filesystems refuse it
+            // outright; a plain replace is still better than the half-written file that writing
+            // in place would leave.
             Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
         }
         return true;
+    }
+
+    /// Reports whether a line sets a key, in either syntax this class writes.
+    ///
+    /// @param trimmedLine the line, trimmed
+    /// @param key         the key
+    /// @return whether the line assigns that key
+    private static boolean isSetting(String trimmedLine, String key) {
+        if (!trimmedLine.startsWith(key)) {
+            return false;
+        }
+        String rest = trimmedLine.substring(key.length()).trim();
+        return rest.startsWith(":") || rest.startsWith("=");
+    }
+
+    /// How a setting is spelled in a given file's syntax.
+    private enum Format {
+        /// `registry: "https://…"` — pnpm's YAML user config, and what the container writes.
+        YAML(": ", true),
+        /// `registry=https://…` — pnpm's INI user config, the form npm also reads.
+        INI("=", false);
+
+        private final String separator;
+        private final boolean quoted;
+
+        Format(String separator, boolean quoted) {
+            this.separator = separator;
+            this.quoted = quoted;
+        }
+
+        /// The file's syntax, told from its name.
+        ///
+        /// @param file the file
+        /// @return the syntax that file is written in
+        static Format of(Path file) {
+            String name = file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+            return name.endsWith(".ini") || name.endsWith(".rc") ? INI : YAML;
+        }
+
+        /// One assignment in this syntax.
+        ///
+        /// @param key   the key
+        /// @param value the value
+        /// @return the line
+        String line(String key, String value) {
+            return key + separator + (quoted ? YamlScalar.of(value) : value);
+        }
     }
 
     private static @Nullable String readText(Path file) {

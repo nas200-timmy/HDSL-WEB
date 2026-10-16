@@ -23,9 +23,9 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import kala.compress.archivers.ArchiveEntry;
 import org.jackhuang.hmcl.util.io.FileUtils;
+import org.jackhuang.hmcl.util.io.Links;
 import org.jackhuang.hmcl.util.io.NetworkUtils;
-import org.jackhuang.hmcl.util.platform.Architecture;
-import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.util.platform.Platform;
 import org.jackhuang.hmcl.util.tree.ArchiveFileTree;
 import org.jackhuang.hmcl.util.tree.TarFileTree;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -68,30 +68,53 @@ public final class NodeRuntimeManager {
     /// The download base for a specific release.
     /// Returns the platform tag used in Node distribution file names.
     ///
-    /// @return `linux-x64`, `linux-arm64`, `darwin-x64` or `darwin-arm64`
+    /// @return `linux-x64`, `darwin-arm64`, `win-x64` …
     /// @throws DshException when the current system has no Node build
     public static String platformTag() throws DshException {
-        if (OperatingSystem.CURRENT_OS == OperatingSystem.MACOS) {
-            return switch (Architecture.SYSTEM_ARCH) {
+        return platformTag(Platform.SYSTEM_PLATFORM);
+    }
+
+    /// Returns the platform tag Node publishes a build under for a platform.
+    ///
+    /// The tag is what appears in the archive's file name, and it is the one thing that
+    /// decides whether the download is a usable runtime: asking for the Linux build on
+    /// Windows produces a tarball that unpacks perfectly, registers as an installed
+    /// runtime, and is an ELF binary the system cannot run. That is why the platform is
+    /// a parameter rather than the ambient one — a test can pin the Windows answer from
+    /// any machine, and this is the fact most worth pinning.
+    ///
+    /// @param platform the platform to name
+    /// @return the tag that appears in the archive's file name
+    /// @throws DshException when Node publishes no build for that platform
+    static String platformTag(Platform platform) throws DshException {
+        return switch (platform.os()) {
+            case WINDOWS -> switch (platform.arch()) {
+                case X86_64 -> "win-x64";
+                case ARM64 -> "win-arm64";
+                default -> throw new DshException(
+                        "Node.js publishes no build for " + platform.arch() + " on Windows");
+            };
+            case MACOS -> switch (platform.arch()) {
                 case X86_64 -> "darwin-x64";
                 case ARM64 -> "darwin-arm64";
                 default -> throw new DshException(
-                        "Node.js publishes no build for " + Architecture.SYSTEM_ARCH + " on macOS");
+                        "Node.js publishes no build for " + platform.arch() + " on macOS");
             };
-        }
-        return switch (Architecture.SYSTEM_ARCH) {
-            case X86_64 -> "linux-x64";
-            case ARM64 -> "linux-arm64";
-            default -> throw new DshException(
-                    "Node.js publishes no build for " + Architecture.SYSTEM_ARCH + " on Linux");
+            default -> switch (platform.arch()) {
+                case X86_64 -> "linux-x64";
+                case ARM64 -> "linux-arm64";
+                default -> throw new DshException(
+                        "Node.js publishes no build for " + platform.arch() + " on Linux");
+            };
         };
     }
 
     /// Returns the entry the release index lists for a platform tag.
     ///
-    /// The archives are named `darwin-x64` and `darwin-arm64`, while the index
-    /// calls the same builds `osx-x64-tar` and `osx-arm64-tar` — which is what
-    /// a new platform has to know before it can filter the release list.
+    /// The archives are named `darwin-x64`, `win-x64` and `linux-x64`, while the index
+    /// calls the same builds `osx-x64-tar`, `win-x64-zip` and `linux-x64` — the suffix
+    /// says which archive format the entry is for, which is what a new platform has to
+    /// know before it can filter the release list.
     ///
     /// @param platform the tag from [NodeRuntimeManager#platformTag]
     /// @return the name to look for in the index `files` array
@@ -99,28 +122,39 @@ public final class NodeRuntimeManager {
         return switch (platform) {
             case "darwin-x64" -> "osx-x64-tar";
             case "darwin-arm64" -> "osx-arm64-tar";
+            case "win-x64" -> "win-x64-zip";
+            case "win-arm64" -> "win-arm64-zip";
             default -> platform;
         };
     }
 
-    /// Returns the archive extension Node publishes for this system.
+    /// Returns the archive extension Node publishes for a platform tag.
     ///
-    /// Linux builds ship as `.tar.xz`, macOS builds as `.tar.gz`; the mirror
-    /// keeps the same layout, so the extension is a property of the system
-    /// rather than of the source.
+    /// Linux builds ship as `.tar.xz` and macOS builds as `.tar.gz`; Windows builds
+    /// ship as `.zip` and nothing else — Node has never published a `win-*.tar.xz`.
     ///
-    /// @return `.tar.xz` on Linux, `.tar.gz` on macOS
-    static String archiveExtension() {
-        return OperatingSystem.CURRENT_OS == OperatingSystem.MACOS ? ".tar.gz" : ".tar.xz";
+    /// @param platform the tag from [NodeRuntimeManager#platformTag]
+    /// @return `.zip`, `.tar.gz` or `.tar.xz`
+    static String archiveExtension(String platform) {
+        if (platform.startsWith("win-")) {
+            return ".zip";
+        }
+        if (platform.startsWith("darwin-")) {
+            return ".tar.gz";
+        }
+        return ".tar.xz";
     }
 
     /// Returns the archive file name for a version and platform tag.
     ///
+    /// The extension follows the tag rather than the ambient system, so a name and the
+    /// tag it was built from cannot disagree.
+    ///
     /// @param version  the version without its leading `v`
     /// @param platform the tag from [NodeRuntimeManager#platformTag]
-    /// @return e.g. `node-v22.19.0-darwin-arm64.tar.gz`
+    /// @return e.g. `node-v22.19.0-win-x64.zip`
     static String archiveFileName(String version, String platform) {
-        return "node-v" + version + "-" + platform + archiveExtension();
+        return "node-v" + version + "-" + platform + archiveExtension(platform);
     }
 
     /// Lists the Node runtimes installed under [DshPaths#RUNTIMES].
@@ -286,7 +320,7 @@ public final class NodeRuntimeManager {
 
         try {
             deleteQuietly(target);
-            Files.move(unpacked, target, StandardCopyOption.ATOMIC_MOVE);
+            moveInto(unpacked, target);
             deleteQuietly(staging);
             Files.deleteIfExists(archive);
         } catch (IOException e) {
@@ -320,8 +354,11 @@ public final class NodeRuntimeManager {
     /// @param runtime the freshly installed runtime
     /// @param onStage receives progress lines, or `null`
     private static void provisionPnpm(NodeRuntime runtime, @Nullable Consumer<String> onStage) {
-        Path npm = runtime.directory().resolve("bin").resolve("npm");
-        if (!Files.isExecutable(npm)) {
+        // Resolved through the layout: `bin/npm` on POSIX, `npm.cmd` in the distribution
+        // root on Windows. `isExecutable` is the wrong question there — NTFS has no
+        // execute bit, so it answers yes for every file — hence the regular-file test.
+        Path npm = runtime.npm();
+        if (!Files.isRegularFile(npm)) {
             stage(onStage, "npm is missing, so pnpm was not installed");
             return;
         }
@@ -334,9 +371,12 @@ public final class NodeRuntimeManager {
         List<String> command = List.of(npm.toString(), "install", "--global", "pnpm@" + PNPM_MAJOR,
                 "--registry=" + registry);
 
-        ProcessBuilder builder = new ProcessBuilder(command);
+        ProcessBuilder builder = new ProcessBuilder(
+                org.jackhuang.hmcl.util.platform.Executables.startable(command));
+        // A Windows `npm.cmd` finds `node.exe` through this directory; a POSIX `bin/npm`
+        // is a `#!/usr/bin/env node` script that needs it for the same reason.
         builder.environment().put("PATH",
-                runtime.directory().resolve("bin") + java.io.File.pathSeparator
+                runtime.binDirectory() + java.io.File.pathSeparator
                         + String.valueOf(System.getenv("PATH")));
         builder.environment().put("npm_config_registry", registry);
         builder.redirectErrorStream(true);
@@ -373,12 +413,13 @@ public final class NodeRuntimeManager {
     /// @param directory the directory holding `bin/node`
     /// @return the version, or `null` when there is no usable node there
     public static @Nullable String versionOfDirectory(Path directory) {
-        Path node = directory.resolve("bin").resolve("node");
-        if (!Files.isExecutable(node)) {
+        Path node = RuntimeLayout.CURRENT.node(directory);
+        if (!Files.isRegularFile(node)) {
             return null;
         }
         try {
-            Process process = new ProcessBuilder(node.toString(), "--version")
+            Process process = new ProcessBuilder(
+                    org.jackhuang.hmcl.util.platform.Executables.startableProgram(node.toString()), "--version")
                     .redirectErrorStream(true)
                     .start();
             String output;
@@ -419,7 +460,7 @@ public final class NodeRuntimeManager {
             deleteQuietly(staging);
             copyTree(source, staging);
             deleteQuietly(target);
-            Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE);
+            moveInto(staging, target);
         } catch (IOException e) {
             deleteQuietly(staging);
             throw new DshException("Failed to adopt " + source + ": " + e.getMessage(), e);
@@ -449,7 +490,9 @@ public final class NodeRuntimeManager {
                 } else if (Files.isSymbolicLink(path)) {
                     // Preserve links: a Node distribution links npm and npx into
                     // lib/node_modules, and copying the targets would break them.
-                    Files.createSymbolicLink(target, Files.readSymbolicLink(path));
+                    // `Links` keeps the link where it can and copies the file where it
+                    // cannot, which is what makes adopting a tree work on Windows.
+                    Links.createOrCopy(target, Files.readSymbolicLink(path));
                 } else {
                     Files.copy(path, target, StandardCopyOption.REPLACE_EXISTING,
                             StandardCopyOption.COPY_ATTRIBUTES);
@@ -517,15 +560,19 @@ public final class NodeRuntimeManager {
 
     /// Unpacks a Node distribution archive into a directory, preserving symlinks.
     ///
-    /// Linux builds ship as `.tar.xz`, macOS builds as `.tar.gz`; both carry
-    /// the same top-level layout, including the symlinks that make `bin/npm`
-    /// and `bin/npx` work.
+    /// Linux builds ship as `.tar.xz`, macOS builds as `.tar.gz` and both carry the
+    /// same top-level layout, including the symlinks that make `bin/npm` and `bin/npx`
+    /// work. Windows builds ship as `.zip`, which has neither.
     ///
-    /// @param archive the `.tar.xz` or `.tar.gz` file
+    /// @param archive the `.zip`, `.tar.xz` or `.tar.gz` file
     /// @param target  the directory to unpack into
     /// @throws IOException when decompression or extraction fails
     private static void extractArchive(Path archive, Path target) throws IOException {
         String name = archive.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (name.endsWith(".zip")) {
+            extractZip(archive, target);
+            return;
+        }
         if (name.endsWith(".tar.gz") || name.endsWith(".tgz")) {
             try (TarFileTree tree = TarFileTree.open(archive)) {
                 extract(tree, tree.getRoot(), target);
@@ -533,6 +580,43 @@ public final class NodeRuntimeManager {
             return;
         }
         extractTarXz(archive, target);
+    }
+
+    /// Unpacks a `.zip` archive into a directory.
+    ///
+    /// The Windows distribution is a zip, and a zip carries no symlinks — `npm.cmd` and
+    /// `npx.cmd` are real files there — so extraction needs neither the link handling
+    /// the tarballs do nor the privilege that recreating a link requires. The single
+    /// top-level directory is **kept**, because [install] moves it up by name after the
+    /// fact; stripping it here would break that step rather than shorten it.
+    ///
+    /// @param archive the `.zip` file
+    /// @param target  the directory to unpack into
+    /// @throws IOException when decompression or extraction fails
+    private static void extractZip(Path archive, Path target) throws IOException {
+        Path root = target.toAbsolutePath().normalize();
+        try (java.util.zip.ZipInputStream in = new java.util.zip.ZipInputStream(
+                new java.io.BufferedInputStream(Files.newInputStream(archive)))) {
+            java.util.zip.ZipEntry entry;
+            while ((entry = in.getNextEntry()) != null) {
+                String name = entry.getName();
+                Path destination = root.resolve(name).normalize();
+                // A zip entry may name `../..`; one that lands outside the target is not
+                // this archive's to write, whatever it says.
+                if (!destination.startsWith(root)) {
+                    throw new IOException("the archive names a path outside its own root: " + name);
+                }
+                if (entry.isDirectory()) {
+                    Files.createDirectories(destination);
+                    continue;
+                }
+                Path parent = destination.getParent();
+                if (parent != null) {
+                    Files.createDirectories(parent);
+                }
+                Files.copy(in, destination, StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
     }
 
     /// Unpacks a `.tar.xz` archive into a directory, preserving symlinks.
@@ -574,8 +658,12 @@ public final class NodeRuntimeManager {
             Path destination = target.resolve(entry.getKey());
             E archiveEntry = entry.getValue();
             if (tree.isLink(archiveEntry)) {
-                Files.deleteIfExists(destination);
-                Files.createSymbolicLink(destination, Path.of(tree.getLink(archiveEntry)));
+                // The distribution reaches `npm` and `npx` through links into
+                // `lib/node_modules`. Where the system permits a link this is that link;
+                // where it does not, `Links` copies the file it points at — the
+                // difference between a runtime that works and an install that fails on
+                // its last step.
+                Links.createOrCopy(destination, Path.of(tree.getLink(archiveEntry)));
                 continue;
             }
             Files.createDirectories(destination.getParent());
@@ -629,18 +717,63 @@ public final class NodeRuntimeManager {
         return false;
     }
 
-    /// Deletes a path, ignoring failures and absence.
+    /// Moves a directory into place, atomically where the system allows it.
+    ///
+    /// `ATOMIC_MOVE` is a request, not a guarantee: Windows refuses it outright when the
+    /// two paths are on different volumes, and a data directory on a second drive is an
+    /// ordinary way to run the panel. What the caller needs is that the *staging*
+    /// directory was complete before anything was published — not that the rename
+    /// itself was indivisible — so the plain move is the right answer when the atomic
+    /// one is not available.
+    ///
+    /// @param source the completed directory
+    /// @param target where it belongs
+    /// @throws IOException when neither move works
+    private static void moveInto(Path source, Path target) throws IOException {
+        try {
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            Files.move(source, target);
+        }
+    }
+
+    /// Deletes a path, retrying briefly while Windows still holds a handle on it.
+    ///
+    /// Windows refuses to remove a directory any process has open — a virus scanner, the
+    /// search indexer, a child process that has only just exited — and the refusal can
+    /// last a few hundred milliseconds. A single attempt turns that into "the install
+    /// failed"; a few retries turn it into an install that took a moment longer.
     ///
     /// @param path the path to remove
     private static void deleteQuietly(Path path) {
-        try {
-            if (Files.isDirectory(path)) {
-                FileUtils.deleteDirectory(path);
-            } else {
-                Files.deleteIfExists(path);
+        for (int attempt = 0; attempt < DELETE_ATTEMPTS; attempt++) {
+            try {
+                if (Files.isDirectory(path) && !Files.isSymbolicLink(path)) {
+                    FileUtils.deleteDirectory(path);
+                } else {
+                    Files.deleteIfExists(path);
+                }
+                return;
+            } catch (IOException e) {
+                if (attempt == DELETE_ATTEMPTS - 1) {
+                    LOG.warning("Failed to delete " + path
+                            + " (it may still be held open by another process)", e);
+                    return;
+                }
+                try {
+                    Thread.sleep(DELETE_RETRY_MILLIS * (attempt + 1L));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    LOG.warning("Failed to delete " + path, e);
+                    return;
+                }
             }
-        } catch (IOException e) {
-            LOG.warning("Failed to delete " + path, e);
         }
     }
+
+    /// How many times a deletion is attempted before it is reported.
+    private static final int DELETE_ATTEMPTS = 5;
+
+    /// The first retry delay, multiplied by the attempt number.
+    private static final long DELETE_RETRY_MILLIS = 100L;
 }

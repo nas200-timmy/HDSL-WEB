@@ -19,6 +19,8 @@ package org.jackhuang.hmcl.web.zcode;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.jackhuang.hmcl.util.io.Links;
+import org.jackhuang.hmcl.util.platform.Executables;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -170,24 +172,38 @@ public final class ZcodeBuilder {
         return List.copyOf(found);
     }
 
-    /// Whether the `current` link points at `release`. Both sides are resolved:
-    /// the link's own path is not the release's path, so a plain comparison
-    /// would never match.
-    private static boolean samePath(Path release, Path link) {
-        try {
-            return Files.exists(link) && release.toRealPath().equals(link.toRealPath());
-        } catch (IOException e) {
-            return false;
-        }
+    /// Whether the `current` pointer points at `release`.
+    ///
+    /// Read through [Links] rather than by walking the path: where symbolic links are not
+    /// permitted — an ordinary Windows account without Developer Mode — the pointer is a
+    /// small text file naming the release, and `toRealPath()` on that resolves the *file*,
+    /// never the release. Every release would then report itself as not current, which is
+    /// what the installed-versions list is built from.
+    ///
+    /// @param release the release directory
+    /// @param pointer the `current` pointer
+    /// @return whether the pointer names that release
+    private static boolean samePath(Path release, Path pointer) {
+        return Links.pointedAt(pointer).map(target -> {
+            try {
+                return release.toRealPath().equals(target.toRealPath());
+            } catch (IOException e) {
+                return false;
+            }
+        }).orElse(false);
     }
 
-    /// The package directory to run: the `current` link when it resolves to a
-    /// package, else the newest installed release, else `current` itself (which
-    /// will not exist, so the interface shows "not installed").
+    /// The package directory to run: what `current` points at when that is a package, else
+    /// the newest installed release, else `current` itself (which will not exist, so the
+    /// interface shows "not installed").
     public static Path currentPackage(Path root) {
         Path current = root.resolve("current");
-        if (Files.isRegularFile(current.resolve("bin/zcode.mjs"))) {
-            return current;
+        // The pointer is read rather than walked through. A symlink can be either, so
+        // walking it worked here and would keep working; a pointer file can only be read,
+        // and mixing the two is how one platform's install becomes invisible to another's.
+        Path pointed = Links.pointedAt(current).orElse(null);
+        if (pointed != null && Files.isRegularFile(pointed.resolve("bin/zcode.mjs"))) {
+            return pointed;
         }
         List<Release> installed = releases(root);
         if (!installed.isEmpty()) {
@@ -221,7 +237,7 @@ public final class ZcodeBuilder {
 
             step.set(0.15, "解包源码");
             Files.createDirectories(sources);
-            run(step, settings, work, List.of("tar", "-xzf", tarball.toString(),
+            run(step, settings, work, List.of(tarProgram(), "-xzf", tarball.toString(),
                     "-C", sources.toString(), "--strip-components=1"), Duration.ofMinutes(10));
 
             step.set(0.22, "应用反代补丁（" + ZcodePatch.size() + " 处）");
@@ -373,8 +389,10 @@ public final class ZcodeBuilder {
         try {
             deleteRecursively(target);
             Files.createDirectories(target);
-            Process tar = new ProcessBuilder("tar", "-xzf", tarball.toString(), "-C", target.toString(),
-                    "--strip-components=1")
+            // `tar` is `tar.exe` on Windows — Windows 10 1803 and later ship bsdtar in
+        // System32, so the unpack step needs no extra dependency there.
+        Process tar = new ProcessBuilder(Executables.startable(List.of(tarProgram(), "-xzf", tarball.toString(), "-C",
+                        target.toString(), "--strip-components=1")))
                     .redirectErrorStream(true)
                     .start();
             tar.getInputStream().transferTo(java.io.OutputStream.nullOutputStream());
@@ -384,9 +402,12 @@ public final class ZcodeBuilder {
             if (!Files.isRegularFile(target.resolve("bin/zcode.mjs"))) {
                 throw new ZcodeException("the built tarball has no bin/zcode.mjs — unexpected layout");
             }
-            Path current = releases.getParent().resolve("current");
-            Files.deleteIfExists(current);
-            Files.createSymbolicLink(current, target);
+            // A pointer at the release just installed. Where the system permits a link
+            // this is a link; where it does not — an ordinary Windows account without
+            // Developer Mode — `Links` writes a pointer file instead, because the
+            // alternative is to fail here, after the pnpm install and build have already
+            // run, over the last step of the whole job.
+            Links.pointAt(releases.getParent().resolve("current"), target);
         } catch (IOException e) {
             throw new ZcodeException("could not install the built ZCode distribution", e);
         } catch (InterruptedException e) {
@@ -412,15 +433,41 @@ public final class ZcodeBuilder {
         }
     }
 
+    /// The `tar` to unpack a release with.
+    ///
+    /// On Windows the system's own `System32\tar.exe` is asked for by path, rather than
+    /// leaving the name to `PATH`. Git for Windows puts GNU tar in `usr\bin`, which is
+    /// routinely earlier on `PATH` — and GNU tar reads `C:\…` as a *remote host* named `C`,
+    /// failing with "Cannot connect to C: resolve failed" and never looking at the file.
+    /// The two are not interchangeable for a Windows path, and the system one is the one
+    /// that works, so it is named.
+    ///
+    /// @return the program to run
+    private static String tarProgram() {
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            String systemRoot = System.getenv("SystemRoot");
+            Path systemTar = Path.of(systemRoot == null || systemRoot.isBlank() ? "C:\\Windows" : systemRoot,
+                    "System32", "tar.exe");
+            if (Files.isRegularFile(systemTar)) {
+                return systemTar.toString();
+            }
+        }
+        return "tar";
+    }
+
     /// Runs a child process, copying its merged output into the build log.
     private static void run(Step step, Settings settings, Path workingDirectory, List<String> command,
                             Duration timeout) throws ZcodeException {
-        ProcessBuilder builder = new ProcessBuilder(command);
+        ProcessBuilder builder = new ProcessBuilder(Executables.startable(command));
         builder.directory(workingDirectory.toFile());
         builder.redirectErrorStream(true);
         if (!settings.buildBin().isBlank()) {
             String path = builder.environment().getOrDefault("PATH", "");
-            builder.environment().put("PATH", settings.buildBin() + ":" + path);
+            // The separator is a property of the system, not of the variable's name:
+            // hardcoding `:` on Windows makes the whole inherited PATH into one entry
+            // that names nothing.
+            builder.environment().put("PATH", settings.buildBin() + java.io.File.pathSeparator + path);
         }
         // Everything a child of the launcher is given: the proxy the settings describe, the npm
         // registry, and the knobs that keep a native build from fetching from the slow half of the
