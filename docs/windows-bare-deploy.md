@@ -4,10 +4,14 @@
 > 本文是 2026-10-16 的一次只读排查：把「Windows 上到底坏在哪、坏在代码的哪一层、怎么修」
 > 钉到 `file:line`，并给出「一个 jar 万能」的实现路径。
 >
-> **当前状态：这份文档写下时，代码没有任何一处针对 Windows 的平台分支**（`OperatingSystem.WINDOWS`
-> 枚举存在，但除几处 `cmd ver`/`chcp` 探测与启动横幅提示外无人使用）。README / CHANGELOG 把
+> **当前状态：已实现**（2026-10-16，分支 `feat/windows-bare-deploy`，见 CHANGELOG v0.4.2）。
+> 本文最初是一份只读排查，落笔时**代码没有任何一处针对 Windows 的平台分支**（`OperatingSystem.WINDOWS`
+> 枚举存在，但除几处 `cmd ver`/`chcp` 探测与启动横幅提示外无人使用）。README / CHANGELOG 当时把
 > Windows 裸部署当作「已加固」场景，而 v0.3.6 的实测记录只覆盖**清空 PATH 的容器内**——用户预期
-> 被抬高了，这是本文要修的第一件事。
+> 被抬高了，那是本文要修的第一件事。
+>
+> 落地过程中，本文几条**推测**被真机实测**修正**（§9.1），§3 的问题清单已按处理结果重新标注。
+> 仍未做的只有「实例终端」（§9.3）。
 
 ## 0. 摘要
 
@@ -101,10 +105,28 @@ Windows 官方 zip 解出来的形状是**根目录** `node.exe` / `npm.cmd` / `
 
 ### 1.4 子进程派生：`.cmd` 不会被 Windows 自动补上
 
-Java 在 Windows 上通过 `CreateProcess` 派生，只自动补 `.exe`，**不会**补 `.cmd`/`.bat`
-（那些必须由 `cmd.exe` 执行）。仓库里所有派生点都是裸 `ProcessBuilder`，**没有任何一处**做
-shell 包装，而 util 层其实**已经有一个带 Windows 批处理转义/引号的 `CommandBuilder`**
-（`CommandBuilder.java:55, 294, 303-323`）——它当前**没有任何调用方**。
+Java 在 Windows 上通过 `CreateProcess` 派生，只自动补 `.exe`，**不会**补 `.cmd`/`.bat`：
+裸 `npm` 报 `CreateProcess error=2`（找不到文件），而面板里所有派生点都是裸 `ProcessBuilder`，
+**没有任何一处**做 shell 包装，它们全都直接失败。
+
+> **实测修正（2026-10-16，Windows 10 + JDK 21）**：原文推论「`.cmd` 必须由 `cmd.exe` 执行」
+> 是**错的**。`CreateProcess` 在命令行里点了名的批处理会由它自己交给 `cmd.exe`，所以：
+>
+> | 形式 | 结果 |
+> |---|---|
+> | 裸 `node` | ✅ 能跑（`CreateProcess` 自己补 `.exe`）|
+> | 裸 `npm` / `npx` | ❌ `error=2` 找不到文件 |
+> | 裸 `npm.cmd` | ✅ **能跑** |
+> | 全路径 `npm.cmd` | ✅ **能跑** |
+> | 全路径无扩展名 `npm` | ❌ `error=193` 不是有效的 Win32 应用程序 |
+>
+> 于是正确修法是**把扩展名补对**，而不是套 `cmd.exe /c` —— 后者会引入一层参数二次转义
+> （那正是 util 层 `CommandBuilder.toBatchStringLiteral` 存在的理由），前者参数可以原样透传。
+> 实现在 `util/platform/Executables`（`resolve()` 按 `PATH` + `PATHEXT` 补全，Windows 上优先
+> `.cmd`、无扩展名的文件退到最后）。
+
+`CommandBuilder` 里那个带 Windows 批处理转义/引号的实现**当前仍然没有任何调用方**——
+本轮没有用它，也不需要它。
 
 | 派生点 | 代码 | Windows 上的结局 |
 |---|---|---|
@@ -131,7 +153,21 @@ shell 包装，而 util 层其实**已经有一个带 Windows 批处理转义/�
 ### 1.6 路径与环境层
 
 - `ZcodeBuilder.java:423`：`settings.buildBin() + ":" + path` —— **硬编码冒号**，Windows 需要 `;`（`File.pathSeparator`）。其余 PATH 拼接点（`DshNodeRuntime:103/228`、`DshVersionManager:846`、`NodeRuntimeManager:339`、`DshInstanceTerminal:206`）都用对了。
-- `PnpmConfigFile.java:73-83`：pnpm 全局配置写在 `${XDG_CONFIG_HOME:-~/.config}/pnpm/config.yaml`。**Windows 的 pnpm 读的是 `%LOCALAPPDATA%\pnpm\config\rc`**，不读这个文件。多数调用点显式传了 `--registry=` 尚可，但 `dsh plugin` 内部自己转发的 pnpm（`DshPluginInstaller.java:40` 注释明确说了这条路径）会走错源。
+- `PnpmConfigFile.java:73-83`：pnpm 全局配置写在 `${XDG_CONFIG_HOME:-~/.config}/pnpm/config.yaml`。
+  **Windows 的 pnpm 不读这个文件**。多数调用点显式传了 `--registry=` 尚可，但 `dsh plugin`
+  内部自己转发的 pnpm（`DshPluginInstaller.java:40` 注释明确说了这条路径）会走错源。
+
+  > **实测修正（Windows 10 + pnpm 11.28.6）**：原文猜的是 `%LOCALAPPDATA%\pnpm\config\rc`，
+  > 那个也不对。用 `pnpm config set` 之后看哪个文件变了：
+  >
+  > | 内容 | pnpm 真正读的位置 |
+  > |---|---|
+  > | registry | `%LOCALAPPDATA%\pnpm\config\auth.ini`，形式 `registry=<地址>` |
+  > | 其余（`storeDir`） | `%LOCALAPPDATA%\pnpm\config\config.yaml` |
+  >
+  > `rc` 与 `~/.config/pnpm/config.yaml` 都**不读**。所以面板写进后者的国内镜像被静默忽略、
+  > 一路打到 npmjs.org。`PnpmConfigFile` 现在按平台分派，语法由文件名决定
+  > （`.yaml` → `registry: "…"`，`.ini` → `registry=…`）。
 - **编码**：子进程输出有的按 `NATIVE_CHARSET` 解（`DshCommand.java:129`、`ManagedProcess.java:155-161`），有的按 UTF-8 解（`BrandInstaller.java:493`、`BrandRuntime.java:538`、`ZcodeRuntime.java:306`）。Windows 中文代码页（936）下二者混用会出现 `?????` 或乱码。
 - 数据目录默认 `./data`（相对当前工作目录，`ServerConfigLoader.java:62`）——Windows 上取决于「从哪双击启动」，属体验问题。
 
@@ -339,3 +375,82 @@ RuntimeLayout                              // 由平台决定
 | `src/main/java/org/jackhuang/hmcl/dsh/{DshCustomCommands,DshInstanceTerminal,DshProcess}.java` | 自定义命令、终端、进程生命周期 |
 | `src/main/java/org/jackhuang/hmcl/dsh/PnpmConfigFile.java` | pnpm 全局配置写入位置 |
 | `src/main/java/org/jackhuang/hmcl/web/Main.java`、`dsh/DshDoctor.java` | 启动横幅体检、doctor |
+
+## 9. 落地与实测（2026-10-16）
+
+环境：真 Windows 10（19045）、JDK 21.0.12、Node v24.22.0、npm 11.19.1、pnpm 11.28.6（实测时装的）。
+
+### 9.1 被实测推翻/修正的推测
+
+| 本文原推测 | 实测结果 |
+|---|---|
+| §1.4：`.cmd`/`.bat` 必须由 `cmd.exe` 执行 → 要套 `cmd /c` | **错**。`CreateProcess` 会自己把点了名的批处理交给 `cmd.exe`：裸 `npm.cmd`、全路径 `npm.cmd` 都能跑；裸 `npm` 是 `error=2`，无扩展名全路径是 `error=193`。修法是补扩展名，不是包 shell。 |
+| §3：`PnpmConfigFile` 在 Windows 应写 `%LOCALAPPDATA%\pnpm\config\rc` | **也不对**。registry 写在 `%LOCALAPPDATA%\pnpm\config\auth.ini`（`registry=<地址>`），`storeDir` 在 `%LOCALAPPDATA%\pnpm\config\config.yaml`；`rc` 和 `~/.config/pnpm/config.yaml` 都不读。 |
+| §3：ZCode 依赖外部 `tar`「需实测」 | **可用，但有陷阱**。Win10 自带 `System32\tar.exe`（bsdtar 3.5.2）支持本处用到的全部参数；但装了 Git for Windows 时 `usr\bin` 里的 **GNU tar** 会排在前面，而 GNU tar 把 `C:\…` 当成**远程主机 `C`**，报 `Cannot connect to C: resolve failed`。所以按路径点名 `System32\tar.exe`。 |
+| §1.5：符号链接失败「取决于开发者模式」 | **确认**。未开开发者模式的普通账户下，建链抛 `FileSystemException: ……current: 客户端没有所需的特权`。 |
+| §3 次要：`ATOMIC_MOVE` 无降级 | **确认**，且跨卷时 Windows 直接拒绝。 |
+
+### 9.2 真机验证通过的部分
+
+按 §6.2 的清单逐条跑（`acc-dsh` = 一个真的 dsh 实例，经面板 `/i/<id>/` 反代）：
+
+| §6.2 | 结果 |
+|---|---|
+| 3 · 识别系统装的 Node/pnpm | ✅ 横幅从 `pnpm MISSING` 变成 `pnpm 11.28.6`；`GET /api/node` 报出 `node.exe`/`npm.cmd`/`pnpm.cmd` 三条完整路径（改之前三条全空——这是 31 个失败里 15 个的同一个根因）|
+| 1 · 一键装托管运行时 | ✅ 装出 `runtimes/26.12.0`：`node.exe` 打 `v26.12.0`、`pnpm.cmd` 打 `11.28.6`，**根目录没有 `bin/`**；`/api/node` 的 `managed[].pnpm` 为 `true` |
+| 4 · 装一个 dsh 实例 | ✅ 601 个包装完、`Installed 0.2.0-rc.2`；`node_modules/@deepseek-ai/dsh` 的链接指向最终路径，`package.json` 读回 `0.2.0-rc.2` |
+| 4 · 启动并使用 | ✅ `state=RUNNING`，经 `/i/acc-dsh/?token=…` 得到 `200`、34782 字节、`<title>DeepSeek Harness</title>`，页面带服务端注入的 `<base href="./">` |
+| 9 · 实例终端 | ✅ 明确不支持：doctor 打印「not available on this platform (it opens a POSIX shell through a Linux terminal emulator)」，启动横幅同款提示 |
+| 10 · 停止后释放端口 | ✅ 停止前 `127.0.0.1:3937` LISTENING，停止后 `state=STOPPED` **且该端口无监听**。（`/i/acc-dsh/` 答 **502** 而非 404，这是设计如此——`ProxyBehaviorTest` 的用例名就写着 `StoppedInstanceIs502`；plan.md 里的「即刻 404」是旧口径。）|
+| 8 · 中文代码页下的日志 | ✅ 控制台编码 `GB18030`，进度「已写入 529 / 601 个包」无乱码 |
+| — · 全量测试 | ✅ **559 用例 / 0 失败 / 0 错误 / 6 跳过**（改之前 31 失败；6 个跳过里 5 个原本就有）|
+| 6 · ZCode 面板内构建 | ⬜ 未跑（长时间构建）。依赖的两个 Windows 陷阱已修并有用例：`tar` 按路径点名 `System32\tar.exe`、PATH 用 `File.pathSeparator` |
+| 5 · 品牌工具（kimi/opencode/claude-web） | ⬜ 未跑（几百 MB 下载）。依赖机制已验：`node_modules/.bin/<tool>` 补全到 `.cmd`（`BrandRuntime.entryPoint`）、`npm`/`pnpm` 走统一派生、`HOME`+`USERPROFILE` 双设 |
+| 7 · 含中文/空格、超深的数据目录 | ⬜ 未跑（本次数据目录是纯 ASCII 短路径）|
+
+### 9.2.1 真机挖出的新问题：安装「先暂存再搬」在 Windows 上必然坏
+
+这是本文原本**没有**列出的项，只有真机真的装一次实例才会暴露。`DshVersionManager.install()`
+原来让 pnpm 在 `dsh.installing/` 里安装，成功后把整棵树 `Files.move` 到 `dsh/`。POSIX 上 pnpm
+写的是**相对**软链，搬了照样能用；**Windows 上 pnpm 用 junction，目标必须是绝对路径**，
+于是搬过去的树里每条链接都还指着刚被删掉的 `dsh.installing/`。现象极具误导性：pnpm 退出码 0、
+601 个包全下完、`.bin/dsh.CMD` 也在，只有 `node_modules/@deepseek-ai/dsh` 是条死链——
+`package.json` 于是读不出来，面板报
+「pnpm reported success, but the installed version could not be read back」。
+
+已修：pnpm 直接写在实例最终要用的路径上；`dsh.installing` 降级为「还在写」的旗标，
+`isInstalled()` 见到它就答「没装」，`discardPartial()` 连同半成品目录一起清掉——中断的安装
+仍然不会被误当成可用版本。修完复测：`Installed 0.2.0-rc.2`，链接指向最终路径。
+
+> 教训：这条**不可能**靠读 Linux 上的代码发现（形状完全一样、Linux 上就是对的）。
+> 它是「真机跑一遍」相对「静态排查」多买到的东西。
+
+### 9.3 仍未做 / 明确不支持
+
+| 项 | 处置 |
+|---|---|
+| 实例终端 | **明确不支持**，被点到时抛的错说清原因（POSIX shell + Linux 终端模拟器）并给出可照抄的替代路径（工作目录 + `DSH_HOME` + 运行时 `bin`）。要真做就是接 `wt`/`powershell`。 |
+| `flock` 会话租约 | Windows 直接答「观察不到」，不再每次去 spawn 一个必然失败的进程。 |
+| 关闭实例后端口/进程是否真的释放 | ✅ dsh 实例实测：停止后端口即刻无监听。品牌与 ZCode 的 `stop()` 仍只 `destroy()`，未加子孙进程清扫。 |
+| 子进程输出编码混用 | ⬜ 未逐处实测；控制台为 GB18030 时中文进度无乱码（§9.2 第 7 行）。 |
+| pnpm 硬链接 store 跨卷 | ⬜ 未实测（需要一个跨卷的数据目录）。 |
+| 长路径（>260） | 未实测；doctor 打印数据目录长度并在 >120 字符时给出提示。 |
+
+### 9.4 复现方法（真机）
+
+```bash
+# 全量测试（Windows）
+gradlew.bat test
+
+# 单跑某一类
+gradlew.bat test --tests "org.jackhuang.hmcl.dsh.PnpmConfigFileTest"
+
+# 裸部署 + 体检
+set HDSL_DATA=%CD%\data
+set HDSL_PORT=3080
+java -jar build\libs\hdsl-web-<版本>.jar
+java -jar build\libs\hdsl-web-<版本>.jar -doctor
+```
+
+派生结论的复现：写一个 `ProcessBuilder` 小程序，分别跑裸 `node`、裸 `npm`、裸 `npm.cmd`、
+全路径 `npm.cmd`、无扩展名全路径 `npm`，看 error code（§1.4 的表就是这样做出来的）。

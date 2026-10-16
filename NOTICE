@@ -52,8 +52,17 @@ The original work has been modified as follows:
     to HMCL's servers, documentation, community links and branding have been
     removed or replaced.
 
-6.  Platform.  Only Linux and macOS are supported.  Windows-specific code
-    paths are not maintained.
+6.  Platform.  Linux, macOS and Windows are supported.  The Windows support
+    covers running `java -jar hdsl-web.jar` directly on the host: detecting a
+    Node.js installed there, installing and running DeepSeek Harness versions
+    and plugins, installing the third-party brand tools, installing a
+    panel-managed Node.js runtime, and building ZCode from the panel.  Two
+    things are deliberately not available there and say so when asked for:
+    the per-instance terminal (it opens a POSIX shell through a Linux terminal
+    emulator) and observation of DeepSeek Harness's `flock(2)` session leases
+    (the command that reads them is util-linux's).  POSIX `0600` has no NTFS
+    equivalent, so the credential file may be readable by other accounts on a
+    multi-user Windows machine.
 
 The full source code of this modified version is available from the project
 repository in which this notice is distributed.

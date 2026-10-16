@@ -2,6 +2,99 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.4.2 — 2026-10-16 · Windows 裸部署：从「文档说可以」到「真能跑」
+
+> 起因：`docs/windows-bare-deploy.md`（同日只读排查）证明 README/CHANGELOG 把 Windows
+> 裸部署当「已加固」，而代码里**没有任何一处**针对 Windows 的平台分支——v0.3.6 那份实测
+> 只覆盖「清空 PATH 的容器内」。本版在真 Windows 10（JDK 21 + Node 24）上逐层补齐，
+> 并按排查稿的 §6.1/§6.2 落测试与真机验收。
+
+### 为什么：真机基线（不是推测）
+
+- 在那台机器上跑全量测试：**559 用例 / 31 失败**（文档基线是容器内 527/0/0）。31 个失败
+  归到 7 个根因，其中 **15 个出自同一个**：`DshNodeRuntime.which()` 按精确名字找文件，
+  而 Windows 上 `node` 是 `node.exe`、`npm` 是 `npm.cmd`——一个都找不到，于是面板判定
+  「本机没有 Node」，把用户推向那个坏掉的托管运行时，**连手动装官方 Node 都白装**。
+- **项目自己的构建在 Windows 上就跑不起来**：`build.gradle.kts` 用
+  `File(it, "npm").canExecute()` 判断 npm 可用——Node 安装包同时放了无扩展名的 `npm`
+  （POSIX 脚本，文件存在所以判断为真）和 `npm.cmd`，紧接着 `Exec("npm")` 必然
+  `CreateProcess error=2`，`./gradlew test` 直接 BUILD FAILED。
+- **`.cmd` 不需要 `cmd /c` 包壳**（推翻了排查稿 §4.3 的建议，实测 JDK 21 + Windows 10）：
+  裸 `npm` → error 2；**裸 `npm.cmd` 与全路径 `npm.cmd` 都能跑**；无扩展名的全路径 `npm`
+  → error 193。正确的修法是**把扩展名补对**，不是套 `cmd.exe /c`——后者会引入参数二次
+  转义（那正是 `CommandBuilder.toBatchStringLiteral` 存在的理由），前者参数原样透传。
+
+### 改了什么
+
+- **L4 派生解析**（新增 `util/platform/Executables`）：`resolve()` 按 `PATH` + `PATHEXT`
+  补全可执行文件——Windows 上优先 `.cmd`，无扩展名的文件退到最后（那是一份 POSIX 脚本，
+  `CreateProcess` 会以「不是有效的 Win32 应用程序」拒绝）；`startable()` 把 argv[0] 补成
+  能启动的形式、参数一字不动。接入 `DshCommand.run`（所有 npm/node/pnpm 的唯一漏斗）、
+  `BrandInstaller`、`ZcodeBuilder`、`ZcodeRuntime`、`Main.toolVersion`、`SystemUtils`、
+  `DshSessions`、`NodeRuntimeManager`；`DshNodeRuntime.which()` / `SystemUtils.which()` 改走它。
+  品牌实例的入口（`node_modules/.bin/<tool>`）与 `tsx` 同样补全到 `.cmd`。
+- **L3 运行时布局**（新增 `dsh/RuntimeLayout`）：POSIX（`bin/node`、`bin/npm`、`bin/` 进
+  `PATH`）对 Windows（根目录 `node.exe`/`npm.cmd`/`npx.cmd`/`pnpm.cmd`，根目录进 `PATH`）。
+  `NodeRuntime`、`DshNodeRuntime.fromManaged`、`NodeRuntimeManager`、`NodeApiServlet`
+  全部改走它；`isExecutable` 换成 `isRegularFile`——NTFS 没有执行位，前者对任何文件都答「是」。
+- **L2 发行物解析**：`platformTag` / `archiveExtension` / `indexTag` 补 `win-x64` / `win-arm64`、
+  `.zip`、`win-x64-zip`，并改成**接收 `Platform` 参数的纯函数**——于是 Windows 的产物名
+  在任意机器上都能被测试钉住，不需要 Windows CI；解包加 zip 分支（Windows 包没有软链，
+  但加条目越界拒绝）。
+- **L5 文件系统语义**（新增 `util/io/Links`）：探测符号链接能力（试建一次临时链接，结果
+  缓存），不可用时按用途降级——解包与复制里的软链（`bin/npm`）**改成复制**；`current`
+  这类**指针改成写一个文本指针文件**，读侧两种形式都认，所以同一目录从一台机器拷到
+  另一台仍然可读。`ATOMIC_MOVE` 补普通 move 兜底（跨卷时 Windows 直接拒绝）；
+  删除/改名加短暂重试（杀软、索引器、刚退出的子进程都会占用几毫秒，一次失败就报
+  「安装失败」太重）。
+- **实例安装不再「先暂存再搬」**（真机实测挖出的 Windows 专属致命项）：原来 pnpm 在
+  `dsh.installing/` 里装完，再把整棵树 `Files.move` 到 `dsh/`。POSIX 上 pnpm 写的是**相对**
+  软链，搬了也没事；Windows 上 pnpm 用的是 **junction**，其目标**必须是绝对路径**——于是搬过去
+  的树里每一条链接都还指着刚被删掉的 `dsh.installing/`，`package.json` 读不出来，面板报
+  「pnpm reported success, but the installed version could not be read back」。现在 pnpm 直接写在
+  实例最终要用的路径上，`dsh.installing` 改为「还在写」的旗标（`isInstalled()` 见到它就答「没装」，
+  `discardPartial()` 会连同半成品目录一起清掉），中断的安装仍然不会被误当成可用版本。
+- **L6 路径与环境**：`ZcodeBuilder` 硬编码的 `":"` → `File.pathSeparator`；
+  `DshCustomCommands` 的 `/bin/sh -c` → Windows `cmd /c`（启动前命令失败会**阻止实例启动**，
+  这条在 Windows 上等于每个带命令的实例都起不来）；`DshInstanceTerminal` 生成的 bash 脚本里
+  `File.pathSeparator` → 字面 `:`（bash 到哪都是 `:`，用宿主分隔符会写出一个只含一个
+  超长目录的 `PATH`）；`BrandRuntime` 在 Windows 同时设 `USERPROFILE`——Node 认它不认
+  `HOME`，否则实例隔离静默失效、品牌凭据落进真实用户目录。
+- **L7 声明层**：`DshDoctor` 加 Windows 专检（符号链接能力、数据目录长度、控制台编码、
+  实例终端不可用），并把 inotify 那一段在 Windows 上标为「不适用」；启动横幅加一条终端
+  不可用的提示；实例终端在 Windows 上抛**说明为什么**的错并给出三个可用路径
+  （工作目录、`DSH_HOME`、运行时 `bin`），而不是「找不到终端模拟器」——那对一台装着
+  Windows Terminal 的机器既真实又无用。
+- **测试夹具平台化**：两个 fake `pnpm` 改成「一份 `pnpm.mjs` + 每平台一行包装」
+  （Windows 那边**必须**有 `pnpm.cmd`，否则面板的可执行文件解析会跳过去、找到真正的 pnpm，
+  测试就会去打网络——这正是这个夹具要防的事）；5 处 `Files.getPosixFilePermissions`
+  断言收进 `PosixPermissions`（POSIX 上仍然断 0600，Windows 上该断言不适用而不是
+  把整个用例跳过）；`DshAcpClientTest` 硬编码的 `/tmp` → 系统临时目录。
+
+### pnpm 配置：实测修正了排查稿的猜测
+
+排查稿写「Windows 的 pnpm 读 `%LOCALAPPDATA%\pnpm\config\rc`」，并标注「需实测确认」。
+在 Windows 10 + pnpm 11.28.6 上实测（`pnpm config set` 之后看哪个文件变了）：
+
+| 内容 | pnpm 真正读的位置 |
+|---|---|
+| registry | `%LOCALAPPDATA%\pnpm\config\auth.ini`，形式 `registry=<地址>` |
+| 其余（`storeDir`） | `%LOCALAPPDATA%\pnpm\config\config.yaml` |
+
+`%LOCALAPPDATA%\pnpm\config\rc` 与 `~/.config/pnpm/config.yaml` **都不读**——面板写进
+后者的国内镜像因此被静默忽略、一路打到 npmjs.org。`PnpmConfigFile` 现在按平台分派：
+POSIX 仍是 `$XDG_CONFIG_HOME/pnpm/config.yaml`（YAML、值带引号），Windows 是两个文件
+（INI 给 registry、YAML 给 storeDir），语法由文件名决定。
+
+### 仍然不支持（明确声明，不再只是报错）
+
+- **实例终端**：它开的是 POSIX shell、走的是 Linux 终端模拟器列表，两端在 Windows 上
+  都不存在。现在抛的错会说清原因并给出可以照抄的替代路径。要真做就是接 `wt`/`powershell`。
+- **`flock` 会话租约**：util-linux 的命令，Windows 没有；面板在 Windows 上直接答
+  「观察不到」而不是每次去 spawn 一个必然失败的进程。
+- POSIX `0600` 语义（旧限制，未变）：NTFS 无 umask，凭据文件可能被同机其他账户读到。
+
+
 ## v0.4.1 — 2026-10-15 · 开山：品牌实例在实例列表页内原地成层，实例成为一等对象
 
 > 版本号：原计划的 **v0.4 不单独发 release**——本版把「开山」与随后的访问宽容化
