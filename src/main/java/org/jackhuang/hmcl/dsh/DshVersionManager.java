@@ -89,6 +89,12 @@ public final class DshVersionManager {
     /// @return whether its entry script is there
     public static boolean isInstalled(DshInstance instance) {
         try {
+            // The flag first. While `dsh.installing` stands, the tree below it is still
+            // being written — an entry script already on disk is half of an install, not
+            // an installed version, and an interrupted install must never read as one.
+            if (Files.exists(stagingDirectory(instance))) {
+                return false;
+            }
             return Files.isRegularFile(instance.dshEntryPoint());
         } catch (DshException e) {
             return false;
@@ -406,12 +412,20 @@ public final class DshVersionManager {
 
     /// Removes a copy that was being installed and did not finish.
     ///
+    /// Both halves: the flag, and the tree that was being written under it. The tree is
+    /// removed as well because it now lives at the path the instance would use — a
+    /// partial one left there is `node_modules` a launch would read.
+    ///
     /// @param instance the instance whose partial install to remove
     public static void discardPartial(DshInstance instance) {
         try {
             Path staging = stagingDirectory(instance);
             if (Files.exists(staging)) {
                 FileUtils.deleteDirectory(staging);
+                Path partial = instance.dshDirectory();
+                if (Files.exists(partial)) {
+                    FileUtils.deleteDirectory(partial);
+                }
                 LOG.info("Removed the partial install for " + instance.id());
             }
         } catch (IOException | DshException e) {
@@ -584,8 +598,18 @@ public final class DshVersionManager {
 
     /// Installs the DeepSeek Harness an instance runs, into that instance.
     ///
-    /// The install is staged inside the instance and moved into place on success,
-    /// so an interrupted install can never look like a usable runtime.
+    /// The tree is written where the instance will use it, and `dsh.installing` stands
+    /// beside it while that happens: a flag that says the install is not finished, so an
+    /// interrupted one can never look like a usable runtime.
+    ///
+    /// It used to be staged in `dsh.installing` and *moved* into place on success. That
+    /// is the cleaner shape and it is what this did, but it cannot survive Windows: pnpm
+    /// links `node_modules` with symlinks on POSIX — relative ones, so the whole tree can
+    /// be moved — and with junctions on Windows, whose targets must be **absolute**. A
+    /// staged tree therefore arrived with every link naming the directory the move had
+    /// just deleted, pnpm having exited zero and the packages all being present. The
+    /// install finished and the manifest could not be read back, which is what the panel
+    /// reported: "pnpm reported success, but the installed version could not be read back".
     ///
     /// @param instance the instance to install for
     /// @param onLine   a consumer notified of pnpm output lines, or `null`
@@ -618,9 +642,16 @@ public final class DshVersionManager {
             if (Files.exists(staging)) {
                 FileUtils.deleteDirectory(staging);
             }
+            if (Files.exists(target)) {
+                FileUtils.deleteDirectory(target);
+            }
+            Files.createDirectories(target);
+            // The flag, raised for as long as the tree is being written. Its presence is
+            // what [isInstalled] refuses to overlook — which is the job the staging
+            // directory used to do by holding the tree.
             Files.createDirectories(staging);
         } catch (IOException e) {
-            throw new DshException("Failed to prepare " + staging, e);
+            throw new DshException("Failed to prepare " + target, e);
         }
 
         // The manifest is written before pnpm runs, because pnpm would otherwise
@@ -635,10 +666,10 @@ public final class DshVersionManager {
         // Pinning the launcher to its exact version and holding the application
         // boot library to the same one keeps a tree consistent. The override is
         // the value the create page offers, and it defaults to the matching one.
-        writeManifest(staging, version, version, runtime,
+        writeManifest(target, version, version, runtime,
                 org.jackhuang.hmcl.setting.SettingsManager.settings().dependencyPolicy());
 
-        List<String> command = buildInstallCommand(runtime, staging);
+        List<String> command = buildInstallCommand(runtime, target);
 
         LOG.info("Installing DSH " + version + " for " + instance.id() + ": " + String.join(" ", command));
 
@@ -655,6 +686,9 @@ public final class DshVersionManager {
         }
 
         if (exitCode != 0) {
+            // Nothing half-written is left to be mistaken for an install, and the flag
+            // goes with it: what remains is a version that was never installed.
+            deleteQuietly(target);
             deleteQuietly(staging);
             // pnpm's own last lines say what went wrong — a version that is not
             // published, a dependency tree that cannot be resolved, a registry that
@@ -664,22 +698,16 @@ public final class DshVersionManager {
                     + ":\n" + tail(commandResult.output()));
         }
 
-        Path bin = staging.resolve(DshVersion.PACKAGE_PATH).resolve("lib/bin.js");
+        Path bin = target.resolve(DshVersion.PACKAGE_PATH).resolve("lib/bin.js");
         if (!Files.isRegularFile(bin)) {
+            deleteQuietly(target);
             deleteQuietly(staging);
             throw new DshException("pnpm reported success but " + bin + " is missing");
         }
 
-        try {
-            if (Files.exists(target)) {
-                FileUtils.deleteDirectory(target);
-            }
-            Files.createDirectories(target.getParent());
-            Files.move(staging, target);
-        } catch (IOException e) {
-            deleteQuietly(staging);
-            throw new DshException("Failed to move the staged install into " + target, e);
-        }
+        // The tree is already where the instance will use it — only the flag has to come
+        // down, and that is the whole of what "publishing" this install means.
+        deleteQuietly(staging);
 
         LOG.info("Installed DSH " + version + " for " + instance.id() + " into " + target);
     }
