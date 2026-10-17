@@ -82,6 +82,38 @@
   断言收进 `PosixPermissions`（POSIX 上仍然断 0600，Windows 上该断言不适用而不是
   把整个用例跳过）；`DshAcpClientTest` 硬编码的 `/tmp` → 系统临时目录。
 
+### 真机复验（2026-10-17，v0.4.2 候选 jar）
+
+在那台 Windows 10 上把 jar 从零跑了一遍——不是单元测试，是 `java -jar` 裸部署：
+
+- 面板：首启建号、登录、`/api/doctor` 全部通过；横幅 `runtime: node v24.22.0, pnpm 11.28.6`
+  （pnpm 不再误报 MISSING）；
+- 托管运行时：`POST /api/node/install` 装出 **win-x64 26.12.0**——根目录 `node.exe`/`pnpm.cmd`、
+  没有 `bin/`，`node -v` 与 `pnpm -v` 都能跑；
+- dsh：`0.2.1-rc.1` 的 626 个包**就地**装进实例目录（`dsh.installing` 只是旗标、装完即消失），
+  启动后经 `/i/<id>/?token=…` 反代 **200**、停止后端口无监听；
+- 品牌：opencode 1.19.3 的装、启、反代（`<title>OpenCode</title>`）全通；停止后状态停在
+  `stopped`、端口释放、`opencode.exe` 无残留（这一条见下）；
+- **中文 + 空格**数据目录（`C:\Users\timmy\hdsl-测试 空格`）：装、启、反代同样通过；
+- HTTPS：自签证书打开后，裸 IP 同端口 `http://192.168.1.11:3080/` 答 **308** →
+  `https://192.168.1.11:3080/`；
+- 实例自定义命令：启动前命令经 `cmd /c` 执行，工作目录里的 `pre-win.txt` 写入成功。
+- 未复跑：ZCode 面板内构建（耗时长）、kimi 品牌（需要账号）。
+
+### 停止实例必须带走整棵进程树
+
+真机复验挖出的最实在的一个问题：opencode 的 `stop()` 只 `destroy()` 了面板持有的那个
+`Process`，真正占着端口的是它派生出来的 `opencode.exe`——面板报 `stopped`，端口却还在
+LISTENING，再次启动就撞「port already in use」。新增 `util/ProcessTree`：**先**收集后代
+（父进程一死，子进程就被重新挂到系统进程之下，`descendants()` 再也找不到它们），再按
+「先礼后兵」的顺序终止；只杀父进程的写法在 Linux 上同样会留下 npm/tsx 的 shim 子进程。
+`BrandRuntime.stop()` 与 `ZcodeRuntime.stop()` 都改走它。`STOPPING` 旗标改由输出泵消费，
+不再由 `stop()` 提前移除——否则「请求停止」和「泵读到 EOF」会竞争同一个答案，把主动停止
+误报成「进程意外退出」。真机复验：停止后 `listeners=0`、`opencode=0`、状态保持 `stopped`。
+
+启动日志也不再为 Windows 上必然发生的 `setPosixFilePermissions` 打一条带堆栈的 WARNING
+（横幅已经写明 NTFS 没有 0600 语义，warning 只会像故障）。
+
 ### pnpm 配置：实测修正了排查稿的猜测
 
 排查稿写「Windows 的 pnpm 读 `%LOCALAPPDATA%\pnpm\config\rc`」，并标注「需实测确认」。

@@ -174,7 +174,8 @@ Java 在 Windows 上通过 `CreateProcess` 派生，只自动补 `.exe`，**不�
 ### 1.7 进程生命周期
 
 - 只有 dsh 侧枚举子孙进程（`DshProcess.java:361, 373`）；
-- `BrandRuntime.stop()`（`:357-365`）与 `ZcodeRuntime.stop()`（`:256-263`）**只 `destroy()+destroyForcibly()`**。Claude Web 是 `tsx` 派生 node，Windows 上强杀 tsx 会留下真正占着端口的 node——而 Windows 的 `destroy()` 本身就是 `TerminateProcess`，没有「优雅退出」可言。
+- `BrandRuntime.stop()`（`:357-365`）与 `ZcodeRuntime.stop()`（`:256-263`）原本**只 `destroy()+destroyForcibly()`**。Claude Web 是 `tsx` 派生 node，Windows 上强杀 tsx 会留下真正占着端口的 node——而 Windows 的 `destroy()` 本身就是 `TerminateProcess`，没有「优雅退出」可言。
+  **v0.4.2 已改为终止整棵进程树**（`util/ProcessTree`，见 §9.2.2 的真机复验）。
 
 ### 1.8 做对了的地方（改动时别弄坏）
 
@@ -212,7 +213,7 @@ Java 在 Windows 上通过 `CreateProcess` 派生，只自动补 `.exe`，**不�
 | 严重 | ZCode `current` 链失败毁掉整次构建 | `ZcodeBuilder.java:387-389` | 代码证实 |
 | 严重 | ZCode PATH 硬编码 `":"` | `ZcodeBuilder.java:423` | 代码证实 |
 | 严重 | pnpm 全局配置路径 POSIX | `PnpmConfigFile.java:73-83` | 代码证实（pnpm 在 Windows 的读取路径需实测确认） |
-| 严重 | 品牌/ZCode 进程不枚举子孙即强杀 | `BrandRuntime.java:357-365`、`ZcodeRuntime.java:256-263` | 代码证实（实际漏杀量需实测） |
+| 严重 | 品牌/ZCode 进程不枚举子孙即强杀 | `BrandRuntime.java:357-365`、`ZcodeRuntime.java:256-263` | 代码证实；**v0.4.2 已修**（`util/ProcessTree`，实测见 §9.2.2） |
 | 严重 | 长路径 / 非 ASCII 路径 | 全局无处理 | **需实测** |
 | 严重 | 被占用文件删/改无重试 | `NodeRuntimeManager.java:288-289, 465-477` | **需实测** |
 | 严重 | pnpm 硬链接 store 跨卷 | `CacheRepository.java:166` + 部署约定 | **需实测** |
@@ -358,6 +359,10 @@ RuntimeLayout                              // 由平台决定
 | 9 | 实例终端 | 明确可用或明确「本平台不支持」（不能只是报错） |
 | 10 | 进程停止：启动品牌实例后点停止，看端口是否释放 | 无残留 node 占用端口 |
 
+2026-10-17 的复验（§9.2.2）覆盖了 3、4、5（opencode）、8、9、10 与 7 的中文/空格部分；
+1/2 的托管运行时下载路径已验证（该机另有开发者模式权限，未单独测「无权限」分支）；
+6（ZCode 构建）、7 的 >260 字符深路径仍未跑。
+
 ### 6.3 仍需实测的点（本文无法在 Linux 上定论）
 
 `bsdtar` 是否可用（ZCode 解包）、pnpm 硬链接 store 跨卷、被占用文件的删改、控制台编码、
@@ -438,13 +443,33 @@ RuntimeLayout                              // 由平台决定
 > 教训：这条**不可能**靠读 Linux 上的代码发现（形状完全一样、Linux 上就是对的）。
 > 它是「真机跑一遍」相对「静态排查」多买到的东西。
 
+### 9.2.2 v0.4.2 候选 jar 的复验（2026-10-17）
+
+同一台机器（Windows 10 19045、JDK 21.0.12、系统 Node 24.22.0、pnpm 11.28.6），用
+`feat/windows-bare-deploy` 构建出的 jar 从**空数据目录**重跑；数据目录分别放在纯 ASCII
+与含中文/空格的两处。
+
+| 场景 | 结果 |
+|---|---|
+| 首启 | ✅ `HDSL_ADMIN_PASSWORD` 建号、登录、`/api/doctor` 全绿；横幅 `runtime: node v24.22.0, pnpm 11.28.6` |
+| 托管运行时（win-x64） | ✅ 装出 `26.12.0`：根目录 `node.exe`/`npm.cmd`/`pnpm.cmd`（无 `bin/`），`node -v`、`pnpm -v` 可用 |
+| dsh 实例 | ✅ `0.2.1-rc.1`、626 个包**就地**装完，`dsh.installing` 装完即消失；`/i/acc-win/?token=…` 反代 **200**（37023 字节、`<base href="./">`）；停止后端口无监听 |
+| 品牌实例（opencode 1.19.3） | ✅ 装、启、反代 200（`<title>OpenCode</title>`）；停止后状态 `stopped`、端口释放、`opencode.exe` 无残留 |
+| 中文 + 空格路径 | ✅ `C:\Users\timmy\hdsl-测试 空格` 下同样装、启、反代通过（链接为相对软链，`dsh.CMD` 就位）|
+| HTTPS + 裸 IP | ✅ 自签证书：`https://192.168.1.11:3080/` → 200；`http://192.168.1.11:3080/`（含 `/api/health`）→ **308** 到 https |
+| 启动前自定义命令 | ✅ `cmd /c` 执行 `echo … > pre-win.txt`，文件落在工作目录，实例正常进入 RUNNING |
+| 全量测试（Linux 侧） | ✅ **581 用例 / 0 失败 / 0 错误 / 0 跳过** |
+
+未复跑：ZCode 面板内构建（耗时）、kimi 品牌（需要账号）、claude-web（GitHub 下载 + 构建）、
+>260 字符的长路径。
+
 ### 9.3 仍未做 / 明确不支持
 
 | 项 | 处置 |
 |---|---|
 | 实例终端 | **明确不支持**，被点到时抛的错说清原因（POSIX shell + Linux 终端模拟器）并给出可照抄的替代路径（工作目录 + `DSH_HOME` + 运行时 `bin`）。要真做就是接 `wt`/`powershell`。 |
 | `flock` 会话租约 | Windows 直接答「观察不到」，不再每次去 spawn 一个必然失败的进程。 |
-| 关闭实例后端口/进程是否真的释放 | ✅ dsh 实例实测：停止后端口即刻无监听。品牌与 ZCode 的 `stop()` 仍只 `destroy()`，未加子孙进程清扫。 |
+| 关闭实例后端口/进程是否真的释放 | ✅ dsh 实例实测：停止后端口即刻无监听。**品牌/ZCode 在 v0.4.2 改为终止整棵进程树**（`util/ProcessTree`）；opencode 复验：停止后 `listeners=0`、`opencode=0`，状态保持 `stopped`（不再被输出泵误报成「意外退出」）。 |
 | 子进程输出编码混用 | ⬜ 未逐处实测；控制台为 GB18030 时中文进度无乱码（§9.2 第 7 行）。 |
 | pnpm 硬链接 store 跨卷 | ⬜ 未实测（需要一个跨卷的数据目录）。 |
 | 长路径（>260） | 未实测；doctor 打印数据目录长度并在 >120 字符时给出提示。 |
