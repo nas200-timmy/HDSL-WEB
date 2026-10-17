@@ -94,12 +94,16 @@ public final class DshDoctor {
             // An instance's harness sits several directories below this, and pnpm's own nesting
             // is what pushes a path past the 260-character limit Windows still applies unless
             // long paths are enabled. The number is what says whether that is a risk here.
-            String dataDirectory = Metadata.HMCL_USER_HOME.toString();
-            out.println("  data directory:  " + dataDirectory);
-            out.println("  its length:      " + dataDirectory.length() + " characters"
-                    + (dataDirectory.length() > 120
+            // The launcher's user directory — where instances and their `node_modules` live —
+            // is not the panel's own data directory (`HDSL_DATA`, default `./data`). The long
+            // path risk belongs to the former, so the label has to say so.
+            String userDirectory = Metadata.HMCL_USER_HOME.toString();
+            out.println("  user directory:  " + userDirectory);
+            out.println("                   (instances and runtimes; the panel's own data dir is HDSL_DATA)");
+            out.println("  its length:      " + userDirectory.length() + " characters"
+                    + (userDirectory.length() > 120
                             ? "  [LONG: an instance's node_modules may exceed the 260-character limit;"
-                                    + " keep the data directory nearer the drive root]"
+                                    + " keep the user directory nearer the drive root]"
                             : "  [ok]"));
             out.println("  console encoding: " + org.jackhuang.hmcl.util.platform.OperatingSystem.NATIVE_CHARSET);
             out.println("  instance terminal: not available on this platform"

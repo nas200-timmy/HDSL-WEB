@@ -169,13 +169,12 @@ public final class PnpmConfigFile {
     private static boolean rewrite(Path file, Format format, @Nullable String registry, @Nullable String store)
             throws IOException {
         List<String> kept = new ArrayList<>();
-        boolean hadRegistry = false;
         boolean hadStore = false;
-        if (Files.isRegularFile(file)) {
+        boolean exists = Files.isRegularFile(file);
+        if (exists) {
             for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
                 String trimmed = line.trim();
                 if (registry != null && isSetting(trimmed, REGISTRY_KEY)) {
-                    hadRegistry = true;
                     continue;
                 }
                 if (isSetting(trimmed, STORE_KEY)) {
@@ -200,6 +199,12 @@ public final class PnpmConfigFile {
         }
         String text = String.join(System.lineSeparator(), written) + System.lineSeparator();
 
+        if (!exists && registry == null && store == null) {
+            // Nothing to add and no file to keep: do not create one. The Windows path calls
+            // this with `store == null` on every settings save, and a file holding a single
+            // newline is a setting nobody set.
+            return false;
+        }
         if (text.equals(readText(file))) {
             return false;
         }

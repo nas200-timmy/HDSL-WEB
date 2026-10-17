@@ -390,7 +390,7 @@ public final class ZcodeBuilder {
             deleteRecursively(target);
             Files.createDirectories(target);
             // `tar` is `tar.exe` on Windows — Windows 10 1803 and later ship bsdtar in
-        // System32, so the unpack step needs no extra dependency there.
+            // System32, so the unpack step needs no extra dependency there.
         Process tar = new ProcessBuilder(Executables.startable(List.of(tarProgram(), "-xzf", tarball.toString(), "-C",
                         target.toString(), "--strip-components=1")))
                     .redirectErrorStream(true)
