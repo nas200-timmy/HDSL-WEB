@@ -273,6 +273,47 @@ public final class FileUtils {
         }
     }
 
+    /// Deletes a file or a directory, retrying briefly while the system still holds a
+    /// handle on it.
+    ///
+    /// Windows refuses to remove a directory any process has open — a virus scanner, the
+    /// search indexer, a child that has only just exited — and the refusal can last a few
+    /// hundred milliseconds. A single attempt turns that into "the install failed"; a few
+    /// retries turn it into an install that took a moment longer. On POSIX the first
+    /// attempt is the one that matters and the loop exits there.
+    ///
+    /// @param path the file or directory to remove; a missing path is success
+    public static void deleteQuietly(Path path) {
+        for (int attempt = 0; attempt < DELETE_ATTEMPTS; attempt++) {
+            try {
+                if (Files.isDirectory(path) && !Files.isSymbolicLink(path))
+                    deleteDirectory(path);
+                else
+                    Files.deleteIfExists(path);
+                return;
+            } catch (IOException e) {
+                if (attempt == DELETE_ATTEMPTS - 1) {
+                    LOG.warning("Failed to delete " + path
+                            + " (it may still be held open by another process)", e);
+                    return;
+                }
+                try {
+                    Thread.sleep(DELETE_RETRY_MILLIS * (attempt + 1L));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    LOG.warning("Failed to delete " + path, e);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// How many times [deleteQuietly] tries before it reports a failure.
+    private static final int DELETE_ATTEMPTS = 5;
+
+    /// The first backoff step, in milliseconds; each retry waits one step longer.
+    private static final long DELETE_RETRY_MILLIS = 100L;
+
     public static void setExecutable(Path path) {
         PosixFileAttributeView view = Files.getFileAttributeView(path, PosixFileAttributeView.class);
         if (view != null) {

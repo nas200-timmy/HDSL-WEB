@@ -290,7 +290,7 @@ public final class NodeRuntimeManager {
 
         try {
             Files.createDirectories(DshPaths.RUNTIMES);
-            deleteQuietly(staging);
+            FileUtils.deleteQuietly(staging);
             Files.createDirectories(staging);
         } catch (IOException e) {
             throw new DshException("Failed to prepare " + staging, e);
@@ -305,8 +305,8 @@ public final class NodeRuntimeManager {
             stage(onStage, "Unpacking " + fileName);
             extractArchive(archive, staging);
         } catch (IOException e) {
-            deleteQuietly(staging);
-            deleteQuietly(archive);
+            FileUtils.deleteQuietly(staging);
+            FileUtils.deleteQuietly(archive);
             throw new DshException("Failed to install Node.js " + normalized + ": " + e.getMessage(), e);
         }
 
@@ -314,17 +314,17 @@ public final class NodeRuntimeManager {
         // so the runtime directory is the distribution root.
         Path unpacked = staging.resolve("node-v" + normalized + "-" + platform);
         if (!Files.isDirectory(unpacked)) {
-            deleteQuietly(staging);
+            FileUtils.deleteQuietly(staging);
             throw new DshException("The archive did not contain node-v" + normalized + "-" + platform);
         }
 
         try {
-            deleteQuietly(target);
+            FileUtils.deleteQuietly(target);
             moveInto(unpacked, target);
-            deleteQuietly(staging);
+            FileUtils.deleteQuietly(staging);
             Files.deleteIfExists(archive);
         } catch (IOException e) {
-            deleteQuietly(staging);
+            FileUtils.deleteQuietly(staging);
             throw new DshException("Failed to move the Node runtime into " + target, e);
         }
 
@@ -457,12 +457,12 @@ public final class NodeRuntimeManager {
         Path target = DshPaths.runtimeDirectory(version);
         Path staging = target.resolveSibling(target.getFileName() + ".adopting");
         try {
-            deleteQuietly(staging);
+            FileUtils.deleteQuietly(staging);
             copyTree(source, staging);
-            deleteQuietly(target);
+            FileUtils.deleteQuietly(target);
             moveInto(staging, target);
         } catch (IOException e) {
-            deleteQuietly(staging);
+            FileUtils.deleteQuietly(staging);
             throw new DshException("Failed to adopt " + source + ": " + e.getMessage(), e);
         }
 
@@ -736,44 +736,4 @@ public final class NodeRuntimeManager {
             Files.move(source, target);
         }
     }
-
-    /// Deletes a path, retrying briefly while Windows still holds a handle on it.
-    ///
-    /// Windows refuses to remove a directory any process has open — a virus scanner, the
-    /// search indexer, a child process that has only just exited — and the refusal can
-    /// last a few hundred milliseconds. A single attempt turns that into "the install
-    /// failed"; a few retries turn it into an install that took a moment longer.
-    ///
-    /// @param path the path to remove
-    private static void deleteQuietly(Path path) {
-        for (int attempt = 0; attempt < DELETE_ATTEMPTS; attempt++) {
-            try {
-                if (Files.isDirectory(path) && !Files.isSymbolicLink(path)) {
-                    FileUtils.deleteDirectory(path);
-                } else {
-                    Files.deleteIfExists(path);
-                }
-                return;
-            } catch (IOException e) {
-                if (attempt == DELETE_ATTEMPTS - 1) {
-                    LOG.warning("Failed to delete " + path
-                            + " (it may still be held open by another process)", e);
-                    return;
-                }
-                try {
-                    Thread.sleep(DELETE_RETRY_MILLIS * (attempt + 1L));
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    LOG.warning("Failed to delete " + path, e);
-                    return;
-                }
-            }
-        }
-    }
-
-    /// How many times a deletion is attempted before it is reported.
-    private static final int DELETE_ATTEMPTS = 5;
-
-    /// The first retry delay, multiplied by the attempt number.
-    private static final long DELETE_RETRY_MILLIS = 100L;
 }
