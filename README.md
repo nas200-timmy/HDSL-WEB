@@ -170,8 +170,12 @@ $env:HDSL_ADMIN_PASSWORD = "换成一个强口令"
 java -jar build\libs\hdsl-web-0.1.0-dev.jar
 ```
 
-Windows 上数据目录默认落在 `%APPDATA%\.hdsl`（`-Dhdsl.home=` 或 `HDSL_USER_HOME` 可覆盖），
-所以「从哪双击启动」不影响它。
+Windows 上有**两个**目录，别混：
+
+- **启动器用户目录** `%APPDATA%\.hdsl`（`-Dhdsl.home=` 或 `HDSL_USER_HOME` 可覆盖）——实例、
+  运行时装在这里；「从哪双击启动」不影响它。
+- **面板数据目录** `HDSL_DATA`（默认 `./data`，**相对当前工作目录**）——账号、配置、证书、
+  pnpm store 在这里。裸部署时建议显式设一个绝对路径的 `HDSL_DATA`，否则它的位置取决于你从哪启动。
 
 不用环境变量也行：`hdsl-web` 会读 `$HDSL_DATA/server.yaml`（默认数据目录 `./data`），
 没有配置文件就用内置默认值。`java -jar … -version` 只打印版本号后退出。

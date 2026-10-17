@@ -7,7 +7,9 @@
 > 起因：`docs/windows-bare-deploy.md`（同日只读排查）证明 README/CHANGELOG 把 Windows
 > 裸部署当「已加固」，而代码里**没有任何一处**针对 Windows 的平台分支——v0.3.6 那份实测
 > 只覆盖「清空 PATH 的容器内」。本版在真 Windows 10（JDK 21 + Node 24）上逐层补齐，
-> 并按排查稿的 §6.1/§6.2 落测试与真机验收。
+> 并按排查稿的 §6.1 落单元测试（`NodeArtifactNamingTest` / `RuntimeLayoutTest` /
+> `ExecutablesTest` / `DshCustomCommandsTest` / `DshVersionManagerRollbackTest`），
+> §6.2 的真机清单逐条跑过。
 
 ### 为什么：真机基线（不是推测）
 
@@ -36,7 +38,11 @@
 - **L3 运行时布局**（新增 `dsh/RuntimeLayout`）：POSIX（`bin/node`、`bin/npm`、`bin/` 进
   `PATH`）对 Windows（根目录 `node.exe`/`npm.cmd`/`npx.cmd`/`pnpm.cmd`，根目录进 `PATH`）。
   `NodeRuntime`、`DshNodeRuntime.fromManaged`、`NodeRuntimeManager`、`NodeApiServlet`
-  全部改走它；`isExecutable` 换成 `isRegularFile`——NTFS 没有执行位，前者对任何文件都答「是」。
+  全部改走它。可执行判定按平台分开：**POSIX 仍然要求执行位、答案仍然是 realpath**
+  （`Executables.startableAmong`，`node_modules/.bin/tsx` 这类软链照旧解析到目标）——这一半
+  不因为 Windows 适配而改变；Windows 上 NTFS 没有执行位，改按扩展名 + `PATHEXT` 补全，
+  并且**不套 `cmd /c`**（`CreateProcess` 会自己把点名的批处理转给 `cmd.exe`，套壳反而多一层
+  转义；实测见下）。
 - **L2 发行物解析**：`platformTag` / `archiveExtension` / `indexTag` 补 `win-x64` / `win-arm64`、
   `.zip`、`win-x64-zip`，并改成**接收 `Platform` 参数的纯函数**——于是 Windows 的产物名
   在任意机器上都能被测试钉住，不需要 Windows CI；解包加 zip 分支（Windows 包没有软链，
@@ -46,7 +52,8 @@
   这类**指针改成写一个文本指针文件**，读侧两种形式都认，所以同一目录从一台机器拷到
   另一台仍然可读。`ATOMIC_MOVE` 补普通 move 兜底（跨卷时 Windows 直接拒绝）；
   删除/改名加短暂重试（杀软、索引器、刚退出的子进程都会占用几毫秒，一次失败就报
-  「安装失败」太重）。
+  「安装失败」太重）——重试落在共享的 `FileUtils.deleteQuietly` 上，实例安装清旗标与
+  运行时安装清暂存目录用的是同一份，不再一个有重试、一个没有。
 - **实例安装不再「先暂存再搬」**（真机实测挖出的 Windows 专属致命项）：原来 pnpm 在
   `dsh.installing/` 里装完，再把整棵树 `Files.move` 到 `dsh/`。POSIX 上 pnpm 写的是**相对**
   软链，搬了也没事；Windows 上 pnpm 用的是 **junction**，其目标**必须是绝对路径**——于是搬过去
@@ -54,13 +61,17 @@
   「pnpm reported success, but the installed version could not be read back」。现在 pnpm 直接写在
   实例最终要用的路径上，`dsh.installing` 改为「还在写」的旗标（`isInstalled()` 见到它就答「没装」，
   `discardPartial()` 会连同半成品目录一起清掉），中断的安装仍然不会被误当成可用版本。
+  **就地安装不能把「失败不毁旧版」这条保证丢掉**（旧流程靠暂存目录天然做到，且这一条对所有
+  平台都重要）：安装前把已有的树**挪到 `dsh.previous`**，pnpm 失败或产物不全时删掉半成品、
+  **把旧树挪回原路径**（Windows 的 junction 是绝对目标，只有回到原路径才重新有效），
+  发布成功才删备份。`DshVersionManagerRollbackTest` 钉住四种状态（失败/中断/已发布/无备份）。
 - **L6 路径与环境**：`ZcodeBuilder` 硬编码的 `":"` → `File.pathSeparator`；
   `DshCustomCommands` 的 `/bin/sh -c` → Windows `cmd /c`（启动前命令失败会**阻止实例启动**，
   这条在 Windows 上等于每个带命令的实例都起不来）；`DshInstanceTerminal` 生成的 bash 脚本里
   `File.pathSeparator` → 字面 `:`（bash 到哪都是 `:`，用宿主分隔符会写出一个只含一个
   超长目录的 `PATH`）；`BrandRuntime` 在 Windows 同时设 `USERPROFILE`——Node 认它不认
   `HOME`，否则实例隔离静默失效、品牌凭据落进真实用户目录。
-- **L7 声明层**：`DshDoctor` 加 Windows 专检（符号链接能力、数据目录长度、控制台编码、
+- **L7 声明层**：`DshDoctor` 加 Windows 专检（符号链接能力、启动器用户目录长度、控制台编码、
   实例终端不可用），并把 inotify 那一段在 Windows 上标为「不适用」；启动横幅加一条终端
   不可用的提示；实例终端在 Windows 上抛**说明为什么**的错并给出三个可用路径
   （工作目录、`DSH_HOME`、运行时 `bin`），而不是「找不到终端模拟器」——那对一台装着

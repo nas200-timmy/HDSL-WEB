@@ -192,7 +192,7 @@ Java 在 Windows 上通过 `CreateProcess` 派生，只自动补 `.exe`，**不�
 | **L1 平台识别** | 回答「我是什么平台/架构」 | `OperatingSystem` 枚举齐备（含 `WINDOWS`），`Architecture` 在 Windows 走 `PROCESSOR_IDENTIFIER`（`Architecture.java:201-208`） | 无 | 已有，直接用；**新增一处「平台能力」查询**（是否 POSIX shell、是否支持符号链接、是否区分 `.cmd`）供其余层使用 |
 | **L2 发行物解析** | 平台 → 文件名 / URL / 索引标签 / 解包布局 | 只认 `linux-*` / `darwin-*` | 下载 Linux 包 | 补 `win-x64/win-arm64` + `.zip` + 索引标签 `win-x64-zip`；**纯函数化**便于在 Linux 上测 |
 | **L3 运行时布局** | node/npm/npx 在哪 | 硬编码 `bin/*` | 找不到可执行文件 | 抽 `RuntimeLayout`：POSIX(`bin/node`,`bin/npm`) vs Windows(`node.exe`,`npm.cmd` 在根) |
-| **L4 子进程派生** | 怎么启动 `.cmd`/脚本/原生二进制 | 全部裸 `ProcessBuilder` | `.cmd` 不可执行 / shim 报 193 | 统一入口：`.cmd|.bat` → `cmd /c`；裸名走 PATHEXT；`.bin/*` 优先 `<tool>.cmd` |
+| **L4 子进程派生** | 怎么启动 `.cmd`/脚本/原生二进制 | 全部裸 `ProcessBuilder` | `.cmd` 不可执行 / shim 报 193 | 统一入口：**补出扩展名、不套 shell**（见 §9.1 实测）；裸名走 `PATH`+`PATHEXT`；`.bin/*` 优先 `<tool>.cmd` |
 | **L5 文件系统语义** | 符号链接/硬链接/权限/占用/原子替换/长路径 | POSIX 语义 | 建链失败、删不动、超 260 | 能力探测 + 降级策略（junction/copy/逻辑指针）+ 占用重试 + 长路径前缀 |
 | **L6 路径与环境** | PATH 拼装、配置目录、编码、HOME | 多数正确，个别硬编码 | PATH 拼坏、pnpm 配置不被读、乱码 | 集中到一处 helper（`pathSeparator`、配置目录按平台、统一 charset） |
 | **L7 声明层** | UI/文档/doctor 承诺什么 | 把 Windows 当已加固 | 用户踩空 | 修好前明确标注不支持 + doctor 加 Windows 专检 |
@@ -265,7 +265,8 @@ RuntimeLayout                              // 由平台决定
 
 统一到一个派生 helper（或复活 util 层那个 `CommandBuilder`，它已有 Windows 引号/转义实现）：
 
-- `.cmd` / `.bat` → `cmd.exe /c <path> <args>`（路径含空格要正确引号）；
+- `.cmd` / `.bat` → **补出扩展名后直接交给 `ProcessBuilder`**，不带 shell：`CreateProcess` 会把点名
+  的批处理自己转给 `cmd.exe`，参数原样透传（套 `cmd /c` 反而多一层转义）。实测见 §9.1；
 - **裸名解析**要按 `PATHEXT` 逐个扩展名试（`node` → `node.exe`；`npm` → `npm.cmd`）；
 - `node_modules/.bin/<tool>`：Windows 上优先 `<tool>.cmd`（其次 `.ps1`），**绝不要执行无扩展名那份**
   （它是 POSIX sh 脚本）；
@@ -288,16 +289,17 @@ RuntimeLayout                              // 由平台决定
 ### 4.5 L6 路径与环境
 
 - `ZcodeBuilder.java:423` 的 `":"` → `File.pathSeparator`；
-- pnpm 全局配置路径按平台（Windows：`%LOCALAPPDATA%\pnpm\config\rc`），或**不写文件**、把 registry
-  一律作为命令行参数传（`--registry=` 已经覆盖多数点，剩下 `dsh plugin` 内部那条只能靠文件）；
+- pnpm 全局配置路径按平台（Windows：registry 写 `%LOCALAPPDATA%\pnpm\config\auth.ini`，`storeDir`
+  写同目录 `config.yaml`；`rc` 不被读取——实测见 §9.1），或**不写文件**、把 registry 一律作为命令行
+  参数传（`--registry=` 已经覆盖多数点，剩下 `dsh plugin` 内部那条只能靠文件）；
 - 子进程输出解码统一到一处（按平台选 UTF-8 或 NATIVE_CHARSET），别一半一半；
 - 启动横幅的 `toolVersion` 走 4.3 的 helper（否则 Windows 永远误报 `pnpm MISSING`）。
 
 ### 4.6 L7 声明层（先做，成本最低）
 
 - 设置页「Node.js」：Windows 上在托管运行时安装按钮旁**明确**写明当前不可用，并给出替代；
-- `DshDoctor`：加 Windows 专检（`node`/`npm`/`pnpm` 探测结果、`cmd /c` 可用性、符号链接权限、
-  数据目录长度、代码页），把「为什么装不了」直接说出来；
+- `DshDoctor`：加 Windows 专检（符号链接权限、启动器用户目录长度、控制台代码页、实例终端不可用），
+  把「为什么装不了」直接说出来；
 - README/CHANGELOG：把「Windows 裸部署已加固」的口径改成实际覆盖范围（Linux/macOS 容器外裸机），
   或注明「Windows 见 docs/windows-bare-deploy.md 的当前限制」。
 
@@ -321,12 +323,23 @@ RuntimeLayout                              // 由平台决定
 
 ### 6.1 单元层（在 Linux 上就能钉住，无需 Windows）
 
-1. `platformTag()` / `archiveExtension()` / `indexTag()`：注入 OS+架构，断言 `win-x64` + `.zip` + `win-x64-zip`，以及拼出的文件名 `node-v22.19.0-win-x64.zip`；
-2. `RuntimeLayout`：给一个假的 Windows 运行时目录（含 `node.exe`/`npm.cmd`/`npx.cmd`），断言
-   `node()/npm()/npx()/isUsable()` 的解析结果；POSIX 目录反例同样钉住；
-3. 派生 helper：断言 `.cmd` 被包成 `cmd /c …`、裸名 `npm` 解析成 `npm.cmd`、`.bin/<tool>` 优先选 `.cmd`；
-4. PATH 拼装：断言 Windows 下用 `;`（`ZcodeBuilder` 的回归）；
-5. pnpm 配置路径：断言 Windows 下指向 `%LOCALAPPDATA%\pnpm\config\rc`。
+已落地（都在 `src/test/java`，本机即可跑）：
+
+1. `NodeArtifactNamingTest`：`platformTag/indexTag/archiveExtension/archiveFileName` 注入
+   `Platform.WINDOWS_X86_64`/`WINDOWS_ARM64`，断言 `win-x64`/`win-x64-zip`/`.zip`/
+   `node-v22.19.0-win-x64.zip`；Linux/macOS 的旧名字、以及「Node 不发布的平台要拒绝」同样钉住；
+2. `RuntimeLayoutTest`：假的 Windows 运行时段（`node.exe`/`npm.cmd`/`npx.cmd`/`pnpm.cmd`）断言
+   `node()/npm()/npx()/pnpm()/binDirectory()/isUsable()`；POSIX 形态，以及「拿 Windows 布局看
+   POSIX 目录必须不认」的反例同样钉住；
+3. `ExecutablesTest`：Windows 规则下 `.cmd` 优先于无扩展名脚本、只有无扩展名时的兜底、`PATH`
+   逐项搜索、带目录的名字不当裸名搜索；**POSIX 规则下执行位必需、答案是 realpath、不会凭空补
+   扩展名**——POSIX 的语义就是「不能因为 Windows 适配而改变」的那一半；
+4. `DshCustomCommandsTest`：`cmd /c` 与 `/bin/sh -c` 两种包装（整行作为单个参数）；
+5. `DshVersionManagerRollbackTest`：安装失败/中断时旧版本被挪回原位、已发布时清掉备份、
+   只剩半成品时删干净。
+
+只能在真机验的（§6.2）：`PATH` 分隔符与目录拼装的**平台值**、`.cmd`/原生二进制的实际启动、
+文件占用重试、长路径、控制台编码、bsdtar。
 
 ### 6.2 真机验收清单（Windows）
 
