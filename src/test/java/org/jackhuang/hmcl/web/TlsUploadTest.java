@@ -111,8 +111,8 @@ class TlsUploadTest {
             Path keyFile = dataDir.resolve("certs").resolve(CertificateManager.UPLOADED_KEY_FILE);
             assertTrue(Files.isRegularFile(certFile));
             assertTrue(Files.isRegularFile(keyFile));
-            assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
-                    Files.getPosixFilePermissions(keyFile), "the uploaded key must be 0600");
+            org.jackhuang.hmcl.util.PosixPermissions.assertOwnerOnly(keyFile,
+                    "the uploaded key must be 0600");
 
             // server.yaml points at the upload with TLS on.
             String yaml = Files.readString(dataDir.resolve("server.yaml"));

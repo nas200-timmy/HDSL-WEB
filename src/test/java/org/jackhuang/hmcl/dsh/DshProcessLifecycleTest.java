@@ -147,6 +147,19 @@ class DshProcessLifecycleTest {
                 "Node.js is not on PATH; the launcher cannot start anything without it");
     }
 
+    /// Skips a test that needs stopping a process to be something the process can notice.
+    ///
+    /// `Process.destroy()` is SIGTERM on POSIX — the child gets to finish, and there is a
+    /// window between "asked to stop" and "gone" to look at. On Windows it is
+    /// `TerminateProcess`: an immediate kill, no signal to handle, no window. A test about
+    /// that window has nothing to assert there, and asserting it anyway would report the
+    /// platform as a defect in the launcher.
+    private static void requireGracefulShutdown() {
+        Assumptions.assumeFalse(org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                        == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS,
+                "Windows has no signal to stop a process with: destroy() kills it outright");
+    }
+
     @Test
     void anInstanceIsStartingUntilItSaysItIsReady() throws Exception {
         requireNode();
@@ -187,6 +200,7 @@ class DshProcessLifecycleTest {
     @Test
     void anInstanceIsBusyUntilItHasFinishedStopping() throws Exception {
         requireNode();
+        requireGracefulShutdown();
         DshInstance instance = makeInstance();
 
         DshProcessManager.launch(instance);

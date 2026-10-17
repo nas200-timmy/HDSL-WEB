@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.zcode;
 
+import org.jackhuang.hmcl.util.ProcessTree;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -181,7 +182,7 @@ public final class ZcodeRuntime {
                 log = Files.newOutputStream(logFile,
                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
                 ProcessBuilder builder = new ProcessBuilder(
-                        nodePath,
+                        org.jackhuang.hmcl.util.platform.Executables.startableProgram(nodePath),
                         packageDir.resolve("bin/zcode.mjs").toString(),
                         "--web", "--no-open",
                         // Loopback only, no token: the browser reaches this
@@ -247,23 +248,27 @@ public final class ZcodeRuntime {
     public static void stop(String id) {
         STOPPING.add(id);
         Process process = PROCESSES.get(id);
-        if (process == null || !process.isAlive()) {
+        if (process == null) {
+            // No output pump is watching this instance, so nothing else will
+            // consume the flag.
+            STOPPING.remove(id);
             STATES.put(id, State.STOPPED);
             PROCESSES.remove(id);
-            STOPPING.remove(id);
             return;
         }
-        process.destroy();
-        try {
-            if (!process.waitFor(STOP_WAIT_SECONDS, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            process.destroyForcibly();
+        if (!process.isAlive()) {
+            // The pump may still be on its way to the end of the output; it
+            // consumes the flag and records STOPPED.
+            STATES.put(id, State.STOPPED);
+            PROCESSES.remove(id);
+            return;
         }
+        // ZCode is launched as `node .../zcode.mjs`, but the same shim shape applies:
+        // stop the tree so nothing keeps the port after the handle we kept is gone.
+        ProcessTree.terminate(process, STOP_WAIT_SECONDS);
         PROCESSES.remove(id);
-        STOPPING.remove(id);
+        // Leave STOPPING for the pump: it reaches EOF after the last holder of
+        // the pipe is gone, which can be after this method returns.
         STATES.put(id, State.STOPPED);
     }
 

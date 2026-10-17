@@ -78,6 +78,39 @@ public final class DshDoctor {
         out.println("  instances: " + DshPaths.INSTANCES);
         out.println();
 
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            out.println("Windows");
+            // Symbolic links need `SeCreateSymbolicLinkPrivilege`, which an ordinary account has
+            // only with Developer Mode on or an elevated process. Nothing here requires them —
+            // the launcher copies a file where it would have linked one, and writes a pointer
+            // file where it would have pointed a link at a release — but which mode this machine
+            // is in is the first thing a failed install raises, so it is worth answering.
+            out.println("  symbolic links:  "
+                    + (org.jackhuang.hmcl.util.io.Links.creatable()
+                            ? "permitted"
+                            : "NOT permitted (Developer Mode off, or not elevated)")
+                    + "  [not required: a copy stands in, and a `current` pointer becomes a file]");
+            // An instance's harness sits several directories below this, and pnpm's own nesting
+            // is what pushes a path past the 260-character limit Windows still applies unless
+            // long paths are enabled. The number is what says whether that is a risk here.
+            // The launcher's user directory — where instances and their `node_modules` live —
+            // is not the panel's own data directory (`HDSL_DATA`, default `./data`). The long
+            // path risk belongs to the former, so the label has to say so.
+            String userDirectory = Metadata.HMCL_USER_HOME.toString();
+            out.println("  user directory:  " + userDirectory);
+            out.println("                   (instances and runtimes; the panel's own data dir is HDSL_DATA)");
+            out.println("  its length:      " + userDirectory.length() + " characters"
+                    + (userDirectory.length() > 120
+                            ? "  [LONG: an instance's node_modules may exceed the 260-character limit;"
+                                    + " keep the user directory nearer the drive root]"
+                            : "  [ok]"));
+            out.println("  console encoding: " + org.jackhuang.hmcl.util.platform.OperatingSystem.NATIVE_CHARSET);
+            out.println("  instance terminal: not available on this platform"
+                    + " (it opens a POSIX shell through a Linux terminal emulator)");
+            out.println();
+        }
+
         out.println("JavaScript toolchain");
         Optional<DshNodeRuntime> detected = DshNodeRuntime.detect();
         boolean runtimeOk;
@@ -98,8 +131,16 @@ public final class DshDoctor {
         out.println();
 
         out.println("File watchers");
-        printFileWatchers(out, org.jackhuang.hmcl.util.platform.WatcherBudget.limit(),
-                org.jackhuang.hmcl.util.platform.WatcherBudget.headroom());
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            // The budget below is the kernel's inotify count, which is a Linux facility. Windows
+            // has no equivalent to run out of, so this row is neither a pass nor a failure here —
+            // printing an inotify number at all would be the kind of row that gets misread.
+            out.println("  not applicable: the inotify watch budget is a Linux limit");
+        } else {
+            printFileWatchers(out, org.jackhuang.hmcl.util.platform.WatcherBudget.limit(),
+                    org.jackhuang.hmcl.util.platform.WatcherBudget.headroom());
+        }
         out.println();
 
         out.println("Instances and the DeepSeek Harness each carries");

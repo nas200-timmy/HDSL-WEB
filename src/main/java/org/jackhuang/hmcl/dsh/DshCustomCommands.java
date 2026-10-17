@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.dsh;
 
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -69,9 +70,11 @@ public final class DshCustomCommands {
         try {
             // A command is a shell line, not a program and its arguments: that is what a
             // person types into the box, and splitting it here would take away the pipes,
-            // redirections and quoting they wrote.
+            // redirections and quoting they wrote. Which shell reads that line is the
+            // platform's business — `/bin/sh` does not exist on Windows, where the
+            // command interpreter is `cmd.exe` and its flag is `/c`.
             DshCommand.Result result = DshCommand.run(
-                    List.of("/bin/sh", "-c", command), instance.workspacePath(), environment, onLine);
+                    shellCommand(command), instance.workspacePath(), environment, onLine);
             if (result.exitCode() != 0) {
                 throw new DshException("The " + phase + " command exited with code "
                         + result.exitCode() + ": " + command);
@@ -82,6 +85,32 @@ public final class DshCustomCommands {
             Thread.currentThread().interrupt();
             throw new DshException("The " + phase + " command was interrupted: " + command, e);
         }
+    }
+
+    /// Wraps a shell line in the command interpreter this system has.
+    ///
+    /// A pre-launch command that cannot be run stops the launch, so this is not a
+    /// detail: `/bin/sh` is a path Windows does not have, and a Windows box given one
+    /// would refuse to start every instance that had a command attached.
+    ///
+    /// @param command the shell line
+    /// @return the program and arguments that run it
+    static List<String> shellCommand(String command) {
+        return shellCommand(command, OperatingSystem.CURRENT_OS);
+    }
+
+    /// Wraps a shell line in the command interpreter **of a given system**.
+    ///
+    /// Package-private and parameterised so the Windows form can be asserted from a test
+    /// on any machine; [shellCommand] supplies the running system's form.
+    ///
+    /// @param command the shell line
+    /// @param os      the system whose interpreter to use
+    /// @return the command to hand to a `ProcessBuilder`
+    static List<String> shellCommand(String command, OperatingSystem os) {
+        return os == OperatingSystem.WINDOWS
+                ? List.of("cmd", "/c", command)
+                : List.of("/bin/sh", "-c", command);
     }
 
     /// Runs a command and reports a failure instead of raising it.

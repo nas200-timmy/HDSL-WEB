@@ -217,8 +217,19 @@ public final class DshSessions {
         if (!Files.exists(lockFile)) {
             return false;
         }
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            // `flock` and `true` are util-linux and coreutils, and Windows has neither.
+            // The lease is taken with `flock(2)`, a syscall that cannot be observed
+            // through a file handle here, so this question is unanswerable on this
+            // platform and every session reads as free. Saying so once is better than
+            // paying for a spawn that is certain to fail on every check.
+            return false;
+        }
         try {
-            Process process = new ProcessBuilder("flock", "-n", lockFile.toString(), "true")
+            Process process = new ProcessBuilder(
+                    org.jackhuang.hmcl.util.platform.Executables.startable(
+                            List.of("flock", "-n", lockFile.toString(), "true")))
                     .redirectErrorStream(true)
                     .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                     .start();

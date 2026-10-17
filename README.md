@@ -5,7 +5,7 @@
 [![release](https://img.shields.io/github/v/release/nas200-timmy/HDSL-WEB?label=release)](https://github.com/nas200-timmy/HDSL-WEB/releases)
 [![ghcr](https://img.shields.io/badge/ghcr.io-hdsl--web-blue?logo=docker)](https://github.com/nas200-timmy/HDSL-WEB/pkgs/container/hdsl-web)
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![platform](https://img.shields.io/badge/platform-Docker%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
+[![platform](https://img.shields.io/badge/platform-Docker%20%7C%20Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)]()
 
 把 [HDSL](https://github.com/MCXCC303/HDSL)（Hello DeepSeek! Launcher，桌面版）搬进浏览器的**单容器**版本：
 打开网页 → 登录 → 傻瓜式创建 dsh 实例 → 点「启动」→ 在**同域名、同端口、同一张证书**下直接使用 dsh 自己的网页界面。
@@ -144,6 +144,13 @@ docker compose up -d --build
 前提：**JDK 21+**、**Node ^22.19.0 || >=24.0.0**、**pnpm**（`corepack enable pnpm`，或 `npm i -g pnpm`）。
 Node 版本范围是 dsh 自己的 `engines` 要求；pnpm 既是 dsh 的安装器，也是插件管理（`dsh plugin`）的转发目标。
 
+**Windows 同样可用**——直接拿宿主机上的 JDK 与 Node 跑：面板认得出系统装的 Node.js
+（`node.exe` / `npm.cmd` / `pnpm.cmd`）、能装 dsh 版本与插件、能装品牌工具、能一键装面板托管的
+Node 运行时、能在面板内构建 ZCode。有两件事**明确不支持**（会在被点到时说清原因，而不是报个看不懂的错）：
+**实例终端**（它开的是 POSIX shell，经 Linux 终端模拟器列表启动，两者在这台机器上都不存在）与
+**会话租约观察**（读它用的是 util-linux 的 `flock`）。另外 NTFS 没有 `0600` 语义（见下方安全说明）。
+逐条实测与限制见 [docs/windows-bare-deploy.md](docs/windows-bare-deploy.md)。
+
 ```bash
 ./gradlew shadowJar                     # 产出 build/libs/hdsl-web-<版本>.jar
 
@@ -152,6 +159,23 @@ HDSL_PORT=3080 \
 HDSL_ADMIN_PASSWORD='换成一个强口令' \
   java -jar build/libs/hdsl-web-0.1.0-dev.jar
 ```
+
+```powershell
+# Windows（PowerShell）——上面那段是 POSIX shell 的写法，cmd 里不成立
+.\gradlew.bat shadowJar
+
+$env:HDSL_DATA = "$PWD\data"
+$env:HDSL_PORT = "3080"
+$env:HDSL_ADMIN_PASSWORD = "换成一个强口令"
+java -jar build\libs\hdsl-web-0.1.0-dev.jar
+```
+
+Windows 上有**两个**目录，别混：
+
+- **启动器用户目录** `%APPDATA%\.hdsl`（`-Dhdsl.home=` 或 `HDSL_USER_HOME` 可覆盖）——实例、
+  运行时装在这里；「从哪双击启动」不影响它。
+- **面板数据目录** `HDSL_DATA`（默认 `./data`，**相对当前工作目录**）——账号、配置、证书、
+  pnpm store 在这里。裸部署时建议显式设一个绝对路径的 `HDSL_DATA`，否则它的位置取决于你从哪启动。
 
 不用环境变量也行：`hdsl-web` 会读 `$HDSL_DATA/server.yaml`（默认数据目录 `./data`），
 没有配置文件就用内置默认值。`java -jar … -version` 只打印版本号后退出。

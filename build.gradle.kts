@@ -103,10 +103,15 @@ tasks.test {
     val fakePnpmBin = layout.buildDirectory.dir("fake-pnpm-bin")
     doFirst {
         val dir = fakePnpmBin.get().asFile
+        dir.deleteRecursively()
         dir.mkdirs()
-        val script = File(dir, "pnpm")
-        project.file("src/test/resources/fake-pnpm/pnpm").copyTo(script, overwrite = true)
-        script.setExecutable(true)
+        // The whole fixture directory, not just the POSIX script: its Windows entry
+        // point is `pnpm.cmd`, and on Windows a bare `pnpm` names nothing. Without the
+        // `.cmd` the launcher's own executable resolution would skip this directory and
+        // find the real pnpm further down PATH — so the tests would reach the network
+        // instead of the stub, which is the one thing this fixture exists to prevent.
+        project.file("src/test/resources/fake-pnpm").copyRecursively(dir, overwrite = true)
+        File(dir, "pnpm").setExecutable(true)
     }
     environment("PATH", fakePnpmBin.get().asFile.absolutePath + File.pathSeparator + (System.getenv("PATH") ?: ""))
     environment("HDSL_FAKE_PNPM_MARKER", layout.buildDirectory.file("fake-pnpm.enabled").get().asFile.absolutePath)
@@ -147,14 +152,32 @@ sourceSets.main {
 // resources tree before packaging so the fat jar serves it. Without npm the
 // tree keeps whatever it currently holds, so Java-only builds still work.
 val webDir = layout.projectDirectory.dir("web")
-val npmAvailable = System.getenv("PATH")?.split(File.pathSeparator)?.any { File(it, "npm").canExecute() } == true
+
+// Which `npm` to run is a platform question, and getting it wrong fails in a way that
+// reads like a Gradle bug rather than a missing tool. A Node.js installation on Windows
+// ships three files under one name: `npm` (a POSIX shell script), `npm.cmd` (the real
+// shim) and `npm.ps1`. The extensionless one is a *file*, so `canExecute()` is true, but
+// it is not an executable image — `CreateProcess` answers "not a valid Win32
+// application" (error 193) while a bare `npm` is not found at all (error 2). The
+// extension is therefore chosen by platform rather than left to the name.
+val npmExecutable: String? = run {
+    val names = if (File.separatorChar == '\\') listOf("npm.cmd", "npm.exe", "npm") else listOf("npm")
+    System.getenv("PATH")
+        ?.split(File.pathSeparator)
+        ?.asSequence()
+        ?.filter { it.isNotBlank() }
+        ?.flatMap { dir -> names.asSequence().map { File(dir, it) } }
+        ?.firstOrNull { it.isFile }
+        ?.absolutePath
+}
+val npmAvailable = npmExecutable != null
 
 val buildWeb by tasks.registering(Exec::class) {
     onlyIf { npmAvailable && webDir.file("package.json").asFile.isFile }
     group = "build"
     description = "Builds the panel SPA (npm run build in web/)."
     workingDir(webDir)
-    commandLine("npm", "run", "build")
+    commandLine(npmExecutable ?: "npm", "run", "build")
 
     inputs.dir(webDir.dir("src"))
     inputs.files(webDir.file("package.json"), webDir.file("index.html"))

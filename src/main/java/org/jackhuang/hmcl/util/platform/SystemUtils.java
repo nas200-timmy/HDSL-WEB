@@ -22,12 +22,9 @@ import org.jackhuang.hmcl.util.function.ExceptionalFunction;
 import org.jackhuang.hmcl.util.io.IOUtils;
 import org.jetbrains.annotations.Nullable;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -48,24 +45,16 @@ public final class SystemUtils {
     private SystemUtils() {
     }
 
+    /// Resolves a program on `PATH`.
+    ///
+    /// The name is completed by platform — on Windows `zstd` is `zstd.exe`, and the
+    /// bare name names nothing — which is why this asks [Executables] rather than
+    /// joining `PATH` entries itself.
+    ///
+    /// @param command the program name
+    /// @return the resolved program, or `null` when it is not on `PATH`
     public static @Nullable Path which(String command) {
-        String path = System.getenv("PATH");
-        if (path == null)
-            return null;
-
-        try {
-            for (String item : path.split(File.pathSeparator)) {
-                try {
-                    Path program = Paths.get(item, command);
-                    if (Files.isExecutable(program))
-                        return program.toRealPath();
-                } catch (Throwable ignored) {
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-
-        return null;
+        return Executables.resolve(command).orElse(null);
     }
 
     public static int callExternalProcess(String... command) throws IOException, InterruptedException {
@@ -73,7 +62,7 @@ public final class SystemUtils {
     }
 
     public static int callExternalProcess(List<String> command) throws IOException, InterruptedException {
-        return callExternalProcess(new ProcessBuilder(command));
+        return callExternalProcess(new ProcessBuilder(Executables.startable(command)));
     }
 
     public static int callExternalProcess(ProcessBuilder processBuilder) throws IOException, InterruptedException {
@@ -98,7 +87,7 @@ public final class SystemUtils {
     }
 
     public static <T> T run(List<String> command, ExceptionalFunction<InputStream, T, ?> convert, Duration maxWaitTime) throws Exception {
-        Process process = new ProcessBuilder(command)
+        Process process = new ProcessBuilder(Executables.startable(command))
                 .redirectError(ProcessBuilder.Redirect.DISCARD)
                 .start();
         try {

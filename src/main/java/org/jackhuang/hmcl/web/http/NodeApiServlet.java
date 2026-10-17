@@ -31,7 +31,6 @@ import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.List;
 
 /// The Node.js toolchain for bare deployments: reports the system probe and
@@ -80,8 +79,10 @@ public final class NodeApiServlet extends HttpServlet {
             entry.addProperty("version", runtime.version());
             entry.addProperty("suitable", DshNodeRuntime.isSupportedNodeVersion(runtime.version()));
             entry.addProperty("node", runtime.node().toString());
-            Path pnpm = runtime.directory().resolve("bin").resolve("pnpm");
-            entry.addProperty("pnpm", java.nio.file.Files.isExecutable(pnpm));
+            // "Does this runtime have pnpm" is a layout question, not a `bin/` one:
+            // on Windows the shim is `pnpm.cmd` in the distribution root, and
+            // `isExecutable` answers yes for every file on NTFS anyway.
+            entry.addProperty("pnpm", java.nio.file.Files.isRegularFile(runtime.pnpm()));
             return entry;
         }).toList()));
         body.addProperty("requirement", DshNodeRuntime.requirement());

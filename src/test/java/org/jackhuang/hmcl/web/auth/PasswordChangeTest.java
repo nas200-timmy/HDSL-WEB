@@ -90,8 +90,7 @@ class PasswordChangeTest {
             assertEquals(200, loginCookieStatus(client, base, "admin", NEW_PASSWORD));
 
             // The rewrite kept the file owner-only.
-            Set<PosixFilePermission> perms = Files.getPosixFilePermissions(dataDir.resolve("auth/users.json"));
-            assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE), perms,
+            org.jackhuang.hmcl.util.PosixPermissions.assertOwnerOnly(dataDir.resolve("auth/users.json"),
                     "users.json must stay 0600 after a password change");
         }
     }

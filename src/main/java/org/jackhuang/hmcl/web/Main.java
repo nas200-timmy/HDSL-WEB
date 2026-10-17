@@ -169,6 +169,11 @@ public final class Main {
             System.out.println("  note     : Windows has no POSIX 0600 semantics - the credential file");
             System.out.println("             may be readable by other accounts on this machine. Single-");
             System.out.println("             user machines are fine; keep the data dir off the public net.");
+            // Said here, once, because the alternative is a user discovering it from a button
+            // that throws: the terminal opens a POSIX shell through a Linux terminal emulator,
+            // and neither exists on this platform.
+            System.out.println("  note     : the instance terminal is not available on Windows (it opens");
+            System.out.println("             a POSIX shell through a Linux terminal emulator).");
         }
         System.out.println();
     }
@@ -184,7 +189,14 @@ public final class Main {
     /// Best effort: any failure means "not available", and the banner says so.
     private static @org.jetbrains.annotations.Nullable String toolVersion(String tool, String flag) {
         try {
-            Process process = new ProcessBuilder(tool, flag).redirectErrorStream(true).start();
+            // `pnpm` is `pnpm.cmd` on Windows and `node` is `node.exe`: a bare name is
+            // not a file there. The banner asks the same resolver as the rest of the
+            // panel, so it cannot report a tool missing that the panel would go on to
+            // use successfully — or the reverse, which is what it did for `pnpm`.
+            Process process = new ProcessBuilder(
+                    org.jackhuang.hmcl.util.platform.Executables.startableProgram(tool), flag)
+                    .redirectErrorStream(true)
+                    .start();
             if (!process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
                 process.destroyForcibly();
                 return null;

@@ -89,6 +89,12 @@ public final class DshVersionManager {
     /// @return whether its entry script is there
     public static boolean isInstalled(DshInstance instance) {
         try {
+            // The flag first. While `dsh.installing` stands, the tree below it is still
+            // being written — an entry script already on disk is half of an install, not
+            // an installed version, and an interrupted install must never read as one.
+            if (Files.exists(installingFlag(instance))) {
+                return false;
+            }
             return Files.isRegularFile(instance.dshEntryPoint());
         } catch (DshException e) {
             return false;
@@ -392,30 +398,121 @@ public final class DshVersionManager {
         return text.matches("\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?") ? text : null;
     }
 
-    /// The directory an instance's copy is staged in while it is installed.
+    /// The flag that says an instance's copy is being written.
     ///
-    /// Inside the instance, so that moving it into place is a rename within one
-    /// filesystem rather than a copy across two.
+    /// A directory rather than a file, because that is what it always was; its presence
+    /// is the whole of its meaning ([isInstalled] refuses while it stands).
     ///
     /// @param instance the instance
-    /// @return the staging directory
+    /// @return the flag directory
     /// @throws DshException when the identifier is not usable as a path segment
-    private static Path stagingDirectory(DshInstance instance) throws DshException {
+    private static Path installingFlag(DshInstance instance) throws DshException {
         return instance.instanceDirectory().resolve("dsh.installing");
+    }
+
+    /// Where the working install is kept while a new one is written.
+    ///
+    /// Same directory as the install itself, so keeping and restoring it are renames
+    /// rather than copies of a `node_modules` tree. The name is not reached by a launch:
+    /// only [install], [discardPartial] and the rollback paths know it.
+    ///
+    /// @param instance the instance
+    /// @return the kept-aside directory
+    /// @throws DshException when the identifier is not usable as a path segment
+    private static Path previousDirectory(DshInstance instance) throws DshException {
+        return instance.instanceDirectory().resolve("dsh.previous");
     }
 
     /// Removes a copy that was being installed and did not finish.
     ///
+    /// Both halves: the flag, and the tree that was being written under it. The tree is
+    /// removed as well because it now lives at the path the instance would use — a
+    /// partial one left there is `node_modules` a launch would read.
+    ///
+    /// The version kept aside by an interrupted install is put back: that is the version
+    /// the instance was working with before the attempt started.
+    ///
     /// @param instance the instance whose partial install to remove
     public static void discardPartial(DshInstance instance) {
         try {
-            Path staging = stagingDirectory(instance);
-            if (Files.exists(staging)) {
-                FileUtils.deleteDirectory(staging);
+            Path flag = installingFlag(instance);
+            Path previous = previousDirectory(instance);
+            Path target = instance.dshDirectory();
+            if (Files.exists(flag)) {
+                FileUtils.deleteQuietly(target);
+                FileUtils.deleteQuietly(flag);
+                restorePrevious(previous, target);
                 LOG.info("Removed the partial install for " + instance.id());
+            } else if (Files.exists(previous)) {
+                // No flag: the install published, and the backup is a leftover.
+                FileUtils.deleteQuietly(previous);
             }
-        } catch (IOException | DshException e) {
+        } catch (DshException e) {
             LOG.warning("Could not remove the partial install for " + instance.id(), e);
+        }
+    }
+
+    /// Clears the remains of an install that never finished, before a new one starts.
+    ///
+    /// Three states are possible, and each has exactly one right answer:
+    ///
+    /// - the flag stands → the tree at `target` is partial. Remove it and the flag, and
+    ///   put back the version that was kept aside;
+    /// - no flag, but a kept-aside version → the install published and was interrupted
+    ///   before the cleanup. The tree at `target` is the good one; the backup goes;
+    /// - neither → nothing to do.
+    ///
+    /// @param target   the instance's install directory
+    /// @param flag     the flag
+    /// @param previous the version kept aside for a rollback
+    static void recoverInterruptedInstall(String instanceId, Path target,
+                                          Path flag, Path previous) {
+        if (Files.exists(flag)) {
+            LOG.info("Cleaning up the interrupted install for " + instanceId);
+            FileUtils.deleteQuietly(target);
+            FileUtils.deleteQuietly(flag);
+            restorePrevious(previous, target);
+            return;
+        }
+        if (Files.exists(previous)) {
+            FileUtils.deleteQuietly(previous);
+        }
+    }
+
+    /// Moves the working install aside so a failed one can be rolled back.
+    ///
+    /// A rename within the instance directory — same filesystem, and no copy of a
+    /// `node_modules` tree. It is deliberately not `ATOMIC_MOVE`: a half-done rename is
+    /// not a state that can exist here (the source and destination are the same
+    /// directory), and `ATOMIC_MOVE` is not supported everywhere.
+    ///
+    /// @param target   the install directory
+    /// @param previous where it is kept while the new tree is written
+    /// @throws IOException when the move fails — the caller still has both trees intact
+    static void moveAside(Path target, Path previous) throws IOException {
+        FileUtils.deleteQuietly(previous);
+        Files.move(target, previous);
+    }
+
+    /// Puts the version kept aside back on the path the instance uses.
+    ///
+    /// The path matters: pnpm's Windows junctions hold absolute targets, so a tree only
+    /// works again once it is back at the exact path it was installed into. Best-effort —
+    /// when it fails the tree is still there, and the warning says where.
+    ///
+    /// @param previous the kept-aside version, or a path that does not exist
+    /// @param target   the install directory
+    static void restorePrevious(Path previous, Path target) {
+        if (!Files.exists(previous)) {
+            return;
+        }
+        try {
+            FileUtils.deleteQuietly(target);
+            Files.move(previous, target);
+            LOG.info("Restored the previous install at " + target);
+        } catch (IOException e) {
+            LOG.warning("Could not restore the previous install to " + target
+                    + "; it is kept at " + previous, e);
         }
     }
 
@@ -584,8 +681,18 @@ public final class DshVersionManager {
 
     /// Installs the DeepSeek Harness an instance runs, into that instance.
     ///
-    /// The install is staged inside the instance and moved into place on success,
-    /// so an interrupted install can never look like a usable runtime.
+    /// The tree is written where the instance will use it, and `dsh.installing` stands
+    /// beside it while that happens: a flag that says the install is not finished, so an
+    /// interrupted one can never look like a usable runtime.
+    ///
+    /// It used to be staged in `dsh.installing` and *moved* into place on success. That
+    /// is the cleaner shape and it is what this did, but it cannot survive Windows: pnpm
+    /// links `node_modules` with symlinks on POSIX — relative ones, so the whole tree can
+    /// be moved — and with junctions on Windows, whose targets must be **absolute**. A
+    /// staged tree therefore arrived with every link naming the directory the move had
+    /// just deleted, pnpm having exited zero and the packages all being present. The
+    /// install finished and the manifest could not be read back, which is what the panel
+    /// reported: "pnpm reported success, but the installed version could not be read back".
     ///
     /// @param instance the instance to install for
     /// @param onLine   a consumer notified of pnpm output lines, or `null`
@@ -607,7 +714,8 @@ public final class DshVersionManager {
     public static void install(DshInstance instance, String version,
                                @Nullable Consumer<String> onLine) throws DshException {
         Path target = instance.dshDirectory();
-        Path staging = stagingDirectory(instance);
+        Path flag = installingFlag(instance);
+        Path previous = previousDirectory(instance);
 
         DshNodeRuntime runtime = requireRuntime();
         if (!runtime.canManagePlugins()) {
@@ -615,12 +723,29 @@ public final class DshVersionManager {
         }
 
         try {
-            if (Files.exists(staging)) {
-                FileUtils.deleteDirectory(staging);
+            recoverInterruptedInstall(instance.id(), target, flag, previous);
+
+            // The working install is **moved aside**, not deleted. An install that fails
+            // must leave the instance with the version it had — that guarantee used to
+            // come from staging the tree elsewhere and moving it in on success, which
+            // cannot work here: on Windows pnpm links packages with junctions whose
+            // targets are absolute, so a tree written under another name arrives with
+            // every link naming a directory that no longer exists. Installing into the
+            // final path fixes that; keeping the old tree beside it fixes the failure
+            // case. Moving it back is a rename within the instance directory, and it
+            // puts the absolute junctions on the path they name again.
+            if (Files.exists(target)) {
+                moveAside(target, previous);
             }
-            Files.createDirectories(staging);
+            Files.createDirectories(target);
+            // The flag, raised for as long as the tree is being written. Its presence is
+            // what [isInstalled] refuses to overlook — the job the staging directory used
+            // to do by holding the tree away from the instance.
+            Files.createDirectories(flag);
         } catch (IOException e) {
-            throw new DshException("Failed to prepare " + staging, e);
+            restorePrevious(previous, target);
+            FileUtils.deleteQuietly(flag);
+            throw new DshException("Failed to prepare " + target, e);
         }
 
         // The manifest is written before pnpm runs, because pnpm would otherwise
@@ -635,10 +760,10 @@ public final class DshVersionManager {
         // Pinning the launcher to its exact version and holding the application
         // boot library to the same one keeps a tree consistent. The override is
         // the value the create page offers, and it defaults to the matching one.
-        writeManifest(staging, version, version, runtime,
+        writeManifest(target, version, version, runtime,
                 org.jackhuang.hmcl.setting.SettingsManager.settings().dependencyPolicy());
 
-        List<String> command = buildInstallCommand(runtime, staging);
+        List<String> command = buildInstallCommand(runtime, target);
 
         LOG.info("Installing DSH " + version + " for " + instance.id() + ": " + String.join(" ", command));
 
@@ -655,7 +780,12 @@ public final class DshVersionManager {
         }
 
         if (exitCode != 0) {
-            deleteQuietly(staging);
+            // Nothing half-written is left to be mistaken for an install, and the flag
+            // goes with it. The version that was working before this attempt comes back:
+            // a failed install is not a reason to leave the instance without a runtime.
+            FileUtils.deleteQuietly(target);
+            FileUtils.deleteQuietly(flag);
+            restorePrevious(previous, target);
             // pnpm's own last lines say what went wrong — a version that is not
             // published, a dependency tree that cannot be resolved, a registry that
             // cannot be reached — and an exit code says none of that.
@@ -664,22 +794,18 @@ public final class DshVersionManager {
                     + ":\n" + tail(commandResult.output()));
         }
 
-        Path bin = staging.resolve(DshVersion.PACKAGE_PATH).resolve("lib/bin.js");
+        Path bin = target.resolve(DshVersion.PACKAGE_PATH).resolve("lib/bin.js");
         if (!Files.isRegularFile(bin)) {
-            deleteQuietly(staging);
+            FileUtils.deleteQuietly(target);
+            FileUtils.deleteQuietly(flag);
+            restorePrevious(previous, target);
             throw new DshException("pnpm reported success but " + bin + " is missing");
         }
 
-        try {
-            if (Files.exists(target)) {
-                FileUtils.deleteDirectory(target);
-            }
-            Files.createDirectories(target.getParent());
-            Files.move(staging, target);
-        } catch (IOException e) {
-            deleteQuietly(staging);
-            throw new DshException("Failed to move the staged install into " + target, e);
-        }
+        // The tree is already where the instance will use it — the flag comes down, and
+        // the version kept aside for a rollback is no longer needed.
+        FileUtils.deleteQuietly(flag);
+        FileUtils.deleteQuietly(previous);
 
         LOG.info("Installed DSH " + version + " for " + instance.id() + " into " + target);
     }
@@ -907,16 +1033,6 @@ public final class DshVersionManager {
     /// Deletes a directory, ignoring failures.
     ///
     /// @param directory the directory to remove
-    private static void deleteQuietly(Path directory) {
-        try {
-            if (Files.exists(directory)) {
-                FileUtils.deleteDirectory(directory);
-            }
-        } catch (IOException e) {
-            LOG.warning("Failed to delete " + directory, e);
-        }
-    }
-
     /// Compares two version strings that may carry pre-release suffixes.
     ///
     /// Delegates to [org.jackhuang.hmcl.util.versioning.VersionNumber] — the

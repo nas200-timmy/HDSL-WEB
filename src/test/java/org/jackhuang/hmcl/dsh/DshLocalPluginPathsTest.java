@@ -194,6 +194,19 @@ class DshLocalPluginPathsTest {
         assertEquals("", DshLocalPluginPaths.rewrite("", from, to));
     }
 
+    /// Renders a path the way a package manager records one.
+    ///
+    /// Always with `/`, on every platform: a record goes into a JSON string, where a
+    /// Windows `\` is an escape character — the fixture used to embed the platform's own
+    /// separator, which on Windows produced a manifest that was not valid JSON at all, and
+    /// the diff that names the moved plugins could not read it.
+    ///
+    /// @param path the path
+    /// @return the path as a record spells it
+    private static String asRecorded(Path path) {
+        return path.toString().replace('\\', '/');
+    }
+
     /// Writes the profile records a local installation leaves behind.
     ///
     /// @param instance     the instance
@@ -224,8 +237,8 @@ class DshLocalPluginPathsTest {
                     }
                   }
                 }
-                """.formatted(INSIDE, plugins.resolve(INSIDE + "-1.0.0.tgz"),
-                OUTSIDE, ELSEWHERE, REGISTRY, INSIDE, REGISTRY);
+                """.formatted(INSIDE, asRecorded(plugins.resolve(INSIDE + "-1.0.0.tgz")),
+                OUTSIDE, asRecorded(ELSEWHERE), REGISTRY, INSIDE, REGISTRY);
         Files.createDirectories(profile);
         Files.writeString(profile.resolve("package.json"), manifest);
         return manifest;
@@ -262,8 +275,8 @@ class DshLocalPluginPathsTest {
                 packages:
                   %s@file:../../../plugins/%s-1.0.0.tgz:
                     resolution: {tarball: file:../../../plugins/%s-1.0.0.tgz}
-                """.formatted(INSIDE, directory.resolve("plugins/" + INSIDE + "-1.0.0.tgz"), INSIDE,
-                OUTSIDE, ELSEWHERE,
+                """.formatted(INSIDE, asRecorded(directory.resolve("plugins/" + INSIDE + "-1.0.0.tgz")), INSIDE,
+                OUTSIDE, asRecorded(ELSEWHERE),
                 INSIDE, INSIDE, INSIDE);
     }
 
@@ -274,7 +287,7 @@ class DshLocalPluginPathsTest {
     /// @param to   the directory they belong to now
     /// @return the text with those paths moved
     private static String expected(String text, Path from, Path to) {
-        return text.replace(from.toString(), to.toString());
+        return text.replace(asRecorded(from), asRecorded(to));
     }
 
     /// Asserts that every path the manifest records inside the instance exists.
@@ -286,7 +299,7 @@ class DshLocalPluginPathsTest {
     /// @param directory the instance directory whose paths are checked
     /// @throws Exception when it cannot be read
     private static void assertResolves(Path manifest, Path directory) throws Exception {
-        String marker = "file:" + directory + "/";
+        String marker = "file:" + asRecorded(directory) + "/";
         int checked = 0;
         for (String line : Files.readAllLines(manifest, StandardCharsets.UTF_8)) {
             int at = line.indexOf(marker);
