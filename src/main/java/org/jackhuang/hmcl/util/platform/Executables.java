@@ -21,6 +21,7 @@ import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
@@ -53,6 +54,10 @@ import java.util.Set;
 ///
 /// The extensions themselves come from `PATHEXT`, the variable whose whole purpose is
 /// this list; the table below is only the fallback for a process that has none.
+///
+/// The two naming rules — **by extension** on Windows, **by execute bit** on POSIX — are
+/// carried by [NameRules] rather than read from [OperatingSystem] at every call, so both
+/// shapes can be exercised on any machine. [CURRENT] is the one the running system uses.
 @NotNullByDefault
 public final class Executables {
     /// What Windows appends to a name when `PATHEXT` says nothing.
@@ -61,6 +66,18 @@ public final class Executables {
     /// Node.js shim is a `.cmd`, and `.exe` is a native binary like `node.exe`.
     private static final List<String> DEFAULT_WINDOWS_EXTENSIONS =
             List.of(".exe", ".cmd", ".bat", ".com");
+
+    /// How a system decides that a file can be started.
+    ///
+    /// @param usesExtensions whether the name is completed by extension (Windows), rather
+    ///                       than requiring the execute bit on the file itself (POSIX)
+    /// @param extensions     the extensions to try, in order, each including its dot
+    record NameRules(boolean usesExtensions, List<String> extensions) {
+    }
+
+    /// The rules of the running system.
+    private static final NameRules CURRENT =
+            new NameRules(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS, extensions());
 
     private Executables() {
     }
@@ -106,7 +123,7 @@ public final class Executables {
     /// @param name the program name, with or without an extension or directory
     /// @return the file to start, or empty when the name names nothing startable
     public static Optional<Path> resolve(@Nullable String name) {
-        return resolve(name, System.getenv("PATH"));
+        return resolve(name, System.getenv("PATH"), CURRENT);
     }
 
     /// Resolves a program name to a file that can be started, searching a given `PATH`.
@@ -119,6 +136,20 @@ public final class Executables {
     /// @param path the `PATH` to search, or `null` for none
     /// @return the file to start, or empty when the name names nothing startable
     public static Optional<Path> resolve(@Nullable String name, @Nullable String path) {
+        return resolve(name, path, CURRENT);
+    }
+
+    /// Resolves a program name under explicit naming rules.
+    ///
+    /// Package-private and parameterised so both platforms' naming can be exercised on
+    /// any machine: whether a name is completed by extension, and how the answer is
+    /// spelled, are the two things a test needs to vary.
+    ///
+    /// @param name  the program name
+    /// @param path  the `PATH` to search, or `null` for none
+    /// @param rules the naming rules of the system being imitated
+    /// @return the file to start, or empty when the name names nothing startable
+    static Optional<Path> resolve(@Nullable String name, @Nullable String path, NameRules rules) {
         if (name == null || name.isBlank()) {
             return Optional.empty();
         }
@@ -135,7 +166,7 @@ public final class Executables {
         // Deciding this before searching is what keeps a relative name from being looked
         // up in every `PATH` entry as if it were a bare one.
         if (asPath.isAbsolute() || hasSeparator(trimmed)) {
-            return startableAmong(asPath);
+            return startableAmong(asPath, rules);
         }
 
         if (path != null && !path.isBlank()) {
@@ -144,7 +175,7 @@ public final class Executables {
                     continue;
                 }
                 try {
-                    Optional<Path> candidate = startableAmong(Path.of(entry.trim()).resolve(trimmed));
+                    Optional<Path> candidate = startableAmong(Path.of(entry.trim()).resolve(trimmed), rules);
                     if (candidate.isPresent()) {
                         return candidate;
                     }
@@ -197,21 +228,30 @@ public final class Executables {
         return name.indexOf('/') >= 0 || name.indexOf('\\') >= 0;
     }
 
-    /// Finds the startable form of one path: exactly as given, else with an extension.
+    /// Finds the startable form of one path under explicit naming rules.
     ///
-    /// The order is what makes `node_modules/.bin/tsx` resolve to `tsx.cmd` on Windows.
+    /// **POSIX**: a program is a file with the execute bit, and the answer is its real
+    /// path — the same answer `which` has always given, and the one a caller expects when
+    /// the name resolved through a symlink (`node_modules/.bin/tsx`). This is the
+    /// behaviour that must not change because Windows needed a second shape.
+    ///
+    /// **Windows**: the order is what makes `node_modules/.bin/tsx` resolve to `tsx.cmd`.
     /// There every file without an extension is a POSIX shell script — the one shape
     /// `CreateProcess` refuses outright — so a name whose extension was left off has to
     /// be completed before the extensionless file is considered, and that file only as a
     /// last resort for a native binary that happens to have no extension.
     ///
-    /// @param path the path to complete
-    /// @return the file to start, or empty
-    private static Optional<Path> startableAmong(Path path) {
-        if (Files.isRegularFile(path) && !usesExtensions()) {
-            return Optional.of(path);
+    /// @param path  the path to complete
+    /// @param rules the naming rules of the system being imitated
+    /// @return the file to start, or empty when none is startable
+    private static Optional<Path> startableAmong(Path path, NameRules rules) {
+        if (!rules.usesExtensions()) {
+            if (!Files.isRegularFile(path) || !Files.isExecutable(path)) {
+                return Optional.empty();
+            }
+            return Optional.of(realPath(path));
         }
-        for (String extension : extensions()) {
+        for (String extension : rules.extensions()) {
             Path completed = path.resolveSibling(path.getFileName() + extension);
             if (Files.isRegularFile(completed)) {
                 return Optional.of(completed);
@@ -219,5 +259,15 @@ public final class Executables {
         }
         // An extension the system already recognises, or a native binary with none.
         return Files.isRegularFile(path) ? Optional.of(path) : Optional.empty();
+    }
+
+    /// Resolves symlinks on the POSIX path, falling back to the path itself when the
+    /// filesystem will not say (a deleted target between the check and the call).
+    private static Path realPath(Path path) {
+        try {
+            return path.toRealPath();
+        } catch (IOException e) {
+            return path;
+        }
     }
 }

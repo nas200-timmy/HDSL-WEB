@@ -93,7 +93,7 @@ class BrandRuntimeTest {
         Path entry = pkg.resolve("server/src/index.ts");
         Files.createDirectories(tsx.getParent());
         Files.createDirectories(entry.getParent());
-        Files.createFile(tsx);
+        createExecutable(tsx);
         Files.createFile(entry);
         BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1", 0, 1);
 
@@ -113,7 +113,7 @@ class BrandRuntimeTest {
         Path pkg = Files.createDirectories(dir.resolve("claude-web-rel"));
         Path tsx = pkg.resolve("node_modules/.bin/tsx");
         Files.createDirectories(tsx.getParent());
-        Files.createFile(tsx);
+        createExecutable(tsx);
         BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1", 0, 1);
 
         assertThrows(IOException.class,
@@ -163,13 +163,29 @@ class BrandRuntimeTest {
                 BrandRuntime.stripAnsi("Local: http://127.0.0.1:35849/"));
     }
 
+    /// Creates a fake binary and gives it the execute bit a real pnpm install gives it.
+    ///
+    /// On POSIX a program is a file with the execute bit — the resolver checks for it (as
+    /// `which` always did), so a fixture created without one is not a program at all.
+    /// Windows has no mode bits; what can be started there is decided by extension.
+    private static Path createExecutable(Path path) throws IOException {
+        Files.createFile(path);
+        try {
+            Files.setPosixFilePermissions(path,
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+        } catch (UnsupportedOperationException e) {
+            // Windows: the extension is the whole story.
+        }
+        return path;
+    }
+
     /// Creates a fake installed prefix holding only the executable the command
     /// builder looks for.
     private Path prefix(Brand brand) throws IOException {
         Path pkg = Files.createDirectories(dir.resolve(brand.id() + "-rel"));
         Path bin = pkg.resolve("node_modules/.bin/" + brand.binName());
         Files.createDirectories(bin.getParent());
-        Files.createFile(bin);
+        createExecutable(bin);
         return pkg;
     }
 }
