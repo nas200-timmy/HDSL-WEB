@@ -483,7 +483,7 @@ public final class BrandInstaller {
         // not name a file there — the clone's dependency step and build step are both
         // program names that have to be completed before they can be started.
         ProcessBuilder builder = new ProcessBuilder(
-                org.jackhuang.hmcl.util.platform.Executables.startable(command));
+                org.jackhuang.hmcl.util.platform.Executables.startable(command, environment.get("PATH")));
         builder.directory(directory.toFile());
         builder.environment().putAll(environment);
         builder.redirectErrorStream(true);

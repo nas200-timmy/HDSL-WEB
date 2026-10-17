@@ -196,10 +196,26 @@ public final class Executables {
     /// @param command the program and its arguments
     /// @return the command to hand to a `ProcessBuilder`
     public static List<String> startable(List<String> command) {
+        return startable(command, System.getenv("PATH"));
+    }
+
+    /// Rewrites a command so its program can be started, searching a **given** `PATH`.
+    ///
+    /// The path has to be the one the child will see, which is not always this process's:
+    /// a managed runtime prepends its own directory through the environment the caller is
+    /// about to apply (`DshCommand.run`, `BrandInstaller.run`). Resolving against the
+    /// panel's own `PATH` would either pick a different tool or — on Windows, where the
+    /// bare name `npm` is not a file — leave `CreateProcess` to fail on a shim that exists
+    /// only in the child's `PATH`.
+    ///
+    /// @param command the program and its arguments
+    /// @param path    the `PATH` the child will run with, or `null` to use this process's
+    /// @return the command to hand to a `ProcessBuilder`
+    public static List<String> startable(List<String> command, @Nullable String path) {
         if (command.isEmpty()) {
             return command;
         }
-        Optional<Path> program = resolve(command.get(0));
+        Optional<Path> program = resolve(command.get(0), path);
         if (program.isEmpty()) {
             return command;
         }

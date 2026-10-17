@@ -114,7 +114,12 @@ public final class DshCommand {
         // tools are `npm.cmd` / `node.exe`, and the bare names are either not found at
         // all or — for the extensionless `npm` a Node.js installation also ships — a
         // POSIX shell script the OS refuses to start.
-        ProcessBuilder builder = new ProcessBuilder(Executables.startable(command));
+        // Resolved against the PATH the child will see, not the panel's own: a managed
+        // runtime is prepended by the caller through `environment`, and on Windows a bare
+        // `npm` is not a file at all — resolving it against this process's PATH would miss
+        // the runtime's `npm.cmd` and fail the launch.
+        ProcessBuilder builder = new ProcessBuilder(
+                Executables.startable(command, environment.get("PATH")));
         // What the launcher is configured to download through travels with every child, so a
         // proxy covers the version lists and the plugin installs alike.
         builder.environment().putAll(DshNetworkSettings.environment());

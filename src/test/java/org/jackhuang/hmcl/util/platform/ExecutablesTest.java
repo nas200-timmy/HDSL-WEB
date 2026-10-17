@@ -81,6 +81,25 @@ class ExecutablesTest {
                 "a name carrying a separator is a path; it must not be appended to PATH entries");
     }
 
+    @Test
+    void theChildsPathIsWhatCounts(@TempDir Path runtimeBin) throws IOException {
+        // A managed runtime is prepended through the child's environment; resolving
+        // against the panel's own PATH would miss it entirely.
+        Path npm = runtimeBin.resolve("npm");
+        Files.writeString(npm, "#!/bin/sh\n");
+        assertTrue(npm.toFile().setExecutable(true),
+                "a real runtime's npm is executable");
+
+        assertEquals(List.of(npm.toRealPath().toString(), "ci", "--no-audit"),
+                Executables.startable(List.of("npm", "ci", "--no-audit"),
+                        runtimeBin.toString()),
+                "the program is rewritten to the one the child will find");
+        assertEquals(List.of("definitely-not-on-any-path", "--version"),
+                Executables.startable(List.of("definitely-not-on-any-path", "--version"),
+                        runtimeBin.toString()),
+                "an unresolvable name is left untouched, so the error names what was asked for");
+    }
+
     // ------------------------------------------------------------------ POSIX --
 
     @Test
