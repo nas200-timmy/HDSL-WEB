@@ -2,7 +2,7 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## v0.4.2 — 2026-10-16 · Windows 裸部署：从「文档说可以」到「真能跑」
+## v0.4.2 — 2026-10-17 · Windows 裸部署：从「文档说可以」到「真能跑」
 
 > 起因：`docs/windows-bare-deploy.md`（同日只读排查）证明 README/CHANGELOG 把 Windows
 > 裸部署当「已加固」，而代码里**没有任何一处**针对 Windows 的平台分支——v0.3.6 那份实测
