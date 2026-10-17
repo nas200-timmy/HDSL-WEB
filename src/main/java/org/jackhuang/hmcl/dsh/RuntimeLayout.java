@@ -122,10 +122,4 @@ public record RuntimeLayout(OperatingSystem os) {
         return Files.isRegularFile(node) || Files.isSymbolicLink(node);
     }
 
-    /// Reports whether this layout names Windows.
-    ///
-    /// @return whether the layout is the Windows one
-    public boolean isWindows() {
-        return os == OperatingSystem.WINDOWS;
-    }
 }

@@ -96,7 +96,19 @@ public final class DshCustomCommands {
     /// @param command the shell line
     /// @return the program and arguments that run it
     static List<String> shellCommand(String command) {
-        return OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS
+        return shellCommand(command, OperatingSystem.CURRENT_OS);
+    }
+
+    /// Wraps a shell line in the command interpreter **of a given system**.
+    ///
+    /// Package-private and parameterised so the Windows form can be asserted from a test
+    /// on any machine; [shellCommand] supplies the running system's form.
+    ///
+    /// @param command the shell line
+    /// @param os      the system whose interpreter to use
+    /// @return the command to hand to a `ProcessBuilder`
+    static List<String> shellCommand(String command, OperatingSystem os) {
+        return os == OperatingSystem.WINDOWS
                 ? List.of("cmd", "/c", command)
                 : List.of("/bin/sh", "-c", command);
     }
