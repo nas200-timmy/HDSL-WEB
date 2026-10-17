@@ -113,7 +113,7 @@ jar 的运行前提见下方「方式二」（JDK 21 与 Node/pnpm）。Docker �
 
 ### 方式一：Docker / Compose（推荐）
 
-不想自己构建镜像时，用已经发布到 **GitHub Container Registry** 的镜像（打 `v*` 标签时由 GitHub Actions 在官方 runner 上自动构建，见 [`.github/workflows/docker.yml`](.github/workflows/docker.yml)）：
+不想自己构建镜像时，用已经发布到 **GitHub Container Registry** 的镜像（打 `v*` 标签时由 GitHub Actions 在官方 runner 上自动构建，见 [`.github/workflows/docker.yml`](.github/workflows/docker.yml)）。镜像是 **`linux/amd64` + `linux/arm64` 双架构 manifest**，`docker pull` 会按机器自动选对应架构：
 
 ```bash
 docker pull ghcr.io/nas200-timmy/hdsl-web:latest

@@ -18,8 +18,13 @@
 
 # =============================================================================
 # Stage 1 — web: the panel SPA
+#
+# Multi-arch builds pin the two build stages to the builder's own architecture:
+# `npm ci`/`vite build` and Gradle produce architecture-neutral output, so there
+# is no reason to run them under QEMU. Only the runtime stage below is
+# target-specific (apt + the Node tarball chosen by dpkg).
 # =============================================================================
-FROM node:22-bookworm-slim AS web
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS web
 
 # Where npm fetches packages from. Point this at a mirror when the network is
 # slow, e.g. --build-arg NPM_REGISTRY=https://registry.npmmirror.com/
@@ -55,8 +60,9 @@ RUN test -f /web/dist/assets-img/wallpapers/2021-08-26.jpg
 # Stage 2 — build: the single executable jar
 # =============================================================================
 # A JDK, not a JRE: the Gradle wrapper compiles gradle/wrapper/GradleWrapperNeo.java
-# on demand, which needs javac.
-FROM eclipse-temurin:21-jdk AS build
+# on demand, which needs javac. Pinned to $BUILDPLATFORM for the same reason as
+# the web stage — the jar is architecture-neutral.
+FROM --platform=$BUILDPLATFORM eclipse-temurin:21-jdk AS build
 
 WORKDIR /src
 

@@ -236,7 +236,9 @@ docker run --rm -u 0:0 -v hdsl-data-restore:/data --entrypoint chown hdsl-web:la
 
 Dockerfile 对 `amd64` 与 `arm64` 都是自适应的：Node 版本按 `dpkg --print-architecture` 选官方 tarball，
 校验 `SHASUMS256.txt`；三阶段基础镜像（`node:22-bookworm-slim`、`eclipse-temurin:21-jdk`、`debian:trixie-slim`）
-都有两个架构的 manifest。
+都有两个架构的 manifest。CI（`.github/workflows/docker.yml`）发布的就是
+`linux/amd64` + `linux/arm64` 双架构 manifest；构建阶段钉在 `$BUILDPLATFORM`，
+只有 runtime 阶段在目标架构下执行。下面的命令用于本地复现：
 
 ```bash
 # 一次性准备 builder
