@@ -289,7 +289,10 @@ public final class PnpmConfigFile {
         try {
             Files.setPosixFilePermissions(file, EnumSet.of(
                     PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
-        } catch (IOException | UnsupportedOperationException e) {
+        } catch (UnsupportedOperationException e) {
+            // Windows has no POSIX mode bits. The startup banner already says so;
+            // warning on every boot would only look like a failure.
+        } catch (IOException e) {
             LOG.warning("Could not restrict the permissions of " + file, e);
         }
     }
