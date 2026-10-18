@@ -195,7 +195,9 @@ kimi-code 自带一个空 `node_modules` 目录，pnpm 11 在 Windows 上因此�
 - **构建成功 ≠ 可用**：本次已验证实例启动与反代 200，但登录、模型供应商、会话行为属上游，  
   面板不作担保（与 `docs/zcode-experimental.md` 一致）。
 
-## 8. 本次工作树里已有的改动（未提交，供决策）
+## 8. 落地状态与复核
+
+改动已移植到 `feat/zcode-windows-toolchain`（基于 main `d0c1709`）：
 
 | 文件                | 改动                                                | 目的                      |
 | ----------------- | ------------------------------------------------- | ----------------------- |
@@ -208,7 +210,12 @@ kimi-code 自带一个空 `node_modules` 目录，pnpm 11 在 Windows 上因此�
 | `BrandInstaller`  | 安装日志真正写入 `install.log`                            | 修空日志                    |
 | `ZcodeApiServlet` | `buildBin` 只认显式配置与镜像路径                            | 把供给逻辑收口到 builder        |
 
-以上改动在 `feat/windows-bare-deploy` 分支（已快进到 main 的 `d0c1709`），**尚未提交、未跑  
-全量测试**。报告口径以实测为准；`ZcodeBuilderTest.buildsAndInstallsAReleaseFromALocalSourceTarball`  
-在 Windows 上有一条 `current` 断言失败，需在落地前查清（与本次清理/junction 改动相邻，  
-怀疑与 `current` 指针的删除顺序有关）。
+复核时补了四处：`samePath` 改用 `Files.isSameFile`（Windows 的大小写/8.3 短名/`\\?\`
+前缀不再影响 `current` 判定）；`deleteRecursively` 用 `NOFOLLOW` 判存在、robocopy 的
+`.empty` 用完即删、删不干净时明确失败；工具链来源写进构建日志；并发安装 Node 的
+「already installed」转为复用。
+
+Linux 全量测试 **584 用例 / 0 失败 / 0 错误 / 0 跳过**。报告的原始结论（Windows 上不需要
+MSVC）以真机实测为准；`current` 文本指针与删除顺序现在有 3 条用例钉住，但**Windows 真机
+尚未复跑**这一版（测试机已关机），重跑时按 §6 的验收清单再过一遍。
+
