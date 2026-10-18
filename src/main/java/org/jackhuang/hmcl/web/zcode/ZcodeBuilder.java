@@ -241,6 +241,7 @@ public final class ZcodeBuilder {
             // download: a bare deployment with no Node 24 and no pnpm would otherwise
             // fail an hour in, at the step that runs pnpm.
             Settings effective = withToolchain(settings, step);
+            reportCompiler(step);
             step.set(0.03, "清理旧目录");
             deleteRecursively(settings.root().resolve("current"));
 
@@ -545,6 +546,84 @@ public final class ZcodeBuilder {
         step.log("=== 构建工具链：" + runtime.node() + "（" + runtime.nodeVersion() + "），pnpm " + pnpm);
         return new Settings(settings.root(), runtime.binDirectory().toString(), pnpm,
                 settings.sourceUrl(), settings.keepSources());
+    }
+
+    /// Tells the operator what the build does and does not have in the way of a
+    /// C++ compiler.
+    ///
+    /// A ZCode build does not need one: `node-pty` ships `prebuilds/win32-x64`, and
+    /// `cpu-features` — the only dependency whose install runs `node-gyp` — is an
+    /// **optional** dependency of `ssh2`, so pnpm carries on when it cannot compile
+    /// (measured on Windows 10 without MSVC: the build completes, `cpufeatures.node`
+    /// is simply absent and ssh2 falls back). Saying that before the install turns
+    /// the expected `Unable to detect compiler type` in the log from a scare into a
+    /// known skip.
+    ///
+    /// The panel deliberately **does not download** a compiler: Microsoft ships
+    /// `cl.exe` only through the Visual Studio installer, where the minimal supported
+    /// set (VC++ tools + Windows SDK) is several GB and needs an administrator. A
+    /// build must not start a UAC prompt or a 3 GB download behind the operator's back.
+    ///
+    /// @param step the build step, for the log
+    private static void reportCompiler(Step step) {
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                != org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            return;
+        }
+        Path compiler = msvcCompiler();
+        if (compiler != null) {
+            step.log("=== C++ 编译链：" + compiler + "（可选原生依赖可现场编译）");
+            return;
+        }
+        step.log("=== 未检测到 MSVC C++ 编译器：cpu-features（ssh2 的可选依赖）会被跳过，不影响本次构建");
+        step.log("    需要它时安装 VS Build Tools 的 VC++ 组件（约 2.5–3 GB，需管理员）：");
+        step.log("    vs_buildtools.exe --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+                + " --add Microsoft.VisualStudio.Component.Windows11SDK.22621");
+    }
+
+    /// Finds `cl.exe` through the Visual Studio installer's own locator.
+    ///
+    /// `vswhere` answers with the installation that has the VC++ tools, whichever
+    /// edition or year it is; neither an IDE nor a developer prompt is required. Only
+    /// Windows is searched, and a missing `vswhere` simply means "no Visual Studio
+    /// toolset here".
+    ///
+    /// @return the compiler, or `null` when this machine has none
+    private static @Nullable Path msvcCompiler() {
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                != org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            return null;
+        }
+        Path vswhere = Path.of(System.getenv().getOrDefault("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+                "Microsoft Visual Studio", "Installer", "vswhere.exe");
+        if (!Files.isRegularFile(vswhere)) {
+            return null;
+        }
+        try {
+            Process process = new ProcessBuilder(vswhere.toString(),
+                    "-latest", "-products", "*",
+                    "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                    "-find", "VC\\Tools\\MSVC\\**\\bin\\Hostx64\\x64\\cl.exe")
+                    .redirectErrorStream(true)
+                    .start();
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line = reader.readLine();
+                if (process.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
+                        && process.exitValue() == 0
+                        && line != null && !line.isBlank()) {
+                    Path compiler = Path.of(line.trim());
+                    if (Files.isRegularFile(compiler)) {
+                        return compiler;
+                    }
+                }
+            }
+        } catch (IOException e) {
+            LOG.debug("Could not ask vswhere for the MSVC compiler: " + e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return null;
     }
 
     /// The newest Node release the build may use, asked of the mirror so the
