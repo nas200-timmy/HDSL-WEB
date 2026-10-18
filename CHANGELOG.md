@@ -2,12 +2,13 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布
+## v0.4.3 — 2026-10-18 · 容器镜像加 `linux/arm64`
 
 - **容器镜像加 `linux/arm64`**：CI 现在产 `linux/amd64` + `linux/arm64` 双架构 manifest，
   `docker pull` 会按机器自动选择。Dockerfile 的 web/build 两个阶段钉在 `$BUILDPLATFORM`
   （产物与架构无关），只有 runtime 阶段走 QEMU 目标架构；Dockerfile 本身早已按
   `dpkg --print-architecture` 选 Node tarball，这次只是把发布侧补齐。
+- jar 与 v0.4.2 相同，没有代码改动；本版只动交付（CI、镜像、文档）。
 
 ## v0.4.2 — 2026-10-17 · Windows 裸部署：从「文档说可以」到「真能跑」
 
