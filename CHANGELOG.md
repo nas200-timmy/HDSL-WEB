@@ -24,6 +24,9 @@
   `cpu-features`（ssh2 的可选依赖）在没有 MSVC 时会报 `Unable to detect compiler type`，
   pnpm 按可选依赖继续——**不需要编译器即可构建**；`node-pty` 用预编译。详见
   `docs/report-2026-10-18-zcode-windows-build.md` §8.1。
+- **编译链预检**：Windows 构建前用 `vswhere` 找 `cl.exe`；没有就明确说明
+  `cpu-features` 是可选依赖、会被跳过，并给出最小 VS Build Tools 命令。面板不自动下载
+  编译器（需管理员 + 2.5–3 GB），也不在构建里弹 UAC。
 
 ## v0.4.3 — 2026-10-18 · 容器镜像加 `linux/arm64`
 

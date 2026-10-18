@@ -37,7 +37,9 @@ AI 编程工作台，Apache-2.0）。它与 dsh 品类**完全隔离**：实例�
 `Could not find any Python installation` / `Unable to detect compiler type`。
 **Windows 裸部署不需要编译链**：`node-pty` 随包带 `win32-x64` 预编译，面板会自供
 Node 24+、pnpm，并在 `<数据目录>/zcode/build/bin` 写一个 `tar.bat` 指向系统 bsdtar
-（PATH 上的 GNU tar 会把 `C:\` 当成远程主机）——实测细节见
+（PATH 上的 GNU tar 会把 `C:\` 当成远程主机）。构建前还会用 `vswhere` 预检 `cl.exe`：
+没有时日志会说明 `cpu-features`（ssh2 的可选依赖）会被跳过、不影响构建；面板**不会**
+自动下载编译器（Build Tools 需管理员且约 2.5–3 GB）。实测细节见
 [`report-2026-10-18-zcode-windows-build.md`](report-2026-10-18-zcode-windows-build.md)。
 要下几百 MB 源码、装 GB 级依赖，**慢是正常的**；构建失败（环境缺失、上游改了锚点）只影响这一次构建，
 已装好的版本不受影响——而且**失败时源码树会保留**（`<数据目录>/zcode/build/src` 与同目录的 `build.log`），
