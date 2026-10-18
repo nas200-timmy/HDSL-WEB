@@ -54,6 +54,11 @@ class ZcodePatchTest {
         assertTrue(oauth.contains("window.location.pathname.match(/^\\/i\\/[^/]+/)"), oauth);
         assertTrue(oauth.contains("/api/v1/oauth/token"), oauth);
         assertTrue(oauth.contains("[\"\"])[0] +"), oauth);
+
+        // The build script spawns `pnpm` by bare name; on Windows only a shell
+        // resolves that to `pnpm.cmd`, so the edit has to keep the guard.
+        String build = Files.readString(source.resolve("scripts/build-zcode.mjs"));
+        assertTrue(build.contains("shell: process.platform === \"win32\","), build);
     }
 
     @Test
@@ -76,7 +81,7 @@ class ZcodePatchTest {
 
     @Test
     void reportsHowManyEditsItPerforms() {
-        assertEquals(5, ZcodePatch.size());
+        assertEquals(6, ZcodePatch.size());
     }
 
     /// Copies a directory tree — the test resources are read-only fixtures.

@@ -83,7 +83,21 @@ public final class ZcodePatch {
             new Edit("packages/web/src/auth/webZaiOAuthConfig.ts",
                     "    tokenUrl: \"/api/v1/oauth/token\",",
                     "    tokenUrl: (window.location.pathname.match(/^\\/i\\/[^/]+/) ?? [\"\"])[0]"
-                            + " + \"/api/v1/oauth/token\",")
+                            + " + \"/api/v1/oauth/token\","),
+
+            // Not a proxy edit: the build script spawns `pnpm` (and `tar`) by bare
+            // name, and Windows has no file called either — they exist as
+            // `pnpm.cmd` / `tar.exe`, and CreateProcess resolves neither through
+            // PATHEXT without a shell. Measured on Windows 10: `pnpm install` and
+            // `tsc -b` finish, then `spawnSync pnpm ENOENT` kills `build:zcode`.
+            // `shell` is false off Windows, so the POSIX build is unchanged.
+            new Edit("scripts/build-zcode.mjs",
+                    "  const result = spawnSync(command, args, {\n    cwd: root,",
+                    "  const result = spawnSync(command, args, {\n"
+                            + "    // HDSL-web patch: bare `pnpm`/`tar` are not files on Windows; cmd.exe\n"
+                            + "    // (through PATHEXT) is what finds `pnpm.cmd` there.\n"
+                            + "    shell: process.platform === \"win32\",\n"
+                            + "    cwd: root,")
     );
 
     /// Applies every edit to the checked-out sources.

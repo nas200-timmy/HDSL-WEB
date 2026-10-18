@@ -127,7 +127,7 @@ gh release download vX.Y.Z -D /tmp/check && (cd /tmp/check && sha256sum -c SHA25
 
 | 项 | 状态 |
 | --- | --- |
-| Windows 上 ZCode 面板内构建 | ⬜ 未跑（耗时长）；`tar` 点名 `System32\tar.exe`、PATH 用 `File.pathSeparator` 已修 |
+| Windows 上 ZCode 面板内构建 | ✅ 2026-10-18 真机跑通 v3.14.3；缺的是 Node 24+/pnpm/bsdtar，不是编译器。改动在 `feat/zcode-windows-toolchain`，见 `docs/report-2026-10-18-zcode-windows-build.md` |
 | Windows 上 kimi / claude-web 品牌 | ⬜ 未跑（下载与账号成本）；opencode 已跑通，派生机制同一套 |
 | >260 字符长路径 | ⬜ 未测；doctor 打印目录长度并在 >120 时提示 |
 | pnpm 硬链接 store 跨卷 | ⬜ 未实测 |

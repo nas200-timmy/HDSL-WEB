@@ -19,6 +19,10 @@ package org.jackhuang.hmcl.web.zcode;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.jackhuang.hmcl.dsh.DshException;
+import org.jackhuang.hmcl.dsh.DshNodeRuntime;
+import org.jackhuang.hmcl.dsh.NodeRuntimeManager;
+import org.jackhuang.hmcl.dsh.NodeSource;
 import org.jackhuang.hmcl.util.io.Links;
 import org.jackhuang.hmcl.util.platform.Executables;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -186,7 +190,11 @@ public final class ZcodeBuilder {
     private static boolean samePath(Path release, Path pointer) {
         return Links.pointedAt(pointer).map(target -> {
             try {
-                return release.toRealPath().equals(target.toRealPath());
+                // `isSameFile` asks the filesystem, which is exactly what Windows needs:
+                // the same directory can be spelled with different case, a short (8.3)
+                // name, or a `\\?\` prefix, and `toRealPath().equals` compares those
+                // spellings rather than the files they name.
+                return Files.isSameFile(release, target);
             } catch (IOException e) {
                 return false;
             }
@@ -224,20 +232,26 @@ public final class ZcodeBuilder {
         try {
             Files.createDirectories(work);
             Files.writeString(log, "", StandardCharsets.UTF_8);
+            prepareShims(settings);
             deleteRecursively(sources);
             deleteRecursively(outDir);
 
             Step step = new Step(log, ref);
+            // Resolve (and if needed install) the build toolchain before the long
+            // download: a bare deployment with no Node 24 and no pnpm would otherwise
+            // fail an hour in, at the step that runs pnpm.
+            Settings effective = withToolchain(settings, step);
+            reportCompiler(step);
             step.set(0.03, "清理旧目录");
             deleteRecursively(settings.root().resolve("current"));
 
-            String url = String.format(settings.sourceUrl(), ref);
+            String url = String.format(effective.sourceUrl(), ref);
             step.set(0.06, "下载源码：" + url);
             download(url, tarball);
 
             step.set(0.15, "解包源码");
             Files.createDirectories(sources);
-            run(step, settings, work, List.of(tarProgram(), "-xzf", tarball.toString(),
+            run(step, effective, work, List.of(tarProgram(), "-xzf", tarball.toString(),
                     "-C", sources.toString(), "--strip-components=1"), Duration.ofMinutes(10));
 
             step.set(0.22, "应用反代补丁（" + ZcodePatch.size() + " 处）");
@@ -257,10 +271,20 @@ public final class ZcodeBuilder {
             // outright when one is missing. Upstream's own `pnpm-workspace.yaml` already asks for
             // exactly the platforms it needs.
             String registry = org.jackhuang.hmcl.dsh.NpmRegistry.effective().registry();
-            List<String> install = new ArrayList<>(List.of(settings.pnpm(), "install"));
+            List<String> install = new ArrayList<>(List.of(effective.pnpm(), "install"));
             install.add("--registry=" + registry);
+            // Windows: pnpm's isolated layout does not link a package's own dependencies
+            // beside it when that package ships a `node_modules` directory, and the tools
+            // this panel installs are written against a flat layout — on Windows 10 with
+            // pnpm 11.28.6 the install passes while the program then cannot resolve `ws`
+            // (`ERR_MODULE_NOT_FOUND`). Hoisted is the layout they expect; POSIX keeps
+            // the isolated one it has always used.
+            if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                    == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+                install.add("--config.node-linker=hoisted");
+            }
             step.set(0.28, "安装依赖：pnpm install（最慢的一步，registry=" + registry + "）");
-            run(step, settings, sources, install, Duration.ofMinutes(90));
+            run(step, effective, sources, install, Duration.ofMinutes(90));
 
             // Upstream's own build does not produce this, and its error message says to run
             // `pnpm build`, which does not either: `packages/shared` declares no build script, so
@@ -269,7 +293,7 @@ public final class ZcodeBuilder {
             // reference build — the one the root `typecheck` runs — which is why anyone who has run
             // that has the file and a clean checkout does not.
             step.set(0.62, "补 packages/shared 的 dist（上游缺的一步）");
-            run(step, settings, sources, List.of(settings.pnpm(), "exec", "tsc", "-b", "packages/shared"),
+            run(step, effective, sources, List.of(effective.pnpm(), "exec", "tsc", "-b", "packages/shared"),
                     Duration.ofMinutes(30));
             if (!Files.isRegularFile(sources.resolve("packages/shared/dist/index.js"))) {
                 throw new ZcodeException("packages/shared/dist/index.js was not produced,"
@@ -277,7 +301,7 @@ public final class ZcodeBuilder {
             }
 
             step.set(0.68, "构建发行包：pnpm build:zcode");
-            run(step, settings, sources, List.of(settings.pnpm(), "build:zcode",
+            run(step, effective, sources, List.of(effective.pnpm(), "build:zcode",
                     "--out-dir", outDir.toString(),
                     "--base-url", "https://example.invalid/zcode/"), Duration.ofMinutes(90));
 
@@ -456,19 +480,331 @@ public final class ZcodeBuilder {
         return "tar";
     }
 
+    /// The lowest Node major the upstream build accepts (its `engines` asks for
+    /// 24.14+, and the SEA staging and Vite 8 toolchain both need the modern line).
+    private static final int MINIMUM_BUILD_NODE_MAJOR = 24;
+
+    /// Makes sure the build has the toolchain it needs, installing what is
+    /// missing into the data directory.
+    ///
+    /// This is the bare-deployment case, and on Windows it is the common one: no
+    /// `/opt/node24` from the image, a system Node on the 22 line (the one dsh
+    /// itself supports), and frequently no pnpm at all. "One click" has to mean
+    /// the panel puts the toolchain under `<data>/hdsl/runtimes` instead of
+    /// telling the user to install Node 24, a package manager and a compiler by
+    /// hand. That directory is exactly the one Settings -> Node.js fills, so the
+    /// runtime stays visible, reusable and removable there afterwards.
+    ///
+    /// Measured on Windows 10 (2026-10-18), a full build needs no C++ toolchain
+    /// at all: `node-pty` ships `prebuilds/win32-x64/pty.node` and its postinstall
+    /// logs `skip electron-rebuild (windows-prebuild-available)`, so there is no
+    /// MSVC/Python requirement to satisfy — Node + pnpm is the whole chain.
+    ///
+    /// @param settings the configured settings
+    /// @param step the build step, for progress in the log
+    /// @return settings whose `buildBin` and `pnpm` point at a usable toolchain
+    /// @throws ZcodeException when the toolchain cannot be provided
+    private static Settings withToolchain(Settings settings, Step step) throws ZcodeException {
+        if (!settings.buildBin().isBlank()) {
+            step.log("=== 构建工具链：已配置的 " + settings.buildBin() + "，pnpm "
+                    + (settings.pnpm().isBlank() ? "pnpm（PATH）" : settings.pnpm()));
+            return settings;
+        }
+        Path image = Path.of("/opt/node24/bin");
+        if (Files.isDirectory(image)) {
+            step.log("=== 构建工具链：镜像自带的 Node 24（" + image + "），pnpm "
+                    + (settings.pnpm().isBlank() ? "pnpm（PATH）" : settings.pnpm()));
+            return new Settings(settings.root(), image.toString(), settings.pnpm(),
+                    settings.sourceUrl(), settings.keepSources());
+        }
+        DshNodeRuntime runtime = DshNodeRuntime.detectManaged()
+                .filter(candidate -> majorOf(candidate.nodeVersion()) >= MINIMUM_BUILD_NODE_MAJOR)
+                .orElse(null);
+        if (runtime == null) {
+            String version = newestBuildNode();
+            step.log("=== 数据目录里没有 Node 24+，自动安装一个：" + version + "（只需一次，装在 <data>/hdsl/runtimes）");
+            try {
+                runtime = DshNodeRuntime.fromManaged(NodeRuntimeManager.install(version, NodeSource.MIRROR,
+                        line -> step.log("[node] " + line)));
+                DshNodeRuntime.invalidateCache();
+            } catch (DshException e) {
+                // Another build may have installed the same version between our probe
+                // and this call; "already installed" is not a failure in that case.
+                runtime = DshNodeRuntime.detectManaged()
+                        .filter(candidate -> majorOf(candidate.nodeVersion()) >= MINIMUM_BUILD_NODE_MAJOR)
+                        .orElse(null);
+                if (runtime == null) {
+                    throw new ZcodeException("could not install the build's Node.js into the data directory: "
+                            + e.getMessage(), e);
+                }
+            }
+        }
+        String pnpm = settings.pnpm();
+        if (pnpm.isBlank() || "pnpm".equals(pnpm)) {
+            pnpm = ensurePnpm(runtime, step);
+        }
+        step.log("=== 构建工具链：" + runtime.node() + "（" + runtime.nodeVersion() + "），pnpm " + pnpm);
+        return new Settings(settings.root(), runtime.binDirectory().toString(), pnpm,
+                settings.sourceUrl(), settings.keepSources());
+    }
+
+    /// Tells the operator what the build does and does not have in the way of a
+    /// C++ compiler.
+    ///
+    /// A ZCode build does not need one: `node-pty` ships `prebuilds/win32-x64`, and
+    /// `cpu-features` — the only dependency whose install runs `node-gyp` — is an
+    /// **optional** dependency of `ssh2`, so pnpm carries on when it cannot compile
+    /// (measured on Windows 10 without MSVC: the build completes, `cpufeatures.node`
+    /// is simply absent and ssh2 falls back). Saying that before the install turns
+    /// the expected `Unable to detect compiler type` in the log from a scare into a
+    /// known skip.
+    ///
+    /// The panel deliberately **does not download** a compiler: Microsoft ships
+    /// `cl.exe` only through the Visual Studio installer, where the minimal supported
+    /// set (VC++ tools + Windows SDK) is several GB and needs an administrator. A
+    /// build must not start a UAC prompt or a 3 GB download behind the operator's back.
+    ///
+    /// @param step the build step, for the log
+    private static void reportCompiler(Step step) {
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                != org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            return;
+        }
+        Path compiler = msvcCompiler();
+        if (compiler != null) {
+            step.log("=== C++ 编译链：" + compiler + "（可选原生依赖可现场编译）");
+            return;
+        }
+        step.log("=== 未检测到 MSVC C++ 编译器：cpu-features（ssh2 的可选依赖）会被跳过，不影响本次构建");
+        step.log("    需要它时安装 VS Build Tools 的 VC++ 组件（约 2.5–3 GB，需管理员）：");
+        step.log("    vs_buildtools.exe --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+                + " --add Microsoft.VisualStudio.Component.Windows11SDK.22621");
+    }
+
+    /// Finds `cl.exe` through the Visual Studio installer's own locator.
+    ///
+    /// `vswhere` answers with the installation that has the VC++ tools, whichever
+    /// edition or year it is; neither an IDE nor a developer prompt is required. Only
+    /// Windows is searched, and a missing `vswhere` simply means "no Visual Studio
+    /// toolset here".
+    ///
+    /// @return the compiler, or `null` when this machine has none
+    private static @Nullable Path msvcCompiler() {
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                != org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            return null;
+        }
+        Path vswhere = Path.of(System.getenv().getOrDefault("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+                "Microsoft Visual Studio", "Installer", "vswhere.exe");
+        if (!Files.isRegularFile(vswhere)) {
+            return null;
+        }
+        try {
+            Process process = new ProcessBuilder(vswhere.toString(),
+                    "-latest", "-products", "*",
+                    "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                    "-find", "VC\\Tools\\MSVC\\**\\bin\\Hostx64\\x64\\cl.exe")
+                    .redirectErrorStream(true)
+                    .start();
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line = reader.readLine();
+                if (process.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
+                        && process.exitValue() == 0
+                        && line != null && !line.isBlank()) {
+                    Path compiler = Path.of(line.trim());
+                    if (Files.isRegularFile(compiler)) {
+                        return compiler;
+                    }
+                }
+            }
+        } catch (IOException e) {
+            LOG.debug("Could not ask vswhere for the MSVC compiler: " + e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return null;
+    }
+
+    /// The newest Node release the build may use, asked of the mirror so the
+    /// answer does not depend on this panel's release cadence.
+    ///
+    /// @return the version, without a leading `v`
+    /// @throws ZcodeException when the release list cannot be read
+    private static String newestBuildNode() throws ZcodeException {
+        try {
+            List<String> candidates = NodeRuntimeManager.fetchReleases(NodeSource.MIRROR).stream()
+                    .map(org.jackhuang.hmcl.dsh.NodeRelease::version)
+                    .filter(version -> majorOf(version) >= MINIMUM_BUILD_NODE_MAJOR)
+                    .toList();
+            if (candidates.isEmpty()) {
+                throw new ZcodeException("the Node mirror lists no 24-or-later release to build with");
+            }
+            return candidates.stream().max(ZcodeBuilder::compareVersions).orElseThrow();
+        } catch (DshException e) {
+            throw new ZcodeException("could not read the Node release list: " + e.getMessage(), e);
+        }
+    }
+
+    /// The major component of a version string, or 0 when it is not a number.
+    ///
+    /// @param version the version, optionally prefixed with `v`
+    /// @return the major version
+    private static int majorOf(String version) {
+        try {
+            return Integer.parseInt(version.replaceFirst("^v", "").split("\\.")[0]);
+        } catch (RuntimeException e) {
+            return 0;
+        }
+    }
+
+    /// Numeric `major.minor.patch` ordering for two version strings.
+    ///
+    /// @param left one version
+    /// @param right the other
+    /// @return the comparison
+    private static int compareVersions(String left, String right) {
+        String[] a = left.replaceFirst("^v", "").split("\\.");
+        String[] b = right.replaceFirst("^v", "").split("\\.");
+        for (int i = 0; i < Math.max(a.length, b.length); i++) {
+            int x = i < a.length ? parseNumber(a[i]) : 0;
+            int y = i < b.length ? parseNumber(b[i]) : 0;
+            if (x != y) {
+                return Integer.compare(x, y);
+            }
+        }
+        return 0;
+    }
+
+    private static int parseNumber(String part) {
+        try {
+            return Integer.parseInt(part.replaceAll("[^0-9].*$", ""));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /// The pnpm to build with, installed into the runtime when it has none.
+    ///
+    /// A managed runtime is a Node distribution, not a package manager install:
+    /// it has `npm` and nothing else. pnpm goes into the same directory so the
+    /// next build (and `Settings -> Node.js`) sees it too.
+    ///
+    /// @param runtime the build's Node
+    /// @param step the build step, for progress in the log
+    /// @return the pnpm executable's path
+    /// @throws ZcodeException when pnpm cannot be installed
+    private static String ensurePnpm(DshNodeRuntime runtime, Step step) throws ZcodeException {
+        Path existing = runtime.pnpm();
+        if (existing != null) {
+            return existing.toString();
+        }
+        Path npm = runtime.npm();
+        if (npm == null) {
+            throw new ZcodeException("the build's Node.js has no npm, so pnpm cannot be installed");
+        }
+        // `--prefix` is the distribution root: on Windows that is where node.exe
+        // sits, on POSIX it is the parent of `bin/`.
+        Path prefix = org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS
+                        ? runtime.binDirectory()
+                        : runtime.binDirectory().getParent();
+        step.log("=== 该运行时没有 pnpm，正在装进 " + prefix + "（只需一次）");
+        String registry = org.jackhuang.hmcl.dsh.NpmRegistry.effective().registry();
+        try {
+            Process process = new ProcessBuilder(Executables.startable(List.of(npm.toString(),
+                    "install", "--global", "pnpm@11", "--prefix", prefix.toString(), "--registry=" + registry)))
+                    .redirectErrorStream(true)
+                    .start();
+            try (var reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    step.log("[pnpm] " + line);
+                }
+            }
+            if (!process.waitFor(10, java.util.concurrent.TimeUnit.MINUTES) || process.exitValue() != 0) {
+                throw new ZcodeException("installing pnpm into " + prefix + " failed");
+            }
+        } catch (IOException e) {
+            throw new ZcodeException("could not run npm to install pnpm: " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ZcodeException("installing pnpm was interrupted", e);
+        }
+        Path installed = org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS
+                        ? prefix.resolve("pnpm.cmd")
+                        : prefix.resolve("bin").resolve("pnpm");
+        if (!Files.isRegularFile(installed)) {
+            throw new ZcodeException("npm reported success but " + installed + " does not exist");
+        }
+        return installed.toString();
+    }
+
+    /// The directory of shims put ahead of `PATH` for every build step.
+    ///
+    /// It lives under the data directory (`<data>/zcode/build/bin`), so a bare
+    /// deployment needs nothing installed system-wide: the panel writes the one
+    /// program Windows spells differently and lets the build find it.
+    ///
+    /// @param settings the build settings
+    /// @return the shim directory
+    private static Path shimDirectory(Settings settings) {
+        return settings.root().resolve("build").resolve("bin");
+    }
+
+    /// Writes the build shims for this platform.
+    ///
+    /// Windows' `tar.exe` is bsdtar and takes `C:\…` paths; Git for Windows ships
+    /// GNU tar earlier on `PATH`, and GNU tar reads the drive letter as a *remote
+    /// host* (`tar (child): Cannot connect to C: resolve failed`), which kills the
+    /// tarball step after the whole install and web build have already run. A
+    /// `tar.bat` ahead of `PATH` resolves `tar` to the system bsdtar. POSIX needs
+    /// no shim: its `tar` is the system one.
+    ///
+    /// @param settings the build settings
+    /// @throws ZcodeException when the shim cannot be written
+    private static void prepareShims(Settings settings) throws ZcodeException {
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                != org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            return;
+        }
+        Path shim = shimDirectory(settings);
+        try {
+            Files.createDirectories(shim);
+            // `%*` forwards the arguments as received, quotes included; `%SystemRoot%`
+            // expands to the drive Windows is actually installed on.
+            Files.writeString(shim.resolve("tar.bat"),
+                    "@echo off\r\n\"%SystemRoot%\\System32\\tar.exe\" %*\r\n", StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new ZcodeException("could not write the build shims into " + shim, e);
+        }
+    }
+
     /// Runs a child process, copying its merged output into the build log.
     private static void run(Step step, Settings settings, Path workingDirectory, List<String> command,
                             Duration timeout) throws ZcodeException {
-        ProcessBuilder builder = new ProcessBuilder(Executables.startable(command));
+        // The shims come first so a bare `tar` (the build script's own call) resolves
+        // to the system one, then the build toolchain, then the panel's own PATH. The
+        // order matters for the *program name* too: the toolchain's pnpm has to be the
+        // one found, which is why the command is resolved against this PATH rather
+        // than this process's own.
+        String path = System.getenv("PATH");
+        // The separator is a property of the system, not of the variable's name:
+        // hardcoding `:` on Windows makes the whole inherited PATH into one entry
+        // that names nothing.
+        StringBuilder searchPath = new StringBuilder(shimDirectory(settings).toString());
+        if (!settings.buildBin().isBlank()) {
+            searchPath.append(java.io.File.pathSeparator).append(settings.buildBin());
+        }
+        if (path != null && !path.isEmpty()) {
+            searchPath.append(java.io.File.pathSeparator).append(path);
+        }
+        ProcessBuilder builder = new ProcessBuilder(Executables.startable(command, searchPath.toString()));
         builder.directory(workingDirectory.toFile());
         builder.redirectErrorStream(true);
-        if (!settings.buildBin().isBlank()) {
-            String path = builder.environment().getOrDefault("PATH", "");
-            // The separator is a property of the system, not of the variable's name:
-            // hardcoding `:` on Windows makes the whole inherited PATH into one entry
-            // that names nothing.
-            builder.environment().put("PATH", settings.buildBin() + java.io.File.pathSeparator + path);
-        }
+        builder.environment().put("PATH", searchPath.toString());
         // Everything a child of the launcher is given: the proxy the settings describe, the npm
         // registry, and the knobs that keep a native build from fetching from the slow half of the
         // internet. The build runs pnpm, node-gyp and git, and all three read these — the proxy
@@ -547,14 +883,102 @@ public final class ZcodeBuilder {
         }
     }
 
-    private static void deleteRecursively(@Nullable Path directory) throws IOException {
-        if (directory == null || !Files.exists(directory)) {
+    /// Removes a directory tree — or a `current`-style pointer, which is not a tree.
+    ///
+    /// Package-private so the pointer rule can be tested without starting a build.
+    ///
+    /// @param directory the tree or pointer, may be `null`
+    /// @throws IOException when something inside could not be removed
+    static void deleteRecursively(@Nullable Path directory) throws IOException {
+        // NOFOLLOW: a dangling `current` link must still be deleted, and `Files.exists`
+        // on its own follows the link and answers "nothing here".
+        if (directory == null || !Files.exists(directory, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
             return;
         }
-        try (var walk = Files.walk(directory)) {
-            for (Path path : walk.sorted(Comparator.reverseOrder()).toList()) {
-                Files.deleteIfExists(path);
+        // `current` is a pointer, not a tree: a link where the system allows one, a
+        // small text file where it does not. Deleting the pointer must never walk
+        // into what it points at — that is an installed release.
+        if (Files.isSymbolicLink(directory)
+                || !Files.isDirectory(directory, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            Files.deleteIfExists(directory);
+            return;
+        }
+        // Windows first. A pnpm tree is hundreds of thousands of files and thousands of
+        // junctions; `rmdir /s` descends into every junction and can take ten minutes
+        // (measured: still running at the ten-minute mark on a 2 GB tree). `robocopy
+        // /MIR` from an empty directory empties it in seconds and `/XJ` keeps it out
+        // of junctions entirely — which is also what made the old walk fail: the walk
+        // entered `node_modules/@zcode/…` through a junction, the target was deleted
+        // from the sibling branch first, and enumeration died with NoSuchFileException,
+        // reported as a build failure before the download had even started.
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            Path empty = directory.toAbsolutePath().getParent().resolve(".empty");
+            try {
+                Files.createDirectories(empty);
+                Process process = new ProcessBuilder("robocopy", empty.toString(), directory.toString(),
+                        "/MIR", "/XJ", "/NFL", "/NDL", "/NJH", "/NJS", "/NC", "/NS", "/R:0", "/W:0")
+                        .redirectErrorStream(true)
+                        .start();
+                process.getInputStream().transferTo(java.io.OutputStream.nullOutputStream());
+                if (process.waitFor(5, java.util.concurrent.TimeUnit.MINUTES)
+                        && process.exitValue() <= 7) {
+                    Files.deleteIfExists(directory);
+                    if (!Files.exists(directory, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                        return;
+                    }
+                }
+            } catch (IOException e) {
+                LOG.warning("Could not empty " + directory + " with robocopy; falling back to a walk", e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("interrupted while removing " + directory, e);
+            } finally {
+                // The empty source of the mirror is ours; do not leave `.empty` beside
+                // every tree that was ever cleaned.
+                try {
+                    Files.deleteIfExists(empty);
+                } catch (IOException ignored) {
+                    // A leftover empty directory is not worth failing a build over.
+                }
             }
+        }
+        // Fallback (and the POSIX path): walk without ever failing the build over an
+        // entry that is already gone — a junction's target disappearing mid-walk is
+        // normal, not an error.
+        Files.walkFileTree(directory, new java.nio.file.SimpleFileVisitor<>() {
+            @Override
+            public java.nio.file.FileVisitResult visitFile(Path file,
+                    java.nio.file.attribute.BasicFileAttributes attrs) {
+                try {
+                    Files.deleteIfExists(file);
+                } catch (IOException e) {
+                    LOG.debug("Could not delete " + file + " (already gone?)");
+                }
+                return java.nio.file.FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public java.nio.file.FileVisitResult visitFileFailed(Path file, IOException exc) {
+                return java.nio.file.FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public java.nio.file.FileVisitResult postVisitDirectory(Path dir, @Nullable IOException exc) {
+                try {
+                    Files.deleteIfExists(dir);
+                } catch (IOException e) {
+                    LOG.debug("Could not delete " + dir + " (already gone?)");
+                }
+                return java.nio.file.FileVisitResult.CONTINUE;
+            }
+        });
+        // The walk tolerates entries that vanished mid-way; it must not also tolerate
+        // leaving the tree behind. A stale `node_modules` would make the next build
+        // install over an old one and produce a package nobody can explain.
+        if (Files.exists(directory, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("could not remove " + directory
+                    + " — some entries are still there (in use, or a link that could not be followed)");
         }
     }
 }

@@ -150,12 +150,23 @@ public final class BrandInstaller {
             throw new BrandException("Failed to prepare " + target, e);
         }
 
-        List<String> command = List.of(
+        List<String> command = new ArrayList<>(List.of(
                 pnpm, "add", "--dir", target.toString(),
                 brand.npmPackage() + "@" + version,
                 "--reporter=append-only",
                 "--registry=" + registry,
-                "--config.dangerously-allow-all-builds=true");
+                "--config.dangerously-allow-all-builds=true"));
+        // pnpm's default (isolated) layout leaves a package's own dependencies as links
+        // beside it inside `.pnpm`, and on Windows those links are not created for a
+        // package that ships a `node_modules` directory of its own — Kimi Code does.
+        // The install then reports success while the tool cannot resolve `ws` at all
+        // (measured on Windows 10, pnpm 11.28.6: `ERR_MODULE_NOT_FOUND: ws`). A hoisted
+        // layout puts the dependencies in the project's `node_modules`, which is what
+        // these tools were written against; POSIX keeps the isolated layout it had.
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            command.add("--config.node-linker=hoisted");
+        }
         message.accept("Installing " + brand.npmPackage() + " " + version);
         LOG.info("Installing " + brand.npmPackage() + " " + version + ": " + String.join(" ", command));
 
@@ -165,6 +176,7 @@ public final class BrandInstaller {
             StringBuilder tail = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
+                output.writeLine(line);
                 if (tail.length() > 0) {
                     tail.append(" | ");
                 }
@@ -361,6 +373,7 @@ public final class BrandInstaller {
             StringBuilder tail = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
+                output.writeLine(line);
                 if (tail.length() > 0) {
                     tail.append(" | ");
                 }
@@ -530,6 +543,16 @@ public final class BrandInstaller {
 
         void attach(Process process) {
             this.process = process;
+        }
+
+        /// Appends one line to the install log, flushed so the log view follows the
+        /// install as it happens rather than after the process exits.
+        ///
+        /// @param line the line, without its terminator
+        /// @throws IOException when the log cannot be written
+        void writeLine(String line) throws IOException {
+            stream.write((line + System.lineSeparator()).getBytes(StandardCharsets.UTF_8));
+            stream.flush();
         }
 
         int exitCode() throws InterruptedException {

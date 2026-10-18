@@ -360,8 +360,11 @@ RuntimeLayout                              // 由平台决定
 | 10 | 进程停止：启动品牌实例后点停止，看端口是否释放 | 无残留 node 占用端口 |
 
 2026-10-17 的复验（§9.2.2）覆盖了 3、4、5（opencode）、8、9、10 与 7 的中文/空格部分；
-1/2 的托管运行时下载路径已验证（该机另有开发者模式权限，未单独测「无权限」分支）；
-6（ZCode 构建）、7 的 >260 字符深路径仍未跑。
+1/2 的托管运行时下载路径已验证（该机另有开发者模式权限，未单独测「无权限」分支）。
+6（ZCode 构建）于 2026-10-18 在同一类真机上跑通（v3.14.3），细节见
+[`report-2026-10-18-zcode-windows-build.md`](report-2026-10-18-zcode-windows-build.md)：
+构建工具链由面板自供（Node 24+、pnpm、`tar.bat` shim），不需要 MSVC；
+7 的 >260 字符深路径仍未跑。
 
 ### 6.3 仍需实测的点（本文无法在 Linux 上定论）
 
@@ -422,7 +425,7 @@ RuntimeLayout                              // 由平台决定
 | 10 · 停止后释放端口 | ✅ 停止前 `127.0.0.1:3937` LISTENING，停止后 `state=STOPPED` **且该端口无监听**。（`/i/acc-dsh/` 答 **502** 而非 404，这是设计如此——`ProxyBehaviorTest` 的用例名就写着 `StoppedInstanceIs502`；plan.md 里的「即刻 404」是旧口径。）|
 | 8 · 中文代码页下的日志 | ✅ 控制台编码 `GB18030`，进度「已写入 529 / 601 个包」无乱码 |
 | — · 全量测试 | ✅ **559 用例 / 0 失败 / 0 错误 / 6 跳过**（改之前 31 失败；6 个跳过里 5 个原本就有）|
-| 6 · ZCode 面板内构建 | ⬜ 未跑（长时间构建）。依赖的两个 Windows 陷阱已修并有用例：`tar` 按路径点名 `System32\tar.exe`、PATH 用 `File.pathSeparator` |
+| 6 · ZCode 面板内构建 | ✅ 2026-10-18 真机跑通 v3.14.3（约 80 MB 发行包）。缺的不是编译器，而是 Node 24+/pnpm/bsdtar——面板已改为自供，见 [`report-2026-10-18-zcode-windows-build.md`](report-2026-10-18-zcode-windows-build.md) |
 | 5 · 品牌工具（kimi/opencode/claude-web） | ⬜ 未跑（几百 MB 下载）。依赖机制已验：`node_modules/.bin/<tool>` 补全到 `.cmd`（`BrandRuntime.entryPoint`）、`npm`/`pnpm` 走统一派生、`HOME`+`USERPROFILE` 双设 |
 | 7 · 含中文/空格、超深的数据目录 | ⬜ 未跑（本次数据目录是纯 ASCII 短路径）|
 
@@ -456,12 +459,12 @@ RuntimeLayout                              // 由平台决定
 | dsh 实例 | ✅ `0.2.1-rc.1`、626 个包**就地**装完，`dsh.installing` 装完即消失；`/i/acc-win/?token=…` 反代 **200**（37023 字节、`<base href="./">`）；停止后端口无监听 |
 | 品牌实例（opencode 1.19.3） | ✅ 装、启、反代 200（`<title>OpenCode</title>`）；停止后状态 `stopped`、端口释放、`opencode.exe` 无残留 |
 | 中文 + 空格路径 | ✅ `C:\Users\timmy\hdsl-测试 空格` 下同样装、启、反代通过（链接为相对软链，`dsh.CMD` 就位）|
-| HTTPS + 裸 IP | ✅ 自签证书：`https://192.168.1.11:3080/` → 200；`http://192.168.1.11:3080/`（含 `/api/health`）→ **308** 到 https |
+| HTTPS + 裸 IP | ✅ 自签证书：`https://192.0.2.10:3080/` → 200；`http://192.0.2.10:3080/`（含 `/api/health`）→ **308** 到 https |
 | 启动前自定义命令 | ✅ `cmd /c` 执行 `echo … > pre-win.txt`，文件落在工作目录，实例正常进入 RUNNING |
-| 全量测试（Linux 侧） | ✅ **581 用例 / 0 失败 / 0 错误 / 0 跳过** |
+| ZCode 面板内构建（v3.14.3） | ✅ 2026-10-18 从空数据目录连跑两次（全新 + 重建）都成功（约 80 MB 发行包）：面板自供 Node 26.12.0、pnpm 与 bsdtar shim；`cpu-features` 无 MSVC 时编译失败但按可选依赖继续，`node-pty` 用预编译——**不需要编译器**。详见 [`report-2026-10-18-zcode-windows-build.md`](report-2026-10-18-zcode-windows-build.md) §8.1 |
+| 全量测试（Linux 侧） | ✅ **584 用例 / 0 失败 / 0 错误 / 0 跳过** |
 
-未复跑：ZCode 面板内构建（耗时）、kimi 品牌（需要账号）、claude-web（GitHub 下载 + 构建）、
->260 字符的长路径。
+未复跑：kimi 品牌（需要账号）、claude-web（GitHub 下载 + 构建）、>260 字符的长路径。
 
 ### 9.3 仍未做 / 明确不支持
 

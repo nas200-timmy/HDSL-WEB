@@ -2,6 +2,32 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布
+
+- **ZCode 面板内构建在 Windows 上跑通（v3.14.3）**：缺的不是编译器，而是三样非编译器的东西——
+  Node 24+、pnpm、以及一个能正确处理 `C:\` 的 `tar`。构建前由面板自动准备：优先镜像
+  `/opt/node24`，其次托管运行时，缺失则装进 `<data>/hdsl/runtimes`（与设置页同一个目录）；
+  运行时没有 pnpm 就用它的 npm 装进去；Windows 写 `<data>/zcode/build/bin/tar.bat` 指向
+  `System32\tar.exe` 并前置 `PATH`（Git 的 GNU tar 会把盘符当远程主机）。
+- **Windows 上 pnpm 改 `node-linker=hoisted`**（品牌安装与 ZCode 构建）：isolated 布局下
+  kimi-code 启动即 `ERR_MODULE_NOT_FOUND(ws)`、opencode 的 postinstall 拿不到平台包。
+  POSIX 仍用 isolated。
+- **清理 pnpm 树**：Windows 用 `robocopy /MIR /XJ`（`rmdir /s` 在 2 GB 树上十分钟未完），
+  junction 目标消失不再让构建失败；`current` 指针按链接/文件分别删除，绝不走进它指向的发行包。
+  删除不干净时明确失败，不把旧树留给下一次安装。
+- **品牌安装日志**此前从未写入 `install.log`，改为逐行落盘并 flush。
+- 复核时补的护栏：`samePath` 改用 `Files.isSameFile`（Windows 的大小写/8.3 短名/`\\?\`
+  前缀不再影响「当前版本」判定）；构建工具链在日志里写明来源；并发安装 Node 的竞态转化为复用。
+- 测试 **584 / 0 失败 / 0 错误 / 0 跳过**（新增 3 条：文本指针的 current 判定、清理指针不碰发行包 ×2）。
+- **真机复验（2026-10-18）**：同一台 Windows 10 上从空数据目录连跑两次（全新 + 重建）都成功；
+  Node 26.12.0 与 pnpm 自动装进 `<data>/hdsl/runtimes`，`tar.bat` shim 生效，实例反代 200。
+  `cpu-features`（ssh2 的可选依赖）在没有 MSVC 时会报 `Unable to detect compiler type`，
+  pnpm 按可选依赖继续——**不需要编译器即可构建**；`node-pty` 用预编译。详见
+  `docs/report-2026-10-18-zcode-windows-build.md` §8.1。
+- **编译链预检**：Windows 构建前用 `vswhere` 找 `cl.exe`；没有就明确说明
+  `cpu-features` 是可选依赖、会被跳过，并给出最小 VS Build Tools 命令。面板不自动下载
+  编译器（需管理员 + 2.5–3 GB），也不在构建里弹 UAC。
+
 ## v0.4.3 — 2026-10-18 · 容器镜像加 `linux/arm64`
 
 - **容器镜像加 `linux/arm64`**：CI 现在产 `linux/amd64` + `linux/arm64` 双架构 manifest，

@@ -32,18 +32,24 @@ AI 编程工作台，Apache-2.0）。它与 dsh 品类**完全隔离**：实例�
 
 界面上能看到当前步骤、进度和日志（日志文件在 `<数据目录>/zcode/build/build.log`）。
 
-要求与代价：镜像里已经装好 Node 24（`/opt/node24`，只有构建用它），以及 `python3` / `make` / `g++`
-——ZCode 依赖里的 `node-pty`、`cpu-features` 要**现场编译**，缺了编译链会直接报
-`Could not find any Python installation` / `Unable to detect compiler type`；要下几百 MB 源码、
-装 GB 级依赖，**慢是正常的**；构建失败（环境缺失、上游改了锚点）只影响这一次构建，
+要求与代价：容器镜像里已经装好 Node 24（`/opt/node24`，只有构建用它），以及 `python3` / `make` / `g++`
+——Linux 容器里 `node-pty`、`cpu-features` 会走现场编译，缺了编译链会直接报
+`Could not find any Python installation` / `Unable to detect compiler type`。
+**Windows 裸部署不需要编译链**：`node-pty` 随包带 `win32-x64` 预编译，面板会自供
+Node 24+、pnpm，并在 `<数据目录>/zcode/build/bin` 写一个 `tar.bat` 指向系统 bsdtar
+（PATH 上的 GNU tar 会把 `C:\` 当成远程主机）。构建前还会用 `vswhere` 预检 `cl.exe`：
+没有时日志会说明 `cpu-features`（ssh2 的可选依赖）会被跳过、不影响构建；面板**不会**
+自动下载编译器（Build Tools 需管理员且约 2.5–3 GB）。实测细节见
+[`report-2026-10-18-zcode-windows-build.md`](report-2026-10-18-zcode-windows-build.md)。
+要下几百 MB 源码、装 GB 级依赖，**慢是正常的**；构建失败（环境缺失、上游改了锚点）只影响这一次构建，
 已装好的版本不受影响——而且**失败时源码树会保留**（`<数据目录>/zcode/build/src` 与同目录的 `build.log`），
 排查完不用重下，下一次构建开始时才清掉。
 
 | 环境变量 | 说明 |
 | --- | --- |
 | `HDSL_ZCODE_SOURCE_URL` | 源码 tarball 模板（`%s` = tag/分支）；也接受 `file:` 或本地路径（离线/内网代理） |
-| `HDSL_ZCODE_BUILD_BIN` | 构建时前置到 `PATH` 的目录；镜像里默认 `/opt/node24/bin` |
-| `HDSL_ZCODE_PNPM` | 构建用的 pnpm 可执行文件；默认 `pnpm` |
+| `HDSL_ZCODE_BUILD_BIN` | 构建时前置到 `PATH` 的目录；镜像里默认 `/opt/node24/bin`。裸部署留空时，面板优先用已装的托管运行时，缺 Node 24+ 会自动装进 `<数据目录>/hdsl/runtimes` |
+| `HDSL_ZCODE_PNPM` | 构建用的 pnpm 可执行文件；留空或写 `pnpm` 时用构建运行时的 pnpm，运行时没有则用它的 npm 自动装进去 |
 | `HDSL_ZCODE_KEEP_SOURCES` | `true` 时构建**成功**后也保留源码树与依赖（排错用，占几个 GB）；失败时无论如何都保留 |
 **慢？** 时间几乎全花在 `pnpm install` 上。三个杠杆：
 
