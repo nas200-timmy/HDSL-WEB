@@ -190,7 +190,11 @@ public final class ZcodeBuilder {
     private static boolean samePath(Path release, Path pointer) {
         return Links.pointedAt(pointer).map(target -> {
             try {
-                return release.toRealPath().equals(target.toRealPath());
+                // `isSameFile` asks the filesystem, which is exactly what Windows needs:
+                // the same directory can be spelled with different case, a short (8.3)
+                // name, or a `\\?\` prefix, and `toRealPath().equals` compares those
+                // spellings rather than the files they name.
+                return Files.isSameFile(release, target);
             } catch (IOException e) {
                 return false;
             }
@@ -501,10 +505,14 @@ public final class ZcodeBuilder {
     /// @throws ZcodeException when the toolchain cannot be provided
     private static Settings withToolchain(Settings settings, Step step) throws ZcodeException {
         if (!settings.buildBin().isBlank()) {
+            step.log("=== 构建工具链：已配置的 " + settings.buildBin() + "，pnpm "
+                    + (settings.pnpm().isBlank() ? "pnpm（PATH）" : settings.pnpm()));
             return settings;
         }
         Path image = Path.of("/opt/node24/bin");
         if (Files.isDirectory(image)) {
+            step.log("=== 构建工具链：镜像自带的 Node 24（" + image + "），pnpm "
+                    + (settings.pnpm().isBlank() ? "pnpm（PATH）" : settings.pnpm()));
             return new Settings(settings.root(), image.toString(), settings.pnpm(),
                     settings.sourceUrl(), settings.keepSources());
         }
@@ -519,8 +527,15 @@ public final class ZcodeBuilder {
                         line -> step.log("[node] " + line)));
                 DshNodeRuntime.invalidateCache();
             } catch (DshException e) {
-                throw new ZcodeException("could not install the build's Node.js into the data directory: "
-                        + e.getMessage(), e);
+                // Another build may have installed the same version between our probe
+                // and this call; "already installed" is not a failure in that case.
+                runtime = DshNodeRuntime.detectManaged()
+                        .filter(candidate -> majorOf(candidate.nodeVersion()) >= MINIMUM_BUILD_NODE_MAJOR)
+                        .orElse(null);
+                if (runtime == null) {
+                    throw new ZcodeException("could not install the build's Node.js into the data directory: "
+                            + e.getMessage(), e);
+                }
             }
         }
         String pnpm = settings.pnpm();
@@ -789,14 +804,23 @@ public final class ZcodeBuilder {
         }
     }
 
-    private static void deleteRecursively(@Nullable Path directory) throws IOException {
-        if (directory == null || !Files.exists(directory)) {
+    /// Removes a directory tree — or a `current`-style pointer, which is not a tree.
+    ///
+    /// Package-private so the pointer rule can be tested without starting a build.
+    ///
+    /// @param directory the tree or pointer, may be `null`
+    /// @throws IOException when something inside could not be removed
+    static void deleteRecursively(@Nullable Path directory) throws IOException {
+        // NOFOLLOW: a dangling `current` link must still be deleted, and `Files.exists`
+        // on its own follows the link and answers "nothing here".
+        if (directory == null || !Files.exists(directory, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
             return;
         }
         // `current` is a pointer, not a tree: a link where the system allows one, a
         // small text file where it does not. Deleting the pointer must never walk
         // into what it points at — that is an installed release.
-        if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory)) {
+        if (Files.isSymbolicLink(directory)
+                || !Files.isDirectory(directory, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
             Files.deleteIfExists(directory);
             return;
         }
@@ -810,8 +834,8 @@ public final class ZcodeBuilder {
         // reported as a build failure before the download had even started.
         if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
                 == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            Path empty = directory.toAbsolutePath().getParent().resolve(".empty");
             try {
-                Path empty = directory.toAbsolutePath().getParent().resolve(".empty");
                 Files.createDirectories(empty);
                 Process process = new ProcessBuilder("robocopy", empty.toString(), directory.toString(),
                         "/MIR", "/XJ", "/NFL", "/NDL", "/NJH", "/NJS", "/NC", "/NS", "/R:0", "/W:0")
@@ -821,7 +845,7 @@ public final class ZcodeBuilder {
                 if (process.waitFor(5, java.util.concurrent.TimeUnit.MINUTES)
                         && process.exitValue() <= 7) {
                     Files.deleteIfExists(directory);
-                    if (!Files.exists(directory)) {
+                    if (!Files.exists(directory, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
                         return;
                     }
                 }
@@ -830,6 +854,14 @@ public final class ZcodeBuilder {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IOException("interrupted while removing " + directory, e);
+            } finally {
+                // The empty source of the mirror is ours; do not leave `.empty` beside
+                // every tree that was ever cleaned.
+                try {
+                    Files.deleteIfExists(empty);
+                } catch (IOException ignored) {
+                    // A leftover empty directory is not worth failing a build over.
+                }
             }
         }
         // Fallback (and the POSIX path): walk without ever failing the build over an
@@ -862,5 +894,12 @@ public final class ZcodeBuilder {
                 return java.nio.file.FileVisitResult.CONTINUE;
             }
         });
+        // The walk tolerates entries that vanished mid-way; it must not also tolerate
+        // leaving the tree behind. A stale `node_modules` would make the next build
+        // install over an old one and produce a package nobody can explain.
+        if (Files.exists(directory, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("could not remove " + directory
+                    + " — some entries are still there (in use, or a link that could not be followed)");
+        }
     }
 }

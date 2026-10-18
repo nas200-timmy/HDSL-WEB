@@ -20,6 +20,7 @@ package org.jackhuang.hmcl.web.zcode;
 import org.jackhuang.hmcl.dsh.NpmRegistry;
 import org.jackhuang.hmcl.setting.LauncherSettings;
 import org.jackhuang.hmcl.setting.SettingsManager;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -154,6 +155,65 @@ class ZcodeBuilderTest {
         } finally {
             settings.setNpmRegistryPreset(NpmRegistry.ENVIRONMENT);
         }
+    }
+
+    /// A pointer written as a text file — what [org.jackhuang.hmcl.util.io.Links]
+    /// does where symbolic links are not permitted — must still mark its release
+    /// as current. On Windows this is the ordinary case, not the exotic one.
+    @Test
+    void aTextPointerStillReportsTheReleaseAsCurrent() throws Exception {
+        Path root = dir.resolve("root");
+        Path release = root.resolve("releases").resolve("9.9.9");
+        Files.createDirectories(release.resolve("bin"));
+        Files.writeString(release.resolve("bin/zcode.mjs"), "// stub\n", StandardCharsets.UTF_8);
+        Files.writeString(release.resolve("package.json"), "{\"version\":\"9.9.9\"}\n", StandardCharsets.UTF_8);
+        Files.writeString(root.resolve("current"),
+                release.toAbsolutePath().normalize() + System.lineSeparator(), StandardCharsets.UTF_8);
+
+        List<ZcodeBuilder.Release> releases = ZcodeBuilder.releases(root);
+        assertEquals(1, releases.size());
+        assertTrue(releases.get(0).current(), "a pointer file must still mark its release as current");
+        assertEquals(release, ZcodeBuilder.currentPackage(root));
+    }
+
+    /// Cleaning the `current` pointer must delete the pointer, never what it points
+    /// at. Walking the release through the link is what made a rebuild empty an
+    /// installed version instead of starting clean.
+    @Test
+    void cleaningThePointerDoesNotTouchTheRelease() throws Exception {
+        Path root = dir.resolve("root");
+        Path release = root.resolve("releases").resolve("9.9.9");
+        Files.createDirectories(release.resolve("bin"));
+        Files.writeString(release.resolve("bin/zcode.mjs"), "// stub\n", StandardCharsets.UTF_8);
+        Path current = root.resolve("current");
+        try {
+            Files.createSymbolicLink(current, release);
+        } catch (IOException | UnsupportedOperationException e) {
+            Assumptions.abort("symbolic links are not permitted here: " + e.getMessage());
+        }
+
+        ZcodeBuilder.deleteRecursively(current);
+
+        assertFalse(Files.exists(current, java.nio.file.LinkOption.NOFOLLOW_LINKS), "the pointer is gone");
+        assertTrue(Files.isRegularFile(release.resolve("bin/zcode.mjs")),
+                "the release the pointer named must survive the pointer's deletion");
+    }
+
+    @Test
+    void cleaningATextPointerLeavesTheReleaseAlone() throws Exception {
+        Path root = dir.resolve("root");
+        Path release = root.resolve("releases").resolve("9.9.9");
+        Files.createDirectories(release.resolve("bin"));
+        Files.writeString(release.resolve("bin/zcode.mjs"), "// stub\n", StandardCharsets.UTF_8);
+        Path current = root.resolve("current");
+        Files.writeString(current, release.toAbsolutePath().normalize() + System.lineSeparator(),
+                StandardCharsets.UTF_8);
+
+        ZcodeBuilder.deleteRecursively(current);
+
+        assertFalse(Files.exists(current, java.nio.file.LinkOption.NOFOLLOW_LINKS), "the pointer file is gone");
+        assertTrue(Files.isRegularFile(release.resolve("bin/zcode.mjs")),
+                "the release the pointer named must survive the pointer file's deletion");
     }
 
     /// The stub `pnpm`, copied somewhere writable with its executable bit set:
