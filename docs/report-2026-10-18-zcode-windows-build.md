@@ -215,7 +215,29 @@ kimi-code 自带一个空 `node_modules` 目录，pnpm 11 在 Windows 上因此�
 `.empty` 用完即删、删不干净时明确失败；工具链来源写进构建日志；并发安装 Node 的
 「already installed」转为复用。
 
-Linux 全量测试 **584 用例 / 0 失败 / 0 错误 / 0 跳过**。报告的原始结论（Windows 上不需要
-MSVC）以真机实测为准；`current` 文本指针与删除顺序现在有 3 条用例钉住，但**Windows 真机
-尚未复跑**这一版（测试机已关机），重跑时按 §6 的验收清单再过一遍。
+Linux 全量测试 **584 用例 / 0 失败 / 0 错误 / 0 跳过**。
+
+### 8.1 真机复跑（2026-10-18，移植后的分支）
+
+在同一台 Windows 10 上从**空数据目录**跑了两遍（全新构建 + 同版本重建），都 `done`：
+
+- 工具链自供：日志先出现
+  `=== 数据目录里没有 Node 24+，自动安装一个：26.12.0`，随后
+  `=== 构建工具链：…\runtimes\26.12.0\node.exe（26.12.0），pnpm …\runtimes\26.12.0\pnpm.cmd`；
+  重建时不再下载，直接复用。运行时目录里 `node.exe`/`npm.cmd`/`pnpm.cmd` 齐全。
+- `tar`：解包走 `C:\Windows\System32\tar.exe`；构建脚本的裸 `tar -czf …` 由
+  `build/bin/tar.bat` shim 命中，**没有** `Cannot connect to C`。
+- `pnpm install` 带 `--config.node-linker=hoisted`；`node-pty` 走
+  `skip electron-rebuild (windows-prebuild-available)`。
+- **编译器**：`cpu-features`（`ssh2` 的可选依赖）确实尝试了 `node-gyp rebuild`，
+  因没有 MSVC 报 `Unable to detect compiler type`——pnpm 把它当可选依赖继续，
+  构建成功，`cpufeatures.node` 不存在，`ssh2` 按设计降级。也就是说：
+  **不需要编译器即可构建**；报告里"没有 gyp 调用"的说法不准确，但结论不受影响。
+- 重建：清理旧 `src`/`out`/`current` 指针后重新安装，`current` 仍指向
+  `releases/3.14.3`，没有残留 `.empty`；报告里怀疑的 `current` 断言问题在实践中未复现。
+- 实例：启动后 `/i/<id>/` 返回 **200**（`<title>ZCode</title>`），停止后端口无监听。
+- 已知小噪音：`apps/zcode-cli` 的 `engines` 钉了 `24.14.0`，用 26.12.0 会有一条
+  `Unsupported engine` 警告（pnpm 不拦截）；启动瞬间若立刻访问反代可能短暂 502，
+  就绪后正常。
+
 

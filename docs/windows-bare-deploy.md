@@ -461,7 +461,7 @@ RuntimeLayout                              // 由平台决定
 | 中文 + 空格路径 | ✅ `C:\Users\timmy\hdsl-测试 空格` 下同样装、启、反代通过（链接为相对软链，`dsh.CMD` 就位）|
 | HTTPS + 裸 IP | ✅ 自签证书：`https://192.0.2.10:3080/` → 200；`http://192.0.2.10:3080/`（含 `/api/health`）→ **308** 到 https |
 | 启动前自定义命令 | ✅ `cmd /c` 执行 `echo … > pre-win.txt`，文件落在工作目录，实例正常进入 RUNNING |
-| ZCode 面板内构建（v3.14.3） | ✅ 2026-10-18 跑通（约 80 MB 发行包）：面板自供 Node 24+、pnpm 与 bsdtar shim，不需要 MSVC；详见 [`report-2026-10-18-zcode-windows-build.md`](report-2026-10-18-zcode-windows-build.md) |
+| ZCode 面板内构建（v3.14.3） | ✅ 2026-10-18 从空数据目录连跑两次（全新 + 重建）都成功（约 80 MB 发行包）：面板自供 Node 26.12.0、pnpm 与 bsdtar shim；`cpu-features` 无 MSVC 时编译失败但按可选依赖继续，`node-pty` 用预编译——**不需要编译器**。详见 [`report-2026-10-18-zcode-windows-build.md`](report-2026-10-18-zcode-windows-build.md) §8.1 |
 | 全量测试（Linux 侧） | ✅ **584 用例 / 0 失败 / 0 错误 / 0 跳过** |
 
 未复跑：kimi 品牌（需要账号）、claude-web（GitHub 下载 + 构建）、>260 字符的长路径。

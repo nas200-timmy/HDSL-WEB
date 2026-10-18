@@ -19,6 +19,11 @@
 - 复核时补的护栏：`samePath` 改用 `Files.isSameFile`（Windows 的大小写/8.3 短名/`\\?\`
   前缀不再影响「当前版本」判定）；构建工具链在日志里写明来源；并发安装 Node 的竞态转化为复用。
 - 测试 **584 / 0 失败 / 0 错误 / 0 跳过**（新增 3 条：文本指针的 current 判定、清理指针不碰发行包 ×2）。
+- **真机复验（2026-10-18）**：同一台 Windows 10 上从空数据目录连跑两次（全新 + 重建）都成功；
+  Node 26.12.0 与 pnpm 自动装进 `<data>/hdsl/runtimes`，`tar.bat` shim 生效，实例反代 200。
+  `cpu-features`（ssh2 的可选依赖）在没有 MSVC 时会报 `Unable to detect compiler type`，
+  pnpm 按可选依赖继续——**不需要编译器即可构建**；`node-pty` 用预编译。详见
+  `docs/report-2026-10-18-zcode-windows-build.md` §8.1。
 
 ## v0.4.3 — 2026-10-18 · 容器镜像加 `linux/arm64`
 
