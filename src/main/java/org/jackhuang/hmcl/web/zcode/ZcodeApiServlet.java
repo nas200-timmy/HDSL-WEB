@@ -98,8 +98,27 @@ public final class ZcodeApiServlet extends HttpServlet {
         this.config = config;
         Path root = config.dataDir.resolve("zcode");
         this.manager = new ZcodeInstanceManager(root.resolve("instances"));
-        this.buildSettings = new ZcodeBuilder.Settings(root, config.zcode.buildBin, config.zcode.pnpm,
+        this.buildSettings = new ZcodeBuilder.Settings(root, buildBin(config.zcode.buildBin), config.zcode.pnpm,
                 config.zcode.sourceUrl, config.zcode.keepSources);
+    }
+
+    /// The directory to put ahead of `PATH` for a build — the Node 24 that the image
+    /// keeps solely for this job.
+    ///
+    /// Everything else is [ZcodeBuilder]'s job: a bare deployment has no `/opt/node24`,
+    /// and when the setting is empty the builder looks for a managed runtime under the
+    /// data directory and **installs one** (plus pnpm) when there is none. Doing that
+    /// resolution at build time rather than here is what makes the one-click promise
+    /// hold — the first build on an empty Windows machine provisions itself.
+    ///
+    /// @param configured `zcode.buildBin` from the environment, may be blank
+    /// @return the directory to prepend, or an empty string to let the builder decide
+    private static String buildBin(@Nullable String configured) {
+        if (configured != null && !configured.isBlank()) {
+            return configured;
+        }
+        Path image = Path.of("/opt/node24/bin");
+        return Files.isDirectory(image) ? image.toString() : "";
     }
 
     @Override
