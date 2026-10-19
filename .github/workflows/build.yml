@@ -29,7 +29,15 @@ jobs:
         working-directory: web
         run: |
           npm ci --no-audit --no-fund
+          npm run typecheck
           npm run build
+
+      # 兼容底线闸门：JS 语法钉在 es2020（es-check）+ CSS 特性黑名单 +
+      # env() 兜底声明配对检查（scripts/compat-check.mjs）。
+      # 底线定义见 docs/compatibility.md（Firefox 115 ESR，Win7 最后一个受维护版本）。
+      - name: Compatibility gate
+        working-directory: web
+        run: npm run compat
 
       # 编译 + 全部测试 + shadowJar（单 jar 产物）。
       - name: Build server and run tests
