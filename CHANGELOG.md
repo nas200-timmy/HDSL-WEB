@@ -2,7 +2,23 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布
+## v0.4.5 — 2026-10-19 · 浏览器兼容底线：Firefox 115 ESR（Win7）
+
+- **声明兼容底线**（`web/package.json` 的 `browserslist`）：Firefox 115、Chrome/Edge 109、
+  Safari/iOS 15.6——Windows 7/8.1 上能用的最后一条浏览器线。`npm run typecheck` 并入
+  SPA 构建。
+- **CI 兼容闸门**（`build.yml` 的 Compatibility gate / `npm run compat`）：
+  `es-check es2020` 钉住产物 JS 语法；`web/scripts/compat-check.mjs` 扫描产物 CSS，
+  把 `:has()`（FF121+）、`text-wrap`（FF121+）、`[popover]`（FF125+）这些
+  Firefox 115 不支持、Vite/esbuild 又不转译的特性挡在构建前。
+- **复核修正**：最初的排查稿写成「`env()` Firefox 136 才支持、115 会整条作废」，并据此
+  给 `mobile.css` 加了 5 处常量兜底和一条 env() 配对闸门。MDN browser-compat-data 证实
+  `env()` 与 `safe-area-inset-*` 自 **Firefox 65 / Chrome 69 / Safari 11** 起支持——115
+  不是缺口。兜底声明与配对闸门已撤掉，文档改为真实口径。
+- **责任边界**（`docs/compatibility.md`）：底线只覆盖面板自身；`/i/<id>/` 反代里的
+  dsh / Kimi / OpenCode / Claude Web / ZCode 页面是上游产物，兼容性归上游。
+
+## v0.4.4 — 2026-10-18 · ZCode 在 Windows 上能一键构建了
 
 - **ZCode 面板内构建在 Windows 上跑通（v3.14.3）**：缺的不是编译器，而是三样非编译器的东西——
   Node 24+、pnpm、以及一个能正确处理 `C:\` 的 `tar`。构建前由面板自动准备：优先镜像
