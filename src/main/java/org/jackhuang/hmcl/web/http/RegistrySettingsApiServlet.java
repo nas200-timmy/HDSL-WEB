@@ -28,6 +28,7 @@ import org.jackhuang.hmcl.Metadata;
 import org.jackhuang.hmcl.dsh.NpmRegistry;
 import org.jackhuang.hmcl.dsh.PnpmConfigFile;
 import org.jackhuang.hmcl.setting.SettingsManager;
+import org.jackhuang.hmcl.util.io.HttpClients;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -176,13 +177,16 @@ public final class RegistrySettingsApiServlet extends HttpServlet {
                     .header("User-Agent", USER_AGENT)
                     .GET()
                     .build();
-            try (HttpClient client = HttpClient.newBuilder()
+            HttpClient client = HttpClient.newBuilder()
                     .connectTimeout(PROBE_TIMEOUT)
                     .followRedirects(HttpClient.Redirect.NORMAL)
-                    .build()) {
+                    .build();
+            try {
                 HttpResponse<Void> probe = client.send(request, HttpResponse.BodyHandlers.discarding());
                 answer.addProperty("ok", probe.statusCode() >= 200 && probe.statusCode() < 300);
                 answer.addProperty("status", probe.statusCode());
+            } finally {
+                HttpClients.closeQuietly(client);
             }
         } catch (IOException | RuntimeException e) {
             answer.addProperty("ok", false);

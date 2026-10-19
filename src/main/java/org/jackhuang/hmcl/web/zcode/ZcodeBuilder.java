@@ -229,6 +229,7 @@ public final class ZcodeBuilder {
         Path outDir = work.resolve("out");
         Path log = work.resolve("build.log");
         logFile = log;
+        String installed = null;
         try {
             Files.createDirectories(work);
             Files.writeString(log, "", StandardCharsets.UTF_8);
@@ -306,10 +307,13 @@ public final class ZcodeBuilder {
                     "--base-url", "https://example.invalid/zcode/"), Duration.ofMinutes(90));
 
             step.set(0.93, "安装发行包");
-            String installed = install(outDir, settings.root().resolve("releases"));
+            installed = install(outDir, settings.root().resolve("releases"));
 
-            step.set(1.0, "完成：" + installed);
-            STATUS.set(new Status(State.DONE, ref, "构建完成：" + installed, 1.0, null));
+            // DONE is published by the finally block, after the scratch tree is gone:
+            // a caller that sees DONE reads the directory immediately, and reporting
+            // success while the cleanup is still deleting files is a race (the tests
+            // caught it on one JVM and not another).
+            step.set(0.99, "清理构建目录");
             LOG.info("ZCode " + ref + " built and installed as " + installed);
         } catch (ZcodeException e) {
             fail(ref, e.getMessage());
@@ -321,7 +325,7 @@ public final class ZcodeBuilder {
             // why it failed — upstream's own scripts answer with their own logs, and deleting them
             // costs a whole rebuild to ask the same question twice. `HDSL_ZCODE_KEEP_SOURCES=1`
             // keeps it even on success.
-            boolean built = STATUS.get().state() == State.DONE;
+            boolean built = installed != null;
             if (!settings.keepSources() && built) {
                 try {
                     deleteRecursively(sources);
@@ -333,6 +337,9 @@ public final class ZcodeBuilder {
             } else if (!built) {
                 // Named because the next question is always "where did it get to".
                 LOG.info("The failed ZCode build is kept at " + work);
+            }
+            if (built) {
+                STATUS.set(new Status(State.DONE, ref, "构建完成：" + installed, 1.0, null));
             }
         }
     }

@@ -37,10 +37,10 @@ public final class SystemUtils {
     /// Where the output-draining half of [#run] runs.
     ///
     /// The desktop build used the task package's I/O pool; HDSL-web has no task
-    /// package, so a virtual thread stands in — the same pool shape the desktop
-    /// one built for Java 21.
+    /// package, so each drain gets a thread of its own — virtual on Java 21+, a
+    /// daemon platform thread on 17 (see [VirtualThreads]).
     private static final java.util.concurrent.ExecutorService IO_EXECUTOR =
-            java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+            VirtualThreads.newPerTaskExecutor();
 
     private SystemUtils() {
     }

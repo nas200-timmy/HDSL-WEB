@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.task;
 
 import com.google.gson.JsonObject;
+import org.jackhuang.hmcl.util.platform.VirtualThreads;
 import org.jackhuang.hmcl.web.event.EventBus;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -33,7 +34,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -262,7 +262,7 @@ public final class TaskService {
     }
 
     private final EventBus bus;
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService executor = VirtualThreads.newPerTaskExecutor();
     private final Semaphore installSlots = new Semaphore(MAX_INSTALLS);
     private final ConcurrentHashMap<String, Task> tasks = new ConcurrentHashMap<>();
     /// Instance id → the install task currently working on it.

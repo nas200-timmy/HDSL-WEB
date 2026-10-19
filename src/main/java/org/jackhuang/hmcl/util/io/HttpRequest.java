@@ -22,6 +22,7 @@ import com.google.gson.reflect.TypeToken;
 import org.jackhuang.hmcl.util.Pair;
 import org.jackhuang.hmcl.util.function.ExceptionalSupplier;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
+import org.jackhuang.hmcl.util.platform.VirtualThreads;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -44,10 +45,10 @@ public abstract class HttpRequest {
     /// Where asynchronous requests run.
     ///
     /// The desktop build borrowed the task package's I/O pool; HDSL-web has no
-    /// task package, so the request runs on a virtual thread — the same shape
-    /// of pool the desktop one built for Java 21.
+    /// task package, so the request gets a thread of its own — virtual on Java 21+,
+    /// a daemon platform thread on 17 (see [VirtualThreads]).
     private static final java.util.concurrent.ExecutorService ASYNC_EXECUTOR =
-            java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+            VirtualThreads.newPerTaskExecutor();
 
     protected final String url;
     protected final String method;
