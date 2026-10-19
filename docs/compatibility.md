@@ -18,32 +18,22 @@ Win7 的最后一版）、Safari/iOS 15.6。基准声明在 `web/package.json` �
   `Promise.withResolvers`、正则 `v` 标志/lookbehind 等）。当前用到的最新 API 是
   `AbortSignal.timeout`（FF 100+）与 `navigator.clipboard.writeText`（FF 63+，仅 HTTPS，
   调用处已兜底）。
-- **CSS**：唯一缺口是 `env(safe-area-inset-*)`——**Firefox 136 才支持**，115 会把含
-  `env()` 的整条声明作废。已按 house style 修复（见下）。其余（`:has()`、CSS 嵌套、
-  `text-wrap`、`popover`、container queries 之外的新特性）全库未使用；`dvh`（FF 101+）
-  与 `color-mix`（FF 113+）在 115 支持范围内。
+- **CSS**：`env()` 与 `safe-area-inset-*` 自 **Firefox 65 / Chrome 69 / Safari 11** 起支持
+  （MDN browser-compat-data），115 ESR 直接可用——**不需要**为它们写双声明兜底；桌面浏览器
+  把安全区算作 0。其余新特性（`:has()` FF121、`text-wrap` FF121、`popover` FF125、
+  CSS 嵌套 FF117、容器查询 FF110）全库未使用；`dvh`（FF101+）与 `color-mix`（FF113+）
+  在 115 支持范围内。
 
-## `env()` 的兜底写法（house style）
-
-`mobile.css` 里凡是 `calc(常量 + env(...))` 的声明，前面必须有一条同属性同常量的纯声明：
-
-```css
-padding-top: 12px;
-padding-top: calc(12px + env(safe-area-inset-top));
-```
-
-不识别 `env()` 的浏览器应用前一条，识别的浏览器用后一条覆盖——与文件中 `100vh` /
-`100dvh` 双声明是同一模式。**新增 `env()` 时必须成对写**，CI 的配对检查会拦住漏写的。
-
-纯 `env(...)`（无常量）的声明不需要兜底：作废即回落为 0，恰是无刘海设备的正确值。
+> 复核记录（2026-10-19）：最初的排查稿写成「`env()` Firefox 136 才支持、115 会作废整条
+> 声明」，这是错的（BCD：FF65 起支持 `env()` 与 `safe-area-inset-*`）。据此加的 5 处
+> 常量兜底与 env() 配对闸门已撤掉；留下的闸门只挡真正超纲的特性。
 
 ## 守门体系（CI，`build.yml` 的 Compatibility gate / `npm run compat`）
 
 1. **JS 语法**：`es-check es2020` 扫描产物，超纲语法直接红。
-2. **CSS 黑名单**（`web/scripts/compat-check.mjs`）：`:has()`、`text-wrap`、`popover`
+2. **CSS 黑名单**（`web/scripts/compat-check.mjs`）：`:has()`、`text-wrap`、`[popover]`
    出现在产物即红（这些 esbuild/Vite 不会转译）。
-3. **env() 配对**：源码里每条 `calc(Npx + env(` 必须紧挨前置兜底声明。
-4. **typecheck**：`tsc --noEmit` 已并入 SPA 构建步骤。
+3. **typecheck**：`tsc --noEmit` 已并入 SPA 构建步骤。
 
 引入新依赖或新 API 时，先对照 caniuse 的 Firefox 115 支持矩阵；确实需要 115 没有的 API
 时，按需引入 `core-js` 的对应模块，并把例外记在这里。
