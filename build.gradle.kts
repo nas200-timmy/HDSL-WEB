@@ -215,14 +215,18 @@ tasks.named("processResources") {
 
 // ------------------------------------------------------------- toolchain -----
 java {
-    // HDSL-web requires JDK 21+. We do not pin a toolchain so the build works
-    // with whichever >= 21 JDK the developer has active.
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
+    // HDSL-web requires JDK 17+. We do not pin a toolchain so the build works
+    // with whichever >= 17 JDK the developer has active.
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
 
 tasks.withType<JavaCompile> {
     options.encoding = "UTF-8"
+    // Compile against the Java 17 API even when the build runs on 21+: the jar
+    // must start on a 17 JVM, and `--release` is what makes a 21-only API a
+    // compile error here rather than an UnsupportedClassVersionError there.
+    options.release.set(17)
     // Report every error instead of stopping at the default 100.
     options.compilerArgs.addAll(listOf("-Xmaxerrs", "10000"))
 }

@@ -20,6 +20,7 @@ package org.jackhuang.hmcl.dsh;
 import com.google.gson.JsonObject;
 import org.jackhuang.hmcl.util.DigestUtils;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
+import org.jackhuang.hmcl.util.io.HttpClients;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -181,10 +182,11 @@ public final class DshPackInstaller {
                     .header("Accept", "application/octet-stream")
                     .GET()
                     .build();
-            try (java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
                     .connectTimeout(java.time.Duration.ofSeconds(20))
                     .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
-                    .build()) {
+                    .build();
+            try {
                 java.net.http.HttpResponse<InputStream> response = client.send(request,
                         java.net.http.HttpResponse.BodyHandlers.ofInputStream());
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -214,6 +216,8 @@ public final class DshPackInstaller {
                     throw new DshException("The pack does not match the market's SHA-256 (expected "
                             + entry.sha256() + ", got " + actual + ")", null);
                 }
+            } finally {
+                HttpClients.closeQuietly(client);
             }
             // Moved into place only now: everything before this line was a file that could be thrown
             // away, and the name the rest of the launcher reads is only ever the verified one.

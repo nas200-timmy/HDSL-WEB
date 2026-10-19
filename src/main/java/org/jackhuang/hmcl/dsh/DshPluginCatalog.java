@@ -383,8 +383,9 @@ public final class DshPluginCatalog {
                     // npm prints a warning on the same stream when it dislikes something, so the
                     // answer is the last line that looks like an address rather than the whole
                     // output.
-                    for (String line : configured.lines().toList().reversed()) {
-                        String candidate = line.strip();
+                    List<String> lines = configured.lines().toList();
+                    for (int i = lines.size() - 1; i >= 0; i--) {
+                        String candidate = lines.get(i).strip();
                         if (candidate.startsWith("http://") || candidate.startsWith("https://")) {
                             return candidate.endsWith("/")
                                     ? candidate.substring(0, candidate.length() - 1) : candidate;

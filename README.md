@@ -15,7 +15,7 @@
 ![主界面](docs/screenshots/02-main.webp)
 
 - 交付形态：**一个可执行 fat jar**（`java -jar hdsl-web.jar`）+ 一个 Debian 容器镜像。
-- jar 之外只需两样东西：**JDK 21+** 和 **Node ^22.19.0 || >=24.0.0 + pnpm**（dsh 由 pnpm 安装、由 node 运行）。
+- jar 之外只需两样东西：**JDK 17+** 和 **Node ^22.19.0 || >=24.0.0 + pnpm**（dsh 由 pnpm 安装、由 node 运行）。
 - 手机可用：窄屏（≤760px）或矮屏（≤520px）自动切换移动版式——主导航收成抽屉、内页子侧栏变顶部横向标签条、
   启动面板变成贴底整条操作栏，可点区域按触摸标准放大到 44px，支持「加到主屏幕」。
   判定条件与规则见 [docs/ui-spec.md §14](docs/ui-spec.md)；桌面版式零变化。
@@ -109,7 +109,7 @@ sha256sum -c SHA256SUMS.txt                       # 校验完整性
 HDSL_DATA="$PWD/data" HDSL_PORT=3080 java -jar hdsl-web-0.1.0.jar
 ```
 
-jar 的运行前提见下方「方式二」（JDK 21 与 Node/pnpm）。Docker 部署推荐用方式一。
+jar 的运行前提见下方「方式二」（JDK 17+ 与 Node/pnpm）。Docker 部署推荐用方式一。
 
 ### 方式一：Docker / Compose（推荐）
 
@@ -141,7 +141,7 @@ docker compose up -d --build
 
 ### 方式二：裸 `java -jar`（不用 Docker）
 
-前提：**JDK 21+**、**Node ^22.19.0 || >=24.0.0**、**pnpm**（`corepack enable pnpm`，或 `npm i -g pnpm`）。
+前提：**JDK 17+**、**Node ^22.19.0 || >=24.0.0**、**pnpm**（`corepack enable pnpm`，或 `npm i -g pnpm`）。
 Node 版本范围是 dsh 自己的 `engines` 要求；pnpm 既是 dsh 的安装器，也是插件管理（`dsh plugin`）的转发目标。
 
 **Windows 同样可用**——直接拿宿主机上的 JDK 与 Node 跑：面板认得出系统装的 Node.js

@@ -2,6 +2,22 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.4.6 — 2026-10-19 · 最低运行时降到 JDK 17
+
+- **最低运行时降到 JDK 17**：jar 用 `--release 17` 编译（class 61），OpenJDK 17 可以直接
+  `java -jar` 启动；21+ 照常。为此补了三处兼容：
+  - 虚拟线程（`Executors.newVirtualThreadPerTaskExecutor`，4 处）收进
+    `util/platform/VirtualThreads`：21+ 反射用虚拟线程，17 回退 cached daemon 线程池；
+  - `HttpClient` 的显式关闭（7 处）收进 `util/io/HttpClients`：21+ 反射调用 `close()`，
+    17 上 no-op（连接池由 GC 回收）；
+  - `List.reversed()`（1 处）改为反向下标循环。
+- **CI 加 JDK 17 矩阵**：build 任务在 17 与 21 上各跑一遍 SPA 构建、兼容闸门与全量测试。
+- 验证时顺手修掉一个构建状态竞态：`ZcodeBuilder` 原先在清理 scratch 目录**之前**就把状态
+  置为 DONE，测试（以及任何看到 DONE 立刻读目录的调用方）会和删除动作抢时间；现在清理
+  完成后才发布 DONE。
+- 镜像仍内置 OpenJDK 21（17 字节码在 21 上照常跑），Dockerfile 不变；README 的
+  「JDK 21+」改为「JDK 17+」。
+
 ## v0.4.5 — 2026-10-19 · 浏览器兼容底线：Firefox 115 ESR（Win7）
 
 - **声明兼容底线**（`web/package.json` 的 `browserslist`）：Firefox 115、Chrome/Edge 109、

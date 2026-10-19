@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.dsh;
 
 import org.jackhuang.hmcl.setting.SettingsManager;
+import org.jackhuang.hmcl.util.io.HttpClients;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -283,10 +284,11 @@ public record DshAccount(
                 request.header("Authorization", "Bearer " + (apiKey == null ? "" : apiKey.trim()));
             }
 
-            try (HttpClient client = HttpClient.newBuilder()
+            HttpClient client = HttpClient.newBuilder()
                     .connectTimeout(TIMEOUT)
                     .followRedirects(HttpClient.Redirect.NORMAL)
-                    .build()) {
+                    .build();
+            try {
                 HttpResponse<String> response = client.send(request.build(),
                         HttpResponse.BodyHandlers.ofString());
                 int status = response.statusCode();
@@ -318,6 +320,8 @@ public record DshAccount(
                             i18n("dsh.account.check.no_listing", String.valueOf(status)));
                 }
                 return new Check(Outcome.UNREACHABLE, i18n("dsh.account.check.http", String.valueOf(status)));
+            } finally {
+                HttpClients.closeQuietly(client);
             }
         } catch (IOException e) {
             // A connection failure often carries no message at all — `ConnectException` from a
@@ -379,13 +383,16 @@ public record DshAccount(
                     .header("User-Agent", USER_AGENT)
                     .GET()
                     .build();
-            try (HttpClient client = HttpClient.newBuilder()
+            HttpClient client = HttpClient.newBuilder()
                     .connectTimeout(TIMEOUT)
                     .followRedirects(HttpClient.Redirect.NORMAL)
-                    .build()) {
+                    .build();
+            try {
                 HttpResponse<String> response =
                         client.send(request, HttpResponse.BodyHandlers.ofString());
                 return new Answer(response.statusCode(), looksLikeAListing(response.body()));
+            } finally {
+                HttpClients.closeQuietly(client);
             }
         } catch (IOException e) {
             String why = e.getMessage() == null || e.getMessage().isBlank()
@@ -478,16 +485,19 @@ public record DshAccount(
                 request.header("Authorization", "Bearer " + (apiKey == null ? "" : apiKey.trim()));
             }
 
-            try (HttpClient client = HttpClient.newBuilder()
+            HttpClient client = HttpClient.newBuilder()
                     .connectTimeout(TIMEOUT)
                     .followRedirects(HttpClient.Redirect.NORMAL)
-                    .build()) {
+                    .build();
+            try {
                 HttpResponse<String> response = client.send(request.build(),
                         HttpResponse.BodyHandlers.ofString());
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
                     return List.of();
                 }
                 return readModelIds(response.body());
+            } finally {
+                HttpClients.closeQuietly(client);
             }
         } catch (IOException | InterruptedException | RuntimeException e) {
             if (e instanceof InterruptedException) {

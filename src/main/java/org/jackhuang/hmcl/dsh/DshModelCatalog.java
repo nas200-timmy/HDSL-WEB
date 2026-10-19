@@ -20,6 +20,7 @@ package org.jackhuang.hmcl.dsh;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.jackhuang.hmcl.util.io.HttpClients;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -434,15 +435,18 @@ public final class DshModelCatalog {
                 .header("User-Agent", USER_AGENT)
                 .GET()
                 .build();
-        try (HttpClient client = HttpClient.newBuilder()
+        HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(CONNECT_TIMEOUT)
                 .followRedirects(HttpClient.Redirect.NORMAL)
-                .build()) {
+                .build();
+        try {
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new IOException("HTTP " + response.statusCode());
             }
             return response.body();
+        } finally {
+            HttpClients.closeQuietly(client);
         }
     }
 

@@ -23,6 +23,7 @@ import org.jackhuang.hmcl.dsh.DshAcpClient;
 import org.jackhuang.hmcl.dsh.DshException;
 import org.jackhuang.hmcl.dsh.DshInstance;
 import org.jackhuang.hmcl.dsh.DshInstanceManager;
+import org.jackhuang.hmcl.util.platform.VirtualThreads;
 import org.jackhuang.hmcl.web.event.EventBus;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -33,7 +34,6 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
@@ -88,7 +88,7 @@ public final class AcpSessionManager {
 
     private final EventBus bus;
     private final Connector connector;
-    private final ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService workers = VirtualThreads.newPerTaskExecutor();
     /// Instance id → the one console that may be live for it.
     private final ConcurrentHashMap<String, Console> consoles = new ConcurrentHashMap<>();
 

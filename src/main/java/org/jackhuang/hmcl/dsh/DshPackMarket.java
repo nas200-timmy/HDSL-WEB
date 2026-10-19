@@ -21,6 +21,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.annotations.SerializedName;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
+import org.jackhuang.hmcl.util.io.HttpClients;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -454,16 +455,19 @@ public final class DshPackMarket {
                     .header("Accept", "text/plain, application/json, text/markdown, */*")
                     .GET()
                     .build();
-            try (java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
                     .connectTimeout(java.time.Duration.ofSeconds(15))
                     .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
-                    .build()) {
+                    .build();
+            try {
                 java.net.http.HttpResponse<String> response = client.send(request,
                         java.net.http.HttpResponse.BodyHandlers.ofString());
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
                     return null;
                 }
                 return response.body();
+            } finally {
+                HttpClients.closeQuietly(client);
             }
         } catch (IOException | InterruptedException | RuntimeException e) {
             if (e instanceof InterruptedException) {
