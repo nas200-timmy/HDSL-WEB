@@ -23,6 +23,7 @@ import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -214,10 +215,18 @@ public final class DshInstanceManager {
 
         Path directory = instance.instanceDirectory();
         try {
-            Files.createDirectories(directory);
+            // Never adopt a directory that is already there: it may hold the user's own files, and a
+            // rename of it is not this instance's to make. `createDirectory` is atomic, unlike
+            // `exists()` followed by `createDirectories()`, so two creates racing for one name cannot
+            // both come away believing the directory is theirs.
+            Files.createDirectories(directory.getParent());
+            Files.createDirectory(directory);
             if (homeMode == DshHomeMode.ISOLATED) {
                 Files.createDirectories(instance.homeDirectory());
             }
+        } catch (FileAlreadyExistsException e) {
+            throw new DshException("Cannot create instance \"" + id + "\": " + directory
+                    + " already exists", e);
         } catch (IOException e) {
             throw new DshException("Failed to create " + directory, e);
         }
