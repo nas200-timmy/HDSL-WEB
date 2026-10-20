@@ -496,9 +496,9 @@ public final class DshModpacks {
             // Two reasons, and the difference is what a person can do about it: a file that was
             // deleted can be put back where it was, while a plugin somebody is working on has no
             // copy here at all — the profile holds a link to their directory, not the directory.
-            report(onStage, DshPluginBundle.isLinked(profileDirectory, name)
-                    ? "Note: " + name + " is a plugin under development, linked from a directory"
-                            + " outside this instance, so the pack does not carry it"
+            report(onStage, DshPluginBundle.namesADirectory(declared, profileDirectory)
+                    ? "Note: " + name + " is a plugin under development, installed from the directory"
+                            + " it is worked on in, so the pack does not carry it"
                     : "Note: " + name + " was installed from a file this instance no longer has,"
                             + " so the pack cannot carry it");
             return new Plugin(name, declared, active, true, false);
@@ -523,10 +523,10 @@ public final class DshModpacks {
 
     /// One plugin an instance installed from this machine rather than from a registry.
     ///
-    /// @param name   the dependency name
-    /// @param linked whether its files are a link to a directory the profile does not hold, which
-    ///               is the half a pack cannot carry
-    public record LocalPlugin(String name, boolean linked) {
+    /// @param name        the dependency name
+    /// @param development whether it was installed from a directory somebody is working on — a
+    ///                    `link:`, or a `file:` that is not an archive — which a pack does not carry
+    public record LocalPlugin(String name, boolean development) {
     }
 
     /// Returns the plugins an instance installed from this machine rather than from a registry.
@@ -534,13 +534,15 @@ public final class DshModpacks {
     /// A `file:` or `link:` specification names something that was on the machine the instance was
     /// made on, and a pack is handed to somebody else. What the export does about it depends on
     /// which of the two it is: a packed plugin the launcher copied into the instance travels as the
-    /// file it is, while a directory the profile only links to has no files of its own to carry and
-    /// is left out of the pack entirely. Both are worth saying **before** the export starts, which
-    /// is the last moment at which the person can still do something about either.
+    /// file it is, while a directory somebody is working on — `link:`, and a `file:` that names a
+    /// directory — has no files of the instance's own to carry and is left out of the pack
+    /// entirely. Both are worth saying **before** the export starts, which is the last moment at
+    /// which the person can still do something about either.
     ///
-    /// Upstream (fdc8349) names this `PackExporter.localPlugins`; this launcher has no such class,
-    /// its export code is this one, and [Manifest#localPlugins] already means the recorded half of
-    /// it, so the name here is `localPluginsOf`.
+    /// Upstream names this `PackExporter.localPlugins` (fdc8349) and its flag `development`
+    /// (ad517a1); this launcher has no such class, its export code is this one, and
+    /// [Manifest#localPlugins] already means the recorded half of it, so the name here is
+    /// `localPluginsOf`.
     ///
     /// @param instance the instance
     /// @return the plugins, in the profile's order, empty when there are none
@@ -554,7 +556,7 @@ public final class DshModpacks {
                         .entrySet()) {
             if (isLocalSpec(entry.getValue())) {
                 plugins.add(new LocalPlugin(entry.getKey(),
-                        DshPluginBundle.isLinked(profileDirectory, entry.getKey())));
+                        DshPluginBundle.namesADirectory(entry.getValue(), profileDirectory)));
             }
         }
         return List.copyOf(plugins);

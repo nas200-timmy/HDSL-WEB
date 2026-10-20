@@ -24,9 +24,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 ///
 /// A profile records a local installation as the path it was given, and a path on one machine is not
 /// something another machine can install from. A pack therefore carries the files — the tarball the
-/// instance keeps, or the directory the profile installed from — and puts them back into the next
-/// instance's own plugin directory, where they are a local installation like any other. These pin the
-/// two halves of that: finding the files, and writing them out again.
+/// instance keeps — and puts them back into the next instance's own plugin directory, where they are
+/// a local installation like any other. A plugin installed from a **directory** is the one that does
+/// not travel: that is somebody working on it, and the profile points at their directory rather than
+/// holding a copy. These pin the two halves of that: finding the files, and writing them out again.
 class DshPluginBundleTest {
 
     @Test
@@ -50,7 +51,12 @@ class DshPluginBundleTest {
     }
 
     @Test
-    void aPluginInstalledFromADirectoryTravelsAsThatDirectory(@TempDir Path directory) throws Exception {
+    void aPluginInstalledFromADirectoryIsNotCarried(@TempDir Path directory) throws Exception {
+        // `link:` installs a plugin somebody is working on: the profile points at their directory
+        // rather than holding a copy of it, so a pack has none of the files and leaves the plugin
+        // out. That the entry in `node_modules` happens to be a real directory does not change it —
+        // the answer is read off the specification, which is the same whichever way the package
+        // manager arranged what is behind it.
         Path profile = directory.resolve("profiles/web");
         Path installed = profile.resolve("node_modules/dsh-fork");
         Files.createDirectories(installed.resolve("lib"));
@@ -58,17 +64,9 @@ class DshPluginBundleTest {
                 {"name":"dsh-fork","version":"2.1.0"}
                 """);
         Files.writeString(installed.resolve("lib/index.js"), "export const x = 1;\n");
-        // A dependency tree is not part of the plugin: the other machine resolves it from the
-        // registry, and carrying it would put a second copy of every dependency in the pack.
-        Files.createDirectories(installed.resolve("node_modules/left-pad"));
-        Files.writeString(installed.resolve("node_modules/left-pad/index.js"), "module.exports = 1;\n");
 
-        DshPluginBundle.Payload payload = DshPluginBundle.locate(profile, "dsh-fork", "link:../dsh-fork");
-
-        assertNotNull(payload, "a link is a directory, and the profile's own copy of it is what travels");
-        assertEquals("2.1.0", payload.version());
-        assertNull(payload.archive());
-        assertEquals(installed, payload.directory());
+        assertNull(DshPluginBundle.locate(profile, "dsh-fork", "link:../dsh-fork"),
+                "a link names a directory, and a pack does not carry one");
     }
 
     @Test
@@ -102,11 +100,52 @@ class DshPluginBundleTest {
     }
 
     @Test
-    void aLinkThatStaysInsideTheProfileIsTheProfilesOwnCopy(@TempDir Path directory) throws Exception {
-        // A package manager's own node_modules is made of links: pnpm puts every dependency behind
-        // one, resolving into `node_modules/.pnpm` inside the profile. Asking only whether an entry
-        // is a link would call every installed plugin somebody's working tree, so the question is
-        // where it resolves to — and inside the profile means the profile owns it.
+    void aDirectoryInstallIsAPluginUnderDevelopment(@TempDir Path directory) throws Exception {
+        // `link:` and a directory `file:` are the same install: a plugin somebody is working on,
+        // whose files stay in their directory. The profile points at it rather than holding a copy,
+        // so there is nothing of the instance's own to carry — and a pack leaves it out.
+        //
+        // What the package manager did about the directory is its business, and this fixture is why
+        // the answer is read off the specification instead: pnpm keeps such a dependency behind a
+        // link that resolves into the profile's own store, which `isLinked` rightly calls the
+        // profile's own copy. Left at that, `locate` would find a package with a version in it and
+        // carry the store's copy of somebody's working directory.
+        Path working = directory.resolve("dsh-fork");
+        Files.createDirectories(working.resolve("lib"));
+        Files.writeString(working.resolve("package.json"), """
+                {"name":"dsh-fork","version":"2.1.0"}
+                """);
+        Files.writeString(working.resolve("lib/index.js"), "export const x = 1;\n");
+
+        Path profile = directory.resolve("profiles/web");
+        Path store = profile.resolve("node_modules/.pnpm/dsh-fork@2.1.0/node_modules/dsh-fork");
+        Files.createDirectories(store.resolve("lib"));
+        Files.writeString(store.resolve("package.json"), """
+                {"name":"dsh-fork","version":"2.1.0"}
+                """);
+        Files.writeString(store.resolve("lib/index.js"), "export const x = 1;\n");
+        Path installed = profile.resolve("node_modules/dsh-fork");
+        Files.createDirectories(installed.getParent());
+        try {
+            Files.createSymbolicLink(installed, store);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            // A filesystem without links cannot test this part.
+            return;
+        }
+
+        assertTrue(DshPluginBundle.namesADirectory("file:" + working, profile),
+                "a file: that names a directory is the same install as a link:");
+        assertNull(DshPluginBundle.locate(profile, "dsh-fork", "file:" + working),
+                "and the pack does not carry it");
+    }
+
+    @Test
+    void aPluginBehindThePackageManagersOwnLinkIsStillCarried(@TempDir Path directory) throws Exception {
+        // A package manager's own node_modules is made of links: pnpm resolves a dependency into
+        // `node_modules/.pnpm` inside the profile. That entry is a link, but the copy is the
+        // profile's own — and a walk does not descend into the path it starts at when that path is
+        // a link, so the copy has to be read where it actually is. Without that, this plugin would
+        // travel as the one file that is read without walking: its `package.json`.
         Path profile = directory.resolve("profiles/web");
         Path store = profile.resolve("node_modules/.pnpm/dsh-fork@2.1.0/node_modules/dsh-fork");
         Files.createDirectories(store.resolve("lib"));
@@ -125,9 +164,10 @@ class DshPluginBundleTest {
 
         assertFalse(DshPluginBundle.isLinked(profile, "dsh-fork"),
                 "an entry resolving inside the profile is the profile's own copy");
-        DshPluginBundle.Payload payload =
-                DshPluginBundle.locate(profile, "dsh-fork", "file:" + directory.resolve("dsh-fork"));
-        assertNotNull(payload, "so the copy the profile holds is what travels");
+        DshPluginBundle.Payload payload = DshPluginBundle.locate(profile, "dsh-fork",
+                "file:" + directory.resolve("dsh-fork-2.1.0.tgz"));
+        assertNotNull(payload,
+                "the tarball the instance installed from is gone, so the profile's copy travels");
         assertEquals(store, payload.directory());
     }
 

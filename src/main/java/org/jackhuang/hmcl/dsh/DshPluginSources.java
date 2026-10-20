@@ -74,7 +74,10 @@ public final class DshPluginSources {
     private static final Pattern SCP = Pattern.compile("^[^@/\\s]+@[^:/\\s]+:.+$");
 
     /// A packed plugin, which is an archive rather than a directory.
-    private static final Pattern ARCHIVE = Pattern.compile(".*\\.(?:tgz|tar\\.gz)$", Pattern.CASE_INSENSITIVE);
+    ///
+    /// Shared with [DshPluginBundle], which has to tell the two apart for the same reason: an
+    /// archive travels in a pack and a directory does not.
+    static final Pattern ARCHIVE = Pattern.compile(".*\\.(?:tgz|tar\\.gz)$", Pattern.CASE_INSENSITIVE);
 
     /// The schemes a repository is fetched over.
     private static final List<String> SCHEMES = List.of("http", "https", "ssh", "git");

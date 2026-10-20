@@ -42,9 +42,15 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// somebody's disk is not something another machine can install from: a pack that
 /// named it would describe an installation nobody can make, and an import would
 /// stop there. So a pack carries the files themselves — the tarball the instance
-/// keeps, or the directory the profile installed from — and hands them back to the
+/// keeps, or the copy the package manager took of it — and hands them back to the
 /// next instance under the directory [DshLocalPlugins] owns, where they are a local
 /// installation like any other.
+///
+/// A plugin installed from a **directory** is the one that does not travel. That is
+/// somebody working on it, and the profile points at their directory rather than
+/// holding a copy of it, so there is nothing here that belongs to the instance. The
+/// export leaves such a plugin out and says so; see [DshPackForge] for the pack the
+/// community's tooling reads, which cannot express it at all.
 ///
 /// A plugin that the registry publishes at the version the instance has is *not*
 /// carried: naming `name@version` installs the same thing from the registry, which
@@ -64,7 +70,7 @@ public final class DshPluginBundle {
     /// @param name      the dependency name, which is the key the profile manifest uses
     /// @param version   the package's own version
     /// @param archive   the packed plugin the instance keeps, or `null` for a directory
-    /// @param directory the directory the profile installed from, or `null` for an archive
+    /// @param directory the profile's own copy of the plugin's files, or `null` for an archive
     public record Payload(String name, String version, @Nullable Path archive, @Nullable Path directory) {
 
         /// Returns the name this payload is written under.
@@ -106,12 +112,12 @@ public final class DshPluginBundle {
     /// deleted — falls back to what the profile *did* install, which is a directory inside its own
     /// `node_modules`.
     ///
-    /// **A link is not that directory.** `link:` and a directory `file:` leave a link in
-    /// `node_modules` rather than a copy — a symbolic link, or the junction Windows makes instead
-    /// of one — so what is behind it belongs to whoever is working on the plugin and not to the
-    /// instance. There are no files of the instance's own to carry, and reading through the link
-    /// would carry somebody's working tree instead. A link is therefore answered with `null`, and
-    /// the caller says the plugin is one under development.
+    /// **A directory is not that file.** `link:` names a directory, and so does a `file:` that is
+    /// not an archive: both install a plugin somebody is working on, and both leave the profile
+    /// pointing at their directory rather than holding a copy of it. There are no files of the
+    /// instance's own to carry, and reading through the link would carry somebody's working tree
+    /// instead. Such a specification is therefore answered with `null`, and the caller says the
+    /// plugin is one under development.
     ///
     /// @param profileDirectory the profile the plugin belongs to
     /// @param name             the dependency name
@@ -128,7 +134,7 @@ public final class DshPluginBundle {
             }
         }
 
-        if (isLinked(profileDirectory, name)) {
+        if (namesADirectory(declared, profileDirectory) || isLinked(profileDirectory, name)) {
             return null;
         }
         Path directory = profileDirectory.resolve("node_modules").resolve(name);
@@ -139,6 +145,38 @@ public final class DshPluginBundle {
             }
         }
         return null;
+    }
+
+    /// Reports whether a local specification names a directory rather than a packed plugin.
+    ///
+    /// `link:` always does: it is a promise about a directory, not about a file. A `file:` may
+    /// name either, and so may a bare path, which is why the answer is looked for rather than
+    /// assumed — where the path is still there it is asked, and where it is not, a name that is
+    /// not an archive is a directory.
+    ///
+    /// This is what a plugin under development is installed with, and it is the half a pack cannot
+    /// carry: the entry in `node_modules` is a link to wherever somebody is working, so the
+    /// instance holds none of the files of its own. Which is why the question is asked of the
+    /// specification rather than of the link: what the package manager did with the directory is
+    /// its business, and the answer has to be the same whichever layout it chose.
+    ///
+    /// @param declared         the specification
+    /// @param profileDirectory the profile, for a specification that is relative
+    /// @return whether it names a directory
+    public static boolean namesADirectory(String declared, Path profileDirectory) {
+        String raw = declared == null ? "" : declared.trim();
+        if (raw.startsWith("link:")) {
+            return true;
+        }
+        Path path = fileOf(raw, profileDirectory);
+        if (path == null) {
+            // Not a local path at all: a registry version, a repository, or a tarball over HTTP.
+            return false;
+        }
+        if (Files.isDirectory(path)) {
+            return true;
+        }
+        return !DshPluginSources.ARCHIVE.matcher(path.getFileName().toString()).matches();
     }
 
     /// Returns the directory a walk of an entry actually reads.
