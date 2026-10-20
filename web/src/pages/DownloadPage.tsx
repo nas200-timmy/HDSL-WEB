@@ -33,6 +33,7 @@ import {
   isTerminalTaskState,
   normState,
 } from "../utils";
+import { DSH_RELEASES } from "../constants";
 
 type DownloadTab = "game" | "modpack" | "plugin" | "skill";
 
@@ -207,6 +208,18 @@ function VersionRow({ v, onClick }: { v: VersionInfo; onClick: () => void }) {
         <span className="tlli-subtitle">{formatDateTime(v.time)}</span>
       </span>
       <span className="row-actions">
+        {/* 上游发布页。桌面版的版本行上就是这颗地球（`DownloadPage.java:423`，文案「打开
+            release 页面」），网页版此前缺一个出路——想看看这个版本改了什么只能自己去搜。 */}
+        <button
+          className="icon-btn on-variant ripple-host"
+          title="打开 release 页面"
+          onClick={(e) => {
+            e.stopPropagation();
+            window.open(`${DSH_RELEASES}${v.version}`, "_blank", "noopener");
+          }}
+        >
+          <PublicIcon size={18} />
+        </button>
         <button
           className="icon-btn on-variant ripple-host"
           title={I18N["button.install"]}
@@ -241,6 +254,10 @@ function ModpackTab() {
   const [installBusy, setInstallBusy] = useState(false);
   const [installTaskId, setInstallTaskId] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
+  const [installCancelling, setInstallCancelling] = useState(false);
+  // 用户按过取消：任务终态是失败时，说「安装已取消」而不是后端那句英文（cancelled），
+  // 也不再把它当成一次故障来报。
+  const installCancelAskedRef = useRef(false);
   const installHandledRef = useRef<string | null>(null);
 
   const [exports, setExports] = useState<ExportRecord[] | null>(null);
@@ -302,7 +319,12 @@ function ModpackTab() {
         await refreshInstances(false);
         if (iid) nav(`/instances/${iid}`);
       } else {
-        setInstallError(installTask.error ?? "安装任务未完成");
+        // 用户按过取消：这一条失败是「我停的」，不是故障——报「安装已取消」，而不是后端那句
+        // 英文（cancelled），让人以为出了什么问题。
+        setInstallError(installCancelAskedRef.current
+          ? "安装已取消"
+          : (installTask.error ?? "安装任务未完成"));
+        installCancelAskedRef.current = false;
         setInstallTaskId(null);
       }
     })();
@@ -320,6 +342,24 @@ function ModpackTab() {
     () => (exports ?? []).slice().sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
     [exports],
   );
+
+  // 取消安装。这里只发请求与给即时反馈——任务真正的终态（成功跳转、失败、还是「已取消」）
+  // 由上面那个 effect 统一收尾。后端收到取消会去停掉正在跑的 pnpm / node，所以此刻说的是
+  // 「已请求取消」而不是「已取消」。
+  const cancelInstall = async () => {
+    if (!installTaskId) return;
+    installCancelAskedRef.current = true;
+    setInstallCancelling(true);
+    try {
+      await api.cancelTask(installTaskId);
+      toast("info", "已请求取消，正在停止安装…");
+    } catch (e) {
+      installCancelAskedRef.current = false;
+      setInstallError(errMsg(e));
+    } finally {
+      setInstallCancelling(false);
+    }
+  };
 
   const doInstall = async () => {
     if (!installTarget) return;
@@ -480,6 +520,18 @@ function ModpackTab() {
             <ProgressBar fraction={installTask?.fraction} />
             <div style={{ fontSize: 13 }}>
               {installTask?.message ?? "正在下载并安装整合包，完成后将自动跳转到新实例…"}
+            </div>
+            {/* 进行中也要有条出路。此前这里没有任何按钮，而 onClose 在安装期间拒绝关闭——
+                点下安装之后就只能看着，装错了版本也没有退路。取消由后端停掉正在跑的
+                pnpm / node（POST /api/tasks/{id}/cancel），终态由上面的 effect 收尾。 */}
+            <div className="dialog-actions">
+              <button
+                className="btn btn-text dim"
+                disabled={installCancelling}
+                onClick={() => void cancelInstall()}
+              >
+                {installCancelling ? "正在取消…" : I18N["button.cancel"]}
+              </button>
             </div>
           </div>
         ) : (

@@ -6,7 +6,7 @@ import { HOME_MODES } from "../constants";
 import { loadVersions, toast, useAppState } from "../store";
 import type { VersionInfo } from "../types";
 import { channelLabel, errMsg, formatDateTime } from "../utils";
-import { ErrorIcon, RefreshIcon } from "../components/icons";
+import { CloseIcon, ErrorIcon, RefreshIcon } from "../components/icons";
 import { VersionListIcon } from "../components/VersionListIcon";
 
 /**
@@ -219,12 +219,31 @@ export function InstallInstanceWizard() {
           </div>
           <div className="form-row">
             <span className="form-label">{I18N["dsh.instance.name"]}</span>
-            <input
-              className="input"
-              value={name}
-              maxLength={64}
-              onChange={(e) => setName(e.target.value)}
-            />
+            <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+              <input
+                className="input"
+                style={{ paddingRight: 34 }}
+                value={name}
+                maxLength={64}
+                aria-invalid={!name.trim()}
+                onChange={(e) => setName(e.target.value)}
+              />
+              {name && (
+                <button
+                  type="button"
+                  className="icon-btn on-variant ripple-host"
+                  style={{ position: "absolute", right: 4 }}
+                  title="清除"
+                  onClick={() => setName("")}
+                >
+                  <CloseIcon size={16} />
+                </button>
+              )}
+            </div>
+            {/* 名字「不合法」在这里不是一种失败：实例目录用的是后端从名字派生的 id——`uniqueId`
+                会净化非法字符、并在重名时自动加后缀——所以桌面版那两个对话框（非法字符、重名）在
+                这里没有对应的失败模式。要当场说出来的只有「什么都没填」。 */}
+            {!name.trim() && <div className="form-error">{I18N["dsh.instance.name.empty"]}</div>}
           </div>
           <div className="form-row">
             <span className="form-label">{I18N["dsh.install.home"]}</span>
