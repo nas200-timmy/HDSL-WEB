@@ -123,10 +123,16 @@ public final class DshDoctor {
             out.println("  node:  " + runtime.nodeVersion() + "  (" + runtime.node() + ")"
                     + (runtime.isNodeSupported() ? "  [supported]" : "  [UNSUPPORTED]"));
             out.println("  npm:   " + describe(runtime.npm(), runtime.npmVersion()));
+            boolean pnpmTooOld = DshVersionManager.isPnpmTooOld(runtime.pnpmVersion());
             out.println("  pnpm:  " + describe(runtime.pnpm(), runtime.pnpmVersion())
-                    + (runtime.canManagePlugins() ? "" : "  [plugin management unavailable]"));
+                    + (runtime.canManagePlugins() ? "" : "  [plugin management unavailable]")
+                    + (pnpmTooOld ? "  [too old for installation]" : ""));
             out.println("  required: " + DshNodeRuntime.requirement());
-            runtimeOk = runtime.isNodeSupported() && runtime.canInstall();
+            // A runtime that cannot manage plugins, or whose pnpm is under the floor an installation
+            // needs, is not one the harness can be installed on: answering "ready" over it would be
+            // the doctor reporting the state of the machine rather than the state of the job.
+            runtimeOk = runtime.isNodeSupported() && runtime.canInstall()
+                    && runtime.canManagePlugins() && !pnpmTooOld;
         }
         out.println();
 

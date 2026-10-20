@@ -721,6 +721,7 @@ public final class DshVersionManager {
         if (!runtime.canManagePlugins()) {
             throw new DshException("pnpm was not found on PATH; installing DeepSeek Harness requires it");
         }
+        requireSupportedPnpm(runtime);
 
         try {
             recoverInterruptedInstall(instance.id(), target, flag, previous);
@@ -1046,6 +1047,52 @@ public final class DshVersionManager {
     /// @param left  the first version
     /// @param right the second version
     /// @return a negative value, zero or a positive value as `left` sorts before, with or after `right`
+    /// Reports whether a pnpm version is under the floor an installation needs.
+    ///
+    /// A version that cannot be read is not answered with a refusal: the string comes from a program
+    /// the launcher did not write, and blocking an install over a version it could not parse would
+    /// turn a working machine into a broken one. What is refused is a version that was read and is
+    /// too low — including a prerelease of the floor itself, which is below it by the same rule the
+    /// harness orders versions with.
+    ///
+    /// @param version the pnpm version, or `null` when it could not be read
+    /// @return whether it is too old to install DeepSeek Harness with
+    static boolean isPnpmTooOld(@Nullable String version) {
+        if (version == null) {
+            return false;
+        }
+        String normalized = version.trim();
+        if (normalized.startsWith("v") || normalized.startsWith("V")) {
+            normalized = normalized.substring(1);
+        }
+        if (!normalized.matches("\\d+(\\.\\d+){0,2}([-+].*)?")) {
+            return false;
+        }
+        int comparison = compareVersions(normalized, DshNodeRuntime.MINIMUM_PNPM);
+        if (comparison < 0) {
+            return true;
+        }
+        // A qualifier on the floor itself. The comparator this uses is the Maven-flavoured one the
+        // rest of the launcher orders versions with, and Maven normalises a trailing `-0` (and `-ga`,
+        // `-final`) to the release: `10.9.0-0` and `10.9.0` compare equal. The floor is the release,
+        // so anything carrying a qualifier is under it — that is the one rule the comparator cannot
+        // express, and the reason this is not a plain `< 0`. A `+build` is not a qualifier in that
+        // sense and leaves the version where it is.
+        return comparison == 0 && normalized.indexOf('-') >= 0;
+    }
+
+    /// Refuses an installation under a pnpm that is too old for it.
+    ///
+    /// @param runtime the runtime the install would use
+    /// @throws DshException when its pnpm is under the floor
+    static void requireSupportedPnpm(DshNodeRuntime runtime) throws DshException {
+        if (isPnpmTooOld(runtime.pnpmVersion())) {
+            throw new DshException("pnpm " + runtime.pnpmVersion()
+                    + " is too old; installing DeepSeek Harness requires pnpm "
+                    + DshNodeRuntime.MINIMUM_PNPM + " or newer");
+        }
+    }
+
     static int compareVersions(String left, String right) {
         return org.jackhuang.hmcl.util.versioning.VersionNumber.compare(left, right);
     }
