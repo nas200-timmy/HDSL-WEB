@@ -17,12 +17,17 @@
  */
 package org.jackhuang.hmcl.dsh;
 
+import org.jackhuang.hmcl.dsh.DshException;
+import org.jackhuang.hmcl.dsh.DshInstance;
+import org.jackhuang.hmcl.dsh.DshPackageRegistry;
+
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -52,6 +57,9 @@ public final class DshPluginRequirements {
 
     /// The ranges that mean "whatever runtime this is installed into".
     private static final List<String> WORKSPACE = List.of("workspace:^", "workspace:~", "workspace:*");
+
+    /// The dash between the two ends of a hyphen range, npm's \`1.2.3 - 2.3.4\`.
+    private static final java.util.regex.Pattern HYPHEN = java.util.regex.Pattern.compile("\\s+-\\s+");
 
     private DshPluginRequirements() {
     }
@@ -231,17 +239,62 @@ public final class DshPluginRequirements {
             // An empty alternative is every version: npm reads `>=0.1.0 ||` as `*`.
             return true;
         }
-        int dash = alternative.indexOf(" - ");
-        if (dash < 0) {
-            for (String comparator : alternative.split("\\s+")) {
-                if (!comparator.isBlank() && !satisfiesComparator(comparator.trim(), version)) {
+        java.util.regex.Matcher dash = HYPHEN.matcher(alternative);
+        if (!dash.find()) {
+            for (String comparator : comparatorsOf(alternative)) {
+                if (!satisfiesComparator(comparator, version)) {
                     return false;
                 }
             }
             return true;
         }
-        return satisfiesHyphen(alternative.substring(0, dash).trim(),
-                alternative.substring(dash + 3).trim(), version);
+        return satisfiesHyphen(alternative.substring(0, dash.start()).trim(),
+                alternative.substring(dash.end()).trim(), version);
+    }
+
+    /// Splits an alternative into comparators, putting an operator back together with its version.
+    ///
+    /// npm allows whitespace between the two — \`>= 1.0.0\`, \`<=  2.0.0\`, \`~ 1.0\` — and writing a range
+    /// that way is ordinary. Split on whitespace alone, the operator is left as a comparator of its
+    /// own, nothing satisfies it, and a plugin whose range is written that way is hidden from every
+    /// instance.
+    ///
+    /// @param alternative the alternative
+    /// @return its comparators, the operator of each joined to its version
+    private static List<String> comparatorsOf(String alternative) {
+        List<String> comparators = new ArrayList<>();
+        String operator = null;
+        for (String token : alternative.split("\\s+")) {
+            if (token.isEmpty()) {
+                continue;
+            }
+            if (operator != null) {
+                comparators.add(operator + token);
+                operator = null;
+            } else if (isOperatorAlone(token)) {
+                operator = token;
+            } else {
+                comparators.add(token);
+            }
+        }
+        if (operator != null) {
+            // An operator with nothing after it names no version, which satisfies nothing.
+            comparators.add(operator);
+        }
+        return comparators;
+    }
+
+    /// Reports whether a comparator is an operator and nothing else.
+    ///
+    /// @param token the comparator
+    /// @return whether it names no version
+    private static boolean isOperatorAlone(String token) {
+        for (int i = 0; i < token.length(); i++) {
+            if ("^~<>=vV".indexOf(token.charAt(i)) < 0) {
+                return false;
+            }
+        }
+        return !token.isEmpty();
     }
 
     /// Reports whether a version lies between the two ends of a hyphen range.
@@ -306,6 +359,10 @@ public final class DshPluginRequirements {
         if (comparator.isEmpty()) {
             return false;
         }
+        if (comparator.startsWith("~>")) {
+            // npm's older spelling of `~`, which it still reads and a range may still be written in.
+            comparator = "~" + comparator.substring(2).trim();
+        }
         if (isWildcard(comparator)) {
             return true;
         }
@@ -341,6 +398,27 @@ public final class DshPluginRequirements {
             }
             if (!isBound(base)) {
                 return false;
+            }
+            int count = countOf(base);
+            if (count == 0) {
+                return false;
+            }
+            if (count < 3) {
+                // A bound that does not name all three numbers is about a line rather than about a
+                // version, which is how npm reads both a number left out and an `x` written where
+                // one belongs: `<=0.7.x` is everything in the 0.7 line, and `>1.2` is everything
+                // past the 1.2 line — not `>1.2.0`, which would hold 1.2.8.
+                int[] named = parse(base).numbers();
+                int above = compare(parse(version), plain(named[0], named[1], named[2]));
+                int below = compare(parse(version), upperBound(false, count, named));
+                return switch (operator) {
+                    case ">=" -> above >= 0;
+                    case ">" -> below >= 0;
+                    case "<" -> compare(parse(version),
+                            release(named[0], named[1], named[2])) < 0;
+                    case "<=" -> below < 0;
+                    default -> above >= 0 && below < 0;
+                };
             }
             int order = compare(parse(version), parse(base));
             return switch (operator) {
@@ -386,10 +464,7 @@ public final class DshPluginRequirements {
     /// @param version the version
     /// @return whether it could be one
     private static boolean isBound(String version) {
-        String clean = version.trim();
-        if (clean.startsWith("v") || clean.startsWith("V")) {
-            clean = clean.substring(1);
-        }
+        String clean = compared(version);
         String[] halves = clean.split("-", 2);
         String[] written = halves[0].split("\\.", -1);
         if (written.length > 3) {
@@ -463,6 +538,20 @@ public final class DshPluginRequirements {
         return release(named[0], named[1], named[2] + 1);
     }
 
+    /// Returns a version with no pre-release part, which is where a line of versions starts.
+    ///
+    /// npm moves the ends of a range out to a pre-release of themselves — that is what
+    /// [#release] writes — and where it does not, the version has to be the release itself to be
+    /// inside: the floor of `1.2.x` is `>=1.2.0`, so `1.2.0-rc` is under it.
+    ///
+    /// @param major the major
+    /// @param minor the minor
+    /// @param patch the patch
+    /// @return the version
+    private static Parsed plain(int major, int minor, int patch) {
+        return new Parsed(new int[]{major, minor, patch}, null);
+    }
+
     /// Returns a version with the prerelease npm puts at the foot of a bound it made up.
     ///
     /// @param major the major
@@ -478,10 +567,7 @@ public final class DshPluginRequirements {
     /// @param version the version
     /// @return one to three, or none when it names no number at all
     private static int countOf(String version) {
-        String clean = version.trim();
-        if (clean.startsWith("v") || clean.startsWith("V")) {
-            clean = clean.substring(1);
-        }
+        String clean = compared(version);
         int count = 0;
         for (String part : clean.split("-", 2)[0].split("\\.", -1)) {
             if (!isNumber(part)) {
@@ -498,10 +584,7 @@ public final class DshPluginRequirements {
     /// @return its three numbers and its pre-release identifiers, the identifiers being
     ///         `null` when the version carries none
     private static Parsed parse(String version) {
-        String clean = version.trim();
-        if (clean.startsWith("v") || clean.startsWith("V")) {
-            clean = clean.substring(1);
-        }
+        String clean = compared(version);
         String[] halves = clean.split("-", 2);
         String[] written = halves[0].split("\\.", -1);
         int[] numbers = new int[3];
@@ -514,6 +597,23 @@ public final class DshPluginRequirements {
                 ? List.of(halves[1].split("\\.", -1))
                 : null;
         return new Parsed(numbers, prerelease);
+    }
+
+    /// Returns a version with the parts npm does not compare taken off it.
+    ///
+    /// A leading \`v\` is decoration, and build metadata — everything from a \`+\` — says how a build
+    /// was made rather than which version it is: npm reads \`v1.2.3+build\` as \`1.2.3\`, so a plugin
+    /// asking for \`^1.2.3+build\` is asking for the same line as \`^1.2.3\`.
+    ///
+    /// @param version the version as it was written
+    /// @return the version as it is compared
+    private static String compared(String version) {
+        String clean = version.trim();
+        if (clean.startsWith("v") || clean.startsWith("V")) {
+            clean = clean.substring(1);
+        }
+        int build = clean.indexOf('+');
+        return build < 0 ? clean : clean.substring(0, build);
     }
 
     /// Reads a number out of one of a version's three leading parts.
