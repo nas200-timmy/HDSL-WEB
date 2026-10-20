@@ -106,6 +106,13 @@ public final class DshPluginBundle {
     /// deleted — falls back to what the profile *did* install, which is a directory inside its own
     /// `node_modules`.
     ///
+    /// **A link is not that directory.** `link:` and a directory `file:` leave a link in
+    /// `node_modules` rather than a copy — a symbolic link, or the junction Windows makes instead
+    /// of one — so what is behind it belongs to whoever is working on the plugin and not to the
+    /// instance. There are no files of the instance's own to carry, and reading through the link
+    /// would carry somebody's working tree instead. A link is therefore answered with `null`, and
+    /// the caller says the plugin is one under development.
+    ///
     /// @param profileDirectory the profile the plugin belongs to
     /// @param name             the dependency name
     /// @param declared         what the profile declares for it
@@ -121,6 +128,9 @@ public final class DshPluginBundle {
             }
         }
 
+        if (isLinked(profileDirectory, name)) {
+            return null;
+        }
         Path directory = profileDirectory.resolve("node_modules").resolve(name);
         if (Files.isDirectory(directory)) {
             String version = versionOf(directory);
@@ -129,6 +139,39 @@ public final class DshPluginBundle {
             }
         }
         return null;
+    }
+
+    /// Reports whether the profile's copy of a package is a link to somewhere else.
+    ///
+    /// A link is asked about twice — once when the files are looked for and once when the reason
+    /// they are not there is said out loud — and both times the answer has to be the same one, so
+    /// it is given in one place.
+    ///
+    /// Windows is why this is not [Files#isSymbolicLink] alone: the package manager makes a
+    /// *junction* there, which is a link to every other program on the machine and a plain
+    /// directory to Java. Comparing where the entry resolves to against where it sits is what
+    /// holds on both, and it is asked of the entry's parent as well, so that a home reached
+    /// through a link of its own — `/tmp` on macOS — is not mistaken for one.
+    ///
+    /// @param profileDirectory the profile the plugin belongs to
+    /// @param name             the dependency name
+    /// @return whether the entry is a link to a directory the instance does not own
+    public static boolean isLinked(Path profileDirectory, String name) {
+        Path directory = profileDirectory.resolve("node_modules").resolve(name);
+        if (Files.isSymbolicLink(directory)) {
+            return true;
+        }
+        if (!Files.isDirectory(directory)) {
+            return false;
+        }
+        try {
+            Path parent = directory.getParent().toRealPath();
+            return !directory.toRealPath().equals(parent.resolve(directory.getFileName()));
+        } catch (IOException | RuntimeException e) {
+            // Unreadable is not linked: the callers already have an answer for a package that
+            // cannot be read, and it is a different sentence.
+            return false;
+        }
     }
 
     /// Reads the file a local specification names.

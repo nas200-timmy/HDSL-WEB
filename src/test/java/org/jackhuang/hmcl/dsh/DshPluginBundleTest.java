@@ -72,6 +72,72 @@ class DshPluginBundleTest {
     }
 
     @Test
+    void aPluginLinkedFromOutsideTheInstanceDoesNotTravel(@TempDir Path directory) throws Exception {
+        // What a `link:` install leaves in `node_modules` is a link rather than a copy — a symbolic
+        // link, or the junction Windows makes instead of one — so what is behind it belongs to
+        // whoever is working on the plugin and not to the instance. Walking a link finds the link
+        // itself and nothing below it, so a pack that read through one would carry a package with
+        // no code in it. The files are not the instance's to carry, and neither is the promise.
+        Path working = directory.resolve("dsh-fork");
+        Files.createDirectories(working.resolve("lib"));
+        Files.writeString(working.resolve("package.json"), """
+                {"name":"dsh-fork","version":"2.1.0"}
+                """);
+        Files.writeString(working.resolve("lib/index.js"), "export const x = 1;\n");
+
+        Path profile = directory.resolve("profiles/web");
+        Path installed = profile.resolve("node_modules/dsh-fork");
+        Files.createDirectories(installed.getParent());
+        try {
+            Files.createSymbolicLink(installed, working);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            // A filesystem without links cannot test this part.
+            return;
+        }
+
+        assertTrue(DshPluginBundle.isLinked(profile, "dsh-fork"),
+                "the profile holds a link to somebody's directory");
+        assertNull(DshPluginBundle.locate(profile, "dsh-fork", "link:" + working),
+                "there are no files of the instance's own to carry");
+    }
+
+    /// A junction is what the package manager makes on Windows, where a symbolic link needs a
+    /// privilege it may not have. It is a link to every other program on the machine and a plain
+    /// directory to Java, so a launcher that asked only about symbolic links would read straight
+    /// through it and pack somebody's working tree.
+    @Test
+    void aWindowsJunctionIsALinkToo(@TempDir Path directory) throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                        == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS,
+                "junctions are a Windows feature");
+
+        Path working = directory.resolve("dsh-fork");
+        Files.createDirectories(working.resolve("lib"));
+        Files.writeString(working.resolve("package.json"), """
+                {"name":"dsh-fork","version":"2.1.0"}
+                """);
+        Files.writeString(working.resolve("lib/index.js"), "export const x = 1;\n");
+
+        Path profile = directory.resolve("profiles/web");
+        Path installed = profile.resolve("node_modules/dsh-fork");
+        Files.createDirectories(installed.getParent());
+        Process link = new ProcessBuilder("cmd.exe", "/c", "mklink", "/J",
+                installed.toString(), working.toString()).redirectErrorStream(true).start();
+        try (var reader = link.inputReader()) {
+            while (reader.readLine() != null) {
+                // Drain, so the process is not left blocked on a full pipe.
+            }
+        }
+        org.junit.jupiter.api.Assumptions.assumeTrue(link.waitFor() == 0,
+                "this machine will not make a junction");
+
+        assertTrue(DshPluginBundle.isLinked(profile, "dsh-fork"), "a junction is a link too");
+        assertNull(DshPluginBundle.locate(profile, "dsh-fork", "link:" + working),
+                "and a pack does not read through one");
+    }
+
+    @Test
     void aPackedPluginComesBackOutOfThePackWhereItWentIn(@TempDir Path directory) throws Exception {
         Path tarball = directory.resolve("dsh-secret-1.0.0.tgz");
         Files.write(tarball, pack("dsh-secret", "1.0.0"));

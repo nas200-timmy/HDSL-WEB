@@ -493,8 +493,14 @@ public final class DshModpacks {
                                       @Nullable Consumer<String> onStage) {
         DshPluginBundle.Payload payload = DshPluginBundle.locate(profileDirectory, name, declared);
         if (payload == null) {
-            report(onStage, "Note: " + name + " was installed from a file this instance no longer has,"
-                    + " so the pack cannot carry it");
+            // Two reasons, and the difference is what a person can do about it: a file that was
+            // deleted can be put back where it was, while a plugin somebody is working on has no
+            // copy here at all — the profile holds a link to their directory, not the directory.
+            report(onStage, DshPluginBundle.isLinked(profileDirectory, name)
+                    ? "Note: " + name + " is a plugin under development, linked from a directory"
+                            + " outside this instance, so the pack does not carry it"
+                    : "Note: " + name + " was installed from a file this instance no longer has,"
+                            + " so the pack cannot carry it");
             return new Plugin(name, declared, active, true, false);
         }
 
@@ -513,6 +519,37 @@ public final class DshModpacks {
         }
         carried.add(payload);
         return new Plugin(name, payload.version(), active, true, true);
+    }
+
+    /// Returns the plugins an instance installed from a directory it does not own.
+    ///
+    /// A `link:` dependency — and a directory `file:`, which the package manager writes the same
+    /// way — leaves a link in the profile's `node_modules` pointing at wherever somebody is
+    /// working. A pack carries files, and these are not the instance's files: they are the working
+    /// tree of whoever is developing the plugin, they change without the pack knowing, and no copy
+    /// of them is recorded anywhere. The export leaves them out, and this is what the interface
+    /// asks before an export so that it can say so first rather than afterwards.
+    ///
+    /// Upstream (08e72c3) puts this in `PackExporter`; this launcher has no such class, its export
+    /// code is this one, and the name is not `localPlugins` because [Manifest#localPlugins] already
+    /// means the recorded half of this.
+    ///
+    /// @param instance the instance
+    /// @return the dependency names, in the profile's order, empty when there are none
+    /// @throws DshException when the profile cannot be read
+    public static List<String> developmentPlugins(DshInstance instance) throws DshException {
+        Path profileDirectory = instance.homeDirectory()
+                .resolve("profiles").resolve(instance.profile());
+        List<String> names = new ArrayList<>();
+        for (Map.Entry<String, String> entry
+                : DshPluginInstaller.readDependencies(instance.homeDirectory(), instance.profile())
+                        .entrySet()) {
+            if (isLocalSpec(entry.getValue())
+                    && DshPluginBundle.isLinked(profileDirectory, entry.getKey())) {
+                names.add(entry.getKey());
+            }
+        }
+        return List.copyOf(names);
     }
 
     /// Reads a pack's manifest.
