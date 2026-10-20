@@ -99,6 +99,38 @@ class InstanceApiTest {
     }
 
     @Test
+    void aDirectoryTheNameResolvesToIsNotAnInstanceAndIsNotAdopted() throws Exception {
+        // What a delete that was interrupted leaves behind: a directory under the instances root with
+        // no manifest in it. The id an instance gets is made from the name the user typed, so the name
+        // resolves to that directory — and since a create no longer adopts a directory that is already
+        // there, the answer has to be the next free id rather than an error: a name is not something a
+        // user should have to type differently because something else left a folder behind.
+        try (TestSupport.RunningServer running = startServer()) {
+            // Made **after** the server is up: booting wipes the shared home the tests run in, so a
+            // directory made before it would be gone before the request that has to find it.
+            Path leftover = Files.createDirectories(
+                    org.jackhuang.hmcl.dsh.DshPaths.instanceDirectory("leftover"));
+            Path document = Files.writeString(leftover.resolve("notes.txt"), "left by something else");
+
+            try {
+                HttpClient client = TestSupport.client();
+
+                HttpResponse<String> created = send(client, running.baseUrl() + "/api/instances", "POST",
+                        "{\"name\":\"Leftover\",\"version\":\"" + VERSION + "\",\"autoInstall\":false}");
+                assertEquals(201, created.statusCode(), created.body());
+                String id = json(created).getAsJsonObject("instance").get("id").getAsString();
+                create(id);
+
+                assertNotEquals("leftover", id, "an id whose directory exists is not the one handed out");
+                assertTrue(Files.isRegularFile(document),
+                        "the directory that held the name is left alone, with what is in it");
+            } finally {
+                org.jackhuang.hmcl.util.io.FileUtils.deleteDirectoryQuietly(leftover);
+            }
+        }
+    }
+
+    @Test
     void instanceCrudAndLifetimePortBinding() throws Exception {
         try (TestSupport.RunningServer running = startServer()) {
             HttpClient client = TestSupport.client();

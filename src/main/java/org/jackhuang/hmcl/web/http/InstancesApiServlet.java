@@ -32,6 +32,7 @@ import org.jackhuang.hmcl.dsh.DshInstanceManager;
 import org.jackhuang.hmcl.dsh.DshInstanceSettings;
 import org.jackhuang.hmcl.dsh.DshLocalPlugins;
 import org.jackhuang.hmcl.dsh.DshPackForge;
+import org.jackhuang.hmcl.dsh.DshPaths;
 import org.jackhuang.hmcl.dsh.DshPluginInstaller;
 import org.jackhuang.hmcl.dsh.DshPortMode;
 import org.jackhuang.hmcl.dsh.DshPorts;
@@ -49,6 +50,7 @@ import org.jetbrains.annotations.Nullable;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
@@ -1507,7 +1509,7 @@ public final class InstancesApiServlet extends HttpServlet {
     /// Package-visible: the pack servlet names the instance a pack install
     /// creates by the same rule, so an id means the same thing wherever it
     /// came from.
-    static String uniqueId(String name) {
+    static String uniqueId(String name) throws DshException {
         String base = name.trim().toLowerCase(Locale.ROOT)
                 .replaceAll("[^a-z0-9._-]+", "-")
                 .replaceAll("-{2,}", "-")
@@ -1517,7 +1519,12 @@ public final class InstancesApiServlet extends HttpServlet {
         }
         String candidate = base;
         int suffix = 2;
-        while (DshInstanceManager.exists(candidate)) {
+        // A directory counts as taken even when no instance answers to the id: what a half-finished
+        // delete leaves behind is a directory under the instances root and nothing else, and
+        // `DshInstanceManager.create` refuses to adopt a directory that is already there — so an id
+        // that resolved to one would turn a name the user typed into an error rather than a suffix.
+        while (DshInstanceManager.exists(candidate)
+                || Files.exists(DshPaths.instanceDirectory(candidate), LinkOption.NOFOLLOW_LINKS)) {
             candidate = base + "-" + suffix;
             suffix++;
         }

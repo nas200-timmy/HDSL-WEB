@@ -23,7 +23,9 @@ import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -213,10 +215,18 @@ public final class DshInstanceManager {
 
         Path directory = instance.instanceDirectory();
         try {
-            Files.createDirectories(directory);
+            // Never adopt a directory that is already there: it may hold the user's own files, and a
+            // rename of it is not this instance's to make. `createDirectory` is atomic, unlike
+            // `exists()` followed by `createDirectories()`, so two creates racing for one name cannot
+            // both come away believing the directory is theirs.
+            Files.createDirectories(directory.getParent());
+            Files.createDirectory(directory);
             if (homeMode == DshHomeMode.ISOLATED) {
                 Files.createDirectories(instance.homeDirectory());
             }
+        } catch (FileAlreadyExistsException e) {
+            throw new DshException("Cannot create instance \"" + id + "\": " + directory
+                    + " already exists", e);
         } catch (IOException e) {
             throw new DshException("Failed to create " + directory, e);
         }
@@ -298,6 +308,13 @@ public final class DshInstanceManager {
         if (exists(normalized)) {
             throw new DshException("Instance " + normalized + " already exists");
         }
+        if (DshProcessManager.stateOf(id) != DshProcessManager.LaunchState.STOPPED) {
+            // Refused before anything moves. The rename moves the directory the running process has
+            // open and writes into — its own plugins, its own logs, the plugins pnpm is installing
+            // right now — so a rename during it would not be a rename, it would be pulling the ground
+            // out from under a process that has no idea its files went somewhere else.
+            throw new DshException("Cannot rename instance \"" + id + "\" while it is running or stopping");
+        }
 
         DshInstance renamed = existing.withId(normalized);
         Path oldDirectory = DshPaths.instanceDirectory(id);
@@ -305,8 +322,16 @@ public final class DshInstanceManager {
 
         boolean moved = false;
         if (Files.isDirectory(oldDirectory)) {
+            // Nothing at the destination is removed to make room for the move. What
+            // resolves to the new name is not necessarily an instance's directory: it can
+            // be what a deleted instance left behind, or a folder somebody put there, and
+            // removing it would delete it, tree and all, with nothing said. The name is
+            // refused instead, and the directory is named so it can be moved aside.
+            if (Files.exists(newDirectory, LinkOption.NOFOLLOW_LINKS)) {
+                throw new DshException("Cannot rename \"" + id + "\" to \"" + normalized + "\": "
+                        + newDirectory + " already exists");
+            }
             try {
-                deleteQuietly(newDirectory);
                 Files.move(oldDirectory, newDirectory);
                 moved = true;
             } catch (IOException e) {
@@ -378,6 +403,13 @@ public final class DshInstanceManager {
         String normalized = newId == null ? "" : newId.trim();
         if (normalized.isEmpty()) {
             throw new DshException("An instance needs a name");
+        }
+        if (normalized.equals(id)) {
+            // The copy would be installed over its own source: the id is the source's, so `find` below
+            // answers with the source itself and every later step treats the original as the half-made
+            // copy — including the cleanup a failed install runs, which is what takes the source's files
+            // away. Refused before any of that is decided.
+            throw new DshException("Cannot duplicate instance \"" + id + "\" onto itself");
         }
 
         DshInstance copy = find(normalized);

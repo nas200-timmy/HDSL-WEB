@@ -42,9 +42,15 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// somebody's disk is not something another machine can install from: a pack that
 /// named it would describe an installation nobody can make, and an import would
 /// stop there. So a pack carries the files themselves — the tarball the instance
-/// keeps, or the directory the profile installed from — and hands them back to the
+/// keeps, or the copy the package manager took of it — and hands them back to the
 /// next instance under the directory [DshLocalPlugins] owns, where they are a local
 /// installation like any other.
+///
+/// A plugin installed from a **directory** is the one that does not travel. That is
+/// somebody working on it, and the profile points at their directory rather than
+/// holding a copy of it, so there is nothing here that belongs to the instance. The
+/// export leaves such a plugin out and says so; see [DshPackForge] for the pack the
+/// community's tooling reads, which cannot express it at all.
 ///
 /// A plugin that the registry publishes at the version the instance has is *not*
 /// carried: naming `name@version` installs the same thing from the registry, which
@@ -64,7 +70,7 @@ public final class DshPluginBundle {
     /// @param name      the dependency name, which is the key the profile manifest uses
     /// @param version   the package's own version
     /// @param archive   the packed plugin the instance keeps, or `null` for a directory
-    /// @param directory the directory the profile installed from, or `null` for an archive
+    /// @param directory the profile's own copy of the plugin's files, or `null` for an archive
     public record Payload(String name, String version, @Nullable Path archive, @Nullable Path directory) {
 
         /// Returns the name this payload is written under.
@@ -106,6 +112,13 @@ public final class DshPluginBundle {
     /// deleted — falls back to what the profile *did* install, which is a directory inside its own
     /// `node_modules`.
     ///
+    /// **A directory is not that file.** `link:` names a directory, and so does a `file:` that is
+    /// not an archive: both install a plugin somebody is working on, and both leave the profile
+    /// pointing at their directory rather than holding a copy of it. There are no files of the
+    /// instance's own to carry, and reading through the link would carry somebody's working tree
+    /// instead. Such a specification is therefore answered with `null`, and the caller says the
+    /// plugin is one under development.
+    ///
     /// @param profileDirectory the profile the plugin belongs to
     /// @param name             the dependency name
     /// @param declared         what the profile declares for it
@@ -121,14 +134,106 @@ public final class DshPluginBundle {
             }
         }
 
+        if (namesADirectory(declared, profileDirectory) || isLinked(profileDirectory, name)) {
+            return null;
+        }
         Path directory = profileDirectory.resolve("node_modules").resolve(name);
         if (Files.isDirectory(directory)) {
             String version = versionOf(directory);
             if (version != null) {
-                return new Payload(name, version, null, directory);
+                return new Payload(name, version, null, readable(directory));
             }
         }
         return null;
+    }
+
+    /// Reports whether a local specification names a directory rather than a packed plugin.
+    ///
+    /// `link:` always does: it is a promise about a directory, not about a file. A `file:` may
+    /// name either, and so may a bare path, which is why the answer is looked for rather than
+    /// assumed — where the path is still there it is asked, and where it is not, a name that is
+    /// not an archive is a directory.
+    ///
+    /// This is what a plugin under development is installed with, and it is the half a pack cannot
+    /// carry: the entry in `node_modules` is a link to wherever somebody is working, so the
+    /// instance holds none of the files of its own. Which is why the question is asked of the
+    /// specification rather than of the link: what the package manager did with the directory is
+    /// its business, and the answer has to be the same whichever layout it chose.
+    ///
+    /// @param declared         the specification
+    /// @param profileDirectory the profile, for a specification that is relative
+    /// @return whether it names a directory
+    public static boolean namesADirectory(String declared, Path profileDirectory) {
+        String raw = declared == null ? "" : declared.trim();
+        if (raw.startsWith("link:")) {
+            return true;
+        }
+        Path path = fileOf(raw, profileDirectory);
+        if (path == null) {
+            // Not a local path at all: a registry version, a repository, or a tarball over HTTP.
+            return false;
+        }
+        if (Files.isDirectory(path)) {
+            return true;
+        }
+        return !DshPluginSources.ARCHIVE.matcher(path.getFileName().toString()).matches();
+    }
+
+    /// Returns the directory a walk of an entry actually reads.
+    ///
+    /// A package manager may keep a dependency's files behind a link of its own: pnpm resolves
+    /// every dependency into `node_modules/.pnpm` inside the profile, and a directory `file:`
+    /// install is one of them. A walk does not descend into the path it starts at when that path
+    /// is a link — it reports the link itself and nothing under it — so what is handed out is
+    /// where the files are rather than where the profile points at them. Without this, such a
+    /// plugin would travel as the one file that is read without walking: its `package.json`.
+    ///
+    /// A plain directory is handed back unchanged, and so is one that cannot be resolved.
+    ///
+    /// @param directory the entry the profile holds
+    /// @return the directory to read
+    private static Path readable(Path directory) {
+        try {
+            Path parent = directory.getParent().toRealPath();
+            Path real = directory.toRealPath();
+            return real.equals(parent.resolve(directory.getFileName())) ? directory : real;
+        } catch (IOException | RuntimeException e) {
+            return directory;
+        }
+    }
+
+    /// Reports whether the profile's copy of a package is a link out of the profile.
+    ///
+    /// A link is asked about twice — once when the files are looked for and once when the reason
+    /// they are not there is said out loud — and both times the answer has to be the same one, so
+    /// it is given in one place.
+    ///
+    /// **Where it resolves to is the question, not whether it is a link.** A package manager's own
+    /// `node_modules` is made of links: pnpm puts every dependency behind one, resolving into
+    /// `node_modules/.pnpm` inside the profile, so asking only whether the entry is a link would
+    /// report the whole profile as somebody's working tree. What matters is whether the files are
+    /// the profile's at all, and the answer to that is whether they live inside it.
+    ///
+    /// Resolving is also what makes this hold on Windows, where the package manager makes a
+    /// *junction* — a link to every other program on the machine, a plain directory to Java, and
+    /// not what [Files#isSymbolicLink] reports on.
+    ///
+    /// @param profileDirectory the profile the plugin belongs to
+    /// @param name             the dependency name
+    /// @return whether the entry names a directory outside the profile
+    public static boolean isLinked(Path profileDirectory, String name) {
+        Path directory = profileDirectory.resolve("node_modules").resolve(name);
+        if (!Files.isDirectory(directory)) {
+            // Nothing to resolve and nothing to carry; the callers have a different sentence for
+            // a package the profile no longer has.
+            return false;
+        }
+        try {
+            return !directory.toRealPath().startsWith(profileDirectory.toRealPath());
+        } catch (IOException | RuntimeException e) {
+            // Unreadable is not linked, for the same reason.
+            return false;
+        }
     }
 
     /// Reads the file a local specification names.
@@ -324,8 +429,22 @@ public final class DshPluginBundle {
                         Files.copy(zip, target, StandardCopyOption.REPLACE_EXISTING);
                         return target.toAbsolutePath().normalize();
                     }
-                    Path target = pluginsDirectory.resolve(carried)
-                            .resolve(rest.substring(slash + 1).replace('/', java.io.File.separatorChar));
+                    Path base = pluginsDirectory.toAbsolutePath().normalize();
+                    Path target = base.resolve(carried)
+                            .resolve(rest.substring(slash + 1).replace('/', java.io.File.separatorChar))
+                            .normalize();
+                    // A pack is an archive somebody downloaded, so where each of its members lands is
+                    // checked rather than assumed: the name a payload carries is a path, and a path
+                    // is what an archive chooses for itself. `plugins/<name>-<version>/../../x.yml`
+                    // passes the check above — the payload is this package's — and would otherwise be
+                    // written over whatever the two `..` reach, which for a plugin directory inside an
+                    // instance is the instance, the profile and, from there, anything the user owns.
+                    if (!target.startsWith(base)) {
+                        LOG.warning("Not unpacking " + entryName + " out of " + pack.getFileName()
+                                + ": it would be written outside " + base);
+                        throw new IOException("That pack tries to write outside the plugin directory ("
+                                + entryName + ")");
+                    }
                     Files.createDirectories(target.getParent());
                     // Read straight out of the archive: closing anything here would close the
                     // archive, and the entries after this one would be gone.

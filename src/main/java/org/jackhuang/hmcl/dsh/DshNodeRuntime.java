@@ -80,6 +80,14 @@ public record DshNodeRuntime(
     /// The selection meaning "whatever the launcher is set to".
     public static final String GLOBAL = "global";
 
+    /// The oldest pnpm DeepSeek Harness can be installed with.
+    ///
+    /// A floor pnpm itself sets rather than one this launcher invents: from 10.9 the package manager
+    /// resolves and links the way the harness's own install expects. Below it an install does not
+    /// fail where it can be seen — it produces a tree the harness cannot start from — so the version
+    /// is checked before the install rather than diagnosed after it.
+    public static final String MINIMUM_PNPM = "10.9";
+
     /// Describes a launcher-managed runtime in the same shape as a probed one.
     ///
     /// `pnpm` is deliberately left unset: a managed runtime has no `pnpm` of its
@@ -263,7 +271,8 @@ public record DshNodeRuntime(
     ///
     /// @return a human-readable requirement string
     public static String requirement() {
-        return "Node.js ^22.19.0 || >=24.0.0, plus pnpm for plugin management";
+        return "Node.js ^22.19.0 || >=24.0.0, plus pnpm " + MINIMUM_PNPM
+                + " or newer for installing DeepSeek Harness; pnpm is also needed for plugin management";
     }
 
     /// Parses a leading `major.minor.patch` from a version string.

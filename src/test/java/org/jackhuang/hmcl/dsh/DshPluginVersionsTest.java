@@ -137,8 +137,9 @@ class DshPluginVersionsTest {
         assertTrue(groups.get(0).recommended(), "what the page was opened for comes first");
         assertTrue(groups.subList(1, 5).stream().noneMatch(DshPluginVersions.Group::recommended));
 
-        assertEquals(List.of("0.22.0", "0.21.0-dev.1"),
-                versionsOf(groups.get(0)), "the versions that admit the harness the instance runs");
+        assertEquals(List.of("0.22.0", "0.21.0-dev.1", "0.12.2"), versionsOf(groups.get(0)),
+                "the versions that admit the harness the instance runs, a caret over `0.1.0` included:"
+                        + " npm reads a prerelease into a range that does not name one, and so does the harness");
         assertEquals(List.of("0.24.1", "0.22.0"), versionsOf(groups.get(1)),
                 "and one written for a later harness is under that harness, not hidden");
         assertEquals(List.of("0.21.0-dev.1", "0.12.2"), versionsOf(groups.get(2)),
@@ -197,6 +198,33 @@ class DshPluginVersionsTest {
         assertEquals(List.of("0.2.0-rc.1", "0.1.7-rc.1", "0.1.5", "0.1.1", "0.1.0"),
                 groups.subList(0, 5).stream().map(DshPluginVersions.Group::harnessVersion).toList());
         assertNull(groups.get(5).harnessVersion(), "and the version that said nothing comes last");
+    }
+
+    @Test
+    void aVersionForALaterPrereleaseOfTheSameNumbersIsNotListedForThisOne() {
+        // What the remote web UI publishes from 0.4.2 on: the numbers are the instance's own and
+        // only the prerelease is later, which is exactly what the harness refuses an installation
+        // over — so the page must not offer it among the versions that fit.
+        JsonObject document = JsonParser.parseString("""
+                {
+                  "versions": {
+                    "0.4.3": { "version": "0.4.3",
+                               "peerDependencies": { "@deepseek-ai/dsh": ">=0.1.7-rc.2" } },
+                    "0.4.1": { "version": "0.4.1",
+                               "peerDependencies": { "@deepseek-ai/dsh": ">=0.1.7-rc.1" } }
+                  }
+                }
+                """).getAsJsonObject();
+
+        List<DshPluginVersions.Group> groups = DshPluginVersions.group(
+                DshPluginVersions.read(document), HARNESS);
+
+        assertEquals(HARNESS, groups.get(0).harnessVersion());
+        assertEquals(List.of("0.4.1"), versionsOf(groups.get(0)),
+                "0.4.3 asks for a later prerelease, which the harness will not run on this one");
+        assertTrue(groups.stream().anyMatch(group -> "0.1.7-rc.2".equals(group.harnessVersion())
+                        && versionsOf(group).contains("0.4.3")),
+                "and it is still listed under the harness version it does ask for");
     }
 
     /// Returns the versions one group holds.

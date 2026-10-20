@@ -362,6 +362,18 @@ public final class DshPackForge {
         manifest.add("bundles", bundles);
 
         JsonObject dependencies = new JsonObject();
+        // Named before the loop rather than when each one is reached. The loop refuses the first plugin
+        // it cannot name, so a pack with two of them would report one name and stop, and the second
+        // would be found only by exporting again — and this is the last moment at which the person can
+        // still do something about it: install a published version, or take the plugin out.
+        for (DshModpacks.LocalPlugin local : DshModpacks.localPluginsOf(instance)) {
+            if (local.development()) {
+                report(onStage, local.name() + " is a plugin under development — installed from a"
+                        + " directory outside this instance — and a pack of published sources cannot"
+                        + " carry it. Install a published version instead, or export a pack this"
+                        + " launcher reads (.hdslp) to carry the files themselves.");
+            }
+        }
         for (Map.Entry<String, String> entry
                 : DshPluginInstaller.readDependencies(instance.homeDirectory(), instance.profile())
                         .entrySet()) {
@@ -392,6 +404,18 @@ public final class DshPackForge {
     private static String publishedVersionOf(DshInstance instance, String name, String declared)
             throws DshException {
         Path profileDirectory = instance.homeDirectory().resolve("profiles").resolve(instance.profile());
+        // A plugin somebody is working on is not a plugin the registry could have published a source
+        // for: what the profile holds is a directory outside this instance, and the file this instance
+        // kept is not missing — it never existed. Saying "the registry does not publish that version"
+        // here would describe the other case, and describe it wrongly.
+        if (DshPluginBundle.namesADirectory(declared, profileDirectory)
+                || DshPluginBundle.isLinked(profileDirectory, name)) {
+            throw new DshException("The plugin " + name + " is one under development: the profile"
+                    + " installed it from a directory outside this instance (" + declared + "), so its"
+                    + " files belong to whoever is working on it and this format, which names published"
+                    + " sources, cannot carry it. Export a pack this launcher reads (.hdslp) to carry the"
+                    + " files themselves, or install a published version first.");
+        }
         DshPluginBundle.Payload payload = DshPluginBundle.locate(profileDirectory, name, declared);
         if (payload != null
                 && DshPackageRegistry.availability(name, payload.version())

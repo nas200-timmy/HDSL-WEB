@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { ApiError } from "../api";
 import { AuthScaffold } from "../components/AuthScaffold";
-import { login, useAppState } from "../store";
+import { login, toast, useAppState } from "../store";
 import { errMsg } from "../utils";
 import { ErrorIcon } from "../components/icons";
 
@@ -33,9 +33,17 @@ export function LoginPage() {
       setTarget((loc.state as { from?: string } | null)?.from ?? "/");
       await login(name.trim(), password);
     } catch (err) {
-      setError(
-        err instanceof ApiError && err.status === 401 ? "用户名或密码错误" : errMsg(err),
-      );
+      if (err instanceof ApiError && err.status === 429) {
+        // 真的被挡住时才说出来——此前不提示任何「还剩几次」：攻击者看不到的策略才是好策略，
+        // 而敲错几次的人也不该被告知一个还没花完的计数。弹一条（会消失）+ 留在表单里一条。
+        const throttled = "登录失败次数过多，请稍后再试（约 10 分钟后重置）";
+        setError(throttled);
+        toast("error", throttled);
+      } else {
+        setError(
+          err instanceof ApiError && err.status === 401 ? "用户名或密码错误" : errMsg(err),
+        );
+      }
     } finally {
       setBusy(false);
     }

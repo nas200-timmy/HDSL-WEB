@@ -136,6 +136,43 @@ class DshPackForgeTest {
         }
     }
 
+    @Test
+    void aPluginUnderDevelopmentIsNamedBeforeTheExportRefusesIt() throws Exception {
+        // What `dsh plugin add <a directory>` leaves behind: a `link:` entry pointing at somebody's
+        // working tree, outside the instance. This format names published sources, so it cannot carry
+        // such a plugin at all — and the two things that matter are that the refusal says which kind of
+        // plugin it is (not "the registry does not publish that version", which is the other case), and
+        // that the name comes out **before** it, while the person can still install a published version
+        // instead.
+        String id = "packforge-dev-" + Long.toHexString(System.nanoTime());
+        Path home = Files.createTempDirectory("packforge-dev-home");
+        DshInstance instance = DshInstanceManager.create(id, "0.1.6-alpha.2",
+                DshInstance.DEFAULT_PROFILE, home, DshHomeMode.ISOLATED, null,
+                java.util.List.of(), java.util.Map.of());
+        Path profile = instance.homeDirectory().resolve("profiles").resolve(instance.profile());
+        Files.createDirectories(profile);
+        Files.writeString(profile.resolve("package.json"), """
+                {"name":"dsh-profile-web","private":true,
+                 "dependencies":{"dsh-fork":"link:/somebody/working/tree"}}
+                """);
+
+        try {
+            java.util.List<String> said = new java.util.ArrayList<>();
+            DshException refused = org.junit.jupiter.api.Assertions.assertThrows(DshException.class,
+                    () -> DshPackForge.buildManifest(instance, DshPackForge.Options.of(instance),
+                            said::add));
+
+            assertTrue(refused.getMessage().contains("under development"),
+                    "the refusal says which kind of plugin this is: " + refused.getMessage());
+            assertTrue(refused.getMessage().contains("dsh-fork"),
+                    "and which one it is: " + refused.getMessage());
+            assertTrue(said.stream().anyMatch(line -> line.contains("dsh-fork")),
+                    "the name is said before the refusal, while the person can act on it: " + said);
+        } finally {
+            DshInstanceManager.delete(id);
+        }
+    }
+
     /// The profile's own files sit at the root, and everything else under `overrides/`.
     ///
     /// The two places are not a style: the installer copies the root files **before** it resolves

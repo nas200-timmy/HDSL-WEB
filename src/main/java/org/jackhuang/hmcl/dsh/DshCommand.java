@@ -26,6 +26,7 @@ import org.jetbrains.annotations.Nullable;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -52,12 +53,24 @@ public final class DshCommand {
     ///
     /// @param exitCode the process exit code
     /// @param output   every stdout and stderr line, in arrival order
-    public record Result(int exitCode, @org.jetbrains.annotations.Unmodifiable List<String> output) {
+    /// @param timedOut whether the command was stopped for outliving its deadline
+    public record Result(int exitCode, @org.jetbrains.annotations.Unmodifiable List<String> output,
+                         boolean timedOut) {
+
+        /// A result of a command that was left to run to its end.
+        ///
+        /// @param exitCode the process exit code
+        /// @param output   every stdout and stderr line, in arrival order
+        public Result(int exitCode, @org.jetbrains.annotations.Unmodifiable List<String> output) {
+            this(exitCode, output, false);
+        }
+
         /// Returns whether the command exited successfully.
         ///
-        /// @return whether the exit code is zero
+        /// @return whether the exit code is zero and the command was not stopped for outliving its
+        ///         deadline
         public boolean isSuccess() {
-            return exitCode == 0;
+            return exitCode == 0 && !timedOut;
         }
 
         /// Returns the captured output joined by newlines.
@@ -109,6 +122,27 @@ public final class DshCommand {
     public static Result run(List<String> command, @Nullable Path directory,
                              Map<String, String> environment, @Nullable Consumer<String> onLine)
             throws IOException, InterruptedException {
+        return run(command, null, directory, environment, onLine);
+    }
+
+    /// Runs a command for at most a deadline, and stops it when it outlives it.
+    ///
+    /// A command that answers is what most of these are, and one that does not answer has no bound
+    /// of its own: a program waiting for something that is not coming holds the thread that asked
+    /// for it for as long as it likes. A deadline is what turns that into an answer — a result that
+    /// says it ran out of time, rather than a call that never comes back.
+    ///
+    /// @param command     the program and its arguments
+    /// @param timeout     how long to wait, or `null` to wait for as long as it takes
+    /// @param directory   the working directory, or `null` for the current one
+    /// @param environment extra environment variables
+    /// @param onLine      a consumer notified of every output line, or `null`
+    /// @return the command result, with `timedOut` set when the deadline stopped it
+    /// @throws IOException          when the process cannot be started
+    /// @throws InterruptedException when the calling thread is interrupted while waiting
+    public static Result run(List<String> command, @Nullable Duration timeout, @Nullable Path directory,
+                             Map<String, String> environment, @Nullable Consumer<String> onLine)
+            throws IOException, InterruptedException {
         // Every npm, node and pnpm this launcher runs lands here, which is why the
         // program name is completed by platform in this one place: on Windows those
         // tools are `npm.cmd` / `node.exe`, and the bare names are either not found at
@@ -153,7 +187,20 @@ public final class DshCommand {
         });
 
         try {
-            int exitCode = running.waitFor();
+            int exitCode;
+            if (timeout == null) {
+                exitCode = running.waitFor();
+            } else if (running.waitFor(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                exitCode = running.exitValue();
+            } else {
+                // Killed rather than asked to stop. What a command that outlived its deadline is
+                // doing is waiting for something that is not coming, and a request to stop is one it
+                // can outlive just as well — so the deadline is answered with the kill, and the
+                // result says why rather than pretending the program exited.
+                killTree(running);
+                process.destroyRelatedThreads();
+                return new Result(0, List.of(), true);
+            }
             process.destroyRelatedThreads();
             return new Result(exitCode, List.copyOf(output));
         } catch (InterruptedException e) {
@@ -188,6 +235,23 @@ public final class DshCommand {
         } catch (InterruptedException e) {
             process.descendants().forEach(ProcessHandle::destroyForcibly);
             process.destroyForcibly();
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /// Kills a program and everything it started, without asking first.
+    ///
+    /// The difference from [stopTree] is the whole point of it: that one asks, and a program that
+    /// has stopped listening is not stopped by being asked. A deadline that has already passed is not
+    /// the moment to start a conversation.
+    ///
+    /// @param process the program to kill
+    private static void killTree(Process process) {
+        process.descendants().forEach(ProcessHandle::destroyForcibly);
+        process.destroyForcibly();
+        try {
+            process.waitFor(1, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
     }

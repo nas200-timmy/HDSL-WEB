@@ -1,6 +1,16 @@
 <!doctype html>
 <html lang="zh-CN">
   <head>
+    <!-- 开发服务器（vite）不像打包后的服务端那样注入 <base href> 与 window.__HDSL_BASE__：
+        SPA 里有相对路径的资源与 API（`assets-img/…`、`fetch("api/…")`），没有 <base> 时它们
+        按当前地址解析——两级深链（/instances/<id>）会把 `api/…` 变成 `/instances/api/…`，落到
+        SPA 兜底页（200 text/html），body 解析不成 JSON，读登录态拿到 null，整页被错误边界接住
+        （「无法连接服务器」）。这里给开发环境补一条根挂载的 <base>。
+
+        打包时服务端仍会注入自己的那条（插在 <head> 之后），而**文档里排在前面的 <base> 生效**，
+        所以子路径挂载（HDSL_BASE_PATH=/panel）用的仍是服务端注入的那条，这一条不会破坏它。
+        window.__HDSL_BASE__ 不在这里补：子路径挂载靠服务端注入的值，开发环境缺省即为根挂载。 -->
+    <base href="/" />
     <meta charset="UTF-8" />
     <!-- viewport-fit=cover：让 env(safe-area-inset-*) 在刘海屏/手势条上生效（见 styles/mobile.css） -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />

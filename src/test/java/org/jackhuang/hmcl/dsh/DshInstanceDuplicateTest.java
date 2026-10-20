@@ -128,6 +128,34 @@ class DshInstanceDuplicateTest {
                 "and nothing was written over it");
     }
 
+    @Test
+    void copyingAnInstanceOntoItselfIsRefusedAndLeavesItAlone() throws Exception {
+        // The name of the copy is the name of the source, so the copy is installed over the original:
+        // `find(normalized)` answers with the source itself, and every step after that treats the
+        // original as this call's own earlier attempt — including the cleanup a failed install runs,
+        // which is what would take the source's files away. Refused before any of that is decided.
+        DshInstance source = makeInstance(SOURCE_ID);
+        Path entry = source.dshEntryPoint();
+        Files.createDirectories(entry.getParent());
+        Files.writeString(entry, "// the harness that was already there\n");
+        Path document = Files.writeString(source.instanceDirectory().resolve("notes.txt"),
+                "a file that belongs to the source");
+
+        DshException refused = assertThrows(DshException.class,
+                () -> DshInstanceManager.duplicate(SOURCE_ID, SOURCE_ID, null));
+
+        // The refusal has to be **this** refusal. Without the guard the call still fails here — there is
+        // no package manager to install the copy with — so the assertions below hold either way and it is
+        // this one that says which failure happened. What follows pins what must not be true whatever
+        // the refusal was: the source is still where it was, with what was in it.
+        assertTrue(refused.getMessage().contains("onto itself"),
+                "a copy of an instance onto itself is refused as that: " + refused.getMessage());
+        assertTrue(Files.isRegularFile(document), "the source is left where it is, with what is in it");
+        assertEquals("// the harness that was already there\n", Files.readString(entry),
+                "and its harness is untouched");
+        assertTrue(DshInstanceManager.find(SOURCE_ID) != null, "the source is still an instance");
+    }
+
     /// Creates an instance whose home the tests can fill.
     ///
     /// @param id the instance id

@@ -13,3 +13,10 @@ export const HOME_MODES: HomeModeOption[] = [
 
 export const MAX_LOG_LINES = 500;
 export const LOG_TAIL = 200;
+
+/// dsh 版本对应的上游发布页。
+///
+/// 与桌面版同一个形状（`DownloadPage.java` 的 `RELEASES`，按钮文案「打开 release 页面」）：
+/// 标签是 `dsh-v<版本>`。注意列在这里的版本来自 npm，上游若只发了 npm 包而没有打 tag，这个
+/// 地址会落到 GitHub 的 404 页——要改成 npm 包页面的话，改这一处即可。
+export const DSH_RELEASES = "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v";

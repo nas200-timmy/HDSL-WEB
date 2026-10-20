@@ -29,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// Verifies that renaming an instance takes everything named after it along.
@@ -96,6 +97,37 @@ class DshInstanceRenameTest {
             DshInstanceManager.delete(id);
         } catch (Exception ignored) {
             // There was nothing left to remove.
+        }
+    }
+
+    @Test
+    void renamingNeverDeletesWhateverAlreadyHoldsTheNewName() throws Exception {
+        // What resolves to the new name is not necessarily an instance's directory: it can be what a
+        // deleted instance left behind, or a folder somebody put there. Renaming used to empty the
+        // destination first, so that directory and everything in it was deleted with nothing said —
+        // the row changed name and the files that were in the way were gone.
+        String id = "renaming-over-" + Long.toHexString(System.nanoTime());
+        String newId = "occupied-name-" + Long.toHexString(System.nanoTime());
+        DshInstanceManager.create(id, "1.0.0", DshInstance.DEFAULT_PROFILE,
+                Path.of(System.getProperty("java.io.tmpdir")), DshHomeMode.ISOLATED, null, List.of(), Map.of());
+        Path occupied = Files.createDirectories(DshPaths.instanceDirectory(newId));
+        Path document = Files.writeString(occupied.resolve("notes.txt"), "a file that was already there");
+
+        try {
+            DshException refused = assertThrows(DshException.class,
+                    () -> DshInstanceManager.rename(id, newId));
+
+            assertTrue(refused.getMessage().contains(occupied.toString()),
+                    "the refusal names the directory that is in the way: " + refused.getMessage());
+            assertTrue(Files.isDirectory(occupied), "the directory that held the name is left where it is");
+            assertTrue(Files.isRegularFile(document), "and so is everything inside it");
+            assertTrue(Files.isDirectory(DshPaths.instanceDirectory(id)),
+                    "the instance keeps its own directory, because the rename did not happen");
+            assertEquals(DshPaths.instanceDirectory(id),
+                    DshInstanceManager.find(id).instanceDirectory());
+        } finally {
+            deleteQuietly(id);
+            FileUtils.deleteDirectoryQuietly(occupied);
         }
     }
 

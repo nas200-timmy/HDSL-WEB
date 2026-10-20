@@ -17,15 +17,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// What a pack does with a plugin an instance installed from a file.
 ///
 /// A profile records a local installation as the path it was given, and a path on one machine is not
 /// something another machine can install from. A pack therefore carries the files — the tarball the
-/// instance keeps, or the directory the profile installed from — and puts them back into the next
-/// instance's own plugin directory, where they are a local installation like any other. These pin the
-/// two halves of that: finding the files, and writing them out again.
+/// instance keeps — and puts them back into the next instance's own plugin directory, where they are
+/// a local installation like any other. A plugin installed from a **directory** is the one that does
+/// not travel: that is somebody working on it, and the profile points at their directory rather than
+/// holding a copy. These pin the two halves of that: finding the files, and writing them out again.
 class DshPluginBundleTest {
 
     @Test
@@ -49,7 +51,12 @@ class DshPluginBundleTest {
     }
 
     @Test
-    void aPluginInstalledFromADirectoryTravelsAsThatDirectory(@TempDir Path directory) throws Exception {
+    void aPluginInstalledFromADirectoryIsNotCarried(@TempDir Path directory) throws Exception {
+        // `link:` installs a plugin somebody is working on: the profile points at their directory
+        // rather than holding a copy of it, so a pack has none of the files and leaves the plugin
+        // out. That the entry in `node_modules` happens to be a real directory does not change it —
+        // the answer is read off the specification, which is the same whichever way the package
+        // manager arranged what is behind it.
         Path profile = directory.resolve("profiles/web");
         Path installed = profile.resolve("node_modules/dsh-fork");
         Files.createDirectories(installed.resolve("lib"));
@@ -57,17 +64,147 @@ class DshPluginBundleTest {
                 {"name":"dsh-fork","version":"2.1.0"}
                 """);
         Files.writeString(installed.resolve("lib/index.js"), "export const x = 1;\n");
-        // A dependency tree is not part of the plugin: the other machine resolves it from the
-        // registry, and carrying it would put a second copy of every dependency in the pack.
-        Files.createDirectories(installed.resolve("node_modules/left-pad"));
-        Files.writeString(installed.resolve("node_modules/left-pad/index.js"), "module.exports = 1;\n");
 
-        DshPluginBundle.Payload payload = DshPluginBundle.locate(profile, "dsh-fork", "link:../dsh-fork");
+        assertNull(DshPluginBundle.locate(profile, "dsh-fork", "link:../dsh-fork"),
+                "a link names a directory, and a pack does not carry one");
+    }
 
-        assertNotNull(payload, "a link is a directory, and the profile's own copy of it is what travels");
-        assertEquals("2.1.0", payload.version());
-        assertNull(payload.archive());
-        assertEquals(installed, payload.directory());
+    @Test
+    void aPluginLinkedFromOutsideTheInstanceDoesNotTravel(@TempDir Path directory) throws Exception {
+        // What a `link:` install leaves in `node_modules` is a link rather than a copy — a symbolic
+        // link, or the junction Windows makes instead of one — so what is behind it belongs to
+        // whoever is working on the plugin and not to the instance. Walking a link finds the link
+        // itself and nothing below it, so a pack that read through one would carry a package with
+        // no code in it. The files are not the instance's to carry, and neither is the promise.
+        Path working = directory.resolve("dsh-fork");
+        Files.createDirectories(working.resolve("lib"));
+        Files.writeString(working.resolve("package.json"), """
+                {"name":"dsh-fork","version":"2.1.0"}
+                """);
+        Files.writeString(working.resolve("lib/index.js"), "export const x = 1;\n");
+
+        Path profile = directory.resolve("profiles/web");
+        Path installed = profile.resolve("node_modules/dsh-fork");
+        Files.createDirectories(installed.getParent());
+        try {
+            Files.createSymbolicLink(installed, working);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            // A filesystem without links cannot test this part.
+            return;
+        }
+
+        assertTrue(DshPluginBundle.isLinked(profile, "dsh-fork"),
+                "the profile holds a link to somebody's directory");
+        assertNull(DshPluginBundle.locate(profile, "dsh-fork", "link:" + working),
+                "there are no files of the instance's own to carry");
+    }
+
+    @Test
+    void aDirectoryInstallIsAPluginUnderDevelopment(@TempDir Path directory) throws Exception {
+        // `link:` and a directory `file:` are the same install: a plugin somebody is working on,
+        // whose files stay in their directory. The profile points at it rather than holding a copy,
+        // so there is nothing of the instance's own to carry — and a pack leaves it out.
+        //
+        // What the package manager did about the directory is its business, and this fixture is why
+        // the answer is read off the specification instead: pnpm keeps such a dependency behind a
+        // link that resolves into the profile's own store, which `isLinked` rightly calls the
+        // profile's own copy. Left at that, `locate` would find a package with a version in it and
+        // carry the store's copy of somebody's working directory.
+        Path working = directory.resolve("dsh-fork");
+        Files.createDirectories(working.resolve("lib"));
+        Files.writeString(working.resolve("package.json"), """
+                {"name":"dsh-fork","version":"2.1.0"}
+                """);
+        Files.writeString(working.resolve("lib/index.js"), "export const x = 1;\n");
+
+        Path profile = directory.resolve("profiles/web");
+        Path store = profile.resolve("node_modules/.pnpm/dsh-fork@2.1.0/node_modules/dsh-fork");
+        Files.createDirectories(store.resolve("lib"));
+        Files.writeString(store.resolve("package.json"), """
+                {"name":"dsh-fork","version":"2.1.0"}
+                """);
+        Files.writeString(store.resolve("lib/index.js"), "export const x = 1;\n");
+        Path installed = profile.resolve("node_modules/dsh-fork");
+        Files.createDirectories(installed.getParent());
+        try {
+            Files.createSymbolicLink(installed, store);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            // A filesystem without links cannot test this part.
+            return;
+        }
+
+        assertTrue(DshPluginBundle.namesADirectory("file:" + working, profile),
+                "a file: that names a directory is the same install as a link:");
+        assertNull(DshPluginBundle.locate(profile, "dsh-fork", "file:" + working),
+                "and the pack does not carry it");
+    }
+
+    @Test
+    void aPluginBehindThePackageManagersOwnLinkIsStillCarried(@TempDir Path directory) throws Exception {
+        // A package manager's own node_modules is made of links: pnpm resolves a dependency into
+        // `node_modules/.pnpm` inside the profile. That entry is a link, but the copy is the
+        // profile's own — and a walk does not descend into the path it starts at when that path is
+        // a link, so the copy has to be read where it actually is. Without that, this plugin would
+        // travel as the one file that is read without walking: its `package.json`.
+        Path profile = directory.resolve("profiles/web");
+        Path store = profile.resolve("node_modules/.pnpm/dsh-fork@2.1.0/node_modules/dsh-fork");
+        Files.createDirectories(store.resolve("lib"));
+        Files.writeString(store.resolve("package.json"), """
+                {"name":"dsh-fork","version":"2.1.0"}
+                """);
+        Files.writeString(store.resolve("lib/index.js"), "export const x = 1;\n");
+        Path installed = profile.resolve("node_modules/dsh-fork");
+        Files.createDirectories(installed.getParent());
+        try {
+            Files.createSymbolicLink(installed, store);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            // A filesystem without links cannot test this part.
+            return;
+        }
+
+        assertFalse(DshPluginBundle.isLinked(profile, "dsh-fork"),
+                "an entry resolving inside the profile is the profile's own copy");
+        DshPluginBundle.Payload payload = DshPluginBundle.locate(profile, "dsh-fork",
+                "file:" + directory.resolve("dsh-fork-2.1.0.tgz"));
+        assertNotNull(payload,
+                "the tarball the instance installed from is gone, so the profile's copy travels");
+        assertEquals(store, payload.directory());
+    }
+
+    /// A junction is what the package manager makes on Windows, where a symbolic link needs a
+    /// privilege it may not have. It is a link to every other program on the machine and a plain
+    /// directory to Java, so a launcher that asked only about symbolic links would read straight
+    /// through it and pack somebody's working tree.
+    @Test
+    void aWindowsJunctionIsALinkToo(@TempDir Path directory) throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                        == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS,
+                "junctions are a Windows feature");
+
+        Path working = directory.resolve("dsh-fork");
+        Files.createDirectories(working.resolve("lib"));
+        Files.writeString(working.resolve("package.json"), """
+                {"name":"dsh-fork","version":"2.1.0"}
+                """);
+        Files.writeString(working.resolve("lib/index.js"), "export const x = 1;\n");
+
+        Path profile = directory.resolve("profiles/web");
+        Path installed = profile.resolve("node_modules/dsh-fork");
+        Files.createDirectories(installed.getParent());
+        Process link = new ProcessBuilder("cmd.exe", "/c", "mklink", "/J",
+                installed.toString(), working.toString()).redirectErrorStream(true).start();
+        try (var reader = link.inputReader()) {
+            while (reader.readLine() != null) {
+                // Drain, so the process is not left blocked on a full pipe.
+            }
+        }
+        org.junit.jupiter.api.Assumptions.assumeTrue(link.waitFor() == 0,
+                "this machine will not make a junction");
+
+        assertTrue(DshPluginBundle.isLinked(profile, "dsh-fork"), "a junction is a link too");
+        assertNull(DshPluginBundle.locate(profile, "dsh-fork", "link:" + working),
+                "and a pack does not read through one");
     }
 
     @Test
@@ -166,6 +303,101 @@ class DshPluginBundleTest {
                 "a path from another machine would make every later operation on the profile fail");
         assertTrue(DshModpacks.listsBootable(pack, json(dependencies)).isEmpty(),
                 "and a bundle the profile does not have stops the instance from starting");
+    }
+
+    @Test
+    void aMemberThatWouldLandOutsideThePluginDirectoryIsRefused(@TempDir Path directory) throws Exception {
+        // A pack is an archive somebody else made, and a payload's name is a path. What the name is
+        // checked against is the package it belongs to — but a name that starts with the right
+        // package and then steps out of the plugin directory used to be written wherever it pointed:
+        // over an instance, over its profile, over anything the user owns. Now the step is refused.
+        //
+        // The member comes **first** in the archive, and that is what makes this test worth having:
+        // `release` answers a payload `.tgz` the moment it reads it — it returns that file — so an
+        // archive that carried its payload first never reaches the member at all. That is the shape
+        // upstream's own case for this fix has, and it is why that one passes with or without the
+        // check; read first, the member is judged.
+        Path plugins = directory.resolve("instance/plugins");
+        Path pack = directory.resolve("pack-escape-first.hdslp");
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(pack))) {
+            zip.putNextEntry(new ZipEntry("plugins/dsh-secret-1.0.0/../../PWNED.txt"));
+            zip.write("planted".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("plugins/dsh-secret-1.0.0/lib/index.js"));
+            zip.write("export const x = 1;\n".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+
+        DshException refused = assertThrows(DshException.class,
+                () -> DshPluginBundle.release(pack, plugins, "dsh-secret", "1.0.0"),
+                "a member that names a path out of the plugin directory is refused, not written");
+
+        // Refused **by the check**, which is what this asserts and what the platform-independent half of
+        // this defect is: before it, whether the member landed outside depended on the platform — on a
+        // POSIX filesystem the write happened to fail with `NoSuchFileException` for this shape, which
+        // is a refusal that says nothing and would not have survived a path whose parents did exist. The
+        // cause naming the entry is the fix; the `assertFalse`s below are what must always hold.
+        assertNotNull(refused.getCause(), "a refusal says why");
+        assertTrue(refused.getCause().getMessage().contains("write outside the plugin directory"),
+                "the refusal names what was refused: " + refused.getCause().getMessage());
+
+        assertFalse(Files.exists(directory.resolve("instance/PWNED.txt")),
+                "the member was written outside the plugin directory");
+        assertFalse(Files.exists(directory.resolve("PWNED.txt")),
+                "the member was written outside the instance");
+    }
+
+    @Test
+    void aMemberThatSpellsTheStepOutWithBackslashesNeverLeavesThePluginDirectory(@TempDir Path directory)
+            throws Exception {
+        // The other spelling of the same step out. `..\..\PWNED.txt` is one file name to POSIX and
+        // three directories to Windows, where the separator is what turns it into a path — so here the
+        // member is written inside the plugin directory under that odd name, and on Windows the same
+        // archive is refused outright. What holds on either platform is the assertion below, and that
+        // is what is pinned; which of the two happens is the platform's business.
+        Path plugins = directory.resolve("instance/plugins");
+        Path pack = directory.resolve("pack-escape-backslashes.hdslp");
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(pack))) {
+            zip.putNextEntry(new ZipEntry("plugins/dsh-secret-1.0.0/..\\..\\PWNED.txt"));
+            zip.write("planted".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+
+        try {
+            DshPluginBundle.release(pack, plugins, "dsh-secret", "1.0.0");
+        } catch (DshException refused) {
+            // Windows reads the name as three directories and the step out is refused there.
+        }
+
+        assertFalse(Files.exists(directory.resolve("instance/PWNED.txt")),
+                "the member was written outside the plugin directory");
+        assertFalse(Files.exists(directory.resolve("PWNED.txt")),
+                "the member was written outside the instance");
+    }
+
+    @Test
+    void aMemberInsideThePluginDirectoryIsStillUnpacked(@TempDir Path directory) throws Exception {
+        // The other half of the check above: what stays inside is put back as before, so the refusal
+        // is about leaving the directory rather than about carrying a path at all.
+        //
+        // Only the member is in this archive. A payload recorded as `plugins/<name>-<version>.tgz` is
+        // the other shape a pack carries, and it is answered the moment it is read — `release` returns
+        // that file — so an archive holding both would be testing the first entry rather than this one.
+        Path pack = directory.resolve("pack.hdslp");
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(pack))) {
+            zip.putNextEntry(new ZipEntry("plugins/dsh-secret-1.0.0/lib/index.js"));
+            zip.write("export const x = 1;\n".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+
+        Path plugins = directory.resolve("instance/plugins");
+        Path released = DshPluginBundle.release(pack, plugins, "dsh-secret", "1.0.0");
+
+        assertEquals(plugins.toAbsolutePath().normalize().resolve("dsh-secret-1.0.0"), released,
+                "a payload carried as a directory comes back as that directory");
+        assertEquals("export const x = 1;\n",
+                Files.readString(plugins.resolve("dsh-secret-1.0.0/lib/index.js")),
+                "and its members are unpacked inside it");
     }
 
     @Test

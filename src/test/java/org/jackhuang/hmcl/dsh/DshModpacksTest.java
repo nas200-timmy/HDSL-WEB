@@ -191,6 +191,136 @@ class DshModpacksTest {
     }
 
     @Test
+    void aPluginSomebodyIsWorkingOnIsNamedBeforeTheExportAndNotCarriedByIt() throws Exception {
+        // A `link:` install is a link in the profile's `node_modules`, and what is behind it is
+        // somebody's working tree rather than a copy the instance owns. The pack does not carry it,
+        // so the interface has to say which plugins those are while there is still time to do
+        // something about it — and the pack must not hold a package with no code in it, which is
+        // what reading through the link would produce.
+        DshInstance instance = makeInstance(SOURCE_ID);
+        Path working = Files.createTempDirectory("dsh-fork");
+        Files.createDirectories(working.resolve("lib"));
+        Files.writeString(working.resolve("package.json"), """
+                {"name":"dsh-fork","version":"2.1.0"}
+                """);
+        Files.writeString(working.resolve("lib/index.js"), "export const x = 1;\n");
+
+        writeProfile(instance, """
+                {
+                  "name": "dsh-profile-web",
+                  "private": true,
+                  "dependencies": {
+                    "dshmarket": "1.52.0",
+                    "dsh-fork": "link:%s"
+                  },
+                  "dsh": {"profile": {"bundles": ["dsh-fork", "dshmarket"]}}
+                }
+                """.formatted(working));
+
+        Path installed = profileDirectory(instance).resolve("node_modules/dsh-fork");
+        Files.createDirectories(installed.getParent());
+        try {
+            Files.createSymbolicLink(installed, working);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            // A filesystem without links cannot test this part.
+            return;
+        }
+
+        assertEquals(List.of(new DshModpacks.LocalPlugin("dsh-fork", true)),
+                DshModpacks.localPluginsOf(instance),
+                "the interface is told which plugins a pack cannot carry, before the export");
+
+        Path pack = Files.createTempFile("modpack", ".zip");
+        DshModpacks.export(instance, pack, null);
+        DshModpacks.Manifest manifest = DshModpacks.readManifest(pack);
+
+        assertEquals(List.of("dshmarket@1.52.0"), manifest.installSpecs(),
+                "only what can be fetched is asked for");
+        assertEquals(List.of("dsh-fork"),
+                manifest.localPlugins().stream().map(DshModpacks.Plugin::name).toList(),
+                "the plugin is recorded, so the loader can say it cannot be restored");
+        assertFalse(DshPluginBundle.carried(pack).stream().anyMatch(name -> name.contains("dsh-fork")),
+                "and no part of somebody's working tree travels: " + DshPluginBundle.carried(pack));
+        Files.deleteIfExists(pack);
+    }
+
+    @Test
+    void aPluginInstalledFromAFileIsNamedWithoutBeingOneThePackCannotCarry() throws Exception {
+        // What the export asks about first is the plugins that came from this machine rather than
+        // from a registry. A packed plugin the launcher copied into the instance travels as the
+        // file it is; a directory the profile only links to does not travel at all. Telling them
+        // apart is the difference between a caution and a promise the pack will not keep.
+        DshInstance instance = makeInstance(SOURCE_ID);
+        writeProfile(instance, """
+                {
+                  "name": "dsh-profile-web",
+                  "private": true,
+                  "dependencies": {
+                    "dshmarket": "1.52.0",
+                    "dsh-hello-local": "file:/tmp/instance/plugins/dsh-hello-local-1.0.0.tgz"
+                  },
+                  "dsh": {"profile": {"bundles": ["dsh-hello-local", "dshmarket"]}}
+                }
+                """);
+
+        assertEquals(List.of(new DshModpacks.LocalPlugin("dsh-hello-local", false)),
+                DshModpacks.localPluginsOf(instance),
+                "a file the instance keeps is local, and is not a link out of the profile");
+    }
+
+    @Test
+    void aPluginInstalledFromADirectoryIsNamedAsOneThePackCannotCarry() throws Exception {
+        // The half a pack cannot carry is read off the specification, not off the link: a `file:`
+        // that names a directory is somebody's working tree even when the package manager left the
+        // profile's own copy of it behind. pnpm does leave one, and it resolves inside the profile —
+        // so asking about the link would call the profile its owner and promise to carry it.
+        //
+        // This test is PORT's own: UPSTREAM's ad517a1 changed the same computation, but nothing in
+        // its suite fails if that half is left as it was, and the promise it protects is the one the
+        // interface shows the user before an export.
+        DshInstance instance = makeInstance(SOURCE_ID);
+        Path working = Files.createTempDirectory("dsh-fork");
+        Files.createDirectories(working.resolve("lib"));
+        Files.writeString(working.resolve("package.json"), """
+                {"name":"dsh-fork","version":"2.1.0"}
+                """);
+        Files.writeString(working.resolve("lib/index.js"), "export const x = 1;\n");
+
+        writeProfile(instance, """
+                {
+                  "name": "dsh-profile-web",
+                  "private": true,
+                  "dependencies": {
+                    "dshmarket": "1.52.0",
+                    "dsh-fork": "file:%s"
+                  },
+                  "dsh": {"profile": {"bundles": ["dsh-fork", "dshmarket"]}}
+                }
+                """.formatted(working));
+
+        Path store = profileDirectory(instance).resolve(
+                "node_modules/.pnpm/dsh-fork@2.1.0/node_modules/dsh-fork");
+        Files.createDirectories(store);
+        Files.writeString(store.resolve("package.json"), """
+                {"name":"dsh-fork","version":"2.1.0"}
+                """);
+        Path installed = profileDirectory(instance).resolve("node_modules/dsh-fork");
+        Files.createDirectories(installed.getParent());
+        try {
+            Files.createSymbolicLink(installed, store);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            // A filesystem without links cannot test this part.
+            return;
+        }
+        assertFalse(DshPluginBundle.isLinked(profileDirectory(instance), "dsh-fork"),
+                "the package manager's own copy resolves inside the profile, so the profile owns it");
+
+        assertEquals(List.of(new DshModpacks.LocalPlugin("dsh-fork", true)),
+                DshModpacks.localPluginsOf(instance),
+                "a directory install is named as one a pack does not carry");
+    }
+
+    @Test
     void somethingThatIsNotAPackIsRefused() throws Exception {
         Path notAPack = Files.createTempFile("modpack", ".zip");
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(notAPack))) {
