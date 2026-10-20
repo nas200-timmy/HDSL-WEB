@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMobileLayout } from "../hooks";
 import { I18N } from "../i18n";
@@ -166,8 +166,62 @@ export function SubSideBar({
   testId?: string;
 }) {
   const mobile = useMobileLayout();
+  const stripRef = useRef<HTMLElement | null>(null);
+
+  // 窄屏的标签条是横向滚动的。触摸有浏览器原生滚动，鼠标没有：滚轮是纵向的，拖动又不会平移
+  // 一个 div——所以在桌面窄窗（包括 DevTools 的设备模拟）里看着就是「滑不动」。这里只对鼠标
+  // 接管，而且只在窄屏：触摸交回浏览器自己（自己接管会和惯性滚动、和页面的纵向滚动打架），
+  // 桌面宽屏根本用不到这条（那会儿它是竖的侧栏）。
+  //
+  // 拖完那一下不能顺带把条目点开——但也不能把「手抖了几像素的正常点击」一起吃掉，所以判据是
+  // 「真的滚动了」，不是「按过鼠标」。
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip || !mobile) return;
+    let startX = 0;
+    let startLeft = 0;
+    let dragging = false;
+    let moved = false;
+
+    const down = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse" || e.button !== 0) return;
+      dragging = true;
+      moved = false;
+      startX = e.clientX;
+      startLeft = strip.scrollLeft;
+    };
+    const move = (e: PointerEvent) => {
+      if (!dragging) return;
+      const dx = e.clientX - startX;
+      if (Math.abs(dx) > 3) moved = true;
+      strip.scrollLeft = startLeft - dx;
+    };
+    const up = () => {
+      dragging = false;
+    };
+    const swallowClick = (e: MouseEvent) => {
+      if (!moved || strip.scrollLeft === startLeft) return;
+      moved = false;
+      e.stopPropagation();
+      e.preventDefault();
+    };
+
+    strip.addEventListener("pointerdown", down);
+    strip.addEventListener("click", swallowClick, true);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    return () => {
+      strip.removeEventListener("pointerdown", down);
+      strip.removeEventListener("click", swallowClick, true);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+  }, [mobile]);
+
   return (
-    <nav className="sidebar-sub" data-testid={testId}>
+    <nav className="sidebar-sub" data-testid={testId} ref={stripRef}>
       {sections.map((sec, i) => (
         <div key={i}>
           {sec.title != null && <div className="side-category">{sec.title}</div>}
