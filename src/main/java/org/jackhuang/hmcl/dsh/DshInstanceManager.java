@@ -308,6 +308,13 @@ public final class DshInstanceManager {
         if (exists(normalized)) {
             throw new DshException("Instance " + normalized + " already exists");
         }
+        if (DshProcessManager.stateOf(id) != DshProcessManager.LaunchState.STOPPED) {
+            // Refused before anything moves. The rename moves the directory the running process has
+            // open and writes into — its own plugins, its own logs, the plugins pnpm is installing
+            // right now — so a rename during it would not be a rename, it would be pulling the ground
+            // out from under a process that has no idea its files went somewhere else.
+            throw new DshException("Cannot rename instance \"" + id + "\" while it is running or stopping");
+        }
 
         DshInstance renamed = existing.withId(normalized);
         Path oldDirectory = DshPaths.instanceDirectory(id);
