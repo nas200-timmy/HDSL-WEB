@@ -25,12 +25,15 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
+import org.jackhuang.hmcl.web.auth.LoginThrottle;
 import org.jackhuang.hmcl.web.auth.UserStore;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.LongSupplier;
@@ -57,6 +60,10 @@ public final class ApiServlet extends HttpServlet {
 
     private final AuthService authService;
     private final AuthFilter authFilter;
+
+    /// 每个来源地址的登录预算（见 [LoginThrottle]）。挂在 servlet 上而不是静态上：一个进程一份，
+    /// 测试各自起自己的服务，也就各自有一份记录，互不干扰。
+    private final LoginThrottle loginThrottle = new LoginThrottle();
     private final boolean authDisabled;
     private final String version;
     private final LongSupplier uptimeStartMillis;
@@ -117,13 +124,42 @@ public final class ApiServlet extends HttpServlet {
             return;
         }
 
+        String address = request.getRemoteAddr() == null ? "unknown" : request.getRemoteAddr();
+        // 拒绝发生在核对口令之前：核对口令本身就是攻击者想花掉的那笔开销（PBKDF2 二十一万次），
+        // 而且被拒绝的地址不该还能让服务端为它算一次。
+        if (loginThrottle.isBlocked(address, Instant.now())) {
+            refuseTooManyAttempts(response, LoginThrottle.BLOCK);
+            return;
+        }
+
         Optional<String> token = authService.login(username, password);
         if (token.isEmpty()) {
+            Duration refusedFor = loginThrottle.recordFailure(address, Instant.now());
+            if (!refusedFor.isZero()) {
+                // 就是这一次把预算花完的，所以这一次就告诉对方；此前十五次什么都不说。
+                refuseTooManyAttempts(response, refusedFor);
+                return;
+            }
             Json.error(response, HttpServletResponse.SC_UNAUTHORIZED, "invalid username or password");
             return;
         }
+
+        // 口令是对的，此前那些失败也就不再算数——这个记录问的正是这件事。
+        loginThrottle.clear(address);
         response.addCookie(authFilter.sessionCookie(token.get()));
         Json.write(response, new LoginBody(true, username));
+    }
+
+    /// 拒绝一次登录，并说明多久之后可以再来。
+    ///
+    /// @param response   the response
+    /// @param refusedFor how long the refusal lasts
+    /// @throws IOException when the response cannot be written
+    private static void refuseTooManyAttempts(HttpServletResponse response, Duration refusedFor) throws IOException {
+        response.setHeader("Retry-After", Long.toString(Math.max(1, refusedFor.toSeconds())));
+        // 429 Too Many Requests：jakarta 的 HttpServletResponse 没有这个常量（只到 4xx 的一部分），
+        // 所以这里直接写数字。
+        Json.error(response, 429, "too many failed sign-in attempts; try again later");
     }
 
     private void status(HttpServletResponse response) throws IOException {
