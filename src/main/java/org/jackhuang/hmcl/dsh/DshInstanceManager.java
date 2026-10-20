@@ -404,6 +404,13 @@ public final class DshInstanceManager {
         if (normalized.isEmpty()) {
             throw new DshException("An instance needs a name");
         }
+        if (normalized.equals(id)) {
+            // The copy would be installed over its own source: the id is the source's, so `find` below
+            // answers with the source itself and every later step treats the original as the half-made
+            // copy — including the cleanup a failed install runs, which is what takes the source's files
+            // away. Refused before any of that is decided.
+            throw new DshException("Cannot duplicate instance \"" + id + "\" onto itself");
+        }
 
         DshInstance copy = find(normalized);
         if (copy == null) {
