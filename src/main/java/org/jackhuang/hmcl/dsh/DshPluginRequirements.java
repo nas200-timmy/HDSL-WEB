@@ -22,7 +22,7 @@ import com.google.gson.JsonObject;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.ArrayList;
+import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
 
@@ -46,6 +46,13 @@ public final class DshPluginRequirements {
     /// The prefix the harness's own packages share.
     private static final String CORE_PREFIX = "@deepseek-ai/";
 
+    /// The harness's own package: the name plugins declare most, and the one every range is
+    /// read against.
+    private static final String HARNESS = CORE_PREFIX + "dsh";
+
+    /// The ranges that mean "whatever runtime this is installed into".
+    private static final List<String> WORKSPACE = List.of("workspace:^", "workspace:~", "workspace:*");
+
     private DshPluginRequirements() {
     }
 
@@ -64,8 +71,10 @@ public final class DshPluginRequirements {
         }
 
         Map<String, String> versions = new java.util.LinkedHashMap<>();
-        JsonObject dependencies = DshPackageRegistry.dependencies(
-                "@deepseek-ai/dsh", version);
+        // The harness's own package does not depend on itself, so it is never among the
+        // dependencies below — and it is the name plugins declare most.
+        versions.put(HARNESS, version);
+        JsonObject dependencies = DshPackageRegistry.dependencies(HARNESS, version);
         for (Map.Entry<String, JsonElement> entry : dependencies.entrySet()) {
             if (entry.getKey().startsWith(CORE_PREFIX) && entry.getValue().isJsonPrimitive()) {
                 versions.put(entry.getKey(), entry.getValue().getAsString());
@@ -97,30 +106,48 @@ public final class DshPluginRequirements {
             return cached;
         }
 
-        Map<String, String> versions = new java.util.LinkedHashMap<>();
+        Map<String, String> versions = Map.of();
         try {
-            java.nio.file.Path manifest = instance.dshDirectory()
+            versions = readCoreVersions(instance.dshDirectory()
                     .resolve("node_modules").resolve("@deepseek-ai").resolve("dsh")
-                    .resolve("package.json");
-            if (java.nio.file.Files.isRegularFile(manifest)) {
-                JsonObject root = org.jackhuang.hmcl.util.gson.JsonUtils
-                        .fromJsonFile(manifest, JsonObject.class);
-                if (root != null && root.has("dependencies") && root.get("dependencies").isJsonObject()) {
-                    for (Map.Entry<String, JsonElement> entry
-                            : root.getAsJsonObject("dependencies").entrySet()) {
-                        if (entry.getKey().startsWith(CORE_PREFIX) && entry.getValue().isJsonPrimitive()) {
-                            versions.put(entry.getKey(), entry.getValue().getAsString());
-                        }
-                    }
-                }
-            }
+                    .resolve("package.json"));
         } catch (DshException | java.io.IOException | RuntimeException e) {
             LOG.warning("Could not read the packages of " + instance.id(), e);
         }
 
-        Map<String, String> result = Map.copyOf(versions);
-        CORE_VERSIONS.put(key, result);
-        return result;
+        CORE_VERSIONS.put(key, versions);
+        return versions;
+    }
+
+    /// Reads the versions of the harness's packages that an installation holds.
+    ///
+    /// @param manifest the manifest of the harness's own package in that installation
+    /// @return the versions, by package name, empty when there is no installation to read
+    /// @throws java.io.IOException when the manifest is there and cannot be read
+    static Map<String, String> readCoreVersions(java.nio.file.Path manifest) throws java.io.IOException {
+        if (!java.nio.file.Files.isRegularFile(manifest)) {
+            return Map.of();
+        }
+        JsonObject root = org.jackhuang.hmcl.util.gson.JsonUtils.fromJsonFile(manifest, JsonObject.class);
+        if (root == null) {
+            return Map.of();
+        }
+
+        Map<String, String> versions = new java.util.LinkedHashMap<>();
+        if (root.has("version") && root.get("version").isJsonPrimitive()) {
+            // This package does not depend on itself, so the loop below never sees it, yet
+            // it is the name plugins declare most and the version the harness reads a range
+            // against: one plugin asking for `>=0.1.7-rc.2` is asking about exactly this.
+            versions.put(HARNESS, root.get("version").getAsString());
+        }
+        if (root.has("dependencies") && root.get("dependencies").isJsonObject()) {
+            for (Map.Entry<String, JsonElement> entry : root.getAsJsonObject("dependencies").entrySet()) {
+                if (entry.getKey().startsWith(CORE_PREFIX) && entry.getValue().isJsonPrimitive()) {
+                    versions.put(entry.getKey(), entry.getValue().getAsString());
+                }
+            }
+        }
+        return Map.copyOf(versions);
     }
 
     /// The versions read so far, per instance and version.
@@ -157,95 +184,165 @@ public final class DshPluginRequirements {
     /// Reports whether a version satisfies an npm range.
     ///
     /// The ranges plugins publish are the ones a package manager writes: alternatives
-    /// separated by `||`, each an exact version, a `^` or `~` range, or a comparison.
+    /// separated by `||`, each a version, a caret or tilde range, or a comparison.
+    ///
+    /// The rules are npm's, and they are applied the way the harness applies them: before it
+    /// installs a plugin it asks npm's own `semver` with `includePrerelease`, so a prerelease
+    /// is an ordinary version here too. That is what makes `>=0.1.7-rc.2` refuse `0.1.7-rc.1`
+    /// — the two agree on every number and differ only in the part that tells them apart —
+    /// and what keeps `<0.2.0` from refusing one merely for being a prerelease.
+    ///
+    /// Two answers are the harness's own rather than npm's: `workspace:^`, `workspace:~` and
+    /// `workspace:*` mean "the runtime this is installed into", so whatever is asking
+    /// satisfies them, and an empty requirement is refused outright, which npm reads as `*`.
     ///
     /// @param range   the range
     /// @param version the version
     /// @return whether it satisfies
     public static boolean satisfies(String range, String version) {
-        if (range == null || range.isBlank() || version == null || version.isBlank()) {
+        if (range == null || version == null || range.isBlank() || version.isBlank()) {
+            return false;
+        }
+
+        String asked = range.trim();
+        if (WORKSPACE.contains(asked)) {
             return true;
         }
-        for (String alternative : range.split("\\|\\|")) {
-            if (satisfiesSingle(alternative.trim(), version.trim())) {
+
+        String held = version.trim();
+        for (String alternative : asked.split("\\|\\|", -1)) {
+            if (satisfiesAlternative(alternative.trim(), held)) {
                 return true;
             }
         }
         return false;
     }
 
-    /// Reports whether a version satisfies one alternative.
+    /// Reports whether a version satisfies one alternative of a range.
     ///
-    /// The rules are npm's, because the ranges are npm's: a caret holds from the
-    /// version it names up to the next change of the leftmost non-zero part, a tilde
-    /// up to the next minor, and a pre-release never satisfies a range that does not
-    /// name one — which is what keeps `0.1.2-alpha.2` out of `^0.1.2` while letting
-    /// the release itself in.
+    /// An alternative is comparators separated by spaces, and every one of them has to hold:
+    /// npm writes a conjunction that way, `>=0.1.0-rc.0 <0.2.0`.
     ///
-    /// @param range   the alternative
-    /// @param version the version
+    /// @param alternative the alternative
+    /// @param version     the version
     /// @return whether it satisfies
-    private static boolean satisfiesSingle(String range, String version) {
-        if (range.isEmpty() || range.equals("*") || range.equalsIgnoreCase("latest")) {
+    private static boolean satisfiesAlternative(String alternative, String version) {
+        if (alternative.isEmpty()) {
+            // An empty alternative is every version: npm reads `>=0.1.0 ||` as `*`.
             return true;
         }
-
-        if (range.startsWith("^") || range.startsWith("~")) {
-            boolean caret = range.startsWith("^");
-            String base = range.substring(1).trim();
-
-            if (hasPrerelease(version) && !hasPrerelease(base)) {
-                return false;
-            }
-            if (range.contains(" ")) {
-                // `^1.2.3 || ^1.2.4` never has a space; `^1.2.3 <1.5.0` does, and
-                // each part is then applied on its own.
-                for (String part : range.split("\\s+")) {
-                    if (!part.isBlank() && !satisfiesSingle(part.trim(), version)) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-
-            int[] bound = triple(base);
-            int[] held = triple(version);
-            if (compareTriples(held, bound) < 0) {
-                return false;
-            }
-
-            int[] upper;
-            if (!caret) {
-                upper = new int[]{bound[0], bound[1] + 1, 0};
-            } else if (bound[0] > 0) {
-                upper = new int[]{bound[0] + 1, 0, 0};
-            } else if (bound[1] > 0) {
-                upper = new int[]{0, bound[1] + 1, 0};
-            } else {
-                upper = new int[]{0, 0, bound[2] + 1};
-            }
-            return compareTriples(held, upper) < 0;
-        }
-
-        if (range.contains(" ") && !range.startsWith("^") && !range.startsWith("~")) {
-            for (String part : range.split("\\s+")) {
-                if (!part.isBlank() && !satisfiesSingle(part.trim(), version)) {
+        int dash = alternative.indexOf(" - ");
+        if (dash < 0) {
+            for (String comparator : alternative.split("\\s+")) {
+                if (!comparator.isBlank() && !satisfiesComparator(comparator.trim(), version)) {
                     return false;
                 }
             }
             return true;
         }
+        return satisfiesHyphen(alternative.substring(0, dash).trim(),
+                alternative.substring(dash + 3).trim(), version);
+    }
 
-        if (range.startsWith(">=") || range.startsWith("<=")
-                || range.startsWith(">") || range.startsWith("<") || range.startsWith("=")) {
-            String operator = range.startsWith(">=") || range.startsWith("<=")
-                    ? range.substring(0, 2) : range.substring(0, 1);
-            String base = range.substring(operator.length()).trim();
+    /// Reports whether a version lies between the two ends of a hyphen range.
+    ///
+    /// npm reads `1.2.3 - 2.3.4` as `>=1.2.3-0 <2.3.5-0`: one end is a floor and the other a
+    /// ceiling, and each is moved out by the smallest step there is — the floor down to a
+    /// prerelease of itself, the ceiling up to the next patch, or to the prerelease it names
+    /// when it names one, which is then a version of its own and is let in.
+    ///
+    /// @param from    the floor
+    /// @param to      the ceiling
+    /// @param version the version
+    /// @return whether it lies between them
+    private static boolean satisfiesHyphen(String from, String to, String version) {
+        if (!isBound(from) || !isBound(to)) {
+            return false;
+        }
+        int floors = countOf(from);
+        int ceilings = countOf(to);
+        if (floors == 0 && ceilings == 0) {
+            // `x - x` names nothing at either end, which npm cannot read either.
+            return false;
+        }
 
-            if (hasPrerelease(version) && !hasPrerelease(base)) {
+        Parsed held = parse(version);
+        if (floors > 0) {
+            Parsed floor = parse(from);
+            if (floors < 3 || floor.prerelease() == null) {
+                int[] named = floor.numbers();
+                floor = release(named[0], named[1], named[2]);
+            }
+            if (compare(held, floor) < 0) {
                 return false;
             }
-            int order = compareTriples(triple(version), triple(base));
+        }
+        if (ceilings == 0) {
+            return true;
+        }
+
+        Parsed ceiling = parse(to);
+        if (ceilings < 3) {
+            return compare(held, upperBound(false, ceilings, ceiling.numbers())) < 0;
+        }
+        if (ceiling.prerelease() != null) {
+            return compare(held, ceiling) <= 0;
+        }
+        int[] named = ceiling.numbers();
+        return compare(held, release(named[0], named[1], named[2] + 1)) < 0;
+    }
+
+    /// Reports whether a version satisfies one comparator.
+    ///
+    /// A caret holds from the version it names up to the next change of the leftmost non-zero
+    /// part it names, and a tilde up to the next minor. A version that stops short of naming
+    /// all three numbers is read the way npm reads one: `^0.1` and `~1.2` are ranges, and a
+    /// bare `0.1` is the range up to the next minor. `*` is every version.
+    ///
+    /// @param comparator the comparator
+    /// @param version    the version
+    /// @return whether it satisfies
+    private static boolean satisfiesComparator(String comparator, String version) {
+        if (comparator.isEmpty()) {
+            return false;
+        }
+        if (isWildcard(comparator)) {
+            return true;
+        }
+
+        char first = comparator.charAt(0);
+        if (first == '^' || first == '~') {
+            String base = comparator.substring(1).trim();
+            if (isWildcard(base)) {
+                // `^*` and `~*` are every version, npm's reading of a range that names none.
+                return true;
+            }
+            if (!isBound(base)) {
+                return false;
+            }
+            int count = countOf(base);
+            if (count == 0) {
+                return false;
+            }
+            int[] named = parse(base).numbers();
+            // A range that leaves a number out starts at a prerelease of the version it does
+            // name — npm's `-0`, as in `^1.2` holding `1.2.0-rc.1`, which `>=1.2.0` does not.
+            Parsed lower = count == 3 ? parse(base) : release(named[0], named[1], named[2]);
+            return within(version, lower, upperBound(first == '^', count, named));
+        }
+
+        if (first == '>' || first == '<' || first == '=') {
+            String operator = comparator.startsWith(">=") || comparator.startsWith("<=")
+                    ? comparator.substring(0, 2) : comparator.substring(0, 1);
+            String base = comparator.substring(operator.length()).trim();
+            if (isWildcard(base)) {
+                // npm reads `>=*` as every version and `>*` as `<0.0.0-0`, which is none.
+                return !operator.equals(">") && !operator.equals("<");
+            }
+            if (!isBound(base)) {
+                return false;
+            }
+            int order = compare(parse(version), parse(base));
             return switch (operator) {
                 case ">=" -> order >= 0;
                 case "<=" -> order <= 0;
@@ -255,122 +352,263 @@ public final class DshPluginRequirements {
             };
         }
 
-        // A space-separated range is a conjunction, as npm writes `>=1.0.0 <2.0.0`.
-        if (range.contains(" ")) {
-            for (String part : range.split("\\s+")) {
-                if (!part.isBlank() && !satisfiesSingle(part.trim(), version)) {
-                    return false;
-                }
-            }
-            return true;
+        if (!isBound(comparator)) {
+            // Nothing a version could be, so nothing satisfies it — which is npm's answer for
+            // `latest`, and for anything else it cannot read as a range.
+            return false;
         }
-
-        return compare(triple(version), triple(range)) == 0 && version.equals(range);
+        int count = countOf(comparator);
+        if (count == 0) {
+            return false;
+        }
+        int[] named = parse(comparator).numbers();
+        return count == 3
+                ? compare(parse(version), parse(comparator)) == 0
+                : within(version, release(named[0], named[1], named[2]),
+                        upperBound(false, count, named));
     }
 
-    /// Reports whether a version carries a pre-release.
+    /// Reports whether a comparator names no version at all.
     ///
-    /// @param version the version
-    /// @return whether it has one
-    private static boolean hasPrerelease(String version) {
-        return version.indexOf('-') >= 0;
+    /// @param text the comparator
+    /// @return whether it is `*`, `x` or `X`
+    private static boolean isWildcard(String text) {
+        return text.equals("*") || text.equals("x") || text.equals("X");
     }
 
-    /// Returns the first three numbers of a version.
+    /// Reports whether a version is one npm could read.
+    ///
+    /// A range may leave a number out and may write an `x` where one belongs, but a fourth
+    /// number, a stray dash or a word where a number belongs is not a range at all: npm
+    /// answers nothing for one, and reading `1.2.3.4` as `1.2.3` would let a plugin that
+    /// declares it look like it fits when the harness is certain to refuse it.
     ///
     /// @param version the version
-    /// @return major, minor and patch
-    private static int[] triple(String version) {
+    /// @return whether it could be one
+    private static boolean isBound(String version) {
         String clean = version.trim();
-        if (clean.startsWith("v")) {
-            clean = clean.substring(1);
-        }
-        String[] numbers = clean.split("-", 2)[0].split("\\.");
-        int[] result = new int[3];
-        for (int i = 0; i < 3; i++) {
-            if (i < numbers.length) {
-                try {
-                    result[i] = Integer.parseInt(numbers[i].trim());
-                } catch (NumberFormatException e) {
-                    result[i] = 0;
-                }
-            }
-        }
-        return result;
-    }
-
-    /// Compares two first-three-numbers versions.
-    ///
-    /// @param left  the left version
-    /// @param right the right version
-    /// @return negative, zero or positive
-    private static int compareTriples(int[] left, int[] right) {
-        for (int i = 0; i < 3; i++) {
-            if (left[i] != right[i]) {
-                return Integer.compare(left[i], right[i]);
-            }
-        }
-        return 0;
-    }
-
-    /// Splits a version into its numbers and its pre-release parts.
-    ///
-    /// @param version the version
-    /// @return major, minor, patch, then the pre-release identifiers as numbers
-    ///         where they are numbers and as high values where they are not
-    private static int[] parts(String version) {
-        String clean = version.trim();
-        if (clean.startsWith("v")) {
+        if (clean.startsWith("v") || clean.startsWith("V")) {
             clean = clean.substring(1);
         }
         String[] halves = clean.split("-", 2);
-        String[] numbers = halves[0].split("\\.");
-        List<Integer> result = new ArrayList<>();
-        for (int i = 0; i < 3; i++) {
-            result.add(i < numbers.length ? number(numbers[i]) : 0);
+        String[] written = halves[0].split("\\.", -1);
+        if (written.length > 3) {
+            return false;
         }
-        if (halves.length > 1) {
-            for (String identifier : halves[1].split("\\.")) {
-                result.add(number(identifier));
+        for (String part : written) {
+            if (!isNumber(part) && !isWildcard(part)) {
+                return false;
             }
         }
-        return result.stream().mapToInt(Integer::intValue).toArray();
+        if (halves.length == 1) {
+            return true;
+        }
+        if (halves[1].isEmpty()) {
+            return false;
+        }
+        for (String identifier : halves[1].split("\\.", -1)) {
+            if (identifier.isEmpty() || !isIdentifier(identifier)) {
+                return false;
+            }
+        }
+        return true;
     }
 
-    /// Reads a number out of a version part.
+    /// Reports whether a string is one npm allows among a prerelease's identifiers.
+    ///
+    /// @param identifier the identifier
+    /// @return whether it is letters, numbers and dashes
+    private static boolean isIdentifier(String identifier) {
+        for (int i = 0; i < identifier.length(); i++) {
+            char c = identifier.charAt(i);
+            if (!(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'z')
+                    && !(c >= 'A' && c <= 'Z') && c != '-') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Reports whether a version lies inside the half-open range a comparator draws.
+    ///
+    /// @param version the version
+    /// @param lower   the first version inside it
+    /// @param upper   the first version past it
+    /// @return whether it is inside
+    private static boolean within(String version, Parsed lower, Parsed upper) {
+        Parsed held = parse(version);
+        return compare(held, lower) >= 0 && compare(held, upper) < 0;
+    }
+
+    /// Returns the first version past the ones a caret or tilde range holds.
+    ///
+    /// The bound names the prerelease `0`, npm's way of writing the first version outside
+    /// rather than the last one inside: `^0.1.7-rc.2` is `>=0.1.7-rc.2 <0.2.0-0`, which keeps
+    /// `0.2.0-rc.1` out while `0.2.0` is simply past it.
+    ///
+    /// @param caret whether the range is a caret
+    /// @param count how many numbers the range named, one to three
+    /// @param named the numbers it named, the ones it left out read as zero
+    /// @return the version the range stops at
+    private static Parsed upperBound(boolean caret, int count, int[] named) {
+        if (!caret) {
+            return count >= 2 ? release(named[0], named[1] + 1, 0) : release(named[0] + 1, 0, 0);
+        }
+        if (count == 1 || named[0] > 0) {
+            return release(named[0] + 1, 0, 0);
+        }
+        if (count == 2 || named[1] > 0) {
+            return release(named[0], named[1] + 1, 0);
+        }
+        return release(named[0], named[1], named[2] + 1);
+    }
+
+    /// Returns a version with the prerelease npm puts at the foot of a bound it made up.
+    ///
+    /// @param major the major
+    /// @param minor the minor
+    /// @param patch the patch
+    /// @return the version, as in `0.2.0-0`
+    private static Parsed release(int major, int minor, int patch) {
+        return new Parsed(new int[]{major, minor, patch}, List.of("0"));
+    }
+
+    /// Counts the numbers a version names, `1.x` naming one and `1.2` two.
+    ///
+    /// @param version the version
+    /// @return one to three, or none when it names no number at all
+    private static int countOf(String version) {
+        String clean = version.trim();
+        if (clean.startsWith("v") || clean.startsWith("V")) {
+            clean = clean.substring(1);
+        }
+        int count = 0;
+        for (String part : clean.split("-", 2)[0].split("\\.", -1)) {
+            if (!isNumber(part)) {
+                break;
+            }
+            count++;
+        }
+        return Math.min(count, 3);
+    }
+
+    /// Splits a version into the parts npm compares.
+    ///
+    /// @param version the version
+    /// @return its three numbers and its pre-release identifiers, the identifiers being
+    ///         `null` when the version carries none
+    private static Parsed parse(String version) {
+        String clean = version.trim();
+        if (clean.startsWith("v") || clean.startsWith("V")) {
+            clean = clean.substring(1);
+        }
+        String[] halves = clean.split("-", 2);
+        String[] written = halves[0].split("\\.", -1);
+        int[] numbers = new int[3];
+        for (int i = 0; i < 3; i++) {
+            // A number a range left out, or wrote as an `x` where one belongs, counts as a
+            // zero, which is how npm compares `1.x` with `1.0.0`.
+            numbers[i] = i < written.length ? numeric(written[i]) : 0;
+        }
+        List<String> prerelease = halves.length > 1 && !halves[1].isEmpty()
+                ? List.of(halves[1].split("\\.", -1))
+                : null;
+        return new Parsed(numbers, prerelease);
+    }
+
+    /// Reads a number out of one of a version's three leading parts.
     ///
     /// @param text the part
-    /// @return its number, or a high value for a named pre-release, so that
-    ///         `1.0.0-rc` sorts above `1.0.0-alpha` the way npm sorts them
-    private static int number(String text) {
+    /// @return its number, or zero when it is not one
+    private static int numeric(String text) {
         try {
             return Integer.parseInt(text.trim());
         } catch (NumberFormatException e) {
-            return NAMED;
+            return 0;
         }
     }
 
-    /// Where a named pre-release identifier sorts.
-    private static final int NAMED = 1_000_000;
+    /// Reports whether a pre-release identifier is a number.
+    ///
+    /// @param identifier the identifier
+    /// @return whether it is one
+    private static boolean isNumber(String identifier) {
+        if (identifier.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < identifier.length(); i++) {
+            char c = identifier.charAt(i);
+            if (c < '0' || c > '9') {
+                return false;
+            }
+        }
+        return true;
+    }
 
     /// Compares two parsed versions.
     ///
-    /// A version with no pre-release is newer than the same version with one, which
-    /// is npm's rule and the one that matters here: `0.1.2-alpha.2` does not satisfy
-    /// `^0.1.2` unless the range says so, and `0.1.2` does.
+    /// The numbers first; then a version with no pre-release outranks the same version with
+    /// one, so `0.1.7` comes after `0.1.7-rc.2`; then the pre-release identifiers in turn, a
+    /// number before a name and the longer list after the shorter when everything before it
+    /// is equal, so `alpha` is under `beta` and `rc` under `rc.1`.
     ///
     /// @param left  the left version
     /// @param right the right version
     /// @return negative, zero or positive
-    private static int compare(int[] left, int[] right) {
-        int length = Math.max(left.length, right.length);
+    private static int compare(Parsed left, Parsed right) {
+        for (int i = 0; i < 3; i++) {
+            if (left.numbers()[i] != right.numbers()[i]) {
+                return Integer.compare(left.numbers()[i], right.numbers()[i]);
+            }
+        }
+
+        List<String> mine = left.prerelease();
+        List<String> theirs = right.prerelease();
+        if (mine == null || theirs == null) {
+            return mine == theirs ? 0 : mine == null ? 1 : -1;
+        }
+
+        int length = Math.max(mine.size(), theirs.size());
         for (int i = 0; i < length; i++) {
-            int a = i < left.length ? left[i] : (i >= 3 ? -1 : 0);
-            int b = i < right.length ? right[i] : (i >= 3 ? -1 : 0);
-            if (a != b) {
-                return Integer.compare(a, b);
+            if (i == mine.size()) {
+                return -1;
+            }
+            if (i == theirs.size()) {
+                return 1;
+            }
+            int order = compareIdentifiers(mine.get(i), theirs.get(i));
+            if (order != 0) {
+                return order;
             }
         }
         return 0;
+    }
+
+    /// Compares two pre-release identifiers.
+    ///
+    /// A number is under a name, two numbers are compared as numbers and two names as text,
+    /// which is npm's rule and the one that tells `0.1.7-rc.1` from `0.1.7-rc.2`.
+    ///
+    /// @param left  the left identifier
+    /// @param right the right identifier
+    /// @return negative, zero or positive
+    private static int compareIdentifiers(String left, String right) {
+        boolean leftNumber = isNumber(left);
+        boolean rightNumber = isNumber(right);
+        if (leftNumber && rightNumber) {
+            return new BigInteger(left).compareTo(new BigInteger(right));
+        }
+        if (leftNumber != rightNumber) {
+            return leftNumber ? -1 : 1;
+        }
+        return left.compareTo(right);
+    }
+
+    /// A version read into the parts npm compares.
+    ///
+    /// @param numbers    major, minor and patch
+    /// @param prerelease the pre-release identifiers in the order they were written, or
+    ///                   `null` when the version carries none
+    private record Parsed(int[] numbers, @Nullable List<String> prerelease) {
     }
 }
