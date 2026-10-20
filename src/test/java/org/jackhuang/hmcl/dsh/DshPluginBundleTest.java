@@ -101,6 +101,36 @@ class DshPluginBundleTest {
                 "there are no files of the instance's own to carry");
     }
 
+    @Test
+    void aLinkThatStaysInsideTheProfileIsTheProfilesOwnCopy(@TempDir Path directory) throws Exception {
+        // A package manager's own node_modules is made of links: pnpm puts every dependency behind
+        // one, resolving into `node_modules/.pnpm` inside the profile. Asking only whether an entry
+        // is a link would call every installed plugin somebody's working tree, so the question is
+        // where it resolves to — and inside the profile means the profile owns it.
+        Path profile = directory.resolve("profiles/web");
+        Path store = profile.resolve("node_modules/.pnpm/dsh-fork@2.1.0/node_modules/dsh-fork");
+        Files.createDirectories(store.resolve("lib"));
+        Files.writeString(store.resolve("package.json"), """
+                {"name":"dsh-fork","version":"2.1.0"}
+                """);
+        Files.writeString(store.resolve("lib/index.js"), "export const x = 1;\n");
+        Path installed = profile.resolve("node_modules/dsh-fork");
+        Files.createDirectories(installed.getParent());
+        try {
+            Files.createSymbolicLink(installed, store);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            // A filesystem without links cannot test this part.
+            return;
+        }
+
+        assertFalse(DshPluginBundle.isLinked(profile, "dsh-fork"),
+                "an entry resolving inside the profile is the profile's own copy");
+        DshPluginBundle.Payload payload =
+                DshPluginBundle.locate(profile, "dsh-fork", "file:" + directory.resolve("dsh-fork"));
+        assertNotNull(payload, "so the copy the profile holds is what travels");
+        assertEquals(store, payload.directory());
+    }
+
     /// A junction is what the package manager makes on Windows, where a symbolic link needs a
     /// privilege it may not have. It is a link to every other program on the machine and a plain
     /// directory to Java, so a launcher that asked only about symbolic links would read straight

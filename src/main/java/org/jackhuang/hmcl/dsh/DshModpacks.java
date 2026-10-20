@@ -521,35 +521,43 @@ public final class DshModpacks {
         return new Plugin(name, payload.version(), active, true, true);
     }
 
-    /// Returns the plugins an instance installed from a directory it does not own.
+    /// One plugin an instance installed from this machine rather than from a registry.
     ///
-    /// A `link:` dependency — and a directory `file:`, which the package manager writes the same
-    /// way — leaves a link in the profile's `node_modules` pointing at wherever somebody is
-    /// working. A pack carries files, and these are not the instance's files: they are the working
-    /// tree of whoever is developing the plugin, they change without the pack knowing, and no copy
-    /// of them is recorded anywhere. The export leaves them out, and this is what the interface
-    /// asks before an export so that it can say so first rather than afterwards.
+    /// @param name   the dependency name
+    /// @param linked whether its files are a link to a directory the profile does not hold, which
+    ///               is the half a pack cannot carry
+    public record LocalPlugin(String name, boolean linked) {
+    }
+
+    /// Returns the plugins an instance installed from this machine rather than from a registry.
     ///
-    /// Upstream (08e72c3) puts this in `PackExporter`; this launcher has no such class, its export
-    /// code is this one, and the name is not `localPlugins` because [Manifest#localPlugins] already
-    /// means the recorded half of this.
+    /// A `file:` or `link:` specification names something that was on the machine the instance was
+    /// made on, and a pack is handed to somebody else. What the export does about it depends on
+    /// which of the two it is: a packed plugin the launcher copied into the instance travels as the
+    /// file it is, while a directory the profile only links to has no files of its own to carry and
+    /// is left out of the pack entirely. Both are worth saying **before** the export starts, which
+    /// is the last moment at which the person can still do something about either.
+    ///
+    /// Upstream (fdc8349) names this `PackExporter.localPlugins`; this launcher has no such class,
+    /// its export code is this one, and [Manifest#localPlugins] already means the recorded half of
+    /// it, so the name here is `localPluginsOf`.
     ///
     /// @param instance the instance
-    /// @return the dependency names, in the profile's order, empty when there are none
+    /// @return the plugins, in the profile's order, empty when there are none
     /// @throws DshException when the profile cannot be read
-    public static List<String> developmentPlugins(DshInstance instance) throws DshException {
+    public static List<LocalPlugin> localPluginsOf(DshInstance instance) throws DshException {
         Path profileDirectory = instance.homeDirectory()
                 .resolve("profiles").resolve(instance.profile());
-        List<String> names = new ArrayList<>();
+        List<LocalPlugin> plugins = new ArrayList<>();
         for (Map.Entry<String, String> entry
                 : DshPluginInstaller.readDependencies(instance.homeDirectory(), instance.profile())
                         .entrySet()) {
-            if (isLocalSpec(entry.getValue())
-                    && DshPluginBundle.isLinked(profileDirectory, entry.getKey())) {
-                names.add(entry.getKey());
+            if (isLocalSpec(entry.getValue())) {
+                plugins.add(new LocalPlugin(entry.getKey(),
+                        DshPluginBundle.isLinked(profileDirectory, entry.getKey())));
             }
         }
-        return List.copyOf(names);
+        return List.copyOf(plugins);
     }
 
     /// Reads a pack's manifest.

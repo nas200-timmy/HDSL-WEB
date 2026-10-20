@@ -226,8 +226,9 @@ class DshModpacksTest {
             return;
         }
 
-        assertEquals(List.of("dsh-fork"), DshModpacks.developmentPlugins(instance),
-                "the names are read out of the profile, so the interface can say them");
+        assertEquals(List.of(new DshModpacks.LocalPlugin("dsh-fork", true)),
+                DshModpacks.localPluginsOf(instance),
+                "the interface is told which plugins a pack cannot carry, before the export");
 
         Path pack = Files.createTempFile("modpack", ".zip");
         DshModpacks.export(instance, pack, null);
@@ -241,6 +242,30 @@ class DshModpacksTest {
         assertFalse(DshPluginBundle.carried(pack).stream().anyMatch(name -> name.contains("dsh-fork")),
                 "and no part of somebody's working tree travels: " + DshPluginBundle.carried(pack));
         Files.deleteIfExists(pack);
+    }
+
+    @Test
+    void aPluginInstalledFromAFileIsNamedWithoutBeingOneThePackCannotCarry() throws Exception {
+        // What the export asks about first is the plugins that came from this machine rather than
+        // from a registry. A packed plugin the launcher copied into the instance travels as the
+        // file it is; a directory the profile only links to does not travel at all. Telling them
+        // apart is the difference between a caution and a promise the pack will not keep.
+        DshInstance instance = makeInstance(SOURCE_ID);
+        writeProfile(instance, """
+                {
+                  "name": "dsh-profile-web",
+                  "private": true,
+                  "dependencies": {
+                    "dshmarket": "1.52.0",
+                    "dsh-hello-local": "file:/tmp/instance/plugins/dsh-hello-local-1.0.0.tgz"
+                  },
+                  "dsh": {"profile": {"bundles": ["dsh-hello-local", "dshmarket"]}}
+                }
+                """);
+
+        assertEquals(List.of(new DshModpacks.LocalPlugin("dsh-hello-local", false)),
+                DshModpacks.localPluginsOf(instance),
+                "a file the instance keeps is local, and is not a link out of the profile");
     }
 
     @Test

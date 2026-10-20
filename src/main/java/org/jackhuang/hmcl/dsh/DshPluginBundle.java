@@ -135,41 +135,65 @@ public final class DshPluginBundle {
         if (Files.isDirectory(directory)) {
             String version = versionOf(directory);
             if (version != null) {
-                return new Payload(name, version, null, directory);
+                return new Payload(name, version, null, readable(directory));
             }
         }
         return null;
     }
 
-    /// Reports whether the profile's copy of a package is a link to somewhere else.
+    /// Returns the directory a walk of an entry actually reads.
+    ///
+    /// A package manager may keep a dependency's files behind a link of its own: pnpm resolves
+    /// every dependency into `node_modules/.pnpm` inside the profile, and a directory `file:`
+    /// install is one of them. A walk does not descend into the path it starts at when that path
+    /// is a link — it reports the link itself and nothing under it — so what is handed out is
+    /// where the files are rather than where the profile points at them. Without this, such a
+    /// plugin would travel as the one file that is read without walking: its `package.json`.
+    ///
+    /// A plain directory is handed back unchanged, and so is one that cannot be resolved.
+    ///
+    /// @param directory the entry the profile holds
+    /// @return the directory to read
+    private static Path readable(Path directory) {
+        try {
+            Path parent = directory.getParent().toRealPath();
+            Path real = directory.toRealPath();
+            return real.equals(parent.resolve(directory.getFileName())) ? directory : real;
+        } catch (IOException | RuntimeException e) {
+            return directory;
+        }
+    }
+
+    /// Reports whether the profile's copy of a package is a link out of the profile.
     ///
     /// A link is asked about twice — once when the files are looked for and once when the reason
     /// they are not there is said out loud — and both times the answer has to be the same one, so
     /// it is given in one place.
     ///
-    /// Windows is why this is not [Files#isSymbolicLink] alone: the package manager makes a
-    /// *junction* there, which is a link to every other program on the machine and a plain
-    /// directory to Java. Comparing where the entry resolves to against where it sits is what
-    /// holds on both, and it is asked of the entry's parent as well, so that a home reached
-    /// through a link of its own — `/tmp` on macOS — is not mistaken for one.
+    /// **Where it resolves to is the question, not whether it is a link.** A package manager's own
+    /// `node_modules` is made of links: pnpm puts every dependency behind one, resolving into
+    /// `node_modules/.pnpm` inside the profile, so asking only whether the entry is a link would
+    /// report the whole profile as somebody's working tree. What matters is whether the files are
+    /// the profile's at all, and the answer to that is whether they live inside it.
+    ///
+    /// Resolving is also what makes this hold on Windows, where the package manager makes a
+    /// *junction* — a link to every other program on the machine, a plain directory to Java, and
+    /// not what [Files#isSymbolicLink] reports on.
     ///
     /// @param profileDirectory the profile the plugin belongs to
     /// @param name             the dependency name
-    /// @return whether the entry is a link to a directory the instance does not own
+    /// @return whether the entry names a directory outside the profile
     public static boolean isLinked(Path profileDirectory, String name) {
         Path directory = profileDirectory.resolve("node_modules").resolve(name);
-        if (Files.isSymbolicLink(directory)) {
-            return true;
-        }
         if (!Files.isDirectory(directory)) {
+            // Nothing to resolve and nothing to carry; the callers have a different sentence for
+            // a package the profile no longer has.
             return false;
         }
         try {
-            Path parent = directory.getParent().toRealPath();
-            return !directory.toRealPath().equals(parent.resolve(directory.getFileName()));
+            return !directory.toRealPath().startsWith(profileDirectory.toRealPath());
         } catch (IOException | RuntimeException e) {
-            // Unreadable is not linked: the callers already have an answer for a package that
-            // cannot be read, and it is a different sentence.
+            // Unreadable is not linked, for the same reason.
             return false;
         }
     }
