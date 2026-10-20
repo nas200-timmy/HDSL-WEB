@@ -114,6 +114,23 @@ public abstract class ArchiveFileTree<R, E extends ArchiveEntry> implements Clos
         String name = entry.getName();
         Dir<E> dir = root;
 
+        // The whole name is judged before any of it is added, because **every** component is one an
+        // extractor resolves under its destination directory — so a component that is a path of its
+        // own, or that steps out of that directory, is the entry landing somewhere the archive was
+        // never given. Reading the name left to right cannot decide that: the walk adds a directory
+        // to the tree as it reaches it, so a `..` in the middle of `a/../../evil.txt` is only seen
+        // once the names before it are already in the tree, and the entry that follows the `..`
+        // writes through them.
+        //
+        // `\` is the separator this most has to refuse, and it is the reason the check is here
+        // rather than in each extractor: on Windows a name such as `..\..\Startup\x.bat` carries no
+        // `/` at all, so it is one "file name" to the split below while being three directories to
+        // the platform's own path parser.
+        if (!isOneRelativePath(name)) {
+            LOG.warning("Invalid entry name: " + name);
+            return;
+        }
+
         int start = 0;
         while (start < name.length()) {
             int end = name.indexOf('/', start);
@@ -140,13 +157,6 @@ public abstract class ArchiveFileTree<R, E extends ArchiveEntry> implements Clos
                 break;
             }
 
-            if (item.equals(".") || item.isEmpty())
-                continue;
-            if (item.equals("..")) {
-                LOG.warning("Invalid entry name: " + name);
-                return;
-            }
-
             if (dir.getFiles().containsKey(item)) {
                 LOG.warning("A file and a directory have the same name: " + name);
                 return;
@@ -165,6 +175,28 @@ public abstract class ArchiveFileTree<R, E extends ArchiveEntry> implements Clos
                 break;
             }
         }
+    }
+
+    /// Reports whether an entry's name is a relative path that cannot be escaped.
+    ///
+    /// Every component has to be a name in its own right, or one of the two spellings of "this
+    /// directory" an archive is allowed to write: an empty component — two slashes in a row — and `.`
+    /// are stepped over, which is what the walk below has always done with them. What is refused is
+    /// the component that leaves the directory, `..`, and the separator Windows reads where the split
+    /// below reads a name, `\`, and the NUL that ends a path in the platform's own parser.
+    ///
+    /// @param name the entry's name
+    /// @return whether every component of it is one name, and none of them leaves the directory
+    protected static boolean isOneRelativePath(String name) {
+        for (String component : name.split("/", -1)) {
+            if (component.isEmpty() || component.equals(".")) {
+                continue;
+            }
+            if (component.equals("..") || component.indexOf('\\') >= 0 || component.indexOf('\0') >= 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public abstract InputStream getInputStream(E entry) throws IOException;
