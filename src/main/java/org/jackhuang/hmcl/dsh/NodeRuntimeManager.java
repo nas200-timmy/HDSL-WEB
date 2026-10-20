@@ -564,10 +564,14 @@ public final class NodeRuntimeManager {
     /// same top-level layout, including the symlinks that make `bin/npm` and `bin/npx`
     /// work. Windows builds ship as `.zip`, which has neither.
     ///
+    /// Package-visible rather than private so a test can drive it with an archive it built itself:
+    /// what this refuses to write — a link pointing out of the tree, an entry naming a path above
+    /// the target — is the part that has no other way in, since [install] downloads its archive.
+    ///
     /// @param archive the `.zip`, `.tar.xz` or `.tar.gz` file
     /// @param target  the directory to unpack into
     /// @throws IOException when decompression or extraction fails
-    private static void extractArchive(Path archive, Path target) throws IOException {
+    static void extractArchive(Path archive, Path target) throws IOException {
         String name = archive.getFileName().toString().toLowerCase(Locale.ROOT);
         if (name.endsWith(".zip")) {
             extractZip(archive, target);
@@ -575,7 +579,7 @@ public final class NodeRuntimeManager {
         }
         if (name.endsWith(".tar.gz") || name.endsWith(".tgz")) {
             try (TarFileTree tree = TarFileTree.open(archive)) {
-                extract(tree, tree.getRoot(), target);
+                extract(tree, tree.getRoot(), target, target);
             }
             return;
         }
@@ -636,7 +640,7 @@ public final class NodeRuntimeManager {
                 Files.copy(xz, tarFile, StandardCopyOption.REPLACE_EXISTING);
             }
             try (TarFileTree tree = TarFileTree.open(tarFile)) {
-                extract(tree, tree.getRoot(), target);
+                extract(tree, tree.getRoot(), target, target);
             }
         } finally {
             Files.deleteIfExists(tarFile);
@@ -648,12 +652,14 @@ public final class NodeRuntimeManager {
     /// @param tree   the archive being read
     /// @param dir    the directory to unpack
     /// @param target the destination directory
+    /// @param root   the directory the whole archive is unpacked into
     /// @param <R>    the reader type
     /// @param <E>    the entry type
     /// @throws IOException when an entry cannot be written
     private static <R, E extends ArchiveEntry> void extract(ArchiveFileTree<R, E> tree,
                                                             ArchiveFileTree.Dir<E> dir,
-                                                            Path target) throws IOException {
+                                                            Path target,
+                                                            Path root) throws IOException {
         for (var entry : dir.getFiles().entrySet()) {
             Path destination = target.resolve(entry.getKey());
             E archiveEntry = entry.getValue();
@@ -663,7 +669,25 @@ public final class NodeRuntimeManager {
                 // where it does not, `Links` copies the file it points at — the
                 // difference between a runtime that works and an install that fails on
                 // its last step.
-                Links.createOrCopy(destination, Path.of(tree.getLink(archiveEntry)));
+                //
+                // A link is recreated only when it stays inside what is being unpacked: the
+                // target travels in the archive, so `node-v22/bin/npm -> /etc/passwd` is a
+                // link this launcher would otherwise create and then read through, and it
+                // is the archive that says where it points. One that leaves is not
+                // recreated at all — the entry is written as the plain file it is instead.
+                //
+                // The order matters, and it is why the check comes before `Links`: asked
+                // first, `Links` would copy the *content* of a target that leaves the
+                // archive into the tree, which is this defect read backwards.
+                Path link = Path.of(tree.getLink(archiveEntry));
+                if (!link.isAbsolute() && target.resolve(link).normalize().startsWith(root)) {
+                    Links.createOrCopy(destination, link);
+                } else {
+                    LOG.warning("Not unpacking the link " + destination + " -> " + link
+                            + ": it points outside " + root);
+                    Files.createDirectories(destination.getParent());
+                    tree.extractTo(archiveEntry, destination);
+                }
                 continue;
             }
             Files.createDirectories(destination.getParent());
@@ -675,7 +699,7 @@ public final class NodeRuntimeManager {
         for (var subDirectory : dir.getSubDirs().entrySet()) {
             Path destination = target.resolve(subDirectory.getKey());
             Files.createDirectories(destination);
-            extract(tree, subDirectory.getValue(), destination);
+            extract(tree, subDirectory.getValue(), destination, root);
         }
     }
 
