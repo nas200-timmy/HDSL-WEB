@@ -24,6 +24,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -305,8 +306,16 @@ public final class DshInstanceManager {
 
         boolean moved = false;
         if (Files.isDirectory(oldDirectory)) {
+            // Nothing at the destination is removed to make room for the move. What
+            // resolves to the new name is not necessarily an instance's directory: it can
+            // be what a deleted instance left behind, or a folder somebody put there, and
+            // removing it would delete it, tree and all, with nothing said. The name is
+            // refused instead, and the directory is named so it can be moved aside.
+            if (Files.exists(newDirectory, LinkOption.NOFOLLOW_LINKS)) {
+                throw new DshException("Cannot rename \"" + id + "\" to \"" + normalized + "\": "
+                        + newDirectory + " already exists");
+            }
             try {
-                deleteQuietly(newDirectory);
                 Files.move(oldDirectory, newDirectory);
                 moved = true;
             } catch (IOException e) {
