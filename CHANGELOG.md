@@ -2,6 +2,20 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.4.8 — 2026-10-21 · API 契约与安全小修一批
+
+- **未捕获异常不再撕毁 API 契约**：`/api/*` 新增 `ApiGuardFilter`，servlet 漏出的
+  任何异常（比如一个 NPE）统一回 `{"error":"internal error"}` JSON 500——此前 Jetty
+  的默认 HTML 错误页会让前端拿到不符合契约的响应。已提交的响应无法重写，照旧上抛。
+- **`server.yaml` 收紧为 0600**：写入时 staging 文件先设 owner-only 权限再原子移动。
+  该文件里躺着 PKCS#12 密码，此前是 umask 默认的 0644——同目录其他敏感文件全是
+  0600，唯独它 world-readable。
+- **任务历史有界**：`TaskService` 终态任务（done/failed）最多保留 400 条，超出按
+  提交顺序淘汰最旧；运行中与等待审批的任务永不淘汰。此前任务表随运行时长只增不减，
+  长跑的面板内存缓慢上涨。
+- **插件工具栏按钮文案与行为对齐**：「打开配置文件夹」按钮实际跳转插件市场下载页，
+  文案改为「去插件市场」（`dsh.instance.plugins.to_market`）。
+
 ## v0.4.7 — 2026-10-20 · 上游 P0 移植 + 网页版差距首批 + 登录防爆破
 
 上游 HDSL 分叉后把包名改成 `com.mcxcc303.hdsl.*` 又把单体类拆成主题包，cherry-pick 的路径

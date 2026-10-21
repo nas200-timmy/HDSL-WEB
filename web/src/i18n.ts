@@ -109,6 +109,7 @@ export const I18N = {
   "dsh.instance.plugins.add.url": "从 URL 安装插件",
   "dsh.instance.plugins.download": "下载插件",
   "dsh.instance.plugins.reveal": "打开配置文件夹",
+  "dsh.instance.plugins.to_market": "去插件市场",
   "dsh.instance.plugins.open": "在 npm 上打开",
   "dsh.instance.plugins.source": "%s（npm 包）",
   "dsh.instance.plugins.remove": "卸载插件",

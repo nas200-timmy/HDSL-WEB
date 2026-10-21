@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.server;
 
 import jakarta.servlet.DispatcherType;
+import org.eclipse.jetty.ee10.servlet.FilterHolder;
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
 import org.eclipse.jetty.ee10.servlet.ServletHolder;
 import org.eclipse.jetty.ee10.websocket.jakarta.server.config.JakartaWebSocketServletContainerInitializer;
@@ -46,6 +47,7 @@ import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.event.EventBus;
 import org.jackhuang.hmcl.web.http.AccountsApiServlet;
+import org.jackhuang.hmcl.web.http.ApiGuardFilter;
 import org.jackhuang.hmcl.web.http.ApiServlet;
 import org.jackhuang.hmcl.web.http.DoctorApiServlet;
 import org.jackhuang.hmcl.web.http.ExportsApiServlet;
@@ -267,6 +269,9 @@ public final class HdslServer {
         context.addServlet(tlsHolder, "/api/settings/*");
         context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService, config.basePath)), "/i/*");
         context.addServlet(new ServletHolder(new StaticServlet(config.basePath)), "/");
+        // Anything a servlet lets escape becomes a JSON 500, not Jetty's HTML
+        // error page — the frontend reads these bodies as an API contract.
+        context.addFilter(new FilterHolder(new ApiGuardFilter()), "/api/*", EnumSet.of(DispatcherType.REQUEST));
 
         // `/ws` rides the jakarta WebSocket container of the context, which
         // funnels upgrades through the filter chain — that is what makes the
