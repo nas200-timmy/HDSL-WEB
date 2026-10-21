@@ -24,10 +24,16 @@ import org.apache.sshd.server.SshServer;
 import org.apache.sshd.server.forward.RejectAllForwardingFilter;
 import org.apache.sshd.server.keyprovider.SimpleGeneratorHostKeyProvider;
 import org.apache.sshd.server.session.ServerSession;
+import org.jackhuang.hmcl.dsh.DshInstance;
+import org.jackhuang.hmcl.dsh.DshPaths;
+import org.jackhuang.hmcl.setting.GameDirectoryManager;
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.auth.LoginThrottle;
+import org.jackhuang.hmcl.web.brand.Brand;
+import org.jackhuang.hmcl.web.brand.BrandInstance;
+import org.jackhuang.hmcl.web.brand.BrandInstanceManager;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -45,8 +51,10 @@ import java.security.MessageDigest;
 import java.security.PublicKey;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -56,8 +64,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 /// The endpoint is a **capability-true-subset** door, not a shell box:
 /// no `CommandFactory` (an `exec` request has nothing to run and is refused
 /// by the channel layer), no SFTP subsystem, [RejectAllForwardingFilter] for
-/// every forwarding kind, and the only door in is [SkeletonShellFactory]
-/// until M2 grows the gate + menu.
+/// every forwarding kind, and the only door in is [MenuShellFactory]: the
+/// TUI gate + numbered instance menu of milestone M2.
 ///
 /// Authentication: publickey against the panel-managed
 /// [AuthorizedKeys] (always on), password against the panel user store
@@ -84,9 +92,7 @@ public final class SshService {
 
     private final ServerConfig config;
     private final AuthService auth;
-    /// M1 keeps no TUI gate yet; the reference is already here because the
-    /// constructor contract is fixed now (M2 reads it).
-    @SuppressWarnings("unused")
+    /// The credential the TUI gate of [MenuShellFactory] asks for.
     private final DeveloperAuth devAuth;
     private final Logger log;
     private final Path sshDir;
@@ -95,6 +101,10 @@ public final class SshService {
     private final LoginThrottle passwordThrottle = new LoginThrottle();
     private final AtomicInteger connections = new AtomicInteger();
     private final SessionListener auditListener = new AuditSessionListener();
+
+    /// What a menu choice attaches to. M2 only prints a stub; M3 swaps in the
+    /// real spawn/byte-pump through [attachSupport].
+    private volatile AttachSupport attachSupport = new MenuShellFactory.PrintingAttachSupport();
 
     private volatile @Nullable SshServer server;
     private volatile boolean running;
@@ -129,6 +139,13 @@ public final class SshService {
     /// The keys the publickey authenticator consults.
     public AuthorizedKeys authorizedKeys() {
         return authorizedKeys;
+    }
+
+    /// What a menu choice attaches to. The setter is the M3 seam: the
+    /// composition root hands in the real spawn/byte-pump when it lands;
+    /// until then (and in tests) the printing stub answers.
+    public void attachSupport(AttachSupport support) {
+        attachSupport = support;
     }
 
     /// The OpenSSH-format SHA256 fingerprint of the host key, or null when
@@ -195,7 +212,9 @@ public final class SshService {
             // must not be offered at all.
             sshd.setKeyboardInteractiveAuthenticator(null);
 
-            sshd.setShellFactory(new SkeletonShellFactory());
+            sshd.setShellFactory(new MenuShellFactory(
+                    devAuth, this::dshInstanceRows, this::brandInstanceRows,
+                    () -> new SessionCatalog(DshPaths.INSTANCES).list(), attachSupport));
             sshd.setForwardingFilter(RejectAllForwardingFilter.INSTANCE);
             sshd.addSessionListener(auditListener);
 
@@ -271,6 +290,36 @@ public final class SshService {
             log.warning("Could not read authorized_keys during an SSH login", e);
             return false;
         }
+    }
+
+    /// The menu's "dsh 实例" section: the selected game directory's
+    /// instances, resolved through [GameDirectoryManager] →
+    /// [org.jackhuang.hmcl.setting.DshInstanceRepository] the same selection
+    /// the web home page renders. A dsh instance's id is its name, so the
+    /// label is the id.
+    private List<MenuShellFactory.Entry> dshInstanceRows() {
+        List<MenuShellFactory.Entry> rows = new ArrayList<>();
+        for (DshInstance instance : GameDirectoryManager.getSelectedRepository().getInstances()) {
+            rows.add(new MenuShellFactory.Entry("dsh", instance.id(), instance.id()));
+        }
+        return rows;
+    }
+
+    /// The menu's "品牌实例" section: every brand's instances under
+    /// `<data>/brands/<brand>/instances` — the same manifest tree
+    /// [org.jackhuang.hmcl.web.brand.BrandApiServlet] serves.
+    private List<MenuShellFactory.Entry> brandInstanceRows() {
+        List<MenuShellFactory.Entry> rows = new ArrayList<>();
+        Path base = config.dataDir.resolve("brands");
+        for (Brand brand : Brand.values()) {
+            BrandInstanceManager manager = new BrandInstanceManager(brand, base.resolve(brand.id())
+                    .resolve("instances"));
+            for (BrandInstance instance : manager.list()) {
+                rows.add(new MenuShellFactory.Entry("brand", brand.id() + ":" + instance.id(),
+                        brand.id() + ": " + instance.name()));
+            }
+        }
+        return rows;
     }
 
     /// Connect and disconnect are meta events: they land in the audit trail,
