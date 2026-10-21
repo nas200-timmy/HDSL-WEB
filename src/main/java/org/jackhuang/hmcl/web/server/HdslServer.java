@@ -42,6 +42,7 @@ import org.eclipse.jetty.websocket.server.WebSocketUpgradeHandler;
 import org.jackhuang.hmcl.Metadata;
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.web.acp.AcpSessionManager;
+import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
@@ -143,6 +144,7 @@ public final class HdslServer {
     ///                     off (then the config must say so too)
     public static HdslServer build(ServerConfig config, AuthService authService,
                                    @Nullable CertificateManager certificates, Logger logger) {
+        AuditLog.init(config.dataDir.resolve("logs"));
         Server server = new Server();
         // The stop sequence is owned by our own shutdown hook (below); Jetty's
         // built-in one would stop the server twice without adding anything.

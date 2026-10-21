@@ -41,6 +41,9 @@ import org.jackhuang.hmcl.dsh.DshVersionManager;
 import org.jackhuang.hmcl.setting.GameDirectory;
 import org.jackhuang.hmcl.setting.GameDirectoryManager;
 import org.jackhuang.hmcl.setting.SettingsManager;
+import org.jackhuang.hmcl.web.audit.AuditLog;
+import org.jackhuang.hmcl.web.auth.AuthFilter;
+import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.instance.InstanceRuntime;
 import org.jackhuang.hmcl.web.task.TaskService;
@@ -128,7 +131,7 @@ public final class InstancesApiServlet extends HttpServlet {
                 switch (request.getMethod()) {
                     case "GET" -> getInstance(response, id);
                     case "PATCH" -> updateInstance(request, response, id);
-                    case "DELETE" -> deleteInstance(response, id);
+                    case "DELETE" -> deleteInstance(request, response, id);
                     default -> Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
                 }
                 return;
@@ -136,7 +139,7 @@ public final class InstancesApiServlet extends HttpServlet {
             switch (segments[1]) {
                 case "install" -> install(request, response, id);
                 case "launch" -> launch(request, response, id);
-                case "stop" -> stop(response, id);
+                case "stop" -> stop(request, response, id);
                 case "logs" -> logs(request, response, id);
                 case "open" -> open(response, id);
                 case "plugins" -> plugins(request, response, id, segments);
@@ -193,6 +196,8 @@ public final class InstancesApiServlet extends HttpServlet {
         String id = uniqueId(name);
         DshInstance instance = DshInstanceManager.create(id, version, DshInstance.DEFAULT_PROFILE,
                 workspace, homeMode, null, List.of(), java.util.Map.of());
+        AuditLog.log(AuditLog.Channel.WEB, "instance.create", id, "success",
+                actorOf(request), request.getRemoteAddr());
 
         DshPortMode portMode = portMode(body, DshPortMode.AUTO);
         Integer port = intField(body, "port");
@@ -361,7 +366,8 @@ public final class InstancesApiServlet extends HttpServlet {
         Json.writePreservingNulls(response, updated);
     }
 
-    private void deleteInstance(HttpServletResponse response, String id) throws IOException, DshException {
+    private void deleteInstance(HttpServletRequest request, HttpServletResponse response, String id)
+            throws IOException, DshException {
         DshInstance instance = DshInstanceManager.find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
@@ -379,6 +385,8 @@ public final class InstancesApiServlet extends HttpServlet {
         DshInstanceManager.delete(id);
         runtime.forget(id);
         runtime.announceDeleted(instance);
+        AuditLog.log(AuditLog.Channel.WEB, "instance.delete", id, "success",
+                actorOf(request), request.getRemoteAddr());
         Json.write(response, java.util.Map.of("ok", true));
     }
 
@@ -613,6 +621,8 @@ public final class InstancesApiServlet extends HttpServlet {
         }
         String publicHost = resolvePublicHost(body, request);
         runtime.launchAsync(instance, publicHost);
+        AuditLog.log(AuditLog.Channel.WEB, "instance.launch", id, "success",
+                actorOf(request), request.getRemoteAddr());
         Json.write(response, HttpServletResponse.SC_ACCEPTED, java.util.Map.of("state", "starting"));
     }
 
@@ -639,7 +649,7 @@ public final class InstancesApiServlet extends HttpServlet {
 
     // ------------------------------------------------------------------- stop --
 
-    private void stop(HttpServletResponse response, String id) throws IOException {
+    private void stop(HttpServletRequest request, HttpServletResponse response, String id) throws IOException {
         DshInstance instance = DshInstanceManager.find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
@@ -650,6 +660,8 @@ public final class InstancesApiServlet extends HttpServlet {
             return;
         }
         runtime.stopAsync(id);
+        AuditLog.log(AuditLog.Channel.WEB, "instance.stop", id, "success",
+                actorOf(request), request.getRemoteAddr());
         Json.write(response, HttpServletResponse.SC_ACCEPTED, java.util.Map.of("state", "stopping"));
     }
 
@@ -1529,6 +1541,13 @@ public final class InstancesApiServlet extends HttpServlet {
             suffix++;
         }
         return candidate;
+    }
+
+    /// The session's username for the audit trail, or null when the request
+    /// carries no session (auth disabled, or a hand the filter never saw).
+    private static @Nullable String actorOf(HttpServletRequest request) {
+        Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
+        return session instanceof AuthService.Session s ? s.username() : null;
     }
 
     /// The host part of a URL or bare authority string: `https://h/x` and
