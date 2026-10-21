@@ -29,6 +29,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.PipedInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -73,7 +74,16 @@ class MenuShellFactoryTest {
                                      List<MenuShellFactory.Entry> dsh,
                                      List<MenuShellFactory.Entry> brands,
                                      List<SessionCatalog.Entry> sessions) {
-        return new MenuShellFactory(auth, () -> dsh, () -> brands, () -> sessions, new PrintingAttachSupport());
+        return factory(auth, dsh, brands, sessions, new PrintingAttachSupport(), null);
+    }
+
+    private MenuShellFactory factory(DeveloperAuth auth,
+                                     List<MenuShellFactory.Entry> dsh,
+                                     List<MenuShellFactory.Entry> brands,
+                                     List<SessionCatalog.Entry> sessions,
+                                     AttachSupport attach,
+                                     org.jackhuang.hmcl.web.auth.LoginThrottle gateThrottle) {
+        return new MenuShellFactory(auth, () -> dsh, () -> brands, () -> sessions, attach, gateThrottle);
     }
 
     /// The acknowledgement stand-in the menu tests drive: prints the choice,
@@ -92,8 +102,13 @@ class MenuShellFactoryTest {
 
     /// Feeds `input` to a fresh shell and waits for the exit callback.
     private Session run(MenuShellFactory factory, String input) throws Exception {
+        return run(factory, new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    /// Drives a fresh shell from `stdin` — which may stay open, like a real
+    /// channel — and waits for the exit callback.
+    private Session run(MenuShellFactory factory, InputStream stdin) throws Exception {
         Command command = factory.createShell(null);
-        ByteArrayInputStream stdin = new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8));
         ByteArrayOutputStream stdout = new ByteArrayOutputStream();
         ByteArrayOutputStream stderr = new ByteArrayOutputStream();
         CountDownLatch exited = new CountDownLatch(1);
@@ -153,6 +168,69 @@ class MenuShellFactoryTest {
         assertEquals(0, session.exitCode());
         assertTrue(session.output.contains("网页端"), "the message names the web UI: " + session.output);
         assertFalse(session.output.contains("dsh 实例"), "the menu never renders: " + session.output);
+    }
+
+    // ------------------------------------------------------------------- M4 --
+
+    @Test
+    void idleGateIsCutByTheWatchdog() throws Exception {
+        MenuShellFactory factory = factory(authWithPassword(), List.of(), List.of(), List.of());
+        factory.gateIdleTimeout(java.time.Duration.ofMillis(300));
+        // A channel that says nothing at all: connected, open, silent.
+        PipedInputStream stdin = new PipedInputStream();
+        java.io.PipedOutputStream feed = new java.io.PipedOutputStream(stdin);
+
+        Session session = run(factory, stdin);
+
+        assertEquals(1, session.exitCode(), "an idle gate is a cut, not a clean exit");
+        assertTrue(session.output.contains("空闲超时"), "the cut says why: " + session.output);
+        feed.close();
+    }
+
+    @Test
+    void aSpentConnectionRecordsOnceButDoesNotBlockTheIpYet() throws Exception {
+        org.jackhuang.hmcl.web.auth.LoginThrottle throttle =
+                new org.jackhuang.hmcl.web.auth.LoginThrottle();
+        MenuShellFactory factory = factory(authWithPassword(),
+                List.of(new MenuShellFactory.Entry("dsh", "dsh-1", "dsh-1")), List.of(), List.of(),
+                new PrintingAttachSupport(), throttle);
+
+        // One connection burns all three answers: it dies, and the IP earns
+        // exactly one record — not nearly the throttle's blocking budget.
+        Session first = run(factory, "wrong-1\nwrong-2\nwrong-3\n");
+        assertNotEquals(0, first.exitCode());
+        assertTrue(first.output.contains("连接已断开"), first.output);
+
+        // The next connection from the same peer (no channel → "unknown")
+        // passes the gate and reaches the menu.
+        Session second = run(factory, DEV_PASSWORD + "\nq\n");
+        assertEquals(0, second.exitCode());
+        assertTrue(second.output.contains("dsh 实例"), "one spent connection does not block the IP: "
+                + second.output);
+    }
+
+    @Test
+    void aBlockedIpIsRefusedBeforeThePrompt() throws Exception {
+        org.jackhuang.hmcl.web.auth.LoginThrottle throttle =
+                new org.jackhuang.hmcl.web.auth.LoginThrottle();
+        MenuShellFactory factory = factory(authWithPassword(),
+                List.of(new MenuShellFactory.Entry("dsh", "dsh-1", "dsh-1")), List.of(), List.of(),
+                new PrintingAttachSupport(), throttle);
+        // The gate records one entry per SPENT connection: fifteen seeds plus
+        // one triple-failure connection cross the throttle's budget, so the
+        // NEXT connection is refused at the door.
+        java.time.Instant now = java.time.Instant.now();
+        for (int i = 0; i < org.jackhuang.hmcl.web.auth.LoginThrottle.MAX_FAILURES; i++) {
+            throttle.recordFailure("unknown", now);
+        }
+        Session spent = run(factory, "wrong-1\nwrong-2\nwrong-3\n");
+        assertTrue(spent.output.contains("连接已断开"), spent.output);
+
+        Session refused = run(factory, DEV_PASSWORD + "\n");
+        assertEquals(1, refused.exitCode());
+        assertTrue(refused.output.contains("请稍后再试"), "the blocked peer is told to wait: " + refused.output);
+        assertFalse(refused.output.contains("dsh 实例"), "the menu never renders for a blocked peer: "
+                + refused.output);
     }
 
     // ------------------------------------------------------------------ menu --

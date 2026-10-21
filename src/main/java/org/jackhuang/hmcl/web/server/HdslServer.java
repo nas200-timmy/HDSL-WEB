@@ -66,10 +66,6 @@ import org.jackhuang.hmcl.web.http.VersionsApiServlet;
 import org.jackhuang.hmcl.web.instance.InstanceRuntime;
 import org.jackhuang.hmcl.web.proxy.InstanceProxyServlet;
 import org.jackhuang.hmcl.web.proxy.InstanceProxyWebSocket;
-import org.jackhuang.hmcl.web.ssh.DeveloperAuth;
-import org.jackhuang.hmcl.web.ssh.DshAttachSupport;
-import org.jackhuang.hmcl.web.ssh.SshApiServlet;
-import org.jackhuang.hmcl.web.ssh.SshService;
 import org.jackhuang.hmcl.web.task.TaskService;
 import org.jackhuang.hmcl.web.tls.CertificateManager;
 import org.jackhuang.hmcl.web.ws.WsGateway;
@@ -123,7 +119,9 @@ public final class HdslServer {
     /// The ACP console bridge; its processes outlive `/ws` connections and are
     /// all stopped when the server stops.
     private final AcpSessionManager acpSessions;
-    private final SshService sshService;
+    /// The SSH terminal channel, behind reflection so the -PnoSsh build can
+    /// omit the channel's classes entirely (see [SshBridge]).
+    private final SshBridge ssh;
     private final Logger logger;
     private final AtomicLong startedAtMillis;
     private final AtomicBoolean hookInstalled = new AtomicBoolean();
@@ -131,7 +129,7 @@ public final class HdslServer {
     private HdslServer(Server server, HttpConfiguration baseHttpConfig, ServerConnector mainConnector,
                        @Nullable ServerConnector redirectConnector,
                        @Nullable SslContextFactory.Server sslContextFactory, WebSocketClient proxyWebSocketClient,
-                       AcpSessionManager acpSessions, SshService sshService, Logger logger, AtomicLong startedAtMillis) {
+                       AcpSessionManager acpSessions, SshBridge ssh, Logger logger, AtomicLong startedAtMillis) {
         this.server = server;
         this.baseHttpConfig = baseHttpConfig;
         this.mainConnector = mainConnector;
@@ -139,7 +137,7 @@ public final class HdslServer {
         this.sslContextFactory = sslContextFactory;
         this.proxyWebSocketClient = proxyWebSocketClient;
         this.acpSessions = acpSessions;
-        this.sshService = sshService;
+        this.ssh = ssh;
         this.logger = logger;
         this.startedAtMillis = startedAtMillis;
     }
@@ -245,21 +243,17 @@ public final class HdslServer {
         // runtime; the reference is filled once the instance exists.
         java.util.concurrent.atomic.AtomicReference<HdslServer> self = new java.util.concurrent.atomic.AtomicReference<>();
 
-        // The SSH terminal channel service (docs/ssh-terminal-channel.md).
-        // Constructed always, but it never touches the network (or even the
-        // disk) unless config.ssh.enabled is true — an off switch with no
-        // attack surface. The developer credential store shares <data>/auth
-        // with the user store.
-        DeveloperAuth devAuth;
-        try {
-            devAuth = DeveloperAuth.open(config.dataDir);
-        } catch (java.io.IOException e) {
-            throw new IllegalStateException("Cannot open the developer credential store in " + config.dataDir, e);
-        }
-        SshService sshService = new SshService(config, authService, devAuth, logger);
-        // What a menu choice attaches to: the real TUI spawn and byte-pump
-        // (docs/ssh-terminal-channel.md §M3).
-        sshService.attachSupport(new DshAttachSupport());
+        // The SSH terminal channel service (docs/ssh-terminal-channel.md),
+        // loaded reflectively so the -PnoSsh build can leave the channel's
+        // classes and the MINA/eddsa jars out of the image: an absent
+        // channel is a log line, not a crash. The HTTPS guard inside the
+        // management servlet reads this server's live TLS state through
+        // `self`, the same reference the TLS settings endpoint uses.
+        SshBridge ssh = SshBridge.load(config, authService,
+                () -> {
+                    HdslServer live = self.get();
+                    return live != null && live.tlsActive();
+                }, logger);
 
         ServletContextHandler context = new ServletContextHandler();
         context.setContextPath("/");
@@ -279,7 +273,7 @@ public final class HdslServer {
         packsHolder.getRegistration().setMultipartConfig(packMultipart);
         context.addServlet(packsHolder, "/api/packs/*");
         context.addServlet(new ServletHolder(new ExportsApiServlet(config)), "/api/exports/*");
-        context.addServlet(new ServletHolder(new DoctorApiServlet(config, sshService)), "/api/doctor");
+        context.addServlet(new ServletHolder(new DoctorApiServlet(config, ssh)), "/api/doctor");
         context.addServlet(new ServletHolder(new AccountsApiServlet(eventBus)), "/api/accounts/*");
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
@@ -291,14 +285,11 @@ public final class HdslServer {
         ServletHolder tlsHolder = new ServletHolder(new TlsApiServlet(config, certificates, self::get));
         tlsHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(tlsHolder, "/api/settings/*");
-        // The SSH channel's management surface. The HTTPS guard inside reads
-        // the live TLS state through `self`, the same reference the TLS
-        // settings endpoint uses.
-        context.addServlet(new ServletHolder(new SshApiServlet(sshService, devAuth, config, authService,
-                () -> {
-                    HdslServer live = self.get();
-                    return live != null && live.tlsActive();
-                })), "/api/ssh/*");
+        // The SSH channel's management surface; nothing is registered at all
+        // when the build omits the channel (-PnoSsh).
+        if (ssh.apiServlet() != null) {
+            context.addServlet(new ServletHolder(ssh.apiServlet()), "/api/ssh/*");
+        }
         context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService, config.basePath)), "/i/*");
         context.addServlet(new ServletHolder(new StaticServlet(config.basePath)), "/");
         // Anything a servlet lets escape becomes a JSON 500, not Jetty's HTML
@@ -351,7 +342,7 @@ public final class HdslServer {
         server.setHandler(handler);
 
         HdslServer built = new HdslServer(server, httpConfig, mainConnector, redirectConnector, ssl,
-                proxyWebSocketClient, acpSessions, sshService, logger, startedAtMillis);
+                proxyWebSocketClient, acpSessions, ssh, logger, startedAtMillis);
         self.set(built);
         return built;
     }
@@ -440,9 +431,10 @@ public final class HdslServer {
         startedAtMillis.set(System.currentTimeMillis());
         // The SSH channel starts after the panel is up: its management API is
         // already serving by the time the listener accepts its first session.
-        // SshService.start() is itself a silent no-op unless the channel is
-        // enabled — "off = no attack surface" is its own guarantee.
-        sshService.start();
+        // The start is itself a silent no-op unless the channel is enabled —
+        // "off = no attack surface" is its own guarantee — and a no-op too
+        // on builds that omit the channel entirely.
+        ssh.start();
         // The brand version pickers read the npm registries; warming the cache
         // off-thread keeps the first picker render instant without delaying
         // the health check.
@@ -493,11 +485,6 @@ public final class HdslServer {
         }
         ServerConnector connector = mainConnector;
         return connector != null && connector.getConnectionFactory(SslConnectionFactory.class) != null;
-    }
-
-    /// The SSH terminal channel service behind `/api/ssh/*`.
-    public SshService sshService() {
-        return sshService;
     }
 
     /// The outcome of a TLS switch attempt: on success `restartRequired` is
@@ -687,7 +674,7 @@ public final class HdslServer {
     public void stop() throws Exception {
         // Symmetric with start(): the SSH listener goes down with the panel
         // that owns it — no port outliving the process that opened it.
-        sshService.stop();
+        ssh.stop();
         acpSessions.closeAll();
         server.stop();
         proxyWebSocketClient.stop();

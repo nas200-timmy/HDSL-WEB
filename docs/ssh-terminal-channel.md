@@ -1,7 +1,9 @@
 # SSH 终端通道：设计 + 分里程碑实施计划
 
-> 状态：**待审阅**。审阅通过后按 M0→M4 顺序实施，**每个里程碑一个提交**到
-> `feat/windows-bare-deploy`。实现期间本文件随进度打勾更新。
+> 状态：**已实施**（M0–M4 全部落地，分支 `feat/windows-bare-deploy`，一个里程碑一个提交）。
+> 类名对齐：计划中的 `PanelShellFactory` 实施为 `MenuShellFactory`；`SpawnSupport` 实施为
+> `AttachSupport` + `DshAttachSupport`；会话扫描为 `SessionCatalog`；`-PnoSsh` 的反射桥为
+> `SshBridge`（web.server 包）。实施期间的全部取舍固化在 §5 各里程碑的「实施注记」与 §6 风险登记。
 
 ## 1. 这是什么
 
@@ -91,7 +93,8 @@ ssh:
 4. （可选）开发者模式内打开「允许口令登录」开关（爆破风险警告）：
    SSH 可用面板口令登录，与公钥方式并存。
 5. `ssh -p 3022 hdsl@host -t` → 第一道 SSH 认证（公钥或口令）→ **TUI 门禁**：
-   输开发者密码（错 3 次断开 + 审计）→ 菜单（实例/品牌/会话分组，会话条目标题
+   输开发者密码（错 3 次断开 + 审计；**门禁阶段 120 秒无输入断开**，审计
+   `ssh.idle-timeout`）→ 菜单（实例/品牌/会话分组，会话条目标题
    来自 session sidecar JSON，锁标记来自 `session.lock` 活性）。
 6. 选条目 → 面板按实例 spawn `dsh tui [--resume <id>]`（env 注入走 `DshLauncher`
    链路）→ 字节泵接管，TERM/尺寸透传，resize 实时生效。
@@ -101,7 +104,7 @@ ssh:
 
 ## 5. 分里程碑计划（每个 M = 一个提交）
 
-### M0｜审计基础 + server.yaml 权限 — 提交 `feat(audit): …`
+### M0｜审计基础 + server.yaml 权限 — 提交 `feat(audit): …` ✅ 已实施
 
 - `AuditLog`：append-only JSONL（`/data/logs/audit.jsonl`，0600，按日轮转、启动清残留），
   事件 `{ts, actor, channel, action, object, outcome, ip}`；通道枚举先含 `web`/`ssh`。
@@ -112,7 +115,10 @@ ssh:
 - 测试：审计文件轮转/并发写/权限断言；server.yaml 落盘权限断言；
   每个接线点一条「事件已落」用例。目标用例数 +20 左右。
 
-### M1｜SSH 开关、平台门、开发者密码与骨架 — 提交 `feat(ssh): …`
+实施注记：M0 本体随 `e4f1247` 落地；容器内无 JDK，其中两处编译错误（Main 缺
+`java.io.IOException` import、ApiGuardFilter rethrow 越界）在 `16815ca` 一并修复。
+
+### M1｜SSH 开关、平台门、开发者密码与骨架 — 提交 `feat(ssh): …` ✅ 已实施
 
 - 依赖：`org.apache.sshd:sshd-core`（shadowJar 已配 `mergeServiceFiles`）。
 - `SshService`：仅 `enabled=true` 且平台允许时由 `HdslServer` 构造并启动；
@@ -148,7 +154,15 @@ ssh:
   开发者密码设置/校验/错 3 次退避/未设置文案、提权过期、
   平台门三态（Linux 过 / macOS 过且标未实测 / Windows 拒）、审计逐条核对。
 
-### M2｜panel-shell 菜单与 TUI 门禁 — 提交 `feat(ssh): …菜单+门禁`
+实施注记：随 `5c25b01` 落地（骨架为 `SkeletonShellFactory`，M2 被替换删除）。
+**两处计划外修复**（`3e58736`）：① `net.i2p.crypto:eddsa` 是 sshd-common 的
+optional 依赖不传递，缺它所有 Ed25519 路径（authorized_keys/host key）运行期必炸——
+已显式声明依赖；② host key 生成对齐 i2p provider（JDK `NamedParameterSpec` 被拒），
+重载路径钉死走 sshd 自家 OpenSSH 解析器（BC 解析器会把 Ed25519 文件解成无关 EC key，
+重启即换 fingerprint）。`MaxAuthTries=3` 未实现（sshd-core 2.12.1 无该旋钮）：
+公钥默认必登录 + 口令 per-IP 节流已覆盖主要爆破面，留作后续加固项。
+
+### M2｜panel-shell 菜单与 TUI 门禁 — 提交 `feat(ssh): …菜单+门禁` ✅ 已实施
 
 - `PanelShellFactory`：唯一入口；无 `CommandFactory`/SFTP/转发。
   行导向 ANSI（JLine3 只做行编辑，不做全屏）。
@@ -162,7 +176,13 @@ ssh:
 - 安全细节：回显实例名/会话标题前过滤控制字符（转义注入用例钉死）。
 - 测试：门禁正/反路径、菜单渲染快照、注入用例、坏输入不崩、空列表文案。
 
-### M3｜TUI attach — 提交 `feat(ssh): …attach`
+实施注记：随 `2651387` 落地。类名 `MenuShellFactory`。取舍固化：① 服务端无 PTY，
+开发者密码**回显**，提示行已标注「(输入将回显)」；② 每行一条菜单项（计划草图为
+两行一条，纯排版差异）；③ 门禁审计每一次失败（不只第 3 次）；④ 未设置开发者密码
+走退出码 0 + 明确文案；⑤ 控制字符过滤 `sanitize()` 在计划三类之外多剥 C1 区
+（0x80–0x9F）；⑥ 会话目录两种拼法（裸 `<uuid>` 与旧式 `session-<uuid>`）并存都扫。
+
+### M3｜TUI attach — 提交 `feat(ssh): …attach` ✅ 已实施
 
 - `SpawnSupport`：进程内调 `DshLauncher` 链路拼 env（DSH_HOME/账户路由注入），
   cwd=实例 home，命令 `dsh tui [--resume <id>]`（brand 实例对应 CLI）。
@@ -174,7 +194,17 @@ ssh:
   `dsh` 桩打印 env 即退）、resize 事件到达子进程、断连后无孤儿进程、
   用真实会话（如 session-60b3f47c）resume 标题对账。
 
-### M4｜加固收尾 — 提交 `feat(ssh): …加固 + 文档`
+实施注记：随 `5b5759e` 落地。接口名 `AttachSupport`，实现 `DshAttachSupport`。
+取舍固化：① env 注入零拷贝复用 `DshLauncher.plan`（web launch 同一入口）+
+  `InstanceRuntime.accountOf`，只换 surface（`tui [--resume]`）与 cwd（实例 home）；
+  ② **品牌实例 attach 明确延后**——菜单选品牌回一行「后续版本提供」（各品牌 CLI
+  差异大，硬套 `dsh tui` 拼装会产生错误命令）；③ resize **已接完整**（超出计划
+  「v1 只留接口」）：MINA 服务端 window-change 经 `StandardEnvironment` 的
+  WINCH 信号直达 `kill -WINCH <pid>`；④ 同 home 单 attach 由面板侧 ConcurrentHashMap
+  把关（第二人得一行的拒绝文案）；⑤ 「resize 事件到达子进程」用例未单独做
+  （信号路径即 MINA 既有机制），断连清树用 fake-dsh 的 sleep+子进程夹具实证。
+
+### M4｜加固收尾 — 提交 `feat(ssh): …加固 + 文档` ✅ 已实施
 
 - SSH 认证适配器按 IP 退避（口令登录开启时尤其必要）；空闲超时只挂门禁阶段
   （SSH 认证完成前 + TUI 门禁输密码前），attach 中的会话不设。
@@ -183,16 +213,26 @@ ssh:
   平台矩阵（Linux ✓ / macOS 未实测 / Windows 不支持）写进 README 与体检文案。
 - 全量回归 + CHANGELOG 草稿（**不发版**，等整批评审后随仓库节奏发布）。
 
+实施注记：随本提交落地。取舍固化：① 门禁 120 秒空闲超时只在**门禁阶段**挂
+（watchdog 定时器：关 channel/关流/中断三管齐下），attach 中的会话不设；
+② 门禁跨连接退避复用 `LoginThrottle` 数据结构、策略在调用处——**一条耗尽
+（错满 3 次）的连接 = 一条记录**，15 条记录（≈15 次重连 ×3 猜）换 10 分钟
+per-IP 封禁；③ `-PnoSsh` 采用**反射方案**：`SshBridge`（web.server 包）按名
+加载 ssh 类，缺类时日志一行「此构建不含 SSH 终端通道」并继续，/api/ssh/*
+ 不注册、体检行如实标注——「类隔离」方案因 DoctorApiServlet/组合根多处直接
+引用被否；④ 连接数口径：网页 status 的 `connections` 来自 `SessionListener`
+ 的 sessionEstablished/sessionClosed 计数，M1 起即为真实值。
+
 ## 6. 风险登记
 
 | 风险 | 缓解 |
 |---|---|
 | 开发者密码丢失 | 面板口令 + HTTPS 下重置（审计落「重置」事件）；重置会使已提权会话失效 |
-| TUI 门禁被爆破 | 错 3 次即断开 + 按 IP 退避 + 公钥前置（双因子）；审计留证 |
+| TUI 门禁被爆破 | 错 3 次即断开 + 按 IP 退避（跨连接，15 条耗尽记录换 10 分钟封禁）+ 门禁 120s 空闲超时 + 公钥前置（双因子）；审计留证 |
 | macOS 行为未验证 | 标「未实测」不承诺；真机复验后转正（沿用 Windows 复验流程） |
-| v1 裸管道下个别程序要求 tty ioctl | 已知取舍；v2 JPty。菜单阶段标注 |
-| dsh 自身锁比预期严格，resume「web 使用中」会话被拒 | v1 透传 dsh 报错，不替它仲裁 |
-| MINA/netty CVE | dependabot 接入（已建议）+ noSsh 变体 + 回环默认 |
+| v1 裸管道下个别程序要求 tty ioctl | 已知取舍，已在菜单与类注释标注；v2 JPty。TERM/COLUMNS/LINES 已透传、SIGWINCH 已接，TUI 渲染正常 |
+| dsh 自身锁比预期严格，resume「web 使用中」会话被拒 | v1 透传 dsh 报错，不替它仲裁（菜单以 `session.lock` 活性标「web 使用中」作前置提示） |
+| MINA/netty CVE | dependabot 接入（已建议）+ **`-PnoSsh` 变体**（ssh 类与 MINA/eddsa 整体出包，反射桥缺类即降级）+ 回环默认 |
 | `session.v4.jsonl.zstd` 格式随 dsh 升级变化 | v1 不解析主日志；sidecar 字段缺失时优雅降级为「显示 ID」 |
 | 纯 HTTP 下用户找不到开关入口 | 入口禁用但**可见**，文案说清「需 HTTPS」并指路 TLS 设置页 |
 
@@ -203,3 +243,6 @@ M3 约 2 天 → M4 半天。
 M0 是其他所有通道的公共地基（与后续 ACP 工具层共用），必须先落。
 spike 验收线：M1+M2+M3 跑通 `ssh -p 3022 hdsl@nas -t` → 门禁输开发者密码 →
 菜单 → attach `dsh tui` → 看到 DeepSeek 的 TUI 画面。
+验收状态：容器内以 JVM 自连（MINA client 走真实 SSH 握手 + fake-dsh 夹具断言
+env/argv/退出码/断连清树）全链路打穿；真机 ssh 客户端验收待部署到带 dsh 实例的
+主机后走 §4 流程。

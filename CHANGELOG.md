@@ -2,6 +2,41 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 — SSH 终端通道（M0–M4）
+
+`ssh -p 3022 hdsl@主机` → TUI 门禁（独立开发者密码）→ 编号菜单（dsh 实例 / 品牌实例 /
+恢复 dsh 会话）→ 选定项的 `dsh tui [--resume]` 终端直接接管当前 SSH 会话。设计、威胁模型与
+验收流程见 [docs/ssh-terminal-channel.md](docs/ssh-terminal-channel.md)。**随下次发版定名
+（计划 v0.5.0）**。
+
+- **审计设施（M0）**：append-only JSONL 审计日志（`/data/logs/audit.jsonl`，0600、按日轮转），
+  事件 `{ts, actor, channel, action, object, outcome, ip}`；登录/实例/TLS 等既有操作全部接线。
+  server.yaml 写入收紧 0600。
+- **SSH 服务骨架（M1）**：嵌入式 Apache MINA SSHD；`ssh.enabled` 默认关（不开关 = 无监听
+  端口，有集成测试钉死）；Ed25519 host key 首启生成、持久化、重启不换 fingerprint；
+  平台门（Linux ✓ / macOS 放行标未实测 / Windows 三层封禁）；开发者密码（PBKDF2 0600 独立
+  存储，网页开发者模式提权 + TUI 门禁双角色）；authorized_keys 管理（粘贴上传/服务端生成
+  密钥对、私钥一次性展示永不落盘）；HTTPS 前置守卫 + 15 分钟滑动提权；口令登录开关
+  （默认关、开带警告、热应用）。
+- **TUI 门禁 + 编号菜单（M2）**：SSH 认证后再输开发者密码（错 3 次断开+审计）；三区分区
+  菜单全局连续编号；「恢复 dsh 会话」只读 sidecar JSON 拿标题、按 `session.lock` 活性标
+  「web 使用中」，不解压 zstd 主日志；实例名/会话标题回显前过 `sanitize()` 控制字符过滤
+  （转义注入用例钉死）。服务端无 PTY，密码回显已在提示行标注。
+- **TUI attach（M3）**：菜单选定后 spawn `dsh tui [--resume]`——env 注入零拷贝复用
+  web 启动链路（`DshLauncher.plan`：账户路由、provider key、实例 Node 运行时、DSH_HOME），
+  cwd=实例 home；双向字节泵（虚拟线程），channel 断开 `ProcessTree` 杀整棵进程树；
+  TERM/COLUMNS/LINES 透传、window-change 转 SIGWINCH；同 home 单 attach；品牌实例
+  attach 明确延后（回一行说明）；未安装实例友好报错。
+- **加固收尾（M4）**：门禁阶段 120 秒空闲超时（审计 `ssh.idle-timeout`）；门禁失败按
+  per-IP 跨连接退避（一条耗尽连接 = 一条节流记录，15 条换 10 分钟封禁）；依赖修复
+  `net.i2p.crypto:eddsa`（sshd-common 的 optional 依赖不传递，缺它 Ed25519 运行期必炸）
+  与 host key 的 i2p provider 对齐（重载路径钉死 sshd 自家解析器，防 BC 解析换 key）；
+  `-PnoSsh` 构建变体（shadowJar 剔除 ssh 类与 MINA/eddsa，`SshBridge` 反射加载、缺类
+  即降级为「无 SSH 能力」并明示）。
+- 修复（同分支早前提交顺带）：M0/M1 遗留的 5 处编译错误（容器内无 JDK 从未被编译器
+  核过）——Main 缺 import、ApiGuardFilter rethrow 越界、HdslServer 缺 import、
+  SshService/SshApiServlet 漏 catch 受检异常、audit() 少传实参、嵌套 switch 语法。
+
 ## v0.4.9 — 2026-10-21 · 前端健壮性与动画体验
 
 - **ErrorBoundary**：任何子组件的渲染/生命周期崩溃都被拦成可恢复的错误页

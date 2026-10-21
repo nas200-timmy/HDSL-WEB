@@ -179,6 +179,14 @@ HDSL-web.
       MIT License.
       https://www.slf4j.org/license.html
 
+  Apache MINA SSHD (org.apache.sshd:sshd-core, sshd-common; the sshd-eddsa
+  classes ship inside sshd-common) and net.i2p.crypto:eddsa
+      Apache License 2.0.
+      The embedded SSH terminal channel; both absent from a `-PnoSsh`
+      build.
+      https://mina.apache.org/sshd-project/
+      https://github.com/str4d/ed25519-java
+
   JetBrains annotations (org.jetbrains:annotations) and IntelliJ language
   annotations (org.intellij:annotations)
       Apache License 2.0.

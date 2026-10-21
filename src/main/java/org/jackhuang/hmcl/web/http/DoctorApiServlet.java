@@ -24,8 +24,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.jackhuang.hmcl.dsh.DshDoctor;
 import org.jackhuang.hmcl.web.config.ServerConfig;
-import org.jackhuang.hmcl.web.ssh.PlatformGuard;
-import org.jackhuang.hmcl.web.ssh.SshService;
+import org.jackhuang.hmcl.web.server.SshBridge;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -56,9 +55,9 @@ import java.util.Locale;
 public final class DoctorApiServlet extends HttpServlet {
 
     private final ServerConfig config;
-    private final SshService ssh;
+    private final SshBridge ssh;
 
-    public DoctorApiServlet(ServerConfig config, SshService ssh) {
+    public DoctorApiServlet(ServerConfig config, SshBridge ssh) {
         this.config = config;
         this.ssh = ssh;
     }
@@ -106,24 +105,25 @@ public final class DoctorApiServlet extends HttpServlet {
 
     /// The platform row of the SSH channel: Linux passes, macOS passes with
     /// the "unverified" label the threat model requires, everything else
-    /// fails — the same verdict [PlatformGuard] gates the service with.
+    /// fails — the same verdict the service itself gates on. A build without
+    /// the channel (-PnoSsh) gets its own honest row.
     private JsonObject sshPlatformCheck() {
         JsonObject check = new JsonObject();
         check.addProperty("id", "ssh-platform");
         check.addProperty("name", "SSH platform");
-        switch (PlatformGuard.verdict()) {
-            case SUPPORTED -> {
-                check.addProperty("status", "ok");
-                check.addProperty("detail", "Linux：SSH 终端通道完整支持");
-            }
-            case SUPPORTED_UNVERIFIED -> {
-                check.addProperty("status", "warn");
-                check.addProperty("detail", "macOS：SSH 终端通道放行，但尚未真机实测");
-            }
-            case UNSUPPORTED -> {
-                check.addProperty("status", "fail");
-                check.addProperty("detail", "此平台不支持 SSH 终端通道");
-            }
+        String verdict = ssh.platformVerdict();
+        if (verdict == null) {
+            check.addProperty("status", "ok");
+            check.addProperty("detail", "此构建不含 SSH 终端通道（-PnoSsh）");
+        } else if (verdict.equals("supported")) {
+            check.addProperty("status", "ok");
+            check.addProperty("detail", "Linux：SSH 终端通道完整支持");
+        } else if (verdict.equals("supported_unverified")) {
+            check.addProperty("status", "warn");
+            check.addProperty("detail", "macOS：SSH 终端通道放行，但尚未真机实测");
+        } else {
+            check.addProperty("status", "fail");
+            check.addProperty("detail", "此平台不支持 SSH 终端通道");
         }
         return check;
     }
@@ -135,7 +135,10 @@ public final class DoctorApiServlet extends HttpServlet {
         JsonObject check = new JsonObject();
         check.addProperty("id", "ssh");
         check.addProperty("name", "SSH channel");
-        if (!config.ssh.enabled) {
+        if (!ssh.present()) {
+            check.addProperty("status", "ok");
+            check.addProperty("detail", "此构建不含 SSH 终端通道（-PnoSsh）");
+        } else if (!config.ssh.enabled) {
             check.addProperty("status", "ok");
             check.addProperty("detail", "SSH 终端通道已关闭（默认，无监听端口）");
         } else if (ssh.isRunning()) {

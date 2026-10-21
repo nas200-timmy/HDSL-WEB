@@ -105,6 +105,13 @@ public final class SshService {
     private final AuthorizedKeys authorizedKeys;
     /// One budget per source IP, shared semantics with the panel sign-in.
     private final LoginThrottle passwordThrottle = new LoginThrottle();
+    /// The TUI gate's cross-connection budget, per peer IP. The primitive is
+    /// [LoginThrottle] unchanged — 15 records in a 5-minute window buy a
+    /// 10-minute refusal — but the gate's policy is expressed in exhausted
+    /// connections, not single guesses: **one record per connection that
+    /// burned all three answers**. 15 reconnects' worth of guessing, not 15
+    /// guesses, is what the window buys.
+    private final LoginThrottle gateThrottle = new LoginThrottle();
     private final AtomicInteger connections = new AtomicInteger();
     private final SessionListener auditListener = new AuditSessionListener();
 
@@ -238,7 +245,7 @@ public final class SshService {
 
             sshd.setShellFactory(new MenuShellFactory(
                     devAuth, this::dshInstanceRows, this::brandInstanceRows,
-                    () -> new SessionCatalog(DshPaths.INSTANCES).list(), attachSupport));
+                    () -> new SessionCatalog(DshPaths.INSTANCES).list(), attachSupport, gateThrottle));
             sshd.setForwardingFilter(RejectAllForwardingFilter.INSTANCE);
             sshd.addSessionListener(auditListener);
 

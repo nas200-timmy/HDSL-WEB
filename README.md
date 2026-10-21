@@ -30,6 +30,13 @@
 - 下载源：设置页可选择预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL。
   保存后立即生效，无需重启。环境变量 `NPM_CONFIG_REGISTRY` 仅作为回退值。
   细节见 [docs/deployment.md](docs/deployment.md)。
+- **SSH 终端通道**：`ssh -p 3022 hdsl@主机` 进来——先过 TUI 门禁（独立的开发者密码），
+  再在编号菜单里挑 dsh 实例 / 恢复 dsh 会话，选定后把 `dsh tui [--resume]` 的终端
+  直接接到你的 SSH 会话上（TERM/尺寸透传、resize 生效、断开自动清理整棵进程树）。
+  默认**关闭**，开启与全部敏感操作要求 **HTTPS + 开发者模式**；公钥登录为默认，
+  口令登录可开（带爆破风险警告）。平台矩阵：**Linux ✓ / macOS 放行但未实测 /
+  Windows 不支持**；极简镜像可用 `-PnoSsh` 构建把 SSH 通道与 MINA 依赖整体剔除。
+  设计、威胁模型与里程碑见 [docs/ssh-terminal-channel.md](docs/ssh-terminal-channel.md)。
 
 <details>
 <summary>更多截图（初始化引导 / 实例列表 / 品牌实例 / 下载 / 设置）</summary>

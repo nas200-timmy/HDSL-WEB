@@ -23,6 +23,7 @@ import org.apache.sshd.server.channel.ChannelSession;
 import org.apache.sshd.server.command.Command;
 import org.apache.sshd.server.shell.ShellFactory;
 import org.jackhuang.hmcl.web.audit.AuditLog;
+import org.jackhuang.hmcl.web.auth.LoginThrottle;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -31,13 +32,19 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
@@ -67,6 +74,12 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// M3), which blocks for the whole attachment and answers the session exit
 /// code; `-1` brings the menu back.
 ///
+/// Hardening (docs/ssh-terminal-channel.md §M4): the gate has a 120-second
+/// idle timeout — a connected client that never answers is cut and audited
+/// `ssh.idle-timeout` — and every connection that burns its three answers
+/// is recorded once against the peer's IP in [SshService]'s gate throttle,
+/// so reconnecting for three more guesses spends a shared budget.
+///
 /// Known v1 tradeoff, deliberate: the server side of the channel has no PTY,
 /// so the developer password **echoes** as the client types it — the prompt
 /// says so (`(输入将回显)`). v2 gains a PTY (docs/ssh-terminal-channel.md
@@ -92,17 +105,58 @@ public final class MenuShellFactory implements ShellFactory {
     private final Supplier<List<Entry>> brandInstances;
     private final Supplier<List<SessionCatalog.Entry>> sessions;
     private final @Nullable AttachSupport attach;
+    private final @Nullable LoginThrottle gateThrottle;
+
+    /// How long the gate may sit unanswered before the watchdog ends the
+    /// session (docs/ssh-terminal-channel.md §M4). Package-private setter so
+    /// the tests can shrink it.
+    private volatile Duration gateIdleTimeout = Duration.ofSeconds(120);
 
     public MenuShellFactory(DeveloperAuth devAuth,
                             Supplier<List<Entry>> dshInstances,
                             Supplier<List<Entry>> brandInstances,
                             Supplier<List<SessionCatalog.Entry>> sessions,
-                            @Nullable AttachSupport attach) {
+                            @Nullable AttachSupport attach,
+                            @Nullable LoginThrottle gateThrottle) {
         this.devAuth = devAuth;
         this.dshInstances = dshInstances;
         this.brandInstances = brandInstances;
         this.sessions = sessions;
         this.attach = attach;
+        this.gateThrottle = gateThrottle;
+    }
+
+    /// Package-private test hook; see the field.
+    void gateIdleTimeout(Duration timeout) {
+        gateIdleTimeout = timeout;
+    }
+
+    /// One watchdog thread for every shell session; a scheduled task only
+    /// ever touches its own session, so sharing is safe.
+    private static final java.util.concurrent.ScheduledExecutorService SCHEDULER =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "hdsl-ssh-gate-watchdog");
+                thread.setDaemon(true);
+                return thread;
+            });
+
+    /// The peer's IP for the gate throttle — the same resolution
+    /// [org.jackhuang.hmcl.web.ssh.SshService] uses for its audit trail,
+    /// with one honest fallback: no channel (unit tests) keys on "unknown".
+    static String peerAddress(@Nullable ChannelSession channel) {
+        if (channel == null) {
+            return "unknown";
+        }
+        try {
+            SocketAddress remote = channel.getServerSession().getRemoteAddress();
+            if (remote instanceof InetSocketAddress inet) {
+                InetAddress address = inet.getAddress();
+                return address == null ? inet.getHostString() : address.getHostAddress();
+            }
+            return String.valueOf(remote);
+        } catch (RuntimeException e) {
+            return "unknown";
+        }
     }
 
     @Override
@@ -175,6 +229,12 @@ public final class MenuShellFactory implements ShellFactory {
         private @Nullable ExitCallback callback;
         private @Nullable ChannelSession channel;
         private @Nullable Thread worker;
+        /// Set by the watchdog when it ends the session; read by the session
+        /// loop to answer a non-zero exit for the cut.
+        private volatile boolean idleTimedOut;
+        /// Whether the session is still before the gate — the watchdog only
+        /// acts inside this window.
+        private volatile boolean gatePhase;
 
         @Override
         public void setInputStream(InputStream in) {
@@ -236,18 +296,70 @@ public final class MenuShellFactory implements ShellFactory {
                 return 0;
             }
             BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
+            // The idle timeout guards only the gate phase (the read of the
+            // developer password): a client that connects and then sits there
+            // must not hold the line forever, and an attach in progress is a
+            // real session, not an idle one.
+            gatePhase = true;
+            ScheduledFuture<?> watchdog = SCHEDULER.schedule(
+                    () -> idleTimeout(input, output), gateIdleTimeout.toMillis(), TimeUnit.MILLISECONDS);
             try {
                 int gate = gate(reader, output);
                 if (gate >= 0) {
                     return gate;
                 }
+                gatePhase = false;
+                watchdog.cancel(false);
                 return menu(reader, input, output);
             } catch (IOException e) {
-                return 0;
+                return idleTimedOut ? 1 : 0;
+            } finally {
+                gatePhase = false;
+                watchdog.cancel(false);
             }
         }
 
-        /// The developer-password gate.
+        /// What the watchdog does when the gate stays quiet for too long:
+        /// say so, audit it, and end the session from every side at once —
+        /// the channel close unblocks a production read, the stream close
+        /// covers a plain pipe, the interrupt is the last resort.
+        private void idleTimeout(InputStream input, OutputStream output) {
+            if (!gatePhase) {
+                return;
+            }
+            idleTimedOut = true;
+            AuditLog.log(AuditLog.Channel.SSH, "ssh.idle-timeout", null, "blocked", null, null);
+            try {
+                line(output, "空闲超时，连接已断开。");
+            } catch (IOException ignored) {
+                // Nobody is reading anyway.
+            }
+            ChannelSession ch = channel;
+            if (ch != null) {
+                try {
+                    ch.close(true);
+                } catch (RuntimeException ignored) {
+                    // The session is ending; a failed close changes nothing.
+                }
+            }
+            try {
+                input.close();
+            } catch (IOException | RuntimeException ignored) {
+                // Same.
+            }
+            Thread thread = worker;
+            if (thread != null) {
+                thread.interrupt();
+            }
+        }
+
+        /// The developer-password gate. Wrong answers are counted per
+        /// connection (three end it); every connection that reaches its third
+        /// is also recorded once against the peer's IP in the gate throttle,
+        /// so an attacker reconnecting for three more guesses spends the
+        /// shared budget instead of getting a fresh one. See
+        /// [org.jackhuang.hmcl.web.ssh.SshService] for the throttle's
+        /// semantics in this role.
         ///
         /// @return the exit code to end the session with, or -1 when the gate
         /// passed and the menu may run
@@ -256,6 +368,14 @@ public final class MenuShellFactory implements ShellFactory {
                 line(output, "开发者密码未设置。请先在网页端「设置 → SSH 通道」中设置开发者密码，"
                         + "然后再从 SSH 终端进入。");
                 return 0;
+            }
+            String peer = peerAddress(channel);
+            LoginThrottle throttle = gateThrottle;
+            Instant now = Instant.now();
+            if (throttle != null && throttle.isBlocked(peer, now)) {
+                AuditLog.log(AuditLog.Channel.SSH, "ssh.gate", null, "blocked", null, null);
+                line(output, "失败次数过多，请稍后再试。");
+                return 1;
             }
             int failures = 0;
             while (true) {
@@ -267,11 +387,19 @@ public final class MenuShellFactory implements ShellFactory {
                 }
                 if (devAuth.verify(answer.trim())) {
                     AuditLog.log(AuditLog.Channel.SSH, "ssh.gate", null, "success", null, null);
+                    if (throttle != null) {
+                        throttle.clear(peer);
+                    }
                     return -1;
                 }
                 failures++;
                 AuditLog.log(AuditLog.Channel.SSH, "ssh.gate", null, "failure", null, null);
                 if (failures >= MAX_GATE_FAILURES) {
+                    if (throttle != null) {
+                        // One record per exhausted connection — the throttle's
+                        // own window size is the policy here, not the guess count.
+                        throttle.recordFailure(peer, Instant.now());
+                    }
                     line(output, "失败次数过多，连接已断开。");
                     return 1;
                 }

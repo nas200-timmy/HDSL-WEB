@@ -188,7 +188,7 @@ class DshAttachSupportTest {
         hookFakeDsh("print", 3);
         MenuShellFactory factory = new MenuShellFactory(authWithPassword(),
                 () -> List.of(new MenuShellFactory.Entry("dsh", "m3-exit", "m3-exit")),
-                List::of, List::of, support);
+                List::of, List::of, support, null);
 
         // The channel's stdin stays open across the whole session — closing
         // it is the disconnect, which only happens after the assertions.
