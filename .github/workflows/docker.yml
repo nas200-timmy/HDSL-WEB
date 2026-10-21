@@ -48,6 +48,11 @@ jobs:
       # 没有这道闸门时，回填一个老标签（例如补一条 v0.3.9）会把 `latest` 从当前的
       # v0.4.1 拽回那个老镜像上——2026-10-15 补 v0.3.9 时踩到过：那次是构建失败才侥幸
       # 没退回去。这里按「仓库里版本号最大的 v* 标签」判断，只认它。
+      #
+      # 闸门必须落在 `flavor` 上：metadata-action 的默认 `latest=auto` 会给每个非预发布
+      # 的 semver 标签自动追加 `latest`，`type=raw,value=latest,enable=false` 挡不住它——
+      # 2026-10-21 同时推 v0.4.8 与 v0.4.9 时，v0.4.8 的 `enable=false` 生效了，`latest`
+      # 还是被 auto 追加，最后指向了 0.4.8。
       - name: Is this the newest version tag?
         id: newest
         env:
@@ -67,10 +72,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/hdsl-web
+          flavor: |
+            latest=${{ steps.newest.outputs.value == 'true' }}
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ steps.newest.outputs.value == 'true' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.newest.outputs.value == 'true' }}
             type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push
