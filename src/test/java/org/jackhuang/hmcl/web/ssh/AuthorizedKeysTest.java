@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.ssh;
 
 import org.apache.sshd.common.util.buffer.ByteArrayBuffer;
+import org.apache.sshd.common.util.security.SecurityUtils;
 import org.jackhuang.hmcl.util.PosixPermissions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -65,8 +66,9 @@ class AuthorizedKeysTest {
     void aMissingFileIsAnEmptyList() throws Exception {
         AuthorizedKeys keys = AuthorizedKeys.open(dataDir);
         assertTrue(keys.list().isEmpty());
-        KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
-        assertFalse(keys.contains(generator.generateKeyPair().getPublic()));
+        // sshd only wire-encodes i2p EdDSA keys; a bare JCA "Ed25519" lookup
+        // yields a JDK-native EdEC key it cannot encode.
+        assertFalse(keys.contains(SecurityUtils.getKeyPairGenerator("EdDSA").generateKeyPair().getPublic()));
     }
 
     @Test
@@ -143,7 +145,7 @@ class AuthorizedKeysTest {
 
     @Test
     void containsMatchesWireEncodedKeys() throws Exception {
-        KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
+        KeyPairGenerator generator = SecurityUtils.getKeyPairGenerator("EdDSA");
         KeyPair authorized = generator.generateKeyPair();
         KeyPair stranger = generator.generateKeyPair();
 

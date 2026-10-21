@@ -25,6 +25,7 @@ import org.apache.sshd.client.future.AuthFuture;
 import org.apache.sshd.client.keyverifier.AcceptAllServerKeyVerifier;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.common.util.buffer.ByteArrayBuffer;
+import org.apache.sshd.common.util.security.SecurityUtils;
 import org.bouncycastle.openssl.PEMKeyPair;
 import org.bouncycastle.openssl.PEMParser;
 import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
@@ -34,6 +35,7 @@ import org.jackhuang.hmcl.web.auth.UserStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.StringReader;
 import java.net.ConnectException;
@@ -45,7 +47,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPair;
-import java.security.KeyPairGenerator;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
@@ -309,7 +310,7 @@ class SshApiServletTest {
     }
 
     @Test
-    void publicKeyLoginWorksTheSkeletonAnswersAndTheToggleOwnsThePort() throws Exception {
+    void publicKeyLoginPassesTheGateAndTheMenuAnswersAndTheToggleOwnsThePort() throws Exception {
         try (TestSupport.RunningServer running = startServer(true)) {
             HttpClient http = TestSupport.trustAllClient();
             String base = base(running);
@@ -337,15 +338,21 @@ class SshApiServletTest {
                 sshClient = freshClient();
                 ClientSession session = authenticatedSession(sshClient, port, testKey);
 
-                // The skeleton says its line and exits 0.
+                // M2: the TUI gate asks for the developer password, the menu
+                // renders behind it, and "q" ends the session cleanly.
                 ChannelShell shell = session.createShellChannel();
+                shell.setIn(new ByteArrayInputStream(
+                        (DEV_PASSWORD + "\nq\n").getBytes(StandardCharsets.UTF_8)));
                 ByteArrayOutputStream shellOut = new ByteArrayOutputStream();
                 shell.setOut(shellOut);
                 shell.open().verify(15, TimeUnit.SECONDS);
                 waitFor(() -> shell.getExitStatus() != null, Duration.ofSeconds(15));
                 assertEquals(Integer.valueOf(0), shell.getExitStatus());
-                assertTrue(shellOut.toString(StandardCharsets.UTF_8).contains("已就绪"),
-                        "the skeleton must greet the session: " + shellOut);
+                String terminal = shellOut.toString(StandardCharsets.UTF_8);
+                assertTrue(terminal.contains("开发者密码"), "the gate asks: " + terminal);
+                assertTrue(terminal.contains("dsh 实例"), "the menu renders: " + terminal);
+                assertTrue(terminal.contains("恢复 dsh 会话"), "the session section renders: " + terminal);
+                assertTrue(terminal.contains("q) 退出"), terminal);
                 shell.close(false);
                 session.close(false);
             } finally {
@@ -419,9 +426,14 @@ class SshApiServletTest {
                     "turning password auth on must carry the brute-force warning");
             assertTrue(Files.readString(dataDir.resolve("server.yaml")).contains("password_auth: true"));
 
+            // The hot switch restarts the listener; port 0 in the config means
+            // the OS hands out a NEW ephemeral port, so re-read it.
+            int hotPort = json(get(http, base + "/api/ssh/status")).get("port").getAsInt();
+            assertTrue(hotPort > 0 && hotPort != port, "the restarted listener re-binds on a fresh port");
+
             try {
                 client = freshClient();
-                ClientSession accepted = client.connect("admin", "127.0.0.1", port)
+                ClientSession accepted = client.connect("admin", "127.0.0.1", hotPort)
                         .verify(15, TimeUnit.SECONDS).getSession();
                 accepted.addPasswordIdentity(PANEL_PASSWORD);
                 accepted.auth().verify(15, TimeUnit.SECONDS);
@@ -499,8 +511,12 @@ class SshApiServletTest {
                 response.body());
     }
 
+    /// Ed25519 keys the way sshd encodes them: through its own provider
+    /// machinery (the i2p EdDSA provider), not a bare JCA lookup — a
+    /// JDK-native EdEC key is not wire-encodable by sshd.
     private static KeyPair generateKeyPair(String algorithm) throws Exception {
-        return KeyPairGenerator.getInstance(algorithm).generateKeyPair();
+        String resolved = ("Ed25519".equals(algorithm) || "EdDSA".equals(algorithm)) ? "EdDSA" : algorithm;
+        return SecurityUtils.getKeyPairGenerator(resolved).generateKeyPair();
     }
 
     /// The OpenSSH single-line form of a JDK key, built the way the wire format asks.

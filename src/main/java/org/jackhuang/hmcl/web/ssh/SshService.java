@@ -17,7 +17,10 @@
  */
 package org.jackhuang.hmcl.web.ssh;
 
+import org.apache.sshd.common.NamedResource;
+import org.apache.sshd.common.config.keys.loader.openssh.OpenSSHKeyPairResourceParser;
 import org.apache.sshd.common.session.Session;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.session.SessionListener;
 import org.apache.sshd.common.util.buffer.ByteArrayBuffer;
 import org.apache.sshd.server.SshServer;
@@ -37,8 +40,10 @@ import org.jackhuang.hmcl.web.brand.BrandInstanceManager;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
+import net.i2p.crypto.eddsa.spec.EdDSANamedCurveTable;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -53,6 +58,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
@@ -193,13 +199,30 @@ public final class SshService {
 
             Files.createDirectories(sshDir);
             setOwnerOnly(sshDir);
-            SimpleGeneratorHostKeyProvider hostKeys = new SimpleGeneratorHostKeyProvider(sshDir.resolve(HOST_KEY_FILE));
-            // The JCA name for Ed25519 is "EdDSA"; the spec pins the curve so
-            // the first boot always produces an Ed25519 key. Generated once,
-            // kept forever: a restarted panel answers with the same
-            // fingerprint clients pinned.
+            SimpleGeneratorHostKeyProvider hostKeys = new SimpleGeneratorHostKeyProvider(sshDir.resolve(HOST_KEY_FILE)) {
+                /// Read through sshd's own OpenSSH parser, never the
+                /// auto-registered BouncyCastle one: BC parses the Ed25519
+                /// file into an unrelated EC key, which would change the
+                /// fingerprint on every restart. The Ed25519 entry decoder
+                /// is i2p-based, so a reloaded key is byte-identical to the
+                /// generated one.
+                @Override
+                protected Iterable<KeyPair> doReadKeyPairs(SessionContext session, NamedResource resourceKey,
+                        InputStream inputStream) throws IOException, GeneralSecurityException {
+                    Collection<KeyPair> keys = OpenSSHKeyPairResourceParser.INSTANCE
+                            .loadKeyPairs(session, resourceKey, null, inputStream);
+                    return keys == null ? List.of() : keys;
+                }
+            };
+            // "EdDSA" resolves through sshd's provider machinery to the i2p
+            // EdDSA provider, whose KeyPairGenerator rejects the JDK
+            // NamedParameterSpec ("parameter object not a
+            // EdDSAParameterSpec") — the curve is therefore pinned in the
+            // provider's own spec language. Generated once, kept forever: a
+            // restarted panel answers with the same fingerprint clients
+            // pinned.
             hostKeys.setAlgorithm("EdDSA");
-            hostKeys.setKeySpec(new java.security.spec.NamedParameterSpec("Ed25519"));
+            hostKeys.setKeySpec(EdDSANamedCurveTable.getByName("Ed25519"));
             hostKeys.setOverwriteAllowed(false);
             sshd.setKeyPairProvider(hostKeys);
 

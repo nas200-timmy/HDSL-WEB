@@ -57,6 +57,11 @@ dependencies {
     // The SSH terminal channel: embedded Apache MINA SSHD server (docs/ssh-terminal-channel.md).
     // sshd-core also carries the SshClient the integration tests connect with.
     implementation(libs.mina.sshd)
+    // Ed25519 for the channel above. sshd-common declares this dependency
+    // OPTIONAL, so Gradle never resolves it transitively — without it every
+    // Ed25519 path (authorized_keys verification, the EdDSA host key) fails
+    // at runtime with "EdDSA provider not supported".
+    implementation(libs.eddsa)
 
     // Jetty speaks slf4j; this binding forwards it to java.util.logging, the
     // same sink HDSL-web's own logging story is built on. Server code itself
