@@ -42,6 +42,7 @@ import org.eclipse.jetty.websocket.server.WebSocketUpgradeHandler;
 import org.jackhuang.hmcl.Metadata;
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.web.acp.AcpSessionManager;
+import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
@@ -118,6 +119,9 @@ public final class HdslServer {
     /// The ACP console bridge; its processes outlive `/ws` connections and are
     /// all stopped when the server stops.
     private final AcpSessionManager acpSessions;
+    /// The SSH terminal channel, behind reflection so the -PnoSsh build can
+    /// omit the channel's classes entirely (see [SshBridge]).
+    private final SshBridge ssh;
     private final Logger logger;
     private final AtomicLong startedAtMillis;
     private final AtomicBoolean hookInstalled = new AtomicBoolean();
@@ -125,7 +129,7 @@ public final class HdslServer {
     private HdslServer(Server server, HttpConfiguration baseHttpConfig, ServerConnector mainConnector,
                        @Nullable ServerConnector redirectConnector,
                        @Nullable SslContextFactory.Server sslContextFactory, WebSocketClient proxyWebSocketClient,
-                       AcpSessionManager acpSessions, Logger logger, AtomicLong startedAtMillis) {
+                       AcpSessionManager acpSessions, SshBridge ssh, Logger logger, AtomicLong startedAtMillis) {
         this.server = server;
         this.baseHttpConfig = baseHttpConfig;
         this.mainConnector = mainConnector;
@@ -133,6 +137,7 @@ public final class HdslServer {
         this.sslContextFactory = sslContextFactory;
         this.proxyWebSocketClient = proxyWebSocketClient;
         this.acpSessions = acpSessions;
+        this.ssh = ssh;
         this.logger = logger;
         this.startedAtMillis = startedAtMillis;
     }
@@ -143,6 +148,7 @@ public final class HdslServer {
     ///                     off (then the config must say so too)
     public static HdslServer build(ServerConfig config, AuthService authService,
                                    @Nullable CertificateManager certificates, Logger logger) {
+        AuditLog.init(config.dataDir.resolve("logs"));
         Server server = new Server();
         // The stop sequence is owned by our own shutdown hook (below); Jetty's
         // built-in one would stop the server twice without adding anything.
@@ -237,6 +243,18 @@ public final class HdslServer {
         // runtime; the reference is filled once the instance exists.
         java.util.concurrent.atomic.AtomicReference<HdslServer> self = new java.util.concurrent.atomic.AtomicReference<>();
 
+        // The SSH terminal channel service (docs/ssh-terminal-channel.md),
+        // loaded reflectively so the -PnoSsh build can leave the channel's
+        // classes and the MINA/eddsa jars out of the image: an absent
+        // channel is a log line, not a crash. The HTTPS guard inside the
+        // management servlet reads this server's live TLS state through
+        // `self`, the same reference the TLS settings endpoint uses.
+        SshBridge ssh = SshBridge.load(config, authService,
+                () -> {
+                    HdslServer live = self.get();
+                    return live != null && live.tlsActive();
+                }, logger);
+
         ServletContextHandler context = new ServletContextHandler();
         context.setContextPath("/");
         context.addFilter(authFilter, "/api/*", EnumSet.of(DispatcherType.REQUEST));
@@ -255,7 +273,7 @@ public final class HdslServer {
         packsHolder.getRegistration().setMultipartConfig(packMultipart);
         context.addServlet(packsHolder, "/api/packs/*");
         context.addServlet(new ServletHolder(new ExportsApiServlet(config)), "/api/exports/*");
-        context.addServlet(new ServletHolder(new DoctorApiServlet()), "/api/doctor");
+        context.addServlet(new ServletHolder(new DoctorApiServlet(config, ssh)), "/api/doctor");
         context.addServlet(new ServletHolder(new AccountsApiServlet(eventBus)), "/api/accounts/*");
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
@@ -267,6 +285,11 @@ public final class HdslServer {
         ServletHolder tlsHolder = new ServletHolder(new TlsApiServlet(config, certificates, self::get));
         tlsHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(tlsHolder, "/api/settings/*");
+        // The SSH channel's management surface; nothing is registered at all
+        // when the build omits the channel (-PnoSsh).
+        if (ssh.apiServlet() != null) {
+            context.addServlet(new ServletHolder(ssh.apiServlet()), "/api/ssh/*");
+        }
         context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService, config.basePath)), "/i/*");
         context.addServlet(new ServletHolder(new StaticServlet(config.basePath)), "/");
         // Anything a servlet lets escape becomes a JSON 500, not Jetty's HTML
@@ -319,7 +342,7 @@ public final class HdslServer {
         server.setHandler(handler);
 
         HdslServer built = new HdslServer(server, httpConfig, mainConnector, redirectConnector, ssl,
-                proxyWebSocketClient, acpSessions, logger, startedAtMillis);
+                proxyWebSocketClient, acpSessions, ssh, logger, startedAtMillis);
         self.set(built);
         return built;
     }
@@ -406,6 +429,12 @@ public final class HdslServer {
         proxyWebSocketClient.start();
         server.start();
         startedAtMillis.set(System.currentTimeMillis());
+        // The SSH channel starts after the panel is up: its management API is
+        // already serving by the time the listener accepts its first session.
+        // The start is itself a silent no-op unless the channel is enabled —
+        // "off = no attack surface" is its own guarantee — and a no-op too
+        // on builds that omit the channel entirely.
+        ssh.start();
         // The brand version pickers read the npm registries; warming the cache
         // off-thread keeps the first picker render instant without delaying
         // the health check.
@@ -443,6 +472,19 @@ public final class HdslServer {
     /// Whether the main connector currently speaks TLS.
     public boolean isTls() {
         return sslContextFactory != null;
+    }
+
+    /// Whether the panel is serving HTTPS **right now** — the guard every
+    /// sensitive SSH-management endpoint checks instead of trusting headers.
+    /// Reads the live connector (an [SslConnectionFactory] on it) so a
+    /// runtime switch is reflected the moment it completes; the boot-time
+    /// identity reference is the fallback.
+    public boolean tlsActive() {
+        if (sslContextFactory != null) {
+            return true;
+        }
+        ServerConnector connector = mainConnector;
+        return connector != null && connector.getConnectionFactory(SslConnectionFactory.class) != null;
     }
 
     /// The outcome of a TLS switch attempt: on success `restartRequired` is
@@ -630,6 +672,9 @@ public final class HdslServer {
     /// Stops Jetty, waiting for in-flight connections to drain, and ends every
     /// ACP console the bridge is holding.
     public void stop() throws Exception {
+        // Symmetric with start(): the SSH listener goes down with the panel
+        // that owns it — no port outliving the process that opened it.
+        ssh.stop();
         acpSessions.closeAll();
         server.stop();
         proxyWebSocketClient.stop();

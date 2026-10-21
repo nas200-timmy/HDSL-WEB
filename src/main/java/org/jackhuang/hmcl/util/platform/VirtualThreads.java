@@ -39,6 +39,9 @@ public final class VirtualThreads {
     /// `Executors.newVirtualThreadPerTaskExecutor`, or `null` before Java 21.
     private static final @Nullable Method NEW_VIRTUAL = find();
 
+    /// `Thread.startVirtualThread`, or `null` before Java 21.
+    private static final @Nullable Method START_VIRTUAL = findStart();
+
     private VirtualThreads() {
     }
 
@@ -63,6 +66,35 @@ public final class VirtualThreads {
     private static @Nullable Method find() {
         try {
             return Executors.class.getMethod("newVirtualThreadPerTaskExecutor");
+        } catch (NoSuchMethodException e) {
+            return null;
+        }
+    }
+
+    /// Starts `task` on its own thread, joining is the caller's business.
+    ///
+    /// The SSH attach pump needs a [Thread] handle (it joins the stdout/stderr
+    /// pumps before returning), which the executor above cannot hand out.
+    ///
+    /// @return the started thread: virtual on Java 21+, a daemon platform
+    ///         thread on 17
+    public static Thread start(Runnable task) {
+        if (START_VIRTUAL != null) {
+            try {
+                return (Thread) START_VIRTUAL.invoke(null, task);
+            } catch (IllegalAccessException | InvocationTargetException | RuntimeException e) {
+                LOG.warning("Could not start a virtual thread; falling back to a platform thread", e);
+            }
+        }
+        Thread thread = new Thread(task, "hdsl-task");
+        thread.setDaemon(true);
+        thread.start();
+        return thread;
+    }
+
+    private static @Nullable Method findStart() {
+        try {
+            return Thread.class.getMethod("startVirtualThread", Runnable.class);
         } catch (NoSuchMethodException e) {
             return null;
         }

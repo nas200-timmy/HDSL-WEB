@@ -29,6 +29,9 @@ import org.jackhuang.hmcl.dsh.NpmRegistry;
 import org.jackhuang.hmcl.dsh.PnpmConfigFile;
 import org.jackhuang.hmcl.setting.SettingsManager;
 import org.jackhuang.hmcl.util.io.HttpClients;
+import org.jackhuang.hmcl.web.audit.AuditLog;
+import org.jackhuang.hmcl.web.auth.AuthFilter;
+import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -93,7 +96,7 @@ public final class RegistrySettingsApiServlet extends HttpServlet {
             probe(body, response);
             return;
         }
-        save(body, response);
+        save(request, body, response);
     }
 
     /// Reads the request body.
@@ -121,7 +124,8 @@ public final class RegistrySettingsApiServlet extends HttpServlet {
     }
 
     /// Applies a choice.
-    private static void save(JsonObject body, HttpServletResponse response) throws IOException {
+    private static void save(HttpServletRequest request, JsonObject body, HttpServletResponse response)
+            throws IOException {
         String preset = stringField(body, "preset");
         if (preset == null || preset.isBlank()) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "preset is required");
@@ -149,7 +153,16 @@ public final class RegistrySettingsApiServlet extends HttpServlet {
         PnpmConfigFile.apply();
         LOG.info("The download source is now " + NpmRegistry.effective().registry()
                 + " (" + NpmRegistry.effective().source() + ")");
+        AuditLog.log(AuditLog.Channel.WEB, "settings.registry", NpmRegistry.effective().registry(),
+                "success", actorOf(request), request.getRemoteAddr());
         Json.writePreservingNulls(response, describe());
+    }
+
+    /// The session's username for the audit trail, or null when the request
+    /// carries no session.
+    private static @Nullable String actorOf(HttpServletRequest request) {
+        Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
+        return session instanceof AuthService.Session s ? s.username() : null;
     }
 
     /// Measures one address.

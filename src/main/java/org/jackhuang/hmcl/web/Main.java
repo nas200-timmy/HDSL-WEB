@@ -27,9 +27,13 @@ import org.jackhuang.hmcl.web.config.WorkspaceDirectory;
 import org.jackhuang.hmcl.web.server.HdslServer;
 import org.jackhuang.hmcl.web.tls.CertificateManager;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Set;
 
 /// The HDSL-web server entry point.
 ///
@@ -69,6 +73,34 @@ public final class Main {
             }
 
             Logger.LOG.start(config.dataDir.resolve("logs"));
+
+            // 升级迁移：v0.4.8 之前写入的 server.yaml 是 0644，里面躺着 p12 密码；certs/ 下的
+            // 私钥/证书包同理。逐份收紧为仅所有者可读写，个别失败只告警、不挡启动。
+            Path serverYaml = config.dataDir.resolve("server.yaml");
+            if (Files.exists(serverYaml)) {
+                try {
+                    Files.setPosixFilePermissions(serverYaml, Set.of(
+                            PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
+                } catch (UnsupportedOperationException | IOException e) {
+                    Logger.LOG.warning("Could not tighten permissions on " + serverYaml + ": " + e);
+                }
+            }
+            try (var certs = Files.list(config.dataDir.resolve("certs"))) {
+                certs.filter(path -> {
+                    String name = path.getFileName().toString();
+                    return name.endsWith(".key") || name.endsWith(".p12") || name.endsWith(".pem");
+                }).forEach(path -> {
+                    try {
+                        Files.setPosixFilePermissions(path, Set.of(
+                                PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
+                    } catch (UnsupportedOperationException | IOException e) {
+                        Logger.LOG.warning("Could not tighten permissions on " + path + ": " + e);
+                    }
+                });
+            } catch (UnsupportedOperationException | IOException e) {
+                // certs/ 尚不存在（从未开过 TLS）或无法列出：没有要迁移的东西。
+                Logger.LOG.warning("Could not scan the certs directory for permission migration: " + e);
+            }
 
             // pnpm reads its registry from its own configuration file rather than from the
             // environment, so the source chosen in the panel is written there now as well as when

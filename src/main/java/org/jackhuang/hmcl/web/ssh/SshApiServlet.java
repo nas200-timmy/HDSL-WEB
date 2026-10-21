@@ -1,0 +1,701 @@
+/*
+ * HDSL-web
+ * Copyright (C) 2026  HDSL-web contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+package org.jackhuang.hmcl.web.ssh;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.apache.sshd.common.util.buffer.ByteArrayBuffer;
+import org.bouncycastle.crypto.params.AsymmetricKeyParameter;
+import org.bouncycastle.crypto.util.OpenSSHPrivateKeyUtil;
+import org.bouncycastle.crypto.util.PrivateKeyFactory;
+import org.bouncycastle.openssl.jcajce.JcaMiscPEMGenerator;
+import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
+import org.jackhuang.hmcl.web.audit.AuditLog;
+import org.jackhuang.hmcl.web.auth.AuthFilter;
+import org.jackhuang.hmcl.web.auth.AuthService;
+import org.jackhuang.hmcl.web.auth.UserStore;
+import org.jackhuang.hmcl.web.config.ServerConfig;
+import org.jackhuang.hmcl.web.config.ServerConfigWriter;
+import org.jackhuang.hmcl.web.http.Json;
+import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
+
+import java.io.IOException;
+import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.BooleanSupplier;
+
+/// The SSH channel's management surface, mapped at `/api/ssh/*`:
+///
+/// - `GET    /api/ssh/status` — everything the settings section renders:
+///   `{enabled, running, bind, port, verdict, supported, https, passwordAuth,
+///   hostKeyFingerprint, devPasswordSet, connections, elevated}`
+/// - `POST   /api/ssh/elevate` `{password}` — prove the developer password,
+///   elevate **this session** for 15 minutes (sliding, renewed by every
+///   sensitive call). Three wrong guesses per session lock it for 10 minutes.
+/// - `POST   /api/ssh/dev-password` `{adminPassword, password, confirm,
+///   currentDevPassword?}` — set or change the developer password. The admin
+///   password proves it is the owner; the current developer password is also
+///   required once one exists. Any set/change kills every elevation.
+/// - `POST   /api/ssh/dev-password/clear` `{adminPassword}` — remove it.
+/// - `POST   /api/ssh/toggle` `{enabled}` — the switch: persists, then hot
+///   starts/stops the listener.
+/// - `GET    /api/ssh/keys` — the authorized keys (elevation required).
+/// - `POST   /api/ssh/keys` `{key}` — add one pasted OpenSSH public key.
+/// - `DELETE /api/ssh/keys` `{index}` — remove one.
+/// - `POST   /api/ssh/generate-keypair` — server-side RSA-3072 pair; the
+///   private key is answered **once** and never written to disk, the public
+///   line lands in `authorized_keys`.
+/// - `POST   /api/ssh/password-auth` `{enabled}` — the panel-password switch.
+///
+/// Two guards stand in front of every sensitive route. The HTTPS guard:
+/// developer-password set/change, elevation, key upload, key generation, the
+/// toggle and the password switch answer 409 unless the panel's own connector
+/// speaks TLS right now — the server-side TLS state decides, never a request
+/// header. The elevation guard: the same routes (plus the key list) answer
+/// 403 until the session has proved the developer password.
+///
+/// Elevation is tracked per session. The elevation key is the session's
+/// username; a panel running with authentication disabled (only legal on a
+/// loopback bind) has no session object, so those requests key on the remote
+/// address instead — loopback-only, and the tests' way in.
+@NotNullByDefault
+public final class SshApiServlet extends HttpServlet {
+
+    /// How long an elevation lasts, renewed on every sensitive call.
+    private static final Duration ELEVATION_TTL = Duration.ofMinutes(15);
+    /// Wrong guesses a session may make before the lock.
+    private static final int MAX_ELEVATION_FAILURES = 3;
+    /// How long an over-guessing session stays locked, and the window the
+    /// guesses are counted in.
+    private static final Duration ELEVATION_LOCK = Duration.ofMinutes(10);
+    private static final Duration ELEVATION_FAILURE_WINDOW = Duration.ofMinutes(10);
+
+    /// What the panel answers when `password-auth` is being turned on.
+    private static final String PASSWORD_AUTH_WARNING =
+            "口令登录开启后，面板口令可直接用于 SSH 登录，爆破风险显著上升；请确认网络层有额外保护（回环/内网/防火墙）。";
+
+    private final SshService ssh;
+    private final DeveloperAuth devAuth;
+    private final ServerConfig config;
+    private final AuthService auth;
+    private final BooleanSupplier tlsActive;
+
+    /// Session username → when the elevation ends.
+    private final ConcurrentMap<String, Instant> elevations = new ConcurrentHashMap<>();
+    /// Session username → its bad-guess record. The records are only mutated
+    /// under their own monitor.
+    private final ConcurrentMap<String, ElevationFailures> elevationFailures = new ConcurrentHashMap<>();
+
+    public SshApiServlet(SshService ssh, DeveloperAuth devAuth, ServerConfig config,
+                         AuthService auth, BooleanSupplier tlsActive) {
+        this.ssh = ssh;
+        this.devAuth = devAuth;
+        this.config = config;
+        this.auth = auth;
+        this.tlsActive = tlsActive;
+    }
+
+    @Override
+    protected void service(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String path = request.getPathInfo();
+        if (path == null || path.isEmpty() || "/".equals(path)) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
+        String method = request.getMethod();
+        switch (method) {
+            case "GET" -> {
+                if ("/status".equals(path)) {
+                    status(request, response);
+                } else if ("/keys".equals(path)) {
+                    keys(request, response);
+                } else {
+                    Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+                }
+            }
+            case "POST" -> {
+                switch (path) {
+                    case "/elevate" -> elevate(request, response);
+                    case "/dev-password" -> devPassword(request, response);
+                    case "/dev-password/clear" -> devPasswordClear(request, response);
+                    case "/toggle" -> toggle(request, response);
+                    case "/keys" -> addKey(request, response);
+                    case "/generate-keypair" -> generateKeypair(request, response);
+                    case "/password-auth" -> passwordAuth(request, response);
+                    default -> Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+                }
+            }
+            case "DELETE" -> {
+                if ("/keys".equals(path)) {
+                    removeKey(request, response);
+                } else {
+                    Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+                }
+            }
+            default -> Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
+        }
+    }
+
+    // ---------------------------------------------------------------- status --
+
+    private void status(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = new JsonObject();
+        body.addProperty("enabled", config.ssh.enabled);
+        body.addProperty("running", ssh.isRunning());
+        body.addProperty("bind", config.ssh.bindHost);
+        body.addProperty("port", ssh.activePort());
+        body.addProperty("verdict", verdictText());
+        body.addProperty("supported", PlatformGuard.supported());
+        body.addProperty("https", tlsActive.getAsBoolean());
+        body.addProperty("passwordAuth", config.ssh.passwordAuth);
+        body.addProperty("hostKeyFingerprint", ssh.hostKeyFingerprint());
+        body.addProperty("devPasswordSet", devAuth.isSet());
+        body.addProperty("connections", ssh.connections());
+        body.addProperty("elevated", isElevated(elevationKey(request)));
+        Json.writePreservingNulls(response, body);
+    }
+
+    // --------------------------------------------------------------- elevate --
+
+    private void elevate(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHttps(request, response, "ssh.elevate")) {
+            return;
+        }
+        JsonObject body = jsonBody(request);
+        String password = body == null ? null : stringField(body, "password");
+        if (password == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must carry the developer password");
+            return;
+        }
+        String key = elevationKey(request);
+        Instant now = Instant.now();
+        if (isElevationLocked(key, now)) {
+            audit(request, "ssh.elevate", null, "blocked");
+            Json.error(response, 429, "too many failed attempts; this session is locked for " + ELEVATION_LOCK.toMinutes() + " minutes");
+            return;
+        }
+        if (!devAuth.isSet()) {
+            audit(request, "ssh.elevate", null, "failure");
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "developer password is not set; set it first");
+            return;
+        }
+        if (!devAuth.verify(password)) {
+            boolean locked = recordElevationFailure(key, now);
+            audit(request, "ssh.elevate", null, "failure");
+            if (locked) {
+                Json.error(response, 429, "too many failed attempts; this session is locked for " + ELEVATION_LOCK.toMinutes() + " minutes");
+            } else {
+                Json.error(response, HttpServletResponse.SC_UNAUTHORIZED, "invalid developer password");
+            }
+            return;
+        }
+        elevations.put(key, now.plus(ELEVATION_TTL));
+        elevationFailures.remove(key);
+        audit(request, "ssh.elevate", null, "success");
+        JsonObject answer = new JsonObject();
+        answer.addProperty("elevated", true);
+        answer.addProperty("expiresAt", now.plus(ELEVATION_TTL).toString());
+        Json.write(response, answer);
+    }
+
+    /// The gate in front of every sensitive route: passes and slides the
+    /// elevation forward; otherwise answers 403 and audits the blocked call.
+    private boolean requireElevation(HttpServletRequest request, HttpServletResponse response, String action)
+            throws IOException {
+        String key = elevationKey(request);
+        Instant now = Instant.now();
+        Instant expiry = elevations.get(key);
+        if (expiry != null && expiry.isAfter(now)) {
+            elevations.put(key, now.plus(ELEVATION_TTL));
+            return true;
+        }
+        elevations.remove(key);
+        audit(request, action, null, "failure");
+        Json.error(response, HttpServletResponse.SC_FORBIDDEN, "developer elevation required");
+        return false;
+    }
+
+    private boolean isElevated(String key) {
+        Instant expiry = elevations.get(key);
+        return expiry != null && expiry.isAfter(Instant.now());
+    }
+
+    /// Who is asking. The session attribute is an [AuthService.Session]; its
+    /// record equality changes every time the session expiry slides, so the
+    /// username is the key, never the record. Without one (authentication
+    /// disabled — loopback-only by config validation) the remote address is
+    /// as good as it gets.
+    private static String elevationKey(HttpServletRequest request) {
+        Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
+        if (session instanceof AuthService.Session s) {
+            return "user:" + s.username();
+        }
+        String address = request.getRemoteAddr();
+        return "anonymous:" + (address == null ? "unknown" : address);
+    }
+
+    private static final class ElevationFailures {
+        private int count;
+        private @Nullable Instant windowStart;
+        private @Nullable Instant lockedUntil;
+    }
+
+    private boolean isElevationLocked(String key, Instant now) {
+        ElevationFailures failures = elevationFailures.computeIfAbsent(key, k -> new ElevationFailures());
+        synchronized (failures) {
+            return failures.lockedUntil != null && now.isBefore(failures.lockedUntil);
+        }
+    }
+
+    /// @return whether this failure tripped the lock
+    private boolean recordElevationFailure(String key, Instant now) {
+        ElevationFailures failures = elevationFailures.computeIfAbsent(key, k -> new ElevationFailures());
+        synchronized (failures) {
+            if (failures.lockedUntil != null) {
+                if (now.isBefore(failures.lockedUntil)) {
+                    return true;
+                }
+                failures.lockedUntil = null;
+                failures.count = 0;
+            }
+            if (failures.windowStart == null || now.isAfter(failures.windowStart.plus(ELEVATION_FAILURE_WINDOW))) {
+                failures.count = 0;
+                failures.windowStart = now;
+            }
+            failures.count++;
+            if (failures.count >= MAX_ELEVATION_FAILURES) {
+                failures.lockedUntil = now.plus(ELEVATION_LOCK);
+                failures.count = 0;
+                return true;
+            }
+            return false;
+        }
+    }
+
+    // ---------------------------------------------------------- dev password --
+
+    private void devPassword(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHttps(request, response, "ssh.dev-password")) {
+            return;
+        }
+        JsonObject body = jsonBody(request);
+        String adminPassword = body == null ? null : stringField(body, "adminPassword");
+        String password = body == null ? null : stringField(body, "password");
+        String confirm = body == null ? null : stringField(body, "confirm");
+        String current = body == null ? null : stringField(body, "currentDevPassword");
+        if (adminPassword == null || password == null || confirm == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "adminPassword, password and confirm are required");
+            return;
+        }
+        UserStore users = auth.userStore();
+        UserStore.User admin = users.admin();
+        if (admin == null || !users.verify(admin.username(), adminPassword)) {
+            audit(request, "ssh.dev-password", null, "failure");
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN, "the panel password does not match");
+            return;
+        }
+        boolean changing = devAuth.isSet();
+        if (changing && (current == null || !devAuth.verify(current))) {
+            audit(request, "ssh.dev-password", null, "failure");
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN, "the current developer password does not match");
+            return;
+        }
+        if (!password.equals(confirm)) {
+            audit(request, "ssh.dev-password", null, "failure");
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "password and confirm do not match");
+            return;
+        }
+        try {
+            devAuth.set(password, users);
+        } catch (IllegalArgumentException e) {
+            audit(request, "ssh.dev-password", null, "failure");
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        } catch (IOException e) {
+            audit(request, "ssh.dev-password", null, "failure");
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "the developer password could not be stored: " + e.getMessage());
+            return;
+        }
+        // A new secret means every elevation minted against the old one dies.
+        elevations.clear();
+        audit(request, "ssh.dev-password", changing ? "change" : "set", "success");
+        JsonObject answer = new JsonObject();
+        answer.addProperty("ok", true);
+        answer.addProperty("devPasswordSet", true);
+        Json.write(response, answer);
+    }
+
+    private void devPasswordClear(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHttps(request, response, "ssh.dev-password")) {
+            return;
+        }
+        JsonObject body = jsonBody(request);
+        String adminPassword = body == null ? null : stringField(body, "adminPassword");
+        if (adminPassword == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "adminPassword is required");
+            return;
+        }
+        UserStore users = auth.userStore();
+        UserStore.User admin = users.admin();
+        if (admin == null || !users.verify(admin.username(), adminPassword)) {
+            audit(request, "ssh.dev-password", null, "failure");
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN, "the panel password does not match");
+            return;
+        }
+        try {
+            devAuth.clear();
+        } catch (IOException e) {
+            audit(request, "ssh.dev-password", null, "failure");
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "the developer password could not be cleared: " + e.getMessage());
+            return;
+        }
+        elevations.clear();
+        audit(request, "ssh.dev-password", "clear", "success");
+        JsonObject answer = new JsonObject();
+        answer.addProperty("ok", true);
+        answer.addProperty("devPasswordSet", false);
+        Json.write(response, answer);
+    }
+
+    // ---------------------------------------------------------------- toggle --
+
+    private void toggle(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHttps(request, response, "ssh.toggle")) {
+            return;
+        }
+        if (!PlatformGuard.supported()) {
+            audit(request, "ssh.toggle", null, "blocked");
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "platform_unsupported: "
+                    + "the SSH channel is not supported on this platform");
+            return;
+        }
+        if (!requireElevation(request, response, "ssh.toggle")) {
+            return;
+        }
+        JsonObject body = jsonBody(request);
+        Boolean enabled = body == null ? null : booleanField(body, "enabled");
+        if (enabled == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must carry a boolean `enabled`");
+            return;
+        }
+        config.ssh.enabled = enabled;
+        try {
+            ServerConfigWriter.updateSsh(config.dataDir, config.ssh);
+        } catch (IOException | RuntimeException e) {
+            audit(request, "ssh.toggle", null, "failure");
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "server.yaml could not be updated: " + e.getMessage());
+            return;
+        }
+        if (enabled) {
+            ssh.start();
+        } else {
+            ssh.stop();
+        }
+        audit(request, "ssh.toggle", String.valueOf(enabled), "success");
+        JsonObject answer = new JsonObject();
+        answer.addProperty("ok", true);
+        answer.addProperty("enabled", config.ssh.enabled);
+        answer.addProperty("running", ssh.isRunning());
+        answer.addProperty("port", ssh.activePort());
+        Json.write(response, answer);
+    }
+
+    // ------------------------------------------------------------------ keys --
+
+    private void keys(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireElevation(request, response, "ssh.keys")) {
+            return;
+        }
+        List<AuthorizedKeys.Entry> entries;
+        try {
+            entries = ssh.authorizedKeys().list();
+        } catch (IOException e) {
+            audit(request, "ssh.keys", null, "failure");
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "authorized_keys could not be read: " + e.getMessage());
+            return;
+        }
+        JsonObject answer = new JsonObject();
+        answer.add("keys", Json.GSON.toJsonTree(entries));
+        Json.write(response, answer);
+    }
+
+    private void addKey(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHttps(request, response, "ssh.key-add")) {
+            return;
+        }
+        if (!requireElevation(request, response, "ssh.key-add")) {
+            return;
+        }
+        JsonObject body = jsonBody(request);
+        String key = body == null ? null : stringField(body, "key");
+        if (key == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must carry the public key line");
+            return;
+        }
+        try {
+            String fingerprint = AuthorizedKeys.fingerprint(key);
+            ssh.authorizedKeys().add(key);
+            audit(request, "ssh.key-add", fingerprint, "success");
+        } catch (IllegalArgumentException e) {
+            audit(request, "ssh.key-add", null, "failure");
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        } catch (IOException e) {
+            audit(request, "ssh.key-add", null, "failure");
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "authorized_keys could not be updated: " + e.getMessage());
+            return;
+        }
+        Json.write(response, java.util.Map.of("ok", true));
+    }
+
+    private void removeKey(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireElevation(request, response, "ssh.key-remove")) {
+            return;
+        }
+        JsonObject body = jsonBody(request);
+        Integer index = body == null ? null : intField(body, "index");
+        if (index == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must carry the key index");
+            return;
+        }
+        try {
+            ssh.authorizedKeys().remove(index);
+            audit(request, "ssh.key-remove", String.valueOf(index), "success");
+        } catch (IllegalArgumentException e) {
+            audit(request, "ssh.key-remove", null, "failure");
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        } catch (IOException e) {
+            audit(request, "ssh.key-remove", null, "failure");
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "authorized_keys could not be updated: " + e.getMessage());
+            return;
+        }
+        Json.write(response, java.util.Map.of("ok", true));
+    }
+
+    // ------------------------------------------------------------ key generation --
+
+    private void generateKeypair(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHttps(request, response, "ssh.keygen")) {
+            return;
+        }
+        if (!requireElevation(request, response, "ssh.keygen")) {
+            return;
+        }
+        KeyPair pair;
+        try {
+            KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+            generator.initialize(3072);
+            pair = generator.generateKeyPair();
+        } catch (NoSuchAlgorithmException | RuntimeException e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "key generation failed: " + e.getMessage());
+            return;
+        }
+
+        String privateKeyPem;
+        String format;
+        try {
+            AsymmetricKeyParameter parameters = PrivateKeyFactory.createKey(pair.getPrivate().getEncoded());
+            byte[] raw = OpenSSHPrivateKeyUtil.encodePrivateKey(parameters);
+            // RSA encodes to PKCS#1 (what OpenSSH's classic "RSA PRIVATE KEY"
+            // PEM is); anything else comes out as openssh-key-v1. OpenSSH's
+            // client accepts both.
+            boolean openSshV1 = raw.length > "openssh-key-v1".length()
+                    && startsWith(raw, "openssh-key-v1\0".getBytes(StandardCharsets.US_ASCII));
+            privateKeyPem = armor(openSshV1 ? "OPENSSH PRIVATE KEY" : "RSA PRIVATE KEY", raw);
+            format = "openssh";
+        } catch (Exception e) {
+            // The contract's fallback: plain PKCS#8, still loadable by ssh -i.
+            privateKeyPem = pkcs8Pem(pair.getPrivate());
+            format = "pkcs8";
+        }
+
+        PublicKey publicKey = pair.getPublic();
+        ByteArrayBuffer wire = new ByteArrayBuffer();
+        wire.putPublicKey(publicKey);
+        byte[] blob = wire.getCompactData();
+        String publicLine = "ssh-rsa " + Base64.getEncoder().encodeToString(blob) + " hdsl-web-generated";
+        String fingerprint;
+        try {
+            ssh.authorizedKeys().add(publicLine);
+            fingerprint = AuthorizedKeys.fingerprint(publicLine);
+        } catch (IllegalArgumentException | IOException e) {
+            audit(request, "ssh.keygen", null, "failure");
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "the generated key could not be authorized: " + e.getMessage());
+            return;
+        }
+        audit(request, "ssh.keygen", fingerprint, "success");
+        JsonObject answer = new JsonObject();
+        answer.addProperty("publicKey", publicLine);
+        answer.addProperty("privateKey", privateKeyPem);
+        answer.addProperty("fingerprint", fingerprint);
+        answer.addProperty("format", format);
+        Json.write(response, answer);
+    }
+
+    // ----------------------------------------------------------- password auth --
+
+    private void passwordAuth(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHttps(request, response, "ssh.password-auth")) {
+            return;
+        }
+        if (!requireElevation(request, response, "ssh.password-auth")) {
+            return;
+        }
+        JsonObject body = jsonBody(request);
+        Boolean enabled = body == null ? null : booleanField(body, "enabled");
+        if (enabled == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must carry a boolean `enabled`");
+            return;
+        }
+        config.ssh.passwordAuth = enabled;
+        try {
+            ServerConfigWriter.updateSsh(config.dataDir, config.ssh);
+        } catch (IOException | RuntimeException e) {
+            audit(request, "ssh.password-auth", null, "failure");
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "server.yaml could not be updated: " + e.getMessage());
+            return;
+        }
+        // The offered user-auth methods are fixed when the listener starts,
+        // so a running one restarts to add or drop "password".
+        ssh.restartIfRunning();
+        audit(request, "ssh.password-auth", String.valueOf(enabled), "success");
+        JsonObject answer = new JsonObject();
+        answer.addProperty("ok", true);
+        answer.addProperty("passwordAuth", config.ssh.passwordAuth);
+        if (enabled) {
+            answer.addProperty("warning", PASSWORD_AUTH_WARNING);
+        }
+        Json.write(response, answer);
+    }
+
+    // ----------------------------------------------------------------- guards --
+
+    /// The HTTPS guard: sensitive operations only exist while the panel's own
+    /// connector speaks TLS (docs/ssh-terminal-channel.md, threat model row
+    /// "敏感操作"). The check is the server's TLS state, never a header.
+    private boolean requireHttps(HttpServletRequest request, HttpServletResponse response, String action)
+            throws IOException {
+        if (tlsActive.getAsBoolean()) {
+            return true;
+        }
+        audit(request, action, null, "blocked");
+        Json.error(response, HttpServletResponse.SC_CONFLICT,
+                "tls_required: this operation needs the panel to be serving HTTPS; enable TLS first");
+        return false;
+    }
+
+    private void audit(HttpServletRequest request, String action, @Nullable String object, String outcome) {
+        AuditLog.log(AuditLog.Channel.WEB, action, object, outcome, actorOf(request), request.getRemoteAddr());
+    }
+
+    /// The session's username for the audit trail, or null when the request
+    /// carries no session (authentication disabled).
+    private static @Nullable String actorOf(HttpServletRequest request) {
+        Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
+        return session instanceof AuthService.Session s ? s.username() : null;
+    }
+
+    // --------------------------------------------------------------- helpers --
+
+    private static @Nullable JsonObject jsonBody(HttpServletRequest request) throws IOException {
+        try {
+            return JsonParser.parseString(new String(request.getInputStream().readAllBytes(), StandardCharsets.UTF_8))
+                    .getAsJsonObject();
+        } catch (JsonParseException | IllegalStateException e) {
+            return null;
+        }
+    }
+
+    private static @Nullable String stringField(JsonObject body, String name) {
+        var element = body.get(name);
+        return element != null && element.isJsonPrimitive() && element.getAsJsonPrimitive().isString()
+                ? element.getAsString() : null;
+    }
+
+    private static @Nullable Boolean booleanField(JsonObject body, String name) {
+        var element = body.get(name);
+        return element != null && element.isJsonPrimitive() && element.getAsJsonPrimitive().isBoolean()
+                ? element.getAsBoolean() : null;
+    }
+
+    private static @Nullable Integer intField(JsonObject body, String name) {
+        var element = body.get(name);
+        return element != null && element.isJsonPrimitive() && element.getAsJsonPrimitive().isNumber()
+                ? element.getAsInt() : null;
+    }
+
+    private static String verdictText() {
+        return switch (PlatformGuard.verdict()) {
+            case SUPPORTED -> "supported";
+            case SUPPORTED_UNVERIFIED -> "supported_unverified";
+            case UNSUPPORTED -> "unsupported";
+        };
+    }
+
+    private static boolean startsWith(byte[] bytes, byte[] prefix) {
+        if (bytes.length < prefix.length) {
+            return false;
+        }
+        for (int i = 0; i < prefix.length; i++) {
+            if (bytes[i] != prefix[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// One PEM armor block, 70-column base64 like OpenSSH writes it.
+    private static String armor(String type, byte[] der) {
+        String encoded = Base64.getMimeEncoder(70, "\n".getBytes(StandardCharsets.US_ASCII)).encodeToString(der);
+        return "-----BEGIN " + type + "-----\n" + encoded + "\n-----END " + type + "-----";
+    }
+
+    private static String pkcs8Pem(PrivateKey privateKey) throws IOException {
+        StringWriter out = new StringWriter();
+        try (JcaPEMWriter writer = new JcaPEMWriter(out)) {
+            writer.writeObject(new JcaMiscPEMGenerator(privateKey));
+        }
+        return out.toString();
+    }
+}

@@ -49,6 +49,9 @@ public final class ServerConfigLoader {
     public static final String ENV_BIND_HOST = "HDSL_BIND_HOST";
     public static final String ENV_BASE_PATH = "HDSL_BASE_PATH";
     public static final String ENV_HTTPS = "HDSL_HTTPS";
+    public static final String ENV_SSH_ENABLED = "HDSL_SSH_ENABLED";
+    public static final String ENV_SSH_BIND = "HDSL_SSH_BIND";
+    public static final String ENV_SSH_PORT = "HDSL_SSH_PORT";
     public static final String ENV_ZCODE_PACKAGE = "HDSL_ZCODE_PACKAGE";
     public static final String ENV_ZCODE_NODE = "HDSL_ZCODE_NODE";
     public static final String ENV_ZCODE_BUILD_BIN = "HDSL_ZCODE_BUILD_BIN";
@@ -139,12 +142,31 @@ public final class ServerConfigLoader {
         if (root.containsKey("auth")) {
             applyAuth(config, mapField(root, "auth"));
         }
+        if (root.containsKey("ssh")) {
+            applySsh(config, mapField(root, "ssh"));
+        }
         for (String key : root.keySet()) {
             switch (key) {
-                case "bind_host", "port", "public_base_url", "https", "auth" -> {
+                case "bind_host", "port", "public_base_url", "https", "auth", "ssh" -> {
                 }
                 default -> logger.warning(yamlFile + ": unknown key `" + key + "` ignored");
             }
+        }
+    }
+
+    private static void applySsh(ServerConfig config, Map<String, Object> ssh) {
+        ServerConfig.Ssh target = config.ssh;
+        if (ssh.containsKey("enabled")) {
+            target.enabled = booleanField(ssh, "enabled");
+        }
+        if (ssh.containsKey("bind_host")) {
+            target.bindHost = stringField(ssh, "bind_host");
+        }
+        if (ssh.containsKey("port")) {
+            target.port = intField(ssh, "port");
+        }
+        if (ssh.containsKey("password_auth")) {
+            target.passwordAuth = booleanField(ssh, "password_auth");
         }
     }
 
@@ -203,6 +225,20 @@ public final class ServerConfigLoader {
                 case "false" -> false;
                 default -> throw new ConfigException(ENV_HTTPS + " must be `true` or `false`, got `" + value + "`");
             };
+        }
+        if (env.containsKey(ENV_SSH_ENABLED)) {
+            String value = env.get(ENV_SSH_ENABLED);
+            config.ssh.enabled = switch (value) {
+                case "true" -> true;
+                case "false" -> false;
+                default -> throw new ConfigException(ENV_SSH_ENABLED + " must be `true` or `false`, got `" + value + "`");
+            };
+        }
+        if (env.containsKey(ENV_SSH_BIND)) {
+            config.ssh.bindHost = env.get(ENV_SSH_BIND);
+        }
+        if (env.containsKey(ENV_SSH_PORT)) {
+            config.ssh.port = parseInt(env.get(ENV_SSH_PORT), ENV_SSH_PORT);
         }
         if (env.containsKey(ENV_ZCODE_PACKAGE)) {
             config.zcode.packageDir = env.get(ENV_ZCODE_PACKAGE);
@@ -264,6 +300,12 @@ public final class ServerConfigLoader {
         if (config.auth.disabled && !isLoopback(config.bindHost)) {
             throw new ConfigException("auth.disabled is only allowed when the server binds a loopback address; bind_host is `"
                     + config.bindHost + "`");
+        }
+        if (config.ssh.port < 1 || config.ssh.port > 65535) {
+            throw new ConfigException("ssh.port must be between 1 and 65535, got " + config.ssh.port);
+        }
+        if (config.ssh.bindHost == null || config.ssh.bindHost.isBlank()) {
+            throw new ConfigException("ssh.bind_host must not be blank");
         }
     }
 

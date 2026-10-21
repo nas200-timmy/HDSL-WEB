@@ -23,6 +23,7 @@ import com.google.gson.JsonParser;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.auth.LoginThrottle;
@@ -128,6 +129,7 @@ public final class ApiServlet extends HttpServlet {
         // 拒绝发生在核对口令之前：核对口令本身就是攻击者想花掉的那笔开销（PBKDF2 二十一万次），
         // 而且被拒绝的地址不该还能让服务端为它算一次。
         if (loginThrottle.isBlocked(address, Instant.now())) {
+            AuditLog.log(AuditLog.Channel.WEB, "login", null, "blocked", username, address);
             refuseTooManyAttempts(response, LoginThrottle.BLOCK);
             return;
         }
@@ -137,15 +139,18 @@ public final class ApiServlet extends HttpServlet {
             Duration refusedFor = loginThrottle.recordFailure(address, Instant.now());
             if (!refusedFor.isZero()) {
                 // 就是这一次把预算花完的，所以这一次就告诉对方；此前十五次什么都不说。
+                AuditLog.log(AuditLog.Channel.WEB, "login", null, "blocked", username, address);
                 refuseTooManyAttempts(response, refusedFor);
                 return;
             }
+            AuditLog.log(AuditLog.Channel.WEB, "login", null, "failure", username, address);
             Json.error(response, HttpServletResponse.SC_UNAUTHORIZED, "invalid username or password");
             return;
         }
 
         // 口令是对的，此前那些失败也就不再算数——这个记录问的正是这件事。
         loginThrottle.clear(address);
+        AuditLog.log(AuditLog.Channel.WEB, "login", null, "success", username, address);
         response.addCookie(authFilter.sessionCookie(token.get()));
         Json.write(response, new LoginBody(true, username));
     }
@@ -202,6 +207,7 @@ public final class ApiServlet extends HttpServlet {
             return;
         }
         response.addCookie(authFilter.sessionCookie(token.get()));
+        AuditLog.log(AuditLog.Channel.WEB, "auth.setup", null, "success", username, request.getRemoteAddr());
         Json.write(response, HttpServletResponse.SC_CREATED, new SetupBody(true, username));
     }
 
@@ -239,6 +245,8 @@ public final class ApiServlet extends HttpServlet {
 
         UserStore users = authService.userStore();
         if (!users.verify(s.username(), currentPassword)) {
+            AuditLog.log(AuditLog.Channel.WEB, "auth.password", null, "failure",
+                    s.username(), request.getRemoteAddr());
             Json.error(response, HttpServletResponse.SC_FORBIDDEN, "current password is incorrect");
             return;
         }
@@ -246,6 +254,8 @@ public final class ApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "user no longer exists");
             return;
         }
+        AuditLog.log(AuditLog.Channel.WEB, "auth.password", null, "success",
+                s.username(), request.getRemoteAddr());
         // The session that made the change survives; every other session of
         // this user (other browsers, other devices) is logged out.
         authService.revokeOtherSessions(s.username(), cookieValue(request, AuthFilter.SESSION_COOKIE));

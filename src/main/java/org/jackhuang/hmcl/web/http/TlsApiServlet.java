@@ -25,6 +25,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.Part;
 import org.jackhuang.hmcl.util.logging.Logger;
+import org.jackhuang.hmcl.web.audit.AuditLog;
+import org.jackhuang.hmcl.web.auth.AuthFilter;
+import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.config.ServerConfigLoader;
 import org.jackhuang.hmcl.web.config.ServerConfigWriter;
@@ -203,6 +206,8 @@ public final class TlsApiServlet extends HttpServlet {
         if (result.ok()) {
             config.https.enabled = true;
             body.addProperty("https", true);
+            AuditLog.log(AuditLog.Channel.WEB, "tls.upload", isP12 ? "pkcs12" : "pem", "success",
+                    actorOf(request), request.getRemoteAddr());
         } else if (result.error() != null) {
             body.addProperty("error", result.error());
         }
@@ -221,6 +226,13 @@ public final class TlsApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
                     "the certificate is live but server.yaml could not be updated: " + e.getMessage());
         }
+    }
+
+    /// The session's username for the audit trail, or null when the request
+    /// carries no session.
+    private static @Nullable String actorOf(HttpServletRequest request) {
+        Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
+        return session instanceof AuthService.Session s ? s.username() : null;
     }
 
     /// Writes a part to a file, owner-only: a private key and a PKCS#12 are
