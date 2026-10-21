@@ -108,9 +108,10 @@ public final class SshService {
     private final AtomicInteger connections = new AtomicInteger();
     private final SessionListener auditListener = new AuditSessionListener();
 
-    /// What a menu choice attaches to. M2 only prints a stub; M3 swaps in the
-    /// real spawn/byte-pump through [attachSupport].
-    private volatile AttachSupport attachSupport = new MenuShellFactory.PrintingAttachSupport();
+    /// What a menu choice attaches to, wired by the composition root
+    /// ([org.jackhuang.hmcl.web.server.HdslServer] hands in a
+    /// [DshAttachSupport]); null leaves the menu answering "未启用".
+    private volatile @Nullable AttachSupport attachSupport;
 
     private volatile @Nullable SshServer server;
     private volatile boolean running;
@@ -147,10 +148,10 @@ public final class SshService {
         return authorizedKeys;
     }
 
-    /// What a menu choice attaches to. The setter is the M3 seam: the
-    /// composition root hands in the real spawn/byte-pump when it lands;
-    /// until then (and in tests) the printing stub answers.
-    public void attachSupport(AttachSupport support) {
+    /// What a menu choice attaches to. The composition root hands in the
+    /// real spawn/byte-pump ([DshAttachSupport]); until then (and in tests)
+    /// the menu answers "未启用".
+    public void attachSupport(@Nullable AttachSupport support) {
         attachSupport = support;
     }
 

@@ -67,7 +67,7 @@ import org.jackhuang.hmcl.web.instance.InstanceRuntime;
 import org.jackhuang.hmcl.web.proxy.InstanceProxyServlet;
 import org.jackhuang.hmcl.web.proxy.InstanceProxyWebSocket;
 import org.jackhuang.hmcl.web.ssh.DeveloperAuth;
-import org.jackhuang.hmcl.web.ssh.MenuShellFactory;
+import org.jackhuang.hmcl.web.ssh.DshAttachSupport;
 import org.jackhuang.hmcl.web.ssh.SshApiServlet;
 import org.jackhuang.hmcl.web.ssh.SshService;
 import org.jackhuang.hmcl.web.task.TaskService;
@@ -257,10 +257,9 @@ public final class HdslServer {
             throw new IllegalStateException("Cannot open the developer credential store in " + config.dataDir, e);
         }
         SshService sshService = new SshService(config, authService, devAuth, logger);
-        // What a menu choice attaches to. M2 only acknowledges the choice in
-        // the terminal; M3 replaces this with the real spawn/byte-pump
+        // What a menu choice attaches to: the real TUI spawn and byte-pump
         // (docs/ssh-terminal-channel.md §M3).
-        sshService.attachSupport(new MenuShellFactory.PrintingAttachSupport());
+        sshService.attachSupport(new DshAttachSupport());
 
         ServletContextHandler context = new ServletContextHandler();
         context.setContextPath("/");

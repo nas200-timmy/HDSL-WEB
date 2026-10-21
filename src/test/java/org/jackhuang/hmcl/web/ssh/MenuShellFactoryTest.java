@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.ssh;
 
+import org.apache.sshd.server.channel.ChannelSession;
 import org.apache.sshd.server.command.Command;
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.web.auth.UserStore;
@@ -25,6 +26,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -69,8 +73,21 @@ class MenuShellFactoryTest {
                                      List<MenuShellFactory.Entry> dsh,
                                      List<MenuShellFactory.Entry> brands,
                                      List<SessionCatalog.Entry> sessions) {
-        return new MenuShellFactory(auth, () -> dsh, () -> brands, () -> sessions,
-                new MenuShellFactory.PrintingAttachSupport());
+        return new MenuShellFactory(auth, () -> dsh, () -> brands, () -> sessions, new PrintingAttachSupport());
+    }
+
+    /// The acknowledgement stand-in the menu tests drive: prints the choice,
+    /// answers `-1`, and the menu comes back. (Production attaches through
+    /// DshAttachSupport; that path is covered by DshAttachSupportTest.)
+    private static final class PrintingAttachSupport implements AttachSupport {
+        @Override
+        public int attach(String kind, String id, InputStream in, OutputStream out, ChannelSession channel)
+                throws IOException {
+            byte[] line = ("已选择 " + kind + ":" + id + "。\r\n").getBytes(StandardCharsets.UTF_8);
+            out.write(line);
+            out.flush();
+            return -1;
+        }
     }
 
     /// Feeds `input` to a fresh shell and waits for the exit callback.
@@ -166,7 +183,7 @@ class MenuShellFactoryTest {
         Session session = run(factory, DEV_PASSWORD + "\n1\nq\n");
         assertEquals(0, session.exitCode());
         assertTrue(session.output.contains("已选择 dsh:dsh-1"), "the stub names the choice: " + session.output);
-        assertTrue(session.output.contains("attach 将在下一里程碑接入"), "the stub defers to M3: " + session.output);
+        assertTrue(session.output.contains("1) dsh-1"), "the menu renders again behind the stub: " + session.output);
     }
 
     @Test

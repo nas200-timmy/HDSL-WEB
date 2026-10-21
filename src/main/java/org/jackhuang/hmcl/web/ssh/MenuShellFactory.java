@@ -63,9 +63,9 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// >
 /// ```
 ///
-/// A choice is answered through [AttachSupport] (M2 prints a stub line; M3
-/// spawns the real TUI), audited as `ssh.attach` with `kind:id` as the
-/// object, and returns to the menu when the attachment ends.
+/// A choice is answered through [AttachSupport] ([DshAttachSupport] since
+/// M3), which blocks for the whole attachment and answers the session exit
+/// code; `-1` brings the menu back.
 ///
 /// Known v1 tradeoff, deliberate: the server side of the channel has no PTY,
 /// so the developer password **echoes** as the client types it — the prompt
@@ -91,13 +91,13 @@ public final class MenuShellFactory implements ShellFactory {
     private final Supplier<List<Entry>> dshInstances;
     private final Supplier<List<Entry>> brandInstances;
     private final Supplier<List<SessionCatalog.Entry>> sessions;
-    private final AttachSupport attach;
+    private final @Nullable AttachSupport attach;
 
     public MenuShellFactory(DeveloperAuth devAuth,
                             Supplier<List<Entry>> dshInstances,
                             Supplier<List<Entry>> brandInstances,
                             Supplier<List<SessionCatalog.Entry>> sessions,
-                            AttachSupport attach) {
+                            @Nullable AttachSupport attach) {
         this.devAuth = devAuth;
         this.dshInstances = dshInstances;
         this.brandInstances = brandInstances;
@@ -162,20 +162,6 @@ public final class MenuShellFactory implements ShellFactory {
             clean.append(c);
         }
         return clean.toString();
-    }
-
-    /// The M2 [AttachSupport]: acknowledges the choice and ends, which proves
-    /// the menu→attach wiring without pretending to spawn anything. Replaced
-    /// by the real spawn/byte-pump in M3.
-    public static final class PrintingAttachSupport implements AttachSupport {
-        @Override
-        public void attach(String kind, String id, InputStream in, OutputStream out, ChannelSession channel)
-                throws IOException {
-            byte[] line = ("已选择 " + kind + ":" + id + "。attach 将在下一里程碑接入。\r\n")
-                    .getBytes(StandardCharsets.UTF_8);
-            out.write(line);
-            out.flush();
-        }
     }
 
     /// One live shell session. MINA asks `start` to spawn a thread
@@ -255,8 +241,7 @@ public final class MenuShellFactory implements ShellFactory {
                 if (gate >= 0) {
                     return gate;
                 }
-                menu(reader, input, output);
-                return 0;
+                return menu(reader, input, output);
             } catch (IOException e) {
                 return 0;
             }
@@ -294,7 +279,11 @@ public final class MenuShellFactory implements ShellFactory {
             }
         }
 
-        private void menu(BufferedReader reader, InputStream input, OutputStream output) throws IOException {
+        /// The menu loop: render, read a choice, either leave with the
+        /// attach's session code or loop again. EOF and `q` leave with 0.
+        ///
+        /// @return the exit code the session ends with
+        private int menu(BufferedReader reader, InputStream input, OutputStream output) throws IOException {
             while (true) {
                 List<Entry> dshRows = supply(dshInstances);
                 List<Entry> brandRows = supply(brandInstances);
@@ -305,11 +294,11 @@ public final class MenuShellFactory implements ShellFactory {
                 output.flush();
                 String answer = reader.readLine();
                 if (answer == null) {
-                    return;
+                    return 0;
                 }
                 String choice = answer.trim();
                 if (choice.equalsIgnoreCase("q") || choice.equalsIgnoreCase("exit")) {
-                    return;
+                    return 0;
                 }
                 Integer number = parseChoice(choice);
                 int total = dshRows.size() + brandRows.size() + sessionRows.size();
@@ -317,16 +306,20 @@ public final class MenuShellFactory implements ShellFactory {
                     line(output, "无效输入，请输入菜单编号或 q。");
                     continue;
                 }
-                select(number, dshRows, brandRows, sessionRows, input, output);
+                int code = select(number, dshRows, brandRows, sessionRows, input, output);
+                if (code >= 0) {
+                    return code;
+                }
             }
         }
 
-        /// Resolves one menu number, audits and hands the channel to
-        /// [AttachSupport]. A failed attachment says so and the menu comes
-        /// back; the menu must not die of a target's problem.
-        private void select(int number, List<Entry> dshRows, List<Entry> brandRows,
-                            List<SessionCatalog.Entry> sessionRows, InputStream input, OutputStream output)
-                throws IOException {
+        /// Resolves one menu number and hands the channel to [AttachSupport].
+        /// A failed attachment says so and the menu comes back; the menu must
+        /// not die of a target's problem.
+        ///
+        /// @return the attach's session code, or `-1` when the menu continues
+        private int select(int number, List<Entry> dshRows, List<Entry> brandRows,
+                           List<SessionCatalog.Entry> sessionRows, InputStream input, OutputStream output) {
             int index = number - 1;
             String kind;
             String id;
@@ -341,12 +334,17 @@ public final class MenuShellFactory implements ShellFactory {
                 kind = "session";
                 id = sessionRows.get(index).id();
             }
-            AuditLog.log(AuditLog.Channel.SSH, "ssh.attach", kind + ":" + id, "success", null, null);
+            AttachSupport hook = attach;
+            if (hook == null) {
+                lineQuiet(output, "终端接入未启用。");
+                return -1;
+            }
             try {
-                attach.attach(kind, id, input, output, channel);
+                return hook.attach(kind, id, input, output, channel);
             } catch (IOException | RuntimeException e) {
                 String message = e.getMessage();
-                line(output, "attach 失败：" + sanitize(message == null ? e.toString() : message));
+                lineQuiet(output, "attach 失败：" + sanitize(message == null ? e.toString() : message));
+                return -1;
             }
         }
     }
@@ -406,6 +404,16 @@ public final class MenuShellFactory implements ShellFactory {
     private static void line(OutputStream output, String text) throws IOException {
         output.write((text + "\r\n").getBytes(StandardCharsets.UTF_8));
         output.flush();
+    }
+
+    /// [line] for call sites that have promised not to throw: a terminal
+    /// that is already gone says nothing.
+    private static void lineQuiet(OutputStream output, String text) {
+        try {
+            line(output, text);
+        } catch (IOException e) {
+            // The terminal is already gone; nothing left to tell.
+        }
     }
 
     private static @Nullable Integer parseChoice(String choice) {
