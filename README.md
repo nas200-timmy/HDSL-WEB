@@ -36,7 +36,7 @@
   默认**关闭**，开启与全部敏感操作要求 **HTTPS + 开发者模式**；公钥登录为默认，
   口令登录可开（带爆破风险警告）。平台矩阵：**Linux ✓ / macOS 放行但未实测 /
   Windows 不支持**；极简镜像可用 `-PnoSsh` 构建把 SSH 通道与 MINA 依赖整体剔除。
-  设计、威胁模型与里程碑见 [docs/ssh-terminal-channel.md](docs/ssh-terminal-channel.md)。
+  设计、安全模型与编译开关见 [docs/ssh-terminal-channel.md](docs/ssh-terminal-channel.md)。
 
 <details>
 <summary>更多截图（初始化引导 / 实例列表 / 品牌实例 / 下载 / 设置）</summary>
@@ -389,6 +389,20 @@ bash scripts/e2e-real.sh
 第一次 `./gradlew build` / `shadowJar` 之前先 `cd web && npm install`：只要 PATH 上有 npm，
 Gradle 就会执行 `npm run build`，没有 `node_modules` 会失败。Docker 构建不需要——镜像的
 build 阶段故意不带 npm，SPA 由单独的 web 阶段产出后拷进去。
+
+### 编译时移除 SSH 支持
+
+SSH 终端通道是正常构建的一部分（release 产物均包含，只是运行时默认关闭）。想从
+**二进制层面**彻底移除它——公网暴露极度敏感、审计合规、或单纯不想镜像里出现 SSH
+服务端——用 `-PnoSsh` 构建：
+
+```bash
+./gradlew --no-daemon -PnoSsh shadowJar
+```
+
+产物里物理不存在 SSH 通道类与 MINA/eddsa 依赖（不是隐藏开关，是类不在 jar 里）；
+面板照常启动并明示「此构建不含 SSH 终端通道」，其余功能不受影响。详见
+[docs/ssh-terminal-channel.md §编译开关](docs/ssh-terminal-channel.md#编译开关-pnossh)。
 
 `scripts/e2e-real.sh` 会真的访问 npm registry、装一个 dsh 版本并启动，耗时几分钟，需要网络。
 `scripts/` 下还有什么、各自验什么、怎么跑，见 [scripts/README.md](scripts/README.md)。
