@@ -2,12 +2,11 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布 — SSH 终端通道（M0–M4）
+## v0.5.0 — 2026-10-22 · SSH 终端通道（M0–M4）
 
 `ssh -p 3022 hdsl@主机` → TUI 门禁（独立开发者密码）→ 编号菜单（dsh 实例 / 品牌实例 /
 恢复 dsh 会话）→ 选定项的 `dsh tui [--resume]` 终端直接接管当前 SSH 会话。设计、威胁模型与
-验收流程见 [docs/ssh-terminal-channel.md](docs/ssh-terminal-channel.md)。**随下次发版定名
-（计划 v0.5.0）**。
+验收流程见 [docs/ssh-terminal-channel.md](docs/ssh-terminal-channel.md)。
 
 - **审计设施（M0）**：append-only JSONL 审计日志（`/data/logs/audit.jsonl`，0600、按日轮转），
   事件 `{ts, actor, channel, action, object, outcome, ip}`；登录/实例/TLS 等既有操作全部接线。
@@ -38,6 +37,11 @@
   `GeneralSecurityException`、`getInstance` 的 `NoSuchAlgorithmException`）、`audit()` 少传
   实参、POST 分支把 `switch` 语句直接挂在 `->` 后面。另外两处（`ApiGuardFilter` 的 rethrow
   越界、`HdslServer` 缺 import）在 v0.4.8 已修并发过版，与本分支无关。
+- 验证：全量 **694 用例 / 0 失败 / 0 错误 / 2 跳过**（JDK 21 与 17 各跑一遍）；前端
+  typecheck / build / compat 三道闸门通过；`-PnoSsh` 的 jar 里 SSH 类与 MINA/eddsa 均为 0，
+  起服务 `/` 回 200 且日志明示「此构建不含 SSH 终端通道」。合并时另修两处：attach 的字节泵
+  改走 `VirtualThreads.start`（原 `Thread.startVirtualThread` 是 21 API，`--release 17` 下
+  编译不过）；`-PnoSsh` 不带值时被读成 false，文档里的命令实际会打出全量 jar。
 
 ## v0.4.9 — 2026-10-21 · 前端健壮性与动画体验
 
