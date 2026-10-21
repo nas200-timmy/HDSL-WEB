@@ -44,6 +44,7 @@ import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.time.Duration;
@@ -143,16 +144,18 @@ public final class SshApiServlet extends HttpServlet {
                     Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
                 }
             }
-            case "POST" -> switch (path) {
-                case "/elevate" -> elevate(request, response);
-                case "/dev-password" -> devPassword(request, response);
-                case "/dev-password/clear" -> devPasswordClear(request, response);
-                case "/toggle" -> toggle(request, response);
-                case "/keys" -> addKey(request, response);
-                case "/generate-keypair" -> generateKeypair(request, response);
-                case "/password-auth" -> passwordAuth(request, response);
-                default -> Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
-            };
+            case "POST" -> {
+                switch (path) {
+                    case "/elevate" -> elevate(request, response);
+                    case "/dev-password" -> devPassword(request, response);
+                    case "/dev-password/clear" -> devPasswordClear(request, response);
+                    case "/toggle" -> toggle(request, response);
+                    case "/keys" -> addKey(request, response);
+                    case "/generate-keypair" -> generateKeypair(request, response);
+                    case "/password-auth" -> passwordAuth(request, response);
+                    default -> Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+                }
+            }
             case "DELETE" -> {
                 if ("/keys".equals(path)) {
                     removeKey(request, response);
@@ -522,7 +525,7 @@ public final class SshApiServlet extends HttpServlet {
             KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
             generator.initialize(3072);
             pair = generator.generateKeyPair();
-        } catch (RuntimeException e) {
+        } catch (NoSuchAlgorithmException | RuntimeException e) {
             Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "key generation failed: " + e.getMessage());
             return;
         }
@@ -616,7 +619,7 @@ public final class SshApiServlet extends HttpServlet {
         if (tlsActive.getAsBoolean()) {
             return true;
         }
-        audit(request, action, "blocked");
+        audit(request, action, null, "blocked");
         Json.error(response, HttpServletResponse.SC_CONFLICT,
                 "tls_required: this operation needs the panel to be serving HTTPS; enable TLS first");
         return false;

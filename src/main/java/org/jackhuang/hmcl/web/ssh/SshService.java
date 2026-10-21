@@ -39,9 +39,9 @@ import java.net.SocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
+import java.security.GeneralSecurityException;
 import java.security.KeyPair;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
 import java.time.Duration;
 import java.time.Instant;
@@ -147,7 +147,7 @@ public final class SshService {
                 return "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest);
             }
             return null;
-        } catch (IOException | NoSuchAlgorithmException | RuntimeException e) {
+        } catch (IOException | GeneralSecurityException | RuntimeException e) {
             log.warning("Could not compute the SSH host key fingerprint: " + e);
             return null;
         }

@@ -27,6 +27,7 @@ import org.jackhuang.hmcl.web.config.WorkspaceDirectory;
 import org.jackhuang.hmcl.web.server.HdslServer;
 import org.jackhuang.hmcl.web.tls.CertificateManager;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
