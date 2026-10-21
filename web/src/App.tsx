@@ -1,7 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { ErrorIcon } from "./components/icons";
 import { Decorator } from "./components/Decorator";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { OfflineBanner } from "./components/OfflineBanner";
 import { SnackbarHost } from "./components/Snackbar";
 import { AccountsPage } from "./pages/AccountsPage";
 import { DownloadPage } from "./pages/DownloadPage";
@@ -67,14 +70,28 @@ function BrandDeepLink() {
 /** 已登录区域：浏览器内窗口（Decorator）+ 路由动画容器。
  * key 只取 pathname：同一页内的 ?tab= 切换不重挂载（保留 ACP 会话等页内状态），
  * tab 内容的 SLIDE_UP_FADE_IN 动画由各页自行施加。
- * 内页背景 = 壁纸（侧栏/内容区的半透明板透出壁纸，见 ui-spec.md §4）。 */
+ * 内页背景 = 壁纸（侧栏/内容区的半透明板透出壁纸，见 ui-spec.md §4）。
+ * 旧页退出动画（ui-spec §11）走 View Transitions API：不认识的浏览器
+ * （Firefox 115 等）维持原状，只有新页入场动画。 */
 function Shell() {
   const location = useLocation();
+  const supportsViewTransition = "startViewTransition" in document;
+  const [displayedPath, setDisplayedPath] = useState(location.pathname);
+  useEffect(() => {
+    if (!supportsViewTransition || location.pathname === displayedPath) {
+      return;
+    }
+    const transition = document.startViewTransition(() => {
+      flushSync(() => setDisplayedPath(location.pathname));
+    });
+    return () => transition.skipTransition();
+  }, [location.pathname, displayedPath, supportsViewTransition]);
+  const path = supportsViewTransition ? displayedPath : location.pathname;
   return (
     <Decorator>
       <div
         className="page-root"
-        key={location.pathname}
+        key={path}
         style={{
           flex: 1,
           minHeight: 0,
@@ -85,7 +102,9 @@ function Shell() {
           backgroundPosition: "center bottom",
         }}
       >
-        <Outlet />
+        <ErrorBoundary>
+          <Outlet />
+        </ErrorBoundary>
       </div>
     </Decorator>
   );
@@ -111,7 +130,9 @@ export default function App() {
           element={
             <Decorator>
               <div className="page-root" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                <LoginPage />
+                <ErrorBoundary>
+                  <LoginPage />
+                </ErrorBoundary>
               </div>
             </Decorator>
           }
@@ -121,7 +142,9 @@ export default function App() {
           element={
             <Decorator>
               <div className="page-root" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                <SetupPage />
+                <ErrorBoundary>
+                  <SetupPage />
+                </ErrorBoundary>
               </div>
             </Decorator>
           }
@@ -146,6 +169,7 @@ export default function App() {
           </Route>
         </Route>
       </Routes>
+      <OfflineBanner />
       <SnackbarHost />
     </>
   );
