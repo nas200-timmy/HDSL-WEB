@@ -41,8 +41,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 ///
 /// Everything that would hold a request thread — an npm install, a launch, a
 /// stop — is submitted here and reported through [EventBus] on the `tasks`
-/// topic. Tasks are retained for the life of the server, so `/api/tasks` can
-/// answer for work that finished long ago.
+/// topic. `/api/tasks` answers for finished work too, but the finished tail
+/// is bounded (see [#pruneTerminal]): a long-running server does not grow
+/// without limit.
 ///
 /// Concurrency is bounded where it matters: at most two installs run at once
 /// (the two pnpm runs would otherwise fight over the shared store), and one
@@ -245,6 +246,11 @@ public final class TaskService {
     /// How many installs may run at once.
     private static final int MAX_INSTALLS = 2;
 
+    /// How many finished tasks (`done`/`failed`) are kept at most, so the
+    /// history `/api/tasks` serves stays bounded on a long-running server.
+    /// Running tasks and ones parked on an approval are never pruned.
+    private static final int DEFAULT_MAX_RETAINED_TERMINAL = 400;
+
     /// The kinds that drive a package manager against one instance's profile:
     /// they are serialised per instance (two pnpm runs over one profile would
     /// race its manifest) and bounded globally by [MAX_INSTALLS] (two pnpm
@@ -267,9 +273,16 @@ public final class TaskService {
     private final ConcurrentHashMap<String, Task> tasks = new ConcurrentHashMap<>();
     /// Instance id → the install task currently working on it.
     private final ConcurrentHashMap<String, String> activeInstalls = new ConcurrentHashMap<>();
+    private final int maxRetainedTerminal;
 
     public TaskService(EventBus bus) {
+        this(bus, DEFAULT_MAX_RETAINED_TERMINAL);
+    }
+
+    /// Test-friendly bound: small retention numbers do not need 400 submits.
+    TaskService(EventBus bus, int maxRetainedTerminal) {
         this.bus = bus;
+        this.maxRetainedTerminal = maxRetainedTerminal;
     }
 
     /// Submits work, returning its handle immediately.
@@ -358,6 +371,30 @@ public final class TaskService {
                 activeInstalls.remove(task.instanceId(), task.id());
             }
             publish(task);
+            pruneTerminal();
+        }
+    }
+
+    /// Drops the oldest finished tasks beyond [maxRetainedTerminal]. Called
+    /// from the completion path of every task, so the bound holds without a
+    /// sweeper thread — the occasional few-hundred-entry scan is cheap next
+    /// to the work that just finished. Running tasks and ones parked on an
+    /// approval are never candidates.
+    private void pruneTerminal() {
+        List<Task> finished = new ArrayList<>();
+        for (Task task : tasks.values()) {
+            if (task.state() != TaskState.RUNNING && task.state() != TaskState.WAITING_APPROVAL) {
+                finished.add(task);
+            }
+        }
+        if (finished.size() <= maxRetainedTerminal) {
+            return;
+        }
+        finished.sort(Comparator.comparingLong(task -> task.sequence));
+        int toRemove = finished.size() - maxRetainedTerminal;
+        for (int i = 0; i < toRemove; i++) {
+            Task oldest = finished.get(i);
+            tasks.remove(oldest.id(), oldest);
         }
     }
 

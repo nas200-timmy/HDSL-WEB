@@ -119,6 +119,38 @@
   animation: page-in-forward 200ms var(--ease);
 }
 
+/* 旧页退出动画（ui-spec §11）：整页快照在 View Transition 中淡出+左移 30px，
+   新页快照沿用 page-in 入场。不认识 startViewTransition 的浏览器
+   （Firefox 115 在列）根本没有这两个伪元素，维持原状。 */
+::view-transition-old(root) {
+  animation: page-out 100ms var(--ease) both;
+}
+
+::view-transition-new(root) {
+  animation: page-in 200ms var(--ease) both;
+}
+
+@keyframes page-out {
+  to {
+    opacity: 0;
+    transform: translateX(-30px);
+  }
+}
+
+/* 浏览器网络断开提示条（OfflineBanner）：贴顶、压在一切内容之上。 */
+.offline-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  padding: 8px 16px;
+  text-align: center;
+  background: var(--monet-error);
+  color: #fff;
+  font-size: 14px;
+}
+
 /* 子页面骨架：左 200px 子侧栏（半透明） + 右内容区（盖 surface-transparent-50 遮罩） */
 .page-with-sidebar {
   display: flex;

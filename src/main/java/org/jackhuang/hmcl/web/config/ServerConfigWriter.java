@@ -33,8 +33,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 /// Writes changes back to `server.yaml`.
 ///
@@ -121,7 +123,8 @@ public final class ServerConfigWriter {
     }
 
     /// Writes the document by replacing the file, so a half-written
-    /// `server.yaml` is never what a restart reads.
+    /// `server.yaml` is never what a restart reads. The staging file carries
+    /// owner-only permissions: the document can hold a PKCS#12 password.
     private static void writeAtomically(Path yamlFile, Map<String, Object> root) throws IOException {
         Dump dump = new Dump(DumpSettings.builder().build());
         String body = dump.dumpToString(root);
@@ -129,6 +132,13 @@ public final class ServerConfigWriter {
         Path staging = yamlFile.resolveSibling(ServerConfigLoader.YAML_FILE_NAME + ".hdsl");
         try (Writer writer = new OutputStreamWriter(Files.newOutputStream(staging), StandardCharsets.UTF_8)) {
             writer.write(body);
+        }
+        try {
+            Files.setPosixFilePermissions(staging, Set.of(
+                    PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
+        } catch (UnsupportedOperationException e) {
+            // No POSIX permission model here (Windows): the move below still
+            // applies, there is just nothing stricter to ask for.
         }
         Files.move(staging, yamlFile, StandardCopyOption.REPLACE_EXISTING);
     }

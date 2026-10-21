@@ -290,11 +290,11 @@ export function InstancePluginsPanel({ instance }: { instance: Instance }) {
             </button>
             <button
               className="tool-btn ripple-host"
-              title={I18N["dsh.instance.plugins.reveal"]}
+              title={I18N["dsh.instance.plugins.to_market"]}
               onClick={() => nav(`/download?tab=plugin&instance=${id}`)}
             >
               <FolderOpenIcon size={20} />
-              {I18N["dsh.instance.plugins.reveal"]}
+              {I18N["dsh.instance.plugins.to_market"]}
             </button>
           </>
         )}
