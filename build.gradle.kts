@@ -54,6 +54,10 @@ dependencies {
     implementation(libs.snakeyaml.engine)
     implementation(libs.bcpkix)
 
+    // The SSH terminal channel: embedded Apache MINA SSHD server (docs/ssh-terminal-channel.md).
+    // sshd-core also carries the SshClient the integration tests connect with.
+    implementation(libs.mina.sshd)
+
     // Jetty speaks slf4j; this binding forwards it to java.util.logging, the
     // same sink HDSL-web's own logging story is built on. Server code itself
     // logs through org.jackhuang.hmcl.util.logging.Logger, never slf4j.

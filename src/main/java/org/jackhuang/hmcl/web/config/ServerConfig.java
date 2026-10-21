@@ -61,6 +61,10 @@ public final class ServerConfig {
     /// Authentication settings; see [AuthConfig].
     public final AuthConfig auth = new AuthConfig();
 
+    /// The SSH terminal channel settings; see [Ssh]. Disabled by default:
+    /// when `enabled` is false no SSH listener exists at all.
+    public final Ssh ssh = new Ssh();
+
     /// The experimental ZCode category; see [ZcodeConfig].
     public final ZcodeConfig zcode = new ZcodeConfig();
 
@@ -151,5 +155,33 @@ public final class ServerConfig {
         /// Session time to live in hours; sessions slide forward on every
         /// verified request (default 168 = one week).
         public int sessionTtlHours = 168;
+    }
+
+    /// The SSH terminal channel knobs (docs/ssh-terminal-channel.md). Every
+    /// one of them can also come from the environment: `HDSL_SSH_ENABLED`,
+    /// `HDSL_SSH_BIND`, `HDSL_SSH_PORT`.
+    public static final class Ssh {
+        /// Whether the channel listens at all (`HDSL_SSH_ENABLED`, default
+        /// false). False means no [org.jackhuang.hmcl.web.ssh.SshService]
+        /// listener is ever created — an off switch with no attack surface.
+        /// Platforms the channel does not support refuse to start even when
+        /// this is true (the platform gate is a hard ban, see
+        /// [org.jackhuang.hmcl.web.ssh.PlatformGuard]).
+        public boolean enabled = false;
+
+        /// The address the SSH listener binds (`HDSL_SSH_BIND`, default
+        /// `127.0.0.1`). Binding anything reachable needs a deliberate choice
+        /// in the settings page — see the threat model in the design doc.
+        public String bindHost = "127.0.0.1";
+
+        /// The SSH listener port (`HDSL_SSH_PORT`, default 3022).
+        public int port = 3022;
+
+        /// Whether the panel password also works over SSH (`password_auth`
+        /// in server.yaml, default false = key login only). Turning this on
+        /// is a brute-force risk and the settings page says so; the check is
+        /// per source IP with the same [org.jackhuang.hmcl.web.auth.LoginThrottle]
+        /// budget the panel sign-in uses.
+        public boolean passwordAuth = false;
     }
 }

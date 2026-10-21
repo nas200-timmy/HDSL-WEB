@@ -1,0 +1,322 @@
+/*
+ * HDSL-web
+ * Copyright (C) 2026  HDSL-web contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+package org.jackhuang.hmcl.web.ssh;
+
+import org.apache.sshd.common.session.Session;
+import org.apache.sshd.common.session.SessionListener;
+import org.apache.sshd.common.util.buffer.ByteArrayBuffer;
+import org.apache.sshd.server.SshServer;
+import org.apache.sshd.server.forward.RejectAllForwardingFilter;
+import org.apache.sshd.server.keyprovider.SimpleGeneratorHostKeyProvider;
+import org.apache.sshd.server.session.ServerSession;
+import org.jackhuang.hmcl.util.logging.Logger;
+import org.jackhuang.hmcl.web.audit.AuditLog;
+import org.jackhuang.hmcl.web.auth.AuthService;
+import org.jackhuang.hmcl.web.auth.LoginThrottle;
+import org.jackhuang.hmcl.web.config.ServerConfig;
+import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
+
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
+import java.security.KeyPair;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.PublicKey;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.EnumSet;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/// The embedded SSH endpoint of the panel (docs/ssh-terminal-channel.md,
+/// milestone M1: switch, platform gate, developer password, skeleton).
+///
+/// The endpoint is a **capability-true-subset** door, not a shell box:
+/// no `CommandFactory` (an `exec` request has nothing to run and is refused
+/// by the channel layer), no SFTP subsystem, [RejectAllForwardingFilter] for
+/// every forwarding kind, and the only door in is [SkeletonShellFactory]
+/// until M2 grows the gate + menu.
+///
+/// Authentication: publickey against the panel-managed
+/// [AuthorizedKeys] (always on), password against the panel user store
+/// (off unless `ssh.password_auth` is on; then every guess spends the same
+/// per-IP [LoginThrottle] budget the panel sign-in uses). The host key is an
+/// Ed25519 pair generated on first start and persisted under
+/// `<data>/ssh/hostkey_ed25519` so restarts keep the fingerprint.
+///
+/// Lifecycle: [start] refuses unless `config.ssh.enabled` is true (the hard
+/// guarantee behind "off = no attack surface") and unless the platform gate
+/// passes; [HdslServer] starts it after Jetty is up and stops it
+/// symmetrically. A start/stop pair audits `ssh.enable` / `ssh.disable` on
+/// the ssh channel; connections, disconnects and failed authentications
+/// audit as they happen.
+@NotNullByDefault
+public final class SshService {
+
+    /// Where the listener actually is; null port means "not running".
+    public record Address(String host, int port) {
+    }
+
+    /// Name of the persisted host key file inside the channel directory.
+    public static final String HOST_KEY_FILE = "hostkey_ed25519";
+
+    private final ServerConfig config;
+    private final AuthService auth;
+    /// M1 keeps no TUI gate yet; the reference is already here because the
+    /// constructor contract is fixed now (M2 reads it).
+    @SuppressWarnings("unused")
+    private final DeveloperAuth devAuth;
+    private final Logger log;
+    private final Path sshDir;
+    private final AuthorizedKeys authorizedKeys;
+    /// One budget per source IP, shared semantics with the panel sign-in.
+    private final LoginThrottle passwordThrottle = new LoginThrottle();
+    private final AtomicInteger connections = new AtomicInteger();
+    private final SessionListener auditListener = new AuditSessionListener();
+
+    private volatile @Nullable SshServer server;
+    private volatile boolean running;
+
+    public SshService(ServerConfig config, AuthService auth, DeveloperAuth devAuth, Logger log) {
+        this.config = config;
+        this.auth = auth;
+        this.devAuth = devAuth;
+        this.log = log;
+        this.sshDir = config.dataDir.resolve(AuthorizedKeys.DIR_NAME);
+        this.authorizedKeys = AuthorizedKeys.open(config.dataDir);
+    }
+
+    /// Whether the listener is up. The answer is the service's own word,
+    /// not a probe, so the toggle API can rely on it mid-flight.
+    public boolean isRunning() {
+        return running;
+    }
+
+    /// The port the listener actually bound (0 in the config means the OS
+    /// picked one). -1 when not running.
+    public int activePort() {
+        SshServer sshd = server;
+        return running && sshd != null ? sshd.getPort() : -1;
+    }
+
+    /// How many SSH sessions are open right now.
+    public int connections() {
+        return Math.max(0, connections.get());
+    }
+
+    /// The keys the publickey authenticator consults.
+    public AuthorizedKeys authorizedKeys() {
+        return authorizedKeys;
+    }
+
+    /// The OpenSSH-format SHA256 fingerprint of the host key, or null when
+    /// the listener is not running (or the key cannot be read).
+    public @Nullable String hostKeyFingerprint() {
+        SshServer sshd = server;
+        if (sshd == null) {
+            return null;
+        }
+        try {
+            Iterable<KeyPair> keys = sshd.getKeyPairProvider().loadKeys(null);
+            for (KeyPair key : keys) {
+                ByteArrayBuffer wire = new ByteArrayBuffer();
+                wire.putPublicKey(key.getPublic());
+                byte[] digest = MessageDigest.getInstance("SHA-256").digest(wire.getCompactData());
+                return "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest);
+            }
+            return null;
+        } catch (IOException | NoSuchAlgorithmException | RuntimeException e) {
+            log.warning("Could not compute the SSH host key fingerprint: " + e);
+            return null;
+        }
+    }
+
+    /// Binds the listener when `config.ssh.enabled` is true. A disabled
+    /// channel is a silent no-op; an unsupported platform is refused loudly
+    /// (warning + audited `blocked`) — the third layer of the platform gate.
+    public synchronized void start() {
+        if (!config.ssh.enabled) {
+            return;
+        }
+        if (!PlatformGuard.supported()) {
+            log.warning("The SSH channel is not supported on this platform (" + verdictText()
+                    + "); refusing to start. See docs/ssh-terminal-channel.md.");
+            AuditLog.log(AuditLog.Channel.SSH, "ssh.enable", null, "blocked", null, null);
+            return;
+        }
+        if (running) {
+            return;
+        }
+        try {
+            SshServer sshd = SshServer.setUpDefaultServer();
+            sshd.setHost(config.ssh.bindHost);
+            sshd.setPort(config.ssh.port);
+
+            Files.createDirectories(sshDir);
+            setOwnerOnly(sshDir);
+            SimpleGeneratorHostKeyProvider hostKeys = new SimpleGeneratorHostKeyProvider(sshDir.resolve(HOST_KEY_FILE));
+            // The JCA name for Ed25519 is "EdDSA"; the spec pins the curve so
+            // the first boot always produces an Ed25519 key. Generated once,
+            // kept forever: a restarted panel answers with the same
+            // fingerprint clients pinned.
+            hostKeys.setAlgorithm("EdDSA");
+            hostKeys.setKeySpec(new java.security.spec.NamedParameterSpec("Ed25519"));
+            hostKeys.setOverwriteAllowed(false);
+            sshd.setKeyPairProvider(hostKeys);
+
+            sshd.setPublickeyAuthenticator(this::authenticateKey);
+            if (config.ssh.passwordAuth) {
+                sshd.setPasswordAuthenticator(this::authenticatePassword);
+            }
+            // No interactive fallback: either password auth is on (then the
+            // factory list from checkConfig already covers it) or the method
+            // must not be offered at all.
+            sshd.setKeyboardInteractiveAuthenticator(null);
+
+            sshd.setShellFactory(new SkeletonShellFactory());
+            sshd.setForwardingFilter(RejectAllForwardingFilter.INSTANCE);
+            sshd.addSessionListener(auditListener);
+
+            sshd.start();
+            setOwnerOnly(sshDir.resolve(HOST_KEY_FILE));
+
+            server = sshd;
+            running = true;
+            log.info("SSH channel listening on " + config.ssh.bindHost + ":" + sshd.getPort()
+                    + " (host key SHA256 fingerprint " + hostKeyFingerprint() + ")");
+            AuditLog.log(AuditLog.Channel.SSH, "ssh.enable", null, "success", null, null);
+        } catch (IOException | RuntimeException e) {
+            log.warning("Failed to start the SSH channel", e);
+            AuditLog.log(AuditLog.Channel.SSH, "ssh.enable", null, "failure", null, null);
+        }
+    }
+
+    /// Closes the listener, abruptly — the toggle promises the port is free
+    /// when the answer returns. Audits `ssh.disable` when it was up.
+    public synchronized void stop() {
+        SshServer sshd = server;
+        server = null;
+        running = false;
+        if (sshd != null) {
+            try {
+                sshd.close(true).await(Duration.ofSeconds(10));
+            } catch (IOException | RuntimeException e) {
+                log.warning("Failed to stop the SSH channel cleanly", e);
+            }
+            AuditLog.log(AuditLog.Channel.SSH, "ssh.disable", null, "success", null, null);
+        }
+    }
+
+    /// Stops and starts again when running — how the password-auth switch
+    /// hot-applies: the offered user-auth methods are fixed at start, so a
+    /// running listener has to be re-resolved to add or drop "password".
+    public synchronized void restartIfRunning() {
+        if (!running) {
+            return;
+        }
+        stop();
+        start();
+    }
+
+    private boolean authenticatePassword(String username, String password, ServerSession session) {
+        String address = peerAddress(session);
+        Instant now = Instant.now();
+        // The refusal happens before the PBKDF2 work, exactly like the panel
+        // sign-in: the check is the cost an attacker is trying to spend.
+        if (passwordThrottle.isBlocked(address, now)) {
+            AuditLog.log(AuditLog.Channel.SSH, "ssh.auth-failure", "password", "blocked", username, address);
+            return false;
+        }
+        if (!auth.userStore().verify(username, password)) {
+            Duration refusedFor = passwordThrottle.recordFailure(address, now);
+            AuditLog.log(AuditLog.Channel.SSH, "ssh.auth-failure", "password",
+                    refusedFor.isZero() ? "failure" : "blocked", username, address);
+            return false;
+        }
+        passwordThrottle.clear(address);
+        return true;
+    }
+
+    private boolean authenticateKey(String username, PublicKey key, ServerSession session) {
+        try {
+            if (authorizedKeys.contains(key)) {
+                return true;
+            }
+            AuditLog.log(AuditLog.Channel.SSH, "ssh.auth-failure", "publickey", "failure", username,
+                    peerAddress(session));
+            return false;
+        } catch (IOException e) {
+            log.warning("Could not read authorized_keys during an SSH login", e);
+            return false;
+        }
+    }
+
+    /// Connect and disconnect are meta events: they land in the audit trail,
+    /// never the traffic that flows through the channel.
+    private final class AuditSessionListener implements SessionListener {
+        @Override
+        public void sessionEstablished(Session session) {
+            connections.incrementAndGet();
+            AuditLog.log(AuditLog.Channel.SSH, "ssh.connect", null, "success", null, peerAddress(session));
+        }
+
+        @Override
+        public void sessionClosed(Session session) {
+            connections.updateAndGet(current -> Math.max(0, current - 1));
+            AuditLog.log(AuditLog.Channel.SSH, "ssh.disconnect", null, "success", null, peerAddress(session));
+        }
+    }
+
+    private static String peerAddress(Session session) {
+        SocketAddress remote = session.getRemoteAddress();
+        if (remote instanceof InetSocketAddress inet) {
+            InetAddress address = inet.getAddress();
+            return address == null ? inet.getHostString() : address.getHostAddress();
+        }
+        return String.valueOf(remote);
+    }
+
+    private static String verdictText() {
+        return switch (PlatformGuard.verdict()) {
+            case SUPPORTED -> "supported";
+            case SUPPORTED_UNVERIFIED -> "supported-unverified";
+            case UNSUPPORTED -> "unsupported";
+        };
+    }
+
+    private static final Set<PosixFilePermission> OWNER_FILE = EnumSet.of(
+            PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
+    private static final Set<PosixFilePermission> OWNER_DIR = EnumSet.of(
+            PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE);
+
+    private static void setOwnerOnly(Path path) {
+        try {
+            Files.setPosixFilePermissions(path, Files.isDirectory(path) ? OWNER_DIR : OWNER_FILE);
+        } catch (IOException | UnsupportedOperationException e) {
+            // Non-POSIX filesystems (Windows) cannot express this; the best
+            // effort above is still applied by every other filesystem.
+        }
+    }
+}

@@ -19,6 +19,7 @@ jetty = "12.0.39"
 snakeyaml-engine = "2.9"
 bouncycastle = "1.86"
 slf4j = "2.0.20"
+mina-sshd = "2.12.1"
 
 [libraries]
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
@@ -45,6 +46,8 @@ jetty-websocket-jetty-client = { module = "org.eclipse.jetty.websocket:jetty-web
 snakeyaml-engine = { module = "org.snakeyaml:snakeyaml-engine", version.ref = "snakeyaml-engine" }
 bcpkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycastle" }
 slf4j-jdk14 = { module = "org.slf4j:slf4j-jdk14", version.ref = "slf4j" }
+# The SSH terminal channel (M1): embedded SSH server (and, in tests, client).
+mina-sshd = { module = "org.apache.sshd:sshd-core", version.ref = "mina-sshd" }
 
 [plugins]
 shadow = { id = "com.gradleup.shadow", version = "9.6.1" }
