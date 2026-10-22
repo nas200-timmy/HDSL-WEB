@@ -26,6 +26,7 @@ import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.http.Json;
@@ -469,6 +470,30 @@ public final class BrandApiServlet extends HttpServlet {
     /// ticket for `/ws/terminal/{ticket}`. On Windows the console belongs to
     /// the desktop, so the panel starts a console window in the instance
     /// workspace instead and answers `{"mode":"desktop"}`.
+    /// The literal confirmation a desktop-terminal POST must carry. It is a
+    /// speed bump against a stolen cookie, not a cryptographic proof: the real
+    /// gates are the session and the developer elevation before it.
+    private static @Nullable String readConfirmation(HttpServletRequest request) throws IOException {
+        try (java.io.InputStreamReader reader =
+                     new java.io.InputStreamReader(request.getInputStream(), StandardCharsets.UTF_8)) {
+            JsonObject body = JsonParser.parseReader(reader).getAsJsonObject();
+            return body.has("confirm") && !body.get("confirm").isJsonNull()
+                    ? body.get("confirm").getAsString()
+                    : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /// Who asked, for the audit trail. `null` when the panel runs with
+    /// authentication disabled (loopback-only).
+    private static @Nullable String actorOf(HttpServletRequest request) {
+        Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
+        return session instanceof org.jackhuang.hmcl.web.auth.AuthService.Session value
+                ? value.username()
+                : null;
+    }
+
     private void terminal(Brand brand, PathRef ref, HttpServletRequest request,
                           HttpServletResponse response, String id) throws IOException {
         BrandInstance instance = ref.manager().find(id);
@@ -519,7 +544,20 @@ public final class BrandApiServlet extends HttpServlet {
         TerminalTarget target = tui.target(packageDir, ref.manager().homeDirectory(instance),
                 ref.manager().workspaceDirectory(instance), id, resume);
         if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
+            // The Windows desktop has its own shell, so this is a convenience
+            // action, not a privilege boundary. The *entry* is still the
+            // boundary: the request already passed the session gate and the
+            // developer elevation above, and it must also spell out the
+            // confirmation — a remote caller who only stole a cookie should
+            // not be able to pop a console with a single POST.
+            if (!"open-desktop-terminal".equals(readConfirmation(request))) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "confirmation_required: send {\"confirm\":\"open-desktop-terminal\"}");
+                return;
+            }
             DesktopTerminal.open(target);
+            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.desktop", id, "success",
+                    actorOf(request), request.getRemoteAddr());
             JsonObject body = new JsonObject();
             body.addProperty("mode", "desktop");
             body.addProperty("instance", id);
