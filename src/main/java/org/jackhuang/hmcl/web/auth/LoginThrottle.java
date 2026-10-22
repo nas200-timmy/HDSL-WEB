@@ -77,6 +77,42 @@ public final class LoginThrottle {
 
     private final Map<String, Attempts> byAddress = new HashMap<>();
 
+    /// The policy this instance enforces. The constants above are the panel
+    /// sign-in defaults; the SSH gate asks for the same failure count with a
+    /// longer refusal (30 minutes), and passes that in here.
+    private final int maxFailures;
+    private final Duration window;
+    private final Duration block;
+
+    /// A throttle that enforces the panel sign-in defaults above.
+    public LoginThrottle() {
+        this(MAX_FAILURES, WINDOW, BLOCK);
+    }
+
+    /// A throttle with its own policy.
+    ///
+    /// @param maxFailures failures a window may hold before the next is refused
+    /// @param window      how far back failures are counted
+    /// @param block       how long a refusal lasts once the budget is spent
+    public LoginThrottle(int maxFailures, Duration window, Duration block) {
+        if (maxFailures < 1 || window.isNegative() || window.isZero() || block.isNegative() || block.isZero()) {
+            throw new IllegalArgumentException("throttle policy must have a positive budget, window and refusal");
+        }
+        this.maxFailures = maxFailures;
+        this.window = window;
+        this.block = block;
+    }
+
+    /// How long this throttle refuses an address for.
+    public Duration block() {
+        return block;
+    }
+
+    /// How many failures this throttle's window holds.
+    public int maxFailures() {
+        return maxFailures;
+    }
+
     /// Reports whether an address is being refused right now.
     ///
     /// @param address the address the request came from
@@ -113,11 +149,11 @@ public final class LoginThrottle {
 
         forgetOldFailures(attempts, now);
         attempts.failures.addLast(now);
-        if (attempts.failures.size() > MAX_FAILURES) {
+        if (attempts.failures.size() > maxFailures) {
             attempts.failures.clear();
-            attempts.blockedUntil = now.plus(BLOCK);
+            attempts.blockedUntil = now.plus(block);
             forgetOldAddresses(now);
-            return BLOCK;
+            return block;
         }
         forgetOldAddresses(now);
         return Duration.ZERO;
@@ -134,8 +170,8 @@ public final class LoginThrottle {
     ///
     /// @param attempts the record
     /// @param now      the current time
-    private static void forgetOldFailures(Attempts attempts, Instant now) {
-        Instant oldest = now.minus(WINDOW);
+    private void forgetOldFailures(Attempts attempts, Instant now) {
+        Instant oldest = now.minus(window);
         while (!attempts.failures.isEmpty() && attempts.failures.peekFirst().isBefore(oldest)) {
             attempts.failures.removeFirst();
         }

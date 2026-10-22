@@ -33,6 +33,7 @@ import java.io.PipedInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -83,7 +84,18 @@ class MenuShellFactoryTest {
                                      List<SessionCatalog.Entry> sessions,
                                      AttachSupport attach,
                                      org.jackhuang.hmcl.web.auth.LoginThrottle gateThrottle) {
-        return new MenuShellFactory(auth, () -> dsh, () -> brands, () -> sessions, attach, gateThrottle);
+        return factory(auth, dsh, brands, sessions, attach, gateThrottle, null);
+    }
+
+    private MenuShellFactory factory(DeveloperAuth auth,
+                                     List<MenuShellFactory.Entry> dsh,
+                                     List<MenuShellFactory.Entry> brands,
+                                     List<SessionCatalog.Entry> sessions,
+                                     AttachSupport attach,
+                                     org.jackhuang.hmcl.web.auth.LoginThrottle gateThrottle,
+                                     java.util.function.Consumer<String> banPeer) {
+        return new MenuShellFactory(auth, () -> dsh, () -> brands, () -> sessions, attach, gateThrottle,
+                banPeer);
     }
 
     /// The acknowledgement stand-in the menu tests drive: prints the choice,
@@ -188,15 +200,14 @@ class MenuShellFactoryTest {
     }
 
     @Test
-    void aSpentConnectionRecordsOnceButDoesNotBlockTheIpYet() throws Exception {
-        org.jackhuang.hmcl.web.auth.LoginThrottle throttle =
-                new org.jackhuang.hmcl.web.auth.LoginThrottle();
+    void aSpentConnectionDoesNotBlockTheGateYet() throws Exception {
+        org.jackhuang.hmcl.web.auth.LoginThrottle throttle = gateThrottle();
         MenuShellFactory factory = factory(authWithPassword(),
                 List.of(new MenuShellFactory.Entry("dsh", "dsh-1", "dsh-1")), List.of(), List.of(),
                 new PrintingAttachSupport(), throttle);
 
-        // One connection burns all three answers: it dies, and the IP earns
-        // exactly one record — not nearly the throttle's blocking budget.
+        // One connection burns all three answers: it dies, and its three wrong
+        // answers are three records — not the fifteen a refusal needs.
         Session first = run(factory, "wrong-1\nwrong-2\nwrong-3\n");
         assertNotEquals(0, first.exitCode());
         assertTrue(first.output.contains("连接已断开"), first.output);
@@ -205,32 +216,69 @@ class MenuShellFactoryTest {
         // passes the gate and reaches the menu.
         Session second = run(factory, DEV_PASSWORD + "\nq\n");
         assertEquals(0, second.exitCode());
-        assertTrue(second.output.contains("dsh 实例"), "one spent connection does not block the IP: "
+        assertTrue(second.output.contains("dsh 实例"), "three wrong answers do not block the gate: "
                 + second.output);
     }
 
     @Test
-    void aBlockedIpIsRefusedBeforeThePrompt() throws Exception {
-        org.jackhuang.hmcl.web.auth.LoginThrottle throttle =
-                new org.jackhuang.hmcl.web.auth.LoginThrottle();
+    void everyWrongAnswerCountsEvenWhenTheClientHangsUpAfterOne() throws Exception {
+        // The bypass this pins down: a client that sends one wrong answer and
+        // closes must still spend the budget, otherwise two guesses per
+        // reconnect never reach the fifteen a refusal needs.
+        org.jackhuang.hmcl.web.auth.LoginThrottle throttle = gateThrottle();
+        List<String> banned = new ArrayList<>();
+        MenuShellFactory factory = factory(authWithPassword(),
+                List.of(new MenuShellFactory.Entry("dsh", "dsh-1", "dsh-1")), List.of(), List.of(),
+                new PrintingAttachSupport(), throttle, banned::add);
+
+        for (int i = 0; i < org.jackhuang.hmcl.web.auth.LoginThrottle.MAX_FAILURES; i++) {
+            Session one = run(factory, "wrong-" + i + "\n");
+            assertEquals(0, one.exitCode(), "EOF at the gate is still a friendly exit: " + one.output);
+        }
+        // The sixteenth wrong answer is the one that goes over the budget:
+        // that connection is told it is banned and the peer is handed to the
+        // ban callback.
+        Session trip = run(factory, "wrong-final\n");
+        assertEquals(1, trip.exitCode(), trip.output);
+        assertTrue(trip.output.contains("30 分钟"), trip.output);
+        assertEquals(List.of("unknown"), banned, "the peer that spent the budget is banned exactly once");
+
+        Session refused = run(factory, DEV_PASSWORD + "\nq\n");
+        assertEquals(1, refused.exitCode());
+        assertTrue(refused.output.contains("30 分钟"), "the refusal names its length: " + refused.output);
+        assertTrue(refused.output.contains("换 IP"), "the refusal is not per address: " + refused.output);
+        assertFalse(refused.output.contains("dsh 实例"), "the menu never renders once refused");
+    }
+
+    @Test
+    void aBlockedGateIsRefusedBeforeThePrompt() throws Exception {
+        org.jackhuang.hmcl.web.auth.LoginThrottle throttle = gateThrottle();
         MenuShellFactory factory = factory(authWithPassword(),
                 List.of(new MenuShellFactory.Entry("dsh", "dsh-1", "dsh-1")), List.of(), List.of(),
                 new PrintingAttachSupport(), throttle);
-        // The gate records one entry per SPENT connection: fifteen seeds plus
-        // one triple-failure connection cross the throttle's budget, so the
-        // NEXT connection is refused at the door.
-        java.time.Instant now = java.time.Instant.now();
-        for (int i = 0; i < org.jackhuang.hmcl.web.auth.LoginThrottle.MAX_FAILURES; i++) {
-            throttle.recordFailure("unknown", now);
+
+        // The budget is one key for every peer: spending it anywhere refuses
+        // the gate everywhere, which is what "换 IP 也得等" means. Fifteen
+        // failures fill the budget; the sixteenth trips it.
+        Instant now = Instant.now();
+        for (int i = 0; i < org.jackhuang.hmcl.web.auth.LoginThrottle.MAX_FAILURES + 1; i++) {
+            throttle.recordFailure(MenuShellFactory.GATE_BUDGET_KEY, now);
         }
-        Session spent = run(factory, "wrong-1\nwrong-2\nwrong-3\n");
-        assertTrue(spent.output.contains("连接已断开"), spent.output);
 
         Session refused = run(factory, DEV_PASSWORD + "\n");
         assertEquals(1, refused.exitCode());
-        assertTrue(refused.output.contains("请稍后再试"), "the blocked peer is told to wait: " + refused.output);
-        assertFalse(refused.output.contains("dsh 实例"), "the menu never renders for a blocked peer: "
+        assertTrue(refused.output.contains("30 分钟"), refused.output);
+        assertFalse(refused.output.contains("dsh 实例"), "the menu never renders for a blocked gate: "
                 + refused.output);
+        assertFalse(refused.output.contains("开发者密码: "), "the blocked gate does not even prompt: "
+                + refused.output);
+    }
+
+    private static org.jackhuang.hmcl.web.auth.LoginThrottle gateThrottle() {
+        return new org.jackhuang.hmcl.web.auth.LoginThrottle(
+                org.jackhuang.hmcl.web.auth.LoginThrottle.MAX_FAILURES,
+                org.jackhuang.hmcl.web.auth.LoginThrottle.WINDOW,
+                SshService.GATE_BLOCK);
     }
 
     // ------------------------------------------------------------------ menu --

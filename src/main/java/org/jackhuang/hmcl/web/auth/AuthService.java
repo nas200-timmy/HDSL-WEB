@@ -144,6 +144,29 @@ public final class AuthService {
         return Optional.of(renewed);
     }
 
+    /// Whether a token still names a live session, without sliding its expiry.
+    ///
+    /// [SshApiServlet] keys its developer-mode elevation by the session token,
+    /// so it asks this on every elevated call: a logged-out or revoked session
+    /// stops being elevated at the same moment it stops being a session.
+    ///
+    /// @param token the session token
+    /// @return whether the token is live
+    public boolean isAlive(@Nullable String token) {
+        if (token == null || token.isBlank()) {
+            return false;
+        }
+        Session session = sessions.get(token);
+        if (session == null) {
+            return false;
+        }
+        if (session.expiresAt().isBefore(Instant.now())) {
+            sessions.remove(token, session);
+            return false;
+        }
+        return true;
+    }
+
     /// Ends the session behind `token`, if any.
     public void logout(@Nullable String token) {
         if (token != null) {

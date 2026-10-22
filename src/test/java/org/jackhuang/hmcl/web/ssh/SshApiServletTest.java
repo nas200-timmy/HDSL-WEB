@@ -96,6 +96,25 @@ class SshApiServletTest {
         return "https://127.0.0.1:" + running.port();
     }
 
+    /// Auth on (two real sessions to compare), TLS from boot, channel off.
+    private TestSupport.RunningServer startServerWithAuth() throws Exception {
+        return TestSupport.start(dataDir, Map.of(UserStore.ENV_ADMIN_PASSWORD, PANEL_PASSWORD), config -> {
+            config.bindHost = "127.0.0.1";
+            config.auth.disabled = false;
+            config.https.enabled = true;
+            config.ssh.enabled = false;
+            config.ssh.port = 0;
+        });
+    }
+
+    /// Signs in and returns the `hdsl_session=…` cookie pair.
+    private static String login(HttpClient client, String base) throws Exception {
+        HttpResponse<String> response = post(client, base + "/api/auth/login",
+                "{\"username\":\"admin\",\"password\":\"" + PANEL_PASSWORD + "\"}");
+        assertEquals(200, response.statusCode(), response.body());
+        return response.headers().firstValue("set-cookie").orElseThrow().split(";", 2)[0];
+    }
+
     // ------------------------------------------------------------------ tests --
 
     @Test
@@ -226,6 +245,68 @@ class SshApiServletTest {
             assertEquals(409, elevateUnset.statusCode(), elevateUnset.body());
         }
     }
+
+    @Test
+    void theElevationBelongsToTheSessionThatEarnedIt() throws Exception {
+        try (TestSupport.RunningServer running = startServerWithAuth()) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = base(running);
+            String first = login(client, base);
+            String second = login(client, base);
+
+            HttpResponse<String> set = post(client, base + "/api/ssh/dev-password",
+                    "{\"adminPassword\":\"" + PANEL_PASSWORD + "\",\"password\":\"" + DEV_PASSWORD
+                            + "\",\"confirm\":\"" + DEV_PASSWORD + "\"}", first);
+            assertEquals(200, set.statusCode(), set.body());
+
+            assertEquals(200, post(client, base + "/api/ssh/elevate",
+                    "{\"password\":\"" + DEV_PASSWORD + "\"}", first).statusCode(), "first session elevates");
+
+            assertEquals(200, get(client, base + "/api/ssh/keys", first).statusCode(),
+                    "the elevated session may read the keys");
+            HttpResponse<String> other = get(client, base + "/api/ssh/keys", second);
+            assertEquals(403, other.statusCode(),
+                    "another session of the same account must not inherit the elevation: " + other.body());
+
+            // A session minted after the first one logged out is not elevated
+            // either: the elevation is not a property of the user that outlives
+            // the token.
+            assertEquals(200, post(client, base + "/api/auth/logout", "", first).statusCode());
+            String third = login(client, base);
+            assertEquals(403, get(client, base + "/api/ssh/keys", third).statusCode(),
+                    "a fresh session must not inherit an old session's elevation");
+        }
+    }
+
+    @Test
+    void thePanelPasswordConfirmationIsThrottled() throws Exception {
+        try (TestSupport.RunningServer running = startServer(false)) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = base(running);
+            String body = "{\"adminPassword\":\"%s\",\"password\":\"" + DEV_PASSWORD
+                    + "\",\"confirm\":\"" + DEV_PASSWORD + "\"}";
+
+            // Fifteen wrong panel passwords fill the budget; the sixteenth is
+            // refused, and so is every attempt after it — including the right
+            // password. Each guess is a PBKDF2 derivation, so the budget is
+            // also the only thing standing between this route and a CPU lever.
+            int budget = org.jackhuang.hmcl.web.auth.LoginThrottle.MAX_FAILURES;
+            for (int i = 0; i < budget; i++) {
+                HttpResponse<String> wrong = post(client, base + "/api/ssh/dev-password",
+                        String.format(body, "wrong-" + i));
+                assertEquals(403, wrong.statusCode(), "guess " + i + ": " + wrong.body());
+            }
+            HttpResponse<String> trips = post(client, base + "/api/ssh/dev-password",
+                    String.format(body, "wrong-final"));
+            assertEquals(429, trips.statusCode(), trips.body());
+            assertTrue(trips.headers().firstValue("Retry-After").isPresent(), "the refusal says how long");
+
+            HttpResponse<String> right = post(client, base + "/api/ssh/dev-password",
+                    String.format(body, PANEL_PASSWORD));
+            assertEquals(429, right.statusCode(), "the right password waits too: " + right.body());
+        }
+    }
+
 
     @Test
     void developerPasswordPolicyAndThreeStrikesLock() throws Exception {
@@ -391,6 +472,54 @@ class SshApiServletTest {
                     "ssh.toggle must be audited: " + audit);
         }
     }
+
+    @Test
+    void spendingTheGateBudgetAlsoRefusesThePeersSshLogins() throws Exception {
+        try (TestSupport.RunningServer running = startServer(true)) {
+            HttpClient http = TestSupport.trustAllClient();
+            String base = base(running);
+            setDeveloperPassword(http, base);
+            elevate(http, base);
+            KeyPair key = generateKeyPair("Ed25519");
+            JsonObject upload = new JsonObject();
+            upload.addProperty("key", publicLine(key));
+            assertEquals(200, post(http, base + "/api/ssh/keys", upload.toString()).statusCode());
+            int port = json(get(http, base + "/api/ssh/status")).get("port").getAsInt();
+
+            SshClient client = freshClient();
+            try {
+                // Three wrong answers per connection: the sixteenth answer
+                // spends the gate's budget inside the sixth connection.
+                for (int i = 0; i < 6; i++) {
+                    ClientSession session = authenticatedSession(client, port, key);
+                    ChannelShell shell = session.createShellChannel();
+                    shell.setIn(new ByteArrayInputStream(
+                            "wrong-a\nwrong-b\nwrong-c\n".getBytes(StandardCharsets.UTF_8)));
+                    shell.setOut(new ByteArrayOutputStream());
+                    shell.open().verify(15, TimeUnit.SECONDS);
+                    waitFor(() -> shell.getExitStatus() != null, Duration.ofSeconds(15));
+                    shell.close(false);
+                    session.close(false);
+                }
+            } finally {
+                client.stop();
+            }
+
+            // The peer that spent it may not log in any more — even with the
+            // key that worked a moment ago.
+            SshClient refused = freshClient();
+            try {
+                ClientSession session = refused.connect("hdsl", "127.0.0.1", port)
+                        .verify(15, TimeUnit.SECONDS).getSession();
+                session.addPublicKeyIdentity(key);
+                assertThrows(Exception.class, () -> session.auth().verify(10, TimeUnit.SECONDS),
+                        "a banned peer's SSH login is refused even with a valid key");
+            } finally {
+                refused.stop();
+            }
+        }
+    }
+
 
     @Test
     void passwordLoginIsOffByDefaultAndHotSwitches() throws Exception {
@@ -610,6 +739,25 @@ class SshApiServletTest {
                 .header("Content-Type", "application/json; charset=utf-8")
                 .method("DELETE", HttpRequest.BodyPublishers.ofString(body)).build(),
                 HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> get(HttpClient client, String url, String cookie) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).GET();
+        if (cookie != null) {
+            builder.header("Cookie", cookie);
+        }
+        return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> post(HttpClient client, String url, String body, String cookie)
+            throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
+                .header("Content-Type", "application/json; charset=utf-8")
+                .POST(HttpRequest.BodyPublishers.ofString(body));
+        if (cookie != null) {
+            builder.header("Cookie", cookie);
+        }
+        return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
     private static JsonObject json(HttpResponse<String> response) {
