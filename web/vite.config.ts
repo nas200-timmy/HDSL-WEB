@@ -14,6 +14,12 @@ export default defineConfig({
   build: {
     outDir: "dist",
     target: "es2020",
+    // 不要压缩输出：esbuild 的语法压缩会破坏 xterm 6.0.0 里
+    // `return f=…, p=…; var f,p` 这种写法，使 DECRQM（CSI ? Ps $ p）抛
+    // ReferenceError，xterm 的写入队列随即停摆——opencode 启动时会连发 6 个
+    // DECRQM，整个终端画面因此永远空白。体积代价实测约 +70 KB gzip，换来
+    // 供应商代码原样执行。
+    minify: false,
   },
   server: {
     proxy: {

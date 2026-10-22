@@ -31,6 +31,14 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
   const phaseRef = useRef<Phase>("opening");
   const closeTimerRef = useRef<number | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
+  /** 父组件每次渲染都会传入新的 onClose；用 ref 兜住，挂载 effect 才不会跟着重连。 */
+  const onCloseRef = useRef(onClose);
+  /** 每次 openSession 自增；慢 POST 回来时若已过期，丢弃结果。 */
+  const generationRef = useRef(0);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   const [phase, setPhaseState] = useState<Phase>("opening");
   const [message, setMessage] = useState("");
@@ -40,6 +48,9 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
   const [setupPassword, setSetupPassword] = useState("");
   const [setupConfirm, setSetupConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+  /** 已从服务端收到的终端字节数（KB），用于区分“没收到”和“收到但没渲染”。 */
+  const [rxKb, setRxKb] = useState(0);
+  const rxRef = useRef(0);
 
   const setPhase = useCallback((next: Phase) => {
     phaseRef.current = next;
@@ -64,6 +75,12 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     const { Terminal } = await import("@xterm/xterm");
     const { FitAddon } = await import("@xterm/addon-fit");
     if (disposedRef.current || !hostRef.current || !data.ws) return;
+    // A reconnect replaces the view: drop the old terminal/socket first so a
+    // second canvas does not pile up in the same host.
+    teardown();
+
+    rxRef.current = 0;
+    setRxKb(0);
 
     const term = new Terminal({
       cursorBlink: true,
@@ -99,6 +116,22 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
       }
     });
 
+    // fit() ran before the socket existed, so its resize was dropped. Send
+    // the real size once the handshake completes; the PTY starts at 80x24.
+    ws.onopen = () => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      }
+    };
+
+    /** 收到二进制帧：计数并渲染。「已接收 N KB」用来区分「没收到字节」和
+     *  「收到了但 xterm 没画出来」——这次空白屏就是后者。 */
+    const acceptBytes = (bytes: Uint8Array) => {
+      rxRef.current += bytes.byteLength;
+      setRxKb(Math.floor(rxRef.current / 1024));
+      term.write(bytes);
+    };
+
     ws.onmessage = (event) => {
       if (typeof event.data === "string") {
         try {
@@ -111,28 +144,48 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
             term.write(`\r\n\x1b[90m${I18N["terminal.ended"]} (${control.code ?? 0})\x1b[0m\r\n`);
             setPhase("ended");
             ws.close();
-            closeTimerRef.current = window.setTimeout(onClose, 3000);
+            closeTimerRef.current = window.setTimeout(() => onCloseRef.current(), 3000);
           }
         } catch {
           term.write(event.data);
         }
-      } else {
-        term.write(new Uint8Array(event.data as ArrayBuffer));
+      } else if (event.data instanceof ArrayBuffer) {
+        acceptBytes(new Uint8Array(event.data));
+      } else if (event.data instanceof Blob) {
+        // binaryType is "arraybuffer", but a browser that ignored it must not
+        // leave a silent black screen.
+        void event.data.arrayBuffer().then((buffer) => acceptBytes(new Uint8Array(buffer)));
       }
     };
-    ws.onclose = () => {
+    ws.onerror = () => {
+      if (disposedRef.current || phaseRef.current !== "opening") {
+        return;
+      }
+      setPhase("error");
+      setMessage(I18N["terminal.error"]);
+    };
+    ws.onclose = (event) => {
+      if (disposedRef.current) {
+        return;
+      }
       if (phaseRef.current === "running") {
         setPhase("detached");
+      } else if (phaseRef.current === "opening") {
+        // The server rejects a stale ticket / missing session by closing
+        // before "ready"; without this the window sat on "opening" forever.
+        setPhase("error");
+        setMessage(`${I18N["terminal.error"]}（WS ${event.code}${event.reason ? `：${event.reason}` : ""}）`);
       }
     };
 
     const observer = new ResizeObserver(() => fit.fit());
     observer.observe(hostRef.current);
     observerRef.current = observer;
-  }, [onClose, setPhase]);
+  }, [teardown, setPhase]);
 
   const openSession = useCallback(async () => {
     if (!target) return;
+    const generation = ++generationRef.current;
     setPhase("opening");
     setMessage("");
     try {
@@ -140,13 +193,14 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
         target.kind === "brand"
           ? await api.openBrandTerminal(target.brand as BrandId, target.id)
           : await api.openDshTerminal(target.id);
-      if (disposedRef.current) return;
+      if (disposedRef.current || generation !== generationRef.current) return;
       if (data.mode === "desktop") {
         setPhase("desktop");
         return;
       }
       await connect(data);
     } catch (e) {
+      if (disposedRef.current || generation !== generationRef.current) return;
       if (e instanceof ApiError && e.status === 403) {
         setPhase("password");
         return;
@@ -220,7 +274,7 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     } finally {
       setBusy(false);
       teardown();
-      onClose();
+      onCloseRef.current();
     }
   };
 
@@ -233,7 +287,10 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
           <span className="terminal-title">
             {target.name} · {I18N["terminal.title"]}
           </span>
-          <span className={`terminal-state terminal-state-${phase}`}>{phaseText(phase)}</span>
+          <span className={`terminal-state terminal-state-${phase}`}>
+            {phaseText(phase)}
+            {rxKb > 0 ? ` · 已接收 ${rxKb} KB` : ""}
+          </span>
         </div>
 
         <div className="terminal-body" ref={hostRef} />

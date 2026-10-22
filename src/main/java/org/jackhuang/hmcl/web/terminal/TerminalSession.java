@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.terminal;
 
 import org.jackhuang.hmcl.util.platform.VirtualThreads;
+import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.web.terminal.pty.Pty;
 import org.jackhuang.hmcl.web.terminal.pty.PtySize;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -105,6 +106,7 @@ public final class TerminalSession {
     public void attach(TerminalSink sink) {
         synchronized (lock) {
             if (state == State.RUNNING) {
+                Logger.LOG.info("Terminal reattach for " + instanceId + ": replaying " + replayCount + " bytes");
                 if (replayCount > 0) {
                     byte[] snapshot = Arrays.copyOf(replay, replayCount);
                     sink.data(snapshot, 0, snapshot.length);

@@ -33,6 +33,7 @@ import jakarta.websocket.server.ServerEndpointConfig;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.terminal.pty.PtySize;
+import org.jackhuang.hmcl.util.logging.Logger;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -86,18 +87,22 @@ public final class TerminalWebSocket implements TerminalSink {
         String ticket = ws.getPathParameters().get("ticket");
         TerminalTickets.Ticket granted = tickets.consume(ticket);
         if (granted == null) {
+            Logger.LOG.warning("Terminal WebSocket rejected: unknown or expired ticket");
             close(ws, 1008, "unknown or expired ticket");
             return;
         }
         if (!authDisabled) {
             Object token = ws.getUserProperties().get("token");
             if (granted.sessionToken() == null || !granted.sessionToken().equals(token)) {
+                Logger.LOG.warning("Terminal WebSocket rejected: ticket does not belong to this session");
                 close(ws, 1008, "ticket does not belong to this session");
                 return;
             }
         }
         Optional<TerminalSession> found = manager.find(granted.instanceId());
         if (found.isEmpty() || found.get().state() != TerminalSession.State.RUNNING) {
+            Logger.LOG.warning("Terminal WebSocket rejected: no running terminal for instance "
+                    + granted.instanceId());
             close(ws, 1011, "no running terminal for this instance");
             return;
         }
@@ -108,6 +113,7 @@ public final class TerminalWebSocket implements TerminalSink {
         ready.addProperty("instance", granted.instanceId());
         sendText(ws, ready.toString());
         session.attach(this);
+        Logger.LOG.info("Terminal WebSocket attached: " + granted.instanceId());
     }
 
     @OnMessage
@@ -143,16 +149,22 @@ public final class TerminalWebSocket implements TerminalSink {
     }
 
     @OnClose
-    public void onClose() {
-        TerminalSession session = terminal;
-        if (session != null) {
-            session.detach(this);
-        }
+    public void onClose(Session ws, CloseReason reason) {
+        Logger.LOG.info("Terminal WebSocket closed: " + reason.getCloseCode() + " " + reason.getReasonPhrase());
+        detach();
     }
 
     @OnError
     public void onError(Throwable error) {
-        onClose();
+        Logger.LOG.warning("Terminal WebSocket error", error);
+        detach();
+    }
+
+    private void detach() {
+        TerminalSession session = terminal;
+        if (session != null) {
+            session.detach(this);
+        }
     }
 
     /// Bytes from the agent. Called on the session's pump thread.
@@ -167,9 +179,10 @@ public final class TerminalWebSocket implements TerminalSink {
             synchronized (ws) {
                 ws.getBasicRemote().sendBinary(buffer);
             }
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            Logger.LOG.warning("Terminal WebSocket send failed (" + length + " bytes)", e);
             // The viewer is gone; the session stays alive for the next one.
-            onClose();
+            detach();
         }
     }
 
@@ -220,6 +233,7 @@ public final class TerminalWebSocket implements TerminalSink {
                     throw new IllegalStateException("no AuthService installed");
                 }
                 if (token == null || auth.verify(token).isEmpty()) {
+                    Logger.LOG.warning("Terminal WebSocket handshake rejected: missing or invalid session cookie");
                     throw new SecurityException("unauthorized");
                 }
             }

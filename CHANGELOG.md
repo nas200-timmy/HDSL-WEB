@@ -2,6 +2,17 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 — 终端空白屏与连接稳定性
+
+- **opencode 终端永远空白**：xterm 6.0.0 的 `requestMode` 在 esbuild 压缩后把
+  `return f=…, p=…; var f,p` 改坏，DECRQM（`CSI ? Ps $ p`）抛 `ReferenceError`，
+  xterm 的写入队列停摆——WS 已 attach、字节也到了浏览器，画面却不再解析。构建改为
+  `minify: false`（体积 +约 70 KB gzip），供应商代码原样执行。
+- **终端窗口反复重连**：父组件每次渲染都传入新的 `onClose`，挂载 effect 的依赖因此
+  不断变化；改用 ref 兜住回调，并给每次 `openSession` 加 generation 丢弃过期结果。
+- 其余可见性修复：WS 打开后补发真实尺寸（PTY 不再停在 80×24）、WS 错误与异常关闭
+  不再静默、标题栏显示「已接收 N KB」、Blob 帧兜底；后端补 attach/发送失败日志。
+
 ## v0.5.2 — 2026-10-22 · Web Shell：实例级原地终端
 
 实例上的「终端」按钮现在就地打开该实例的原生 TUI（`kimi` / `opencode` / `dsh tui`），
