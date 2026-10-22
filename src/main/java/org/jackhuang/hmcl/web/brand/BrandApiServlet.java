@@ -595,8 +595,16 @@ public final class BrandApiServlet extends HttpServlet {
             BrandRuntime.stop(id);
         }
         String resume = request.getParameter("resume");
-        TerminalTarget target = tui.target(packageDir, ref.manager().homeDirectory(instance),
-                ref.manager().workspaceDirectory(instance), id, resume);
+        TerminalTarget target;
+        try {
+            target = tui.target(packageDir, ref.manager().homeDirectory(instance),
+                    ref.manager().workspaceDirectory(instance), id, resume);
+        } catch (IOException | RuntimeException e) {
+            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.open", id, "failure",
+                    actorOf(request), request.getRemoteAddr());
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
+            return;
+        }
         if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
             // The Windows desktop has its own shell, so this is a convenience
             // action, not a privilege boundary. The *entry* is still the
@@ -609,7 +617,12 @@ public final class BrandApiServlet extends HttpServlet {
                         "confirmation_required: send {\"confirm\":\"open-desktop-terminal\"}");
                 return;
             }
-            DesktopTerminal.open(target);
+            try {
+                DesktopTerminal.open(target);
+            } catch (IOException e) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
+                return;
+            }
             AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.desktop", id, "success",
                     actorOf(request), request.getRemoteAddr());
             JsonObject body = new JsonObject();
@@ -629,6 +642,11 @@ public final class BrandApiServlet extends HttpServlet {
             }
         } catch (org.jackhuang.hmcl.web.terminal.TerminalBusyException e) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_already_open: " + e.getMessage());
+            return;
+        } catch (IOException | RuntimeException e) {
+            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.open", id, "failure",
+                    actorOf(request), request.getRemoteAddr());
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
             return;
         }
         String ticket = terminalTickets.issue(id,

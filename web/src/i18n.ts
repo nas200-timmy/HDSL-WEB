@@ -317,6 +317,12 @@ export const I18N = {
   "terminal.state.detached": "已断开",
   "terminal.state.desktop": "桌面",
   "terminal.state.error": "错误",
+  "terminal.setup.prompt": "还没有设置开发者密码。先设置一个，再打开终端。",
+  "terminal.setup.panel": "面板密码",
+  "terminal.setup.password": "开发者密码",
+  "terminal.setup.confirm": "再输一次",
+  "terminal.setup.submit": "设置并打开",
+  "terminal.setup.mismatch": "两次输入的开发者密码不一致",
 } as const;
 
 export type I18nKey = keyof typeof I18N;

@@ -17,14 +17,18 @@
  */
 package org.jackhuang.hmcl.web.terminal;
 
+import org.jackhuang.hmcl.dsh.DshNodeRuntime;
 import org.jackhuang.hmcl.util.platform.Executables;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /// Kimi Code's interactive TUI: `node <dist/main.mjs> [--resume <id>]`.
 ///
@@ -50,14 +54,30 @@ public final class KimiTui implements BrandTui {
                 && !entry.getFileName().toString().endsWith(".js")) {
             throw new IOException("kimi entry point is not a JS file: " + entry);
         }
-        Path node = Executables.resolve("node")
-                .orElseThrow(() -> new IOException("node is not on PATH; the Kimi Code instance needs it"));
+        // The panel may run without node on its own PATH (the managed runtime
+        // lives under <data>/hdsl/runtimes); prefer that runtime, then fall
+        // back to the system PATH.
+        DshNodeRuntime runtime = DshNodeRuntime.detect()
+                .or(DshNodeRuntime::detectManaged)
+                .orElse(null);
+        Map<String, String> environment = new HashMap<>(BrandTui.environment(home));
+        Path node;
+        if (runtime != null) {
+            node = runtime.node();
+            environment.put("PATH",
+                    node.getParent().toString() + File.pathSeparator
+                            + environment.getOrDefault("PATH", ""));
+        } else {
+            node = Executables.resolve("node")
+                    .orElseThrow(() -> new IOException(
+                            "node is neither managed nor on PATH; install a Node runtime first"));
+        }
 
         List<String> command = new ArrayList<>(List.of(node.toString(), entry.toString()));
         if (resumeSession != null && !resumeSession.isBlank()) {
             command.add("--resume");
             command.add(resumeSession);
         }
-        return new TerminalTarget("kimi", instanceId, command, workspace, BrandTui.environment(home));
+        return new TerminalTarget("kimi", instanceId, command, workspace, Map.copyOf(environment));
     }
 }

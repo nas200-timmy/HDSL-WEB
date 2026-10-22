@@ -188,6 +188,21 @@ export const api = {
   developerStatus: () => request<{ devPasswordSet: boolean; elevated: boolean }>("/api/developer/status"),
   elevateDeveloper: (password: string) =>
     request<{ elevated: boolean; expiresAt: string }>("/api/developer/elevate", jsonInit("POST", { password })),
+  setDeveloperPassword: (
+    adminPassword: string,
+    password: string,
+    confirm: string,
+    currentDevPassword?: string,
+  ) =>
+    request<{ ok: boolean; devPasswordSet: boolean }>(
+      "/api/developer/password",
+      jsonInit("POST", { adminPassword, password, confirm, currentDevPassword }),
+    ),
+  clearDeveloperPassword: (adminPassword: string) =>
+    request<{ ok: boolean; devPasswordSet: boolean }>(
+      "/api/developer/password/clear",
+      jsonInit("POST", { adminPassword }),
+    ),
 
 
   logs: (id: string, tail = 200) =>

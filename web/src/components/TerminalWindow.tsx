@@ -15,7 +15,7 @@ export interface TerminalTargetInfo {
   name: string;
 }
 
-type Phase = "opening" | "password" | "running" | "ended" | "detached" | "desktop" | "error";
+type Phase = "opening" | "password" | "setup" | "running" | "ended" | "detached" | "desktop" | "error";
 
 /** 原地终端（docs/web-shell.md）：xterm 覆盖层 + 服务端 PTY。
  *
@@ -36,6 +36,9 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
   const [message, setMessage] = useState("");
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [password, setPassword] = useState("");
+  const [setupAdmin, setSetupAdmin] = useState("");
+  const [setupPassword, setSetupPassword] = useState("");
+  const [setupConfirm, setSetupConfirm] = useState("");
   const [busy, setBusy] = useState(false);
 
   const setPhase = useCallback((next: Phase) => {
@@ -148,6 +151,10 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
         setPhase("password");
         return;
       }
+      if (e instanceof ApiError && e.status === 409 && e.message.includes("developer_password_not_set")) {
+        setPhase("setup");
+        return;
+      }
       setPhase("error");
       setMessage(e instanceof Error ? e.message : String(e));
     }
@@ -173,6 +180,27 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
       await openSession();
     } catch (e) {
       setMessage(e instanceof ApiError && e.status === 429 ? I18N["terminal.password.locked"] : e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitSetup = async () => {
+    if (!setupAdmin || !setupPassword || setupPassword !== setupConfirm) {
+      setMessage(I18N["terminal.setup.mismatch"]);
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await api.setDeveloperPassword(setupAdmin, setupPassword, setupConfirm);
+      await api.elevateDeveloper(setupPassword);
+      setSetupAdmin("");
+      setSetupPassword("");
+      setSetupConfirm("");
+      await openSession();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -231,6 +259,44 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
           </div>
         )}
 
+        {phase === "setup" && (
+          <div className="terminal-password">
+            <div className="terminal-password-title">{I18N["terminal.setup.prompt"]}</div>
+            <input
+              className="input"
+              type="password"
+              placeholder={I18N["terminal.setup.panel"]}
+              value={setupAdmin}
+              onChange={(e) => setSetupAdmin(e.target.value)}
+            />
+            <input
+              className="input"
+              type="password"
+              placeholder={I18N["terminal.setup.password"]}
+              value={setupPassword}
+              onChange={(e) => setSetupPassword(e.target.value)}
+            />
+            <input
+              className="input"
+              type="password"
+              placeholder={I18N["terminal.setup.confirm"]}
+              value={setupConfirm}
+              onChange={(e) => setSetupConfirm(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void submitSetup();
+              }}
+            />
+            <button
+              className="btn btn-raised ripple-host"
+              disabled={busy || !setupAdmin || !setupPassword || !setupConfirm}
+              onClick={() => void submitSetup()}
+            >
+              {I18N["terminal.setup.submit"]}
+            </button>
+            {message && <div className="hint error">{message}</div>}
+          </div>
+        )}
+
         {phase === "desktop" && <div className="terminal-note">{I18N["terminal.desktop"]}</div>}
         {phase === "error" && <div className="terminal-note error">{message || I18N["terminal.error"]}</div>}
         {phase === "detached" && <div className="terminal-note">{I18N["terminal.detached"]}</div>}
@@ -262,6 +328,7 @@ function phaseText(phase: Phase): string {
     case "opening":
       return I18N["terminal.state.opening"];
     case "password":
+    case "setup":
       return I18N["terminal.state.locked"];
     case "running":
       return I18N["terminal.state.running"];

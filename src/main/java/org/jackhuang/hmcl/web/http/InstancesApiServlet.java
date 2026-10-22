@@ -715,7 +715,9 @@ public final class InstancesApiServlet extends HttpServlet {
         try {
             target = DshTui.target(instance, request.getParameter("resume"));
         } catch (DshException | RuntimeException e) {
-            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.open", id, "failure",
+                    actorOf(request), request.getRemoteAddr());
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
             return;
         }
         if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
@@ -725,7 +727,12 @@ public final class InstancesApiServlet extends HttpServlet {
                         "confirmation_required: send {\"confirm\":\"open-desktop-terminal\"}");
                 return;
             }
-            org.jackhuang.hmcl.web.terminal.DesktopTerminal.open(target);
+            try {
+                org.jackhuang.hmcl.web.terminal.DesktopTerminal.open(target);
+            } catch (IOException e) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
+                return;
+            }
             AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.desktop", id, "success",
                     actorOf(request), request.getRemoteAddr());
             JsonObject body = new JsonObject();
@@ -745,6 +752,11 @@ public final class InstancesApiServlet extends HttpServlet {
             }
         } catch (org.jackhuang.hmcl.web.terminal.TerminalBusyException e) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_already_open: " + e.getMessage());
+            return;
+        } catch (IOException | RuntimeException e) {
+            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.open", id, "failure",
+                    actorOf(request), request.getRemoteAddr());
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
             return;
         }
         String ticket = terminalTickets.issue(id, token);
