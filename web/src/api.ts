@@ -19,6 +19,7 @@ import type {
   RegistryTestResult,
   SessionInfo,
   SkillInfo,
+  SshBindResult,
   SshDevPasswordResult,
   SshElevateResult,
   SshGeneratedKeypair,
@@ -298,6 +299,10 @@ export const api = {
 
   sshToggle: (enabled: boolean) =>
     request<SshToggleResult>("/api/ssh/toggle", jsonInit("POST", { enabled })),
+
+  /** 改 SSH 监听绑定地址；运行中会热重启监听器，绑不上后端回滚到旧值 */
+  sshSetBind: (bind: string) =>
+    request<SshBindResult>("/api/ssh/bind", jsonInit("POST", { bind })),
 
   sshKeys: () => request<{ keys: SshKeyEntry[] }>("/api/ssh/keys"),
 
