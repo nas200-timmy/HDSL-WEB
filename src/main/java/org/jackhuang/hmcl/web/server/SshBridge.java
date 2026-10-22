@@ -21,6 +21,8 @@ import jakarta.servlet.http.HttpServlet;
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
+import org.jackhuang.hmcl.web.developer.DeveloperAuth;
+import org.jackhuang.hmcl.web.developer.DeveloperElevation;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -73,14 +75,12 @@ public final class SshBridge {
     /// the service, wires the attach support, and instantiates the
     /// management servlet with the live-TLS supplier. Absent classes answer
     /// an absent bridge; any other reflective failure stops the boot.
-    public static SshBridge load(ServerConfig config, AuthService auth, BooleanSupplier tlsActive, Logger log) {
+    public static SshBridge load(ServerConfig config, AuthService auth, DeveloperAuth devAuth,
+                                 DeveloperElevation elevation, BooleanSupplier tlsActive, Logger log) {
         try {
-            Class<?> devAuthClass = Class.forName(PACKAGE + "DeveloperAuth");
-            Object devAuth = devAuthClass.getMethod("open", Path.class).invoke(null, config.dataDir);
-
             Class<?> serviceClass = Class.forName(PACKAGE + "SshService");
             Object service = serviceClass
-                    .getConstructor(ServerConfig.class, AuthService.class, devAuthClass, Logger.class)
+                    .getConstructor(ServerConfig.class, AuthService.class, DeveloperAuth.class, Logger.class)
                     .newInstance(config, auth, devAuth, log);
             Class<?> attachSupportClass = Class.forName(PACKAGE + "AttachSupport");
             Object attach = Class.forName(PACKAGE + "DshAttachSupport").getConstructor().newInstance();
@@ -88,9 +88,9 @@ public final class SshBridge {
 
             Class<?> apiClass = Class.forName(PACKAGE + "SshApiServlet");
             HttpServlet api = (HttpServlet) apiClass
-                    .getConstructor(serviceClass, devAuthClass, ServerConfig.class, AuthService.class,
-                            BooleanSupplier.class)
-                    .newInstance(service, devAuth, config, auth, tlsActive);
+                    .getConstructor(serviceClass, DeveloperAuth.class, DeveloperElevation.class,
+                            ServerConfig.class, AuthService.class, BooleanSupplier.class)
+                    .newInstance(service, devAuth, elevation, config, auth, tlsActive);
 
             Class<?> guardClass = Class.forName(PACKAGE + "PlatformGuard");
             return new SshBridge(true, service,

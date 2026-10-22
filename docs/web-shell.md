@@ -92,7 +92,7 @@ web/ssh/                      只剩传输与认证；SshAttachAdapter 复用终
 | 3 | `TerminalSession` / `TerminalManager` | 完成 |
 | 4 | HTTP 与 WebSocket（ticket、`/ws/terminal`、Windows 桌面终端） | 后端完成，见 §10 缺口 |
 | 5 | xterm 前端 + 底栏启停 | 未开始 |
-| 6 | dsh 适配 + SSH 归位 + 默认 `-PnoSsh` | 未开始 |
+| 6 | dsh 适配 + SSH 归位 + 默认 `-PnoSsh` | 进行中：提权迁移完成；dsh/默认开关未做 |
 | 7 | ~~Windows ConPTY~~ | **取消**：Windows 用桌面终端（见 §7.1） |
 
 品牌顺序：**kimi → opencode → dsh（可选）**。
@@ -137,10 +137,10 @@ home，因此 TUI 读到的就是网页模式写下的那份会话。
 
 ## 10. 已知缺口（阶段 5/6 之前不发布）
 
-- **开发者密码提权尚未接到终端入口**：`/api/brands/.../terminal` 目前只要求面板会话
-  （AuthFilter）。提权实现现在住在 `web.ssh`（`SshApiServlet` 的 elevation 表），而
-  `-PnoSsh` 构建会整包剔除 `web.ssh`；阶段 6 把 `DeveloperAuth` 与提权迁进常置包后，
-  终端入口必须改为「会话 + 开发者密码」才允许打开。
+- ~~开发者密码提权尚未接到终端入口~~：已完成。`DeveloperAuth` 与 `DeveloperElevation`
+  已迁到常置包 `web.developer`，新增 `POST /api/developer/elevate`、`GET
+  /api/developer/status`；品牌终端入口现在要求「会话 + 15 分钟提权」，`-PnoSsh` 构建
+  同样可用。
 - **前端未接**：阶段 4 只到 API/WS；xterm 覆盖层、底栏启动/停止、断线重开在阶段 5。
 - **web ↔ 终端互斥**：当前开终端会停掉品牌 web 运行时，但不会自动恢复；恢复动作交给
   底栏「启动」（阶段 5 接按钮）。

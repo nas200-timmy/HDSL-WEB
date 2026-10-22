@@ -32,6 +32,8 @@ import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
 import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
+import org.jackhuang.hmcl.web.developer.DeveloperAuth;
+import org.jackhuang.hmcl.web.developer.DeveloperElevation;
 import org.jackhuang.hmcl.web.auth.LoginThrottle;
 import org.jackhuang.hmcl.web.auth.UserStore;
 import org.jackhuang.hmcl.web.config.ServerConfig;
@@ -53,7 +55,6 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.function.BooleanSupplier;
 
 /// The SSH channel's management surface, mapped at `/api/ssh/*`:
@@ -71,6 +72,9 @@ import java.util.function.BooleanSupplier;
 /// - `POST   /api/ssh/dev-password/clear` `{adminPassword}` — remove it.
 /// - `POST   /api/ssh/toggle` `{enabled}` — the switch: persists, then hot
 ///   starts/stops the listener.
+/// - `POST   /api/ssh/bind` `{bind}` — the listener's bind address. Persists,
+///   then restarts a running listener on the new address; a bind that cannot
+///   listen is rolled back to the previous one.
 /// - `GET    /api/ssh/keys` — the authorized keys (elevation required).
 /// - `POST   /api/ssh/keys` `{key}` — add one pasted OpenSSH public key.
 /// - `DELETE /api/ssh/keys` `{index}` — remove one.
@@ -93,40 +97,27 @@ import java.util.function.BooleanSupplier;
 @NotNullByDefault
 public final class SshApiServlet extends HttpServlet {
 
-    /// How long an elevation lasts, renewed on every sensitive call.
-    private static final Duration ELEVATION_TTL = Duration.ofMinutes(15);
-    /// Wrong guesses a session may make before the lock.
-    private static final int MAX_ELEVATION_FAILURES = 3;
-    /// How long an over-guessing session stays locked, and the window the
-    /// guesses are counted in.
-    private static final Duration ELEVATION_LOCK = Duration.ofMinutes(10);
-    private static final Duration ELEVATION_FAILURE_WINDOW = Duration.ofMinutes(10);
-
     /// What the panel answers when `password-auth` is being turned on.
     private static final String PASSWORD_AUTH_WARNING =
             "口令登录开启后，面板口令可直接用于 SSH 登录，爆破风险显著上升；请确认网络层有额外保护（回环/内网/防火墙）。";
 
     private final SshService ssh;
     private final DeveloperAuth devAuth;
+    private final DeveloperElevation elevation;
     private final ServerConfig config;
     private final AuthService auth;
     private final BooleanSupplier tlsActive;
 
-    /// Session token → when the elevation ends. Keyed by token, not by user:
-    /// two sessions of the same account must not share one elevation.
-    private final ConcurrentMap<String, Instant> elevations = new ConcurrentHashMap<>();
-    /// Session token → its bad-guess record. The records are only mutated
-    /// under their own monitor.
-    private final ConcurrentMap<String, ElevationFailures> elevationFailures = new ConcurrentHashMap<>();
     /// Failed panel-password confirmations on the developer-password routes,
     /// per source address. The confirmation guards the second factor, so it
     /// must not double as an unthrottled oracle for the panel password.
     private final LoginThrottle adminPasswordThrottle = new LoginThrottle();
 
-    public SshApiServlet(SshService ssh, DeveloperAuth devAuth, ServerConfig config,
-                         AuthService auth, BooleanSupplier tlsActive) {
+    public SshApiServlet(SshService ssh, DeveloperAuth devAuth, DeveloperElevation elevation,
+                         ServerConfig config, AuthService auth, BooleanSupplier tlsActive) {
         this.ssh = ssh;
         this.devAuth = devAuth;
+        this.elevation = elevation;
         this.config = config;
         this.auth = auth;
         this.tlsActive = tlsActive;
@@ -156,6 +147,7 @@ public final class SshApiServlet extends HttpServlet {
                     case "/dev-password" -> devPassword(request, response);
                     case "/dev-password/clear" -> devPasswordClear(request, response);
                     case "/toggle" -> toggle(request, response);
+                    case "/bind" -> bind(request, response);
                     case "/keys" -> addKey(request, response);
                     case "/generate-keypair" -> generateKeypair(request, response);
                     case "/password-auth" -> passwordAuth(request, response);
@@ -188,7 +180,7 @@ public final class SshApiServlet extends HttpServlet {
         body.addProperty("hostKeyFingerprint", ssh.hostKeyFingerprint());
         body.addProperty("devPasswordSet", devAuth.isSet());
         body.addProperty("connections", ssh.connections());
-        body.addProperty("elevated", isElevated(elevationKey(request)));
+        body.addProperty("elevated", isElevated(keyOf(request)));
         Json.writePreservingNulls(response, body);
     }
 
@@ -204,11 +196,12 @@ public final class SshApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must carry the developer password");
             return;
         }
-        String key = elevationKey(request);
+        String key = keyOf(request);
         Instant now = Instant.now();
-        if (isElevationLocked(key, now)) {
+        if (elevation.isLocked(key, now)) {
             audit(request, "ssh.elevate", null, "blocked");
-            Json.error(response, 429, "too many failed attempts; this session is locked for " + ELEVATION_LOCK.toMinutes() + " minutes");
+            Json.error(response, 429, "too many failed attempts; this session is locked for "
+                    + DeveloperElevation.LOCK.toMinutes() + " minutes");
             return;
         }
         if (!devAuth.isSet()) {
@@ -217,127 +210,66 @@ public final class SshApiServlet extends HttpServlet {
             return;
         }
         if (!devAuth.verify(password)) {
-            boolean locked = recordElevationFailure(key, now);
+            boolean locked = elevation.recordFailure(key, now);
             audit(request, "ssh.elevate", null, "failure");
             if (locked) {
-                Json.error(response, 429, "too many failed attempts; this session is locked for " + ELEVATION_LOCK.toMinutes() + " minutes");
+                Json.error(response, 429, "too many failed attempts; this session is locked for "
+                        + DeveloperElevation.LOCK.toMinutes() + " minutes");
             } else {
                 Json.error(response, HttpServletResponse.SC_UNAUTHORIZED, "invalid developer password");
             }
             return;
         }
-        elevations.put(key, now.plus(ELEVATION_TTL));
-        elevationFailures.remove(key);
+        elevation.elevate(key);
+        elevation.clearFailures(key);
         audit(request, "ssh.elevate", null, "success");
         JsonObject answer = new JsonObject();
         answer.addProperty("elevated", true);
-        answer.addProperty("expiresAt", now.plus(ELEVATION_TTL).toString());
+        answer.addProperty("expiresAt", now.plus(DeveloperElevation.TTL).toString());
         Json.write(response, answer);
     }
 
     /// The gate in front of every sensitive route: passes and slides the
     /// elevation forward; otherwise answers 403 and audits the blocked call.
     ///
-    /// Elevation is keyed by the session token, so logging that session out —
-    /// or revoking it with a password change — ends its elevation in the same
-    /// instant, and one browser session's elevation is never inherited by
-    /// another.
+    /// Elevation lives in [DeveloperElevation] and is keyed by the session
+    /// token, so logging that session out — or revoking it with a password
+    /// change — ends its elevation in the same instant, and one browser
+    /// session's elevation is never inherited by another.
     private boolean requireElevation(HttpServletRequest request, HttpServletResponse response, String action)
             throws IOException {
-        String key = elevationKey(request);
-        Instant now = Instant.now();
-        pruneElevations(now);
-        if (!sessionBehind(key)) {
-            elevations.remove(key);
-            audit(request, action, null, "failure");
-            Json.error(response, HttpServletResponse.SC_FORBIDDEN, "developer elevation required");
-            return false;
-        }
-        Instant expiry = elevations.get(key);
-        if (expiry != null && expiry.isAfter(now)) {
-            elevations.put(key, now.plus(ELEVATION_TTL));
+        if (elevation.require(keyOf(request), sessionAlive(request))) {
             return true;
         }
-        elevations.remove(key);
         audit(request, action, null, "failure");
         Json.error(response, HttpServletResponse.SC_FORBIDDEN, "developer elevation required");
         return false;
     }
 
     private boolean isElevated(String key) {
-        Instant expiry = elevations.get(key);
-        return expiry != null && expiry.isAfter(Instant.now()) && sessionBehind(key);
+        return elevation.isElevated(key, sessionAlive(key));
     }
 
-    /// Whether the session a key names is still alive. Anonymous keys (auth
-    /// disabled, loopback-only) have no session to outlive.
-    private boolean sessionBehind(String key) {
-        if (!key.startsWith(SESSION_PREFIX)) {
+    /// Whether the session a request carries is still alive. Requests without
+    /// a session (authentication disabled, loopback-only) have nothing to
+    /// outlive.
+    private boolean sessionAlive(HttpServletRequest request) {
+        Object token = request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE);
+        return !(token instanceof String value) || value.isBlank() || auth.isAlive(value);
+    }
+
+    /// The same check when only the key is at hand: `token:<token>` embeds the
+    /// session, anonymous keys have none.
+    private boolean sessionAlive(String key) {
+        if (!key.startsWith("token:")) {
             return true;
         }
-        return auth.isAlive(key.substring(SESSION_PREFIX.length()));
+        return auth.isAlive(key.substring("token:".length()));
     }
 
-    /// Drops elevations whose fifteen minutes are up. Sessions come and go,
-    /// so the map is only bounded if the *expired* entries actually leave.
-    private void pruneElevations(Instant now) {
-        if (elevations.size() < 64) {
-            return;
-        }
-        elevations.entrySet().removeIf(entry -> !entry.getValue().isAfter(now));
-    }
-
-    private static final String SESSION_PREFIX = "token:";
-
-    /// Who is asking, and — since the elevation must not outlive its session
-    /// or leak to another one — the session token, never the username.
-    /// Without a session (authentication disabled, loopback-only by config
-    /// validation) the remote address is as good as it gets.
-    private static String elevationKey(HttpServletRequest request) {
+    private static String keyOf(HttpServletRequest request) {
         Object token = request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE);
-        if (token instanceof String value && !value.isBlank()) {
-            return SESSION_PREFIX + value;
-        }
-        String address = request.getRemoteAddr();
-        return "anonymous:" + (address == null ? "unknown" : address);
-    }
-
-    private static final class ElevationFailures {
-        private int count;
-        private @Nullable Instant windowStart;
-        private @Nullable Instant lockedUntil;
-    }
-
-    private boolean isElevationLocked(String key, Instant now) {
-        ElevationFailures failures = elevationFailures.computeIfAbsent(key, k -> new ElevationFailures());
-        synchronized (failures) {
-            return failures.lockedUntil != null && now.isBefore(failures.lockedUntil);
-        }
-    }
-
-    /// @return whether this failure tripped the lock
-    private boolean recordElevationFailure(String key, Instant now) {
-        ElevationFailures failures = elevationFailures.computeIfAbsent(key, k -> new ElevationFailures());
-        synchronized (failures) {
-            if (failures.lockedUntil != null) {
-                if (now.isBefore(failures.lockedUntil)) {
-                    return true;
-                }
-                failures.lockedUntil = null;
-                failures.count = 0;
-            }
-            if (failures.windowStart == null || now.isAfter(failures.windowStart.plus(ELEVATION_FAILURE_WINDOW))) {
-                failures.count = 0;
-                failures.windowStart = now;
-            }
-            failures.count++;
-            if (failures.count >= MAX_ELEVATION_FAILURES) {
-                failures.lockedUntil = now.plus(ELEVATION_LOCK);
-                failures.count = 0;
-                return true;
-            }
-            return false;
-        }
+        return DeveloperElevation.key(token instanceof String value ? value : null, request.getRemoteAddr());
     }
 
     // ---------------------------------------------------------- dev password --
@@ -384,7 +316,7 @@ public final class SshApiServlet extends HttpServlet {
             return;
         }
         // A new secret means every elevation minted against the old one dies.
-        elevations.clear();
+        elevation.clearAll();
         audit(request, "ssh.dev-password", changing ? "change" : "set", "success");
         JsonObject answer = new JsonObject();
         answer.addProperty("ok", true);
@@ -452,7 +384,7 @@ public final class SshApiServlet extends HttpServlet {
                     "the developer password could not be cleared: " + e.getMessage());
             return;
         }
-        elevations.clear();
+        elevation.clearAll();
         audit(request, "ssh.dev-password", "clear", "success");
         JsonObject answer = new JsonObject();
         answer.addProperty("ok", true);
@@ -499,6 +431,73 @@ public final class SshApiServlet extends HttpServlet {
         JsonObject answer = new JsonObject();
         answer.addProperty("ok", true);
         answer.addProperty("enabled", config.ssh.enabled);
+        answer.addProperty("running", ssh.isRunning());
+        answer.addProperty("port", ssh.activePort());
+        Json.write(response, answer);
+    }
+
+    // ------------------------------------------------------------------ bind --
+
+    /// Moves the listener to another bind address. The address is persisted
+    /// only after the new listener came up, and a failed bind restores the
+    /// previous address so a typo never leaves the channel down.
+    private void bind(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHttps(request, response, "ssh.bind")) {
+            return;
+        }
+        if (!PlatformGuard.supported()) {
+            audit(request, "ssh.bind", null, "blocked");
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "platform_unsupported: "
+                    + "the SSH channel is not supported on this platform");
+            return;
+        }
+        if (!requireElevation(request, response, "ssh.bind")) {
+            return;
+        }
+        JsonObject body = jsonBody(request);
+        String requested = body == null ? null : stringField(body, "bind");
+        if (requested == null || requested.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must carry a non-empty `bind`");
+            return;
+        }
+        requested = requested.trim();
+        if (!validBindHost(requested)) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "`bind` must be an IP address or host name no longer than 253 characters");
+            return;
+        }
+        boolean wasRunning = ssh.isRunning();
+        String previous = config.ssh.bindHost;
+        config.ssh.bindHost = requested;
+        if (wasRunning) {
+            ssh.stop();
+            ssh.start();
+            if (!ssh.isRunning()) {
+                config.ssh.bindHost = previous;
+                ssh.start();
+                audit(request, "ssh.bind", requested, "failure");
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "could not listen on " + requested + "; the previous address is still in use");
+                return;
+            }
+        }
+        try {
+            ServerConfigWriter.updateSsh(config.dataDir, config.ssh);
+        } catch (IOException | RuntimeException e) {
+            config.ssh.bindHost = previous;
+            if (wasRunning) {
+                ssh.stop();
+                ssh.start();
+            }
+            audit(request, "ssh.bind", requested, "failure");
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "server.yaml could not be updated: " + e.getMessage());
+            return;
+        }
+        audit(request, "ssh.bind", requested, "success");
+        JsonObject answer = new JsonObject();
+        answer.addProperty("ok", true);
+        answer.addProperty("bind", config.ssh.bindHost);
         answer.addProperty("running", ssh.isRunning());
         answer.addProperty("port", ssh.activePort());
         Json.write(response, answer);
@@ -732,6 +731,21 @@ public final class SshApiServlet extends HttpServlet {
         var element = body.get(name);
         return element != null && element.isJsonPrimitive() && element.getAsJsonPrimitive().isNumber()
                 ? element.getAsInt() : null;
+    }
+
+    /// A bind value is an IPv4/IPv6 literal or a host name. Keep the character
+    /// set tight — whitespace or path syntax must never reach sshd.
+    private static boolean validBindHost(String host) {
+        if (host.isEmpty() || host.length() > 253) {
+            return false;
+        }
+        for (int i = 0; i < host.length(); i++) {
+            char c = host.charAt(i);
+            if (!(Character.isLetterOrDigit(c) || c == '.' || c == ':' || c == '-' || c == '_' || c == '%')) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static String verdictText() {

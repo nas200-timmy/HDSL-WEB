@@ -20,6 +20,7 @@ package org.jackhuang.hmcl.web.ssh;
 import org.apache.sshd.server.channel.ChannelSession;
 import org.apache.sshd.server.command.Command;
 import org.jackhuang.hmcl.util.logging.Logger;
+import org.jackhuang.hmcl.web.developer.DeveloperAuth;
 import org.jackhuang.hmcl.web.auth.UserStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

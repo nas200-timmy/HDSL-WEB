@@ -260,17 +260,31 @@ public final class HdslServer {
         // runtime; the reference is filled once the instance exists.
         java.util.concurrent.atomic.AtomicReference<HdslServer> self = new java.util.concurrent.atomic.AtomicReference<>();
 
+        // The developer credential and its elevation live in a permanent
+        // package: the web terminal needs the same second factor as the SSH
+        // management routes, including in a -PnoSsh build.
+        org.jackhuang.hmcl.web.developer.DeveloperAuth developerAuth;
+        try {
+            developerAuth = org.jackhuang.hmcl.web.developer.DeveloperAuth.open(config.dataDir);
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Cannot open the developer credential store in "
+                    + config.dataDir, e);
+        }
+        org.jackhuang.hmcl.web.developer.DeveloperElevation developerElevation =
+                new org.jackhuang.hmcl.web.developer.DeveloperElevation();
+        java.util.function.BooleanSupplier tlsActive = () -> {
+            HdslServer live = self.get();
+            return live != null && live.tlsActive();
+        };
+
         // The SSH terminal channel service (docs/ssh-terminal-channel.md),
         // loaded reflectively so the -PnoSsh build can leave the channel's
         // classes and the MINA/eddsa jars out of the image: an absent
         // channel is a log line, not a crash. The HTTPS guard inside the
         // management servlet reads this server's live TLS state through
         // `self`, the same reference the TLS settings endpoint uses.
-        SshBridge ssh = SshBridge.load(config, authService,
-                () -> {
-                    HdslServer live = self.get();
-                    return live != null && live.tlsActive();
-                }, logger);
+        SshBridge ssh = SshBridge.load(config, authService, developerAuth, developerElevation,
+                tlsActive, logger);
 
         ServletContextHandler context = new ServletContextHandler();
         context.setContextPath("/");
@@ -295,7 +309,11 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
         context.addServlet(new ServletHolder(new ZcodeApiServlet(config)), "/api/zcode/*");
-        context.addServlet(new ServletHolder(new BrandApiServlet(config, taskService, terminals, terminalTickets)), "/api/brands/*");
+        context.addServlet(new ServletHolder(new BrandApiServlet(
+                config, taskService, terminals, terminalTickets,
+                authService, developerAuth, developerElevation)), "/api/brands/*");
+        context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.developer.DeveloperApiServlet(
+                developerAuth, developerElevation, authService, tlsActive)), "/api/developer/*");
         // Registered before the `/api/settings/*` holder below and matched by its longer prefix:
         // the download source is a launcher setting, and TLS is the other thing this path serves.
         context.addServlet(new ServletHolder(new RegistrySettingsApiServlet()), "/api/settings/registry/*");
