@@ -30,11 +30,17 @@ import java.util.Locale;
 
 /// OpenCode's interactive TUI: `<native binary> [--session <id>]`.
 ///
-/// The npm package ships `bin/opencode.cjs` as a launcher that spawns a
-/// platform-specific native binary (`@opencode/cli-<os>-<arch>/bin/opencode`).
-/// Starting through that launcher would make the Node launcher the root
-/// process, so the adapter resolves the native binary itself, with the same
-/// variants the launcher would try (baseline / musl on x64).
+/// The npm package arrives in two layouts, both of which ship
+/// `bin/opencode.cjs` as a launcher around a native binary. Since 1.19 the
+/// platform binary comes from `opencode-ai` itself —
+/// `node_modules/opencode-ai/bin/opencode.exe` (the `.exe` name is used on
+/// POSIX too; it is an ELF) — with unscoped `opencode-<os>-<arch>` platform
+/// packages as the fallback. Older releases used scoped
+/// `@opencode/cli-<os>-<arch>` packages.
+///
+/// Starting through the launcher would make the Node launcher the root
+/// process, so the adapter resolves the native binary itself, trying the same
+/// variants the launcher would (baseline / musl on x64).
 ///
 /// Sessions live under the XDG data directory (`~/.local/share/opencode`),
 /// which follows the instance `HOME` the target carries.
@@ -66,24 +72,44 @@ public final class OpencodeTui implements BrandTui {
             throw new IOException("opencode has no native build for " + OperatingSystem.CURRENT_OS);
         }
         String arch = architecture();
-        String base = "@opencode/cli-" + os + "-" + arch;
-        String executable = "windows".equals(os) ? "opencode.exe" : "opencode";
-        List<String> names = new ArrayList<>(List.of(base));
-        if ("x64".equals(arch)) {
-            names.add(base + "-baseline");
-            names.add(base + "-musl");
-            names.add(base + "-baseline-musl");
-        } else {
-            names.add(base + "-musl");
+        // Relative to node_modules, in the order the launcher would try them.
+        List<String> candidates = new ArrayList<>();
+        // Since 1.19: the main package carries the platform binary. The
+        // postinstall always names it opencode.exe, POSIX included.
+        candidates.add("opencode-ai/bin/opencode.exe");
+        candidates.add("opencode-ai/bin/opencode");
+        for (String suffix : platformSuffixes(arch)) {
+            // Unscoped platform packages: opencode-<os>-<arch>[-baseline][-musl].
+            candidates.add("opencode-" + os + "-" + arch + suffix + "/bin/opencode");
+            candidates.add("opencode-" + os + "-" + arch + suffix + "/bin/opencode.exe");
         }
-        for (String name : names) {
-            Path candidate = packageDir.resolve("node_modules").resolve(name).resolve("bin").resolve(executable);
+        for (String suffix : platformSuffixes(arch)) {
+            // Older releases: @opencode/cli-<os>-<arch>[-baseline][-musl].
+            candidates.add("@opencode/cli-" + os + "-" + arch + suffix + "/bin/opencode");
+            candidates.add("@opencode/cli-" + os + "-" + arch + suffix + "/bin/opencode.exe");
+        }
+        for (String relative : candidates) {
+            Path candidate = packageDir.resolve("node_modules").resolve(relative);
             if (Files.isRegularFile(candidate)) {
                 return candidate;
             }
         }
         throw new IOException("opencode native binary missing under " + packageDir
-                + " (looked for " + String.join(", ", names) + ")");
+                + " (expected node_modules/opencode-ai/bin/opencode.exe or opencode-"
+                + os + "-" + arch + "/bin/opencode)");
+    }
+
+    /// The platform package variants the launcher would try, in order.
+    private static List<String> platformSuffixes(String arch) {
+        List<String> suffixes = new ArrayList<>(List.of(""));
+        if ("x64".equals(arch)) {
+            suffixes.add("-baseline");
+            suffixes.add("-musl");
+            suffixes.add("-baseline-musl");
+        } else {
+            suffixes.add("-musl");
+        }
+        return suffixes;
     }
 
     private static String architecture() throws IOException {

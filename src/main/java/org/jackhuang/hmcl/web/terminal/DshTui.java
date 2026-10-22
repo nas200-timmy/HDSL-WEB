@@ -34,12 +34,35 @@ import java.util.Map;
 ///
 /// [DshLauncher#plan] is the same spec a browser launch uses — the account
 /// route, the provider key in the environment, the instance's own Node runtime
-/// ahead on `PATH`, and `DSH_HOME`. The TUI therefore opens the same sessions
-/// the web page lists.
+/// ahead on `PATH`, and `DSH_HOME`. The plan's command is the **web** launch
+/// (`node <bin.js> --profile web …`); appending `tui` to that would keep the
+/// web profile and pass `tui` as an app argument. The TUI is
+/// `dsh tui [--resume <id>]`, i.e. the interpreter and entry of the plan with
+/// the `tui` subcommand in place of the web flags — the same shape
+/// [org.jackhuang.hmcl.web.ssh.DshAttachSupport] uses.
 @NotNullByDefault
 public final class DshTui {
 
     private DshTui() {
+    }
+
+    /// The TUI argv from a web launch plan: interpreter + entry, then `tui`
+    /// (and `--resume`). The plan's web flags are deliberately dropped — they
+    /// belong to the web profile, not to the TUI.
+    ///
+    /// Package-private for the test that pins the shape.
+    static List<String> tuiCommand(List<String> planCommand, @Nullable String resumeSession)
+            throws DshException {
+        if (planCommand.size() < 2) {
+            throw new DshException("unexpected dsh launch plan: " + planCommand);
+        }
+        List<String> command = new ArrayList<>(planCommand.subList(0, 2));
+        command.add("tui");
+        if (resumeSession != null && !resumeSession.isBlank()) {
+            command.add("--resume");
+            command.add(resumeSession);
+        }
+        return List.copyOf(command);
     }
 
     /// Builds the terminal target for one dsh instance.
@@ -51,12 +74,7 @@ public final class DshTui {
     public static TerminalTarget target(DshInstance instance, @Nullable String resumeSession)
             throws DshException {
         DshLauncher.LaunchPlan plan = DshLauncher.plan(instance, InstanceRuntime.accountOf(instance));
-        List<String> command = new ArrayList<>(plan.command());
-        command.add("tui");
-        if (resumeSession != null && !resumeSession.isBlank()) {
-            command.add("--resume");
-            command.add(resumeSession);
-        }
+        List<String> command = tuiCommand(plan.command(), resumeSession);
         Map<String, String> environment = new HashMap<>(System.getenv());
         environment.putAll(plan.environment());
         environment.put("TERM", "xterm-256color");

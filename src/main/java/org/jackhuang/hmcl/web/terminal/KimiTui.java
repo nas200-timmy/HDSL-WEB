@@ -24,6 +24,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -32,10 +33,10 @@ import java.util.Map;
 
 /// Kimi Code's interactive TUI: `node <dist/main.mjs> [--resume <id>]`.
 ///
-/// The installed `node_modules/.bin/kimi` is a symlink to the package's
-/// `dist/main.mjs`; resolving it to the real file and starting Node directly
-/// is what keeps the process tree free of the shim, whose shebang would add a
-/// `/usr/bin/env` step and a second interpreter.
+/// pnpm installs `.bin/kimi` as a shell shim, not a symlink, so the adapter
+/// starts the package's own `dist/main.mjs` with Node directly. Starting
+/// through the shim would put `/bin/sh` (and `env`) in the process tree and
+/// make the shim, not the agent, the root process.
 ///
 /// Sessions live under `<HOME>/.kimi-code/sessions`, which the instance home
 /// supplies — so the TUI lists exactly the sessions `kimi web` wrote.
@@ -45,14 +46,20 @@ public final class KimiTui implements BrandTui {
     @Override
     public TerminalTarget target(Path packageDir, Path home, Path workspace,
                                  String instanceId, @Nullable String resumeSession) throws IOException {
-        Path entry = Executables.resolve(packageDir.resolve("node_modules/.bin/kimi").toString())
-                .orElseThrow(() -> new IOException(
-                        "kimi entry point missing under " + packageDir + " (node_modules/.bin/kimi)"));
-        // Defensive: a package whose shim resolves to something other than the
-        // JS entry is not the install this adapter knows how to start.
-        if (!entry.getFileName().toString().endsWith(".mjs")
-                && !entry.getFileName().toString().endsWith(".js")) {
-            throw new IOException("kimi entry point is not a JS file: " + entry);
+        // pnpm does not link `.bin/kimi` to the JS file: it writes a shell
+        // shim (`#!/bin/sh`) and leaves the real entry in the package. Start
+        // from the package's own `bin` target and only fall back to the shim
+        // when it happens to be an npm symlink to a JS file.
+        Path entry = packageDir.resolve("node_modules/@moonshot-ai/kimi-code/dist/main.mjs");
+        if (!Files.isRegularFile(entry)) {
+            Path shim = Executables.resolve(packageDir.resolve("node_modules/.bin/kimi").toString())
+                    .orElse(null);
+            String name = shim == null ? "" : shim.getFileName().toString();
+            if (!name.endsWith(".mjs") && !name.endsWith(".js")) {
+                throw new IOException("kimi entry point missing under " + packageDir
+                        + " (expected node_modules/@moonshot-ai/kimi-code/dist/main.mjs)");
+            }
+            entry = shim;
         }
         // The panel may run without node on its own PATH (the managed runtime
         // lives under <data>/hdsl/runtimes); prefer that runtime, then fall

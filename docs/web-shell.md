@@ -151,12 +151,18 @@ web/ssh/                      只剩传输与认证；SshAttachAdapter 复用终
 | 品牌 | TUI 命令 | 会话/配置目录 | 与 web 是否同一份 | resume 参数 |
 |---|---|---|---|---|
 | kimi | `node <包>/dist/main.mjs`（`kimi` 无子命令） | `KIMI_CODE_HOME` 或 `~/.kimi-code`；会话在 `<home>/sessions` | 是：`kimi web` 用同一 home | `-r/--resume [id]`、`-c/--continue` |
-| opencode | `@opencode/cli-<os>-<arch>/bin/opencode`（原生二进制；`bin/opencode.cjs` 只是启动器） | XDG：data `~/.local/share/opencode`、config `~/.config/opencode` | 是：同一 data 目录 | `--session <id>`、`--continue` |
+| opencode | 1.19+：`opencode-ai/bin/opencode.exe`（POSIX 也叫 .exe，ELF）；旧版：`opencode-<os>-<arch>/bin/opencode` 或 `@opencode/cli-*`。`bin/opencode.cjs` 只是启动器 | XDG：data `~/.local/share/opencode`、config `~/.config/opencode` | 是：同一 data 目录 | `--session <id>`、`--continue` |
 | dsh | `dsh tui [--resume]` | 实例 `DSH_HOME` | 是（已有 SessionCatalog） | `--resume <id>` |
 
 实现约定：两个品牌都由适配器解析成「node + 入口 JS」或「原生二进制」，**不经过
 `.bin` shim / `.cjs` 启动器**；环境里 `HOME`（和 Windows 的 `USERPROFILE`）指向实例
 home，因此 TUI 读到的就是网页模式写下的那份会话。
+
+- kimi：pnpm 的 `.bin/kimi` 是 `#!/bin/sh` shim（不是软链），所以直接取
+  `node_modules/@moonshot-ai/kimi-code/dist/main.mjs`；只有 npm 的软链布局才回退到
+  `.bin/kimi`。
+- opencode：1.19 起平台二进制由 `opencode-ai` 自己带（`bin/opencode.exe`，POSIX 同样
+  叫 .exe 的 ELF）；先找它，再退回无 scope 的平台包与旧的 `@opencode/cli-*`。
 
 ## 10. 已知缺口（阶段 5/6 之前不发布）
 
