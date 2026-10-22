@@ -30,7 +30,12 @@
 - 下载源：设置页可选择预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL。
   保存后立即生效，无需重启。环境变量 `NPM_CONFIG_REGISTRY` 仅作为回退值。
   细节见 [docs/deployment.md](docs/deployment.md)。
-- **SSH 终端通道**：`ssh -p 3022 hdsl@主机` 进来——先过 TUI 门禁（独立的开发者密码），
+- **实例终端（Web Shell）**：实例行上的「终端」按钮就地打开该实例的原生 TUI——Kimi Code、
+  OpenCode，以及 dsh 的 `dsh tui [--resume]`。终端跑在面板进程里、走现有 WebSocket，不新增
+  端口、不需要反向代理；关窗/刷新只断开查看，agent 继续跑，重开接回并回放。同一份实例 home
+  与会话记录，和网页模式看到的是同一份。打开需要开发者密码；细节与威胁模型见
+  [docs/web-shell.md](docs/web-shell.md)。
+- **SSH 终端通道（可选）**：`ssh -p 3022 hdsl@主机` 进来——先过 TUI 门禁（独立的开发者密码），
   再在编号菜单里挑 dsh 实例 / 恢复 dsh 会话，选定后把 `dsh tui [--resume]` 的终端
   直接接到你的 SSH 会话上（TERM/尺寸透传、resize 生效、断开自动清理整棵进程树）。
   SSH 是「万不得已」通道：**默认构建不含它**，用 `-PwithSsh` 构建才会带上（运行时仍
@@ -60,6 +65,7 @@
 ## 目录
 
 - [架构](#架构)
+- [实例终端（Web Shell）](#实例终端web-shell)
 - [快速开始](#快速开始)（Release 下载 / Docker Compose / 裸 `java -jar`）
 - [首次登录与初始化引导](#首次登录与初始化引导)
 - [数据与挂载点](#数据与挂载点)
@@ -84,9 +90,11 @@
 │   ├─ SPA 静态资源（React 构建产物，已打进 jar）               │
 │   ├─ /api/*       REST（认证/实例/版本/插件/账户/整合包/…）   │
 │   ├─ /ws          WebSocket（日志流、任务进度、状态事件）      │
+│   ├─ /ws/terminal WebSocket（原地终端：实例原生 TUI）          │
 │   └─ /i/{id}/*    反向代理 → 127.0.0.1:3081-4081             │
 │  Java 领域层（自 HDSL 移植）：实例、版本、插件、账户、整合包   │
 │  dsh 实例进程池：node bin.js --profile web --port N …        │
+│  伪终端：kimi / opencode / dsh tui（按实例，随面板退出）      │
 │  容器内置 OpenJDK 21 + Node ^22 + pnpm(通过 corepack)         │
 └───────────────────────────────────────────────────────────────┘
         │  卷：hdsl-data → /data（唯一需要持久化的目录）
@@ -97,12 +105,29 @@
 nginx/Caddy 也支持，`Host` 必须原样透传。细节见 [docs/deployment.md](docs/deployment.md) 与
 [docs/design-notes.md](docs/design-notes.md)。
 
+## 实例终端（Web Shell）
+
+实例行上的「终端」按钮打开该实例的原生 TUI（Kimi Code、OpenCode、`dsh tui`），在当前页面
+原地覆盖，不跳路由：
+
+- **以实例为单位**：同一份 home、账号与模型路由，TUI 里能 resume 的会话与网页模式一致。
+- **会话常驻**：关窗/刷新只 detach，agent 继续跑；重开接回并回放最近 256 KB。`/exit`、
+  底栏「停止」、实例停止才杀进程树；同一实例同时只有一个会话。
+- **两道门**：面板会话 + 开发者密码提权（15 分钟滑动）。首次打开时可直接在终端窗口里设置
+  开发者密码（要面板密码确认），不依赖 SSH 构建。
+- **Windows**：不走浏览器 PTY，而是在桌面会话里开一个控制台窗口；面板以服务运行时没有交互
+  桌面，按钮会明确拒绝。
+
+终端入口效果上等价于 RCE（它启动的是 agent 进程），部署前提与威胁模型见
+[docs/web-shell.md §4.1](docs/web-shell.md)。日常的 TUI 用这个按钮；SSH 只是可选的
+「万不得已」通道。
+
 ## 快速开始
 
 ### 方式零：下载 Release 产物
 
-从 [Releases](https://github.com/nas200-timmy/HDSL-WEB/releases) 下载 `hdsl-web-<版本>.jar` 与
-`SHA256SUMS.txt`：
+从 [Releases](https://github.com/nas200-timmy/HDSL-WEB/releases) 下载 `hdsl-web-<版本>.jar`
+（默认构建，不含 SSH）或 `hdsl-web-<版本>-full.jar`（含 SSH 服务端），以及 `SHA256SUMS.txt`：
 
 ```bash
 sha256sum -c SHA256SUMS.txt
@@ -126,7 +151,8 @@ docker run -d --name hdsl-web --restart unless-stopped \
   ghcr.io/nas200-timmy/hdsl-web:latest
 ```
 
-版本化标签与 Release 一一对应（如 `ghcr.io/nas200-timmy/hdsl-web:0.4.6`）。从源码构建：
+版本化标签与 Release 一一对应（如 `ghcr.io/nas200-timmy/hdsl-web:0.5.2`）。镜像由默认构建
+产出，**不含 SSH 服务端**；需要 SSH 时用 `-PwithSsh` 从源码构建。从源码构建：
 
 ```bash
 cd HDSL-web
@@ -146,8 +172,10 @@ docker compose up -d --build
 Node 版本范围是 dsh 自己的 `engines` 要求；pnpm 既是 dsh 的安装器，也是插件管理的转发目标。
 
 Windows 同样可用：面板认得出系统装的 Node.js（`node.exe` / `npm.cmd` / `pnpm.cmd`）、能装 dsh
-版本与插件、能装品牌工具、能一键装托管 Node 运行时、能在面板内构建 ZCode。两件事明确不支持
-（被点到时会说明原因）：实例终端和会话租约观察。NTFS 也没有 `0600` 语义（见
+版本与插件、能装品牌工具、能一键装托管 Node 运行时、能在面板内构建 ZCode。实例终端在
+Windows 上走桌面控制台——面板必须在控制台或 RDP 会话里运行；以服务运行（session 0）时没有
+交互桌面，终端与「打开文件夹/日志」会明确返回 409。会话租约观察仍不支持。NTFS 也没有
+`0600` 语义（见
 [安全说明](#安全说明)）。逐条实测与限制见 [docs/windows-bare-deploy.md](docs/windows-bare-deploy.md)。
 
 ```bash
@@ -353,6 +381,9 @@ location /panel/ {
   （PBKDF2 二十一万次）就是攻击者想花掉的那笔开销。来源地址取的是 TCP 对端地址，所以面板如果
   架在反向代理后面，这个预算是所有访问者共用的（`X-Forwarded-For` 是客户端能自己写的，不能信）。
 - 口令用 PBKDF2WithHmacSHA256（per-user 盐、21 万次迭代），文件原子写入并尽量收紧到 0600。
+- **实例终端是一个能执行 agent 的入口，效果上等价于 RCE**：除了会话，还要开发者密码提权
+  （15 分钟滑动）；Windows 桌面启动额外要求字面确认。面板只应监听回环或可信网络；要暴露
+  公网必须在网络层再加保护。见 [docs/web-shell.md §4.1](docs/web-shell.md)。
 - dsh 只监听回环；TLS 在面板边缘终结，外部能到达的只有面板端口。
 - 点「停止」会杀整棵进程树：端口立刻关闭，`/i/<id>/` 立刻不可用。dsh 的访问 token 每进程随机、
   只存内存、重启即换。
