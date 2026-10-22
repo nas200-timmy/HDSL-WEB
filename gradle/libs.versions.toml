@@ -2,8 +2,9 @@
 #
 # Domain-layer libraries are aligned with the HDSL desktop build this source
 # was copied from (see HDSL/gradle/libs.versions.toml); everything the desktop
-# UI needed (JavaFX, JFoenix, JNA, jsoup, nanohttpd, commonmark, ...) is
-# deliberately absent.
+# UI needed (JavaFX, JFoenix, jsoup, nanohttpd, commonmark, ...) is
+# deliberately absent. JNA is the one native bridge this build keeps: the web
+# terminal's PTY glue (docs/web-shell.md) is written against it directly.
 
 [versions]
 junit = "6.1.3"
@@ -24,6 +25,10 @@ mina-sshd = "2.12.1"
 # never transitively resolves optional Maven dependencies, so the version
 # is pinned here and declared explicitly in build.gradle.kts.
 eddsa = "0.3.0"
+# JNA is used only by the web terminal's PTY glue (docs/web-shell.md).
+# Dual-licensed LGPL-2.1 / Apache-2.0; this build relies on the Apache-2.0 arm,
+# which is GPL-3.0 compatible.
+jna = "5.19.1"
 
 [libraries]
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
@@ -50,6 +55,8 @@ jetty-websocket-jetty-client = { module = "org.eclipse.jetty.websocket:jetty-web
 snakeyaml-engine = { module = "org.snakeyaml:snakeyaml-engine", version.ref = "snakeyaml-engine" }
 bcpkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycastle" }
 slf4j-jdk14 = { module = "org.slf4j:slf4j-jdk14", version.ref = "slf4j" }
+# The web terminal's PTY glue (docs/web-shell.md). Apache-2.0 arm only.
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 # The SSH terminal channel (M1): embedded SSH server (and, in tests, client).
 mina-sshd = { module = "org.apache.sshd:sshd-core", version.ref = "mina-sshd" }
 # Ed25519 for the SSH channel. sshd-common marks this OPTIONAL, so Gradle

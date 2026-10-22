@@ -142,9 +142,10 @@ HDSL-web THIRD-PARTY COMPONENTS
 
 HDSL-web ships as a single executable jar that bundles its runtime
 dependencies.  The components below are the ones bundled into that jar; the
-desktop-only components named in the section above (JFoenix, OpenJFX, JNA,
-jsoup, commonmark, NanoHTTPD, MonetFX, webp, pci-ids, ...) are not part of
-HDSL-web.
+desktop-only components named in the section above (JFoenix, OpenJFX, jsoup,
+commonmark, NanoHTTPD, MonetFX, webp, pci-ids, ...) are not part of
+HDSL-web.  JNA is the one component from that list that HDSL-web does bundle:
+it backs the PTY glue of the web terminal, and nothing else.
 
   Eclipse Jetty (jetty-server, jetty-http, jetty-io, jetty-util, jetty-client,
   jetty-security, jetty-session, jetty-alpn-client, jetty-xml, jetty-jndi,
@@ -174,6 +175,12 @@ HDSL-web.
   Gson (com.google.code.gson:gson) and error_prone_annotations
       Apache License 2.0.
       https://github.com/google/gson
+
+  JNA (net.java.dev.jna:jna)
+      Dual licensed under the Apache License 2.0 or the LGPL 2.1; this
+      distribution relies on the Apache 2.0 arm.  Used only by the PTY glue
+      of the web terminal (docs/web-shell.md).
+      https://github.com/java-native-access/jna
 
   SLF4J (org.slf4j:slf4j-api, org.slf4j:slf4j-jdk14)
       MIT License.

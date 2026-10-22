@@ -3,8 +3,9 @@
 // The domain sources under `org.jackhuang.hmcl.dsh/setting/util` are copied
 // from the HDSL desktop build and de-JavaFX-ed (see docs/plan.md); their
 // package names and copyright headers stay as GPLv3 requires. This build keeps
-// only what a headless server needs: no JavaFX, no JFoenix, no JNA, no
-// nanohttpd.
+// only what a headless server needs: no JavaFX, no JFoenix, no nanohttpd.
+// JNA is the single native bridge kept: it backs the PTY glue of the web
+// terminal (org.jackhuang.hmcl.web.terminal.pty, see docs/web-shell.md).
 
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 
@@ -65,6 +66,11 @@ dependencies {
     implementation(libs.jetty.websocket.jetty.client)
     implementation(libs.snakeyaml.engine)
     implementation(libs.bcpkix)
+
+    // The PTY glue behind the web terminal (docs/web-shell.md): JNA is the
+    // only native bridge in this build, and the terminal is present in every
+    // variant — it is not part of the -PnoSsh switch.
+    implementation(libs.jna)
 
     // The SSH terminal channel: embedded Apache MINA SSHD server (docs/ssh-terminal-channel.md).
     // sshd-core also carries the SshClient the integration tests connect with.
