@@ -55,10 +55,12 @@
 
 ```
 web/terminal/                 常置包，不依赖 MINA
-  TerminalTarget              实例 → home/cwd/env/argv（品牌适配器产出）
-  BrandTui                    KimiTui / OpencodeTui / DshTui
-  TerminalSession             PTY 进程 + 回放缓冲 + 状态
-  TerminalManager             实例级互斥、attach/detach、杀树、审计
+  TerminalTarget              实例 → home/cwd/env/argv
+  BrandTui                    KimiTui / OpencodeTui（dsh 的 DshTui 在阶段 6）
+  TerminalSink                一个挂载者（生产是 WebSocket，测试是收集器）
+  TerminalSession             PTY 进程 + 回放缓冲 + attach/detach + 退出
+  TerminalManager             实例级互斥、open/terminate、审计
+  TerminalBusyException       同实例第二个终端
   pty/                        伪终端胶水（JNA）
     Pty / PtySize / PtyException / PosixPty
 web/http/TerminalApiServlet   POST 开终端、DELETE 结束终端
@@ -103,10 +105,16 @@ web/ssh/                      只剩传输与认证；SshAttachAdapter 复用终
 - 同实例第二个终端 409；未提权 403。
 - `-PnoSsh` 构建的 jar：无 `web/ssh`，终端功能可用。
 
-## 9. 品牌实测（阶段 0 spike，待填）
+## 9. 品牌实测（阶段 0 spike）
+
+已从源码仓库核对（`kimi-code` / `opencode`）：
 
 | 品牌 | TUI 命令 | 会话/配置目录 | 与 web 是否同一份 | resume 参数 |
 |---|---|---|---|---|
-| kimi | 待测 | 待测 | 待测 | 待测 |
-| opencode | 待测 | 待测 | 待测 | 待测 |
+| kimi | `node <包>/dist/main.mjs`（`kimi` 无子命令） | `KIMI_CODE_HOME` 或 `~/.kimi-code`；会话在 `<home>/sessions` | 是：`kimi web` 用同一 home | `-r/--resume [id]`、`-c/--continue` |
+| opencode | `@opencode/cli-<os>-<arch>/bin/opencode`（原生二进制；`bin/opencode.cjs` 只是启动器） | XDG：data `~/.local/share/opencode`、config `~/.config/opencode` | 是：同一 data 目录 | `--session <id>`、`--continue` |
 | dsh | `dsh tui [--resume]` | 实例 `DSH_HOME` | 是（已有 SessionCatalog） | `--resume <id>` |
+
+实现约定：两个品牌都由适配器解析成「node + 入口 JS」或「原生二进制」，**不经过
+`.bin` shim / `.cjs` 启动器**；环境里 `HOME`（和 Windows 的 `USERPROFILE`）指向实例
+home，因此 TUI 读到的就是网页模式写下的那份会话。

@@ -57,7 +57,8 @@ public final class AuditLog {
     /// Which door the event came through.
     public enum Channel {
         WEB("web"),
-        SSH("ssh");
+        SSH("ssh"),
+        TERMINAL("terminal");
 
         private final String wireName;
 
