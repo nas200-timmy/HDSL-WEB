@@ -37,7 +37,7 @@ import java.util.function.BooleanSupplier;
 /// `GET /api/developer/status`.
 ///
 /// It lives outside the SSH package on purpose: the web terminal needs the
-/// same second factor, and a `-PnoSsh` build still carries this endpoint. The
+/// same second factor, and the default build still carries this endpoint. The
 /// SSH settings servlet keeps its `/api/ssh/elevate` route for compatibility,
 /// backed by the same [DeveloperElevation] instance.
 ///

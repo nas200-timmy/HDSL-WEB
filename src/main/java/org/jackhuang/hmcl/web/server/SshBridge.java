@@ -31,7 +31,7 @@ import java.nio.file.Path;
 import java.util.function.BooleanSupplier;
 
 /// The SSH terminal channel behind one reflective seam
-/// (docs/ssh-terminal-channel.md §M4): the `-PnoSsh` build drops
+/// (docs/ssh-terminal-channel.md §M4): the default build drops
 /// `org/jackhuang/hmcl/web/ssh/**` and the MINA/eddsa packages from the fat
 /// jar, so nothing outside that package may name its classes — one static
 /// import of `SshService` would turn the whole server into a
@@ -98,7 +98,7 @@ public final class SshBridge {
                     serviceClass.getMethod("isRunning"), serviceClass.getMethod("activePort"),
                     guardClass.getMethod("verdict"), api);
         } catch (ClassNotFoundException | NoClassDefFoundError missing) {
-            log.info("此构建不含 SSH 终端通道（-PnoSsh）；SSH 相关能力不可用。");
+            log.info("此构建不含 SSH 终端通道（默认构建；需要时用 -PwithSsh）；SSH 相关能力不可用。");
             return new SshBridge(false, null, null, null, null, null, null, null);
         } catch (ReflectiveOperationException | RuntimeException broken) {
             throw new IllegalStateException("The SSH channel is present but could not be initialized", broken);

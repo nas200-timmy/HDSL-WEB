@@ -119,11 +119,11 @@ public final class HdslServer {
     /// The ACP console bridge; its processes outlive `/ws` connections and are
     /// all stopped when the server stops.
     private final AcpSessionManager acpSessions;
-    /// The SSH terminal channel, behind reflection so the -PnoSsh build can
+    /// The SSH terminal channel, behind reflection so the default build can
     /// omit the channel's classes entirely (see [SshBridge]).
     private final SshBridge ssh;
     /// The web terminal's sessions (docs/web-shell.md). Present in every build:
-    /// the terminal is not part of the -PnoSsh switch.
+    /// the terminal is not part of the build switch.
     private final org.jackhuang.hmcl.web.terminal.TerminalManager terminals;
     private final Logger logger;
     private final AtomicLong startedAtMillis;
@@ -262,7 +262,7 @@ public final class HdslServer {
 
         // The developer credential and its elevation live in a permanent
         // package: the web terminal needs the same second factor as the SSH
-        // management routes, including in a -PnoSsh build.
+        // management routes, including in the default build.
         org.jackhuang.hmcl.web.developer.DeveloperAuth developerAuth;
         try {
             developerAuth = org.jackhuang.hmcl.web.developer.DeveloperAuth.open(config.dataDir);
@@ -278,7 +278,7 @@ public final class HdslServer {
         };
 
         // The SSH terminal channel service (docs/ssh-terminal-channel.md),
-        // loaded reflectively so the -PnoSsh build can leave the channel's
+        // loaded reflectively so the default build can leave the channel's
         // classes and the MINA/eddsa jars out of the image: an absent
         // channel is a log line, not a crash. The HTTPS guard inside the
         // management servlet reads this server's live TLS state through
@@ -322,7 +322,7 @@ public final class HdslServer {
         tlsHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(tlsHolder, "/api/settings/*");
         // The SSH channel's management surface; nothing is registered at all
-        // when the build omits the channel (-PnoSsh).
+        // when the build omits the channel (default).
         if (ssh.apiServlet() != null) {
             context.addServlet(new ServletHolder(ssh.apiServlet()), "/api/ssh/*");
         }

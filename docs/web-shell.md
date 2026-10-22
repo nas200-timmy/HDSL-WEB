@@ -142,7 +142,7 @@ web/ssh/                      只剩传输与认证；SshAttachAdapter 复用终
 - 关窗/刷新后进程仍在，重开能接上并看到历史输出。
 - agent 退出后写 PTY 不会到达 WS；会话移除，attach 返回 410。
 - 同实例第二个终端 409；未提权 403。
-- `-PnoSsh` 构建的 jar：无 `web/ssh`，终端功能可用。
+- 默认构建的 jar：无 `web/ssh`，终端功能可用；`-PwithSsh` 才带 SSH。
 
 ## 9. 品牌实测（阶段 0 spike）
 
