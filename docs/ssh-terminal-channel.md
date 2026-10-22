@@ -40,6 +40,10 @@ cwd 落在实例 home——所以 resume 会话、账户、模型路由和网页
    `/data/auth/developer.json`（0600、原子写）。
 2. **打开开关**：「启用」写 `server.yaml`（原子落盘）并热启动监听器；页面随即显示
    监听地址与 host key 的 OpenSSH fingerprint（Ed25519，首启生成、持久化、重启不换）。
+   「绑定地址」可直接在设置页填写并保存，运行中的监听器会立即换地址重启；绑不上时
+   后端回滚到旧地址。填非回环地址（如 `0.0.0.0`）会先弹确认框说明暴露面。默认
+   `127.0.0.1` 只监听本机，**容器部署要填 `0.0.0.0`**（并把 SSH 端口映射到宿主机），
+   见下文「容器部署」。
 3. **添加公钥**（默认必须密钥登录）：
    - 粘贴自己的 OpenSSH 公钥（算法白名单 ed25519/rsa/ecdsa + base64 校验），写入
      `/data/ssh/authorized_keys`（0600）；或
@@ -71,32 +75,25 @@ cwd 落在实例 home——所以 resume 会话、账户、模型路由和网页
 | macOS | ⚠️ 放行但**未真机实测**（体检标 warn；真机复验后转正） |
 | Windows | ❌ 不支持——网页入口禁用并说明、toggle API 409、`SshService.start()` 拒绝（三层防配置跨平台拷贝绕过） |
 
-## 编译开关：`-PnoSsh`
+## 编译开关：`-PwithSsh`
 
-发布产物（CI 与 Dockerfile 的 `./gradlew build shadowJar`）都是**正常构建**：SSH 通道
-完整包含，只是运行时默认关闭。如果你要在二进制层面**彻底没有** SSH 功能——公网暴露
-极度敏感场景、审计合规场景、或就是不想让镜像里出现 SSH 服务端——用编译开关自行构建：
+SSH 是「万不得已」通道：**默认构建不含它**。CI 与 Dockerfile 的 `./gradlew build`
+产出里物理不存在 `org/jackhuang/hmcl/web/ssh.**`、`org.apache.sshd.**`、`net.i2p.**`；
+运行时由反射桥（`SshBridge`）按名加载，缺类时启动日志一行「此构建不含 SSH 终端通道」，
+`/api/ssh/*` 不注册，体检如实标注，其余功能零影响。
+
+要在二进制里带上 SSH 服务端：
 
 ```bash
-# 产物 build/libs/hdsl-web-<版本>.jar —— 不含任何 SSH 类、MINA 与 eddsa
-./gradlew --no-daemon -PnoSsh shadowJar
-
-# 对照：正常构建（release 形态，功能在、运行时默认关）
-./gradlew --no-daemon shadowJar
+./gradlew --no-daemon -PwithSsh shadowJar
 ```
 
-这是**代码层面的保证，不是隐藏开关**：`-PnoSsh` 构建的 jar 里物理不存在
-`org/jackhuang.hmcl.web.ssh.**`、`org.apache.sshd.**`、`net.i2p.**`——攻击面不存在，
-而不是被禁用了。运行时由反射桥（`SshBridge`）按名加载 SSH 类，缺类时：
+这是**代码层面的开关**：带与不带是两份 jar，不是运行时隐藏。实现要点：`-PwithSsh`
+之外 MINA/eddsa 走 `compileOnly`（源码照常编译、测试照常跑），`shadowJar` 对 SSH
+类与这两个包做物理剔除；包外代码（HdslServer/DoctorApiServlet 等）不持有任何 SSH
+类型的静态引用，这是审计过的硬约束。
 
-- 启动日志一行「此构建不含 SSH 终端通道（-PnoSsh）」，面板照常启动；
-- `/api/ssh/*` 不注册（设置页的 SSH 区在该构建下不可用，属预期）；
-- 体检（doctor）如实标注「此构建不含 SSH 终端通道」；
-- 其余功能零影响。
-
-实现要点：noSsh 构建里 MINA/eddsa 走 `compileOnly`（源码照常编译、测试照常跑），
-`shadowJar` 对 SSH 类与这两个包做物理剔除；包外代码（HdslServer/DoctorApiServlet 等）
-不持有任何 SSH 类型的静态引用，这是审计过的硬约束。
+日常的 TUI 入口是 Web Shell（[docs/web-shell.md](web-shell.md)），不需要 SSH。
 
 ## 配置参考
 
@@ -104,7 +101,7 @@ cwd 落在实例 home——所以 resume 会话、账户、模型路由和网页
 # server.yaml（0600）
 ssh:
   enabled: false            # 默认关；false = 不构造服务、无监听端口
-  bind_host: 127.0.0.1      # 绑 LAN 需网页显式确认 + 警告文案；公网建议 Tailscale/外层白名单
+  bind_host: 127.0.0.1      # 网页可改（开发者模式）；0.0.0.0 = 所有网卡
   port: 3022
   password_auth: false      # 网页可开关；默认关 = 必须密钥登录
 ```
@@ -112,6 +109,19 @@ ssh:
 环境变量覆盖：`HDSL_SSH_ENABLED` / `HDSL_SSH_BIND` / `HDSL_SSH_PORT`。
 开发者密码不进 server.yaml（独立 `/data/auth/developer.json`）。
 不支持的平台即使 `enabled=true` 也拒绝启动。
+
+### 容器部署
+
+容器里的 `127.0.0.1` 是**容器自己的回环**，从宿主机或其它机器连不上。要让 SSH
+通道从外部可用，需要两件事：
+
+1. 设置页把「绑定地址」改成 `0.0.0.0`（保存后监听器热重启）；
+2. compose 里把 SSH 端口映射到宿主机（本仓库的 `docker-compose.yml` 已给出
+   `3022:3022`；若改了 `ssh.port`，映射的内外端口要一起改）。
+
+绑定 `0.0.0.0` 的那一刻，SSH 端口对所有可达网络开放。门禁（独立开发者密码）、
+公钥/口令认证与审计仍然生效，但请同时用防火墙/安全组把来源限制到你信任的范围；
+公网场景建议只经由 Tailscale/WireGuard 或反向代理白名单进入。
 
 ## 当前限制
 

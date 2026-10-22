@@ -109,8 +109,8 @@ web/ssh/                      只剩传输与认证；SshAttachAdapter 复用终
 | 2 | PTY 胶水（JNA） | 完成 |
 | 3 | `TerminalSession` / `TerminalManager` | 完成 |
 | 4 | HTTP 与 WebSocket（ticket、`/ws/terminal`、Windows 桌面终端） | 后端完成，见 §10 缺口 |
-| 5 | xterm 前端 + 底栏启停 | 未开始 |
-| 6 | dsh 适配 + SSH 归位 + 默认 `-PnoSsh` | 进行中：提权迁移完成；dsh/默认开关未做 |
+| 5 | xterm 前端 + 底栏启停 | 完成 |
+| 6 | dsh 适配 + SSH 归位 + 默认不带 SSH | 完成（dsh 终端、`-PwithSsh` 开关） |
 | 7 | ~~Windows ConPTY~~ | **取消**：Windows 用桌面终端（见 §7.1） |
 
 品牌顺序：**kimi → opencode → dsh（可选）**。
@@ -155,12 +155,10 @@ home，因此 TUI 读到的就是网页模式写下的那份会话。
 
 ## 10. 已知缺口（阶段 5/6 之前不发布）
 
-- ~~开发者密码提权尚未接到终端入口~~：已完成。`DeveloperAuth` 与 `DeveloperElevation`
-  已迁到常置包 `web.developer`，新增 `POST /api/developer/elevate`、`GET
-  /api/developer/status`；品牌终端入口现在要求「会话 + 15 分钟提权」，`-PnoSsh` 构建
-  同样可用。
-- **前端未接**：阶段 4 只到 API/WS；xterm 覆盖层、底栏启动/停止、断线重开在阶段 5。
-- **web ↔ 终端互斥**：当前开终端会停掉品牌 web 运行时，但不会自动恢复；恢复动作交给
-  底栏「启动」（阶段 5 接按钮）。
-- **dsh 终端**：`DshTui` 与 `SessionCatalog` 迁移在阶段 6；dsh 实例暂不提供终端按钮。
-- **默认构建仍带 SSH**：`-PnoSsh` 翻默认与双资产发布在阶段 6。
+- **web ↔ 终端互斥**：开终端会停掉品牌的 web 运行时（同一 HOME 不能两个进程抢），
+  但不会自动恢复；恢复动作交给底栏「启动」（实例启动按钮）。
+- **refresh 重连**：运行中的会话会直接发新票据，浏览器刷新后能接回同一进程并回放；
+  但两个窗口同时 attach 目前都会收到广播、输入也会同时写入——v1 不做单控制端仲裁。
+- **Windows 便利功能**：`POST .../reveal`（`target=home|workspace|log`）用
+  `explorer.exe` / `notepad.exe` 打开，路径由服务端按实例记录计算，请求只能点名
+  三个目标之一；dsh 的日志在内存里，`log` 返回 400。

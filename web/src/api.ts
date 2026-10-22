@@ -157,6 +157,38 @@ export const api = {
 
   stop: (id: string) => request<unknown>(`/api/instances/${id}/stop`, { method: "POST" }),
 
+  // --- 终端（docs/web-shell.md） -------------------------------------------
+  openDshTerminal: (id: string, resume?: string) =>
+    request<TerminalOpen>(
+      `/api/instances/${encodeURIComponent(id)}/terminal${resume ? `?resume=${encodeURIComponent(resume)}` : ""}`,
+      jsonInit("POST", {}),
+    ),
+  closeDshTerminal: (id: string) =>
+    request<{ ok: boolean; killed: boolean }>(`/api/instances/${encodeURIComponent(id)}/terminal`, {
+      method: "DELETE",
+    }),
+  revealDsh: (id: string, target: "home" | "workspace") =>
+    request<{ opened: string }>(`/api/instances/${encodeURIComponent(id)}/reveal`, jsonInit("POST", { target })),
+  openBrandTerminal: (brand: BrandId, id: string, resume?: string) =>
+    request<TerminalOpen>(
+      `/api/brands/${brand}/instances/${encodeURIComponent(id)}/terminal${resume ? `?resume=${encodeURIComponent(resume)}` : ""}`,
+      jsonInit("POST", {}),
+    ),
+  closeBrandTerminal: (brand: BrandId, id: string) =>
+    request<{ ok: boolean; killed: boolean }>(
+      `/api/brands/${brand}/instances/${encodeURIComponent(id)}/terminal`,
+      { method: "DELETE" },
+    ),
+  revealBrand: (brand: BrandId, id: string, target: "home" | "workspace" | "log") =>
+    request<{ opened: string }>(
+      `/api/brands/${brand}/instances/${encodeURIComponent(id)}/reveal`,
+      jsonInit("POST", { target }),
+    ),
+  developerStatus: () => request<{ devPasswordSet: boolean; elevated: boolean }>("/api/developer/status"),
+  elevateDeveloper: (password: string) =>
+    request<{ elevated: boolean; expiresAt: string }>("/api/developer/elevate", jsonInit("POST", { password })),
+
+
   logs: (id: string, tail = 200) =>
     request<{ lines: LogLine[] }>(`/api/instances/${id}/logs?tail=${tail}`),
 
@@ -484,4 +516,13 @@ export interface NodeStatus {
   } | null;
   managed: { version: string; suitable: boolean; node: string; pnpm: boolean }[];
   requirement: string;
+}
+
+/** 打开终端的结果：POSIX 返回 ticket + ws，Windows 返回 desktop。 */
+export interface TerminalOpen {
+  mode: "pty" | "desktop";
+  instance: string;
+  brand?: string;
+  ticket?: string;
+  ws?: string;
 }

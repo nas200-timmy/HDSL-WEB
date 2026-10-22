@@ -43,6 +43,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.EnumMap;
 import java.util.List;
@@ -200,6 +201,10 @@ public final class BrandApiServlet extends HttpServlet {
             if (segments.length == 3 && "terminal".equals(segments[2])
                     && ("POST".equals(request.getMethod()) || "DELETE".equals(request.getMethod()))) {
                 terminal(brand, ref, request, response, id);
+                return;
+            }
+            if (segments.length == 3 && "reveal".equals(segments[2]) && "POST".equals(request.getMethod())) {
+                reveal(ref, request, response, id);
                 return;
             }
         }
@@ -470,19 +475,68 @@ public final class BrandApiServlet extends HttpServlet {
     /// ticket for `/ws/terminal/{ticket}`. On Windows the console belongs to
     /// the desktop, so the panel starts a console window in the instance
     /// workspace instead and answers `{"mode":"desktop"}`.
-    /// The literal confirmation a desktop-terminal POST must carry. It is a
-    /// speed bump against a stolen cookie, not a cryptographic proof: the real
-    /// gates are the session and the developer elevation before it.
-    private static @Nullable String readConfirmation(HttpServletRequest request) throws IOException {
+    /// Opens one of the instance's own folders (or its log) in the desktop.
+    /// The path is computed here from the instance record — the request only
+    /// names one of three known targets, never a path.
+    private void reveal(PathRef ref, HttpServletRequest request, HttpServletResponse response, String id)
+            throws IOException {
+        BrandInstance instance = ref.manager().find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
+            return;
+        }
+        if (!org.jackhuang.hmcl.web.desktop.DesktopIntegration.supported()) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "desktop_unsupported: this host has no desktop");
+            return;
+        }
+        String target = readBodyField(request, "target");
+        Path path = switch (target == null ? "" : target) {
+            case "home" -> ref.manager().homeDirectory(instance);
+            case "workspace" -> ref.manager().workspaceDirectory(instance);
+            case "log" -> ref.manager().logFile(instance);
+            default -> null;
+        };
+        if (path == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "target must be one of home, workspace, log");
+            return;
+        }
+        try {
+            if ("log".equals(target)) {
+                org.jackhuang.hmcl.web.desktop.DesktopIntegration.openText(path);
+            } else {
+                Files.createDirectories(path);
+                org.jackhuang.hmcl.web.desktop.DesktopIntegration.reveal(path);
+            }
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+            return;
+        }
+        AuditLog.log(AuditLog.Channel.TERMINAL, "desktop.reveal", id, "success",
+                actorOf(request), request.getRemoteAddr());
+        JsonObject body = new JsonObject();
+        body.addProperty("opened", path.toString());
+        Json.write(response, body);
+    }
+
+    /// Reads one string field out of the request body, or `null`.
+    private static @Nullable String readBodyField(HttpServletRequest request, String field) throws IOException {
         try (java.io.InputStreamReader reader =
                      new java.io.InputStreamReader(request.getInputStream(), StandardCharsets.UTF_8)) {
             JsonObject body = JsonParser.parseReader(reader).getAsJsonObject();
-            return body.has("confirm") && !body.get("confirm").isJsonNull()
-                    ? body.get("confirm").getAsString()
+            return body.has(field) && !body.get(field).isJsonNull()
+                    ? body.get(field).getAsString()
                     : null;
         } catch (RuntimeException e) {
             return null;
         }
+    }
+
+    /// The literal confirmation a desktop-terminal POST must carry. It is a
+    /// speed bump against a stolen cookie, not a cryptographic proof: the real
+    /// gates are the session and the developer elevation before it.
+    private static @Nullable String readConfirmation(HttpServletRequest request) throws IOException {
+        return readBodyField(request, "confirm");
     }
 
     /// Who asked, for the audit trail. `null` when the panel runs with
@@ -564,9 +618,15 @@ public final class BrandApiServlet extends HttpServlet {
             Json.write(response, body);
             return;
         }
-        TerminalSession session;
+        // A refresh comes back to the same agent: an existing running session
+        // gets a fresh ticket instead of a 409. The process outlives the tab.
         try {
-            session = terminals.open(target, PtySize.DEFAULT);
+            TerminalSession running = terminals.find(id)
+                    .filter(candidate -> candidate.state() == TerminalSession.State.RUNNING)
+                    .orElse(null);
+            if (running == null) {
+                terminals.open(target, PtySize.DEFAULT);
+            }
         } catch (org.jackhuang.hmcl.web.terminal.TerminalBusyException e) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_already_open: " + e.getMessage());
             return;

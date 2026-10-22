@@ -22,17 +22,18 @@ group = "org.jackhuang.hmcl"
 // desktop build is — the jar name just needs to be stable.
 version = (findProperty("releaseVersion") as String?)?.takeIf { it.isNotBlank() } ?: "0.1.0-dev"
 
-// The minimal-image variant: `-PnoSsh` drops the SSH terminal channel —
-// its classes and the MINA/eddsa jars — from the fat jar. HdslServer meets
-// the absence reflectively (SshBridge), so the runtime degrades to "the
-// channel does not exist", not to a crash.
+// SSH is opt-in: the default jar carries no SSH terminal channel — no
+// `web/ssh` classes, no MINA/eddsa. `-PwithSsh` (valueless) adds the channel
+// back. This is the "last resort" posture: the web terminal is the everyday
+// door, SSH is for a tailnet.
 //
-// `-PnoSsh` carries no value, which Gradle hands over as the empty string;
-// `String::toBoolean` would read that as false and silently ship the full
-// jar, so presence alone means on. `-PnoSsh=false` still turns it off.
-val noSsh = providers.gradleProperty("noSsh")
+// `-PwithSsh` carries no value, which Gradle hands over as the empty string;
+// `String::toBoolean` would read that as false, so presence alone means on.
+// `-PwithSsh=false` keeps the default.
+val withSsh = providers.gradleProperty("withSsh")
     .map { it.isEmpty() || it.toBoolean() }
     .getOrElse(false)
+val noSsh = !withSsh
 
 application {
     mainClass = "org.jackhuang.hmcl.web.Main"

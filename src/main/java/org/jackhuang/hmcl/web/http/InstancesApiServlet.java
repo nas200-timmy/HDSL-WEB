@@ -44,6 +44,13 @@ import org.jackhuang.hmcl.setting.SettingsManager;
 import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
+import org.jackhuang.hmcl.web.developer.DeveloperAuth;
+import org.jackhuang.hmcl.web.developer.DeveloperElevation;
+import org.jackhuang.hmcl.web.terminal.DshTui;
+import org.jackhuang.hmcl.web.terminal.TerminalManager;
+import org.jackhuang.hmcl.web.terminal.TerminalTarget;
+import org.jackhuang.hmcl.web.terminal.TerminalTickets;
+import org.jackhuang.hmcl.web.terminal.pty.PtySize;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.instance.InstanceRuntime;
 import org.jackhuang.hmcl.web.task.TaskService;
@@ -106,11 +113,24 @@ public final class InstancesApiServlet extends HttpServlet {
     private final InstanceRuntime runtime;
     private final TaskService tasks;
     private final ServerConfig config;
+    private final TerminalManager terminals;
+    private final TerminalTickets terminalTickets;
+    private final AuthService auth;
+    private final DeveloperAuth developerAuth;
+    private final DeveloperElevation developerElevation;
 
-    public InstancesApiServlet(InstanceRuntime runtime, TaskService tasks, ServerConfig config) {
+    public InstancesApiServlet(InstanceRuntime runtime, TaskService tasks, ServerConfig config,
+                               TerminalManager terminals, TerminalTickets terminalTickets,
+                               AuthService auth, DeveloperAuth developerAuth,
+                               DeveloperElevation developerElevation) {
         this.runtime = runtime;
         this.tasks = tasks;
         this.config = config;
+        this.terminals = terminals;
+        this.terminalTickets = terminalTickets;
+        this.auth = auth;
+        this.developerAuth = developerAuth;
+        this.developerElevation = developerElevation;
     }
 
     @Override
@@ -140,6 +160,8 @@ public final class InstancesApiServlet extends HttpServlet {
                 case "install" -> install(request, response, id);
                 case "launch" -> launch(request, response, id);
                 case "stop" -> stop(request, response, id);
+                case "terminal" -> terminal(request, response, id);
+                case "reveal" -> reveal(request, response, id);
                 case "logs" -> logs(request, response, id);
                 case "open" -> open(response, id);
                 case "plugins" -> plugins(request, response, id, segments);
@@ -645,6 +667,150 @@ public final class InstancesApiServlet extends HttpServlet {
             }
         }
         return HostHeaders.stripPort(request.getHeader("Host"));
+    }
+
+
+    // --------------------------------------------------------------- terminal --
+
+    /// `POST /api/instances/{id}/terminal` opens the dsh TUI for the instance;
+    /// `DELETE` kills it. Same gates as the brand terminal: session, developer
+    /// elevation, and (on Windows) the desktop confirmation.
+    private void terminal(HttpServletRequest request, HttpServletResponse response, String id) throws IOException {
+        DshInstance instance = DshInstanceManager.find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
+            return;
+        }
+        if ("DELETE".equals(request.getMethod())) {
+            boolean killed = terminals.terminate(id);
+            JsonObject body = new JsonObject();
+            body.addProperty("ok", true);
+            body.addProperty("killed", killed);
+            Json.write(response, body);
+            return;
+        }
+        if (!"POST".equals(request.getMethod())) {
+            Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
+            return;
+        }
+        if (!developerAuth.isSet()) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "developer_password_not_set: set it before opening a terminal");
+            return;
+        }
+        String token = (String) request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE);
+        boolean sessionAlive = token == null || token.isBlank() || auth.isAlive(token);
+        String key = DeveloperElevation.key(token, request.getRemoteAddr());
+        if (!developerElevation.isElevated(key, sessionAlive)) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return;
+        }
+        // The web runtime and the TUI share DSH_HOME; the terminal takes the
+        // instance over, and the footer's start button brings the web mode back.
+        if (runtime.runningProcess(id).isPresent()) {
+            runtime.stopAsync(id);
+        }
+        TerminalTarget target;
+        try {
+            target = DshTui.target(instance, request.getParameter("resume"));
+        } catch (DshException | RuntimeException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+            return;
+        }
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            if (!"open-desktop-terminal".equals(readBodyField(request, "confirm"))) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "confirmation_required: send {\"confirm\":\"open-desktop-terminal\"}");
+                return;
+            }
+            org.jackhuang.hmcl.web.terminal.DesktopTerminal.open(target);
+            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.desktop", id, "success",
+                    actorOf(request), request.getRemoteAddr());
+            JsonObject body = new JsonObject();
+            body.addProperty("mode", "desktop");
+            body.addProperty("instance", id);
+            Json.write(response, body);
+            return;
+        }
+        // Reattaching after a refresh: keep the agent, issue a new ticket.
+        try {
+            org.jackhuang.hmcl.web.terminal.TerminalSession running = terminals.find(id)
+                    .filter(candidate -> candidate.state()
+                            == org.jackhuang.hmcl.web.terminal.TerminalSession.State.RUNNING)
+                    .orElse(null);
+            if (running == null) {
+                terminals.open(target, PtySize.DEFAULT);
+            }
+        } catch (org.jackhuang.hmcl.web.terminal.TerminalBusyException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_already_open: " + e.getMessage());
+            return;
+        }
+        String ticket = terminalTickets.issue(id, token);
+        JsonObject body = new JsonObject();
+        body.addProperty("mode", "pty");
+        body.addProperty("instance", id);
+        body.addProperty("ticket", ticket);
+        body.addProperty("ws", "/ws/terminal/" + ticket);
+        body.addProperty("brand", "dsh");
+        Json.write(response, body);
+    }
+
+    /// `POST /api/instances/{id}/reveal` opens the instance's home or workspace
+    /// in the desktop; dsh's logs are in memory, so `log` is refused.
+    private void reveal(HttpServletRequest request, HttpServletResponse response, String id) throws IOException {
+        DshInstance instance = DshInstanceManager.find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
+            return;
+        }
+        if (!org.jackhuang.hmcl.web.desktop.DesktopIntegration.supported()) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "desktop_unsupported: this host has no desktop");
+            return;
+        }
+        String target = readBodyField(request, "target");
+        Path path;
+        try {
+            path = switch (target == null ? "" : target) {
+                case "home" -> instance.homeDirectory();
+                case "workspace" -> DshTui.target(instance, null).cwd();
+                case "log" -> null;
+                default -> null;
+            };
+        } catch (DshException | RuntimeException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+            return;
+        }
+        if (path == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "target must be home or workspace (dsh logs are in memory)");
+            return;
+        }
+        try {
+            Files.createDirectories(path);
+            org.jackhuang.hmcl.web.desktop.DesktopIntegration.reveal(path);
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+            return;
+        }
+        AuditLog.log(AuditLog.Channel.TERMINAL, "desktop.reveal", id, "success",
+                actorOf(request), request.getRemoteAddr());
+        JsonObject body = new JsonObject();
+        body.addProperty("opened", path.toString());
+        Json.write(response, body);
+    }
+
+    private static @Nullable String readBodyField(HttpServletRequest request, String field) throws IOException {
+        try (java.io.InputStreamReader reader =
+                     new java.io.InputStreamReader(request.getInputStream(), StandardCharsets.UTF_8)) {
+            JsonObject body = JsonParser.parseReader(reader).getAsJsonObject();
+            return body.has(field) && !body.get(field).isJsonNull()
+                    ? body.get(field).getAsString()
+                    : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------- stop --
