@@ -2,7 +2,7 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布 — 终端空白屏与连接稳定性
+## v0.5.21 — 2026-10-23 · 终端空白屏与连接稳定性
 
 - **opencode 终端永远空白**：xterm 6.0.0 的 `requestMode` 在 esbuild 压缩后把
   `return f=…, p=…; var f,p` 改坏，DECRQM（`CSI ? Ps $ p`）抛 `ReferenceError`，
