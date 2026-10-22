@@ -22,6 +22,7 @@ import org.apache.sshd.server.ExitCallback;
 import org.apache.sshd.server.channel.ChannelSession;
 import org.apache.sshd.server.command.Command;
 import org.apache.sshd.server.shell.ShellFactory;
+import org.jackhuang.hmcl.web.developer.DeveloperAuth;
 import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.LoginThrottle;
 import org.jetbrains.annotations.NotNullByDefault;

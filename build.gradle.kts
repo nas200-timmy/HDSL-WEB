@@ -3,8 +3,9 @@
 // The domain sources under `org.jackhuang.hmcl.dsh/setting/util` are copied
 // from the HDSL desktop build and de-JavaFX-ed (see docs/plan.md); their
 // package names and copyright headers stay as GPLv3 requires. This build keeps
-// only what a headless server needs: no JavaFX, no JFoenix, no JNA, no
-// nanohttpd.
+// only what a headless server needs: no JavaFX, no JFoenix, no nanohttpd.
+// JNA is the single native bridge kept: it backs the PTY glue of the web
+// terminal (org.jackhuang.hmcl.web.terminal.pty, see docs/web-shell.md).
 
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 
@@ -21,17 +22,18 @@ group = "org.jackhuang.hmcl"
 // desktop build is — the jar name just needs to be stable.
 version = (findProperty("releaseVersion") as String?)?.takeIf { it.isNotBlank() } ?: "0.1.0-dev"
 
-// The minimal-image variant: `-PnoSsh` drops the SSH terminal channel —
-// its classes and the MINA/eddsa jars — from the fat jar. HdslServer meets
-// the absence reflectively (SshBridge), so the runtime degrades to "the
-// channel does not exist", not to a crash.
+// SSH is opt-in: the default jar carries no SSH terminal channel — no
+// `web/ssh` classes, no MINA/eddsa. `-PwithSsh` (valueless) adds the channel
+// back. This is the "last resort" posture: the web terminal is the everyday
+// door, SSH is for a tailnet.
 //
-// `-PnoSsh` carries no value, which Gradle hands over as the empty string;
-// `String::toBoolean` would read that as false and silently ship the full
-// jar, so presence alone means on. `-PnoSsh=false` still turns it off.
-val noSsh = providers.gradleProperty("noSsh")
+// `-PwithSsh` carries no value, which Gradle hands over as the empty string;
+// `String::toBoolean` would read that as false, so presence alone means on.
+// `-PwithSsh=false` keeps the default.
+val withSsh = providers.gradleProperty("withSsh")
     .map { it.isEmpty() || it.toBoolean() }
     .getOrElse(false)
+val noSsh = !withSsh
 
 application {
     mainClass = "org.jackhuang.hmcl.web.Main"
@@ -65,6 +67,11 @@ dependencies {
     implementation(libs.jetty.websocket.jetty.client)
     implementation(libs.snakeyaml.engine)
     implementation(libs.bcpkix)
+
+    // The PTY glue behind the web terminal (docs/web-shell.md): JNA is the
+    // only native bridge in this build, and the terminal is present in every
+    // variant — it is not part of the -PnoSsh switch.
+    implementation(libs.jna)
 
     // The SSH terminal channel: embedded Apache MINA SSHD server (docs/ssh-terminal-channel.md).
     // sshd-core also carries the SshClient the integration tests connect with.

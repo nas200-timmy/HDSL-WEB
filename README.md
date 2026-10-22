@@ -33,9 +33,11 @@
 - **SSH 终端通道**：`ssh -p 3022 hdsl@主机` 进来——先过 TUI 门禁（独立的开发者密码），
   再在编号菜单里挑 dsh 实例 / 恢复 dsh 会话，选定后把 `dsh tui [--resume]` 的终端
   直接接到你的 SSH 会话上（TERM/尺寸透传、resize 生效、断开自动清理整棵进程树）。
-  默认**关闭**，开启与全部敏感操作要求 **HTTPS + 开发者模式**；公钥登录为默认，
-  口令登录可开（带爆破风险警告）。平台矩阵：**Linux ✓ / macOS 放行但未实测 /
-  Windows 不支持**；极简镜像可用 `-PnoSsh` 构建把 SSH 通道与 MINA 依赖整体剔除。
+  SSH 是「万不得已」通道：**默认构建不含它**，用 `-PwithSsh` 构建才会带上（运行时仍
+  默认关闭）。开启与全部敏感操作要求 **HTTPS + 开发者模式**；公钥登录为默认，口令登录
+  可开（带爆破风险警告）。监听地址（`bind_host`）可在设置页直接填写，默认 `127.0.0.1`。
+  平台矩阵：**Linux ✓ / macOS 放行但未实测 / Windows 不支持**。
+  日常的 TUI 请用实例上的「终端」按钮（[Web Shell](docs/web-shell.md)）。
   设计、安全模型与编译开关见 [docs/ssh-terminal-channel.md](docs/ssh-terminal-channel.md)。
 
 <details>
@@ -390,19 +392,18 @@ bash scripts/e2e-real.sh
 Gradle 就会执行 `npm run build`，没有 `node_modules` 会失败。Docker 构建不需要——镜像的
 build 阶段故意不带 npm，SPA 由单独的 web 阶段产出后拷进去。
 
-### 编译时移除 SSH 支持
+### 编译时启用 SSH 支持
 
-SSH 终端通道是正常构建的一部分（release 产物均包含，只是运行时默认关闭）。想从
-**二进制层面**彻底移除它——公网暴露极度敏感、审计合规、或单纯不想镜像里出现 SSH
-服务端——用 `-PnoSsh` 构建：
+SSH 终端通道是**可选**的：默认构建（CI 与 Dockerfile 的 `./gradlew build`）不含
+`web/ssh`、MINA 与 eddsa，面板照常启动；日常 TUI 用 Web Shell。要在二进制里带上
+SSH 服务端：
 
 ```bash
-./gradlew --no-daemon -PnoSsh shadowJar
+./gradlew --no-daemon -PwithSsh shadowJar
 ```
 
-产物里物理不存在 SSH 通道类与 MINA/eddsa 依赖（不是隐藏开关，是类不在 jar 里）；
-面板照常启动并明示「此构建不含 SSH 终端通道」，其余功能不受影响。详见
-[docs/ssh-terminal-channel.md §编译开关](docs/ssh-terminal-channel.md#编译开关-pnossh)。
+运行时仍然默认关闭，开启与敏感操作要求 HTTPS + 开发者模式。详见
+[docs/ssh-terminal-channel.md §编译开关](docs/ssh-terminal-channel.md#编译开关pwithssh)。
 
 `scripts/e2e-real.sh` 会真的访问 npm registry、装一个 dsh 版本并启动，耗时几分钟，需要网络。
 `scripts/` 下还有什么、各自验什么、怎么跑，见 [scripts/README.md](scripts/README.md)。

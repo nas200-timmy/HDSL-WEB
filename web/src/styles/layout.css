@@ -477,3 +477,99 @@
 .instance-actions-box {
   margin: 0 8px 8px;
 }
+
+/* 终端窗口（docs/web-shell.md）：原地覆盖层，不跳路由 */
+.terminal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.5);
+}
+.terminal-window {
+  display: flex;
+  flex-direction: column;
+  width: min(980px, 96vw);
+  height: min(72vh, 760px);
+  overflow: hidden;
+  border-radius: 14px;
+  background: #1b1b1f;
+  color: #e6e1e5;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+}
+.terminal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #242329;
+  font-size: 13px;
+}
+.terminal-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terminal-state {
+  font-size: 11px;
+  opacity: 0.8;
+}
+.terminal-state-running {
+  color: #8bd5a0;
+}
+.terminal-state-error {
+  color: #f2b8b5;
+}
+.terminal-body {
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+}
+.terminal-body .xterm {
+  height: 100%;
+}
+.terminal-password {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 14px;
+  background: #242329;
+}
+.terminal-password-title {
+  width: 100%;
+  font-size: 12px;
+  opacity: 0.85;
+}
+.terminal-password .input {
+  max-width: 260px;
+}
+.terminal-note {
+  padding: 10px 14px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+.terminal-note.error {
+  color: #f2b8b5;
+}
+.terminal-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #242329;
+}
+@media (max-width: 720px) {
+  .terminal-overlay {
+    padding: 0;
+  }
+  .terminal-window {
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+  }
+}

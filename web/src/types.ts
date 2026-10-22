@@ -307,7 +307,7 @@ export type SshPlatformVerdict = "supported" | "supported_unverified" | "unsuppo
 export interface SshStatus {
   enabled: boolean;
   running: boolean;
-  /** 配置的绑定地址（只读展示） */
+  /** 当前绑定地址（设置页可改，运行中的监听器会热重启） */
   bind: string;
   /** 实际监听端口；未运行时为 0 */
   port: number;
@@ -344,6 +344,14 @@ export interface SshDevPasswordResult {
 export interface SshToggleResult {
   ok: boolean;
   enabled: boolean;
+  running: boolean;
+  port: number;
+}
+
+/// POST /api/ssh/bind：改绑定地址。运行中的监听器会立即换地址重启
+export interface SshBindResult {
+  ok: boolean;
+  bind: string;
   running: boolean;
   port: number;
 }

@@ -31,6 +31,7 @@ import org.jackhuang.hmcl.dsh.DshInstance;
 import org.jackhuang.hmcl.dsh.DshPaths;
 import org.jackhuang.hmcl.setting.GameDirectoryManager;
 import org.jackhuang.hmcl.util.logging.Logger;
+import org.jackhuang.hmcl.web.developer.DeveloperAuth;
 import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.auth.LoginThrottle;

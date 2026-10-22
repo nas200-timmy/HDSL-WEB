@@ -21,6 +21,8 @@ import jakarta.servlet.http.HttpServlet;
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
+import org.jackhuang.hmcl.web.developer.DeveloperAuth;
+import org.jackhuang.hmcl.web.developer.DeveloperElevation;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -29,7 +31,7 @@ import java.nio.file.Path;
 import java.util.function.BooleanSupplier;
 
 /// The SSH terminal channel behind one reflective seam
-/// (docs/ssh-terminal-channel.md §M4): the `-PnoSsh` build drops
+/// (docs/ssh-terminal-channel.md §M4): the default build drops
 /// `org/jackhuang/hmcl/web/ssh/**` and the MINA/eddsa packages from the fat
 /// jar, so nothing outside that package may name its classes — one static
 /// import of `SshService` would turn the whole server into a
@@ -73,14 +75,12 @@ public final class SshBridge {
     /// the service, wires the attach support, and instantiates the
     /// management servlet with the live-TLS supplier. Absent classes answer
     /// an absent bridge; any other reflective failure stops the boot.
-    public static SshBridge load(ServerConfig config, AuthService auth, BooleanSupplier tlsActive, Logger log) {
+    public static SshBridge load(ServerConfig config, AuthService auth, DeveloperAuth devAuth,
+                                 DeveloperElevation elevation, BooleanSupplier tlsActive, Logger log) {
         try {
-            Class<?> devAuthClass = Class.forName(PACKAGE + "DeveloperAuth");
-            Object devAuth = devAuthClass.getMethod("open", Path.class).invoke(null, config.dataDir);
-
             Class<?> serviceClass = Class.forName(PACKAGE + "SshService");
             Object service = serviceClass
-                    .getConstructor(ServerConfig.class, AuthService.class, devAuthClass, Logger.class)
+                    .getConstructor(ServerConfig.class, AuthService.class, DeveloperAuth.class, Logger.class)
                     .newInstance(config, auth, devAuth, log);
             Class<?> attachSupportClass = Class.forName(PACKAGE + "AttachSupport");
             Object attach = Class.forName(PACKAGE + "DshAttachSupport").getConstructor().newInstance();
@@ -88,9 +88,9 @@ public final class SshBridge {
 
             Class<?> apiClass = Class.forName(PACKAGE + "SshApiServlet");
             HttpServlet api = (HttpServlet) apiClass
-                    .getConstructor(serviceClass, devAuthClass, ServerConfig.class, AuthService.class,
-                            BooleanSupplier.class)
-                    .newInstance(service, devAuth, config, auth, tlsActive);
+                    .getConstructor(serviceClass, DeveloperAuth.class, DeveloperElevation.class,
+                            ServerConfig.class, AuthService.class, BooleanSupplier.class)
+                    .newInstance(service, devAuth, elevation, config, auth, tlsActive);
 
             Class<?> guardClass = Class.forName(PACKAGE + "PlatformGuard");
             return new SshBridge(true, service,
@@ -98,7 +98,7 @@ public final class SshBridge {
                     serviceClass.getMethod("isRunning"), serviceClass.getMethod("activePort"),
                     guardClass.getMethod("verdict"), api);
         } catch (ClassNotFoundException | NoClassDefFoundError missing) {
-            log.info("此构建不含 SSH 终端通道（-PnoSsh）；SSH 相关能力不可用。");
+            log.info("此构建不含 SSH 终端通道（默认构建；需要时用 -PwithSsh）；SSH 相关能力不可用。");
             return new SshBridge(false, null, null, null, null, null, null, null);
         } catch (ReflectiveOperationException | RuntimeException broken) {
             throw new IllegalStateException("The SSH channel is present but could not be initialized", broken);

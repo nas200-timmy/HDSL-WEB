@@ -25,14 +25,25 @@ import com.google.gson.JsonParser;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.web.audit.AuditLog;
+import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.http.Json;
 import org.jackhuang.hmcl.web.task.TaskService;
+import org.jackhuang.hmcl.web.terminal.BrandTui;
+import org.jackhuang.hmcl.web.terminal.DesktopTerminal;
+import org.jackhuang.hmcl.web.terminal.TerminalManager;
+import org.jackhuang.hmcl.web.terminal.TerminalSession;
+import org.jackhuang.hmcl.web.terminal.TerminalTarget;
+import org.jackhuang.hmcl.web.terminal.TerminalTickets;
+import org.jackhuang.hmcl.web.terminal.pty.PtySize;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.EnumMap;
 import java.util.List;
@@ -73,14 +84,28 @@ public final class BrandApiServlet extends HttpServlet {
 
     private final ServerConfig config;
     private final TaskService tasks;
+    private final TerminalManager terminals;
+    private final TerminalTickets terminalTickets;
+    private final org.jackhuang.hmcl.web.auth.AuthService auth;
+    private final org.jackhuang.hmcl.web.developer.DeveloperAuth developerAuth;
+    private final org.jackhuang.hmcl.web.developer.DeveloperElevation developerElevation;
     private final Map<Brand, PathRef> brands = new EnumMap<>(Brand.class);
 
     private record PathRef(Path root, BrandInstanceManager manager) {
     }
 
-    public BrandApiServlet(ServerConfig config, TaskService tasks) {
+    public BrandApiServlet(ServerConfig config, TaskService tasks,
+                           TerminalManager terminals, TerminalTickets terminalTickets,
+                           org.jackhuang.hmcl.web.auth.AuthService auth,
+                           org.jackhuang.hmcl.web.developer.DeveloperAuth developerAuth,
+                           org.jackhuang.hmcl.web.developer.DeveloperElevation developerElevation) {
         this.config = config;
         this.tasks = tasks;
+        this.terminals = terminals;
+        this.terminalTickets = terminalTickets;
+        this.auth = auth;
+        this.developerAuth = developerAuth;
+        this.developerElevation = developerElevation;
         Path base = config.dataDir.resolve("brands");
         for (Brand brand : Brand.values()) {
             Path root = base.resolve(brand.id());
@@ -171,6 +196,15 @@ public final class BrandApiServlet extends HttpServlet {
             }
             if (segments.length == 3 && "plugins".equals(segments[2]) && "GET".equals(request.getMethod())) {
                 plugins(brand, ref, response, id);
+                return;
+            }
+            if (segments.length == 3 && "terminal".equals(segments[2])
+                    && ("POST".equals(request.getMethod()) || "DELETE".equals(request.getMethod()))) {
+                terminal(brand, ref, request, response, id);
+                return;
+            }
+            if (segments.length == 3 && "reveal".equals(segments[2]) && "POST".equals(request.getMethod())) {
+                reveal(ref, request, response, id);
                 return;
             }
         }
@@ -392,6 +426,7 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "stop the instance before deleting it");
             return;
         }
+        terminals.terminate(id);
         ref.manager().delete(id);
         response.setStatus(204);
     }
@@ -423,8 +458,206 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
             return;
         }
+        // Stopping the instance stops its terminal: the agent process belongs
+        // to the instance, and leaving it running behind a "stopped" state
+        // would be a lie the next browser tab could still see.
+        terminals.terminate(id);
         BrandRuntime.stop(id);
         writeStatus(response, BrandRuntime.status(id));
+    }
+
+    // --------------------------------------------------------------- terminal --
+
+    /// `POST /api/brands/{brand}/instances/{id}/terminal` opens the instance's
+    /// native TUI; `DELETE` kills it (the footer's stop button).
+    ///
+    /// On POSIX the panel spawns the agent on a PTY and answers a one-use
+    /// ticket for `/ws/terminal/{ticket}`. On Windows the console belongs to
+    /// the desktop, so the panel starts a console window in the instance
+    /// workspace instead and answers `{"mode":"desktop"}`.
+    /// Opens one of the instance's own folders (or its log) in the desktop.
+    /// The path is computed here from the instance record — the request only
+    /// names one of three known targets, never a path.
+    private void reveal(PathRef ref, HttpServletRequest request, HttpServletResponse response, String id)
+            throws IOException {
+        BrandInstance instance = ref.manager().find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
+            return;
+        }
+        if (!org.jackhuang.hmcl.web.desktop.DesktopIntegration.supported()) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "desktop_unsupported: this host has no desktop");
+            return;
+        }
+        String target = readBodyField(request, "target");
+        Path path = switch (target == null ? "" : target) {
+            case "home" -> ref.manager().homeDirectory(instance);
+            case "workspace" -> ref.manager().workspaceDirectory(instance);
+            case "log" -> ref.manager().logFile(instance);
+            default -> null;
+        };
+        if (path == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "target must be one of home, workspace, log");
+            return;
+        }
+        try {
+            if ("log".equals(target)) {
+                org.jackhuang.hmcl.web.desktop.DesktopIntegration.openText(path);
+            } else {
+                Files.createDirectories(path);
+                org.jackhuang.hmcl.web.desktop.DesktopIntegration.reveal(path);
+            }
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+            return;
+        }
+        AuditLog.log(AuditLog.Channel.TERMINAL, "desktop.reveal", id, "success",
+                actorOf(request), request.getRemoteAddr());
+        JsonObject body = new JsonObject();
+        body.addProperty("opened", path.toString());
+        Json.write(response, body);
+    }
+
+    /// Reads one string field out of the request body, or `null`.
+    private static @Nullable String readBodyField(HttpServletRequest request, String field) throws IOException {
+        try (java.io.InputStreamReader reader =
+                     new java.io.InputStreamReader(request.getInputStream(), StandardCharsets.UTF_8)) {
+            JsonObject body = JsonParser.parseReader(reader).getAsJsonObject();
+            return body.has(field) && !body.get(field).isJsonNull()
+                    ? body.get(field).getAsString()
+                    : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /// The literal confirmation a desktop-terminal POST must carry. It is a
+    /// speed bump against a stolen cookie, not a cryptographic proof: the real
+    /// gates are the session and the developer elevation before it.
+    private static @Nullable String readConfirmation(HttpServletRequest request) throws IOException {
+        return readBodyField(request, "confirm");
+    }
+
+    /// Who asked, for the audit trail. `null` when the panel runs with
+    /// authentication disabled (loopback-only).
+    private static @Nullable String actorOf(HttpServletRequest request) {
+        Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
+        return session instanceof org.jackhuang.hmcl.web.auth.AuthService.Session value
+                ? value.username()
+                : null;
+    }
+
+    private void terminal(Brand brand, PathRef ref, HttpServletRequest request,
+                          HttpServletResponse response, String id) throws IOException {
+        BrandInstance instance = ref.manager().find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
+            return;
+        }
+        if ("DELETE".equals(request.getMethod())) {
+            boolean killed = terminals.terminate(id);
+            JsonObject body = new JsonObject();
+            body.addProperty("ok", true);
+            body.addProperty("killed", killed);
+            Json.write(response, body);
+            return;
+        }
+        if (!developerAuth.isSet()) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "developer_password_not_set: set it before opening a terminal");
+            return;
+        }
+        String token = (String) request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE);
+        boolean sessionAlive = token == null || token.isBlank() || auth.isAlive(token);
+        String key = org.jackhuang.hmcl.web.developer.DeveloperElevation.key(token, request.getRemoteAddr());
+        if (!developerElevation.isElevated(key, sessionAlive)) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return;
+        }
+        BrandTui tui = BrandTui.forBrand(brand.id());
+        if (tui == null) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "brand_has_no_tui: " + brand.id() + " has no interactive terminal");
+            return;
+        }
+        Path packageDir = BrandInstaller.packageDir(brand, ref.root(), instance.version());
+        if (packageDir == null) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    brand.sourceLabel() + " " + instance.version() + " is not installed");
+            return;
+        }
+        // A web runtime and a TUI on one HOME race the agent's own state; the
+        // terminal takes the instance over, and the footer's start button
+        // brings the web mode back when the user wants it.
+        if (BrandRuntime.isRunning(id)) {
+            BrandRuntime.stop(id);
+        }
+        String resume = request.getParameter("resume");
+        TerminalTarget target;
+        try {
+            target = tui.target(packageDir, ref.manager().homeDirectory(instance),
+                    ref.manager().workspaceDirectory(instance), id, resume);
+        } catch (IOException | RuntimeException e) {
+            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.open", id, "failure",
+                    actorOf(request), request.getRemoteAddr());
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
+            return;
+        }
+        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
+            // The Windows desktop has its own shell, so this is a convenience
+            // action, not a privilege boundary. The *entry* is still the
+            // boundary: the request already passed the session gate and the
+            // developer elevation above, and it must also spell out the
+            // confirmation — a remote caller who only stole a cookie should
+            // not be able to pop a console with a single POST.
+            if (!"open-desktop-terminal".equals(readConfirmation(request))) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "confirmation_required: send {\"confirm\":\"open-desktop-terminal\"}");
+                return;
+            }
+            try {
+                DesktopTerminal.open(target);
+            } catch (IOException e) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
+                return;
+            }
+            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.desktop", id, "success",
+                    actorOf(request), request.getRemoteAddr());
+            JsonObject body = new JsonObject();
+            body.addProperty("mode", "desktop");
+            body.addProperty("instance", id);
+            Json.write(response, body);
+            return;
+        }
+        // A refresh comes back to the same agent: an existing running session
+        // gets a fresh ticket instead of a 409. The process outlives the tab.
+        try {
+            TerminalSession running = terminals.find(id)
+                    .filter(candidate -> candidate.state() == TerminalSession.State.RUNNING)
+                    .orElse(null);
+            if (running == null) {
+                terminals.open(target, PtySize.DEFAULT);
+            }
+        } catch (org.jackhuang.hmcl.web.terminal.TerminalBusyException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_already_open: " + e.getMessage());
+            return;
+        } catch (IOException | RuntimeException e) {
+            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.open", id, "failure",
+                    actorOf(request), request.getRemoteAddr());
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
+            return;
+        }
+        String ticket = terminalTickets.issue(id,
+                (String) request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE));
+        JsonObject body = new JsonObject();
+        body.addProperty("mode", "pty");
+        body.addProperty("instance", id);
+        body.addProperty("ticket", ticket);
+        body.addProperty("ws", "/ws/terminal/" + ticket);
+        body.addProperty("brand", brand.id());
+        Json.write(response, body);
     }
 
     // ------------------------------------------------------------------ open --

@@ -1172,6 +1172,9 @@ const SSH_PUBKEY_LINE =
 /** 纯 HTTP 下敏感操作的门：后端会 409，前端直接禁用并说清原因 */
 const SSH_HTTPS_GATE = "需要 HTTPS（先在 TLS 设置页启用）";
 
+/** 只监听本机的绑定值；其余（0.0.0.0、::、网卡地址）都会对外开放 */
+const SSH_LOOPBACK_BINDS = new Set(["127.0.0.1", "::1", "localhost"]);
+
 /** 复制到剪贴板：HTTPS 下走 Clipboard API，纯 HTTP（非安全上下文）退到 execCommand */
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -1208,6 +1211,9 @@ function SshTab() {
   const [generated, setGenerated] = useState<SshGeneratedKeypair | null>(null);
   const [pwAuthWarning, setPwAuthWarning] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<SshKeyEntry | null>(null);
+  const [bindDraft, setBindDraft] = useState("");
+  const [bindBusy, setBindBusy] = useState(false);
+  const [confirmBind, setConfirmBind] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -1225,6 +1231,11 @@ function SshTab() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** 回读或保存后把输入框对齐到后端的当前值 */
+  useEffect(() => {
+    if (status) setBindDraft(status.bind);
+  }, [status?.bind]);
 
   const loadKeys = async () => {
     try {
@@ -1286,6 +1297,30 @@ function SshTab() {
       if (!onForbidden(e)) toast("error", `设置失败：${errMsg(e)}`);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const doSaveBind = async (override?: string) => {
+    const value = (override ?? bindDraft).trim();
+    if (!value) {
+      toast("error", "绑定地址不能为空");
+      return;
+    }
+    if (value === status?.bind) {
+      toast("info", "绑定地址没有变化");
+      return;
+    }
+    setBindBusy(true);
+    try {
+      const r = await api.sshSetBind(value);
+      setStatus((s) => (s ? { ...s, bind: r.bind, running: r.running, port: r.port } : s));
+      toast("success", `绑定地址已改为 ${r.bind}`);
+      // 回读 status：拿热重启后的实际端口与指纹
+      setStatus(await api.sshStatus());
+    } catch (e) {
+      if (!onForbidden(e)) toast("error", `保存失败：${errMsg(e)}`);
+    } finally {
+      setBindBusy(false);
     }
   };
 
@@ -1465,8 +1500,44 @@ function SshTab() {
                 {!status.https && <div className="form-error" style={{ margin: "0 8px" }}>{SSH_HTTPS_GATE}</div>}
                 <div className="comp-row">
                   <span className="comp-label">绑定地址</span>
-                  <span className="comp-value mono">{status.bind}</span>
+                  <span className="comp-value" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input
+                      className="input"
+                      style={{ width: 180, height: 32 }}
+                      value={bindDraft}
+                      onChange={(e) => setBindDraft(e.target.value)}
+                      disabled={busy || bindBusy || !status.https}
+                      placeholder="127.0.0.1"
+                      spellCheck={false}
+                      aria-label="SSH 绑定地址"
+                    />
+                    <button
+                      className="btn btn-outline ripple-host"
+                      disabled={busy || bindBusy || !status.https || bindDraft.trim() === status.bind}
+                      onClick={() => {
+                        const value = bindDraft.trim();
+                        if (!value || SSH_LOOPBACK_BINDS.has(value)) {
+                          void doSaveBind(value);
+                        } else {
+                          setConfirmBind(value);
+                        }
+                      }}
+                    >
+                      {bindBusy ? "保存中…" : "保存"}
+                    </button>
+                  </span>
                 </div>
+                {bindDraft.trim() !== "" && !SSH_LOOPBACK_BINDS.has(bindDraft.trim()) && (
+                  <div className="hint warning" style={{ margin: "0 8px 4px" }}>
+                    <WarningIcon size={16} style={{ flex: "none", marginTop: 2 }} />
+                    <span>
+                      不是回环地址：保存后 SSH 端口会对所有可达网络开放，现有连接也会断开。请确认公钥登录与网络层防护已就位。
+                    </span>
+                  </div>
+                )}
+                <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "0 8px", lineHeight: 1.6 }}>
+                  默认 127.0.0.1 只监听本机。容器部署通常填 0.0.0.0，并把端口映射到宿主机；保存会立即热重启监听器。
+                </p>
                 <div className="comp-row">
                   <span className="comp-label">端口</span>
                   <span className="comp-value">{status.running ? status.port : "—"}</span>
@@ -1641,6 +1712,20 @@ function SshTab() {
         busy={busy}
         onConfirm={() => void doRemoveKey()}
         onCancel={() => setConfirmRemove(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmBind !== null}
+        title="让 SSH 监听所有网卡？"
+        message={`保存后监听器会绑定 ${confirmBind ?? ""}：所有能连到这台机器的网络都能访问 SSH 端口（当前 ${status?.port || 3022}）。门禁、公钥认证与审计仍然生效，但请确认防火墙或安全组已限制来源。保存会立即重启监听器，现有连接会被断开。`}
+        confirmLabel="仍然保存"
+        busy={bindBusy}
+        onConfirm={() => {
+          const value = confirmBind;
+          setConfirmBind(null);
+          if (value) void doSaveBind(value);
+        }}
+        onCancel={() => setConfirmBind(null)}
       />
     </>
   );

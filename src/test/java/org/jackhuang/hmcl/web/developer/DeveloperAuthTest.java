@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-package org.jackhuang.hmcl.web.ssh;
+package org.jackhuang.hmcl.web.developer;
 
 import org.jackhuang.hmcl.util.PosixPermissions;
 import org.jackhuang.hmcl.util.logging.Logger;

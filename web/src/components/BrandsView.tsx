@@ -9,11 +9,13 @@ import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
 import { ProgressBar } from "../components/ProgressBar";
 import { ZcodeBuildButton } from "../components/ZcodeBuildDialog";
 import { ZcodeSection } from "../components/ZcodeSection";
+import { TerminalWindow, type TerminalTargetInfo } from "../components/TerminalWindow";
 import {
   ArrowDropUpIcon,
   CloseIcon,
   ContentCopyIcon,
   DeleteIcon,
+  DeployedCodeIcon,
   EditIcon,
   ExtensionIcon,
   FormatListBulletedIcon,
@@ -656,6 +658,7 @@ function InstancesCard({
     version: string;
     status: BrandInstallStatus | null;
   } | null>(null);
+  const [terminalTarget, setTerminalTarget] = useState<TerminalTargetInfo | null>(null);
 
   const shortName = BRAND_SHORT[brand];
   const instances = s.external.filter((e) => e.brand === brand);
@@ -1008,6 +1011,16 @@ function InstancesCard({
                     </button>
                     <button
                       className="icon-btn on-variant ripple-host"
+                      title={I18N["terminal.open"]}
+                      disabled={installing || brand === "claude-web"}
+                      onClick={() =>
+                        setTerminalTarget({ kind: "brand", brand, id: inst.id, name: inst.name })
+                      }
+                    >
+                      <DeployedCodeIcon size={18} />
+                    </button>
+                    <button
+                      className="icon-btn on-variant ripple-host"
                       title={I18N["dsh.brand.open"]}
                       disabled={!running}
                       onClick={() => doOpen(inst)}
@@ -1173,6 +1186,8 @@ function InstancesCard({
         onConfirm={() => void confirmPending()}
         onCancel={() => setPending(null)}
       />
+
+      <TerminalWindow target={terminalTarget} onClose={() => setTerminalTarget(null)} />
     </div>
   );
 }

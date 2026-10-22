@@ -32,6 +32,7 @@ import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
 import org.jackhuang.hmcl.util.PosixPermissions;
 import org.jackhuang.hmcl.web.TestSupport;
 import org.jackhuang.hmcl.web.auth.UserStore;
+import org.jackhuang.hmcl.web.developer.DeveloperAuth;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -178,6 +179,44 @@ class SshApiServletTest {
             assertTlsRequired(post(client, base + "/api/ssh/keys", "{\"key\":\"ssh-ed25519 AAAA\"}"));
             assertTlsRequired(post(client, base + "/api/ssh/generate-keypair", "{}"));
             assertTlsRequired(post(client, base + "/api/ssh/password-auth", "{\"enabled\":true}"));
+            assertTlsRequired(post(client, base + "/api/ssh/bind", "{\"bind\":\"0.0.0.0\"}"));
+        }
+    }
+
+    @Test
+    void bindAddressIsEditableAndPersisted() throws Exception {
+        try (TestSupport.RunningServer running = startServer(false)) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = base(running);
+
+            // The route sits behind elevation like every other sensitive write.
+            assertEquals(403, post(client, base + "/api/ssh/bind", "{\"bind\":\"0.0.0.0\"}").statusCode());
+
+            assertEquals(200, post(client, base + "/api/ssh/dev-password",
+                    "{\"adminPassword\":\"" + PANEL_PASSWORD + "\",\"password\":\"" + DEV_PASSWORD + "\","
+                            + "\"confirm\":\"" + DEV_PASSWORD + "\"}").statusCode());
+            assertEquals(200, post(client, base + "/api/ssh/elevate",
+                    "{\"password\":\"" + DEV_PASSWORD + "\"}").statusCode());
+
+            // Garbage is refused before anything is written.
+            assertEquals(400, post(client, base + "/api/ssh/bind", "{\"bind\":\"bad host!\"}").statusCode());
+            assertEquals("127.0.0.1", json(get(client, base + "/api/ssh/status")).get("bind").getAsString());
+
+            HttpResponse<String> moved = post(client, base + "/api/ssh/bind", "{\"bind\":\"0.0.0.0\"}");
+            assertEquals(200, moved.statusCode(), moved.body());
+            assertEquals("0.0.0.0", json(moved).get("bind").getAsString());
+            assertEquals("0.0.0.0", json(get(client, base + "/api/ssh/status")).get("bind").getAsString());
+            String yaml = Files.readString(dataDir.resolve("server.yaml"));
+            assertTrue(yaml.contains("bind_host") && yaml.contains("0.0.0.0"),
+                    "the choice must survive a restart: " + yaml);
+
+            // Enabling after the move listens on the new address, not the old one.
+            assertEquals(200, post(client, base + "/api/ssh/toggle", "{\"enabled\":true}").statusCode());
+            JsonObject status = json(get(client, base + "/api/ssh/status"));
+            assertTrue(status.get("running").getAsBoolean());
+            assertTrue(status.get("port").getAsInt() > 0);
+            assertTrue(Files.readAllLines(auditFile()).stream()
+                    .anyMatch(line -> line.contains("\"action\":\"ssh.bind\"")), "ssh.bind must be audited");
         }
     }
 

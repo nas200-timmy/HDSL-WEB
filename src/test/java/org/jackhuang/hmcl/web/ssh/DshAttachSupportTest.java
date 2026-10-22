@@ -23,6 +23,7 @@ import org.jackhuang.hmcl.dsh.DshInstance;
 import org.jackhuang.hmcl.dsh.DshInstanceManager;
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.util.platform.VirtualThreads;
+import org.jackhuang.hmcl.web.developer.DeveloperAuth;
 import org.jackhuang.hmcl.web.auth.UserStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;

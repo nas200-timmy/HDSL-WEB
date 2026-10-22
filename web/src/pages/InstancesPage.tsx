@@ -5,11 +5,13 @@ import { launchInstance, openDsh, stopInstance } from "../actions";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
 import { InstanceIcon, StateBadge } from "../components/InstanceIcon";
 import { ExportInstanceModal } from "../components/ExportInstanceModal";
+import { TerminalWindow, type TerminalTargetInfo } from "../components/TerminalWindow";
 import {
   AddCircleIcon,
   AddIcon,
   CloseIcon,
   DeleteIcon,
+  DeployedCodeIcon,
   EditIcon,
   FolderIcon,
   MoreVertIcon,
@@ -67,6 +69,7 @@ export function InstancesPage() {
   const [query, setQuery] = useState("");
   const [searchMode, setSearchMode] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; inst: Instance } | null>(null);
+  const [terminalTarget, setTerminalTarget] = useState<TerminalTargetInfo | null>(null);
   const [renameTarget, setRenameTarget] = useState<Instance | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
@@ -334,6 +337,17 @@ export function InstancesPage() {
                         </button>
                         <button
                           className="icon-btn on-variant ripple-host"
+                          title={I18N["terminal.open"]}
+                          disabled={st === "INSTALLING"}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setTerminalTarget({ kind: "dsh", id: inst.id, name: inst.name });
+                          }}
+                        >
+                          <DeployedCodeIcon size={18} />
+                        </button>
+                        <button
+                          className="icon-btn on-variant ripple-host"
                           title={I18N["dsh.instance.menu"]}
                           onClick={(e) => setMenuAnchor({ el: e.currentTarget, inst })}
                         >
@@ -464,6 +478,8 @@ export function InstancesPage() {
           onClose={() => setExportTarget(null)}
         />
       )}
+
+      <TerminalWindow target={terminalTarget} onClose={() => setTerminalTarget(null)} />
     </div>
   );
 }
