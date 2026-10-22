@@ -2,6 +2,32 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.5.2 — 2026-10-22 · Web Shell：实例级原地终端
+
+实例上的「终端」按钮现在就地打开该实例的原生 TUI（`kimi` / `opencode` / `dsh tui`），
+走现有 WebSocket，不新增端口、不引入 SSH 协议栈。终端以实例为单位启动：同一份 home、
+账号与模型路由，TUI 里的会话记录与网页模式一致。
+
+- **终端核心**：常置包 `web/terminal`（`TerminalTarget`、`BrandTui` + `KimiTui` /
+  `OpencodeTui` / `DshTui`、`TerminalSession`、`TerminalManager`）。PTY 用 JNA 自写
+  （`openpty` + `posix_spawn`，不 fork、无 JNA 回调），每个终端一个进程组；子进程退出后
+  先关 master 再杀进程组，屏幕不可能再出现新内容。
+- **会话**：关窗/刷新只 detach，agent 继续跑；重开接回同一会话并回放最近 256 KB；
+  `/exit`、底栏「停止」、实例停止才杀进程树。同一实例单会话。
+- **授权**：打开终端需要会话 + 开发者密码提权（15 分钟滑动）；Windows 桌面启动额外要求
+  `{"confirm":"open-desktop-terminal"}` 并记审计。入口等价于 RCE，威胁模型见
+  [docs/web-shell.md §4.1](docs/web-shell.md)。
+- **Windows**：不做 ConPTY，直接在桌面会话里开控制台；`reveal`（home/workspace/log）用
+  `explorer` / `notepad`，路径由服务端按实例记录计算，只接受三个目标名。面板以服务运行
+  时没有交互桌面，桌面功能返回 409。
+- **构建**：SSH 改为 opt-in——默认 jar 不含 `web/ssh`、MINA 与 eddsa，`-PwithSsh` 才带上；
+  日常 TUI 用 Web Shell。
+- **前端**：xterm 覆盖层（桌面）/全屏（手机）、底栏启停、断线提示与重连；`compat` 闸门
+  给 es-check 加 `--module`（动态 import 产生的 chunk 是 ES module）。
+- 验证：**725 用例 / 0 失败 / 2 跳过**（JDK 21 与 17，默认构建）；默认 jar `web/ssh=0`、
+  `web/terminal=28`、MINA=0；`-PwithSsh` jar `web/ssh=21`、MINA=1173；前端
+  typecheck / build / compat 通过。
+
 ## v0.5.1 — 2026-10-22 · SSH 门禁与提权加固（v0.5.0 审阅 P1）
 
 - **门禁每次错答都计数**：此前只有「一条连接错满 3 次」才给节流记一条，客户端错 1–2 次就
