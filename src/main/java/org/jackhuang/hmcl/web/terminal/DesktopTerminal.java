@@ -51,8 +51,8 @@ public final class DesktopTerminal {
     /// @throws IOException when the platform is not Windows or the console
     ///                     cannot be started
     public static void open(TerminalTarget target) throws IOException {
-        if (OperatingSystem.CURRENT_OS != OperatingSystem.WINDOWS) {
-            throw new IOException("the desktop terminal is Windows-only");
+        if (!org.jackhuang.hmcl.web.desktop.DesktopIntegration.supported()) {
+            throw new IOException("no interactive Windows desktop session (a service has nowhere to show a console)");
         }
         Files.createDirectories(target.cwd());
         Path script = Files.createTempFile(target.cwd(), ".hdsl-terminal-", ".cmd");

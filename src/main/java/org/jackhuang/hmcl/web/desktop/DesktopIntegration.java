@@ -38,9 +38,13 @@ public final class DesktopIntegration {
     private DesktopIntegration() {
     }
 
-    /// Whether this build can open desktop windows at all.
+    /// Whether this process has an interactive Windows desktop to open windows
+    /// on: a console or RDP session has `SESSIONNAME`; a Windows service
+    /// (session 0) does not, and a window started there would be invisible.
+    /// The endpoints answer 409 instead of pretending it worked.
     public static boolean supported() {
-        return OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS;
+        return OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS
+                && System.getenv("SESSIONNAME") != null;
     }
 
     /// Opens `directory` in Explorer.
