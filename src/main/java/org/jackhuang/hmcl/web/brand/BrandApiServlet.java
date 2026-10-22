@@ -25,9 +25,18 @@ import com.google.gson.JsonParser;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.http.Json;
 import org.jackhuang.hmcl.web.task.TaskService;
+import org.jackhuang.hmcl.web.terminal.BrandTui;
+import org.jackhuang.hmcl.web.terminal.DesktopTerminal;
+import org.jackhuang.hmcl.web.terminal.TerminalManager;
+import org.jackhuang.hmcl.web.terminal.TerminalSession;
+import org.jackhuang.hmcl.web.terminal.TerminalTarget;
+import org.jackhuang.hmcl.web.terminal.TerminalTickets;
+import org.jackhuang.hmcl.web.terminal.pty.PtySize;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -73,14 +82,19 @@ public final class BrandApiServlet extends HttpServlet {
 
     private final ServerConfig config;
     private final TaskService tasks;
+    private final TerminalManager terminals;
+    private final TerminalTickets terminalTickets;
     private final Map<Brand, PathRef> brands = new EnumMap<>(Brand.class);
 
     private record PathRef(Path root, BrandInstanceManager manager) {
     }
 
-    public BrandApiServlet(ServerConfig config, TaskService tasks) {
+    public BrandApiServlet(ServerConfig config, TaskService tasks,
+                           TerminalManager terminals, TerminalTickets terminalTickets) {
         this.config = config;
         this.tasks = tasks;
+        this.terminals = terminals;
+        this.terminalTickets = terminalTickets;
         Path base = config.dataDir.resolve("brands");
         for (Brand brand : Brand.values()) {
             Path root = base.resolve(brand.id());
@@ -171,6 +185,11 @@ public final class BrandApiServlet extends HttpServlet {
             }
             if (segments.length == 3 && "plugins".equals(segments[2]) && "GET".equals(request.getMethod())) {
                 plugins(brand, ref, response, id);
+                return;
+            }
+            if (segments.length == 3 && "terminal".equals(segments[2])
+                    && ("POST".equals(request.getMethod()) || "DELETE".equals(request.getMethod()))) {
+                terminal(brand, ref, request, response, id);
                 return;
             }
         }
@@ -392,6 +411,7 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "stop the instance before deleting it");
             return;
         }
+        terminals.terminate(id);
         ref.manager().delete(id);
         response.setStatus(204);
     }
@@ -423,8 +443,83 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
             return;
         }
+        // Stopping the instance stops its terminal: the agent process belongs
+        // to the instance, and leaving it running behind a "stopped" state
+        // would be a lie the next browser tab could still see.
+        terminals.terminate(id);
         BrandRuntime.stop(id);
         writeStatus(response, BrandRuntime.status(id));
+    }
+
+    // --------------------------------------------------------------- terminal --
+
+    /// `POST /api/brands/{brand}/instances/{id}/terminal` opens the instance's
+    /// native TUI; `DELETE` kills it (the footer's stop button).
+    ///
+    /// On POSIX the panel spawns the agent on a PTY and answers a one-use
+    /// ticket for `/ws/terminal/{ticket}`. On Windows the console belongs to
+    /// the desktop, so the panel starts a console window in the instance
+    /// workspace instead and answers `{"mode":"desktop"}`.
+    private void terminal(Brand brand, PathRef ref, HttpServletRequest request,
+                          HttpServletResponse response, String id) throws IOException {
+        BrandInstance instance = ref.manager().find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
+            return;
+        }
+        if ("DELETE".equals(request.getMethod())) {
+            boolean killed = terminals.terminate(id);
+            JsonObject body = new JsonObject();
+            body.addProperty("ok", true);
+            body.addProperty("killed", killed);
+            Json.write(response, body);
+            return;
+        }
+        BrandTui tui = BrandTui.forBrand(brand.id());
+        if (tui == null) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "brand_has_no_tui: " + brand.id() + " has no interactive terminal");
+            return;
+        }
+        Path packageDir = BrandInstaller.packageDir(brand, ref.root(), instance.version());
+        if (packageDir == null) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    brand.sourceLabel() + " " + instance.version() + " is not installed");
+            return;
+        }
+        // A web runtime and a TUI on one HOME race the agent's own state; the
+        // terminal takes the instance over, and the footer's start button
+        // brings the web mode back when the user wants it.
+        if (BrandRuntime.isRunning(id)) {
+            BrandRuntime.stop(id);
+        }
+        String resume = request.getParameter("resume");
+        TerminalTarget target = tui.target(packageDir, ref.manager().homeDirectory(instance),
+                ref.manager().workspaceDirectory(instance), id, resume);
+        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
+            DesktopTerminal.open(target);
+            JsonObject body = new JsonObject();
+            body.addProperty("mode", "desktop");
+            body.addProperty("instance", id);
+            Json.write(response, body);
+            return;
+        }
+        TerminalSession session;
+        try {
+            session = terminals.open(target, PtySize.DEFAULT);
+        } catch (org.jackhuang.hmcl.web.terminal.TerminalBusyException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_already_open: " + e.getMessage());
+            return;
+        }
+        String ticket = terminalTickets.issue(id,
+                (String) request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE));
+        JsonObject body = new JsonObject();
+        body.addProperty("mode", "pty");
+        body.addProperty("instance", id);
+        body.addProperty("ticket", ticket);
+        body.addProperty("ws", "/ws/terminal/" + ticket);
+        body.addProperty("brand", brand.id());
+        Json.write(response, body);
     }
 
     // ------------------------------------------------------------------ open --

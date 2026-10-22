@@ -122,6 +122,9 @@ public final class HdslServer {
     /// The SSH terminal channel, behind reflection so the -PnoSsh build can
     /// omit the channel's classes entirely (see [SshBridge]).
     private final SshBridge ssh;
+    /// The web terminal's sessions (docs/web-shell.md). Present in every build:
+    /// the terminal is not part of the -PnoSsh switch.
+    private final org.jackhuang.hmcl.web.terminal.TerminalManager terminals;
     private final Logger logger;
     private final AtomicLong startedAtMillis;
     private final AtomicBoolean hookInstalled = new AtomicBoolean();
@@ -129,7 +132,9 @@ public final class HdslServer {
     private HdslServer(Server server, HttpConfiguration baseHttpConfig, ServerConnector mainConnector,
                        @Nullable ServerConnector redirectConnector,
                        @Nullable SslContextFactory.Server sslContextFactory, WebSocketClient proxyWebSocketClient,
-                       AcpSessionManager acpSessions, SshBridge ssh, Logger logger, AtomicLong startedAtMillis) {
+                       AcpSessionManager acpSessions, SshBridge ssh,
+                       org.jackhuang.hmcl.web.terminal.TerminalManager terminals,
+                       Logger logger, AtomicLong startedAtMillis) {
         this.server = server;
         this.baseHttpConfig = baseHttpConfig;
         this.mainConnector = mainConnector;
@@ -138,6 +143,7 @@ public final class HdslServer {
         this.proxyWebSocketClient = proxyWebSocketClient;
         this.acpSessions = acpSessions;
         this.ssh = ssh;
+        this.terminals = terminals;
         this.logger = logger;
         this.startedAtMillis = startedAtMillis;
     }
@@ -214,6 +220,17 @@ public final class HdslServer {
         AcpSessionManager acpSessions = new AcpSessionManager(eventBus);
         WsGateway.install(eventBus, authService, config.auth.disabled, acpSessions);
 
+        // The web terminal (docs/web-shell.md): the agent TUI runs on a PTY
+        // inside the panel; the browser is only a viewer. Tickets bridge the
+        // authenticated POST and the WebSocket handshake, and the manager owns
+        // the one-terminal-per-instance rule.
+        org.jackhuang.hmcl.web.terminal.TerminalManager terminals =
+                new org.jackhuang.hmcl.web.terminal.TerminalManager();
+        org.jackhuang.hmcl.web.terminal.TerminalTickets terminalTickets =
+                new org.jackhuang.hmcl.web.terminal.TerminalTickets();
+        org.jackhuang.hmcl.web.terminal.TerminalWebSocket.configure(
+                terminals, terminalTickets, authService, config.auth.disabled);
+
         // The client behind the `/i/*` WebSocket relay; its life is the
         // server's own. Its message limits are raised for the same reason the
         // server-side ones are (see InstanceProxyWebSocket#MAX_MESSAGE_BYTES):
@@ -278,7 +295,7 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
         context.addServlet(new ServletHolder(new ZcodeApiServlet(config)), "/api/zcode/*");
-        context.addServlet(new ServletHolder(new BrandApiServlet(config, taskService)), "/api/brands/*");
+        context.addServlet(new ServletHolder(new BrandApiServlet(config, taskService, terminals, terminalTickets)), "/api/brands/*");
         // Registered before the `/api/settings/*` holder below and matched by its longer prefix:
         // the download source is a launcher setting, and TLS is the other thing this path serves.
         context.addServlet(new ServletHolder(new RegistrySettingsApiServlet()), "/api/settings/registry/*");
@@ -300,7 +317,10 @@ public final class HdslServer {
         // funnels upgrades through the filter chain — that is what makes the
         // AuthFilter above the 401 gate for unauthenticated handshakes.
         JakartaWebSocketServletContainerInitializer.configure(context,
-                (servletContext, container) -> container.addEndpoint(WsGateway.class));
+                (servletContext, container) -> {
+                    container.addEndpoint(WsGateway.class);
+                    container.addEndpoint(org.jackhuang.hmcl.web.terminal.TerminalWebSocket.class);
+                });
 
         // Upgrades under `/i/*` are relayed to the instance's own WebSocket
         // endpoint. Jakarta endpoint paths are single-segment URI templates
@@ -342,7 +362,7 @@ public final class HdslServer {
         server.setHandler(handler);
 
         HdslServer built = new HdslServer(server, httpConfig, mainConnector, redirectConnector, ssl,
-                proxyWebSocketClient, acpSessions, ssh, logger, startedAtMillis);
+                proxyWebSocketClient, acpSessions, ssh, terminals, logger, startedAtMillis);
         self.set(built);
         return built;
     }
@@ -675,6 +695,9 @@ public final class HdslServer {
         // Symmetric with start(): the SSH listener goes down with the panel
         // that owns it — no port outliving the process that opened it.
         ssh.stop();
+        // The terminal processes are children of the panel; closing the
+        // manager takes their process groups with it.
+        terminals.close();
         acpSessions.closeAll();
         server.stop();
         proxyWebSocketClient.stop();

@@ -79,22 +79,38 @@ web/ssh/                      只剩传输与认证；SshAttachAdapter 复用终
   attr：`POSIX_SPAWN_SETPGROUP` + pgroup=0。
 - 不在 JVM 里 `fork()`；不注册 JNA 回调；泵线程 `poll` + 关闭标志；
   `read` 遇 `EIO` 视为子进程结束；`waitpid` 独立线程收尸。
-- Windows：阶段 7 用 ConPTY + Job Object；在此之前抛 `PtyException`，按钮禁用并说明。
+- Windows：不用 ConPTY。`Pty.spawn` 在 Windows 抛 `PtyException`；品牌终端改走
+  `DesktopTerminal`（§7.1），在桌面会话里打开真正的控制台窗口。
 
 ## 7. 实施阶段
 
-| 阶段 | 内容 | 产出 |
+| 阶段 | 内容 | 状态 |
 |---|---|---|
-| 0 | 分支、基线、kimi/opencode 会话存储 spike | spike 结论 |
-| 1 | 品牌无关的终端核心（`TerminalTarget` + `BrandTui`） | 单元测试 |
-| 2 | PTY 胶水（JNA） | `PosixPty` + 测试 |
-| 3 | `TerminalSession` / `TerminalManager` | 生命周期 + 审计 |
-| 4 | HTTP 与 WebSocket + 底栏启停 | 端到端可用 |
-| 5 | xterm 前端 | 页面可用 |
-| 6 | dsh 适配 + SSH 归位 + 默认 `-PnoSsh` | 双资产 |
-| 7 | Windows ConPTY（可选） | Windows 可用 |
+| 0 | 分支、基线、kimi/opencode 会话存储 spike | 完成（源码核对） |
+| 1 | 品牌无关的终端核心（`TerminalTarget` + `BrandTui`） | 完成 |
+| 2 | PTY 胶水（JNA） | 完成 |
+| 3 | `TerminalSession` / `TerminalManager` | 完成 |
+| 4 | HTTP 与 WebSocket（ticket、`/ws/terminal`、Windows 桌面终端） | 后端完成，见 §10 缺口 |
+| 5 | xterm 前端 + 底栏启停 | 未开始 |
+| 6 | dsh 适配 + SSH 归位 + 默认 `-PnoSsh` | 未开始 |
+| 7 | ~~Windows ConPTY~~ | **取消**：Windows 用桌面终端（见 §7.1） |
 
 品牌顺序：**kimi → opencode → dsh（可选）**。
+
+### 7.1 Windows：用桌面的终端，不做浏览器 PTY
+
+裸部署的 Windows 有桌面和自己的 shell，不需要在浏览器里再复制一个 PTY（服务进程也不共享
+交互桌面）。因此 Windows 上点「终端」时，面板进程（就跑在那个桌面会话里）用 Java 直接
+起一个控制台窗口，并把工作目录与 HOME 指到该实例：
+
+- `DesktopTerminal` 在实例工作区写一个 `.cmd`：`cd /d <工作区>`、`set HOME=…`、再执行该
+  品牌的 TUI 命令；
+- 通过 `cmd.exe /c start … cmd.exe /k <script>` 打开，窗口属于桌面，面板不代理键盘；
+- API 返回 `{"mode":"desktop"}`，前端只显示「已在本机桌面打开终端」。
+
+这条路径**故意**经过 `cmd.exe`：它启动的就是用户自己的终端；「不经 shell」的不变量只
+约束 POSIX 的 Web 终端路径。Windows 端也不额外假设密码限制——按部署现实，能坐到这台
+桌面的人本来就能直接开命令行。
 
 ## 8. 验收
 
@@ -118,3 +134,15 @@ web/ssh/                      只剩传输与认证；SshAttachAdapter 复用终
 实现约定：两个品牌都由适配器解析成「node + 入口 JS」或「原生二进制」，**不经过
 `.bin` shim / `.cjs` 启动器**；环境里 `HOME`（和 Windows 的 `USERPROFILE`）指向实例
 home，因此 TUI 读到的就是网页模式写下的那份会话。
+
+## 10. 已知缺口（阶段 5/6 之前不发布）
+
+- **开发者密码提权尚未接到终端入口**：`/api/brands/.../terminal` 目前只要求面板会话
+  （AuthFilter）。提权实现现在住在 `web.ssh`（`SshApiServlet` 的 elevation 表），而
+  `-PnoSsh` 构建会整包剔除 `web.ssh`；阶段 6 把 `DeveloperAuth` 与提权迁进常置包后，
+  终端入口必须改为「会话 + 开发者密码」才允许打开。
+- **前端未接**：阶段 4 只到 API/WS；xterm 覆盖层、底栏启动/停止、断线重开在阶段 5。
+- **web ↔ 终端互斥**：当前开终端会停掉品牌 web 运行时，但不会自动恢复；恢复动作交给
+  底栏「启动」（阶段 5 接按钮）。
+- **dsh 终端**：`DshTui` 与 `SessionCatalog` 迁移在阶段 6；dsh 实例暂不提供终端按钮。
+- **默认构建仍带 SSH**：`-PnoSsh` 翻默认与双资产发布在阶段 6。
