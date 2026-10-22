@@ -53,6 +53,10 @@ public final class AuthFilter implements Filter {
 
     public static final String SESSION_COOKIE = "hdsl_session";
     public static final String SESSION_ATTRIBUTE = "session";
+    /// The raw token behind [SESSION_ATTRIBUTE]. Elevation in the SSH settings
+    /// servlet is keyed by it, so that logging one session out logs its
+    /// developer-mode elevation out too.
+    public static final String SESSION_TOKEN_ATTRIBUTE = "session.token";
 
     public static final String LOGIN_PATH = "/api/auth/login";
     public static final String STATUS_PATH = "/api/auth/status";
@@ -94,6 +98,7 @@ public final class AuthFilter implements Filter {
         Optional<AuthService.Session> session = token == null ? Optional.empty() : authService.verify(token);
         if (session.isPresent()) {
             req.setAttribute(SESSION_ATTRIBUTE, session.get());
+            req.setAttribute(SESSION_TOKEN_ATTRIBUTE, token);
             chain.doFilter(request, response);
         } else {
             Json.error(resp, HttpServletResponse.SC_UNAUTHORIZED, "unauthorized");

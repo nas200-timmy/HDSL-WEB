@@ -62,6 +62,7 @@ import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /// The embedded SSH endpoint of the panel (docs/ssh-terminal-channel.md,
@@ -75,8 +76,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 ///
 /// Authentication: publickey against the panel-managed
 /// [AuthorizedKeys] (always on), password against the panel user store
-/// (off unless `ssh.password_auth` is on; then every guess spends the same
-/// per-IP [LoginThrottle] budget the panel sign-in uses). The host key is an
+/// (off unless `ssh.password_auth` is on; while it is on, every guess spends
+/// this channel's own per-IP [LoginThrottle] budget, with the same policy as
+/// the panel sign-in). The host key is an
 /// Ed25519 pair generated on first start and persisted under
 /// `<data>/ssh/hostkey_ed25519` so restarts keep the fingerprint.
 ///
@@ -96,6 +98,10 @@ public final class SshService {
     /// Name of the persisted host key file inside the channel directory.
     public static final String HOST_KEY_FILE = "hostkey_ed25519";
 
+    /// How long the gate refuses guesses — and how long the peer that spent
+    /// the budget is refused SSH logins — once 15 answers were wrong.
+    static final Duration GATE_BLOCK = Duration.ofMinutes(30);
+
     private final ServerConfig config;
     private final AuthService auth;
     /// The credential the TUI gate of [MenuShellFactory] asks for.
@@ -105,13 +111,15 @@ public final class SshService {
     private final AuthorizedKeys authorizedKeys;
     /// One budget per source IP, shared semantics with the panel sign-in.
     private final LoginThrottle passwordThrottle = new LoginThrottle();
-    /// The TUI gate's cross-connection budget, per peer IP. The primitive is
-    /// [LoginThrottle] unchanged — 15 records in a 5-minute window buy a
-    /// 10-minute refusal — but the gate's policy is expressed in exhausted
-    /// connections, not single guesses: **one record per connection that
-    /// burned all three answers**. 15 reconnects' worth of guessing, not 15
-    /// guesses, is what the window buys.
-    private final LoginThrottle gateThrottle = new LoginThrottle();
+    /// The TUI gate's cross-connection budget. One key for every peer
+    /// ([MenuShellFactory#GATE_BUDGET_KEY]): 15 wrong answers inside the
+    /// window buy a 30-minute refusal of the gate for everybody — moving to
+    /// another address does not shorten it.
+    private final LoginThrottle gateThrottle =
+            new LoginThrottle(LoginThrottle.MAX_FAILURES, LoginThrottle.WINDOW, GATE_BLOCK);
+    /// Peers whose SSH *logins* are refused because they spent the gate's
+    /// budget: address → when the refusal ends. Bounded like the throttles.
+    private final ConcurrentHashMap<String, Instant> blockedPeers = new ConcurrentHashMap<>();
     private final AtomicInteger connections = new AtomicInteger();
     private final SessionListener auditListener = new AuditSessionListener();
 
@@ -245,7 +253,8 @@ public final class SshService {
 
             sshd.setShellFactory(new MenuShellFactory(
                     devAuth, this::dshInstanceRows, this::brandInstanceRows,
-                    () -> new SessionCatalog(DshPaths.INSTANCES).list(), attachSupport, gateThrottle));
+                    () -> new SessionCatalog(DshPaths.INSTANCES).list(), attachSupport, gateThrottle,
+                    this::blockPeer));
             sshd.setForwardingFilter(RejectAllForwardingFilter.INSTANCE);
             sshd.addSessionListener(auditListener);
 
@@ -295,6 +304,10 @@ public final class SshService {
         Instant now = Instant.now();
         // The refusal happens before the PBKDF2 work, exactly like the panel
         // sign-in: the check is the cost an attacker is trying to spend.
+        if (isPeerBlocked(address)) {
+            AuditLog.log(AuditLog.Channel.SSH, "ssh.auth-blocked", "password", "blocked", username, address);
+            return false;
+        }
         if (passwordThrottle.isBlocked(address, now)) {
             AuditLog.log(AuditLog.Channel.SSH, "ssh.auth-failure", "password", "blocked", username, address);
             return false;
@@ -310,17 +323,59 @@ public final class SshService {
     }
 
     private boolean authenticateKey(String username, PublicKey key, ServerSession session) {
+        String address = peerAddress(session);
+        if (isPeerBlocked(address)) {
+            AuditLog.log(AuditLog.Channel.SSH, "ssh.auth-blocked", "publickey", "blocked", username, address);
+            return false;
+        }
         try {
             if (authorizedKeys.contains(key)) {
                 return true;
             }
             AuditLog.log(AuditLog.Channel.SSH, "ssh.auth-failure", "publickey", "failure", username,
-                    peerAddress(session));
+                    address);
             return false;
         } catch (IOException e) {
             log.warning("Could not read authorized_keys during an SSH login", e);
             return false;
         }
+    }
+
+    /// Refuses SSH logins from `address` for [GATE_BLOCK], because that peer
+    /// spent the TUI gate's budget. Wired into [MenuShellFactory] as its
+    /// `banPeer` callback: the gate is global, this refusal is per address,
+    /// so the peer that did the guessing cannot come back to try again.
+    void blockPeer(String address) {
+        blockedPeers.put(address, Instant.now().plus(GATE_BLOCK));
+        pruneBlockedPeers();
+        log.info("SSH logins from " + address + " are refused for " + GATE_BLOCK.toMinutes()
+                + " minutes: the developer-password gate spent its budget");
+    }
+
+    /// Reports whether an address's SSH logins are being refused.
+    ///
+    /// @param address the peer address
+    /// @return whether the refusal is still in force
+    boolean isPeerBlocked(String address) {
+        Instant until = blockedPeers.get(address);
+        if (until == null) {
+            return false;
+        }
+        if (Instant.now().isBefore(until)) {
+            return true;
+        }
+        blockedPeers.remove(address, until);
+        return false;
+    }
+
+    /// Keeps [blockedPeers] from growing without bound. Entries are refusals
+    /// only, so evicting the expired ones is enough.
+    private void pruneBlockedPeers() {
+        if (blockedPeers.size() <= 1024) {
+            return;
+        }
+        Instant now = Instant.now();
+        blockedPeers.entrySet().removeIf(entry -> now.isAfter(entry.getValue()));
     }
 
     /// The menu's "dsh 实例" section: the selected game directory's

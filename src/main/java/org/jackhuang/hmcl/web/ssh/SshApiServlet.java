@@ -32,6 +32,7 @@ import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
 import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
+import org.jackhuang.hmcl.web.auth.LoginThrottle;
 import org.jackhuang.hmcl.web.auth.UserStore;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.config.ServerConfigWriter;
@@ -111,11 +112,16 @@ public final class SshApiServlet extends HttpServlet {
     private final AuthService auth;
     private final BooleanSupplier tlsActive;
 
-    /// Session username → when the elevation ends.
+    /// Session token → when the elevation ends. Keyed by token, not by user:
+    /// two sessions of the same account must not share one elevation.
     private final ConcurrentMap<String, Instant> elevations = new ConcurrentHashMap<>();
-    /// Session username → its bad-guess record. The records are only mutated
+    /// Session token → its bad-guess record. The records are only mutated
     /// under their own monitor.
     private final ConcurrentMap<String, ElevationFailures> elevationFailures = new ConcurrentHashMap<>();
+    /// Failed panel-password confirmations on the developer-password routes,
+    /// per source address. The confirmation guards the second factor, so it
+    /// must not double as an unthrottled oracle for the panel password.
+    private final LoginThrottle adminPasswordThrottle = new LoginThrottle();
 
     public SshApiServlet(SshService ssh, DeveloperAuth devAuth, ServerConfig config,
                          AuthService auth, BooleanSupplier tlsActive) {
@@ -231,10 +237,22 @@ public final class SshApiServlet extends HttpServlet {
 
     /// The gate in front of every sensitive route: passes and slides the
     /// elevation forward; otherwise answers 403 and audits the blocked call.
+    ///
+    /// Elevation is keyed by the session token, so logging that session out —
+    /// or revoking it with a password change — ends its elevation in the same
+    /// instant, and one browser session's elevation is never inherited by
+    /// another.
     private boolean requireElevation(HttpServletRequest request, HttpServletResponse response, String action)
             throws IOException {
         String key = elevationKey(request);
         Instant now = Instant.now();
+        pruneElevations(now);
+        if (!sessionBehind(key)) {
+            elevations.remove(key);
+            audit(request, action, null, "failure");
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN, "developer elevation required");
+            return false;
+        }
         Instant expiry = elevations.get(key);
         if (expiry != null && expiry.isAfter(now)) {
             elevations.put(key, now.plus(ELEVATION_TTL));
@@ -248,18 +266,37 @@ public final class SshApiServlet extends HttpServlet {
 
     private boolean isElevated(String key) {
         Instant expiry = elevations.get(key);
-        return expiry != null && expiry.isAfter(Instant.now());
+        return expiry != null && expiry.isAfter(Instant.now()) && sessionBehind(key);
     }
 
-    /// Who is asking. The session attribute is an [AuthService.Session]; its
-    /// record equality changes every time the session expiry slides, so the
-    /// username is the key, never the record. Without one (authentication
-    /// disabled — loopback-only by config validation) the remote address is
-    /// as good as it gets.
+    /// Whether the session a key names is still alive. Anonymous keys (auth
+    /// disabled, loopback-only) have no session to outlive.
+    private boolean sessionBehind(String key) {
+        if (!key.startsWith(SESSION_PREFIX)) {
+            return true;
+        }
+        return auth.isAlive(key.substring(SESSION_PREFIX.length()));
+    }
+
+    /// Drops elevations whose fifteen minutes are up. Sessions come and go,
+    /// so the map is only bounded if the *expired* entries actually leave.
+    private void pruneElevations(Instant now) {
+        if (elevations.size() < 64) {
+            return;
+        }
+        elevations.entrySet().removeIf(entry -> !entry.getValue().isAfter(now));
+    }
+
+    private static final String SESSION_PREFIX = "token:";
+
+    /// Who is asking, and — since the elevation must not outlive its session
+    /// or leak to another one — the session token, never the username.
+    /// Without a session (authentication disabled, loopback-only by config
+    /// validation) the remote address is as good as it gets.
     private static String elevationKey(HttpServletRequest request) {
-        Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
-        if (session instanceof AuthService.Session s) {
-            return "user:" + s.username();
+        Object token = request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE);
+        if (token instanceof String value && !value.isBlank()) {
+            return SESSION_PREFIX + value;
         }
         String address = request.getRemoteAddr();
         return "anonymous:" + (address == null ? "unknown" : address);
@@ -320,10 +357,7 @@ public final class SshApiServlet extends HttpServlet {
             return;
         }
         UserStore users = auth.userStore();
-        UserStore.User admin = users.admin();
-        if (admin == null || !users.verify(admin.username(), adminPassword)) {
-            audit(request, "ssh.dev-password", null, "failure");
-            Json.error(response, HttpServletResponse.SC_FORBIDDEN, "the panel password does not match");
+        if (!confirmPanelPassword(request, response, adminPassword, "ssh.dev-password")) {
             return;
         }
         boolean changing = devAuth.isSet();
@@ -358,6 +392,45 @@ public final class SshApiServlet extends HttpServlet {
         Json.write(response, answer);
     }
 
+    /// Confirms the panel password with a per-address budget, answering the
+    /// refusal itself.
+    ///
+    /// The developer-password routes are the only place the panel password is
+    /// asked for outside the sign-in endpoint. Without a budget here this
+    /// endpoint is an unthrottled oracle for the same secret — and every guess
+    /// costs a PBKDF2 derivation, so it is also a CPU lever.
+    private boolean confirmPanelPassword(HttpServletRequest request, HttpServletResponse response,
+                                         String adminPassword, String action) throws IOException {
+        String address = request.getRemoteAddr();
+        String key = address == null || address.isBlank() ? "unknown" : address;
+        Instant now = Instant.now();
+        if (adminPasswordThrottle.isBlocked(key, now)) {
+            audit(request, action, null, "blocked");
+            refuseDeveloperAttempts(response, adminPasswordThrottle.block());
+            return false;
+        }
+        UserStore users = auth.userStore();
+        UserStore.User admin = users.admin();
+        if (admin != null && users.verify(admin.username(), adminPassword)) {
+            adminPasswordThrottle.clear(key);
+            return true;
+        }
+        Duration refused = adminPasswordThrottle.recordFailure(key, Instant.now());
+        audit(request, action, null, refused.isZero() ? "failure" : "blocked");
+        if (refused.isZero()) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN, "the panel password does not match");
+        } else {
+            refuseDeveloperAttempts(response, refused);
+        }
+        return false;
+    }
+
+    private static void refuseDeveloperAttempts(HttpServletResponse response, Duration refusedFor)
+            throws IOException {
+        response.setHeader("Retry-After", Long.toString(Math.max(1, refusedFor.toSeconds())));
+        Json.error(response, 429, "too many failed panel-password attempts; try again later");
+    }
+
     private void devPasswordClear(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (!requireHttps(request, response, "ssh.dev-password")) {
             return;
@@ -368,11 +441,7 @@ public final class SshApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "adminPassword is required");
             return;
         }
-        UserStore users = auth.userStore();
-        UserStore.User admin = users.admin();
-        if (admin == null || !users.verify(admin.username(), adminPassword)) {
-            audit(request, "ssh.dev-password", null, "failure");
-            Json.error(response, HttpServletResponse.SC_FORBIDDEN, "the panel password does not match");
+        if (!confirmPanelPassword(request, response, adminPassword, "ssh.dev-password")) {
             return;
         }
         try {

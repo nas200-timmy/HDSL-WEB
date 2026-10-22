@@ -45,6 +45,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
@@ -76,9 +77,13 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 ///
 /// Hardening (docs/ssh-terminal-channel.md §M4): the gate has a 120-second
 /// idle timeout — a connected client that never answers is cut and audited
-/// `ssh.idle-timeout` — and every connection that burns its three answers
-/// is recorded once against the peer's IP in [SshService]'s gate throttle,
-/// so reconnecting for three more guesses spends a shared budget.
+/// `ssh.idle-timeout` — and **every wrong answer** spends a shared budget,
+/// not just connections that burn all three. Fifteen wrong answers spend it;
+/// the next one (the sixteenth) refuses the gate for 30 minutes for
+/// everybody, from any address ([GATE_BUDGET_KEY] is a single key on
+/// purpose), and the peer that spent it also has its SSH logins refused for
+/// the same stretch — so hanging up after one guess buys neither a free guess
+/// nor a fresh budget.
 ///
 /// Known v1 tradeoff, deliberate: the server side of the channel has no PTY,
 /// so the developer password **echoes** as the client types it — the prompt
@@ -91,6 +96,11 @@ public final class MenuShellFactory implements ShellFactory {
 
     /// Wrong gate answers before the connection is dropped.
     public static final int MAX_GATE_FAILURES = 3;
+
+    /// The key the gate's cross-connection budget is kept under. One key for
+    /// every peer on purpose: spending the budget anywhere refuses the gate
+    /// everywhere, so reconnecting from another address buys nothing.
+    static final String GATE_BUDGET_KEY = "gate";
 
     /// One selectable dsh or brand row.
     ///
@@ -106,6 +116,10 @@ public final class MenuShellFactory implements ShellFactory {
     private final Supplier<List<SessionCatalog.Entry>> sessions;
     private final @Nullable AttachSupport attach;
     private final @Nullable LoginThrottle gateThrottle;
+    /// Called with the peer address when the gate's budget is spent, so the
+    /// channel can refuse SSH logins from that address for the throttle's
+    /// block (the composition root wires this to [SshService]).
+    private final @Nullable Consumer<String> banPeer;
 
     /// How long the gate may sit unanswered before the watchdog ends the
     /// session (docs/ssh-terminal-channel.md §M4). Package-private setter so
@@ -117,13 +131,15 @@ public final class MenuShellFactory implements ShellFactory {
                             Supplier<List<Entry>> brandInstances,
                             Supplier<List<SessionCatalog.Entry>> sessions,
                             @Nullable AttachSupport attach,
-                            @Nullable LoginThrottle gateThrottle) {
+                            @Nullable LoginThrottle gateThrottle,
+                            @Nullable Consumer<String> banPeer) {
         this.devAuth = devAuth;
         this.dshInstances = dshInstances;
         this.brandInstances = brandInstances;
         this.sessions = sessions;
         this.attach = attach;
         this.gateThrottle = gateThrottle;
+        this.banPeer = banPeer;
     }
 
     /// Package-private test hook; see the field.
@@ -371,10 +387,9 @@ public final class MenuShellFactory implements ShellFactory {
             }
             String peer = peerAddress(channel);
             LoginThrottle throttle = gateThrottle;
-            Instant now = Instant.now();
-            if (throttle != null && throttle.isBlocked(peer, now)) {
-                AuditLog.log(AuditLog.Channel.SSH, "ssh.gate", null, "blocked", null, null);
-                line(output, "失败次数过多，请稍后再试。");
+            if (throttle != null && throttle.isBlocked(GATE_BUDGET_KEY, Instant.now())) {
+                AuditLog.log(AuditLog.Channel.SSH, "ssh.gate", null, "blocked", null, peer);
+                line(output, bannedFor(throttle));
                 return 1;
             }
             int failures = 0;
@@ -386,25 +401,43 @@ public final class MenuShellFactory implements ShellFactory {
                     return 0;
                 }
                 if (devAuth.verify(answer.trim())) {
-                    AuditLog.log(AuditLog.Channel.SSH, "ssh.gate", null, "success", null, null);
+                    AuditLog.log(AuditLog.Channel.SSH, "ssh.gate", null, "success", null, peer);
                     if (throttle != null) {
-                        throttle.clear(peer);
+                        throttle.clear(GATE_BUDGET_KEY);
                     }
                     return -1;
                 }
                 failures++;
-                AuditLog.log(AuditLog.Channel.SSH, "ssh.gate", null, "failure", null, null);
-                if (failures >= MAX_GATE_FAILURES) {
-                    if (throttle != null) {
-                        // One record per exhausted connection — the throttle's
-                        // own window size is the policy here, not the guess count.
-                        throttle.recordFailure(peer, Instant.now());
+                // Every wrong answer spends the gate's budget, whether or not
+                // the connection lives to see its third strike: a client that
+                // hangs up after one guess must not get that guess for free.
+                Duration refused = throttle == null
+                        ? Duration.ZERO
+                        : throttle.recordFailure(GATE_BUDGET_KEY, Instant.now());
+                AuditLog.log(AuditLog.Channel.SSH, "ssh.gate", null,
+                        refused.isZero() ? "failure" : "blocked", null, peer);
+                if (!refused.isZero()) {
+                    // The budget is spent: the channel also refuses this peer's
+                    // SSH logins for the same stretch, so reconnecting to spend
+                    // the next budget is not possible either.
+                    if (banPeer != null) {
+                        banPeer.accept(peer);
                     }
+                    line(output, bannedFor(throttle));
+                    return 1;
+                }
+                if (failures >= MAX_GATE_FAILURES) {
                     line(output, "失败次数过多，连接已断开。");
                     return 1;
                 }
                 line(output, "密码错误，请重试（还剩 " + (MAX_GATE_FAILURES - failures) + " 次机会）。");
             }
+        }
+
+        /// What a refused gate says: the refusal length and the fact that
+        /// moving to another address does not shorten it.
+        private String bannedFor(LoginThrottle throttle) {
+            return "失败次数过多，已封禁 " + throttle.block().toMinutes() + " 分钟（换 IP 也需等待）。";
         }
 
         /// The menu loop: render, read a choice, either leave with the
