@@ -15,9 +15,9 @@ SSH 通道整个拿掉，Web Shell 成为面板里唯一的 TUI 入口。这不�
   `HDSL_SSH_BIND` / `HDSL_SSH_PORT`、`server.yaml` 的 `ssh:` 段、Apache MINA SSHD 与
   eddsa 依赖、`docker-compose.yml` 的 3022 端口映射、`-PwithSsh` 构建开关与
   `-full.jar` 产物。环境体检不再有 SSH 两行。
-- **没变**：开发者密码与 15 分钟提权、Web Shell 的打开/回放/停止语义、实例级互斥、
+- **没变**：开发者密码与 30 分钟提权、Web Shell 的打开/回放/停止语义、实例级互斥、
   审计日志（web / terminal 两个通道）。
-- **设置页换页**：「SSH 终端」整页改为「开发者模式」，进入同样需要开发者密码（15 分钟
+- **设置页换页**：「SSH 终端」整页改为「开发者模式」，进入同样需要开发者密码（30 分钟
   滑动）。页内有两个控件：Web Shell 总开关（写 `server.yaml` 的 `web_shell.enabled`，
   也可用 `HDSL_WEB_SHELL_ENABLED` 覆盖；关掉后终端按钮隐藏、接口返回 403
   `web_shell_disabled`，已运行的终端不受影响）和修改开发者密码（当前开发者密码 +

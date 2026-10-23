@@ -301,7 +301,7 @@ export interface DoctorReport {
 export interface DeveloperStatus {
   /** 是否已设置开发者密码 */
   devPasswordSet: boolean;
-  /** 当前会话是否已通过开发者密码提权（15 分钟滑动续期） */
+  /** 当前会话是否已通过开发者密码提权（30 分钟滑动续期） */
   elevated: boolean;
   /** 实例终端（Web Shell）开关；false 时打开终端会被后端拒绝 */
   webShellEnabled: boolean;

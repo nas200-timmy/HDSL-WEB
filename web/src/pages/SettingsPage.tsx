@@ -1591,7 +1591,7 @@ function DeveloperTab() {
         {caption}
         <div className="card">
           <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
-            这个页面需要一个开发者密码才能进入——它和打开实例终端时用的是同一个密码。验证后 15 分钟内有效，
+            这个页面需要一个开发者密码才能进入——它和打开实例终端时用的是同一个密码。验证后 30 分钟内有效，
             期间不需要重复输入。
           </p>
           <div className="comp-row">

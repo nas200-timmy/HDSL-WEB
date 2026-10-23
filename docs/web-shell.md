@@ -44,7 +44,7 @@
 3. **WS 只搬运字节**：没有 exec / send-keys / 切换程序的接口。
 4. **进程组隔离**：`POSIX_SPAWN_SETPGROUP`（pgroup=0），杀树用 `kill(-pgid)`；
    窗口尺寸只写 `TIOCSWINSZ`，SIGWINCH 由内核发送。
-5. **权限**：打开终端需要会话 + 开发者密码提权（会话级 15 分钟滑动）；argv 白名单；
+5. **权限**：打开终端需要会话 + 开发者密码提权（会话级 30 分钟滑动）；argv 白名单；
    单实例单会话；审计 `terminal.open` / `terminal.exit` / `terminal.kill` /
    `terminal.desktop` / `desktop.reveal`。
 6. **ticket**：WebSocket 用一次性的 `/ws/terminal/{ticket}` 鉴权，ticket 只对一次 attach、
@@ -63,7 +63,7 @@ Windows 桌面终端不增加**本地**攻击面：能坐到这台机器前、�
 一个执行 agent 的进程，屏幕还能交互——**在效果上等价于远程代码执行**。因此：
 
 - 端点仍走 `/api/*` 的会话门（`AuthFilter`），没有会话一律 401；
-- 还要开发者密码提权（会话级 15 分钟）；没有提权 403 `developer_elevation_required`；
+- 还要开发者密码提权（会话级 30 分钟）；没有提权 403 `developer_elevation_required`；
 - Windows 桌面启动额外要求字面确认 `{"confirm":"open-desktop-terminal"}`，并记审计
   `terminal.desktop`（谁、从哪个地址）；这是对「只偷到 cookie」的减速带，不是加密证明；
 - **部署前提**：面板只监听 loopback 或可信网络；要暴露公网，必须在网络层加保护

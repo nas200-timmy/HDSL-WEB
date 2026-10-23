@@ -54,6 +54,18 @@
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
 }
 
+/* 危险动作（终端「停止」）：实心红、药丸形，和普通动作明显区分 */
+.btn-raised.danger {
+  background: var(--monet-error);
+  color: var(--monet-on-error);
+  border-radius: 999px;
+  padding: 0 18px;
+}
+
+.btn-raised.danger:not(:disabled):hover {
+  box-shadow: 0 2px 8px rgba(186, 26, 26, 0.45);
+}
+
 /* 描边按钮 .jfx-button-border：透明底、outline 0.2px、圆角 5、文字 primary */
 .btn-outline {
   background: transparent;

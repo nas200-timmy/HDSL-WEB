@@ -371,7 +371,11 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
 
         <div className="terminal-footer">
           {(phase === "running" || phase === "detached") && (
-            <button className="btn btn-text ripple-host" disabled={busy} onClick={() => void stopSession()}>
+            <button
+              className="btn btn-raised danger ripple-host"
+              disabled={busy}
+              onClick={() => void stopSession()}
+            >
               {I18N["terminal.stop"]}
             </button>
           )}

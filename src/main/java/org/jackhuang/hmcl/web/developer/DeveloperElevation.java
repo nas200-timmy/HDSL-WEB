@@ -24,7 +24,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
 
-/// The fifteen-minute developer-mode elevation, shared by every door that
+/// The thirty-minute developer-mode elevation, shared by every door that
 /// needs it: the developer routes and the web terminal.
 ///
 /// The key is the **session token**, never the username: two browser sessions
@@ -39,8 +39,11 @@ import java.util.concurrent.ConcurrentHashMap;
 @NotNullByDefault
 public final class DeveloperElevation {
 
-    /// How long one elevation lasts, sliding on every use.
-    public static final Duration TTL = Duration.ofMinutes(15);
+    /// How long one elevation lasts, sliding on every use. Thirty minutes is
+    /// deliberately longer than a terminal session's usual idle gaps: a user
+    /// watching an agent should not be asked for the password mid-task, and
+    /// the elevation only gates new opens/attach, not the live WebSocket.
+    public static final Duration TTL = Duration.ofMinutes(30);
     /// How many wrong developer passwords are allowed inside the window.
     public static final int MAX_FAILURES = 3;
     /// How long a locked key waits before it may guess again.
