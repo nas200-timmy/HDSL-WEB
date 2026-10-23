@@ -2,6 +2,30 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.5.4 — 2026-10-23 · 终端客户端 hdsl-tui
+
+Web Shell 多了一个官方终端客户端：手机 SSH、服务器 console、没有图形界面的环境也能接进
+实例的原生 TUI。它只调用面板现有的 REST 与 WebSocket，不新增端口、不新增鉴权面。
+
+- **客户端**（`client/hdsl-tui`，Go）：登录 → 开发者密码提权 → 选实例 → 打开终端；二进制帧
+  直接对接 PTY。Unix 用 `SIGWINCH`、Windows 轮询窗口尺寸；Windows 下自动打开 VT 处理与
+  UTF-8 代码页，退出时恢复。`Ctrl-] q` 断开而 agent 继续跑，`Ctrl-] Ctrl-]` 发送字面量，
+  `Ctrl-C` 原样送给 agent。
+- **分发**：与面板同版本号发布。Release 附带
+  `hdsl-tui-<版本>-<os>-<arch>[.exe]`（linux / darwin / windows × amd64 / arm64）、含 vendor
+  的源码包、`SHA256SUMS-client.txt`，以及 `scripts/install-hdsl-tui.sh` / `.ps1`
+  一键下载校验安装；`--build` 可用本机 Go 离线编译。
+- **依赖源码随仓库提交（vendor）**：构建全程 `GOPROXY=off`，CI 里有一条专门的离线构建步骤
+  作为证明；服务端与客户端都不需要联网取依赖。
+- **协议成文**：新增 [docs/terminal-protocol.md](docs/terminal-protocol.md) 固定 REST/WS 契约；
+  `ready` 帧新增 `protocol` 与 `brand`，打开终端的响应也带 `protocol`。
+- **Windows 面板不变**：终端仍只开在面板所在机器的桌面上，客户端收到 `mode=desktop` 时打印
+  服务端给的提示并退出（远程 PTY 需要 ConPTY，另议）。
+- 验证：服务端 **684 用例 / 0 失败 / 2 跳过**；客户端 `gofmt` / `go vet` / `go test ./...`
+  通过，`GOFLAGS=-mod=vendor GOPROXY=off go build` 与 5 个平台交叉编译通过（Go 1.24.4）；
+  真面板 + 假 kimi TUI 的端到端（PTY 字节、detach/reattach 回放、agent 退出码、
+  `web_shell_disabled` 与 `insecure_transport` 两种拒绝）跑通。
+
 ## v0.5.3 — 2026-10-23 · 移除 SSH 终端通道
 
 SSH 通道整个拿掉，Web Shell 成为面板里唯一的 TUI 入口。这不是「再关一个开关」，而是把

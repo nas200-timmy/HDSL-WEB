@@ -186,14 +186,6 @@ it backs the PTY glue of the web terminal, and nothing else.
       MIT License.
       https://www.slf4j.org/license.html
 
-  Apache MINA SSHD (org.apache.sshd:sshd-core, sshd-common; the sshd-eddsa
-  classes ship inside sshd-common) and net.i2p.crypto:eddsa
-      Apache License 2.0.
-      The embedded SSH terminal channel; both absent from a `-PnoSsh`
-      build.
-      https://mina.apache.org/sshd-project/
-      https://github.com/str4d/ed25519-java
-
   JetBrains annotations (org.jetbrains:annotations) and IntelliJ language
   annotations (org.intellij:annotations)
       Apache License 2.0.
@@ -230,6 +222,21 @@ it backs the PTY glue of the web terminal, and nothing else.
   TypeScript (React and react-router-dom under the MIT License, Vite under the
   MIT License, TypeScript under the Apache License 2.0).  The licence texts are
   the ones published with those packages.
+
+  The terminal client under client/hdsl-tui (the Go binary `hdsl-tui`) vendors
+  its dependencies into the repository under client/hdsl-tui/vendor/, so it
+  builds offline.  Those vendored sources are:
+
+    gorilla/websocket (github.com/gorilla/websocket)
+        BSD 3-Clause License.
+        https://github.com/gorilla/websocket
+
+    golang.org/x/term and golang.org/x/sys
+        BSD 3-Clause License.
+        https://cs.opensource.google/go/x/term
+        https://cs.opensource.google/go/x/sys
+
+  Each vendored package keeps its own LICENSE file next to its sources.
 
 --------------------------------------------------------------------------------
 

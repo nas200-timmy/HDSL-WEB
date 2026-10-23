@@ -184,6 +184,32 @@ nginx/Caddy 也支持，`Host` 必须原样透传。细节见 [docs/deployment.m
 - **HTTPS 检查**：HTTP 下这一页会直接弹「当前环境不安全」并给出两条路——去「HTTPS 证书」上传
   证书，或生成自签名证书继续（浏览器会告警）。
 
+### 在终端里用：hdsl-tui
+
+浏览器之外还有一个终端客户端 `hdsl-tui`：适合手机 SSH、服务器 console、没有图形界面
+的环境。它只调用面板现有的 REST 与 WebSocket（`docs/terminal-protocol.md`），不新增端口，
+也不需要反向代理。
+
+一键安装（Linux / macOS）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nas200-timmy/HDSL-WEB/main/scripts/install-hdsl-tui.sh | sh
+hdsl-tui https://panel.example.com
+```
+
+Windows 用 PowerShell 版的同一个脚本（`scripts/install-hdsl-tui.ps1`）。也可以直接从
+[Releases](https://github.com/nas200-timmy/HDSL-WEB/releases) 下载
+`hdsl-tui-<版本>-<os>-<arch>[.exe]`（linux / darwin / windows，amd64 / arm64），
+用 `SHA256SUMS-client.txt` 校验。
+
+- 客户端与面板**同版本号发布**；`hdsl-tui --version` 打印自己的版本与协议号。
+- 依赖源码随仓库提交（`vendor/`），`install-hdsl-tui.sh --build` 可以在没有预编译产物时
+  用本机 Go 离线编译。
+- 每次启动都要输面板密码 + 开发者密码（提权 30 分钟滑动）；凭证只存在内存里，不落盘。
+- 断开用 `Ctrl-]` 再按 `q`，agent 继续跑；重连会接回同一个会话并回放最近输出。
+- Windows 客户端支持 Windows Terminal 与 conhost（自动打开 VT 处理与 UTF-8 代码页）；
+  **Windows 面板**仍只有桌面控制台，客户端会打印服务端给的提示后退出。
+
 ### 常见错误
 
 | 现象 | 原因与处理 |
@@ -196,8 +222,10 @@ nginx/Caddy 也支持，`Host` 必须原样透传。细节见 [docs/deployment.m
 | `terminal_already_open` | 该实例已有一个终端，先去那个窗口里操作或停止 |
 | 关掉网页后 agent 还在跑 | 这是设计行为：关窗只 detach。要真正结束请用 `/exit`、底栏「停止」，或退出面板进程 |
 | Windows 点终端返回 409 | 面板以服务方式运行，没有交互桌面；改在控制台/RDP 会话里启动面板 |
+| 命令行客户端报 `mode=desktop` | 那台面板跑在 Windows 上，终端只能开在它的桌面上；换 Linux/macOS 面板再远程接入 |
 
-更细的架构、PTY 实现与验收标准见 [docs/web-shell.md](docs/web-shell.md)。
+更细的架构、PTY 实现与验收标准见 [docs/web-shell.md](docs/web-shell.md)；
+客户端安装、退出码与 Windows 细节见 [client/README.md](client/README.md)。
 
 ## 快速开始
 
