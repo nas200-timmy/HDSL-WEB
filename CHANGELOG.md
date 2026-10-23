@@ -2,7 +2,7 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## v0.6.0 — 2026-10-23 · 移除 SSH 终端通道
+## v0.5.3 — 2026-10-23 · 移除 SSH 终端通道
 
 SSH 通道整个拿掉，Web Shell 成为面板里唯一的 TUI 入口。这不是「再关一个开关」，而是把
 协议栈、认证面和监听端口一起从二进制里删掉。
@@ -92,7 +92,7 @@ SSH 通道整个拿掉，Web Shell 成为面板里唯一的 TUI 入口。这不�
 
 `ssh -p 3022 hdsl@主机` → TUI 门禁（独立开发者密码）→ 编号菜单（dsh 实例 / 品牌实例 /
 恢复 dsh 会话）→ 选定项的 `dsh tui [--resume]` 终端直接接管当前 SSH 会话。该通道已在
-v0.6.0 整体移除（原因是 Web Shell 已覆盖同一需求，且 SSH 自带协议 CVE 面）。
+v0.5.3 整体移除（原因是 Web Shell 已覆盖同一需求，且 SSH 自带协议 CVE 面）。
 
 - **审计设施（M0）**：append-only JSONL 审计日志（`/data/logs/audit.jsonl`，0600、按日轮转），
   事件 `{ts, actor, channel, action, object, outcome, ip}`；登录/实例/TLS 等既有操作全部接线。

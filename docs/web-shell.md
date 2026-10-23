@@ -1,6 +1,6 @@
 # Web Shell：实例级原地终端
 
-> 状态：已上线。v0.6.0 起它是面板里唯一的 TUI 入口（SSH 通道已移除）。
+> 状态：已上线。v0.5.3 起它是面板里唯一的 TUI 入口（SSH 通道已移除）。
 > 主要适配 **Kimi Code** 与 **OpenCode** 的原生 TUI；dsh 以网页为主，TUI 是插件能力，
 > 列为次要目标。
 
@@ -15,7 +15,7 @@
 ## 2. 不是什么
 
 - 不是通用 shell：没有自由命令、文件上传下载、端口转发、切换用户。
-- 不是 SSH 的替代协议：SSH 通道已在 v0.6.0 移除，面板里唯一的终端入口就是这个 Web Shell。
+- 不是 SSH 的替代协议：SSH 通道已在 v0.5.3 移除，面板里唯一的终端入口就是这个 Web Shell。
 - 不是沙箱：agent 以面板进程的用户身份运行。
 
 ## 3. 使用流程
@@ -141,7 +141,7 @@ web/ws/TerminalWebSocket      WSS /ws/terminal/{ticket}
 | 5 | xterm 前端 + 底栏启停 | 完成 |
 | 6 | dsh 适配 | 完成（dsh 终端） |
 | 7 | ~~Windows ConPTY~~ | **取消**：Windows 用桌面终端（见 §7.1） |
-| 8 | 移除 SSH 通道（v0.6.0） | 完成：`web/ssh`、MINA 与 eddsa 已删除 |
+| 8 | 移除 SSH 通道（v0.5.3） | 完成：`web/ssh`、MINA 与 eddsa 已删除 |
 
 品牌顺序：**kimi → opencode → dsh（可选）**。
 
