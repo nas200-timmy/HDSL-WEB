@@ -37,18 +37,15 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.function.BooleanSupplier;
 
-/// The developer mode's own door: the second factor, independent of whether
-/// the SSH channel is in this build.
+/// The developer mode's own door: the second factor behind the web terminal.
 ///
 /// `POST /api/developer/elevate` proves the password; `GET /api/developer/status`
 /// answers whether the caller is elevated; `POST /api/developer/password` sets
-/// or changes it (panel password confirmation, like the SSH settings route);
+/// or changes it (panel password confirmation, like the TLS settings route);
 /// `POST /api/developer/password/clear` removes it.
 ///
-/// It lives outside the SSH package on purpose: the web terminal needs the
-/// same second factor, and the default build carries this endpoint. The SSH
-/// settings servlet keeps `/api/ssh/elevate` and the password routes for
-/// compatibility, backed by the same [DeveloperElevation] and [DeveloperAuth].
+/// The routes are backed by [DeveloperElevation] and [DeveloperAuth], which
+/// the terminal's own gate shares.
 @NotNullByDefault
 public final class DeveloperApiServlet extends HttpServlet {
 

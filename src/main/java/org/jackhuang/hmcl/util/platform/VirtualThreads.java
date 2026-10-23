@@ -73,8 +73,8 @@ public final class VirtualThreads {
 
     /// Starts `task` on its own thread, joining is the caller's business.
     ///
-    /// The SSH attach pump needs a [Thread] handle (it joins the stdout/stderr
-    /// pumps before returning), which the executor above cannot hand out.
+    /// The PTY pump needs a [Thread] handle (it joins the read loop before
+    /// returning), which the executor above cannot hand out.
     ///
     /// @return the started thread: virtual on Java 21+, a daemon platform
     ///         thread on 17

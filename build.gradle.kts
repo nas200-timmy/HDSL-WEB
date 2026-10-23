@@ -22,19 +22,6 @@ group = "org.jackhuang.hmcl"
 // desktop build is — the jar name just needs to be stable.
 version = (findProperty("releaseVersion") as String?)?.takeIf { it.isNotBlank() } ?: "0.1.0-dev"
 
-// SSH is opt-in: the default jar carries no SSH terminal channel — no
-// `web/ssh` classes, no MINA/eddsa. `-PwithSsh` (valueless) adds the channel
-// back. This is the "last resort" posture: the web terminal is the everyday
-// door, SSH is for a tailnet.
-//
-// `-PwithSsh` carries no value, which Gradle hands over as the empty string;
-// `String::toBoolean` would read that as false, so presence alone means on.
-// `-PwithSsh=false` keeps the default.
-val withSsh = providers.gradleProperty("withSsh")
-    .map { it.isEmpty() || it.toBoolean() }
-    .getOrElse(false)
-val noSsh = !withSsh
-
 application {
     mainClass = "org.jackhuang.hmcl.web.Main"
 }
@@ -69,29 +56,8 @@ dependencies {
     implementation(libs.bcpkix)
 
     // The PTY glue behind the web terminal (docs/web-shell.md): JNA is the
-    // only native bridge in this build, and the terminal is present in every
-    // variant — it is not part of the -PnoSsh switch.
+    // only native bridge in this build.
     implementation(libs.jna)
-
-    // The SSH terminal channel: embedded Apache MINA SSHD server (docs/ssh-terminal-channel.md).
-    // sshd-core also carries the SshClient the integration tests connect with.
-    // Both the channel and its dependencies are absent from a `-PnoSsh`
-    // build: the minimal image carries no MINA/eddsa at all (docs §M4). The
-    // sources still compile against them (compileOnly), and the test suite
-    // still runs with them — only the shipped jar loses them.
-    if (noSsh) {
-        compileOnly(libs.mina.sshd)
-        compileOnly(libs.eddsa)
-        testImplementation(libs.mina.sshd)
-        testImplementation(libs.eddsa)
-    } else {
-        implementation(libs.mina.sshd)
-        // Ed25519 for the channel above. sshd-common declares this dependency
-        // OPTIONAL, so Gradle never resolves it transitively — without it every
-        // Ed25519 path (authorized_keys verification, the EdDSA host key) fails
-        // at runtime with "EdDSA provider not supported".
-        implementation(libs.eddsa)
-    }
 
     // Jetty speaks slf4j; this binding forwards it to java.util.logging, the
     // same sink HDSL-web's own logging story is built on. Server code itself
@@ -291,14 +257,6 @@ tasks.named<ShadowJar>("shadowJar") {
     // Dependency signatures do not survive merging, and a stale one makes the
     // JVM refuse to start.
     exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA", "META-INF/INDEX.LIST")
-    // The -PnoSsh variant ships no SSH terminal channel: the channel's own
-    // classes and MINA/eddsa stay out of the image. HdslServer meets the
-    // absence through SshBridge (reflection), so nothing else changes.
-    if (noSsh) {
-        exclude("org/jackhuang/hmcl/web/ssh/**")
-        exclude("org/apache/sshd/**")
-        exclude("net/i2p/**")
-    }
     manifest {
         attributes(
             "Main-Class" to "org.jackhuang.hmcl.web.Main",

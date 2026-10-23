@@ -57,7 +57,7 @@ class AuditLogTest {
         AuditLog.init(dataDir.resolve("logs"));
         AuditLog.log(AuditLog.Channel.WEB, "login", null, "success", "alice", "127.0.0.1");
         AuditLog.log(AuditLog.Channel.WEB, "instance.create", "srv", "success", "alice", null);
-        AuditLog.log(AuditLog.Channel.SSH, "session.open", null, "blocked", null, "10.0.0.9");
+        AuditLog.log(AuditLog.Channel.TERMINAL, "session.open", null, "blocked", null, "10.0.0.9");
 
         assertTrue(Files.isRegularFile(todayFile()));
         List<String> lines = Files.readAllLines(todayFile());

@@ -146,8 +146,8 @@ public final class AuthService {
 
     /// Whether a token still names a live session, without sliding its expiry.
     ///
-    /// [SshApiServlet] keys its developer-mode elevation by the session token,
-    /// so it asks this on every elevated call: a logged-out or revoked session
+    /// The developer endpoints key their elevation by the session token, so
+    /// they ask this on every elevated call: a logged-out or revoked session
     /// stops being elevated at the same moment it stops being a session.
     ///
     /// @param token the session token

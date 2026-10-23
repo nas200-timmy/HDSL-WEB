@@ -42,7 +42,7 @@ import java.util.Set;
 /// thing a crash takes away. Every entry carries:
 ///
 /// ```
-/// {ts, channel(web|ssh), action, object?, outcome(success|failure|blocked), actor?, ip?}
+/// {ts, channel(web|terminal), action, object?, outcome(success|failure|blocked), actor?, ip?}
 /// ```
 ///
 /// Meta events only: connections, toggles, authentications, spawns. What a
@@ -57,7 +57,6 @@ public final class AuditLog {
     /// Which door the event came through.
     public enum Channel {
         WEB("web"),
-        SSH("ssh"),
         TERMINAL("terminal");
 
         private final String wireName;

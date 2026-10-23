@@ -78,8 +78,7 @@ public final class LoginThrottle {
     private final Map<String, Attempts> byAddress = new HashMap<>();
 
     /// The policy this instance enforces. The constants above are the panel
-    /// sign-in defaults; the SSH gate asks for the same failure count with a
-    /// longer refusal (30 minutes), and passes that in here.
+    /// sign-in defaults; a caller may pass a different policy.
     private final int maxFailures;
     private final Duration window;
     private final Duration block;

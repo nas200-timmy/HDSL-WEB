@@ -23,8 +23,6 @@ import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.jackhuang.hmcl.dsh.DshDoctor;
-import org.jackhuang.hmcl.web.config.ServerConfig;
-import org.jackhuang.hmcl.web.server.SshBridge;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -48,19 +46,9 @@ import java.util.Locale;
 /// report's own words decide the status — `FAILED` / `NOT FOUND` /
 /// `UNSUPPORTED` are failures, `INCOMPLETE` / `SHORTAGE` / `skipped` /
 /// `unavailable` are warnings. The report's exit code (its own verdict) becomes
-/// the `overall` check. Two checks are not the domain's to print and are
-/// appended after the parsed ones: the SSH channel's platform row and its
-/// state row (see docs/ssh-terminal-channel.md).
+/// the `overall` check.
 @NotNullByDefault
 public final class DoctorApiServlet extends HttpServlet {
-
-    private final ServerConfig config;
-    private final SshBridge ssh;
-
-    public DoctorApiServlet(ServerConfig config, SshBridge ssh) {
-        this.config = config;
-        this.ssh = ssh;
-    }
 
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -94,62 +82,10 @@ public final class DoctorApiServlet extends HttpServlet {
         }
         checks.add(overall);
 
-        checks.add(sshPlatformCheck());
-        checks.add(sshStateCheck());
-
         JsonObject body = new JsonObject();
         body.add("checks", checks);
         body.addProperty("generatedAt", Instant.now().toString());
         Json.write(response, body);
-    }
-
-    /// The platform row of the SSH channel: Linux passes, macOS passes with
-    /// the "unverified" label the threat model requires, everything else
-    /// fails — the same verdict the service itself gates on. A build without
-    /// the channel (default build) gets its own honest row.
-    private JsonObject sshPlatformCheck() {
-        JsonObject check = new JsonObject();
-        check.addProperty("id", "ssh-platform");
-        check.addProperty("name", "SSH platform");
-        String verdict = ssh.platformVerdict();
-        if (verdict == null) {
-            check.addProperty("status", "ok");
-            check.addProperty("detail", "此构建不含 SSH 终端通道（默认构建，需要时用 -PwithSsh）");
-        } else if (verdict.equals("supported")) {
-            check.addProperty("status", "ok");
-            check.addProperty("detail", "Linux：SSH 终端通道完整支持");
-        } else if (verdict.equals("supported_unverified")) {
-            check.addProperty("status", "warn");
-            check.addProperty("detail", "macOS：SSH 终端通道放行，但尚未真机实测");
-        } else {
-            check.addProperty("status", "fail");
-            check.addProperty("detail", "此平台不支持 SSH 终端通道");
-        }
-        return check;
-    }
-
-    /// The channel state row: off is a green check ("已关闭 ✓" is the
-    /// healthy default), on-and-listening is green with the address, on-but-
-    /// not-listening is a warning that names the two usual causes.
-    private JsonObject sshStateCheck() {
-        JsonObject check = new JsonObject();
-        check.addProperty("id", "ssh");
-        check.addProperty("name", "SSH channel");
-        if (!ssh.present()) {
-            check.addProperty("status", "ok");
-            check.addProperty("detail", "此构建不含 SSH 终端通道（默认构建，需要时用 -PwithSsh）");
-        } else if (!config.ssh.enabled) {
-            check.addProperty("status", "ok");
-            check.addProperty("detail", "SSH 终端通道已关闭（默认，无监听端口）");
-        } else if (ssh.isRunning()) {
-            check.addProperty("status", "ok");
-            check.addProperty("detail", "SSH 终端通道监听中：" + config.ssh.bindHost + ":" + ssh.activePort()
-                    + (config.ssh.passwordAuth ? "；口令登录已开启" : "；仅密钥登录"));
-        } else {
-            check.addProperty("status", "warn");
-            check.addProperty("detail", "SSH 终端通道已启用但未运行（平台不支持或启动失败，见日志）");
-        }
-        return check;
     }
 
     /// One section of the plain-text report: its heading and the body under it.

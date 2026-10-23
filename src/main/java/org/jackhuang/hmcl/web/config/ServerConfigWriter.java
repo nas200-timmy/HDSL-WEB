@@ -100,34 +100,6 @@ public final class ServerConfigWriter {
         writeAtomically(yamlFile, root);
     }
 
-    /// Records the current SSH channel settings in `server.yaml`: the toggle
-    /// and the password-auth switch write here so a restart loads what the
-    /// panel last applied. The other two fields round-trip with them, so the
-    /// file never describes a half-edited channel.
-    ///
-    /// @param dataDir the data directory `server.yaml` lives in
-    /// @param ssh     the settings to persist
-    /// @throws IOException when the file cannot be read or written
-    public static void updateSsh(Path dataDir, ServerConfig.Ssh ssh) throws IOException {
-        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
-        Map<String, Object> root = readExisting(yamlFile);
-
-        Object sshValue = root.get("ssh");
-        Map<String, Object> section = new LinkedHashMap<>();
-        if (sshValue instanceof Map<?, ?> map) {
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                section.put(String.valueOf(entry.getKey()), entry.getValue());
-            }
-        }
-        section.put("enabled", ssh.enabled);
-        section.put("bind_host", ssh.bindHost);
-        section.put("port", ssh.port);
-        section.put("password_auth", ssh.passwordAuth);
-        root.put("ssh", section);
-
-        writeAtomically(yamlFile, root);
-    }
-
     /// Reads the existing document, or an empty map when there is none.
     private static Map<String, Object> readExisting(Path yamlFile) throws IOException {
         Map<String, Object> root = new LinkedHashMap<>();

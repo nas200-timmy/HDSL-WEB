@@ -119,11 +119,8 @@ public final class HdslServer {
     /// The ACP console bridge; its processes outlive `/ws` connections and are
     /// all stopped when the server stops.
     private final AcpSessionManager acpSessions;
-    /// The SSH terminal channel, behind reflection so the default build can
-    /// omit the channel's classes entirely (see [SshBridge]).
-    private final SshBridge ssh;
-    /// The web terminal's sessions (docs/web-shell.md). Present in every build:
-    /// the terminal is not part of the build switch.
+    /// The web terminal's sessions (docs/web-shell.md), the only way into a
+    /// TUI from the panel.
     private final org.jackhuang.hmcl.web.terminal.TerminalManager terminals;
     private final Logger logger;
     private final AtomicLong startedAtMillis;
@@ -132,7 +129,7 @@ public final class HdslServer {
     private HdslServer(Server server, HttpConfiguration baseHttpConfig, ServerConnector mainConnector,
                        @Nullable ServerConnector redirectConnector,
                        @Nullable SslContextFactory.Server sslContextFactory, WebSocketClient proxyWebSocketClient,
-                       AcpSessionManager acpSessions, SshBridge ssh,
+                       AcpSessionManager acpSessions,
                        org.jackhuang.hmcl.web.terminal.TerminalManager terminals,
                        Logger logger, AtomicLong startedAtMillis) {
         this.server = server;
@@ -142,7 +139,6 @@ public final class HdslServer {
         this.sslContextFactory = sslContextFactory;
         this.proxyWebSocketClient = proxyWebSocketClient;
         this.acpSessions = acpSessions;
-        this.ssh = ssh;
         this.terminals = terminals;
         this.logger = logger;
         this.startedAtMillis = startedAtMillis;
@@ -260,9 +256,8 @@ public final class HdslServer {
         // runtime; the reference is filled once the instance exists.
         java.util.concurrent.atomic.AtomicReference<HdslServer> self = new java.util.concurrent.atomic.AtomicReference<>();
 
-        // The developer credential and its elevation live in a permanent
-        // package: the web terminal needs the same second factor as the SSH
-        // management routes, including in the default build.
+        // The developer credential and its elevation gate the web terminal and
+        // the other sensitive developer routes (docs/web-shell.md §4.1).
         org.jackhuang.hmcl.web.developer.DeveloperAuth developerAuth;
         try {
             developerAuth = org.jackhuang.hmcl.web.developer.DeveloperAuth.open(config.dataDir);
@@ -276,15 +271,6 @@ public final class HdslServer {
             HdslServer live = self.get();
             return live != null && live.tlsActive();
         };
-
-        // The SSH terminal channel service (docs/ssh-terminal-channel.md),
-        // loaded reflectively so the default build can leave the channel's
-        // classes and the MINA/eddsa jars out of the image: an absent
-        // channel is a log line, not a crash. The HTTPS guard inside the
-        // management servlet reads this server's live TLS state through
-        // `self`, the same reference the TLS settings endpoint uses.
-        SshBridge ssh = SshBridge.load(config, authService, developerAuth, developerElevation,
-                tlsActive, logger);
 
         ServletContextHandler context = new ServletContextHandler();
         context.setContextPath("/");
@@ -305,7 +291,7 @@ public final class HdslServer {
         packsHolder.getRegistration().setMultipartConfig(packMultipart);
         context.addServlet(packsHolder, "/api/packs/*");
         context.addServlet(new ServletHolder(new ExportsApiServlet(config)), "/api/exports/*");
-        context.addServlet(new ServletHolder(new DoctorApiServlet(config, ssh)), "/api/doctor");
+        context.addServlet(new ServletHolder(new DoctorApiServlet()), "/api/doctor");
         context.addServlet(new ServletHolder(new AccountsApiServlet(eventBus)), "/api/accounts/*");
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
@@ -321,11 +307,6 @@ public final class HdslServer {
         ServletHolder tlsHolder = new ServletHolder(new TlsApiServlet(config, certificates, self::get));
         tlsHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(tlsHolder, "/api/settings/*");
-        // The SSH channel's management surface; nothing is registered at all
-        // when the build omits the channel (default).
-        if (ssh.apiServlet() != null) {
-            context.addServlet(new ServletHolder(ssh.apiServlet()), "/api/ssh/*");
-        }
         context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService, config.basePath)), "/i/*");
         context.addServlet(new ServletHolder(new StaticServlet(config.basePath)), "/");
         // Anything a servlet lets escape becomes a JSON 500, not Jetty's HTML
@@ -381,7 +362,7 @@ public final class HdslServer {
         server.setHandler(handler);
 
         HdslServer built = new HdslServer(server, httpConfig, mainConnector, redirectConnector, ssl,
-                proxyWebSocketClient, acpSessions, ssh, terminals, logger, startedAtMillis);
+                proxyWebSocketClient, acpSessions, terminals, logger, startedAtMillis);
         self.set(built);
         return built;
     }
@@ -468,12 +449,6 @@ public final class HdslServer {
         proxyWebSocketClient.start();
         server.start();
         startedAtMillis.set(System.currentTimeMillis());
-        // The SSH channel starts after the panel is up: its management API is
-        // already serving by the time the listener accepts its first session.
-        // The start is itself a silent no-op unless the channel is enabled —
-        // "off = no attack surface" is its own guarantee — and a no-op too
-        // on builds that omit the channel entirely.
-        ssh.start();
         // The brand version pickers read the npm registries; warming the cache
         // off-thread keeps the first picker render instant without delaying
         // the health check.
@@ -513,8 +488,8 @@ public final class HdslServer {
         return sslContextFactory != null;
     }
 
-    /// Whether the panel is serving HTTPS **right now** — the guard every
-    /// sensitive SSH-management endpoint checks instead of trusting headers.
+    /// Whether the panel is serving HTTPS **right now** — the guard the
+    /// developer endpoints check instead of trusting headers.
     /// Reads the live connector (an [SslConnectionFactory] on it) so a
     /// runtime switch is reflected the moment it completes; the boot-time
     /// identity reference is the fallback.
@@ -711,9 +686,6 @@ public final class HdslServer {
     /// Stops Jetty, waiting for in-flight connections to drain, and ends every
     /// ACP console the bridge is holding.
     public void stop() throws Exception {
-        // Symmetric with start(): the SSH listener goes down with the panel
-        // that owns it — no port outliving the process that opened it.
-        ssh.stop();
         // The terminal processes are children of the panel; closing the
         // manager takes their process groups with it.
         terminals.close();

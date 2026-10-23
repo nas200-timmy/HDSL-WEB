@@ -38,8 +38,7 @@ import java.util.Map;
 /// (`node <bin.js> --profile web …`); appending `tui` to that would keep the
 /// web profile and pass `tui` as an app argument. The TUI is
 /// `dsh tui [--resume <id>]`, i.e. the interpreter and entry of the plan with
-/// the `tui` subcommand in place of the web flags — the same shape
-/// [org.jackhuang.hmcl.web.ssh.DshAttachSupport] uses.
+/// the `tui` subcommand in place of the web flags.
 @NotNullByDefault
 public final class DshTui {
 

@@ -25,7 +25,7 @@ import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
 
 /// The fifteen-minute developer-mode elevation, shared by every door that
-/// needs it: the SSH management routes and the web terminal.
+/// needs it: the developer routes and the web terminal.
 ///
 /// The key is the **session token**, never the username: two browser sessions
 /// of the same account must not share an elevation, and logging one out must

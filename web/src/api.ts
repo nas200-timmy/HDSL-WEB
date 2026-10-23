@@ -19,14 +19,6 @@ import type {
   RegistryTestResult,
   SessionInfo,
   SkillInfo,
-  SshBindResult,
-  SshDevPasswordResult,
-  SshElevateResult,
-  SshGeneratedKeypair,
-  SshKeyEntry,
-  SshPasswordAuthResult,
-  SshStatus,
-  SshToggleResult,
   Task,
   TlsSettings,
   TlsUploadResult,
@@ -289,48 +281,6 @@ export const api = {
 
   uploadTls: (fd: FormData) =>
     request<TlsUploadResult>("/api/settings/tls", { method: "POST", body: fd }),
-
-  // ---------- SSH 终端通道（敏感操作要求 HTTPS + 开发者模式提权，见 SshApiServlet） ----------
-
-  sshStatus: () => request<SshStatus>("/api/ssh/status"),
-
-  /** 证明开发者密码，给当前会话提权 15 分钟（滑动续期）。后端用 401 表示密码错误——
-   *  那是业务失败不是会话过期，必须跳过全局 401 → 回登录页的处理，交给调用方展示 */
-  sshElevate: (password: string) =>
-    request<SshElevateResult>("/api/ssh/elevate", jsonInit("POST", { password }), {
-      skipUnauthorizedRedirect: true,
-    }),
-
-  /** 设置/修改开发者密码；已设置时必须带 currentDevPassword。设置或修改都会吊销所有提权 */
-  sshSetDevPassword: (body: {
-    adminPassword: string;
-    password: string;
-    confirm: string;
-    currentDevPassword?: string;
-  }) => request<SshDevPasswordResult>("/api/ssh/dev-password", jsonInit("POST", body)),
-
-  sshClearDevPassword: (adminPassword: string) =>
-    request<SshDevPasswordResult>("/api/ssh/dev-password/clear", jsonInit("POST", { adminPassword })),
-
-  sshToggle: (enabled: boolean) =>
-    request<SshToggleResult>("/api/ssh/toggle", jsonInit("POST", { enabled })),
-
-  /** 改 SSH 监听绑定地址；运行中会热重启监听器，绑不上后端回滚到旧值 */
-  sshSetBind: (bind: string) =>
-    request<SshBindResult>("/api/ssh/bind", jsonInit("POST", { bind })),
-
-  sshKeys: () => request<{ keys: SshKeyEntry[] }>("/api/ssh/keys"),
-
-  sshAddKey: (key: string) => request<{ ok: boolean }>("/api/ssh/keys", jsonInit("POST", { key })),
-
-  /** 按 1-based 行号删除（authorized_keys 的 index 语义）；DELETE 带 body 走 jsonInit */
-  sshRemoveKey: (index: number) => request<{ ok: boolean }>("/api/ssh/keys", jsonInit("DELETE", { index })),
-
-  /** 服务端生成 RSA-3072 密钥对：私钥只返回这一次，公钥自动写入 authorized_keys */
-  sshGenerateKeypair: () => request<SshGeneratedKeypair>("/api/ssh/generate-keypair", { method: "POST" }),
-
-  sshPasswordAuth: (enabled: boolean) =>
-    request<SshPasswordAuthResult>("/api/ssh/password-auth", jsonInit("POST", { enabled })),
 
   // ---------- 下载源（npm registry） ----------
 

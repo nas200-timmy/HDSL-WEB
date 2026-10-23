@@ -20,11 +20,6 @@ jetty = "12.0.39"
 snakeyaml-engine = "2.9"
 bouncycastle = "1.86"
 slf4j = "2.0.20"
-mina-sshd = "2.12.1"
-# Ed25519 for Apache MINA sshd. Optional dependency of sshd-common: Gradle
-# never transitively resolves optional Maven dependencies, so the version
-# is pinned here and declared explicitly in build.gradle.kts.
-eddsa = "0.3.0"
 # JNA is used only by the web terminal's PTY glue (docs/web-shell.md).
 # Dual-licensed LGPL-2.1 / Apache-2.0; this build relies on the Apache-2.0 arm,
 # which is GPL-3.0 compatible.
@@ -57,13 +52,6 @@ bcpkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycast
 slf4j-jdk14 = { module = "org.slf4j:slf4j-jdk14", version.ref = "slf4j" }
 # The web terminal's PTY glue (docs/web-shell.md). Apache-2.0 arm only.
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
-# The SSH terminal channel (M1): embedded SSH server (and, in tests, client).
-mina-sshd = { module = "org.apache.sshd:sshd-core", version.ref = "mina-sshd" }
-# Ed25519 for the SSH channel. sshd-common marks this OPTIONAL, so Gradle
-# does not resolve it transitively — without it every Ed25519 path
-# (authorized_keys checks, the EdDSA host key) fails at runtime with
-# "EdDSA provider not supported".
-eddsa = { module = "net.i2p.crypto:eddsa", version.ref = "eddsa" }
 
 [plugins]
 shadow = { id = "com.gradleup.shadow", version = "9.6.1" }

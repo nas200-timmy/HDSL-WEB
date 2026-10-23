@@ -35,9 +35,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/// The developer second factor in a build that has no SSH at all: the default
-/// build still carries the password routes and the elevation endpoint, and the
-/// web terminal depends on both.
+/// The developer second factor: the password routes and the elevation endpoint
+/// are always present, and the web terminal depends on both.
 class DeveloperApiServletTest {
 
     private static final String PANEL_PASSWORD = "panel-password-1";
@@ -47,7 +46,7 @@ class DeveloperApiServletTest {
     Path dataDir;
 
     @Test
-    void passwordLifecycleAndElevationWorkWithoutSsh() throws Exception {
+    void passwordLifecycleAndElevationWork() throws Exception {
         try (TestSupport.RunningServer running = TestSupport.start(dataDir,
                 Map.of(UserStore.ENV_ADMIN_PASSWORD, PANEL_PASSWORD), config -> {
                     config.bindHost = "127.0.0.1";

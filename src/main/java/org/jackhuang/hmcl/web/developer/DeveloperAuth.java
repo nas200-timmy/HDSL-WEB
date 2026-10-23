@@ -44,13 +44,11 @@ import java.util.EnumSet;
 import java.util.Set;
 
 /// The developer password: a credential separate from the panel password that
-/// gates every sensitive SSH operation (docs/ssh-terminal-channel.md).
+/// gates the sensitive developer routes and the web terminal (docs/web-shell.md).
 ///
-/// It plays two roles with the same secret: the web developer mode (elevate
-/// before touching keys, the toggle, or the password-auth switch — the thing
-/// that stops a stolen web session from planting a key and turning a
-/// one-off login into a permanent SSH backdoor) and, from M2, the TUI gate in
-/// the SSH channel itself.
+/// It is the second factor that stops a stolen web session from opening a
+/// terminal on an instance; the same secret also guards the developer routes
+/// that change it.
 ///
 /// The hash lives apart from the user store at `<data>/auth/developer.json`:
 /// PBKDF2WithHmacSHA256 with the same parameters as [UserStore] (16-byte
