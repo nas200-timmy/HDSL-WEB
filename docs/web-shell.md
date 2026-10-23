@@ -80,6 +80,20 @@ Windows 桌面终端不增加**本地**攻击面：能坐到这台机器前、�
 - **修改开发者密码**：需要当前开发者密码 + 面板密码（与设置时同一套确认）；成功后
   所有已提权的会话立即失效，需要重新验证。
 
+### 4.3 强制 HTTPS 与自签名权宜
+
+开发者模式和终端都只在面板**此刻真的在讲 TLS** 时可用（读的是主连接器，不是配置里的
+`https.enabled`）：
+
+- HTTP 下进入「开发者模式」会直接弹出「当前环境不安全」的提示，并指引到「HTTPS 证书」；
+  终端按钮在实例列表里隐藏，直接调 `POST .../terminal` 返回 403 `insecure_transport`。
+- 没有证书时可以选择生成自签名证书：`POST /api/settings/tls/self-signed` 生成（或复用）
+  `<data>/certs/self-signed*.pem`，把 `https.enabled` 写进 `server.yaml`，在同一端口热切换
+  连接器。浏览器会提示证书不受信任，这是预期行为；它只适合内网或临时使用。
+- 「HTTPS 证书」页顶部同样有红框说明，并在 HTTPS 未启用时提供同一个按钮；已经配置了真实
+  证书（`https.cert_file` / `https.pkcs12_file`）时，后端拒绝回退到自签名
+  （409 `certificate_already_configured`），避免误把线上身份换掉。
+
 ## 5. 架构
 
 ```

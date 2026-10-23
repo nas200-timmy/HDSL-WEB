@@ -22,6 +22,11 @@ SSH 通道整个拿掉，Web Shell 成为面板里唯一的 TUI 入口。这不�
   也可用 `HDSL_WEB_SHELL_ENABLED` 覆盖；关掉后终端按钮隐藏、接口返回 403
   `web_shell_disabled`，已运行的终端不受影响）和修改开发者密码（当前开发者密码 +
   面板密码确认，成功后所有提权立即失效）。
+- **开发者模式与终端强制 HTTPS**：两者只在主连接器此刻讲 TLS 时可用。HTTP 下开发者模式
+  直接弹「当前环境不安全」并指引到 HTTPS 设置，终端按钮隐藏、接口返回 403
+  `insecure_transport`。没有证书时可以生成自签名证书（`POST /api/settings/tls/self-signed`，
+  同端口热切换，浏览器会告警）；「HTTPS 证书」页也加了红框说明和同一个按钮，已配置真实
+  证书时后端拒绝回退到自签名。
 - **升级说明**：旧 `server.yaml` 里的 `ssh:` 段会被忽略并在启动日志里打一条
   `unknown key` 警告，不需要手工删除；3022 不再监听；以前下载的 `-full.jar` 不再产出，
   从源码构建也只需要 `./gradlew build`。

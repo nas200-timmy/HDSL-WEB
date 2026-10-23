@@ -667,7 +667,7 @@ function InstancesCard({
     api
       .developerStatus()
       .then((status) => {
-        if (alive) setWebShellEnabled(status.webShellEnabled);
+        if (alive) setWebShellEnabled(status.webShellEnabled && status.https);
       })
       .catch(() => {
         // 读不到就维持显示：后端仍会拒绝打开，按钮不是那道门

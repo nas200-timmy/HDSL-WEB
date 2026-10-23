@@ -77,6 +77,14 @@ public final class TlsApiServlet extends HttpServlet {
     @Override
     protected void service(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String path = request.getPathInfo();
+        if ("/tls/self-signed".equals(path)) {
+            if (!"POST".equals(request.getMethod())) {
+                Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
+                return;
+            }
+            selfSigned(request, response);
+            return;
+        }
         if (!"/tls".equals(path)) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
             return;
@@ -207,6 +215,71 @@ public final class TlsApiServlet extends HttpServlet {
             config.https.enabled = true;
             body.addProperty("https", true);
             AuditLog.log(AuditLog.Channel.WEB, "tls.upload", isP12 ? "pkcs12" : "pem", "success",
+                    actorOf(request), request.getRemoteAddr());
+        } else if (result.error() != null) {
+            body.addProperty("error", result.error());
+        }
+        Json.write(response, body);
+    }
+
+    /// `POST /api/settings/tls/self-signed` — generates (or reuses) the
+    /// self-signed pair and switches the panel to HTTPS on the same port. The
+    /// stopgap path: the developer page and the HTTPS tab both use it when the
+    /// user insists on using a feature that requires TLS without owning a
+    /// certificate. The answer carries `{ok, https, restartRequired}` exactly
+    /// like an upload; the caller must treat `Connection: close` as "let go of
+    /// this connection and come back over https".
+    private void selfSigned(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        HdslServer running = server.get();
+        if (certificates == null || running == null) {
+            Json.error(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                    "no certificate manager is attached to this server");
+            return;
+        }
+        CertificateManager.Source current = certificates.getSource();
+        boolean uploaded = current == CertificateManager.Source.PEM
+                || current == CertificateManager.Source.PKCS12
+                || config.https.hasExplicitCertificate();
+        if (uploaded) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "certificate_already_configured: a real certificate is already configured; "
+                            + "remove https.cert_file / https.pkcs12_file to fall back to a self-signed pair");
+            return;
+        }
+        CertificateManager.Info info;
+        try {
+            info = certificates.useSelfSigned();
+        } catch (IOException | RuntimeException e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "the self-signed certificate could not be generated: " + e.getMessage());
+            return;
+        }
+        try {
+            ServerConfigWriter.enableSelfSigned(config.dataDir);
+        } catch (IOException | RuntimeException e) {
+            Logger.LOG.warning("The self-signed certificate is ready but server.yaml could not be updated", e);
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "the certificate is ready but server.yaml could not be updated: " + e.getMessage());
+            return;
+        }
+
+        boolean swapping = !running.isTls();
+        if (swapping) {
+            response.setHeader("Connection", "close");
+        }
+        HdslServer.TlsSwitch result = swapping
+                ? running.enableTls(certificates)
+                : running.reloadTls(certificates);
+        JsonObject body = new JsonObject();
+        body.addProperty("ok", result.ok());
+        body.addProperty("restartRequired", result.restartRequired());
+        body.addProperty("source", "self-signed");
+        body.addProperty("fingerprintSha256", info.fingerprintSha256());
+        body.addProperty("expires", info.expires().toString());
+        if (result.ok()) {
+            config.https.enabled = true;
+            body.addProperty("https", true);
+            AuditLog.log(AuditLog.Channel.WEB, "tls.self-signed", null, "success",
                     actorOf(request), request.getRemoteAddr());
         } else if (result.error() != null) {
             body.addProperty("error", result.error());

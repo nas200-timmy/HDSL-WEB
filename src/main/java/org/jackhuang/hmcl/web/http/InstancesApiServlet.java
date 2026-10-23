@@ -118,11 +118,14 @@ public final class InstancesApiServlet extends HttpServlet {
     private final AuthService auth;
     private final DeveloperAuth developerAuth;
     private final DeveloperElevation developerElevation;
+    /// Live TLS state of the main connector; the terminal is HTTPS-only.
+    private final java.util.function.BooleanSupplier tlsActive;
 
     public InstancesApiServlet(InstanceRuntime runtime, TaskService tasks, ServerConfig config,
                                TerminalManager terminals, TerminalTickets terminalTickets,
                                AuthService auth, DeveloperAuth developerAuth,
-                               DeveloperElevation developerElevation) {
+                               DeveloperElevation developerElevation,
+                               java.util.function.BooleanSupplier tlsActive) {
         this.runtime = runtime;
         this.tasks = tasks;
         this.config = config;
@@ -131,6 +134,7 @@ public final class InstancesApiServlet extends HttpServlet {
         this.auth = auth;
         this.developerAuth = developerAuth;
         this.developerElevation = developerElevation;
+        this.tlsActive = tlsActive;
     }
 
     @Override
@@ -696,6 +700,11 @@ public final class InstancesApiServlet extends HttpServlet {
         if (!config.webShell.enabled) {
             Json.error(response, HttpServletResponse.SC_FORBIDDEN,
                     "web_shell_disabled: the web shell is disabled in developer settings");
+            return;
+        }
+        if (!tlsActive.getAsBoolean()) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "insecure_transport: the web shell requires HTTPS; enable it in the HTTPS settings");
             return;
         }
         if (!developerAuth.isSet()) {

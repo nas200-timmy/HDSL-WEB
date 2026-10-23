@@ -82,6 +82,7 @@ public final class DeveloperApiServlet extends HttpServlet {
             body.addProperty("devPasswordSet", devAuth.isSet());
             body.addProperty("elevated", elevation.isElevated(keyOf(request), sessionAlive(request)));
             body.addProperty("webShellEnabled", config.webShell.enabled);
+            body.addProperty("https", tlsActive.getAsBoolean());
             Json.write(response, body);
             return;
         }

@@ -100,6 +100,34 @@ public final class ServerConfigWriter {
         writeAtomically(yamlFile, root);
     }
 
+    /// Switches `server.yaml` to HTTPS backed by the generated self-signed
+    /// pair: `https.enabled` on and every uploaded/configured file reference
+    /// removed, so a restart loads (or regenerates) the pair under
+    /// `<data>/certs/self-signed*.pem`. Files already on disk are left alone.
+    ///
+    /// @param dataDir the data directory `server.yaml` lives in
+    /// @throws IOException when the file cannot be read or written
+    public static void enableSelfSigned(Path dataDir) throws IOException {
+        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
+        Map<String, Object> root = readExisting(yamlFile);
+
+        Object httpsValue = root.get("https");
+        Map<String, Object> https = new LinkedHashMap<>();
+        if (httpsValue instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                https.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        https.put("enabled", true);
+        https.remove("cert_file");
+        https.remove("key_file");
+        https.remove("pkcs12_file");
+        https.remove("pkcs12_password");
+        root.put("https", https);
+
+        writeAtomically(yamlFile, root);
+    }
+
     /// Records the Web Shell switch in `server.yaml` (`web_shell.enabled`), so
     /// the developer page's choice survives a restart. Other keys in the
     /// section ride along untouched.

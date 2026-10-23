@@ -206,6 +206,11 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
         setMessage("Web Shell 已在「设置 → 开发者模式」里关闭");
         return;
       }
+      if (e instanceof ApiError && e.status === 403 && e.message.includes("insecure_transport")) {
+        setPhase("error");
+        setMessage("Web Shell 需要 HTTPS，请先在「设置 → HTTPS 证书」里启用");
+        return;
+      }
       if (e instanceof ApiError && e.status === 403) {
         setPhase("password");
         return;

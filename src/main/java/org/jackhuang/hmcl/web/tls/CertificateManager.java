@@ -483,6 +483,33 @@ public final class CertificateManager {
         https.pkcs12Password = "";
     }
 
+    /// Makes a self-signed identity the one this manager serves: reuses the
+    /// pair already under `<data>/certs/`, generates one otherwise. It does
+    /// **not** touch `server.yaml` and does not switch the connector — the
+    /// caller persists the choice and calls `enableTls`/`reloadTls`.
+    ///
+    /// @return what the certificate says about itself
+    /// @throws IOException when the pair cannot be read or generated
+    public synchronized Info useSelfSigned() throws IOException {
+        loadSelfSigned();
+        Info loaded = info();
+        if (loaded == null) {
+            throw new IOException("the self-signed certificate could not be loaded");
+        }
+        return loaded;
+    }
+
+    private void loadSelfSigned() throws IOException {
+        Path certPath = selfSignedCertPath();
+        Path keyPath = selfSignedKeyPath();
+        if (Files.exists(certPath) && Files.exists(keyPath)) {
+            install(buildKeyStoreFromPem(certPath, keyPath), Source.SELF_SIGNED);
+            logger.info("Reusing the self-signed certificate from " + certPath);
+        } else {
+            generateSelfSigned();
+        }
+    }
+
     /// What the current identity's certificate says about itself, for the
     /// settings endpoint; `null` when no material is loaded.
     public synchronized @Nullable Info info() {

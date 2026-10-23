@@ -280,7 +280,7 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new ApiServlet(
                 authService, authFilter, config.auth.disabled, Metadata.VERSION, startedAtMillis::get)), "/api/*");
         ServletHolder instancesHolder = new ServletHolder(new InstancesApiServlet(runtime, taskService, config, terminals, terminalTickets,
-                authService, developerAuth, developerElevation));
+                authService, developerAuth, developerElevation, tlsActive));
         instancesHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(instancesHolder, "/api/instances/*");
         context.addServlet(new ServletHolder(new VersionsApiServlet(taskService)), "/api/versions");
@@ -298,7 +298,7 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new ZcodeApiServlet(config)), "/api/zcode/*");
         context.addServlet(new ServletHolder(new BrandApiServlet(
                 config, taskService, terminals, terminalTickets,
-                authService, developerAuth, developerElevation)), "/api/brands/*");
+                authService, developerAuth, developerElevation, tlsActive)), "/api/brands/*");
         context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.developer.DeveloperApiServlet(
                 developerAuth, developerElevation, authService, config, tlsActive)), "/api/developer/*");
         // Registered before the `/api/settings/*` holder below and matched by its longer prefix:

@@ -286,6 +286,13 @@ export const api = {
   uploadTls: (fd: FormData) =>
     request<TlsUploadResult>("/api/settings/tls", { method: "POST", body: fd }),
 
+  /** 生成（或复用）自签名证书并在同一端口切到 HTTPS；浏览器会提示证书不受信任 */
+  enableSelfSignedTls: () =>
+    request<{ ok: boolean; https?: boolean; restartRequired?: boolean; error?: string; fingerprintSha256?: string }>(
+      "/api/settings/tls/self-signed",
+      { method: "POST" },
+    ),
+
   // ---------- 下载源（npm registry） ----------
 
   getRegistry: () => request<RegistrySettings>("/api/settings/registry"),

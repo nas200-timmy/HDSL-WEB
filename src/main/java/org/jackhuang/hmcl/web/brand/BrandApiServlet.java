@@ -89,6 +89,8 @@ public final class BrandApiServlet extends HttpServlet {
     private final org.jackhuang.hmcl.web.auth.AuthService auth;
     private final org.jackhuang.hmcl.web.developer.DeveloperAuth developerAuth;
     private final org.jackhuang.hmcl.web.developer.DeveloperElevation developerElevation;
+    /// Live TLS state of the main connector; the terminal is HTTPS-only.
+    private final java.util.function.BooleanSupplier tlsActive;
     private final Map<Brand, PathRef> brands = new EnumMap<>(Brand.class);
 
     private record PathRef(Path root, BrandInstanceManager manager) {
@@ -98,7 +100,8 @@ public final class BrandApiServlet extends HttpServlet {
                            TerminalManager terminals, TerminalTickets terminalTickets,
                            org.jackhuang.hmcl.web.auth.AuthService auth,
                            org.jackhuang.hmcl.web.developer.DeveloperAuth developerAuth,
-                           org.jackhuang.hmcl.web.developer.DeveloperElevation developerElevation) {
+                           org.jackhuang.hmcl.web.developer.DeveloperElevation developerElevation,
+                           java.util.function.BooleanSupplier tlsActive) {
         this.config = config;
         this.tasks = tasks;
         this.terminals = terminals;
@@ -106,6 +109,7 @@ public final class BrandApiServlet extends HttpServlet {
         this.auth = auth;
         this.developerAuth = developerAuth;
         this.developerElevation = developerElevation;
+        this.tlsActive = tlsActive;
         Path base = config.dataDir.resolve("brands");
         for (Brand brand : Brand.values()) {
             Path root = base.resolve(brand.id());
@@ -566,6 +570,11 @@ public final class BrandApiServlet extends HttpServlet {
         if (!config.webShell.enabled) {
             Json.error(response, HttpServletResponse.SC_FORBIDDEN,
                     "web_shell_disabled: the web shell is disabled in developer settings");
+            return;
+        }
+        if (!tlsActive.getAsBoolean()) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "insecure_transport: the web shell requires HTTPS; enable it in the HTTPS settings");
             return;
         }
         if (!developerAuth.isSet()) {

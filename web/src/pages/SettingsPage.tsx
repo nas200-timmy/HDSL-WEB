@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError, isNotImplemented } from "../api";
+import { ConfirmDialog, Dialog } from "../components/Dialog";
 import { FileDropInput } from "../components/FileDropInput";
 import {
   CheckCircleIcon,
@@ -946,6 +947,8 @@ function TlsTab() {
   const [tlsFormError, setTlsFormError] = useState<string | null>(null);
   const [tlsBusy, setTlsBusy] = useState(false);
   const [redirectIn, setRedirectIn] = useState<number | null>(null);
+  const [selfSignedConfirmOpen, setSelfSignedConfirmOpen] = useState(false);
+  const [selfSignedBusy, setSelfSignedBusy] = useState(false);
 
   const loadTls = async () => {
     setTlsLoading(true);
@@ -1032,6 +1035,25 @@ function TlsTab() {
     }
   };
 
+  const doSelfSigned = async () => {
+    setTlsFormError(null);
+    setSelfSignedBusy(true);
+    try {
+      const r = await api.enableSelfSignedTls();
+      if (!r.ok) {
+        setTlsFormError(r.error ?? "自签名证书没能启用，请稍后再试");
+        return;
+      }
+      setSelfSignedConfirmOpen(false);
+      toast("success", "已生成自签名证书，即将跳转到 HTTPS");
+      setRedirectIn(3);
+    } catch (e) {
+      setTlsFormError(isNotImplemented(e) ? "后端尚未支持自签名证书" : errMsg(e));
+    } finally {
+      setSelfSignedBusy(false);
+    }
+  };
+
   const tag = tls ? tlsSourceTag(tls.source) : null;
 
   return (
@@ -1056,6 +1078,27 @@ function TlsTab() {
           </div>
         ) : tls ? (
           <>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 8,
+                margin: "4px 8px 8px",
+                padding: "10px 12px",
+                border: "1px solid var(--monet-error)",
+                borderRadius: 4,
+                color: "var(--monet-error)",
+                fontSize: 12,
+                lineHeight: 1.6,
+              }}
+            >
+              <WarningIcon size={16} style={{ flex: "none", marginTop: 2 }} />
+              <span>
+                <strong>自签名证书只是权宜之计。</strong>
+                浏览器会提示证书不受信任，它也无法证明服务器身份，只适合内网或临时使用。
+                正式部署请上传受信任证书，或把面板放到带证书的反向代理后面。
+              </span>
+            </div>
             <div className="comp-row">
               <span className="comp-label">当前状态</span>
               <span className="comp-value">
@@ -1101,6 +1144,20 @@ function TlsTab() {
               </div>
             ) : (
               <div style={{ padding: "8px 4px 0", display: "flex", flexDirection: "column", gap: 10 }}>
+                {!tls.https && (
+                  <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                    <button
+                      className="btn btn-outline ripple-host"
+                      disabled={tlsBusy || selfSignedBusy}
+                      onClick={() => setSelfSignedConfirmOpen(true)}
+                    >
+                      生成并使用自签名证书
+                    </button>
+                    <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                      没有证书时的临时方案；浏览器会提示证书不受信任。
+                    </span>
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: 8 }}>
                   <label className="input-check">
                     <input type="radio" checked={tlsMode === "pem"} onChange={() => { setTlsMode("pem"); setTlsFormError(null); }} />
@@ -1155,6 +1212,32 @@ function TlsTab() {
           </>
         ) : null}
       </div>
+      <ConfirmDialog
+        open={selfSignedConfirmOpen}
+        title="生成并使用自签名证书？"
+        danger
+        busy={selfSignedBusy}
+        confirmLabel={selfSignedBusy ? "生成中…" : "生成并启用"}
+        cancelLabel="取消"
+        message={
+          <div style={{ lineHeight: 1.7 }}>
+            <p>将生成一张自签名证书，并在同一端口把面板切换到 HTTPS。</p>
+            <ul style={{ paddingLeft: 18, margin: "8px 0" }}>
+              <li>浏览器会提示「证书不受信任」，需要手动选择继续访问；</li>
+              <li>自签名证书不能证明服务器身份，只适合内网或临时使用；</li>
+              <li>切换后当前 HTTP 地址会跳到 https:// 同一地址。</li>
+            </ul>
+            {tlsFormError && <div className="form-error">{tlsFormError}</div>}
+          </div>
+        }
+        onCancel={() => {
+          if (!selfSignedBusy) {
+            setSelfSignedConfirmOpen(false);
+            setTlsFormError(null);
+          }
+        }}
+        onConfirm={() => void doSelfSigned()}
+      />
     </>
   );
 }
@@ -1172,6 +1255,9 @@ function developerError(e: unknown): string {
   if (raw.includes("must be at least")) return "开发者密码至少 8 位";
   if (raw.includes("must differ from the panel password")) return "开发者密码不能与面板密码相同";
   if (raw.includes("tls_required")) return "需要先启用 HTTPS";
+  if (raw.includes("certificate_already_configured")) {
+    return "已经配置了真实证书，不能再切回自签名；请先清空 server.yaml 里的证书项";
+  }
   if (raw.includes("developer_elevation_required")) return "需要先输入开发者密码";
   return raw;
 }
@@ -1179,10 +1265,16 @@ function developerError(e: unknown): string {
 /// 设置页的「开发者模式」：进入需要开发者密码，进去后可以开关 Web Shell、
 /// 修改开发者密码。实例终端打开前的二次确认用的是同一个密码。
 function DeveloperTab() {
+  const [, setSearchParams] = useSearchParams();
   const [status, setStatus] = useState<DeveloperStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /// HTTP 下的拦截弹窗：默认一进来就弹
+  const [insecureOpen, setInsecureOpen] = useState(true);
+  const [confirmSelfSigned, setConfirmSelfSigned] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
 
   const [unlockPassword, setUnlockPassword] = useState("");
   const [setupAdmin, setSetupAdmin] = useState("");
@@ -1278,6 +1370,27 @@ function DeveloperTab() {
     }
   };
 
+  const generateSelfSigned = async () => {
+    setSwitchError(null);
+    setSwitching(true);
+    try {
+      const result = await api.enableSelfSignedTls();
+      if (!result.ok) {
+        setSwitchError(result.error ?? "自签名证书没能启用，请稍后再试");
+        return;
+      }
+      setConfirmSelfSigned(false);
+      // 服务端会在这条应答写完后换掉连接器：稍等片刻再回到同一地址的 https
+      window.setTimeout(() => {
+        window.location.href = window.location.href.replace(/^http:/, "https:");
+      }, 1200);
+    } catch (e) {
+      setSwitchError(developerError(e));
+    } finally {
+      setSwitching(false);
+    }
+  };
+
   const caption = (
     <div className="section-caption">
       <DeployedCodeIcon size={16} />
@@ -1312,6 +1425,98 @@ function DeveloperTab() {
             <span>正在读取开发者模式状态…</span>
           </div>
         </div>
+      </>
+    );
+  }
+
+  if (!status.https) {
+    return (
+      <>
+        {caption}
+        <div className="card">
+          <div
+            className="form-error"
+            style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px 0", fontSize: 13 }}
+          >
+            <WarningIcon size={16} />
+            当前连接不是 HTTPS，开发者模式与 Web Shell 不可用。
+          </div>
+          <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "8px 8px 0", lineHeight: 1.6 }}>
+            在明文 HTTP 上，开发者密码和终端里的输入输出都会被网络上的其他人看到。请先在「HTTPS 证书」里上传证书；
+            如果暂时没有证书，可以生成自签名证书继续，但浏览器会提示证书不受信任。
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingTop: 8 }}>
+            <button
+              className="btn btn-raised ripple-host"
+              onClick={() => setSearchParams({ tab: "tls" }, { replace: true })}
+            >
+              去 HTTPS 设置
+            </button>
+            <button className="btn btn-outline ripple-host" onClick={() => setInsecureOpen(true)}>
+              仍要使用…
+            </button>
+          </div>
+        </div>
+
+        <Dialog open={insecureOpen} title="当前环境不安全" onClose={() => setInsecureOpen(false)}>
+          <div style={{ maxWidth: 440, lineHeight: 1.7 }}>
+            <p>面板现在通过 HTTP 明文提供服务。开发者密码、终端里的键盘输入与输出都会以明文经过网络，
+              任何能看到这条链路的人都能截获。</p>
+            <p>因此开发者模式与 Web Shell 只在 HTTPS 下可用。</p>
+            <p>如果暂时没有证书，可以生成自签名证书继续——浏览器会提示证书不受信任，只适合内网或临时使用。
+              正式部署请上传受信任证书，或者把面板放到带证书的反向代理后面。</p>
+          </div>
+          <div className="dialog-actions">
+            <button className="btn btn-text dim" onClick={() => setInsecureOpen(false)}>
+              返回
+            </button>
+            <button
+              className="btn btn-text"
+              onClick={() => {
+                setInsecureOpen(false);
+                setSearchParams({ tab: "tls" }, { replace: true });
+              }}
+            >
+              去上传证书
+            </button>
+            <button
+              className="btn btn-text danger"
+              onClick={() => {
+                setInsecureOpen(false);
+                setConfirmSelfSigned(true);
+              }}
+            >
+              生成自签名证书
+            </button>
+          </div>
+        </Dialog>
+
+        <ConfirmDialog
+          open={confirmSelfSigned}
+          title="生成自签名证书并启用 HTTPS？"
+          danger
+          busy={switching}
+          confirmLabel={switching ? "生成中…" : "生成并启用"}
+          cancelLabel="取消"
+          message={
+            <div style={{ lineHeight: 1.7 }}>
+              <p>将生成一张自签名证书，并把面板切换到 HTTPS（同一端口）。</p>
+              <ul style={{ paddingLeft: 18, margin: "8px 0" }}>
+                <li>浏览器会提示「证书不受信任」，需要手动选择继续访问；</li>
+                <li>它不能证明服务器身份，只适合内网或临时使用；</li>
+                <li>切换后当前 HTTP 地址会跳到 https:// 同一地址，可能需要重新登录。</li>
+              </ul>
+              {switchError && <div className="form-error">{switchError}</div>}
+            </div>
+          }
+          onCancel={() => {
+            if (!switching) {
+              setConfirmSelfSigned(false);
+              setSwitchError(null);
+            }
+          }}
+          onConfirm={() => void generateSelfSigned()}
+        />
       </>
     );
   }

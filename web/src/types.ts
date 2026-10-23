@@ -305,6 +305,8 @@ export interface DeveloperStatus {
   elevated: boolean;
   /** 实例终端（Web Shell）开关；false 时打开终端会被后端拒绝 */
   webShellEnabled: boolean;
+  /** 面板此刻是否真的在讲 TLS；false 时开发者模式与 Web Shell 都不可用 */
+  https: boolean;
 }
 
 // ---------- Phase 4：ACP 控制台 ----------
