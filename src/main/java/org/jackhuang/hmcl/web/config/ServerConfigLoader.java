@@ -49,6 +49,7 @@ public final class ServerConfigLoader {
     public static final String ENV_BIND_HOST = "HDSL_BIND_HOST";
     public static final String ENV_BASE_PATH = "HDSL_BASE_PATH";
     public static final String ENV_HTTPS = "HDSL_HTTPS";
+    public static final String ENV_TRUST_FORWARDED_PROTO = "HDSL_TRUST_FORWARDED_PROTO";
     public static final String ENV_WEB_SHELL_ENABLED = "HDSL_WEB_SHELL_ENABLED";
     public static final String ENV_ZCODE_PACKAGE = "HDSL_ZCODE_PACKAGE";
     public static final String ENV_ZCODE_NODE = "HDSL_ZCODE_NODE";
@@ -184,6 +185,9 @@ public final class ServerConfigLoader {
         if (https.containsKey("redirect_port")) {
             target.redirectPort = intField(https, "redirect_port");
         }
+        if (https.containsKey("trust_forwarded_proto")) {
+            target.trustForwardedProto = booleanField(https, "trust_forwarded_proto");
+        }
     }
 
     private static void applyAuth(ServerConfig config, Map<String, Object> auth) {
@@ -212,6 +216,15 @@ public final class ServerConfigLoader {
                 case "true" -> true;
                 case "false" -> false;
                 default -> throw new ConfigException(ENV_HTTPS + " must be `true` or `false`, got `" + value + "`");
+            };
+        }
+        if (env.containsKey(ENV_TRUST_FORWARDED_PROTO)) {
+            String value = env.get(ENV_TRUST_FORWARDED_PROTO);
+            config.https.trustForwardedProto = switch (value) {
+                case "true" -> true;
+                case "false" -> false;
+                default -> throw new ConfigException(ENV_TRUST_FORWARDED_PROTO
+                        + " must be `true` or `false`, got `" + value + "`");
             };
         }
         if (env.containsKey(ENV_WEB_SHELL_ENABLED)) {

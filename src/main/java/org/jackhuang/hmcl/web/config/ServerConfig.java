@@ -140,6 +140,15 @@ public final class ServerConfig {
         /// The port of that redirect connector (default 80).
         public int redirectPort = 80;
 
+        /// Whether `X-Forwarded-Proto: https` from a reverse proxy counts as
+        /// HTTPS (`https.trust_forwarded_proto`, `HDSL_TRUST_FORWARDED_PROTO`,
+        /// default false). Turn this on only when the panel is reachable
+        /// **solely** through a proxy that terminates TLS — a direct client can
+        /// write the header itself, and then the browser leg may well be
+        /// plaintext. With it on, the developer page and the Web Shell stay
+        /// usable behind nginx/Caddy instead of reporting "not HTTPS".
+        public boolean trustForwardedProto = false;
+
         /// Whether a certificate file was explicitly configured (PKCS#12 or PEM).
         public boolean hasExplicitCertificate() {
             return !pkcs12File.isBlank() || (!certFile.isBlank() && !keyFile.isBlank());

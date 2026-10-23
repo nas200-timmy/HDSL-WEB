@@ -27,6 +27,10 @@ SSH 通道整个拿掉，Web Shell 成为面板里唯一的 TUI 入口。这不�
   `insecure_transport`。没有证书时可以生成自签名证书（`POST /api/settings/tls/self-signed`，
   同端口热切换，浏览器会告警）；「HTTPS 证书」页也加了红框说明和同一个按钮，已配置真实
   证书时后端拒绝回退到自签名。
+- **反代终结 TLS 也认**：`https.trust_forwarded_proto`（`HDSL_TRUST_FORWARDED_PROTO`，
+  默认关）打开后，`X-Forwarded-Proto: https` 即视为 HTTPS，开发者模式、终端和 `Secure`
+  会话 Cookie 在 nginx/Caddy 后面照常工作。默认关闭是因为直接连到 HTTP 端口的客户端可以
+  伪造该头；这种部署下生成自签名证书会被 409 `tls_terminated_upstream` 拒绝。
 - **升级说明**：旧 `server.yaml` 里的 `ssh:` 段会被忽略并在启动日志里打一条
   `unknown key` 警告，不需要手工删除；3022 不再监听；以前下载的 `-full.jar` 不再产出，
   从源码构建也只需要 `./gradlew build`。

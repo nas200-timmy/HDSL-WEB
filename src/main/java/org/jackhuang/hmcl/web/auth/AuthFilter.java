@@ -65,21 +65,23 @@ public final class AuthFilter implements Filter {
 
     private final AuthService authService;
     private final boolean authDisabled;
-    private final java.util.function.BooleanSupplier secureCookies;
+    private final java.util.function.Predicate<HttpServletRequest> secureRequest;
     private final int cookieMaxAgeSeconds;
 
     /// @param authDisabled  when true, the filter passes everything through
     ///                      without a session (only legal on loopback binds)
-    /// @param secureCookies whether the session cookie gets the `Secure` flag;
-    ///                      read per cookie, because the certificate upload can
+    /// @param secureRequest whether this request's browser leg is HTTPS; read
+    ///                      per cookie, because the certificate upload can
     ///                      switch the main connector to TLS at runtime and a
-    ///                      login after the switch must mint a Secure cookie
+    ///                      login after the switch must mint a Secure cookie.
+    ///                      A TLS-terminating proxy counts when the server is
+    ///                      told to trust `X-Forwarded-Proto`.
     /// @param ttlSeconds    session TTL, also the cookie Max-Age
     public AuthFilter(AuthService authService, boolean authDisabled,
-                      java.util.function.BooleanSupplier secureCookies, int ttlSeconds) {
+                      java.util.function.Predicate<HttpServletRequest> secureRequest, int ttlSeconds) {
         this.authService = authService;
         this.authDisabled = authDisabled;
-        this.secureCookies = secureCookies;
+        this.secureRequest = secureRequest;
         this.cookieMaxAgeSeconds = ttlSeconds;
     }
 
@@ -107,24 +109,28 @@ public final class AuthFilter implements Filter {
 
     /// Builds the session cookie. Shared with the login endpoint so the
     /// attributes can never drift apart between the two places that set it.
-    public Cookie sessionCookie(String token) {
+    ///
+    /// @param request the request the cookie will answer, for `Secure`
+    public Cookie sessionCookie(HttpServletRequest request, String token) {
         Cookie cookie = new Cookie(SESSION_COOKIE, token);
         cookie.setPath("/");
         cookie.setHttpOnly(true);
         cookie.setMaxAge(cookieMaxAgeSeconds);
-        cookie.setSecure(secureCookies.getAsBoolean());
+        cookie.setSecure(secureRequest.test(request));
         cookie.setAttribute("SameSite", "Strict");
         return cookie;
     }
 
     /// A cookie with the same name/path and zero Max-Age, which is what makes
     /// the browser drop it.
-    public Cookie clearedSessionCookie() {
+    ///
+    /// @param request the request the cookie will answer, for `Secure`
+    public Cookie clearedSessionCookie(HttpServletRequest request) {
         Cookie cookie = new Cookie(SESSION_COOKIE, "");
         cookie.setPath("/");
         cookie.setHttpOnly(true);
         cookie.setMaxAge(0);
-        cookie.setSecure(secureCookies.getAsBoolean());
+        cookie.setSecure(secureRequest.test(request));
         cookie.setAttribute("SameSite", "Strict");
         return cookie;
     }

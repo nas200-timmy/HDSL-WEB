@@ -93,6 +93,11 @@ Windows 桌面终端不增加**本地**攻击面：能坐到这台机器前、�
 - 「HTTPS 证书」页顶部同样有红框说明，并在 HTTPS 未启用时提供同一个按钮；已经配置了真实
   证书（`https.cert_file` / `https.pkcs12_file`）时，后端拒绝回退到自签名
   （409 `certificate_already_configured`），避免误把线上身份换掉。
+- **反代终结 TLS** 也算：打开 `https.trust_forwarded_proto` 后，请求带
+  `X-Forwarded-Proto: https`（nginx/Caddy 的常规配置）即视为 HTTPS，开发者模式、终端和
+  `Secure` 会话 Cookie 都按 HTTPS 处理。这个信任是显式开关，默认关闭——直接能连到面板
+  HTTP 端口的客户端可以自己写这个头。已经是这种部署时，不要再生成面板自己的自签名证书，
+  接口会以 409 `tls_terminated_upstream` 拒绝，免得把反代到面板这段改坏。
 
 ## 5. 架构
 

@@ -204,7 +204,9 @@ public final class HdslServer {
 
         int ttlSeconds = Math.toIntExact(java.time.Duration.ofHours(config.auth.sessionTtlHours).toSeconds());
         AuthFilter authFilter = new AuthFilter(authService, config.auth.disabled,
-                () -> config.https.enabled, ttlSeconds);
+                request -> request.isSecure()
+                        || org.jackhuang.hmcl.web.http.RequestSecurity.forwardedHttps(request, config),
+                ttlSeconds);
 
         // The Phase 2 services: the event bus every WebSocket payload flows
         // through, the task pool behind installs and launches, and the

@@ -30,6 +30,7 @@ import org.jackhuang.hmcl.web.auth.UserStore;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.config.ServerConfigWriter;
 import org.jackhuang.hmcl.web.http.Json;
+import org.jackhuang.hmcl.web.http.RequestSecurity;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -82,7 +83,8 @@ public final class DeveloperApiServlet extends HttpServlet {
             body.addProperty("devPasswordSet", devAuth.isSet());
             body.addProperty("elevated", elevation.isElevated(keyOf(request), sessionAlive(request)));
             body.addProperty("webShellEnabled", config.webShell.enabled);
-            body.addProperty("https", tlsActive.getAsBoolean());
+            body.addProperty("https",
+                    RequestSecurity.isSecure(request, tlsActive.getAsBoolean(), config));
             Json.write(response, body);
             return;
         }
@@ -106,7 +108,7 @@ public final class DeveloperApiServlet extends HttpServlet {
     }
 
     private void elevate(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        if (!requireTls(response)) {
+        if (!requireTls(request, response)) {
             return;
         }
         String password = stringField(readJson(request), "password");
@@ -145,7 +147,7 @@ public final class DeveloperApiServlet extends HttpServlet {
     }
 
     private void setPassword(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        if (!requireTls(response)) {
+        if (!requireTls(request, response)) {
             return;
         }
         JsonObject body = readJson(request);
@@ -191,7 +193,7 @@ public final class DeveloperApiServlet extends HttpServlet {
     }
 
     private void clearPassword(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        if (!requireTls(response)) {
+        if (!requireTls(request, response)) {
             return;
         }
         String adminPassword = stringField(readJson(request), "adminPassword");
@@ -220,7 +222,7 @@ public final class DeveloperApiServlet extends HttpServlet {
     /// proof a terminal needs) and HTTPS, because this is the switch that
     /// decides whether an RCE-equivalent entry is reachable at all.
     private void setWebShell(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        if (!requireTls(response)) {
+        if (!requireTls(request, response)) {
             return;
         }
         if (!elevation.require(keyOf(request), sessionAlive(request))) {
@@ -284,8 +286,8 @@ public final class DeveloperApiServlet extends HttpServlet {
         Json.error(response, 429, "too many failed panel-password attempts; try again later");
     }
 
-    private boolean requireTls(HttpServletResponse response) throws IOException {
-        if (tlsActive.getAsBoolean()) {
+    private boolean requireTls(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (RequestSecurity.isSecure(request, tlsActive.getAsBoolean(), config)) {
             return true;
         }
         Json.error(response, HttpServletResponse.SC_CONFLICT,

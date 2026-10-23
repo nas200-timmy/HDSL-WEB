@@ -314,6 +314,7 @@ auth:
 | `HDSL_BIND_HOST` | `0.0.0.0` | 主监听地址。只想本机访问可设 `127.0.0.1` |
 | `HDSL_BASE_PATH` | 空 | 面板被反代在子路径下时的挂载前缀（如 `/panel`）。反代须剥前缀，见[反向代理](#反向代理) |
 | `HDSL_HTTPS` | `false` | 只接受 `true`/`false`；等价于 `https.enabled` |
+| `HDSL_TRUST_FORWARDED_PROTO` | `false` | 只接受 `true`/`false`；等价于 `https.trust_forwarded_proto`。反代终结 TLS 时打开，`X-Forwarded-Proto: https` 才算 HTTPS（前提：面板只能经反代访问） |
 | `HDSL_WEB_SHELL_ENABLED` | `true` | 实例终端（Web Shell）总开关；等价于 `server.yaml` 的 `web_shell.enabled`。关掉后终端按钮隐藏、打开接口返回 403。设置页「开发者模式」也能改 |
 | `HDSL_ADMIN_PASSWORD` | 空 | 仅首次启动且数据目录里没有用户时，用它创建 `admin` 账号；已存在账号时忽略 |
 | `NPM_CONFIG_REGISTRY` | `https://registry.npmjs.org/` | 下载源的回退值；面板设置优先。面板里改完立即生效，改环境变量要重启容器 |
@@ -323,9 +324,8 @@ auth:
 | `HDSL_ZCODE_PACKAGE` | 空 | 实验性 ZCode 的发行包目录（需含 `bin/zcode.mjs`）；不设时找 `<数据目录>/zcode/current/`。见 [docs/zcode-experimental.md](docs/zcode-experimental.md) |
 | `HDSL_ZCODE_NODE` | 空 | 跑 ZCode 用的 node；不设时用 PATH 上的 `node` |
 
-`HDSL_BIND_HOST` / `HDSL_PORT` / `HDSL_HTTPS` 之外的一切（证书路径、`auth.disabled`、
-`redirect_same_port` 等）都从 `server.yaml` 读。dsh 实例端口从 3081–4081 分配、终身绑定，只
-监听回环，不对外发布。
+上面表格之外的一切（证书路径、`auth.disabled`、`redirect_same_port` 等）都从 `server.yaml`
+读。dsh 实例端口从 3081–4081 分配、终身绑定，只监听回环，不对外发布。
 
 环境变量盖过 `server.yaml`：镜像里已经设了 `HDSL_PORT=3080`，想换端口要改 `HDSL_PORT`（改
 `server.yaml` 的 `port` 会被忽略）；要用 `server.yaml` 的 `port` 就把 `HDSL_PORT` 显式清空。
@@ -366,6 +366,19 @@ location /panel/ {
 两种挂法都必须透传 WebSocket 升级头，否则实例列表、任务进度和品牌实例状态不会刷新（页面其余
 功能不受影响）。剥前缀、`Host` 透传与 `<base href>` 的机制见
 [docs/design-notes.md](docs/design-notes.md)。
+
+**TLS 在反代终结时**（面板自己只讲 HTTP，nginx/Caddy 负责证书）：在 `server.yaml` 里打开
+
+```yaml
+https:
+  trust_forwarded_proto: true
+```
+
+并确保反代发送 `proxy_set_header X-Forwarded-Proto $scheme;`（Caddy 默认就发）。打开后
+`X-Forwarded-Proto: https` 才被当作 HTTPS：开发者模式、Web Shell 和 `Secure` 会话 Cookie
+都靠它判断，否则面板会诚实地认为自己不在 HTTPS 上。这个开关只在面板**只能**经反代访问时打开
+——能直接连到面板 HTTP 端口的客户端可以自己写这个头。反过来，已经由反代终结 TLS 时不要再
+生成面板自己的自签名证书，接口会拒绝（`tls_terminated_upstream`）。
 
 ## 安全说明
 

@@ -90,11 +90,24 @@ dsh.example.com {
 
 Caddy 自动签发/续期证书；HDSL-web 这边就不用再配 HTTPS 了（见下面的注意）。
 
-### 注意：外层 TLS + 内层 HTTP 的 cookie 安全标志
+### 注意：外层 TLS + 内层 HTTP
 
-HDSL-web 是否给会话 cookie 加 `Secure`，取决于**它自己**是否启用 HTTPS（`https.enabled`）。
-如果外层代理终结 TLS、HDSL-web 仍是 HTTP，cookie 就不带 `Secure`。在「3080 只绑回环、只被本机代理访问」
-的拓扑下风险有限，但更稳妥的做法二选一：
+如果外层代理终结 TLS、HDSL-web 仍是 HTTP，请打开：
+
+```yaml
+https:
+  trust_forwarded_proto: true
+```
+
+（或环境变量 `HDSL_TRUST_FORWARDED_PROTO=true`）并确保代理发送 `X-Forwarded-Proto`
+（上面的 nginx 片段已经发了，Caddy 默认就发）。打开后：
+
+- 会话 cookie 带 `Secure`；
+- 开发者模式和实例终端（Web Shell）把请求当作 HTTPS，不会被「当前环境不安全」挡住。
+
+前提是 3080 只绑回环、**只被代理访问**——能直接连到 3080 的客户端可以自己写这个头。这种
+拓扑下也不要再在面板里生成自签名证书：后端会以 409 `tls_terminated_upstream` 拒绝，免得把
+「代理 → 面板」这段改成 TLS 之后反代连不上。
 
 - **推荐**：不要让 3080 暴露到公网。代理跑在宿主机上就只发布到宿主回环
   （`ports: ["127.0.0.1:3080:3080"]`，容器内保持 `HDSL_BIND_HOST=0.0.0.0`，否则宿主的端口映射连不进去）；

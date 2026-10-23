@@ -142,6 +142,49 @@ class DeveloperApiServletTest {
         }
     }
 
+    @Test
+    void aTrustedProxyCanTerminateTls() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir,
+                Map.of(UserStore.ENV_ADMIN_PASSWORD, PANEL_PASSWORD), config -> {
+                    config.bindHost = "127.0.0.1";
+                    config.https.trustForwardedProto = true;
+                })) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "http://127.0.0.1:" + running.port();
+
+            // The header is ignored without the opt-in, so the login cookie is
+            // a plain one; with it the same request counts as HTTPS.
+            HttpResponse<String> plain = post(client, base + "/api/auth/login",
+                    "{\"username\":\"admin\",\"password\":\"" + PANEL_PASSWORD + "\"}", null);
+            assertEquals(200, plain.statusCode(), plain.body());
+            assertFalse(plain.headers().firstValue("set-cookie").orElseThrow().contains("Secure"));
+
+            HttpResponse<String> proxied = postWithProto(client, base + "/api/auth/login",
+                    "{\"username\":\"admin\",\"password\":\"" + PANEL_PASSWORD + "\"}", null, "https");
+            assertEquals(200, proxied.statusCode(), proxied.body());
+            String cookie = proxied.headers().firstValue("set-cookie").orElseThrow().split(";", 2)[0];
+            assertTrue(proxied.headers().firstValue("set-cookie").orElseThrow().contains("Secure"));
+
+            // Without the header the panel honestly says "not HTTPS"; the
+            // developer password refuses to travel.
+            assertFalse(json(get(client, base + "/api/developer/status", cookie))
+                    .get("https").getAsBoolean());
+            HttpResponse<String> refused = post(client, base + "/api/developer/password",
+                    "{\"adminPassword\":\"" + PANEL_PASSWORD + "\",\"password\":\"" + DEV_PASSWORD
+                            + "\",\"confirm\":\"" + DEV_PASSWORD + "\"}", cookie);
+            assertEquals(409, refused.statusCode(), refused.body());
+            assertTrue(refused.body().contains("tls_required"));
+
+            // Behind the proxy (header present) the same call goes through.
+            assertTrue(json(getWithProto(client, base + "/api/developer/status", cookie, "https"))
+                    .get("https").getAsBoolean());
+            HttpResponse<String> allowed = postWithProto(client, base + "/api/developer/password",
+                    "{\"adminPassword\":\"" + PANEL_PASSWORD + "\",\"password\":\"" + DEV_PASSWORD
+                            + "\",\"confirm\":\"" + DEV_PASSWORD + "\"}", cookie, "https");
+            assertEquals(200, allowed.statusCode(), allowed.body());
+        }
+    }
+
     private static String login(HttpClient client, String base) throws Exception {
         HttpResponse<String> response = post(client, base + "/api/auth/login",
                 "{\"username\":\"admin\",\"password\":\"" + PANEL_PASSWORD + "\"}", null);
@@ -155,13 +198,31 @@ class DeveloperApiServletTest {
         return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
+    private static HttpResponse<String> getWithProto(HttpClient client, String url, String cookie, String proto)
+            throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
+                .header("Cookie", cookie)
+                .header("X-Forwarded-Proto", proto)
+                .GET();
+        return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
     private static HttpResponse<String> post(HttpClient client, String url, String body, String cookie)
+            throws Exception {
+        return postWithProto(client, url, body, cookie, null);
+    }
+
+    private static HttpResponse<String> postWithProto(HttpClient client, String url, String body,
+                                                      String cookie, @org.jetbrains.annotations.Nullable String proto)
             throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
                 .header("Content-Type", "application/json; charset=utf-8")
                 .POST(HttpRequest.BodyPublishers.ofString(body));
         if (cookie != null) {
             builder.header("Cookie", cookie);
+        }
+        if (proto != null) {
+            builder.header("X-Forwarded-Proto", proto);
         }
         return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }

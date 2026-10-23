@@ -572,7 +572,8 @@ public final class BrandApiServlet extends HttpServlet {
                     "web_shell_disabled: the web shell is disabled in developer settings");
             return;
         }
-        if (!tlsActive.getAsBoolean()) {
+        if (!org.jackhuang.hmcl.web.http.RequestSecurity.isSecure(
+                request, tlsActive.getAsBoolean(), config)) {
             Json.error(response, HttpServletResponse.SC_FORBIDDEN,
                     "insecure_transport: the web shell requires HTTPS; enable it in the HTTPS settings");
             return;

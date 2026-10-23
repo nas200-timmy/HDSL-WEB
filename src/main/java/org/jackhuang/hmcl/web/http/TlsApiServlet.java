@@ -240,6 +240,12 @@ public final class TlsApiServlet extends HttpServlet {
         boolean uploaded = current == CertificateManager.Source.PEM
                 || current == CertificateManager.Source.PKCS12
                 || config.https.hasExplicitCertificate();
+        if (!running.isTls() && RequestSecurity.forwardedHttps(request, config)) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "tls_terminated_upstream: the panel sits behind a TLS-terminating proxy; "
+                            + "switching its own connector to HTTPS would break the proxy leg");
+            return;
+        }
         if (uploaded) {
             Json.error(response, HttpServletResponse.SC_CONFLICT,
                     "certificate_already_configured: a real certificate is already configured; "
