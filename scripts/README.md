@@ -15,6 +15,14 @@ cd web && npm install        # 本机第一次（build.gradle.kts 发现 npm 就
 | `e2e-phase4.sh` | Phase 4 全链路：体检 / 整合包市场 / 安装 / 会话·技能·工作区 / 导出并下载 / 反代 / ACP 控制台 | 网络、jar、**热过的 pnpm 缓存** | 几分钟 |
 | `acp-probe/AcpProbe.java` | 不是独立脚本：`e2e-phase4.sh` 编译并运行它——带会话 Cookie 连 `/ws` 的 ACP 控制台、发一条消息、按结果退出码判定 | 由脚本用 jar 里的 Jetty 编译 | — |
 
+下面两个**不属于**上面那类开发脚本：它们是给终端用户的客户端安装器，从 GitHub Release
+下载 `hdsl-tui`、校验 SHA256、装到用户目录，不需要 root，也不需要在仓库里跑。
+
+| 安装器 | 用于 | 说明 |
+| --- | --- | --- |
+| `install-hdsl-tui.sh` | Linux / macOS | `--version V`、`--prefix DIR`、`--build`（本机 Go 离线编译）、`--dry-run` |
+| `install-hdsl-tui.ps1` | Windows（PowerShell 5.1+） | 同上，参数写成 `-Version/-Prefix/-Build/-DryRun` |
+
 ## mobile-acceptance.py
 
 ```bash

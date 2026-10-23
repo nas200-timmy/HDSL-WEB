@@ -1,0 +1,285 @@
+package panel
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+// maxErrorBody caps how much of an error response is read; the panel's error
+// bodies are one short sentence.
+const maxErrorBody = 64 << 10
+
+// Client talks to one panel. The session cookie lives here and nowhere else:
+// no jar, no disk, no argv.
+type Client struct {
+	base   *url.URL
+	http   *http.Client
+	cookie *http.Cookie
+	logf   func(format string, args ...any)
+}
+
+// New builds a client for baseURL (scheme + host [+ path prefix]).
+func New(baseURL string, httpClient *http.Client, logf func(string, ...any)) (*Client, error) {
+	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if trimmed == "" {
+		return nil, fmt.Errorf("面板地址为空")
+	}
+	base, err := url.Parse(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("面板地址无效 %q: %w", baseURL, err)
+	}
+	if base.Scheme != "http" && base.Scheme != "https" {
+		return nil, fmt.Errorf("面板地址必须以 http:// 或 https:// 开头，收到 %q", baseURL)
+	}
+	if base.Host == "" {
+		return nil, fmt.Errorf("面板地址缺少主机名: %q", baseURL)
+	}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	return &Client{base: base, http: httpClient, logf: logf}, nil
+}
+
+// BaseURL is the normalised panel address.
+func (c *Client) BaseURL() *url.URL { return c.base }
+
+// Cookie is the captured session cookie, or nil before login.
+func (c *Client) Cookie() *http.Cookie { return c.cookie }
+
+// Session returns a copy of the session cookie usable in a WebSocket
+// handshake header, or "" when there is none.
+func (c *Client) Session() string {
+	if c.cookie == nil {
+		return ""
+	}
+	cookie := *c.cookie
+	cookie.Path = "/"
+	return cookie.String()
+}
+
+// URL resolves a panel-relative path against the base, keeping any prefix the
+// panel is mounted under.
+func (c *Client) URL(path string, query url.Values) string {
+	target := *c.base
+	target.Path = strings.TrimRight(c.base.Path, "/") + path
+	if query != nil {
+		target.RawQuery = query.Encode()
+	}
+	return target.String()
+}
+
+// WebSocketURL turns the `ws` field of an open-terminal answer into an
+// absolute ws:// or wss:// URL.
+func (c *Client) WebSocketURL(path string) (string, error) {
+	reference, err := url.Parse(path)
+	if err != nil {
+		return "", fmt.Errorf("服务端返回的 ws 地址无效 %q: %w", path, err)
+	}
+	if reference.IsAbs() {
+		return reference.String(), nil
+	}
+	absolute := c.base.ResolveReference(reference)
+	switch absolute.Scheme {
+	case "http":
+		absolute.Scheme = "ws"
+	case "https":
+		absolute.Scheme = "wss"
+	default:
+		return "", fmt.Errorf("不支持的 ws 协议 %q", absolute.Scheme)
+	}
+	return absolute.String(), nil
+}
+
+func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any) (*http.Response, []byte, error) {
+	var payload io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return nil, nil, err
+		}
+		payload = bytes.NewReader(encoded)
+	}
+	target := c.URL(path, query)
+	request, err := http.NewRequestWithContext(ctx, method, target, payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	request.Header.Set("Accept", "application/json")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if c.cookie != nil {
+		request.AddCookie(c.cookie)
+	}
+	c.logf("> %s %s", method, target)
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, nil, &TransportError{Op: method + " " + path, Err: err}
+	}
+	defer response.Body.Close()
+	if method == "POST" {
+		c.captureCookie(response)
+	}
+	data, readErr := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
+	if readErr != nil {
+		return response, nil, &TransportError{Op: method + " " + path, Err: readErr}
+	}
+	c.logf("< %d %s", response.StatusCode, strings.TrimSpace(string(data)))
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return response, data, apiErrorFrom(response.StatusCode, data)
+	}
+	return response, data, nil
+}
+
+func (c *Client) captureCookie(response *http.Response) {
+	for _, cookie := range response.Cookies() {
+		if cookie.Name == SessionCookie {
+			c.cookie = cookie
+			return
+		}
+	}
+}
+
+// apiErrorFrom decodes `{"error":"..."}`; a body that is not JSON (a proxy's
+// HTML error page, say) still becomes an APIError with the status text.
+func apiErrorFrom(status int, data []byte) error {
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(data, &body); err == nil && body.Error != "" {
+		return &APIError{Status: status, Message: body.Error, Code: errorCode(body.Error)}
+	}
+	text := strings.TrimSpace(string(data))
+	if len(text) > 200 {
+		text = text[:200]
+	}
+	return &APIError{Status: status, Message: fmt.Sprintf("HTTP %d %s", status, text)}
+}
+
+// Health reads GET /api/health. It is the only endpoint that works before
+// login and is used as a reachability and version check.
+func (c *Client) Health(ctx context.Context) (Health, error) {
+	_, data, err := c.do(ctx, http.MethodGet, "/api/health", nil, nil)
+	if err != nil {
+		return Health{}, err
+	}
+	var health Health
+	if err := json.Unmarshal(data, &health); err != nil {
+		return Health{}, &TransportError{Op: "GET /api/health", Err: err}
+	}
+	return health, nil
+}
+
+// Login posts the panel credentials and captures the session cookie. The
+// cookie is never written anywhere.
+func (c *Client) Login(ctx context.Context, username, password string) (string, error) {
+	_, data, err := c.do(ctx, http.MethodPost, "/api/auth/login", nil, map[string]string{
+		"username": username,
+		"password": password,
+	})
+	if err != nil {
+		return "", err
+	}
+	if c.cookie == nil {
+		return "", &TransportError{Op: "POST /api/auth/login", Err: fmt.Errorf("登录成功但没有收到 %s Cookie", SessionCookie)}
+	}
+	var body loginBody
+	if err := json.Unmarshal(data, &body); err != nil {
+		return body.Username, nil
+	}
+	if body.Username == "" {
+		body.Username = username
+	}
+	return body.Username, nil
+}
+
+// Elevate proves the developer password. The elevation lives on the panel,
+// keyed by session token and client address; it expires after 30 minutes of
+// inactivity.
+func (c *Client) Elevate(ctx context.Context, password string) (Elevation, error) {
+	_, data, err := c.do(ctx, http.MethodPost, "/api/developer/elevate", nil, map[string]string{
+		"password": password,
+	})
+	if err != nil {
+		return Elevation{}, err
+	}
+	var elevation Elevation
+	if err := json.Unmarshal(data, &elevation); err != nil {
+		return Elevation{Elevated: true}, nil
+	}
+	return elevation, nil
+}
+
+// Instances lists the DSH instances (GET /api/instances).
+func (c *Client) Instances(ctx context.Context) ([]Instance, error) {
+	return c.instances(ctx, "/api/instances")
+}
+
+// BrandInstances lists one brand's instances
+// (GET /api/brands/{brand}/instances).
+func (c *Client) BrandInstances(ctx context.Context, brand string) ([]Instance, error) {
+	return c.instances(ctx, "/api/brands/"+url.PathEscape(brand)+"/instances")
+}
+
+func (c *Client) instances(ctx context.Context, path string) ([]Instance, error) {
+	_, data, err := c.do(ctx, http.MethodGet, path, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var list instanceList
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, &TransportError{Op: "GET " + path, Err: err}
+	}
+	return list.Instances, nil
+}
+
+// terminalPath is the open/close terminal endpoint. An empty brand means the
+// DSH instance surface; brands have their own mirrored surface.
+func terminalPath(brand, id string) string {
+	id = url.PathEscape(id)
+	if brand == "" || brand == "dsh" {
+		return "/api/instances/" + id + "/terminal"
+	}
+	return "/api/brands/" + url.PathEscape(brand) + "/instances/" + id + "/terminal"
+}
+
+// OpenTerminal asks for a ticket. resume reattaches to an existing agent
+// session of the harness.
+func (c *Client) OpenTerminal(ctx context.Context, brand, id, resume string) (Terminal, error) {
+	var query url.Values
+	if resume != "" {
+		query = url.Values{"resume": {resume}}
+	}
+	_, data, err := c.do(ctx, http.MethodPost, terminalPath(brand, id), query, map[string]string{})
+	if err != nil {
+		return Terminal{}, err
+	}
+	var terminal Terminal
+	if err := json.Unmarshal(data, &terminal); err != nil {
+		return Terminal{}, &TransportError{Op: "POST terminal", Err: err}
+	}
+	return terminal, nil
+}
+
+// CloseTerminal stops the running terminal (DELETE .../terminal). It is what
+// Ctrl-] k does; the reported `killed` is false when nothing was running.
+func (c *Client) CloseTerminal(ctx context.Context, brand, id string) (bool, error) {
+	_, data, err := c.do(ctx, http.MethodDelete, terminalPath(brand, id), nil, nil)
+	if err != nil {
+		return false, err
+	}
+	var body closeBody
+	if err := json.Unmarshal(data, &body); err != nil {
+		return false, nil
+	}
+	return body.Killed, nil
+}
