@@ -98,6 +98,9 @@ final class PosixPty implements Pty {
     private static final long TIOCSWINSZ =
             OperatingSystem.CURRENT_OS == OperatingSystem.LINUX ? 0x5414L : 0x80087467L;
 
+    /// `SIGWINCH` is 28 on both Linux and macOS.
+    private static final int SIGWINCH = 28;
+
     private final int masterFd;
     private final int pid;
     private final Buffer output = new Buffer(REPLAY_CAPACITY);
@@ -255,6 +258,13 @@ final class PosixPty implements Pty {
         // A failed resize is not fatal: the session keeps running at the old
         // size and the browser sends another one on the next fit.
         LibC.INSTANCE.ioctl(masterFd, new NativeLong(TIOCSWINSZ), winsize(size));
+        // The child is spawned without TIOCSCTTY, so the pty has no controlling
+        // terminal and the kernel has no foreground process group to notify:
+        // TIOCSWINSZ alone changes the size but never delivers SIGWINCH, and a
+        // running TUI keeps painting the width it started with. On a reattach
+        // from a different window that paints wider than the real terminal and
+        // the terminal wraps every line. Deliver the signal ourselves.
+        LibC.INSTANCE.kill(pid, SIGWINCH);
     }
 
     @Override

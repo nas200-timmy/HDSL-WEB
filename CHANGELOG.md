@@ -25,6 +25,11 @@
   attach 后的第一个按键会被它吞掉——通常正好是 `Ctrl-] q`。现在全进程只有一个终端读取者，
   attach 期间把字节原样转交给终端泵（`internal/rtty`），界面恢复后不会丢键。
 - **`--plain`**：逐行问答的旧界面保留给脚本和无终端环境（没有 TTY 时自动启用），行为不变。
+- **面板：resize 之后补发 `SIGWINCH`**。PTY 的子进程没有 controlling terminal（没有
+  `TIOCSCTTY`），所以 `TIOCSWINSZ` 只改尺寸、内核没有前台进程组可通知——已经在跑的 TUI
+  永远按旧宽度画。重新 attach 到一个更窄的窗口时，TUI 画得比终端宽，每一行都被折行，
+  屏幕上就是越滚越乱的「刷新问题」。现在 `PosixPty.resize` 在 ioctl 之后自己
+  `kill(pid, SIGWINCH)`；客户端也在 `ready` 之后再补发一次尺寸作为兜底。
 - 验证：客户端 `gofmt` / `go vet` / `go test ./...` 通过（新增 `ui` / `store` / `app` 的
   按键解码、排版宽度、配置读写、错误文案等用例）；5 个平台交叉编译通过；真二进制在 pty 里
   对着假面板跑完 42 项端到端检查（登录失败重试、四级菜单回退、attach/detach、agent 退出码、

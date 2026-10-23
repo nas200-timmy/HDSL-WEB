@@ -92,6 +92,23 @@ class PosixPtyTest {
         }
     }
 
+    /// A resize must also *signal* the child. The pty has no controlling
+    /// terminal (nothing calls TIOCSCTTY), so the kernel has no foreground
+    /// process group to notify: without an explicit SIGWINCH a running TUI
+    /// keeps painting its old width — which a reattach from a different window
+    /// turns into wrapped, cascading output.
+    @Test
+    void resizeSignalsTheChild() throws Exception {
+        try (Pty pty = Pty.spawn(
+                List.of("/bin/sh", "-c", "trap 'echo GOT-WINCH $(stty size)' WINCH; while :; do sleep 0.1; done"),
+                TMP, ENV, new PtySize(80, 24))) {
+            Collector output = new Collector(pty.output());
+            Thread.sleep(250);
+            pty.resize(new PtySize(120, 40));
+            output.await("GOT-WINCH 40 120", Duration.ofSeconds(5));
+        }
+    }
+
     @Test
     void exitCodeComesBack() throws Exception {
         try (Pty pty = Pty.spawn(List.of("/bin/sh", "-c", "exit 7"), TMP, ENV, new PtySize(80, 24))) {

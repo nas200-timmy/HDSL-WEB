@@ -39,13 +39,15 @@ func Run(ctx context.Context, term, out *os.File, input io.Reader, conn *pterm.C
 			logf("尺寸监听结束: %v", err)
 		}
 	}()
-	if size, err := local.Size(); err == nil {
+	initial, sizeErr := local.Size()
+	if sizeErr == nil {
 		// The agent needs a size before its first paint, or it guesses 80x24.
-		if sendErr := conn.SendResize(size.Cols, size.Rows); sendErr != nil {
+		logf("初始尺寸 %dx%d", initial.Cols, initial.Rows)
+		if sendErr := conn.SendResize(initial.Cols, initial.Rows); sendErr != nil {
 			logf("初始尺寸未发送: %v", sendErr)
 		}
 	} else {
-		logf("读不到本地窗口尺寸: %v", err)
+		logf("读不到本地窗口尺寸: %v", sizeErr)
 	}
 
 	detach := &cli.Detach{}
@@ -58,6 +60,13 @@ func Run(ctx context.Context, term, out *os.File, input io.Reader, conn *pterm.C
 			logf("ready: instance=%s brand=%s protocol=%d", control.Instance, control.Brand, control.Protocol)
 			if control.Protocol != 0 && control.Protocol != pterm.Protocol {
 				logf("警告: 面板的终端协议是 %d，本客户端实现的是 %d", control.Protocol, pterm.Protocol)
+			}
+			// Send the size once more now that the terminal is really open: a
+			// TUI that was already running may have missed the first one (it
+			// is sent before the panel finishes the handshake), and a stale
+			// size means it paints wider than the window.
+			if sizeErr == nil {
+				_ = conn.SendResize(initial.Cols, initial.Rows)
 			}
 		},
 	})
