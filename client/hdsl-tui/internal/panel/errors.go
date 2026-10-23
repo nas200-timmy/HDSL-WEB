@@ -7,8 +7,10 @@ import (
 	"strings"
 )
 
-// SessionCookie is the cookie carrying the panel session. It is kept in memory
-// for the lifetime of the process only.
+// SessionCookie is the cookie carrying the panel session. The HTTP client
+// holds it in memory; whether it reaches the config file is the user's choice
+// (store.RememberSession), and it is the only thing the file stores that
+// authenticates anything.
 const SessionCookie = "hdsl_session"
 
 // APIError is an error body: every /api failure (except a bare transport

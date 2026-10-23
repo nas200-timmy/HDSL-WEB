@@ -34,7 +34,7 @@ func TestUsageErrors(t *testing.T) {
 	}{
 		{"no panel address", []string{}},
 		{"unknown brand", []string{"--brand", "vscode", "https://panel.test"}},
-		{"address without a scheme", []string{"nas200.top"}},
+		{"address without a scheme", []string{"panel.example.com"}},
 		{"address without a host", []string{"https://"}},
 		{"two addresses", []string{"https://a.test", "https://b.test"}},
 		{"unknown flag", []string{"--nope", "https://panel.test"}},

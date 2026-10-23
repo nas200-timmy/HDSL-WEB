@@ -194,7 +194,7 @@ nginx/Caddy 也支持，`Host` 必须原样透传。细节见 [docs/deployment.m
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nas200-timmy/HDSL-WEB/main/scripts/install-hdsl-tui.sh | sh
-hdsl-tui https://panel.example.com
+hdsl-tui            # 全屏菜单：选服务器 → 登录一次 → 选实例 → 进终端
 ```
 
 Windows 用 PowerShell 版的同一个脚本（`scripts/install-hdsl-tui.ps1`）。也可以直接从
@@ -205,8 +205,11 @@ Windows 用 PowerShell 版的同一个脚本（`scripts/install-hdsl-tui.ps1`）
 - 客户端与面板**同版本号发布**；`hdsl-tui --version` 打印自己的版本与协议号。
 - 依赖源码随仓库提交（`vendor/`），`install-hdsl-tui.sh --build` 可以在没有预编译产物时
   用本机 Go 离线编译。
-- 每次启动都要输面板密码 + 开发者密码（提权 30 分钟滑动）；凭证只存在内存里，不落盘。
-- 断开用 `Ctrl-]` 再按 `q`，agent 继续跑；重连会接回同一个会话并回放最近输出。
+- 全屏菜单照 Debian 安装器做的：服务器列表 → 主菜单 → 分类 → 实例 → 动作，`Esc` 逐级返回。
+  保存的服务器和登录会话记在 `~/.config/hdsl-tui/config.json`（`0600`），下次直接复用；
+  开发者密码只在面板要求时问一次（30 分钟滑动）。
+- 断开用 `Ctrl-]` 再按 `q`，回到菜单而不是退出程序，agent 继续跑；再进一次接回同一个会话。
+- 脚本或无终端环境加 `--plain` 退回逐行问答界面。
 - Windows 客户端支持 Windows Terminal 与 conhost（自动打开 VT 处理与 UTF-8 代码页）；
   **Windows 面板**仍只有桌面控制台，客户端会打印服务端给的提示后退出。
 

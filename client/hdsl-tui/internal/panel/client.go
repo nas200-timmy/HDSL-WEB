@@ -15,8 +15,9 @@ import (
 // bodies are one short sentence.
 const maxErrorBody = 64 << 10
 
-// Client talks to one panel. The session cookie lives here and nowhere else:
-// no jar, no disk, no argv.
+// Client talks to one panel. The session cookie lives here and nowhere else in
+// the HTTP layer: no jar, no argv. The UI decides whether to persist it (see
+// internal/store); this type only ever holds it in memory.
 type Client struct {
 	base   *url.URL
 	http   *http.Client
@@ -64,6 +65,26 @@ func (c *Client) Session() string {
 	cookie := *c.cookie
 	cookie.Path = "/"
 	return cookie.String()
+}
+
+// CookieValue is the bare session token, or "" before login. It is what the
+// config file stores when the user lets the client remember the session.
+func (c *Client) CookieValue() string {
+	if c.cookie == nil {
+		return ""
+	}
+	return c.cookie.Value
+}
+
+// SetSession installs a session token captured earlier (or clears it when raw
+// is empty). The panel decides whether it is still valid; the first request
+// after this call is the probe.
+func (c *Client) SetSession(raw string) {
+	if raw == "" {
+		c.cookie = nil
+		return
+	}
+	c.cookie = &http.Cookie{Name: SessionCookie, Value: raw, Path: "/"}
 }
 
 // URL resolves a panel-relative path against the base, keeping any prefix the

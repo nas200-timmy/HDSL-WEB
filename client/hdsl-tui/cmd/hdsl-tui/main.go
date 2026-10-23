@@ -1,8 +1,12 @@
 // Command hdsl-tui opens one HDSL-Web instance's terminal in a real terminal.
 //
-// It is a viewer, not a session owner: closing it detaches and the agent keeps
-// running. Everything the panel checks — HTTPS, the web shell switch, the
-// developer password — stays checked by the panel; this client only renders.
+// Run with no arguments in a terminal and it opens its own menu: pick a saved
+// panel or type a new address, log in once (the session can be remembered),
+// then choose 分类 → 实例 → 动作. Attaching to an agent returns to the menu,
+// not to the shell — the login and the connection survive the agent.
+//
+// Run with a panel address and no terminal (a pipe, cron, a script) and it
+// falls back to the line-based flow it always had.
 package main
 
 import (
@@ -16,13 +20,14 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
+	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/app"
 	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/cli"
 	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/panel"
 	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/pterm"
+	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/rtty"
 	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/termx"
 )
 
@@ -43,6 +48,7 @@ type options struct {
 	insecure    bool
 	showVersion bool
 	verbose     bool
+	plain       bool
 }
 
 func main() {
@@ -64,15 +70,83 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return cli.ExitOK
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if !opts.plain && isTerminal(stdin) && isTerminal(stdout) {
+		return runInteractive(ctx, opts, base, stdin.(*os.File), stdout.(*os.File), stderr)
+	}
+	return runPlain(ctx, opts, base, stdin, stdout, stderr)
+}
+
+func isTerminal(stream any) bool {
+	file, ok := stream.(*os.File)
+	return ok && termx.IsTerminal(file)
+}
+
+// runInteractive is the default in a terminal: the menu owns the screen from
+// here on.
+func runInteractive(ctx context.Context, opts options, base *url.URL, in, out *os.File, stderr io.Writer) int {
+	log := logger{w: stderr, enabled: opts.verbose}
+
+	tlsConfig, err := tlsConfigFor(opts.ca, opts.insecure, base, in, stderr, log.Logf)
+	if err != nil {
+		fmt.Fprintln(stderr, "错误: "+err.Error())
+		return cli.ExitUsage
+	}
+	httpClient := &http.Client{
+		Transport: &http.Transport{TLSClientConfig: tlsConfig, Proxy: http.ProxyFromEnvironment},
+		Timeout:   requestTimeout,
+	}
+	newClient := func(baseURL string) (*panel.Client, error) {
+		return panel.New(baseURL, httpClient, log.Logf)
+	}
+
+	initial := ""
+	if base != nil {
+		initial = base.String()
+	}
+
+	raw, openErr := termx.Open(in, out)
+	if openErr != nil {
+		fmt.Fprintln(stderr, "错误: 无法初始化终端："+openErr.Error())
+		return cli.ExitUsage
+	}
+
+	code, runErr := app.Run(ctx, app.Options{
+		NewClient:     newClient,
+		Instance:      opts.instance,
+		Brand:         normaliseBrand(opts.brand),
+		Resume:        opts.resume,
+		User:          opts.user,
+		TLSConfig:     tlsConfig,
+		Insecure:      opts.insecure && base == nil,
+		InitialServer: initial,
+		Version:       version,
+		Logf:          log.Logf,
+	}, in, out, stderr, raw)
+	if runErr != nil {
+		fmt.Fprintln(stderr, "错误: "+runErr.Error())
+		return cli.ExitUsage
+	}
+	return code
+}
+
+// runPlain is the scriptable flow: a panel address is required, the username
+// and both passwords are read from stdin, and the chooser is a numbered list.
+func runPlain(ctx context.Context, opts options, base *url.URL, stdin io.Reader, stdout, stderr io.Writer) int {
 	log := logger{w: stderr, enabled: opts.verbose}
 	fail := func(err error) int {
 		code, text := cli.Explain(err)
 		fmt.Fprintln(stderr, "错误: "+text)
 		return code
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	if base == nil {
+		fmt.Fprintln(stderr, "缺少面板地址：非交互式运行需要显式指定，例如 hdsl-tui https://panel.example.com:8443")
+		fmt.Fprintln(stderr)
+		fmt.Fprint(stderr, usageText)
+		return cli.ExitUsage
+	}
 
 	tlsConfig, err := tlsConfigFor(opts.ca, opts.insecure, base, stdin, stderr, log.Logf)
 	if err != nil {
@@ -169,42 +243,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer conn.Close()
 
-	local := localTerminal(stderr)
-	restore := rawMode(local, log)
-	defer restore()
-
-	sizeCtx, stopSize := context.WithCancel(ctx)
-	defer stopSize()
-	go func() {
-		if err := local.Poll(sizeCtx, func(size termx.Size) {
-			log.Logf("窗口尺寸 %dx%d", size.Cols, size.Rows)
-			_ = conn.SendResize(size.Cols, size.Rows)
-		}); err != nil {
-			log.Logf("尺寸监听结束: %v", err)
-		}
-	}()
-	if size, err := local.Size(); err == nil {
-		// The agent needs a size before its first paint, or it guesses 80x24.
-		if sendErr := conn.SendResize(size.Cols, size.Rows); sendErr != nil {
-			log.Logf("初始尺寸未发送: %v", sendErr)
-		}
-	} else {
-		log.Logf("读不到本地窗口尺寸: %v", err)
-	}
-
-	detach := &cli.Detach{}
-	result, runErr := conn.Run(ctx, pterm.Options{
-		In: os.Stdin, Out: os.Stdout, Logf: log.Logf, Filter: detach.Feed,
-		OnReady: func(control pterm.Control) {
-			log.Logf("ready: instance=%s brand=%s protocol=%d", control.Instance, control.Brand, control.Protocol)
-			if control.Protocol != 0 && control.Protocol != pterm.Protocol {
-				fmt.Fprintf(stderr, "警告: 面板的终端协议是 %d，本客户端实现的是 %d，仍会尝试连接。\n",
-					control.Protocol, pterm.Protocol)
-			}
-		},
-	})
-	restore()
-
+	tty := fileOrStdin(stdin)
+	result, runErr := rtty.Run(ctx, tty, fileOrStdout(stdout), tty, conn, log.Logf)
 	if runErr != nil {
 		return fail(runErr)
 	}
@@ -223,6 +263,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return fail(&pterm.CloseError{Code: result.CloseCode, Reason: result.CloseReason})
 	}
 	return fail(errors.New("终端连接在没有收到 exit 帧的情况下结束"))
+}
+
+// fileOrStdin and fileOrStdout let the plain flow keep working with buffers in
+// tests: rtty only needs a terminal when there is one.
+func fileOrStdin(stream io.Reader) *os.File {
+	if file, ok := stream.(*os.File); ok {
+		return file
+	}
+	return os.Stdin
+}
+
+func fileOrStdout(stream io.Writer) *os.File {
+	if file, ok := stream.(*os.File); ok {
+		return file
+	}
+	return os.Stdout
 }
 
 // killTerminal stops the terminal through the REST surface, which is what
@@ -264,39 +320,6 @@ func collectGroups(ctx context.Context, client *panel.Client, log logger) ([]cli
 	return groups, nil
 }
 
-// localTerminal uses the real terminal when there is one and a no-op stand-in
-// otherwise, so the client still works with redirected stdin/stdout.
-func localTerminal(stderr io.Writer) termx.Raw {
-	if !termx.IsTerminal(os.Stdin) || !termx.IsTerminal(os.Stdout) {
-		fmt.Fprintln(stderr, "提示: 标准输入/输出不是终端，已跳过 raw 模式（交互式使用请在真正的终端里运行）。")
-		return termx.Nop{}
-	}
-	local, err := termx.Open(os.Stdin, os.Stdout)
-	if err != nil {
-		fmt.Fprintln(stderr, "提示: 无法初始化终端，已跳过 raw 模式："+err.Error())
-		return termx.Nop{}
-	}
-	return local
-}
-
-// rawMode enters raw mode and returns a restore function that is safe to call
-// more than once: it runs before the closing messages and again on the way out.
-func rawMode(local termx.Raw, log logger) func() {
-	restore, err := local.Enter()
-	if err != nil {
-		log.Logf("进入 raw 模式失败: %v", err)
-		return func() {}
-	}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			if err := restore(); err != nil {
-				log.Logf("恢复终端失败: %v", err)
-			}
-		})
-	}
-}
-
 func normaliseBrand(brand string) string {
 	if brand == "dsh" {
 		return ""
@@ -314,9 +337,10 @@ func parseArgs(args []string) (options, *url.URL, error) {
 	flags.StringVar(&opts.resume, "resume", "", "附着到该 harness 会话")
 	flags.StringVar(&opts.user, "user", "", "面板用户名（默认 admin）")
 	flags.StringVar(&opts.ca, "ca", "", "额外信任的 CA 证书（PEM 文件）")
-	flags.BoolVar(&opts.insecure, "insecure", false, "跳过证书校验（打印指纹并要求确认）")
+	flags.BoolVar(&opts.insecure, "insecure", false, "跳过证书校验（要求确认指纹）")
 	flags.BoolVar(&opts.showVersion, "version", false, "打印客户端版本与协议号后退出")
 	flags.BoolVar(&opts.verbose, "verbose", false, "把请求细节写到 stderr")
+	flags.BoolVar(&opts.plain, "plain", false, "使用逐行问答的旧界面（脚本/无终端时自动启用）")
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -333,11 +357,13 @@ func parseArgs(args []string) (options, *url.URL, error) {
 		return options{}, nil, fmt.Errorf("--brand 只能是 kimi | opencode | claude-web（或留空表示 dsh），收到 %q\n\n%s", opts.brand, usageText)
 	}
 	rest := flags.Args()
-	if len(rest) == 0 {
-		return options{}, nil, fmt.Errorf("缺少面板地址\n\n%s", usageText)
-	}
 	if len(rest) > 1 {
 		return options{}, nil, fmt.Errorf("只需要一个面板地址，收到 %d 个\n\n%s", len(rest), usageText)
+	}
+	if len(rest) == 0 {
+		// No address is fine: the interactive client starts with its server
+		// picker. Plain mode rejects it later, with the usage text.
+		return opts, nil, nil
 	}
 	base, err := url.Parse(strings.TrimRight(strings.TrimSpace(rest[0]), "/"))
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
@@ -351,29 +377,39 @@ func usage(w io.Writer) { fmt.Fprint(w, usageText) }
 const usageText = `hdsl-tui — 在终端里进入 HDSL-Web 面板的实例
 
 用法:
-  hdsl-tui [选项] <面板地址>
+  hdsl-tui [选项] [面板地址]
 
-  <面板地址> 例如 https://nas200.top:8443 或 http://127.0.0.1:8080
+  不带面板地址时进入全屏菜单：选择已保存的服务器或输入新地址，登录一次，
+  再按「分类 → 实例 → 动作」操作。Esc 逐级返回，Ctrl-C 取消。
+
+  带面板地址时直接连过去（菜单仍会显示，地址只是跳过选择那一步）。
 
 选项:
-  --instance <id>   直接进入该实例，不显示菜单
+  --instance <id>   直接进入该实例的终端（仍会显示菜单）
   --brand <name>    品牌：kimi | opencode | claude-web（默认 dsh）
   --resume <id>     附着到该 harness 会话（kimi / opencode）
   --user <name>     面板用户名，默认 admin；给了就不再提示
   --ca <pem>        额外信任的 CA 证书（PEM 文件）
   --insecure        跳过证书校验：先打印 SHA-256 指纹，要求输入 yes
+  --plain           使用逐行问答的旧界面（无终端时自动启用）
   --version         打印客户端版本与协议号后退出（不联网）
   --verbose         把请求细节写到 stderr
   -h, --help        显示本帮助
 
-会话中的按键:
-  Ctrl-] q          离开客户端，agent 继续在后台跑
-  Ctrl-] k          停掉终端（DELETE .../terminal）再退出
-  Ctrl-] Ctrl-]     发送一个字面量 Ctrl-]
-  其他按键（含 Ctrl-C）原样送给 agent
+菜单里的按键:
+  ↑/↓ 或 j/k        移动光标        Enter 确认
+  Esc               返回上一级      Ctrl-C 取消 / 退出
+  输入框里:
+  Ctrl-U            清空当前输入
+
+  在 agent 终端里:
+  Ctrl-] q          离开终端，agent 继续跑，回到菜单
+  Ctrl-] k          停掉终端再回到菜单
+  Ctrl-] Ctrl-]     给 agent 发一个字面量 Ctrl-]
+  Ctrl-C            原样发给 agent
 
 退出码:
-  0  正常结束（含 agent 以 0 退出、Ctrl-] q 离开）
+  0  正常结束（含菜单里选择退出、Ctrl-] q 离开）
   2  认证或提权失败
   3  无法连接面板 / 连接中断
   4  策略拒绝：面板不在 HTTPS、Web Shell 已关闭、Windows 面板的桌面终端

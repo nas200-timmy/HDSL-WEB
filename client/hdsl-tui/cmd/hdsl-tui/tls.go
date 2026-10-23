@@ -41,6 +41,13 @@ func tlsConfigFor(caPath string, insecure bool, base *url.URL, stdin io.Reader, 
 	if !insecure {
 		return config, nil
 	}
+	if base == nil {
+		// Interactive mode: the address is picked later, so there is no
+		// certificate to fingerprint yet. The app shows its own warning page
+		// before the server picker (app.Options.Insecure).
+		config.InsecureSkipVerify = true
+		return config, nil
+	}
 	if base.Scheme != "https" {
 		fmt.Fprintln(stderr, "提示：面板地址不是 https，--insecure 没有作用。")
 		return config, nil
