@@ -45,4 +45,10 @@ class DesktopTerminalTest {
         assertTrue(script.contains("\"C:\\work dir\\main.mjs\""), script);
         assertTrue(script.contains("\"s 1\""), script);
     }
+
+    @Test
+    void theRemoteHintExplainsThatAWindowsPanelCannotBeAttachedTo() {
+        assertTrue(DesktopTerminal.REMOTE_HINT.contains("Windows"), DesktopTerminal.REMOTE_HINT);
+        assertTrue(DesktopTerminal.REMOTE_HINT.contains("远程"), DesktopTerminal.REMOTE_HINT);
+    }
 }

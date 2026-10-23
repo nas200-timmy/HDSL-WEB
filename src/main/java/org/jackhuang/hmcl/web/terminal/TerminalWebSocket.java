@@ -57,6 +57,11 @@ import java.util.Optional;
 @ServerEndpoint(value = "/ws/terminal/{ticket}", configurator = TerminalWebSocket.SessionConfigurator.class)
 public final class TerminalWebSocket implements TerminalSink {
 
+    /// Version of the control-frame contract (docs/terminal-protocol.md).
+    /// Sent in the `ready` frame; a client that does not know the number warns
+    /// and tries anyway, because the byte channel itself is unchanged.
+    public static final int PROTOCOL = 1;
+
     private static volatile TerminalManager manager;
     private static volatile TerminalTickets tickets;
     private static volatile AuthService authService;
@@ -108,12 +113,25 @@ public final class TerminalWebSocket implements TerminalSink {
         }
         TerminalSession session = found.get();
         this.terminal = session;
-        JsonObject ready = new JsonObject();
-        ready.addProperty("type", "ready");
-        ready.addProperty("instance", granted.instanceId());
-        sendText(ws, ready.toString());
+        sendText(ws, readyJson(granted.instanceId(), granted.brand()));
         session.attach(this);
         Logger.LOG.info("Terminal WebSocket attached: " + granted.instanceId());
+    }
+
+    /// The `ready` control frame. Static and separate from the handshake so the
+    /// shape can be asserted in a unit test — docs/terminal-protocol.md is the
+    /// contract both sides are written against.
+    ///
+    /// @param instanceId the instance this socket is attached to
+    /// @param brand      the brand id the terminal serves
+    /// @return the JSON text frame
+    public static String readyJson(String instanceId, String brand) {
+        JsonObject ready = new JsonObject();
+        ready.addProperty("type", "ready");
+        ready.addProperty("protocol", PROTOCOL);
+        ready.addProperty("instance", instanceId);
+        ready.addProperty("brand", brand);
+        return ready.toString();
     }
 
     @OnMessage

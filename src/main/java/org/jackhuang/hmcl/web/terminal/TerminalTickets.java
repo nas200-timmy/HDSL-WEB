@@ -42,10 +42,11 @@ public final class TerminalTickets {
     /// What a ticket remembers.
     ///
     /// @param instanceId   the instance the terminal was opened for
+    /// @param brand        the brand id (`dsh`, `kimi`, …) the terminal serves
     /// @param sessionToken the panel session that asked for it, or `null` when
     ///                     authentication is disabled
     /// @param expiresAt    when the ticket stops being valid
-    public record Ticket(String instanceId, @Nullable String sessionToken, Instant expiresAt) {
+    public record Ticket(String instanceId, String brand, @Nullable String sessionToken, Instant expiresAt) {
     }
 
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -62,12 +63,16 @@ public final class TerminalTickets {
     }
 
     /// Issues a ticket for one attach.
-    public String issue(String instanceId, @Nullable String sessionToken) {
+    ///
+    /// @param instanceId the instance the terminal was opened for
+    /// @param brand      the brand id the terminal serves
+    /// @param sessionToken the session that asked, or `null` without auth
+    public String issue(String instanceId, String brand, @Nullable String sessionToken) {
         prune();
         byte[] bytes = new byte[32];
         RANDOM.nextBytes(bytes);
         String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        tickets.put(ticket, new Ticket(instanceId, sessionToken, Instant.now().plus(ttl)));
+        tickets.put(ticket, new Ticket(instanceId, brand, sessionToken, Instant.now().plus(ttl)));
         return ticket;
     }
 

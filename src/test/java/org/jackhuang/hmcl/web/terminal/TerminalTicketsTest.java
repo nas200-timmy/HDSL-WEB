@@ -31,11 +31,12 @@ class TerminalTicketsTest {
     @Test
     void aTicketIsConsumedOnceAndCarriesItsInstance() {
         TerminalTickets tickets = new TerminalTickets();
-        String issued = tickets.issue("kimi-1", "session-token");
+        String issued = tickets.issue("kimi-1", "kimi", "session-token");
 
         TerminalTickets.Ticket granted = tickets.consume(issued);
         assertNotNull(granted);
         assertEquals("kimi-1", granted.instanceId());
+        assertEquals("kimi", granted.brand(), "the ready frame reports the brand from the ticket");
         assertEquals("session-token", granted.sessionToken());
         assertNull(tickets.consume(issued), "the second consume must not find it");
     }
@@ -43,7 +44,7 @@ class TerminalTicketsTest {
     @Test
     void anExpiredTicketIsRefused() throws Exception {
         TerminalTickets tickets = new TerminalTickets(Duration.ofMillis(20));
-        String issued = tickets.issue("kimi-1", null);
+        String issued = tickets.issue("kimi-1", "kimi", null);
         Thread.sleep(60);
         assertNull(tickets.consume(issued));
     }

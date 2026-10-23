@@ -753,6 +753,7 @@ public final class InstancesApiServlet extends HttpServlet {
             JsonObject body = new JsonObject();
             body.addProperty("mode", "desktop");
             body.addProperty("instance", id);
+            body.addProperty("hint", org.jackhuang.hmcl.web.terminal.DesktopTerminal.REMOTE_HINT);
             Json.write(response, body);
             return;
         }
@@ -774,9 +775,10 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
             return;
         }
-        String ticket = terminalTickets.issue(id, token);
+        String ticket = terminalTickets.issue(id, "dsh", token);
         JsonObject body = new JsonObject();
         body.addProperty("mode", "pty");
+        body.addProperty("protocol", org.jackhuang.hmcl.web.terminal.TerminalWebSocket.PROTOCOL);
         body.addProperty("instance", id);
         body.addProperty("ticket", ticket);
         body.addProperty("ws", "/ws/terminal/" + ticket);

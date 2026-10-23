@@ -42,6 +42,13 @@ import java.nio.file.StandardOpenOption;
 @NotNullByDefault
 public final class DesktopTerminal {
 
+    /// Appended to a `mode: "desktop"` answer so a non-browser client (the
+    /// terminal CLI) can print something useful: there is no PTY to attach to
+    /// on a Windows panel, the console is opened on the panel machine's own
+    /// desktop.
+    public static final String REMOTE_HINT = "这台面板运行在 Windows 上：「终端」会在面板所在机器的桌面上打开控制台窗口，"
+            + "远程客户端无法接入。请在面板所在机器的桌面上使用，或把面板部署到 Linux/macOS 后再远程接入。";
+
     private DesktopTerminal() {
     }
 
