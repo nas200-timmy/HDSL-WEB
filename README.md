@@ -106,6 +106,9 @@ nginx/Caddy 也支持，`Host` 必须原样透传。细节见 [docs/deployment.m
   底栏「停止」、实例停止才杀进程树；同一实例同时只有一个会话。
 - **两道门**：面板会话 + 开发者密码提权（15 分钟滑动）。首次打开时可直接在终端窗口里设置
   开发者密码（要面板密码确认）。
+- **可关闭**：设置 →「开发者模式」（这一页本身也要开发者密码）里有一个 Web Shell 总开关。
+  关掉后实例列表不再显示终端按钮，直接调接口返回 403 `web_shell_disabled`；已经打开的终端
+  不受影响，可以从它自己的窗口停止。
 - **Windows**：不走浏览器 PTY，而是在桌面会话里开一个控制台窗口；面板以服务运行时没有交互
   桌面，按钮会明确拒绝。
 
@@ -305,6 +308,7 @@ auth:
 | `HDSL_BIND_HOST` | `0.0.0.0` | 主监听地址。只想本机访问可设 `127.0.0.1` |
 | `HDSL_BASE_PATH` | 空 | 面板被反代在子路径下时的挂载前缀（如 `/panel`）。反代须剥前缀，见[反向代理](#反向代理) |
 | `HDSL_HTTPS` | `false` | 只接受 `true`/`false`；等价于 `https.enabled` |
+| `HDSL_WEB_SHELL_ENABLED` | `true` | 实例终端（Web Shell）总开关；等价于 `server.yaml` 的 `web_shell.enabled`。关掉后终端按钮隐藏、打开接口返回 403。设置页「开发者模式」也能改 |
 | `HDSL_ADMIN_PASSWORD` | 空 | 仅首次启动且数据目录里没有用户时，用它创建 `admin` 账号；已存在账号时忽略 |
 | `NPM_CONFIG_REGISTRY` | `https://registry.npmjs.org/` | 下载源的回退值；面板设置优先。面板里改完立即生效，改环境变量要重启容器 |
 | `JAVA_OPTS` | 空 | 追加到 `java` 命令行的 JVM 参数，例如 `-Xmx2g` |

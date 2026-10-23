@@ -76,9 +76,23 @@ export function InstancesPage() {
   const [deleteTarget, setDeleteTarget] = useState<Instance | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [exportTarget, setExportTarget] = useState<Instance | null>(null);
+  /// Web Shell 总开关（开发者模式里控制）；关着就不显示终端按钮
+  const [webShellEnabled, setWebShellEnabled] = useState(true);
 
   useEffect(() => {
     void refreshInstances(!getState().instancesLoaded);
+    let alive = true;
+    api
+      .developerStatus()
+      .then((status) => {
+        if (alive) setWebShellEnabled(status.webShellEnabled);
+      })
+      .catch(() => {
+        // 读不到就维持显示：后端仍会拒绝打开，按钮不是那道门
+      });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const filtered = useMemo(() => {
@@ -335,17 +349,19 @@ export function InstancesPage() {
                         >
                           <RocketLaunchIcon size={18} />
                         </button>
-                        <button
-                          className="icon-btn on-variant ripple-host"
-                          title={I18N["terminal.open"]}
-                          disabled={st === "INSTALLING"}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setTerminalTarget({ kind: "dsh", id: inst.id, name: inst.name });
-                          }}
-                        >
-                          <DeployedCodeIcon size={18} />
-                        </button>
+                        {webShellEnabled && (
+                          <button
+                            className="icon-btn on-variant ripple-host"
+                            title={I18N["terminal.open"]}
+                            disabled={st === "INSTALLING"}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setTerminalTarget({ kind: "dsh", id: inst.id, name: inst.name });
+                            }}
+                          >
+                            <DeployedCodeIcon size={18} />
+                          </button>
+                        )}
                         <button
                           className="icon-btn on-variant ripple-host"
                           title={I18N["dsh.instance.menu"]}

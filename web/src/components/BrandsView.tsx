@@ -659,6 +659,23 @@ function InstancesCard({
     status: BrandInstallStatus | null;
   } | null>(null);
   const [terminalTarget, setTerminalTarget] = useState<TerminalTargetInfo | null>(null);
+  /// Web Shell 总开关（开发者模式里控制）；关着就不显示终端按钮
+  const [webShellEnabled, setWebShellEnabled] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .developerStatus()
+      .then((status) => {
+        if (alive) setWebShellEnabled(status.webShellEnabled);
+      })
+      .catch(() => {
+        // 读不到就维持显示：后端仍会拒绝打开，按钮不是那道门
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const shortName = BRAND_SHORT[brand];
   const instances = s.external.filter((e) => e.brand === brand);
@@ -1009,16 +1026,18 @@ function InstancesCard({
                     >
                       {running ? <CloseIcon size={18} /> : <RocketLaunchIcon size={18} />}
                     </button>
-                    <button
-                      className="icon-btn on-variant ripple-host"
-                      title={I18N["terminal.open"]}
-                      disabled={installing || brand === "claude-web"}
-                      onClick={() =>
-                        setTerminalTarget({ kind: "brand", brand, id: inst.id, name: inst.name })
-                      }
-                    >
-                      <DeployedCodeIcon size={18} />
-                    </button>
+                    {webShellEnabled && (
+                      <button
+                        className="icon-btn on-variant ripple-host"
+                        title={I18N["terminal.open"]}
+                        disabled={installing || brand === "claude-web"}
+                        onClick={() =>
+                          setTerminalTarget({ kind: "brand", brand, id: inst.id, name: inst.name })
+                        }
+                      >
+                        <DeployedCodeIcon size={18} />
+                      </button>
+                    )}
                     <button
                       className="icon-btn on-variant ripple-host"
                       title={I18N["dsh.brand.open"]}

@@ -49,6 +49,7 @@ public final class ServerConfigLoader {
     public static final String ENV_BIND_HOST = "HDSL_BIND_HOST";
     public static final String ENV_BASE_PATH = "HDSL_BASE_PATH";
     public static final String ENV_HTTPS = "HDSL_HTTPS";
+    public static final String ENV_WEB_SHELL_ENABLED = "HDSL_WEB_SHELL_ENABLED";
     public static final String ENV_ZCODE_PACKAGE = "HDSL_ZCODE_PACKAGE";
     public static final String ENV_ZCODE_NODE = "HDSL_ZCODE_NODE";
     public static final String ENV_ZCODE_BUILD_BIN = "HDSL_ZCODE_BUILD_BIN";
@@ -139,12 +140,21 @@ public final class ServerConfigLoader {
         if (root.containsKey("auth")) {
             applyAuth(config, mapField(root, "auth"));
         }
+        if (root.containsKey("web_shell")) {
+            applyWebShell(config, mapField(root, "web_shell"));
+        }
         for (String key : root.keySet()) {
             switch (key) {
-                case "bind_host", "port", "public_base_url", "https", "auth" -> {
+                case "bind_host", "port", "public_base_url", "https", "auth", "web_shell" -> {
                 }
                 default -> logger.warning(yamlFile + ": unknown key `" + key + "` ignored");
             }
+        }
+    }
+
+    private static void applyWebShell(ServerConfig config, Map<String, Object> webShell) {
+        if (webShell.containsKey("enabled")) {
+            config.webShell.enabled = booleanField(webShell, "enabled");
         }
     }
 
@@ -202,6 +212,15 @@ public final class ServerConfigLoader {
                 case "true" -> true;
                 case "false" -> false;
                 default -> throw new ConfigException(ENV_HTTPS + " must be `true` or `false`, got `" + value + "`");
+            };
+        }
+        if (env.containsKey(ENV_WEB_SHELL_ENABLED)) {
+            String value = env.get(ENV_WEB_SHELL_ENABLED);
+            config.webShell.enabled = switch (value) {
+                case "true" -> true;
+                case "false" -> false;
+                default -> throw new ConfigException(ENV_WEB_SHELL_ENABLED
+                        + " must be `true` or `false`, got `" + value + "`");
             };
         }
         if (env.containsKey(ENV_ZCODE_PACKAGE)) {

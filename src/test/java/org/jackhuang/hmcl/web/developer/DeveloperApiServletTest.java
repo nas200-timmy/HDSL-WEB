@@ -28,6 +28,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
@@ -83,6 +84,60 @@ class DeveloperApiServletTest {
             HttpResponse<String> cleared = post(client, base + "/api/developer/password/clear",
                     "{\"adminPassword\":\"" + PANEL_PASSWORD + "\"}", cookie);
             assertEquals(200, cleared.statusCode(), cleared.body());
+            assertFalse(json(get(client, base + "/api/developer/status", cookie)).get("elevated").getAsBoolean());
+        }
+    }
+
+    @Test
+    void theWebShellSwitchNeedsElevationAndACorrectCurrentPassword() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir,
+                Map.of(UserStore.ENV_ADMIN_PASSWORD, PANEL_PASSWORD), config -> {
+                    config.bindHost = "127.0.0.1";
+                    config.https.enabled = true;
+                })) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "https://127.0.0.1:" + running.port();
+            String cookie = login(client, base);
+
+            HttpResponse<String> set = post(client, base + "/api/developer/password",
+                    "{\"adminPassword\":\"" + PANEL_PASSWORD + "\",\"password\":\"" + DEV_PASSWORD
+                            + "\",\"confirm\":\"" + DEV_PASSWORD + "\"}", cookie);
+            assertEquals(200, set.statusCode(), set.body());
+
+            // The switch starts on and cannot be flipped without the second factor.
+            JsonObject initial = json(get(client, base + "/api/developer/status", cookie));
+            assertTrue(initial.get("webShellEnabled").getAsBoolean());
+            HttpResponse<String> refused = post(client, base + "/api/developer/web-shell",
+                    "{\"enabled\":false}", cookie);
+            assertEquals(403, refused.statusCode(), refused.body());
+            assertTrue(refused.body().contains("developer_elevation_required"));
+
+            HttpResponse<String> elevated = post(client, base + "/api/developer/elevate",
+                    "{\"password\":\"" + DEV_PASSWORD + "\"}", cookie);
+            assertEquals(200, elevated.statusCode(), elevated.body());
+
+            HttpResponse<String> off = post(client, base + "/api/developer/web-shell",
+                    "{\"enabled\":false}", cookie);
+            assertEquals(200, off.statusCode(), off.body());
+            assertFalse(json(off).get("enabled").getAsBoolean());
+            assertFalse(json(get(client, base + "/api/developer/status", cookie))
+                    .get("webShellEnabled").getAsBoolean());
+            String yaml = Files.readString(running.dataDir().resolve("server.yaml"));
+            assertTrue(yaml.contains("web_shell"), yaml);
+            assertTrue(yaml.contains("enabled: false"), yaml);
+
+            // Changing the password needs the current one; without it the call fails.
+            HttpResponse<String> wrongCurrent = post(client, base + "/api/developer/password",
+                    "{\"adminPassword\":\"" + PANEL_PASSWORD + "\",\"password\":\"new-dev-password-1\""
+                            + ",\"confirm\":\"new-dev-password-1\",\"currentDevPassword\":\"not-it\"}", cookie);
+            assertEquals(403, wrongCurrent.statusCode(), wrongCurrent.body());
+
+            HttpResponse<String> changed = post(client, base + "/api/developer/password",
+                    "{\"adminPassword\":\"" + PANEL_PASSWORD + "\",\"password\":\"new-dev-password-1\""
+                            + ",\"confirm\":\"new-dev-password-1\",\"currentDevPassword\":\"" + DEV_PASSWORD + "\"}",
+                    cookie);
+            assertEquals(200, changed.statusCode(), changed.body());
+            // A new secret kills every elevation minted against the old one.
             assertFalse(json(get(client, base + "/api/developer/status", cookie)).get("elevated").getAsBoolean());
         }
     }

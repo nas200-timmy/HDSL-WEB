@@ -300,7 +300,7 @@ public final class HdslServer {
                 config, taskService, terminals, terminalTickets,
                 authService, developerAuth, developerElevation)), "/api/brands/*");
         context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.developer.DeveloperApiServlet(
-                developerAuth, developerElevation, authService, tlsActive)), "/api/developer/*");
+                developerAuth, developerElevation, authService, config, tlsActive)), "/api/developer/*");
         // Registered before the `/api/settings/*` holder below and matched by its longer prefix:
         // the download source is a launcher setting, and TLS is the other thing this path serves.
         context.addServlet(new ServletHolder(new RegistrySettingsApiServlet()), "/api/settings/registry/*");

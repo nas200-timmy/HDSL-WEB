@@ -100,6 +100,30 @@ public final class ServerConfigWriter {
         writeAtomically(yamlFile, root);
     }
 
+    /// Records the Web Shell switch in `server.yaml` (`web_shell.enabled`), so
+    /// the developer page's choice survives a restart. Other keys in the
+    /// section ride along untouched.
+    ///
+    /// @param dataDir the data directory `server.yaml` lives in
+    /// @param enabled whether instances may open a terminal
+    /// @throws IOException when the file cannot be read or written
+    public static void updateWebShell(Path dataDir, boolean enabled) throws IOException {
+        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
+        Map<String, Object> root = readExisting(yamlFile);
+
+        Object current = root.get("web_shell");
+        Map<String, Object> section = new LinkedHashMap<>();
+        if (current instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                section.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        section.put("enabled", enabled);
+        root.put("web_shell", section);
+
+        writeAtomically(yamlFile, root);
+    }
+
     /// Reads the existing document, or an empty map when there is none.
     private static Map<String, Object> readExisting(Path yamlFile) throws IOException {
         Map<String, Object> root = new LinkedHashMap<>();

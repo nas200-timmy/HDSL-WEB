@@ -5,6 +5,8 @@ import { FileDropInput } from "../components/FileDropInput";
 import {
   CheckCircleIcon,
   CheckIcon,
+  DeployedCodeFillIcon,
+  DeployedCodeIcon,
   DownloadIcon,
   ErrorIcon,
   InfoFillIcon,
@@ -25,6 +27,7 @@ import { I18N } from "../i18n";
 import { logout, setState, toast, useAppState } from "../store";
 import { bindSystemThemeListener, setThemeMode, useThemeMode, type ThemeMode } from "../theme";
 import type {
+  DeveloperStatus,
   DoctorCheck,
   DoctorReport,
   Health,
@@ -42,6 +45,7 @@ type SettingsTab =
   | "appearance"
   | "download-source"
   | "tls"
+  | "developer"
   | "doctor"
   | "about";
 
@@ -63,6 +67,7 @@ export function SettingsPage() {
       "appearance",
       "download-source",
       "tls",
+      "developer",
       "doctor",
       "about",
     ] as SettingsTab[]
@@ -119,6 +124,12 @@ export function SettingsPage() {
                 title: "HTTPS 证书",
                 icon: <KeepIcon size={20} />,
               },
+              {
+                key: "developer",
+                title: "开发者模式",
+                icon: <DeployedCodeIcon size={20} />,
+                iconActive: <DeployedCodeFillIcon size={20} />,
+              },
             ],
           },
           {
@@ -150,6 +161,7 @@ export function SettingsPage() {
         {tab === "appearance" && <AppearanceTab />}
         {tab === "download-source" && <DownloadSourceTab />}
         {tab === "tls" && <TlsTab />}
+        {tab === "developer" && <DeveloperTab />}
         {tab === "doctor" && <DoctorTab />}
         {tab === "about" && <AboutTab />}
       </div>
@@ -1142,6 +1154,366 @@ function TlsTab() {
             )}
           </>
         ) : null}
+      </div>
+    </>
+  );
+}
+
+/* ---------------- 开发者模式 ---------------- */
+
+/// 后端错误文案 → 面板上的中文；认不出来就原样显示。
+function developerError(e: unknown): string {
+  if (e instanceof ApiError && e.status === 429) return "尝试次数过多，请稍后再试";
+  const raw = errMsg(e);
+  if (raw.includes("developer_password_not_set")) return "还没有设置开发者密码";
+  if (raw.includes("invalid developer password")) return "开发者密码不正确";
+  if (raw.includes("the current developer password does not match")) return "当前开发者密码不正确";
+  if (raw.includes("the panel password does not match")) return "面板密码不正确";
+  if (raw.includes("must be at least")) return "开发者密码至少 8 位";
+  if (raw.includes("must differ from the panel password")) return "开发者密码不能与面板密码相同";
+  if (raw.includes("tls_required")) return "需要先启用 HTTPS";
+  if (raw.includes("developer_elevation_required")) return "需要先输入开发者密码";
+  return raw;
+}
+
+/// 设置页的「开发者模式」：进入需要开发者密码，进去后可以开关 Web Shell、
+/// 修改开发者密码。实例终端打开前的二次确认用的是同一个密码。
+function DeveloperTab() {
+  const [status, setStatus] = useState<DeveloperStatus | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [unlockPassword, setUnlockPassword] = useState("");
+  const [setupAdmin, setSetupAdmin] = useState("");
+  const [setupPassword, setSetupPassword] = useState("");
+  const [setupConfirm, setSetupConfirm] = useState("");
+  const [changeCurrent, setChangeCurrent] = useState("");
+  const [changeAdmin, setChangeAdmin] = useState("");
+  const [changePassword, setChangePassword] = useState("");
+  const [changeConfirm, setChangeConfirm] = useState("");
+
+  const load = async () => {
+    setLoadError(null);
+    try {
+      setStatus(await api.developerStatus());
+    } catch (e) {
+      setLoadError(isNotImplemented(e) ? "后端尚未支持开发者模式" : developerError(e));
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const unlock = async () => {
+    if (!unlockPassword) return;
+    setBusy(true);
+    setFormError(null);
+    try {
+      await api.elevateDeveloper(unlockPassword);
+      setUnlockPassword("");
+      await load();
+    } catch (e) {
+      setFormError(developerError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setup = async () => {
+    setFormError(null);
+    if (!setupAdmin) return setFormError("请输入面板密码");
+    if (setupPassword.length < 8) return setFormError("开发者密码至少 8 位");
+    if (setupPassword !== setupConfirm) return setFormError("两次输入的开发者密码不一致");
+    setBusy(true);
+    try {
+      await api.setDeveloperPassword(setupAdmin, setupPassword, setupConfirm);
+      setSetupAdmin("");
+      setSetupPassword("");
+      setSetupConfirm("");
+      toast("success", "开发者密码已设置，请用它进入开发者模式");
+      await load();
+    } catch (e) {
+      setFormError(developerError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const change = async () => {
+    setFormError(null);
+    if (!changeCurrent) return setFormError("请输入当前开发者密码");
+    if (!changeAdmin) return setFormError("请输入面板密码");
+    if (changePassword.length < 8) return setFormError("新开发者密码至少 8 位");
+    if (changePassword !== changeConfirm) return setFormError("两次输入的新开发者密码不一致");
+    setBusy(true);
+    try {
+      await api.setDeveloperPassword(changeAdmin, changePassword, changeConfirm, changeCurrent);
+      setChangeCurrent("");
+      setChangeAdmin("");
+      setChangePassword("");
+      setChangeConfirm("");
+      toast("success", "开发者密码已更新，请用新密码重新进入");
+      await load();
+    } catch (e) {
+      setFormError(developerError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleWebShell = async () => {
+    if (!status) return;
+    setBusy(true);
+    setFormError(null);
+    try {
+      const result = await api.setWebShell(!status.webShellEnabled);
+      toast("success", result.enabled ? "Web Shell 已启用" : "Web Shell 已关闭");
+      await load();
+    } catch (e) {
+      setFormError(developerError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const caption = (
+    <div className="section-caption">
+      <DeployedCodeIcon size={16} />
+      开发者模式
+    </div>
+  );
+
+  if (loadError) {
+    return (
+      <>
+        {caption}
+        <div className="card">
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 12 }}>
+            <ErrorIcon size={16} style={{ color: "var(--monet-error)" }} />
+            <span>{loadError}</span>
+            <button className="btn btn-outline ripple-host" style={{ marginLeft: "auto" }} onClick={() => void load()}>
+              重试
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  if (!status) {
+    return (
+      <>
+        {caption}
+        <div className="card">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 12 }}>
+            <span className="spinner" />
+            <span>正在读取开发者模式状态…</span>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  if (!status.devPasswordSet) {
+    return (
+      <>
+        {caption}
+        <div className="card">
+          <div className="comp-row">
+            <span className="comp-label">开发者密码</span>
+            <span className="comp-value">尚未设置</span>
+          </div>
+          <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+            开发者密码是打开实例终端（Web Shell）之前的第二道门，和面板密码分开保存。设置时需要面板密码确认；
+            之后进入这个页面、打开终端、开关 Web Shell，都要用它验证。
+          </p>
+          <div className="comp-row">
+            <span className="comp-label">面板密码</span>
+            <span className="comp-value">
+              <input
+                className="input"
+                type="password"
+                autoComplete="current-password"
+                value={setupAdmin}
+                disabled={busy}
+                onChange={(e) => setSetupAdmin(e.target.value)}
+              />
+            </span>
+          </div>
+          <div className="comp-row">
+            <span className="comp-label">新开发者密码</span>
+            <span className="comp-value">
+              <input
+                className="input"
+                type="password"
+                autoComplete="new-password"
+                placeholder="至少 8 位"
+                value={setupPassword}
+                disabled={busy}
+                onChange={(e) => setSetupPassword(e.target.value)}
+              />
+            </span>
+          </div>
+          <div className="comp-row">
+            <span className="comp-label">确认开发者密码</span>
+            <span className="comp-value">
+              <input
+                className="input"
+                type="password"
+                autoComplete="new-password"
+                value={setupConfirm}
+                disabled={busy}
+                onChange={(e) => setSetupConfirm(e.target.value)}
+              />
+            </span>
+          </div>
+          {formError && <div className="form-error">{formError}</div>}
+          <div style={{ display: "flex", paddingTop: 6 }}>
+            <button className="btn btn-raised ripple-host" style={{ marginLeft: "auto" }} disabled={busy} onClick={() => void setup()}>
+              {busy ? "保存中…" : "设置开发者密码"}
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  if (!status.elevated) {
+    return (
+      <>
+        {caption}
+        <div className="card">
+          <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+            这个页面需要一个开发者密码才能进入——它和打开实例终端时用的是同一个密码。验证后 15 分钟内有效，
+            期间不需要重复输入。
+          </p>
+          <div className="comp-row">
+            <span className="comp-label">开发者密码</span>
+            <span className="comp-value">
+              <input
+                className="input"
+                type="password"
+                autoComplete="off"
+                autoFocus
+                value={unlockPassword}
+                disabled={busy}
+                onChange={(e) => setUnlockPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void unlock();
+                }}
+              />
+            </span>
+          </div>
+          {formError && <div className="form-error">{formError}</div>}
+          <div style={{ display: "flex", paddingTop: 6 }}>
+            <button className="btn btn-raised ripple-host" style={{ marginLeft: "auto" }} disabled={busy || !unlockPassword} onClick={() => void unlock()}>
+              {busy ? "验证中…" : "进入开发者模式"}
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      {caption}
+      <div className="card">
+        <div className="comp-row">
+          <span className="comp-label">实例终端（Web Shell）</span>
+          <span className="comp-value">
+            <span className={`tag ${status.webShellEnabled ? "running" : "plain"}`}>
+              {status.webShellEnabled ? "已启用" : "已关闭"}
+            </span>
+            <button
+              className={`switch ${status.webShellEnabled ? "on" : ""}`}
+              role="switch"
+              aria-checked={status.webShellEnabled}
+              aria-label="启用 Web Shell"
+              style={{ border: 0, padding: 0, marginLeft: "auto" }}
+              disabled={busy}
+              onClick={() => void toggleWebShell()}
+            />
+          </span>
+        </div>
+        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+          关闭后，实例列表上的终端按钮会隐藏，直接调用终端接口也会被拒绝；已经在运行的终端不受影响，
+          可以从它自己的窗口里停止。这个开关保存进 <span className="mono">server.yaml</span> 的
+          <span className="mono"> web_shell.enabled</span>，重启后仍然有效。
+        </p>
+      </div>
+
+      <div className="card">
+        <div className="comp-row">
+          <span className="comp-label">修改开发者密码</span>
+          <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            需要当前开发者密码 + 面板密码
+          </span>
+        </div>
+        <div className="comp-row">
+          <span className="comp-label">当前开发者密码</span>
+          <span className="comp-value">
+            <input
+              className="input"
+              type="password"
+              autoComplete="off"
+              value={changeCurrent}
+              disabled={busy}
+              onChange={(e) => setChangeCurrent(e.target.value)}
+            />
+          </span>
+        </div>
+        <div className="comp-row">
+          <span className="comp-label">面板密码</span>
+          <span className="comp-value">
+            <input
+              className="input"
+              type="password"
+              autoComplete="current-password"
+              value={changeAdmin}
+              disabled={busy}
+              onChange={(e) => setChangeAdmin(e.target.value)}
+            />
+          </span>
+        </div>
+        <div className="comp-row">
+          <span className="comp-label">新开发者密码</span>
+          <span className="comp-value">
+            <input
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              placeholder="至少 8 位"
+              value={changePassword}
+              disabled={busy}
+              onChange={(e) => setChangePassword(e.target.value)}
+            />
+          </span>
+        </div>
+        <div className="comp-row">
+          <span className="comp-label">确认新密码</span>
+          <span className="comp-value">
+            <input
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              value={changeConfirm}
+              disabled={busy}
+              onChange={(e) => setChangeConfirm(e.target.value)}
+            />
+          </span>
+        </div>
+        {formError && <div className="form-error">{formError}</div>}
+        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+          改完会立即吊销所有已提权的会话（包括当前这个），需要重新验证一次。
+        </p>
+        <div style={{ display: "flex", paddingTop: 6 }}>
+          <button className="btn btn-raised ripple-host" style={{ marginLeft: "auto" }} disabled={busy} onClick={() => void change()}>
+            {busy ? "保存中…" : "更新开发者密码"}
+          </button>
+        </div>
       </div>
     </>
   );

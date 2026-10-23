@@ -17,6 +17,11 @@ SSH 通道整个拿掉，Web Shell 成为面板里唯一的 TUI 入口。这不�
   `-full.jar` 产物。环境体检不再有 SSH 两行。
 - **没变**：开发者密码与 15 分钟提权、Web Shell 的打开/回放/停止语义、实例级互斥、
   审计日志（web / terminal 两个通道）。
+- **设置页换页**：「SSH 终端」整页改为「开发者模式」，进入同样需要开发者密码（15 分钟
+  滑动）。页内有两个控件：Web Shell 总开关（写 `server.yaml` 的 `web_shell.enabled`，
+  也可用 `HDSL_WEB_SHELL_ENABLED` 覆盖；关掉后终端按钮隐藏、接口返回 403
+  `web_shell_disabled`，已运行的终端不受影响）和修改开发者密码（当前开发者密码 +
+  面板密码确认，成功后所有提权立即失效）。
 - **升级说明**：旧 `server.yaml` 里的 `ssh:` 段会被忽略并在启动日志里打一条
   `unknown key` 警告，不需要手工删除；3022 不再监听；以前下载的 `-full.jar` 不再产出，
   从源码构建也只需要 `./gradlew build`。

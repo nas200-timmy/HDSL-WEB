@@ -22,10 +22,13 @@ import com.google.gson.JsonParser;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.auth.LoginThrottle;
 import org.jackhuang.hmcl.web.auth.UserStore;
+import org.jackhuang.hmcl.web.config.ServerConfig;
+import org.jackhuang.hmcl.web.config.ServerConfigWriter;
 import org.jackhuang.hmcl.web.http.Json;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -40,9 +43,11 @@ import java.util.function.BooleanSupplier;
 /// The developer mode's own door: the second factor behind the web terminal.
 ///
 /// `POST /api/developer/elevate` proves the password; `GET /api/developer/status`
-/// answers whether the caller is elevated; `POST /api/developer/password` sets
-/// or changes it (panel password confirmation, like the TLS settings route);
-/// `POST /api/developer/password/clear` removes it.
+/// answers whether the caller is elevated and whether the Web Shell is on;
+/// `POST /api/developer/password` sets or changes it (current developer
+/// password + panel password confirmation, like the TLS settings route);
+/// `POST /api/developer/password/clear` removes it; `POST /api/developer/web-shell`
+/// flips the instance-terminal switch.
 ///
 /// The routes are backed by [DeveloperElevation] and [DeveloperAuth], which
 /// the terminal's own gate shares.
@@ -52,6 +57,7 @@ public final class DeveloperApiServlet extends HttpServlet {
     private final DeveloperAuth devAuth;
     private final DeveloperElevation elevation;
     private final AuthService auth;
+    private final ServerConfig config;
     private final BooleanSupplier tlsActive;
     /// Failed panel-password confirmations, per source address — the second
     /// confirmation must not become an unthrottled oracle for the panel
@@ -59,10 +65,11 @@ public final class DeveloperApiServlet extends HttpServlet {
     private final LoginThrottle adminPasswordThrottle = new LoginThrottle();
 
     public DeveloperApiServlet(DeveloperAuth devAuth, DeveloperElevation elevation,
-                               AuthService auth, BooleanSupplier tlsActive) {
+                               AuthService auth, ServerConfig config, BooleanSupplier tlsActive) {
         this.devAuth = devAuth;
         this.elevation = elevation;
         this.auth = auth;
+        this.config = config;
         this.tlsActive = tlsActive;
     }
 
@@ -74,6 +81,7 @@ public final class DeveloperApiServlet extends HttpServlet {
             JsonObject body = new JsonObject();
             body.addProperty("devPasswordSet", devAuth.isSet());
             body.addProperty("elevated", elevation.isElevated(keyOf(request), sessionAlive(request)));
+            body.addProperty("webShellEnabled", config.webShell.enabled);
             Json.write(response, body);
             return;
         }
@@ -87,6 +95,10 @@ public final class DeveloperApiServlet extends HttpServlet {
         }
         if ("/password/clear".equals(path) && "POST".equals(method)) {
             clearPassword(request, response);
+            return;
+        }
+        if ("/web-shell".equals(path) && "POST".equals(method)) {
+            setWebShell(request, response);
             return;
         }
         Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
@@ -203,6 +215,44 @@ public final class DeveloperApiServlet extends HttpServlet {
         Json.write(response, answer);
     }
 
+    /// Flips the Web Shell switch. Requires the developer elevation (the same
+    /// proof a terminal needs) and HTTPS, because this is the switch that
+    /// decides whether an RCE-equivalent entry is reachable at all.
+    private void setWebShell(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireTls(response)) {
+            return;
+        }
+        if (!elevation.require(keyOf(request), sessionAlive(request))) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return;
+        }
+        Boolean enabled = booleanField(readJson(request), "enabled");
+        if (enabled == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "enabled is required");
+            return;
+        }
+        try {
+            ServerConfigWriter.updateWebShell(config.dataDir, enabled);
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "the web shell switch could not be stored: " + e.getMessage());
+            return;
+        }
+        config.webShell.enabled = enabled;
+        AuditLog.log(AuditLog.Channel.WEB, "developer.web-shell", enabled ? "on" : "off", "success",
+                actorOf(request), request.getRemoteAddr());
+        JsonObject answer = new JsonObject();
+        answer.addProperty("ok", true);
+        answer.addProperty("enabled", enabled);
+        Json.write(response, answer);
+    }
+
+    private static @Nullable String actorOf(HttpServletRequest request) {
+        Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
+        return session instanceof AuthService.Session value ? value.username() : null;
+    }
+
     /// Confirms the panel password with a per-address budget, answering the
     /// refusal itself.
     private boolean confirmPanelPassword(HttpServletRequest request, HttpServletResponse response,
@@ -254,6 +304,17 @@ public final class DeveloperApiServlet extends HttpServlet {
         return body != null && body.has(field) && !body.get(field).isJsonNull()
                 ? body.get(field).getAsString()
                 : null;
+    }
+
+    private static @Nullable Boolean booleanField(@Nullable JsonObject body, String field) {
+        if (body == null || !body.has(field) || body.get(field).isJsonNull()) {
+            return null;
+        }
+        try {
+            return body.get(field).getAsBoolean();
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private boolean sessionAlive(HttpServletRequest request) {

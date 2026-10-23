@@ -201,6 +201,11 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
       await connect(data);
     } catch (e) {
       if (disposedRef.current || generation !== generationRef.current) return;
+      if (e instanceof ApiError && e.status === 403 && e.message.includes("web_shell_disabled")) {
+        setPhase("error");
+        setMessage("Web Shell 已在「设置 → 开发者模式」里关闭");
+        return;
+      }
       if (e instanceof ApiError && e.status === 403) {
         setPhase("password");
         return;

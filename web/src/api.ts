@@ -2,6 +2,7 @@ import type {
   Account,
   CreateAccountBody,
   CreateInstanceBody,
+  DeveloperStatus,
   DoctorReport,
   ExportRecord,
   Health,
@@ -177,9 +178,12 @@ export const api = {
       `/api/brands/${brand}/instances/${encodeURIComponent(id)}/reveal`,
       jsonInit("POST", { target }),
     ),
-  developerStatus: () => request<{ devPasswordSet: boolean; elevated: boolean }>("/api/developer/status"),
+  developerStatus: () => request<DeveloperStatus>("/api/developer/status"),
   elevateDeveloper: (password: string) =>
     request<{ elevated: boolean; expiresAt: string }>("/api/developer/elevate", jsonInit("POST", { password })),
+  /** 开发者模式下翻转 Web Shell 开关；需要先提权 */
+  setWebShell: (enabled: boolean) =>
+    request<{ ok: boolean; enabled: boolean }>("/api/developer/web-shell", jsonInit("POST", { enabled })),
   setDeveloperPassword: (
     adminPassword: string,
     password: string,

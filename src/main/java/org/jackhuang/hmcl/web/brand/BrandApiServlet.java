@@ -563,6 +563,11 @@ public final class BrandApiServlet extends HttpServlet {
             Json.write(response, body);
             return;
         }
+        if (!config.webShell.enabled) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "web_shell_disabled: the web shell is disabled in developer settings");
+            return;
+        }
         if (!developerAuth.isSet()) {
             Json.error(response, HttpServletResponse.SC_CONFLICT,
                     "developer_password_not_set: set it before opening a terminal");

@@ -297,6 +297,16 @@ export interface DoctorReport {
   generatedAt: string | number;
 }
 
+/// GET /api/developer/status：开发者模式的当前状态。
+export interface DeveloperStatus {
+  /** 是否已设置开发者密码 */
+  devPasswordSet: boolean;
+  /** 当前会话是否已通过开发者密码提权（15 分钟滑动续期） */
+  elevated: boolean;
+  /** 实例终端（Web Shell）开关；false 时打开终端会被后端拒绝 */
+  webShellEnabled: boolean;
+}
+
 // ---------- Phase 4：ACP 控制台 ----------
 
 /** acp-update 事件的 update 体：kind 之外字段按 ACP 会话更新类型各异，宽松读取 */

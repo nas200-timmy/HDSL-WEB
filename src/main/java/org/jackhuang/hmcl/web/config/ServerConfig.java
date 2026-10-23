@@ -61,6 +61,9 @@ public final class ServerConfig {
     /// Authentication settings; see [AuthConfig].
     public final AuthConfig auth = new AuthConfig();
 
+    /// The web terminal switch; see [WebShellConfig].
+    public final WebShellConfig webShell = new WebShellConfig();
+
     /// The experimental ZCode category; see [ZcodeConfig].
     public final ZcodeConfig zcode = new ZcodeConfig();
 
@@ -151,5 +154,16 @@ public final class ServerConfig {
         /// Session time to live in hours; sessions slide forward on every
         /// verified request (default 168 = one week).
         public int sessionTtlHours = 168;
+    }
+
+    /// The instance terminal (Web Shell) switch (docs/web-shell.md). The
+    /// developer page flips it; the terminal endpoints read it on every open,
+    /// so a change applies without a restart.
+    public static final class WebShellConfig {
+        /// Whether instances may open a terminal at all (`HDSL_WEB_SHELL_ENABLED`,
+        /// default true). Off means the open endpoint refuses with
+        /// `web_shell_disabled`; a terminal that is already running is left
+        /// alone, so the user can still stop it from its window.
+        public volatile boolean enabled = true;
     }
 }
