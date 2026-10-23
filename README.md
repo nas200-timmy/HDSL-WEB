@@ -35,15 +35,6 @@
   端口、不需要反向代理；关窗/刷新只断开查看，agent 继续跑，重开接回并回放。同一份实例 home
   与会话记录，和网页模式看到的是同一份。打开需要开发者密码；细节与威胁模型见
   [docs/web-shell.md](docs/web-shell.md)。
-- **SSH 终端通道（可选）**：`ssh -p 3022 hdsl@主机` 进来——先过 TUI 门禁（独立的开发者密码），
-  再在编号菜单里挑 dsh 实例 / 恢复 dsh 会话，选定后把 `dsh tui [--resume]` 的终端
-  直接接到你的 SSH 会话上（TERM/尺寸透传、resize 生效、断开自动清理整棵进程树）。
-  SSH 是「万不得已」通道：**默认构建不含它**，用 `-PwithSsh` 构建才会带上（运行时仍
-  默认关闭）。开启与全部敏感操作要求 **HTTPS + 开发者模式**；公钥登录为默认，口令登录
-  可开（带爆破风险警告）。监听地址（`bind_host`）可在设置页直接填写，默认 `127.0.0.1`。
-  平台矩阵：**Linux ✓ / macOS 放行但未实测 / Windows 不支持**。
-  日常的 TUI 请用实例上的「终端」按钮（[Web Shell](docs/web-shell.md)）。
-  设计、安全模型与编译开关见 [docs/ssh-terminal-channel.md](docs/ssh-terminal-channel.md)。
 
 <details>
 <summary>更多截图（初始化引导 / 实例列表 / 品牌实例 / 下载 / 设置）</summary>
@@ -114,20 +105,20 @@ nginx/Caddy 也支持，`Host` 必须原样透传。细节见 [docs/deployment.m
 - **会话常驻**：关窗/刷新只 detach，agent 继续跑；重开接回并回放最近 256 KB。`/exit`、
   底栏「停止」、实例停止才杀进程树；同一实例同时只有一个会话。
 - **两道门**：面板会话 + 开发者密码提权（15 分钟滑动）。首次打开时可直接在终端窗口里设置
-  开发者密码（要面板密码确认），不依赖 SSH 构建。
+  开发者密码（要面板密码确认）。
 - **Windows**：不走浏览器 PTY，而是在桌面会话里开一个控制台窗口；面板以服务运行时没有交互
   桌面，按钮会明确拒绝。
 
 终端入口效果上等价于 RCE（它启动的是 agent 进程），部署前提与威胁模型见
-[docs/web-shell.md §4.1](docs/web-shell.md)。日常的 TUI 用这个按钮；SSH 只是可选的
-「万不得已」通道。
+[docs/web-shell.md §4.1](docs/web-shell.md)。这是面板里唯一的 TUI 入口——SSH 通道已在
+v0.6.0 移除。
 
 ## 快速开始
 
 ### 方式零：下载 Release 产物
 
 从 [Releases](https://github.com/nas200-timmy/HDSL-WEB/releases) 下载 `hdsl-web-<版本>.jar`
-（默认构建，不含 SSH）或 `hdsl-web-<版本>-full.jar`（含 SSH 服务端），以及 `SHA256SUMS.txt`：
+以及 `SHA256SUMS.txt`：
 
 ```bash
 sha256sum -c SHA256SUMS.txt
@@ -151,8 +142,7 @@ docker run -d --name hdsl-web --restart unless-stopped \
   ghcr.io/nas200-timmy/hdsl-web:latest
 ```
 
-版本化标签与 Release 一一对应（如 `ghcr.io/nas200-timmy/hdsl-web:0.5.21`）。镜像由默认构建
-产出，**不含 SSH 服务端**；需要 SSH 时用 `-PwithSsh` 从源码构建。从源码构建：
+版本化标签与 Release 一一对应（如 `ghcr.io/nas200-timmy/hdsl-web:0.5.21`）。从源码构建：
 
 ```bash
 cd HDSL-web
@@ -422,19 +412,6 @@ bash scripts/e2e-real.sh
 第一次 `./gradlew build` / `shadowJar` 之前先 `cd web && npm install`：只要 PATH 上有 npm，
 Gradle 就会执行 `npm run build`，没有 `node_modules` 会失败。Docker 构建不需要——镜像的
 build 阶段故意不带 npm，SPA 由单独的 web 阶段产出后拷进去。
-
-### 编译时启用 SSH 支持
-
-SSH 终端通道是**可选**的：默认构建（CI 与 Dockerfile 的 `./gradlew build`）不含
-`web/ssh`、MINA 与 eddsa，面板照常启动；日常 TUI 用 Web Shell。要在二进制里带上
-SSH 服务端：
-
-```bash
-./gradlew --no-daemon -PwithSsh shadowJar
-```
-
-运行时仍然默认关闭，开启与敏感操作要求 HTTPS + 开发者模式。详见
-[docs/ssh-terminal-channel.md §编译开关](docs/ssh-terminal-channel.md#编译开关pwithssh)。
 
 `scripts/e2e-real.sh` 会真的访问 npm registry、装一个 dsh 版本并启动，耗时几分钟，需要网络。
 `scripts/` 下还有什么、各自验什么、怎么跑，见 [scripts/README.md](scripts/README.md)。

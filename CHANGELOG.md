@@ -2,6 +2,25 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.6.0 — 2026-10-23 · 移除 SSH 终端通道
+
+SSH 通道整个拿掉，Web Shell 成为面板里唯一的 TUI 入口。这不是「再关一个开关」，而是把
+协议栈、认证面和监听端口一起从二进制里删掉。
+
+- **为什么删**：TUI 的需求（手机或终端里接回实例、恢复会话）已经由 Web Shell 覆盖；
+  SSH 是面板里唯一自带协议 CVE 历史的组件，还叠着公钥/口令/开发者密码三套认证和一套
+  自研门禁。留着它只有负担。
+- **删了什么**：`org.jackhuang.hmcl.web.ssh` 整包（服务、门禁、菜单、公钥、会话目录）、
+  `SshBridge`、`/api/ssh/*`、设置页「SSH 终端」整页、`HDSL_SSH_ENABLED` /
+  `HDSL_SSH_BIND` / `HDSL_SSH_PORT`、`server.yaml` 的 `ssh:` 段、Apache MINA SSHD 与
+  eddsa 依赖、`docker-compose.yml` 的 3022 端口映射、`-PwithSsh` 构建开关与
+  `-full.jar` 产物。环境体检不再有 SSH 两行。
+- **没变**：开发者密码与 15 分钟提权、Web Shell 的打开/回放/停止语义、实例级互斥、
+  审计日志（web / terminal 两个通道）。
+- **升级说明**：旧 `server.yaml` 里的 `ssh:` 段会被忽略并在启动日志里打一条
+  `unknown key` 警告，不需要手工删除；3022 不再监听；以前下载的 `-full.jar` 不再产出，
+  从源码构建也只需要 `./gradlew build`。
+
 ## v0.5.21 — 2026-10-23 · 终端空白屏与连接稳定性
 
 - **opencode 终端永远空白**：xterm 6.0.0 的 `requestMode` 在 esbuild 压缩后把
@@ -58,8 +77,8 @@
 ## v0.5.0 — 2026-10-22 · SSH 终端通道（M0–M4）
 
 `ssh -p 3022 hdsl@主机` → TUI 门禁（独立开发者密码）→ 编号菜单（dsh 实例 / 品牌实例 /
-恢复 dsh 会话）→ 选定项的 `dsh tui [--resume]` 终端直接接管当前 SSH 会话。设计、威胁模型与
-验收流程见 [docs/ssh-terminal-channel.md](docs/ssh-terminal-channel.md)。
+恢复 dsh 会话）→ 选定项的 `dsh tui [--resume]` 终端直接接管当前 SSH 会话。该通道已在
+v0.6.0 整体移除（原因是 Web Shell 已覆盖同一需求，且 SSH 自带协议 CVE 面）。
 
 - **审计设施（M0）**：append-only JSONL 审计日志（`/data/logs/audit.jsonl`，0600、按日轮转），
   事件 `{ts, actor, channel, action, object, outcome, ip}`；登录/实例/TLS 等既有操作全部接线。

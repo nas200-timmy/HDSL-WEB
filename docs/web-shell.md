@@ -1,6 +1,6 @@
 # Web Shell：实例级原地终端
 
-> 状态：实施中（分支 `web-shell`）。本文先是设计文档，功能上线后会改成功能介绍。
+> 状态：已上线。v0.6.0 起它是面板里唯一的 TUI 入口（SSH 通道已移除）。
 > 主要适配 **Kimi Code** 与 **OpenCode** 的原生 TUI；dsh 以网页为主，TUI 是插件能力，
 > 列为次要目标。
 
@@ -15,7 +15,7 @@
 ## 2. 不是什么
 
 - 不是通用 shell：没有自由命令、文件上传下载、端口转发、切换用户。
-- 不是 SSH 的替代协议：SSH 保留为 `-PwithSsh` 构建里的「万不得已」通道，默认构建不含。
+- 不是 SSH 的替代协议：SSH 通道已在 v0.6.0 移除，面板里唯一的终端入口就是这个 Web Shell。
 - 不是沙箱：agent 以面板进程的用户身份运行。
 
 ## 3. 使用流程
@@ -83,10 +83,7 @@ web/terminal/                 常置包，不依赖 MINA
     Pty / PtySize / PtyException / PosixPty
 web/http/TerminalApiServlet   POST 开终端、DELETE 结束终端
 web/ws/TerminalWebSocket      WSS /ws/terminal/{ticket}
-web/ssh/                      只剩传输与认证；SshAttachAdapter 复用终端核心
 ```
-
-单向依赖：`web.ssh → web.terminal`；`web.terminal` 不 import `org.apache.sshd.*`。
 
 ## 6. PTY 胶水（JNA）
 
@@ -110,8 +107,9 @@ web/ssh/                      只剩传输与认证；SshAttachAdapter 复用终
 | 3 | `TerminalSession` / `TerminalManager` | 完成 |
 | 4 | HTTP 与 WebSocket（ticket、`/ws/terminal`、Windows 桌面终端） | 后端完成，见 §10 缺口 |
 | 5 | xterm 前端 + 底栏启停 | 完成 |
-| 6 | dsh 适配 + SSH 归位 + 默认不带 SSH | 完成（dsh 终端、`-PwithSsh` 开关） |
+| 6 | dsh 适配 | 完成（dsh 终端） |
 | 7 | ~~Windows ConPTY~~ | **取消**：Windows 用桌面终端（见 §7.1） |
+| 8 | 移除 SSH 通道（v0.6.0） | 完成：`web/ssh`、MINA 与 eddsa 已删除 |
 
 品牌顺序：**kimi → opencode → dsh（可选）**。
 
@@ -142,7 +140,7 @@ web/ssh/                      只剩传输与认证；SshAttachAdapter 复用终
 - 关窗/刷新后进程仍在，重开能接上并看到历史输出。
 - agent 退出后写 PTY 不会到达 WS；会话移除，attach 返回 410。
 - 同实例第二个终端 409；未提权 403。
-- 默认构建的 jar：无 `web/ssh`，终端功能可用；`-PwithSsh` 才带 SSH。
+- jar 里没有任何 SSH 代码与依赖；终端功能可用。
 
 ## 9. 品牌实测（阶段 0 spike）
 
