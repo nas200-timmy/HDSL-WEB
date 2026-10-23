@@ -45,8 +45,10 @@
 4. **进程组隔离**：`POSIX_SPAWN_SETPGROUP`（pgroup=0），杀树用 `kill(-pgid)`；
    窗口尺寸只写 `TIOCSWINSZ`，SIGWINCH 由内核发送。
 5. **权限**：打开终端需要会话 + 开发者密码提权（会话级 15 分钟滑动）；argv 白名单；
-   单实例单会话；审计 `terminal.open/attach/detach/exit/kill/denied`。
-6. **token**：终端会话存在期间该会话 token 按 3 小时滑动续期；结束终端恢复默认策略。
+   单实例单会话；审计 `terminal.open` / `terminal.exit` / `terminal.kill` /
+   `terminal.desktop` / `desktop.reveal`。
+6. **ticket**：WebSocket 用一次性的 `/ws/terminal/{ticket}` 鉴权，ticket 只对一次 attach、
+   一个实例有效，30 秒后失效；会话 Cookie 不进 URL，避免落进历史记录与代理日志。
 
 **做不到的**：agent 自带 shell 功能不归本层管；`setsid` 逃出进程组的孤儿 `kill(-pgid)`
 清不掉（master 已关，无法再交互），彻底清理需 cgroup v2，列为后续加固。
