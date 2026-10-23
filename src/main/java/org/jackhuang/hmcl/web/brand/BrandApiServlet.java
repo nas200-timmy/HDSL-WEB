@@ -586,7 +586,7 @@ public final class BrandApiServlet extends HttpServlet {
         String token = (String) request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE);
         boolean sessionAlive = token == null || token.isBlank() || auth.isAlive(token);
         String key = org.jackhuang.hmcl.web.developer.DeveloperElevation.key(token, request.getRemoteAddr());
-        if (!developerElevation.isElevated(key, sessionAlive)) {
+        if (!developerElevation.require(key, sessionAlive)) {
             Json.error(response, HttpServletResponse.SC_FORBIDDEN,
                     "developer_elevation_required: elevate with the developer password first");
             return;
