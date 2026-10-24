@@ -2,6 +2,29 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.5.6 — 2026-10-24 · 子路径反代下的终端连接
+
+面板挂在反向代理的子路径（`HDSL_BASE_PATH=/hdsl`）下时，网页、登录、实例列表都正常，
+只有终端连不上：客户端把服务端返回的根相对路径 `/ws/terminal/{ticket}` 直接拼到主机上，
+挂载点前缀丢了。根路径部署不受影响，所以这个问题一直没暴露。
+
+- **网页**：`TerminalWindow` 改用项目已有的 `withBase()` 生成 WebSocket 地址，与状态通道、
+  其他 API 走同一个入口；`withBase()` 同时挡住三种边界——挂载点带尾斜杠、路径不带前导斜杠、
+  服务端已经带上前缀（不再出现 `/hdsl/hdsl/…`）。
+- **Go 客户端**：`panel.Client.WebSocketURL` 不再用 `ResolveReference`（根相对路径会替换整个
+  path），改为把 `ws` 当作面板内部路径、显式拼上连接地址的 path 前缀；完整 `ws://`/`wss://`
+  地址仍按原样使用，`query` 与 ticket 的转义保持不变。
+- **错误阶段**：WebSocket 在 `ready` 之前断开时，网页显示「终端票据已获取，但 WebSocket
+  通道连接失败……请检查反向代理的子路径与 Upgrade 配置」，不再与「密码错误/面板离线」混在
+  一起；`onerror` 不再抢在 `onclose` 前面把阶段改成笼统错误。
+- **裸部署的 `HOME`**：`DshCommand` 在子进程环境里没有 `HOME` 时用 JVM 的 `user.home` 兜底。
+  systemd 不给服务注入 `HOME`，pnpm 装的 koffi 会因此 `Missing HOME environment variable`
+  失败，而 pnpm 只报 `ERR_PNPM_EXECUTOR_LIFECYCLE_SCRIPT_FAILED`，看不出原因。显式传入或
+  继承到的 `HOME` 仍然优先。
+- 协议文档补上 `ws` 字段的约定：它是面板内部路径，挂载点由客户端负责加。
+- 验证：Go `gofmt` / `go vet` / `go test ./...` 通过（新增 15 组 base path 用例）；
+  前端 `tsc --noEmit` 通过；`DshCommandHomeTest` 与 `PosixPtyTest` 全通。
+
 ## v0.5.5 — 2026-10-23 · 终端客户端改成全屏菜单
 
 `hdsl-tui` 原来的界面是逐行问答：先要地址，再要两个密码，然后一个编号列表，agent 一退出

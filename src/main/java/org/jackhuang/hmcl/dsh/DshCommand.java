@@ -161,6 +161,12 @@ public final class DshCommand {
             builder.directory(directory.toFile());
         }
         builder.environment().putAll(environment);
+        // Only when nobody provided one: an inherited or explicitly passed
+        // HOME always wins.
+        String home = builder.environment().get("HOME");
+        if (home == null || home.isBlank()) {
+            builder.environment().putAll(homeFallback());
+        }
         builder.redirectErrorStream(true);
 
         ManagedProcess process = new ManagedProcess(builder);
@@ -278,5 +284,24 @@ public final class DshCommand {
     /// can wait for a process to appear before cancelling its task.
     public static int runningCount() {
         return RUNNING.size();
+    }
+
+    /// The `HOME` a child needs when the launcher was started without one.
+    ///
+    /// systemd does not inject `HOME` into a service environment, and a bare
+    /// deployment started with `env -i` has none either. npm, pnpm and node
+    /// lifecycle scripts still expect it: koffi's `cnoke.cjs` looks for its
+    /// cache under `XDG_CACHE_HOME` → `HOME` and throws
+    /// `Missing HOME environment variable` otherwise, which pnpm reports only
+    /// as `ERR_PNPM_EXECUTOR_LIFECYCLE_SCRIPT_FAILED`. The JVM always knows a
+    /// home directory, so it is used as the fallback.
+    ///
+    /// @return a one-entry map, or an empty one when the JVM has no home
+    static Map<String, String> homeFallback() {
+        String home = System.getProperty("user.home");
+        if (home == null || home.isBlank()) {
+            return Map.of();
+        }
+        return Map.of("HOME", home);
     }
 }

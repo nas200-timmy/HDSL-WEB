@@ -98,26 +98,69 @@ func (c *Client) URL(path string, query url.Values) string {
 	return target.String()
 }
 
-// WebSocketURL turns the `ws` field of an open-terminal answer into an
-// absolute ws:// or wss:// URL.
+// WebSocketURL turns the `ws` field of an open-terminal answer into a proper
+// ws:// or wss:// URL.
+//
+// The field is a panel-internal path ("/ws/terminal/{ticket}"). It is relative
+// to the panel's mount point, not to the host root: resolving it with
+// ResolveReference would replace the whole path and silently drop a base path
+// such as /hdsl, which breaks terminal connections in every sub-path
+// deployment while health checks and login keep working.
 func (c *Client) WebSocketURL(path string) (string, error) {
 	reference, err := url.Parse(path)
 	if err != nil {
 		return "", fmt.Errorf("服务端返回的 ws 地址无效 %q: %w", path, err)
 	}
 	if reference.IsAbs() {
-		return reference.String(), nil
+		absolute := *reference
+		switch absolute.Scheme {
+		case "ws", "wss":
+			return absolute.String(), nil
+		case "http":
+			absolute.Scheme = "ws"
+		case "https":
+			absolute.Scheme = "wss"
+		default:
+			return "", fmt.Errorf("不支持的 ws 协议 %q", reference.Scheme)
+		}
+		return absolute.String(), nil
 	}
-	absolute := c.base.ResolveReference(reference)
-	switch absolute.Scheme {
+
+	target := *c.base
+	prefix := strings.TrimRight(c.base.Path, "/")
+	target.Path = joinPanelPath(prefix, reference.Path)
+	target.RawPath = ""
+	if reference.RawPath != "" {
+		target.RawPath = joinPanelPath(prefix, reference.RawPath)
+	}
+	target.RawQuery = reference.RawQuery
+	target.Fragment = ""
+	switch target.Scheme {
 	case "http":
-		absolute.Scheme = "ws"
+		target.Scheme = "ws"
 	case "https":
-		absolute.Scheme = "wss"
+		target.Scheme = "wss"
 	default:
-		return "", fmt.Errorf("不支持的 ws 协议 %q", absolute.Scheme)
+		return "", fmt.Errorf("不支持的 ws 协议 %q", target.Scheme)
 	}
-	return absolute.String(), nil
+	return target.String(), nil
+}
+
+// joinPanelPath puts a panel-internal path under the mount point. A path that
+// already carries the prefix is left alone (never "/hdsl/hdsl/…"), and the
+// join never produces a double slash.
+func joinPanelPath(prefix, path string) string {
+	if path == "" {
+		return prefix
+	}
+	clean := "/" + strings.TrimLeft(path, "/")
+	if prefix == "" {
+		return clean
+	}
+	if clean == prefix || strings.HasPrefix(clean, prefix+"/") {
+		return clean
+	}
+	return prefix + clean
 }
 
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any) (*http.Response, []byte, error) {

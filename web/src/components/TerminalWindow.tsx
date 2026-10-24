@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Terminal as XTerm } from "@xterm/xterm";
 import type { FitAddon as XFitAddon } from "@xterm/addon-fit";
 import { api, ApiError } from "../api";
+import { withBase } from "../base";
 import type { TerminalOpen } from "../api";
 import type { BrandId } from "../types";
 import { I18N } from "../i18n";
@@ -101,7 +102,11 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     fitRef.current = fit;
 
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${protocol}://${window.location.host}${data.ws}`);
+    // The server returns a panel-internal path ("/ws/terminal/{ticket}").
+    // withBase adds the public mount point ("/hdsl"), the same way every other
+    // API and the status socket do; without it a sub-path deployment opens the
+    // ticket successfully and then dials the wrong URL.
+    const ws = new WebSocket(`${protocol}://${window.location.host}${withBase(data.ws)}`);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
@@ -158,7 +163,12 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
       }
     };
     ws.onerror = () => {
-      if (disposedRef.current || phaseRef.current !== "opening") {
+      if (disposedRef.current) {
+        return;
+      }
+      // During "opening" the close handler below carries the stage-specific
+      // explanation; flipping the phase here would hide it.
+      if (phaseRef.current === "opening") {
         return;
       }
       setPhase("error");
@@ -171,10 +181,16 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
       if (phaseRef.current === "running") {
         setPhase("detached");
       } else if (phaseRef.current === "opening") {
-        // The server rejects a stale ticket / missing session by closing
-        // before "ready"; without this the window sat on "opening" forever.
+        // The ticket is already issued at this point, so a close before
+        // "ready" is a channel problem, not a password one. Say which stage
+        // failed: a sub-path proxy that drops the WebSocket prefix looks
+        // exactly like this.
         setPhase("error");
-        setMessage(`${I18N["terminal.error"]}（WS ${event.code}${event.reason ? `：${event.reason}` : ""}）`);
+        setMessage(
+          "终端票据已获取，但 WebSocket 通道连接失败" +
+            (event.code ? `（${event.code}${event.reason ? `：${event.reason}` : ""}）` : "") +
+            "。请检查反向代理的子路径与 WebSocket Upgrade 配置。",
+        );
       }
     };
 
