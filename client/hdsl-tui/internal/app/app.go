@@ -41,6 +41,14 @@ type Options struct {
 	// TLSConfig is what the terminal WebSocket handshake uses; the REST
 	// client already carries the same settings.
 	TLSConfig *tls.Config
+	// NewInsecureClient builds a client that does not verify the panel's
+	// certificate. It is only called after the user has seen what the
+	// certificate actually says and asked to connect anyway; nil means the
+	// command line cannot offer that (verification is already off).
+	NewInsecureClient func(baseURL string) (*panel.Client, error)
+	// InsecureTLSConfig is the WebSocket counterpart of NewInsecureClient:
+	// both halves of the connection must end up on the same policy.
+	InsecureTLSConfig *tls.Config
 	// Insecure is set when --insecure was given without a panel address: the
 	// fingerprint ritual cannot run yet, so the app shows a warning page
 	// before the server picker instead.
@@ -68,6 +76,15 @@ type App struct {
 	username string
 	health   panel.Health
 
+	// tlsConfig is what the terminal handshake uses. It starts as the command
+	// line gave it and is replaced when the user accepts a certificate that
+	// does not prove the panel's identity, so REST and WebSocket never end up
+	// on different policies.
+	tlsConfig *tls.Config
+	// unverified records that this run's connection was accepted without
+	// certificate verification. It is memory only: nothing about it is saved.
+	unverified bool
+
 	// elevatedUntil mirrors the panel's elevation window, so the menus can
 	// say "已提权" instead of offering the password again.
 	elevatedUntil time.Time
@@ -83,7 +100,7 @@ func Run(ctx context.Context, opts Options, in, out *os.File, stderr io.Writer, 
 	if err != nil {
 		return cli.ExitUsage, err
 	}
-	app := &App{opts: opts, screen: screen, stderr: stderr, in: in, out: out}
+	app := &App{opts: opts, screen: screen, stderr: stderr, in: in, out: out, tlsConfig: opts.TLSConfig}
 	defer screen.Close()
 
 	app.loadConfig()
@@ -214,6 +231,9 @@ func (a *App) statusLine() string {
 	if a.elevated() {
 		parts = append(parts, "已提权至 "+a.elevatedUntil.Local().Format("15:04"))
 	}
+	if a.unverified {
+		parts = append(parts, "证书未验证")
+	}
 	return strings.Join(parts, "  ·  ")
 }
 
@@ -225,8 +245,12 @@ func (a *App) elevated() bool {
 type menuPage struct {
 	Title    string
 	Subtitle string
-	Items    []ui.Item
-	Hint     string
+	// Detail is the text a user has to read before choosing, wrapped to the
+	// dialog width and shown above the list. It is for warnings whose wording
+	// is the point (the certificate dialog), not for decoration.
+	Detail string
+	Items  []ui.Item
+	Hint   string
 }
 
 // menu runs a selection screen until the user confirms a row or backs out.
@@ -249,6 +273,12 @@ func (a *App) menu(page menuPage) (int, bool) {
 		if page.Subtitle != "" {
 			body = append(body, ui.Note(page.Subtitle, inner))
 			header++
+		}
+		if page.Detail != "" {
+			for _, line := range wrap(page.Detail, inner-6) {
+				body = append(body, ui.Fill("  "+line, inner, ui.Body))
+				header++
+			}
 		}
 		body = append(body, ui.Blank(inner))
 		header++
@@ -528,6 +558,8 @@ func (a *App) serveServer(ctx context.Context, server string) (code int, back bo
 	a.server = server
 	a.username = ""
 	a.elevatedUntil = time.Time{}
+	a.unverified = false
+	a.tlsConfig = a.opts.TLSConfig
 
 	a.busy("正在连接 " + server + "…")
 	client, err := a.opts.NewClient(server)
@@ -537,8 +569,30 @@ func (a *App) serveServer(ctx context.Context, server string) (code int, back bo
 	}
 	health, err := client.Health(ctx)
 	if err != nil {
-		a.message("无法连接面板", explain(err))
-		return 0, true
+		certificate, isCertificate := panel.CertificateFailure(err)
+		if !isCertificate || a.opts.NewInsecureClient == nil {
+			a.message("无法连接面板", explain(err))
+			return 0, true
+		}
+		index, accepted := a.menu(certificateRiskPage(server, certificate))
+		if !accepted || index != 1 {
+			return 0, true
+		}
+		a.busy("正在以不验证证书的方式重连 " + server + "…")
+		insecureClient, buildErr := a.opts.NewInsecureClient(server)
+		if buildErr != nil {
+			a.message("仍无法连接面板", buildErr.Error())
+			return 0, true
+		}
+		health, err = insecureClient.Health(ctx)
+		if err != nil {
+			a.message("仍无法连接面板", "已经按你的选择跳过证书校验，连接还是失败：\n\n"+explain(err))
+			return 0, true
+		}
+		client = insecureClient
+		a.tlsConfig = a.opts.InsecureTLSConfig
+		a.unverified = true
+		a.logf("已按用户选择跳过证书校验（仅本次运行，未写入配置）")
 	}
 	a.client = client
 	a.health = health
@@ -759,6 +813,9 @@ func explain(err error) string {
 	}
 	var transport *panel.TransportError
 	if errors.As(err, &transport) {
+		if certificate, ok := panel.CertificateFailure(err); ok {
+			return "面板证书未通过校验：" + certificate.Reason
+		}
 		return "网络错误：" + transport.Error()
 	}
 	return err.Error()

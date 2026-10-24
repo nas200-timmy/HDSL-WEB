@@ -34,7 +34,7 @@ func (a *App) attach(ctx context.Context, brand string, instance panel.Instance)
 		a.logf("面板的终端协议是 %d，本客户端实现的是 %d，仍会尝试连接", terminal.Protocol, pterm.Protocol)
 	}
 
-	conn, err := pterm.Dial(ctx, wsURL, a.client.Session(), a.opts.TLSConfig)
+	conn, err := pterm.Dial(ctx, wsURL, a.client.Session(), a.tlsConfig)
 	if err != nil {
 		a.message("无法连接终端", explain(err))
 		return

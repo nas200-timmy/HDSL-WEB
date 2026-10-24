@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -102,6 +103,23 @@ func runInteractive(ctx context.Context, opts options, base *url.URL, in, out *o
 		return panel.New(baseURL, httpClient, log.Logf)
 	}
 
+	// The dialog for a certificate that does not prove the panel's identity.
+	// --insecure already skips verification for every server, so there is
+	// nothing left to offer; otherwise both halves of the connection switch
+	// together, which is why the WebSocket config is prepared here as well.
+	var newInsecureClient func(string) (*panel.Client, error)
+	var insecureTLSConfig *tls.Config
+	if !tlsConfig.InsecureSkipVerify {
+		insecureTLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}
+		insecureHTTPClient := &http.Client{
+			Transport: &http.Transport{TLSClientConfig: insecureTLSConfig, Proxy: http.ProxyFromEnvironment},
+			Timeout:   requestTimeout,
+		}
+		newInsecureClient = func(baseURL string) (*panel.Client, error) {
+			return panel.New(baseURL, insecureHTTPClient, log.Logf)
+		}
+	}
+
 	initial := ""
 	if base != nil {
 		initial = base.String()
@@ -114,16 +132,18 @@ func runInteractive(ctx context.Context, opts options, base *url.URL, in, out *o
 	}
 
 	code, runErr := app.Run(ctx, app.Options{
-		NewClient:     newClient,
-		Instance:      opts.instance,
-		Brand:         normaliseBrand(opts.brand),
-		Resume:        opts.resume,
-		User:          opts.user,
-		TLSConfig:     tlsConfig,
-		Insecure:      opts.insecure && base == nil,
-		InitialServer: initial,
-		Version:       version,
-		Logf:          log.Logf,
+		NewClient:         newClient,
+		NewInsecureClient: newInsecureClient,
+		Instance:          opts.instance,
+		Brand:             normaliseBrand(opts.brand),
+		Resume:            opts.resume,
+		User:              opts.user,
+		TLSConfig:         tlsConfig,
+		InsecureTLSConfig: insecureTLSConfig,
+		Insecure:          opts.insecure && base == nil,
+		InitialServer:     initial,
+		Version:           version,
+		Logf:              log.Logf,
 	}, in, out, stderr, raw)
 	if runErr != nil {
 		fmt.Fprintln(stderr, "错误: "+runErr.Error())
@@ -390,7 +410,8 @@ const usageText = `hdsl-tui — 在终端里进入 HDSL-Web 面板的实例
   --resume <id>     附着到该 harness 会话（kimi / opencode）
   --user <name>     面板用户名，默认 admin；给了就不再提示
   --ca <pem>        额外信任的 CA 证书（PEM 文件）
-  --insecure        跳过证书校验：先打印 SHA-256 指纹，要求输入 yes
+  --insecure        全局跳过证书校验：先打印 SHA-256 指纹，要求输入 yes
+                    （只想跳过一次时不用它：菜单会在证书校验失败时当场询问）
   --plain           使用逐行问答的旧界面（无终端时自动启用）
   --version         打印客户端版本与协议号后退出（不联网）
   --verbose         把请求细节写到 stderr
