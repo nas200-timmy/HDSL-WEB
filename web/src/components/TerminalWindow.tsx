@@ -131,8 +131,13 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     // The server returns a panel-internal path ("/ws/terminal/{ticket}").
     // withBase adds the public mount point ("/hdsl"), the same way every other
     // API and the status socket do; without it a sub-path deployment opens the
-    // ticket successfully and then dials the wrong URL.
-    const ws = new WebSocket(`${protocol}://${window.location.host}${withBase(data.ws)}`);
+    // ticket successfully and then dials the wrong URL. The protocol allows an
+    // absolute ws:// or wss:// answer too — prefixing that would produce
+    // garbage, so it is used as it came.
+    const wsUrl = /^wss?:\/\//i.test(data.ws)
+      ? data.ws
+      : `${protocol}://${window.location.host}${withBase(data.ws)}`;
+    const ws = new WebSocket(wsUrl);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 

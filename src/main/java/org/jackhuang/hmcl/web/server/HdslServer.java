@@ -206,7 +206,7 @@ public final class HdslServer {
         AuthFilter authFilter = new AuthFilter(authService, config.auth.disabled,
                 request -> request.isSecure()
                         || org.jackhuang.hmcl.web.http.RequestSecurity.forwardedHttps(request, config),
-                ttlSeconds);
+                ttlSeconds, config.basePath);
 
         // The Phase 2 services: the event bus every WebSocket payload flows
         // through, the task pool behind installs and launches, and the
