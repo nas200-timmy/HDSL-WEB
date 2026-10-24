@@ -23,7 +23,7 @@ Release 同时提供 `SHA256SUMS-client.txt`，请先核对校验和。
 
 ```sh
 cd client/hdsl-tui
-GOFLAGS=-mod=vendor GOPROXY=off CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=v0.5.4" ./cmd/hdsl-tui
+GOFLAGS=-mod=vendor GOPROXY=off CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=v0.5.71" ./cmd/hdsl-tui
 ```
 
 需要 **Go 1.24 或更新**（`go.mod` 的 `go 1.24.0`；依赖锁在同时支持 1.24 的版本上，

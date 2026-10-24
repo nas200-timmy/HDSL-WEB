@@ -34,7 +34,7 @@
 
 ### `GET /api/health`
 
-公开端点，用于版本与连通性检查：`{"status":"ok","version":"0.5.4","uptimeSec":123}`。
+公开端点，用于版本与连通性检查：`{"status":"ok","version":"0.5.71","uptimeSec":123}`。
 
 ### `POST /api/developer/elevate`
 

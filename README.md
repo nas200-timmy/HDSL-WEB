@@ -285,7 +285,7 @@ docker run -d --name hdsl-web --restart unless-stopped \
   ghcr.io/nas200-timmy/hdsl-web:latest
 ```
 
-版本化标签与 Release 一一对应（如 `ghcr.io/nas200-timmy/hdsl-web:0.5.21`）。从源码构建：
+版本化标签与 Release 一一对应（如 `ghcr.io/nas200-timmy/hdsl-web:0.5.71`）。从源码构建：
 
 ```bash
 cd HDSL-web

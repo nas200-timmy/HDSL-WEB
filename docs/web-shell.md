@@ -1,8 +1,8 @@
 # Web Shell：实例级原地终端
 
-> 状态：已上线。v0.5.3 起它是面板里唯一的 TUI 入口（SSH 通道已移除）。
-> 主要适配 **Kimi Code** 与 **OpenCode** 的原生 TUI；dsh 以网页为主，TUI 是插件能力，
-> 列为次要目标。
+> 状态：已上线。v0.5.3 起它是面板里唯一的 TUI 入口（SSH 通道已移除）。v0.5.71 起覆盖
+> 五个品类：**dsh**、**Kimi Code**、**OpenCode**、**Claude Web**（社区引擎 / 官方
+> Claude Code 两个内核由用户选）与 **ZCode**（实验性品类）。
 
 ## 1. 是什么
 
@@ -106,15 +106,19 @@ Windows 桌面终端不增加**本地**攻击面：能坐到这台机器前、�
 ```
 web/terminal/                 常置包，不依赖 MINA
   TerminalTarget              实例 → home/cwd/env/argv
-  BrandTui                    KimiTui / OpencodeTui（dsh 的 DshTui 在阶段 6）
+  BrandTui                    KimiTui / OpencodeTui；ClaudeWebTui 带内核参数（BrandTui.forBrand 故意不返回它）
+  ZcodeTui                    ZCode 的官方 TUI（不带 --web 的 bin/zcode.mjs）
+  InstanceTerminal            三个品类共用的门禁 / Windows 分支 / spawn / ticket
   TerminalSink                一个挂载者（生产是 WebSocket，测试是收集器）
   TerminalSession             PTY 进程 + 回放缓冲 + attach/detach + 退出
-  TerminalManager             实例级互斥、open/terminate、审计
+  TerminalManager             按 brand + instanceId 互斥、open/terminate、审计
   TerminalBusyException       同实例第二个终端
   pty/                        伪终端胶水（JNA）
     Pty / PtySize / PtyException / PosixPty
-web/http/TerminalApiServlet   POST 开终端、DELETE 结束终端
-web/ws/TerminalWebSocket      WSS /ws/terminal/{ticket}
+web/http/InstancesApiServlet   dsh 的 POST/DELETE /api/instances/{id}/terminal
+web/brand/BrandApiServlet      品牌的 /api/brands/{brand}/instances/{id}/terminal 与 …/terminals（内核清单）
+web/zcode/ZcodeApiServlet      ZCode 的 /api/zcode/instances/{id}/terminal
+web/ws/TerminalWebSocket       WSS /ws/terminal/{ticket}
 ```
 
 ## 6. PTY 胶水（JNA）
@@ -142,8 +146,11 @@ web/ws/TerminalWebSocket      WSS /ws/terminal/{ticket}
 | 6 | dsh 适配 | 完成（dsh 终端） |
 | 7 | ~~Windows ConPTY~~ | **取消**：Windows 用桌面终端（见 §7.1） |
 | 8 | 移除 SSH 通道（v0.5.3） | 完成：`web/ssh`、MINA 与 eddsa 已删除 |
+| 9 | ZCode 终端（v0.5.71） | 完成：`ZcodeTui`、`/api/zcode/instances/{id}/terminal` |
+| 10 | Claude Web 双内核（v0.5.71） | 完成：社区引擎 / 官方 Claude Code，`…/terminals` + `?kernel=` |
+| 11 | 门禁收口与打开顺序（v0.5.71） | 完成：`InstanceTerminal`；先密码对话框、必要时选内核，再出终端窗口 |
 
-品牌顺序：**kimi → opencode → dsh（可选）**。
+品类覆盖顺序：**kimi → opencode → dsh → zcode → claude-web（双内核）**。
 
 ### 7.1 Windows：用桌面的终端，不做浏览器 PTY
 
@@ -176,17 +183,23 @@ web/ws/TerminalWebSocket      WSS /ws/terminal/{ticket}
 
 ## 9. 品牌实测（阶段 0 spike）
 
-已从源码仓库核对（`kimi-code` / `opencode`）：
+已从源码核对（`kimi-code` / `opencode` 的仓库，以及 dsh 工作区里的 `zcode`、`claude-web-main` 两份上游源码）：
 
 | 品牌 | TUI 命令 | 会话/配置目录 | 与 web 是否同一份 | resume 参数 |
 |---|---|---|---|---|
 | kimi | `node <包>/dist/main.mjs`（`kimi` 无子命令） | `KIMI_CODE_HOME` 或 `~/.kimi-code`；会话在 `<home>/sessions` | 是：`kimi web` 用同一 home | `-r/--resume [id]`、`-c/--continue` |
 | opencode | 1.19+：`opencode-ai/bin/opencode.exe`（POSIX 也叫 .exe，ELF）；旧版：`opencode-<os>-<arch>/bin/opencode` 或 `@opencode/cli-*`。`bin/opencode.cjs` 只是启动器 | XDG：data `~/.local/share/opencode`、config `~/.config/opencode` | 是：同一 data 目录 | `--session <id>`、`--continue` |
 | dsh | `dsh tui [--resume]` | 实例 `DSH_HOME` | 是（已有 SessionCatalog） | `--resume <id>` |
+| zcode | `node <发行包>/bin/zcode.mjs`（不带参数；CLI 默认命令是 `tui`） | `ZCODE_DATA_BASE_DIR` 下的 `.zcode/`；会话库跟 `homedir()` | 是：与 web 进程同一个 `ZCODE_DATA_BASE_DIR` 与 `HOME` | 第一版不做 |
+| claude-web | 社区引擎 `node_modules/claude-web-engine/dist/cli-node.js`；官方 `@anthropic-ai/claude-agent-sdk-<platform>-<arch>/claude[.exe]`（缺失退回 PATH 上的 `claude`） | `~/.claude` 与 `~/.claude-web`（实例 home） | 是：网页工作台写的就是这两处 | 第一版不做 |
 
-实现约定：两个品牌都由适配器解析成「node + 入口 JS」或「原生二进制」，**不经过
+实现约定：这几家都由适配器解析成「node + 入口 JS」或「原生二进制」，**不经过
 `.bin` shim / `.cjs` 启动器**；环境里 `HOME`（和 Windows 的 `USERPROFILE`）指向实例
 home，因此 TUI 读到的就是网页模式写下的那份会话。
+
+ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供应商配置跟
+`ZCODE_DATA_BASE_DIR` 走。为了让终端与 web 进程看到同一批会话，`HOME` **保持与 web
+进程一致**（不指到实例目录），只额外设 `ZCODE_DATA_BASE_DIR`。
 
 - kimi：pnpm 的 `.bin/kimi` 是 `#!/bin/sh` shim（不是软链），所以直接取
   `node_modules/@moonshot-ai/kimi-code/dist/main.mjs`；只有 npm 的软链布局才回退到
@@ -194,12 +207,23 @@ home，因此 TUI 读到的就是网页模式写下的那份会话。
 - opencode：1.19 起平台二进制由 `opencode-ai` 自己带（`bin/opencode.exe`，POSIX 同样
   叫 .exe 的 ELF）；先找它，再退回无 scope 的平台包与旧的 `@opencode/cli-*`。
 
-## 10. 已知缺口（阶段 5/6 之前不发布）
+## 10. 已知缺口
 
-- **web ↔ 终端互斥**：开终端会停掉品牌的 web 运行时（同一 HOME 不能两个进程抢），
-  但不会自动恢复；恢复动作交给底栏「启动」（实例启动按钮）。
+- **web ↔ 终端互斥**：开终端会停掉同实例的 web 运行时（同一份状态不能两个进程抢），
+  面板侧已经是**同步**停止（品牌 `BrandRuntime.stop` / ZCode `ZcodeRuntime.stop` /
+  dsh `DshProcessManager.stop` 都等进程树退出），但不会自动恢复——恢复动作交给底栏
+  「启动」（实例启动按钮）。
 - **refresh 重连**：运行中的会话会直接发新票据，浏览器刷新后能接回同一进程并回放；
   但两个窗口同时 attach 目前都会收到广播、输入也会同时写入——v1 不做单控制端仲裁。
 - **Windows 便利功能**：`POST .../reveal`（`target=home|workspace|log`）用
   `explorer.exe` / `notepad.exe` 打开，路径由服务端按实例记录计算，请求只能点名
   三个目标之一；dsh 的日志在内存里，`log` 返回 400。
+- **ZCode / Claude Web 的真机终端**：两个适配器的命令形状有单测锁定，但「TUI 到底能不能
+  在 PTY 里起来、中文与 resize 是否正常」只能在 Linux/macOS 上对着真实发行包验证；
+  Windows 面板本来就没有 PTY（走桌面控制台）。
+- **Claude Web 的官方内核是否存在**取决于发行包里有没有 SDK 的平台可选依赖
+  （`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`），没有时退回 PATH 上的 `claude`；
+  `…/terminals` 端点会把可用性与缺什么如实报出来。
+- **hdsl-tui 的顺序**：网页是「密码 → 内核 → 终端」，Go 客户端目前是「选内核 →
+  （需要时）密码 → 终端」——客户端只在收到 403 时才知道要提权，要完全一致得先查一次
+  `developerStatus`。

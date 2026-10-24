@@ -17,11 +17,14 @@ README 只保留「用户需要知道的」。这里记录为什么这样做—�
   品牌实例状态不会刷新；页面其余功能不受影响。
 - `/i/<id>` 无尾斜杠时反代 301 到目录形式；dsh 自己的 WebSocket（`/api/remote.mux`）原样转发。
 
-## 2. 品牌区（Kimi Code / OpenCode / Claude Web）
+## 2. 品牌区（Kimi Code / OpenCode / Claude Web / ZCode）
 
 - 实例是主对象，版本是品牌级共享构建：一次构建（尤其是 Claude Web 的源码构建）成本很高，
   同品牌实例共用同一份 `releases/<版本>/`，切换版本不需要重新安装。品牌区因此做成实例列表页
   内的第二层，而不是「装完版本就没下文」的一次性工具。
+- 终端与网页共用一份实例状态：dsh / 品牌 / ZCode 的适配器、一次性 ticket 与门禁收在
+  `web/terminal/InstanceTerminal`，协议见 [terminal-protocol.md](terminal-protocol.md)，
+  Claude Web 的两个内核（社区引擎 / 官方 Claude Code）由用户选。
 - 每个实例的插件通道已在界面与后端预留；上游没有统一插件协议，所以现在一律答「暂不支持」。
 - 图标取自上游仓库自己发布的标志：dsh 用 DeepSeek 鲸鱼，Kimi Code / OpenCode 取 MIT 仓库
   原文件，ZCode 取许可明确的 CC0 那份。Claude Web 不上图——Anthropic 的商标条款要求事先
