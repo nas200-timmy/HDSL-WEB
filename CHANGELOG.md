@@ -2,77 +2,77 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## v0.6.0 — 2026-10-24 · ZCode 终端与 Claude Web 双内核
+## v0.5.71 — 2026-10-24 · 终端：ZCode、Claude Web 双内核、证书应急
 
-ZCode 的发行包不带参数启动就是官方 TUI（`scripts/zcode-distribution/runner.mjs` 会 import
-`agent/zcode.cjs`，CLI 的默认命令是 `tui`），所以它和 Kimi Code、OpenCode 一样可以就地
-接进 Web Shell。Claude Web 也一样——它的内核本来就是 Claude Code CLI，只是有两个。这次把
-后端、网页与 Go 客户端三处一起补齐，并把打开终端的前置步骤挪到终端窗口之前。
+> 版本号说明：v0.5.21 当初把补丁号写成了两位（本意是 v0.5.2.1），`sort -V` 会把它排在
+> 0.5.6 之后，docker 的 `latest` 闸门于是一直指着它。这次直接取 **0.5.71**——数字上明确
+> 大于 0.5.21 与 0.5.6，把那个错号盖过去，不需要再挪旧标签。
 
-- **打开流程改了（全品类）**：原来点终端先出一个空终端窗口，再在窗口里要开发者密码；现在
-  先弹密码框（没设过则是设置表单），验证通过（Claude Web 还要选内核）之后才换成终端窗口。
-  申请中、密码、设置、选内核都是对话框，终端窗口只在拿到票据后出现。
-- **Claude Web 选内核**：`ClaudeWebTui` 按上游 `server/src/claude-exe.ts` 的布局解析两份
-  内核——社区引擎 `node_modules/claude-web-engine/dist/cli-node.js`（用 node 起）与官方
-  `@anthropic-ai/claude-agent-sdk-<platform>-<arch>/claude[.exe]`（原生二进制，找不到就
-  退回 PATH 上的 `claude`）。**不静默替换**：选了没装的那个直接报错说明缺什么。
-  新增 `GET /api/brands/claude-web/instances/{id}/terminals` 列出可用内核，终端接口多了
-  `?kernel=community|official`。网页在有两个可用内核时才问，客户端的
-  「进入终端」前也加了一步上下选择（`--kernel` 可直接指定）。
-- **适配器**：新增 `ZcodeTui`，起 `node <发行包>/bin/zcode.mjs`。**不传任何参数**——
-  `--web` / `--host` / `--port` / `--no-token` 是 web 模式专属，`--workspace` 也只有
-  web 分支解析；工作区靠进程 cwd。缺 `bin/zcode.mjs` 或 `agent/zcode.cjs` 时提前给出可读
-  原因（只有 web 的发行包会在 PTY 里静默失败）。
-- **状态分工**（按上游源码核对）：`ZCODE_DATA_BASE_DIR` 指实例 `data/`，凭据
-  （`.zcode/v2/credentials.json`）与供应商配置（`.zcode/v2/provider_config.json`，也就是
-  面板写的那份）都在它下面；会话库跟 `homedir()` 走，所以 `HOME` **保持与 web 进程一致**，
-  不指向实例目录——否则网页与终端会看到两套会话。
-- **一份门禁**：把 dsh / 品牌 / ZCode 三处逐行重复的终端逻辑收进 `InstanceTerminal`
-  （Web Shell 开关、HTTPS、开发者密码、提权、Windows 桌面分支、spawn、一次性 ticket）。
-  ZCode 新增 `POST|DELETE /api/zcode/instances/{id}/terminal`，响应体与其他品类完全一致。
-- **生命周期**：开 TUI 前同步停 web（等进程树退出），启动 web 前先停 TUI，停止/删除实例
-  连带结束终端；dsh 打开终端时的 web 停止也从异步改成阻塞式，避免两个进程抢一个 `DSH_HOME`。
-- **会话键**：终端注册表改为 `brand + instanceId`，dsh / 品牌 / ZCode 各自的 id 空间不再
-  互相串会话。
-- **网页**：ZCode 实例卡新增「打开终端」，复用现有 `TerminalWindow`；发行包未就绪、
-  Web Shell 关闭或面板不在 HTTPS 时不显示可用入口。Claude Web 的终端按钮不再禁用，点开
-  先过密码、再选内核。
-- **客户端**：`hdsl-tui` 的分类多出 `zcode`（`GET /api/zcode/instances`），`--brand zcode`
-  可用；终端路径按品类解析。进入 Claude Web 实例的终端前先弹内核选择（`--kernel` 可跳过）。
-- **子路径部署**：会话 Cookie 的 `Path` 跟着挂载点走（同一个域名下挂两个面板时不再互相
-  踢下线）；终端 WebSocket 接受服务端返回的绝对 `ws://`/`wss://`，不再往上拼挂载点。
-  `docs/deployment.md §1` 重写为「谁终结 TLS」的两套 nginx 配置（根路径 / `/hdsl/` 子路径）、
-  排错对照表与验收命令。
-- 验证：后端 `compileJava` / `compileTestJava` 通过，`web.{auth,developer,brand,http,terminal,zcode}`
-  138 个用例里只有 2 个 Windows 专属 POSIX 权限用例失败（既存问题，与本次无关），20 个
-  Linux-only 用例跳过；前端 `tsc --noEmit` 与 `vite build` 通过；客户端 `go vet` /
-  `go test ./...` 通过（新增品类路径与内核路径用例）。
+这一版把「终端」这条线补齐：ZCode 接进来、Claude Web 的内核交给用户选、证书不匹配时可以
+只对本次放行；顺带把打开终端的顺序改成「先密码、再终端」，并修掉子路径部署下的两处隐患。
 
-## v0.5.7 — 2026-10-24 · 证书不匹配时可以「仅本次」继续
+### 打开终端：先密码，再终端（全品类）
 
-面板证书只签了域名、客户端却用局域网 IP 连（`https://192.0.2.10:3080`）时，`hdsl-tui`
-一直只有两个选择：`--insecure` 全局关掉校验，或者连不上。前者对之后连的每台面板都生效，
-后者在 NAS/内网这种「网络是通的、证书不对」的场景里直接把路堵死。这次补上中间那一档。
+原来点「终端」先出一个空终端窗口，再在窗口里要开发者密码——先看见终端再输密码，反直觉。
+现在申请中、密码、首次设置、选内核都是**对话框**，验证通过、拿到票据之后才换成终端窗口；
+xterm 在窗格挂载后才接 WebSocket（票据先暂存，不会因为对话框还在就丢连接）。断线重连沿用
+刚才选过的内核，不再问第二遍。
 
-- **按类型识别，不认字符串**：新增 `panel.CertificateFailure`，用 `errors.As` 匹配
-  `x509.HostnameError` / `x509.UnknownAuthorityError` / `x509.CertificateInvalidError`
-  / `*tls.CertificateVerificationError`，穿过 `TransportError` 与 `*url.Error` 的多层
-  包装。Go 改文案、平台改措辞都不会让按钮消失或换位置。兜底的
-  `*tls.CertificateVerificationError` 只在确实有未通过校验的证书时才算数——握手层的
-  其他问题不该被当成「可以接受的身份」。
-- **菜单里当场给选择**：连面板时证书不能证明身份，不再是死路，而是先说明哪里不对
-  （证书里没有这个地址 / 签发者不被信任 / 已过期），下面两条：
-  `← 返回（推荐）` 和 `仅本次忽略风险并连接`。光标停在「返回」，连按回车不会顺手关掉
-  校验。
-- **REST 与 WebSocket 一起切**：接受风险后同时换掉 HTTP 客户端和终端握手的 TLS 配置
-  （`app.tlsConfig`），不会出现健康检查过了、终端却因为另一半还在校验而失败。状态栏
-  常驻「证书未验证」，直到切服务器或退出。
-- **只对本次运行有效**：不写进 `config.json`，不记进服务器条目，换服务器自动恢复完整
-  校验。非证书失败（DNS 失败、连接被拒、超时、403/404）不会出现这个入口。
-- 已验证：`go build` / `go vet` / `go test ./...` 通过；新增用例覆盖四种证书错误、多层
-  包装、非证书失败不误判，以及一次**真实 TLS 握手**（`httptest.NewTLSServer` 自签证书
-  被拒 → 分类成立；换成信任该证书的客户端 → 正常通过）。5 个平台的交叉编译通过。
-- 文档：`client/README.md` 的 TLS 一节与 `--insecure` 说明、`--help` 文本同步更新。
+### Claude Web：两个内核，用户自己选
+
+Claude Web 的内核本来就是 Claude Code CLI，只是它带了两份：
+
+- **社区引擎** `node_modules/claude-web-engine/dist/cli-node.js`（用 `node` 起）——网页里
+  配置的第三方/中转供应商只对它生效；
+- **官方 Claude Code** `@anthropic-ai/claude-agent-sdk-<platform>-<arch>/claude[.exe]`
+  （原生二进制，发行包没带时退回 `PATH` 上的 `claude`）。
+
+新增 `GET /api/brands/claude-web/instances/{id}/terminals` 列出可用内核（含缺什么），
+终端接口多了 `?kernel=community|official`；**不静默替换**——选了没装的那个直接报错说明
+缺什么。网页只在两个内核都可用时才问，Go 客户端进入终端前也加了上下选择（`--kernel`
+可跳过）。
+
+### ZCode：官方 TUI 接进 Web Shell
+
+ZCode 的发行包不带参数启动就是官方 TUI（`runner.mjs` 会 import `agent/zcode.cjs`，CLI 的
+默认命令是 `tui`）。新增 `ZcodeTui`，起 `node <发行包>/bin/zcode.mjs`，**不传任何参数**——
+`--web` 一套是 web 模式专属，`--workspace` 也只有 web 分支解析，工作区靠进程 cwd；缺
+`bin/zcode.mjs` 或 `agent/zcode.cjs` 时提前给出可读原因。
+
+状态按上游源码分工：`ZCODE_DATA_BASE_DIR` 指实例 `data/`（凭据与供应商配置都在它下面），
+会话库跟 `homedir()` 走，所以 `HOME` 保持与 web 进程一致——否则网页与终端会看到两套会话。
+
+### 一份门禁，一套生命周期
+
+dsh / 品牌 / ZCode 三处逐行重复的终端逻辑收进 `InstanceTerminal`（Web Shell 开关、HTTPS、
+开发者密码、提权、Windows 桌面分支、spawn、一次性 ticket）。开 TUI 前同步停 web（等进程树
+退出），启动 web 前先停 TUI，停止/删除实例连带结束终端；dsh 打开终端时的 web 停止也从异步
+改成阻塞式，避免两个进程抢一个 `DSH_HOME`。终端注册表改按 `brand + instanceId` 存，
+三个品类的 id 空间不再互相串会话。
+
+### 客户端：证书不匹配时可以「仅本次」继续
+
+面板证书只签了域名、客户端却用局域网 IP 连时，`hdsl-tui` 原来只有 `--insecure`（全局关掉
+校验）或连不上两条路。现在按类型识别证书错误（`x509.HostnameError` /
+`UnknownAuthorityError` / `CertificateInvalidError` / `tls.CertificateVerificationError`，
+穿过 `TransportError` 与 `*url.Error` 的包装，不认字符串），在菜单里给「← 返回（推荐）」
+与「仅本次忽略风险并连接」两条；默认停在返回。接受后 REST 与 WebSocket 一起切换、状态栏
+常驻「证书未验证」，且**只对本次运行有效**（不写配置、换服务器即恢复）。非证书失败
+（DNS、拒绝连接、超时、403/404）不会出现这个入口。
+
+### 子路径部署加固
+
+- 会话 Cookie 的 `Path` 跟着挂载点走：同一个域名下挂两个面板时不再互相踢下线；
+- 终端 WebSocket 接受服务端返回的绝对 `ws://`/`wss://`，不再往上拼挂载点；
+- `docs/deployment.md §1` 重写为「谁终结 TLS」的两套 nginx 配置（根路径 / `/hdsl/` 子路径）、
+  排错对照表与验收命令；README 开头补了「现在能做什么」。
+
+### 验证
+
+- 后端：`web.{auth,developer,brand,http,terminal,zcode}` 138 个用例，2 个 Windows 专属
+  POSIX 权限用例失败（既存问题）、20 个 Linux-only 用例跳过；
+- 前端：`tsc --noEmit` 与 `vite build` 通过；
+- 客户端：`go vet` / `go test ./...` 通过，5 个平台交叉编译通过（含真实 TLS 握手的用例）。
 
 ## v0.5.6 — 2026-10-24 · 子路径反代下的终端连接
 
