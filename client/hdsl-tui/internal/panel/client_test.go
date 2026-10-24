@@ -400,3 +400,53 @@ func TestNewRejectsBadBaseURLs(t *testing.T) {
 		t.Errorf("panel.New with a path prefix failed: %v", err)
 	}
 }
+
+func TestWebSocketURLKeepsTheMountPoint(t *testing.T) {
+	cases := []struct {
+		name string
+		base string
+		ws   string
+		want string
+		bad  bool
+	}{
+		{"root mount", "https://panel.example.com", "/ws/terminal/t", "wss://panel.example.com/ws/terminal/t", false},
+		{"root mount with slash", "https://panel.example.com/", "/ws/terminal/t", "wss://panel.example.com/ws/terminal/t", false},
+		{"one segment", "https://panel.example.com/hdsl", "/ws/terminal/t", "wss://panel.example.com/hdsl/ws/terminal/t", false},
+		{"one segment with slash", "https://panel.example.com/hdsl/", "/ws/terminal/t", "wss://panel.example.com/hdsl/ws/terminal/t", false},
+		{"other segment", "https://panel.example.com/panel", "/ws/terminal/t", "wss://panel.example.com/panel/ws/terminal/t", false},
+		{"two segments", "https://panel.example.com/a/b/", "/ws/terminal/t", "wss://panel.example.com/a/b/ws/terminal/t", false},
+		{"plain http", "http://127.0.0.1:8080/hdsl", "/ws/terminal/t", "ws://127.0.0.1:8080/hdsl/ws/terminal/t", false},
+		{"no leading slash", "https://panel.example.com/hdsl", "ws/terminal/t", "wss://panel.example.com/hdsl/ws/terminal/t", false},
+		{"already prefixed", "https://panel.example.com/hdsl", "/hdsl/ws/terminal/t", "wss://panel.example.com/hdsl/ws/terminal/t", false},
+		{"query preserved", "https://panel.example.com/hdsl", "/ws/terminal/t?x=1&y=2", "wss://panel.example.com/hdsl/ws/terminal/t?x=1&y=2", false},
+		{"escaped ticket", "https://panel.example.com/hdsl", "/ws/terminal/a%2Fb", "wss://panel.example.com/hdsl/ws/terminal/a%2Fb", false},
+		{"absolute wss", "https://panel.example.com/hdsl", "wss://edge.example.com/ws/terminal/t", "wss://edge.example.com/ws/terminal/t", false},
+		{"absolute https", "https://panel.example.com/hdsl", "https://edge.example.com/ws/x", "wss://edge.example.com/ws/x", false},
+		{"absolute http", "http://panel.example.com", "http://edge.example.com/ws/x", "ws://edge.example.com/ws/x", false},
+		{"bad scheme", "https://panel.example.com", "ftp://edge.example.com/x", "", true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			client, err := panel.New(testCase.base, nil, nil)
+			if err != nil {
+				t.Fatalf("panel.New(%q): %v", testCase.base, err)
+			}
+			got, err := client.WebSocketURL(testCase.ws)
+			if testCase.bad {
+				if err == nil {
+					t.Fatalf("WebSocketURL(%q) = %q, want an error", testCase.ws, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("WebSocketURL(%q): %v", testCase.ws, err)
+			}
+			if got != testCase.want {
+				t.Errorf("WebSocketURL(%q) with base %q = %q, want %q", testCase.ws, testCase.base, got, testCase.want)
+			}
+			if strings.Contains(got, "//ws") || strings.Contains(got, "/hdsl/hdsl") {
+				t.Errorf("WebSocketURL produced a doubled path: %q", got)
+			}
+		})
+	}
+}

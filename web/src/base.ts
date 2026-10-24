@@ -7,8 +7,16 @@ export function basePath(): string {
   return (window as unknown as { __HDSL_BASE__?: string }).__HDSL_BASE__ ?? "";
 }
 
-/** 给根绝对路径加挂载点前缀（"/i/<id>/" → "/panel/i/<id>/"）。 */
+/**
+ * 给根绝对路径加挂载点前缀（"/i/<id>/" → "/panel/i/<id>/"）。
+ *
+ * 三个边界都要挡住，否则终端 WebSocket 这类路径会拼错：挂载点带尾斜杠、
+ * 传入路径不带前导斜杠、服务端已经把前缀带上（重复会变成 /panel/panel/…）。
+ */
 export function withBase(path: string): string {
-  const base = basePath();
-  return base ? base + path : path;
+  const base = basePath().replace(/\/+$/, "");
+  if (!base) return path;
+  const rest = path.startsWith("/") ? path : "/" + path;
+  if (rest === base || rest.startsWith(base + "/")) return rest;
+  return base + rest;
 }
