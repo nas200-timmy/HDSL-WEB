@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -38,19 +39,23 @@ func TestSaveIsPrivateAndRoundTrips(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Errorf("file mode = %o, want 600", mode)
-	}
-	dirInfo, err := os.Stat(filepath.Dir(path))
-	if err != nil {
-		t.Fatalf("stat dir: %v", err)
-	}
-	if mode := dirInfo.Mode().Perm(); mode != 0o700 {
-		t.Errorf("dir mode = %o, want 700", mode)
+	// POSIX permission bits are not enforced on Windows (chmod there only
+	// toggles the read-only attribute), so the exact modes are Unix-only.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Errorf("file mode = %o, want 600", mode)
+		}
+		dirInfo, err := os.Stat(filepath.Dir(path))
+		if err != nil {
+			t.Fatalf("stat dir: %v", err)
+		}
+		if mode := dirInfo.Mode().Perm(); mode != 0o700 {
+			t.Errorf("dir mode = %o, want 700", mode)
+		}
 	}
 
 	reloaded, err := Load(path)
