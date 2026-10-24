@@ -98,9 +98,13 @@ nginx/Caddy 也支持，`Host` 必须原样透传。细节见 [docs/deployment.m
 
 ## 实例终端（Web Shell）
 
-实例行上的「终端」按钮就地打开该实例的原生 TUI：Kimi Code、OpenCode，以及 dsh 的
+实例行上的「终端」按钮就地打开该实例的原生 TUI：Kimi Code、OpenCode、ZCode（实验性
+品类，`node <发行包>/bin/zcode.mjs`，不带 `--web` 就是官方 TUI），以及 dsh 的
 `dsh tui [--resume]`。终端跑在面板进程里、走现有 WebSocket——**不新增端口，也不需要反向代理**。
 这是面板里唯一的终端入口。
+
+Claude Web 目前没有终端入口：它本身是一个围绕 Claude Code CLI 的工作台，面板只代理它的
+网页端，终端形态待接入。
 
 和「打开」按钮的区别：打开是在新标签页用该实例的网页模式；终端是在当前页面覆盖一层真终端，
 直接操作 agent 自己的交互界面。

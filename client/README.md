@@ -43,7 +43,7 @@ hdsl-tui --brand kimi --instance kimi-1 https://panel.example.com
 | 选项 | 说明 |
 |---|---|
 | `--instance <id>` | 登录后直接进入该实例的终端（菜单仍可用） |
-| `--brand <name>` | `kimi` / `opencode` / `claude-web`，默认走 dsh 实例 |
+| `--brand <name>` | `kimi` / `opencode` / `claude-web` / `zcode`，默认走 dsh 实例 |
 | `--resume <sessionId>` | 附着到该 harness 会话（kimi / opencode 的会话恢复） |
 | `--user <name>` | 面板用户名，默认 `admin`；给了就不再提示 |
 | `--ca <pem>` | 额外信任的 CA 证书（PEM 文件），用于自签面板 |
@@ -67,7 +67,7 @@ hdsl-tui --brand kimi --instance kimi-1 https://panel.example.com
 ╚════════════════════════════════════════════════════════╝
 ```
 
-层级是 **服务器 → 主菜单 → 分类（dsh/kimi/opencode/claude-web）→ 实例 → 动作**。
+层级是 **服务器 → 主菜单 → 分类（dsh/kimi/opencode/claude-web/zcode）→ 实例 → 动作**。
 每一层都有 `← 返回` 项，`Esc` 也逐级回退；`Ctrl-C` 在任意输入页取消当前动作，
 在根层（服务器列表）退出程序。退出 agent（`Ctrl-] q`）或 agent 自己退出，都只回到
 实例动作菜单——**登录状态和面板连接都还在**，不会连人带会话一起退出。

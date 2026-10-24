@@ -8,9 +8,9 @@ import type { BrandId } from "../types";
 import { I18N } from "../i18n";
 import "@xterm/xterm/css/xterm.css";
 
-/** 终端窗口的目标：一个品牌实例或一个 dsh 实例。 */
+/** 终端窗口的目标：一个品牌实例、一个 dsh 实例，或一个 ZCode 实例（实验性品类）。 */
 export interface TerminalTargetInfo {
-  kind: "brand" | "dsh";
+  kind: "brand" | "dsh" | "zcode";
   brand?: BrandId;
   id: string;
   name: string;
@@ -206,9 +206,11 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     setMessage("");
     try {
       const data =
-        target.kind === "brand"
-          ? await api.openBrandTerminal(target.brand as BrandId, target.id)
-          : await api.openDshTerminal(target.id);
+        target.kind === "zcode"
+          ? await api.openZcodeTerminal(target.id)
+          : target.kind === "brand"
+            ? await api.openBrandTerminal(target.brand as BrandId, target.id)
+            : await api.openDshTerminal(target.id);
       if (disposedRef.current || generation !== generationRef.current) return;
       if (data.mode === "desktop") {
         setPhase("desktop");
@@ -290,7 +292,9 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     if (!target) return;
     setBusy(true);
     try {
-      if (target.kind === "brand") {
+      if (target.kind === "zcode") {
+        await api.closeZcodeTerminal(target.id);
+      } else if (target.kind === "brand") {
         await api.closeBrandTerminal(target.brand as BrandId, target.id);
       } else {
         await api.closeDshTerminal(target.id);

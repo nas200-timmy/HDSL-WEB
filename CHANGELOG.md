@@ -2,6 +2,34 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.6.0 — 2026-10-24 · ZCode 终端
+
+ZCode 的发行包不带参数启动就是官方 TUI（`scripts/zcode-distribution/runner.mjs` 会 import
+`agent/zcode.cjs`，CLI 的默认命令是 `tui`），所以它和 Kimi Code、OpenCode 一样可以就地
+接进 Web Shell。这次把后端、网页与 Go 客户端三处一起补齐。
+
+- **适配器**：新增 `ZcodeTui`，起 `node <发行包>/bin/zcode.mjs`。**不传任何参数**——
+  `--web` / `--host` / `--port` / `--no-token` 是 web 模式专属，`--workspace` 也只有
+  web 分支解析；工作区靠进程 cwd。缺 `bin/zcode.mjs` 或 `agent/zcode.cjs` 时提前给出可读
+  原因（只有 web 的发行包会在 PTY 里静默失败）。
+- **状态分工**（按上游源码核对）：`ZCODE_DATA_BASE_DIR` 指实例 `data/`，凭据
+  （`.zcode/v2/credentials.json`）与供应商配置（`.zcode/v2/provider_config.json`，也就是
+  面板写的那份）都在它下面；会话库跟 `homedir()` 走，所以 `HOME` **保持与 web 进程一致**，
+  不指向实例目录——否则网页与终端会看到两套会话。
+- **一份门禁**：把 dsh / 品牌 / ZCode 三处逐行重复的终端逻辑收进 `InstanceTerminal`
+  （Web Shell 开关、HTTPS、开发者密码、提权、Windows 桌面分支、spawn、一次性 ticket）。
+  ZCode 新增 `POST|DELETE /api/zcode/instances/{id}/terminal`，响应体与其他品类完全一致。
+- **生命周期**：开 TUI 前同步停 web（等进程树退出），启动 web 前先停 TUI，停止/删除实例
+  连带结束终端；dsh 打开终端时的 web 停止也从异步改成阻塞式，避免两个进程抢一个 `DSH_HOME`。
+- **会话键**：终端注册表改为 `brand + instanceId`，dsh / 品牌 / ZCode 各自的 id 空间不再
+  互相串会话。
+- **网页**：ZCode 实例卡新增「打开终端」，复用现有 `TerminalWindow`；发行包未就绪、
+  Web Shell 关闭或面板不在 HTTPS 时不显示可用入口。
+- **客户端**：`hdsl-tui` 的分类多出 `zcode`（`GET /api/zcode/instances`），`--brand zcode`
+  可用；终端路径按品类解析。
+- 验证：后端 `compileJava` / `compileTestJava` 与终端相关用例通过；前端 `tsc --noEmit`
+  与 `vite build` 通过；客户端 `go vet` / `go test ./...` 通过（新增品类路径用例）。
+
 ## v0.5.7 — 2026-10-24 · 证书不匹配时可以「仅本次」继续
 
 面板证书只签了域名、客户端却用局域网 IP 连（`https://192.0.2.10:3080`）时，`hdsl-tui`

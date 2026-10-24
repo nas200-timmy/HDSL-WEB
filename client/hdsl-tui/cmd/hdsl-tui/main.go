@@ -35,8 +35,9 @@ import (
 // version is stamped by the release build: -X main.version=v0.5.4.
 var version = "dev"
 
-// brands are the three brand instance surfaces, in menu order.
-var brands = []string{"kimi", "opencode", "claude-web"}
+// brands are the instance surfaces beyond dsh, in menu order: the three brand
+// categories and ZCode (its own experimental category, same terminal contract).
+var brands = []string{"kimi", "opencode", "claude-web", "zcode"}
 
 const requestTimeout = 30 * time.Second
 
@@ -335,9 +336,17 @@ func collectGroups(ctx context.Context, client *panel.Client, log logger) ([]cli
 			log.Logf("跳过 %s 实例列表: %v", brand, err)
 			continue
 		}
-		groups = append(groups, cli.Group{Title: brand + " 实例", Brand: brand, Items: items})
+		groups = append(groups, cli.Group{Title: brandTitle(brand), Brand: brand, Items: items})
 	}
 	return groups, nil
+}
+
+// brandTitle is the picker's label for a surface.
+func brandTitle(brand string) string {
+	if brand == "zcode" {
+		return "ZCode 实例（实验）"
+	}
+	return brand + " 实例"
 }
 
 func normaliseBrand(brand string) string {
@@ -353,7 +362,7 @@ func parseArgs(args []string) (options, *url.URL, error) {
 	flags.SetOutput(io.Discard)
 	flags.Usage = func() {}
 	flags.StringVar(&opts.instance, "instance", "", "直接进入该实例，不显示菜单")
-	flags.StringVar(&opts.brand, "brand", "", "品牌：kimi | opencode | claude-web（默认 dsh）")
+	flags.StringVar(&opts.brand, "brand", "", "品牌：kimi | opencode | claude-web | zcode（默认 dsh）")
 	flags.StringVar(&opts.resume, "resume", "", "附着到该 harness 会话")
 	flags.StringVar(&opts.user, "user", "", "面板用户名（默认 admin）")
 	flags.StringVar(&opts.ca, "ca", "", "额外信任的 CA 证书（PEM 文件）")
@@ -372,9 +381,9 @@ func parseArgs(args []string) (options, *url.URL, error) {
 		return opts, nil, nil
 	}
 	switch opts.brand {
-	case "", "dsh", "kimi", "opencode", "claude-web":
+	case "", "dsh", "kimi", "opencode", "claude-web", "zcode":
 	default:
-		return options{}, nil, fmt.Errorf("--brand 只能是 kimi | opencode | claude-web（或留空表示 dsh），收到 %q\n\n%s", opts.brand, usageText)
+		return options{}, nil, fmt.Errorf("--brand 只能是 kimi | opencode | claude-web | zcode（或留空表示 dsh），收到 %q\n\n%s", opts.brand, usageText)
 	}
 	rest := flags.Args()
 	if len(rest) > 1 {
@@ -406,7 +415,7 @@ const usageText = `hdsl-tui — 在终端里进入 HDSL-Web 面板的实例
 
 选项:
   --instance <id>   直接进入该实例的终端（仍会显示菜单）
-  --brand <name>    品牌：kimi | opencode | claude-web（默认 dsh）
+  --brand <name>    品牌：kimi | opencode | claude-web | zcode（默认 dsh）
   --resume <id>     附着到该 harness 会话（kimi / opencode）
   --user <name>     面板用户名，默认 admin；给了就不再提示
   --ca <pem>        额外信任的 CA 证书（PEM 文件）

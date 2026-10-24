@@ -6,6 +6,7 @@ import { PopupItem, PopupMenu, PopupSep } from "./PopupMenu";
 import {
   CloseIcon,
   DeleteIcon,
+  DeployedCodeIcon,
   EditIcon,
   ExtensionIcon,
   FormatListBulletedIcon,
@@ -18,6 +19,7 @@ import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } f
 import { refreshExternal, refreshZcode, toast, useAppState } from "../store";
 import type { ExternalInstance, InstancePlugins } from "../types";
 import { errMsg } from "../utils";
+import { TerminalWindow, type TerminalTargetInfo } from "./TerminalWindow";
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
@@ -55,6 +57,24 @@ export function ZcodeSection() {
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ name: "", baseUrl: DEFAULT_BASE_URL, apiKey: "" });
   const [formError, setFormError] = useState<string | null>(null);
+  const [terminalTarget, setTerminalTarget] = useState<TerminalTargetInfo | null>(null);
+  /// Web Shell 总开关（开发者模式里控制）与 HTTPS 状态；任一不满足就不显示终端入口
+  const [webShellEnabled, setWebShellEnabled] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .developerStatus()
+      .then((status) => {
+        if (alive) setWebShellEnabled(status.webShellEnabled && status.https);
+      })
+      .catch(() => {
+        if (alive) setWebShellEnabled(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     void refreshZcode();
@@ -290,6 +310,14 @@ export function ZcodeSection() {
                   </button>
                   <button
                     className="icon-btn on-variant ripple-host"
+                    title="打开终端（ZCode TUI）"
+                    disabled={busy || !webShellEnabled || !s.zcodeDist?.present}
+                    onClick={() => setTerminalTarget({ kind: "zcode", id: inst.id, name: inst.name })}
+                  >
+                    <DeployedCodeIcon size={18} />
+                  </button>
+                  <button
+                    className="icon-btn on-variant ripple-host"
                     title="在新标签页打开（经面板 /i/<id>/ 反代）"
                     disabled={inst.state !== "running"}
                     onClick={() => void openInBrowser(inst)}
@@ -432,6 +460,9 @@ export function ZcodeSection() {
 
       {/* 插件通道：形状与品牌实例卡一致（弹窗各持一份，免得两个组件文件互相引用） */}
       <ZcodePluginsDialog inst={pluginsTarget} onClose={() => setPluginsTarget(null)} />
+
+      {/* 原地终端：与品牌实例共用 TerminalWindow，协议同为 docs/terminal-protocol.md 的 v1 */}
+      <TerminalWindow target={terminalTarget} onClose={() => setTerminalTarget(null)} />
 
       <ConfirmDialog
         open={deleteTarget !== null}

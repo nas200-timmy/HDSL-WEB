@@ -288,10 +288,23 @@ func (c *Client) Instances(ctx context.Context) ([]Instance, error) {
 	return c.instances(ctx, "/api/instances")
 }
 
-// BrandInstances lists one brand's instances
-// (GET /api/brands/{brand}/instances).
+// BrandInstances lists one surface's instances. The three brand surfaces answer
+// GET /api/brands/{brand}/instances; ZCode is its own experimental category with
+// its own prefix (`/api/zcode/instances`), which is why the path is resolved
+// here instead of being spelled out by every caller.
 func (c *Client) BrandInstances(ctx context.Context, brand string) ([]Instance, error) {
-	return c.instances(ctx, "/api/brands/"+url.PathEscape(brand)+"/instances")
+	return c.instances(ctx, instancesPath(brand))
+}
+
+// instancesPath maps a surface id to its list endpoint.
+func instancesPath(brand string) string {
+	switch brand {
+	case "", "dsh":
+		return "/api/instances"
+	case "zcode":
+		return "/api/zcode/instances"
+	}
+	return "/api/brands/" + url.PathEscape(brand) + "/instances"
 }
 
 func (c *Client) instances(ctx context.Context, path string) ([]Instance, error) {
@@ -307,11 +320,15 @@ func (c *Client) instances(ctx context.Context, path string) ([]Instance, error)
 }
 
 // terminalPath is the open/close terminal endpoint. An empty brand means the
-// DSH instance surface; brands have their own mirrored surface.
+// DSH instance surface; the brand categories mirror it under /api/brands, and
+// ZCode has its own category prefix.
 func terminalPath(brand, id string) string {
 	id = url.PathEscape(id)
-	if brand == "" || brand == "dsh" {
+	switch {
+	case brand == "" || brand == "dsh":
 		return "/api/instances/" + id + "/terminal"
+	case brand == "zcode":
+		return "/api/zcode/instances/" + id + "/terminal"
 	}
 	return "/api/brands/" + url.PathEscape(brand) + "/instances/" + id + "/terminal"
 }

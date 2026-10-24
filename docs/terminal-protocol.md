@@ -50,11 +50,18 @@
 - dsh：`GET /api/instances` → `{"instances":[{"id","name","state",…}]}`
 - 品牌：`GET /api/brands/{brand}/instances`，`brand ∈ {kimi, opencode, claude-web}`，
   元素形状同上（另带 `version` 等字段）
+- ZCode（实验性品类）：`GET /api/zcode/instances`，元素形状同上（`state ∈ created /
+  starting / running / stopped / error`）
+
+`claude-web` 目前没有交互终端：它自己的 web 是一个围绕 Claude Code CLI 的工作台，
+面板只代理它的网页端。其余三个品类都有原生 TUI。
 
 ### `POST /api/instances/{id}/terminal`
 
-品牌版本是 `POST /api/brands/{brand}/instances/{id}/terminal`。可选查询参数
-`?resume=<sessionId>`（TUI 里恢复某个会话）。请求体可以是 `{}`；Windows 桌面模式要求
+品牌版本是 `POST /api/brands/{brand}/instances/{id}/terminal`，ZCode 是
+`POST /api/zcode/instances/{id}/terminal`——三条路由的门禁、生命周期与响应体完全相同
+（服务端由同一个 `InstanceTerminal` 实现）。可选查询参数 `?resume=<sessionId>`（TUI 里
+恢复某个会话；ZCode 第一版忽略它）。请求体可以是 `{}`；Windows 桌面模式要求
 `{"confirm":"open-desktop-terminal"}`。
 
 POSIX 面板返回：
@@ -101,6 +108,8 @@ Windows 面板返回（没有 ticket，也没有 PTY——终端开在面板所�
 ### `DELETE /api/instances/{id}/terminal`
 
 结束该实例的终端（杀进程树）：`{"ok":true,"killed":true}`。不需要提权（与打开分开）。
+品牌与 ZCode 的写法同上：`DELETE /api/brands/{brand}/instances/{id}/terminal`、
+`DELETE /api/zcode/instances/{id}/terminal`。停止或删除实例时面板也会连带结束它的终端。
 
 ## 3. WebSocket
 

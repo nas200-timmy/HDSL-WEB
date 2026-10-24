@@ -394,6 +394,15 @@ export const api = {
   /** 运行中实例的打开地址（HTTP 明文 + 令牌，用请求 Host 拼出来） */
   zcodeOpen: (id: string) => request<{ url: string }>(`/api/zcode/instances/${encodeURIComponent(id)}/open`),
 
+  /// ZCode 的原地终端：`node <发行包>/bin/zcode.mjs`（不带 --web，即官方 TUI）。
+  /// 协议与品牌实例相同，见 docs/terminal-protocol.md。
+  openZcodeTerminal: (id: string) =>
+    request<TerminalOpen>(`/api/zcode/instances/${encodeURIComponent(id)}/terminal`, jsonInit("POST", {})),
+  closeZcodeTerminal: (id: string) =>
+    request<{ ok: boolean; killed: boolean }>(`/api/zcode/instances/${encodeURIComponent(id)}/terminal`, {
+      method: "DELETE",
+    }),
+
   zcodeLogs: (id: string, tail = 200) =>
     request<{ lines: string[] }>(`/api/zcode/instances/${encodeURIComponent(id)}/logs?tail=${tail}`),
 
