@@ -463,8 +463,13 @@ public final class BrandRuntime {
                 // Its port comes from the environment, not a flag (verified in
                 // server/src/index.ts: PORT ?? 3090), so the pre-allocated
                 // port travels in the environment while the command stays a
-                // plain `tsx <entry>`.
-                return new LaunchPlan(List.copyOf(command), Map.of("PORT", String.valueOf(port)));
+                // plain `tsx <entry>`. The instance's endpoint override rides
+                // along: the browser mode drives the same CLI, so a gateway
+                // configured for the terminal must serve the web workbench too.
+                java.util.Map<String, String> environment = new java.util.LinkedHashMap<>();
+                environment.put("PORT", String.valueOf(port));
+                org.jackhuang.hmcl.web.terminal.ClaudeWebTui.applyBaseUrl(environment, instance.baseUrl());
+                return new LaunchPlan(List.copyOf(command), java.util.Map.copyOf(environment));
             }
             default -> throw new IOException("unknown brand " + brand);
         }

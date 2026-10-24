@@ -646,6 +646,9 @@ function InstancesCard({
   const [infoTarget, setInfoTarget] = useState<ExternalInstance | null>(null);
   const [renameTarget, setRenameTarget] = useState<ExternalInstance | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  /// 仅 claude-web：实例的 ANTHROPIC_BASE_URL（空 = 用工具默认端点）
+  const [baseUrlTarget, setBaseUrlTarget] = useState<ExternalInstance | null>(null);
+  const [baseUrlValue, setBaseUrlValue] = useState("");
   const [pluginsTarget, setPluginsTarget] = useState<ExternalInstance | null>(null);
   const [logTarget, setLogTarget] = useState<ExternalInstance | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -769,6 +772,30 @@ function InstancesCard({
       await refreshExternal();
     } catch (e) {
       toast("error", `重命名失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doSaveBaseUrl = async () => {
+    if (!baseUrlTarget) return;
+    const value = baseUrlValue.trim();
+    if (value === (baseUrlTarget.baseUrl ?? "")) {
+      setBaseUrlTarget(null);
+      return;
+    }
+    if (value !== "" && !/^https?:\/\//i.test(value)) {
+      toast("error", "地址要以 http:// 或 https:// 开头");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.patchBrandInstance(brand, baseUrlTarget.id, { baseUrl: value });
+      toast("success", value ? "已设置 ANTHROPIC_BASE_URL" : "已恢复默认端点");
+      setBaseUrlTarget(null);
+      await refreshExternal();
+    } catch (e) {
+      toast("error", `保存失败：${errMsg(e)}`);
     } finally {
       setBusy(false);
     }
@@ -1111,6 +1138,21 @@ function InstancesCard({
         >
           {I18N["dsh.brand.view_log"]}
         </PopupItem>
+        {brand === "claude-web" && (
+          <PopupItem
+            icon={<PublicIcon size={16} />}
+            onClick={() => {
+              const inst = menuAnchor?.inst;
+              setMenuAnchor(null);
+              if (inst) {
+                setBaseUrlTarget(inst);
+                setBaseUrlValue(inst.baseUrl ?? "");
+              }
+            }}
+          >
+            Anthropic 端点…
+          </PopupItem>
+        )}
         <PopupSep />
         <PopupItem
           danger
@@ -1151,6 +1193,39 @@ function InstancesCard({
             {I18N["button.cancel"]}
           </button>
           <button className="btn btn-text" disabled={busy} onClick={() => void doRename()}>
+            {I18N["button.ok"]}
+          </button>
+        </div>
+      </Dialog>
+
+      {/* Claude Web 的 ANTHROPIC_BASE_URL */}
+      <Dialog
+        open={baseUrlTarget !== null}
+        title="Anthropic 端点（ANTHROPIC_BASE_URL）"
+        onClose={() => !busy && setBaseUrlTarget(null)}
+      >
+        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", lineHeight: 1.6, marginTop: 0 }}>
+          官方内核在不受支持的地区会被 Anthropic 直接拒绝（HTTP 403）。这里填一个可达的网关地址，
+          官方内核与这个实例的网页模式都会改用它；留空则用工具自己的默认端点。
+        </p>
+        <div className="form-row">
+          <span className="form-label">ANTHROPIC_BASE_URL</span>
+          <input
+            className="input"
+            autoFocus
+            placeholder="https://gateway.example.com"
+            value={baseUrlValue}
+            onChange={(e) => setBaseUrlValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !busy) void doSaveBaseUrl();
+            }}
+          />
+        </div>
+        <div className="dialog-actions">
+          <button className="btn btn-text dim" disabled={busy} onClick={() => setBaseUrlTarget(null)}>
+            {I18N["button.cancel"]}
+          </button>
+          <button className="btn btn-text" disabled={busy} onClick={() => void doSaveBaseUrl()}>
             {I18N["button.ok"]}
           </button>
         </div>

@@ -460,7 +460,8 @@ export const api = {
     request<{ instance: BrandInstance }>(`/api/brands/${brand}/instances`, jsonInit("POST", body)),
 
   /** 运行中改 version → 409；未安装的 version → 400 */
-  patchBrandInstance: (brand: BrandId, id: string, body: { name?: string; version?: string }) =>
+  /** baseUrl 目前只有 claude-web 接受（ANTHROPIC_BASE_URL）；传空串表示清除 */
+  patchBrandInstance: (brand: BrandId, id: string, body: { name?: string; version?: string; baseUrl?: string }) =>
     request<{ instance: BrandInstance }>(
       `/api/brands/${brand}/instances/${encodeURIComponent(id)}`,
       jsonInit("PATCH", body),

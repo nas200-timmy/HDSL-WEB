@@ -19,6 +19,7 @@ package org.jackhuang.hmcl.web.brand;
 
 import com.google.gson.annotations.SerializedName;
 import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
 
 /// One brand-category instance: a [Brand] tool pinned to one installed version,
 /// plus the panel-side record of how to launch it.
@@ -34,18 +35,33 @@ public record BrandInstance(
         @SerializedName("brand") String brand,
         @SerializedName("name") String name,
         @SerializedName("version") String version,
+        @SerializedName("baseUrl") @Nullable String baseUrl,
         @SerializedName("lastPort") int lastPort,
         @SerializedName("createdAt") long createdAt) {
 
     public BrandInstance withName(String newName) {
-        return new BrandInstance(id, brand, newName, version, lastPort, createdAt);
+        return new BrandInstance(id, brand, newName, version, baseUrl, lastPort, createdAt);
     }
 
     public BrandInstance withVersion(String newVersion) {
-        return new BrandInstance(id, brand, name, newVersion, lastPort, createdAt);
+        return new BrandInstance(id, brand, name, newVersion, baseUrl, lastPort, createdAt);
     }
 
     public BrandInstance withLastPort(int newLastPort) {
-        return new BrandInstance(id, brand, name, version, newLastPort, createdAt);
+        return new BrandInstance(id, brand, name, version, baseUrl, newLastPort, createdAt);
+    }
+
+    /// The endpoint the tool should talk to instead of its own default.
+    ///
+    /// Only Claude Web uses this today (`ANTHROPIC_BASE_URL`): the official
+    /// kernel is refused outright in unsupported regions, and a self-hosted or
+    /// otherwise reachable gateway is the documented way around it. A blank
+    /// value means "keep the tool's own default", so old manifests and the
+    /// other brands carry `null`.
+    ///
+    /// @param newBaseUrl the endpoint, or `null`/blank for the default
+    /// @return the instance with the endpoint recorded
+    public BrandInstance withBaseUrl(@Nullable String newBaseUrl) {
+        return new BrandInstance(id, brand, name, version, newBaseUrl, lastPort, createdAt);
     }
 }

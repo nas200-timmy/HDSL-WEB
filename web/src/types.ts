@@ -366,6 +366,8 @@ export interface BrandInstance {
   brand: BrandId;
   name: string;
   version: string;
+  /** 仅 claude-web：ANTHROPIC_BASE_URL 覆盖；空/缺省表示用工具自己的默认端点 */
+  baseUrl?: string | null;
   lastPort: number;
   createdAt: string | number;
   state: "created" | "starting" | "running" | "stopped" | "error";

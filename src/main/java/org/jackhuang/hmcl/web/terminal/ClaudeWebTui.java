@@ -74,9 +74,56 @@ public final class ClaudeWebTui implements BrandTui {
     }
 
     private final @Nullable String kernel;
+    private final @Nullable String baseUrl;
 
     public ClaudeWebTui(@Nullable String kernel) {
+        this(kernel, null);
+    }
+
+    /// @param kernel  `community`, `official`, or `null` for the default
+    /// @param baseUrl the instance's endpoint override, as `ANTHROPIC_BASE_URL`
+    public ClaudeWebTui(@Nullable String kernel, @Nullable String baseUrl) {
         this.kernel = kernel;
+        this.baseUrl = baseUrl;
+    }
+
+    /// Puts an instance's endpoint override into a child environment.
+    ///
+    /// Claude Web is the only brand that stores one: Anthropic refuses the
+    /// official kernel outright in unsupported regions, and `ANTHROPIC_BASE_URL`
+    /// is the documented way to point the CLI at a reachable gateway instead.
+    /// A blank value changes nothing, so the tools keep their own default.
+    ///
+    /// @param environment the child environment to amend
+    /// @param baseUrl     the configured endpoint, or `null`/blank
+    public static void applyBaseUrl(Map<String, String> environment, @Nullable String baseUrl) {
+        if (baseUrl != null && !baseUrl.isBlank()) {
+            environment.put("ANTHROPIC_BASE_URL", baseUrl.trim());
+        }
+    }
+
+    /// Whether an endpoint's answer means "this region is not served".
+    ///
+    /// Anthropic answers **403** to requests from unsupported countries; a
+    /// supported region without a key answers **401**. Only the 403 is turned
+    /// into a refusal, and it is worded so it also fits a gateway that rejects
+    /// the caller for its own reasons.
+    ///
+    /// @param status the HTTP status the probe saw
+    /// @param body   the response body, may be blank
+    /// @return whether the official kernel should not be started here
+    public static boolean regionBlocked(int status, @Nullable String body) {
+        if (status != 403) {
+            return false;
+        }
+        String text = body == null ? "" : body.toLowerCase(java.util.Locale.ROOT);
+        return text.contains("not available in your country")
+                || text.contains("supported countries")
+                || text.contains("unsupported")
+                || text.contains("region")
+                // No body, or nothing recognisable: a 403 from the API edge is
+                // still a refusal, and the message below covers both readings.
+                || text.isBlank();
     }
 
     /// The kernels this installation can start, community first.
@@ -140,7 +187,51 @@ public final class ClaudeWebTui implements BrandTui {
                             + environment.getOrDefault("PATH", "")));
         }
         command.add(entry.toString());
+        applyBaseUrl(environment, baseUrl);
         return new TerminalTarget(BRAND, instanceId, command, workspace, Map.copyOf(environment));
+    }
+
+    /// What an endpoint answered when asked whether it serves this panel.
+    ///
+    /// @param status the HTTP status
+    /// @param body   the response body, possibly blank
+    public record Probe(int status, String body) {
+    }
+
+    /// Asks the endpoint whether it serves this panel at all: `GET <base>/v1/models`
+    /// without a key. An unsupported region answers **403**; a supported one
+    /// answers **401**, which is the healthy answer for a panel with no key.
+    ///
+    /// @param baseUrl the instance's endpoint, or `null`/blank for api.anthropic.com
+    /// @return what it answered, or `null` when the request never completed
+    public static @Nullable Probe probeAnthropic(@Nullable String baseUrl) {
+        String base = baseUrl == null || baseUrl.isBlank() ? "https://api.anthropic.com" : baseUrl.trim();
+        while (base.endsWith("/")) {
+            base = base.substring(0, base.length() - 1);
+        }
+        try {
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(3))
+                    .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+                    .build();
+            java.net.http.HttpRequest request = java.net.http.HttpRequest
+                    .newBuilder(java.net.URI.create(base + "/v1/models"))
+                    .timeout(java.time.Duration.ofSeconds(4))
+                    .header("anthropic-version", "2023-06-01")
+                    .GET()
+                    .build();
+            java.net.http.HttpResponse<String> response =
+                    client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
+            String body = response.body() == null ? "" : response.body();
+            // The region note is at the front; the rest is not worth keeping.
+            return new Probe(response.statusCode(), body.length() > 4096 ? body.substring(0, 4096) : body);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (RuntimeException | java.io.IOException e) {
+            // Offline, DNS, TLS or timeout: unknown, and the CLI explains it.
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------ probe --

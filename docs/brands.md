@@ -82,6 +82,30 @@ Claude Web 的项目选择器里那个 `打开文件夹…` 叫的是**服务器
 「项目」菜单里就能直接选中 `workspace` 目录，完全不需要那个对话框。若还想用别的目录，
 可以先用面板的文件能力把它放进实例工作区，或用它的终端 `cd` 过去。
 
+### Claude Web：官方内核与 `ANTHROPIC_BASE_URL`
+
+Claude Web 有两个内核（社区引擎 `claude-web-engine`、官方 `@anthropic-ai/claude-agent-sdk-*`），
+**两个都最终连 Anthropic**：官方内核是官方 Claude Code，社区引擎是它的社区构建。而 Anthropic 的
+[支持地区政策](https://www.anthropic.com/legal/supported-regions)把未列出的国家/地区（含中国大陆）
+列为不受支持，并明确覆盖「人在不支持地区使用」与「主体注册在不支持地区」两种情形；从这类网络出口
+访问 `api.anthropic.com` 一律 **403**，Claude Code 自己会打印
+`App unavailable in region` 然后退出。
+
+面板为此做两件事：
+
+- **实例级的端点覆盖**：实例菜单 →「Anthropic 端点…」可以填 `ANTHROPIC_BASE_URL`（留空即恢复默认）。
+  值随实例存进 `instance.json`，**网页模式与终端都用它**（同一个 workbench、同一份 CLI 配置），
+  面板不校验端点是谁，也不代管凭据——走官方网关还是第三方中转、以及服务条款上的风险，都由使用者判断。
+  若网关需要密钥，把 `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` 放在面板进程的环境里：子进程继承
+  面板的环境，无需在面板里再存一份。
+- **官方内核的预检**：选官方内核时，面板先对该端点 `GET /v1/models`——不受支持地区回 **403**，
+  受支持地区没带 key 回 **401**。只有 403 会被拦下并给出人话（社区引擎或配置端点二选一），
+  而不是把一个起不来的 TUI 丢给用户；401、超时、DNS/TLS 失败都放行，由 CLI 自己解释。
+
+要绕过地区限制，正路是用**受支持地区**的出口或官方支持的云厂商（Bedrock / Vertex）通道；
+第三方中转不是 Anthropic 的服务，提示词与密钥都会交给对方，而且在不受支持地区使用本身就落在上面
+那条政策里，账号风险自负。
+
 ## 为什么 OpenCode 需要一段「路由修正脚本」
 
 OpenCode 的网页客户端**按 URL 路径路由**（bundle 里直接读 `window.location.pathname` 匹配路由表，

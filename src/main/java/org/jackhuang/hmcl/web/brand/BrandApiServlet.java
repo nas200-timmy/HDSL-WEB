@@ -374,8 +374,40 @@ public final class BrandApiServlet extends HttpServlet {
             return;
         }
         BrandInstance created = ref.manager().create(name, version);
+        if (body.has("baseUrl")) {
+            created = created.withBaseUrl(baseUrlFrom(brand, body));
+            ref.manager().update(created);
+        }
         Json.writePreservingNulls(response, HttpServletResponse.SC_CREATED,
                 Map.of("instance", instanceJson(brand, created, request)));
+    }
+
+    /// Claude Web's endpoint override, read out of a request body.
+    ///
+    /// `ANTHROPIC_BASE_URL`: Anthropic refuses the official kernel outright in
+    /// unsupported regions, and pointing the CLI at a reachable gateway is the
+    /// documented way around that. Only Claude Web stores one, and only over
+    /// http/https — the value goes into the child's environment verbatim.
+    ///
+    /// @param brand the brand the instance belongs to
+    /// @param body  the request body, which carries the field
+    /// @return the value to store, or `null` to clear it
+    /// @throws BrandException when the brand has no such setting or the URL is
+    ///                        not one a client could talk to
+    private static @Nullable String baseUrlFrom(Brand brand, JsonObject body) throws BrandException {
+        if (brand != Brand.CLAUDE_WEB) {
+            throw new BrandException(brand.id()
+                    + " instances have no ANTHROPIC_BASE_URL; only claude-web does");
+        }
+        String raw = stringField(body, "baseUrl");
+        String trimmed = raw == null ? "" : raw.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+            throw new BrandException("baseUrl must start with http:// or https://");
+        }
+        return trimmed;
     }
 
     private void getInstance(Brand brand, PathRef ref, HttpServletRequest request, HttpServletResponse response,
@@ -422,6 +454,9 @@ public final class BrandApiServlet extends HttpServlet {
             if (version != null && !version.isBlank() && !version.trim().equals(instance.version())) {
                 patched = patched.withVersion(version.trim());
             }
+        }
+        if (body.has("baseUrl")) {
+            patched = patched.withBaseUrl(baseUrlFrom(brand, body));
         }
         ref.manager().update(patched);
         Json.writePreservingNulls(response, Map.of("instance", instanceJson(brand, patched, request)));
@@ -581,7 +616,8 @@ public final class BrandApiServlet extends HttpServlet {
             // written for, and the official CLI. The caller picks one
             // (`?kernel=`); the adapter refuses rather than substituting.
             BrandTui tui = brand == Brand.CLAUDE_WEB
-                    ? new org.jackhuang.hmcl.web.terminal.ClaudeWebTui(request.getParameter("kernel"))
+                    ? new org.jackhuang.hmcl.web.terminal.ClaudeWebTui(
+                            request.getParameter("kernel"), instance.baseUrl())
                     : BrandTui.forBrand(brand.id());
             if (tui == null) {
                 throw new InstanceTerminal.Refused(409,
@@ -591,6 +627,23 @@ public final class BrandApiServlet extends HttpServlet {
             if (packageDir == null) {
                 throw new InstanceTerminal.Refused(409,
                         brand.sourceLabel() + " " + instance.version() + " is not installed");
+            }
+            // The official kernel is refused outright in unsupported regions, and
+            // Claude Code exits with "App unavailable in region" after a 403 the
+            // user cannot act on. Ask the endpoint first and answer with a
+            // sentence pointing at the two ways out.
+            if (brand == Brand.CLAUDE_WEB
+                    && org.jackhuang.hmcl.web.terminal.ClaudeWebTui.OFFICIAL
+                            .equals(request.getParameter("kernel"))) {
+                org.jackhuang.hmcl.web.terminal.ClaudeWebTui.Probe probe =
+                        org.jackhuang.hmcl.web.terminal.ClaudeWebTui.probeAnthropic(instance.baseUrl());
+                if (probe != null && org.jackhuang.hmcl.web.terminal.ClaudeWebTui
+                        .regionBlocked(probe.status(), probe.body())) {
+                    throw new InstanceTerminal.Refused(409,
+                            "terminal_failed: 官方内核在这里被 Anthropic 拒绝（HTTP " + probe.status()
+                                    + "）。面板位于不受支持地区时，官方 Claude Code 会被直接拒绝——"
+                                    + "请改用社区引擎，或在这个实例上配置 ANTHROPIC_BASE_URL 指向可达的网关。");
+                }
             }
             // A web runtime and a TUI on one HOME race the agent's own state;
             // the terminal takes the instance over, and the footer's start
@@ -714,6 +767,9 @@ public final class BrandApiServlet extends HttpServlet {
         body.addProperty("brand", instance.brand());
         body.addProperty("name", instance.name());
         body.addProperty("version", instance.version());
+        if (brand == Brand.CLAUDE_WEB) {
+            body.addProperty("baseUrl", instance.baseUrl());
+        }
         body.addProperty("lastPort", instance.lastPort());
         body.addProperty("createdAt", instance.createdAt());
         body.addProperty("state", status.state().name().toLowerCase(java.util.Locale.ROOT));

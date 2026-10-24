@@ -120,6 +120,57 @@ class BrandApiTest {
         }
     }
 
+    /// Claude Web's endpoint override: accepted for that brand, refused for the
+    /// others, cleared by an empty value, and only over http/https.
+    @Test
+    void claudeWebStoresAnEndpointOverrideOtherBrandsRefuseIt() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            Path release = dataDir.resolve("brands/claude-web/releases/0.3.2");
+            Files.createDirectories(release.resolve("web/dist"));
+            Files.writeString(release.resolve("web/dist/index.html"), "<!doctype html>\n");
+
+            HttpResponse<String> created = post(TestSupport.client(), running,
+                    "/api/brands/claude-web/instances", "{\"name\":\"Workbench\",\"version\":\"0.3.2\"}");
+            assertEquals(201, created.statusCode(), created.body());
+            String id = JsonParser.parseString(created.body()).getAsJsonObject()
+                    .getAsJsonObject("instance").get("id").getAsString();
+            String path = "/api/brands/claude-web/instances/" + id;
+
+            HttpResponse<String> set = request(TestSupport.client(), "PATCH", running, path,
+                    "{\"baseUrl\":\"https://gateway.example.com\"}");
+            assertEquals(200, set.statusCode(), set.body());
+            assertEquals("https://gateway.example.com", instance(set).get("baseUrl").getAsString());
+
+            // A bare host is not something a client could talk to.
+            HttpResponse<String> bad = request(TestSupport.client(), "PATCH", running, path,
+                    "{\"baseUrl\":\"gateway.example.com\"}");
+            assertEquals(400, bad.statusCode(), bad.body());
+
+            // Empty clears it, and the field stays visible as null.
+            HttpResponse<String> cleared = request(TestSupport.client(), "PATCH", running, path,
+                    "{\"baseUrl\":\"\"}");
+            assertEquals(200, cleared.statusCode(), cleared.body());
+            assertTrue(instance(cleared).get("baseUrl").isJsonNull(), cleared.body());
+
+            // Kimi has no ANTHROPIC_BASE_URL.
+            Path kimi = dataDir.resolve("brands/kimi/releases/2.1.1");
+            Files.createDirectories(kimi.resolve("node_modules/.bin"));
+            Files.writeString(kimi.resolve("node_modules/.bin/kimi"), "#!/bin/sh\n");
+            HttpResponse<String> kimiCreated = post(TestSupport.client(), running,
+                    "/api/brands/kimi/instances", "{\"name\":\"Kimi\",\"version\":\"2.1.1\"}");
+            assertEquals(201, kimiCreated.statusCode(), kimiCreated.body());
+            String kimiId = JsonParser.parseString(kimiCreated.body()).getAsJsonObject()
+                    .getAsJsonObject("instance").get("id").getAsString();
+            HttpResponse<String> refused = request(TestSupport.client(), "PATCH", running,
+                    "/api/brands/kimi/instances/" + kimiId, "{\"baseUrl\":\"https://gateway.example.com\"}");
+            assertEquals(400, refused.statusCode(), refused.body());
+        }
+    }
+
+    private static JsonObject instance(HttpResponse<String> response) {
+        return JsonParser.parseString(response.body()).getAsJsonObject().getAsJsonObject("instance");
+    }
+
     private static HttpResponse<String> get(TestSupport.RunningServer running, String path)
             throws Exception {
         return TestSupport.client().send(HttpRequest.newBuilder(

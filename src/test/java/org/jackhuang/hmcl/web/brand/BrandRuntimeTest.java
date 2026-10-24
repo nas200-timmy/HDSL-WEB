@@ -41,7 +41,7 @@ class BrandRuntimeTest {
     @Test
     void kimiCommandCarriesTheProxyContract() throws IOException {
         Path pkg = prefix(Brand.KIMI);
-        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1);
 
         List<String> command = BrandRuntime.command(Brand.KIMI, pkg, instance, "dsh.example.com");
 
@@ -59,7 +59,7 @@ class BrandRuntimeTest {
     @Test
     void kimiCommandOmitsTheAllowlistWithoutAHost() throws IOException {
         Path pkg = prefix(Brand.KIMI);
-        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1);
 
         List<String> command = BrandRuntime.command(Brand.KIMI, pkg, instance, null);
 
@@ -69,7 +69,7 @@ class BrandRuntimeTest {
     @Test
     void opencodeCommandUsesAPanelAllocatedPort() throws IOException {
         Path pkg = prefix(Brand.OPENCODE);
-        BrandInstance instance = new BrandInstance("abc", "opencode", "demo", "1.18.35", 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "opencode", "demo", "1.18.35", null, 0, 1);
 
         List<String> command = BrandRuntime.command(Brand.OPENCODE, pkg, instance, null);
 
@@ -80,7 +80,7 @@ class BrandRuntimeTest {
 
     @Test
     void commandRefusesAPrefixWithoutTheExecutable() {
-        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1);
 
         assertThrows(IOException.class,
                 () -> BrandRuntime.command(Brand.KIMI, dir, instance, null));
@@ -95,7 +95,7 @@ class BrandRuntimeTest {
         Files.createDirectories(entry.getParent());
         createExecutable(tsx);
         Files.createFile(entry);
-        BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1", 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1", null, 0, 1);
 
         BrandRuntime.LaunchPlan plan = BrandRuntime.plan(Brand.CLAUDE_WEB, pkg, instance, null);
 
@@ -108,13 +108,39 @@ class BrandRuntimeTest {
         assertTrue(port > 0, "a real pre-allocated port in the environment: " + plan.environment());
     }
 
+    /// The instance's endpoint override reaches the browser mode too: the
+    /// workbench drives the same CLI, so a gateway configured for the terminal
+    /// has to serve the web mode as well.
+    @Test
+    void claudeWebPlanCarriesTheInstancesEndpointOverride() throws IOException {
+        Path pkg = Files.createDirectories(dir.resolve("claude-web-rel"));
+        Path tsx = pkg.resolve("node_modules/.bin/tsx");
+        Path entry = pkg.resolve("server/src/index.ts");
+        Files.createDirectories(tsx.getParent());
+        Files.createDirectories(entry.getParent());
+        createExecutable(tsx);
+        Files.createFile(entry);
+        BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1",
+                "https://gateway.example.com", 0, 1);
+
+        BrandRuntime.LaunchPlan plan = BrandRuntime.plan(Brand.CLAUDE_WEB, pkg, instance, null);
+
+        assertEquals("https://gateway.example.com", plan.environment().get("ANTHROPIC_BASE_URL"));
+        assertTrue(plan.environment().containsKey("PORT"), plan.environment().toString());
+
+        // Unset stays unset: the CLI keeps its own default.
+        BrandInstance plain = new BrandInstance("abc", "claude-web", "demo", "0.2.1", null, 0, 1);
+        assertFalse(BrandRuntime.plan(Brand.CLAUDE_WEB, pkg, plain, null)
+                .environment().containsKey("ANTHROPIC_BASE_URL"));
+    }
+
     @Test
     void claudeWebPlanRefusesAPrefixWithoutTheServerEntry() throws IOException {
         Path pkg = Files.createDirectories(dir.resolve("claude-web-rel"));
         Path tsx = pkg.resolve("node_modules/.bin/tsx");
         Files.createDirectories(tsx.getParent());
         createExecutable(tsx);
-        BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1", 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1", null, 0, 1);
 
         assertThrows(IOException.class,
                 () -> BrandRuntime.plan(Brand.CLAUDE_WEB, pkg, instance, null));
@@ -123,7 +149,7 @@ class BrandRuntimeTest {
     @Test
     void npmBrandPlansCarryNoEnvironment() throws IOException {
         Path pkg = prefix(Brand.KIMI);
-        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1);
 
         assertTrue(BrandRuntime.plan(Brand.KIMI, pkg, instance, null).environment().isEmpty());
     }

@@ -149,6 +149,65 @@ class ClaudeWebTuiTest {
         assertEquals(packageDir.resolve("home").toString(), target.environment().get("HOME"));
     }
 
+    /// The instance's endpoint override travels as `ANTHROPIC_BASE_URL` — the
+    /// documented way around a region Anthropic does not serve — and only when
+    /// it is actually set.
+    @Test
+    void anEndpointOverrideTravelsInTheEnvironment() throws IOException {
+        assumeTrue(nodeOnPath(), "the engine is a JS entry and needs node");
+        stageEngine();
+
+        TerminalTarget withOverride = new ClaudeWebTui(ClaudeWebTui.COMMUNITY, "https://gateway.example.com")
+                .target(packageDir, packageDir.resolve("home"), packageDir.resolve("workspace"), "c1", null);
+        assertEquals("https://gateway.example.com",
+                withOverride.environment().get("ANTHROPIC_BASE_URL"));
+
+        TerminalTarget without = new ClaudeWebTui(ClaudeWebTui.COMMUNITY).target(
+                packageDir, packageDir.resolve("home"), packageDir.resolve("workspace"), "c1", null);
+        assertFalse(without.environment().containsKey("ANTHROPIC_BASE_URL"),
+                "an unset override must not shadow the tool's own default");
+    }
+
+    /// Anthropic answers 403 to unsupported regions and 401 to a supported one
+    /// without a key; only the first is a refusal, and a missing body is still
+    /// a refusal rather than "unknown".
+    @Test
+    void onlyAForbiddenAnswerMeansTheRegionIsNotServed() {
+        assertTrue(ClaudeWebTui.regionBlocked(403,
+                "{\"error\":\"Claude Code is not available in your country\"}"));
+        assertTrue(ClaudeWebTui.regionBlocked(403, ""));
+        assertFalse(ClaudeWebTui.regionBlocked(401,
+                "{\"error\":{\"type\":\"authentication_error\"}}"));
+        assertFalse(ClaudeWebTui.regionBlocked(200, "{}"));
+    }
+
+    /// The probe reports what the endpoint said, and gives up quietly when
+    /// nothing answers: an unreachable endpoint must not become a refusal.
+    @Test
+    void theProbeReportsTheAnswerAndGivesUpQuietly() throws IOException {
+        com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+                .create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/models", exchange -> {
+            byte[] body = "Claude Code is not available in your country"
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(403, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            ClaudeWebTui.Probe probe = ClaudeWebTui.probeAnthropic(
+                    "http://127.0.0.1:" + server.getAddress().getPort());
+            assertEquals(403, probe.status(), probe.body());
+            assertTrue(ClaudeWebTui.regionBlocked(probe.status(), probe.body()));
+        } finally {
+            server.stop(0);
+        }
+
+        // Nothing listening: the answer is "unknown", never a refusal.
+        org.junit.jupiter.api.Assertions.assertNull(ClaudeWebTui.probeAnthropic("http://127.0.0.1:1"));
+    }
+
     private static boolean nodeOnPath() {
         return resolves("node");
     }
