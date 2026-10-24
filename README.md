@@ -8,33 +8,49 @@
 [![platform](https://img.shields.io/badge/platform-Docker%20%7C%20Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)]()
 
 把 [HDSL](https://github.com/MCXCC303/HDSL)（Hello DeepSeek! Launcher，桌面版）搬进浏览器的单容器版本：
-打开网页 → 登录 → 创建 dsh 实例 → 点「启动」→ 在同一域名、端口与证书下使用 dsh 自己的网页界面。
+打开网页 → 登录 → 建实例 → 点「启动」→ 在同一域名、端口与证书下用它自己的网页界面。除了 dsh，
+还能把 Kimi Code、OpenCode、Claude Web、ZCode 一起装进来，并且给每个实例配一个**原地终端**。
 界面按桌面版复刻（HMCL 视觉语言、Material You 主题、同款图标与动画），实例/版本/插件/账户/整合包/
 会话/技能/体检/ACP 控制台都在。
 
 ![主界面](docs/screenshots/02-main.webp)
 
+## 现在能做什么
+
+### 五种 Agent，一个面板，想换就换
+
+| Agent | 网页入口 | 原地终端（Web Shell） |
+|---|---|---|
+| DeepSeek Harness（`dsh`） | dsh 自己的网页 | `dsh tui [--resume]` |
+| Kimi Code | `kimi web` | 官方 TUI |
+| OpenCode | `opencode web` | 官方 TUI |
+| Claude Web（社区工作台） | 它自己的网页 | Claude Code CLI —— 社区引擎 / 官方二进制，**进之前自己选** |
+| ZCode（实验性品类） | `zcode --web` | 官方 TUI（发行包不带参数就是它） |
+
+同一个品牌的版本装一次、所有实例共用；点一下就在实例之间切换，不用重装、不用换端口、不用记第二套地址。dsh 这边还完整搬来了桌面版的账户、插件、整合包、会话、技能、体检与 ACP 控制台。
+
+### 同一个实例，网页和终端都行
+
+「打开」进它的网页模式；「终端」进同一个实例的原生 TUI——同一份 `home`、同一批会话记录：那边开始的工作，这边接着做，不用重新登录、不用重新配账号。终端不是另开一个 shell，而是把 agent 自己的交互界面嵌进页面：关窗/刷新只算 detach，agent 继续跑，回来时把最近 256 KB 输出回放给你。顺序也顺手了——先过开发者密码（30 分钟滑动），Claude Web 再选一下内核，然后才出现终端窗口。
+
+### 一个容器、一个端口，隔离做到实例级
+
+- **一个 JVM、一个端口**（默认 3080）：面板、REST、WebSocket、每个实例的反代全在同一个端口后面，同一张证书；外面再套 nginx/Caddy 也好配。
+- **每个实例一份自己的 `home` 与工作区**：dsh 是独立的 `DSH_HOME`，品牌实例把 `HOME`/`USERPROFILE` 指到实例目录——换实例就是换一套账号、配置和会话，彼此不串。
+- **实例自己的端口只在回环上**：dsh 实例在 3081–4081 里分配、终身绑定，品牌实例从 20000–60999 里挑一个；对外只有面板这一道门。agent 的凭据落在数据卷里的实例目录，不散在宿主。
+- **终端是一张一次性 ticket**（30 秒、绑定实例与会话）：关掉网页不影响 agent，面板退出才一起收掉。
+- **两层钥匙**：面板密码 + 开发者密码第二因子；Web Shell 只在 HTTPS 下开，也能整体关掉。
+- **备份只有一个目录**：配置、证书、账号、实例、`DSH_HOME`、pnpm store 全在 `/data` 下，拷走那一个卷就搬完了（工作区可以另挂宿主机目录）。
+
+### 一些细节
+
 - 交付：一个可执行 fat jar（`java -jar hdsl-web.jar`）和一个 Debian 容器镜像。
 - 运行前提：JDK 17+；Node `^22.19.0 || >=24.0.0` 与 pnpm（dsh 由 pnpm 安装、由 node 运行）。
-- 手机可用：窄屏（≤760px）或矮屏（≤520px）自动切换移动版式——主导航收成抽屉、内页子侧栏变
-  顶部横向标签条、启动面板变成贴底整条操作栏；可点区域按触摸标准放大到 44px，支持「加到主屏幕」。
-  桌面上版式不变。规则见 [docs/ui-spec.md §14](docs/ui-spec.md)。
-- 账户：为某个模型供应商填一次 API Key。供应商与模型名来自 [models.dev](https://models.dev)
-  目录（200+ 家，选中供应商即带出端点、协议与密钥环境变量提示），默认模型可搜索也可手输；
-  目录拉不到时退回纯手输。规则见 [docs/ui-spec.md §4](docs/ui-spec.md)。
-- 创建实例即开始安装；未安装的实例点「启动」会先装再启。进度与失败原因都在面板上。
-  细节见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md)。
-- 品牌：除 dsh 外，还能在面板里安装第三方网页工作台：Kimi Code、OpenCode、Claude Web（实验性）。
-  入口在实例列表页左侧「第三方品牌」。每个品牌可以开多个实例，版本按品牌共享——装一次，同品牌的
-  所有实例都能切换过去。完整说明见 [docs/brands.md](docs/brands.md)。
-- 下载源：设置页可选择预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL。
-  保存后立即生效，无需重启。环境变量 `NPM_CONFIG_REGISTRY` 仅作为回退值。
-  细节见 [docs/deployment.md](docs/deployment.md)。
-- **实例终端（Web Shell）**：实例行上的「终端」按钮就地打开该实例的原生 TUI——Kimi Code、
-  OpenCode，以及 dsh 的 `dsh tui [--resume]`。终端跑在面板进程里、走现有 WebSocket，不新增
-  端口、不需要反向代理；关窗/刷新只断开查看，agent 继续跑，重开接回并回放。同一份实例 home
-  与会话记录，和网页模式看到的是同一份。**前提是 HTTPS + 开发者密码**，设置页可总开关；
-  完整说明、前提与限制见 [实例终端（Web Shell）](#实例终端web-shell)。
+- 手机可用：窄屏（≤760px）或矮屏（≤520px）自动切换移动版式——主导航收成抽屉、内页子侧栏变顶部横向标签条、启动面板变成贴底整条操作栏；可点区域按触摸标准放大到 44px，支持「加到主屏幕」。桌面上版式不变。规则见 [docs/ui-spec.md §14](docs/ui-spec.md)。
+- 账户：为某个模型供应商填一次 API Key。供应商与模型名来自 [models.dev](https://models.dev) 目录（200+ 家，选中供应商即带出端点、协议与密钥环境变量提示），默认模型可搜索也可手输；目录拉不到时退回纯手输。规则见 [docs/ui-spec.md §4](docs/ui-spec.md)。
+- 创建实例即开始安装；未安装的实例点「启动」会先装再启。进度与失败原因都在面板上。细节见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md)。
+- 品牌实例的安装、版本共享与实验性边界见 [docs/brands.md](docs/brands.md)；ZCode 的构建与限制见 [docs/zcode-experimental.md](docs/zcode-experimental.md)；终端的前提、安全模型与开关见 [实例终端（Web Shell）](#实例终端web-shell)。
+- 下载源：设置页可选择预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL。保存后立即生效，无需重启。环境变量 `NPM_CONFIG_REGISTRY` 仅作为回退值。细节见 [docs/deployment.md](docs/deployment.md)。
 
 <details>
 <summary>更多截图（初始化引导 / 实例列表 / 品牌实例 / 下载 / 设置）</summary>
@@ -55,6 +71,7 @@
 
 ## 目录
 
+- [现在能做什么](#现在能做什么)
 - [架构](#架构)
 - [实例终端（Web Shell）](#实例终端web-shell)
 - [快速开始](#快速开始)（Release 下载 / Docker Compose / 裸 `java -jar`）
@@ -92,8 +109,11 @@
         ▼
 ```
 
-面板与 dsh 是两个彼此独立的页面：面板负责启动和停止，使用在 dsh 自己的页面里。前面再放一层
-nginx/Caddy 也支持，`Host` 必须原样透传。细节见 [docs/deployment.md](docs/deployment.md) 与
+面板与 dsh 是两个彼此独立的页面：面板负责启动和停止，使用在 dsh 自己的页面里。Kimi Code、
+OpenCode、Claude Web 与 ZCode 同理——各有自己的网页进程，用同一个 `/i/<id>/` 挂载点代理，
+终端也都走同一个 `TerminalManager`（见 [docs/brands.md](docs/brands.md)、
+[docs/zcode-experimental.md](docs/zcode-experimental.md)）。前面再放一层 nginx/Caddy 也支持，
+`Host` 必须原样透传。细节见 [docs/deployment.md](docs/deployment.md) 与
 [docs/design-notes.md](docs/design-notes.md)。
 
 ## 实例终端（Web Shell）
