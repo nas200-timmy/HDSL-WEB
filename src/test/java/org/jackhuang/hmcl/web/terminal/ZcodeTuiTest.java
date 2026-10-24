@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.terminal;
 
+import org.jackhuang.hmcl.util.platform.Executables;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -73,6 +74,41 @@ class ZcodeTuiTest {
         IOException expected = assertThrows(IOException.class, () -> ZcodeTui.target(
                 packageDir, packageDir.resolve("data"), packageDir.resolve("workspace"), "z1", "node"));
         assertTrue(expected.getMessage().contains("agent/zcode.cjs"), expected.getMessage());
+    }
+
+    /// The regression this pins: `ZcodeApiServlet` hands the adapter the
+    /// configured value with `node` as its default, so a bare name must be
+    /// looked up on `PATH`. Requiring a file made every ZCode terminal fail
+    /// with "zcode.nodePath does not point at a file: node".
+    @Test
+    void aBareNodeNameIsResolvedThroughPath() throws Exception {
+        IOException missing = assertThrows(IOException.class,
+                () -> ZcodeTui.resolveNode("hdsl-no-such-node-6d1f"));
+        assertTrue(missing.getMessage().contains("zcode.nodePath"), missing.getMessage());
+
+        assumeTrue(Executables.resolve("node").isPresent(), "node is not installed on this machine");
+        assertTrue(Files.isRegularFile(ZcodeTui.resolveNode("node")),
+                "the default `node` must resolve through PATH");
+    }
+
+    /// The same thing through the public entry: a distribution plus the
+    /// servlet's default must produce a runnable argv.
+    @Test
+    void theDefaultNodeNameFromTheServletProducesARunnableCommand() throws Exception {
+        assumeTrue(Executables.resolve("node").isPresent(), "node is not installed on this machine");
+        Path entry = packageDir.resolve("bin/zcode.mjs");
+        Files.createDirectories(entry.getParent());
+        Files.writeString(entry, "// runner\n");
+        Path agent = packageDir.resolve("agent/zcode.cjs");
+        Files.createDirectories(agent.getParent());
+        Files.writeString(agent, "// agent\n");
+
+        TerminalTarget target = ZcodeTui.target(packageDir, packageDir.resolve("data"),
+                packageDir.resolve("workspace"), "z1", "node");
+
+        assertEquals(2, target.command().size(), target.command().toString());
+        assertTrue(Files.isRegularFile(Path.of(target.command().get(0))),
+                "argv[0] must be a startable file: " + target.command().get(0));
     }
 
     /// The web mode's flags must not leak into the terminal: `--web` in a PTY

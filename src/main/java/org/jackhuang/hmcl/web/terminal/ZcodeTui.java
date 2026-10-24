@@ -95,15 +95,22 @@ public final class ZcodeTui {
     }
 
     /// The Node the panel was told to use (`zcode.nodePath`), else `node` from
-    /// `PATH`. Both are resolved to a real executable so a shim that cannot be
-    /// started fails here, with a sentence, instead of inside the PTY.
+    /// `PATH`.
+    ///
+    /// A **bare name** is looked up on `PATH` — the same treatment the web
+    /// runtime gives it, Windows `.exe`/`.cmd` completion included. Requiring a
+    /// file here is what broke the default: `ZcodeApiServlet` passes the
+    /// configured value through with `node` as its default, and `node` is a
+    /// name, not a path, so every ZCode terminal failed with
+    /// "zcode.nodePath does not point at a file: node".
+    ///
+    /// @param configured the configured Node, may be blank
+    /// @return a program that can actually be started
+    /// @throws IOException when nothing startable can be resolved
     static Path resolveNode(@Nullable String configured) throws IOException {
         if (configured != null && !configured.isBlank()) {
-            Path path = Path.of(configured);
-            if (Files.isRegularFile(path)) {
-                return Path.of(Executables.startableProgram(path.toString()));
-            }
-            throw new IOException("zcode.nodePath does not point at a file: " + configured);
+            return Executables.resolve(configured).orElseThrow(() -> new IOException(
+                    "zcode.nodePath does not point at a startable program: " + configured));
         }
         return Executables.resolve("node")
                 .orElseThrow(() -> new IOException("node is not on PATH; set zcode.nodePath or install Node"));

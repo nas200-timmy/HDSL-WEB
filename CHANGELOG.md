@@ -2,6 +2,20 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.5.72 — 2026-10-24 · 修 ZCode 终端：`node` 允许是 PATH 上的命令名
+
+ZCode 的 TUI 起不来，报 `terminal_failed: zcode.nodePath does not point at a file: node`。
+
+- **原因**：`ZcodeApiServlet` 把 `zcode.nodePath` 原样传给适配器，而 `node` 正是它的默认值；
+  适配器却先 `Path.of(...)` 再要求那是个文件——默认路径必然抛错，等于所有没显式配绝对路径的
+  部署，ZCode 终端全坏。网页模式不受影响，因为它走的是 `Executables.startableProgram`。
+- **修法**：适配器改用同一个 `Executables.resolve`——带目录的值当路径（必须是可启动文件），
+  裸名字按 `PATH` 查找（Windows 会补 `.exe`/`.cmd`）。与网页模式行为一致，`node` 默认值恢复。
+- 测试：`ZcodeTuiTest` 新增两条——裸名字按 PATH 解析；从 servlet 的默认值走完整入口能产出
+  可执行 argv。
+
+验证：**709 用例 / 0 失败 / 2 跳过**。
+
 ## v0.5.71 — 2026-10-24 · 终端：ZCode、Claude Web 双内核、证书应急
 
 > 版本号说明：v0.5.21 当初把补丁号写成了两位（本意是 v0.5.2.1），`sort -V` 会把它排在

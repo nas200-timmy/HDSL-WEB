@@ -85,7 +85,7 @@ Node 24+、pnpm，并在 `<数据目录>/zcode/build/bin` 写一个 `tar.bat` �
 | 环境变量 | 说明 |
 | --- | --- |
 | `HDSL_ZCODE_PACKAGE` | 发行包目录（覆盖上面的自动查找） |
-| `HDSL_ZCODE_NODE` | 运行 ZCode 的 node 可执行文件；缺省用 PATH 上的 `node` |
+| `HDSL_ZCODE_NODE` | 运行 ZCode 的 node：可以写命令名（按 `PATH` 查找，默认 `node`），也可以写绝对路径 |
 
 ### 反代补丁
 

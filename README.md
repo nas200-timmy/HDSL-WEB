@@ -459,7 +459,7 @@ auth:
 | `PNPM_STORE_DIR` | `/data/pnpm-store` | pnpm 共享仓库位置（入口脚本会写进 pnpm 配置）；一般不用改 |
 | `HDSL_WORKSPACE` | 空 | dsh 工作区路径。不设时用 `$HOME/workspace`（镜像内 `/home/hdsl/workspace`）；新建实例默认用它 |
 | `HDSL_ZCODE_PACKAGE` | 空 | 实验性 ZCode 的发行包目录（需含 `bin/zcode.mjs`）；不设时找 `<数据目录>/zcode/current/`。见 [docs/zcode-experimental.md](docs/zcode-experimental.md) |
-| `HDSL_ZCODE_NODE` | 空 | 跑 ZCode 用的 node；不设时用 PATH 上的 `node` |
+| `HDSL_ZCODE_NODE` | 空 | 跑 ZCode 用的 node：命令名（按 `PATH` 查找）或绝对路径；不设时用 PATH 上的 `node` |
 
 上面表格之外的一切（证书路径、`auth.disabled`、`redirect_same_port` 等）都从 `server.yaml`
 读。dsh 实例端口从 3081–4081 分配、终身绑定，只监听回环，不对外发布。
