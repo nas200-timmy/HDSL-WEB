@@ -3,12 +3,48 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/cli"
 	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/pterm"
 )
+
+// The report this pins: `--insecure` used to require a typed `yes`, so a
+// scripted or ECS run died with "需要交互确认，但当前无法读取输入" and had no way
+// to connect at all. With stdin not a terminal the warning still prints, the
+// confirmation is skipped, and the explicit flag is what carries the consent.
+func TestInsecureWithoutATerminalSkipsThePromptButStillWarns(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	base, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var notes []string
+	config, err := tlsConfigFor("", true, base, strings.NewReader(""), io.Discard,
+		func(format string, args ...any) { notes = append(notes, fmt.Sprintf(format, args...)) })
+	if err != nil {
+		t.Fatalf("tlsConfigFor: %v", err)
+	}
+	if !config.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify = false, want verification skipped")
+	}
+	mention := false
+	for _, note := range notes {
+		if strings.Contains(note, "不是终端") {
+			mention = true
+		}
+	}
+	if !mention {
+		t.Errorf("no non-interactive note was logged: %v", notes)
+	}
+}
 
 func TestVersionPrintsAndDoesNotTouchTheNetwork(t *testing.T) {
 	var stdout, stderr bytes.Buffer

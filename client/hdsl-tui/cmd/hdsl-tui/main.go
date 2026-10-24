@@ -369,7 +369,7 @@ func parseArgs(args []string) (options, *url.URL, error) {
 	flags.StringVar(&opts.kernel, "kernel", "", "Claude Web 的内核：community | official（默认面板推荐）")
 	flags.StringVar(&opts.user, "user", "", "面板用户名（默认 admin）")
 	flags.StringVar(&opts.ca, "ca", "", "额外信任的 CA 证书（PEM 文件）")
-	flags.BoolVar(&opts.insecure, "insecure", false, "跳过证书校验（要求确认指纹）")
+	flags.BoolVar(&opts.insecure, "insecure", false, "跳过证书校验（终端上打印指纹并要求确认；非交互运行时打印警告后继续）")
 	flags.BoolVar(&opts.showVersion, "version", false, "打印客户端版本与协议号后退出")
 	flags.BoolVar(&opts.verbose, "verbose", false, "把请求细节写到 stderr")
 	flags.BoolVar(&opts.plain, "plain", false, "使用逐行问答的旧界面（脚本/无终端时自动启用）")
@@ -428,7 +428,8 @@ const usageText = `hdsl-tui — 在终端里进入 HDSL-Web 面板的实例
   --kernel <name>   Claude Web 内核：community | official（默认面板推荐）
   --user <name>     面板用户名，默认 admin；给了就不再提示
   --ca <pem>        额外信任的 CA 证书（PEM 文件）
-  --insecure        全局跳过证书校验：先打印 SHA-256 指纹，要求输入 yes
+  --insecure        全局跳过证书校验：先打印 SHA-256 指纹；终端上要求输入 yes，
+                    stdin 不是终端（脚本/无人值守）时打印警告后继续
                     （只想跳过一次时不用它：菜单会在证书校验失败时当场询问）
   --plain           使用逐行问答的旧界面（无终端时自动启用）
   --version         打印客户端版本与协议号后退出（不联网）

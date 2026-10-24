@@ -573,3 +573,42 @@ origin** 下，而浏览器只按 origin（协议 + 域名 + 端口）隔离 `lo
 > 反向代理放在前面时（§1）另外注意：外层代理必须**原样透传 Host**，否则 dsh 的浏览器信任栅栏会以
 > 403 拒掉实例页面——这与面板自己是否开 TLS 无关。实例的信任名单是启动时按当时的访问地址算的，
 > 换域名/换地址之后重新启动一次实例即可。
+
+---
+
+## 10. 裸部署（systemd）
+
+不用容器、直接 `java -jar` 的 Linux 部署通常交给 systemd。最小单元：
+
+```ini
+# /etc/systemd/system/hdsl-web.service
+[Unit]
+Description=HDSL-web
+After=network-online.target
+
+[Service]
+Type=simple
+User=hdsl
+# systemd 的系统服务默认不注入 HOME。pnpm / node 的生命周期脚本会因此失败，而 pnpm 只报
+# ERR_PNPM_EXECUTOR_LIFECYCLE_SCRIPT_FAILED（koffi 的 cnoke.cjs 直接抛 "Missing HOME"），
+# 面板日志里只剩截断的堆栈尾部——很难查。面板自己已在 HOME 缺失时退回 JVM 的 user.home
+# 兜底（DshCommand），这一行是双保险，也让其它手工命令拿到一致的 HOME。
+Environment=HOME=/srv/hdsl
+Environment=HDSL_DATA=/srv/hdsl/data
+Environment=HDSL_PORT=3080
+ExecStart=/usr/bin/java -Xmx1g -jar /srv/hdsl/hdsl-web.jar
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+- `HOME` 与 `HDSL_DATA` 指向的目录要属于 `User=`（面板要在其中写账号、证书、实例与 pnpm store）。
+- 参数多时用 `EnvironmentFile=/etc/hdsl-web.env`（一行一个 `KEY=value`）；`HDSL_ADMIN_PASSWORD`
+  建议放那里并 `chmod 600`。
+- 数据目录里的 `auth/` 是 0700，备份/迁移要用 root 读（见 §3）。
+- 升级：换掉 jar 后 `systemctl restart hdsl-web`，`HDSL_DATA` 不动即可。
+- 想直接监听 1024 以下的端口（例如 443）要给 `AmbientCapabilities=CAP_NET_BIND_SERVICE`，
+  或者照 §1/§9 在前面放反代。
+- `journalctl -u hdsl-web -f` 看服务日志；面板自己的日志同时在 `<HDSL_DATA>/logs/` 下。

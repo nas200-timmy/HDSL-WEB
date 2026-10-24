@@ -2,9 +2,9 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## v0.5.72 — 2026-10-24 · 修 ZCode 终端：`node` 允许是 PATH 上的命令名
+## v0.5.72 — 2026-10-24 · 修 ZCode 终端，补齐两处收尾
 
-ZCode 的 TUI 起不来，报 `terminal_failed: zcode.nodePath does not point at a file: node`。
+**ZCode 终端起不来**：报 `terminal_failed: zcode.nodePath does not point at a file: node`。
 
 - **原因**：`ZcodeApiServlet` 把 `zcode.nodePath` 原样传给适配器，而 `node` 正是它的默认值；
   适配器却先 `Path.of(...)` 再要求那是个文件——默认路径必然抛错，等于所有没显式配绝对路径的
@@ -14,7 +14,19 @@ ZCode 的 TUI 起不来，报 `terminal_failed: zcode.nodePath does not point at
 - 测试：`ZcodeTuiTest` 新增两条——裸名字按 PATH 解析；从 servlet 的默认值走完整入口能产出
   可执行 argv。
 
-验证：**709 用例 / 0 失败 / 2 跳过**。
+**客户端 `--insecure` 补非交互入口**：以前它一律要求手输 `yes`，而 stdin 不是终端时直接报
+「需要交互确认，但当前无法读取输入」——脚本 / CI / ECS 控制台里等于用不了（报告里点到的
+那一条）。现在：stdin 是终端时行为不变（打印指纹、要求 `yes`）；不是终端时只打印那句风险
+警告，继续连接。显式的 `--insecure` 本身就是那次同意。
+
+**部署文档补 systemd 单元**：`docs/deployment.md` 新增 §10「裸部署（systemd）」，示例单元里
+写了 `Environment=HOME=…` 及原因（systemd 系统服务默认不注入 `HOME`，pnpm/node 生命周期
+脚本会因此失败，而 pnpm 只报 `ERR_PNPM_EXECUTOR_LIFECYCLE_SCRIPT_FAILED`）。面板本身已有
+`user.home` 兜底，这行是双保险。
+
+验证：**709 用例 / 0 失败 / 2 跳过**；客户端 `gofmt` / `go vet` / `go test` 全绿；真实面板 +
+假 ZCode 发行包，`HDSL_ZCODE_NODE=node` 下终端接口返回 pty 票据，`node <pkg>/bin/zcode.mjs`
+子进程确实起来了。
 
 ## v0.5.71 — 2026-10-24 · 终端：ZCode、Claude Web 双内核、证书应急
 

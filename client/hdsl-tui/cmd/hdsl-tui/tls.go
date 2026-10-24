@@ -59,9 +59,11 @@ func tlsConfigFor(caPath string, insecure bool, base *url.URL, stdin io.Reader, 
 	return config, nil
 }
 
-// confirmFingerprint shows what the certificate actually is and requires a
-// typed confirmation. Skipping verification silently is exactly the habit that
-// makes TLS pointless, so the fingerprint is printed first.
+// confirmFingerprint shows what the certificate actually is and, on a
+// terminal, requires a typed confirmation. Skipping verification silently is
+// exactly the habit that makes TLS pointless, so the fingerprint is printed
+// first — also on the non-interactive path, where nobody can answer and the
+// run proceeds on the strength of the explicit `--insecure` flag alone.
 func confirmFingerprint(base *url.URL, stdin io.Reader, stderr io.Writer, logf func(string, ...any)) error {
 	address := base.Host
 	if base.Port() == "" {
@@ -87,6 +89,14 @@ func confirmFingerprint(base *url.URL, stdin io.Reader, stderr io.Writer, logf f
 	fmt.Fprintln(stderr, "跳过证书校验会让任何人都能冒充这台面板。指纹核对无误再继续。")
 	logf("--insecure: 已跳过证书校验")
 
+	// A script, a CI job or an ECS console cannot answer a prompt. Dying there
+	// ("需要交互确认，但当前无法读取输入") left such runs with no way to proceed
+	// at all — and `--insecure` was typed on purpose. The warning above is
+	// printed either way; only the typed confirmation is dropped.
+	if file, ok := stdin.(*os.File); !ok || !termx.IsTerminal(file) {
+		logf("--insecure: stdin 不是终端，跳过指纹确认（脚本/无人值守用法）")
+		return nil
+	}
 	answer, err := termx.ReadLine(stdin, stderr, "确认继续请输入 yes: ")
 	if err != nil {
 		return fmt.Errorf("--insecure 需要交互确认，但当前无法读取输入: %w", err)
