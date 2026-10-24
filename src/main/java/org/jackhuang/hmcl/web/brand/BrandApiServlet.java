@@ -206,6 +206,10 @@ public final class BrandApiServlet extends HttpServlet {
                 plugins(brand, ref, response, id);
                 return;
             }
+            if (segments.length == 3 && "terminals".equals(segments[2]) && "GET".equals(request.getMethod())) {
+                kernels(brand, ref, response, id);
+                return;
+            }
             if (segments.length == 3 && "terminal".equals(segments[2])
                     && ("POST".equals(request.getMethod()) || "DELETE".equals(request.getMethod()))) {
                 terminal(brand, ref, request, response, id);
@@ -572,7 +576,13 @@ public final class BrandApiServlet extends HttpServlet {
         }
         try {
             instanceTerminal.authorize(request);
-            BrandTui tui = BrandTui.forBrand(brand.id());
+            // Claude Web is a workbench in front of the Claude Code CLI and ships
+            // two kernels: the community engine its provider configuration is
+            // written for, and the official CLI. The caller picks one
+            // (`?kernel=`); the adapter refuses rather than substituting.
+            BrandTui tui = brand == Brand.CLAUDE_WEB
+                    ? new org.jackhuang.hmcl.web.terminal.ClaudeWebTui(request.getParameter("kernel"))
+                    : BrandTui.forBrand(brand.id());
             if (tui == null) {
                 throw new InstanceTerminal.Refused(409,
                         "brand_has_no_tui: " + brand.id() + " has no interactive terminal");
@@ -593,6 +603,48 @@ public final class BrandApiServlet extends HttpServlet {
         } catch (InstanceTerminal.Refused e) {
             InstanceTerminal.write(request, response, e);
         }
+    }
+
+    // ------------------------------------------------------------------ kernels --
+
+    /// `GET /api/brands/claude-web/instances/{id}/terminals` — the Claude Code
+    /// kernels this installation can start, community engine first.
+    ///
+    /// Exists so the picker never offers a kernel that would fail: the answer
+    /// carries availability and, when missing, the reason. Other brands answer
+    /// 404 — they have exactly one TUI and therefore nothing to choose.
+    private void kernels(Brand brand, PathRef ref, HttpServletResponse response, String id)
+            throws IOException {
+        BrandInstance instance = ref.manager().find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
+            return;
+        }
+        if (brand != Brand.CLAUDE_WEB) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
+        Path packageDir = BrandInstaller.packageDir(brand, ref.root(), instance.version());
+        if (packageDir == null) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    brand.sourceLabel() + " " + instance.version() + " is not installed");
+            return;
+        }
+        JsonArray array = new JsonArray();
+        for (org.jackhuang.hmcl.web.terminal.ClaudeWebTui.Kernel kernel
+                : org.jackhuang.hmcl.web.terminal.ClaudeWebTui.kernels(packageDir)) {
+            JsonObject item = new JsonObject();
+            item.addProperty("id", kernel.id());
+            item.addProperty("label", kernel.label());
+            item.addProperty("available", kernel.available());
+            item.addProperty("detail", kernel.detail());
+            array.add(item);
+        }
+        JsonObject body = new JsonObject();
+        body.add("kernels", array);
+        body.addProperty("default",
+                org.jackhuang.hmcl.web.terminal.ClaudeWebTui.defaultKernel(packageDir));
+        Json.writePreservingNulls(response, body);
     }
 
     // ------------------------------------------------------------------ open --

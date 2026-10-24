@@ -2,12 +2,23 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## v0.6.0 — 2026-10-24 · ZCode 终端
+## v0.6.0 — 2026-10-24 · ZCode 终端与 Claude Web 双内核
 
 ZCode 的发行包不带参数启动就是官方 TUI（`scripts/zcode-distribution/runner.mjs` 会 import
 `agent/zcode.cjs`，CLI 的默认命令是 `tui`），所以它和 Kimi Code、OpenCode 一样可以就地
-接进 Web Shell。这次把后端、网页与 Go 客户端三处一起补齐。
+接进 Web Shell。Claude Web 也一样——它的内核本来就是 Claude Code CLI，只是有两个。这次把
+后端、网页与 Go 客户端三处一起补齐，并把打开终端的前置步骤挪到终端窗口之前。
 
+- **打开流程改了（全品类）**：原来点终端先出一个空终端窗口，再在窗口里要开发者密码；现在
+  先弹密码框（没设过则是设置表单），验证通过（Claude Web 还要选内核）之后才换成终端窗口。
+  申请中、密码、设置、选内核都是对话框，终端窗口只在拿到票据后出现。
+- **Claude Web 选内核**：`ClaudeWebTui` 按上游 `server/src/claude-exe.ts` 的布局解析两份
+  内核——社区引擎 `node_modules/claude-web-engine/dist/cli-node.js`（用 node 起）与官方
+  `@anthropic-ai/claude-agent-sdk-<platform>-<arch>/claude[.exe]`（原生二进制，找不到就
+  退回 PATH 上的 `claude`）。**不静默替换**：选了没装的那个直接报错说明缺什么。
+  新增 `GET /api/brands/claude-web/instances/{id}/terminals` 列出可用内核，终端接口多了
+  `?kernel=community|official`。网页在有两个可用内核时才问，客户端的
+  「进入终端」前也加了一步上下选择（`--kernel` 可直接指定）。
 - **适配器**：新增 `ZcodeTui`，起 `node <发行包>/bin/zcode.mjs`。**不传任何参数**——
   `--web` / `--host` / `--port` / `--no-token` 是 web 模式专属，`--workspace` 也只有
   web 分支解析；工作区靠进程 cwd。缺 `bin/zcode.mjs` 或 `agent/zcode.cjs` 时提前给出可读
@@ -24,11 +35,14 @@ ZCode 的发行包不带参数启动就是官方 TUI（`scripts/zcode-distributi
 - **会话键**：终端注册表改为 `brand + instanceId`，dsh / 品牌 / ZCode 各自的 id 空间不再
   互相串会话。
 - **网页**：ZCode 实例卡新增「打开终端」，复用现有 `TerminalWindow`；发行包未就绪、
-  Web Shell 关闭或面板不在 HTTPS 时不显示可用入口。
+  Web Shell 关闭或面板不在 HTTPS 时不显示可用入口。Claude Web 的终端按钮不再禁用，点开
+  先过密码、再选内核。
 - **客户端**：`hdsl-tui` 的分类多出 `zcode`（`GET /api/zcode/instances`），`--brand zcode`
-  可用；终端路径按品类解析。
-- 验证：后端 `compileJava` / `compileTestJava` 与终端相关用例通过；前端 `tsc --noEmit`
-  与 `vite build` 通过；客户端 `go vet` / `go test ./...` 通过（新增品类路径用例）。
+  可用；终端路径按品类解析。进入 Claude Web 实例的终端前先弹内核选择（`--kernel` 可跳过）。
+- 验证：后端 `compileJava` / `compileTestJava` 通过，`web.{brand,http,terminal,zcode,developer}`
+  122 个用例里只有 2 个 Windows 专属 POSIX 权限用例失败（既存问题，与本次无关），20 个
+  Linux-only 用例跳过；前端 `tsc --noEmit` 与 `vite build` 通过；客户端 `go vet` /
+  `go test ./...` 通过（新增品类路径与内核路径用例）。
 
 ## v0.5.7 — 2026-10-24 · 证书不匹配时可以「仅本次」继续
 

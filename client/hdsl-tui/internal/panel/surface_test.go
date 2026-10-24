@@ -41,3 +41,14 @@ func TestTerminalPathEscapesTheInstanceID(t *testing.T) {
 		t.Errorf("terminalPath = %q", got)
 	}
 }
+
+// The kernel list is a sibling of the terminal endpoint and only exists for the
+// brand categories (Claude Web is the one with two kernels).
+func TestKernelsPath(t *testing.T) {
+	if got := kernelsPath("claude-web", "i1"); got != "/api/brands/claude-web/instances/i1/terminals" {
+		t.Errorf("kernelsPath = %q", got)
+	}
+	if got := kernelsPath("claude-web", "a/b"); got != "/api/brands/claude-web/instances/a%2Fb/terminals" {
+		t.Errorf("kernelsPath escaped = %q", got)
+	}
+}

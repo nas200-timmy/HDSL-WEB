@@ -36,6 +36,9 @@ type Options struct {
 	Instance string
 	Brand    string
 	Resume   string
+	// Kernel picks one of Claude Web's two CLI kernels (`community` or
+	// `official`). Empty means "ask when there is a choice".
+	Kernel string
 	// User is the panel username to prefill (default admin).
 	User string
 	// TLSConfig is what the terminal WebSocket handshake uses; the REST

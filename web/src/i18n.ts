@@ -312,6 +312,7 @@ export const I18N = {
   "terminal.error": "终端打开失败",
   "terminal.state.opening": "正在打开",
   "terminal.state.locked": "等待密码",
+  "terminal.state.kernel": "选择内核",
   "terminal.state.running": "运行中",
   "terminal.state.ended": "已结束",
   "terminal.state.detached": "已断开",

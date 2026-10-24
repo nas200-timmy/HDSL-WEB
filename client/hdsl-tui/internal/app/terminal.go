@@ -8,15 +8,20 @@ import (
 	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/panel"
 	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/pterm"
 	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/rtty"
+	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/ui"
 )
 
 // attach opens the terminal for one instance and pumps it until the agent
 // exits or the user detaches. It returns to the actions menu either way: the
 // login session and the panel connection stay alive.
 func (a *App) attach(ctx context.Context, brand string, instance panel.Instance) {
+	kernel, proceed := a.pickKernel(ctx, brand, instance.ID)
+	if !proceed {
+		return
+	}
 	a.busy("正在打开 " + instanceLabel(instance) + " 的终端…")
 
-	terminal, ok := a.openWithElevation(ctx, brand, instance.ID)
+	terminal, ok := a.openWithElevation(ctx, brand, instance.ID, kernel)
 	if !ok {
 		return
 	}
@@ -101,9 +106,9 @@ func (a *App) attach(ctx context.Context, brand string, instance panel.Instance)
 // openWithElevation asks the panel for a ticket. A missing or expired
 // developer elevation is the one refusal that a password fixes, so it is
 // handled here instead of at startup.
-func (a *App) openWithElevation(ctx context.Context, brand, id string) (panel.Terminal, bool) {
+func (a *App) openWithElevation(ctx context.Context, brand, id, kernel string) (panel.Terminal, bool) {
 	for attempt := 0; attempt < 2; attempt++ {
-		terminal, err := a.client.OpenTerminal(ctx, brand, id, a.opts.Resume)
+		terminal, err := a.client.OpenTerminal(ctx, brand, id, a.opts.Resume, kernel)
 		if err == nil {
 			return terminal, true
 		}
@@ -123,4 +128,54 @@ func (a *App) openWithElevation(ctx context.Context, brand, id string) (panel.Te
 func needsElevation(err error) bool {
 	return panel.IsCode(err, "developer_elevation_required") ||
 		panel.Message(err) == "developer_elevation_required"
+}
+
+// pickKernel asks which Claude Code kernel to start. Only Claude Web has more
+// than one, and an installation with fewer than two usable kernels uses the
+// panel's default instead of asking a question with a single answer.
+//
+// The boolean is false when the user backs out: no terminal should open.
+func (a *App) pickKernel(ctx context.Context, brand, id string) (string, bool) {
+	if brand != "claude-web" {
+		return "", true
+	}
+	if a.opts.Kernel != "" {
+		return a.opts.Kernel, true
+	}
+	kernels, preferred, err := a.client.TerminalKernels(ctx, brand, id)
+	if err != nil {
+		a.logf("读取内核列表失败，按面板默认打开: %v", err)
+		return preferred, true
+	}
+	usable := make([]panel.Kernel, 0, len(kernels))
+	for _, kernel := range kernels {
+		if kernel.Available {
+			usable = append(usable, kernel)
+		}
+	}
+	if len(usable) < 2 {
+		return preferred, true
+	}
+	items := make([]ui.Item, 0, len(usable)+1)
+	for _, kernel := range usable {
+		items = append(items, ui.Item{Label: kernel.Label, Note: kernelNote(kernel.ID)})
+	}
+	items = append(items, ui.Item{Label: "← 取消"})
+
+	index, ok := a.menu(menuPage{
+		Title:    "选择 Claude Code 内核",
+		Subtitle: "网页里配置的第三方供应商只对社区引擎生效；官方内核只认 Anthropic 账号。",
+		Items:    items,
+	})
+	if !ok || index >= len(usable) {
+		return "", false
+	}
+	return usable[index].ID, true
+}
+
+func kernelNote(id string) string {
+	if id == "official" {
+		return "官方 Claude Code"
+	}
+	return "社区引擎"
 }

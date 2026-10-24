@@ -82,6 +82,44 @@ class BrandApiTest {
         }
     }
 
+    /// Claude Web ships two Claude Code kernels; the picker asks this endpoint so
+    /// it never offers one that would fail. Other categories answer 404: they
+    /// have exactly one TUI and nothing to choose.
+    @Test
+    void claudeWebListsItsTwoKernels() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            Path release = dataDir.resolve("brands/claude-web/releases/0.3.2");
+            Files.createDirectories(release.resolve("web/dist"));
+            Files.writeString(release.resolve("web/dist/index.html"), "<!doctype html>\n");
+
+            HttpResponse<String> created = post(TestSupport.client(), running,
+                    "/api/brands/claude-web/instances", "{\"name\":\"Workbench\",\"version\":\"0.3.2\"}");
+            assertEquals(201, created.statusCode(), created.body());
+            String id = JsonParser.parseString(created.body()).getAsJsonObject()
+                    .getAsJsonObject("instance").get("id").getAsString();
+
+            HttpResponse<String> response = get(running, "/api/brands/claude-web/instances/" + id + "/terminals");
+            assertEquals(200, response.statusCode(), response.body());
+            JsonObject body = JsonParser.parseString(response.body()).getAsJsonObject();
+            assertEquals(2, body.getAsJsonArray("kernels").size(), response.body());
+            assertEquals("community", body.getAsJsonArray("kernels").get(0)
+                    .getAsJsonObject().get("id").getAsString());
+            assertEquals("official", body.getAsJsonArray("kernels").get(1)
+                    .getAsJsonObject().get("id").getAsString());
+
+            // A category with one TUI has no kernel list.
+            Path kimi = dataDir.resolve("brands/kimi/releases/2.1.1");
+            Files.createDirectories(kimi.resolve("node_modules/.bin"));
+            Files.writeString(kimi.resolve("node_modules/.bin/kimi"), "#!/bin/sh\n");
+            HttpResponse<String> kimiCreated = post(TestSupport.client(), running,
+                    "/api/brands/kimi/instances", "{\"name\":\"Kimi\",\"version\":\"2.1.1\"}");
+            assertEquals(201, kimiCreated.statusCode(), kimiCreated.body());
+            String kimiId = JsonParser.parseString(kimiCreated.body()).getAsJsonObject()
+                    .getAsJsonObject("instance").get("id").getAsString();
+            assertEquals(404, get(running, "/api/brands/kimi/instances/" + kimiId + "/terminals").statusCode());
+        }
+    }
+
     private static HttpResponse<String> get(TestSupport.RunningServer running, String path)
             throws Exception {
         return TestSupport.client().send(HttpRequest.newBuilder(

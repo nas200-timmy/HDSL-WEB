@@ -53,16 +53,40 @@
 - ZCode（实验性品类）：`GET /api/zcode/instances`，元素形状同上（`state ∈ created /
   starting / running / stopped / error`）
 
-`claude-web` 目前没有交互终端：它自己的 web 是一个围绕 Claude Code CLI 的工作台，
-面板只代理它的网页端。其余三个品类都有原生 TUI。
+`claude-web` 的内核就是 Claude Code CLI（社区引擎 `claude-web-engine` 或官方二进制），
+所以它也有终端，只是要先选内核——见下面的 `terminals` 端点与 `?kernel=` 参数。
+
+### `GET /api/brands/{brand}/instances/{id}/terminals`
+
+Claude Web 专用：列出这次能进入的 Claude Code 内核。别的品类只有一个 TUI，回答 404。
+
+```json
+{
+  "kernels": [
+    { "id": "community", "label": "社区引擎（claude-web-engine）", "available": true, "detail": "<路径>" },
+    { "id": "official",  "label": "官方 Claude Code",             "available": false, "detail": "缺什么" }
+  ],
+  "default": "community"
+}
+```
+
+`available` 为假时 `detail` 说明缺什么，客户端据此只显示能用的那些；只剩一个可用时不必再问。
 
 ### `POST /api/instances/{id}/terminal`
 
 品牌版本是 `POST /api/brands/{brand}/instances/{id}/terminal`，ZCode 是
 `POST /api/zcode/instances/{id}/terminal`——三条路由的门禁、生命周期与响应体完全相同
-（服务端由同一个 `InstanceTerminal` 实现）。可选查询参数 `?resume=<sessionId>`（TUI 里
-恢复某个会话；ZCode 第一版忽略它）。请求体可以是 `{}`；Windows 桌面模式要求
-`{"confirm":"open-desktop-terminal"}`。
+（服务端由同一个 `InstanceTerminal` 实现）。可选查询参数：
+
+- `?resume=<sessionId>`：TUI 里恢复某个会话（ZCode 第一版忽略它）；
+- `?kernel=community|official`：Claude Web 选哪个 Claude Code 内核。不传按面板推荐的
+  默认（社区引擎优先）；传了但那份没装，返回 409 `terminal_failed` 说明缺什么，**不会**
+  静默换成另一个内核。
+
+请求体可以是 `{}`；Windows 桌面模式要求 `{"confirm":"open-desktop-terminal"}`。
+
+客户端在界面上把开发者密码、内核选择都画成**终端窗口之前的对话框**：密码通过（必要时先
+设置）→ 需要时选内核 → 才换成终端。协议没变，顺序是客户端行为。
 
 POSIX 面板返回：
 

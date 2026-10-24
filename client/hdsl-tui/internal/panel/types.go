@@ -37,6 +37,21 @@ type Terminal struct {
 	Hint     string `json:"hint"`
 }
 
+// Kernel is one terminal kernel a surface offers. Only Claude Web has more than
+// one: the community engine its browser-side provider configuration is written
+// for, and the official Claude Code binary.
+type Kernel struct {
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Available bool   `json:"available"`
+	Detail    string `json:"detail"`
+}
+
+type kernelList struct {
+	Kernels []Kernel `json:"kernels"`
+	Default *string  `json:"default"`
+}
+
 // Desktop reports whether the panel answered with a desktop console instead of
 // a PTY.
 func (t Terminal) Desktop() bool { return t.Mode == "desktop" }

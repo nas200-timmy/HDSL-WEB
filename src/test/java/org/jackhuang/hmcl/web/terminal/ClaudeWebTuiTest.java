@@ -1,0 +1,167 @@
+/*
+ * HDSL-web
+ * Copyright (C) 2026  HDSL-web contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+package org.jackhuang.hmcl.web.terminal;
+
+import org.jackhuang.hmcl.util.platform.Executables;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+
+/// Claude Web runs the Claude Code CLI it bundles; the community engine and the
+/// official binary are separate kernels instead of one silently standing in
+/// for the other. The entry points mirror upstream `server/src/claude-exe.ts`.
+class ClaudeWebTuiTest {
+
+    @TempDir
+    Path packageDir;
+
+    /// `node_modules/claude-web-engine/dist/cli-node.js` — the package ships a
+    /// JS entry and no `bin` field, so the path is the contract.
+    private Path stageEngine() throws IOException {
+        Path entry = packageDir.resolve(ClaudeWebTui.ENGINE_ENTRY);
+        Files.createDirectories(entry.getParent());
+        Files.writeString(entry, "// engine\n");
+        return entry;
+    }
+
+    /// The SDK's platform package carrying the official binary.
+    private Path stageOfficial() throws IOException {
+        Path entry = packageDir.resolve("node_modules")
+                .resolve(ClaudeWebTui.officialPackageName())
+                .resolve(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS ? "claude.exe" : "claude");
+        Files.createDirectories(entry.getParent());
+        Files.writeString(entry, "// official\n");
+        return entry;
+    }
+
+    @Test
+    void kernelsReportWhatIsActuallyInstalled() throws IOException {
+        stageEngine();
+
+        List<ClaudeWebTui.Kernel> kernels = ClaudeWebTui.kernels(packageDir);
+        assertEquals(List.of(ClaudeWebTui.COMMUNITY, ClaudeWebTui.OFFICIAL),
+                kernels.stream().map(ClaudeWebTui.Kernel::id).toList());
+        assertTrue(kernels.get(0).available(), kernels.get(0).detail());
+        // The official kernel also resolves a `claude` on PATH, so on a machine
+        // that has one installed it is available even without the SDK package.
+        assertEquals(claudeOnPath(), kernels.get(1).available(), kernels.get(1).detail());
+    }
+
+    @Test
+    void aBundledOfficialBinaryIsFoundWithoutPath() throws IOException {
+        Path official = stageOfficial();
+        ClaudeWebTui.Kernel kernel = ClaudeWebTui.kernels(packageDir).get(1);
+        assertTrue(kernel.available(), kernel.detail());
+        assertEquals(official.toString(), kernel.detail());
+    }
+
+    @Test
+    void theCommunityEngineIsTheDefault() throws IOException {
+        stageEngine();
+        stageOfficial();
+        assertEquals(ClaudeWebTui.COMMUNITY, ClaudeWebTui.defaultKernel(packageDir));
+    }
+
+    @Test
+    void anUnavailableKernelIsRefusedInsteadOfSubstituted() throws IOException {
+        assumeTrue(!claudeOnPath(), "the official kernel resolves to a PATH binary on this machine");
+        stageEngine();
+
+        IOException expected = assertThrows(IOException.class,
+                () -> new ClaudeWebTui(ClaudeWebTui.OFFICIAL).target(
+                        packageDir, packageDir.resolve("home"), packageDir.resolve("workspace"), "c1", null));
+        assertTrue(expected.getMessage().contains("not available"), expected.getMessage());
+    }
+
+    @Test
+    void anUnknownKernelIsRefused() {
+        IOException expected = assertThrows(IOException.class,
+                () -> new ClaudeWebTui("turbo").target(
+                        packageDir, packageDir.resolve("home"), packageDir.resolve("workspace"), "c1", null));
+        assertTrue(expected.getMessage().contains("unknown Claude Code kernel"), expected.getMessage());
+    }
+
+    @Test
+    void noKernelAtAllSaysWhatIsMissing() {
+        assumeTrue(!claudeOnPath(), "the official kernel resolves to a PATH binary on this machine");
+        IOException expected = assertThrows(IOException.class,
+                () -> new ClaudeWebTui(null).target(
+                        packageDir, packageDir.resolve("home"), packageDir.resolve("workspace"), "c1", null));
+        assertTrue(expected.getMessage().contains("claude-web-engine"), expected.getMessage());
+    }
+
+    /// A JS engine is started with `node <file>` and the instance home as
+    /// `HOME` — the same isolation the web process gets.
+    @Test
+    void theCommunityEngineStartsThroughNode() throws IOException {
+        assumeTrue(nodeOnPath(), "needs a node on PATH, like the panel does");
+        Path entry = stageEngine();
+
+        TerminalTarget target = new ClaudeWebTui(ClaudeWebTui.COMMUNITY).target(
+                packageDir, packageDir.resolve("home"), packageDir.resolve("workspace"), "c1", null);
+
+        assertEquals(ClaudeWebTui.BRAND, target.brand());
+        assertEquals(2, target.command().size(), target.command().toString());
+        String node = Path.of(target.command().get(0)).getFileName().toString().toLowerCase();
+        assertTrue(node.startsWith("node"), target.command().get(0));
+        assertEquals(entry.toAbsolutePath().normalize().toString(), target.command().get(1));
+        assertEquals(packageDir.resolve("workspace"), target.cwd());
+        assertEquals(packageDir.resolve("home").toString(), target.environment().get("HOME"));
+        assertEquals("xterm-256color", target.environment().get("TERM"));
+    }
+
+    /// A native binary runs as itself: node is not required to start it.
+    @Test
+    void theOfficialBinaryRunsDirectly() throws IOException {
+        Path official = stageOfficial();
+
+        TerminalTarget target = new ClaudeWebTui(ClaudeWebTui.OFFICIAL).target(
+                packageDir, packageDir.resolve("home"), packageDir.resolve("workspace"), "c1", null);
+
+        assertEquals(1, target.command().size(), target.command().toString());
+        assertEquals(official.toString(), target.command().get(0));
+        assertEquals(packageDir.resolve("home").toString(), target.environment().get("HOME"));
+    }
+
+    private static boolean nodeOnPath() {
+        return resolves("node");
+    }
+
+    private static boolean claudeOnPath() {
+        return resolves("claude");
+    }
+
+    private static boolean resolves(String program) {
+        try {
+            return Executables.resolve(program).isPresent();
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+}

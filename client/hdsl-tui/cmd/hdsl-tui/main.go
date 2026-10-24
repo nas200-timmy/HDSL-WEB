@@ -45,6 +45,7 @@ type options struct {
 	instance    string
 	brand       string
 	resume      string
+	kernel      string
 	user        string
 	ca          string
 	insecure    bool
@@ -138,6 +139,7 @@ func runInteractive(ctx context.Context, opts options, base *url.URL, in, out *o
 		Instance:          opts.instance,
 		Brand:             normaliseBrand(opts.brand),
 		Resume:            opts.resume,
+		Kernel:            opts.kernel,
 		User:              opts.user,
 		TLSConfig:         tlsConfig,
 		InsecureTLSConfig: insecureTLSConfig,
@@ -243,7 +245,7 @@ func runPlain(ctx context.Context, opts options, base *url.URL, stdin io.Reader,
 		brand, id = choice.Brand, choice.ID
 	}
 
-	terminal, err := client.OpenTerminal(ctx, brand, id, opts.resume)
+	terminal, err := client.OpenTerminal(ctx, brand, id, opts.resume, opts.kernel)
 	if err != nil {
 		return fail(err)
 	}
@@ -364,6 +366,7 @@ func parseArgs(args []string) (options, *url.URL, error) {
 	flags.StringVar(&opts.instance, "instance", "", "直接进入该实例，不显示菜单")
 	flags.StringVar(&opts.brand, "brand", "", "品牌：kimi | opencode | claude-web | zcode（默认 dsh）")
 	flags.StringVar(&opts.resume, "resume", "", "附着到该 harness 会话")
+	flags.StringVar(&opts.kernel, "kernel", "", "Claude Web 的内核：community | official（默认面板推荐）")
 	flags.StringVar(&opts.user, "user", "", "面板用户名（默认 admin）")
 	flags.StringVar(&opts.ca, "ca", "", "额外信任的 CA 证书（PEM 文件）")
 	flags.BoolVar(&opts.insecure, "insecure", false, "跳过证书校验（要求确认指纹）")
@@ -384,6 +387,11 @@ func parseArgs(args []string) (options, *url.URL, error) {
 	case "", "dsh", "kimi", "opencode", "claude-web", "zcode":
 	default:
 		return options{}, nil, fmt.Errorf("--brand 只能是 kimi | opencode | claude-web | zcode（或留空表示 dsh），收到 %q\n\n%s", opts.brand, usageText)
+	}
+	switch opts.kernel {
+	case "", "community", "official":
+	default:
+		return options{}, nil, fmt.Errorf("--kernel 只能是 community | official（Claude Web 才需要），收到 %q\n\n%s", opts.kernel, usageText)
 	}
 	rest := flags.Args()
 	if len(rest) > 1 {
@@ -417,6 +425,7 @@ const usageText = `hdsl-tui — 在终端里进入 HDSL-Web 面板的实例
   --instance <id>   直接进入该实例的终端（仍会显示菜单）
   --brand <name>    品牌：kimi | opencode | claude-web | zcode（默认 dsh）
   --resume <id>     附着到该 harness 会话（kimi / opencode）
+  --kernel <name>   Claude Web 内核：community | official（默认面板推荐）
   --user <name>     面板用户名，默认 admin；给了就不再提示
   --ca <pem>        额外信任的 CA 证书（PEM 文件）
   --insecure        全局跳过证书校验：先打印 SHA-256 指纹，要求输入 yes

@@ -334,13 +334,21 @@ func terminalPath(brand, id string) string {
 }
 
 // OpenTerminal asks for a ticket. resume reattaches to an existing agent
-// session of the harness.
-func (c *Client) OpenTerminal(ctx context.Context, brand, id, resume string) (Terminal, error) {
-	var query url.Values
+// session of the harness; kernel picks one of Claude Web's two CLI kernels and
+// is ignored by surfaces that have only one.
+func (c *Client) OpenTerminal(ctx context.Context, brand, id, resume, kernel string) (Terminal, error) {
+	query := url.Values{}
 	if resume != "" {
-		query = url.Values{"resume": {resume}}
+		query.Set("resume", resume)
 	}
-	_, data, err := c.do(ctx, http.MethodPost, terminalPath(brand, id), query, map[string]string{})
+	if kernel != "" {
+		query.Set("kernel", kernel)
+	}
+	var sent url.Values
+	if len(query) > 0 {
+		sent = query
+	}
+	_, data, err := c.do(ctx, http.MethodPost, terminalPath(brand, id), sent, map[string]string{})
 	if err != nil {
 		return Terminal{}, err
 	}
@@ -349,6 +357,32 @@ func (c *Client) OpenTerminal(ctx context.Context, brand, id, resume string) (Te
 		return Terminal{}, &TransportError{Op: "POST terminal", Err: err}
 	}
 	return terminal, nil
+}
+
+// TerminalKernels lists the kernel choices of one brand instance
+// (GET /api/brands/{brand}/instances/{id}/terminals). The second result is the
+// panel's preferred default, or "" when it names none.
+func (c *Client) TerminalKernels(ctx context.Context, brand, id string) ([]Kernel, string, error) {
+	path := kernelsPath(brand, id)
+	_, data, err := c.do(ctx, http.MethodGet, path, nil, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	var list kernelList
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, "", &TransportError{Op: "GET terminals", Err: err}
+	}
+	preferred := ""
+	if list.Default != nil {
+		preferred = *list.Default
+	}
+	return list.Kernels, preferred, nil
+}
+
+// kernelsPath is the sibling of terminalPath that lists what a surface can
+// start; only Claude Web answers with more than one entry.
+func kernelsPath(brand, id string) string {
+	return "/api/brands/" + url.PathEscape(brand) + "/instances/" + url.PathEscape(id) + "/terminals"
 }
 
 // CloseTerminal stops the running terminal (DELETE .../terminal). It is what

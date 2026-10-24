@@ -53,6 +53,11 @@ public interface BrandTui {
                           String instanceId, @Nullable String resumeSession) throws IOException;
 
     /// The adapter for a brand, or `null` when the brand has no native TUI.
+    ///
+    /// Claude Web is deliberately absent: it has two kernels (the community
+    /// engine and the official CLI), so its adapter is built with the chosen
+    /// kernel instead of being a stateless singleton — see
+    /// [ClaudeWebTui].
     static @Nullable BrandTui forBrand(String brandId) {
         Brand brand = Brand.fromId(brandId);
         if (brand == null) {
@@ -61,9 +66,7 @@ public interface BrandTui {
         return switch (brand) {
             case KIMI -> new KimiTui();
             case OPENCODE -> new OpencodeTui();
-            // Claude Web is a web workbench around the Claude Code CLI and has
-            // no interactive TUI of its own; dsh's TUI is a plugin and gets
-            // its adapter in a later stage.
+            // dsh's TUI is a plugin and gets its adapter in a later stage.
             default -> null;
         };
     }
