@@ -67,6 +67,10 @@ public final class AuthFilter implements Filter {
     private final boolean authDisabled;
     private final java.util.function.Predicate<HttpServletRequest> secureRequest;
     private final int cookieMaxAgeSeconds;
+    /// 会话 Cookie 的 Path：根挂载是 `/`，子路径挂载是挂载点本身。
+    /// 同一个域名下挂两个面板（`/a/`、`/b/`）时，Path=/ 的同名 Cookie 会互相覆盖，
+    /// 表现为「登录 A 之后 B 掉线」。
+    private final String cookiePath;
 
     /// @param authDisabled  when true, the filter passes everything through
     ///                      without a session (only legal on loopback binds)
@@ -77,12 +81,18 @@ public final class AuthFilter implements Filter {
     ///                      A TLS-terminating proxy counts when the server is
     ///                      told to trust `X-Forwarded-Proto`.
     /// @param ttlSeconds    session TTL, also the cookie Max-Age
+    /// @param basePath      the mount point the panel is served under ("" for
+    ///                      the root). The cookie is scoped to it, so two panels
+    ///                      mounted on one origin (`/a/` and `/b/`) do not
+    ///                      overwrite each other's session.
     public AuthFilter(AuthService authService, boolean authDisabled,
-                      java.util.function.Predicate<HttpServletRequest> secureRequest, int ttlSeconds) {
+                      java.util.function.Predicate<HttpServletRequest> secureRequest, int ttlSeconds,
+                      String basePath) {
         this.authService = authService;
         this.authDisabled = authDisabled;
         this.secureRequest = secureRequest;
         this.cookieMaxAgeSeconds = ttlSeconds;
+        this.cookiePath = basePath == null || basePath.isBlank() ? "/" : basePath;
     }
 
     @Override
@@ -113,7 +123,7 @@ public final class AuthFilter implements Filter {
     /// @param request the request the cookie will answer, for `Secure`
     public Cookie sessionCookie(HttpServletRequest request, String token) {
         Cookie cookie = new Cookie(SESSION_COOKIE, token);
-        cookie.setPath("/");
+        cookie.setPath(cookiePath);
         cookie.setHttpOnly(true);
         cookie.setMaxAge(cookieMaxAgeSeconds);
         cookie.setSecure(secureRequest.test(request));
@@ -127,7 +137,7 @@ public final class AuthFilter implements Filter {
     /// @param request the request the cookie will answer, for `Secure`
     public Cookie clearedSessionCookie(HttpServletRequest request) {
         Cookie cookie = new Cookie(SESSION_COOKIE, "");
-        cookie.setPath("/");
+        cookie.setPath(cookiePath);
         cookie.setHttpOnly(true);
         cookie.setMaxAge(0);
         cookie.setSecure(secureRequest.test(request));

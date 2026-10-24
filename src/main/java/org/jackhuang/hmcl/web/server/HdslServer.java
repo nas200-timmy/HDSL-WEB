@@ -206,7 +206,7 @@ public final class HdslServer {
         AuthFilter authFilter = new AuthFilter(authService, config.auth.disabled,
                 request -> request.isSecure()
                         || org.jackhuang.hmcl.web.http.RequestSecurity.forwardedHttps(request, config),
-                ttlSeconds);
+                ttlSeconds, config.basePath);
 
         // The Phase 2 services: the event bus every WebSocket payload flows
         // through, the task pool behind installs and launches, and the
@@ -297,7 +297,8 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new AccountsApiServlet(eventBus)), "/api/accounts/*");
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
-        context.addServlet(new ServletHolder(new ZcodeApiServlet(config)), "/api/zcode/*");
+        context.addServlet(new ServletHolder(new ZcodeApiServlet(config, terminals, terminalTickets,
+                authService, developerAuth, developerElevation, tlsActive)), "/api/zcode/*");
         context.addServlet(new ServletHolder(new BrandApiServlet(
                 config, taskService, terminals, terminalTickets,
                 authService, developerAuth, developerElevation, tlsActive)), "/api/brands/*");

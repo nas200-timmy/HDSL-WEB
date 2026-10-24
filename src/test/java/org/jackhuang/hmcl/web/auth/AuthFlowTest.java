@@ -47,6 +47,24 @@ class AuthFlowTest {
     @TempDir
     Path dataDir;
 
+    /// 子路径挂载时 Cookie 的 Path 跟着挂载点走：同一个域名下挂两个面板
+    /// （`/a/`、`/b/`）时，Path=/ 的同名 Cookie 会让「登录 A 之后 B 掉线」。
+    @Test
+    void theSessionCookieIsScopedToTheMountPoint() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir,
+                Map.of(UserStore.ENV_ADMIN_PASSWORD, PASSWORD),
+                config -> {
+                    config.bindHost = "127.0.0.1";
+                    config.basePath = "/hdsl";
+                })) {
+            HttpResponse<String> login = post(TestSupport.client(), running.baseUrl() + "/api/auth/login",
+                    "{\"username\":\"admin\",\"password\":\"" + PASSWORD + "\"}");
+            assertEquals(200, login.statusCode(), login.body());
+            String setCookie = login.headers().firstValue("set-cookie").orElseThrow();
+            assertTrue(setCookie.contains("Path=/hdsl"), setCookie);
+        }
+    }
+
     @Test
     void loginLogoutAndWhoamiFlow() throws Exception {
         try (TestSupport.RunningServer running = TestSupport.start(dataDir,

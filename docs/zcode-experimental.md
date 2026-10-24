@@ -108,12 +108,28 @@ fetch、Z.ai OAuth 的 `tokenUrl`。上游把这些锚点挪走时构建会**明
 - 保存 API Key 时写入 `<实例>/data/.zcode/v2/provider_config.json`（ZCode 的个人供应商
   配置；条目 `providerId = hdsl-injected`，协议 `openai-chat-completions`）。
 
+### 终端（TUI）
+
+- 发行包不带参数启动就是官方 TUI（`bin/zcode.mjs` 会 import `agent/zcode.cjs`，CLI 的
+  默认命令是 `tui`）。面板起 `node <发行包>/bin/zcode.mjs`，**不传任何参数**：`--web` 一
+  套是 web 模式专属，`--workspace` 也只有 web 分支解析，工作区由进程 cwd 决定。
+- 环境只多设一条 `ZCODE_DATA_BASE_DIR=<实例>/data`（凭据与供应商配置都在它下面）。`HOME`
+  **不改**：会话库跟着 `homedir()` 走（上游 `adapters/src/storage/session-store/paths.ts`），
+  web 模式继承面板的 `HOME`，终端必须和它一致，否则两边看到两套会话。
+- 缺 `bin/zcode.mjs` 或 `agent/zcode.cjs` 时打开终端直接返回可读原因——只有 web 的构建
+  产物没有 agent，放进 PTY 才失败会让人以为是面板的问题。
+- `POST|DELETE /api/zcode/instances/{id}/terminal`，协议、ticket 与门禁与其他品类完全相同
+  （见 `docs/terminal-protocol.md`）。
+
 ## 已知限制（都是有意为之）
 
 - **只有面板这一条路**：实例只绑回环、不开令牌，浏览器经 `/i/<id>/` 进来（面板的会话门就是
   唯一的门）。别去映射 ZCode 自己的端口——它也不监听外面。
 - **API Key 明文**：同时写在实例清单与 `<实例>/data/.zcode/v2/provider_config.json`。
-- **没有面板侧集成**：会话列表、插件管理、控制台（ZCode 没有 ACP）都只属于 dsh 品类。
+- **没有面板侧集成**：会话列表、插件管理、控制台（ZCode 没有 ACP）都只属于 dsh 品类；
+  ZCode 这边只有启停、网页反代与终端。
+- **终端要有 agent**：只有 web 的构建产物（缺 `agent/zcode.cjs`）不能开 TUI；第一版也不做
+  `--resume` 接历史会话。
 - **凭证注入尽力而为**：格式取自 ZCode v3.14.3 源码，换成别的版本可能不生效——那就当它
   没有这个功能。
 - **深层相对路径可能取不到资源**：补丁用 vite 的 `base: "./"`，资源按文档 URL 解析——
@@ -124,6 +140,11 @@ fetch、Z.ai OAuth 的 `tokenUrl`。上游把这些锚点挪走时构建会**明
 - 后端：`src/main/java/org/jackhuang/hmcl/web/zcode/`（`ZcodeApiServlet`、`ZcodeRuntime`、
   `ZcodeInstanceManager`），挂在 `HdslServer` 的 `/api/zcode/*`（与其它 `/api/*` 一样过
   会话门）。
-- 前端：`web/src/components/ZcodeSection.tsx`（实例页里的独立品牌分区）。
+- 终端：`web/terminal/ZcodeTui.java`（argv 与两条状态根）、`web/terminal/InstanceTerminal.java`
+  （与 dsh、品牌共用的门禁/启动/ticket）。
+- 前端：`web/src/components/ZcodeSection.tsx`（实例页里的独立品牌分区，终端复用
+  `TerminalWindow`）。
+- 客户端：`client/hdsl-tui/internal/panel/client.go` 的 `instancesPath` / `terminalPath`
+  按品类解析前缀。
 - 测试：`src/test/java/org/jackhuang/hmcl/web/zcode/`，用 `src/test/resources/fake-zcode/`
-  这份 stub 发行包跑完整生命周期。
+  这份 stub 发行包跑完整生命周期；终端门禁见 `ZcodeTerminalApiTest`。

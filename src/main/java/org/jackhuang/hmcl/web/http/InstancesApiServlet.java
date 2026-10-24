@@ -49,6 +49,7 @@ import org.jackhuang.hmcl.web.developer.DeveloperElevation;
 import org.jackhuang.hmcl.web.terminal.DshTui;
 import org.jackhuang.hmcl.web.terminal.TerminalManager;
 import org.jackhuang.hmcl.web.terminal.TerminalTarget;
+import org.jackhuang.hmcl.web.terminal.InstanceTerminal;
 import org.jackhuang.hmcl.web.terminal.TerminalTickets;
 import org.jackhuang.hmcl.web.terminal.pty.PtySize;
 import org.jackhuang.hmcl.web.config.ServerConfig;
@@ -120,6 +121,7 @@ public final class InstancesApiServlet extends HttpServlet {
     private final DeveloperElevation developerElevation;
     /// Live TLS state of the main connector; the terminal is HTTPS-only.
     private final java.util.function.BooleanSupplier tlsActive;
+    private final InstanceTerminal instanceTerminal;
 
     public InstancesApiServlet(InstanceRuntime runtime, TaskService tasks, ServerConfig config,
                                TerminalManager terminals, TerminalTickets terminalTickets,
@@ -135,6 +137,8 @@ public final class InstancesApiServlet extends HttpServlet {
         this.developerAuth = developerAuth;
         this.developerElevation = developerElevation;
         this.tlsActive = tlsActive;
+        this.instanceTerminal = new InstanceTerminal(config, terminals, terminalTickets, auth,
+                developerAuth, developerElevation, tlsActive);
     }
 
     @Override
@@ -686,10 +690,9 @@ public final class InstancesApiServlet extends HttpServlet {
             return;
         }
         if ("DELETE".equals(request.getMethod())) {
-            boolean killed = terminals.terminate(id);
             JsonObject body = new JsonObject();
             body.addProperty("ok", true);
-            body.addProperty("killed", killed);
+            body.addProperty("killed", instanceTerminal.close("dsh", id));
             Json.write(response, body);
             return;
         }
@@ -697,93 +700,25 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
             return;
         }
-        if (!config.webShell.enabled) {
-            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
-                    "web_shell_disabled: the web shell is disabled in developer settings");
-            return;
-        }
-        if (!org.jackhuang.hmcl.web.http.RequestSecurity.isSecure(
-                request, tlsActive.getAsBoolean(), config)) {
-            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
-                    "insecure_transport: the web shell requires HTTPS; enable it in the HTTPS settings");
-            return;
-        }
-        if (!developerAuth.isSet()) {
-            Json.error(response, HttpServletResponse.SC_CONFLICT,
-                    "developer_password_not_set: set it before opening a terminal");
-            return;
-        }
-        String token = (String) request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE);
-        boolean sessionAlive = token == null || token.isBlank() || auth.isAlive(token);
-        String key = DeveloperElevation.key(token, request.getRemoteAddr());
-        if (!developerElevation.require(key, sessionAlive)) {
-            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
-                    "developer_elevation_required: elevate with the developer password first");
-            return;
-        }
-        // The web runtime and the TUI share DSH_HOME; the terminal takes the
-        // instance over, and the footer's start button brings the web mode back.
-        if (runtime.runningProcess(id).isPresent()) {
-            runtime.stopAsync(id);
-        }
-        TerminalTarget target;
         try {
-            target = DshTui.target(instance, request.getParameter("resume"));
-        } catch (DshException | RuntimeException e) {
-            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.open", id, "failure",
-                    actorOf(request), request.getRemoteAddr());
-            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
-            return;
-        }
-        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
-                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
-            if (!"open-desktop-terminal".equals(readBodyField(request, "confirm"))) {
-                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
-                        "confirmation_required: send {\"confirm\":\"open-desktop-terminal\"}");
-                return;
-            }
-            try {
-                org.jackhuang.hmcl.web.terminal.DesktopTerminal.open(target);
-            } catch (IOException e) {
-                Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
-                return;
-            }
-            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.desktop", id, "success",
-                    actorOf(request), request.getRemoteAddr());
-            JsonObject body = new JsonObject();
-            body.addProperty("mode", "desktop");
-            body.addProperty("instance", id);
-            body.addProperty("hint", org.jackhuang.hmcl.web.terminal.DesktopTerminal.REMOTE_HINT);
+            instanceTerminal.authorize(request);
+            // The web runtime and the TUI share DSH_HOME, so the terminal takes
+            // the instance over. The stop has to be the blocking one: spawning
+            // the TUI while the web process is still exiting leaves two
+            // processes on one home.
+            Runnable stopWeb = () -> org.jackhuang.hmcl.dsh.DshProcessManager.stop(id);
+            JsonObject body = instanceTerminal.open(request, id, stopWeb,
+                    resume -> {
+                        try {
+                            return DshTui.target(instance, resume);
+                        } catch (org.jackhuang.hmcl.dsh.DshException e) {
+                            throw new IOException(e.getMessage(), e);
+                        }
+                    });
             Json.write(response, body);
-            return;
+        } catch (org.jackhuang.hmcl.web.terminal.InstanceTerminal.Refused e) {
+            org.jackhuang.hmcl.web.terminal.InstanceTerminal.write(request, response, e);
         }
-        // Reattaching after a refresh: keep the agent, issue a new ticket.
-        try {
-            org.jackhuang.hmcl.web.terminal.TerminalSession running = terminals.find(id)
-                    .filter(candidate -> candidate.state()
-                            == org.jackhuang.hmcl.web.terminal.TerminalSession.State.RUNNING)
-                    .orElse(null);
-            if (running == null) {
-                terminals.open(target, PtySize.DEFAULT);
-            }
-        } catch (org.jackhuang.hmcl.web.terminal.TerminalBusyException e) {
-            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_already_open: " + e.getMessage());
-            return;
-        } catch (IOException | RuntimeException e) {
-            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.open", id, "failure",
-                    actorOf(request), request.getRemoteAddr());
-            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
-            return;
-        }
-        String ticket = terminalTickets.issue(id, "dsh", token);
-        JsonObject body = new JsonObject();
-        body.addProperty("mode", "pty");
-        body.addProperty("protocol", org.jackhuang.hmcl.web.terminal.TerminalWebSocket.PROTOCOL);
-        body.addProperty("instance", id);
-        body.addProperty("ticket", ticket);
-        body.addProperty("ws", "/ws/terminal/" + ticket);
-        body.addProperty("brand", "dsh");
-        Json.write(response, body);
     }
 
     /// `POST /api/instances/{id}/reveal` opens the instance's home or workspace

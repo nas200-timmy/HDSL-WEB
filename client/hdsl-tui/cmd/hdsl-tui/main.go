@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -34,8 +35,9 @@ import (
 // version is stamped by the release build: -X main.version=v0.5.4.
 var version = "dev"
 
-// brands are the three brand instance surfaces, in menu order.
-var brands = []string{"kimi", "opencode", "claude-web"}
+// brands are the instance surfaces beyond dsh, in menu order: the three brand
+// categories and ZCode (its own experimental category, same terminal contract).
+var brands = []string{"kimi", "opencode", "claude-web", "zcode"}
 
 const requestTimeout = 30 * time.Second
 
@@ -43,6 +45,7 @@ type options struct {
 	instance    string
 	brand       string
 	resume      string
+	kernel      string
 	user        string
 	ca          string
 	insecure    bool
@@ -102,6 +105,23 @@ func runInteractive(ctx context.Context, opts options, base *url.URL, in, out *o
 		return panel.New(baseURL, httpClient, log.Logf)
 	}
 
+	// The dialog for a certificate that does not prove the panel's identity.
+	// --insecure already skips verification for every server, so there is
+	// nothing left to offer; otherwise both halves of the connection switch
+	// together, which is why the WebSocket config is prepared here as well.
+	var newInsecureClient func(string) (*panel.Client, error)
+	var insecureTLSConfig *tls.Config
+	if !tlsConfig.InsecureSkipVerify {
+		insecureTLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}
+		insecureHTTPClient := &http.Client{
+			Transport: &http.Transport{TLSClientConfig: insecureTLSConfig, Proxy: http.ProxyFromEnvironment},
+			Timeout:   requestTimeout,
+		}
+		newInsecureClient = func(baseURL string) (*panel.Client, error) {
+			return panel.New(baseURL, insecureHTTPClient, log.Logf)
+		}
+	}
+
 	initial := ""
 	if base != nil {
 		initial = base.String()
@@ -114,16 +134,19 @@ func runInteractive(ctx context.Context, opts options, base *url.URL, in, out *o
 	}
 
 	code, runErr := app.Run(ctx, app.Options{
-		NewClient:     newClient,
-		Instance:      opts.instance,
-		Brand:         normaliseBrand(opts.brand),
-		Resume:        opts.resume,
-		User:          opts.user,
-		TLSConfig:     tlsConfig,
-		Insecure:      opts.insecure && base == nil,
-		InitialServer: initial,
-		Version:       version,
-		Logf:          log.Logf,
+		NewClient:         newClient,
+		NewInsecureClient: newInsecureClient,
+		Instance:          opts.instance,
+		Brand:             normaliseBrand(opts.brand),
+		Resume:            opts.resume,
+		Kernel:            opts.kernel,
+		User:              opts.user,
+		TLSConfig:         tlsConfig,
+		InsecureTLSConfig: insecureTLSConfig,
+		Insecure:          opts.insecure && base == nil,
+		InitialServer:     initial,
+		Version:           version,
+		Logf:              log.Logf,
 	}, in, out, stderr, raw)
 	if runErr != nil {
 		fmt.Fprintln(stderr, "错误: "+runErr.Error())
@@ -222,7 +245,7 @@ func runPlain(ctx context.Context, opts options, base *url.URL, stdin io.Reader,
 		brand, id = choice.Brand, choice.ID
 	}
 
-	terminal, err := client.OpenTerminal(ctx, brand, id, opts.resume)
+	terminal, err := client.OpenTerminal(ctx, brand, id, opts.resume, opts.kernel)
 	if err != nil {
 		return fail(err)
 	}
@@ -315,9 +338,17 @@ func collectGroups(ctx context.Context, client *panel.Client, log logger) ([]cli
 			log.Logf("跳过 %s 实例列表: %v", brand, err)
 			continue
 		}
-		groups = append(groups, cli.Group{Title: brand + " 实例", Brand: brand, Items: items})
+		groups = append(groups, cli.Group{Title: brandTitle(brand), Brand: brand, Items: items})
 	}
 	return groups, nil
+}
+
+// brandTitle is the picker's label for a surface.
+func brandTitle(brand string) string {
+	if brand == "zcode" {
+		return "ZCode 实例（实验）"
+	}
+	return brand + " 实例"
 }
 
 func normaliseBrand(brand string) string {
@@ -333,8 +364,9 @@ func parseArgs(args []string) (options, *url.URL, error) {
 	flags.SetOutput(io.Discard)
 	flags.Usage = func() {}
 	flags.StringVar(&opts.instance, "instance", "", "直接进入该实例，不显示菜单")
-	flags.StringVar(&opts.brand, "brand", "", "品牌：kimi | opencode | claude-web（默认 dsh）")
+	flags.StringVar(&opts.brand, "brand", "", "品牌：kimi | opencode | claude-web | zcode（默认 dsh）")
 	flags.StringVar(&opts.resume, "resume", "", "附着到该 harness 会话")
+	flags.StringVar(&opts.kernel, "kernel", "", "Claude Web 的内核：community | official（默认面板推荐）")
 	flags.StringVar(&opts.user, "user", "", "面板用户名（默认 admin）")
 	flags.StringVar(&opts.ca, "ca", "", "额外信任的 CA 证书（PEM 文件）")
 	flags.BoolVar(&opts.insecure, "insecure", false, "跳过证书校验（要求确认指纹）")
@@ -352,9 +384,14 @@ func parseArgs(args []string) (options, *url.URL, error) {
 		return opts, nil, nil
 	}
 	switch opts.brand {
-	case "", "dsh", "kimi", "opencode", "claude-web":
+	case "", "dsh", "kimi", "opencode", "claude-web", "zcode":
 	default:
-		return options{}, nil, fmt.Errorf("--brand 只能是 kimi | opencode | claude-web（或留空表示 dsh），收到 %q\n\n%s", opts.brand, usageText)
+		return options{}, nil, fmt.Errorf("--brand 只能是 kimi | opencode | claude-web | zcode（或留空表示 dsh），收到 %q\n\n%s", opts.brand, usageText)
+	}
+	switch opts.kernel {
+	case "", "community", "official":
+	default:
+		return options{}, nil, fmt.Errorf("--kernel 只能是 community | official（Claude Web 才需要），收到 %q\n\n%s", opts.kernel, usageText)
 	}
 	rest := flags.Args()
 	if len(rest) > 1 {
@@ -386,11 +423,13 @@ const usageText = `hdsl-tui — 在终端里进入 HDSL-Web 面板的实例
 
 选项:
   --instance <id>   直接进入该实例的终端（仍会显示菜单）
-  --brand <name>    品牌：kimi | opencode | claude-web（默认 dsh）
+  --brand <name>    品牌：kimi | opencode | claude-web | zcode（默认 dsh）
   --resume <id>     附着到该 harness 会话（kimi / opencode）
+  --kernel <name>   Claude Web 内核：community | official（默认面板推荐）
   --user <name>     面板用户名，默认 admin；给了就不再提示
   --ca <pem>        额外信任的 CA 证书（PEM 文件）
-  --insecure        跳过证书校验：先打印 SHA-256 指纹，要求输入 yes
+  --insecure        全局跳过证书校验：先打印 SHA-256 指纹，要求输入 yes
+                    （只想跳过一次时不用它：菜单会在证书校验失败时当场询问）
   --plain           使用逐行问答的旧界面（无终端时自动启用）
   --version         打印客户端版本与协议号后退出（不联网）
   --verbose         把请求细节写到 stderr

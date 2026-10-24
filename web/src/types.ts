@@ -334,6 +334,15 @@ export type WsEvent =
 
 export type BrandId = "kimi" | "opencode" | "claude-web";
 
+/// 终端内核（只有 Claude Web 有不止一个：社区引擎 claude-web-engine 或官方
+/// Claude Code 二进制）。`available` 为假时 `detail` 说明缺什么。
+export interface TerminalKernel {
+  id: string;
+  label: string;
+  available: boolean;
+  detail?: string | null;
+}
+
 /// GET /api/brands/<brand>/versions：全部干净 semver（最新在前）+ 已装列表 + 新建实例默认版本
 export interface BrandVersions {
   versions: string[];

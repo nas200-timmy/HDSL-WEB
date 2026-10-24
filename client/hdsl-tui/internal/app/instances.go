@@ -16,8 +16,17 @@ type group struct {
 	Items []panel.Instance
 }
 
-// brandOrder is the menu order of the three brand surfaces.
-var brandOrder = []string{"kimi", "opencode", "claude-web"}
+// brandOrder is the menu order of the instance surfaces: the three brand
+// categories, then ZCode — an experimental category with its own endpoints
+// (`/api/zcode/*`), but the same instance and terminal contract.
+var brandOrder = []string{"kimi", "opencode", "claude-web", "zcode"}
+
+func brandTitle(brand string) string {
+	if brand == "zcode" {
+		return "ZCode 实例（实验）"
+	}
+	return brand + " 实例"
+}
 
 func (a *App) loadGroups(ctx context.Context) ([]group, bool) {
 	a.busy("正在读取实例列表…")
@@ -34,7 +43,7 @@ func (a *App) loadGroups(ctx context.Context) ([]group, bool) {
 			a.logf("跳过 %s 实例列表: %v", brand, err)
 			continue
 		}
-		groups = append(groups, group{Brand: brand, Title: brand + " 实例", Items: items})
+		groups = append(groups, group{Brand: brand, Title: brandTitle(brand), Items: items})
 	}
 	return groups, true
 }
@@ -143,6 +152,8 @@ func stateText(state string) string {
 	switch strings.ToLower(state) {
 	case "", "unknown":
 		return "状态未知"
+	case "created":
+		return "未启动"
 	case "running", "started":
 		return "运行中"
 	case "stopped", "exited":

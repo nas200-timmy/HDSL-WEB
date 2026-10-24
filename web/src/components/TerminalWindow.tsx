@@ -4,19 +4,38 @@ import type { FitAddon as XFitAddon } from "@xterm/addon-fit";
 import { api, ApiError } from "../api";
 import { withBase } from "../base";
 import type { TerminalOpen } from "../api";
-import type { BrandId } from "../types";
+import type { BrandId, TerminalKernel } from "../types";
 import { I18N } from "../i18n";
+import { Dialog } from "./Dialog";
 import "@xterm/xterm/css/xterm.css";
 
-/** 终端窗口的目标：一个品牌实例或一个 dsh 实例。 */
+/** 终端窗口的目标：一个品牌实例、一个 dsh 实例，或一个 ZCode 实例（实验性品类）。 */
 export interface TerminalTargetInfo {
-  kind: "brand" | "dsh";
+  kind: "brand" | "dsh" | "zcode";
   brand?: BrandId;
   id: string;
   name: string;
 }
 
-type Phase = "opening" | "password" | "setup" | "running" | "ended" | "detached" | "desktop" | "error";
+/// 打开终端的前置步骤都画成对话框，只有真正拿到票据之后才换成终端窗口：
+/// `opening`（申请中）、`password`（开发者密码）、`setup`（首次设置）、
+/// `kernel`（Claude Web 选内核）；`connecting` 起才是终端。
+type Phase =
+  | "opening"
+  | "password"
+  | "setup"
+  | "kernel"
+  | "connecting"
+  | "running"
+  | "ended"
+  | "detached"
+  | "desktop"
+  | "error";
+
+/** 前置步骤：画对话框而不是终端窗口。 */
+function isDialogPhase(phase: Phase): boolean {
+  return phase === "opening" || phase === "password" || phase === "setup" || phase === "kernel";
+}
 
 /** 原地终端（docs/web-shell.md）：xterm 覆盖层 + 服务端 PTY。
  *
@@ -36,6 +55,8 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
   const onCloseRef = useRef(onClose);
   /** 每次 openSession 自增；慢 POST 回来时若已过期，丢弃结果。 */
   const generationRef = useRef(0);
+  /** 这轮选过的内核；断线重连时沿用它，不再问一遍。 */
+  const kernelRef = useRef<string>("");
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -52,6 +73,11 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
   /** 已从服务端收到的终端字节数（KB），用于区分“没收到”和“收到但没渲染”。 */
   const [rxKb, setRxKb] = useState(0);
   const rxRef = useRef(0);
+  /** 票据到手、等终端窗口挂载完成后再接 WebSocket（帧要画进 xterm）。 */
+  const [pending, setPending] = useState<TerminalOpen | null>(null);
+  /** Claude Web 的两个内核（社区引擎 / 官方），只在需要选择时非空。 */
+  const [kernels, setKernels] = useState<TerminalKernel[]>([]);
+  const [kernelChoice, setKernelChoice] = useState<string>("");
 
   const setPhase = useCallback((next: Phase) => {
     phaseRef.current = next;
@@ -105,8 +131,13 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     // The server returns a panel-internal path ("/ws/terminal/{ticket}").
     // withBase adds the public mount point ("/hdsl"), the same way every other
     // API and the status socket do; without it a sub-path deployment opens the
-    // ticket successfully and then dials the wrong URL.
-    const ws = new WebSocket(`${protocol}://${window.location.host}${withBase(data.ws)}`);
+    // ticket successfully and then dials the wrong URL. The protocol allows an
+    // absolute ws:// or wss:// answer too — prefixing that would produce
+    // garbage, so it is used as it came.
+    const wsUrl = /^wss?:\/\//i.test(data.ws)
+      ? data.ws
+      : `${protocol}://${window.location.host}${withBase(data.ws)}`;
+    const ws = new WebSocket(wsUrl);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
@@ -199,22 +230,28 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     observerRef.current = observer;
   }, [teardown, setPhase]);
 
-  const openSession = useCallback(async () => {
+  /// 申请票据并进入终端。前置步骤（密码 / 内核）已经走完时才调用。
+  const openSession = useCallback(async (kernel?: string) => {
     if (!target) return;
     const generation = ++generationRef.current;
+    if (kernel) kernelRef.current = kernel;
     setPhase("opening");
     setMessage("");
     try {
       const data =
-        target.kind === "brand"
-          ? await api.openBrandTerminal(target.brand as BrandId, target.id)
-          : await api.openDshTerminal(target.id);
+        target.kind === "zcode"
+          ? await api.openZcodeTerminal(target.id)
+          : target.kind === "brand"
+            ? await api.openBrandTerminal(target.brand as BrandId, target.id, undefined, kernel)
+            : await api.openDshTerminal(target.id);
       if (disposedRef.current || generation !== generationRef.current) return;
       if (data.mode === "desktop") {
         setPhase("desktop");
         return;
       }
-      await connect(data);
+      // 票据到手，但终端窗口还没挂载（对话框要换成终端），等 effect 接。
+      setPending(data);
+      setPhase("connecting");
     } catch (e) {
       if (disposedRef.current || generation !== generationRef.current) return;
       if (e instanceof ApiError && e.status === 403 && e.message.includes("web_shell_disabled")) {
@@ -238,17 +275,81 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
       setPhase("error");
       setMessage(e instanceof Error ? e.message : String(e));
     }
-  }, [target, connect, setPhase]);
+  }, [target, setPhase]);
+
+  /// Claude Web 有社区引擎和官方两个内核：提权之后让用户选一个，其余品牌
+  /// 直接进终端。只有一个可用内核、或者查询失败时按服务端默认走，不挡路。
+  const askKernel = useCallback(async (): Promise<boolean> => {
+    if (!target || target.kind !== "brand" || target.brand !== "claude-web") return false;
+    try {
+      const info = await api.brandTerminalKernels(target.brand, target.id);
+      const usable = info.kernels.filter((kernel) => kernel.available);
+      if (usable.length < 2) return false;
+      setKernels(usable);
+      setKernelChoice(info.default ?? usable[0].id);
+      setPhase("kernel");
+      return true;
+    } catch {
+      return false;
+    }
+  }, [target, setPhase]);
+
+  /// 挂载后第一步：先确认开发者密码的状态，再决定画哪一页。
+  const begin = useCallback(async () => {
+    if (!target) return;
+    setPhase("opening");
+    setMessage("");
+    try {
+      const status = await api.developerStatus();
+      if (!status.webShellEnabled) {
+        setPhase("error");
+        setMessage("Web Shell 已在「设置 → 开发者模式」里关闭");
+        return;
+      }
+      if (!status.https) {
+        setPhase("error");
+        setMessage("Web Shell 需要 HTTPS，请先在「设置 → HTTPS 证书」里启用");
+        return;
+      }
+      if (!status.devPasswordSet) {
+        setPhase("setup");
+        return;
+      }
+      if (!status.elevated) {
+        setPhase("password");
+        return;
+      }
+      if (await askKernel()) return;
+      await openSession();
+    } catch (e) {
+      setPhase("error");
+      setMessage(e instanceof Error ? e.message : String(e));
+    }
+  }, [target, askKernel, openSession, setPhase]);
+
+  /// 提权成功之后：先问内核，再开终端。
+  const afterElevation = useCallback(async () => {
+    if (await askKernel()) return;
+    await openSession();
+  }, [askKernel, openSession]);
+
+  /// 终端窗口挂载完成后再接 WebSocket——票据在对话框阶段就拿好了。
+  useEffect(() => {
+    if (phase !== "connecting" || !pending || !hostRef.current) return;
+    const data = pending;
+    setPending(null);
+    void connect(data);
+  }, [phase, pending, connect, setPhase]);
 
   useEffect(() => {
     if (!target) return;
     disposedRef.current = false;
-    void openSession();
+    void begin();
     return () => {
       disposedRef.current = true;
       teardown();
     };
-  }, [target, openSession, teardown]);
+  }, [target, begin, teardown]);
 
   const submitPassword = async () => {
     if (!password) return;
@@ -257,7 +358,7 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     try {
       await api.elevateDeveloper(password);
       setPassword("");
-      await openSession();
+      await afterElevation();
     } catch (e) {
       setMessage(e instanceof ApiError && e.status === 429 ? I18N["terminal.password.locked"] : e instanceof Error ? e.message : String(e));
     } finally {
@@ -278,7 +379,7 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
       setSetupAdmin("");
       setSetupPassword("");
       setSetupConfirm("");
-      await openSession();
+      await afterElevation();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
     } finally {
@@ -290,7 +391,9 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     if (!target) return;
     setBusy(true);
     try {
-      if (target.kind === "brand") {
+      if (target.kind === "zcode") {
+        await api.closeZcodeTerminal(target.id);
+      } else if (target.kind === "brand") {
         await api.closeBrandTerminal(target.brand as BrandId, target.id);
       } else {
         await api.closeDshTerminal(target.id);
@@ -306,24 +409,25 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
 
   if (!target) return null;
 
-  return (
-    <div className="terminal-overlay" role="dialog" aria-label={`${target.name} ${I18N["terminal.title"]}`}>
-      <div className="terminal-window">
-        <div className="terminal-head">
-          <span className="terminal-title">
-            {target.name} · {I18N["terminal.title"]}
-          </span>
-          <span className={`terminal-state terminal-state-${phase}`}>
-            {phaseText(phase)}
-            {rxKb > 0 ? ` · 已接收 ${rxKb} KB` : ""}
-          </span>
-        </div>
-
-        <div className="terminal-body" ref={hostRef} />
+  // 前置步骤画对话框：先密码（或首次设置）、必要时选内核，然后才换成终端窗口。
+  if (isDialogPhase(phase)) {
+    return (
+      <Dialog
+        open
+        title={`${target.name} · ${I18N["terminal.title"]}`}
+        onClose={busy ? undefined : onClose}
+        closeOnBackdrop={!busy}
+      >
+        {phase === "opening" && (
+          <div className="hint" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span className="spinner" />
+            <span>正在申请终端…</span>
+          </div>
+        )}
 
         {phase === "password" && (
-          <div className="terminal-password">
-            <div className="terminal-password-title">{I18N["terminal.password.prompt"]}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div>{I18N["terminal.password.prompt"]}</div>
             <input
               className="input"
               type="password"
@@ -335,19 +439,25 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
                 if (e.key === "Enter") void submitPassword();
               }}
             />
-            <button className="btn btn-raised ripple-host" disabled={busy || !password} onClick={() => void submitPassword()}>
-              {I18N["terminal.password.submit"]}
-            </button>
             {message && <div className="hint error">{message}</div>}
+            <div className="dialog-actions">
+              <button className="btn btn-text dim" disabled={busy} onClick={onClose}>
+                {I18N["button.cancel"]}
+              </button>
+              <button className="btn btn-raised ripple-host" disabled={busy || !password} onClick={() => void submitPassword()}>
+                {I18N["terminal.password.submit"]}
+              </button>
+            </div>
           </div>
         )}
 
         {phase === "setup" && (
-          <div className="terminal-password">
-            <div className="terminal-password-title">{I18N["terminal.setup.prompt"]}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div>{I18N["terminal.setup.prompt"]}</div>
             <input
               className="input"
               type="password"
+              autoFocus
               placeholder={I18N["terminal.setup.panel"]}
               value={setupAdmin}
               onChange={(e) => setSetupAdmin(e.target.value)}
@@ -369,17 +479,83 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
                 if (e.key === "Enter") void submitSetup();
               }}
             />
-            <button
-              className="btn btn-raised ripple-host"
-              disabled={busy || !setupAdmin || !setupPassword || !setupConfirm}
-              onClick={() => void submitSetup()}
-            >
-              {I18N["terminal.setup.submit"]}
-            </button>
             {message && <div className="hint error">{message}</div>}
+            <div className="dialog-actions">
+              <button className="btn btn-text dim" disabled={busy} onClick={onClose}>
+                {I18N["button.cancel"]}
+              </button>
+              <button
+                className="btn btn-raised ripple-host"
+                disabled={busy || !setupAdmin || !setupPassword || !setupConfirm}
+                onClick={() => void submitSetup()}
+              >
+                {I18N["terminal.setup.submit"]}
+              </button>
+            </div>
           </div>
         )}
 
+        {phase === "kernel" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div>选择这次要进入的 Claude Code 内核：</div>
+            {kernels.map((kernel) => (
+              <label
+                key={kernel.id}
+                style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}
+              >
+                <input
+                  type="radio"
+                  name="terminal-kernel"
+                  checked={kernelChoice === kernel.id}
+                  onChange={() => setKernelChoice(kernel.id)}
+                />
+                <span>
+                  <span style={{ display: "block" }}>{kernel.label}</span>
+                  {kernel.detail && (
+                    <span style={{ display: "block", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                      {kernel.detail}
+                    </span>
+                  )}
+                </span>
+              </label>
+            ))}
+            <div className="hint">
+              网页里配置的第三方供应商只对社区引擎生效；官方内核只认 Anthropic 账号。
+            </div>
+            <div className="dialog-actions">
+              <button className="btn btn-text dim" onClick={onClose}>
+                {I18N["button.cancel"]}
+              </button>
+              <button
+                className="btn btn-raised ripple-host"
+                disabled={!kernelChoice}
+                onClick={() => void openSession(kernelChoice)}
+              >
+                {I18N["terminal.open"]}
+              </button>
+            </div>
+          </div>
+        )}
+      </Dialog>
+    );
+  }
+
+  return (
+    <div className="terminal-overlay" role="dialog" aria-label={`${target.name} ${I18N["terminal.title"]}`}>
+      <div className="terminal-window">
+        <div className="terminal-head">
+          <span className="terminal-title">
+            {target.name} · {I18N["terminal.title"]}
+          </span>
+          <span className={`terminal-state terminal-state-${phase}`}>
+            {phaseText(phase)}
+            {rxKb > 0 ? ` · 已接收 ${rxKb} KB` : ""}
+          </span>
+        </div>
+
+        <div className="terminal-body" ref={hostRef} />
+
+        {phase === "connecting" && <div className="terminal-note">{I18N["terminal.state.opening"]}</div>}
         {phase === "desktop" && <div className="terminal-note">{I18N["terminal.desktop"]}</div>}
         {phase === "error" && <div className="terminal-note error">{message || I18N["terminal.error"]}</div>}
         {phase === "detached" && <div className="terminal-note">{I18N["terminal.detached"]}</div>}
@@ -396,7 +572,7 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
             </button>
           )}
           {(phase === "detached" || phase === "error") && (
-            <button className="btn btn-text ripple-host" onClick={() => void openSession()}>
+            <button className="btn btn-text ripple-host" onClick={() => void openSession(kernelRef.current || undefined)}>
               {I18N["terminal.reconnect"]}
             </button>
           )}
@@ -417,6 +593,10 @@ function phaseText(phase: Phase): string {
     case "password":
     case "setup":
       return I18N["terminal.state.locked"];
+    case "kernel":
+      return I18N["terminal.state.kernel"];
+    case "connecting":
+      return I18N["terminal.state.opening"];
     case "running":
       return I18N["terminal.state.running"];
     case "ended":

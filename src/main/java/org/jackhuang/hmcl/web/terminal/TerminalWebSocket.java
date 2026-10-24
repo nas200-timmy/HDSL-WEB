@@ -104,7 +104,7 @@ public final class TerminalWebSocket implements TerminalSink {
                 return;
             }
         }
-        Optional<TerminalSession> found = manager.find(granted.instanceId());
+        Optional<TerminalSession> found = manager.find(granted.brand(), granted.instanceId());
         if (found.isEmpty() || found.get().state() != TerminalSession.State.RUNNING) {
             Logger.LOG.warning("Terminal WebSocket rejected: no running terminal for instance "
                     + granted.instanceId());

@@ -202,7 +202,7 @@ func TestOpenTerminalPTY(t *testing.T) {
 	client := newClient(t, server)
 	login(t, client)
 
-	terminal, err := client.OpenTerminal(context.Background(), "", "dsh-1", "session-42")
+	terminal, err := client.OpenTerminal(context.Background(), "", "dsh-1", "session-42", "")
 	if err != nil {
 		t.Fatalf("OpenTerminal: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestOpenTerminalBrandUsesTheBrandSurface(t *testing.T) {
 	client := newClient(t, server)
 	login(t, client)
 
-	terminal, err := client.OpenTerminal(context.Background(), "kimi", "kimi-1", "")
+	terminal, err := client.OpenTerminal(context.Background(), "kimi", "kimi-1", "", "")
 	if err != nil {
 		t.Fatalf("OpenTerminal: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestOpenTerminalDesktopMode(t *testing.T) {
 	client := newClient(t, server)
 	login(t, client)
 
-	terminal, err := client.OpenTerminal(context.Background(), "", "dsh-1", "")
+	terminal, err := client.OpenTerminal(context.Background(), "", "dsh-1", "", "")
 	if err != nil {
 		t.Fatalf("OpenTerminal: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestOpenTerminalErrorMapping(t *testing.T) {
 			client := newClient(t, server)
 			login(t, client)
 
-			_, err := client.OpenTerminal(context.Background(), "", "dsh-1", "")
+			_, err := client.OpenTerminal(context.Background(), "", "dsh-1", "", "")
 			if err == nil {
 				t.Fatal("expected an error")
 			}

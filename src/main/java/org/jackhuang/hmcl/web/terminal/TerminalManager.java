@@ -54,24 +54,33 @@ public final class TerminalManager implements AutoCloseable {
         this.replayBytes = replayBytes;
     }
 
+    /// The registry key of one instance's terminal. The brand is part of it
+    /// because dsh, the brand categories and ZCode each have their own id
+    /// space: two surfaces may legitimately name an instance the same way, and
+    /// they must not share a PTY.
+    public static String key(String brand, String instanceId) {
+        return brand + "\u0000" + instanceId;
+    }
+
     /// Starts a terminal for `target`.
     ///
     /// @throws TerminalBusyException when the instance already has one running
     /// @throws IOException when the PTY or the agent cannot be started
     public synchronized TerminalSession open(TerminalTarget target, PtySize size) throws IOException {
-        TerminalSession existing = sessions.get(target.instanceId());
+        String key = key(target.brand(), target.instanceId());
+        TerminalSession existing = sessions.get(key);
         if (existing != null) {
             if (existing.state() == TerminalSession.State.RUNNING) {
                 throw new TerminalBusyException(target.instanceId());
             }
-            sessions.remove(target.instanceId(), existing);
+            sessions.remove(key, existing);
         }
         Pty pty = Pty.spawn(target.command(), target.cwd(), target.environment(), size);
         TerminalSession session = new TerminalSession(target.instanceId(), pty, replayBytes);
-        sessions.put(target.instanceId(), session);
+        sessions.put(key, session);
         AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.open", target.instanceId(), "success", null, null);
         session.onExit(() -> {
-            sessions.remove(target.instanceId(), session);
+            sessions.remove(key, session);
             AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.exit", target.instanceId(),
                     String.valueOf(session.exitCode()), null, null);
         });
@@ -79,15 +88,15 @@ public final class TerminalManager implements AutoCloseable {
     }
 
     /// The running terminal of an instance, if any.
-    public Optional<TerminalSession> find(String instanceId) {
-        return Optional.ofNullable(sessions.get(instanceId));
+    public Optional<TerminalSession> find(String brand, String instanceId) {
+        return Optional.ofNullable(sessions.get(key(brand, instanceId)));
     }
 
     /// Kills the instance's terminal, if one is running.
     ///
     /// @return whether there was a session to kill
-    public boolean terminate(String instanceId) {
-        TerminalSession session = sessions.remove(instanceId);
+    public boolean terminate(String brand, String instanceId) {
+        TerminalSession session = sessions.remove(key(brand, instanceId));
         if (session == null) {
             return false;
         }

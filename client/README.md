@@ -43,11 +43,12 @@ hdsl-tui --brand kimi --instance kimi-1 https://panel.example.com
 | 选项 | 说明 |
 |---|---|
 | `--instance <id>` | 登录后直接进入该实例的终端（菜单仍可用） |
-| `--brand <name>` | `kimi` / `opencode` / `claude-web`，默认走 dsh 实例 |
+| `--brand <name>` | `kimi` / `opencode` / `claude-web` / `zcode`，默认走 dsh 实例 |
 | `--resume <sessionId>` | 附着到该 harness 会话（kimi / opencode 的会话恢复） |
+| `--kernel <name>` | Claude Web 的内核：`community`（社区引擎）或 `official`（官方 Claude Code）；不给就在菜单里选 |
 | `--user <name>` | 面板用户名，默认 `admin`；给了就不再提示 |
 | `--ca <pem>` | 额外信任的 CA 证书（PEM 文件），用于自签面板 |
-| `--insecure` | 跳过证书校验；**会先打印 SHA-256 指纹并要求确认** |
+| `--insecure` | 全局跳过证书校验；**会先打印 SHA-256 指纹并要求确认**。不需要全局跳过时，菜单会在证书校验失败时当场给「仅本次忽略风险」，见 [TLS](#tls) |
 | `--plain` | 用逐行问答的旧界面（无终端时自动启用） |
 | `--version` | 打印客户端版本与 `protocol` 后退出，不联网 |
 | `--verbose` | 把请求与握手细节写到 stderr |
@@ -67,7 +68,7 @@ hdsl-tui --brand kimi --instance kimi-1 https://panel.example.com
 ╚════════════════════════════════════════════════════════╝
 ```
 
-层级是 **服务器 → 主菜单 → 分类（dsh/kimi/opencode/claude-web）→ 实例 → 动作**。
+层级是 **服务器 → 主菜单 → 分类（dsh/kimi/opencode/claude-web/zcode）→ 实例 → 动作**。
 每一层都有 `← 返回` 项，`Esc` 也逐级回退；`Ctrl-C` 在任意输入页取消当前动作，
 在根层（服务器列表）退出程序。退出 agent（`Ctrl-] q`）或 agent 自己退出，都只回到
 实例动作菜单——**登录状态和面板连接都还在**，不会连人带会话一起退出。
@@ -114,6 +115,25 @@ hdsl-tui --brand kimi --instance kimi-1 https://panel.example.com
   服务器之前弹一页风险确认。
   指纹要自己核对（比如从面板的「设置 → HTTPS 证书」抄一份），不然这一步只是让你多敲了
   几个字符。
+
+菜单里连一台面板时，如果证书不能证明它的身份，现在不会直接报错退出，而是给一页说明
+**哪里不对**（证书里没有这个地址 / 签发者不被信任 / 已过期），下面是两个选项：
+
+```
+ ← 返回（推荐）
+   仅本次忽略风险并连接
+```
+
+光标默认停在「返回」，回车不会顺手关掉安全校验。选「仅本次」之后：REST 与 WebSocket
+一起改为不校验（不会一半校验一半不校验），状态栏常驻「证书未验证」，这个选择只在本次
+运行内有效——不写进 `config.json`，换服务器或下次启动都恢复完整校验。
+
+只有证书类失败会出现这一页。DNS 失败、连接被拒、超时、面板返回 403/404 都不会，因为
+那些不是「可以用一次风险换通」的问题。
+
+> 证书里没有 IP 是最常见的触发点：面板证书只签了域名，客户端却用 `192.0.2.10` 连。
+> 根治办法是让证书包含这个地址——面板「设置 → HTTPS 证书」生成的自签名证书会把本机
+> 所有网卡地址写进 SAN——再用 `--ca` 信任它。
 
 ## Windows
 

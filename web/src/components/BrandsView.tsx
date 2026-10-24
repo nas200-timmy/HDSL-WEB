@@ -1030,7 +1030,7 @@ function InstancesCard({
                       <button
                         className="icon-btn on-variant ripple-host"
                         title={I18N["terminal.open"]}
-                        disabled={installing || brand === "claude-web"}
+                        disabled={installing}
                         onClick={() =>
                           setTerminalTarget({ kind: "brand", brand, id: inst.id, name: inst.name })
                         }

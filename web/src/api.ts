@@ -34,6 +34,7 @@ import type {
   BrandInstance,
   BrandVersions,
   InstancePlugins,
+  TerminalKernel,
 } from "./types";
 
 export class ApiError extends Error {
@@ -163,10 +164,20 @@ export const api = {
     }),
   revealDsh: (id: string, target: "home" | "workspace") =>
     request<{ opened: string }>(`/api/instances/${encodeURIComponent(id)}/reveal`, jsonInit("POST", { target })),
-  openBrandTerminal: (brand: BrandId, id: string, resume?: string) =>
-    request<TerminalOpen>(
-      `/api/brands/${brand}/instances/${encodeURIComponent(id)}/terminal${resume ? `?resume=${encodeURIComponent(resume)}` : ""}`,
+  openBrandTerminal: (brand: BrandId, id: string, resume?: string, kernel?: string) => {
+    const query = new URLSearchParams();
+    if (resume) query.set("resume", resume);
+    if (kernel) query.set("kernel", kernel);
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+    return request<TerminalOpen>(
+      `/api/brands/${brand}/instances/${encodeURIComponent(id)}/terminal${suffix}`,
       jsonInit("POST", {}),
+    );
+  },
+  /// Claude Web 的两个内核（社区引擎 / 官方）；别的品类有且只有一个 TUI，会回 404。
+  brandTerminalKernels: (brand: BrandId, id: string) =>
+    request<{ kernels: TerminalKernel[]; default: string | null }>(
+      `/api/brands/${brand}/instances/${encodeURIComponent(id)}/terminals`,
     ),
   closeBrandTerminal: (brand: BrandId, id: string) =>
     request<{ ok: boolean; killed: boolean }>(
@@ -393,6 +404,15 @@ export const api = {
 
   /** 运行中实例的打开地址（HTTP 明文 + 令牌，用请求 Host 拼出来） */
   zcodeOpen: (id: string) => request<{ url: string }>(`/api/zcode/instances/${encodeURIComponent(id)}/open`),
+
+  /// ZCode 的原地终端：`node <发行包>/bin/zcode.mjs`（不带 --web，即官方 TUI）。
+  /// 协议与品牌实例相同，见 docs/terminal-protocol.md。
+  openZcodeTerminal: (id: string) =>
+    request<TerminalOpen>(`/api/zcode/instances/${encodeURIComponent(id)}/terminal`, jsonInit("POST", {})),
+  closeZcodeTerminal: (id: string) =>
+    request<{ ok: boolean; killed: boolean }>(`/api/zcode/instances/${encodeURIComponent(id)}/terminal`, {
+      method: "DELETE",
+    }),
 
   zcodeLogs: (id: string, tail = 200) =>
     request<{ lines: string[] }>(`/api/zcode/instances/${encodeURIComponent(id)}/logs?tail=${tail}`),

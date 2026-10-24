@@ -46,10 +46,10 @@ class TerminalManagerTest {
     @Test
     void aSecondTerminalForTheSameInstanceIsRefused() throws Exception {
         try (TerminalManager manager = new TerminalManager(1024)) {
-            TerminalSession first = manager.open(target("i1"), new PtySize(80, 24));
-            assertTrue(manager.find("i1").isPresent());
+            TerminalSession first = manager.open(target("test", "i1"), new PtySize(80, 24));
+            assertTrue(manager.find("test", "i1").isPresent());
             assertThrows(TerminalBusyException.class,
-                    () -> manager.open(target("i1"), new PtySize(80, 24)));
+                    () -> manager.open(target("test", "i1"), new PtySize(80, 24)));
             assertTrue(first.state() == TerminalSession.State.RUNNING);
         }
     }
@@ -57,35 +57,51 @@ class TerminalManagerTest {
     @Test
     void terminateEndsTheSessionAndAllowsReopening() throws Exception {
         try (TerminalManager manager = new TerminalManager(1024)) {
-            manager.open(target("i2"), new PtySize(80, 24));
-            assertTrue(manager.terminate("i2"));
-            awaitNoSession(manager, "i2");
-            TerminalSession reopened = manager.open(target("i2"), new PtySize(80, 24));
+            manager.open(target("test", "i2"), new PtySize(80, 24));
+            assertTrue(manager.terminate("test", "i2"));
+            awaitNoSession(manager, "test", "i2");
+            TerminalSession reopened = manager.open(target("test", "i2"), new PtySize(80, 24));
             assertTrue(reopened.state() == TerminalSession.State.RUNNING);
+        }
+    }
+
+    /// dsh, the brand categories and ZCode each have their own id space, so the
+    /// same id under two brands must not share one PTY — the second open would
+    /// otherwise be refused as "already open" for an unrelated instance.
+    @Test
+    void theSameIdUnderTwoBrandsGetsTwoIndependentTerminals() throws Exception {
+        try (TerminalManager manager = new TerminalManager(1024)) {
+            manager.open(target("dsh", "same"), new PtySize(80, 24));
+            manager.open(target("zcode", "same"), new PtySize(80, 24));
+            assertTrue(manager.find("dsh", "same").isPresent());
+            assertTrue(manager.find("zcode", "same").isPresent());
+            assertTrue(manager.terminate("dsh", "same"));
+            assertTrue(manager.find("zcode", "same").isPresent(), "the other brand's terminal must survive");
         }
     }
 
     @Test
     void closingTheManagerEndsEveryTerminal() throws Exception {
         TerminalManager manager = new TerminalManager(1024);
-        TerminalSession one = manager.open(target("i3"), new PtySize(80, 24));
-        TerminalSession two = manager.open(target("i4"), new PtySize(80, 24));
+        TerminalSession one = manager.open(target("test", "i3"), new PtySize(80, 24));
+        TerminalSession two = manager.open(target("test", "i4"), new PtySize(80, 24));
         manager.close();
         assertTrue(one.waitFor() != Integer.MIN_VALUE);
         assertTrue(two.waitFor() != Integer.MIN_VALUE);
         assertTrue(manager.size() == 0);
     }
 
-    private static TerminalTarget target(String instanceId) {
-        return new TerminalTarget("test", instanceId, List.of("/bin/cat"),
+    private static TerminalTarget target(String brand, String instanceId) {
+        return new TerminalTarget(brand, instanceId, List.of("/bin/cat"),
                 Path.of("/tmp"), ENV);
     }
 
-    private static void awaitNoSession(TerminalManager manager, String instanceId) throws InterruptedException {
+    private static void awaitNoSession(TerminalManager manager, String brand, String instanceId)
+            throws InterruptedException {
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-        while (manager.find(instanceId).isPresent() && System.nanoTime() < deadline) {
+        while (manager.find(brand, instanceId).isPresent() && System.nanoTime() < deadline) {
             Thread.sleep(20);
         }
-        assertTrue(manager.find(instanceId).isEmpty(), "the session should be gone");
+        assertTrue(manager.find(brand, instanceId).isEmpty(), "the session should be gone");
     }
 }

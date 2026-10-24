@@ -57,6 +57,13 @@ func Explain(err error) (int, string) {
 
 	var transport *panel.TransportError
 	if errors.As(err, &transport) {
+		// A certificate that does not prove the panel's identity is the one
+		// transport failure with an action attached; the interactive client
+		// offers it as a screen, this is the scripted equivalent.
+		if certificate, ok := panel.CertificateFailure(err); ok {
+			return ExitTransport, "面板证书未通过校验：" + certificate.Reason +
+				"；确认这个地址就是那台面板后，用 --ca <证书文件> 信任它，或用 --insecure 跳过校验（会失去身份保护）"
+		}
 		return ExitTransport, "无法连接面板：" + transport.Error()
 	}
 
