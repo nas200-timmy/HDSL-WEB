@@ -34,13 +34,50 @@ public_base_url: https://dsh.example.com
 
 HDSL-web 用它给自签证书加 SAN，并在启动 dsh 实例时传 `--trusted-host dsh.example.com`。
 
-### nginx（TLS 在外层终结）
+### 先定一件事：谁终结 TLS
+
+两条路都支持，但**只能选一条**。混着来就是下面这类事故的根源。
+
+| | A. 外层代理终结（推荐：已有 nginx/Caddy、共享 443） | B. 面板自己终结 |
+|---|---|---|
+| 证书在谁手里 | nginx/Caddy（Let's Encrypt 等） | HDSL-web（`server.yaml` 的 `https.*`，或面板「设置 → HTTPS 证书」上传 / 生成自签） |
+| 面板的 `https.enabled` | **保持 `false`** | `true` |
+| `https.trust_forwarded_proto` | **`true`**（否则面板以为自己在 HTTP 上） | 不需要 |
+| `proxy_pass` 指向 | `http://127.0.0.1:3080` | `https://127.0.0.1:3080` + `proxy_ssl_verify off;`（自签/内网证书） |
+| 面板的 `https.redirect_http` | **必须关闭**（80 归 nginx，别抢） | 不需要（跳转由 nginx 做） |
+
+三条铁律，占一条就可能出现「明明配了 HTTPS，还是走 HTTP」：
+
+1. **只让一方终结 TLS**。nginx 已经 `listen 443 ssl` 了，面板就不要再开 `https.enabled`；
+   反过来面板开了 HTTPS，`proxy_pass` 就必须写 `https://`，不能还写 `http://`。
+2. **`proxy_pass` 的协议和端口必须等于面板真实监听的**。默认是 `127.0.0.1:3080`——写成
+   `http://127.0.0.1:80` 是常见错误：80 通常是 nginx 自己的明文入口，请求要么打到别的站点、
+   要么循环回自己，要么 502。面板换过 `HDSL_PORT`/`port` 时这里也要跟着改。
+3. **子路径挂载（`/hdsl/`）必须剥前缀**：`proxy_pass http://127.0.0.1:3080/;` 结尾那个
+   斜杠就是"剥掉 location 前缀"。漏了它，面板收到的是 `/hdsl/api/health`，直接 404。
+
+### A. nginx 终结 TLS（面板纯 HTTP）
+
+面板侧（`<HDSL_DATA>/server.yaml`，或环境变量）：
+
+```yaml
+https:
+  enabled: false              # 证书在 nginx，面板不碰
+  trust_forwarded_proto: true # 让面板认 X-Forwarded-Proto: https
+```
+
+nginx，**根路径挂载**：
 
 ```nginx
-# http 上下文
 map $http_upgrade $connection_upgrade {
     default upgrade;
     ''      close;
+}
+
+server {
+    listen 80;
+    server_name dsh.example.com;
+    return 308 https://$host$request_uri;      # 80 只做跳转
 }
 
 server {
@@ -51,86 +88,149 @@ server {
     ssl_certificate     /etc/nginx/certs/fullchain.pem;
     ssl_certificate_key /etc/nginx/certs/privkey.pem;
 
-    # 整合包上传（.dspack）上限 200 MiB，留一点余量
-    client_max_body_size 210m;
+    client_max_body_size 210m;                 # 整合包上传上限 200 MiB
 
     location / {
-        proxy_pass http://127.0.0.1:3080;
-
+        proxy_pass http://127.0.0.1:3080;      # 面板的真实地址：不是 :80，也不是 https://
         proxy_http_version 1.1;
-        # 关键：保留客户端发来的 Host（含端口），不改写
-        proxy_set_header Host $http_host;
+        proxy_set_header Host $http_host;      # 必须原样透传（dsh 的信任栅栏会比对 Origin/Host）
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        # WebSocket：面板 /ws，以及每个实例的 /i/<id>/api/remote.mux
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+        proxy_buffering off;                   # SSE 与流式输出不要缓冲
+    }
+}
+```
 
-        # SSE（/i/<id>/plugins/events）与流式聊天不要缓冲
+nginx，**子路径挂载 `/hdsl/`**（面板侧设 `HDSL_BASE_PATH=/hdsl`）：
+
+```nginx
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name dsh.example.com;
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+    client_max_body_size 210m;
+
+    location /hdsl/ {
+        proxy_pass http://127.0.0.1:3080/;     # 结尾斜杠 = 剥掉 /hdsl 前缀
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 3600s;
         proxy_buffering off;
     }
 }
 ```
 
-### Caddy（更少的坑：默认就透传 Host）
+子路径形态下面板自己会带着 `/hdsl` 生成链接、静态资源、`/ws` 和 `/ws/terminal/*`，
+nginx 只需要**剥前缀 + 透传升级头**，不需要额外 rewrite。`/i/<id>/` 实例页也在同一个
+location 下，同样自动适用。
+
+### B. 面板自己终结 TLS（自签或上传证书）
+
+面板侧：
+
+```yaml
+https:
+  enabled: true
+  # 方式 A：上传证书（面板「设置 → HTTPS 证书」会回写这段）
+  cert_file: certs/fullchain.pem
+  key_file:  certs/privkey.pem
+  # 方式 B：不配证书，首启自动生成自签（SAN 已含 public_base_url 与所有网卡地址）
+  redirect_http: false        # 80 交给 nginx，别让面板也去监听 80
+```
+
+nginx 到面板这一段也要说 TLS（`proxy_ssl_verify off` 是因为上游是自签/内网证书，
+身份由内网保证）：
+
+```nginx
+location /hdsl/ {
+    proxy_pass https://127.0.0.1:3080/;   # 注意：https，不是 http；端口仍是 3080
+    proxy_ssl_verify off;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_read_timeout 3600s;
+    proxy_buffering off;
+}
+```
+
+这种拓扑下 `trust_forwarded_proto` 不需要开：面板自己就在讲 TLS。也不要再在面板里
+「生成自签名证书」——如果开了 `trust_forwarded_proto` 又想生成自签，后端会用 409
+`tls_terminated_upstream` 拒绝，免得把「代理 → 面板」这段改成 TLS 之后反代连不上。
+
+### Caddy（更少的坑：默认透传 Host）
+
+外层终结 TLS：
 
 ```caddyfile
 dsh.example.com {
     encode zstd gzip
     reverse_proxy 127.0.0.1:3080 {
-        header_up Host {host}      # 显式写出，等价于 Caddy 的默认行为
+        header_up Host {host}
         flush_interval -1          # SSE 立即刷新
     }
 }
 ```
 
-Caddy 自动签发/续期证书；HDSL-web 这边就不用再配 HTTPS 了（见下面的注意）。
+Caddy 自动签发/续期证书，面板侧按 A 配置（`https.enabled: false` +
+`trust_forwarded_proto: true`）。子路径挂载用 `handle_path /hdsl/*`（`handle_path` 会剥前缀）：
 
-### 注意：外层 TLS + 内层 HTTP
-
-如果外层代理终结 TLS、HDSL-web 仍是 HTTP，请打开：
-
-```yaml
-https:
-  trust_forwarded_proto: true
+```caddyfile
+dsh.example.com {
+    handle_path /hdsl/* {
+        reverse_proxy 127.0.0.1:3080
+    }
+}
 ```
 
-（或环境变量 `HDSL_TRUST_FORWARDED_PROTO=true`）并确保代理发送 `X-Forwarded-Proto`
-（上面的 nginx 片段已经发了，Caddy 默认就发）。打开后：
+### 排错对照表
 
-- 会话 cookie 带 `Secure`；
-- 开发者模式和实例终端（Web Shell）把请求当作 HTTPS，不会被「当前环境不安全」挡住。
+| 症状 | 多半是 |
+|---|---|
+| `/hdsl/api/health` 直接 404 | 反代没剥前缀（`proxy_pass` 少了结尾斜杠），或面板没设 `HDSL_BASE_PATH` |
+| 浏览器打开是 `http://`，证书没生效 | nginx 的 80 段没有 `return 308 https://…`；或者 `proxy_pass` 写成了 `http://127.0.0.1:80` 打到了明文入口 |
+| `curl https://…` 报 502 / 连不上 | `proxy_pass` 的协议或端口和面板不一致：面板开了 HTTPS 但写的是 `http://`，或端口不是 3080 |
+| 面板自己的自签证书在浏览器里报错，同时 nginx 也有证书 | 两个 HTTPS 叠着用了：要么让 nginx 终结（面板关 HTTPS），要么让面板终结（nginx 用 `https://` + `proxy_ssl_verify off`） |
+| 页面能用，但状态不刷新、终端连不上 | 没透传 `Upgrade`/`Connection` |
+| 终端与开发者模式报 403 `insecure_transport` | 反代终结了 TLS 但没发 `X-Forwarded-Proto`，或面板没开 `trust_forwarded_proto` |
+| 登录 A 面板之后 B 面板掉线 | 同一个域名下挂了两个面板且用了旧版 Cookie（`Path=/` 互相覆盖）；新版按挂载点收敛，重新登录一次即可 |
+| `Set-Cookie` 里是 `Path=/hdsl` | 正常：会话 Cookie 跟着挂载点走，两个面板互不覆盖 |
 
-前提是 3080 只绑回环、**只被代理访问**——能直接连到 3080 的客户端可以自己写这个头。这种
-拓扑下也不要再在面板里生成自签名证书：后端会以 409 `tls_terminated_upstream` 拒绝，免得把
-「代理 → 面板」这段改成 TLS 之后反代连不上。
+### 验收命令
 
-- **推荐**：不要让 3080 暴露到公网。代理跑在宿主机上就只发布到宿主回环
-  （`ports: ["127.0.0.1:3080:3080"]`，容器内保持 `HDSL_BIND_HOST=0.0.0.0`，否则宿主的端口映射连不进去）；
-  代理本身跑在容器里就把它和 HDSL-web 放进同一个 Docker 网络、**完全不发布** ports，用服务名互访。
-- **或者**：HDSL-web 自己也开 HTTPS（面板上传证书），外层代理改用 `proxy_pass https://127.0.0.1:3080;`
-  配 `proxy_ssl_verify off;`（上游是自签或内网证书时）。此时 cookie 带 `Secure`，也是双层加密。
+```bash
+# 1) 面板活着，且经过反代可达（子路径时要带前缀）
+curl -sS https://dsh.example.com/hdsl/api/health
 
-```nginx
-# 内层也是 HTTPS 时的 location 片段
-location / {
-    proxy_pass https://127.0.0.1:3080;
-    proxy_ssl_verify off;          # 上游证书由 HDSL-web 自己管理
-    proxy_set_header Host $http_host;
-    # …其余同上
-}
+# 2) 80 是否只做跳转（期望 308 / 301，Location 是 https）
+curl -sSI http://dsh.example.com/hdsl/api/health | head -3
+
+# 3) 登录后的 Cookie 作用域（期望 Path=/hdsl）
+curl -sS -D- -o /dev/null https://dsh.example.com/hdsl/api/auth/login   -H 'Content-Type: application/json'   -d '{"username":"admin","password":"<口令>"}' | grep -i '^set-cookie'
+
+# 4) WebSocket 能不能升级（没有会话 cookie 时会被拒，但能看出路由到了面板而不是别的站点）
+curl -sS -i -N https://dsh.example.com/hdsl/ws   -H 'Connection: Upgrade' -H 'Upgrade: websocket'   -H 'Sec-WebSocket-Version: 13'   -H 'Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==' | head -1
 ```
 
 ### 端口与可达性
 
-- 面板：容器内 `3080`，HTTPS 开启时同端口直接说 TLS。
+- 面板：容器内 `3080`，HTTPS 开启时同端口直接说 TLS（`redirect_same_port` 默认开：同一端口
+  收到明文请求会 308 跳到 https）。
 - dsh 实例：容器内回环 `3081–4081`，**只监听回环、不要发布**，一切经 `/i/<id>/` 走 3080。
-- 若同时开了 `https.redirect_http: true`，会额外监听 `redirect_port`（默认 80）做 308→HTTPS 跳转，
-  需要在 compose 里把 80 也发布出去；外层已有代理负责跳转时**不要**开启它。
+- `https.redirect_http: true` 会让面板额外监听 `redirect_port`（默认 80）做 308→HTTPS 跳转；
+  **外层代理已经占着 80 时不要开它**，否则两个进程抢同一个端口。跳转交给 nginx 更省事。
+
 
 ### 容器侧建议
 

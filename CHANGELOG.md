@@ -39,8 +39,12 @@ ZCode 的发行包不带参数启动就是官方 TUI（`scripts/zcode-distributi
   先过密码、再选内核。
 - **客户端**：`hdsl-tui` 的分类多出 `zcode`（`GET /api/zcode/instances`），`--brand zcode`
   可用；终端路径按品类解析。进入 Claude Web 实例的终端前先弹内核选择（`--kernel` 可跳过）。
-- 验证：后端 `compileJava` / `compileTestJava` 通过，`web.{brand,http,terminal,zcode,developer}`
-  122 个用例里只有 2 个 Windows 专属 POSIX 权限用例失败（既存问题，与本次无关），20 个
+- **子路径部署**：会话 Cookie 的 `Path` 跟着挂载点走（同一个域名下挂两个面板时不再互相
+  踢下线）；终端 WebSocket 接受服务端返回的绝对 `ws://`/`wss://`，不再往上拼挂载点。
+  `docs/deployment.md §1` 重写为「谁终结 TLS」的两套 nginx 配置（根路径 / `/hdsl/` 子路径）、
+  排错对照表与验收命令。
+- 验证：后端 `compileJava` / `compileTestJava` 通过，`web.{auth,developer,brand,http,terminal,zcode}`
+  138 个用例里只有 2 个 Windows 专属 POSIX 权限用例失败（既存问题，与本次无关），20 个
   Linux-only 用例跳过；前端 `tsc --noEmit` 与 `vite build` 通过；客户端 `go vet` /
   `go test ./...` 通过（新增品类路径与内核路径用例）。
 

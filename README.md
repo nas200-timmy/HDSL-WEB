@@ -456,6 +456,11 @@ ZCode 是实验性品类，不在稳定性承诺内；定位、构建方式与�
 面板本身可以被 nginx / Caddy / 网关架在域名后面。两种挂法都实测过（SPA、登录、API、WebSocket、
 品牌实例 `/i/<id>/`、壁纸资产全链路）。
 
+**先决定谁终结 TLS，只选一个**——面板自己开 HTTPS，还是外层代理开 HTTPS。混着配就会出现
+「明明上了证书，浏览器还在走 HTTP」或两个证书互相打架。两种拓扑的完整 nginx/Caddy 配置、
+子路径 `/hdsl/` 写法、排错对照表和验收命令都在
+[docs/deployment.md §1](docs/deployment.md#1-再套一层反向代理nginx--caddy)。
+
 根路径挂载（推荐，零配置）：
 
 ```nginx
