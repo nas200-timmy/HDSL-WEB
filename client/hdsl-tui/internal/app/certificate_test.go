@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/panel"
+	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/ui"
 )
 
 // Pressing Enter on an unread screen must return to the server list, never
@@ -51,5 +52,30 @@ func TestStatusLineMarksAnUnverifiedConnection(t *testing.T) {
 	app.unverified = true
 	if !strings.Contains(app.statusLine(), "证书未验证") {
 		t.Errorf("status line = %q, want the unverified marker", app.statusLine())
+	}
+}
+
+// On a short screen the explanation must give way to the two choices: a page
+// whose rows are clipped is a page the user cannot answer.
+func TestDetailLinesStopsBeforeTheChoicesDisappear(t *testing.T) {
+	long := strings.Repeat("证书里没有这个地址，它只签给了别的名字。", 12)
+	lines := detailLines(long, 40, 3)
+	if len(lines) != 3 {
+		t.Fatalf("detailLines returned %d lines, want the limit of 3", len(lines))
+	}
+	if !strings.HasSuffix(lines[2], "…") {
+		t.Errorf("last line = %q, want it to end in an ellipsis", lines[2])
+	}
+	for _, line := range lines {
+		if ui.VisibleWidth(line) > 40 {
+			t.Errorf("line %q is wider than the column", line)
+		}
+	}
+}
+
+func TestDetailLinesLeavesShortTextAlone(t *testing.T) {
+	lines := detailLines("证书已过期", 40, 5)
+	if len(lines) != 1 || lines[0] != "证书已过期" {
+		t.Errorf("detailLines = %q", lines)
 	}
 }

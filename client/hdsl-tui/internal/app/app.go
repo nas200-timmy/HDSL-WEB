@@ -275,7 +275,7 @@ func (a *App) menu(page menuPage) (int, bool) {
 			header++
 		}
 		if page.Detail != "" {
-			for _, line := range wrap(page.Detail, inner-6) {
+			for _, line := range detailLines(page.Detail, inner-6, bodyHeight-5) {
 				body = append(body, ui.Fill("  "+line, inner, ui.Body))
 				header++
 			}
@@ -432,6 +432,19 @@ func (a *App) busy(text string) {
 		body = append(body, ui.Blank(inner))
 	}
 	a.draw("请稍候", body, "")
+}
+
+// detailLines wraps a menu's detail text and keeps it from pushing the choices
+// off a short screen: the rows are the point, the explanation may end in "…".
+func detailLines(text string, width, limit int) []string {
+	lines := wrap(text, width)
+	if limit > 0 && len(lines) > limit {
+		lines = lines[:limit]
+		if len(lines) > 0 {
+			lines[len(lines)-1] = ui.Truncate(lines[len(lines)-1]+"…", width)
+		}
+	}
+	return lines
 }
 
 // wrap breaks text to width cells, honouring explicit newlines.
