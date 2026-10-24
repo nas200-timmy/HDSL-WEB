@@ -36,6 +36,7 @@ import org.jackhuang.hmcl.web.terminal.DesktopTerminal;
 import org.jackhuang.hmcl.web.terminal.TerminalManager;
 import org.jackhuang.hmcl.web.terminal.TerminalSession;
 import org.jackhuang.hmcl.web.terminal.TerminalTarget;
+import org.jackhuang.hmcl.web.terminal.InstanceTerminal;
 import org.jackhuang.hmcl.web.terminal.TerminalTickets;
 import org.jackhuang.hmcl.web.terminal.pty.PtySize;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -91,6 +92,7 @@ public final class BrandApiServlet extends HttpServlet {
     private final org.jackhuang.hmcl.web.developer.DeveloperElevation developerElevation;
     /// Live TLS state of the main connector; the terminal is HTTPS-only.
     private final java.util.function.BooleanSupplier tlsActive;
+    private final InstanceTerminal instanceTerminal;
     private final Map<Brand, PathRef> brands = new EnumMap<>(Brand.class);
 
     private record PathRef(Path root, BrandInstanceManager manager) {
@@ -110,6 +112,8 @@ public final class BrandApiServlet extends HttpServlet {
         this.developerAuth = developerAuth;
         this.developerElevation = developerElevation;
         this.tlsActive = tlsActive;
+        this.instanceTerminal = new InstanceTerminal(config, terminals, terminalTickets, auth,
+                developerAuth, developerElevation, tlsActive);
         Path base = config.dataDir.resolve("brands");
         for (Brand brand : Brand.values()) {
             Path root = base.resolve(brand.id());
@@ -177,7 +181,7 @@ public final class BrandApiServlet extends HttpServlet {
                 switch (request.getMethod()) {
                     case "GET" -> getInstance(brand, ref, request, response, id);
                     case "PATCH" -> patchInstance(brand, ref, request, response, id);
-                    case "DELETE" -> deleteInstance(ref, response, id);
+                    case "DELETE" -> deleteInstance(brand, ref, response, id);
                     default -> Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
                 }
                 return;
@@ -187,7 +191,7 @@ public final class BrandApiServlet extends HttpServlet {
                 return;
             }
             if (segments.length == 3 && "stop".equals(segments[2]) && "POST".equals(request.getMethod())) {
-                stop(ref, response, id);
+                stop(brand, ref, response, id);
                 return;
             }
             if (segments.length == 3 && "open".equals(segments[2]) && "GET".equals(request.getMethod())) {
@@ -419,7 +423,7 @@ public final class BrandApiServlet extends HttpServlet {
         Json.writePreservingNulls(response, Map.of("instance", instanceJson(brand, patched, request)));
     }
 
-    private void deleteInstance(PathRef ref, HttpServletResponse response, String id)
+    private void deleteInstance(Brand brand, PathRef ref, HttpServletResponse response, String id)
             throws IOException, BrandException {
         BrandInstance instance = ref.manager().find(id);
         if (instance == null) {
@@ -430,7 +434,7 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "stop the instance before deleting it");
             return;
         }
-        terminals.terminate(id);
+        instanceTerminal.close(brand.id(), id);
         ref.manager().delete(id);
         response.setStatus(204);
     }
@@ -456,7 +460,7 @@ public final class BrandApiServlet extends HttpServlet {
         writeStatus(response, status);
     }
 
-    private void stop(PathRef ref, HttpServletResponse response, String id) throws IOException {
+    private void stop(Brand brand, PathRef ref, HttpServletResponse response, String id) throws IOException {
         BrandInstance instance = ref.manager().find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
@@ -465,7 +469,7 @@ public final class BrandApiServlet extends HttpServlet {
         // Stopping the instance stops its terminal: the agent process belongs
         // to the instance, and leaving it running behind a "stopped" state
         // would be a lie the next browser tab could still see.
-        terminals.terminate(id);
+        instanceTerminal.close(brand.id(), id);
         BrandRuntime.stop(id);
         writeStatus(response, BrandRuntime.status(id));
     }
@@ -560,121 +564,35 @@ public final class BrandApiServlet extends HttpServlet {
             return;
         }
         if ("DELETE".equals(request.getMethod())) {
-            boolean killed = terminals.terminate(id);
             JsonObject body = new JsonObject();
             body.addProperty("ok", true);
-            body.addProperty("killed", killed);
+            body.addProperty("killed", instanceTerminal.close(brand.id(), id));
             Json.write(response, body);
             return;
         }
-        if (!config.webShell.enabled) {
-            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
-                    "web_shell_disabled: the web shell is disabled in developer settings");
-            return;
-        }
-        if (!org.jackhuang.hmcl.web.http.RequestSecurity.isSecure(
-                request, tlsActive.getAsBoolean(), config)) {
-            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
-                    "insecure_transport: the web shell requires HTTPS; enable it in the HTTPS settings");
-            return;
-        }
-        if (!developerAuth.isSet()) {
-            Json.error(response, HttpServletResponse.SC_CONFLICT,
-                    "developer_password_not_set: set it before opening a terminal");
-            return;
-        }
-        String token = (String) request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE);
-        boolean sessionAlive = token == null || token.isBlank() || auth.isAlive(token);
-        String key = org.jackhuang.hmcl.web.developer.DeveloperElevation.key(token, request.getRemoteAddr());
-        if (!developerElevation.require(key, sessionAlive)) {
-            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
-                    "developer_elevation_required: elevate with the developer password first");
-            return;
-        }
-        BrandTui tui = BrandTui.forBrand(brand.id());
-        if (tui == null) {
-            Json.error(response, HttpServletResponse.SC_CONFLICT,
-                    "brand_has_no_tui: " + brand.id() + " has no interactive terminal");
-            return;
-        }
-        Path packageDir = BrandInstaller.packageDir(brand, ref.root(), instance.version());
-        if (packageDir == null) {
-            Json.error(response, HttpServletResponse.SC_CONFLICT,
-                    brand.sourceLabel() + " " + instance.version() + " is not installed");
-            return;
-        }
-        // A web runtime and a TUI on one HOME race the agent's own state; the
-        // terminal takes the instance over, and the footer's start button
-        // brings the web mode back when the user wants it.
-        if (BrandRuntime.isRunning(id)) {
-            BrandRuntime.stop(id);
-        }
-        String resume = request.getParameter("resume");
-        TerminalTarget target;
         try {
-            target = tui.target(packageDir, ref.manager().homeDirectory(instance),
-                    ref.manager().workspaceDirectory(instance), id, resume);
-        } catch (IOException | RuntimeException e) {
-            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.open", id, "failure",
-                    actorOf(request), request.getRemoteAddr());
-            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
-            return;
-        }
-        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
-            // The Windows desktop has its own shell, so this is a convenience
-            // action, not a privilege boundary. The *entry* is still the
-            // boundary: the request already passed the session gate and the
-            // developer elevation above, and it must also spell out the
-            // confirmation — a remote caller who only stole a cookie should
-            // not be able to pop a console with a single POST.
-            if (!"open-desktop-terminal".equals(readConfirmation(request))) {
-                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
-                        "confirmation_required: send {\"confirm\":\"open-desktop-terminal\"}");
-                return;
+            instanceTerminal.authorize(request);
+            BrandTui tui = BrandTui.forBrand(brand.id());
+            if (tui == null) {
+                throw new InstanceTerminal.Refused(409,
+                        "brand_has_no_tui: " + brand.id() + " has no interactive terminal");
             }
-            try {
-                DesktopTerminal.open(target);
-            } catch (IOException e) {
-                Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
-                return;
+            Path packageDir = BrandInstaller.packageDir(brand, ref.root(), instance.version());
+            if (packageDir == null) {
+                throw new InstanceTerminal.Refused(409,
+                        brand.sourceLabel() + " " + instance.version() + " is not installed");
             }
-            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.desktop", id, "success",
-                    actorOf(request), request.getRemoteAddr());
-            JsonObject body = new JsonObject();
-            body.addProperty("mode", "desktop");
-            body.addProperty("instance", id);
-            body.addProperty("hint", DesktopTerminal.REMOTE_HINT);
+            // A web runtime and a TUI on one HOME race the agent's own state;
+            // the terminal takes the instance over, and the footer's start
+            // button brings the web mode back when the user wants it.
+            JsonObject body = instanceTerminal.open(request, id,
+                    () -> BrandRuntime.stop(id),
+                    resume -> tui.target(packageDir, ref.manager().homeDirectory(instance),
+                            ref.manager().workspaceDirectory(instance), id, resume));
             Json.write(response, body);
-            return;
+        } catch (InstanceTerminal.Refused e) {
+            InstanceTerminal.write(request, response, e);
         }
-        // A refresh comes back to the same agent: an existing running session
-        // gets a fresh ticket instead of a 409. The process outlives the tab.
-        try {
-            TerminalSession running = terminals.find(id)
-                    .filter(candidate -> candidate.state() == TerminalSession.State.RUNNING)
-                    .orElse(null);
-            if (running == null) {
-                terminals.open(target, PtySize.DEFAULT);
-            }
-        } catch (org.jackhuang.hmcl.web.terminal.TerminalBusyException e) {
-            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_already_open: " + e.getMessage());
-            return;
-        } catch (IOException | RuntimeException e) {
-            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.open", id, "failure",
-                    actorOf(request), request.getRemoteAddr());
-            Json.error(response, HttpServletResponse.SC_CONFLICT, "terminal_failed: " + e.getMessage());
-            return;
-        }
-        String ticket = terminalTickets.issue(id, brand.id(),
-                (String) request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE));
-        JsonObject body = new JsonObject();
-        body.addProperty("mode", "pty");
-        body.addProperty("protocol", org.jackhuang.hmcl.web.terminal.TerminalWebSocket.PROTOCOL);
-        body.addProperty("instance", id);
-        body.addProperty("ticket", ticket);
-        body.addProperty("ws", "/ws/terminal/" + ticket);
-        body.addProperty("brand", brand.id());
-        Json.write(response, body);
     }
 
     // ------------------------------------------------------------------ open --

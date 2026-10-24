@@ -297,7 +297,8 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new AccountsApiServlet(eventBus)), "/api/accounts/*");
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
-        context.addServlet(new ServletHolder(new ZcodeApiServlet(config)), "/api/zcode/*");
+        context.addServlet(new ServletHolder(new ZcodeApiServlet(config, terminals, terminalTickets,
+                authService, developerAuth, developerElevation, tlsActive)), "/api/zcode/*");
         context.addServlet(new ServletHolder(new BrandApiServlet(
                 config, taskService, terminals, terminalTickets,
                 authService, developerAuth, developerElevation, tlsActive)), "/api/brands/*");

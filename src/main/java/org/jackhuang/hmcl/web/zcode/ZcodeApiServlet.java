@@ -25,8 +25,15 @@ import com.google.gson.JsonParser;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
+import org.jackhuang.hmcl.web.developer.DeveloperAuth;
+import org.jackhuang.hmcl.web.developer.DeveloperElevation;
 import org.jackhuang.hmcl.web.http.Json;
+import org.jackhuang.hmcl.web.terminal.InstanceTerminal;
+import org.jackhuang.hmcl.web.terminal.TerminalManager;
+import org.jackhuang.hmcl.web.terminal.TerminalTickets;
+import org.jackhuang.hmcl.web.terminal.ZcodeTui;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -93,13 +100,19 @@ public final class ZcodeApiServlet extends HttpServlet {
     private final ServerConfig config;
     private final ZcodeInstanceManager manager;
     private final ZcodeBuilder.Settings buildSettings;
+    private final InstanceTerminal instanceTerminal;
 
-    public ZcodeApiServlet(ServerConfig config) {
+    public ZcodeApiServlet(ServerConfig config, TerminalManager terminals, TerminalTickets terminalTickets,
+                           AuthService auth, DeveloperAuth developerAuth,
+                           DeveloperElevation developerElevation,
+                           java.util.function.BooleanSupplier tlsActive) {
         this.config = config;
         Path root = config.dataDir.resolve("zcode");
         this.manager = new ZcodeInstanceManager(root.resolve("instances"));
         this.buildSettings = new ZcodeBuilder.Settings(root, buildBin(config.zcode.buildBin), config.zcode.pnpm,
                 config.zcode.sourceUrl, config.zcode.keepSources);
+        this.instanceTerminal = new InstanceTerminal(config, terminals, terminalTickets, auth,
+                developerAuth, developerElevation, tlsActive);
     }
 
     /// The directory to put ahead of `PATH` for a build — the Node 24 that the image
@@ -173,6 +186,11 @@ public final class ZcodeApiServlet extends HttpServlet {
                 }
                 if (segments.length == 3 && "stop".equals(segments[2]) && "POST".equals(request.getMethod())) {
                     stop(response, id);
+                    return;
+                }
+                if (segments.length == 3 && "terminal".equals(segments[2])
+                        && ("POST".equals(request.getMethod()) || "DELETE".equals(request.getMethod()))) {
+                    terminal(request, response, id);
                     return;
                 }
                 if (segments.length == 3 && "open".equals(segments[2]) && "GET".equals(request.getMethod())) {
@@ -333,6 +351,7 @@ public final class ZcodeApiServlet extends HttpServlet {
                     "stop the ZCode instance before deleting it");
             return;
         }
+        instanceTerminal.close(ZcodeTui.BRAND, id);
         manager.delete(id);
         response.setStatus(204);
     }
@@ -350,6 +369,10 @@ public final class ZcodeApiServlet extends HttpServlet {
                     "no ZCode distribution was found; place one at " + packageDir());
             return;
         }
+        // The TUI and the web process share the instance's data directory: the
+        // web mode only starts once the terminal is gone, or two processes
+        // would write the same config.
+        instanceTerminal.close(ZcodeTui.BRAND, id);
         ZcodeRuntime.Status status = ZcodeRuntime.launch(
                 manager, instance, new HashMap<>(System.getenv()), nodePath(), packageDir());
         writeStatus(response, id, status);
@@ -361,8 +384,49 @@ public final class ZcodeApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such ZCode instance");
             return;
         }
+        instanceTerminal.close(ZcodeTui.BRAND, id);
         ZcodeRuntime.stop(id);
         writeStatus(response, id, ZcodeRuntime.status(id));
+    }
+
+    // --------------------------------------------------------------- terminal --
+
+    /// `POST /api/zcode/instances/{id}/terminal` opens the instance's native
+    /// TUI (`node bin/zcode.mjs`, no `--web`); `DELETE` stops it.
+    ///
+    /// Same gates, same takeover rule and same wire body as the dsh and brand
+    /// terminals: [InstanceTerminal] owns them so the three surfaces cannot
+    /// drift apart.
+    private void terminal(HttpServletRequest request, HttpServletResponse response, String id)
+            throws IOException {
+        ZcodeInstance instance = manager.find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such ZCode instance");
+            return;
+        }
+        if ("DELETE".equals(request.getMethod())) {
+            JsonObject body = new JsonObject();
+            body.addProperty("ok", true);
+            body.addProperty("killed", instanceTerminal.close(ZcodeTui.BRAND, id));
+            Json.write(response, body);
+            return;
+        }
+        try {
+            instanceTerminal.authorize(request);
+            Path packageDir = packageDir();
+            if (!Files.isRegularFile(packageDir.resolve("bin/zcode.mjs"))) {
+                throw new InstanceTerminal.Refused(409,
+                        "terminal_failed: no ZCode distribution was found at " + packageDir
+                                + " (build or place one with bin/zcode.mjs)");
+            }
+            JsonObject body = instanceTerminal.open(request, id,
+                    () -> ZcodeRuntime.stop(id),
+                    resume -> ZcodeTui.target(packageDir, manager.dataDirectory(instance),
+                            manager.workspaceDirectory(instance), id, nodePath()));
+            Json.write(response, body);
+        } catch (InstanceTerminal.Refused e) {
+            InstanceTerminal.write(request, response, e);
+        }
     }
 
     /// The node executable: the env override, else `node` from `PATH`.
