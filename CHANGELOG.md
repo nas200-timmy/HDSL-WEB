@@ -2,27 +2,7 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## v0.5.73 — 2026-10-24 · Claude Web：实例级 ANTHROPIC_BASE_URL + 官方内核预检
-
-Anthropic 按地区封禁：从不受支持地区（含中国大陆）访问 `api.anthropic.com` 一律 403，
-官方 Claude Code 打印 `App unavailable in region` 后退出。面板为这条路补上两个能力。
-
-- **实例级端点覆盖**：`PATCH /api/brands/claude-web/instances/{id}` 接受 `baseUrl`（`http(s)://`
-  或空串清除，其它品牌 400），值存进 `instance.json`；实例菜单新增「Anthropic 端点…」对话框。
-  `ANTHROPIC_BASE_URL` 同时进**终端**与**网页模式**的 child 环境——同一个 workbench、同一份 CLI
-  配置，不能让两边指向不同端点。凭据仍走面板进程环境（`ANTHROPIC_API_KEY` 等由子进程继承），
-  面板不新增存密钥的地方。
-- **官方内核预检**：选官方内核时先 `GET <端点>/v1/models`——不受支持地区回 403，受支持地区没带
-  key 回 401。只有 403 会被拦下，回一句「改用社区引擎，或在这个实例上配置 ANTHROPIC_BASE_URL」；
-  401、超时、DNS/TLS 失败都放行，交给 CLI 自己解释。探针结论用 `regionBlocked(status, body)` 判定，
-  403 且响应体缺region 字样时仍按拒绝处理。
-- 文档：`docs/brands.md` 新增「Claude Web：官方内核与 ANTHROPIC_BASE_URL」，写清政策、两条出路与
-  第三方中转的合规风险；README 的 Claude Web 段落同步。
-
-验证：服务端测试新增 5 条（端点覆盖存取/清除/校验、其它品牌拒绝、plan 带环境变量、探针与判定、
-终端环境注入），全绿。
-
-## v0.5.72 — 2026-10-24 · 修 ZCode 终端，补齐两处收尾
+## v0.5.72 — 2026-10-24 · ZCode 终端修复、客户端证书非交互入口、Claude Web 端点覆盖与官方内核预检
 
 **ZCode 终端起不来**：报 `terminal_failed: zcode.nodePath does not point at a file: node`。
 
@@ -44,9 +24,26 @@ Anthropic 按地区封禁：从不受支持地区（含中国大陆）访问 `ap
 脚本会因此失败，而 pnpm 只报 `ERR_PNPM_EXECUTOR_LIFECYCLE_SCRIPT_FAILED`）。面板本身已有
 `user.home` 兜底，这行是双保险。
 
-验证：**709 用例 / 0 失败 / 2 跳过**；客户端 `gofmt` / `go vet` / `go test` 全绿；真实面板 +
+**Claude Web 端点覆盖与官方内核预检**：Anthropic 按地区封禁——从不受支持地区（含中国大陆）
+访问 `api.anthropic.com` 一律 403，官方 Claude Code 打印 `App unavailable in region` 后退出。
+面板为这条路补上两个能力。
+
+- **实例级端点覆盖**：`PATCH /api/brands/claude-web/instances/{id}` 接受 `baseUrl`（`http(s)://`
+  或空串清除，其它品牌 400），值存进 `instance.json`；实例菜单新增「Anthropic 端点…」对话框。
+  `ANTHROPIC_BASE_URL` 同时进**终端**与**网页模式**的 child 环境——同一个 workbench、同一份 CLI
+  配置，不能让两边指向不同端点。凭据仍走面板进程环境（`ANTHROPIC_API_KEY` 等由子进程继承），
+  面板不新增存密钥的地方。
+- **官方内核预检**：选官方内核时先 `GET <端点>/v1/models`——不受支持地区回 403，受支持地区没带
+  key 回 401。只有 403 会被拦下，回一句「改用社区引擎，或在这个实例上配置 ANTHROPIC_BASE_URL」；
+  401、超时、DNS/TLS 失败都放行，交给 CLI 自己解释。探针结论用 `regionBlocked(status, body)` 判定，
+  403 且响应体缺region 字样时仍按拒绝处理。
+- 文档：`docs/brands.md` 新增「Claude Web：官方内核与 ANTHROPIC_BASE_URL」，写清政策、两条出路与
+  第三方中转的合规风险；README 的 Claude Web 段落同步。
+
+验证：**714 用例 / 0 失败 / 2 跳过**；客户端 `gofmt` / `go vet` / `go test` 全绿；真实面板 +
 假 ZCode 发行包，`HDSL_ZCODE_NODE=node` 下终端接口返回 pty 票据，`node <pkg>/bin/zcode.mjs`
-子进程确实起来了。
+子进程确实起来了。Claude Web 两处新增 5 条用例（端点覆盖存取/清除/校验、其它品牌拒绝、plan
+带环境变量、探针与判定、终端环境注入）全绿。
 
 ## v0.5.71 — 2026-10-24 · 终端：ZCode、Claude Web 双内核、证书应急
 
