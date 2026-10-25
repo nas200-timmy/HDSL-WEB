@@ -124,7 +124,7 @@ README 只保留「用户需要知道的」。这里记录为什么这样做—�
 ## 10. 构建、兼容底线与发布
 
 - Dockerfile 是三阶段：web（npm 构建 SPA）→ build（Gradle 产 shadow jar）→ runtime
-  （Debian + **JDK** + Node + pnpm + 一套构建工具链：go / rust / gcc / python / pkg-config / wget）。
+  （Debian + **JDK** + Node + pnpm + 一套构建工具链：go / rust / gcc / python / pkg-config / wget / busybox）。
   runtime 阶段另外装这套工具链是有意的：容器也是人工排障、现编现修的地方，理由与逐项说明在 Dockerfile
   的注释里。build 阶段故意不带 npm，SPA 由 web 阶段产出后拷进去，
   所以容器构建不需要本机的 `web/node_modules`。

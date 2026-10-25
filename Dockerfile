@@ -157,6 +157,11 @@ LABEL org.opencontainers.image.licenses="GPL-3.0-only"
 # python3          the interpreter node-gyp and most build scripts look for
 # python-is-python3  …and the bare `python` name plenty of them still call, which
 #                  `python3` alone does not provide on Debian
+# busybox-static   the first-aid kit: one **statically linked** binary carrying the
+#                  usual survival applets (`busybox sh`, `busybox vi`, `busybox wget`,
+#                  …). Static on purpose — a dynamically linked busybox dies with the
+#                  loader or libc it depends on, and that is precisely the state it is
+#                  kept around to repair.
 ARG NODE_VERSION=22.23.1
 ARG PNPM_VERSION=11.28.2
 # Node 官方 dist 的下载基址。国内网络直连 nodejs.org 会 TLS 握手失败（curl exit 35），
@@ -167,6 +172,7 @@ ARG NODE_DIST_MIRROR=https://nodejs.org/dist
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential \
+      busybox-static \
       ca-certificates \
       cargo \
       curl \

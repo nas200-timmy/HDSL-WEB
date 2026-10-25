@@ -2,15 +2,18 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## v0.5.82 — 2026-10-25 · 容器补齐构建工具链（JDK / go / rust / python）
+## v0.5.82 — 2026-10-25 · 容器补齐构建工具链（JDK / go / rust / python / busybox）
 
 - **容器里补齐构建工具链**（Dockerfile 运行阶段）：`openjdk-21-jre-headless` 换成
   **`openjdk-21-jdk-headless`**——要的是 JDK 而不是 JRE，`javac` / `jar` / `jcmd` 正是排查时真会伸手去拿的
   东西；并补上 `golang-go`（Go 1.24，与 `client/hdsl-tui/go.mod` 同一条线）、`rustc` + `cargo`、
   `build-essential`（gcc / g++ / make / libc6-dev：node-gyp、rustc 的链接器、`make install` 都要它）、
   `pkg-config`、`wget`，以及 `python-is-python3`——Debian 只装 `python3` 时**没有裸 `python` 命令**，
-  而不少构建脚本调的就是它。容器是"医者自医"的现场，缺一把手术刀就白搭；代价是镜像明显变大，
-  且 arm64 那条腿要在 QEMU 下装这些包，这一阶段会慢一些。
+  而不少构建脚本调的就是它。
+- **加上 `busybox-static` 急救箱**：一个**静态链接**的 busybox（`busybox sh` / `vi` / `wget` …）。特意用静态版——
+  动态链接的 busybox 会跟着它依赖的 loader 或 libc 一起坏掉，而那恰恰是它被留在镜像里要修的状态。
+- 容器是"医者自医"的现场，缺一把手术刀就白搭；代价是镜像明显变大，且 arm64 那条腿要在 QEMU 下装这些包，
+  这一阶段会慢一些。
 
 ## v0.5.81 — 2026-10-25 · 终端入口、整合包契约补齐、TUI 插件注入
 
