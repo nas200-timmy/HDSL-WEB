@@ -161,7 +161,16 @@ LABEL org.opencontainers.image.licenses="GPL-3.0-only"
 #                  usual survival applets (`busybox sh`, `busybox vi`, `busybox wget`,
 #                  …). Static on purpose — a dynamically linked busybox dies with the
 #                  loader or libc it depends on, and that is precisely the state it is
-#                  kept around to repair.
+#                  kept around to repair. Note what it does *not* do: the package
+#                  ships only /usr/bin/busybox, so its applets are `busybox vi`,
+#                  never a bare `vi` — that is why the two editors below exist.
+# vim-tiny, nano   a real editor **on PATH**. Without these, "open the container
+#                  and point apt at another mirror" ends at "no editor installed";
+#                  `vi` resolves through vim-tiny, and nano is there because not
+#                  everyone wants to be reacquainted with modal editing.
+# unzip, zip, bzip2, 7zip  the unpacking half of the toolbox: tar/gzip come with
+#                  the base image and xz/zstd are above, these cover .zip, .bz2
+#                  and .7z — the three that otherwise end in "command not found"
 ARG NODE_VERSION=22.23.1
 ARG PNPM_VERSION=11.28.2
 # Node 官方 dist 的下载基址。国内网络直连 nodejs.org 会 TLS 握手失败（curl exit 35），
@@ -171,14 +180,17 @@ ARG NODE_DIST_MIRROR=https://nodejs.org/dist
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
+      7zip \
       build-essential \
       busybox-static \
+      bzip2 \
       ca-certificates \
       cargo \
       curl \
       git \
       golang-go \
       less \
+      nano \
       openjdk-21-jdk-headless \
       pkg-config \
       procps \
@@ -186,8 +198,11 @@ RUN apt-get update \
       python3 \
       rustc \
       tini \
+      unzip \
+      vim-tiny \
       wget \
       xz-utils \
+      zip \
       zstd \
  && rm -rf /var/lib/apt/lists/*
 

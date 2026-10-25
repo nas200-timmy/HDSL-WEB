@@ -12,6 +12,10 @@
   而不少构建脚本调的就是它。
 - **加上 `busybox-static` 急救箱**：一个**静态链接**的 busybox（`busybox sh` / `vi` / `wget` …）。特意用静态版——
   动态链接的 busybox 会跟着它依赖的 loader 或 libc 一起坏掉，而那恰恰是它被留在镜像里要修的状态。
+  注意它**不**提供 PATH 上的 `vi`：这个包只装 `/usr/bin/busybox`，applet 一律要写成 `busybox vi`。
+- **真编辑器与解压件**：`vim-tiny`（提供 `/usr/bin/vi`）与 `nano`——否则"进容器改个源"会卡在"没有编辑器"；
+  外加 `unzip` / `zip` / `bzip2` / `7zip`（tar/gzip 在基础镜像里，`xz-utils`、`zstd` 本就在），
+  覆盖 `.zip` / `.bz2` / `.7z` 这三种否则只会回一句 `command not found` 的格式。
 - 容器是"医者自医"的现场，缺一把手术刀就白搭；代价是镜像明显变大，且 arm64 那条腿要在 QEMU 下装这些包，
   这一阶段会慢一些。
 
