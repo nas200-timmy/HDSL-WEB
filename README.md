@@ -102,8 +102,8 @@
 │   └─ /i/{id}/*    反向代理 → 127.0.0.1:3081-4081             │
 │  Java 领域层（自 HDSL 移植）：实例、版本、插件、账户、整合包   │
 │  dsh 实例进程池：node bin.js --profile web --port N …        │
-│  伪终端：kimi / opencode / dsh tui（按实例，随面板退出）      │
-│  容器内置 OpenJDK 21 + Node ^22 + pnpm(通过 corepack)         │
+│  伪终端：kimi / opencode / dsh（dsh 需先装 TUI 插件）        │
+│  容器内置 JDK 21 + Node 22 + pnpm + 构建工具链(go/rust/gcc)   │
 └───────────────────────────────────────────────────────────────┘
         │  卷：hdsl-data → /data（唯一需要持久化的目录）
         ▼

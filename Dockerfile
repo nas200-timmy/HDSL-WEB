@@ -7,8 +7,9 @@
 #
 #   web      node:22-bookworm-slim   builds the React panel SPA into /web/dist
 #   build    eclipse-temurin:21-jdk  embeds that dist and produces the shadow jar
-#   runtime  debian:trixie-slim      full Debian + OpenJDK 21 + Node 22 + pnpm,
-#                                    running as the unprivileged user `hdsl`
+#   runtime  debian:trixie-slim      full Debian + OpenJDK 21 (JDK) + Node 22 +
+#                                    pnpm + a build toolchain (go / rust / gcc /
+#                                    python), running as the unprivileged `hdsl`
 #
 # Build:  docker build -t hdsl-web .
 # Run:    docker run -d --name hdsl-web -p 3080:3080 -v hdsl-data:/data hdsl-web
@@ -121,19 +122,41 @@ LABEL org.opencontainers.image.description="DeepSeek Harness 的单容器网页�
 LABEL org.opencontainers.image.licenses="GPL-3.0-only"
 
 # ca-certificates  TLS to npm/registry, plus the JVM's own trust store
-# curl             registry downloads and the HEALTHCHECK probe
+# curl, wget       registry downloads, the HEALTHCHECK probe, and the plain
+#                  fetch a hand-run build inside the container expects to find
 # tini             PID 1: reaps zombies, forwards SIGTERM to the JVM
 # git              plugins installed from a repository (`git:` sources, ls-remote)
 # zstd             reading compressed session logs when a pack is exported
 # xz-utils         .tar.xz archives (manual/fallback Node runtimes, packs)
 # procps, less     so `docker exec -it … ps/less` works while troubleshooting
-# openjdk-21-jre-headless  the runtime itself (drags in util-linux -> flock(1),
-#                  which the session-lease check shells out to)
-# g++, make, python3  what node-gyp needs, and therefore what the in-panel ZCode build needs:
-#                  its dependency tree compiles native modules (`node-pty`, `cpu-features`), and
-#                  without these it stops at "Could not find any Python installation" or "Unable to
-#                  detect compiler type" — messages that name nothing the reader can install.
-#                  About 250 MB; the price of the build button working at all.
+# openjdk-21-jdk-headless  the runtime itself — a **JDK, not a JRE**. The panel
+#                  needs nothing but a JVM, but a container is also where someone
+#                  repairs things by hand, and `javac`/`jar`/`jcmd` are the tools
+#                  that get reached for. Drags in util-linux -> flock(1), which
+#                  the session-lease check shells out to.
+#
+# The rest of this list is a deliberate **build toolchain**, even though the
+# panel itself compiles nothing: this container is the environment people
+# diagnose and fix things in, and "doctor, heal thyself" is worthless without a
+# scalpel. It costs a noticeable amount of image size (Go, Rust and the JDK are
+# each in the hundreds of MB) and the arm64 leg installs it under QEMU, so it
+# is slower than the rest of this stage; that is the price of the container
+# being able to build, not only to run.
+#
+# build-essential  gcc / g++ / make / libc6-dev: what node-gyp needs — and
+#                  therefore what the in-panel ZCode build needs, whose
+#                  dependency tree compiles `node-pty` and `cpu-features`
+#                  (without it, it stops at "Could not find any Python
+#                  installation" or "Unable to detect compiler type", messages
+#                  that name nothing the reader can install). Also what rustc
+#                  uses as its linker, and what `make && make install` expects.
+# golang-go        Go 1.24 — the exact line `client/hdsl-tui/go.mod` requires, so
+#                  the terminal client can be built and tested in here
+# rustc, cargo     Debian's Rust toolchain (rustc 1.85)
+# pkg-config       the `.pc` lookup half of every native build
+# python3          the interpreter node-gyp and most build scripts look for
+# python-is-python3  …and the bare `python` name plenty of them still call, which
+#                  `python3` alone does not provide on Debian
 ARG NODE_VERSION=22.23.1
 ARG PNPM_VERSION=11.28.2
 # Node 官方 dist 的下载基址。国内网络直连 nodejs.org 会 TLS 握手失败（curl exit 35），
@@ -143,16 +166,21 @@ ARG NODE_DIST_MIRROR=https://nodejs.org/dist
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
+      build-essential \
       ca-certificates \
+      cargo \
       curl \
-      g++ \
       git \
+      golang-go \
       less \
-      make \
-      openjdk-21-jre-headless \
+      openjdk-21-jdk-headless \
+      pkg-config \
       procps \
+      python-is-python3 \
       python3 \
+      rustc \
       tini \
+      wget \
       xz-utils \
       zstd \
  && rm -rf /var/lib/apt/lists/*
