@@ -271,6 +271,82 @@ class PackApiTest {
     // ----------------------------------------------------------------- export --
 
     @Test
+    void theExportChoicesAreOfferedAndTheChosenHomeTravels() throws Exception {
+        NodeDshStub.assumeNode();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+            String id = createInstance(client, base, "homely");
+            NodeDshStub.install(DshInstanceManager.find(id), false);
+            DshInstance instance = DshInstanceManager.find(id);
+
+            Path profile = instance.homeDirectory().resolve("profiles").resolve("web");
+            Files.createDirectories(profile);
+            Files.writeString(profile.resolve("package.json"), "{\"dependencies\":{}}\n");
+            Files.writeString(profile.resolve("cordis.patch.yml"), "plugins: {}\n");
+            Path home = instance.homeDirectory();
+            Files.createDirectories(home.resolve("skills/keep"));
+            Files.writeString(home.resolve("skills/keep/SKILL.md"), "# keep me\n");
+            Files.writeString(home.resolve("AGENTS.md"), "global instructions\n");
+            Files.writeString(home.resolve(".credentials.yaml"), "token: secret\n");
+            Files.createDirectories(home.resolve("profiles/other"));
+            Files.writeString(home.resolve("profiles/other/package.json"), "{\"name\":\"other\"}\n");
+
+            // A GET is what a form asks for the choices: the home content the filter allows, and the
+            // harness versions this machine has. Neither is guessed at by the caller.
+            HttpResponse<String> choices = get(client, base + "/api/instances/" + id + "/export");
+            assertEquals(200, choices.statusCode(), choices.body());
+            List<String> offered = new ArrayList<>();
+            for (com.google.gson.JsonElement file : json(choices).getAsJsonArray("home")) {
+                offered.add(file.getAsJsonObject().get("path").getAsString());
+            }
+            assertTrue(offered.contains("skills/keep/SKILL.md"), offered.toString());
+            assertTrue(offered.contains("AGENTS.md"), offered.toString());
+            assertTrue(offered.stream().noneMatch(path -> path.startsWith("profiles/")),
+                    "every other profile in the home is not offered: " + offered);
+            assertTrue(offered.stream().noneMatch(path -> path.contains("credentials")),
+                    "and the filter has already refused the credentials: " + offered);
+            List<String> versions = new ArrayList<>();
+            json(choices).getAsJsonArray("dshVersions").forEach(v -> versions.add(v.getAsString()));
+            assertEquals(List.of(VERSION), versions, "the versions this machine has, offered to choose from");
+
+            // Asking for the home travels: what was named and allowed goes under `home/`, and naming
+            // a credential does not carry it.
+            HttpResponse<String> export = post(client, base + "/api/instances/" + id + "/export",
+                    "{\"home\":[\"skills/keep/SKILL.md\",\"AGENTS.md\",\".credentials.yaml\"],"
+                            + "\"dshVersions\":[\"0.1.6-alpha.2\",\"not a version\"]}");
+            assertEquals(202, export.statusCode(), export.body());
+            JsonObject task = awaitTask(client, base, json(export).get("taskId").getAsString());
+            assertEquals("done", task.get("state").getAsString(), "export task must finish: " + task);
+            String filename = task.getAsJsonObject("result").get("filename").getAsString();
+
+            byte[] pack = Files.readAllBytes(dataDir.resolve("exports").resolve(filename));
+            List<String> entries = zipEntries(pack);
+            assertTrue(entries.contains("home/skills/keep/SKILL.md"), entries.toString());
+            assertTrue(entries.contains("home/AGENTS.md"), entries.toString());
+            assertTrue(entries.stream().noneMatch(entry -> entry.contains("credentials")),
+                    "a credential is refused even when it is named: " + entries);
+            assertTrue(entries.contains("overrides/cordis.patch.yml"), entries.toString());
+
+            JsonObject manifest = JsonParser.parseString(zipEntry(pack, "manifest.json")).getAsJsonObject();
+            List<String> measured = new ArrayList<>();
+            manifest.getAsJsonArray("dshVersions").forEach(v -> measured.add(v.getAsString()));
+            assertEquals(List.of(VERSION, "0.1.6-alpha.2"), measured,
+                    "the measured set travels with the pin first, and what is not a version does not");
+
+            // An export that asks for nothing carries no home, which is what it has always done.
+            HttpResponse<String> plain = post(client, base + "/api/instances/" + id + "/export", "{}");
+            assertEquals(202, plain.statusCode(), plain.body());
+            JsonObject plainTask = awaitTask(client, base, json(plain).get("taskId").getAsString());
+            assertEquals("done", plainTask.get("state").getAsString(), plainTask.toString());
+            String plainFile = plainTask.getAsJsonObject("result").get("filename").getAsString();
+            assertTrue(zipEntries(Files.readAllBytes(dataDir.resolve("exports").resolve(plainFile)))
+                            .stream().noneMatch(entry -> entry.startsWith("home/")),
+                    "nothing from the home travels unasked");
+        }
+    }
+
+    @Test
     void exportFiltersCredentialsAndDownloadsRoundTrip() throws Exception {
         NodeDshStub.assumeNode();
         try (TestSupport.RunningServer running = startServer()) {
@@ -408,7 +484,92 @@ class PackApiTest {
         }
     }
 
+    @Test
+    void anUploadedTgzOfTheOldContractInstallsToo() throws Exception {
+        NodeDshStub.assumeNode();
+        TestSupport.enableFakePnpm();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            // The format's first container: a flat gzipped tar with the manifest at its root, which
+            // is what packs were before the `.dspack` marker existed.
+            byte[] pack = tgz(
+                    "manifest.json", "{\"manifestVersion\":3,\"name\":\"old-tools\",\"version\":\"1.0.0\","
+                            + "\"dshVersion\":\"" + VERSION + "\",\"profileName\":\"web\","
+                            + "\"bundles\":[],\"dependencies\":{}}",
+                    "package.json", "{\"dependencies\":{}}\n",
+                    "cordis.patch.yml", "# pack patch\n",
+                    "notes.txt", "hello from the old pack\n");
+
+            HttpResponse<String> upload = multipart(client, base + "/api/packs/upload",
+                    "Old Tools", "old-tools.tgz", pack);
+            assertEquals(202, upload.statusCode(), upload.body());
+            JsonObject task = awaitTask(client, base, json(upload).get("taskId").getAsString());
+            assertEquals("done", task.get("state").getAsString(), "the old container must install: " + task);
+            String instanceId = task.getAsJsonObject("result").get("instanceId").getAsString();
+            created.add(instanceId);
+
+            DshInstance instance = DshInstanceManager.find(instanceId);
+            assertNotNull(instance);
+            assertEquals(VERSION, instance.version());
+            Path profile = instance.homeDirectory().resolve("profiles").resolve("web");
+            assertTrue(Files.isRegularFile(profile.resolve("package.json")),
+                    "the machine file lands first, where the install reads it");
+            assertTrue(Files.isRegularFile(profile.resolve("cordis.patch.yml")));
+            assertTrue(Files.isRegularFile(profile.resolve("notes.txt")));
+            assertFalse(Files.exists(profile.resolve("manifest.json")),
+                    "the archive's own manifest is not part of the installation");
+        }
+    }
+
+    /// A `.tgz` pack, written by a real tar writer: the old container is one this launcher has to be
+    /// able to read, and a renamed ZIP would test nothing.
+    private static byte[] tgz(String... members) throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (kala.compress.archivers.tar.TarArchiveOutputStream tar =
+                     new kala.compress.archivers.tar.TarArchiveOutputStream(
+                             new java.util.zip.GZIPOutputStream(bytes))) {
+            for (int i = 0; i < members.length; i += 2) {
+                byte[] content = members[i + 1].getBytes(StandardCharsets.UTF_8);
+                kala.compress.archivers.tar.TarArchiveEntry entry =
+                        new kala.compress.archivers.tar.TarArchiveEntry(members[i]);
+                entry.setSize(content.length);
+                tar.putArchiveEntry(entry);
+                tar.write(content);
+                tar.closeArchiveEntry();
+            }
+        }
+        return bytes.toByteArray();
+    }
+
     // ----------------------------------------------------------------- helpers --
+
+    @Test
+    void aPackThatDeclaresItDoesNotSupportThisLauncherStillInstallsAndSaysSo() throws Exception {
+        NodeDshStub.assumeNode();
+        TestSupport.enableFakePnpm();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            // `supported: false` with the author's own words. The format is explicit that this is a
+            // warning and not a gate, so the instance has to exist afterwards — and what the author
+            // wanted shown has to be somewhere the person can see it.
+            byte[] pack = dspack("pickier", "\"launchers\":{\"hdsl\":{\"supported\":false,"
+                    + "\"reason\":\"needs the desktop settings screen\"}},");
+            HttpResponse<String> upload = multipart(client, base + "/api/packs/upload",
+                    "Pickier", "pickier.dspack", pack);
+            assertEquals(202, upload.statusCode(), upload.body());
+            JsonObject task = awaitTask(client, base, json(upload).get("taskId").getAsString());
+            assertEquals("done", task.get("state").getAsString(),
+                    "a launcher declaration never refuses an install: " + task);
+            created.add(task.getAsJsonObject("result").get("instanceId").getAsString());
+            assertTrue(task.get("message").getAsString()
+                            .contains("needs the desktop settings screen"),
+                    "and the import result carries what the pack said: " + task.get("message"));
+        }
+    }
 
     private String createInstance(HttpClient client, String base, String name) throws Exception {
         HttpResponse<String> response = post(client, base + "/api/instances",
@@ -422,11 +583,21 @@ class PackApiTest {
     /// A minimal but legitimate `.dspack`: the v3 marker, a v5 manifest, one
     /// machine file and two override files.
     private static byte[] dspack(String name) throws Exception {
+        // The manifest is the same except for whatever the caller adds (a launcher declaration, for
+        // one), which is easier to read here than a second copy of the whole document.
+        return dspack(name, "");
+    }
+
+    /// A `.dspack` whose manifest carries extra fields.
+    ///
+    /// @param name  the pack's identifier
+    /// @param extra manifest fields, written after `version` and ending with a comma
+    private static byte[] dspack(String name, String extra) throws Exception {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (ZipOutputStream zip = new ZipOutputStream(bytes)) {
             put(zip, "dspack.json", "{\"format\":\"dspack\",\"version\":3}");
             put(zip, "manifest.json", "{\"manifestVersion\":5,\"type\":\"profile\",\"name\":\"" + name
-                    + "\",\"version\":\"1.0.0\",\"dshVersion\":\"" + VERSION
+                    + "\",\"version\":\"1.0.0\"," + extra + "\"dshVersion\":\"" + VERSION
                     + "\",\"profileName\":\"web\",\"dependencies\":{}}");
             put(zip, "package.json", "{\"dependencies\":{}}\n");
             put(zip, "overrides/cordis.patch.yml", "# pack patch\n");

@@ -56,6 +56,16 @@ type kernelList struct {
 // a PTY.
 func (t Terminal) Desktop() bool { return t.Mode == "desktop" }
 
+// DeveloperStatus is the body of GET /api/developer/status: what the panel holds
+// right now, read before a terminal is opened so the developer password is asked
+// for in the order the web UI uses.
+type DeveloperStatus struct {
+	DevPasswordSet  bool `json:"devPasswordSet"`
+	Elevated        bool `json:"elevated"`
+	WebShellEnabled bool `json:"webShellEnabled"`
+	HTTPS           bool `json:"https"`
+}
+
 // Elevation is the body of POST /api/developer/elevate.
 type Elevation struct {
 	Elevated  bool   `json:"elevated"`

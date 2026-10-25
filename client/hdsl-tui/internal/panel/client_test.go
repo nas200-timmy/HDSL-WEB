@@ -161,6 +161,42 @@ func TestElevateSuccessAndFailures(t *testing.T) {
 	}
 }
 
+func TestDeveloperStatus(t *testing.T) {
+	server := fakeserver.New()
+	defer server.Close()
+	client := newClient(t, server)
+	login(t, client)
+
+	status, err := client.DeveloperStatus(context.Background())
+	if err != nil {
+		t.Fatalf("DeveloperStatus: %v", err)
+	}
+	if !status.DevPasswordSet || !status.Elevated || !status.WebShellEnabled || !status.HTTPS {
+		t.Errorf("status = %+v, want every flag set", status)
+	}
+
+	server.Elevated = false
+	server.DevPasswordSet = false
+	status, err = client.DeveloperStatus(context.Background())
+	if err != nil {
+		t.Fatalf("DeveloperStatus: %v", err)
+	}
+	if status.Elevated || status.DevPasswordSet {
+		t.Errorf("status = %+v, want both flags clear", status)
+	}
+	if !status.WebShellEnabled || !status.HTTPS {
+		t.Errorf("status = %+v, want the unrelated flags untouched", status)
+	}
+
+	request, ok := server.LastRequestTo("/api/developer/status")
+	if !ok || request.Method != http.MethodGet {
+		t.Errorf("request = %+v (found %v), want a GET", request, ok)
+	}
+	if request.Cookie != "fake-session-token" {
+		t.Errorf("cookie = %q, want the captured session", request.Cookie)
+	}
+}
+
 func TestInstanceLists(t *testing.T) {
 	server := fakeserver.New()
 	defer server.Close()
@@ -292,7 +328,9 @@ func TestOpenTerminalErrorMapping(t *testing.T) {
 		{http.StatusForbidden, "developer_elevation_required: elevate with the developer password first", "developer_elevation_required", panel.KindAuth},
 		{http.StatusConflict, "developer_password_not_set: set it before opening a terminal", "developer_password_not_set", panel.KindAuth},
 		{http.StatusConflict, "terminal_already_open: another terminal is attached", "terminal_already_open", panel.KindOther},
-		{http.StatusConflict, "terminal_failed: no pty available", "terminal_failed", panel.KindOther},
+		// The panel refused to start the terminal: no retry fixes it, so it is
+		// a policy refusal (exit 4) and not a transport failure (exit 3).
+		{http.StatusConflict, "terminal_failed: no pty available", "terminal_failed", panel.KindPolicy},
 		{http.StatusBadRequest, `confirmation_required: send {"confirm":"open-desktop-terminal"}`, "confirmation_required", panel.KindPolicy},
 		{http.StatusNotFound, "instance not found", "", panel.KindOther},
 		{http.StatusForbidden, "brand_has_no_tui: claude-web has no interactive terminal", "brand_has_no_tui", panel.KindPolicy},

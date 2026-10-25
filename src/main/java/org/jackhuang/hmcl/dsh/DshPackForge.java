@@ -33,10 +33,13 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.function.Consumer;
 import java.util.zip.ZipEntry;
@@ -55,8 +58,10 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 ///
 /// The container is a plain ZIP with `dspack.json` at its root — the marker that says this is a
 /// `.dspack` and which version of the container it is — and the profile's files live under
-/// `overrides/`, which is what an importer copies into the profile it is rebuilding. The manifest
-/// is v5 with `type: "profile"`.
+/// `overrides/`, which is what an importer copies into the profile it is rebuilding. Content from
+/// the level above the profile, the global `skills/` and `.agent-presets/` among it, can travel
+/// under `home/`, which an importer lands at the `$DSH_HOME` root; it goes in only when the export
+/// was told which paths to carry. The manifest is v5 with `type: "profile"`.
 ///
 /// The specification's filter is the part worth taking literally: an exported pack is something
 /// people publish, so installed trees, credentials, keys, private keys, tokens and nested archives
@@ -74,6 +79,21 @@ public final class DshPackForge {
 
     /// Where a profile's own files go, which is where an importer copies them from.
     public static final String OVERRIDES = "overrides/";
+
+    /// Where content from the home rather than the profile goes.
+    ///
+    /// A profile pack may carry the level above the profile — the global `skills/`, the
+    /// `.agent-presets/`, `AGENTS.md` — and this is the container's name for that level. An importer
+    /// lands these at the `$DSH_HOME` root, which is where they belong: they are not the profile's
+    /// own files, and installing them into the profile would put a global skill somewhere nothing
+    /// looks for one.
+    public static final String HOME = "home/";
+
+    /// The home's own profiles, which a profile pack never carries.
+    ///
+    /// `overrides/` is how a pack carries *its* profile; the home's `profiles/` directory holds every
+    /// other profile on the machine, which is not this pack's to distribute.
+    private static final String HOME_PROFILES = "profiles/";
 
     /// The manifest version this writes.
     public static final int MANIFEST_VERSION = 5;
@@ -106,6 +126,13 @@ public final class DshPackForge {
     private static final List<String> DENY_PREFIXES = List.of(
             "attachments/", "profiles/web/", "profiles/headless/", "skills/.system/");
 
+    /// What counts as a version string.
+    ///
+    /// Used for the extra harness versions a pack claims to have been measured against: the manifest
+    /// spec asks for version strings there, and a number that is not one would make the install
+    /// decision compare a pin against something no version manager can name.
+    private static final Pattern VERSION = Pattern.compile("\\d+(\\.\\d+)*(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?");
+
     private DshPackForge() {
     }
 
@@ -116,8 +143,10 @@ public final class DshPackForge {
     /// @param displayName what people see, or an empty string for the name
     /// @param description what it is for, or an empty string
     /// @param author      who made it, or an empty string
+    /// @param dshVersions the other harness versions this pack was measured against, or an empty
+    ///                    list for the instance's own version alone
     public record Options(String name, String version, String displayName, String description,
-                          String author) {
+                          String author, List<String> dshVersions) {
 
         /// Returns options that describe an instance without being told anything.
         ///
@@ -125,7 +154,7 @@ public final class DshPackForge {
         /// @return the options
         public static Options of(DshInstance instance) {
             String name = kebab(instance.id());
-            return new Options(name, "1.0.0", instance.id(), "", "");
+            return new Options(name, "1.0.0", instance.id(), "", "", List.of());
         }
 
         /// Turns anything into a kebab-case identifier.
@@ -171,22 +200,50 @@ public final class DshPackForge {
     /// @return what travels and what does not
     /// @throws DshException when the directory cannot be read
     public static Scan scan(Path profile) throws DshException {
+        return scan(profile, null);
+    }
+
+    /// Scans a home for the content a profile pack may carry beside its profile.
+    ///
+    /// The same scan, minus the home's own `profiles/`: this launcher runs an instance per profile
+    /// under `$DSH_HOME/profiles/`, none of which is this pack's to distribute. Everything else the
+    /// security filter allows — the global `skills/`, the `.agent-presets/`, `AGENTS.md` — is a
+    /// candidate, and which of them actually travels is the caller's whitelist.
+    ///
+    /// @param home the `$DSH_HOME` directory
+    /// @return what could travel and what could not
+    /// @throws DshException when the directory cannot be read
+    public static Scan scanHome(Path home) throws DshException {
+        return scan(home, HOME_PROFILES);
+    }
+
+    /// Scans a root, leaving one prefix out.
+    ///
+    /// @param root the directory
+    /// @param skip a prefix that never travels, or `null`
+    /// @return what travels and what does not
+    /// @throws DshException when the directory cannot be read
+    private static Scan scan(Path root, @Nullable String skip) throws DshException {
         List<Entry> files = new ArrayList<>();
         Map<String, String> excluded = new LinkedHashMap<>();
 
         try {
-            Files.walkFileTree(profile, new SimpleFileVisitor<>() {
+            Files.walkFileTree(root, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
-                    if (directory.equals(profile)) {
+                    if (directory.equals(root)) {
                         return FileVisitResult.CONTINUE;
                     }
                     if (Files.isSymbolicLink(directory)) {
                         // A link is never followed: it can leave the profile, and it can loop.
-                        excluded.put(relative(profile, directory), "symlink");
+                        excluded.put(relative(root, directory), "symlink");
                         return FileVisitResult.SKIP_SUBTREE;
                     }
-                    String rel = relative(profile, directory) + "/";
+                    String rel = relative(root, directory) + "/";
+                    if (skip != null && rel.startsWith(skip)) {
+                        excluded.put(rel, "profile");
+                        return FileVisitResult.SKIP_SUBTREE;
+                    }
                     String reason = exclusionOf(rel);
                     if (reason != null) {
                         excluded.put(rel, reason);
@@ -197,7 +254,7 @@ public final class DshPackForge {
 
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
-                    String rel = relative(profile, file);
+                    String rel = relative(root, file);
                     if (Files.isSymbolicLink(file)) {
                         excluded.put(rel, "symlink");
                         return FileVisitResult.CONTINUE;
@@ -214,12 +271,12 @@ public final class DshPackForge {
                 @Override
                 public FileVisitResult visitFileFailed(Path file, IOException e) {
                     // Unreadable is the same as absent for a pack's purposes.
-                    excluded.put(relative(profile, file), "unreadable");
+                    excluded.put(relative(root, file), "unreadable");
                     return FileVisitResult.CONTINUE;
                 }
             });
         } catch (IOException e) {
-            throw new DshException("Failed to scan " + profile, e);
+            throw new DshException("Failed to scan " + root, e);
         }
 
         files.sort((left, right) -> left.relative().compareTo(right.relative()));
@@ -261,6 +318,19 @@ public final class DshPackForge {
         return null;
     }
 
+    /// Writes an instance as a `.dspack`, carrying only the profile.
+    ///
+    /// @param instance the instance
+    /// @param target   the archive to create
+    /// @param options  what it should say about itself
+    /// @param onStage  receives progress lines, or `null`
+    /// @return what was written
+    /// @throws DshException when the profile cannot be read or written
+    public static Result export(DshInstance instance, Path target, Options options,
+                               @Nullable Consumer<String> onStage) throws DshException {
+        return export(instance, target, options, List.of(), onStage);
+    }
+
     /// Writes an instance as a `.dspack`.
     ///
     /// Both of the container's places are used the way the specification says. The files that
@@ -271,19 +341,22 @@ public final class DshPackForge {
     /// and then boots with none of its plugins: the resolve that installs them ran while the profile
     /// was still empty, because the manifest it needed had not been copied yet.
     ///
-    /// `home/` is not written. The container defines it, and the installer lands it at the DSH_HOME
-    /// root, which is where anything outside the profile belongs — the skills under `skills/` among
-    /// them. That is a question for the format repository rather than one to answer here alone, and
-    /// it is also why [DENY_PREFIXES], whose entries are home-relative paths, matches nothing under
-    /// the profile this scans today.
+    /// `home/` carries what is **not** the profile's own: the global `skills/`, the
+    /// `.agent-presets/`, `AGENTS.md`. The specification permits it and the installer lands it at the
+    /// `$DSH_HOME` root, but nothing travels there unless the caller names it in `homeInclude` —
+    /// the home is the machine's, not the profile's, and a pack that swept it up unasked would
+    /// publish things its author never chose to publish. What the whitelist asks for is still put
+    /// through the security filter below, so naming a credential does not carry it.
     ///
-    /// @param instance the instance
-    /// @param target   the archive to create
-    /// @param options  what it should say about itself
-    /// @param onStage  receives progress lines, or `null`
+    /// @param instance    the instance
+    /// @param target      the archive to create
+    /// @param options     what it should say about itself
+    /// @param homeInclude the home-relative paths to carry, or empty for none
+    /// @param onStage     receives progress lines, or `null`
     /// @return what was written
     /// @throws DshException when the profile cannot be read or written
     public static Result export(DshInstance instance, Path target, Options options,
+                               Collection<String> homeInclude,
                                @Nullable Consumer<String> onStage) throws DshException {
         Path profile = instance.homeDirectory().resolve("profiles").resolve(instance.profile());
         if (!Files.isDirectory(profile)) {
@@ -293,6 +366,9 @@ public final class DshPackForge {
         report(onStage, "Scanning " + profile.getFileName());
         Scan scan = scan(profile);
         report(onStage, scan.files().size() + " file(s) travel, " + scan.excluded().size() + " left out");
+
+        Path home = instance.homeDirectory();
+        List<Entry> fromHome = selectHome(home, homeInclude, onStage);
 
         JsonObject manifest = buildManifest(instance, options, onStage);
 
@@ -315,6 +391,9 @@ public final class DshPackForge {
                                     ? entry.relative()
                                     : OVERRIDES + entry.relative());
                 }
+                for (Entry entry : fromHome) {
+                    copy(zip, home.resolve(entry.relative()), HOME + entry.relative());
+                }
             }
         } catch (IOException e) {
             throw new DshException("Failed to write " + target, e);
@@ -325,7 +404,44 @@ public final class DshPackForge {
         report(onStage, "Wrote " + target.getFileName() + " (" + (size / 1024) + " KiB, sha256 "
                 + digest.substring(0, 12) + "…)");
         LOG.info("Wrote a DSH-PackForge pack of " + instance.id() + " to " + target);
-        return new Result(scan.files().size(), scan.excluded().size(), size, digest);
+        return new Result(scan.files().size() + fromHome.size(), scan.excluded().size(), size, digest);
+    }
+
+    /// Works out which home-level files travel, and says what does not.
+    ///
+    /// A path the caller named but the scan did not offer is reported rather than silently dropped:
+    /// the person selected it, and the two reasons it can be missing — it is not there any more, or
+    /// the security filter refuses it — are both things they would want to know.
+    ///
+    /// @param home    the home
+    /// @param include the home-relative paths the caller selected
+    /// @param onStage receives progress lines, or `null`
+    /// @return the files that travel, in path order
+    /// @throws DshException when the home cannot be read
+    private static List<Entry> selectHome(Path home, Collection<String> include,
+                                          @Nullable Consumer<String> onStage) throws DshException {
+        if (include.isEmpty()) {
+            return List.of();
+        }
+        Scan scan = scanHome(home);
+        Set<String> wanted = new LinkedHashSet<>();
+        for (String path : include) {
+            if (path != null && !path.isBlank()) {
+                wanted.add(path.replace('\\', '/').replaceAll("^/+", ""));
+            }
+        }
+        List<Entry> chosen = new ArrayList<>();
+        for (Entry entry : scan.files()) {
+            if (wanted.remove(entry.relative())) {
+                chosen.add(entry);
+            }
+        }
+        if (!wanted.isEmpty()) {
+            report(onStage, "Not carried from the home, because they are not there or the filter"
+                    + " leaves them out: " + wanted);
+        }
+        report(onStage, chosen.size() + " file(s) from the home travel");
+        return List.copyOf(chosen);
     }
 
     /// Builds the v5 manifest for an instance.
@@ -354,6 +470,11 @@ public final class DshPackForge {
         }
         // Exact, because the specification requires it: a pack is a reproducible snapshot.
         manifest.addProperty("dshVersion", instance.version());
+        // And the set the author measured it against, which is what an importer chooses from when
+        // the pinned version is not on the machine. The pinned version comes first and is always
+        // there: the specification requires it to be a member, and a set that omitted it would
+        // describe a pack nobody could install.
+        manifest.add("dshVersions", measuredVersions(instance, options, onStage));
         manifest.addProperty("profileName", instance.profile());
 
         JsonArray bundles = new JsonArray();
@@ -392,6 +513,40 @@ public final class DshPackForge {
         }
         manifest.add("dependencies", dependencies);
         return manifest;
+    }
+
+    /// Builds the set of harness versions the pack says it was measured against.
+    ///
+    /// The instance's own version first, then whatever the author added, deduplicated. A string that
+    /// is not a version is left out and said so, rather than written: the manifest spec asks for
+    /// version strings there, and an importer compares them against what it has installed, which no
+    /// other spelling can match.
+    ///
+    /// @param instance the instance the pack is of
+    /// @param options  what the author said about it
+    /// @param onStage  receives progress lines, or `null`
+    /// @return the versions, first one first
+    private static JsonArray measuredVersions(DshInstance instance, Options options,
+                                              @Nullable Consumer<String> onStage) {
+        Set<String> versions = new LinkedHashSet<>();
+        versions.add(instance.version());
+        if (options.dshVersions() != null) {
+            for (String version : options.dshVersions()) {
+                String cleaned = version == null ? "" : version.trim();
+                if (cleaned.isEmpty() || versions.contains(cleaned)) {
+                    continue;
+                }
+                if (!VERSION.matcher(cleaned).matches()) {
+                    report(onStage, cleaned + " is not a version, so the pack does not claim to"
+                            + " have been measured against it");
+                    continue;
+                }
+                versions.add(cleaned);
+            }
+        }
+        JsonArray array = new JsonArray();
+        versions.forEach(array::add);
+        return array;
     }
 
     /// Returns the published version of a plugin an instance installed from a file.

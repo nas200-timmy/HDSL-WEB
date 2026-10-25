@@ -8,13 +8,13 @@ export interface IconProps extends Omit<SVGProps<SVGSVGElement>, "width" | "heig
   size?: number;
 }
 
-function makeIcon(path: string) {
+function makeIcon(path: string, viewBox = "0 0 24 24") {
   return function Icon({ size = 24, ...rest }: IconProps) {
     return (
       <svg
         width={size}
         height={size}
-        viewBox="0 0 24 24"
+        viewBox={viewBox}
         fill="currentColor"
         aria-hidden="true"
         {...rest}
@@ -24,6 +24,13 @@ function makeIcon(path: string) {
     );
   };
 }
+
+// 终端窗口：Material Symbols outlined `terminal` 的官方 path 逐字抄录。桌面版 SVG.java 没有这个
+// 图标（本项目新增的第一个非 SVG.java 来源），且新版 Symbols 用 `0 -960 960 960` 视口，故显式传入。
+export const TerminalIcon = makeIcon(
+  "M160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h640q33 0 56.5 23.5T880-720v480q0 33-23.5 56.5T800-160H160Zm0-80h640v-400H160v400Zm140-40-56-56 103-104-104-104 57-56 160 160-160 160Zm180 0v-80h240v80H480Z",
+  "0 -960 960 960",
+);
 
 // SVG.java 枚举（保留原枚举名）
 export const AddIcon = makeIcon("M11 13H5V11H11V5H13V11H19V13H13V19H11V13Z");

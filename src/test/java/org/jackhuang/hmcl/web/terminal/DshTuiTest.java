@@ -18,30 +18,200 @@
 package org.jackhuang.hmcl.web.terminal;
 
 import org.jackhuang.hmcl.dsh.DshException;
+import org.jackhuang.hmcl.dsh.DshHomeMode;
+import org.jackhuang.hmcl.dsh.DshInstance;
+import org.jackhuang.hmcl.dsh.DshNodeRuntime;
+import org.jackhuang.hmcl.dsh.DshTuiPlugins;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-/// `dsh tui` is the interpreter + entry, not the web command with `tui`
-/// appended: the web flags must not survive into the TUI.
+/// The terminal is a plugin on **its own profile**, and the instance's web profile is
+/// never it: a terminal interface and `dsh-web-app` are both app plugins, and sharing a
+/// profile with a second app plugin is what stops the instance from starting. What is
+/// started here is the plugin's own executable with Node, or its profile booted the
+/// upstream way (`dsh --profile <name>`).
 class DshTuiTest {
 
-    @Test
-    void theTuiCommandDropsTheWebFlags() throws Exception {
-        List<String> plan = List.of("/opt/node/bin/node", "/data/dsh/bin.js",
-                "--profile", "web", "--port", "3252", "--no-open");
+    /// The instance runs on a home of its own, so nothing here reads or writes the
+    /// launcher's real one.
+    private static DshInstance instanceWith(Path home, String profile) {
+        return new DshInstance("tui-test", "0.1.7-rc.1", profile, home.resolve("workspace").toString(),
+                null, DshHomeMode.CUSTOM, home.toString(), List.of(), Map.of(), null, null, null, 0, 0L);
+    }
 
-        assertEquals(List.of("/opt/node/bin/node", "/data/dsh/bin.js", "tui"),
-                DshTui.tuiCommand(plan, null));
-        assertEquals(List.of("/opt/node/bin/node", "/data/dsh/bin.js", "tui", "--resume", "abc"),
-                DshTui.tuiCommand(plan, "abc"));
+    /// Writes the profile manifest the installer's own `dsh plugin add` would leave.
+    private static void install(DshInstance instance, String profile, String... packages) throws Exception {
+        StringBuilder dependencies = new StringBuilder();
+        for (String name : packages) {
+            if (!dependencies.isEmpty()) {
+                dependencies.append(',');
+            }
+            dependencies.append('"').append(name).append("\":\"1.0.0\"");
+        }
+        Path manifest = instance.homeDirectory().resolve("profiles").resolve(profile).resolve("package.json");
+        Files.createDirectories(manifest.getParent());
+        Files.writeString(manifest, "{\"dependencies\":{" + dependencies + "}}");
+    }
+
+    @Test
+    void anInstanceWithNoTerminalPluginIsRefusedWithWhereToGetOne(@TempDir Path home) throws Exception {
+        DshInstance instance = instanceWith(home, "web");
+
+        DshException refused = assertThrows(DshException.class, () -> DshTui.terminalPlugin(instance));
+
+        assertTrue(refused.getMessage().contains("未安装终端界面插件"), refused.getMessage());
+        assertTrue(refused.getMessage().contains("「安装」"), refused.getMessage());
+        assertTrue(refused.getMessage().contains(DshTuiPlugins.ENTRIES.get(0).packageName()),
+                "the refusal names what to install: " + refused.getMessage());
+    }
+
+    /// The hard constraint, pinned from the side that can be tested here: the same
+    /// package written into the *web* profile is not a terminal plugin this launcher will
+    /// start, because that profile is where the two app plugins collide.
+    @Test
+    void aTerminalPluginInTheWebProfileIsNotInstalled(@TempDir Path home) throws Exception {
+        DshInstance instance = instanceWith(home, "web");
+        install(instance, "web", "@deepseek-harness-tui/dsh-tui");
+
+        assertThrows(DshException.class, () -> DshTui.terminalPlugin(instance));
+    }
+
+    @Test
+    void aPluginThatShipsItsOwnExecutableIsStartedWithNode(@TempDir Path home) throws Exception {
+        DshInstance instance = instanceWith(home, "web");
+        DshTuiPlugins.Entry plugin = DshTuiPlugins.ENTRIES.get(0);
+        assertEquals("@deepseek-harness-tui/dsh-tui", plugin.packageName());
+        assertEquals("dsh-tui", plugin.profile(), "the profile is the plugin's own, not the instance's");
+        assertTrue(plugin.hasExecutable());
+        install(instance, plugin.profile(), plugin.packageName());
+
+        assertEquals(plugin.packageName(), DshTui.terminalPlugin(instance).packageName());
+
+        // The package's own manifest names its entry; the file is what is started, and it
+        // is looked for in the plugin's profile.
+        Path packageDirectory = DshTui.profileNodeModules(instance, plugin.profile())
+                .resolve(plugin.packageName());
+        Files.createDirectories(packageDirectory.resolve("bin"));
+        Files.writeString(packageDirectory.resolve("bin/dsh-tui.js"), "console.log('tui');\n");
+        Files.writeString(packageDirectory.resolve("package.json"),
+                "{\"name\":\"@deepseek-harness-tui/dsh-tui\",\"bin\":{\"dst\":\"bin/dsh-tui.js\",\"dsh-tui\":\"bin/dsh-tui.js\"}}");
+
+        Path entry = DshTui.entryPoint(instance, plugin);
+        assertEquals(packageDirectory.resolve("bin/dsh-tui.js").toAbsolutePath().normalize(), entry);
+
+        DshNodeRuntime runtime = new DshNodeRuntime(Path.of("/opt/node/bin/node"), "22.19.0",
+                null, null, null, null);
+        assertEquals(List.of("/opt/node/bin/node", entry.toString(), "--resume", "sess-1"),
+                DshTui.executableCommand(runtime, entry, "sess-1"));
+        assertEquals(List.of("/opt/node/bin/node", entry.toString()),
+                DshTui.executableCommand(runtime, entry, null),
+                "no session to resume means no flag");
+    }
+
+    /// A bin the profile does not hold is not a dead end: the profile is booted instead,
+    /// which is the path the plugin's own documentation shows.
+    @Test
+    void aBinThatIsNotThereLeavesTheProfilePath(@TempDir Path home) throws Exception {
+        DshInstance instance = instanceWith(home, "web");
+        DshTuiPlugins.Entry plugin = DshTuiPlugins.ENTRIES.get(0);
+        assertTrue(plugin.hasExecutable());
+        install(instance, plugin.profile(), plugin.packageName());
+
+        assertEquals(plugin.packageName(), DshTui.terminalPlugin(instance).packageName(),
+                "the plugin is installed, so it is what gets started");
+        assertNull(DshTui.entryPoint(instance, plugin),
+                "the profile holds no files yet, so `target` falls through to booting the profile");
+    }
+
+    /// pnpm writes `.bin/<tool>` as a shell shim; starting through it would make
+    /// `/bin/sh` the root process of the terminal, so only a shim that resolves to
+    /// the package's own script is taken.
+    @Test
+    void theShimIsTakenOnlyWhenItIsThePackagesOwnScript(@TempDir Path nodeModules) throws Exception {
+        assumeTrue(OperatingSystem.CURRENT_OS != OperatingSystem.WINDOWS, "the refusal is about POSIX shims");
+
+        Path bin = nodeModules.resolve(".bin");
+        Files.createDirectories(bin);
+        Path shim = bin.resolve("dsh-tui");
+        Files.writeString(shim, "#!/bin/sh\nexec node \"$0/../lib/bin.js\" \"$@\"\n");
+        Files.setPosixFilePermissions(shim, PosixFilePermissions.fromString("rwx------"));
+        assertNull(DshTui.entryPoint(nodeModules, "@huiliyi37/dsh-tianshu-tui", "dsh-tui"),
+                "a shell shim is not the entry to start");
+
+        // The same name, linked to the script the package ships, is.
+        Path script = nodeModules.resolve("tui-package/lib/bin.js");
+        Files.createDirectories(script.getParent());
+        Files.writeString(script, "console.log('tui');\n");
+        Files.setPosixFilePermissions(script, PosixFilePermissions.fromString("rwx------"));
+        Files.delete(shim);
+        Files.createSymbolicLink(shim, script);
+
+        assertEquals(script.toRealPath(), DshTui.entryPoint(nodeModules, "tui-package", "dsh-tui"));
+    }
+
+    @Test
+    void aPureBundleIsStartedByBootingItsProfile(@TempDir Path home) throws Exception {
+        DshInstance instance = instanceWith(home, "web");
+        DshTuiPlugins.Entry plugin = DshTuiPlugins.find("@tomowang/dsh-tui").orElseThrow();
+        assertEquals("tui", plugin.profile());
+        assertFalse(plugin.hasExecutable(), "a pure bundle has no entry of its own");
+        install(instance, plugin.profile(), plugin.packageName());
+
+        assertEquals(plugin.packageName(), DshTui.terminalPlugin(instance).packageName());
+
+        // The plan is the harness's own argv — interpreter, entry, `--profile <name>` —
+        // and that is what is started; the profile in it is the plugin's, never `web`.
+        List<String> plan = List.of("/opt/node/bin/node", "/data/dsh/lib/bin.js", "--profile", "tui");
+        assertEquals("tui", DshTui.plannedProfile(plan));
+        assertEquals(plan, DshTui.cliCommand(plan, null));
+        assertEquals(List.of("/opt/node/bin/node", "/data/dsh/bin.js", "--profile", "tui", "--resume", "abc"),
+                DshTui.cliCommand(List.of("/opt/node/bin/node", "/data/dsh/bin.js", "--profile", "tui"), "abc"));
+        assertNull(DshTui.plannedProfile(List.of("/opt/node/bin/node", "/data/dsh/bin.js")));
+    }
+
+    /// The rule applies to the instance's own arguments too: `--profile web` in them
+    /// would boot the web app over the terminal's profile, which is the combination that
+    /// does not start.
+    @Test
+    void aPlanThatBootsTheWebProfileIsRefused() throws Exception {
+        DshException refused = assertThrows(DshException.class, () -> DshTui.refuseWebProfile("web"));
+        assertTrue(refused.getMessage().contains("--profile web"), refused.getMessage());
+        assertTrue(refused.getMessage().contains("app 插件"), refused.getMessage());
+
+        DshTui.refuseWebProfile("tui");
+        DshTui.refuseWebProfile("pi-tui");
+        DshTui.refuseWebProfile(null);
+        DshTui.refuseWebProfile("");
+    }
+
+    @Test
+    void theRecommendedPluginWinsWhenSeveralAreInstalled(@TempDir Path home) throws Exception {
+        DshInstance instance = instanceWith(home, "web");
+        DshTuiPlugins.Entry recommended = DshTuiPlugins.ENTRIES.get(0);
+        // Each in its own profile — the profiles differ, and that is the point.
+        install(instance, "tui", "@tomowang/dsh-tui");
+        install(instance, recommended.profile(), recommended.packageName());
+
+        assertEquals(recommended.packageName(), DshTui.terminalPlugin(instance).packageName(),
+                "the list's order is the preference");
     }
 
     @Test
     void aPlanWithoutAnEntryIsRefused() {
-        assertThrows(DshException.class, () -> DshTui.tuiCommand(List.of("node"), null));
+        assertThrows(DshException.class, () -> DshTui.cliCommand(List.of("node"), null));
     }
 }

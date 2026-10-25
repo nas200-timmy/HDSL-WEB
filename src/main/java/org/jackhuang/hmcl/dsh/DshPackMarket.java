@@ -95,6 +95,10 @@ public final class DshPackMarket {
     /// @param author          who made it, or `null`
     /// @param category        the collector's category, or `null`
     /// @param dshVersion      the harness version it was made for, or `null`
+    /// @param dshVersions     the harness versions the author measured it against, or empty when the
+    ///                        index did not flatten them (they are then only in the lazy manifest)
+    /// @param launcherRestricted whether the pack carries a `launchers` declaration, which the index
+    ///                        publishes as a derived flag so a list can filter without fetching
     /// @param profileName     what the installed profile is called, or `null`
     /// @param updatedAt       when it last changed, or `null`
     /// @param bundleCount     how many bundles it layers, or `null`
@@ -115,6 +119,8 @@ public final class DshPackMarket {
             @Nullable String author,
             @Nullable String category,
             @Nullable String dshVersion,
+            List<String> dshVersions,
+            boolean launcherRestricted,
             @Nullable String profileName,
             @Nullable String updatedAt,
             @Nullable Integer bundleCount,
@@ -290,6 +296,8 @@ public final class DshPackMarket {
                 string(object, "author"),
                 string(object, "category"),
                 string(object, "dshVersion"),
+                strings(object, "dshVersions"),
+                bool(object, "launcherRestricted"),
                 string(object, "profileName"),
                 string(object, "updatedAt"),
                 integer(object, "bundleCount"),
@@ -378,6 +386,43 @@ public final class DshPackMarket {
             return null;
         }
         return element.getAsInt();
+    }
+
+    /// Reads an array of strings.
+    ///
+    /// The index is allowed to flatten the author's `dshVersions` set and may also leave it to the
+    /// lazy manifest, so an entry without it is an ordinary entry and not a broken one. Entries that
+    /// are not strings are dropped rather than shown: this list is only ever displayed.
+    ///
+    /// @param object the entry
+    /// @param key    the field's name
+    /// @return the strings, in the order written
+    private static List<String> strings(JsonObject object, String key) {
+        JsonElement element = object.get(key);
+        if (element == null || !element.isJsonArray()) {
+            return List.of();
+        }
+        List<String> values = new java.util.ArrayList<>();
+        for (JsonElement item : element.getAsJsonArray()) {
+            if (item.isJsonPrimitive()) {
+                String text = item.getAsString().trim();
+                if (!text.isEmpty() && !values.contains(text)) {
+                    values.add(text);
+                }
+            }
+        }
+        return List.copyOf(values);
+    }
+
+    /// Reads a boolean field.
+    ///
+    /// @param object the entry
+    /// @param key    the field's name
+    /// @return the value, or `false` when it is absent or not a boolean
+    private static boolean bool(JsonObject object, String key) {
+        JsonElement element = object.get(key);
+        return element != null && element.isJsonPrimitive()
+                && element.getAsJsonPrimitive().isBoolean() && element.getAsBoolean();
     }
 
     /// Returns the address of the index to read.

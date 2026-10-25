@@ -4,6 +4,7 @@ import type {
   CreateInstanceBody,
   DeveloperStatus,
   DoctorReport,
+  ExportChoices,
   ExportRecord,
   Health,
   Instance,
@@ -23,6 +24,8 @@ import type {
   Task,
   TlsSettings,
   TlsUploadResult,
+  TuiPluginItem,
+  TuiPluginState,
   VersionInfo,
   WorkspaceInfo,
   ZcodeBuildStatus,
@@ -251,6 +254,27 @@ export const api = {
     return request<{ taskId: string }>(`/api/instances/${id}/plugins/local`, { method: "POST", body: fd });
   },
 
+  // 面板精选的 TUI 终端插件清单（全局常量），以及每个实例上它们的安装状态。
+  // 安装/卸载走 `/api/instances/{id}/tui-plugins/*`：TUI 插件是 app 插件，必须装进它
+  // 自己的 profile —— 装进实例的 web profile 会和 dsh-web-app 撞在同一份 argv 上，实例就起不来了。
+  // profile 由服务端按清单决定，请求里只说包名。
+  tuiPlugins: () => request<{ plugins: TuiPluginItem[] }>("/api/dsh/tui-plugins"),
+
+  instanceTuiPlugins: (id: string) =>
+    request<{ plugins: TuiPluginState[] }>(`/api/instances/${id}/tui-plugins`),
+
+  installTuiPlugin: (id: string, packageName: string) =>
+    request<{ taskId: string }>(
+      `/api/instances/${id}/tui-plugins/install`,
+      jsonInit("POST", { package: packageName }),
+    ),
+
+  removeTuiPlugin: (id: string, packageName: string) =>
+    request<{ taskId: string }>(
+      `/api/instances/${id}/tui-plugins/remove`,
+      jsonInit("POST", { package: packageName }),
+    ),
+
   approveTask: (taskId: string, allow: boolean) =>
     request<unknown>(`/api/tasks/${taskId}/approve`, jsonInit("POST", { allow })),
 
@@ -337,8 +361,20 @@ export const api = {
 
   // ---------- Phase 4：导出 ----------
 
-  exportInstance: (id: string, body: { name?: string; includeSessions?: boolean }) =>
-    request<{ taskId: string }>(`/api/instances/${id}/export`, jsonInit("POST", body)),
+  /** 导出表单的可选项：能随包的 home 内容 + 本机已装的 dsh 版本（从不猜，由后端列） */
+  exportChoices: (id: string) => request<ExportChoices>(`/api/instances/${id}/export`),
+
+  exportInstance: (
+    id: string,
+    body: {
+      name?: string;
+      includeSessions?: boolean;
+      /** 白名单：随包分发的 home 相对路径，缺省/空即不分发任何 home 内容 */
+      home?: string[];
+      /** 写进 manifest 的兼容集，实例自身版本由后端固定排在首位 */
+      dshVersions?: string[];
+    },
+  ) => request<{ taskId: string }>(`/api/instances/${id}/export`, jsonInit("POST", body)),
 
   exports: () => request<{ exports: ExportRecord[] }>("/api/exports"),
 

@@ -21,8 +21,10 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpServer;
+import org.jackhuang.hmcl.dsh.DshInstance;
 import org.jackhuang.hmcl.dsh.DshInstanceManager;
 import org.jackhuang.hmcl.dsh.DshProcessManager;
+import org.jackhuang.hmcl.dsh.DshTuiPlugins;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -45,6 +47,7 @@ import java.util.zip.GZIPOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -361,6 +364,146 @@ class PluginApiTest {
             Path workspace = DshInstanceManager.find(id).homeDirectory()
                     .resolve("profiles").resolve("web").resolve("pnpm-workspace.yaml");
             assertTrue(Files.readString(workspace).contains("node-pty: false"));
+        }
+    }
+
+    // -------------------------------------------------------- terminal plugins --
+
+    /// The curated terminal-interface list answers without a network — it is a
+    /// constant, because it has to explain itself offline — and every row carries
+    /// what the page must show next to the button: the pinned version, the licence,
+    /// the repository, the **profile it must go into**, and whether it has an
+    /// executable of its own.
+    @Test
+    void terminalPluginsAreListedWithTheirPinnedVersionAndProfile() throws Exception {
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            HttpResponse<String> response = get(client, base + "/api/dsh/tui-plugins");
+            assertEquals(200, response.statusCode(), response.body());
+            JsonArray plugins = json(response).getAsJsonArray("plugins");
+            assertEquals(DshTuiPlugins.ENTRIES.size(), plugins.size(), "the list is the curated one");
+            for (int i = 0; i < plugins.size(); i++) {
+                JsonObject entry = plugins.get(i).getAsJsonObject();
+                DshTuiPlugins.Entry known = DshTuiPlugins.ENTRIES.get(i);
+                assertEquals(known.packageName(), entry.get("packageName").getAsString());
+                assertEquals(known.spec(), entry.get("spec").getAsString(),
+                        "the panel installs a pinned version, and says which");
+                assertEquals(known.version(), entry.get("version").getAsString());
+                assertEquals(known.license(), entry.get("license").getAsString());
+                assertTrue(entry.get("repository").getAsString().startsWith("https://github.com/"),
+                        "the page links to where the plugin comes from: " + entry);
+                assertFalse(entry.get("description").getAsString().isBlank());
+                assertEquals(known.profile(), entry.get("profile").getAsString(),
+                        "the profile is where the package goes, and it is not the instance's");
+                assertNotEquals("web", entry.get("profile").getAsString(),
+                        "a terminal plugin never shares the web profile with the web app");
+            }
+
+            JsonObject recommended = plugins.get(0).getAsJsonObject();
+            assertEquals("@deepseek-harness-tui/dsh-tui", recommended.get("packageName").getAsString(),
+                    "the one developed against the harness's own releases comes first");
+            assertEquals("dsh-tui", recommended.get("bin").getAsString());
+            assertEquals("dsh-tui", recommended.get("profile").getAsString());
+            // The one that needs Bun to run is no longer offered.
+            for (int i = 0; i < plugins.size(); i++) {
+                assertNotEquals("@ruhooai/dsh-tui", plugins.get(i).getAsJsonObject().get("packageName").getAsString());
+            }
+
+            // The prefix is mapped, not the single path: anything else under it is a 404.
+            assertEquals(404, get(client, base + "/api/dsh/unknown").statusCode());
+        }
+    }
+
+    /// The per-instance half, end to end: a terminal plugin really is installed into the
+/// profile the catalogue names — not the instance's web profile — its state is read back
+/// from that profile, and the ordinary install route refuses the combination that would
+/// stop the instance from starting.
+    @Test
+    void terminalPluginsInstallIntoTheirOwnProfileAndNeverIntoWeb() throws Exception {
+        assumePluginTooling();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+            String id = createInstance(client, base, "tui");
+            DshInstance instance = DshInstanceManager.find(id);
+
+            HttpResponse<String> state = get(client, base + "/api/instances/" + id + "/tui-plugins");
+            assertEquals(200, state.statusCode(), state.body());
+            JsonArray rows = json(state).getAsJsonArray("plugins");
+            assertEquals(DshTuiPlugins.ENTRIES.size(), rows.size(),
+                    "one row per candidate: what is not installed is what the page offers");
+            for (int i = 0; i < rows.size(); i++) {
+                JsonObject row = rows.get(i).getAsJsonObject();
+                assertEquals(DshTuiPlugins.ENTRIES.get(i).packageName(), row.get("packageName").getAsString());
+                assertEquals(DshTuiPlugins.ENTRIES.get(i).profile(), row.get("profile").getAsString());
+                assertFalse(row.get("installed").getAsBoolean(), "a fresh instance has none: " + row);
+            }
+
+            // A package that is not one of these is refused, and the refusal names the ones
+            // that are — the route cannot be talked into an arbitrary specification.
+            HttpResponse<String> unknown = post(client, base + "/api/instances/" + id + "/tui-plugins/install",
+                    "{\"package\":\"@someone/else\"}");
+            assertEquals(400, unknown.statusCode(), unknown.body());
+            assertTrue(json(unknown).get("error").getAsString().contains("@xmoon76/dsh-pi-tui"),
+                    json(unknown).toString());
+
+            NodeDshStub.installPluginCapable(instance, false);
+
+            // Installing goes through `dsh plugin --profile tui add <pinned spec>`.
+            HttpResponse<String> install = post(client, base + "/api/instances/" + id + "/tui-plugins/install",
+                    "{\"package\":\"@tomowang/dsh-tui\"}");
+            assertEquals(202, install.statusCode(), install.body());
+            JsonObject installed = awaitTask(client, base, json(install).get("taskId").getAsString());
+            assertEquals("done", installed.get("state").getAsString(), installed.toString());
+
+            // It landed in `tui`, and the version that landed is the pinned one.
+            assertTrue(Files.isRegularFile(instance.homeDirectory()
+                            .resolve("profiles/tui/package.json")),
+                    "the plugin's own profile is what was written");
+            JsonObject row = null;
+            JsonArray afterInstall = json(get(client, base + "/api/instances/" + id + "/tui-plugins"))
+                    .getAsJsonArray("plugins");
+            for (int i = 0; i < afterInstall.size(); i++) {
+                JsonObject candidate = afterInstall.get(i).getAsJsonObject();
+                if ("@tomowang/dsh-tui".equals(candidate.get("packageName").getAsString())) {
+                    row = candidate;
+                }
+            }
+            assertNotNull(row, "the installed one is a row: " + afterInstall);
+            assertTrue(row.get("installed").getAsBoolean(), row.toString());
+            assertEquals("0.10.2", row.get("installedVersion").getAsString(),
+                    "the catalogue's pinned version is what was installed");
+
+            // And the instance's own profile — the one the web app boots — is untouched,
+            // which is the whole point: two app plugins in one profile do not start.
+            assertEquals(0, json(get(client, base + "/api/instances/" + id + "/plugins"))
+                    .getAsJsonArray("plugins").size(), "a terminal plugin is not a web-profile plugin");
+
+            // The ordinary route targets the instance's profile, so it must refuse the
+            // combination instead of bricking the instance.
+            HttpResponse<String> intoWeb = post(client, base + "/api/instances/" + id + "/plugins/install",
+                    "{\"specs\":[\"@xmoon76/dsh-pi-tui@0.5.3\"]}");
+            assertEquals(202, intoWeb.statusCode(), intoWeb.body());
+            JsonObject refused = awaitTask(client, base, json(intoWeb).get("taskId").getAsString());
+            assertEquals("failed", refused.get("state").getAsString(), refused.toString());
+            assertTrue(refused.get("error").getAsString().contains("不能装进 web profile"), refused.toString());
+            assertFalse(Files.exists(instance.homeDirectory().resolve("profiles/web/package.json")),
+                    "the refusal happens before any command runs, so the web profile was not touched");
+
+            // Taking it out again is never refused, and the state goes back.
+            HttpResponse<String> remove = post(client, base + "/api/instances/" + id + "/tui-plugins/remove",
+                    "{\"package\":\"@tomowang/dsh-tui\"}");
+            assertEquals(202, remove.statusCode(), remove.body());
+            JsonObject removed = awaitTask(client, base, json(remove).get("taskId").getAsString());
+            assertEquals("done", removed.get("state").getAsString(), removed.toString());
+            JsonArray afterRemove = json(get(client, base + "/api/instances/" + id + "/tui-plugins"))
+                    .getAsJsonArray("plugins");
+            for (int i = 0; i < afterRemove.size(); i++) {
+                assertFalse(afterRemove.get(i).getAsJsonObject().get("installed").getAsBoolean(),
+                        "the removal is what the state now says: " + afterRemove);
+            }
         }
     }
 

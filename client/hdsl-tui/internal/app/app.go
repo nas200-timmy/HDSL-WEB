@@ -295,11 +295,22 @@ func (a *App) menu(page menuPage) (int, bool) {
 		}
 		a.draw(page.Title, body, hint)
 
-		switch event := <-a.screen.Events(); event.Key {
+		event := <-a.screen.Events()
+		switch event.Key {
 		case ui.KeyUp:
 			list.Move(-1)
 		case ui.KeyDown:
 			list.Move(1)
+		case ui.KeyRune:
+			// The help promises "↑/↓ 或 j/k", so the vim keys move the cursor
+			// too. Only a menu moves on a letter: the prompt screens below feed
+			// the same events to the input field, where j and k are text.
+			switch event.Rune {
+			case 'j':
+				list.Move(1)
+			case 'k':
+				list.Move(-1)
+			}
 		case ui.KeyPgUp:
 			list.Move(-rows)
 		case ui.KeyPgDn:
@@ -806,14 +817,23 @@ func (a *App) elevate(ctx context.Context) bool {
 	return true
 }
 
+// developerPasswordNotSet is the one sentence for both ways this refusal
+// arrives: the status answer (no developer password has ever been set) and the
+// panel's own 409. The client cannot set one for the user.
+const developerPasswordNotSet = "还没设置开发者密码：请在面板「设置 → 开发者」里设置后重试。"
+
 // explain turns a panel error into a sentence a user can act on.
 func explain(err error) string {
 	if err == nil {
 		return ""
 	}
+	var api *panel.APIError
+	hasAPIError := errors.As(err, &api)
 	switch panel.Code(err) {
 	case "developer_elevation_required":
 		return "需要开发者密码：在「主菜单 → 开发者提权」里输入一次。"
+	case "developer_password_not_set":
+		return developerPasswordNotSet
 	case "web_shell_disabled":
 		return "面板关闭了 Web Shell（设置 → 开发者 → Web Shell 总开关）。"
 	case "insecure_transport", "tls_required":
@@ -821,10 +841,19 @@ func explain(err error) string {
 	case "brand_has_no_tui":
 		return "这个品牌没有终端可以附着。"
 	case "terminal_failed":
-		return "面板启动终端失败：请查看面板日志。"
+		// The panel puts the actionable part after the code — which profile
+		// cannot hold the plugin, which kernel is missing — so it is kept
+		// instead of being replaced by "check the panel log".
+		reason := ""
+		if hasAPIError {
+			reason = strings.TrimSpace(strings.TrimPrefix(api.Message, "terminal_failed:"))
+		}
+		if reason == "" {
+			return "面板启动终端失败：请查看面板日志。"
+		}
+		return "面板启动终端失败：" + reason
 	}
-	var api *panel.APIError
-	if errors.As(err, &api) && api.Message != "" {
+	if hasAPIError && api.Message != "" {
 		return api.Message
 	}
 	var transport *panel.TransportError

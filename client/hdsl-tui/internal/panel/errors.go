@@ -106,7 +106,8 @@ const (
 	// KindTransport is a failure to reach or keep talking to the panel (exit 3).
 	KindTransport
 	// KindPolicy is a refusal that no retry fixes: the panel is not on HTTPS,
-	// the web shell is off, the terminal is a Windows desktop console (exit 4).
+	// the web shell is off, the terminal cannot start at all, or the only
+	// console is the panel machine's own desktop (exit 4).
 	KindPolicy
 )
 
@@ -128,6 +129,11 @@ var policyCodes = map[string]bool{
 	"web_shell_disabled":    true,
 	"confirmation_required": true,
 	"brand_has_no_tui":      true,
+	// The panel refused to start the terminal (no PTY, a profile that cannot
+	// hold the plugin, a missing kernel). It is the panel's own reason that
+	// reaches the user, and no retry fixes it — the same bucket as a missing
+	// plugin, not a transport failure.
+	"terminal_failed": true,
 }
 
 // Classify buckets a failure for exit-code and wording purposes.

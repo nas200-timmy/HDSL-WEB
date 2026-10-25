@@ -131,3 +131,45 @@ func TestParseArgsAcceptsTheDocumentedForm(t *testing.T) {
 		t.Errorf("base = %q, the trailing slash should be trimmed", base.String())
 	}
 }
+
+// The flag package stops parsing at the first positional argument, so
+// `hdsl-tui URL --insecure` used to reach the address check as two positionals
+// and was refused with "只需要一个面板地址，收到 2 个" — a command that looks
+// right and one that is wrong, indistinguishable. Both orders parse to the same
+// options now. (A second address is still an error; TestUsageErrors pins that.)
+func TestParseArgsAcceptsOptionsOnEitherSideOfTheAddress(t *testing.T) {
+	address := "https://panel.test:8443/"
+	flags := []string{"--instance", "dsh-1", "--brand", "kimi", "--resume", "s-9",
+		"--user", "admin", "--ca", "/tmp/ca.pem", "--insecure", "--verbose"}
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"options before the address", append(append([]string{}, flags...), address)},
+		{"options after the address", append([]string{address}, flags...)},
+		{"options on both sides", append(
+			append([]string{"--brand", "kimi", address}, "--insecure", "--instance", "dsh-1"),
+			"--verbose", "--resume", "s-9", "--user", "admin", "--ca", "/tmp/ca.pem")},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			opts, base, err := parseArgs(testCase.args)
+			if err != nil {
+				t.Fatalf("parseArgs(%v): %v", testCase.args, err)
+			}
+			if base == nil || base.String() != "https://panel.test:8443" {
+				t.Fatalf("base = %v, want the one address", base)
+			}
+			if opts.instance != "dsh-1" || opts.brand != "kimi" || opts.resume != "s-9" ||
+				opts.user != "admin" || opts.ca != "/tmp/ca.pem" || !opts.insecure || !opts.verbose {
+				t.Errorf("options = %+v", opts)
+			}
+		})
+	}
+}
+
+func TestParseArgsRefusesATypoAfterTheAddress(t *testing.T) {
+	if _, _, err := parseArgs([]string{"https://panel.test", "--instnace", "dsh-1"}); err == nil {
+		t.Error("an unknown option after the address was accepted")
+	}
+}

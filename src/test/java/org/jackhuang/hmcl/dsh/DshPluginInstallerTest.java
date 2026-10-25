@@ -18,10 +18,16 @@
 package org.jackhuang.hmcl.dsh;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// Verifies what the launcher reads out of the package manager's output.
 ///
@@ -65,5 +71,26 @@ class DshPluginInstallerTest {
                         "allowBuilds:",
                         "  node-pty: set this to true or false")),
                 "the placeholder pnpm writes itself is a different flow, and is not read as one of these");
+    }
+
+    /// The profile a terminal plugin may not go into is refused by the installer itself,
+    /// so every route that installs a package is covered by one rule — and the refusal
+    /// comes before the runtime is resolved, so being told "not into the web profile" does
+    /// not depend on node and pnpm being there.
+    @Test
+    void aTerminalPluginCannotBeInstalledIntoTheWebProfile(@TempDir Path home) {
+        DshInstance instance = new DshInstance("installer-test", "0.1.7-rc.1", "web",
+                home.resolve("workspace").toString(), null, DshHomeMode.CUSTOM, home.toString(),
+                List.of(), Map.of(), null, null, null, 0, 0L);
+
+        DshException refused = assertThrows(DshException.class, () -> DshPluginInstaller.installSpecs(
+                instance, "web", List.of("@xmoon76/dsh-pi-tui@0.5.3"), null));
+        assertTrue(refused.getMessage().contains("不能装进 web profile"), refused.getMessage());
+
+        // The plugin's own profile is not refused here; that it fails later (a runtime, or
+        // an instance with no harness of its own) is what says the guard did not fire.
+        DshException later = assertThrows(DshException.class, () -> DshPluginInstaller.installSpecs(
+                instance, "pi-tui", List.of("@xmoon76/dsh-pi-tui@0.5.3"), null));
+        assertFalse(later.getMessage().contains("不能装进"), later.getMessage());
     }
 }

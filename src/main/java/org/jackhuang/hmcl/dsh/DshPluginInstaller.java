@@ -78,8 +78,35 @@ public final class DshPluginInstaller {
     ///                       is missing, or an install fails
     public static void installSpecs(DshInstance instance, List<String> specs,
                                     @Nullable Consumer<String> onLine) throws DshException {
+        installSpecs(instance, instance.profile(), specs, onLine);
+    }
+
+    /// Installs explicit package specs into a named profile.
+    ///
+    /// The profile is a parameter because not every plugin belongs in the instance's
+    /// own. A terminal interface is an *app* plugin, exactly like `dsh-web-app`, and two
+    /// app plugins in one profile each parse the whole argv with their own grammar while
+    /// upstream arbitrates nothing between them — so it is installed into the profile its
+    /// authors document (`tui`, `dsh-tui`, `pi-tui`) and started there. Everything else
+    /// about the run is the same, which is why this is the same method: the profile is
+    /// the only thing that differs.
+    ///
+    /// The refusal comes **before** the runtime is resolved, so being told "not into the
+    /// web profile" does not depend on node and pnpm being present.
+    ///
+    /// @param instance the instance whose profile is modified
+    /// @param profile  the profile inside its `DSH_HOME` to modify
+    /// @param specs    the package specs to install
+    /// @param onLine   receives every output line, or `null`
+    /// @throws DshException when a spec may not go into that profile, the runtime or
+    ///                       version is unavailable, `pnpm` is missing, or a run fails
+    public static void installSpecs(DshInstance instance, String profile, List<String> specs,
+                                    @Nullable Consumer<String> onLine) throws DshException {
         if (specs.isEmpty()) {
             return;
+        }
+        for (String spec : specs) {
+            DshTuiPlugins.refuseAppProfile(spec, profile);
         }
 
         DshNodeRuntime runtime = DshLauncher.resolveRuntime(instance);
@@ -90,7 +117,7 @@ public final class DshPluginInstaller {
         Path home = instance.homeDirectory();
         for (String spec : specs) {
             report(onLine, "Installing " + spec + " ...");
-            runPluginCommand(instance, runtime, home, List.of("add", spec), onLine);
+            runPluginCommand(instance, runtime, home, profile, List.of("add", spec), onLine);
             report(onLine, "Installed " + spec);
         }
     }
@@ -108,11 +135,22 @@ public final class DshPluginInstaller {
     /// @param onLine   receives every output line, or `null`
     /// @throws DshException when pnpm is missing or the resolve fails
     public static void resolve(DshInstance instance, @Nullable Consumer<String> onLine) throws DshException {
+        resolve(instance, instance.profile(), onLine);
+    }
+
+    /// Resolves a named profile from the manifest it holds.
+    ///
+    /// @param instance the instance whose profile is resolved
+    /// @param profile  the profile inside its `DSH_HOME`
+    /// @param onLine   receives every output line, or `null`
+    /// @throws DshException when pnpm is missing or the resolve fails
+    public static void resolve(DshInstance instance, String profile, @Nullable Consumer<String> onLine)
+            throws DshException {
         DshNodeRuntime runtime = DshLauncher.resolveRuntime(instance);
         if (!runtime.canManagePlugins()) {
             throw new DshException("pnpm was not found on PATH; installing plugins requires it");
         }
-        runPluginCommand(instance, runtime, instance.homeDirectory(), List.of("install"), onLine);
+        runPluginCommand(instance, runtime, instance.homeDirectory(), profile, List.of("install"), onLine);
     }
 
     /// Removes a package from an instance's profile.
@@ -142,6 +180,23 @@ public final class DshPluginInstaller {
     /// @throws DshException when the removal fails
     public static void removeSpecs(DshInstance instance, List<String> specs,
                                    @Nullable Consumer<String> onLine) throws DshException {
+        removeSpecs(instance, instance.profile(), specs, onLine);
+    }
+
+    /// Removes several packages from a named profile in one run.
+    ///
+    /// Removal is never refused for a plugin that should not have been there: a profile
+    /// holding a terminal plugin *and* an app is one that does not boot, and taking the
+    /// plugin out is the repair. See [DshTuiPlugins#refuseAppProfile] for the install
+    /// half of that pair.
+    ///
+    /// @param instance the instance whose profile is modified
+    /// @param profile  the profile inside its `DSH_HOME`
+    /// @param specs    the package specs to remove
+    /// @param onLine   receives every output line, or `null`
+    /// @throws DshException when the removal fails
+    public static void removeSpecs(DshInstance instance, String profile, List<String> specs,
+                                   @Nullable Consumer<String> onLine) throws DshException {
         if (specs.isEmpty()) {
             return;
         }
@@ -155,7 +210,7 @@ public final class DshPluginInstaller {
         List<String> command = new ArrayList<>();
         command.add("remove");
         command.addAll(specs);
-        runPluginCommand(instance, runtime, instance.homeDirectory(), command, onLine);
+        runPluginCommand(instance, runtime, instance.homeDirectory(), profile, command, onLine);
         report(onLine, "Removed " + specs.size() + " package(s)");
     }
 
@@ -246,6 +301,7 @@ public final class DshPluginInstaller {
     private static void runPluginCommand(DshInstance instance,
                                          DshNodeRuntime runtime,
                                          Path home,
+                                         String profile,
                                          List<String> args,
                                          @Nullable Consumer<String> onLine) throws DshException {
         Path script = instance.dshEntryPoint();
@@ -262,7 +318,7 @@ public final class DshPluginInstaller {
         command.add(script.toString());
         command.add("plugin");
         command.add("--profile");
-        command.add(instance.profile());
+        command.add(profile);
         command.addAll(args);
 
         // DSH_* cannot come from a .env file — upstream rejects those names there
@@ -286,12 +342,12 @@ public final class DshPluginInstaller {
                 // instead, because that entry has to carry the resolved address. Recording what it
                 // named as a question puts both onto the same path — see DshBuildScripts#propose.
                 List<String> named = gitBuildKeys(result.output());
-                boolean placeholder = explainIgnoredBuilds(result.output(), home, instance.profile()) != null;
+                boolean placeholder = explainIgnoredBuilds(result.output(), home, profile) != null;
                 if (!named.isEmpty() && DshBuildScriptPolicy.of(instance) == DshBuildScriptPolicy.NEVER) {
                     // A repository-hosted package is built **by** being installed — there is no
                     // published build to fall back on — so refusing the build refuses the
                     // installation. Saying so beats a retry that cannot succeed.
-                    throw new DshException(explainGitBuild(named, home, instance.profile()));
+                    throw new DshException(explainGitBuild(named, home, profile));
                 }
                 if (!named.isEmpty()) {
                     DshBuildScripts.propose(instance, named);
@@ -323,9 +379,9 @@ public final class DshPluginInstaller {
                 }
             }
             if (exitCode != 0) {
-                String explanation = explainIgnoredBuilds(result.output(), home, instance.profile());
+                String explanation = explainIgnoredBuilds(result.output(), home, profile);
                 if (explanation == null) {
-                    explanation = explainGitBuild(gitBuildKeys(result.output()), home, instance.profile());
+                    explanation = explainGitBuild(gitBuildKeys(result.output()), home, profile);
                 }
                 if (explanation != null) {
                     throw new DshException(explanation);

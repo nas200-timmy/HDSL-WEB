@@ -17,68 +17,307 @@
  */
 package org.jackhuang.hmcl.web.terminal;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.jackhuang.hmcl.dsh.DshException;
 import org.jackhuang.hmcl.dsh.DshInstance;
 import org.jackhuang.hmcl.dsh.DshLauncher;
+import org.jackhuang.hmcl.dsh.DshNodeRuntime;
+import org.jackhuang.hmcl.dsh.DshPluginInstaller;
+import org.jackhuang.hmcl.dsh.DshTuiPlugins;
+import org.jackhuang.hmcl.util.platform.Executables;
 import org.jackhuang.hmcl.web.instance.InstanceRuntime;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/// dsh's interactive TUI: the web launch plan with `tui` instead of a server
-/// surface.
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
+
+/// dsh's terminal surface, which is a plugin on a profile of its own.
 ///
-/// [DshLauncher#plan] is the same spec a browser launch uses — the account
-/// route, the provider key in the environment, the instance's own Node runtime
-/// ahead on `PATH`, and `DSH_HOME`. The plan's command is the **web** launch
-/// (`node <bin.js> --profile web …`); appending `tui` to that would keep the
-/// web profile and pass `tui` as an app argument. The TUI is
-/// `dsh tui [--resume <id>]`, i.e. the interpreter and entry of the plan with
-/// the `tui` subcommand in place of the web flags.
+/// There is no `dsh-tui` subcommand and no TUI from the harness itself — [DshSurface]
+/// enumerates WEB, HEADLESS, ACP and SDK. The terminal is installed like any other
+/// plugin and started by booting **its own profile** (`dsh --profile tui`, which upstream
+/// also accepts as the bare `dsh tui`: a bare word is expanded into `--profile <word>`).
+/// A terminal profile is not one of the harness's templates, so it exists only once a
+/// plugin has been installed into it — which is exactly what the panel's install route
+/// does, and why the profile comes from the catalogue rather than from the instance.
+///
+/// **The instance's web profile is never used here.** A terminal interface and
+/// `dsh-web-app` are both *app* plugins: each parses the same argv with its own grammar
+/// and upstream arbitrates nothing between them, so the pair stops the instance from
+/// starting at all (the community's report is `error: unknown option '--no-open'`). This
+/// class therefore asks [DshTuiPlugins] which profile the installed plugin belongs to,
+/// builds the launch plan for that profile, and refuses a plan that would boot the web
+/// app — a user's own `--profile web` in the instance's arguments included.
+///
+/// Two command shapes come out of that:
+///
+/// - a plugin that ships its own executable is started through it (`node
+///   <profile>/node_modules/<package>/<its own bin>`), the way [KimiTui] starts an agent:
+///   a package manager's `.bin` entry is a shell shim and starting through it would make
+///   `/bin/sh` rather than the terminal the root process;
+/// - a pure bundle has no entry of its own, so its profile is booted — and so is a
+///   bin-shipping plugin whose file is not there, because that path always works.
 @NotNullByDefault
 public final class DshTui {
 
     private DshTui() {
     }
 
-    /// The TUI argv from a web launch plan: interpreter + entry, then `tui`
-    /// (and `--resume`). The plan's web flags are deliberately dropped — they
-    /// belong to the web profile, not to the TUI.
-    ///
-    /// Package-private for the test that pins the shape.
-    static List<String> tuiCommand(List<String> planCommand, @Nullable String resumeSession)
-            throws DshException {
-        if (planCommand.size() < 2) {
-            throw new DshException("unexpected dsh launch plan: " + planCommand);
-        }
-        List<String> command = new ArrayList<>(planCommand.subList(0, 2));
-        command.add("tui");
-        if (resumeSession != null && !resumeSession.isBlank()) {
-            command.add("--resume");
-            command.add(resumeSession);
-        }
-        return List.copyOf(command);
-    }
-
     /// Builds the terminal target for one dsh instance.
     ///
     /// @param instance      the instance
     /// @param resumeSession a session id to resume, or `null`
-    /// @throws DshException when the instance is not installed or its runtime
-    ///                      is missing
+    /// @throws DshException when no terminal plugin is installed, the instance is not
+    ///                      installed, or its runtime is missing
     public static TerminalTarget target(DshInstance instance, @Nullable String resumeSession)
             throws DshException {
-        DshLauncher.LaunchPlan plan = DshLauncher.plan(instance, InstanceRuntime.accountOf(instance));
-        List<String> command = tuiCommand(plan.command(), resumeSession);
+        // Which plugin comes first, and deliberately: building a launch plan writes to the
+        // instance's home — the account contract, the route left by an earlier launch, the
+        // default model — so an instance that has no terminal plugin must be refused before
+        // all of that happens rather than after.
+        DshTuiPlugins.Entry plugin = terminalPlugin(instance);
+
+        // The plan is built for the plugin's profile, not the instance's: `dsh` picks the
+        // profile up from the argv, and the argv is what decides which app boots. The
+        // instance itself is otherwise the same one — same home, same workspace, same
+        // account — which is why this is the instance with a different profile rather than
+        // a hand-built command line.
+        DshInstance onItsProfile = instance.withProfile(plugin.profile());
+        DshLauncher.LaunchPlan plan =
+                DshLauncher.plan(onItsProfile, InstanceRuntime.accountOf(instance));
+        refuseWebProfile(plannedProfile(plan.command()));
+
+        List<String> command = null;
+        if (plugin.hasExecutable()) {
+            Path entry = entryPoint(onItsProfile, plugin);
+            if (entry != null) {
+                command = executableCommand(DshLauncher.resolveRuntime(instance), entry, resumeSession);
+            }
+        }
+        if (command == null) {
+            // No bin, or a bin this profile does not hold: booting the profile is what the
+            // plugin's own documentation shows, and it is the one path that cannot be
+            // wrong about which files a package shipped.
+            command = cliCommand(plan.command(), resumeSession);
+        }
+
         Map<String, String> environment = new HashMap<>(System.getenv());
         environment.putAll(plan.environment());
         environment.put("TERM", "xterm-256color");
         environment.put("COLORTERM", "truecolor");
         return new TerminalTarget("dsh", instance.id(), command, plan.workingDirectory(),
                 Map.copyOf(environment));
+    }
+
+    /// The terminal plugin an instance has installed, in its own profile.
+    ///
+    /// The first entry of [DshTuiPlugins] that its profile's manifest declares, so the
+    /// order of the list is the preference. Each entry is looked for in **its own**
+    /// profile: three of the four use three different profiles, and one installed into
+    /// `tui` is absent from the instance's `web` profile by design.
+    ///
+    /// Public because the REST handler asks it before it opens a terminal: opening takes
+    /// the instance over — the web runtime is stopped first — so an instance with nothing
+    /// to run has to be refused before that happens, not after.
+    ///
+    /// @param instance the instance
+    /// @return the entry to start
+    /// @throws DshException when none is installed
+    public static DshTuiPlugins.Entry terminalPlugin(DshInstance instance) throws DshException {
+        for (DshTuiPlugins.Entry entry : DshTuiPlugins.ENTRIES) {
+            Map<String, String> dependencies =
+                    DshPluginInstaller.readDependencies(instance.homeDirectory(), entry.profile());
+            if (DshTuiPlugins.isInstalled(entry, dependencies.keySet())) {
+                return entry;
+            }
+        }
+        throw new DshException("未安装终端界面插件，请先到实例的「安装」页安装一个 TUI 插件（推荐 "
+                + DshTuiPlugins.ENTRIES.get(0).packageName() + "）。");
+    }
+
+    /// Refuses a launch that would boot the harness's own web app.
+    ///
+    /// The catalogue never names `web` as a terminal plugin's profile, so this is the
+    /// second half of the same rule: an instance whose own launch arguments name
+    /// `--profile web` would otherwise boot the web app with a terminal plugin's files in
+    /// the same profile, which is the combination that does not start. Asking the argv
+    /// rather than re-deriving it is what keeps the answer true to the plan that was
+    /// actually built — `dsh` takes the profile from the command line.
+    ///
+    /// @param profile the profile the plan boots, or `null` when it names none
+    /// @throws DshException when that profile is the web one
+    static void refuseWebProfile(@Nullable String profile) throws DshException {
+        if (!DshTuiPlugins.WEB_PROFILE.equalsIgnoreCase(profile == null ? "" : profile)) {
+            return;
+        }
+        throw new DshException("这个实例的启动参数把 profile 指回了 web（`--profile web`）："
+                + "终端插件与 dsh-web-app 都是 app 插件，各自按自己的语法解析同一份 argv，"
+                + "同 profile 装在一起会让实例起不来。请去掉该参数，让终端跑在插件自己的 profile 上。");
+    }
+
+    /// The profile a launch command boots.
+    ///
+    /// @param command the argv
+    /// @return the profile named after `--profile`, or `null` when none is
+    static @Nullable String plannedProfile(List<String> command) {
+        for (int i = 0; i + 1 < command.size(); i++) {
+            if ("--profile".equals(command.get(i))) {
+                return command.get(i + 1);
+            }
+        }
+        return null;
+    }
+
+    /// The directory a profile's packages live in.
+    ///
+    /// `dsh plugin` forwards its arguments to pnpm inside this directory, so this is
+    /// where a plugin's files and its `.bin` links are.
+    ///
+    /// @param instance the instance
+    /// @param profile  the profile
+    /// @return `<DSH_HOME>/profiles/<profile>/node_modules`
+    /// @throws DshException when the instance cannot name its home
+    static Path profileNodeModules(DshInstance instance, String profile) throws DshException {
+        return instance.homeDirectory().resolve("profiles").resolve(profile).resolve("node_modules");
+    }
+
+    /// Finds the executable an installed plugin ships.
+    ///
+    /// @param instance the instance
+    /// @param plugin   the plugin
+    /// @return the file to start, or `null` when the profile holds none
+    /// @throws DshException when the instance cannot name its home
+    static @Nullable Path entryPoint(DshInstance instance, DshTuiPlugins.Entry plugin) throws DshException {
+        return entryPoint(profileNodeModules(instance, plugin.profile()),
+                plugin.packageName(), plugin.bin());
+    }
+
+    /// Finds a package's executable under one `node_modules` directory.
+    ///
+    /// The package's own manifest is asked first: it names the script the package
+    /// intends to be started, which is a file Node can run as it stands. Only then is
+    /// the `.bin` entry considered, and only when it *is* that script — pnpm writes a
+    /// POSIX shell shim there and npm a `.cmd` on Windows, and neither belongs as the
+    /// root process of a terminal ([KimiTui] makes the same refusal).
+    ///
+    /// @param nodeModules the `node_modules` directory
+    /// @param packageName the npm package name
+    /// @param bin         the executable's name
+    /// @return the script to run, or `null` when it is not there
+    static @Nullable Path entryPoint(Path nodeModules, String packageName, String bin) {
+        if (bin == null || bin.isBlank()) {
+            return null;
+        }
+        Path declared = declaredBin(nodeModules.resolve(packageName), bin);
+        if (declared != null) {
+            return declared;
+        }
+        Path shim = Executables.resolve(nodeModules.resolve(".bin").resolve(bin).toString()).orElse(null);
+        return shim != null && isScript(shim) ? shim : null;
+    }
+
+    /// Reads the file a package's own `package.json` names as its executable.
+    ///
+    /// @param packageDirectory the installed package directory
+    /// @param bin              the executable's name
+    /// @return the file, or `null` when the manifest names none or it is not there
+    static @Nullable Path declaredBin(Path packageDirectory, String bin) {
+        Path manifest = packageDirectory.resolve("package.json");
+        if (!Files.isRegularFile(manifest)) {
+            return null;
+        }
+        String relative = null;
+        try {
+            JsonElement parsed = JsonParser.parseString(Files.readString(manifest));
+            if (parsed.isJsonObject()) {
+                JsonObject declared = parsed.getAsJsonObject().getAsJsonObject("bin");
+                JsonElement named = declared == null ? null : declared.get(bin);
+                if (named != null && named.isJsonPrimitive()) {
+                    relative = named.getAsString();
+                } else if (declared != null && declared.size() == 1) {
+                    // One bin under another name is still the package's entry.
+                    relative = declared.entrySet().iterator().next().getValue().getAsString();
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            LOG.warning("Could not read the executable of " + packageDirectory, e);
+            return null;
+        }
+        if (relative == null || relative.isBlank()) {
+            return null;
+        }
+        Path target = packageDirectory.resolve(relative.trim()).normalize();
+        return Files.isRegularFile(target) ? target : null;
+    }
+
+    /// The argv for a plugin that ships its own executable: the interpreter and the
+    /// script, so the terminal — not a shell — is the process the terminal is attached
+    /// to. A native executable is started on its own.
+    ///
+    /// @param runtime       the instance's Node runtime
+    /// @param entry         the script or binary
+    /// @param resumeSession a session id to resume, or `null`
+    /// @return the argv
+    static List<String> executableCommand(DshNodeRuntime runtime, Path entry,
+                                          @Nullable String resumeSession) {
+        List<String> command = new ArrayList<>();
+        if (isScript(entry)) {
+            command.add(runtime.node().toString());
+        }
+        command.add(entry.toString());
+        command.addAll(resumeArguments(resumeSession));
+        return List.copyOf(command);
+    }
+
+    /// The argv for booting the plugin's profile: the instance's own boot command.
+    ///
+    /// The plan's command is the harness, its entry script, `--profile <the plugin's
+    /// profile>` and that profile's flags — the upstream entry point, and the only thing
+    /// there is to start for a pure bundle. A terminal profile boots no app of its own
+    /// ([DshSurface] reads the bundles, and a terminal bundle is not one of the four), so
+    /// nothing else is added to it.
+    ///
+    /// @param planCommand   the plan's command
+    /// @param resumeSession a session id to resume, or `null`
+    /// @return the argv
+    /// @throws DshException when the plan cannot be one this class understands
+    static List<String> cliCommand(List<String> planCommand, @Nullable String resumeSession)
+            throws DshException {
+        if (planCommand.size() < 2) {
+            throw new DshException("unexpected dsh launch plan: " + planCommand);
+        }
+        List<String> command = new ArrayList<>(planCommand);
+        command.addAll(resumeArguments(resumeSession));
+        return List.copyOf(command);
+    }
+
+    /// The arguments a resume adds, if one was asked for.
+    ///
+    /// @param resumeSession the session id, or `null`
+    /// @return the arguments, empty when there is nothing to resume
+    private static List<String> resumeArguments(@Nullable String resumeSession) {
+        if (resumeSession == null || resumeSession.isBlank()) {
+            return List.of();
+        }
+        return List.of("--resume", resumeSession);
+    }
+
+    /// Reports whether a file is a JavaScript entry rather than a native program.
+    ///
+    /// @param file the file
+    /// @return whether it has to be run by Node
+    private static boolean isScript(Path file) {
+        String name = file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        return name.endsWith(".js") || name.endsWith(".mjs") || name.endsWith(".cjs");
     }
 }

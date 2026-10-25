@@ -374,11 +374,28 @@ func parseArgs(args []string) (options, *url.URL, error) {
 	flags.BoolVar(&opts.verbose, "verbose", false, "把请求细节写到 stderr")
 	flags.BoolVar(&opts.plain, "plain", false, "使用逐行问答的旧界面（脚本/无终端时自动启用）")
 
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return options{}, nil, flag.ErrHelp
+	// Go's flag package stops at the first positional argument, so
+	// `hdsl-tui URL --insecure` used to be read as two addresses and refused.
+	// Parsing again from after each address accepts both orders; a second
+	// address is still counted below and still refused.
+	var addresses []string
+	remaining := args
+	for {
+		if err := flags.Parse(remaining); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return options{}, nil, flag.ErrHelp
+			}
+			return options{}, nil, fmt.Errorf("%w\n\n%s", err, usageText)
 		}
-		return options{}, nil, fmt.Errorf("%w\n\n%s", err, usageText)
+		rest := flags.Args()
+		if len(rest) == 0 {
+			break
+		}
+		addresses = append(addresses, rest[0])
+		remaining = rest[1:]
+		if len(remaining) == 0 {
+			break
+		}
 	}
 	if opts.showVersion {
 		return opts, nil, nil
@@ -393,18 +410,17 @@ func parseArgs(args []string) (options, *url.URL, error) {
 	default:
 		return options{}, nil, fmt.Errorf("--kernel 只能是 community | official（Claude Web 才需要），收到 %q\n\n%s", opts.kernel, usageText)
 	}
-	rest := flags.Args()
-	if len(rest) > 1 {
-		return options{}, nil, fmt.Errorf("只需要一个面板地址，收到 %d 个\n\n%s", len(rest), usageText)
+	if len(addresses) > 1 {
+		return options{}, nil, fmt.Errorf("只需要一个面板地址，收到 %d 个\n\n%s", len(addresses), usageText)
 	}
-	if len(rest) == 0 {
+	if len(addresses) == 0 {
 		// No address is fine: the interactive client starts with its server
 		// picker. Plain mode rejects it later, with the usage text.
 		return opts, nil, nil
 	}
-	base, err := url.Parse(strings.TrimRight(strings.TrimSpace(rest[0]), "/"))
+	base, err := url.Parse(strings.TrimRight(strings.TrimSpace(addresses[0]), "/"))
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
-		return options{}, nil, fmt.Errorf("面板地址必须是 http:// 或 https:// 开头的完整地址，收到 %q\n\n%s", rest[0], usageText)
+		return options{}, nil, fmt.Errorf("面板地址必须是 http:// 或 https:// 开头的完整地址，收到 %q\n\n%s", addresses[0], usageText)
 	}
 	return opts, base, nil
 }
@@ -415,6 +431,10 @@ const usageText = `hdsl-tui — 在终端里进入 HDSL-Web 面板的实例
 
 用法:
   hdsl-tui [选项] [面板地址]
+
+  选项写在地址前面或后面都一样：
+  hdsl-tui --insecure https://panel.test 与
+  hdsl-tui https://panel.test --insecure 是同一条命令。
 
   不带面板地址时进入全屏菜单：选择已保存的服务器或输入新地址，登录一次，
   再按「分类 → 实例 → 动作」操作。Esc 逐级返回，Ctrl-C 取消。
@@ -452,7 +472,8 @@ const usageText = `hdsl-tui — 在终端里进入 HDSL-Web 面板的实例
   0  正常结束（含菜单里选择退出、Ctrl-] q 离开）
   2  认证或提权失败
   3  无法连接面板 / 连接中断
-  4  策略拒绝：面板不在 HTTPS、Web Shell 已关闭、Windows 面板的桌面终端
+  4  策略拒绝：面板不在 HTTPS、Web Shell 已关闭、实例没装 TUI 插件、面板启动终端失败、
+     Windows 面板的桌面终端
   5  用法错误
 `
 

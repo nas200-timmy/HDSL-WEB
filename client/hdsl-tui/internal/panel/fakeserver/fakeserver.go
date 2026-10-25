@@ -41,6 +41,14 @@ type Server struct {
 	HealthStatus string
 	UptimeSec    int64
 
+	// DeveloperStatus is the answer of GET /api/developer/status. The zero
+	// value would say "nothing is usable here", so New starts it as an
+	// elevated panel on HTTPS with the web shell on.
+	DevPasswordSet  bool
+	Elevated        bool
+	WebShellEnabled bool
+	HTTPS           bool
+
 	// DSHInstances is the answer of GET /api/instances.
 	DSHInstances []map[string]any
 	// BrandInstances is keyed by brand id.
@@ -71,6 +79,10 @@ func New() *Server {
 		Version:           "v0.5.4",
 		HealthStatus:      "ok",
 		UptimeSec:         4242,
+		DevPasswordSet:    true,
+		Elevated:          true,
+		WebShellEnabled:   true,
+		HTTPS:             true,
 		DSHInstances:      []map[string]any{{"id": "dsh-1", "name": "main", "state": "running"}},
 		BrandInstances: map[string][]map[string]any{
 			"kimi":       {{"id": "kimi-1", "name": "kimi-one", "state": "stopped"}},
@@ -183,6 +195,14 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"elevated": true, "expiresAt": "2026-10-23T12:34:56Z"})
+		return
+	case method == "GET" && r.URL.Path == "/api/developer/status":
+		writeJSON(w, http.StatusOK, map[string]any{
+			"devPasswordSet":  s.DevPasswordSet,
+			"elevated":        s.Elevated,
+			"webShellEnabled": s.WebShellEnabled,
+			"https":           s.HTTPS,
+		})
 		return
 	case method == "GET" && len(segments) == 2 && segments[0] == "api" && segments[1] == "instances":
 		writeJSON(w, http.StatusOK, map[string]any{"instances": s.DSHInstances})

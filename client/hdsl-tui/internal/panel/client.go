@@ -283,6 +283,22 @@ func (c *Client) Elevate(ctx context.Context, password string) (Elevation, error
 	return elevation, nil
 }
 
+// DeveloperStatus reads GET /api/developer/status: whether a developer password
+// exists, whether this session is elevated, whether the web shell switch is on
+// and whether the panel is speaking TLS. A panel older than this endpoint
+// answers 404, which the caller must treat as "ask the panel by opening".
+func (c *Client) DeveloperStatus(ctx context.Context) (DeveloperStatus, error) {
+	_, data, err := c.do(ctx, http.MethodGet, "/api/developer/status", nil, nil)
+	if err != nil {
+		return DeveloperStatus{}, err
+	}
+	var status DeveloperStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		return DeveloperStatus{}, &TransportError{Op: "GET /api/developer/status", Err: err}
+	}
+	return status, nil
+}
+
 // Instances lists the DSH instances (GET /api/instances).
 func (c *Client) Instances(ctx context.Context) ([]Instance, error) {
 	return c.instances(ctx, "/api/instances")

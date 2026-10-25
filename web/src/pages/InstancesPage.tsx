@@ -11,7 +11,6 @@ import {
   AddIcon,
   CloseIcon,
   DeleteIcon,
-  DeployedCodeIcon,
   EditIcon,
   FolderIcon,
   MoreVertIcon,
@@ -21,6 +20,7 @@ import {
   RocketLaunchIcon,
   SearchIcon,
   SettingsFillIcon,
+  TerminalIcon,
 } from "../components/icons";
 import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
 import { BrandsView, fallbackBrand, isBrandKey, type BrandKey } from "../components/BrandsView";
@@ -349,19 +349,17 @@ export function InstancesPage() {
                         >
                           <RocketLaunchIcon size={18} />
                         </button>
-                        {webShellEnabled && (
-                          <button
-                            className="icon-btn on-variant ripple-host"
-                            title={I18N["terminal.open"]}
-                            disabled={st === "INSTALLING"}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setTerminalTarget({ kind: "dsh", id: inst.id, name: inst.name });
-                            }}
-                          >
-                            <DeployedCodeIcon size={18} />
-                          </button>
-                        )}
+                        <button
+                          className="icon-btn on-variant ripple-host"
+                          title={webShellEnabled ? I18N["terminal.open"] : I18N["terminal.unavailable"]}
+                          disabled={!webShellEnabled || st === "INSTALLING"}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setTerminalTarget({ kind: "dsh", id: inst.id, name: inst.name });
+                          }}
+                        >
+                          <TerminalIcon size={18} />
+                        </button>
                         <button
                           className="icon-btn on-variant ripple-host"
                           title={I18N["dsh.instance.menu"]}
