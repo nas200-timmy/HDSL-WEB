@@ -83,6 +83,12 @@ public final class TerminalWebSocket implements TerminalSink {
     @OnOpen
     public void onOpen(Session ws) {
         this.ws = ws;
+        // No idle timeout. A terminal is silent whenever the agent is thinking
+        // or waiting for input, and docs/web-shell.md §3 is explicit that a
+        // quiet terminal must never be killed for it. Jetty's 30-second default
+        // closed exactly those sessions (`1001 Connection Idle Timeout`), which
+        // reads to the user as "the terminal disconnected by itself".
+        ws.setMaxIdleTimeout(0);
         TerminalManager manager = TerminalWebSocket.manager;
         TerminalTickets tickets = TerminalWebSocket.tickets;
         if (manager == null || tickets == null) {
