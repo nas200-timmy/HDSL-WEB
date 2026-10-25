@@ -2,7 +2,7 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布
+## v0.5.82 — 2026-10-25 · 容器补齐构建工具链（JDK / go / rust / python）
 
 - **容器里补齐构建工具链**（Dockerfile 运行阶段）：`openjdk-21-jre-headless` 换成
   **`openjdk-21-jdk-headless`**——要的是 JDK 而不是 JRE，`javac` / `jar` / `jcmd` 正是排查时真会伸手去拿的
