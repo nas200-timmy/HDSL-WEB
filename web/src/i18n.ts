@@ -357,6 +357,7 @@ export const I18N = {
   "terminal.desktop": "已在桌面打开终端窗口",
   "terminal.detached": "连接已断开（agent 仍在运行）",
   "terminal.ended": "会话已结束",
+  "terminal.failedWithoutOutput": "进程没产生任何输出就退出了：多半是插件没装好（实例「安装」页可重装），或启动参数被拒。",
   "terminal.error": "终端打开失败",
   "terminal.state.opening": "正在打开",
   "terminal.state.locked": "等待密码",

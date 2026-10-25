@@ -47,7 +47,10 @@ import java.util.Optional;
 ///
 /// Binary frames carry terminal bytes both ways. Text frames carry control:
 /// `{"type":"resize","cols":120,"rows":40}` and, from the server,
-/// `{"type":"ready","instance":"…"}` / `{"type":"exit","code":0}`.
+/// `{"type":"ready","instance":"…"}` /
+/// `{"type":"exit","code":0}` — plus `"failedWithoutOutput":true` when the child
+/// failed without writing anything, which is the only trace that failure
+/// leaves (see [TerminalSession#silentFailure]).
 ///
 /// The socket is a **viewer**, not the session: closing it detaches; the agent
 /// keeps running and a new ticket reattaches with the replay buffer. When the
@@ -217,12 +220,38 @@ public final class TerminalWebSocket implements TerminalSink {
         if (ws == null) {
             return;
         }
-        sendText(ws, "{\"type\":\"exit\",\"code\":" + code + "}");
+        TerminalSession terminal = this.terminal;
+        sendText(ws, exitJson(code, terminal != null && terminal.silentFailure()));
         try {
             ws.close(new CloseReason(CloseReason.CloseCodes.NORMAL_CLOSURE, "terminal exited"));
         } catch (IOException ignored) {
             // Closing an already-closed socket is not an error here.
         }
+    }
+
+    /// The `exit` control frame, kept separate from the socket for the same
+    /// reason as [readyJson]: docs/terminal-protocol.md is the contract and a
+    /// unit test pins the shape.
+    ///
+    /// `failedWithoutOutput` is only present when true — a viewer that predates
+    /// the field keeps parsing the frame unchanged, which is why adding it is not
+    /// a protocol break (docs/terminal-protocol.md §4). It is the one thing the
+    /// browser can act on when a terminal dies instantly: the child never spoke,
+    /// so the screen is empty because there was nothing to paint, not because the
+    /// viewer missed it.
+    ///
+    /// @param code                the child's exit code
+    /// @param failedWithoutOutput whether this is a failure that left no output
+    ///                            ([TerminalSession#silentFailure])
+    /// @return the JSON text frame
+    public static String exitJson(int code, boolean failedWithoutOutput) {
+        JsonObject exit = new JsonObject();
+        exit.addProperty("type", "exit");
+        exit.addProperty("code", code);
+        if (failedWithoutOutput) {
+            exit.addProperty("failedWithoutOutput", true);
+        }
+        return exit.toString();
     }
 
     private static void sendText(Session ws, String text) {

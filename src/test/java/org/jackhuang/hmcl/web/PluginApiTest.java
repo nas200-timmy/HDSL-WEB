@@ -23,6 +23,7 @@ import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpServer;
 import org.jackhuang.hmcl.dsh.DshInstance;
 import org.jackhuang.hmcl.dsh.DshInstanceManager;
+import org.jackhuang.hmcl.dsh.DshPluginInstaller;
 import org.jackhuang.hmcl.dsh.DshProcessManager;
 import org.jackhuang.hmcl.dsh.DshTuiPlugins;
 import org.junit.jupiter.api.AfterEach;
@@ -504,6 +505,35 @@ class PluginApiTest {
                 assertFalse(afterRemove.get(i).getAsJsonObject().get("installed").getAsBoolean(),
                         "the removal is what the state now says: " + afterRemove);
             }
+        }
+    }
+
+    // An install that reports success without leaving the package behind is not an
+    /// install, and it has to fail **here** rather than in the terminal: the dependency is
+    /// written into the manifest before pnpm fetches anything, so a fetch that never
+    /// happened leaves a profile the panel would call installed — and booting it is what
+    /// dies with an empty screen. This is the field failure the check exists for.
+    @Test
+    void anInstallThatLeavesNoFilesBehindFailsTheTask() throws Exception {
+        assumePluginTooling();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+            String id = createInstance(client, base, "nofiles");
+
+            NodeDshStub.installPluginCapableLayingNothing(DshInstanceManager.find(id));
+
+            HttpResponse<String> install = post(client, base + "/api/instances/" + id + "/tui-plugins/install",
+                    "{\"package\":\"@tomowang/dsh-tui\"}");
+            assertEquals(202, install.statusCode(), install.body());
+            JsonObject task = awaitTask(client, base, json(install).get("taskId").getAsString());
+
+            assertEquals("failed", task.get("state").getAsString(),
+                    "a package that never landed is not installed: " + task);
+            assertTrue(task.get("error").getAsString().contains("node_modules"), task.toString());
+            assertFalse(DshPluginInstaller.holdsPackage(
+                            DshInstanceManager.find(id).homeDirectory(), "tui", "@tomowang/dsh-tui"),
+                    "and nothing is on disk to call installed");
         }
     }
 

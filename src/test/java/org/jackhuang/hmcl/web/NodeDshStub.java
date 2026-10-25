@@ -39,10 +39,13 @@ import java.util.concurrent.TimeUnit;
 /// the flag, which is what a modern release does.
 ///
 /// [#installPluginCapable] additionally answers the `plugin` subcommand the
-/// plugin installer drives: `add`/`remove` edit the profile's `package.json`
-/// the way `dsh plugin` + pnpm would (a stub does not fetch anything), and —
-/// when asked — play the build-script refusal pnpm prints until somebody
-/// answers its `pnpm-workspace.yaml` placeholder.
+/// plugin installer drives: `add`/`remove` edit the profile's `package.json` and
+/// lay down (or take away) the package directory under `node_modules` the way
+/// `dsh plugin` + pnpm would — a stub fetches nothing, but it does leave an
+/// installed package behind, because the panel checks that an install really
+/// landed before it calls it one — and, when asked, it plays the build-script
+/// refusal pnpm prints until somebody answers its `pnpm-workspace.yaml`
+/// placeholder.
 public final class NodeDshStub {
 
     public static final String TOKEN = "testtoken123";
@@ -91,6 +94,23 @@ public final class NodeDshStub {
     ///                       answers `node-pty:` with true or false — the flow
     ///                       that parks the install task in `waiting_approval`
     public static void installPluginCapable(DshInstance instance, boolean needsApproval) throws IOException {
+        writePluginScript(instance, pluginScript(needsApproval, true));
+    }
+
+    /// Writes a stub whose `plugin add` reports success **without** leaving the package
+    /// behind.
+    ///
+    /// This is the shape a fetch that fails after the dependency was written leaves, and it
+    /// is what the panel has to refuse at install time: the profile would otherwise be
+    /// recorded as installed while `node_modules` holds nothing, which is how a terminal
+    /// comes to die in a fraction of a second with an empty screen.
+    ///
+    /// @param instance the instance
+    public static void installPluginCapableLayingNothing(DshInstance instance) throws IOException {
+        writePluginScript(instance, pluginScript(false, false));
+    }
+
+    private static void writePluginScript(DshInstance instance, String script) throws IOException {
         Path bin;
         try {
             bin = instance.dshDirectory().resolve(DshVersion.PACKAGE_PATH).resolve("lib/bin.js");
@@ -98,7 +118,7 @@ public final class NodeDshStub {
             throw new IOException("cannot resolve the stub path", e);
         }
         Files.createDirectories(bin.getParent());
-        Files.writeString(bin, pluginScript(needsApproval));
+        Files.writeString(bin, script);
     }
 
     /// The stub program.
@@ -202,7 +222,7 @@ public final class NodeDshStub {
     /// and exits 1 with the ignored-build output, exactly as pnpm does, until
     /// the file answers the entry — which is what the launcher's approval
     /// dance reads and answers.
-    private static String pluginScript(boolean needsApproval) {
+    private static String pluginScript(boolean needsApproval, boolean laysFiles) {
         String approvalBlock = needsApproval ? """
                   const wsFile = path.join(profileDir, "pnpm-workspace.yaml");
                   const wsText = fs.existsSync(wsFile) ? fs.readFileSync(wsFile, "utf8") : "";
@@ -225,6 +245,9 @@ public final class NodeDshStub {
                 const fs = require("fs");
                 const path = require("path");
                 const home = process.env.DSH_HOME;
+                // Whether an `add` really leaves the package behind. False is the variant a
+                // fetch that fails after the dependency was written produces.
+                const laysFiles = %s;
                 if (args[0] === "plugin") {
                   const profile = args[args.indexOf("--profile") + 1];
                   const pnpmArgs = args.slice(args.indexOf("--profile") + 2);
@@ -237,11 +260,31 @@ public final class NodeDshStub {
                   }
                   const op = pnpmArgs[0];
                   const write = () => fs.writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + "\\n");
+                  // pnpm leaves the package's files behind, and the panel checks that an
+                  // install really landed (DshPluginInstaller.requireLanded): a stub that
+                  // only edited the manifest would be describing an install that never
+                  // happened, and every install test would then be testing the failure.
+                  // A variant that reports success without laying anything down is what the
+                  // panel has to catch, and lives behind the flag below.
+                  const lay = (name) => {
+                    if (!laysFiles) {
+                      return;
+                    }
+                    const dir = path.join(profileDir, "node_modules", name);
+                    fs.mkdirSync(path.join(dir, "lib"), { recursive: true });
+                    fs.writeFileSync(path.join(dir, "lib", "main.js"), "// " + name + "\\n");
+                    const bin = name.split("/").pop();
+                    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(
+                      { name: name, version: "0.0.0", bin: { [bin]: "lib/main.js" } }, null, 2) + "\\n");
+                  };
+                  const unlay = (name) => fs.rmSync(path.join(profileDir, "node_modules", name),
+                    { recursive: true, force: true });
                   if (op === "add") {
                 %s
                     for (const spec of pnpmArgs.slice(1)) {
                       const parsed = parseSpec(spec);
                       manifest.dependencies[parsed[0]] = parsed[1];
+                      lay(parsed[0]);
                     }
                     write();
                     console.log("added " + (pnpmArgs.length - 1) + " package(s)");
@@ -250,6 +293,7 @@ public final class NodeDshStub {
                   if (op === "remove") {
                     for (const spec of pnpmArgs.slice(1)) {
                       delete manifest.dependencies[spec];
+                      unlay(spec);
                     }
                     write();
                     console.log("removed " + (pnpmArgs.length - 1) + " package(s)");
@@ -275,6 +319,6 @@ public final class NodeDshStub {
                 }
                 console.error("stub argv: " + args.join(" "));
                 process.exit(1);
-                """.formatted(approvalBlock);
+                """.formatted(laysFiles ? "true" : "false", approvalBlock);
     }
 }

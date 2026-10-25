@@ -491,6 +491,15 @@ public final class HdslServer {
         return Optional.ofNullable(sslContextFactory);
     }
 
+    /// The registry of running terminals — one per instance, and the panel is
+    /// their parent process. [stop] closes it; the instance routes close the
+    /// entries they own before they delete or take over an instance. Exposed
+    /// so the lifecycle tests can watch an instance's terminal the way the
+    /// route leaves it, without a PTY in the picture.
+    public org.jackhuang.hmcl.web.terminal.TerminalManager terminals() {
+        return terminals;
+    }
+
     /// Whether the main connector currently speaks TLS.
     public boolean isTls() {
         return sslContextFactory != null;

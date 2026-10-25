@@ -118,8 +118,97 @@ public final class DshPluginInstaller {
         for (String spec : specs) {
             report(onLine, "Installing " + spec + " ...");
             runPluginCommand(instance, runtime, home, profile, List.of("add", spec), onLine);
+            requireLanded(home, profile, spec);
             report(onLine, "Installed " + spec);
         }
+    }
+
+    /// The `node_modules` directory of one profile.
+    ///
+    /// @param home    the `DSH_HOME` holding the profile
+    /// @param profile the profile name
+    /// @return the directory packages are installed under
+    public static Path profileNodeModules(Path home, String profile) {
+        return home.resolve("profiles").resolve(profile).resolve("node_modules");
+    }
+
+    /// Reports whether a profile really holds a package's files.
+    ///
+    /// A manifest is the record of what was *asked* for; this is the record of what is
+    /// *there*. The two come apart when a package manager fails after the dependency was
+    /// written — a registry that 404s, a store that came back empty — and an instance in
+    /// that state is worse than an uninstalled one: the profile says the package is
+    /// installed, so the panel starts it, and the harness dies with nothing on screen
+    /// because the package it would load is not there.
+    ///
+    /// A pnpm link inside `node_modules` counts, which is why the question is asked of
+    /// the path rather than of the directory entry: `Files.isDirectory` follows the link
+    /// and is false only when it dangles, and a dangling link is exactly the half-installed
+    /// state this exists to catch.
+    ///
+    /// @param home        the `DSH_HOME` holding the profile
+    /// @param profile     the profile name
+    /// @param packageName the npm package name, or `null`
+    /// @return whether the package's directory is there
+    public static boolean holdsPackage(Path home, String profile, @Nullable String packageName) {
+        if (packageName == null || packageName.isBlank()) {
+            return false;
+        }
+        return Files.isDirectory(profileNodeModules(home, profile).resolve(packageName.trim()));
+    }
+
+    /// Fails a run that reported success without leaving the package behind.
+    ///
+    /// `dsh plugin add` forwards to pnpm, and pnpm can exit zero with the dependency
+    /// written into the manifest and nothing under `node_modules`: the fetch is what makes
+    /// the files, and a run that could not fetch reports a package it never placed — the
+    /// field report behind this check is a profile whose `package.json` named a TUI plugin
+    /// while its `node_modules` held nothing, so the panel opened a terminal that died in
+    /// a fraction of a second with no output at all.
+    ///
+    /// Only registry specs are verified. A `file:`, `link:`, `github:` or URL spec resolves
+    /// to a name this method cannot predict from the text — the local-install routes pass
+    /// paths — and a false failure there would break a working install.
+    ///
+    /// @param home    the `DSH_HOME` holding the profile
+    /// @param profile the profile name
+    /// @param spec    the specification that was installed
+    /// @throws DshException when a registry package did not land
+    static void requireLanded(Path home, String profile, String spec) throws DshException {
+        if (!isRegistrySpec(spec)) {
+            return;
+        }
+        String name = DshTuiPlugins.packageNameOf(spec);
+        if (holdsPackage(home, profile, name)) {
+            return;
+        }
+        throw new DshException("pnpm 报告成功，但 " + profile + " profile 的 node_modules 里没有 " + name
+                + "：依赖写进了 manifest，文件没落地。请重试安装；若一直如此，多半是这个包（或这个版本）"
+                + "在当前的源上取不到。");
+    }
+
+    /// Whether a specification names a registry package rather than a file, a link or a
+    /// repository.
+    ///
+    /// @param spec the specification as typed
+    /// @return whether it is a plain `name`, `name@version` or `@scope/name@range`
+    static boolean isRegistrySpec(@Nullable String spec) {
+        if (spec == null) {
+            return false;
+        }
+        String raw = spec.trim();
+        if (raw.isEmpty() || raw.contains(":") || raw.startsWith("/") || raw.startsWith(".") || raw.contains("\\")) {
+            return false;
+        }
+        String name = DshTuiPlugins.packageNameOf(raw);
+        if (name == null || name.isBlank()) {
+            return false;
+        }
+        if (name.startsWith("@")) {
+            // Exactly one scope separator: `@scope/name`, never `@scope/name/other`.
+            return name.indexOf('/') == name.lastIndexOf('/') && name.indexOf('/') > 1;
+        }
+        return !name.contains("/");
     }
 
     /// Resolves a profile from the manifest it holds.

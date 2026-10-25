@@ -53,8 +53,35 @@ class DshTuiTest {
                 null, DshHomeMode.CUSTOM, home.toString(), List.of(), Map.of(), null, null, null, 0, 0L);
     }
 
-    /// Writes the profile manifest the installer's own `dsh plugin add` would leave.
+    /// Writes what the installer's own `dsh plugin add` leaves behind: the profile manifest,
+    /// **and the files that came with it**.
+    ///
+    /// A manifest on its own is not an installed plugin — it is the state an install leaves
+    /// when the fetch fails after the dependency was written, which is exactly the state the
+    /// launcher refuses instead of starting. So every package also gets the directory pnpm
+    /// would fill under `node_modules/<name>`, and the file its manifest names as a bin:
+    /// a package that ships an executable is started through that file.
     private static void install(DshInstance instance, String profile, String... packages) throws Exception {
+        declareOnly(instance, profile, packages);
+        Path nodeModules = instance.homeDirectory().resolve("profiles").resolve(profile).resolve("node_modules");
+        for (String name : packages) {
+            layPackage(nodeModules.resolve(name), name);
+        }
+    }
+
+    /// The files one installed package has: a manifest that declares a bin named after the
+    /// package, and the script it points at.
+    private static void layPackage(Path packageDirectory, String name) throws Exception {
+        String bin = name.substring(name.lastIndexOf('/') + 1);
+        Files.createDirectories(packageDirectory.resolve("lib"));
+        Files.writeString(packageDirectory.resolve("lib/main.js"), "// " + name + "\n");
+        Files.writeString(packageDirectory.resolve("package.json"),
+                "{\"name\":\"" + name + "\",\"version\":\"1.0.0\",\"bin\":{\"" + bin + "\":\"lib/main.js\"}}");
+    }
+
+    /// A manifest with a dependency and nothing on disk: what an install that could not
+    /// fetch leaves, and what the launcher must not treat as a terminal.
+    private static void declareOnly(DshInstance instance, String profile, String... packages) throws Exception {
         StringBuilder dependencies = new StringBuilder();
         for (String name : packages) {
             if (!dependencies.isEmpty()) {
@@ -62,9 +89,10 @@ class DshTuiTest {
             }
             dependencies.append('"').append(name).append("\":\"1.0.0\"");
         }
-        Path manifest = instance.homeDirectory().resolve("profiles").resolve(profile).resolve("package.json");
-        Files.createDirectories(manifest.getParent());
-        Files.writeString(manifest, "{\"dependencies\":{" + dependencies + "}}");
+        Path profileDirectory = instance.homeDirectory().resolve("profiles").resolve(profile);
+        Files.createDirectories(profileDirectory);
+        Files.writeString(profileDirectory.resolve("package.json"),
+                "{\"dependencies\":{" + dependencies + "}}");
     }
 
     @Test
@@ -122,19 +150,40 @@ class DshTuiTest {
                 "no session to resume means no flag");
     }
 
-    /// A bin the profile does not hold is not a dead end: the profile is booted instead,
-    /// which is the path the plugin's own documentation shows.
+    /// A profile that *declares* a bin-shipping plugin and does not hold its file is not a
+    /// terminal, and booting it is exactly what leaves an empty screen: the harness starts,
+    /// finds nothing to load, and dies before it can print. The declaration alone is
+    /// therefore refused, and the refusal says which package and what to do about it —
+    /// which is the difference between a user seeing "reinstall this" and watching a
+    /// terminal flash.
     @Test
-    void aBinThatIsNotThereLeavesTheProfilePath(@TempDir Path home) throws Exception {
+    void aDeclaredPluginWithNoFilesIsRefusedRatherThanBooted(@TempDir Path home) throws Exception {
         DshInstance instance = instanceWith(home, "web");
         DshTuiPlugins.Entry plugin = DshTuiPlugins.ENTRIES.get(0);
         assertTrue(plugin.hasExecutable());
-        install(instance, plugin.profile(), plugin.packageName());
+        declareOnly(instance, plugin.profile(), plugin.packageName());
 
-        assertEquals(plugin.packageName(), DshTui.terminalPlugin(instance).packageName(),
-                "the plugin is installed, so it is what gets started");
-        assertNull(DshTui.entryPoint(instance, plugin),
-                "the profile holds no files yet, so `target` falls through to booting the profile");
+        assertNull(DshTui.entryPoint(instance, plugin), "there is no file to start");
+
+        DshException refused = assertThrows(DshException.class, () -> DshTui.terminalPlugin(instance));
+        assertTrue(refused.getMessage().contains(plugin.packageName()),
+                "the refusal names the package: " + refused.getMessage());
+        assertTrue(refused.getMessage().contains("重新安装"),
+                "the refusal says what to do about it: " + refused.getMessage());
+    }
+
+    /// A declared-but-missing entry does not shadow a working one: the list's order is a
+    /// preference, not a promise that everything ahead of an entry is usable.
+    @Test
+    void aDeclaredButMissingEntryDoesNotShadowAWorkingOne(@TempDir Path home) throws Exception {
+        DshInstance instance = instanceWith(home, "web");
+        DshTuiPlugins.Entry preferred = DshTuiPlugins.ENTRIES.get(0);
+        DshTuiPlugins.Entry bundle = DshTuiPlugins.find("@tomowang/dsh-tui").orElseThrow();
+        declareOnly(instance, preferred.profile(), preferred.packageName());
+        install(instance, bundle.profile(), bundle.packageName());
+
+        assertEquals(bundle.packageName(), DshTui.terminalPlugin(instance).packageName(),
+                "the plugin whose files are really there is what gets started");
     }
 
     /// pnpm writes `.bin/<tool>` as a shell shim; starting through it would make
