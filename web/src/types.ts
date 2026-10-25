@@ -105,6 +105,33 @@ export interface InstalledPlugin {
   pending?: boolean;
 }
 
+/** 面板精选的 TUI 终端插件（GET /api/dsh/tui-plugins 的 plugins[] 一条，见 DshTuiPlugins） */
+export interface TuiPluginItem {
+  id: string;
+  packageName: string;
+  /** 面板锁定的安装规格 `包名@版本` —— 版本锁定就发生在这里 */
+  spec: string;
+  name: string;
+  version: string;
+  license: string;
+  repository: string | null;
+  description: string;
+  /** 包自带的可执行入口名；纯 bundle 为 null（由 dsh 启动它的 profile） */
+  bin: string | null;
+  /** 必须装进、也从这里启动的 profile —— 绝不是实例的 web（两个 app 插件同 profile 会让实例起不来） */
+  profile: string;
+}
+
+/** 某个实例上候选 TUI 插件的安装状态（GET /api/instances/{id}/tui-plugins 的一条） */
+export interface TuiPluginState {
+  packageName: string;
+  /** 该插件的 profile；状态是从这个 profile 的清单里读出来的，不是实例的 web */
+  profile: string;
+  installed: boolean;
+  /** 该 profile 记录的版本（安装时是面板锁定的那个版本） */
+  installedVersion?: string;
+}
+
 export interface TaskApproval {
   kind: string;
   keys: string[];
@@ -257,6 +284,20 @@ export interface ExportRecord {
   filename: string;
   sizeBytes: number;
   createdAt: string | number;
+}
+
+/** 可随包的 home 内容：安全过滤之后的一条候选（凭据、密钥、压缩包已被服务端排除） */
+export interface ExportHomeEntry {
+  /** home 相对路径，一律 `/` 分隔 */
+  path: string;
+  sizeBytes: number;
+}
+
+/** GET /api/instances/{id}/export：导出表单的可选项。从未启动过的实例 `home` 为空数组。 */
+export interface ExportChoices {
+  home: ExportHomeEntry[];
+  /** 本机已装的 dsh 版本，新的在前；写进 manifest 时实例自身版本排在首位 */
+  dshVersions: string[];
 }
 
 // ---------- Phase 4：会话 / 工作区 / 技能 ----------

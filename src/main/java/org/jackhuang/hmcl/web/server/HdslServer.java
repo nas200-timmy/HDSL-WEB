@@ -51,6 +51,7 @@ import org.jackhuang.hmcl.web.http.AccountsApiServlet;
 import org.jackhuang.hmcl.web.http.ApiGuardFilter;
 import org.jackhuang.hmcl.web.http.ApiServlet;
 import org.jackhuang.hmcl.web.http.DoctorApiServlet;
+import org.jackhuang.hmcl.web.http.DshApiServlet;
 import org.jackhuang.hmcl.web.http.ExportsApiServlet;
 import org.jackhuang.hmcl.web.http.InstancesApiServlet;
 import org.jackhuang.hmcl.web.http.NodeApiServlet;
@@ -289,6 +290,10 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new TasksApiServlet(taskService)), "/api/tasks/*");
         context.addServlet(new ServletHolder(new NodeApiServlet(taskService)), "/api/node/*");
         context.addServlet(new ServletHolder(new PluginsApiServlet()), "/api/plugins/*");
+        // The curated terminal-plugin list lives under its own prefix: it is not the
+        // community catalogue (that is `/api/plugins/catalog`) and it has no
+        // per-instance state of its own to hang off an instance path.
+        context.addServlet(new ServletHolder(new DshApiServlet()), "/api/dsh/*");
         ServletHolder packsHolder = new ServletHolder(new PacksApiServlet(runtime, taskService, config));
         packsHolder.getRegistration().setMultipartConfig(packMultipart);
         context.addServlet(packsHolder, "/api/packs/*");

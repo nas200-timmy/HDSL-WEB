@@ -55,9 +55,10 @@ import java.util.Locale;
 ///   `{taskId}`: download (length + SHA-256 checked by [DshPackInstaller]),
 ///   identify, install into a new instance. The done task carries
 ///   `result: {instanceId}` and an `instance-created` event is broadcast.
-/// - `POST /api/packs/upload`       — a `.dspack` upload (multipart field
-///   `file`, at most 200 MiB; optional field `name`), 202 `{taskId}`, same
-///   install flow with the staged upload as the source.
+/// - `POST /api/packs/upload`       — a `.dspack` (or the format's older `.tgz`)
+///   upload (multipart field `file`, at most 200 MiB; optional field
+///   `name`), 202 `{taskId}`, same install flow with the staged upload as
+///   the source.
 ///
 /// The install flow mirrors the desktop's ([DshPackInstaller#installNew] for
 /// the first attempt, [DshPackInstaller#finish] for the retry after a
@@ -185,6 +186,11 @@ public final class PacksApiServlet extends HttpServlet {
             if (entry.dshVersion() != null) {
                 version.addProperty("dshVersion", entry.dshVersion());
             }
+            if (!entry.dshVersions().isEmpty()) {
+                JsonArray measured = new JsonArray();
+                entry.dshVersions().forEach(measured::add);
+                version.add("dshVersions", measured);
+            }
             if (entry.manifestVersion() != null) {
                 version.addProperty("manifestVersion", entry.manifestVersion());
             }
@@ -263,6 +269,17 @@ public final class PacksApiServlet extends HttpServlet {
         if (entry.dshVersion() != null) {
             json.addProperty("dshVersion", entry.dshVersion());
         }
+        if (!entry.dshVersions().isEmpty()) {
+            JsonArray versions = new JsonArray();
+            entry.dshVersions().forEach(versions::add);
+            json.add("dshVersions", versions);
+        }
+        if (entry.launcherRestricted()) {
+            // The index's derived flag: the pack declares which launchers it supports, and which
+            // ones are left to the lazy manifest. Shown because a pack that names launchers is one
+            // somebody may want to look at more closely before installing.
+            json.addProperty("launcherRestricted", true);
+        }
         if (entry.type() != null) {
             json.addProperty("type", entry.type());
         }
@@ -331,7 +348,7 @@ public final class PacksApiServlet extends HttpServlet {
         }, chosen.profileName() == null ? "pack" : chosen.profileName(), chosen.dshVersion(), null);
     }
 
-    /// Installs an uploaded `.dspack`. The upload is staged first, so a file
+    /// Installs an uploaded pack. The upload is staged first, so a file
     /// that is not a pack is a 400 with nothing left behind, and the task
     /// installs from the staged copy (which it removes either way).
     private void upload(HttpServletRequest request, HttpServletResponse response)
@@ -349,9 +366,11 @@ public final class PacksApiServlet extends HttpServlet {
             return;
         }
         String submitted = part.getSubmittedFileName() == null ? "pack.dspack" : part.getSubmittedFileName();
-        if (!submitted.toLowerCase(Locale.ROOT).endsWith(".dspack")) {
+        String extension = submitted.toLowerCase(Locale.ROOT);
+        if (!extension.endsWith(".dspack") && !extension.endsWith(".tgz")) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
-                    submitted + " is not a DeepSeek Harness pack (.dspack)");
+                    submitted + " is not a DeepSeek Harness pack (.dspack, or .tgz for one made with"
+                            + " the format's first container)");
             return;
         }
 
@@ -421,7 +440,7 @@ public final class PacksApiServlet extends HttpServlet {
                     JsonObject result = new JsonObject();
                     result.addProperty("instanceId", installed.id());
                     holder[0].attachResult(result);
-                    return "Installed the pack into " + installed.id();
+                    return installedMessage(archive, installed.id());
                 } catch (org.jackhuang.hmcl.dsh.DshPluginInstaller.DshBuildScriptApprovalRequired waiting) {
                     parked = true;
                     throw waiting;
@@ -447,6 +466,26 @@ public final class PacksApiServlet extends HttpServlet {
         Json.write(response, HttpServletResponse.SC_ACCEPTED, result);
     }
 
+    /// The done message of an install, carrying what the pack's launcher
+    /// declaration had to say.
+    ///
+    /// A declaration this launcher does not satisfy is a warning and never a
+    /// refusal — the format is explicit about that — and the two places it has
+    /// to show up are the task's log, which the install writes, and the task's
+    /// own message, which is what remains of the import once it is done.
+    private static String installedMessage(Path archive, String instanceId) {
+        String message = "Installed the pack into " + instanceId;
+        try {
+            java.util.List<String> warnings = DshPackInstaller.launcherWarnings(
+                    DshPackInstaller.identify(archive).manifest());
+            return warnings.isEmpty() ? message : message + " " + String.join(" ", warnings);
+        } catch (DshException | RuntimeException e) {
+            // The pack installed, so the declaration cannot be read for some reason of its own;
+            // saying the install worked is still true and is what this is for.
+            return message;
+        }
+    }
+
     /// The domain's install sequence, exactly as the desktop runs it: the
     /// container is recognised before anything is created, the first attempt
     /// makes the instance, and a retry after a build-script answer finishes
@@ -461,7 +500,15 @@ public final class PacksApiServlet extends HttpServlet {
             throw new DshException("whole-home (dshhome) packs are not supported through the web API");
         }
         String profile = container.profileName(profileFallback);
-        String version = container.text("dshVersion");
+        // The specification's decision rather than the pack's pin alone: a pack that lists the
+        // versions it was measured against is installed with one of them when this machine has one,
+        // and the pinned version is what is installed when it does not — never a refusal for the
+        // pin's own absence.
+        DshPackInstaller.Decision decision = DshPackInstaller.decide(container.manifest());
+        String version = decision.version();
+        if (version == null || version.isBlank()) {
+            version = container.dshVersion();
+        }
         if (version == null || version.isBlank()) {
             version = versionFallback;
         }

@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.http;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
@@ -32,11 +33,13 @@ import org.jackhuang.hmcl.dsh.DshInstanceManager;
 import org.jackhuang.hmcl.dsh.DshInstanceSettings;
 import org.jackhuang.hmcl.dsh.DshLocalPlugins;
 import org.jackhuang.hmcl.dsh.DshPackForge;
+import org.jackhuang.hmcl.dsh.DshPackInstaller;
 import org.jackhuang.hmcl.dsh.DshPaths;
 import org.jackhuang.hmcl.dsh.DshPluginInstaller;
 import org.jackhuang.hmcl.dsh.DshPortMode;
 import org.jackhuang.hmcl.dsh.DshPorts;
 import org.jackhuang.hmcl.dsh.DshProcessManager;
+import org.jackhuang.hmcl.dsh.DshTuiPlugins;
 import org.jackhuang.hmcl.dsh.DshVersionManager;
 import org.jackhuang.hmcl.setting.GameDirectory;
 import org.jackhuang.hmcl.setting.GameDirectoryManager;
@@ -88,6 +91,13 @@ import java.util.Locale;
 /// - `POST   /api/instances/{id}/plugins/remove`  — `{specs: [...]}`, 202 `{taskId}`
 /// - `POST   /api/instances/{id}/plugins/local`   — a `.tgz` upload (multipart field
 ///   `file`, at most 50 MiB), 202 `{taskId}`
+/// - `GET    /api/instances/{id}/tui-plugins`            — the curated terminal
+///   interfaces with their installation state, read from **each one's own profile**
+///   ([DshTuiPlugins]: a terminal plugin never shares a profile with the web app)
+/// - `POST   /api/instances/{id}/tui-plugins/install`    — `{package: "@scope/name"}`,
+///   202 `{taskId}`: installs the catalogue's pinned version into the profile the
+///   catalogue names
+/// - `POST   /api/instances/{id}/tui-plugins/remove`     — `{package}`, 202 `{taskId}`
 /// - `POST   /api/instances/{id}/export`          — `{name?, includeSessions?}`, 202
 ///   `{taskId}`: a DSH-PackForge `.dspack` into `<HDSL_DATA>/exports/` (the
 ///   domain's credential filter decides what travels), the done task carries
@@ -173,7 +183,8 @@ public final class InstancesApiServlet extends HttpServlet {
                 case "logs" -> logs(request, response, id);
                 case "open" -> open(response, id);
                 case "plugins" -> plugins(request, response, id, segments);
-                case "export" -> exportPack(request, response, id);
+                case "tui-plugins" -> tuiPlugins(request, response, id, segments);
+                case "export" -> export(request, response, id);
                 case "sessions" -> sessions(request, response, id, segments);
                 case "workspaces" -> workspaces(request, response, id);
                 case "skills" -> skills(request, response, id, segments);
@@ -702,6 +713,16 @@ public final class InstancesApiServlet extends HttpServlet {
         }
         try {
             instanceTerminal.authorize(request);
+            // Which terminal plugin this instance holds is asked *before* the takeover:
+            // opening stops the web runtime first, so an instance with no terminal
+            // plugin would be taken down to be told it has nothing to run. The refusal
+            // is the same sentence `DshTui.target` would raise, said earlier.
+            try {
+                DshTui.terminalPlugin(instance);
+            } catch (DshException e) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+                return;
+            }
             // The web runtime and the TUI share DSH_HOME, so the terminal takes
             // the instance over. The stop has to be the blocking one: spawning
             // the TUI while the web process is still exiting leaves two
@@ -738,7 +759,7 @@ public final class InstancesApiServlet extends HttpServlet {
         try {
             path = switch (target == null ? "" : target) {
                 case "home" -> instance.homeDirectory();
-                case "workspace" -> DshTui.target(instance, null).cwd();
+                case "workspace" -> instance.workspacePath();
                 case "log" -> null;
                 default -> null;
             };
@@ -898,6 +919,119 @@ public final class InstancesApiServlet extends HttpServlet {
         Json.write(response, body);
     }
 
+    // ------------------------------------------------------------ tui plugins --
+
+    /// Routes under `/api/instances/{id}/tui-plugins`.
+    ///
+    /// A terminal interface is an app plugin, so it cannot share a profile with the web
+    /// app: it goes into the profile its own authors document (`tui`, `dsh-tui`,
+    /// `pi-tui`) and is started there — see [DshTuiPlugins]. That is the one thing these
+    /// routes add, and it is the reason they exist at all: the ordinary plugin routes
+    /// modify the instance's own profile, which for a terminal plugin is the wrong one.
+    ///
+    /// The profile is never named by the request. It comes from the catalogue, so a
+    /// caller cannot ask for the combination that does not boot.
+    private void tuiPlugins(HttpServletRequest request, HttpServletResponse response, String id,
+                            String[] segments) throws IOException, DshException {
+        if (segments.length == 2) {
+            if ("GET".equals(request.getMethod())) {
+                listTuiPlugins(response, id);
+            } else {
+                Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
+            }
+            return;
+        }
+        if (segments.length != 3 || !"POST".equals(request.getMethod())) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
+        switch (segments[2]) {
+            case "install" -> changeTuiPlugin(request, response, id, true);
+            case "remove" -> changeTuiPlugin(request, response, id, false);
+            default -> Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+        }
+    }
+
+    /// Which candidate terminal interfaces this instance has installed, and where.
+    ///
+    /// One row per catalogue entry, always — an entry that is not installed is what the
+    /// page offers, and leaving it out would make the answer unusable as a list. The
+    /// state is read from **each entry's own profile**, because that is where these live:
+    /// asking the instance's `web` profile would report every one of them as absent.
+    private void listTuiPlugins(HttpServletResponse response, String id) throws IOException, DshException {
+        DshInstance instance = DshInstanceManager.find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
+            return;
+        }
+        java.nio.file.Path home = instance.homeDirectory();
+        JsonArray plugins = new JsonArray();
+        for (DshTuiPlugins.Entry entry : DshTuiPlugins.ENTRIES) {
+            java.util.Map<String, String> dependencies =
+                    DshPluginInstaller.readDependencies(home, entry.profile());
+            boolean installed = DshTuiPlugins.isInstalled(entry, dependencies.keySet());
+            JsonObject json = new JsonObject();
+            json.addProperty("packageName", entry.packageName());
+            json.addProperty("profile", entry.profile());
+            json.addProperty("installed", installed);
+            if (installed) {
+                json.addProperty("installedVersion", declaredVersion(entry, dependencies));
+            }
+            plugins.add(json);
+        }
+        JsonObject body = new JsonObject();
+        body.add("plugins", plugins);
+        Json.write(response, body);
+    }
+
+    /// The version a profile recorded for an entry, whatever case it was written in.
+    private static @Nullable String declaredVersion(
+            DshTuiPlugins.Entry entry, java.util.Map<String, String> dependencies) {
+        for (java.util.Map.Entry<String, String> dependency : dependencies.entrySet()) {
+            if (entry.packageName().equalsIgnoreCase(dependency.getKey().trim())) {
+                return dependency.getValue();
+            }
+        }
+        return null;
+    }
+
+    /// Installs or removes one catalogue entry, in the profile the catalogue names.
+    ///
+    /// The body names the package and nothing else: `{package: "@xmoon76/dsh-pi-tui"}`.
+    /// The specification installed is the catalogue's **pinned** one, so the version the
+    /// page showed is the version that lands, and the profile comes from the same entry.
+    private void changeTuiPlugin(HttpServletRequest request, HttpServletResponse response, String id,
+                                 boolean install) throws IOException, DshException {
+        JsonObject body = body(request, response);
+        if (body == null) {
+            return;
+        }
+        String name = body.has("package") && body.get("package").isJsonPrimitive()
+                ? body.get("package").getAsString() : null;
+        DshTuiPlugins.Entry entry = DshTuiPlugins.find(name).orElse(null);
+        if (entry == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "package must be one of: " + DshTuiPlugins.ENTRIES.stream()
+                            .map(DshTuiPlugins.Entry::packageName)
+                            .collect(java.util.stream.Collectors.joining(", ")));
+            return;
+        }
+        DshInstance instance = DshInstanceManager.find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
+            return;
+        }
+        if (!DshVersionManager.isInstalled(instance)) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "not installed");
+            return;
+        }
+        // `install` takes the pinned specification; `remove` takes the name, which is what
+        // the profile recorded as a key.
+        java.util.List<String> specs = java.util.List.of(install ? entry.spec() : entry.packageName());
+        submitPluginTask(install ? "tui-plugin-install" : "tui-plugin-remove",
+                instance, entry.profile(), specs, install, response);
+    }
+
     /// Reports a progress line to the task whose submission created the listener.
     ///
     /// [TaskService.submit] hands the work to its executor before it returns the
@@ -939,17 +1073,10 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "not installed");
             return;
         }
-        try {
-            TaskService.Task[] holder = new TaskService.Task[1];
-            TaskService.Task task = tasks.submit("plugin-install", id, () -> {
-                DshPluginInstaller.installSpecs(instance, specs, line -> report(holder, line));
-                return "Installed " + specs.size() + " plugin(s)";
-            }, (allow, keys) -> DshBuildScripts.answer(instance, keys, allow));
-            holder[0] = task;
-            accepted(response, task);
-        } catch (TaskService.InstanceBusyException e) {
-            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
-        }
+        // The instance's own profile — which is the point of the refusal inside the
+        // installer: a terminal plugin belongs in its own profile, and this route cannot
+        // know that, so the installer says so instead of quietly mixing two app plugins.
+        submitPluginTask("plugin-install", instance, instance.profile(), specs, true, response);
     }
 
     /// Removes package specs as a task: one `dsh plugin remove` for all of them.
@@ -973,11 +1100,34 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "not installed");
             return;
         }
+        submitPluginTask("plugin-remove", instance, instance.profile(), specs, false, response);
+    }
+
+    /// Submits one plugin installation or removal as a task.
+    ///
+    /// One place, because `/plugins/install`, `/plugins/remove` and the two
+    /// `/tui-plugins` routes differ only in the profile and the specifications they
+    /// name — the task kind, the build-script approval callback, the progress holder and
+    /// the busy answer are the same, and a second copy of them is how those drift apart.
+    ///
+    /// @param kind     the task kind the interface groups by (`plugin-install`, …)
+    /// @param instance the instance whose profile is modified
+    /// @param profile  the profile inside its `DSH_HOME` to modify
+    /// @param specs    the package specifications
+    /// @param install  whether this adds the packages or takes them out
+    /// @param response the response to answer 202 on
+    private void submitPluginTask(String kind, DshInstance instance, String profile,
+                                  java.util.List<String> specs, boolean install,
+                                  HttpServletResponse response) throws IOException, DshException {
         try {
             TaskService.Task[] holder = new TaskService.Task[1];
-            TaskService.Task task = tasks.submit("plugin-remove", id, () -> {
-                DshPluginInstaller.removeSpecs(instance, specs, line -> report(holder, line));
-                return "Removed " + specs.size() + " plugin(s)";
+            TaskService.Task task = tasks.submit(kind, instance.id(), () -> {
+                if (install) {
+                    DshPluginInstaller.installSpecs(instance, profile, specs, line -> report(holder, line));
+                } else {
+                    DshPluginInstaller.removeSpecs(instance, profile, specs, line -> report(holder, line));
+                }
+                return (install ? "Installed " : "Removed ") + specs.size() + " plugin(s)";
             }, (allow, keys) -> DshBuildScripts.answer(instance, keys, allow));
             holder[0] = task;
             accepted(response, task);
@@ -1057,11 +1207,69 @@ public final class InstancesApiServlet extends HttpServlet {
 
     // ------------------------------------------------------------------ export --
 
+    /// The two halves of the export route: a `POST` writes the pack, and a
+    /// `GET` answers what could be chosen for it.
+    private void export(HttpServletRequest request, HttpServletResponse response, String id)
+            throws IOException, DshException {
+        if ("GET".equals(request.getMethod())) {
+            exportChoices(response, id);
+            return;
+        }
+        exportPack(request, response, id);
+    }
+
+    /// What a pack of this instance could carry beyond the profile: the
+    /// home-level content the security filter allows, and the harness versions
+    /// this machine has installed.
+    ///
+    /// Both are selections the export takes (`home`, `dshVersions`), and both
+    /// are facts about this machine rather than about the pack, so they are
+    /// asked for here instead of guessed at by whoever fills the form. The
+    /// home list is a **candidate** list: nothing travels unless it is named in
+    /// the export request, and naming a credential does not carry it either —
+    /// the filter has already left it out of this list.
+    private void exportChoices(HttpServletResponse response, String id) throws IOException {
+        DshInstance instance = DshInstanceManager.find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
+            return;
+        }
+        JsonObject body = new JsonObject();
+        JsonArray home = new JsonArray();
+        try {
+            Path homeDirectory = instance.homeDirectory();
+            // An instance that has never been launched has no home yet, and that is an empty
+            // selection rather than a failure: there is nothing there to offer.
+            if (Files.isDirectory(homeDirectory)) {
+                for (DshPackForge.Entry entry : DshPackForge.scanHome(homeDirectory).files()) {
+                    JsonObject file = new JsonObject();
+                    file.addProperty("path", entry.relative());
+                    file.addProperty("sizeBytes", entry.size());
+                    home.add(file);
+                }
+            }
+        } catch (DshException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
+        body.add("home", home);
+        JsonArray versions = new JsonArray();
+        DshPackInstaller.installedVersions().forEach(versions::add);
+        body.add("dshVersions", versions);
+        Json.write(response, body);
+    }
+
     /// Exports the instance as a DSH-PackForge `.dspack` into
     /// `<HDSL_DATA>/exports/`. The domain's scan decides what travels —
     /// credentials, keys, tokens and nested archives never do — and when
     /// `includeSessions` is set the conversations are written beside the
     /// container in the domain's own session-pack layout.
+    ///
+    /// The body may also carry `home`, the home-level paths to carry beside the
+    /// profile, and `dshVersions`, the other harness versions the pack is
+    /// claimed to have been measured against. Neither is guessed at: both are
+    /// absent by default, and absent means the pack carries the profile alone
+    /// and claims only the version it is pinned to.
     private void exportPack(HttpServletRequest request, HttpServletResponse response, String id)
             throws IOException, DshException {
         if (!"POST".equals(request.getMethod())) {
@@ -1098,6 +1306,8 @@ public final class InstancesApiServlet extends HttpServlet {
         Boolean includeSessions = boolField(body, "includeSessions");
         String base = name != null && !name.isBlank() ? name : instance.id();
         boolean withSessions = includeSessions != null && includeSessions;
+        java.util.List<String> homeInclude = stringList(body, "home");
+        java.util.List<String> measured = stringList(body, "dshVersions");
         try {
             TaskService.Task[] holder = new TaskService.Task[1];
             TaskService.Task task = tasks.submit("pack-export", id, () -> {
@@ -1110,12 +1320,12 @@ public final class InstancesApiServlet extends HttpServlet {
                 Path dir = PackExports.ensureDirectory(config.dataDir.resolve("exports"));
                 Path target = PackExports.uniqueFile(dir, base, ".dspack");
                 DshPackForge.Options options = new DshPackForge.Options(
-                        DshPackForge.Options.kebab(base), "1.0.0", base, "", "");
+                        DshPackForge.Options.kebab(base), "1.0.0", base, "", "", measured);
                 java.util.List<org.jackhuang.hmcl.dsh.DshSession> sessions = withSessions
                         ? org.jackhuang.hmcl.dsh.DshSessions.list(instance.homeDirectory())
                         : java.util.List.of();
                 if (sessions.isEmpty()) {
-                    DshPackForge.export(instance, target, options, report);
+                    DshPackForge.export(instance, target, options, homeInclude, report);
                 } else {
                     // PackForge writes no sessions, and a pack carrying
                     // conversations lays them out the session-pack way — same
@@ -1123,7 +1333,7 @@ public final class InstancesApiServlet extends HttpServlet {
                     // and the session entries are appended beside it.
                     Path building = target.resolveSibling(target.getFileName() + ".building");
                     try {
-                        DshPackForge.export(instance, building, options, report);
+                        DshPackForge.export(instance, building, options, homeInclude, report);
                         appendSessions(building, target, instance, sessions, report);
                     } finally {
                         Files.deleteIfExists(building);
@@ -1600,6 +1810,25 @@ public final class InstancesApiServlet extends HttpServlet {
     private static @Nullable Boolean boolField(JsonObject object, String name) {
         return object.has(name) && object.get(name).isJsonPrimitive()
                 && object.get(name).getAsJsonPrimitive().isBoolean() ? object.get(name).getAsBoolean() : null;
+    }
+
+    /// Reads a field the client writes as an array of strings.
+    ///
+    /// A field that is absent, or that holds something other than an array, is
+    /// an empty selection rather than an error: both mean "nothing was
+    /// chosen", which is what these selections default to.
+    private static java.util.List<String> stringList(JsonObject object, String name) {
+        JsonElement element = object.get(name);
+        if (element == null || !element.isJsonArray()) {
+            return java.util.List.of();
+        }
+        java.util.List<String> values = new java.util.ArrayList<>();
+        for (JsonElement item : element.getAsJsonArray()) {
+            if (item.isJsonPrimitive() && !item.getAsString().isBlank()) {
+                values.add(item.getAsString().trim());
+            }
+        }
+        return java.util.List.copyOf(values);
     }
 
     /// Parses the `homeMode` member; unknown values fall back to the default

@@ -114,7 +114,8 @@ class DshPackForgeTest {
 
         try {
         JsonObject manifest = DshPackForge.buildManifest(instance,
-                new DshPackForge.Options("My Pack", "2.1.0", "我的整合包", "a description", "someone"),
+                new DshPackForge.Options("My Pack", "2.1.0", "我的整合包", "a description", "someone",
+                        java.util.List.of()),
                 null);
 
         assertEquals(5, manifest.get("manifestVersion").getAsInt());
@@ -130,10 +131,166 @@ class DshPackForgeTest {
                         .map(com.google.gson.JsonElement::getAsString).toList(),
                 "the bundle order is what the profile loads in");
         assertEquals("1.52.0", manifest.getAsJsonObject("dependencies").get("dshmarket").getAsString());
+        assertEquals(java.util.List.of(instance.version()),
+                manifest.getAsJsonArray("dshVersions").asList().stream()
+                        .map(com.google.gson.JsonElement::getAsString).toList(),
+                "the set the author measured against always holds the pinned version");
 
         } finally {
             DshInstanceManager.delete("packforge-test");
         }
+    }
+
+    /// The set an author measured against travels, the pinned version first.
+    ///
+    /// The manifest spec asks for the pinned version to be one of the set, and for the set to be
+    /// versions: anything else is left out and said so, rather than written into a manifest an
+    /// importer would compare against what it has installed.
+    ///
+    /// @throws Exception when the instance or the manifest cannot be made
+    @Test
+    void theVersionsThePackWasMeasuredAgainstTravelWithThePinFirst() throws Exception {
+        String id = "packforge-versions";
+        Path home = Files.createTempDirectory("packforge-versions-home");
+        DshInstance instance = DshInstanceManager.create(id, "0.1.6-alpha.2",
+                DshInstance.DEFAULT_PROFILE, home, DshHomeMode.ISOLATED, null,
+                java.util.List.of(), java.util.Map.of());
+        Path profile = instance.homeDirectory().resolve("profiles").resolve(instance.profile());
+        Files.createDirectories(profile);
+        Files.writeString(profile.resolve("package.json"),
+                "{\"name\":\"dsh-profile-web\",\"private\":true}\n");
+
+        try {
+            java.util.List<String> said = new java.util.ArrayList<>();
+            JsonObject manifest = DshPackForge.buildManifest(instance,
+                    new DshPackForge.Options("measured", "1.0.0", "", "", "",
+                            java.util.List.of("0.1.7-rc.1", instance.version(), "not a version", "0.1.5")),
+                    said::add);
+
+            assertEquals(java.util.List.of(instance.version(), "0.1.7-rc.1", "0.1.5"),
+                    manifest.getAsJsonArray("dshVersions").asList().stream()
+                            .map(com.google.gson.JsonElement::getAsString).toList(),
+                    "the pin comes first, the rest follow in the order given, and a duplicate is one entry");
+            assertEquals(manifest.get("dshVersion").getAsString(),
+                    manifest.getAsJsonArray("dshVersions").get(0).getAsString(),
+                    "the specification requires the pinned version to be in the set");
+            assertTrue(said.stream().anyMatch(line -> line.contains("not a version")),
+                    "what is not a version is left out and said so: " + said);
+        } finally {
+            DshInstanceManager.delete(id);
+        }
+    }
+
+    /// The home travels only when it is asked for, and the filter still decides what may.
+    ///
+    /// A profile pack may carry the global `skills/`, the `.agent-presets/` and `AGENTS.md`; none of
+    /// it travels unasked, because the home is the machine's. What the caller does ask for is still
+    /// put through the security filter — naming a credential does not carry it — and the home's own
+    /// `profiles/` is never a candidate, since that is every other profile on the machine.
+    ///
+    /// @throws Exception when the instance, the home or the packs cannot be made
+    @Test
+    void theHomeTravelsOnlyWhenItIsAskedForAndNeverWithCredentials() throws Exception {
+        String id = "packforge-home-travel";
+        Path workspace = Files.createTempDirectory("packforge-home-travel-workspace");
+        DshInstance instance = DshInstanceManager.create(id, "0.1.6-alpha.2",
+                DshInstance.DEFAULT_PROFILE, workspace, DshHomeMode.ISOLATED, null,
+                java.util.List.of(), java.util.Map.of());
+        // An isolated instance keeps its own home inside the instance, which is what the export
+        // scans; the workspace is only where its sessions are scoped.
+        Path home = instance.homeDirectory();
+        Files.createDirectories(home);
+        Path profile = instance.homeDirectory().resolve("profiles").resolve(instance.profile());
+        Files.createDirectories(profile);
+        Files.writeString(profile.resolve("package.json"), "{\"name\":\"dsh-profile-web\"}\n");
+
+        Files.createDirectories(home.resolve("skills/my-skill"));
+        Files.writeString(home.resolve("skills/my-skill/SKILL.md"), "# a skill\n");
+        Files.createDirectories(home.resolve(".agent-presets/coding"));
+        Files.writeString(home.resolve(".agent-presets/coding/agent.cordis.yml"), "[]\n");
+        Files.writeString(home.resolve("AGENTS.md"), "global instructions\n");
+        Files.writeString(home.resolve(".credentials.yaml"), "token: secret\n");
+        Files.writeString(home.resolve("settings.yaml"), "model: demo\n");
+        Files.writeString(home.resolve(".anonymous-user-id"), "id\n");
+        Files.createDirectories(home.resolve("attachments"));
+        Files.writeString(home.resolve("attachments/a.txt"), "runtime data\n");
+        Files.createDirectories(home.resolve("profiles/other"));
+        Files.writeString(home.resolve("profiles/other/package.json"), "{\"name\":\"other\"}\n");
+        Files.createDirectories(home.resolve("skills/.system"));
+        Files.writeString(home.resolve("skills/.system/note.md"), "an installed system skill\n");
+
+        Path withoutAsking = Files.createTempFile("packforge-home-none", ".dspack");
+        Path asked = Files.createTempFile("packforge-home-asked", ".dspack");
+        try {
+            DshPackForge.export(instance, withoutAsking, DshPackForge.Options.of(instance), null);
+            assertTrue(members(withoutAsking).stream().noneMatch(member -> member.startsWith("home/")),
+                    "nothing from the home travels unasked: " + members(withoutAsking));
+
+            java.util.List<String> said = new java.util.ArrayList<>();
+            DshPackForge.export(instance, asked, DshPackForge.Options.of(instance),
+                    java.util.List.of("skills/my-skill/SKILL.md", "AGENTS.md",
+                            ".agent-presets/coding/agent.cordis.yml", ".credentials.yaml",
+                            "settings.yaml", "profiles/other/package.json", "nowhere.txt"),
+                    said::add);
+
+            java.util.Set<String> travelled = members(asked);
+            assertTrue(travelled.contains("home/skills/my-skill/SKILL.md"), travelled.toString());
+            assertTrue(travelled.contains("home/AGENTS.md"), travelled.toString());
+            assertTrue(travelled.contains("home/.agent-presets/coding/agent.cordis.yml"),
+                    travelled.toString());
+            assertTrue(travelled.stream().noneMatch(member -> member.startsWith("home/.credentials")
+                            || member.startsWith("home/settings.yaml")
+                            || member.startsWith("home/profiles/")),
+                    "what the filter refuses does not travel even when it is named: " + travelled);
+            assertTrue(said.stream().anyMatch(line -> line.contains("Not carried from the home")),
+                    "and what was named but did not travel is said so: " + said);
+            // The profile's own files are where they were: `home/` is an addition, not a move.
+            assertTrue(travelled.contains("package.json"), travelled.toString());
+
+            // What the caller can choose from is the filtered home, and it is asked of the same scan.
+            DshPackForge.Scan candidates = DshPackForge.scanHome(home);
+            java.util.List<String> offered = candidates.files().stream()
+                    .map(DshPackForge.Entry::relative).toList();
+            assertTrue(offered.contains("skills/my-skill/SKILL.md"), offered.toString());
+            assertTrue(offered.contains("AGENTS.md"), offered.toString());
+            assertFalse(offered.contains("skills/.system/note.md"), offered.toString());
+            assertEquals("runtime", candidates.excluded().get("skills/.system/"),
+                    "an installed system skill is not offered");
+            assertEquals("profile", candidates.excluded().get("profiles/"),
+                    "and the home's own profiles are not, at any depth");
+            assertTrue(offered.stream().noneMatch(candidate -> candidate.startsWith("profiles/")),
+                    "every other profile on the machine is not this pack's to carry: " + offered);
+            assertTrue(offered.stream().noneMatch(candidate -> candidate.contains("credentials")
+                            || candidate.equals("settings.yaml") || candidate.equals(".anonymous-user-id")
+                            || candidate.startsWith("attachments/")),
+                    "the home-level filter still applies: " + offered);
+
+            // And the importer lands them at the home root rather than in the profile.
+            Path destination = Files.createTempDirectory("packforge-home-landed");
+            Path targetHome = Files.createTempDirectory("packforge-home-target");
+            DshPackInstaller.land(asked, destination, targetHome);
+            assertTrue(Files.isRegularFile(targetHome.resolve("skills/my-skill/SKILL.md")));
+            assertTrue(Files.isRegularFile(targetHome.resolve("AGENTS.md")));
+            assertFalse(Files.exists(destination.resolve("AGENTS.md")),
+                    "a home-level file does not land in the profile");
+        } finally {
+            Files.deleteIfExists(withoutAsking);
+            Files.deleteIfExists(asked);
+            DshInstanceManager.delete(id);
+        }
+    }
+
+    /// Lists an archive's members.
+    ///
+    /// @param archive the archive
+    /// @return its member names
+    /// @throws Exception when it cannot be read
+    private static java.util.Set<String> members(Path archive) throws Exception {
+        java.util.Set<String> names = new java.util.TreeSet<>();
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archive.toFile())) {
+            zip.stream().map(java.util.zip.ZipEntry::getName).forEach(names::add);
+        }
+        return names;
     }
 
     @Test

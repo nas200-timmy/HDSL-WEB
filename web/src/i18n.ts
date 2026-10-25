@@ -117,6 +117,41 @@ export const I18N = {
   "dsh.instance.plugins.empty": "这个配置里还没有安装任何插件。",
   "dsh.market.no_instance": "请先在实例列表中选择一个实例",
 
+  // ---- TUI 终端插件（实例「安装」页区段；见 DshTuiPlugins / DshApiServlet） ----
+  "dsh.tui.title": "TUI 终端插件",
+  "dsh.tui.intro":
+    "dsh 本身没有终端界面（DshSurface 只有 WEB/HEADLESS/ACP/SDK），终端由社区插件提供。这里选一个装进它自己的 profile，装好后用实例页的「终端」打开——终端就从这个 profile 启动。",
+  "dsh.tui.notice.title": "免责声明：面板只做安装搬运，不改 dsh 任何源码",
+  "dsh.tui.notice.scope":
+    "面板只做三件事：用 npm 安装、锁定版本、把包挂到该插件自己的 profile（不是实例的 web）。",
+  "dsh.tui.notice.core":
+    "不修改 dsh 的任何源码：这些插件只使用 dsh 的公开导出。推荐项 dsh-TUI 自述 “zero core changes / 卸载不留补丁（uninstall leaves no patches behind）”。",
+  "dsh.tui.notice.third_party":
+    "插件是第三方社区作品，与面板、与 HDSL 无关：功能、安全性与可用性归其上游作者，面板不背书、不担保，请自行判断来源后再安装。",
+  "dsh.tui.notice.facts":
+    "下面逐条列出实际安装的包名、版本、来源仓库、许可证与 profile；不想要了可一键卸载，插件不会在 dsh 里留下补丁。",
+  "dsh.tui.notice.web":
+    "为什么不装进 web：TUI 插件和 dsh-web-app 都是 app 插件，各自按自己的语法解析同一份 argv，上游不仲裁。同 profile 装在一起，应用会遇上不认识的旗标直接退出（社区实测 error: unknown option '--no-open'）——这不是装了没用，是会让实例起不来。所以面板只往插件自己的 profile 里装，也拦下「装进 web」的尝试。",
+  "dsh.tui.package": "包名",
+  "dsh.tui.version": "版本",
+  "dsh.tui.license": "许可证",
+  "dsh.tui.repository": "来源仓库",
+  "dsh.tui.repository.none": "上游未声明仓库",
+  "dsh.tui.profile": "profile",
+  "dsh.tui.profile.row":
+    "装进 %s profile —— 不与 web 混装：TUI 插件与 web 都是 app 插件，同一份 argv 会被两套语法解析，装一起实例起不来。",
+  "dsh.tui.profile.not_listed": "它装在自己的 profile 里，所以不会出现在「插件」页的列表里。",
+  "dsh.tui.installed": "已安装",
+  "dsh.tui.not_installed": "未安装",
+  "dsh.tui.pure_bundle": "纯插件：无自带入口，启动它的 profile 即为终端（dsh --profile %s）",
+  "dsh.tui.bin": "自带入口：%s（优先直接运行，入口缺失时回退到启动 profile）",
+  "dsh.tui.install": "安装",
+  "dsh.tui.remove": "卸载",
+  "dsh.tui.loading": "正在读取终端插件清单…",
+  "dsh.tui.load_failed": "无法读取终端插件清单",
+  "dsh.tui.submitted": "已提交任务（%s），进度见「插件」页",
+  "dsh.tui.needs_install": "该实例尚未安装 dsh 运行时，安装完成后才能安装终端插件。",
+
   // ---- 会话 / 技能 ----
   "dsh.session.empty": "这个实例还没有会话记录。",
   "dsh.session.in_use": "使用中",
@@ -126,6 +161,18 @@ export const I18N = {
   "dsh.workspaces.empty": "这个实例还没有任何工作区。",
   "dsh.session.pack.export.selected": "导出选中的会话",
   "dsh.session.delete.confirm.many": "确定删除 %d 个会话吗？此操作无法撤销。",
+
+  // ---- 导出整合包弹窗（ExportInstanceModal，见 InstancesApiServlet 的 /export） ----
+  "dsh.export.home": "随包分发的全局内容（home/）",
+  "dsh.export.home.hint":
+    "默认全不勾：只有勾选的路径随包分发。凭据、密钥、令牌与压缩包已在服务端被排除，不会出现在这里。",
+  "dsh.export.home.empty": "这个实例还没有可随包的全局内容（从未启动过，或已被安全过滤排除）。",
+  "dsh.export.home.loading": "正在读取可选项…",
+  "dsh.export.home.load_failed": "无法读取可选项，将不随包任何 home 内容。",
+  "dsh.export.versions": "实测兼容集（dshVersions）",
+  "dsh.export.versions.own": "实例自身版本，始终写入",
+  "dsh.export.versions.hint":
+    "写进整合包 manifest 的 dshVersions：实例自身版本固定在首位，其余勾选的版本一并声明为实测兼容；不勾就只声明实例自身版本。",
 
   // ---- 设置页（SettingsPage.java） ----
   "launcher": "启动器",
@@ -299,6 +346,7 @@ export const I18N = {
   // ---- 终端（docs/web-shell.md） ----
   "terminal.title": "终端",
   "terminal.open": "终端",
+  "terminal.unavailable": "终端需要 HTTPS，且 Web Shell 总开关已打开（设置 → 开发者模式）",
   "terminal.stop": "停止",
   "terminal.close": "关闭",
   "terminal.reconnect": "重新连接",

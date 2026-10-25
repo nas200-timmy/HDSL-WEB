@@ -9,6 +9,8 @@ import { ExportInstanceModal } from "../components/ExportInstanceModal";
 import { StateBadge, stateLabel } from "../components/InstanceIcon";
 import { InstancePluginsPanel } from "../components/InstancePluginsPanel";
 import { InstanceSessionsPanel, InstanceSkillsPanel } from "../components/InstanceExtrasPanel";
+import { TuiPluginSection } from "../components/TuiPluginSection";
+import { TerminalWindow, type TerminalTargetInfo } from "../components/TerminalWindow";
 import { LogView } from "../components/LogView";
 import { ProgressBar } from "../components/ProgressBar";
 import {
@@ -31,6 +33,7 @@ import {
   RocketLaunchIcon,
   SettingsFillIcon,
   SettingsIcon,
+  TerminalIcon,
   TextureIcon,
 } from "../components/icons";
 import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
@@ -137,6 +140,9 @@ export function InstanceDetailPage() {
   const [renameBusy, setRenameBusy] = useState(false);
   const [manageAnchor, setManageAnchor] = useState<HTMLElement | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [terminalTarget, setTerminalTarget] = useState<TerminalTargetInfo | null>(null);
+  /// Web Shell 总开关 + 面板是否在讲 TLS；任一不满足就不显示终端入口（docs/web-shell.md §4.3）
+  const [webShellEnabled, setWebShellEnabled] = useState(true);
 
   // 挂载：订阅该实例日志 topic + 全局任务，打底数据，并周期性兜底刷新
   useEffect(() => {
@@ -153,6 +159,22 @@ export function InstanceDetailPage() {
       disposeConsole(id);
     };
   }, [id]);
+
+  // 终端入口的显示条件与列表页一致：Web Shell 总开关 + 面板此刻真的在讲 TLS
+  useEffect(() => {
+    let alive = true;
+    api
+      .developerStatus()
+      .then((status) => {
+        if (alive) setWebShellEnabled(status.webShellEnabled && status.https);
+      })
+      .catch(() => {
+        // 读不到就维持显示：后端仍会拒绝打开，按钮不是那道门
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // 深链直达（store 里还没有该实例）时单独拉取
   useEffect(() => {
@@ -314,6 +336,20 @@ export function InstanceDetailPage() {
   const running = st === "RUNNING";
   const port = instance.port ?? parsePortFromUrl(instance.url);
 
+  /// 终端入口：打开终端会先停掉同实例的 web 再跑 TUI，所以与实例状态无关，装了就能开。
+  /// 不可用时**变灰禁用而不是隐藏**——隐藏会让人以为没有这个功能（docs/web-shell.md §4.3）。
+  const terminalButton = (
+    <button
+      className="btn btn-outline ripple-host"
+      title={webShellEnabled ? I18N["terminal.open"] : I18N["terminal.unavailable"]}
+      disabled={!webShellEnabled}
+      onClick={() => setTerminalTarget({ kind: "dsh", id, name: instance.name })}
+    >
+      <TerminalIcon size={15} />
+      {I18N["terminal.open"]}
+    </button>
+  );
+
   // ---------- 概览（实例管理 tab 顶部状态卡） ----------
 
   const overview = (() => {
@@ -419,6 +455,7 @@ export function InstanceDetailPage() {
                 <CancelIcon size={15} />
                 {I18N["dsh.stop"]}
               </button>
+              {terminalButton}
             </div>
           </div>
         );
@@ -466,6 +503,7 @@ export function InstanceDetailPage() {
                 <RefreshIcon size={15} />
                 刷新日志
               </button>
+              {terminalButton}
             </div>
           </div>
         );
@@ -482,6 +520,7 @@ export function InstanceDetailPage() {
                 <RocketLaunchIcon size={15} />
                 {I18N["dsh.launch"]}
               </button>
+              {terminalButton}
               <span style={{ flex: 1 }} />
               <VersionSelect
                 value={reinstallVersion || instance.version}
@@ -748,6 +787,10 @@ export function InstanceDetailPage() {
                 </button>
               </div>
             </div>
+
+            {/* TUI 终端插件：dsh 没有内置终端界面，终端由社区插件提供（见 DshTuiPlugins）。
+                安装/卸载走的就是本页「插件」那一套接口，这里只是把清单与免责声明摆出来。 */}
+            <TuiPluginSection instance={instance} />
           </div>
         )}
 
@@ -911,6 +954,7 @@ export function InstanceDetailPage() {
       />
 
       <ExportInstanceModal instance={instance} open={exportOpen} onClose={() => setExportOpen(false)} />
+      <TerminalWindow target={terminalTarget} onClose={() => setTerminalTarget(null)} />
     </div>
   );
 }

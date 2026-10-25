@@ -15,7 +15,6 @@ import {
   CloseIcon,
   ContentCopyIcon,
   DeleteIcon,
-  DeployedCodeIcon,
   EditIcon,
   ExtensionIcon,
   FormatListBulletedIcon,
@@ -25,6 +24,7 @@ import {
   PublicIcon,
   RefreshIcon,
   RocketLaunchIcon,
+  TerminalIcon,
 } from "../components/icons";
 import { I18N } from "../i18n";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
@@ -1053,18 +1053,16 @@ function InstancesCard({
                     >
                       {running ? <CloseIcon size={18} /> : <RocketLaunchIcon size={18} />}
                     </button>
-                    {webShellEnabled && (
-                      <button
-                        className="icon-btn on-variant ripple-host"
-                        title={I18N["terminal.open"]}
-                        disabled={installing}
-                        onClick={() =>
-                          setTerminalTarget({ kind: "brand", brand, id: inst.id, name: inst.name })
-                        }
-                      >
-                        <DeployedCodeIcon size={18} />
-                      </button>
-                    )}
+                    <button
+                      className="icon-btn on-variant ripple-host"
+                      title={webShellEnabled ? I18N["terminal.open"] : I18N["terminal.unavailable"]}
+                      disabled={!webShellEnabled || installing}
+                      onClick={() =>
+                        setTerminalTarget({ kind: "brand", brand, id: inst.id, name: inst.name })
+                      }
+                    >
+                      <TerminalIcon size={18} />
+                    </button>
                     <button
                       className="icon-btn on-variant ripple-host"
                       title={I18N["dsh.brand.open"]}

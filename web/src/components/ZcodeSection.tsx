@@ -6,13 +6,13 @@ import { PopupItem, PopupMenu, PopupSep } from "./PopupMenu";
 import {
   CloseIcon,
   DeleteIcon,
-  DeployedCodeIcon,
   EditIcon,
   ExtensionIcon,
   FormatListBulletedIcon,
   MoreVertIcon,
   PublicIcon,
   RocketLaunchIcon,
+  TerminalIcon,
 } from "./icons";
 import { I18N } from "../i18n";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
@@ -314,7 +314,7 @@ export function ZcodeSection() {
                     disabled={busy || !webShellEnabled || !s.zcodeDist?.present}
                     onClick={() => setTerminalTarget({ kind: "zcode", id: inst.id, name: inst.name })}
                   >
-                    <DeployedCodeIcon size={18} />
+                    <TerminalIcon size={18} />
                   </button>
                   <button
                     className="icon-btn on-variant ripple-host"
