@@ -264,6 +264,15 @@ docker `0.5.83` 会拿到 `latest`（`sort -V` 下它最大）。**推完必须�
 
 - **`git fetch github.com` 在这台机器上会被掐断**（`GnuTLS recv error (-110)`）。读上游提交用
   `gh api repos/MCXCC303/HDSL/commits`；源码 zip 走 `codeload.github.com` 也通。
+- **推送 github.com 一律强制 HTTP/1.1**（v0.5.83 那次踩到的）：`git push origin main` 卡在
+  "Failed to connect to github.com port 443"，同一时刻 `gh api`（api.github.com）0.3 秒就回。
+  实测 `github.com` 的**连接能建立、传满 32 KB 就停**（典型的 HTTP/2 窗口/MTU 症状）；换成
+  `git -c http.version=HTTP/1.1 push` **第一次就过**。以后推送都带上它，再加
+  `-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=45`，卡住就快速失败，别干等 134 秒。
+  另外本机 `~/.ssh/id_ed25519` **没有**注册在账号上（`ssh -T git@github.com` 返回
+  Permission denied (publickey)），所以 SSH 这条退路目前不通——只有 HTTPS + gh 凭据一条路。
+- **`SHA256SUMS.txt`**：`cd build/libs && sha256sum hdsl-web-<版本>.jar > …`（只含文件名，86 字节），
+  放在仓库根但**不提交**，只作为 Release 资产上传。
 - 子代理在同一个工作树里并发干活时，**分支会被漂到 `main`**（本次两回），收尾时务必确认
   `git branch --show-current`。
 - 本仓库 `origin` 是 HTTPS + `gh` 凭据（`git -c credential.helper='!gh auth git-credential' push …`）。
