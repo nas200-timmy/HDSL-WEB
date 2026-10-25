@@ -132,4 +132,27 @@ grep -rn "DshPluginRequirements\|DshPluginBundle\|DshModpacks" \
 
 # 4) 全量（照 CI）
 (cd web && npm ci --no-audit --no-fund && npm run typecheck && npm run build && npm run compat) && ./gradlew --no-daemon build
-```
+```## 2026-10-25 扫描（v0.5.81）：没有要搬的
+
+按「每月扫一遍」的流程跑了一次，结论是**这一批没有需要移植的上游改动**。
+
+- 上游本地克隆停在 `bc60c61`（2026-10-23），并经 GitHub API 确认**就是上游最新提交**——所以不是
+  "没拉到"，是真的没有更新的。（本机 `git fetch github.com` 会被掐断：`GnuTLS recv error (-110)`；
+  读提交用 `gh api repos/MCXCC303/HDSL/commits` 是通的。）
+- 从上一批终点（`8d17e2e` / `e146c5b`，2026-10-18~19）到 `bc60c61`，落在拷贝层且本仓库**确实还没有**
+  的只有三条：
+
+| 上游 | 内容 | 判定 |
+|---|---|---|
+| `b6316b7` | 新实例默认 ISOLATED HOME | **半条**：网页侧已由 `InstancesApiServlet` 硬编码 `ISOLATED` 兜住；领域层 `DshIsolationPolicy.of(null)` 与 `LauncherSettings` 默认值仍是 `WITH_PLUGINS`，而这段在 PORT 里**没有任何调用者**（死代码）。将来真把策略接上时才需要同步，届时一并改三处（含 `SettingsManager` 的 `Snapshot`） |
+| `6eda067` | 密钥校验报错搬进对话框 | 适用，但只影响呈现：`dsh/DshAccount` 仍保留 `SAID_LIMIT = 120` 截断与 `vendor_said` / `not_a_listing` 旧文案 |
+| `0eb4095` / `bc60c61` | `feat(plugin)` 新类（读 profile 已装插件、插件图标） | **不属于同步范围**：消费者只有上游 CLI 与 JavaFX 页；本仓库的 React 面板走自己的 `GET /api/instances/{id}/plugins` |
+
+- 其余全是：已移植、纯结构重排（改包名 / 拆主题包）、测试与 CI、CLI 专用、JavaFX UI，或本文档
+  「明确不搬的」里已列过的桌面单用户语义（`LauncherLock`、`DshRunningRecord`、`PortOccupant`、
+  多实例文件夹模型）。
+- 一条**残余差异**值得记着（当前无实际影响）：上游 `Semver.compare` 会剥掉 `v` 前缀与 `+build`，
+  而 PORT 的 `VersionNumber`（Maven ComparableVersion）按 `+` 切分且不认 `v`。目前进
+  `compareVersions` 的都是干净的 npm 版本串，所以排序一致；哪天有带 `v`/`+build` 的串进来就会不一致。
+- 整合包那一块另见 [modpacks.md](modpacks.md) §4：上游 `pack/*` 与本仓库 `dsh/DshPack*` 契约同源、
+  停在同一点，同样没有"等待移植"的改动。

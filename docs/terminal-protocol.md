@@ -45,6 +45,23 @@
 200 → `{"elevated":true,"expiresAt":"…"}`。要求 HTTPS，否则 409 `tls_required`。
 其他：401 密码错误；409 `developer_password_not_set`（还没设置过）；429 连续失败被锁。
 
+### `GET /api/developer/status`
+
+开发者模式此刻的状态。两个客户端都在**打开终端之前**读它，好把对话框排成同一个顺序
+（密码 → 内核 → 终端），而不是等到 403 才知道要提权：
+
+```json
+{ "devPasswordSet": true, "elevated": true, "webShellEnabled": true, "https": true }
+```
+
+- `devPasswordSet`：面板里到底有没有开发者密码。为假时提权永远不可能成功，客户端直接
+  说明去哪里设置，不再问一个不存在的密码；
+- `elevated`：按当前会话 Cookie 与来源地址算（30 分钟滑动续期）；
+- `webShellEnabled` / `https`：总开关与「面板此刻是否真的在讲 TLS」。
+
+读不到这个端点（老面板 404）不算失败：客户端跳过预检，照旧直接开终端，让下面的
+403 / 409 说话——服务端始终是最终权威。
+
 ### 实例列表
 
 - dsh：`GET /api/instances` → `{"instances":[{"id","name","state",…}]}`
@@ -86,7 +103,8 @@ Claude Web 专用：列出这次能进入的 Claude Code 内核。别的品类�
 请求体可以是 `{}`；Windows 桌面模式要求 `{"confirm":"open-desktop-terminal"}`。
 
 客户端在界面上把开发者密码、内核选择都画成**终端窗口之前的对话框**：密码通过（必要时先
-设置）→ 需要时选内核 → 才换成终端。协议没变，顺序是客户端行为。
+设置）→ 需要时选内核 → 才换成终端。协议没变，顺序是客户端行为——两个客户端都靠上面那个
+`developer/status` 把顺序对齐，而不是等到 403 才知道要提权。
 
 POSIX 面板返回：
 
@@ -125,7 +143,8 @@ Windows 面板返回（没有 ticket，也没有 PTY——终端开在面板所�
 | 403 | `developer_elevation_required` | 开发者密码提权过期 |
 | 409 | `developer_password_not_set` | 还没设置过开发者密码 |
 | 409 | `terminal_already_open` | 同实例已有终端（正常路径是重连，不该看到这个） |
-| 409 | `terminal_failed: …` | 启动 TUI 失败，冒号后是原因 |
+| 409 | `terminal_failed: …` | 启动 TUI 失败，冒号后是原因（客户端要把这段原因原样给用户，它是可行动的那半句） |
+| 409 | 无 code 前缀 | dsh 实例没装终端插件：整个错误体就是一句中文说明（`未安装终端界面插件，请先到实例的「安装」页安装一个 TUI 插件（推荐 …）。`）。它不带 `code:` 前缀，所以客户端要按这句话本身认出来；语义上是**策略拒绝**，重试无用 |
 | 400 | `confirmation_required` | Windows 面板缺 `confirm` |
 | 404 | `instance not found` / `no such instance` | 实例不存在 |
 

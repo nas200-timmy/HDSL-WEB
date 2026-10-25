@@ -25,7 +25,7 @@
       │  web 运行中则先停 web（记 terminal.switch）
       ▼
   原地覆盖层（桌面）/ 全屏 sheet（手机）
-      │  xterm.js ←WSS→ 服务端 PTY → kimi / opencode / dsh tui
+      │  xterm.js ←WSS→ 服务端 PTY → kimi / opencode / dsh（已装的 TUI 插件）
       ▼
   底栏：实例状态 + [启动] / [停止]
 ```
@@ -33,7 +33,8 @@
 - `/exit`、进程退出、崩溃 → 清屏关窗，恢复之前的 web 模式。
 - 关窗 / 刷新 / 断网 → 只 detach，进程继续跑；重新打开即 attach 并回放最近输出。
 - 底栏「停止」= 紧急杀进程（复用实例停止机制），不是关窗。
-- 不做空闲超时；终端一直挂着不自动回收。
+- 不做空闲超时；终端一直挂着不自动回收。终端 WebSocket 显式 `setMaxIdleTimeout(0)`——Jetty 默认的
+  30 秒曾把静默终端以 `1001 Connection Idle Timeout` 关掉，看起来就像"终端自己断了"（v0.5.81 修）。
 
 ## 4. 安全不变量
 
@@ -118,6 +119,8 @@ web/terminal/                 常置包，不依赖 MINA
 web/http/InstancesApiServlet   dsh 的 POST/DELETE /api/instances/{id}/terminal
 web/brand/BrandApiServlet      品牌的 /api/brands/{brand}/instances/{id}/terminal 与 …/terminals（内核清单）
 web/zcode/ZcodeApiServlet      ZCode 的 /api/zcode/instances/{id}/terminal
+web/http/DshApiServlet         GET /api/dsh/tui-plugins（精选 TUI 终端插件清单，见 DshTuiPlugins）
+web/http/InstancesApiServlet   /api/instances/{id}/tui-plugins（每个插件自己的 profile 上的状态与安装/卸载）
 web/ws/TerminalWebSocket       WSS /ws/terminal/{ticket}
 ```
 
@@ -189,7 +192,7 @@ web/ws/TerminalWebSocket       WSS /ws/terminal/{ticket}
 |---|---|---|---|---|
 | kimi | `node <包>/dist/main.mjs`（`kimi` 无子命令） | `KIMI_CODE_HOME` 或 `~/.kimi-code`；会话在 `<home>/sessions` | 是：`kimi web` 用同一 home | `-r/--resume [id]`、`-c/--continue` |
 | opencode | 1.19+：`opencode-ai/bin/opencode.exe`（POSIX 也叫 .exe，ELF）；旧版：`opencode-<os>-<arch>/bin/opencode` 或 `@opencode/cli-*`。`bin/opencode.cjs` 只是启动器 | XDG：data `~/.local/share/opencode`、config `~/.config/opencode` | 是：同一 data 目录 | `--session <id>`、`--continue` |
-| dsh | `dsh tui [--resume]` | 实例 `DSH_HOME` | 是（已有 SessionCatalog） | `--resume <id>` |
+| dsh | 终端由社区插件提供（dsh 自身只有 WEB/HEADLESS/ACP/SDK 四种 surface）：**启动插件自己的 profile**，`dsh --profile tui`（上游把 `dsh tui` 也展开成它），bin 型可优先直接跑其入口。详见下方 | 实例 `DSH_HOME` | 是（已有 SessionCatalog） | `--resume <id>`（bin 型与纯插件都支持） |
 | zcode | `node <发行包>/bin/zcode.mjs`（不带参数；CLI 默认命令是 `tui`） | `ZCODE_DATA_BASE_DIR` 下的 `.zcode/`；会话库跟 `homedir()` | 是：与 web 进程同一个 `ZCODE_DATA_BASE_DIR` 与 `HOME` | 第一版不做 |
 | claude-web | 社区引擎 `node_modules/claude-web-engine/dist/cli-node.js`；官方 `@anthropic-ai/claude-agent-sdk-<platform>-<arch>/claude[.exe]`（缺失退回 PATH 上的 `claude`） | `~/.claude` 与 `~/.claude-web`（实例 home） | 是：网页工作台写的就是这两处 | 第一版不做 |
 
@@ -206,6 +209,26 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
   `.bin/kimi`。
 - opencode：1.19 起平台二进制由 `opencode-ai` 自己带（`bin/opencode.exe`，POSIX 同样
   叫 .exe 的 ELF）；先找它，再退回无 scope 的平台包与旧的 `@opencode/cli-*`。
+- dsh（`DshTui` + `DshTuiPlugins`）：**终端是插件，跑在它自己的 profile 上**。上游把
+  `dsh <name>` 展开成 `dsh --profile <name>`，所以 `dsh tui` 确实是上游入口——但 `tui` 不是
+  内置模板名（模板只有 acp/web/headless/sdk/sdk-minimal），它要先被插件建出来。于是：
+  - **装**：`POST /api/instances/{id}/tui-plugins/install` `{package}`，服务端按清单用
+    `dsh plugin --profile <清单里的 profile> add <包@锁定版本>`（`GET …/tui-plugins` 读状态，
+    每个插件从**它自己的 profile** 读，实例的 web profile 里本来就看不到它们）。
+  - **绝不能装进 web**：TUI 插件与 `dsh-web-app` 都是 app 插件，各按自己的语法解析同一份
+    argv，上游不仲裁；同 profile 装一起会让应用遇不认识的旗标直接退出（社区实测
+    `error: unknown option '--no-open'`），实例起不来。守卫在 `DshPluginInstaller.installSpecs`
+    （拒绝发生在解析运行时之前，所有安装路径共用），`DshTuiPlugins.refuseAppProfile` 负责说明；
+    卸载永不拒绝（那是把实例修回来）。
+  - **起**：先按 `<DSH_HOME>/profiles/<插件 profile>/node_modules/<包>/<其 package.json 声明的
+    bin>` 直接跑（bin 型，先读包自己的清单、再退回 `node_modules/.bin/<bin>`，且只接受解析后是
+    JS 文件的软链——pnpm 写的是 `#!/bin/sh` shim，不能当根进程，理由同 kimi）；没有 bin 或入口不在，
+    就启动那个 profile：`node <bin.js> --profile <插件 profile>`。argv 里出现 `--profile web`
+    （例如用户在实例启动参数里自己写的）一律拒绝。
+  - 一个都没装 → 明确报错并指向实例「安装」页。清单与许可证/仓库/profile 由
+    `GET /api/dsh/tui-plugins` 提供（`web/http/DshApiServlet`）；许可证含 Apache-2.0
+    （`@huiliyi37/dsh-tianshu-tui`）。`@ruhooai/dsh-tui`（bin 需要 Bun + 外部 `cordis.yml`）
+    与 `@zhangweiii/dsh-tui` 已不在清单里。
 
 ## 10. 已知缺口
 
@@ -224,6 +247,3 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
 - **Claude Web 的官方内核是否存在**取决于发行包里有没有 SDK 的平台可选依赖
   （`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`），没有时退回 PATH 上的 `claude`；
   `…/terminals` 端点会把可用性与缺什么如实报出来。
-- **hdsl-tui 的顺序**：网页是「密码 → 内核 → 终端」，Go 客户端目前是「选内核 →
-  （需要时）密码 → 终端」——客户端只在收到 403 时才知道要提权，要完全一致得先查一次
-  `developerStatus`。

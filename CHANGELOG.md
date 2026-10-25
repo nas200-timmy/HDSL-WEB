@@ -2,6 +2,67 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.5.81 — 2026-10-25 · 终端入口、整合包契约补齐、TUI 插件注入
+
+三条线一起推：面板里的**终端入口**变得名副其实；**整合包**补齐可选能力与向后兼容；**dsh 的终端**
+从"假设上游有 `tui`"改成"装一个 TUI 插件"。
+
+### 终端入口统一为「终端窗口」
+
+四处终端入口（实例列表、实例详情、品牌实例、ZCode）此前都用 `DeployedCodeIcon`（一个代码立方体），
+既不统一也不像终端。现在统一换成 **Material Symbols 的 `terminal` 窗口图标**（圆角窗口 + `>` + `_`）；
+`makeIcon` 增加可选 `viewBox` 以承载该图标的新视口。不可用时**变灰禁用而不是整个消失**——隐藏会让
+人以为没有这个功能。
+
+### 整合包：可选能力与向后兼容（对齐 DSH-PackForge 规范）
+
+规范仓库把现行版本定为 manifest v5 / `.dspack` v3 / index `schemaVersion 2`；本版补齐四处：
+
+- **导出 `home/`**（`pack-structure/v3.md §5`）：可选白名单，把全局 `DSH_HOME` 内容（`skills/`、
+  `.agent-presets/`、`AGENTS.md`）随 profile 包分发——**不勾选则什么都不随包走**，凭据/压缩包过滤
+  原样保留。导出弹窗新增勾选列表（默认全不勾），`GET /api/instances/{id}/export` 提供可选项。
+- **`dshVersions` 兼容集**（`manifest/v5.md §12`）：导出写实测集（实例自身版本在首位）；导入按
+  `pack-structure/v3.md §9.1(2)` 做 `∩ 本机已装` 的确定性选择（优先 pin、其次最新），**不再因为
+  那个版本本机没有就整包失败**；市场条目也读该字段。
+- **`launchers` 声明**（`manifest/v5.md §13`、`launcher-registry.md`）：简式与全式都解析，归一化后
+  查本启动器 canonical id `hdsl`，逐段数值比较，**只警告放行、绝不硬拒**；警告随导入结果回报。
+  导出侧刻意**不写** `launchers`（HDSL 导出的包保持通用）。
+- **向后兼容导入**：`.tgz`（pack-structure v1）按 gzip 魔数识别并导入，manifest v2/v3 可导入，
+  **v1 拒绝并说清它被压平了什么**。
+
+### dsh 的终端：从 `dsh tui` 到「装一个 TUI 插件」
+
+上游 `dsh <name>` 就是 `dsh --profile <name>`，但 `tui` **不在**自动初始化的 profile 模板里——所以
+"没装插件就打开终端"会以 `profile "tui" does not exist` 在 0.4 秒内退出（审核实测）。本版：
+
+- 面板提供**精选 TUI 插件清单**（`DshTuiPlugins`）与逐实例安装/卸载
+  （`/api/instances/{id}/tui-plugins`；`profile` 由服务端按清单决定，请求无法指定）；
+- **硬约束**：TUI 插件**绝不能装进实例的 `web` profile**——它和 `dsh-web-app` 都是 app 插件、
+  各按自己的语法解析同一份 argv，混装会让应用遇未知旗标直接退出。安装器新增 profile 形参与
+  `refuseAppProfile` 守卫（拒绝发生在解析运行时之前，所有安装路径共用）；
+- `DshTui` 改为启动**插件自己的 profile**；没装插件时给出可行动的错误，不再跑坏命令；
+- 实例「安装」页新增 TUI 插件区段与**醒目免责声明**：面板只做 npm 安装 / 版本锁定 / 挂到插件自己的
+  profile，**不修改 dsh 任何源码**，插件是第三方社区作品、功能与安全归其上游，并展示实际包名 /
+  版本 / 来源仓库 / 许可证与一键卸载。
+
+### 终端 WS 不再被 30 秒"静默"掐断
+
+`docs/web-shell.md §3` 一直写着「无空闲超时」，但 `TerminalWebSocket` 从未设置过——终端 WS 因此吃
+Jetty 默认的 30 秒，agent 一静默就被 `1001 Connection Idle Timeout` 关掉（审核实测）。现在显式
+`setMaxIdleTimeout(0)`；客户端同时加了心跳（20 秒 ping、10 秒 pong 期限），半死连接不再干挂。
+（客户端要求对端回 pong；仓库 pin 的 Jetty 12.0.39 会回，已反编译确认。）
+
+### 客户端（hdsl-tui）对齐
+
+- 终端失败时**保留服务端给的原因**（不再被通用文案盖掉）；提权顺序改为「状态 → 密码 → 内核 → 终端」，
+  与网页一致（用早已存在、此前从未调用的 `GET /api/developer/status`）；
+- 选项可以放在地址**前后**（Go 标准 flag 有"首个位置参数处停止解析"的陷阱）；
+- 补上帮助里早已承诺的 `j/k` 菜单导航；
+- `terminal_failed` 的退出码统一为 **4（策略拒绝）**——此前两条路径上一个 3 一个 4。
+
+验证：**741 用例 / 0 失败 / 2 跳过**（Linux；含新增的整合包与 TUI 插件用例）；前端 `tsc --noEmit`、
+`vite build`、兼容闸门全过；客户端 `gofmt` / `go vet` / `go test ./...` 全绿，5 平台交叉编译通过。
+
 ## v0.5.72 — 2026-10-24 · ZCode 终端修复、客户端证书非交互入口、Claude Web 端点覆盖与官方内核预检
 
 **ZCode 终端起不来**：报 `terminal_failed: zcode.nodePath does not point at a file: node`。
