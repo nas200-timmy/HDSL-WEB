@@ -289,21 +289,15 @@ public final class BrandApiServlet extends HttpServlet {
                     "an install for " + brand.id() + " is already running");
             return;
         }
-        TaskService.Task[] holder = new TaskService.Task[1];
-        TaskService.Task task = tasks.submit("install", brand.id(), () -> {
+        TaskService.Task task = tasks.submit("install", brand.id(), live -> {
             try {
-                BrandInstaller.install(brand, target, ref.root(), message -> {
-                    TaskService.Task owner = holder[0];
-                    if (owner != null) {
-                        owner.update(message, -1);
-                    }
-                });
+                BrandInstaller.install(brand, target, ref.root(),
+                        message -> live.update(message, -1));
                 return "Installed " + brand.sourceLabel() + " " + target;
             } catch (BrandException e) {
                 throw new RuntimeException(e.getMessage(), e);
             }
         });
-        holder[0] = task;
         JsonObject result = new JsonObject();
         result.addProperty("taskId", task.id());
         Json.write(response, HttpServletResponse.SC_ACCEPTED, result);

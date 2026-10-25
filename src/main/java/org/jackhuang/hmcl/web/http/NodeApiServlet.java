@@ -111,19 +111,16 @@ public final class NodeApiServlet extends HttpServlet {
                 ? NodeSource.of(body.get("source").getAsString())
                 : NodeSource.MIRROR;
 
-        // 进度回调里要用任务句柄，而句柄在 submit 之后才存在——经典 holder 模式
-        TaskService.Task[] holder = new TaskService.Task[1];
-        holder[0] = tasks.submit("node-install", null, () -> {
+        // 进度回调里要用任务句柄：TaskWork 把本任务直接交给任务体，句柄在
+        // 第一行进度到达时就一定存在（老的一格 holder 要在 submit 返回后才填上，
+        // 那之前的进度行没有收件人）。
+        TaskService.Task task = tasks.submit("node-install", null, live -> {
             String picked = version == null || version.isEmpty() ? newestSupported(source) : version;
-            NodeRuntime installed = NodeRuntimeManager.install(picked, source, stage -> {
-                TaskService.Task task = holder[0];
-                if (task != null) {
-                    task.update(stage, -1);
-                }
-            });
+            NodeRuntime installed = NodeRuntimeManager.install(picked, source,
+                    stage -> live.update(stage, -1));
             return "Installed Node.js " + installed.version();
         });
-        Json.write(response, java.util.Map.of("taskId", holder[0].id()));
+        Json.write(response, java.util.Map.of("taskId", task.id()));
     }
 
     private void uninstall(HttpServletRequest request, HttpServletResponse response) throws IOException {

@@ -24,6 +24,7 @@ import org.jackhuang.hmcl.Metadata;
 import org.jackhuang.hmcl.util.DigestUtils;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
 import org.jackhuang.hmcl.util.io.HttpClients;
+import org.jackhuang.hmcl.util.io.SafePaths;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -68,6 +69,10 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// followed. The export side already filters all of this, but a pack from the market was not
 /// necessarily made by this launcher — and a previous bug in this very project (`sessions/../planted/x`
 /// in a session pack) is why the rule is "never trust a member name".
+///
+/// The destination is not trusted either, and for a different reason: a pack cannot put a link there,
+/// but a `link:` or `file:` plugin leaves one behind, so a directory that is already a link out of the
+/// destination is refused rather than written through. See [SafePaths].
 @NotNullByDefault
 public final class DshPackInstaller {
     /// The container's marker file, at the archive's root.
@@ -96,19 +101,6 @@ public final class DshPackInstaller {
     /// `dshl` differ by one letter and are unrelated projects — `dshl` is the PCL-family launcher,
     /// this is HDSL — so the id is written once, here, and never spelled by hand at a call site.
     public static final String LAUNCHER_ID = "hdsl";
-
-    /// Names a pack may not write, whatever it says about itself.
-    ///
-    /// The same list the export side refuses, kept here as well: the two sides guard different
-    /// things — the exporter guards the author's secrets from being published, and this guards the
-    /// person's machine from being written to — so neither can rely on the other having run.
-    private static final List<String> DENY_NAMES = List.of(
-            ".env", ".netrc", ".pypirc", ".npmrc", ".yarnrc", ".yarnrc.yml",
-            "credentials.yaml", ".credentials.yaml", "id_rsa", "id_ed25519", "id_ecdsa", "id_ed448");
-
-    /// Extensions a pack may not write.
-    private static final List<String> DENY_EXTENSIONS = List.of(
-            ".key", ".pem", ".p12", ".pfx", ".jks", ".keystore");
 
     private DshPackInstaller() {
     }
@@ -960,28 +952,37 @@ public final class DshPackInstaller {
                 // is the target's path and whose Unix mode marks it as a link; `java.util.zip` does
                 // not expose the mode, so this cannot tell one from a small text file — and it does
                 // not have to. Nothing here calls `Files.createSymbolicLink`, so such an entry is
-                // written out as an ordinary file holding the text of a path. The link is never
-                // created, and the path check below already refuses a member that would land outside
-                // the destination whatever it points at.
+                // written out as an ordinary file holding the text of a path, and the link is never
+                // created.
+                //
+                // That is a statement about the entries of *this* archive, and no more. It does not
+                // mean a member can never be written through a link: a link that was already in the
+                // destination — what a `link:` or `file:` plugin leaves behind — is found rather
+                // than made, and it is [#resolve]'s second question (see [#SafePaths]) that refuses
+                // the member, not the fact that the archive cannot carry one.
 
+                Path root;
                 Path target;
                 if (name.startsWith("overrides/")) {
                     if (!parts.contains(Part.OVERRIDES)) {
                         continue;
                     }
-                    target = resolve(destination, name.substring("overrides/".length()));
+                    root = destination;
+                    target = resolve(root, name.substring("overrides/".length()));
                     overrides++;
                 } else if (name.startsWith("home/") && home != null) {
                     if (!parts.contains(Part.HOME)) {
                         continue;
                     }
-                    target = resolve(home, name.substring("home/".length()));
+                    root = home;
+                    target = resolve(root, name.substring("home/".length()));
                     fromHome++;
                 } else if (isMachineFile(name)) {
                     if (!parts.contains(Part.MACHINE)) {
                         continue;
                     }
-                    target = resolve(destination, name);
+                    root = destination;
+                    target = resolve(root, name);
                     machine++;
                 } else {
                     // `manifest.json`, `dspack.json`, and anything else the pack carries for its own
@@ -990,7 +991,7 @@ public final class DshPackInstaller {
                 }
 
                 refuseIfUnsafe(name, target);
-                Files.createDirectories(target.getParent());
+                SafePaths.createDirectories(root, target.getParent());
                 Files.copy(zip, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 files++;
             }
@@ -1041,7 +1042,7 @@ public final class DshPackInstaller {
                 }
                 Path target = resolve(destination, member);
                 refuseIfUnsafe(member, target);
-                Files.createDirectories(target.getParent());
+                SafePaths.createDirectories(destination, target.getParent());
                 Files.copy(tar, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 if (isMachine) {
                     machine++;
@@ -1057,18 +1058,21 @@ public final class DshPackInstaller {
 
     /// Returns where a member lands, refusing anything that would leave the destination.
     ///
-    /// The check is on the **resolved** path rather than on the name, because a name is what an
-    /// attacker controls: `a/../../b` and `a/./../../b` are the same escape written two ways, and
-    /// both resolve outside. Normalising first and comparing after is what catches both.
+    /// The check is [#SafePaths#resolveInside]'s, and it asks two questions because one of them is
+    /// not enough. Normalising the name and comparing it with the destination is what catches
+    /// `a/../../b` and `a/./../../b` — the same escape written two ways, both leaving the
+    /// destination — but it is made of strings, and a destination that already holds a symlink
+    /// directory beginning with it passes it while the write lands wherever the link points. The
+    /// second question is asked of the filesystem instead: the deepest component of the resolved
+    /// path that exists has to resolve, links and all, to somewhere inside the destination.
     ///
     /// @param root the directory the member must stay inside
     /// @param name the member's name, already stripped of its prefix
     /// @return where it lands
     /// @throws DshException when it would land outside
     private static Path resolve(Path root, String name) throws DshException {
-        Path base = root.toAbsolutePath().normalize();
-        Path target = base.resolve(name).normalize();
-        if (!target.startsWith(base)) {
+        Path target = SafePaths.resolveInside(root, name);
+        if (target == null) {
             throw new DshException("That pack tries to write outside the folder it is installing "
                     + "into (" + name + ")", null);
         }
@@ -1077,22 +1081,30 @@ public final class DshPackInstaller {
 
     /// Refuses a member that names something a pack must never write.
     ///
+    /// The credential rules are [DshPackForge]'s rather than a second list kept here, and the reason
+    /// is the direction they guard. This side guards the person's machine from being written to and
+    /// the export side guards the author's secrets from being published, so neither can lean on the
+    /// other having run — but that makes one list *more* important, not less. As two hand-written
+    /// lists they had drifted: this side refused `.netrc`, `.pypirc`, `.yarnrc` and `.yarnrc.yml`
+    /// while the export side published them, and a key named `id_ed25519` escaped both. What the
+    /// export side knows and this does not — `*token*`, `*api[_-]?key*`, `*.crt` — is an addition on
+    /// its side only, so what is read here is always a subset of what it refuses.
+    ///
     /// @param name   the member's name
     /// @param target where it would land
     /// @throws DshException when it may not be written
     private static void refuseIfUnsafe(String name, Path target) throws DshException {
         String file = target.getFileName().toString();
         String lower = file.toLowerCase(java.util.Locale.ROOT);
-        if (DENY_NAMES.contains(lower) || lower.startsWith("id_rsa") || lower.startsWith("id_ed25519")
-                || lower.startsWith("id_ecdsa") || lower.startsWith("id_ed448")) {
-            throw new DshException("That pack tries to write " + file
-                    + ", which holds credentials and is never installed from a pack", null);
-        }
-        for (String extension : DENY_EXTENSIONS) {
+        for (String extension : DshPackForge.CREDENTIAL_EXTENSIONS) {
             if (lower.endsWith(extension)) {
                 throw new DshException("That pack tries to write " + file
                         + ", which is a key file and is never installed from a pack", null);
             }
+        }
+        if (DshPackForge.isCredentialName(file)) {
+            throw new DshException("That pack tries to write " + file
+                    + ", which holds credentials and is never installed from a pack", null);
         }
         // A nested archive is refused too: it is the one member whose contents cannot be checked
         // before they are on the disk, and nothing a pack needs is stored as one.

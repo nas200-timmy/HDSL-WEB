@@ -31,6 +31,8 @@ import org.jackhuang.hmcl.dsh.DshInstanceManager;
 import org.jackhuang.hmcl.dsh.DshProcess;
 import org.jackhuang.hmcl.dsh.DshProcessManager;
 import org.jackhuang.hmcl.setting.GameDirectory;
+import org.jackhuang.hmcl.web.config.ServerConfig;
+import org.jackhuang.hmcl.web.config.ServerConfigLoader;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -64,6 +66,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /// the HTTP behaviors are served by the stub itself, and the WebSocket echo
 /// backend is a Jetty server inside the test, bound to the port the stub
 /// announces.
+///
+/// One case runs on a panel mounted at a subpath ([ServerConfig#basePath]):
+/// every browser-facing URL the proxy emits carries it, so the rewrite that
+/// produces them has to take it as a string rather than as a pattern.
 class ProxyBehaviorTest {
 
     private static final String INSTANCE = "proxy-behavior-test";
@@ -86,7 +92,13 @@ class ProxyBehaviorTest {
     }
 
     private TestSupport.RunningServer startServer() throws Exception {
-        TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+        return startServer(Map.of());
+    }
+
+    /// The same panel, with the given environment — the one case here that needs
+    /// a mount of its own (see the `$` in the base path below).
+    private TestSupport.RunningServer startServer(Map<String, String> env) throws Exception {
+        TestSupport.RunningServer running = TestSupport.start(dataDir, env,
                 config -> {
                     config.bindHost = "127.0.0.1";
                     config.auth.disabled = true;
@@ -237,6 +249,37 @@ class ProxyBehaviorTest {
                 assertTrue(joined.contains("y=2; Path=/i/" + INSTANCE + "/; HttpOnly"), joined);
                 assertFalse(joined.contains("Path=/;"), joined);
                 assertFalse(joined.contains("Path=/\n"), joined);
+            } finally {
+                process.stop();
+            }
+        }
+    }
+
+    /// The cookie path is rewritten onto the *browser* mount, which carries the
+    /// panel's own base path — and that base path is configuration, not a
+    /// pattern. `$1` in a replacement string is a group reference, so without
+    /// the mount being quoted as a literal the cookie's Path comes out as
+    /// `/panel; /i/<id>/` instead of `/panel$1/i/<id>/` (`$x` is worse still:
+    /// it is an `IllegalArgumentException` and the response loses its cookies
+    /// altogether).
+    @Test
+    void aDollarInTheBasePathIsNotAReplacementTokenInTheCookiePath() throws Exception {
+        NodeDshStub.assumeNode();
+        try (TestSupport.RunningServer running = startServer(Map.of(ServerConfigLoader.ENV_BASE_PATH, "/panel$1"))) {
+            HttpClient client = TestSupport.client();
+            DshInstance instance = createInstance();
+            NodeDshStub.install(instance, true);
+            DshProcess process = DshProcessManager.launch(instance);
+            try {
+                awaitReady(process);
+
+                HttpResponse<String> cookieResponse = client.send(
+                        request(running.baseUrl() + "/i/" + INSTANCE + "/cookie", null, null).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertEquals(200, cookieResponse.statusCode(), cookieResponse.body());
+                String joined = String.join("\n", cookieResponse.headers().allValues("set-cookie"));
+                assertTrue(joined.contains("x=1; Path=/panel$1/i/" + INSTANCE + "/"), joined);
+                assertTrue(joined.contains("y=2; Path=/panel$1/i/" + INSTANCE + "/; HttpOnly"), joined);
             } finally {
                 process.stop();
             }

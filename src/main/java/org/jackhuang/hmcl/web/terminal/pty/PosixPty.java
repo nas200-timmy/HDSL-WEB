@@ -53,16 +53,36 @@ import java.util.concurrent.atomic.AtomicBoolean;
 ///   thread (`poll` + `read`), so the native side never calls back into the
 ///   JVM and there is no callback-thread bookkeeping to get wrong.
 ///
-/// When the child exits, the pump drains what is still buffered and then
-/// reports EOF; the master is closed right after, so no output written after
-/// the exit can be observed. That is the property the web terminal relies on:
-/// the moment the agent is gone, the screen can no longer change.
+/// When the child exits, the pump drains until the device reports EOF and then
+/// reports that end itself; the master is closed right after, which ends the
+/// session for every call that has not started yet. That is the property the
+/// web terminal relies on: the moment the agent is gone, the screen can no
+/// longer change. A call that is already inside the kernel when the close
+/// happens is the one exception, and it is deliberate — see [MasterFd]: it
+/// finishes on the descriptor it started with and hands over what it read,
+/// which is exactly the tail the drain is trying to keep.
+///
+/// The master's *descriptor* has a lifetime rule of its own, in [MasterFd]: no
+/// caller ever uses the descriptor's number directly, because the kernel
+/// recycles numbers and this JVM runs several terminals at once.
 @NotNullByDefault
 final class PosixPty implements Pty {
 
-    /// How long the pump may keep draining after `waitpid` returned. The data
-    /// is already in the kernel buffer; this is not a window for interaction.
-    private static final long DRAIN_MILLIS = 500;
+    /// How long the pump may keep draining after `waitpid` returned.
+    ///
+    /// This is a bound, not a wait: the pump reaches EOF as soon as the child's
+    /// side of the device is gone, and the drain ends there. The bound only
+    /// covers a pump that cannot make progress — a reader that stopped
+    /// consuming while the replay buffer is full — and covering that case is
+    /// the point: the chunk the pump is holding was read off the terminal and
+    /// belongs to the reader, so the master has to outlive it. Half a second
+    /// was too short for a slow reader and cost the tail of the screen.
+    private static final long DRAIN_MILLIS = 2000;
+
+    /// The pump's poll timeout. It is what makes the pump notice a terminal
+    /// that ended while the poll was running, and it bounds how long a lease on
+    /// the descriptor can outlive the terminal's own close.
+    private static final int POLL_MILLIS = 100;
 
     /// One read from the master. Large enough for a TUI repaint, small enough
     /// that the replay buffer's chunk list stays cheap.
@@ -71,6 +91,10 @@ final class PosixPty implements Pty {
     /// How much output the pump may hold for a slow reader before it stops
     /// reading, which in turn blocks the child on its own writes.
     private static final int REPLAY_CAPACITY = 1024 * 1024;
+
+    /// The pump's answer when a poll round produced no bytes: nothing this
+    /// time, not the end.
+    private static final byte[] NO_BYTES = new byte[0];
 
     /// Background struct sizes. The C types are opaque; over-allocating is
     /// safe (the callee only touches its own size) and avoids hard-coding
@@ -88,10 +112,15 @@ final class PosixPty implements Pty {
     private static final int POLLNVAL = 0x020;
 
     private static final int EINTR = 4;
-    private static final int EIO = 5;
 
     private static final int F_SETFD = 2;
     private static final int FD_CLOEXEC = 1;
+
+    /// `F_DUPFD_CLOEXEC`: the same descriptor with `FD_CLOEXEC` already set, in
+    /// one call. Its number is per-platform, like the other `fcntl` commands
+    /// here (Linux and Darwin disagree).
+    private static final int F_DUPFD_CLOEXEC =
+            OperatingSystem.CURRENT_OS == OperatingSystem.LINUX ? 1030 : 67;
 
     /// `TIOCSWINSZ`; the value is an ioctl request, and ioctl numbers differ
     /// between the two POSIX platforms this build runs on.
@@ -101,17 +130,25 @@ final class PosixPty implements Pty {
     /// `SIGWINCH` is 28 on both Linux and macOS.
     private static final int SIGWINCH = 28;
 
-    private final int masterFd;
+    private final MasterFd master;
+    private final Syscalls syscalls;
     private final int pid;
     private final Buffer output = new Buffer(REPLAY_CAPACITY);
-    private final AtomicBoolean masterClosed = new AtomicBoolean();
     private final AtomicBoolean inputClosed = new AtomicBoolean();
     private final CountDownLatch finished = new CountDownLatch(1);
+    private final CountDownLatch pumpEnded = new CountDownLatch(1);
     private final Thread pump;
     private volatile int exitCode = -1;
 
-    private PosixPty(int masterFd, int pid) {
-        this.masterFd = masterFd;
+    /// Takes an already-running child: [spawn] has done `openpty` and
+    /// `posix_spawn` by now, so all that is left is the master descriptor, the
+    /// pid and the syscalls.
+    ///
+    /// Package-private rather than private for [Syscalls]: a test needs to
+    /// build a terminal against a stand-in kernel without spawning anything.
+    PosixPty(int masterFd, int pid, Syscalls syscalls) {
+        this.master = new MasterFd(syscalls, masterFd);
+        this.syscalls = syscalls;
         this.pid = pid;
         this.pump = VirtualThreads.start(this::pump);
         VirtualThreads.start(this::reap);
@@ -141,6 +178,17 @@ final class PosixPty implements Pty {
         }
         int masterFd = master.getValue();
         int slaveFd = slave.getValue();
+        // Both ends are marked close-on-exec the moment they exist, before the
+        // spawn below rather than after it returns. The difference is not
+        // cosmetic: until the flag is on, an unrelated child of this JVM started
+        // during the spawn inherits the master — and a child holding a pty master
+        // can read the instance's terminal or type into it. On the slave the flag
+        // is the second half of the rule below (the file actions close it in the
+        // child as well): a copy left in the child is inherited by whatever the
+        // child starts, and while any copy of the slave is open the master never
+        // reports EOF.
+        cloexec(masterFd);
+        cloexec(slaveFd);
         Memory fileActions = new Memory(POSIX_STRUCT_BYTES);
         Memory attributes = new Memory(POSIX_STRUCT_BYTES);
         fileActions.clear();
@@ -148,8 +196,10 @@ final class PosixPty implements Pty {
         boolean fileActionsReady = false;
         boolean attributesReady = false;
         try {
-            // The child's stdio is the slave side; the master never leaks into
-            // it, and neither leaks into any other child this JVM starts.
+            // The child's stdio is the slave side (dup2 clears the close-on-exec
+            // flag on the descriptor it creates, so the three copies below are the
+            // child's to keep); the master never leaks into it, and neither end
+            // leaks into any other child this JVM starts.
             check(LibC.INSTANCE.posix_spawn_file_actions_init(fileActions), "posix_spawn_file_actions_init");
             fileActionsReady = true;
             for (int fd = 0; fd <= 2; fd++) {
@@ -157,6 +207,12 @@ final class PosixPty implements Pty {
                         "posix_spawn_file_actions_adddup2");
             }
             check(LibC.INSTANCE.posix_spawn_file_actions_addclose(fileActions, masterFd),
+                    "posix_spawn_file_actions_addclose");
+            // The slave's own number goes too, after the dup2s: the child's copy at
+            // `slaveFd` is what its grandchildren would inherit, and a grandchild
+            // holding the slave keeps the device's slave side open — the master
+            // then never reports EOF and the drain falls back to its bound.
+            check(LibC.INSTANCE.posix_spawn_file_actions_addclose(fileActions, slaveFd),
                     "posix_spawn_file_actions_addclose");
             if (cwd != null) {
                 try {
@@ -184,9 +240,7 @@ final class PosixPty implements Pty {
             if (spawned != 0) {
                 throw new PtyException("posix_spawn " + program, spawned);
             }
-            // Keep the master out of every other child this JVM spawns.
-            LibC.INSTANCE.fcntl(masterFd, F_SETFD, FD_CLOEXEC);
-            return new PosixPty(masterFd, childPid.getValue());
+            return new PosixPty(masterFd, childPid.getValue(), new Libc());
         } catch (IOException | RuntimeException e) {
             LibC.INSTANCE.close(masterFd);
             throw e;
@@ -212,7 +266,7 @@ final class PosixPty implements Pty {
 
             @Override
             public void write(byte[] bytes, int offset, int length) throws IOException {
-                if (inputClosed.get() || masterClosed.get()) {
+                if (inputClosed.get()) {
                     throw new IOException("the terminal has ended");
                 }
                 if (length == 0) {
@@ -221,8 +275,19 @@ final class PosixPty implements Pty {
                 byte[] chunk = offset == 0 && length == bytes.length
                         ? bytes
                         : Arrays.copyOfRange(bytes, offset, offset + length);
-                if (LibC.INSTANCE.write(masterFd, chunk, new NativeLong(length)).longValue() < 0) {
-                    throw new PtyException("write", Native.getLastError());
+                // A lease, like the pump: the terminal can end between the check
+                // above and the write, and this must not type into whatever
+                // holds the number by then.
+                int fd = master.acquire();
+                if (fd < 0) {
+                    throw new IOException("the terminal has ended");
+                }
+                try {
+                    if (syscalls.write(fd, chunk, length) < 0) {
+                        throw new PtyException("write", syscalls.lastError());
+                    }
+                } finally {
+                    master.release(fd);
                 }
             }
         };
@@ -252,19 +317,24 @@ final class PosixPty implements Pty {
 
     @Override
     public void resize(PtySize size) {
-        if (masterClosed.get()) {
+        int fd = master.acquire();
+        if (fd < 0) {
             return;
         }
-        // A failed resize is not fatal: the session keeps running at the old
-        // size and the browser sends another one on the next fit.
-        LibC.INSTANCE.ioctl(masterFd, new NativeLong(TIOCSWINSZ), winsize(size));
+        try {
+            // A failed resize is not fatal: the session keeps running at the old
+            // size and the browser sends another one on the next fit.
+            syscalls.ioctl(fd, TIOCSWINSZ, winsize(size));
+        } finally {
+            master.release(fd);
+        }
         // The child is spawned without TIOCSCTTY, so the pty has no controlling
         // terminal and the kernel has no foreground process group to notify:
         // TIOCSWINSZ alone changes the size but never delivers SIGWINCH, and a
         // running TUI keeps painting the width it started with. On a reattach
         // from a different window that paints wider than the real terminal and
         // the terminal wraps every line. Deliver the signal ourselves.
-        LibC.INSTANCE.kill(pid, SIGWINCH);
+        syscalls.kill(pid, SIGWINCH);
     }
 
     @Override
@@ -283,10 +353,10 @@ final class PosixPty implements Pty {
         if (finished.getCount() == 0) {
             return;
         }
-        LibC.INSTANCE.kill(-pid, SIGTERM);
+        syscalls.kill(-pid, SIGTERM);
         try {
             if (!finished.await(Math.max(1, grace.toMillis()), TimeUnit.MILLISECONDS)) {
-                LibC.INSTANCE.kill(-pid, SIGKILL);
+                syscalls.kill(-pid, SIGKILL);
                 finished.await(2, TimeUnit.SECONDS);
             }
         } catch (InterruptedException e) {
@@ -300,6 +370,15 @@ final class PosixPty implements Pty {
         closeMaster();
     }
 
+    /// Waits for the pump to stop touching the terminal: by then every byte it
+    /// read out of the master is in the replay buffer. [reap] waits on this
+    /// before it closes the master, and a test that looks at the buffer needs
+    /// the same guarantee — the pump's last [Buffer#put] can land after the
+    /// session's end is already visible.
+    boolean awaitPump(Duration timeout) throws InterruptedException {
+        return pumpEnded.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
     /// `waitpid` on the root process, then the end of the session.
     ///
     /// The order is the security contract: input is refused first, then the
@@ -310,71 +389,95 @@ final class PosixPty implements Pty {
         IntByReference status = new IntByReference();
         int rc;
         do {
-            rc = LibC.INSTANCE.waitpid(pid, status, 0);
-        } while (rc < 0 && Native.getLastError() == EINTR);
+            rc = syscalls.waitpid(pid, status);
+        } while (rc < 0 && syscalls.lastError() == EINTR);
         exitCode = rc < 0 ? -1 : decodeStatus(status.getValue());
         inputClosed.set(true);
         try {
-            pump.join(DRAIN_MILLIS);
+            // Drain to EOF, and treat the constant as the bound it is: the pump
+            // reaches EOF as soon as the device reports the child is gone, so
+            // waiting for it costs nothing in the normal case, and a pump that
+            // is waiting on the reader gets the chance to hand over what it
+            // already read instead of losing it to the clock.
+            awaitPump(Duration.ofMillis(DRAIN_MILLIS));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
         closeMaster();
-        LibC.INSTANCE.kill(-pid, SIGKILL);
+        syscalls.kill(-pid, SIGKILL);
         output.finish();
         finished.countDown();
     }
 
     private void pump() {
-        Memory pollfd = new Memory(8);
         Memory buffer = new Memory(READ_BUFFER);
         try {
-            while (!masterClosed.get()) {
-                pollfd.setInt(0, masterFd);
-                pollfd.setShort(4, (short) POLLIN);
-                pollfd.setShort(6, (short) 0);
-                int ready = LibC.INSTANCE.poll(pollfd, new NativeLong(1), 100);
-                if (ready < 0) {
-                    if (Native.getLastError() == EINTR) {
-                        continue;
-                    }
-                    break;
-                }
-                if (ready == 0) {
-                    continue;
-                }
-                short events = pollfd.getShort(6);
-                if ((events & POLLIN) != 0) {
-                    long n = LibC.INSTANCE.read(masterFd, buffer, new NativeLong(READ_BUFFER)).longValue();
-                    if (n > 0) {
-                        output.put(buffer.getByteArray(0, (int) n));
-                        continue;
-                    }
-                    if (n == 0) {
-                        break;
-                    }
-                    if (Native.getLastError() == EINTR) {
-                        continue;
-                    }
-                    // EIO: the child closed the slave side. Nothing more can
-                    // ever arrive.
-                    break;
-                }
-                if ((events & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-                    break;
+            byte[] chunk;
+            while ((chunk = readOnce(buffer)) != null) {
+                if (chunk.length > 0) {
+                    output.put(chunk);
                 }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
             output.finish();
+            pumpEnded.countDown();
         }
     }
 
-    private void closeMaster() {
-        if (masterClosed.compareAndSet(false, true)) {
-            LibC.INSTANCE.close(masterFd);
+    /// One `poll` and the `read` it turned into, both under a single lease on
+    /// the master.
+    ///
+    /// The lease is what makes this safe against [closeMaster]: the call runs
+    /// on its own descriptor, so the terminal's number can be freed — and taken
+    /// by the next session — while this is still inside the kernel, and what
+    /// comes back is still this terminal's output. The lease is released before
+    /// the bytes reach the buffer, so a full replay buffer never holds the
+    /// descriptor open.
+    ///
+    /// @return the bytes read, [NO_BYTES] when this round had nothing, or
+    ///         `null` when the terminal has ended or its output reached EOF
+    private @Nullable byte[] readOnce(Memory buffer) throws InterruptedException {
+        int fd = master.acquire();
+        if (fd < 0) {
+            return null;
         }
+        try {
+            Syscalls.PollResult ready = syscalls.poll(fd, POLL_MILLIS);
+            if (ready.ready() < 0) {
+                return syscalls.lastError() == EINTR ? NO_BYTES : null;
+            }
+            if (ready.ready() == 0) {
+                return NO_BYTES;
+            }
+            short events = (short) ready.events();
+            if ((events & POLLIN) != 0) {
+                long n = syscalls.read(fd, buffer, READ_BUFFER);
+                if (n > 0) {
+                    return buffer.getByteArray(0, (int) n);
+                }
+                if (n == 0) {
+                    return null;
+                }
+                // EINTR after a signal, or EIO because the child closed the
+                // slave side: the latter means nothing can ever arrive.
+                return syscalls.lastError() == EINTR ? NO_BYTES : null;
+            }
+            if ((events & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                return null;
+            }
+            return NO_BYTES;
+        } finally {
+            master.release(fd);
+        }
+    }
+
+    /// The end of the session: no syscall can start on the master any more, and
+    /// its number goes back to the kernel. A call that is already running is on
+    /// its own descriptor and finishes where it started.
+    private void closeMaster() {
+        master.close();
     }
 
     /// The usual shell mapping: exit code, or `128 + signal`.
@@ -401,6 +504,75 @@ final class PosixPty implements Pty {
         }
     }
 
+    /// Marks a descriptor close-on-exec. Best effort, exactly as it was when this
+    /// ran after the spawn: a failure here costs the inheritance it prevents, not
+    /// the terminal.
+    private static void cloexec(int fd) {
+        LibC.INSTANCE.fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
+
+    /// The master descriptor, and the rule that keeps it from being used after
+    /// it is closed.
+    ///
+    /// `close(2)` frees the *number* at once, and the kernel hands that number
+    /// to the next `openpty` — this JVM runs one terminal per instance, and a
+    /// closed session's number goes straight to the next one. A thread that was
+    /// already inside `poll`/`read`/`write` when the terminal ended would then
+    /// go on using the number: it would read the next session's output, or type
+    /// into it. Gating those calls on a flag was not enough, because the check
+    /// and the syscall are not atomic, and a blocking syscall is slow enough to
+    /// lose that race reliably.
+    ///
+    /// So nobody uses the terminal's own number. A caller takes a lease, which
+    /// duplicates the descriptor close-on-exec in one call
+    /// (`fcntl(F_DUPFD_CLOEXEC)`): the copy is a number the caller owns for the
+    /// duration of one syscall, and closing the terminal's number cannot
+    /// recycle it. The lease dies with the call, which is also what lets the
+    /// device go for real once the last caller is out.
+    ///
+    /// Only the bookkeeping is locked, never the syscalls: holding the lock
+    /// across a `poll` would make every close wait for a read to come back.
+    private static final class MasterFd {
+
+        private final Syscalls syscalls;
+        private int fd;
+        private boolean closed;
+
+        MasterFd(Syscalls syscalls, int fd) {
+            this.syscalls = syscalls;
+            this.fd = fd;
+        }
+
+        /// A descriptor for one call, or `-1` when the terminal has ended. The
+        /// caller must [release] it, and must not touch it after that.
+        synchronized int acquire() {
+            if (closed) {
+                return -1;
+            }
+            // One call, not two: `dup` hands back a descriptor without
+            // FD_CLOEXEC, and the `fcntl` that sets it afterwards is a window in
+            // which a child this JVM starts inherits the lease — that child holds
+            // the pty open after the session is over. The spawn path made the same
+            // mistake in the same shape; this is the call that has no window.
+            return syscalls.dupCloexec(fd);
+        }
+
+        void release(int lease) {
+            syscalls.close(lease);
+        }
+
+        /// Ends the terminal: no new lease, and the number goes back to the
+        /// kernel now. A call that already holds a lease is unaffected.
+        synchronized void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            syscalls.close(fd);
+            fd = -1;
+        }
+    }
+
     private static final class Buffer {
         private final ArrayDeque<byte[]> chunks = new ArrayDeque<>();
         private final long capacity;
@@ -417,9 +589,12 @@ final class PosixPty implements Pty {
             while (bytes + data.length > capacity && !finished) {
                 wait();
             }
-            if (finished) {
-                return;
-            }
+            // Take the bytes even when the end has already been declared:
+            // `finished` means "nothing more can arrive after what the pump has
+            // read", not "throw away what it has". A chunk read just before the
+            // child exited is the tail of the screen, and dropping it left a
+            // reattached client with a picture older than the session's, which
+            // is the opposite of what finish() is trying to preserve.
             chunks.addLast(data);
             bytes += data.length;
             notifyAll();
@@ -461,6 +636,110 @@ final class PosixPty implements Pty {
             // last line dropped before the collector could read it.
             finished = true;
             notifyAll();
+        }
+    }
+
+    /// The syscalls the terminal makes once the child is running, behind an
+    /// interface so a test can stand in for the kernel.
+    ///
+    /// The reason this seam exists: the descriptor's lifetime is a race
+    /// between a blocking `poll`/`read` and `close`, and it can only be seen by
+    /// recycling an fd *number* at one exact moment. That cannot be arranged
+    /// with the real kernel, so the numbering is the test's.
+    ///
+    /// [Libc] is the production side of it and does nothing but delegate to
+    /// JNA. `openpty`/`posix_spawn` are deliberately not here: they run before
+    /// the terminal exists, and no test drives the spawn path.
+    interface Syscalls {
+
+        /// What one `poll` of a single descriptor reported.
+        ///
+        /// @param ready the number of ready descriptors, `0` on timeout, `-1`
+        ///              on error with [Syscalls#lastError] set
+        /// @param events the reported `revents`, meaningful only when `ready > 0`
+        record PollResult(int ready, int events) {
+        }
+
+        /// One `poll` of `fd`, waiting at most `timeoutMillis`.
+        PollResult poll(int fd, int timeoutMillis);
+
+        /// One `read`; `-1` on error with [Syscalls#lastError] set.
+        long read(int fd, Memory buffer, int length);
+
+        /// One `write`; `-1` on error with [Syscalls#lastError] set.
+        long write(int fd, byte[] data, int length);
+
+        /// `fcntl(fd, F_DUPFD_CLOEXEC, 0)`: a new descriptor for the same open
+        /// file, close-on-exec from the moment it exists. This is the seam's
+        /// whole duplication story: there is deliberately no plain `dup` beside
+        /// it, because `dup` followed by a second `fcntl` that sets the flag is
+        /// not the same thing — see [MasterFd#acquire].
+        int dupCloexec(int fd);
+
+        void close(int fd);
+
+        int ioctl(int fd, long request, Memory argument);
+
+        int kill(int pid, int signal);
+
+        /// `waitpid` with no options.
+        int waitpid(int pid, IntByReference status);
+
+        /// The errno of the last call that failed.
+        int lastError();
+    }
+
+    /// Production [Syscalls]: every call goes straight to libc through JNA.
+    private static final class Libc implements Syscalls {
+
+        @Override
+        public PollResult poll(int fd, int timeoutMillis) {
+            Memory pollfd = new Memory(8);
+            pollfd.setInt(0, fd);
+            pollfd.setShort(4, (short) POLLIN);
+            pollfd.setShort(6, (short) 0);
+            int ready = LibC.INSTANCE.poll(pollfd, new NativeLong(1), timeoutMillis);
+            return new PollResult(ready, ready > 0 ? pollfd.getShort(6) : 0);
+        }
+
+        @Override
+        public long read(int fd, Memory buffer, int length) {
+            return LibC.INSTANCE.read(fd, buffer, new NativeLong(length)).longValue();
+        }
+
+        @Override
+        public long write(int fd, byte[] data, int length) {
+            return LibC.INSTANCE.write(fd, data, new NativeLong(length)).longValue();
+        }
+
+        @Override
+        public int dupCloexec(int fd) {
+            return LibC.INSTANCE.fcntl(fd, F_DUPFD_CLOEXEC, 0);
+        }
+
+        @Override
+        public void close(int fd) {
+            LibC.INSTANCE.close(fd);
+        }
+
+        @Override
+        public int ioctl(int fd, long request, Memory argument) {
+            return LibC.INSTANCE.ioctl(fd, new NativeLong(request), argument);
+        }
+
+        @Override
+        public int kill(int pid, int signal) {
+            return LibC.INSTANCE.kill(pid, signal);
+        }
+
+        @Override
+        public int waitpid(int pid, IntByReference status) {
+            return LibC.INSTANCE.waitpid(pid, status, 0);
+        }
+
+        @Override
+        public int lastError() {
+            return Native.getLastError();
         }
     }
 

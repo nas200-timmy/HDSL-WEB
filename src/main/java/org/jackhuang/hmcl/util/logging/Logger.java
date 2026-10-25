@@ -28,6 +28,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -180,6 +181,17 @@ public final class Logger {
         boolean failed = false;
         Path xzFile = logFile.resolveSibling(logFile.getFileName() + ".xz");
         try (XZOutputStream output = new XZOutputStream(Files.newOutputStream(xzFile), new LZMA2Options())) {
+            // The archive outlives the raw log, which is deleted below, and it is
+            // what a log download hands out: it holds the same user names,
+            // addresses and instance names, so it gets the same owner-only mode.
+            // The file is created (or truncated) by the stream just opened, so
+            // this never tightens something this process did not write.
+            try {
+                Files.setPosixFilePermissions(xzFile, Set.of(
+                        PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
+            } catch (UnsupportedOperationException | IOException e) {
+                // No POSIX permission model here (Windows): nothing stricter to ask for.
+            }
             logWriter.flush();
             Files.copy(logFile, output);
         } catch (IOException e) {
@@ -208,6 +220,17 @@ public final class Logger {
                     try {
                         logWriter = new PrintWriter(Files.newBufferedWriter(file, UTF_8, CREATE_NEW));
                         logFile = file;
+                        // The raw log is not a public document: it carries user names, source
+                        // addresses, instance names and proxied URLs. CREATE_NEW means this
+                        // process is the one that created it, so tightening it here cannot take
+                        // a mode away from anything else — and the umask must not decide how
+                        // much of that other accounts get to read.
+                        try {
+                            Files.setPosixFilePermissions(file, Set.of(
+                                    PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
+                        } catch (UnsupportedOperationException | IOException e) {
+                            // No POSIX permission model here (Windows): nothing stricter to ask for.
+                        }
                         break;
                     } catch (FileAlreadyExistsException ignored) {
                     }

@@ -25,6 +25,7 @@ import kala.compress.archivers.ArchiveEntry;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.io.Links;
 import org.jackhuang.hmcl.util.io.NetworkUtils;
+import org.jackhuang.hmcl.util.io.SafePaths;
 import org.jackhuang.hmcl.util.platform.Platform;
 import org.jackhuang.hmcl.util.tree.ArchiveFileTree;
 import org.jackhuang.hmcl.util.tree.TarFileTree;
@@ -566,7 +567,8 @@ public final class NodeRuntimeManager {
     ///
     /// Package-visible rather than private so a test can drive it with an archive it built itself:
     /// what this refuses to write — a link pointing out of the tree, an entry naming a path above
-    /// the target — is the part that has no other way in, since [install] downloads its archive.
+    /// the target, and an entry reached through a directory that is a link out of it — is the part
+    /// that has no other way in, since [install] downloads its archive.
     ///
     /// @param archive the `.zip`, `.tar.xz` or `.tar.gz` file
     /// @param target  the directory to unpack into
@@ -604,20 +606,24 @@ public final class NodeRuntimeManager {
             java.util.zip.ZipEntry entry;
             while ((entry = in.getNextEntry()) != null) {
                 String name = entry.getName();
-                Path destination = root.resolve(name).normalize();
                 // A zip entry may name `../..`; one that lands outside the target is not
-                // this archive's to write, whatever it says.
-                if (!destination.startsWith(root)) {
+                // this archive's to write, whatever it says. A link is the second way out
+                // and is not written here — a zip carries none — but a target that already
+                // holds one is found rather than made, so the question is asked of the
+                // filesystem too rather than only of the name.
+                Path destination = SafePaths.resolveInside(root, name);
+                if (destination == null) {
                     throw new IOException("the archive names a path outside its own root: " + name);
                 }
                 if (entry.isDirectory()) {
-                    Files.createDirectories(destination);
+                    SafePaths.createDirectories(root, destination);
                     continue;
                 }
                 Path parent = destination.getParent();
-                if (parent != null) {
-                    Files.createDirectories(parent);
+                if (parent == null) {
+                    throw new IOException("the archive names a path outside its own root: " + name);
                 }
+                SafePaths.createDirectories(root, parent);
                 Files.copy(in, destination, StandardCopyOption.REPLACE_EXISTING);
             }
         }
@@ -680,17 +686,22 @@ public final class NodeRuntimeManager {
                 // first, `Links` would copy the *content* of a target that leaves the
                 // archive into the tree, which is this defect read backwards.
                 Path link = Path.of(tree.getLink(archiveEntry));
-                if (!link.isAbsolute() && target.resolve(link).normalize().startsWith(root)) {
+                if (!link.isAbsolute() && SafePaths.resolveInside(root, target.resolve(link)) != null) {
+                    // The parent is made before `Links` is asked to make the link, so that where the
+                    // link is *written* is judged too: the target's answer above is about the link's
+                    // destination, and a directory already standing between them as a link out of the
+                    // tree is the same defect approached from the other side.
+                    SafePaths.createDirectories(root, destination.getParent());
                     Links.createOrCopy(destination, link);
                 } else {
                     LOG.warning("Not unpacking the link " + destination + " -> " + link
                             + ": it points outside " + root);
-                    Files.createDirectories(destination.getParent());
+                    SafePaths.createDirectories(root, destination.getParent());
                     tree.extractTo(archiveEntry, destination);
                 }
                 continue;
             }
-            Files.createDirectories(destination.getParent());
+            SafePaths.createDirectories(root, destination.getParent());
             tree.extractTo(archiveEntry, destination);
             if (tree.isExecutable(archiveEntry)) {
                 destination.toFile().setExecutable(true, false);
@@ -698,7 +709,7 @@ public final class NodeRuntimeManager {
         }
         for (var subDirectory : dir.getSubDirs().entrySet()) {
             Path destination = target.resolve(subDirectory.getKey());
-            Files.createDirectories(destination);
+            SafePaths.createDirectories(root, destination);
             extract(tree, subDirectory.getValue(), destination, root);
         }
     }

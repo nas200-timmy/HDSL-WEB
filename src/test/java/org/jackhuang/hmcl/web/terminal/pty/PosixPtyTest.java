@@ -28,12 +28,17 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.StringJoiner;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -53,6 +58,9 @@ class PosixPtyTest {
             "LANG", "C.UTF-8");
 
     private static final Path TMP = Path.of("/tmp");
+
+    /// One `<fd> -> <target>` line of an `ls -l /proc/<pid>/fd` listing.
+    private static final Pattern LISTED_FD = Pattern.compile(" (\\d+) -> (\\S.*)$");
 
     @BeforeAll
     static void linuxOnly() {
@@ -155,6 +163,50 @@ class PosixPtyTest {
         }
     }
 
+    /// The child holds its terminal as its own stdio and nowhere else.
+    ///
+    /// The spawn gives the child the slave on three descriptors (its 0, 1, 2),
+    /// and the number `openpty` handed out must not survive into it as well:
+    /// whatever the child goes on to start inherits that number, and a grandchild
+    /// holding it keeps the device's slave side open, so the master never reports
+    /// EOF — the drain after the child's exit then falls back to its bound
+    /// instead of ending when the child did.
+    ///
+    /// The listing is the child's own (`ls` reads `/proc/<shell pid>/fd`, so it is
+    /// the shell's table that is printed), and the assertion is stated against the
+    /// target of the child's stdin rather than a fixed device name: what is being
+    /// pinned is that *no other descriptor points at this same terminal*, which is
+    /// exactly the inheritance at issue.
+    @Test
+    void theChildKeepsNoCopyOfTheSlave() throws Exception {
+        try (Pty pty = Pty.spawn(List.of("/bin/sh", "-c", "ls -l /proc/$$/fd"), TMP, ENV, new PtySize(80, 24))) {
+            Collector output = new Collector(pty.output());
+            assertEquals(0, pty.waitFor());
+            assertTrue(output.awaitEnd(Duration.ofSeconds(5)), "the pump reaches EOF");
+
+            Map<Integer, String> fds = descriptors(output.text());
+            String terminal = fds.get(0);
+            assertNotNull(terminal, "the child listed no descriptor for its stdin: " + listing(fds));
+            assertTrue(terminal.startsWith("/dev/pts/") && Character.isDigit(terminal.charAt("/dev/pts/".length())),
+                    "the child's stdin is the pty's slave, so the listing is about it: " + terminal);
+            assertEquals(terminal, fds.get(1), "the child's stdout is not its stdin's terminal");
+            assertEquals(terminal, fds.get(2), "the child's stderr is not its stdin's terminal");
+
+            Set<Integer> holding = new TreeSet<>();
+            fds.forEach((fd, target) -> {
+                if (target.equals(terminal)) {
+                    holding.add(fd);
+                }
+            });
+            // The message names the holding descriptors rather than the whole
+            // listing: the test JVM hands the child a hundred inherited fds, and
+            // only the ones on this terminal are the subject.
+            assertEquals(Set.of(0, 1, 2), holding,
+                    "the child holds this terminal's slave (" + terminal + ") as its stdio and at no other number,"
+                            + " but it holds it at " + holding);
+        }
+    }
+
     @Test
     void openingAndClosingDoesNotLeakFileDescriptors() throws Exception {
         long before = fileDescriptors();
@@ -171,6 +223,28 @@ class PosixPtyTest {
         try (Stream<Path> files = Files.list(Path.of("/proc/self/fd"))) {
             return files.count();
         }
+    }
+
+    /// The `fd -> target` pairs of an `ls -l /proc/<pid>/fd` listing. Lines that
+    /// are not a descriptor (the `total` header) are skipped, and the target is
+    /// taken from the arrow to the end of the line, which is where `ls` puts it.
+    private static Map<Integer, String> descriptors(String listing) {
+        Map<Integer, String> fds = new TreeMap<>();
+        for (String line : listing.split("\\R")) {
+            Matcher matcher = LISTED_FD.matcher(line);
+            if (matcher.find()) {
+                fds.put(Integer.parseInt(matcher.group(1)), matcher.group(2).trim());
+            }
+        }
+        return fds;
+    }
+
+    /// The same pairs, for an assertion message: a test process hands its child
+    /// every fd it holds, so the raw listing is a hundred lines of jars.
+    private static String listing(Map<Integer, String> fds) {
+        StringJoiner joined = new StringJoiner(", ");
+        fds.forEach((fd, target) -> joined.add(fd + " -> " + target));
+        return joined.toString();
     }
 
     private static boolean waitUntilGone(long pid, Duration timeout) throws InterruptedException {

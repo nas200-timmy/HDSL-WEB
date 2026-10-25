@@ -375,6 +375,38 @@ class DshPluginBundleTest {
                 "the member was written outside the instance");
     }
 
+    /// A member under a link that is already in the plugin directory is refused too.
+    ///
+    /// The two tests above are about the name — `..` spelled one way or the other. This is about the
+    /// directory: a plugin installed with `link:` leaves a symlink beside the payloads, a member
+    /// whose parent is that link begins with the plugin directory, and the write lands wherever the
+    /// link points. The pack cannot have planted it; it was found.
+    ///
+    /// @param directory where the plugins directory and the pack are built
+    /// @throws Exception when the fixture cannot be built
+    @Test
+    void aMemberUnderALinkInThePluginDirectoryIsRefused(@TempDir Path directory) throws Exception {
+        Path outside = Files.createDirectory(directory.resolve("outside"));
+        Path plugins = Files.createDirectories(directory.resolve("instance/plugins"));
+        try {
+            Files.createSymbolicLink(plugins.resolve("dsh-secret-1.0.0"), outside);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            return; // A filesystem without links cannot test this part.
+        }
+
+        Path pack = directory.resolve("pack-link.hdslp");
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(pack))) {
+            zip.putNextEntry(new ZipEntry("plugins/dsh-secret-1.0.0/lib/index.js"));
+            zip.write("planted".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+
+        assertThrows(DshException.class,
+                () -> DshPluginBundle.release(pack, plugins, "dsh-secret", "1.0.0"));
+        assertFalse(Files.exists(outside.resolve("lib/index.js")),
+                "the member was written through the link, outside the plugin directory");
+    }
+
     @Test
     void aMemberInsideThePluginDirectoryIsStillUnpacked(@TempDir Path directory) throws Exception {
         // The other half of the check above: what stays inside is put back as before, so the refusal
