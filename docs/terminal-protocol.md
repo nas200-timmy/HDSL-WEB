@@ -168,7 +168,12 @@ Windows 面板返回（没有 ticket，也没有 PTY——终端开在面板所�
 ```json
 {"type":"ready","protocol":1,"instance":"…","brand":"…"}
 {"type":"exit","code":0}
+{"type":"exit","code":1,"failedWithoutOutput":true}
 ```
+
+- `exit` 的 `failedWithoutOutput` 只在为真时出现（可选字段，见 §4）：子进程**非零退出且一个字节
+  都没输出**——那正是"插件没装好/参数被拒"的样子，屏幕空是因为它从没打印过，而不是查看者错过了
+  输出。面板自己结束的会话不带这个字段（非零码是要来的）。
 
 - **断开**只代表 detach：agent 继续跑，重新走一次 `POST …/terminal` 拿新 ticket 即可接回，
   并会先收到最近的输出回放（服务端保留 256 KB）。

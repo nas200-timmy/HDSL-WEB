@@ -40,11 +40,22 @@
 
 1. **不经过 shell 启动**：`posix_spawn` 直接 exec `node <品牌入口 JS>`，不复用 `.bin` shim；
    启动后断言根进程不是 `sh`/`cmd`。
-2. **根进程就是 agent**：`waitpid` 返回后**先 `close(master)`**，再 `kill(-pgid)`、
-   移除会话、通知 WS、审计。关 master 之前不做任何别的事。
+2. **根进程就是 agent**：`waitpid` 返回后的顺序是**先拒绝输入**（`inputClosed`）、
+   给泵一个有界的时间排空最后几个字节（排到 EOF 即止，超时只是兜底），**再 `close(master)`**
+   ——此后不再有输出可被观察到——最后 `kill(-pgid)`、移除会话、通知 WS、审计。
+   排空之所以在关 master 之前，是因为泵手里那块已经读出、还没交给读者的字节属于读者，
+   关掉就丢尾（旧文写的"关 master 之前不做任何别的事"与实现不符，此处按实现纠正）。
+   master 的**描述符**另有规矩：任何调用都不直接用它，每次 `poll`/`read`/`write`/`ioctl`
+   各持一份副本（`fcntl(F_DUPFD_CLOEXEC)`，一次调用完成复制并带 CLOEXEC）——描述符号会被内核复用，
+   一个已经通过检查、正在内核里的调用若继续用原号，读到的可能是**另一个实例**终端的输出，
+   或者把按键写进别人的 PTY。两个描述符都在 `openpty` 返回后**立刻**带上 `FD_CLOEXEC`，
+   子进程的文件动作里也关掉它手里的 slave 副本：否则一个孙进程会一直握住 pty，
+   master 就永远等不到 EOF（排空会退化成等超时）。
 3. **WS 只搬运字节**：没有 exec / send-keys / 切换程序的接口。
 4. **进程组隔离**：`POSIX_SPAWN_SETPGROUP`（pgroup=0），杀树用 `kill(-pgid)`；
-   窗口尺寸只写 `TIOCSWINSZ`，SIGWINCH 由内核发送。
+   窗口尺寸写 `TIOCSWINSZ`，**SIGWINCH 由面板自己发**（`resize` 里对根进程 `kill(SIGWINCH)`）——
+   子进程没有控制终端（未做 `TIOCSCTTY`），内核没有可通知的前台进程组，只写 `TIOCSWINSZ`
+   会改尺寸但不通知 TUI（旧文写成"由内核发送"，与实现不符）。
 5. **权限**：打开终端需要会话 + 开发者密码提权（会话级 30 分钟滑动）；argv 白名单；
    单实例单会话；审计 `terminal.open` / `terminal.exit` / `terminal.kill` /
    `terminal.desktop` / `desktop.reveal`。
@@ -215,6 +226,13 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
   - **装**：`POST /api/instances/{id}/tui-plugins/install` `{package}`，服务端按清单用
     `dsh plugin --profile <清单里的 profile> add <包@锁定版本>`（`GET …/tui-plugins` 读状态，
     每个插件从**它自己的 profile** 读，实例的 web profile 里本来就看不到它们）。
+    **装完要验**：`pnpm` 先写依赖再取包，取不到时会留下"manifest 说有、`node_modules` 里没有"
+    的半装状态——那正是"打开终端 0.4 秒死掉、一个字节都没有"的样子。所以 installer 在
+    `dsh plugin add` 退出 0 之后还要看 `node_modules/<包>` 是否真的在（`DshPluginInstaller.requireLanded`；
+    只验 registry 型 spec，`file:`/`link:`/`github:`/URL 的名字从文本里读不出来，误判会打断正常安装），
+    不在就把任务判失败。这个状态**不再被当成已安装**：`terminalPlugin` 同时要求 manifest 声明
+    与文件真的在（有 bin 的包还要求它声明的入口存在），否则用同一句可行动的中文拒绝
+    （"声明了 X 但文件不在，请重新安装"），而不是去启动一个空 profile。
   - **绝不能装进 web**：TUI 插件与 `dsh-web-app` 都是 app 插件，各按自己的语法解析同一份
     argv，上游不仲裁；同 profile 装一起会让应用遇不认识的旗标直接退出（社区实测
     `error: unknown option '--no-open'`），实例起不来。守卫在 `DshPluginInstaller.installSpecs`
@@ -222,20 +240,25 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     卸载永不拒绝（那是把实例修回来）。
   - **起**：先按 `<DSH_HOME>/profiles/<插件 profile>/node_modules/<包>/<其 package.json 声明的
     bin>` 直接跑（bin 型，先读包自己的清单、再退回 `node_modules/.bin/<bin>`，且只接受解析后是
-    JS 文件的软链——pnpm 写的是 `#!/bin/sh` shim，不能当根进程，理由同 kimi）；没有 bin 或入口不在，
-    就启动那个 profile：`node <bin.js> --profile <插件 profile>`。argv 里出现 `--profile web`
-    （例如用户在实例启动参数里自己写的）一律拒绝。
-  - 一个都没装 → 明确报错并指向实例「安装」页。清单与许可证/仓库/profile 由
-    `GET /api/dsh/tui-plugins` 提供（`web/http/DshApiServlet`）；许可证含 Apache-2.0
-    （`@huiliyi37/dsh-tianshu-tui`）。`@ruhooai/dsh-tui`（bin 需要 Bun + 外部 `cordis.yml`）
-    与 `@zhangweiii/dsh-tui` 已不在清单里。
+    JS 文件的软链——pnpm 写的是 `#!/bin/sh` shim，不能当根进程，理由同 kimi）；没有 bin
+    （纯 bundle）就启动那个 profile：`node <bin.js> --profile <插件 profile>`。argv 里出现
+    `--profile web`（例如用户在实例启动参数里自己写的）一律拒绝。
+  - 一个都没装 → 明确报错并指向实例「安装」页；**声明了但文件不在** → 同样拒绝，但说的是
+    "重新安装这个"。清单与许可证/仓库/profile 由 `GET /api/dsh/tui-plugins` 提供
+    （`web/http/DshApiServlet`）；许可证含 Apache-2.0（`@huiliyi37/dsh-tianshu-tui`）。
+    `@ruhooai/dsh-tui`（bin 需要 Bun + 外部 `cordis.yml`）与 `@zhangweiii/dsh-tui` 已不在清单里。
+  - **终端死了要留话**：子进程非零退出且**一个字节都没输出**时，应用日志写一条
+    （`TerminalSession`，实例 / 退出码 / 没有输出），退出帧带 `failedWithoutOutput`
+    （`docs/terminal-protocol.md §3`），前端在"会话已结束 (N)"下面补一句可行动的提示。
+    面板自己结束的会话不算——那个非零码就是要来的（143 = SIGTERM），诊断它只会变成噪音。
 
 ## 10. 已知缺口
 
-- **web ↔ 终端互斥**：开终端会停掉同实例的 web 运行时（同一份状态不能两个进程抢），
-  面板侧已经是**同步**停止（品牌 `BrandRuntime.stop` / ZCode `ZcodeRuntime.stop` /
-  dsh `DshProcessManager.stop` 都等进程树退出），但不会自动恢复——恢复动作交给底栏
-  「启动」（实例启动按钮）。
+- **web ↔ 终端互斥**：**两个方向都成立**——开终端会同步停掉同实例的 web 运行时（品牌
+  `BrandRuntime.stop` / ZCode `ZcodeRuntime.stop` / dsh `DshProcessManager.stop` 都等
+  进程树退出），**启动**/停止/删除实例也会先结束它的终端（品牌与 ZCode 一直如此，dsh
+  原先只做了"开终端→停 web"这半个方向，现已补齐，顺序与理由见 §4）。
+  停掉 web 后不会自动恢复——恢复动作交给底栏「启动」（实例启动按钮）。
 - **refresh 重连**：运行中的会话会直接发新票据，浏览器刷新后能接回同一进程并回放；
   但两个窗口同时 attach 目前都会收到广播、输入也会同时写入——v1 不做单控制端仲裁。
 - **Windows 便利功能**：`POST .../reveal`（`target=home|workspace|log`）用
