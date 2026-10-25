@@ -93,6 +93,24 @@ public final class TaskService {
                            @Nullable JsonObject result) {
     }
 
+    /// Work that is handed the task it belongs to.
+    ///
+    /// [#submit(String, String, TaskWork)] starts the work before it returns,
+    /// so a work body can report progress or attach its result the moment it
+    /// begins — it does not have to wait for the submitter to publish the
+    /// handle, which is a race it would otherwise sometimes lose.
+    @FunctionalInterface
+    public interface TaskWork {
+        /// Runs the work.
+        ///
+        /// @param task the task this work belongs to; its return value becomes
+        ///             the done message, a thrown exception becomes the
+        ///             failure error
+        /// @return the done message
+        /// @throws Exception when the work fails
+        String run(Task task) throws Exception;
+    }
+
     /// What the submitter does with an approval decision, between the answer
     /// arriving and the work being retried: a plugin install writes the answer
     /// into the profile's `pnpm-workspace.yaml` here.
@@ -296,11 +314,30 @@ public final class TaskService {
     /// @throws InstanceBusyException when an install for the same instance is
     ///                               already running
     public Task submit(String kind, @Nullable String instanceId, Callable<String> work) {
+        return submit(kind, instanceId, work, (ApprovalDecider) null);
+    }
+
+    /// Submits work that is handed its own task, returning the handle
+    /// immediately.
+    ///
+    /// Prefer this to [#submit(String, String, Callable)] whenever the work
+    /// needs the handle — to report progress or to attach a result. The work
+    /// starts on another thread before `submit` returns, so a submitter that
+    /// filled in a holder after the call would be racing it.
+    ///
+    /// @param kind       the kind of work, reported in the task JSON
+    /// @param instanceId the instance the task belongs to, or `null` for
+    ///                   global work
+    /// @param work       the work
+    /// @return the live handle
+    /// @throws InstanceBusyException when an install for the same instance is
+    ///                               already running
+    public Task submit(String kind, @Nullable String instanceId, TaskWork work) {
         return submit(kind, instanceId, work, null);
     }
 
-    /// Submits work that may park on a human decision, returning its handle
-    /// immediately.
+    /// Submits work that is handed its own task and may park on a human
+    /// decision, returning the handle immediately.
     ///
     /// When the work throws
     /// [org.jackhuang.hmcl.dsh.DshPluginInstaller.DshBuildScriptApprovalRequired],
@@ -317,7 +354,7 @@ public final class TaskService {
     /// @return the live handle
     /// @throws InstanceBusyException when an install for the same instance is
     ///                               already running
-    public Task submit(String kind, @Nullable String instanceId, Callable<String> work,
+    public Task submit(String kind, @Nullable String instanceId, TaskWork work,
                        @Nullable ApprovalDecider approvalDecider) {
         if (installLike(kind) && instanceId != null) {
             if (activeInstalls.putIfAbsent(instanceId, "pending") != null) {
@@ -331,9 +368,25 @@ public final class TaskService {
         return task;
     }
 
+    /// Submits work that may park on a human decision, returning its handle
+    /// immediately. The work is not handed its own task — see
+    /// [#submit(String, String, TaskWork, ApprovalDecider)] when it needs it.
+    ///
+    /// @param kind            the kind of work
+    /// @param instanceId      the instance the task belongs to, or `null`
+    /// @param work            the work, retried after each approval
+    /// @param approvalDecider applies the decision, or `null` to fail instead
+    /// @return the live handle
+    /// @throws InstanceBusyException when an install for the same instance is
+    ///                               already running
+    public Task submit(String kind, @Nullable String instanceId, Callable<String> work,
+                       @Nullable ApprovalDecider approvalDecider) {
+        return submit(kind, instanceId, task -> work.call(), approvalDecider);
+    }
+
     /// Runs a task: acquires the install slot when needed, calls the work, and
     /// records the outcome.
-    private void run(Task task, Callable<String> work, @Nullable ApprovalDecider approvalDecider) {
+    private void run(Task task, TaskWork work, @Nullable ApprovalDecider approvalDecider) {
         task.worker = Thread.currentThread();
         boolean installBound = installLike(task.kind()) && task.instanceId() != null;
         try {
@@ -401,11 +454,11 @@ public final class TaskService {
     /// Calls the work, honouring the approval dance: a thrown
     /// `DshBuildScriptApprovalRequired` parks the task, the decision is
     /// applied, and the work runs again.
-    private String callWithApprovals(Task task, Callable<String> work,
+    private String callWithApprovals(Task task, TaskWork work,
                                      @Nullable ApprovalDecider approvalDecider) throws Exception {
         while (true) {
             try {
-                return work.call();
+                return work.run(task);
             } catch (org.jackhuang.hmcl.dsh.DshPluginInstaller.DshBuildScriptApprovalRequired required) {
                 if (approvalDecider == null || task.isCancelled()) {
                     throw required;

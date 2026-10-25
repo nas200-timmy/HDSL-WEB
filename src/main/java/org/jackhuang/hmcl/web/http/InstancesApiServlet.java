@@ -1309,14 +1309,8 @@ public final class InstancesApiServlet extends HttpServlet {
         java.util.List<String> homeInclude = stringList(body, "home");
         java.util.List<String> measured = stringList(body, "dshVersions");
         try {
-            TaskService.Task[] holder = new TaskService.Task[1];
-            TaskService.Task task = tasks.submit("pack-export", id, () -> {
-                java.util.function.Consumer<String> report = line -> {
-                    TaskService.Task live = holder[0];
-                    if (live != null) {
-                        live.update(line, -1);
-                    }
-                };
+            TaskService.Task task = tasks.submit("pack-export", id, live -> {
+                java.util.function.Consumer<String> report = line -> live.update(line, -1);
                 Path dir = PackExports.ensureDirectory(config.dataDir.resolve("exports"));
                 Path target = PackExports.uniqueFile(dir, base, ".dspack");
                 DshPackForge.Options options = new DshPackForge.Options(
@@ -1342,10 +1336,9 @@ public final class InstancesApiServlet extends HttpServlet {
                 PackExports.privateFile(target);
                 JsonObject result = new JsonObject();
                 result.addProperty("filename", target.getFileName().toString());
-                holder[0].attachResult(result);
+                live.attachResult(result);
                 return "Exported " + target.getFileName();
             });
-            holder[0] = task;
             accepted(response, task);
         } catch (TaskService.InstanceBusyException e) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
@@ -1464,24 +1457,17 @@ public final class InstancesApiServlet extends HttpServlet {
             chosen.add(found);
         }
         try {
-            TaskService.Task[] holder = new TaskService.Task[1];
-            TaskService.Task task = tasks.submit("session-export", id, () -> {
-                java.util.function.Consumer<String> report = line -> {
-                    TaskService.Task live = holder[0];
-                    if (live != null) {
-                        live.update(line, -1);
-                    }
-                };
+            TaskService.Task task = tasks.submit("session-export", id, live -> {
+                java.util.function.Consumer<String> report = line -> live.update(line, -1);
                 Path dir = PackExports.ensureDirectory(config.dataDir.resolve("exports"));
                 Path target = PackExports.uniqueFile(dir, instance.id() + "-sessions", ".sspack");
                 org.jackhuang.hmcl.dsh.DshSessionPacks.export(instance, chosen, target, report);
                 PackExports.privateFile(target);
                 JsonObject result = new JsonObject();
                 result.addProperty("filename", target.getFileName().toString());
-                holder[0].attachResult(result);
+                live.attachResult(result);
                 return "Exported " + chosen.size() + " session(s) to " + target.getFileName();
             });
-            holder[0] = task;
             accepted(response, task);
         } catch (TaskService.InstanceBusyException e) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());

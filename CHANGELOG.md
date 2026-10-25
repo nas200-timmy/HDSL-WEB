@@ -52,6 +52,14 @@ Jetty 默认的 30 秒，agent 一静默就被 `1001 Connection Idle Timeout` �
 `setMaxIdleTimeout(0)`；客户端同时加了心跳（20 秒 ping、10 秒 pong 期限），半死连接不再干挂。
 （客户端要求对端回 pong；仓库 pin 的 Jetty 12.0.39 会回，已反编译确认。）
 
+### 顺手修掉一处导出竞态（CI 的 JDK 17 那条腿先撞上）
+
+`TaskService.submit` 立刻返回、任务体在另一线程上跑，而三处调用方写的是「先 submit、再把句柄塞进
+`holder[0]`」——任务体跑到 `holder[0].attachResult(...)` 时可能还是 null，导出会偶发失败并报
+`Cannot invoke … because "holder[0]" is null`。现在任务体**直接拿到自己所属的 Task**
+（`TaskService.TaskWork`），竞态从构造上消失；其余 `holder[0]` 读取本来就带 null 判断（只用于进度
+显示），保持原样。这条不是新引入的缺陷——是既有写法，只是本版新增的快速导出用例把它踩出来了。
+
 ### 客户端（hdsl-tui）对齐
 
 - 终端失败时**保留服务端给的原因**（不再被通用文案盖掉）；提权顺序改为「状态 → 密码 → 内核 → 终端」，

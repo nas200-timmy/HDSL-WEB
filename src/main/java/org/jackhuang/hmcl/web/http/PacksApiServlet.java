@@ -420,15 +420,9 @@ public final class PacksApiServlet extends HttpServlet {
     private void submitInstall(HttpServletResponse response, String id, ArchiveSource source,
                                String profileFallback, @Nullable String versionFallback,
                                @Nullable Path stagedToRemove) throws IOException {
-        TaskService.Task[] holder = new TaskService.Task[1];
         try {
-            TaskService.Task task = tasks.submit("pack-install", id, () -> {
-                java.util.function.Consumer<String> report = line -> {
-                    TaskService.Task live = holder[0];
-                    if (live != null) {
-                        live.update(line, -1);
-                    }
-                };
+            TaskService.Task task = tasks.submit("pack-install", id, live -> {
+                java.util.function.Consumer<String> report = line -> live.update(line, -1);
                 // A build-script question keeps the staging file: the retry
                 // after its answer installs from it again. Every other exit —
                 // success, failure, a cancel while parked — removes it.
@@ -439,7 +433,7 @@ public final class PacksApiServlet extends HttpServlet {
                     runtime.announceCreated(installed);
                     JsonObject result = new JsonObject();
                     result.addProperty("instanceId", installed.id());
-                    holder[0].attachResult(result);
+                    live.attachResult(result);
                     return installedMessage(archive, installed.id());
                 } catch (org.jackhuang.hmcl.dsh.DshPluginInstaller.DshBuildScriptApprovalRequired waiting) {
                     parked = true;
@@ -456,14 +450,12 @@ public final class PacksApiServlet extends HttpServlet {
                 }
                 DshBuildScripts.answer(instance, keys, allow);
             });
-            holder[0] = task;
+            JsonObject accepted = new JsonObject();
+            accepted.addProperty("taskId", task.id());
+            Json.write(response, HttpServletResponse.SC_ACCEPTED, accepted);
         } catch (TaskService.InstanceBusyException e) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
-            return;
         }
-        JsonObject result = new JsonObject();
-        result.addProperty("taskId", holder[0].id());
-        Json.write(response, HttpServletResponse.SC_ACCEPTED, result);
     }
 
     /// The done message of an install, carrying what the pack's launcher

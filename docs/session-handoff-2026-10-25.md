@@ -11,7 +11,7 @@
 
 - 分支 `main`，本地已合并 `web-shell`（`--no-ff`），**尚未推送**。
 - 版本号：**v0.5.81**（本地已打 annotated tag）。上一版是 v0.5.72；中间没有发布过，也没有 73–80。
-- 测试基线（本机 Linux）：后端 **741 用例 / 0 失败 / 2 跳过**（两个跳过是既有的
+- 测试基线（本机 Linux）：后端 **743 用例 / 0 失败 / 2 跳过**（两个跳过是既有的
   `AuditLogTest.logBeforeInitIsANoOp` 与 Windows 专有项）；前端 `tsc --noEmit` + `vite build` +
   兼容闸门通过；客户端 `gofmt` / `go vet` / `go test ./...` 全绿，5 平台交叉编译通过。
 - Release 资产**还没构建**（`shadowJar` 本地跑过 0.1.0-dev，未按 v0.5.81 出包）。

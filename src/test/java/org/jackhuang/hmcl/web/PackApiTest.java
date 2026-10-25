@@ -62,6 +62,10 @@ class PackApiTest {
 
     private static final String VERSION = "0.1.7-rc.1";
 
+    /// How many times the export race regression case runs (see
+    /// [PackApiTest#everyExportTaskFinishesWithTheResultItAttached]).
+    private static final int EXPORT_ATTEMPTS = 300;
+
     private final List<String> created = new ArrayList<>();
     private final List<HttpServer> stubs = new ArrayList<>();
 
@@ -343,6 +347,41 @@ class PackApiTest {
             assertTrue(zipEntries(Files.readAllBytes(dataDir.resolve("exports").resolve(plainFile)))
                             .stream().noneMatch(entry -> entry.startsWith("home/")),
                     "nothing from the home travels unasked");
+        }
+    }
+
+    /// The handle a task's work needs — to attach the export's result to — is
+    /// there while the work runs, not only once the submission has returned.
+    /// An export used to read a one-slot holder the submitter filled in after
+    /// `submit` returned, so the work could reach the result while the holder
+    /// was still empty, and lose the race to a null dereference: the artifact
+    /// was written and the task failed anyway. This runs the shortest path that
+    /// attaches a result, several times, so passing it cannot be luck.
+    @Test
+    void everyExportTaskFinishesWithTheResultItAttached() throws Exception {
+        NodeDshStub.assumeNode();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+            String id = createInstance(client, base, "raced");
+            NodeDshStub.install(DshInstanceManager.find(id), false);
+            Path profile = DshInstanceManager.find(id).homeDirectory().resolve("profiles").resolve("web");
+            Files.createDirectories(profile);
+            Files.writeString(profile.resolve("package.json"), "{\"dependencies\":{}}\n");
+            Files.writeString(profile.resolve("cordis.patch.yml"), "plugins: {}\n");
+
+            for (int attempt = 0; attempt < EXPORT_ATTEMPTS; attempt++) {
+                HttpResponse<String> export = post(client, base + "/api/instances/" + id + "/export", "{}");
+                assertEquals(202, export.statusCode(), export.body());
+                JsonObject task = awaitTask(client, base, json(export).get("taskId").getAsString());
+                String where = "attempt " + (attempt + 1) + " of " + EXPORT_ATTEMPTS + ": " + task;
+                assertEquals("done", task.get("state").getAsString(),
+                        "the export must not lose the race to its own handle: " + where);
+                assertNotNull(task.get("result"), "a finished export carries the file it wrote: " + where);
+                assertTrue(Files.isRegularFile(dataDir.resolve("exports")
+                                .resolve(task.getAsJsonObject("result").get("filename").getAsString())),
+                        "and the artifact it names is on disk: " + where);
+            }
         }
     }
 

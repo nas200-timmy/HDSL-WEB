@@ -141,6 +141,38 @@ class TaskApiTest {
         assertEquals(newestId, all.get(0).id());
     }
 
+    /// The work is handed the very task the submission returns, so the first
+    /// thing it does — report a line, attach its result — has a handle to do it
+    /// with. The caller here never publishes anything, which is the property the
+    /// export endpoints rely on: a handle that only arrives after `submit`
+    /// returns is a handle the work races for and sometimes loses.
+    @Test
+    void theWorkIsHandedItsOwnTaskAndItsResultSurvives() throws Exception {
+        EventBus bus = new EventBus();
+        TaskService tasks = new TaskService(bus);
+
+        for (int attempt = 0; attempt < 100; attempt++) {
+            JsonObject attached = new JsonObject();
+            attached.addProperty("filename", "pack-" + attempt + ".dspack");
+            AtomicReference<TaskService.Task> handed = new AtomicReference<>();
+            TaskService.Task task = tasks.submit("pack-export", null, own -> {
+                handed.set(own);
+                own.update("writing the archive", -1);
+                own.attachResult(attached);
+                return "exported";
+            });
+            await(() -> !"running".equals(tasks.get(task.id()).orElseThrow().state()));
+
+            TaskService.TaskInfo info = tasks.get(task.id()).orElseThrow();
+            String where = "attempt " + (attempt + 1) + ": " + info;
+            assertEquals("done", info.state(), where);
+            assertEquals("exported", info.message(), where);
+            assertEquals(task, handed.get(), "the work is handed the handle the submit returned");
+            assertNotNull(info.result(), "the result attached by the work is part of the snapshot: " + where);
+            assertEquals("pack-" + attempt + ".dspack", info.result().get("filename").getAsString(), where);
+        }
+    }
+
     @Test
     void cancelMarksTheTaskAndTheWorkStops() throws Exception {
         EventBus bus = new EventBus();
