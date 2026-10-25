@@ -120,6 +120,8 @@ export interface TuiPluginItem {
   bin: string | null;
   /** 必须装进、也从这里启动的 profile —— 绝不是实例的 web（两个 app 插件同 profile 会让实例起不来） */
   profile: string;
+  /** 这套插件要求的 dsh 主线（缺省 = 任何已发布线都能起）；工具面靠 0.2.0 起的 agent-preset 层 */
+  requiresDsh?: string | null;
 }
 
 /** 某个实例上候选 TUI 插件的安装状态（GET /api/instances/{id}/tui-plugins 的一条） */
@@ -130,6 +132,10 @@ export interface TuiPluginState {
   installed: boolean;
   /** 该 profile 记录的版本（安装时是面板锁定的那个版本） */
   installedVersion?: string;
+  /** 实例的 dsh 主线能不能跑这套插件；false = 装上也只会得到没有工具面的会话 */
+  fitsHost?: boolean;
+  /** 这套插件要求的 dsh 主线（缺省 = 任何已发布线） */
+  requiresDsh?: string;
 }
 
 export interface TaskApproval {

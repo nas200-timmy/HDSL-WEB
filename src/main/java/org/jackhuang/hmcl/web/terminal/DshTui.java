@@ -144,10 +144,11 @@ public final class DshTui {
     ///
     /// @param instance the instance
     /// @return the entry to start
-    /// @throws DshException when none is installed, or the one that is declared is not on
-    ///                       disk
+    /// @throws DshException when none is installed, the declared one is not on disk, or the
+    ///                       installed one cannot run on the harness this instance has
     public static DshTuiPlugins.Entry terminalPlugin(DshInstance instance) throws DshException {
         DshTuiPlugins.Entry declared = null;
+        DshTuiPlugins.Entry misfit = null;
         for (DshTuiPlugins.Entry entry : DshTuiPlugins.ENTRIES) {
             Map<String, String> dependencies =
                     DshPluginInstaller.readDependencies(instance.homeDirectory(), entry.profile());
@@ -159,12 +160,26 @@ public final class DshTui {
             // the second false, and an instance in that state has to be refused **here**:
             // booting that profile dies before it can print a single byte, which reads as
             // the panel having opened a terminal that does nothing.
-            if (filesPresent(instance, entry)) {
-                return entry;
+            if (!filesPresent(instance, entry)) {
+                if (declared == null) {
+                    declared = entry;
+                }
+                continue;
             }
-            if (declared == null) {
-                declared = entry;
+            // Installed and on disk is still not enough: the tool surface comes from the
+            // agent-preset layer, and a plugin written for it cannot mount on a 0.1.x
+            // harness. That session starts and then has no tools at all — see
+            // [DshTuiPlugins#fitsHost]. A later entry that does fit is still preferred.
+            if (!DshTuiPlugins.fitsHost(entry, instance.version())) {
+                if (misfit == null) {
+                    misfit = entry;
+                }
+                continue;
             }
+            return entry;
+        }
+        if (misfit != null) {
+            throw new DshException(DshTuiPlugins.hostMismatch(misfit, instance.version()));
         }
         if (declared != null) {
             throw new DshException("实例的 " + declared.profile() + " profile 声明了 "

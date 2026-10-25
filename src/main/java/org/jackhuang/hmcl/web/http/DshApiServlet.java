@@ -78,6 +78,12 @@ public final class DshApiServlet extends HttpServlet {
             json.add("bin", entry.bin() == null
                     ? JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(entry.bin()));
             json.addProperty("profile", entry.profile());
+            if (entry.requiresDsh() != null) {
+                // The harness line this one needs; absent means it starts on any published
+                // line. Shown next to the licence because it decides whether installing it
+                // is even meaningful (see DshTuiPlugins#fitsHost).
+                json.addProperty("requiresDsh", entry.requiresDsh());
+            }
             plugins.add(json);
         }
         JsonObject body = new JsonObject();

@@ -145,6 +145,8 @@ export const I18N = {
   "dsh.tui.not_installed": "未安装",
   "dsh.tui.pure_bundle": "纯插件：无自带入口，启动它的 profile 即为终端（dsh --profile %s）",
   "dsh.tui.bin": "自带入口：%s（优先直接运行，入口缺失时回退到启动 profile）",
+  "dsh.tui.requires_dsh": "要求 dsh %s：它的工具面来自 0.2.0 起的 agent-preset 层，旧宿主上装上也只会得到没有工具的会话。",
+  "dsh.tui.host_mismatch": "这个实例的 dsh 太旧，装上也只会得到没有工具面的会话：%s",
   "dsh.tui.install": "安装",
   "dsh.tui.remove": "卸载",
   "dsh.tui.loading": "正在读取终端插件清单…",

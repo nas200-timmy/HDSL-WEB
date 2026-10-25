@@ -1013,6 +1013,13 @@ public final class InstancesApiServlet extends HttpServlet {
             json.addProperty("packageName", entry.packageName());
             json.addProperty("profile", entry.profile());
             json.addProperty("installed", installed);
+            // Whether this instance's harness line can run it at all. The page greys the
+            // install button out on false rather than hiding the row: "this exists but your
+            // instance is too old" is what the user needs to see (see DshTuiPlugins#fitsHost).
+            json.addProperty("fitsHost", DshTuiPlugins.fitsHost(entry, instance.version()));
+            if (entry.requiresDsh() != null) {
+                json.addProperty("requiresDsh", entry.requiresDsh());
+            }
             if (installed) {
                 json.addProperty("installedVersion", declaredVersion(entry, dependencies));
             }
@@ -1066,6 +1073,15 @@ public final class InstancesApiServlet extends HttpServlet {
         }
         // `install` takes the pinned specification; `remove` takes the name, which is what
         // the profile recorded as a key.
+        // A terminal plugin's tool surface comes from the agent-preset layer, which the
+        // harness only has from 0.2.0 — so a 0.2-only plugin on an older instance is a
+        // combination to refuse, not to install and discover at boot. Said before the task
+        // is submitted, so nobody waits for pnpm just to be told the session would be empty.
+        if (install && !DshTuiPlugins.fitsHost(entry, instance.version())) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    DshTuiPlugins.hostMismatch(entry, instance.version()));
+            return;
+        }
         java.util.List<String> specs = java.util.List.of(install ? entry.spec() : entry.packageName());
         submitPluginTask(install ? "tui-plugin-install" : "tui-plugin-remove",
                 instance, entry.profile(), specs, install, response);

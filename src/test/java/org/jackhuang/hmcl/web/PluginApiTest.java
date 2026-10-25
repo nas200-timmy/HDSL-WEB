@@ -452,29 +452,29 @@ class PluginApiTest {
 
             NodeDshStub.installPluginCapable(instance, false);
 
-            // Installing goes through `dsh plugin --profile tui add <pinned spec>`.
+            // Installing goes through `dsh plugin --profile dsh-tui add <pinned spec>`.
             HttpResponse<String> install = post(client, base + "/api/instances/" + id + "/tui-plugins/install",
-                    "{\"package\":\"@tomowang/dsh-tui\"}");
+                    "{\"package\":\"@deepseek-harness-tui/dsh-tui\"}");
             assertEquals(202, install.statusCode(), install.body());
             JsonObject installed = awaitTask(client, base, json(install).get("taskId").getAsString());
             assertEquals("done", installed.get("state").getAsString(), installed.toString());
 
-            // It landed in `tui`, and the version that landed is the pinned one.
+            // It landed in its own profile, and the version that landed is the pinned one.
             assertTrue(Files.isRegularFile(instance.homeDirectory()
-                            .resolve("profiles/tui/package.json")),
+                            .resolve("profiles/dsh-tui/package.json")),
                     "the plugin's own profile is what was written");
             JsonObject row = null;
             JsonArray afterInstall = json(get(client, base + "/api/instances/" + id + "/tui-plugins"))
                     .getAsJsonArray("plugins");
             for (int i = 0; i < afterInstall.size(); i++) {
                 JsonObject candidate = afterInstall.get(i).getAsJsonObject();
-                if ("@tomowang/dsh-tui".equals(candidate.get("packageName").getAsString())) {
+                if ("@deepseek-harness-tui/dsh-tui".equals(candidate.get("packageName").getAsString())) {
                     row = candidate;
                 }
             }
             assertNotNull(row, "the installed one is a row: " + afterInstall);
             assertTrue(row.get("installed").getAsBoolean(), row.toString());
-            assertEquals("0.10.2", row.get("installedVersion").getAsString(),
+            assertEquals("0.17.0", row.get("installedVersion").getAsString(),
                     "the catalogue's pinned version is what was installed");
 
             // And the instance's own profile — the one the web app boots — is untouched,
@@ -495,7 +495,7 @@ class PluginApiTest {
 
             // Taking it out again is never refused, and the state goes back.
             HttpResponse<String> remove = post(client, base + "/api/instances/" + id + "/tui-plugins/remove",
-                    "{\"package\":\"@tomowang/dsh-tui\"}");
+                    "{\"package\":\"@deepseek-harness-tui/dsh-tui\"}");
             assertEquals(202, remove.statusCode(), remove.body());
             JsonObject removed = awaitTask(client, base, json(remove).get("taskId").getAsString());
             assertEquals("done", removed.get("state").getAsString(), removed.toString());
@@ -524,7 +524,7 @@ class PluginApiTest {
             NodeDshStub.installPluginCapableLayingNothing(DshInstanceManager.find(id));
 
             HttpResponse<String> install = post(client, base + "/api/instances/" + id + "/tui-plugins/install",
-                    "{\"package\":\"@tomowang/dsh-tui\"}");
+                    "{\"package\":\"@deepseek-harness-tui/dsh-tui\"}");
             assertEquals(202, install.statusCode(), install.body());
             JsonObject task = awaitTask(client, base, json(install).get("taskId").getAsString());
 
@@ -532,8 +532,51 @@ class PluginApiTest {
                     "a package that never landed is not installed: " + task);
             assertTrue(task.get("error").getAsString().contains("node_modules"), task.toString());
             assertFalse(DshPluginInstaller.holdsPackage(
-                            DshInstanceManager.find(id).homeDirectory(), "tui", "@tomowang/dsh-tui"),
+                            DshInstanceManager.find(id).homeDirectory(), "dsh-tui", "@deepseek-harness-tui/dsh-tui"),
                     "and nothing is on disk to call installed");
+        }
+    }
+
+    /// A terminal plugin written for the 0.2.0 harness cannot give an older instance a tool
+    /// surface: its whole tool face comes from the agent-preset layer, which 0.1.x does not
+    /// have. Installing it there produces a window whose agent has no tools at all — the
+    /// field symptom is the plugin's own `agent-presets 未装配` warning — so the route
+    /// refuses the combination instead of submitting a task for it.
+    @Test
+    void aTuiPluginForANewerHarnessIsRefusedOnAnOlderInstance() throws Exception {
+        assumePluginTooling();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+            String id = createInstance(client, base, "old-host");
+            // The instances here run 0.1.7-rc.1; @tomowang/dsh-tui asks for >=0.2.1-rc.3.
+            NodeDshStub.installPluginCapable(DshInstanceManager.find(id), false);
+
+            HttpResponse<String> refused = post(client,
+                    base + "/api/instances/" + id + "/tui-plugins/install",
+                    "{\"package\":\"@tomowang/dsh-tui\"}");
+            assertEquals(409, refused.statusCode(), refused.body());
+            String error = json(refused).get("error").getAsString();
+            assertTrue(error.contains("@tomowang/dsh-tui"), error);
+            assertTrue(error.contains(">=0.2.1-rc.3"), error);
+            assertTrue(error.contains("agent-preset"), "the reason travels with the refusal: " + error);
+            assertTrue(error.contains("@deepseek-harness-tui/dsh-tui"),
+                    "and it names the entry that does work here: " + error);
+
+            // The row is still listed — greyed out is not the same as hidden — and it says
+            // why it cannot be installed.
+            JsonArray rows = json(get(client, base + "/api/instances/" + id + "/tui-plugins"))
+                    .getAsJsonArray("plugins");
+            JsonObject row = null;
+            for (int i = 0; i < rows.size(); i++) {
+                JsonObject candidate = rows.get(i).getAsJsonObject();
+                if ("@tomowang/dsh-tui".equals(candidate.get("packageName").getAsString())) {
+                    row = candidate;
+                }
+            }
+            assertNotNull(row, rows.toString());
+            assertFalse(row.get("fitsHost").getAsBoolean(), row.toString());
+            assertEquals(">=0.2.1-rc.3", row.get("requiresDsh").getAsString());
         }
     }
 

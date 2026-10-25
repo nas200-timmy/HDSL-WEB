@@ -164,6 +164,9 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
         (catalog ?? []).map((plugin, index) => {
           const state = stateOf.get(plugin.packageName);
           const isPresent = state?.installed === true;
+          // 缺字段（旧面板）当作能装：宁可让后端拒绝，也不要在界面上凭空禁用
+          const fitsHost = state?.fitsHost !== false;
+          const requiresDsh = state?.requiresDsh ?? plugin.requiresDsh ?? null;
           const shownVersion = isPresent ? state?.installedVersion ?? plugin.version : plugin.version;
           return (
             <div key={plugin.id}>
@@ -208,6 +211,14 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
                   <span className="tlli-subtitle" style={{ lineHeight: 1.6 }}>
                     {I18N["dsh.tui.profile.row"].replace("%s", plugin.profile)}
                   </span>
+                  {requiresDsh && (
+                    <span
+                      className="tlli-subtitle"
+                      style={{ lineHeight: 1.6, color: fitsHost ? undefined : "var(--monet-error)" }}
+                    >
+                      {I18N["dsh.tui.requires_dsh"].replace("%s", requiresDsh)}
+                    </span>
+                  )}
                 </span>
                 <span className="row-actions">
                   {isPresent ? (
@@ -221,7 +232,8 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
                   ) : (
                     <button
                       className="btn btn-raised ripple-host"
-                      disabled={busy === plugin.packageName}
+                      disabled={busy === plugin.packageName || !fitsHost}
+                      title={fitsHost ? undefined : I18N["dsh.tui.host_mismatch"].replace("%s", requiresDsh ?? "")}
                       onClick={() => void submit(plugin, true)}
                     >
                       {I18N["dsh.tui.install"]}

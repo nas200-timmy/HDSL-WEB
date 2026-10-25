@@ -17,6 +17,10 @@
   于是 CHANGELOG 重排过：**v0.5.82 段只留它真正含的东西**（构建工具链 + busybox，与已发出的 Release
   说明一致），真编辑器/解压件（`c452bce`）与两轮审查修复都进了 v0.5.83 段。v0.5.82 的 tag 与 Release
   一个字没动。
+- **v0.5.83 重切过一次**（同一个版本号，用户要求）：发布后补了「TUI 插件要配对宿主版本」这条闸门
+  （见 §1.7 末尾），Release 与 tag 都重新指向含它的提交。要照做时的心得：`gh release delete --yes`
+  → `git push origin :refs/tags/v0.5.83` → `git tag -d` → 重打 tag → 推 → `gh release create`
+  重新上传 jar 与 `SHA256SUMS.txt`（客户端 5 个资产由 `client.yml` 在 tag 推送后重新挂上）。
 - 测试基线（本机 Linux）：后端 **790 用例 / 0 失败 / 2 跳过**（跳过项仍是
   `AuditLogTest.logBeforeInitIsANoOp` 与 Windows 专有项；743 → 790 的差是两轮共新增 49 条、
   删掉 2 条只测已废弃 holder 助手的用例）；前端 `tsc --noEmit` + `vite build` + `compat` 通过；
@@ -172,6 +176,28 @@ Jetty 默认 30 秒 → 静默终端被 `1001 Connection Idle Timeout` 关掉。
 - **`freshClient()` 每次重试新建且不 close**：不能提前 close（会掐断正在读的 body），收益小于复杂度。
 - **`HDSL_ADMIN_PASSWORD` 常驻进程环境**：命中项目自陈的威胁模型（§4.1"不是沙箱：agent 以面板
   进程的用户身份运行"）；另外 JVM **改不了自己的 environ**，"读完 unset"做不到。
+
+### 1.8 TUI 插件要配对宿主版本（v0.5.83 重切时补的）
+
+现场症状：天枢装进 0.1.x 实例，终端起得来，会话却报 `⚠ agent-presets 未装配：本会话没有工具面`
+——**窗口能用，agent 一个工具都没有**。
+
+根因：终端界面的**工具面就是 agent-preset 层**，而这一层是 dsh **0.2.0** 才有的架构
+（`dsh-agent-preset-registry` + 每条 `preset` 一行）。三套社区 TUI 全写给 0.2.x，各自把这层写进
+自己的 bundle patch；面板原来把它们当通用货装给任何实例。
+
+改动（都在 v0.5.83 里）：
+
+- `DshTuiPlugins.Entry` 新增 `requiresDsh`（天枢 `>=0.2.0-rc.1`、tomowang `>=0.2.1-rc.3`、
+  pi-tui `>=0.2.1-rc.2`、`@deepseek-harness-tui/dsh-tui` 为 `null` 因为 peers 跨两条线），
+  `fitsHost` 复用 `DshPluginRequirements.satisfies`；
+- 安装路由**提交任务前**就 409、开终端时 `terminalPlugin` 也拒（已装的旧组合）；
+- `GET …/tui-plugins` 多给 `fitsHost`/`requiresDsh`，前端**变灰不可装**并写明原因（不隐藏）；
+- 未知实例版本不拒；两个路由共用 `hostMismatch` 一句文案。
+
+**还没解决的**：`0.2.x` 的 dsh 在 npm 上只有 `next`/`alpha` 通道（`latest` 仍是 0.1.7 线），
+而面板的版本列表把 `predatesLockstep` 的老版本也标成可装——所以实例仍可能落在 0.1.x，只能用
+`@deepseek-harness-tui/dsh-tui`。要不要把"只有 `next` 才有 0.2.x"这件事在 UI 上说清楚，留给下一轮。
 
 ## 2. 关键文件
 

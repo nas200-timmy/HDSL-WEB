@@ -35,6 +35,51 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /// and the refusal that keeps a terminal plugin out of the web profile really fires.
 class DshTuiPluginsTest {
 
+    /// The harness line a plugin needs is the half of "can this run here" that the manifest
+    /// cannot answer: a terminal interface's tool surface is the agent-preset layer, which
+    /// only exists from 0.2.0. Pinning that per entry is what lets the panel refuse the
+    /// combination instead of installing a window with no tools behind it.
+    @Test
+    void everyEntryThatNeedsANewerHarnessSaysSo() {
+        for (DshTuiPlugins.Entry entry : DshTuiPlugins.ENTRIES) {
+            String range = entry.requiresDsh();
+            if (range == null) {
+                // The one entry whose peers span both lines answers to any of them.
+                assertTrue(DshTuiPlugins.fitsHost(entry, "0.1.7-rc.1"), entry.packageName());
+                assertTrue(DshTuiPlugins.fitsHost(entry, "0.2.1-rc.3"), entry.packageName());
+                continue;
+            }
+            assertFalse(DshTuiPlugins.fitsHost(entry, "0.1.7-rc.1"),
+                    entry.packageName() + " claims " + range + " yet fits 0.1.7-rc.1");
+            assertTrue(DshTuiPlugins.fitsHost(entry, "0.2.1-rc.3"),
+                    entry.packageName() + " claims " + range + " yet does not fit 0.2.1-rc.3");
+        }
+    }
+
+    /// An unknown version is not refused: the version comes from the instance record, and a
+    /// guess would block an instance that is probably fine.
+    @Test
+    void anUnknownHarnessVersionIsNotRefused() {
+        for (DshTuiPlugins.Entry entry : DshTuiPlugins.ENTRIES) {
+            assertTrue(DshTuiPlugins.fitsHost(entry, null), entry.packageName());
+            assertTrue(DshTuiPlugins.fitsHost(entry, ""), entry.packageName());
+        }
+    }
+
+    /// The refusal names the line it needs, the line the instance has, why the pair cannot
+    /// work, and which entry does — one sentence, because the install route and the terminal
+    /// route both say it.
+    @Test
+    void theMismatchSentenceSaysWhatToDo() {
+        DshTuiPlugins.Entry entry = DshTuiPlugins.find("@tomowang/dsh-tui").orElseThrow();
+        String said = DshTuiPlugins.hostMismatch(entry, "0.1.7-rc.1");
+        assertTrue(said.contains("@tomowang/dsh-tui"), said);
+        assertTrue(said.contains(">=0.2.1-rc.3"), said);
+        assertTrue(said.contains("0.1.7-rc.1"), said);
+        assertTrue(said.contains("agent-preset"), said);
+        assertTrue(said.contains("@deepseek-harness-tui/dsh-tui"), said);
+    }
+
     @Test
     void everyEntryIsSelfContainedEnoughToBeShownOffline() {
         Set<String> ids = new HashSet<>();

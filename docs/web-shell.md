@@ -233,6 +233,14 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     不在就把任务判失败。这个状态**不再被当成已安装**：`terminalPlugin` 同时要求 manifest 声明
     与文件真的在（有 bin 的包还要求它声明的入口存在），否则用同一句可行动的中文拒绝
     （"声明了 X 但文件不在，请重新安装"），而不是去启动一个空 profile。
+  - **还要配对宿主版本**：终端界面的**工具面来自 agent-preset 层**，而这一层是 dsh **0.2.0**
+    才有的（`dsh-agent-preset-registry` + 每条 `preset` 一行）。写给它的插件（天枢 / tomowang /
+    pi-tui）自带这一层，装在 0.1.x 实例上**装得上、起得来、但会话没有工具**——插件自己的原话是
+    `agent-presets 未装配：本会话没有工具面`。所以清单每项都有 `requiresDsh`
+    （天枢 `>=0.2.0-rc.1`、tomowang `>=0.2.1-rc.3`、pi-tui `>=0.2.1-rc.2`；`@deepseek-harness-tui/dsh-tui`
+    的 peer 跨两条线，故为空=任意线），安装路由在提交任务**之前**就拒（`409` + 一句说清
+    "需要 X、你的实例是 Y、工具面为什么没了、可以改用哪个"），`terminalPlugin` 在开终端时也拒
+    （已装的旧组合）。清单行不会消失，只是**变灰不可装**并写明原因——隐藏会让人以为没这个功能。
   - **绝不能装进 web**：TUI 插件与 `dsh-web-app` 都是 app 插件，各按自己的语法解析同一份
     argv，上游不仲裁；同 profile 装一起会让应用遇不认识的旗标直接退出（社区实测
     `error: unknown option '--no-open'`），实例起不来。守卫在 `DshPluginInstaller.installSpecs`

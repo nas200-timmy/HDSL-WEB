@@ -49,7 +49,11 @@ class DshTuiTest {
     /// The instance runs on a home of its own, so nothing here reads or writes the
     /// launcher's real one.
     private static DshInstance instanceWith(Path home, String profile) {
-        return new DshInstance("tui-test", "0.1.7-rc.1", profile, home.resolve("workspace").toString(),
+        return instanceWith(home, profile, "0.1.7-rc.1");
+    }
+
+    private static DshInstance instanceWith(Path home, String profile, String dshVersion) {
+        return new DshInstance("tui-test", dshVersion, profile, home.resolve("workspace").toString(),
                 null, DshHomeMode.CUSTOM, home.toString(), List.of(), Map.of(), null, null, null, 0, 0L);
     }
 
@@ -173,10 +177,11 @@ class DshTuiTest {
     }
 
     /// A declared-but-missing entry does not shadow a working one: the list's order is a
-    /// preference, not a promise that everything ahead of an entry is usable.
-    @Test
+    /// preference, not a promise that everything ahead of an entry is usable.    @Test
     void aDeclaredButMissingEntryDoesNotShadowAWorkingOne(@TempDir Path home) throws Exception {
-        DshInstance instance = instanceWith(home, "web");
+        // On a harness that can run the 0.2-only entries: on 0.1.x this would be the harness
+        // refusal rather than the shadowing question, which is the test below.
+        DshInstance instance = instanceWith(home, "web", "0.2.1-rc.3");
         DshTuiPlugins.Entry preferred = DshTuiPlugins.ENTRIES.get(0);
         DshTuiPlugins.Entry bundle = DshTuiPlugins.find("@tomowang/dsh-tui").orElseThrow();
         declareOnly(instance, preferred.profile(), preferred.packageName());
@@ -184,6 +189,34 @@ class DshTuiTest {
 
         assertEquals(bundle.packageName(), DshTui.terminalPlugin(instance).packageName(),
                 "the plugin whose files are really there is what gets started");
+    }
+
+    /// Installed and on disk is still not enough: a plugin written for the 0.2.0 harness
+    /// mounts its own agent-preset layer, and that layer cannot mount on a 0.1.x instance —
+    /// the window opens and the agent has no tools at all (the plugin says so in its own
+    /// words: `agent-presets 未装配：本会话没有工具面`). The pair is refused before the
+    /// takeover, with the same sentence the install route uses.
+    @Test
+    void aPluginForANewerHarnessIsRefusedInsteadOfStarted(@TempDir Path home) throws Exception {
+        DshInstance instance = instanceWith(home, "web");
+        DshTuiPlugins.Entry plugin = DshTuiPlugins.find("@tomowang/dsh-tui").orElseThrow();
+        install(instance, plugin.profile(), plugin.packageName());
+
+        DshException refused = assertThrows(DshException.class, () -> DshTui.terminalPlugin(instance));
+        assertTrue(refused.getMessage().contains(plugin.requiresDsh()), refused.getMessage());
+        assertTrue(refused.getMessage().contains("agent-preset"), refused.getMessage());
+        assertTrue(refused.getMessage().contains("0.1.7-rc.1"), refused.getMessage());
+    }
+
+    /// The same plugin starts normally on the harness it was written for: this is a pairing
+    /// check, not a blacklist.
+    @Test
+    void theSamePluginStartsOnTheHarnessItWasWrittenFor(@TempDir Path home) throws Exception {
+        DshInstance instance = instanceWith(home, "web", "0.2.1-rc.3");
+        DshTuiPlugins.Entry plugin = DshTuiPlugins.find("@tomowang/dsh-tui").orElseThrow();
+        install(instance, plugin.profile(), plugin.packageName());
+
+        assertEquals(plugin.packageName(), DshTui.terminalPlugin(instance).packageName());
     }
 
     /// pnpm writes `.bin/<tool>` as a shell shim; starting through it would make
@@ -214,7 +247,9 @@ class DshTuiTest {
 
     @Test
     void aPureBundleIsStartedByBootingItsProfile(@TempDir Path home) throws Exception {
-        DshInstance instance = instanceWith(home, "web");
+        // The pure-bundle entries are written for the 0.2.x harness, so the instance has to
+        // be one: otherwise the (correct) harness refusal would be what this test sees.
+        DshInstance instance = instanceWith(home, "web", "0.2.1-rc.3");
         DshTuiPlugins.Entry plugin = DshTuiPlugins.find("@tomowang/dsh-tui").orElseThrow();
         assertEquals("tui", plugin.profile());
         assertFalse(plugin.hasExecutable(), "a pure bundle has no entry of its own");

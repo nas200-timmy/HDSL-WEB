@@ -72,6 +72,8 @@ public final class DshTuiPlugins {
     /// @param description one sentence on what it is
     /// @param bin         the executable the package ships, or `null` for a pure bundle
     /// @param profile     the profile it is installed into and started from
+    /// @param requiresDsh the harness line this plugin needs, or `null` when it starts on
+    ///                    any published line — see [fitsHost]
     public record Entry(
             String id,
             String packageName,
@@ -81,7 +83,8 @@ public final class DshTuiPlugins {
             String license,
             String description,
             @Nullable String bin,
-            String profile) {
+            String profile,
+            @Nullable String requiresDsh) {
 
         /// Returns the specification the installer is given.
         ///
@@ -105,8 +108,8 @@ public final class DshTuiPlugins {
     /// harness's own releases first, then the rest by package name.
     ///
     /// Every field here was read from the package's own `latest` document on npm
-    /// (version, licence, `bin`, `repository`) and from its README (the profile), not
-    /// from a description of it.
+    /// (version, licence, `bin`, `repository`, `engines`/`peerDependencies`) and from its
+    /// README (the profile and the harness line), not from a description of it.
     public static final @Unmodifiable List<Entry> ENTRIES = List.of(
             new Entry(
                     "deepseek-harness-tui",
@@ -118,7 +121,11 @@ public final class DshTuiPlugins {
                     "社区主力终端界面：像素鲸鱼头部、流式思考、工具卡片、会话恢复与中英界面。"
                             + "自述 zero core changes —— 只消费 dsh 的公开导出，卸载不留补丁。",
                     "dsh-tui",
-                    "dsh-tui"),
+                    "dsh-tui",
+                    // Its peers span both lines (`^0.1.0-rc.6 … 0.2.1-rc.3`), so it is the one
+                    // entry that starts on a 0.1.x harness; that is also why it carries no
+                    // preset layer of its own.
+                    null),
             new Entry(
                     "tianshu-tui",
                     "@huiliyi37/dsh-tianshu-tui",
@@ -129,7 +136,9 @@ public final class DshTuiPlugins {
                     "天枢终端面板：自研极简 ANSI 渲染引擎、16+ 主题、slash 命令与选择器、"
                             + "LSP 诊断与图像/视觉桥接。",
                     null,
-                    "tui"),
+                    "tui",
+                    // README: 需 ≥ 0.2.0-rc.1（npm next）；peers 全是 ^0.2.0-rc.1。
+                    ">=0.2.0-rc.1"),
             new Entry(
                     "tomowang-tui",
                     "@tomowang/dsh-tui",
@@ -140,7 +149,9 @@ public final class DshTuiPlugins {
                     "树外 mode bundle：与内置的 dsh-web-app / dsh-headless 同构地叠在 dsh-base 上，"
                             + "把 agent 从浏览器搬到终端。",
                     null,
-                    "tui"),
+                    "tui",
+                    // peers 全是 ^0.2.1-rc.3。
+                    ">=0.2.1-rc.3"),
             new Entry(
                     "pi-tui",
                     "@xmoon76/dsh-pi-tui",
@@ -150,7 +161,9 @@ public final class DshTuiPlugins {
                     "MIT",
                     "基于 Pi TUI 的终端前端，纯 bundle：流式对话、工具调用、会话管理、Subagent 与审批。",
                     null,
-                    "pi-tui"));
+                    "pi-tui",
+                    // 唯一把要求直接写出来的一个：`engines.dsh: >=0.2.1-rc.2`。
+                    ">=0.2.1-rc.2"));
 
     private DshTuiPlugins() {
     }
@@ -188,6 +201,61 @@ public final class DshTuiPlugins {
             }
         }
         return false;
+    }
+
+    /// Whether a plugin can start on the harness an instance runs.
+    ///
+    /// A terminal interface's **tool surface comes from the agent-preset layer**, which the
+    /// harness only grew in 0.2.0 (`dsh-agent-preset-registry` plus one `dsh-agent-preset`
+    /// row per preset). The plugins written against it carry their own preset rows in their
+    /// bundle patch, and on a 0.1.x harness none of those rows can mount: the terminal
+    /// starts, the session comes up with no tools, and the plugin says so in its own words —
+    /// `agent-presets 未装配：本会话没有工具面`. Installing such a plugin into an older
+    /// instance is therefore not a failure to detect late, it is a combination to refuse:
+    /// what the user would get is a working window with a useless agent.
+    ///
+    /// Two answers are deliberately permissive. `requiresDsh() == null` means the entry
+    /// starts on any published line (its peers span both). An unknown harness version is not
+    /// refused either: the version comes from the instance record, and guessing would block
+    /// an instance that is probably fine.
+    ///
+    /// @param entry           the catalogue entry
+    /// @param harnessVersion  the dsh version the instance runs, or `null` when unknown
+    /// @return whether the plugin is meant for that line
+    public static boolean fitsHost(Entry entry, @Nullable String harnessVersion) {
+        String range = entry.requiresDsh();
+        if (range == null || range.isBlank()) {
+            return true;
+        }
+        if (harnessVersion == null || harnessVersion.isBlank()) {
+            return true;
+        }
+        return DshPluginRequirements.satisfies(range, harnessVersion);
+    }
+
+    /// The sentence the install route and the terminal route both say for a plugin whose
+    /// harness line does not match — one wording, so the two cannot drift apart.
+    ///
+    /// @param entry          the entry that does not fit
+    /// @param harnessVersion the dsh version the instance runs, or `null` when unknown
+    /// @return the refusal text
+    public static String hostMismatch(Entry entry, @Nullable String harnessVersion) {
+        return entry.packageName() + " 需要 dsh " + entry.requiresDsh() + "，这个实例是 "
+                + (harnessVersion == null || harnessVersion.isBlank() ? "未知版本" : harnessVersion)
+                + "。它的工具面来自 dsh 0.2.0 起的 agent-preset 层，装在旧宿主上只会得到一个"
+                + "「没有工具面」的会话。请把实例升级到要求的 dsh 版本，或改用 "
+                + spanningEntry() + "（它的 peer 跨两条线）。";
+    }
+
+    /// The entry that starts on any published harness line, named in [hostMismatch] as the
+    /// alternative to offer.
+    private static String spanningEntry() {
+        for (Entry entry : ENTRIES) {
+            if (entry.requiresDsh() == null || entry.requiresDsh().isBlank()) {
+                return entry.packageName();
+            }
+        }
+        return ENTRIES.isEmpty() ? "" : ENTRIES.get(0).packageName();
     }
 
     /// Returns the package a specification names, without its version.
