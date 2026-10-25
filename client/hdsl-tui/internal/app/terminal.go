@@ -15,6 +15,12 @@ import (
 // exits or the user detaches. It returns to the actions menu either way: the
 // login session and the panel connection stay alive.
 func (a *App) attach(ctx context.Context, brand string, instance panel.Instance) {
+	// The order is the web UI's: password → kernel → terminal. Asking for the
+	// kernel first would put a question in front of a user who cannot open a
+	// terminal at all yet.
+	if !a.ensureElevated(ctx) {
+		return
+	}
 	kernel, proceed := a.pickKernel(ctx, brand, instance.ID)
 	if !proceed {
 		return
@@ -101,6 +107,30 @@ func (a *App) attach(ctx context.Context, brand string, instance panel.Instance)
 		}
 		a.message("终端连接已结束", "连接在没有 exit 帧的情况下结束了，通常表示面板重启或实例被删除。")
 	}
+}
+
+// ensureElevated asks for the developer password before anything else in the
+// attach flow, which is what makes the order password → kernel → terminal.
+//
+// The panel's own answer stays the authority: a status that cannot be read
+// (an older panel, a transient failure) only means the client skips ahead, and
+// openWithElevation still asks for the password when a 403 comes back.
+func (a *App) ensureElevated(ctx context.Context) bool {
+	status, err := a.client.DeveloperStatus(ctx)
+	if err != nil {
+		a.logf("读取开发者状态失败，直接尝试打开终端: %v", err)
+		return true
+	}
+	if status.Elevated {
+		return true
+	}
+	if !status.DevPasswordSet {
+		// No terminal can open without a developer password — the panel needs
+		// one to elevate at all — so a password prompt would be a dead end.
+		a.message("无法打开终端", developerPasswordNotSet)
+		return false
+	}
+	return a.elevate(ctx)
 }
 
 // openWithElevation asks the panel for a ticket. A missing or expired

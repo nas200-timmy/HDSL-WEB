@@ -73,6 +73,11 @@ func TestExplainMapsExitCodes(t *testing.T) {
 			ExitPolicy, "no pty available",
 		},
 		{
+			"a dsh instance without a terminal plugin is a policy refusal",
+			apiError(http.StatusConflict, "未安装终端界面插件，请先到实例的「安装」页安装一个 TUI 插件（推荐 @deepseek-harness-tui/dsh-tui）。"),
+			ExitPolicy, "「安装」页",
+		},
+		{
 			"unknown instance points at the picker",
 			apiError(http.StatusNotFound, "instance not found"),
 			ExitTransport, "--instance",
@@ -153,5 +158,21 @@ func TestExitCodeFor(t *testing.T) {
 		if got := ExitCodeFor(kind); got != want {
 			t.Errorf("ExitCodeFor(%v) = %d, want %d", kind, got, want)
 		}
+	}
+}
+
+// A panel that refuses to start the terminal is a policy refusal (exit 4): the
+// reason is a PTY it does not have or a plugin it cannot load, and no rerun
+// fixes either. panel.Classify and cli.Explain disagreed about that — Classify
+// called it "other", which reads as the transport failure (exit 3) — so the
+// same failure had two exit codes depending on which table answered. Both are
+// asserted here so the two cannot drift apart again.
+func TestTerminalFailureIsPolicyOnBothPaths(t *testing.T) {
+	err := apiError(http.StatusConflict, "terminal_failed: no pty available")
+	if code, text := Explain(err); code != ExitPolicy {
+		t.Errorf("Explain = %d (%q), want %d", code, text, ExitPolicy)
+	}
+	if code := ExitCodeFor(panel.Classify(err)); code != ExitPolicy {
+		t.Errorf("ExitCodeFor(Classify) = %d, want %d", code, ExitPolicy)
 	}
 }

@@ -12,7 +12,8 @@ const (
 	// unexpectedly (3).
 	ExitTransport = 3
 	// ExitPolicy — the panel refuses on policy or platform grounds and no
-	// retry helps: not on HTTPS, web shell off, Windows desktop console (4).
+	// retry helps: not on HTTPS, web shell off, the terminal cannot start,
+	// Windows desktop console (4).
 	ExitPolicy = 4
 	// ExitUsage — the command line was wrong (5).
 	ExitUsage = 5

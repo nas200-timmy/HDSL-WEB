@@ -80,9 +80,19 @@ func Explain(err error) (int, string) {
 	case message == "":
 		return ExitTransport, "请求失败：" + shorten(err.Error())
 	case panel.IsCode(err, "terminal_failed"):
+		// ExitCodeFor(panel.Classify(err)) says the same thing: the panel's
+		// terminal_failed is a policy code. The wording lives here because the
+		// panel's reason is the part the user can act on.
 		return ExitPolicy, "终端启动失败：" + strings.TrimPrefix(shorten(message), "terminal_failed: ")
 	case strings.Contains(message, "not installed"):
 		return ExitPolicy, "这个版本还没安装：" + shorten(message)
+	case strings.Contains(message, "未安装终端界面插件"):
+		// The dsh terminal is a plugin, and an instance without one is refused
+		// with that sentence as plain text — no `code:` prefix — so nothing
+		// else would classify it and a 409 would read like a network fault.
+		// Retrying cannot fix it: the plugin is installed from the panel, and
+		// the panel's own sentence says which page.
+		return ExitPolicy, shorten(message)
 	case panel.Status(err) == 404:
 		return ExitTransport, "找不到该实例：dsh 实例直接写 id，品牌实例（kimi/opencode/claude-web）要加 --brand；" +
 			"不带 --instance 运行可以列出全部实例"
