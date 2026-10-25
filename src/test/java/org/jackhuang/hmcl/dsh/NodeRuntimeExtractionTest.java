@@ -101,6 +101,66 @@ class NodeRuntimeExtractionTest {
                 "and the entries before it are still unpacked");
     }
 
+    /// A zip entry whose parent is a link out of the target is not written through it.
+    ///
+    /// The entry's own name is the half the check above covers; this is the other half, and it is
+    /// not about the archive at all: the target already holds a link, `Files.createDirectories`
+    /// treats it as the directory it points at, and the entry would be written on the far side of
+    /// it. A zip carries no links, so the link cannot have come from the archive.
+    ///
+    /// @param directory where the target and the archive are built
+    /// @throws Exception when the fixture cannot be built
+    @Test
+    void aZipEntryUnderAnExistingLinkIsNotWrittenThroughIt(@TempDir Path directory) throws Exception {
+        Path outside = Files.createDirectory(directory.resolve("outside"));
+        Path target = Files.createDirectory(directory.resolve("out"));
+        try {
+            Files.createSymbolicLink(target.resolve("sub"), outside);
+        } catch (UnsupportedOperationException | IOException e) {
+            return; // A filesystem without links cannot test this part.
+        }
+
+        Path archive = directory.resolve("node-v22.19.0-win-x64.zip");
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(archive))) {
+            zip.putNextEntry(new ZipEntry("sub/inside.txt"));
+            zip.write("planted".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+
+        assertThrows(IOException.class, () -> NodeRuntimeManager.extractArchive(archive, target));
+        assertFalse(Files.exists(outside.resolve("inside.txt")),
+                "the entry was written through the link, outside the target");
+    }
+
+    /// And the `.tar.gz` the Linux build ships as, where the link is the top-level directory itself.
+    ///
+    /// The tar reader refuses a `..` component before extraction starts, so the name half of this is
+    /// already decided; the destination half is the same question, and the link is the directory the
+    /// whole distribution unpacks into.
+    ///
+    /// @param directory where the target and the archive are built
+    /// @throws Exception when the fixture cannot be built
+    @Test
+    void aTarEntryUnderAnExistingLinkIsNotWrittenThroughIt(@TempDir Path directory) throws Exception {
+        Path outside = Files.createDirectory(directory.resolve("outside"));
+        Path target = Files.createDirectory(directory.resolve("out"));
+        try {
+            Files.createSymbolicLink(target.resolve("node-v22"), outside);
+        } catch (UnsupportedOperationException | IOException e) {
+            return; // A filesystem without links cannot test this part.
+        }
+
+        Path archive = directory.resolve("node-v22.19.0-linux-x64.tar.gz");
+        try (TarArchiveOutputStream tar = new TarArchiveOutputStream(
+                new GZIPOutputStream(Files.newOutputStream(archive)))) {
+            tarFile(tar, "node-v22/sub/inside.txt", "planted");
+        }
+
+        assertThrows(IOException.class, () -> NodeRuntimeManager.extractArchive(archive, target));
+        assertFalse(Files.exists(outside.resolve("sub/inside.txt")),
+                "the entry was written through the link, outside the target");
+    }
+
     /// Adds a plain file to an archive.
     ///
     /// @param tar     the archive being written

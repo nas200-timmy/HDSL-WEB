@@ -52,6 +52,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Flow;
 import java.util.concurrent.SubmissionPublisher;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
@@ -71,6 +72,10 @@ import java.util.zip.InflaterInputStream;
 /// - hop-by-hop headers are stripped in both directions; **the Host header
 ///   passes through untouched**, because dsh's browser-trust fence compares
 ///   Origin to Host and refuses rewritten requests;
+/// - the browser's `Accept-Encoding` is **narrowed** to the encodings the body
+///   rewriting can undo ([decodableAcceptEncoding]) — passing it through offered
+///   the instance brotli, and a body this servlet cannot decode is a body it
+///   cannot rewrite;
 /// - `Set-Cookie: ...; Path=/` becomes `Path=/i/<id>/` so the cookies of two
 ///   instances (which share their names, decided by host alone) stop
 ///   overwriting each other;
@@ -90,7 +95,8 @@ import java.util.zip.InflaterInputStream;
 /// - bodies stream in both directions (a `Flow.Publisher` over the servlet
 ///   input on the way up, `BodyHandlers.ofInputStream` on the way down), so
 ///   SSE — `/plugins/events` — works without special treatment;
-/// - when the client goes away the upstream request is cancelled.
+/// - when the client goes away the upstream request is cancelled — the attempt
+///   that is really in flight, first or retry (see [Upstream]).
 ///
 /// WebSocket upgrades under `/i/*` are not handled here; Jetty routes them to
 /// the [org.jackhuang.hmcl.web.proxy.InstanceProxyWebSocket] endpoint before
@@ -122,13 +128,19 @@ public final class InstanceProxyServlet extends HttpServlet {
         // `PUT` that saved an API key died that way, inside the JDK's own
         // `Http1RequestBodySubscriber`, and the browser was told nothing at all.
         // Retiring idle connections before the instance does keeps that rare;
-        // [service] retries the one that still slips through.
+        // [service] retries the one that still slips through, for the methods a
+        // retry may be sent for at all (see there).
         System.setProperty("jdk.httpclient.keepalive.timeout", "4");
     }
 
     /// Headers that describe one hop and must not reach the other side.
     public static final Set<String> HOP_BY_HOP = Set.of(
             "connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "trailer");
+
+    /// The methods a failed attempt may be sent again for: the request says the
+    /// same thing twice, so sending it twice cannot apply anything twice (see
+    /// [service]).
+    private static final Set<String> RETRYABLE_METHODS = Set.of("GET", "HEAD");
 
     /// Matches the `Path=/` of a Set-Cookie value, at the start or after a
     /// separator, so it can be rewritten to the instance's mount.
@@ -264,8 +276,7 @@ public final class InstanceProxyServlet extends HttpServlet {
         // is what the client announced — by content-length or by chunked framing;
         // `-1` with neither is a body-less request (the common GET), which must
         // not be given a publisher: a request that carries nothing is not this
-        // panel's to turn into a chunked one, and the retry below is only for the
-        // requests that can be sent twice.
+        // panel's to turn into a chunked one.
         long announcedBody = request.getContentLengthLong();
         boolean hasBody = announcedBody > 0
                 || (announcedBody < 0 && request.getHeader("transfer-encoding") != null);
@@ -296,16 +307,19 @@ public final class InstanceProxyServlet extends HttpServlet {
         // SSE streams stay open indefinitely; no timeout, the client's own
         // disconnect is what ends the pump.
         async.setTimeout(0);
-        CompletableFuture<HttpResponse<InputStream>> firstAttempt = client.sendAsync(upstreamRequest,
-                HttpResponse.BodyHandlers.ofInputStream());
-        // A body that was read into memory (or none at all) can be sent twice, so
-        // such a request is retried on a client that has never spoken to the
-        // instance: the retry cannot land on the same stale connection the first
-        // attempt died on — see the keep-alive note in the static block.
-        CompletableFuture<HttpResponse<InputStream>> upstream = streamedBody == null
-                ? firstAttempt.exceptionallyCompose(error ->
-                        freshClient().sendAsync(upstreamRequest, HttpResponse.BodyHandlers.ofInputStream()))
-                : firstAttempt;
+        // What a failed attempt is retried for, and what it is not: a request
+        // that says the same thing twice. A `POST`, `PUT`, `PATCH` or `DELETE`
+        // that fails is answered with its failure instead — the reason those
+        // methods are not idempotent is that the instance may have applied the
+        // request before the connection died, and nothing here can tell that from
+        // an instance that never saw it ("can be sent twice" is about the bytes,
+        // and the bytes are not the question). A body that had to be streamed is
+        // not replayable at all, so it cannot be retried whatever the method.
+        boolean retryable = streamedBody == null && RETRYABLE_METHODS.contains(request.getMethod());
+        // The attempt in flight, held on to — with the retry registered in it as
+        // it starts — so that a cancellation reaches whichever request really is
+        // in flight, and not a stage derived from the first one (see [Upstream]).
+        Upstream upstream = attempt(client, upstreamRequest, retryable);
         async.addListener(new AsyncListener() {
             @Override
             public void onComplete(AsyncEvent event) {
@@ -313,12 +327,12 @@ public final class InstanceProxyServlet extends HttpServlet {
 
             @Override
             public void onTimeout(AsyncEvent event) {
-                upstream.cancel(true);
+                upstream.cancel();
             }
 
             @Override
             public void onError(AsyncEvent event) {
-                upstream.cancel(true);
+                upstream.cancel();
             }
 
             @Override
@@ -334,10 +348,37 @@ public final class InstanceProxyServlet extends HttpServlet {
         boolean zcodeClient = org.jackhuang.hmcl.web.zcode.ZcodeRuntime.known(instanceId);
         boolean routerClient = brandClient && brand.needsRouterShim();
         int upstreamPort = port;
-        upstream.whenCompleteAsync(
-                (result, error) -> pump(response, async, upstream, mount, browserMount, brandClient, zcodeClient,
-                        routerClient, upstreamPort, result, error),
+        upstream.answer().whenCompleteAsync(
+                (answer, error) -> pump(response, async, upstream, mount, browserMount, brandClient, zcodeClient,
+                        routerClient, upstreamPort, answer, error),
                 tasks.executor());
+    }
+
+    /// Starts the first attempt at `request`, and — for a request that may be
+    /// sent twice — the composition through which its retry answers for it.
+    ///
+    /// A retry runs on a client that has never spoken to the instance, so it
+    /// cannot land on the same stale connection the first attempt died on — see
+    /// the keep-alive note in the static block. It is registered with the
+    /// attempt holder as it starts, which is what lets a cancellation reach
+    /// whichever request is really in flight (see [Upstream]); a client whose
+    /// disconnect has already been recorded is not sent one at all.
+    ///
+    /// @param retryable whether a failed attempt may be answered with a second
+    ///                  request — the methods a retry is legal for, and a body
+    ///                  that could be replayed (see [service])
+    /// @return the attempt, and the stage the pump waits on ([Upstream#answer])
+    static Upstream attempt(HttpClient client, HttpRequest request, boolean retryable) {
+        Upstream upstream = new Upstream(client.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream()));
+        upstream.answer = retryable
+                ? upstream.first().exceptionallyCompose(error -> upstream.isCancelled()
+                        // The client went away before this failure was read: the
+                        // answer to its disconnect is not another request.
+                        ? CompletableFuture.failedFuture(error)
+                        : upstream.retrying(freshClient().sendAsync(request,
+                                HttpResponse.BodyHandlers.ofInputStream())))
+                : upstream.first();
+        return upstream;
     }
 
     /// Copies the response headers and streams the body back, running on the
@@ -351,8 +392,7 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// @param browserMount  `mount` under the panel's own base — every surface
     ///                      the browser sees (injected references, patched asset
     ///                      URLs, redirect Locations, cookie paths)
-    private static void pump(HttpServletResponse response, AsyncContext async,
-                             CompletableFuture<HttpResponse<InputStream>> upstream, String mount,
+    private static void pump(HttpServletResponse response, AsyncContext async, Upstream upstream, String mount,
                              String browserMount, boolean brandClient, boolean zcodeClient, boolean routerClient,
                              int port, @Nullable HttpResponse<InputStream> result, @Nullable Throwable error) {
         try {
@@ -420,22 +460,96 @@ public final class InstanceProxyServlet extends HttpServlet {
         } catch (IOException e) {
             // The client went away, or the instance died mid-response. The
             // upstream request is cancelled either way — a half-finished
-            // response has no consumer.
-            upstream.cancel(true);
+            // response has no consumer. That is the attempt in flight, so a retry
+            // this servlet started is cancelled here too (see [Upstream]).
+            upstream.cancel();
         } finally {
             async.complete();
         }
     }
 
+    /// The upstream attempt that is in flight, the stage its answer arrives on,
+    /// and the record of its cancellation.
+    ///
+    /// What cancels has to be the `sendAsync` that is really running, which is
+    /// **not** the stage the pump waits on ([Upstream#answer]): for a request
+    /// being retried that stage is the future `exceptionallyCompose` produced,
+    /// and a derived stage carries the cancelable of the attempt it was derived
+    /// *from* — so cancelling it cancels the first attempt's already-dead
+    /// exchange and leaves the retry holding the instance's connection open.
+    /// Measured 2026-10 in this package's tests: the retry was still in flight at
+    /// the instance after the stage had been cancelled. The class doc's "when the
+    /// client goes away the upstream request is cancelled" was not true of it.
+    ///
+    /// The retry is registered here as it starts ([Upstream#retrying]), and
+    /// [Upstream#cancel] cancels whichever attempt that is, exactly once.
+    ///
+    /// Package-private, as is [InstanceProxyServlet#attempt], because that
+    /// contract is what the proxy tests pin down.
+    static final class Upstream {
+
+        private final AtomicReference<CompletableFuture<HttpResponse<InputStream>>> inFlight;
+        /// The stage the pump waits on: the first attempt, or the composition
+        /// the retry answers through. Set once, by [InstanceProxyServlet#attempt].
+        private CompletableFuture<HttpResponse<InputStream>> answer;
+        /// Set *before* the attempt is cancelled, so that a retry whose
+        /// composition is already under way sees it and does not start another
+        /// request in answer to the client's going away.
+        private final AtomicBoolean cancelled = new AtomicBoolean();
+
+        private Upstream(CompletableFuture<HttpResponse<InputStream>> firstAttempt) {
+            this.inFlight = new AtomicReference<>(firstAttempt);
+        }
+
+        /// The first attempt: what a retryable request's retry is composed onto,
+        /// and the whole of what an unretryable one is.
+        private CompletableFuture<HttpResponse<InputStream>> first() {
+            return inFlight.get();
+        }
+
+        /// The stage whose completion is the answer — what the pump is run for.
+        CompletableFuture<HttpResponse<InputStream>> answer() {
+            return answer;
+        }
+
+        private boolean isCancelled() {
+            return cancelled.get();
+        }
+
+        /// Registers the retry that is now in flight — and cancels it at once
+        /// when the client went away while it was being started, which is the
+        /// one window a cancel could otherwise miss.
+        private CompletableFuture<HttpResponse<InputStream>> retrying(
+                CompletableFuture<HttpResponse<InputStream>> attempt) {
+            inFlight.set(attempt);
+            if (cancelled.get()) {
+                attempt.cancel(true);
+            }
+            return attempt;
+        }
+
+        /// Ends the attempt in flight, once: what the async listener and the
+        /// pump do when the client is not there any more.
+        void cancel() {
+            if (cancelled.compareAndSet(false, true)) {
+                inFlight.get().cancel(true);
+            }
+        }
+    }
+
     /// Copies the request headers, dropping hop-by-hop names and the
-    /// content-length (the streamed body has none), and passing Host through
-    /// as it arrived.
+    /// content-length (the streamed body has none), passing Host through as it
+    /// arrived, and narrowing the Accept-Encoding to the encodings the body
+    /// rewriting can undo ([decodableAcceptEncoding]).
     private static void copyRequestHeaders(HttpServletRequest request, HttpRequest.Builder builder) {
         Enumeration<String> names = request.getHeaderNames();
         while (names.hasMoreElements()) {
             String name = names.nextElement();
             String lower = name.toLowerCase(Locale.ROOT);
-            if (HOP_BY_HOP.contains(lower) || lower.equals("content-length")) {
+            if (HOP_BY_HOP.contains(lower) || lower.equals("content-length")
+                    || lower.equals("accept-encoding")) {
+                // The encodings are set once, narrowed, after the loop: the value
+                // the browser sent is one this servlet may not hand over as it is.
                 continue;
             }
             Enumeration<String> values = request.getHeaders(name);
@@ -443,10 +557,66 @@ public final class InstanceProxyServlet extends HttpServlet {
                 builder.header(name, values.nextElement());
             }
         }
+        String encodings = decodableAcceptEncoding(request.getHeader("accept-encoding"));
+        if (encodings != null) {
+            builder.header("accept-encoding", encodings);
+        }
+    }
+
+    /// The encodings the body rewriting can undo, and the only ones it may ask
+    /// for: gzip and deflate. Brotli and zstd would each be a dependency this
+    /// build does not carry, and [readPage]/[readAsset] have no decoder for them.
+    private static final Set<String> DECODABLE_ENCODINGS = Set.of("gzip", "deflate");
+
+    /// Narrows what the browser asked for down to what the rewriting can decode.
+    ///
+    /// The request side and the rewriting side have to agree, and this is the one
+    /// of the two that can be decided before the answer exists: any response may
+    /// turn out to be a body that gets rebuilt — the instance answers a path it
+    /// does not know with its index page — so there is no point at which "this
+    /// body will not be rewritten" is known. Passing the browser's header through
+    /// meant an instance could answer brotli, and [readPage] then decoded those
+    /// bytes as UTF-8 text: measured 2026-10, the browser was handed the mangled
+    /// remains of the page, with the mount missing from it entirely.
+    ///
+    /// The tokens the browser did list are kept verbatim, `q` values and all; `*`
+    /// is dropped rather than kept, because a wildcard is exactly the licence to
+    /// answer brotli. A `null` result means the request carries no
+    /// `Accept-Encoding` at all, which every server answers with the identity
+    /// encoding — the one body shape this servlet reads as it is.
+    ///
+    /// @param requested the header the browser sent, or `null`
+    /// @return the narrowed header value, or `null` when nothing is left of it
+    static @Nullable String decodableAcceptEncoding(@Nullable String requested) {
+        if (requested == null || requested.isBlank()) {
+            return null;
+        }
+        StringBuilder narrowed = new StringBuilder();
+        for (String token : requested.split(",")) {
+            String trimmed = token.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            int parameter = trimmed.indexOf(';');
+            String name = parameter < 0 ? trimmed : trimmed.substring(0, parameter).trim();
+            if (!DECODABLE_ENCODINGS.contains(name.toLowerCase(Locale.ROOT))) {
+                continue;
+            }
+            if (!narrowed.isEmpty()) {
+                narrowed.append(", ");
+            }
+            narrowed.append(trimmed);
+        }
+        return narrowed.isEmpty() ? null : narrowed.toString();
     }
 
     /// Copies the response headers, dropping hop-by-hop names, pointing a
     /// redirect back at the mount, and rewriting the Set-Cookie paths onto it.
+    ///
+    /// The mount is quoted wherever it goes into a replacement string: it is
+    /// configuration (`basePath` and the instance id), and a `$` or `\` in it
+    /// would otherwise be read as a group reference — `$1` silently taking the
+    /// cookie's own separator for the path, `$x` throwing outright.
     ///
     /// @param rewritesBody whether the caller is replacing the body, in which
     ///                     case the headers that described the old one go too
@@ -463,7 +633,8 @@ public final class InstanceProxyServlet extends HttpServlet {
             }
             for (String value : entry.getValue()) {
                 if (lower.equals("set-cookie")) {
-                    value = COOKIE_PATH.matcher(value).replaceAll("$1Path=" + mount);
+                    value = COOKIE_PATH.matcher(value)
+                            .replaceAll("$1Path=" + Matcher.quoteReplacement(mount));
                 } else if (lower.equals("location")) {
                     value = mountLocation(value, mount);
                 }
@@ -476,6 +647,10 @@ public final class InstanceProxyServlet extends HttpServlet {
     ///
     /// The page arrives gzipped and cannot be rewritten while it is, so the answer goes back
     /// uncompressed — which is why the caller drops the `content-encoding` header with it.
+    ///
+    /// An encoding this servlet has no decoder for is read as text anyway, and
+    /// logged on the way ([warnUndecodableEncoding]): the bytes are not the page
+    /// then, and silence about it was half of what made the brotli case invisible.
     private static String readPage(InputStream in, HttpResponse<InputStream> result) throws IOException {
         String encoding = result.headers().firstValue("content-encoding").orElse("").toLowerCase(Locale.ROOT);
         if (encoding.contains("gzip")) {
@@ -488,7 +663,23 @@ public final class InstanceProxyServlet extends HttpServlet {
                 return new String(deflate.readAllBytes(), StandardCharsets.UTF_8);
             }
         }
+        if (!encoding.isEmpty()) {
+            warnUndecodableEncoding(encoding, result);
+        }
         return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+    }
+
+    /// The other half of the request-side narrowing ([decodableAcceptEncoding]).
+    ///
+    /// The narrowing is what keeps an instance from being offered an encoding
+    /// this servlet cannot undo, but an instance — or a proxy in front of one —
+    /// may answer one anyway. The body is then read as text, which is not the page
+    /// the browser needs, and it was silent. Naming it here is what makes the next
+    /// occurrence visible instead of a report about a mangled page.
+    private static void warnUndecodableEncoding(String encoding, HttpResponse<InputStream> result) {
+        org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                "Treating a \"" + encoding + "\" body as text: " + result.request().uri()
+                        + " — the rewriting cannot decode it, so the browser will get it mangled");
     }
 
     /// The shim that keeps the page's runtime requests inside the mount.
@@ -773,6 +964,10 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// browser would run, and a compressed body is not those bytes. The caller
     /// drops `content-encoding` with it — see [copyResponseHeaders].
     ///
+    /// An encoding with no decoder is read as text and logged, exactly as in
+    /// [readPage]: the patch is then matched against something that is not the
+    /// asset, and the file the browser loads is not the one the instance served.
+    ///
     /// @return the bytes, or `null` when the response holds more than
     ///         [MAX_SCRIPT_BYTES] after all
     private static byte @Nullable [] readAsset(InputStream in, HttpResponse<InputStream> result) throws IOException {
@@ -786,6 +981,9 @@ public final class InstanceProxyServlet extends HttpServlet {
             try (InflaterInputStream deflate = new InflaterInputStream(in)) {
                 return readBytes(deflate, MAX_SCRIPT_BYTES);
             }
+        }
+        if (!encoding.isEmpty()) {
+            warnUndecodableEncoding(encoding, result);
         }
         return readBytes(in, MAX_SCRIPT_BYTES);
     }

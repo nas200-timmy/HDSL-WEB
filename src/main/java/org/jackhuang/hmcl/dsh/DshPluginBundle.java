@@ -20,6 +20,7 @@ package org.jackhuang.hmcl.dsh;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.jackhuang.hmcl.util.io.SafePaths;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -430,22 +431,27 @@ public final class DshPluginBundle {
                         return target.toAbsolutePath().normalize();
                     }
                     Path base = pluginsDirectory.toAbsolutePath().normalize();
-                    Path target = base.resolve(carried)
-                            .resolve(rest.substring(slash + 1).replace('/', java.io.File.separatorChar))
-                            .normalize();
+                    Path target = SafePaths.resolveInside(base, base.resolve(carried)
+                            .resolve(rest.substring(slash + 1).replace('/', java.io.File.separatorChar)));
                     // A pack is an archive somebody downloaded, so where each of its members lands is
                     // checked rather than assumed: the name a payload carries is a path, and a path
                     // is what an archive chooses for itself. `plugins/<name>-<version>/../../x.yml`
                     // passes the check above — the payload is this package's — and would otherwise be
                     // written over whatever the two `..` reach, which for a plugin directory inside an
                     // instance is the instance, the profile and, from there, anything the user owns.
-                    if (!target.startsWith(base)) {
+                    //
+                    // `..` is only the half of it that is made of strings. A plugin installed with
+                    // `link:` leaves a symlink directory beside these, and a member whose parent is
+                    // one begins with the plugin directory while the write lands wherever the link
+                    // points — which is why the check is [SafePaths]'s and asks the filesystem as
+                    // well.
+                    if (target == null) {
                         LOG.warning("Not unpacking " + entryName + " out of " + pack.getFileName()
                                 + ": it would be written outside " + base);
                         throw new IOException("That pack tries to write outside the plugin directory ("
                                 + entryName + ")");
                     }
-                    Files.createDirectories(target.getParent());
+                    SafePaths.createDirectories(base, target.getParent());
                     // Read straight out of the archive: closing anything here would close the
                     // archive, and the entries after this one would be gone.
                     Files.copy(zip, target, StandardCopyOption.REPLACE_EXISTING);

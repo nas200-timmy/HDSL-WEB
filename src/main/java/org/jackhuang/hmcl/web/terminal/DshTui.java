@@ -105,9 +105,13 @@ public final class DshTui {
             }
         }
         if (command == null) {
-            // No bin, or a bin this profile does not hold: booting the profile is what the
-            // plugin's own documentation shows, and it is the one path that cannot be
-            // wrong about which files a package shipped.
+            // No bin — booting the profile is what a bundle's own documentation shows.
+            // A package that *does* ship one cannot arrive here: [terminalPlugin] returns
+            // only an entry whose entry point resolves whenever its manifest declares a
+            // bin, so this is the bundle case and not a fallback for a missing file.
+            // Reading it as "the one path that cannot be wrong about which files a
+            // package shipped" is what let an instance whose plugin was only half
+            // installed boot an empty profile and die with nothing on screen.
             command = cliCommand(plan.command(), resumeSession);
         }
 
@@ -121,10 +125,18 @@ public final class DshTui {
 
     /// The terminal plugin an instance has installed, in its own profile.
     ///
-    /// The first entry of [DshTuiPlugins] that its profile's manifest declares, so the
-    /// order of the list is the preference. Each entry is looked for in **its own**
-    /// profile: three of the four use three different profiles, and one installed into
-    /// `tui` is absent from the instance's `web` profile by design.
+    /// The first entry of [DshTuiPlugins] whose profile both **declares** the package and
+    /// **holds** it, so the order of the list is the preference. Each entry is looked for
+    /// in **its own** profile: three of the four use three different profiles, and one
+    /// installed into `tui` is absent from the instance's `web` profile by design.
+    ///
+    /// Both halves are required. The manifest is written before pnpm fetches anything, so
+    /// a run that could not fetch leaves a profile that claims a plugin it does not have —
+    /// and that state used to be accepted here, which is what made the panel open a
+    /// terminal that died instantly and silently. A declared-but-missing entry is skipped
+    /// (a later one that really is installed is still offered), and when nothing else is
+    /// there it is named in the refusal, because "reinstall this one" is a different
+    /// instruction from "install one".
     ///
     /// Public because the REST handler asks it before it opens a terminal: opening takes
     /// the instance over — the web runtime is stopped first — so an instance with nothing
@@ -132,17 +144,55 @@ public final class DshTui {
     ///
     /// @param instance the instance
     /// @return the entry to start
-    /// @throws DshException when none is installed
+    /// @throws DshException when none is installed, or the one that is declared is not on
+    ///                       disk
     public static DshTuiPlugins.Entry terminalPlugin(DshInstance instance) throws DshException {
+        DshTuiPlugins.Entry declared = null;
         for (DshTuiPlugins.Entry entry : DshTuiPlugins.ENTRIES) {
             Map<String, String> dependencies =
                     DshPluginInstaller.readDependencies(instance.homeDirectory(), entry.profile());
-            if (DshTuiPlugins.isInstalled(entry, dependencies.keySet())) {
+            if (!DshTuiPlugins.isInstalled(entry, dependencies.keySet())) {
+                continue;
+            }
+            // The manifest says what was asked for; the files say what is there. An
+            // install that failed after writing the dependency leaves the first true and
+            // the second false, and an instance in that state has to be refused **here**:
+            // booting that profile dies before it can print a single byte, which reads as
+            // the panel having opened a terminal that does nothing.
+            if (filesPresent(instance, entry)) {
                 return entry;
             }
+            if (declared == null) {
+                declared = entry;
+            }
+        }
+        if (declared != null) {
+            throw new DshException("实例的 " + declared.profile() + " profile 声明了 "
+                    + declared.packageName() + "，但它的文件不在——安装没有真的落地（或者被删了）。"
+                    + "请到实例的「安装」页重新安装这个 TUI 插件。");
         }
         throw new DshException("未安装终端界面插件，请先到实例的「安装」页安装一个 TUI 插件（推荐 "
                 + DshTuiPlugins.ENTRIES.get(0).packageName() + "）。");
+    }
+
+    /// Whether a declared plugin's files are really in its profile.
+    ///
+    /// Two questions, because a package declares which of the two it is: a package that
+    /// ships an executable is started through it, so the file its own manifest names has
+    /// to be there — booting the profile instead is the bin-less path, and this package
+    /// says it has a bin. A pure bundle only has to be on disk, because booting its
+    /// profile is how its authors document starting it.
+    ///
+    /// @param instance the instance
+    /// @param plugin   the plugin the profile declares
+    /// @return whether the profile holds what starting it needs
+    /// @throws DshException when the instance cannot name its home
+    static boolean filesPresent(DshInstance instance, DshTuiPlugins.Entry plugin) throws DshException {
+        Path nodeModules = profileNodeModules(instance, plugin.profile());
+        if (!Files.isDirectory(nodeModules.resolve(plugin.packageName()))) {
+            return false;
+        }
+        return !plugin.hasExecutable() || entryPoint(nodeModules, plugin.packageName(), plugin.bin()) != null;
     }
 
     /// Refuses a launch that would boot the harness's own web app.
@@ -188,7 +238,7 @@ public final class DshTui {
     /// @return `<DSH_HOME>/profiles/<profile>/node_modules`
     /// @throws DshException when the instance cannot name its home
     static Path profileNodeModules(DshInstance instance, String profile) throws DshException {
-        return instance.homeDirectory().resolve("profiles").resolve(profile).resolve("node_modules");
+        return DshPluginInstaller.profileNodeModules(instance.homeDirectory(), profile);
     }
 
     /// Finds the executable an installed plugin ships.

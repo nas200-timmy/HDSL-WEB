@@ -26,7 +26,9 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// Verifies what a DSH-PackForge pack carries, and what it refuses to.
@@ -392,6 +394,70 @@ class DshPackForgeTest {
             Files.deleteIfExists(pack);
             DshInstanceManager.delete(id);
         }
+    }
+
+    /// Every credential the importer refuses, the exporter refuses too.
+    ///
+    /// The two sides used to hold two hand-written lists, and the importer's comment claimed they
+    /// were the same one. They were not, and the direction the difference ran was the wrong one:
+    /// `.netrc`, `.pypirc`, `.yarnrc` and `.yarnrc.yml` could be **published** inside a `.dspack`
+    /// that the importer would have refused to write, and a key named `id_ed25519` with no extension
+    /// at all escaped both. There is one list now, and this asks it of both sides — the export side
+    /// through `exclusionOf`, which is what its scan decides with, and the import side through
+    /// `land`, the entry point that writes a pack's members — so re-splitting the list fails here
+    /// rather than in somebody's published pack.
+    ///
+    /// @param temp where the packs are built
+    /// @throws Exception when a pack cannot be written
+    @Test
+    void everyCredentialTheImporterRefusesTheExporterRefusesToo(@TempDir Path temp) throws Exception {
+        java.util.List<String> spellings = new java.util.ArrayList<>(DshPackForge.CREDENTIAL_NAMES);
+        for (String prefix : DshPackForge.CREDENTIAL_KEY_PREFIXES) {
+            spellings.add(prefix);
+            spellings.add(prefix + ".pub");
+        }
+        for (String extension : DshPackForge.CREDENTIAL_EXTENSIONS) {
+            spellings.add("carried" + extension);
+        }
+        // The shapes, which are rules rather than spellings and so cannot be read off a list.
+        spellings.addAll(java.util.List.of("credentials.yml", "kept.credentials"));
+
+        for (String spelling : spellings) {
+            assertNotNull(DshPackForge.exclusionOf(spelling),
+                    "the export side refuses what the import side does: " + spelling);
+            assertThrows(DshException.class,
+                    () -> DshPackInstaller.land(credentialPack(temp, spelling),
+                            temp.resolve("landed"), null,
+                            java.util.EnumSet.of(DshPackInstaller.Part.OVERRIDES)),
+                    "the import side refuses " + spelling);
+        }
+
+        // The spellings this defect was about, named individually, because each of them used to be
+        // refused on one side and not the other: the first four the export side published, the next
+        // three escaped both, and the last three the import side refused and the export side did not.
+        for (String spelling : java.util.List.of(".netrc", ".pypirc", ".yarnrc", ".yarnrc.yml",
+                "id_ed25519", "id_ecdsa", "id_ed448", "carried.jks", "carried.keystore",
+                "credentials.yml")) {
+            assertNotNull(DshPackForge.exclusionOf(spelling),
+                    "a credential one side used to refuse and the other did not: " + spelling);
+        }
+    }
+
+    /// Builds a pack carrying one file under `overrides/`.
+    ///
+    /// @param directory where the pack is written
+    /// @param member    the member's name
+    /// @return the pack
+    /// @throws Exception when the archive cannot be written
+    private static Path credentialPack(Path directory, String member) throws Exception {
+        Path pack = directory.resolve("pack-" + member.replace('.', '-') + ".dspack");
+        try (java.util.zip.ZipOutputStream zip =
+                     new java.util.zip.ZipOutputStream(java.nio.file.Files.newOutputStream(pack))) {
+            zip.putNextEntry(new java.util.zip.ZipEntry("overrides/" + member));
+            zip.write("a credential".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+        return pack;
     }
 
     @Test

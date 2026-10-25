@@ -30,7 +30,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 
 /// One running agent TUI, detached from any viewer.
@@ -43,7 +42,10 @@ import java.util.concurrent.CountDownLatch;
 /// When the child exits, the pump drains the last bytes, marks the session
 /// [State#EXITED], tells every attached sink the exit code, and answers
 /// [#waitFor]. Input is refused from that moment on: the terminal can never be
-/// handed to anything else.
+/// handed to anything else. A child that exits non-zero without writing a byte
+/// is reported in the app log and in the exit frame, because that failure leaves
+/// no other trace ([#silentFailure]). An exit this panel caused is not one:
+/// stopping a terminal is supposed to produce no output.
 @NotNullByDefault
 public final class TerminalSession {
 
@@ -57,12 +59,23 @@ public final class TerminalSession {
     private final byte[] replay;
     private final Object lock = new Object();
     private final List<TerminalSink> sinks = new ArrayList<>();
-    private final List<Runnable> exitListeners = new CopyOnWriteArrayList<>();
+    /// Only ever read and written under [lock], like [sinks]: the exit path
+    /// takes its snapshot inside that lock.
+    private final List<Runnable> exitListeners = new ArrayList<>();
     private final CountDownLatch exited = new CountDownLatch(1);
     private final Thread pump;
     private int replayCount;
     private volatile State state = State.RUNNING;
     private volatile int exitCode = Integer.MIN_VALUE;
+    /// Everything the child ever wrote, replay buffer or not. The pump reads it
+    /// only after the output stream reached its end, so no lock is needed for
+    /// that reading thread; it is volatile so a viewer that is told about the
+    /// exit sees the final count.
+    private volatile long outputBytes;
+    /// Set when this panel is the one ending the session. A stop we asked for
+    /// reports the signal it took as the exit code and prints nothing on the way
+    /// out, so it has the same shape as a failure without being one.
+    private volatile boolean endedByPanel;
 
     /// @param replayBytes how much output is kept for a reattach
     public TerminalSession(String instanceId, Pty pty, int replayBytes) {
@@ -86,6 +99,24 @@ public final class TerminalSession {
     /// The child's exit code once [State#EXITED], `Integer.MIN_VALUE` before.
     public int exitCode() {
         return exitCode;
+    }
+
+    /// Whether the session failed without ever writing a byte.
+    ///
+    /// A child that dies instantly — a missing plugin, a rejected argument, a
+    /// crash before the first paint — leaves the same empty screen as a viewer
+    /// that missed the output, and only this counter tells the two apart. It is
+    /// what lets the exit frame say the terminal never printed anything instead
+    /// of showing a bare non-zero code.
+    ///
+    /// A session this panel ended does not count, whatever its exit code: a stop
+    /// we asked for takes a signal and prints nothing, so both halves of this
+    /// predicate hold for it — and reporting that as a failure would put a
+    /// diagnosis in the log and a hint in the browser every time somebody
+    /// pressed 停止, deleted an instance, or let the lifecycle close a terminal
+    /// behind them.
+    public boolean silentFailure() {
+        return exitCode != 0 && outputBytes == 0 && !endedByPanel;
     }
 
     /// Bytes typed at the terminal.
@@ -127,6 +158,9 @@ public final class TerminalSession {
 
     /// Ends the child's process group, waiting up to `grace` for the exit.
     public void terminate(Duration grace) {
+        // Before the signal: the exit it causes is not a failure to diagnose, and
+        // the pump may read the flag the moment the child is gone.
+        endedByPanel = true;
         pty.terminate(grace);
         try {
             // The pump reports the exit; give it the same grace again so a
@@ -139,17 +173,19 @@ public final class TerminalSession {
 
     /// Runs `listener` once the child is gone. Used by the manager to drop the
     /// instance → session mapping without polling.
+    ///
+    /// The state check and the registration happen under the same lock in which
+    /// the pump marks the session exited and takes its snapshot of this list: a
+    /// listener is either in that snapshot or run here, never both. Running it
+    /// here while the pump still held the lock would mean a second run.
     public void onExit(Runnable listener) {
-        if (state == State.EXITED) {
-            listener.run();
-            return;
+        synchronized (lock) {
+            if (state == State.RUNNING) {
+                exitListeners.add(listener);
+                return;
+            }
         }
-        exitListeners.add(listener);
-        // The pump may have finished between the check and the add; the
-        // listener must still run exactly once.
-        if (state == State.EXITED && exitListeners.remove(listener)) {
-            listener.run();
-        }
+        listener.run();
     }
 
     /// Waits for the child and returns its exit code.
@@ -178,19 +214,36 @@ public final class TerminalSession {
             }
         } catch (IOException ignored) {
             // The PTY was closed under us (shutdown or a broken child); the
-            // exit path below still runs and reports it.
+            // exit path below still runs and reports it, and the byte count it
+            // reads is the one this pump actually saw.
         } finally {
             int code = pty.waitFor();
             exitCode = code;
-            state = State.EXITED;
+            if (silentFailure()) {
+                // A terminal that dies without a single byte of output leaves
+                // nothing to diagnose: the audit line has an exit code and the
+                // app log has a closed socket, and neither says the child never
+                // spoke. Say that one fact — it is what the session knows — so
+                // the line leads somewhere instead of reading like every other
+                // exit.
+                Logger.LOG.warning("Terminal " + instanceId + " exited with code " + code
+                        + " without producing any output");
+            }
+            List<Runnable> listeners;
             synchronized (lock) {
+                // The state write and the snapshot are one step under this lock,
+                // which is what makes onExit's listener run exactly once: a
+                // caller that lost the race against this block finds EXITED and
+                // runs its listener itself.
+                state = State.EXITED;
                 for (TerminalSink sink : sinks) {
                     sink.exited(code);
                 }
                 sinks.clear();
+                listeners = new ArrayList<>(exitListeners);
             }
             exited.countDown();
-            for (Runnable listener : exitListeners) {
+            for (Runnable listener : listeners) {
                 listener.run();
             }
         }
@@ -198,6 +251,7 @@ public final class TerminalSession {
 
     private void broadcast(byte[] data, int offset, int length) {
         synchronized (lock) {
+            outputBytes += length;
             appendReplay(data, offset, length);
             for (TerminalSink sink : sinks) {
                 sink.data(data, offset, length);

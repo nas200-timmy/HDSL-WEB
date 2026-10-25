@@ -171,13 +171,23 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     ws.onmessage = (event) => {
       if (typeof event.data === "string") {
         try {
-          const control = JSON.parse(event.data) as { type?: string; code?: number };
+          const control = JSON.parse(event.data) as {
+            type?: string;
+            code?: number;
+            failedWithoutOutput?: boolean;
+          };
           if (control.type === "ready") {
             setPhase("running");
             term.focus();
           } else if (control.type === "exit") {
             setExitCode(control.code ?? 0);
             term.write(`\r\n\x1b[90m${I18N["terminal.ended"]} (${control.code ?? 0})\x1b[0m\r\n`);
+            if (control.failedWithoutOutput) {
+              // The child never printed anything, so the empty screen is the failure and
+              // not a viewer that missed the output — say what to do about it instead of
+              // leaving a bare exit code.
+              term.write(`\x1b[90m${I18N["terminal.failedWithoutOutput"]}\x1b[0m\r\n`);
+            }
             setPhase("ended");
             ws.close();
             closeTimerRef.current = window.setTimeout(() => onCloseRef.current(), 3000);

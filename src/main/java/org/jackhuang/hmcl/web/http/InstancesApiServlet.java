@@ -414,6 +414,15 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
             return;
         }
+        // The terminal is an instance's own process, and after the record is
+        // gone the panel has no other way to reach it: `DELETE .../terminal`
+        // looks the instance up first and answers 404 once it is deleted, so
+        // the kill has to happen here, before the delete. The brand and ZCode
+        // routes close in this order for the same reason.
+        // `stateOf` only knows the web process, so an instance whose only
+        // process is the terminal reads STOPPED and passes the gate below —
+        // which is exactly why the close cannot wait for it.
+        instanceTerminal.close("dsh", id);
         String state = runtime.stateOf(id);
         if (state.equals("RUNNING") || state.equals("STARTING") || state.equals("STOPPING")) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "instance is running");
@@ -488,14 +497,18 @@ public final class InstancesApiServlet extends HttpServlet {
     private TaskService.Task submitInstall(DshInstance instance, String version,
                                           @Nullable java.util.function.Consumer<DshInstance> onInstalled) {
         String id = instance.id();
-        TaskService.Task[] holder = new TaskService.Task[1];
-        java.util.ArrayDeque<String> tail = new java.util.ArrayDeque<>();
-        TaskService.Task task = tasks.submit("install", id, () -> {
+        // Written by the process pump and read by the task thread when a failure is
+        // explained, with no happens-before between them: `DshCommand` only interrupts
+        // its pump after `waitFor` returns, never joins it, so a line can still be
+        // arriving while `failedInstall` joins what is here. A deque that is safe
+        // under that is the whole reason this is not an `ArrayDeque`.
+        java.util.concurrent.ConcurrentLinkedDeque<String> tail = new java.util.concurrent.ConcurrentLinkedDeque<>();
+        TaskService.Task task = tasks.submit("install", id, live -> {
             org.jackhuang.hmcl.dsh.DshInstallProgress progress =
                     new org.jackhuang.hmcl.dsh.DshInstallProgress();
-            // The holder lets the progress listener reach the task whose
-            // submission created this lambda; the tail is what a failure will
-            // be explained with.
+            // The work is handed its own task, so the progress listener can
+            // report straight through it; the tail is what a failure will be
+            // explained with.
             progress.addListener(p -> {
                 if (p.getMessage() != null && !p.getMessage().isBlank()) {
                     if (tail.size() >= INSTALL_TAIL_LINES) {
@@ -503,12 +516,7 @@ public final class InstancesApiServlet extends HttpServlet {
                     }
                     tail.addLast(p.getMessage().trim());
                 }
-                // The task may still be in flight to the pool while the first
-                // line arrives; a missing holder just means nobody to tell yet.
-                TaskService.Task owner = holder[0];
-                if (owner != null) {
-                    owner.update(p.getMessage(), p.getFraction());
-                }
+                live.update(p.getMessage(), p.getFraction());
             });
             try {
                 DshVersionManager.install(instance, version, progress::accept);
@@ -546,7 +554,6 @@ public final class InstancesApiServlet extends HttpServlet {
             }
             return "Installed " + version;
         });
-        holder[0] = task;
         // The task is registered by now, so stateOf() answers INSTALLING;
         // telling the panel right away saves it a poll.
         runtime.announceState(id);
@@ -557,7 +564,7 @@ public final class InstancesApiServlet extends HttpServlet {
     /// pnpm printed, and a line in the container log — the task table lives in
     /// memory and would take the explanation with it on a restart.
     private static DshException failedInstall(String id, String version,
-                                              java.util.ArrayDeque<String> tail,
+                                              java.util.concurrent.ConcurrentLinkedDeque<String> tail,
                                               @Nullable String reason, @Nullable Throwable cause) {
         String detail = "Installing DSH " + version + " for " + id + " failed: " + reason
                 + registryHint(reason + "\n" + String.join("\n", tail))
@@ -625,6 +632,11 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
             return;
         }
+        // The web runtime and the TUI share DSH_HOME: starting the web
+        // process while a terminal is up would put two writers on one home.
+        // The takeover is unconditional in both directions — opening the
+        // terminal stops the web runtime — so the launch closes first.
+        instanceTerminal.close("dsh", id);
         String state = runtime.stateOf(id);
         if (state.equals("STOPPING")) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "instance is stopping");
@@ -720,6 +732,12 @@ public final class InstancesApiServlet extends HttpServlet {
             try {
                 DshTui.terminalPlugin(instance);
             } catch (DshException e) {
+                // Audited, unlike an unauthorised attempt: the interesting refusal is
+                // "this instance has no terminal to open", and without a line here a
+                // person can only tell it apart from a terminal that opened and died by
+                // the absence of a `terminal.open`.
+                AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.open", id, "failure",
+                        actorOf(request), request.getRemoteAddr());
                 Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
                 return;
             }
@@ -806,14 +824,35 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
             return;
         }
-        if (runtime.runningProcess(id).isEmpty() && !DshProcessManager.isStopping(id)) {
+        // The terminal is an instance's process too, and it is the one the
+        // web runtime does not know about: `runningProcess` is empty while a
+        // terminal is up, so an instance whose only process is the terminal
+        // used to read "instance not running" — refusing the stop the caller
+        // asked for. Close first, then decide on what is actually left.
+        boolean killedTerminal = instanceTerminal.close("dsh", id);
+        boolean webStopping = runtime.runningProcess(id).isPresent() || DshProcessManager.isStopping(id);
+        if (!webStopping && !killedTerminal) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "instance not running");
             return;
         }
-        runtime.stopAsync(id);
+        if (webStopping) {
+            runtime.stopAsync(id);
+        } else {
+            // No web process is stopping, so nothing is coming that would
+            // change the state the panel last saw — and a browser that asked
+            // for a stop has already shown "stopping". Re-announce the state so
+            // it hears the truth instead of waiting for a refresh.
+            runtime.announceState(id);
+        }
         AuditLog.log(AuditLog.Channel.WEB, "instance.stop", id, "success",
                 actorOf(request), request.getRemoteAddr());
-        Json.write(response, HttpServletResponse.SC_ACCEPTED, java.util.Map.of("state", "stopping"));
+        if (webStopping) {
+            Json.write(response, HttpServletResponse.SC_ACCEPTED, java.util.Map.of("state", "stopping"));
+        } else {
+            // The terminal was the only thing running and it is gone now: the
+            // truthful answer is stopped, not a promise to stop later.
+            Json.write(response, java.util.Map.of("state", "stopped"));
+        }
     }
 
     // ------------------------------------------------------------------- logs --
@@ -1032,25 +1071,6 @@ public final class InstancesApiServlet extends HttpServlet {
                 instance, entry.profile(), specs, install, response);
     }
 
-    /// Reports a progress line to the task whose submission created the listener.
-    ///
-    /// [TaskService.submit] hands the work to its executor before it returns the
-    /// handle, so an installer's first line can arrive while `holder[0]` is
-    /// still empty. That is a recipient not yet there, not a failure — the same
-    /// window [submitInstall] guards on its own listener.
-    ///
-    /// Package-private so the empty-holder case can be driven on purpose; the
-    /// race itself is not something a test can be made to lose on demand.
-    ///
-    /// @param holder the one-slot holder the submitter fills in
-    /// @param line   the line to report
-    static void report(TaskService.Task[] holder, String line) {
-        TaskService.Task owner = holder[0];
-        if (owner != null) {
-            owner.update(line, -1);
-        }
-    }
-
     /// Installs package specs as a task: `dsh plugin add` per spec, with the
     /// build-script approval dance when a package wants to run code.
     private void installPlugins(HttpServletRequest request, HttpServletResponse response, String id)
@@ -1120,16 +1140,14 @@ public final class InstancesApiServlet extends HttpServlet {
                                   java.util.List<String> specs, boolean install,
                                   HttpServletResponse response) throws IOException, DshException {
         try {
-            TaskService.Task[] holder = new TaskService.Task[1];
-            TaskService.Task task = tasks.submit(kind, instance.id(), () -> {
+            TaskService.Task task = tasks.submit(kind, instance.id(), live -> {
                 if (install) {
-                    DshPluginInstaller.installSpecs(instance, profile, specs, line -> report(holder, line));
+                    DshPluginInstaller.installSpecs(instance, profile, specs, line -> live.update(line, -1));
                 } else {
-                    DshPluginInstaller.removeSpecs(instance, profile, specs, line -> report(holder, line));
+                    DshPluginInstaller.removeSpecs(instance, profile, specs, line -> live.update(line, -1));
                 }
                 return (install ? "Installed " : "Removed ") + specs.size() + " plugin(s)";
             }, (allow, keys) -> DshBuildScripts.answer(instance, keys, allow));
-            holder[0] = task;
             accepted(response, task);
         } catch (TaskService.InstanceBusyException e) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
@@ -1193,12 +1211,10 @@ public final class InstancesApiServlet extends HttpServlet {
         java.nio.file.Files.move(staging, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
 
         try {
-            TaskService.Task[] holder = new TaskService.Task[1];
-            TaskService.Task task = tasks.submit("plugin-local", id, () -> {
-                DshLocalPlugins.install(instance, target, line -> report(holder, line));
+            TaskService.Task task = tasks.submit("plugin-local", id, live -> {
+                DshLocalPlugins.install(instance, target, line -> live.update(line, -1));
                 return "Installed " + pkg.name() + " " + pkg.version();
             }, (allow, keys) -> DshBuildScripts.answer(instance, keys, allow));
-            holder[0] = task;
             accepted(response, task);
         } catch (TaskService.InstanceBusyException e) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
@@ -1582,14 +1598,8 @@ public final class InstancesApiServlet extends HttpServlet {
         String trimmed = source.trim();
         RepoForm repo = RepoForm.parse(trimmed);
         try {
-            TaskService.Task[] holder = new TaskService.Task[1];
-            TaskService.Task task = tasks.submit("skill-install", id, () -> {
-                java.util.function.Consumer<String> report = line -> {
-                    TaskService.Task live = holder[0];
-                    if (live != null) {
-                        live.update(line, -1);
-                    }
-                };
+            TaskService.Task task = tasks.submit("skill-install", id, live -> {
+                java.util.function.Consumer<String> report = line -> live.update(line, -1);
                 org.jackhuang.hmcl.dsh.DshSkillSource.Bundle bundle;
                 if (repo != null) {
                     bundle = org.jackhuang.hmcl.dsh.DshSkillSource.resolve(
@@ -1623,7 +1633,6 @@ public final class InstancesApiServlet extends HttpServlet {
                                 instance.homeDirectory(), bundle, report);
                 return "Installed skill " + installed.name() + " from " + bundle.repo().fullName();
             });
-            holder[0] = task;
             accepted(response, task);
         } catch (TaskService.InstanceBusyException e) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());

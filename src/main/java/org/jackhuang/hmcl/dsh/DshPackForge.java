@@ -98,25 +98,100 @@ public final class DshPackForge {
     /// The manifest version this writes.
     public static final int MANIFEST_VERSION = 5;
 
+    /// Credential names, refused by **both** sides of a pack.
+    ///
+    /// One set of rules rather than one per direction, and that is the point: the export side guards
+    /// the author's secrets from being published and [DshPackInstaller] guards the machine from being
+    /// written to, but a credential is both, and two hand-written lists are how a name ends up
+    /// refused on one side and published on the other — which is what had happened here. The export
+    /// side is the superset: everything [isCredentialName] refuses, it refuses, and what it knows and
+    /// the import side does not is below.
+    static final List<String> CREDENTIAL_NAMES = List.of(
+            ".env", ".netrc", ".pypirc", ".npmrc", ".yarnrc", ".yarnrc.yml", ".credentials.yaml");
+
+    /// The private keys an SSH client keeps, matched as prefixes.
+    ///
+    /// A key file is named for its algorithm and then carries whatever extension the tool that made
+    /// it chose, so `id_rsa` and `id_rsa.pub` are one rule and a list of exact names would miss both.
+    /// `id_ed25519` with no extension at all is the spelling that used to escape: the export side
+    /// knew only `id_rsa` here.
+    static final List<String> CREDENTIAL_KEY_PREFIXES = List.of(
+            "id_rsa", "id_ed25519", "id_ecdsa", "id_ed448");
+
+    /// Extensions that are key material rather than content, refused by both sides.
+    static final List<String> CREDENTIAL_EXTENSIONS = List.of(
+            ".key", ".pem", ".p12", ".pfx", ".jks", ".keystore");
+
+    /// Shapes that are credentials whatever they are called, refused by both sides.
+    ///
+    /// A file named after credentials is one rule rather than a list of spellings: `credentials.yaml`
+    /// and `credentials.yml` are the same file to whatever reads it, and the import side knew only
+    /// the first. The export side's own shapes are [DENY_FILE_NAMES], and they are the ones a profile
+    /// may legitimately hold — `*token*` in a name is a credential to publish and ordinary prose in a
+    /// package.
+    private static final List<Pattern> CREDENTIAL_SHAPES = List.of(
+            Pattern.compile("^credentials.*\\.ya?ml$", Pattern.CASE_INSENSITIVE),
+            Pattern.compile(".*\\.credentials$", Pattern.CASE_INSENSITIVE));
+
     /// Names excluded anywhere in a path.
-    private static final List<String> DENY_NAMES = List.of(
+    ///
+    /// The credential names plus the things a profile accumulates and a pack has no business
+    /// carrying: an installed tree, its lock files, and the instance's own settings. `.env` and
+    /// `.credentials.yaml` are in both lists, and the credential list is named first so the reason
+    /// reported for them is unchanged.
+    private static final List<String> DENY_NAMES = concat(CREDENTIAL_NAMES,
             "node_modules", "dist", "build", "coverage", ".cache", "cordis.yml", "manifest.json",
-            "package-lock.json", "yarn.lock", ".env", ".npmrc", ".credentials.yaml",
-            ".anonymous-user-id", "settings.yaml", ".dshpkcfg");
+            "package-lock.json", "yarn.lock", ".anonymous-user-id", "settings.yaml", ".dshpkcfg");
 
     /// Extensions that are credentials rather than content.
-    private static final List<String> DENY_EXTENSIONS = List.of(
-            ".key", ".pem", ".p12", ".pfx", ".crt", ".der", ".asc");
+    ///
+    /// The shared list plus the certificates and signatures the export side knows and the import
+    /// side does not: a publication carrying a `.crt` or a signature file leaks as surely as one
+    /// carrying a key, while writing one into a profile is not a leak at all.
+    private static final List<String> DENY_EXTENSIONS = concat(CREDENTIAL_EXTENSIONS,
+            ".crt", ".der", ".asc");
 
-    /// Names that are credentials whatever they are called.
+    /// Names that are credentials whatever they are called, and that only the export side refuses.
     private static final List<Pattern> DENY_FILE_NAMES = List.of(
             Pattern.compile("^\\.env.*"),
-            Pattern.compile("^credentials.*\\.ya?ml$", Pattern.CASE_INSENSITIVE),
-            Pattern.compile(".*\\.credentials$", Pattern.CASE_INSENSITIVE),
-            Pattern.compile("^id_rsa.*"),
             Pattern.compile("^secrets.*\\.(json|ya?ml)$", Pattern.CASE_INSENSITIVE),
             Pattern.compile(".*token.*", Pattern.CASE_INSENSITIVE),
             Pattern.compile(".*api[_-]?key.*", Pattern.CASE_INSENSITIVE));
+
+    /// Reports whether a file name is credential material, whichever side is asking.
+    ///
+    /// The one place both directions ask the question. It is a predicate rather than a list because
+    /// what is refused is not only a spelling: a private key is recognised by its algorithm, a key
+    /// file by its extension, and a credential file by the word in its name — and the reason a side
+    /// refuses it is that side's own business, which is why the export side's reasons for these are
+    /// still reported one tier at a time.
+    ///
+    /// @param name the file's name
+    /// @return whether it is credential material
+    static boolean isCredentialName(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        for (String credential : CREDENTIAL_NAMES) {
+            if (lower.equals(credential)) {
+                return true;
+            }
+        }
+        for (String prefix : CREDENTIAL_KEY_PREFIXES) {
+            if (lower.startsWith(prefix)) {
+                return true;
+            }
+        }
+        for (String extension : CREDENTIAL_EXTENSIONS) {
+            if (lower.endsWith(extension)) {
+                return true;
+            }
+        }
+        for (Pattern shape : CREDENTIAL_SHAPES) {
+            if (shape.matcher(name).matches()) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /// Archives, which are never nested inside a pack.
     private static final Pattern DENY_ARCHIVE = Pattern.compile(
@@ -132,6 +207,17 @@ public final class DshPackForge {
     /// spec asks for version strings there, and a number that is not one would make the install
     /// decision compare a pin against something no version manager can name.
     private static final Pattern VERSION = Pattern.compile("\\d+(\\.\\d+)*(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?");
+
+    /// Joins one deny list to the names that extend it.
+    ///
+    /// @param shared the list both sides refuse
+    /// @param more   the names this side refuses as well
+    /// @return the joined list
+    private static List<String> concat(List<String> shared, String... more) {
+        List<String> joined = new ArrayList<>(shared);
+        joined.addAll(List.of(more));
+        return List.copyOf(joined);
+    }
 
     private DshPackForge() {
     }
@@ -297,10 +383,16 @@ public final class DshPackForge {
         }
 
         String name = segments.length == 0 ? path : segments[segments.length - 1];
+        String lower = name.toLowerCase(Locale.ROOT);
         for (String extension : DENY_EXTENSIONS) {
-            if (name.toLowerCase(Locale.ROOT).endsWith(extension)) {
+            if (lower.endsWith(extension)) {
                 return "extension";
             }
+        }
+        // Everything both sides refuse — a private key's name, a key extension, a file named after
+        // credentials — and then the shapes only this side knows.
+        if (isCredentialName(name)) {
+            return "credentials";
         }
         for (Pattern pattern : DENY_FILE_NAMES) {
             if (pattern.matcher(name).matches()) {
