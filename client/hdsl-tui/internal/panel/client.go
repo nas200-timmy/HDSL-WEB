@@ -283,6 +283,33 @@ func (c *Client) Elevate(ctx context.Context, password string) (Elevation, error
 	return elevation, nil
 }
 
+// ExtendElevation stretches an existing elevation to three hours from now
+// (POST /api/developer/extend). The panel refuses with
+// developer_elevation_required when this session is not elevated yet, so the
+// caller runs it after a successful Elevate.
+func (c *Client) ExtendElevation(ctx context.Context) (Elevation, error) {
+	return c.elevationAction(ctx, "/api/developer/extend")
+}
+
+// RevokeElevation drops this session's elevation immediately (POST
+// /api/developer/revoke), ahead of its expiry. Idempotent: revoking without an
+// elevation is a no-op the panel answers with elevated:false.
+func (c *Client) RevokeElevation(ctx context.Context) (Elevation, error) {
+	return c.elevationAction(ctx, "/api/developer/revoke")
+}
+
+func (c *Client) elevationAction(ctx context.Context, path string) (Elevation, error) {
+	_, data, err := c.do(ctx, http.MethodPost, path, nil, nil)
+	if err != nil {
+		return Elevation{}, err
+	}
+	var elevation Elevation
+	if err := json.Unmarshal(data, &elevation); err != nil {
+		return Elevation{}, &TransportError{Op: "POST " + path, Err: err}
+	}
+	return elevation, nil
+}
+
 // DeveloperStatus reads GET /api/developer/status: whether a developer password
 // exists, whether this session is elevated, whether the web shell switch is on
 // and whether the panel is speaking TLS. A panel older than this endpoint

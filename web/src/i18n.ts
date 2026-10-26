@@ -7,6 +7,7 @@ export const I18N = {
 
   // ---- 主导航（MainPage.java） ----
   "dsh.account.list": "账户",
+  "dsh.logout": "退出登录",
   "instance": "游戏",
   "settings.launcher.general": "通用",
   "dsh.instance.manage": "实例管理",

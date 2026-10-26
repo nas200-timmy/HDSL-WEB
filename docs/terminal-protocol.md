@@ -45,18 +45,34 @@
 200 → `{"elevated":true,"expiresAt":"…"}`。要求 HTTPS，否则 409 `tls_required`。
 其他：401 密码错误；409 `developer_password_not_set`（还没设置过）；429 连续失败被锁。
 
+### `POST /api/developer/extend`
+
+已提权的会话把这次提权**延长到 3 小时后**，不需要重新输入密码——长时间维护前用一次，
+免得到期重输。**每张提权票只有一次延长机会**：已延长过的票再调本端点，403
+`developer_elevation_extended`；重新 `elevate` 验证一次密码会发一张带新延长票的新提权，
+且**保留还没走完的有效期**（延长期内续票不会被砍回 30 分钟）。要求 HTTPS + 当前已提权；
+未提权时 403 `developer_elevation_required`（与终端入口同一个 code，客户端复用同一分支）。
+200 → `{"elevated":true,"expiresAt":"…"}`。
+
+### `POST /api/developer/revoke`
+
+**立即停止**当前会话的提权，不等 30 分钟到期。刻意不要求当前处于提权状态——降级必须
+总是可用，对未提权的会话是幂等空操作。要求 HTTPS。200 → `{"elevated":false}`。
+网页（开发者模式页）与 hdsl-tui（主菜单 → 开发者提权）共用这两个端点。
+
 ### `GET /api/developer/status`
 
 开发者模式此刻的状态。两个客户端都在**打开终端之前**读它，好把对话框排成同一个顺序
 （密码 → 内核 → 终端），而不是等到 403 才知道要提权：
 
 ```json
-{ "devPasswordSet": true, "elevated": true, "webShellEnabled": true, "https": true }
+{ "devPasswordSet": true, "elevated": true, "expiresAt": "…", "webShellEnabled": true, "https": true }
 ```
 
 - `devPasswordSet`：面板里到底有没有开发者密码。为假时提权永远不可能成功，客户端直接
   说明去哪里设置，不再问一个不存在的密码；
 - `elevated`：按当前会话 Cookie 与来源地址算（30 分钟滑动续期）；
+- `expiresAt`：这次提权的到期时间；未提权时**不出现**（可选字段，容忍缺失）；
 - `webShellEnabled` / `https`：总开关与「面板此刻是否真的在讲 TLS」。
 
 读不到这个端点（老面板 404）不算失败：客户端跳过预检，照旧直接开终端，让下面的

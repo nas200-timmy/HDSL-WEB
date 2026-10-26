@@ -1370,6 +1370,37 @@ function DeveloperTab() {
     }
   };
 
+  /// 已提权的前提下把这次提权延长到 3 小时后（后端要求当前已提权）。
+  const extendElevation = async () => {
+    setBusy(true);
+    setFormError(null);
+    try {
+      await api.extendDeveloper();
+      toast("success", "提权已延长到 3 小时后");
+      await load();
+    } catch (e) {
+      setFormError(developerError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /// 主动停止提权：立即失效，不等到期。后端对未提权的会话也幂等放行，
+  /// 成功后 status.elevated 翻回 false，本页自动回到输密码的界面。
+  const stopElevation = async () => {
+    setBusy(true);
+    setFormError(null);
+    try {
+      await api.revokeDeveloper();
+      toast("success", "提权已停止");
+      await load();
+    } catch (e) {
+      setFormError(developerError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const generateSelfSigned = async () => {
     setSwitchError(null);
     setSwitching(true);
@@ -1627,6 +1658,29 @@ function DeveloperTab() {
       {caption}
       <div className="card">
         <div className="comp-row">
+          <span className="comp-label">提权状态</span>
+          <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            {status.expiresAt ? expiryText(status.expiresAt) : "已提权（有效期未知）"}
+          </span>
+        </div>
+        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+          提权默认 30 分钟滑动续期（每次使用自动顺延）。需要长时间操作时可以延长到 3 小时后
+          （每张票限延长一次，重新验证密码可再来），用完建议立即停止——停止后再开终端、
+          改这里任何设置都会重新要求开发者密码。
+        </p>
+        {formError && <div className="form-error">{formError}</div>}
+        <div style={{ display: "flex", gap: 8, paddingTop: 8, flexWrap: "wrap" }}>
+          <button className="btn btn-outline ripple-host" disabled={busy} onClick={() => void extendElevation()}>
+            延长到 3 小时
+          </button>
+          <button className="btn btn-text danger ripple-host" disabled={busy} onClick={() => void stopElevation()}>
+            停止提权
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="comp-row">
           <span className="comp-label">实例终端（Web Shell）</span>
           <span className="comp-value">
             <span className={`tag ${status.webShellEnabled ? "running" : "plain"}`}>
@@ -1725,6 +1779,18 @@ function DeveloperTab() {
 }
 
 /* ---------------- 环境体检 ---------------- */
+
+/// 把提权到期时间格式化成一行可读的话（渲染时刻的近似，不做实时倒计时）。
+function expiryText(iso: string): string {
+  const expiry = new Date(iso);
+  if (Number.isNaN(expiry.getTime())) {
+    return iso;
+  }
+  const minutes = Math.max(0, Math.round((expiry.getTime() - Date.now()) / 60000));
+  const hh = expiry.getHours().toString().padStart(2, "0");
+  const mm = expiry.getMinutes().toString().padStart(2, "0");
+  return `有效期至 ${hh}:${mm}（约 ${minutes} 分钟后到期）`;
+}
 
 function statusOf(status: string): "ok" | "warn" | "fail" | "other" {
   const s = (status ?? "").toLowerCase();

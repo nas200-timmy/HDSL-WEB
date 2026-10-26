@@ -350,6 +350,8 @@ export interface DeveloperStatus {
   devPasswordSet: boolean;
   /** 当前会话是否已通过开发者密码提权（30 分钟滑动续期） */
   elevated: boolean;
+  /** 提权到期时间（ISO 字符串）；未提权时不出现 */
+  expiresAt?: string;
   /** 实例终端（Web Shell）开关；false 时打开终端会被后端拒绝 */
   webShellEnabled: boolean;
   /** 面板此刻是否真的在讲 TLS；false 时开发者模式与 Web Shell 都不可用 */

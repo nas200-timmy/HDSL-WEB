@@ -58,7 +58,7 @@ import java.util.Optional;
 /// clears its screen.
 @NotNullByDefault
 @ServerEndpoint(value = "/ws/terminal/{ticket}", configurator = TerminalWebSocket.SessionConfigurator.class)
-public final class TerminalWebSocket implements TerminalSink {
+public final class TerminalWebSocket implements TerminalSink, TerminalSockets.Socket {
 
     /// Version of the control-frame contract (docs/terminal-protocol.md).
     /// Sent in the `ready` frame; a client that does not know the number warns
@@ -69,6 +69,9 @@ public final class TerminalWebSocket implements TerminalSink {
     private static volatile TerminalTickets tickets;
     private static volatile AuthService authService;
     private static volatile boolean authDisabled = true;
+    /// Live sockets by the session that opened them: logout severs exactly
+    /// the connections the logged-out session was using.
+    private static final TerminalSockets SOCKETS = new TerminalSockets();
 
     /// Installed once by the composition root, before the endpoint accepts
     /// handshakes.
@@ -80,8 +83,15 @@ public final class TerminalWebSocket implements TerminalSink {
         TerminalWebSocket.authDisabled = authDisabled;
     }
 
+    /// Closes every terminal socket `sessionToken` opened. Called from the
+    /// logout route; the close is a detach, so the agents keep running.
+    public static int closeForSession(String sessionToken) {
+        return SOCKETS.closeForSession(sessionToken);
+    }
+
     private volatile @Nullable Session ws;
     private volatile @Nullable TerminalSession terminal;
+    private volatile @Nullable String sessionToken;
 
     @OnOpen
     public void onOpen(Session ws) {
@@ -122,8 +132,12 @@ public final class TerminalWebSocket implements TerminalSink {
         }
         TerminalSession session = found.get();
         this.terminal = session;
+        this.sessionToken = granted.sessionToken();
         sendText(ws, readyJson(granted.instanceId(), granted.brand()));
         session.attach(this);
+        if (granted.sessionToken() != null) {
+            SOCKETS.register(granted.sessionToken(), this);
+        }
         Logger.LOG.info("Terminal WebSocket attached: " + granted.instanceId());
     }
 
@@ -188,9 +202,25 @@ public final class TerminalWebSocket implements TerminalSink {
     }
 
     private void detach() {
+        String token = sessionToken;
+        sessionToken = null;
+        if (token != null) {
+            SOCKETS.unregister(token, this);
+        }
         TerminalSession session = terminal;
         if (session != null) {
             session.detach(this);
+        }
+    }
+
+    /// The owning session logged out: sever this viewer. Deliberately a
+    /// detach, not a kill — the agent keeps running and may be reattached
+    /// after the next elevation.
+    @Override
+    public void closeForLogout() {
+        Session ws = this.ws;
+        if (ws != null && ws.isOpen()) {
+            close(ws, 1008, "logged out");
         }
     }
 

@@ -524,6 +524,21 @@
 .terminal-state-error {
   color: #f2b8b5;
 }
+/* 提权剩余时间倒计时：纯提示。提权过期不杀已连接的终端（它只 gate
+   开新终端/重连），所以「已过期」也只是提醒重连时要再验证一次。 */
+.terminal-elevation {
+  font-size: 11px;
+  opacity: 0.8;
+  white-space: nowrap;
+}
+.terminal-elevation-soon {
+  color: #f2b8b5;
+  opacity: 1;
+}
+.terminal-elevation-expired {
+  color: #f2b8b5;
+  opacity: 1;
+}
 .terminal-body {
   flex: 1;
   min-height: 0;
@@ -563,13 +578,67 @@
   padding: 8px 12px;
   background: #242329;
 }
+/* 功能键条（Esc / Ctrl+C / 方向键…）：桌面不占高度，手机与触屏才显示
+   （见文件尾部的媒体查询）。横向可滚动，装不下的键划一下就到。 */
+.terminal-keys {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  background: #242329;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.terminal-key {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid #3d3a44;
+  border-radius: 8px;
+  background: #2b292f;
+  color: #e6e1e5;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  cursor: pointer;
+  /* 连点不触发双击缩放，长按不选中文字 */
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.terminal-key:active {
+  background: #4a4458;
+}
+@media (max-width: 720px), (pointer: coarse) {
+  .terminal-keys {
+    display: flex;
+  }
+}
 @media (max-width: 720px) {
   .terminal-overlay {
     padding: 0;
+    /* 滚动终端回滚不触发整页下拉刷新 */
+    overscroll-behavior: none;
   }
   .terminal-window {
     width: 100vw;
     height: 100vh;
+    /* 手机浏览器地址栏/软键盘会吃掉 100vh 的一部分；dvh 跟随实际可视高度。
+       不认识 dvh 的浏览器忽略第二行，保留 100vh；JS 同时把高度钉在
+       visualViewport 上（软键盘起落只改 visualViewport，iOS 尤其）。 */
+    height: 100dvh;
     border-radius: 0;
+    padding-bottom: 0;
+    /* 底部手势条 / Home 指示器不压住功能键条与底栏（viewport-fit=cover） */
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .terminal-head {
+    /* 刘海屏状态栏不压住标题行（viewport-fit=cover 时 env() 才有值） */
+    padding-top: calc(10px + env(safe-area-inset-top));
+  }
+  .terminal-body {
+    padding: 4px;
   }
 }

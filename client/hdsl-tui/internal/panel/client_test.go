@@ -197,6 +197,45 @@ func TestDeveloperStatus(t *testing.T) {
 	}
 }
 
+func TestExtendAndRevokeElevation(t *testing.T) {
+	server := fakeserver.New()
+	defer server.Close()
+	client := newClient(t, server)
+	login(t, client)
+
+	// Extending an existing elevation answers with a new expiry.
+	extended, err := client.ExtendElevation(context.Background())
+	if err != nil {
+		t.Fatalf("ExtendElevation: %v", err)
+	}
+	if !extended.Elevated {
+		t.Error("extended.elevated = false")
+	}
+	if expiry := extended.Expiry(); expiry.IsZero() {
+		t.Errorf("expiresAt %q did not parse", extended.ExpiresAt)
+	}
+
+	// Without an elevation the panel refuses with the same code the terminal
+	// path already understands.
+	server.Elevated = false
+	_, err = client.ExtendElevation(context.Background())
+	if panel.Code(err) != "developer_elevation_required" {
+		t.Errorf("code = %q, want developer_elevation_required", panel.Code(err))
+	}
+
+	// Revoking is idempotent and actually clears the fake panel's elevation.
+	revoked, err := client.RevokeElevation(context.Background())
+	if err != nil {
+		t.Fatalf("RevokeElevation: %v", err)
+	}
+	if revoked.Elevated {
+		t.Error("revoked.elevated = true")
+	}
+	if server.Elevated {
+		t.Error("fake panel still reports elevated")
+	}
+}
+
 func TestInstanceLists(t *testing.T) {
 	server := fakeserver.New()
 	defer server.Close()

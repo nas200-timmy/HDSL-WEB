@@ -791,9 +791,55 @@ func (a *App) clearSavedLogin() {
 	a.message("已清除", "本地会话已删除。本次仍保持登录，直到你切换服务器或退出。")
 }
 
-// elevate proves the developer password. It is only needed once per 30-minute
-// panel window, which is why the client asks for it here and not at startup.
+// elevate manages the developer elevation. Without one it asks for the
+// password — the common path, and the only one a fresh session knows. With one
+// it becomes the management door for the panel's two knobs: stretching the
+// elevation to three hours and dropping it early.
 func (a *App) elevate(ctx context.Context) bool {
+	if !a.elevatedUntil.IsZero() && time.Now().Before(a.elevatedUntil) {
+		index, ok := a.menu(menuPage{
+			Title:    "开发者提权",
+			Subtitle: "当前提权有效至 " + a.elevatedUntil.Local().Format("15:04") + "。",
+			Items: []ui.Item{
+				{Label: "延长到 3 小时", Note: "长时间操作前用，免得到期重输"},
+				{Label: "停止提权", Note: "立即失效，开终端会重新要密码"},
+				{Label: "重新验证", Note: "有效期重置为 30 分钟"},
+				{Label: "← 返回"},
+			},
+			Hint: "↑/↓ 选择    Enter 确定    Esc 返回",
+		})
+		if !ok || index == 3 {
+			return true
+		}
+		switch index {
+		case 0:
+			a.busy("正在延长提权…")
+			elevation, err := a.client.ExtendElevation(ctx)
+			if err != nil {
+				a.message("延长失败", explain(err))
+				return false
+			}
+			a.elevatedUntil = elevation.Expiry()
+			if a.elevatedUntil.IsZero() {
+				a.elevatedUntil = time.Now().Add(3 * time.Hour)
+			}
+			a.message("已延长", "提权现在有效至 "+a.elevatedUntil.Local().Format("15:04")+"。")
+			return true
+		case 1:
+			if !a.confirm("停止提权", "立即结束当前提权？之后打开终端需要重新输入开发者密码。") {
+				return true
+			}
+			a.busy("正在停止提权…")
+			if _, err := a.client.RevokeElevation(ctx); err != nil {
+				a.message("停止提权失败", explain(err))
+				return false
+			}
+			a.elevatedUntil = time.Time{}
+			a.message("已停止提权", "开发者提权已立即失效。")
+			return true
+		}
+		// index == 2 falls through to re-verification below.
+	}
 	password, ok := a.prompt(promptPage{
 		Title:    "开发者提权",
 		Subtitle: "开发者密码用于打开 Web Shell，面板端 30 分钟内有效。",
@@ -832,6 +878,8 @@ func explain(err error) string {
 	switch panel.Code(err) {
 	case "developer_elevation_required":
 		return "需要开发者密码：在「主菜单 → 开发者提权」里输入一次。"
+	case "developer_elevation_extended":
+		return "这次提权已经延长过一次：重新验证开发者密码后会发一张新的延长票，剩余时间不会丢。"
 	case "developer_password_not_set":
 		return developerPasswordNotSet
 	case "web_shell_disabled":

@@ -60,10 +60,16 @@ func (t Terminal) Desktop() bool { return t.Mode == "desktop" }
 // right now, read before a terminal is opened so the developer password is asked
 // for in the order the web UI uses.
 type DeveloperStatus struct {
-	DevPasswordSet  bool `json:"devPasswordSet"`
-	Elevated        bool `json:"elevated"`
-	WebShellEnabled bool `json:"webShellEnabled"`
-	HTTPS           bool `json:"https"`
+	DevPasswordSet  bool   `json:"devPasswordSet"`
+	Elevated        bool   `json:"elevated"`
+	ExpiresAt       string `json:"expiresAt"`
+	WebShellEnabled bool   `json:"webShellEnabled"`
+	HTTPS           bool   `json:"https"`
+}
+
+// Expiry parses ExpiresAt; a panel that omits it yields the zero time.
+func (s DeveloperStatus) Expiry() time.Time {
+	return Elevation{ExpiresAt: s.ExpiresAt}.Expiry()
 }
 
 // Elevation is the body of POST /api/developer/elevate.
