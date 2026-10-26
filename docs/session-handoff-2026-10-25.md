@@ -193,6 +193,8 @@ Jetty 默认 30 秒 → 静默终端被 `1001 Connection Idle Timeout` 关掉。
   `fitsHost` 复用 `DshPluginRequirements.satisfies`；
 - 安装路由**提交任务前**就 409、开终端时 `terminalPlugin` 也拒（已装的旧组合）；
 - `GET …/tui-plugins` 多给 `fitsHost`/`requiresDsh`，前端**变灰不可装**并写明原因（不隐藏）；
+- `GET …/tui-plugins` 另给 `filesPresent`（manifest 声明 vs 磁盘真相），`installed && !filesPresent`
+  的行标「安装未完成」并给「重新安装」+「卸载」（第二轮审查后补，见 CHANGELOG v0.5.85）；
 - 未知实例版本不拒；两个路由共用 `hostMismatch` 一句文案。
 
 **还没解决的**：`0.2.x` 的 dsh 在 npm 上只有 `next`/`alpha` 通道（`latest` 仍是 0.1.7 线），

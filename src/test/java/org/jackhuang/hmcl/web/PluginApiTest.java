@@ -506,10 +506,46 @@ class PluginApiTest {
             assertFalse(Files.exists(instance.homeDirectory().resolve("profiles/web/package.json")),
                     "the refusal happens before any command runs, so the web profile was not touched");
 
+            // Declared is not landed. Deleting the package behind the profile's back is the
+            // shape a fetch that failed half-way leaves; the list has to say so, because the
+            // page's only other signal is `installed`, which is what the manifest claims.
+            Path packageDirectory = instance.homeDirectory().resolve("profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui");
+            deleteRecursively(packageDirectory);
+            JsonObject half = null;
+            JsonArray halfInstalled = json(get(client, base + "/api/instances/" + id + "/tui-plugins"))
+                    .getAsJsonArray("plugins");
+            for (int i = 0; i < halfInstalled.size(); i++) {
+                JsonObject candidate = halfInstalled.get(i).getAsJsonObject();
+                if ("@deepseek-harness-tui/dsh-tui".equals(candidate.get("packageName").getAsString())) {
+                    half = candidate;
+                }
+            }
+            assertNotNull(half, halfInstalled.toString());
+            assertTrue(half.get("installed").getAsBoolean(), "the manifest still declares it: " + half);
+            assertFalse(half.get("filesPresent").getAsBoolean(),
+                    "the package is gone, so the terminal would die at once: " + half);
+            assertFalse(half.get("active").getAsBoolean(), "nothing startable claims to be active: " + half);
+
+            // Reinstalling is what the page offers for that state; it has to work without a
+            // remove first, and it has to bring the files back.
+            HttpResponse<String> reinstall = post(client, base + "/api/instances/" + id + "/tui-plugins/install",
+                    "{\"package\":\"@deepseek-harness-tui/dsh-tui\"}");
+            assertEquals(202, reinstall.statusCode(), reinstall.body());
+            JsonObject reinstalled = awaitTask(client, base, json(reinstall).get("taskId").getAsString());
+            assertEquals("done", reinstalled.get("state").getAsString(), reinstalled.toString());
+            JsonArray afterReinstall = json(get(client, base + "/api/instances/" + id + "/tui-plugins"))
+                    .getAsJsonArray("plugins");
+            for (int i = 0; i < afterReinstall.size(); i++) {
+                JsonObject candidate = afterReinstall.get(i).getAsJsonObject();
+                if ("@deepseek-harness-tui/dsh-tui".equals(candidate.get("packageName").getAsString())) {
+                    assertTrue(candidate.get("filesPresent").getAsBoolean(),
+                            "the files are back: " + candidate);
+                }
+            }
+
             // Taking it out again is never refused, and the state goes back.
             HttpResponse<String> remove = post(client, base + "/api/instances/" + id + "/tui-plugins/remove",
-                    "{\"package\":\"@deepseek-harness-tui/dsh-tui\"}");
-            assertEquals(202, remove.statusCode(), remove.body());
+                    "{\"package\":\"@deepseek-harness-tui/dsh-tui\"}");            assertEquals(202, remove.statusCode(), remove.body());
             JsonObject removed = awaitTask(client, base, json(remove).get("taskId").getAsString());
             assertEquals("done", removed.get("state").getAsString(), removed.toString());
             JsonArray afterRemove = json(get(client, base + "/api/instances/" + id + "/tui-plugins"))
@@ -687,5 +723,20 @@ class PluginApiTest {
         System.arraycopy(block, 0, result, 0, 512);
         System.arraycopy(body, 0, result, 512, body.length);
         return result;
+    }
+
+    /// Removes a directory tree, ignoring what is already gone.
+    ///
+    /// @param root the directory to remove
+    private static void deleteRecursively(Path root) throws java.io.IOException {
+        if (!java.nio.file.Files.exists(root)) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> walk = java.nio.file.Files.walk(root)) {
+            java.util.List<Path> entries = walk.sorted(java.util.Comparator.reverseOrder()).toList();
+            for (Path entry : entries) {
+                java.nio.file.Files.deleteIfExists(entry);
+            }
+        }
     }
 }

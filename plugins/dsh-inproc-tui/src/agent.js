@@ -58,13 +58,20 @@ export class ChatSession {
     // `installModelSelection` takes the *state object* the prompt assembly reads
     // (`{current, assembled}`), not just the context: without it the harness's
     // assemble hook dereferences undefined on the first step.
+    //
+    // The object is kept: `current` is what the harness's assemble hook reads on
+    // **every** step, so a later `/model` has to write here — appending the
+    // durable event alone only changed what the log said.
     const setup = (agentCtx, agent) => {
       const state = {
         current: agent?.model?.current?.() ?? selection,
         assembled: undefined,
       }
+      this.modelState = state
       installModelSelection(agentCtx, state)
     }
+    this.modelState = null
+    this.resumeFailure = undefined
 
     let resumed = false
     if (options.resume) {
@@ -200,13 +207,36 @@ export class ChatSession {
     if (this.agent === null) return
     const current = this.currentModel()
     const effort = selection.reasoningEffort ?? current?.reasoningEffort
-    // The same durable event `agent.model.select` writes: a later step reads the
-    // newest selection, and the log is what survives a resume.
-    this.agent.session.append('model/selection', {
+    const chosen = {
       provider: selection.provider ?? current?.provider ?? '',
       model: selection.model ?? current?.model ?? '',
       ...(effort === undefined ? {} : { reasoningEffort: effort }),
-    })
+    }
+    // What the next step actually assembles with. The harness's assemble hook
+    // reads this object's `current` on every step, so writing only the event
+    // below left the request on the old route while the UI said otherwise.
+    if (this.modelState !== null && this.modelState !== undefined) {
+      this.modelState.current = { ...chosen }
+    }
+    // The same durable event `agent.model.select` writes: a later step reads the
+    // newest selection, and the log is what survives a resume.
+    this.agent.session.append('model/selection', chosen)
+  }
+
+  /**
+   * The live agent's session log, oldest first.
+   *
+   * Used to put a resumed conversation back on screen: the log is the only
+   * place the earlier turns exist once the previous agent is gone.
+   *
+   * @returns {object[]} the events, or an empty list when none can be read
+   */
+  history() {
+    try {
+      return this.agent?.session?.snapshotEvents() ?? []
+    } catch {
+      return []
+    }
   }
 
   /**
@@ -313,5 +343,6 @@ export class ChatSession {
     this.dispose = null
     this.agent = null
     this.sessionId = null
+    this.modelState = null
   }
 }

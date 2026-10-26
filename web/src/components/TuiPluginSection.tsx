@@ -167,14 +167,19 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
       ) : (
         (catalog ?? []).map((plugin, index) => {
           const state = stateOf.get(plugin.packageName);
-          const isPresent = state?.installed === true;
+          // 清单里声明了 ≠ 文件在磁盘上：pnpm 先写 package.json 再拉包，中途失败会留下一个
+          // 「有声明、没文件」的 profile，它起不来。旧面板没有 filesPresent 字段，缺字段
+          // 当作在位——宁可让后端拒绝，也不要在界面上凭空报错。
+          const declared = state?.installed === true;
+          const isPresent = declared && state?.filesPresent !== false;
+          const incomplete = declared && !isPresent;
           // 缺字段（旧面板）当作能装：宁可让后端拒绝，也不要在界面上凭空禁用
           const fitsHost = state?.fitsHost !== false;
           const requiresDsh = state?.requiresDsh ?? plugin.requiresDsh ?? null;
           // Several terminals can be installed on purpose (the ACP one is the fallback for a
           // version that moves); exactly one is what the terminal button starts.
           const active = state?.active === true;
-          const shownVersion = isPresent ? state?.installedVersion ?? plugin.version : plugin.version;
+          const shownVersion = declared ? state?.installedVersion ?? plugin.version : plugin.version;
           return (
             <div key={plugin.id}>
               <div className="tlli" style={{ cursor: "default", alignItems: "flex-start" }}>
@@ -184,8 +189,15 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
                 <span className="tlli-text">
                   <span className="tlli-title">
                     {plugin.name}
-                    <span className={`tag ${isPresent ? "running" : "plain"}`}>
-                      {isPresent ? I18N["dsh.tui.installed"] : I18N["dsh.tui.not_installed"]}
+                    <span
+                      className={`tag ${incomplete ? "warn" : isPresent ? "running" : "plain"}`}
+                      title={incomplete ? I18N["dsh.tui.incomplete.hint"] : undefined}
+                    >
+                      {incomplete
+                        ? I18N["dsh.tui.incomplete"]
+                        : isPresent
+                          ? I18N["dsh.tui.installed"]
+                          : I18N["dsh.tui.not_installed"]}
                     </span>
                     <span className="tag" title={plugin.profile}>
                       {I18N["dsh.tui.profile"]}: {plugin.profile}
@@ -213,7 +225,7 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
                     {I18N["dsh.tui.package"]} <span className="mono">{plugin.packageName}</span>
                     {" · "}
                     {I18N["dsh.tui.version"]} {shownVersion}
-                    {isPresent && shownVersion !== plugin.version ? `（清单锁定 ${plugin.version}）` : ""}
+                  {isPresent && shownVersion !== plugin.version ? `（清单锁定 ${plugin.version}）` : ""}
                     {" · "}
                     {I18N["dsh.tui.license"]} {plugin.license}
                     {" · "}
@@ -244,7 +256,7 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
                   )}
                 </span>
                 <span className="row-actions">
-                  {isPresent ? (
+                  {isPresent && (
                     <button
                       className="btn btn-text danger ripple-host"
                       disabled={busy === plugin.packageName}
@@ -252,7 +264,27 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
                     >
                       {I18N["dsh.tui.remove"]}
                     </button>
-                  ) : (
+                  )}
+                  {incomplete && (
+                    <>
+                      <button
+                        className="btn btn-raised ripple-host"
+                        disabled={busy === plugin.packageName || !fitsHost}
+                        title={I18N["dsh.tui.incomplete.hint"]}
+                        onClick={() => void submit(plugin, true)}
+                      >
+                        {I18N["dsh.tui.reinstall"]}
+                      </button>
+                      <button
+                        className="btn btn-text danger ripple-host"
+                        disabled={busy === plugin.packageName}
+                        onClick={() => void submit(plugin, false)}
+                      >
+                        {I18N["dsh.tui.remove"]}
+                      </button>
+                    </>
+                  )}
+                  {!declared && (
                     <button
                       className="btn btn-raised ripple-host"
                       disabled={busy === plugin.packageName || !fitsHost}

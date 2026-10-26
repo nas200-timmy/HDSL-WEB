@@ -19,6 +19,7 @@ import { createTheme, detectMode } from '../../../shared/term/theme.js'
 import { Screen } from '../../../shared/term/screen.js'
 import { createKeyDecoder } from '../../../shared/term/keys.js'
 import { Composer } from '../../../shared/ui/composer.js'
+import { applyEditKey, isLiveOverlay } from '../../../shared/ui/edit.js'
 import { renderFrame, spinnerFrame } from '../../../shared/ui/render.js'
 import { formatDuration, shortId } from '../../../shared/ui/blocks.js'
 import { VERSION } from '../version.js'
@@ -416,6 +417,11 @@ export class App {
   /** @private */
   onNotification(message) {
     if (message.method !== 'session/update') return
+    const sessionId = message.params?.sessionId
+    // A late update from the session that was just replaced must not land in
+    // the new transcript: the switch is a different conversation, not a
+    // continuation, and a stray chunk reads as the new session answering.
+    if (typeof sessionId === 'string' && sessionId !== this.sessionId) return
     this.applyUpdate(message.params?.update)
   }
 
@@ -449,6 +455,8 @@ export class App {
           this.bump(existing)
           return
         }
+        // No `expanded` field: the global toggle (ctrl+o / shift+tab) decides,
+        // and a card that pinned itself closed would ignore it.
         const block = this.makeBlock({
           type: 'tool',
           callId: update.toolCallId,
@@ -458,7 +466,6 @@ export class App {
           status: update.status ?? 'in_progress',
           startedAt: this.clock,
           output: null,
-          expanded: false,
         })
         this.activity.tool = block.name
         this.activity.startedAt = this.activity.startedAt ?? this.clock
@@ -607,6 +614,10 @@ export class App {
   /** @private */
   onKeyEvent(event) {
     if (this.overlay !== null) {
+      // The command palette floats over the text being typed, so the keys that
+      // edit text keep editing it and the palette merely re-filters; a dialog
+      // that owns the keyboard (permission, picker) is untouched by this.
+      if (isLiveOverlay(this.overlay) && this.editLivePalette(event)) return
       this.handleOverlayKey(event)
       return
     }
@@ -628,7 +639,10 @@ export class App {
       return
     }
     if (name === 'enter') {
-      if (event.shift || event.alt) {
+      // `ctrl+j` arrives as enter+ctrl from the decoder (a raw newline is a
+      // control byte, not a key name every terminal agrees on), and it means
+      // the same thing shift+enter and alt+enter do: a line break, not a send.
+      if (event.shift || event.alt || event.ctrl) {
         this.composer.newline()
         this.dirty = true
         return
@@ -763,6 +777,36 @@ export class App {
     this.dirty = true
   }
 
+  /**
+   * Edits the composer behind a live palette, then re-filters the palette.
+   *
+   * Returns `false` for the keys the palette itself owns (arrows, page keys,
+   * enter, escape), which is what lets one overlay both follow the text and
+   * still be navigable.
+   *
+   * @private
+   * @param {{name: string, text?: string}} event the decoded key
+   * @returns {boolean} whether the key was consumed as text editing
+   */
+  editLivePalette(event) {
+    const width = Math.max(1, this.screen.columns - 4)
+    if (event.name === 'left' || event.name === 'right') {
+      this.composer.move(event.name, width)
+      this.syncCommandPalette()
+      this.dirty = true
+      return true
+    }
+    if (event.name === 'tab') {
+      this.completeCommand()
+      return true
+    }
+    if (!applyEditKey(this.composer, event, width)) return false
+    this.syncCommandPalette()
+    this.scrollToBottom()
+    this.dirty = true
+    return true
+  }
+
   /** @private */
   handleOverlayKey(event) {
     const overlay = this.overlay
@@ -839,7 +883,16 @@ export class App {
   /** @private */
   syncCommandPalette() {
     const text = this.composer.text
-    if (!text.startsWith('/') || text.includes(' ') || text.includes('\n')) return
+    if (!text.startsWith('/') || text.includes(' ') || text.includes('\n')) {
+      // The text stopped being a command prefix (`/help args`, a newline, a
+      // paste that is not a command): the palette goes away instead of staying
+      // up over a line it no longer describes. Only ours is cleared this way.
+      if (isLiveOverlay(this.overlay)) {
+        this.overlay = null
+        this.dirty = true
+      }
+      return
+    }
     const prefix = text.slice(1).toLowerCase()
     const items = COMMANDS
       .filter((command) => command.name.startsWith(prefix))
@@ -857,6 +910,9 @@ export class App {
       return
     }
     this.overlay = {
+      // `live` is what keeps the letters typed after `/` going into the line:
+      // the palette follows the text rather than taking the keyboard for itself.
+      live: true,
       kind: 'picker',
       title: 'commands',
       width: 56,
@@ -1108,11 +1164,30 @@ export class App {
     this.dirty = true
   }
 
+  /**
+   * Quiets the outgoing session before another one takes the screen.
+   *
+   * `/new` and `/resume` used to swap the session while a turn was running and
+   * while prompts sat in the queue; the queue belonged to the old conversation
+   * and the turn's updates belonged to it too. Nothing may be in flight when the
+   * transcript is replaced.
+   *
+   * @private
+   */
+  async detachTurn() {
+    this.queue = []
+    this.activity = { tool: null, startedAt: null }
+    if (this.status === 'working') await this.cancelTurn()
+    this.status = 'ready'
+    this.dirty = true
+  }
+
   /** @private */
   async resumeSession(sessionId) {
     this.overlay = null
     if (this.client === null) return
     try {
+      await this.detachTurn()
       const result = await this.client.request('session/resume', { sessionId, cwd: this.cwd, mcpServers: [] })
       this.blocks = this.blocks.filter((block) => block.type === 'banner')
       this.transcriptCache = new WeakMap()
@@ -1128,6 +1203,7 @@ export class App {
   async startNewSession() {
     if (this.client === null) return
     try {
+      await this.detachTurn()
       if (this.sessionId !== null && this.client.sessions.close !== undefined) {
         await this.client.request('session/close', { sessionId: this.sessionId }).catch(() => {})
       }

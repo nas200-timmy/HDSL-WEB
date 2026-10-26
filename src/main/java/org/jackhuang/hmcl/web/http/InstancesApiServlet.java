@@ -1014,6 +1014,20 @@ public final class InstancesApiServlet extends HttpServlet {
             json.addProperty("packageName", entry.packageName());
             json.addProperty("profile", entry.profile());
             json.addProperty("installed", installed);
+            // Declared is not landed: pnpm writes the dependency before it fetches, so a
+            // run that failed half-way leaves a profile that claims a plugin whose files
+            // are absent. Booting that profile dies before printing a byte, so the page
+            // has to be able to say "declared, but not on disk" and offer a reinstall
+            // rather than only an uninstall.
+            boolean filesPresent = false;
+            if (installed) {
+                try {
+                    filesPresent = DshTui.filesPresent(instance, entry);
+                } catch (DshException ignored) {
+                    // An instance that cannot name its home cannot have the files either.
+                }
+            }
+            json.addProperty("filesPresent", filesPresent);
             json.addProperty("bundled", entry.bundled());
             // Whether this instance's harness line can run it at all. The page greys the
             // install button out on false rather than hiding the row: "this exists but your

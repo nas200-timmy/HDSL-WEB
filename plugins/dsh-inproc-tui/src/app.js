@@ -21,6 +21,7 @@ import { createTheme, detectMode } from '../../shared/term/theme.js'
 import { Screen } from '../../shared/term/screen.js'
 import { createKeyDecoder } from '../../shared/term/keys.js'
 import { Composer } from '../../shared/ui/composer.js'
+import { applyEditKey, isLiveOverlay } from '../../shared/ui/edit.js'
 import { renderFrame } from '../../shared/ui/render.js'
 import { shortId } from '../../shared/ui/blocks.js'
 import { ChatSession } from './agent.js'
@@ -41,6 +42,8 @@ const ESC_DELAY_MS = 25
 const QUIT_CLOSE_MS = 3_000
 /** At most one error notice per window, so a broken frame cannot flood the screen. */
 const ERROR_NOTICE_MS = 2_000
+/** How much of a resumed session log is put back on screen, newest last. */
+const MAX_REPLAY_EVENTS = 400
 
 const EFFORTS = [
   { value: 'off', name: 'off' },
@@ -396,6 +399,8 @@ export class TerminalApp {
       }
       case 'tool/call': {
         const input = parseArguments(event.data.arguments)
+        // No `expanded` field: the global toggle (ctrl+o / shift+tab) decides,
+        // and a card that pinned itself closed would ignore it.
         const block = this.makeBlock({
           type: 'tool',
           callId: event.data.callId,
@@ -404,7 +409,6 @@ export class TerminalApp {
           status: 'in_progress',
           startedAt: this.clock,
           output: null,
-          expanded: false,
         })
         this.activity.tool = block.name
         this.dirty = true
@@ -671,10 +675,22 @@ export class TerminalApp {
   /** @private */
   dispatchKey(event) {
     if (this.overlay !== null) {
+      // The command palette floats over the text being typed, so the keys that
+      // edit text keep editing it and the palette merely re-filters; a dialog
+      // that owns the keyboard (permission, picker) is untouched by this.
+      if (isLiveOverlay(this.overlay) && this.editLivePalette(event)) return
       this.handleOverlayKey(event)
       return
     }
     const { name } = event
+    if (name === 'paste') {
+      // The terminal sends the whole clipboard as one event; it is the user's
+      // text, so it goes in at the caret with CRLF normalised by the composer.
+      this.composer.paste(event.text ?? '')
+      this.syncCommandPalette()
+      this.scrollToBottom()
+      return
+    }
     if (name === 'char') {
       this.composer.insert(event.text ?? '')
       this.syncCommandPalette()
@@ -682,7 +698,10 @@ export class TerminalApp {
       return
     }
     if (name === 'enter') {
-      if (event.shift || event.alt) {
+      // `ctrl+j` arrives as enter+ctrl from the decoder (a raw newline is a
+      // control byte, not a key name every terminal agrees on), and it means
+      // the same thing shift+enter and alt+enter do: a line break, not a send.
+      if (event.shift || event.alt || event.ctrl) {
         this.composer.newline()
         this.dirty = true
         return
@@ -816,11 +835,46 @@ export class TerminalApp {
     this.dirty = true
   }
 
+  /**
+   * Edits the composer behind a live palette, then re-filters the palette.
+   *
+   * Returns `false` for the keys the palette itself owns (arrows, page keys,
+   * enter, escape), which is what lets one overlay both follow the text and
+   * still be navigable.
+   *
+   * @private
+   * @param {{name: string, text?: string}} event the decoded key
+   * @returns {boolean} whether the key was consumed as text editing
+   */
+  editLivePalette(event) {
+    const width = Math.max(1, this.screen.columns - 4)
+    if (event.name === 'left' || event.name === 'right') {
+      this.composer.move(event.name, width)
+      this.syncCommandPalette()
+      this.dirty = true
+      return true
+    }
+    if (event.name === 'tab') {
+      this.completeCommand()
+      return true
+    }
+    if (!applyEditKey(this.composer, event, width)) return false
+    this.syncCommandPalette()
+    this.scrollToBottom()
+    this.dirty = true
+    return true
+  }
+
   /** @private */
   handleOverlayKey(event) {
     const overlay = this.overlay
     if (overlay === null) return
     const { name } = event
+    if (name === 'paste') {
+      // A dialog owns the keyboard while it is up; the composer behind it is not
+      // visible, so inserting there would edit text the person cannot see.
+      return
+    }
     if (name === 'escape') {
       if (overlay.kind === 'permission') this.resolveInteraction(null)
       else this.overlay = null
@@ -888,7 +942,16 @@ export class TerminalApp {
   /** @private */
   syncCommandPalette() {
     const text = this.composer.text
-    if (!text.startsWith('/') || text.includes(' ') || text.includes('\n')) return
+    if (!text.startsWith('/') || text.includes(' ') || text.includes('\n')) {
+      // The text stopped being a command prefix (`/help args`, a newline, a
+      // paste that is not a command): the palette goes away instead of staying
+      // up over a line it no longer describes. Only ours is cleared this way.
+      if (isLiveOverlay(this.overlay)) {
+        this.overlay = null
+        this.dirty = true
+      }
+      return
+    }
     const prefix = text.slice(1).toLowerCase()
     const items = COMMANDS
       .filter((command) => command.name.startsWith(prefix))
@@ -905,6 +968,9 @@ export class TerminalApp {
       return
     }
     this.overlay = {
+      // `live` is what keeps the letters typed after `/` going into the line:
+      // the palette follows the text rather than taking the keyboard for itself.
+      live: true,
       kind: 'picker',
       title: 'commands',
       width: 56,
@@ -1122,14 +1188,105 @@ export class TerminalApp {
     this.dirty = true
   }
 
+  /**
+   * Ends the current turn before the session under it is replaced.
+   *
+   * `/new` and `/resume` used to clear the transcript and swap the agent while
+   * a turn was still running: the running turn's events then landed on the new
+   * session's transcript, and a queued message could be delivered to it. What
+   * has to be true before the swap is that nothing is running, nothing is
+   * queued, and no streaming block is left holding a half-answer.
+   *
+   * @private
+   */
+  async detachTurn() {
+    this.queue = []
+    this.activity = { tool: null, startedAt: null }
+    this.turnStartedAt = null
+    this.streaming = { text: null, reasoning: null }
+    if (this.session.ready) {
+      this.session.cancel()
+      await this.session.settle()
+    }
+    this.status = 'ready'
+    this.dirty = true
+  }
+
+  /**
+   * Puts a resumed conversation's earlier turns back on screen.
+   *
+   * The session log is the only record of them: the agent that produced them is
+   * gone. Read defensively — a log that cannot be projected is not a reason to
+   * lose the resume, so a failure is a debug line, not a notice.
+   *
+   * @private
+   * @param {object[]} events the session log, oldest first
+   */
+  replayHistory(events) {
+    const start = Math.max(0, events.length - MAX_REPLAY_EVENTS)
+    for (let index = start; index < events.length; index += 1) {
+      const event = events[index]
+      try {
+        if (event?.type === 'user/message' && event.data?.source?.kind === 'user') {
+          const text = textOfMessage(event.data)
+          if (text.trim() !== '') this.makeBlock({ type: 'user', text })
+          continue
+        }
+        if (event?.type === 'assistant/message') {
+          const text = textOfMessage(event.data.message)
+          if (text.trim() !== '') this.makeBlock({ type: 'assistant', text, streaming: false })
+          continue
+        }
+        if (event?.type === 'tool/call') {
+          this.makeBlock({
+            type: 'tool',
+            callId: event.data.callId,
+            name: event.data.name ?? 'tool',
+            input: parseArguments(event.data.arguments),
+            status: 'in_progress',
+            startedAt: this.clock,
+            output: null,
+          })
+          continue
+        }
+        if (event?.type === 'tool/result') {
+          const block = this.findTool(event.data.message?.toolCallId)
+          if (block === null) continue
+          block.output = textOfMessage(event.data.message)
+          block.status = event.data.message?.isError === true ? 'failed' : 'completed'
+          block.endedAt = this.clock
+        }
+      } catch (error) {
+        this.debug(error)
+      }
+    }
+    this.transcriptCache = new WeakMap()
+    this.dirty = true
+  }
+
   /** @private */
   async resumeSession(sessionId) {
     try {
+      await this.detachTurn()
       this.blocks = this.blocks.filter((block) => block.type === 'banner')
       this.transcriptCache = new WeakMap()
-      await this.session.resume(sessionId)
+      const result = await this.session.resume(sessionId)
       this.syncSelection()
-      this.pushNotice(this.i18n.t('banner.resume', { id: shortId(sessionId) }), 'info')
+      if (result?.resumed !== true) {
+        // The registry refused the id (a typo, another workspace's session) and
+        // the agent fell back to a fresh one. Saying "resumed" here would be a
+        // lie the person only notices once the history is missing.
+        const reason = this.session.resumeFailure
+        this.blocks = []
+        this.pushBanner()
+        this.pushNotice(this.i18n.t('resume.failed', {
+          id: shortId(sessionId),
+          error: reason === undefined ? '' : this.failureText(reason),
+        }), 'error')
+      } else {
+        this.replayHistory(this.session.history())
+        this.pushNotice(this.i18n.t('banner.resume', { id: shortId(sessionId) }), 'info')
+      }
     } catch (error) {
       this.pushNotice(this.failureText(error), 'error')
     }
@@ -1139,10 +1296,13 @@ export class TerminalApp {
   /** @private */
   async startNew() {
     try {
-      this.blocks = []
-      this.transcriptCache = new WeakMap()
+      await this.detachTurn()
       await this.session.close()
       await this.session.open({})
+      this.blocks = []
+      this.transcriptCache = new WeakMap()
+      this.screen.clear()
+      this.pushBanner()
       this.syncSelection()
       this.pushNotice(this.i18n.t('banner.new'), 'success')
     } catch (error) {

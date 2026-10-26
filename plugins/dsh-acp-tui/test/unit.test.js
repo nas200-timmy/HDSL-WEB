@@ -13,6 +13,8 @@ import { Composer, layoutText } from '../../shared/ui/composer.js'
 import { createKeyDecoder } from '../../shared/term/keys.js'
 import { renderMarkdown } from '../../shared/term/markdown.js'
 import { createTheme } from '../../shared/term/theme.js'
+import { applyEditKey, isLiveOverlay } from '../../shared/ui/edit.js'
+import { renderBlock } from '../../shared/ui/blocks.js'
 import { createI18n, detectLanguage, TABLES } from '../../shared/i18n.js'
 import { renderFrame } from '../../shared/ui/render.js'
 import { createInitialState } from '../src/ui/app.js'
@@ -178,4 +180,47 @@ test('a dialog is composited without changing the frame size', () => {
   for (const row of frame.rows) assert.equal(visibleWidth(row), 70)
   assert.equal(frame.cursor, null, 'no caret while a dialog is open')
   assert.ok(frame.rows.some((row) => stripAnsi(row).includes('models')))
+})
+
+test('the editing keys a live palette passes on are exactly the text ones', () => {
+  const composer = new Composer({ maxLines: 8 })
+  composer.setText('/he')
+  // The palette owns arrows, page keys, enter and escape; this is everything
+  // else it must hand to the composer.
+  assert.equal(applyEditKey(composer, { name: 'char', text: 'l' }, 40), true)
+  assert.equal(composer.text, '/hel')
+  assert.equal(applyEditKey(composer, { name: 'backspace' }, 40), true)
+  assert.equal(composer.text, '/he')
+  assert.equal(applyEditKey(composer, { name: 'paste', text: 'lp\r\nme' }, 40), true)
+  assert.equal(composer.text, '/help\nme')
+  assert.equal(applyEditKey(composer, { name: 'ctrl+u' }, 40), true)
+  assert.equal(composer.text.length < '/help\nme'.length, true)
+  assert.equal(applyEditKey(composer, { name: 'enter' }, 40), false)
+  assert.equal(applyEditKey(composer, { name: 'down' }, 40), false)
+
+  assert.equal(isLiveOverlay({ live: true, kind: 'picker' }), true)
+  assert.equal(isLiveOverlay({ kind: 'picker' }), false, 'a dialog owns the keyboard')
+  assert.equal(isLiveOverlay(null), false)
+})
+
+test('a tool card follows the global expand toggle', () => {
+  const i18n = createI18n('en')
+  const render = (options) => renderBlock({
+    type: 'tool',
+    name: 'read',
+    input: { path: 'src/index.js' },
+    output: Array.from({ length: 40 }, (_unused, index) => `line ${index}`).join('\n'),
+    status: 'completed',
+  }, 60, theme, i18n, options)
+  const collapsed = render({ expandTools: false, spinner: '.' })
+  const expanded = render({ expandTools: true, spinner: '.' })
+  assert.ok(expanded.length > collapsed.length, 'the toggle shows more of the output')
+  // A card that pinned itself closed used to ignore the toggle; that field is
+  // what the terminals no longer set. The output has to be longer than the
+  // collapsed preview for the difference to show at all.
+  const long = Array.from({ length: 40 }, (_unused, index) => `line ${index}`).join('\n')
+  const renderOne = (extra) => renderBlock({
+    type: 'tool', name: 'read', input: { path: 'x' }, output: long, status: 'completed', ...extra,
+  }, 60, theme, i18n, { expandTools: true, spinner: '.' })
+  assert.ok(renderOne({}).length > renderOne({ expanded: false }).length, 'expanded:false overrides the toggle')
 })

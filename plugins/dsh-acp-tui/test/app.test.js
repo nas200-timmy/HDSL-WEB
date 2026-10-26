@@ -89,6 +89,87 @@ test('a paste while a dialog is open leaves the composer untouched', () => {
   assert.equal(app.overlay, overlay)
 })
 
+test('the command palette follows the text instead of swallowing it', () => {
+  const { app } = makeApp()
+  app.onKeyEvent({ name: 'char', text: '/' })
+  assert.equal(app.overlay?.live, true, 'the palette says it leaves the line editable')
+  app.onKeyEvent({ name: 'char', text: 'h' })
+  app.onKeyEvent({ name: 'char', text: 'e' })
+  assert.equal(app.composer.text, '/he', 'the letters typed after / reach the composer')
+  assert.deepEqual(app.overlay.items.map((item) => item.label), ['/help'])
+
+  // The same palette still navigates: the arrows move the selection, they do
+  // not move the caret.
+  app.overlay.items = [{ label: '/help' }, { label: '/hello' }]
+  app.onKeyEvent({ name: 'down' })
+  assert.equal(app.overlay.index, 1)
+  assert.equal(app.composer.caret, 3)
+
+  app.onKeyEvent({ name: 'backspace' })
+  assert.equal(app.composer.text, '/h')
+
+  // A paste is text too, and a space ends the command prefix.
+  app.onKeyEvent({ name: 'paste', text: 'elp ' })
+  assert.equal(app.composer.text, '/help ')
+  assert.equal(app.overlay, null, 'the palette closes once the line is no longer a command')
+
+  // Nothing matches `/hx`, so the palette closes and typing simply continues.
+  app.composer.setText('/hx')
+  app.onKeyEvent({ name: 'char', text: 'y' })
+  assert.equal(app.overlay, null)
+  assert.equal(app.composer.text, '/hxy')
+})
+
+test('ctrl+enter is a line break, not a send', () => {
+  const { app } = makeApp()
+  app.composer.setText('first')
+  // A raw newline arrives as enter+ctrl: `\n` is a control byte, not a key name
+  // every terminal agrees on.
+  app.onKeyEvent({ name: 'enter', ctrl: true })
+  assert.equal(app.composer.text, 'first\n')
+  assert.equal(app.blocks.filter((block) => block.type === 'user').length, 0)
+  app.onKeyEvent({ name: 'enter', shift: true })
+  assert.equal(app.composer.text, 'first\n\n')
+})
+
+test('an update from the session that was replaced is ignored', () => {
+  const { app } = makeApp()
+  app.sessionId = 'session-new'
+  app.status = 'ready'
+  const chunk = (sessionId, text) => ({
+    method: 'session/update',
+    params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } },
+  })
+  app.onNotification(chunk('session-old', 'late answer'))
+  assert.equal(app.blocks.filter((block) => block.type === 'assistant').length, 0)
+  app.onNotification(chunk('session-new', 'current answer'))
+  assert.equal(app.blocks.filter((block) => block.type === 'assistant').length, 1)
+})
+
+test('/new cancels the running turn before it swaps the session', async () => {
+  const { app } = makeApp()
+  const calls = []
+  app.client = {
+    sessions: { close: true },
+    request(method) {
+      calls.push(method)
+      if (method === 'session/new') return Promise.resolve({ sessionId: 'session-next', configOptions: [] })
+      return Promise.resolve({})
+    },
+    notify(method) {
+      calls.push(method)
+    },
+    respond() {},
+  }
+  app.sessionId = 'session-live'
+  app.status = 'working'
+  app.queue = ['a queued prompt']
+  await app.startNewSession()
+  assert.deepEqual(calls.slice(0, 3), ['session/cancel', 'session/close', 'session/new'])
+  assert.deepEqual(app.queue, [], 'the queue belonged to the session that was left')
+  assert.equal(app.sessionId, 'session-next')
+})
+
 test('adoptSession tolerates an empty transcript', () => {
   const { app } = makeApp()
   app.blocks = []

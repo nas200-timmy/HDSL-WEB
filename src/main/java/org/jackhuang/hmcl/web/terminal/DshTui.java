@@ -207,7 +207,7 @@ public final class DshTui {
     /// @param plugin   the plugin the profile declares
     /// @return whether the profile holds what starting it needs
     /// @throws DshException when the instance cannot name its home
-    static boolean filesPresent(DshInstance instance, DshTuiPlugins.Entry plugin) throws DshException {
+    public static boolean filesPresent(DshInstance instance, DshTuiPlugins.Entry plugin) throws DshException {
         Path nodeModules = profileNodeModules(instance, plugin.profile());
         if (!Files.isDirectory(nodeModules.resolve(plugin.packageName()))) {
             return false;
