@@ -8,6 +8,9 @@
 // terminal (org.jackhuang.hmcl.web.terminal.pty, see docs/web-shell.md).
 
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+import groovy.json.JsonSlurper
+import org.gradle.api.tasks.bundling.Compression
+import java.security.MessageDigest
 
 plugins {
     java
@@ -216,6 +219,185 @@ val syncWebDist by tasks.registering(Sync::class) {
 
 tasks.named("processResources") {
     dependsOn(syncWebDist)
+}
+
+// ------------------------------------------------- first-party plugins -----
+//
+// Plugins the panel ships itself live under `plugins/<name>/` as ordinary npm
+// packages. Each is packed into an npm-layout tarball (a `package/` directory),
+// hashed and indexed, then copied into the jar's resources. The panel's
+// terminal-plugin install route reads that index, materialises the tarball and
+// installs it from the file system, so a first-party plugin never needs the npm
+// registry — the panel works offline.
+//
+// Packing is a Gradle Tar task rather than `npm pack`: the build already
+// tolerates a machine without npm (see buildWeb), and a plugin that could only
+// be packaged with npm would leave that machine with a jar that has no plugins.
+val pluginRoot = layout.projectDirectory.dir("plugins")
+val pluginsOutput = layout.buildDirectory.dir("first-party-plugins")
+
+data class FirstPartyPlugin(
+    val dirName: String,
+    val packageName: String,
+    val version: String,
+    val fileName: String,
+)
+
+fun pluginManifestField(manifest: File, field: String): String? {
+    val parsed = JsonSlurper().parse(manifest) as? Map<*, *> ?: return null
+    return parsed[field]?.toString()
+}
+
+fun jsonQuote(value: String): String =
+    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+val firstPartyPlugins: List<FirstPartyPlugin> = run {
+    val dirs = pluginRoot.asFile.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name } ?: emptyList()
+    dirs.mapNotNull { dir ->
+        val manifest = File(dir, "package.json")
+        if (!manifest.isFile) return@mapNotNull null
+        val name = pluginManifestField(manifest, "name") ?: return@mapNotNull null
+        val version = pluginManifestField(manifest, "version") ?: return@mapNotNull null
+        val stem = name.removePrefix("@").replace('/', '-')
+        FirstPartyPlugin(dir.name, name, version, "$stem-$version.tgz")
+    }
+}
+
+// A plugin's sources import the shared terminal toolkit by a path that is right in
+// this repository (`plugins/shared`), while the installed copy carries it inside the
+// package (`package/shared`) — the extra `@scope/` directory an npm install adds
+// means no single relative path is right in both. Staging copies the package and
+// the toolkit, then rewrites just those import specifiers.
+val stageFirstPartyPlugin = firstPartyPlugins.map { plugin ->
+    val camel = plugin.dirName.split('-', '_').joinToString("") { part -> part.replaceFirstChar(Char::uppercase) }
+    tasks.register<Sync>("stageFirstPartyPlugin$camel") {
+        group = "build"
+        description = "Stages the ${plugin.packageName} first-party plugin for packing."
+        val stage = layout.buildDirectory.dir("staged-plugins/${plugin.dirName}")
+        into(stage)
+        from(pluginRoot.dir(plugin.dirName)) {
+            include("package.json", "README.md", "LICENSE", "cordis.patch.yml", "bin/**", "src/**")
+        }
+        if (pluginRoot.dir("shared").asFile.isDirectory) {
+            from(pluginRoot.dir("shared")) {
+                include("**/*.js")
+                into("shared")
+            }
+        }
+        inputs.dir(pluginRoot.dir(plugin.dirName))
+        if (pluginRoot.dir("shared").asFile.isDirectory) inputs.dir(pluginRoot.dir("shared"))
+        outputs.dir(stage)
+        doLast {
+            val root = stage.get().asFile
+            if (!root.isDirectory) return@doLast
+            root.walkTopDown().filter { it.isFile && it.extension == "js" }.forEach { file ->
+                val relative = file.relativeTo(root).invariantSeparatorsPath
+                val depth = relative.count { it == '/' }
+                val prefix = "../".repeat(depth)
+                val text = file.readText()
+                val rewritten = text.replace(
+                    Regex("""(from\s+|import\(\s*)(['"])(?:\.\./)+shared/"""),
+                ) { match -> match.groupValues[1] + match.groupValues[2] + prefix + "shared/" }
+                if (rewritten != text) file.writeText(rewritten)
+            }
+        }
+    }
+}
+
+val packFirstPartyPlugin = firstPartyPlugins.mapIndexed { index, plugin ->
+    val camel = plugin.dirName.split('-', '_').joinToString("") { part -> part.replaceFirstChar(Char::uppercase) }
+    tasks.register<Tar>("packFirstPartyPlugin$camel") {
+        group = "build"
+        description = "Packs the ${plugin.packageName} first-party plugin into an installable tarball."
+        dependsOn(stageFirstPartyPlugin[index])
+        archiveFileName.set(plugin.fileName)
+        destinationDirectory.set(pluginsOutput)
+        compression = Compression.GZIP
+        // Reproducible: two builds of one commit produce one tarball.
+        isPreserveFileTimestamps = false
+        isReproducibleFileOrder = true
+        into("package") {
+            from(stageFirstPartyPlugin[index])
+        }
+        outputs.file(pluginsOutput.map { it.file(plugin.fileName) })
+    }
+}
+
+val packageFirstPartyPlugins by tasks.registering {
+    group = "build"
+    description = "Packs and indexes the first-party plugins under plugins/."
+    dependsOn(packFirstPartyPlugin)
+    val outputDir = pluginsOutput.get().asFile
+    outputs.files(
+        firstPartyPlugins.map { File(outputDir, it.fileName) } + File(outputDir, "index.json")
+    )
+    doFirst {
+        // A renamed or removed plugin leaves its old tarball here; without this it would
+        // still be copied into the jar (and served next to the current index).
+        val expected = firstPartyPlugins.map { it.fileName }.toSet() + "index.json"
+        outputDir.listFiles()
+            ?.filter { it.isFile && it.name !in expected }
+            ?.forEach { it.delete() }
+    }
+    doLast {
+        val entries = firstPartyPlugins.joinToString(",\n") { plugin ->
+            val file = File(outputDir, plugin.fileName)
+            val digest = MessageDigest.getInstance("SHA-256")
+            digest.update(file.readBytes())
+            val sha = digest.digest().joinToString("") { value -> String.format("%02x", value.toInt() and 0xff) }
+            "    {\"name\": ${jsonQuote(plugin.packageName)}, \"version\": ${jsonQuote(plugin.version)}, " +
+                "\"file\": ${jsonQuote(plugin.fileName)}, \"sha256\": ${jsonQuote(sha)}}"
+        }
+        File(outputDir, "index.json").writeText(
+            "{\n  \"plugins\": [\n" + entries + "\n  ]\n}\n"
+        )
+        logger.lifecycle("first-party plugins: " + firstPartyPlugins.joinToString { "${it.packageName}@${it.version}" })
+    }
+}
+
+tasks.named<ProcessResources>("processResources") {
+    dependsOn(packageFirstPartyPlugins)
+    from(pluginsOutput) { into("first-party-plugins") }
+}
+
+// The plugin's own offline check and tests, run by `gradle check` where Node is
+// present. A machine without Node skips them, exactly like the SPA build.
+val nodeExecutable: String? = run {
+    val names = if (File.separatorChar == '\\') listOf("node.exe", "node") else listOf("node")
+    System.getenv("PATH")
+        ?.split(File.pathSeparator)
+        ?.asSequence()
+        ?.filter { it.isNotBlank() }
+        ?.flatMap { dir -> names.asSequence().map { File(dir, it) } }
+        ?.firstOrNull { it.isFile }
+        ?.absolutePath
+}
+
+firstPartyPlugins.forEach { plugin ->
+    val dir = pluginRoot.dir(plugin.dirName)
+    val camel = plugin.dirName.split('-', '_').joinToString("") { part -> part.replaceFirstChar(Char::uppercase) }
+    if (dir.file("scripts/check.mjs").asFile.isFile) {
+        val name = "checkFirstPartyPlugin$camel"
+        tasks.register<Exec>(name) {
+            group = "verification"
+            description = "Runs the offline check of the ${plugin.packageName} first-party plugin."
+            onlyIf { nodeExecutable != null }
+            workingDir(dir)
+            commandLine(nodeExecutable ?: "node", "scripts/check.mjs")
+        }
+        tasks.named("check") { dependsOn(name) }
+    }
+    if (dir.dir("test").asFile.isDirectory) {
+        val name = "testFirstPartyPlugin$camel"
+        tasks.register<Exec>(name) {
+            group = "verification"
+            description = "Runs the unit tests of the ${plugin.packageName} first-party plugin."
+            onlyIf { nodeExecutable != null }
+            workingDir(dir)
+            commandLine(nodeExecutable ?: "node", "--test")
+        }
+        tasks.named("check") { dependsOn(name) }
+    }
 }
 
 // ------------------------------------------------------------- toolchain -----

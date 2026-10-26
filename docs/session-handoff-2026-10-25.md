@@ -1,5 +1,9 @@
 # 会话交接：HDSL-web（2026-10-25）
 
+> **已被 [`session-handoff-2026-10-26.md`](session-handoff-2026-10-26.md) 接续**（v0.5.91：面板自带
+> 两个第一方终端与三轮审查修复）。本稿仍是实例生命周期 ↔ 终端、反代、整合包契约、部署与环境
+> 备注的权威文本，接续稿只写之后的增量。
+>
 > 本稿接住 **v0.5.81** 与 **v0.5.82** 两版，外加一轮**外部审查修复**（实例生命周期 ↔ 终端的两处高危、
 > PTY 描述符竞态、反代取消/重试、`holder[0]` 清理）。v0.5.82 一版的内容：容器补齐构建工具链与真编辑器；
 > v0.5.81：终端入口统一、整合包契约补齐（`home/` / `dshVersions` / `launchers` / 向后兼容）、
@@ -193,6 +197,8 @@ Jetty 默认 30 秒 → 静默终端被 `1001 Connection Idle Timeout` 关掉。
   `fitsHost` 复用 `DshPluginRequirements.satisfies`；
 - 安装路由**提交任务前**就 409、开终端时 `terminalPlugin` 也拒（已装的旧组合）；
 - `GET …/tui-plugins` 多给 `fitsHost`/`requiresDsh`，前端**变灰不可装**并写明原因（不隐藏）；
+- `GET …/tui-plugins` 另给 `filesPresent`（manifest 声明 vs 磁盘真相），`installed && !filesPresent`
+  的行标「安装未完成」并给「重新安装」+「卸载」（第二轮审查后补，见 CHANGELOG v0.5.91）；
 - 未知实例版本不拒；两个路由共用 `hostMismatch` 一句文案。
 
 **还没解决的**：`0.2.x` 的 dsh 在 npm 上只有 `next`/`alpha` 通道（`latest` 仍是 0.1.7 线），

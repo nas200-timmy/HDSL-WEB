@@ -403,10 +403,23 @@ class PluginApiTest {
             }
 
             JsonObject recommended = plugins.get(0).getAsJsonObject();
-            assertEquals("@deepseek-harness-tui/dsh-tui", recommended.get("packageName").getAsString(),
-                    "the one developed against the harness's own releases comes first");
-            assertEquals("dsh-tui", recommended.get("bin").getAsString());
-            assertEquals("dsh-tui", recommended.get("profile").getAsString());
+            assertEquals("@nas200-timmy/dsh-inproc-tui", recommended.get("packageName").getAsString(),
+                    "the panel's fuller in-process terminal comes first");
+            assertTrue(recommended.get("bundled").getAsBoolean(),
+                    "and the page can say it ships with the panel");
+            assertTrue(recommended.get("bin").isJsonNull(), "a mode bundle ships no program");
+            assertEquals("dsh-inproc-tui", recommended.get("profile").getAsString());
+
+            // The ACP terminal is the second first-party entry, and it does ship one.
+            JsonObject acp = plugins.get(1).getAsJsonObject();
+            assertEquals("@nas200-timmy/dsh-acp-tui", acp.get("packageName").getAsString());
+            assertEquals("dsh-acp-tui", acp.get("bin").getAsString());
+            assertTrue(acp.get("bundled").getAsBoolean());
+
+            // The community entry the panel used to recommend is still offered, not gone.
+            JsonObject community = plugins.get(2).getAsJsonObject();
+            assertEquals("@deepseek-harness-tui/dsh-tui", community.get("packageName").getAsString());
+            assertFalse(community.get("bundled").getAsBoolean());
             // The one that needs Bun to run is no longer offered.
             for (int i = 0; i < plugins.size(); i++) {
                 assertNotEquals("@ruhooai/dsh-tui", plugins.get(i).getAsJsonObject().get("packageName").getAsString());
@@ -492,6 +505,69 @@ class PluginApiTest {
             assertTrue(refused.get("error").getAsString().contains("不能装进 web profile"), refused.toString());
             assertFalse(Files.exists(instance.homeDirectory().resolve("profiles/web/package.json")),
                     "the refusal happens before any command runs, so the web profile was not touched");
+
+            // Declared is not landed. Deleting the package behind the profile's back is the
+            // shape a fetch that failed half-way leaves; the list has to say so, because the
+            // page's only other signal is `installed`, which is what the manifest claims.
+            Path packageDirectory = instance.homeDirectory().resolve("profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui");
+            deleteRecursively(packageDirectory);
+            JsonObject half = null;
+            JsonArray halfInstalled = json(get(client, base + "/api/instances/" + id + "/tui-plugins"))
+                    .getAsJsonArray("plugins");
+            for (int i = 0; i < halfInstalled.size(); i++) {
+                JsonObject candidate = halfInstalled.get(i).getAsJsonObject();
+                if ("@deepseek-harness-tui/dsh-tui".equals(candidate.get("packageName").getAsString())) {
+                    half = candidate;
+                }
+            }
+            assertNotNull(half, halfInstalled.toString());
+            assertTrue(half.get("installed").getAsBoolean(), "the manifest still declares it: " + half);
+            assertFalse(half.get("filesPresent").getAsBoolean(),
+                    "the package is gone, so the terminal would die at once: " + half);
+            assertFalse(half.get("active").getAsBoolean(), "nothing startable claims to be active: " + half);
+
+            // Reinstalling is what the page offers for that state; it has to work without a
+            // remove first, and it has to bring the files back.
+            HttpResponse<String> reinstall = post(client, base + "/api/instances/" + id + "/tui-plugins/install",
+                    "{\"package\":\"@deepseek-harness-tui/dsh-tui\"}");
+            assertEquals(202, reinstall.statusCode(), reinstall.body());
+            JsonObject reinstalled = awaitTask(client, base, json(reinstall).get("taskId").getAsString());
+            assertEquals("done", reinstalled.get("state").getAsString(), reinstalled.toString());
+            JsonArray afterReinstall = json(get(client, base + "/api/instances/" + id + "/tui-plugins"))
+                    .getAsJsonArray("plugins");
+            for (int i = 0; i < afterReinstall.size(); i++) {
+                JsonObject candidate = afterReinstall.get(i).getAsJsonObject();
+                if ("@deepseek-harness-tui/dsh-tui".equals(candidate.get("packageName").getAsString())) {
+                    assertTrue(candidate.get("filesPresent").getAsBoolean(),
+                            "the files are back: " + candidate);
+                }
+            }
+
+            // And the same question one level down: a directory that is still there but has
+            // lost its manifest. (For this package the missing entry file would already fail
+            // the check; `DshTuiTest.anEmptyPackageDirectoryIsNotAnInstalledBundle` pins the
+            // pure-bundle case, where the manifest is the only thing there is to check.)
+            Path bundleDirectory = instance.homeDirectory()
+                    .resolve("profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui");
+            Files.delete(bundleDirectory.resolve("package.json"));
+            JsonArray afterManifestGone = json(get(client, base + "/api/instances/" + id + "/tui-plugins"))
+                    .getAsJsonArray("plugins");
+            for (int i = 0; i < afterManifestGone.size(); i++) {
+                JsonObject candidate = afterManifestGone.get(i).getAsJsonObject();
+                if ("@deepseek-harness-tui/dsh-tui".equals(candidate.get("packageName").getAsString())) {
+                    assertTrue(candidate.get("installed").getAsBoolean(), candidate.toString());
+                    assertFalse(candidate.get("filesPresent").getAsBoolean(),
+                            "a manifest-less directory holds nothing to boot: " + candidate);
+                }
+            }
+
+            // Reinstalling puts the manifest back, which is what the page offers next to the
+            // state above.
+            HttpResponse<String> restore = post(client, base + "/api/instances/" + id + "/tui-plugins/install",
+                    "{\"package\":\"@deepseek-harness-tui/dsh-tui\"}");
+            assertEquals(202, restore.statusCode(), restore.body());
+            JsonObject restored = awaitTask(client, base, json(restore).get("taskId").getAsString());
+            assertEquals("done", restored.get("state").getAsString(), restored.toString());
 
             // Taking it out again is never refused, and the state goes back.
             HttpResponse<String> remove = post(client, base + "/api/instances/" + id + "/tui-plugins/remove",
@@ -674,5 +750,20 @@ class PluginApiTest {
         System.arraycopy(block, 0, result, 0, 512);
         System.arraycopy(body, 0, result, 512, body.length);
         return result;
+    }
+
+    /// Removes a directory tree, ignoring what is already gone.
+    ///
+    /// @param root the directory to remove
+    private static void deleteRecursively(Path root) throws java.io.IOException {
+        if (!java.nio.file.Files.exists(root)) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> walk = java.nio.file.Files.walk(root)) {
+            java.util.List<Path> entries = walk.sorted(java.util.Comparator.reverseOrder()).toList();
+            for (Path entry : entries) {
+                java.nio.file.Files.deleteIfExists(entry);
+            }
+        }
     }
 }

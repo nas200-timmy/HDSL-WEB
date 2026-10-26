@@ -216,6 +216,43 @@ Claude Web 有两个内核可以选：**社区引擎**（`claude-web-engine`，�
 - **HTTPS 检查**：HTTP 下这一页会直接弹「当前环境不安全」并给出两条路——去「HTTPS 证书」上传
   证书，或生成自签名证书继续（浏览器会告警）。
 
+### 面板自带的终端：`plugins/` 与两个第一方 TUI
+
+dsh 的终端界面一直都是插件（dsh 自己只有 WEB / HEADLESS / ACP / SDK 四种面），所以面板
+自己带了两个：一个进程内、一个走 ACP。它们和其它插件一样装进**自己的 profile**，但
+**不发 npm**——构建时被打成 npm 布局的 tarball 塞进 jar，装的时候由面板从本地文件安装，
+所以离线也能装。
+
+```sh
+plugins/                        # 第一方插件源码，一个目录一个 npm 包
+  README.md                     # 契约：自带、离线可建、只依赖 harness
+  shared/                       # 两个终端共用的渲染/输入/组件层
+  dsh-inproc-tui/               # 进程内终端（mode bundle，dsh 0.2.x）
+  dsh-acp-tui/                  # ACP 终端（独立程序，0.1.2 起）
+```
+
+- **`dsh-inproc-tui`（进程内）**：**mode bundle**，叠在 `dsh-base` 上、跑在 harness 进程里，
+  所以有真·逐字流式、思考增量、`approval/request` 审批与 `user-questions/request` 追问、
+  进程内模型切换和压缩。代价是只认 **0.2.x** 的服务接缝（`requiresDsh >=0.2.0-rc.2`，
+  实测 0.2.0-rc.2 与 0.2.1-rc.3 都能跑）。面板用 `dsh --profile dsh-inproc-tui` 启动它。
+- **`dsh-acp-tui`（兼容备用）**：**独立程序**，不 import 任何 harness 包，用 ACP v1 与
+  `dsh --profile acp` 通信，因此从 **0.1.2-rc.1** 起都能跑；面板用
+  `node …/bin/dsh-acp-tui.js` 启动它。它是**绝对的兼容选项**：实例升级、降级都拿它兜底。
+- **两个可以同时装，但只有一个在跑**：清单顺序是偏好——0.2.x 上先用进程内那个，ACP 那个
+  待命（列表里标「备用」）；实例版本一变、进程内那个不再匹配，ACP 版自动接管。这正是
+  "同实例版本蹦迪"时想要的：装一次退路，不用跟着版本反复装卸。
+- **一条安装规则**：低版本实例装不了要求更高版本的插件——列表里保留该行、写明缺什么，
+  安装按钮灰掉、服务端也 409。两个第一方终端**不互斥**，可以都装。
+- **界面是 kimi-code 那一路的**：☾ 头、记录区（用户消息 / 思考 / 工具卡片 / markdown 回答）、
+  底部输入框、状态栏（模型 · 推理强度 · 工作目录 · git 分支 · 上下文占用）、`/model` 与
+  `/resume` 选择器、权限对话框、`ctrl+o` 展开工具输出。
+- **构建**：`./gradlew packageFirstPartyPlugins` 产出 `build/first-party-plugins/*.tgz` 与
+  `index.json`，`processResources` 自动把它们放进 jar；`./gradlew check` 会跑插件的离线检查
+  与单元测试（机器上没有 Node 时跳过，和 SPA 构建同一套策略）。
+
+新增第一方插件只需在 `plugins/` 下放一个目录（见 [plugins/README.md](plugins/README.md)），
+构建会自动打包；若是终端界面，再在 `DshTuiPlugins.ENTRIES` 里登记一行（`bundled = true`）。
+
 ### 在终端里用：hdsl-tui
 
 浏览器之外还有一个终端客户端 `hdsl-tui`：适合手机 SSH、服务器 console、没有图形界面
