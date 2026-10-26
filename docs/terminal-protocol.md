@@ -48,8 +48,11 @@
 ### `POST /api/developer/extend`
 
 已提权的会话把这次提权**延长到 3 小时后**，不需要重新输入密码——长时间维护前用一次，
-免得到期重输。要求 HTTPS + 当前已提权；未提权时 403 `developer_elevation_required`
-（与终端入口同一个 code，客户端复用同一分支）。200 → `{"elevated":true,"expiresAt":"…"}`。
+免得到期重输。**每张提权票只有一次延长机会**：已延长过的票再调本端点，403
+`developer_elevation_extended`；重新 `elevate` 验证一次密码会发一张带新延长票的新提权，
+且**保留还没走完的有效期**（延长期内续票不会被砍回 30 分钟）。要求 HTTPS + 当前已提权；
+未提权时 403 `developer_elevation_required`（与终端入口同一个 code，客户端复用同一分支）。
+200 → `{"elevated":true,"expiresAt":"…"}`。
 
 ### `POST /api/developer/revoke`
 

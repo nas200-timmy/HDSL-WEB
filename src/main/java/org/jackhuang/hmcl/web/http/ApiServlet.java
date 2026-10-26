@@ -28,6 +28,7 @@ import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.auth.LoginThrottle;
 import org.jackhuang.hmcl.web.auth.UserStore;
+import org.jackhuang.hmcl.web.terminal.TerminalWebSocket;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -310,6 +311,12 @@ public final class ApiServlet extends HttpServlet {
     private void logout(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String token = cookieValue(request, AuthFilter.SESSION_COOKIE);
         authService.logout(token);
+        // 已建立的终端 WS 不再复查会话，不掐的话登出后的浏览器还留着一条
+        // 活动的终端通道。只断连接、不动 PTY：detach 语义，agent 继续跑
+        // （docs/web-shell.md §3），下次提权后重连即可接回。
+        if (token != null && !token.isBlank()) {
+            TerminalWebSocket.closeForSession(token);
+        }
         response.addCookie(authFilter.clearedSessionCookie(request));
         Json.write(response, Map.of("ok", true));
     }

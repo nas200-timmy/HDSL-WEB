@@ -878,6 +878,8 @@ func explain(err error) string {
 	switch panel.Code(err) {
 	case "developer_elevation_required":
 		return "需要开发者密码：在「主菜单 → 开发者提权」里输入一次。"
+	case "developer_elevation_extended":
+		return "这次提权已经延长过一次：重新验证开发者密码后会发一张新的延长票，剩余时间不会丢。"
 	case "developer_password_not_set":
 		return developerPasswordNotSet
 	case "web_shell_disabled":

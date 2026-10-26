@@ -1664,8 +1664,9 @@ function DeveloperTab() {
           </span>
         </div>
         <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
-          提权默认 30 分钟滑动续期（每次使用自动顺延）。需要长时间操作时可以延长到 3 小时后，
-          用完建议立即停止——停止后再开终端、改这里任何设置都会重新要求开发者密码。
+          提权默认 30 分钟滑动续期（每次使用自动顺延）。需要长时间操作时可以延长到 3 小时后
+          （每张票限延长一次，重新验证密码可再来），用完建议立即停止——停止后再开终端、
+          改这里任何设置都会重新要求开发者密码。
         </p>
         {formError && <div className="form-error">{formError}</div>}
         <div style={{ display: "flex", gap: 8, paddingTop: 8, flexWrap: "wrap" }}>

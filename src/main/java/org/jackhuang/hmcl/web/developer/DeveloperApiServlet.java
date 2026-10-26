@@ -161,10 +161,12 @@ public final class DeveloperApiServlet extends HttpServlet {
         Json.write(response, body);
     }
 
-    /// The developer page's 「延长提权」: an already-elevated session stretches
-    /// itself to [DeveloperElevation.EXTENDED_TTL] without re-typing the
-    /// password. Extending requires the elevation it lengthens — otherwise the
-    /// endpoint would be a second, password-less mint.
+    /// The developer page's 「延长提权」: an already-elevated session spends
+    /// its ticket's single extension coupon and stretches itself to
+    /// [DeveloperElevation.EXTENDED_TTL] without re-typing the password. The
+    /// coupon is one-shot by design — a second stretch takes a fresh password
+    /// proof — and extending requires the elevation it lengthens, otherwise
+    /// the endpoint would be a second, password-less mint.
     private void extend(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (!requireTls(request, response)) {
             return;
@@ -177,10 +179,9 @@ public final class DeveloperApiServlet extends HttpServlet {
         }
         Instant expiry = elevation.extend(key, DeveloperElevation.EXTENDED_TTL);
         if (expiry == null) {
-            // require() just passed, so this is a race with expiry — answer
-            // honestly instead of pretending the extension landed.
+            // require() 刚放行并滑动过有效期，能走到这的只有「延长过一次」。
             Json.error(response, HttpServletResponse.SC_FORBIDDEN,
-                    "developer_elevation_required: elevation expired, verify again");
+                    "developer_elevation_extended: 这次提权已经延长过一次，重新输入开发者密码后可再次延长");
             return;
         }
         AuditLog.log(AuditLog.Channel.WEB, "developer.elevation", "extend", "success",

@@ -182,6 +182,24 @@ class DeveloperApiServletTest {
             assertEquals(newExpiry, Instant.parse(json(get(client, base + "/api/developer/status", cookie))
                     .get("expiresAt").getAsString()));
 
+            // The extension coupon is one-shot: a second stretch is refused
+            // until the password is re-proven.
+            HttpResponse<String> twice = post(client, base + "/api/developer/extend", "{}", cookie);
+            assertEquals(403, twice.statusCode(), twice.body());
+            assertTrue(twice.body().contains("developer_elevation_extended"));
+
+            // Re-proving mints a fresh coupon and keeps the time still on the
+            // clock — the 3-hour window must not be cut back to 30 minutes.
+            HttpResponse<String> reElevated = post(client, base + "/api/developer/elevate",
+                    "{\"password\":\"" + DEV_PASSWORD + "\"}", cookie);
+            assertEquals(200, reElevated.statusCode(), reElevated.body());
+            Instant keptExpiry = Instant.parse(json(get(client, base + "/api/developer/status", cookie))
+                    .get("expiresAt").getAsString());
+            assertTrue(keptExpiry.isAfter(Instant.now().plus(Duration.ofHours(2))),
+                    "re-verifying must keep the unspent extension time, got " + keptExpiry);
+            HttpResponse<String> extendedAgain = post(client, base + "/api/developer/extend", "{}", cookie);
+            assertEquals(200, extendedAgain.statusCode(), extendedAgain.body());
+
             // Revoking drops the elevation immediately and is safe to repeat.
             HttpResponse<String> revoked = post(client, base + "/api/developer/revoke", "{}", cookie);
             assertEquals(200, revoked.statusCode(), revoked.body());

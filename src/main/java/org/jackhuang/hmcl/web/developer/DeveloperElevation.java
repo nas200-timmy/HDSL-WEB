@@ -33,6 +33,12 @@ import java.util.concurrent.ConcurrentHashMap;
 /// treated as not elevated (the caller passes that in, because only
 /// [org.jackhuang.hmcl.web.auth.AuthService] knows).
 ///
+/// Each elevation is a **ticket with one extension coupon**: the holder may
+/// stretch it to [EXTENDED_TTL] at most once; stretching it again takes a
+/// fresh password proof ([#elevate]). Re-proving mints a new ticket that keeps
+/// whatever time the old one had left — re-verifying mid-extension must not
+/// cut the window back down to [TTL].
+///
 /// Failures are counted per key with the same shape the sign-in gate uses:
 /// [#MAX_FAILURES] wrong passwords inside [#FAILURE_WINDOW] lock the key for
 /// [#LOCK]. A correct password clears both.
@@ -57,7 +63,7 @@ public final class DeveloperElevation {
 
     private static final String SESSION_PREFIX = "token:";
 
-    private final ConcurrentHashMap<String, Instant> elevations = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Elevation> elevations = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Failures> failures = new ConcurrentHashMap<>();
 
     /// The elevation key for one request: the session token when there is
@@ -77,8 +83,8 @@ public final class DeveloperElevation {
             elevations.remove(key);
             return false;
         }
-        Instant expiry = elevations.get(key);
-        return expiry != null && expiry.isAfter(Instant.now());
+        Elevation elevation = elevations.get(key);
+        return elevation != null && elevation.expiry.isAfter(Instant.now());
     }
 
     /// Passes and slides an elevation, or answers `false`.
@@ -89,28 +95,58 @@ public final class DeveloperElevation {
             elevations.remove(key);
             return false;
         }
-        Instant expiry = elevations.get(key);
-        if (expiry != null && expiry.isAfter(now)) {
-            elevations.put(key, now.plus(TTL));
+        Elevation elevation = elevations.get(key);
+        if (elevation != null && elevation.expiry.isAfter(now)) {
+            synchronized (elevation) {
+                // 只往前滑、绝不缩短：一次常规使用（开终端、开关页…）不能把
+                // 已经延长到 3 小时的提权砍回 30 分钟。
+                Instant slid = now.plus(TTL);
+                if (slid.isAfter(elevation.expiry)) {
+                    elevation.expiry = slid;
+                }
+            }
             return true;
         }
-        elevations.remove(key);
+        if (elevation != null) {
+            elevations.remove(key, elevation);
+        }
         return false;
     }
 
-    /// Marks `key` elevated for a fresh [TTL].
+    /// Marks `key` elevated for a fresh [TTL]. When the key already holds an
+    /// unexpired elevation, the fresh proof replaces it but keeps the later
+    /// expiry: someone re-verifying inside a 3-hour extension keeps the
+    /// remaining time and simply earns a new extension coupon.
     public void elevate(String key) {
-        elevations.put(key, Instant.now().plus(TTL));
+        Instant fresh = Instant.now().plus(TTL);
+        elevations.merge(key, new Elevation(fresh, false), (existing, unused) -> {
+            Elevation next = new Elevation(fresh, false);
+            if (existing.expiry.isAfter(next.expiry)) {
+                next.expiry = existing.expiry;
+            }
+            return next;
+        });
     }
 
     /// Stretches `key`'s elevation to `duration` from now, answering the new
-    /// expiry. The caller must have established elevation first (see
-    /// [#require]); extending a key that has none would mint authority out of
-    /// nothing, so this method refuses by answering `null`.
+    /// expiry, or `null` when there is nothing to stretch: no elevation, an
+    /// expired one, or one whose single extension coupon is already spent.
+    /// The caller must have established elevation first (see [#require]);
+    /// extending a key that has none would mint authority out of nothing.
     public @Nullable Instant extend(String key, Duration duration) {
+        Elevation elevation = elevations.get(key);
+        if (elevation == null) {
+            return null;
+        }
         Instant now = Instant.now();
-        Instant expiry = elevations.computeIfPresent(key, (k, old) -> old.isAfter(now) ? now.plus(duration) : null);
-        return expiry;
+        synchronized (elevation) {
+            if (!elevation.expiry.isAfter(now) || elevation.extended) {
+                return null;
+            }
+            elevation.expiry = now.plus(duration);
+            elevation.extended = true;
+            return elevation.expiry;
+        }
     }
 
     /// When `key`'s elevation expires, if it is elevated and its session
@@ -120,8 +156,8 @@ public final class DeveloperElevation {
             elevations.remove(key);
             return null;
         }
-        Instant expiry = elevations.get(key);
-        return expiry != null && expiry.isAfter(Instant.now()) ? expiry : null;
+        Elevation elevation = elevations.get(key);
+        return elevation != null && elevation.expiry.isAfter(Instant.now()) ? elevation.expiry : null;
     }
 
     /// Ends one key's elevation.
@@ -183,7 +219,17 @@ public final class DeveloperElevation {
         if (elevations.size() < 64) {
             return;
         }
-        elevations.entrySet().removeIf(entry -> !entry.getValue().isAfter(now));
+        elevations.entrySet().removeIf(entry -> !entry.getValue().expiry.isAfter(now));
+    }
+
+    private static final class Elevation {
+        private Instant expiry;
+        private boolean extended;
+
+        private Elevation(Instant expiry, boolean extended) {
+            this.expiry = expiry;
+            this.extended = extended;
+        }
     }
 
     private static final class Failures {
