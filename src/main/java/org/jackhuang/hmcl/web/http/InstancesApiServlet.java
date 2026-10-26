@@ -40,6 +40,7 @@ import org.jackhuang.hmcl.dsh.DshPortMode;
 import org.jackhuang.hmcl.dsh.DshPorts;
 import org.jackhuang.hmcl.dsh.DshProcessManager;
 import org.jackhuang.hmcl.dsh.DshTuiPlugins;
+import org.jackhuang.hmcl.dsh.FirstPartyPlugins;
 import org.jackhuang.hmcl.dsh.DshVersionManager;
 import org.jackhuang.hmcl.setting.GameDirectory;
 import org.jackhuang.hmcl.setting.GameDirectoryManager;
@@ -1013,6 +1014,7 @@ public final class InstancesApiServlet extends HttpServlet {
             json.addProperty("packageName", entry.packageName());
             json.addProperty("profile", entry.profile());
             json.addProperty("installed", installed);
+            json.addProperty("bundled", entry.bundled());
             // Whether this instance's harness line can run it at all. The page greys the
             // install button out on false rather than hiding the row: "this exists but your
             // instance is too old" is what the user needs to see (see DshTuiPlugins#fitsHost).
@@ -1021,13 +1023,58 @@ public final class InstancesApiServlet extends HttpServlet {
                 json.addProperty("requiresDsh", entry.requiresDsh());
             }
             if (installed) {
-                json.addProperty("installedVersion", declaredVersion(entry, dependencies));
+                json.addProperty("installedVersion", installedVersion(instance, entry, dependencies));
             }
             plugins.add(json);
+        }
+        // Which row the terminal button would start right now: the first installed entry
+        // whose files are there and whose host line fits. Several terminals may be installed
+        // on purpose (the ACP one is the fallback for a version that moves); the rest are
+        // standby, not broken.
+        String active = null;
+        try {
+            active = DshTui.terminalPlugin(instance).packageName();
+        } catch (DshException ignored) {
+            // Nothing is startable; no row claims to be active.
+        }
+        for (JsonElement element : plugins) {
+            JsonObject json = element.getAsJsonObject();
+            json.addProperty("active", json.get("packageName").getAsString().equals(active));
         }
         JsonObject body = new JsonObject();
         body.add("plugins", plugins);
         Json.write(response, body);
+    }
+
+    /// The version the profile really holds.
+    ///
+    /// A bundled plugin is installed from a tarball, and pnpm records that as `file:/…`
+    /// rather than a version; reading the installed manifest is what lets the page show
+    /// `0.1.0` for a plugin the jar provided, instead of a path.
+    private static @Nullable String installedVersion(DshInstance instance, DshTuiPlugins.Entry entry,
+                                                     java.util.Map<String, String> dependencies) {
+        String recorded = declaredVersion(entry, dependencies);
+        if (recorded != null && !recorded.startsWith("file:") && !recorded.startsWith("link:")) {
+            return recorded;
+        }
+        try {
+            Path manifest = DshPluginInstaller.profileNodeModules(instance.homeDirectory(), entry.profile())
+                    .resolve(entry.packageName()).resolve("package.json");
+            if (Files.isRegularFile(manifest)) {
+                com.google.gson.JsonElement parsed =
+                        com.google.gson.JsonParser.parseString(Files.readString(manifest));
+                if (parsed.isJsonObject()) {
+                    com.google.gson.JsonElement version = parsed.getAsJsonObject().get("version");
+                    if (version != null && version.isJsonPrimitive()) {
+                        return version.getAsString();
+                    }
+                }
+            }
+        } catch (IOException | RuntimeException | DshException e) {
+            org.jackhuang.hmcl.util.logging.Logger.LOG.debug(
+                    "Could not read the installed version of " + entry.packageName(), e);
+        }
+        return recorded;
     }
 
     /// The version a profile recorded for an entry, whatever case it was written in.
@@ -1077,12 +1124,29 @@ public final class InstancesApiServlet extends HttpServlet {
         // harness only has from 0.2.0 — so a 0.2-only plugin on an older instance is a
         // combination to refuse, not to install and discover at boot. Said before the task
         // is submitted, so nobody waits for pnpm just to be told the session would be empty.
+        //
+        // The host line is the one hard rule: a terminal written for services the instance
+        // does not have is a session that opens and cannot work. Installing *both* first-party
+        // terminals is deliberately allowed — the ACP one is the fallback for an instance
+        // whose version moves, and it stays dormant while the in-process one runs.
         if (install && !DshTuiPlugins.fitsHost(entry, instance.version())) {
             Json.error(response, HttpServletResponse.SC_CONFLICT,
                     DshTuiPlugins.hostMismatch(entry, instance.version()));
             return;
         }
-        java.util.List<String> specs = java.util.List.of(install ? entry.spec() : entry.packageName());
+        java.util.List<String> specs;
+        if (!install) {
+            specs = java.util.List.of(entry.packageName());
+        } else if (entry.bundled()) {
+            // Installed from the copy inside this jar. The tarball is written under the
+            // instance's home so a reinstall does not depend on a temp directory that a
+            // reboot cleaned.
+            Path tarball = FirstPartyPlugins.materialize(entry.packageName(),
+                    instance.homeDirectory().resolve(".first-party-plugins"));
+            specs = java.util.List.of("file:" + tarball.toAbsolutePath());
+        } else {
+            specs = java.util.List.of(entry.spec());
+        }
         submitPluginTask(install ? "tui-plugin-install" : "tui-plugin-remove",
                 instance, entry.profile(), specs, install, response);
     }

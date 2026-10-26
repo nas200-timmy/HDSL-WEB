@@ -120,6 +120,14 @@ export const I18N = {
 
   // ---- TUI 终端插件（实例「安装」页区段；见 DshTuiPlugins / DshApiServlet） ----
   "dsh.tui.title": "TUI 终端插件",
+  "dsh.tui.bundled": "面板自带",
+  "dsh.tui.bundled.hint": "这个插件随面板一起发布，jar 里带着安装包，装它不需要联网。",
+  "dsh.tui.rules":
+    "两条规则：低版本实例装不了要求更高版本的插件（按钮会灰掉并写明缺什么）；两个第一方终端**可以同时装**——0.2.x 用进程内那个，ACP 那个作为退路，实例版本一变就自动接管，同时装时只有一个在跑（列表标出「当前生效」）。",
+  "dsh.tui.active": "当前生效",
+  "dsh.tui.active.hint": "点「终端」时启动的就是它。",
+  "dsh.tui.standby": "备用",
+  "dsh.tui.standby.hint": "已安装但此刻不会启动：另一个终端能跑时它待命，实例版本变化后它会自动接管。",
   "dsh.tui.intro":
     "dsh 本身没有终端界面（DshSurface 只有 WEB/HEADLESS/ACP/SDK），终端由社区插件提供。这里选一个装进它自己的 profile，装好后用实例页的「终端」打开——终端就从这个 profile 启动。",
   "dsh.tui.notice.title": "免责声明：面板只做安装搬运，不改 dsh 任何源码",
@@ -146,8 +154,8 @@ export const I18N = {
   "dsh.tui.not_installed": "未安装",
   "dsh.tui.pure_bundle": "纯插件：无自带入口，启动它的 profile 即为终端（dsh --profile %s）",
   "dsh.tui.bin": "自带入口：%s（优先直接运行，入口缺失时回退到启动 profile）",
-  "dsh.tui.requires_dsh": "要求 dsh %s：它的工具面来自 0.2.0 起的 agent-preset 层，旧宿主上装上也只会得到没有工具的会话。",
-  "dsh.tui.host_mismatch": "这个实例的 dsh 太旧，装上也只会得到没有工具面的会话：%s",
+  "dsh.tui.requires_dsh": "要求 dsh %s。",
+  "dsh.tui.host_mismatch": "这个实例的 dsh 版本不满足要求，装上也无法启动：面板会拒绝安装。",
   "dsh.tui.install": "安装",
   "dsh.tui.remove": "卸载",
   "dsh.tui.loading": "正在读取终端插件清单…",

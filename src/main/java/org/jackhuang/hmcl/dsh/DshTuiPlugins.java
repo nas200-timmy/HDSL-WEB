@@ -74,6 +74,12 @@ public final class DshTuiPlugins {
     /// @param profile     the profile it is installed into and started from
     /// @param requiresDsh the harness line this plugin needs, or `null` when it starts on
     ///                    any published line — see [fitsHost]
+    /// @param bundled     whether the panel ships this plugin inside its own jar (see
+    ///                    [FirstPartyPlugins]) instead of fetching it from npm
+    /// @param runtimeGroup a name shared by entries that are alternatives **at run time**:
+    ///                    several may be installed on purpose — the ACP terminal is the
+    ///                    fallback for an instance whose version moves — but only the first
+    ///                    fitting one is started (see `DshTui#terminalPlugin`)
     public record Entry(
             String id,
             String packageName,
@@ -84,7 +90,9 @@ public final class DshTuiPlugins {
             String description,
             @Nullable String bin,
             String profile,
-            @Nullable String requiresDsh) {
+            @Nullable String requiresDsh,
+            boolean bundled,
+            @Nullable String runtimeGroup) {
 
         /// Returns the specification the installer is given.
         ///
@@ -112,6 +120,41 @@ public final class DshTuiPlugins {
     /// README (the profile and the harness line), not from a description of it.
     public static final @Unmodifiable List<Entry> ENTRIES = List.of(
             new Entry(
+                    "dsh-inproc-tui",
+                    "@nas200-timmy/dsh-inproc-tui",
+                    "0.1.0",
+                    "DSH TUI（进程内）",
+                    "https://github.com/nas200-timmy/HDSL-WEB",
+                    "GPL-3.0-or-later",
+                    "面板自带的进程内终端（dsh 0.2.x）：真·逐字流式、思考增量、dsh 自己的工具卡片、"
+                            + "审批与追问、模型/推理强度切换、会话恢复与压缩。纯 bundle。与 ACP 版可以"
+                            + "同时装——它跑不了时由 ACP 版接管。",
+                    null,
+                    "dsh-inproc-tui",
+                    // A bundle over dsh-base: it uses the 0.2.x agent/stream/approval seams
+                    // directly. Verified on 0.2.0-rc.2 and 0.2.1-rc.3 — the 0.2.0 line is
+                    // where those seams first appear, so that is the floor.
+                    ">=0.2.0-rc.2",
+                    true,
+                    "dsh-terminal"),
+            new Entry(
+                    "dsh-acp-tui",
+                    "@nas200-timmy/dsh-acp-tui",
+                    "0.1.0",
+                    "DSH ACP TUI（兼容备用）",
+                    "https://github.com/nas200-timmy/HDSL-WEB",
+                    "GPL-3.0-or-later",
+                    "面板自带的 ACP 终端：kimi-code 风格的记录区、输入框、状态栏、工具卡片与"
+                            + "模型/会话选择器，零外部依赖，通过 ACP 与 dsh 通信。**绝对的兼容选项**——"
+                            + "实例升级/降级后都能当退路，装完即离线可用。",
+                    "dsh-acp-tui",
+                    "dsh-acp-tui",
+                    // It speaks ACP over stdio and imports no harness package, so it runs on
+                    // every line whose CLI ships the acp profile template (0.1.2-rc.1 onwards).
+                    ">=0.1.2-rc.1",
+                    true,
+                    "dsh-terminal"),
+            new Entry(
                     "deepseek-harness-tui",
                     "@deepseek-harness-tui/dsh-tui",
                     "0.17.0",
@@ -125,6 +168,8 @@ public final class DshTuiPlugins {
                     // Its peers span both lines (`^0.1.0-rc.6 … 0.2.1-rc.3`), so it is the one
                     // entry that starts on a 0.1.x harness; that is also why it carries no
                     // preset layer of its own.
+                    null,
+                    false,
                     null),
             new Entry(
                     "tianshu-tui",
@@ -138,7 +183,9 @@ public final class DshTuiPlugins {
                     null,
                     "tui",
                     // README: 需 ≥ 0.2.0-rc.1（npm next）；peers 全是 ^0.2.0-rc.1。
-                    ">=0.2.0-rc.1"),
+                    ">=0.2.0-rc.1",
+                    false,
+                    null),
             new Entry(
                     "tomowang-tui",
                     "@tomowang/dsh-tui",
@@ -151,7 +198,9 @@ public final class DshTuiPlugins {
                     null,
                     "tui",
                     // peers 全是 ^0.2.1-rc.3。
-                    ">=0.2.1-rc.3"),
+                    ">=0.2.1-rc.3",
+                    false,
+                    null),
             new Entry(
                     "pi-tui",
                     "@xmoon76/dsh-pi-tui",
@@ -163,7 +212,9 @@ public final class DshTuiPlugins {
                     null,
                     "pi-tui",
                     // 唯一把要求直接写出来的一个：`engines.dsh: >=0.2.1-rc.2`。
-                    ">=0.2.1-rc.2"));
+                    ">=0.2.1-rc.2",
+                    false,
+                    null));
 
     private DshTuiPlugins() {
     }
@@ -240,11 +291,47 @@ public final class DshTuiPlugins {
     /// @param harnessVersion the dsh version the instance runs, or `null` when unknown
     /// @return the refusal text
     public static String hostMismatch(Entry entry, @Nullable String harnessVersion) {
+        String host = harnessVersion == null || harnessVersion.isBlank() ? "未知版本" : harnessVersion;
+        if (entry.bundled() && entry.hasExecutable()) {
+            return entry.packageName() + " 需要 dsh " + entry.requiresDsh() + "，这个实例是 " + host
+                    + "。它通过 ACP 与 dsh 通信，而 ACP 的 profile 模板从 dsh 0.1.2-rc.1 起才有；"
+                    + "旧宿主没有这个模板，终端会起不来。请把实例升级到要求的 dsh 版本，或改用 "
+                    + alternativeFor(entry, harnessVersion) + "。";
+        }
+        if (entry.bundled()) {
+            return entry.packageName() + " 需要 dsh " + entry.requiresDsh() + "，这个实例是 " + host
+                    + "。它跑在 harness 进程里，用的是 0.2.x 才有的 agent 流、审批与模型选择服务；"
+                    + "旧宿主没有这些接缝，插件装上也起不来。请把实例升级到要求的 dsh 版本，或改用 "
+                    + alternativeFor(entry, harnessVersion) + "（走 ACP，旧版本也能跑）。";
+        }
         return entry.packageName() + " 需要 dsh " + entry.requiresDsh() + "，这个实例是 "
-                + (harnessVersion == null || harnessVersion.isBlank() ? "未知版本" : harnessVersion)
+                + host
                 + "。它的工具面来自 dsh 0.2.0 起的 agent-preset 层，装在旧宿主上只会得到一个"
                 + "「没有工具面」的会话。请把实例升级到要求的 dsh 版本，或改用 "
                 + spanningEntry() + "（它的 peer 跨两条线）。";
+    }
+
+    /// The first other entry that can actually run on this host.
+    ///
+    /// For a bundled entry the alternative should be the panel's own fallback when there is
+    /// one — on a 0.1.x instance, the in-process terminal's answer is the ACP one, not a
+    /// community package that merely happens to declare no floor.
+    ///
+    /// @param entry          the entry that does not fit
+    /// @param harnessVersion the host line, or `null` when unknown
+    /// @return the package name to offer
+    private static String alternativeFor(Entry entry, @Nullable String harnessVersion) {
+        for (Entry candidate : ENTRIES) {
+            if (candidate != entry && candidate.bundled() && fitsHost(candidate, harnessVersion)) {
+                return candidate.packageName();
+            }
+        }
+        for (Entry candidate : ENTRIES) {
+            if (candidate != entry && fitsHost(candidate, harnessVersion)) {
+                return candidate.packageName();
+            }
+        }
+        return spanningEntry();
     }
 
     /// The entry that starts on any published harness line, named in [hostMismatch] as the

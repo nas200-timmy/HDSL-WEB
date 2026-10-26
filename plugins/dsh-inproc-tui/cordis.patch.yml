@@ -1,0 +1,25 @@
+# The dsh-inproc-tui bundle patch: an interactive terminal mode over dsh-base.
+#
+# A terminal interface is an app plugin, so it goes in a profile of its own and
+# never shares `web`. The profile lists this package as a bundle; installing it
+# appends the row below to the profile's bundle list, and booting
+# `dsh --profile dsh-inproc-tui` composes dsh-base, this patch, and then the terminal.
+#
+# There is no Host, no HTTP server, no browser plugin here: the terminal is the
+# whole application, and it drives the harness's own agent, tools, approval and
+# question services in-process. That is also why this plugin is 0.2.x-only —
+# those are internal seams, not the ACP contract the other terminal uses.
+
+# The coding-agent persona, model-interpolated by the harness.
+- id: system-prompt
+  config:
+    personaPrefix: You are a coding agent powered by the {{model}} model.
+
+# Module-reload redraws would fight the terminal; the launcher's watch-only
+# fallback keeps the user patch layers live.
+- id: hmr
+  disabled: true
+
+- insert:
+    - id: dsh-inproc-tui
+      name: '@nas200-timmy/dsh-inproc-tui'

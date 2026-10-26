@@ -2,6 +2,42 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.5.85 — 未发布 · 面板自带两个第一方终端（进程内 / ACP）
+
+面板开始带自己的终端插件：仓库根下新增 `plugins/`，一个目录一个 npm 包；构建时打成 npm
+布局的 tarball 塞进 jar（`first-party-plugins/index.json` + `.tgz`），安装时由
+`FirstPartyPlugins` 从 jar 写出、以 `file:` 规格交给 `dsh plugin add`——**离线可装**，
+不需要 registry，也不需要构建机上有 npm。
+
+两个终端，两种形状：
+
+- **`@nas200-timmy/dsh-inproc-tui`**（profile `dsh-inproc-tui`）：**mode bundle**，叠在
+  `dsh-base` 上、跑在 harness 进程里。因此拿到 ACP 给不了的东西：`agent/assistant-stream`
+  的 token 级文本与思考增量、`tool/call`+`tool/result` 的工具卡片（工具本身仍是 dsh 的）、
+  `approval/request` 审批、`user-questions/request` 追问、`model/selection` 进程内切换、
+  `/resume` 与 `/compact`。`requiresDsh >=0.2.0-rc.2`（实测 0.2.0-rc.2 / 0.2.1-rc.3）。
+- **`@nas200-timmy/dsh-acp-tui`**（profile `dsh-acp-tui`，bin `dsh-acp-tui`）：**独立程序**，
+  不 import 任何 harness 包，用 ACP v1 与 `dsh --profile acp` 通信。**绝对的兼容选项**，
+  `>=0.1.2-rc.1` 起都能跑（实测 0.1.2-rc.1 / 0.1.7-rc.2 / 0.2.1-rc.3），也是同实例版本
+  来回变时的退路。
+
+安装与运行规则：
+
+- **两个可以同时装，但只有一个在跑**：清单顺序是偏好（0.2.x 优先进程内），启动时取第一个
+  「已装 + 文件在 + `fitsHost`」的条目；版本降下去后进程内那个不再匹配，ACP 自动接管。
+  列表每行多一个 `active`，页面标「当前生效 / 备用」。
+- **安装期只有一条硬规则**：低版本实例装不了要求更高版本的插件（按钮灰掉 + 服务端 409，
+  不隐藏该行）；装第一个方终端不再被拒。
+
+渲染层抽到 `plugins/shared` 给两个终端共用。它在仓库里位于插件目录之外、安装后又必须在包内
+（`package/shared`）——Gradle 的 staging 任务负责搬运并把 import 路径改写过去，源码保持可读、
+tarball 保持自包含。
+
+测试：`FirstPartyPluginsTest`（索引、摘要、npm 布局、目录与构建版本一致）、
+`DshTuiPluginsTest`（首方条目、运行分组、宿主区间）、`DshTuiTest`（两版同装时当前线跑进程内、
+旧线 ACP 接管）、`PluginApiTest`（清单带 `bundled`/`active`、首方安装走本地 tarball 且落进
+自己的 profile）。
+
 ## v0.5.84 — 2026-10-26 · 开发者提权升级、终端会话生命周期、手机窄屏适配
 
 - **提权可延长、可撤销**：开发者提权不再锁死 30 分钟——「设置 → 开发者」页可以主动停止

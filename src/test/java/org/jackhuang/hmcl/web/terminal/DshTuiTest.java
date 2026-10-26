@@ -125,8 +125,7 @@ class DshTuiTest {
     @Test
     void aPluginThatShipsItsOwnExecutableIsStartedWithNode(@TempDir Path home) throws Exception {
         DshInstance instance = instanceWith(home, "web");
-        DshTuiPlugins.Entry plugin = DshTuiPlugins.ENTRIES.get(0);
-        assertEquals("@deepseek-harness-tui/dsh-tui", plugin.packageName());
+        DshTuiPlugins.Entry plugin = DshTuiPlugins.find("@deepseek-harness-tui/dsh-tui").orElseThrow();
         assertEquals("dsh-tui", plugin.profile(), "the profile is the plugin's own, not the instance's");
         assertTrue(plugin.hasExecutable());
         install(instance, plugin.profile(), plugin.packageName());
@@ -163,7 +162,7 @@ class DshTuiTest {
     @Test
     void aDeclaredPluginWithNoFilesIsRefusedRatherThanBooted(@TempDir Path home) throws Exception {
         DshInstance instance = instanceWith(home, "web");
-        DshTuiPlugins.Entry plugin = DshTuiPlugins.ENTRIES.get(0);
+        DshTuiPlugins.Entry plugin = DshTuiPlugins.find("@deepseek-harness-tui/dsh-tui").orElseThrow();
         assertTrue(plugin.hasExecutable());
         declareOnly(instance, plugin.profile(), plugin.packageName());
 
@@ -284,7 +283,8 @@ class DshTuiTest {
 
     @Test
     void theRecommendedPluginWinsWhenSeveralAreInstalled(@TempDir Path home) throws Exception {
-        DshInstance instance = instanceWith(home, "web");
+        // The first entry is the in-process bundle, which needs the 0.2.x seams.
+        DshInstance instance = instanceWith(home, "web", "0.2.1-rc.3");
         DshTuiPlugins.Entry recommended = DshTuiPlugins.ENTRIES.get(0);
         // Each in its own profile — the profiles differ, and that is the point.
         install(instance, "tui", "@tomowang/dsh-tui");
@@ -292,6 +292,28 @@ class DshTuiTest {
 
         assertEquals(recommended.packageName(), DshTui.terminalPlugin(instance).packageName(),
                 "the list's order is the preference");
+    }
+
+    /// Both terminals may be installed at once; which one runs is the list order plus
+    /// `fitsHost`. On the current line the in-process one runs, on an older one the ACP
+    /// terminal takes over — the version-bounce case the pair exists for.
+    @Test
+    void theInProcessTerminalRunsFirstOnTheCurrentLine(@TempDir Path home) throws Exception {
+        DshInstance instance = instanceWith(home, "web", "0.2.1-rc.3");
+        install(instance, "dsh-acp-tui", "@nas200-timmy/dsh-acp-tui");
+        install(instance, "dsh-inproc-tui", "@nas200-timmy/dsh-inproc-tui");
+
+        assertEquals("@nas200-timmy/dsh-inproc-tui", DshTui.terminalPlugin(instance).packageName());
+    }
+
+    @Test
+    void theAcpTerminalTakesOverWhenTheInProcessOneCannotRun(@TempDir Path home) throws Exception {
+        DshInstance instance = instanceWith(home, "web", "0.1.7-rc.1");
+        install(instance, "dsh-inproc-tui", "@nas200-timmy/dsh-inproc-tui");
+        install(instance, "dsh-acp-tui", "@nas200-timmy/dsh-acp-tui");
+
+        assertEquals("@nas200-timmy/dsh-acp-tui", DshTui.terminalPlugin(instance).packageName(),
+                "the fallback is what runs when the fuller terminal cannot fit the host");
     }
 
     @Test

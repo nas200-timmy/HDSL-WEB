@@ -122,6 +122,8 @@ export interface TuiPluginItem {
   profile: string;
   /** 这套插件要求的 dsh 主线（缺省 = 任何已发布线都能起）；工具面靠 0.2.0 起的 agent-preset 层 */
   requiresDsh?: string | null;
+  /** 面板自带：安装包在 jar 里，走本地 tarball，不需要 npm registry */
+  bundled?: boolean;
 }
 
 /** 某个实例上候选 TUI 插件的安装状态（GET /api/instances/{id}/tui-plugins 的一条） */
@@ -136,6 +138,8 @@ export interface TuiPluginState {
   fitsHost?: boolean;
   /** 这套插件要求的 dsh 主线（缺省 = 任何已发布线） */
   requiresDsh?: string;
+  /** 点「终端」时实际会启动的那一个（可以装多个，只有一个生效） */
+  active?: boolean;
 }
 
 export interface TaskApproval {

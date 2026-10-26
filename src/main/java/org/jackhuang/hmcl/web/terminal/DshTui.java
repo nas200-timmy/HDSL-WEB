@@ -119,6 +119,11 @@ public final class DshTui {
         environment.putAll(plan.environment());
         environment.put("TERM", "xterm-256color");
         environment.put("COLORTERM", "truecolor");
+        // A terminal interface that is a program rather than a mode bundle spawns the
+        // instance's own harness. Handing it the entry point is what keeps that spawn from
+        // guessing: it must be *this* instance's dsh (its version, its home), not a `dsh`
+        // that happens to be first on PATH.
+        environment.put("HSDL_DSH_ENTRY", instance.dshEntryPoint().toString());
         return new TerminalTarget("dsh", instance.id(), command, plan.workingDirectory(),
                 Map.copyOf(environment));
     }

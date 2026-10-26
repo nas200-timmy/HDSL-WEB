@@ -144,6 +144,10 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
         {I18N["dsh.tui.intro"]} {I18N["dsh.tui.profile.not_listed"]}
       </div>
 
+      <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+        {I18N["dsh.tui.rules"]}
+      </div>
+
       {!installed ? (
         <p className="hint info" style={{ margin: 0 }}>
           {I18N["dsh.tui.needs_install"]}
@@ -167,6 +171,9 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
           // 缺字段（旧面板）当作能装：宁可让后端拒绝，也不要在界面上凭空禁用
           const fitsHost = state?.fitsHost !== false;
           const requiresDsh = state?.requiresDsh ?? plugin.requiresDsh ?? null;
+          // Several terminals can be installed on purpose (the ACP one is the fallback for a
+          // version that moves); exactly one is what the terminal button starts.
+          const active = state?.active === true;
           const shownVersion = isPresent ? state?.installedVersion ?? plugin.version : plugin.version;
           return (
             <div key={plugin.id}>
@@ -183,6 +190,21 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
                     <span className="tag" title={plugin.profile}>
                       {I18N["dsh.tui.profile"]}: {plugin.profile}
                     </span>
+                    {plugin.bundled && (
+                      <span className="tag running" title={I18N["dsh.tui.bundled.hint"]}>
+                        {I18N["dsh.tui.bundled"]}
+                      </span>
+                    )}
+                    {isPresent && active && (
+                      <span className="tag running" title={I18N["dsh.tui.active.hint"]}>
+                        {I18N["dsh.tui.active"]}
+                      </span>
+                    )}
+                    {isPresent && !active && (
+                      <span className="tag plain" title={I18N["dsh.tui.standby.hint"]}>
+                        {I18N["dsh.tui.standby"]}
+                      </span>
+                    )}
                   </span>
                   <span className="tlli-subtitle" style={{ lineHeight: 1.6 }}>
                     {plugin.description}
@@ -214,9 +236,10 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
                   {requiresDsh && (
                     <span
                       className="tlli-subtitle"
-                      style={{ lineHeight: 1.6, color: fitsHost ? undefined : "var(--monet-error)" }}
+                      style={{ lineHeight: 1.6, color: fitsHost ? undefined : "var(--monet-warning, #b26a00)" }}
                     >
                       {I18N["dsh.tui.requires_dsh"].replace("%s", requiresDsh)}
+                      {!fitsHost && ` — ${I18N["dsh.tui.host_mismatch"]}`}
                     </span>
                   )}
                 </span>
@@ -233,7 +256,7 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
                     <button
                       className="btn btn-raised ripple-host"
                       disabled={busy === plugin.packageName || !fitsHost}
-                      title={fitsHost ? undefined : I18N["dsh.tui.host_mismatch"].replace("%s", requiresDsh ?? "")}
+                      title={fitsHost ? undefined : I18N["dsh.tui.host_mismatch"]}
                       onClick={() => void submit(plugin, true)}
                     >
                       {I18N["dsh.tui.install"]}

@@ -403,10 +403,23 @@ class PluginApiTest {
             }
 
             JsonObject recommended = plugins.get(0).getAsJsonObject();
-            assertEquals("@deepseek-harness-tui/dsh-tui", recommended.get("packageName").getAsString(),
-                    "the one developed against the harness's own releases comes first");
-            assertEquals("dsh-tui", recommended.get("bin").getAsString());
-            assertEquals("dsh-tui", recommended.get("profile").getAsString());
+            assertEquals("@nas200-timmy/dsh-inproc-tui", recommended.get("packageName").getAsString(),
+                    "the panel's fuller in-process terminal comes first");
+            assertTrue(recommended.get("bundled").getAsBoolean(),
+                    "and the page can say it ships with the panel");
+            assertTrue(recommended.get("bin").isJsonNull(), "a mode bundle ships no program");
+            assertEquals("dsh-inproc-tui", recommended.get("profile").getAsString());
+
+            // The ACP terminal is the second first-party entry, and it does ship one.
+            JsonObject acp = plugins.get(1).getAsJsonObject();
+            assertEquals("@nas200-timmy/dsh-acp-tui", acp.get("packageName").getAsString());
+            assertEquals("dsh-acp-tui", acp.get("bin").getAsString());
+            assertTrue(acp.get("bundled").getAsBoolean());
+
+            // The community entry the panel used to recommend is still offered, not gone.
+            JsonObject community = plugins.get(2).getAsJsonObject();
+            assertEquals("@deepseek-harness-tui/dsh-tui", community.get("packageName").getAsString());
+            assertFalse(community.get("bundled").getAsBoolean());
             // The one that needs Bun to run is no longer offered.
             for (int i = 0; i < plugins.size(); i++) {
                 assertNotEquals("@ruhooai/dsh-tui", plugins.get(i).getAsJsonObject().get("packageName").getAsString());

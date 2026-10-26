@@ -269,6 +269,30 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     "重新安装这个"。清单与许可证/仓库/profile 由 `GET /api/dsh/tui-plugins` 提供
     （`web/http/DshApiServlet`）；许可证含 Apache-2.0（`@huiliyi37/dsh-tianshu-tui`）。
     `@ruhooai/dsh-tui`（bin 需要 Bun + 外部 `cordis.yml`）与 `@zhangweiii/dsh-tui` 已不在清单里。
+  - **两个第一方终端可以同时装，但只有一个在跑**：`dsh-inproc-tui` 与 `dsh-acp-tui` 是同一个
+    终端面的两种实现，清单给两者同一个 `runtimeGroup`（`dsh-terminal`，社区插件不分组）。
+    装两个是**允许且有用**的——ACP 那个是实例版本变来变去时的退路。启动时按清单顺序取第一个
+    「已装 + 文件在 + fitsHost」的条目：0.2.x 用进程内那个，ACP 待命；版本降下去之后进程内
+    那个不再匹配，ACP 自动接管。`GET …/tui-plugins` 每行多一个 `active`，页面据此标
+    「当前生效 / 备用」。卸载永远不拒。
+  - **面板自带的第一方终端（进程内）**：`plugins/dsh-inproc-tui`（`@nas200-timmy/dsh-inproc-tui`，
+    profile `dsh-inproc-tui`）。它是 mode bundle：清单里没有 bin，安装后 `dsh plugin add` 会把它
+    加进该 profile 的 `dsh.profile.bundles`，面板按纯 bundle 的路径启动
+    `node <bin.js> --profile dsh-inproc-tui`。它跑在 harness 进程里，所以有 token 级流式、审批
+    与追问、进程内模型切换；`requiresDsh = ">=0.2.0-rc.2"`（实测 0.2.0-rc.2 / 0.2.1-rc.3），
+    旧宿主由清单跳过、退回下面的 ACP 终端。渲染层与 ACP 终端共用 `plugins/shared`
+    （打包时随 tarball 一起进入 `package/shared`）。
+  - **面板自带的第一方终端（ACP，兼容备用）**：`plugins/dsh-acp-tui`（包名
+    `@nas200-timmy/dsh-acp-tui`，profile `dsh-acp-tui`）。它和其它条目走同一条安装与启动路径，
+    只有两点不同：**装**的时候 `FirstPartyPlugins` 把 jar 里的 tarball 写到
+    `<DSH_HOME>/.first-party-plugins/`，安装规格是 `file:<tarball>`（离线可用，没有 registry
+    也不失败）；**起**的时候因为它是 bin 型，面板跑
+    `node <profile>/node_modules/@nas200-timmy/dsh-acp-tui/bin/dsh-acp-tui.js`，并把
+    `HSDL_DSH_ENTRY=<instance.dshEntryPoint()>` 放进环境——它自己 spawn 该实例的
+    `dsh --profile acp`，用 ACP v1 通信，不 import 任何 harness 包。`requiresDsh` 是
+    `>=0.1.2-rc.1`：ACP 的 profile 模板从那一版才有（实测 0.1.2-rc.1 / 0.1.7-rc.2 / 0.2.1-rc.3
+    都能跑）。它是**绝对的兼容选项**，也是同实例版本来回变时的退路。新增第一方插件见
+    [plugins/README.md](../plugins/README.md)。
   - **终端死了要留话**：子进程非零退出且**一个字节都没输出**时，应用日志写一条
     （`TerminalSession`，实例 / 退出码 / 没有输出），退出帧带 `failedWithoutOutput`
     （`docs/terminal-protocol.md §3`），前端在"会话已结束 (N)"下面补一句可行动的提示。
