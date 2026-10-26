@@ -88,6 +88,14 @@ Two shapes are supported, and the panel starts each the way its manifest says:
   process writing ANSI to a terminal, exactly like any other terminal application.
   This shape is what makes it portable to 0.1.x: it only needs the ACP profile
   template.
+  Two profiles are in play and they are not interchangeable: the package's own profile
+  (`dsh-acp-tui`) is where its **files** live, while the harness boots the **`acp`**
+  template. The panel plans for `acp` (the launcher writes the account's supplier route
+  and default model into the profile a launch boots) and passes the same name in
+  `HSDL_TUI_ACP_PROFILE`, so the route is in the profile that runs. Nothing renames keys
+  on the way: a third-party account's key stays under `HSDL_LAUNCH_API_KEY_<route>`, which
+  the route itself reads; `DEEPSEEK_API_KEY` is set by the launcher for DeepSeek accounts
+  only, because the web-search entry behind it is DeepSeek's service.
 - **A mode bundle (`dsh.bundle`)** — `dsh-inproc-tui`. The panel installs it and boots
   its profile (`dsh --profile dsh-inproc-tui`), exactly like the community bundles. The
   plugin runs inside the harness process, which is what buys token-level streaming and

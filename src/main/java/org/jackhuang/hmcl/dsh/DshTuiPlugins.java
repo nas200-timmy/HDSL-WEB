@@ -22,6 +22,7 @@ import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Unmodifiable;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /// The community's terminal interfaces for DeepSeek Harness, as a curated list.
@@ -218,6 +219,29 @@ public final class DshTuiPlugins {
 
     private DshTuiPlugins() {
     }
+
+    /// The harness profile a terminal plugin boots, when that is not its own profile.
+    ///
+    /// A plugin that ships an executable is started directly and boots the harness itself, so which
+    /// profile runs is **its** choice, not the catalogue's: the panel only knows it has to match.
+    /// The ACP terminal speaks to the harness's own `acp` template — the one that mounts the ACP
+    /// server — and nothing else; its own profile (`dsh-acp-tui`) is where its files live.
+    ///
+    /// The distinction matters beyond a label: the launcher writes the account's supplier route and
+    /// default model into the profile it is told the launch boots. Written into one profile while
+    /// the harness boots the other, the route is invisible — the account simply does not work.
+    ///
+    /// A pure bundle boots its own profile (`dsh --profile <its profile>`), so it has no entry here.
+    ///
+    /// @param entry the catalogue entry
+    /// @return the profile the plugin's own program boots, or `null` when it is the entry's profile
+    public static @Nullable String harnessProfile(Entry entry) {
+        return HARNESS_PROFILES.get(entry.packageName());
+    }
+
+    /// The profiles a plugin's own program boots, by package name — see [harnessProfile].
+    private static final Map<String, String> HARNESS_PROFILES = Map.of(
+            "@nas200-timmy/dsh-acp-tui", "acp");
 
     /// Looks an entry up by package name.
     ///

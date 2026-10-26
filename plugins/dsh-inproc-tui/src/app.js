@@ -159,6 +159,10 @@ export class TerminalApp {
         this.pushNotice(`${this.failureText(this.session.resumeFailure)} — starting a new session`, 'error')
       }
       this.syncSelection()
+      // A launch that was asked to resume has to show what it resumed: the log is
+      // the only record of those turns, and a banner alone reads as an empty
+      // conversation. `/resume` does the same; this is the way in from the panel.
+      if (resumed) this.replayHistory(this.session.history())
       this.pushNotice(resumed
         ? this.i18n.t('banner.resume', { id: shortId(this.session.sessionId) })
         : this.i18n.t('notice.ready', { version: process.env.HDSL_INSTANCE_VERSION ?? '0.2.x' }), 'info')
@@ -1204,7 +1208,8 @@ export class TerminalApp {
     this.activity = { tool: null, startedAt: null }
     this.turnStartedAt = null
     this.streaming = { text: null, reasoning: null }
-    if (this.session.ready) {
+    const running = this.status === 'working' || this.session.busy
+    if (this.session.ready && running) {
       this.session.cancel()
       await this.session.settle()
     }

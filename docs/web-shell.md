@@ -245,7 +245,9 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     `dsh plugin add` 退出 0 之后还要看 `node_modules/<包>` 是否真的在（`DshPluginInstaller.requireLanded`；
     只验 registry 型 spec，`file:`/`link:`/`github:`/URL 的名字从文本里读不出来，误判会打断正常安装），
     不在就把任务判失败。这个状态**不再被当成已安装**：`terminalPlugin` 同时要求 manifest 声明
-    与文件真的在（有 bin 的包还要求它声明的入口存在），否则用同一句可行动的中文拒绝
+    与文件真的在——**目录里还要有 `package.json`**（`pnpm` 在建目录之后才拉包，中途失败或被删
+    内容会留下一个空壳，而纯 bundle 是从清单指定的 patch 组合出来的，没有清单就什么都引导不了），
+    有 bin 的包还要求它声明的入口存在，否则用同一句可行动的中文拒绝
     （"声明了 X 但文件不在，请重新安装"），而不是去启动一个空 profile。
     列表接口把这两件事分开说：`installed` 是 manifest 的答案，`filesPresent` 是磁盘的答案；
     `installed && !filesPresent` 的那一行在页面上标「安装未完成」（变灰说明原因，不隐藏），
@@ -291,11 +293,15 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     `<DSH_HOME>/.first-party-plugins/`，安装规格是 `file:<tarball>`（离线可用，没有 registry
     也不失败）；**起**的时候因为它是 bin 型，面板跑
     `node <profile>/node_modules/@nas200-timmy/dsh-acp-tui/bin/dsh-acp-tui.js`，并把
-    `HSDL_DSH_ENTRY=<instance.dshEntryPoint()>` 放进环境——它自己 spawn 该实例的
-    `dsh --profile acp`，用 ACP v1 通信，不 import 任何 harness 包。`requiresDsh` 是
+    `HSDL_DSH_ENTRY=<instance.dshEntryPoint()>` 与 `HSDL_TUI_ACP_PROFILE=acp` 放进环境——它自己
+    spawn 该实例的 `dsh --profile acp`，用 ACP v1 通信，不 import 任何 harness 包。`requiresDsh` 是
     `>=0.1.2-rc.1`：ACP 的 profile 模板从那一版才有（实测 0.1.2-rc.1 / 0.1.7-rc.2 / 0.2.1-rc.3
     都能跑）。它是**绝对的兼容选项**，也是同实例版本来回变时的退路。新增第一方插件见
     [plugins/README.md](../plugins/README.md)。
+    **两个 profile 别混**：它自己的 `dsh-acp-tui` 只存放文件，真正引导的是 harness 自己的 `acp`
+    模板。账户的供应商路由/default model 由 launcher 写进"这次启动引导的 profile"，所以开终端时
+    的启动计划是按 `acp` 建的（`DshTui.runProfile`），环境里也把同一个名字告诉它
+    （`HSDL_TUI_ACP_PROFILE`）——写在存储 profile 里的路由，运行中的 harness 是看不见的。
   - **第一方终端的可靠性约定**（两个都适用）：粘贴走 bracketed paste，由 `keys.js` 解出
     `{name:'paste', text}` 交给 composer（CRLF 归一化后插入；对话框打开时忽略，不写进看不见的输入框）；
     握手/子进程死亡/信号退出都会还原终端并清掉定时器，**失败的启动不会留下一个常驻进程**；

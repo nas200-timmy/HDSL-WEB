@@ -28,6 +28,15 @@ const TICK_MS = 33
 const ESC_DELAY_MS = 25
 const REVEAL_PER_FRAME = 24
 const REVEAL_MAX_FRAMES = 26
+/**
+ * How long a session switch waits for the turn it cancelled.
+ *
+ * A cancel is a notification: the harness stops when it gets to it, and the
+ * `session/prompt` it is running answers afterwards. A switch waits for that
+ * answer, but never forever — a tool parked on an approval keeps the turn alive
+ * and the terminal must still be able to move on.
+ */
+const TURN_SETTLE_MS = 2_000
 
 /** Commands offered by `/` and by the help dialog. */
 const COMMANDS = [
@@ -52,6 +61,7 @@ export class App {
    *   cwd: string,
    *   harness: {command: string[], source: string, profile: string},
    *   resume: string | null,
+   *   turnSettleMs?: number,
    * }} options
    */
   constructor(options) {
@@ -61,6 +71,8 @@ export class App {
     this.cwd = options.cwd
     this.harness = options.harness
     this.resume = options.resume
+    /** How long a session switch waits for the turn in flight to settle. */
+    this.turnSettleMs = options.turnSettleMs ?? TURN_SETTLE_MS
 
     this.language = detectLanguage(this.env)
     this.i18n = createI18n(this.language)
@@ -90,6 +102,13 @@ export class App {
     this.quitArmedAt = null
     this.pendingPermission = null
     this.permissionQueue = []
+    /**
+     * Identifies the turn that owns the screen. A switch bumps it, which is what
+     * makes a still-running `session/prompt` a no-op when it finally answers.
+     */
+    this.turnSerial = 0
+    /** The `session/prompt` in flight, or `null`; awaited by a switch, never by a cancel. */
+    this.pendingTurn = null
     this.startupError = null
     this.exitCode = 0
     this.exitDetail = ''
@@ -229,14 +248,13 @@ export class App {
     const env = { ...process.env, ...this.env }
     env.TERM = env.TERM ?? 'xterm-256color'
     env.COLORTERM = env.COLORTERM ?? 'truecolor'
-    // The panel hands the account key to the process that boots a profile whose
-    // patch names it. The `acp` profile is the harness's own template and reads
-    // the vendor's variable, so a launch that carries an account key makes the
-    // two names meet here instead of requiring a second patched profile.
-    if (env.DEEPSEEK_API_KEY === undefined || env.DEEPSEEK_API_KEY === '') {
-      const keyName = Object.keys(env).find((name) => /^HDSL_LAUNCH_API_KEY_/u.test(name) && (env[name] ?? '') !== '')
-      if (keyName !== undefined) env.DEEPSEEK_API_KEY = env[keyName]
-    }
+    // Nothing is renamed or copied here. The launcher names the account's key after the
+    // route it wrote (`HSDL_LAUNCH_API_KEY_<route>`), and the harness resolves that name
+    // from the route itself, so the two meet without a translation table. Copying "some
+    // launch key" into `DEEPSEEK_API_KEY` — which this used to do — handed a third-party
+    // vendor's key to the harness's own DeepSeek entry, web search included, and picked
+    // the key by object-key order when a launch carried more than one. The one variable
+    // the DeepSeek path needs is set by the launcher, for DeepSeek accounts only.
     return env
   }
 
@@ -965,36 +983,96 @@ export class App {
     this.runPrompt(text)
   }
 
-  /** @private */
+  /**
+   * Runs one prompt to completion.
+   *
+   * The request is kept in `pendingTurn` so a session switch can **wait** for it:
+   * cancelling only sends a notification, and the answer to a cancelled turn
+   * arrives afterwards as an ordinary response. Left unguarded, that answer
+   * finished the *new* session's streaming block, rewrote its status and drained
+   * its queue — a late reply from a conversation that is no longer on screen.
+   *
+   * Every mutation below therefore checks that this turn still owns the screen
+   * (`ownsTurn`); a turn that lost it does nothing at all.
+   *
+   * @private
+   * @param {string} text the prompt
+   */
   async runPrompt(text) {
     if (this.client === null || this.sessionId === null) {
       this.pushNotice(this.startupError === null ? this.i18n.t('status.disconnected') : this.failureText(this.startupError), 'error')
       return
     }
+    const turn = this.turnSerial
+    const sessionId = this.sessionId
     this.status = 'working'
     this.activity = { tool: null, startedAt: this.clock }
     this.lastTurnSeconds = null
     this.scrollToBottom()
     this.dirty = true
     const started = this.clock
-    try {
-      const result = await this.client.request('session/prompt', {
-        sessionId: this.sessionId,
-        prompt: [{ type: 'text', text }],
-      })
-      this.finishStreaming()
+    // One promise for the request either way, so the wait does not depend on
+    // whether it succeeds — and it never rejects, which is what keeps a switch's
+    // `await` from turning a failed turn into a failed switch.
+    const settled = this.client.request('session/prompt', {
+      sessionId,
+      prompt: [{ type: 'text', text }],
+    }).then((result) => ({ result }), (error) => ({ error }))
+    this.pendingTurn = settled
+    const { result, error } = await settled
+    if (this.pendingTurn === settled) this.pendingTurn = null
+    if (this.stopped || !this.ownsTurn(turn, sessionId)) {
+      // The session was replaced (or the terminal is shutting down) while this
+      // turn was answering. Its text belongs to the transcript that was cleared,
+      // and its status to nobody.
+      this.dirty = true
+      return
+    }
+    this.finishStreaming()
+    this.status = 'ready'
+    this.activity = { tool: null, startedAt: null }
+    if (error === undefined) {
       this.lastTurnSeconds = (this.clock - started) / 1000
-      this.status = 'ready'
-      this.activity = { tool: null, startedAt: null }
       if (result?.stopReason === 'cancelled') this.pushNotice(this.i18n.t('notice.cancelled'), 'info')
-    } catch (error) {
-      this.finishStreaming()
-      this.status = 'ready'
-      this.activity = { tool: null, startedAt: null }
+    } else {
       this.pushNotice(this.failureText(error), 'error')
     }
     this.dirty = true
     this.drainQueue()
+  }
+
+  /**
+   * Whether a turn still owns the screen it started on.
+   *
+   * @private
+   * @param {number} turn the serial the turn was started under
+   * @param {string} sessionId the session it was started in
+   * @returns {boolean}
+   */
+  ownsTurn(turn, sessionId) {
+    return turn === this.turnSerial && sessionId === this.sessionId
+  }
+
+  /**
+   * Waits for the turn in flight, but never forever.
+   *
+   * @private
+   * @param {number} [timeoutMs]
+   */
+  async settleTurn(timeoutMs = this.turnSettleMs) {
+    const pending = this.pendingTurn
+    if (pending === null || pending === undefined) return
+    let timer = null
+    try {
+      await Promise.race([
+        pending,
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, timeoutMs)
+        }),
+      ])
+    } finally {
+      if (timer !== null) clearTimeout(timer)
+    }
   }
 
   /** @private */
@@ -1167,17 +1245,27 @@ export class App {
   /**
    * Quiets the outgoing session before another one takes the screen.
    *
-   * `/new` and `/resume` used to swap the session while a turn was running and
-   * while prompts sat in the queue; the queue belonged to the old conversation
-   * and the turn's updates belonged to it too. Nothing may be in flight when the
-   * transcript is replaced.
+   * Cancelling is only a notification, so this **waits** for the turn it just
+   * cancelled to answer (bounded — a tool parked on an approval must not pin the
+   * terminal), and then bumps the turn serial: whatever is still in flight is no
+   * longer the turn that owns the screen, and its answer becomes a no-op instead
+   * of finishing the new session's block and rewriting its status.
    *
    * @private
    */
   async detachTurn() {
     this.queue = []
     this.activity = { tool: null, startedAt: null }
-    if (this.status === 'working') await this.cancelTurn()
+    if (this.status === 'working' && this.client !== null && this.sessionId !== null) {
+      try {
+        this.client.notify('session/cancel', { sessionId: this.sessionId })
+      } catch {
+        // A cancelled notification is best effort; the wait below is what matters.
+      }
+      await this.settleTurn()
+    }
+    this.turnSerial += 1
+    this.pendingTurn = null
     this.status = 'ready'
     this.dirty = true
   }

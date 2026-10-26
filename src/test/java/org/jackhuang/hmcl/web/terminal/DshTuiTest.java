@@ -316,6 +316,88 @@ class DshTuiTest {
                 "the fallback is what runs when the fuller terminal cannot fit the host");
     }
 
+    /// The plan decides **where** the account's supplier route and default model are
+    /// written, and the terminal program decides **which profile boots**. When those two
+    /// disagree the account silently does not work: the harness starts on a profile with
+    /// no route in it. The ACP terminal is a program — it boots the harness's own `acp`
+    /// template, not the profile its files were installed into — so the plan has to be
+    /// built for `acp`, and the same name has to be stated in the environment.
+    @Test
+    void theAcpTerminalIsPlannedForTheProfileItBoots() {
+        DshTuiPlugins.Entry acp = DshTuiPlugins.find("@nas200-timmy/dsh-acp-tui").orElseThrow();
+        assertTrue(acp.hasExecutable(), "the ACP terminal is a program");
+        assertEquals("dsh-acp-tui", acp.profile(), "its files live in its own profile");
+        assertEquals("acp", DshTuiPlugins.harnessProfile(acp), "and it boots the harness's template");
+        assertEquals("acp", DshTui.runProfile(acp), "the plan follows the profile that boots, not the storage one");
+    }
+
+    /// A mode bundle has no separate boot profile: `dsh --profile <its profile>` is how it
+    /// is started, so nothing is stated twice and nothing can disagree.
+    @Test
+    void aModeBundleIsPlannedForItsOwnProfile() {
+        DshTuiPlugins.Entry inproc = DshTuiPlugins.find("@nas200-timmy/dsh-inproc-tui").orElseThrow();
+        assertFalse(inproc.hasExecutable());
+        assertNull(DshTuiPlugins.harnessProfile(inproc));
+        assertEquals(inproc.profile(), DshTui.runProfile(inproc));
+    }
+
+    /// The environment is where the agreement becomes real: a program is told which profile
+    /// the plan was built for, and a bundle is not given a variable it would ignore.
+    @Test
+    void theTerminalIsToldTheProfileThePlanWasBuiltFor() {
+        DshTuiPlugins.Entry acp = DshTuiPlugins.find("@nas200-timmy/dsh-acp-tui").orElseThrow();
+        Map<String, String> plan = Map.of("HDSL_LAUNCH_API_KEY_ACME_00000000", "sk-acme", "DSH_HOME", "/tmp/home");
+
+        Map<String, String> program = DshTui.terminalEnvironment(plan, "/opt/dsh/lib/bin.js", acp);
+        assertEquals("acp", program.get(DshTui.ACP_PROFILE_ENVIRONMENT_VARIABLE));
+        assertEquals("/opt/dsh/lib/bin.js", program.get("HSDL_DSH_ENTRY"));
+        assertEquals("sk-acme", program.get("HDSL_LAUNCH_API_KEY_ACME_00000000"),
+                "the account key travels under its own name, never as another vendor's");
+        assertEquals(null, program.get("DEEPSEEK_API_KEY"),
+                "nothing renames a third-party key into the harness's own vendor variable");
+
+        DshTuiPlugins.Entry inproc = DshTuiPlugins.find("@nas200-timmy/dsh-inproc-tui").orElseThrow();
+        Map<String, String> bundle = DshTui.terminalEnvironment(plan, "/opt/dsh/lib/bin.js", inproc);
+        assertEquals(null, bundle.get(DshTui.ACP_PROFILE_ENVIRONMENT_VARIABLE));
+        assertEquals("/opt/dsh/lib/bin.js", bundle.get("HSDL_DSH_ENTRY"));
+    }
+
+    /// A directory is not an installation. `pnpm` creates `node_modules/<package>` before it
+    /// fetches, and a fetch that fails — or a delete that leaves the directory — leaves a
+    /// shell with no manifest in it. Booting that profile dies before it can print, so it is
+    /// not "present".
+    @Test
+    void anEmptyPackageDirectoryIsNotAnInstalledBundle(@TempDir Path home) throws Exception {
+        DshInstance instance = instanceWith(home, "web", "0.2.1-rc.3");
+        DshTuiPlugins.Entry bundle = DshTuiPlugins.find("@nas200-timmy/dsh-inproc-tui").orElseThrow();
+        assertFalse(bundle.hasExecutable());
+        declareOnly(instance, bundle.profile(), bundle.packageName());
+        Path directory = DshTui.profileNodeModules(instance, bundle.profile()).resolve(bundle.packageName());
+        Files.createDirectories(directory);
+
+        assertFalse(DshTui.filesPresent(instance, bundle), "an empty directory holds nothing to boot");
+        assertThrows(DshException.class, () -> DshTui.terminalPlugin(instance));
+
+        Files.writeString(directory.resolve("package.json"), "{\"name\":\"" + bundle.packageName() + "\"}");
+        assertTrue(DshTui.filesPresent(instance, bundle), "with its manifest it is a bundle again");
+        assertEquals(bundle.packageName(), DshTui.terminalPlugin(instance).packageName());
+    }
+
+    /// The same question for a package that ships an executable: the manifest alone is not
+    /// enough either, the file it names has to be there.
+    @Test
+    void aPackageWhoseEntryFileIsGoneIsNotPresent(@TempDir Path home) throws Exception {
+        DshInstance instance = instanceWith(home, "web");
+        install(instance, "dsh-acp-tui", "@nas200-timmy/dsh-acp-tui");
+        DshTuiPlugins.Entry plugin = DshTuiPlugins.find("@nas200-timmy/dsh-acp-tui").orElseThrow();
+        assertTrue(DshTui.filesPresent(instance, plugin));
+
+        Files.delete(DshTui.profileNodeModules(instance, plugin.profile())
+                .resolve(plugin.packageName()).resolve("lib/main.js"));
+
+        assertFalse(DshTui.filesPresent(instance, plugin));
+    }
+
     @Test
     void aPlanWithoutAnEntryIsRefused() {
         assertThrows(DshException.class, () -> DshTui.cliCommand(List.of("node"), null));

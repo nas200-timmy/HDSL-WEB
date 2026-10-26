@@ -53,7 +53,7 @@ function inputSource() {
 }
 
 /** An `App` that has not been started; the test decides what `client` and `harness` are. */
-function makeApp() {
+function makeApp(extra = {}) {
   const stdout = outputSink()
   const stdin = inputSource()
   const app = new App({
@@ -63,6 +63,7 @@ function makeApp() {
     cwd: process.cwd(),
     harness: { command: ['dsh'], source: 'test', profile: 'acp' },
     resume: null,
+    ...extra,
   })
   return { app, stdout, stdin }
 }
@@ -168,6 +169,80 @@ test('/new cancels the running turn before it swaps the session', async () => {
   assert.deepEqual(calls.slice(0, 3), ['session/cancel', 'session/close', 'session/new'])
   assert.deepEqual(app.queue, [], 'the queue belonged to the session that was left')
   assert.equal(app.sessionId, 'session-next')
+})
+
+test('/new waits for the turn in flight instead of leaving it running', async () => {
+  const { app } = makeApp()
+  let answer = null
+  const calls = []
+  app.client = {
+    sessions: { close: true },
+    request(method) {
+      calls.push(method)
+      if (method === 'session/prompt') {
+        return new Promise((resolve) => {
+          answer = resolve
+        })
+      }
+      if (method === 'session/new') return Promise.resolve({ sessionId: 'session-next', configOptions: [] })
+      return Promise.resolve({})
+    },
+    notify(method) {
+      calls.push(method)
+    },
+    respond() {},
+  }
+  app.sessionId = 'session-live'
+  const turn = app.runPrompt('slow question')
+  assert.equal(app.status, 'working')
+  const switching = app.startNewSession()
+  // Give the switch every chance to race ahead: it must be parked on the turn.
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(calls.includes('session/cancel'), true, 'the turn was asked to stop')
+  assert.equal(calls.includes('session/new'), false, 'the new session waits for the old turn to answer')
+
+  answer({ stopReason: 'cancelled' })
+  await turn
+  await switching
+  assert.equal(app.sessionId, 'session-next')
+  assert.equal(app.status, 'ready')
+  assert.deepEqual(calls.slice(0, 3), ['session/prompt', 'session/cancel', 'session/close'])
+})
+
+test('a turn that outlives its session cannot touch the next one', async () => {
+  const { app } = makeApp({ turnSettleMs: 20 })
+  let answer = null
+  app.client = {
+    sessions: { close: true },
+    request(method) {
+      if (method === 'session/prompt') {
+        return new Promise((resolve) => {
+          answer = resolve
+        })
+      }
+      if (method === 'session/new') return Promise.resolve({ sessionId: 'session-next', configOptions: [] })
+      return Promise.resolve({})
+    },
+    notify() {},
+    respond() {},
+  }
+  app.sessionId = 'session-live'
+  const turn = app.runPrompt('slow question')
+  // The switch gives up waiting after `turnSettleMs` and moves on.
+  await app.startNewSession()
+  assert.equal(app.sessionId, 'session-next')
+
+  // The new session starts its own turn, and is mid-answer when the old one
+  // finally clears — the shape of the defect: the late reply used to finish the
+  // streaming block, set the status and drain the queue of a conversation it
+  // does not belong to.
+  const streaming = app.makeBlock({ type: 'assistant', text: '', full: 'new answer', streaming: true })
+  app.status = 'working'
+  answer({ stopReason: 'end_turn' })
+  await turn
+  assert.equal(app.status, 'working', 'the late turn did not mark the new session idle')
+  assert.equal(streaming.streaming, true, 'the late turn did not finish the new session\'s block')
+  assert.equal(app.blocks.filter((block) => block.type === 'notice' && block.level === 'error').length, 0)
 })
 
 test('adoptSession tolerates an empty transcript', () => {

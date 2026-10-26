@@ -13,8 +13,11 @@
 
 import { randomUUID } from 'node:crypto'
 
-import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+// The harness packages are imported when a session is opened, not when this
+// module loads. They are peers: a terminal that never reaches `open()` — the
+// `--help` path, a profile whose registry is missing — must still be loadable,
+// and the two error messages below are the ones that say so. It is also what
+// lets this module be exercised without a harness installed.
 
 /** How long a detach waits for the agent to go idle before giving up on it. */
 const SETTLE_TIMEOUT_MS = 2_000
@@ -31,6 +34,10 @@ export class ChatSession {
     this.agent = null
     this.dispose = null
     this.sessionId = null
+    /** The state object the harness assembles prompts from; see {@link open}. */
+    this.modelState = null
+    /** Set by {@link open}: the harness's own user-message constructor. */
+    this.createUserMessage = undefined
   }
 
   /** The live agent, or `null` before {@link open}. */
@@ -55,6 +62,12 @@ export class ChatSession {
     }
     const selection = defaultModel.currentSelection()
     const agentOptions = { ...selection }
+    // Loaded here rather than at module scope, so this module can be read without
+    // a harness: both are peers, and one of them (`dsh-llm`) is only needed once a
+    // prompt is actually sent.
+    const { installModelSelection } = await import('@deepseek-ai/dsh-agent')
+    const { createUserMessage } = await import('@deepseek-ai/dsh-llm')
+    this.createUserMessage = createUserMessage
     // `installModelSelection` takes the *state object* the prompt assembly reads
     // (`{current, assembled}`), not just the context: without it the harness's
     // assemble hook dereferences undefined on the first step.
@@ -117,7 +130,8 @@ export class ChatSession {
    */
   send(text) {
     if (this.agent === null) throw new Error('dsh-inproc-tui: no agent is open')
-    this.agent.followup(createUserMessage({
+    if (this.createUserMessage === undefined) throw new Error('dsh-inproc-tui: the session was never opened')
+    this.agent.followup(this.createUserMessage({
       content: [{ type: 'text', text }],
       source: { kind: 'user' },
     }))

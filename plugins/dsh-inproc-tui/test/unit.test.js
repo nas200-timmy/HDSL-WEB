@@ -166,46 +166,13 @@ test('the patch does not override a row the composition lacks', () => {
   assert.match(patch, /name: '@nas200-timmy\/dsh-inproc-tui'/u)
 })
 
-// The terminal loop itself needs a 0.2.x harness in the process (the peers are
-// only resolvable there), so the wiring below is pinned against the source the
-// harness mounts. Each pattern is the fix for a defect the ACP terminal covers
-// with a behavioural test in `plugins/dsh-acp-tui/test/app.test.js`; the two
-// apps share `plugins/shared`, and these keep the copy here from drifting.
-test('the composer keeps the editing keys, including behind the command palette', () => {
+// `start()` cannot run here: it needs a TTY on both ends and a harness in the
+// process. Everything it does after opening the session is exercised in
+// `test/app.test.js`; this is only the one line that connects the two — a launch
+// asked to resume must put the log back on screen, not just print a banner.
+test('a launch asked to resume replays the log it resumed', () => {
   const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8')
-  assert.match(app, /import \{ applyEditKey, isLiveOverlay \} from '\.\.\/\.\.\/shared\/ui\/edit\.js'/u)
-  assert.match(
-    app,
-    /if \(isLiveOverlay\(this\.overlay\) && this\.editLivePalette\(event\)\) return/u,
-    'a live palette lets the text through instead of taking the keyboard',
-  )
-  assert.match(
-    app,
-    /if \(name === 'paste'\) \{\n\s*\/\/ The terminal sends the whole clipboard/u,
-    'a bracketed paste reaches the composer',
-  )
-  assert.match(
-    app,
-    /if \(event\.shift \|\| event\.alt \|\| event\.ctrl\)/u,
-    'ctrl+enter (a raw newline) is a line break, not a send',
-  )
-  assert.match(app, /live: true,/u, 'the command palette marks itself live')
-})
-
-test('a tool card leaves the expansion decision to the global toggle', () => {
-  const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8')
-  const call = /case 'tool\/call': \{[\s\S]*?\n      \}/u.exec(app)
-  assert.ok(call !== null, 'the tool/call branch is still there')
-  assert.doesNotMatch(call[0], /expanded: false/u, 'a card that pins itself closed ignores ctrl+o')
-})
-
-test('switching sessions quietens the old turn and reports a failed resume', () => {
-  const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8')
-  assert.match(app, /async detachTurn\(\)/u)
-  assert.match(app, /const result = await this\.session\.resume\(sessionId\)/u)
-  assert.match(app, /if \(result\?\.resumed !== true\)/u, 'a refused id is not reported as resumed')
-  assert.match(app, /this\.replayHistory\(this\.session\.history\(\)\)/u, 'a resumed conversation is put back on screen')
-  const startNew = /async startNew\(\) \{[\s\S]*?\n  \}/u.exec(app)
-  assert.ok(startNew !== null)
-  assert.match(startNew[0], /await this\.detachTurn\(\)/u, '/new cancels the running turn first')
+  const start = /async start\(\) \{[\s\S]*?\n  \}/u.exec(app)
+  assert.ok(start !== null, 'the startup path is still there')
+  assert.match(start[0], /if \(resumed\) this\.replayHistory\(this\.session\.history\(\)\)/u)
 })

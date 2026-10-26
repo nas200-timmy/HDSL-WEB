@@ -116,6 +116,41 @@ tarball 保持自包含。
   行为测试在 ACP 侧跑同一份 `plugins/shared`）。`PluginApiTest` 补「删掉包目录后 `installed` 仍真、
   `filesPresent` 变假、重新安装把文件带回」。
 
+### 第一方终端：第三轮审查（ACP 账户交接、切换竞态、启动恢复）
+
+第三轮的两条高危都在"路由/生命周期写进哪个东西"上：一条把密钥与 profile 对错了，
+一条把"发个通知"当成了"回合结束"。
+
+- **ACP 终端的账户路由写错了 profile**：`DshLauncher.plan` 把第三方账户的供应商路由与
+  default model 写进"这次启动引导的 profile"，而开终端时计划是按插件的**存放** profile
+  （`dsh-acp-tui`）建的——真正跑起来的进程却引导 harness 自己的 `acp` 模板，于是路由在
+  运行中的 harness 里根本不存在，账户不可用或落回别的路由。现在计划按 `acp` 建
+  （`DshTui.runProfile` + `DshTuiPlugins.harnessProfile`），并把同一个名字放进
+  `HSDL_TUI_ACP_PROFILE`，两处不可能再不一致；纯 bundle 依旧按它自己的 profile 引导。
+- **任意账户密钥被复制成 `DEEPSEEK_API_KEY`**：ACP 终端在 `DEEPSEEK_API_KEY` 为空时，按
+  对象键顺序取第一把非空的 `HSDL_LAUNCH_API_KEY_*` 复制过去——第三方的密钥因此被交给
+  DeepSeek 的模型与搜索入口。这段改名逻辑整个删掉：launcher 本来就是按路由名给密钥
+  （`HSDL_LAUNCH_API_KEY_<route>`），路由自己读这个名字；`DEEPSEEK_API_KEY` 只由 launcher
+  给 DeepSeek 账户设置。
+- **`/new`、`/resume` 没有等旧回合结束**：`cancelTurn()` 只是发 `session/cancel` 通知，随即
+  返回，切换于是发生在旧 `session/prompt` 还在飞的时候——它回来时会 `finishStreaming()`、
+  把 `status` 改成 `ready`、`drainQueue()`，对着**新会话**做这些事。现在 `runPrompt` 把请求
+  留在 `pendingTurn` 里，`detachTurn()` 取消后**有界等待**（2s，审批卡住时也要能走），并
+  推进 `turnSerial`；晚到的答复因此是空操作（`ownsTurn` 同时比 serial 与 sessionId）。
+- **启动时 `--resume` 不回放历史**：交互式 `/resume` 上一轮已经会回放，但面板带 `?resume=`
+  进来的路径只印了一条"已恢复"。现在两条路都走 `replayHistory()`。
+- **纯 bundle 的空目录仍算已安装**：`filesPresent` 只看 `node_modules/<包>` 是否存在，而
+  `pnpm` 是先建目录再拉包，中途失败会留下空壳，纯 bundle 又是从清单指定的 patch 组合出来的
+  ——现在要求目录里真的有 `package.json`；有 bin 的包照旧还要入口文件在。
+- 测试：ACP **46 条**（新增"切换要等旧回合"与"活过切换的回合不能碰新会话"两条，都先在
+  修复前的代码上跑红）；进程内 **20 条唯一测试**（`node --test` 之前把 `test/index.js` 与它
+  导入的 `unit.test.js` 各跑一遍，所以"24 条"其实是 12×2 —— `index.js` 已删）。进程内也不再
+  用源码正则：新增 `test/app.test.js` 直接驱动 `TerminalApp`/`ChatSession`（粘贴、面板跟随、
+  ctrl+enter、工具卡、`/model` 写 `modelState.current`、恢复回放、`/new` 先收尾），
+  `agent.js` 的两个 peer 改成 `open()` 里动态 import 才让这个模块可以脱离 harness 加载。
+  Java 侧新增 `DshTuiTest` 五条：ACP 计划引导 `acp`、bundle 用自己的、环境里告诉程序同一个
+  名字、空目录/缺入口都不算已安装；`PluginApiTest` 补"目录还在但清单没了"。
+
 ## v0.5.84 — 2026-10-26 · 开发者提权升级、终端会话生命周期、手机窄屏适配
 
 - **提权可延长、可撤销**：开发者提权不再锁死 30 分钟——「设置 → 开发者」页可以主动停止

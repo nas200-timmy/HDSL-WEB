@@ -543,9 +543,36 @@ class PluginApiTest {
                 }
             }
 
+            // And the same question one level down: a directory that is still there but has
+            // lost its manifest. (For this package the missing entry file would already fail
+            // the check; `DshTuiTest.anEmptyPackageDirectoryIsNotAnInstalledBundle` pins the
+            // pure-bundle case, where the manifest is the only thing there is to check.)
+            Path bundleDirectory = instance.homeDirectory()
+                    .resolve("profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui");
+            Files.delete(bundleDirectory.resolve("package.json"));
+            JsonArray afterManifestGone = json(get(client, base + "/api/instances/" + id + "/tui-plugins"))
+                    .getAsJsonArray("plugins");
+            for (int i = 0; i < afterManifestGone.size(); i++) {
+                JsonObject candidate = afterManifestGone.get(i).getAsJsonObject();
+                if ("@deepseek-harness-tui/dsh-tui".equals(candidate.get("packageName").getAsString())) {
+                    assertTrue(candidate.get("installed").getAsBoolean(), candidate.toString());
+                    assertFalse(candidate.get("filesPresent").getAsBoolean(),
+                            "a manifest-less directory holds nothing to boot: " + candidate);
+                }
+            }
+
+            // Reinstalling puts the manifest back, which is what the page offers next to the
+            // state above.
+            HttpResponse<String> restore = post(client, base + "/api/instances/" + id + "/tui-plugins/install",
+                    "{\"package\":\"@deepseek-harness-tui/dsh-tui\"}");
+            assertEquals(202, restore.statusCode(), restore.body());
+            JsonObject restored = awaitTask(client, base, json(restore).get("taskId").getAsString());
+            assertEquals("done", restored.get("state").getAsString(), restored.toString());
+
             // Taking it out again is never refused, and the state goes back.
             HttpResponse<String> remove = post(client, base + "/api/instances/" + id + "/tui-plugins/remove",
-                    "{\"package\":\"@deepseek-harness-tui/dsh-tui\"}");            assertEquals(202, remove.statusCode(), remove.body());
+                    "{\"package\":\"@deepseek-harness-tui/dsh-tui\"}");
+            assertEquals(202, remove.statusCode(), remove.body());
             JsonObject removed = awaitTask(client, base, json(remove).get("taskId").getAsString());
             assertEquals("done", removed.get("state").getAsString(), removed.toString());
             JsonArray afterRemove = json(get(client, base + "/api/instances/" + id + "/tui-plugins"))

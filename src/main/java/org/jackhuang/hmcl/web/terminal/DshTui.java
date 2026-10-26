@@ -87,19 +87,30 @@ public final class DshTui {
         // all of that happens rather than after.
         DshTuiPlugins.Entry plugin = terminalPlugin(instance);
 
-        // The plan is built for the plugin's profile, not the instance's: `dsh` picks the
-        // profile up from the argv, and the argv is what decides which app boots. The
-        // instance itself is otherwise the same one — same home, same workspace, same
-        // account — which is why this is the instance with a different profile rather than
-        // a hand-built command line.
-        DshInstance onItsProfile = instance.withProfile(plugin.profile());
+        // Two profiles, and they are not always the same one:
+        //
+        // - **where the plugin's files live** — the profile it was installed into;
+        // - **the profile the terminal process boots** — `dsh` takes the profile from its
+        //   argv, and for a program that is the program's own choice, not the catalogue's.
+        //
+        // A mode bundle boots its own profile, so the two coincide. The ACP terminal is a
+        // program: it boots the harness's own `acp` template (the one that mounts the ACP
+        // server), and its own profile is only where its files sit. The distinction is not
+        // cosmetic — the launcher writes the account's supplier route and default model into
+        // the profile it is told the launch boots, so a plan built for the storage profile
+        // leaves the running harness with no route at all.
+        //
+        // The plan is still built through `DshLauncher` rather than by hand: same home, same
+        // workspace, same account contract — only the profile differs.
+        DshInstance onItsProfile = instance.withProfile(runProfile(plugin));
+        DshInstance onItsFiles = instance.withProfile(plugin.profile());
         DshLauncher.LaunchPlan plan =
                 DshLauncher.plan(onItsProfile, InstanceRuntime.accountOf(instance));
         refuseWebProfile(plannedProfile(plan.command()));
 
         List<String> command = null;
         if (plugin.hasExecutable()) {
-            Path entry = entryPoint(onItsProfile, plugin);
+            Path entry = entryPoint(onItsFiles, plugin);
             if (entry != null) {
                 command = executableCommand(DshLauncher.resolveRuntime(instance), entry, resumeSession);
             }
@@ -115,17 +126,59 @@ public final class DshTui {
             command = cliCommand(plan.command(), resumeSession);
         }
 
-        Map<String, String> environment = new HashMap<>(System.getenv());
-        environment.putAll(plan.environment());
-        environment.put("TERM", "xterm-256color");
-        environment.put("COLORTERM", "truecolor");
-        // A terminal interface that is a program rather than a mode bundle spawns the
-        // instance's own harness. Handing it the entry point is what keeps that spawn from
-        // guessing: it must be *this* instance's dsh (its version, its home), not a `dsh`
-        // that happens to be first on PATH.
-        environment.put("HSDL_DSH_ENTRY", instance.dshEntryPoint().toString());
+        Map<String, String> environment = terminalEnvironment(
+                plan.environment(), instance.dshEntryPoint().toString(), plugin);
         return new TerminalTarget("dsh", instance.id(), command, plan.workingDirectory(),
                 Map.copyOf(environment));
+    }
+
+    /// The environment handed to the terminal process.
+    ///
+    /// Two things are stated here rather than inherited: **which harness** to spawn
+    /// (`HSDL_DSH_ENTRY`, so a program drives this instance's dsh and not whichever one is
+    /// first on `PATH`) and, for a program that picks a profile itself, **which profile**
+    /// (`HSDL_TUI_ACP_PROFILE`, the same one [runProfile] put the plan on). The second is
+    /// what keeps the account route, which the launcher writes into the planned profile,
+    /// in the profile that actually boots.
+    ///
+    /// @param planEnvironment what the launch plan set: the account contract and its key
+    /// @param dshEntry        the instance's harness entry point
+    /// @param plugin          the terminal plugin being started
+    /// @return the environment, never `null`
+    static Map<String, String> terminalEnvironment(Map<String, String> planEnvironment,
+                                                   String dshEntry,
+                                                   DshTuiPlugins.Entry plugin) {
+        Map<String, String> environment = new HashMap<>(System.getenv());
+        environment.putAll(planEnvironment);
+        environment.put("TERM", "xterm-256color");
+        environment.put("COLORTERM", "truecolor");
+        environment.put("HSDL_DSH_ENTRY", dshEntry);
+        String declared = DshTuiPlugins.harnessProfile(plugin);
+        if (declared != null) {
+            environment.put(ACP_PROFILE_ENVIRONMENT_VARIABLE, declared);
+        }
+        return environment;
+    }
+
+    /// The variable a terminal program reads to learn which harness profile to boot.
+    ///
+    /// Named for the ACP terminal that introduced it; a program that takes its profile from
+    /// the panel rather than from its own default is what it exists for. Also read by
+    /// `locateHarness` in `plugins/dsh-acp-tui/src/dsh.js`.
+    static final String ACP_PROFILE_ENVIRONMENT_VARIABLE = "HSDL_TUI_ACP_PROFILE";
+
+    /// The profile the terminal process boots, and therefore the one its plan is built for.
+    ///
+    /// A mode bundle boots its own profile; a program boots the harness's own template
+    /// ([DshTuiPlugins#harnessProfile]). The two are only the same by coincidence, and the
+    /// account's supplier route follows the profile that boots — see the comment in
+    /// [target].
+    ///
+    /// @param plugin the terminal plugin
+    /// @return the profile name, never `null`
+    static String runProfile(DshTuiPlugins.Entry plugin) {
+        String declared = DshTuiPlugins.harnessProfile(plugin);
+        return declared == null ? plugin.profile() : declared;
     }
 
     /// The terminal plugin an instance has installed, in its own profile.
@@ -203,13 +256,23 @@ public final class DshTui {
     /// says it has a bin. A pure bundle only has to be on disk, because booting its
     /// profile is how its authors document starting it.
     ///
+    /// "On disk" is a directory **and its manifest**, not the directory alone. `pnpm`
+    /// creates `node_modules/<package>` before it fetches, and an install that failed
+    /// half-way — or somebody deleting the contents — leaves a directory that is empty or
+    /// has lost its `package.json`. That shell is not an installation: a bundle is composed
+    /// from the patch its manifest names, so a manifest-less directory boots nothing.
+    ///
     /// @param instance the instance
     /// @param plugin   the plugin the profile declares
     /// @return whether the profile holds what starting it needs
     /// @throws DshException when the instance cannot name its home
     public static boolean filesPresent(DshInstance instance, DshTuiPlugins.Entry plugin) throws DshException {
         Path nodeModules = profileNodeModules(instance, plugin.profile());
-        if (!Files.isDirectory(nodeModules.resolve(plugin.packageName()))) {
+        Path directory = nodeModules.resolve(plugin.packageName());
+        if (!Files.isDirectory(directory)) {
+            return false;
+        }
+        if (!Files.isRegularFile(directory.resolve("package.json"))) {
             return false;
         }
         return !plugin.hasExecutable() || entryPoint(nodeModules, plugin.packageName(), plugin.bin()) != null;
