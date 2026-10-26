@@ -50,8 +50,19 @@ therefore stays readable and its tarball stays self-contained.
    `bundled = true`, its own profile and the harness range it needs.
 4. The Gradle build picks the directory up automatically: every directory under
    `plugins/` that has a `package.json` is packed, indexed and added to the jar's
-   resources. A plugin without npm on the build machine keeps the previously built
-   tarball (the build warns).
+   resources. Packing is a Gradle `Tar` task, not `npm pack` — **the build never needs
+   npm**, and a machine without Node still produces a jar with the plugins in it (only
+   the plugins' own `check`/`test` tasks are skipped).
+
+## Peer ranges: enumerate, do not range
+
+The harness only publishes prereleases (`0.2.1-rc.3`), and under npm's semver rules a
+range such as `>=0.2.0-rc.2 <0.3` does **not** match `0.2.1-rc.3` — a comparator's
+prerelease only admits prereleases of its own `major.minor.patch`. So a first-party
+plugin lists the harness versions it was actually exercised against, one by one, instead
+of a range; when the harness ships a stable release the enumeration can become
+`>=0.3.0 <0.4`. The panel's install gate (`DshTuiPlugins.requiresDsh`) is a separate,
+looser check and is the one that decides whether the button is enabled.
 
 ## Terminal interfaces specifically
 

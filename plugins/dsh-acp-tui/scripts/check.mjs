@@ -58,6 +58,23 @@ if (!manifest.bin || manifest.bin['dsh-acp-tui'] === undefined) {
 if (manifest.type !== 'module') {
   failures.push('package.json must be an ES module package')
 }
+// The tarball has to be installable on its own: the terminal toolkit is staged
+// into `package/shared`, the licence must travel with it, and every export must
+// name a file that exists after staging.
+const manifestFiles = manifest.files ?? []
+for (const required of ['bin', 'src', 'shared', 'LICENSE']) {
+  if (!manifestFiles.includes(required)) failures.push(`package.json files[] must include ${required}`)
+}
+if (!existsSync(join(root, 'LICENSE'))) {
+  failures.push('LICENSE must sit beside package.json so the tarball ships it')
+}
+for (const [subpath, target] of Object.entries(manifest.exports ?? {})) {
+  if (typeof target !== 'string') continue
+  const staged = target.startsWith('./shared/')
+    ? join(sharedRoot, target.slice('./shared/'.length))
+    : join(root, target.startsWith('./') ? target.slice(2) : target)
+  if (!existsSync(staged)) failures.push(`exports["${subpath}"] points at ${target}, which is not present when staged`)
+}
 
 const i18n = await import(join(sharedRoot, 'i18n.js'))
 const english = Object.keys(i18n.TABLES.en)

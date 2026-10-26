@@ -62,6 +62,20 @@ for (const [name, range] of Object.entries(manifest.peerDependencies ?? {})) {
   }
   if (String(range).trim() === '') failures.push(`peer dependency ${name} has an empty range`)
 }
+if (!existsSync(join(root, 'LICENSE'))) {
+  failures.push('LICENSE is missing: the package is GPL-3.0-or-later and the tarball carries the text')
+}
+
+// The question service is an *optional* peer. A top-level import of it makes
+// the whole terminal fail to load on a harness that does not ship it, which is
+// exactly the boot the shape-matched error in `src/protocol.js` avoids.
+for (const file of files) {
+  if (!file.endsWith('.js')) continue
+  const text = readFileSync(file, 'utf8')
+  if (/(?:from|import)\s*\(?\s*['"]@deepseek-ai\/dsh-user-questions['"]/u.test(text)) {
+    failures.push(`${file}: imports the optional dsh-user-questions peer at module load`)
+  }
+}
 
 const i18n = await import(join(sharedRoot, 'i18n.js'))
 const english = Object.keys(i18n.TABLES.en)

@@ -85,11 +85,24 @@ export async function main(options = {}) {
     app.resolveExit()
   })
 
-  const signals = ['SIGTERM', 'SIGHUP']
+  // SIGINT only reaches us when the terminal is not in raw mode yet (or the
+  // signal comes from outside); in raw mode Ctrl+C is an input byte the UI reads.
+  const signals = ['SIGTERM', 'SIGHUP', 'SIGINT']
   const onSignal = () => {
     app.quit(0)
   }
   for (const signal of signals) process.on(signal, onSignal)
+  // Last-resort restore: nothing should reach here without `stop()` having left
+  // the alternate screen, but a stray `process.exit()` must not strand a person
+  // in it. `Screen.leave` is idempotent.
+  const onProcessExit = () => {
+    try {
+      app.screen.leave()
+    } catch {
+      // already restored
+    }
+  }
+  process.on('exit', onProcessExit)
   process.on('uncaughtException', (error) => {
     try {
       app.screen.leave()
@@ -102,6 +115,7 @@ export async function main(options = {}) {
 
   const code = await app.waitForExit()
   for (const signal of signals) process.removeListener(signal, onSignal)
+  process.removeListener('exit', onProcessExit)
   return code
 }
 

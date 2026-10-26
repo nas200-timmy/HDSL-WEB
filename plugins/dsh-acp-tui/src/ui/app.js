@@ -88,13 +88,19 @@ export class App {
     this.running = false
     this.quitArmedAt = null
     this.pendingPermission = null
+    this.permissionQueue = []
     this.startupError = null
     this.exitCode = 0
+    this.exitDetail = ''
     this.stopping = false
+    this.stopped = false
+    this.protocolNoticeAt = 0
     this.transcriptTotal = 0
 
     this.timer = null
     this.escTimer = null
+    this.onInputData = null
+    this.onInputEnd = null
     this.exitPromise = new Promise((resolve) => {
       this.resolveExit = resolve
     })
@@ -126,6 +132,7 @@ export class App {
       this.client.on('notification', (message) => this.onNotification(message))
       this.client.on('request', (message) => this.onRequest(message))
       this.client.on('exit', (info) => this.onExit(info))
+      this.client.on('protocolError', (error) => this.onProtocolError(error))
       this.client.start()
 
       const handshake = await this.client.initialize({ name: 'dsh-acp-tui', version: VERSION })
@@ -135,20 +142,46 @@ export class App {
     } catch (error) {
       this.startupError = error
       this.status = 'disconnected'
+      // A quit that overtook the handshake already owns the exit; reporting the
+      // aborted request on top of it would print an error after a clean quit.
+      if (this.stopped) return this
+      // There is no terminal to be had without a harness: show the failure while
+      // the alternate screen is still up, then release the terminal, the stdin
+      // handle and the clock so the process can actually exit. `main` catches the
+      // rejection and prints the error on the restored screen.
       this.pushNotice(this.failureText(error), 'error')
+      this.render()
+      this.exitCode = 1
+      await this.stop('startup')
+      throw error
     }
     this.dirty = true
     this.render()
     return this
   }
 
-  /** Stops the clock, restores the terminal and shuts the child down. */
+  /**
+   * Stops the clock, restores the terminal and shuts the child down.
+   *
+   * Every route out of the terminal (quit, startup failure, signal, the child
+   * dying) goes through here, and it runs at most once: a second call must not
+   * print the resume hint twice or wait on a child that already went away.
+   */
   async stop(reason = 'quit') {
+    if (this.stopped) return
+    this.stopped = true
+    this.stopping = true
     if (this.timer !== null) clearInterval(this.timer)
     this.timer = null
     if (this.escTimer !== null) clearTimeout(this.escTimer)
     this.escTimer = null
-    this.screen.leave()
+    this.overlay = null
+    this.permissionQueue = []
+    try {
+      this.screen.leave()
+    } catch {
+      // the terminal may already be gone
+    }
     // Release the terminal's stdin: a resumed stdin keeps the event loop alive,
     // and the panel reads a live process as "the terminal is still open". After
     // the alternate screen is gone there is nothing left to read.
@@ -159,11 +192,27 @@ export class App {
         // the PTY may already be gone
       }
     }
-    this.stdin.removeAllListeners('data')
+    if (this.onInputData !== null) this.stdin.removeListener('data', this.onInputData)
+    if (this.onInputEnd !== null) this.stdin.removeListener('end', this.onInputEnd)
+    this.onInputData = null
+    this.onInputEnd = null
     this.stdin.pause()
-    if (this.client !== null) await this.client.close()
-    if (reason === 'quit' && this.sessionId !== null) {
-      this.stdout.write(this.i18n.t('quit.resume', { id: this.sessionId }) + '\n')
+    if (this.client !== null) {
+      try {
+        await this.client.close()
+      } catch {
+        // A child that cannot be reaped must not keep the terminal open.
+      }
+    }
+    try {
+      if (reason === 'quit' && this.sessionId !== null) {
+        this.stdout.write(this.i18n.t('quit.resume', { id: this.sessionId }) + '\n')
+      } else if (reason === 'exit') {
+        const detail = this.exitDetail === '' ? '' : ` — ${this.exitDetail}`
+        this.stdout.write(`dsh-acp-tui: ${this.i18n.t('notice.reconnect')}${detail}\n`)
+      }
+    } catch {
+      // the terminal may already be gone
     }
     this.running = false
     this.resolveExit(this.exitCode)
@@ -195,7 +244,7 @@ export class App {
     if (typeof this.stdin.setRawMode === 'function') this.stdin.setRawMode(true)
     this.stdin.resume()
     this.stdin.setEncoding('utf8')
-    this.stdin.on('data', (chunk) => {
+    this.onInputData = (chunk) => {
       this.codec.feed(chunk)
       if (this.codec.pending) {
         if (this.escTimer !== null) clearTimeout(this.escTimer)
@@ -204,8 +253,10 @@ export class App {
           this.codec.flush()
         }, ESC_DELAY_MS)
       }
-    })
-    this.stdin.on('end', () => this.quit())
+    }
+    this.onInputEnd = () => this.quit()
+    this.stdin.on('data', this.onInputData)
+    this.stdin.on('end', this.onInputEnd)
   }
 
   // ── blocks ──────────────────────────────────────────────────────────────
@@ -234,7 +285,7 @@ export class App {
       version: `v${VERSION}`,
       subtitle: this.i18n.t('banner.subtitle'),
       hint: this.i18n.t('banner.hint'),
-      sessionId: this.resume,
+      sessionId: this.resume ?? this.sessionId,
       cwd: this.cwd,
     })
   }
@@ -324,7 +375,12 @@ export class App {
     this.sessionId = sessionId ?? result?.sessionId ?? null
     this.applyConfigOptions(result?.configOptions)
     this.usage = { used: 0, size: 0 }
-    this.bump(this.blocks[0])
+    // The banner is what shows the session id, so it is bumped to repaint. A
+    // caller that cleared the transcript first (a fresh `/new`) may have nothing
+    // there yet; that is not an error, just nothing to repaint.
+    const anchor = this.blocks[0]
+    if (anchor !== undefined) this.bump(anchor)
+    this.dirty = true
   }
 
   /** @private */
@@ -454,27 +510,41 @@ export class App {
   /** @private */
   onRequest(message) {
     if (message.method === 'session/request_permission') {
-      const params = message.params ?? {}
-      this.pendingPermission = { id: message.id, params }
-      const options = (params.options ?? []).map((option) => ({
-        label: permissionLabel(option, this.i18n),
-        value: option.optionId,
-        kind: option.kind,
-      }))
-      this.overlay = {
-        kind: 'permission',
-        toolName: params.toolCall?.title ?? params.toolCall?.kind ?? params.toolCall?.name,
-        detail: permissionDetail(params.toolCall),
-        options: options.length > 0 ? options : [{ label: this.i18n.t('permission.reject'), value: null, kind: 'reject_once' }],
-        index: 0,
+      // A second approval while one is on screen must not replace the first: the
+      // harness is waiting on both, and overwriting the pending entry would leave
+      // the earlier request unanswered forever. Queue it; the first dialog is
+      // shown until the person answers it, then the next one takes its place.
+      if (this.pendingPermission !== null || this.permissionQueue.length > 0) {
+        this.permissionQueue.push(message)
+        this.dirty = true
+        return
       }
-      this.dirty = true
-      this.render()
+      this.showPermission(message)
       return
     }
     // Any other request is one this client cannot serve; answer "cancelled" so
     // the harness never waits on a promise nobody will settle.
     this.client?.respond(message.id, { error: { code: -32601, message: `unsupported request: ${message.method}` } })
+  }
+
+  /** @private */
+  showPermission(message) {
+    const params = message.params ?? {}
+    this.pendingPermission = { id: message.id, params }
+    const options = (params.options ?? []).map((option) => ({
+      label: permissionLabel(option, this.i18n),
+      value: option.optionId,
+      kind: option.kind,
+    }))
+    this.overlay = {
+      kind: 'permission',
+      toolName: params.toolCall?.title ?? params.toolCall?.kind ?? params.toolCall?.name,
+      detail: permissionDetail(params.toolCall),
+      options: options.length > 0 ? options : [{ label: this.i18n.t('permission.reject'), value: null, kind: 'reject_once' }],
+      index: 0,
+    }
+    this.dirty = true
+    this.render()
   }
 
   /** @private */
@@ -490,15 +560,46 @@ export class App {
     this.pendingPermission = null
     this.overlay = null
     this.dirty = true
+    const next = this.permissionQueue.shift()
+    if (next !== undefined) this.showPermission(next)
   }
 
   /** @private */
   onExit(info) {
     if (this.stopping) return
+    const connecting = this.status === 'connecting'
     this.status = 'disconnected'
     const detail = info?.error?.message ?? (this.client?.stderrLines?.slice(-3).join(' ') ?? '')
-    this.pushNotice(`${this.i18n.t('notice.reconnect')}${detail === '' ? '' : ` — ${detail}`}`, 'error')
+    this.exitDetail = detail
     this.dirty = true
+    if (connecting) {
+      // `start` is still awaiting the handshake; its catch turns this into one
+      // notice and one stop, so do not race it with a second exit path.
+      return
+    }
+    this.pushNotice(`${this.i18n.t('notice.reconnect')}${detail === '' ? '' : ` — ${detail}`}`, 'error')
+    this.render()
+    // Nothing is left to drive once the harness is gone: restore the terminal so
+    // the process can exit instead of sitting in raw mode on a dead pipe.
+    const code = Number.isInteger(info?.code) && info.code !== 0 ? info.code : 1
+    this.quit(code, 'exit').catch(() => {})
+  }
+
+  /**
+   * Shows a line the protocol reader had to drop.
+   *
+   * A stray non-JSON line is usually the harness logging to stdout; one notice
+   * tells the person their session is still alive without letting a chatty
+   * process flood the transcript.
+   *
+   * @private
+   */
+  onProtocolError(error) {
+    this.log(`protocol: ${error?.message ?? error}`)
+    const now = Date.now()
+    if (now - this.protocolNoticeAt < 2000) return
+    this.protocolNoticeAt = now
+    this.pushNotice(`ACP: ${error?.message ?? error}`, 'error')
   }
 
   // ── keys ────────────────────────────────────────────────────────────────
@@ -510,6 +611,16 @@ export class App {
       return
     }
     const { name } = event
+    if (name === 'paste') {
+      // The terminal sends the whole clipboard as one event; it is the user's
+      // text, so it goes in at the caret with CRLF normalised by the composer.
+      if (this.composer.paste(event.text ?? '')) {
+        this.syncCommandPalette()
+        this.scrollToBottom()
+        this.dirty = true
+      }
+      return
+    }
     if (name === 'char') {
       this.composer.insert(event.text ?? '')
       this.syncCommandPalette()
@@ -657,6 +768,13 @@ export class App {
     const overlay = this.overlay
     if (overlay === null) return
     const { name } = event
+    if (name === 'paste') {
+      // A dialog owns the keyboard while it is up; the composer behind it is not
+      // visible, so inserting there would edit text the person cannot see (and
+      // could replace the very palette this key came through). Dropping the
+      // paste is the only outcome that does not surprise.
+      return
+    }
     if (name === 'escape' || name === 'ctrl+c') {
       if (overlay.kind === 'permission') this.answerPermission(null)
       else this.overlay = null
@@ -1016,7 +1134,10 @@ export class App {
       const result = await this.client.request('session/new', { cwd: this.cwd, mcpServers: [] })
       this.blocks = []
       this.transcriptCache = new WeakMap()
+      // Adopt first (it tolerates an empty transcript), so the banner this puts
+      // back carries the id of the session that was just created.
       this.adoptSession(result, result.sessionId)
+      this.pushBanner()
       this.pushNotice(this.i18n.t('banner.new'), 'success')
     } catch (error) {
       this.pushNotice(this.failureText(error), 'error')
@@ -1102,11 +1223,11 @@ export class App {
   }
 
   /** Leaves with the given code. */
-  async quit(code = 0) {
+  async quit(code = 0, reason = 'quit') {
     if (this.stopping) return
     this.stopping = true
     this.exitCode = code
-    await this.stop('quit')
+    await this.stop(reason)
   }
 }
 

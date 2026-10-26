@@ -22,7 +22,8 @@
     "src",
     "shared",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18.20"

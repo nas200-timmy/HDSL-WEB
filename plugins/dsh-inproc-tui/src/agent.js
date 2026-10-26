@@ -16,6 +16,9 @@ import { randomUUID } from 'node:crypto'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 
+/** How long a detach waits for the agent to go idle before giving up on it. */
+const SETTLE_TIMEOUT_MS = 2_000
+
 /** A model choice as the harness records it. */
 export class ChatSession {
   /**
@@ -44,8 +47,11 @@ export class ChatSession {
   async open(options = {}) {
     const agents = this.ctx.get('agents')
     const defaultModel = this.ctx.get('agentDefaultModel')
-    if (agents === undefined || defaultModel === undefined) {
+    if (agents === undefined) {
       throw new Error('dsh-inproc-tui: this profile does not mount the agent registry (dsh-base does)')
+    }
+    if (defaultModel === undefined) {
+      throw new Error('dsh-inproc-tui: this harness exposes no agentDefaultModel; the profile has no model route to start')
     }
     const selection = defaultModel.currentSelection()
     const agentOptions = { ...selection }
@@ -115,9 +121,30 @@ export class ChatSession {
     this.agent?.cancel({ kind: 'user' })
   }
 
-  /** Waits until the agent is quiet (used before quitting). */
-  async settle() {
-    await this.agent?.whenIdle()
+  /**
+   * Waits until the agent is quiet, but never forever.
+   *
+   * A tool parked on an approval or a question keeps the agent non-idle; a
+   * quit that waits for idle without a bound hangs the harness process.
+   *
+   * @param {number} [timeoutMs]
+   */
+  async settle(timeoutMs = SETTLE_TIMEOUT_MS) {
+    const agent = this.agent
+    if (agent === null) return
+    let timer = null
+    try {
+      await Promise.race([
+        Promise.resolve(agent.whenIdle()).catch(() => {}),
+        // Not unref'd: the wait *is* the work here, and a quit that vanishes
+        // into an empty event loop would leave the terminal unrestored.
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, timeoutMs)
+        }),
+      ])
+    } finally {
+      if (timer !== null) clearTimeout(timer)
+    }
   }
 
   /** Persists the session log, when the profile mounts persistence. */
@@ -270,9 +297,13 @@ export class ChatSession {
     return true
   }
 
-  /** Detaches and forgets the current agent. */
-  async close() {
-    await this.settle()
+  /**
+   * Detaches and forgets the current agent.
+   *
+   * @param {{settleTimeoutMs?: number}} [options]
+   */
+  async close(options = {}) {
+    await this.settle(options.settleTimeoutMs)
     await this.flush()
     try {
       this.dispose?.()

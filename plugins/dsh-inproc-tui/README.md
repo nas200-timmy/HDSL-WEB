@@ -19,8 +19,11 @@ in-session model switching, and it gives up the right to run on an older harness
 - **Tool cards from the harness's own tools** — `tool/call` / `tool/result`
   events become cards with argument preview, duration, output and diff tinting.
   It adds no tools of its own; the tool surface is whatever the profile composed.
-- **Approvals** — answers `approval/request` with a dialog (allow once / reject).
-- **Questions** — answers `user-questions/request` for `ask_user_question`.
+- **Approvals** — answers `approval/request` with a dialog (allow once / reject)
+  for the agent this terminal drives; another agent's request is delegated down
+  the waterfall (a sub-agent, the host's own answerer).
+- **Questions** — answers `user-questions/request` the same way: only this
+  agent's `ask_user_question`; agentless host questions (`/auth`) are delegated.
 - **Model and effort switching** — the provider/model catalogue from `ctx.llm`,
   written through `agent.model.select` so it reaches the next model step.
 - **Sessions** — `/resume` lists stored sessions (`sessionPersistence.list`) and
@@ -41,9 +44,11 @@ inside the panel jar, so the install needs no registry. The panel then opens the
 terminal by booting this profile — a pure bundle has no executable of its own.
 
 **0.2.x only.** The bundle patch is written against the 0.2.x service seams, and
-the panel's catalogue pins it to `>=0.2.0-rc.2` (verified on 0.2.0-rc.2 and
-0.2.1-rc.3). An older instance gets `dsh-acp-tui` instead, which speaks ACP and is meant
-for exactly that case.
+the panel's catalogue pins it to `>=0.2.0-rc.2`; the peer ranges are
+`>=0.2.0-rc.2 <0.3` for the same reason, so a later 0.2.x cannot pass the gate
+while sitting outside the peers (verified on 0.2.0-rc.2 and 0.2.1-rc.3). An older
+instance gets `dsh-acp-tui` instead, which speaks ACP and is meant for exactly
+that case.
 
 Both terminals may be installed side by side: this one is preferred while it fits the
 instance, and `dsh-acp-tui` waits as the fallback. When the instance's dsh version moves
@@ -53,20 +58,29 @@ reinstall. The list marks the row that will actually run as **active**.
 ## Layout
 
 ```
-cordis.patch.yml     the profile layer: persona, HMR off, and this plugin's row
+cordis.patch.yml     the profile layer: persona and this plugin's row (the
+                     optional services sit in the row's inject, not in code)
 src/index.js         Cordis plugin: name / inject / apply
 src/app.js           the terminal state machine, key map and commands
 src/agent.js         agent create/resume, prompt, model selection, sessions
+src/protocol.js      the peer-free decisions: argv, waterfall scope, question
+                     error shape (unit-tested without a harness)
+test/unit.test.js    node:test unit tests for src/protocol.js
 shared/              the terminal toolkit both first-party terminals use (packed
                      into the tarball by the build)
+LICENSE              GPL-3.0-or-later, copied from the repository root
 ```
 
 ## Checking
 
 ```sh
 node scripts/check.mjs   # syntax, patch present, harness-only peers, i18n parity
+node --test              # unit tests (test/unit.test.js), no harness needed
 npm run check            # the same
 ```
+
+Both are offline. `HSDL_TUI_DEBUG=1` (or the older `HSDL_UI_DEBUG`) writes
+internal failures to stderr without touching the interface.
 
 The build packs this directory (and `plugins/shared`) into
 `first-party-plugins/nas200-timmy-dsh-inproc-tui-<version>.tgz` inside the jar; see
@@ -74,4 +88,5 @@ The build packs this directory (and `plugins/shared`) into
 
 ## Licence
 
-GPL-3.0-or-later.
+GPL-3.0-or-later; the full text is in [LICENSE](LICENSE), copied from the
+repository root.

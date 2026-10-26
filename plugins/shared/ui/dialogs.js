@@ -15,6 +15,9 @@ import { padStyled, truncateStyled, visibleWidth, wrapStyled } from '../term/tex
 const POINTER = '❯'
 const MAX_DESCRIPTION_LINES = 2
 
+/** How many rows a permission's detail may take before it is elided. */
+const MAX_PERMISSION_DETAIL_LINES = 8
+
 /** Draws a bordered box around already-styled lines. */
 export function box({ title, lines, width, height, theme, footer, titleRight }) {
   const inner = Math.max(4, width - 4)
@@ -67,7 +70,9 @@ export function renderOverlay(overlay, context) {
   if (overlay === null || overlay === undefined) return null
   const { width: screenWidth, height: screenHeight, theme, i18n } = context
   const width = Math.max(28, Math.min(screenWidth - 4, overlay.width ?? 62))
-  const maxHeight = Math.max(5, Math.min(screenHeight - 4, overlay.maxHeight ?? 20))
+  // `maxHeight` is the newer spelling; `height` was what the ACP app sets on every
+  // overlay it opens, and reading only one of them silently ignored the other's intent.
+  const maxHeight = Math.max(5, Math.min(screenHeight - 4, overlay.maxHeight ?? overlay.height ?? 20))
   let lines
   let footer
   if (overlay.kind === 'picker') {
@@ -158,7 +163,19 @@ function permissionLines(overlay, width, theme, i18n) {
   const tool = overlay.toolName ? theme.strong('textStrong', overlay.toolName) : theme.fg('text', 'tool')
   lines.push(`${theme.fg('warning', '⚑')} ${tool}`)
   if (overlay.detail) {
-    for (const row of wrapStyled(theme.fg('textDim', overlay.detail), Math.max(8, width - 6))) lines.push(row)
+    // The detail is a command or a patch: potentially hundreds of rows. The box keeps the
+    // first rows and drops the rest, and since the options are drawn after it a long detail
+    // would push 允许/拒绝 out of the dialog — the keyboard still worked, but the user could
+    // not see what they were answering. Budget the detail so the choices always fit.
+    const wrapped = wrapStyled(theme.fg('textDim', overlay.detail), Math.max(8, width - 6))
+    const budget = MAX_PERMISSION_DETAIL_LINES
+    if (wrapped.length > budget) {
+      const hidden = wrapped.length - budget
+      lines.push(...wrapped.slice(0, budget))
+      lines.push(theme.fg('textMuted', `  … ${hidden} more line${hidden === 1 ? '' : 's'}`))
+    } else {
+      lines.push(...wrapped)
+    }
   }
   lines.push('')
   const options = overlay.options ?? []

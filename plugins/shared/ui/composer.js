@@ -25,6 +25,28 @@ class Line {
 }
 
 /**
+ * The character ending at `index`, as a string.
+ *
+ * `codePointAt(index - 1)` looks *forward*, so on an astral character it returns the low
+ * half of the surrogate pair and deleting "one character" removes half of it — that leaves
+ * a lone surrogate in the text, which the agent then receives as a replacement character.
+ * Walking the pair together is the whole job of this helper.
+ *
+ * @param {string} text
+ * @param {number} index
+ * @returns {string} one character (one or two code units), or '' at the start
+ */
+function charBefore(text, index) {
+  if (index <= 0) return ''
+  const low = text.charCodeAt(index - 1)
+  if (low >= 0xdc00 && low <= 0xdfff && index >= 2) {
+    const high = text.charCodeAt(index - 2)
+    if (high >= 0xd800 && high <= 0xdbff) return text.slice(index - 2, index)
+  }
+  return text.slice(index - 1, index)
+}
+
+/**
  * Wraps text to `width` cells for display, remembering source offsets.
  *
  * @param {string} text
@@ -98,6 +120,24 @@ export class Composer {
     this.caret += text.length
   }
 
+  /**
+   * Inserts pasted text at the caret.
+   *
+   * Pasted content arrives as whatever the terminal sent, which includes the CRLF a
+   * copied line ends with; a composer that kept them would send `\r` to the agent. Line
+   * endings are normalised, everything else is inserted verbatim — a paste is the user's
+   * text, not something to trim or reformat.
+   *
+   * @param {string} text the pasted text
+   * @returns {boolean} whether anything was inserted
+   */
+  paste(text) {
+    const normalised = String(text ?? '').replace(/\r\n?/g, '\n')
+    if (normalised === '') return false
+    this.insert(normalised)
+    return true
+  }
+
   /** Inserts a line break. */
   newline() {
     this.insert('\n')
@@ -107,7 +147,7 @@ export class Composer {
   backspace() {
     if (this.caret === 0) return
     const before = this.text.slice(0, this.caret)
-    const removed = String.fromCodePoint(before.codePointAt(before.length - 1))
+    const removed = charBefore(this.text, this.caret)
     this.text = before.slice(0, before.length - removed.length) + this.text.slice(this.caret)
     this.caret -= removed.length
   }
@@ -130,9 +170,7 @@ export class Composer {
     const position = this.positionOf(lines)
     if (direction === 'left') {
       if (this.caret === 0) return
-      const before = this.text.slice(0, this.caret)
-      const removed = String.fromCodePoint(before.codePointAt(before.length - 1))
-      this.caret -= removed.length
+      this.caret -= charBefore(this.text, this.caret).length
       return
     }
     if (direction === 'right') {

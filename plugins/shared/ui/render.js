@@ -47,11 +47,20 @@ export function renderFrame(state, context) {
   const rows = new Array(height).fill('')
   for (let index = 0; index < transcript.rows.length; index += 1) rows[index] = transcript.rows[index]
 
-  const top = height - bottomRows
+  // A short terminal (or a composer that has grown to several lines) can make the bottom
+  // block taller than the screen: `top` went negative and the rows were written at negative
+  // indices, which shift the frame and pull the cursor back to row 1. Clamp where the block
+  // starts and refuse writes outside the screen — the composer is what the user is typing
+  // into, so it wins over the transcript that is being clipped anyway.
+  const top = Math.max(0, height - bottomRows)
   let row = top
-  rows[row++] = ''
-  if (activityRow !== null) rows[row++] = activityRow
-  for (const composerRow of composerRows) rows[row++] = composerRow
+  const put = (value) => {
+    if (row >= 0 && row < height) rows[row] = value
+    row += 1
+  }
+  put('')
+  if (activityRow !== null) put(activityRow)
+  for (const composerRow of composerRows) put(composerRow)
   rows[height - 1] = statusRow
 
   let cursor = null

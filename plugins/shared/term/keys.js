@@ -99,9 +99,13 @@ export function createKeyDecoder(onKey) {
     const [codeText, modText] = params.split(';')
     const code = Number(codeText)
     const mod = Number(modText ?? '1')
-    const shift = Number.isFinite(mod) && (mod - 1) % 8 >= 1 && (mod - 1) % 4 >= 1
-    const alt = Number.isFinite(mod) && Math.floor((mod - 1) / 2) % 2 === 1
-    const ctrl = Number.isFinite(mod) && Math.floor((mod - 1) / 4) % 2 === 1
+    // xterm 的修饰位：bit0=Shift、bit1=Alt、bit2=Ctrl（相对是 mod-1）。用位运算，别用取模——
+    // 原来的 `(mod-1)%8>=1 && (mod-1)%4>=1` 会把 Ctrl（4）也判成 Shift，把 Ctrl+Shift（5）判成
+    // 没有 Shift，于是 Ctrl+Enter 变成换行而不是发送。
+    const bits = Number.isFinite(mod) ? mod - 1 : 0
+    const shift = (bits & 1) === 1
+    const alt = ((bits >> 1) & 1) === 1
+    const ctrl = ((bits >> 2) & 1) === 1
     if (code === 13) return { name: KEYS.ENTER, shift, alt, ctrl }
     if (code === 9) return { name: shift ? KEYS.SHIFT_TAB : KEYS.TAB, shift, alt, ctrl }
     if (code === 27) return { name: KEYS.ESCAPE, shift, alt, ctrl }

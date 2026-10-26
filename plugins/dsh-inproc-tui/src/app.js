@@ -15,23 +15,32 @@
  */
 
 import { readFileSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
-
-import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 
 import { createI18n, detectLanguage } from '../../shared/i18n.js'
 import { createTheme, detectMode } from '../../shared/term/theme.js'
 import { Screen } from '../../shared/term/screen.js'
 import { createKeyDecoder } from '../../shared/term/keys.js'
 import { Composer } from '../../shared/ui/composer.js'
-import { renderFrame, spinnerFrame } from '../../shared/ui/render.js'
-import { formatDuration, shortId } from '../../shared/ui/blocks.js'
+import { renderFrame } from '../../shared/ui/render.js'
+import { shortId } from '../../shared/ui/blocks.js'
 import { ChatSession } from './agent.js'
+import {
+  argsFromProcess,
+  isUserQuestionError,
+  ownsRequest,
+  parseArgs,
+  questionInterrupted,
+  scopedWaterfall,
+  usage,
+} from './protocol.js'
 import { VERSION } from './version.js'
 
 const TICK_MS = 33
 const ESC_DELAY_MS = 25
-const REVEAL_LIMIT = 200_000
+/** How long `quit()` waits for the agent to detach before ending the process. */
+const QUIT_CLOSE_MS = 3_000
+/** At most one error notice per window, so a broken frame cannot flood the screen. */
+const ERROR_NOTICE_MS = 2_000
 
 const EFFORTS = [
   { value: 'off', name: 'off' },
@@ -73,6 +82,8 @@ export class TerminalApp {
     this.scroll = { offset: 0, follow: true }
     this.overlay = null
     this.interactions = []
+    /** Live question batches, so `quit()` can reject them as interrupted. */
+    this.pendingQuestions = new Set()
     this.activeInteraction = null
     this.focus = 'composer'
     this.expandTools = false
@@ -91,6 +102,10 @@ export class TerminalApp {
     this.escTimer = null
     this.quitArmedAt = null
     this.stopping = false
+    /** True before the alternate screen is taken: `--help`, or no TTY. */
+    this.headless = false
+    /** When the last error notice was pushed (rate limit for `reportError`). */
+    this.lastErrorAt = 0
     this.transcriptTotal = 0
     this.disposers = []
     this.streaming = { text: null, reasoning: null }
@@ -108,9 +123,20 @@ export class TerminalApp {
   async start() {
     const args = this.readArgs()
     if (args.help) {
+      // Nothing has taken the terminal, so this path ends the app here: a
+      // profile that only printed its help must not keep the process alive.
+      this.headless = true
       process.stdout.write(usage())
-      this.resolveExit(0)
-      return
+      await this.quit(0)
+      return this
+    }
+    if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
+      // Writing alt-screen and raw mode into a pipe corrupts whatever reads it;
+      // the ACP terminal refuses the same way.
+      this.headless = true
+      process.stdout.write('dsh-inproc-tui: this interface needs a terminal; run it in a PTY.\n')
+      await this.quit(1)
+      return this
     }
     this.screen.enter()
     this.screen.resized = () => {
@@ -152,24 +178,10 @@ export class TerminalApp {
     } catch {
       list = []
     }
-    if (list.length === 0) {
-      // Fall back to the process arguments after the profile name; a launcher
-      // that did not provide cmdlineArgs still gets --resume working.
-      const index = process.argv.indexOf('--profile')
-      list = index >= 0 ? process.argv.slice(index + 2) : process.argv.slice(2)
-    }
-    const result = { resume: null, help: false }
-    for (let index = 0; index < list.length; index += 1) {
-      const argument = list[index]
-      if (argument === '--help' || argument === '-h') result.help = true
-      else if (argument === '--resume' || argument === '-r') {
-        result.resume = list[index + 1] ?? null
-        index += 1
-      } else if (argument.startsWith('--resume=')) {
-        result.resume = argument.slice('--resume='.length)
-      }
-    }
-    return result
+    if (Array.isArray(list) && list.length > 0) return parseArgs(list)
+    // Fall back to the process arguments after the profile name; a launcher
+    // that did not provide cmdlineArgs still gets --resume working.
+    return argsFromProcess(process.argv)
   }
 
   /** @private */
@@ -178,13 +190,21 @@ export class TerminalApp {
     process.stdin.resume()
     process.stdin.setEncoding('utf8')
     process.stdin.on('data', (chunk) => {
-      this.codec.feed(chunk)
-      if (this.codec.pending) {
-        if (this.escTimer !== null) clearTimeout(this.escTimer)
-        this.escTimer = setTimeout(() => {
-          this.escTimer = null
-          this.codec.flush()
-        }, ESC_DELAY_MS)
+      try {
+        this.codec.feed(chunk)
+        if (this.codec.pending) {
+          if (this.escTimer !== null) clearTimeout(this.escTimer)
+          this.escTimer = setTimeout(() => {
+            this.escTimer = null
+            try {
+              this.codec.flush()
+            } catch (error) {
+              this.reportError(error, 'keys')
+            }
+          }, ESC_DELAY_MS)
+        }
+      } catch (error) {
+        this.reportError(error, 'keys')
       }
     })
     process.stdin.on('end', () => this.quit())
@@ -205,28 +225,57 @@ export class TerminalApp {
   wireHarnessEvents() {
     const ctx = this.ctx
     const mine = (agent) => agent === this.session.live
+    // A malformed event or a render bug must become a notice, not an uncaught
+    // exception in the host process. Waterfall listeners are wrapped too: the
+    // answer is their return value, so it is passed through untouched.
+    const guard = (label, fn) => (...args) => {
+      try {
+        const result = fn(...args)
+        if (result !== null && typeof result?.catch === 'function') {
+          result.catch((error) => this.reportError(error, label))
+        }
+        return result
+      } catch (error) {
+        this.reportError(error, label)
+        return undefined
+      }
+    }
+    const isMine = (request) => ownsRequest(request, this.session.live)
     this.disposers.push(
-      ctx.on('agent/assistant-stream', (payload) => {
+      ctx.on('agent/assistant-stream', guard('stream', (payload) => {
         if (mine(payload.agent)) this.onStreamFrame(payload.frame)
-      }),
-      ctx.on('session/event', (session, event) => {
+      })),
+      ctx.on('session/event', guard('session', (session, event) => {
         if (session === this.session.live?.session) this.onSessionEvent(event)
-      }),
-      ctx.on('agent/status', (payload) => {
+      })),
+      ctx.on('agent/status', guard('status', (payload) => {
         if (!mine(payload.agent)) return
         this.status = payload.status === 'running' ? 'working' : 'ready'
         if (payload.status === 'running' && this.activity.startedAt === null) {
           this.activity.startedAt = this.clock
         }
         this.dirty = true
-      }),
-      ctx.on('agent/error', (payload) => {
+      })),
+      ctx.on('agent/error', guard('agent', (payload) => {
         if (!mine(payload.agent)) return
         this.debug(payload.error)
         this.pushNotice(this.failureText(payload.error), 'error')
-      }),
-      ctx.on('approval/request', (request) => this.requestApproval(request)),
-      ctx.on('user-questions/request', (request) => this.requestAnswers(request)),
+      })),
+      // 0.2.x approval and question requests are waterfalls: answer only the
+      // agent this terminal drives and delegate everyone else's down the chain
+      // (a sub-agent's approval, the host's /auth wizard). An agentless request
+      // is not ours either — dsh-tui's own /auth questions belong to whoever
+      // dispatched them.
+      ctx.on('approval/request', guard('approval', scopedWaterfall({
+        isMine,
+        handle: (request) => this.requestApproval(request),
+        onError: (error) => this.reportError(error, 'approval'),
+      }))),
+      ctx.on('user-questions/request', guard('questions', scopedWaterfall({
+        isMine,
+        handle: (request) => this.requestAnswers(request),
+        onError: (error) => this.reportError(error, 'questions'),
+      }))),
     )
   }
 
@@ -428,22 +477,39 @@ export class TerminalApp {
   requestAnswers(request) {
     return new Promise((resolve, reject) => {
       if (request.signal?.aborted === true) {
-        reject(new UserQuestionError('ask_user_question was interrupted', 'ASK_ABORTED'))
+        reject(questionInterrupted())
         return
       }
       const answers = []
       let index = 0
       let active = null
-      const fail = () => {
-        request.signal?.removeEventListener('abort', fail)
-        if (active !== null) retire(this, active)
-        reject(new UserQuestionError('ask_user_question was interrupted', 'ASK_ABORTED'))
+      let settled = false
+      // Registered so `quit()` can reject this ask instead of waiting for a
+      // dialogue nobody is left to answer.
+      const batch = {
+        cancel: () => fail(),
       }
+      const remove = () => {
+        this.pendingQuestions.delete(batch)
+        request.signal?.removeEventListener('abort', fail)
+      }
+      const fail = () => {
+        if (settled) return
+        settled = true
+        remove()
+        const current = active
+        active = null
+        if (current !== null) retire(this, current)
+        reject(questionInterrupted())
+      }
+      this.pendingQuestions.add(batch)
       request.signal?.addEventListener('abort', fail, { once: true })
       const askNext = () => {
         const question = request.questions[index]
         if (question === undefined) {
-          request.signal?.removeEventListener('abort', fail)
+          if (settled) return
+          settled = true
+          remove()
           resolve({ answers })
           return
         }
@@ -478,8 +544,47 @@ export class TerminalApp {
     })
   }
 
+  /**
+   * Rejects every waiting question (as interrupted) and answers every waiting
+   * approval as cancelled. Called from `quit()` before the agent is detached,
+   * so a tool blocked on a dialogue can unwind instead of holding `whenIdle()`.
+   *
+   * @private
+   */
+  dismissInteractions() {
+    this.queue = []
+    for (const batch of [...this.pendingQuestions]) {
+      try {
+        batch.cancel()
+      } catch {
+        // A batch that already settled has nothing left to reject.
+      }
+    }
+    this.pendingQuestions.clear()
+    const pending = [this.activeInteraction, ...this.interactions].filter((item) => item !== null)
+    this.interactions = []
+    this.activeInteraction = null
+    this.overlay = null
+    for (const item of pending) {
+      if (item.kind !== 'approval') continue
+      try {
+        item.settle('cancelled')
+      } catch {
+        // The dialogue may already have been retired by its abort listener.
+      }
+    }
+    this.dirty = true
+  }
+
   /** @private */
   showNextInteraction() {
+    // Quitting retires interactions on purpose: do not pop the next dialogue
+    // while the terminal is being restored.
+    if (this.stopping) {
+      this.activeInteraction = null
+      this.overlay = null
+      return
+    }
     if (this.activeInteraction !== null) return
     const next = this.interactions.shift()
     this.activeInteraction = next ?? null
@@ -1097,43 +1202,82 @@ export class TerminalApp {
 
   /** @private */
   tick() {
-    this.clock = Date.now()
-    if (this.status === 'working') this.dirty = true
-    // The harness shares this process and may write a log line to stderr at any
-    // moment (a provider catalogue refresh does exactly that). Repaint every row
-    // once a second so such a line cannot sit on top of the interface: a paint
-    // that only diffs against the previous frame would keep it there.
-    if (this.clock - (this.lastFullPaint ?? 0) > 1000) {
-      this.lastFullPaint = this.clock
-      this.screen.previous = []
-      this.dirty = true
+    try {
+      this.clock = Date.now()
+      if (this.status === 'working') this.dirty = true
+      // The harness shares this process and may write a log line to stderr at any
+      // moment (a provider catalogue refresh does exactly that). Repaint every row
+      // once a second so such a line cannot sit on top of the interface: a paint
+      // that only diffs against the previous frame would keep it there.
+      if (this.clock - (this.lastFullPaint ?? 0) > 1000) {
+        this.lastFullPaint = this.clock
+        this.screen.previous = []
+        this.dirty = true
+      }
+      if (this.dirty) this.render()
+    } catch (error) {
+      this.reportError(error, 'tick')
     }
-    if (this.dirty) this.render()
   }
 
-  /** Paints one frame. */
+  /** Paints one frame; a broken frame must not escape into the host's timers. */
   render() {
     this.dirty = false
-    const { columns, rows } = this.screen.measure()
-    if (columns < 20 || rows < 6) {
-      this.screen.paint([], null)
-      return
+    try {
+      const { columns, rows } = this.screen.measure()
+      if (columns < 20 || rows < 6) {
+        this.screen.paint([], null)
+        return
+      }
+      const frame = renderFrame(this, {
+        width: columns,
+        height: rows,
+        theme: this.theme,
+        i18n: this.i18n,
+        clock: this.clock || Date.now(),
+      })
+      this.transcriptTotal = frame.transcript.total
+      this.screen.paint(frame.rows, frame.cursor)
+    } catch (error) {
+      this.reportError(error, 'render')
+      // A minimal row is the only thing safe to draw from a broken frame.
+      try {
+        this.screen.paint([this.failureText(error)], null)
+      } catch {
+        // The terminal itself may be gone.
+      }
     }
-    const frame = renderFrame(this, {
-      width: columns,
-      height: rows,
-      theme: this.theme,
-      i18n: this.i18n,
-      clock: this.clock || Date.now(),
-    })
-    this.transcriptTotal = frame.transcript.total
-    this.screen.paint(frame.rows, frame.cursor)
+  }
+
+  /**
+   * Turns a failure into a notice (rate-limited) and a debug line.
+   *
+   * @param {unknown} error
+   * @param {string} where the callback that failed
+   * @private
+   */
+  reportError(error, where) {
+    this.debug(error)
+    // An interrupted question is an outcome the asker asked for, not a fault.
+    if (isUserQuestionError(error)) return
+    const now = Date.now()
+    if (now - this.lastErrorAt < ERROR_NOTICE_MS) return
+    this.lastErrorAt = now
+    const message = error?.message ?? String(error)
+    this.pushNotice(`${this.i18n.t('notice.error')} (${where}): ${message}`, 'error')
+    this.dirty = true
   }
 
   /** @private */
   debug(error) {
-    if (this.env.HSDL_UI_DEBUG === undefined) return
-    process.stderr.write(`dsh-inproc-tui: ${error?.stack ?? error}\n`)
+    // The ACP terminal reads HSDL_TUI_DEBUG; both names are honoured here so one
+    // variable debugs either program.
+    if (this.env.HSDL_TUI_DEBUG === undefined && this.env.HSDL_UI_DEBUG === undefined) return
+    try {
+      process.stderr.write(`dsh-inproc-tui: ${error?.stack ?? error}\n`)
+    } catch {
+      // the terminal may already be gone
+    }
   }
 
   /** @private */
@@ -1144,10 +1288,19 @@ export class TerminalApp {
 
   // ── exit ────────────────────────────────────────────────────────────────
 
-  /** Restores the terminal and asks the launcher to end this process. */
-  async quit() {
+  /**
+   * Restores the terminal and asks the launcher to end this process.
+   *
+   * Quitting must never outlive the wait for an agent: a blocked approval or a
+   * running turn would keep the harness process alive forever, so the waiting
+   * dialogues are settled, the turn is cancelled and the detach is bounded.
+   *
+   * @param {number} [code] the exit code
+   */
+  async quit(code) {
     if (this.stopping) return
     this.stopping = true
+    if (code !== undefined) this.exitCode = code
     if (this.timer !== null) clearInterval(this.timer)
     this.timer = null
     if (this.escTimer !== null) clearTimeout(this.escTimer)
@@ -1159,11 +1312,24 @@ export class TerminalApp {
         // A disposed plugin scope may already be gone.
       }
     }
-    this.screen.leave()
+    this.disposers = []
+    // Unblock the tools that are waiting on a dialogue, then stop the turn they
+    // belong to; only then is waiting for idle a wait that can end.
+    this.dismissInteractions()
     try {
-      await this.session.close()
-    } catch {
-      // Leaving matters more than a tidy detach.
+      if (this.session.busy) this.session.cancel()
+    } catch (error) {
+      this.debug(error)
+    }
+    try {
+      this.screen.leave()
+    } catch (error) {
+      this.debug(error)
+    }
+    try {
+      await withTimeout(this.session.close(), QUIT_CLOSE_MS)
+    } catch (error) {
+      this.debug(error)
     }
     if (typeof process.stdin.setRawMode === 'function') {
       try {
@@ -1172,13 +1338,37 @@ export class TerminalApp {
         // the PTY may already be gone
       }
     }
-    process.stdin.removeAllListeners('data')
-    process.stdin.pause()
+    try {
+      process.stdin.removeAllListeners('data')
+      process.stdin.pause()
+    } catch (error) {
+      this.debug(error)
+    }
     for (const [signal, handler] of this.signalHandlers ?? []) process.removeListener(signal, handler)
     this.resolveExit(this.exitCode)
-    const exit = this.ctx.get('appExit')
-    if (typeof exit === 'function') exit(this.exitCode)
-    else process.exitCode = this.exitCode
+    // The exit seam is read last and defensively: a throw here would leave the
+    // process running after the screen was already restored — and callers of
+    // `quit()` do not await it, so a rejection would be an uncaught one.
+    let exit
+    try {
+      exit = this.ctx.get('appExit')
+    } catch {
+      exit = undefined
+    }
+    if (typeof exit === 'function') {
+      try {
+        exit(this.exitCode)
+      } catch (error) {
+        this.debug(error)
+        process.exitCode = this.exitCode
+      }
+    } else if (this.headless) {
+      // `--help` / no TTY: nothing else owns this process, so end it here
+      // instead of hanging behind the harness's event loop.
+      process.exit(this.exitCode)
+    } else {
+      process.exitCode = this.exitCode
+    }
   }
 
   /** Resolves after the terminal has been restored. */
@@ -1245,17 +1435,25 @@ function detectGitBranch(cwd) {
   return ''
 }
 
-/** The `--help` text this profile prints. */
-export function usage() {
-  return `dsh-inproc-tui ${VERSION} — HDSL-web's terminal interface for DeepSeek Harness 0.2.x
-
-Usage:
-  dsh --profile dsh-inproc-tui                 start a new session in the current directory
-  dsh --profile dsh-inproc-tui --resume <id>   resume a stored session
-  dsh --profile dsh-inproc-tui --help          print this help
-
-The panel starts this for you (instance terminal). It runs in-process over
-dsh-base, so it needs a 0.2.x harness: the agent, streaming, approval and
-question services are the harness's own.
-`
+/**
+ * Settles after `promise` or after `ms`, whichever comes first.
+ *
+ * Quitting is not a place to wait for a harness that may never answer. The
+ * timer stays referenced: a quit that exits into an empty event loop would
+ * leave the process without restoring the terminal or reporting its code.
+ */
+function withTimeout(promise, ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      () => {
+        clearTimeout(timer)
+        resolve(undefined)
+      },
+    )
+  })
 }

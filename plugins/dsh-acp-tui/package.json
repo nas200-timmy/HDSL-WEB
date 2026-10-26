@@ -19,13 +19,15 @@
   "main": "./src/main.js",
   "exports": {
     ".": "./src/main.js",
-    "./ui/render": "./src/ui/render.js",
+    "./ui/render": "./shared/ui/render.js",
     "./package.json": "./package.json"
   },
   "files": [
     "bin",
     "src",
-    "README.md"
+    "shared",
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18.20"

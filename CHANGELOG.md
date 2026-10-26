@@ -38,6 +38,49 @@ tarball 保持自包含。
 旧线 ACP 接管）、`PluginApiTest`（清单带 `bundled`/`active`、首方安装走本地 tarball 且落进
 自己的 profile）。
 
+### 第一方终端：发布前的加固（审查发现）
+
+代码评审在推发布之前挑出一批问题，下面是修掉的部分——**两个包仍然零 npm 依赖**
+（`dependencies` 为空，唯一的 peer 是 dsh 自己的包，且全部 optional），所有检查离线可跑。
+
+- **粘贴根本进不来**：`keys.js` 早就把 bracketed paste 解成 `{name:'paste', text}`，两个 app 却
+  没有这个分支，于是往面板里粘贴文字是静默丢失。现在交给 `Composer#paste()`（CRLF 归一化后插入
+  光标处）；对话框打开时忽略——它拥有键盘，写进看不见的输入框比丢弃一次粘贴更意外。
+- **`/new` 每次必抛**：先清空 `blocks` 再 `adoptSession`，而 `adoptSession` 无条件 `bump(blocks[0])`，
+  `block.rev += 1` 在 `undefined` 上抛 TypeError——会话其实建好了，用户看到的是假错误。
+- **启动失败会留下常驻进程**：ACP 终端的 `start()` 在握手前就起了 interval，握手/`session/new`
+  失败只写一条通告，`main` 的 catch 永远等不到 → 进程（连同已 resume 的 stdin）永远不退。
+  现在失败路径还原屏幕、清定时器、关子进程，并把错误抛给 `main`；`stop()` 幂等。
+- **`acp.js` 的四处脆弱**：`stdin` 没有 `'error'` 监听（子进程死后写入变成未捕获的 EPIPE）；
+  `'error'` 分支不置 closed 让 `close()` 白等；没有握手超时；单行没有长度上限（一条没有换行的
+  垃圾既吃内存又让首条消息永远解析不出来）。现在都有：stdin error → 统一 finalize、30s 握手超时、
+  16Mi 行长上限、非 JSON 行只报一次协议错误且 reader 继续。
+- **两个审批请求互相覆盖**：第二个 `session/request_permission` 会顶掉第一个，前者永远不会被应答
+  而 harness 干等。现在排队，应答完一个再显示下一个。
+- **进程内那侧的四个真问题**：顶层 `import` 了一个 **optional** peer（`dsh-user-questions`），
+  缺这个包的组合会在模块加载阶段就失败 → 改成按 `name`/`code` 形状识别；code-level `inject` 硬等
+  `agentDefaultModel`/`sessions` 两个可选服务（缺一个就永久 pending、终端根本不出现）→ 收窄成
+  `['agents']`，可选项移到行级 `inject`；`cordis.patch.yml` override 了一个 0.2.x 里不存在的
+  `hmr` 行 → 删掉；审批/追问在 0.2.x 是 **waterfall**，现在按 `request.agent` 只答本会话的 agent，
+  其余 `next()`。
+- **进程内插件的异常会带走整个 harness**（也就是该实例的 web 进程）：事件回调、`tick()`、`render()`
+  现在都兜住，坏事件降级成一条（2 秒内合并的）通告，渲染失败退回一行兜底文本。
+- **退出会挂**：`quit()` 原来直接 `session.close()`，而回合可能卡在没人答复的审批上。现在先把未决
+  的审批/追问以 cancelled 结算、取消当前回合，再**有界**等待关闭；`--help` 也真的退出了（原来只打印
+  不 leave，`dsh --profile dsh-inproc-tui --help` 会挂住）。
+- **没有 TTY 就不该开屏**：进程内那侧补上 TTY 检查（与 ACP 一致），非 PTY 直接拒绝。
+- **包元数据**：ACP 的 `exports["./ui/render"]` 指向不存在的文件、`files` 漏了 `shared` → 修正并让
+  `check.mjs` 校验（exports 目标在 staging 后必须存在、`files` 必须覆盖 import）；两个包都补上
+  `LICENSE`（声明 GPL-3.0-or-later 却没有许可证文本）。
+- **peer 范围必须逐个枚举**：dsh 只发预发布版，而 npm 的 semver 里 `>=0.2.0-rc.2 <0.3` **不匹配**
+  `0.2.1-rc.3`（比较符的预发布只承认自己那组 `major.minor.patch`）。所以两个包都列实测过的版本，
+  稳定版出现后再换区间——理由写进 `plugins/README.md`。
+
+测试相应补齐：ACP 从 19 条到 **38 条**（协议层从零覆盖到九条：一次 read 两条消息、半行、非 JSON、
+超长行、stdin EPIPE、spawn error、握手超时、迟到 id、真实子进程握手），进程内从零到 **9 条**
+（可选 peer 的形状识别、waterfall 的归属判定与降级、参数解析、patch 行与 code-level inject 的
+静态断言）。把 ACP 的源码换回修复前再跑，18 条新测试里 17 条会红。
+
 ## v0.5.84 — 2026-10-26 · 开发者提权升级、终端会话生命周期、手机窄屏适配
 
 - **提权可延长、可撤销**：开发者提权不再锁死 30 分钟——「设置 → 开发者」页可以主动停止
