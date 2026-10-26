@@ -92,6 +92,10 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
   /** 已从服务端收到的终端字节数（KB），用于区分“没收到”和“收到但没渲染”。 */
   const [rxKb, setRxKb] = useState(0);
   const rxRef = useRef(0);
+  /** 提权到期时间（epoch ms），null = 面板没报（未提权或读不到）。头部倒计时用。 */
+  const [elevationExpiry, setElevationExpiry] = useState<number | null>(null);
+  /** 每秒走一格的时钟，只驱动倒计时渲染。 */
+  const [nowMs, setNowMs] = useState(() => Date.now());
   /** 票据到手、等终端窗口挂载完成后再接 WebSocket（帧要画进 xterm）。 */
   const [pending, setPending] = useState<TerminalOpen | null>(null);
   /** Claude Web 的两个内核（社区引擎 / 官方），只在需要选择时非空。 */
@@ -359,6 +363,7 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     setMessage("");
     try {
       const status = await api.developerStatus();
+      setElevationExpiry(status.expiresAt ? Date.parse(status.expiresAt) : null);
       if (!status.webShellEnabled) {
         setPhase("error");
         setMessage("Web Shell 已在「设置 → 开发者模式」里关闭");
@@ -409,12 +414,30 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     };
   }, [target, begin, teardown]);
 
+  /// 每 30 秒对一次表、每秒走一格：提权会被其它页面延长、被使用滑动、
+  /// 或悄悄到期，头部倒计时始终要以面板为准；读失败就保持现状。
+  useEffect(() => {
+    if (!target) return;
+    const poll = window.setInterval(() => {
+      api
+        .developerStatus()
+        .then((s) => setElevationExpiry(s.expiresAt ? Date.parse(s.expiresAt) : null))
+        .catch(() => {});
+    }, 30000);
+    const tick = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => {
+      window.clearInterval(poll);
+      window.clearInterval(tick);
+    };
+  }, [target]);
+
   const submitPassword = async () => {
     if (!password) return;
     setBusy(true);
     setMessage("");
     try {
-      await api.elevateDeveloper(password);
+      const elevation = await api.elevateDeveloper(password);
+      setElevationExpiry(elevation.expiresAt ? Date.parse(elevation.expiresAt) : null);
       setPassword("");
       await afterElevation();
     } catch (e) {
@@ -433,7 +456,8 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     setMessage("");
     try {
       await api.setDeveloperPassword(setupAdmin, setupPassword, setupConfirm);
-      await api.elevateDeveloper(setupPassword);
+      const elevation = await api.elevateDeveloper(setupPassword);
+      setElevationExpiry(elevation.expiresAt ? Date.parse(elevation.expiresAt) : null);
       setSetupAdmin("");
       setSetupPassword("");
       setSetupConfirm("");
@@ -466,6 +490,27 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
   };
 
   if (!target) return null;
+
+  /** 头部提权倒计时。提权过期只影响开新终端/重连，不动已连接的终端——
+   *  agent 继续跑，这里只负责让用户心里有数，到期后重连时再验证即可。 */
+  let elevationCountdown: { text: string; tone: "ok" | "soon" | "expired" } | null = null;
+  if (elevationExpiry != null) {
+    const left = elevationExpiry - nowMs;
+    if (left <= 0) {
+      elevationCountdown = { text: "提权已过期", tone: "expired" };
+    } else {
+      const totalSec = Math.floor(left / 1000);
+      const h = Math.floor(totalSec / 3600);
+      const m = Math.floor((totalSec % 3600) / 60);
+      const s = totalSec % 60;
+      const mm = m.toString().padStart(2, "0");
+      const ss = s.toString().padStart(2, "0");
+      elevationCountdown = {
+        text: h > 0 ? `提权剩余 ${h}:${mm}:${ss}` : `提权剩余 ${m}:${ss}`,
+        tone: left < 5 * 60_000 ? "soon" : "ok",
+      };
+    }
+  }
 
   // 前置步骤画对话框：先密码（或首次设置）、必要时选内核，然后才换成终端窗口。
   if (isDialogPhase(phase)) {
@@ -609,6 +654,14 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
             {phaseText(phase)}
             {rxKb > 0 ? ` · 已接收 ${rxKb} KB` : ""}
           </span>
+          {elevationCountdown && (
+            <span
+              className={`terminal-elevation terminal-elevation-${elevationCountdown.tone}`}
+              title="提权只影响开新终端与重连；到期不会断开当前终端，重连时再验证一次即可"
+            >
+              {elevationCountdown.text}
+            </span>
+          )}
         </div>
 
         <div className="terminal-body" ref={hostRef} />

@@ -524,6 +524,21 @@
 .terminal-state-error {
   color: #f2b8b5;
 }
+/* 提权剩余时间倒计时：纯提示。提权过期不杀已连接的终端（它只 gate
+   开新终端/重连），所以「已过期」也只是提醒重连时要再验证一次。 */
+.terminal-elevation {
+  font-size: 11px;
+  opacity: 0.8;
+  white-space: nowrap;
+}
+.terminal-elevation-soon {
+  color: #f2b8b5;
+  opacity: 1;
+}
+.terminal-elevation-expired {
+  color: #f2b8b5;
+  opacity: 1;
+}
 .terminal-body {
   flex: 1;
   min-height: 0;

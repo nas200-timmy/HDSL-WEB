@@ -38,6 +38,9 @@
   `env(safe-area-inset-*)`。终端与底栏之间有一排功能键（Esc、Tab、Ctrl+C、Ctrl+D、
   Ctrl+Z、方向键），按下即发对应 PTY 字节——手机软键盘发不出这些键，而 WS 二进制帧
   本来就是原始字节（terminal-protocol.md §3），协议与服务端都不用动。
+- 终端头部显示**提权剩余时间倒计时**（每 30 秒与面板对表）。提权过期**不影响**已连接
+  的终端——它只 gate 开新终端/重连，agent 该跑还跑；掉线后点「重连」会重新走一次密码
+  对话框，验证接上即可。
 - 不做空闲超时；终端一直挂着不自动回收。终端 WebSocket 显式 `setMaxIdleTimeout(0)`——Jetty 默认的
   30 秒曾把静默终端以 `1001 Connection Idle Timeout` 关掉，看起来就像"终端自己断了"（v0.5.81 修）。
 
