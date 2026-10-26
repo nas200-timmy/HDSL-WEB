@@ -33,6 +33,11 @@
 - `/exit`、进程退出、崩溃 → 清屏关窗，恢复之前的 web 模式。
 - 关窗 / 刷新 / 断网 → 只 detach，进程继续跑；重新打开即 attach 并回放最近输出。
 - 底栏「停止」= 紧急杀进程（复用实例停止机制），不是关窗。
+- 手机形态（窄屏或触屏）：覆盖层全屏铺满，窗口高度钉在 `visualViewport` 上——软键盘
+  起落、地址栏伸缩都不遮挡输入行（iOS 上软键盘只改 visualViewport）；刘海与手势条走
+  `env(safe-area-inset-*)`。终端与底栏之间有一排功能键（Esc、Tab、Ctrl+C、Ctrl+D、
+  Ctrl+Z、方向键），按下即发对应 PTY 字节——手机软键盘发不出这些键，而 WS 二进制帧
+  本来就是原始字节（terminal-protocol.md §3），协议与服务端都不用动。
 - 不做空闲超时；终端一直挂着不自动回收。终端 WebSocket 显式 `setMaxIdleTimeout(0)`——Jetty 默认的
   30 秒曾把静默终端以 `1001 Connection Idle Timeout` 关掉，看起来就像"终端自己断了"（v0.5.81 修）。
 

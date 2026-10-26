@@ -37,6 +37,21 @@ function isDialogPhase(phase: Phase): boolean {
   return phase === "opening" || phase === "password" || phase === "setup" || phase === "kernel";
 }
 
+/// 手机形态的功能键条（CSS 按屏幕宽度/指针类型决定可见性，桌面不占高度）。
+/// 手机软键盘发不出控制键与方向键，按一下这里就直接发对应的 PTY 字节——协议里
+/// WS 二进制帧就是原始字节（docs/terminal-protocol.md §3），所以不需要动服务端。
+const MOBILE_KEYS: { label: string; seq: string; aria: string }[] = [
+  { label: "Esc", seq: "\x1b", aria: "Escape" },
+  { label: "Tab", seq: "\t", aria: "Tab" },
+  { label: "Ctrl+C", seq: "\x03", aria: "Ctrl+C（中断当前程序）" },
+  { label: "Ctrl+D", seq: "\x04", aria: "Ctrl+D（EOF / 退出会话）" },
+  { label: "Ctrl+Z", seq: "\x1a", aria: "Ctrl+Z（挂起当前程序）" },
+  { label: "↑", seq: "\x1b[A", aria: "上箭头" },
+  { label: "↓", seq: "\x1b[B", aria: "下箭头" },
+  { label: "←", seq: "\x1b[D", aria: "左箭头" },
+  { label: "→", seq: "\x1b[C", aria: "右箭头" },
+];
+
 /** 原地终端（docs/web-shell.md）：xterm 覆盖层 + 服务端 PTY。
  *
  * 关窗只 detach，agent 继续跑；底栏「停止」才杀进程。刷新后重新打开会接回
@@ -44,6 +59,8 @@ function isDialogPhase(phase: Phase): boolean {
  * 打开需要开发者密码提权：403 时先在这里输入一次。 */
 export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo | null; onClose: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  /** 终端窗口容器：手机形态下把高度钉在 visualViewport 上（软键盘起落时跟随）。 */
+  const winRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<XFitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -51,6 +68,8 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
   const phaseRef = useRef<Phase>("opening");
   const closeTimerRef = useRef<number | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
+  /** visualViewport 的 resize 监听句柄，teardown 时摘下。 */
+  const viewportHandlerRef = useRef<(() => void) | null>(null);
   /** 父组件每次渲染都会传入新的 onClose；用 ref 兜住，挂载 effect 才不会跟着重连。 */
   const onCloseRef = useRef(onClose);
   /** 每次 openSession 自增；慢 POST 回来时若已过期，丢弃结果。 */
@@ -91,11 +110,24 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     }
     observerRef.current?.disconnect();
     observerRef.current = null;
+    if (viewportHandlerRef.current) {
+      window.visualViewport?.removeEventListener("resize", viewportHandlerRef.current);
+      viewportHandlerRef.current = null;
+    }
     wsRef.current?.close();
     wsRef.current = null;
     termRef.current?.dispose();
     termRef.current = null;
     fitRef.current = null;
+  }, []);
+
+  /** 字节进 PTY：物理键盘经 xterm 的 onData，功能按钮经这里。都只发送、不在本地
+   *  回显——画面全部来自远端 PTY，本地多写一次就会双倍字符。 */
+  const sendText = useCallback((text: string) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(new TextEncoder().encode(text));
+    }
   }, []);
 
   const connect = useCallback(async (data: TerminalOpen) => {
@@ -141,11 +173,7 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
-    term.onData((chunk) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(new TextEncoder().encode(chunk));
-      }
-    });
+    term.onData((chunk) => sendText(chunk));
     term.onResize(({ cols, rows }) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "resize", cols, rows }));
@@ -235,10 +263,30 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
       }
     };
 
+    // 软键盘起落只改 visualViewport、不改 layout viewport（iOS 尤其如此），只看
+    // 元素尺寸会漏掉。手机形态把窗口高度直接钉在可视高度上，fit() 随之重算行列；
+    // 宽屏不动内联样式，高度交给 CSS 的 min(72vh, 760px)。
+    const applyViewport = () => {
+      const win = winRef.current;
+      const vv = window.visualViewport;
+      if (!win || !vv) return;
+      if (window.matchMedia("(max-width: 720px)").matches) {
+        win.style.height = `${Math.round(vv.height)}px`;
+      } else {
+        win.style.height = "";
+      }
+      fit.fit();
+    };
+    applyViewport();
+    if (window.visualViewport) {
+      viewportHandlerRef.current = applyViewport;
+      window.visualViewport.addEventListener("resize", applyViewport);
+    }
+
     const observer = new ResizeObserver(() => fit.fit());
     observer.observe(hostRef.current);
     observerRef.current = observer;
-  }, [teardown, setPhase]);
+  }, [teardown, sendText, setPhase]);
 
   /// 申请票据并进入终端。前置步骤（密码 / 内核）已经走完时才调用。
   const openSession = useCallback(async (kernel?: string) => {
@@ -552,7 +600,7 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
 
   return (
     <div className="terminal-overlay" role="dialog" aria-label={`${target.name} ${I18N["terminal.title"]}`}>
-      <div className="terminal-window">
+      <div className="terminal-window" ref={winRef}>
         <div className="terminal-head">
           <span className="terminal-title">
             {target.name} · {I18N["terminal.title"]}
@@ -564,6 +612,27 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
         </div>
 
         <div className="terminal-body" ref={hostRef} />
+
+        <div className="terminal-keys" role="toolbar" aria-label="终端功能键">
+          {MOBILE_KEYS.map((key) => (
+            <button
+              key={key.label}
+              type="button"
+              className="terminal-key"
+              aria-label={key.aria}
+              title={key.aria}
+              // 不让按钮抢走 xterm 隐藏输入框的焦点（手机软键盘不会因此收起）；
+              // 少数仍抢走焦点的情况在 click 里把焦点还回去。
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => {
+                sendText(key.seq);
+                termRef.current?.focus();
+              }}
+            >
+              {key.label}
+            </button>
+          ))}
+        </div>
 
         {phase === "connecting" && <div className="terminal-note">{I18N["terminal.state.opening"]}</div>}
         {phase === "desktop" && <div className="terminal-note">{I18N["terminal.desktop"]}</div>}
