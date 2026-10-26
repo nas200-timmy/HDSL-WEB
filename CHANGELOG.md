@@ -2,7 +2,7 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## v0.5.85 — 未发布 · 面板自带两个第一方终端（进程内 / ACP）
+## v0.5.91 — 2026-10-26 · 面板自带两个第一方终端（进程内 / ACP）
 
 面板开始带自己的终端插件：仓库根下新增 `plugins/`，一个目录一个 npm 包；构建时打成 npm
 布局的 tarball 塞进 jar（`first-party-plugins/index.json` + `.tgz`），安装时由
