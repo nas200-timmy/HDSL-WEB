@@ -195,6 +195,11 @@ export const api = {
   developerStatus: () => request<DeveloperStatus>("/api/developer/status"),
   elevateDeveloper: (password: string) =>
     request<{ elevated: boolean; expiresAt: string }>("/api/developer/elevate", jsonInit("POST", { password })),
+  /** 已提权的前提下把提权延长到 3 小时后；未提权时后端拒绝 */
+  extendDeveloper: () =>
+    request<{ elevated: boolean; expiresAt: string }>("/api/developer/extend", { method: "POST" }),
+  /** 立即停止当前会话的提权（不需要当前处于提权状态，幂等） */
+  revokeDeveloper: () => request<{ elevated: boolean }>("/api/developer/revoke", { method: "POST" }),
   /** 开发者模式下翻转 Web Shell 开关；需要先提权 */
   setWebShell: (enabled: boolean) =>
     request<{ ok: boolean; enabled: boolean }>("/api/developer/web-shell", jsonInit("POST", { enabled })),

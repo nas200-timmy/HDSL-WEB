@@ -44,6 +44,10 @@ public final class DeveloperElevation {
     /// watching an agent should not be asked for the password mid-task, and
     /// the elevation only gates new opens/attach, not the live WebSocket.
     public static final Duration TTL = Duration.ofMinutes(30);
+    /// The ceiling a session may give itself on demand (the developer page's
+    /// 「延长提权」): one long stretch — a hands-on maintenance window — beats
+    /// being re-asked hourly, and it is still a fraction of a day.
+    public static final Duration EXTENDED_TTL = Duration.ofHours(3);
     /// How many wrong developer passwords are allowed inside the window.
     public static final int MAX_FAILURES = 3;
     /// How long a locked key waits before it may guess again.
@@ -97,6 +101,27 @@ public final class DeveloperElevation {
     /// Marks `key` elevated for a fresh [TTL].
     public void elevate(String key) {
         elevations.put(key, Instant.now().plus(TTL));
+    }
+
+    /// Stretches `key`'s elevation to `duration` from now, answering the new
+    /// expiry. The caller must have established elevation first (see
+    /// [#require]); extending a key that has none would mint authority out of
+    /// nothing, so this method refuses by answering `null`.
+    public @Nullable Instant extend(String key, Duration duration) {
+        Instant now = Instant.now();
+        Instant expiry = elevations.computeIfPresent(key, (k, old) -> old.isAfter(now) ? now.plus(duration) : null);
+        return expiry;
+    }
+
+    /// When `key`'s elevation expires, if it is elevated and its session
+    /// alive — what [#status] answers as `expiresAt`.
+    public @Nullable Instant expiryOf(String key, boolean sessionAlive) {
+        if (!sessionAlive) {
+            elevations.remove(key);
+            return null;
+        }
+        Instant expiry = elevations.get(key);
+        return expiry != null && expiry.isAfter(Instant.now()) ? expiry : null;
     }
 
     /// Ends one key's elevation.

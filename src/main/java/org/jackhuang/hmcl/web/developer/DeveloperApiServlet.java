@@ -44,11 +44,13 @@ import java.util.function.BooleanSupplier;
 /// The developer mode's own door: the second factor behind the web terminal.
 ///
 /// `POST /api/developer/elevate` proves the password; `GET /api/developer/status`
-/// answers whether the caller is elevated and whether the Web Shell is on;
-/// `POST /api/developer/password` sets or changes it (current developer
-/// password + panel password confirmation, like the TLS settings route);
-/// `POST /api/developer/password/clear` removes it; `POST /api/developer/web-shell`
-/// flips the instance-terminal switch.
+/// answers whether the caller is elevated (and when that expires) and whether
+/// the Web Shell is on; `POST /api/developer/extend` stretches an existing
+/// elevation to [DeveloperElevation.EXTENDED_TTL]; `POST /api/developer/revoke`
+/// drops it early; `POST /api/developer/password` sets or changes it (current
+/// developer password + panel password confirmation, like the TLS settings
+/// route); `POST /api/developer/password/clear` removes it;
+/// `POST /api/developer/web-shell` flips the instance-terminal switch.
 ///
 /// The routes are backed by [DeveloperElevation] and [DeveloperAuth], which
 /// the terminal's own gate shares.
@@ -79,9 +81,14 @@ public final class DeveloperApiServlet extends HttpServlet {
         String path = request.getPathInfo();
         String method = request.getMethod();
         if ("/status".equals(path) && "GET".equals(method)) {
+            String key = keyOf(request);
             JsonObject body = new JsonObject();
             body.addProperty("devPasswordSet", devAuth.isSet());
-            body.addProperty("elevated", elevation.isElevated(keyOf(request), sessionAlive(request)));
+            body.addProperty("elevated", elevation.isElevated(key, sessionAlive(request)));
+            Instant expiry = elevation.expiryOf(key, sessionAlive(request));
+            if (expiry != null) {
+                body.addProperty("expiresAt", expiry.toString());
+            }
             body.addProperty("webShellEnabled", config.webShell.enabled);
             body.addProperty("https",
                     RequestSecurity.isSecure(request, tlsActive.getAsBoolean(), config));
@@ -90,6 +97,14 @@ public final class DeveloperApiServlet extends HttpServlet {
         }
         if ("/elevate".equals(path) && "POST".equals(method)) {
             elevate(request, response);
+            return;
+        }
+        if ("/extend".equals(path) && "POST".equals(method)) {
+            extend(request, response);
+            return;
+        }
+        if ("/revoke".equals(path) && "POST".equals(method)) {
+            revoke(request, response);
             return;
         }
         if ("/password".equals(path) && "POST".equals(method)) {
@@ -143,6 +158,54 @@ public final class DeveloperApiServlet extends HttpServlet {
         JsonObject body = new JsonObject();
         body.addProperty("elevated", true);
         body.addProperty("expiresAt", now.plus(DeveloperElevation.TTL).toString());
+        Json.write(response, body);
+    }
+
+    /// The developer page's 「延长提权」: an already-elevated session stretches
+    /// itself to [DeveloperElevation.EXTENDED_TTL] without re-typing the
+    /// password. Extending requires the elevation it lengthens — otherwise the
+    /// endpoint would be a second, password-less mint.
+    private void extend(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireTls(request, response)) {
+            return;
+        }
+        String key = keyOf(request);
+        if (!elevation.require(key, sessionAlive(request))) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return;
+        }
+        Instant expiry = elevation.extend(key, DeveloperElevation.EXTENDED_TTL);
+        if (expiry == null) {
+            // require() just passed, so this is a race with expiry — answer
+            // honestly instead of pretending the extension landed.
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevation expired, verify again");
+            return;
+        }
+        AuditLog.log(AuditLog.Channel.WEB, "developer.elevation", "extend", "success",
+                actorOf(request), request.getRemoteAddr());
+        JsonObject body = new JsonObject();
+        body.addProperty("elevated", true);
+        body.addProperty("expiresAt", expiry.toString());
+        Json.write(response, body);
+    }
+
+    /// The developer page's 「停止提权」: drops this session's elevation
+    /// immediately, ahead of its expiry. Deliberately **not** gated on the
+    /// elevation itself — de-escalation must work even when (or exactly
+    /// because) the elevation just expired, and clearing an absent key is a
+    /// no-op by nature.
+    private void revoke(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireTls(request, response)) {
+            return;
+        }
+        String key = keyOf(request);
+        elevation.clear(key);
+        AuditLog.log(AuditLog.Channel.WEB, "developer.elevation", "revoke", "success",
+                actorOf(request), request.getRemoteAddr());
+        JsonObject body = new JsonObject();
+        body.addProperty("elevated", false);
         Json.write(response, body);
     }
 

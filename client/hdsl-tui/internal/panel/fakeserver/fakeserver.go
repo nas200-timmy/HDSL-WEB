@@ -196,6 +196,17 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"elevated": true, "expiresAt": "2026-10-23T12:34:56Z"})
 		return
+	case method == "POST" && r.URL.Path == "/api/developer/extend":
+		if !s.Elevated {
+			writeError(w, http.StatusForbidden, "developer_elevation_required: elevate with the developer password first")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"elevated": true, "expiresAt": "2026-10-23T15:34:56Z"})
+		return
+	case method == "POST" && r.URL.Path == "/api/developer/revoke":
+		s.Elevated = false
+		writeJSON(w, http.StatusOK, map[string]any{"elevated": false})
+		return
 	case method == "GET" && r.URL.Path == "/api/developer/status":
 		writeJSON(w, http.StatusOK, map[string]any{
 			"devPasswordSet":  s.DevPasswordSet,

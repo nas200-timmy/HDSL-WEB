@@ -30,6 +30,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -139,6 +141,56 @@ class DeveloperApiServletTest {
             assertEquals(200, changed.statusCode(), changed.body());
             // A new secret kills every elevation minted against the old one.
             assertFalse(json(get(client, base + "/api/developer/status", cookie)).get("elevated").getAsBoolean());
+        }
+    }
+
+    @Test
+    void elevationCanBeExtendedToThreeHoursAndRevokedEarly() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir,
+                Map.of(UserStore.ENV_ADMIN_PASSWORD, PANEL_PASSWORD), config -> {
+                    config.bindHost = "127.0.0.1";
+                    config.https.enabled = true;
+                })) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "https://127.0.0.1:" + running.port();
+            String cookie = login(client, base);
+            HttpResponse<String> set = post(client, base + "/api/developer/password",
+                    "{\"adminPassword\":\"" + PANEL_PASSWORD + "\",\"password\":\"" + DEV_PASSWORD
+                            + "\",\"confirm\":\"" + DEV_PASSWORD + "\"}", cookie);
+            assertEquals(200, set.statusCode(), set.body());
+
+            // Extending without an elevation would mint authority for free.
+            HttpResponse<String> refused = post(client, base + "/api/developer/extend", "{}", cookie);
+            assertEquals(403, refused.statusCode(), refused.body());
+            assertTrue(refused.body().contains("developer_elevation_required"));
+
+            HttpResponse<String> elevated = post(client, base + "/api/developer/elevate",
+                    "{\"password\":\"" + DEV_PASSWORD + "\"}", cookie);
+            assertEquals(200, elevated.statusCode(), elevated.body());
+            JsonObject status = json(get(client, base + "/api/developer/status", cookie));
+            assertTrue(status.get("elevated").getAsBoolean());
+            Instant initialExpiry = Instant.parse(status.get("expiresAt").getAsString());
+            assertTrue(initialExpiry.isBefore(Instant.now().plus(Duration.ofMinutes(31))));
+
+            // The extension answers ~3h out — far beyond the 30-minute TTL,
+            // so this proves the stretch and not a slide.
+            HttpResponse<String> extended = post(client, base + "/api/developer/extend", "{}", cookie);
+            assertEquals(200, extended.statusCode(), extended.body());
+            Instant newExpiry = Instant.parse(json(extended).get("expiresAt").getAsString());
+            assertTrue(newExpiry.isAfter(Instant.now().plus(Duration.ofHours(2))),
+                    "extended expiry should be ~3h out, got " + newExpiry);
+            assertEquals(newExpiry, Instant.parse(json(get(client, base + "/api/developer/status", cookie))
+                    .get("expiresAt").getAsString()));
+
+            // Revoking drops the elevation immediately and is safe to repeat.
+            HttpResponse<String> revoked = post(client, base + "/api/developer/revoke", "{}", cookie);
+            assertEquals(200, revoked.statusCode(), revoked.body());
+            assertFalse(json(revoked).get("elevated").getAsBoolean());
+            JsonObject after = json(get(client, base + "/api/developer/status", cookie));
+            assertFalse(after.get("elevated").getAsBoolean());
+            assertFalse(after.has("expiresAt"));
+            HttpResponse<String> again = post(client, base + "/api/developer/revoke", "{}", cookie);
+            assertEquals(200, again.statusCode(), again.body());
         }
     }
 
