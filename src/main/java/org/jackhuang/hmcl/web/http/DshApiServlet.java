@@ -78,6 +78,8 @@ public final class DshApiServlet extends HttpServlet {
             json.add("bin", entry.bin() == null
                     ? JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(entry.bin()));
             json.addProperty("profile", entry.profile());
+            // First-party: the panel ships the tarball, so the install needs no registry.
+            json.addProperty("bundled", entry.bundled());
             if (entry.requiresDsh() != null) {
                 // The harness line this one needs; absent means it starts on any published
                 // line. Shown next to the licence because it decides whether installing it

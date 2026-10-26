@@ -2,6 +2,155 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.5.85 — 未发布 · 面板自带两个第一方终端（进程内 / ACP）
+
+面板开始带自己的终端插件：仓库根下新增 `plugins/`，一个目录一个 npm 包；构建时打成 npm
+布局的 tarball 塞进 jar（`first-party-plugins/index.json` + `.tgz`），安装时由
+`FirstPartyPlugins` 从 jar 写出、以 `file:` 规格交给 `dsh plugin add`——**离线可装**，
+不需要 registry，也不需要构建机上有 npm。
+
+两个终端，两种形状：
+
+- **`@nas200-timmy/dsh-inproc-tui`**（profile `dsh-inproc-tui`）：**mode bundle**，叠在
+  `dsh-base` 上、跑在 harness 进程里。因此拿到 ACP 给不了的东西：`agent/assistant-stream`
+  的 token 级文本与思考增量、`tool/call`+`tool/result` 的工具卡片（工具本身仍是 dsh 的）、
+  `approval/request` 审批、`user-questions/request` 追问、`model/selection` 进程内切换、
+  `/resume` 与 `/compact`。`requiresDsh >=0.2.0-rc.2`（实测 0.2.0-rc.2 / 0.2.1-rc.3）。
+- **`@nas200-timmy/dsh-acp-tui`**（profile `dsh-acp-tui`，bin `dsh-acp-tui`）：**独立程序**，
+  不 import 任何 harness 包，用 ACP v1 与 `dsh --profile acp` 通信。**绝对的兼容选项**，
+  `>=0.1.2-rc.1` 起都能跑（实测 0.1.2-rc.1 / 0.1.7-rc.2 / 0.2.1-rc.3），也是同实例版本
+  来回变时的退路。
+
+安装与运行规则：
+
+- **两个可以同时装，但只有一个在跑**：清单顺序是偏好（0.2.x 优先进程内），启动时取第一个
+  「已装 + 文件在 + `fitsHost`」的条目；版本降下去后进程内那个不再匹配，ACP 自动接管。
+  列表每行多一个 `active`，页面标「当前生效 / 备用」。
+- **安装期只有一条硬规则**：低版本实例装不了要求更高版本的插件（按钮灰掉 + 服务端 409，
+  不隐藏该行）；装第一个方终端不再被拒。
+
+渲染层抽到 `plugins/shared` 给两个终端共用。它在仓库里位于插件目录之外、安装后又必须在包内
+（`package/shared`）——Gradle 的 staging 任务负责搬运并把 import 路径改写过去，源码保持可读、
+tarball 保持自包含。
+
+测试：`FirstPartyPluginsTest`（索引、摘要、npm 布局、目录与构建版本一致）、
+`DshTuiPluginsTest`（首方条目、运行分组、宿主区间）、`DshTuiTest`（两版同装时当前线跑进程内、
+旧线 ACP 接管）、`PluginApiTest`（清单带 `bundled`/`active`、首方安装走本地 tarball 且落进
+自己的 profile）。
+
+### 第一方终端：发布前的加固（审查发现）
+
+代码评审在推发布之前挑出一批问题，下面是修掉的部分——**两个包仍然零 npm 依赖**
+（`dependencies` 为空，唯一的 peer 是 dsh 自己的包，且全部 optional），所有检查离线可跑。
+
+- **粘贴根本进不来**：`keys.js` 早就把 bracketed paste 解成 `{name:'paste', text}`，两个 app 却
+  没有这个分支，于是往面板里粘贴文字是静默丢失。现在交给 `Composer#paste()`（CRLF 归一化后插入
+  光标处）；对话框打开时忽略——它拥有键盘，写进看不见的输入框比丢弃一次粘贴更意外。
+- **`/new` 每次必抛**：先清空 `blocks` 再 `adoptSession`，而 `adoptSession` 无条件 `bump(blocks[0])`，
+  `block.rev += 1` 在 `undefined` 上抛 TypeError——会话其实建好了，用户看到的是假错误。
+- **启动失败会留下常驻进程**：ACP 终端的 `start()` 在握手前就起了 interval，握手/`session/new`
+  失败只写一条通告，`main` 的 catch 永远等不到 → 进程（连同已 resume 的 stdin）永远不退。
+  现在失败路径还原屏幕、清定时器、关子进程，并把错误抛给 `main`；`stop()` 幂等。
+- **`acp.js` 的四处脆弱**：`stdin` 没有 `'error'` 监听（子进程死后写入变成未捕获的 EPIPE）；
+  `'error'` 分支不置 closed 让 `close()` 白等；没有握手超时；单行没有长度上限（一条没有换行的
+  垃圾既吃内存又让首条消息永远解析不出来）。现在都有：stdin error → 统一 finalize、30s 握手超时、
+  16Mi 行长上限、非 JSON 行只报一次协议错误且 reader 继续。
+- **两个审批请求互相覆盖**：第二个 `session/request_permission` 会顶掉第一个，前者永远不会被应答
+  而 harness 干等。现在排队，应答完一个再显示下一个。
+- **进程内那侧的四个真问题**：顶层 `import` 了一个 **optional** peer（`dsh-user-questions`），
+  缺这个包的组合会在模块加载阶段就失败 → 改成按 `name`/`code` 形状识别；code-level `inject` 硬等
+  `agentDefaultModel`/`sessions` 两个可选服务（缺一个就永久 pending、终端根本不出现）→ 收窄成
+  `['agents']`，可选项移到行级 `inject`；`cordis.patch.yml` override 了一个 0.2.x 里不存在的
+  `hmr` 行 → 删掉；审批/追问在 0.2.x 是 **waterfall**，现在按 `request.agent` 只答本会话的 agent，
+  其余 `next()`。
+- **进程内插件的异常会带走整个 harness**（也就是该实例的 web 进程）：事件回调、`tick()`、`render()`
+  现在都兜住，坏事件降级成一条（2 秒内合并的）通告，渲染失败退回一行兜底文本。
+- **退出会挂**：`quit()` 原来直接 `session.close()`，而回合可能卡在没人答复的审批上。现在先把未决
+  的审批/追问以 cancelled 结算、取消当前回合，再**有界**等待关闭；`--help` 也真的退出了（原来只打印
+  不 leave，`dsh --profile dsh-inproc-tui --help` 会挂住）。
+- **没有 TTY 就不该开屏**：进程内那侧补上 TTY 检查（与 ACP 一致），非 PTY 直接拒绝。
+- **包元数据**：ACP 的 `exports["./ui/render"]` 指向不存在的文件、`files` 漏了 `shared` → 修正并让
+  `check.mjs` 校验（exports 目标在 staging 后必须存在、`files` 必须覆盖 import）；两个包都补上
+  `LICENSE`（声明 GPL-3.0-or-later 却没有许可证文本）。
+- **peer 范围必须逐个枚举**：dsh 只发预发布版，而 npm 的 semver 里 `>=0.2.0-rc.2 <0.3` **不匹配**
+  `0.2.1-rc.3`（比较符的预发布只承认自己那组 `major.minor.patch`）。所以两个包都列实测过的版本，
+  稳定版出现后再换区间——理由写进 `plugins/README.md`。
+
+测试相应补齐：ACP 从 19 条到 **38 条**（协议层从零覆盖到九条：一次 read 两条消息、半行、非 JSON、
+超长行、stdin EPIPE、spawn error、握手超时、迟到 id、真实子进程握手），进程内从零到 **9 条**
+（可选 peer 的形状识别、waterfall 的归属判定与降级、参数解析、patch 行与 code-level inject 的
+静态断言）。把 ACP 的源码换回修复前再跑，18 条新测试里 17 条会红。
+
+### 第一方终端：第二轮审查（输入、会话切换、半安装）
+
+第二轮按"两个终端都是我们的"逐条核对输入路径与会话生命周期。零依赖、离线构建的约束不变。
+
+- **斜杠命令只能从列表里选**：命令面板是 overlay，而 overlay 一律吃掉键盘，所以 `/` 之后的每个
+  字母都进了对话框——无法逐字输入命令，Tab 补全也失去意义。现在面板自己声明 `live`：编辑键
+  （字符、退格、删除、粘贴、左右、home/end、ctrl+a/e/u/k/w）照常改正文，面板跟着重新过滤，方向键
+  与回车仍归它；文本一旦不再是命令前缀（空格、换行、无匹配）面板自动收起。共用逻辑在
+  `plugins/shared/ui/edit.js`（`applyEditKey` / `isLiveOverlay`），两个终端同一份。
+- **进程内终端的粘贴是静默丢失的**：ACP 那侧有 `paste` 分支，进程内没有（上一轮只修了一半）。
+  现在两边都把剪贴板交给 `Composer#paste()`。
+- **`Ctrl+J` 会发送消息**：解码层把 `\n` 解成 `enter + ctrl`（裸换行是控制字节，没有跨终端一致的
+  键名），而两个 app 只把 `shift/alt + enter` 当换行。现在 `ctrl` 也算换行。
+- **`Ctrl+O` 展不开工具输出**：工具卡创建时写了 `expanded: false`，而渲染层的全局开关判据是
+  `block.expanded !== false`——卡片把自己钉死成折叠。现在创建时不写这个字段，展开与否由开关决定。
+- **`/model`、`/effort` 只改了显示**：`select()` 只往会话日志追加 `model/selection`，而 harness 的
+  `system-prompt/assemble` 每一步读的是 `installModelSelection` 拿到的那个 state 对象里的
+  `current`——选择器说切了，下一次请求还走旧路由。现在 state 留在 `ChatSession` 上，`select()`
+  同时写它（并继续写事件，恢复会话仍读得到）。
+- **切换会话不隔离**：`/new` 与 `/resume` 在回合运行时直接换 agent，旧回合的事件落进新会话的记录，
+  排队里的消息会被发给新会话。现在两个终端都先 `detachTurn()`：取消当前回合并**有界**等 idle、
+  清空队列与流式块，再换；ACP 侧另外按 `sessionId` 丢弃旧会话迟到的 `session/update`。
+- **`/resume` 失败却说"已恢复"**：注册表拒绝该 id 时 `ChatSession` 会静默建一个新会话，交互式入口
+  没有看 `resumeFailure`。现在按 `resumed` 分支：失败给一条带原因的红色通告并重画 banner；
+  成功则把会话日志（最近 400 条）回放成用户/助手/工具卡片——否则"恢复"只是换了个空白屏。
+- **半安装仍显示"已安装"**：列表的 `installed` 只读 profile 清单，而 pnpm 先写清单再取包，
+  取包失败的 profile 会声称有插件、磁盘上却没有——开终端立刻退出且零输出。列表现在多给
+  `filesPresent`（磁盘判据，复用 `DshTui.filesPresent`），页面把这一行标成「安装未完成」（变灰说明
+  原因，不隐藏），并同时给「重新安装」与「卸载」。
+- 测试：ACP 44 条（新增：面板跟随输入、ctrl+enter 换行、跨会话通告丢弃、`/new` 先取消、
+  编辑键白名单、工具卡跟随全局开关），进程内 24 条（新增三条静态断言：粘贴/面板/换行接线、
+  工具卡不钉死展开、切换会话先收尾并如实报告恢复失败——进程内的终端循环需要 harness 在进程内，
+  行为测试在 ACP 侧跑同一份 `plugins/shared`）。`PluginApiTest` 补「删掉包目录后 `installed` 仍真、
+  `filesPresent` 变假、重新安装把文件带回」。
+
+### 第一方终端：第三轮审查（ACP 账户交接、切换竞态、启动恢复）
+
+第三轮的两条高危都在"路由/生命周期写进哪个东西"上：一条把密钥与 profile 对错了，
+一条把"发个通知"当成了"回合结束"。
+
+- **ACP 终端的账户路由写错了 profile**：`DshLauncher.plan` 把第三方账户的供应商路由与
+  default model 写进"这次启动引导的 profile"，而开终端时计划是按插件的**存放** profile
+  （`dsh-acp-tui`）建的——真正跑起来的进程却引导 harness 自己的 `acp` 模板，于是路由在
+  运行中的 harness 里根本不存在，账户不可用或落回别的路由。现在计划按 `acp` 建
+  （`DshTui.runProfile` + `DshTuiPlugins.harnessProfile`），并把同一个名字放进
+  `HSDL_TUI_ACP_PROFILE`，两处不可能再不一致；纯 bundle 依旧按它自己的 profile 引导。
+- **任意账户密钥被复制成 `DEEPSEEK_API_KEY`**：ACP 终端在 `DEEPSEEK_API_KEY` 为空时，按
+  对象键顺序取第一把非空的 `HSDL_LAUNCH_API_KEY_*` 复制过去——第三方的密钥因此被交给
+  DeepSeek 的模型与搜索入口。这段改名逻辑整个删掉：launcher 本来就是按路由名给密钥
+  （`HSDL_LAUNCH_API_KEY_<route>`），路由自己读这个名字；`DEEPSEEK_API_KEY` 只由 launcher
+  给 DeepSeek 账户设置。
+- **`/new`、`/resume` 没有等旧回合结束**：`cancelTurn()` 只是发 `session/cancel` 通知，随即
+  返回，切换于是发生在旧 `session/prompt` 还在飞的时候——它回来时会 `finishStreaming()`、
+  把 `status` 改成 `ready`、`drainQueue()`，对着**新会话**做这些事。现在 `runPrompt` 把请求
+  留在 `pendingTurn` 里，`detachTurn()` 取消后**有界等待**（2s，审批卡住时也要能走），并
+  推进 `turnSerial`；晚到的答复因此是空操作（`ownsTurn` 同时比 serial 与 sessionId）。
+- **启动时 `--resume` 不回放历史**：交互式 `/resume` 上一轮已经会回放，但面板带 `?resume=`
+  进来的路径只印了一条"已恢复"。现在两条路都走 `replayHistory()`。
+- **纯 bundle 的空目录仍算已安装**：`filesPresent` 只看 `node_modules/<包>` 是否存在，而
+  `pnpm` 是先建目录再拉包，中途失败会留下空壳，纯 bundle 又是从清单指定的 patch 组合出来的
+  ——现在要求目录里真的有 `package.json`；有 bin 的包照旧还要入口文件在。
+- 测试：ACP **46 条**（新增"切换要等旧回合"与"活过切换的回合不能碰新会话"两条，都先在
+  修复前的代码上跑红）；进程内 **20 条唯一测试**（`node --test` 之前把 `test/index.js` 与它
+  导入的 `unit.test.js` 各跑一遍，所以"24 条"其实是 12×2 —— `index.js` 已删）。进程内也不再
+  用源码正则：新增 `test/app.test.js` 直接驱动 `TerminalApp`/`ChatSession`（粘贴、面板跟随、
+  ctrl+enter、工具卡、`/model` 写 `modelState.current`、恢复回放、`/new` 先收尾），
+  `agent.js` 的两个 peer 改成 `open()` 里动态 import 才让这个模块可以脱离 harness 加载。
+  Java 侧新增 `DshTuiTest` 五条：ACP 计划引导 `acp`、bundle 用自己的、环境里告诉程序同一个
+  名字、空目录/缺入口都不算已安装；`PluginApiTest` 补"目录还在但清单没了"。
+
 ## v0.5.84 — 2026-10-26 · 开发者提权升级、终端会话生命周期、手机窄屏适配
 
 - **提权可延长、可撤销**：开发者提权不再锁死 30 分钟——「设置 → 开发者」页可以主动停止

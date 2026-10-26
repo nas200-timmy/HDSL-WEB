@@ -42,18 +42,23 @@ class DshTuiPluginsTest {
     @Test
     void everyEntryThatNeedsANewerHarnessSaysSo() {
         for (DshTuiPlugins.Entry entry : DshTuiPlugins.ENTRIES) {
-            String range = entry.requiresDsh();
-            if (range == null) {
-                // The one entry whose peers span both lines answers to any of them.
-                assertTrue(DshTuiPlugins.fitsHost(entry, "0.1.7-rc.1"), entry.packageName());
-                assertTrue(DshTuiPlugins.fitsHost(entry, "0.2.1-rc.3"), entry.packageName());
-                continue;
-            }
-            assertFalse(DshTuiPlugins.fitsHost(entry, "0.1.7-rc.1"),
-                    entry.packageName() + " claims " + range + " yet fits 0.1.7-rc.1");
             assertTrue(DshTuiPlugins.fitsHost(entry, "0.2.1-rc.3"),
-                    entry.packageName() + " claims " + range + " yet does not fit 0.2.1-rc.3");
+                    entry.packageName() + " must run on the current line");
         }
+        // The ones that need the agent-preset layer refuse the older line.
+        for (String name : List.of("@huiliyi37/dsh-tianshu-tui", "@tomowang/dsh-tui", "@xmoon76/dsh-pi-tui")) {
+            assertFalse(DshTuiPlugins.fitsHost(DshTuiPlugins.find(name).orElseThrow(), "0.1.7-rc.1"), name);
+        }
+        // The ACP terminal is the absolute compatibility option; the in-process one is not.
+        DshTuiPlugins.Entry acp = DshTuiPlugins.find("@nas200-timmy/dsh-acp-tui").orElseThrow();
+        assertTrue(DshTuiPlugins.fitsHost(acp, "0.1.7-rc.1"));
+        assertFalse(DshTuiPlugins.fitsHost(acp, "0.1.0-rc.6"),
+                "ACP's profile template arrived in 0.1.2-rc.1");
+        DshTuiPlugins.Entry inproc = DshTuiPlugins.find("@nas200-timmy/dsh-inproc-tui").orElseThrow();
+        assertFalse(DshTuiPlugins.fitsHost(inproc, "0.1.7-rc.1"));
+        assertTrue(DshTuiPlugins.fitsHost(inproc, "0.2.0-rc.2"));
+        String fallback = DshTuiPlugins.hostMismatch(inproc, "0.1.7-rc.1");
+        assertTrue(fallback.contains("@nas200-timmy/dsh-acp-tui"), fallback);
     }
 
     /// An unknown version is not refused: the version comes from the instance record, and a
@@ -112,6 +117,8 @@ class DshTuiPluginsTest {
     @Test
     void theKnownPackagesAreTheOnesCurated() {
         assertEquals(List.of(
+                        "@nas200-timmy/dsh-inproc-tui",
+                        "@nas200-timmy/dsh-acp-tui",
                         "@deepseek-harness-tui/dsh-tui",
                         "@huiliyi37/dsh-tianshu-tui",
                         "@tomowang/dsh-tui",
@@ -128,9 +135,27 @@ class DshTuiPluginsTest {
         assertTrue(DshTuiPlugins.find("@zhangweiii/dsh-tui").isEmpty());
     }
 
+    /// The two first-party terminals are alternatives at **run time**: both may be installed
+    /// (the ACP one is the fallback for an instance whose version moves), but only the first
+    /// fitting one is started. Community entries declare no group.
+    @Test
+    void theTwoFirstPartyTerminalsShareARuntimeGroup() {
+        DshTuiPlugins.Entry inproc = DshTuiPlugins.find("@nas200-timmy/dsh-inproc-tui").orElseThrow();
+        DshTuiPlugins.Entry acp = DshTuiPlugins.find("@nas200-timmy/dsh-acp-tui").orElseThrow();
+        assertEquals("dsh-terminal", inproc.runtimeGroup());
+        assertEquals("dsh-terminal", acp.runtimeGroup());
+        assertEquals(inproc, DshTuiPlugins.ENTRIES.get(0), "the in-process one is listed first");
+        assertEquals(acp, DshTuiPlugins.ENTRIES.get(1), "the ACP one is its fallback");
+        assertTrue(inproc.bundled());
+        assertTrue(acp.bundled());
+        assertTrue(acp.hasExecutable());
+        assertFalse(inproc.hasExecutable());
+        assertNull(DshTuiPlugins.find("@tomowang/dsh-tui").orElseThrow().runtimeGroup());
+    }
+
     @Test
     void anEntryIsInstalledOnlyInItsOwnProfile() {
-        DshTuiPlugins.Entry entry = DshTuiPlugins.ENTRIES.get(0);
+        DshTuiPlugins.Entry entry = DshTuiPlugins.find("@deepseek-harness-tui/dsh-tui").orElseThrow();
 
         assertTrue(DshTuiPlugins.isInstalled(entry, List.of("@DeepSeek-Harness-TUI/dsh-tui")),
                 "matched case-insensitively");
@@ -141,7 +166,7 @@ class DshTuiPluginsTest {
     /// name: `@scope/name@1.2.3` keeps its leading `@` and loses the second one.
     @Test
     void aSpecificationLosesItsVersion() {
-        DshTuiPlugins.Entry entry = DshTuiPlugins.ENTRIES.get(0);
+        DshTuiPlugins.Entry entry = DshTuiPlugins.find("@deepseek-harness-tui/dsh-tui").orElseThrow();
 
         assertEquals("@deepseek-harness-tui/dsh-tui", DshTuiPlugins.packageNameOf(entry.spec()));
         assertEquals("@deepseek-harness-tui/dsh-tui",

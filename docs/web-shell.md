@@ -245,8 +245,13 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     `dsh plugin add` 退出 0 之后还要看 `node_modules/<包>` 是否真的在（`DshPluginInstaller.requireLanded`；
     只验 registry 型 spec，`file:`/`link:`/`github:`/URL 的名字从文本里读不出来，误判会打断正常安装），
     不在就把任务判失败。这个状态**不再被当成已安装**：`terminalPlugin` 同时要求 manifest 声明
-    与文件真的在（有 bin 的包还要求它声明的入口存在），否则用同一句可行动的中文拒绝
+    与文件真的在——**目录里还要有 `package.json`**（`pnpm` 在建目录之后才拉包，中途失败或被删
+    内容会留下一个空壳，而纯 bundle 是从清单指定的 patch 组合出来的，没有清单就什么都引导不了），
+    有 bin 的包还要求它声明的入口存在，否则用同一句可行动的中文拒绝
     （"声明了 X 但文件不在，请重新安装"），而不是去启动一个空 profile。
+    列表接口把这两件事分开说：`installed` 是 manifest 的答案，`filesPresent` 是磁盘的答案；
+    `installed && !filesPresent` 的那一行在页面上标「安装未完成」（变灰说明原因，不隐藏），
+    按钮同时给「重新安装」与「卸载」——先卸再装不是用户该知道的步骤。
   - **还要配对宿主版本**：终端界面的**工具面来自 agent-preset 层**，而这一层是 dsh **0.2.0**
     才有的（`dsh-agent-preset-registry` + 每条 `preset` 一行）。写给它的插件（天枢 / tomowang /
     pi-tui）自带这一层，装在 0.1.x 实例上**装得上、起得来、但会话没有工具**——插件自己的原话是
@@ -269,6 +274,42 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     "重新安装这个"。清单与许可证/仓库/profile 由 `GET /api/dsh/tui-plugins` 提供
     （`web/http/DshApiServlet`）；许可证含 Apache-2.0（`@huiliyi37/dsh-tianshu-tui`）。
     `@ruhooai/dsh-tui`（bin 需要 Bun + 外部 `cordis.yml`）与 `@zhangweiii/dsh-tui` 已不在清单里。
+  - **两个第一方终端可以同时装，但只有一个在跑**：`dsh-inproc-tui` 与 `dsh-acp-tui` 是同一个
+    终端面的两种实现，清单给两者同一个 `runtimeGroup`（`dsh-terminal`，社区插件不分组）。
+    装两个是**允许且有用**的——ACP 那个是实例版本变来变去时的退路。启动时按清单顺序取第一个
+    「已装 + 文件在 + fitsHost」的条目：0.2.x 用进程内那个，ACP 待命；版本降下去之后进程内
+    那个不再匹配，ACP 自动接管。`GET …/tui-plugins` 每行多一个 `active`，页面据此标
+    「当前生效 / 备用」。卸载永远不拒。
+  - **面板自带的第一方终端（进程内）**：`plugins/dsh-inproc-tui`（`@nas200-timmy/dsh-inproc-tui`，
+    profile `dsh-inproc-tui`）。它是 mode bundle：清单里没有 bin，安装后 `dsh plugin add` 会把它
+    加进该 profile 的 `dsh.profile.bundles`，面板按纯 bundle 的路径启动
+    `node <bin.js> --profile dsh-inproc-tui`。它跑在 harness 进程里，所以有 token 级流式、审批
+    与追问、进程内模型切换；`requiresDsh = ">=0.2.0-rc.2"`（实测 0.2.0-rc.2 / 0.2.1-rc.3），
+    旧宿主由清单跳过、退回下面的 ACP 终端。渲染层与 ACP 终端共用 `plugins/shared`
+    （打包时随 tarball 一起进入 `package/shared`）。
+  - **面板自带的第一方终端（ACP，兼容备用）**：`plugins/dsh-acp-tui`（包名
+    `@nas200-timmy/dsh-acp-tui`，profile `dsh-acp-tui`）。它和其它条目走同一条安装与启动路径，
+    只有两点不同：**装**的时候 `FirstPartyPlugins` 把 jar 里的 tarball 写到
+    `<DSH_HOME>/.first-party-plugins/`，安装规格是 `file:<tarball>`（离线可用，没有 registry
+    也不失败）；**起**的时候因为它是 bin 型，面板跑
+    `node <profile>/node_modules/@nas200-timmy/dsh-acp-tui/bin/dsh-acp-tui.js`，并把
+    `HSDL_DSH_ENTRY=<instance.dshEntryPoint()>` 与 `HSDL_TUI_ACP_PROFILE=acp` 放进环境——它自己
+    spawn 该实例的 `dsh --profile acp`，用 ACP v1 通信，不 import 任何 harness 包。`requiresDsh` 是
+    `>=0.1.2-rc.1`：ACP 的 profile 模板从那一版才有（实测 0.1.2-rc.1 / 0.1.7-rc.2 / 0.2.1-rc.3
+    都能跑）。它是**绝对的兼容选项**，也是同实例版本来回变时的退路。新增第一方插件见
+    [plugins/README.md](../plugins/README.md)。
+    **两个 profile 别混**：它自己的 `dsh-acp-tui` 只存放文件，真正引导的是 harness 自己的 `acp`
+    模板。账户的供应商路由/default model 由 launcher 写进"这次启动引导的 profile"，所以开终端时
+    的启动计划是按 `acp` 建的（`DshTui.runProfile`），环境里也把同一个名字告诉它
+    （`HSDL_TUI_ACP_PROFILE`）——写在存储 profile 里的路由，运行中的 harness 是看不见的。
+  - **第一方终端的可靠性约定**（两个都适用）：粘贴走 bracketed paste，由 `keys.js` 解出
+    `{name:'paste', text}` 交给 composer（CRLF 归一化后插入；对话框打开时忽略，不写进看不见的输入框）；
+    握手/子进程死亡/信号退出都会还原终端并清掉定时器，**失败的启动不会留下一个常驻进程**；
+    两个终端都会在最外层兜异常——进程内那个尤其重要，它跑在 harness 进程里，一个未捕获异常
+    会把整个实例的 web 进程一起带走；审批与追问按 **waterfall + `request.agent`** 只答本会话的
+    agent，别人的请求 `next()` 交给下游；`quit()` 先把未决的审批/追问以 cancelled 结算、再取消回合、
+    最后有界等待关闭，所以在对话框前退出不会把 harness 挂住。ACP 那边额外有握手超时与单行长度上限
+    （没有换行的垃圾行不会既吃内存又让首条消息永远解析不出来）——见 `plugins/README.md`。
   - **终端死了要留话**：子进程非零退出且**一个字节都没输出**时，应用日志写一条
     （`TerminalSession`，实例 / 退出码 / 没有输出），退出帧带 `failedWithoutOutput`
     （`docs/terminal-protocol.md §3`），前端在"会话已结束 (N)"下面补一句可行动的提示。

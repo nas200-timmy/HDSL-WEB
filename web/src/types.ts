@@ -122,6 +122,8 @@ export interface TuiPluginItem {
   profile: string;
   /** 这套插件要求的 dsh 主线（缺省 = 任何已发布线都能起）；工具面靠 0.2.0 起的 agent-preset 层 */
   requiresDsh?: string | null;
+  /** 面板自带：安装包在 jar 里，走本地 tarball，不需要 npm registry */
+  bundled?: boolean;
 }
 
 /** 某个实例上候选 TUI 插件的安装状态（GET /api/instances/{id}/tui-plugins 的一条） */
@@ -132,10 +134,18 @@ export interface TuiPluginState {
   installed: boolean;
   /** 该 profile 记录的版本（安装时是面板锁定的那个版本） */
   installedVersion?: string;
+  /**
+   * 清单声明了、文件也真的在磁盘上。`installed` 只读 profile 的 package.json，而 pnpm
+   * 先写清单再拉包，所以「声明了但没落地」是可能的状态：这种 profile 起不来，页面必须
+   * 能说出来，并且给的是「重新安装」而不是只给「卸载」。旧面板没有这个字段 → undefined
+   */
+  filesPresent?: boolean;
   /** 实例的 dsh 主线能不能跑这套插件；false = 装上也只会得到没有工具面的会话 */
   fitsHost?: boolean;
   /** 这套插件要求的 dsh 主线（缺省 = 任何已发布线） */
   requiresDsh?: string;
+  /** 点「终端」时实际会启动的那一个（可以装多个，只有一个生效） */
+  active?: boolean;
 }
 
 export interface TaskApproval {
