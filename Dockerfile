@@ -75,6 +75,11 @@ COPY gradlew ./
 COPY gradle ./gradle
 COPY settings.gradle.kts build.gradle.kts ./
 COPY src ./src
+# The first-party terminals ship as npm tarballs packed from `plugins/` by the
+# `packageFirstPartyPlugins` task that shadowJar depends on. Without this COPY
+# the task has no input, the index comes out empty and the jar quietly has no
+# plugins at all — the panel then offers a terminal it cannot install.
+COPY plugins ./plugins
 RUN chmod +x ./gradlew
 
 # The panel is built in the web stage and dropped in at web/dist. build.gradle.kts
@@ -104,6 +109,10 @@ RUN printf '%s\n' \
 RUN --mount=type=cache,target=/root/.gradle \
     ./gradlew --no-daemon --console=plain -I /tmp/mirror.gradle "-PreleaseVersion=${RELEASE_VERSION}" shadowJar
 # -> /src/build/libs/hdsl-web-<version>.jar
+
+# 兜底断言：第一方终端必须以 tarball 形式真的进了 jar。索引为空时面板会「假装」
+# 有插件，用户点开才失败——那比构建失败糟糕得多，所以这里当场失败。
+RUN test "$(jar tf "$(ls /src/build/libs/hdsl-web-*.jar | head -1)" | grep -c '^first-party-plugins/.*\.tgz$')" -ge 1
 
 
 # =============================================================================
