@@ -18,6 +18,8 @@ import { describeCandidates } from './complete.js'
 
 const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 const MIN_TRANSCRIPT_ROWS = 2
+/** How many rows the inline `/` menu may take before it starts scrolling. */
+const MAX_MENU_ROWS = 7
 
 /** The spinner frame for a moment in time. */
 export function spinnerFrame(clock) {
@@ -41,10 +43,17 @@ export function renderFrame(state, context) {
   const composerLayout = layoutComposer(state, inner)
   const composerRows = paintComposer(state, width, composerLayout, theme, i18n)
   const activityRow = renderActivity(state, width, theme, i18n, clock, spinner)
+  // The `/` menu is part of the bottom block, not a dialog: it starts directly
+  // under the input box and pushes the transcript up, the way Kimi Code draws
+  // its command list. Its height is bounded by the screen, because the composer
+  // still has to fit.
+  const menuBudget = Math.max(1, Math.min(MAX_MENU_ROWS,
+    height - composerRows.length - 2 - (activityRow === null ? 0 : 1) - 1 - MIN_TRANSCRIPT_ROWS))
+  const menuRows = state.overlay === null ? renderCommandMenu(state, width, theme, menuBudget) : []
   // The hint line sits **below** the input box, the way Kimi Code draws it: the
   // thing you are looking at while you type should be next to what you type.
   const hintRow = renderHint(state, width, theme, i18n, clock)
-  const bottomRows = composerRows.length + 2 + (activityRow === null ? 0 : 1) + 1
+  const bottomRows = composerRows.length + 2 + (activityRow === null ? 0 : 1) + 1 + menuRows.length
   const transcriptHeight = Math.max(MIN_TRANSCRIPT_ROWS, height - bottomRows)
   const transcript = renderTranscript(state, width, transcriptHeight, scope)
 
@@ -65,6 +74,7 @@ export function renderFrame(state, context) {
   put('')
   if (activityRow !== null) put(activityRow)
   for (const composerRow of composerRows) put(composerRow)
+  for (const menuRow of menuRows) put(menuRow)
   put(hintRow)
   rows[height - 1] = statusRow
 
@@ -219,6 +229,53 @@ function renderActivity(state, width, theme, i18n, clock, spinner) {
 }
 
 /**
+ * The `/` command list, drawn inline under the composer.
+ *
+ * It is deliberately not a bordered dialog: a box centred over the transcript
+ * is what made `/` feel like a pop-up window instead of part of the input.
+ * One row per command, one dial: `↑`/`↓` move, enter runs, esc closes. The
+ * labels are numbered because the number is a shortcut, and the window keeps
+ * the selection in view when the list is longer than the budget.
+ */
+function renderCommandMenu(state, width, theme, budget) {
+  const menu = state.palette
+  if (menu === null || menu === undefined) return []
+  const items = menu.items ?? []
+  if (items.length === 0) return []
+  const selected = Math.max(0, Math.min(items.length - 1, menu.index ?? 0))
+  const rowsBudget = Math.max(1, Math.min(MAX_MENU_ROWS, budget))
+  // Two of the budget rows may be "more" markers; on a screen too short for
+  // those, show the selected item alone rather than overflowing the block.
+  const showMore = rowsBudget >= 3
+  let start = 0
+  let end = items.length
+  if (items.length > rowsBudget) {
+    // Reserve one row for each "more" marker; the item window then follows the
+    // selection instead of always showing the first page.
+    const capacity = Math.max(1, showMore ? rowsBudget - 2 : 1)
+    start = Math.max(0, Math.min(selected - Math.floor(capacity / 2), items.length - capacity))
+    end = Math.min(items.length, start + capacity)
+  }
+  const labelWidth = Math.max(8, Math.min(30, Math.floor(width * 0.32)))
+  const descriptionWidth = width >= 56 ? Math.max(0, width - 9 - labelWidth) : 0
+  const rows = []
+  if (showMore && start > 0) rows.push(theme.fg('textMuted', `  ↑ ${start} more`))
+  for (let index = start; index < end; index += 1) {
+    const item = items[index]
+    const active = index === selected
+    const pointer = active ? theme.fg('primary', '❯') : ' '
+    const number = index < 9 ? theme.fg(active ? 'primary' : 'textMuted', `${index + 1}.`) : '  '
+    const label = active ? theme.strong('textStrong', item.label) : theme.fg('text', item.label)
+    const description = descriptionWidth > 0 && item.description
+      ? '  ' + truncateStyled(theme.fg('textMuted', item.description), descriptionWidth)
+      : ''
+    rows.push(`  ${pointer} ${number} ${padStyled(label, labelWidth)}${description}`)
+  }
+  if (showMore && end < items.length) rows.push(theme.fg('textMuted', `  ↓ ${items.length - end} more`))
+  return rows
+}
+
+/**
  * The line under the input box.
  *
  * In order of who needs it: the candidates a Tab is cycling, then what the keys
@@ -228,6 +285,9 @@ function renderActivity(state, width, theme, i18n, clock, spinner) {
  * discoverable.
  */
 function renderHint(state, width, theme, i18n, clock) {
+  if (state.overlay === null && state.palette !== null && state.palette !== undefined) {
+    return ` ${theme.fg('textMuted', i18n.t('palette.hint'))}`
+  }
   const candidates = describeCandidates(state.completion, Math.max(10, width - 4))
   if (candidates !== '') return ` ${theme.fg('textMuted', `${candidates}  ⇥`)}`
   if (state.status === 'working') {

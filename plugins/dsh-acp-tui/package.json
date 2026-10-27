@@ -1,6 +1,6 @@
 {
   "name": "@nas200-timmy/dsh-acp-tui",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "HDSL-web's portable ACP terminal for DeepSeek Harness: the absolute compatibility option, usable as the high-version fallback.",
   "keywords": [
     "dsh",

@@ -90,20 +90,20 @@ test('a paste while a dialog is open leaves the composer untouched', () => {
   assert.equal(app.overlay, overlay)
 })
 
-test('the command palette follows the text instead of swallowing it', () => {
+test('the inline command menu follows the text instead of swallowing it', () => {
   const { app } = makeApp()
   app.onKeyEvent({ name: 'char', text: '/' })
-  assert.equal(app.overlay?.live, true, 'the palette says it leaves the line editable')
+  assert.equal(app.overlay, null, 'the command list is not a dialog')
   app.onKeyEvent({ name: 'char', text: 'h' })
   app.onKeyEvent({ name: 'char', text: 'e' })
   assert.equal(app.composer.text, '/he', 'the letters typed after / reach the composer')
-  assert.deepEqual(app.overlay.items.map((item) => item.label), ['/help'])
+  assert.deepEqual(app.palette.items.map((item) => item.label), ['/help'])
 
-  // The same palette still navigates: the arrows move the selection, they do
-  // not move the caret.
-  app.overlay.items = [{ label: '/help' }, { label: '/hello' }]
+  // The menu still navigates: the arrows move the selection, they do not move
+  // the caret.
+  app.palette.items = [{ name: 'help', label: '/help' }, { name: 'hello', label: '/hello' }]
   app.onKeyEvent({ name: 'down' })
-  assert.equal(app.overlay.index, 1)
+  assert.equal(app.palette.index, 1)
   assert.equal(app.composer.caret, 3)
 
   app.onKeyEvent({ name: 'backspace' })
@@ -112,12 +112,12 @@ test('the command palette follows the text instead of swallowing it', () => {
   // A paste is text too, and a space ends the command prefix.
   app.onKeyEvent({ name: 'paste', text: 'elp ' })
   assert.equal(app.composer.text, '/help ')
-  assert.equal(app.overlay, null, 'the palette closes once the line is no longer a command')
+  assert.equal(app.palette, null, 'the menu closes once the line is no longer a command')
 
-  // Nothing matches `/hx`, so the palette closes and typing simply continues.
+  // Nothing matches `/hx`, so the menu closes and typing simply continues.
   app.composer.setText('/hx')
   app.onKeyEvent({ name: 'char', text: 'y' })
-  assert.equal(app.overlay, null)
+  assert.equal(app.palette, null)
   assert.equal(app.composer.text, '/hxy')
 })
 

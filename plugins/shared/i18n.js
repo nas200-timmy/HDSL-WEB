@@ -163,6 +163,7 @@ export const TABLES = {
     'error.version': 'This harness speaks ACP version {got}, the terminal needs 1.',
     'hint.session': 'session {id}',
     'hint.line': '/ commands · @ files · ctrl+j newline · shift+tab plan · ctrl+s steer · ctrl+o expand',
+    'palette.hint': '↑↓ choose · enter run · esc close',
 
     'hint.queued': '{count} queued',
     'cmd.permission': 'Permission preset: sandbox + approval',
@@ -336,6 +337,7 @@ export const TABLES = {
     'error.version': '这个 harness 说 ACP 版本 {got}，终端需要 1。',
     'hint.session': '会话 {id}',
     'hint.line': '/ 命令 · @ 文件 · ctrl+j 换行 · shift+tab 计划 · ctrl+s 插话 · ctrl+o 展开',
+    'palette.hint': '↑↓ 选择 · enter 运行 · esc 关闭',
 
     'hint.queued': '{count} 条排队',
     'cmd.permission': '权限预设：沙箱 + 审批',

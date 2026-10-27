@@ -80,18 +80,32 @@ test('a bracketed paste reaches the composer, one event and CRLF normalised', ()
   assert.equal(app.blocks.filter((block) => block.type === 'notice' && block.level === 'error').length, 0)
 })
 
-test('typing after a slash keeps the line, and the palette follows it', () => {
+test('typing after a slash keeps the line, and the inline menu follows it', () => {
   const app = makeApp()
   for (const letter of ['/', 'h', 'e']) app.onKeyEvent({ name: 'char', text: letter })
   assert.equal(app.composer.text, '/he')
-  assert.equal(app.overlay?.live, true)
-  assert.deepEqual(app.overlay.items.map((item) => item.label), ['/help'])
+  assert.equal(app.overlay, null, 'the command list is not a dialog')
+  assert.deepEqual(app.palette.items.map((item) => item.label), ['/help'])
 
   app.onKeyEvent({ name: 'backspace' })
   assert.equal(app.composer.text, '/h')
   app.onKeyEvent({ name: 'char', text: 'x' })
   assert.equal(app.composer.text, '/hx', 'a prefix nothing matches still reaches the line')
-  assert.equal(app.overlay, null, 'and the palette gets out of the way')
+  assert.equal(app.palette, null, 'and the menu gets out of the way')
+})
+
+test('the inline menu runs the highlighted command and esc closes it without clearing', () => {
+  const app = makeApp()
+  app.onKeyEvent({ name: 'char', text: '/' })
+  app.onKeyEvent({ name: 'enter' })
+  assert.equal(app.palette, null, 'enter consumed the menu')
+  assert.equal(app.overlay?.kind, 'help', 'the first command (/help) ran')
+
+  app.overlay = null
+  app.onKeyEvent({ name: 'char', text: '/' })
+  app.onKeyEvent({ name: 'escape' })
+  assert.equal(app.palette, null)
+  assert.equal(app.composer.text, '/', 'esc closes the list, not the line')
 })
 
 test('ctrl+enter is a line break rather than a send', () => {
@@ -408,7 +422,7 @@ test('the palette and the help list the harness commands too', async () => {
   })
   app.session = fakeSession({ live: {} })
   app.onKeyEvent({ name: 'char', text: '/' })
-  const labels = app.overlay.items.map((item) => item.label)
+  const labels = app.palette.items.map((item) => item.label)
   assert.ok(labels.includes('/goal') === false)
   assert.ok(labels.includes('/permission'), labels.join(','))
   assert.ok(labels.includes('/yolo'), 'the local commands stay')
