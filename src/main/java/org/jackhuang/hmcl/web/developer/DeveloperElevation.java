@@ -20,8 +20,10 @@ package org.jackhuang.hmcl.web.developer;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.concurrent.ConcurrentHashMap;
 
 /// The thirty-minute developer-mode elevation, shared by every door that
@@ -62,6 +64,15 @@ public final class DeveloperElevation {
     public static final Duration FAILURE_WINDOW = Duration.ofMinutes(10);
 
     private static final String SESSION_PREFIX = "token:";
+
+    /// The key prefix of an elevation held by a bearer token minted through
+    /// [#mintToken]. A token is not tied to a browser session: it exists for
+    /// callers that cannot carry the session cookie (a host script, an
+    /// inspection agent, CI), and it dies the way any elevation does — TTL,
+    /// password change, or [clearAll].
+    private static final String BEARER_PREFIX = "bearer:";
+
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     private final ConcurrentHashMap<String, Elevation> elevations = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Failures> failures = new ConcurrentHashMap<>();
@@ -171,6 +182,33 @@ public final class DeveloperElevation {
     public void clearAll() {
         elevations.clear();
         failures.clear();
+    }
+
+    /// Mints a bearer token with its own elevation window.
+    ///
+    /// The caller must have proved the password already; this method never
+    /// checks one. The token is a URL-safe 32-byte random string, stored only
+    /// in memory and never logged — treat it like the password itself.
+    ///
+    /// @return the token, to be handed to the caller and to nobody else
+    public String mintToken() {
+        byte[] bytes = new byte[32];
+        RANDOM.nextBytes(bytes);
+        String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        elevate(BEARER_PREFIX + token);
+        return token;
+    }
+
+    /// Passes a bearer token's elevation, or answers `false`.
+    ///
+    /// Unknown, expired and revoked tokens are all just `false`: the caller
+    /// answers one code (`developer_elevation_required`) so a probe cannot tell
+    /// "wrong token" from "expired token".
+    public boolean requireToken(String token) {
+        if (token.isBlank()) {
+            return false;
+        }
+        return require(BEARER_PREFIX + token, true);
     }
 
     /// Whether wrong passwords locked this key.

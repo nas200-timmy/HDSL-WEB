@@ -129,6 +129,10 @@ var policyCodes = map[string]bool{
 	"web_shell_disabled":    true,
 	"confirmation_required": true,
 	"brand_has_no_tui":      true,
+	// The emergency stop and its cooldown are the panel's decision, not
+	// something a retry or a password clears: wait, or restart the panel.
+	"emergency_stop": true,
+	"estop_cooldown": true,
 	// The panel refused to start the terminal (no PTY, a profile that cannot
 	// hold the plugin, a missing kernel). It is the panel's own reason that
 	// reaches the user, and no retry fixes it — the same bucket as a missing

@@ -84,10 +84,21 @@ public final class InstanceTerminal {
     private final DeveloperAuth developerAuth;
     private final DeveloperElevation developerElevation;
     private final BooleanSupplier tlsActive;
+    private final org.jackhuang.hmcl.web.emergency.EmergencyStop emergency;
 
     public InstanceTerminal(ServerConfig config, TerminalManager terminals, TerminalTickets tickets,
                             AuthService auth, DeveloperAuth developerAuth,
                             DeveloperElevation developerElevation, BooleanSupplier tlsActive) {
+        this(config, terminals, tickets, auth, developerAuth, developerElevation, tlsActive,
+                new org.jackhuang.hmcl.web.emergency.EmergencyStop());
+    }
+
+    /// @param emergency the panel's emergency stop; while it is engaged every
+    ///                  terminal request is refused, whatever the caller proved
+    public InstanceTerminal(ServerConfig config, TerminalManager terminals, TerminalTickets tickets,
+                            AuthService auth, DeveloperAuth developerAuth,
+                            DeveloperElevation developerElevation, BooleanSupplier tlsActive,
+                            org.jackhuang.hmcl.web.emergency.EmergencyStop emergency) {
         this.config = config;
         this.terminals = terminals;
         this.tickets = tickets;
@@ -95,13 +106,18 @@ public final class InstanceTerminal {
         this.developerAuth = developerAuth;
         this.developerElevation = developerElevation;
         this.tlsActive = tlsActive;
+        this.emergency = emergency;
     }
 
     /// The gates every terminal request passes before anything is started:
-    /// the web shell switch, HTTPS, a developer password and its elevation.
+    /// the emergency stop, the web shell switch, HTTPS, a developer password
+    /// and its elevation.
     ///
     /// @throws Refused with the status and code the caller should answer
     public void authorize(HttpServletRequest request) {
+        if (emergency.isEngaged()) {
+            throw new Refused(503, "emergency_stop: the panel is in emergency stop; terminals are frozen");
+        }
         if (!config.webShell.enabled) {
             throw new Refused(403, "web_shell_disabled: the web shell is disabled in developer settings");
         }

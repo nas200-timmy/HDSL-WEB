@@ -17,6 +17,7 @@ import { MainPage } from "./pages/MainPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { bootstrap, useAppState } from "./store";
+import { api } from "./api";
 import { refreshServerVersion } from "./version";
 
 function SplashScreen() {
@@ -103,10 +104,86 @@ function Shell() {
         }}
       >
         <ErrorBoundary>
+          <EmergencyStopBanner />
           <Outlet />
         </ErrorBoundary>
       </div>
     </Decorator>
+  );
+}
+
+/// 紧急停机期间的全局横幅：所有已登录页面都能看到，冷却结束前只显示倒计时。
+///
+/// 状态来自 `GET /api/developer/status`（守卫与停机都会在 /api 白名单里放行它），
+/// 每 20 秒刷新一次，页面重新可见时立刻刷新——按下停机的人刷新页面就能看到。
+function EmergencyStopBanner() {
+  const [state, setState] = useState<{ engaged: boolean; remainingSeconds: number } | null>(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const status = await api.developerStatus();
+        if (!cancelled) {
+          const estop = status.estop;
+          setState({
+            engaged: estop?.engaged === true,
+            // 端点只给按下那一刻的剩余秒数；本地按读取时间往前推。
+            remainingSeconds: estop?.remainingSeconds ?? 0,
+          });
+        }
+      } catch {
+        // 未登录、旧后端、网络抖动：不显示横幅，页面自身的错误处理照旧。
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 20_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
+  // 剩余时间的秒针：只在停机期间跑，避免整页每秒重渲染。
+  useEffect(() => {
+    if (state?.engaged !== true) return;
+    const timer = window.setInterval(() => setTick((value) => value + 1), 1_000);
+    return () => window.clearInterval(timer);
+  }, [state?.engaged]);
+
+  if (state?.engaged !== true) return null;
+  const remaining = Math.max(0, state.remainingSeconds - tick);
+  const minutes = Math.floor(remaining / 60);
+  const seconds = remaining % 60;
+
+  return (
+    <div
+      role="status"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 14px",
+        background: "var(--monet-error)",
+        color: "#fff",
+        fontSize: 13,
+      }}
+    >
+      <ErrorIcon size={16} />
+      <span>
+        紧急停机中：实例网页、终端与实例启动全部冻结，剩余 {minutes} 分 {seconds} 秒；
+        解除需要开发者密码，或重启面板进程/容器。
+      </span>
+      <a href="settings?tab=developer" style={{ marginLeft: "auto", color: "#fff", textDecoration: "underline" }}>
+        去开发者模式
+      </a>
+    </div>
   );
 }
 

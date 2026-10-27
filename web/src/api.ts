@@ -2,8 +2,10 @@ import type {
   Account,
   CreateAccountBody,
   CreateInstanceBody,
+  DeveloperGuardScope,
   DeveloperStatus,
   DoctorReport,
+  EmergencyStopPreview,
   ExportChoices,
   ExportRecord,
   Health,
@@ -194,7 +196,10 @@ export const api = {
     ),
   developerStatus: () => request<DeveloperStatus>("/api/developer/status"),
   elevateDeveloper: (password: string) =>
-    request<{ elevated: boolean; expiresAt: string }>("/api/developer/elevate", jsonInit("POST", { password })),
+    request<{ elevated: boolean; expiresAt: string; token?: string }>(
+      "/api/developer/elevate",
+      jsonInit("POST", { password }),
+    ),
   /** 已提权的前提下把提权延长到 3 小时后；未提权时后端拒绝 */
   extendDeveloper: () =>
     request<{ elevated: boolean; expiresAt: string }>("/api/developer/extend", { method: "POST" }),
@@ -203,6 +208,19 @@ export const api = {
   /** 开发者模式下翻转 Web Shell 开关；需要先提权 */
   setWebShell: (enabled: boolean) =>
     request<{ ok: boolean; enabled: boolean }>("/api/developer/web-shell", jsonInit("POST", { enabled })),
+  /** 设置开发者守卫的作用域；需要先提权，且必须已启用 HTTPS */
+  setDeveloperGuard: (scope: DeveloperGuardScope) =>
+    request<{ ok: boolean; scope: string }>("/api/developer/guard", jsonInit("POST", { scope })),
+  /** 紧急停机：按下之前先看清单（会杀掉哪些实例与终端） */
+  estopPreview: () => request<EmergencyStopPreview>("/api/developer/estop/preview"),
+  /** 紧急停机：强杀所有实例进程树并关掉所有终端，1 小时内不能解除 */
+  estopEngage: (reason: string) =>
+    request<{ engaged: boolean; terminals: number; processes: number; releasesAt?: string }>(
+      "/api/developer/estop/engage",
+      jsonInit("POST", { confirm: "ENGAGE-EMERGENCY-STOP", reason }),
+    ),
+  /** 紧急停机：冷却到点后才能解除（否则后端 409 带 remainingSeconds） */
+  estopRelease: () => request<{ engaged: boolean }>("/api/developer/estop/release", { method: "POST" }),
   setDeveloperPassword: (
     adminPassword: string,
     password: string,

@@ -152,6 +152,30 @@ public final class ServerConfigWriter {
         writeAtomically(yamlFile, root);
     }
 
+    /// Records the developer guard scope in `server.yaml` (`developer_guard.scope`).
+    /// Other keys in the section ride along untouched, the same way
+    /// [updateWebShell] treats `web_shell`.
+    ///
+    /// @param dataDir the data directory `server.yaml` lives in
+    /// @param scope the new scope
+    /// @throws IOException when the file cannot be read or written
+    public static void updateDeveloperGuard(Path dataDir, DeveloperGuardScope scope) throws IOException {
+        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
+        Map<String, Object> root = readExisting(yamlFile);
+
+        Object current = root.get("developer_guard");
+        Map<String, Object> section = new LinkedHashMap<>();
+        if (current instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                section.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        section.put("scope", scope.wireName());
+        root.put("developer_guard", section);
+
+        writeAtomically(yamlFile, root);
+    }
+
     /// Reads the existing document, or an empty map when there is none.
     private static Map<String, Object> readExisting(Path yamlFile) throws IOException {
         Map<String, Object> root = new LinkedHashMap<>();

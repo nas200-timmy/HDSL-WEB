@@ -276,6 +276,28 @@ public final class DshProcessManager {
         RUNNING.clear();
     }
 
+    /// Kills every running process tree at once, for the emergency stop.
+    ///
+    /// Each process is removed from the registry as it is killed, so a later
+    /// start sees "nothing running" rather than a corpse. Unlike [stopAll] this
+    /// is the brake: no drain window, no `post-exit` command.
+    ///
+    /// @return how many processes were signalled, parent and descendants
+    public static int killAllForcibly() {
+        int killed = 0;
+        for (Map.Entry<String, DshProcess> entry : List.copyOf(RUNNING.entrySet())) {
+            DshProcess process = entry.getValue();
+            try {
+                killed += process.killNow();
+            } catch (RuntimeException e) {
+                LOG.warning("Failed to kill " + process.instance().id(), e);
+            } finally {
+                RUNNING.remove(entry.getKey(), process);
+            }
+        }
+        return killed;
+    }
+
     /// Returns the process for an instance without checking liveness.
     ///
     /// @param instanceId the instance id

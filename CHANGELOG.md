@@ -2,6 +2,53 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.5.94 — 2026-10-27 · 开发者守卫（反代/实例/全部 API）+ 紧急停机
+
+> 这一版把"开发者密码"从终端门口扩展到别的入口，并加了一个真正能刹住车的按钮。
+> 两个开关都**默认关闭**：不开就跟以前完全一样。
+
+### 开发者守卫：提权管到哪，你自己选
+
+- `developer_guard.scope`（`HDSL_DEVELOPER_GUARD`）四档逐级包含：`off`（默认）→ `proxy`（实例网页
+  `/i/<id>/*` 的 HTTP 与 WebSocket 都要密码）→ `instance`（再加启动/停止/删除/装包/改设置的写操作，
+  读仍开放）→ `all`（除登录、健康检查、开发者页外，全部 `/api/*`）。
+- **它是门禁，不是断路器**：只挡新请求。已经开着的实例网页、已附着的终端、正在跑的 agent 都不动，
+  重新进入才要密码——要立刻掐断，用紧急停机。
+- **给脚本留了正门**：`POST /api/developer/elevate` 现在返回 `token`，用
+  `Authorization: Bearer <token>` 就能在没有 cookie 的情况下通过守卫。token 只在内存、与提权同寿命、
+  改密码或注销即失效。
+- 非 HTTPS 时守卫与紧急停机的控件变灰并写明"需要先启用 HTTPS"——沿用"开发者模式在明文 HTTP 下
+  不给用"的既有约定，而不是偷偷放行。
+
+### 紧急停机（E-Stop）
+
+- 三次确认（影响清单 → 输入「紧急停机」→ 不可逆声明），按下前先 `GET /api/developer/estop/preview`
+  把**此刻会杀掉什么逐条列出来**：实例、进程数、终端，并写明面板里正在跑的巡检/修复 agent 也会被一起
+  杀掉。
+- 按下后的顺序是"先关门再清理"：翻转状态 → 关掉所有终端 → 强杀所有实例的整棵进程树
+  （先收集 descendants，再 `destroyForcibly`，有界等待后补一轮；**不跑 `post-exit` 自定义命令**）。
+- 停机期间：`/i/*` 与实例的写操作一律 `503 emergency_stop`，终端同样 503；登录、健康检查、
+  开发者页、只读列表、日志与 `/ws` 照常，否则看不到状态也解除不了。
+- **冷却 1 小时**，期间没有人能解除（开发者密码也不行）；状态只在内存——重启面板进程或容器才会
+  清空，这是唯一的物理恢复方式，也是本次的明确选择。被杀掉的实例不会自动重启。
+
+### 面板与客户端
+
+- 设置 → 开发者模式：新增守卫四选一与红色 E-Stop 区块（含清单、三次确认、冷却倒计时）；
+  停机期间所有页面顶部有红色横幅与剩余时间。
+- `GET /api/developer/status` 增加 `guardScope` 与 `estop{engaged,engagedAt,releasesAt,remainingSeconds}`；
+  新增 `POST /api/developer/guard`、`GET /api/developer/estop/preview`、
+  `POST /api/developer/estop/engage`、`POST /api/developer/estop/release`。
+- Go 客户端（hdsl-tui）：新增 `emergency_stop` / `estop_cooldown` 的可执行文案与策略类退出码，
+  `DeveloperStatus` 读得出 `guardScope` 与停机状态；旧面板缺字段时按"未停机/守卫关闭"降级。
+
+### 验证
+
+- 新增 `DeveloperGuardScopeTest`、`DeveloperGuardFilterTest`、`EmergencyStopTest`（含"第二次按下不重置计时"
+  "冷却未到谁都不能解除""新对象即未停机"三条语义钉子）与 `ConfigLoaderTest` 的四条配置用例。
+- `./gradlew --no-daemon check`、`web` 三连、Go 的 `gofmt`/`go vet`/`go test`、插件两条全部绿。
+- 冷启动 / E-Stop 的真实效果只能在**独立起的临时面板**上验证，绝不在跑着 agent 的生产面板上按。
+
 ## v0.5.93 — 2026-10-27 · 输入框光标对齐
 
 - **TUI 输入框光标少算一格**：行首 `│ ` + `❯ ` 是四格，光标列却按三格算，光标永远压在最后一个

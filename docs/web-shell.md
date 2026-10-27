@@ -90,23 +90,64 @@ Windows 桌面终端不增加**本地**攻击面：能坐到这台机器前、�
   `terminal.desktop`（谁、从哪个地址）；这是对「只偷到 cookie」的减速带，不是加密证明；
 - **部署前提**：面板只监听 loopback 或可信网络；要暴露公网，必须在网络层加保护
   （反代鉴权/VPN/白名单），或者干脆不开终端按钮。文档明确写这条，而不是拿
-  「Windows 有桌面」当安全边界；
+  「Windows 有桌面」当安全边界。绑非回环又确实需要把实例网页/实例操作放出去时，开
+  `developer_guard.scope: instance`（见 §4.2）：实例网页与启动/停止/装包那一层会要求开发者密码；
 - 反过来，Linux 的 PTY 通道同样受这套入口约束：会话 + 提权 + 单实例单会话。
 
 ### 4.2 总开关与开发者模式
 
-设置页的「开发者模式」页本身也要开发者密码，进去后有两个控件：
+设置页的「开发者模式」页本身也要开发者密码，进去后有这些控件：
 
 - **Web Shell 总开关**（写入 `server.yaml` 的 `web_shell.enabled`，环境变量
   `HDSL_WEB_SHELL_ENABLED` 可覆盖）：关掉后 `POST .../terminal` 返回
   403 `web_shell_disabled`，实例列表不再显示终端按钮；已经在运行的终端不受影响，
   可以从自己的窗口里停止。开关本身要求开发者密码提权 + HTTPS 才会被接受。
+- **开发者守卫**（`developer_guard.scope`，环境变量 `HDSL_DEVELOPER_GUARD`，**默认 `off`**）：
+  决定提权还管到哪。四档逐级包含：
+
+  | 取值 | 管什么 |
+  |---|---|
+  | `off` | 和没有守卫时一样，只有终端要提权 |
+  | `proxy` | `/i/<id>/*` 的 HTTP 与 WebSocket 都要提权 |
+  | `instance` | 再加 `/api/instances/*`、`/api/brands/*`、`/api/zcode/*`、`/api/packs/*`、`/api/settings/*` 的 POST/PUT/PATCH/DELETE；GET 仍放行 |
+  | `all` | 除 `/api/health`、`/api/auth/*`、`/api/developer/*`、`/api/version` 外，全部 `/api/*` 都要提权 |
+
+  **它是门禁，不是断路器**：只挡新请求/新连接。已经加载的实例网页继续跑（它自己的接口请求开始
+  403），已开着的终端与正在跑的 agent 一律不动——重新进入才要密码。要立刻掐断一切，用下面的
+  紧急停机。
+- **给脚本/巡检 agent 的口子**：`POST /api/developer/elevate` 的响应里多一个 `token`（32 字节
+  随机串，只在内存、与提权同寿命、改密码或注销即失效）。拿它当
+  `Authorization: Bearer <token>` 就能在没有 cookie 的情况下通过守卫。别把它写进脚本文件或用
+  `ps` 能看到的命令行参数里。
 - **修改开发者密码**：需要当前开发者密码 + 面板密码（与设置时同一套确认）；成功后
   所有已提权的会话立即失效，需要重新验证。
 - **提权时长**：提权默认 30 分钟滑动续期；开发者模式页和 hdsl-tui 的「开发者提权」入口
   都可以把它**延长到 3 小时后**（`POST /api/developer/extend`，要求当前已提权，**每张票
   限一次**，重新验证密码可再延长），也可以**随时停止**（`POST /api/developer/revoke`，
   幂等，不等到期）。`GET /api/developer/status` 的 `expiresAt` 告诉两端还剩多久。
+
+### 4.2.1 紧急停机（E-Stop）
+
+设置页「开发者模式」里的红色区块，一次点击把面板对外的一切冻住。它要三次确认，第二次输入
+`紧急停机` 四个字，第三次声明不可逆。
+
+- **按下前先看清单**（`GET /api/developer/estop/preview`）：此刻在跑的实例（id / 状态 / 进程数）
+  与终端（品牌 / 实例）逐条列出，并写明**面板里正在跑的巡检/修复 agent 也会被杀掉**——那个 agent
+  往往就在某个实例的进程树或某个终端里。
+- **按下时**（`POST /api/developer/estop/engage`，要求提权 + `confirm` 短语）按这个顺序：
+  1. 先翻转状态，所有闸门立刻关上（之后再起来的实例也会被拦住，不会漏）；
+  2. 关掉所有终端（POSIX 走进程组 SIGKILL；**Windows 的桌面终端窗口不在面板进程表里，杀不掉，
+     需要人工关闭**）；
+  3. 强杀所有实例的整棵进程树：先收集 `descendants()`，再 `destroyForcibly()`，有界等待后再补一轮。
+     **不跑 `post-exit` 自定义命令**——紧急停机不该再去执行用户代码。会话尾部可能丢几行。
+  4. 审计 `estop.engage`（谁、终端数、进程数、原因）。
+- **停机期间**：`/i/*` 与实例的写操作类 API 一律 `503 emergency_stop`；终端接口同样 503。
+  登录、`/api/health`、`/api/developer/*`、只读列表与日志、`/ws` 事件流照常——否则界面看不到状态、
+  也解除不了。
+- **解除**（`POST /api/developer/estop/release`）：提权 + **冷却满 1 小时**。未到点返回
+  `409 estop_cooldown` 并带 `remainingSeconds`。没有任何"强制解除"接口。
+- **状态只在内存**：重启面板进程或容器就清空——这是唯一的物理恢复方式，也是本次的明确选择。
+  被杀掉的实例不会自动重启。重复按下不会重置计时。
 
 ### 4.3 强制 HTTPS 与自签名权宜
 
@@ -115,6 +156,8 @@ Windows 桌面终端不增加**本地**攻击面：能坐到这台机器前、�
 
 - HTTP 下进入「开发者模式」会直接弹出「当前环境不安全」的提示，并指引到「HTTPS 证书」；
   终端按钮在实例列表里隐藏，直接调 `POST .../terminal` 返回 403 `insecure_transport`。
+  **开发者守卫与紧急停机同样只在 HTTPS 下可用**——它们都建立在提权之上，拿不到提权时
+  `/i/*` 的回答是 `tls_required`（提权页会说明"开发者模式不可用"），开发者页把两组控件变灰并写明原因。
 - 没有证书时可以选择生成自签名证书：`POST /api/settings/tls/self-signed` 生成（或复用）
   `<data>/certs/self-signed*.pem`，把 `https.enabled` 写进 `server.yaml`，在同一端口热切换
   连接器。浏览器会提示证书不受信任，这是预期行为；它只适合内网或临时使用。

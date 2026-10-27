@@ -371,6 +371,33 @@ export interface DeveloperStatus {
   webShellEnabled: boolean;
   /** 面板此刻是否真的在讲 TLS；false 时开发者模式与 Web Shell 都不可用 */
   https: boolean;
+  /** 开发者守卫的作用域；旧后端没有这个字段，按 off 处理 */
+  guardScope?: DeveloperGuardScope;
+  /** 紧急停机状态；旧后端没有这个字段，按未停机处理 */
+  estop?: EmergencyStopState;
+}
+
+/// 开发者守卫能管多远：off / 只反代 / 反代 + 实例操作 / 全部 API。
+export type DeveloperGuardScope = "off" | "proxy" | "instance" | "all";
+
+/// 紧急停机（E-Stop）的当前状态。
+export interface EmergencyStopState {
+  engaged: boolean;
+  engagedAt?: string;
+  releasesAt?: string;
+  /** 冷却剩余秒数；未停机时为 0 */
+  remainingSeconds: number;
+  reason?: string;
+}
+
+/// GET /api/developer/estop/preview：按下之前先看会杀掉什么。
+export interface EmergencyStopPreview {
+  engagable: boolean;
+  estop: EmergencyStopState;
+  instances: { id: string; brand: string; state: string; pids: number }[];
+  terminals: { brand: string; instance: string; running: boolean }[];
+  processCount: number;
+  terminalCount: number;
 }
 
 // ---------- Phase 4：ACP 控制台 ----------

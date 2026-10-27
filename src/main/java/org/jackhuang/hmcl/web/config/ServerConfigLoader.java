@@ -51,6 +51,7 @@ public final class ServerConfigLoader {
     public static final String ENV_HTTPS = "HDSL_HTTPS";
     public static final String ENV_TRUST_FORWARDED_PROTO = "HDSL_TRUST_FORWARDED_PROTO";
     public static final String ENV_WEB_SHELL_ENABLED = "HDSL_WEB_SHELL_ENABLED";
+    public static final String ENV_DEVELOPER_GUARD = "HDSL_DEVELOPER_GUARD";
     public static final String ENV_ZCODE_PACKAGE = "HDSL_ZCODE_PACKAGE";
     public static final String ENV_ZCODE_NODE = "HDSL_ZCODE_NODE";
     public static final String ENV_ZCODE_BUILD_BIN = "HDSL_ZCODE_BUILD_BIN";
@@ -144,9 +145,12 @@ public final class ServerConfigLoader {
         if (root.containsKey("web_shell")) {
             applyWebShell(config, mapField(root, "web_shell"));
         }
+        if (root.containsKey("developer_guard")) {
+            applyDeveloperGuard(config, mapField(root, "developer_guard"));
+        }
         for (String key : root.keySet()) {
             switch (key) {
-                case "bind_host", "port", "public_base_url", "https", "auth", "web_shell" -> {
+                case "bind_host", "port", "public_base_url", "https", "auth", "web_shell", "developer_guard" -> {
                 }
                 default -> logger.warning(yamlFile + ": unknown key `" + key + "` ignored");
             }
@@ -157,6 +161,25 @@ public final class ServerConfigLoader {
         if (webShell.containsKey("enabled")) {
             config.webShell.enabled = booleanField(webShell, "enabled");
         }
+    }
+
+    private static void applyDeveloperGuard(ServerConfig config, Map<String, Object> section) {
+        if (section.containsKey("scope")) {
+            config.developerGuard.scope = guardScope(stringField(section, "scope"), "developer_guard.scope");
+        }
+        for (String key : section.keySet()) {
+            if (!key.equals("scope")) {
+                throw new ConfigException("developer_guard: unknown key `" + key + "` (only `scope` is accepted)");
+            }
+        }
+    }
+
+    private static DeveloperGuardScope guardScope(String value, String label) {
+        DeveloperGuardScope scope = DeveloperGuardScope.parse(value);
+        if (scope == null) {
+            throw new ConfigException(label + " must be `off`, `proxy`, `instance` or `all`, got `" + value + "`");
+        }
+        return scope;
     }
 
     private static void applyHttps(ServerConfig config, Map<String, Object> https) {
@@ -235,6 +258,9 @@ public final class ServerConfigLoader {
                 default -> throw new ConfigException(ENV_WEB_SHELL_ENABLED
                         + " must be `true` or `false`, got `" + value + "`");
             };
+        }
+        if (env.containsKey(ENV_DEVELOPER_GUARD)) {
+            config.developerGuard.scope = guardScope(env.get(ENV_DEVELOPER_GUARD), ENV_DEVELOPER_GUARD);
         }
         if (env.containsKey(ENV_ZCODE_PACKAGE)) {
             config.zcode.packageDir = env.get(ENV_ZCODE_PACKAGE);

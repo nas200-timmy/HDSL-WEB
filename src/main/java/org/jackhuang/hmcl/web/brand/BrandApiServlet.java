@@ -103,7 +103,8 @@ public final class BrandApiServlet extends HttpServlet {
                            org.jackhuang.hmcl.web.auth.AuthService auth,
                            org.jackhuang.hmcl.web.developer.DeveloperAuth developerAuth,
                            org.jackhuang.hmcl.web.developer.DeveloperElevation developerElevation,
-                           java.util.function.BooleanSupplier tlsActive) {
+                           java.util.function.BooleanSupplier tlsActive,
+                           org.jackhuang.hmcl.web.emergency.EmergencyStop emergency) {
         this.config = config;
         this.tasks = tasks;
         this.terminals = terminals;
@@ -113,7 +114,7 @@ public final class BrandApiServlet extends HttpServlet {
         this.developerElevation = developerElevation;
         this.tlsActive = tlsActive;
         this.instanceTerminal = new InstanceTerminal(config, terminals, terminalTickets, auth,
-                developerAuth, developerElevation, tlsActive);
+                developerAuth, developerElevation, tlsActive, emergency);
         Path base = config.dataDir.resolve("brands");
         for (Brand brand : Brand.values()) {
             Path root = base.resolve(brand.id());

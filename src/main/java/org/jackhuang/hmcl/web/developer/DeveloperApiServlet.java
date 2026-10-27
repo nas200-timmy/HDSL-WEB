@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.developer;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import jakarta.servlet.http.HttpServlet;
@@ -29,8 +30,11 @@ import org.jackhuang.hmcl.web.auth.LoginThrottle;
 import org.jackhuang.hmcl.web.auth.UserStore;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.config.ServerConfigWriter;
+import org.jackhuang.hmcl.web.emergency.EmergencyStop;
 import org.jackhuang.hmcl.web.http.Json;
 import org.jackhuang.hmcl.web.http.RequestSecurity;
+import org.jackhuang.hmcl.web.instance.InstanceRuntime;
+import org.jackhuang.hmcl.web.terminal.TerminalManager;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -62,18 +66,25 @@ public final class DeveloperApiServlet extends HttpServlet {
     private final AuthService auth;
     private final ServerConfig config;
     private final BooleanSupplier tlsActive;
+    private final EmergencyStop emergency;
+    private final TerminalManager terminals;
+    private final InstanceRuntime runtime;
     /// Failed panel-password confirmations, per source address — the second
     /// confirmation must not become an unthrottled oracle for the panel
     /// password.
     private final LoginThrottle adminPasswordThrottle = new LoginThrottle();
 
     public DeveloperApiServlet(DeveloperAuth devAuth, DeveloperElevation elevation,
-                               AuthService auth, ServerConfig config, BooleanSupplier tlsActive) {
+                               AuthService auth, ServerConfig config, BooleanSupplier tlsActive,
+                               EmergencyStop emergency, TerminalManager terminals, InstanceRuntime runtime) {
         this.devAuth = devAuth;
         this.elevation = elevation;
         this.auth = auth;
         this.config = config;
         this.tlsActive = tlsActive;
+        this.emergency = emergency;
+        this.terminals = terminals;
+        this.runtime = runtime;
     }
 
     @Override
@@ -92,7 +103,25 @@ public final class DeveloperApiServlet extends HttpServlet {
             body.addProperty("webShellEnabled", config.webShell.enabled);
             body.addProperty("https",
                     RequestSecurity.isSecure(request, tlsActive.getAsBoolean(), config));
+            body.addProperty("guardScope", config.developerGuard.scope.wireName());
+            body.add("estop", estopState());
             Json.write(response, body);
+            return;
+        }
+        if ("/guard".equals(path) && "POST".equals(method)) {
+            setGuard(request, response);
+            return;
+        }
+        if ("/estop/preview".equals(path) && "GET".equals(method)) {
+            estopPreview(request, response);
+            return;
+        }
+        if ("/estop/engage".equals(path) && "POST".equals(method)) {
+            estopEngage(request, response);
+            return;
+        }
+        if ("/estop/release".equals(path) && "POST".equals(method)) {
+            estopRelease(request, response);
             return;
         }
         if ("/elevate".equals(path) && "POST".equals(method)) {
@@ -158,6 +187,10 @@ public final class DeveloperApiServlet extends HttpServlet {
         JsonObject body = new JsonObject();
         body.addProperty("elevated", true);
         body.addProperty("expiresAt", now.plus(DeveloperElevation.TTL).toString());
+        // A bearer token for callers that cannot keep the session cookie: a host
+        // script, an inspection agent, CI. Same TTL and sliding rules as the
+        // cookie elevation, in memory only, and killed by a password change.
+        body.addProperty("token", elevation.mintToken());
         Json.write(response, body);
     }
 
@@ -318,6 +351,190 @@ public final class DeveloperApiServlet extends HttpServlet {
     private static @Nullable String actorOf(HttpServletRequest request) {
         Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
         return session instanceof AuthService.Session value ? value.username() : null;
+    }
+
+    /// Flips the developer guard's scope (docs/web-shell.md §4.1).
+    ///
+    /// Same proof as the Web Shell switch — TLS and an elevation — because this
+    /// is the switch that decides how far an elevation reaches. Turning it on
+    /// without a developer password is refused: nobody could clear it again.
+    private void setGuard(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireTls(request, response)) {
+            return;
+        }
+        if (!elevation.require(keyOf(request), sessionAlive(request))) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return;
+        }
+        org.jackhuang.hmcl.web.config.DeveloperGuardScope scope =
+                org.jackhuang.hmcl.web.config.DeveloperGuardScope.parse(stringField(readJson(request), "scope"));
+        if (scope == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "scope must be one of off, proxy, instance, all");
+            return;
+        }
+        if (scope != org.jackhuang.hmcl.web.config.DeveloperGuardScope.OFF && !devAuth.isSet()) {
+            // Without a password the gate could never be satisfied, so the
+            // instances would be unreachable until someone edits server.yaml.
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "developer_password_not_set: set the developer password before turning the guard on");
+            return;
+        }
+        try {
+            ServerConfigWriter.updateDeveloperGuard(config.dataDir, scope);
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "the developer guard could not be stored: " + e.getMessage());
+            return;
+        }
+        config.developerGuard.scope = scope;
+        AuditLog.log(AuditLog.Channel.WEB, "developer.guard", scope.wireName(), "success",
+                actorOf(request), request.getRemoteAddr());
+        JsonObject answer = new JsonObject();
+        answer.addProperty("ok", true);
+        answer.addProperty("scope", scope.wireName());
+        Json.write(response, answer);
+    }
+
+    /// The emergency stop's state, for `/status` and the banners.
+    private JsonObject estopState() {
+        JsonObject state = new JsonObject();
+        boolean engaged = emergency.isEngaged();
+        state.addProperty("engaged", engaged);
+        if (!engaged) {
+            state.addProperty("remainingSeconds", 0);
+            return state;
+        }
+        Instant engagedAt = emergency.engagedAt();
+        Instant releasesAt = emergency.releasesAt();
+        if (engagedAt != null) {
+            state.addProperty("engagedAt", engagedAt.toString());
+        }
+        if (releasesAt != null) {
+            state.addProperty("releasesAt", releasesAt.toString());
+        }
+        state.addProperty("remainingSeconds", Math.max(0, emergency.remaining(Instant.now()).toSeconds()));
+        String reason = emergency.reason();
+        if (reason != null && !reason.isBlank()) {
+            state.addProperty("reason", reason);
+        }
+        return state;
+    }
+
+    /// What the E-Stop is about to kill, so the confirmation can list it.
+    ///
+    /// The list is a snapshot: an instance started between this call and the
+    /// engage is still killed, because the gate closes before the killing
+    /// starts.
+    private void estopPreview(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireTls(request, response)) {
+            return;
+        }
+        if (!elevation.require(keyOf(request), sessionAlive(request))) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return;
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty("engagable", !emergency.isEngaged());
+        body.add("estop", estopState());
+
+        JsonArray instances = new JsonArray();
+        int processes = 0;
+        for (org.jackhuang.hmcl.dsh.DshProcess process : runtime.runningProcesses()) {
+            JsonObject row = new JsonObject();
+            row.addProperty("id", process.instance().id());
+            row.addProperty("brand", "dsh");
+            row.addProperty("state", runtime.stateOf(process.instance().id()));
+            row.addProperty("pids", process.processTreeSize());
+            instances.add(row);
+            processes += process.processTreeSize();
+        }
+        JsonArray terminalRows = new JsonArray();
+        int terminals = 0;
+        for (org.jackhuang.hmcl.web.terminal.TerminalManager.Tracked terminal : this.terminals.tracked()) {
+            JsonObject row = new JsonObject();
+            row.addProperty("brand", terminal.brand());
+            row.addProperty("instance", terminal.instanceId());
+            row.addProperty("running", terminal.running());
+            terminalRows.add(row);
+            if (terminal.running()) {
+                terminals++;
+            }
+        }
+        body.add("instances", instances);
+        body.add("terminals", terminalRows);
+        body.addProperty("processCount", processes);
+        body.addProperty("terminalCount", terminals);
+        Json.write(response, body);
+    }
+
+    /// The brake: state first, then the work (see [EmergencyStop]).
+    private void estopEngage(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireTls(request, response)) {
+            return;
+        }
+        if (!elevation.require(keyOf(request), sessionAlive(request))) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return;
+        }
+        JsonObject input = readJson(request);
+        if (!"ENGAGE-EMERGENCY-STOP".equals(stringField(input, "confirm"))) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "confirmation_required: send {\"confirm\":\"ENGAGE-EMERGENCY-STOP\"}");
+            return;
+        }
+        String reason = stringField(input, "reason");
+        boolean engagedNow = emergency.engage(String.valueOf(actorOf(request)), reason, Instant.now());
+        if (!engagedNow) {
+            // Already engaged: the hour must not restart, and nothing is killed
+            // a second time.
+            JsonObject answer = estopState();
+            answer.addProperty("alreadyEngaged", true);
+            Json.write(response, answer);
+            return;
+        }
+        int terminalsClosed = terminals.terminateAll();
+        int processes = runtime.killAllForcibly();
+        AuditLog.log(AuditLog.Channel.WEB, "estop.engage",
+                "terminals=" + terminalsClosed + " processes=" + processes
+                        + (reason == null || reason.isBlank() ? "" : " reason=" + reason),
+                "success", actorOf(request), request.getRemoteAddr());
+        JsonObject answer = estopState();
+        answer.addProperty("terminals", terminalsClosed);
+        answer.addProperty("processes", processes);
+        Json.write(response, answer);
+    }
+
+    /// Lifts the stop, but only after the hour has run out.
+    private void estopRelease(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireTls(request, response)) {
+            return;
+        }
+        if (!elevation.require(keyOf(request), sessionAlive(request))) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return;
+        }
+        Instant now = Instant.now();
+        Instant endedAt = emergency.release(now);
+        if (endedAt == null) {
+            JsonObject refusal = new JsonObject();
+            refusal.addProperty("error", emergency.isEngaged()
+                    ? "estop_cooldown: the emergency stop cannot be released yet"
+                    : "estop_not_engaged: the panel is not in emergency stop");
+            refusal.addProperty("remainingSeconds", emergency.remaining(now).toSeconds());
+            Json.write(response, HttpServletResponse.SC_CONFLICT, refusal);
+            return;
+        }
+        AuditLog.log(AuditLog.Channel.WEB, "estop.release",
+                "held for " + java.time.Duration.between(endedAt, now).toMinutes() + " minutes",
+                "success", actorOf(request), request.getRemoteAddr());
+        JsonObject answer = new JsonObject();
+        answer.addProperty("engaged", false);
+        Json.write(response, answer);
     }
 
     /// Confirms the panel password with a per-address budget, answering the

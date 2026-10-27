@@ -138,7 +138,8 @@ public final class InstancesApiServlet extends HttpServlet {
                                TerminalManager terminals, TerminalTickets terminalTickets,
                                AuthService auth, DeveloperAuth developerAuth,
                                DeveloperElevation developerElevation,
-                               java.util.function.BooleanSupplier tlsActive) {
+                               java.util.function.BooleanSupplier tlsActive,
+                               org.jackhuang.hmcl.web.emergency.EmergencyStop emergency) {
         this.runtime = runtime;
         this.tasks = tasks;
         this.config = config;
@@ -149,7 +150,7 @@ public final class InstancesApiServlet extends HttpServlet {
         this.developerElevation = developerElevation;
         this.tlsActive = tlsActive;
         this.instanceTerminal = new InstanceTerminal(config, terminals, terminalTickets, auth,
-                developerAuth, developerElevation, tlsActive);
+                developerAuth, developerElevation, tlsActive, emergency);
     }
 
     @Override

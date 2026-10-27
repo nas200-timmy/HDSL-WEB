@@ -83,6 +83,9 @@ public final class InstanceRuntime {
 
     private final EventBus bus;
     private final TaskService tasks;
+    /// The panel-wide emergency stop; a launch while it is engaged is refused
+    /// rather than started and immediately killed.
+    private final org.jackhuang.hmcl.web.emergency.EmergencyStop emergency;
     private final ConcurrentHashMap<String, EndedState> ended = new ConcurrentHashMap<>();
     /// Processes whose READY transition has been announced, so a readiness line
     /// (or the attach-time check) only fires the RUNNING event once.
@@ -93,8 +96,36 @@ public final class InstanceRuntime {
     private final Set<DshProcess> attachedSinks = ConcurrentHashMap.newKeySet();
 
     public InstanceRuntime(EventBus bus, TaskService tasks) {
+        this(bus, tasks, new org.jackhuang.hmcl.web.emergency.EmergencyStop());
+    }
+
+    /// @param bus       the event bus
+    /// @param tasks     the task pool
+    /// @param emergency the panel's emergency stop, so a frozen panel cannot be
+    ///                  made to start an instance by a queued task
+    public InstanceRuntime(EventBus bus, TaskService tasks,
+                           org.jackhuang.hmcl.web.emergency.EmergencyStop emergency) {
         this.bus = bus;
         this.tasks = tasks;
+        this.emergency = emergency;
+    }
+
+    /// The emergency stop this runtime obeys.
+    public org.jackhuang.hmcl.web.emergency.EmergencyStop emergency() {
+        return emergency;
+    }
+
+    /// Every process the panel is currently running, newest first — the
+    /// preview the E-Stop confirmation lists before anything is killed.
+    public java.util.List<DshProcess> runningProcesses() {
+        return DshProcessManager.running();
+    }
+
+    /// Kills every instance's process tree, for the emergency stop.
+    ///
+    /// @return how many processes were signalled, parents and descendants
+    public int killAllForcibly() {
+        return DshProcessManager.killAllForcibly();
     }
 
     /// Connects the runtime to the domain layer's event hooks. Call once, at
@@ -209,6 +240,11 @@ public final class InstanceRuntime {
     /// @return the running process
     /// @throws DshException when the launch fails
     public DshProcess launchSync(DshInstance instance, @Nullable String publicHost) throws DshException {
+        if (emergency.isEngaged()) {
+            // The request path is refused by the guard filter, but a queued task
+            // (install-then-launch) reaches this method directly.
+            throw new DshException("emergency_stop: the panel is in emergency stop; instance starts are frozen");
+        }
         DshLauncher.LaunchPlan plan = DshLauncher.plan(instance, accountOf(instance));
         if (publicHost != null && !publicHost.isBlank()) {
             List<String> command = new ArrayList<>(plan.command());
