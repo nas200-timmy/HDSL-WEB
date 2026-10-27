@@ -92,9 +92,29 @@ export function parsePortFromUrl(url: string | null | undefined): number | null 
   return m ? Number(m[1]) : null;
 }
 
+/** 把后端错误码翻译成用户能照着做的一句话；未知错误原样返回。 */
 export function errMsg(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  return "操作失败";
+  const raw = e instanceof Error ? e.message : "操作失败";
+  // 这几种不是"操作失败"，是"先去做另一件事"。不翻译的话，toast 里只剩一串英文码。
+  if (raw.includes("tls_required")) {
+    return "面板不在 HTTPS 下，开发者模式不可用：请在「设置 → HTTPS 证书」里启用后重试";
+  }
+  if (raw.includes("insecure_transport")) {
+    return "终端只在 HTTPS 下可用：请在「设置 → HTTPS 证书」里启用后重试";
+  }
+  if (raw.includes("emergency_stop")) {
+    return "面板处于紧急停机：实例网页、终端与实例启动都被冻结，冷却结束或重启面板后才能恢复";
+  }
+  if (raw.includes("estop_cooldown")) {
+    return "紧急停机的冷却期还没结束：到点前谁都不能解除（重启面板进程或容器会清空）";
+  }
+  if (raw.includes("web_shell_disabled")) {
+    return "Web Shell 已在面板里关闭：请在「设置 → 开发者模式」里打开后再连";
+  }
+  if (raw.includes("developer_password_not_set")) {
+    return "还没有设置开发者密码：请在「设置 → 开发者模式」里设置后重试";
+  }
+  return raw;
 }
 
 /** "YYYY-MM-DD"；无法解析时原样返回 */

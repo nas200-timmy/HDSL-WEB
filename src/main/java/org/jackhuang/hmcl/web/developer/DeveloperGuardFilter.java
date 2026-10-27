@@ -35,7 +35,7 @@ import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
-import java.io.PrintWriter;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.function.BooleanSupplier;
 
@@ -93,7 +93,8 @@ public final class DeveloperGuardFilter implements Filter {
         if (emergency.isEngaged() && blockedByEmergency(path, method)) {
             refuse(answer, navigation, path, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "emergency_stop",
                     "紧急停机中：实例网页、终端与实例启动都被冻结。冷却结束或重启面板后才能恢复。",
-                    "The panel is in emergency stop: instance pages, terminals and instance starts are frozen.");
+                    "The panel is in emergency stop: instance pages, terminals and instance starts are frozen.",
+                    false);
             return;
         }
 
@@ -107,7 +108,7 @@ public final class DeveloperGuardFilter implements Filter {
         if (!devAuth.isSet()) {
             refuse(answer, navigation, path, HttpServletResponse.SC_CONFLICT, "developer_password_not_set",
                     "开发者守卫已开启，但还没有设置开发者密码。请先在「设置 → 开发者模式」里设置。",
-                    "The developer guard is on but no developer password is set.");
+                    "The developer guard is on but no developer password is set.", false);
             return;
         }
         // Elevation is only ever obtained over HTTPS (see DeveloperApiServlet),
@@ -117,7 +118,7 @@ public final class DeveloperGuardFilter implements Filter {
         if (!RequestSecurity.isSecure(http, tlsActive.getAsBoolean(), config)) {
             refuse(answer, navigation, path, HttpServletResponse.SC_FORBIDDEN, "tls_required",
                     "面板不在 HTTPS 下：开发者模式不可用。请先在「设置 → HTTPS 证书」里启用。",
-                    "The panel is not on HTTPS, so developer mode is unavailable.");
+                    "The panel is not on HTTPS, so developer mode is unavailable.", false);
             return;
         }
         if (elevation.require(key(http), sessionAlive(http)) || elevation.requireToken(bearerToken(http))) {
@@ -125,8 +126,9 @@ public final class DeveloperGuardFilter implements Filter {
             return;
         }
         refuse(answer, navigation, path, HttpServletResponse.SC_FORBIDDEN, "developer_elevation_required",
-                "需要开发者密码：请先在面板里提权，然后刷新这个页面。",
-                "The developer password is required: elevate in the panel, then reload.");
+                "需要开发者密码",
+                "Enter the developer password to open this instance.",
+                true);
     }
 
     /// Whether the guard's scope covers this request.
@@ -173,26 +175,87 @@ public final class DeveloperGuardFilter implements Filter {
 
     /// Answers the refusal: a small HTML page for a browser navigation (a JSON
     /// body would read as a broken page), JSON for everything else.
+    ///
+    /// The page carries the **password form itself** when the refusal is
+    /// [elevation][#elevationRequired]: being told "go to the panel settings and
+    /// come back" is a dead end when the thing you clicked was a link to the
+    /// instance. The form posts to the panel's own `elevate` endpoint and
+    /// reloads on success; a transport refusal (`tls_required`) deliberately
+    /// has no form — the password would only be refused again, in cleartext.
     private void refuse(HttpServletResponse response, boolean navigation, String path,
-                        int status, String code, String zh, String en) throws IOException {
+                        int status, String code, String zh, String en, boolean elevationRequired)
+            throws IOException {
         if (navigation && path.startsWith("/i/")) {
             response.setStatus(status);
             response.setContentType("text/html; charset=utf-8");
             response.setHeader("Cache-Control", "no-store");
             String panel = (config.basePath.isEmpty() ? "" : config.basePath) + "/";
-            try (PrintWriter out = new PrintWriter(response.getOutputStream(), false, StandardCharsets.UTF_8)) {
-                out.write("<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\">"
-                        + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-                        + "<title>HDSL-web</title></head><body style=\"font:14px/1.6 system-ui, sans-serif;"
-                        + "max-width:40rem;margin:12vh auto;padding:0 1.2rem;color:#1b1b1f\">");
-                out.write("<h1 style=\"font-size:1.25rem\">" + escape(zh) + "</h1>");
-                out.write("<p style=\"color:#555\">" + escape(en) + "</p>");
-                out.write("<p><a href=\"" + escape(panel) + "\">返回面板</a></p>");
-                out.write("</body></html>");
+            byte[] body = gatePage(panel, zh, en, elevationRequired).getBytes(StandardCharsets.UTF_8);
+            try (OutputStream out = response.getOutputStream()) {
+                out.write(body);
             }
             return;
         }
         Json.error(response, status, code + ": " + en);
+    }
+
+    /// The gate page itself.
+    ///
+    /// Split out from [#refuse] so the two shapes can be asserted without a
+    /// booted server: with `elevationRequired` the page carries the password
+    /// form (that is the case a user hits by clicking through to an instance),
+    /// without it the page explains the transport policy and has no form — a
+    /// password typed there would only be refused again, in cleartext.
+    static String gatePage(String panel, String zh, String en, boolean elevationRequired) {
+        StringBuilder page = new StringBuilder(1024);
+        page.append("<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\">")
+                .append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
+                .append("<title>HDSL-web</title></head><body style=\"font:14px/1.6 system-ui, sans-serif;")
+                .append("max-width:40rem;margin:12vh auto;padding:0 1.2rem;color:#1b1b1f\">")
+                .append("<h1 style=\"font-size:1.25rem\">").append(escape(zh)).append("</h1>")
+                .append("<p style=\"color:#555\">").append(escape(en)).append("</p>");
+        if (elevationRequired) {
+            page.append("<form id=\"hdsl-elevate\" style=\"display:flex;gap:.5rem;align-items:center;")
+                    .append("flex-wrap:wrap;margin:1.2rem 0\">")
+                    .append("<input id=\"hdsl-dev-password\" type=\"password\" autocomplete=\"off\" autofocus")
+                    .append(" placeholder=\"开发者密码\"")
+                    .append(" style=\"flex:1 1 14rem;padding:.5rem .6rem;border:1px solid #bbb;")
+                    .append("border-radius:4px;font:inherit\">")
+                    .append("<button type=\"submit\" style=\"padding:.5rem 1rem;border:0;border-radius:4px;")
+                    .append("background:#4e6fff;color:#fff;font:inherit;cursor:pointer\">提权并继续</button>")
+                    .append("</form>")
+                    .append("<p id=\"hdsl-elevate-error\" style=\"color:#b3261e;min-height:1.4em\"></p>")
+                    .append("<script>(function(){")
+                    .append("var form=document.getElementById('hdsl-elevate');")
+                    .append("var field=document.getElementById('hdsl-dev-password');")
+                    .append("var err=document.getElementById('hdsl-elevate-error');")
+                    .append("form.addEventListener('submit',function(event){")
+                    .append("event.preventDefault();err.textContent='';")
+                    .append("fetch(").append(jsString(panel + "api/developer/elevate")).append(",{method:'POST',")
+                    .append("credentials:'same-origin',headers:{'Content-Type':'application/json'},")
+                    .append("body:JSON.stringify({password:field.value})})")
+                    .append(".then(function(response){return response.text().then(function(text){")
+                    .append("if(response.ok){location.reload();return;}")
+                    .append("var message='';try{message=JSON.parse(text).error||'';}catch(ignored){}")
+                    .append("if(message.indexOf('tls_required')>=0){")
+                    .append("err.textContent='面板不在 HTTPS 下，开发者模式不可用。';}")
+                    .append("else if(message.indexOf('developer_password_not_set')>=0){")
+                    .append("err.textContent='还没有设置开发者密码，请先在面板「设置 → 开发者模式」里设置。';}")
+                    .append("else if(message.indexOf('too many failed attempts')>=0){")
+                    .append("err.textContent='失败次数过多，已临时锁定，请稍后再试。';}")
+                    .append("else{err.textContent='开发者密码不正确。';}")
+                    .append("});})")
+                    .append(".catch(function(){err.textContent='请求失败，请检查网络后重试。';});")
+                    .append("});})();</script>");
+        }
+        page.append("<p><a href=\"").append(escape(panel)).append("\">返回面板</a></p>");
+        page.append("</body></html>");
+        return page.toString();
+    }
+
+    /// A JS string literal, for the one interpolated URL above.
+    static String jsString(String value) {
+        return "'" + value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "") + "'";
     }
 
     /// Whether this looks like a browser navigation, which gets the HTML page.

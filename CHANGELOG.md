@@ -2,6 +2,23 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.5.95 — 2026-10-28 · 需要开发者密码时弹框 + 安全说明补齐
+
+- **守卫挡住操作时弹密码框，不再干拒**：`启动 / 停止 / 装版本 / 打开实例` 被
+  `developer_elevation_required` 挡住时，面板直接弹「需要开发者密码」，输对就重试原操作一次
+  （`web/src/elevation.ts` + `components/ElevationDialog.tsx`，`actions.ts` 的 `withElevation`）。
+  提权 30 分钟有效，不缓存密码。
+- **`/i/<id>/` 的拦截页也带密码框**：守卫要求提权时，那一页直接给「开发者密码 + 提权并继续」，
+  成功后整页重载；密码错、没设密码、被锁定各有提示。传输策略的拒绝（`tls_required`）**故意不给框**——
+  面板不在 HTTPS 下时密码填了也是明文，只会再被拒一次。
+- **错误文案不再只吐英文码**：`errMsg` 会把 `tls_required`、`insecure_transport`、`emergency_stop`、
+  `estop_cooldown`、`web_shell_disabled`、`developer_password_not_set` 翻成"先去做另一件事"的一句话。
+- 文档：`design-notes.md` §7 扩成完整安全说明（保护什么 / 不负责的边界 / 三层门 + 一个刹车 /
+  明文 HTTP 的政策 / 其余不变量）；`plan.md` 认证设计补「第二把钥匙」；`web-shell.md` §4.3 改成
+  "开发者模式只在 HTTPS 下可用" 并写清理由，§4.2.1 补「已知取舍」与「验证纪律」；
+  `deployment.md` 症状表补守卫/停机两条。
+- **行为没有变化**：明文 HTTP 下开发者模式与守卫依旧不开（v0.5.94 的规矩）。
+
 ## v0.5.94 — 2026-10-27 · 开发者守卫（反代/实例/全部 API）+ 紧急停机
 
 > 这一版把"开发者密码"从终端门口扩展到别的入口，并加了一个真正能刹住车的按钮。

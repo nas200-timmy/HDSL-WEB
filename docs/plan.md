@@ -124,6 +124,10 @@ https:
 - 单管理员：`POST /api/auth/login`（PBKDF2WithHmacSHA256 哈希，盐 per-user，JDK 内置），会话 = HttpOnly + SameSite=Strict cookie（TLS 下加 Secure）。
 - 除 `/api/auth/login` 与健康检查外，**一切资源都要会话**：`/api/*`、`/ws`、SPA、`/i/*`（dsh 自身还有 token+cookie 双保险）。
 - `auth.disabled: true` 仅在绑定 127.0.0.1 时允许（开发用）。
+- **Phase 之后加的第二把钥匙**：开发者密码（`developer.json`，0600）+ 会话级提权，守着终端；
+  可选扩到实例网页、实例写操作或全部 API（`developer_guard.scope`），另有一个会把实例进程树
+  一起强杀的紧急停机。完整威胁模型、边界与"明文 HTTP 默认只警告"的口径见
+  `docs/design-notes.md` §7；操作面见 `docs/web-shell.md` §4.2 / §4.3。
 
 ## 反代与实例启动细节
 

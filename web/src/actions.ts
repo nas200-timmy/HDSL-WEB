@@ -1,9 +1,27 @@
 import { api } from "./api";
 import { beginLaunch, consumeLaunchPopup, forgetLaunch } from "./launch";
+import { requestDeveloperPassword, isElevationRequired } from "./elevation";
 import { I18N } from "./i18n";
 import { patchInstanceLocal, refreshExternal, seedTasks, toast } from "./store";
 import type { Instance } from "./types";
 import { errMsg } from "./utils";
+
+/**
+ * 跑一个可能被开发者守卫挡住的请求：被挡住时弹一次开发者密码框，成功后重试一次。
+ *
+ * 只对 `developer_elevation_required` / `developer_password_not_set` 弹框——别的拒绝
+ * （没有 HTTPS、终端已关闭、正在紧急停机）弹密码框没有意义，照旧把错误交给调用方。
+ */
+async function withElevation<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (e) {
+    if (!isElevationRequired(e)) throw e;
+    const elevated = await requestDeveloperPassword();
+    if (!elevated) throw e;
+    return await call();
+  }
+}
 
 /**
  * 启动流程：
@@ -15,7 +33,7 @@ import { errMsg } from "./utils";
 export async function launchInstance(inst: Instance, onSubmitted?: () => void): Promise<boolean> {
   const win = beginLaunch(inst.id);
   try {
-    const r = await api.launch(inst.id);
+    const r = await withElevation(() => api.launch(inst.id));
     const installing = r.state === "installing";
     patchInstanceLocal(inst.id, { state: installing ? "INSTALLING" : "STARTING" });
     toast(
@@ -38,7 +56,7 @@ export async function launchInstance(inst: Instance, onSubmitted?: () => void): 
 
 export async function stopInstance(inst: Instance): Promise<boolean> {
   try {
-    await api.stop(inst.id);
+    await withElevation(() => api.stop(inst.id));
     patchInstanceLocal(inst.id, { state: "STOPPING" });
     toast("info", "已发送停止指令");
     return true;
@@ -50,7 +68,7 @@ export async function stopInstance(inst: Instance): Promise<boolean> {
 
 export async function installVersion(inst: Instance, version: string): Promise<boolean> {
   try {
-    await api.install(inst.id, version);
+    await withElevation(() => api.install(inst.id, version));
     patchInstanceLocal(inst.id, { state: "INSTALLING" });
     void seedTasks();
     toast("info", `已开始安装 ${version}`);
@@ -69,8 +87,9 @@ export function openDsh(instanceId: string): void {
   } catch {
     win = null;
   }
-  api
-    .open(instanceId)
+  // `/api/instances/<id>/open` 是写操作（它会把实例拉起来），守卫开着时要提权：
+  // 弹一次密码框，成功后重试，而不是把"打开失败"丢给用户。
+  withElevation(() => api.open(instanceId))
     .then((r) => {
       // r.url 已由后端带挂载点前缀（open 端点在 REST 边界加 base）
       if (win) {
@@ -98,19 +117,21 @@ export async function launchBrandInstance(
   beginLaunch(entry.id);
   try {
     let state: string;
+    // 品牌 / ZCode 的启动与打开同样是写操作：守卫开着时会要开发者密码，
+    // 这里弹一次、成功后重试，别把"启动失败"直接甩给用户。
     if (brand === "zcode") {
-      const r = await api.launchZcode(entry.id);
+      const r = await withElevation(() => api.launchZcode(entry.id));
       state = r.state;
       if (state === "error") throw new Error(r.error ?? "未知原因");
     } else {
-      const r = await api.launchBrand(brand, entry.id);
+      const r = await withElevation(() => api.launchBrand(brand, entry.id));
       state = r.state;
       if (state === "error") throw new Error(r.error ?? "未知原因");
     }
     const target =
       brand === "zcode"
-        ? (await api.zcodeOpen(entry.id)).url
-        : (await api.openBrand(brand, entry.id)).url;
+        ? (await withElevation(() => api.zcodeOpen(entry.id))).url
+        : (await withElevation(() => api.openBrand(brand, entry.id))).url;
     const popup = consumeLaunchPopup(entry.id);
     toast("success", I18N["dsh.launch.ready"].replace("%s", entry.name));
     if (popup && !popup.closed) {

@@ -6,6 +6,7 @@ import { Decorator } from "./components/Decorator";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { OfflineBanner } from "./components/OfflineBanner";
 import { SnackbarHost } from "./components/Snackbar";
+import { ElevationHost } from "./components/ElevationDialog";
 import { AccountsPage } from "./pages/AccountsPage";
 import { DownloadPage } from "./pages/DownloadPage";
 import { InstallInstanceWizard } from "./pages/InstallInstanceWizard";
@@ -248,6 +249,7 @@ export default function App() {
       </Routes>
       <OfflineBanner />
       <SnackbarHost />
+      <ElevationHost />
     </>
   );
 }

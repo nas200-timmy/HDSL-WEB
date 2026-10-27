@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { requestDeveloperPassword } from "../elevation";
 import { CollapsibleNote } from "./CollapsibleNote";
 import { ConfirmDialog, Dialog } from "./Dialog";
 import { PopupItem, PopupMenu, PopupSep } from "./PopupMenu";
@@ -196,7 +197,15 @@ export function ZcodeSection() {
 
   const openInBrowser = async (inst: ExternalInstance) => {
     try {
-      const r = await api.zcodeOpen(inst.id);
+      // 守卫开着时"打开"要提权：先弹密码框，成功后重试一次。
+      let r;
+      try {
+        r = await api.zcodeOpen(inst.id);
+      } catch (e) {
+        if (!(e instanceof Error) || !e.message.includes("developer_elevation_required")) throw e;
+        if (!(await requestDeveloperPassword())) throw e;
+        r = await api.zcodeOpen(inst.id);
+      }
       window.open(r.url, "_blank", "noopener");  // r.url 已带挂载点前缀
     } catch (e) {
       toast("error", `打开失败：${errMsg(e)}`);
