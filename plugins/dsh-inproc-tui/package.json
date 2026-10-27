@@ -23,6 +23,7 @@
     "shared",
     "cordis.patch.yml",
     "README.md",
+    "NOTICE",
     "LICENSE"
   ],
   "engines": {

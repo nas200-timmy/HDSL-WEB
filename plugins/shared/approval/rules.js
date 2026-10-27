@@ -13,10 +13,24 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 
-/** The file a terminal reads and writes; `HDSL_TUI_RULES` overrides it for tests. */
-export function rulesFile() {
-  const override = process.env.HDSL_TUI_RULES
+/**
+ * The file a terminal reads and writes.
+ *
+ * `HDSL_TUI_RULES` overrides it (tests, and anyone who wants the rules somewhere
+ * else). Otherwise it lives inside the **instance home** — the directory the
+ * panel backs up and keeps across container updates. It used to sit in
+ * `~/.hdsl-tui/`, which is shared by every instance of the same OS user and is
+ * not on the persistent volume: a rule made in one instance quietly applied to
+ * all of them, and image updates threw the file away.
+ *
+ * @param {Record<string, string | undefined>} [env] the environment to read
+ * @returns {string} the rules file
+ */
+export function rulesFile(env = process.env) {
+  const override = env.HDSL_TUI_RULES
   if (typeof override === 'string' && override.trim() !== '') return override
+  const home = typeof env.DSH_HOME === 'string' ? env.DSH_HOME.trim() : ''
+  if (home !== '') return join(home, '.hdsl-tui', 'permissions.json')
   return join(homedir(), '.hdsl-tui', 'permissions.json')
 }
 

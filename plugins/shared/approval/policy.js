@@ -34,8 +34,15 @@ const SHELL_TOOLS = /bash|pwsh|powershell|shell|exec|terminal|run_command|run\b/
 /** File-writing tools, by tool name. */
 const WRITE_TOOLS = /write|edit|replace|patch|create|delete|remove|move|rename|copy|mkdir|touch|apply|insert|append/iu
 
-/** Tools that only read: these are the ones Always Ask does not interrupt. */
-const READ_TOOLS = /read|view|list|search|grep|glob|find|stat|ls\b|cat\b|head\b|tail\b|wc\b|diff\b|show\b|fetch\b|web/iu
+/**
+ * Tools that only read: these are the ones Always Ask does not interrupt.
+ *
+ * Network reads are deliberately **not** here: `web_fetch` is a read of a URL
+ * that the model composes, so it can carry the workspace out in a query string.
+ * It costs one dialog and stays a read in every other respect (the sandbox does
+ * not apply to it, which is exactly why the dialog does).
+ */
+const READ_TOOLS = /read|view|list|search|grep|glob|find|stat|ls\b|cat\b|head\b|tail\b|wc\b|diff\b|show\b/iu
 
 /** Tools whose call is a decision about what to do, never an automated action. */
 const PLAN_TOOLS = /plan|present|goal|question|ask_user/iu
@@ -88,8 +95,14 @@ const SENSITIVE_SEGMENTS = new Set(['.ssh', '.gnupg', '.aws', '.azure', '.kube',
 /** A reference to a credential in a shell command. */
 const SENSITIVE_TOKEN = /(^|[\s/'"=:<>,;|&(])(\.env(\.[\w.-]+)?|\.ssh\/[^\s'"|&;]*|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|credentials(\.json)?|secrets?(\.json)?|tokens?(\.json)?|.*\.(pem|key|p12|pfx))(?=$|[\s/'"|&;),])/iu
 
-/** Commands that print the environment wholesale. */
-const ENVIRONMENT_DUMP = /(^|[\s/])(env|printenv)\b/u
+/**
+ * Commands that print the environment wholesale.
+ *
+ * `printenv` dumps whatever it is given, so it always counts. Bare `env` does
+ * too — but `env FOO=bar cmd` is how you run a command with one variable set,
+ * which is ordinary work and must not be treated as reading the environment.
+ */
+const ENVIRONMENT_DUMP = /(^|[\s;&|(])(printenv\b|env(?=\s*($|[|>;&)])))/u
 
 /**
  * Reads the command text out of a tool call's arguments.
@@ -234,13 +247,23 @@ export function decide(request) {
   if (PLAN_TOOLS.test(toolName)) {
     return { verdict: 'ask', reason: '计划/提问类调用', severity: 'plan' }
   }
+
+  // Credentials are checked **before** the mode, so `full` does not become
+  // "print the keys and write them out quietly". Everything else about `full` is
+  // unchanged: no dialogs for ordinary work.
+  if (SHELL_TOOLS.test(toolName)) {
+    const sensitive = sensitiveCommand(commandOf(input))
+    if (sensitive !== '') return { verdict: 'ask', reason: sensitive, severity: 'sensitive' }
+  } else if (WRITE_TOOLS.test(toolName) || READ_TOOLS.test(toolName)) {
+    const sensitive = sensitivePath(pathOf(input))
+    if (sensitive !== '') return { verdict: 'ask', reason: sensitive, severity: 'sensitive' }
+  }
+
   if (mode === 'full') return { verdict: 'allow', reason: 'full 模式', severity: 'mode' }
 
   if (SHELL_TOOLS.test(toolName)) {
     const command = commandOf(input)
     if (command === '') return { verdict: 'ask', reason: '有命令但读不出内容', severity: 'unknown' }
-    const sensitive = sensitiveCommand(command)
-    if (sensitive !== '') return { verdict: 'ask', reason: sensitive, severity: 'sensitive' }
     const dangerous = dangerousCommand(command)
     if (dangerous !== '') return { verdict: 'ask', reason: dangerous, severity: 'danger' }
     if (mode === 'ask') return { verdict: 'ask', reason: 'ask 模式：命令需要确认', severity: 'mode' }
@@ -250,8 +273,6 @@ export function decide(request) {
   if (WRITE_TOOLS.test(toolName)) {
     const target = pathOf(input)
     if (target === '') return { verdict: 'ask', reason: '写操作没有可读路径', severity: 'unknown' }
-    const sensitive = sensitivePath(target)
-    if (sensitive !== '') return { verdict: 'ask', reason: sensitive, severity: 'sensitive' }
     const dangerous = dangerousPath(target, cwd)
     if (dangerous !== '') return { verdict: 'ask', reason: dangerous, severity: 'danger' }
     if (mode === 'ask') return { verdict: 'ask', reason: 'ask 模式：写入需要确认', severity: 'mode' }
@@ -259,9 +280,6 @@ export function decide(request) {
   }
 
   if (READ_TOOLS.test(toolName)) {
-    const target = pathOf(input)
-    const sensitive = target === '' ? '' : sensitivePath(target)
-    if (sensitive !== '') return { verdict: 'ask', reason: sensitive, severity: 'sensitive' }
     return { verdict: 'allow', reason: '只读操作', severity: 'read' }
   }
 

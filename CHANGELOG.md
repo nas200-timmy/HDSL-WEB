@@ -10,13 +10,15 @@
 
 - **默认档位改成 `ask`**：只读工具直接跑，写文件、跑命令、未知工具、敏感文件和计划都发问——
   和 Kimi Code 的 Always Ask 对齐。`critical` 才是"日常编辑和命令直接跑"，`full` 是 Never Ask。
-- **敏感文件保护**：`.env*`、`.ssh/`、`id_rsa`、`.npmrc`、`.netrc`、`*.pem`、`*.key`、`printenv`/`env`
-  在 `ask` / `critical` 下发问；`full` 才放行。
+- **敏感文件保护**：`.env*`、`.ssh/`、`id_rsa`、`.npmrc`、`.netrc`、`*.pem`、`*.key`、`printenv`/裸 `env`
+  **在任何档位都会问**，`full` 也不例外——把密钥打进回放不可逆。`env FOO=bar cmd` 不算环境转储。
+  `web_fetch` 不再按"只读"自动放行：URL 由模型拼，可以把工作区数据带出去。
 - **路径先 resolve 再判断**：`..`、相对路径、`/workspace/../etc/passwd` 都不能绕过工作区或系统路径检查；
   写操作读不出路径时发问，而不是当作"工作区内写入"。
 - **会话允许名单不再吞掉危险操作**：危险命令、敏感文件、计划始终弹窗；白名单键改成"工具 + 完整命令/路径"，
   `git status` 不会再顺带允许 `git push`，一次文件写入也不会覆盖所有写入。
-- **永久规则**：`/allow` `/deny` `/rules [clear]`，存 `~/.hdsl-tui/permissions.json`，deny 优先。
+- **永久规则**：`/allow` `/deny` `/rules [clear]`，存在**实例 home** 的 `.hdsl-tui/permissions.json`
+  （随 `/data` 保留、不跨实例共享；`HDSL_TUI_RULES` 可覆盖），deny 优先。
 - `/new` `/resume` 之后档位和计数回到默认，不会把上一个会话的 `full` 带过去。
 
 ### Plan mode 与输入
@@ -37,6 +39,7 @@
 ### 验证
 
 - 两个第一方插件版本升到 **0.2.0**（`DshTuiPlugins.ENTRIES` 与 `package.json` 同步）；旧 0.1.0 需要在面板里重新安装/重新打包。
+- 插件包补 `NOTICE`：启动页的像素鲸鱼来自 dsh-TUI（MIT）→ dsh-ui-whale（BSD-3），随 tarball 一起分发署名。
 - 插件测试：进程内 **50**、ACP **96**（含分类器 18 条、规则/模式重置/steer/plan/表格/鲸鱼启动页）。
 - `./gradlew --no-daemon build` 全绿（后端 814 用例基线不变）。
 - 仍未做：后台任务 `/tasks`、`/fork` `/undo` `/title`、图片/视频、MCP/技能/Hook/主题（P2）。

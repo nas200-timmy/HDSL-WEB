@@ -91,7 +91,13 @@ const WHALE_ROWS = [
   '      AAAAAAAAAAA  AAAAAAA      ',
 ]
 
-/** Frame 0 of the dsh-TUI pixel whale, with the SVG's own colours. */
+/**
+ * Frame 0 of the dsh-TUI pixel whale, with the SVG's own colours.
+ *
+ * ccch1mneyyy/dsh-TUI (MIT License) → lhh010/dsh-ui-whale (BSD-3-Clause) for the
+ * original 22 frames. Each plugin's tarball carries a NOTICE with this
+ * attribution, because this module ships inside it.
+ */
 const WHALE_PALETTE = {
   A: '#142660',
   B: '#4e6fff',

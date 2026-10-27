@@ -27,6 +27,7 @@
     "src",
     "shared",
     "README.md",
+    "NOTICE",
     "LICENSE"
   ],
   "engines": {

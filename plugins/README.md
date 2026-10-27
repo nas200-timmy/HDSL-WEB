@@ -100,12 +100,15 @@ harness 自己的审批策略只有"问"和"全拒"（`'never'` 是**拒绝**，
 
 - 自动放行**仍然写审计**（harness 记 `approval/asked` + `approval/decided`），也**不放宽沙箱**。
 - 分类器"未知即问"：读不出命令的 shell 调用、读不出路径的写操作、未知工具、计划/提问类调用一律发问。
-- **敏感文件**（`.env*`、`.ssh/`、`id_rsa`、`.npmrc`、`.netrc`、`*.pem`、`*.key` 等）在 `ask` / `critical`
-  下发问，`full` 才放行；`printenv` / `env` 也算敏感。
+- **敏感文件**（`.env*`、`.ssh/`、`id_rsa`、`.npmrc`、`.netrc`、`*.pem`、`*.key` 等）**在任何档位都会问**，
+  `full` 也不例外：把密钥打进回放不是"随手 ls"，不可逆。`printenv` 与**裸** `env` 也算敏感
+  （`env FOO=bar cmd` 是"带着一个变量跑命令"，不在此列）。
+- **网络读取不算"只读"**：`web_fetch` 的 URL 是模型自己拼的，可以把工作区数据带在查询串里，所以它按
+  未知工具处理（`ask`/`critical` 会问，`full` 放行）。
 - 路径先 `resolve` 再判断包含关系，`..`、相对路径和 `/workspace/../etc/passwd` 都不能绕过工作区边界。
 - 档位是**会话级**的，`/new`、`/resume` 之后回到 `ask`，不会把上一个会话的 `full` 带过去。
 - **永久规则**：`/allow <工具> <完整命令或路径>`、`/deny <工具> <完整命令或路径>`、`/rules [clear]`。
-  规则按 `allowKey()` 的精确字符串匹配，存在 `~/.hdsl-tui/permissions.json`（`HDSL_TUI_RULES` 可覆盖）；
+  规则按 `allowKey()` 的精确字符串匹配，存在**实例 home** 的 `.hdsl-tui/permissions.json`（随 `/data` 保留、不跨实例共享；`HDSL_TUI_RULES` 可覆盖）；
   deny 永远优先，allow/deny 都不经过启发式分类器。
 
 ### 审批对话框的四个选项（数字键 1-4）

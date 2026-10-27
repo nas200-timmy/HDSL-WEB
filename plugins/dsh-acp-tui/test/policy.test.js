@@ -124,14 +124,20 @@ test('credential files are sensitive even inside the workspace', () => {
   assert.equal(verdict('critical', bash('cat .env')).verdict, 'ask')
   assert.equal(verdict('critical', bash('cat ~/.ssh/id_rsa')).verdict, 'ask')
   assert.equal(verdict('critical', bash('printenv')).verdict, 'ask')
-  assert.equal(verdict('full', bash('cat .env')).verdict, 'allow', 'Never Ask still runs it')
+  // Credentials are the one thing `full` still asks about: printing a key into the
+  // transcript is not undoable the way a stray `ls` is.
+  assert.equal(verdict('full', bash('cat .env')).verdict, 'ask')
+  assert.equal(verdict('full', read('/root/.ssh/id_rsa')).verdict, 'ask')
+  assert.equal(verdict('full', bash('ls')).verdict, 'allow', 'everything else still runs')
+  assert.equal(verdict('full', bash('rm -rf build')).verdict, 'allow')
 })
 
 test('an unknown tool is asked about, in ask and critical', () => {
   assert.equal(verdict('ask', { toolName: 'computer_use', input: {} }).verdict, 'ask')
   assert.equal(verdict('critical', { toolName: 'computer_use', input: {} }).verdict, 'ask')
-  assert.equal(verdict('ask', { toolName: 'web_fetch', input: { url: 'https://example.com' } }).verdict, 'allow',
-    'web fetch is read-only')
+  // A URL is composed by the model, so a "read" of one can carry the workspace
+  // out in a query string: it asks like any other unknown tool.
+  assert.equal(verdict('ask', { toolName: 'web_fetch', input: { url: 'https://example.com' } }).verdict, 'ask')
   assert.equal(verdict('full', { toolName: 'computer_use', input: {} }).verdict, 'allow')
 })
 
