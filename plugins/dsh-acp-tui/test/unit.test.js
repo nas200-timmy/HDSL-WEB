@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { plainWidth, stripAnsi, truncateStyled, visibleWidth, wrapStyled } from '../../shared/term/text.js'
 import { Composer, layoutText } from '../../shared/ui/composer.js'
 import { createKeyDecoder } from '../../shared/term/keys.js'
+import { Screen } from '../../shared/term/screen.js'
 import { renderMarkdown } from '../../shared/term/markdown.js'
 import { createTheme } from '../../shared/term/theme.js'
 import { applyEditKey, isLiveOverlay } from '../../shared/ui/edit.js'
@@ -229,6 +230,39 @@ test('a numbered dialog prints the shortcut numbers', () => {
   const numbered = body.filter((row) => /[1-4]\. /u.test(row))
   assert.equal(numbered.length, 4, 'every choice is numbered')
   assert.ok(body.some((row) => /1\. Run/u.test(row)), 'the number sits in front of the label')
+})
+
+test('Tab is a key, not a dropped control byte', () => {
+  // The decoder used to have no entry for 0x09, so Tab fell through the
+  // "unknown control character" branch and completion never ran at all.
+  const events = []
+  const decoder = createKeyDecoder((event) => events.push(event.name))
+  decoder.feed('/mo\t')
+  assert.deepEqual(events, ['char', 'tab'])
+})
+
+test('the completion candidates sit below the input box', () => {
+  const state = createInitialState({ cwd: '/workspace', composerText: '/yo' })
+  state.completion = { start: 0, end: 3, options: ['/yolo'], index: 0 }
+  const frame = renderFrame(state, { width: 70, height: 16, theme, i18n: createI18n('en'), clock: 0 })
+  const rows = frame.rows.map(stripAnsi)
+  const bottom = rows.findIndex((row) => row.startsWith('╰'))
+  const candidates = rows.findIndex((row) => /1\. \/yolo/u.test(row))
+  assert.ok(bottom >= 0 && candidates > bottom, `box bottom ${bottom}, candidates ${candidates}`)
+  assert.ok(candidates < rows.length - 1, 'and above the status row')
+})
+
+test('an idle frame writes nothing the second time', () => {
+  // A no-op paint is what keeps a browser terminal's input method alive: every
+  // write repositions its composition helper.
+  const writes = []
+  const screen = new Screen({ write: (text) => writes.push(text), columns: 60, rows: 8 }, {})
+  screen.enter()
+  const rows = ['a'.repeat(60), ...Array.from({ length: 7 }, () => ' '.repeat(60))]
+  screen.paint(rows, { row: 0, column: 1 })
+  const afterFirst = writes.length
+  screen.paint(rows, { row: 0, column: 1 })
+  assert.equal(writes.length, afterFirst, 'an identical frame is not written again')
 })
 
 test('the editing keys a live palette passes on are exactly the text ones', () => {

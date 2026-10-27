@@ -1482,16 +1482,46 @@ export class App {
       return
     }
     if (arg === '') {
-      const index = APPROVAL_MODES.indexOf(this.approvalMode)
-      this.approvalMode = APPROVAL_MODES[(index + 1) % APPROVAL_MODES.length]
-    } else if (APPROVAL_MODES.includes(arg)) {
-      this.approvalMode = arg
-    } else {
-      this.pushNotice(this.i18n.t('yolo.unknown', { mode: arg }), 'error')
-      this.dirty = true
+      this.openYoloPicker()
       return
     }
-    this.pushNotice(this.i18n.t(`yolo.set.${this.approvalMode}`), this.approvalMode === 'full' ? 'warning' : 'success')
+    if (APPROVAL_MODES.includes(arg)) {
+      this.setApprovalMode(arg)
+      return
+    }
+    this.pushNotice(this.i18n.t('yolo.unknown', { mode: arg }), 'error')
+    this.dirty = true
+  }
+
+  /** @private */
+  openYoloPicker() {
+    const items = APPROVAL_MODES.map((mode) => ({
+      label: this.i18n.t(`status.mode.${mode}`),
+      description: this.i18n.t(`yolo.desc.${mode}`),
+      tail: mode === this.approvalMode ? this.i18n.t('yolo.current') : '',
+      onSelect: () => this.setApprovalMode(mode),
+    }))
+    this.overlay = {
+      kind: 'picker',
+      title: this.i18n.t('yolo.title'),
+      width: 66,
+      height: 14,
+      items,
+      index: Math.max(0, APPROVAL_MODES.indexOf(this.approvalMode)),
+      hint: this.i18n.t('model.hint'),
+    }
+    this.dirty = true
+  }
+
+  /**
+   * Sets the approval level and says what changed.
+   *
+   * @private
+   * @param {string} mode the new level
+   */
+  setApprovalMode(mode) {
+    this.approvalMode = mode
+    this.pushNotice(this.i18n.t(`yolo.set.${mode}`), mode === 'full' ? 'warning' : 'success')
     this.refreshBanner()
     this.dirty = true
   }

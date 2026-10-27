@@ -41,7 +41,10 @@ export function renderFrame(state, context) {
   const composerLayout = layoutComposer(state, inner)
   const composerRows = paintComposer(state, width, composerLayout, theme, i18n)
   const activityRow = renderActivity(state, width, theme, i18n, clock, spinner)
-  const bottomRows = composerRows.length + 2 + (activityRow === null ? 0 : 1)
+  // The hint line sits **below** the input box, the way Kimi Code draws it: the
+  // thing you are looking at while you type should be next to what you type.
+  const hintRow = renderHint(state, width, theme, i18n, clock)
+  const bottomRows = composerRows.length + 2 + (activityRow === null ? 0 : 1) + 1
   const transcriptHeight = Math.max(MIN_TRANSCRIPT_ROWS, height - bottomRows)
   const transcript = renderTranscript(state, width, transcriptHeight, scope)
 
@@ -62,6 +65,7 @@ export function renderFrame(state, context) {
   put('')
   if (activityRow !== null) put(activityRow)
   for (const composerRow of composerRows) put(composerRow)
+  put(hintRow)
   rows[height - 1] = statusRow
 
   let cursor = null
@@ -203,36 +207,37 @@ function renderActivity(state, width, theme, i18n, clock, spinner) {
     // progress reads as a hang, and the token count is the number that moves.
     const live = liveCharacters(state)
     const size = live > 0 ? theme.fg('textMuted', ` · ~${formatTokens(Math.round(live / 4))}`) : ''
-    const left = ` ${theme.fg('primary', spinner)} ${theme.fg('textDim', label)}${theme.fg('textMuted', `  ${formatDuration(elapsed)}`)}${size}`
-    const hint = state.queue.length > 0
-      ? theme.fg('textMuted', `${state.queue.length} queued`)
-      : theme.fg('textMuted', i18n.t('hint.esc'))
-    return spread(left, hint, width, 2)
+    return ` ${theme.fg('primary', spinner)} ${theme.fg('textDim', label)}${theme.fg('textMuted', `  ${formatDuration(elapsed)}`)}${size}`
   }
   if (state.status === 'connecting') {
     return ` ${theme.fg('warning', spinner)} ${theme.fg('textDim', i18n.t('status.polling'))}`
   }
+  return null
+}
+
+/**
+ * The line under the input box.
+ *
+ * In order of who needs it: the candidates a Tab is cycling, then what the keys
+ * do while a turn runs, then the envelope after it ends, and otherwise the one
+ * line that does not rotate — `/` commands, `@` files, `ctrl+j`, `ctrl+o`, `esc`.
+ * A rotating tip hid two of those at any moment, which is the opposite of
+ * discoverable.
+ */
+function renderHint(state, width, theme, i18n, clock) {
   const candidates = describeCandidates(state.completion, Math.max(10, width - 4))
   if (candidates !== '') return ` ${theme.fg('textMuted', `${candidates}  ⇥`)}`
+  if (state.status === 'working') {
+    const queued = state.queue.length > 0 ? `${i18n.t('hint.queued', { count: String(state.queue.length) })} · ` : ''
+    return ` ${theme.fg('textMuted', `${queued}${i18n.t('hint.esc')} · ${i18n.t('hint.ctrl-c')}`)}`
+  }
   const recent = state.lastTurnSeconds !== null && state.turnEndedAt !== undefined
     ? clock - state.turnEndedAt < 6000
     : false
   if (recent) {
-    return ` ${theme.fg('textMuted', '·')} ${theme.fg('textMuted', i18n.t('notice.turn-end', { seconds: state.lastTurnSeconds.toFixed(1) }))}`
+    return ` ${theme.fg('textMuted', `· ${i18n.t('notice.turn-end', { seconds: state.lastTurnSeconds.toFixed(1) })}`)}`
   }
-  const tip = tipFor(clock, i18n)
-  return tip === '' ? null : ` ${theme.fg('textMuted', '·')} ${theme.fg('textMuted', tip)}`
-}
-
-/**
- * The idle hint line.
- *
- * One line that does not rotate: what can be typed (`/`), what completes (`@`),
- * how to break a line, and the two ways out. A rotating tip hid two of those at
- * any moment, which is the opposite of discoverable.
- */
-function tipFor(_clock, i18n) {
-  return i18n.t('hint.line')
+  return ` ${theme.fg('textMuted', i18n.t('hint.line'))}`
 }
 
 /** Characters currently streaming, for the live token estimate. */

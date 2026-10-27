@@ -32,6 +32,7 @@ export class Screen {
     this.out = out
     this.input = input
     this.previous = []
+    this.lastCursorMove = ''
     this.entered = false
     this.columns = 80
     this.rows = 24
@@ -85,10 +86,27 @@ export class Screen {
     if (!this.entered) return
     const height = this.rows
     const width = this.columns
-    let frame = ''
-    frame += SYNC_ON
+
+    // Nothing changed: write nothing at all. Besides being free, this is what
+    // keeps an input method alive. Every frame used to end with an absolute
+    // cursor move, and an idle screen still painted once a second — a browser
+    // terminal repositions its IME helper on every write, so a Chinese
+    // composition could be dropped before it was ever committed.
+    let cursorMove = ''
+    if (cursor !== null) {
+      const row = Math.max(1, Math.min(height, cursor.row + 1))
+      const column = Math.max(1, Math.min(width, cursor.column + 1))
+      cursorMove = `${ESC}[${row};${column}H`
+    }
+    const shown = rows.slice(0, height)
+    const unchanged = this.previous.length === shown.length
+      && shown.every((row, index) => this.previous[index] === row)
+      && cursorMove === this.lastCursorMove
+    if (unchanged) return
+
+    let frame = SYNC_ON
     for (let index = 0; index < height; index += 1) {
-      const row = rows[index] ?? ''
+      const row = shown[index] ?? ''
       if (this.previous[index] === row) continue
       frame += `${ESC}[${index + 1};1H` + row + `${ESC}[K`
     }
@@ -98,20 +116,20 @@ export class Screen {
       }
     }
     if (cursor !== null) {
-      const row = Math.max(1, Math.min(height, cursor.row + 1))
-      const column = Math.max(1, Math.min(width, cursor.column + 1))
-      frame += `${ESC}[${row};${column}H` + CURSOR_SHOW
+      frame += cursorMove + CURSOR_SHOW
     } else {
       frame += CURSOR_HIDE
     }
     frame += SYNC_OFF
-    this.previous = rows.slice(0, height)
+    this.previous = shown
+    this.lastCursorMove = cursorMove
     this.out.write(frame)
   }
 
   /** Clears everything the previous frame drew. */
   clear() {
     this.previous = []
+    this.lastCursorMove = ''
     if (this.entered) this.out.write(`${ESC}[2J${ESC}[H`)
   }
 }

@@ -81,6 +81,7 @@ const COMMANDS = [
   { name: 'model', key: 'cmd.model' },
   { name: 'effort', key: 'cmd.effort' },
   { name: 'yolo', key: 'cmd.yolo' },
+  { name: 'permission', key: 'cmd.permission' },
   { name: 'plan', key: 'cmd.plan' },
   { name: 'resume', key: 'cmd.resume' },
   { name: 'sessions', key: 'cmd.sessions' },
@@ -1613,6 +1614,9 @@ export class TerminalApp {
       case 'yolo':
         this.runYolo(argument)
         return
+      case 'permission':
+        this.openPermissionPicker(argument)
+        return
       case 'plan':
         void this.togglePlan(argument)
         return
@@ -1715,17 +1719,100 @@ export class TerminalApp {
       return
     }
     if (arg === '') {
-      const index = APPROVAL_MODES.indexOf(this.approvalMode)
-      this.approvalMode = APPROVAL_MODES[(index + 1) % APPROVAL_MODES.length]
-    } else if (APPROVAL_MODES.includes(arg)) {
-      this.approvalMode = arg
-    } else {
-      this.pushNotice(this.i18n.t('yolo.unknown', { mode: arg }), 'error')
-      this.dirty = true
+      // No argument means "let me pick", not "cycle and hope": a mode is a
+      // decision with three names, and the same list the model picker uses makes
+      // it one keystroke instead of three.
+      this.openYoloPicker()
       return
     }
-    this.pushNotice(this.i18n.t(`yolo.set.${this.approvalMode}`), this.approvalMode === 'full' ? 'warning' : 'success')
+    if (APPROVAL_MODES.includes(arg)) {
+      this.setApprovalMode(arg)
+      return
+    }
+    this.pushNotice(this.i18n.t('yolo.unknown', { mode: arg }), 'error')
+    this.dirty = true
+  }
+
+  /** @private */
+  openYoloPicker() {
+    const items = APPROVAL_MODES.map((mode) => ({
+      label: this.i18n.t(`status.mode.${mode}`),
+      description: this.i18n.t(`yolo.desc.${mode}`),
+      tail: mode === this.approvalMode ? this.i18n.t('yolo.current') : '',
+      onSelect: () => this.setApprovalMode(mode),
+    }))
+    this.overlay = {
+      kind: 'picker',
+      title: this.i18n.t('yolo.title'),
+      width: 66,
+      maxHeight: 14,
+      items,
+      index: Math.max(0, APPROVAL_MODES.indexOf(this.approvalMode)),
+      hint: this.i18n.t('model.hint'),
+    }
+    this.dirty = true
+  }
+
+  /**
+   * Sets the approval level and says what changed.
+   *
+   * @private
+   * @param {'ask'|'critical'|'full'} mode the new level
+   */
+  setApprovalMode(mode) {
+    this.approvalMode = mode
+    this.pushNotice(this.i18n.t(`yolo.set.${mode}`), mode === 'full' ? 'warning' : 'success')
     this.refreshBanner()
+    this.dirty = true
+  }
+
+  /**
+   * `/permission` — the harness's sandbox+approval presets, pickable.
+   *
+   * The harness owns the presets, so the list comes from it; an argument still
+   * goes through the harness command, which is the authoritative setter.
+   *
+   * @private
+   * @param {string} argument the preset name, or empty to open the list
+   */
+  openPermissionPicker(argument) {
+    const text = String(argument ?? '').trim()
+    const presets = this.ctx.get('permissionPresets')
+    const agent = this.session.live
+    if (text !== '' || presets === undefined || agent === null) {
+      void this.runHarnessCommand('permission', text)
+      return
+    }
+    const catalog = presets.catalog?.() ?? { options: [] }
+    const current = presets.current?.(agent.session)
+    const items = (catalog.options ?? []).map((option) => ({
+      label: option.name ?? option.value,
+      description: option.description,
+      tail: option.value === current ? this.i18n.t('yolo.current') : '',
+      onSelect: () => {
+        try {
+          presets.set(agent.session, option.value)
+          this.pushNotice(this.i18n.t('permission.preset.set', { name: option.name ?? option.value }), 'success')
+          this.refreshBanner()
+        } catch (error) {
+          this.pushNotice(this.failureText(error), 'error')
+        }
+        this.dirty = true
+      },
+    }))
+    if (items.length === 0) {
+      void this.runHarnessCommand('permission', '')
+      return
+    }
+    this.overlay = {
+      kind: 'picker',
+      title: this.i18n.t('permission.preset.title'),
+      width: 66,
+      maxHeight: 14,
+      items,
+      index: Math.max(0, (catalog.options ?? []).findIndex((option) => option.value === current)),
+      hint: this.i18n.t('model.hint'),
+    }
     this.dirty = true
   }
 
@@ -2384,10 +2471,13 @@ export class TerminalApp {
       this.clock = Date.now()
       if (this.status === 'working') this.dirty = true
       // The harness shares this process and may write a log line to stderr at any
-      // moment (a provider catalogue refresh does exactly that). Repaint every row
-      // once a second so such a line cannot sit on top of the interface: a paint
-      // that only diffs against the previous frame would keep it there.
-      if (this.clock - (this.lastFullPaint ?? 0) > 1000) {
+      // moment (a provider catalogue refresh does exactly that). Repainting every
+      // row now and then is what removes such a line: a paint that only diffs
+      // against the previous frame would keep it there. The cadence is the
+      // compromise — often enough to clean up, rare enough not to churn a
+      // browser terminal's input method (`Screen#paint` writes nothing when the
+      // frame is identical, so this is the only forced repaint left).
+      if (this.clock - (this.lastFullPaint ?? 0) > 2000) {
         this.lastFullPaint = this.clock
         this.screen.previous = []
         this.dirty = true

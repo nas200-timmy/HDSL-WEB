@@ -441,21 +441,48 @@ test('a name nobody knows is refused only after the harness was asked', async ()
   assert.equal(bare.blocks.filter((block) => block.type === 'notice' && block.level === 'error').length, 1)
 })
 
-test('/yolo cycles the three modes and takes an explicit one', () => {
+test('/yolo opens a list of the three modes and takes an explicit one', () => {
   const app = makeApp()
-  assert.equal(app.approvalMode, 'ask')
+  assert.equal(app.approvalMode, 'ask', 'the default is Always Ask')
+
+  // No argument: a picker, not a cycle. The current level is marked.
   app.runCommand('yolo')
-  assert.equal(app.approvalMode, 'critical')
-  app.runCommand('yolo')
+  assert.equal(app.overlay.kind, 'picker')
+  assert.deepEqual(app.overlay.items.map((item) => item.tail !== ''), [true, false, false])
+  app.overlay.items[2].onSelect()
   assert.equal(app.approvalMode, 'full')
-  app.runCommand('yolo')
-  assert.equal(app.approvalMode, 'ask')
+
   app.runCommand('yolo', 'critical')
   assert.equal(app.approvalMode, 'critical')
+
   app.runCommand('yolo', 'nonsense')
   assert.equal(app.approvalMode, 'critical', 'an unknown mode changes nothing')
   const errors = app.blocks.filter((block) => block.type === 'notice' && block.level === 'error')
   assert.match(errors.at(-1).text, /nonsense/u)
+})
+
+test('/permission opens the harness preset list and applies one', () => {
+  const applied = []
+  const app = makeApp({
+    permissionPresets: {
+      catalog: () => ({
+        options: [
+          { value: 'read-only', name: '只读' },
+          { value: 'workspace-write', name: '工作区可写' },
+          { value: 'danger-full-access', name: '完全放开' },
+        ],
+      }),
+      current: () => 'workspace-write',
+      set: (_session, name) => applied.push(name),
+    },
+  })
+  app.session = fakeSession({ live: { session: { id: 's' } } })
+  app.runCommand('permission')
+  assert.equal(app.overlay.kind, 'picker')
+  assert.equal(app.overlay.items.length, 3)
+  assert.equal(app.overlay.index, 1, 'the current preset is highlighted')
+  app.overlay.items[2].onSelect()
+  assert.deepEqual(applied, ['danger-full-access'])
 })
 
 test('/yolo status reports the mode and what it has allowed', async () => {

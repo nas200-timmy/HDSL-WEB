@@ -310,8 +310,10 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     不受白名单影响；`/allow` `/deny` `/rules` 是永久规则（实例 home 的 `.hdsl-tui/permissions.json`，随 `/data` 保留）。审批对话框
     四个选项（1 运行 · 2 当前会话默认运行 · 3 拒绝 · 4 拒绝并说明原因，理由会作为一条用户消息交给模型）。
     `shift+tab` / `/plan` 切换 Plan mode（进程内交给 harness，ACP 明说不可用）；`ctrl+s` 中途插入
-    （进程内 `agent.steer()`，ACP 留在队列）；`/sessions` 是 `/resume` 别名；Tab 补全覆盖命令、参数与
-    `@` 路径（`@` 有界递归且不离开工作区）；`/provider` 在终端里增删 `llm-pi-ai` 的供应商（写 settings、
+    （进程内 `agent.steer()`，ACP 留在队列）；`/sessions` 是 `/resume` 别名；`/yolo`、`/permission`
+    无参时是列表选择（当前项标「当前」）；提示与补全候选画在**输入框下方**；Tab 补全覆盖命令、参数与
+    `@` 路径（`@` 有界递归且不离开工作区）；空闲时终端不写任何字节（避免打断输入法组词）；
+    面板 xterm 的字体栈带 CJK 等宽字体，全角字符与标点正好两格；`/provider` 在终端里增删 `llm-pi-ai` 的供应商（写 settings、
     密钥走 credentials，`--yes` 才落盘）。启动页是 dsh-TUI README 像素鲸鱼的静态帧（原 SVG 调色板）+ 模型/档位/计划/cwd/会话 +
     Kimi 风格按键提示。ACP 线路只保留协议允许的部分，其余命令会明确说明不可用，而不是静默失败。
   - **第一方终端的可靠性约定**（两个都适用）：粘贴走 bracketed paste，由 `keys.js` 解出

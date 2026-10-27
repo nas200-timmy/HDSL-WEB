@@ -148,6 +148,15 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 13,
+      // A monospace stack that actually has CJK glyphs. Without one the browser
+      // falls back to a proportional font for 中文 and its punctuation, whose
+      // glyphs are wider than the two cells the terminal grid gives them — which
+      // reads as clipped/overlapping characters. These families are monospaced
+      // for CJK too, so a full-width glyph is exactly two ASCII cells.
+      fontFamily:
+        '"JetBrains Mono", "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, '
+        + '"Sarasa Mono SC", "Noto Sans Mono CJK SC", "Source Han Mono SC", '
+        + '"Microsoft YaHei Mono", "WenQuanYi Micro Hei Mono", monospace',
       scrollback: 3000,
       theme: {
         background: "#1b1b1f",
