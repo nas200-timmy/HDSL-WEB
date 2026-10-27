@@ -312,7 +312,8 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     不受白名单影响；`/allow` `/deny` `/rules` 是永久规则（实例 home 的 `.hdsl-tui/permissions.json`，随 `/data` 保留）。审批对话框
     四个选项（1 运行 · 2 当前会话默认运行 · 3 拒绝 · 4 拒绝并说明原因，理由会作为一条用户消息交给模型）。
     `shift+tab` / `/plan` 切换 Plan mode（进程内交给 harness，ACP 明说不可用）；`ctrl+s` 中途插入
-    （进程内 `agent.steer()`，ACP 留在队列）；`/sessions` 是 `/resume` 别名；`/yolo`、`/permission`
+    （进程内 `agent.steer()`，ACP 留在队列）；`/sessions` 是 `/resume` 别名，且只列有首条人类
+    提示的会话（空会话不出现，列表标签就是那条提示）；`/yolo`、`/permission`
     无参时是列表选择（当前项标「当前」）；提示、补全候选与 `/` 命令菜单都画在**输入框下方**
     （菜单是底部内联列表，不是居中弹窗，不遮记录区也不隐藏光标）；Tab 补全覆盖命令、参数与
     `@` 路径（`@` 有界递归且不离开工作区）；空闲时终端不写任何字节（避免打断输入法组词）；

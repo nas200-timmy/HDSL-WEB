@@ -174,6 +174,71 @@ test('/resume puts the resumed transcript on screen', async () => {
   assert.deepEqual(app.blocks.filter((block) => block.type === 'assistant').map((block) => block.text), ['earlier answer'])
 })
 
+test('stored sessions without a human prompt are not listed', async () => {
+  const events = {
+    'session-prompt': [
+      { type: 'session/ready', data: {} },
+      { type: 'user/message', data: { source: { kind: 'user' }, content: [text('Fix the build, then run the tests')] } },
+      { type: 'assistant/message', data: { message: { content: [text('done')] } } },
+    ],
+    'session-tool-only': [
+      { type: 'tool/call', data: { callId: 'c1', name: 'read', arguments: '{}' } },
+    ],
+  }
+  const opened = []
+  const persistence = {
+    async list() {
+      return [
+        { header: { id: 'session-empty', cwd: '/workspace', updatedAt: 300 }, eventCount: 0 },
+        { header: { id: 'session-tool-only', cwd: '/workspace', updatedAt: 200 }, eventCount: 1 },
+        { header: { id: 'session-prompt', cwd: '/workspace', updatedAt: 100 }, eventCount: 3 },
+      ]
+    },
+    async open(id) {
+      opened.push(id)
+      return {
+        async read(offset = 0, length = 100) {
+          return { events: (events[id] ?? []).slice(offset, offset + length) }
+        },
+        async close() {},
+      }
+    },
+  }
+  const session = new ChatSession({ get: (name) => (name === 'sessionPersistence' ? persistence : undefined) }, '/workspace')
+  const rows = await session.listSessions()
+  assert.deepEqual(rows.map((row) => row.id), ['session-prompt'])
+  assert.equal(rows[0].title, 'Fix the build, then run the tests')
+  assert.equal(rows[0].at, 100)
+  assert.deepEqual(opened, ['session-tool-only', 'session-prompt'], 'a zero-event artifact is never opened')
+})
+
+test('/sessions labels a row with its first prompt instead of the id', async () => {
+  const persistence = {
+    async list() {
+      return [{ header: { id: 'session-123456', cwd: '/workspace', updatedAt: 100 }, eventCount: 2 }]
+    },
+    async open() {
+      return {
+        async read() {
+          return {
+            events: [
+              { type: 'user/message', data: { source: { kind: 'user' }, content: [text('给 /sessions 加首条提示词')] } },
+            ],
+          }
+        },
+        async close() {},
+      }
+    },
+  }
+  const app = makeApp({ sessionPersistence: persistence })
+  app.session = new ChatSession({ get: (name) => (name === 'sessionPersistence' ? persistence : undefined) }, '/workspace')
+  await app.openResumePicker()
+  assert.equal(app.overlay.kind, 'picker')
+  assert.equal(app.overlay.items.length, 1)
+  assert.match(app.overlay.items[0].label, /给 \/sessions 加首条提示词/u)
+  assert.match(app.overlay.items[0].tail, /123456/u, 'the id stays as secondary metadata')
+})
+
 test('/new ends the turn in flight before it swaps the agent', async () => {
   const app = makeApp()
   app.session = fakeSession({ busy: true })
