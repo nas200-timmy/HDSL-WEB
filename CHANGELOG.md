@@ -52,6 +52,11 @@
   从每秒降到每两秒。浏览器终端每次写入都会重排它的输入法辅助框，这正是中文输入法被"吞掉"的原因。
 - **中文按等宽渲染**：面板 xterm 的字体栈补上 CJK 等宽字体（Sarasa Mono SC / Noto Sans Mono CJK /
   Source Han Mono / 微软雅黑等宽 / WenQuanYi），全角字符与标点因此正好占两格，不再被裁切或错位。
+- **中文输入法不再漂移 / 重发旧文本**：xterm 6 在 composition 期间每次写屏都会重定位候选框，
+  而它的隐藏 textarea 还会残留大写字母与空格，遇到 229 键会把整段旧内容重新发进 `onData`
+  （xtermjs/xterm.js#6078）。面板终端现在在 composition 期间缓冲 PTY 输出，compositionend
+  后再刷；并在 keyup/compositionend 之后延迟清理 textarea 残留（`screenReaderMode` 除外）。
+  这解决的是“输入法候选框突然跑到别处”和“按错一个键，前面输入的一段文字又被复制一遍”。
 
 ### 验证
 
