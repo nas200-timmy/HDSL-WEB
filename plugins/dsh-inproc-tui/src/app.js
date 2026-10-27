@@ -1750,7 +1750,10 @@ export class TerminalApp {
       this.pushNotice(this.i18n.t(next ? 'plan.on' : 'plan.off'), 'info')
       return
     }
-    const ok = await this.runHarnessCommand('plan', next ? 'on' : 'off')
+    // Entering is `/plan` **with no argument**: the harness steers whatever text
+    // it is given into the running conversation, so `/plan on` would put the word
+    // "on" in front of the model. Leaving is `/plan off`, which it reads as a verb.
+    const ok = await this.runHarnessCommand('plan', next ? '' : 'off')
     if (!ok) return
     this.planMode = next
     this.refreshBanner()

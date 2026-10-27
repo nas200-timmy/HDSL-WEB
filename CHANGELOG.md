@@ -31,7 +31,6 @@
 
 - `/sessions` 作为 `/resume` 的别名；`/compact` 明确是本地压缩，不再写成"交给 harness"。
 - `@` 空片段做有界递归搜索（跳过 `.git`、`node_modules` 等），带 `/` 列下一层，限制在工作区内。
-- 输入框以 `!` 开头时在工作区直接执行命令，输出是一张 shell 工具卡；退出终端会收掉仍在跑的 shell。
 - Markdown 支持管道表格；审批详情里识别 unified diff 并用 diff 颜色渲染；工具卡对 plan 调用显示 `▣计划`。
 - 启动页换成 dsh-TUI README 里像素鲸鱼的静态帧（保留原 SVG 调色板 #142660 / #4e6fff / #bee1ff / #ffffff）+ 模型/档位/计划/cwd/会话 + Kimi 风格按键提示；宽终端两栏，窄终端堆叠。
 

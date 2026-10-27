@@ -341,10 +341,12 @@ test('/plan and shift+tab toggle the harness plan mode', async () => {
   app.session = fakeSession({ live: {} })
   await app.togglePlan('on')
   assert.equal(app.planMode, true)
-  assert.deepEqual(lines, ['/plan on'])
+  // Bare `/plan`: the harness steers any argument into the conversation, so
+  // `/plan on` would send the word "on" to the model.
+  assert.deepEqual(lines, ['/plan'])
   await app.togglePlan('')
   assert.equal(app.planMode, false)
-  assert.deepEqual(lines, ['/plan on', '/plan off'])
+  assert.deepEqual(lines, ['/plan', '/plan off'])
 })
 
 test('permanent rules deny and allow without a dialog', async () => {
