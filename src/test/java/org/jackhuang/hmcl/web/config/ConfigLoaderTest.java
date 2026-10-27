@@ -188,4 +188,49 @@ class ConfigLoaderTest {
         ServerConfigLoader.ConfigException e = assertThrows(ServerConfigLoader.ConfigException.class, () -> load(Map.of()));
         assertTrue(e.getMessage().contains("cert_file"), e.getMessage());
     }
+
+    @Test
+    void theDeveloperGuardIsOffUnlessAskedFor() {
+        // The default is the whole point: an upgrade must not start gating
+        // anything that used to be open.
+        assertEquals(DeveloperGuardScope.OFF, load(Map.of()).developerGuard.scope);
+    }
+
+    @Test
+    void theDeveloperGuardScopeIsReadFromYamlAndEnvironment() throws Exception {
+        Files.writeString(dataDir.resolve("server.yaml"), """
+                developer_guard:
+                  scope: instance
+                """);
+        assertEquals(DeveloperGuardScope.INSTANCE, load(Map.of()).developerGuard.scope);
+
+        // The environment wins over the file, the same way every other knob does.
+        Map<String, String> env = Map.of(ServerConfigLoader.ENV_DEVELOPER_GUARD, "all");
+        assertEquals(DeveloperGuardScope.ALL, load(env).developerGuard.scope);
+    }
+
+    @Test
+    void anUnknownDeveloperGuardScopeIsAnError() throws Exception {
+        Files.writeString(dataDir.resolve("server.yaml"), """
+                developer_guard:
+                  scope: sometimes
+                """);
+        ServerConfigLoader.ConfigException e = assertThrows(ServerConfigLoader.ConfigException.class,
+                () -> load(Map.of()));
+        assertTrue(e.getMessage().contains("developer_guard.scope"), e.getMessage());
+        assertTrue(e.getMessage().contains("sometimes"), e.getMessage());
+    }
+
+    @Test
+    void anUnknownKeyInsideTheGuardSectionIsAnError() throws Exception {
+        // A typo like `scopes:` would otherwise leave the guard off while the
+        // operator believes it is on.
+        Files.writeString(dataDir.resolve("server.yaml"), """
+                developer_guard:
+                  scopes: all
+                """);
+        ServerConfigLoader.ConfigException e = assertThrows(ServerConfigLoader.ConfigException.class,
+                () -> load(Map.of()));
+        assertTrue(e.getMessage().contains("scopes"), e.getMessage());
+    }
 }

@@ -65,6 +65,20 @@ type DeveloperStatus struct {
 	ExpiresAt       string `json:"expiresAt"`
 	WebShellEnabled bool   `json:"webShellEnabled"`
 	HTTPS           bool   `json:"https"`
+	// GuardScope is the developer guard's reach (off/proxy/instance/all). A
+	// panel older than v0.5.94 omits it, which reads as off.
+	GuardScope string `json:"guardScope"`
+	// Estop is the emergency stop's state. Absent on older panels, and the zero
+	// value means "not engaged".
+	Estop EmergencyStopState `json:"estop"`
+}
+
+// EmergencyStopState mirrors the panel's E-Stop block. Only the fields the
+// client can act on are decoded.
+type EmergencyStopState struct {
+	Engaged          bool   `json:"engaged"`
+	ReleasesAt       string `json:"releasesAt"`
+	RemainingSeconds int64  `json:"remainingSeconds"`
 }
 
 // Expiry parses ExpiresAt; a panel that omits it yields the zero time.
@@ -76,6 +90,10 @@ func (s DeveloperStatus) Expiry() time.Time {
 type Elevation struct {
 	Elevated  bool   `json:"elevated"`
 	ExpiresAt string `json:"expiresAt"`
+	// Token is the bearer credential minted by the same response, for callers
+	// that cannot keep the session cookie. The client itself uses cookies, so
+	// it keeps this only to pass on to a child process; empty on old panels.
+	Token string `json:"token"`
 }
 
 // Expiry parses ExpiresAt; a panel that omits it yields the zero time.

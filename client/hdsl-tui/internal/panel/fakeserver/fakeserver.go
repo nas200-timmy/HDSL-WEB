@@ -48,6 +48,13 @@ type Server struct {
 	Elevated        bool
 	WebShellEnabled bool
 	HTTPS           bool
+	// GuardScope and Estop round out the status body from v0.5.94; the zero
+	// values are "guard off" and "not stopped", which is also what a client
+	// talking to an older panel sees.
+	GuardScope string
+	Estop      bool
+	// EstopRemainingSeconds is the cooldown the fake reports while Estop is set.
+	EstopRemainingSeconds int64
 
 	// DSHInstances is the answer of GET /api/instances.
 	DSHInstances []map[string]any
@@ -208,11 +215,17 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"elevated": false})
 		return
 	case method == "GET" && r.URL.Path == "/api/developer/status":
+		estop := map[string]any{"engaged": s.Estop, "remainingSeconds": int64(0)}
+		if s.Estop {
+			estop["remainingSeconds"] = s.EstopRemainingSeconds
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"devPasswordSet":  s.DevPasswordSet,
 			"elevated":        s.Elevated,
 			"webShellEnabled": s.WebShellEnabled,
 			"https":           s.HTTPS,
+			"guardScope":      s.GuardScope,
+			"estop":           estop,
 		})
 		return
 	case method == "GET" && len(segments) == 2 && segments[0] == "api" && segments[1] == "instances":

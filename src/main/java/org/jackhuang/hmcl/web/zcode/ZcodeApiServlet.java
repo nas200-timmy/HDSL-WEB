@@ -105,14 +105,15 @@ public final class ZcodeApiServlet extends HttpServlet {
     public ZcodeApiServlet(ServerConfig config, TerminalManager terminals, TerminalTickets terminalTickets,
                            AuthService auth, DeveloperAuth developerAuth,
                            DeveloperElevation developerElevation,
-                           java.util.function.BooleanSupplier tlsActive) {
+                           java.util.function.BooleanSupplier tlsActive,
+                           org.jackhuang.hmcl.web.emergency.EmergencyStop emergency) {
         this.config = config;
         Path root = config.dataDir.resolve("zcode");
         this.manager = new ZcodeInstanceManager(root.resolve("instances"));
         this.buildSettings = new ZcodeBuilder.Settings(root, buildBin(config.zcode.buildBin), config.zcode.pnpm,
                 config.zcode.sourceUrl, config.zcode.keepSources);
         this.instanceTerminal = new InstanceTerminal(config, terminals, terminalTickets, auth,
-                developerAuth, developerElevation, tlsActive);
+                developerAuth, developerElevation, tlsActive, emergency);
     }
 
     /// The directory to put ahead of `PATH` for a build — the Node 24 that the image

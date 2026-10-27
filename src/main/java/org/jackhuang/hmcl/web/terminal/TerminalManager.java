@@ -105,6 +105,58 @@ public final class TerminalManager implements AutoCloseable {
         return true;
     }
 
+    /// Kills every tracked terminal, for the emergency stop.
+    ///
+    /// Same contract as [terminate] per session (the PTY's process group gets
+    /// SIGKILL after a two-second grace), and the same audit line, so a stop
+    /// leaves the same trail as closing terminals one by one. On Windows this
+    /// registry is empty in normal use — the console belongs to the desktop,
+    /// see [DesktopTerminal].
+    ///
+    /// @return how many sessions were terminated
+    public int terminateAll() {
+        int ended = 0;
+        for (String key : java.util.List.copyOf(sessions.keySet())) {
+            TerminalSession session = sessions.remove(key);
+            if (session == null) {
+                continue;
+            }
+            try {
+                session.terminate(java.time.Duration.ofSeconds(2));
+                ended++;
+            } catch (RuntimeException ignored) {
+                // A session that is already gone must not keep the rest alive.
+            }
+        }
+        return ended;
+    }
+
+    /// How many terminals are tracked, and which instance each belongs to, for
+    /// the emergency stop's preview.
+    ///
+    /// @return a snapshot, in no particular order
+    public java.util.List<Tracked> tracked() {
+        java.util.List<Tracked> rows = new java.util.ArrayList<>();
+        for (Map.Entry<String, TerminalSession> entry : sessions.entrySet()) {
+            int separator = entry.getKey().indexOf('\u0000');
+            String brand = separator < 0 ? "" : entry.getKey().substring(0, separator);
+            String instanceId = separator < 0 ? entry.getKey() : entry.getKey().substring(separator + 1);
+            TerminalSession session = entry.getValue();
+            rows.add(new Tracked(brand, instanceId,
+                    session.state() == TerminalSession.State.RUNNING, session.exitCode()));
+        }
+        return rows;
+    }
+
+    /// One tracked terminal, as the E-Stop preview lists it.
+    ///
+    /// @param brand      the surface that owns the terminal (`dsh`, a brand id, `zcode`)
+    /// @param instanceId the instance id
+    /// @param running    whether the session is still alive
+    /// @param exitCode   the child's exit code once it ended, `0` while running
+    public record Tracked(String brand, String instanceId, boolean running, int exitCode) {
+    }
+
     /// How many terminals are tracked (running or just exited).
     public int size() {
         return sessions.size();

@@ -43,6 +43,16 @@ func TestExplainMapsExitCodes(t *testing.T) {
 			ExitPolicy, "HTTPS",
 		},
 		{
+			"emergency stop is a policy refusal",
+			apiError(http.StatusServiceUnavailable, "emergency_stop: the panel is in emergency stop; terminals are frozen"),
+			ExitPolicy, "紧急停机",
+		},
+		{
+			"an estop cooldown is a policy refusal",
+			apiError(http.StatusConflict, "estop_cooldown: the emergency stop cannot be released yet"),
+			ExitPolicy, "冷却",
+		},
+		{
 			"developer password not set is an auth failure",
 			apiError(http.StatusConflict, "developer_password_not_set: set it before opening a terminal"),
 			ExitAuth, "开发者密码",

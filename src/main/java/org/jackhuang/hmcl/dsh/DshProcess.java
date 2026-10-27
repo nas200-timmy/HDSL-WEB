@@ -377,11 +377,71 @@ public final class DshProcess {
         }
     }
 
+    /// How many processes this launch currently holds: the child plus its
+    /// descendants. Cheap enough for the emergency stop's preview (one glance at
+    /// `/proc` or the Windows process table), never used on a hot path.
+    ///
+    /// @return the process count, `0` when nothing is running
+    public int processTreeSize() {
+        if (!isRunning()) {
+            return 0;
+        }
+        return 1 + (int) process.getProcess().descendants().count();
+    }
+
     /// Reports whether the launcher asked this process to stop.
     ///
     /// @return whether a stop was requested
     public boolean isStopRequested() {
         return stopRequested;
+    }
+
+    /// Kills this process and every descendant **immediately**, for the
+    /// emergency stop.
+    ///
+    /// Deliberately different from [stop]: no drain window on the parent, and
+    /// **no `post-exit` custom command** — the emergency stop is a brake, not a
+    /// shutdown, and running a user script in the middle of it would be the one
+    /// piece of user code the freeze still executes.
+    ///
+    /// The descendants are collected *before* the parent dies: once it is gone,
+    /// `ProcessHandle.descendants()` has nothing left to walk.
+    ///
+    /// @return how many processes were signalled (the parent counts as one)
+    public int killNow() {
+        if (!isRunning()) {
+            return 0;
+        }
+        stopRequested = true;
+        Process raw = process.getProcess();
+        List<ProcessHandle> descendants = raw.descendants().toList();
+        int killed = 0;
+        if (raw.isAlive()) {
+            raw.destroyForcibly();
+            killed++;
+        }
+        for (ProcessHandle descendant : descendants) {
+            if (descendant.isAlive()) {
+                descendant.destroyForcibly();
+                killed++;
+            }
+        }
+        try {
+            raw.waitFor(FORCE_GRACE.toSeconds(), TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        // One more pass over the captured descendants: a handle that was not
+        // yet gone when the first round fired deserves the last word.
+        for (ProcessHandle descendant : descendants) {
+            if (!descendant.isAlive()) {
+                continue;
+            }
+            descendant.destroyForcibly();
+            killed++;
+        }
+        appendLog("Emergency stop: killed the process tree (" + killed + " processes)");
+        return killed;
     }
 
     /// Records a log line, notifying the sink.

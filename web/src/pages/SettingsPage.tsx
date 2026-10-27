@@ -28,9 +28,11 @@ import { I18N } from "../i18n";
 import { logout, setState, toast, useAppState } from "../store";
 import { bindSystemThemeListener, setThemeMode, useThemeMode, type ThemeMode } from "../theme";
 import type {
+  DeveloperGuardScope,
   DeveloperStatus,
   DoctorCheck,
   DoctorReport,
+  EmergencyStopPreview,
   Health,
   RegistrySettings,
   RegistryTestResult,
@@ -38,6 +40,23 @@ import type {
   TlsUploadResult,
 } from "../types";
 import { errMsg, formatDateTime, formatUptime, registryError } from "../utils";
+
+/// 开发者守卫四档的中文名，按钮与状态行共用。
+const GUARD_SCOPE_LABEL: Record<DeveloperGuardScope, string> = {
+  off: "关闭",
+  proxy: "只反代",
+  instance: "反代 + 实例操作",
+  all: "全部 API",
+};
+
+/// 把剩余秒数写成 "47 分 12 秒" / "58 秒"。
+function formatRemaining(seconds: number | undefined): string {
+  const total = Math.max(0, Math.floor(seconds ?? 0));
+  if (total <= 0) return "0 秒";
+  const minutes = Math.floor(total / 60);
+  const rest = total % 60;
+  return minutes > 0 ? `${minutes} 分 ${rest} 秒` : `${rest} 秒`;
+}
 
 type SettingsTab =
   | "general"
@@ -1275,6 +1294,15 @@ function DeveloperTab() {
   const [confirmSelfSigned, setConfirmSelfSigned] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
+  /// 开发者守卫的保存中标志：四档按钮共用，避免连点写出两次配置。
+  const [guardSaving, setGuardSaving] = useState(false);
+  /// 紧急停机的三次确认：1 清单 → 2 短语 → 3 不可逆声明。
+  const [estopOpen, setEstopOpen] = useState(false);
+  const [estopStage, setEstopStage] = useState<1 | 2 | 3>(1);
+  const [estopPreview, setEstopPreview] = useState<EmergencyStopPreview | null>(null);
+  const [estopPhrase, setEstopPhrase] = useState("");
+  const [estopBusy, setEstopBusy] = useState(false);
+  const [estopError, setEstopError] = useState<string | null>(null);
 
   const [unlockPassword, setUnlockPassword] = useState("");
   const [setupAdmin, setSetupAdmin] = useState("");
@@ -1428,6 +1456,75 @@ function DeveloperTab() {
       开发者模式
     </div>
   );
+
+  /// 切换开发者守卫的作用域。后端要求已提权，过期时按普通错误提示（页面会
+  /// 回到输密码的界面），不做静默重试。
+  const saveGuard = async (scope: DeveloperGuardScope) => {
+    if (guardSaving || (status?.guardScope ?? "off") === scope) return;
+    setGuardSaving(true);
+    setFormError(null);
+    try {
+      await api.setDeveloperGuard(scope);
+      toast("success", `开发者守卫：${GUARD_SCOPE_LABEL[scope]}`);
+      await load();
+    } catch (e) {
+      setFormError(developerError(e));
+    } finally {
+      setGuardSaving(false);
+    }
+  };
+
+  /// 打开 E-Stop 的三次确认，并先把"会杀掉什么"读回来列清楚。
+  const openEstop = async () => {
+    setEstopOpen(true);
+    setEstopStage(1);
+    setEstopPhrase("");
+    setEstopError(null);
+    setEstopPreview(null);
+    try {
+      setEstopPreview(await api.estopPreview());
+    } catch (e) {
+      setEstopError(developerError(e));
+    }
+  };
+
+  const closeEstop = () => {
+    setEstopOpen(false);
+    setEstopStage(1);
+    setEstopPhrase("");
+    setEstopPreview(null);
+    setEstopError(null);
+  };
+
+  const engageEstop = async () => {
+    if (estopBusy) return;
+    setEstopBusy(true);
+    setEstopError(null);
+    try {
+      const result = await api.estopEngage("");
+      closeEstop();
+      toast("success", `已停机：关闭终端 ${result.terminals} 个、杀掉进程 ${result.processes} 个`);
+      await load();
+    } catch (e) {
+      setEstopError(developerError(e));
+    } finally {
+      setEstopBusy(false);
+    }
+  };
+
+  const releaseEstop = async () => {
+    setEstopBusy(true);
+    setEstopError(null);
+    try {
+      await api.estopRelease();
+      toast("success", "紧急停机已解除");
+      await load();
+    } catch (e) {
+      setEstopError(developerError(e));
+    } finally {
+      setEstopBusy(false);
+    }
+  };
 
   if (loadError) {
     return (
@@ -1703,6 +1800,193 @@ function DeveloperTab() {
           <span className="mono"> web_shell.enabled</span>，重启后仍然有效。
         </p>
       </div>
+
+      <div className="card">
+        <div className="comp-row">
+          <span className="comp-label">开发者守卫</span>
+          <span className="comp-value">
+            <span className={`tag ${(status.guardScope ?? "off") === "off" ? "plain" : "running"}`}>
+              {GUARD_SCOPE_LABEL[status.guardScope ?? "off"]}
+            </span>
+          </span>
+        </div>
+        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+          守卫决定"开发者密码还管到哪"：终端本来要，守卫再往后扩。<b>它只挡新进门</b>——已经开着的实例网页、
+          正在跑的 agent 都不受影响，重新进入才要密码。要立刻掐断一切，用下面的紧急停机。
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingTop: 8 }}>
+          {(["off", "proxy", "instance", "all"] as DeveloperGuardScope[]).map((scope) => (
+            <button
+              key={scope}
+              className={`btn ${status.guardScope === scope ? "btn-raised" : "btn-outline"} ripple-host`}
+              disabled={busy || guardSaving}
+              onClick={() => void saveGuard(scope)}
+            >
+              {GUARD_SCOPE_LABEL[scope]}
+            </button>
+          ))}
+        </div>
+        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "6px 8px 0", lineHeight: 1.6 }}>
+          <span className="mono">只反代</span>：实例网页（/i/&lt;id&gt;/ 与它的 WebSocket）要密码；{" "}
+          <span className="mono">反代 + 实例操作</span>：再加启动/停止/删除/装包/改设置（读还开放）；{" "}
+          <span className="mono">全部 API</span>：除登录、健康检查与开发者页外都要密码。
+          脚本或巡检 agent 可以先 <span className="mono">POST /api/developer/elevate</span> 拿到 token，再用{" "}
+          <span className="mono">Authorization: Bearer &lt;token&gt;</span> 调接口——token 与浏览器提权同寿命，
+          改密码或注销即失效，别写进脚本文件。
+        </p>
+      </div>
+
+      <div className="card" style={{ borderColor: "var(--monet-error)" }}>
+        <div className="comp-row">
+          <span className="comp-label">紧急停机（E-Stop）</span>
+          <span className="comp-value">
+            <span className={`tag ${status.estop?.engaged ? "failed" : "plain"}`}>
+              {status.estop?.engaged ? "已停机" : "正常"}
+            </span>
+          </span>
+        </div>
+        {status.estop?.engaged ? (
+          <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+            停机中：实例网页、终端与实例启动全部冻结。冷却剩余{" "}
+            <b>{formatRemaining(status.estop.remainingSeconds)}</b>，
+            到点后才能解除；重启面板进程或容器也会清空（这是唯一的物理恢复方式）。
+            被杀掉的实例不会自动重启。
+          </p>
+        ) : (
+          <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+            一键冻结：立刻断开所有终端、强杀所有实例的整棵进程树、实例网页断流，之后 1 小时内谁都解除不了。
+            面板里正在跑的巡检/修复 agent 也会被一起杀掉——按下之前会列出清单。
+          </p>
+        )}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingTop: 8 }}>
+          <button
+            className="btn btn-text danger ripple-host"
+            disabled={busy || status.estop?.engaged}
+            onClick={() => void openEstop()}
+          >
+            紧急停机
+          </button>
+          <button
+            className="btn btn-outline ripple-host"
+            disabled={busy || !status.estop?.engaged || (status.estop.remainingSeconds ?? 0) > 0}
+            title={
+              status.estop?.engaged && (status.estop.remainingSeconds ?? 0) > 0
+                ? `冷却中，还剩 ${formatRemaining(status.estop.remainingSeconds)}`
+                : undefined
+            }
+            onClick={() => void releaseEstop()}
+          >
+            {status.estop?.engaged && (status.estop.remainingSeconds ?? 0) > 0
+              ? `冷却中 ${formatRemaining(status.estop.remainingSeconds)}`
+              : "解除停机"}
+          </button>
+        </div>
+        {estopError && <div className="form-error">{estopError}</div>}
+      </div>
+
+      <Dialog
+        open={estopOpen}
+        title={
+          estopStage === 1 ? "紧急停机：这次会杀掉这些" : estopStage === 2 ? "确认短语" : "最后一步：这件事不可逆"
+        }
+        onClose={() => {
+          if (!estopBusy) closeEstop();
+        }}
+      >
+        {estopStage === 1 && (
+          <div style={{ maxWidth: 520, lineHeight: 1.7 }}>
+            <p>按下之后立刻发生：</p>
+            <ul style={{ paddingLeft: 18, margin: "6px 0" }}>
+              <li>所有终端断开（Windows 的桌面终端窗口除外，需要人工关闭）；</li>
+              <li>所有实例的进程树被强制杀死，不等待优雅退出，会话尾部可能丢几行；</li>
+              <li>实例网页与实例启动冻结 1 小时，冷却期内没人能解除。</li>
+            </ul>
+            <p style={{ fontWeight: 600 }}>
+              面板里正在跑的巡检/修复 agent（包括正在改面板自己那个）也会被杀掉。
+            </p>
+            {estopPreview ? (
+              <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                <div style={{ paddingTop: 4 }}>
+                  实例 {estopPreview.instances.length} 个 / 进程 {estopPreview.processCount} 个：
+                </div>
+                {estopPreview.instances.map((row) => (
+                  <div key={`${row.brand}:${row.id}`} className="mono">
+                    · {row.id}（{row.state}，{row.pids} 个进程）
+                  </div>
+                ))}
+                <div style={{ paddingTop: 4 }}>
+                  终端 {estopPreview.terminalCount} 个：
+                </div>
+                {estopPreview.terminals.map((row) => (
+                  <div key={`${row.brand}:${row.instance}`} className="mono">
+                    · {row.brand} / {row.instance}
+                    {row.running ? "" : "（已结束）"}
+                  </div>
+                ))}
+                {estopPreview.instances.length === 0 && estopPreview.terminalCount === 0 && (
+                  <div>此刻没有正在运行的实例或终端。</div>
+                )}
+              </div>
+            ) : (
+              <div style={{ fontSize: 12 }}>
+                <span className="spinner" /> 正在读取清单…
+              </div>
+            )}
+            <div className="dialog-actions">
+              <button className="btn btn-text dim" disabled={estopBusy} onClick={() => closeEstop()}>
+                取消
+              </button>
+              <button className="btn btn-text danger" disabled={!estopPreview} onClick={() => setEstopStage(2)}>
+                继续
+              </button>
+            </div>
+          </div>
+        )}
+        {estopStage === 2 && (
+          <div style={{ maxWidth: 440, lineHeight: 1.7 }}>
+            <p>
+              请输入 <span className="mono">紧急停机</span> 四个字继续：
+            </p>
+            <input
+              className="input"
+              value={estopPhrase}
+              disabled={estopBusy}
+              onChange={(e) => setEstopPhrase(e.target.value)}
+              placeholder="紧急停机"
+            />
+            <div className="dialog-actions">
+              <button className="btn btn-text dim" disabled={estopBusy} onClick={() => setEstopStage(1)}>
+                返回
+              </button>
+              <button
+                className="btn btn-text danger"
+                disabled={estopPhrase.trim() !== "紧急停机"}
+                onClick={() => setEstopStage(3)}
+              >
+                继续
+              </button>
+            </div>
+          </div>
+        )}
+        {estopStage === 3 && (
+          <div style={{ maxWidth: 480, lineHeight: 1.7 }}>
+            <p>
+              <b>1 小时内不能解除</b>，开发者密码也不行。想立刻恢复只能重启面板进程或容器——那会清空停机状态，
+              也会打断里面所有会话。
+            </p>
+            <p>被杀掉的实例不会自动重启；解除后需要你自己重新启动它们。</p>
+            {estopError && <div className="form-error">{estopError}</div>}
+            <div className="dialog-actions">
+              <button className="btn btn-text dim" disabled={estopBusy} onClick={() => setEstopStage(2)}>
+                返回
+              </button>
+              <button className="btn btn-text danger" disabled={estopBusy} onClick={() => void engageEstop()}>
+                {estopBusy ? "停机中…" : "我明白，停机"}
+              </button>
+            </div>
+          </div>
+        )}
+      </Dialog>
 
       <div className="card">
         <div className="comp-row">

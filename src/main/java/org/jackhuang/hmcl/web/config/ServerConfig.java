@@ -175,4 +175,22 @@ public final class ServerConfig {
         /// alone, so the user can still stop it from its window.
         public volatile boolean enabled = true;
     }
+
+    /// The developer guard (docs/web-shell.md §4.1): how far the developer
+    /// elevation reaches beyond the web terminal. Off by default — the panel's
+    /// own session is the only door unless an operator asks for more.
+    ///
+    /// The value is a *scope*, and each level includes the previous one:
+    /// `proxy` gates the instance web pages (`/i/<id>/*`), `instance` also gates
+    /// the state-changing instance APIs, `all` gates every `/api/*` request
+    /// except the allowlist [DeveloperGuardScope] documents. The gates only
+    /// apply to **new** requests: an already-open page, terminal or agent keeps
+    /// running (that is what the emergency stop is for).
+    public final DeveloperGuardConfig developerGuard = new DeveloperGuardConfig();
+
+    public static final class DeveloperGuardConfig {
+        /// The scope itself (`developer_guard.scope`, `HDSL_DEVELOPER_GUARD`),
+        /// default [DeveloperGuardScope#OFF].
+        public volatile DeveloperGuardScope scope = DeveloperGuardScope.OFF;
+    }
 }

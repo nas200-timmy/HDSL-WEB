@@ -214,7 +214,13 @@ public final class HdslServer {
         // runtime that turns domain events into the panel's event stream.
         EventBus eventBus = new EventBus();
         TaskService taskService = new TaskService(eventBus);
-        InstanceRuntime runtime = new InstanceRuntime(eventBus, taskService);
+        // The emergency stop's state: one object, in memory, consulted by the
+        // proxy gates, the terminal and the instance launcher (docs/web-shell.md).
+        // Created before the runtime because launching an instance is one of the
+        // things it freezes.
+        org.jackhuang.hmcl.web.emergency.EmergencyStop emergencyStop =
+                new org.jackhuang.hmcl.web.emergency.EmergencyStop();
+        InstanceRuntime runtime = new InstanceRuntime(eventBus, taskService, emergencyStop);
         runtime.wire();
         AcpSessionManager acpSessions = new AcpSessionManager(eventBus);
         WsGateway.install(eventBus, authService, config.auth.disabled, acpSessions);
@@ -280,10 +286,18 @@ public final class HdslServer {
         context.addFilter(authFilter, "/api/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(authFilter, "/i/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(authFilter, "/ws/*", EnumSet.of(DispatcherType.REQUEST));
+        // The emergency stop and the developer guard, in that order, after the
+        // session gate: an unauthenticated request must still read as 401, not
+        // as a guard refusal (docs/web-shell.md §4.1).
+        org.jackhuang.hmcl.web.developer.DeveloperGuardFilter guardFilter =
+                new org.jackhuang.hmcl.web.developer.DeveloperGuardFilter(
+                        config, developerAuth, developerElevation, authService, emergencyStop, tlsActive);
+        context.addFilter(new FilterHolder(guardFilter), "/api/*", EnumSet.of(DispatcherType.REQUEST));
+        context.addFilter(new FilterHolder(guardFilter), "/i/*", EnumSet.of(DispatcherType.REQUEST));
         context.addServlet(new ServletHolder(new ApiServlet(
                 authService, authFilter, config.auth.disabled, Metadata.VERSION, startedAtMillis::get)), "/api/*");
         ServletHolder instancesHolder = new ServletHolder(new InstancesApiServlet(runtime, taskService, config, terminals, terminalTickets,
-                authService, developerAuth, developerElevation, tlsActive));
+                authService, developerAuth, developerElevation, tlsActive, emergencyStop));
         instancesHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(instancesHolder, "/api/instances/*");
         context.addServlet(new ServletHolder(new VersionsApiServlet(taskService)), "/api/versions");
@@ -303,12 +317,13 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
         context.addServlet(new ServletHolder(new ZcodeApiServlet(config, terminals, terminalTickets,
-                authService, developerAuth, developerElevation, tlsActive)), "/api/zcode/*");
+                authService, developerAuth, developerElevation, tlsActive, emergencyStop)), "/api/zcode/*");
         context.addServlet(new ServletHolder(new BrandApiServlet(
                 config, taskService, terminals, terminalTickets,
-                authService, developerAuth, developerElevation, tlsActive)), "/api/brands/*");
+                authService, developerAuth, developerElevation, tlsActive, emergencyStop)), "/api/brands/*");
         context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.developer.DeveloperApiServlet(
-                developerAuth, developerElevation, authService, config, tlsActive)), "/api/developer/*");
+                developerAuth, developerElevation, authService, config, tlsActive,
+                emergencyStop, terminals, runtime)), "/api/developer/*");
         // Registered before the `/api/settings/*` holder below and matched by its longer prefix:
         // the download source is a launcher setting, and TLS is the other thing this path serves.
         context.addServlet(new ServletHolder(new RegistrySettingsApiServlet()), "/api/settings/registry/*");
@@ -345,6 +360,7 @@ public final class HdslServer {
             container.addMapping("/i/*",
                     (upgradeRequest, upgradeResponse, callback) -> createRelay(
                             authService, config.auth.disabled, proxyWebSocketClient,
+                            config, developerElevation, emergencyStop,
                             upgradeRequest, upgradeResponse, callback));
         });
 
@@ -411,10 +427,26 @@ public final class HdslServer {
     /// connection is opened when the endpoint comes up.
     private static @Nullable InstanceProxyWebSocket createRelay(
             AuthService authService, boolean authDisabled, WebSocketClient proxyWebSocketClient,
+            ServerConfig config,
+            org.jackhuang.hmcl.web.developer.DeveloperElevation elevation,
+            org.jackhuang.hmcl.web.emergency.EmergencyStop emergency,
             org.eclipse.jetty.websocket.server.ServerUpgradeRequest upgradeRequest,
             org.eclipse.jetty.websocket.server.ServerUpgradeResponse upgradeResponse, Callback callback) {
         if (!authDisabled && !hasSession(authService, upgradeRequest.getHeaders())) {
             upgradeResponse.setStatus(401);
+            callback.succeeded();
+            return null;
+        }
+        // The stop and the guard have to be judged here as well: a WebSocket
+        // upgrade never reaches the servlet filters, so a gate that only lives
+        // in a Filter would leave the stream open (docs/web-shell.md §4.1).
+        if (emergency.isEngaged()) {
+            upgradeResponse.setStatus(503);
+            callback.succeeded();
+            return null;
+        }
+        if (config.developerGuard.scope.coversProxy() && !elevated(authService, elevation, upgradeRequest)) {
+            upgradeResponse.setStatus(403);
             callback.succeeded();
             return null;
         }
@@ -448,6 +480,33 @@ public final class HdslServer {
                 String token = trimmed.substring(AuthFilter.SESSION_COOKIE.length() + 1);
                 return authService.verify(token).isPresent();
             }
+        }
+        return false;
+    }
+
+    /// Whether the upgrade request proves a developer elevation — either the
+    /// cookie session's, or a bearer token minted by `/api/developer/elevate`.
+    private static boolean elevated(AuthService authService,
+                                     org.jackhuang.hmcl.web.developer.DeveloperElevation elevation,
+                                     org.eclipse.jetty.websocket.server.ServerUpgradeRequest request) {
+        org.eclipse.jetty.http.HttpFields headers = request.getHeaders();
+        String cookie = headers.get(HttpHeader.COOKIE);
+        if (cookie != null) {
+            for (String pair : cookie.split(";")) {
+                String trimmed = pair.trim();
+                if (trimmed.startsWith(AuthFilter.SESSION_COOKIE + "=")) {
+                    String token = trimmed.substring(AuthFilter.SESSION_COOKIE.length() + 1);
+                    if (!authService.verify(token).isPresent()) {
+                        return false;
+                    }
+                    return elevation.require(
+                            org.jackhuang.hmcl.web.developer.DeveloperElevation.key(token, null), true);
+                }
+            }
+        }
+        String authorization = headers.get(HttpHeader.AUTHORIZATION);
+        if (authorization != null && authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            return elevation.requireToken(authorization.substring(7).trim());
         }
         return false;
     }

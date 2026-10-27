@@ -10,8 +10,8 @@
 
 ## 0. 当前状态
 
-- `main` = **v0.5.93**（`web-shell` 以 `--no-ff` 合并进来，两条分支同步）。v0.5.93 是 v0.5.92 之后的
-  补丁：输入框光标少算一格（TUI 的 `renderFrame`）与 Go 客户端 `cursorCell` 的末尾偏移。
+- `main` = **v0.5.94**（`web-shell` 以 `--no-ff` 合并进来，两条分支同步）。v0.5.93 是 v0.5.92 之后的
+  补丁（输入框光标少算一格），v0.5.94 新增开发者守卫与紧急停机（见 §5.1）。
 - 两个第一方插件版本 **0.2.1**（随 jar 分发、从未上 npm；改版本要同时改 `package.json` 与
   `DshTuiPlugins.ENTRIES`）。内容变了而版本没变也没关系：面板比的是摘要，会亮「有新版本」。
   所以 v0.5.93 的插件 tarball 虽然摘要变了，版本号仍是 0.2.1——重新构建镜像后实例页会提示更新。
@@ -122,19 +122,38 @@ src/main/java/…/dsh/FirstPartyPlugins.java  摘要记录、isOutdated、tarbal
 - `/sessions` 的真实观感：需要重建镜像 → 实例页点「更新」拿到 0.2.1 → 看顺序与标题。
 - ACP 的理由排队在真实慢回合下的顺序；`@` 补全在真实工作区的性能。
 
-## 5. 发布动作：v0.5.92（本次执行）
+## 5. 发布动作：v0.5.92 → v0.5.94（本日共三次）
 
 ```bash
 git checkout main && git merge --no-ff web-shell
-flock /tmp/hdsl-gradle.lock ./gradlew --no-daemon shadowJar -PreleaseVersion=0.5.92
-sha256sum build/libs/hdsl-web-0.5.92.jar > SHA256SUMS.txt
-git tag -a v0.5.92 -m "第一方终端补完：真审批、Plan mode、内联命令、会话列表"
-git -c http.version=HTTP/1.1 push origin main web-shell v0.5.92
-gh release create v0.5.92 …   # 正文写面向用户的介绍，不抄 CHANGELOG
+flock /tmp/hdsl-gradle.lock ./gradlew --no-daemon shadowJar -PreleaseVersion=<版本>
+sha256sum build/libs/hdsl-web-<版本>.jar > SHA256SUMS.txt
+git tag -a v<版本> -m "…"
+git -c http.version=HTTP/1.1 push origin main web-shell v<版本>
+gh release create v<版本> …   # 正文写面向用户的介绍，不抄 CHANGELOG
 ```
 
 **`Dockerfile` 的白名单 `COPY plugins ./plugins` 与 `first-party-plugins/*.tgz` 断言别动**——
 v0.5.91 第一次发布就是在这里漏掉的：镜像里的 jar 没有插件，而 CI 全绿。
+
+### 5.1 v0.5.94：开发者守卫与紧急停机（新增，看这节）
+
+- **守卫**：`developer_guard.scope = off|proxy|instance|all`（`HDSL_DEVELOPER_GUARD`），默认 `off`。
+  实现在 `web/developer/DeveloperGuardFilter`（挂在 `AuthFilter` 之后的 `/api/*` 与 `/i/*`）与
+  `HdslServer.createRelay`（WebSocket 升级不过 servlet 过滤器，必须单独判一次——这个坑踩过一次）。
+  **只挡新请求**：已加载的页面、已附着的终端、正在跑的 agent 都不动。
+- **提权 token**：`POST /api/developer/elevate` 多返回一个 `token`（`DeveloperElevation.mintToken()`，
+  内存里的 `bearer:` 前缀 key），守卫与 WS 都认 `Authorization: Bearer`。这条是给宿主机脚本/巡检
+  agent 的正门，不是后门：同 TTL、同滑动、改密码即清空。
+- **E-Stop**：`web/emergency/EmergencyStop`，**只在内存**（重启即解除，这是设计选择）。顺序是
+  "先翻转状态 → `TerminalManager.terminateAll()` → `DshProcessManager.killAllForcibly()`"
+  （后者走 `DshProcess.killNow()`：先收集 descendants 再 `destroyForcibly`，**不跑 `post-exit`**）。
+  冷却 1 小时，未到点 `409 estop_cooldown`。
+- **冻结范围**：`/i/*`、实例的写操作、终端接口 → `503 emergency_stop`；登录、健康检查、
+  `/api/developer/*`、只读列表/日志、`/ws` 照常。
+- **Windows**：实例进程的 kill 两平台一致；**桌面终端窗口不在面板进程表里，杀不掉**，UI 与文档都写明。
+- **验证纪律**：E-Stop 只能在独立起的临时面板（临时 `HDSL_DATA`、`HDSL_PORT=0`）上试。
+  生产面板里往往正跑着干活的 agent（包括改面板的那个），按下去会一起杀掉，1 小时内起不回来。
 
 ## 6. 环境备注
 
