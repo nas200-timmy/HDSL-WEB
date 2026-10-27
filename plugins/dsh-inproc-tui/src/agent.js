@@ -12,6 +12,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { readdirSync, statSync } from 'node:fs'
+import { basename, join } from 'node:path'
 
 // The harness packages are imported when a session is opened, not when this
 // module loads. They are peers: a terminal that never reaches `open()` — the
@@ -21,6 +23,17 @@ import { randomUUID } from 'node:crypto'
 
 /** How long a detach waits for the agent to go idle before giving up on it. */
 const SETTLE_TIMEOUT_MS = 2_000
+
+/** How many events one session-index read asks for. */
+const SESSION_INDEX_READ = 64
+/** Stop looking for the first prompt after this many events. */
+const SESSION_INDEX_LIMIT = 2_048
+/** How many characters of the first prompt the picker shows. */
+const SESSION_TITLE_CHARS = 40
+/** Newest artifacts read when building the `/sessions` index. */
+const SESSION_INDEX_MAX = 200
+/** Read handles opened at once; a large store must not open hundreds in parallel. */
+const SESSION_INDEX_CONCURRENCY = 8
 
 /** A model choice as the harness records it. */
 export class ChatSession {
@@ -317,8 +330,18 @@ export class ChatSession {
   }
 
   /**
-   * Stored sessions, newest first.
-   * @returns {Promise<{id: string, cwd: string, at: number}[]>}
+   * Stored sessions that have a human prompt, newest activity first.
+   *
+   * Persistence lists every artifact it has, including the empty session an
+   * accidental `/new`, a failed resume or a killed start leaves behind. Those
+   * have no first prompt and are not useful in `/sessions`, so their first few
+   * events are read and the ones that really are empty are dropped.
+   *
+   * A read that fails or stops at the scan cap is **kept**, with an empty title.
+   * An unreadable real conversation is worse to hide than to show with its id:
+   * upstream's digest keeps uncertain reads visible for the same reason.
+   *
+   * @returns {Promise<{id: string, cwd: string, at: number, title: string, unreadable: boolean}[]>}
    */
   async listSessions() {
     const persistence = this.ctx.get('sessionPersistence')
@@ -329,14 +352,37 @@ export class ChatSession {
     } catch {
       return []
     }
-    return snapshots
-      .map((snapshot) => ({
-        id: snapshot.header?.id ?? '',
-        cwd: snapshot.header?.cwd ?? '',
-        at: snapshot.header?.updatedAt ?? snapshot.header?.createdAt ?? 0,
-      }))
-      .filter((row) => row.id !== '')
-      .sort((left, right) => Number(right.at) - Number(left.at))
+    // `list()` promises no order and a store can be large. Work newest-first so
+    // the picker's 40 rows are populated from the useful end, and read with a
+    // small pool: one read handle per session, but not hundreds at once.
+    const mtimes = sessionFileMtimes()
+    const ordered = [...snapshots]
+      .sort((left, right) => sessionTime(right, mtimes) - sessionTime(left, mtimes))
+      .slice(0, SESSION_INDEX_MAX)
+    const rows = []
+    let next = 0
+    const worker = async () => {
+      while (next < ordered.length) {
+        const snapshot = ordered[next]
+        next += 1
+        const id = snapshot.header?.id ?? ''
+        if (id === '') continue
+        const prompt = await readSessionPrompt(persistence, id)
+        if (prompt.state === 'empty') continue
+        rows.push({
+          id,
+          cwd: snapshot.header?.cwd ?? '',
+          at: sessionTime(snapshot, mtimes),
+          title: prompt.title ?? '',
+          unreadable: prompt.state !== 'prompt',
+        })
+      }
+    }
+    await Promise.all(Array.from(
+      { length: Math.min(SESSION_INDEX_CONCURRENCY, ordered.length) },
+      worker,
+    ))
+    return rows.sort((left, right) => Number(right.at) - Number(left.at))
   }
 
   /**
@@ -377,4 +423,174 @@ export class ChatSession {
     this.sessionId = null
     this.modelState = null
   }
+}
+
+/**
+ * Read enough of one session to tell an empty artifact from a real conversation.
+ *
+ * `user/message` is the normal shape, but an early prompt can still live in an
+ * `agent/inbox/spliced` event: the inbox is written before the turn claims it.
+ * Both are checked. A source that is missing or null counts as human (old logs
+ * predate the source field); runtime-context and tool notices do not.
+ *
+ * @param {object} persistence the session persistence service
+ * @param {string} id the stored session id
+ * @returns {Promise<{state: 'prompt'|'empty'|'uncertain'|'unreadable', title?: string}>}
+ */
+async function readSessionPrompt(persistence, id) {
+  let handle = null
+  let reachedEnd = false
+  try {
+    handle = await persistence.open(id, 'read')
+    let offset = 0
+    while (offset < SESSION_INDEX_LIMIT) {
+      const result = await handle.read(offset, SESSION_INDEX_READ)
+      const events = Array.isArray(result?.events) ? result.events : []
+      // A short read is not an EOF promise: the contract says `length` is a
+      // maximum, not that a backend must fill it. Only an empty slice proves the
+      // log ended; stopping at a short slice could delete a real conversation.
+      if (events.length === 0) {
+        reachedEnd = true
+        break
+      }
+      for (const event of events) {
+        const text = promptFromEvent(event)
+        if (text.trim() !== '') return { state: 'prompt', title: shortenPrompt(text) }
+      }
+      offset += events.length
+    }
+    // Hitting the cap without finding a prompt is not proof of an empty session:
+    // keep it visible and let the person decide, rather than deleting a real one.
+    return reachedEnd ? { state: 'empty' } : { state: 'uncertain' }
+  } catch {
+    return { state: 'unreadable' }
+  } finally {
+    try {
+      await handle?.close()
+    } catch {
+      // Closing a read handle is best effort.
+    }
+  }
+}
+
+/** The first human text in one stored event, or ''. */
+function promptFromEvent(event) {
+  if (event?.type === 'user/message') {
+    return isHumanSource(event.data?.source) ? messageText(event.data) : ''
+  }
+  if (event?.type === 'agent/inbox/spliced') {
+    const inserted = event.data?.inserted
+    if (!Array.isArray(inserted)) return ''
+    for (const message of inserted) {
+      if (!isHumanSource(message?.source)) continue
+      const text = messageText(message)
+      if (text.trim() !== '') return text
+    }
+  }
+  return ''
+}
+
+/**
+ * Whether a stored message came from the person.
+ *
+ * Older logs do not carry `source` at all; those are human by default. The
+ * runtime context and tool-job notices are typed, so they are not.
+ */
+function isHumanSource(source) {
+  if (source === null || source === undefined) return true
+  if (typeof source === 'string') return source === 'user'
+  return typeof source === 'object' && source.kind === 'user'
+}
+
+/** The text blocks of a stored message; old logs may store content as a string. */
+function messageText(message) {
+  const content = message?.content
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => (block?.type === 'text' ? String(block.text ?? '') : ''))
+      .join('')
+  }
+  if (content !== null && typeof content === 'object' && content.type === 'text') {
+    return String(content.text ?? '')
+  }
+  return ''
+}
+
+/** Collapse whitespace and cap a prompt at a readable picker label. */
+function shortenPrompt(text) {
+  const flat = String(text ?? '')
+    .replace(/[\u0000-\u001f\u007f]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+  if (flat === '') return ''
+  const chars = Array.from(flat)
+  return chars.length <= SESSION_TITLE_CHARS
+    ? flat
+    : `${chars.slice(0, SESSION_TITLE_CHARS - 1).join('')}…`
+}
+
+/**
+ * Last-write time per stored session, from the JSONL artifacts under
+ * `$DSH_HOME/sessions`.
+ *
+ * The persistence snapshot has `createdAt` but no `updatedAt`, so sorting by the
+ * header alone puts a months-old session that is used every day below a session
+ * created yesterday and never opened. The file mtime is the cheapest signal
+ * that actually follows writes; when the layout is not a JSONL store (or
+ * `DSH_HOME` is absent), callers fall back to `createdAt`.
+ *
+ * @returns {Map<string, number>} session id → mtime in epoch milliseconds
+ */
+function sessionFileMtimes() {
+  const home = process.env.DSH_HOME
+  if (home === undefined || home === '') return new Map()
+  const root = join(home, 'sessions')
+  const mtimes = new Map()
+  const walk = (directory, depth) => {
+    if (depth > 4) return
+    let entries
+    try {
+      entries = readdirSync(directory, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        walk(full, depth + 1)
+        continue
+      }
+      if (!entry.isFile()) continue
+      if (!entry.name.endsWith('.jsonl') && !entry.name.endsWith('.jsonl.zstd')) continue
+      try {
+        mtimes.set(basename(directory), statSync(full).mtimeMs)
+      } catch {
+        // A file that vanished between readdir and stat is not a session we can
+        // order; the createdAt fallback still gives it a stable position.
+      }
+    }
+  }
+  walk(root, 0)
+  return mtimes
+}
+
+/** The header time, with the artifact mtime and createdAt as fallbacks. */
+function sessionTime(snapshot, mtimes) {
+  return timestamp(snapshot?.header?.updatedAt)
+    || mtimes.get(snapshot?.header?.id)
+    || timestamp(snapshot?.header?.createdAt)
+    || 0
+}
+
+/** A number or ISO timestamp as epoch milliseconds, or 0. */
+function timestamp(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value !== '') {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric)) return numeric
+    const parsed = Date.parse(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return 0
 }

@@ -2308,11 +2308,24 @@ export class TerminalApp {
     const now = Date.now()
     const items = sessions.slice(0, 40).map((session) => {
       const current = session.id === this.sessionId
-      const where = session.cwd === this.cwd ? this.i18n.t('resume.here') : session.cwd
+      const where = session.cwd === this.cwd
+        ? this.i18n.t('resume.here')
+        : (session.cwd !== '' ? session.cwd : this.i18n.t('resume.other'))
       const age = Number.isFinite(session.at) && session.at > 0 ? ` · ${ageLabel(now - session.at)}` : ''
+      const title = typeof session.title === 'string' && session.title !== ''
+        ? session.title
+        : shortId(session.id)
+      // A session whose first prompt could not be read is still listed: hiding a
+      // real conversation is worse than showing its id with a warning.
+      const unreadable = session.unreadable === true
+        ? ` · ${this.i18n.t('resume.unreadable')}`
+        : ''
       return {
-        label: `${shortId(session.id)}${current ? ` · ${this.i18n.t('resume.current')}` : ''}`,
-        tail: `${where}${age}`,
+        // The prompt is what identifies the conversation; the id is metadata,
+        // not a label. Empty artifacts never reach this point (listSessions drops
+        // them), so every row answers "which conversation is this?".
+        label: `${title}${unreadable}${current ? ` · ${this.i18n.t('resume.current')}` : ''}`,
+        tail: `${shortId(session.id)} · ${where}${age}`,
         onSelect: () => void this.resumeSession(session.id),
       }
     })
@@ -2323,7 +2336,7 @@ export class TerminalApp {
     this.overlay = {
       kind: 'picker',
       title: this.i18n.t('resume.title'),
-      width: 66,
+      width: 76,
       maxHeight: 20,
       items,
       index: 0,
