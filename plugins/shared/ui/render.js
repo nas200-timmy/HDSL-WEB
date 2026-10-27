@@ -12,7 +12,7 @@
  */
 
 import { padStyled, spread, truncateStyled, visibleWidth } from '../term/text.js'
-import { renderBlock, formatDuration } from './blocks.js'
+import { formatDuration, renderBlock, shortId } from './blocks.js'
 import { center, renderOverlay } from './dialogs.js'
 import { describeCandidates } from './complete.js'
 
@@ -156,8 +156,11 @@ function renderStatus(state, width, theme, i18n) {
   const scroll = state.scroll.offset > 0 ? theme.fg('warning', `↑ ${state.scroll.offset}`) : ''
   // The session id and the approval mode are the two facts a person checks when
   // they are not sure which conversation or which "will it ask me" they are in.
+  // `shortId` is what the notices already use: a harness session id is
+  // `session-<hex>`, so slicing the first characters showed the useless prefix
+  // ("#sessio") instead of anything that identifies the conversation.
   const session = typeof state.sessionId === 'string' && state.sessionId !== ''
-    ? theme.fg('textMuted', `#${state.sessionId.slice(0, 6)}`)
+    ? theme.fg('textMuted', `#${shortId(state.sessionId)}`)
     : ''
   const plan = state.planMode === true ? theme.fg('warning', `▣${i18n.t('banner.plan')}`) : ''
   const right = [scroll, session, usage].filter(Boolean).join('  ')

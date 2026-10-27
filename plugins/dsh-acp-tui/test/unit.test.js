@@ -184,11 +184,12 @@ test('a dialog is composited without changing the frame size', () => {
 })
 
 test('the status row carries the approval mode and the session id', () => {
-  const state = createInitialState({ cwd: '/workspace', sessionId: 'abcdef123456' })
+  const state = createInitialState({ cwd: '/workspace', sessionId: 'session-1234abcd' })
   state.approval = { mode: 'full', autoApproved: 3 }
   const frame = renderFrame(state, { width: 90, height: 24, theme, i18n: createI18n('en'), clock: 0 })
   const bottom = stripAnsi(frame.rows.at(-1))
-  assert.match(bottom, /abcdef/u, 'the session id is visible')
+  assert.match(bottom, /#1234abcd/u, 'the id without its useless session- prefix')
+  assert.doesNotMatch(bottom, /#sessio/u)
   assert.match(bottom, /yolo/u, 'and so is the mode that decides whether it asks')
 })
 

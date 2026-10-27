@@ -46,6 +46,8 @@
   「当前」，不再"点一下换一档"；带参数仍然直接设置。`/permission` 的列表来自 harness 的预设目录。
 - **空闲不再重绘**：`Screen#paint` 在整帧与光标位置都没变时**一个字节都不写**；兜底的全量重绘
   从每秒降到每两秒。浏览器终端每次写入都会重排它的输入法辅助框，这正是中文输入法被"吞掉"的原因。
+- **状态栏的会话号不再是 `#sessio`**：harness 的会话 id 是 `session-<hex>`，之前直接截前 6 个字符，
+  正好截到无用的前缀。改用通知里同一套 `shortId`（去掉 `session-` 再缩写）。
 - **中文按等宽渲染**：面板 xterm 的字体栈补上 CJK 等宽字体（Sarasa Mono SC / Noto Sans Mono CJK /
   Source Han Mono / 微软雅黑等宽 / WenQuanYi），全角字符与标点因此正好占两格，不再被裁切或错位。
 
