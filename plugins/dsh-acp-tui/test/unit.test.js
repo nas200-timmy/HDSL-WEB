@@ -11,9 +11,10 @@ import assert from 'node:assert/strict'
 import { plainWidth, stripAnsi, truncateStyled, visibleWidth, wrapStyled } from '../../shared/term/text.js'
 import { Composer, layoutText } from '../../shared/ui/composer.js'
 import { createKeyDecoder } from '../../shared/term/keys.js'
+import { Screen } from '../../shared/term/screen.js'
 import { renderMarkdown } from '../../shared/term/markdown.js'
 import { createTheme } from '../../shared/term/theme.js'
-import { applyEditKey, isLiveOverlay } from '../../shared/ui/edit.js'
+import { applyEditKey } from '../../shared/ui/edit.js'
 import { renderBlock } from '../../shared/ui/blocks.js'
 import { createI18n, detectLanguage, TABLES } from '../../shared/i18n.js'
 import { renderFrame } from '../../shared/ui/render.js'
@@ -182,7 +183,110 @@ test('a dialog is composited without changing the frame size', () => {
   assert.ok(frame.rows.some((row) => stripAnsi(row).includes('models')))
 })
 
-test('the editing keys a live palette passes on are exactly the text ones', () => {
+test('the status row carries the approval mode and the session id', () => {
+  const state = createInitialState({ cwd: '/workspace', sessionId: 'session-1234abcd' })
+  state.approval = { mode: 'full', autoApproved: 3 }
+  const frame = renderFrame(state, { width: 90, height: 24, theme, i18n: createI18n('en'), clock: 0 })
+  const bottom = stripAnsi(frame.rows.at(-1))
+  assert.match(bottom, /#1234abcd/u, 'the id without its useless session- prefix')
+  assert.doesNotMatch(bottom, /#sessio/u)
+  assert.match(bottom, /yolo/u, 'and so is the mode that decides whether it asks')
+})
+
+test('a working turn shows the live size, not just the clock', () => {
+  const state = createInitialState({ cwd: '/workspace' })
+  state.status = 'working'
+  state.activity = { tool: null, startedAt: 0 }
+  state.blocks = [{ type: 'assistant', text: '', full: 'x'.repeat(4000), streaming: true, rev: 0 }]
+  const frame = renderFrame(state, { width: 90, height: 24, theme, i18n: createI18n('en'), clock: 1500 })
+  const body = frame.rows.map(stripAnsi).join('\n')
+  assert.match(body, /~1\.0k/u, 'a rough token count while the answer streams')
+})
+
+test('the idle hint line names the keys a person actually needs', () => {
+  const state = createInitialState({ cwd: '/workspace' })
+  const frame = renderFrame(state, { width: 96, height: 24, theme, i18n: createI18n('en'), clock: 0 })
+  const body = frame.rows.map(stripAnsi).join('\n')
+  assert.match(body, /\/ commands/u)
+  assert.match(body, /ctrl\+j newline/u)
+})
+
+test('a numbered dialog prints the shortcut numbers', () => {
+  const state = createInitialState({ cwd: '/workspace' })
+  state.overlay = {
+    kind: 'permission',
+    title: 'permission',
+    toolName: 'bash',
+    detail: 'rm -rf build',
+    options: [
+      { label: 'Run', value: 'allowed-once' },
+      { label: 'Run for this session', value: 'session-allow' },
+      { label: 'Reject', value: 'rejected' },
+      { label: 'Reject with a reason', value: 'reject-reason' },
+    ],
+    index: 0,
+  }
+  const frame = renderFrame(state, { width: 90, height: 24, theme, i18n: createI18n('en'), clock: 0 })
+  const body = frame.rows.map(stripAnsi)
+  const numbered = body.filter((row) => /[1-4]\. /u.test(row))
+  assert.equal(numbered.length, 4, 'every choice is numbered')
+  assert.ok(body.some((row) => /1\. Run/u.test(row)), 'the number sits in front of the label')
+})
+
+test('Tab is a key, not a dropped control byte', () => {
+  // The decoder used to have no entry for 0x09, so Tab fell through the
+  // "unknown control character" branch and completion never ran at all.
+  const events = []
+  const decoder = createKeyDecoder((event) => events.push(event.name))
+  decoder.feed('/mo\t')
+  assert.deepEqual(events, ['char', 'tab'])
+})
+
+test('the completion candidates sit below the input box', () => {
+  const state = createInitialState({ cwd: '/workspace', composerText: '/yo' })
+  state.completion = { start: 0, end: 3, options: ['/yolo'], index: 0 }
+  const frame = renderFrame(state, { width: 70, height: 16, theme, i18n: createI18n('en'), clock: 0 })
+  const rows = frame.rows.map(stripAnsi)
+  const bottom = rows.findIndex((row) => row.startsWith('╰'))
+  const candidates = rows.findIndex((row) => /1\. \/yolo/u.test(row))
+  assert.ok(bottom >= 0 && candidates > bottom, `box bottom ${bottom}, candidates ${candidates}`)
+  assert.ok(candidates < rows.length - 1, 'and above the status row')
+})
+
+test('the command menu sits below the input, not in a dialog', () => {
+  const state = createInitialState({ cwd: '/workspace', composerText: '/' })
+  state.palette = {
+    items: [
+      { name: 'help', label: '/help', description: 'list commands and keys' },
+      { name: 'model', label: '/model', description: 'choose this session model' },
+    ],
+    index: 0,
+  }
+  const frame = renderFrame(state, { width: 80, height: 16, theme, i18n: createI18n('en'), clock: 0 })
+  const rows = frame.rows.map(stripAnsi)
+  const bottom = rows.findIndex((row) => row.startsWith('╰'))
+  const menu = rows.findIndex((row) => /1\. \/help/u.test(row))
+  assert.ok(bottom >= 0 && menu > bottom, `box bottom ${bottom}, menu ${menu}`)
+  assert.ok(menu < rows.length - 1, 'and above the status row')
+  assert.ok(rows[menu].startsWith('  ❯ 1. /help'), rows[menu])
+  assert.ok(rows.some((row) => row.includes('enter run')), 'the menu has its own key hint')
+  assert.ok(frame.cursor !== null, 'the composer keeps the caret while the menu is open')
+})
+
+test('an idle frame writes nothing the second time', () => {
+  // A no-op paint is what keeps a browser terminal's input method alive: every
+  // write repositions its composition helper.
+  const writes = []
+  const screen = new Screen({ write: (text) => writes.push(text), columns: 60, rows: 8 }, {})
+  screen.enter()
+  const rows = ['a'.repeat(60), ...Array.from({ length: 7 }, () => ' '.repeat(60))]
+  screen.paint(rows, { row: 0, column: 1 })
+  const afterFirst = writes.length
+  screen.paint(rows, { row: 0, column: 1 })
+  assert.equal(writes.length, afterFirst, 'an identical frame is not written again')
+})
+
+test('the editing keys the inline menu passes on are exactly the text ones', () => {
   const composer = new Composer({ maxLines: 8 })
   composer.setText('/he')
   // The palette owns arrows, page keys, enter and escape; this is everything
@@ -198,13 +302,56 @@ test('the editing keys a live palette passes on are exactly the text ones', () =
   assert.equal(applyEditKey(composer, { name: 'enter' }, 40), false)
   assert.equal(applyEditKey(composer, { name: 'down' }, 40), false)
 
-  assert.equal(isLiveOverlay({ live: true, kind: 'picker' }), true)
-  assert.equal(isLiveOverlay({ kind: 'picker' }), false, 'a dialog owns the keyboard')
-  assert.equal(isLiveOverlay(null), false)
 })
 
-test('a tool card follows the global expand toggle', () => {
+test('the startup banner has the whale and the Kimi-style keys', () => {
   const i18n = createI18n('en')
+  const rows = renderBlock({
+    type: 'banner',
+    tag: 'dsh-inproc-tui',
+    version: 'v0.9.0',
+    subtitle: 'DeepSeek Harness in your terminal',
+    hint: 'Type a message to start · /help for commands',
+    cwd: '/workspace',
+    model: 'kimi-k2',
+    mode: 'ask',
+    planMode: true,
+    sessionId: 'abcdef123456',
+  }, 82, theme, i18n, { expandTools: false, spinner: '.' })
+  const text = rows.join('\n')
+  assert.match(text, /[▄▀█]/u, 'the pixel whale is drawn')
+  assert.match(text, /kimi-k2/u, 'the model is in the banner')
+  assert.match(text, /plan/u, 'plan mode is in the banner')
+  assert.match(text, /shift\+tab plan/u, 'the keyboard hint is in the banner')
+  assert.match(text, /dsh-inproc-tui/u, 'the plugin name is in the banner')
+})
+
+test('the startup whale uses the SVG palette', () => {
+  const colorTheme = createTheme({ color: true, mode: 'dark' })
+  const rows = renderBlock({
+    type: 'banner',
+    tag: 'HDSL-web',
+    version: 'v0.2.0',
+    subtitle: 'DeepSeek Harness in your terminal',
+    mode: 'ask',
+  }, 82, colorTheme, createI18n('en'), { expandTools: false, spinner: '.' })
+  const text = rows.join('\n')
+  assert.match(text, /38;2;20;38;96/u, 'outline #142660')
+  assert.match(text, /38;2;78;111;255/u, 'body #4e6fff')
+  assert.match(text, /38;2;190;225;255/u, 'highlight #bee1ff')
+})
+
+test('a pipe table becomes columns instead of a paragraph', () => {
+  const lines = renderMarkdown('| file | state |\n| --- | --- |\n| a.js | ok |\n| b.js | bad |', 50, theme)
+  const text = lines.join('\n')
+  assert.match(text, /file/u)
+  assert.match(text, /state/u)
+  assert.match(text, /a\.js/u)
+  assert.match(text, /bad/u)
+  assert.equal(text.includes('| --- |'), false, 'the separator row is not printed')
+})
+
+test('a tool card follows the global expand toggle', () => {  const i18n = createI18n('en')
   const render = (options) => renderBlock({
     type: 'tool',
     name: 'read',

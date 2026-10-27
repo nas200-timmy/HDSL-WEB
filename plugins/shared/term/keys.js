@@ -33,6 +33,10 @@ export const KEYS = {
 
 /** Control characters that map straight onto a semantic action. */
 const CONTROL = new Map([
+  // Tab is a control byte like the others. Without this entry the decoder fell
+  // through to "not a known control character" and dropped the key, so Tab never
+  // reached either terminal — completion looked broken because it never ran.
+  [0x09, 'tab'],
   [0x03, 'ctrl+c'],
   [0x04, 'ctrl+d'],
   [0x06, 'ctrl+f'],

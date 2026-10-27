@@ -12,11 +12,14 @@
  */
 
 import { padStyled, spread, truncateStyled, visibleWidth } from '../term/text.js'
-import { renderBlock, formatDuration } from './blocks.js'
+import { formatDuration, renderBlock, shortId } from './blocks.js'
 import { center, renderOverlay } from './dialogs.js'
+import { describeCandidates } from './complete.js'
 
 const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 const MIN_TRANSCRIPT_ROWS = 2
+/** How many rows the inline `/` menu may take before it starts scrolling. */
+const MAX_MENU_ROWS = 7
 
 /** The spinner frame for a moment in time. */
 export function spinnerFrame(clock) {
@@ -40,7 +43,17 @@ export function renderFrame(state, context) {
   const composerLayout = layoutComposer(state, inner)
   const composerRows = paintComposer(state, width, composerLayout, theme, i18n)
   const activityRow = renderActivity(state, width, theme, i18n, clock, spinner)
-  const bottomRows = composerRows.length + 2 + (activityRow === null ? 0 : 1)
+  // The `/` menu is part of the bottom block, not a dialog: it starts directly
+  // under the input box and pushes the transcript up, the way Kimi Code draws
+  // its command list. Its height is bounded by the screen, because the composer
+  // still has to fit.
+  const menuBudget = Math.max(1, Math.min(MAX_MENU_ROWS,
+    height - composerRows.length - 2 - (activityRow === null ? 0 : 1) - 1 - MIN_TRANSCRIPT_ROWS))
+  const menuRows = state.overlay === null ? renderCommandMenu(state, width, theme, menuBudget) : []
+  // The hint line sits **below** the input box, the way Kimi Code draws it: the
+  // thing you are looking at while you type should be next to what you type.
+  const hintRow = renderHint(state, width, theme, i18n, clock)
+  const bottomRows = composerRows.length + 2 + (activityRow === null ? 0 : 1) + 1 + menuRows.length
   const transcriptHeight = Math.max(MIN_TRANSCRIPT_ROWS, height - bottomRows)
   const transcript = renderTranscript(state, width, transcriptHeight, scope)
 
@@ -61,6 +74,8 @@ export function renderFrame(state, context) {
   put('')
   if (activityRow !== null) put(activityRow)
   for (const composerRow of composerRows) put(composerRow)
+  for (const menuRow of menuRows) put(menuRow)
+  put(hintRow)
   rows[height - 1] = statusRow
 
   let cursor = null
@@ -149,9 +164,29 @@ function renderStatus(state, width, theme, i18n) {
       : `${i18n.t('status.context')} ${percent(state.usage)}%`)
     : ''
   const scroll = state.scroll.offset > 0 ? theme.fg('warning', `↑ ${state.scroll.offset}`) : ''
-  const right = [scroll, usage].filter(Boolean).join('  ')
-  const left = [dot, model, effort, cwd].filter((part) => part !== '').join(' ')
+  // The session id and the approval mode are the two facts a person checks when
+  // they are not sure which conversation or which "will it ask me" they are in.
+  // `shortId` is what the notices already use: a harness session id is
+  // `session-<hex>`, so slicing the first characters showed the useless prefix
+  // ("#sessio") instead of anything that identifies the conversation.
+  const session = typeof state.sessionId === 'string' && state.sessionId !== ''
+    ? theme.fg('textMuted', `#${shortId(state.sessionId)}`)
+    : ''
+  const plan = state.planMode === true ? theme.fg('warning', `▣${i18n.t('banner.plan')}`) : ''
+  const right = [scroll, session, usage].filter(Boolean).join('  ')
+  const left = [dot, model, effort, renderMode(state, theme, i18n), plan, cwd].filter((part) => part !== '').join(' ')
   return spread(left, right, width, 2)
+}
+
+/** The approval mode badge: how much this session asks before running a tool. */
+function renderMode(state, theme, i18n) {
+  const mode = state.approval?.mode
+  if (typeof mode !== 'string' || mode === '') return ''
+  const key = `status.mode.${mode}`
+  const label = i18n.has(key) ? i18n.t(key) : mode
+  if (mode === 'full') return theme.fg('warning', `⚡${label}`)
+  if (mode === 'ask') return theme.fg('textMuted', `◇${label}`)
+  return theme.fg('primary', `◆${label}`)
 }
 
 function percent(usage) {
@@ -181,30 +216,101 @@ function renderActivity(state, width, theme, i18n, clock, spinner) {
       ? i18n.t('working.tool', { tool: state.activity.tool })
       : i18n.t('working')
     const elapsed = state.activity.startedAt === null ? 0 : clock - state.activity.startedAt
-    const left = ` ${theme.fg('primary', spinner)} ${theme.fg('textDim', label)}${theme.fg('textMuted', `  ${formatDuration(elapsed)}`)}`
-    const hint = state.queue.length > 0
-      ? theme.fg('textMuted', `${state.queue.length} queued`)
-      : theme.fg('textMuted', i18n.t('hint.esc'))
-    return spread(left, hint, width, 2)
+    // A live size next to the clock: waiting for a long answer without any sign of
+    // progress reads as a hang, and the token count is the number that moves.
+    const live = liveCharacters(state)
+    const size = live > 0 ? theme.fg('textMuted', ` · ~${formatTokens(Math.round(live / 4))}`) : ''
+    return ` ${theme.fg('primary', spinner)} ${theme.fg('textDim', label)}${theme.fg('textMuted', `  ${formatDuration(elapsed)}`)}${size}`
   }
   if (state.status === 'connecting') {
     return ` ${theme.fg('warning', spinner)} ${theme.fg('textDim', i18n.t('status.polling'))}`
+  }
+  return null
+}
+
+/**
+ * The `/` command list, drawn inline under the composer.
+ *
+ * It is deliberately not a bordered dialog: a box centred over the transcript
+ * is what made `/` feel like a pop-up window instead of part of the input.
+ * One row per command, one dial: `↑`/`↓` move, enter runs, esc closes. The
+ * labels are numbered because the number is a shortcut, and the window keeps
+ * the selection in view when the list is longer than the budget.
+ */
+function renderCommandMenu(state, width, theme, budget) {
+  const menu = state.palette
+  if (menu === null || menu === undefined) return []
+  const items = menu.items ?? []
+  if (items.length === 0) return []
+  const selected = Math.max(0, Math.min(items.length - 1, menu.index ?? 0))
+  const rowsBudget = Math.max(1, Math.min(MAX_MENU_ROWS, budget))
+  // Two of the budget rows may be "more" markers; on a screen too short for
+  // those, show the selected item alone rather than overflowing the block.
+  const showMore = rowsBudget >= 3
+  let start = 0
+  let end = items.length
+  if (items.length > rowsBudget) {
+    // Reserve one row for each "more" marker; the item window then follows the
+    // selection instead of always showing the first page.
+    const capacity = Math.max(1, showMore ? rowsBudget - 2 : 1)
+    start = Math.max(0, Math.min(selected - Math.floor(capacity / 2), items.length - capacity))
+    end = Math.min(items.length, start + capacity)
+  }
+  const labelWidth = Math.max(8, Math.min(30, Math.floor(width * 0.32)))
+  const descriptionWidth = width >= 56 ? Math.max(0, width - 9 - labelWidth) : 0
+  const rows = []
+  if (showMore && start > 0) rows.push(theme.fg('textMuted', `  ↑ ${start} more`))
+  for (let index = start; index < end; index += 1) {
+    const item = items[index]
+    const active = index === selected
+    const pointer = active ? theme.fg('primary', '❯') : ' '
+    const number = index < 9 ? theme.fg(active ? 'primary' : 'textMuted', `${index + 1}.`) : '  '
+    const label = active ? theme.strong('textStrong', item.label) : theme.fg('text', item.label)
+    const description = descriptionWidth > 0 && item.description
+      ? '  ' + truncateStyled(theme.fg('textMuted', item.description), descriptionWidth)
+      : ''
+    rows.push(`  ${pointer} ${number} ${padStyled(label, labelWidth)}${description}`)
+  }
+  if (showMore && end < items.length) rows.push(theme.fg('textMuted', `  ↓ ${items.length - end} more`))
+  return rows
+}
+
+/**
+ * The line under the input box.
+ *
+ * In order of who needs it: the candidates a Tab is cycling, then what the keys
+ * do while a turn runs, then the envelope after it ends, and otherwise the one
+ * line that does not rotate — `/` commands, `@` files, `ctrl+j`, `ctrl+o`, `esc`.
+ * A rotating tip hid two of those at any moment, which is the opposite of
+ * discoverable.
+ */
+function renderHint(state, width, theme, i18n, clock) {
+  if (state.overlay === null && state.palette !== null && state.palette !== undefined) {
+    return ` ${theme.fg('textMuted', i18n.t('palette.hint'))}`
+  }
+  const candidates = describeCandidates(state.completion, Math.max(10, width - 4))
+  if (candidates !== '') return ` ${theme.fg('textMuted', `${candidates}  ⇥`)}`
+  if (state.status === 'working') {
+    const queued = state.queue.length > 0 ? `${i18n.t('hint.queued', { count: String(state.queue.length) })} · ` : ''
+    return ` ${theme.fg('textMuted', `${queued}${i18n.t('hint.esc')} · ${i18n.t('hint.ctrl-c')}`)}`
   }
   const recent = state.lastTurnSeconds !== null && state.turnEndedAt !== undefined
     ? clock - state.turnEndedAt < 6000
     : false
   if (recent) {
-    return ` ${theme.fg('textMuted', '·')} ${theme.fg('textMuted', i18n.t('notice.turn-end', { seconds: state.lastTurnSeconds.toFixed(1) }))}`
+    return ` ${theme.fg('textMuted', `· ${i18n.t('notice.turn-end', { seconds: state.lastTurnSeconds.toFixed(1) })}`)}`
   }
-  const tip = tipFor(clock, i18n)
-  return tip === '' ? null : ` ${theme.fg('textMuted', '·')} ${theme.fg('textMuted', tip)}`
+  return ` ${theme.fg('textMuted', i18n.t('hint.line'))}`
 }
 
-/** Idle hints rotate slowly, the way a toolbar tip does. */
-function tipFor(clock, i18n) {
-  const tips = ['hint.esc', 'hint.ctrl-o', 'hint.scroll', 'composer.hint.newline']
-  const index = Math.floor(clock / 9000) % tips.length
-  return i18n.t(tips[index])
+/** Characters currently streaming, for the live token estimate. */
+function liveCharacters(state) {
+  let total = 0
+  for (const block of state.blocks) {
+    if (block.streaming !== true) continue
+    total += String(block.full ?? block.text ?? '').length
+  }
+  return total
 }
 
 function renderTranscript(state, width, height, scope) {

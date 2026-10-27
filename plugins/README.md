@@ -85,6 +85,105 @@ harness 只发预发布版（`0.2.1-rc.3`），而在 npm 的 semver 规则下 `
   它拿到 token 级流式与审批/追问通道的原因——代价是它钉在写它时的那套 0.2.x 接缝上。哪些线
   能跑，看清单里的 `requiresDsh`。
 
+## 终端契约：审批、命令、补全、供应商
+
+### 审批三档（`/yolo`）
+
+harness 自己的审批策略只有"问"和"全拒"（`'never'` 是**拒绝**，不是放行），所以"不问就执行"是终端
+自己的决定，落在 `plugins/shared/approval/policy.js` 一个纯函数里：
+
+| 档位 | 行为 |
+|---|---|
+| `ask`（**默认**） | 只读工具直接跑；写文件、跑命令、未知工具、敏感文件与计划都发问 |
+| `critical` | 日常编辑与命令直接跑；危险命令、敏感文件、计划审批发问 |
+| `full` | 一律放行（计划/提问仍会问；沙箱仍然生效） |
+
+- 自动放行**仍然写审计**（harness 记 `approval/asked` + `approval/decided`），也**不放宽沙箱**。
+- 分类器"未知即问"：读不出命令的 shell 调用、读不出路径的写操作、未知工具、计划/提问类调用一律发问。
+- **敏感文件**（`.env*`、`.ssh/`、`id_rsa`、`.npmrc`、`.netrc`、`*.pem`、`*.key` 等）**在任何档位都会问**，
+  `full` 也不例外：把密钥打进回放不是"随手 ls"，不可逆。`printenv` 与**裸** `env` 也算敏感
+  （`env FOO=bar cmd` 是"带着一个变量跑命令"，不在此列）。
+- **网络读取不算"只读"**：`web_fetch` 的 URL 是模型自己拼的，可以把工作区数据带在查询串里，所以它按
+  未知工具处理（`ask`/`critical` 会问，`full` 放行）。
+- 路径先 `resolve` 再判断包含关系，`..`、相对路径和 `/workspace/../etc/passwd` 都不能绕过工作区边界。
+- 档位是**会话级**的，`/new`、`/resume` 之后回到 `ask`，不会把上一个会话的 `full` 带过去。
+- **永久规则**：`/allow <工具> <完整命令或路径>`、`/deny <工具> <完整命令或路径>`、`/rules [clear]`。
+  规则按 `allowKey()` 的精确字符串匹配，存在**实例 home** 的 `.hdsl-tui/permissions.json`（随 `/data` 保留、不跨实例共享；`HDSL_TUI_RULES` 可覆盖）；
+  deny 永远优先，allow/deny 都不经过启发式分类器。
+
+### 审批对话框的四个选项（数字键 1-4）
+
+| 键 | 选项 | 结果 |
+|---|---|---|
+| 1 | 运行 | 允许这一次 |
+| 2 | 当前会话默认运行 | 本会话内同一"工具 + 完整命令/路径"不再问（危险/敏感/计划除外） |
+| 3 | 拒绝 | 拒绝 |
+| 4 | 拒绝并说明原因 | 拒绝，并把理由作为一条用户消息交给模型 |
+
+第 4 项的理由投递方式取决于线路：进程内 `followup`（下一步入上下文）；ACP 的 `session/prompt`
+不允许并发，所以排在当前回合结束后再发。
+
+### 命令
+
+- **交给 harness**：`/permission`、`/goal`、`/feedback`、`/export`。
+- **终端自己的**：`/help` `/model` `/effort` `/yolo` `/plan` `/resume` `/sessions` `/new`
+  `/compact` `/clear` `/status` `/provider` `/allow` `/deny` `/rules` `/quit`。
+- **`/sessions` 的列表**：只列有首条人类提示的会话，空会话/误建会话不出现；行标签是首条提示词，
+  短 id 只放在后面的元信息里。读不出日志的会话会保留并标「标题未读出」，不会静默消失；判据认
+  source 缺失、`agent/inbox/spliced` 和字符串 content，排序用 JSONL 的 mtime。ACP 线路的
+  `session/list` 目前只回 sessionId/cwd，服务端给出 `title` 时会用，空会话过滤只在进程内保证。
+- 未知命令先问 harness，仍未命中才报错。
+
+### Plan mode 与 Ctrl-S
+
+- `shift+tab` 或 `/plan [on|off]` 切换 Plan mode；状态栏和启动页有 `▣计划` 标记。进程内把
+  `/plan on|off` 交给 harness；ACP 协议没有这个通道，会明确说"这条线跑不了"。
+- `ctrl+s` 把输入框内容插进**正在跑的回合**（进程内走 `agent.steer()`）；ACP 不能并发 prompt，
+  会说明并留在队列里。`ctrl+o` 仍是展开/折叠工具输出。
+- **提示、补全候选与 `/` 命令菜单都画在输入框下面**（Kimi Code 的位置），状态栏在最底：
+  候选行、`esc 打断`、`/ 命令 · @ 文件 · ctrl+j · ctrl+o` 都在那里。`/` 菜单不是 overlay——
+  它是底部块里的内联列表（编号 + 描述，↑↓/数字选择、enter 运行、esc 关闭），不遮住记录区，
+  也不隐藏输入框光标。
+- **`/yolo` 与 `/permission` 无参时打开列表**（↑↓ / 数字 / 回车，当前项标「当前」），
+  不再"执行一次换一档"；带参数仍然直接设置。
+- **空闲时终端一个字节都不写**（`Screen#paint` 在整帧与光标都没变时直接返回）。浏览器/终端
+  每次写入都会重排输入法的辅助框，空闲重绘会把中文输入法正在组词的内容打断。
+- 输入框以 `!` 开头时，命令在实例工作区直接执行，输出是一张 shell 工具卡（进程内；不写进
+  agent 上下文，因为那需要伪造一条工具结果）。退出终端会结束仍在跑的 shell 子进程。
+
+### Tab 补全
+
+`plugins/shared/ui/complete.js`：命令名（本地 + harness）、参数（模型/强度/档位/计划/会话/预设/供应商）、
+`@` 工作区路径。`@` 空片段会做有界递归搜索（跳过 `.git`、`node_modules` 等），带 `/` 时列下一层；
+不会离开工作区。重复 Tab 循环，候选行显示在输入框下方，任何其它按键结束循环。
+
+### 启动页
+
+第一方终端的启动页用 **dsh-TUI README 里像素鲸鱼的静态帧**（MIT；原调色板 `#142660` / `#4e6fff`
+/ `#bee1ff` / `#ffffff`），左侧鲸鱼、右侧模型/档位/计划/cwd/会话与按键提示；窄终端改为上下堆叠。
+
+### 模型供应商（仅进程内）
+
+`/provider list|add|remove|test`。写的是 **`llm-pi-ai` 的 settings 段**（与网页「模型」页同一份），
+用 `mutate` 按路径写而不是整段替换（整段替换会清掉已 redact 的 secret）。密钥走 `credentials.set`
+或只写 `--key-env` 名字；`--key` 不回显、不写日志、不进 settings。`add`/`remove` 需要 `--yes`。
+
+### 能力矩阵
+
+| 能力 | 进程内（0.2.x） | ACP（0.1.x+） |
+|---|---|---|
+| 三档审批 / `/yolo`（默认 `ask`） | 是 | 是（客户端应答过滤） |
+| 敏感文件保护 / 永久 allow-deny | 是 | 是（同一份规则文件） |
+| 四选项审批（含拒绝理由） | 是 | 是（理由排队到回合结束） |
+| `/permission` `/goal` `/feedback` `/export` | 是（harness 命令） | 否（会明说） |
+| Plan mode / `shift+tab` | 是（harness `/plan`） | 否（会明说） |
+| `ctrl+s` 中途插入 | 是（`agent.steer()`） | 否（留在队列并说明） |
+| `!` Shell mode | 是（工作区、输出为工具卡） | 否 |
+| Tab 补全 命令/参数 | 是 | 是 |
+| `@` 文件补全 | 是（有界递归，工作区内） | 否 |
+| `/provider` | 是 | 否 |
+| `/status` | 是 | 是 |
+
 ## 检查
 
 ```sh

@@ -1,6 +1,6 @@
 {
   "name": "@nas200-timmy/dsh-inproc-tui",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "HDSL-web's in-process terminal interface for DeepSeek Harness 0.2.x: a mode bundle over dsh-base with token-level streaming, live reasoning, approvals and in-session model switching.",
   "keywords": [
     "dsh",
@@ -23,6 +23,7 @@
     "shared",
     "cordis.patch.yml",
     "README.md",
+    "NOTICE",
     "LICENSE"
   ],
   "engines": {

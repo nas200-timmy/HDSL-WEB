@@ -62,6 +62,8 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
   /** 终端窗口容器：手机形态下把高度钉在 visualViewport 上（软键盘起落时跟随）。 */
   const winRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
+  /** IME guards installed on the current terminal; teardown runs this before dispose. */
+  const cleanupImeRef = useRef<(() => void) | null>(null);
   const fitRef = useRef<XFitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const disposedRef = useRef(false);
@@ -118,6 +120,8 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
       window.visualViewport?.removeEventListener("resize", viewportHandlerRef.current);
       viewportHandlerRef.current = null;
     }
+    cleanupImeRef.current?.();
+    cleanupImeRef.current = null;
     wsRef.current?.close();
     wsRef.current = null;
     termRef.current?.dispose();
@@ -148,6 +152,15 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 13,
+      // A monospace stack that actually has CJK glyphs. Without one the browser
+      // falls back to a proportional font for 中文 and its punctuation, whose
+      // glyphs are wider than the two cells the terminal grid gives them — which
+      // reads as clipped/overlapping characters. These families are monospaced
+      // for CJK too, so a full-width glyph is exactly two ASCII cells.
+      fontFamily:
+        '"JetBrains Mono", "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, '
+        + '"Sarasa Mono SC", "Noto Sans Mono CJK SC", "Source Han Mono SC", '
+        + '"Microsoft YaHei Mono", "WenQuanYi Micro Hei Mono", monospace',
       scrollback: 3000,
       theme: {
         background: "#1b1b1f",
@@ -162,6 +175,88 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     fit.fit();
     termRef.current = term;
     fitRef.current = fit;
+
+    // ── IME guard ──────────────────────────────────────────────────────────
+    // xterm 6 keeps a hidden <textarea> for input. Two upstream defects show up
+    // through it, and both are worse in a full-screen TUI that writes frames
+    // continuously:
+    //  1. every terminal write while a composition is active re-anchors the
+    //     composition/candidate box to the buffer cursor (xterm's CompositionHelper
+    //     runs updateCompositionElements on every render). A streaming turn or a
+    //     spinner therefore makes the Chinese candidate window drift;
+    //  2. uppercase letters and spaces leave their character in that textarea; a
+    //     later keyCode-229 key can re-emit the whole accumulated value through
+    //     onData (xtermjs/xterm.js#6078). In the TUI that reads as an earlier
+    //     block of text being pasted into the composer again.
+    // Buffer PTY output while composing, and sweep the textarea once keys settle.
+    // screenReaderMode is skipped: that mode deliberately keeps the textarea value
+    // readable by assistive technology.
+    let composing = false;
+    /** PTY bytes received while the IME is composing, flushed on compositionend. */
+    let pendingOutput: Uint8Array[] = [];
+    let pendingBytes = 0;
+    const MAX_PENDING_BYTES = 512 * 1024;
+    let sweepTimer: number | undefined;
+    const textarea = term.textarea;
+
+    const flushOutput = () => {
+      if (pendingOutput.length === 0) return;
+      const chunks = pendingOutput;
+      pendingOutput = [];
+      pendingBytes = 0;
+      for (const chunk of chunks) term.write(chunk);
+    };
+    const sweepTextarea = () => {
+      if (term.options.screenReaderMode === true || composing) return;
+      if (sweepTimer !== undefined) window.clearTimeout(sweepTimer);
+      // xterm reads the textarea value in a setTimeout(0) when a composition
+      // finalizes; clearing before that would eat the just-committed text.
+      sweepTimer = window.setTimeout(() => {
+        sweepTimer = undefined;
+        if (composing || termRef.current !== term) return;
+        const input = term.textarea;
+        if (input === undefined || input.value === "") return;
+        input.value = "";
+        input.setSelectionRange(0, 0);
+      }, 50);
+    };
+    const onCompositionStart = () => {
+      composing = true;
+      if (sweepTimer !== undefined) {
+        window.clearTimeout(sweepTimer);
+        sweepTimer = undefined;
+      }
+    };
+    const onCompositionEnd = () => {
+      composing = false;
+      // xterm schedules its own commit in setTimeout(0); flush after it.
+      window.setTimeout(() => {
+        if (!composing && termRef.current === term) flushOutput();
+      }, 0);
+      sweepTextarea();
+    };
+    const onKeyUp = () => sweepTextarea();
+    const onBlur = () => {
+      if (!composing) return;
+      composing = false;
+      flushOutput();
+    };
+    textarea?.addEventListener("compositionstart", onCompositionStart);
+    textarea?.addEventListener("compositionend", onCompositionEnd);
+    textarea?.addEventListener("keyup", onKeyUp);
+    textarea?.addEventListener("blur", onBlur);
+    cleanupImeRef.current = () => {
+      if (sweepTimer !== undefined) {
+        window.clearTimeout(sweepTimer);
+        sweepTimer = undefined;
+      }
+      textarea?.removeEventListener("compositionstart", onCompositionStart);
+      textarea?.removeEventListener("compositionend", onCompositionEnd);
+      textarea?.removeEventListener("keyup", onKeyUp);
+      textarea?.removeEventListener("blur", onBlur);
+      pendingOutput = [];
+      pendingBytes = 0;
+    };
 
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     // The server returns a panel-internal path ("/ws/terminal/{ticket}").
@@ -197,6 +292,14 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
     const acceptBytes = (bytes: Uint8Array) => {
       rxRef.current += bytes.byteLength;
       setRxKb(Math.floor(rxRef.current / 1024));
+      if (composing) {
+        pendingOutput.push(bytes);
+        pendingBytes += bytes.byteLength;
+        // A pathological stream must not grow without bound; flush at the cap
+        // even mid-composition rather than losing output entirely.
+        if (pendingBytes >= MAX_PENDING_BYTES) flushOutput();
+        return;
+      }
       term.write(bytes);
     };
 

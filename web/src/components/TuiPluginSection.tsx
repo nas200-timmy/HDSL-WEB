@@ -173,6 +173,8 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
           const declared = state?.installed === true;
           const isPresent = declared && state?.filesPresent !== false;
           const incomplete = declared && !isPresent;
+          // 装着的不是这一版自带的那份（同版本号的旧内容也算）：给「更新」而不是只给卸载。
+          const outdated = isPresent && state?.outdated === true;
           // 缺字段（旧面板）当作能装：宁可让后端拒绝，也不要在界面上凭空禁用
           const fitsHost = state?.fitsHost !== false;
           const requiresDsh = state?.requiresDsh ?? plugin.requiresDsh ?? null;
@@ -205,6 +207,11 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
                     {plugin.bundled && (
                       <span className="tag running" title={I18N["dsh.tui.bundled.hint"]}>
                         {I18N["dsh.tui.bundled"]}
+                      </span>
+                    )}
+                    {outdated && (
+                      <span className="tag warn" title={I18N["dsh.tui.outdated.hint"]}>
+                        {I18N["dsh.tui.outdated"]}
                       </span>
                     )}
                     {isPresent && active && (
@@ -256,6 +263,16 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
                   )}
                 </span>
                 <span className="row-actions">
+                  {outdated && (
+                    <button
+                      className="btn btn-raised ripple-host"
+                      disabled={busy === plugin.packageName || !fitsHost}
+                      title={I18N["dsh.tui.outdated.hint"]}
+                      onClick={() => void submit(plugin, true)}
+                    >
+                      {I18N["dsh.tui.update"]}
+                    </button>
+                  )}
                   {isPresent && (
                     <button
                       className="btn btn-text danger ripple-host"

@@ -249,7 +249,9 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     内容会留下一个空壳，而纯 bundle 是从清单指定的 patch 组合出来的，没有清单就什么都引导不了），
     有 bin 的包还要求它声明的入口存在，否则用同一句可行动的中文拒绝
     （"声明了 X 但文件不在，请重新安装"），而不是去启动一个空 profile。
-    列表接口把这两件事分开说：`installed` 是 manifest 的答案，`filesPresent` 是磁盘的答案；
+    列表接口把两件事分开说：`installed` 是 manifest 的答案，`filesPresent` 是磁盘的答案；
+    还有第三个 `outdated` —— 第一方插件比安装包摘要（安装成功时记进 `<实例 home>/.hdsl-web/first-party-installs.json`），
+    社区插件比清单锁定的版本；版本号相同但内容不同、或老面板留下的"没有记录"，都会让页面给「更新」按钮；
     `installed && !filesPresent` 的那一行在页面上标「安装未完成」（变灰说明原因，不隐藏），
     按钮同时给「重新安装」与「卸载」——先卸再装不是用户该知道的步骤。
   - **还要配对宿主版本**：终端界面的**工具面来自 agent-preset 层**，而这一层是 dsh **0.2.0**
@@ -302,6 +304,27 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     模板。账户的供应商路由/default model 由 launcher 写进"这次启动引导的 profile"，所以开终端时
     的启动计划是按 `acp` 建的（`DshTui.runProfile`），环境里也把同一个名字告诉它
     （`HSDL_TUI_ACP_PROFILE`）——写在存储 profile 里的路由，运行中的 harness 是看不见的。
+  - **第一方终端的能力矩阵**（v0.5.92 起，P0/P1 继续打磨）：审批三档（`/yolo`：`ask` **默认** /
+    `critical` / `full`，由 `plugins/shared/approval/policy.js` 判定，自动放行不绕过审计也不放宽沙箱）；
+    默认 `ask` 只读自动、写文件/跑命令/敏感文件/计划都问，敏感文件含 `.env*`、`.ssh/`、`*.pem` 等且**任何档位都问**
+    （`full` 也一样）；`web_fetch` 不按"只读"放行（URL 由模型拼，可以带数据出去）；
+    路径先 resolve 再判断，`..` 不能绕过工作区；会话白名单键是"工具 + 完整命令/路径"，危险/敏感/计划
+    不受白名单影响；`/allow` `/deny` `/rules` 是永久规则（实例 home 的 `.hdsl-tui/permissions.json`，随 `/data` 保留）。审批对话框
+    四个选项（1 运行 · 2 当前会话默认运行 · 3 拒绝 · 4 拒绝并说明原因，理由会作为一条用户消息交给模型）。
+    `shift+tab` / `/plan` 切换 Plan mode（进程内交给 harness，ACP 明说不可用）；`ctrl+s` 中途插入
+    （进程内 `agent.steer()`，ACP 留在队列）；`/sessions` 是 `/resume` 别名，且只列有首条人类
+    提示的会话（空会话不出现，列表标签就是那条提示；读不出的会话保留并标「标题未读出」，
+    排序按 JSONL mtime）；`/yolo`、`/permission`
+    无参时是列表选择（当前项标「当前」）；提示、补全候选与 `/` 命令菜单都画在**输入框下方**
+    （菜单是底部内联列表，不是居中弹窗，不遮记录区也不隐藏光标）；Tab 补全覆盖命令、参数与
+    `@` 路径（`@` 有界递归且不离开工作区）；空闲时终端不写任何字节（避免打断输入法组词）；
+    面板 xterm 的字体栈带 CJK 等宽字体，全角字符与标点正好两格；`/provider` 在终端里增删 `llm-pi-ai` 的供应商（写 settings、
+    密钥走 credentials，`--yes` 才落盘）。启动页是 dsh-TUI README 像素鲸鱼的静态帧（原 SVG 调色板）+ 模型/档位/计划/cwd/会话 +
+    Kimi 风格按键提示。ACP 线路只保留协议允许的部分，其余命令会明确说明不可用，而不是静默失败。
+  - **中文输入法**：xterm 6 在 composition 期间写屏会移动候选框；隐藏 textarea 的残留还会让
+    229 键把旧输入整段重发（xtermjs/xterm.js#6078）。面板终端在组词期间缓冲 PTY 输出、结束后再刷，
+    并在按键/组词结束后延迟清理 textarea 残留（`screenReaderMode` 除外），所以候选框不会漂，
+    也不会突然把前面的文字复制进输入框。
   - **第一方终端的可靠性约定**（两个都适用）：粘贴走 bracketed paste，由 `keys.js` 解出
     `{name:'paste', text}` 交给 composer（CRLF 归一化后插入；对话框打开时忽略，不写进看不见的输入框）；
     握手/子进程死亡/信号退出都会还原终端并清掉定时器，**失败的启动不会留下一个常驻进程**；

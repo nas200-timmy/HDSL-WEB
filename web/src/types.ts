@@ -140,6 +140,11 @@ export interface TuiPluginState {
    * 能说出来，并且给的是「重新安装」而不是只给「卸载」。旧面板没有这个字段 → undefined
    */
   filesPresent?: boolean;
+  /**
+   * 装着的不是这一版面板自带的那份：第一方插件比 tarball 摘要（同版本号也可能内容不同），
+   * 社区插件比清单锁定的版本。true 时页面给「更新」按钮——重装一次即可。
+   */
+  outdated?: boolean;
   /** 实例的 dsh 主线能不能跑这套插件；false = 装上也只会得到没有工具面的会话 */
   fitsHost?: boolean;
   /** 这套插件要求的 dsh 主线（缺省 = 任何已发布线） */

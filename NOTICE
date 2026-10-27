@@ -147,6 +147,14 @@ commonmark, NanoHTTPD, MonetFX, webp, pci-ids, ...) are not part of
 HDSL-web.  JNA is the one component from that list that HDSL-web does bundle:
 it backs the PTY glue of the web terminal, and nothing else.
 
+  dsh-TUI startup whale
+      The startup banner's pixel whale is frame 0 of the README logo from
+      ccch1mneyyy/dsh-TUI (MIT License), with the SVG's original palette
+      (#142660 / #4e6fff / #bee1ff / #ffffff).  dsh-TUI credits its 22-frame
+      whale to lhh010/dsh-ui-whale (BSD-3-Clause); only the static frame is
+      reproduced here.
+      https://github.com/ccch1mneyyy/dsh-TUI
+
   Eclipse Jetty (jetty-server, jetty-http, jetty-io, jetty-util, jetty-client,
   jetty-security, jetty-session, jetty-alpn-client, jetty-xml, jetty-jndi,
   jetty-plus, jetty-ee, the org.eclipse.jetty.ee10 / .ee10.websocket servlet

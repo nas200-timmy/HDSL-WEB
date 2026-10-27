@@ -94,6 +94,14 @@ export function createTheme(options = {}) {
     const [r, g, b] = hexToRgb(hex)
     return `${ESC}[48;2;${r};${g};${b}m${text}${ESC}[0m`
   }
+  const fgBg = (foreground, background, text) => {
+    if (!state.color) return String(text)
+    const fgHex = state.palette[foreground] ?? foreground
+    const bgHex = state.palette[background] ?? background
+    const [fr, fg, fb] = hexToRgb(fgHex)
+    const [br, bgG, bb] = hexToRgb(bgHex)
+    return `${ESC}[38;2;${fr};${fg};${fb};48;2;${br};${bgG};${bb}m${text}${ESC}[0m`
+  }
   const sgr = (code) => (text) => (state.color ? `${ESC}[${code}m${text}${ESC}[0m` : String(text))
 
   const theme = {
@@ -114,6 +122,7 @@ export function createTheme(options = {}) {
     },
     fg,
     bg,
+    fgBg,
     bold: sgr(1),
     dim: sgr(2),
     italic: sgr(3),
