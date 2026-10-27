@@ -32,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -101,6 +102,39 @@ class FirstPartyPluginsTest {
     void anUnknownPluginIsRefused() {
         assertThrows(DshException.class,
                 () -> FirstPartyPlugins.materialize("@unknown/plugin", directory));
+    }
+
+    /// A version number cannot say "this is the same build"; the tarball digest can.
+    /// The panel used to answer "installed" and never offer newer files when a source
+    /// change shipped under the same version.
+    @Test
+    void theInstallRecordTellsThisBuildsCopyFromAnOlderOne(@TempDir Path home) throws Exception {
+        DshTuiPlugins.Entry entry = DshTuiPlugins.find("@nas200-timmy/dsh-inproc-tui").orElseThrow();
+        String digest = FirstPartyPlugins.find(entry.packageName())
+                .map(FirstPartyPlugins.Bundled::sha256)
+                .orElse(null);
+        assertNotNull(digest, "the build records a digest for every bundled plugin");
+
+        // No record is not "up to date": it is an install from a panel that did not
+        // write one, and reinstall is what makes the files match the jar.
+        assertNull(FirstPartyPlugins.installedDigest(home, entry.packageName()));
+        assertTrue(FirstPartyPlugins.isOutdated(home, entry.packageName()));
+
+        FirstPartyPlugins.recordInstalled(home, entry.packageName(), digest);
+        assertEquals(digest, FirstPartyPlugins.installedDigest(home, entry.packageName()));
+        assertFalse(FirstPartyPlugins.isOutdated(home, entry.packageName()));
+
+        FirstPartyPlugins.recordInstalled(home, entry.packageName(), "deadbeef");
+        assertTrue(FirstPartyPlugins.isOutdated(home, entry.packageName()),
+                "a different digest is a different build, whatever the version says");
+
+        FirstPartyPlugins.recordInstalled(home, entry.packageName(), null);
+        assertNull(FirstPartyPlugins.installedDigest(home, entry.packageName()));
+
+        // The record belongs to one home; another instance is not told anything.
+        Path other = home.resolve("other");
+        FirstPartyPlugins.recordInstalled(home, entry.packageName(), digest);
+        assertNull(FirstPartyPlugins.installedDigest(other, entry.packageName()));
     }
 
     /// The catalogue pins a version and the build packs one; they are the same number.

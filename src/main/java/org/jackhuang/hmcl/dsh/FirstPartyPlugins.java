@@ -28,12 +28,16 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
@@ -118,6 +122,112 @@ public final class FirstPartyPlugins {
     /// @return whether it is bundled
     public static boolean isBundled(@Nullable String packageName) {
         return find(packageName).isPresent();
+    }
+
+    /// Where the panel remembers which tarball it installed, per instance home.
+    ///
+    /// The version number cannot answer "is this the same build": a source change
+    /// without a version bump produces two different packages that call themselves
+    /// `0.2.0`. The tarball's digest can, and it is already in the index.
+    static final String INSTALL_RECORD = ".hdsl-web/first-party-installs.json";
+
+    /// The digest this instance recorded for a bundled plugin, when it has one.
+    ///
+    /// A missing record is not "up to date": it is a panel that installed the
+    /// plugin before this record existed, so the caller should treat the package as
+    /// unknown and offer a reinstall (see [#isOutdated]).
+    ///
+    /// @param home        the instance's `DSH_HOME`
+    /// @param packageName the npm package name
+    /// @return the recorded digest, or `null`
+    public static @Nullable String installedDigest(Path home, @Nullable String packageName) {
+        if (packageName == null || packageName.isBlank()) {
+            return null;
+        }
+        Path file = home.resolve(INSTALL_RECORD);
+        if (!Files.isRegularFile(file)) {
+            return null;
+        }
+        try {
+            JsonElement parsed = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8));
+            if (!parsed.isJsonObject()) {
+                return null;
+            }
+            JsonElement value = parsed.getAsJsonObject().get(packageName);
+            return value != null && value.isJsonPrimitive() ? value.getAsString() : null;
+        } catch (IOException | RuntimeException e) {
+            LOG.warning("Could not read the first-party install record " + file, e);
+            return null;
+        }
+    }
+
+    /// Records the digest of the tarball that was just installed.
+    ///
+    /// Written beside the instance home, atomically: a half-written file would be
+    /// read as "no record", which is the safe direction but a confusing one.
+    ///
+    /// @param home        the instance's `DSH_HOME`
+    /// @param packageName the npm package name
+    /// @param sha256      the tarball digest, or `null` to clear the record
+    /// @throws DshException when the file cannot be written
+    public static void recordInstalled(Path home, String packageName, @Nullable String sha256)
+            throws DshException {
+        Path file = home.resolve(INSTALL_RECORD);
+        Map<String, String> records = new LinkedHashMap<>();
+        if (Files.isRegularFile(file)) {
+            try {
+                JsonElement parsed = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8));
+                if (parsed.isJsonObject()) {
+                    for (Map.Entry<String, JsonElement> entry : parsed.getAsJsonObject().entrySet()) {
+                        if (entry.getValue().isJsonPrimitive()) {
+                            records.put(entry.getKey(), entry.getValue().getAsString());
+                        }
+                    }
+                }
+            } catch (IOException | RuntimeException e) {
+                LOG.warning("Could not read the first-party install record " + file, e);
+            }
+        }
+        if (sha256 == null) {
+            records.remove(packageName);
+        } else {
+            records.put(packageName, sha256);
+        }
+        JsonObject json = new JsonObject();
+        for (Map.Entry<String, String> entry : records.entrySet()) {
+            json.addProperty(entry.getKey(), entry.getValue());
+        }
+        try {
+            Files.createDirectories(file.getParent());
+            Path staging = file.resolveSibling(file.getFileName() + ".tmp");
+            Files.writeString(staging, json + "\n", StandardCharsets.UTF_8);
+            try {
+                Files.move(staging, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(staging, file, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException e) {
+            throw new DshException("Could not write " + file, e);
+        }
+    }
+
+    /// Whether an installed bundled package is not the one this build ships.
+    ///
+    /// The question is the digest, not the version: a source change that forgot to
+    /// bump the version produces the same `0.2.0` twice, and the panel used to see
+    /// "installed" and never offer the newer files. An instance with no record
+    /// counts as outdated — reinstalling once is what fills the record in.
+    ///
+    /// @param home        the instance's `DSH_HOME`
+    /// @param packageName the npm package name
+    /// @return whether a reinstall would change the files
+    public static boolean isOutdated(Path home, String packageName) {
+        Bundled bundled = find(packageName).orElse(null);
+        if (bundled == null || bundled.sha256() == null) {
+            return false;
+        }
+        String installed = installedDigest(home, packageName);
+        return installed == null || !bundled.sha256().equalsIgnoreCase(installed);
     }
 
     /// Writes a bundled plugin's tarball out under `directory`.

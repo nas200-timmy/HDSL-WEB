@@ -1036,9 +1036,26 @@ public final class InstancesApiServlet extends HttpServlet {
             if (entry.requiresDsh() != null) {
                 json.addProperty("requiresDsh", entry.requiresDsh());
             }
+            String presentVersion = null;
             if (installed) {
-                json.addProperty("installedVersion", installedVersion(instance, entry, dependencies));
+                presentVersion = installedVersion(instance, entry, dependencies);
+                json.addProperty("installedVersion", presentVersion);
             }
+            // Installed is not "this build's copy": a source change without a version
+            // bump produces two packages that both say 0.2.0, and the old panel saw
+            // "installed" and never offered the newer files. A first-party package is
+            // compared by the tarball digest the install recorded (no record counts as
+            // outdated — reinstalling once fills it in); a registry package by the
+            // version the catalogue pins.
+            boolean outdated = false;
+            if (installed && filesPresent) {
+                if (entry.bundled()) {
+                    outdated = FirstPartyPlugins.isOutdated(home, entry.packageName());
+                } else if (presentVersion != null && !presentVersion.isBlank()) {
+                    outdated = !entry.version().equals(presentVersion);
+                }
+            }
+            json.addProperty("outdated", outdated);
             plugins.add(json);
         }
         // Which row the terminal button would start right now: the first installed entry
@@ -1162,7 +1179,7 @@ public final class InstancesApiServlet extends HttpServlet {
             specs = java.util.List.of(entry.spec());
         }
         submitPluginTask(install ? "tui-plugin-install" : "tui-plugin-remove",
-                instance, entry.profile(), specs, install, response);
+                instance, entry.profile(), specs, install, entry, response);
     }
 
     /// Installs package specs as a task: `dsh plugin add` per spec, with the
@@ -1190,7 +1207,7 @@ public final class InstancesApiServlet extends HttpServlet {
         // The instance's own profile — which is the point of the refusal inside the
         // installer: a terminal plugin belongs in its own profile, and this route cannot
         // know that, so the installer says so instead of quietly mixing two app plugins.
-        submitPluginTask("plugin-install", instance, instance.profile(), specs, true, response);
+        submitPluginTask("plugin-install", instance, instance.profile(), specs, true, null, response);
     }
 
     /// Removes package specs as a task: one `dsh plugin remove` for all of them.
@@ -1214,7 +1231,7 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "not installed");
             return;
         }
-        submitPluginTask("plugin-remove", instance, instance.profile(), specs, false, response);
+        submitPluginTask("plugin-remove", instance, instance.profile(), specs, false, null, response);
     }
 
     /// Submits one plugin installation or removal as a task.
@@ -1232,13 +1249,24 @@ public final class InstancesApiServlet extends HttpServlet {
     /// @param response the response to answer 202 on
     private void submitPluginTask(String kind, DshInstance instance, String profile,
                                   java.util.List<String> specs, boolean install,
+                                  @Nullable DshTuiPlugins.Entry entry,
                                   HttpServletResponse response) throws IOException, DshException {
         try {
             TaskService.Task task = tasks.submit(kind, instance.id(), live -> {
                 if (install) {
                     DshPluginInstaller.installSpecs(instance, profile, specs, line -> live.update(line, -1));
+                    // Remember which tarball landed: the digest is what later tells
+                    // "same version, newer files" apart from "already current".
+                    if (entry != null && entry.bundled()) {
+                        String sha = FirstPartyPlugins.find(entry.packageName())
+                                .map(FirstPartyPlugins.Bundled::sha256).orElse(null);
+                        FirstPartyPlugins.recordInstalled(instance.homeDirectory(), entry.packageName(), sha);
+                    }
                 } else {
                     DshPluginInstaller.removeSpecs(instance, profile, specs, line -> live.update(line, -1));
+                    if (entry != null && entry.bundled()) {
+                        FirstPartyPlugins.recordInstalled(instance.homeDirectory(), entry.packageName(), null);
+                    }
                 }
                 return (install ? "Installed " : "Removed ") + specs.size() + " plugin(s)";
             }, (allow, keys) -> DshBuildScripts.answer(instance, keys, allow));

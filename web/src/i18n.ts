@@ -156,6 +156,10 @@ export const I18N = {
   "dsh.tui.incomplete.hint":
     "profile 的清单里写了这个插件，但它的文件不在磁盘上——这通常是安装中途失败（例如包拉不下来）。这种实例开终端会立刻退出且没有任何输出，请「重新安装」。",
   "dsh.tui.reinstall": "重新安装",
+  "dsh.tui.update": "更新",
+  "dsh.tui.outdated": "有新版本",
+  "dsh.tui.outdated.hint":
+    "装着的这份和面板现在自带的不一样。第一方插件按安装包的摘要比对（版本号相同也可能内容不同），社区插件按清单锁定的版本比对。点「更新」重装一次即可。",
   "dsh.tui.pure_bundle": "纯插件：无自带入口，启动它的 profile 即为终端（dsh --profile %s）",
   "dsh.tui.bin": "自带入口：%s（优先直接运行，入口缺失时回退到启动 profile）",
   "dsh.tui.requires_dsh": "要求 dsh %s。",

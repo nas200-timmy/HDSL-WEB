@@ -24,6 +24,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.jackhuang.hmcl.dsh.DshInstance;
 import org.jackhuang.hmcl.dsh.DshInstanceManager;
 import org.jackhuang.hmcl.dsh.DshPluginInstaller;
+import org.jackhuang.hmcl.dsh.FirstPartyPlugins;
 import org.jackhuang.hmcl.dsh.DshProcessManager;
 import org.jackhuang.hmcl.dsh.DshTuiPlugins;
 import org.junit.jupiter.api.AfterEach;
@@ -582,6 +583,66 @@ class PluginApiTest {
                         "the removal is what the state now says: " + afterRemove);
             }
         }
+    }
+
+    /// A first-party plugin is identified by the tarball that landed, not by its
+    /// version: a source change under the same `0.2.0` used to look "installed" and
+    /// the panel never offered the newer files. The list now answers "is this the
+    /// copy this build ships", from the digest the install recorded.
+    @Test
+    void aBundledPluginSaysWhenTheInstalledCopyIsNotThisBuilds() throws Exception {
+        assumePluginTooling();
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+            String id = createInstance(client, base, "outdated");
+            DshInstance instance = DshInstanceManager.find(id);
+            DshTuiPlugins.Entry entry = DshTuiPlugins.find("@nas200-timmy/dsh-acp-tui").orElseThrow();
+            String name = entry.packageName();
+            String digest = FirstPartyPlugins.find(name)
+                    .map(FirstPartyPlugins.Bundled::sha256)
+                    .orElseThrow();
+
+            // The state an older panel leaves behind: the package is installed and on
+            // disk, but nothing recorded which tarball it came from.
+            Path profile = instance.homeDirectory().resolve("profiles").resolve(entry.profile());
+            Files.createDirectories(profile.resolve("node_modules").resolve(name).resolve("lib"));
+            Files.writeString(profile.resolve("package.json"),
+                    "{\"dependencies\":{\"" + name + "\":\"file:/tmp/x.tgz\"}}");
+            Files.writeString(profile.resolve("node_modules").resolve(name).resolve("lib/main.js"), "//\n");
+            Files.writeString(profile.resolve("node_modules").resolve(name).resolve("package.json"),
+                    "{\"name\":\"" + name + "\",\"version\":\"0.2.0\",\"bin\":{\"dsh-acp-tui\":\"lib/main.js\"}}");
+
+            JsonObject unknown = tuiRow(base, client, id);
+            assertEquals(true, unknown.get("installed").getAsBoolean(), unknown.toString());
+            assertEquals(true, unknown.get("filesPresent").getAsBoolean(), unknown.toString());
+            assertEquals(true, unknown.get("outdated").getAsBoolean(),
+                    "no record means reinstall once, not 'up to date': " + unknown);
+
+            // What a finished install writes.
+            FirstPartyPlugins.recordInstalled(instance.homeDirectory(), name, digest);
+            assertEquals(false, tuiRow(base, client, id).get("outdated").getAsBoolean());
+
+            // A tarball from a different build: same version string, different files.
+            FirstPartyPlugins.recordInstalled(instance.homeDirectory(), name, "deadbeef");
+            JsonObject older = tuiRow(base, client, id);
+            assertEquals(true, older.get("outdated").getAsBoolean(), older.toString());
+            assertEquals("0.2.0", older.get("installedVersion").getAsString(),
+                    "the version alone would have said nothing: " + older);
+        }
+    }
+
+    /// The ACP terminal's row, by package name.
+    private JsonObject tuiRow(String base, HttpClient client, String id) throws Exception {
+        JsonArray rows = json(get(client, base + "/api/instances/" + id + "/tui-plugins"))
+                .getAsJsonArray("plugins");
+        for (int index = 0; index < rows.size(); index += 1) {
+            JsonObject row = rows.get(index).getAsJsonObject();
+            if ("@nas200-timmy/dsh-acp-tui".equals(row.get("packageName").getAsString())) {
+                return row;
+            }
+        }
+        throw new AssertionError("no row for @nas200-timmy/dsh-acp-tui: " + rows);
     }
 
     // An install that reports success without leaving the package behind is not an
