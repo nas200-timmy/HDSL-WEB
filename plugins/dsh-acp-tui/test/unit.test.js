@@ -182,6 +182,55 @@ test('a dialog is composited without changing the frame size', () => {
   assert.ok(frame.rows.some((row) => stripAnsi(row).includes('models')))
 })
 
+test('the status row carries the approval mode and the session id', () => {
+  const state = createInitialState({ cwd: '/workspace', sessionId: 'abcdef123456' })
+  state.approval = { mode: 'full', autoApproved: 3 }
+  const frame = renderFrame(state, { width: 90, height: 24, theme, i18n: createI18n('en'), clock: 0 })
+  const bottom = stripAnsi(frame.rows.at(-1))
+  assert.match(bottom, /abcdef/u, 'the session id is visible')
+  assert.match(bottom, /yolo/u, 'and so is the mode that decides whether it asks')
+})
+
+test('a working turn shows the live size, not just the clock', () => {
+  const state = createInitialState({ cwd: '/workspace' })
+  state.status = 'working'
+  state.activity = { tool: null, startedAt: 0 }
+  state.blocks = [{ type: 'assistant', text: '', full: 'x'.repeat(4000), streaming: true, rev: 0 }]
+  const frame = renderFrame(state, { width: 90, height: 24, theme, i18n: createI18n('en'), clock: 1500 })
+  const body = frame.rows.map(stripAnsi).join('\n')
+  assert.match(body, /~1\.0k/u, 'a rough token count while the answer streams')
+})
+
+test('the idle hint line names the keys a person actually needs', () => {
+  const state = createInitialState({ cwd: '/workspace' })
+  const frame = renderFrame(state, { width: 96, height: 24, theme, i18n: createI18n('en'), clock: 0 })
+  const body = frame.rows.map(stripAnsi).join('\n')
+  assert.match(body, /\/ commands/u)
+  assert.match(body, /ctrl\+j newline/u)
+})
+
+test('a numbered dialog prints the shortcut numbers', () => {
+  const state = createInitialState({ cwd: '/workspace' })
+  state.overlay = {
+    kind: 'permission',
+    title: 'permission',
+    toolName: 'bash',
+    detail: 'rm -rf build',
+    options: [
+      { label: 'Run', value: 'allowed-once' },
+      { label: 'Run for this session', value: 'session-allow' },
+      { label: 'Reject', value: 'rejected' },
+      { label: 'Reject with a reason', value: 'reject-reason' },
+    ],
+    index: 0,
+  }
+  const frame = renderFrame(state, { width: 90, height: 24, theme, i18n: createI18n('en'), clock: 0 })
+  const body = frame.rows.map(stripAnsi)
+  const numbered = body.filter((row) => /[1-4]\. /u.test(row))
+  assert.equal(numbered.length, 4, 'every choice is numbered')
+  assert.ok(body.some((row) => /1\. Run/u.test(row)), 'the number sits in front of the label')
+})
+
 test('the editing keys a live palette passes on are exactly the text ones', () => {
   const composer = new Composer({ maxLines: 8 })
   composer.setText('/he')

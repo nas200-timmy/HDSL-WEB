@@ -14,6 +14,7 @@
 import { padStyled, spread, truncateStyled, visibleWidth } from '../term/text.js'
 import { renderBlock, formatDuration } from './blocks.js'
 import { center, renderOverlay } from './dialogs.js'
+import { describeCandidates } from './complete.js'
 
 const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 const MIN_TRANSCRIPT_ROWS = 2
@@ -149,9 +150,25 @@ function renderStatus(state, width, theme, i18n) {
       : `${i18n.t('status.context')} ${percent(state.usage)}%`)
     : ''
   const scroll = state.scroll.offset > 0 ? theme.fg('warning', `↑ ${state.scroll.offset}`) : ''
-  const right = [scroll, usage].filter(Boolean).join('  ')
-  const left = [dot, model, effort, cwd].filter((part) => part !== '').join(' ')
+  // The session id and the approval mode are the two facts a person checks when
+  // they are not sure which conversation or which "will it ask me" they are in.
+  const session = typeof state.sessionId === 'string' && state.sessionId !== ''
+    ? theme.fg('textMuted', `#${state.sessionId.slice(0, 6)}`)
+    : ''
+  const right = [scroll, session, usage].filter(Boolean).join('  ')
+  const left = [dot, model, effort, renderMode(state, theme, i18n), cwd].filter((part) => part !== '').join(' ')
   return spread(left, right, width, 2)
+}
+
+/** The approval mode badge: how much this session asks before running a tool. */
+function renderMode(state, theme, i18n) {
+  const mode = state.approval?.mode
+  if (typeof mode !== 'string' || mode === '') return ''
+  const key = `status.mode.${mode}`
+  const label = i18n.has(key) ? i18n.t(key) : mode
+  if (mode === 'full') return theme.fg('warning', `⚡${label}`)
+  if (mode === 'ask') return theme.fg('textMuted', `◇${label}`)
+  return theme.fg('primary', `◆${label}`)
 }
 
 function percent(usage) {
@@ -181,7 +198,11 @@ function renderActivity(state, width, theme, i18n, clock, spinner) {
       ? i18n.t('working.tool', { tool: state.activity.tool })
       : i18n.t('working')
     const elapsed = state.activity.startedAt === null ? 0 : clock - state.activity.startedAt
-    const left = ` ${theme.fg('primary', spinner)} ${theme.fg('textDim', label)}${theme.fg('textMuted', `  ${formatDuration(elapsed)}`)}`
+    // A live size next to the clock: waiting for a long answer without any sign of
+    // progress reads as a hang, and the token count is the number that moves.
+    const live = liveCharacters(state)
+    const size = live > 0 ? theme.fg('textMuted', ` · ~${formatTokens(Math.round(live / 4))}`) : ''
+    const left = ` ${theme.fg('primary', spinner)} ${theme.fg('textDim', label)}${theme.fg('textMuted', `  ${formatDuration(elapsed)}`)}${size}`
     const hint = state.queue.length > 0
       ? theme.fg('textMuted', `${state.queue.length} queued`)
       : theme.fg('textMuted', i18n.t('hint.esc'))
@@ -190,6 +211,8 @@ function renderActivity(state, width, theme, i18n, clock, spinner) {
   if (state.status === 'connecting') {
     return ` ${theme.fg('warning', spinner)} ${theme.fg('textDim', i18n.t('status.polling'))}`
   }
+  const candidates = describeCandidates(state.completion, Math.max(10, width - 4))
+  if (candidates !== '') return ` ${theme.fg('textMuted', `${candidates}  ⇥`)}`
   const recent = state.lastTurnSeconds !== null && state.turnEndedAt !== undefined
     ? clock - state.turnEndedAt < 6000
     : false
@@ -200,11 +223,25 @@ function renderActivity(state, width, theme, i18n, clock, spinner) {
   return tip === '' ? null : ` ${theme.fg('textMuted', '·')} ${theme.fg('textMuted', tip)}`
 }
 
-/** Idle hints rotate slowly, the way a toolbar tip does. */
-function tipFor(clock, i18n) {
-  const tips = ['hint.esc', 'hint.ctrl-o', 'hint.scroll', 'composer.hint.newline']
-  const index = Math.floor(clock / 9000) % tips.length
-  return i18n.t(tips[index])
+/**
+ * The idle hint line.
+ *
+ * One line that does not rotate: what can be typed (`/`), what completes (`@`),
+ * how to break a line, and the two ways out. A rotating tip hid two of those at
+ * any moment, which is the opposite of discoverable.
+ */
+function tipFor(_clock, i18n) {
+  return i18n.t('hint.line')
+}
+
+/** Characters currently streaming, for the live token estimate. */
+function liveCharacters(state) {
+  let total = 0
+  for (const block of state.blocks) {
+    if (block.streaming !== true) continue
+    total += String(block.full ?? block.text ?? '').length
+  }
+  return total
 }
 
 function renderTranscript(state, width, height, scope) {

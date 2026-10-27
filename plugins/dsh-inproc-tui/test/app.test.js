@@ -13,13 +13,16 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { ChatSession } from '../src/agent.js'
 import { TerminalApp } from '../src/app.js'
 
 /** A terminal app with a screen that writes nowhere and a session the test supplies. */
-function makeApp() {
-  const app = new TerminalApp({ get: () => undefined })
+function makeApp(services = {}) {
+  const app = new TerminalApp({ get: (name) => services[name] })
   app.screen = { out: null, columns: 80, rows: 24, clear() {}, enter() {}, leave() {} }
   app.render = () => {}
   return app
@@ -28,8 +31,10 @@ function makeApp() {
 /** The session stand-in the terminal talks to; `calls` is the order it was used in. */
 function fakeSession(overrides = {}) {
   const calls = []
+  const sent = []
   const session = {
     calls,
+    sent,
     ready: true,
     busy: false,
     resumeFailure: undefined,
@@ -53,6 +58,9 @@ function fakeSession(overrides = {}) {
     currentModel: () => null,
     usage: () => ({ used: 0, size: 0 }),
     history: () => [],
+    send(text) {
+      sent.push(text)
+    },
     ...overrides,
   }
   return session
@@ -156,6 +164,385 @@ test('/new ends the turn in flight before it swaps the agent', async () => {
   assert.deepEqual(app.session.calls, ['cancel', 'settle', 'close', 'open'])
   assert.deepEqual(app.queue, [], 'the queue belonged to the session that was left')
   assert.equal(app.status, 'ready')
+})
+
+/** Presses one key on the open dialog. */
+function press(app, name, text) {
+  app.onKeyEvent(text === undefined ? { name } : { name, text })
+}
+
+/**
+ * Starts one approval and returns its promise plus the dialog item.
+ *
+ * `tool/call` arrives before the ask, which is where the arguments come from —
+ * the request itself carries only the tool name and the call id.
+ */
+function ask(app, { callId = 'c1', name = 'bash', command = 'npm test', reason = 'needs permission' } = {}) {
+  app.onSessionEvent({ type: 'tool/call', data: { callId, name, arguments: JSON.stringify({ command }) } })
+  const promise = app.requestApproval({ toolName: name, callId, reason })
+  return promise
+}
+
+test('an approval asks with four numbered choices and answers by number', async () => {
+  const app = makeApp()
+  app.approvalMode = 'ask'
+  const decided = ask(app)
+  assert.deepEqual(app.overlay.options.map((option) => option.value),
+    ['allowed-once', 'session-allow', 'rejected', 'reject-reason'])
+
+  press(app, 'char', '1')
+  assert.equal(await decided, 'allowed-once')
+  assert.equal(app.overlay, null)
+})
+
+test('number 2 runs this command for the rest of the session', async () => {
+  const app = makeApp()
+  app.approvalMode = 'ask'
+  const first = ask(app)
+  press(app, 'char', '2')
+  assert.equal(await first, 'allowed-once')
+  assert.equal(app.approvedTools.has('bash npm'), true)
+
+  // The same command again does not draw a dialog at all.
+  const second = ask(app, { callId: 'c2' })
+  assert.equal(await second, 'allowed-once')
+  assert.equal(app.overlay, null)
+})
+
+test('number 4 settles as rejected and tells the model why', async () => {
+  const app = makeApp()
+  app.approvalMode = 'ask'
+  app.session = fakeSession()
+  const decided = ask(app)
+
+  press(app, 'char', '4')
+  assert.ok(app.overlay.reason !== undefined, 'the reason line opens inside the dialog')
+  for (const letter of ['别', '删']) press(app, 'char', letter)
+  press(app, 'enter')
+
+  assert.equal(await decided, 'rejected')
+  assert.deepEqual(app.session.sent, [
+    app.i18n.t('permission.reason.message', { tool: 'bash', reason: '别删' }),
+  ])
+  assert.match(app.session.sent[0], /别删/u, 'the reason itself is in the message')
+  assert.equal(app.blocks.filter((block) => block.type === 'user').length, 1, 'the reason is visible too')
+})
+
+test('escape goes back to the choices without rejecting', async () => {
+  const app = makeApp()
+  app.approvalMode = 'ask'
+  app.session = fakeSession()
+  const decided = ask(app)
+
+  press(app, 'char', '4')
+  press(app, 'escape')
+  assert.equal(app.overlay.reason, undefined)
+  assert.equal(app.session.sent.length, 0)
+
+  press(app, 'char', '3')
+  assert.equal(await decided, 'rejected')
+})
+
+test('critical mode runs a safe command and still asks about a dangerous one', async () => {
+  const app = makeApp()
+  assert.equal(app.approvalMode, 'critical', 'the default')
+
+  assert.equal(await ask(app), 'allowed-once')
+  assert.equal(app.overlay, null, 'a safe command does not interrupt')
+
+  const dangerous = ask(app, { callId: 'c2', command: 'rm -rf /' })
+  assert.notEqual(app.overlay, null, 'a dangerous command still asks')
+  press(app, 'char', '3')
+  assert.equal(await dangerous, 'rejected')
+})
+
+test('full mode runs everything except a plan decision', async () => {
+  const app = makeApp()
+  app.approvalMode = 'full'
+  assert.equal(await ask(app, { command: 'sudo rm -rf /' }), 'allowed-once')
+
+  const plan = ask(app, { callId: 'c2', name: 'present_plan', command: '' })
+  assert.notEqual(app.overlay, null, 'accepting a plan is still a decision')
+  press(app, 'char', '3')
+  assert.equal(await plan, 'rejected')
+})
+
+test('a new session forgets the session allow-list', async () => {
+  const app = makeApp()
+  app.approvalMode = 'ask'
+  app.session = fakeSession()
+  const decided = ask(app)
+  press(app, 'char', '2')
+  await decided
+  assert.equal(app.approvedTools.size, 1)
+
+  await app.startNew()
+  assert.equal(app.approvedTools.size, 0)
+  assert.equal(app.autoApproved, 0)
+})
+
+test('the banner shows the live session id', async () => {
+  const app = makeApp()
+  app.session = fakeSession({ sessionId: 'abcdef123456' })
+  app.pushBanner()
+  app.refreshBanner()
+  const banner = app.blocks.find((block) => block.type === 'banner')
+  assert.equal(banner.sessionId, 'abcdef123456')
+})
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+test('a harness command is executed by the harness, not re-implemented here', async () => {
+  const executed = []
+  const app = makeApp({
+    commands: {
+      list: () => [{ name: 'goal', description: 'Set or view the goal' }],
+      execute: async (agent, line) => {
+        executed.push(line)
+        return { result: { kind: 'success', text: 'goal set' } }
+      },
+    },
+  })
+  app.session = fakeSession({ live: {} })
+  app.runCommand('goal', 'ship it')
+  await tick()
+  assert.deepEqual(executed, ['/goal ship it'])
+  assert.equal(app.blocks.filter((block) => block.type === 'notice' && block.text === 'goal set').length, 1)
+})
+
+test('the palette and the help list the harness commands too', async () => {
+  const app = makeApp({
+    commands: { list: () => [{ name: 'permission', description: 'Switch the permission preset' }], execute: async () => undefined },
+  })
+  app.session = fakeSession({ live: {} })
+  app.onKeyEvent({ name: 'char', text: '/' })
+  const labels = app.overlay.items.map((item) => item.label)
+  assert.ok(labels.includes('/goal') === false)
+  assert.ok(labels.includes('/permission'), labels.join(','))
+  assert.ok(labels.includes('/yolo'), 'the local commands stay')
+})
+
+test('a name nobody knows is refused only after the harness was asked', async () => {
+  const asked = []
+  const app = makeApp({
+    commands: {
+      list: () => [],
+      execute: async (agent, line) => {
+        asked.push(line)
+        return undefined
+      },
+    },
+  })
+  app.session = fakeSession({ live: {} })
+  app.runCommand('nope', '')
+  await tick()
+  assert.deepEqual(asked, ['/nope'])
+  const errors = app.blocks.filter((block) => block.type === 'notice' && block.level === 'error')
+  assert.equal(errors.length, 1)
+  assert.match(errors[0].text, /nope/u)
+
+  // Without the service at all the answer is the same, and it is immediate.
+  const bare = makeApp({})
+  bare.session = fakeSession({ live: {} })
+  bare.runCommand('goal', '')
+  await tick()
+  assert.equal(bare.blocks.filter((block) => block.type === 'notice' && block.level === 'error').length, 1)
+})
+
+test('/yolo cycles the three modes and takes an explicit one', () => {
+  const app = makeApp()
+  assert.equal(app.approvalMode, 'critical')
+  app.runCommand('yolo')
+  assert.equal(app.approvalMode, 'full')
+  app.runCommand('yolo')
+  assert.equal(app.approvalMode, 'ask')
+  app.runCommand('yolo', 'critical')
+  assert.equal(app.approvalMode, 'critical')
+  app.runCommand('yolo', 'nonsense')
+  assert.equal(app.approvalMode, 'critical', 'an unknown mode changes nothing')
+  const errors = app.blocks.filter((block) => block.type === 'notice' && block.level === 'error')
+  assert.match(errors.at(-1).text, /nonsense/u)
+})
+
+test('/yolo status reports the mode and what it has allowed', async () => {
+  const app = makeApp()
+  await ask(app)
+  app.runCommand('yolo', 'status')
+  const text = app.blocks.filter((block) => block.type === 'notice').at(-1).text
+  assert.match(text, /critical|关键确认/u)
+  assert.match(text, /1/u, 'one request ran without asking')
+})
+
+test('/status shows the facts a person checks', () => {
+  const app = makeApp()
+  app.session = fakeSession({ sessionId: 'abcdef123456' })
+  app.runCommand('status')
+  assert.equal(app.overlay.kind, 'help')
+  const rows = app.overlay.sections[0].rows.map((row) => row[1]).join('\n')
+  assert.match(rows, /abcdef123456/u)
+  assert.match(rows, /critical|关键确认/u)
+})
+
+test('Tab completes a harness command as readily as a local one', () => {
+  const app = makeApp({
+    commands: { list: () => [{ name: 'goal', description: 'Set the goal' }], execute: async () => undefined },
+  })
+  app.session = fakeSession({ live: {} })
+  app.composer.setText('/go')
+  app.composer.caret = 3
+  app.onKeyEvent({ name: 'tab' })
+  assert.equal(app.composer.text, '/goal')
+})
+
+test('/effort completes its values and Tab cycles through them', () => {
+  const app = makeApp()
+  app.composer.setText('/effort ')
+  app.composer.caret = 8
+  app.onKeyEvent({ name: 'tab' })
+  assert.equal(app.composer.text, '/effort off')
+  app.onKeyEvent({ name: 'tab' })
+  assert.equal(app.composer.text, '/effort low', 'the next Tab moves to the next value')
+  app.onKeyEvent({ name: 'tab' })
+  assert.equal(app.composer.text, '/effort high')
+})
+
+test('@ completes workspace paths', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'dsh-complete-'))
+  try {
+    mkdirSync(join(directory, 'src'))
+    writeFileSync(join(directory, 'src', 'index.js'), '')
+    writeFileSync(join(directory, 'src', 'main.js'), '')
+    writeFileSync(join(directory, 'README.md'), '')
+    const app = makeApp()
+    app.cwd = directory
+
+    app.composer.setText('/model @src/')
+    app.composer.caret = app.composer.text.length
+    app.onKeyEvent({ name: 'tab' })
+    assert.match(app.composer.text, /^\/model @src\/(index\.js|main\.js)$/u)
+
+    app.composer.setText('/model @RE')
+    app.composer.caret = app.composer.text.length
+    app.onKeyEvent({ name: 'tab' })
+    assert.equal(app.composer.text, '/model @README.md')
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+/** The services `/provider` writes through, recording what it asked for. */
+function providerServices({ routes = {} } = {}) {
+  const writes = []
+  return {
+    writes,
+    settings: {
+      describe: () => [{ ns: 'llm-pi-ai', value: { providers: routes }, revision: 7 }],
+      mutate: (ns, ops, revision) => {
+        writes.push({ ns, ops, revision })
+        return Promise.resolve()
+      },
+    },
+    credentials: {
+      describe: async (name) => ({ present: name === 'ACME_API_KEY' }),
+      set: async (name, value) => {
+        writes.push({ key: name, value })
+      },
+    },
+    llm: {
+      listProviders: () => [{ provider: 'acme', displayName: 'Acme' }],
+      listModels: async () => [{ id: 'acme-1' }, { id: 'acme-2' }],
+    },
+  }
+}
+
+test('/provider add writes nothing until --yes, then the path-addressed section', async () => {
+  const services = providerServices()
+  const app = makeApp(services)
+
+  await app.runProvider('add acme openai-completions https://api.example.test/v1 --model acme-1,acme-2')
+  assert.equal(services.writes.length, 0, 'the exact block is shown first')
+  const confirm = app.blocks.filter((block) => block.type === 'notice').at(-1).text
+  assert.match(confirm, /acme/u)
+  assert.match(confirm, /--yes/u)
+
+  await app.runProvider('add acme openai-completions https://api.example.test/v1 --model acme-1 --yes')
+  assert.equal(services.writes.length, 1)
+  const write = services.writes[0]
+  assert.equal(write.ns, 'llm-pi-ai')
+  assert.equal(write.revision, 7, 'the revision guards a concurrent edit')
+  assert.deepEqual(write.ops[0].op, 'set')
+  assert.deepEqual(write.ops[0].path, ['providers', 'acme'])
+  assert.equal(write.ops[0].value.baseURL, 'https://api.example.test/v1')
+  assert.equal(write.ops[0].value.api, 'openai-completions')
+  assert.equal(write.ops[0].value.apiKeyEnv, 'ACME_API_KEY', 'the default variable name')
+})
+
+test('/provider add --key stores the key through the credentials service, never in the settings write', async () => {
+  const services = providerServices()
+  const app = makeApp(services)
+  await app.runProvider('add relay openai-completions https://relay.example.test/v1 --key sk-secret --yes')
+  const settingsWrite = services.writes.find((write) => write.ns === 'llm-pi-ai')
+  assert.equal(JSON.stringify(settingsWrite).includes('sk-secret'), false,
+    'the key is not part of the profile')
+  const keyWrite = services.writes.find((write) => write.key !== undefined)
+  assert.deepEqual(keyWrite, { key: 'RELAY_API_KEY', value: 'sk-secret' })
+  assert.equal(JSON.stringify(app.blocks).includes('sk-secret'), false, 'and it is never printed')
+})
+
+test('/provider remove needs --yes and unsets the route', async () => {
+  const services = providerServices()
+  const app = makeApp(services)
+  await app.runProvider('remove acme')
+  assert.equal(services.writes.length, 0)
+  await app.runProvider('remove acme --yes')
+  assert.deepEqual(services.writes[0].ops, [{ op: 'unset', path: ['providers', 'acme'] }])
+})
+
+test('/provider list shows the route and whether its key resolves', async () => {
+  const services = providerServices({
+    routes: { acme: { api: 'openai-completions', baseURL: 'https://api.example.test/v1', apiKeyEnv: 'ACME_API_KEY' } },
+  })
+  const app = makeApp(services)
+  await app.runProvider('list')
+  const text = app.blocks.filter((block) => block.type === 'notice').at(-1).text
+  assert.match(text, /acme/u)
+  assert.match(text, /key set|已配置/u)
+  assert.equal(text.includes('ACME_API_KEY'), true, 'the variable name is shown')
+})
+
+test('/provider says so when the profile has no llm-pi-ai section', async () => {
+  const services = providerServices()
+  services.settings.describe = () => []
+  const app = makeApp(services)
+  await app.runProvider('add acme openai-completions https://x.test/v1 --yes')
+  const notice = app.blocks.filter((block) => block.type === 'notice').at(-1)
+  assert.equal(notice.level, 'error')
+  assert.match(notice.text, /llm-pi-ai/u)
+})
+
+test('/provider test asks the provider for its models', async () => {
+  const services = providerServices()
+  const app = makeApp(services)
+  await app.runProvider('test acme')
+  const text = app.blocks.filter((block) => block.type === 'notice').at(-1).text
+  assert.match(text, /acme/u)
+  assert.match(text, /2/u)
+})
+
+test('/provider without the services says which version has them', async () => {
+  const app = makeApp({})
+  await app.runProvider('list')
+  const notice = app.blocks.filter((block) => block.type === 'notice').at(-1)
+  assert.equal(notice.level, 'error')
+  assert.match(notice.text, /0\.2|settings|挂载|mount/u)
+})
+
+test('/resume says why there is nothing to resume when persistence is off', async () => {
+  const app = makeApp({})
+  await app.openResumePicker()
+  const notice = app.blocks.filter((block) => block.type === 'notice').at(-1)
+  assert.match(notice.text, /persistence|持久化/u)
+  assert.equal(app.overlay, null, 'no empty picker')
 })
 
 test('a quiet session is not cancelled on the way to a new one', async () => {

@@ -85,6 +85,66 @@ harness 只发预发布版（`0.2.1-rc.3`），而在 npm 的 semver 规则下 `
   它拿到 token 级流式与审批/追问通道的原因——代价是它钉在写它时的那套 0.2.x 接缝上。哪些线
   能跑，看清单里的 `requiresDsh`。
 
+## 终端契约：审批、命令、补全、供应商
+
+### 审批三档（`/yolo`）
+
+harness 自己的审批策略只有"问"和"全拒"（`'never'` 是**拒绝**，不是放行），所以"不问就执行"是终端
+自己的决定，落在 `plugins/shared/approval/policy.js` 一个纯函数里：
+
+| 档位 | 行为 |
+|---|---|
+| `ask` | 每个工具调用都弹窗 |
+| `critical`（**默认**） | 危险命令与计划审批弹窗，其余直接放行 |
+| `full` | 一律放行（沙箱仍然生效） |
+
+- 自动放行**仍然写审计**（harness 记 `approval/asked` + `approval/decided`），也**不放宽沙箱**。
+- 分类器"未知即问"：读不出命令的 shell 调用、未知工具、计划/提问类调用一律发问。
+- 档位是**会话级**的，`/new`、`/resume` 之后回到默认。
+
+### 审批对话框的四个选项（数字键 1-4）
+
+| 键 | 选项 | 结果 |
+|---|---|---|
+| 1 | 运行 | 允许这一次 |
+| 2 | 当前会话默认运行 | 本会话内同一"工具 + 命令首词"不再问 |
+| 3 | 拒绝 | 拒绝 |
+| 4 | 拒绝并说明原因 | 拒绝，并把理由作为一条用户消息交给模型 |
+
+第 4 项的理由投递方式取决于线路：进程内 `followup`（下一步入上下文）；ACP 的 `session/prompt`
+不允许并发，所以排在当前回合结束后再发。
+
+### 命令
+
+- **交给 harness**：`/permission`、`/plan`、`/goal`、`/feedback`、`/export`、`/compact`
+  （`ctx.commands.execute`，结果文本原样显示；因此随实例的 dsh 版本变化）。
+- **终端自己的**：`/help` `/model` `/effort` `/yolo` `/resume` `/new` `/clear` `/status`
+  `/provider` `/quit`。
+- 未知命令先问 harness，仍未命中才报错。
+
+### Tab 补全
+
+`plugins/shared/ui/complete.js`：命令名（本地 + harness）、参数（模型/强度/档位/会话/预设/供应商）、
+`@` 工作区路径。重复 Tab 循环，候选行显示在输入框上方，任何其它按键结束循环。
+
+### 模型供应商（仅进程内）
+
+`/provider list|add|remove|test`。写的是 **`llm-pi-ai` 的 settings 段**（与网页「模型」页同一份），
+用 `mutate` 按路径写而不是整段替换（整段替换会清掉已 redact 的 secret）。密钥走 `credentials.set`
+或只写 `--key-env` 名字；`--key` 不回显、不写日志、不进 settings。`add`/`remove` 需要 `--yes`。
+
+### 能力矩阵
+
+| 能力 | 进程内（0.2.x） | ACP（0.1.x+） |
+|---|---|---|
+| 三档审批 / `/yolo` | 是 | 是（客户端应答过滤） |
+| 四选项审批（含拒绝理由） | 是 | 是（理由排队到回合结束） |
+| `/permission` `/plan` `/goal` `/feedback` `/export` `/compact` | 是（harness 命令） | 否（会明说） |
+| Tab 补全 命令/参数 | 是 | 是 |
+| `@` 文件补全 | 是 | 否 |
+| `/provider` | 是 | 否 |
+| `/status` | 是 | 是 |
+
 ## 检查
 
 ```sh

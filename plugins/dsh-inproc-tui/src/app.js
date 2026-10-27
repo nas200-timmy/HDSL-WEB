@@ -14,7 +14,8 @@
  * @module app
  */
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
+import { resolve as resolvePath } from 'node:path'
 
 import { createI18n, detectLanguage } from '../../shared/i18n.js'
 import { createTheme, detectMode } from '../../shared/term/theme.js'
@@ -22,8 +23,10 @@ import { Screen } from '../../shared/term/screen.js'
 import { createKeyDecoder } from '../../shared/term/keys.js'
 import { Composer } from '../../shared/ui/composer.js'
 import { applyEditKey, isLiveOverlay } from '../../shared/ui/edit.js'
+import { applyCompletion, completionFor, nextCandidate } from '../../shared/ui/complete.js'
+import { APPROVAL_MODES, DEFAULT_APPROVAL_MODE, allowKey, decide } from '../../shared/approval/policy.js'
 import { renderFrame } from '../../shared/ui/render.js'
-import { shortId } from '../../shared/ui/blocks.js'
+import { ageLabel, shortId } from '../../shared/ui/blocks.js'
 import { ChatSession } from './agent.js'
 import {
   argsFromProcess,
@@ -52,14 +55,24 @@ const EFFORTS = [
   { value: 'max', name: 'max' },
 ]
 
+/**
+ * Commands this terminal owns.
+ *
+ * Everything else (`/permission`, `/plan`, `/goal`, `/feedback`, `/export`) is
+ * the harness's own and is dispatched to `ctx.commands`, so it stays in step
+ * with the version the instance runs instead of being re-implemented here.
+ */
 const COMMANDS = [
   { name: 'help', key: 'cmd.help' },
   { name: 'model', key: 'cmd.model' },
   { name: 'effort', key: 'cmd.effort' },
+  { name: 'yolo', key: 'cmd.yolo' },
   { name: 'resume', key: 'cmd.resume' },
   { name: 'new', key: 'cmd.new' },
   { name: 'compact', key: 'cmd.compact' },
   { name: 'clear', key: 'cmd.clear' },
+  { name: 'status', key: 'cmd.status' },
+  { name: 'provider', key: 'cmd.provider' },
   { name: 'quit', key: 'cmd.quit' },
 ]
 
@@ -88,6 +101,26 @@ export class TerminalApp {
     /** Live question batches, so `quit()` can reject them as interrupted. */
     this.pendingQuestions = new Set()
     this.activeInteraction = null
+    /**
+     * How much this session asks before running a tool. The harness has no such
+     * switch (its own policy is ask-or-reject), so the decision is this app's —
+     * see `plugins/shared/approval/policy.js`.
+     */
+    this.approvalMode = DEFAULT_APPROVAL_MODE
+    /** "(tool first-word)" keys the person said "run for this session" for. */
+    this.approvedTools = new Set()
+    /** How many requests this session ran without a dialog, for the status row. */
+    this.autoApproved = 0
+    /** Arguments of tool calls in flight, by callId: the approval request itself has none. */
+    this.toolCalls = new Map()
+    /** The rejection reason being typed, or `null` when that line is closed. */
+    this.reasonDraft = null
+    /** The Tab completion being cycled, or `null`. */
+    this.completion = null
+    /** Model routes/ids seen by the last model picker, for `/model` completion. */
+    this.modelOptions = []
+    /** Sessions seen by the last resume picker, for `/resume` completion. */
+    this.sessionCache = []
     this.focus = 'composer'
     this.expandTools = false
     this.status = 'connecting'
@@ -118,6 +151,16 @@ export class TerminalApp {
       this.resolveExit = resolve
     })
     this.codec = createKeyDecoder((event) => this.onKeyEvent(event))
+  }
+
+  /** The live session id: the status row and the banner both show it. */
+  get sessionId() {
+    return this.session?.sessionId ?? null
+  }
+
+  /** What the renderer reads for the approval badge. */
+  get approval() {
+    return { mode: this.approvalMode, autoApproved: this.autoApproved }
   }
 
   // ── lifecycle ───────────────────────────────────────────────────────────
@@ -159,6 +202,8 @@ export class TerminalApp {
         this.pushNotice(`${this.failureText(this.session.resumeFailure)} — starting a new session`, 'error')
       }
       this.syncSelection()
+      // The banner was painted before the session existed; it now has an id.
+      this.refreshBanner()
       // A launch that was asked to resume has to show what it resumed: the log is
       // the only record of those turns, and a banner alone reads as an empty
       // conversation. `/resume` does the same; this is the way in from the panel.
@@ -403,6 +448,11 @@ export class TerminalApp {
       }
       case 'tool/call': {
         const input = parseArguments(event.data.arguments)
+        // Kept for the approval that follows: the request names the tool and the
+        // call, never the arguments the decision is about.
+        if (event.data.callId !== undefined) {
+          this.toolCalls.set(event.data.callId, { name: event.data.name ?? 'tool', input })
+        }
         // No `expanded` field: the global toggle (ctrl+o / shift+tab) decides,
         // and a card that pinned itself closed would ignore it.
         const block = this.makeBlock({
@@ -420,6 +470,9 @@ export class TerminalApp {
       }
       case 'tool/result': {
         const block = this.findTool(event.data.message?.toolCallId)
+        if (event.data.message?.toolCallId !== undefined) {
+          this.toolCalls.delete(event.data.message.toolCallId)
+        }
         if (block === null) return
         block.output = textOfMessage(event.data.message)
         block.status = event.data.message?.isError === true ? 'failed' : 'completed'
@@ -455,30 +508,78 @@ export class TerminalApp {
         resolve('cancelled')
         return
       }
+      // The request names the tool and (when the asker had one) the call, not its
+      // arguments — those arrived on `tool/call`, which this app already stored.
+      const call = request.callId === undefined ? undefined : this.toolCalls.get(request.callId)
+      const toolName = request.toolName ?? call?.name ?? 'tool'
+      const key = allowKey(toolName, call?.input)
+      if (this.approvedTools.has(key)) {
+        // "Run for this session" said so: no dialog, still one audit record.
+        this.autoApproved += 1
+        resolve('allowed-once')
+        this.dirty = true
+        return
+      }
+      const verdict = decide({ mode: this.approvalMode, toolName, input: call?.input, cwd: this.cwd })
+      if (verdict.verdict === 'allow') {
+        this.autoApproved += 1
+        resolve('allowed-once')
+        this.dirty = true
+        return
+      }
       const item = {
         kind: 'approval',
         request,
+        key,
+        toolName,
+        detail: request.displayReason ?? request.reason ?? '',
+        /** Why the dialog is up, so the footer can say "critical 模式下需要确认". */
+        why: verdict.reason,
         settle: (outcome) => {
           request.signal?.removeEventListener('abort', onAbort)
           retire(this, item)
           resolve(outcome)
         },
-        render: () => ({
-          kind: 'permission',
-          title: this.i18n.t('permission.title'),
-          toolName: request.toolName,
-          detail: request.displayReason ?? request.reason ?? '',
-          options: [
-            { label: this.i18n.t('permission.allow-once'), value: 'allowed-once' },
-            { label: this.i18n.t('permission.reject'), value: 'rejected' },
-          ],
-          index: 0,
-        }),
+        render: () => this.approvalOverlay(item),
       }
       const onAbort = () => item.settle('cancelled')
       request.signal?.addEventListener('abort', onAbort, { once: true })
       enqueue(this, item)
     })
+  }
+
+  /**
+   * The approval dialog: four numbered choices.
+   *
+   * The numbers are the shortcuts (1-9 already selected rows); printing them is
+   * what makes that discoverable. The fourth choice opens a reason line inside
+   * the dialog — the composer behind it is not visible, so typing there would
+   * edit unseen text.
+   *
+   * @private
+   * @param {object} item the interaction being rendered
+   * @returns {object} the overlay
+   */
+  approvalOverlay(item) {
+    const overlay = {
+      kind: 'permission',
+      title: this.i18n.t('permission.title'),
+      toolName: item.toolName,
+      detail: item.detail,
+      options: [
+        { label: this.i18n.t('permission.allow-once'), value: 'allowed-once' },
+        { label: this.i18n.t('permission.allow-always'), value: 'session-allow' },
+        { label: this.i18n.t('permission.reject'), value: 'rejected' },
+        { label: this.i18n.t('permission.reject-reason'), value: 'reject-reason' },
+      ],
+      index: 0,
+      detailOffset: 0,
+      hint: this.i18n.t('permission.hint'),
+    }
+    // A reason line that was already open survives a re-render (it redraws on
+    // every keystroke and on resize).
+    if (this.reasonDraft !== null) overlay.reason = { text: this.reasonDraft }
+    return overlay
   }
 
   /** @private */
@@ -608,6 +709,24 @@ export class TerminalApp {
 
   /** @private */
   resolveInteraction(value) {
+    // Two of the four approval choices are the app's own, not outcomes the
+    // harness knows: "run for this session" records the key and runs this one,
+    // and "reject with a reason" opens the reason line without settling yet.
+    if (value === 'session-allow') {
+      const key = this.activeInteraction?.key
+      if (key !== undefined) this.approvedTools.add(key)
+      value = 'allowed-once'
+    }
+    if (value === 'reject-reason') {
+      if (this.overlay?.kind === 'permission' && this.overlay.reason === undefined) {
+        this.reasonDraft = ''
+        this.overlay = { ...this.overlay, reason: { text: '' } }
+        this.dirty = true
+        this.render()
+      }
+      return
+    }
+    this.reasonDraft = null
     const active = this.activeInteraction
     this.activeInteraction = null
     this.overlay = null
@@ -615,6 +734,31 @@ export class TerminalApp {
     this.dirty = true
     this.showNextInteraction()
     this.render()
+  }
+
+  /**
+   * Settles the open approval as rejected and sends the reason to the model.
+   *
+   * The harness's rejection carries no text, so the reason only reaches the
+   * model as a message of its own. `followup` is queued for the next step, which
+   * is exactly where the model learns why and can change course — and it does
+   * not interrupt the turn that just lost its tool.
+   *
+   * @private
+   */
+  submitReason() {
+    const reason = String(this.reasonDraft ?? '').trim()
+    const toolName = this.activeInteraction?.toolName ?? 'tool'
+    this.resolveInteraction('rejected')
+    if (reason === '') return
+    const text = this.i18n.t('permission.reason.message', { tool: toolName, reason })
+    this.makeBlock({ type: 'user', text })
+    try {
+      this.session.send(text)
+    } catch (error) {
+      this.pushNotice(this.failureText(error), 'error')
+    }
+    this.dirty = true
   }
 
   // ── blocks ──────────────────────────────────────────────────────────────
@@ -636,6 +780,24 @@ export class TerminalApp {
   }
 
   /** @private */
+  /**
+   * Points the banner at the live session.
+   *
+   * The banner is painted before the session exists (the screen needs something
+   * on it while `open()` runs), so its id has to be filled in afterwards — and
+   * again after a resume, where the banner is the one thing kept.
+   *
+   * @private
+   */
+  refreshBanner() {
+    const banner = this.blocks.find((block) => block.type === 'banner')
+    if (banner === undefined) return
+    banner.sessionId = this.sessionId
+    banner.rev += 1
+    this.dirty = true
+  }
+
+  /** @private */
   pushBanner() {
     this.makeBlock({
       type: 'banner',
@@ -643,7 +805,7 @@ export class TerminalApp {
       version: `v${VERSION}`,
       subtitle: this.i18n.t('banner.subtitle'),
       hint: this.i18n.t('banner.hint'),
-      sessionId: null,
+      sessionId: this.sessionId,
       cwd: this.cwd,
     })
   }
@@ -667,6 +829,8 @@ export class TerminalApp {
 
   /** @private */
   onKeyEvent(event) {
+    // Any key but Tab ends the cycle: the next Tab starts from the fresh token.
+    if (event.name !== 'tab') this.completion = null
     try {
       this.dispatchKey(event)
     } catch (error) {
@@ -808,7 +972,7 @@ export class TerminalApp {
       return
     }
     if (name === 'tab') {
-      this.completeCommand()
+      this.complete()
       return
     }
     if (name === 'shift+tab') {
@@ -859,7 +1023,7 @@ export class TerminalApp {
       return true
     }
     if (event.name === 'tab') {
-      this.completeCommand()
+      this.complete()
       return true
     }
     if (!applyEditKey(this.composer, event, width)) return false
@@ -874,6 +1038,10 @@ export class TerminalApp {
     const overlay = this.overlay
     if (overlay === null) return
     const { name } = event
+    if (overlay.reason !== undefined) {
+      this.editReason(event)
+      return
+    }
     if (name === 'paste') {
       // A dialog owns the keyboard while it is up; the composer behind it is not
       // visible, so inserting there would edit text the person cannot see.
@@ -901,6 +1069,14 @@ export class TerminalApp {
       return
     }
     if (name === 'page-up' || name === 'page-down') {
+      if (overlay.kind === 'permission' && overlay.detail) {
+        // Page keys scroll the detail: a long command or patch must be readable
+        // without pushing the choices off the dialog.
+        const step = name === 'page-up' ? -6 : 6
+        overlay.detailOffset = Math.max(0, (overlay.detailOffset ?? 0) + step)
+        this.dirty = true
+        return
+      }
       const length = overlay.items?.length ?? overlay.options?.length ?? 0
       if (length === 0) return
       overlay.index = Math.max(0, Math.min(length - 1, (overlay.index ?? 0) + (name === 'page-up' ? -6 : 6)))
@@ -934,6 +1110,46 @@ export class TerminalApp {
     }
   }
 
+  /**
+   * Edits the rejection reason while its line is open.
+   *
+   * Deliberately small: one line, append and backspace, esc to go back to the
+   * choices. It is a note to the model, not a prompt editor — the composer is
+   * still there for a real message once the dialog is gone.
+   *
+   * @private
+   * @param {{name: string, text?: string}} event the decoded key
+   */
+  editReason(event) {
+    const draft = this.reasonDraft ?? ''
+    const { name } = event
+    if (name === 'char') {
+      this.reasonDraft = draft + (event.text ?? '')
+    } else if (name === 'paste') {
+      this.reasonDraft = draft + String(event.text ?? '').replace(/\r\n?/gu, '\n')
+    } else if (name === 'backspace') {
+      this.reasonDraft = Array.from(draft).slice(0, -1).join('')
+    } else if (name === 'enter') {
+      this.submitReason()
+      return
+    } else if (name === 'escape' || name === 'ctrl+c') {
+      // Back to the four choices, nothing settled.
+      this.reasonDraft = null
+      if (this.overlay !== null) {
+        const { reason: _dropped, ...rest } = this.overlay
+        this.overlay = rest
+      }
+      this.dirty = true
+      this.render()
+      return
+    } else {
+      return
+    }
+    if (this.overlay !== null) this.overlay.reason = { text: this.reasonDraft }
+    this.dirty = true
+    this.render()
+  }
+
   /** @private */
   chooseOverlayItem(item) {
     this.overlay = null
@@ -957,11 +1173,11 @@ export class TerminalApp {
       return
     }
     const prefix = text.slice(1).toLowerCase()
-    const items = COMMANDS
+    const items = this.commandList()
       .filter((command) => command.name.startsWith(prefix))
       .map((command) => ({
         label: `/${command.name}`,
-        description: this.i18n.t(command.key),
+        description: command.description,
         onSelect: () => {
           this.composer.setText('')
           this.runCommand(command.name)
@@ -986,17 +1202,121 @@ export class TerminalApp {
     this.dirty = true
   }
 
-  /** @private */
-  completeCommand() {
-    const text = this.composer.text
-    if (!text.startsWith('/')) return
-    const prefix = text.slice(1)
-    const match = COMMANDS.find((command) => command.name.startsWith(prefix))
-    if (match !== undefined) {
-      this.composer.setText(`/${match.name} `)
-      this.overlay = null
+  /**
+   * Completes the token under the caret, cycling on repeated Tab.
+   *
+   * `completionFor` decides what the token even is (command, argument, path);
+   * this method only applies the result, so the rules stay testable without a
+   * terminal.
+   *
+   * @private
+   */
+  complete() {
+    const caret = this.composer.caret
+    // Still cycling the same candidate: the text is exactly the option applied
+    // last time and the caret sits right after it, so the next Tab moves on
+    // instead of re-filtering from what was just filled in.
+    const current = this.completion
+    if (current !== null && current !== undefined
+      && caret === current.start + current.option.length
+      && this.composer.text.slice(current.start, caret) === current.option) {
+      const index = (current.index + 1) % current.options.length
+      const option = current.options[index]
+      const next = applyCompletion(
+        { text: this.composer.text, caret },
+        { start: current.start, end: caret },
+        option,
+      )
+      this.composer.setText(next.text)
+      this.composer.caret = next.caret
+      this.completion = { ...current, index, option, end: next.caret }
+      this.syncCommandPalette()
       this.dirty = true
+      return
     }
+    const fresh = completionFor({
+      text: this.composer.text,
+      caret: this.composer.caret,
+      resolve: (request) => this.completionsFor(request),
+    })
+    if (fresh === null) {
+      this.completion = null
+      this.dirty = true
+      return
+    }
+    const { option, index } = nextCandidate(this.completion, fresh)
+    const applied = applyCompletion(
+      { text: this.composer.text, caret: this.composer.caret },
+      fresh,
+      option,
+    )
+    this.composer.setText(applied.text)
+    this.composer.caret = applied.caret
+    this.completion = { ...fresh, index, option }
+    this.syncCommandPalette()
+    this.dirty = true
+  }
+
+  /**
+   * The candidate source: commands, their arguments, and `@` paths.
+   *
+   * @private
+   * @param {{token: string, index: number, command: string}} request what is being completed
+   * @returns {string[]} candidates
+   */
+  completionsFor(request) {
+    const { token, index, command } = request
+    if (index === 0) return this.commandList().map((entry) => `/${entry.name}`)
+    if (token.startsWith('@')) return this.completePaths(token.slice(1)).map((path) => `@${path}`)
+    switch (command) {
+      case 'yolo':
+        return ['ask', 'critical', 'full', 'status', 'forget']
+      case 'effort':
+        return EFFORTS.map((effort) => effort.value)
+      case 'permission':
+      case 'preset': {
+        const presets = this.ctx.get('permissionPresets')
+        return presets === undefined ? [] : [...(presets.names ?? [])]
+      }
+      case 'model':
+        return this.modelOptions
+      case 'resume':
+        return this.sessionCache
+      case 'provider':
+        return ['list', 'add', 'remove', 'test']
+      default:
+        return []
+    }
+  }
+
+  /**
+   * Workspace paths for `@` completion.
+   *
+   * Only the last segment is listed — the terminal is a terminal, not a file
+   * manager — and a trailing slash keeps the completion open for the next level.
+   *
+   * @private
+   * @param {string} fragment what was typed after `@`
+   * @returns {string[]} paths relative to the workspace
+   */
+  completePaths(fragment) {
+    const slash = fragment.lastIndexOf('/')
+    const directory = slash === -1 ? '' : fragment.slice(0, slash + 1)
+    const leaf = slash === -1 ? fragment : fragment.slice(slash + 1)
+    const base = directory === '' ? this.cwd : resolvePath(this.cwd, directory)
+    let entries = []
+    try {
+      entries = readdirSync(base, { withFileTypes: true })
+    } catch {
+      return []
+    }
+    const paths = []
+    for (const entry of entries) {
+      if (!entry.name.startsWith(leaf)) continue
+      if (entry.name.startsWith('.') && !leaf.startsWith('.')) continue
+      paths.push(`${directory}${entry.name}${entry.isDirectory() ? '/' : ''}`)
+    }
+    return paths.sort()
   }
 
   /** @private */
@@ -1008,8 +1328,8 @@ export class TerminalApp {
       return
     }
     if (value.startsWith('/')) {
-      const [head] = value.trim().slice(1).split(/\s+/u)
-      this.runCommand(head)
+      const [head, ...rest] = value.trim().slice(1).split(/\s+/u)
+      this.runCommand(head, rest.join(' '))
       return
     }
     this.sendPrompt(value)
@@ -1057,7 +1377,7 @@ export class TerminalApp {
   }
 
   /** @private */
-  runCommand(name) {
+  runCommand(name, argument = '') {
     switch (name) {
       case 'help':
         this.openHelp()
@@ -1075,6 +1395,15 @@ export class TerminalApp {
       case 'effort':
         this.openEffortPicker()
         return
+      case 'yolo':
+        this.runYolo(argument)
+        return
+      case 'status':
+        this.openStatus()
+        return
+      case 'provider':
+        void this.runProvider(argument)
+        return
       case 'resume':
         void this.openResumePicker()
         return
@@ -1089,8 +1418,350 @@ export class TerminalApp {
         void this.quit()
         return
       default:
-        this.pushNotice(this.i18n.t('cmd.unknown', { name }), 'error')
+        // Not ours: the harness registers `/permission`, `/plan`, `/goal`,
+        // `/feedback`, `/export` and its own `/compact`. Asking it is what keeps
+        // this terminal honest about what the running version can do.
+        void this.runHarnessCommand(name, argument)
     }
+  }
+
+  /**
+   * Runs one of the harness's own slash commands.
+   *
+   * The handler decides what it means and answers with text, so the terminal
+   * only has to show that text. An unknown name comes back as `undefined`, which
+   * is the moment to say "not a command" — after asking, not before.
+   *
+   * @private
+   * @param {string} name the command, without the slash
+   * @param {string} argument everything after it
+   */
+  async runHarnessCommand(name, argument) {
+    const commands = this.ctx.get('commands')
+    const agent = this.session.live
+    if (commands === undefined || agent === null) {
+      this.pushNotice(this.i18n.t('cmd.unknown', { name }), 'error')
+      return
+    }
+    const line = argument === '' ? `/${name}` : `/${name} ${argument}`
+    try {
+      const execution = await commands.execute(agent, line, [], new AbortController().signal)
+      if (execution === undefined) {
+        this.pushNotice(this.i18n.t('cmd.unknown', { name }), 'error')
+        return
+      }
+      const result = execution.result ?? {}
+      const text = typeof result.text === 'string' ? result.text : ''
+      if (text !== '') this.pushNotice(text, result.kind === 'error' ? 'error' : 'info')
+    } catch (error) {
+      this.pushNotice(this.failureText(error), 'error')
+    }
+    this.dirty = true
+  }
+
+  /**
+   * `/yolo` — how much this session asks before running a tool.
+   *
+   * The harness's own approval policy is ask-or-reject, so the middle and top
+   * modes are this terminal's decision, made per request in `requestApproval`.
+   * It is a session setting, not a global one: a new session starts at the
+   * default again.
+   *
+   * @private
+   * @param {string} argument the argument, if any
+   */
+  runYolo(argument) {
+    const arg = String(argument ?? '').trim().toLowerCase()
+    if (arg === 'status') {
+      this.pushNotice(this.i18n.t('yolo.status', {
+        mode: this.i18n.t(`status.mode.${this.approvalMode}`),
+        count: String(this.autoApproved),
+        tools: String(this.approvedTools.size),
+      }), 'info')
+      this.dirty = true
+      return
+    }
+    if (arg === 'forget') {
+      this.approvedTools.clear()
+      this.pushNotice(this.i18n.t('yolo.forgotten'), 'success')
+      this.dirty = true
+      return
+    }
+    if (arg === '') {
+      const index = APPROVAL_MODES.indexOf(this.approvalMode)
+      this.approvalMode = APPROVAL_MODES[(index + 1) % APPROVAL_MODES.length]
+    } else if (APPROVAL_MODES.includes(arg)) {
+      this.approvalMode = arg
+    } else {
+      this.pushNotice(this.i18n.t('yolo.unknown', { mode: arg }), 'error')
+      this.dirty = true
+      return
+    }
+    this.pushNotice(this.i18n.t(`yolo.set.${this.approvalMode}`), this.approvalMode === 'full' ? 'warning' : 'success')
+    this.dirty = true
+  }
+
+  /**
+   * `/provider` — the model suppliers this terminal can add and remove.
+   *
+   * The routes live in the `llm-pi-ai` settings section (the same one the web
+   * Models page writes); their keys live in the credentials service, addressed by
+   * the `apiKeyEnv` name each route carries. Both are touched only after `--yes`:
+   * this is a persistent change to the instance's profile, not a session setting.
+   *
+   * @private
+   * @param {string} argument the sub-command and its arguments
+   */
+  async runProvider(argument) {
+    const words = String(argument ?? '').trim().split(/\s+/u).filter((word) => word !== '')
+    const action = words[0] ?? 'list'
+    const settings = this.ctx.get('settings')
+    const llm = this.ctx.get('llm')
+    if (settings === undefined || llm === undefined) {
+      this.pushNotice(this.i18n.t('provider.needs-services'), 'error')
+      return
+    }
+    try {
+      if (action === 'list') {
+        await this.listProviders(settings, llm)
+        return
+      }
+      if (action === 'add') {
+        await this.addProvider(settings, words.slice(1))
+        return
+      }
+      if (action === 'remove') {
+        await this.removeProvider(settings, words.slice(1))
+        return
+      }
+      if (action === 'test') {
+        await this.testProvider(llm, words[1])
+        return
+      }
+      this.pushNotice(this.i18n.t('provider.usage'), 'info')
+    } catch (error) {
+      this.pushNotice(this.failureText(error), 'error')
+    }
+    this.dirty = true
+  }
+
+  /** @private */
+  async listProviders(settings, llm) {
+    const providers = llm.listProviders()
+    if (providers.length === 0) {
+      this.pushNotice(this.i18n.t('provider.none'), 'info')
+      return
+    }
+    const credentials = this.ctx.get('credentials')
+    const section = this.providerSection(settings)
+    const routes = section?.value?.providers ?? {}
+    for (const provider of providers) {
+      const route = provider.provider ?? provider.id
+      const profile = routes[route] ?? {}
+      const keyName = typeof profile.apiKeyEnv === 'string' ? profile.apiKeyEnv : ''
+      let keyState = this.i18n.t('provider.key.none')
+      if (keyName !== '' && credentials !== undefined) {
+        const described = await credentials.describe(keyName).catch(() => undefined)
+        keyState = described?.present === true
+          ? this.i18n.t('provider.key.set', { name: keyName })
+          : this.i18n.t('provider.key.missing', { name: keyName })
+      }
+      const models = Array.isArray(profile.models) ? profile.models.length : 0
+      this.pushNotice(this.i18n.t('provider.row', {
+        route,
+        base: profile.baseURL ?? provider.displayName ?? '',
+        api: profile.api ?? '',
+        models: String(models),
+        key: keyState,
+      }), 'info')
+    }
+  }
+
+  /** @private */
+  async addProvider(settings, words) {
+    const [route, api, baseURL] = words
+    if (route === undefined || api === undefined) {
+      this.pushNotice(this.i18n.t('provider.usage'), 'info')
+      return
+    }
+    const flags = this.providerFlags(words.slice(3))
+    // Every route names the variable its key resolves from: the one given, or a
+    // default derived from the route. A route without a name would resolve no key.
+    const keyEnv = flags['key-env'] ?? `${route.toUpperCase().replace(/[^A-Z0-9]+/gu, '_')}_API_KEY`
+    const profile = {
+      api,
+      ...(baseURL === undefined ? {} : { baseURL }),
+      ...(flags.display === undefined ? {} : { displayName: flags.display }),
+      ...(keyEnv === undefined ? {} : { apiKeyEnv: keyEnv }),
+      ...(flags.model === undefined ? {} : {
+        models: flags.model.split(',').map((id) => ({ id: id.trim() })).filter((model) => model.id !== ''),
+      }),
+    }
+    const section = this.providerSection(settings)
+    if (section === null) {
+      this.pushNotice(this.i18n.t('provider.no-section'), 'error')
+      return
+    }
+    if (flags.yes === undefined) {
+      // Persistent configuration: show the exact block first, write on `--yes`.
+      this.pushNotice(this.i18n.t('provider.confirm', {
+        route,
+        block: JSON.stringify({ [route]: profile }, null, 2),
+      }), 'info')
+      return
+    }
+    await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', route], value: profile }], section.revision)
+    if (flags.key !== undefined) {
+      const credentials = this.ctx.get('credentials')
+      if (credentials === undefined) {
+        this.pushNotice(this.i18n.t('provider.no-credentials'), 'error')
+        return
+      }
+      await credentials.set(keyEnv, flags.key)
+    }
+    this.pushNotice(this.i18n.t('provider.added', { route }), 'success')
+    this.modelOptions = []
+    this.dirty = true
+  }
+
+  /** @private */
+  async removeProvider(settings, words) {
+    const [route] = words
+    if (route === undefined) {
+      this.pushNotice(this.i18n.t('provider.usage'), 'info')
+      return
+    }
+    const section = this.providerSection(settings)
+    if (section === null) {
+      this.pushNotice(this.i18n.t('provider.no-section'), 'error')
+      return
+    }
+    if (!words.includes('--yes')) {
+      this.pushNotice(this.i18n.t('provider.confirm-remove', { route }), 'info')
+      return
+    }
+    await settings.mutate('llm-pi-ai', [{ op: 'unset', path: ['providers', route] }], section.revision)
+    this.pushNotice(this.i18n.t('provider.removed', { route }), 'success')
+    this.modelOptions = []
+    this.dirty = true
+  }
+
+  /** @private */
+  async testProvider(llm, route) {
+    if (route === undefined) {
+      this.pushNotice(this.i18n.t('provider.usage'), 'info')
+      return
+    }
+    const models = await llm.listModels(route)
+    this.pushNotice(this.i18n.t('provider.tested', { route, count: String(models.length) }), 'success')
+    this.dirty = true
+  }
+
+  /**
+   * The `llm-pi-ai` settings section, with the revision a write has to carry.
+   *
+   * @private
+   * @param {object} settings the settings service
+   * @returns {{value: object, revision: number} | null} the section, or `null`
+   */
+  providerSection(settings) {
+    let described = []
+    try {
+      described = settings.describe({ redactSecrets: true }) ?? []
+    } catch {
+      described = []
+    }
+    const section = described.find((entry) => entry?.ns === 'llm-pi-ai')
+    if (section === undefined) return null
+    return { value: section.value ?? {}, revision: section.revision ?? 0 }
+  }
+
+  /**
+   * `--flag value` pairs from a command line.
+   *
+   * @private
+   * @param {string[]} words the words after the positional ones
+   * @returns {Record<string, string>} the flags, `--yes` mapped to `'true'`
+   */
+  providerFlags(words) {
+    const flags = {}
+    for (let index = 0; index < words.length; index += 1) {
+      const word = words[index]
+      if (!word.startsWith('--')) continue
+      const name = word.slice(2)
+      const next = words[index + 1]
+      if (next === undefined || next.startsWith('--')) {
+        flags[name] = 'true'
+        continue
+      }
+      flags[name] = next
+      index += 1
+    }
+    return flags
+  }
+
+  /**
+   * `/status` — the facts a person checks when something feels off.
+   *
+   * @private
+   */
+  openStatus() {
+    const usage = this.usage
+    const rows = [
+      [this.i18n.t('status.mode'), this.i18n.t(`status.mode.${this.approvalMode}`)
+        + (this.autoApproved > 0 ? ` · ${this.i18n.t('yolo.auto', { count: String(this.autoApproved) })}` : '')],
+      [this.i18n.t('hint.session').replace(' {id}', ''), this.sessionId === null ? '—' : this.sessionId],
+      [this.i18n.t('status.model'), `${this.model.currentLabel ?? this.model.current ?? '—'}`
+        + (this.effort.current === null ? '' : ` · ${this.effort.current}`)],
+      [this.i18n.t('status.context'), usage.size > 0 ? `${usage.used}/${usage.size}` : '—'],
+      [this.i18n.t('status.dsh'), this.env.HDSL_INSTANCE_VERSION ?? '—'],
+      [this.i18n.t('status.plugins'), `dsh-inproc-tui v${VERSION}`],
+      ['cwd', this.cwd],
+    ]
+    this.overlay = {
+      kind: 'help',
+      title: this.i18n.t('status.title'),
+      width: 72,
+      maxHeight: 20,
+      sections: [{ title: this.i18n.t('status.title'), rows }],
+    }
+    this.dirty = true
+  }
+
+  /**
+   * The commands offered by `/` and by the help dialog.
+   *
+   * The terminal's own first, then whatever the harness registered — with the
+   * harness's description when both know the name, because that text follows the
+   * version the instance runs. A profile without the `commands` service (an
+   * older harness, a minimal composition) simply lists the local ones.
+   *
+   * @private
+   * @returns {{name: string, description: string}[]} the merged list
+   */
+  commandList() {
+    const rows = COMMANDS.map((command) => ({ name: command.name, description: this.i18n.t(command.key) }))
+    const commands = this.ctx.get('commands')
+    const agent = this.session.live
+    if (commands === undefined || agent === null) return rows
+    let listed = []
+    try {
+      listed = commands.list(agent) ?? []
+    } catch {
+      listed = []
+    }
+    for (const descriptor of listed) {
+      if (descriptor === null || typeof descriptor.name !== 'string' || descriptor.name === '') continue
+      const existing = rows.find((row) => row.name === descriptor.name)
+      if (existing !== undefined) {
+        if (typeof descriptor.description === 'string' && descriptor.description !== '') {
+          existing.description = descriptor.description
+        }
+        continue
+      }
+      rows.push({ name: descriptor.name, description: descriptor.description ?? '' })
+    }
+    return rows
   }
 
   /** @private */
@@ -1101,7 +1772,7 @@ export class TerminalApp {
       width: 64,
       maxHeight: 24,
       sections: [
-        { title: this.i18n.t('help.commands'), rows: COMMANDS.map((command) => [`/${command.name}`, this.i18n.t(command.key)]) },
+        { title: this.i18n.t('help.commands'), rows: this.commandList().map((command) => [`/${command.name}`, command.description]) },
         {
           title: this.i18n.t('help.keys'),
           rows: [
@@ -1123,6 +1794,10 @@ export class TerminalApp {
     const catalog = await this.session.modelCatalog()
     const current = this.session.currentModel()
     const items = []
+    // What `/model` completes from: `provider/model`, the same pair the picker
+    // writes into the session.
+    this.modelOptions = catalog.flatMap((provider) =>
+      provider.models.map((model) => `${provider.provider}/${model.id}`))
     for (const provider of catalog) {
       for (const model of provider.models) {
         items.push({
@@ -1169,12 +1844,25 @@ export class TerminalApp {
 
   /** @private */
   async openResumePicker() {
+    if (this.ctx.get('sessionPersistence') === undefined) {
+      // An empty list would read as "you have no sessions"; the truth is that this
+      // profile cannot store them at all.
+      this.pushNotice(this.i18n.t('resume.no-persistence'), 'info')
+      return
+    }
     const sessions = await this.session.listSessions()
-    const items = sessions.slice(0, 40).map((session) => ({
-      label: shortId(session.id),
-      tail: session.cwd === this.cwd ? this.i18n.t('resume.here') : session.cwd,
-      onSelect: () => void this.resumeSession(session.id),
-    }))
+    this.sessionCache = sessions.map((session) => session.id)
+    const now = Date.now()
+    const items = sessions.slice(0, 40).map((session) => {
+      const current = session.id === this.sessionId
+      const where = session.cwd === this.cwd ? this.i18n.t('resume.here') : session.cwd
+      const age = Number.isFinite(session.at) && session.at > 0 ? ` · ${ageLabel(now - session.at)}` : ''
+      return {
+        label: `${shortId(session.id)}${current ? ` · ${this.i18n.t('resume.current')}` : ''}`,
+        tail: `${where}${age}`,
+        onSelect: () => void this.resumeSession(session.id),
+      }
+    })
     if (items.length === 0) {
       this.pushNotice(this.i18n.t('resume.empty'), 'info')
       return
@@ -1208,6 +1896,13 @@ export class TerminalApp {
     this.activity = { tool: null, startedAt: null }
     this.turnStartedAt = null
     this.streaming = { text: null, reasoning: null }
+    // The approval state belongs to the conversation being left: "run for this
+    // session" is a promise about *this* session, and a tool call remembered from
+    // it has no meaning in the next one.
+    this.approvedTools.clear()
+    this.autoApproved = 0
+    this.toolCalls.clear()
+    this.reasonDraft = null
     const running = this.status === 'working' || this.session.busy
     if (this.session.ready && running) {
       this.session.cancel()
@@ -1289,6 +1984,7 @@ export class TerminalApp {
           error: reason === undefined ? '' : this.failureText(reason),
         }), 'error')
       } else {
+        this.refreshBanner()
         this.replayHistory(this.session.history())
         this.pushNotice(this.i18n.t('banner.resume', { id: shortId(sessionId) }), 'info')
       }

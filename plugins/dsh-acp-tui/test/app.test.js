@@ -317,6 +317,235 @@ test('a second permission request waits its turn instead of replacing the first'
   assert.equal(app.overlay, null)
 })
 
+/** One permission request shaped the way the harness sends it. */
+function permissionRequest(id, { command = 'npm test', options } = {}) {
+  return {
+    id,
+    method: 'session/request_permission',
+    params: {
+      toolCall: { title: 'bash', kind: 'bash', rawInput: { command } },
+      options: options ?? [
+        { optionId: 'allow-once', kind: 'allow_once' },
+        { optionId: 'allow-always', kind: 'allow_always' },
+        { optionId: 'reject-once', kind: 'reject_once' },
+      ],
+    },
+  }
+}
+
+/** A client that records what the terminal answered and asked. */
+function recordingClient() {
+  const answered = []
+  const prompts = []
+  return {
+    answered,
+    prompts,
+    respond(id, payload) {
+      answered.push({ id, payload })
+    },
+    request(method, params) {
+      if (method === 'session/prompt') prompts.push(params.prompt?.[0]?.text ?? '')
+      return Promise.resolve({ stopReason: 'end_turn' })
+    },
+    notify() {},
+    close: async () => {},
+  }
+}
+
+test('an approval asks with the same four numbered choices as the in-process terminal', () => {
+  const { app } = makeApp()
+  app.client = recordingClient()
+  app.approvalMode = 'ask'
+  app.onRequest(permissionRequest(1))
+  assert.deepEqual(app.overlay.options.map((option) => option.value),
+    ['allowed-once', 'session-allow', 'rejected', 'reject-reason'])
+})
+
+test('the number keys answer: 1 runs and 3 rejects', () => {
+  const { app } = makeApp()
+  const client = recordingClient()
+  app.client = client
+  app.approvalMode = 'ask'
+
+  app.onRequest(permissionRequest(1))
+  app.onKeyEvent({ name: 'char', text: '1' })
+  assert.deepEqual(client.answered[0].payload.result.outcome, { outcome: 'selected', optionId: 'allow-once' })
+
+  app.onRequest(permissionRequest(2))
+  app.onKeyEvent({ name: 'char', text: '3' })
+  assert.deepEqual(client.answered[1].payload.result.outcome, { outcome: 'selected', optionId: 'reject-once' })
+})
+
+test('"run for this session" answers the first request and silences the next one', () => {
+  const { app } = makeApp()
+  const client = recordingClient()
+  app.client = client
+  app.approvalMode = 'ask'
+
+  app.onRequest(permissionRequest(1))
+  app.onKeyEvent({ name: 'char', text: '2' })
+  assert.deepEqual(client.answered[0].payload.result.outcome, { outcome: 'selected', optionId: 'allow-always' })
+
+  // The same command again: answered without a dialog, and the overlay stays closed.
+  app.onRequest(permissionRequest(2))
+  assert.equal(app.overlay, null)
+  assert.equal(client.answered.length, 2)
+  assert.deepEqual(client.answered[1].payload.result.outcome, { outcome: 'selected', optionId: 'allow-once' })
+})
+
+test('"reject with a reason" sends the reason to the model after the rejection', () => {
+  const { app } = makeApp()
+  const client = recordingClient()
+  app.client = client
+  app.approvalMode = 'ask'
+  app.sessionId = 'session-live'
+  app.status = 'ready'
+
+  app.onRequest(permissionRequest(1))
+  app.onKeyEvent({ name: 'char', text: '4' })
+  assert.ok(app.overlay.reason !== undefined, 'the reason line opens inside the dialog')
+  assert.equal(client.answered.length, 0, 'nothing is settled while the reason is being typed')
+
+  for (const letter of ['太', '危', '险']) app.onKeyEvent({ name: 'char', text: letter })
+  app.onKeyEvent({ name: 'enter' })
+
+  assert.deepEqual(client.answered[0].payload.result.outcome, { outcome: 'selected', optionId: 'reject-once' })
+  assert.equal(client.prompts.length, 1, 'the reason is one prompt of its own')
+  assert.match(client.prompts[0], /太危险/u)
+  assert.match(client.prompts[0], /bash/u)
+})
+
+test('escape returns to the choices without rejecting', () => {
+  const { app } = makeApp()
+  const client = recordingClient()
+  app.client = client
+  app.approvalMode = 'ask'
+
+  app.onRequest(permissionRequest(1))
+  app.onKeyEvent({ name: 'char', text: '4' })
+  app.onKeyEvent({ name: 'escape' })
+  assert.equal(app.overlay.reason, undefined)
+  assert.equal(client.answered.length, 0, 'back to the four choices, nothing decided')
+
+  app.onKeyEvent({ name: 'char', text: '1' })
+  assert.equal(client.answered.length, 1)
+})
+
+test('critical mode answers a safe command and still asks about a dangerous one', () => {
+  const { app } = makeApp()
+  const client = recordingClient()
+  app.client = client
+
+  app.onRequest(permissionRequest(1, { command: 'npm test' }))
+  assert.equal(app.overlay, null, 'a safe command does not interrupt')
+  assert.equal(client.answered.length, 1)
+
+  app.onRequest(permissionRequest(2, { command: 'rm -rf /' }))
+  assert.notEqual(app.overlay, null, 'a dangerous command still asks')
+})
+
+test('the four choices are answered even when the server offers no reject option', () => {
+  const { app } = makeApp()
+  const client = recordingClient()
+  app.client = client
+  app.approvalMode = 'ask'
+  app.onRequest(permissionRequest(1, { options: [{ optionId: 'allow-once', kind: 'allow_once' }] }))
+  app.onKeyEvent({ name: 'char', text: '3' })
+  assert.deepEqual(client.answered[0].payload.result.outcome, { outcome: 'cancelled' },
+    'no reject option means cancelling, not inventing a decision')
+})
+
+test('Tab completes a command and its argument, cycling on repeat', () => {
+  const { app } = makeApp()
+  app.composer.setText('/yo')
+  app.composer.caret = 3
+  app.onKeyEvent({ name: 'tab' })
+  assert.equal(app.composer.text, '/yolo', 'the command is completed')
+
+  app.onKeyEvent({ name: 'char', text: ' ' })
+  app.onKeyEvent({ name: 'tab' })
+  assert.match(app.composer.text, /^\/yolo (ask|critical|full)/u)
+  const first = app.composer.text
+  app.onKeyEvent({ name: 'tab' })
+  assert.notEqual(app.composer.text, first, 'a second Tab moves on')
+})
+
+test('a model argument completes from what the session advertised', () => {
+  const { app } = makeApp()
+  app.model = { current: 'sonnet', currentLabel: 'sonnet', options: [{ value: 'sonnet' }, { value: 'sonnet-long' }] }
+  app.composer.setText('/model so')
+  app.composer.caret = 9
+  app.onKeyEvent({ name: 'tab' })
+  assert.equal(app.composer.text, '/model sonnet')
+})
+
+test('the candidate line appears while there is something to cycle', () => {
+  const { app } = makeApp()
+  app.composer.setText('/yo')
+  app.composer.caret = 3
+  app.onKeyEvent({ name: 'tab' })
+  assert.ok(app.completion !== null, 'the completion state is kept for cycling')
+  assert.ok(app.completion.options.length >= 1)
+  app.onKeyEvent({ name: 'char', text: 'x' })
+  assert.equal(app.completion, null, 'typing ends the cycle')
+})
+
+test('"/permission" says which line can run it instead of pretending', () => {
+  const { app } = makeApp()
+  app.runCommand('permission', '')
+  const notice = app.blocks.filter((block) => block.type === 'notice').at(-1)
+  assert.match(notice.text, /permission/u)
+  assert.match(notice.text, /0\.2|in-process|进程内/u)
+})
+
+test('/yolo full answers even a dangerous permission request', () => {
+  const { app } = makeApp()
+  const client = recordingClient()
+  app.client = client
+  app.runCommand('yolo', 'full')
+  app.onRequest(permissionRequest(1, { command: 'rm -rf /' }))
+  assert.equal(app.overlay, null, 'full mode does not interrupt')
+  assert.equal(client.answered.length, 1)
+})
+
+test('/resume closes the session it is leaving', async () => {
+  const { app } = makeApp()
+  const calls = []
+  app.client = {
+    sessions: { close: true },
+    request(method, params) {
+      calls.push(`${method}:${params.sessionId ?? ''}`)
+      if (method === 'session/resume') return Promise.resolve({ configOptions: [] })
+      return Promise.resolve({})
+    },
+    notify() {},
+    respond() {},
+  }
+  app.sessionId = 'session-old'
+  await app.resumeSession('session-new')
+  assert.deepEqual(calls, ['session/close:session-old', 'session/resume:session-new'])
+  assert.equal(app.sessionId, 'session-new')
+})
+
+test('a failed resume says the terminal stayed where it was', async () => {
+  const { app } = makeApp()
+  app.client = {
+    sessions: { close: true },
+    request(method) {
+      if (method === 'session/resume') return Promise.reject(new Error('no such session'))
+      return Promise.resolve({})
+    },
+    notify() {},
+    respond() {},
+  }
+  app.sessionId = 'session-old'
+  await app.resumeSession('missing')
+  const notice = app.blocks.filter((block) => block.type === 'notice' && block.level === 'error').at(-1)
+  assert.match(notice.text, /no such session/u)
+  assert.match(notice.text, /session-old|still|仍在/u)
+  assert.equal(app.sessionId, 'session-old', 'the terminal did not adopt the failed session')
+})
+
 test('a protocol error becomes one notice, not a flood', () => {
   const { app } = makeApp()
   app.onProtocolError(new Error('the harness wrote a line that is not JSON'))
