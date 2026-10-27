@@ -123,7 +123,7 @@ public final class DshTuiPlugins {
             new Entry(
                     "dsh-inproc-tui",
                     "@nas200-timmy/dsh-inproc-tui",
-                    "0.2.0",
+                    "0.2.1",
                     "DSH TUI（进程内）",
                     "https://github.com/nas200-timmy/HDSL-WEB",
                     "GPL-3.0-or-later",
@@ -141,7 +141,7 @@ public final class DshTuiPlugins {
             new Entry(
                     "dsh-acp-tui",
                     "@nas200-timmy/dsh-acp-tui",
-                    "0.2.0",
+                    "0.2.1",
                     "DSH ACP TUI（兼容备用）",
                     "https://github.com/nas200-timmy/HDSL-WEB",
                     "GPL-3.0-or-later",

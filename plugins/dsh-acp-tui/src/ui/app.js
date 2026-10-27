@@ -19,7 +19,7 @@ import { createTheme, detectMode } from '../../../shared/term/theme.js'
 import { Screen } from '../../../shared/term/screen.js'
 import { createKeyDecoder } from '../../../shared/term/keys.js'
 import { Composer } from '../../../shared/ui/composer.js'
-import { applyEditKey, isLiveOverlay } from '../../../shared/ui/edit.js'
+import { applyEditKey } from '../../../shared/ui/edit.js'
 import { applyCompletion, completionFor, nextCandidate } from '../../../shared/ui/complete.js'
 import {
   APPROVAL_MODES,
@@ -109,6 +109,8 @@ export class App {
     this.queue = []
     this.scroll = { offset: 0, follow: true }
     this.overlay = null
+    /** The inline `/` menu, or `null`; it is not an overlay and never owns the keyboard. */
+    this.palette = null
     this.focus = 'composer'
     this.expandTools = false
     this.status = 'connecting'
@@ -852,13 +854,12 @@ export class App {
     // Any key but Tab ends the cycle: the next Tab starts from the fresh token.
     if (event.name !== 'tab') this.completion = null
     if (this.overlay !== null) {
-      // The command palette floats over the text being typed, so the keys that
-      // edit text keep editing it and the palette merely re-filters; a dialog
-      // that owns the keyboard (permission, picker) is untouched by this.
-      if (isLiveOverlay(this.overlay) && this.editLivePalette(event)) return
       this.handleOverlayKey(event)
       return
     }
+    // The `/` menu is part of the composer, not a dialog: it gets first refusal
+    // on the keys it owns, then lets everything else edit the line underneath.
+    if (this.palette !== null && this.handlePaletteKey(event)) return
     const { name } = event
     if (name === 'paste') {
       // The terminal sends the whole clipboard as one event; it is the user's
@@ -1012,6 +1013,7 @@ export class App {
     }
     if (!this.composer.empty) {
       this.composer.setText('')
+      this.palette = null
       this.dirty = true
       return
     }
@@ -1026,26 +1028,69 @@ export class App {
   }
 
   /**
-   * Edits the composer behind a live palette, then re-filters the palette.
+   * Keys while the inline `/` menu is open.
    *
-   * Returns `false` for the keys the palette itself owns (arrows, page keys,
-   * enter, escape), which is what lets one overlay both follow the text and
-   * still be navigable.
+   * The menu is not a dialog: typing keeps editing the command and the menu
+   * filters itself. Arrows move the selection, enter runs it, esc closes it
+   * without clearing the line. `false` means the app still owns the key, so
+   * ctrl+c, ctrl+o and the like keep their normal meaning.
    *
    * @private
    * @param {{name: string, text?: string}} event the decoded key
-   * @returns {boolean} whether the key was consumed as text editing
+   * @returns {boolean} whether the menu consumed the key
    */
-  editLivePalette(event) {
+  handlePaletteKey(event) {
     const width = Math.max(1, this.screen.columns - 4)
-    if (event.name === 'left' || event.name === 'right') {
-      this.composer.move(event.name, width)
+    const { name } = event
+    const items = this.palette.items ?? []
+    if (name === 'up' || name === 'down') {
+      if (items.length === 0) return true
+      const step = name === 'up' ? -1 : 1
+      this.palette.index = (this.palette.index + step + items.length) % items.length
+      this.dirty = true
+      return true
+    }
+    if (name === 'page-up' || name === 'page-down') {
+      if (items.length === 0) return true
+      const step = name === 'page-up' ? -5 : 5
+      this.palette.index = Math.max(0, Math.min(items.length - 1, this.palette.index + step))
+      this.dirty = true
+      return true
+    }
+    if (name === 'enter') {
+      if (event.shift || event.alt || event.ctrl) {
+        this.composer.newline()
+        this.syncCommandPalette()
+        this.dirty = true
+        return true
+      }
+      this.choosePaletteItem(items[this.palette.index] ?? items[0])
+      return true
+    }
+    if (name === 'ctrl+j') {
+      this.composer.newline()
       this.syncCommandPalette()
       this.dirty = true
       return true
     }
-    if (event.name === 'tab') {
+    if (name === 'escape') {
+      this.palette = null
+      this.dirty = true
+      return true
+    }
+    if (name === 'tab') {
       this.complete()
+      return true
+    }
+    if (name === 'char' && /^[1-9]$/u.test(event.text ?? '')) {
+      const item = items[Number(event.text) - 1]
+      if (item !== undefined) this.choosePaletteItem(item)
+      return true
+    }
+    if (name === 'left' || name === 'right') {
+      this.composer.move(name, width)
+      this.syncCommandPalette()
+      this.dirty = true
       return true
     }
     if (!applyEditKey(this.composer, event, width)) return false
@@ -1053,6 +1098,15 @@ export class App {
     this.scrollToBottom()
     this.dirty = true
     return true
+  }
+
+  /** @private */
+  choosePaletteItem(item) {
+    if (item === undefined) return
+    this.palette = null
+    this.composer.setText('')
+    this.dirty = true
+    this.runCommand(item.name, '')
   }
 
   /** @private */
@@ -1143,12 +1197,12 @@ export class App {
   /** @private */
   syncCommandPalette() {
     const text = this.composer.text
-    if (!text.startsWith('/') || text.includes(' ') || text.includes('\n')) {
+    if (!text.startsWith('/') || /[\s\n]/u.test(text)) {
       // The text stopped being a command prefix (`/help args`, a newline, a
-      // paste that is not a command): the palette goes away instead of staying
-      // up over a line it no longer describes. Only ours is cleared this way.
-      if (isLiveOverlay(this.overlay)) {
-        this.overlay = null
+      // paste that is not a command): the menu goes away instead of staying up
+      // over a line it no longer describes.
+      if (this.palette !== null) {
+        this.palette = null
         this.dirty = true
       }
       return
@@ -1157,30 +1211,27 @@ export class App {
     const items = COMMANDS
       .filter((command) => command.name.startsWith(prefix))
       .map((command) => ({
+        name: command.name,
         label: `/${command.name}`,
         description: this.i18n.t(command.key),
-        onSelect: () => {
-          this.overlay = null
-          this.composer.setText('')
-          this.runCommand(command.name, '')
-        },
       }))
     if (items.length === 0) {
-      this.overlay = null
+      if (this.palette !== null) {
+        this.palette = null
+        this.dirty = true
+      }
       return
     }
-    this.overlay = {
-      // `live` is what keeps the letters typed after `/` going into the line:
-      // the palette follows the text rather than taking the keyboard for itself.
-      live: true,
-      kind: 'picker',
-      title: 'commands',
-      width: 56,
-      height: Math.min(14, items.length + 4),
-      items,
-      index: 0,
-      hint: this.i18n.t('model.hint'),
+    const previous = this.palette
+    const same = previous !== null
+      && previous.items.length === items.length
+      && previous.items.every((item, index) => item.name === items[index].name)
+    if (same) {
+      // Moving the caret does not change the list; keep the highlighted row.
+      previous.index = Math.min(previous.index, items.length - 1)
+      return
     }
+    this.palette = { items, index: 0 }
     this.dirty = true
   }
 
@@ -1267,6 +1318,7 @@ export class App {
   submitComposer() {
     const value = this.composer.submit()
     this.overlay = null
+    this.palette = null
     if (value.trim() === '') {
       this.dirty = true
       return
@@ -1960,6 +2012,7 @@ export function createInitialState(options = {}) {
     queue: [],
     scroll: { offset: 0, follow: true },
     overlay: null,
+    palette: null,
     focus: 'composer',
     expandTools: false,
     status: options.status ?? 'ready',

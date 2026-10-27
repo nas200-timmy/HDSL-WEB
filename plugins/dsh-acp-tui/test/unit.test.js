@@ -14,7 +14,7 @@ import { createKeyDecoder } from '../../shared/term/keys.js'
 import { Screen } from '../../shared/term/screen.js'
 import { renderMarkdown } from '../../shared/term/markdown.js'
 import { createTheme } from '../../shared/term/theme.js'
-import { applyEditKey, isLiveOverlay } from '../../shared/ui/edit.js'
+import { applyEditKey } from '../../shared/ui/edit.js'
 import { renderBlock } from '../../shared/ui/blocks.js'
 import { createI18n, detectLanguage, TABLES } from '../../shared/i18n.js'
 import { renderFrame } from '../../shared/ui/render.js'
@@ -252,6 +252,26 @@ test('the completion candidates sit below the input box', () => {
   assert.ok(candidates < rows.length - 1, 'and above the status row')
 })
 
+test('the command menu sits below the input, not in a dialog', () => {
+  const state = createInitialState({ cwd: '/workspace', composerText: '/' })
+  state.palette = {
+    items: [
+      { name: 'help', label: '/help', description: 'list commands and keys' },
+      { name: 'model', label: '/model', description: 'choose this session model' },
+    ],
+    index: 0,
+  }
+  const frame = renderFrame(state, { width: 80, height: 16, theme, i18n: createI18n('en'), clock: 0 })
+  const rows = frame.rows.map(stripAnsi)
+  const bottom = rows.findIndex((row) => row.startsWith('╰'))
+  const menu = rows.findIndex((row) => /1\. \/help/u.test(row))
+  assert.ok(bottom >= 0 && menu > bottom, `box bottom ${bottom}, menu ${menu}`)
+  assert.ok(menu < rows.length - 1, 'and above the status row')
+  assert.ok(rows[menu].startsWith('  ❯ 1. /help'), rows[menu])
+  assert.ok(rows.some((row) => row.includes('enter run')), 'the menu has its own key hint')
+  assert.ok(frame.cursor !== null, 'the composer keeps the caret while the menu is open')
+})
+
 test('an idle frame writes nothing the second time', () => {
   // A no-op paint is what keeps a browser terminal's input method alive: every
   // write repositions its composition helper.
@@ -265,7 +285,7 @@ test('an idle frame writes nothing the second time', () => {
   assert.equal(writes.length, afterFirst, 'an identical frame is not written again')
 })
 
-test('the editing keys a live palette passes on are exactly the text ones', () => {
+test('the editing keys the inline menu passes on are exactly the text ones', () => {
   const composer = new Composer({ maxLines: 8 })
   composer.setText('/he')
   // The palette owns arrows, page keys, enter and escape; this is everything
@@ -281,9 +301,6 @@ test('the editing keys a live palette passes on are exactly the text ones', () =
   assert.equal(applyEditKey(composer, { name: 'enter' }, 40), false)
   assert.equal(applyEditKey(composer, { name: 'down' }, 40), false)
 
-  assert.equal(isLiveOverlay({ live: true, kind: 'picker' }), true)
-  assert.equal(isLiveOverlay({ kind: 'picker' }), false, 'a dialog owns the keyboard')
-  assert.equal(isLiveOverlay(null), false)
 })
 
 test('the startup banner has the whale and the Kimi-style keys', () => {

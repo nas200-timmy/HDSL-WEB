@@ -3,14 +3,9 @@
  *
  * Both terminals keep a composer under the transcript, and the same handful of
  * keys edits it. The mapping lives here rather than twice in the two apps
- * because one caller cannot afford to drift: the slash-command palette. That
- * palette is an overlay, and an overlay used to take the whole keyboard, so
- * every letter typed after `/` went to the dialog instead of the text — the
- * command had to be picked from the list, and Tab completion was pointless.
- *
- * A palette marked `live` therefore routes its editing keys through here: the
- * text keeps growing, the palette filters itself from it, and the arrows and
- * enter still drive the list.
+ * because one caller cannot afford to drift: the inline `/` command menu. While
+ * that menu is open the line must keep growing so the menu can filter itself;
+ * arrows and enter still drive the list, and everything else edits the text.
  *
  * @module ui/edit
  */
@@ -73,19 +68,4 @@ export function applyEditKey(composer, event, width) {
     return true
   }
   return false
-}
-
-/**
- * Whether an overlay leaves the composer editable underneath it.
- *
- * A permission dialog or a model picker owns the keyboard: what it would edit
- * is behind the dialog, so nothing is edited. The command palette is the one
- * overlay that sits *on* the text being typed, which is why it says so itself
- * instead of being inferred from its kind.
- *
- * @param {{live?: boolean} | null} overlay the overlay, or `null`
- * @returns {boolean}
- */
-export function isLiveOverlay(overlay) {
-  return overlay !== null && overlay !== undefined && overlay.live === true
 }
