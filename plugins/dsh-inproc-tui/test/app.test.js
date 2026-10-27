@@ -262,7 +262,9 @@ test('a session whose log cannot be read stays visible', async () => {
   app.session = session
   await app.openResumePicker()
   assert.equal(app.overlay.items.length, 1)
-  assert.match(app.overlay.items[0].label, /标题未读出/u)
+  // The interface language follows the locale, so the label is asserted in
+  // either table rather than in the one this machine happens to run.
+  assert.match(app.overlay.items[0].label, /title unavailable|标题未读出/u)
 })
 
 test('sessions are ordered by artifact mtime, not creation time', async () => {
@@ -295,6 +297,58 @@ test('sessions are ordered by artifact mtime, not creation time', async () => {
     else process.env.DSH_HOME = previous
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+test('the newest log generation decides the order, not the listing order', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-session-generation-'))
+  const previous = process.env.DSH_HOME
+  try {
+    process.env.DSH_HOME = home
+    // `session.v10` sorts before `session.v2` in a directory listing, so a
+    // walk that keeps the last entry would order by the stale generation.
+    const rewritten = join(home, 'sessions', '--workspace--', 'session-rewritten')
+    const created = join(home, 'sessions', '--workspace--', 'session-created')
+    mkdirSync(rewritten, { recursive: true })
+    mkdirSync(created, { recursive: true })
+    for (const [name, mtime] of [['session.v2.jsonl', 1_000], ['session.v10.jsonl', 9_000]]) {
+      const file = join(rewritten, name)
+      writeFileSync(file, '')
+      utimesSync(file, new Date(mtime), new Date(mtime))
+    }
+    const otherFile = join(created, 'session.jsonl')
+    writeFileSync(otherFile, '')
+    utimesSync(otherFile, new Date(5_000), new Date(5_000))
+    const persistence = sessionPersistence([
+      { id: 'session-rewritten', at: 100, events: [
+        { type: 'user/message', data: { source: { kind: 'user' }, content: [text('written again today')] } },
+      ] },
+      { id: 'session-created', at: 200, events: [
+        { type: 'user/message', data: { source: { kind: 'user' }, content: [text('created later')] } },
+      ] },
+    ])
+    const session = new ChatSession({ get: (name) => (name === 'sessionPersistence' ? persistence : undefined) }, '/workspace')
+    const rows = await session.listSessions()
+    assert.deepEqual(rows.map((row) => row.id), ['session-rewritten', 'session-created'],
+      'a session whose newest generation was just written sorts above an older one')
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('/sessions resolves each first prompt once and remembers it', async () => {
+  const persistence = sessionPersistence([
+    { id: 'session-cached', at: 10, events: [
+      { type: 'user/message', data: { source: { kind: 'user' }, content: [text('only read once')] } },
+    ] },
+  ])
+  const session = new ChatSession({ get: (name) => (name === 'sessionPersistence' ? persistence : undefined) }, '/workspace')
+  const first = await session.listSessions()
+  const second = await session.listSessions()
+  assert.deepEqual(second, first, 'the second listing answers the same way')
+  assert.deepEqual(persistence.opened, ['session-cached'],
+    'a resolved title is kept, so reopening the picker does not read the log again')
 })
 
 test('/sessions labels a row with its first prompt instead of the id', async () => {

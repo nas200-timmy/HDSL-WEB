@@ -13,6 +13,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { readdirSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 
 // The harness packages are imported when a session is opened, not when this
@@ -34,6 +35,8 @@ const SESSION_TITLE_CHARS = 40
 const SESSION_INDEX_MAX = 200
 /** Read handles opened at once; a large store must not open hundreds in parallel. */
 const SESSION_INDEX_CONCURRENCY = 8
+/** Resolved first prompts kept in memory; a title never changes once found. */
+const PROMPT_CACHE_MAX = 1_000
 
 /** A model choice as the harness records it. */
 export class ChatSession {
@@ -426,6 +429,47 @@ export class ChatSession {
 }
 
 /**
+ * Resolved first prompts, one map per persistence service.
+ *
+ * Keyed by the service so a remounted or replaced store cannot answer from the
+ * previous one's titles; each map is dropped with its service.
+ */
+const promptCaches = new WeakMap()
+
+/** @param {object} persistence the session persistence service @returns {Map<string, object>} */
+function promptCacheFor(persistence) {
+  let cache = promptCaches.get(persistence)
+  if (cache === undefined) {
+    cache = new Map()
+    promptCaches.set(persistence, cache)
+  }
+  return cache
+}
+
+/**
+ * The first prompt of one stored session, resolved at most once.
+ *
+ * Only a resolved prompt is cached: it is the head of an append-only log and
+ * never changes. Empty and inconclusive answers can still turn into a
+ * conversation, so they are re-read the next time `/sessions` opens.
+ *
+ * @param {object} persistence the session persistence service
+ * @param {string} id the stored session id
+ * @returns {Promise<{state: 'prompt'|'empty'|'uncertain'|'unreadable', title?: string}>}
+ */
+async function readSessionPrompt(persistence, id) {
+  const cache = promptCacheFor(persistence)
+  const cached = cache.get(id)
+  if (cached !== undefined) return cached
+  const result = await readPromptFromStore(persistence, id)
+  if (result.state === 'prompt') {
+    if (cache.size >= PROMPT_CACHE_MAX) cache.clear()
+    cache.set(id, result)
+  }
+  return result
+}
+
+/**
  * Read enough of one session to tell an empty artifact from a real conversation.
  *
  * `user/message` is the normal shape, but an early prompt can still live in an
@@ -437,7 +481,7 @@ export class ChatSession {
  * @param {string} id the stored session id
  * @returns {Promise<{state: 'prompt'|'empty'|'uncertain'|'unreadable', title?: string}>}
  */
-async function readSessionPrompt(persistence, id) {
+async function readPromptFromStore(persistence, id) {
   let handle = null
   let reachedEnd = false
   try {
@@ -531,21 +575,22 @@ function shortenPrompt(text) {
 }
 
 /**
- * Last-write time per stored session, from the JSONL artifacts under
- * `$DSH_HOME/sessions`.
+ * Last-write time per stored session, from the JSONL artifacts under the
+ * session roots.
  *
  * The persistence snapshot has `createdAt` but no `updatedAt`, so sorting by the
  * header alone puts a months-old session that is used every day below a session
  * created yesterday and never opened. The file mtime is the cheapest signal
- * that actually follows writes; when the layout is not a JSONL store (or
- * `DSH_HOME` is absent), callers fall back to `createdAt`.
+ * that actually follows writes; when the layout is not a JSONL store (or no
+ * root exists), callers fall back to `createdAt`.
+ *
+ * The roots and the `sessions/<workspace>/<session>/session[.vN].jsonl[.zstd]`
+ * layout mirror the `dsh-session` filesystem backend, so the same store the
+ * harness resumes from is the one ordered here.
  *
  * @returns {Map<string, number>} session id → mtime in epoch milliseconds
  */
 function sessionFileMtimes() {
-  const home = process.env.DSH_HOME
-  if (home === undefined || home === '') return new Map()
-  const root = join(home, 'sessions')
   const mtimes = new Map()
   const walk = (directory, depth) => {
     if (depth > 4) return
@@ -564,16 +609,44 @@ function sessionFileMtimes() {
       if (!entry.isFile()) continue
       if (!entry.name.endsWith('.jsonl') && !entry.name.endsWith('.jsonl.zstd')) continue
       try {
-        mtimes.set(basename(directory), statSync(full).mtimeMs)
+        // A directory holds one generation per format version. Taking the newest
+        // rather than the last one `readdir` returned keeps a session that just
+        // wrote a v4 log from sorting by its stale v3 mtime.
+        const id = basename(directory)
+        const stamp = statSync(full).mtimeMs
+        const seen = mtimes.get(id)
+        if (seen === undefined || stamp > seen) mtimes.set(id, stamp)
       } catch {
         // A file that vanished between readdir and stat is not a session we can
         // order; the createdAt fallback still gives it a stable position.
       }
     }
   }
-  walk(root, 0)
+  for (const root of sessionRoots()) walk(root, 0)
   return mtimes
 }
+
+/**
+ * Candidate session-log roots, in the order the harness resolves them.
+ *
+ * `DSH_TUI_SESSION_ROOT` is an explicit override; otherwise the store lives in
+ * `$DSH_HOME/sessions`, and a bare dsh install without `DSH_HOME` keeps it in
+ * `~/.dsh/sessions` (the legacy base config falls back to `~/.dsh-tui/sessions`).
+ * Scanning every candidate costs one failed `readdir` at most.
+ *
+ * @returns {string[]} absolute root paths, deduplicated
+ */
+function sessionRoots() {
+  const roots = []
+  const override = process.env.DSH_TUI_SESSION_ROOT
+  if (override !== undefined && override.trim() !== '') roots.push(override)
+  const home = process.env.DSH_HOME
+  const base = home !== undefined && home.trim() !== '' ? home : join(homedir(), '.dsh')
+  roots.push(join(base, 'sessions'))
+  roots.push(join(homedir(), '.dsh-tui', 'sessions'))
+  return [...new Set(roots)]
+}
+
 
 /** The header time, with the artifact mtime and createdAt as fallbacks. */
 function sessionTime(snapshot, mtimes) {
