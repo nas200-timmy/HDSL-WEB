@@ -8,41 +8,60 @@
  * the dialog is drawn. That decision lives here: one pure function, one list of
  * rules, and a test file next to the terminal that uses it.
  *
+ * The modes mirror the three Kimi Code permission modes:
+ *
+ * - `ask` (default): read-only tools run, everything with a side effect asks;
+ * - `critical`: routine edits and commands run, dangerous/sensitive ones ask;
+ * - `full`: everything runs except plan/question decisions.
+ *
  * The bias is deliberate: anything not recognised is asked about. A wrong "ask"
  * costs one keystroke; a wrong "allow" runs `rm -rf` without one.
  *
  * @module approval/policy
  */
 
+import { isAbsolute, relative as relativePath, resolve as resolvePath } from 'node:path'
+
 /** The three modes, in the order `/yolo` cycles them. */
 export const APPROVAL_MODES = ['ask', 'critical', 'full']
 
-/** The mode a fresh session starts in — see `plugins/README.md` for why. */
-export const DEFAULT_APPROVAL_MODE = 'critical'
+/** The mode a fresh session starts in — Kimi Code's "Always Ask" default. */
+export const DEFAULT_APPROVAL_MODE = 'ask'
 
 /** Shells a command may arrive through, by tool name. */
-const SHELL_TOOLS = /bash|pwsh|powershell|shell|exec|terminal|run_command/iu
+const SHELL_TOOLS = /bash|pwsh|powershell|shell|exec|terminal|run_command|run\b/iu
 
 /** File-writing tools, by tool name. */
-const WRITE_TOOLS = /write|edit|replace|patch|create|delete|remove|move|rename|copy|mkdir|touch/iu
+const WRITE_TOOLS = /write|edit|replace|patch|create|delete|remove|move|rename|copy|mkdir|touch|apply|insert|append/iu
+
+/** Tools that only read: these are the ones Always Ask does not interrupt. */
+const READ_TOOLS = /read|view|list|search|grep|glob|find|stat|ls\b|cat\b|head\b|tail\b|wc\b|diff\b|show\b|fetch\b|web/iu
 
 /** Tools whose call is a decision about what to do, never an automated action. */
 const PLAN_TOOLS = /plan|present|goal|question|ask_user/iu
 
+/** Tools that carry a plan to review, as opposed to a question. */
+const PLAN_CARD = /present_plan|exit_plan_mode|plan_mode|(^|_)plan($|_)/iu
+
+/** @param {string} toolName @returns {boolean} */
+export function isPlanCall(toolName) {
+  return PLAN_CARD.test(String(toolName ?? ''))
+}
+
 /** Commands that need a human even in `critical` mode. */
 const DANGEROUS_COMMANDS = [
   // Privilege and account changes.
-  /(^|\s)(sudo|doas|su|runas)\s/u,
+  /(^|[\s/])(sudo|doas|su|runas)\s/u,
   // Deletion, whatever the flags.
-  /(^|\s)(rm|rmdir|shred|unlink|srm)\s/u,
+  /(^|[\s/])(rm|rmdir|shred|unlink|srm)\s/u,
   // Whole-disk and partition work.
-  /(^|\s)(mkfs[.\w]*|fdisk|parted|dd|wipefs|mkswap|losetup)\s/u,
+  /(^|[\s/])(mkfs[.\w]*|fdisk|parted|dd|wipefs|mkswap|losetup)\s/u,
   // Power and init.
-  /(^|\s)(shutdown|reboot|poweroff|halt|systemctl\s+(poweroff|reboot|halt))\b/u,
+  /(^|[\s/])(shutdown|reboot|poweroff|halt|systemctl\s+(poweroff|reboot|halt))\b/u,
   // Killing everything the account can see.
-  /(^|\s)kill\s+(-9|-KILL|-s\s*9)\s+-1\b/u,
+  /(^|[\s/])kill\s+(-9|-KILL|-s\s*9)\s+-1\b/u,
   // Recursive permission changes.
-  /(^|\s)(chmod|chown|chgrp)\s+(-\w*R|--recursive)/u,
+  /(^|[\s/])(chmod|chown|chgrp)\s+(-\w*R|--recursive)/u,
   // History the person did not ask to lose.
   /git\s+push\b[^\n]*(--force\b|--force-with-lease\b|(^|\s)-f(\s|$))/u,
   /git\s+reset\s+--hard\b/u,
@@ -50,15 +69,27 @@ const DANGEROUS_COMMANDS = [
   // Publishing to a registry.
   /(npm|pnpm|yarn)\s+publish\b/u,
   // Downloading something and running it.
-  /(curl|wget)[^\n|]*\|\s*(sudo\s+)?(ba|z|da)?sh\b/u,
+  /(curl|wget)[^\n|]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b/u,
   // Writing to the machine's own directories.
-  /(^|\s)>{1,2}\s*(\/etc|\/usr|\/bin|\/sbin|\/boot|\/dev\/(sd|nvme|hd)|\/var\/(lib|spool))\b/u,
+  /(^|[\s/])>{1,2}\s*(\/etc|\/usr|\/bin|\/sbin|\/boot|\/dev\/(sd|nvme|hd)|\/var\/(lib|spool))\b/u,
   // The classic fork bomb shape.
   /:\s*\(\s*\)\s*\{/u,
 ]
 
 /** Paths that belong to the machine rather than the workspace. */
 const SYSTEM_PATHS = /^\/(etc|usr|bin|sbin|boot|dev|proc|sys|root|var\/(lib|spool))(\/|$)/u
+
+/** A file whose contents are a credential, not source. */
+const SENSITIVE_BASENAME = /^(\.env(\..+)?|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|known_hosts|authorized_keys|\.npmrc|\.pypirc|\.netrc|\.git-credentials|credentials(\.json)?|secrets?(\.json)?|tokens?(\.json)?|auth\.json|.*\.(pem|key|p12|pfx))$/iu
+
+/** A directory whose contents are credentials. */
+const SENSITIVE_SEGMENTS = new Set(['.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker'])
+
+/** A reference to a credential in a shell command. */
+const SENSITIVE_TOKEN = /(^|[\s/'"=:<>,;|&(])(\.env(\.[\w.-]+)?|\.ssh\/[^\s'"|&;]*|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|credentials(\.json)?|secrets?(\.json)?|tokens?(\.json)?|.*\.(pem|key|p12|pfx))(?=$|[\s/'"|&;),])/iu
+
+/** Commands that print the environment wholesale. */
+const ENVIRONMENT_DUMP = /(^|[\s/])(env|printenv)\b/u
 
 /**
  * Reads the command text out of a tool call's arguments.
@@ -95,6 +126,39 @@ export function pathOf(input) {
 }
 
 /**
+ * Whether a path names a credential file.
+ *
+ * @param {string} target the path
+ * @returns {string} why it is sensitive, or `''`
+ */
+export function sensitivePath(target) {
+  const value = String(target ?? '').replace(/\\/gu, '/').trim()
+  if (value === '') return ''
+  const segments = value.split('/').filter((segment) => segment !== '' && segment !== '.')
+  for (const segment of segments) {
+    if (SENSITIVE_SEGMENTS.has(segment)) return `敏感目录 ${segment}`
+  }
+  const base = segments[segments.length - 1] ?? ''
+  if (SENSITIVE_BASENAME.test(base)) return `敏感文件 ${base}`
+  return ''
+}
+
+/**
+ * Whether a shell command references a credential file or dumps the environment.
+ *
+ * @param {string} command the command text
+ * @returns {string} why it is sensitive, or `''`
+ */
+export function sensitiveCommand(command) {
+  const text = String(command ?? '')
+  if (text.trim() === '') return ''
+  if (ENVIRONMENT_DUMP.test(text)) return '读取环境变量'
+  const match = SENSITIVE_TOKEN.exec(text)
+  if (match !== null) return `敏感文件 ${match[2]}`
+  return ''
+}
+
+/**
  * Whether a shell command does something a person should see first.
  *
  * @param {string} command the command text
@@ -110,21 +174,42 @@ export function dangerousCommand(command) {
 }
 
 /**
- * Whether a file write leaves the workspace.
+ * Whether a file write leaves the workspace or touches a credential.
+ *
+ * The path is resolved against `cwd` before it is compared, so `..`, a relative
+ * path, or `/workspace/../etc/passwd` cannot be used to escape the check.
  *
  * @param {string} target the path the call names
  * @param {string} cwd the workspace root
  * @returns {string} why it is dangerous, or `''`
  */
 export function dangerousPath(target, cwd) {
-  const path = String(target ?? '').trim()
-  if (path === '') return ''
-  if (SYSTEM_PATHS.test(path)) return `写入系统路径 ${path}`
-  const root = String(cwd ?? '').replace(/\/+$/u, '')
-  if (root !== '' && path.startsWith('/') && !path.startsWith(`${root}/`) && path !== root) {
-    return `写入工作区之外 ${path}`
-  }
-  return ''
+  const raw = String(target ?? '').trim()
+  if (raw === '') return ''
+  const base = resolvePath(cwd ?? process.cwd())
+  const resolved = resolvePath(base, raw)
+  const sensitive = sensitivePath(raw) || sensitivePath(resolved)
+  if (sensitive !== '') return sensitive
+  if (SYSTEM_PATHS.test(resolved)) return `写入系统路径 ${resolved}`
+  const relative = relativePath(base, resolved)
+  if (relative === '' || (!relative.startsWith('..') && !isAbsolute(relative))) return ''
+  return `写入工作区之外 ${resolved}`
+}
+
+/**
+ * Whether a session allow-list entry may answer this request without a dialog.
+ *
+ * A person saying "run this for the session" is a promise about ordinary work,
+ * not about a dangerous command, a credential file, or a plan.
+ *
+ * @param {{verdict: string, severity?: string}} verdict the decision
+ * @returns {boolean}
+ */
+export function allowlistEligible(verdict) {
+  return verdict.verdict === 'ask'
+    && verdict.severity !== 'danger'
+    && verdict.severity !== 'sensitive'
+    && verdict.severity !== 'plan'
 }
 
 /**
@@ -136,7 +221,7 @@ export function dangerousPath(target, cwd) {
  *   input?: object,
  *   cwd?: string,
  * }} request what the harness is asking about
- * @returns {{verdict: 'allow' | 'ask', reason: string}} the decision and why
+ * @returns {{verdict: 'allow' | 'ask', reason: string, severity: string}} the decision and why
  */
 export function decide(request) {
   const mode = APPROVAL_MODES.includes(request.mode) ? request.mode : DEFAULT_APPROVAL_MODE
@@ -146,34 +231,50 @@ export function decide(request) {
 
   // A plan is a decision about what to do next, not a permission: it is asked
   // about in every mode, including `full`.
-  if (PLAN_TOOLS.test(toolName)) return { verdict: 'ask', reason: '计划/提问类调用' }
-  if (mode === 'ask') return { verdict: 'ask', reason: 'ask 模式' }
-  if (mode === 'full') return { verdict: 'allow', reason: 'full 模式' }
+  if (PLAN_TOOLS.test(toolName)) {
+    return { verdict: 'ask', reason: '计划/提问类调用', severity: 'plan' }
+  }
+  if (mode === 'full') return { verdict: 'allow', reason: 'full 模式', severity: 'mode' }
 
-  // `critical`: everything the rules do not name runs without a dialog.
   if (SHELL_TOOLS.test(toolName)) {
     const command = commandOf(input)
-    if (command === '') return { verdict: 'ask', reason: '有命令但读不出内容' }
+    if (command === '') return { verdict: 'ask', reason: '有命令但读不出内容', severity: 'unknown' }
+    const sensitive = sensitiveCommand(command)
+    if (sensitive !== '') return { verdict: 'ask', reason: sensitive, severity: 'sensitive' }
     const dangerous = dangerousCommand(command)
-    if (dangerous !== '') return { verdict: 'ask', reason: dangerous }
-    return { verdict: 'allow', reason: '未命中危险规则' }
+    if (dangerous !== '') return { verdict: 'ask', reason: dangerous, severity: 'danger' }
+    if (mode === 'ask') return { verdict: 'ask', reason: 'ask 模式：命令需要确认', severity: 'mode' }
+    return { verdict: 'allow', reason: '未命中危险规则', severity: 'command' }
   }
+
   if (WRITE_TOOLS.test(toolName)) {
-    const dangerous = dangerousPath(pathOf(input), cwd)
-    if (dangerous !== '') return { verdict: 'ask', reason: dangerous }
-    return { verdict: 'allow', reason: '工作区内的写入' }
+    const target = pathOf(input)
+    if (target === '') return { verdict: 'ask', reason: '写操作没有可读路径', severity: 'unknown' }
+    const sensitive = sensitivePath(target)
+    if (sensitive !== '') return { verdict: 'ask', reason: sensitive, severity: 'sensitive' }
+    const dangerous = dangerousPath(target, cwd)
+    if (dangerous !== '') return { verdict: 'ask', reason: dangerous, severity: 'danger' }
+    if (mode === 'ask') return { verdict: 'ask', reason: 'ask 模式：写入需要确认', severity: 'mode' }
+    return { verdict: 'allow', reason: '工作区内的写入', severity: 'write' }
   }
+
+  if (READ_TOOLS.test(toolName)) {
+    const target = pathOf(input)
+    const sensitive = target === '' ? '' : sensitivePath(target)
+    if (sensitive !== '') return { verdict: 'ask', reason: sensitive, severity: 'sensitive' }
+    return { verdict: 'allow', reason: '只读操作', severity: 'read' }
+  }
+
   // Anything else — an unknown tool, a subagent, a web fetch — is asked about.
-  return { verdict: 'ask', reason: '未知工具' }
+  return { verdict: 'ask', reason: '未知工具', severity: 'unknown' }
 }
 
 /**
  * The allow-list key for "run this for the rest of the session".
  *
- * A whole tool name is too coarse for a shell (allowing `bash` once would allow
- * everything), and the full command too narrow (the next `ls` would ask again).
- * The first word is the middle: `git status` and `git log` share `git`, while
- * `git push` stays a separate decision.
+ * The full command (not just its first word) and the path a write names: a
+ * session grant for `git status` must not silently cover `git push`, and a
+ * grant for one file must not cover every write.
  *
  * @param {string} toolName the tool
  * @param {object | undefined} input the call's arguments
@@ -181,7 +282,8 @@ export function decide(request) {
  */
 export function allowKey(toolName, input) {
   const command = commandOf(input).trim()
-  if (command === '') return String(toolName ?? '')
-  const word = command.split(/\s+/u)[0] ?? ''
-  return `${toolName} ${word}`
+  if (command !== '') return `${toolName} ${command}`
+  const target = pathOf(input).trim()
+  if (target !== '') return `${toolName} ${target}`
+  return String(toolName ?? '')
 }

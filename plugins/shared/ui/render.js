@@ -155,8 +155,9 @@ function renderStatus(state, width, theme, i18n) {
   const session = typeof state.sessionId === 'string' && state.sessionId !== ''
     ? theme.fg('textMuted', `#${state.sessionId.slice(0, 6)}`)
     : ''
+  const plan = state.planMode === true ? theme.fg('warning', `▣${i18n.t('banner.plan')}`) : ''
   const right = [scroll, session, usage].filter(Boolean).join('  ')
-  const left = [dot, model, effort, renderMode(state, theme, i18n), cwd].filter((part) => part !== '').join(' ')
+  const left = [dot, model, effort, renderMode(state, theme, i18n), plan, cwd].filter((part) => part !== '').join(' ')
   return spread(left, right, width, 2)
 }
 

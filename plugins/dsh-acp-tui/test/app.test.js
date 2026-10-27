@@ -435,6 +435,8 @@ test('critical mode answers a safe command and still asks about a dangerous one'
   const { app } = makeApp()
   const client = recordingClient()
   app.client = client
+  assert.equal(app.approvalMode, 'ask', 'the Kimi-style default is Always Ask')
+  app.approvalMode = 'critical'
 
   app.onRequest(permissionRequest(1, { command: 'npm test' }))
   assert.equal(app.overlay, null, 'a safe command does not interrupt')
@@ -442,6 +444,59 @@ test('critical mode answers a safe command and still asks about a dangerous one'
 
   app.onRequest(permissionRequest(2, { command: 'rm -rf /' }))
   assert.notEqual(app.overlay, null, 'a dangerous command still asks')
+})
+
+test('a session grant does not swallow a dangerous command', () => {
+  const { app } = makeApp()
+  const client = recordingClient()
+  app.client = client
+  app.approvalMode = 'ask'
+
+  app.onRequest(permissionRequest(1, { command: 'rm -rf build' }))
+  app.onKeyEvent({ name: 'char', text: '2' })
+  assert.equal(app.allowedTools.has('bash rm -rf build'), true)
+
+  app.onRequest(permissionRequest(2, { command: 'rm -rf /' }))
+  assert.notEqual(app.overlay, null, 'a dangerous command still draws the dialog')
+  app.onKeyEvent({ name: 'char', text: '3' })
+  assert.deepEqual(client.answered.at(-1).payload.result.outcome,
+    { outcome: 'selected', optionId: 'reject-once' })
+})
+
+test('a session switch resets the approval mode and counter', async () => {
+  const { app } = makeApp()
+  app.approvalMode = 'full'
+  app.autoApproved = 4
+  await app.detachTurn()
+  assert.equal(app.approvalMode, 'ask')
+  assert.equal(app.autoApproved, 0)
+})
+
+test('permanent rules deny and allow without a dialog', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hdsl-acp-rules-'))
+  const file = join(dir, 'permissions.json')
+  const previous = process.env.HDSL_TUI_RULES
+  process.env.HDSL_TUI_RULES = file
+  try {
+    const { app } = makeApp()
+    const client = recordingClient()
+    app.client = client
+    app.runRuleCommand('deny', 'bash rm -rf /')
+    app.onRequest(permissionRequest(1, { command: 'rm -rf /' }))
+    assert.equal(app.overlay, null)
+    assert.deepEqual(client.answered[0].payload.result.outcome,
+      { outcome: 'selected', optionId: 'reject-once' })
+
+    app.runRuleCommand('allow', 'bash npm test')
+    app.onRequest(permissionRequest(2, { command: 'npm test' }))
+    assert.equal(app.overlay, null)
+    assert.deepEqual(client.answered[1].payload.result.outcome,
+      { outcome: 'selected', optionId: 'allow-once' })
+  } finally {
+    if (previous === undefined) delete process.env.HDSL_TUI_RULES
+    else process.env.HDSL_TUI_RULES = previous
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('the four choices are answered even when the server offers no reject option', () => {

@@ -21,7 +21,15 @@ import { createKeyDecoder } from '../../../shared/term/keys.js'
 import { Composer } from '../../../shared/ui/composer.js'
 import { applyEditKey, isLiveOverlay } from '../../../shared/ui/edit.js'
 import { applyCompletion, completionFor, nextCandidate } from '../../../shared/ui/complete.js'
-import { APPROVAL_MODES, DEFAULT_APPROVAL_MODE, allowKey, decide } from '../../../shared/approval/policy.js'
+import {
+  APPROVAL_MODES,
+  DEFAULT_APPROVAL_MODE,
+  allowKey,
+  allowlistEligible,
+  decide,
+  isPlanCall,
+} from '../../../shared/approval/policy.js'
+import { loadRules, ruleFor, saveRules, withRule, emptyRules } from '../../../shared/approval/rules.js'
 import { renderFrame, spinnerFrame } from '../../../shared/ui/render.js'
 import { ageLabel, formatDuration, shortId } from '../../../shared/ui/blocks.js'
 import { VERSION } from '../version.js'
@@ -47,9 +55,13 @@ const COMMANDS = [
   { name: 'effort', key: 'cmd.effort' },
   { name: 'yolo', key: 'cmd.yolo' },
   { name: 'resume', key: 'cmd.resume' },
+  { name: 'sessions', key: 'cmd.sessions' },
   { name: 'new', key: 'cmd.new' },
   { name: 'clear', key: 'cmd.clear' },
   { name: 'status', key: 'cmd.status' },
+  { name: 'allow', key: 'cmd.allow' },
+  { name: 'deny', key: 'cmd.deny' },
+  { name: 'rules', key: 'cmd.rules' },
   { name: 'quit', key: 'cmd.quit' },
 ]
 
@@ -116,6 +128,8 @@ export class App {
     this.permissionQueue = []
     /** "Run for this session": keys the person said yes to, answered without a dialog. */
     this.allowedTools = new Set()
+    /** Persistent allow/deny rules, loaded once per terminal. */
+    this.rules = loadRules()
     /** How much this session asks before running a tool — see the shared policy. */
     this.approvalMode = DEFAULT_APPROVAL_MODE
     /** Requests this session ran without a dialog, for the badge and `/yolo status`. */
@@ -327,13 +341,25 @@ export class App {
   pushBanner() {
     this.makeBlock({
       type: 'banner',
-      tag: 'dsh-acp-tui',
-      version: `v${VERSION}`,
+      tag: 'HDSL-web',
+      version: `v${VERSION} · dsh-acp-tui`,
       subtitle: this.i18n.t('banner.subtitle'),
       hint: this.i18n.t('banner.hint'),
       sessionId: this.resume ?? this.sessionId,
       cwd: this.cwd,
+      model: this.model.currentLabel ?? this.model.current ?? null,
+      mode: this.approvalMode,
     })
+  }
+
+  /** @private */
+  refreshBanner() {
+    const banner = this.blocks.find((block) => block.type === 'banner')
+    if (banner === undefined) return
+    banner.sessionId = this.sessionId
+    banner.model = this.model.currentLabel ?? this.model.current ?? null
+    banner.mode = this.approvalMode
+    this.bump(banner)
   }
 
   /** @private */
@@ -425,7 +451,8 @@ export class App {
     // caller that cleared the transcript first (a fresh `/new`) may have nothing
     // there yet; that is not an error, just nothing to repaint.
     const anchor = this.blocks[0]
-    if (anchor !== undefined) this.bump(anchor)
+    if (this.blocks.some((block) => block.type === 'banner')) this.refreshBanner()
+    else if (anchor !== undefined) this.bump(anchor)
     this.dirty = true
   }
 
@@ -456,6 +483,7 @@ export class App {
         }
       }
     }
+    if (typeof this.refreshBanner === 'function') this.refreshBanner()
     this.dirty = true
   }
 
@@ -511,6 +539,7 @@ export class App {
           status: update.status ?? 'in_progress',
           startedAt: this.clock,
           output: null,
+          plan: isPlanCall(update.title ?? update.kind ?? ''),
         })
         this.activity.tool = block.name
         this.activity.startedAt = this.activity.startedAt ?? this.clock
@@ -595,19 +624,41 @@ export class App {
     const reject = offered.find((option) => option.kind === 'reject_once')
       ?? offered.find((option) => option.kind === 'reject_always')
     const key = allowKey(toolName, params.toolCall?.rawInput)
-    if (this.allowedTools.has(key) && allowOnce !== undefined) {
-      // Already answered for this session: no dialog, one audit record from the server.
-      this.respondAllow(message.id, allowOnce, next => this.showPermission(next))
-      return
-    }
-    // The same decision the in-process terminal makes, on the information the
-    // protocol gives: the tool, its title and its raw input.
     const verdict = decide({
       mode: this.approvalMode,
       toolName,
       input: params.toolCall?.rawInput,
       cwd: this.cwd,
     })
+    // Permanent rules are explicit configuration and win over the heuristic.
+    const rule = ruleFor(this.rules, key)
+    if (rule === 'deny') {
+      this.pushNotice(this.i18n.t('permission.rule.denied', { key }), 'warning')
+      const rejectId = reject?.optionId ?? null
+      if (rejectId === null) {
+        this.client?.respond(message.id, { result: { outcome: { outcome: 'cancelled' } } })
+      } else {
+        this.client?.respond(message.id, {
+          result: { outcome: { outcome: 'selected', optionId: rejectId } },
+        })
+      }
+      const next = this.permissionQueue.shift()
+      if (next !== undefined) this.showPermission(next)
+      this.dirty = true
+      return
+    }
+    if (rule === 'allow' && allowOnce !== undefined) {
+      this.autoApproved += 1
+      this.respondAllow(message.id, allowOnce, next => this.showPermission(next))
+      return
+    }
+    // "Run for this session" is a promise about ordinary calls. Dangerous
+    // commands, credential files and plans still draw the dialog.
+    if (this.allowedTools.has(key) && allowOnce !== undefined && allowlistEligible(verdict)) {
+      // Already answered for this session: no dialog, one audit record from the server.
+      this.respondAllow(message.id, allowOnce, next => this.showPermission(next))
+      return
+    }
     if (verdict.verdict === 'allow' && allowOnce !== undefined) {
       this.autoApproved += 1
       this.respondAllow(message.id, allowOnce, next => this.showPermission(next))
@@ -618,14 +669,17 @@ export class App {
       params,
       toolName,
       key,
+      plan: verdict.severity === 'plan',
       allowOnce: allowOnce?.optionId ?? null,
       allowAlways: allowAlways?.optionId ?? allowOnce?.optionId ?? null,
       reject: reject?.optionId ?? null,
     }
     this.overlay = {
       kind: 'permission',
+      title: verdict.severity === 'plan' ? this.i18n.t('permission.plan.title') : this.i18n.t('permission.title'),
       toolName,
       detail: permissionDetail(params.toolCall),
+      plan: verdict.severity === 'plan',
       options: [
         { label: this.i18n.t('permission.allow-once'), value: 'allowed-once' },
         { label: this.i18n.t('permission.allow-always'), value: 'session-allow' },
@@ -886,6 +940,15 @@ export class App {
       this.dirty = true
       return
     }
+    if (name === 'ctrl+s') {
+      const text = this.composer.text.trim()
+      if (text === '') return
+      this.composer.setText('')
+      this.pushNotice(this.i18n.t('steer.unavailable'), 'warning')
+      this.queue.push(text)
+      this.dirty = true
+      return
+    }
     if (name === 'ctrl+a') {
       this.composer.moveLineEdge('home', Math.max(1, this.screen.columns - 4))
       this.dirty = true
@@ -934,8 +997,9 @@ export class App {
       return
     }
     if (name === 'shift+tab') {
-      this.expandTools = !this.expandTools
-      this.transcriptCache = new WeakMap()
+      // Same muscle memory as Kimi Code; the ACP protocol has no plan-mode
+      // channel, so say that instead of silently folding a tool card.
+      this.pushNotice(this.i18n.t('plan.unsupported'), 'info')
       this.dirty = true
     }
   }
@@ -1358,6 +1422,7 @@ export class App {
         this.openEffortPicker()
         return
       case 'resume':
+      case 'sessions':
         this.openResumePicker()
         return
       case 'new':
@@ -1365,6 +1430,11 @@ export class App {
         return
       case 'yolo':
         this.runYolo(argument)
+        return
+      case 'allow':
+      case 'deny':
+      case 'rules':
+        this.runRuleCommand(name, argument)
         return
       case 'status':
         this.openStatus()
@@ -1422,6 +1492,56 @@ export class App {
       return
     }
     this.pushNotice(this.i18n.t(`yolo.set.${this.approvalMode}`), this.approvalMode === 'full' ? 'warning' : 'success')
+    this.refreshBanner()
+    this.dirty = true
+  }
+
+  /**
+   * `/allow`, `/deny`, `/rules`: persistent approval rules, shared with the
+   * in-process line through the same JSON file and the same key shape.
+   *
+   * @private
+   * @param {string} name
+   * @param {string} argument
+   */
+  runRuleCommand(name, argument) {
+    if (name === 'rules') {
+      const arg = String(argument ?? '').trim().toLowerCase()
+      if (arg === 'clear') {
+        this.rules = emptyRules()
+        try {
+          saveRules(this.rules)
+        } catch (error) {
+          this.pushNotice(this.failureText(error), 'error')
+          return
+        }
+        this.pushNotice(this.i18n.t('rule.cleared'), 'success')
+        this.dirty = true
+        return
+      }
+      const lines = [
+        ...this.rules.allow.map((key) => this.i18n.t('rule.line.allow', { key })),
+        ...this.rules.deny.map((key) => this.i18n.t('rule.line.deny', { key })),
+      ]
+      this.pushNotice(lines.length === 0 ? this.i18n.t('rule.none') : lines.join('\n'), 'info')
+      this.dirty = true
+      return
+    }
+    const text = String(argument ?? '').trim()
+    const [tool, ...rest] = text.split(/\s+/u).filter((word) => word !== '')
+    if (tool === undefined) {
+      this.pushNotice(this.i18n.t('rule.usage'), 'info')
+      return
+    }
+    const key = rest.length === 0 ? tool : `${tool} ${rest.join(' ')}`
+    this.rules = withRule(this.rules, name === 'deny' ? 'deny' : 'allow', key)
+    try {
+      saveRules(this.rules)
+    } catch (error) {
+      this.pushNotice(this.failureText(error), 'error')
+      return
+    }
+    this.pushNotice(this.i18n.t(name === 'deny' ? 'rule.added.deny' : 'rule.added.allow', { key }), 'success')
     this.dirty = true
   }
 
@@ -1595,6 +1715,8 @@ export class App {
     // "Run for this session" was a promise about the session being left, and a
     // half-typed reason has no meaning in the next one.
     this.allowedTools.clear()
+    this.autoApproved = 0
+    this.approvalMode = DEFAULT_APPROVAL_MODE
     this.reasonDraft = null
     this.permissionQueue = []
     if (this.status === 'working' && this.client !== null && this.sessionId !== null) {

@@ -11,6 +11,7 @@
  */
 
 import { padStyled, truncateStyled, visibleWidth, wrapStyled } from '../term/text.js'
+import { renderDiff } from '../term/markdown.js'
 
 const POINTER = '❯'
 const MAX_DESCRIPTION_LINES = 2
@@ -171,7 +172,13 @@ function permissionLines(overlay, width, theme, i18n) {
     // budgeted window and the rest is reachable with page-up/page-down — the options stay
     // on screen, because answering without seeing what is being answered is the defect
     // this dialog exists to avoid.
-    const wrapped = wrapStyled(theme.fg('textDim', overlay.detail), Math.max(8, width - 6))
+    const inner = Math.max(8, width - 6)
+    const detail = String(overlay.detail)
+    const isDiff = /(^|\n)(diff --git|@@ )/u.test(detail)
+    const source = isDiff
+      ? renderDiff(detail, inner, theme, { maxLines: 400 })
+      : [theme.fg('textDim', detail)]
+    const wrapped = source.flatMap((line) => wrapStyled(line, inner))
     const budget = MAX_PERMISSION_DETAIL_LINES
     const maxOffset = Math.max(0, wrapped.length - budget)
     const offset = Math.max(0, Math.min(maxOffset, overlay.detailOffset ?? 0))

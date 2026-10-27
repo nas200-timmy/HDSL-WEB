@@ -252,8 +252,54 @@ test('the editing keys a live palette passes on are exactly the text ones', () =
   assert.equal(isLiveOverlay(null), false)
 })
 
-test('a tool card follows the global expand toggle', () => {
+test('the startup banner has the whale and the Kimi-style keys', () => {
   const i18n = createI18n('en')
+  const rows = renderBlock({
+    type: 'banner',
+    tag: 'dsh-inproc-tui',
+    version: 'v0.9.0',
+    subtitle: 'DeepSeek Harness in your terminal',
+    hint: 'Type a message to start · /help for commands',
+    cwd: '/workspace',
+    model: 'kimi-k2',
+    mode: 'ask',
+    planMode: true,
+    sessionId: 'abcdef123456',
+  }, 82, theme, i18n, { expandTools: false, spinner: '.' })
+  const text = rows.join('\n')
+  assert.match(text, /[▄▀█]/u, 'the pixel whale is drawn')
+  assert.match(text, /kimi-k2/u, 'the model is in the banner')
+  assert.match(text, /plan/u, 'plan mode is in the banner')
+  assert.match(text, /shift\+tab plan/u, 'the keyboard hint is in the banner')
+  assert.match(text, /dsh-inproc-tui/u, 'the plugin name is in the banner')
+})
+
+test('the startup whale uses the SVG palette', () => {
+  const colorTheme = createTheme({ color: true, mode: 'dark' })
+  const rows = renderBlock({
+    type: 'banner',
+    tag: 'HDSL-web',
+    version: 'v0.2.0',
+    subtitle: 'DeepSeek Harness in your terminal',
+    mode: 'ask',
+  }, 82, colorTheme, createI18n('en'), { expandTools: false, spinner: '.' })
+  const text = rows.join('\n')
+  assert.match(text, /38;2;20;38;96/u, 'outline #142660')
+  assert.match(text, /38;2;78;111;255/u, 'body #4e6fff')
+  assert.match(text, /38;2;190;225;255/u, 'highlight #bee1ff')
+})
+
+test('a pipe table becomes columns instead of a paragraph', () => {
+  const lines = renderMarkdown('| file | state |\n| --- | --- |\n| a.js | ok |\n| b.js | bad |', 50, theme)
+  const text = lines.join('\n')
+  assert.match(text, /file/u)
+  assert.match(text, /state/u)
+  assert.match(text, /a\.js/u)
+  assert.match(text, /bad/u)
+  assert.equal(text.includes('| --- |'), false, 'the separator row is not printed')
+})
+
+test('a tool card follows the global expand toggle', () => {  const i18n = createI18n('en')
   const render = (options) => renderBlock({
     type: 'tool',
     name: 'read',

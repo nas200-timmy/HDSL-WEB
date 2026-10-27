@@ -2,6 +2,46 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## Unreleased — 2026-10-27 · 终端更像 Kimi Code：真实默认审批、Plan mode、Ctrl-S、鲸鱼启动页
+
+这一版继续打磨 P0/P1，不碰 MCP/技能/媒体/主题这些 P2。重点是把"安全默认"和"用起来顺手"补齐。
+
+### 审批
+
+- **默认档位改成 `ask`**：只读工具直接跑，写文件、跑命令、未知工具、敏感文件和计划都发问——
+  和 Kimi Code 的 Always Ask 对齐。`critical` 才是"日常编辑和命令直接跑"，`full` 是 Never Ask。
+- **敏感文件保护**：`.env*`、`.ssh/`、`id_rsa`、`.npmrc`、`.netrc`、`*.pem`、`*.key`、`printenv`/`env`
+  在 `ask` / `critical` 下发问；`full` 才放行。
+- **路径先 resolve 再判断**：`..`、相对路径、`/workspace/../etc/passwd` 都不能绕过工作区或系统路径检查；
+  写操作读不出路径时发问，而不是当作"工作区内写入"。
+- **会话允许名单不再吞掉危险操作**：危险命令、敏感文件、计划始终弹窗；白名单键改成"工具 + 完整命令/路径"，
+  `git status` 不会再顺带允许 `git push`，一次文件写入也不会覆盖所有写入。
+- **永久规则**：`/allow` `/deny` `/rules [clear]`，存 `~/.hdsl-tui/permissions.json`，deny 优先。
+- `/new` `/resume` 之后档位和计数回到默认，不会把上一个会话的 `full` 带过去。
+
+### Plan mode 与输入
+
+- `shift+tab` / `/plan [on|off]` 切换 Plan mode；状态栏和启动页显示 `▣计划`。进程内把
+  `/plan on|off` 交给 harness；ACP 明确说这条线没有。
+- `ctrl+s` 把输入框插进正在跑的回合（进程内 `agent.steer()`）；ACP 不能并发 prompt，会说明并留在队列。
+- `ctrl+o` 仍然是工具展开/折叠；`shift+tab` 不再抢这个键。
+- 输入框以 `!` 开头时在工作区直接执行命令，输出是一张 shell 工具卡；退出终端会收掉仍在跑的 shell。
+
+### 会话、补全与渲染
+
+- `/sessions` 作为 `/resume` 的别名；`/compact` 明确是本地压缩，不再写成"交给 harness"。
+- `@` 空片段做有界递归搜索（跳过 `.git`、`node_modules` 等），带 `/` 列下一层，限制在工作区内。
+- 输入框以 `!` 开头时在工作区直接执行命令，输出是一张 shell 工具卡；退出终端会收掉仍在跑的 shell。
+- Markdown 支持管道表格；审批详情里识别 unified diff 并用 diff 颜色渲染；工具卡对 plan 调用显示 `▣计划`。
+- 启动页换成 dsh-TUI README 里像素鲸鱼的静态帧（保留原 SVG 调色板 #142660 / #4e6fff / #bee1ff / #ffffff）+ 模型/档位/计划/cwd/会话 + Kimi 风格按键提示；宽终端两栏，窄终端堆叠。
+
+### 验证
+
+- 两个第一方插件版本升到 **0.2.0**（`DshTuiPlugins.ENTRIES` 与 `package.json` 同步）；旧 0.1.0 需要在面板里重新安装/重新打包。
+- 插件测试：进程内 **50**、ACP **96**（含分类器 18 条、规则/模式重置/steer/plan/表格/鲸鱼启动页）。
+- `./gradlew --no-daemon build` 全绿（后端 814 用例基线不变）。
+- 仍未做：后台任务 `/tasks`、`/fork` `/undo` `/title`、图片/视频、MCP/技能/Hook/主题（P2）。
+
 ## v0.6.0 — 2026-10-27 · 终端能日常用了：三档审批、命令交给 harness、Tab 补全、供应商
 
 这一版把 **进程内终端（dsh 0.2.x）** 补成能天天用的界面：审批不再是"每次都问"或"什么都不问"的二选一，

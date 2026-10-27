@@ -67,17 +67,114 @@ export function renderBlock(block, width, theme, i18n, options) {
   }
 }
 
-function banner(block, width, theme, i18n) {
-  const rows = []
-  const tag = `${theme.fg('primary', '☾')} ${theme.strong('textStrong', block.tag ?? 'dsh-acp-tui')}`
-  const version = block.version ? theme.fg('textMuted', ` ${block.version}`) : ''
-  rows.push('')
-  rows.push(`  ${tag}${version}`)
-  rows.push(`  ${theme.fg('textDim', block.subtitle ?? '')}`)
-  if (block.sessionId) {
-    rows.push(`  ${theme.fg('textMuted', `${i18n.t('hint.session', { id: shortId(block.sessionId) })} · ${block.cwd ?? ''}`)}`)
+const WHALE_ROWS = [
+  '                     A          ',
+  '                    ABA       A ',
+  '                    ABBA     ABA',
+  '                    ABBBA  AABBA',
+  '                    ABBBBAABBBBA',
+  '    AAAAAAAAA        ABBBBBBBBA ',
+  '   ABBBBBBBBBAA       ABBBBBBBA ',
+  '  ABBBBBBBBBBBBAA     ABBBBBAA  ',
+  ' ABBBBBBBBBBBBBBBAA    ABBBA    ',
+  'AABBBBBBBBBBBBBBBBBA  ABBBBA    ',
+  'ABBBBBBBBBBBBBBBBBBBAABBBBBA    ',
+  'ABBBABBBBBBABBBBBBBBBBBBBBBA    ',
+  'ABBBABBBBBBABBBBBBBBBBBBBBA     ',
+  'ABBBBBBBBBBBBBBBBBBBBBBBBBA     ',
+  'ABBBBDDDDDDDBBBBBBBBABBBBA      ',
+  'AABDDDDDDDDDDDDBBBBBBABBBA      ',
+  ' ACCDDDDDDDDDDDDABBBBAABA       ',
+  '  ACCCDDDDDDDDDDABBBBBAA        ',
+  '   AACCCDDDDDDCCCABBBBBAA       ',
+  '     ACCCCCCCCCCCAABBBBBBA      ',
+  '      AAAAAAAAAAA  AAAAAAA      ',
+]
+
+/** Frame 0 of the dsh-TUI pixel whale, with the SVG's own colours. */
+const WHALE_PALETTE = {
+  A: '#142660',
+  B: '#4e6fff',
+  C: '#bee1ff',
+  D: '#ffffff',
+}
+
+/** The logo wordmark/descriptor/rule colours from the same SVG. */
+const LOGO_INK = {
+  dark: { wordmark: '#e8e6e0', descriptor: '#abc2ec', rule: '#5e88cc' },
+  light: { wordmark: '#263146', descriptor: '#687386', rule: '#abc2ec' },
+}
+
+function pixelCell(theme, top, bottom) {
+  const topColor = WHALE_PALETTE[top] ?? null
+  const bottomColor = WHALE_PALETTE[bottom] ?? null
+  if (!theme.color) {
+    if (topColor !== null && bottomColor !== null) return '█'
+    if (topColor !== null) return '▀'
+    if (bottomColor !== null) return '▄'
+    return ' '
   }
-  rows.push(`  ${theme.fg('textMuted', block.hint ?? '')}`)
+  if (topColor !== null && bottomColor !== null) {
+    if (topColor === bottomColor) return theme.fg(topColor, '█')
+    return theme.fgBg(topColor, bottomColor, '▀')
+  }
+  if (topColor !== null) return theme.fg(topColor, '▀')
+  if (bottomColor !== null) return theme.fg(bottomColor, '▄')
+  return ' '
+}
+
+function whaleLines(theme) {
+  const lines = []
+  for (let row = 0; row < WHALE_ROWS.length; row += 2) {
+    let line = ''
+    const top = WHALE_ROWS[row]
+    const bottom = WHALE_ROWS[row + 1] ?? ''
+    for (let column = 0; column < top.length; column += 1) {
+      line += pixelCell(theme, top[column] ?? ' ', bottom[column] ?? ' ')
+    }
+    lines.push(line.replace(/\s+$/u, ''))
+  }
+  return lines
+}
+
+function banner(block, width, theme, i18n) {
+  const art = whaleLines(theme)
+  const artWidth = 32
+  const ink = theme.mode === 'dark' ? LOGO_INK.dark : LOGO_INK.light
+  const info = []
+  const tag = theme.fg(ink.wordmark, block.tag ?? 'HDSL-web')
+  const version = block.version ? ` ${theme.fg(ink.descriptor, block.version)}` : ''
+  info.push(`${tag}${version}`)
+  if (block.subtitle) info.push(theme.fg(ink.descriptor, block.subtitle))
+  const facts = []
+  if (block.model) facts.push(`${i18n.t('banner.model')} ${block.model}`)
+  if (block.mode) facts.push(`${i18n.t('banner.mode')} ${i18n.t(`status.mode.${block.mode}`)}`)
+  if (block.planMode) facts.push(theme.fg('#e0a63c', i18n.t('banner.plan')))
+  if (block.cwd) facts.push(block.cwd)
+  if (facts.length > 0) info.push(theme.fg(ink.descriptor, facts.join(theme.fg(ink.rule, ' · '))))
+  if (block.sessionId) {
+    info.push(theme.fg(ink.descriptor, i18n.t('hint.session', { id: shortId(block.sessionId) })))
+  }
+  info.push(theme.fg(ink.rule, '─'.repeat(Math.max(8, Math.min(46, width - 4)))))
+  info.push(theme.fg(ink.descriptor, block.hint ?? i18n.t('banner.hint')))
+  info.push(theme.fg(ink.descriptor, i18n.t('banner.keys')))
+
+  const rows = ['']
+  const wide = width >= artWidth + 34
+  if (wide) {
+    const count = Math.max(art.length, info.length)
+    for (let index = 0; index < count; index += 1) {
+      const left = art[index] === undefined
+        ? ' '.repeat(artWidth)
+        : padStyled(art[index], artWidth)
+      const right = info[index] ?? ''
+      rows.push(`  ${left}  ${right}`)
+    }
+  } else {
+    for (const line of art) rows.push(`  ${line}`)
+    rows.push('')
+    for (const line of info) rows.push(`  ${line}`)
+  }
   rows.push('')
   return rows.map((row) => truncateStyled(row, width))
 }
@@ -129,6 +226,9 @@ function thought(block, width, theme, i18n, options) {
 function tool(block, width, theme, i18n, options) {
   const expanded = block.expanded === true || (options.expandTools && block.expanded !== false)
   const rows = ['']
+  if (block.plan === true) {
+    rows.push(`${BODY_INDENT}${theme.fg('warning', `▣ ${i18n.t('plan.card')}`)}`)
+  }
   const name = theme.strong('textStrong', block.name ?? 'tool')
   const args = summary(block.input)
   const left = `${BODY_INDENT}${statusGlyph(block.status, theme, options.spinner)} ${name}${args === '' ? '' : '  ' + theme.fg('textDim', args)}`
