@@ -213,44 +213,11 @@ class DeveloperApiServletTest {
     }
 
     @Test
-    void plainHttpIsWarnedNotBlockedByDefault() throws Exception {
-        // v0.5.95 changed the default: a panel on plain HTTP is an operator who
-        // decided the wire is not a threat, so the developer surfaces work and
-        // log a warning instead of refusing. `aTrustedProxyCanTerminateTls`
-        // covers the opt-in strict policy.
-        try (TestSupport.RunningServer running = TestSupport.start(dataDir,
-                Map.of(UserStore.ENV_ADMIN_PASSWORD, PANEL_PASSWORD), config ->
-                        config.bindHost = "127.0.0.1")) {
-            HttpClient client = TestSupport.client();
-            String base = running.baseUrl();
-            String cookie = login(client, base);
-
-            HttpResponse<String> set = post(client, base + "/api/developer/password",
-                    "{\"adminPassword\":\"" + PANEL_PASSWORD + "\",\"password\":\"" + DEV_PASSWORD
-                            + "\",\"confirm\":\"" + DEV_PASSWORD + "\"}", cookie);
-            assertEquals(200, set.statusCode(), set.body());
-
-            HttpResponse<String> elevate = post(client, base + "/api/developer/elevate",
-                    "{\"password\":\"" + DEV_PASSWORD + "\"}", cookie);
-            assertEquals(200, elevate.statusCode(), elevate.body());
-            // The bearer token is part of the same answer: that is the path a
-            // host script or an inspection agent uses.
-            assertTrue(json(elevate).has("token"), elevate.body());
-            assertTrue(json(elevate).get("token").getAsString().length() >= 32);
-        }
-    }
-
-    @Test
     void aTrustedProxyCanTerminateTls() throws Exception {
         try (TestSupport.RunningServer running = TestSupport.start(dataDir,
                 Map.of(UserStore.ENV_ADMIN_PASSWORD, PANEL_PASSWORD), config -> {
                     config.bindHost = "127.0.0.1";
                     config.https.trustForwardedProto = true;
-                    // This test is about the forwarded-header policy, so it asks
-                    // for the strict transport rule: without the header the
-                    // password must still be refused. (The default since
-                    // v0.5.95 is warn-and-allow, covered by the next test.)
-                    config.security.requireHttpsForDeveloper = true;
                 })) {
             HttpClient client = TestSupport.trustAllClient();
             String base = "http://127.0.0.1:" + running.port();

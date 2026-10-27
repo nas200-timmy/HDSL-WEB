@@ -73,9 +73,6 @@ public final class DeveloperApiServlet extends HttpServlet {
     /// confirmation must not become an unthrottled oracle for the panel
     /// password.
     private final LoginThrottle adminPasswordThrottle = new LoginThrottle();
-    /// Whether the "plain HTTP" warning has already been written this boot.
-    private final java.util.concurrent.atomic.AtomicBoolean insecureWarned =
-            new java.util.concurrent.atomic.AtomicBoolean();
 
     public DeveloperApiServlet(DeveloperAuth devAuth, DeveloperElevation elevation,
                                AuthService auth, ServerConfig config, BooleanSupplier tlsActive,
@@ -570,38 +567,13 @@ public final class DeveloperApiServlet extends HttpServlet {
         Json.error(response, 429, "too many failed panel-password attempts; try again later");
     }
 
-    /// Whether the developer surfaces may proceed on this request.
-    ///
-    /// Default: **warn, do not block.** A panel served over plain HTTP is an
-    /// operator who decided the wire is not a threat; refusing to let them in
-    /// would leave them unable to repair the panel that is right there. The
-    /// warning is logged once per boot (below) and repeated in the UI.
-    ///
-    /// `security.require_https_for_developer: true` restores the v0.5.94
-    /// behaviour: `409 tls_required`, and the developer password never travels
-    /// in cleartext.
     private boolean requireTls(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (RequestSecurity.isSecure(request, tlsActive.getAsBoolean(), config)) {
-            return true;
-        }
-        if (!config.security.requireHttpsForDeveloper) {
-            warnInsecureOnce();
             return true;
         }
         Json.error(response, HttpServletResponse.SC_CONFLICT,
                 "tls_required: the developer password is only accepted over HTTPS");
         return false;
-    }
-
-    /// One line per boot: the operator should see it in the log even if nobody
-    /// reads the page.
-    private void warnInsecureOnce() {
-        if (insecureWarned.compareAndSet(false, true)) {
-            org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
-                    "Developer mode over plain HTTP: the developer password and terminal input are readable "
-                            + "on the wire. Enable HTTPS, or set security.require_https_for_developer: true "
-                            + "to refuse instead.");
-        }
     }
 
     private static @Nullable JsonObject readJson(HttpServletRequest request) throws IOException {

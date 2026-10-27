@@ -65,29 +65,12 @@ class ZcodeTerminalApiTest {
     }
 
     @Test
-    void plainHttpIsRefusedWhenTheOperatorAsksForTlsOnly() throws Exception {
-        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(), config -> {
-            loopbackAuthOff(config);
-            // The default is warn-and-allow (v0.5.95); this asserts the
-            // opt-in strict policy still refuses.
-            config.security.requireHttpsForDeveloper = true;
-        })) {
+    void plainHttpIsRefusedWithInsecureTransport() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(), this::loopbackAuthOff)) {
             String id = createInstance(running);
             HttpResponse<String> response = post(running.baseUrl() + "/api/zcode/instances/" + id + "/terminal", null);
             assertEquals(403, response.statusCode(), response.body());
             assertTrue(error(response).startsWith("insecure_transport"), error(response));
-        }
-    }
-
-    @Test
-    void plainHttpIsAllowedByDefaultAndStopsAtTheNextGate() throws Exception {
-        // v0.5.95: the transport is no longer a hard gate by default. The next
-        // refusal a fresh panel gives is the missing developer password.
-        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(), this::loopbackAuthOff)) {
-            String id = createInstance(running);
-            HttpResponse<String> response = post(running.baseUrl() + "/api/zcode/instances/" + id + "/terminal", null);
-            assertEquals(409, response.statusCode(), response.body());
-            assertTrue(error(response).startsWith("developer_password_not_set"), error(response));
         }
     }
 

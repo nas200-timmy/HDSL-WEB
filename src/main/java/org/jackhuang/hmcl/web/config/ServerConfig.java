@@ -64,9 +64,6 @@ public final class ServerConfig {
     /// The web terminal switch; see [WebShellConfig].
     public final WebShellConfig webShell = new WebShellConfig();
 
-    /// Transport policy for the developer mode; see [SecurityConfig].
-    public final SecurityConfig security = new SecurityConfig();
-
     /// The experimental ZCode category; see [ZcodeConfig].
     public final ZcodeConfig zcode = new ZcodeConfig();
 
@@ -195,24 +192,5 @@ public final class ServerConfig {
         /// The scope itself (`developer_guard.scope`, `HDSL_DEVELOPER_GUARD`),
         /// default [DeveloperGuardScope#OFF].
         public volatile DeveloperGuardScope scope = DeveloperGuardScope.OFF;
-    }
-
-    /// How much the panel insists on HTTPS for its own sensitive surfaces.
-    ///
-    /// The default is to **warn, not block**: a panel served over plain HTTP is
-    /// an operator who has decided that the network is not a threat, and a
-    /// panel that refuses to let them in is a panel they cannot repair. The
-    /// refusal is still available for deployments that want the guard rail.
-    public static final class SecurityConfig {
-        /// Whether the developer password, the Web Shell and the developer
-        /// guard refuse to work without TLS (`security.require_https_for_developer`,
-        /// `HDSL_REQUIRE_HTTPS_FOR_DEVELOPER`, default `false`).
-        ///
-        /// With it `false`, those surfaces work over plain HTTP and log a
-        /// warning each boot: anyone on the wire can read the password and the
-        /// terminal's input/output. With it `true`, they answer
-        /// `409 tls_required` / `403 insecure_transport` as releases up to
-        /// v0.5.94 did.
-        public volatile boolean requireHttpsForDeveloper = false;
     }
 }

@@ -73,10 +73,6 @@ README 只保留「用户需要知道的」。这里记录为什么这样做—�
 
 - 配置优先级：环境变量 > `server.yaml` > 内置默认值。`server.yaml` 键都可选；写错或非法值
   会让启动失败并指出行/字段，服务器不会带着半份配置起来。
-- **开发者面（终端、提权、守卫、E-Stop）默认不强制 TLS**：明文 HTTP 下照常可用，只在启动时
-  警告一次。理由很简单——用裸 HTTP 跑面板的人已经宣布这条线不是威胁，面板再拦着他只会让他
-  没法修这台机器。想要护栏就显式设 `security.require_https_for_developer: true`（或环境变量
-  `HDSL_REQUIRE_HTTPS_FOR_DEVELOPER=true`），恢复 `tls_required` / `insecure_transport` 的硬拒。
 - `redirect_same_port`（默认开）：TLS 端口同时接受明文连接，只回
   `308 Location: https://<同主机>:<同端口><同路径>`，内容永远不会以明文发出。这样没有域名、
   直接用 IP 访问也不会撞上 `ERR_INVALID_HTTP_RESPONSE`。会话 Cookie 带 `Secure`，明文请求
@@ -124,20 +120,22 @@ README 只保留「用户需要知道的」。这里记录为什么这样做—�
    冻结 1 小时（`/i/*`、实例写操作、终端一律 503）。状态只在内存，重启进程/容器即解除，
    这是唯一的物理恢复方式，也是刻意的选择（宿主机权限 = 恢复键）。
 
-### 7.4 明文 HTTP 的政策（v0.5.95 反转）
+### 7.4 明文 HTTP：随它去，但不给钥匙
 
-**默认警告、不拦。** 用裸 HTTP 跑面板，等于宣布"这条线不是威胁"：面板再把他拦在开发者模式外，
-只会让他没法修这台机器。所以：
+**开发者模式、终端、守卫、E-Stop 只在面板此刻真的在讲 TLS 时可用**（读主连接器状态，尊重
+`https.trust_forwarded_proto`）。裸 HTTP 部署随它去——那是部署者的选择，面板不为他兜底；但也
+不会在那种状态下把开发者模式打开：没有 TLS 时"提权"本身就是明文传密码，给一把假锁比不给更糟。
 
-- 开发者密码、终端、守卫、E-Stop 在明文下照常可用；每次启动打一行 `WARNING`，开发者页顶部
-  挂红色横幅说明"密码与终端输入输出可被同网段嗅探"；
-- **想要护栏就显式打开** `security.require_https_for_developer: true`
-  （`HDSL_REQUIRE_HTTPS_FOR_DEVELOPER`）：终端 403 `insecure_transport`、提权/守卫
-  409/403 `tls_required`，与 v0.5.94 一致；
-- 判断"是否 HTTPS"读的是主连接器**此刻**的状态，并尊重 `https.trust_forwarded_proto`：
-  反代终结 TLS 且发了 `X-Forwarded-Proto: https` 就按 HTTPS 算（这个信任是显式开关，默认关）。
-
-这条政策的含义要说明白：**默认不阻止你把密码发在明文上，但也不会替你保密**。风险归部署者。
+- HTTP 下开发者页只给提示与去「HTTPS 证书」的按钮；终端 open 返回 403 `insecure_transport`；
+  提权与守卫返回 409/403 `tls_required`；`/i/*` 的提权页直接说"面板不在 HTTPS 下，
+  开发者模式不可用"（不会渲染密码框，因为填了也没用）。
+- **守卫在裸 HTTP 下没有意义**：它不是"再加一道门"，而是"提权管到哪"；提权本身拿不到，
+  守卫只会把实例网页一起锁死。所以守卫与 E-Stop 的控件在 HTTP 下变灰并写明原因（不隐藏）。
+- 判断"是否 HTTPS"遵守 `https.trust_forwarded_proto`：反代终结 TLS 且发了
+  `X-Forwarded-Proto: https` 就按 HTTPS 算。这个信任是显式开关，默认关——直接能连到面板
+  HTTP 端口的客户端可以自己写这个头，所以别在混合暴露的部署上打开它。
+- 想让面板在 HTTP 上可用又安全，正确做法是**给它 TLS**（自签证书、真证书、或反代终结 TLS），
+  不是放宽判定。
 
 ### 7.5 其余不变量
 

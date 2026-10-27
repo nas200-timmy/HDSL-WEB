@@ -2,23 +2,16 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## Unreleased — 2026-10-27 · 明文 HTTP 不再拦开发者模式
+## Unreleased — 2026-10-27 · 文档：把安全说明写完整
 
-- **默认改成"警告不拦"**：裸 HTTP 上跑面板的人已经宣布这条线不是威胁，面板再拦着他只会让他
-  没法修这台机器。开发者密码、终端、守卫、E-Stop 在明文下照常可用，启动时打一行 `WARNING`
-  （每次启动一次），开发者页顶部挂红色横幅说清楚风险。`GET /api/developer/status` 的 `https`
-  仍是事实来源。
-- **想要护栏就显式打开**：新配置 `security.require_https_for_developer`
-  （`HDSL_REQUIRE_HTTPS_FOR_DEVELOPER`），默认 `false`。设为 `true` 恢复 v0.5.94 的行为——
-  终端 403 `insecure_transport`、提权与守卫 409/403 `tls_required`，`/i/*` 的提权页直接说
-  "面板不在 HTTPS 下，开发者模式不可用"。
-- 测试跟着调：`DeveloperApiServletTest` 的代理头用例与 `ZcodeTerminalApiTest` 的明文拒绝用例
-  改成显式打开严格模式；新增两条"默认允许"的用例；`DeveloperGuardGateTest` 现在会先提权再断言
-  门确实打开（`/i/*` 走到代理自己的 404、实例写操作不再是 403）。
-- 说明：守卫与 E-Stop 本身不变，只是"取得提权的通道"不再强制 TLS。
-- 文档：`design-notes.md` §7 重写成完整的安全说明（保护什么 / 不负责的边界 / 三层门 + 刹车 /
-  明文政策 / 其余不变量），`plan.md` 的认证设计补上开发者密码与守卫的落点，`web-shell.md` §4.3
-  改为"默认警告、可显式强制"并链到 §7，`deployment.md` 的症状表同步。
+- `docs/design-notes.md` §7 从"一堆不变量"扩成完整的安全说明：保护什么（实例运行环境 / 面板会话 /
+  凭据）、**不负责的边界**（宿主机权限、网络层、实例里的第三方代码、不做 RBAC）、三层门 + 一个刹车、
+  明文 HTTP 的政策、以及其余不变量。写清楚边界是为了以后别把"能重启容器就解除 E-Stop"当漏洞报。
+- `docs/plan.md` 的认证设计补上"Phase 之后加的第二把钥匙"（开发者密码 + 守卫 + E-Stop）并指向 §7。
+- `docs/web-shell.md` §4.3 改成"开发者模式只在 HTTPS 下可用"，并把"随它去但不给钥匙"的理由写清楚；
+  §4.2.1 末尾补「已知取舍」与「验证纪律」。
+- `docs/deployment.md` 的症状表补两条：守卫要密码是预期、`emergency_stop` 要找按下去的人。
+- 行为没有变化：**明文 HTTP 下开发者模式与守卫依旧不开**（v0.5.94 的规矩）。
 
 ## v0.5.94 — 2026-10-27 · 开发者守卫（反代/实例/全部 API）+ 紧急停机
 

@@ -1557,103 +1557,102 @@ function DeveloperTab() {
     );
   }
 
-  /// 明文 HTTP 的提示：**只是警告**（v0.5.95 起不再拦），页面上其余控件照常可用。
-  const insecureNotice = !status.https ? (
-    <>
-      <div className="card">
-        <div
-          className="form-error"
-          style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px 0", fontSize: 13 }}
-        >
-          <WarningIcon size={16} />
-          当前连接是明文 HTTP：开发者密码与终端输入输出可被同网段嗅探。
-        </div>
-        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "8px 8px 0", lineHeight: 1.6 }}>
-          功能照常可用——这是你的选择，风险由部署环境承担。想要更强的保证就在「HTTPS 证书」里上传证书，
-          或者生成一张自签名证书（浏览器会提示不受信任，只适合内网或临时使用）。
-          如果想让面板**强制**要求 HTTPS，把 <span className="mono">security.require_https_for_developer</span>
-          设为 <span className="mono">true</span>。
-        </p>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingTop: 8 }}>
-          <button
-            className="btn btn-raised ripple-host"
-            onClick={() => setSearchParams({ tab: "tls" }, { replace: true })}
+  if (!status.https) {
+    return (
+      <>
+        {caption}
+        <div className="card">
+          <div
+            className="form-error"
+            style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px 0", fontSize: 13 }}
           >
-            去 HTTPS 设置
-          </button>
-          <button className="btn btn-outline ripple-host" onClick={() => setInsecureOpen(true)}>
-            仍要使用…
-          </button>
-        </div>
-      </div>
-
-      <Dialog open={insecureOpen} title="当前环境不安全" onClose={() => setInsecureOpen(false)}>
-        <div style={{ maxWidth: 440, lineHeight: 1.7 }}>
-          <p>面板现在通过 HTTP 明文提供服务。开发者密码、终端里的键盘输入与输出都会以明文经过网络，
-            任何能看到这条链路的人都能截获。</p>
-          <p>因此开发者模式与 Web Shell 只在 HTTPS 下可用。</p>
-          <p>如果暂时没有证书，可以生成自签名证书继续——浏览器会提示证书不受信任，只适合内网或临时使用。
-            正式部署请上传受信任证书，或者把面板放到带证书的反向代理后面。</p>
-        </div>
-        <div className="dialog-actions">
-          <button className="btn btn-text dim" onClick={() => setInsecureOpen(false)}>
-            返回
-          </button>
-          <button
-            className="btn btn-text"
-            onClick={() => {
-              setInsecureOpen(false);
-              setSearchParams({ tab: "tls" }, { replace: true });
-            }}
-          >
-            去上传证书
-          </button>
-          <button
-            className="btn btn-text danger"
-            onClick={() => {
-              setInsecureOpen(false);
-              setConfirmSelfSigned(true);
-            }}
-          >
-            生成自签名证书
-          </button>
-        </div>
-      </Dialog>
-
-      <ConfirmDialog
-        open={confirmSelfSigned}
-        title="生成自签名证书并启用 HTTPS？"
-        danger
-        busy={switching}
-        confirmLabel={switching ? "生成中…" : "生成并启用"}
-        cancelLabel="取消"
-        message={
-          <div style={{ lineHeight: 1.7 }}>
-            <p>将生成一张自签名证书，并把面板切换到 HTTPS（同一端口）。</p>
-            <ul style={{ paddingLeft: 18, margin: "8px 0" }}>
-              <li>浏览器会提示「证书不受信任」，需要手动选择继续访问；</li>
-              <li>它不能证明服务器身份，只适合内网或临时使用；</li>
-              <li>切换后当前 HTTP 地址会跳到 https:// 同一地址，可能需要重新登录。</li>
-            </ul>
-            {switchError && <div className="form-error">{switchError}</div>}
+            <WarningIcon size={16} />
+            当前连接不是 HTTPS，开发者模式与 Web Shell 不可用。
           </div>
-        }
-        onCancel={() => {
-          if (!switching) {
-            setConfirmSelfSigned(false);
-            setSwitchError(null);
+          <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "8px 8px 0", lineHeight: 1.6 }}>
+            在明文 HTTP 上，开发者密码和终端里的输入输出都会被网络上的其他人看到。请先在「HTTPS 证书」里上传证书；
+            如果暂时没有证书，可以生成自签名证书继续，但浏览器会提示证书不受信任。
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingTop: 8 }}>
+            <button
+              className="btn btn-raised ripple-host"
+              onClick={() => setSearchParams({ tab: "tls" }, { replace: true })}
+            >
+              去 HTTPS 设置
+            </button>
+            <button className="btn btn-outline ripple-host" onClick={() => setInsecureOpen(true)}>
+              仍要使用…
+            </button>
+          </div>
+        </div>
+
+        <Dialog open={insecureOpen} title="当前环境不安全" onClose={() => setInsecureOpen(false)}>
+          <div style={{ maxWidth: 440, lineHeight: 1.7 }}>
+            <p>面板现在通过 HTTP 明文提供服务。开发者密码、终端里的键盘输入与输出都会以明文经过网络，
+              任何能看到这条链路的人都能截获。</p>
+            <p>因此开发者模式与 Web Shell 只在 HTTPS 下可用。</p>
+            <p>如果暂时没有证书，可以生成自签名证书继续——浏览器会提示证书不受信任，只适合内网或临时使用。
+              正式部署请上传受信任证书，或者把面板放到带证书的反向代理后面。</p>
+          </div>
+          <div className="dialog-actions">
+            <button className="btn btn-text dim" onClick={() => setInsecureOpen(false)}>
+              返回
+            </button>
+            <button
+              className="btn btn-text"
+              onClick={() => {
+                setInsecureOpen(false);
+                setSearchParams({ tab: "tls" }, { replace: true });
+              }}
+            >
+              去上传证书
+            </button>
+            <button
+              className="btn btn-text danger"
+              onClick={() => {
+                setInsecureOpen(false);
+                setConfirmSelfSigned(true);
+              }}
+            >
+              生成自签名证书
+            </button>
+          </div>
+        </Dialog>
+
+        <ConfirmDialog
+          open={confirmSelfSigned}
+          title="生成自签名证书并启用 HTTPS？"
+          danger
+          busy={switching}
+          confirmLabel={switching ? "生成中…" : "生成并启用"}
+          cancelLabel="取消"
+          message={
+            <div style={{ lineHeight: 1.7 }}>
+              <p>将生成一张自签名证书，并把面板切换到 HTTPS（同一端口）。</p>
+              <ul style={{ paddingLeft: 18, margin: "8px 0" }}>
+                <li>浏览器会提示「证书不受信任」，需要手动选择继续访问；</li>
+                <li>它不能证明服务器身份，只适合内网或临时使用；</li>
+                <li>切换后当前 HTTP 地址会跳到 https:// 同一地址，可能需要重新登录。</li>
+              </ul>
+              {switchError && <div className="form-error">{switchError}</div>}
+            </div>
           }
-        }}
-        onConfirm={() => void generateSelfSigned()}
-      />
-    </>
-  ) : null;
+          onCancel={() => {
+            if (!switching) {
+              setConfirmSelfSigned(false);
+              setSwitchError(null);
+            }
+          }}
+          onConfirm={() => void generateSelfSigned()}
+        />
+      </>
+    );
+  }
 
   if (!status.devPasswordSet) {
     return (
       <>
         {caption}
-        {insecureNotice}
         <div className="card">
           <div className="comp-row">
             <span className="comp-label">开发者密码</span>
@@ -1718,7 +1717,6 @@ function DeveloperTab() {
     return (
       <>
         {caption}
-        {insecureNotice}
         <div className="card">
           <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
             这个页面需要一个开发者密码才能进入——它和打开实例终端时用的是同一个密码。验证后 30 分钟内有效，
