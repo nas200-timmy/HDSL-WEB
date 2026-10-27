@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router-dom";
-import { ErrorIcon } from "./components/icons";
+import { ErrorIcon, InfoIcon } from "./components/icons";
 import { Decorator } from "./components/Decorator";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { OfflineBanner } from "./components/OfflineBanner";
@@ -19,6 +19,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { bootstrap, useAppState } from "./store";
 import { api } from "./api";
+import { requestDeveloperPassword } from "./elevation";
 import { refreshServerVersion } from "./version";
 
 function SplashScreen() {
@@ -118,7 +119,10 @@ function Shell() {
 /// 状态来自 `GET /api/developer/status`（守卫与停机都会在 /api 白名单里放行它），
 /// 每 20 秒刷新一次，页面重新可见时立刻刷新——按下停机的人刷新页面就能看到。
 function EmergencyStopBanner() {
-  const [state, setState] = useState<{ engaged: boolean; remainingSeconds: number } | null>(null);
+  const [estop, setEstop] = useState<{ engaged: boolean; remainingSeconds: number } | null>(null);
+  /** 「全部 API」档 + 未提权：读也被拦住，页面会像刚装好一样空。要解释，并给一键提权。 */
+  const [readLocked, setReadLocked] = useState(false);
+  const [elevating, setElevating] = useState(false);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -127,12 +131,15 @@ function EmergencyStopBanner() {
       try {
         const status = await api.developerStatus();
         if (!cancelled) {
-          const estop = status.estop;
-          setState({
-            engaged: estop?.engaged === true,
+          const stop = status.estop;
+          setEstop({
+            engaged: stop?.engaged === true,
             // 端点只给按下那一刻的剩余秒数；本地按读取时间往前推。
-            remainingSeconds: estop?.remainingSeconds ?? 0,
+            remainingSeconds: stop?.remainingSeconds ?? 0,
           });
+          // `all` 是唯一会拦读的档：它的意思就是"连列表都要提权"。
+          // 这时页面读不到实例，看起来像空面板——必须说清楚，而不是让人以为数据没了。
+          setReadLocked((status.guardScope ?? "off") === "all" && !status.elevated);
         }
       } catch {
         // 未登录、旧后端、网络抖动：不显示横幅，页面自身的错误处理照旧。
@@ -153,13 +160,58 @@ function EmergencyStopBanner() {
 
   // 剩余时间的秒针：只在停机期间跑，避免整页每秒重渲染。
   useEffect(() => {
-    if (state?.engaged !== true) return;
+    if (estop?.engaged !== true) return;
     const timer = window.setInterval(() => setTick((value) => value + 1), 1_000);
     return () => window.clearInterval(timer);
-  }, [state?.engaged]);
+  }, [estop?.engaged]);
 
-  if (state?.engaged !== true) return null;
-  const remaining = Math.max(0, state.remainingSeconds - tick);
+  /// 「提权」：输密码，成功后整页重载（`all` 档下所有 GET 都等这一次提权）。
+  const elevate = async () => {
+    if (elevating) return;
+    setElevating(true);
+    try {
+      if (await requestDeveloperPassword()) window.location.reload();
+    } finally {
+      setElevating(false);
+    }
+  };
+
+  if (readLocked && estop?.engaged !== true) {
+    return (
+      <div
+        role="status"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "8px 14px",
+          background: "var(--monet-surface-container-high, #e8e6ef)",
+          color: "var(--monet-on-surface)",
+          fontSize: 13,
+        }}
+      >
+        <InfoIcon size={16} />
+        <span>
+          开发者守卫处于「全部 API」档：未提权时连实例列表都读不到，所以页面看起来是空的。
+          这是这一档的设定，不是数据丢了。
+        </span>
+        <button
+          className="btn btn-text"
+          style={{ marginLeft: "auto", whiteSpace: "nowrap" }}
+          disabled={elevating}
+          onClick={() => void elevate()}
+        >
+          {elevating ? "提权中…" : "输入开发者密码"}
+        </button>
+        <a href="settings?tab=developer" style={{ color: "inherit", textDecoration: "underline", whiteSpace: "nowrap" }}>
+          开发者设置
+        </a>
+      </div>
+    );
+  }
+
+  if (estop?.engaged !== true) return null;
+  const remaining = Math.max(0, estop.remainingSeconds - tick);
   const minutes = Math.floor(remaining / 60);
   const seconds = remaining % 60;
 
