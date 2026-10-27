@@ -125,6 +125,42 @@ func TestInputMasksAndKeepsTheCursorInView(t *testing.T) {
 	}
 }
 
+func TestCursorCellFollowsTheCursor(t *testing.T) {
+	cases := []struct {
+		text   string
+		offset int
+		want   string
+	}{
+		{"", 0, "\x1b[7m \x1b[27m"},
+		{"abc", 0, "\x1b[7ma\x1b[27mbc"},
+		{"abc", 1, "a\x1b[7mb\x1b[27mc"},
+		{"abc", 3, "abc\x1b[7m \x1b[27m"},
+		{"中文", 2, "中\x1b[7m文\x1b[27m"},
+		{"中文", 4, "中文\x1b[7m \x1b[27m"},
+	}
+	for _, test := range cases {
+		if got := cursorCell(test.text, test.offset); got != test.want {
+			t.Errorf("cursorCell(%q, %d) = %q, want %q", test.text, test.offset, got, test.want)
+		}
+	}
+}
+
+func TestInputLinesPutTheCursorAtTheEnd(t *testing.T) {
+	input := Input{Value: []rune("abc"), Cursor: 3}
+	lines := input.Lines(20, true)
+	if !strings.Contains(lines[1], "abc\x1b[7m \x1b[27m") {
+		t.Errorf("line = %q, want the inverted space after abc", lines[1])
+	}
+	if strings.Contains(lines[1], "\x1b[7m \x1b[27mabc") {
+		t.Errorf("line = %q, cursor is at the start of the field", lines[1])
+	}
+	for _, line := range lines {
+		if VisibleWidth(line) != 20 {
+			t.Errorf("line width = %d (%q)", VisibleWidth(line), line)
+		}
+	}
+}
+
 func TestRenderProducesAFullScreen(t *testing.T) {
 	page := Page{
 		Title:  "选择服务器",

@@ -167,6 +167,16 @@ test('the caret sits inside the composer border', () => {
   assert.ok(frame.cursor.column < 60)
 })
 
+test('the caret sits after the last character, including wide CJK', () => {
+  for (const text of ['', 'abc', '中文', 'ab中cd']) {
+    const state = createInitialState({ cwd: '/workspace', composerText: text })
+    const frame = renderFrame(state, { width: 60, height: 20, theme, i18n: createI18n('en'), clock: 0 })
+    assert.ok(frame.cursor !== null)
+    // `│ ` + `❯ ` is four cells; the caret follows the text by its display width.
+    assert.equal(frame.cursor.column, 4 + plainWidth(text), `text ${JSON.stringify(text)}`)
+  }
+})
+
 test('a dialog is composited without changing the frame size', () => {
   const state = createInitialState({ cwd: '/workspace' })
   state.overlay = {
