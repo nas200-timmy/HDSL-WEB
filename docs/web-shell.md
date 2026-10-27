@@ -304,7 +304,7 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     模板。账户的供应商路由/default model 由 launcher 写进"这次启动引导的 profile"，所以开终端时
     的启动计划是按 `acp` 建的（`DshTui.runProfile`），环境里也把同一个名字告诉它
     （`HSDL_TUI_ACP_PROFILE`）——写在存储 profile 里的路由，运行中的 harness 是看不见的。
-  - **第一方终端的能力矩阵**（v0.6.0 起，P0/P1 继续打磨）：审批三档（`/yolo`：`ask` **默认** /
+  - **第一方终端的能力矩阵**（v0.5.92 起，P0/P1 继续打磨）：审批三档（`/yolo`：`ask` **默认** /
     `critical` / `full`，由 `plugins/shared/approval/policy.js` 判定，自动放行不绕过审计也不放宽沙箱）；
     默认 `ask` 只读自动、写文件/跑命令/敏感文件/计划都问，敏感文件含 `.env*`、`.ssh/`、`*.pem` 等且**任何档位都问**
     （`full` 也一样）；`web_fetch` 不按"只读"放行（URL 由模型拼，可以带数据出去）；
