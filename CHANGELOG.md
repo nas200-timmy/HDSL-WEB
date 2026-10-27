@@ -2,6 +2,21 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## Unreleased — 2026-10-27 · 明文 HTTP 不再拦开发者模式
+
+- **默认改成"警告不拦"**：裸 HTTP 上跑面板的人已经宣布这条线不是威胁，面板再拦着他只会让他
+  没法修这台机器。开发者密码、终端、守卫、E-Stop 在明文下照常可用，启动时打一行 `WARNING`
+  （每次启动一次），开发者页顶部挂红色横幅说清楚风险。`GET /api/developer/status` 的 `https`
+  仍是事实来源。
+- **想要护栏就显式打开**：新配置 `security.require_https_for_developer`
+  （`HDSL_REQUIRE_HTTPS_FOR_DEVELOPER`），默认 `false`。设为 `true` 恢复 v0.5.94 的行为——
+  终端 403 `insecure_transport`、提权与守卫 409/403 `tls_required`，`/i/*` 的提权页直接说
+  "面板不在 HTTPS 下，开发者模式不可用"。
+- 测试跟着调：`DeveloperApiServletTest` 的代理头用例与 `ZcodeTerminalApiTest` 的明文拒绝用例
+  改成显式打开严格模式；新增两条"默认允许"的用例；`DeveloperGuardGateTest` 现在会先提权再断言
+  门确实打开（`/i/*` 走到代理自己的 404、实例写操作不再是 403）。
+- 说明：守卫与 E-Stop 本身不变，只是"取得提权的通道"不再强制 TLS。
+
 ## v0.5.94 — 2026-10-27 · 开发者守卫（反代/实例/全部 API）+ 紧急停机
 
 > 这一版把"开发者密码"从终端门口扩展到别的入口，并加了一个真正能刹住车的按钮。

@@ -203,7 +203,7 @@ dsh.example.com {
 | `curl https://…` 报 502 / 连不上 | `proxy_pass` 的协议或端口和面板不一致：面板开了 HTTPS 但写的是 `http://`，或端口不是 3080 |
 | 面板自己的自签证书在浏览器里报错，同时 nginx 也有证书 | 两个 HTTPS 叠着用了：要么让 nginx 终结（面板关 HTTPS），要么让面板终结（nginx 用 `https://` + `proxy_ssl_verify off`） |
 | 页面能用，但状态不刷新、终端连不上 | 没透传 `Upgrade`/`Connection` |
-| 终端与开发者模式报 403 `insecure_transport` | 反代终结了 TLS 但没发 `X-Forwarded-Proto`，或面板没开 `trust_forwarded_proto` |
+| 终端与开发者模式报 403 `insecure_transport` / 409 `tls_required` | 要么是反代终结了 TLS 但没发 `X-Forwarded-Proto`（也没开 `trust_forwarded_proto`），要么开了 `security.require_https_for_developer: true` 而面板在明文上跑 |
 | 实例网页突然要开发者密码 | 面板开了开发者守卫（`developer_guard.scope`），这是预期；要么在开发者页提权，要么把作用域调回 `off` |
 | 实例网页 / 终端全部 503 `emergency_stop` | 有人按了紧急停机；冷却 1 小时或重启面板进程/容器，之后在开发者页解除 |
 | 登录 A 面板之后 B 面板掉线 | 同一个域名下挂了两个面板且用了旧版 Cookie（`Path=/` 互相覆盖）；新版按挂载点收敛，重新登录一次即可 |

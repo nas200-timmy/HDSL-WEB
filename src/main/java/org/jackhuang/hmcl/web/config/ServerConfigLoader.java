@@ -52,6 +52,7 @@ public final class ServerConfigLoader {
     public static final String ENV_TRUST_FORWARDED_PROTO = "HDSL_TRUST_FORWARDED_PROTO";
     public static final String ENV_WEB_SHELL_ENABLED = "HDSL_WEB_SHELL_ENABLED";
     public static final String ENV_DEVELOPER_GUARD = "HDSL_DEVELOPER_GUARD";
+    public static final String ENV_REQUIRE_HTTPS_FOR_DEVELOPER = "HDSL_REQUIRE_HTTPS_FOR_DEVELOPER";
     public static final String ENV_ZCODE_PACKAGE = "HDSL_ZCODE_PACKAGE";
     public static final String ENV_ZCODE_NODE = "HDSL_ZCODE_NODE";
     public static final String ENV_ZCODE_BUILD_BIN = "HDSL_ZCODE_BUILD_BIN";
@@ -148,9 +149,13 @@ public final class ServerConfigLoader {
         if (root.containsKey("developer_guard")) {
             applyDeveloperGuard(config, mapField(root, "developer_guard"));
         }
+        if (root.containsKey("security")) {
+            applySecurity(config, mapField(root, "security"));
+        }
         for (String key : root.keySet()) {
             switch (key) {
-                case "bind_host", "port", "public_base_url", "https", "auth", "web_shell", "developer_guard" -> {
+                case "bind_host", "port", "public_base_url", "https", "auth", "web_shell", "developer_guard",
+                     "security" -> {
                 }
                 default -> logger.warning(yamlFile + ": unknown key `" + key + "` ignored");
             }
@@ -160,6 +165,12 @@ public final class ServerConfigLoader {
     private static void applyWebShell(ServerConfig config, Map<String, Object> webShell) {
         if (webShell.containsKey("enabled")) {
             config.webShell.enabled = booleanField(webShell, "enabled");
+        }
+    }
+
+    private static void applySecurity(ServerConfig config, Map<String, Object> section) {
+        if (section.containsKey("require_https_for_developer")) {
+            config.security.requireHttpsForDeveloper = booleanField(section, "require_https_for_developer");
         }
     }
 
@@ -261,6 +272,15 @@ public final class ServerConfigLoader {
         }
         if (env.containsKey(ENV_DEVELOPER_GUARD)) {
             config.developerGuard.scope = guardScope(env.get(ENV_DEVELOPER_GUARD), ENV_DEVELOPER_GUARD);
+        }
+        if (env.containsKey(ENV_REQUIRE_HTTPS_FOR_DEVELOPER)) {
+            String value = env.get(ENV_REQUIRE_HTTPS_FOR_DEVELOPER);
+            config.security.requireHttpsForDeveloper = switch (value) {
+                case "true" -> true;
+                case "false" -> false;
+                default -> throw new ConfigException(ENV_REQUIRE_HTTPS_FOR_DEVELOPER
+                        + " must be `true` or `false`, got `" + value + "`");
+            };
         }
         if (env.containsKey(ENV_ZCODE_PACKAGE)) {
             config.zcode.packageDir = env.get(ENV_ZCODE_PACKAGE);

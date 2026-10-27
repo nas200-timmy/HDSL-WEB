@@ -121,9 +121,11 @@ public final class InstanceTerminal {
         if (!config.webShell.enabled) {
             throw new Refused(403, "web_shell_disabled: the web shell is disabled in developer settings");
         }
-        if (!RequestSecurity.isSecure(request, tlsActive.getAsBoolean(), config)) {
+        if (!RequestSecurity.isSecure(request, tlsActive.getAsBoolean(), config)
+                && config.security.requireHttpsForDeveloper) {
             throw new Refused(403,
-                    "insecure_transport: the web shell requires HTTPS; enable it in the HTTPS settings");
+                    "insecure_transport: the web shell requires HTTPS; enable it in the HTTPS settings, "
+                            + "or set security.require_https_for_developer: false to accept plain HTTP");
         }
         if (!developerAuth.isSet()) {
             throw new Refused(409, "developer_password_not_set: set it before opening a terminal");

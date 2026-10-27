@@ -73,6 +73,10 @@ README 只保留「用户需要知道的」。这里记录为什么这样做—�
 
 - 配置优先级：环境变量 > `server.yaml` > 内置默认值。`server.yaml` 键都可选；写错或非法值
   会让启动失败并指出行/字段，服务器不会带着半份配置起来。
+- **开发者面（终端、提权、守卫、E-Stop）默认不强制 TLS**：明文 HTTP 下照常可用，只在启动时
+  警告一次。理由很简单——用裸 HTTP 跑面板的人已经宣布这条线不是威胁，面板再拦着他只会让他
+  没法修这台机器。想要护栏就显式设 `security.require_https_for_developer: true`（或环境变量
+  `HDSL_REQUIRE_HTTPS_FOR_DEVELOPER=true`），恢复 `tls_required` / `insecure_transport` 的硬拒。
 - `redirect_same_port`（默认开）：TLS 端口同时接受明文连接，只回
   `308 Location: https://<同主机>:<同端口><同路径>`，内容永远不会以明文发出。这样没有域名、
   直接用 IP 访问也不会撞上 `ERR_INVALID_HTTP_RESPONSE`。会话 Cookie 带 `Secure`，明文请求
@@ -98,6 +102,12 @@ README 只保留「用户需要知道的」。这里记录为什么这样做—�
 - 面板 Cookie 是 `HttpOnly` + `SameSite=Strict`，HTTPS 下加 `Secure`，`Path=/`；反代把
   dsh 的 `Set-Cookie: … Path=/` 改写成 `Path=/i/<id>/`，多实例的同名 Cookie 不会互相覆盖。
 - `auth.disabled: true` 只在绑定回环地址时允许——能免登录，但不可能误配到公网。
+- 开发者面还有一层可选的**开发者守卫**（`developer_guard.scope`）：`proxy` 让实例网页要开发者密码，
+  `instance` 再加实例的写操作，`all` 连读也要。它**只挡新请求**——已经打开的页面、已附着的终端、
+  正在跑的 agent 都不动；要立刻掐断是**紧急停机**的事（E-Stop：关终端 + 强杀实例进程树 + 冻结
+  1 小时，状态只在内存，重启即解除）。两者默认都关。
+- 脚本/巡检 agent 走 `POST /api/developer/elevate` 拿 bearer token（内存里、同 TTL、改密码即失效），
+  不需要维护 cookie；这也是守卫开启后本机自动化不被自己锁住的正门。
 - Windows 没有 POSIX 的 0600 语义，凭据文件可能被同机其他账户读到；按单用户机器对待，
   并且不要把数据目录暴露到公网可访问的位置。
 

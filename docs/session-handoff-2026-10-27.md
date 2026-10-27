@@ -12,6 +12,7 @@
 
 - `main` = **v0.5.94**（`web-shell` 以 `--no-ff` 合并进来，两条分支同步）。v0.5.93 是 v0.5.92 之后的
   补丁（输入框光标少算一格），v0.5.94 新增开发者守卫与紧急停机（见 §5.1）。
+  **`web-shell` 上还有一批未发布的改动**：明文 HTTP 不再拦开发者模式（见 §5.2），待下一版发布。
 - 两个第一方插件版本 **0.2.1**（随 jar 分发、从未上 npm；改版本要同时改 `package.json` 与
   `DshTuiPlugins.ENTRIES`）。内容变了而版本没变也没关系：面板比的是摘要，会亮「有新版本」。
   所以 v0.5.93 的插件 tarball 虽然摘要变了，版本号仍是 0.2.1——重新构建镜像后实例页会提示更新。
@@ -155,8 +156,22 @@ v0.5.91 第一次发布就是在这里漏掉的：镜像里的 jar 没有插件�
 - **验证纪律**：E-Stop 只能在独立起的临时面板（临时 `HDSL_DATA`、`HDSL_PORT=0`）上试。
   生产面板里往往正跑着干活的 agent（包括改面板的那个），按下去会一起杀掉，1 小时内起不回来。
 
-## 6. 环境备注
+### 5.2 v0.5.95：明文 HTTP 不再拦（policy 反转）
 
+同一天晚些时候做的反转，别按旧文档办事：
+
+- 默认**警告不拦**：`security.require_https_for_developer`（`HDSL_REQUIRE_HTTPS_FOR_DEVELOPER`）
+  默认 `false`，开发者密码 / 终端 / 守卫 / E-Stop 在明文 HTTP 下全部照常可用，启动打一行
+  `WARNING`，开发者页挂红色横幅。
+- 想要 v0.5.94 的硬拒就把它设成 `true`：终端 403 `insecure_transport`、提权/守卫 409/403
+  `tls_required`。
+- 受影响的旧断言已改：`DeveloperApiServletTest` 的代理头用例、`ZcodeTerminalApiTest` 的明文
+  拒绝用例都显式打开严格模式；新增"默认允许"用例；`DeveloperGuardGateTest` 改成"先提权再断言
+  门打开"（`/i/*` 走到代理自己的 404）。
+- 如果以后又要改回去，只动 `DeveloperApiServlet.requireTls` / `InstanceTerminal.authorize` /
+  `DeveloperGuardFilter` 三处的判定，别在别处加 TLS 检查（会漏）。
+
+## 6. 环境备注
 沿用 [`2026-10-25`](session-handoff-2026-10-25.md) §6 与 [`2026-10-26`](session-handoff-2026-10-26.md) §6：
 推送强制 `-c http.version=HTTP/1.1`（github.com 传满 32 KB 就停）、推送后用 `gh api` 核 sha、
 `github.com:443` 整段不可用时先重试再考虑走 API（API 生成的 commit sha 与本地不同）、
