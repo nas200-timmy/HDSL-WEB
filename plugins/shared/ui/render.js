@@ -84,7 +84,11 @@ export function renderFrame(state, context) {
   } else if (state.focus === 'composer') {
     cursor = {
       row: top + 1 + (activityRow === null ? 0 : 1) + 1 + composerLayout.caretRow,
-      column: 3 + composerLayout.caretColumn,
+      // `│ ` + `❯ ` is four cells before the first content cell. Three put the
+      // caret on the last typed character (or the right half of a wide CJK
+      // glyph), which is exactly the "cursor sits in the middle of the text"
+      // defect seen in the Go client.
+      column: 4 + composerLayout.caretColumn,
     }
   }
 

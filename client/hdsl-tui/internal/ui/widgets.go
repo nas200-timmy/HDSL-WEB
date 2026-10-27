@@ -226,20 +226,21 @@ func (i *Input) Lines(width int, focused bool) []string {
 
 // cursorCell inverts the character at offset (a space at the end of the line),
 // which is the client's visible cursor.
+//
+// The cursor sits *before* the rune at offset: offset 0 inverts the first rune,
+// offset len(value) has no rune after it and appends an inverted space. The
+// previous version fell through to prepending that space at the end, so the
+// cursor appeared at the start of the field even when typing at the end.
 func cursorCell(text string, offset int) string {
 	runes := []rune(text)
 	position := 0
 	for index, r := range runes {
-		cell := runeWidth(r)
-		if position >= offset {
-			if index < len(runes) {
-				return string(runes[:index]) + "\x1b[7m" + string(r) + "\x1b[27m" + string(runes[index+1:])
-			}
-			break
+		if offset <= position {
+			return string(runes[:index]) + "\x1b[7m" + string(r) + "\x1b[27m" + string(runes[index+1:])
 		}
-		position += cell
+		position += runeWidth(r)
 	}
-	return "\x1b[7m \x1b[27m" + text
+	return text + "\x1b[7m \x1b[27m"
 }
 
 // Width is the printed width of plain text.
