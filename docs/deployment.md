@@ -614,3 +614,44 @@ WantedBy=multi-user.target
 - 想直接监听 1024 以下的端口（例如 443）要给 `AmbientCapabilities=CAP_NET_BIND_SERVICE`，
   或者照 §1/§9 在前面放反代。
 - `journalctl -u hdsl-web -f` 看服务日志；面板自己的日志同时在 `<HDSL_DATA>/logs/` 下。
+
+## 11. 把 agent 当对手：三条真边界
+
+面板的凭据（`auth/users.json`、`developer.json`、证书私钥）都是 0600，**这只挡别的用户**。agent 以面板
+用户的身份跑，同一 uid 下它可以直接重写这些文件，也能从 `/proc/<pid>/environ` 读到面板进程的环境变量。
+面板侧加任何检查都挡不住（校验和与签名密钥也在它读得到的地方），所以这一节讲的是 OS/容器层的边界。
+
+判断标准很简单：**你信不信任跑在实例里的那个 agent？** 信，就保持现状（默认、单用户、最省事）；
+不信，就选下面一条，代价从小到大。
+
+### 11.1 外层再认证一次（最便宜，只解决一半）
+
+面板前面放一层自己的认证（nginx `auth_basic`、Authelia、SSO、VPN 白名单）。
+它挡不住"改 `users.json`"这件事，但能保证**偷到面板密码也进不来**，并让"面板被人从网络上摸到"变成
+"面板只对内网/VPN 可见"。见 §1 的反代写法，加 `auth_basic` 即可。
+
+### 11.2 拆容器：面板与实例分开（推荐给 Docker 部署）
+
+- 面板容器只挂 `auth/`、`certs/`、`logs/`；实例容器只挂实例目录（`hdsl/instances/`、pnpm store）。
+- 两边**不共享** `auth/`，agent 也就没有可改的面板凭据。
+- 代价：`/i/<id>/` 反代要跨容器访问实例端口（容器网络里的服务名），实例的 `$DSH_HOME` 与 pnpm store
+  要重新规划；两个容器都要有相同的 uid 约定（比如都用 1000）。
+- 好处：升级、重启、甚至面板整个换掉，都不影响实例；E-Stop 也只需管自己那半边。
+
+### 11.3 不同 uid 跑实例（Linux 裸部署，最彻底）
+
+- 面板以 `hdsl` 用户跑，`/srv/hdsl/data/auth` 保持 `hdsl:hdsl 0700`；实例进程由面板
+  **降权**为 `dsh-agent` uid（或用 systemd 的 `User=dsh-agent` 跑一个每实例的 unit）。
+- agent 读写自己的 `$DSH_HOME`、工作区、pnpm store，但进不去 `auth/`，也读不到面板的
+  `/proc/<pid>/environ`。
+- 代价：`$DSH_HOME`、pnpm store、终端 PTY 的属主都要迁；**Windows 没有等价的 uid 语义**，
+  这条路在 Windows 上不可用。
+- 目前面板没有内置"实例降权"开关（见 `docs/design-notes.md` §7.2 为什么不做假防线）；
+  要用就自己用 `sudo -u dsh-agent` / systemd unit 包一层，并接受终端与文件属主的手工维护。
+
+### 11.4 明确不做的事
+
+- 不做"哈希文件保护"（校验和、签名、内存基线告警）：同 uid 下都是剧场，只会让下一个人误以为
+  这里有边界。
+- 不做"给 agent 少一点权限但还能干活"的中间态：它要么能写自己的 home（那就一样能写面板数据，
+  只要同 uid），要么根本跑不起来。
