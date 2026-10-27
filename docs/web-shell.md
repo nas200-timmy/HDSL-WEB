@@ -319,6 +319,10 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     面板 xterm 的字体栈带 CJK 等宽字体，全角字符与标点正好两格；`/provider` 在终端里增删 `llm-pi-ai` 的供应商（写 settings、
     密钥走 credentials，`--yes` 才落盘）。启动页是 dsh-TUI README 像素鲸鱼的静态帧（原 SVG 调色板）+ 模型/档位/计划/cwd/会话 +
     Kimi 风格按键提示。ACP 线路只保留协议允许的部分，其余命令会明确说明不可用，而不是静默失败。
+  - **中文输入法**：xterm 6 在 composition 期间写屏会移动候选框；隐藏 textarea 的残留还会让
+    229 键把旧输入整段重发（xtermjs/xterm.js#6078）。面板终端在组词期间缓冲 PTY 输出、结束后再刷，
+    并在按键/组词结束后延迟清理 textarea 残留（`screenReaderMode` 除外），所以候选框不会漂，
+    也不会突然把前面的文字复制进输入框。
   - **第一方终端的可靠性约定**（两个都适用）：粘贴走 bracketed paste，由 `keys.js` 解出
     `{name:'paste', text}` 交给 composer（CRLF 归一化后插入；对话框打开时忽略，不写进看不见的输入框）；
     握手/子进程死亡/信号退出都会还原终端并清掉定时器，**失败的启动不会留下一个常驻进程**；
