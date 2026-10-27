@@ -2,6 +2,14 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## Unreleased — 2026-10-28 · 「全部 API」档的空面板给个说法
+
+- `all` 档的行为不变（连读都要提权，这是它区别于 `instance` 的地方），但**前端不再让人对着空列表猜**：
+  顶部出现一条提示「『全部 API』档：未提权时连实例列表都读不到，所以页面是空的」，
+  旁边一个「输入开发者密码」按钮，提权成功后整页重载。横幅复用已有的 `/api/developer/status` 轮询。
+- `proxy` / `instance` 两档读本来就开放，不显示这条提示。
+- 文档：`docs/web-shell.md` §4.2 补一句"`all` 档连读要提权，界面会明说，不会假装没有实例"。
+
 ## Unreleased — 2026-10-28 · 文档：把"同 uid 的 agent"这条边界写清楚
 
 - `docs/design-notes.md` §7.2 增加一条**结构性事实**：`users.json` / `developer.json` / 证书私钥的
