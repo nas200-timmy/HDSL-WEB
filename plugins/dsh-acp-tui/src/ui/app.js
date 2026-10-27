@@ -20,8 +20,10 @@ import { Screen } from '../../../shared/term/screen.js'
 import { createKeyDecoder } from '../../../shared/term/keys.js'
 import { Composer } from '../../../shared/ui/composer.js'
 import { applyEditKey, isLiveOverlay } from '../../../shared/ui/edit.js'
+import { applyCompletion, completionFor, nextCandidate } from '../../../shared/ui/complete.js'
+import { APPROVAL_MODES, DEFAULT_APPROVAL_MODE, allowKey, decide } from '../../../shared/approval/policy.js'
 import { renderFrame, spinnerFrame } from '../../../shared/ui/render.js'
-import { formatDuration, shortId } from '../../../shared/ui/blocks.js'
+import { ageLabel, formatDuration, shortId } from '../../../shared/ui/blocks.js'
 import { VERSION } from '../version.js'
 
 const TICK_MS = 33
@@ -38,16 +40,26 @@ const REVEAL_MAX_FRAMES = 26
  */
 const TURN_SETTLE_MS = 2_000
 
-/** Commands offered by `/` and by the help dialog. */
+/** Commands offered by `/` and by the help dialog on this line. */
 const COMMANDS = [
   { name: 'help', key: 'cmd.help' },
   { name: 'model', key: 'cmd.model' },
   { name: 'effort', key: 'cmd.effort' },
+  { name: 'yolo', key: 'cmd.yolo' },
   { name: 'resume', key: 'cmd.resume' },
   { name: 'new', key: 'cmd.new' },
   { name: 'clear', key: 'cmd.clear' },
+  { name: 'status', key: 'cmd.status' },
   { name: 'quit', key: 'cmd.quit' },
 ]
+
+/**
+ * Commands the in-process terminal gets from the harness, which ACP has no
+ * channel for: the protocol advertises only `model` and `reasoning_effort` as
+ * session configuration, and there is no method to run a command or switch a
+ * permission preset. Saying so beats pretending they worked.
+ */
+const INPROC_ONLY = new Set(['permission', 'preset', 'plan', 'goal', 'feedback', 'export', 'compact', 'provider'])
 
 /**
  * Everything one terminal session needs.
@@ -102,6 +114,16 @@ export class App {
     this.quitArmedAt = null
     this.pendingPermission = null
     this.permissionQueue = []
+    /** "Run for this session": keys the person said yes to, answered without a dialog. */
+    this.allowedTools = new Set()
+    /** How much this session asks before running a tool — see the shared policy. */
+    this.approvalMode = DEFAULT_APPROVAL_MODE
+    /** Requests this session ran without a dialog, for the badge and `/yolo status`. */
+    this.autoApproved = 0
+    /** The rejection reason being typed, or `null` when that line is closed. */
+    this.reasonDraft = null
+    /** The Tab completion being cycled, or `null`. */
+    this.completion = null
     /**
      * Identifies the turn that owns the screen. A switch bumps it, which is what
      * makes a still-running `session/prompt` a no-op when it finally answers.
@@ -236,6 +258,11 @@ export class App {
     }
     this.running = false
     this.resolveExit(this.exitCode)
+  }
+
+  /** What the renderer reads for the approval badge. */
+  get approval() {
+    return { mode: this.approvalMode, autoApproved: this.autoApproved }
   }
 
   /** Resolves with the exit code once the terminal has been restored. */
@@ -555,19 +582,60 @@ export class App {
   /** @private */
   showPermission(message) {
     const params = message.params ?? {}
-    this.pendingPermission = { id: message.id, params }
-    const options = (params.options ?? []).map((option) => ({
-      label: permissionLabel(option, this.i18n),
-      value: option.optionId,
-      kind: option.kind,
-    }))
+    const toolName = params.toolCall?.title ?? params.toolCall?.kind ?? params.toolCall?.name ?? 'tool'
+    // The server decides which options exist; the dialog shows the same four the
+    // in-process terminal does, in the same order, so one set of keys works on
+    // both lines. An option the server does not offer is emulated (see
+    // `answerPermission`): "run for this session" answers `allow_once` and
+    // remembers the key, which is the same promise under a different name.
+    const offered = params.options ?? []
+    const allowOnce = offered.find((option) => option.kind === 'allow_once')
+      ?? offered.find((option) => option.kind === 'allow_always')
+    const allowAlways = offered.find((option) => option.kind === 'allow_always')
+    const reject = offered.find((option) => option.kind === 'reject_once')
+      ?? offered.find((option) => option.kind === 'reject_always')
+    const key = allowKey(toolName, params.toolCall?.rawInput)
+    if (this.allowedTools.has(key) && allowOnce !== undefined) {
+      // Already answered for this session: no dialog, one audit record from the server.
+      this.respondAllow(message.id, allowOnce, next => this.showPermission(next))
+      return
+    }
+    // The same decision the in-process terminal makes, on the information the
+    // protocol gives: the tool, its title and its raw input.
+    const verdict = decide({
+      mode: this.approvalMode,
+      toolName,
+      input: params.toolCall?.rawInput,
+      cwd: this.cwd,
+    })
+    if (verdict.verdict === 'allow' && allowOnce !== undefined) {
+      this.autoApproved += 1
+      this.respondAllow(message.id, allowOnce, next => this.showPermission(next))
+      return
+    }
+    this.pendingPermission = {
+      id: message.id,
+      params,
+      toolName,
+      key,
+      allowOnce: allowOnce?.optionId ?? null,
+      allowAlways: allowAlways?.optionId ?? allowOnce?.optionId ?? null,
+      reject: reject?.optionId ?? null,
+    }
     this.overlay = {
       kind: 'permission',
-      toolName: params.toolCall?.title ?? params.toolCall?.kind ?? params.toolCall?.name,
+      toolName,
       detail: permissionDetail(params.toolCall),
-      options: options.length > 0 ? options : [{ label: this.i18n.t('permission.reject'), value: null, kind: 'reject_once' }],
+      options: [
+        { label: this.i18n.t('permission.allow-once'), value: 'allowed-once' },
+        { label: this.i18n.t('permission.allow-always'), value: 'session-allow' },
+        { label: this.i18n.t('permission.reject'), value: 'rejected' },
+        { label: this.i18n.t('permission.reject-reason'), value: 'reject-reason' },
+      ],
       index: 0,
+      detailOffset: 0,
     }
+    if (this.reasonDraft !== null) this.overlay.reason = { text: this.reasonDraft }
     this.dirty = true
     this.render()
   }
@@ -577,16 +645,112 @@ export class App {
     const pending = this.pendingPermission
     if (pending === null) return
     const value = choice?.value ?? null
-    if (value === null) {
+    if (value === 'reject-reason') {
+      // The line opens inside the dialog: the composer behind it is not visible.
+      if (this.overlay?.reason === undefined) {
+        this.reasonDraft = ''
+        this.overlay = { ...this.overlay, reason: { text: '' } }
+        this.dirty = true
+        this.render()
+      }
+      return
+    }
+    let optionId = value
+    if (value === 'session-allow') {
+      this.allowedTools.add(pending.key)
+      optionId = pending.allowAlways ?? pending.allowOnce
+    } else if (value === 'allowed-once') {
+      optionId = pending.allowOnce ?? pending.allowAlways
+    } else if (value === 'rejected') {
+      optionId = pending.reject
+    }
+    if (optionId === null || optionId === undefined) {
+      // No option means no way to say "yes" (or "no") that the server accepts:
+      // cancelling is the honest answer — it settles the ask without inventing a
+      // decision the harness cannot interpret.
       this.client?.respond(pending.id, { result: { outcome: { outcome: 'cancelled' } } })
     } else {
-      this.client?.respond(pending.id, { result: { outcome: { outcome: 'selected', optionId: value } } })
+      this.client?.respond(pending.id, { result: { outcome: { outcome: 'selected', optionId } } })
     }
+    this.reasonDraft = null
     this.pendingPermission = null
     this.overlay = null
     this.dirty = true
     const next = this.permissionQueue.shift()
     if (next !== undefined) this.showPermission(next)
+  }
+
+  /**
+   * Answers one request with an allow option without drawing a dialog.
+   *
+   * @private
+   * @param {number | string} id the request id
+   * @param {{optionId: string}} option the option to select
+   * @param {(next: object) => void} show how to present the next queued request
+   */
+  respondAllow(id, option, show) {
+    this.client?.respond(id, { result: { outcome: { outcome: 'selected', optionId: option.optionId } } })
+    const next = this.permissionQueue.shift()
+    if (next !== undefined) show(next)
+    this.dirty = true
+  }
+
+  /**
+   * Settles the open request as rejected and queues the reason for the model.
+   *
+   * The rejection the harness receives carries no text, so the reason only
+   * reaches the model as a prompt of its own. ACP refuses a second
+   * `session/prompt` while one is in flight ("a prompt is already in flight"),
+   * so it goes through the same queue a typed-while-working message uses and is
+   * sent when the turn settles — not a moment before.
+   *
+   * @private
+   */
+  submitReason() {
+    const reason = String(this.reasonDraft ?? '').trim()
+    const toolName = this.pendingPermission?.toolName ?? 'tool'
+    this.answerPermission({ value: 'rejected' })
+    if (reason === '') return
+    const text = this.i18n.t('permission.reason.message', { tool: toolName, reason })
+    this.pushUser(text)
+    this.queue.push(text)
+    this.dirty = true
+    this.drainQueue()
+  }
+
+  /**
+   * Edits the rejection reason while its line is open.
+   *
+   * @private
+   * @param {{name: string, text?: string}} event the decoded key
+   */
+  editReason(event) {
+    const draft = this.reasonDraft ?? ''
+    const { name } = event
+    if (name === 'char') {
+      this.reasonDraft = draft + (event.text ?? '')
+    } else if (name === 'paste') {
+      this.reasonDraft = draft + String(event.text ?? '').replace(/\r\n?/gu, '\n')
+    } else if (name === 'backspace') {
+      this.reasonDraft = Array.from(draft).slice(0, -1).join('')
+    } else if (name === 'enter') {
+      this.submitReason()
+      return
+    } else if (name === 'escape' || name === 'ctrl+c') {
+      this.reasonDraft = null
+      if (this.overlay !== null) {
+        const { reason: _dropped, ...rest } = this.overlay
+        this.overlay = rest
+      }
+      this.dirty = true
+      this.render()
+      return
+    } else {
+      return
+    }
+    if (this.overlay !== null) this.overlay.reason = { text: this.reasonDraft }
+    this.dirty = true
+    this.render()
   }
 
   /** @private */
@@ -631,6 +795,8 @@ export class App {
 
   /** @private */
   onKeyEvent(event) {
+    // Any key but Tab ends the cycle: the next Tab starts from the fresh token.
+    if (event.name !== 'tab') this.completion = null
     if (this.overlay !== null) {
       // The command palette floats over the text being typed, so the keys that
       // edit text keep editing it and the palette merely re-filters; a dialog
@@ -764,7 +930,7 @@ export class App {
       return
     }
     if (name === 'tab') {
-      this.completeCommand()
+      this.complete()
       return
     }
     if (name === 'shift+tab') {
@@ -815,7 +981,7 @@ export class App {
       return true
     }
     if (event.name === 'tab') {
-      this.completeCommand()
+      this.complete()
       return true
     }
     if (!applyEditKey(this.composer, event, width)) return false
@@ -830,6 +996,10 @@ export class App {
     const overlay = this.overlay
     if (overlay === null) return
     const { name } = event
+    if (overlay.reason !== undefined) {
+      this.editReason(event)
+      return
+    }
     if (name === 'paste') {
       // A dialog owns the keyboard while it is up; the composer behind it is not
       // visible, so inserting there would edit text the person cannot see (and
@@ -853,6 +1023,14 @@ export class App {
       return
     }
     if (name === 'page-up' || name === 'page-down') {
+      if (overlay.kind === 'permission' && overlay.detail) {
+        // Page keys scroll the command/patch: a long one must be readable without
+        // pushing the four choices off the dialog.
+        const step = name === 'page-up' ? -6 : 6
+        overlay.detailOffset = Math.max(0, (overlay.detailOffset ?? 0) + step)
+        this.dirty = true
+        return
+      }
       const length = overlay.items?.length ?? 0
       if (length === 0) return
       overlay.index = Math.max(0, Math.min(length - 1, (overlay.index ?? 0) + (name === 'page-up' ? -6 : 6)))
@@ -942,16 +1120,82 @@ export class App {
     this.dirty = true
   }
 
-  /** @private */
-  completeCommand() {
-    const text = this.composer.text
-    if (!text.startsWith('/')) return
-    const prefix = text.slice(1)
-    const match = COMMANDS.find((command) => command.name.startsWith(prefix))
-    if (match !== undefined) {
-      this.composer.setText(`/${match.name} `)
-      this.overlay = null
+  /**
+   * Completes the token under the caret, cycling on repeated Tab.
+   *
+   * This line has no command runtime to ask, so the candidates are the local
+   * table and the values the session already advertised (`configOptions` for the
+   * model and the effort). Workspace paths are an in-process feature: ACP has no
+   * workspace file service.
+   *
+   * @private
+   */
+  complete() {
+    const caret = this.composer.caret
+    // Still cycling the same candidate: the text is exactly the option applied
+    // last time and the caret sits right after it, so the next Tab moves on
+    // instead of re-filtering from what was just filled in.
+    const current = this.completion
+    if (current !== null && current !== undefined
+      && caret === current.start + current.option.length
+      && this.composer.text.slice(current.start, caret) === current.option) {
+      const index = (current.index + 1) % current.options.length
+      const option = current.options[index]
+      const next = applyCompletion(
+        { text: this.composer.text, caret },
+        { start: current.start, end: caret },
+        option,
+      )
+      this.composer.setText(next.text)
+      this.composer.caret = next.caret
+      this.completion = { ...current, index, option, end: next.caret }
+      this.syncCommandPalette()
       this.dirty = true
+      return
+    }
+    const fresh = completionFor({
+      text: this.composer.text,
+      caret: this.composer.caret,
+      resolve: (request) => this.completionsFor(request),
+    })
+    if (fresh === null) {
+      this.completion = null
+      this.dirty = true
+      return
+    }
+    const { option, index } = nextCandidate(this.completion, fresh)
+    const applied = applyCompletion(
+      { text: this.composer.text, caret: this.composer.caret },
+      fresh,
+      option,
+    )
+    this.composer.setText(applied.text)
+    this.composer.caret = applied.caret
+    this.completion = { ...fresh, index, option }
+    this.syncCommandPalette()
+    this.dirty = true
+  }
+
+  /**
+   * The candidate source for this line.
+   *
+   * @private
+   * @param {{token: string, index: number, command: string}} request what is being completed
+   * @returns {string[]} candidates
+   */
+  completionsFor(request) {
+    const { token, index, command } = request
+    if (index === 0) return COMMANDS.map((entry) => `/${entry.name}`)
+    if (token.startsWith('@')) return []
+    switch (command) {
+      case 'yolo':
+        return ['ask', 'critical', 'full', 'status', 'forget']
+      case 'effort':
+        return (this.effort.options ?? []).map((option) => option.value)
+      case 'model':
+        return (this.model.options ?? []).map((option) => option.value)
+      default:
+        return []
     }
   }
 
@@ -1119,14 +1363,95 @@ export class App {
       case 'new':
         this.startNewSession()
         return
+      case 'yolo':
+        this.runYolo(argument)
+        return
+      case 'status':
+        this.openStatus()
+        return
       case 'quit':
       case 'exit':
         this.quit()
         return
       default:
+        if (INPROC_ONLY.has(name)) {
+          // One sentence, not a shrug: the command exists, this line cannot run it.
+          this.pushNotice(this.i18n.t('cmd.needs-inproc', { name }), 'info')
+          return
+        }
         this.pushNotice(this.i18n.t('cmd.unknown', { name }), 'error')
     }
     if (argument !== undefined && argument !== '') this.log(`ignored argument for /${name}: ${argument}`)
+  }
+
+  /**
+   * `/yolo` — how much this session asks before running a tool.
+   *
+   * ACP has no permission-preset channel, but it does ask the client for every
+   * permission decision, so the filtering happens here on the request itself —
+   * the same three modes and the same policy module the in-process terminal uses.
+   *
+   * @private
+   * @param {string} argument the argument, if any
+   */
+  runYolo(argument) {
+    const arg = String(argument ?? '').trim().toLowerCase()
+    if (arg === 'status') {
+      this.pushNotice(this.i18n.t('yolo.status', {
+        mode: this.i18n.t(`status.mode.${this.approvalMode}`),
+        count: String(this.autoApproved),
+        tools: String(this.allowedTools.size),
+      }), 'info')
+      this.dirty = true
+      return
+    }
+    if (arg === 'forget') {
+      this.allowedTools.clear()
+      this.pushNotice(this.i18n.t('yolo.forgotten'), 'success')
+      this.dirty = true
+      return
+    }
+    if (arg === '') {
+      const index = APPROVAL_MODES.indexOf(this.approvalMode)
+      this.approvalMode = APPROVAL_MODES[(index + 1) % APPROVAL_MODES.length]
+    } else if (APPROVAL_MODES.includes(arg)) {
+      this.approvalMode = arg
+    } else {
+      this.pushNotice(this.i18n.t('yolo.unknown', { mode: arg }), 'error')
+      this.dirty = true
+      return
+    }
+    this.pushNotice(this.i18n.t(`yolo.set.${this.approvalMode}`), this.approvalMode === 'full' ? 'warning' : 'success')
+    this.dirty = true
+  }
+
+  /**
+   * `/status` — the facts a person checks when something feels off.
+   *
+   * @private
+   */
+  openStatus() {
+    const usage = this.usage
+    this.overlay = {
+      kind: 'help',
+      title: this.i18n.t('status.title'),
+      width: 72,
+      maxHeight: 20,
+      sections: [{
+        title: this.i18n.t('status.title'),
+        rows: [
+          [this.i18n.t('status.mode'), this.i18n.t(`status.mode.${this.approvalMode}`)
+            + (this.autoApproved > 0 ? ` · ${this.i18n.t('yolo.auto', { count: String(this.autoApproved) })}` : '')],
+          ['session', this.sessionId ?? '—'],
+          [this.i18n.t('status.model'), `${this.model.currentLabel ?? this.model.current ?? '—'}`
+            + (this.effort.current === null ? '' : ` · ${this.effort.current}`)],
+          [this.i18n.t('status.context'), usage.size > 0 ? `${usage.used}/${usage.size}` : '—'],
+          [this.i18n.t('status.plugins'), `dsh-acp-tui v${VERSION}`],
+          ['cwd', this.cwd],
+        ],
+      }],
+    }
+    this.dirty = true
   }
 
   /** @private */
@@ -1138,6 +1463,12 @@ export class App {
       height: 24,
       sections: [
         { title: this.i18n.t('help.commands'), rows: COMMANDS.map((command) => [`/${command.name}`, this.i18n.t(command.key)]) },
+        {
+          // Named, not hidden: knowing a command exists and why it cannot run here
+          // is more useful than a shorter list that looks complete.
+          title: this.i18n.t('help.unsupported'),
+          rows: [...INPROC_ONLY].map((name) => [`/${name}`, this.i18n.t('cmd.needs-inproc.short')]),
+        },
         {
           title: this.i18n.t('help.keys'),
           rows: [
@@ -1220,11 +1551,16 @@ export class App {
       this.pushNotice(this.failureText(error), 'error')
       return
     }
-    const items = sessions.map((session) => ({
-      label: shortId(session.sessionId),
-      tail: session.cwd === this.cwd ? this.i18n.t('resume.here') : session.cwd,
-      onSelect: () => this.resumeSession(session.sessionId),
-    }))
+    const items = sessions.map((session) => {
+      const current = session.sessionId === this.sessionId
+      const where = session.cwd === this.cwd ? this.i18n.t('resume.here') : session.cwd
+      const age = session.createdAt === undefined ? '' : ` · ${ageLabel(Date.now() - session.createdAt)}`
+      return {
+        label: `${shortId(session.sessionId)}${current ? ` · ${this.i18n.t('resume.current')}` : ''}`,
+        tail: `${where}${age}`,
+        onSelect: () => this.resumeSession(session.sessionId),
+      }
+    })
     if (items.length === 0) {
       this.pushNotice(this.i18n.t('resume.empty'), 'info')
       return
@@ -1256,6 +1592,11 @@ export class App {
   async detachTurn() {
     this.queue = []
     this.activity = { tool: null, startedAt: null }
+    // "Run for this session" was a promise about the session being left, and a
+    // half-typed reason has no meaning in the next one.
+    this.allowedTools.clear()
+    this.reasonDraft = null
+    this.permissionQueue = []
     if (this.status === 'working' && this.client !== null && this.sessionId !== null) {
       try {
         this.client.notify('session/cancel', { sessionId: this.sessionId })
@@ -1274,15 +1615,29 @@ export class App {
   async resumeSession(sessionId) {
     this.overlay = null
     if (this.client === null) return
+    const previous = this.sessionId
     try {
       await this.detachTurn()
+      // The session being left is closed first: the harness holds one live record
+      // per session and nothing would ever release this one, so switching a few
+      // times would pile up sessions that are still "open" from its side.
+      if (previous !== null && previous !== sessionId && this.client.sessions?.close !== undefined) {
+        await this.client.request('session/close', { sessionId: previous }).catch(() => {})
+      }
       const result = await this.client.request('session/resume', { sessionId, cwd: this.cwd, mcpServers: [] })
       this.blocks = this.blocks.filter((block) => block.type === 'banner')
       this.transcriptCache = new WeakMap()
       this.adoptSession(result, sessionId)
       this.pushNotice(this.i18n.t('banner.resume', { id: shortId(sessionId) }), 'info')
     } catch (error) {
-      this.pushNotice(this.failureText(error), 'error')
+      // Nothing was adopted, so the terminal is still on the session it was on —
+      // saying which one is the difference between "failed" and "failed, and you
+      // are where you were".
+      this.pushNotice(this.i18n.t('resume.failed.kept', {
+        target: shortId(sessionId),
+        previous: previous === null ? '—' : shortId(previous),
+        error: this.failureText(error),
+      }), 'error')
     }
     this.dirty = true
   }

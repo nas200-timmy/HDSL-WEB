@@ -1,5 +1,8 @@
 # 会话交接：HDSL-web（2026-10-26）
 
+> **已被 [`session-handoff-2026-10-27.md`](session-handoff-2026-10-27.md) 接续**（v0.6.0：三档审批、
+> 命令委托、Tab 补全、供应商）。本稿仍是第一方终端本体与三轮审查的权威文本。
+>
 > 本稿接住 **v0.5.91**：面板第一次自带终端（`plugins/` 下两个第一方插件），以及围绕它们的
 > **三轮外部审查**修复。上一稿 [`session-handoff-2026-10-25.md`](session-handoff-2026-10-25.md)
 > 仍有效——实例生命周期 ↔ 终端、反代、整合包契约、部署与环境备注都在那里，本稿只写它之后的增量
@@ -148,9 +151,19 @@ git -c http.version=HTTP/1.1 push origin main web-shell v0.5.91
 gh release create v0.5.91 build/libs/hdsl-web-0.5.91.jar SHA256SUMS.txt --notes-file <notes>
 ```
 
-Release 说明的固定做法：`sed -n '/^## v0.5.91/,/^## v0.5.84/p' CHANGELOG.md | sed '$d'` 存成文件
-再 `--notes-file`。客户端 5 个平台资产与 `SHA256SUMS-client.txt` 由 tag 触发的 `client.yml` 上传；
+**Release 说明写什么**：v0.5.91 起，Release 正文是**面向用户的功能介绍**（这一版有什么、怎么用、
+边界在哪），不再是 CHANGELOG 的摘录——第一次直接 `sed` 提了工程记录，被用户退回重写。CHANGELOG 仍是
+工程记录，两者的读者不同。正文写在 `/tmp` 的文件里再 `--notes-file`，发布后要改走
+`gh api -X PATCH repos/<owner>/<repo>/releases/<id> --input <json>`（`gh release edit` 走同一接口）。
+
+客户端 5 个平台资产与 `SHA256SUMS-client.txt` 由 tag 触发的 `client.yml` 上传（`--clobber`，可重复跑）；
 docker `0.5.91` 会拿到 `latest`（`sort -V`）。
+
+**容器镜像这条路容易被漏掉**：`Dockerfile` 的构建阶段是**白名单 COPY**，新增任何会被 Gradle 读到的
+顶层目录都要显式 COPY 进去。v0.5.91 第一次发布就漏了 `COPY plugins ./plugins`——镜像里那份 jar
+**不带第一方终端**（索引为空，面板照样列出条目，点安装才失败），而 CI 全绿。现在 `Dockerfile`
+里有 `COPY plugins` 和一条构建期断言（jar 里必须至少有一个 `first-party-plugins/*.tgz`），断言
+放在 `shadowJar` 之后、镜像组装之前，漏了当场失败。
 
 ## 6. 环境备注（下次接手别踩）
 

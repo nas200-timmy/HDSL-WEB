@@ -107,12 +107,16 @@ function pickerLines(overlay, width, budget, theme, i18n) {
 
   // Size the window by rendered rows, not by item count: a description that
   // wraps to two lines is a taller row than a bare label.
-  const rendered = items.map((item) => {
+  const rendered = items.map((item, index) => {
     const rows = []
-    const pointer = item === items[selected] ? theme.fg('primary', POINTER) : ' '
-    const label = item === items[selected] ? theme.strong('textStrong', item.label) : theme.fg('text', item.label)
+    const selectedItem = item === items[selected]
+    const pointer = selectedItem ? theme.fg('primary', POINTER) : ' '
+    // The number is the shortcut (1-9 pick a row), and printing it is what lets a person
+    // discover that — the same reason the permission dialog numbers its options.
+    const number = index < 9 ? theme.fg(selectedItem ? 'primary' : 'textMuted', `${index + 1}.`) : '  '
+    const label = selectedItem ? theme.strong('textStrong', item.label) : theme.fg('text', item.label)
     const tail = item.tail ? theme.fg('textMuted', `  ${item.tail}`) : ''
-    rows.push(`${pointer} ${label}${tail}`)
+    rows.push(`${pointer} ${number} ${label}${tail}`)
     if (item.description) {
       const wrapped = wrapStyled(theme.fg('textMuted', item.description), Math.max(8, inner - 2))
       for (const row of wrapped.slice(0, MAX_DESCRIPTION_LINES)) rows.push(`  ${row}`)
@@ -163,18 +167,19 @@ function permissionLines(overlay, width, theme, i18n) {
   const tool = overlay.toolName ? theme.strong('textStrong', overlay.toolName) : theme.fg('text', 'tool')
   lines.push(`${theme.fg('warning', '⚑')} ${tool}`)
   if (overlay.detail) {
-    // The detail is a command or a patch: potentially hundreds of rows. The box keeps the
-    // first rows and drops the rest, and since the options are drawn after it a long detail
-    // would push 允许/拒绝 out of the dialog — the keyboard still worked, but the user could
-    // not see what they were answering. Budget the detail so the choices always fit.
+    // The detail is a command or a patch: potentially hundreds of rows. The box keeps a
+    // budgeted window and the rest is reachable with page-up/page-down — the options stay
+    // on screen, because answering without seeing what is being answered is the defect
+    // this dialog exists to avoid.
     const wrapped = wrapStyled(theme.fg('textDim', overlay.detail), Math.max(8, width - 6))
     const budget = MAX_PERMISSION_DETAIL_LINES
-    if (wrapped.length > budget) {
+    const maxOffset = Math.max(0, wrapped.length - budget)
+    const offset = Math.max(0, Math.min(maxOffset, overlay.detailOffset ?? 0))
+    lines.push(...wrapped.slice(offset, offset + budget))
+    if (maxOffset > 0) {
       const hidden = wrapped.length - budget
-      lines.push(...wrapped.slice(0, budget))
-      lines.push(theme.fg('textMuted', `  … ${hidden} more line${hidden === 1 ? '' : 's'}`))
-    } else {
-      lines.push(...wrapped)
+      const where = offset === 0 ? `↓ ${hidden}` : offset >= maxOffset ? `↑ ${hidden}` : `↑ ${offset} · ↓ ${hidden - offset}`
+      lines.push(theme.fg('textMuted', `  … ${i18n.t('permission.detail.more', { where, count: hidden })}`))
     }
   }
   lines.push('')
@@ -182,9 +187,22 @@ function permissionLines(overlay, width, theme, i18n) {
   options.forEach((option, index) => {
     const active = index === (overlay.index ?? 0)
     const mark = active ? theme.fg('primary', POINTER) : ' '
+    // The number is the shortcut: 1-9 pick the row, and seeing it is what makes the
+    // shortcut discoverable (the keys worked before, but nothing said so).
+    const number = index < 9 ? theme.fg(active ? 'primary' : 'textMuted', `${index + 1}.`) : '  '
     const label = active ? theme.strong('textStrong', option.label) : theme.fg('text', option.label)
-    lines.push(`${mark} ${label}`)
+    const hint = active && option.hint ? theme.fg('textMuted', `  ${option.hint}`) : ''
+    lines.push(`${mark} ${number} ${label}${hint}`)
   })
+  if (overlay.reason !== null && overlay.reason !== undefined) {
+    // A rejection can carry a reason the model reads. The line lives inside the dialog:
+    // the composer behind it is not visible, so typing there would edit unseen text.
+    const draft = overlay.reason.text ?? ''
+    const caret = theme.fg('primary', '▏')
+    lines.push('')
+    lines.push(`${theme.fg('textMuted', `  ${i18n.t('permission.reason.label')}`)}${theme.fg('text', draft)}${caret}`)
+    lines.push(theme.fg('textMuted', `  ${i18n.t('permission.reason.hint')}`))
+  }
   return lines
 }
 
