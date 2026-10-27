@@ -31,6 +31,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// Boots a real panel and checks that the guard is actually wired — the filter
@@ -127,5 +128,25 @@ class DeveloperGuardGateTest {
             assertEquals(200, send(running, "GET", "/api/developer/status").statusCode());
             assertEquals(200, send(running, "GET", "/api/health").statusCode());
         }
+    }
+
+    @Test
+    void theGatePageCarriesAPasswordFormOnlyWhenElevationIsWhatIsMissing() {
+        // The case a user hits by clicking through to an instance: the guard
+        // wants the developer password, so the page asks for it right there
+        // instead of sending them off to the settings page.
+        String elevation = DeveloperGuardFilter.gatePage("/", "需要开发者密码", "Enter the developer password", true);
+        assertTrue(elevation.contains("id=\"hdsl-dev-password\""), elevation);
+        assertTrue(elevation.contains("/api/developer/elevate"), elevation);
+
+        // A transport refusal is not a password problem: no form, just the reason.
+        String transport = DeveloperGuardFilter.gatePage("/", "面板不在 HTTPS 下", "Not on HTTPS", false);
+        assertFalse(transport.contains("hdsl-dev-password"), transport);
+        assertTrue(transport.contains("返回面板"), transport);
+
+        // The form's fetch target has to carry the mount point, or a sub-path
+        // deployment would post to the host root.
+        String mounted = DeveloperGuardFilter.gatePage("/hdsl/", "x", "x", true);
+        assertTrue(mounted.contains("'/hdsl/api/developer/elevate'"), mounted);
     }
 }
