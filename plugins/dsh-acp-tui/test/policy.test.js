@@ -13,24 +13,32 @@ import {
   APPROVAL_MODES,
   DEFAULT_APPROVAL_MODE,
   allowKey,
+  allowlistEligible,
   commandOf,
   dangerousCommand,
   dangerousPath,
   decide,
   pathOf,
+  sensitiveCommand,
+  sensitivePath,
 } from '../../shared/approval/policy.js'
 
 const bash = (command) => ({ toolName: 'bash', input: { command } })
+const read = (path) => ({ toolName: 'read_file', input: { path } })
+const write = (path) => ({ toolName: 'fs_write', input: { path } })
 const verdict = (mode, call, cwd = '/workspace') => decide({ mode, ...call, cwd })
 
-test('the three modes exist and start at critical', () => {
+test('the three modes exist and start at Always Ask', () => {
   assert.deepEqual([...APPROVAL_MODES], ['ask', 'critical', 'full'])
-  assert.equal(DEFAULT_APPROVAL_MODE, 'critical')
+  assert.equal(DEFAULT_APPROVAL_MODE, 'ask')
 })
 
-test('ask mode asks about everything, including a harmless command', () => {
+test('ask mode runs read-only tools and asks before side effects', () => {
+  assert.equal(verdict('ask', read('/workspace/src/index.js')).verdict, 'allow')
+  assert.equal(verdict('ask', read('/workspace/notes.md')).verdict, 'allow')
   assert.equal(verdict('ask', bash('ls')).verdict, 'ask')
   assert.equal(verdict('ask', bash('git status')).verdict, 'ask')
+  assert.equal(verdict('ask', write('/workspace/a.txt')).verdict, 'ask')
 })
 
 test('full mode runs everything except a plan decision', () => {
@@ -52,6 +60,8 @@ test('critical mode asks about the commands that can ruin a machine', () => {
     'doas reboot',
     'rm -rf build',
     'rm file.txt',
+    '/bin/rm -rf /',
+    '/usr/bin/dd if=/dev/zero of=/dev/sda',
     'mkfs.ext4 /dev/sdb1',
     'dd if=/dev/zero of=/dev/sda',
     'shutdown -h now',
@@ -84,7 +94,6 @@ test('a shell call whose command cannot be read is asked about', () => {
 })
 
 test('file writes inside the workspace run, outside it they ask', () => {
-  const write = (path) => ({ toolName: 'fs_write', input: { path } })
   assert.equal(verdict('critical', write('/workspace/src/index.js')).verdict, 'allow')
   assert.equal(verdict('critical', write('/workspace/README.md')).verdict, 'allow')
   assert.equal(verdict('critical', write('/etc/passwd')).verdict, 'ask')
@@ -94,22 +103,50 @@ test('file writes inside the workspace run, outside it they ask', () => {
     'a sibling directory is not inside the workspace')
 })
 
-test('an unknown tool is asked about, in every mode but full', () => {
-  assert.equal(verdict('critical', { toolName: 'web_fetch', input: { url: 'https://example.com' } }).verdict, 'ask')
-  assert.equal(verdict('full', { toolName: 'web_fetch', input: {} }).verdict, 'allow')
+test('a path is resolved before containment is judged', () => {
+  assert.equal(verdict('critical', write('/workspace/../etc/passwd')).verdict, 'ask')
+  assert.equal(verdict('critical', write('/workspace/a/../../etc/passwd')).verdict, 'ask')
+  assert.equal(verdict('critical', write('../etc/passwd')).verdict, 'ask')
+  assert.equal(verdict('critical', write('../../etc/passwd')).verdict, 'ask')
+  assert.equal(verdict('critical', write('/workspace/src/../a.txt')).verdict, 'allow')
+})
+
+test('a write with no readable path is asked about', () => {
+  assert.equal(verdict('critical', { toolName: 'fs_write', input: {} }).verdict, 'ask')
+  assert.equal(verdict('critical', { toolName: 'fs_write', input: { filepath: '/etc/passwd' } }).verdict, 'ask')
+})
+
+test('credential files are sensitive even inside the workspace', () => {
+  for (const path of ['/workspace/.env', '/workspace/.env.local', '/workspace/.ssh/id_rsa', '/workspace/secrets.json', '/workspace/cert.pem']) {
+    assert.equal(verdict('critical', read(path)).verdict, 'ask', path)
+    assert.equal(verdict('critical', write(path)).verdict, 'ask', path)
+  }
+  assert.equal(verdict('critical', bash('cat .env')).verdict, 'ask')
+  assert.equal(verdict('critical', bash('cat ~/.ssh/id_rsa')).verdict, 'ask')
+  assert.equal(verdict('critical', bash('printenv')).verdict, 'ask')
+  assert.equal(verdict('full', bash('cat .env')).verdict, 'allow', 'Never Ask still runs it')
+})
+
+test('an unknown tool is asked about, in ask and critical', () => {
+  assert.equal(verdict('ask', { toolName: 'computer_use', input: {} }).verdict, 'ask')
+  assert.equal(verdict('critical', { toolName: 'computer_use', input: {} }).verdict, 'ask')
+  assert.equal(verdict('ask', { toolName: 'web_fetch', input: { url: 'https://example.com' } }).verdict, 'allow',
+    'web fetch is read-only')
+  assert.equal(verdict('full', { toolName: 'computer_use', input: {} }).verdict, 'allow')
 })
 
 test('every plan-shaped tool asks, whatever the mode', () => {
   for (const toolName of ['present_plan', 'exit_plan_mode', 'ask_user_question']) {
     assert.equal(verdict('full', { toolName, input: {} }).verdict, 'ask', toolName)
     assert.equal(verdict('critical', { toolName, input: {} }).verdict, 'ask', toolName)
+    assert.equal(verdict('ask', { toolName, input: {} }).verdict, 'ask', toolName)
   }
 })
 
 test('an unknown mode falls back to the default instead of allowing', () => {
-  // `critical` and not `full`: a typo in a persisted mode must never mean "run it".
   assert.equal(verdict('yoloo', bash('rm -rf /')).verdict, 'ask')
-  assert.equal(verdict(undefined, bash('ls')).verdict, 'allow', 'the default is critical')
+  assert.equal(verdict(undefined, bash('ls')).verdict, 'ask', 'the default is ask')
+  assert.equal(verdict(undefined, read('/workspace/a')).verdict, 'allow', 'ask still runs reads')
 })
 
 test('the arguments are read from the shapes tools actually use', () => {
@@ -125,15 +162,29 @@ test('the arguments are read from the shapes tools actually use', () => {
 
 test('the danger helpers answer on their own', () => {
   assert.match(dangerousCommand('sudo true'), /危险规则/u)
+  assert.match(dangerousCommand('/bin/rm -rf /'), /危险规则/u)
   assert.equal(dangerousCommand('echo hi'), '')
   assert.match(dangerousPath('/etc/hosts', '/workspace'), /系统路径/u)
   assert.equal(dangerousPath('/workspace/a.txt', '/workspace'), '')
+  assert.match(dangerousPath('/workspace/../etc/passwd', '/workspace'), /系统路径|工作区之外/u)
+  assert.match(sensitivePath('/workspace/.env'), /敏感文件/u)
+  assert.match(sensitiveCommand('cat .env'), /敏感文件/u)
+  assert.equal(sensitiveCommand('cat README.md'), '')
 })
 
-test('the session allow-list key is the tool plus the command word', () => {
-  assert.equal(allowKey('bash', { command: 'git status' }), 'bash git')
-  assert.equal(allowKey('bash', { command: 'git log' }), 'bash git')
-  assert.equal(allowKey('bash', { command: 'git push' }), 'bash git')
-  assert.equal(allowKey('fs_write', { path: '/workspace/a' }), 'fs_write')
+test('the session allow-list key is the exact tool + command/path', () => {
+  assert.equal(allowKey('bash', { command: 'git status' }), 'bash git status')
+  assert.equal(allowKey('bash', { command: 'git log' }), 'bash git log')
+  assert.equal(allowKey('bash', { command: 'git push' }), 'bash git push')
+  assert.equal(allowKey('fs_write', { path: '/workspace/a' }), 'fs_write /workspace/a')
   assert.equal(allowKey('read', undefined), 'read')
+})
+
+test('only ordinary asks may be answered by the session allow-list', () => {
+  assert.equal(allowlistEligible({ verdict: 'ask', severity: 'mode' }), true)
+  assert.equal(allowlistEligible({ verdict: 'ask', severity: 'unknown' }), true)
+  assert.equal(allowlistEligible({ verdict: 'ask', severity: 'danger' }), false)
+  assert.equal(allowlistEligible({ verdict: 'ask', severity: 'sensitive' }), false)
+  assert.equal(allowlistEligible({ verdict: 'ask', severity: 'plan' }), false)
+  assert.equal(allowlistEligible({ verdict: 'allow', severity: 'mode' }), false)
 })

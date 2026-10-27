@@ -15,7 +15,8 @@
  */
 
 import { readFileSync, readdirSync } from 'node:fs'
-import { resolve as resolvePath } from 'node:path'
+import { spawn } from 'node:child_process'
+import { isAbsolute, relative as relativePath, resolve as resolvePath } from 'node:path'
 
 import { createI18n, detectLanguage } from '../../shared/i18n.js'
 import { createTheme, detectMode } from '../../shared/term/theme.js'
@@ -24,7 +25,15 @@ import { createKeyDecoder } from '../../shared/term/keys.js'
 import { Composer } from '../../shared/ui/composer.js'
 import { applyEditKey, isLiveOverlay } from '../../shared/ui/edit.js'
 import { applyCompletion, completionFor, nextCandidate } from '../../shared/ui/complete.js'
-import { APPROVAL_MODES, DEFAULT_APPROVAL_MODE, allowKey, decide } from '../../shared/approval/policy.js'
+import {
+  APPROVAL_MODES,
+  DEFAULT_APPROVAL_MODE,
+  allowKey,
+  allowlistEligible,
+  decide,
+  isPlanCall,
+} from '../../shared/approval/policy.js'
+import { loadRules, ruleFor, saveRules, withRule, emptyRules } from '../../shared/approval/rules.js'
 import { renderFrame } from '../../shared/ui/render.js'
 import { ageLabel, shortId } from '../../shared/ui/blocks.js'
 import { ChatSession } from './agent.js'
@@ -55,24 +64,34 @@ const EFFORTS = [
   { value: 'max', name: 'max' },
 ]
 
+/** Directories never worth walking for `@` completion. */
+const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.gradle', '.cache', 'target', 'vendor'])
+
 /**
  * Commands this terminal owns.
  *
- * Everything else (`/permission`, `/plan`, `/goal`, `/feedback`, `/export`) is
- * the harness's own and is dispatched to `ctx.commands`, so it stays in step
- * with the version the instance runs instead of being re-implemented here.
+ * `/permission`, `/goal` and `/feedback` are the harness's own and are dispatched
+ * to `ctx.commands`, so they stay in step with the version the instance runs.
+ * `/plan` is local because the terminal has to draw the plan-mode badge and the
+ * Shift-Tab shortcut, and `/allow` `/deny` `/rules` are local because they edit
+ * a file this terminal owns.
  */
 const COMMANDS = [
   { name: 'help', key: 'cmd.help' },
   { name: 'model', key: 'cmd.model' },
   { name: 'effort', key: 'cmd.effort' },
   { name: 'yolo', key: 'cmd.yolo' },
+  { name: 'plan', key: 'cmd.plan' },
   { name: 'resume', key: 'cmd.resume' },
+  { name: 'sessions', key: 'cmd.sessions' },
   { name: 'new', key: 'cmd.new' },
   { name: 'compact', key: 'cmd.compact' },
   { name: 'clear', key: 'cmd.clear' },
   { name: 'status', key: 'cmd.status' },
   { name: 'provider', key: 'cmd.provider' },
+  { name: 'allow', key: 'cmd.allow' },
+  { name: 'deny', key: 'cmd.deny' },
+  { name: 'rules', key: 'cmd.rules' },
   { name: 'quit', key: 'cmd.quit' },
 ]
 
@@ -107,12 +126,18 @@ export class TerminalApp {
      * see `plugins/shared/approval/policy.js`.
      */
     this.approvalMode = DEFAULT_APPROVAL_MODE
-    /** "(tool first-word)" keys the person said "run for this session" for. */
+    /** Exact `(tool + command/path)` keys said "run for this session". */
     this.approvedTools = new Set()
+    /** Persistent allow/deny rules, loaded once per terminal. */
+    this.rules = loadRules()
+    /** Whether Plan mode is on (in-process line; toggled with shift+tab). */
+    this.planMode = false
     /** How many requests this session ran without a dialog, for the status row. */
     this.autoApproved = 0
     /** Arguments of tool calls in flight, by callId: the approval request itself has none. */
     this.toolCalls = new Map()
+    /** Local `!` shell commands still running; quit must not leave them behind. */
+    this.shellProcesses = new Set()
     /** The rejection reason being typed, or `null` when that line is closed. */
     this.reasonDraft = null
     /** The Tab completion being cycled, or `null`. */
@@ -463,6 +488,7 @@ export class TerminalApp {
           status: 'in_progress',
           startedAt: this.clock,
           output: null,
+          plan: isPlanCall(event.data.name),
         })
         this.activity.tool = block.name
         this.dirty = true
@@ -513,14 +539,33 @@ export class TerminalApp {
       const call = request.callId === undefined ? undefined : this.toolCalls.get(request.callId)
       const toolName = request.toolName ?? call?.name ?? 'tool'
       const key = allowKey(toolName, call?.input)
-      if (this.approvedTools.has(key)) {
-        // "Run for this session" said so: no dialog, still one audit record.
+      const verdict = decide({ mode: this.approvalMode, toolName, input: call?.input, cwd: this.cwd })
+
+      // A permanent rule is explicit configuration and wins over the heuristic.
+      // A deny is final; an allow still records the harness audit because the
+      // answer is `allowed-once`, not a policy change in the harness.
+      const rule = ruleFor(this.rules, key)
+      if (rule === 'deny') {
+        this.pushNotice(this.i18n.t('permission.rule.denied', { key }), 'warning')
+        resolve('rejected')
+        this.dirty = true
+        return
+      }
+      if (rule === 'allow') {
         this.autoApproved += 1
         resolve('allowed-once')
         this.dirty = true
         return
       }
-      const verdict = decide({ mode: this.approvalMode, toolName, input: call?.input, cwd: this.cwd })
+      // "Run for this session" is a promise about ordinary work. It must not
+      // swallow a dangerous command, a credential file, or a plan: those still
+      // draw the dialog, so the person sees what changed.
+      if (this.approvedTools.has(key) && allowlistEligible(verdict)) {
+        this.autoApproved += 1
+        resolve('allowed-once')
+        this.dirty = true
+        return
+      }
       if (verdict.verdict === 'allow') {
         this.autoApproved += 1
         resolve('allowed-once')
@@ -535,6 +580,7 @@ export class TerminalApp {
         detail: request.displayReason ?? request.reason ?? '',
         /** Why the dialog is up, so the footer can say "critical 模式下需要确认". */
         why: verdict.reason,
+        plan: verdict.severity === 'plan',
         settle: (outcome) => {
           request.signal?.removeEventListener('abort', onAbort)
           retire(this, item)
@@ -563,9 +609,10 @@ export class TerminalApp {
   approvalOverlay(item) {
     const overlay = {
       kind: 'permission',
-      title: this.i18n.t('permission.title'),
+      title: item.plan ? this.i18n.t('permission.plan.title') : this.i18n.t('permission.title'),
       toolName: item.toolName,
       detail: item.detail,
+      plan: item.plan === true,
       options: [
         { label: this.i18n.t('permission.allow-once'), value: 'allowed-once' },
         { label: this.i18n.t('permission.allow-always'), value: 'session-allow' },
@@ -793,6 +840,9 @@ export class TerminalApp {
     const banner = this.blocks.find((block) => block.type === 'banner')
     if (banner === undefined) return
     banner.sessionId = this.sessionId
+    banner.model = this.model.currentLabel ?? this.model.current ?? null
+    banner.mode = this.approvalMode
+    banner.planMode = this.planMode
     banner.rev += 1
     this.dirty = true
   }
@@ -801,12 +851,15 @@ export class TerminalApp {
   pushBanner() {
     this.makeBlock({
       type: 'banner',
-      tag: 'dsh-inproc-tui',
-      version: `v${VERSION}`,
+      tag: 'HDSL-web',
+      version: `v${VERSION} · dsh-inproc-tui`,
       subtitle: this.i18n.t('banner.subtitle'),
       hint: this.i18n.t('banner.hint'),
       sessionId: this.sessionId,
       cwd: this.cwd,
+      model: this.model.currentLabel ?? this.model.current ?? null,
+      mode: this.approvalMode,
+      planMode: this.planMode,
     })
   }
 
@@ -928,6 +981,10 @@ export class TerminalApp {
       this.dirty = true
       return
     }
+    if (name === 'ctrl+s') {
+      this.steerComposer()
+      return
+    }
     if (name === 'ctrl+a') {
       this.composer.moveLineEdge('home', Math.max(1, this.screen.columns - 4))
       this.dirty = true
@@ -976,9 +1033,9 @@ export class TerminalApp {
       return
     }
     if (name === 'shift+tab') {
-      this.expandTools = !this.expandTools
-      this.transcriptCache = new WeakMap()
-      this.dirty = true
+      // Kimi Code's muscle memory: Shift-Tab is Plan mode, not the tool
+      // expansion toggle (that one stays on ctrl+o).
+      void this.togglePlan('')
     }
   }
 
@@ -1271,6 +1328,8 @@ export class TerminalApp {
     switch (command) {
       case 'yolo':
         return ['ask', 'critical', 'full', 'status', 'forget']
+      case 'plan':
+        return ['on', 'off']
       case 'effort':
         return EFFORTS.map((effort) => effort.value)
       case 'permission':
@@ -1292,31 +1351,69 @@ export class TerminalApp {
   /**
    * Workspace paths for `@` completion.
    *
-   * Only the last segment is listed — the terminal is a terminal, not a file
-   * manager — and a trailing slash keeps the completion open for the next level.
+   * A bare fragment searches the workspace (two levels, bounded) instead of only
+   * the top directory; a fragment with a slash lists that directory. The result
+   * never leaves the workspace: `@../` is not a way to browse the machine. A
+   * trailing slash keeps the completion open for the next level.
    *
    * @private
    * @param {string} fragment what was typed after `@`
    * @returns {string[]} paths relative to the workspace
    */
   completePaths(fragment) {
-    const slash = fragment.lastIndexOf('/')
-    const directory = slash === -1 ? '' : fragment.slice(0, slash + 1)
-    const leaf = slash === -1 ? fragment : fragment.slice(slash + 1)
+    const text = String(fragment ?? '')
+    if (text.startsWith('/') || text.startsWith('~')) return []
+    const slash = text.lastIndexOf('/')
+    const directory = slash === -1 ? '' : text.slice(0, slash + 1)
+    const leaf = slash === -1 ? text : text.slice(slash + 1)
     const base = directory === '' ? this.cwd : resolvePath(this.cwd, directory)
-    let entries = []
-    try {
-      entries = readdirSync(base, { withFileTypes: true })
-    } catch {
-      return []
-    }
+    if (!this.insideWorkspace(base)) return []
     const paths = []
-    for (const entry of entries) {
-      if (!entry.name.startsWith(leaf)) continue
-      if (entry.name.startsWith('.') && !leaf.startsWith('.')) continue
-      paths.push(`${directory}${entry.name}${entry.isDirectory() ? '/' : ''}`)
+    if (directory === '') {
+      this.walkWorkspace(base, '', leaf, paths, 0)
+    } else {
+      let entries = []
+      try {
+        entries = readdirSync(base, { withFileTypes: true })
+      } catch {
+        return []
+      }
+      for (const entry of entries) {
+        if (!entry.name.startsWith(leaf)) continue
+        if (entry.name.startsWith('.') && !leaf.startsWith('.')) continue
+        paths.push(`${directory}${entry.name}${entry.isDirectory() ? '/' : ''}`)
+      }
     }
     return paths.sort()
+  }
+
+  /** @private */
+  insideWorkspace(target) {
+    const relative = relativePath(this.cwd, target)
+    return relative === '' || (!relative.startsWith('..') && !isAbsolute(relative))
+  }
+
+  /** @private */
+  walkWorkspace(directory, prefix, leaf, paths, depth) {
+    if (depth > 2 || paths.length >= 200) return
+    let entries = []
+    try {
+      entries = readdirSync(directory, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (paths.length >= 200) return
+      if (entry.isDirectory() && SKIP_DIRS.has(entry.name)) continue
+      if (entry.name.startsWith('.') && !leaf.startsWith('.')) continue
+      const relative = `${prefix}${entry.name}`
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith(leaf)) paths.push(`${relative}/`)
+        this.walkWorkspace(resolvePath(directory, entry.name), `${relative}/`, leaf, paths, depth + 1)
+      } else if (entry.name.startsWith(leaf)) {
+        paths.push(relative)
+      }
+    }
   }
 
   /** @private */
@@ -1327,12 +1424,130 @@ export class TerminalApp {
       this.dirty = true
       return
     }
+    if (value.startsWith('!')) {
+      this.runShellCommand(value.slice(1).trim())
+      return
+    }
     if (value.startsWith('/')) {
       const [head, ...rest] = value.trim().slice(1).split(/\s+/u)
       this.runCommand(head, rest.join(' '))
       return
     }
     this.sendPrompt(value)
+  }
+
+  /**
+   * `!command`: run it in the workspace without going through the agent.
+   *
+   * This is Kimi Code's shell mode in its smallest useful form. The output is a
+   * tool card, not agent context: the terminal cannot inject an arbitrary tool
+   * result into the harness's history without pretending the agent called it.
+   * The process is tracked so quit does not leave a shell behind.
+   *
+   * @private
+   * @param {string} command
+   */
+  runShellCommand(command) {
+    const text = String(command ?? '').trim()
+    if (text === '') return
+    const block = this.makeBlock({
+      type: 'tool',
+      name: 'shell',
+      shell: true,
+      input: { command: text },
+      status: 'in_progress',
+      startedAt: this.clock,
+      output: '',
+    })
+    this.activity.tool = 'shell'
+    this.activity.startedAt = this.clock
+    this.scrollToBottom()
+    this.dirty = true
+    let output = ''
+    let settled = false
+    let child
+    try {
+      child = spawn(text, {
+        shell: true,
+        cwd: this.cwd,
+        env: process.env,
+      })
+    } catch (error) {
+      block.status = 'failed'
+      block.output = this.failureText(error)
+      block.endedAt = this.clock
+      this.activity.tool = null
+      this.pushNotice(this.failureText(error), 'error')
+      this.dirty = true
+      return
+    }
+    this.shellProcesses.add(child)
+    const append = (chunk) => {
+      if (output.length >= 64 * 1024) return
+      output += String(chunk).slice(0, 64 * 1024 - output.length)
+      block.output = output
+      this.bump(block)
+    }
+    child.stdout?.on('data', append)
+    child.stderr?.on('data', append)
+    const finish = (code, error) => {
+      if (settled) return
+      settled = true
+      this.shellProcesses.delete(child)
+      if (error !== undefined) {
+        block.status = 'failed'
+        block.output = `${output}${this.failureText(error)}`
+        this.pushNotice(this.failureText(error), 'error')
+      } else {
+        block.status = code === 0 ? 'completed' : 'failed'
+        block.output = output
+        this.pushNotice(this.i18n.t(code === 0 ? 'shell.done' : 'shell.failed', {
+          code: String(code ?? '?'),
+        }), code === 0 ? 'success' : 'error')
+      }
+      block.endedAt = this.clock
+      this.activity.tool = null
+      this.dirty = true
+    }
+    child.on('error', (error) => finish(undefined, error))
+    child.on('close', (code) => finish(code))
+  }
+
+  /**
+   * `Ctrl-S`: push the composer into the turn that is running.
+   *
+   * This is the difference between "queue the next message" and "tell the agent
+   * now"; Kimi Code has had it for a while and a long tool loop is where it
+   * matters most. The in-process line can steer; the ACP protocol cannot, so
+   * that line says so instead of silently queuing.
+   *
+   * @private
+   */
+  steerComposer() {
+    const text = this.composer.text.trim()
+    if (text === '') return
+    this.composer.setText('')
+    if (this.status !== 'working' && !this.session.busy) {
+      this.sendPrompt(text)
+      return
+    }
+    if (typeof this.session.steer !== 'function') {
+      this.pushNotice(this.i18n.t('steer.unavailable'), 'warning')
+      this.queue.push(text)
+      this.dirty = true
+      return
+    }
+    try {
+      this.session.steer(text)
+      this.makeBlock({ type: 'user', text, steer: true })
+      this.pushNotice(this.i18n.t('steer.sent'), 'success')
+      this.scrollToBottom()
+      this.dirty = true
+    } catch (error) {
+      this.pushNotice(this.failureText(error), 'error')
+      this.queue.push(text)
+      this.dirty = true
+    }
   }
 
   /** @private */
@@ -1398,6 +1613,9 @@ export class TerminalApp {
       case 'yolo':
         this.runYolo(argument)
         return
+      case 'plan':
+        void this.togglePlan(argument)
+        return
       case 'status':
         this.openStatus()
         return
@@ -1405,6 +1623,7 @@ export class TerminalApp {
         void this.runProvider(argument)
         return
       case 'resume':
+      case 'sessions':
         void this.openResumePicker()
         return
       case 'new':
@@ -1413,14 +1632,19 @@ export class TerminalApp {
       case 'compact':
         void this.compact()
         return
+      case 'allow':
+      case 'deny':
+      case 'rules':
+        this.runRuleCommand(name, argument)
+        return
       case 'quit':
       case 'exit':
         void this.quit()
         return
       default:
-        // Not ours: the harness registers `/permission`, `/plan`, `/goal`,
-        // `/feedback`, `/export` and its own `/compact`. Asking it is what keeps
-        // this terminal honest about what the running version can do.
+        // Not ours: the harness registers `/permission`, `/goal`, `/feedback`
+        // and `/export`. Asking it is what keeps this terminal honest about what
+        // the running version can do.
         void this.runHarnessCommand(name, argument)
     }
   }
@@ -1441,22 +1665,25 @@ export class TerminalApp {
     const agent = this.session.live
     if (commands === undefined || agent === null) {
       this.pushNotice(this.i18n.t('cmd.unknown', { name }), 'error')
-      return
+      return false
     }
     const line = argument === '' ? `/${name}` : `/${name} ${argument}`
     try {
       const execution = await commands.execute(agent, line, [], new AbortController().signal)
       if (execution === undefined) {
         this.pushNotice(this.i18n.t('cmd.unknown', { name }), 'error')
-        return
+        return false
       }
       const result = execution.result ?? {}
       const text = typeof result.text === 'string' ? result.text : ''
       if (text !== '') this.pushNotice(text, result.kind === 'error' ? 'error' : 'info')
+      return result.kind !== 'error'
     } catch (error) {
       this.pushNotice(this.failureText(error), 'error')
+      return false
+    } finally {
+      this.dirty = true
     }
-    this.dirty = true
   }
 
   /**
@@ -1498,6 +1725,87 @@ export class TerminalApp {
       return
     }
     this.pushNotice(this.i18n.t(`yolo.set.${this.approvalMode}`), this.approvalMode === 'full' ? 'warning' : 'success')
+    this.refreshBanner()
+    this.dirty = true
+  }
+
+  /**
+   * `/plan` and Shift-Tab: ask the harness to enter or leave Plan mode.
+   *
+   * The harness owns the actual mode; this app keeps only the badge and the
+   * shortcut. If the running harness has no `/plan` command, the toggle is
+   * refused instead of pretending the mode changed.
+   *
+   * @private
+   * @param {string} [argument] `on`, `off`, or empty to flip
+   */
+  async togglePlan(argument = '') {
+    const arg = String(argument ?? '').trim().toLowerCase()
+    if (arg !== '' && arg !== 'on' && arg !== 'off') {
+      this.pushNotice(this.i18n.t('plan.usage'), 'info')
+      return
+    }
+    const next = arg === 'on' ? true : arg === 'off' ? false : !this.planMode
+    if (next === this.planMode) {
+      this.pushNotice(this.i18n.t(next ? 'plan.on' : 'plan.off'), 'info')
+      return
+    }
+    const ok = await this.runHarnessCommand('plan', next ? 'on' : 'off')
+    if (!ok) return
+    this.planMode = next
+    this.refreshBanner()
+    this.pushNotice(this.i18n.t(next ? 'plan.on' : 'plan.off'), 'success')
+    this.dirty = true
+  }
+
+  /**
+   * `/allow`, `/deny`, `/rules`: the persistent half of the approval seam.
+   *
+   * Keys are the exact strings `allowKey()` produces (`<tool> <command>` or
+   * `<tool> <path>`), so a rule cannot accidentally become a regex.
+   *
+   * @private
+   * @param {string} name `allow`, `deny`, or `rules`
+   * @param {string} argument the rest of the line
+   */
+  runRuleCommand(name, argument) {
+    if (name === 'rules') {
+      const arg = String(argument ?? '').trim().toLowerCase()
+      if (arg === 'clear') {
+        this.rules = { allow: [], deny: [] }
+        try {
+          saveRules(this.rules)
+        } catch (error) {
+          this.pushNotice(this.failureText(error), 'error')
+          return
+        }
+        this.pushNotice(this.i18n.t('rule.cleared'), 'success')
+        this.dirty = true
+        return
+      }
+      const lines = [
+        ...this.rules.allow.map((key) => this.i18n.t('rule.line.allow', { key })),
+        ...this.rules.deny.map((key) => this.i18n.t('rule.line.deny', { key })),
+      ]
+      this.pushNotice(lines.length === 0 ? this.i18n.t('rule.none') : lines.join('\n'), 'info')
+      this.dirty = true
+      return
+    }
+    const text = String(argument ?? '').trim()
+    const [tool, ...rest] = text.split(/\s+/u).filter((word) => word !== '')
+    if (tool === undefined) {
+      this.pushNotice(this.i18n.t('rule.usage'), 'info')
+      return
+    }
+    const key = rest.length === 0 ? tool : `${tool} ${rest.join(' ')}`
+    this.rules = withRule(this.rules, name === 'deny' ? 'deny' : 'allow', key)
+    try {
+      saveRules(this.rules)
+    } catch (error) {
+      this.pushNotice(this.failureText(error), 'error')
+      return
+    }
+    this.pushNotice(this.i18n.t(name === 'deny' ? 'rule.added.deny' : 'rule.added.allow', { key }), 'success')
     this.dirty = true
   }
 
@@ -1710,6 +2018,7 @@ export class TerminalApp {
     const rows = [
       [this.i18n.t('status.mode'), this.i18n.t(`status.mode.${this.approvalMode}`)
         + (this.autoApproved > 0 ? ` · ${this.i18n.t('yolo.auto', { count: String(this.autoApproved) })}` : '')],
+      [this.i18n.t('banner.plan'), this.planMode ? 'on' : 'off'],
       [this.i18n.t('hint.session').replace(' {id}', ''), this.sessionId === null ? '—' : this.sessionId],
       [this.i18n.t('status.model'), `${this.model.currentLabel ?? this.model.current ?? '—'}`
         + (this.effort.current === null ? '' : ` · ${this.effort.current}`)],
@@ -1901,6 +2210,10 @@ export class TerminalApp {
     // it has no meaning in the next one.
     this.approvedTools.clear()
     this.autoApproved = 0
+    // The mode was chosen for the conversation being left. A new or resumed
+    // session starts at the Kimi-style default again, rather than inheriting a
+    // `full` that was meant for the previous task.
+    this.approvalMode = DEFAULT_APPROVAL_MODE
     this.toolCalls.clear()
     this.reasonDraft = null
     const running = this.status === 'working' || this.session.busy
@@ -2038,6 +2351,7 @@ export class TerminalApp {
     }
     this.effort = { current: current?.reasoningEffort ?? null, options: [] }
     this.usage = this.session.usage()
+    this.refreshBanner()
     this.dirty = true
   }
 
@@ -2166,6 +2480,14 @@ export class TerminalApp {
     this.timer = null
     if (this.escTimer !== null) clearTimeout(this.escTimer)
     this.escTimer = null
+    for (const child of this.shellProcesses) {
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        // The command may already have exited.
+      }
+    }
+    this.shellProcesses.clear()
     for (const dispose of this.disposers) {
       try {
         dispose()

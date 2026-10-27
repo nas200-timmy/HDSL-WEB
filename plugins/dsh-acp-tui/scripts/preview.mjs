@@ -31,11 +31,14 @@ const base = createInitialState({
 
 const banner = block({
   type: 'banner',
-  tag: 'dsh-acp-tui',
-  version: 'v0.1.0',
+  tag: 'HDSL-web',
+  version: 'v0.2.0 · dsh-acp-tui',
   subtitle: '终端里的 DeepSeek Harness',
   hint: '输入问题开始 · /help 查看命令',
   sessionId: base.sessionId,
+  model: 'deepseek-v4-flash',
+  mode: 'ask',
+  planMode: false,
   cwd: base.cwd,
 })
 
@@ -62,7 +65,7 @@ if (scene === 'welcome') {
       startedAt: 1000,
       endedAt: 1520,
       input: { command: 'ls plugins/dsh-acp-tui/src/ui && pnpm test', description: 'List UI files and run tests' },
-      output: 'app.js\nblocks.js\ncomposer.js\ndialogs.js\nrender.js\n\n> @nas200-timmy/dsh-acp-tui@0.1.0 test\n> node --test test/*.test.js\n\n# pass 12\n# fail 0\n',
+      output: 'app.js\nblocks.js\ncomposer.js\ndialogs.js\nrender.js\n\n> @nas200-timmy/dsh-acp-tui@0.2.0 test\n> node --test test/*.test.js\n\n# pass 12\n# fail 0\n',
     }),
     block({
       type: 'tool',

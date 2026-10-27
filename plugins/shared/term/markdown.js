@@ -18,6 +18,7 @@ const FENCE_RE = /^\s*(```+|~~~+)\s*([\w+-]*)\s*$/
 const LIST_RE = /^(\s*)([-*+]|\d{1,3}[.)])\s+(.*)$/
 const QUOTE_RE = /^\s*>\s?(.*)$/
 const RULE_RE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/
+const TABLE_SEPARATOR = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/u
 
 const KEYWORDS = new Set([
   'const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'class', 'new',
@@ -51,7 +52,8 @@ export function renderMarkdown(source, width, theme, options = {}) {
     paragraph = []
   }
 
-  for (const row of rows) {
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index]
     const fenceMatch = FENCE_RE.exec(row)
     if (fenceMatch) {
       if (fence === null) {
@@ -71,6 +73,22 @@ export function renderMarkdown(source, width, theme, options = {}) {
     if (row.trim() === '') {
       flushParagraph()
       if (lines.length > 0 && lines[lines.length - 1] !== '') lines.push('')
+      continue
+    }
+    // A table is a header row followed by a separator row. Without the
+    // separator it is just prose (or a pipe in a shell snippet).
+    if (row.includes('|') && index + 1 < rows.length && TABLE_SEPARATOR.test(rows[index + 1])) {
+      flushParagraph()
+      const table = [tableCells(row)]
+      index += 2
+      while (index < rows.length && rows[index].includes('|') && rows[index].trim() !== '') {
+        table.push(tableCells(rows[index]))
+        index += 1
+      }
+      index -= 1
+      const rendered = renderTable(table, width, theme)
+      if (lines.length > 0 && lines[lines.length - 1] !== '') lines.push('')
+      lines.push(...rendered)
       continue
     }
     if (RULE_RE.test(row)) {
@@ -286,6 +304,14 @@ export function renderDiff(patch, width, theme, options = {}) {
     out.push(theme.fg('textDim', row))
   }
   return out.map((line) => line.length === 0 ? line : line)
+}
+
+/** Splits one pipe-table row into trimmed cells. */
+function tableCells(row) {
+  let text = String(row).trim()
+  if (text.startsWith('|')) text = text.slice(1)
+  if (text.endsWith('|')) text = text.slice(0, -1)
+  return text.split('|').map((cell) => cell.trim())
 }
 
 /**

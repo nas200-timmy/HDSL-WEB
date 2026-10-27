@@ -94,20 +94,26 @@ harness 自己的审批策略只有"问"和"全拒"（`'never'` 是**拒绝**，
 
 | 档位 | 行为 |
 |---|---|
-| `ask` | 每个工具调用都弹窗 |
-| `critical`（**默认**） | 危险命令与计划审批弹窗，其余直接放行 |
-| `full` | 一律放行（沙箱仍然生效） |
+| `ask`（**默认**） | 只读工具直接跑；写文件、跑命令、未知工具、敏感文件与计划都发问 |
+| `critical` | 日常编辑与命令直接跑；危险命令、敏感文件、计划审批发问 |
+| `full` | 一律放行（计划/提问仍会问；沙箱仍然生效） |
 
 - 自动放行**仍然写审计**（harness 记 `approval/asked` + `approval/decided`），也**不放宽沙箱**。
-- 分类器"未知即问"：读不出命令的 shell 调用、未知工具、计划/提问类调用一律发问。
-- 档位是**会话级**的，`/new`、`/resume` 之后回到默认。
+- 分类器"未知即问"：读不出命令的 shell 调用、读不出路径的写操作、未知工具、计划/提问类调用一律发问。
+- **敏感文件**（`.env*`、`.ssh/`、`id_rsa`、`.npmrc`、`.netrc`、`*.pem`、`*.key` 等）在 `ask` / `critical`
+  下发问，`full` 才放行；`printenv` / `env` 也算敏感。
+- 路径先 `resolve` 再判断包含关系，`..`、相对路径和 `/workspace/../etc/passwd` 都不能绕过工作区边界。
+- 档位是**会话级**的，`/new`、`/resume` 之后回到 `ask`，不会把上一个会话的 `full` 带过去。
+- **永久规则**：`/allow <工具> <完整命令或路径>`、`/deny <工具> <完整命令或路径>`、`/rules [clear]`。
+  规则按 `allowKey()` 的精确字符串匹配，存在 `~/.hdsl-tui/permissions.json`（`HDSL_TUI_RULES` 可覆盖）；
+  deny 永远优先，allow/deny 都不经过启发式分类器。
 
 ### 审批对话框的四个选项（数字键 1-4）
 
 | 键 | 选项 | 结果 |
 |---|---|---|
 | 1 | 运行 | 允许这一次 |
-| 2 | 当前会话默认运行 | 本会话内同一"工具 + 命令首词"不再问 |
+| 2 | 当前会话默认运行 | 本会话内同一"工具 + 完整命令/路径"不再问（危险/敏感/计划除外） |
 | 3 | 拒绝 | 拒绝 |
 | 4 | 拒绝并说明原因 | 拒绝，并把理由作为一条用户消息交给模型 |
 
@@ -116,16 +122,30 @@ harness 自己的审批策略只有"问"和"全拒"（`'never'` 是**拒绝**，
 
 ### 命令
 
-- **交给 harness**：`/permission`、`/plan`、`/goal`、`/feedback`、`/export`、`/compact`
-  （`ctx.commands.execute`，结果文本原样显示；因此随实例的 dsh 版本变化）。
-- **终端自己的**：`/help` `/model` `/effort` `/yolo` `/resume` `/new` `/clear` `/status`
-  `/provider` `/quit`。
+- **交给 harness**：`/permission`、`/goal`、`/feedback`、`/export`。
+- **终端自己的**：`/help` `/model` `/effort` `/yolo` `/plan` `/resume` `/sessions` `/new`
+  `/compact` `/clear` `/status` `/provider` `/allow` `/deny` `/rules` `/quit`。
 - 未知命令先问 harness，仍未命中才报错。
+
+### Plan mode 与 Ctrl-S
+
+- `shift+tab` 或 `/plan [on|off]` 切换 Plan mode；状态栏和启动页有 `▣计划` 标记。进程内把
+  `/plan on|off` 交给 harness；ACP 协议没有这个通道，会明确说"这条线跑不了"。
+- `ctrl+s` 把输入框内容插进**正在跑的回合**（进程内走 `agent.steer()`）；ACP 不能并发 prompt，
+  会说明并留在队列里。`ctrl+o` 仍是展开/折叠工具输出。
+- 输入框以 `!` 开头时，命令在实例工作区直接执行，输出是一张 shell 工具卡（进程内；不写进
+  agent 上下文，因为那需要伪造一条工具结果）。退出终端会结束仍在跑的 shell 子进程。
 
 ### Tab 补全
 
-`plugins/shared/ui/complete.js`：命令名（本地 + harness）、参数（模型/强度/档位/会话/预设/供应商）、
-`@` 工作区路径。重复 Tab 循环，候选行显示在输入框上方，任何其它按键结束循环。
+`plugins/shared/ui/complete.js`：命令名（本地 + harness）、参数（模型/强度/档位/计划/会话/预设/供应商）、
+`@` 工作区路径。`@` 空片段会做有界递归搜索（跳过 `.git`、`node_modules` 等），带 `/` 时列下一层；
+不会离开工作区。重复 Tab 循环，候选行显示在输入框上方，任何其它按键结束循环。
+
+### 启动页
+
+第一方终端的启动页用 **dsh-TUI README 里像素鲸鱼的静态帧**（MIT；原调色板 `#142660` / `#4e6fff`
+/ `#bee1ff` / `#ffffff`），左侧鲸鱼、右侧模型/档位/计划/cwd/会话与按键提示；窄终端改为上下堆叠。
 
 ### 模型供应商（仅进程内）
 
@@ -137,11 +157,15 @@ harness 自己的审批策略只有"问"和"全拒"（`'never'` 是**拒绝**，
 
 | 能力 | 进程内（0.2.x） | ACP（0.1.x+） |
 |---|---|---|
-| 三档审批 / `/yolo` | 是 | 是（客户端应答过滤） |
+| 三档审批 / `/yolo`（默认 `ask`） | 是 | 是（客户端应答过滤） |
+| 敏感文件保护 / 永久 allow-deny | 是 | 是（同一份规则文件） |
 | 四选项审批（含拒绝理由） | 是 | 是（理由排队到回合结束） |
-| `/permission` `/plan` `/goal` `/feedback` `/export` `/compact` | 是（harness 命令） | 否（会明说） |
+| `/permission` `/goal` `/feedback` `/export` | 是（harness 命令） | 否（会明说） |
+| Plan mode / `shift+tab` | 是（harness `/plan`） | 否（会明说） |
+| `ctrl+s` 中途插入 | 是（`agent.steer()`） | 否（留在队列并说明） |
+| `!` Shell mode | 是（工作区、输出为工具卡） | 否 |
 | Tab 补全 命令/参数 | 是 | 是 |
-| `@` 文件补全 | 是 | 否 |
+| `@` 文件补全 | 是（有界递归，工作区内） | 否 |
 | `/provider` | 是 | 否 |
 | `/status` | 是 | 是 |
 

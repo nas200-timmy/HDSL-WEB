@@ -32,9 +32,11 @@ function makeApp(services = {}) {
 function fakeSession(overrides = {}) {
   const calls = []
   const sent = []
+  const steered = []
   const session = {
     calls,
     sent,
+    steered,
     ready: true,
     busy: false,
     resumeFailure: undefined,
@@ -60,6 +62,9 @@ function fakeSession(overrides = {}) {
     history: () => [],
     send(text) {
       sent.push(text)
+    },
+    steer(text) {
+      steered.push(text)
     },
     ...overrides,
   }
@@ -201,7 +206,7 @@ test('number 2 runs this command for the rest of the session', async () => {
   const first = ask(app)
   press(app, 'char', '2')
   assert.equal(await first, 'allowed-once')
-  assert.equal(app.approvedTools.has('bash npm'), true)
+  assert.equal(app.approvedTools.has('bash npm test'), true)
 
   // The same command again does not draw a dialog at all.
   const second = ask(app, { callId: 'c2' })
@@ -245,7 +250,8 @@ test('escape goes back to the choices without rejecting', async () => {
 
 test('critical mode runs a safe command and still asks about a dangerous one', async () => {
   const app = makeApp()
-  assert.equal(app.approvalMode, 'critical', 'the default')
+  assert.equal(app.approvalMode, 'ask', 'the Kimi-style default is Always Ask')
+  app.approvalMode = 'critical'
 
   assert.equal(await ask(app), 'allowed-once')
   assert.equal(app.overlay, null, 'a safe command does not interrupt')
@@ -276,9 +282,93 @@ test('a new session forgets the session allow-list', async () => {
   await decided
   assert.equal(app.approvedTools.size, 1)
 
+  app.approvalMode = 'full'
   await app.startNew()
   assert.equal(app.approvedTools.size, 0)
   assert.equal(app.autoApproved, 0)
+  assert.equal(app.approvalMode, 'ask', 'the next session starts at Always Ask, even after full')
+})
+
+test('a session grant does not swallow a dangerous command', async () => {
+  const app = makeApp()
+  app.approvalMode = 'ask'
+  app.session = fakeSession()
+  const first = ask(app, { command: 'rm -rf build' })
+  press(app, 'char', '2')
+  assert.equal(await first, 'allowed-once')
+  assert.equal(app.approvedTools.has('bash rm -rf build'), true)
+
+  const dangerous = ask(app, { callId: 'c2', command: 'rm -rf /' })
+  assert.notEqual(app.overlay, null, 'a dangerous command still draws the dialog')
+  press(app, 'char', '3')
+  assert.equal(await dangerous, 'rejected')
+})
+
+test('ctrl+s steers instead of queueing while a turn is running', () => {
+  const app = makeApp()
+  app.session = fakeSession()
+  app.status = 'working'
+  app.composer.setText('use the other fixture')
+  app.onKeyEvent({ name: 'ctrl+s' })
+  assert.deepEqual(app.session.steered, ['use the other fixture'])
+  assert.deepEqual(app.session.sent, [])
+  assert.deepEqual(app.queue, [])
+  assert.equal(app.composer.text, '')
+})
+
+test('! runs a workspace shell command and renders its output', async () => {
+  const app = makeApp()
+  app.runShellCommand('printf hello')
+  const block = app.blocks.find((candidate) => candidate.type === 'tool' && candidate.name === 'shell')
+  assert.ok(block, 'the command gets a card')
+  for (let attempt = 0; attempt < 100 && block.status === 'in_progress'; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.equal(block.status, 'completed')
+  assert.match(block.output, /hello/u)
+})
+
+test('/plan and shift+tab toggle the harness plan mode', async () => {
+  const lines = []
+  const app = makeApp({
+    commands: {
+      execute: async (_agent, line) => {
+        lines.push(line)
+        return { result: { text: 'plan mode changed' } }
+      },
+    },
+  })
+  app.session = fakeSession({ live: {} })
+  await app.togglePlan('on')
+  assert.equal(app.planMode, true)
+  assert.deepEqual(lines, ['/plan on'])
+  await app.togglePlan('')
+  assert.equal(app.planMode, false)
+  assert.deepEqual(lines, ['/plan on', '/plan off'])
+})
+
+test('permanent rules deny and allow without a dialog', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hdsl-rules-'))
+  const file = join(dir, 'permissions.json')
+  const previous = process.env.HDSL_TUI_RULES
+  process.env.HDSL_TUI_RULES = file
+  try {
+    const app = makeApp()
+    app.session = fakeSession()
+    app.runRuleCommand('deny', 'bash rm -rf /')
+    const denied = ask(app, { command: 'rm -rf /' })
+    assert.equal(await denied, 'rejected')
+    assert.equal(app.overlay, null, 'a deny rule settles before the dialog')
+
+    app.runRuleCommand('allow', 'bash npm test')
+    const allowed = ask(app, { callId: 'c2', command: 'npm test' })
+    assert.equal(await allowed, 'allowed-once')
+    assert.equal(app.overlay, null, 'an allow rule settles before the dialog')
+  } finally {
+    if (previous === undefined) delete process.env.HDSL_TUI_RULES
+    else process.env.HDSL_TUI_RULES = previous
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('the banner shows the live session id', async () => {
@@ -351,6 +441,8 @@ test('a name nobody knows is refused only after the harness was asked', async ()
 
 test('/yolo cycles the three modes and takes an explicit one', () => {
   const app = makeApp()
+  assert.equal(app.approvalMode, 'ask')
+  app.runCommand('yolo')
   assert.equal(app.approvalMode, 'critical')
   app.runCommand('yolo')
   assert.equal(app.approvalMode, 'full')
@@ -366,6 +458,7 @@ test('/yolo cycles the three modes and takes an explicit one', () => {
 
 test('/yolo status reports the mode and what it has allowed', async () => {
   const app = makeApp()
+  app.approvalMode = 'critical'
   await ask(app)
   app.runCommand('yolo', 'status')
   const text = app.blocks.filter((block) => block.type === 'notice').at(-1).text
@@ -375,6 +468,7 @@ test('/yolo status reports the mode and what it has allowed', async () => {
 
 test('/status shows the facts a person checks', () => {
   const app = makeApp()
+  app.approvalMode = 'critical'
   app.session = fakeSession({ sessionId: 'abcdef123456' })
   app.runCommand('status')
   assert.equal(app.overlay.kind, 'help')
@@ -425,6 +519,9 @@ test('@ completes workspace paths', () => {
     app.composer.caret = app.composer.text.length
     app.onKeyEvent({ name: 'tab' })
     assert.equal(app.composer.text, '/model @README.md')
+
+    assert.ok(app.completePaths('inde').includes('src/index.js'), 'a bare fragment searches the workspace')
+    assert.deepEqual(app.completePaths('../'), [], 'completion never leaves the workspace')
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }

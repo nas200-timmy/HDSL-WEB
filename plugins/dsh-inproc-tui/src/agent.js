@@ -137,6 +137,24 @@ export class ChatSession {
     }))
   }
 
+  /**
+   * Feeds text to the step that is running, instead of queuing the next turn.
+   *
+   * This is Kimi Code's `Ctrl-S`: the agent sees the message in the current
+   * turn's next step. An idle agent starts a turn, so the caller may use it
+   * without checking status.
+   *
+   * @param {string} text
+   */
+  steer(text) {
+    if (this.agent === null) throw new Error('dsh-inproc-tui: no agent is open')
+    if (this.createUserMessage === undefined) throw new Error('dsh-inproc-tui: the session was never opened')
+    this.agent.steer(this.createUserMessage({
+      content: [{ type: 'text', text }],
+      source: { kind: 'user' },
+    }))
+  }
+
   /** Interrupts whatever the agent is doing. */
   cancel() {
     this.agent?.cancel({ kind: 'user' })

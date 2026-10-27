@@ -302,13 +302,17 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     模板。账户的供应商路由/default model 由 launcher 写进"这次启动引导的 profile"，所以开终端时
     的启动计划是按 `acp` 建的（`DshTui.runProfile`），环境里也把同一个名字告诉它
     （`HSDL_TUI_ACP_PROFILE`）——写在存储 profile 里的路由，运行中的 harness 是看不见的。
-  - **第一方终端的能力矩阵**（v0.6.0 起）：审批三档（`/yolo`：ask / critical 默认 / full，由
-    `plugins/shared/approval/policy.js` 判定，自动放行不绕过审计也不放宽沙箱）；审批对话框四个选项
-    （1 运行 · 2 当前会话默认运行 · 3 拒绝 · 4 拒绝并说明原因，理由会作为一条用户消息交给模型）；
-    `/permission` `/plan` `/goal` `/feedback` `/export` `/compact` 直接由 harness 的命令运行时执行；
-    Tab 补全覆盖命令、参数与 `@` 路径；`/provider` 在终端里增删 `llm-pi-ai` 的供应商（写 settings、
-    密钥走 credentials，`--yes` 才落盘）。ACP 线路只保留协议允许的部分，其余命令会明确说明不可用，
-    而不是静默失败。
+  - **第一方终端的能力矩阵**（v0.6.0 起，P0/P1 继续打磨）：审批三档（`/yolo`：`ask` **默认** /
+    `critical` / `full`，由 `plugins/shared/approval/policy.js` 判定，自动放行不绕过审计也不放宽沙箱）；
+    默认 `ask` 只读自动、写文件/跑命令/敏感文件/计划都问，敏感文件含 `.env*`、`.ssh/`、`*.pem` 等；
+    路径先 resolve 再判断，`..` 不能绕过工作区；会话白名单键是"工具 + 完整命令/路径"，危险/敏感/计划
+    不受白名单影响；`/allow` `/deny` `/rules` 是永久规则（`~/.hdsl-tui/permissions.json`）。审批对话框
+    四个选项（1 运行 · 2 当前会话默认运行 · 3 拒绝 · 4 拒绝并说明原因，理由会作为一条用户消息交给模型）。
+    `shift+tab` / `/plan` 切换 Plan mode（进程内交给 harness，ACP 明说不可用）；`ctrl+s` 中途插入
+    （进程内 `agent.steer()`，ACP 留在队列）；`/sessions` 是 `/resume` 别名；Tab 补全覆盖命令、参数与
+    `@` 路径（`@` 有界递归且不离开工作区）；`/provider` 在终端里增删 `llm-pi-ai` 的供应商（写 settings、
+    密钥走 credentials，`--yes` 才落盘）。启动页是 dsh-TUI README 像素鲸鱼的静态帧（原 SVG 调色板）+ 模型/档位/计划/cwd/会话 +
+    Kimi 风格按键提示。ACP 线路只保留协议允许的部分，其余命令会明确说明不可用，而不是静默失败。
   - **第一方终端的可靠性约定**（两个都适用）：粘贴走 bracketed paste，由 `keys.js` 解出
     `{name:'paste', text}` 交给 composer（CRLF 归一化后插入；对话框打开时忽略，不写进看不见的输入框）；
     握手/子进程死亡/信号退出都会还原终端并清掉定时器，**失败的启动不会留下一个常驻进程**；
