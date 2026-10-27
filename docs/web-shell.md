@@ -175,6 +175,7 @@ Windows 桌面终端不增加**本地**攻击面：能坐到这台机器前、�
 （`HDSL_REQUIRE_HTTPS_FOR_DEVELOPER`）。打开后恢复 v0.5.94 的行为——开发者页拒绝加载控件、
 终端返回 403 `insecure_transport`、提权返回 409 `tls_required`，`/i/*` 的提权页直接说
 "面板不在 HTTPS 下，开发者模式不可用"。
+威胁模型与责任划分（哪些归面板、哪些归部署者）见 [`design-notes.md` §7](design-notes.md#7-安全模型)。
 
 其余与证书有关的行为不变：
 
