@@ -13,7 +13,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -174,62 +174,135 @@ test('/resume puts the resumed transcript on screen', async () => {
   assert.deepEqual(app.blocks.filter((block) => block.type === 'assistant').map((block) => block.text), ['earlier answer'])
 })
 
-test('stored sessions without a human prompt are not listed', async () => {
-  const events = {
-    'session-prompt': [
-      { type: 'session/ready', data: {} },
-      { type: 'user/message', data: { source: { kind: 'user' }, content: [text('Fix the build, then run the tests')] } },
-      { type: 'assistant/message', data: { message: { content: [text('done')] } } },
-    ],
-    'session-tool-only': [
-      { type: 'tool/call', data: { callId: 'c1', name: 'read', arguments: '{}' } },
-    ],
-  }
+/// A persistence double for the session-index tests. `fails` makes `open` throw.
+function sessionPersistence(entries) {
   const opened = []
-  const persistence = {
+  return {
+    opened,
     async list() {
-      return [
-        { header: { id: 'session-empty', cwd: '/workspace', updatedAt: 300 }, eventCount: 0 },
-        { header: { id: 'session-tool-only', cwd: '/workspace', updatedAt: 200 }, eventCount: 1 },
-        { header: { id: 'session-prompt', cwd: '/workspace', updatedAt: 100 }, eventCount: 3 },
-      ]
+      return entries.map(({ id, at, eventCount }) => ({
+        header: { id, cwd: '/workspace', createdAt: at },
+        eventCount,
+      }))
     },
     async open(id) {
       opened.push(id)
+      const entry = entries.find((candidate) => candidate.id === id)
+      if (entry?.fails === true) throw new Error('unreadable')
       return {
         async read(offset = 0, length = 100) {
-          return { events: (events[id] ?? []).slice(offset, offset + length) }
+          return { events: (entry?.events ?? []).slice(offset, offset + length) }
         },
         async close() {},
       }
     },
   }
+}
+
+test('stored sessions without a human prompt are not listed', async () => {
+  const persistence = sessionPersistence([
+    { id: 'session-empty', at: 300, eventCount: 0, events: [] },
+    { id: 'session-tool-only', at: 200, eventCount: 1, events: [
+      { type: 'tool/call', data: { callId: 'c1', name: 'read', arguments: '{}' } },
+    ] },
+    { id: 'session-prompt', at: 100, eventCount: 1, events: [
+      { type: 'user/message', data: { source: { kind: 'user' }, content: [text('Fix the build, then run the tests')] } },
+    ] },
+  ])
   const session = new ChatSession({ get: (name) => (name === 'sessionPersistence' ? persistence : undefined) }, '/workspace')
   const rows = await session.listSessions()
   assert.deepEqual(rows.map((row) => row.id), ['session-prompt'])
   assert.equal(rows[0].title, 'Fix the build, then run the tests')
+  assert.equal(rows[0].unreadable, false)
   assert.equal(rows[0].at, 100)
-  assert.deepEqual(opened, ['session-tool-only', 'session-prompt'], 'a zero-event artifact is never opened')
+  assert.deepEqual(
+    persistence.opened.sort(),
+    ['session-empty', 'session-prompt', 'session-tool-only'],
+    'every artifact is read; emptiness is decided by content, not eventCount',
+  )
+})
+
+test('a first prompt tolerates missing sources, splices and string content', async () => {
+  const persistence = sessionPersistence([
+    { id: 'session-old-source', at: 3, events: [
+      // Old logs predate `source`; they are still human input.
+      { type: 'user/message', data: { content: [text('old log without source')] } },
+    ] },
+    { id: 'session-string', at: 2, events: [
+      { type: 'user/message', data: { source: { kind: 'user' }, content: 'string prompt' } },
+    ] },
+    { id: 'session-splice', at: 1, events: [
+      // A tool notice is not a prompt; the spliced human message after it is.
+      { type: 'agent/inbox/spliced', data: { inserted: [
+        { content: [text('job notice')], source: { kind: 'tool-jobs' } },
+      ] } },
+      { type: 'agent/inbox/spliced', data: { inserted: [
+        { content: [text('spliced prompt')], source: { kind: 'user' } },
+      ] } },
+    ] },
+  ])
+  const session = new ChatSession({ get: (name) => (name === 'sessionPersistence' ? persistence : undefined) }, '/workspace')
+  const rows = await session.listSessions()
+  assert.deepEqual(rows.map((row) => row.id), ['session-old-source', 'session-string', 'session-splice'])
+  assert.deepEqual(rows.map((row) => row.title), ['old log without source', 'string prompt', 'spliced prompt'])
+})
+
+test('a session whose log cannot be read stays visible', async () => {
+  const persistence = sessionPersistence([
+    { id: 'session-broken', at: 10, fails: true },
+  ])
+  const session = new ChatSession({ get: (name) => (name === 'sessionPersistence' ? persistence : undefined) }, '/workspace')
+  const rows = await session.listSessions()
+  assert.equal(rows.length, 1, 'an unreadable real session is not deleted')
+  assert.equal(rows[0].id, 'session-broken')
+  assert.equal(rows[0].title, '')
+  assert.equal(rows[0].unreadable, true)
+
+  const app = makeApp({ sessionPersistence: persistence })
+  app.session = session
+  await app.openResumePicker()
+  assert.equal(app.overlay.items.length, 1)
+  assert.match(app.overlay.items[0].label, /标题未读出/u)
+})
+
+test('sessions are ordered by artifact mtime, not creation time', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-session-mtime-'))
+  const previous = process.env.DSH_HOME
+  try {
+    process.env.DSH_HOME = home
+    const group = join(home, 'sessions', '--workspace--')
+    for (const [id, mtime] of [['session-old', 5_000], ['session-new', 1_000]]) {
+      const directory = join(group, id)
+      mkdirSync(directory, { recursive: true })
+      const file = join(directory, 'session.v4.jsonl.zstd')
+      writeFileSync(file, '')
+      utimesSync(file, new Date(mtime), new Date(mtime))
+    }
+    const persistence = sessionPersistence([
+      { id: 'session-old', at: 100, events: [
+        { type: 'user/message', data: { source: { kind: 'user' }, content: [text('old but active')] } },
+      ] },
+      { id: 'session-new', at: 200, events: [
+        { type: 'user/message', data: { source: { kind: 'user' }, content: [text('new but idle')] } },
+      ] },
+    ])
+    const session = new ChatSession({ get: (name) => (name === 'sessionPersistence' ? persistence : undefined) }, '/workspace')
+    const rows = await session.listSessions()
+    assert.deepEqual(rows.map((row) => row.id), ['session-old', 'session-new'],
+      'the session written most recently sorts first even though it was created first')
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+    rmSync(home, { recursive: true, force: true })
+  }
 })
 
 test('/sessions labels a row with its first prompt instead of the id', async () => {
-  const persistence = {
-    async list() {
-      return [{ header: { id: 'session-123456', cwd: '/workspace', updatedAt: 100 }, eventCount: 2 }]
-    },
-    async open() {
-      return {
-        async read() {
-          return {
-            events: [
-              { type: 'user/message', data: { source: { kind: 'user' }, content: [text('给 /sessions 加首条提示词')] } },
-            ],
-          }
-        },
-        async close() {},
-      }
-    },
-  }
+  const persistence = sessionPersistence([
+    { id: 'session-123456', at: 100, events: [
+      { type: 'user/message', data: { source: { kind: 'user' }, content: [text('给 /sessions 加首条提示词')] } },
+    ] },
+  ])
   const app = makeApp({ sessionPersistence: persistence })
   app.session = new ChatSession({ get: (name) => (name === 'sessionPersistence' ? persistence : undefined) }, '/workspace')
   await app.openResumePicker()

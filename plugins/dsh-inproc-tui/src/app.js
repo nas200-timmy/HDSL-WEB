@@ -2315,11 +2315,16 @@ export class TerminalApp {
       const title = typeof session.title === 'string' && session.title !== ''
         ? session.title
         : shortId(session.id)
+      // A session whose first prompt could not be read is still listed: hiding a
+      // real conversation is worse than showing its id with a warning.
+      const unreadable = session.unreadable === true
+        ? ` · ${this.i18n.t('resume.unreadable')}`
+        : ''
       return {
         // The prompt is what identifies the conversation; the id is metadata,
         // not a label. Empty artifacts never reach this point (listSessions drops
         // them), so every row answers "which conversation is this?".
-        label: `${title}${current ? ` · ${this.i18n.t('resume.current')}` : ''}`,
+        label: `${title}${unreadable}${current ? ` · ${this.i18n.t('resume.current')}` : ''}`,
         tail: `${shortId(session.id)} · ${where}${age}`,
         onSelect: () => void this.resumeSession(session.id),
       }
