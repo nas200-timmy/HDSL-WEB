@@ -1756,10 +1756,18 @@ export class App {
     const items = sessions.map((session) => {
       const current = session.sessionId === this.sessionId
       const where = session.cwd === this.cwd ? this.i18n.t('resume.here') : session.cwd
-      const age = session.createdAt === undefined ? '' : ` · ${ageLabel(Date.now() - session.createdAt)}`
+      // `SessionInfo` has a title since ACP 1.4, but dsh-acp 0.2.1 still answers
+      // with sessionId/cwd only. Use the title when a newer server sends it; the
+      // short id remains the fallback rather than inventing a fake name.
+      const title = typeof session.title === 'string' && session.title.trim() !== ''
+        ? session.title
+        : shortId(session.sessionId)
+      const updated = typeof session.updatedAt === 'string' ? Date.parse(session.updatedAt) : NaN
+      const at = Number.isFinite(updated) ? updated : session.createdAt
+      const age = Number.isFinite(at) ? ` · ${ageLabel(Date.now() - at)}` : ''
       return {
-        label: `${shortId(session.sessionId)}${current ? ` · ${this.i18n.t('resume.current')}` : ''}`,
-        tail: `${where}${age}`,
+        label: `${title}${current ? ` · ${this.i18n.t('resume.current')}` : ''}`,
+        tail: `${shortId(session.sessionId)} · ${where}${age}`,
         onSelect: () => this.resumeSession(session.sessionId),
       }
     })
@@ -1770,7 +1778,7 @@ export class App {
     this.overlay = {
       kind: 'picker',
       title: this.i18n.t('resume.title'),
-      width: 66,
+      width: 76,
       height: 20,
       items,
       index: 0,

@@ -22,6 +22,17 @@ import { randomUUID } from 'node:crypto'
 /** How long a detach waits for the agent to go idle before giving up on it. */
 const SETTLE_TIMEOUT_MS = 2_000
 
+/** How many events one session-index read asks for. */
+const SESSION_INDEX_READ = 64
+/** Stop looking for the first prompt after this many events. */
+const SESSION_INDEX_LIMIT = 2_048
+/** How many characters of the first prompt the picker shows. */
+const SESSION_TITLE_CHARS = 40
+/** Newest artifacts read when building the `/sessions` index. */
+const SESSION_INDEX_MAX = 200
+/** Read handles opened at once; a large store must not open hundreds in parallel. */
+const SESSION_INDEX_CONCURRENCY = 8
+
 /** A model choice as the harness records it. */
 export class ChatSession {
   /**
@@ -317,8 +328,16 @@ export class ChatSession {
   }
 
   /**
-   * Stored sessions, newest first.
-   * @returns {Promise<{id: string, cwd: string, at: number}[]>}
+   * Stored sessions with at least one human prompt, newest first.
+   *
+   * Persistence lists every artifact it has, including the empty session an
+   * accidental `/new`, a failed resume or a killed start leaves behind. Those
+   * have no first prompt and are not useful in `/sessions`, so they are read
+   * (metadata only, then the first few events) and dropped. The first human
+   * message is also the label the picker shows: a session id alone tells nobody
+   * which conversation it is.
+   *
+   * @returns {Promise<{id: string, cwd: string, at: number, title: string}[]>}
    */
   async listSessions() {
     const persistence = this.ctx.get('sessionPersistence')
@@ -329,14 +348,38 @@ export class ChatSession {
     } catch {
       return []
     }
-    return snapshots
-      .map((snapshot) => ({
-        id: snapshot.header?.id ?? '',
-        cwd: snapshot.header?.cwd ?? '',
-        at: snapshot.header?.updatedAt ?? snapshot.header?.createdAt ?? 0,
-      }))
-      .filter((row) => row.id !== '')
-      .sort((left, right) => Number(right.at) - Number(left.at))
+    // `list()` promises no order and a store can be large. Work newest-first so
+    // the picker's 40 rows are populated from the useful end, and read with a
+    // small pool: one read handle per session, but not hundreds at once.
+    const ordered = [...snapshots]
+      .sort((left, right) => (right.header?.updatedAt ?? right.header?.createdAt ?? 0)
+        - (left.header?.updatedAt ?? left.header?.createdAt ?? 0))
+      .slice(0, SESSION_INDEX_MAX)
+    const rows = []
+    let next = 0
+    const worker = async () => {
+      while (next < ordered.length) {
+        const snapshot = ordered[next]
+        next += 1
+        const id = snapshot.header?.id ?? ''
+        if (id === '') continue
+        // A zero-event artifact was created but never written; no need to open it.
+        if (snapshot.eventCount === 0) continue
+        const title = await firstPromptTitle(persistence, id)
+        if (title === '') continue
+        rows.push({
+          id,
+          cwd: snapshot.header?.cwd ?? '',
+          at: snapshot.header?.updatedAt ?? snapshot.header?.createdAt ?? 0,
+          title,
+        })
+      }
+    }
+    await Promise.all(Array.from(
+      { length: Math.min(SESSION_INDEX_CONCURRENCY, ordered.length) },
+      worker,
+    ))
+    return rows.sort((left, right) => Number(right.at) - Number(left.at))
   }
 
   /**
@@ -377,4 +420,69 @@ export class ChatSession {
     this.sessionId = null
     this.modelState = null
   }
+}
+
+/**
+ * The first human prompt stored in a session, shortened for a picker label.
+ *
+ * A read handle is opened and closed per session. Reading stops at the first
+ * eligible `user/message`, so a long conversation costs one small slice; the
+ * cap keeps a pathological log (thousands of system events before any prompt)
+ * from turning `/sessions` into a full scan.
+ *
+ * @param {object} persistence the session persistence service
+ * @param {string} id the stored session id
+ * @returns {Promise<string>} the shortened prompt, or '' when there is none
+ */
+async function firstPromptTitle(persistence, id) {
+  let handle = null
+  try {
+    handle = await persistence.open(id, 'read')
+    let offset = 0
+    while (offset < SESSION_INDEX_LIMIT) {
+      const result = await handle.read(offset, SESSION_INDEX_READ)
+      const events = result?.events ?? []
+      for (const event of events) {
+        if (event?.type !== 'user/message' || event.data?.source?.kind !== 'user') continue
+        const text = messageText(event.data)
+        const title = shortenPrompt(text)
+        if (title !== '') return title
+      }
+      if (events.length < SESSION_INDEX_READ) break
+      offset += events.length
+    }
+    return ''
+  } catch {
+    // An unreadable old format or a half-written artifact is not a session the
+    // picker can resume; leave it out instead of offering a broken row.
+    return ''
+  } finally {
+    try {
+      await handle?.close()
+    } catch {
+      // Closing a read handle is best effort.
+    }
+  }
+}
+
+/** The text blocks of a stored user message. */
+function messageText(message) {
+  const content = message?.content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((block) => (block?.type === 'text' ? String(block.text ?? '') : ''))
+    .join('')
+}
+
+/** Collapse whitespace and cap a prompt at a readable picker label. */
+function shortenPrompt(text) {
+  const flat = String(text ?? '')
+    .replace(/[\u0000-\u001f\u007f]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+  if (flat === '') return ''
+  const chars = Array.from(flat)
+  return chars.length <= SESSION_TITLE_CHARS
+    ? flat
+    : `${chars.slice(0, SESSION_TITLE_CHARS - 1).join('')}…`
 }

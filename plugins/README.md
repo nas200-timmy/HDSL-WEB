@@ -128,6 +128,9 @@ harness 自己的审批策略只有"问"和"全拒"（`'never'` 是**拒绝**，
 - **交给 harness**：`/permission`、`/goal`、`/feedback`、`/export`。
 - **终端自己的**：`/help` `/model` `/effort` `/yolo` `/plan` `/resume` `/sessions` `/new`
   `/compact` `/clear` `/status` `/provider` `/allow` `/deny` `/rules` `/quit`。
+- **`/sessions` 的列表**：只列有首条人类提示的会话，空会话/误建会话不出现；行标签是首条提示词，
+  短 id 只放在后面的元信息里。ACP 线路的 `session/list` 目前只回 sessionId/cwd，服务端给出
+  `title` 时会用，空会话过滤只在进程内保证。
 - 未知命令先问 harness，仍未命中才报错。
 
 ### Plan mode 与 Ctrl-S
