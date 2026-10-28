@@ -46,6 +46,32 @@ src/main/resources/octop/octop-dashboard-<version>.zip
 补丁源码在 `integrations/octop/patches/`（见该目录 README），构建产物就是上面的
 `octop-dashboard-<version>.zip`。
 
+## 登录密码（面板里就能管）
+
+Octop 的管理员账号是它自己的一层，和面板账号无关。面板现在提供一个入口：
+**实例行 → 更多 → 登录密码…**。
+
+- **读**：先看 Octop 自己的 `<OCTOP_HOME>/credential.txt`（它 entrypoint 写的那个文件，文档里让人
+  `cat` 的就是它），再看面板首次启动时记的 `octop-admin.txt`。两边都没有明文时**不报错**，而是显示
+  「面板没有明文（Octop 只存哈希）」——在 Octop 网页向导/控制台里改过的密码就是这种情况。
+  这时面板会顺手跑一次 `octop --json user list`，把真实的管理员用户名带回来（向导里改过名的话，
+  默认的 `admin` 是错的）。
+- **两种 `credential.txt` 都认**：正常登录块给「用户名 + 密码」；Octop 的
+  `Setup Required` 提示块给的是**向导口令**（`Wizard password:`，旧版在其旁边的
+  `octop-login.txt` 里）。后者会以 `mode: wizard` 返回，页面明确写「实例还没初始化：打开它的网页，
+  用这个口令完成向导」——两种东西不能混为一谈。
+- **写/重置**：调 Octop 自己的 CLI
+  `octop user passwd <用户名> --password <新密码>`（源码编译用 `.venv/bin/octop`，portable 用
+  `runtime/bin/python3.12 launch.py`），成功后把新密码写回上面两个文件（0600）。
+  密码策略与 Octop 自己的校验一致：≥ 8 位、含字母和数字，并且**不在它的常见口令黑名单里**
+  （`password123` 这类会被它网页控制台拒绝，面板提前拦下）。面板首次启动 `octop init` 之后也会写
+  `credential.txt`，所以 `cat credential.txt` 在面板装的实例上同样有效。
+- **门禁**：创建实例后的 **15 分钟**内可以直接看（密码是刚生成的，总得能登录一次）；之后查看与任何
+  重置都要**开发者密码**。面板跑在明文 HTTP 上时无法提权，此时改为**面板密码**（每个地址限速，
+  和开发者页同一个规则）。
+- **重置不会踢掉已登录的 Octop 会话**：改的是数据库里的密码哈希，已签发的 JWT 仍在有效期内。
+- 实例没启动过（`octop.db` 还没生成）时没有密码可读，先启动一次。
+
 ## 最后手段（设置 → 品牌实例）
 
 在「设置 → 品牌实例」里，**读不需要开发者密码**（品牌列表、已装版本、当前策略都能看），
