@@ -79,6 +79,10 @@ src/main/resources/octop/octop-dashboard-<version>.zip
   `<version>.previous` 在，就把半成品改名成 `<version>.broken-<时间戳>` 留着排查，再把
   `.previous` 挪回 `<version>`。看到日志里的 "Recovered the Octop release …" 就是这次修复。
 
-另外：**任何安装（不只源码构建）都不允许覆盖正在运行的实例所用的版本**，会先返回 409 让你停实例。
+另外两条已知行为，别当故障：
+
+- **任何安装（不只源码构建）都不允许覆盖正在运行的实例所用的版本**，会先返回 409 让你停实例。
+- **构建期间同一版本的实例会短暂报「未安装」**：marker 要等构建成功才写，这期间点「启动」会失败
+  而不是排队；等构建结束再点即可。
 
 策略存 `<data>/brands/policy.json`，默认全关；面板重启后固定路径恢复。
