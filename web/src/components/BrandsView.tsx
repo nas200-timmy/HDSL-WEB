@@ -545,6 +545,37 @@ function VersionCard({
                 )}
               </div>
               <ProgressBar fraction={installFraction} />
+              {installStatus.stageFraction !== undefined && installStatus.stageFraction >= 0 && (
+                <div style={{ display: "grid", gap: 3 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "baseline",
+                      gap: 8,
+                      fontSize: 11.5,
+                      color: "var(--monet-on-surface-variant)",
+                    }}
+                  >
+                    <span style={{ flex: 1 }}>{installStatus.stage ?? "当前步骤"}</span>
+                    <span className="mono">
+                      {Math.round(installStatus.stageFraction * 100)}%
+                    </span>
+                  </div>
+                  <div
+                    className="progress"
+                    style={{ height: 4 }}
+                    role="progressbar"
+                    aria-label={installStatus.stage ?? "当前步骤"}
+                  >
+                    <div
+                      className="bar"
+                      style={{
+                        width: `${Math.round(Math.min(1, Math.max(0, installStatus.stageFraction)) * 1000) / 10}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12 }}>
                 <span style={{ color: "var(--monet-on-surface-variant)" }}>已用 {formatElapsed(installElapsed)}</span>
                 {installEta && (

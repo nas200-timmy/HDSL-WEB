@@ -106,6 +106,12 @@ public final class BrandInstaller {
     public interface Progress {
         void update(String message, double fraction);
 
+        /// Reports the bar of the sub-step in flight, when that step knows a real fraction
+        /// (download bytes, installed packages). Steps without a real fraction leave it to the
+        /// time-based tick.
+        default void stage(String stage, double fraction) {
+        }
+
         /// Whether the user asked to stop. The installers check this in the loops that are not a
         /// child process (downloads, unzip); a child process is killed by the task service itself.
         default boolean isCancelled() {
@@ -138,10 +144,24 @@ public final class BrandInstaller {
             progress.update(line, value);
         }
 
+        /// Reports the sub-step's own bar, and remembers when — the time-based tick must not
+        /// overwrite a real number with an estimate half a second later.
+        void stage(String name, double value) {
+            lastRealStageAt = System.currentTimeMillis();
+            progress.stage(name, value);
+        }
+
+        /// Whether a real (not estimated) sub-step fraction arrived recently.
+        boolean recentlyReported() {
+            return System.currentTimeMillis() - lastRealStageAt < 1500;
+        }
+
         /// Whether the user asked to stop.
         boolean cancelled() {
             return progress.isCancelled();
         }
+
+        private volatile long lastRealStageAt;
     }
 
     @FunctionalInterface
@@ -165,12 +185,19 @@ public final class BrandInstaller {
             throws BrandException {
         long started = System.currentTimeMillis();
         message.report(label(index, total, name, before), before);
+        message.stage(name, 0);
         java.util.Timer ticker = new java.util.Timer("brand-install-progress", true);
         ticker.scheduleAtFixedRate(new java.util.TimerTask() {
             @Override
             public void run() {
+                // A stage that knows its real progress (bytes, packages) has reported within the
+                // last second; do not paper over it with an estimate.
+                if (message.recentlyReported()) {
+                    return;
+                }
                 double in = Math.min(0.95,
                         (System.currentTimeMillis() - started) / (1000.0 * Math.max(1, expectedSeconds)));
+                message.stage(name, in);
                 message.report(label(index, total, name, before + weight * in), before + weight * in);
             }
         }, 700, 700);
@@ -179,6 +206,7 @@ public final class BrandInstaller {
         } finally {
             ticker.cancel();
         }
+        message.stage(name, 1);
         message.report(label(index, total, name, before + weight), before + weight);
     }
 
@@ -186,6 +214,172 @@ public final class BrandInstaller {
     private static String label(int index, int total, String name, double fraction) {
         int percent = (int) Math.floor(Math.max(0, Math.min(1, fraction)) * 100);
         return "[" + (index + 1) + "/" + total + "] " + name + " · " + percent + "%";
+    }
+
+    /// Downloads with a byte-accurate sub-step bar: the server's `Content-Length` is the total, and
+    /// `12.3 MB / 260.0 MB` is a number a person can wait on. Without a length the bar stays on the
+    /// time-based tick.
+    private static java.io.InputStream download(String url, Sink message, String label) throws BrandException {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofMinutes(5))
+                .header("Accept", "*/*")
+                .GET()
+                .build();
+        try {
+            HttpResponse<java.io.InputStream> response =
+                    CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() / 100 != 2) {
+                throw new BrandException("Download answered " + response.statusCode() + ": " + url);
+            }
+            long total = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
+            return new ProgressStream(response.body(), message, label, total);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BrandException("Download was interrupted: " + url, e);
+        } catch (java.io.IOException e) {
+            throw new BrandException("Download failed: " + url + " — " + e.getMessage(), e);
+        }
+    }
+
+    /// An input stream that reports how many bytes went by, at most twice a second — often enough
+    /// to look alive, rare enough not to flood the task feed.
+    private static final class ProgressStream extends java.io.FilterInputStream {
+        private final Sink message;
+        private final String label;
+        private final long total;
+        private long read;
+        private long lastReport;
+
+        ProgressStream(java.io.InputStream in, Sink message, String label, long total) {
+            super(in);
+            this.message = message;
+            this.label = label;
+            this.total = total;
+        }
+
+        @Override
+        public int read() throws java.io.IOException {
+            int b = super.read();
+            if (b >= 0) {
+                tick(1);
+            }
+            return b;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws java.io.IOException {
+            int n = super.read(buffer, offset, length);
+            if (n > 0) {
+                tick(n);
+            }
+            return n;
+        }
+
+        private void tick(int n) {
+            read += n;
+            long now = System.currentTimeMillis();
+            if (now - lastReport < 500) {
+                return;
+            }
+            lastReport = now;
+            if (total > 0) {
+                message.stage(label, Math.min(0.99, read / (double) total));
+                message.accept(label + "：" + megabytes(read) + " / " + megabytes(total));
+            } else {
+                message.stage(label, Math.min(0.9, read / (260.0 * 1024 * 1024)));
+                message.accept(label + "：" + megabytes(read));
+            }
+        }
+    }
+
+    private static String megabytes(long bytes) {
+        return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0));
+    }
+
+    /// Runs `body` while counting how many packages `node_modules` holds, against the count the
+    /// lockfile declares: `已安装 762/1245 个包` is the only honest progress npm can offer, because
+    /// `npm ci` prints almost nothing while it works.
+    private static void runWithPackageCount(Path nodeModules, Path lockFile, Sink message, String label,
+                                            StepBody body) throws BrandException {
+        long expected = countLockPackages(lockFile);
+        long[] lastShown = {-1};
+        java.util.Timer watcher = new java.util.Timer("brand-install-packages", true);
+        watcher.scheduleAtFixedRate(new java.util.TimerTask() {
+            @Override
+            public void run() {
+                int installed = countInstalled(nodeModules);
+                if (installed == lastShown[0]) {
+                    return;
+                }
+                lastShown[0] = installed;
+                if (expected > 0) {
+                    message.stage(label, Math.min(0.95, installed / (double) expected));
+                    message.accept(label + "：已安装 " + installed + "/" + expected + " 个包");
+                } else {
+                    message.accept(label + "：已安装 " + installed + " 个包");
+                }
+            }
+        }, 500, 900);
+        try {
+            body.run();
+        } finally {
+            watcher.cancel();
+        }
+        if (expected > 0) {
+            message.stage(label, 1);
+            message.accept(label + "：已安装 " + expected + "/" + expected + " 个包");
+        }
+    }
+
+    /// How many packages a lockfile declares, or `-1` when it cannot be read.
+    private static long countLockPackages(Path lockFile) {
+        if (!Files.isRegularFile(lockFile)) {
+            return -1;
+        }
+        try (java.io.Reader reader = Files.newBufferedReader(lockFile, java.nio.charset.StandardCharsets.UTF_8)) {
+            JsonObject root = JsonParser.parseReader(reader).getAsJsonObject();
+            if (root.get("packages") instanceof JsonObject packages) {
+                long count = 0;
+                for (String key : packages.keySet()) {
+                    if (!key.isEmpty()) {
+                        count++;
+                    }
+                }
+                return count;
+            }
+            if (root.get("dependencies") instanceof JsonObject dependencies) {
+                return dependencies.size();
+            }
+        } catch (RuntimeException | java.io.IOException e) {
+            LOG.info("Could not read " + lockFile + " for the package count: " + e.getMessage());
+        }
+        return -1;
+    }
+
+    /// How many packages are on disk right now (scoped packages count once each).
+    private static int countInstalled(Path nodeModules) {
+        if (!Files.isDirectory(nodeModules)) {
+            return 0;
+        }
+        int count = 0;
+        try (java.util.stream.Stream<Path> entries = Files.list(nodeModules)) {
+            for (Path entry : (Iterable<Path>) entries::iterator) {
+                String name = entry.getFileName().toString();
+                if (name.startsWith(".") || !Files.isDirectory(entry)) {
+                    continue;
+                }
+                if (name.startsWith("@")) {
+                    try (java.util.stream.Stream<Path> scoped = Files.list(entry)) {
+                        count += (int) scoped.filter(Files::isDirectory).count();
+                    }
+                } else {
+                    count++;
+                }
+            }
+        } catch (java.io.IOException e) {
+            LOG.info("Could not count " + nodeModules + ": " + e.getMessage());
+        }
+        return count;
     }
 
     static final String RELEASES_DIR = "releases";
@@ -453,7 +647,7 @@ public final class BrandInstaller {
         stage(message, 0, total, "下载 portable 包（约 260 MB）", 0.0, 0.9, 120, () -> {
             message.accept("Downloading " + url + " (source: " + release.source() + ")");
             LOG.info("Downloading Octop portable archive " + url);
-            extractZip(download(url), target, message::cancelled);
+            extractZip(download(url, message, "下载 portable 包"), target, message::cancelled);
         });
         stage(message, 1, total, "换成打过挂载点补丁的 dashboard", 0.9, 0.1, 20, () -> {
             markExecutable(target.resolve("runtime/bin"));
@@ -540,7 +734,7 @@ public final class BrandInstaller {
 
         stage(message, 0, total, "下载源码", 0.00, 0.05, 20, () -> {
             message.accept("Downloading source " + url);
-            extractZip(download(url), target, message::cancelled);
+            extractZip(download(url, message, "下载源码"), target, message::cancelled);
         });
 
         stage(message, 1, total, "应用 dashboard 补丁", 0.05, 0.02, 5, () -> {
@@ -562,8 +756,10 @@ public final class BrandInstaller {
         Map<String, String> npmEnv = new HashMap<>();
         npmEnv.put("NPM_CONFIG_REGISTRY", registry);
         stage(message, 2, total, "安装前端依赖（npm ci）", 0.07, 0.35, 240, () ->
-                runChecked(List.of("npm", "ci", "--no-audit", "--no-fund", "--registry=" + registry),
-                        dashboard, npmEnv, log, message, "installing dashboard dependencies"));
+                runWithPackageCount(dashboard.resolve("node_modules"), dashboard.resolve("package-lock.json"),
+                        message, "npm ci", () ->
+                                runChecked(List.of("npm", "ci", "--no-audit", "--no-fund", "--registry=" + registry),
+                                        dashboard, npmEnv, log, message, "installing dashboard dependencies")));
         npmEnv.put("VITE_BASE_PATH", "./");
         npmEnv.put("NODE_OPTIONS", "--max-old-space-size=2048");
         stage(message, 3, total, "构建 dashboard", 0.42, 0.15, 90, () ->

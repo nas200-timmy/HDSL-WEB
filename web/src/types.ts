@@ -529,6 +529,9 @@ export interface BrandInstallStatus {
   state: "running" | "done" | "failed" | "none";
   message: string;
   fraction: number;
+  /// 当前子步骤的名字（下载 / npm ci / uv sync …）与它自己的进度；旧后端没有这两个字段
+  stage?: string;
+  stageFraction?: number;
   error?: string;
 }
 

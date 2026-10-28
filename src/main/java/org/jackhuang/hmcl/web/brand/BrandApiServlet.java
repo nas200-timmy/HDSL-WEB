@@ -317,6 +317,11 @@ public final class BrandApiServlet extends HttpServlet {
                 public boolean isCancelled() {
                     return live.isCancelled();
                 }
+
+                @Override
+                public void stage(String stage, double fraction) {
+                    live.updateStage(stage, fraction);
+                }
             };
             try {
                 if (sourceBuild) {
@@ -345,10 +350,15 @@ public final class BrandApiServlet extends HttpServlet {
             body.addProperty("state", "none");
             body.addProperty("message", "");
             body.addProperty("fraction", -1);
+            body.addProperty("stageFraction", -1);
         } else {
             body.addProperty("state", info.state().toLowerCase(java.util.Locale.ROOT));
             body.addProperty("message", info.message());
             body.addProperty("fraction", info.fraction());
+            if (info.stage() != null) {
+                body.addProperty("stage", info.stage());
+            }
+            body.addProperty("stageFraction", info.stageFraction());
             if (info.error() != null) {
                 body.addProperty("error", info.error());
             }
