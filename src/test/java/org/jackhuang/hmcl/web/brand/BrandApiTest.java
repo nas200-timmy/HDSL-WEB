@@ -218,6 +218,36 @@ class BrandApiTest {
         }
     }
 
+    /// Octop's `credential.txt` carries two shapes: a login block, or the "Setup Required" hint with
+    /// a wizard password. The panel must tell them apart — "finish the wizard" is not "log in".
+    @Test
+    void octopSetupHintIsReportedAsAWizardPasswordNotAsAnAdminLogin() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpClient client = TestSupport.client();
+            Path release = dataDir.resolve("brands/octop/releases/1.0.3b1");
+            Files.createDirectories(release);
+            Files.writeString(release.resolve("octop-install.json"),
+                    "{\"mode\":\"package\",\"version\":\"1.0.3b1\"}\n");
+            HttpResponse<String> created = post(client, running, "/api/brands/octop/instances",
+                    "{\"name\":\"B\",\"version\":\"1.0.3b1\"}");
+            assertEquals(201, created.statusCode(), created.body());
+            String id = JsonParser.parseString(created.body()).getAsJsonObject()
+                    .getAsJsonObject("instance").get("id").getAsString();
+            Path home = dataDir.resolve("brands/octop/instances").resolve(id).resolve("home");
+            Files.createDirectories(home);
+            Files.writeString(home.resolve("credential.txt"),
+                    "Octop Setup Required\n====================\n"
+                            + "No admin account has been created yet.\n"
+                            + "Wizard password: wiz-123456\n");
+
+            JsonObject read = JsonParser.parseString(post(client, running,
+                    "/api/brands/octop/instances/" + id + "/admin-password", "{}").body())
+                    .getAsJsonObject();
+            assertEquals("wizard", read.get("mode").getAsString());
+            assertEquals("wiz-123456", read.get("password").getAsString());
+        }
+    }
+
     private static HttpResponse<String> get(TestSupport.RunningServer running, String path)
             throws Exception {
         return TestSupport.client().send(HttpRequest.newBuilder(

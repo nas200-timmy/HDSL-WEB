@@ -9,7 +9,15 @@
   不再是一句英文错误。
 - 重置走 Octop 官方 CLI `octop user passwd <用户名> --password <新密码>`（portable 走
   `runtime/bin/python3.12 launch.py`），成功后把新密码写回两个文件（0600），格式与 Octop entrypoint
-  一致；密码策略同步为 ≥8 位且含字母数字，CLI 的拒绝原因原样带回。
+  一致；密码策略同步为 ≥8 位且含字母数字，且**对齐 Octop 的常见口令黑名单**（它的 `user passwd`
+  本身不校验策略，只有网页端校验，面板补上这层以免设出一个网页端拒绝的密码）。
+- 面板第一次 `octop init` 之后也会写 `credential.txt`（Octop 的格式），所以文档里让人
+  `cat credential.txt` 的做法在面板实例上同样成立。
+- `credential.txt` 也可能是 Octop 的 `Setup Required` 提示块：此时返回的是**向导口令**
+  （`mode: wizard`），页面说明「打开实例网页完成向导」，不把它当成管理员密码。
+- 两处文件都没有明文时，用 `octop --json user list` 查真实管理员用户名（向导里可改名）；
+  Octop 只存哈希，所以「不可读」是正常答案，页面直接引导重置。
+- 实例正在运行时重置可能撞 SQLite 锁：面板回 409 并提示「先停实例再试」。
 - 门禁：创建后 15 分钟内可直接看；之后查看/重置要开发者密码；明文 HTTP 下面板无法提权，改为
   面板密码（同地址限速，和开发者页一致）。重置不会让已登录的 Octop 会话失效。
 - 测试：`BrandApiTest` 覆盖「没有明文时不可读」「从 credential.txt 读到」「重置缺第二因子 → 401」。

@@ -717,6 +717,23 @@ public final class BrandRuntime {
         } catch (UnsupportedOperationException ignored) {
             // Windows: the file still lives inside the instance directory.
         }
+        // Octop's own documentation points people at `<OCTOP_HOME>/credential.txt` (its container
+        // entrypoint writes exactly that file). Writing it here too means `cat credential.txt`
+        // works on a panel-managed instance, and the panel's password page has one source of truth
+        // to read before its own record.
+        Path credential = home.resolve("credential.txt");
+        Files.writeString(credential, "Octop Login Credential\n"
+                + "======================\n"
+                + "Username: admin\n"
+                + "Password: " + password + "\n\n"
+                + "Written by the hdsl-web panel during the first boot.\n"
+                + "A password changed in Octop's web console wins over this file.\n",
+                StandardCharsets.UTF_8);
+        try {
+            Files.setPosixFilePermissions(credential, PosixFilePermissions.fromString("rw-------"));
+        } catch (UnsupportedOperationException ignored) {
+            // Windows: the file still lives inside the instance directory.
+        }
         Files.writeString(logFile, text, StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         LOG.info("Initialised Octop at " + home + " (admin credentials in octop-admin.txt)");

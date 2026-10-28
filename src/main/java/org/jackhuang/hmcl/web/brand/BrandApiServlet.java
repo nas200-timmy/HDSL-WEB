@@ -877,6 +877,15 @@ public final class BrandApiServlet extends HttpServlet {
     private final org.jackhuang.hmcl.web.auth.LoginThrottle adminPasswordThrottle =
             new org.jackhuang.hmcl.web.auth.LoginThrottle();
 
+    /// Octop's own denylist (`src/octop/infra/users/password.py`, compared case-insensitively).
+    /// Its `user passwd` does **not** enforce the policy (the offline path only hashes), so the
+    /// panel checks the same list itself — otherwise the page would happily set `password123`,
+    /// which the web console then refuses to accept as a new password.
+    private static final java.util.Set<String> OCTOP_COMMON_PASSWORDS = java.util.Set.of(
+            "password", "password1", "password12", "password123", "12345678", "123456789",
+            "qwerty123", "admin123", "welcome1", "letmein1", "changeme1", "octop123",
+            "abc12345", "iloveyou1");
+
     /// The instance's own admin credentials.
     ///
     /// Octop generates them on first boot and writes `octop-admin.txt`; until now the only way to
@@ -908,18 +917,29 @@ public final class BrandApiServlet extends HttpServlet {
         Path home = ref.manager().homeDirectory(instance);
         String username = "admin";
         String password = null;
-        // Octop's own credential file first (`$OCTOP_HOME/credential.txt`, written by its entrypoint
-        // and by the panel's first boot), then the panel's `octop-admin.txt`. Neither is
-        // authoritative for a password changed in Octop's web console — the DB only keeps a hash —
-        // so a missing plaintext is answered as "readable: false", not as an error.
+        boolean wizard = false;
+        // Octop's own credential file first (`$OCTOP_HOME/credential.txt`), then the panel's
+        // `octop-admin.txt`. The same file carries either a login block or Octop's "Setup Required"
+        // hint with a wizard password; both are read, because "finish the wizard" and "log in" are
+        // two different answers the page must be able to give.
         for (String line : readCredentialFile(home.resolve("credential.txt"))) {
+            if (line.startsWith("Setup Required") || line.startsWith("Octop Setup Required")) {
+                wizard = true;
+                continue;
+            }
             String value = credentialValue(line, "Username:");
             if (value != null) {
                 username = value;
                 continue;
             }
             value = credentialValue(line, "Password:");
-            if (value != null) {
+            if (value != null && !value.isBlank()) {
+                password = value;
+                continue;
+            }
+            value = credentialValue(line, "Wizard password:");
+            if (value != null && !value.isBlank()) {
+                wizard = true;
                 password = value;
             }
         }
@@ -930,22 +950,51 @@ public final class BrandApiServlet extends HttpServlet {
                 password = line.substring("password:".length()).trim();
             }
         }
+        if (wizard && password == null) {
+            // Older entrypoints put the wizard password in its own file instead of the hint block.
+            List<String> wizardFile = readCredentialFile(home.resolve("octop-login.txt"));
+            if (!wizardFile.isEmpty()) {
+                String first = wizardFile.get(0).trim();
+                if (!first.isEmpty()) {
+                    password = first;
+                }
+            }
+        }
+        if (password == null) {
+            // Nothing recorded: ask Octop's own user table who the admin is, so the page does not
+            // tell somebody their admin is called "admin" when they renamed it during the wizard.
+            String discovered = discoverAdminUsername(instance, ref.root(), home);
+            if (discovered != null) {
+                username = discovered;
+            }
+        }
 
         if (reset) {
             String wanted = stringField(body, "password");
             String next = wanted != null && !wanted.isBlank() ? wanted.trim() : randomPassword();
             if (next.length() < 8 || !next.matches(".*[A-Za-z].*") || !next.matches(".*[0-9].*")) {
-                // Octop itself enforces a policy (length, common-password blacklist); catching the
-                // obvious half of it here saves a round trip through its CLI.
                 Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                         "password must be at least 8 characters and contain letters and digits");
+                return;
+            }
+            if (OCTOP_COMMON_PASSWORDS.contains(next.toLowerCase(java.util.Locale.ROOT))) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "password is too common (Octop refuses it in its own console)");
                 return;
             }
             try {
                 resetOctopPassword(instance, ref.root(), home, username, next);
                 writeAdminCredentials(home, username, next);
             } catch (IOException e) {
-                Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+                String detail = e.getMessage() == null ? "" : e.getMessage();
+                if (detail.contains("locked") || detail.contains("busy")) {
+                    // `octop user passwd` writes the SQLite database of a *running* server; a busy
+                    // instance is the ordinary reason it fails, and stopping it is the fix.
+                    Json.error(response, HttpServletResponse.SC_CONFLICT,
+                            "database is busy (stop the instance, then retry): " + detail);
+                    return;
+                }
+                Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, detail);
                 return;
             }
             AuditLog.log(AuditLog.Channel.WEB, "brand.admin-password", brand.id() + "/" + id,
@@ -962,6 +1011,7 @@ public final class BrandApiServlet extends HttpServlet {
             result.add("password", JsonNull.INSTANCE);
             result.addProperty("reset", false);
             result.addProperty("readable", false);
+            result.addProperty("mode", wizard ? "wizard" : "admin");
             Json.write(response, result);
             return;
         }
@@ -969,6 +1019,7 @@ public final class BrandApiServlet extends HttpServlet {
         result.addProperty("username", username);
         result.addProperty("password", password);
         result.addProperty("readable", true);
+        result.addProperty("mode", wizard ? "wizard" : "admin");
         result.addProperty("reset", reset);
         Json.write(response, result);
     }
@@ -1085,18 +1136,7 @@ public final class BrandApiServlet extends HttpServlet {
         if (packageDir == null) {
             throw new IOException("Octop " + instance.version() + " is not installed");
         }
-        List<String> command = new java.util.ArrayList<>();
-        Path sourceOctop = packageDir.resolve(".venv/bin/octop");
-        if (Files.isRegularFile(sourceOctop)) {
-            command.add(sourceOctop.toString());
-        } else {
-            Path launch = packageDir.resolve("launch.py");
-            if (!Files.isRegularFile(launch)) {
-                throw new IOException("Octop launcher not found: " + launch);
-            }
-            command.add(BrandRuntime.octopPython(packageDir).toString());
-            command.add(launch.toString());
-        }
+        List<String> command = new java.util.ArrayList<>(octopCommand(packageDir));
         command.addAll(List.of("user", "passwd", username, "--password", password));
 
         ProcessBuilder builder = new ProcessBuilder(command);
@@ -1143,6 +1183,72 @@ public final class BrandApiServlet extends HttpServlet {
             throw new IOException("octop user passwd failed (exit " + process.exitValue() + "): "
                     + (text.isEmpty() ? "no output" : text));
         }
+    }
+
+    /// How to invoke Octop's CLI inside an installed release: the source build has an entry point, the
+    /// portable archive ships an interpreter plus `launch.py`.
+    private static List<String> octopCommand(Path packageDir) throws IOException {
+        List<String> command = new java.util.ArrayList<>();
+        Path sourceOctop = packageDir.resolve(".venv/bin/octop");
+        if (Files.isRegularFile(sourceOctop)) {
+            command.add(sourceOctop.toString());
+            return command;
+        }
+        Path launch = packageDir.resolve("launch.py");
+        if (!Files.isRegularFile(launch)) {
+            throw new IOException("Octop launcher not found: " + launch);
+        }
+        command.add(BrandRuntime.octopPython(packageDir).toString());
+        command.add(launch.toString());
+        return command;
+    }
+
+    /// The first admin in Octop's own user table, via `octop --json user list`.
+    ///
+    /// Only used when no credential file records a username — Octop's setup wizard lets people
+    /// rename the admin, and guessing `admin` would then be wrong. Any failure keeps the default
+    /// rather than turning a read into an error.
+    private static @Nullable String discoverAdminUsername(BrandInstance instance, Path brandRoot,
+                                                          Path home) {
+        try {
+            Path packageDir = BrandInstaller.packageDir(Brand.OCTOP, brandRoot, instance.version());
+            if (packageDir == null) {
+                return null;
+            }
+            List<String> command = new java.util.ArrayList<>(octopCommand(packageDir));
+            command.addAll(List.of("--json", "user", "list"));
+            ProcessBuilder builder = new ProcessBuilder(command);
+            builder.directory(home.toFile());
+            builder.redirectErrorStream(true);
+            builder.environment().put("OCTOP_HOME", home.toString());
+            Process process = builder.start();
+            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            if (!process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return null;
+            }
+            if (process.exitValue() != 0) {
+                return null;
+            }
+            int start = output.indexOf('[');
+            int end = output.lastIndexOf(']');
+            if (start < 0 || end <= start) {
+                return null;
+            }
+            JsonArray users = JsonParser.parseString(output.substring(start, end + 1)).getAsJsonArray();
+            for (com.google.gson.JsonElement element : users) {
+                JsonObject user = element.getAsJsonObject();
+                String role = user.has("role") ? user.get("role").getAsString() : "";
+                if ("admin".equals(role) && user.has("username")) {
+                    return user.get("username").getAsString();
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            LOG.info("Could not list Octop users for " + instance.id() + ": " + e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return null;
     }
 
     /// A 16-character password with letters and digits, for the "reset" without a typed value.

@@ -137,6 +137,12 @@ export function AdminCredentialsDialog({
               <span className="comp-label">用户名</span>
               <span className="comp-value mono">{credentials.username}</span>
             </div>
+            {credentials.mode === "wizard" ? (
+              <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+                这个实例还没完成 Octop 的初始化向导（数据库里还没有管理员）。下面是<b>向导口令</b>：
+                打开实例网页，用它进入设置向导，再在那里选管理员的用户名和密码。
+              </p>
+            ) : null}
             {credentials.password === null ? (
               <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
                 面板没有这个实例的明文密码：Octop 只保存哈希，可能是在它的网页向导或控制台里设的。

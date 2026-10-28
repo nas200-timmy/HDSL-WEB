@@ -531,6 +531,8 @@ export interface BrandAdminCredentials {
   password: string | null;
   /// 密码是否可读；false 时页面只提供重置
   readable?: boolean;
+  /// `admin`：正常的管理员口令；`wizard`：实例还没初始化，这是 Octop 初始化向导的口令
+  mode?: "admin" | "wizard";
   reset?: boolean;
 }
 
