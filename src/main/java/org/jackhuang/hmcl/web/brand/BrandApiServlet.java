@@ -307,14 +307,23 @@ public final class BrandApiServlet extends HttpServlet {
             return;
         }
         TaskService.Task task = tasks.submit("install", brand.id(), live -> {
+            BrandInstaller.Progress progress = new BrandInstaller.Progress() {
+                @Override
+                public void update(String message, double fraction) {
+                    live.update(message, fraction);
+                }
+
+                @Override
+                public boolean isCancelled() {
+                    return live.isCancelled();
+                }
+            };
             try {
                 if (sourceBuild) {
                     BrandInstaller.installOctopSource(brand, target, ref.root(),
-                            ref.root().resolve(BrandInstaller.RELEASES_DIR).resolve(target),
-                            message -> live.update(message, -1));
+                            ref.root().resolve(BrandInstaller.RELEASES_DIR).resolve(target), progress);
                 } else {
-                    BrandInstaller.install(brand, target, ref.root(),
-                            message -> live.update(message, -1));
+                    BrandInstaller.install(brand, target, ref.root(), progress);
                 }
                 return "Installed " + brand.sourceLabel() + " " + target
                         + (sourceBuild ? " (source build)" : "");

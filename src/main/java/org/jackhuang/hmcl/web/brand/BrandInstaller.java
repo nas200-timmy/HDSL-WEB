@@ -97,6 +97,97 @@ public final class BrandInstaller {
     public record Release(String version, String path, boolean current) {
     }
 
+    /// Where an install reports progress: one human line and a 0–1 fraction.
+    ///
+    /// The fraction is what drives the panel's bar and its ETA, so the installer reports it at
+    /// stage boundaries and ticks it while a stage runs — an install that only ever said "running"
+    /// for an hour is the thing this exists to prevent.
+    @FunctionalInterface
+    public interface Progress {
+        void update(String message, double fraction);
+
+        /// Whether the user asked to stop. The installers check this in the loops that are not a
+        /// child process (downloads, unzip); a child process is killed by the task service itself.
+        default boolean isCancelled() {
+            return false;
+        }
+    }
+
+    /// A [Progress] that also carries the current fraction for the many `message.accept` calls the
+    /// installers already make: those lines are ordinary log output, and the bar must not jump back
+    /// to "unknown" because one of them arrived.
+    private static final class Sink implements java.util.function.Consumer<String> {
+        private final Progress progress;
+        private volatile double fraction = -1;
+
+        Sink(Progress progress) {
+            this.progress = progress;
+        }
+
+        @Override
+        public void accept(String line) {
+            progress.update(line, fraction);
+        }
+
+        void fraction(double value) {
+            this.fraction = value;
+        }
+
+        void report(String line, double value) {
+            fraction = value;
+            progress.update(line, value);
+        }
+
+        /// Whether the user asked to stop.
+        boolean cancelled() {
+            return progress.isCancelled();
+        }
+    }
+
+    @FunctionalInterface
+    private interface StepBody {
+        void run() throws BrandException;
+    }
+
+    /// Runs one weighted stage of an install: names it, ticks the bar while it runs (against a
+    /// rough expected duration, capped below 100%), and completes it afterwards.
+    ///
+    /// @param message        the sink shared by the whole install
+    /// @param index          zero-based stage index
+    /// @param total          how many stages the install has
+    /// @param name           the stage, as the panel shows it
+    /// @param before         how much of the bar was already done (0–1)
+    /// @param weight         how much of the bar this stage owns (0–1)
+    /// @param expectedSeconds how long this stage usually takes; only makes the tick move
+    /// @param body           the work
+    private static void stage(Sink message, int index, int total, String name,
+                              double before, double weight, int expectedSeconds, StepBody body)
+            throws BrandException {
+        long started = System.currentTimeMillis();
+        message.report(label(index, total, name, before), before);
+        java.util.Timer ticker = new java.util.Timer("brand-install-progress", true);
+        ticker.scheduleAtFixedRate(new java.util.TimerTask() {
+            @Override
+            public void run() {
+                double in = Math.min(0.95,
+                        (System.currentTimeMillis() - started) / (1000.0 * Math.max(1, expectedSeconds)));
+                message.report(label(index, total, name, before + weight * in), before + weight * in);
+            }
+        }, 700, 700);
+        try {
+            body.run();
+        } finally {
+            ticker.cancel();
+        }
+        message.report(label(index, total, name, before + weight), before + weight);
+    }
+
+    /// `[3/7] 构建 dashboard · 55%` — the line the panel shows next to the bar.
+    private static String label(int index, int total, String name, double fraction) {
+        int percent = (int) Math.floor(Math.max(0, Math.min(1, fraction)) * 100);
+        return "[" + (index + 1) + "/" + total + "] " + name + " · " + percent + "%";
+    }
+
     static final String RELEASES_DIR = "releases";
     /// The staging name the source build moves a previous release to. It is
     /// **not** a release: a killed build leaves it behind (see
@@ -132,8 +223,9 @@ public final class BrandInstaller {
     /// @param message progress sink for the task record
     /// @throws BrandException when a required tool is missing, the install
     ///                          fails, or the installed release is incomplete
-    public static void install(Brand brand, String version, Path brandRoot, Consumer<String> message)
+    public static void install(Brand brand, String version, Path brandRoot, Progress progress)
             throws BrandException {
+        Sink message = new Sink(progress);
         Path releases = brandRoot.resolve(RELEASES_DIR);
         Path target = releases.resolve(version);
         boolean installed = Files.exists(target.resolve(brand.installMarker()));
@@ -258,7 +350,7 @@ public final class BrandInstaller {
     /// insurance against a future lockfile that pulls it in through another
     /// workspace.)
     private static void installGitHub(Brand brand, String version, Path brandRoot, Path target,
-                                      Consumer<String> message) throws BrandException {
+                                      Sink message) throws BrandException {
         DshNodeRuntime runtime = DshNodeRuntime.detect()
                 .or(DshNodeRuntime::detectManaged)
                 .orElseThrow(() -> new BrandException("Node.js was not found on PATH and no panel-managed runtime "
@@ -272,7 +364,8 @@ public final class BrandInstaller {
             FileUtils.deleteDirectoryQuietly(target);
         }
 
-        String url = "https://codeload.github.com/" + brand.githubSlug()
+        String archive = BrandSources.archive().url();
+        String url = archive.replaceAll("/$", "") + "/" + brand.githubSlug()
                 + "/zip/refs/tags/" + brand.releaseTag(version);
         BrandException downloadFailure = null;
         for (int attempt = 1; attempt <= 3; attempt++) {
@@ -282,7 +375,7 @@ public final class BrandInstaller {
             try {
                 message.accept("Downloading " + url);
                 LOG.info("Downloading " + url + " (attempt " + attempt + " of 3)");
-                extractZip(download(url), target);
+                extractZip(download(url), target, message::cancelled);
                 downloadFailure = null;
                 break;
             } catch (BrandException e) {
@@ -343,44 +436,49 @@ public final class BrandInstaller {
     /// Only the SPA is replaced: upstream builds for `/`, while this instance
     /// is mounted at `/i/<token>/` and needs the runtime-base patch.
     private static void installOctop(Brand brand, String version, Path brandRoot, Path target,
-                                     Consumer<String> message) throws BrandException {
+                                     Sink message) throws BrandException {
         String platform = octopPlatform();
         String asset = "Octop-portable-" + platform + "-" + version + ".zip";
-        String base = System.getenv("OCTOP_RELEASE_BASE");
-        if (base == null || base.isBlank()) {
-            base = "https://github.com/" + brand.githubSlug() + "/releases/download";
+        BrandSources.Effective release = BrandSources.release(brand);
+        String base = release.url();
+        if (base.isBlank()) {
+            throw new BrandException("no release base is configured for " + brand.id());
         }
         String url = base.replaceAll("/$", "") + "/" + brand.releaseTag(version) + "/" + asset;
 
         if (Files.exists(target)) {
             FileUtils.deleteDirectoryQuietly(target);
         }
-        message.accept("Downloading " + url);
-        LOG.info("Downloading Octop portable archive " + url);
-        extractZip(download(url), target);
-        markExecutable(target.resolve("runtime/bin"));
-
-        Path dashboard = target.resolve("packages/octop/dashboard");
-        if (!Files.isDirectory(dashboard)) {
-            throw new BrandException("Octop archive has no packages/octop/dashboard: " + target);
-        }
-        FileUtils.deleteDirectoryQuietly(dashboard);
-        String resource = "/octop/octop-dashboard-" + version + ".zip";
-        try (InputStream patched = BrandInstaller.class.getResourceAsStream(resource)) {
-            if (patched == null) {
-                throw new BrandException("This panel build has no patched Octop dashboard for " + version
-                        + " (" + resource + "); use the version bundled with this panel");
+        int total = 2;
+        stage(message, 0, total, "下载 portable 包（约 260 MB）", 0.0, 0.9, 120, () -> {
+            message.accept("Downloading " + url + " (source: " + release.source() + ")");
+            LOG.info("Downloading Octop portable archive " + url);
+            extractZip(download(url), target, message::cancelled);
+        });
+        stage(message, 1, total, "换成打过挂载点补丁的 dashboard", 0.9, 0.1, 20, () -> {
+            markExecutable(target.resolve("runtime/bin"));
+            Path dashboard = target.resolve("packages/octop/dashboard");
+            if (!Files.isDirectory(dashboard)) {
+                throw new BrandException("Octop archive has no packages/octop/dashboard: " + target);
             }
-            extractZip(patched, dashboard);
-        } catch (IOException e) {
-            throw new BrandException("Could not unpack the patched Octop dashboard: " + e.getMessage(), e);
-        }
-        if (!Files.exists(dashboard.resolve("index.html"))) {
-            throw new BrandException("Octop " + version + " installed without its dashboard ("
-                    + dashboard.resolve("index.html") + ")");
-        }
-        writeMarker(target, "package", version);
-        message.accept("Installed Octop " + version + " with the patched dashboard");
+            FileUtils.deleteDirectoryQuietly(dashboard);
+            String resource = "/octop/octop-dashboard-" + version + ".zip";
+            try (InputStream patched = BrandInstaller.class.getResourceAsStream(resource)) {
+                if (patched == null) {
+                    throw new BrandException("This panel build has no patched Octop dashboard for " + version
+                            + " (" + resource + "); use the version bundled with this panel");
+                }
+                extractZip(patched, dashboard, message::cancelled);
+            } catch (IOException e) {
+                throw new BrandException("Could not unpack the patched Octop dashboard: " + e.getMessage(), e);
+            }
+            if (!Files.exists(dashboard.resolve("index.html"))) {
+                throw new BrandException("Octop " + version + " installed without its dashboard ("
+                        + dashboard.resolve("index.html") + ")");
+            }
+            writeMarker(target, "package", version);
+        });
+        message.report("Installed Octop " + version + " with the patched dashboard · 100%", 1.0);
     }
 
     /// The last-resort source build: tag archive → dashboard patch/build →
@@ -390,7 +488,8 @@ public final class BrandInstaller {
     /// dependency tree there needs a toolchain the panel deliberately does not
     /// manage, and the portable archive already works.
     static void installOctopSource(Brand brand, String version, Path brandRoot, Path target,
-                                   Consumer<String> message) throws BrandException {
+                                   Progress progress) throws BrandException {
+        Sink message = new Sink(progress);
         // Keep the previous release until the new build is complete: a failed
         // source build must not take a working package install with it.
         Path backup = target.resolveSibling(target.getFileName() + PREVIOUS_SUFFIX);
@@ -425,7 +524,7 @@ public final class BrandInstaller {
     }
 
     private static void installOctopSourceInto(Brand brand, String version, Path brandRoot, Path target,
-                                               Consumer<String> message) throws BrandException {
+                                               Sink message) throws BrandException {
         if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
             throw new BrandException("local source compilation is not supported on Windows; "
                     + "turn sourceBuild off and use the prebuilt portable archive");
@@ -433,53 +532,79 @@ public final class BrandInstaller {
         if (Files.exists(target)) {
             FileUtils.deleteDirectoryQuietly(target);
         }
-        String url = "https://codeload.github.com/" + brand.githubSlug()
+        String archive = BrandSources.archive().url();
+        String url = archive.replaceAll("/$", "") + "/" + brand.githubSlug()
                 + "/zip/refs/tags/" + brand.releaseTag(version);
-        message.accept("Downloading source " + url);
-        extractZip(download(url), target);
-
-        Path patch = target.resolve(".hdsl-octop.patch");
-        try (InputStream in = BrandInstaller.class.getResourceAsStream("/octop/octop-runtime-base.patch")) {
-            if (in == null) {
-                throw new BrandException("This panel build has no Octop dashboard patch");
-            }
-            Files.copy(in, patch, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException e) {
-            throw new BrandException("Could not write the Octop dashboard patch: " + e.getMessage(), e);
-        }
         Path log = brandRoot.resolve(INSTALL_LOG);
-        runChecked(List.of("git", "apply", "--whitespace=nowarn", patch.toString()),
-                target, Map.of(), log, message, "applying the dashboard patch");
+        int total = 7;
+
+        stage(message, 0, total, "下载源码", 0.00, 0.05, 20, () -> {
+            message.accept("Downloading source " + url);
+            extractZip(download(url), target, message::cancelled);
+        });
+
+        stage(message, 1, total, "应用 dashboard 补丁", 0.05, 0.02, 5, () -> {
+            Path patch = target.resolve(".hdsl-octop.patch");
+            try (InputStream in = BrandInstaller.class.getResourceAsStream("/octop/octop-runtime-base.patch")) {
+                if (in == null) {
+                    throw new BrandException("This panel build has no Octop dashboard patch");
+                }
+                Files.copy(in, patch, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e) {
+                throw new BrandException("Could not write the Octop dashboard patch: " + e.getMessage(), e);
+            }
+            runChecked(List.of("git", "apply", "--whitespace=nowarn", patch.toString()),
+                    target, Map.of(), log, message, "applying the dashboard patch");
+        });
 
         String registry = NpmRegistry.effective().registry();
         Path dashboard = target.resolve("dashboard");
         Map<String, String> npmEnv = new HashMap<>();
         npmEnv.put("NPM_CONFIG_REGISTRY", registry);
-        runChecked(List.of("npm", "ci", "--no-audit", "--no-fund", "--registry=" + registry),
-                dashboard, npmEnv, log, message, "installing dashboard dependencies");
+        stage(message, 2, total, "安装前端依赖（npm ci）", 0.07, 0.35, 240, () ->
+                runChecked(List.of("npm", "ci", "--no-audit", "--no-fund", "--registry=" + registry),
+                        dashboard, npmEnv, log, message, "installing dashboard dependencies"));
         npmEnv.put("VITE_BASE_PATH", "./");
         npmEnv.put("NODE_OPTIONS", "--max-old-space-size=2048");
-        runChecked(List.of("npm", "run", "build:docker"),
-                dashboard, npmEnv, log, message, "building the dashboard");
+        stage(message, 3, total, "构建 dashboard", 0.42, 0.15, 90, () ->
+                runChecked(List.of("npm", "run", "build:docker"),
+                        dashboard, npmEnv, log, message, "building the dashboard"));
         // The built SPA is under src/octop/dashboard; the 4+ GiB dependency
         // tree is no longer needed by the runtime or a future launch.
         FileUtils.deleteDirectoryQuietly(dashboard.resolve("node_modules"));
 
-        Path uv = ensureUv(brandRoot, log, message);
+        BrandSources.Effective pypi = BrandSources.pypi();
+        BrandSources.Effective pythonMirror = BrandSources.python();
+        Path[] uvHolder = new Path[1];
+        stage(message, 4, total, "准备 uv", 0.57, 0.08, 30, () ->
+                uvHolder[0] = ensureUv(brandRoot, log, message));
+        Path uv = uvHolder[0];
+        message.accept("下载源：PyPI=" + pypi.url() + " (" + pypi.source() + ") · CPython="
+                + pythonMirror.url() + " (" + pythonMirror.source() + ")");
         Map<String, String> pythonEnv = new HashMap<>();
         pythonEnv.put("UV_CACHE_DIR", brandRoot.resolve("cache/uv").toString());
         pythonEnv.put("UV_PYTHON_INSTALL_DIR", brandRoot.resolve("toolchain/python").toString());
         pythonEnv.put("UV_LINK_MODE", "copy");
         pythonEnv.put("PYTHONDONTWRITEBYTECODE", "1");
-        runChecked(List.of(uv.toString(), "sync", "--frozen", "--no-dev", "--python", "3.12"),
-                target, pythonEnv, log, message, "installing the Python environment");
-
-        Path octop = target.resolve(".venv/bin/octop");
-        if (!Files.isRegularFile(octop)) {
-            throw new BrandException("source build produced no .venv/bin/octop in " + target);
+        // uv reads both names; the deprecated one is kept for older toolchains and for the
+        // build scripts some dependencies run themselves.
+        pythonEnv.put("UV_DEFAULT_INDEX", pypi.url());
+        pythonEnv.put("PIP_INDEX_URL", pypi.url());
+        if (!BrandSources.PYTHON_DEFAULT.equals(pythonMirror.url())) {
+            pythonEnv.put("UV_PYTHON_INSTALL_MIRROR", pythonMirror.url());
         }
-        writeMarker(target, "source", version);
-        message.accept("Installed Octop " + version + " from source");
+        stage(message, 5, total, "安装 Python 依赖（uv sync + CPython 3.12）", 0.65, 0.30, 300, () ->
+                runChecked(List.of(uv.toString(), "sync", "--frozen", "--no-dev", "--python", "3.12"),
+                        target, pythonEnv, log, message, "installing the Python environment"));
+
+        stage(message, 6, total, "收尾", 0.95, 0.05, 5, () -> {
+            Path octop = target.resolve(".venv/bin/octop");
+            if (!Files.isRegularFile(octop)) {
+                throw new BrandException("source build produced no .venv/bin/octop in " + target);
+            }
+            writeMarker(target, "source", version);
+        });
+        message.report("Installed Octop " + version + " from source · 100%", 1.0);
     }
 
     /// Finds a usable `uv`: PATH first, then a per-brand copy downloaded from
@@ -503,12 +628,24 @@ public final class BrandInstaller {
                 Thread.currentThread().interrupt();
             }
         }
-        // PyPI first: its wheel contains the same binary, and it is reachable on
-        // networks where github.com's release-asset host times out.
+        // The configured index first: a mirror serves the same wheel, and on the deployment this was
+        // written for the official CDN answers at about 40 KB/s while domestic mirrors do ~6.6 MB/s.
+        BrandSources.Effective index = BrandSources.pypi();
         try {
-            return installUvFromPyPI(toolchain, binary, message);
+            return installUvFromIndex(index.url(), toolchain, binary, message);
         } catch (BrandException e) {
-            message.accept("PyPI uv unavailable (" + e.getMessage() + "); trying GitHub");
+            message.accept("uv from " + index.url() + " unavailable (" + e.getMessage() + ")");
+        }
+        if (!BrandSources.PYPI_DEFAULT.equals(index.url())) {
+            // PyPI's JSON API is not mirrored by most mirrors, so trying it after a failed
+            // mirror is only worth it when the index was not pypi.org itself.
+            try {
+                return installUvFromPyPI(toolchain, binary, message);
+            } catch (BrandException e) {
+                message.accept("PyPI uv unavailable (" + e.getMessage() + "); trying GitHub");
+            }
+        } else {
+            message.accept("PyPI uv unavailable; trying GitHub");
         }
         String arch = switch (Architecture.CURRENT_ARCH) {
             case X86_64 -> "x86_64";
@@ -586,10 +723,78 @@ public final class BrandInstaller {
             if (chosen == null) {
                 throw new BrandException("no manylinux " + arch + " uv wheel on PyPI");
             }
+            message.accept("Downloading uv from PyPI " + chosen);
+            return extractUvWheel(chosen, toolchain, binary, message);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BrandException("uv download was interrupted", e);
+        } catch (IOException e) {
+            throw new BrandException("Could not fetch uv from PyPI: " + e.getMessage(), e);
+        }
+    }
+
+    /// Downloads the uv wheel named by the configured PyPI index and extracts it.
+    ///
+    /// A mirror's simple page is one HTML file listing the wheel links, and reading it is what
+    /// makes a mirror usable at all: most mirrors do not serve PyPI's JSON API, so the lookup
+    /// itself has to come from the mirror's own index.
+    private static Path installUvFromIndex(String index, Path toolchain, Path binary, Consumer<String> message)
+            throws BrandException {
+        String arch = switch (Architecture.CURRENT_ARCH) {
+            case X86_64 -> "x86_64";
+            case ARM64 -> "aarch64";
+            default -> throw new BrandException("no uv wheel for " + Architecture.CURRENT_ARCH);
+        };
+        String pageUrl = index.replaceAll("/$", "") + "/uv/";
+        message.accept("Looking for uv " + UV_VERSION + " on " + pageUrl);
+        String html;
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(pageUrl))
+                    .timeout(Duration.ofSeconds(30))
+                    .header("Accept", "text/html")
+                    .GET()
+                    .build();
+            HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() / 100 != 2) {
+                throw new BrandException("the index answered " + response.statusCode() + " for " + pageUrl);
+            }
+            html = response.body();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BrandException("the uv index lookup was interrupted", e);
+        } catch (IOException e) {
+            throw new BrandException("could not read " + pageUrl + ": " + e.getMessage(), e);
+        }
+
+        String prefix = "uv-" + UV_VERSION + "-";
+        java.util.regex.Matcher link = java.util.regex.Pattern.compile("href=\"([^\"]+)\"").matcher(html);
+        while (link.find()) {
+            String href = link.group(1);
+            // Simple pages may carry the hash in a fragment; mirrors may hand out relative links
+            // (`../../packages/…`), which have to be resolved against the page they came from.
+            String file = href.contains("#") ? href.substring(0, href.indexOf('#')) : href;
+            String name = file.substring(file.lastIndexOf('/') + 1);
+            if (!name.startsWith(prefix) || !name.endsWith(".whl")
+                    || !name.contains("manylinux") || !name.contains(arch)) {
+                continue;
+            }
+            String url = URI.create(pageUrl).resolve(file).toString();
+            message.accept("Downloading uv from " + url);
+            return extractUvWheel(url, toolchain, binary, message);
+        }
+        throw new BrandException("no manylinux " + arch + " uv " + UV_VERSION + " wheel on " + index);
+    }
+
+    /// Downloads one uv wheel and extracts `uv` from `uv-<version>.data/scripts/uv`.
+    ///
+    /// The wheel is the same static binary as GitHub's tarball, but it comes from whichever index
+    /// answered — which is the whole point of pointing this at a mirror.
+    private static Path extractUvWheel(String url, Path toolchain, Path binary, Consumer<String> message)
+            throws BrandException {
+        try {
             Files.createDirectories(toolchain);
             Path wheel = toolchain.resolve("uv.whl");
-            message.accept("Downloading uv from PyPI " + chosen);
-            try (InputStream in = download(chosen)) {
+            try (InputStream in = download(url)) {
                 Files.copy(in, wheel, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
             try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(wheel))) {
@@ -609,11 +814,8 @@ public final class BrandInstaller {
             Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwxr-xr-x"));
             Files.deleteIfExists(wheel);
             return binary;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new BrandException("uv download was interrupted", e);
         } catch (IOException e) {
-            throw new BrandException("Could not fetch uv from PyPI: " + e.getMessage(), e);
+            throw new BrandException("Could not unpack uv from " + url + ": " + e.getMessage(), e);
         }
     }
 
@@ -734,6 +936,17 @@ public final class BrandInstaller {
     ///
     /// Package-private so the unpacking is testable with an in-memory zip.
     static void extractZip(java.io.InputStream zip, Path target) throws BrandException {
+        extractZip(zip, target, () -> false);
+    }
+
+    /// Unpacks an archive, asking `cancelled` between entries: an unzip loop is not a child process,
+    /// so the task service's process kill does not reach it.
+    ///
+    /// @param zip       the archive
+    /// @param target    where to unpack
+    /// @param cancelled whether the user asked to stop
+    static void extractZip(java.io.InputStream zip, Path target, java.util.function.BooleanSupplier cancelled)
+            throws BrandException {
         try {
             Files.createDirectories(target);
             Path root = target.toAbsolutePath().normalize();
@@ -741,6 +954,9 @@ public final class BrandInstaller {
                     new java.io.BufferedInputStream(zip))) {
                 java.util.zip.ZipEntry entry;
                 while ((entry = in.getNextEntry()) != null) {
+                    if (cancelled.getAsBoolean()) {
+                        throw new BrandException("unpacking was cancelled");
+                    }
                     String name = entry.getName();
                     int slash = name.indexOf('/');
                     if (slash < 0) {
@@ -791,6 +1007,11 @@ public final class BrandInstaller {
             }
             int code = output.exitCode();
             if (code != 0) {
+                // A cancel kills the tree, which the child reports as SIGKILL/SIGTERM; saying so
+                // beats showing the panel "exit 137" for something the user asked for.
+                if (code == 137 || code == 143) {
+                    throw new BrandException("Install step was cancelled (" + what + ")");
+                }
                 throw new BrandException("Install step failed (" + what + ", exit " + code + "): " + tail);
             }
         } catch (IOException e) {

@@ -97,6 +97,35 @@ public final class LauncherSettings {
     /// The registry somebody typed by hand, or empty. Read only while the preset is `custom`.
     private String npmRegistry = "";
 
+    /// Which PyPI index the brand installers use (uv itself and `uv sync`).
+    ///
+    /// Kept as a preset id for the same reason as the npm registry: a mirror whose
+    /// address changes should be followed by a release, not by every deployment.
+    private String brandPypiIndexPreset = org.jackhuang.hmcl.web.brand.BrandSources.ENVIRONMENT;
+
+    /// The PyPI index typed by hand, or empty. Read only while the preset is `custom`.
+    private String brandPypiIndex = "";
+
+    /// Where the CPython build (`UV_PYTHON_INSTALL_MIRROR`) is fetched from.
+    private String brandPythonMirrorPreset = org.jackhuang.hmcl.web.brand.BrandSources.ENVIRONMENT;
+
+    /// The CPython mirror typed by hand, or empty. Read only while the preset is `custom`.
+    private String brandPythonMirror = "";
+
+    /// Where version source archives are fetched from (GitHub's codeload by default).
+    private String brandArchivePreset = org.jackhuang.hmcl.web.brand.BrandSources.ENVIRONMENT;
+
+    /// The source-archive base typed by hand, or empty. Read only while the preset is `custom`.
+    private String brandArchiveBase = "";
+
+    /// Per-brand release bases: brand id → preset id. A brand with no entry follows the
+    /// deployment's environment and then the upstream GitHub releases.
+    private final Map<String, String> brandReleasePresets = new LinkedHashMap<>();
+
+    /// Per-brand release bases typed by hand: brand id → address, read only while that
+    /// brand's preset is `custom`.
+    private final Map<String, String> brandReleaseBases = new LinkedHashMap<>();
+
     /// Where the modpack market's index is read from, or empty for the one the ecosystem publishes.
     private String packMarketUrl = "";
 
@@ -297,6 +326,122 @@ public final class LauncherSettings {
 
     public void setNpmRegistry(String npmRegistry) {
         this.npmRegistry = npmRegistry;
+        fireChanged();
+    }
+
+    /// Returns which PyPI index the brand installers use.
+    ///
+    /// @return the preset's id, or `environment` when the deployment's own is to be used
+    public String getBrandPypiIndexPreset() {
+        return brandPypiIndexPreset == null || brandPypiIndexPreset.isBlank()
+                ? org.jackhuang.hmcl.web.brand.BrandSources.ENVIRONMENT : brandPypiIndexPreset;
+    }
+
+    public void setBrandPypiIndexPreset(String preset) {
+        this.brandPypiIndexPreset = preset;
+        fireChanged();
+    }
+
+    /// Returns the PyPI index typed by hand.
+    ///
+    /// @return the address, empty when none was typed; meaningless unless the preset is `custom`
+    public String getBrandPypiIndex() {
+        return brandPypiIndex == null ? "" : brandPypiIndex;
+    }
+
+    public void setBrandPypiIndex(String index) {
+        this.brandPypiIndex = index == null ? "" : index;
+        fireChanged();
+    }
+
+    /// Returns where the CPython build is fetched from.
+    ///
+    /// @return the preset's id, or `environment` when the deployment's own is to be used
+    public String getBrandPythonMirrorPreset() {
+        return brandPythonMirrorPreset == null || brandPythonMirrorPreset.isBlank()
+                ? org.jackhuang.hmcl.web.brand.BrandSources.ENVIRONMENT : brandPythonMirrorPreset;
+    }
+
+    public void setBrandPythonMirrorPreset(String preset) {
+        this.brandPythonMirrorPreset = preset;
+        fireChanged();
+    }
+
+    /// Returns the CPython mirror typed by hand.
+    ///
+    /// @return the address, empty when none was typed; meaningless unless the preset is `custom`
+    public String getBrandPythonMirror() {
+        return brandPythonMirror == null ? "" : brandPythonMirror;
+    }
+
+    public void setBrandPythonMirror(String mirror) {
+        this.brandPythonMirror = mirror == null ? "" : mirror;
+        fireChanged();
+    }
+
+    /// Returns where version source archives are fetched from.
+    ///
+    /// @return the preset's id, or `environment` when the deployment's own is to be used
+    public String getBrandArchivePreset() {
+        return brandArchivePreset == null || brandArchivePreset.isBlank()
+                ? org.jackhuang.hmcl.web.brand.BrandSources.ENVIRONMENT : brandArchivePreset;
+    }
+
+    public void setBrandArchivePreset(String preset) {
+        this.brandArchivePreset = preset;
+        fireChanged();
+    }
+
+    /// Returns the source-archive base typed by hand.
+    ///
+    /// @return the address, empty when none was typed; meaningless unless the preset is `custom`
+    public String getBrandArchiveBase() {
+        return brandArchiveBase == null ? "" : brandArchiveBase;
+    }
+
+    public void setBrandArchiveBase(String base) {
+        this.brandArchiveBase = base == null ? "" : base;
+        fireChanged();
+    }
+
+    /// Returns which release base a brand was set to.
+    ///
+    /// @param brandId the brand's id, e.g. `octop`
+    /// @return the preset's id, or `environment` when that brand has no setting
+    public String getBrandReleasePreset(String brandId) {
+        String preset = brandReleasePresets.get(brandId);
+        return preset == null || preset.isBlank()
+                ? org.jackhuang.hmcl.web.brand.BrandSources.ENVIRONMENT : preset;
+    }
+
+    /// Returns every per-brand release preset, by brand id.
+    ///
+    /// @return an unmodifiable view; brands with no entry are absent
+    public Map<String, String> getBrandReleasePresets() {
+        return java.util.Collections.unmodifiableMap(brandReleasePresets);
+    }
+
+    /// Returns every hand-typed release base, by brand id.
+    public Map<String, String> getBrandReleaseBases() {
+        return java.util.Collections.unmodifiableMap(brandReleaseBases);
+    }
+
+    public void setBrandReleasePreset(String brandId, String preset) {
+        brandReleasePresets.put(brandId, preset);
+        fireChanged();
+    }
+
+    /// Returns the release base typed by hand for a brand.
+    ///
+    /// @param brandId the brand's id
+    /// @return the address, empty when none was typed; meaningless unless the preset is `custom`
+    public String getBrandReleaseBase(String brandId) {
+        String base = brandReleaseBases.get(brandId);
+        return base == null ? "" : base;
+    }
+
+    public void setBrandReleaseBase(String brandId, String base) {
+        brandReleaseBases.put(brandId, base == null ? "" : base);
         fireChanged();
     }
 

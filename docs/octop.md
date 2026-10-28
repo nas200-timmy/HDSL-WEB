@@ -22,7 +22,9 @@ src/main/resources/octop/octop-dashboard-<version>.zip
 需要换版本时，重新生成这个 zip 并重新打包面板。
 
 `OCTOP_RELEASE_BASE` 可以指向镜像；默认是
-`https://github.com/TencentCloud/Octop/releases/download`。
+`https://github.com/TencentCloud/Octop/releases/download`。面板里对应的开关是
+**设置 → 品牌实例 → 下载源 → octop 的 Release 源**（优先级：面板设置 > `OCTOP_RELEASE_BASE` >
+默认），并在同一页可以「测速」。portable 包约 260 MB，国内没有官方镜像，自建一份填「自定义」即可。
 
 ## 实例
 
@@ -44,17 +46,18 @@ src/main/resources/octop/octop-dashboard-<version>.zip
 补丁源码在 `integrations/octop/patches/`（见该目录 README），构建产物就是上面的
 `octop-dashboard-<version>.zip`。
 
-## 最后手段（开发者模式）
+## 最后手段（设置 → 品牌实例）
 
-设置 → 开发者模式 → 品牌实例管理，需要开发者密码：
+在「设置 → 品牌实例」里，**读不需要开发者密码**（品牌列表、已装版本、当前策略都能看），
+只有修改策略、改下载源、点「测速」才要开发者密码（和打开终端是同一个，30 分钟滑动）：
 
 - **单实例模式**：必须指定保留实例；其余实例灰掉，启动/打开/修改/删除被拒绝，数据保留。
 - **固定反代 `/i/octop/`**：要求单实例，指向保留实例；关闭后回到 token 路径。
 - **固定反代 `/i/octop/` 是"入口"，不只是别名**：开启后，保留实例的「打开」按钮与 `POST
   .../octop/instances/<id>/open` 返回的 URL 都会变成 `<base>/i/octop/`；关闭后回到 `/i/<token>/`。
-- **本地源码编译**（仅 Linux）：下载 tag 源码，应用 dashboard 补丁，`npm ci && build`，再优先从 PyPI
-  取 uv、下载 Python 3.12 并 `uv sync`；失败会恢复原预编译 release。构建完删除 `node_modules`，
-  源码 release 约 2.8 GiB。
+- **本地源码编译**（仅 Linux）：下载 tag 源码（走「源码归档」那个 base，默认 codeload），应用
+  dashboard 补丁，`npm ci && build`，再从配置的 PyPI 镜像取 uv、下载 Python 3.12 并 `uv sync`；
+  失败会恢复原预编译 release。构建完删除 `node_modules`，源码 release 约 2.8 GiB。
 
 ### 源码编译的真实成本（先看完再点）
 

@@ -56,6 +56,7 @@ import org.jackhuang.hmcl.web.http.ExportsApiServlet;
 import org.jackhuang.hmcl.web.http.InstancesApiServlet;
 import org.jackhuang.hmcl.web.http.NodeApiServlet;
 import org.jackhuang.hmcl.web.http.ModelsApiServlet;
+import org.jackhuang.hmcl.web.http.BrandSettingsApiServlet;
 import org.jackhuang.hmcl.web.http.PacksApiServlet;
 import org.jackhuang.hmcl.web.http.PluginsApiServlet;
 import org.jackhuang.hmcl.web.http.RegistrySettingsApiServlet;
@@ -331,6 +332,10 @@ public final class HdslServer {
         // Registered before the `/api/settings/*` holder below and matched by its longer prefix:
         // the download source is a launcher setting, and TLS is the other thing this path serves.
         context.addServlet(new ServletHolder(new RegistrySettingsApiServlet()), "/api/settings/registry/*");
+        // The brand page's own data (sources + policy). Same reason for the longer prefix: the
+        // `/api/settings/*` holder below is TLS, and Jetty matches the longest path spec.
+        context.addServlet(new ServletHolder(new BrandSettingsApiServlet(
+                config, developerElevation, authService, tlsActive)), "/api/settings/brands/*");
         ServletHolder tlsHolder = new ServletHolder(new TlsApiServlet(config, certificates, self::get));
         tlsHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(tlsHolder, "/api/settings/*");

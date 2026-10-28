@@ -2,7 +2,7 @@ import { useEffect, useReducer, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError, isNotImplemented } from "../api";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
-import { BrandPolicyPanel } from "../components/BrandPolicyPanel";
+import { BrandManagementPanel } from "../components/BrandManagementPanel";
 import { FileDropInput } from "../components/FileDropInput";
 import {
   CheckCircleIcon,
@@ -11,6 +11,7 @@ import {
   DeployedCodeIcon,
   DownloadIcon,
   ErrorIcon,
+  ExtensionIcon,
   InfoFillIcon,
   InfoIcon,
   KeepIcon,
@@ -65,6 +66,7 @@ type SettingsTab =
   | "launcher-general"
   | "appearance"
   | "download-source"
+  | "brands"
   | "tls"
   | "developer"
   | "doctor"
@@ -87,6 +89,7 @@ export function SettingsPage() {
       "launcher-general",
       "appearance",
       "download-source",
+      "brands",
       "tls",
       "developer",
       "doctor",
@@ -141,6 +144,11 @@ export function SettingsPage() {
                 icon: <DownloadIcon size={20} />,
               },
               {
+                key: "brands",
+                title: "品牌实例",
+                icon: <ExtensionIcon size={20} />,
+              },
+              {
                 key: "tls",
                 title: "HTTPS 证书",
                 icon: <KeepIcon size={20} />,
@@ -181,6 +189,7 @@ export function SettingsPage() {
         {tab === "launcher-general" && <LauncherGeneralTab />}
         {tab === "appearance" && <AppearanceTab />}
         {tab === "download-source" && <DownloadSourceTab />}
+        {tab === "brands" && <BrandManagementPanel />}
         {tab === "tls" && <TlsTab />}
         {tab === "developer" && <DeveloperTab />}
         {tab === "doctor" && <DoctorTab />}
@@ -1836,8 +1845,6 @@ function DeveloperTab() {
           改密码或注销即失效，别写进脚本文件。
         </p>
       </div>
-
-      <BrandPolicyPanel />
 
       <div className="card" style={{ borderColor: "var(--monet-error)" }}>
         <div className="comp-row">

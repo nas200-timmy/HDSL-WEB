@@ -2,6 +2,38 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## Unreleased — 2026-10-28 · 品牌实例独立成页 + 品牌下载源（测速推荐）
+
+- 设置页新增 **「品牌实例」**（与「下载源」「开发者模式」平级）：未提权**只读可见**（品牌、已装
+  版本、当前生效的源、实例状态），写操作变灰并在点击时弹开发者密码框；明文 HTTP 下写操作全灰并
+  说明「需要 HTTPS」。读接口不要求提权——页面不会因为没密码就假装没有实例。
+- **品牌策略迁到这一页**（单实例 / 固定反代 / 本地源码编译）。页面按品牌的 `capabilities` 渲染开关，
+  以后接新品牌只改后端能力位；`GET /api/settings/brands`、`PUT /api/settings/brands/policy/<brand>`
+  取代 `GET/PUT /api/developer/brand-policy`（Go 客户端未使用该接口）。
+- 新增**四类下载源**设置：PyPI 索引（uv 本体 + `uv sync`）、CPython 运行时镜像
+  （`UV_PYTHON_INSTALL_MIRROR`）、版本源码归档（codeload 形态 `<base>/<slug>/zip/refs/tags/<tag>`，
+  环境变量 `CODELOAD_BASE` / `HDSL_CODELOAD_BASE`）、每个走 GitHub Releases 的品牌各自一行（当前
+  Octop）。优先级 **面板设置 > 环境变量 > 上游默认**，老部署用 `UV_DEFAULT_INDEX`/`OCTOP_RELEASE_BASE`
+  配好的镜像继续有效。npm 不进来：它仍是全局的「下载源」页。
+- **测速 vs 保存**：点「测速」会从面板实测该组每个候选、列出毫秒并给最快者标「推荐」，只有点保存
+  才写入；一次提交里任何一个地址非法则整体 400 且不落盘。地址限 `http(s)`、去尾斜杠、拒绝控制符与
+  `"'\`\\#$;|&@`（这些值会进子进程环境）。
+- `BrandInstaller` 接上这些源：Octop portable 的 base 取设置；`uv sync` 注入
+  `UV_DEFAULT_INDEX` / `PIP_INDEX_URL` / `UV_PYTHON_INSTALL_MIRROR`；版本源码 zip（Claude Web 与
+  Octop 源码编译）走「源码归档」那个 base 而不是硬编码的 `codeload.github.com`；`ensureUv()` 先读
+  **镜像自己的 simple 页**解析 wheel（镜像大多没有 PyPI 的 JSON API），失败才回落 pypi.org JSON 与
+  GitHub。
+- 下载源写进 `launcher-settings.json` 的显式快照（`brandPypiIndexPreset` 等），重启后仍生效。
+- **安装进度改成阶段制**：源码编译分成 7 段（下载源码 → 补丁 → `npm ci` → 构建 dashboard → 准备 uv →
+  `uv sync` → 收尾），每段带权重，面板显示 `[3/7] 构建 dashboard · 55%` 的文案、进度条、
+  已用时间与**预计剩余**（按已完成比例与耗时反推）；portable 安装是 2 段。
+- **安装可以停止**：面板上的「停止」调 `POST /api/tasks/<id>/cancel`；子进程由任务服务整棵杀掉，
+  下载与解包循环自己看 `isCancelled()`（它们不是进程）。半成品由启动时的对账清理（见 `octop.md`）。
+- 安装日志面板重做：等宽、自动滚到最新一行、阶段行高亮，失败时仍保留最后 300 行可翻。
+- 测试：`BrandSourcesTest`（地址校验、预设、品牌默认 base）、`BrandSettingsApiTest`（只读可见、
+  未提权三条写接口全拒、保存与回读、坏地址整体不落盘、单实例必须有保留实例、非 Octop 不许
+  `lockedRoute`、未知 kind 的测速被拒）。
+
 ## Unreleased — 2026-10-28 · 文档纠错：v0.6.0 已交付、交接稿状态、品牌索引
 
 - `docs/session-handoff-2026-10-27.md` §0 曾写「v0.6.0 那个版本从来没交付过、别再添加 v0.6.0 小节」——

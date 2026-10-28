@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { launchBrandInstance, stopBrandInstance } from "../actions";
 import { api } from "../api";
 import { withBase } from "../base";
@@ -271,7 +271,25 @@ function VersionCard({
   const [installStatus, setInstallStatus] = useState<BrandInstallStatus | null>(null);
   const [installLogOpen, setInstallLogOpen] = useState(false);
   const [installLog, setInstallLog] = useState<string[]>([]);
+  const [installTaskId, setInstallTaskId] = useState<string | null>(null);
+  const [installStartedAt, setInstallStartedAt] = useState<number | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [, forceTick] = useState(0);
   const [busy, setBusy] = useState(false);
+  const installLogRef = useRef<HTMLPreElement | null>(null);
+
+  // 预计剩余：用已完成比例与已用时间反推。比例太小或刚启动时先不给数字，免得跳。
+  useEffect(() => {
+    if (!installing || installStartedAt === null) return;
+    const timer = setInterval(() => forceTick((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, [installing, installStartedAt]);
+
+  // 日志永远滚到最新一行：编译慢的时候人盯着的就是这一行。
+  useEffect(() => {
+    const node = installLogRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [installLog, installLogOpen]);
 
   // 安装中：每秒轮询安装状态；终态后刷新版本目录与实例（新版本可能马上被实例切过去）
   useEffect(() => {
@@ -285,11 +303,15 @@ function VersionCard({
           setInstallStatus(st);
           if (st.state === "done") {
             setInstalling(false);
+            setInstallTaskId(null);
+            setInstallStartedAt(null);
             toast("success", `${BRAND_TITLE[brand]} ${I18N["dsh.brand.installed"]}`);
             void reload();
             void refreshExternal();
           } else if (st.state === "failed" || st.state === "none") {
             setInstalling(false);
+            setInstallTaskId(null);
+            setInstallStartedAt(null);
             if (st.state === "failed") toast("error", `安装失败：${st.error ?? st.message}`);
             void reload();
           }
@@ -317,18 +339,52 @@ function VersionCard({
   const selected = picked ?? versions?.latest ?? catalog[0] ?? "";
   const selectedInstalled = installed.some((r) => r.version === selected);
 
+  const installFraction = installStatus && installStatus.fraction >= 0 ? installStatus.fraction : null;
+  const installPercent = installFraction === null ? null : Math.round(installFraction * 100);
+  const installElapsed = installStartedAt === null ? 0 : Math.round((Date.now() - installStartedAt) / 1000);
+  // 预计剩余：进度太小或刚启动时不给数字，免得从“0 秒”跳到“一小时”。
+  const installEta = (() => {
+    if (!installing || installFraction === null || installFraction <= 0.02 || installElapsed <= 1) return null;
+    const remaining = Math.round((installElapsed * (1 - installFraction)) / installFraction);
+    const minutes = Math.floor(remaining / 60);
+    const seconds = remaining % 60;
+    return minutes > 0 ? `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒` : `${seconds} 秒`;
+  })();
+  const formatElapsed = (totalSeconds: number) => {
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return minutes > 0 ? `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒` : `${seconds} 秒`;
+  };
+
   const doInstall = async () => {
     if (!selected) return;
     setBusy(true);
     try {
-      await api.brandInstall(brand, selected);
+      const started = Date.now();
+      const accepted = await api.brandInstall(brand, selected);
       setInstalling(true);
-      setInstallStatus({ state: "running", message: "", fraction: 0 });
+      setInstallTaskId(accepted.taskId);
+      setInstallStartedAt(started);
+      setInstallStatus({ state: "running", message: "已提交，正在准备…", fraction: 0 });
     } catch (e) {
       // 409（同品牌已有安装在进行）也走这里：把后端给的原因原样带出来
       toast("error", `安装失败：${errMsg(e)}`);
     } finally {
       setBusy(false);
+    }
+  };
+
+  /// 停止：取消任务会杀掉它起的进程树，并让下载/解包循环看到中断标志。
+  const stopInstall = async () => {
+    if (!installTaskId || stopping) return;
+    setStopping(true);
+    try {
+      await api.cancelTask(installTaskId);
+      toast("success", "已请求停止：进程与下载会随之中断，半成品会留在安装目录（启动时会自动对账）");
+    } catch (e) {
+      toast("error", `停止失败：${errMsg(e)}`);
+    } finally {
+      setStopping(false);
     }
   };
 
@@ -477,28 +533,74 @@ function VersionCard({
           {versionsError && <div className="hint error">{versionsError}</div>}
 
           {installing && installStatus && (
-            <div className="hint info">
-              <span style={{ flex: 1 }}>
-                {I18N["dsh.brand.installing.progress"].replace(
-                  "%s",
-                  installStatus.message || "…",
+            <div className="card" style={{ padding: "10px 12px", display: "grid", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <span style={{ flex: 1, fontSize: 13, wordBreak: "break-all" }}>
+                  {installStatus.message || "已提交，正在准备…"}
+                </span>
+                {installPercent !== null && (
+                  <span className="mono" style={{ fontSize: 13 }}>
+                    {installPercent}%
+                  </span>
                 )}
-              </span>
-              <button
-                className="btn btn-text ripple-host"
-                style={{ height: 24 }}
-                onClick={() => void toggleInstallLog()}
-              >
-                {I18N["dsh.brand.view_log"]}
-              </button>
+              </div>
+              <ProgressBar fraction={installFraction} />
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12 }}>
+                <span style={{ color: "var(--monet-on-surface-variant)" }}>已用 {formatElapsed(installElapsed)}</span>
+                {installEta && (
+                  <span style={{ color: "var(--monet-on-surface-variant)" }}>预计剩余 {installEta}</span>
+                )}
+                <span className="spacer" style={{ flex: 1 }} />
+                <button
+                  className="btn btn-text ripple-host"
+                  style={{ height: 24 }}
+                  onClick={() => void toggleInstallLog()}
+                >
+                  {I18N["dsh.brand.view_log"]}
+                </button>
+                <button
+                  className="btn btn-text danger ripple-host"
+                  style={{ height: 24 }}
+                  disabled={!installTaskId || stopping}
+                  title="杀掉这次安装起的进程并中断下载；已写入的半成品由启动时的对账清理"
+                  onClick={() => void stopInstall()}
+                >
+                  {stopping ? "正在停止…" : "停止"}
+                </button>
+              </div>
             </div>
           )}
           {installLogOpen && (
             <pre
+              ref={installLogRef}
               className="card"
-              style={{ maxHeight: 180, overflow: "auto", margin: 0, padding: 10, fontSize: 12, lineHeight: 1.5 }}
+              style={{
+                maxHeight: 260,
+                overflow: "auto",
+                margin: 0,
+                padding: "10px 12px",
+                fontSize: 11.5,
+                lineHeight: 1.55,
+                fontFamily: "var(--mono-font, ui-monospace, SFMono-Regular, Menlo, monospace)",
+                background: "var(--monet-surface-container)",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+              }}
             >
-              {installLog.length === 0 ? I18N["dsh.brand.log.empty"] : installLog.join("\n")}
+              {installLog.length === 0
+                ? I18N["dsh.brand.log.empty"]
+                : installLog.map((line, index) => (
+                    <div
+                      key={index}
+                      style={
+                        line.startsWith("[")
+                          ? { color: "var(--monet-primary)", fontWeight: 600 }
+                          : undefined
+                      }
+                    >
+                      {line}
+                    </div>
+                  ))}
             </pre>
           )}
 
