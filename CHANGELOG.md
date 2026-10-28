@@ -2,7 +2,23 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## Unreleased — 2026-10-28 · Octop 作为品牌实例接入
+## Unreleased — 2026-10-28 · 文档纠错：v0.6.0 已交付、交接稿状态、品牌索引
+
+- `docs/session-handoff-2026-10-27.md` §0 曾写「v0.6.0 那个版本从来没交付过、别再添加 v0.6.0 小节」——
+  那是 v0.5.92 之前**撤回**的那一次；正式的 v0.6.0（Octop）已于 2026-10-28 发布。改成准确表述，
+  并补上 `main` 的当前状态、tag 名是 `v0.6.0`（不存在 `v0.6.00`）、测试基线 859 用例（2 skipped）。
+- 交接稿同时记下**分支血缘分叉与收敛**：v0.6.0 后的三个提交当时因 git 端点（https 443）不通，
+  改用 Git API 重放，远端 `web-shell` 拿到和 `main` 内容相同、sha 不同的平行历史；现已把
+  `web-shell` 强制对齐到 `fac7023`，compare 恢复 `identical`。下次 push 超时优先重试/换协议，别再重放。
+- CHANGELOG 里原本挂在 `Unreleased` 的三节（Octop 接入细节、`all` 档空面板提示、同 uid 边界）实际
+  随 v0.6.0 交付，改为「v0.6.0 细节补记」。
+- `docs/brands.md` 开头补一句「品牌共五个，Octop 不在那三类里」并链到 `octop.md`；README 的文档
+  索引加上 `docs/octop.md`，镜像示例版本号更新到 `0.6.0`。
+
+## v0.6.0 细节补记 — 2026-10-28 · Octop 接入、all 档提示与同 uid 边界
+
+> 下面三节是 v0.6.0 发布当天的细节记录（原先挂在 `Unreleased` 下，实际已随 v0.6.0 交付）；
+> 面向用户的总览见下方 `## v0.6.0` 小节。
 
 - 新增品牌 **Octop**（TencentCloud/Octop，MIT）：按普通品牌实例管理，实例 id 是随机 token，
   挂载在 `/i/<token>/`；日常与 Kimi / OpenCode / Claude Web 同一套创建、启动、停止、打开、日志。
@@ -22,7 +38,7 @@
 - 版本选择器只列出本面板真正带补丁 dashboard 的 Octop 版本，避免选到渲染不出挂载点的上游 tag。
 - 测试：`BrandPolicyTest`、Octop 页面改写用例；插件/Java 基线照旧。
 
-## Unreleased — 2026-10-28 · 「全部 API」档的空面板给个说法
+### 「全部 API」档的空面板给个说法
 
 - `all` 档的行为不变（连读都要提权，这是它区别于 `instance` 的地方），但**前端不再让人对着空列表猜**：
   顶部出现一条提示「『全部 API』档：未提权时连实例列表都读不到，所以页面是空的」，
@@ -30,7 +46,7 @@
 - `proxy` / `instance` 两档读本来就开放，不显示这条提示。
 - 文档：`docs/web-shell.md` §4.2 补一句"`all` 档连读要提权，界面会明说，不会假装没有实例"。
 
-## Unreleased — 2026-10-28 · 文档：把"同 uid 的 agent"这条边界写清楚
+### 文档：把"同 uid 的 agent"这条边界写清楚
 
 - `docs/design-notes.md` §7.2 增加一条**结构性事实**：`users.json` / `developer.json` / 证书私钥的
   0600 只挡别的用户；agent 与面板同 uid 时可以直接重写它们，也能从 `/proc/<pid>/environ` 读到面板的

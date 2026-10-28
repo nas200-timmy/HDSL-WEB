@@ -7,6 +7,10 @@
 > 不跳第二层页面）：实例是主对象，版本是品牌级共享构建。面板不提供插件管理（这些工具没有
 > 可用的插件生态），但**每实例的插件通道已在界面与后端预留**（见「实例模型」）；也不注入任何
 > 凭据——登录、模型供应商、计费都由工具自己的网页界面完成。
+>
+> 品牌一共五个（另有 ZCode 与 Octop）。**Octop 不在这三类里**：它走 GitHub Release 的 portable
+> 预编译包（或开发者模式里的 Linux 源码编译），并需要给它的 dashboard 打挂载点补丁，安装与策略
+> 见 [octop.md](octop.md)；ZCode 见 [zcode-experimental.md](zcode-experimental.md)。
 
 ## 面板到底做了什么 / 没做什么
 
