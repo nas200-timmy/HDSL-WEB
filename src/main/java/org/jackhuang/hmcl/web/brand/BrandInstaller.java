@@ -132,6 +132,7 @@ public final class BrandInstaller {
 
         @Override
         public void accept(String line) {
+            lastLineAt = System.currentTimeMillis();
             progress.update(line, fraction);
         }
 
@@ -139,21 +140,38 @@ public final class BrandInstaller {
             this.fraction = value;
         }
 
+        /// The overall fraction as last reported, for reporters that only own the sub-step bar.
+        double fraction() {
+            return fraction;
+        }
+
         void report(String line, double value) {
             fraction = value;
+            lastLineAt = System.currentTimeMillis();
             progress.update(line, value);
         }
 
         /// Reports the sub-step's own bar, and remembers when — the time-based tick must not
         /// overwrite a real number with an estimate half a second later.
         void stage(String name, double value) {
-            lastRealStageAt = System.currentTimeMillis();
+            lastRealProgressAt = System.currentTimeMillis();
             progress.stage(name, value);
         }
 
-        /// Whether a real (not estimated) sub-step fraction arrived recently.
-        boolean recentlyReported() {
-            return System.currentTimeMillis() - lastRealStageAt < 1500;
+        /// Reports the sub-step's bar without claiming it is real progress: used by the ticker,
+        /// which is an estimate and must not stop the ticker from updating again.
+        void stageOnly(String name, double value) {
+            progress.stage(name, value);
+        }
+
+        /// Whether nothing has been printed for `millis`.
+        boolean quietFor(long millis) {
+            return System.currentTimeMillis() - lastLineAt >= millis;
+        }
+
+        /// Whether no real (not estimated) sub-step fraction arrived for `millis`.
+        boolean noRealProgressFor(long millis) {
+            return System.currentTimeMillis() - lastRealProgressAt >= millis;
         }
 
         /// Whether the user asked to stop.
@@ -161,7 +179,8 @@ public final class BrandInstaller {
             return progress.isCancelled();
         }
 
-        private volatile long lastRealStageAt;
+        private volatile long lastRealProgressAt;
+        private volatile long lastLineAt;
     }
 
     @FunctionalInterface
@@ -185,20 +204,22 @@ public final class BrandInstaller {
             throws BrandException {
         long started = System.currentTimeMillis();
         message.report(label(index, total, name, before), before);
-        message.stage(name, 0);
+        message.stageOnly(name, 0);
         java.util.Timer ticker = new java.util.Timer("brand-install-progress", true);
         ticker.scheduleAtFixedRate(new java.util.TimerTask() {
             @Override
             public void run() {
-                // A stage that knows its real progress (bytes, packages) has reported within the
-                // last second; do not paper over it with an estimate.
-                if (message.recentlyReported()) {
-                    return;
+                // The bar keeps moving on the estimate while nothing better arrives...
+                if (message.noRealProgressFor(1500)) {
+                    double in = Math.min(0.95,
+                            (System.currentTimeMillis() - started) / (1000.0 * Math.max(1, expectedSeconds)));
+                    message.stageOnly(name, in);
+                    // ...but the line itself is only replaced when the tool is quiet: a stage that
+                    // prints (vite, npm, uv) must show its own output, not "55%" forever.
+                    if (message.quietFor(2000)) {
+                        message.report(label(index, total, name, before + weight * in), before + weight * in);
+                    }
                 }
-                double in = Math.min(0.95,
-                        (System.currentTimeMillis() - started) / (1000.0 * Math.max(1, expectedSeconds)));
-                message.stage(name, in);
-                message.report(label(index, total, name, before + weight * in), before + weight * in);
             }
         }, 700, 700);
         try {
@@ -285,18 +306,32 @@ public final class BrandInstaller {
             }
             read += n;
             long now = System.currentTimeMillis();
+            long sinceSpeed = now - lastSpeedAt;
+            if (sinceSpeed >= 800) {
+                double instant = (read - lastSpeedBytes) / (sinceSpeed / 1000.0);
+                speed = speed <= 0 ? instant : speed * 0.5 + instant * 0.5;
+                lastSpeedBytes = read;
+                lastSpeedAt = now;
+            }
             if (now - lastReport < 500) {
                 return;
             }
             lastReport = now;
+            String rate = speed > 1024 ? " · " + speedText(speed) : "";
             if (total > 0) {
                 message.stage(label, Math.min(0.99, read / (double) total));
-                message.accept(label + "：" + megabytes(read) + " / " + megabytes(total));
+                long remaining = speed > 1024 ? (long) ((total - read) / speed) : -1;
+                message.accept(label + "：" + megabytes(read) + " / " + megabytes(total) + rate
+                        + (remaining >= 0 ? " · 剩约 " + durationText(remaining) : ""));
             } else {
                 message.stage(label, Math.min(0.9, read / (260.0 * 1024 * 1024)));
-                message.accept(label + "：" + megabytes(read));
+                message.accept(label + "：" + megabytes(read) + rate);
             }
         }
+
+        private long lastSpeedAt = System.currentTimeMillis() - 1000;
+        private long lastSpeedBytes;
+        private double speed;
 
         /// Closes the stream as soon as the task is cancelled.
         ///
@@ -335,6 +370,185 @@ public final class BrandInstaller {
         return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0));
     }
 
+    /// Reads `uv sync`'s output and turns it into a phase, a rate and a bar.
+    ///
+    /// uv prints one line per package it fetches (`Downloading numpy (15.9MiB)`), one per sdist it
+    /// compiles (`Building evdev==1.9.3`), and `Prepared` / `Installed N packages` at the end of
+    /// each phase. On a slow link that is minutes of silence, which used to look exactly like a
+    /// hang; this turns it into `uv：下载 12 个包 · 68.4 MB · 6.1 MB/s` and an explicit
+    /// "下载完成，开始编译" — the two things the page could not tell before.
+    private static final class UvWatcher implements java.util.function.Consumer<String>, AutoCloseable {
+        private final Sink message;
+        private final java.util.Timer timer;
+        private final java.util.LinkedHashSet<String> fetched = new java.util.LinkedHashSet<>();
+        private final java.util.LinkedHashSet<String> building = new java.util.LinkedHashSet<>();
+        private final java.util.LinkedHashSet<String> built = new java.util.LinkedHashSet<>();
+        private long bytes;
+        private long sampledBytes;
+        private long sampledAt = System.currentTimeMillis();
+        private double speed;
+        private int prepared = -1;
+        private int installed = -1;
+
+        UvWatcher(Sink message) {
+            this.message = message;
+            this.timer = new java.util.Timer("brand-uv-progress", true);
+            timer.scheduleAtFixedRate(new java.util.TimerTask() {
+                @Override
+                public void run() {
+                    publish();
+                }
+            }, 1000, 1500);
+        }
+
+        @Override
+        public void accept(String line) {
+            String text = line.trim();
+            if (text.startsWith("Downloading ")) {
+                int open = text.lastIndexOf('(');
+                int close = text.lastIndexOf(')');
+                String name = text.substring("Downloading ".length(), open > 0 ? open : text.length()).trim();
+                if (fetched.add(name)) {
+                    if (open > 0 && close > open) {
+                        bytes += parseSize(text.substring(open + 1, close));
+                    }
+                    publish();
+                }
+            } else if (text.startsWith("Building ")) {
+                building.add(text.substring("Building ".length()).trim());
+                publish();
+            } else if (text.startsWith("Built ")) {
+                String spec = text.substring("Built ".length()).trim();
+                building.remove(spec);
+                built.add(spec);
+                publish();
+            } else if (text.startsWith("Prepared ")) {
+                prepared = leadingNumber(text);
+                publish();
+            } else if (text.startsWith("Installed ")) {
+                installed = leadingNumber(text);
+                publish();
+            } else if (text.startsWith("Using CPython") || text.startsWith("Creating virtual environment")
+                    || text.startsWith("Resolved ") || text.startsWith("Audited ")) {
+                publish();
+            }
+        }
+
+        private void publish() {
+            long now = System.currentTimeMillis();
+            long elapsed = now - sampledAt;
+            if (elapsed >= 800) {
+                double instant = (bytes - sampledBytes) / (elapsed / 1000.0);
+                speed = speed <= 0 ? instant : speed * 0.6 + instant * 0.4;
+                sampledBytes = bytes;
+                sampledAt = now;
+            }
+
+            boolean downloadsDone = prepared >= 0 || installed >= 0 || !building.isEmpty() || !built.isEmpty();
+            String summary = "下载完成（" + fetched.size() + " 个包"
+                    + (bytes > 0 ? " · " + megabytes(bytes) : "") + "）";
+            String line;
+            double fraction;
+            if (installed >= 0) {
+                fraction = 0.95;
+                line = "uv：" + summary + " · 安装完成 " + installed + " 个包";
+            } else if (downloadsDone) {
+                int done = built.size();
+                int running = building.size();
+                if (done == 0 && running == 0) {
+                    fraction = 0.9;
+                    line = "uv：" + summary + " · 安装依赖中";
+                } else {
+                    fraction = 0.55 + 0.35 * (done + 0.5) / (done + running + 1.5);
+                    line = "uv：" + summary + " · 编译本地依赖 " + done + " 个完成"
+                            + (running > 0 ? "，进行中 " + running + "（" + preview(building) + "）" : "");
+                }
+            } else {
+                fraction = 0.55 * (1 - 1 / (1 + fetched.size() / 6.0));
+                line = "uv：下载 " + fetched.size() + " 个包"
+                        + (bytes > 0 ? " · " + megabytes(bytes) : "")
+                        + (speed > 1024 ? " · " + speedText(speed) : "");
+            }
+            message.stage("安装 Python 依赖", Math.min(0.97, fraction));
+            message.report(line, message.fraction());
+        }
+
+        @Override
+        public void close() {
+            timer.cancel();
+            publish();
+        }
+
+        /// Keeps the first two names, so the line stays one line.
+        private static String preview(java.util.Set<String> names) {
+            int shown = 0;
+            StringBuilder text = new StringBuilder();
+            for (String name : names) {
+                if (shown == 2) {
+                    text.append(" 等");
+                    break;
+                }
+                if (shown > 0) {
+                    text.append("、");
+                }
+                String simple = name.contains("==") ? name.substring(0, name.indexOf("==")) : name;
+                text.append(simple);
+                shown++;
+            }
+            return text.toString();
+        }
+
+        private static int leadingNumber(String text) {
+            int start = text.indexOf(' ');
+            if (start < 0) {
+                return -1;
+            }
+            int end = start + 1;
+            while (end < text.length() && Character.isDigit(text.charAt(end))) {
+                end++;
+            }
+            return end > start + 1 ? Integer.parseInt(text.substring(start + 1, end)) : -1;
+        }
+
+        private static long parseSize(String text) {
+            String value = text.trim().toUpperCase(java.util.Locale.ROOT);
+            double factor = 1;
+            if (value.endsWith("KIB")) {
+                factor = 1024;
+                value = value.substring(0, value.length() - 3);
+            } else if (value.endsWith("MIB")) {
+                factor = 1024 * 1024;
+                value = value.substring(0, value.length() - 3);
+            } else if (value.endsWith("GIB")) {
+                factor = 1024.0 * 1024 * 1024;
+                value = value.substring(0, value.length() - 3);
+            } else if (value.endsWith("B")) {
+                value = value.substring(0, value.length() - 1);
+            }
+            try {
+                return (long) (Double.parseDouble(value) * factor);
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+    }
+
+    /// `<n> MB/s`, with the unit a person reads.
+    private static String speedText(double bytesPerSecond) {
+        if (bytesPerSecond >= 1024 * 1024) {
+            return String.format(java.util.Locale.ROOT, "%.1f MB/s", bytesPerSecond / (1024.0 * 1024.0));
+        }
+        return String.format(java.util.Locale.ROOT, "%.0f KB/s", bytesPerSecond / 1024.0);
+    }
+
+    /// `1 分 20 秒` / `40 秒`.
+    private static String durationText(long seconds) {
+        long total = Math.max(0, seconds);
+        long minutes = total / 60;
+        long rest = total % 60;
+        return minutes > 0 ? minutes + " 分 " + rest + " 秒" : rest + " 秒";
+    }
+
     /// Runs `body` while counting how many packages `node_modules` holds, against the count the
     /// lockfile declares: `已安装 762/1245 个包` is the only honest progress npm can offer, because
     /// `npm ci` prints almost nothing while it works.
@@ -342,6 +556,7 @@ public final class BrandInstaller {
                                             StepBody body) throws BrandException {
         long expected = countLockPackages(lockFile);
         long[] lastShown = {-1};
+        long startedAt = System.currentTimeMillis();
         java.util.Timer watcher = new java.util.Timer("brand-install-packages", true);
         watcher.scheduleAtFixedRate(new java.util.TimerTask() {
             @Override
@@ -353,7 +568,16 @@ public final class BrandInstaller {
                 lastShown[0] = installed;
                 if (expected > 0) {
                     message.stage(label, Math.min(0.95, installed / (double) expected));
-                    message.accept(label + "：已安装 " + installed + "/" + expected + " 个包");
+                    // Rate over the whole run, and the remaining time it implies — the one number
+                    // `npm ci` itself never offers.
+                    double seconds = (System.currentTimeMillis() - startedAt) / 1000.0;
+                    String eta = "";
+                    if (installed > 0 && seconds > 10) {
+                        double perSecond = installed / seconds;
+                        long remaining = (long) ((expected - installed) / perSecond);
+                        eta = " · 剩约 " + durationText(remaining);
+                    }
+                    message.accept(label + "：已安装 " + installed + "/" + expected + " 个包" + eta);
                 } else {
                     message.accept(label + "：已安装 " + installed + " 个包");
                 }
@@ -832,9 +1056,13 @@ public final class BrandInstaller {
         if (!BrandSources.PYTHON_DEFAULT.equals(pythonMirror.url())) {
             pythonEnv.put("UV_PYTHON_INSTALL_MIRROR", pythonMirror.url());
         }
-        stage(message, 5, total, "安装 Python 依赖（uv sync + CPython 3.12）", 0.65, 0.30, 300, () ->
+        stage(message, 5, total, "安装 Python 依赖（uv sync + CPython 3.12）", 0.65, 0.30, 300, () -> {
+            UvWatcher uvProgress = new UvWatcher(message);
+            try (uvProgress) {
                 runChecked(List.of(uv.toString(), "sync", "--frozen", "--no-dev", "--python", "3.12"),
-                        target, pythonEnv, log, message, "installing the Python environment"));
+                        target, pythonEnv, log, uvProgress, "installing the Python environment");
+            }
+        });
 
         stage(message, 6, total, "收尾", 0.95, 0.05, 5, () -> {
             Path octop = target.resolve(".venv/bin/octop");

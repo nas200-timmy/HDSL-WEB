@@ -291,6 +291,20 @@ function VersionCard({
     if (node) node.scrollTop = node.scrollHeight;
   }, [installLog, installLogOpen]);
 
+  // 日志面板开着时把最新状态行追加进去：以前这里是一次性快照，看着像卡死。
+  const lastLoggedRef = useRef("");
+  useEffect(() => {
+    if (!installLogOpen) return;
+    const line = installStatus?.message;
+    if (!line || line === lastLoggedRef.current) return;
+    lastLoggedRef.current = line;
+    setInstallLog((current) => {
+      if (current[current.length - 1] === line) return current;
+      const next = [...current, line];
+      return next.length > 400 ? next.slice(next.length - 400) : next;
+    });
+  }, [installLogOpen, installStatus?.message]);
+
   // 安装中：每秒轮询安装状态；终态后刷新版本目录与实例（新版本可能马上被实例切过去）
   // 挂载时先认领一次：刷新页面或从别的入口进来时，正在跑的安装也要显示进度与「停止」，
   // 而不是等下一次点安装才冒出一句「已有安装在跑」。
@@ -362,14 +376,8 @@ function VersionCard({
   const installFraction = installStatus && installStatus.fraction >= 0 ? installStatus.fraction : null;
   const installPercent = installFraction === null ? null : Math.round(installFraction * 100);
   const installElapsed = installStartedAt === null ? 0 : Math.round((Date.now() - installStartedAt) / 1000);
-  // 预计剩余：进度太小或刚启动时不给数字，免得从“0 秒”跳到“一小时”。
-  const installEta = (() => {
-    if (!installing || installFraction === null || installFraction <= 0.02 || installElapsed <= 1) return null;
-    const remaining = Math.round((installElapsed * (1 - installFraction)) / installFraction);
-    const minutes = Math.floor(remaining / 60);
-    const seconds = remaining % 60;
-    return minutes > 0 ? `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒` : `${seconds} 秒`;
-  })();
+  // 预计剩余不再由前端瞎算：后端在知道总量时（下载字节、npm 包数）把「剩约 …」写进消息，
+  // 不知道时（uv 的编译/安装）就只说速度和已完成数量——比一个反推出来的数字诚实。
   const formatElapsed = (totalSeconds: number) => {
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
@@ -555,7 +563,12 @@ function VersionCard({
           {installing && installStatus && (
             <div className="card" style={{ padding: "10px 12px", display: "grid", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                <span style={{ flex: 1, fontSize: 13, wordBreak: "break-all" }}>
+                {installStatus.stage && (
+                  <span className="tag plain" style={{ flexShrink: 0 }}>
+                    {installStatus.stage}
+                  </span>
+                )}
+                <span style={{ flex: 1, fontSize: 13.5, fontWeight: 500, wordBreak: "break-all" }}>
                   {installStatus.message || "已提交，正在准备…"}
                 </span>
                 {installPercent !== null && (
@@ -601,9 +614,6 @@ function VersionCard({
                   <span style={{ color: "var(--monet-on-surface-variant)" }}>
                     已用 {formatElapsed(installElapsed)}
                   </span>
-                )}
-                {installEta && (
-                  <span style={{ color: "var(--monet-on-surface-variant)" }}>预计剩余 {installEta}</span>
                 )}
                 <span className="spacer" style={{ flex: 1 }} />
                 <button
