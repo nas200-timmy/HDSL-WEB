@@ -129,18 +129,10 @@ index 32202c7..826894f 100644
  /**
   * Pure helper: narrow ``agents`` down to those that are "enabled" for the
 diff --git a/dashboard/src/layouts/Sidebar.tsx b/dashboard/src/layouts/Sidebar.tsx
-index e11f753..194c5a1 100644
+index e11f753..233cb42 100644
 --- a/dashboard/src/layouts/Sidebar.tsx
 +++ b/dashboard/src/layouts/Sidebar.tsx
-@@ -7,6 +7,7 @@ import AppVersionBadge from "../components/AppVersionBadge";
- import CurrentVersionBadge from "../components/CurrentVersionBadge";
- import { ArrowRightLeft, ChevronDown, X } from "lucide-react";
- import { useTheme } from "../context/ThemeContext";
-+import { publicUrl } from "../utils/publicUrl";
- import { useLayoutMode } from "../context/LayoutModeContext";
- import { useUserRole } from "../hooks/useUserRole";
- import { useCurrentUser, useSetCurrentUser } from "../hooks/useCurrentUser";
-@@ -510,7 +511,7 @@ export default function Sidebar({
+@@ -510,7 +510,7 @@ export default function Sidebar({
    const brandInner = (
      <>
        <img
@@ -192,10 +184,17 @@ index 7962174..0f9e41d 100644
            style={{ marginBottom: 16 }}
          />
 diff --git a/dashboard/src/pages/Experts/components/TeamDrawer.tsx b/dashboard/src/pages/Experts/components/TeamDrawer.tsx
-index cc136df..7975c54 100644
+index cc136df..3c44358 100644
 --- a/dashboard/src/pages/Experts/components/TeamDrawer.tsx
 +++ b/dashboard/src/pages/Experts/components/TeamDrawer.tsx
-@@ -245,9 +245,9 @@ export default function TeamDrawer({
+@@ -1,5 +1,6 @@
+ import { useEffect, useMemo, useState } from "react";
+ import { useTranslation } from "react-i18next";
++import { Link } from "react-router-dom";
+ import { Alert, Collapse, Drawer, Form, Input, Select, Spin } from "antd";
+ import { message } from "@/utils/antdMessage";
+ 
+@@ -245,9 +246,9 @@ export default function TeamDrawer({
            showIcon
            message={t("experts.noModelsWarning")}
            action={
