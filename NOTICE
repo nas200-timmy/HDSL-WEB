@@ -155,6 +155,17 @@ it backs the PTY glue of the web terminal, and nothing else.
       reproduced here.
       https://github.com/ccch1mneyyy/dsh-TUI
 
+  Octop (TencentCloud/Octop)
+      The panel bundles a patched build of the Octop dashboard
+      (src/main/resources/octop/octop-dashboard-<version>.zip) for its
+      brand-instance integration.  Octop is Copyright (c) Tencent and
+      contributors and is distributed under the MIT License.
+      https://github.com/TencentCloud/Octop
+
+      The portable runtime archive is downloaded at install time from the
+      project's GitHub Releases; it bundles CPython (PSF License) and the
+      Python packages listed in Octop's own distribution metadata.
+
   Eclipse Jetty (jetty-server, jetty-http, jetty-io, jetty-util, jetty-client,
   jetty-security, jetty-session, jetty-alpn-client, jetty-xml, jetty-jndi,
   jetty-plus, jetty-ee, the org.eclipse.jetty.ee10 / .ee10.websocket servlet

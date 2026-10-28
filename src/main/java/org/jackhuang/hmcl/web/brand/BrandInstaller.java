@@ -21,11 +21,14 @@ import org.jackhuang.hmcl.dsh.DshNodeRuntime;
 import org.jackhuang.hmcl.dsh.NpmRegistry;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.io.Links;
+import org.jackhuang.hmcl.util.platform.Architecture;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -35,6 +38,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -46,7 +50,7 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 /// Installs and enumerates the tool releases of one [Brand].
 ///
-/// Two source flavours:
+/// Three source flavours:
 ///
 /// - **npm brands** install a published package with the same command the dsh
 ///   installer uses, minus the lockstep machinery:
@@ -61,6 +65,9 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 ///   deployment's network), unpack it, then `npm ci -w server -w web` (only
 ///   the workspaces the web mode needs — the desktop workspace's Electron
 ///   binary is never downloaded), then `npm run build -w web`.
+/// - **Octop** downloads the prebuilt portable archive from GitHub Releases
+///   (CPython 3.12 + every Python dependency included) and replaces only its
+///   dashboard with the patched SPA bundled in this jar.
 ///
 /// Two npm details are load-bearing:
 ///
@@ -116,6 +123,13 @@ public final class BrandInstaller {
         if (Files.exists(target.resolve(brand.installMarker()))) {
             message.accept(brand.sourceLabel() + " " + version + " is already installed");
             pointCurrentAt(brandRoot, target);
+            return;
+        }
+        if (brand == Brand.OCTOP) {
+            installOctop(brand, version, brandRoot, target, message);
+            pointCurrentAt(brandRoot, target);
+            message.accept("Installed " + brand.sourceLabel() + " " + version);
+            LOG.info("Installed " + brand.sourceLabel() + " " + version + " into " + target);
             return;
         }
         if (brand.source() == Brand.Source.GITHUB) {
@@ -299,6 +313,96 @@ public final class BrandInstaller {
         }
     }
 
+    /// The Octop install: a prebuilt portable archive from the GitHub release,
+    /// then the patched dashboard on top.
+    ///
+    /// The archive already carries CPython 3.12 and every Python dependency, so
+    /// the panel does not need a Python toolchain (or Docker) to install it.
+    /// Only the SPA is replaced: upstream builds for `/`, while this instance
+    /// is mounted at `/i/<token>/` and needs the runtime-base patch.
+    private static void installOctop(Brand brand, String version, Path brandRoot, Path target,
+                                     Consumer<String> message) throws BrandException {
+        String platform = octopPlatform();
+        String asset = "Octop-portable-" + platform + "-" + version + ".zip";
+        String base = System.getenv("OCTOP_RELEASE_BASE");
+        if (base == null || base.isBlank()) {
+            base = "https://github.com/" + brand.githubSlug() + "/releases/download";
+        }
+        String url = base.replaceAll("/$", "") + "/" + brand.releaseTag(version) + "/" + asset;
+
+        if (Files.exists(target)) {
+            FileUtils.deleteDirectoryQuietly(target);
+        }
+        message.accept("Downloading " + url);
+        LOG.info("Downloading Octop portable archive " + url);
+        extractZip(download(url), target);
+        markExecutable(target.resolve("runtime/bin"));
+
+        Path dashboard = target.resolve("packages/octop/dashboard");
+        if (!Files.isDirectory(dashboard)) {
+            throw new BrandException("Octop archive has no packages/octop/dashboard: " + target);
+        }
+        FileUtils.deleteDirectoryQuietly(dashboard);
+        String resource = "/octop/octop-dashboard-" + version + ".zip";
+        try (InputStream patched = BrandInstaller.class.getResourceAsStream(resource)) {
+            if (patched == null) {
+                throw new BrandException("This panel build has no patched Octop dashboard for " + version
+                        + " (" + resource + "); use the version bundled with this panel");
+            }
+            extractZip(patched, dashboard);
+        } catch (IOException e) {
+            throw new BrandException("Could not unpack the patched Octop dashboard: " + e.getMessage(), e);
+        }
+        if (!Files.exists(target.resolve(brand.installMarker()))) {
+            throw new BrandException("Octop " + version + " installed without its dashboard ("
+                    + target.resolve(brand.installMarker()) + ")");
+        }
+        message.accept("Installed Octop " + version + " with the patched dashboard");
+    }
+
+    /// Portable archives are unpacked with `Files.copy`, which does not carry
+    /// Unix mode bits. The bundled interpreter must be executable; mark every
+    /// file in `runtime/bin` (python3.12, python3, helper shims).
+    private static void markExecutable(Path directory) throws BrandException {
+        if (!Files.isDirectory(directory)) {
+            return;
+        }
+        try (Stream<Path> entries = Files.list(directory)) {
+            for (Path entry : entries.toList()) {
+                if (!Files.isRegularFile(entry)) {
+                    continue;
+                }
+                try {
+                    Files.setPosixFilePermissions(entry, PosixFilePermissions.fromString("rwxr-xr-x"));
+                } catch (UnsupportedOperationException ignored) {
+                    // Windows: no POSIX mode; the executable bit is implicit.
+                    return;
+                }
+            }
+        } catch (IOException e) {
+            throw new BrandException("Could not make Octop's bundled Python executable: " + e.getMessage(), e);
+        }
+    }
+
+    /// The platform suffix in Octop's portable asset names
+    /// (`linux-amd64`, `windows-arm64`, `darwin-amd64`).
+    static String octopPlatform() throws BrandException {
+        String os = switch (OperatingSystem.CURRENT_OS) {
+            case LINUX -> "linux";
+            case WINDOWS -> "windows";
+            case MACOS -> "darwin";
+            default -> throw new BrandException("Octop has no portable build for "
+                    + OperatingSystem.CURRENT_OS);
+        };
+        String arch = switch (Architecture.CURRENT_ARCH) {
+            case X86_64 -> "amd64";
+            case ARM64 -> "arm64";
+            default -> throw new BrandException("Octop has no portable build for "
+                    + Architecture.CURRENT_ARCH);
+        };
+        return os + "-" + arch;
+    }
+
     /// Fetches the source zip over HTTPS. Kept separate from the unpacking so
     /// the retry loop can wrap the download alone.
     private static java.io.InputStream download(String url) throws BrandException {
@@ -393,6 +497,13 @@ public final class BrandInstaller {
             Thread.currentThread().interrupt();
             throw new BrandException("Install step was interrupted (" + what + ")", e);
         }
+    }
+
+    /// Whether this panel build ships a patched Octop dashboard for a version.
+    /// The version picker filters on it, so a user cannot select an upstream
+    /// tag whose SPA would render at the wrong base (and fail under the mount).
+    public static boolean hasBundledOctopDashboard(String version) {
+        return BrandInstaller.class.getResource("/octop/octop-dashboard-" + version + ".zip") != null;
     }
 
     /// The installed releases, newest version first.

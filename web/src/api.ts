@@ -1,5 +1,6 @@
 import type {
   Account,
+  BrandPolicyStatus,
   CreateAccountBody,
   CreateInstanceBody,
   DeveloperGuardScope,
@@ -211,6 +212,12 @@ export const api = {
   /** 设置开发者守卫的作用域；需要先提权，且必须已启用 HTTPS */
   setDeveloperGuard: (scope: DeveloperGuardScope) =>
     request<{ ok: boolean; scope: string }>("/api/developer/guard", jsonInit("POST", { scope })),
+  /** 品牌实例的“最后手段”策略（单实例、固定反代、源码编译） */
+  brandPolicy: () => request<BrandPolicyStatus>("/api/developer/brand-policy"),
+  setBrandPolicy: (
+    brand: BrandId,
+    body: { singleInstance: boolean; survivor: string | null; lockedRoute: boolean; sourceBuild: boolean },
+  ) => request<{ ok: boolean }>(`/api/developer/brand-policy/${brand}`, jsonInit("PUT", body)),
   /** 紧急停机：按下之前先看清单（会杀掉哪些实例与终端） */
   estopPreview: () => request<EmergencyStopPreview>("/api/developer/estop/preview"),
   /** 紧急停机：强杀所有实例进程树并关掉所有终端，1 小时内不能解除 */

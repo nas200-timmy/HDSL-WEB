@@ -222,6 +222,10 @@ public final class HdslServer {
                 new org.jackhuang.hmcl.web.emergency.EmergencyStop();
         InstanceRuntime runtime = new InstanceRuntime(eventBus, taskService, emergencyStop);
         runtime.wire();
+        // The last-resort fixed mount survives a panel restart: the policy file
+        // is the source of truth, the runtime only caches the survivor id.
+        org.jackhuang.hmcl.web.brand.BrandRuntime.setLockedOctopSurvivor(
+                new org.jackhuang.hmcl.web.brand.BrandPolicy(config.dataDir).lockedSurvivor());
         AcpSessionManager acpSessions = new AcpSessionManager(eventBus);
         WsGateway.install(eventBus, authService, config.auth.disabled, acpSessions);
 

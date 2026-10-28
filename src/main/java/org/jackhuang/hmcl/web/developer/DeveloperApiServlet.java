@@ -69,6 +69,7 @@ public final class DeveloperApiServlet extends HttpServlet {
     private final EmergencyStop emergency;
     private final TerminalManager terminals;
     private final InstanceRuntime runtime;
+    private final org.jackhuang.hmcl.web.brand.BrandPolicy brandPolicy;
     /// Failed panel-password confirmations, per source address — the second
     /// confirmation must not become an unthrottled oracle for the panel
     /// password.
@@ -85,6 +86,7 @@ public final class DeveloperApiServlet extends HttpServlet {
         this.emergency = emergency;
         this.terminals = terminals;
         this.runtime = runtime;
+        this.brandPolicy = new org.jackhuang.hmcl.web.brand.BrandPolicy(config.dataDir);
     }
 
     @Override
@@ -146,6 +148,14 @@ public final class DeveloperApiServlet extends HttpServlet {
         }
         if ("/web-shell".equals(path) && "POST".equals(method)) {
             setWebShell(request, response);
+            return;
+        }
+        if ("/brand-policy".equals(path) && "GET".equals(method)) {
+            brandPolicyStatus(request, response);
+            return;
+        }
+        if (path != null && path.startsWith("/brand-policy/") && "PUT".equals(method)) {
+            setBrandPolicy(request, response, path.substring("/brand-policy/".length()));
             return;
         }
         Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
@@ -313,6 +323,128 @@ public final class DeveloperApiServlet extends HttpServlet {
         answer.addProperty("ok", true);
         answer.addProperty("devPasswordSet", false);
         Json.write(response, answer);
+    }
+
+    /// The brand-policy page's data: every brand's switches plus the instance
+    /// rows the UI needs to grey out. Requires the same developer elevation as
+    /// the rest of this page.
+    private void brandPolicyStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!elevation.require(keyOf(request), sessionAlive(request))) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return;
+        }
+        JsonArray brands = new JsonArray();
+        for (org.jackhuang.hmcl.web.brand.Brand brand : org.jackhuang.hmcl.web.brand.Brand.values()) {
+            org.jackhuang.hmcl.web.brand.BrandPolicy.Entry entry = brandPolicy.get(brand);
+            JsonObject body = new JsonObject();
+            body.addProperty("brand", brand.id());
+            body.addProperty("singleInstance", entry.singleInstance());
+            if (entry.survivor() == null) {
+                body.add("survivor", com.google.gson.JsonNull.INSTANCE);
+            } else {
+                body.addProperty("survivor", entry.survivor());
+            }
+            body.addProperty("lockedRoute", entry.lockedRoute());
+            body.addProperty("sourceBuild", entry.sourceBuild());
+            JsonArray instances = new JsonArray();
+            org.jackhuang.hmcl.web.brand.BrandInstanceManager manager =
+                    new org.jackhuang.hmcl.web.brand.BrandInstanceManager(
+                            brand, config.dataDir.resolve("brands").resolve(brand.id()).resolve("instances"));
+            for (org.jackhuang.hmcl.web.brand.BrandInstance instance : manager.list()) {
+                JsonObject row = new JsonObject();
+                row.addProperty("id", instance.id());
+                row.addProperty("name", instance.name());
+                row.addProperty("version", instance.version());
+                row.addProperty("state", org.jackhuang.hmcl.web.brand.BrandRuntime
+                        .status(instance.id()).state().name().toLowerCase(java.util.Locale.ROOT));
+                row.addProperty("disabled", brandPolicy.disabled(brand, instance.id()));
+                instances.add(row);
+            }
+            body.add("instances", instances);
+            brands.add(body);
+        }
+        JsonObject result = new JsonObject();
+        result.add("brands", brands);
+        Json.write(response, result);
+    }
+
+    /// Saves one brand's fallback policy. Single-instance mode requires a
+    /// survivor; enabling it stops the other running instances immediately
+    /// (data stays on disk and comes back when the policy is turned off).
+    private void setBrandPolicy(HttpServletRequest request, HttpServletResponse response, String brandId)
+            throws IOException {
+        if (!elevation.require(keyOf(request), sessionAlive(request))) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return;
+        }
+        org.jackhuang.hmcl.web.brand.Brand brand = org.jackhuang.hmcl.web.brand.Brand.fromId(brandId);
+        if (brand == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "unknown brand");
+            return;
+        }
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "a JSON body is required");
+            return;
+        }
+        Boolean single = booleanField(body, "singleInstance");
+        Boolean locked = booleanField(body, "lockedRoute");
+        Boolean source = booleanField(body, "sourceBuild");
+        String survivor = stringField(body, "survivor");
+        if (survivor != null && survivor.isBlank()) {
+            survivor = null;
+        }
+        boolean singleInstance = single != null && single;
+        boolean lockedRoute = locked != null && locked;
+        boolean sourceBuild = source != null && source;
+        if (lockedRoute && brand != org.jackhuang.hmcl.web.brand.Brand.OCTOP) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "lockedRoute is supported for octop only");
+            return;
+        }
+        if (singleInstance && survivor == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "singleInstance requires a survivor instance");
+            return;
+        }
+        org.jackhuang.hmcl.web.brand.BrandInstanceManager manager =
+                new org.jackhuang.hmcl.web.brand.BrandInstanceManager(
+                        brand, config.dataDir.resolve("brands").resolve(brand.id()).resolve("instances"));
+        if (survivor != null && manager.find(survivor) == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "survivor is not an instance of " + brand.id());
+            return;
+        }
+        try {
+            if (singleInstance) {
+                for (org.jackhuang.hmcl.web.brand.BrandInstance instance : manager.list()) {
+                    if (!instance.id().equals(survivor)
+                            && org.jackhuang.hmcl.web.brand.BrandRuntime.isRunning(instance.id())) {
+                        org.jackhuang.hmcl.web.brand.BrandRuntime.stop(instance.id());
+                    }
+                }
+            }
+            org.jackhuang.hmcl.web.brand.BrandPolicy.Entry entry =
+                    new org.jackhuang.hmcl.web.brand.BrandPolicy.Entry(
+                            singleInstance, survivor, lockedRoute, sourceBuild);
+            brandPolicy.set(brand, entry);
+            if (brand == org.jackhuang.hmcl.web.brand.Brand.OCTOP) {
+                org.jackhuang.hmcl.web.brand.BrandRuntime.setLockedOctopSurvivor(
+                        lockedRoute ? survivor : null);
+            }
+            AuditLog.log(AuditLog.Channel.WEB, "brand.policy", brand.id(), "success",
+                    null, request.getRemoteAddr());
+            JsonObject result = new JsonObject();
+            result.addProperty("ok", true);
+            Json.write(response, result);
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "could not save the brand policy");
+        }
     }
 
     /// Flips the Web Shell switch. Requires the developer elevation (the same

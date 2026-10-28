@@ -2,6 +2,24 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## Unreleased — 2026-10-28 · Octop 作为品牌实例接入
+
+- 新增品牌 **Octop**（TencentCloud/Octop，MIT）：按普通品牌实例管理，实例 id 是随机 token，
+  挂载在 `/i/<token>/`；日常与 Kimi / OpenCode / Claude Web 同一套创建、启动、停止、打开、日志。
+- 安装走 GitHub Release 的 **portable 包**（`Octop-portable-<plat>-<version>.zip`），内含 CPython 3.12
+  与全部 Python 依赖，面板不需要系统 Python/uv；只把 `packages/octop/dashboard` 换成随面板分发的
+  补丁版（`src/main/resources/octop/octop-dashboard-<version>.zip`），Windows 同样直接可用。
+- Octop 前端补丁：运行时读代理注入的 `<base>`/`window.__OCTOP_BASE__`，构建用相对 base；
+  `auth_token`、`active-agent` 等 localStorage key 按挂载点命名空间化——多个实例同 origin 登录互不踢。
+- 代理：Octop 页面只注入 `<base>` 与全局变量，不跑 Kimi/OpenCode 的 JS/router 改写；
+  WS/SSE、Cookie Path、Redirect 沿用现有 `/i/*` 实现。
+- 开发者模式新增 **品牌实例管理**（需要开发者密码）：单实例模式必须先指定保留实例，其余实例
+  灰掉并拒绝启动/打开/修改/删除（数据保留）；可选固定 `/i/octop/` 反代；本地源码编译开关预留
+  （当前版本仍只用预编译包，选择它时安装会明确拒绝）。
+- 设置页策略存 `<data>/brands/policy.json`，按品牌分节；默认全关。面板重启后固定路径会自动恢复。
+- 版本选择器只列出本面板真正带补丁 dashboard 的 Octop 版本，避免选到渲染不出挂载点的上游 tag。
+- 测试：`BrandPolicyTest`、Octop 页面改写用例；插件/Java 基线照旧。
+
 ## Unreleased — 2026-10-28 · 「全部 API」档的空面板给个说法
 
 - `all` 档的行为不变（连读都要提权，这是它区别于 `instance` 的地方），但**前端不再让人对着空列表猜**：

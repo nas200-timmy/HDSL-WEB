@@ -75,13 +75,14 @@ function versionOption(version: string, latest: boolean, installed: boolean): st
 /// 其余三个共用 /api/brands/<brand>/*。顺序 = 页签顺序，也是深链缺省时的挑选顺序。
 export type BrandKey = "zcode" | BrandId;
 
-export const BRAND_KEYS: BrandKey[] = ["zcode", "kimi", "opencode", "claude-web"];
+export const BRAND_KEYS: BrandKey[] = ["zcode", "kimi", "opencode", "claude-web", "octop"];
 
 const BRAND_TITLE: Record<BrandKey, string> = {
   zcode: I18N["dsh.brand.zcode"],
   kimi: I18N["dsh.brand.kimi"],
   opencode: I18N["dsh.brand.opencode"],
   "claude-web": I18N["dsh.brand.claude-web"],
+  octop: I18N["dsh.brand.octop"],
 };
 
 /// 短名（不带「（实验）」后缀）：写进用户的实例名与「还没有 X 实例」这类句子里，
@@ -91,6 +92,7 @@ const BRAND_SHORT: Record<BrandKey, string> = {
   kimi: I18N["dsh.brand.kimi"],
   opencode: I18N["dsh.brand.opencode.short"],
   "claude-web": I18N["dsh.brand.claude-web.short"],
+  octop: I18N["dsh.brand.octop.short"],
 };
 
 export function isBrandKey(value: string | null | undefined): value is BrandKey {
@@ -983,9 +985,10 @@ function InstancesCard({
             const running = inst.state === "running";
             const installing = rowInstall?.id === inst.id;
             const version = inst.version ?? "";
+            const disabled = !!inst.disabled;
             return (
               <div key={inst.id}>
-                <div className="tlli" style={{ padding: "6px 12px" }}>
+                <div className="tlli" style={{ padding: "6px 12px", opacity: disabled ? 0.55 : undefined }}>
                   {/* 「当前实例」与 dsh 实例列表同款：启动面板与主侧栏都认这个选择 */}
                   <label className="input-check">
                     <input
@@ -1001,6 +1004,7 @@ function InstancesCard({
                       <span className={`tag ${STATE_TAG[inst.state] ?? "plain"}`}>
                         {stateText(inst.state)}
                       </span>
+                      {disabled && <span className="tag plain">策略禁用</span>}
                     </span>
                     <span className="tlli-subtitle">
                       {inst.id} · {version}
@@ -1034,7 +1038,7 @@ function InstancesCard({
                       className="input"
                       style={{ flex: "none", maxWidth: 124, height: 36 }}
                       value={version}
-                      disabled={busy || installing}
+                      disabled={busy || installing || disabled}
                       onChange={(e) => void pickVersion(inst, e.target.value)}
                     >
                       {catalog.map((v) => (
@@ -1048,7 +1052,7 @@ function InstancesCard({
                     <button
                       className="icon-btn on-variant ripple-host"
                       title={running ? I18N["dsh.stop"] : I18N["dsh.launch"]}
-                      disabled={busyId === inst.id || inst.state === "starting" || installing}
+                      disabled={busyId === inst.id || inst.state === "starting" || installing || disabled}
                       onClick={() => (running ? void doStop(inst) : void doLaunch(inst))}
                     >
                       {running ? <CloseIcon size={18} /> : <RocketLaunchIcon size={18} />}
@@ -1056,7 +1060,7 @@ function InstancesCard({
                     <button
                       className="icon-btn on-variant ripple-host"
                       title={webShellEnabled ? I18N["terminal.open"] : I18N["terminal.unavailable"]}
-                      disabled={!webShellEnabled || installing}
+                      disabled={!webShellEnabled || installing || disabled}
                       onClick={() =>
                         setTerminalTarget({ kind: "brand", brand, id: inst.id, name: inst.name })
                       }
@@ -1066,7 +1070,7 @@ function InstancesCard({
                     <button
                       className="icon-btn on-variant ripple-host"
                       title={I18N["dsh.brand.open"]}
-                      disabled={!running}
+                      disabled={!running || disabled}
                       onClick={() => doOpen(inst)}
                     >
                       <PublicIcon size={18} />

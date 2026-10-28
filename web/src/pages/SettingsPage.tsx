@@ -2,6 +2,7 @@ import { useEffect, useReducer, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError, isNotImplemented } from "../api";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
+import { BrandPolicyPanel } from "../components/BrandPolicyPanel";
 import { FileDropInput } from "../components/FileDropInput";
 import {
   CheckCircleIcon,
@@ -1835,6 +1836,8 @@ function DeveloperTab() {
           改密码或注销即失效，别写进脚本文件。
         </p>
       </div>
+
+      <BrandPolicyPanel />
 
       <div className="card" style={{ borderColor: "var(--monet-error)" }}>
         <div className="comp-row">

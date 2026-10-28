@@ -30,7 +30,7 @@ export interface LaunchEntry {
   name: string;
   /** 已归一化（大写）：RUNNING / STARTING / STOPPED … */
   state: string;
-  kind: "dsh" | "kimi" | "opencode" | "claude-web" | "zcode";
+  kind: "dsh" | "kimi" | "opencode" | "claude-web" | "octop" | "zcode";
   /** kind = dsh 时的原始实例；品牌/zcode 实例为 null */
   dsh: Instance | null;
   /** 品牌/zcode 条目；dsh 实例为 null */
@@ -42,6 +42,7 @@ const BRAND_LABEL: Record<string, string> = {
   kimi: I18N["dsh.brand.kimi"],
   opencode: I18N["dsh.brand.opencode"],
   "claude-web": I18N["dsh.brand.claude-web"],
+  octop: I18N["dsh.brand.octop"],
   zcode: I18N["dsh.brand.zcode"],
 };
 export { BRAND_LABEL };

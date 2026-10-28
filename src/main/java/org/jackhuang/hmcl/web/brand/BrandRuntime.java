@@ -28,10 +28,16 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -97,6 +103,12 @@ public final class BrandRuntime {
     private static final Pattern CLAUDE_WEB_LISTENING =
             Pattern.compile("listening on http://127\\.0\\.0\\.1:(\\d+)");
 
+    /// Octop's uvicorn line. The launch path polls `/api/health` instead (the
+    /// health endpoint is Octop's own contract); the pattern only keeps the
+    /// shared log pump exhaustive.
+    private static final Pattern OCTOP_UVICORN =
+            Pattern.compile("Uvicorn running on http://127\\.0\\.0\\.1:(\\d+)");
+
     /// Where pre-allocated ports for brands that cannot pick their own are
     /// drawn from — outside the dsh pool (3081–4081) so the two never fight.
     private static final int ALLOC_RANGE_START = 20000;
@@ -115,6 +127,11 @@ public final class BrandRuntime {
     private static final Map<String, Object> LOCKS = new ConcurrentHashMap<>();
     private static final Map<String, Integer> PORTS = new ConcurrentHashMap<>();
     private static final Random RANDOM = new Random();
+
+    /// The instance that answers the last-resort `/i/octop/` mount, when the
+    /// developer policy turns `lockedRoute` on. `null` means the normal token
+    /// mounts only.
+    private static volatile @Nullable String LOCKED_OCTOP_SURVIVOR;
 
     private BrandRuntime() {
     }
@@ -194,6 +211,7 @@ public final class BrandRuntime {
             Path home = manager.homeDirectory(instance);
             Process process;
             OutputStream log;
+            LaunchPlan plan;
             try {
                 Files.createDirectories(logFile.getParent());
                 Files.createDirectories(workspace);
@@ -201,7 +219,10 @@ public final class BrandRuntime {
                 log = Files.newOutputStream(logFile,
                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
                         StandardOpenOption.WRITE);
-                LaunchPlan plan = plan(brand, packageDir, instance, publicHost);
+                if (brand == Brand.OCTOP) {
+                    ensureOctopInitialized(packageDir, home, logFile);
+                }
+                plan = plan(brand, packageDir, instance, publicHost);
                 ProcessBuilder builder = new ProcessBuilder(Executables.startable(plan.command()));
                 builder.directory(workspace.toFile());
                 builder.redirectErrorStream(true);
@@ -209,6 +230,11 @@ public final class BrandRuntime {
                 // instance directory — credentials, sessions and config all
                 // land inside the volume, per instance.
                 builder.environment().put("HOME", home.toString());
+                if (brand == Brand.OCTOP) {
+                    // Octop's data root; explicit because it is not derived from
+                    // HOME on every platform.
+                    builder.environment().put("OCTOP_HOME", home.toString());
+                }
                 // Node.js resolves `~` through `USERPROFILE` on Windows and ignores `HOME`,
                 // so without this the isolation above silently does not apply there and a
                 // brand's credentials land in the real user profile — outside the instance,
@@ -237,7 +263,9 @@ public final class BrandRuntime {
             pump.setDaemon(true);
             pump.start();
 
-            Integer port = awaitReady(brand, id, process, ready);
+            Integer port = brand == Brand.OCTOP
+                    ? awaitOctopHealth(id, process, plan.port())
+                    : awaitReady(brand, id, process, ready);
             READY.remove(id);
             if (port != null) {
                 PORTS.put(id, port);
@@ -269,6 +297,36 @@ public final class BrandRuntime {
     /// @return the brand, or `null` when the id is unknown here
     public static @Nullable Brand brandOf(String id) {
         return BRANDS.get(id);
+    }
+
+    /// Selects the survivor that answers `/i/octop/`, or clears the fixed
+    /// route. Called at boot and whenever the developer policy changes.
+    public static void setLockedOctopSurvivor(@Nullable String instanceId) {
+        LOCKED_OCTOP_SURVIVOR = instanceId == null || instanceId.isBlank() ? null : instanceId;
+    }
+
+    /// The survivor id behind `/i/octop/`, or `null` when the fixed route is
+    /// off.
+    public static @Nullable String lockedOctopSurvivor() {
+        return LOCKED_OCTOP_SURVIVOR;
+    }
+
+    /// The brand a mount id names. A normal mount id is an instance id; the
+    /// reserved `/i/octop/` alias is the one that has no instance of its own.
+    public static @Nullable Brand brandForMount(String mountId) {
+        if ("octop".equals(mountId) && LOCKED_OCTOP_SURVIVOR != null) {
+            return Brand.OCTOP;
+        }
+        return brandOf(mountId);
+    }
+
+    /// The target a mount id resolves to: normally the instance id, but the
+    /// fixed alias forwards to the survivor.
+    public static String targetForMount(String mountId) {
+        if ("octop".equals(mountId) && LOCKED_OCTOP_SURVIVOR != null) {
+            return LOCKED_OCTOP_SURVIVOR;
+        }
+        return mountId;
     }
 
     /// The `workspaces.add` request the panel sends to a freshly started Claude
@@ -396,7 +454,7 @@ public final class BrandRuntime {
     /// @param command the executable and arguments
     /// @param environment extra environment variables, on top of the panel's
     ///                      own (HOME etc.)
-    record LaunchPlan(List<String> command, Map<String, String> environment) {
+    record LaunchPlan(List<String> command, Map<String, String> environment, int port) {
     }
 
     /// Builds the brand's launch command.
@@ -436,17 +494,18 @@ public final class BrandRuntime {
                 // authenticating proxy this switch is documented for; no token
                 // is ever generated, printed, or handled here.
                 command.add("--dangerous-bypass-auth");
-                return new LaunchPlan(List.copyOf(command), Map.of());
+                return new LaunchPlan(List.copyOf(command), Map.of(), 0);
             }
             case OPENCODE -> {
+                int port = allocatePort();
                 command.add(entryPoint(packageDir.resolve(brand.installMarker())).toString());
                 command.add("web");
                 command.add("--port");
-                command.add(String.valueOf(allocatePort()));
+                command.add(String.valueOf(port));
                 command.add("--hostname");
                 command.add("127.0.0.1");
                 command.add("--print-logs");
-                return new LaunchPlan(List.copyOf(command), Map.of());
+                return new LaunchPlan(List.copyOf(command), Map.of(), port);
             }
             case CLAUDE_WEB -> {
                 // The server runs under tsx straight from the checkout — there
@@ -469,7 +528,28 @@ public final class BrandRuntime {
                 java.util.Map<String, String> environment = new java.util.LinkedHashMap<>();
                 environment.put("PORT", String.valueOf(port));
                 org.jackhuang.hmcl.web.terminal.ClaudeWebTui.applyBaseUrl(environment, instance.baseUrl());
-                return new LaunchPlan(List.copyOf(command), java.util.Map.copyOf(environment));
+                return new LaunchPlan(List.copyOf(command), java.util.Map.copyOf(environment), port);
+            }
+            case OCTOP -> {
+                int port = allocatePort();
+                Path launch = packageDir.resolve("launch.py");
+                if (!Files.isRegularFile(launch)) {
+                    throw new IOException("Octop launcher not found: " + launch);
+                }
+                // The portable archive carries its own CPython, so no system
+                // Python (and no uv) is involved. `launch.py` puts packages/
+                // on sys.path and then runs the `octop` module.
+                command.add(octopPython(packageDir).toString());
+                command.add(launch.toString());
+                command.add("run");
+                command.add("--host");
+                command.add("127.0.0.1");
+                command.add("--port");
+                command.add(String.valueOf(port));
+                java.util.Map<String, String> environment = new java.util.LinkedHashMap<>();
+                environment.put("OCTOP_PORT", String.valueOf(port));
+                environment.put("PYTHONDONTWRITEBYTECODE", "1");
+                return new LaunchPlan(List.copyOf(command), java.util.Map.copyOf(environment), port);
             }
             default -> throw new IOException("unknown brand " + brand);
         }
@@ -503,6 +583,143 @@ public final class BrandRuntime {
             }
         }
         throw new IOException("no free port between " + ALLOC_RANGE_START + " and " + ALLOC_RANGE_END);
+    }
+
+    /// The portable archive's own interpreter: the panel must not depend on a
+    /// system Python, and the archive ships CPython 3.12 next to `launch.py`.
+    static Path octopPython(Path packageDir) throws IOException {
+        Path runtime = packageDir.resolve("runtime");
+        for (String candidate : List.of("bin/python3.12", "bin/python3", "python.exe")) {
+            Path path = runtime.resolve(candidate);
+            if (Files.isRegularFile(path)) {
+                return path;
+            }
+        }
+        throw new IOException("Octop runtime has no Python interpreter under " + runtime);
+    }
+
+    /// First-run bootstrap: `octop init --yes` with a generated admin password.
+    ///
+    /// Idempotent by the control-plane database, which is what `octop init`
+    /// itself treats as "already bootstrapped". The password is written to
+    /// `<home>/octop-admin.txt` (0600) once; later launches leave it alone.
+    private static void ensureOctopInitialized(Path packageDir, Path home, Path logFile) throws IOException {
+        if (Files.isRegularFile(home.resolve("octop.db"))) {
+            return;
+        }
+        Path launch = packageDir.resolve("launch.py");
+        if (!Files.isRegularFile(launch)) {
+            throw new IOException("Octop launcher not found: " + launch);
+        }
+        String password = randomPassword();
+        List<String> command = List.of(
+                octopPython(packageDir).toString(), launch.toString(),
+                "init", "--yes",
+                "--admin-username", "admin",
+                "--admin-password", password);
+        ProcessBuilder builder = new ProcessBuilder(command);
+        builder.directory(home.toFile());
+        builder.redirectErrorStream(true);
+        builder.environment().put("HOME", home.toString());
+        builder.environment().put("OCTOP_HOME", home.toString());
+        builder.environment().put("PYTHONDONTWRITEBYTECODE", "1");
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            builder.environment().put("USERPROFILE", home.toString());
+        }
+        Process process = builder.start();
+        byte[] output = process.getInputStream().readAllBytes();
+        boolean finished;
+        try {
+            finished = process.waitFor(120, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            process.destroyForcibly();
+            throw new IOException("Octop init was interrupted", e);
+        }
+        if (!finished) {
+            process.destroyForcibly();
+            throw new IOException("Octop init did not finish within 120 seconds");
+        }
+        String text = new String(output, StandardCharsets.UTF_8);
+        if (process.exitValue() != 0) {
+            throw new IOException("Octop init failed (exit " + process.exitValue() + "): " + tail(text));
+        }
+        Files.writeString(home.resolve("octop-admin.txt"),
+                "username: admin\npassword: " + password + "\n", StandardCharsets.UTF_8);
+        try {
+            Files.setPosixFilePermissions(home.resolve("octop-admin.txt"),
+                    PosixFilePermissions.fromString("rw-------"));
+        } catch (UnsupportedOperationException ignored) {
+            // Windows: the file still lives inside the instance directory.
+        }
+        Files.writeString(logFile, text, StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        LOG.info("Initialised Octop at " + home + " (admin credentials in octop-admin.txt)");
+    }
+
+    /// Polls Octop's `/api/health` until it answers or the process dies. Its
+    /// log line is uvicorn's, not a stable readiness contract; the health
+    /// endpoint is the one Octop itself documents.
+    private static @Nullable Integer awaitOctopHealth(String id, Process process, int port) {
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(2))
+                .build();
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create("http://127.0.0.1:" + port + "/api/health"))
+                .timeout(Duration.ofSeconds(2))
+                .GET()
+                .build();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(READY_TIMEOUT_SECONDS);
+        while (System.nanoTime() < deadline) {
+            if (!process.isAlive()) {
+                return null;
+            }
+            try {
+                HttpResponse<Void> response = client.send(request, HttpResponse.BodyHandlers.discarding());
+                if (response.statusCode() / 100 == 2) {
+                    return port;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            } catch (IOException ignored) {
+                // Not listening yet (or still migrating the database).
+            }
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+        ERRORS.put(id, "octop did not answer /api/health within " + READY_TIMEOUT_SECONDS + " seconds");
+        STATES.put(id, State.ERROR);
+        return null;
+    }
+
+    /// A 16-character password that satisfies Octop's policy (a letter and a
+    /// digit), avoiding the common-password list by construction.
+    static String randomPassword() {
+        String letters = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
+        String digits = "23456789";
+        String all = letters + digits;
+        SecureRandom random = new SecureRandom();
+        StringBuilder out = new StringBuilder(16);
+        out.append(letters.charAt(random.nextInt(letters.length())));
+        for (int i = 1; i < 15; i++) {
+            out.append(all.charAt(random.nextInt(all.length())));
+        }
+        out.append(digits.charAt(random.nextInt(digits.length())));
+        return out.toString();
+    }
+
+    /// The last line(s) of a failed subprocess, bounded for an error message.
+    private static String tail(String text) {
+        String trimmed = text.strip();
+        int newline = trimmed.lastIndexOf('\n');
+        String last = newline >= 0 ? trimmed.substring(newline + 1) : trimmed;
+        return last.length() > 500 ? last.substring(last.length() - 500) : last;
     }
 
     private static @Nullable Integer awaitReady(Brand brand, String id, Process process,
@@ -552,6 +769,7 @@ public final class BrandRuntime {
             case KIMI -> KIMI_LOCAL_PORT;
             case OPENCODE -> OPENCODE_WEB_INTERFACE;
             case CLAUDE_WEB -> CLAUDE_WEB_LISTENING;
+            case OCTOP -> OCTOP_UVICORN;
         };
     }
 

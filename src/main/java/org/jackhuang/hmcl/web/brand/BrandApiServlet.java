@@ -93,6 +93,7 @@ public final class BrandApiServlet extends HttpServlet {
     /// Live TLS state of the main connector; the terminal is HTTPS-only.
     private final java.util.function.BooleanSupplier tlsActive;
     private final InstanceTerminal instanceTerminal;
+    private final BrandPolicy policy;
     private final Map<Brand, PathRef> brands = new EnumMap<>(Brand.class);
 
     private record PathRef(Path root, BrandInstanceManager manager) {
@@ -113,6 +114,7 @@ public final class BrandApiServlet extends HttpServlet {
         this.developerAuth = developerAuth;
         this.developerElevation = developerElevation;
         this.tlsActive = tlsActive;
+        this.policy = new BrandPolicy(config.dataDir);
         this.instanceTerminal = new InstanceTerminal(config, terminals, terminalTickets, auth,
                 developerAuth, developerElevation, tlsActive, emergency);
         Path base = config.dataDir.resolve("brands");
@@ -285,6 +287,12 @@ public final class BrandApiServlet extends HttpServlet {
                     target + " is not a published " + brand.sourceLabel() + " version");
             return;
         }
+        if (brand == Brand.OCTOP && policy.get(brand).sourceBuild()) {
+            Json.error(response, HttpServletResponse.SC_NOT_IMPLEMENTED,
+                    "source_build_reserved: local source compilation is reserved for a later build; "
+                            + "turn it off to use the prebuilt portable archive");
+            return;
+        }
         if (tasks.activeInstall(brand.id()).isPresent()) {
             Json.error(response, HttpServletResponse.SC_CONFLICT,
                     "an install for " + brand.id() + " is already running");
@@ -423,6 +431,9 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
             return;
         }
+        if (refuseDisabled(brand, id, response)) {
+            return;
+        }
         JsonObject body = body(request, response);
         if (body == null) {
             return;
@@ -464,6 +475,9 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
             return;
         }
+        if (refuseDisabled(brand, id, response)) {
+            return;
+        }
         if (BrandRuntime.isRunning(id)) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "stop the instance before deleting it");
             return;
@@ -473,6 +487,19 @@ public final class BrandApiServlet extends HttpServlet {
         response.setStatus(204);
     }
 
+    /// The single-instance policy hides every non-survivor. Refuse the actions
+    /// that would start, open, change or delete one; stopping remains allowed
+    /// so an operator can always wind a disabled instance down.
+    private boolean refuseDisabled(Brand brand, String id, HttpServletResponse response) throws IOException {
+        if (!policy.disabled(brand, id)) {
+            return false;
+        }
+        Json.error(response, HttpServletResponse.SC_CONFLICT,
+                "disabled_by_brand_policy: this instance is disabled by the single-instance policy; "
+                        + "choose it as the survivor in Settings → Brand Instances");
+        return true;
+    }
+
     // ------------------------------------------------------------ launch / stop --
 
     private void launch(Brand brand, PathRef ref, HttpServletRequest request, HttpServletResponse response, String id)
@@ -480,6 +507,9 @@ public final class BrandApiServlet extends HttpServlet {
         BrandInstance instance = ref.manager().find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
+            return;
+        }
+        if (refuseDisabled(brand, id, response)) {
             return;
         }
         java.nio.file.Path packageDir = BrandInstaller.packageDir(brand, ref.root(), instance.version());
@@ -704,6 +734,9 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
             return;
         }
+        if (refuseDisabled(brand, id, response)) {
+            return;
+        }
         if (!BrandRuntime.isRunning(id)) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "the instance is not running");
             return;
@@ -768,6 +801,7 @@ public final class BrandApiServlet extends HttpServlet {
         body.addProperty("lastPort", instance.lastPort());
         body.addProperty("createdAt", instance.createdAt());
         body.addProperty("state", status.state().name().toLowerCase(java.util.Locale.ROOT));
+        body.addProperty("disabled", policy.disabled(brand, instance.id()));
         if (status.error() != null) {
             body.addProperty("error", status.error());
         }

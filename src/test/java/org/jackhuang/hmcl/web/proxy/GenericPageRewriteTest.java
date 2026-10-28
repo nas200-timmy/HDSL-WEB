@@ -321,6 +321,22 @@ class GenericPageRewriteTest {
                 java.net.http.HttpResponse.BodyHandlers.ofString());
     }
 
+    @Test
+    void octopPageGetsARuntimeBaseAndNoManifest() {
+        String page = """
+                <!doctype html><html><head>
+                <link rel="manifest" href="./manifest.json" />
+                <script type="module" src="./assets/index.js"></script>
+                </head><body></body></html>
+                """;
+        String rewritten = InstanceProxyServlet.rewriteOctopPage(page, MOUNT);
+        assertTrue(rewritten.contains("<base href=\"" + MOUNT + "\">"), rewritten);
+        assertTrue(rewritten.contains("window.__OCTOP_BASE__=\"" + MOUNT + "\""), rewritten);
+        // Relative assets stay relative; <base> makes them resolve per deep link.
+        assertTrue(rewritten.contains("src=\"./assets/index.js\""), rewritten);
+        assertFalse(rewritten.contains("rel=\"manifest\""), rewritten);
+    }
+
     private static String rewrite(String html) {
         return InstanceProxyServlet.rewritePage(html, MOUNT);
     }
