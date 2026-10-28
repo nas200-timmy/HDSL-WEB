@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { launchBrandInstance, stopBrandInstance } from "../actions";
 import { api } from "../api";
 import { withBase } from "../base";
+import { AdminCredentialsDialog } from "../components/AdminCredentialsDialog";
 import { CollapsibleNote } from "../components/CollapsibleNote";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
 import { BrandIcon } from "../components/BrandIcon";
@@ -863,6 +864,7 @@ function InstancesCard({
   const [baseUrlTarget, setBaseUrlTarget] = useState<ExternalInstance | null>(null);
   const [baseUrlValue, setBaseUrlValue] = useState("");
   const [pluginsTarget, setPluginsTarget] = useState<ExternalInstance | null>(null);
+  const [adminTarget, setAdminTarget] = useState<ExternalInstance | null>(null);
   const [logTarget, setLogTarget] = useState<ExternalInstance | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<ExternalInstance | null>(null);
@@ -1393,6 +1395,17 @@ function InstancesCard({
             Anthropic 端点…
           </PopupItem>
         )}
+        {brand === "octop" && (
+          <PopupItem
+            onClick={() => {
+              const inst = menuAnchor?.inst;
+              setMenuAnchor(null);
+              if (inst) setAdminTarget(inst);
+            }}
+          >
+            登录密码…
+          </PopupItem>
+        )}
         <PopupSep />
         <PopupItem
           danger
@@ -1409,6 +1422,7 @@ function InstancesCard({
 
       <InfoDialog brand={brand} inst={infoTarget} onClose={() => setInfoTarget(null)} />
       <PluginsDialog brand={brand} inst={pluginsTarget} onClose={() => setPluginsTarget(null)} />
+      <AdminCredentialsDialog brand={brand} instance={adminTarget} onClose={() => setAdminTarget(null)} />
 
       {/* 重命名 */}
       <Dialog

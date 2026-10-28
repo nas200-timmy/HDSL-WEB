@@ -1,5 +1,6 @@
 import type {
   Account,
+  BrandAdminCredentials,
   BrandSettings,
   BrandSourceProbe,
   BrandSourcesBody,
@@ -544,6 +545,17 @@ export const api = {
   /** 运行中删除 → 409 */
   deleteBrandInstance: (brand: BrandId, id: string) =>
     request<unknown>(`/api/brands/${brand}/instances/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  /** 实例自己的管理员凭据（目前只有 octop）：读，或带 password 重置（空串=随机生成） */
+  brandAdminPassword: (
+    brand: BrandId,
+    id: string,
+    body: { password?: string; adminPassword?: string },
+  ) =>
+    request<BrandAdminCredentials>(
+      `/api/brands/${brand}/instances/${encodeURIComponent(id)}/admin-password`,
+      jsonInit("POST", body),
+    ),
 
   /** 同步阻塞至就绪（最多 60s）；error 状态带原因 */
   launchBrand: (brand: BrandId, id: string) =>

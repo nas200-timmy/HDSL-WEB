@@ -50,6 +50,8 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
+
 /// The REST surface of the third-party brand categories, mapped at
 /// `/api/brands/<brand>/*` (behind the same session gate as every other
 /// `/api/*` route):
@@ -216,6 +218,11 @@ public final class BrandApiServlet extends HttpServlet {
             if (segments.length == 3 && "terminal".equals(segments[2])
                     && ("POST".equals(request.getMethod()) || "DELETE".equals(request.getMethod()))) {
                 terminal(brand, ref, request, response, id);
+                return;
+            }
+            if (segments.length == 3 && "admin-password".equals(segments[2])
+                    && "POST".equals(request.getMethod())) {
+                adminPassword(brand, ref, request, response, id);
                 return;
             }
             if (segments.length == 3 && "reveal".equals(segments[2]) && "POST".equals(request.getMethod())) {
@@ -861,6 +868,317 @@ public final class BrandApiServlet extends HttpServlet {
         body.addProperty("supported", brand.supportsPlugins());
         body.add("plugins", new JsonArray());
         Json.write(response, body);
+    }
+
+    // ------------------------------------------------------ admin credentials --
+
+    /// Throttle for the panel-password fallback: a plain-HTTP panel cannot elevate at all, so the
+    /// panel password is the only second factor there — it must not become an unthrottled oracle.
+    private final org.jackhuang.hmcl.web.auth.LoginThrottle adminPasswordThrottle =
+            new org.jackhuang.hmcl.web.auth.LoginThrottle();
+
+    /// The instance's own admin credentials.
+    ///
+    /// Octop generates them on first boot and writes `octop-admin.txt`; until now the only way to
+    /// learn or change that password was `docker exec … octop user passwd`. Reading is allowed
+    /// without a password for the first minutes after the instance was created — the password was
+    /// generated moments ago and the user has to log in at least once. Everything else (a later
+    /// read, and every reset) needs the developer password over HTTPS, or the panel password on a
+    /// plain-HTTP panel, where elevation is impossible by design.
+    private void adminPassword(Brand brand, PathRef ref, HttpServletRequest request,
+                               HttpServletResponse response, String id) throws IOException {
+        if (brand != Brand.OCTOP) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "admin-password is not supported for " + brand.id());
+            return;
+        }
+        BrandInstance instance = ref.manager().find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "unknown instance");
+            return;
+        }
+        JsonObject body = optionalBody(request);
+        boolean reset = body != null && body.has("password") && !body.get("password").isJsonNull();
+        if (reset || !firstRunWindow(instance)) {
+            if (!authorizeSecretAccess(request, response, body)) {
+                return;
+            }
+        }
+
+        Path home = ref.manager().homeDirectory(instance);
+        String username = "admin";
+        String password = null;
+        // Octop's own credential file first (`$OCTOP_HOME/credential.txt`, written by its entrypoint
+        // and by the panel's first boot), then the panel's `octop-admin.txt`. Neither is
+        // authoritative for a password changed in Octop's web console — the DB only keeps a hash —
+        // so a missing plaintext is answered as "readable: false", not as an error.
+        for (String line : readCredentialFile(home.resolve("credential.txt"))) {
+            String value = credentialValue(line, "Username:");
+            if (value != null) {
+                username = value;
+                continue;
+            }
+            value = credentialValue(line, "Password:");
+            if (value != null) {
+                password = value;
+            }
+        }
+        for (String line : readCredentialFile(home.resolve("octop-admin.txt"))) {
+            if (line.startsWith("username:")) {
+                username = line.substring("username:".length()).trim();
+            } else if (line.startsWith("password:")) {
+                password = line.substring("password:".length()).trim();
+            }
+        }
+
+        if (reset) {
+            String wanted = stringField(body, "password");
+            String next = wanted != null && !wanted.isBlank() ? wanted.trim() : randomPassword();
+            if (next.length() < 8 || !next.matches(".*[A-Za-z].*") || !next.matches(".*[0-9].*")) {
+                // Octop itself enforces a policy (length, common-password blacklist); catching the
+                // obvious half of it here saves a round trip through its CLI.
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "password must be at least 8 characters and contain letters and digits");
+                return;
+            }
+            try {
+                resetOctopPassword(instance, ref.root(), home, username, next);
+                writeAdminCredentials(home, username, next);
+            } catch (IOException e) {
+                Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+                return;
+            }
+            AuditLog.log(AuditLog.Channel.WEB, "brand.admin-password", brand.id() + "/" + id,
+                    "reset", actorOf(request), request.getRemoteAddr());
+            LOG.info("Reset the Octop admin password for instance " + id);
+            password = next;
+        }
+
+        if (password == null) {
+            // Not an error: Octop keeps only a hash, and a password set in its own wizard or web
+            // console is not knowable from the panel. Say so, and let the page offer a reset.
+            JsonObject result = new JsonObject();
+            result.addProperty("username", username);
+            result.add("password", JsonNull.INSTANCE);
+            result.addProperty("reset", false);
+            result.addProperty("readable", false);
+            Json.write(response, result);
+            return;
+        }
+        JsonObject result = new JsonObject();
+        result.addProperty("username", username);
+        result.addProperty("password", password);
+        result.addProperty("readable", true);
+        result.addProperty("reset", reset);
+        Json.write(response, result);
+    }
+
+    /// Whether the instance is still inside the "just created" window, where showing the generated
+    /// password needs no second factor.
+    private static boolean firstRunWindow(BrandInstance instance) {
+        return System.currentTimeMillis() - instance.createdAt() < 15 * 60 * 1000L;
+    }
+
+    /// Refuses a credentials request that has not proven the developer password — or, on a panel
+    /// without HTTPS, the panel password, because there is nothing to elevate over there.
+    private boolean authorizeSecretAccess(HttpServletRequest request, HttpServletResponse response,
+                                          @Nullable JsonObject body) throws IOException {
+        if (org.jackhuang.hmcl.web.http.RequestSecurity.isSecure(request,
+                tlsActive.getAsBoolean(), config)) {
+            if (developerElevation.require(keyOf(request), sessionAlive(request))) {
+                return true;
+            }
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return false;
+        }
+        String adminPassword = body == null ? null : stringField(body, "adminPassword");
+        if (adminPassword == null || adminPassword.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_UNAUTHORIZED,
+                    "panel_password_required: this panel has no HTTPS; confirm with the panel password");
+            return false;
+        }
+        return confirmPanelPassword(request, response, adminPassword);
+    }
+
+    /// Verifies the panel password, with the same per-address throttle the developer page uses.
+    private boolean confirmPanelPassword(HttpServletRequest request, HttpServletResponse response,
+                                         String adminPassword) throws IOException {
+        String address = request.getRemoteAddr();
+        String key = address == null || address.isBlank() ? "unknown" : address;
+        java.time.Instant now = java.time.Instant.now();
+        if (adminPasswordThrottle.isBlocked(key, now)) {
+            response.setHeader("Retry-After",
+                    Long.toString(Math.max(1, adminPasswordThrottle.block().toSeconds())));
+            Json.error(response, 429, "too many failed panel-password attempts; try again later");
+            return false;
+        }
+        org.jackhuang.hmcl.web.auth.UserStore users = auth.userStore();
+        org.jackhuang.hmcl.web.auth.UserStore.User admin = users.admin();
+        if (admin != null && users.verify(admin.username(), adminPassword)) {
+            adminPasswordThrottle.clear(key);
+            return true;
+        }
+        java.time.Duration refused = adminPasswordThrottle.recordFailure(key, java.time.Instant.now());
+        if (refused.isZero()) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN, "the panel password does not match");
+        } else {
+            response.setHeader("Retry-After", Long.toString(Math.max(1, refused.toSeconds())));
+            Json.error(response, 429, "too many failed panel-password attempts; try again later");
+        }
+        return false;
+    }
+
+    /// The lines of a credential file, or an empty list when it does not exist.
+    private static List<String> readCredentialFile(Path file) {
+        if (!Files.isRegularFile(file)) {
+            return List.of();
+        }
+        try {
+            return Files.readAllLines(file, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return List.of();
+        }
+    }
+
+    /// The value after `prefix` in a `Key: value` line, or `null` when the line is something else.
+    private static @Nullable String credentialValue(String line, String prefix) {
+        return line.startsWith(prefix) ? line.substring(prefix.length()).trim() : null;
+    }
+
+    /// Writes the new password where both the panel and Octop's own documentation look for it.
+    ///
+    /// `octop-admin.txt` is the panel's record; `credential.txt` is Octop's (`<OCTOP_HOME>/credential.txt`,
+    /// the file its entrypoint writes and its docs tell people to `cat`). No URL is written: the panel
+    /// does not know which hostname the instance will be opened under, and a wrong one misleads.
+    private static void writeAdminCredentials(Path home, String username, String password)
+            throws IOException {
+        Path file = home.resolve("octop-admin.txt");
+        Files.writeString(file, "username: " + username + "\npassword: " + password + "\n",
+                StandardCharsets.UTF_8);
+        restrictToOwner(file);
+        Path credential = home.resolve("credential.txt");
+        Files.writeString(credential, "Octop Login Credential\n"
+                + "======================\n"
+                + "Username: " + username + "\n"
+                + "Password: " + password + "\n\n"
+                + "Rewritten by the hdsl-web panel's password reset.\n"
+                + "A password changed in Octop's web console wins over this file.\n",
+                StandardCharsets.UTF_8);
+        restrictToOwner(credential);
+    }
+
+    private static void restrictToOwner(Path file) {
+        try {
+            Files.setPosixFilePermissions(file,
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+        } catch (UnsupportedOperationException | IOException ignored) {
+            // Windows has no POSIX modes; a volume that refuses the chmod is still confined to the
+            // instance directory.
+        }
+    }
+
+    /// Runs `octop user passwd <username> --password <pw>` with the instance's own environment.
+    private static void resetOctopPassword(BrandInstance instance, Path brandRoot, Path home,
+                                           String username, String password) throws IOException {
+        Path packageDir = BrandInstaller.packageDir(Brand.OCTOP, brandRoot, instance.version());
+        if (packageDir == null) {
+            throw new IOException("Octop " + instance.version() + " is not installed");
+        }
+        List<String> command = new java.util.ArrayList<>();
+        Path sourceOctop = packageDir.resolve(".venv/bin/octop");
+        if (Files.isRegularFile(sourceOctop)) {
+            command.add(sourceOctop.toString());
+        } else {
+            Path launch = packageDir.resolve("launch.py");
+            if (!Files.isRegularFile(launch)) {
+                throw new IOException("Octop launcher not found: " + launch);
+            }
+            command.add(BrandRuntime.octopPython(packageDir).toString());
+            command.add(launch.toString());
+        }
+        command.addAll(List.of("user", "passwd", username, "--password", password));
+
+        ProcessBuilder builder = new ProcessBuilder(command);
+        builder.directory(home.toFile());
+        builder.redirectErrorStream(true);
+        builder.environment().put("OCTOP_HOME", home.toString());
+        Process process = builder.start();
+        StringBuilder output = new StringBuilder();
+        Thread reader = new Thread(() -> {
+            try (java.io.BufferedReader lines = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = lines.readLine()) != null) {
+                    synchronized (output) {
+                        if (output.length() < 4000) {
+                            output.append(line).append('\n');
+                        }
+                    }
+                }
+            } catch (IOException ignored) {
+                // The exit code is what matters.
+            }
+        }, "brand-admin-password");
+        reader.setDaemon(true);
+        reader.start();
+        boolean finished;
+        try {
+            finished = process.waitFor(90, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            process.destroyForcibly();
+            throw new IOException("octop user passwd was interrupted", e);
+        }
+        if (!finished) {
+            process.descendants().forEach(java.lang.ProcessHandle::destroyForcibly);
+            process.destroyForcibly();
+            throw new IOException("octop user passwd timed out");
+        }
+        String text;
+        synchronized (output) {
+            text = output.toString().trim();
+        }
+        if (process.exitValue() != 0) {
+            throw new IOException("octop user passwd failed (exit " + process.exitValue() + "): "
+                    + (text.isEmpty() ? "no output" : text));
+        }
+    }
+
+    /// A 16-character password with letters and digits, for the "reset" without a typed value.
+    private static String randomPassword() {
+        String alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+        java.security.SecureRandom random = new java.security.SecureRandom();
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < 16; i++) {
+            text.append(alphabet.charAt(random.nextInt(alphabet.length())));
+        }
+        return text.toString();
+    }
+
+    /// Reads a body when there is one; `null` otherwise (read requests may carry none).
+    private static @Nullable JsonObject optionalBody(HttpServletRequest request) throws IOException {
+        String text = new String(request.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        if (text.isBlank()) {
+            return null;
+        }
+        try {
+            com.google.gson.JsonElement parsed = JsonParser.parseString(text);
+            return parsed.isJsonObject() ? parsed.getAsJsonObject() : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static String keyOf(HttpServletRequest request) {
+        Object token = request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE);
+        return org.jackhuang.hmcl.web.developer.DeveloperElevation.key(
+                token instanceof String value ? value : null, request.getRemoteAddr());
+    }
+
+    private boolean sessionAlive(HttpServletRequest request) {
+        Object token = request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE);
+        return !(token instanceof String value) || value.isBlank() || auth.isAlive(value);
     }
 
     // --------------------------------------------------------------- response --

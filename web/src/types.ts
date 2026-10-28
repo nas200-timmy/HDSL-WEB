@@ -524,6 +524,16 @@ export interface BrandVersions {
   default: string | null;
 }
 
+/// 品牌实例自己的管理员凭据（目前只有 Octop 有）。
+export interface BrandAdminCredentials {
+  username: string;
+  /// Octop 只存哈希：面板没记录过的密码（网页向导里设的）读不出来，此时为 null
+  password: string | null;
+  /// 密码是否可读；false 时页面只提供重置
+  readable?: boolean;
+  reset?: boolean;
+}
+
 /// GET /api/brands/<brand>/install：安装任务状态
 export interface BrandInstallStatus {
   state: "running" | "done" | "failed" | "none";

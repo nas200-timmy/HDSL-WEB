@@ -171,6 +171,53 @@ class BrandApiTest {
         return JsonParser.parseString(response.body()).getAsJsonObject().getAsJsonObject("instance");
     }
 
+    /// The Octop credential route: Octop keeps only a hash, so the panel can show what it recorded
+    /// (its own `octop-admin.txt` or Octop's `credential.txt`) and otherwise says "not readable";
+    /// every reset goes through `octop user passwd` and needs the second factor.
+    @Test
+    void octopAdminPasswordIsReadableFromItsOwnFileAndResetsNeedAConfirmation() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpClient client = TestSupport.client();
+            Path release = dataDir.resolve("brands/octop/releases/1.0.3b1");
+            Files.createDirectories(release);
+            Files.writeString(release.resolve("octop-install.json"),
+                    "{\"mode\":\"package\",\"version\":\"1.0.3b1\"}\n");
+            HttpResponse<String> created = post(client, running, "/api/brands/octop/instances",
+                    "{\"name\":\"A\",\"version\":\"1.0.3b1\"}");
+            assertEquals(201, created.statusCode(), created.body());
+            String id = JsonParser.parseString(created.body()).getAsJsonObject()
+                    .getAsJsonObject("instance").get("id").getAsString();
+            String path = "/api/brands/octop/instances/" + id + "/admin-password";
+
+            // Nothing recorded yet: "not readable" is an answer, not an error.
+            JsonObject empty = JsonParser.parseString(
+                    post(client, running, path, "{}").body()).getAsJsonObject();
+            assertEquals(false, empty.has("password") && !empty.get("password").isJsonNull());
+            assertEquals("admin", empty.get("username").getAsString());
+
+            // Octop's own credential file is what its docs tell people to cat.
+            Path home = dataDir.resolve("brands/octop/instances").resolve(id).resolve("home");
+            Files.createDirectories(home);
+            Files.writeString(home.resolve("credential.txt"),
+                    "Octop Login Credential\n======================\n"
+                            + "Username: admin\nPassword: s3cret-pass1\n");
+            JsonObject read = JsonParser.parseString(
+                    post(client, running, path, "{}").body()).getAsJsonObject();
+            assertEquals("s3cret-pass1", read.get("password").getAsString());
+            assertEquals(true, read.get("readable").getAsBoolean());
+
+            // A reset is never in the first-run window, and this panel has no HTTPS: the panel
+            // password is the only second factor it can ask for.
+            HttpResponse<String> refused = post(client, running, path, "{\"password\":\"newpass123\"}");
+            assertEquals(401, refused.statusCode(), refused.body());
+            assertTrue(refused.body().contains("panel_password_required"), refused.body());
+
+            // Other brands do not have an Octop admin account.
+            assertEquals(400, post(client, running,
+                    "/api/brands/kimi/instances/" + id + "/admin-password", "{}").statusCode());
+        }
+    }
+
     private static HttpResponse<String> get(TestSupport.RunningServer running, String path)
             throws Exception {
         return TestSupport.client().send(HttpRequest.newBuilder(
