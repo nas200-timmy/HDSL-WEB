@@ -42,9 +42,23 @@ src/main/resources/octop/octop-dashboard-<version>.zip
 1. 构建用相对 base，代理在 `index.html` 注入 `<base href="${basePath}/i/<token>/">`
    和 `window.__OCTOP_BASE__`；
 2. `auth_token`、`octop:active-agent` 等 localStorage key 按挂载点命名空间化；
-3. **静态资源走 `publicUrl()`**：上游把空状态吉祥物、欢迎页动画、侧栏图标、专家/团队头像写成根绝对
-   路径（`/octop-mascot-empty.png` 等），`<base>` 对它们无效，请求会落到面板根并拿回 SPA 外壳
-   （200 + `text/html`）——表现就是一片破图。
+3. **所有 URL 走 `publicUrl()` / `getApiUrl()` / `getWsUrl()`**：这三张门是唯一会读挂载点的地方。
+
+### 挂载点不变量（一次查完，别再一个个补）
+
+`<base>` 只对**相对**路径生效。任何写成根绝对的地方都会落到面板根：静态资源拿回 SPA 外壳
+（200 + `text/html`，浏览器当图片解码 → 破图），`/api/*` 撞的是面板自己的接口，WebSocket 根本
+升级不了。已修的三类：
+
+| 类别 | 例子 | 修法 |
+|---|---|---|
+| 硬跳转 | `window.location.href = "/chat"`、`location.replace("/login"｜"/setup")` | `publicUrl("chat")` |
+| 裸链接 | `<a href="/admin/models">` | `<Link to>`（router basename 自动生效） |
+| 手拼 socket | `ws://host/api/agents/…/chat/ws`（chat、终端、ADB、桌面/手机/浏览器串流共 6 处） | `getWsUrl("/…")` |
+
+`integrations/octop/check-mount-escapes.sh` 把这三类（外加 `src="/…"`、`fetch("/api…")`、
+`window.open("/…")`）做成**构建期闸门**：`build-dashboard.sh` 在打完补丁后先跑它，命中任何一条
+就让打包失败。这样新增的根绝对路径不会等到用户点开页面才发现。
 
 补丁源码在 `integrations/octop/patches/`（见该目录 README），构建产物就是上面的
 `octop-dashboard-<version>.zip`。
@@ -85,7 +99,8 @@ Octop 的管理员账号是它自己的一层，和面板账号无关。面板�
 - **固定反代 `/i/octop/` 是"入口"，不只是别名**：开启后，保留实例的「打开」按钮与 `POST
   .../octop/instances/<id>/open` 返回的 URL 都会变成 `<base>/i/octop/`；关闭后回到 `/i/<token>/`。
 - **本地源码编译**（仅 Linux）：下载 tag 源码（走「源码归档」那个 base，默认 codeload），应用
-  dashboard 补丁，`npm ci && build`，再从配置的 PyPI 镜像取 uv、下载 Python 3.12 并 `uv sync`；
+  dashboard 补丁，`npm ci` 后跑 `npm run build`（含 `tsc` 类型检查），再从配置的 PyPI 镜像取 uv、
+  下载 Python 3.12 并 `uv sync`；
   失败会恢复原预编译 release。构建完删除 `node_modules`，源码 release 约 2.8 GiB。
 
 ### 源码编译的真实成本（先看完再点）
@@ -97,8 +112,12 @@ Octop 的管理员账号是它自己的一层，和面板账号无关。面板�
 - **可能要 1 小时以上**：冷缓存 + 慢盘（写盘 ~100 KB/s 时，`playwright/driver/node` 这一个文件
   就写了 45 分钟）实测 55 分钟还没进 `uv sync` 收尾；换成热缓存重跑约 9 分钟。
 - **额外磁盘约 3 GiB**：uv 缓存约 2.7 GiB + 源码 release 约 2.8 GiB（构建完会删 `node_modules`）。
-- **没有取消入口**：任务面板只有一行滚动文本、进度条是未知（`fraction: -1`），中途想停只能停面板
-  进程——**那样会留下半安装**（见下）。
+- **dashboard 这一步含类型检查**：走 `npm run build`（`tsc -b && vite build`），不是上游的
+  `build:docker`。多花 30–60 秒，换来「缺 import、未使用变量、类型不匹配」在安装期就失败——
+  这类错误以前要等用户点进页面看到白屏才暴露。前提是 `npm ci` 装了 devDependencies：
+  宿主**不要**设 `NODE_ENV=production`（或给 `npm ci` 加 `--include=dev`），否则 `typescript` 不在。
+- **进度与停止**：面板显示阶段（下载 → 解包写盘 → 编译 → `uv sync`）、速度与逐包日志；
+  「停止」会杀掉构建起的进程树并中断下载，半成品由启动时的对账清理。
 
 ### 半安装与自动修复
 

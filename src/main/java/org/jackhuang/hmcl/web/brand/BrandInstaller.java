@@ -1218,8 +1218,12 @@ public final class BrandInstaller {
                                         dashboard, npmEnv, log, message, "installing dashboard dependencies")));
         npmEnv.put("VITE_BASE_PATH", "./");
         npmEnv.put("NODE_OPTIONS", "--max-old-space-size=2048");
-        stage(message, 3, total, "构建 dashboard", 0.42, 0.15, 90, () ->
-                runChecked(List.of("npm", "run", "build:docker"),
+        // `build`, not `build:docker`: the former is `tsc -b && vite build`, and Octop's tsconfig
+        // is strict + noUnusedLocals/Parameters. Thirty seconds of type checking during a
+        // fifty-minute install buys "a missing import fails the install" instead of "the user
+        // opens the page and sees a blank screen" — the TeamDrawer `Link` import was exactly that.
+        stage(message, 3, total, "构建 dashboard（含类型检查）", 0.42, 0.15, 150, () ->
+                runChecked(List.of("npm", "run", "build"),
                         dashboard, npmEnv, log, message, "building the dashboard"));
         // The built SPA is under src/octop/dashboard; the 4+ GiB dependency
         // tree is no longer needed by the runtime or a future launch.

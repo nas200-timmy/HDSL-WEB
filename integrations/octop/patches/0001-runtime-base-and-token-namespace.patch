@@ -1,11 +1,30 @@
+diff --git a/dashboard/src/api/modules/wsChat.ts b/dashboard/src/api/modules/wsChat.ts
+index e75ad72..ec1fa5a 100644
+--- a/dashboard/src/api/modules/wsChat.ts
++++ b/dashboard/src/api/modules/wsChat.ts
+@@ -1,10 +1,12 @@
++import { getWsUrl } from "../config";
+ import { getAuthToken } from "../request";
+ 
+ export function buildDashboardChatWsUrl(agentId: string): string {
+   const token = getAuthToken();
+-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+   const encoded = encodeURIComponent(agentId);
+-  const base = `${protocol}://${window.location.host}/api/agents/${encoded}/chat/ws`;
++  // getWsUrl honours the mount (`/i/<token>/`) that the panel proxies this instance under;
++  // a hand-built `ws://host/api/...` lands on the panel's own API and the upgrade fails.
++  const base = getWsUrl(`/agents/${encoded}/chat/ws`);
+   const params = new URLSearchParams();
+   if (token) params.set("token", token);
+   return params.toString() ? `${base}?${params.toString()}` : base;
 diff --git a/dashboard/src/api/request.ts b/dashboard/src/api/request.ts
-index 7afb709..2bd1577 100644
+index 7afb709..9fd9f1d 100644
 --- a/dashboard/src/api/request.ts
 +++ b/dashboard/src/api/request.ts
 @@ -1,10 +1,18 @@
  import { getApiUrl } from "./config";
  import i18n from "../i18n";
-+import { routerBasename } from "../utils/publicUrl";
++import { publicUrl, routerBasename } from "../utils/publicUrl";
  import { markNavigatingAway } from "../utils/reloadOnStaleChunk";
  
 -const AUTH_TOKEN_KEY = "auth_token";
@@ -32,6 +51,26 @@ index 7afb709..2bd1577 100644
    setActiveAgentId(null);
  }
  
+@@ -128,8 +136,8 @@ function handleSetupRequired(): void {
+     return;
+   }
+   _redirectingToSetup = true;
+-  // Full reload drops any in-flight React state.
+-  window.location.replace("/setup");
++  // Full reload drops any in-flight React state. Stay inside the panel mount.
++  window.location.replace(publicUrl("setup"));
+ }
+ 
+ /** Wizard endpoints stay reachable while lockdown is active. */
+@@ -326,7 +334,7 @@ function handleUnauthorized(): void {
+   if (takenOver) return;
+ 
+   markNavigatingAway();
+-  window.location.replace("/login");
++  window.location.replace(publicUrl("login"));
+ }
+ 
+ /**
 diff --git a/dashboard/src/assets/mascot.ts b/dashboard/src/assets/mascot.ts
 index d8ae9a9..321d062 100644
 --- a/dashboard/src/assets/mascot.ts
@@ -128,6 +167,66 @@ index 32202c7..826894f 100644
  
  /**
   * Pure helper: narrow ``agents`` down to those that are "enabled" for the
+diff --git a/dashboard/src/hooks/useBrowserStream.ts b/dashboard/src/hooks/useBrowserStream.ts
+index 1f4f96b..de31a75 100644
+--- a/dashboard/src/hooks/useBrowserStream.ts
++++ b/dashboard/src/hooks/useBrowserStream.ts
+@@ -1,4 +1,5 @@
+ import { useState, useRef, useCallback, useEffect } from "react";
++import { getWsUrl } from "../api/config";
+ import { getAuthToken } from "../api/request";
+ import { normalizeUrl } from "../utils/normalizeUrl";
+ import {
+@@ -46,8 +47,7 @@ function buildWsUrl(
+         bridgeConnectionId,
+       )}/browser-stream/ws`
+     : "/browser-stream/ws";
+-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+-  const base = `${protocol}://${window.location.host}/api${path}`;
++  const base = getWsUrl(path);
+   const params = new URLSearchParams({
+     width: String(width),
+     height: String(height),
+diff --git a/dashboard/src/hooks/useDesktopStream.ts b/dashboard/src/hooks/useDesktopStream.ts
+index 94d1668..1934eef 100644
+--- a/dashboard/src/hooks/useDesktopStream.ts
++++ b/dashboard/src/hooks/useDesktopStream.ts
+@@ -1,4 +1,5 @@
+ import { useCallback, useEffect, useRef, useState } from "react";
++import { getWsUrl } from "../api/config";
+ import { getAuthToken } from "../api/request";
+ 
+ export type DesktopStreamState =
+@@ -37,8 +38,7 @@ const MAX_RECONNECT_ATTEMPTS = 5;
+ const RECONNECT_BASE_MS = 1000;
+ 
+ function buildWsUrl(): string {
+-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+-  return `${protocol}://${window.location.host}/api/desktop-stream/ws`;
++  return getWsUrl("/desktop-stream/ws");
+ }
+ 
+ function closeSocket(ws: WebSocket): Promise<void> {
+diff --git a/dashboard/src/hooks/useMobileStream.ts b/dashboard/src/hooks/useMobileStream.ts
+index d31c918..796953a 100644
+--- a/dashboard/src/hooks/useMobileStream.ts
++++ b/dashboard/src/hooks/useMobileStream.ts
+@@ -1,4 +1,5 @@
+ import { useCallback, useRef, useState } from "react";
++import { getWsUrl } from "../api/config";
+ import { getAuthToken } from "../api/request";
+ import { H264CanvasDecoder, parseVideoInit } from "../utils/h264CanvasDecoder";
+ 
+@@ -20,8 +21,7 @@ export interface MobileStreamOptions {
+ }
+ 
+ function buildWsUrl(): string {
+-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+-  return `${protocol}://${window.location.host}/api/mobile-stream/ws`;
++  return getWsUrl("/mobile-stream/ws");
+ }
+ 
+ export function useMobileStream() {
 diff --git a/dashboard/src/layouts/Sidebar.tsx b/dashboard/src/layouts/Sidebar.tsx
 index e11f753..233cb42 100644
 --- a/dashboard/src/layouts/Sidebar.tsx
@@ -159,6 +258,52 @@ index 00e07a0..fb95d93 100644
  const MASCOT_IMAGES = [MASCOT_PEEK, MASCOT_TYPE];
  
  function getRandomMascot(current?: string): string {
+diff --git a/dashboard/src/pages/Control/RemoteAndroid/useAdbShell.ts b/dashboard/src/pages/Control/RemoteAndroid/useAdbShell.ts
+index 17f5977..4beba94 100644
+--- a/dashboard/src/pages/Control/RemoteAndroid/useAdbShell.ts
++++ b/dashboard/src/pages/Control/RemoteAndroid/useAdbShell.ts
+@@ -1,4 +1,5 @@
+ import { useCallback, useEffect, useRef, useState } from "react";
++import { getWsUrl } from "../../../api/config";
+ import { getAuthToken } from "../../../api/request";
+ 
+ export type AdbShellState = "idle" | "connecting" | "connected" | "error";
+@@ -10,10 +11,7 @@ function buildWsUrl(serial: string, cols: number, rows: number): string {
+   params.set("serial", serial);
+   params.set("cols", String(cols));
+   params.set("rows", String(rows));
+-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+-  return `${protocol}://${
+-    window.location.host
+-  }/api/mobile/adb/shell/ws?${params.toString()}`;
++  return `${getWsUrl("/mobile/adb/shell/ws")}?${params.toString()}`;
+ }
+ 
+ export function useAdbShell() {
+diff --git a/dashboard/src/pages/Control/Terminal/useTerminal.ts b/dashboard/src/pages/Control/Terminal/useTerminal.ts
+index aabf256..683b336 100644
+--- a/dashboard/src/pages/Control/Terminal/useTerminal.ts
++++ b/dashboard/src/pages/Control/Terminal/useTerminal.ts
+@@ -7,6 +7,7 @@
+  * Output is multi-cast to every registered UI listener.
+  */
+ import { useCallback, useEffect, useSyncExternalStore } from "react";
++import { getWsUrl } from "../../../api/config";
+ import { getAuthToken } from "../../../api/request";
+ 
+ // ─── Types ────────────────────────────────────────────────────────────────────
+@@ -103,10 +104,7 @@ function generateId(): string {
+ 
+ function buildWsUrl(agentId: string, sessionId: string): string {
+   const token = getAuthToken();
+-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+-  const base = `${protocol}://${
+-    window.location.host
+-  }/api/agents/${encodeURIComponent(agentId)}/terminal/ws`;
++  const base = getWsUrl(`/agents/${encodeURIComponent(agentId)}/terminal/ws`);
+   const params = new URLSearchParams();
+   if (token) params.set("token", token);
+   // Same id re-attaches to the backend shell.
 diff --git a/dashboard/src/pages/Experts/components/CreateFromExpertDrawer.tsx b/dashboard/src/pages/Experts/components/CreateFromExpertDrawer.tsx
 index 7962174..0f9e41d 100644
 --- a/dashboard/src/pages/Experts/components/CreateFromExpertDrawer.tsx
@@ -206,6 +351,24 @@ index cc136df..3c44358 100644
            }
            style={{ marginBottom: 16 }}
          />
+diff --git a/dashboard/src/pages/Login/index.tsx b/dashboard/src/pages/Login/index.tsx
+index a8ead51..63e7409 100644
+--- a/dashboard/src/pages/Login/index.tsx
++++ b/dashboard/src/pages/Login/index.tsx
+@@ -174,7 +174,12 @@ export default function LoginPage() {
+       if (event.data.access_token) {
+         setAuthToken(event.data.access_token, event.data.remember ?? true);
+       }
+-      window.location.replace(event.data.redirect || "/chat");
++      // The redirect may be a path inside the mount or a full external URL (SSO). Prefix the
++      // former, leave the latter alone — a bare "/chat" used to leave /i/<token>/ entirely.
++      const redirect = event.data.redirect as string | undefined;
++      const target =
++        redirect && redirect.startsWith("/") ? publicUrl(redirect) : redirect || publicUrl("chat");
++      window.location.replace(target);
+     };
+     window.addEventListener("message", onMessage);
+     return () => window.removeEventListener("message", onMessage);
 diff --git a/dashboard/src/utils/publicUrl.ts b/dashboard/src/utils/publicUrl.ts
 index 3ada3ca..31acbf9 100644
 --- a/dashboard/src/utils/publicUrl.ts

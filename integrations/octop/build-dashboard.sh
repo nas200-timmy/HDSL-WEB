@@ -27,12 +27,17 @@ echo "[octop] applying dashboard patch"
 git -C "${SOURCE}" apply --whitespace=nowarn "${PATCH}" 2>/dev/null \
   || (cd "${SOURCE}" && patch -p1 < "${PATCH}")
 
+echo "[octop] checking for URLs that would leave the panel mount"
+"${ROOT}/integrations/octop/check-mount-escapes.sh" "${SOURCE}"
+
 echo "[octop] installing dashboard dependencies"
 cd "${SOURCE}/dashboard"
 npm ci --no-audit --no-fund
 
-echo "[octop] building dashboard (relative base)"
-VITE_BASE_PATH=./ NODE_OPTIONS="--max-old-space-size=2048" npm run build:docker
+# `build`, not `build:docker`: tsc catches a missing import or a type mismatch here instead of
+# letting the user find a blank page. Costs ~40 s out of a very long source build.
+echo "[octop] building dashboard (relative base, with type check)"
+VITE_BASE_PATH=./ NODE_OPTIONS="--max-old-space-size=2048" npm run build
 
 echo "[octop] packing ${OUT}"
 rm -f "${OUT}"

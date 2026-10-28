@@ -283,6 +283,33 @@ HDSL_DATA=/tmp/panel HDSL_PORT=<随机空闲端口> HDSL_BIND_HOST=127.0.0.1 \
 - **做法**：新增设置要在三处一起改——字段 + `Snapshot.of()` 抄值 + `Snapshot.applyTo()` 回填；
   测试里直接断言 `launcher-settings.json` 的文本包含该键。
 
+### 5.7.3 源码构建 dashboard 要用会做类型检查的脚本
+- **现象**：安装成功、实例能启动，用户点进页面却是白屏或整片破图；控制台里缺 `Link`、某张图走的是
+  根绝对路径。
+- **根因**：上游 `dashboard/package.json` 有两个构建脚本——`build`（`tsc -b && vite build`）与
+  `build:docker`（只有 `vite build`，给容器省时间）。面板源码构建用了后者，`tsconfig` 里的
+  `strict` + `noUnusedLocals` + `noUnusedParameters` 全被跳过，补丁里少一个 import、多一个未使用
+  变量都不会报错。
+- **做法**：跑 `npm run build`。多花 30–60 秒，换来「缺 import / 类型不匹配 / 未使用变量」在安装期
+  就失败。前提是 devDependencies 装了：`npm ci` 别带 `--omit=dev`，宿主别设 `NODE_ENV=production`，
+  否则 `typescript` 不在（已实测：干净 tag 树 + 补丁，`npm ci` 8 秒、`tsc + vite build` 41 秒）。
+
+### 5.7.4 挂载点逃逸：一次查完，并用闸门挡住新增
+- **现象**：`<base href>` 明明注入了，还是有整片破图；点「没有可用模型」跳回面板首页；聊天/终端
+  的 WebSocket 连不上（连到的是面板自己的 `/api`）；登录后回到面板外壳而不是实例。
+- **根因**：`<base>` 只影响**相对**路径。上游到处都是根绝对的写法——`<a href="/admin/models">`、
+  `window.location.replace("/login"｜"/setup")`、`const base = ws://host/api/...`。
+  静态资源命中面板的 SPA 外壳（200 + `text/html`，浏览器按图片解码失败）；socket 撞上不升级的
+  `/api`。
+- **做法**（三类，改动只在补丁里）：
+  1. 硬跳转 → `publicUrl("chat")`；
+  2. 裸链接 → `<Link to>`（router basename 生效）；
+  3. 手拼 socket → `getWsUrl("/…")`（`api/config.ts` 已经处理 basename 与 ws/wss）。
+- **闸门**：`integrations/octop/check-mount-escapes.sh` 对打完补丁的 `dashboard/src` 扫六种模式
+  （硬跳转、`href="/`、`src="/`、`location.host}/api`、`fetch("/api`、`window.open("/`），
+  `build-dashboard.sh` 里先跑它再 `npm ci`，命中就让打包失败。新增的后端响应 URL、静态资源、
+  新 socket 都不要再手工拼 `/api`。
+
 ### 5.8 子进程与超时
 - **现象**：`octop init` 卡住一小时，面板永远起不来；设置了 120 秒超时却从不触发。
 - **根因**：先 `readAllBytes()` 再 `waitFor(timeout)`，读永不返回。
