@@ -232,7 +232,9 @@ public final class BrandInstaller {
                 throw new BrandException("Download answered " + response.statusCode() + ": " + url);
             }
             long total = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
-            return new ProgressStream(response.body(), message, label, total);
+            ProgressStream stream = new ProgressStream(response.body(), message, label, total);
+            stream.watchCancellation();
+            return stream;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BrandException("Download was interrupted: " + url, e);
@@ -275,7 +277,12 @@ public final class BrandInstaller {
             return n;
         }
 
-        private void tick(int n) {
+        private void tick(int n) throws java.io.IOException {
+            // The task's cancel flag is the only thing a blocking read can notice here: the socket
+            // belongs to an HttpClient, not to a child process the task service could kill.
+            if (message.cancelled()) {
+                throw new java.io.IOException("cancelled");
+            }
             read += n;
             long now = System.currentTimeMillis();
             if (now - lastReport < 500) {
@@ -290,6 +297,38 @@ public final class BrandInstaller {
                 message.accept(label + "：" + megabytes(read));
             }
         }
+
+        /// Closes the stream as soon as the task is cancelled.
+        ///
+        /// A read that is waiting on a server which never sends another byte cannot notice the
+        /// flag, so a cancel needs somebody to shut the socket; otherwise "stop" only takes effect
+        /// when the HTTP timeout does, minutes later.
+        void watchCancellation() {
+            Thread watcher = new Thread(() -> {
+                try {
+                    while (!closed && !message.cancelled()) {
+                        Thread.sleep(500);
+                    }
+                    if (!closed) {
+                        close();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } catch (java.io.IOException ignored) {
+                    // Closing an already-broken stream is the outcome we wanted anyway.
+                }
+            }, "brand-install-cancel");
+            watcher.setDaemon(true);
+            watcher.start();
+        }
+
+        @Override
+        public void close() throws java.io.IOException {
+            closed = true;
+            super.close();
+        }
+
+        private volatile boolean closed;
     }
 
     private static String megabytes(long bytes) {
@@ -704,6 +743,10 @@ public final class BrandInstaller {
         } finally {
             if (complete) {
                 FileUtils.deleteDirectoryQuietly(backup);
+                // The pointer is what the page shows as 「当前」 and what an older default used;
+                // a source build used to leave it on the release it had just deleted, which made a
+                // finished build look like it had never happened.
+                pointCurrentAt(brandRoot, target);
             } else {
                 FileUtils.deleteDirectoryQuietly(target);
                 if (Files.exists(backup)) {

@@ -202,4 +202,38 @@ class BrandApiTest {
         }
         return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
+
+    /// A version counts only when its install marker is on disk: that is what the create form is
+    /// built from, so a finished build that lost its marker (or a half-installed directory left by
+    /// a killed JVM) must not be offered, and one that has it must be creatable — including when
+    /// the version string arrives with padding.
+    @Test
+    void aReleaseIsCreatableExactlyWhenItsMarkerIsThere() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpClient client = TestSupport.client();
+            Path release = dataDir.resolve("brands/octop/releases/1.0.3b1");
+            Files.createDirectories(release);
+
+            // Half-installed: the directory exists, the marker does not.
+            JsonObject before = JsonParser.parseString(get(running, "/api/brands/octop/versions").body())
+                    .getAsJsonObject();
+            assertTrue(before.getAsJsonArray("releases").isEmpty(), before.toString());
+            HttpResponse<String> refused = post(client, running, "/api/brands/octop/instances",
+                    "{\"name\":\"A\",\"version\":\"1.0.3b1\"}");
+            assertEquals(400, refused.statusCode(), refused.body());
+            assertTrue(refused.body().contains("is not installed"), refused.body());
+
+            // The marker is the whole difference.
+            Files.writeString(release.resolve("octop-install.json"),
+                    "{\"mode\":\"package\",\"version\":\"1.0.3b1\"}\n");
+            JsonObject after = JsonParser.parseString(get(running, "/api/brands/octop/versions").body())
+                    .getAsJsonObject();
+            assertEquals(1, after.getAsJsonArray("releases").size(), after.toString());
+            assertEquals("1.0.3b1", after.get("default").getAsString());
+
+            HttpResponse<String> created = post(client, running, "/api/brands/octop/instances",
+                    "{\"name\":\"A\",\"version\":\" 1.0.3b1 \"}");
+            assertEquals(201, created.statusCode(), created.body());
+        }
+    }
 }

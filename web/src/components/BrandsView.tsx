@@ -292,6 +292,26 @@ function VersionCard({
   }, [installLog, installLogOpen]);
 
   // 安装中：每秒轮询安装状态；终态后刷新版本目录与实例（新版本可能马上被实例切过去）
+  // 挂载时先认领一次：刷新页面或从别的入口进来时，正在跑的安装也要显示进度与「停止」，
+  // 而不是等下一次点安装才冒出一句「已有安装在跑」。
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const st = await api.brandInstallStatus(brand);
+        if (!alive || st.state !== "running") return;
+        setInstalling(true);
+        setInstallTaskId(st.taskId ?? null);
+        setInstallStatus(st);
+      } catch {
+        // 读不到状态就什么也不改：页面本来就还有别的重试入口。
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [brand]);
+
   useEffect(() => {
     if (!installing) return;
     let alive = true;
@@ -577,7 +597,11 @@ function VersionCard({
                 </div>
               )}
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12 }}>
-                <span style={{ color: "var(--monet-on-surface-variant)" }}>已用 {formatElapsed(installElapsed)}</span>
+                {installStartedAt !== null && (
+                  <span style={{ color: "var(--monet-on-surface-variant)" }}>
+                    已用 {formatElapsed(installElapsed)}
+                  </span>
+                )}
                 {installEta && (
                   <span style={{ color: "var(--monet-on-surface-variant)" }}>预计剩余 {installEta}</span>
                 )}
@@ -851,7 +875,19 @@ function InstancesCard({
       setForm({ name: "", version: "" });
       await refreshExternal();
     } catch (e) {
-      toast("error", `创建失败：${errMsg(e)}`);
+      const raw = errMsg(e);
+      if (raw.includes("is being installed")) {
+        toast("error", "这个版本正在装，装完再创建实例");
+      } else if (raw.includes("is not installed")) {
+        // The list this form was built from did not have the version any more (a rebuild
+        // replaced the directory, or another page refreshed the releases). Re-read instead of
+        // leaving a select pointing at something the server cannot see.
+        setForm((f) => ({ ...f, version: "" }));
+        await reload();
+        toast("error", "这个版本已经不在已装列表里了（已重新读取），请再选一次");
+      } else {
+        toast("error", `创建失败：${raw}`);
+      }
     } finally {
       setBusy(false);
     }
@@ -988,8 +1024,16 @@ function InstancesCard({
     try {
       await api.brandInstall(brand, version);
     } catch (e) {
-      // 409（同品牌已有安装在进行）等：把后端给的原因原样带出来，实例版本不动
-      toast("error", `安装失败：${errMsg(e)}`);
+      // 409（同品牌已有安装在进行）等：把后端给的原因原样带出来，实例版本不动。
+      // 同一个版本的重复请求后端会直接接上那个任务（202），走不到这里；能到这里说明
+      // 正在装的是**另一个**版本，等它结束再切比排两个编译更靠谱。
+      const raw = errMsg(e);
+      toast(
+        "error",
+        raw.includes("already running")
+          ? `这个品牌正在安装另一个版本，等它结束再切换（${raw}）`
+          : `安装失败：${raw}`,
+      );
       setRowInstall(null);
       return;
     }

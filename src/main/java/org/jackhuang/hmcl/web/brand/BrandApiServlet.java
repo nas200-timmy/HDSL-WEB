@@ -301,9 +301,22 @@ public final class BrandApiServlet extends HttpServlet {
                 return;
             }
         }
-        if (tasks.activeInstall(brand.id()).isPresent()) {
+        java.util.Optional<TaskService.TaskInfo> running = tasks.activeInstall(brand.id());
+        if (running.isPresent()) {
+            TaskService.TaskInfo info = running.get();
+            // Asking for the version that is already being installed is not an error: the create
+            // and switch flows both land here, and failing them left the page saying "install
+            // failed" while an install was in fact under way. Hand back the live task instead.
+            if (info.result() != null && info.result().has("version")
+                    && target.equals(info.result().get("version").getAsString())) {
+                JsonObject attached = new JsonObject();
+                attached.addProperty("taskId", info.id());
+                attached.addProperty("alreadyRunning", true);
+                Json.write(response, attached);
+                return;
+            }
             Json.error(response, HttpServletResponse.SC_CONFLICT,
-                    "an install for " + brand.id() + " is already running");
+                    "an install for " + brand.id() + " is already running (" + info.message() + ")");
             return;
         }
         TaskService.Task task = tasks.submit("install", brand.id(), live -> {
@@ -323,6 +336,12 @@ public final class BrandApiServlet extends HttpServlet {
                     live.updateStage(stage, fraction);
                 }
             };
+            // What this task is installing, so a second request for the same version can attach
+            // to it instead of being told "already running".
+            JsonObject installing = new JsonObject();
+            installing.addProperty("version", target);
+            installing.addProperty("sourceBuild", sourceBuild);
+            live.attachResult(installing);
             try {
                 if (sourceBuild) {
                     BrandInstaller.installOctopSource(brand, target, ref.root(),
@@ -352,6 +371,7 @@ public final class BrandApiServlet extends HttpServlet {
             body.addProperty("fraction", -1);
             body.addProperty("stageFraction", -1);
         } else {
+            body.addProperty("taskId", info.id());
             body.addProperty("state", info.state().toLowerCase(java.util.Locale.ROOT));
             body.addProperty("message", info.message());
             body.addProperty("fraction", info.fraction());
@@ -397,6 +417,10 @@ public final class BrandApiServlet extends HttpServlet {
         }
         String name = stringField(body, "name");
         String version = stringField(body, "version");
+        if (version != null) {
+            // A padded value would fail the marker lookup for a version that is installed.
+            version = version.trim();
+        }
         if (version == null || version.isBlank()) {
             version = defaultVersion(ref);
         }
@@ -406,6 +430,17 @@ public final class BrandApiServlet extends HttpServlet {
             return;
         }
         if (BrandInstaller.packageDir(brand, ref.root(), version) == null) {
+            // A version that is being installed right now is not a mistake: saying so turns
+            // "creation is broken" into "wait a moment".
+            java.util.Optional<TaskService.TaskInfo> running = tasks.activeInstall(brand.id());
+            if (running.isPresent() && running.get().result() != null
+                    && running.get().result().has("version")
+                    && version.equals(running.get().result().get("version").getAsString())) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT,
+                        brand.sourceLabel() + " " + version + " is being installed ("
+                                + running.get().message() + "); create the instance when it finishes");
+                return;
+            }
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                     brand.sourceLabel() + " " + version + " is not installed");
             return;
