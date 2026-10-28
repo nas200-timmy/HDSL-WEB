@@ -1,4 +1,10 @@
-## 未发布 — Octop dashboard 的静态资源走运行时挂载点
+# 更新日志
+
+版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
+
+## v0.6.11 — 2026-10-29 · Octop 实例的登录密码在面板里就能看/重置
+
+### 同版本补丁：dashboard 的静态资源走运行时挂载点
 
 - 现象：实例页面能打开，但空状态吉祥物、欢迎页动画（peek/type）、侧栏收起时的图标、专家/团队
   卡通头像全是破图；`curl -D- https://<面板>/octop-mascot-empty.png` 回的是 `200 text/html`。
@@ -9,13 +15,7 @@
   `presetIdFromExpertAvatarUrl` 先剥掉挂载前缀再解析预设 id；`teamPortraitUrl` 的默认值比较同时
   接受带前缀与不带前缀两种历史值，避免已存的 `icon_url` 变成"自定义照片"。
 - 资源：`integrations/octop/patches/0001-…patch`、`src/main/resources/octop/octop-runtime-base.patch`
-  与 `octop-dashboard-1.0.3b1.zip` 一并重建。
-
-# 更新日志
-
-版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
-
-## v0.6.11 — 2026-10-29 · Octop 实例的登录密码在面板里就能看/重置
+  与 `octop-dashboard-1.0.3b1.zip` 一并重建（同版本重发，镜像与 jar 覆盖 `v0.6.11`）。
 
 - 实例行 → 更多 → **登录密码…**：读的是 Octop 自己的 `<OCTOP_HOME>/credential.txt`，其次面板
   首次启动记录的 `octop-admin.txt`；两边都没有明文时返回「不可读」（Octop 只存哈希）并引导重置，
