@@ -25,6 +25,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.URI;
@@ -127,6 +128,11 @@ public final class BrandRuntime {
     private static final Map<String, Object> LOCKS = new ConcurrentHashMap<>();
     private static final Map<String, Integer> PORTS = new ConcurrentHashMap<>();
     private static final Random RANDOM = new Random();
+
+    /// How long `octop init` may take before the instance is declared broken.
+    private static final int OCTOP_INIT_TIMEOUT_SECONDS = 120;
+    /// How much of its output is kept for the failure message and the log.
+    private static final int OCTOP_INIT_OUTPUT_CAP = 64 * 1024;
 
     /// The instance that answers the last-resort `/i/octop/` mount, when the
     /// developer policy turns `lockedRoute` on. `null` means the normal token
@@ -644,10 +650,32 @@ public final class BrandRuntime {
             builder.environment().put("USERPROFILE", home.toString());
         }
         Process process = builder.start();
-        byte[] output = process.getInputStream().readAllBytes();
+        // Drain on a side thread with a bounded buffer: the old code read the
+        // whole stream before waiting, so a wedged `octop init` blocked for
+        // ever (the 120 s timeout was unreachable) and the output had no cap.
+        StringBuilder sink = new StringBuilder();
+        Thread pump = new Thread(() -> {
+            byte[] buffer = new byte[8192];
+            try (InputStream in = process.getInputStream()) {
+                int read;
+                while ((read = in.read(buffer)) >= 0) {
+                    synchronized (sink) {
+                        sink.append(new String(buffer, 0, read, StandardCharsets.UTF_8));
+                        int overflow = sink.length() - OCTOP_INIT_OUTPUT_CAP;
+                        if (overflow > 0) {
+                            sink.delete(0, overflow);
+                        }
+                    }
+                }
+            } catch (IOException ignored) {
+                // The stream closing is how a killed process ends the loop.
+            }
+        }, "octop-init-" + home.getFileName());
+        pump.setDaemon(true);
+        pump.start();
         boolean finished;
         try {
-            finished = process.waitFor(120, TimeUnit.SECONDS);
+            finished = process.waitFor(OCTOP_INIT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             process.destroyForcibly();
@@ -655,9 +683,25 @@ public final class BrandRuntime {
         }
         if (!finished) {
             process.destroyForcibly();
-            throw new IOException("Octop init did not finish within 120 seconds");
+            // A wedged init is the difference between "the instance starts in a
+            // minute" and "this instance never starts"; say so with the tail we
+            // did capture.
+            String partial;
+            synchronized (sink) {
+                partial = sink.toString();
+            }
+            throw new IOException("Octop init did not finish within " + OCTOP_INIT_TIMEOUT_SECONDS
+                    + " seconds (killed). Last output: " + tail(partial));
         }
-        String text = new String(output, StandardCharsets.UTF_8);
+        try {
+            pump.join(2000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        String text;
+        synchronized (sink) {
+            text = sink.toString();
+        }
         if (process.exitValue() != 0) {
             throw new IOException("Octop init failed (exit " + process.exitValue() + "): " + tail(text));
         }

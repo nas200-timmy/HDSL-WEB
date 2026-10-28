@@ -288,13 +288,17 @@ public final class BrandApiServlet extends HttpServlet {
             return;
         }
         boolean sourceBuild = brand == Brand.OCTOP && policy.get(brand).sourceBuild();
-        if (sourceBuild) {
-            for (BrandInstance instance : ref.manager().list()) {
-                if (target.equals(instance.version()) && BrandRuntime.isRunning(instance.id())) {
-                    Json.error(response, HttpServletResponse.SC_CONFLICT,
-                            "stop the running instance before rebuilding this version from source");
-                    return;
-                }
+        // Reinstalling deletes the target directory, so it must not happen under
+        // a running instance — whatever the install path. (The source build has
+        // the same rule for its own reason: it would rebuild the tree the
+        // process is executing from.)
+        for (BrandInstance instance : ref.manager().list()) {
+            if (target.equals(instance.version()) && BrandRuntime.isRunning(instance.id())) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT,
+                        sourceBuild
+                                ? "stop the running instance before rebuilding this version from source"
+                                : "stop the running instance before reinstalling this version");
+                return;
             }
         }
         if (tasks.activeInstall(brand.id()).isPresent()) {
@@ -827,9 +831,26 @@ public final class BrandApiServlet extends HttpServlet {
     /// clients (OpenCode) get the router shim injected there instead of an
     /// origin of their own.
     private String openUrl(Brand brand, BrandInstance instance, HttpServletRequest request) {
+        return mountPath(config.basePath, brand, instance.id(), BrandRuntime.lockedOctopSurvivor());
+    }
+
+    /// The mount a browser should open for one instance.
+    ///
+    /// Normally the token mount `/i/<instanceId>/`. When the developer policy
+    /// has switched the fixed `/i/octop/` alias on **and** this instance is its
+    /// survivor, that alias is the URL to hand out — otherwise the "open"
+    /// button would keep sending people to the token path and the fixed route
+    /// would only ever be reachable by typing it.
+    ///
+    /// Package-private and pure so the two cases can be asserted without a
+    /// running instance.
+    static String mountPath(String basePath, Brand brand, String instanceId, @Nullable String lockedSurvivor) {
         // Browser-consumed URL: carries the mount base so a subpath-mounted
         // panel hands out /panel/i/<id>/ instead of a root path that 404s.
-        return config.basePath + "/i/" + instance.id() + "/";
+        if (brand == Brand.OCTOP && lockedSurvivor != null && lockedSurvivor.equals(instanceId)) {
+            return basePath + "/i/octop/";
+        }
+        return basePath + "/i/" + instanceId + "/";
     }
 
     private static void writeStatus(HttpServletResponse response, BrandRuntime.Status status) throws IOException {

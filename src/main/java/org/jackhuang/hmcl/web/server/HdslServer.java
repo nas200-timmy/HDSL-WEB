@@ -226,6 +226,11 @@ public final class HdslServer {
         // is the source of truth, the runtime only caches the survivor id.
         org.jackhuang.hmcl.web.brand.BrandRuntime.setLockedOctopSurvivor(
                 new org.jackhuang.hmcl.web.brand.BrandPolicy(config.dataDir).lockedSurvivor());
+        // A panel killed mid source-build leaves a half-built release next to a
+        // complete `<version>.previous`; put it back before anything lists
+        // releases (otherwise that version reads as installed but cannot start).
+        org.jackhuang.hmcl.web.brand.BrandInstaller.reconcileOctopReleases(
+                config.dataDir.resolve("brands").resolve(org.jackhuang.hmcl.web.brand.Brand.OCTOP.id()));
         AcpSessionManager acpSessions = new AcpSessionManager(eventBus);
         WsGateway.install(eventBus, authService, config.auth.disabled, acpSessions);
 

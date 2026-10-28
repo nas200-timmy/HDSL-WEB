@@ -1052,7 +1052,14 @@ function InstancesCard({
                     <button
                       className="icon-btn on-variant ripple-host"
                       title={running ? I18N["dsh.stop"] : I18N["dsh.launch"]}
-                      disabled={busyId === inst.id || inst.state === "starting" || installing || disabled}
+                      // "停止"对策略禁用的实例仍然要能点：后端明确允许把被禁用的实例关掉，
+                      // 否则政策切换（或面板外改了 policy.json）之后只能看着它跑。
+                      disabled={
+                        busyId === inst.id
+                        || inst.state === "starting"
+                        || installing
+                        || (disabled && !running)
+                      }
                       onClick={() => (running ? void doStop(inst) : void doLaunch(inst))}
                     >
                       {running ? <CloseIcon size={18} /> : <RocketLaunchIcon size={18} />}

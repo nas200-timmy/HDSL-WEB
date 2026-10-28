@@ -98,6 +98,10 @@ public final class BrandInstaller {
     }
 
     static final String RELEASES_DIR = "releases";
+    /// The staging name the source build moves a previous release to. It is
+    /// **not** a release: a killed build leaves it behind (see
+    /// [#reconcileOctopReleases]).
+    static final String PREVIOUS_SUFFIX = ".previous";
     private static final String CURRENT_LINK = "current";
     private static final String INSTALL_LOG = "install.log";
     /// Pinned uv release for the source fallback. `latest/download` redirects
@@ -389,7 +393,7 @@ public final class BrandInstaller {
                                    Consumer<String> message) throws BrandException {
         // Keep the previous release until the new build is complete: a failed
         // source build must not take a working package install with it.
-        Path backup = target.resolveSibling(target.getFileName() + ".previous");
+        Path backup = target.resolveSibling(target.getFileName() + PREVIOUS_SUFFIX);
         try {
             if (Files.exists(backup)) {
                 FileUtils.deleteDirectoryQuietly(backup);
@@ -511,8 +515,17 @@ public final class BrandInstaller {
             case ARM64 -> "aarch64";
             default -> throw new BrandException("no uv release for " + Architecture.CURRENT_ARCH);
         };
+        // The GitHub fallback has to name the right triple: the old hardcoded
+        // `unknown-linux-gnu` downloaded a Linux binary on macOS and then failed
+        // with an exec error instead of saying what was wrong.
+        String triple = switch (OperatingSystem.CURRENT_OS) {
+            case LINUX -> arch + "-unknown-linux-gnu";
+            case MACOS -> arch + "-apple-darwin";
+            default -> throw new BrandException(
+                    "uv has no GitHub release for " + OperatingSystem.CURRENT_OS);
+        };
         String url = "https://github.com/astral-sh/uv/releases/download/" + UV_VERSION + "/uv-"
-                + arch + "-unknown-linux-gnu.tar.gz";
+                + triple + ".tar.gz";
         Path archive = toolchain.resolve("uv.tar.gz");
         try {
             Files.createDirectories(toolchain);
@@ -522,9 +535,9 @@ public final class BrandInstaller {
             }
             runChecked(List.of("tar", "-xzf", archive.toString(), "-C", toolchain.toString()),
                     toolchain, Map.of(), log, message, "unpacking uv");
-            Path extracted = toolchain.resolve("uv-" + arch + "-unknown-linux-gnu").resolve("uv");
+            Path extracted = toolchain.resolve("uv-" + triple).resolve("uv");
             if (!Files.isRegularFile(extracted)) {
-                throw new BrandException("uv archive did not contain uv-" + arch + "-unknown-linux-gnu/uv");
+                throw new BrandException("uv archive did not contain uv-" + triple + "/uv");
             }
             Files.move(extracted, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             Files.setPosixFilePermissions(binary,
@@ -606,6 +619,24 @@ public final class BrandInstaller {
 
     /// The marker both Octop installers write: one existence check proves the
     /// release is complete, regardless of package-vs-source layout.
+    /// Whether a release directory carries any brand's install marker.
+    ///
+    /// [#releases] is brand-agnostic (it only sees a brand root), so it cannot
+    /// ask one brand for its marker. Octop's `octop-install.json` is checked
+    /// first because that is the one this class writes; the per-brand markers of
+    /// the other categories are the fallback.
+    private static boolean hasInstallMarker(Path directory) {
+        if (!markerMode(directory).isEmpty()) {
+            return true;
+        }
+        for (Brand brand : Brand.values()) {
+            if (Files.exists(directory.resolve(brand.installMarker()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static String markerMode(Path target) {
         try {
             String json = Files.readString(target.resolve("octop-install.json"), StandardCharsets.UTF_8);
@@ -791,6 +822,20 @@ public final class BrandInstaller {
         try (Stream<Path> entries = Files.list(releases)) {
             for (Path directory : entries.filter(Files::isDirectory).toList()) {
                 String version = directory.getFileName().toString();
+                // A `.previous` directory is the source build's staging area,
+                // not a release: listing it made `defaultVersion()` point new
+                // instances at an uninstallable name.
+                if (version.endsWith(PREVIOUS_SUFFIX)) {
+                    continue;
+                }
+                // A directory without an install marker is a half-finished
+                // install (the JVM was killed, or the download failed). It is
+                // not usable, so it must not be offered.
+                if (!hasInstallMarker(directory)) {
+                    LOG.warning("Ignoring incomplete Octop release at " + directory
+                            + " (no install marker); run an install of that version to repair it");
+                    continue;
+                }
                 found.add(new Release(version, directory.toString(),
                         current != null && current.equals(directory)));
             }
@@ -799,6 +844,69 @@ public final class BrandInstaller {
         }
         found.sort(Comparator.comparing(Release::version, newestFirst()));
         return found;
+    }
+
+    /// Puts a killed source build's leftovers back in order.
+    ///
+    /// The source installer moves the working release aside to
+    /// `<version>.previous` while it builds; the restore lives in a `finally`,
+    /// so a panel that is killed mid-build leaves **both** a half-built
+    /// `<version>` and a complete `<version>.previous`. Without this pass the
+    /// usable release stays hidden under the staging name for ever, and new
+    /// instances get told that version is installed when it is not.
+    ///
+    /// Rules, in order:
+    /// - a `<version>` that carries the install marker wins; its `.previous`
+    ///   sibling is stale and left alone (deleting a user's only other copy is
+    ///   not this method's call);
+    /// - otherwise the half-built `<version>` is renamed to
+    ///   `<version>.broken-<millis>` (kept for diagnosis) and `.previous` is
+    ///   moved back.
+    ///
+    /// Safe to call on every boot; it only touches directories this installer
+    /// created.
+    ///
+    /// @param brandRoot the brand's directory
+    public static void reconcileOctopReleases(Path brandRoot) {
+        Path releases = brandRoot.resolve(RELEASES_DIR);
+        if (!Files.isDirectory(releases)) {
+            return;
+        }
+        List<Path> entries;
+        try (Stream<Path> list = Files.list(releases)) {
+            entries = list.filter(Files::isDirectory).toList();
+        } catch (IOException e) {
+            LOG.warning("Could not scan " + releases + " for interrupted installs", e);
+            return;
+        }
+        for (Path previous : entries) {
+            String name = previous.getFileName().toString();
+            if (!name.endsWith(PREVIOUS_SUFFIX)) {
+                continue;
+            }
+            String version = name.substring(0, name.length() - PREVIOUS_SUFFIX.length());
+            Path target = releases.resolve(version);
+            if (Files.isDirectory(target) && hasInstallMarker(target)) {
+                // The build finished (or was never interrupted): nothing to do.
+                continue;
+            }
+            if (Files.exists(target)) {
+                Path broken = releases.resolve(version + ".broken-" + System.currentTimeMillis());
+                try {
+                    Files.move(target, broken);
+                    LOG.warning("Moved an incomplete Octop release aside: " + target + " -> " + broken);
+                } catch (IOException e) {
+                    LOG.warning("Could not move the incomplete Octop release aside: " + target, e);
+                    continue;
+                }
+            }
+            try {
+                Files.move(previous, target);
+                LOG.info("Recovered the Octop release " + version + " from " + previous);
+            } catch (IOException e) {
+                LOG.warning("Could not restore the staged Octop release " + previous, e);
+            }
+        }
     }
 
     /// The directory holding the given installed version, or `null` when that
