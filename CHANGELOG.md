@@ -2,9 +2,30 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.6.12 — 2026-10-29 · Octop dashboard 的挂载点收口：跳转、WebSocket、构建期闸门
+
+> v0.6.11 修的是「静态资源拿回 SPA 外壳变破图」；这一版把同一类问题（根绝对路径逃出
+> `/i/<token>/`）**一次收口**，并把闸门放进构建期，不再一个个补。
+
+- **对话的 WebSocket 一直是连到面板根的**：聊天、终端、ADB shell、桌面/手机/浏览器串流共 6 处
+  都写成 `ws://host/api/...`，挂载后连的是面板自己的 `/api`，握手必然失败——表现就是"发消息没反应"，
+  实例日志里连一条 POST 都看不到。现在统一走 `getWsUrl(...)`（`api/config.ts` 本来就会带上挂载点）。
+- **硬跳转**：401 处理器与初始化流程里的 `location.replace("/login"｜"/setup")`、登录回跳的
+  `"/chat"` 都改 `publicUrl(...)`；站内「去配置模型」的裸链接改 `<Link to>`。
+- **构建期闸门**：新增 `integrations/octop/check-mount-escapes.sh`，打补丁后扫六种模式
+  （硬跳转、`href="/`、`src="/`、`location.host}/api`、`fetch("/api`、`window.open("/`），
+  命中就让打包失败；对未打补丁的 1.0.3b1 实测能抓出 8 条。
+- **构建期就查类型**：`build-dashboard.sh` 与面板源码构建都改用 `npm run build`（`tsc -b && vite build`）。
+  多 30–60 秒，换来缺 import / 未使用变量 / 类型不匹配在安装期失败——`TeamDrawer` 缺 `Link` 正是这类；
+  宿主需保证 `npm ci` 装 devDependencies（别设 `NODE_ENV=production`）。
+- 资源：补丁 20 个文件（原 13 + 新增 7），`octop-dashboard-1.0.3b1.zip` 重建；产物里
+  `location.host}/api` 与根 `location.replace` 均为 0。
+- 文档：`docs/octop.md` 新增「挂载点不变量」清单，`docs/build-from-scratch-prompt.md` 增 §5.7.4，
+  `integrations/octop/README.md` 写清闸门。
+
 ## v0.6.11 — 2026-10-29 · Octop 实例的登录密码在面板里就能看/重置
 
-### 同版本补丁：dashboard 的静态资源走运行时挂载点
+### 同版本补丁（已随 v0.6.11 重发）：dashboard 的静态资源走运行时挂载点
 
 - 现象：实例页面能打开，但空状态吉祥物、欢迎页动画（peek/type）、侧栏收起时的图标、专家/团队
   卡通头像全是破图；`curl -D- https://<面板>/octop-mascot-empty.png` 回的是 `200 text/html`。
@@ -14,20 +35,8 @@
 - 修法：这些路径改走补丁里已有的 `publicUrl()`（运行时读 `<base>` / `window.__OCTOP_BASE__`）；
   `presetIdFromExpertAvatarUrl` 先剥掉挂载前缀再解析预设 id；`teamPortraitUrl` 的默认值比较同时
   接受带前缀与不带前缀两种历史值，避免已存的 `icon_url` 变成"自定义照片"。
-- 站内跳转：**「没有可用模型」告警里的 `去配置模型` 是裸 `<a href="/admin/models">`**，点击整页跳到
-  面板根，落进 hdsl 自己的外壳；`ErrorBoundary` 的 `window.location.href = "/chat"` 同样会跳出挂载点。
-  前者改 `<Link to>`（router basename 自动生效），后者改 `publicUrl("chat")`。
 - 资源：`integrations/octop/patches/0001-…patch`、`src/main/resources/octop/octop-runtime-base.patch`
   与 `octop-dashboard-1.0.3b1.zip` 一并重建（同版本重发，镜像与 jar 覆盖 `v0.6.11`）。
-- **构建期就查类型**：源码构建的 dashboard 从 `npm run build:docker`（只 `vite build`）改成
-  `npm run build`（`tsc -b && vite build`）。多 30–60 秒，换来「缺 import、未使用变量、类型不匹配」
-  在安装期失败，而不是等用户点进页面看白屏——`TeamDrawer` 缺 `Link` 就是这类。宿主需保证
-  `npm ci` 装 devDependencies（别设 `NODE_ENV=production`）。实测：干净树 + 补丁，`tsc + vite` 41 秒。
-- **挂载点逃逸一次查完**：`<base>` 只对相对路径生效，补丁把三类都收了口——硬跳转（`/login`、
-  `/setup`、登录回跳的 `/chat`）走 `publicUrl()`；站内链接改 `<Link to>`；**6 处手拼的 WebSocket**
-  （聊天、终端、ADB shell、桌面/手机/浏览器串流）改用 `getWsUrl()`，以前它们连的是面板自己的
-  `/api`。并新增 `integrations/octop/check-mount-escapes.sh` 作为构建期闸门（打补丁后先扫一遍，
-  命中硬跳转/`href="/`/`src="/`/`location.host}/api`/`fetch("/api`/`window.open("/` 就让打包失败）。
 
 - 实例行 → 更多 → **登录密码…**：读的是 Octop 自己的 `<OCTOP_HOME>/credential.txt`，其次面板
   首次启动记录的 `octop-admin.txt`；两边都没有明文时返回「不可读」（Octop 只存哈希）并引导重置，
