@@ -89,7 +89,7 @@ public final class TaskService {
     /// `filename`) — it is the machine-readable half of the done message.
     public record TaskInfo(String id, String kind, @Nullable String instanceId, String state, String message,
                            double fraction,
-                           @Nullable String stage, double stageFraction,
+                           @Nullable String stage, @Nullable String stageKey, double stageFraction,
                            @Nullable String error, @Nullable ApprovalInfo approval,
                            @Nullable JsonObject result) {
     }
@@ -151,7 +151,10 @@ public final class TaskService {
         private volatile double fraction = -1;
         /// The name of the sub-step in flight, and how far it is (0–1, `-1` when unknown). A long
         /// install reports both: the bar for the whole job and the bar for the step inside it.
+        /// `stageKey` is the machine-readable phase (`download` / `write` / `build` / `install` /
+        /// `done`), so a page can say "downloads are over" without matching the text.
         private volatile @Nullable String stage;
+        private volatile @Nullable String stageKey;
         private volatile double stageFraction = -1;
         private volatile @Nullable String error;
         private final AtomicBoolean cancelled = new AtomicBoolean();
@@ -213,7 +216,17 @@ public final class TaskService {
         /// @param newStage         what the step is called, or `null` when it has no bar
         /// @param newStageFraction how far it is (0–1), `-1` for unknown
         public void updateStage(@Nullable String newStage, double newStageFraction) {
+            updateStage(newStage, null, newStageFraction);
+        }
+
+        /// The same, with the machine-readable phase the page keys its wording off.
+        ///
+        /// @param newStage         what the step is called, or `null` when it has no bar
+        /// @param newStageKey      `download` / `write` / `build` / `install` / `done`, or `null`
+        /// @param newStageFraction how far it is (0–1), `-1` for unknown
+        public void updateStage(@Nullable String newStage, @Nullable String newStageKey, double newStageFraction) {
             this.stage = newStage;
+            this.stageKey = newStageKey;
             this.stageFraction = newStageFraction;
             owner.publish(this);
         }
@@ -265,7 +278,7 @@ public final class TaskService {
 
         private TaskInfo snapshot() {
             return new TaskInfo(id, kind, instanceId, state.wireName(), message, fraction,
-                    stage, stageFraction, error, approval, result);
+                    stage, stageKey, stageFraction, error, approval, result);
         }
     }
 
@@ -639,6 +652,9 @@ public final class TaskService {
         payload.addProperty("fraction", info.fraction());
         if (info.stage() != null) {
             payload.addProperty("stage", info.stage());
+        }
+        if (info.stageKey() != null) {
+            payload.addProperty("stageKey", info.stageKey());
         }
         payload.addProperty("stageFraction", info.stageFraction());
         payload.addProperty("state", info.state());

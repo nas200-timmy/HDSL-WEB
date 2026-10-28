@@ -534,6 +534,8 @@ export interface BrandInstallStatus {
   /// 当前子步骤的名字（下载 / npm ci / uv sync …）与它自己的进度；旧后端没有这两个字段
   stage?: string;
   stageFraction?: number;
+  /// 机器可读的阶段：`download` / `write` / `build` / `install` / `done`；旧后端没有这个字段
+  stageKey?: string;
   error?: string;
 }
 

@@ -291,19 +291,38 @@ function VersionCard({
     if (node) node.scrollTop = node.scrollHeight;
   }, [installLog, installLogOpen]);
 
-  // 日志面板开着时把最新状态行追加进去：以前这里是一次性快照，看着像卡死。
-  const lastLoggedRef = useRef("");
+  // 日志面板开着时每 3 秒拉一次尾巴：`>>> 已安装 (199 of 345) …` 这类 portage 风格的行是
+  // 写进 install.log 的，只靠状态消息会漏掉它们。
   useEffect(() => {
-    if (!installLogOpen) return;
-    const line = installStatus?.message;
-    if (!line || line === lastLoggedRef.current) return;
-    lastLoggedRef.current = line;
-    setInstallLog((current) => {
-      if (current[current.length - 1] === line) return current;
-      const next = [...current, line];
-      return next.length > 400 ? next.slice(next.length - 400) : next;
-    });
-  }, [installLogOpen, installStatus?.message]);
+    if (!installLogOpen || !installing) return;
+    let alive = true;
+    const timer = setInterval(() => {
+      void (async () => {
+        try {
+          const r = await api.brandInstallLog(brand, 400);
+          if (alive) setInstallLog(r.lines);
+        } catch {
+          // 读不到就保持上一份，不必打扰用户
+        }
+      })();
+    }, 3000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [installLogOpen, installing, brand]);
+
+  // 下载一旦彻底结束（阶段键离开 download）就明确说一声：后面那段是编译/写盘，
+  // 在这台慢盘上可以很久，用户不该还以为在下载。
+  const previousStageKey = useRef<string | null>(null);
+  useEffect(() => {
+    const key = installStatus?.stageKey ?? null;
+    const previous = previousStageKey.current;
+    previousStageKey.current = key;
+    if (previous === "download" && key !== null && key !== "download" && key !== "done") {
+      toast("success", "下载阶段已结束：接下来是编译/写盘，这台机器上可能很久——可以离开去喝杯咖啡。");
+    }
+  }, [installStatus?.stageKey]);
 
   // 安装中：每秒轮询安装状态；终态后刷新版本目录与实例（新版本可能马上被实例切过去）
   // 挂载时先认领一次：刷新页面或从别的入口进来时，正在跑的安装也要显示进度与「停止」，
@@ -564,7 +583,10 @@ function VersionCard({
             <div className="card" style={{ padding: "10px 12px", display: "grid", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
                 {installStatus.stage && (
-                  <span className="tag plain" style={{ flexShrink: 0 }}>
+                  <span
+                    className={`tag ${installStatus.stageKey === "download" ? "running" : "plain"}`}
+                    style={{ flexShrink: 0 }}
+                  >
                     {installStatus.stage}
                   </span>
                 )}
@@ -578,6 +600,28 @@ function VersionCard({
                 )}
               </div>
               <ProgressBar fraction={installFraction} />
+              {installStatus.stageKey &&
+                installStatus.stageKey !== "download" &&
+                installStatus.stageKey !== "done" && (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      lineHeight: 1.6,
+                      padding: "6px 8px",
+                      borderRadius: 8,
+                      background: "var(--monet-secondary-container)",
+                      color: "var(--monet-on-secondary-container)",
+                    }}
+                  >
+                    ✅ 下载阶段已结束 · 正在{installStatus.stage ?? "处理"}（
+                    {installStatus.stageKey === "build"
+                      ? "编译"
+                      : installStatus.stageKey === "install"
+                        ? "安装依赖"
+                        : "写盘"}
+                    ）· 这一步在慢盘或慢网上可能很久，去喝杯咖啡再回来看也行
+                  </div>
+                )}
               {installStatus.stageFraction !== undefined && installStatus.stageFraction >= 0 && (
                 <div style={{ display: "grid", gap: 3 }}>
                   <div

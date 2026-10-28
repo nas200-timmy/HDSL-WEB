@@ -335,6 +335,11 @@ public final class BrandApiServlet extends HttpServlet {
                 public void stage(String stage, double fraction) {
                     live.updateStage(stage, fraction);
                 }
+
+                @Override
+                public void stage(String stage, String key, double fraction) {
+                    live.updateStage(stage, key, fraction);
+                }
             };
             // What this task is installing, so a second request for the same version can attach
             // to it instead of being told "already running".
@@ -377,6 +382,9 @@ public final class BrandApiServlet extends HttpServlet {
             body.addProperty("fraction", info.fraction());
             if (info.stage() != null) {
                 body.addProperty("stage", info.stage());
+            }
+            if (info.stageKey() != null) {
+                body.addProperty("stageKey", info.stageKey());
             }
             body.addProperty("stageFraction", info.stageFraction());
             if (info.error() != null) {
