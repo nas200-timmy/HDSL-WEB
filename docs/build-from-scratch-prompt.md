@@ -235,6 +235,14 @@ HDSL_DATA=/tmp/panel HDSL_PORT=<随机空闲端口> HDSL_BIND_HOST=127.0.0.1 \
 - **做法**：整帧与光标都没变时**不写任何字节**；组词期间缓冲 PTY 输出、`compositionend` 后再刷；
   keyup/compositionend 之后延迟清理 textarea（`screenReaderMode` 除外）。字体栈要有 CJK 等宽字体。
 
+### 5.4.1 测试里别用「先声明 holder，再 submit」的写法
+- **现象**：`TaskApiTest.cancelMarksTheTaskAndTheWorkStops` 在 JDK 21 的 CI 上偶发失败
+  （`assertTrue(tasks.cancel(...))` 得到 false），本地反复跑却是绿的。
+- **根因**：`TaskService.submit` 可能在**返回句柄之前**就把 work 跑起来了；work 里读
+  `holder[0].isCancelled()` 时它还是 null → NPE → 任务变失败 → cancel 返回 false。
+- **做法**：work 需要句柄就用 `TaskWork` 重载（`submit(kind, id, own -> …)`，句柄直接传进来），
+  不要靠调用方事后赋值；测试里的「等它跑起来」一律给 30 秒（CI 机器比本机慢得多）。
+
 ### 5.5 TUI 自己的输入细节
 - composer 行首是 `│ ` + `❯ `（四格），光标列按 3 格算会压住最后两个字；Tab 需要在按键解码表里有
   `0x09`，否则"补全坏了"其实是键从来没到应用；`ctrl+j` 是换行，别解码成 enter。

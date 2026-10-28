@@ -178,22 +178,27 @@ class TaskApiTest {
         EventBus bus = new EventBus();
         TaskService tasks = new TaskService(bus);
         CountDownLatch started = new CountDownLatch(1);
-        TaskService.Task[] holder = new TaskService.Task[1];
-        holder[0] = tasks.submit("probe", null, () -> {
+        // The work is handed its own task, deliberately: `submit` may start the
+        // work **before it returns the handle**, so the old `holder[0]` capture
+        // was still null inside the work. That NPE failed the task, `cancel()`
+        // then answered false and the assertion below failed — on the JDK 21 CI
+        // leg, twice, while passing locally.
+        TaskService.TaskWork work = own -> {
             started.countDown();
             long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
-            while (System.nanoTime() < deadline && !holder[0].isCancelled()) {
+            while (System.nanoTime() < deadline && !own.isCancelled()) {
                 Thread.sleep(10);
             }
-            return holder[0].isCancelled() ? "stopped early" : "ran to the end";
-        });
-        assertTrue(started.await(5, TimeUnit.SECONDS));
-        assertTrue(tasks.cancel(holder[0].id()));
-        await(() -> !"running".equals(tasks.get(holder[0].id()).orElseThrow().state()));
-        assertEquals("done", tasks.get(holder[0].id()).orElseThrow().state());
-        assertEquals("stopped early", tasks.get(holder[0].id()).orElseThrow().message());
+            return own.isCancelled() ? "stopped early" : "ran to the end";
+        };
+        TaskService.Task task = tasks.submit("probe", null, work);
+        assertTrue(started.await(30, TimeUnit.SECONDS), "the work must start");
+        assertTrue(tasks.cancel(task.id()), "a running task can be cancelled");
+        await(() -> !"running".equals(tasks.get(task.id()).orElseThrow().state()));
+        assertEquals("done", tasks.get(task.id()).orElseThrow().state());
+        assertEquals("stopped early", tasks.get(task.id()).orElseThrow().message());
         // Cancelling a finished task is a no-op; an unknown id too.
-        assertTrue(!tasks.cancel(holder[0].id()));
+        assertTrue(!tasks.cancel(task.id()));
         assertTrue(!tasks.cancel("no-such-task"));
     }
 
@@ -223,7 +228,7 @@ class TaskApiTest {
                 return "slept";
             });
         }
-        assertTrue(bothStarted.await(5, TimeUnit.SECONDS));
+        assertTrue(bothStarted.await(30, TimeUnit.SECONDS), "both works must start");
         // Both processes must be registered before the cancellation lands,
         // otherwise the regression (killing the sibling) cannot be observed.
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
@@ -335,17 +340,20 @@ class TaskApiTest {
             String base = "http://127.0.0.1:" + connector.getLocalPort();
 
             CountDownLatch started = new CountDownLatch(1);
-            TaskService.Task[] holder = new TaskService.Task[1];
-            holder[0] = tasks.submit("probe", INSTANCE, () -> {
+            // Same trap as `cancelMarksTheTaskAndTheWorkStops`: `submit` may run
+            // the work before returning, so the work must be handed its own task
+            // rather than reading a holder the caller assigns afterwards.
+            TaskService.TaskWork work = own -> {
                 started.countDown();
                 long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
-                while (System.nanoTime() < deadline && !holder[0].isCancelled()) {
+                while (System.nanoTime() < deadline && !own.isCancelled()) {
                     Thread.sleep(10);
                 }
-                return holder[0].isCancelled() ? "stopped early" : "ran to the end";
-            });
-            assertTrue(started.await(5, TimeUnit.SECONDS));
-            String taskId = holder[0].id();
+                return own.isCancelled() ? "stopped early" : "ran to the end";
+            };
+            TaskService.Task submitted = tasks.submit("probe", INSTANCE, work);
+            assertTrue(started.await(30, TimeUnit.SECONDS), "the work must start");
+            String taskId = submitted.id();
 
             // A running task cancels: 200 {ok: true}, and the work observes it.
             HttpResponse<String> cancelled = client.send(

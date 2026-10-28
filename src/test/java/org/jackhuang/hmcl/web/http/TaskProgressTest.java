@@ -58,7 +58,7 @@ class TaskProgressTest {
             return "done";
         });
 
-        assertTrue(reported.await(5, TimeUnit.SECONDS), "the work must start");
+        assertTrue(reported.await(30, TimeUnit.SECONDS), "the work must start");
         assertSame(task, handed.get(), "the handle the work gets is the handle submit returns");
         assertEquals("installing", tasks.get(task.id()).orElseThrow().message(),
                 "a progress line reported through that handle reaches the task");
