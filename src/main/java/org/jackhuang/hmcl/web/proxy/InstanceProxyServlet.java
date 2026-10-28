@@ -119,8 +119,10 @@ public final class InstanceProxyServlet extends HttpServlet {
         // java.net.http refuses to set Connection/Content-Length/Expect/Host/
         // Upgrade via its builder API unless the property names them. Host
         // passthrough is the one contract dsh itself enforces (Origin must
-        // equal Host), so it is enabled here, before any client is built.
-        System.setProperty("jdk.httpclient.allowRestrictedHeaders", "host");
+        // equal Host). `main` sets this before anything else — this line is the
+        // fallback for tests and for an embedder that builds the servlet
+        // directly, and it only works if no HttpClient exists yet.
+        org.jackhuang.hmcl.web.http.HostHeaderSupport.allow();
         // Instance servers are Node and Bun, whose keep-alive timeout is five
         // seconds; the pooled connection this client would otherwise hold for
         // minutes is then a socket the other end has already closed. A request

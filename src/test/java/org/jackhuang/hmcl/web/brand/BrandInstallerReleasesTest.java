@@ -101,6 +101,39 @@ class BrandInstallerReleasesTest {
     }
 
     @Test
+    void reconcileDoesNotRestoreAnIncompleteStagingCopy() throws IOException {
+        // Two interrupted builds in a row: `.previous` is broken too. Renaming it
+        // back would just put a half-installed tree under the real name.
+        Path staged = release("1.0.3b1" + BrandInstaller.PREVIOUS_SUFFIX, false);
+        release("1.0.3b1", false);
+
+        BrandInstaller.reconcileOctopReleases(brandRoot);
+
+        assertTrue(Files.exists(staged), "the staged copy stays where it is");
+        assertFalse(Files.exists(releasesDir().resolve("1.0.3b1").resolve("octop-install.json")),
+                "nothing claims to be installed");
+        assertTrue(BrandInstaller.releases(brandRoot).isEmpty());
+    }
+
+    @Test
+    void onlyTheNewestBrokenCopyIsKept() throws IOException {
+        Path old = release("1.0.3b1.broken-1", true);
+        release("1.0.3b1" + BrandInstaller.PREVIOUS_SUFFIX, true);
+        release("1.0.3b1", false);
+
+        BrandInstaller.reconcileOctopReleases(brandRoot);
+
+        assertFalse(Files.exists(old), "the previous diagnostic copy is pruned");
+        try (var entries = Files.list(releasesDir())) {
+            long broken = entries
+                    .filter(Files::isDirectory)
+                    .filter(path -> path.getFileName().toString().startsWith("1.0.3b1.broken-"))
+                    .count();
+            assertEquals(1, broken, "exactly one broken tree is kept");
+        }
+    }
+
+    @Test
     void reconcileOnAnAbsentBrandDirectoryIsANoOp() {
         // First boot: nothing installed yet, and the boot path must not create
         // anything or throw.

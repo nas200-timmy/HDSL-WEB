@@ -48,6 +48,12 @@ public final class Main {
     }
 
     public static void main(String[] args) {
+        // Must be the very first thing: the JDK freezes the restricted-header
+        // allow-list when the first HttpClient is constructed, and any static
+        // client in a class we happen to touch would do that first (this bit us:
+        // a brand-installer initialiser ran before the proxy's own static block,
+        // and every /i/* mount answered 500 "restricted header name: Host").
+        org.jackhuang.hmcl.web.http.HostHeaderSupport.allow();
         for (String arg : args) {
             if ("-version".equals(arg) || "--version".equals(arg)) {
                 System.out.println("HDSL-web " + Metadata.VERSION);

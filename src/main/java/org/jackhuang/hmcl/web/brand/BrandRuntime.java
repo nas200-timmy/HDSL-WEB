@@ -682,6 +682,10 @@ public final class BrandRuntime {
             throw new IOException("Octop init was interrupted", e);
         }
         if (!finished) {
+            // Take the whole tree: `octop init` may spawn helpers, and a
+            // `destroyForcibly()` on the direct child leaves those behind
+            // holding the instance directory open.
+            process.descendants().forEach(java.lang.ProcessHandle::destroyForcibly);
             process.destroyForcibly();
             // A wedged init is the difference between "the instance starts in a
             // minute" and "this instance never starts"; say so with the tail we

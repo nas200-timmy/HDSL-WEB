@@ -890,7 +890,19 @@ public final class BrandInstaller {
                 // The build finished (or was never interrupted): nothing to do.
                 continue;
             }
+            // Only a *complete* staging copy is worth restoring: if the previous
+            // build died too, `.previous` has no marker either, and moving it
+            // back would just rename one broken tree.
+            if (!hasInstallMarker(previous)) {
+                LOG.warning("Ignoring an incomplete staged Octop release at " + previous
+                        + "; reinstall that version to repair it");
+                continue;
+            }
             if (Files.exists(target)) {
+                // Keep one broken tree for diagnosis, not a pile of them: each
+                // is hundreds of megabytes and repeated interrupted builds would
+                // grow without bound.
+                pruneBrokenReleases(releases, version);
                 Path broken = releases.resolve(version + ".broken-" + System.currentTimeMillis());
                 try {
                     Files.move(target, broken);
@@ -906,6 +918,21 @@ public final class BrandInstaller {
             } catch (IOException e) {
                 LOG.warning("Could not restore the staged Octop release " + previous, e);
             }
+        }
+    }
+
+    /// Deletes every `<version>.broken-*` directory, so the diagnostic copy we
+    /// are about to keep is the only one.
+    private static void pruneBrokenReleases(Path releases, String version) {
+        String prefix = version + ".broken-";
+        try (Stream<Path> list = Files.list(releases)) {
+            for (Path candidate : list.filter(Files::isDirectory).toList()) {
+                if (candidate.getFileName().toString().startsWith(prefix)) {
+                    FileUtils.deleteDirectoryQuietly(candidate);
+                }
+            }
+        } catch (IOException e) {
+            LOG.warning("Could not prune old broken Octop releases in " + releases, e);
         }
     }
 
