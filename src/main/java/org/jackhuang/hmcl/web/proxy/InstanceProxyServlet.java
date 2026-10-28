@@ -119,8 +119,10 @@ public final class InstanceProxyServlet extends HttpServlet {
         // java.net.http refuses to set Connection/Content-Length/Expect/Host/
         // Upgrade via its builder API unless the property names them. Host
         // passthrough is the one contract dsh itself enforces (Origin must
-        // equal Host), so it is enabled here, before any client is built.
-        System.setProperty("jdk.httpclient.allowRestrictedHeaders", "host");
+        // equal Host). `main` sets this before anything else — this line is the
+        // fallback for tests and for an embedder that builds the servlet
+        // directly, and it only works if no HttpClient exists yet.
+        org.jackhuang.hmcl.web.http.HostHeaderSupport.allow();
         // Instance servers are Node and Bun, whose keep-alive timeout is five
         // seconds; the pooled connection this client would otherwise hold for
         // minutes is then a socket the other end has already closed. A request
@@ -341,16 +343,19 @@ public final class InstanceProxyServlet extends HttpServlet {
         });
 
         org.jackhuang.hmcl.web.brand.Brand brand =
-                org.jackhuang.hmcl.web.brand.BrandRuntime.brandOf(instanceId);
-        boolean brandClient = brand != null;
+                org.jackhuang.hmcl.web.brand.BrandRuntime.brandForMount(instanceId);
+        boolean octopClient = brand == org.jackhuang.hmcl.web.brand.Brand.OCTOP;
+        // Octop is built with a relative base and reads the injected <base>;
+        // its chunks must not go through the Kimi/OpenCode script patcher.
+        boolean brandClient = brand != null && !octopClient;
         // ZCode 与 Kimi Code 同源（共享「原生认识 /i/<id>/ 挂载」的客户端代码），
         // 它的 bundle 同样需要运行时补丁（见 patchBrandScript 的挂载检测放宽）。
         boolean zcodeClient = org.jackhuang.hmcl.web.zcode.ZcodeRuntime.known(instanceId);
         boolean routerClient = brandClient && brand.needsRouterShim();
         int upstreamPort = port;
         upstream.answer().whenCompleteAsync(
-                (answer, error) -> pump(response, async, upstream, mount, browserMount, brandClient, zcodeClient,
-                        routerClient, upstreamPort, answer, error),
+                (answer, error) -> pump(response, async, upstream, mount, browserMount, brandClient, octopClient,
+                        zcodeClient, routerClient, upstreamPort, answer, error),
                 tasks.executor());
     }
 
@@ -393,7 +398,8 @@ public final class InstanceProxyServlet extends HttpServlet {
     ///                      the browser sees (injected references, patched asset
     ///                      URLs, redirect Locations, cookie paths)
     private static void pump(HttpServletResponse response, AsyncContext async, Upstream upstream, String mount,
-                             String browserMount, boolean brandClient, boolean zcodeClient, boolean routerClient,
+                             String browserMount, boolean brandClient, boolean octopClient, boolean zcodeClient,
+                             boolean routerClient,
                              int port, @Nullable HttpResponse<InputStream> result, @Nullable Throwable error) {
         try {
             if (error != null || result == null) {
@@ -423,9 +429,11 @@ public final class InstanceProxyServlet extends HttpServlet {
                     // Buffered and rewritten, because the page dsh generates is rooted at the origin
                     // rather than at whatever path it is reached through — see rewritePage.
                     String html = readPage(in, result);
-                    out.write(rewritePage(html, browserMount,
-                                    routerClient ? routerShimFor(port, mount, html) : RouterShim.NONE,
-                                    brandClient)
+                    out.write((octopClient
+                                    ? rewriteOctopPage(html, browserMount)
+                                    : rewritePage(html, browserMount,
+                                            routerClient ? routerShimFor(port, mount, html) : RouterShim.NONE,
+                                            brandClient))
                             .getBytes(StandardCharsets.UTF_8));
                     out.flush();
                 } else if (servesScript || servesStyle) {
@@ -1162,6 +1170,30 @@ public final class InstanceProxyServlet extends HttpServlet {
 
     /// Whether the page references anything from the origin root — the signal
     /// that it assumes it owns the origin and needs the generic rewrite.
+    /// Octop's page: Vite is built with `base: './'`, so the only thing the
+    /// proxy has to add is the mount itself. The `<base>` makes relative asset
+    /// references resolve from deep links (`/i/<token>/agents/...`), and the
+    /// global is what the patched `publicUrl`/router reads. No runtime shim and
+    /// no chunk rewriting: the bundle already builds mount-aware URLs.
+    static String rewriteOctopPage(String html, String mount) {
+        String escaped = mount.replace("\\", "\\\\").replace("\"", "\\\"");
+        String injection = "<base href=\"" + mount + "\">"
+                + "<script>window.__OCTOP_BASE__=\"" + escaped + "\";</script>";
+        String withoutBase = html.replaceAll("(?is)<base\\s[^>]*>", "");
+        int head = indexOfIgnoreCase(withoutBase, "<head>");
+        String rewritten;
+        if (head >= 0) {
+            int after = head + "<head>".length();
+            rewritten = withoutBase.substring(0, after) + injection + withoutBase.substring(after);
+        } else {
+            rewritten = injection + withoutBase;
+        }
+        // A manifest fetched without credentials is a 401 through the session
+        // gate, and an app served under someone else's path cannot be installed
+        // from it anyway.
+        return rewritten.replaceAll("<link rel=\"manifest\"[^>]*>", "");
+    }
+
     private static boolean hasRootAbsoluteReferences(String html) {
         return html.contains("src=\"/") || html.contains("href=\"/") || html.contains("action=\"/");
     }

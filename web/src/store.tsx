@@ -231,21 +231,25 @@ export async function refreshZcode(showLoading = false): Promise<void> {
 /// 主页启动面板的实例选择菜单与主按钮动作用它。单个品牌失败不影响其它品牌；
 /// 静默失败（不弹 toast）——主页面 5 秒轮询一次，报错会刷爆通知。
 export async function refreshExternal(): Promise<void> {
-  const [kimi, opencode, claudeWeb, zcode] = await Promise.all([
+  const [kimi, opencode, claudeWeb, octop, zcode] = await Promise.all([
     api.brandInstances("kimi").then((r) => r.instances).catch(() => null),
     api.brandInstances("opencode").then((r) => r.instances).catch(() => null),
     api.brandInstances("claude-web").then((r) => r.instances).catch(() => null),
+    api.brandInstances("octop").then((r) => r.instances).catch(() => null),
     api.zcodeInstances().then((r) => r.instances).catch(() => null),
   ]);
   const external: ExternalInstance[] = [];
   for (const i of kimi ?? []) {
-    external.push({ brand: "kimi", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error });
+    external.push({ brand: "kimi", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error, disabled: i.disabled });
   }
   for (const i of opencode ?? []) {
-    external.push({ brand: "opencode", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error });
+    external.push({ brand: "opencode", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error, disabled: i.disabled });
   }
   for (const i of claudeWeb ?? []) {
-    external.push({ brand: "claude-web", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error });
+    external.push({ brand: "claude-web", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error, disabled: i.disabled });
+  }
+  for (const i of octop ?? []) {
+    external.push({ brand: "octop", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error, disabled: i.disabled });
   }
   for (const i of zcode ?? []) {
     external.push({

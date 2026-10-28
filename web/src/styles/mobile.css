@@ -361,3 +361,56 @@
   }
 
 }
+
+/* -------------------------------------------------------------------------
+ * 品牌实例：窄屏不要把标题、版本选择器和四个按钮挤成一片。
+ * 手机上（以及窄窗口、触摸设备）把操作组折到第二行并按需横向滑动；
+ * 标题/副标题允许多行，长 url 用 anywhere 断行，避免撑破卡片。
+ * ------------------------------------------------------------------------- */
+
+@media (max-width: 760px), (max-height: 520px), (hover: none) and (pointer: coarse) {
+  .brand-instance-list .tlli {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .brand-instance-list .tlli .tlli-text {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .brand-instance-list .tlli .tlli-title {
+    flex-wrap: wrap;
+    white-space: normal;
+    row-gap: 4px;
+  }
+
+  .brand-instance-list .tlli .tlli-subtitle {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.5;
+  }
+
+  .brand-instance-list .row-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+    overflow-x: auto;
+    padding-top: 6px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .brand-instance-list .row-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* 新建实例那一行：输入框占满一行、按钮各自换行，不横向挤压 */
+  .brand-instance-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .brand-instance-toolbar .input {
+    flex: 1 1 140px;
+    max-width: none;
+  }
+}

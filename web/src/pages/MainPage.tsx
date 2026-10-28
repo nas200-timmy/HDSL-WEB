@@ -263,8 +263,8 @@ function MobileHomeBrand({ entry }: { entry: LaunchEntry }) {
     window.open(openUrl, "_blank", "noopener");
   };
   const doAction = () => {
-    if (running) void stopBrandInstance(entry.kind as "kimi" | "opencode" | "claude-web" | "zcode", entry.id);
-    else void launchBrandInstance(entry.kind as "kimi" | "opencode" | "claude-web" | "zcode", { id: entry.id, name: entry.name });
+    if (running) void stopBrandInstance(entry.kind as "kimi" | "opencode" | "claude-web" | "octop" | "zcode", entry.id);
+    else void launchBrandInstance(entry.kind as "kimi" | "opencode" | "claude-web" | "octop" | "zcode", { id: entry.id, name: entry.name });
   };
   const copyUrl = () => {
     void navigator.clipboard.writeText(openUrl).then(

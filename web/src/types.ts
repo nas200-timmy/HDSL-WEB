@@ -377,6 +377,27 @@ export interface DeveloperStatus {
   estop?: EmergencyStopState;
 }
 
+/// 一个品牌的“最后手段”策略；默认全关。
+export interface BrandPolicyEntry {
+  brand: BrandId;
+  singleInstance: boolean;
+  survivor: string | null;
+  lockedRoute: boolean;
+  sourceBuild: boolean;
+  instances: {
+    id: string;
+    name: string;
+    version: string;
+    state: string;
+    disabled: boolean;
+  }[];
+}
+
+/// GET /api/developer/brand-policy
+export interface BrandPolicyStatus {
+  brands: BrandPolicyEntry[];
+}
+
 /// 开发者守卫能管多远：off / 只反代 / 反代 + 实例操作 / 全部 API。
 export type DeveloperGuardScope = "off" | "proxy" | "instance" | "all";
 
@@ -423,7 +444,7 @@ export type WsEvent =
 
 // ---------- 第三方品牌实例（kimi / opencode / claude-web，REST 挂 /api/brands/<brand>/*） ----------
 
-export type BrandId = "kimi" | "opencode" | "claude-web";
+export type BrandId = "kimi" | "opencode" | "claude-web" | "octop";
 
 /// 终端内核（只有 Claude Web 有不止一个：社区引擎 claude-web-engine 或官方
 /// Claude Code 二进制）。`available` 为假时 `detail` 说明缺什么。
@@ -463,6 +484,8 @@ export interface BrandInstance {
   createdAt: string | number;
   state: "created" | "starting" | "running" | "stopped" | "error";
   error?: string;
+  /** 被单实例策略禁用：行变灰，启动/打开/删除应被拒绝 */
+  disabled?: boolean;
   /** state = running 时的反代地址（/i/<id>/） */
   url?: string;
 }
@@ -480,7 +503,7 @@ export interface InstancePlugins {
 /// 这是**唯一**的跨品牌实例状态源：BrandsView（品牌层）/ ZcodeSection / LaunchPane /
 /// MainPage 都从这里读，写入只发生在 refreshExternal。
 export interface ExternalInstance {
-  brand: "kimi" | "opencode" | "claude-web" | "zcode";
+  brand: "kimi" | "opencode" | "claude-web" | "octop" | "zcode";
   id: string;
   name: string;
   state: string;
@@ -491,6 +514,8 @@ export interface ExternalInstance {
   version?: string;
   /** 运行出错时的错误信息（state = error） */
   error?: string;
+  /** 被单实例策略禁用 */
+  disabled?: boolean;
   /** 仅 zcode：实例是否已配置 API Key */
   hasApiKey?: boolean;
   /** 仅 zcode：已保存的 API Base URL（编辑表单回填用） */

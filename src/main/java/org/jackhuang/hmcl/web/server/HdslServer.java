@@ -222,6 +222,10 @@ public final class HdslServer {
                 new org.jackhuang.hmcl.web.emergency.EmergencyStop();
         InstanceRuntime runtime = new InstanceRuntime(eventBus, taskService, emergencyStop);
         runtime.wire();
+        // The last-resort fixed mount survives a panel restart: the policy file
+        // is the source of truth, the runtime only caches the survivor id.
+        org.jackhuang.hmcl.web.brand.BrandRuntime.setLockedOctopSurvivor(
+                new org.jackhuang.hmcl.web.brand.BrandPolicy(config.dataDir).lockedSurvivor());
         AcpSessionManager acpSessions = new AcpSessionManager(eventBus);
         WsGateway.install(eventBus, authService, config.auth.disabled, acpSessions);
 
@@ -331,6 +335,14 @@ public final class HdslServer {
         tlsHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(tlsHolder, "/api/settings/*");
         context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService, config.basePath)), "/i/*");
+        // A panel killed mid source-build leaves a half-built release next to a
+        // complete `<version>.previous`; put it back before anything lists
+        // releases (otherwise that version reads as installed but cannot start).
+        // Deliberately *after* the proxy servlet is constructed: touching the
+        // installer initialises its own HttpClient, and the JDK freezes the
+        // restricted-header allow-list at that moment (see HostHeaderSupport).
+        org.jackhuang.hmcl.web.brand.BrandInstaller.reconcileOctopReleases(
+                config.dataDir.resolve("brands").resolve(org.jackhuang.hmcl.web.brand.Brand.OCTOP.id()));
         context.addServlet(new ServletHolder(new StaticServlet(config.basePath)), "/");
         // Anything a servlet lets escape becomes a JSON 500, not Jetty's HTML
         // error page — the frontend reads these bodies as an API contract.
@@ -384,6 +396,11 @@ public final class HdslServer {
                     context);
         }
         server.setHandler(handler);
+
+        // Fail fast if something ordered badly: a broken Host passthrough is a
+        // 500 on every /i/* mount, and finding that out at boot beats finding it
+        // out from users.
+        org.jackhuang.hmcl.web.http.HostHeaderSupport.verify();
 
         HdslServer built = new HdslServer(server, httpConfig, mainConnector, redirectConnector, ssl,
                 proxyWebSocketClient, acpSessions, terminals, logger, startedAtMillis);

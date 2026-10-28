@@ -54,6 +54,11 @@ final class InstanceProxyTargets {
     /// @param instanceId the id from the `/i/<id>/` path
     /// @return a positive port, or [UNKNOWN] / [NOT_RUNNING]
     static int resolve(String instanceId) {
+        String target = BrandRuntime.targetForMount(instanceId);
+        if (!target.equals(instanceId)) {
+            int port = BrandRuntime.isRunning(target) ? BrandRuntime.portOf(target) : 0;
+            return port > 0 ? port : NOT_RUNNING;
+        }
         DshInstance instance = DshInstanceManager.find(instanceId);
         if (instance != null) {
             URI webUrl = DshProcessManager.find(instanceId).flatMap(DshProcess::webUrl).orElse(null);
@@ -84,6 +89,11 @@ final class InstanceProxyTargets {
     /// @param instanceId the id from the `/i/<id>/` path
     /// @return a positive port, or [NOT_RUNNING]
     static int resolveForRelay(String instanceId) {
+        String target = BrandRuntime.targetForMount(instanceId);
+        if (!target.equals(instanceId)) {
+            int port = BrandRuntime.isRunning(target) ? BrandRuntime.portOf(target) : 0;
+            return port > 0 ? port : NOT_RUNNING;
+        }
         URI webUrl = DshProcessManager.find(instanceId).flatMap(DshProcess::webUrl).orElse(null);
         if (webUrl != null && webUrl.getPort() > 0) {
             return webUrl.getPort();

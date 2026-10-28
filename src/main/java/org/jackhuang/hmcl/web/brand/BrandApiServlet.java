@@ -93,6 +93,7 @@ public final class BrandApiServlet extends HttpServlet {
     /// Live TLS state of the main connector; the terminal is HTTPS-only.
     private final java.util.function.BooleanSupplier tlsActive;
     private final InstanceTerminal instanceTerminal;
+    private final BrandPolicy policy;
     private final Map<Brand, PathRef> brands = new EnumMap<>(Brand.class);
 
     private record PathRef(Path root, BrandInstanceManager manager) {
@@ -113,6 +114,7 @@ public final class BrandApiServlet extends HttpServlet {
         this.developerAuth = developerAuth;
         this.developerElevation = developerElevation;
         this.tlsActive = tlsActive;
+        this.policy = new BrandPolicy(config.dataDir);
         this.instanceTerminal = new InstanceTerminal(config, terminals, terminalTickets, auth,
                 developerAuth, developerElevation, tlsActive, emergency);
         Path base = config.dataDir.resolve("brands");
@@ -285,6 +287,20 @@ public final class BrandApiServlet extends HttpServlet {
                     target + " is not a published " + brand.sourceLabel() + " version");
             return;
         }
+        boolean sourceBuild = brand == Brand.OCTOP && policy.get(brand).sourceBuild();
+        // Reinstalling deletes the target directory, so it must not happen under
+        // a running instance — whatever the install path. (The source build has
+        // the same rule for its own reason: it would rebuild the tree the
+        // process is executing from.)
+        for (BrandInstance instance : ref.manager().list()) {
+            if (target.equals(instance.version()) && BrandRuntime.isRunning(instance.id())) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT,
+                        sourceBuild
+                                ? "stop the running instance before rebuilding this version from source"
+                                : "stop the running instance before reinstalling this version");
+                return;
+            }
+        }
         if (tasks.activeInstall(brand.id()).isPresent()) {
             Json.error(response, HttpServletResponse.SC_CONFLICT,
                     "an install for " + brand.id() + " is already running");
@@ -292,9 +308,16 @@ public final class BrandApiServlet extends HttpServlet {
         }
         TaskService.Task task = tasks.submit("install", brand.id(), live -> {
             try {
-                BrandInstaller.install(brand, target, ref.root(),
-                        message -> live.update(message, -1));
-                return "Installed " + brand.sourceLabel() + " " + target;
+                if (sourceBuild) {
+                    BrandInstaller.installOctopSource(brand, target, ref.root(),
+                            ref.root().resolve(BrandInstaller.RELEASES_DIR).resolve(target),
+                            message -> live.update(message, -1));
+                } else {
+                    BrandInstaller.install(brand, target, ref.root(),
+                            message -> live.update(message, -1));
+                }
+                return "Installed " + brand.sourceLabel() + " " + target
+                        + (sourceBuild ? " (source build)" : "");
             } catch (BrandException e) {
                 throw new RuntimeException(e.getMessage(), e);
             }
@@ -423,6 +446,9 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
             return;
         }
+        if (refuseDisabled(brand, id, response)) {
+            return;
+        }
         JsonObject body = body(request, response);
         if (body == null) {
             return;
@@ -464,6 +490,9 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
             return;
         }
+        if (refuseDisabled(brand, id, response)) {
+            return;
+        }
         if (BrandRuntime.isRunning(id)) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "stop the instance before deleting it");
             return;
@@ -473,6 +502,19 @@ public final class BrandApiServlet extends HttpServlet {
         response.setStatus(204);
     }
 
+    /// The single-instance policy hides every non-survivor. Refuse the actions
+    /// that would start, open, change or delete one; stopping remains allowed
+    /// so an operator can always wind a disabled instance down.
+    private boolean refuseDisabled(Brand brand, String id, HttpServletResponse response) throws IOException {
+        if (!policy.disabled(brand, id)) {
+            return false;
+        }
+        Json.error(response, HttpServletResponse.SC_CONFLICT,
+                "disabled_by_brand_policy: this instance is disabled by the single-instance policy; "
+                        + "choose it as the survivor in Settings → Brand Instances");
+        return true;
+    }
+
     // ------------------------------------------------------------ launch / stop --
 
     private void launch(Brand brand, PathRef ref, HttpServletRequest request, HttpServletResponse response, String id)
@@ -480,6 +522,9 @@ public final class BrandApiServlet extends HttpServlet {
         BrandInstance instance = ref.manager().find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
+            return;
+        }
+        if (refuseDisabled(brand, id, response)) {
             return;
         }
         java.nio.file.Path packageDir = BrandInstaller.packageDir(brand, ref.root(), instance.version());
@@ -704,6 +749,9 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
             return;
         }
+        if (refuseDisabled(brand, id, response)) {
+            return;
+        }
         if (!BrandRuntime.isRunning(id)) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "the instance is not running");
             return;
@@ -768,6 +816,7 @@ public final class BrandApiServlet extends HttpServlet {
         body.addProperty("lastPort", instance.lastPort());
         body.addProperty("createdAt", instance.createdAt());
         body.addProperty("state", status.state().name().toLowerCase(java.util.Locale.ROOT));
+        body.addProperty("disabled", policy.disabled(brand, instance.id()));
         if (status.error() != null) {
             body.addProperty("error", status.error());
         }
@@ -782,9 +831,26 @@ public final class BrandApiServlet extends HttpServlet {
     /// clients (OpenCode) get the router shim injected there instead of an
     /// origin of their own.
     private String openUrl(Brand brand, BrandInstance instance, HttpServletRequest request) {
+        return mountPath(config.basePath, brand, instance.id(), BrandRuntime.lockedOctopSurvivor());
+    }
+
+    /// The mount a browser should open for one instance.
+    ///
+    /// Normally the token mount `/i/<instanceId>/`. When the developer policy
+    /// has switched the fixed `/i/octop/` alias on **and** this instance is its
+    /// survivor, that alias is the URL to hand out — otherwise the "open"
+    /// button would keep sending people to the token path and the fixed route
+    /// would only ever be reachable by typing it.
+    ///
+    /// Package-private and pure so the two cases can be asserted without a
+    /// running instance.
+    static String mountPath(String basePath, Brand brand, String instanceId, @Nullable String lockedSurvivor) {
         // Browser-consumed URL: carries the mount base so a subpath-mounted
         // panel hands out /panel/i/<id>/ instead of a root path that 404s.
-        return config.basePath + "/i/" + instance.id() + "/";
+        if (brand == Brand.OCTOP && lockedSurvivor != null && lockedSurvivor.equals(instanceId)) {
+            return basePath + "/i/octop/";
+        }
+        return basePath + "/i/" + instanceId + "/";
     }
 
     private static void writeStatus(HttpServletResponse response, BrandRuntime.Status status) throws IOException {

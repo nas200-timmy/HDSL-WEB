@@ -71,13 +71,30 @@ public enum Brand {
     /// over a single WebSocket at `/ws`, and routes nothing by pathname, so a
     /// subpath mount under `/i/<id>/` works with the standard brand shim — no
     /// router shim.
-    CLAUDE_WEB("claude-web", Source.GITHUB, "https://github.com/ypyik0669/claude-web", "v", false);
+    CLAUDE_WEB("claude-web", Source.GITHUB, "https://github.com/ypyik0669/claude-web", "v", false),
 
-    /// Where a brand's releases come from: an npm registry package, or a
-    /// GitHub repository's release tags (source zip over HTTPS, no git).
+    /// Octop (TencentCloud/Octop, MIT): a self-hosted multi-user AI assistant
+    /// whose dashboard is a Python/FastAPI server plus a React SPA.
+    ///
+    /// Its releases are **portable archives**, not a source checkout: each tag
+    /// publishes `Octop-portable-<plat>-<version>.zip`, which already contains
+    /// CPython 3.12, every Python dependency and the dashboard. The panel
+    /// installs that archive and replaces only the dashboard directory with the
+    /// patched build (`octop-dashboard-<version>.zip`), because Octop's own
+    /// dashboard is built for `/` while an instance lives under `/i/<token>/`.
+    ///
+    /// The instance id is an opaque token (the same construction every brand
+    /// uses), so several Octop servers can coexist without sharing storage
+    /// keys; the patched dashboard namespaces `auth_token` by its mount.
+    OCTOP("octop", Source.GITHUB_RELEASE, "https://github.com/TencentCloud/Octop", "v", false);
+
+    /// Where a brand's releases come from: an npm registry package, a GitHub
+    /// repository's release tags (source zip over HTTPS, no git), or a GitHub
+    /// release's prebuilt portable archive.
     public enum Source {
         NPM,
-        GITHUB
+        GITHUB,
+        GITHUB_RELEASE
     }
 
     private final String id;
@@ -107,6 +124,12 @@ public enum Brand {
         return source;
     }
 
+    /// Whether releases come from a GitHub repository (source zip or a
+    /// prebuilt release asset), as opposed to an npm registry package.
+    public boolean fromGitHub() {
+        return source == Source.GITHUB || source == Source.GITHUB_RELEASE;
+    }
+
     /// The upstream npm package the installer fetches; `null` for GitHub brands.
     public @Nullable String npmPackage() {
         return source == Source.NPM ? locator : null;
@@ -121,14 +144,14 @@ public enum Brand {
     /// The upstream repository URL the installer fetches sources from; `null`
     /// for npm brands.
     public @Nullable String repoUrl() {
-        return source == Source.GITHUB ? locator : null;
+        return fromGitHub() ? locator : null;
     }
 
     /// The `owner/repo` slug of the repository — the form the GitHub REST API
     /// (`/repos/<slug>/tags`) and codeload (`/<slug>/zip/…`) address it by.
     /// Empty for npm brands.
     public String githubSlug() {
-        if (source != Source.GITHUB) {
+        if (!fromGitHub()) {
             return "";
         }
         String slug = locator;
@@ -147,19 +170,35 @@ public enum Brand {
     /// The tag prefix a version is released under (`v` for `v0.2.1`). Empty
     /// for npm brands.
     public String tagPrefix() {
-        return source == Source.GITHUB ? aux : "";
+        return fromGitHub() ? aux : "";
     }
 
     /// The tag naming one version: the prefix plus the version (`v` + `0.2.1`
     /// → `v0.2.1`). The version alone for npm brands.
     public String releaseTag(String version) {
-        return source == Source.GITHUB ? aux + version : version;
+        return fromGitHub() ? aux + version : version;
     }
 
     /// The release-relative path whose existence proves an install: the
-    /// package's executable (NPM) or the built web app (GIT).
+    /// package's executable (NPM) or the built web app (GITHUB). Octop's
+    /// portable archive carries the SPA under `packages/octop/dashboard/`.
     public String installMarker() {
+        if (this == OCTOP) {
+            // Written by both installers (portable archive and local source),
+            // so one marker proves either layout is complete.
+            return "octop-install.json";
+        }
         return source == Source.NPM ? "node_modules/.bin/" + aux : "web/dist/index.html";
+    }
+
+    /// Whether a tag/version is a release this panel should offer. Octop
+    /// publishes beta tags such as `1.0.3b1`; the other brands are strict
+    /// `x.y.z` to keep their CI noise out of the picker.
+    public boolean isReleaseVersion(String version) {
+        String pattern = this == OCTOP
+                ? "^\\d+\\.\\d+\\.\\d+(?:[A-Za-z][0-9A-Za-z.-]*)?$"
+                : "^\\d+\\.\\d+\\.\\d+$";
+        return version.matches(pattern);
     }
 
     /// What the panel calls the upstream in user-facing messages: the npm

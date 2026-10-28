@@ -2,6 +2,26 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## Unreleased — 2026-10-28 · Octop 作为品牌实例接入
+
+- 新增品牌 **Octop**（TencentCloud/Octop，MIT）：按普通品牌实例管理，实例 id 是随机 token，
+  挂载在 `/i/<token>/`；日常与 Kimi / OpenCode / Claude Web 同一套创建、启动、停止、打开、日志。
+- 安装走 GitHub Release 的 **portable 包**（`Octop-portable-<plat>-<version>.zip`），内含 CPython 3.12
+  与全部 Python 依赖，面板不需要系统 Python/uv；只把 `packages/octop/dashboard` 换成随面板分发的
+  补丁版（`src/main/resources/octop/octop-dashboard-<version>.zip`），Windows 同样直接可用。
+- Octop 前端补丁：运行时读代理注入的 `<base>`/`window.__OCTOP_BASE__`，构建用相对 base；
+  `auth_token`、`active-agent` 等 localStorage key 按挂载点命名空间化——多个实例同 origin 登录互不踢。
+- 代理：Octop 页面只注入 `<base>` 与全局变量，不跑 Kimi/OpenCode 的 JS/router 改写；
+  WS/SSE、Cookie Path、Redirect 沿用现有 `/i/*` 实现。
+- 开发者模式新增 **品牌实例管理**（需要开发者密码）：单实例模式必须先指定保留实例，其余实例
+  灰掉并拒绝启动/打开/修改/删除（数据保留）；可选固定 `/i/octop/` 反代。
+- **本地源码编译**（Linux）：下载 tag 源码，应用 dashboard 补丁，`npm ci && build`，再优先从 PyPI
+  取 uv、下载 Python 3.12 并 `uv sync`；失败会保留原预编译 release，成功后产出 `.venv/bin/octop`。
+  构建完删除 4+ GiB 的 `node_modules`，源码 release 约 2.8 GiB。
+- 设置页策略存 `<data>/brands/policy.json`，按品牌分节；默认全关。面板重启后固定路径会自动恢复。
+- 版本选择器只列出本面板真正带补丁 dashboard 的 Octop 版本，避免选到渲染不出挂载点的上游 tag。
+- 测试：`BrandPolicyTest`、Octop 页面改写用例；插件/Java 基线照旧。
+
 ## Unreleased — 2026-10-28 · 「全部 API」档的空面板给个说法
 
 - `all` 档的行为不变（连读都要提权，这是它区别于 `instance` 的地方），但**前端不再让人对着空列表猜**：
@@ -18,6 +38,28 @@
 - `docs/deployment.md` 新增 §11「把 agent 当对手：三条真边界」：外层再认证（便宜、只解决一半）、
   拆容器（推荐给 Docker）、不同 uid 跑实例（Linux 最彻底，Windows 无等价物），以及明确列出"不做的事"。
 - 没有代码改动：这是边界说明，不是功能。
+
+## v0.6.0 — 2026-10-28 · 新增一个品牌：Octop（腾讯云）
+
+> 这一版的主题只有一个：面板多了一个可以管理的品牌。
+
+- **Octop（腾讯云的开源自托管 AI 助手）**：一个新的品牌分类，和 kimi / opencode / claude-web /
+  zcode 并列。安装在品牌页里完成，实例是一份独立的 `OCTOP_HOME`，端口只绑回环、经面板
+  `/i/<token>/` 反代访问；面板会话门在前、Octop 自己的 JWT 在后，两层都能单独拦住。
+  安装有两条路：官方 portable 包（默认），或开发者模式里的**本地源码编译**（Linux）。
+- **仪表盘挂载点补丁**：Octop 的前端按绝对路径取资源，直接挂在 `/i/<id>/` 下会全是 404；
+  面板给它注入 `<base href>` 与 `__OCTOP_BASE__` 的运行时补丁（源码在 `integrations/octop/`），
+  这样同一份上游产物在子路径挂载下也能跑。
+- **品牌策略（开发者模式）**：单实例模式（其余实例灰掉但数据保留）、固定反代 `/i/octop/`
+  （开启后「打开」按钮与 open 接口都返回这个固定路径）、源码编译开关，存
+  `<data>/brands/policy.json`。
+- **品牌实例在手机上不再挤成一团**：窄屏/触摸设备下，实例行的版本选择与操作按钮折到第二行、
+  长 url 自动断行，新建行也各自换行（纯前端样式，逻辑未动）。
+- **图标与商标**：Octop 一节**不**使用腾讯/Octop 的标志——上游仓库是 MIT，但许可证不覆盖商标；
+  所以走中性图标 + 文字标签，理由写在 `NOTICE` 的 TRADEMARKS 与 `BrandIcon` 注释里。
+- **顺带修掉的 P0**：`/i/*` 反代曾在正常启动后全 500（`restricted header name: "Host"`）——
+  Octop 安装器的静态 `HttpClient` 在反代 servlet 之前初始化，把 JDK 的受限头允许列表定死了。
+  现在 `main` 第一行就设属性、装配完再做一次**真探针**自检，顺序错就启动失败而不是静默 500。
 
 ## v0.5.95 — 2026-10-28 · 需要开发者密码时弹框 + 安全说明补齐
 

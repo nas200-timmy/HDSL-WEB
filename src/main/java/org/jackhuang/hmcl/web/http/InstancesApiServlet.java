@@ -2013,7 +2013,9 @@ public final class InstancesApiServlet extends HttpServlet {
         // `DshInstanceManager.create` refuses to adopt a directory that is already there — so an id
         // that resolved to one would turn a name the user typed into an error rather than a suffix.
         while (DshInstanceManager.exists(candidate)
-                || Files.exists(DshPaths.instanceDirectory(candidate), LinkOption.NOFOLLOW_LINKS)) {
+                || Files.exists(DshPaths.instanceDirectory(candidate), LinkOption.NOFOLLOW_LINKS)
+                // `/i/octop/` is reserved for the last-resort Octop mount.
+                || "octop".equals(candidate)) {
             candidate = base + "-" + suffix;
             suffix++;
         }

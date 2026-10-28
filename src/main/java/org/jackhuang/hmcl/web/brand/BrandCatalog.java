@@ -82,7 +82,7 @@ public final class BrandCatalog {
     /// @param brand the brand
     /// @return the versions, newest first
     public static List<String> versions(Brand brand) {
-        return snapshot(brand).versions();
+        return installable(brand).versions();
     }
 
     /// The version the registry's `latest` dist-tag points at, when it is one
@@ -91,7 +91,21 @@ public final class BrandCatalog {
     /// @param brand the brand
     /// @return the version to preselect, never empty when versions exist
     public static String latest(Brand brand) {
-        return snapshot(brand).latest();
+        return installable(brand).latest();
+    }
+
+    /// Octop needs a patched SPA per release; only versions this panel build
+    /// actually bundles are offered. Other brands pass their picker through.
+    private static Snapshot installable(Brand brand) {
+        Snapshot snapshot = snapshot(brand);
+        if (brand != Brand.OCTOP) {
+            return snapshot;
+        }
+        List<String> versions = snapshot.versions().stream()
+                .filter(BrandInstaller::hasBundledOctopDashboard)
+                .toList();
+        String latest = versions.isEmpty() ? "" : versions.get(0);
+        return new Snapshot(versions, latest, snapshot.fetchedAt());
     }
 
     /// Prefetches every brand's list — called once at server startup so the
@@ -163,7 +177,7 @@ public final class BrandCatalog {
     /// One registry round trip: the package document's `versions` keys, filtered
     /// to clean semver and sorted newest first, plus the `latest` dist-tag.
     private static Snapshot fetch(Brand brand) {
-        if (brand.source() == Brand.Source.GITHUB) {
+        if (brand.fromGitHub()) {
             return fetchGitHub(brand);
         }
         String registry = NpmRegistry.effective().registry();
@@ -211,7 +225,7 @@ public final class BrandCatalog {
             try {
                 HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
                 if (response.statusCode() / 100 == 2) {
-                    return parseGitHubTags(response.body());
+                    return parseGitHubTags(response.body(), brand.tagPrefix(), brand::isReleaseVersion);
                 }
                 LOG.warning("GitHub answered " + response.statusCode() + " for " + url);
             } catch (InterruptedException e) {
@@ -240,6 +254,13 @@ public final class BrandCatalog {
 
     /// [parseGitHubTags(String)] with an explicit tag prefix.
     static Snapshot parseGitHubTags(String body, String tagPrefix) {
+        return parseGitHubTags(body, tagPrefix, version -> CLEAN_VERSION.matcher(version).matches());
+    }
+
+    /// The same, with a brand-specific release predicate: Octop publishes beta
+    /// tags (`1.0.3b1`) that the strict semantic-version filter would hide.
+    static Snapshot parseGitHubTags(String body, String tagPrefix,
+                                    java.util.function.Predicate<String> accepted) {
         try {
             com.google.gson.JsonArray array = JsonParser.parseString(body).getAsJsonArray();
             java.util.Set<String> seen = new java.util.HashSet<>();
@@ -252,7 +273,7 @@ public final class BrandCatalog {
                 String version = tagPrefix.isEmpty() || !name.startsWith(tagPrefix)
                         ? name
                         : name.substring(tagPrefix.length());
-                if (CLEAN_VERSION.matcher(version).matches() && seen.add(version)) {
+                if (accepted.test(version) && seen.add(version)) {
                     clean.add(version);
                 }
             }
@@ -270,12 +291,29 @@ public final class BrandCatalog {
         String[] a = left.split("\\.");
         String[] b = right.split("\\.");
         for (int i = 0; i < Math.max(a.length, b.length); i++) {
-            int x = i < a.length ? Integer.parseInt(a[i]) : 0;
-            int y = i < b.length ? Integer.parseInt(b[i]) : 0;
+            int x = i < a.length ? leadingNumber(a[i]) : 0;
+            int y = i < b.length ? leadingNumber(b[i]) : 0;
             if (x != y) {
                 return Integer.compare(y, x);
             }
         }
         return right.compareTo(left);
     };
+
+    /// The numeric prefix of a version component: `3` for `3`, `3` for
+    /// `3b1` (Octop's beta tags), `0` when the component starts with a letter.
+    private static int leadingNumber(String component) {
+        int end = 0;
+        while (end < component.length() && Character.isDigit(component.charAt(end))) {
+            end++;
+        }
+        if (end == 0) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(component.substring(0, end));
+        } catch (NumberFormatException e) {
+            return Integer.MAX_VALUE;
+        }
+    }
 }

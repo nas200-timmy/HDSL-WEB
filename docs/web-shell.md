@@ -210,6 +210,27 @@ web/http/InstancesApiServlet   /api/instances/{id}/tui-plugins（每个插件自
 web/ws/TerminalWebSocket       WSS /ws/terminal/{ticket}
 ```
 
+### 5.1 反代的 `Host` 透传：一个只能设一次的 JDK 开关
+
+`/i/*` 必须把浏览器带来的 `Host` 原样转给实例（dsh 用 `Origin == Host` 判同源），而 `java.net.http`
+默认拒绝设置 `Host`，要先设 `jdk.httpclient.allowRestrictedHeaders=host`。麻烦在于**JDK 在第一次创建
+`HttpClient` 时就把这份允许列表定死了**，之后再设属性没有任何效果。
+
+2026-10-28 踩过一次：启动流程里先碰了一个带静态 `HttpClient` 的类（Octop 安装器），再构造反代
+servlet，于是所有 `/i/*` 都回 `500 restricted header name: "Host"`；加 `-D` 参数立刻恢复 200，
+说明纯粹是顺序问题。
+
+现在三道保险，别再拆掉任何一道：
+
+1. `main` 的**第一行**调用 `HostHeaderSupport.allow()`，在建任何 `HttpClient` 之前；
+2. `InstanceProxyServlet` 的静态块保留同样的调用作兜底（只对"还没有 HttpClient"的场合有效）；
+3. `HdslServer` 装配完最后一个 servlet 后调 `HostHeaderSupport.verify()`——它**直接探一次请求**，
+   而不是回读属性（设晚了的属性读起来一切正常，这正是要抓的错），失败即启动失败并给出 `-D` 补救。
+
+对应测试 `HostHeaderSupportTest` 用**独立 JVM** 跑 `HostHeaderProbe`：先加载带静态 `HttpClient` 的类
+再 verify 必须被拒绝；先设属性则放行。普通进程内测试抓不到这个回归（测试 JVM 的 `TestSupport`
+早就把属性设好了，这正是以前测试全绿而线上 500 的原因）。
+
 ## 6. PTY 胶水（JNA）
 
 - 依赖只有 JNA（LGPL-2.1/Apache-2.0 双许可，按 Apache-2.0 使用，与 GPL-3.0 兼容）。

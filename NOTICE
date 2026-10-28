@@ -109,6 +109,11 @@ implied.
   zai-org/ZCode repository is deliberately not used: that repository's NOTICE
   reserves the terms of "icons" generically, so the clearly-licensed file wins.
 
+  Octop — "Octop" and "Tencent Cloud" are trademarks of Tencent.  The panel
+  ships **no** Octop/Tencent mark: the upstream repository
+  (TencentCloud/Octop) is MIT-licensed, but that licence covers its code, not
+  its trademarks, so the section is labelled with text and the neutral icon.
+
   Claude Web — "Claude", "Claude Code" and "Anthropic" are trademarks of
   Anthropic PBC.  The Claude Web section manages the community project
   ypyik0669/claude-web (an unofficial workbench around the Claude Code CLI that
@@ -154,6 +159,17 @@ it backs the PTY glue of the web terminal, and nothing else.
       whale to lhh010/dsh-ui-whale (BSD-3-Clause); only the static frame is
       reproduced here.
       https://github.com/ccch1mneyyy/dsh-TUI
+
+  Octop (TencentCloud/Octop)
+      The panel bundles a patched build of the Octop dashboard
+      (src/main/resources/octop/octop-dashboard-<version>.zip) for its
+      brand-instance integration.  Octop is Copyright (c) Tencent and
+      contributors and is distributed under the MIT License.
+      https://github.com/TencentCloud/Octop
+
+      The portable runtime archive is downloaded at install time from the
+      project's GitHub Releases; it bundles CPython (PSF License) and the
+      Python packages listed in Octop's own distribution metadata.
 
   Eclipse Jetty (jetty-server, jetty-http, jetty-io, jetty-util, jetty-client,
   jetty-security, jetty-session, jetty-alpn-client, jetty-xml, jetty-jndi,
