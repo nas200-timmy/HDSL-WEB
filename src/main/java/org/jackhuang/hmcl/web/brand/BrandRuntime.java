@@ -532,15 +532,22 @@ public final class BrandRuntime {
             }
             case OCTOP -> {
                 int port = allocatePort();
-                Path launch = packageDir.resolve("launch.py");
-                if (!Files.isRegularFile(launch)) {
-                    throw new IOException("Octop launcher not found: " + launch);
+                Path sourceOctop = packageDir.resolve(".venv/bin/octop");
+                if (Files.isRegularFile(sourceOctop)) {
+                    // Source fallback: uv produced a console script whose
+                    // shebang points at the venv's own CPython 3.12.
+                    command.add(sourceOctop.toString());
+                } else {
+                    Path launch = packageDir.resolve("launch.py");
+                    if (!Files.isRegularFile(launch)) {
+                        throw new IOException("Octop launcher not found: " + launch);
+                    }
+                    // The portable archive carries its own CPython, so no system
+                    // Python (and no uv) is involved. `launch.py` puts packages/
+                    // on sys.path and then runs the `octop` module.
+                    command.add(octopPython(packageDir).toString());
+                    command.add(launch.toString());
                 }
-                // The portable archive carries its own CPython, so no system
-                // Python (and no uv) is involved. `launch.py` puts packages/
-                // on sys.path and then runs the `octop` module.
-                command.add(octopPython(packageDir).toString());
-                command.add(launch.toString());
                 command.add("run");
                 command.add("--host");
                 command.add("127.0.0.1");
@@ -607,16 +614,25 @@ public final class BrandRuntime {
         if (Files.isRegularFile(home.resolve("octop.db"))) {
             return;
         }
-        Path launch = packageDir.resolve("launch.py");
-        if (!Files.isRegularFile(launch)) {
-            throw new IOException("Octop launcher not found: " + launch);
-        }
+        Path sourceOctop = packageDir.resolve(".venv/bin/octop");
         String password = randomPassword();
-        List<String> command = List.of(
-                octopPython(packageDir).toString(), launch.toString(),
-                "init", "--yes",
-                "--admin-username", "admin",
-                "--admin-password", password);
+        List<String> command = new ArrayList<>();
+        if (Files.isRegularFile(sourceOctop)) {
+            command.add(sourceOctop.toString());
+        } else {
+            Path launch = packageDir.resolve("launch.py");
+            if (!Files.isRegularFile(launch)) {
+                throw new IOException("Octop launcher not found: " + launch);
+            }
+            command.add(octopPython(packageDir).toString());
+            command.add(launch.toString());
+        }
+        command.add("init");
+        command.add("--yes");
+        command.add("--admin-username");
+        command.add("admin");
+        command.add("--admin-password");
+        command.add(password);
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.directory(home.toFile());
         builder.redirectErrorStream(true);

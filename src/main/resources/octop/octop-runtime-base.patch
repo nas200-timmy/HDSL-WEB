@@ -1,0 +1,127 @@
+diff --git a/dashboard/src/api/request.ts b/dashboard/src/api/request.ts
+index 7afb709..2bd1577 100644
+--- a/dashboard/src/api/request.ts
++++ b/dashboard/src/api/request.ts
+@@ -1,10 +1,18 @@
+ import { getApiUrl } from "./config";
+ import i18n from "../i18n";
++import { routerBasename } from "../utils/publicUrl";
+ import { markNavigatingAway } from "../utils/reloadOnStaleChunk";
+ 
+-const AUTH_TOKEN_KEY = "auth_token";
++/** Storage keys are scoped to the mount: several Octop instances can share one
++ *  origin (the panel proxies each under `/i/<token>/`), and an unscoped
++ *  `auth_token` would make logging into one instance sign the others out. */
++function scopedKey(name: string): string {
++  return `octop:${routerBasename() || "/"}:${name}`;
++}
++
++const AUTH_TOKEN_KEY = scopedKey("auth_token");
+ /** sessionStorage handoff for SSO redirects / popups (default = remember). */
+-const AUTH_REMEMBER_PREF_KEY = "auth_remember_pref";
++const AUTH_REMEMBER_PREF_KEY = scopedKey("auth_remember_pref");
+ 
+ /**
+  * Fired when the session is no longer valid. Cancelable: a listener inside the
+@@ -96,7 +104,7 @@ export function clearAuthToken() {
+   localStorage.removeItem(AUTH_TOKEN_KEY);
+   sessionStorage.removeItem(AUTH_TOKEN_KEY);
+   sessionStorage.removeItem(AUTH_REMEMBER_PREF_KEY);
+-  localStorage.removeItem("octop:active-agent");
++  localStorage.removeItem(scopedKey("active-agent"));
+   setActiveAgentId(null);
+ }
+ 
+diff --git a/dashboard/src/context/AgentContext.tsx b/dashboard/src/context/AgentContext.tsx
+index 32202c7..826894f 100644
+--- a/dashboard/src/context/AgentContext.tsx
++++ b/dashboard/src/context/AgentContext.tsx
+@@ -13,6 +13,7 @@ import {
+   retainDisconnectedBridgeAgents,
+   toBridgeShadowAgentId,
+ } from "../utils/remoteExpert";
++import { routerBasename } from "../utils/publicUrl";
+ 
+ /**
+  * Multi-Agent navigation state.
+@@ -114,7 +115,7 @@ export interface EnabledExpertsOptions {
+   pinActive?: boolean;
+ }
+ 
+-const STORAGE_KEY = "octop:active-agent";
++const STORAGE_KEY = `octop:${routerBasename() || "/"}:active-agent`;
+ 
+ /**
+  * Pure helper: narrow ``agents`` down to those that are "enabled" for the
+diff --git a/dashboard/src/utils/publicUrl.ts b/dashboard/src/utils/publicUrl.ts
+index 3ada3ca..31acbf9 100644
+--- a/dashboard/src/utils/publicUrl.ts
++++ b/dashboard/src/utils/publicUrl.ts
+@@ -1,18 +1,48 @@
+ /**
+- * Resolve a path under the Vite-configured public base (``import.meta.env.BASE_URL``).
++ * The mount this build is served under.
++ *
++ * A panel-mounted instance gets a ``<base href="/i/<token>/">`` injected by the
++ * reverse proxy (or ``window.__OCTOP_BASE__`` from an embedding host). Both
++ * change per instance, so the value must be read at runtime: baking the mount
++ * into the bundle is what used to make one build usable for exactly one mount.
++ * Falls back to the Vite build base when the app is opened directly.
++ */
++function runtimeBase(): string {
++  const injected =
++    typeof window !== "undefined"
++      ? (window as unknown as { __OCTOP_BASE__?: string }).__OCTOP_BASE__
++      : undefined;
++  const tag =
++    typeof document !== "undefined"
++      ? document.querySelector("base")?.getAttribute("href")
++      : null;
++  const raw = injected || tag || "";
++  if (raw) {
++    try {
++      const path = new URL(raw, window.location.origin).pathname;
++      return path.endsWith("/") ? path : `${path}/`;
++    } catch {
++      // A malformed base is not worth crashing the app for; use the build base.
++    }
++  }
++  const base = import.meta.env.BASE_URL || "/";
++  return base.endsWith("/") ? base : `${base}/`;
++}
++
++/**
++ * Resolve a path under the runtime mount.
+  * Use for static assets and SW registration when the app may be hosted under a subpath.
+  */
+ export function publicUrl(path: string): string {
+-  const base = import.meta.env.BASE_URL || "/";
++  const base = runtimeBase();
+   const cleaned = path.replace(/^\//, "");
+   if (base === "/") return `/${cleaned}`;
+-  const prefix = base.endsWith("/") ? base : `${base}/`;
+-  return `${prefix}${cleaned}`;
++  return `${base}${cleaned}`;
+ }
+ 
+ /** Router basename: no trailing slash; ``undefined`` when served from domain root. */
+ export function routerBasename(): string | undefined {
+-  const base = import.meta.env.BASE_URL || "/";
++  const base = runtimeBase();
+   if (base === "/") return undefined;
+   return base.replace(/\/$/, "") || undefined;
+ }
+diff --git a/dashboard/vite.config.ts b/dashboard/vite.config.ts
+index 7cad0df..462a7a3 100644
+--- a/dashboard/vite.config.ts
++++ b/dashboard/vite.config.ts
+@@ -54,6 +54,9 @@ function suppressViteDisconnectReload(): Plugin {
+ 
+ function normalizeViteBase(raw: string | undefined): string {
+   const value = (raw || "/").trim() || "/";
++  // Relative base: the panel injects a per-instance <base href>, so the same
++  // build serves any /i/<token>/ mount.
++  if (value === "." || value === "./") return "./";
+   if (value === "/") return "/";
+   const withLeading = value.startsWith("/") ? value : `/${value}`;
+   return withLeading.endsWith("/") ? withLeading : `${withLeading}/`;

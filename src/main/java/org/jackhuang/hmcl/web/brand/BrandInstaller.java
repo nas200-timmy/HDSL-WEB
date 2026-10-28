@@ -26,6 +26,10 @@ import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -42,9 +46,13 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
@@ -89,9 +97,13 @@ public final class BrandInstaller {
     public record Release(String version, String path, boolean current) {
     }
 
-    private static final String RELEASES_DIR = "releases";
+    static final String RELEASES_DIR = "releases";
     private static final String CURRENT_LINK = "current";
     private static final String INSTALL_LOG = "install.log";
+    /// Pinned uv release for the source fallback. `latest/download` redirects
+    /// through a host that times out on this network; a pinned tag serves the
+    /// asset directly.
+    private static final String UV_VERSION = "0.7.13";
 
     /// The HTTP client for GitHub source downloads — its own instance, with a
     /// longer connect timeout than the catalog's (an 11 MB body in the default
@@ -120,7 +132,13 @@ public final class BrandInstaller {
             throws BrandException {
         Path releases = brandRoot.resolve(RELEASES_DIR);
         Path target = releases.resolve(version);
-        if (Files.exists(target.resolve(brand.installMarker()))) {
+        boolean installed = Files.exists(target.resolve(brand.installMarker()));
+        if (installed && brand == Brand.OCTOP) {
+            // A source-built release has the same marker; asking for the
+            // package layout must replace it, not report "already installed".
+            installed = "package".equals(markerMode(target));
+        }
+        if (installed) {
             message.accept(brand.sourceLabel() + " " + version + " is already installed");
             pointCurrentAt(brandRoot, target);
             return;
@@ -353,11 +371,264 @@ public final class BrandInstaller {
         } catch (IOException e) {
             throw new BrandException("Could not unpack the patched Octop dashboard: " + e.getMessage(), e);
         }
-        if (!Files.exists(target.resolve(brand.installMarker()))) {
+        if (!Files.exists(dashboard.resolve("index.html"))) {
             throw new BrandException("Octop " + version + " installed without its dashboard ("
-                    + target.resolve(brand.installMarker()) + ")");
+                    + dashboard.resolve("index.html") + ")");
         }
+        writeMarker(target, "package", version);
         message.accept("Installed Octop " + version + " with the patched dashboard");
+    }
+
+    /// The last-resort source build: tag archive → dashboard patch/build →
+    /// `uv sync` (CPython 3.12 + dependencies) → `.venv/bin/octop`.
+    ///
+    /// Only Linux/macOS. Windows keeps the portable path: compiling the Python
+    /// dependency tree there needs a toolchain the panel deliberately does not
+    /// manage, and the portable archive already works.
+    static void installOctopSource(Brand brand, String version, Path brandRoot, Path target,
+                                   Consumer<String> message) throws BrandException {
+        // Keep the previous release until the new build is complete: a failed
+        // source build must not take a working package install with it.
+        Path backup = target.resolveSibling(target.getFileName() + ".previous");
+        try {
+            if (Files.exists(backup)) {
+                FileUtils.deleteDirectoryQuietly(backup);
+            }
+            if (Files.exists(target)) {
+                Files.move(target, backup, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException e) {
+            throw new BrandException("Could not stage the Octop source build: " + e.getMessage(), e);
+        }
+        boolean complete = false;
+        try {
+            installOctopSourceInto(brand, version, brandRoot, target, message);
+            complete = true;
+        } finally {
+            if (complete) {
+                FileUtils.deleteDirectoryQuietly(backup);
+            } else {
+                FileUtils.deleteDirectoryQuietly(target);
+                if (Files.exists(backup)) {
+                    try {
+                        Files.move(backup, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    } catch (IOException e) {
+                        LOG.warning("Could not restore the previous Octop release at " + target, e);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void installOctopSourceInto(Brand brand, String version, Path brandRoot, Path target,
+                                               Consumer<String> message) throws BrandException {
+        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
+            throw new BrandException("local source compilation is not supported on Windows; "
+                    + "turn sourceBuild off and use the prebuilt portable archive");
+        }
+        if (Files.exists(target)) {
+            FileUtils.deleteDirectoryQuietly(target);
+        }
+        String url = "https://codeload.github.com/" + brand.githubSlug()
+                + "/zip/refs/tags/" + brand.releaseTag(version);
+        message.accept("Downloading source " + url);
+        extractZip(download(url), target);
+
+        Path patch = target.resolve(".hdsl-octop.patch");
+        try (InputStream in = BrandInstaller.class.getResourceAsStream("/octop/octop-runtime-base.patch")) {
+            if (in == null) {
+                throw new BrandException("This panel build has no Octop dashboard patch");
+            }
+            Files.copy(in, patch, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            throw new BrandException("Could not write the Octop dashboard patch: " + e.getMessage(), e);
+        }
+        Path log = brandRoot.resolve(INSTALL_LOG);
+        runChecked(List.of("git", "apply", "--whitespace=nowarn", patch.toString()),
+                target, Map.of(), log, message, "applying the dashboard patch");
+
+        String registry = NpmRegistry.effective().registry();
+        Path dashboard = target.resolve("dashboard");
+        Map<String, String> npmEnv = new HashMap<>();
+        npmEnv.put("NPM_CONFIG_REGISTRY", registry);
+        runChecked(List.of("npm", "ci", "--no-audit", "--no-fund", "--registry=" + registry),
+                dashboard, npmEnv, log, message, "installing dashboard dependencies");
+        npmEnv.put("VITE_BASE_PATH", "./");
+        npmEnv.put("NODE_OPTIONS", "--max-old-space-size=2048");
+        runChecked(List.of("npm", "run", "build:docker"),
+                dashboard, npmEnv, log, message, "building the dashboard");
+        // The built SPA is under src/octop/dashboard; the 4+ GiB dependency
+        // tree is no longer needed by the runtime or a future launch.
+        FileUtils.deleteDirectoryQuietly(dashboard.resolve("node_modules"));
+
+        Path uv = ensureUv(brandRoot, log, message);
+        Map<String, String> pythonEnv = new HashMap<>();
+        pythonEnv.put("UV_CACHE_DIR", brandRoot.resolve("cache/uv").toString());
+        pythonEnv.put("UV_PYTHON_INSTALL_DIR", brandRoot.resolve("toolchain/python").toString());
+        pythonEnv.put("UV_LINK_MODE", "copy");
+        pythonEnv.put("PYTHONDONTWRITEBYTECODE", "1");
+        runChecked(List.of(uv.toString(), "sync", "--frozen", "--no-dev", "--python", "3.12"),
+                target, pythonEnv, log, message, "installing the Python environment");
+
+        Path octop = target.resolve(".venv/bin/octop");
+        if (!Files.isRegularFile(octop)) {
+            throw new BrandException("source build produced no .venv/bin/octop in " + target);
+        }
+        writeMarker(target, "source", version);
+        message.accept("Installed Octop " + version + " from source");
+    }
+
+    /// Finds a usable `uv`: PATH first, then a per-brand copy downloaded from
+    /// the official release tarball. The copy lives under the persisted brand
+    /// directory, so a later reinstall does not fetch it again.
+    private static Path ensureUv(Path brandRoot, Path log, Consumer<String> message) throws BrandException {
+        Path toolchain = brandRoot.resolve("toolchain");
+        Path binary = toolchain.resolve("uv");
+        if (Files.isRegularFile(binary)) {
+            return binary;
+        }
+        try {
+            Process probe = new ProcessBuilder("uv", "--version")
+                    .redirectErrorStream(true).start();
+            if (probe.waitFor(10, java.util.concurrent.TimeUnit.SECONDS) && probe.exitValue() == 0) {
+                return Path.of("uv");
+            }
+            probe.destroyForcibly();
+        } catch (IOException | InterruptedException ignored) {
+            if (ignored instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        // PyPI first: its wheel contains the same binary, and it is reachable on
+        // networks where github.com's release-asset host times out.
+        try {
+            return installUvFromPyPI(toolchain, binary, message);
+        } catch (BrandException e) {
+            message.accept("PyPI uv unavailable (" + e.getMessage() + "); trying GitHub");
+        }
+        String arch = switch (Architecture.CURRENT_ARCH) {
+            case X86_64 -> "x86_64";
+            case ARM64 -> "aarch64";
+            default -> throw new BrandException("no uv release for " + Architecture.CURRENT_ARCH);
+        };
+        String url = "https://github.com/astral-sh/uv/releases/download/" + UV_VERSION + "/uv-"
+                + arch + "-unknown-linux-gnu.tar.gz";
+        Path archive = toolchain.resolve("uv.tar.gz");
+        try {
+            Files.createDirectories(toolchain);
+            message.accept("Downloading uv " + url);
+            try (InputStream in = download(url)) {
+                Files.copy(in, archive, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            runChecked(List.of("tar", "-xzf", archive.toString(), "-C", toolchain.toString()),
+                    toolchain, Map.of(), log, message, "unpacking uv");
+            Path extracted = toolchain.resolve("uv-" + arch + "-unknown-linux-gnu").resolve("uv");
+            if (!Files.isRegularFile(extracted)) {
+                throw new BrandException("uv archive did not contain uv-" + arch + "-unknown-linux-gnu/uv");
+            }
+            Files.move(extracted, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            Files.setPosixFilePermissions(binary,
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+            Files.deleteIfExists(archive);
+            return binary;
+        } catch (IOException e) {
+            throw new BrandException("Could not install uv: " + e.getMessage(), e);
+        }
+    }
+
+    /// Downloads the uv wheel from PyPI and extracts `uv` from
+    /// `uv-<version>.data/scripts/uv`. The wheel is the same static binary as
+    /// the GitHub tarball, but PyPI's CDN is reachable where GitHub's
+    /// release-asset redirect is not.
+    private static Path installUvFromPyPI(Path toolchain, Path binary, Consumer<String> message)
+            throws BrandException {
+        String arch = switch (Architecture.CURRENT_ARCH) {
+            case X86_64 -> "x86_64";
+            case ARM64 -> "aarch64";
+            default -> throw new BrandException("no uv wheel for " + Architecture.CURRENT_ARCH);
+        };
+        String jsonUrl = "https://pypi.org/pypi/uv/" + UV_VERSION + "/json";
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(jsonUrl))
+                    .timeout(Duration.ofSeconds(30))
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+            HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() / 100 != 2) {
+                throw new BrandException("PyPI answered " + response.statusCode() + " for " + jsonUrl);
+            }
+            JsonObject document = JsonParser.parseString(response.body()).getAsJsonObject();
+            JsonArray urls = document.getAsJsonArray("urls");
+            String chosen = null;
+            for (com.google.gson.JsonElement element : urls) {
+                JsonObject file = element.getAsJsonObject();
+                String filename = file.get("filename").getAsString();
+                if (filename.endsWith(".whl") && filename.contains("manylinux")
+                        && filename.contains(arch)) {
+                    chosen = file.get("url").getAsString();
+                    break;
+                }
+            }
+            if (chosen == null) {
+                throw new BrandException("no manylinux " + arch + " uv wheel on PyPI");
+            }
+            Files.createDirectories(toolchain);
+            Path wheel = toolchain.resolve("uv.whl");
+            message.accept("Downloading uv from PyPI " + chosen);
+            try (InputStream in = download(chosen)) {
+                Files.copy(in, wheel, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(wheel))) {
+                ZipEntry entry;
+                boolean found = false;
+                while ((entry = zip.getNextEntry()) != null) {
+                    if (!entry.isDirectory() && entry.getName().endsWith("/uv")) {
+                        Files.copy(zip, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    throw new BrandException("uv wheel did not contain scripts/uv");
+                }
+            }
+            Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwxr-xr-x"));
+            Files.deleteIfExists(wheel);
+            return binary;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BrandException("uv download was interrupted", e);
+        } catch (IOException e) {
+            throw new BrandException("Could not fetch uv from PyPI: " + e.getMessage(), e);
+        }
+    }
+
+    /// The marker both Octop installers write: one existence check proves the
+    /// release is complete, regardless of package-vs-source layout.
+    private static String markerMode(Path target) {
+        try {
+            String json = Files.readString(target.resolve("octop-install.json"), StandardCharsets.UTF_8);
+            int index = json.indexOf("\"mode\"");
+            if (index < 0) {
+                return "";
+            }
+            int colon = json.indexOf(':', index);
+            int first = json.indexOf('"', colon + 1);
+            int last = json.indexOf('"', first + 1);
+            return first >= 0 && last > first ? json.substring(first + 1, last) : "";
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    private static void writeMarker(Path target, String mode, String version) throws BrandException {
+        String json = "{\"mode\":\"" + mode + "\",\"version\":\"" + version + "\"}\n";
+        try {
+            Files.writeString(target.resolve("octop-install.json"), json, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new BrandException("Could not write the Octop install marker: " + e.getMessage(), e);
+        }
     }
 
     /// Portable archives are unpacked with `Files.copy`, which does not carry
@@ -408,7 +679,7 @@ public final class BrandInstaller {
     private static java.io.InputStream download(String url) throws BrandException {
         HttpRequest request = HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofMinutes(5))
-                .header("Accept", "application/zip")
+                .header("Accept", "*/*")
                 .GET()
                 .build();
         try {

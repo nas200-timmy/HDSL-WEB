@@ -124,7 +124,7 @@ export function BrandPolicyPanel() {
 
           <label className="input-check">
             <input type="checkbox" checked={sourceBuild} onChange={(e) => setSourceBuild(e.target.checked)} />
-            本地源码编译（预留：当前版本会拒绝安装，仍使用预编译包）
+            本地源码编译（Linux；下载源码 + uv + 前端，首次较慢）
           </label>
 
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

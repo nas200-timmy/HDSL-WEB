@@ -50,6 +50,8 @@ src/main/resources/octop/octop-dashboard-<version>.zip
 
 - **单实例模式**：必须指定保留实例；其余实例灰掉，启动/打开/修改/删除被拒绝，数据保留。
 - **固定反代 `/i/octop/`**：要求单实例，指向保留实例；关闭后回到 token 路径。
-- **本地源码编译**：预留开关；当前面板仍使用预编译包，选择它时安装会明确拒绝。
+- **本地源码编译**（仅 Linux）：下载 tag 源码，应用 dashboard 补丁，`npm ci && build`，再优先从 PyPI
+  取 uv、下载 Python 3.12 并 `uv sync`；首次较慢，失败会恢复原预编译 release。构建完删除
+  `node_modules`，源码 release 约 2.8 GiB。
 
 策略存 `<data>/brands/policy.json`，默认全关；面板重启后固定路径恢复。

@@ -14,8 +14,10 @@
 - 代理：Octop 页面只注入 `<base>` 与全局变量，不跑 Kimi/OpenCode 的 JS/router 改写；
   WS/SSE、Cookie Path、Redirect 沿用现有 `/i/*` 实现。
 - 开发者模式新增 **品牌实例管理**（需要开发者密码）：单实例模式必须先指定保留实例，其余实例
-  灰掉并拒绝启动/打开/修改/删除（数据保留）；可选固定 `/i/octop/` 反代；本地源码编译开关预留
-  （当前版本仍只用预编译包，选择它时安装会明确拒绝）。
+  灰掉并拒绝启动/打开/修改/删除（数据保留）；可选固定 `/i/octop/` 反代。
+- **本地源码编译**（Linux）：下载 tag 源码，应用 dashboard 补丁，`npm ci && build`，再优先从 PyPI
+  取 uv、下载 Python 3.12 并 `uv sync`；失败会保留原预编译 release，成功后产出 `.venv/bin/octop`。
+  构建完删除 4+ GiB 的 `node_modules`，源码 release 约 2.8 GiB。
 - 设置页策略存 `<data>/brands/policy.json`，按品牌分节；默认全关。面板重启后固定路径会自动恢复。
 - 版本选择器只列出本面板真正带补丁 dashboard 的 Octop 版本，避免选到渲染不出挂载点的上游 tag。
 - 测试：`BrandPolicyTest`、Octop 页面改写用例；插件/Java 基线照旧。

@@ -184,7 +184,9 @@ public enum Brand {
     /// portable archive carries the SPA under `packages/octop/dashboard/`.
     public String installMarker() {
         if (this == OCTOP) {
-            return "packages/octop/dashboard/index.html";
+            // Written by both installers (portable archive and local source),
+            // so one marker proves either layout is complete.
+            return "octop-install.json";
         }
         return source == Source.NPM ? "node_modules/.bin/" + aux : "web/dist/index.html";
     }

@@ -287,11 +287,15 @@ public final class BrandApiServlet extends HttpServlet {
                     target + " is not a published " + brand.sourceLabel() + " version");
             return;
         }
-        if (brand == Brand.OCTOP && policy.get(brand).sourceBuild()) {
-            Json.error(response, HttpServletResponse.SC_NOT_IMPLEMENTED,
-                    "source_build_reserved: local source compilation is reserved for a later build; "
-                            + "turn it off to use the prebuilt portable archive");
-            return;
+        boolean sourceBuild = brand == Brand.OCTOP && policy.get(brand).sourceBuild();
+        if (sourceBuild) {
+            for (BrandInstance instance : ref.manager().list()) {
+                if (target.equals(instance.version()) && BrandRuntime.isRunning(instance.id())) {
+                    Json.error(response, HttpServletResponse.SC_CONFLICT,
+                            "stop the running instance before rebuilding this version from source");
+                    return;
+                }
+            }
         }
         if (tasks.activeInstall(brand.id()).isPresent()) {
             Json.error(response, HttpServletResponse.SC_CONFLICT,
@@ -300,9 +304,16 @@ public final class BrandApiServlet extends HttpServlet {
         }
         TaskService.Task task = tasks.submit("install", brand.id(), live -> {
             try {
-                BrandInstaller.install(brand, target, ref.root(),
-                        message -> live.update(message, -1));
-                return "Installed " + brand.sourceLabel() + " " + target;
+                if (sourceBuild) {
+                    BrandInstaller.installOctopSource(brand, target, ref.root(),
+                            ref.root().resolve(BrandInstaller.RELEASES_DIR).resolve(target),
+                            message -> live.update(message, -1));
+                } else {
+                    BrandInstaller.install(brand, target, ref.root(),
+                            message -> live.update(message, -1));
+                }
+                return "Installed " + brand.sourceLabel() + " " + target
+                        + (sourceBuild ? " (source build)" : "");
             } catch (BrandException e) {
                 throw new RuntimeException(e.getMessage(), e);
             }
