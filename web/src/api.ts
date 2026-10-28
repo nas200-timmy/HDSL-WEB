@@ -1,6 +1,8 @@
 import type {
   Account,
-  BrandPolicyStatus,
+  BrandSettings,
+  BrandSourceProbe,
+  BrandSourcesBody,
   CreateAccountBody,
   CreateInstanceBody,
   DeveloperGuardScope,
@@ -212,12 +214,18 @@ export const api = {
   /** 设置开发者守卫的作用域；需要先提权，且必须已启用 HTTPS */
   setDeveloperGuard: (scope: DeveloperGuardScope) =>
     request<{ ok: boolean; scope: string }>("/api/developer/guard", jsonInit("POST", { scope })),
-  /** 品牌实例的“最后手段”策略（单实例、固定反代、源码编译） */
-  brandPolicy: () => request<BrandPolicyStatus>("/api/developer/brand-policy"),
+  /** 品牌实例页（设置 → 品牌实例）：下载源 + 每个品牌的策略与实例。
+   *  读不需要开发者密码；写操作（策略、下载源、测速）需要提权。 */
+  brandSettings: () => request<BrandSettings>("/api/settings/brands"),
   setBrandPolicy: (
     brand: BrandId,
     body: { singleInstance: boolean; survivor: string | null; lockedRoute: boolean; sourceBuild: boolean },
-  ) => request<{ ok: boolean }>(`/api/developer/brand-policy/${brand}`, jsonInit("PUT", body)),
+  ) => request<{ ok: boolean }>(`/api/settings/brands/policy/${brand}`, jsonInit("PUT", body)),
+  setBrandSources: (body: BrandSourcesBody) =>
+    request<BrandSettings>("/api/settings/brands/sources", jsonInit("POST", body)),
+  /** 从面板这台机器测一个候选源；`url` 省略时测当前生效的那个 */
+  probeBrandSource: (kind: "pypi" | "python" | "archive" | "release", brand?: BrandId, url?: string) =>
+    request<BrandSourceProbe>("/api/settings/brands/test", jsonInit("POST", { kind, brand, url })),
   /** 紧急停机：按下之前先看清单（会杀掉哪些实例与终端） */
   estopPreview: () => request<EmergencyStopPreview>("/api/developer/estop/preview"),
   /** 紧急停机：强杀所有实例进程树并关掉所有终端，1 小时内不能解除 */
@@ -259,8 +267,8 @@ export const api = {
     return [];
   },
 
-  // 注：冻结契约未列出取消任务端点，但 Phase 2 UX 规范要求进度视图提供 [取消]。
-  // 按 TaskService 设计（cancel → DshCommand.stopRunning）推测为 POST /api/tasks/{id}/cancel。
+  // 取消任务：POST /api/tasks/{id}/cancel（TasksApiServlet）。它先杀这次任务起的进程树，
+  // 再中断工作线程——下载与解包循环只认这个中断标志。
   cancelTask: (taskId: string) => request<unknown>(`/api/tasks/${taskId}/cancel`, { method: "POST" }),
 
   // ---------- Phase 3：插件 ----------

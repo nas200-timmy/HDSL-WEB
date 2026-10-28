@@ -263,6 +263,26 @@ HDSL_DATA=/tmp/panel HDSL_PORT=<随机空闲端口> HDSL_BIND_HOST=127.0.0.1 \
 - **做法**：枚举只认带 marker 的目录、忽略 `*.previous`；启动时对账（半成品改名 `.broken-<ts>`，
   把**带 marker 的** `.previous` 挪回原名）；`.broken-*` 只留最新一份；运行中的版本禁止重装。
 
+### 5.7.1 品牌安装的下载源：镜像怎么配、uv 怎么取
+- **现象**：源码编译卡在 `Downloading uv from PyPI https://files.pythonhosted.org/...`，几十 KB/s；
+  Octop 的 portable 包（约 260 MB）走 GitHub Releases 直接超时。同一台机器上阿里云 PyPI 有
+  6.6 MB/s、南大 `github-release` 镜像 6.45 MB/s。
+- **根因**：默认全部指向境外源，而且 `ensureUv()` 原来硬编码 `pypi.org` 的 **JSON API**
+  ——大多国内镜像不提供这个 API，只提供 simple 索引页。
+- **做法**：四类源分开配（设置 → 品牌实例）：PyPI 索引（`UV_DEFAULT_INDEX` + `PIP_INDEX_URL`）、
+  CPython 镜像（`UV_PYTHON_INSTALL_MIRROR`，形状 `<base>/<tag>/<file>`）、版本源码归档
+  （`CODELOAD_BASE`，形状 `<base>/<slug>/zip/refs/tags/<tag>`；不要用 git 传输，它在这里会被切断）、
+  每品牌 release base（如 `OCTOP_RELEASE_BASE`）。取 uv 要**读镜像自己的 `<index>/uv/` simple 页并
+  解析 href**（注意 `#sha256=` 片段与 `../../packages/…` 相对链接），失败再回落 PyPI JSON 与 GitHub。
+  优先级固定为 **设置 > 环境变量 > 上游默认**，别反过来，否则升级会踩掉运维配的镜像。
+
+### 5.7.2 设置字段必须同时加进 `Snapshot`
+- **现象**：接口返回保存成功，`launcher-settings.json` 里却找不到新字段，重启即丢。
+- **根因**：`SettingsManager` 落盘不是把对象直接序列化，而是 `Snapshot.of(settings())` 的**显式白名单**；
+  只加 `LauncherSettings` 字段（哪怕带 `@SerializedName`）不会出现在快照里。
+- **做法**：新增设置要在三处一起改——字段 + `Snapshot.of()` 抄值 + `Snapshot.applyTo()` 回填；
+  测试里直接断言 `launcher-settings.json` 的文本包含该键。
+
 ### 5.8 子进程与超时
 - **现象**：`octop init` 卡住一小时，面板永远起不来；设置了 120 秒超时却从不触发。
 - **根因**：先 `readAllBytes()` 再 `waitFor(timeout)`，读永不返回。

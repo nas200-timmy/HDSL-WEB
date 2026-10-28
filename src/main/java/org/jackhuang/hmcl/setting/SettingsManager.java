@@ -300,6 +300,38 @@ public final class SettingsManager {
         @SerializedName("npmRegistry")
         private @Nullable String npmRegistry;
 
+        /// Which PyPI index the brand installers use, or absent for the deployment's own.
+        @SerializedName("brandPypiIndexPreset")
+        private @Nullable String brandPypiIndexPreset;
+
+        /// The PyPI index typed by hand, read only while the preset is `custom`.
+        @SerializedName("brandPypiIndex")
+        private @Nullable String brandPypiIndex;
+
+        /// Where the CPython build is fetched from, or absent for the deployment's own.
+        @SerializedName("brandPythonMirrorPreset")
+        private @Nullable String brandPythonMirrorPreset;
+
+        /// The CPython mirror typed by hand, read only while the preset is `custom`.
+        @SerializedName("brandPythonMirror")
+        private @Nullable String brandPythonMirror;
+
+        /// Where version source archives are fetched from, or absent for the deployment's own.
+        @SerializedName("brandArchivePreset")
+        private @Nullable String brandArchivePreset;
+
+        /// The source-archive base typed by hand, read only while the preset is `custom`.
+        @SerializedName("brandArchiveBase")
+        private @Nullable String brandArchiveBase;
+
+        /// Per-brand release bases: brand id → preset id.
+        @SerializedName("brandReleasePresets")
+        private @Nullable java.util.Map<String, String> brandReleasePresets;
+
+        /// Per-brand release bases typed by hand: brand id → address.
+        @SerializedName("brandReleaseBases")
+        private @Nullable java.util.Map<String, String> brandReleaseBases;
+
         /// Where the modpack market's index is read from, or absent for the published one.
         @SerializedName("packMarketUrl")
         private @Nullable String packMarketUrl;
@@ -403,6 +435,14 @@ public final class SettingsManager {
             snapshot.packMarketUrl = settings.getPackMarketUrl();
             snapshot.npmRegistryPreset = settings.getNpmRegistryPreset();
             snapshot.npmRegistry = settings.getNpmRegistry();
+            snapshot.brandPypiIndexPreset = settings.getBrandPypiIndexPreset();
+            snapshot.brandPypiIndex = settings.getBrandPypiIndex();
+            snapshot.brandPythonMirrorPreset = settings.getBrandPythonMirrorPreset();
+            snapshot.brandPythonMirror = settings.getBrandPythonMirror();
+            snapshot.brandArchivePreset = settings.getBrandArchivePreset();
+            snapshot.brandArchiveBase = settings.getBrandArchiveBase();
+            snapshot.brandReleasePresets = new java.util.LinkedHashMap<>(settings.getBrandReleasePresets());
+            snapshot.brandReleaseBases = new java.util.LinkedHashMap<>(settings.getBrandReleaseBases());
             snapshot.dependencyPolicy = settings.dependencyPolicy().name();
             snapshot.cacheDirectory = settings.getCacheDirectory();
             snapshot.cacheDirectoryCustom = settings.isCacheDirectoryCustom();
@@ -543,6 +583,34 @@ public final class SettingsManager {
             }
             if (npmRegistry != null) {
                 settings.setNpmRegistry(npmRegistry);
+            }
+            if (brandPypiIndexPreset != null) {
+                settings.setBrandPypiIndexPreset(brandPypiIndexPreset);
+            }
+            if (brandPypiIndex != null) {
+                settings.setBrandPypiIndex(brandPypiIndex);
+            }
+            if (brandPythonMirrorPreset != null) {
+                settings.setBrandPythonMirrorPreset(brandPythonMirrorPreset);
+            }
+            if (brandPythonMirror != null) {
+                settings.setBrandPythonMirror(brandPythonMirror);
+            }
+            if (brandArchivePreset != null) {
+                settings.setBrandArchivePreset(brandArchivePreset);
+            }
+            if (brandArchiveBase != null) {
+                settings.setBrandArchiveBase(brandArchiveBase);
+            }
+            if (brandReleasePresets != null) {
+                for (java.util.Map.Entry<String, String> entry : brandReleasePresets.entrySet()) {
+                    settings.setBrandReleasePreset(entry.getKey(), entry.getValue());
+                }
+            }
+            if (brandReleaseBases != null) {
+                for (java.util.Map.Entry<String, String> entry : brandReleaseBases.entrySet()) {
+                    settings.setBrandReleaseBase(entry.getKey(), entry.getValue());
+                }
             }
             if (cacheDirectory != null) {
                 settings.setCacheDirectory(cacheDirectory);

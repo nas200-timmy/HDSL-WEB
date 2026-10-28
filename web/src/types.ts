@@ -380,6 +380,9 @@ export interface DeveloperStatus {
 /// 一个品牌的“最后手段”策略；默认全关。
 export interface BrandPolicyEntry {
   brand: BrandId;
+  /// 这个品牌支持的开关（目前只有 octop 有 lockedRoute / sourceBuild）；
+  /// 页面按它渲染，未列出的开关不显示，也不允许打开。
+  capabilities?: string[];
   singleInstance: boolean;
   survivor: string | null;
   lockedRoute: boolean;
@@ -393,7 +396,64 @@ export interface BrandPolicyEntry {
   }[];
 }
 
-/// GET /api/developer/brand-policy
+/// 一个可选的下载源（PyPI 索引 / CPython 镜像 / 某品牌的 release 基址）。
+export interface BrandSourcePreset {
+  id: string;
+  label: string;
+  url: string;
+  note: string;
+}
+
+/// 某一类源当前的设置：选中的 preset、手填地址、实际生效地址与来源。
+export interface BrandSourceState {
+  preset: string;
+  /// 手填地址；即使当前选了别的 preset 也会保留，切回“自定义”时还能看到
+  url: string;
+  effective: string;
+  /// `setting` / `environment` / `default`
+  source: string;
+  presets: BrandSourcePreset[];
+}
+
+/// GET /api/settings/brands
+export interface BrandSettings {
+  sources: {
+    pypi: BrandSourceState;
+    python: BrandSourceState;
+    /// 版本源码归档（codeload 形态：`<base>/<slug>/zip/refs/tags/<tag>`）
+    archive: BrandSourceState;
+    /// 按品牌 id 索引；目前只有走 GitHub Releases 的品牌（octop）
+    release: Record<string, BrandSourceState>;
+  };
+  policy: BrandPolicyStatus;
+}
+
+/// POST /api/settings/brands/test 的结果
+export interface BrandSourceProbe {
+  kind: string;
+  url: string;
+  ok: boolean;
+  status: number | null;
+  millis: number;
+  error?: string;
+}
+
+/// 一次提交里的一行：选了哪个 preset，以及选择“自定义”时要写入的地址。
+export interface BrandSourceChoice {
+  preset: string;
+  url?: string;
+}
+
+/// POST /api/settings/brands/sources 的请求体：全有或全无，任何一项非法就整体不改。
+export interface BrandSourcesBody {
+  pypi: BrandSourceChoice;
+  python: BrandSourceChoice;
+  archive: BrandSourceChoice;
+  /// 按品牌 id 索引；只提交页面上出现的品牌
+  release?: Record<string, BrandSourceChoice>;
+}
+
+/// GET /api/settings/brands 的 `policy` 段（读不要求提权）
 export interface BrandPolicyStatus {
   brands: BrandPolicyEntry[];
 }

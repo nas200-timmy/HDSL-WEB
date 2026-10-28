@@ -50,7 +50,10 @@
 - 手机可用：窄屏（≤760px）或矮屏（≤520px）自动切换移动版式——主导航收成抽屉、内页子侧栏变顶部横向标签条、启动面板变成贴底整条操作栏；可点区域按触摸标准放大到 44px，支持「加到主屏幕」。桌面上版式不变。规则见 [docs/ui-spec.md §14](docs/ui-spec.md)。
 - 账户：为某个模型供应商填一次 API Key。供应商与模型名来自 [models.dev](https://models.dev) 目录（200+ 家，选中供应商即带出端点、协议与密钥环境变量提示），默认模型可搜索也可手输；目录拉不到时退回纯手输。规则见 [docs/ui-spec.md §4](docs/ui-spec.md)。
 - 创建实例即开始安装；未安装的实例点「启动」会先装再启。进度与失败原因都在面板上。细节见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md)。
-- 品牌实例的安装、版本共享与实验性边界见 [docs/brands.md](docs/brands.md)；ZCode 的构建与限制见 [docs/zcode-experimental.md](docs/zcode-experimental.md)；终端的前提、安全模型与开关见 [实例终端（Web Shell）](#实例终端web-shell)。
+- 品牌实例的安装、版本共享与实验性边界见 [docs/brands.md](docs/brands.md)；Octop 的便携包 /
+本地源码编译与挂载点补丁见 [docs/octop.md](docs/octop.md)；ZCode 的构建与限制见
+[docs/zcode-experimental.md](docs/zcode-experimental.md)；终端的前提、安全模型与开关见
+[实例终端（Web Shell）](#实例终端web-shell)。
 - 下载源：设置页可选择预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL。保存后立即生效，无需重启。环境变量 `NPM_CONFIG_REGISTRY` 仅作为回退值。细节见 [docs/deployment.md](docs/deployment.md)。
 - 想**从空目录**把整个项目交给另一个模型重写？[docs/build-from-scratch-prompt.md](docs/build-from-scratch-prompt.md) 是一份完整任务提示词：硬约束、功能清单、对外契约、构建与验证命令，以及这一路踩过的坑。
   **只在清空/新建仓库时用**——在现有仓库里接手请读交接稿，别按它重建。
@@ -331,7 +334,7 @@ docker run -d --name hdsl-web --restart unless-stopped \
   ghcr.io/nas200-timmy/hdsl-web:latest
 ```
 
-版本化标签与 Release 一一对应（如 `ghcr.io/nas200-timmy/hdsl-web:0.5.72`）。从源码构建：
+版本化标签与 Release 一一对应（如 `ghcr.io/nas200-timmy/hdsl-web:0.6.0`）。从源码构建：
 
 ```bash
 cd HDSL-web
