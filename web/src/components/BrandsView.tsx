@@ -291,7 +291,60 @@ function VersionCard({
     if (node) node.scrollTop = node.scrollHeight;
   }, [installLog, installLogOpen]);
 
+  // 日志面板开着时每 3 秒拉一次尾巴：`>>> 已安装 (199 of 345) …` 这类 portage 风格的行是
+  // 写进 install.log 的，只靠状态消息会漏掉它们。
+  useEffect(() => {
+    if (!installLogOpen || !installing) return;
+    let alive = true;
+    const timer = setInterval(() => {
+      void (async () => {
+        try {
+          const r = await api.brandInstallLog(brand, 400);
+          if (alive) setInstallLog(r.lines);
+        } catch {
+          // 读不到就保持上一份，不必打扰用户
+        }
+      })();
+    }, 3000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [installLogOpen, installing, brand]);
+
+  // 下载一旦彻底结束（阶段键离开 download）就明确说一声：后面那段是编译/写盘，
+  // 在这台慢盘上可以很久，用户不该还以为在下载。
+  const previousStageKey = useRef<string | null>(null);
+  useEffect(() => {
+    const key = installStatus?.stageKey ?? null;
+    const previous = previousStageKey.current;
+    previousStageKey.current = key;
+    if (previous === "download" && key !== null && key !== "download" && key !== "done") {
+      toast("success", "下载阶段已结束：接下来是编译/写盘，这台机器上可能很久——可以离开去喝杯咖啡。");
+    }
+  }, [installStatus?.stageKey]);
+
   // 安装中：每秒轮询安装状态；终态后刷新版本目录与实例（新版本可能马上被实例切过去）
+  // 挂载时先认领一次：刷新页面或从别的入口进来时，正在跑的安装也要显示进度与「停止」，
+  // 而不是等下一次点安装才冒出一句「已有安装在跑」。
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const st = await api.brandInstallStatus(brand);
+        if (!alive || st.state !== "running") return;
+        setInstalling(true);
+        setInstallTaskId(st.taskId ?? null);
+        setInstallStatus(st);
+      } catch {
+        // 读不到状态就什么也不改：页面本来就还有别的重试入口。
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [brand]);
+
   useEffect(() => {
     if (!installing) return;
     let alive = true;
@@ -342,14 +395,8 @@ function VersionCard({
   const installFraction = installStatus && installStatus.fraction >= 0 ? installStatus.fraction : null;
   const installPercent = installFraction === null ? null : Math.round(installFraction * 100);
   const installElapsed = installStartedAt === null ? 0 : Math.round((Date.now() - installStartedAt) / 1000);
-  // 预计剩余：进度太小或刚启动时不给数字，免得从“0 秒”跳到“一小时”。
-  const installEta = (() => {
-    if (!installing || installFraction === null || installFraction <= 0.02 || installElapsed <= 1) return null;
-    const remaining = Math.round((installElapsed * (1 - installFraction)) / installFraction);
-    const minutes = Math.floor(remaining / 60);
-    const seconds = remaining % 60;
-    return minutes > 0 ? `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒` : `${seconds} 秒`;
-  })();
+  // 预计剩余不再由前端瞎算：后端在知道总量时（下载字节、npm 包数）把「剩约 …」写进消息，
+  // 不知道时（uv 的编译/安装）就只说速度和已完成数量——比一个反推出来的数字诚实。
   const formatElapsed = (totalSeconds: number) => {
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
@@ -535,7 +582,15 @@ function VersionCard({
           {installing && installStatus && (
             <div className="card" style={{ padding: "10px 12px", display: "grid", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                <span style={{ flex: 1, fontSize: 13, wordBreak: "break-all" }}>
+                {installStatus.stage && (
+                  <span
+                    className={`tag ${installStatus.stageKey === "download" ? "running" : "plain"}`}
+                    style={{ flexShrink: 0 }}
+                  >
+                    {installStatus.stage}
+                  </span>
+                )}
+                <span style={{ flex: 1, fontSize: 13.5, fontWeight: 500, wordBreak: "break-all" }}>
                   {installStatus.message || "已提交，正在准备…"}
                 </span>
                 {installPercent !== null && (
@@ -545,10 +600,64 @@ function VersionCard({
                 )}
               </div>
               <ProgressBar fraction={installFraction} />
+              {installStatus.stageKey &&
+                installStatus.stageKey !== "download" &&
+                installStatus.stageKey !== "done" && (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      lineHeight: 1.6,
+                      padding: "6px 8px",
+                      borderRadius: 8,
+                      background: "var(--monet-secondary-container)",
+                      color: "var(--monet-on-secondary-container)",
+                    }}
+                  >
+                    ✅ 下载阶段已结束 · 正在{installStatus.stage ?? "处理"}（
+                    {installStatus.stageKey === "build"
+                      ? "编译"
+                      : installStatus.stageKey === "install"
+                        ? "安装依赖"
+                        : "写盘"}
+                    ）· 这一步在慢盘或慢网上可能很久，去喝杯咖啡再回来看也行
+                  </div>
+                )}
+              {installStatus.stageFraction !== undefined && installStatus.stageFraction >= 0 && (
+                <div style={{ display: "grid", gap: 3 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "baseline",
+                      gap: 8,
+                      fontSize: 11.5,
+                      color: "var(--monet-on-surface-variant)",
+                    }}
+                  >
+                    <span style={{ flex: 1 }}>{installStatus.stage ?? "当前步骤"}</span>
+                    <span className="mono">
+                      {Math.round(installStatus.stageFraction * 100)}%
+                    </span>
+                  </div>
+                  <div
+                    className="progress"
+                    style={{ height: 4 }}
+                    role="progressbar"
+                    aria-label={installStatus.stage ?? "当前步骤"}
+                  >
+                    <div
+                      className="bar"
+                      style={{
+                        width: `${Math.round(Math.min(1, Math.max(0, installStatus.stageFraction)) * 1000) / 10}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12 }}>
-                <span style={{ color: "var(--monet-on-surface-variant)" }}>已用 {formatElapsed(installElapsed)}</span>
-                {installEta && (
-                  <span style={{ color: "var(--monet-on-surface-variant)" }}>预计剩余 {installEta}</span>
+                {installStartedAt !== null && (
+                  <span style={{ color: "var(--monet-on-surface-variant)" }}>
+                    已用 {formatElapsed(installElapsed)}
+                  </span>
                 )}
                 <span className="spacer" style={{ flex: 1 }} />
                 <button
@@ -820,7 +929,19 @@ function InstancesCard({
       setForm({ name: "", version: "" });
       await refreshExternal();
     } catch (e) {
-      toast("error", `创建失败：${errMsg(e)}`);
+      const raw = errMsg(e);
+      if (raw.includes("is being installed")) {
+        toast("error", "这个版本正在装，装完再创建实例");
+      } else if (raw.includes("is not installed")) {
+        // The list this form was built from did not have the version any more (a rebuild
+        // replaced the directory, or another page refreshed the releases). Re-read instead of
+        // leaving a select pointing at something the server cannot see.
+        setForm((f) => ({ ...f, version: "" }));
+        await reload();
+        toast("error", "这个版本已经不在已装列表里了（已重新读取），请再选一次");
+      } else {
+        toast("error", `创建失败：${raw}`);
+      }
     } finally {
       setBusy(false);
     }
@@ -957,8 +1078,16 @@ function InstancesCard({
     try {
       await api.brandInstall(brand, version);
     } catch (e) {
-      // 409（同品牌已有安装在进行）等：把后端给的原因原样带出来，实例版本不动
-      toast("error", `安装失败：${errMsg(e)}`);
+      // 409（同品牌已有安装在进行）等：把后端给的原因原样带出来，实例版本不动。
+      // 同一个版本的重复请求后端会直接接上那个任务（202），走不到这里；能到这里说明
+      // 正在装的是**另一个**版本，等它结束再切比排两个编译更靠谱。
+      const raw = errMsg(e);
+      toast(
+        "error",
+        raw.includes("already running")
+          ? `这个品牌正在安装另一个版本，等它结束再切换（${raw}）`
+          : `安装失败：${raw}`,
+      );
       setRowInstall(null);
       return;
     }

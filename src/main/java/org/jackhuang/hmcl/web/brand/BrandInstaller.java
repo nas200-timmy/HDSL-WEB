@@ -106,6 +106,18 @@ public final class BrandInstaller {
     public interface Progress {
         void update(String message, double fraction);
 
+        /// Reports the bar of the sub-step in flight, when that step knows a real fraction
+        /// (download bytes, installed packages). Steps without a real fraction leave it to the
+        /// time-based tick.
+        default void stage(String stage, double fraction) {
+        }
+
+        /// The same, plus a machine-readable key for the phase (`download`, `write`, `build`,
+        /// `install`, `done`) so the page can say "downloads are over" without matching text.
+        default void stage(String stage, String key, double fraction) {
+            stage(stage, fraction);
+        }
+
         /// Whether the user asked to stop. The installers check this in the loops that are not a
         /// child process (downloads, unzip); a child process is killed by the task service itself.
         default boolean isCancelled() {
@@ -126,6 +138,7 @@ public final class BrandInstaller {
 
         @Override
         public void accept(String line) {
+            lastLineAt = System.currentTimeMillis();
             progress.update(line, fraction);
         }
 
@@ -133,15 +146,58 @@ public final class BrandInstaller {
             this.fraction = value;
         }
 
+        /// The overall fraction as last reported, for reporters that only own the sub-step bar.
+        double fraction() {
+            return fraction;
+        }
+
         void report(String line, double value) {
             fraction = value;
+            lastLineAt = System.currentTimeMillis();
             progress.update(line, value);
+        }
+
+        /// Reports the sub-step's own bar, and remembers when — the time-based tick must not
+        /// overwrite a real number with an estimate half a second later.
+        void stage(String name, double value) {
+            lastRealProgressAt = System.currentTimeMillis();
+            progress.stage(name, value);
+        }
+
+        /// The same, with the phase key the page reads (`download` / `write` / `build` / `install`).
+        void stage(String name, String key, double value) {
+            lastRealProgressAt = System.currentTimeMillis();
+            progress.stage(name, key, value);
+        }
+
+        /// Reports the sub-step's bar without claiming it is real progress: used by the ticker,
+        /// which is an estimate and must not stop the ticker from updating again.
+        void stageOnly(String name, double value) {
+            progress.stage(name, value);
+        }
+
+        /// Whether nothing has been printed for `millis`.
+        boolean quietFor(long millis) {
+            return System.currentTimeMillis() - lastLineAt >= millis;
+        }
+
+        /// How many seconds nothing has been printed.
+        long quietSeconds() {
+            return Math.max(0, (System.currentTimeMillis() - lastLineAt) / 1000);
+        }
+
+        /// Whether no real (not estimated) sub-step fraction arrived for `millis`.
+        boolean noRealProgressFor(long millis) {
+            return System.currentTimeMillis() - lastRealProgressAt >= millis;
         }
 
         /// Whether the user asked to stop.
         boolean cancelled() {
             return progress.isCancelled();
         }
+
+        private volatile long lastRealProgressAt;
+        private volatile long lastLineAt;
     }
 
     @FunctionalInterface
@@ -156,22 +212,39 @@ public final class BrandInstaller {
     /// @param index          zero-based stage index
     /// @param total          how many stages the install has
     /// @param name           the stage, as the panel shows it
+    /// @param key            the machine-readable phase: `download` / `write` / `build` / `install`
+    ///                       / `done`. The page uses it to say "downloads are finished" without
+    ///                       matching the Chinese text.
     /// @param before         how much of the bar was already done (0–1)
     /// @param weight         how much of the bar this stage owns (0–1)
     /// @param expectedSeconds how long this stage usually takes; only makes the tick move
     /// @param body           the work
-    private static void stage(Sink message, int index, int total, String name,
+    private static void stage(Sink message, int index, int total, String name, String key,
                               double before, double weight, int expectedSeconds, StepBody body)
             throws BrandException {
         long started = System.currentTimeMillis();
         message.report(label(index, total, name, before), before);
+        message.stage(name, key, 0);
         java.util.Timer ticker = new java.util.Timer("brand-install-progress", true);
         ticker.scheduleAtFixedRate(new java.util.TimerTask() {
             @Override
             public void run() {
-                double in = Math.min(0.95,
-                        (System.currentTimeMillis() - started) / (1000.0 * Math.max(1, expectedSeconds)));
-                message.report(label(index, total, name, before + weight * in), before + weight * in);
+                // The bar keeps moving on the estimate while nothing better arrives...
+                if (message.noRealProgressFor(1500)) {
+                    double in = Math.min(0.95,
+                            (System.currentTimeMillis() - started) / (1000.0 * Math.max(1, expectedSeconds)));
+                    message.stageOnly(name, in);
+                    // ...but the line itself is only replaced when the tool is quiet: a stage that
+                    // prints (vite, npm, uv) must show its own output, not "55%" forever. A stage
+                    // that has been silent for a while says so, because silence is exactly what
+                    // looked like a dead process on this deployment's slow volume.
+                    if (message.quietFor(2000)) {
+                        long quiet = message.quietSeconds();
+                        String suffix = quiet >= 15 ? " · 已 " + quiet + " 秒无新输出" : "";
+                        message.report(label(index, total, name, before + weight * in) + suffix,
+                                before + weight * in);
+                    }
+                }
             }
         }, 700, 700);
         try {
@@ -179,13 +252,586 @@ public final class BrandInstaller {
         } finally {
             ticker.cancel();
         }
+        message.stage(name, key, 1);
         message.report(label(index, total, name, before + weight), before + weight);
+    }
+
+    /// The same, with the phase key derived from the stage name.
+    ///
+    /// The names are constants in this file, so this is a mapping, not a guess; stages that know
+    /// their phase for real (uv's watcher) call the keyed version directly.
+    private static void stage(Sink message, int index, int total, String name,
+                              double before, double weight, int expectedSeconds, StepBody body)
+            throws BrandException {
+        stage(message, index, total, name, keyOf(name), before, weight, expectedSeconds, body);
+    }
+
+    /// The phase key for a stage name: `download` / `write` / `build` / `install` / `done`.
+    private static String keyOf(String name) {
+        if (name.contains("下载") || name.contains("准备 uv")) {
+            return "download";
+        }
+        if (name.contains("构建") || name.contains("编译")) {
+            return "build";
+        }
+        if (name.contains("安装")) {
+            return "install";
+        }
+        if (name.contains("收尾")) {
+            return "done";
+        }
+        return "write";
     }
 
     /// `[3/7] 构建 dashboard · 55%` — the line the panel shows next to the bar.
     private static String label(int index, int total, String name, double fraction) {
         int percent = (int) Math.floor(Math.max(0, Math.min(1, fraction)) * 100);
         return "[" + (index + 1) + "/" + total + "] " + name + " · " + percent + "%";
+    }
+
+    /// Downloads with a byte-accurate sub-step bar: the server's `Content-Length` is the total, and
+    /// `12.3 MB / 260.0 MB` is a number a person can wait on. Without a length the bar stays on the
+    /// time-based tick.
+    private static java.io.InputStream download(String url, Sink message, String label) throws BrandException {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofMinutes(5))
+                .header("Accept", "*/*")
+                .GET()
+                .build();
+        try {
+            HttpResponse<java.io.InputStream> response =
+                    CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() / 100 != 2) {
+                throw new BrandException("Download answered " + response.statusCode() + ": " + url);
+            }
+            long total = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
+            ProgressStream stream = new ProgressStream(response.body(), message, label, total);
+            stream.watchCancellation();
+            return stream;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BrandException("Download was interrupted: " + url, e);
+        } catch (java.io.IOException e) {
+            throw new BrandException("Download failed: " + url + " — " + e.getMessage(), e);
+        }
+    }
+
+    /// An input stream that reports how many bytes went by, at most twice a second — often enough
+    /// to look alive, rare enough not to flood the task feed.
+    private static final class ProgressStream extends java.io.FilterInputStream {
+        private final Sink message;
+        private final String label;
+        private final long total;
+        private long read;
+        private long lastReport;
+
+        ProgressStream(java.io.InputStream in, Sink message, String label, long total) {
+            super(in);
+            this.message = message;
+            this.label = label;
+            this.total = total;
+        }
+
+        @Override
+        public int read() throws java.io.IOException {
+            int b = super.read();
+            if (b >= 0) {
+                tick(1);
+            }
+            return b;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws java.io.IOException {
+            int n = super.read(buffer, offset, length);
+            if (n > 0) {
+                tick(n);
+            }
+            return n;
+        }
+
+        private void tick(int n) throws java.io.IOException {
+            // The task's cancel flag is the only thing a blocking read can notice here: the socket
+            // belongs to an HttpClient, not to a child process the task service could kill.
+            if (message.cancelled()) {
+                throw new java.io.IOException("cancelled");
+            }
+            read += n;
+            long now = System.currentTimeMillis();
+            long sinceSpeed = now - lastSpeedAt;
+            if (sinceSpeed >= 800) {
+                double instant = (read - lastSpeedBytes) / (sinceSpeed / 1000.0);
+                speed = speed <= 0 ? instant : speed * 0.5 + instant * 0.5;
+                lastSpeedBytes = read;
+                lastSpeedAt = now;
+            }
+            if (now - lastReport < 500) {
+                return;
+            }
+            lastReport = now;
+            String rate = speed > 1024 ? " · " + speedText(speed) : "";
+            if (total > 0) {
+                message.stage(label, Math.min(0.99, read / (double) total));
+                long remaining = speed > 1024 ? (long) ((total - read) / speed) : -1;
+                message.accept(label + "：" + megabytes(read) + " / " + megabytes(total) + rate
+                        + (remaining >= 0 ? " · 剩约 " + durationText(remaining) : ""));
+            } else {
+                message.stage(label, Math.min(0.9, read / (260.0 * 1024 * 1024)));
+                message.accept(label + "：" + megabytes(read) + rate);
+            }
+        }
+
+        private long lastSpeedAt = System.currentTimeMillis() - 1000;
+        private long lastSpeedBytes;
+        private double speed;
+
+        /// Closes the stream as soon as the task is cancelled.
+        ///
+        /// A read that is waiting on a server which never sends another byte cannot notice the
+        /// flag, so a cancel needs somebody to shut the socket; otherwise "stop" only takes effect
+        /// when the HTTP timeout does, minutes later.
+        void watchCancellation() {
+            Thread watcher = new Thread(() -> {
+                try {
+                    while (!closed && !message.cancelled()) {
+                        Thread.sleep(500);
+                    }
+                    if (!closed) {
+                        close();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } catch (java.io.IOException ignored) {
+                    // Closing an already-broken stream is the outcome we wanted anyway.
+                }
+            }, "brand-install-cancel");
+            watcher.setDaemon(true);
+            watcher.start();
+        }
+
+        @Override
+        public void close() throws java.io.IOException {
+            closed = true;
+            super.close();
+        }
+
+        private volatile boolean closed;
+    }
+
+    private static String megabytes(long bytes) {
+        return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0));
+    }
+
+    /// Reads `uv sync`'s output and turns it into a phase, a rate and a bar.
+    ///
+    /// uv prints one line per package it fetches (`Downloading numpy (15.9MiB)`), one per sdist it
+    /// compiles (`Building evdev==1.9.3`), and `Prepared` / `Installed N packages` at the end of
+    /// each phase. On a slow link that is minutes of silence, which used to look exactly like a
+    /// hang; this turns it into `uv：下载 12 个包 · 68.4 MB · 6.1 MB/s` and an explicit
+    /// "下载完成，开始编译" — the two things the page could not tell before.
+    private static final class UvWatcher implements java.util.function.Consumer<String>, AutoCloseable {
+        private final Sink message;
+        private final Path brandRoot;
+        private final Path venvDir;
+        private final Path archiveDir;
+        private final java.util.Timer timer;
+        private final java.util.LinkedHashSet<String> fetched = new java.util.LinkedHashSet<>();
+        private final java.util.LinkedHashSet<String> building = new java.util.LinkedHashSet<>();
+        private final java.util.LinkedHashSet<String> built = new java.util.LinkedHashSet<>();
+        private long bytes;
+        private long sampledBytes;
+        private long sampledAt = System.currentTimeMillis();
+        private double speed;
+        private int prepared = -1;
+        private int installed = -1;
+        private int unpacked = -1;
+        private long lastLineAt = System.currentTimeMillis();
+        /// Packages already announced in the log, so each one is reported exactly once — the
+        /// portage-style stream the page tails.
+        private final java.util.LinkedHashSet<String> announced = new java.util.LinkedHashSet<>();
+        private boolean headerAnnounced;
+
+        UvWatcher(Sink message, Path brandRoot, Path venvDir, Path archiveDir) {
+            this.message = message;
+            this.brandRoot = brandRoot;
+            this.venvDir = venvDir;
+            this.archiveDir = archiveDir;
+            this.timer = new java.util.Timer("brand-uv-progress", true);
+            timer.scheduleAtFixedRate(new java.util.TimerTask() {
+                @Override
+                public void run() {
+                    publish();
+                }
+            }, 1000, 1500);
+        }
+
+        @Override
+        public void accept(String line) {
+            lastLineAt = System.currentTimeMillis();
+            String text = line.trim();
+            if (text.startsWith("Downloading ")) {
+                int open = text.lastIndexOf('(');
+                int close = text.lastIndexOf(')');
+                String name = text.substring("Downloading ".length(), open > 0 ? open : text.length()).trim();
+                if (fetched.add(name)) {
+                    if (open > 0 && close > open) {
+                        bytes += parseSize(text.substring(open + 1, close));
+                    }
+                    publish();
+                }
+            } else if (text.startsWith("Building ")) {
+                building.add(text.substring("Building ".length()).trim());
+                publish();
+            } else if (text.startsWith("Built ")) {
+                String spec = text.substring("Built ".length()).trim();
+                building.remove(spec);
+                built.add(spec);
+                publish();
+            } else if (text.startsWith("Prepared ")) {
+                prepared = leadingNumber(text);
+                publish();
+            } else if (text.startsWith("Installed ")) {
+                installed = leadingNumber(text);
+                publish();
+            } else if (text.startsWith("Using CPython") || text.startsWith("Creating virtual environment")
+                    || text.startsWith("Resolved ") || text.startsWith("Audited ")) {
+                publish();
+            }
+        }
+
+        private void publish() {
+            long now = System.currentTimeMillis();
+            long elapsed = now - sampledAt;
+            if (elapsed >= 800) {
+                double instant = (bytes - sampledBytes) / (elapsed / 1000.0);
+                speed = speed <= 0 ? instant : speed * 0.6 + instant * 0.4;
+                sampledBytes = bytes;
+                sampledAt = now;
+            }
+
+            boolean downloadsDone = prepared >= 0 || installed >= 0 || !building.isEmpty() || !built.isEmpty();
+            String summary = "下载完成（" + fetched.size() + " 个包"
+                    + (bytes > 0 ? " · " + megabytes(bytes) : "") + "）";
+            long quietSeconds = Math.max(0, (System.currentTimeMillis() - lastLineAt) / 1000);
+            // uv's progress bars are TTY-only: in a pipe it prints one line per download and then
+            // goes silent for the unpack/install phase, which on a slow volume is tens of minutes.
+            // Saying how long it has been quiet is the difference between "working" and "dead".
+            String quiet = quietSeconds >= 5 ? " · 已 " + quietSeconds + " 秒无新输出" : "";
+            unpacked = countInstalled(venvDir);
+            if (unpacked < 0) {
+                unpacked = countArchives(archiveDir);
+            }
+            announceNewPackages();
+
+            String phase;
+            String line;
+            double fraction;
+            if (installed >= 0) {
+                phase = "安装完成";
+                fraction = 0.96;
+                line = "uv：" + summary + " · 安装完成 " + installed + " 个包";
+            } else if (!building.isEmpty()) {
+                phase = "编译本地依赖";
+                int done = built.size();
+                int running = building.size();
+                fraction = 0.55 + 0.1 * (done + 0.5) / (done + running + 1.5);
+                line = "uv：" + summary + " · 编译 " + done + " 个完成"
+                        + "，进行中 " + running + "（" + preview(building) + "）" + quiet;
+            } else if (downloadsDone) {
+                // Silent phase: uv is unpacking wheel archives onto this disk and will not say a
+                // word until the end. Count what is on disk instead of waiting for it to speak.
+                phase = "解包写入磁盘";
+                String total = prepared > 0 ? "/" + prepared : "";
+                double in = prepared > 0 && unpacked >= 0
+                        ? Math.min(0.99, unpacked / (double) prepared)
+                        : (unpacked > 0 ? 1 - 1 / (1 + unpacked / 40.0) : 0);
+                fraction = 0.65 + 0.3 * in;
+                line = "uv：" + summary
+                        + (built.isEmpty() ? "" : " · 已编译 " + built.size() + " 个")
+                        + " · 解包写入 " + (unpacked >= 0 ? unpacked : "?") + total + " 个包"
+                        + quiet;
+            } else {
+                phase = "下载依赖";
+                fraction = 0.55 * (1 - 1 / (1 + fetched.size() / 6.0));
+                line = "uv：下载 " + fetched.size() + " 个包"
+                        + (bytes > 0 ? " · " + megabytes(bytes) : "")
+                        + (speed > 1024 ? " · " + speedText(speed) : "")
+                        + quiet;
+            }
+            message.stage(phase, keyOf(phase), Math.min(0.97, fraction));
+            message.report(line, message.fraction());
+        }
+
+        /// Packages already unpacked into the venv: one `.dist-info` directory each. A single
+        /// directory read — the only kind of I/O that is cheap on a volume this slow.
+        private static int countInstalled(Path venvDir) {
+            Path lib = venvDir.resolve("lib");
+            if (!Files.isDirectory(lib)) {
+                return -1;
+            }
+            try (java.util.stream.Stream<Path> interpreters = Files.list(lib)) {
+                for (Path dir : (Iterable<Path>) interpreters::iterator) {
+                    if (!dir.getFileName().toString().startsWith("python3")) {
+                        continue;
+                    }
+                    Path site = dir.resolve("site-packages");
+                    if (!Files.isDirectory(site)) {
+                        continue;
+                    }
+                    try (java.util.stream.Stream<Path> entries = Files.list(site)) {
+                        return (int) entries
+                                .filter(path -> path.getFileName().toString().endsWith(".dist-info"))
+                                .count();
+                    }
+                }
+            } catch (java.io.IOException e) {
+                LOG.info("Could not count the packages in " + venvDir + ": " + e.getMessage());
+            }
+            return -1;
+        }
+
+        /// Portage's trick: a wrapper that reports each package the moment it lands.
+        ///
+        /// uv in a pipe says nothing while it unpacks, which on this volume is tens of minutes of
+        /// silence. One `readdir` per tick is cheap and gives the stream the page tails:
+        /// `>>> 已安装 (199 of 345) cryptography-46.0`.
+        private void announceNewPackages() {
+            Path lib = venvDir.resolve("lib");
+            if (!Files.isDirectory(lib)) {
+                return;
+            }
+            java.util.List<String> names = new java.util.ArrayList<>();
+            try (java.util.stream.Stream<Path> interpreters = Files.list(lib)) {
+                for (Path dir : (Iterable<Path>) interpreters::iterator) {
+                    if (!dir.getFileName().toString().startsWith("python3")) {
+                        continue;
+                    }
+                    Path site = dir.resolve("site-packages");
+                    if (!Files.isDirectory(site)) {
+                        continue;
+                    }
+                    try (java.util.stream.Stream<Path> entries = Files.list(site)) {
+                        entries.forEach(path -> {
+                            String name = path.getFileName().toString();
+                            if (name.endsWith(".dist-info")) {
+                                names.add(name);
+                            }
+                        });
+                    }
+                    break;
+                }
+            } catch (java.io.IOException e) {
+                return;
+            }
+            if (names.isEmpty()) {
+                return;
+            }
+            if (!headerAnnounced) {
+                headerAnnounced = true;
+                appendLogLine(brandRoot, ">>> 开始安装依赖"
+                        + (prepared > 0 ? "（共 " + prepared + " 个包）" : "")
+                        + "：uv 在管道里不出声，这里每装好一个就报一行");
+            }
+            java.util.Collections.sort(names);
+            StringBuilder batch = new StringBuilder();
+            for (String name : names) {
+                if (!announced.add(name)) {
+                    continue;
+                }
+                String clean = name.substring(0, name.length() - ".dist-info".length());
+                batch.append(">>> 已安装 (").append(announced.size())
+                        .append(prepared > 0 ? " of " + prepared : "")
+                        .append(") ").append(clean).append('\n');
+            }
+            if (batch.length() > 0) {
+                // One write per tick, not one per package: the volume this runs on charges for
+                // every open and every flush.
+                appendLogLine(brandRoot, batch.toString().stripTrailing());
+            }
+        }
+
+        /// Unpacked archives in uv's cache — the fallback before a venv exists.
+        private static int countArchives(Path archiveDir) {
+            if (!Files.isDirectory(archiveDir)) {
+                return -1;
+            }
+            try (java.util.stream.Stream<Path> entries = Files.list(archiveDir)) {
+                return (int) entries.count();
+            } catch (java.io.IOException e) {
+                return -1;
+            }
+        }
+
+        @Override
+        public void close() {
+            timer.cancel();
+            publish();
+        }
+
+        /// Keeps the first two names, so the line stays one line.
+        private static String preview(java.util.Set<String> names) {
+            int shown = 0;
+            StringBuilder text = new StringBuilder();
+            for (String name : names) {
+                if (shown == 2) {
+                    text.append(" 等");
+                    break;
+                }
+                if (shown > 0) {
+                    text.append("、");
+                }
+                String simple = name.contains("==") ? name.substring(0, name.indexOf("==")) : name;
+                text.append(simple);
+                shown++;
+            }
+            return text.toString();
+        }
+
+        private static int leadingNumber(String text) {
+            int start = text.indexOf(' ');
+            if (start < 0) {
+                return -1;
+            }
+            int end = start + 1;
+            while (end < text.length() && Character.isDigit(text.charAt(end))) {
+                end++;
+            }
+            return end > start + 1 ? Integer.parseInt(text.substring(start + 1, end)) : -1;
+        }
+
+        private static long parseSize(String text) {
+            String value = text.trim().toUpperCase(java.util.Locale.ROOT);
+            double factor = 1;
+            if (value.endsWith("KIB")) {
+                factor = 1024;
+                value = value.substring(0, value.length() - 3);
+            } else if (value.endsWith("MIB")) {
+                factor = 1024 * 1024;
+                value = value.substring(0, value.length() - 3);
+            } else if (value.endsWith("GIB")) {
+                factor = 1024.0 * 1024 * 1024;
+                value = value.substring(0, value.length() - 3);
+            } else if (value.endsWith("B")) {
+                value = value.substring(0, value.length() - 1);
+            }
+            try {
+                return (long) (Double.parseDouble(value) * factor);
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+    }
+
+    /// `<n> MB/s`, with the unit a person reads.
+    private static String speedText(double bytesPerSecond) {
+        if (bytesPerSecond >= 1024 * 1024) {
+            return String.format(java.util.Locale.ROOT, "%.1f MB/s", bytesPerSecond / (1024.0 * 1024.0));
+        }
+        return String.format(java.util.Locale.ROOT, "%.0f KB/s", bytesPerSecond / 1024.0);
+    }
+
+    /// `1 分 20 秒` / `40 秒`.
+    private static String durationText(long seconds) {
+        long total = Math.max(0, seconds);
+        long minutes = total / 60;
+        long rest = total % 60;
+        return minutes > 0 ? minutes + " 分 " + rest + " 秒" : rest + " 秒";
+    }
+
+    /// Runs `body` while counting how many packages `node_modules` holds, against the count the
+    /// lockfile declares: `已安装 762/1245 个包` is the only honest progress npm can offer, because
+    /// `npm ci` prints almost nothing while it works.
+    private static void runWithPackageCount(Path nodeModules, Path lockFile, Sink message, String label,
+                                            StepBody body) throws BrandException {
+        long expected = countLockPackages(lockFile);
+        long[] lastShown = {-1};
+        long startedAt = System.currentTimeMillis();
+        java.util.Timer watcher = new java.util.Timer("brand-install-packages", true);
+        watcher.scheduleAtFixedRate(new java.util.TimerTask() {
+            @Override
+            public void run() {
+                int installed = countInstalled(nodeModules);
+                if (installed == lastShown[0]) {
+                    return;
+                }
+                lastShown[0] = installed;
+                if (expected > 0) {
+                    message.stage(label, Math.min(0.95, installed / (double) expected));
+                    // Rate over the whole run, and the remaining time it implies — the one number
+                    // `npm ci` itself never offers.
+                    double seconds = (System.currentTimeMillis() - startedAt) / 1000.0;
+                    String eta = "";
+                    if (installed > 0 && seconds > 10) {
+                        double perSecond = installed / seconds;
+                        long remaining = (long) ((expected - installed) / perSecond);
+                        eta = " · 剩约 " + durationText(remaining);
+                    }
+                    message.accept(label + "：已安装 " + installed + "/" + expected + " 个包" + eta);
+                } else {
+                    message.accept(label + "：已安装 " + installed + " 个包");
+                }
+            }
+        }, 500, 900);
+        try {
+            body.run();
+        } finally {
+            watcher.cancel();
+        }
+        if (expected > 0) {
+            message.stage(label, 1);
+            message.accept(label + "：已安装 " + expected + "/" + expected + " 个包");
+        }
+    }
+
+    /// How many packages a lockfile declares, or `-1` when it cannot be read.
+    private static long countLockPackages(Path lockFile) {
+        if (!Files.isRegularFile(lockFile)) {
+            return -1;
+        }
+        try (java.io.Reader reader = Files.newBufferedReader(lockFile, java.nio.charset.StandardCharsets.UTF_8)) {
+            JsonObject root = JsonParser.parseReader(reader).getAsJsonObject();
+            if (root.get("packages") instanceof JsonObject packages) {
+                long count = 0;
+                for (String key : packages.keySet()) {
+                    if (!key.isEmpty()) {
+                        count++;
+                    }
+                }
+                return count;
+            }
+            if (root.get("dependencies") instanceof JsonObject dependencies) {
+                return dependencies.size();
+            }
+        } catch (RuntimeException | java.io.IOException e) {
+            LOG.info("Could not read " + lockFile + " for the package count: " + e.getMessage());
+        }
+        return -1;
+    }
+
+    /// How many packages are on disk right now (scoped packages count once each).
+    private static int countInstalled(Path nodeModules) {
+        if (!Files.isDirectory(nodeModules)) {
+            return 0;
+        }
+        int count = 0;
+        try (java.util.stream.Stream<Path> entries = Files.list(nodeModules)) {
+            for (Path entry : (Iterable<Path>) entries::iterator) {
+                String name = entry.getFileName().toString();
+                if (name.startsWith(".") || !Files.isDirectory(entry)) {
+                    continue;
+                }
+                if (name.startsWith("@")) {
+                    try (java.util.stream.Stream<Path> scoped = Files.list(entry)) {
+                        count += (int) scoped.filter(Files::isDirectory).count();
+                    }
+                } else {
+                    count++;
+                }
+            }
+        } catch (java.io.IOException e) {
+            LOG.info("Could not count " + nodeModules + ": " + e.getMessage());
+        }
+        return count;
     }
 
     static final String RELEASES_DIR = "releases";
@@ -453,7 +1099,7 @@ public final class BrandInstaller {
         stage(message, 0, total, "下载 portable 包（约 260 MB）", 0.0, 0.9, 120, () -> {
             message.accept("Downloading " + url + " (source: " + release.source() + ")");
             LOG.info("Downloading Octop portable archive " + url);
-            extractZip(download(url), target, message::cancelled);
+            extractZip(download(url, message, "下载 portable 包"), target, message::cancelled);
         });
         stage(message, 1, total, "换成打过挂载点补丁的 dashboard", 0.9, 0.1, 20, () -> {
             markExecutable(target.resolve("runtime/bin"));
@@ -510,6 +1156,10 @@ public final class BrandInstaller {
         } finally {
             if (complete) {
                 FileUtils.deleteDirectoryQuietly(backup);
+                // The pointer is what the page shows as 「当前」 and what an older default used;
+                // a source build used to leave it on the release it had just deleted, which made a
+                // finished build look like it had never happened.
+                pointCurrentAt(brandRoot, target);
             } else {
                 FileUtils.deleteDirectoryQuietly(target);
                 if (Files.exists(backup)) {
@@ -540,7 +1190,7 @@ public final class BrandInstaller {
 
         stage(message, 0, total, "下载源码", 0.00, 0.05, 20, () -> {
             message.accept("Downloading source " + url);
-            extractZip(download(url), target, message::cancelled);
+            extractZip(download(url, message, "下载源码"), target, message::cancelled);
         });
 
         stage(message, 1, total, "应用 dashboard 补丁", 0.05, 0.02, 5, () -> {
@@ -562,8 +1212,10 @@ public final class BrandInstaller {
         Map<String, String> npmEnv = new HashMap<>();
         npmEnv.put("NPM_CONFIG_REGISTRY", registry);
         stage(message, 2, total, "安装前端依赖（npm ci）", 0.07, 0.35, 240, () ->
-                runChecked(List.of("npm", "ci", "--no-audit", "--no-fund", "--registry=" + registry),
-                        dashboard, npmEnv, log, message, "installing dashboard dependencies"));
+                runWithPackageCount(dashboard.resolve("node_modules"), dashboard.resolve("package-lock.json"),
+                        message, "npm ci", () ->
+                                runChecked(List.of("npm", "ci", "--no-audit", "--no-fund", "--registry=" + registry),
+                                        dashboard, npmEnv, log, message, "installing dashboard dependencies")));
         npmEnv.put("VITE_BASE_PATH", "./");
         npmEnv.put("NODE_OPTIONS", "--max-old-space-size=2048");
         stage(message, 3, total, "构建 dashboard", 0.42, 0.15, 90, () ->
@@ -593,9 +1245,14 @@ public final class BrandInstaller {
         if (!BrandSources.PYTHON_DEFAULT.equals(pythonMirror.url())) {
             pythonEnv.put("UV_PYTHON_INSTALL_MIRROR", pythonMirror.url());
         }
-        stage(message, 5, total, "安装 Python 依赖（uv sync + CPython 3.12）", 0.65, 0.30, 300, () ->
+        stage(message, 5, total, "安装 Python 依赖（uv sync + CPython 3.12）", 0.65, 0.30, 300, () -> {
+            UvWatcher uvProgress = new UvWatcher(message, brandRoot,
+                    target.resolve(".venv"), brandRoot.resolve("cache/uv/archive-v0"));
+            try (uvProgress) {
                 runChecked(List.of(uv.toString(), "sync", "--frozen", "--no-dev", "--python", "3.12"),
-                        target, pythonEnv, log, message, "installing the Python environment"));
+                        target, pythonEnv, log, uvProgress, "installing the Python environment");
+            }
+        });
 
         stage(message, 6, total, "收尾", 0.95, 0.05, 5, () -> {
             Path octop = target.resolve(".venv/bin/octop");
@@ -1184,6 +1841,24 @@ public final class BrandInstaller {
         }
         List<Release> releases = releases(brandRoot);
         return releases.isEmpty() ? null : Path.of(releases.get(0).path());
+    }
+
+    /// Appends one line to the brand's install log.
+    ///
+    /// Used by the uv wrapper: the portage-style `>>> 已安装 (199 of 345) cryptography-46.0` lines
+    /// belong in the log the page tails, not only in the task's single status line.
+    ///
+    /// @param brandRoot the brand's directory
+    /// @param line      the line, without its terminator
+    static void appendLogLine(Path brandRoot, String line) {
+        Path log = brandRoot.resolve(INSTALL_LOG);
+        try {
+            Files.createDirectories(log.getParent());
+            Files.writeString(log, line + System.lineSeparator(), StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (java.io.IOException e) {
+            LOG.info("Could not append to the install log " + log + ": " + e.getMessage());
+        }
     }
 
     /// The tail of the install log, for the panel's log view.
