@@ -7,7 +7,11 @@ the upstream portable archive; only the SPA is rebuilt here.
   - reads the mount from `<base>` / `window.__OCTOP_BASE__` at runtime;
   - builds with a relative Vite base;
   - scopes `auth_token`, `auth_remember_pref` and `active-agent` by mount, so
-    several instances can share one panel origin.
+    several instances can share one panel origin;
+  - routes the bundled static assets (`octop-mascot-*`, `pwa-192.png`,
+    `experts/avatars/*.svg`) through `publicUrl()`, because `<base>` does not
+    apply to the upstream's root-absolute paths and the panel answers unknown
+    root paths with its SPA shell (broken images otherwise).
 - `build-dashboard.sh <version>` downloads the tag, applies the patch, builds
   and writes `src/main/resources/octop/octop-dashboard-<version>.zip`.
 

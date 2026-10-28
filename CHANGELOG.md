@@ -1,3 +1,16 @@
+## 未发布 — Octop dashboard 的静态资源走运行时挂载点
+
+- 现象：实例页面能打开，但空状态吉祥物、欢迎页动画（peek/type）、侧栏收起时的图标、专家/团队
+  卡通头像全是破图；`curl -D- https://<面板>/octop-mascot-empty.png` 回的是 `200 text/html`。
+- 原因：dashboard 里有 6 处硬编码的根绝对路径（`/octop-mascot-*.png|webp`、`/pwa-192.png`、
+  `/experts/avatars/*.svg`）。`<base href="/i/<token>/">` 对以 `/` 开头的路径无效，请求落到面板根，
+  面板的静态路由对未知路径回 SPA 外壳（200 + `text/html`），浏览器把 HTML 当图片解码 → 破图。
+- 修法：这些路径改走补丁里已有的 `publicUrl()`（运行时读 `<base>` / `window.__OCTOP_BASE__`）；
+  `presetIdFromExpertAvatarUrl` 先剥掉挂载前缀再解析预设 id；`teamPortraitUrl` 的默认值比较同时
+  接受带前缀与不带前缀两种历史值，避免已存的 `icon_url` 变成"自定义照片"。
+- 资源：`integrations/octop/patches/0001-…patch`、`src/main/resources/octop/octop-runtime-base.patch`
+  与 `octop-dashboard-1.0.3b1.zip` 一并重建。
+
 # 更新日志
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。

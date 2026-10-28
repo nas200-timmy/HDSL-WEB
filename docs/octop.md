@@ -41,7 +41,10 @@ src/main/resources/octop/octop-dashboard-<version>.zip
 
 1. 构建用相对 base，代理在 `index.html` 注入 `<base href="${basePath}/i/<token>/">`
    和 `window.__OCTOP_BASE__`；
-2. `auth_token`、`octop:active-agent` 等 localStorage key 按挂载点命名空间化。
+2. `auth_token`、`octop:active-agent` 等 localStorage key 按挂载点命名空间化；
+3. **静态资源走 `publicUrl()`**：上游把空状态吉祥物、欢迎页动画、侧栏图标、专家/团队头像写成根绝对
+   路径（`/octop-mascot-empty.png` 等），`<base>` 对它们无效，请求会落到面板根并拿回 SPA 外壳
+   （200 + `text/html`）——表现就是一片破图。
 
 补丁源码在 `integrations/octop/patches/`（见该目录 README），构建产物就是上面的
 `octop-dashboard-<version>.zip`。
