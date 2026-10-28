@@ -913,7 +913,7 @@ function InstancesCard({
       className="card"
       style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", padding: 0 }}
     >
-      <div className="toolbar-row" style={{ padding: "6px 12px", flexShrink: 0 }}>
+      <div className="toolbar-row brand-instance-toolbar" style={{ padding: "6px 12px", flexShrink: 0 }}>
         <span style={{ fontSize: 13, fontWeight: 600, flex: "none" }}>
           {I18N["dsh.brand.section.instances"]}
         </span>
@@ -972,7 +972,7 @@ function InstancesCard({
         )}
       </div>
 
-      <div className="list-body scroll-hover">
+      <div className="list-body scroll-hover brand-instance-list">
         {instances.length === 0 ? (
           <div className="empty-state" style={{ padding: "6px 12px" }}>
             <span>还没有 {shortName} 实例</span>

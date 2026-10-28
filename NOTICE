@@ -109,6 +109,11 @@ implied.
   zai-org/ZCode repository is deliberately not used: that repository's NOTICE
   reserves the terms of "icons" generically, so the clearly-licensed file wins.
 
+  Octop — "Octop" and "Tencent Cloud" are trademarks of Tencent.  The panel
+  ships **no** Octop/Tencent mark: the upstream repository
+  (TencentCloud/Octop) is MIT-licensed, but that licence covers its code, not
+  its trademarks, so the section is labelled with text and the neutral icon.
+
   Claude Web — "Claude", "Claude Code" and "Anthropic" are trademarks of
   Anthropic PBC.  The Claude Web section manages the community project
   ypyik0669/claude-web (an unofficial workbench around the Claude Code CLI that
