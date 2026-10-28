@@ -2,7 +2,7 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## Unreleased — 2026-10-29 · Octop 实例的登录密码在面板里就能看/重置
+## v0.6.11 — 2026-10-29 · Octop 实例的登录密码在面板里就能看/重置
 
 - 实例行 → 更多 → **登录密码…**：读的是 Octop 自己的 `<OCTOP_HOME>/credential.txt`，其次面板
   首次启动记录的 `octop-admin.txt`；两边都没有明文时返回「不可读」（Octop 只存哈希）并引导重置，
