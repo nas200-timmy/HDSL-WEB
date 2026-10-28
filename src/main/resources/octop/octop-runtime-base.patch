@@ -86,6 +86,27 @@ index 34a3f7d..5ec5c99 100644
    const match = /^\/experts\/avatars\/([^/]+)\.svg$/i.exec(text);
    return match?.[1] ?? null;
  }
+diff --git a/dashboard/src/components/ErrorBoundary/index.tsx b/dashboard/src/components/ErrorBoundary/index.tsx
+index 1560803..b565d4d 100644
+--- a/dashboard/src/components/ErrorBoundary/index.tsx
++++ b/dashboard/src/components/ErrorBoundary/index.tsx
+@@ -1,6 +1,7 @@
+ import { Component, type ReactNode } from "react";
+ import { Result, Button, Space } from "antd";
+ import i18n from "../../i18n";
++import { publicUrl } from "../../utils/publicUrl";
+ import {
+   isChunkLoadError,
+   tryReloadOnStaleChunk,
+@@ -56,7 +57,7 @@ export default class GlobalErrorBoundary extends Component<Props, State> {
+   };
+ 
+   handleHome = () => {
+-    window.location.href = "/chat";
++    window.location.href = publicUrl("chat");
+   };
+ 
+   handleReload = () => {
 diff --git a/dashboard/src/context/AgentContext.tsx b/dashboard/src/context/AgentContext.tsx
 index 32202c7..826894f 100644
 --- a/dashboard/src/context/AgentContext.tsx
@@ -146,6 +167,46 @@ index 00e07a0..fb95d93 100644
  const MASCOT_IMAGES = [MASCOT_PEEK, MASCOT_TYPE];
  
  function getRandomMascot(current?: string): string {
+diff --git a/dashboard/src/pages/Experts/components/CreateFromExpertDrawer.tsx b/dashboard/src/pages/Experts/components/CreateFromExpertDrawer.tsx
+index 7962174..0f9e41d 100644
+--- a/dashboard/src/pages/Experts/components/CreateFromExpertDrawer.tsx
++++ b/dashboard/src/pages/Experts/components/CreateFromExpertDrawer.tsx
+@@ -1,6 +1,7 @@
+ // dashboard/src/pages/Experts/components/CreateFromExpertDrawer.tsx
+ import { useEffect, useMemo, useRef, useState } from "react";
+ import { useTranslation } from "react-i18next";
++import { Link } from "react-router-dom";
+ import {
+   Alert,
+   Button,
+@@ -672,9 +673,9 @@ export default function CreateFromExpertDrawer({
+           showIcon
+           message={t("experts.noModelsWarning")}
+           action={
+-            <a href="/admin/models" style={{ whiteSpace: "nowrap" }}>
++            <Link to="/admin/models" style={{ whiteSpace: "nowrap" }}>
+               {t("experts.goToAdmin")}
+-            </a>
++            </Link>
+           }
+           style={{ marginBottom: 16 }}
+         />
+diff --git a/dashboard/src/pages/Experts/components/TeamDrawer.tsx b/dashboard/src/pages/Experts/components/TeamDrawer.tsx
+index cc136df..7975c54 100644
+--- a/dashboard/src/pages/Experts/components/TeamDrawer.tsx
++++ b/dashboard/src/pages/Experts/components/TeamDrawer.tsx
+@@ -245,9 +245,9 @@ export default function TeamDrawer({
+           showIcon
+           message={t("experts.noModelsWarning")}
+           action={
+-            <a href="/admin/models" style={{ whiteSpace: "nowrap" }}>
++            <Link to="/admin/models" style={{ whiteSpace: "nowrap" }}>
+               {t("experts.goToAdmin")}
+-            </a>
++            </Link>
+           }
+           style={{ marginBottom: 16 }}
+         />
 diff --git a/dashboard/src/utils/publicUrl.ts b/dashboard/src/utils/publicUrl.ts
 index 3ada3ca..31acbf9 100644
 --- a/dashboard/src/utils/publicUrl.ts

@@ -8,6 +8,9 @@
 - 修法：这些路径改走补丁里已有的 `publicUrl()`（运行时读 `<base>` / `window.__OCTOP_BASE__`）；
   `presetIdFromExpertAvatarUrl` 先剥掉挂载前缀再解析预设 id；`teamPortraitUrl` 的默认值比较同时
   接受带前缀与不带前缀两种历史值，避免已存的 `icon_url` 变成"自定义照片"。
+- 站内跳转：**「没有可用模型」告警里的 `去配置模型` 是裸 `<a href="/admin/models">`**，点击整页跳到
+  面板根，落进 hdsl 自己的外壳；`ErrorBoundary` 的 `window.location.href = "/chat"` 同样会跳出挂载点。
+  前者改 `<Link to>`（router basename 自动生效），后者改 `publicUrl("chat")`。
 - 资源：`integrations/octop/patches/0001-…patch`、`src/main/resources/octop/octop-runtime-base.patch`
   与 `octop-dashboard-1.0.3b1.zip` 一并重建。
 
