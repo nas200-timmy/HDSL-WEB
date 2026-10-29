@@ -880,6 +880,15 @@ function InstancesCard({
   /// Web Shell 总开关（开发者模式里控制）；关着就不显示终端按钮
   const [webShellEnabled, setWebShellEnabled] = useState(true);
 
+  /// glm-5.2: 标记组件是否仍挂载；stopAndWait / installThenPatch 这类无界 async 循环
+  /// 卸载后仍会继续发请求、更新状态（甚至静默 patchVersion），在循环里用它提前 return。
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   useEffect(() => {
     let alive = true;
     api
@@ -1066,6 +1075,8 @@ function InstancesCard({
     }
     for (let i = 0; i < 30; i += 1) {
       await sleep(1000);
+      // glm-5.2: 卸载后停止轮询，避免继续发请求 / 更新已卸载组件状态
+      if (!mountedRef.current) return false;
       await refreshExternal();
       const state = getState().external.find((e) => e.id === id)?.state;
       if (state !== "running" && state !== "starting") return true;
@@ -1095,6 +1106,8 @@ function InstancesCard({
     }
     for (;;) {
       await sleep(1000);
+      // glm-5.2: 卸载后停止轮询，避免继续拉安装状态 / 更新已卸载组件状态
+      if (!mountedRef.current) return;
       let st: BrandInstallStatus;
       try {
         st = await api.brandInstallStatus(brand);
@@ -1112,6 +1125,8 @@ function InstancesCard({
         return;
       }
     }
+    // glm-5.2: 装完到 PATCH 之间组件可能已卸载——此时不再 reload，更不能静默 patchVersion
+    if (!mountedRef.current) return;
     setRowInstall(null);
     await reload();
     await patchVersion(id, version);

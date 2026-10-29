@@ -23,10 +23,12 @@ import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -557,13 +559,37 @@ public final class DshInstanceManager {
     ///
     /// @param instance the instance to persist
     /// @throws DshException when the manifest cannot be written
+    // H3 (glm-5.2): atomic write — write to a temp file and move it into place
+    // so a reader never opens a half-written manifest.
     private static void write(DshInstance instance) throws DshException {
         try {
             Path directory = instance.instanceDirectory();
             Files.createDirectories(directory);
-            JsonUtils.writeToJsonFile(directory.resolve(MANIFEST_NAME), instance);
+            Path target = directory.resolve(MANIFEST_NAME);
+            Path temp = Files.createTempFile(directory, "instance-manifest", ".json");
+            try {
+                JsonUtils.writeToJsonFile(temp, instance);
+                moveManifest(temp, target);
+            } finally {
+                Files.deleteIfExists(temp);
+            }
         } catch (IOException e) {
             throw new DshException("Failed to write the instance manifest for " + instance.id(), e);
+        }
+    }
+
+    /// Moves a written manifest into place atomically when the filesystem
+    /// supports it, falling back to a non-atomic move otherwise (glm-5.2).
+    ///
+    /// @param written the temp file to move
+    /// @param target  where it goes
+    /// @throws IOException when it cannot be moved
+    private static void moveManifest(Path written, Path target) throws IOException {
+        try {
+            Files.move(written, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            LOG.info("Moving " + written + " into place atomically is not supported here", e);
+            Files.move(written, target, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 }

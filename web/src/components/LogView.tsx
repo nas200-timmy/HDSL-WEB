@@ -81,8 +81,8 @@ export function LogView({
         {logs.length === 0 ? (
           <div className="log-empty">{emptyHint ?? "暂无日志"}</div>
         ) : (
-          logs.map((l, idx) => (
-            <div className={`log-line ${LEVEL_CLASS[normLevel(l.level)] ?? "log-info"}`} key={idx}>
+          logs.map((l) => (
+            <div className={`log-line ${LEVEL_CLASS[normLevel(l.level)] ?? "log-info"}`} key={`${l.time}|${l.text.slice(0, 16)}`}>
               <span className="log-time">{formatClock(l.time)}</span>
               <span className="log-level">{l.level}</span>
               <span>{l.text}</span>

@@ -692,9 +692,12 @@ final class PosixPty implements Pty {
     /// Production [Syscalls]: every call goes straight to libc through JNA.
     private static final class Libc implements Syscalls {
 
+        // M2 (glm-5.2): reuse the pollfd Memory across poll() calls instead of
+        // allocating 8 bytes of native memory on every poll cycle.
+        private final Memory pollfd = new Memory(8);
+
         @Override
         public PollResult poll(int fd, int timeoutMillis) {
-            Memory pollfd = new Memory(8);
             pollfd.setInt(0, fd);
             pollfd.setShort(4, (short) POLLIN);
             pollfd.setShort(6, (short) 0);

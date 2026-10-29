@@ -109,6 +109,10 @@ public final class StaticServlet extends HttpServlet {
         // Phase 1 ships a hand-written placeholder shell; assets are rebuilt
         // per deploy and must never be cached across versions.
         response.setHeader("Cache-Control", "no-cache");
+        // M7 (glm-5.2): security headers for the panel's own responses.
+        response.setHeader("X-Content-Type-Options", "nosniff");
+        response.setHeader("X-Frame-Options", "DENY");
+        response.setHeader("Referrer-Policy", "same-origin");
         if (INDEX.equals(path)) {
             byte[] body = indexHtml(resource);
             response.setContentLengthLong(body.length);

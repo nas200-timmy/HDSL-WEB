@@ -240,11 +240,17 @@ public final class DshProcessManager {
     /// @param instanceId the instance id
     /// @return whether a running process was stopped
     public static boolean stop(String instanceId) {
+        // M14 (glm-5.2): set STOPPING *before* reading RUNNING so a concurrent
+        // launch() that holds LAUNCH_LOCK sees the flag and refuses — the
+        // original race was between RUNNING.get() and STOPPING.add(). stop()
+        // itself does not hold LAUNCH_LOCK: process.stop() blocks for seconds,
+        // and holding the lock that long would starve every launch.
+        STOPPING.add(instanceId);
         DshProcess process = RUNNING.get(instanceId);
         if (process == null) {
+            STOPPING.remove(instanceId);
             return false;
         }
-        STOPPING.add(instanceId);
         try {
             process.stop();
         } finally {

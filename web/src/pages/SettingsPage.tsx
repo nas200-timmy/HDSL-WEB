@@ -1511,7 +1511,13 @@ function DeveloperTab() {
     setEstopBusy(true);
     setEstopError(null);
     try {
-      const result = await api.estopEngage("");
+      // glm-5.2: 传描述性 reason，否则审计日志里 E-Stop 原因永远为空字符串。
+      const result = await api.estopEngage("emergency stop engaged from panel");
+      // glm-5.2: 后端可能返回 engaged=false（未真正停机），这时不能当成功，留在对话框里报错。
+      if (!result.engaged) {
+        setEstopError("服务器未确认停机生效（engaged=false），请重试或联系管理员。");
+        return;
+      }
       closeEstop();
       toast("success", `已停机：关闭终端 ${result.terminals} 个、杀掉进程 ${result.processes} 个`);
       await load();

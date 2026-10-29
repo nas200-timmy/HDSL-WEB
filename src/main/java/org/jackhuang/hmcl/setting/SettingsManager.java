@@ -89,7 +89,11 @@ public final class SettingsManager {
     ///
     /// Failures are logged rather than propagated so that a read-only home
     /// directory cannot make the launcher unusable.
-    public static void save() {
+    // glm-5.2: synchronized so the snapshot read in Snapshot.of runs under the
+    // same class-level lock as settings(); without it two concurrent save()
+    // calls could interleave their reads of every field and produce a file
+    // whose fields come from different points in time.
+    public static synchronized void save() {
         writeSnapshot(Snapshot.of(settings()));
     }
 

@@ -111,20 +111,9 @@ export const ws = {
   },
 
   removeTopics(removed: string[]): void {
-    let changed = false;
-    for (const t of removed) {
-      if (topics.delete(t)) changed = true;
-    }
-    if (!changed) return;
-    // 尽力而为：契约只定义了 subscribe；后端若不支持 unsubscribe 会忽略或断开
-    //（断开后自动重连并按当前活跃 topic 重新订阅，状态仍保持一致）。
-    if (socket?.readyState === WebSocket.OPEN) {
-      try {
-        socket.send(JSON.stringify({ type: "unsubscribe", topics: removed }));
-      } catch {
-        // ignore
-      }
-    }
+    // glm-5.2: 只在本地删除——后端协议只定义了 subscribe，发 unsubscribe 可能被当非法消息触发断连；
+    // 下次重连时 onopen 会按当前活跃 topic 重新 subscribe，状态自然一致。
+    for (const t of removed) topics.delete(t);
   },
 
   hasTopic(t: string): boolean {

@@ -123,7 +123,10 @@ function EmergencyStopBanner() {
   /** 「全部 API」档 + 未提权：读也被拦住，页面会像刚装好一样空。要解释，并给一键提权。 */
   const [readLocked, setReadLocked] = useState(false);
   const [elevating, setElevating] = useState(false);
-  const [tick, setTick] = useState(0);
+  // glm-5.2: tick 值不再参与倒计时计算，只保留 setter 作为每秒重渲染的心跳（值用不到，故丢弃）。
+  const [, setTick] = useState(0);
+  // glm-5.2: 锚定上次从服务器拿到 remainingSeconds 的墙钟时间，倒计时改按 Date.now() 推算真实经过秒数，避免每 20 秒刷新跳一下。
+  const [estopRefreshTime, setEstopRefreshTime] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,6 +140,8 @@ function EmergencyStopBanner() {
             // 端点只给按下那一刻的剩余秒数；本地按读取时间往前推。
             remainingSeconds: stop?.remainingSeconds ?? 0,
           });
+          // glm-5.2: 记录本次服务器刷新的墙钟时刻，供 remaining 用 Date.now() 推算。
+          setEstopRefreshTime(Date.now());
           // `all` 是唯一会拦读的档：它的意思就是"连列表都要提权"。
           // 这时页面读不到实例，看起来像空面板——必须说清楚，而不是让人以为数据没了。
           setReadLocked((status.guardScope ?? "off") === "all" && !status.elevated);
@@ -158,7 +163,8 @@ function EmergencyStopBanner() {
     };
   }, []);
 
-  // 剩余时间的秒针：只在停机期间跑，避免整页每秒重渲染。
+  // glm-5.2: 倒计时改按墙钟推算（见下方 remaining），这里每秒只触发一次重渲染让数字往下走；
+  // 只在停机期间跑，避免整页每秒重渲染。
   useEffect(() => {
     if (estop?.engaged !== true) return;
     const timer = window.setInterval(() => setTick((value) => value + 1), 1_000);
@@ -211,7 +217,8 @@ function EmergencyStopBanner() {
   }
 
   if (estop?.engaged !== true) return null;
-  const remaining = Math.max(0, estop.remainingSeconds - tick);
+  // glm-5.2: 用 Date.now() 与上次服务器刷新时间的差值推算剩余秒数，不依赖会漂移且不随刷新重置的 tick 计数。
+  const remaining = Math.max(0, estop.remainingSeconds - Math.floor((Date.now() - estopRefreshTime) / 1000));
   const minutes = Math.floor(remaining / 60);
   const seconds = remaining % 60;
 

@@ -253,6 +253,9 @@ public final class InstancesApiServlet extends HttpServlet {
             }
             instance = DshInstanceManager.find(id);
             if (instance == null) {
+                // M11 (glm-5.2): the manifest did not survive creation — return
+                // 500 instead of a silent empty response.
+                Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "instance was not persisted");
                 return;
             }
         }

@@ -465,7 +465,9 @@ public final class InstanceProxyServlet extends HttpServlet {
                     }
                 }
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
+            // M15 (glm-5.2): catch Exception, not just IOException — a
+            // RuntimeException from the pump must still cancel the upstream.
             // The client went away, or the instance died mid-response. The
             // upstream request is cancelled either way — a half-finished
             // response has no consumer. That is the attempt in flight, so a retry
@@ -1273,11 +1275,15 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// A client that has never spoken to anyone, so the request it sends cannot
     /// land on a pooled connection the instance has since closed — see the
     /// keep-alive note in the static block.
+    // M1 (glm-5.2): shared instead of per-call — each freshClient() used to
+    // build and abandon an HttpClient, leaking its connection pool.
+    private static final HttpClient FRESH_CLIENT = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build();
+
     private static HttpClient freshClient() {
-        return HttpClient.newBuilder()
-                .version(HttpClient.Version.HTTP_1_1)
-                .followRedirects(HttpClient.Redirect.NEVER)
-                .build();
+        return FRESH_CLIENT;
     }
 
     /// A request body publisher that pumps the servlet input stream into the

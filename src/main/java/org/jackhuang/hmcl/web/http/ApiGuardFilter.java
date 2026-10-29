@@ -40,6 +40,13 @@ public final class ApiGuardFilter implements Filter {
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
             throws IOException, ServletException {
+        // H2 (glm-5.2): reject oversized JSON request bodies before they reach a handler.
+        if (request instanceof HttpServletRequest req && response instanceof HttpServletResponse http) {
+            if (req.getContentLengthLong() > 1048576) {
+                Json.error(http, 413, "payload too large");
+                return;
+            }
+        }
         try {
             chain.doFilter(request, response);
         } catch (Throwable t) {

@@ -598,7 +598,9 @@ public final class TaskService {
     /// @return the running install-like task
     public Optional<TaskInfo> activeInstallLike(String instanceId) {
         String taskId = activeInstalls.get(instanceId);
-        if (taskId == null || "pending".equals(taskId)) {
+        // H5 (glm-5.2): a "pending" sentinel still means an install is queued —
+        // the delete guard must see it, so only a true absence returns empty.
+        if (taskId == null) {
             return Optional.empty();
         }
         return get(taskId);

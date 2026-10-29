@@ -817,7 +817,23 @@ public final class HdslServer {
                 return false;
             }
             String host = request.getHeaders().get(HttpHeader.HOST);
-            String bareHost = stripPort(host == null || host.isBlank() ? "localhost" : host);
+            // glm-5.2: Validate the Host header before using it to construct the
+            // redirect Location. A client controls the Host value it sends, so
+            // copying it raw can point the redirect at a domain the attacker
+            // controls. Reject values that contain path separators or protocol
+            // prefixes and fall back to the actual server name from the
+            // connection metadata instead.
+            String bareHost;
+            if (host == null || host.isBlank()) {
+                bareHost = "localhost";
+            } else if (host.contains("/") || host.contains("\\")
+                    || host.contains("http://") || host.contains("https://")) {
+                String serverName = Request.getServerName(request);
+                bareHost = serverName != null && !serverName.isBlank()
+                        ? stripPort(serverName) : "localhost";
+            } else {
+                bareHost = stripPort(host);
+            }
             int mainPort = mainConnector.getLocalPort();
 
             HttpURI uri = request.getHttpURI();
