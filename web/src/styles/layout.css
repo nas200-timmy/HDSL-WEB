@@ -79,6 +79,16 @@
   display: block;
 }
 
+/* 图标现在是个按钮（点它回主界面）：观感保持 24×24，只加一点可点反馈 */
+button.titlebar-icon {
+  padding: 0;
+  border-radius: 6px;
+}
+
+button.titlebar-icon:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
 .titlebar-title {
   font-size: 14px;
   font-weight: bold;
@@ -179,12 +189,19 @@
   width: 200px;
   min-width: 200px;
   padding-top: 12px;
+  padding-bottom: 8px;
   background: var(--monet-surface-transparent-50);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   position: relative;
   z-index: 1;
+}
+
+/* 把底部固定项（退出登录）推到侧栏末尾；内容超高时它自己收缩成 8px 间距 */
+.sidebar-main .side-spacer {
+  flex: 1 1 auto;
+  min-height: 8px;
 }
 
 /* 子侧栏同款（内容页左栏） */

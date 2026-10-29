@@ -14,11 +14,10 @@ import { I18N } from "../i18n";
 import { findTaskForInstance, getState, refreshExternal, refreshInstances, toast, useAppState } from "../store";
 import type { Instance } from "../types";
 import { formatUptime, normState, parsePortFromUrl } from "../utils";
+import { useWallpaperUrl } from "../wallpaper";
 import { withBase } from "../base";
 
-function wallpaper(): string {
-  return `assets-img/wallpapers/2021-08-26.jpg`;
-}
+/// 背景壁纸：内置的或用户上传的，见 `wallpaper.ts`。选中的那张拉不到时回落默认。
 
 /** 启动/安装中的进度浮层（HMCL 任务对话框风格：进度条 + 消息 + 实时日志）。 */
 function LaunchProgress({ inst }: { inst: Instance }) {
@@ -178,6 +177,7 @@ const EXT_STATE_TEXT: Record<string, string> = {
 export function MainPage() {
   const s = useAppState();
   const mobile = useMobileLayout();
+  const wallpaperUrl = useWallpaperUrl();
   // 启动目标（底栏主按钮操作的那个实例，跨品牌）：主卡片跟它走，全屏只剩一个"当前实例"
   const entry = useLaunchEntry();
 
@@ -233,7 +233,7 @@ export function MainPage() {
   return (
     <div className="main-page">
       <MainSideBar />
-      <div className="wallpaper-bg" style={{ backgroundImage: `url(${wallpaper()})` }} />
+      <div className="wallpaper-bg" style={{ backgroundImage: `url(${wallpaperUrl})` }} />
       {mobile && card}
       <LaunchPane />
       {showProgress && overlayInst && <LaunchProgress inst={overlayInst} />}

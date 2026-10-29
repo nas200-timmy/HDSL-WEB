@@ -707,3 +707,20 @@ export interface ZcodeBuildStatus {
   fraction: number;
   error?: string;
 }
+
+/// 一张可选壁纸（GET /api/wallpapers 的一项）。
+/// `builtin` 为真的那些随面板打包，不能删；上传的那些由后端命名与校验。
+export interface Wallpaper {
+  id: string;
+  name: string;
+  /** 相对路径：由 <base href> 解析，两种挂载下都对 */
+  url: string;
+  builtin: boolean;
+  width?: number;
+  height?: number;
+  bytes?: number;
+}
+
+export interface WallpaperList {
+  wallpapers: Wallpaper[];
+}

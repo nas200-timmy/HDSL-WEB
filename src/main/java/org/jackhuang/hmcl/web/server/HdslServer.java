@@ -265,6 +265,9 @@ public final class HdslServer {
                 uploadStaging.toString(), 50L * 1024 * 1024, 55L * 1024 * 1024, 1024 * 1024);
         jakarta.servlet.MultipartConfigElement packMultipart = new jakarta.servlet.MultipartConfigElement(
                 uploadStaging.toString(), 200L * 1024 * 1024, 210L * 1024 * 1024, 1024 * 1024);
+        // 壁纸上传有自己的体积上限（见 WallpaperApiServlet），不跟着整合包那 200 MiB 走。
+        jakarta.servlet.MultipartConfigElement wallpaperMultipart =
+                org.jackhuang.hmcl.web.http.WallpaperApiServlet.multipartConfig(uploadStaging);
 
         // The TLS settings endpoint switches this very server to TLS at
         // runtime; the reference is filled once the instance exists.
@@ -339,6 +342,11 @@ public final class HdslServer {
         ServletHolder tlsHolder = new ServletHolder(new TlsApiServlet(config, certificates, self::get));
         tlsHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(tlsHolder, "/api/settings/*");
+        // 壁纸：外观是用户自己的事，不需要开发者提权；会话门由 /api/* 的 AuthFilter 负责。
+        ServletHolder wallpaperHolder = new ServletHolder(
+                new org.jackhuang.hmcl.web.http.WallpaperApiServlet(config.dataDir));
+        wallpaperHolder.getRegistration().setMultipartConfig(wallpaperMultipart);
+        context.addServlet(wallpaperHolder, "/api/wallpapers/*");
         context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService, config.basePath)), "/i/*");
         // A panel killed mid source-build leaves a half-built release next to a
         // complete `<version>.previous`; put it back before anything lists

@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMobileLayout } from "../hooks";
 import { I18N } from "../i18n";
-import { closeSidebar, useAppState } from "../store";
+import { closeSidebar, logout, useAppState } from "../store";
 import type { Instance } from "../types";
 import { normState } from "../utils";
 import { BrandIcon } from "./BrandIcon";
 import {
   DownloadIcon,
   FormatListBulletedIcon,
+  LogoutIcon,
   PersonIcon,
   SettingsIcon,
 } from "./icons";
@@ -132,6 +133,24 @@ export function MainSideBar() {
         </span>
         <span className="side-text">
           <span className="side-title">{I18N["settings"]}</span>
+        </span>
+      </button>
+
+      {/* 底部固定项：主导航侧栏以前没有退出登录的入口，只能绕到实例页或设置页去。
+          与那两处同一条路径（服务端吊销会话 + 清 Cookie + 本地清理）。 */}
+      <span className="side-spacer" />
+      <button
+        className="side-item ripple-host"
+        onClick={() => {
+          closeSidebar();
+          void logout().then(() => nav("/login", { replace: true }));
+        }}
+      >
+        <span className="side-graphic">
+          <LogoutIcon size={20} />
+        </span>
+        <span className="side-text">
+          <span className="side-title">{I18N["dsh.logout"]}</span>
         </span>
       </button>
     </nav>

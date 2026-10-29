@@ -18,6 +18,7 @@ import { MainPage } from "./pages/MainPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { bootstrap, useAppState } from "./store";
+import { refreshWallpapers, useWallpaperUrl } from "./wallpaper";
 import { api } from "./api";
 import { requestDeveloperPassword } from "./elevation";
 import { refreshServerVersion } from "./version";
@@ -90,6 +91,12 @@ function Shell() {
     return () => transition.skipTransition();
   }, [location.pathname, displayedPath, supportsViewTransition]);
   const path = supportsViewTransition ? displayedPath : location.pathname;
+  // 二级页的背景以前是写死的那张内置壁纸，换壁纸只有主页跟着变、点进任何子页就打回原形。
+  // 列表也在这里拉一次：深链直接进 /settings 时（没经过主页）上传的那些也得在。
+  const wallpaperUrl = useWallpaperUrl();
+  useEffect(() => {
+    void refreshWallpapers();
+  }, []);
   return (
     <Decorator>
       <div
@@ -100,7 +107,7 @@ function Shell() {
           minHeight: 0,
           display: "flex",
           flexDirection: "column",
-          backgroundImage: `url(assets-img/wallpapers/2021-08-26.jpg)`,
+          backgroundImage: `url(${wallpaperUrl})`,
           backgroundSize: "cover",
           backgroundPosition: "center bottom",
         }}

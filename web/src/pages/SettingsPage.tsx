@@ -5,8 +5,10 @@ import { ConfirmDialog, Dialog } from "../components/Dialog";
 import { BrandManagementPanel } from "../components/BrandManagementPanel";
 import { FileDropInput } from "../components/FileDropInput";
 import {
+  AddIcon,
   CheckCircleIcon,
   CheckIcon,
+  CloseIcon,
   DeployedCodeFillIcon,
   DeployedCodeIcon,
   DownloadIcon,
@@ -28,7 +30,15 @@ import {
 import { SubSideBar } from "../components/SideBar";
 import { I18N } from "../i18n";
 import { logout, setState, toast, useAppState } from "../store";
-import { bindSystemThemeListener, setThemeMode, useThemeMode, type ThemeMode } from "../theme";
+import { bindSystemThemeListener, DEFAULT_SEED, resetSeed, setSeed, setThemeMode, useThemeMode, useThemeSeed, type ThemeMode } from "../theme";
+import {
+  deleteWallpaper,
+  refreshWallpapers,
+  setWallpaperId,
+  uploadWallpaper,
+  useWallpaperId,
+  useWallpapers,
+} from "../wallpaper";
 import type {
   DeveloperGuardScope,
   DeveloperStatus,
@@ -645,6 +655,50 @@ function LauncherGeneralTab() {
 
 function AppearanceTab() {
   const mode = useThemeMode();
+  const seed = useThemeSeed();
+  const wallpapers = useWallpapers();
+  const selectedWallpaper = useWallpaperId();
+  const [uploading, setUploading] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  // 手输 hex 时允许停在 "#5C6B" 这种半成品上，但生效的仍是上一个合法值
+  const [hexText, setHexText] = useState(seed);
+
+  useEffect(() => {
+    setHexText(seed);
+  }, [seed]);
+
+  // 用户上传的壁纸只在服务端有：进这一页拉一次
+  useEffect(() => {
+    void refreshWallpapers();
+  }, []);
+
+  const pickWallpaper = async (file: File) => {
+    setUploading(true);
+    try {
+      const created = await uploadWallpaper(file);
+      setWallpaperId(created.id);
+      toast("success", "壁纸已上传并启用");
+    } catch (e) {
+      toast("error", e instanceof ApiError ? e.message : `上传失败：${String(e)}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const removeWallpaper = async () => {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    try {
+      await deleteWallpaper(deleteTarget);
+      setDeleteTarget(null);
+      toast("success", "已删除");
+    } catch (e) {
+      toast("error", `删除失败：${String(e)}`);
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
 
   const modes: { value: ThemeMode; label: string }[] = [
     { value: "auto", label: I18N["dsh.settings.theme.brightness.auto"] },
@@ -694,19 +748,39 @@ function AppearanceTab() {
         <div className="comp-row">
           <span className="comp-label">种子色</span>
           <span className="comp-value">
-            <span
-              style={{
-                width: 20,
-                height: 20,
-                borderRadius: 4,
-                background: "#5C6BC0",
-                border: "1px solid var(--monet-outline-variant)",
-                flex: "none",
-              }}
+            {/* 取色器直接改运行时样式表里的 --monet-*：整站跟着变，不需要谁配合 */}
+            <input
+              type="color"
+              className="seed-swatch"
+              // 原生取色器只认小写 `#rrggbb`，给大写会被静默重置成 #000000
+              value={seed.toLowerCase()}
+              onChange={(e) => setSeed(e.target.value)}
+              title="选一个种子色"
+              aria-label="种子色"
             />
-            <code>#5C6BC0</code>
+            <input
+              className="input seed-hex"
+              value={hexText}
+              spellCheck={false}
+              aria-label="种子色十六进制值"
+              onChange={(e) => {
+                const v = e.target.value.trim().toUpperCase();
+                setHexText(v);
+                if (/^#[0-9A-F]{6}$/.test(v)) setSeed(v);
+              }}
+              // 没写完整就离开：回到当前真正生效的那个值，别留一个骗人的输入框
+              onBlur={() => setHexText(seed)}
+            />
+            <button
+              className="btn btn-text"
+              style={{ height: 28 }}
+              disabled={seed === DEFAULT_SEED}
+              onClick={() => resetSeed()}
+            >
+              恢复默认
+            </button>
             <span style={{ color: "var(--monet-on-surface-variant)", fontSize: 12 }}>
-              （{I18N["dsh.settings.theme_color.default"]}，Material You · FIDELITY · Spec 2025）
+              （Material You · FIDELITY · Spec 2025）
             </span>
           </span>
         </div>
@@ -730,6 +804,73 @@ function AppearanceTab() {
           </span>
         </div>
       </div>
+
+      <div className="section-caption">
+        <AddIcon size={16} />
+        壁纸
+      </div>
+      <div className="card">
+        <div className="wallpaper-grid">
+          {wallpapers.map((w) => (
+            <div key={w.id} className={`wallpaper-cell${w.id === selectedWallpaper ? " selected" : ""}`}>
+              <button
+                type="button"
+                className="wallpaper-pick ripple-host"
+                style={{ backgroundImage: `url(${w.url})` }}
+                title={w.builtin ? `内置：${w.name}` : `${w.name}（${w.width}×${w.height}）`}
+                onClick={() => setWallpaperId(w.id)}
+              >
+                <span className="wallpaper-name">
+                  {w.builtin ? "内置" : w.name}
+                  {w.width ? ` · ${w.width}×${w.height}` : ""}
+                </span>
+              </button>
+              {!w.builtin && (
+                <button
+                  type="button"
+                  className="wallpaper-del"
+                  title="删除这张"
+                  aria-label={`删除 ${w.name}`}
+                  onClick={() => setDeleteTarget(w.id)}
+                >
+                  <CloseIcon size={12} />
+                </button>
+              )}
+            </div>
+          ))}
+          <label className={`wallpaper-cell wallpaper-add${uploading ? " busy" : ""}`}>
+            <AddIcon size={22} />
+            <span className="wallpaper-name">{uploading ? "上传中…" : "上传壁纸"}</span>
+            <input
+              type="file"
+              accept="image/png,image/jpeg"
+              disabled={uploading}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void pickWallpaper(file);
+              }}
+            />
+          </label>
+        </div>
+        <div className="hint info" style={{ marginTop: 8 }}>
+          只收静态的 JPEG / PNG，最大 12 MiB。SVG 会被拒（它能带脚本），GIF、APNG 同样不收，
+          WebP 暂不支持（面板没有它的解码器）。上传的壁纸存在服务器数据目录里，删除后找不回来；
+          选中的那张记在本机上，换浏览器就回到默认。
+        </div>
+      </div>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="删除这张壁纸？"
+        danger
+        busy={deleteBusy}
+        confirmLabel={deleteBusy ? "删除中…" : "删除"}
+        cancelLabel="取消"
+        message={<div style={{ lineHeight: 1.7 }}>文件会从服务器上删掉，找不回来。若它正被选中，界面会回到默认壁纸。</div>}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => void removeWallpaper()}
+      />
     </>
   );
 }

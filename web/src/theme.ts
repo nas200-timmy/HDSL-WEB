@@ -17,8 +17,24 @@ import {
   type DynamicScheme,
 } from "@material/material-color-utilities";
 
-const SEED = "#5C6BC0";
+/// 默认种子：桌面版用的那一个，`恢复默认` 也回到它。
+export const DEFAULT_SEED = "#5C6BC0";
+
+const SEED_KEY = "hdsl.theme.seed";
 const STORAGE_KEY = "hdsl.theme.mode";
+
+/// 种子色存在 localStorage：它和主题模式一样属于「这台设备上的我看什么舒服」，
+/// 不上服务端——换浏览器回到默认值是可接受的，为了一个配色再开一套服务端设置存储不是。
+function normalizeSeed(value: string | null): string {
+  if (!value) return DEFAULT_SEED;
+  const v = value.trim().toUpperCase();
+  return /^#[0-9A-F]{6}$/.test(v) ? v : DEFAULT_SEED;
+}
+
+/** 当前种子色（未设置时为默认 #5C6BC0） */
+export function getSeed(): string {
+  return normalizeSeed(localStorage.getItem(SEED_KEY));
+}
 
 /** 导出为 --monet-<kebab> 的角色（与桌面版 blue.css 的变量名一一对应） */
 const ROLES = [
@@ -98,8 +114,8 @@ function transparentDerivatives(p: Palette): Record<string, string> {
   return d;
 }
 
-function generatePalette(isDark: boolean): Palette {
-  const seed = Hct.fromInt(argbFromHex(SEED));
+function generatePalette(seedHex: string, isDark: boolean): Palette {
+  const seed = Hct.fromInt(argbFromHex(seedHex));
   // FIDELITY 风格（桌面版 HSLCToner 对应）、Contrast 0、Spec 2025
   const scheme: DynamicScheme = new SchemeFidelity(seed, isDark, 0, "2025");
   // 库私有结构：升级后字段可能改名/消失。结构没了就返回空 palette——
@@ -127,11 +143,14 @@ function declarations(p: Palette): string {
   return lines.join("\n  ");
 }
 
-/** 启动时生成亮/暗两套调色板并写入样式表（覆盖 monet.css 中的同名字段） */
-export function initTheme(): void {
+/// 按当前种子重算亮/暗两套调色板并写进运行时样式表（覆盖 monet.css 里的同名字段）。
+/// 换种子色就是重跑这一个函数——所有 `--monet-*` 消费者（卡片、按钮、侧栏、图表）
+/// 跟着 CSS 变量一起变，不需要任何组件配合。
+function applySeed(): void {
   try {
-    const light = generatePalette(false);
-    const dark = generatePalette(true);
+    const seed = getSeed();
+    const light = generatePalette(seed, false);
+    const dark = generatePalette(seed, true);
     let style = document.getElementById("monet-runtime");
     if (!style) {
       style = document.createElement("style");
@@ -143,6 +162,42 @@ export function initTheme(): void {
     // 生成失败时回落到 monet.css 内嵌的默认值（与库输出一致）
   }
   applyResolvedTheme();
+}
+
+/** 启动时按存储的种子生成调色板（没存过就是默认 #5C6BC0） */
+export function initTheme(): void {
+  applySeed();
+}
+
+/** 换种子色：立刻生效并持久化；不是 `#RRGGBB` 的输入按默认值处理 */
+export function setSeed(hex: string): void {
+  const value = normalizeSeed(hex);
+  if (value === DEFAULT_SEED) {
+    localStorage.removeItem(SEED_KEY);
+  } else {
+    localStorage.setItem(SEED_KEY, value);
+  }
+  applySeed();
+  for (const l of [...seedListeners]) l();
+}
+
+/** 回到默认种子 */
+export function resetSeed(): void {
+  setSeed(DEFAULT_SEED);
+}
+
+const seedListeners = new Set<() => void>();
+
+function subscribeSeed(listener: () => void): () => void {
+  seedListeners.add(listener);
+  return () => {
+    seedListeners.delete(listener);
+  };
+}
+
+/** 订阅当前种子色（设置-外观页的取色器用） */
+export function useThemeSeed(): string {
+  return useSyncExternalStore(subscribeSeed, getSeed);
 }
 
 // ---------------------------------------------------------------------------

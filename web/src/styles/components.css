@@ -964,3 +964,138 @@ select.input {
 [data-theme="dark"] .version-list-icon .for-dark {
   display: block;
 }
+
+/* ---------------- 外观：种子色与壁纸选择器 ---------------- */
+
+/* 取色器：原生 input[type=color] 只留色块，边框与圆角跟旁边的 swatch 一致 */
+.seed-swatch {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--monet-outline-variant);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+  flex: none;
+}
+
+.seed-swatch::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.seed-swatch::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+.seed-hex {
+  width: 96px;
+  max-width: 96px;
+  font-family: var(--mono, monospace);
+  text-transform: uppercase;
+}
+
+.wallpaper-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.wallpaper-cell {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  min-height: 60px;
+}
+
+/* 缩略图即按钮：点一下就换背景，选中的一圈描边 */
+.wallpaper-pick {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  padding: 0;
+  border: 1px solid var(--monet-outline-variant);
+  border-radius: 6px;
+  background-size: cover;
+  background-position: center;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.wallpaper-cell.selected .wallpaper-pick {
+  border: 2px solid var(--monet-primary);
+}
+
+.wallpaper-name {
+  display: block;
+  width: 100%;
+  padding: 2px 6px;
+  font-size: 11px;
+  text-align: left;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wallpaper-del {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+}
+
+.wallpaper-del:hover {
+  background: var(--monet-error);
+}
+
+/* 上传：整格是个 label，真正的 file input 铺满并透明 */
+.wallpaper-add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: 1px dashed var(--monet-outline-variant);
+  border-radius: 6px;
+  color: var(--monet-on-surface-variant);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.wallpaper-add .wallpaper-name {
+  display: inline;
+  width: auto;
+  padding: 0;
+  background: none;
+  color: inherit;
+  text-align: center;
+}
+
+.wallpaper-add input[type="file"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.wallpaper-add.busy {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.wallpaper-add.busy input[type="file"] {
+  cursor: default;
+}

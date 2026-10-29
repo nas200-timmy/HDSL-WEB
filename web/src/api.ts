@@ -33,6 +33,8 @@ import type {
   TuiPluginItem,
   TuiPluginState,
   VersionInfo,
+  Wallpaper,
+  WallpaperList,
   WorkspaceInfo,
   ZcodeBuildStatus,
   ZcodeDistInfo,
@@ -401,6 +403,22 @@ export const api = {
     if (name) fd.append("name", name);
     return request<{ taskId: string }>("/api/packs/upload", { method: "POST", body: fd });
   },
+
+  // ---------- 壁纸 ----------
+
+  /** 可选壁纸清单：内置的在前，用户上传的按时间排在后面 */
+  wallpapers: () => request<WallpaperList>("/api/wallpapers"),
+
+  // multipart：只收静态位图，判据在服务端（魔数 + 动图特征 + 真读一遍图片头）
+  uploadWallpaper: (file: File, name?: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    if (name) fd.append("name", name);
+    return request<Wallpaper>("/api/wallpapers", { method: "POST", body: fd });
+  },
+
+  deleteWallpaper: (id: string) =>
+    request<void>(`/api/wallpapers/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   // ---------- Phase 4：导出 ----------
 
