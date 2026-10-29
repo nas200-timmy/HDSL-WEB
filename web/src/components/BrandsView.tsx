@@ -1211,9 +1211,7 @@ function InstancesCard({
               >
                 {installed.map((r) => (
                   <option key={r.version} value={r.version}>
-                    {mobile
-                      ? `${r.version}${r.current ? " ✓" : ""}`
-                      : `${r.version}${r.current ? `（${I18N["dsh.brand.current"]}）` : ""}`}
+                    {mobile ? r.version : `${r.version}${r.current ? `（${I18N["dsh.brand.current"]}）` : ""}`}
                   </option>
                 ))}
               </select>
@@ -1293,16 +1291,14 @@ function InstancesCard({
                     {/* 全量版本目录：已装/未装都列出来，切到未装的会先把它装上 */}
                     <select
                       className="input"
-                      style={{ flex: "none", maxWidth: mobile ? 84 : 124, height: mobile ? 32 : 36 }}
+                      style={{ flex: "none", maxWidth: mobile ? 150 : 124, height: mobile ? 32 : 36 }}
                       value={version}
                       disabled={busy || installing || disabled}
                       onChange={(e) => void pickVersion(inst, e.target.value)}
                     >
                       {catalog.map((v) => (
                         <option key={v} value={v}>
-                          {mobile
-                            ? `${v}${installed.some((r) => r.version === v) ? " ✓" : ""}`
-                            : versionOption(v, false, installed.some((r) => r.version === v))}
+                          {versionOption(v, false, installed.some((r) => r.version === v))}
                         </option>
                       ))}
                       {/* 上游撤掉的版本会不在目录里：补一条占位，免得选择器回落到别的版本 */}

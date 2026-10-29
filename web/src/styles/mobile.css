@@ -377,11 +377,18 @@
   .brand-instance-list .tlli {
     flex-wrap: wrap;
     align-items: center;
-    row-gap: 4px;
+    row-gap: 6px;
   }
 
+  /* 选择点跟标题行对齐，不再飘在文字上方 */
+  .brand-instance-list .tlli .input-check {
+    align-self: flex-start;
+    margin-top: 4px;
+  }
+
+  /* basis 0：文字块永远跟选择点共享第一行，不会自己挤到第二行 */
   .brand-instance-list .tlli .tlli-text {
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-width: 0;
   }
 
@@ -397,19 +404,22 @@
     line-height: 1.5;
   }
 
-  /* 操作组（版本选择 + 四个图标）尽量跟标题同一行、靠右；
-   * 行宽实在不够才整体落到第二行——以前是无条件占满一整行，
-   * 393px 的屏上一行实例要吃掉两行高度。 */
+  /* 操作组单独占一行：版本选择靠左、图标按钮靠右。
+   * 这一行空间充裕，选择器拉长到能正常显示「2.2.0 已装」。 */
   .brand-instance-list .row-actions {
-    flex: none;
-    margin-left: auto;
+    flex: 1 1 100%;
     gap: 2px;
+  }
+
+  .brand-instance-list .row-actions > .icon-btn:first-of-type {
+    margin-left: auto;
   }
 
   .brand-instance-list .row-actions .input {
     min-height: 32px;
     height: 32px;
     padding: 0 6px;
+    min-width: 104px;
   }
 
   /* 行与行之间一条细分界线：标出每行的点击范围，也当视觉分栏 */
