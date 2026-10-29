@@ -38,9 +38,12 @@ export function McPage() {
       setFeature(next);
       setLoadError(null);
       if (next.enabled) {
-        const [list, catalog] = await Promise.all([api.mc.instances(), api.mc.versions()]);
+        // 版本清单要联网：拉不到只让「创建/装版本」退化，不该把整个页面变成错误页。
+        const list = await api.mc.instances();
         setInstances(list.instances);
-        setVersions(catalog.versions);
+        api.mc.versions()
+          .then((catalog) => setVersions(catalog.versions))
+          .catch(() => setVersions([]));
       }
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
@@ -55,6 +58,19 @@ export function McPage() {
   useEffect(() => {
     void load();
   }, []);
+
+  // 起停是异步状态（STARTING/STOPPING 由服务端推进），有过渡态时轻量轮询，
+  // 没有就停——不要把整个页面变成 2 秒一次的心跳。
+  const transitioning = instances.some((instance) => instance.state === "STARTING" || instance.state === "STOPPING");
+  useEffect(() => {
+    if (!transitioning) return;
+    const timer = window.setInterval(() => {
+      void api.mc.instances()
+        .then((list) => setInstances(list.instances))
+        .catch(() => undefined);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [transitioning]);
 
   useEffect(() => {
     if (!feature?.locked) return;
