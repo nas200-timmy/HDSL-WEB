@@ -81,8 +81,13 @@ export function LogView({
         {logs.length === 0 ? (
           <div className="log-empty">{emptyHint ?? "暂无日志"}</div>
         ) : (
-          logs.map((l) => (
-            <div className={`log-line ${LEVEL_CLASS[normLevel(l.level)] ?? "log-info"}`} key={`${l.time}|${l.text.slice(0, 16)}`}>
+          logs.map((l, idx) => (
+            // 行只会在尾部追加、清空时整体移除（store 里按 MAX_LOG_LINES 截断），所以下标是稳定键；
+            // 用 time|text 当键反而会撞：time 只有秒级精度，重复的进度行在同一秒内文本相同。
+            <div
+              className={`log-line ${LEVEL_CLASS[normLevel(l.level)] ?? "log-info"}`}
+              key={idx}
+            >
               <span className="log-time">{formatClock(l.time)}</span>
               <span className="log-level">{l.level}</span>
               <span>{l.text}</span>

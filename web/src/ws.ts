@@ -111,9 +111,20 @@ export const ws = {
   },
 
   removeTopics(removed: string[]): void {
-    // glm-5.2: 只在本地删除——后端协议只定义了 subscribe，发 unsubscribe 可能被当非法消息触发断连；
-    // 下次重连时 onopen 会按当前活跃 topic 重新 subscribe，状态自然一致。
-    for (const t of removed) topics.delete(t);
+    let changed = false;
+    for (const t of removed) {
+      if (topics.delete(t)) changed = true;
+    }
+    if (!changed) return;
+    // 后端 /ws 明确支持 unsubscribe（WsGateway：有 topics 就移除，订阅“全部”时进排除集；
+    // 未知 type 只回一帧 error，不会断连）。不发就等于让服务端继续推这个实例的 log/state。
+    if (socket?.readyState === WebSocket.OPEN) {
+      try {
+        socket.send(JSON.stringify({ type: "unsubscribe", topics: removed }));
+      } catch {
+        // ignore
+      }
+    }
   },
 
   hasTopic(t: string): boolean {

@@ -591,19 +591,33 @@ public final class TaskService {
     }
 
     /// Returns the install-like task currently working on an instance, of any
-    /// install-like kind. The deletion guard asks this: an instance being
-    /// package-managed must not disappear under pnpm.
+    /// install-like kind. The instance page asks this for its install progress.
+    ///
+    /// A queued install has no task yet — [TaskService] parks the `pending`
+    /// sentinel in the map — so this answers empty for it. Guards that must see
+    /// a queued install ask [#hasActiveInstallLike] instead.
     ///
     /// @param instanceId the instance id
     /// @return the running install-like task
     public Optional<TaskInfo> activeInstallLike(String instanceId) {
         String taskId = activeInstalls.get(instanceId);
-        // H5 (glm-5.2): a "pending" sentinel still means an install is queued —
-        // the delete guard must see it, so only a true absence returns empty.
         if (taskId == null) {
             return Optional.empty();
         }
         return get(taskId);
+    }
+
+    /// Whether an install-like task is running **or queued** for an instance.
+    ///
+    /// Not expressible through [#activeInstallLike]: while a task is queued the
+    /// map holds the `pending` sentinel, which names no task, so the lookup for
+    /// it finds nothing. A delete or a start guard asking that way waved the
+    /// request through under an install that was about to run.
+    ///
+    /// @param instanceId the instance id
+    /// @return whether an install-like task holds the instance
+    public boolean hasActiveInstallLike(String instanceId) {
+        return activeInstalls.containsKey(instanceId);
     }
 
     /// Returns the most recent finished install for an instance, if any.

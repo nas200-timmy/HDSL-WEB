@@ -160,7 +160,7 @@ public final class InstanceRuntime {
         if (DshProcessManager.isStopping(instanceId)) {
             return "STOPPING";
         }
-        if (tasks.activeInstallLike(instanceId).isPresent()) {
+        if (tasks.hasActiveInstallLike(instanceId)) {
             return "INSTALLING";
         }
         DshInstance instance = DshInstanceManager.find(instanceId);

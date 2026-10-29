@@ -1274,16 +1274,17 @@ public final class InstanceProxyServlet extends HttpServlet {
 
     /// A client that has never spoken to anyone, so the request it sends cannot
     /// land on a pooled connection the instance has since closed — see the
-    /// keep-alive note in the static block.
-    // M1 (glm-5.2): shared instead of per-call — each freshClient() used to
-    // build and abandon an HttpClient, leaking its connection pool.
-    private static final HttpClient FRESH_CLIENT = HttpClient.newBuilder()
-            .version(HttpClient.Version.HTTP_1_1)
-            .followRedirects(HttpClient.Redirect.NEVER)
-            .build();
-
+    /// keep-alive note in the static block and [InstanceProxyServlet#attempt].
+    ///
+    /// Deliberately not hoisted into a shared `static final`: a shared one's pool
+    /// holds sockets the instance has already closed, which is the stale connection
+    /// the retry exists to avoid. The cost of a client per retry is a daemon
+    /// selector thread that lives until the process exits, and retries are rare.
     private static HttpClient freshClient() {
-        return FRESH_CLIENT;
+        return HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
     }
 
     /// A request body publisher that pumps the servlet input stream into the

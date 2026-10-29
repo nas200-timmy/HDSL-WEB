@@ -884,6 +884,9 @@ function InstancesCard({
   /// 卸载后仍会继续发请求、更新状态（甚至静默 patchVersion），在循环里用它提前 return。
   const mountedRef = useRef(true);
   useEffect(() => {
+    // Set here, not only in useRef: StrictMode mounts, clears and mounts again, and the
+    // initial value would stay `false` after that simulated unmount.
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };

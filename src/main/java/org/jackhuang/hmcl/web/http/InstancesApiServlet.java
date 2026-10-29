@@ -433,7 +433,7 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "instance is running");
             return;
         }
-        if (tasks.activeInstallLike(id).isPresent()) {
+        if (tasks.hasActiveInstallLike(id)) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "install in progress");
             return;
         }

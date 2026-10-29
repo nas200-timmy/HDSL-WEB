@@ -28,6 +28,7 @@ import org.jackhuang.hmcl.util.logging.Logger;
 import org.jetbrains.annotations.NotNullByDefault;
 
 import java.io.IOException;
+import java.util.Locale;
 
 /// Catches whatever a servlet lets escape. An NPE in a handler is a 500 like
 /// any other, but Jetty's default error page is HTML and `/api/*` speaks JSON
@@ -40,9 +41,18 @@ public final class ApiGuardFilter implements Filter {
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
             throws IOException, ServletException {
-        // H2 (glm-5.2): reject oversized JSON request bodies before they reach a handler.
+        // H2 (glm-5.2): reject oversized request bodies before they reach a handler.
+        //
+        // Everything except multipart: handlers on this mapping parse JSON by reading the whole
+        // body into memory, which is the OOM the cap exists for, and they do that whatever the
+        // request's Content-Type says. Multipart uploads share the mapping but stream to a
+        // staging file — a plugin `.tgz` (50 MiB) and a pack `.dspack` (200 MiB, the documented
+        // cap) — so a cap keyed on length alone refused them at 1 MiB.
         if (request instanceof HttpServletRequest req && response instanceof HttpServletResponse http) {
-            if (req.getContentLengthLong() > 1048576) {
+            String contentType = req.getContentType();
+            boolean multipart = contentType != null
+                    && contentType.toLowerCase(Locale.ROOT).startsWith("multipart/form-data");
+            if (!multipart && req.getContentLengthLong() > 1048576) {
                 Json.error(http, 413, "payload too large");
                 return;
             }
