@@ -1063,6 +1063,18 @@ GPL 视角的论证（要写进 docs）：`server.jar` 不是本项目代码，�
   面板只记录哈希与时间。
 ```
 
+**下载校验（实现契约）**
+
+Mojang 的版本元数据只发布 **SHA-1**（`downloads.server` 只有 `sha1`/`size`/`url`），
+所以不能假装有 SHA-256。三层：
+
+1. 以 launchermeta（HTTPS）里拿到的 `sha1` 为主锚——镜像只能改下载地址，改不了这个值；
+2. 面板在下载时**自己算一份 SHA-256**，记进 `versions/<v>/version.json`，之后复用共享 jar
+   时 SHA-1 与 SHA-256 都要对得上，任一不符就重新下载；
+3. 运维可以在 `<v>/trusted.sha256` 放一行哈希把版本钉死，面板会优先按它校验。
+
+另外拒绝非 zip 的文件：反代的错误页被存成 `server.jar` 是经典事故，魔数检查比哈希先做。
+
 CI 断言（沿用 Dockerfile 的 `test -f` 风格）：
 
 - 镜像内不存在 `*.jar`（除自有构建产物）

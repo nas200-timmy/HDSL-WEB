@@ -67,7 +67,7 @@ class McVersionsTest {
 
     @Test
     void downloadsVerifiesAndLinksTheServerJar(@TempDir Path dir) throws Exception {
-        byte[] jar = "not really a jar, but the hash is what matters".getBytes(StandardCharsets.UTF_8);
+        byte[] jar = zipBytes("not really a jar, but the hash is what matters");
         HttpServer mojang = fakeMojang(jar, sha1(jar));
         try {
             String manifest = "http://127.0.0.1:" + mojang.getAddress().getPort() + "/manifest.json";
@@ -82,15 +82,70 @@ class McVersionsTest {
             assertEquals("1.21.4", installed.version());
             assertArrayEquals(jar, Files.readAllBytes(manager.serverJar(installed)));
             assertTrue(Files.isRegularFile(dir.resolve("versions").resolve("1.21.4").resolve("server.jar")));
-            assertTrue(Files.isRegularFile(dir.resolve("versions").resolve("1.21.4").resolve("version.json")));
+            String record = Files.readString(dir.resolve("versions").resolve("1.21.4").resolve("version.json"));
+            // Upstream only publishes SHA-1; the panel records its own SHA-256.
+            assertTrue(record.contains("sha256"), record);
         } finally {
             mojang.stop(0);
         }
     }
 
     @Test
+    void aCorruptedSharedJarIsDownloadedAgain(@TempDir Path dir) throws Exception {
+        byte[] jar = zipBytes("payload");
+        HttpServer mojang = fakeMojang(jar, sha1(jar));
+        try {
+            String manifest = "http://127.0.0.1:" + mojang.getAddress().getPort() + "/manifest.json";
+            McInstanceManager manager = new McInstanceManager(dir.resolve("instances"));
+            McInstance instance = manager.create("survival", "1.21.4", 25565, 25575, 1024, "world", null);
+            McVersions versions = new McVersions(dir.resolve("versions"), URI.create(manifest));
+            versions.install(instance, manager, "1.21.4");
+
+            Path shared = dir.resolve("versions").resolve("1.21.4").resolve("server.jar");
+            Files.writeString(shared, "corrupted");
+            versions.install(instance, manager, "1.21.4");
+            assertArrayEquals(jar, Files.readAllBytes(shared));
+        } finally {
+            mojang.stop(0);
+        }
+    }
+
+    @Test
+    void anOperatorPinThatDisagreesBlocksTheDownload(@TempDir Path dir) throws Exception {
+        byte[] jar = zipBytes("payload");
+        HttpServer mojang = fakeMojang(jar, sha1(jar));
+        try {
+            String manifest = "http://127.0.0.1:" + mojang.getAddress().getPort() + "/manifest.json";
+            McInstanceManager manager = new McInstanceManager(dir.resolve("instances"));
+            McInstance instance = manager.create("pinned", "1.21.4", 25565, 25575, 1024, "world", null);
+            Path versionDir = dir.resolve("versions").resolve("1.21.4");
+            Files.createDirectories(versionDir);
+            Files.writeString(versionDir.resolve("trusted.sha256"), "deadbeef\n");
+            McVersions versions = new McVersions(dir.resolve("versions"), URI.create(manifest));
+
+            McException failed = assertThrows(McException.class,
+                    () -> versions.install(instance, manager, "1.21.4"));
+            assertTrue(failed.getMessage().contains("trusted.sha256"), failed.getMessage());
+            assertFalse(Files.exists(versionDir.resolve("server.jar")));
+        } finally {
+            mojang.stop(0);
+        }
+    }
+
+    private static byte[] zipBytes(String payload) {
+        byte[] body = payload.getBytes(StandardCharsets.UTF_8);
+        byte[] jar = new byte[4 + body.length];
+        jar[0] = 'P';
+        jar[1] = 'K';
+        jar[2] = 3;
+        jar[3] = 4;
+        System.arraycopy(body, 0, jar, 4, body.length);
+        return jar;
+    }
+
+    @Test
     void aWrongHashFailsAndLeavesNothingBehind(@TempDir Path dir) throws Exception {
-        byte[] jar = "payload".getBytes(StandardCharsets.UTF_8);
+        byte[] jar = zipBytes("payload");
         HttpServer mojang = fakeMojang(jar, "0000000000000000000000000000000000000000");
         try {
             String manifest = "http://127.0.0.1:" + mojang.getAddress().getPort() + "/manifest.json";

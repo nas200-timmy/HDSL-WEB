@@ -35,7 +35,6 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
@@ -147,7 +146,7 @@ public final class McVersions {
     public McInstance install(McInstance instance, McInstanceManager manager, String versionId) throws McException {
         ServerDownload download = resolve(versionId);
         Path shared = versionsRoot.resolve(versionId).resolve(McInstanceManager.SERVER_JAR_NAME);
-        if (!Files.isRegularFile(shared) || !sha1Of(shared).equalsIgnoreCase(download.sha1())) {
+        if (!reusable(shared, download)) {
             downloadAndVerify(download, shared);
         }
         link(shared, manager.serverJar(instance));
@@ -209,9 +208,15 @@ public final class McVersions {
                 if (answer.statusCode() != 200) {
                     throw new McException("the server download answered HTTP " + answer.statusCode());
                 }
-                MessageDigest digest = MessageDigest.getInstance("SHA-1");
+                // Upstream publishes only SHA-1. We verify that (the hash comes
+                // from Mojang over HTTPS, not from the mirror) **and** compute a
+                // SHA-256 of our own, which is what later reuses are checked
+                // against. An operator can pin an even stronger value by
+                // dropping `trusted.sha256` next to the version.
+                MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
+                MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
                 long copied = 0;
-                try (InputStream in = new DigestInputStream(answer.body(), digest);
+                try (InputStream in = answer.body();
                      OutputStream out = Files.newOutputStream(temp)) {
                     byte[] buffer = new byte[64 * 1024];
                     int read;
@@ -220,25 +225,32 @@ public final class McVersions {
                         if (copied > MAX_JAR_BYTES) {
                             throw new McException("the server download is larger than the panel accepts");
                         }
+                        sha1.update(buffer, 0, read);
+                        sha256.update(buffer, 0, read);
                         out.write(buffer, 0, read);
                     }
                 }
-                String actual = HexFormat.of().formatHex(digest.digest());
-                if (!actual.equalsIgnoreCase(download.sha1())) {
+                String actualSha1 = HexFormat.of().formatHex(sha1.digest());
+                if (!actualSha1.equalsIgnoreCase(download.sha1())) {
                     throw new McException("the server download failed its SHA-1 check (expected "
-                            + download.sha1() + ", got " + actual + ")");
+                            + download.sha1() + ", got " + actualSha1 + ")");
                 }
                 if (download.size() >= 0 && copied != download.size()) {
                     throw new McException("the server download is " + copied + " bytes, the manifest says "
                             + download.size());
                 }
+                String actualSha256 = HexFormat.of().formatHex(sha256.digest());
+                requireZip(temp);
+                requirePinned(target.getParent().resolve("trusted.sha256"), actualSha256);
+
                 Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
-                // A trimmed record of where this jar came from: the panel never
-                // re-publishes it, it only explains what it is running.
+                // A trimmed record of where this jar came from and what we saw:
+                // the panel never re-publishes it, it only explains what it runs.
                 JsonObject record = new JsonObject();
                 record.addProperty("id", download.id());
                 record.addProperty("url", download.url());
                 record.addProperty("sha1", download.sha1());
+                record.addProperty("sha256", actualSha256);
                 record.addProperty("size", copied);
                 JsonUtils.writeToJsonFile(target.getParent().resolve("version.json"), record);
                 LOG.info("Downloaded Minecraft server " + download.id() + " (" + copied + " bytes)");
@@ -248,10 +260,72 @@ public final class McVersions {
         } catch (IOException e) {
             throw new McException("Failed to download the server jar: " + e.getMessage(), e);
         } catch (NoSuchAlgorithmException e) {
-            throw new McException("SHA-1 is not available in this JVM", e);
+            throw new McException("SHA-1/SHA-256 is not available in this JVM", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new McException("the server download was interrupted", e);
+        }
+    }
+
+    /// Whether the shared jar can be reused instead of downloaded again: the
+    /// manifest's SHA-1, our recorded SHA-256, the operator's pin, and a zip
+    /// header all have to agree.
+    private boolean reusable(Path shared, ServerDownload download) {
+        if (!Files.isRegularFile(shared)) {
+            return false;
+        }
+        try {
+            if (!sha1Of(shared).equalsIgnoreCase(download.sha1())) {
+                return false;
+            }
+            String sha256 = sha256Of(shared);
+            JsonObject record = Files.isRegularFile(shared.getParent().resolve("version.json"))
+                    ? JsonUtils.fromJsonFile(shared.getParent().resolve("version.json"), JsonObject.class)
+                    : null;
+            String recorded = record == null ? null : string(record, "sha256");
+            if (recorded != null && !recorded.equalsIgnoreCase(sha256)) {
+                return false;
+            }
+            Path pin = shared.getParent().resolve("trusted.sha256");
+            if (Files.isRegularFile(pin)) {
+                requirePinned(pin, sha256);
+            }
+            requireZip(shared);
+            return true;
+        } catch (McException | IOException e) {
+            return false;
+        }
+    }
+
+    /// Refuses a file that is not a zip: a proxy's HTML error page saved under
+    /// the right name is the classic way a "downloaded jar" turns out to be junk.
+    private static void requireZip(Path file) throws McException {
+        try (InputStream in = Files.newInputStream(file)) {
+            byte[] magic = in.readNBytes(4);
+            if (magic.length < 4 || magic[0] != 'P' || magic[1] != 'K') {
+                throw new McException("the downloaded server.jar is not a zip archive");
+            }
+        } catch (IOException e) {
+            throw new McException("Failed to inspect " + file, e);
+        }
+    }
+
+    /// An operator-placed pin (`<version>/trusted.sha256`, first token on the
+    /// first line) wins over everything else: it is the only value a mirror
+    /// cannot influence.
+    private static void requirePinned(Path pin, String sha256) throws McException {
+        if (!Files.isRegularFile(pin)) {
+            return;
+        }
+        try {
+            String text = Files.readString(pin).strip();
+            String expected = text.split("\\s+")[0].toLowerCase(Locale.ROOT);
+            if (!expected.equalsIgnoreCase(sha256)) {
+                throw new McException("the server jar does not match trusted.sha256 (expected "
+                        + expected + ", got " + sha256 + ")");
+            }
+        } catch (IOException e) {
+            throw new McException("Failed to read " + pin, e);
         }
     }
 
@@ -297,8 +371,16 @@ public final class McVersions {
     }
 
     private static String sha1Of(Path file) throws McException {
+        return digestOf(file, "SHA-1");
+    }
+
+    private static String sha256Of(Path file) throws McException {
+        return digestOf(file, "SHA-256");
+    }
+
+    private static String digestOf(Path file, String algorithm) throws McException {
         try (InputStream in = Files.newInputStream(file)) {
-            MessageDigest digest = MessageDigest.getInstance("SHA-1");
+            MessageDigest digest = MessageDigest.getInstance(algorithm);
             byte[] buffer = new byte[64 * 1024];
             int read;
             while ((read = in.read(buffer)) >= 0) {
@@ -308,7 +390,7 @@ public final class McVersions {
         } catch (IOException e) {
             throw new McException("Failed to hash " + file, e);
         } catch (NoSuchAlgorithmException e) {
-            throw new McException("SHA-1 is not available in this JVM", e);
+            throw new McException(algorithm + " is not available in this JVM", e);
         }
     }
 }
