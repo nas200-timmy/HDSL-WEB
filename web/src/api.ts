@@ -231,10 +231,14 @@ export const api = {
   estopPreview: () => request<EmergencyStopPreview>("/api/developer/estop/preview"),
   /** 紧急停机：强杀所有实例进程树并关掉所有终端，1 小时内不能解除 */
   estopEngage: (reason: string) =>
-    request<{ engaged: boolean; terminals: number; processes: number; releasesAt?: string }>(
-      "/api/developer/estop/engage",
-      jsonInit("POST", { confirm: "ENGAGE-EMERGENCY-STOP", reason }),
-    ),
+    request<{
+      engaged: boolean;
+      /** 已处于停机状态时后端不再杀一遍，也不会重算冷却；此时没有 terminals/processes。 */
+      alreadyEngaged?: boolean;
+      terminals?: number;
+      processes?: number;
+      releasesAt?: string;
+    }>("/api/developer/estop/engage", jsonInit("POST", { confirm: "ENGAGE-EMERGENCY-STOP", reason })),
   /** 紧急停机：冷却到点后才能解除（否则后端 409 带 remainingSeconds） */
   estopRelease: () => request<{ engaged: boolean }>("/api/developer/estop/release", { method: "POST" }),
   setDeveloperPassword: (

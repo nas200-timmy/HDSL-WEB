@@ -1519,7 +1519,12 @@ function DeveloperTab() {
         return;
       }
       closeEstop();
-      toast("success", `已停机：关闭终端 ${result.terminals} 个、杀掉进程 ${result.processes} 个`);
+      if (result.alreadyEngaged) {
+        // 已经停机：后端没再杀一遍，也没有 terminals/processes；冷却不会重算。
+        toast("info", "已处于紧急停机状态，冷却时间不变");
+      } else {
+        toast("success", `已停机：关闭终端 ${result.terminals ?? 0} 个、杀掉进程 ${result.processes ?? 0} 个`);
+      }
       await load();
     } catch (e) {
       setEstopError(developerError(e));
