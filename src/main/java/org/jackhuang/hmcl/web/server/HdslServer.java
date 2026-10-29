@@ -347,6 +347,26 @@ public final class HdslServer {
                 new org.jackhuang.hmcl.web.http.WallpaperApiServlet(config.dataDir));
         wallpaperHolder.getRegistration().setMultipartConfig(wallpaperMultipart);
         context.addServlet(wallpaperHolder, "/api/wallpapers/*");
+
+        // The Minecraft surface (docs/minecraft.md). Off by default: while the
+        // feature is DISABLED the gate answers 404 for everything but the enable
+        // flow, so the panel looks exactly like one without this feature.
+        org.jackhuang.hmcl.web.minecraft.McFeatureState mcFeature =
+                new org.jackhuang.hmcl.web.minecraft.McFeatureState(
+                        config.dataDir.resolve("minecraft").resolve("feature.json"));
+        org.jackhuang.hmcl.web.minecraft.McInstanceManager mcInstances =
+                new org.jackhuang.hmcl.web.minecraft.McInstanceManager(
+                        config.dataDir.resolve("minecraft").resolve("instances"));
+        String mcJava = config.mc.javaPath == null || config.mc.javaPath.isBlank()
+                ? "java" : config.mc.javaPath;
+        org.jackhuang.hmcl.web.minecraft.McRuntime mcRuntime =
+                new org.jackhuang.hmcl.web.minecraft.McRuntime(mcInstances, terminals, mcFeature, mcJava);
+        context.addFilter(new FilterHolder(new org.jackhuang.hmcl.web.minecraft.McFeatureFilter(
+                mcFeature, config.basePath)), "/api/mc/*", EnumSet.of(DispatcherType.REQUEST));
+        context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.minecraft.McApiServlet(
+                config, mcFeature, mcInstances, mcRuntime, terminalTickets, authService,
+                developerAuth, developerElevation, tlsActive, emergencyStop)), "/api/mc/*");
+
         context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService, config.basePath)), "/i/*");
         // A panel killed mid source-build leaves a half-built release next to a
         // complete `<version>.previous`; put it back before anything lists

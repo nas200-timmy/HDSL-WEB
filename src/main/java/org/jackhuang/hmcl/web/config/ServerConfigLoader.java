@@ -58,6 +58,11 @@ public final class ServerConfigLoader {
     public static final String ENV_ZCODE_PNPM = "HDSL_ZCODE_PNPM";
     public static final String ENV_ZCODE_SOURCE_URL = "HDSL_ZCODE_SOURCE_URL";
     public static final String ENV_ZCODE_KEEP_SOURCES = "HDSL_ZCODE_KEEP_SOURCES";
+    public static final String ENV_MC_PORT_START = "HDSL_MC_PORT_START";
+    public static final String ENV_MC_PORT_END = "HDSL_MC_PORT_END";
+    public static final String ENV_MC_MAX_INSTANCES = "HDSL_MC_MAX_INSTANCES";
+    public static final String ENV_MC_MAX_MEMORY_MB = "HDSL_MC_MAX_MEMORY_MB";
+    public static final String ENV_MC_JAVA_PATH = "HDSL_MC_JAVA_PATH";
 
     public static final String YAML_FILE_NAME = "server.yaml";
 
@@ -148,9 +153,13 @@ public final class ServerConfigLoader {
         if (root.containsKey("developer_guard")) {
             applyDeveloperGuard(config, mapField(root, "developer_guard"));
         }
+        if (root.containsKey("mc")) {
+            applyMc(config, mapField(root, "mc"));
+        }
         for (String key : root.keySet()) {
             switch (key) {
-                case "bind_host", "port", "public_base_url", "https", "auth", "web_shell", "developer_guard" -> {
+                case "bind_host", "port", "public_base_url", "https", "auth", "web_shell",
+                        "developer_guard", "mc" -> {
                 }
                 default -> logger.warning(yamlFile + ": unknown key `" + key + "` ignored");
             }
@@ -180,6 +189,34 @@ public final class ServerConfigLoader {
             throw new ConfigException(label + " must be `off`, `proxy`, `instance` or `all`, got `" + value + "`");
         }
         return scope;
+    }
+
+    /// `mc:` in `server.yaml`: the bounds of what the Minecraft surface may
+    /// create. The feature switch itself is not here — it is a runtime decision
+    /// the owner makes in the panel, not a deployment key.
+    private static void applyMc(ServerConfig config, Map<String, Object> section) {
+        if (section.containsKey("port_start")) {
+            config.mc.portStart = intField(section, "port_start");
+        }
+        if (section.containsKey("port_end")) {
+            config.mc.portEnd = intField(section, "port_end");
+        }
+        if (section.containsKey("max_instances")) {
+            config.mc.maxInstances = intField(section, "max_instances");
+        }
+        if (section.containsKey("max_memory_mb")) {
+            config.mc.maxMemoryMb = intField(section, "max_memory_mb");
+        }
+        if (section.containsKey("java_path")) {
+            config.mc.javaPath = stringField(section, "java_path");
+        }
+        for (String key : section.keySet()) {
+            switch (key) {
+                case "port_start", "port_end", "max_instances", "max_memory_mb", "java_path" -> {
+                }
+                default -> throw new ConfigException("mc: unknown key `" + key + "`");
+            }
+        }
     }
 
     private static void applyHttps(ServerConfig config, Map<String, Object> https) {
@@ -261,6 +298,21 @@ public final class ServerConfigLoader {
         }
         if (env.containsKey(ENV_DEVELOPER_GUARD)) {
             config.developerGuard.scope = guardScope(env.get(ENV_DEVELOPER_GUARD), ENV_DEVELOPER_GUARD);
+        }
+        if (env.containsKey(ENV_MC_PORT_START)) {
+            config.mc.portStart = parseInt(env.get(ENV_MC_PORT_START), ENV_MC_PORT_START);
+        }
+        if (env.containsKey(ENV_MC_PORT_END)) {
+            config.mc.portEnd = parseInt(env.get(ENV_MC_PORT_END), ENV_MC_PORT_END);
+        }
+        if (env.containsKey(ENV_MC_MAX_INSTANCES)) {
+            config.mc.maxInstances = parseInt(env.get(ENV_MC_MAX_INSTANCES), ENV_MC_MAX_INSTANCES);
+        }
+        if (env.containsKey(ENV_MC_MAX_MEMORY_MB)) {
+            config.mc.maxMemoryMb = parseInt(env.get(ENV_MC_MAX_MEMORY_MB), ENV_MC_MAX_MEMORY_MB);
+        }
+        if (env.containsKey(ENV_MC_JAVA_PATH)) {
+            config.mc.javaPath = env.get(ENV_MC_JAVA_PATH);
         }
         if (env.containsKey(ENV_ZCODE_PACKAGE)) {
             config.zcode.packageDir = env.get(ENV_ZCODE_PACKAGE);

@@ -193,4 +193,22 @@ public final class ServerConfig {
         /// default [DeveloperGuardScope#OFF].
         public volatile DeveloperGuardScope scope = DeveloperGuardScope.OFF;
     }
+
+    /// The Minecraft surface (docs/minecraft.md). The feature itself stays off
+    /// until the owner enables it; these knobs only bound what may be created
+    /// once it is on.
+    public final McConfig mc = new McConfig();
+
+    public static final class McConfig {
+        /// First port the auto-allocator may hand out (`mc.port_start`).
+        public volatile int portStart = 25565;
+        /// Last port the auto-allocator may hand out (`mc.port_end`).
+        public volatile int portEnd = 25665;
+        /// How many servers this panel manages at once (`mc.max_instances`).
+        public volatile int maxInstances = 8;
+        /// The heap ceiling the create form accepts (`mc.max_memory_mb`).
+        public volatile int maxMemoryMb = 8192;
+        /// The java executable (`mc.java_path`); empty means `java` on PATH.
+        public volatile String javaPath = "";
+    }
 }
