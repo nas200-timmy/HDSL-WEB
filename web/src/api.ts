@@ -278,6 +278,8 @@ export const api = {
   // 再中断工作线程——下载与解包循环只认这个中断标志。
   cancelTask: (taskId: string) => request<unknown>(`/api/tasks/${taskId}/cancel`, { method: "POST" }),
 
+  task: (taskId: string) => request<Task>(`/api/tasks/${encodeURIComponent(taskId)}`),
+
   // ---------- Phase 3：插件 ----------
 
   pluginCatalog: (refresh = false) =>
@@ -643,7 +645,7 @@ export const api = {
     rename: (id: string, name: string) =>
       request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}`, jsonInit("PATCH", { name })),
     remove: (id: string) =>
-      request<{ ok: boolean }>(`/api/mc/instances/${encodeURIComponent(id)}`, { method: "DELETE" }),
+      request<{ ok: boolean; backup: string }>(`/api/mc/instances/${encodeURIComponent(id)}`, { method: "DELETE" }),
     start: (id: string) =>
       request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}/start`, jsonInit("POST", {})),
     stop: (id: string) =>
@@ -651,10 +653,35 @@ export const api = {
     kill: (id: string) =>
       request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}/kill`, jsonInit("POST", {})),
     install: (id: string, version: string) =>
-      request<McInstance>(
+      request<{ taskId: string }>(
         `/api/mc/instances/${encodeURIComponent(id)}/install`,
         jsonInit("POST", { version }),
-        { timeoutMs: 10 * 60 * 1000 },
+      ),
+    backups: (id: string) =>
+      request<{ backups: McBackup[] }>(`/api/mc/instances/${encodeURIComponent(id)}/backups`),
+    createBackup: (id: string) =>
+      request<McBackup>(`/api/mc/instances/${encodeURIComponent(id)}/backups`, jsonInit("POST", {}), {
+        timeoutMs: 5 * 60 * 1000,
+      }),
+    deleteBackup: (id: string, name: string) =>
+      request<{ ok: boolean }>(
+        `/api/mc/instances/${encodeURIComponent(id)}/backups/${encodeURIComponent(name)}`,
+        { method: "DELETE" },
+      ),
+    restoreBackup: (id: string, name: string) =>
+      request<{ ok: boolean; safety: string }>(
+        `/api/mc/instances/${encodeURIComponent(id)}/backups/${encodeURIComponent(name)}/restore`,
+        jsonInit("POST", {}),
+        { timeoutMs: 5 * 60 * 1000 },
+      ),
+    properties: (id: string) =>
+      request<{ properties: Record<string, string> }>(
+        `/api/mc/instances/${encodeURIComponent(id)}/properties`,
+      ),
+    saveProperties: (id: string, values: Record<string, string>) =>
+      request<{ properties: Record<string, string> }>(
+        `/api/mc/instances/${encodeURIComponent(id)}/properties`,
+        jsonInit("PUT", values),
       ),
     logs: (id: string) =>
       request<{ lines: string[] }>(`/api/mc/instances/${encodeURIComponent(id)}/logs?tail=200`),
@@ -706,6 +733,12 @@ export interface McInstance {
   state: "STOPPED" | "STARTING" | "RUNNING" | "STOPPING" | "FAILED";
   error?: string;
   consoleAvailable: boolean;
+}
+
+export interface McBackup {
+  name: string;
+  createdAt: string;
+  bytes: number;
 }
 
 /// GET /api/node 的快照：系统 PATH 探测 + 面板托管运行时列表

@@ -30,6 +30,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -91,26 +92,42 @@ public final class McRuntime {
     private final TerminalManager terminals;
     private final McFeatureState feature;
     private final CommandFactory commandFactory;
+    private final @Nullable String javaBin;
+    private final @Nullable Path versionsRoot;
 
     private final Map<String, State> states = new ConcurrentHashMap<>();
     private final Map<String, String> errors = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<Void>> readiness = new ConcurrentHashMap<>();
+    private static final Map<String, Integer> JAVA_MAJOR = new ConcurrentHashMap<>();
 
     /// The production wiring: `java -Xmx<memory>M -jar server.jar nogui`.
     ///
-    /// @param manager  the instance manager
+    /// @param manager   the instance manager
     /// @param terminals the terminal registry
-    /// @param feature  the feature switch (start is refused while disabled or locked)
-    /// @param javaBin  the java executable
+    /// @param feature   the feature switch (start is refused while disabled or locked)
+    /// @param javaBin   the java executable
     public McRuntime(McInstanceManager manager, TerminalManager terminals,
                      McFeatureState feature, String javaBin) {
-        this(manager, terminals, feature, instance -> List.of(
+        this(manager, terminals, feature, javaBin, null);
+    }
+
+    /// The production wiring plus the version metadata directory, so a launch
+    /// can refuse a Java too old for the version before it starts.
+    ///
+    /// @param manager      the instance manager
+    /// @param terminals    the terminal registry
+    /// @param feature      the feature switch
+    /// @param javaBin      the java executable
+    /// @param versionsRoot the shared versions directory, or `null` to skip the check
+    public McRuntime(McInstanceManager manager, TerminalManager terminals,
+                     McFeatureState feature, String javaBin, @Nullable Path versionsRoot) {
+        this(manager, terminals, feature, _instance -> List.of(
                 javaBin,
                 "-Xms512M",
-                "-Xmx" + instance.memoryMb() + "M",
+                "-Xmx" + _instance.memoryMb() + "M",
                 "-jar",
                 McInstanceManager.SERVER_JAR_NAME,
-                "nogui"));
+                "nogui"), javaBin, versionsRoot);
     }
 
     /// The same, with an injectable argv for tests.
@@ -121,10 +138,17 @@ public final class McRuntime {
     /// @param commandFactory the argv builder
     public McRuntime(McInstanceManager manager, TerminalManager terminals,
                      McFeatureState feature, CommandFactory commandFactory) {
+        this(manager, terminals, feature, commandFactory, null, null);
+    }
+
+    private McRuntime(McInstanceManager manager, TerminalManager terminals, McFeatureState feature,
+                      CommandFactory commandFactory, @Nullable String javaBin, @Nullable Path versionsRoot) {
         this.manager = manager;
         this.terminals = terminals;
         this.feature = feature;
         this.commandFactory = commandFactory;
+        this.javaBin = javaBin;
+        this.versionsRoot = versionsRoot;
     }
 
     /// The state of an instance.
@@ -183,6 +207,7 @@ public final class McRuntime {
         if (!eulaAccepted(instance)) {
             throw new McException("the EULA has not been accepted for this instance");
         }
+        checkJava(instance);
 
         Map<String, String> environment = new HashMap<>(System.getenv());
         TerminalTarget target = new TerminalTarget(BRAND, id,
@@ -279,6 +304,70 @@ public final class McRuntime {
         } catch (IOException e) {
             return false;
         }
+    }
+
+    /// Refuses a Java too old for the version **before** spawning anything.
+    ///
+    /// The version metadata carries `javaVersion.majorVersion` (written into
+    /// `version.json` by [McVersions]); the panel runs `<java> -version` once and
+    /// caches the result. When either side is unknown the check is skipped —
+    /// the server's own error is then the fallback, not a wrong refusal.
+    private void checkJava(McInstance instance) throws McException {
+        if (versionsRoot == null || javaBin == null) {
+            return;
+        }
+        int required = requiredJava(instance.version());
+        if (required <= 0) {
+            return;
+        }
+        int actual = javaMajor();
+        if (actual > 0 && actual < required) {
+            throw new McException("Minecraft " + instance.version() + " needs Java " + required
+                    + " or newer, but `" + javaBin + "` is Java " + actual
+                    + "; point mc.java_path at a newer JDK");
+        }
+    }
+
+    private int requiredJava(String version) {
+        Path metadata = versionsRoot.resolve(version).resolve("version.json");
+        if (!Files.isRegularFile(metadata)) {
+            return 0;
+        }
+        try {
+            com.google.gson.JsonObject record =
+                    org.jackhuang.hmcl.util.gson.JsonUtils.fromJsonFile(metadata,
+                            com.google.gson.JsonObject.class);
+            return record != null && record.has("javaMajor") ? record.get("javaMajor").getAsInt() : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private int javaMajor() {
+        String bin = javaBin;
+        if (bin == null) {
+            return 0;
+        }
+        return JAVA_MAJOR.computeIfAbsent(bin, candidate -> {
+            try {
+                Process process = new ProcessBuilder(candidate, "-version")
+                        .redirectErrorStream(true)
+                        .start();
+                String output;
+                try (var in = process.getInputStream()) {
+                    output = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+                }
+                if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
+                    return 0;
+                }
+                java.util.regex.Matcher matcher =
+                        java.util.regex.Pattern.compile("version \"(\\d+)").matcher(output);
+                return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
+            } catch (Exception e) {
+                return 0;
+            }
+        });
     }
 
     /// Watches the output for the readiness line. Vanilla prints

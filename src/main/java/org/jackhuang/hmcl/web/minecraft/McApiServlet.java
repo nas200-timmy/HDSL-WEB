@@ -34,6 +34,7 @@ import org.jackhuang.hmcl.web.http.Json;
 import org.jackhuang.hmcl.web.http.RequestSecurity;
 import org.jackhuang.hmcl.web.terminal.TerminalTickets;
 import org.jackhuang.hmcl.web.terminal.TerminalWebSocket;
+import org.jackhuang.hmcl.web.task.TaskService;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -83,6 +84,8 @@ public final class McApiServlet extends HttpServlet {
     private final McInstanceManager manager;
     private final McRuntime runtime;
     private final McVersions versions;
+    private final McBackups backups;
+    private final TaskService tasks;
     private final TerminalTickets tickets;
     private final AuthService auth;
     private final DeveloperAuth developerAuth;
@@ -101,7 +104,8 @@ public final class McApiServlet extends HttpServlet {
     }
 
     public McApiServlet(ServerConfig config, McFeatureState feature, McInstanceManager manager,
-                        McRuntime runtime, McVersions versions, TerminalTickets tickets, AuthService auth,
+                        McRuntime runtime, McVersions versions, McBackups backups, TaskService tasks,
+                        TerminalTickets tickets, AuthService auth,
                         DeveloperAuth developerAuth, DeveloperElevation elevation,
                         BooleanSupplier tlsActive, EmergencyStop emergency) {
         this.config = config;
@@ -109,6 +113,8 @@ public final class McApiServlet extends HttpServlet {
         this.manager = manager;
         this.runtime = runtime;
         this.versions = versions;
+        this.backups = backups;
+        this.tasks = tasks;
         this.tickets = tickets;
         this.auth = auth;
         this.developerAuth = developerAuth;
@@ -222,7 +228,8 @@ public final class McApiServlet extends HttpServlet {
             cached = fetchEula();
             if (cached == null) {
                 Json.error(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
-                        "eula_unavailable: the official EULA could not be fetched; the feature cannot be enabled offline");
+                        "eula_unavailable: could not reach Mojang to fetch the EULA — check the network/proxy and retry "
+                        + "(the server download would fail the same way)");
                 return;
             }
             eula = cached;
@@ -350,6 +357,29 @@ public final class McApiServlet extends HttpServlet {
             }
         }
         boolean started = feature.stopFeature();
+        // `stop` is a request to the server, not a guarantee. Anything still
+        // alive after the grace period is killed, so "all servers are down"
+        // becomes true shortly after the press instead of "whenever each
+        // server felt like exiting".
+        if (!ids.isEmpty()) {
+            org.jackhuang.hmcl.util.platform.VirtualThreads.start(() -> {
+                try {
+                    Thread.sleep(McRuntime.STOP_GRACE_SECONDS * 1000L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                for (String id : ids) {
+                    if (runtime.isRunning(id)) {
+                        try {
+                            runtime.kill(id);
+                        } catch (McException ignored) {
+                            // Gone between the check and the kill.
+                        }
+                    }
+                }
+            });
+        }
         audit("mc.feature.stop", "instances=" + ids.size(), started ? "started" : "already-locked", request);
         featureJson(response);
     }
@@ -489,9 +519,12 @@ public final class McApiServlet extends HttpServlet {
                     Json.error(response, HttpServletResponse.SC_CONFLICT, "stop the server before deleting it");
                     return;
                 }
+                // The world is the only irreplaceable thing here: a delete always
+                // leaves a snapshot behind, and refuses when one cannot be taken.
+                McBackups.Backup safety = backups.create(instance, manager);
                 manager.delete(id);
-                audit("mc.instance.delete", id, "success", request);
-                Json.write(response, Map.of("ok", true));
+                audit("mc.instance.delete", id + " (backup " + safety.name() + ")", "success", request);
+                Json.write(response, Map.of("ok", true, "backup", safety.name()));
                 return;
             }
         }
@@ -533,15 +566,32 @@ public final class McApiServlet extends HttpServlet {
                     Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "version is required");
                     return;
                 }
-                McInstance installed = versions.install(instance, manager, version.trim());
-                audit("mc.instance.install", id + "@" + version, "success", request);
-                Json.write(response, instanceJson(installed));
+                // A download is tens of megabytes on a possibly slow link: run it
+                // as a task and report bytes, instead of holding the request open.
+                try {
+                    TaskService.Task task = tasks.submit("mc-install", id, live -> {
+                        live.update("Downloading Minecraft " + version, -1);
+                        versions.install(instance, manager, version.trim(), (copied, total) -> {
+                            String progress = (copied / (1024 * 1024)) + " / "
+                                    + (total > 0 ? (total / (1024 * 1024)) + " MB" : "? MB");
+                            live.update("Downloading " + version + ": " + progress,
+                                    total > 0 ? (double) copied / total : -1);
+                        });
+                        return "Installed Minecraft " + version;
+                    }, null);
+                    audit("mc.instance.install", id + "@" + version, "submitted", request);
+                    response.setStatus(HttpServletResponse.SC_ACCEPTED);
+                    Json.write(response, Map.of("taskId", task.id()));
+                } catch (TaskService.InstanceBusyException e) {
+                    Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+                }
             }
             case "logs" -> {
                 int tail = parseInt(request.getParameter("tail"), 200);
                 List<String> lines = manager.tailLog(instance, Math.max(1, Math.min(2000, tail)));
                 Json.write(response, Map.of("lines", lines));
             }
+            case "backups" -> backups(request, response, method, instance, segments);
             case "console" -> {
                 String consoleAction = segments.length > 2 ? segments[2] : "";
                 if (!"ticket".equals(consoleAction)) {
@@ -568,6 +618,65 @@ public final class McApiServlet extends HttpServlet {
             case "properties" -> properties(request, response, method, instance);
             default -> Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
         }
+    }
+
+    private void backups(HttpServletRequest request, HttpServletResponse response, String method,
+                         McInstance instance, String[] segments) throws IOException, McException {
+        if (segments.length == 2) {
+            if ("GET".equals(method)) {
+                List<Map<String, Object>> items = new ArrayList<>();
+                for (McBackups.Backup backup : backups.list(instance.id())) {
+                    items.add(Map.of("name", backup.name(), "createdAt", backup.createdAt(),
+                            "bytes", backup.bytes()));
+                }
+                Json.write(response, Map.of("backups", items));
+                return;
+            }
+            if ("POST".equals(method)) {
+                if (!requireElevation(request, response)) {
+                    return;
+                }
+                if (runtime.isRunning(instance.id())) {
+                    Json.error(response, HttpServletResponse.SC_CONFLICT,
+                            "stop the server before taking a backup (a hot zip can be inconsistent)");
+                    return;
+                }
+                McBackups.Backup backup = backups.create(instance, manager);
+                audit("mc.instance.backup", instance.id() + "/" + backup.name(), "success", request);
+                response.setStatus(HttpServletResponse.SC_CREATED);
+                Json.write(response, Map.of("name", backup.name(), "createdAt", backup.createdAt(),
+                        "bytes", backup.bytes()));
+                return;
+            }
+            Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "use GET or POST");
+            return;
+        }
+        String name = segments[2];
+        if (segments.length == 3 && "DELETE".equals(method)) {
+            if (!requireElevation(request, response)) {
+                return;
+            }
+            backups.delete(instance.id(), name);
+            audit("mc.instance.backup.delete", instance.id() + "/" + name, "success", request);
+            Json.write(response, Map.of("ok", true));
+            return;
+        }
+        if (segments.length == 4 && "restore".equals(segments[3]) && "POST".equals(method)) {
+            if (!requireElevation(request, response)) {
+                return;
+            }
+            if (runtime.isRunning(instance.id())) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT,
+                        "stop the server before restoring a backup");
+                return;
+            }
+            McBackups.Backup safety = backups.restore(instance, manager, name);
+            audit("mc.instance.restore", instance.id() + "/" + name
+                    + " (safety " + safety.name() + ")", "success", request);
+            Json.write(response, Map.of("ok", true, "safety", safety.name()));
+            return;
+        }
+        Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
     }
 
     private void properties(HttpServletRequest request, HttpServletResponse response,

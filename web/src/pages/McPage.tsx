@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError, type McEula, type McFeature, type McInstance, type McTerms, type McVersion } from "../api";
 import { TerminalWindow, type TerminalTargetInfo } from "../components/TerminalWindow";
+import { McBackupsDialog, McPropertiesDialog } from "../components/McDialogs";
 import { AddIcon, DeleteIcon, RefreshIcon, RocketLaunchIcon, TerminalIcon } from "../components/icons";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { toast } from "../store";
@@ -30,6 +31,9 @@ export function McPage() {
   const [versions, setVersions] = useState<McVersion[]>([]);
   const [terminalTarget, setTerminalTarget] = useState<TerminalTargetInfo | null>(null);
   const [logs, setLogs] = useState<{ name: string; lines: string[] } | null>(null);
+  const [backupFor, setBackupFor] = useState<McInstance | null>(null);
+  const [propsFor, setPropsFor] = useState<McInstance | null>(null);
+  const [installNote, setInstallNote] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
   const load = async () => {
@@ -97,7 +101,13 @@ export function McPage() {
       setEula(eulaAnswer);
       setTerms(termsAnswer);
     } catch (e) {
-      setEulaError(errMsg(e));
+      const message = errMsg(e);
+      // 拉不到 EULA 也就下载不了服务端；不给“离线导入”这种假出路。
+      setEulaError(
+        message.includes("eula_unavailable")
+          ? "网络问题：连不上 Mojang，拉不到 EULA（服务端也下载不了）。检查网络或代理后重试。"
+          : message,
+      );
     }
   };
 
@@ -215,10 +225,11 @@ export function McPage() {
   };
 
   const remove = async (instance: McInstance) => {
-    if (!window.confirm(`删除「${instance.name}」？世界目录会一起删掉，先备份。`)) return;
+    if (!window.confirm(`删除「${instance.name}」？删除前会自动备份世界，备份不会随实例一起删。`)) return;
     setBusy(true);
     try {
-      await withElevation(() => api.mc.remove(instance.id));
+      const answer = await withElevation(() => api.mc.remove(instance.id));
+      toast("success", `已删除；世界备份：${answer.backup}`);
       await refreshInstances();
     } catch (e) {
       toast("error", errMsg(e));
@@ -229,13 +240,28 @@ export function McPage() {
 
   const install = async (instance: McInstance, version: string) => {
     setBusy(true);
+    setInstallNote(`正在下载 ${version}…`);
     try {
-      await withElevation(() => api.mc.install(instance.id, version));
-      toast("success", `已安装 ${version}`);
+      const { taskId } = await withElevation(() => api.mc.install(instance.id, version));
+      // 下载是任务：轮询到结束，顺便把任务的进度文案显示出来。
+      for (let i = 0; i < 900; i += 1) {
+        const task = await api.task(taskId);
+        if (task.message) setInstallNote(task.message);
+        if (task.state === "done") {
+          toast("success", task.message || `已安装 ${version}`);
+          break;
+        }
+        if (task.state === "failed" || task.state === "cancelled") {
+          toast("error", task.error || "安装失败");
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
       await refreshInstances();
     } catch (e) {
       toast("error", errMsg(e));
     } finally {
+      setInstallNote(null);
       setBusy(false);
     }
   };
@@ -405,6 +431,12 @@ export function McPage() {
             <button className="btn btn-text" onClick={() => void showLogs(instance)}>
               日志
             </button>
+            <button className="btn btn-text" onClick={() => setBackupFor(instance)}>
+              备份
+            </button>
+            <button className="btn btn-text" onClick={() => setPropsFor(instance)}>
+              设置
+            </button>
             <InstallVersion
               versions={versions}
               current={instance.version}
@@ -419,6 +451,13 @@ export function McPage() {
       )}
 
       <TerminalWindow target={terminalTarget} onClose={() => setTerminalTarget(null)} />
+
+      {backupFor && <McBackupsDialog instance={backupFor} onClose={() => setBackupFor(null)} />}
+      {propsFor && <McPropertiesDialog instance={propsFor} onClose={() => setPropsFor(null)} />}
+
+      {installNote && (
+        <div className="card" style={{ padding: 8, fontSize: 13 }}>{installNote}</div>
+      )}
 
       {logs && (
         <div className="card" style={{ padding: 12 }}>

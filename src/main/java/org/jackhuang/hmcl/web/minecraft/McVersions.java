@@ -79,7 +79,7 @@ public final class McVersions {
     /// @param url   where the jar came from
     /// @param sha1  the manifest's SHA-1, lowercase hex
     /// @param size  the manifest's size in bytes, or `-1` when it did not say
-    private record ServerDownload(String id, String url, String sha1, long size) {
+    private record ServerDownload(String id, String url, String sha1, long size, int javaMajor) {
     }
 
     private final URI manifestUri;
@@ -144,15 +144,35 @@ public final class McVersions {
     /// @throws McException when the version is unknown, the download fails, or
     ///                      the hash does not match
     public McInstance install(McInstance instance, McInstanceManager manager, String versionId) throws McException {
+        return install(instance, manager, versionId, null);
+    }
+
+    /// The same with progress: `progress` is called while the jar downloads,
+    /// roughly once per megabyte (and once at the end).
+    ///
+    /// @param instance  the instance
+    /// @param manager   the instance manager
+    /// @param versionId the version
+    /// @param progress  the sink, or `null`
+    /// @return the instance with its version updated
+    /// @throws McException when the download fails or the hash does not match
+    public McInstance install(McInstance instance, McInstanceManager manager, String versionId,
+                              @Nullable Progress progress) throws McException {
         ServerDownload download = resolve(versionId);
         Path shared = versionsRoot.resolve(versionId).resolve(McInstanceManager.SERVER_JAR_NAME);
         if (!reusable(shared, download)) {
-            downloadAndVerify(download, shared);
+            downloadAndVerify(download, shared, progress);
         }
         link(shared, manager.serverJar(instance));
         McInstance updated = instance.withVersion(versionId);
         manager.update(updated);
         return updated;
+    }
+
+    /// Download progress in bytes; `total` is `-1` when the manifest did not say.
+    @FunctionalInterface
+    public interface Progress {
+        void update(long copied, long total);
     }
 
     private ServerDownload resolve(String versionId) throws McException {
@@ -192,10 +212,19 @@ public final class McVersions {
             throw new McException("version `" + versionId + "` publishes an incomplete server download");
         }
         long size = server.has("size") ? server.get("size").getAsLong() : -1;
-        return new ServerDownload(versionId, jarUrl, sha1.toLowerCase(Locale.ROOT), size);
+        // `javaVersion.majorVersion` is what the version needs; 0 when absent.
+        int javaMajor = 0;
+        if (meta.has("javaVersion") && meta.get("javaVersion").isJsonObject()) {
+            JsonObject javaVersion = meta.getAsJsonObject("javaVersion");
+            if (javaVersion.has("majorVersion")) {
+                javaMajor = javaVersion.get("majorVersion").getAsInt();
+            }
+        }
+        return new ServerDownload(versionId, jarUrl, sha1.toLowerCase(Locale.ROOT), size, javaMajor);
     }
 
-    private void downloadAndVerify(ServerDownload download, Path target) throws McException {
+    private void downloadAndVerify(ServerDownload download, Path target, @Nullable Progress progress) throws McException {
+        long lastReport = 0;
         try {
             Files.createDirectories(target.getParent());
             Path temp = Files.createTempFile(target.getParent(), "server", ".jar.part");
@@ -228,6 +257,10 @@ public final class McVersions {
                         sha1.update(buffer, 0, read);
                         sha256.update(buffer, 0, read);
                         out.write(buffer, 0, read);
+                        if (progress != null && copied - lastReport >= 1024 * 1024) {
+                            lastReport = copied;
+                            progress.update(copied, download.size());
+                        }
                     }
                 }
                 String actualSha1 = HexFormat.of().formatHex(sha1.digest());
@@ -252,6 +285,10 @@ public final class McVersions {
                 record.addProperty("sha1", download.sha1());
                 record.addProperty("sha256", actualSha256);
                 record.addProperty("size", copied);
+                record.addProperty("javaMajor", download.javaMajor());
+                if (progress != null) {
+                    progress.update(copied, download.size());
+                }
                 JsonUtils.writeToJsonFile(target.getParent().resolve("version.json"), record);
                 LOG.info("Downloaded Minecraft server " + download.id() + " (" + copied + " bytes)");
             } finally {

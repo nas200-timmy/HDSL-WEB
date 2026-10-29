@@ -359,16 +359,20 @@ public final class HdslServer {
                         config.dataDir.resolve("minecraft").resolve("instances"));
         String mcJava = config.mc.javaPath == null || config.mc.javaPath.isBlank()
                 ? "java" : config.mc.javaPath;
+        java.nio.file.Path mcVersionsRoot = config.dataDir.resolve("minecraft").resolve("versions");
         org.jackhuang.hmcl.web.minecraft.McRuntime mcRuntime =
-                new org.jackhuang.hmcl.web.minecraft.McRuntime(mcInstances, terminals, mcFeature, mcJava);
+                new org.jackhuang.hmcl.web.minecraft.McRuntime(
+                        mcInstances, terminals, mcFeature, mcJava, mcVersionsRoot);
         org.jackhuang.hmcl.web.minecraft.McVersions mcVersions =
-                new org.jackhuang.hmcl.web.minecraft.McVersions(
-                        config.dataDir.resolve("minecraft").resolve("versions"));
+                new org.jackhuang.hmcl.web.minecraft.McVersions(mcVersionsRoot);
+        org.jackhuang.hmcl.web.minecraft.McBackups mcBackups =
+                new org.jackhuang.hmcl.web.minecraft.McBackups(
+                        config.dataDir.resolve("minecraft").resolve("backups"));
         context.addFilter(new FilterHolder(new org.jackhuang.hmcl.web.minecraft.McFeatureFilter(
                 mcFeature, config.basePath)), "/api/mc/*", EnumSet.of(DispatcherType.REQUEST));
         context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.minecraft.McApiServlet(
-                config, mcFeature, mcInstances, mcRuntime, mcVersions, terminalTickets, authService,
-                developerAuth, developerElevation, tlsActive, emergencyStop)), "/api/mc/*");
+                config, mcFeature, mcInstances, mcRuntime, mcVersions, mcBackups, taskService,
+                terminalTickets, authService, developerAuth, developerElevation, tlsActive, emergencyStop)), "/api/mc/*");
 
         context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService, config.basePath)), "/i/*");
         // A panel killed mid source-build leaves a half-built release next to a
