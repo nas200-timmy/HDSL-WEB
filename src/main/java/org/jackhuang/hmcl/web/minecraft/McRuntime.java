@@ -98,6 +98,15 @@ public final class McRuntime {
     private final Map<String, State> states = new ConcurrentHashMap<>();
     private final Map<String, String> errors = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<Void>> readiness = new ConcurrentHashMap<>();
+    /// Windows has no PTY; those servers run as a plain child process with
+    /// piped stdio. The console is then the log + a command box, not a terminal
+    /// (docs/minecraft.md §15.2).
+    private final Map<String, PipeServer> pipes = new ConcurrentHashMap<>();
+    private static final boolean PTY_SUPPORTED =
+            org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                    == org.jackhuang.hmcl.util.platform.OperatingSystem.LINUX
+            || org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                    == org.jackhuang.hmcl.util.platform.OperatingSystem.MACOS;
     private static final Map<String, Integer> JAVA_MAJOR = new ConcurrentHashMap<>();
 
     /// The production wiring: `java -Xmx<memory>M -jar server.jar nogui`.
@@ -157,8 +166,9 @@ public final class McRuntime {
     /// @return the status
     public Status status(String id) {
         TerminalSession session = terminals.find(BRAND, id).orElse(null);
+        boolean alive = session != null || pipes.containsKey(id);
         State state = states.getOrDefault(id, State.STOPPED);
-        if (session == null && (state == State.STARTING || state == State.RUNNING || state == State.STOPPING)) {
+        if (!alive && (state == State.STARTING || state == State.RUNNING || state == State.STOPPING)) {
             // The registry drops a session that exited on its own; the maps follow.
             state = State.STOPPED;
         }
@@ -168,9 +178,9 @@ public final class McRuntime {
     /// Whether the instance's server process is alive.
     ///
     /// @param id the instance id
-    /// @return whether a session exists
+    /// @return whether a session or a pipe process exists
     public boolean isRunning(String id) {
-        return terminals.find(BRAND, id).isPresent();
+        return terminals.find(BRAND, id).isPresent() || pipes.containsKey(id);
     }
 
     /// The console of a running server. Never starts one.
@@ -201,6 +211,9 @@ public final class McRuntime {
         if (terminals.find(BRAND, id).isPresent()) {
             throw new McException("the server for " + id + " is already running");
         }
+        if (pipes.containsKey(id)) {
+            throw new McException("the server for " + id + " is already running");
+        }
         if (!Files.isRegularFile(manager.serverJar(instance))) {
             throw new McException(McInstanceManager.SERVER_JAR_NAME + " is not installed for this instance");
         }
@@ -208,6 +221,11 @@ public final class McRuntime {
             throw new McException("the EULA has not been accepted for this instance");
         }
         checkJava(instance);
+
+        if (!PTY_SUPPORTED) {
+            launchPipe(instance);
+            return;
+        }
 
         Map<String, String> environment = new HashMap<>(System.getenv());
         TerminalTarget target = new TerminalTarget(BRAND, id,
@@ -263,6 +281,24 @@ public final class McRuntime {
     /// @param id the instance id
     /// @throws McException when it is not running
     public void stop(String id) throws McException {
+        if (!PTY_SUPPORTED) {
+            PipeServer pipe = pipes.get(id);
+            if (pipe == null) {
+                throw new McException("the server for " + id + " is not running");
+            }
+            states.put(id, State.STOPPING);
+            writePipe(pipe, "stop\n");
+            CompletableFuture<Void> exited = new CompletableFuture<>();
+            pipe.process.onExit().thenRun(() -> exited.complete(null));
+            exited.orTimeout(STOP_GRACE_SECONDS, TimeUnit.SECONDS).whenComplete((ignored, error) -> {
+                if (error != null) {
+                    LOG.warning("Minecraft instance " + id + " did not stop within "
+                            + STOP_GRACE_SECONDS + "s; killing it");
+                    pipe.process.destroyForcibly();
+                }
+            });
+            return;
+        }
         TerminalSession session = terminals.find(BRAND, id)
                 .orElseThrow(() -> new McException("the server for " + id + " is not running"));
         states.put(id, State.STOPPING);
@@ -291,10 +327,147 @@ public final class McRuntime {
     /// @param id the instance id
     /// @throws McException when it is not running
     public void kill(String id) throws McException {
+        PipeServer pipe = pipes.get(id);
+        if (pipe != null) {
+            states.put(id, State.STOPPING);
+            pipe.process.destroyForcibly();
+            return;
+        }
         TerminalSession session = terminals.find(BRAND, id)
                 .orElseThrow(() -> new McException("the server for " + id + " is not running"));
         states.put(id, State.STOPPING);
         session.terminate(Duration.ofSeconds(2));
+    }
+
+    /// The console shape of a running instance: a real terminal on POSIX, a
+    /// log+command box on Windows, `null` when nothing is running.
+    ///
+    /// @param id the instance id
+    /// @return `"pty"`, `"pipe"` or `null`
+    public @Nullable String consoleMode(String id) {
+        if (terminals.find(BRAND, id).isPresent()) {
+            return "pty";
+        }
+        return pipes.containsKey(id) ? "pipe" : null;
+    }
+
+    /// Writes one console line to the running server.
+    ///
+    /// @param id   the instance id
+    /// @param line the command (a newline is appended)
+    /// @throws McException when the server is not running
+    public void sendCommand(String id, String line) throws McException {
+        TerminalSession session = terminals.find(BRAND, id).orElse(null);
+        if (session != null) {
+            try {
+                OutputStream input = session.input();
+                synchronized (input) {
+                    input.write((line + "\n").getBytes(StandardCharsets.UTF_8));
+                    input.flush();
+                }
+            } catch (IOException e) {
+                throw new McException("Failed to write to the server console", e);
+            }
+            return;
+        }
+        PipeServer pipe = pipes.get(id);
+        if (pipe == null) {
+            throw new McException("the server for " + id + " is not running");
+        }
+        writePipe(pipe, line + "\n");
+    }
+
+    private void launchPipe(McInstance instance) throws McException {
+        String id = instance.id();
+        Process process;
+        try {
+            Path directory = manager.instanceDirectory(id);
+            Files.createDirectories(directory);
+            ProcessBuilder builder = new ProcessBuilder(commandFactory.command(instance));
+            builder.directory(directory.toFile());
+            builder.redirectErrorStream(true);
+            builder.environment().putAll(System.getenv());
+            process = builder.start();
+        } catch (IOException e) {
+            states.put(id, State.FAILED);
+            errors.put(id, "failed to start the server process: " + e.getMessage());
+            throw new McException("Failed to start the server for " + id, e);
+        }
+        CompletableFuture<Void> ready = new CompletableFuture<>();
+        readiness.put(id, ready);
+        states.put(id, State.STARTING);
+        errors.remove(id);
+
+        PipeServer pipe = new PipeServer(process, manager.logFile(instance));
+        pipes.put(id, pipe);
+        process.onExit().thenRun(() -> finish(id, process.exitValue(), ready));
+        VirtualThreads.start(() -> pumpPipe(pipe, ready));
+        ready.orTimeout(READY_TIMEOUT_SECONDS, TimeUnit.SECONDS).whenComplete((ignored, error) -> {
+            if (error != null) {
+                states.put(id, State.FAILED);
+                errors.put(id, "the server did not become ready within "
+                        + READY_TIMEOUT_SECONDS + " seconds");
+                process.destroyForcibly();
+                return;
+            }
+            states.put(id, State.RUNNING);
+            LOG.info("Minecraft instance " + id + " is ready (pipe console)");
+        });
+    }
+
+    private void pumpPipe(PipeServer pipe, CompletableFuture<Void> ready) {
+        try {
+            java.nio.file.Files.createDirectories(pipe.log.getParent());
+            try (java.io.BufferedReader in = new java.io.BufferedReader(
+                         new java.io.InputStreamReader(pipe.process.getInputStream(), StandardCharsets.UTF_8));
+                 java.io.BufferedWriter log = java.nio.file.Files.newBufferedWriter(pipe.log,
+                         StandardCharsets.UTF_8,
+                         java.nio.file.StandardOpenOption.CREATE,
+                         java.nio.file.StandardOpenOption.APPEND)) {
+                String line;
+                while ((line = in.readLine()) != null) {
+                    log.write(line);
+                    log.newLine();
+                    log.flush();
+                    if (!ready.isDone() && line.contains("Done (")) {
+                        ready.complete(null);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            LOG.warning("Console pump ended for " + pipe.log, e);
+        }
+    }
+
+    private void finish(String id, int exitCode, CompletableFuture<Void> ready) {
+        pipes.remove(id);
+        CompletableFuture<Void> pending = readiness.remove(id);
+        boolean readyReached = pending != null && pending.isDone() && !pending.isCompletedExceptionally();
+        State previous = states.getOrDefault(id, State.STOPPED);
+        if (previous == State.FAILED) {
+            return;
+        }
+        if (!readyReached && previous != State.STOPPING) {
+            states.put(id, State.FAILED);
+            errors.put(id, "the server exited before it was ready (code " + exitCode + ")");
+        } else {
+            states.put(id, State.STOPPED);
+        }
+    }
+
+    private static void writePipe(PipeServer pipe, String text) throws McException {
+        try {
+            OutputStream stdin = pipe.process.getOutputStream();
+            synchronized (stdin) {
+                stdin.write(text.getBytes(StandardCharsets.UTF_8));
+                stdin.flush();
+            }
+        } catch (IOException e) {
+            throw new McException("Failed to write to the server console", e);
+        }
+    }
+
+    private record PipeServer(Process process, Path log) {
     }
 
     private boolean eulaAccepted(McInstance instance) {

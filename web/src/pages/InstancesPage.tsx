@@ -300,6 +300,14 @@ export function InstancesPage() {
                 : "加载中…"}
             </span>
             <span className="spacer" />
+            <button
+              className="tool-btn ripple-host"
+              title="MC 服务端（实验性；首次开启需开发者密码）"
+              onClick={() => nav("/mc")}
+            >
+              <TerminalIcon size={20} />
+              MC 服务端
+            </button>
             <button className="tool-btn ripple-host" title={I18N["search"]} onClick={() => setSearchMode(true)}>
               <SearchIcon size={20} />
               {I18N["search"]}

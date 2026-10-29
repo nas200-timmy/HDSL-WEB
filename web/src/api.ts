@@ -687,6 +687,36 @@ export const api = {
       request<{ lines: string[] }>(`/api/mc/instances/${encodeURIComponent(id)}/logs?tail=200`),
     consoleTicket: (id: string) =>
       request<TerminalOpen>(`/api/mc/instances/${encodeURIComponent(id)}/console/ticket`, jsonInit("POST", {})),
+    consoleInput: (id: string, line: string) =>
+      request<{ ok: boolean }>(`/api/mc/instances/${encodeURIComponent(id)}/console/input`, jsonInit("POST", { line })),
+    players: (id: string) =>
+      request<{ online: number; max: number; names: string[] }>(
+        `/api/mc/instances/${encodeURIComponent(id)}/players`,
+      ),
+    playerAction: (id: string, name: string, action: "kick" | "op" | "deop" | "ban") =>
+      request<{ ok: boolean; answer: string }>(
+        `/api/mc/instances/${encodeURIComponent(id)}/players/${encodeURIComponent(name)}/${action}`,
+        jsonInit("POST", {}),
+      ),
+    exportWorld: async (id: string): Promise<Blob> => {
+      const res = await fetch(`api/mc/instances/${encodeURIComponent(id)}/world/export`, {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      if (!res.ok) throw new ApiError(res.status, await res.text());
+      return res.blob();
+    },
+    importWorld: async (id: string, file: File): Promise<{ ok: boolean; safety: string }> => {
+      const res = await fetch(`api/mc/instances/${encodeURIComponent(id)}/world/import`, {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        body: file,
+        headers: { "Content-Type": "application/zip" },
+      });
+      if (!res.ok) throw new ApiError(res.status, await res.text());
+      return (await res.json()) as { ok: boolean; safety: string };
+    },
   },
 };
 
@@ -757,7 +787,7 @@ export interface NodeStatus {
 
 /** 打开终端的结果：POSIX 返回 ticket + ws，Windows 返回 desktop。 */
 export interface TerminalOpen {
-  mode: "pty" | "desktop";
+  mode: "pty" | "desktop" | "pipe";
   instance: string;
   brand?: string;
   ticket?: string;

@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError, type McEula, type McFeature, type McInstance, type McTerms, type McVersion } from "../api";
 import { TerminalWindow, type TerminalTargetInfo } from "../components/TerminalWindow";
-import { McBackupsDialog, McPropertiesDialog } from "../components/McDialogs";
+import {
+  McBackupsDialog,
+  McPipeConsole,
+  McPlayersDialog,
+  McPropertiesDialog,
+  McWorldDialog,
+} from "../components/McDialogs";
 import { AddIcon, DeleteIcon, RefreshIcon, RocketLaunchIcon, TerminalIcon } from "../components/icons";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { toast } from "../store";
@@ -33,6 +39,9 @@ export function McPage() {
   const [logs, setLogs] = useState<{ name: string; lines: string[] } | null>(null);
   const [backupFor, setBackupFor] = useState<McInstance | null>(null);
   const [propsFor, setPropsFor] = useState<McInstance | null>(null);
+  const [pipeConsoleFor, setPipeConsoleFor] = useState<McInstance | null>(null);
+  const [playersFor, setPlayersFor] = useState<McInstance | null>(null);
+  const [worldFor, setWorldFor] = useState<McInstance | null>(null);
   const [installNote, setInstallNote] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
@@ -424,12 +433,33 @@ export function McPage() {
             <button
               className="btn btn-text"
               disabled={!instance.consoleAvailable}
-              onClick={() => setTerminalTarget({ kind: "mc", id: instance.id, name: instance.name })}
+              onClick={async () => {
+                try {
+                  const answer = await withElevation(() => api.mc.consoleTicket(instance.id));
+                  if (answer.mode === "pipe") {
+                    setPipeConsoleFor(instance);
+                  } else {
+                    setTerminalTarget({ kind: "mc", id: instance.id, name: instance.name });
+                  }
+                } catch (e) {
+                  toast("error", errMsg(e));
+                }
+              }}
             >
               <TerminalIcon size={16} /> 控制台
             </button>
             <button className="btn btn-text" onClick={() => void showLogs(instance)}>
               日志
+            </button>
+            <button
+              className="btn btn-text"
+              disabled={instance.state !== "RUNNING"}
+              onClick={() => setPlayersFor(instance)}
+            >
+              玩家
+            </button>
+            <button className="btn btn-text" onClick={() => setWorldFor(instance)}>
+              世界
             </button>
             <button className="btn btn-text" onClick={() => setBackupFor(instance)}>
               备份
@@ -454,6 +484,9 @@ export function McPage() {
 
       {backupFor && <McBackupsDialog instance={backupFor} onClose={() => setBackupFor(null)} />}
       {propsFor && <McPropertiesDialog instance={propsFor} onClose={() => setPropsFor(null)} />}
+      {pipeConsoleFor && <McPipeConsole instance={pipeConsoleFor} onClose={() => setPipeConsoleFor(null)} />}
+      {playersFor && <McPlayersDialog instance={playersFor} onClose={() => setPlayersFor(null)} />}
+      {worldFor && <McWorldDialog instance={worldFor} onClose={() => setWorldFor(null)} />}
 
       {installNote && (
         <div className="card" style={{ padding: 8, fontSize: 13 }}>{installNote}</div>

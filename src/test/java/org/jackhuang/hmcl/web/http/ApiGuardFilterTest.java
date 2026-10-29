@@ -125,6 +125,14 @@ class ApiGuardFilterTest {
                     .POST(HttpRequest.BodyPublishers.ofByteArray(multipartBody(announced)))
                     .build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(200, multipart.statusCode(), "a 2 MiB multipart upload must reach the handler");
+
+            // A world import is a raw zip stream, not multipart: it must pass too.
+            HttpResponse<String> world = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                            URI.create("http://127.0.0.1:" + port + "/api/upload"))
+                    .header("Content-Type", "application/zip")
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[announced]))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, world.statusCode(), "a 2 MiB world zip must reach the handler");
         } finally {
             server.stop();
         }

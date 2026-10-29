@@ -594,15 +594,36 @@ public final class McApiServlet extends HttpServlet {
             case "backups" -> backups(request, response, method, instance, segments);
             case "console" -> {
                 String consoleAction = segments.length > 2 ? segments[2] : "";
+                if (!requireElevation(request, response)) {
+                    return;
+                }
+                String mode = runtime.consoleMode(id);
+                if (mode == null) {
+                    Json.error(response, HttpServletResponse.SC_CONFLICT, "the server is not running");
+                    return;
+                }
+                if ("input".equals(consoleAction)) {
+                    JsonObject body = readJson(request);
+                    String line = body == null ? null : stringField(body, "line");
+                    if (line == null || line.isBlank()) {
+                        Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "line is required");
+                        return;
+                    }
+                    runtime.sendCommand(id, line.strip());
+                    Json.write(response, Map.of("ok", true));
+                    return;
+                }
                 if (!"ticket".equals(consoleAction)) {
                     Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
                     return;
                 }
-                if (!requireElevation(request, response)) {
-                    return;
-                }
-                if (runtime.console(id).isEmpty()) {
-                    Json.error(response, HttpServletResponse.SC_CONFLICT, "the server is not running");
+                if ("pipe".equals(mode)) {
+                    // Windows: no PTY, the page shows the log plus a command box.
+                    JsonObject body = new JsonObject();
+                    body.addProperty("mode", "pipe");
+                    body.addProperty("instance", id);
+                    body.addProperty("brand", McRuntime.BRAND);
+                    Json.write(response, body);
                     return;
                 }
                 String ticket = tickets.issue(id, McRuntime.BRAND, sessionToken(request));
@@ -614,6 +635,60 @@ public final class McApiServlet extends HttpServlet {
                 body.addProperty("ticket", ticket);
                 body.addProperty("ws", "/ws/terminal/" + ticket);
                 Json.write(response, body);
+            }
+            case "world" -> {
+                String worldAction = segments.length > 2 ? segments[2] : "";
+                if (!requireElevation(request, response)) {
+                    return;
+                }
+                if (runtime.isRunning(id)) {
+                    Json.error(response, HttpServletResponse.SC_CONFLICT,
+                            "stop the server before moving the world");
+                    return;
+                }
+                if ("export".equals(worldAction) && "GET".equals(method)) {
+                    response.setContentType("application/zip");
+                    response.setHeader("Content-Disposition",
+                            "attachment; filename=\"" + id + "-" + instance.levelName() + ".zip\"");
+                    McWorlds.export(instance, manager, response.getOutputStream());
+                    audit("mc.instance.world.export", id, "success", request);
+                    return;
+                }
+                if ("import".equals(worldAction) && "POST".equals(method)) {
+                    String safety = McWorlds.importZip(instance, manager, backups, request.getInputStream());
+                    audit("mc.instance.world.import", id
+                            + (safety == null ? "" : " (safety " + safety + ")"), "success", request);
+                    Json.write(response, Map.of("ok", true,
+                            "safety", safety == null ? "" : safety));
+                    return;
+                }
+                Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            }
+            case "players" -> {
+                if ("GET".equals(method) && segments.length == 2) {
+                    Json.write(response, McRcon.players(instance, manager));
+                    return;
+                }
+                if ("POST".equals(method) && segments.length == 4) {
+                    if (!requireElevation(request, response)) {
+                        return;
+                    }
+                    String name = segments[2];
+                    String verb = segments[3];
+                    if (!name.matches("[A-Za-z0-9_]{1,16}")) {
+                        Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "invalid player name");
+                        return;
+                    }
+                    if (!List.of("kick", "op", "deop", "ban").contains(verb)) {
+                        Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "unknown action");
+                        return;
+                    }
+                    String answer = McRcon.command(instance, manager, verb + " " + name);
+                    audit("mc.instance.player." + verb, id + "/" + name, "success", request);
+                    Json.write(response, Map.of("ok", true, "answer", answer.strip()));
+                    return;
+                }
+                Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
             }
             case "properties" -> properties(request, response, method, instance);
             default -> Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");

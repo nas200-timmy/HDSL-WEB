@@ -50,9 +50,12 @@ public final class ApiGuardFilter implements Filter {
         // cap) — so a cap keyed on length alone refused them at 1 MiB.
         if (request instanceof HttpServletRequest req && response instanceof HttpServletResponse http) {
             String contentType = req.getContentType();
-            boolean multipart = contentType != null
-                    && contentType.toLowerCase(Locale.ROOT).startsWith("multipart/form-data");
-            if (!multipart && req.getContentLengthLong() > 1048576) {
+            String type = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
+            // Streamed uploads: multipart (plugin/pack) and a raw world zip
+            // (`/api/mc/instances/{id}/world/import`). Both go to a file; only
+            // the in-memory JSON parsers need the cap.
+            boolean streamed = type.startsWith("multipart/form-data") || type.startsWith("application/zip");
+            if (!streamed && req.getContentLengthLong() > 1048576) {
                 Json.error(http, 413, "payload too large");
                 return;
             }
