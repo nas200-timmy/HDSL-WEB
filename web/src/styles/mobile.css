@@ -285,8 +285,9 @@
 }
 
 /* ---------------------------------------------------------------------------
- * 触摸环境：把可点区域抬到 44px（Material/Apple 的最小建议值），
- * 输入框 16px（iOS 聚焦时不会自动缩放页面），并去掉移动端点击高亮。
+ * 触摸环境：把可点区域抬到 36-42px（Material/Apple 建议 44px，但手机上照那个值
+ * 做，一屏放不下两个控件，内容全被推到折叠线以下），输入框 16px（iOS 聚焦时不会
+ * 自动缩放页面），并去掉移动端点击高亮。
  * 与视口宽度无关，所以单独成块：平板横屏（宽 >760）也适用。
  * ------------------------------------------------------------------------- */
 
@@ -303,25 +304,29 @@
   }
 
   .side-item {
-    min-height: 44px;
+    min-height: 40px;
   }
 
+  /* 触摸目标：44px 是 Material/Apple 的建议值，但一屏五个控件就把内容挤没了。
+   * 这里压到 36-40：仍是可点区域、不重叠，内容密度优先。
+   * 输入框保持 16px 字号（iOS 小于 16 会在聚焦时放大页面），只收高度。 */
   .btn {
     height: auto;
-    min-height: 44px;
+    min-height: 38px;
   }
 
   .tool-btn {
     height: auto;
-    min-height: 44px;
+    min-height: 36px;
+    font-size: 13px;
   }
 
   .tlli {
-    min-height: 48px;
+    min-height: 42px;
   }
 
   .popup-item {
-    min-height: 44px;
+    min-height: 40px;
     font-size: 14px;
   }
 
@@ -336,7 +341,7 @@
 
   .input,
   select.input {
-    min-height: 44px;
+    min-height: 40px;
     font-size: 16px;
   }
 
@@ -371,7 +376,8 @@
 @media (max-width: 760px), (max-height: 520px), (hover: none) and (pointer: coarse) {
   .brand-instance-list .tlli {
     flex-wrap: wrap;
-    align-items: flex-start;
+    align-items: center;
+    row-gap: 4px;
   }
 
   .brand-instance-list .tlli .tlli-text {
@@ -391,26 +397,71 @@
     line-height: 1.5;
   }
 
+  /* 操作组（版本选择 + 四个图标）尽量跟标题同一行、靠右；
+   * 行宽实在不够才整体落到第二行——以前是无条件占满一整行，
+   * 393px 的屏上一行实例要吃掉两行高度。 */
   .brand-instance-list .row-actions {
-    flex: 1 1 100%;
-    justify-content: flex-end;
-    overflow-x: auto;
-    padding-top: 6px;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
+    flex: none;
+    margin-left: auto;
+    gap: 2px;
   }
 
-  .brand-instance-list .row-actions::-webkit-scrollbar {
-    display: none;
+  .brand-instance-list .row-actions .input {
+    min-height: 32px;
+    height: 32px;
+    padding: 0 6px;
   }
 
-  /* 新建实例那一行：输入框占满一行、按钮各自换行，不横向挤压 */
+  /* 行与行之间一条细分界线：标出每行的点击范围，也当视觉分栏 */
+  .brand-instance-list > div:not(:last-child) .tlli {
+    border-bottom: 1px solid var(--monet-outline-variant);
+  }
+
+  /* 新建实例那一行：控件宽度由 JSX 按窄屏/宽屏给（内联样式压过 CSS），
+   * 这里只负责允许换行兜底 */
   .brand-instance-toolbar {
     flex-wrap: wrap;
   }
+}
 
-  .brand-instance-toolbar .input {
-    flex: 1 1 140px;
-    max-width: none;
+/* -------------------------------------------------------------------------
+ * 品牌页签行（Z Code / Kimi / OpenCode / Claude Web / Octop）。
+ *
+ * 触摸设备：单行排列、横向滑动，页签保持自然宽度。
+ * 不设 flex:none 时，overflow-x:auto 会把 flex 项的自动最小尺寸清零，
+ * 页签被压缩到刚好放下、没有溢出，于是「看起来挤在一起、又滑不动」。
+ *
+ * 鼠标环境（窄窗口）故意不接管：退回 .toolbar-row 的 flex-wrap:wrap，
+ * 页签折行，谁也不会被裁在卡片外面——鼠标没有「拖动滑动」这件事，
+ * 留一条看不见的横向滚动等于把后面的页签藏起来。
+ * ------------------------------------------------------------------------- */
+@media (hover: none) and (pointer: coarse) {
+  .brand-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    /* 手机上把卡片内边距收紧，多让几像素给页签 */
+    padding: 4px;
+  }
+
+  .brand-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .brand-tabs .tool-btn {
+    flex: none;
+    /* 页签这一行是纯切换，比通用 .tool-btn 再收一档 */
+    height: 34px;
+    min-height: 34px;
+    padding: 0 7px;
+    gap: 4px;
+    font-size: 12px;
+  }
+
+  .brand-tabs .tool-btn .tag {
+    font-size: 10px;
+    padding: 0 3px;
   }
 }

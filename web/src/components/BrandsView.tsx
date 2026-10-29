@@ -27,6 +27,7 @@ import {
   RocketLaunchIcon,
   TerminalIcon,
 } from "../components/icons";
+import { useMobileLayout } from "../hooks";
 import { I18N } from "../i18n";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
 import { getState, refreshExternal, refreshZcode, toast, useAppState } from "../store";
@@ -131,6 +132,9 @@ export function BrandsView({
   onSelect: (brand: BrandKey) => void;
 }) {
   const s = useAppState();
+  // 窄屏页签用短名（去掉「（实验）」）：五个品牌全带后缀时一行放不下，
+  // 而实验标记在下面的警示条里还会说一次，不必每个页签都占那六个字。
+  const mobile = useMobileLayout();
 
   useEffect(() => {
     void refreshExternal();
@@ -139,9 +143,9 @@ export function BrandsView({
   const warning = I18N["dsh.brand.thirdparty.warning"].replace("%s", BRAND_TITLE[brand]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: mobile ? 6 : 8, flex: 1, minHeight: 0 }}>
       {/* 品牌页签行：带实例数（0 个就不显示标签），换页签只换下面这块内容 */}
-      <div className="card toolbar-row" style={{ flexShrink: 0 }}>
+      <div className="card toolbar-row brand-tabs" style={{ flexShrink: 0 }}>
         {BRAND_KEYS.map((k) => {
           const count = s.external.filter((e) => e.brand === k).length;
           const active = k === brand;
@@ -156,10 +160,10 @@ export function BrandsView({
               }
               onClick={() => onSelect(k)}
             >
-              <BrandIcon brand={k} size={16} />
-              {BRAND_TITLE[k]}
+              <BrandIcon brand={k} size={mobile ? 14 : 16} />
+              {mobile ? BRAND_SHORT[k] : BRAND_TITLE[k]}
               {count > 0 && (
-                <span className="tag plain" style={{ marginLeft: 4 }}>
+                <span className="tag plain" style={{ marginLeft: mobile ? 2 : 4 }}>
                   {count}
                 </span>
               )}
@@ -853,6 +857,7 @@ function InstancesCard({
 }) {
   const s = useAppState();
   const selectedId = useSelectedInstanceId();
+  const mobile = useMobileLayout();
   const [form, setForm] = useState({ name: "", version: "" });
   const [busy, setBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -1176,7 +1181,7 @@ function InstancesCard({
           <>
             <input
               className="input"
-              style={{ flex: "1 1 140px", maxWidth: 220 }}
+              style={{ flex: mobile ? "1 1 80px" : "1 1 140px", maxWidth: mobile ? 150 : 220 }}
               placeholder={I18N["dsh.instance.name"]}
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -1200,14 +1205,15 @@ function InstancesCard({
             ) : (
               <select
                 className="input"
-                style={{ flex: "none", maxWidth: 170, height: 36 }}
+                style={{ flex: "none", maxWidth: mobile ? 96 : 170, height: 36 }}
                 value={createVersion}
                 onChange={(e) => setForm((f) => ({ ...f, version: e.target.value }))}
               >
                 {installed.map((r) => (
                   <option key={r.version} value={r.version}>
-                    {r.version}
-                    {r.current ? `（${I18N["dsh.brand.current"]}）` : ""}
+                    {mobile
+                      ? `${r.version}${r.current ? " ✓" : ""}`
+                      : `${r.version}${r.current ? `（${I18N["dsh.brand.current"]}）` : ""}`}
                   </option>
                 ))}
               </select>
@@ -1287,14 +1293,16 @@ function InstancesCard({
                     {/* 全量版本目录：已装/未装都列出来，切到未装的会先把它装上 */}
                     <select
                       className="input"
-                      style={{ flex: "none", maxWidth: 124, height: 36 }}
+                      style={{ flex: "none", maxWidth: mobile ? 84 : 124, height: mobile ? 32 : 36 }}
                       value={version}
                       disabled={busy || installing || disabled}
                       onChange={(e) => void pickVersion(inst, e.target.value)}
                     >
                       {catalog.map((v) => (
                         <option key={v} value={v}>
-                          {versionOption(v, false, installed.some((r) => r.version === v))}
+                          {mobile
+                            ? `${v}${installed.some((r) => r.version === v) ? " ✓" : ""}`
+                            : versionOption(v, false, installed.some((r) => r.version === v))}
                         </option>
                       ))}
                       {/* 上游撤掉的版本会不在目录里：补一条占位，免得选择器回落到别的版本 */}
