@@ -361,10 +361,13 @@ public final class HdslServer {
                 ? "java" : config.mc.javaPath;
         org.jackhuang.hmcl.web.minecraft.McRuntime mcRuntime =
                 new org.jackhuang.hmcl.web.minecraft.McRuntime(mcInstances, terminals, mcFeature, mcJava);
+        org.jackhuang.hmcl.web.minecraft.McVersions mcVersions =
+                new org.jackhuang.hmcl.web.minecraft.McVersions(
+                        config.dataDir.resolve("minecraft").resolve("versions"));
         context.addFilter(new FilterHolder(new org.jackhuang.hmcl.web.minecraft.McFeatureFilter(
                 mcFeature, config.basePath)), "/api/mc/*", EnumSet.of(DispatcherType.REQUEST));
         context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.minecraft.McApiServlet(
-                config, mcFeature, mcInstances, mcRuntime, terminalTickets, authService,
+                config, mcFeature, mcInstances, mcRuntime, mcVersions, terminalTickets, authService,
                 developerAuth, developerElevation, tlsActive, emergencyStop)), "/api/mc/*");
 
         context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService, config.basePath)), "/i/*");

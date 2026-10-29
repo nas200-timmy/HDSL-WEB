@@ -82,6 +82,7 @@ public final class McApiServlet extends HttpServlet {
     private final McFeatureState feature;
     private final McInstanceManager manager;
     private final McRuntime runtime;
+    private final McVersions versions;
     private final TerminalTickets tickets;
     private final AuthService auth;
     private final DeveloperAuth developerAuth;
@@ -100,13 +101,14 @@ public final class McApiServlet extends HttpServlet {
     }
 
     public McApiServlet(ServerConfig config, McFeatureState feature, McInstanceManager manager,
-                        McRuntime runtime, TerminalTickets tickets, AuthService auth,
+                        McRuntime runtime, McVersions versions, TerminalTickets tickets, AuthService auth,
                         DeveloperAuth developerAuth, DeveloperElevation elevation,
                         BooleanSupplier tlsActive, EmergencyStop emergency) {
         this.config = config;
         this.feature = feature;
         this.manager = manager;
         this.runtime = runtime;
+        this.versions = versions;
         this.tickets = tickets;
         this.auth = auth;
         this.developerAuth = developerAuth;
@@ -131,6 +133,10 @@ public final class McApiServlet extends HttpServlet {
             }
             if ("/eula".equals(path) && "GET".equals(method)) {
                 eula(request, response);
+                return;
+            }
+            if ("/terms".equals(path) && "GET".equals(method)) {
+                terms(response);
                 return;
             }
             if ("/feature/enable".equals(path) && "POST".equals(method)) {
@@ -164,6 +170,10 @@ public final class McApiServlet extends HttpServlet {
                     return;
                 }
             }
+            if ("/versions".equals(path) && "GET".equals(method)) {
+                listVersions(response);
+                return;
+            }
             if (path.startsWith("/instances/")) {
                 routeInstance(request, response, method, path.substring("/instances/".length()));
                 return;
@@ -195,6 +205,14 @@ public final class McApiServlet extends HttpServlet {
             body.addProperty("termsAcceptedAt", record.termsAcceptedAt());
             body.addProperty("acceptedBy", record.acceptedBy());
         });
+        Json.write(response, body);
+    }
+
+    private void terms(HttpServletResponse response) throws IOException {
+        JsonObject body = new JsonObject();
+        body.addProperty("version", McTerms.VERSION);
+        body.addProperty("text", McTerms.text());
+        body.addProperty("hash", McTerms.hash());
         Json.write(response, body);
     }
 
@@ -282,6 +300,16 @@ public final class McApiServlet extends HttpServlet {
                     "the EULA changed since it was shown; show it again");
             return;
         }
+        if (termsVersion != McTerms.VERSION) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "the terms changed to v" + McTerms.VERSION + "; show them again");
+            return;
+        }
+        if (!McTerms.hash().equals(termsTextHash)) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "the terms text does not match what this build offers");
+            return;
+        }
 
         String now = Instant.now().toString();
         McConsent record = new McConsent(termsVersion, termsTextHash, eulaHash,
@@ -362,6 +390,14 @@ public final class McApiServlet extends HttpServlet {
             items.add(instanceJson(instance));
         }
         Json.write(response, Map.of("instances", items));
+    }
+
+    private void listVersions(HttpServletResponse response) throws IOException, McException {
+        List<Map<String, String>> items = new ArrayList<>();
+        for (McVersions.VersionEntry entry : versions.list()) {
+            items.add(Map.of("id", entry.id(), "type", entry.type()));
+        }
+        Json.write(response, Map.of("versions", items));
     }
 
     private void createInstance(HttpServletRequest request, HttpServletResponse response)
@@ -481,6 +517,25 @@ public final class McApiServlet extends HttpServlet {
                 runtime.kill(id);
                 audit("mc.instance.kill", id, "success", request);
                 Json.write(response, instanceJson(instance));
+            }
+            case "install" -> {
+                if (!requireElevation(request, response)) {
+                    return;
+                }
+                if (runtime.isRunning(id)) {
+                    Json.error(response, HttpServletResponse.SC_CONFLICT,
+                            "stop the server before changing its version");
+                    return;
+                }
+                JsonObject body = readJson(request);
+                String version = body == null ? null : stringField(body, "version");
+                if (version == null || version.isBlank()) {
+                    Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "version is required");
+                    return;
+                }
+                McInstance installed = versions.install(instance, manager, version.trim());
+                audit("mc.instance.install", id + "@" + version, "success", request);
+                Json.write(response, instanceJson(installed));
             }
             case "logs" -> {
                 int tail = parseInt(request.getParameter("tail"), 200);

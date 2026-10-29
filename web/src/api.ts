@@ -72,7 +72,7 @@ export function setUnauthorizedHandler(fn: () => void): void {
   unauthorizedHandler = fn;
 }
 
-async function request<T>(path: string, init?: RequestInit, opts?: { skipUnauthorizedRedirect?: boolean }): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, opts?: { skipUnauthorizedRedirect?: boolean; timeoutMs?: number }): Promise<T> {
   let res: Response;
   try {
     // 相对路径：由后端注入的 <base href> 解析——根挂载解析到 /api/…，
@@ -80,7 +80,7 @@ async function request<T>(path: string, init?: RequestInit, opts?: { skipUnautho
     res = await fetch(path.replace(/^\//, ""), {
       credentials: "same-origin",
       cache: "no-store",
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(opts?.timeoutMs ?? 30000),
       ...init,
     });
   } catch (e) {
@@ -612,7 +612,101 @@ export const api = {
     request<{ taskId: string }>("/api/node/install", jsonInit("POST", body)),
   nodeUninstall: (version: string) =>
     request<{ ok: boolean }>("/api/node/uninstall", jsonInit("POST", { version })),
+  mc: {
+    feature: () => request<McFeature>("/api/mc/feature"),
+    eula: () => request<McEula>("/api/mc/eula"),
+    terms: () => request<McTerms>("/api/mc/terms"),
+    enable: (body: {
+      eulaAcknowledged: boolean;
+      termsAcknowledged: boolean;
+      eulaHash: string;
+      termsVersion: number;
+      termsTextHash: string;
+      sawDeclineOption: boolean;
+      uiVersion: string;
+    }) => request<McFeature>("/api/mc/feature/enable", jsonInit("POST", body)),
+    stopFeature: () => request<McFeature>("/api/mc/feature/stop", jsonInit("POST", {})),
+    confirmClose: () => request<McFeature>("/api/mc/feature/confirm-close", jsonInit("POST", {})),
+    cancelClose: () => request<McFeature>("/api/mc/feature/cancel-close", jsonInit("POST", {})),
+    decline: () => request<{ ok: boolean }>("/api/mc/feature/decline", jsonInit("POST", {})),
+    versions: () => request<{ versions: McVersion[] }>("/api/mc/versions"),
+    instances: () => request<{ instances: McInstance[] }>("/api/mc/instances"),
+    create: (body: {
+      name: string;
+      version: string;
+      memoryMb?: number;
+      levelName?: string;
+      seed?: string;
+      port?: number;
+      rconPort?: number;
+    }) => request<McInstance>("/api/mc/instances", jsonInit("POST", body)),
+    rename: (id: string, name: string) =>
+      request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}`, jsonInit("PATCH", { name })),
+    remove: (id: string) =>
+      request<{ ok: boolean }>(`/api/mc/instances/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    start: (id: string) =>
+      request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}/start`, jsonInit("POST", {})),
+    stop: (id: string) =>
+      request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}/stop`, jsonInit("POST", {})),
+    kill: (id: string) =>
+      request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}/kill`, jsonInit("POST", {})),
+    install: (id: string, version: string) =>
+      request<McInstance>(
+        `/api/mc/instances/${encodeURIComponent(id)}/install`,
+        jsonInit("POST", { version }),
+        { timeoutMs: 10 * 60 * 1000 },
+      ),
+    logs: (id: string) =>
+      request<{ lines: string[] }>(`/api/mc/instances/${encodeURIComponent(id)}/logs?tail=200`),
+    consoleTicket: (id: string) =>
+      request<TerminalOpen>(`/api/mc/instances/${encodeURIComponent(id)}/console/ticket`, jsonInit("POST", {})),
+  },
 };
+
+/// GET /api/mc/feature：功能开关与内存锁。
+export interface McFeature {
+  state: "DISABLED" | "ENABLED";
+  enabled: boolean;
+  locked: boolean;
+  lockRemainingSeconds: number;
+  keepFeature: boolean | null;
+  termsVersion?: number;
+  termsAcceptedAt?: string;
+  acceptedBy?: string;
+}
+
+export interface McEula {
+  text: string;
+  hash: string;
+  fetchedAt: string;
+  source: string;
+}
+
+export interface McTerms {
+  version: number;
+  text: string;
+  hash: string;
+}
+
+export interface McVersion {
+  id: string;
+  type: string;
+}
+
+export interface McInstance {
+  id: string;
+  name: string;
+  version: string;
+  port: number;
+  rconPort: number;
+  memoryMb: number;
+  levelName: string;
+  seed?: string;
+  createdAt: number;
+  state: "STOPPED" | "STARTING" | "RUNNING" | "STOPPING" | "FAILED";
+  error?: string;
+  consoleAvailable: boolean;
+}
 
 /// GET /api/node 的快照：系统 PATH 探测 + 面板托管运行时列表
 export interface NodeStatus {

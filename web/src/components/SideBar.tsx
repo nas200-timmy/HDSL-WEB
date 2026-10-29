@@ -12,6 +12,7 @@ import {
   LogoutIcon,
   PersonIcon,
   SettingsIcon,
+  TerminalIcon,
 } from "./icons";
 
 /** 实例图标：icon 字段是可访问 URL 时显示图片，否则用 dsh 的品牌标志（DeepSeek 鲸鱼）。 */
@@ -109,6 +110,18 @@ export function MainSideBar() {
         </span>
         <span className="side-text">
           <span className="side-title">{I18N["dsh.instance.list"]}</span>
+        </span>
+      </button>
+      <button
+        className={`side-item ripple-host${selected("/mc") ? " selected" : ""}`}
+        onClick={go("/mc")}
+      >
+        <span className="side-graphic">
+          <TerminalIcon size={20} />
+        </span>
+        <span className="side-text">
+          <span className="side-title">MC 服务端</span>
+          <span className="side-subtitle">实验性 · 默认关闭</span>
         </span>
       </button>
       <button

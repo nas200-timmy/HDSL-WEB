@@ -11,7 +11,7 @@ import "@xterm/xterm/css/xterm.css";
 
 /** 终端窗口的目标：一个品牌实例、一个 dsh 实例，或一个 ZCode 实例（实验性品类）。 */
 export interface TerminalTargetInfo {
-  kind: "brand" | "dsh" | "zcode";
+  kind: "brand" | "dsh" | "zcode" | "mc";
   brand?: BrandId;
   id: string;
   name: string;
@@ -406,9 +406,11 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
       const data =
         target.kind === "zcode"
           ? await api.openZcodeTerminal(target.id)
-          : target.kind === "brand"
-            ? await api.openBrandTerminal(target.brand as BrandId, target.id, undefined, kernel)
-            : await api.openDshTerminal(target.id);
+          : target.kind === "mc"
+            ? await api.mc.consoleTicket(target.id)
+            : target.kind === "brand"
+              ? await api.openBrandTerminal(target.brand as BrandId, target.id, undefined, kernel)
+              : await api.openDshTerminal(target.id);
       if (disposedRef.current || generation !== generationRef.current) return;
       if (data.mode === "desktop") {
         setPhase("desktop");
@@ -574,6 +576,12 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
 
   const stopSession = async () => {
     if (!target) return;
+    if (target.kind === "mc") {
+      // MC 的「停止」是关服，属于功能页的动作（要提权、要停所有服），
+      // 不能藏在控制台底栏里误点一次。这里只关窗口。
+      onClose();
+      return;
+    }
     setBusy(true);
     try {
       if (target.kind === "zcode") {
@@ -797,7 +805,7 @@ export function TerminalWindow({ target, onClose }: { target: TerminalTargetInfo
         {phase === "ended" && <div className="terminal-note">{I18N["terminal.ended"]} ({exitCode ?? 0})</div>}
 
         <div className="terminal-footer">
-          {(phase === "running" || phase === "detached") && (
+          {(target.kind !== "mc") && (phase === "running" || phase === "detached") && (
             <button
               className="btn btn-raised danger ripple-host"
               disabled={busy}

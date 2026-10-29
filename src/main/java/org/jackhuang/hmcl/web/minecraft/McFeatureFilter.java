@@ -93,7 +93,8 @@ public final class McFeatureFilter implements Filter {
 
     /// The enable flow's own routes, plus the status read the page needs.
     static boolean allowedWhileDisabled(String path, String method) {
-        if ("GET".equals(method) && (path.equals("/api/mc/feature") || path.equals("/api/mc/eula"))) {
+        if ("GET".equals(method) && (path.equals("/api/mc/feature")
+                || path.equals("/api/mc/eula") || path.equals("/api/mc/terms"))) {
             return true;
         }
         return "POST".equals(method)
