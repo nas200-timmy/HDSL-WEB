@@ -239,6 +239,16 @@ export const I18N = {
   "about.stack.statement":
     "React · Vite · Material Color Utilities · Material Symbols 图标 · Jetty · Java 21 · Node 22 + pnpm",
 
+  // ---- 关于（MC 段：只有功能开启后才出现，见 McAboutCard） ----
+  "about.mc": "Minecraft 服务端",
+  "about.mc.state": "状态",
+  "about.mc.state.on": "已开启（下方两段文本只在这个功能开启后出现）",
+  "about.mc.intro":
+    "前一段说人话：这个功能实际做了什么、哪里容易翻车、出事按什么顺序处理，没有法律效力。后一段是使用条款原文，有法律效力；两段冲突时以条款为准。",
+  "about.mc.notes.open": "说明：开服前该知道的事（说人话版）",
+  "about.mc.terms.open": "使用条款原文",
+  "about.mc.terms.cancelled": "已取消。展开条款原文需要开发者提权。",
+
   // ---- 账户（AccountListPage / dsh.account.*） ----
   "account": "账户",
   "dsh.account.title": "账号",
