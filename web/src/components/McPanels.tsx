@@ -480,6 +480,23 @@ export function McPlayersPanel({ instance }: { instance: McInstance }) {
   const [names, setNames] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [listsNote, setListsNote] = useState<string | null>(null);
+
+  const importLists = async (file: File) => {
+    setBusy(true);
+    setListsNote(null);
+    try {
+      const answer = await elevated(() => api.mc.importPlayerLists(instance.id, file));
+      const parts = Object.entries(answer.files).map(([name, count]) => `${name} ${count} 条`);
+      setListsNote(`已导入：${parts.join("、")}`);
+      toast("success", "玩家名单已导入；重启服务器后生效");
+      await load();
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const load = async () => {
     try {
@@ -538,6 +555,29 @@ export function McPlayersPanel({ instance }: { instance: McInstance }) {
           </div>
         ))}
       </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 8px 0", flexWrap: "wrap" }}>
+        <label
+          className={`btn btn-text${instance.state === "RUNNING" ? " disabled" : ""}`}
+          style={{ cursor: instance.state === "RUNNING" ? "not-allowed" : "pointer" }}
+        >
+          导入名单 zip…
+          <input
+            type="file"
+            accept=".zip"
+            style={{ display: "none" }}
+            disabled={busy || instance.state === "RUNNING"}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void importLists(file);
+              e.target.value = "";
+            }}
+          />
+        </label>
+        <span className="dim" style={{ fontSize: 12 }}>
+          whitelist.json / ops.json / banned-*.json，放在 zip 根上；停服才能导入
+        </span>
+      </div>
+      {listsNote && <div style={{ padding: "4px 8px 0", fontSize: 12 }}>{listsNote}</div>}
       <p className="dim" style={{ fontSize: 12, margin: 0, padding: "0 8px 8px" }}>
         需要 server.properties 里开启 RCON（<code>enable-rcon=true</code>）；默认是关的。
       </p>
@@ -619,6 +659,14 @@ export function McWorldPanel({ instance }: { instance: McInstance }) {
           </div>
           <p className="dim" style={{ fontSize: 12, margin: 0, lineHeight: 1.6 }}>
             导入会先备份当前世界，再整体替换；不会合并两个世界。
+            zip 里的目录可以叫 <span className="mono">{instance.levelName}/…</span>，也可以直接是世界内容
+            （平铺或 <span className="mono">region/…</span> 这种层级）；上限 2 GB。
+            <b>顶层目录名和上面的世界目录名不一致会被拒绝</b>——否则服务器找不到
+            <span className="mono">level.dat</span>，会当成新世界。改世界目录名或重新打包即可。
+            <br />
+            这里<b>只搬存档</b>：服务端程序、插件/模组、白名单与 OP 名单都不在 zip 里。
+            旧服要带过来时，版本选成和旧服一致（服务端程序走官方下载），
+            名单用「玩家」页的 op/deop 或控制台 <span className="mono">whitelist add</span> 重建。
           </p>
         </div>
       )}

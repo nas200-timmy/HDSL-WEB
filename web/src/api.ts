@@ -738,6 +738,20 @@ export const api = {
       if (!res.ok) throw new ApiError(res.status, await res.text());
       return (await res.json()) as { ok: boolean; safety: string };
     },
+    importPlayerLists: async (
+      id: string,
+      file: File,
+    ): Promise<{ ok: boolean; files: Record<string, number> }> => {
+      const res = await fetch(`api/mc/instances/${encodeURIComponent(id)}/player-lists`, {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        body: file,
+        headers: { "Content-Type": "application/zip" },
+      });
+      if (!res.ok) throw new ApiError(res.status, await res.text());
+      return (await res.json()) as { ok: boolean; files: Record<string, number> };
+    },
   },
 };
 

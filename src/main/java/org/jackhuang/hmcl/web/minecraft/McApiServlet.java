@@ -812,6 +812,25 @@ public final class McApiServlet extends HttpServlet {
                 }
                 Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
             }
+            case "player-lists" -> {
+                if (!requireElevation(request, response)) {
+                    return;
+                }
+                if (!"POST".equals(method)) {
+                    Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
+                    return;
+                }
+                if (runtime.isRunning(id)) {
+                    Json.error(response, HttpServletResponse.SC_CONFLICT,
+                            "stop the server before replacing its player lists");
+                    return;
+                }
+                Map<String, Integer> counts = McPlayerLists.importZip(instance, manager, request.getInputStream());
+                audit("mc.instance.player-lists.import", id + " " + counts, "success", request);
+                JsonObject body = new JsonObject();
+                counts.forEach(body::addProperty);
+                Json.write(response, Map.of("ok", true, "files", body));
+            }
             case "players" -> {
                 if ("GET".equals(method) && segments.length == 2) {
                     Json.write(response, McRcon.players(instance, manager));

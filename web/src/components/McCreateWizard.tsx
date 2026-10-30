@@ -44,6 +44,8 @@ export function McCreateWizard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [instance, setInstance] = useState<McInstance | null>(null);
+  const [worldFile, setWorldFile] = useState<File | null>(null);
+  const [worldImported, setWorldImported] = useState(false);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ fraction: number; message: string } | null>(null);
 
@@ -55,6 +57,7 @@ export function McCreateWizard({
     setStep(0);
     setError("");
     setInstance(null);
+    setWorldImported(false);
     setTaskId(null);
     setProgress(null);
     void api.mc
@@ -129,6 +132,14 @@ export function McCreateWizard({
         setInstance(created);
         onCreated(created);
       }
+      // 旧存档先落地，再装服务端：导入不需要服务器进程，而且失败时实例已经
+      // 存在，重试只会重跑这一步（worldImported 置位后不再重复导入）。
+      if (worldFile && !worldImported) {
+        setStep(3);
+        setProgress({ fraction: -1, message: `正在导入存档 ${worldFile.name}…` });
+        await elevated(() => api.mc.importWorld(created!.id, worldFile));
+        setWorldImported(true);
+      }
       const task = await elevated(() => api.mc.install(created.id, version));
       setTaskId(task.taskId);
       setStep(3);
@@ -178,6 +189,38 @@ export function McCreateWizard({
             <Field label="种子（可空）">
               <input className="input" value={seed} onChange={(e) => setSeed(e.target.value)} placeholder="留空随机" />
             </Field>
+            <Field
+              label="现有存档（可选）"
+              hint="旧服的 world 目录压成 zip：顶层目录名要和上面的「世界目录名」一致，也可以直接压世界内容；只搬存档，不含插件与名单"
+            >
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <label className="btn btn-text" style={{ cursor: "pointer" }}>
+                  {worldFile ? "换一个 zip…" : "选择 zip…"}
+                  <input
+                    type="file"
+                    accept=".zip"
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) setWorldFile(file);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                {worldFile ? (
+                  <>
+                    <span style={{ fontSize: 12 }}>
+                      {worldFile.name} · {Math.max(1, Math.round(worldFile.size / 1024 / 1024))} MB
+                    </span>
+                    <button className="btn btn-text" onClick={() => setWorldFile(null)}>
+                      移除
+                    </button>
+                  </>
+                ) : (
+                  <span className="dim" style={{ fontSize: 12 }}>不选则从一个空世界开始</span>
+                )}
+              </div>
+            </Field>
           </div>
         )}
 
@@ -197,6 +240,12 @@ export function McCreateWizard({
               <span style={{ flex: 1 }}>
                 服务端程序不随本项目分发，安装时从 Mojang 官方下载并校验。
                 同一版本的 `server.jar` 在面板里只存一份，多实例共用。
+              </span>
+            </div>
+            <div className="hint warning" style={{ margin: 0 }}>
+              <span style={{ flex: 1 }}>
+                已有服务器要搬过来？把版本选成<b>和旧服一致</b>的那个，建完后到实例页「世界」
+                导入旧存档的 zip——只搬存档，服务端程序仍用官方下载；插件、白名单与 OP 名单不随存档走。
               </span>
             </div>
           </div>
