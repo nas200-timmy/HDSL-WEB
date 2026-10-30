@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, ApiError, isNotImplemented } from "../api";
+import { api, ApiError, isNotImplemented, type NetworkTrust } from "../api";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
 import { BrandManagementPanel } from "../components/BrandManagementPanel";
 import { LegalCard } from "../components/LegalCard";
@@ -29,6 +29,7 @@ import {
   StyleIcon,
   TuneIcon,
   WarningIcon,
+  PublicIcon,
 } from "../components/icons";
 import { SubSideBar } from "../components/SideBar";
 import { I18N } from "../i18n";
@@ -1089,6 +1090,107 @@ function DownloadSourceTab() {
             </p>
           </>
         ) : null}
+      </div>
+
+      <OutboundTlsCard />
+    </>
+  );
+}
+
+/* ---------------- 出站证书（面板自己发出去的 HTTPS） ---------------- */
+
+/// 「下载源」页的最后一块：面板出站请求的证书策略。
+///
+/// 常态是严格校验。需要放宽只有一种场景——这台机器上有反向代理/抓包工具/GitHub
+/// 加速器在中间人转发，它用自己的根证书签名，那张根证书在 Windows 证书库里、不在
+/// Java 的 cacerts 里，于是浏览器打得开、面板报 PKIX。这里把"当前是什么状态、
+/// 最近一次失败是谁、要不要开一个限时窗口"放在一个人能找到的地方；版本列表因为
+/// 证书失败而空时，那里也有同一个按钮。
+function OutboundTlsCard() {
+  const [state, setState] = useState<NetworkTrust | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      setState(await api.networkTrust.state());
+      setError(null);
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const accept = async () => {
+    setBusy(true);
+    try {
+      const current = await api.networkTrust.state();
+      setState(await api.networkTrust.accept(60, current.acknowledge));
+      toast("success", "已授权 60 分钟：期间无法校验的证书会被接受，日志里会记下每一条");
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async () => {
+    setBusy(true);
+    try {
+      setState(await api.networkTrust.revoke());
+      toast("success", "已恢复严格校验");
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const open = state?.mode === "accept_unverified";
+
+  return (
+    <>
+      <div className="section-caption">
+        <PublicIcon size={16} />
+        出站证书（面板自己发出的 HTTPS）
+      </div>
+      <div className="card" style={{ display: "grid", gap: 8, padding: 12 }}>
+        <div className="comp-row" style={{ padding: "2px 0" }}>
+          <span className="comp-label" style={{ width: "auto", flex: "none" }}>当前策略</span>
+          <span className="comp-value" style={{ fontSize: 13 }}>
+            {state === null
+              ? "检测中…"
+              : open
+                ? `已放宽到 ${state.acceptedUntil ? formatDateTime(state.acceptedUntil) : "（到期）"}，之后自动恢复严格校验`
+                : "严格校验（只认 Java 自带的 cacerts）"}
+          </span>
+        </div>
+        {state?.lastTrouble && (
+          <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", whiteSpace: "pre-wrap" }}>
+            最近一次证书失败：{state.lastTrouble.host}（{formatDateTime(state.lastTrouble.at)}）
+            {"\n"}
+            {state.lastTrouble.reason}
+          </span>
+        )}
+        {error && <div className="hint error">{error}</div>}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {open ? (
+            <button className="btn btn-outline ripple-host" style={{ height: 30 }} disabled={busy} onClick={() => void revoke()}>
+              立即恢复严格校验
+            </button>
+          ) : (
+            <button className="btn btn-raised ripple-host" style={{ height: 30 }} disabled={busy || state === null} onClick={() => void accept()}>
+              {busy ? "处理中…" : "我确认：这是我自己的网络代理（60 分钟）"}
+            </button>
+          )}
+          <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            只在"这台机器上有代理/加速器在转发 HTTPS"时才需要；一次性、最长 24 小时、可随时撤销，
+            期间无法校验的证书会被接受并记进日志。
+          </span>
+        </div>
       </div>
     </>
   );

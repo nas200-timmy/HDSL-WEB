@@ -99,7 +99,7 @@ class OutboundTlsTest {
         String explanation = OutboundTls.explain(trouble);
         assertTrue(explanation.contains("api.github.com"), explanation);
         assertTrue(explanation.contains("TLS"), explanation);
-        assertTrue(explanation.contains("设置 → 网络"), explanation);
+        assertTrue(explanation.contains("设置 → 下载源 → 出站证书"), explanation);
         assertTrue(explanation.contains("24 小时"), explanation);
     }
 
