@@ -30,6 +30,7 @@ import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.config.ServerConfigWriter;
 import org.jackhuang.hmcl.web.developer.DeveloperElevation;
+import org.jackhuang.hmcl.web.logs.ClockGuard;
 import org.jackhuang.hmcl.web.logs.LogPreview;
 import org.jackhuang.hmcl.web.logs.LogRetention;
 import org.jackhuang.hmcl.web.logs.RetentionUpdate;
@@ -39,9 +40,8 @@ import org.jetbrains.annotations.Nullable;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.List;
 import java.time.Instant;
-import java.util.Map;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
 
@@ -128,13 +128,33 @@ public final class LogRetentionApiServlet extends HttpServlet {
         update(request, response);
     }
 
-    private Map<String, Object> describe() {
-        return Map.of(
-                "auditDays", config.logs.auditDays,
-                "panelDays", config.logs.panelDays,
-                "floorDays", LogRetention.FLOOR_DAYS,
-                "ceilingDays", LogRetention.HARD_CAP_DAYS,
-                "viewDays", LogPreview.VIEW_DAYS);
+    private JsonObject describe() {
+        JsonObject body = new JsonObject();
+        body.addProperty("auditDays", config.logs.auditDays);
+        body.addProperty("panelDays", config.logs.panelDays);
+        body.addProperty("floorDays", LogRetention.FLOOR_DAYS);
+        body.addProperty("ceilingDays", LogRetention.HARD_CAP_DAYS);
+        body.addProperty("viewDays", LogPreview.VIEW_DAYS);
+
+        LogRetention retention = LogRetention.installed();
+        if (retention != null) {
+            // 时钟可不可信：界面要能解释“为什么这轮一个文件都没删”。
+            ClockGuard.Status clock = retention.clockStatus();
+            JsonObject clockRow = new JsonObject();
+            clockRow.addProperty("trusted", clock.trusted());
+            clockRow.addProperty("reason", clock.reason());
+            clockRow.addProperty("skewMillis", clock.skewMillis());
+            clockRow.addProperty("checkedAt", clock.checkedAt() == null ? null : clock.checkedAt().toString());
+            body.add("clock", clockRow);
+
+            LogRetention.SweepResult sweep = retention.lastSweep();
+            JsonObject sweepRow = new JsonObject();
+            sweepRow.addProperty("deleted", sweep.deleted());
+            sweepRow.addProperty("at", sweep.at() == null ? null : sweep.at().toString());
+            sweepRow.addProperty("skippedReason", sweep.skippedReason());
+            body.add("lastSweep", sweepRow);
+        }
+        return body;
     }
 
     /// 界面上能看的日志清单——**只有最近 [LogPreview#VIEW_DAYS] 天**。

@@ -19,12 +19,14 @@ package org.jackhuang.hmcl.web.logs;
 
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -82,16 +84,43 @@ public final class LogRetention {
     private volatile int auditDays;
     private volatile int panelDays;
     private final Clock clock;
+    /// 时钟可不可信；不可信时一轮删除都不做（[ClockGuard]）。
+    private final ClockGuard clockGuard;
+    /// 最近一次扫描的结果（包括“因为时钟不可信而没删”）。
+    private volatile SweepResult lastSweep = new SweepResult(null, 0, "has not run yet");
+
+    /// 时钟采样间隔：半小时一次（足够抓住“突然漂移”，又不至于每分钟吵一次）。
+    public static final Duration CLOCK_TICK = Duration.ofMinutes(30);
+
+    /// 到点才真扫；被时钟挡下的那轮在下一跳重试，所以这里不是 24 小时一次的死板节奏。
+    private static final Duration SWEEP_INTERVAL = Duration.ofHours(24);
+
+    /// 日志里出现“未来时间”的容忍度：超过这么多就当墙钟往回跳过。
+    private static final Duration FUTURE_GRACE = Duration.ofHours(1);
+
+    /// 一次扫描的结果。
+    ///
+    /// @param at            扫描时刻（`null` 表示从没扫过）
+    /// @param deleted       删掉的文件数
+    /// @param skippedReason 没删的理由（`null` 表示真的扫过一轮）
+    public record SweepResult(@Nullable Instant at, int deleted, @Nullable String skippedReason) {
+    }
 
     public LogRetention(Path logsDir, int auditDays, int panelDays) {
-        this(logsDir, auditDays, panelDays, Clock.systemDefaultZone());
+        this(logsDir, auditDays, panelDays, Clock.systemDefaultZone(),
+                new ClockGuard(Instant::now, System::nanoTime));
     }
 
     LogRetention(Path logsDir, int auditDays, int panelDays, Clock clock) {
+        this(logsDir, auditDays, panelDays, clock, ClockGuard.trusted());
+    }
+
+    LogRetention(Path logsDir, int auditDays, int panelDays, Clock clock, ClockGuard clockGuard) {
         this.logsDir = logsDir;
         this.auditDays = requireWindow(auditDays, "audit");
         this.panelDays = requireWindow(panelDays, "panel");
         this.clock = clock;
+        this.clockGuard = clockGuard;
     }
 
     private static int requireWindow(int days, String label) {
@@ -129,16 +158,30 @@ public final class LogRetention {
 
     /// 启动时跑一次，之后每 24 小时一次。守护线程：面板退出时它跟着走。
     public void start() {
+        // 基线从“现在”算起：否则第一个观察窗会从第一次心跳才开始，等价于白等一个周期。
+        clockGuard.sample();
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "log-retention");
             thread.setDaemon(true);
             return thread;
         });
-        scheduler.scheduleWithFixedDelay(this::sweepQuietly, 60, TimeUnit.DAYS.toSeconds(1), TimeUnit.SECONDS);
+        // 第一次等过观察窗（否则第一次采样撞不上跳变），之后每半小时一跳：
+        // 采样时钟；到点了才真扫。被时钟挡下的那轮在下一跳重试。
+        scheduler.scheduleWithFixedDelay(this::tick,
+                ClockGuard.BOOT_GRACE.plusSeconds(10).toSeconds(),
+                CLOCK_TICK.toSeconds(), TimeUnit.SECONDS);
     }
 
-    private void sweepQuietly() {
+    /// 一次心跳：采样时钟，必要时扫一轮。
+    void tick() {
         try {
+            clockGuard.sample();
+            Instant now = clock.instant();
+            SweepResult previous = lastSweep;
+            if (previous.at() != null && previous.skippedReason() == null
+                    && previous.at().plus(SWEEP_INTERVAL).isAfter(now)) {
+                return;
+            }
             int deleted = sweep();
             if (deleted > 0) {
                 Logger.LOG.info("Log retention: deleted " + deleted + " file(s) older than "
@@ -151,12 +194,43 @@ public final class LogRetention {
     }
 
     /// 删一轮，返回删掉的文件数。测试直接调这个，不碰调度器。
+    ///
+    /// **时钟不可信时一个文件都不删**：按时间删文件的工具不该信任一个会跳的钟。
+    /// 这一轮会记进 [SweepResult]，界面据此说明“为什么没删”。
     public int sweep() {
+        Instant now = clock.instant();
         if (!Files.isDirectory(logsDir)) {
+            lastSweep = new SweepResult(now, 0, "logs directory does not exist");
+            return 0;
+        }
+        Path newest = newestPanelLog();
+        // 日志的时间在未来 = 墙钟往回跳过。这一条是跨进程重启也成立的证据：
+        // 单调钟只能抓“运行中的跳变”，而“未来时间的文件”是跳变留下的痕迹。
+        if (newest != null && lastModified(newest).isAfter(now.plus(FUTURE_GRACE))) {
+            clockGuard.suspect("a log file is dated in the future (" + newest.getFileName()
+                    + "); the clock moved backwards");
+        }
+        ClockGuard.Status status = clockGuard.status();
+        if (!status.trusted()) {
+            lastSweep = new SweepResult(now, 0, status.reason());
+            Logger.LOG.warning("Log retention skipped: " + status.reason()
+                    + " (nothing was deleted; " + auditDays + "/" + panelDays + " day windows stay as they are)");
             return 0;
         }
         LocalDate today = LocalDate.now(clock);
-        return sweepAudit(today) + sweepPanel();
+        int deleted = sweepAudit(today) + sweepPanel(newest);
+        lastSweep = new SweepResult(now, deleted, null);
+        return deleted;
+    }
+
+    /// 时钟状态（给「关于 → 日志」看）。
+    public ClockGuard.Status clockStatus() {
+        return clockGuard.status();
+    }
+
+    /// 最近一次扫描的结果。
+    public SweepResult lastSweep() {
+        return lastSweep;
     }
 
     private int sweepAudit(LocalDate today) {
@@ -177,10 +251,11 @@ public final class LogRetention {
         return deleted;
     }
 
-    private int sweepPanel() {
-        Instant cutoff = clock.instant().minusSeconds(TimeUnit.DAYS.toSeconds(panelDays));
-        // 先收集再删：最新那份永远留——时钟被调错时，它是唯一还在写的文件。
-        List<Path> candidates = new ArrayList<>();
+    /// 面板日志里最新的那一份；没有就是 `null`。
+    ///
+    /// 抽出来是因为有两处要用：删除时“最新那份永远留”，以及“它的时间在未来 =
+    /// 时钟往回跳过”这条跨重启也成立的判断。
+    private @Nullable Path newestPanelLog() {
         Path newest = null;
         try (DirectoryStream<Path> files = Files.newDirectoryStream(logsDir)) {
             for (Path file : files) {
@@ -188,10 +263,28 @@ public final class LogRetention {
                 if (!name.endsWith(".log") && !name.endsWith(".log.xz")) {
                     continue;
                 }
-                candidates.add(file);
                 if (newest == null || lastModified(file).isAfter(lastModified(newest))) {
                     newest = file;
                 }
+            }
+        } catch (IOException e) {
+            Logger.LOG.warning("Could not list panel logs in " + logsDir + ": " + e.getMessage());
+            return null;
+        }
+        return newest;
+    }
+
+    private int sweepPanel(@Nullable Path newest) {
+        Instant cutoff = clock.instant().minusSeconds(TimeUnit.DAYS.toSeconds(panelDays));
+        // 先收集再删：最新那份永远留——时钟被调错时，它是唯一还在写的文件。
+        List<Path> candidates = new ArrayList<>();
+        try (DirectoryStream<Path> files = Files.newDirectoryStream(logsDir)) {
+            for (Path file : files) {
+                String name = file.getFileName().toString();
+                if (!name.endsWith(".log") && !name.endsWith(".log.xz")) {
+                    continue;
+                }
+                candidates.add(file);
             }
         } catch (IOException e) {
             Logger.LOG.warning("Could not list panel logs in " + logsDir + ": " + e.getMessage());

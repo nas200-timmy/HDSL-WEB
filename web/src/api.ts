@@ -764,13 +764,26 @@ export interface McTerms {
   hash: string;
 }
 
-/// GET /api/settings/logs：磁盘上留多久 + 界面能看多久。
+/// GET /api/settings/logs：磁盘上留多久 + 界面能看多久 + 时钟可不可信。
 export interface LogRetention {
   auditDays: number;
   panelDays: number;
   floorDays: number;
   ceilingDays: number;
   viewDays: number;
+  /// 系统时钟可不可信。不可信时清理一个文件都不删（要重启面板才恢复）。
+  clock?: {
+    trusted: boolean;
+    reason?: string | null;
+    skewMillis: number;
+    checkedAt?: string | null;
+  };
+  /// 最近一轮清理的结果；`skippedReason` 非空表示那轮什么都没删。
+  lastSweep?: {
+    deleted: number;
+    at?: string | null;
+    skippedReason?: string | null;
+  };
 }
 
 /// GET /api/settings/logs/recent 里的一份日志。

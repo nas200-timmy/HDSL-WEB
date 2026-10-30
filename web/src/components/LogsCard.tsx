@@ -103,6 +103,31 @@ export function LogsCard() {
           清理在启动时跑一次，之后每 24 小时一次。审计日志按文件名里的日期算年龄，面板日志按修改时间；
           <b>最新一份面板日志永不删除</b>（故意的：时钟被调错时它是唯一还在写的文件）。
         </p>
+        {retention?.clock && (
+          <div style={{ padding: "6px 8px 0", fontSize: 12, lineHeight: 1.7 }}>
+            <b>时钟</b>{" "}
+            {retention.clock.trusted ? (
+              <span className="tag running">可信</span>
+            ) : (
+              <span className="tag failed">不可信</span>
+            )}{" "}
+            <span style={{ color: "var(--monet-on-surface-variant)" }}>
+              每 30 分钟拿单调钟对一次；一旦发现跳变，清理会一直停到面板重启（删掉的日志回不来，所以不自动恢复）。
+              {retention.clock.reason ? ` 当前原因：${retention.clock.reason}` : ""}
+              {retention.clock.checkedAt ? ` 上次检查：${retention.clock.checkedAt}` : ""}
+            </span>
+          </div>
+        )}
+        {retention?.lastSweep && (
+          <div style={{ padding: "2px 8px 0", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            最近一轮：
+            {retention.lastSweep.at ?? "还没跑过"}
+            {" · "}
+            {retention.lastSweep.skippedReason
+              ? `没有删除（${retention.lastSweep.skippedReason}）`
+              : `删除 ${retention.lastSweep.deleted} 个`}
+          </div>
+        )}
         {error && <div style={{ color: "var(--monet-error)", padding: "6px 8px", fontSize: 13 }}>{error}</div>}
         {retention && (
           <>

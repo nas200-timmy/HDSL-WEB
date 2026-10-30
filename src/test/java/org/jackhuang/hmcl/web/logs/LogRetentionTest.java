@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -107,9 +108,46 @@ class LogRetentionTest {
         assertNull(LogRetention.auditDay(Path.of("2026-10-30.log")));
     }
 
+    @Test
+    void anUntrustedClockDeletesNothing(@TempDir Path dir) throws IOException {
+        Path expiredAudit = write(dir, "audit-2026-01-01.jsonl");
+        Path oldPanel = write(dir, "2026-01-01T00-00-00.log.xz");
+        setMtime(oldPanel, daysAgo(200));
+
+        ClockGuard guard = new ClockGuard(Instant::now, System::nanoTime);
+        guard.suspect("test: pretend the wall clock jumped");
+        LogRetention retention = new LogRetention(dir, 180, 180,
+                Clock.fixed(noon(), ZoneId.systemDefault()), guard);
+
+        assertEquals(0, retention.sweep(), "时钟不可信时一个文件都不该删");
+        assertTrue(Files.exists(expiredAudit));
+        assertTrue(Files.exists(oldPanel));
+        assertFalse(retention.clockStatus().trusted());
+        assertEquals("test: pretend the wall clock jumped", retention.lastSweep().skippedReason());
+    }
+
+    @Test
+    void aLogDatedInTheFutureMarksTheClockUntrusted(@TempDir Path dir) throws IOException {
+        Path newest = write(dir, "2026-10-30T12-00-00.log");
+        // 文件的 mtime 比“现在”还晚两小时 = 墙钟往回跳过；这条判断跨重启也成立。
+        setMtime(newest, noon().plusSeconds(2 * 3600).toEpochMilli());
+        Path expiredAudit = write(dir, "audit-2025-01-01.jsonl");
+
+        LogRetention retention = LogRetention.at(dir, 180, 180, noon());
+
+        assertEquals(0, retention.sweep());
+        assertFalse(retention.clockStatus().trusted());
+        assertTrue(retention.clockStatus().reason().contains("in the future"),
+                retention.clockStatus().reason());
+        assertTrue(Files.exists(expiredAudit), "时钟可疑时宁可留着");
+    }
+
     private static Path write(Path dir, String name) throws IOException {
         Path file = dir.resolve(name);
         Files.writeString(file, "{}\n");
+        // 默认 mtime 落在固定时钟的同一天：否则“文件的 mtime 在时钟的未来”这条
+        // 跨重启判断会被真实的当前时间触发，测试就跟着跑测试的钟一起飘。
+        setMtime(file, noon().toEpochMilli());
         return file;
     }
 
