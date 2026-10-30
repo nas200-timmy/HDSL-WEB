@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.http;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -29,6 +30,7 @@ import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.config.ServerConfigWriter;
 import org.jackhuang.hmcl.web.developer.DeveloperElevation;
+import org.jackhuang.hmcl.web.logs.LogPreview;
 import org.jackhuang.hmcl.web.logs.LogRetention;
 import org.jackhuang.hmcl.web.logs.RetentionUpdate;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -37,6 +39,7 @@ import org.jetbrains.annotations.Nullable;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -93,11 +96,27 @@ public final class LogRetentionApiServlet extends HttpServlet {
     @Override
     protected void service(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String path = request.getPathInfo();
+        String method = request.getMethod();
+        if ("/recent".equals(path)) {
+            if (!"GET".equals(method)) {
+                Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "use GET");
+                return;
+            }
+            recent(response);
+            return;
+        }
+        if (path != null && path.startsWith("/recent/")) {
+            if (!"GET".equals(method)) {
+                Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "use GET");
+                return;
+            }
+            tail(path.substring("/recent/".length()), request, response);
+            return;
+        }
         if (path != null && !path.isEmpty() && !"/".equals(path)) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
             return;
         }
-        String method = request.getMethod();
         if ("GET".equals(method)) {
             Json.write(response, describe());
             return;
@@ -114,7 +133,60 @@ public final class LogRetentionApiServlet extends HttpServlet {
                 "auditDays", config.logs.auditDays,
                 "panelDays", config.logs.panelDays,
                 "floorDays", LogRetention.FLOOR_DAYS,
-                "ceilingDays", LogRetention.HARD_CAP_DAYS);
+                "ceilingDays", LogRetention.HARD_CAP_DAYS,
+                "viewDays", LogPreview.VIEW_DAYS);
+    }
+
+    /// 界面上能看的日志清单——**只有最近 [LogPreview#VIEW_DAYS] 天**。
+    ///
+    /// 窗口写死在服务端，不是给前端一个参数：能改的窗口等于没有窗口，
+    /// 而“界面能看多久”本来就该由服务端说了算。
+    private void recent(HttpServletResponse response) throws IOException {
+        List<LogPreview.Entry> entries = LogPreview.recent(logsDir(), Instant.now(), LogPreview.VIEW_DAYS);
+        JsonArray files = new JsonArray();
+        for (LogPreview.Entry entry : entries) {
+            JsonObject row = new JsonObject();
+            row.addProperty("name", entry.name());
+            row.addProperty("kind", entry.kind());
+            row.addProperty("bytes", entry.bytes());
+            row.addProperty("modified", entry.modified().toString());
+            row.addProperty("compressed", entry.compressed());
+            files.add(row);
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty("viewDays", LogPreview.VIEW_DAYS);
+        body.add("files", files);
+        Json.write(response, body);
+    }
+
+    /// 一份日志的尾巴。名字必须是目录里的一项，且仍在窗口内；越界一律同一条回答。
+    private void tail(String name, HttpServletRequest request, HttpServletResponse response) throws IOException {
+        int lines = intParam(request.getParameter("tail"), LogPreview.DEFAULT_TAIL_LINES);
+        try {
+            JsonArray text = new JsonArray();
+            LogPreview.tail(logsDir(), name, Instant.now(), LogPreview.VIEW_DAYS, lines).forEach(text::add);
+            JsonObject body = new JsonObject();
+            body.addProperty("name", name);
+            body.add("lines", text);
+            Json.write(response, body);
+        } catch (LogPreview.Refused e) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, e.getMessage());
+        }
+    }
+
+    private java.nio.file.Path logsDir() {
+        return config.dataDir.resolve("logs");
+    }
+
+    private static int intParam(@Nullable String raw, int fallback) {
+        if (raw == null) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 
     private void update(HttpServletRequest request, HttpServletResponse response) throws IOException {

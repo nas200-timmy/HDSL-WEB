@@ -3,7 +3,7 @@
 export interface Health {
   status: string;
   version: string;
-  /** 面板自身运行的 JDK 版本（不是实例用的 JDK）。 */
+  /** 面板自身运行的 JDK，只给大版本号（`/api/health` 免认证，不该送完整指纹）。 */
   java?: string;
   uptimeSec: number;
 }

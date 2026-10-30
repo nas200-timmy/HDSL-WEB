@@ -5,6 +5,7 @@ import { ConfirmDialog, Dialog } from "../components/Dialog";
 import { BrandManagementPanel } from "../components/BrandManagementPanel";
 import { LegalCard } from "../components/LegalCard";
 import { McAboutCard } from "../components/McAboutCard";
+import { LogsCard } from "../components/LogsCard";
 import { FileDropInput } from "../components/FileDropInput";
 import {
   AddIcon,
@@ -2402,7 +2403,7 @@ function AboutTab() {
         </div>
         <div className="comp-row">
           <span className="comp-label">{I18N["about.java"]}</span>
-          <span className="comp-value">{health?.java || "—"}</span>
+          <span className="comp-value">{health?.java ? `Java ${health.java}` : "—"}</span>
         </div>
         <div className="comp-row">
           <span className="comp-label">说明</span>
@@ -2465,6 +2466,7 @@ function AboutTab() {
       </div>
       <LegalCard />
       <McAboutCard />
+      <LogsCard />
     </>
   );
 }

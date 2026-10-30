@@ -211,9 +211,13 @@ public final class ServerConfig {
         public volatile String javaPath = "";
     }
 
-    /// `logs:` — how long the panel keeps its own files. Windows can be shortened
-    /// freely and lengthened up to [org.jackhuang.hmcl.web.logs.LogRetention#HARD_CAP_DAYS]
-    /// (three years); anything longer is refused at boot rather than clamped.
+    /// `logs:` — how long the panel keeps its own files. The window may only be set
+    /// between [org.jackhuang.hmcl.web.logs.LogRetention#FLOOR_DAYS] (180 days) and
+    /// [org.jackhuang.hmcl.web.logs.LogRetention#HARD_CAP_DAYS] (four years);
+    /// anything outside that is refused at boot rather than clamped.
+    ///
+    /// 设置页只能往上调（见 `/api/settings/logs`），调小要编辑 `server.yaml`——
+    /// “把保留窗口拖短让审计记录消失”正是那条规则要挡的事。
     public final LogsConfig logs = new LogsConfig();
 
     public static final class LogsConfig {

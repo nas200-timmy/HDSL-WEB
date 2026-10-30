@@ -109,10 +109,12 @@ public final class ApiServlet extends HttpServlet {
         long uptimeSec = Math.max(0, (System.currentTimeMillis() - uptimeStartMillis.getAsLong()) / 1000);
         // `java` 是「关于」页要显示的运行时版本：面板自己跑在哪个 JDK 上，
         // 和实例用的 JDK 是两回事，混在一起会让人以为实例也换了运行时。
+        // 只给大版本：`/api/health` 是免认证探针，把发行版与补丁号（`21.0.12.1+1-deb13u1`）
+        // 告诉任何路过的人，等于免费送一份指纹。
         Json.write(response, Map.of(
                 "status", "ok",
                 "version", version,
-                "java", System.getProperty("java.version", ""),
+                "java", String.valueOf(Runtime.version().feature()),
                 "uptimeSec", uptimeSec));
     }
 

@@ -228,7 +228,7 @@ public final class LogRetention {
     }
 
     /// `audit-2026-10-30.jsonl` → 2026-10-30；不认识的形状返回 `null`。
-    static LocalDate auditDay(Path file) {
+    public static @org.jetbrains.annotations.Nullable LocalDate auditDay(Path file) {
         String name = file.getFileName().toString();
         if (!name.startsWith(AUDIT_PREFIX) || !name.endsWith(AUDIT_SUFFIX)) {
             return null;

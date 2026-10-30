@@ -614,6 +614,18 @@ export const api = {
     request<{ taskId: string }>("/api/node/install", jsonInit("POST", body)),
   nodeUninstall: (version: string) =>
     request<{ ok: boolean }>("/api/node/uninstall", jsonInit("POST", { version })),
+  /** 日志保留窗口（关于 → 日志）。PUT 要开发者提权，且只能往上调。 */
+  panelLogs: {
+    retention: () => request<LogRetention>("/api/settings/logs"),
+    setRetention: (body: { auditDays?: number; panelDays?: number }) =>
+      request<LogRetention>("/api/settings/logs", jsonInit("PUT", body)),
+    /** 界面能看的日志：服务端写死最近几天，不随保留窗口变。 */
+    recent: () => request<{ viewDays: number; files: LogFileEntry[] }>("/api/settings/logs/recent"),
+    tail: (name: string, tail = 200) =>
+      request<{ name: string; lines: string[] }>(
+        `/api/settings/logs/recent/${encodeURIComponent(name)}?tail=${tail}`,
+      ),
+  },
   mc: {
     feature: () => request<McFeature>("/api/mc/feature"),
     eula: () => request<McEula>("/api/mc/eula"),
@@ -750,6 +762,24 @@ export interface McTerms {
   version: number;
   text: string;
   hash: string;
+}
+
+/// GET /api/settings/logs：磁盘上留多久 + 界面能看多久。
+export interface LogRetention {
+  auditDays: number;
+  panelDays: number;
+  floorDays: number;
+  ceilingDays: number;
+  viewDays: number;
+}
+
+/// GET /api/settings/logs/recent 里的一份日志。
+export interface LogFileEntry {
+  name: string;
+  kind: "audit" | "panel";
+  bytes: number;
+  modified: string;
+  compressed: boolean;
 }
 
 export interface McVersion {
