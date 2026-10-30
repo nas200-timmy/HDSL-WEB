@@ -527,10 +527,30 @@ public final class McRuntime {
     private record PipeServer(Process process, Path log) {
     }
 
-    private boolean eulaAccepted(McInstance instance) {
+    /// Whether the instance's `eula.txt` records acceptance.
+    ///
+    /// Minecraft writes the file with a comment header and `eula=true` on its
+    /// own line; the panel's own `acceptEula` writes the bare line. Both are
+    /// valid. Comparing the whole file to `eula=true` rejected every server
+    /// that had been started once before the panel adopted it.
+    ///
+    /// When the key appears more than once the **last** value wins: that is how
+    /// Java's properties parser (which the server uses) reads it, so a file a
+    /// server would accept must not be rejected here.
+    boolean eulaAccepted(McInstance instance) {
         try {
-            return Files.readString(manager.eulaFile(instance), StandardCharsets.UTF_8)
-                    .strip().equals("eula=true");
+            boolean accepted = false;
+            for (String line : Files.readAllLines(manager.eulaFile(instance), StandardCharsets.UTF_8)) {
+                String trimmed = line.strip();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    continue;
+                }
+                int separator = trimmed.indexOf('=');
+                if (separator > 0 && trimmed.substring(0, separator).strip().equalsIgnoreCase("eula")) {
+                    accepted = trimmed.substring(separator + 1).strip().equalsIgnoreCase("true");
+                }
+            }
+            return accepted;
         } catch (IOException e) {
             return false;
         }

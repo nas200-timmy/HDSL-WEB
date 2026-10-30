@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -146,6 +147,45 @@ class McRuntimeTest {
         McException noEula = assertThrows(McException.class, () -> runtime.launch(instance.id()));
         assertTrue(noEula.getMessage().contains("EULA"), noEula.getMessage());
         assertTrue(runtime.console(instance.id()).isEmpty());
+    }
+
+    @Test
+    void anEulaFileWithMinecraftsCommentHeaderIsAccepted() throws Exception {
+        McInstance instance = installedInstance("standard-eula", "1.21.4");
+        Files.writeString(manager.eulaFile(instance),
+                "#By changing the setting below to TRUE you are indicating your agreement to our EULA "
+                        + "(https://account.mojang.com/documents/minecraft_eula).\n"
+                        + "#Wed Feb 04 19:16:42 CST 2026\n"
+                        + "eula=true\n");
+
+        assertTrue(runtime().eulaAccepted(instance));
+    }
+
+    @Test
+    void anEulaFileThatDeclinesIsRejected() throws Exception {
+        McInstance instance = installedInstance("declined-eula", "1.21.4");
+        Files.writeString(manager.eulaFile(instance),
+                "#By changing the setting below to TRUE you are indicating your agreement to our EULA.\n"
+                        + "eula=false\n");
+
+        assertFalse(runtime().eulaAccepted(instance));
+    }
+
+    /// Java's properties parser keeps the last value of a repeated key; the
+    /// server would accept this file, so the panel must not reject it.
+    @Test
+    void aRepeatedEulaKeyUsesTheLastValue() throws Exception {
+        McInstance instance = installedInstance("repeated-eula", "1.21.4");
+        Files.writeString(manager.eulaFile(instance),
+                "eula=false\n"
+                        + "# turned on later by hand\n"
+                        + "eula=true\n");
+        assertTrue(runtime().eulaAccepted(instance));
+
+        Files.writeString(manager.eulaFile(instance),
+                "eula=true\n"
+                        + "eula=false\n");
+        assertFalse(runtime().eulaAccepted(instance));
     }
 
     @Test

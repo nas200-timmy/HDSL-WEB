@@ -104,6 +104,19 @@ public final class McWorlds {
                         throw new McException("the world zip contains an unsafe entry: " + name);
                     }
                     if (!name.startsWith(stripPrefix)) {
+                        int slash = name.indexOf('/');
+                        if (slash > 0
+                                && name.substring(slash + 1).equals("level.dat")
+                                && !name.substring(0, slash).equals(instance.levelName())) {
+                            // A zip packed under another world directory used to be nested
+                            // (`world/oldworld/…`), after which the server found no
+                            // `world/level.dat` and generated a fresh world — a silent data
+                            // loss. Name the mismatch instead.
+                            throw new McException("the world zip is packed under `"
+                                    + name.substring(0, slash) + "/`, but this instance's world"
+                                    + " directory is `" + instance.levelName() + "/`; set the"
+                                    + " instance's world directory name to match, or repack the zip");
+                        }
                         // Accept a world that was zipped without its directory.
                         name = instance.levelName() + "/" + name;
                     }

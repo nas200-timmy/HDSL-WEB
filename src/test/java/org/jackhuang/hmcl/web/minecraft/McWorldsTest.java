@@ -82,6 +82,27 @@ class McWorldsTest {
     }
 
     @Test
+    void aWorldZippedFromInsideItsDirectoryIsAccepted(@TempDir Path dir) throws Exception {
+        McInstanceManager manager = new McInstanceManager(dir.resolve("instances"));
+        McInstance instance = setup(dir, manager);
+        McBackups backups = new McBackups(dir.resolve("backups"));
+
+        ByteArrayOutputStream contents = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(contents)) {
+            zip.putNextEntry(new ZipEntry("level.dat"));
+            zip.write("inside".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("region/r.0.0.mca"));
+            zip.write(new byte[] {1, 2, 3});
+            zip.closeEntry();
+        }
+        McWorlds.importZip(instance, manager, backups, new ByteArrayInputStream(contents.toByteArray()));
+        Path world = manager.worldDirectory(instance);
+        assertEquals("inside", Files.readString(world.resolve("level.dat")));
+        assertTrue(Files.isRegularFile(world.resolve("region/r.0.0.mca")));
+    }
+
+    @Test
     void anUnsafeEntryIsRefusedAndTheWorldIsUntouched(@TempDir Path dir) throws Exception {
         McInstanceManager manager = new McInstanceManager(dir.resolve("instances"));
         McInstance instance = setup(dir, manager);
@@ -108,6 +129,28 @@ class McWorldsTest {
         McBackups backups = new McBackups(dir.resolve("backups"));
         assertThrows(McException.class, () -> McWorlds.importZip(instance, manager, backups,
                 new ByteArrayInputStream(new byte[0])));
+    }
+
+    /// A zip packed under a *different* top-level directory used to be silently
+    /// nested (`world/oldworld/…`), and the server then generated a fresh world
+    /// because `world/level.dat` was missing. Refusing with the name is the only
+    /// outcome that does not lose the import without saying so.
+    @Test
+    void aZipPackedUnderAnotherDirectoryNameIsRefused(@TempDir Path dir) throws Exception {
+        McInstanceManager manager = new McInstanceManager(dir.resolve("instances"));
+        McInstance instance = setup(dir, manager);
+        McBackups backups = new McBackups(dir.resolve("backups"));
+
+        ByteArrayOutputStream other = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(other)) {
+            zip.putNextEntry(new ZipEntry("oldworld/level.dat"));
+            zip.write("data".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+        McException error = assertThrows(McException.class, () -> McWorlds.importZip(instance, manager, backups,
+                new ByteArrayInputStream(other.toByteArray())));
+        assertTrue(error.getMessage().contains("oldworld"));
+        assertTrue(error.getMessage().contains("world"));
     }
 
     @Test
