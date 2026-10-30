@@ -337,7 +337,7 @@ export const api = {
     ),
 
   verifyAccount: (name: string) =>
-    request<{ ok: boolean; models?: string[]; error?: string }>(
+    request<{ ok: boolean; models?: string[]; error?: string; note?: string }>(
       `/api/accounts/${encodeURIComponent(name)}/verify`,
     ),
 

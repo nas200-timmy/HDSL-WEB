@@ -29,6 +29,51 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /// Tests for what an account is: a key, the vendor it is for, and the name it is known by.
 class DshAccountTest {
     @Test
+    void aRefusedModelListSaysWhatTheEndpointAnswered() throws Exception {
+        // 一个会说话的 401，就是“key 打错 region / 过期”在现场的样子。原因必须留到启动失败
+        // 的那句话里，否则界面上只剩一句“启动失败”，人只能猜。
+        com.sun.net.httpserver.HttpServer server =
+                com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/models", exchange -> {
+            // 正文里故意带上 key：摘要必须把它抹掉。
+            byte[] body = ("{\"error\":{\"message\":\"invalid_api_key\",\"hint\":\"sk-test\"}}")
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(401, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            int port = server.getAddress().getPort();
+            DshAccount account = new DshAccount(DshAccount.AccountKind.THIRD_PARTY, "openrouter",
+                    "sk-test", "http://127.0.0.1:" + port + "/v1", null, null, null);
+
+            DshAccount.ModelsAnswer answer = account.fetchModelsAnswer();
+
+            assertTrue(answer.empty());
+            assertNotNull(answer.failure());
+            assertTrue(answer.failure().contains("HTTP 401"), answer.failure());
+            assertTrue(answer.failure().contains("invalid_api_key"), answer.failure());
+            assertFalse(answer.failure().contains("sk-test"),
+                    "摘要里不能出现 key：" + answer.failure());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void anAccountWithoutAnEndpointSaysSoInsteadOfSilentlyListingNothing() {
+        DshAccount offline = new DshAccount(DshAccount.AccountKind.OFFLINE, "offline", "", null, "me", null, null);
+
+        DshAccount.ModelsAnswer answer = offline.fetchModelsAnswer();
+
+        assertTrue(answer.empty());
+        assertNotNull(answer.failure());
+        assertTrue(answer.failure().contains("no endpoint"), answer.failure());
+    }
+
+    @Test
     void anAccountIsNamedByItsVendorAndItsLabel() {
         // The key names the account, so it is written to a file and read back; a vendor used twice
         // with two keys has to stay two accounts, which is what the label is for.

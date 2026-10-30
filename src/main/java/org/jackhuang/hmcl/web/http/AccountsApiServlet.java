@@ -325,11 +325,17 @@ public final class AccountsApiServlet extends HttpServlet {
         JsonObject body = new JsonObject();
         if (check.outcome() == DshAccount.Outcome.VALID) {
             body.addProperty("ok", true);
+            // 列表和“为什么没有列表”一起给：验证通过但一个模型都没有，正是
+            // “key 能通、端点却列不出模型”的样子，界面要能把这句原话摆出来。
+            DshAccount.ModelsAnswer answer = account.fetchModelsAnswer();
             JsonArray models = new JsonArray();
-            for (String model : account.fetchModels()) {
+            for (String model : answer.models()) {
                 models.add(model);
             }
             body.add("models", models);
+            if (answer.empty() && answer.failure() != null) {
+                body.addProperty("note", answer.failure());
+            }
         } else {
             body.addProperty("ok", false);
             body.addProperty("error", check.message());

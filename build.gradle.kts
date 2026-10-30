@@ -90,6 +90,13 @@ tasks.test {
     // reads, and `…method.default` is not a key at all, which is a bound nobody reads.
     systemProperty("junit.jupiter.execution.timeout.default", "120s")
     systemProperty("junit.jupiter.execution.timeout.threaddump.enabled", "true")
+    // The instance proxy forwards `Host`, which the JDK only allows once this property is set —
+    // and it freezes that allow-list at the first `HttpClient` in the JVM. Production sets it at
+    // boot (`Main`); the test JVM has to do the same **before any test class** gets a client,
+    // otherwise whichever class happens to run first decides whether the panel's own server
+    // tests can start. (That is not hypothetical: a test that talks to a local HTTP server was
+    // enough to turn every `AccountApiTest` case red.)
+    systemProperty("jdk.httpclient.allowRestrictedHeaders", "host")
     // The launcher keeps its state in one per-user home, and a test that writes
     // settings must not write into the one the user is running. Tests get a home
     // of their own inside the build tree, which is also what makes them able to

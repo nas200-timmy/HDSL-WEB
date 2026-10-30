@@ -140,6 +140,14 @@ export function AccountsPage() {
       const r = await api.verifyAccount(name);
       if (r.ok) {
         const n = r.models?.length ?? 0;
+        if (n === 0 && r.note) {
+          // 验证通过却一个模型都列不出来：启动时这条路由写不进去（harness 不认它，
+          // 自己也没法补），所以这里必须把供应商的原话摆出来，并指路到“模型”栏。
+          const detail = `读不到模型列表（${r.note}）；启动前请在账户里填一个模型名`;
+          setVerifyResult((m) => ({ ...m, [name]: { ok: false, detail } }));
+          toast("error", `「${name}」验证通过，但${detail}`);
+          return;
+        }
         setVerifyResult((m) => ({ ...m, [name]: { ok: true, detail: `${n} 个可用模型` } }));
         toast("success", `「${name}」验证通过，${n} 个可用模型`);
       } else {
@@ -475,12 +483,12 @@ export function AccountsPage() {
               />
             </div>
             <div className="form-row">
-              <span className="form-label">默认模型（选填）</span>
+              <span className="form-label">默认模型（自建供应商建议填）</span>
               <ModelSelect
                 value={form.model}
                 onChange={(v) => setForm((f) => ({ ...f, model: v }))}
                 vendorId={pickedVendor ? pickedVendor.id : form.vendor.trim()}
-                placeholder="可搜索模型，或直接输入（留空由 harness 决定）"
+                placeholder="可搜索模型，或直接输入；读不到供应商列表时，这里填的名字就是兜底"
               />
             </div>
             {submitWarn && (
@@ -528,6 +536,7 @@ export function AccountsPage() {
             value={editForm.model}
             onChange={(v) => setEditForm((f) => ({ ...f, model: v }))}
             vendorId={editTarget?.vendor ?? ""}
+            placeholder="读不到供应商列表时，这里填的名字就是兜底"
           />
         </div>
         <div className="form-row">

@@ -735,6 +735,13 @@ export function InstanceDetailPage() {
                       ，可前往「账户」页管理
                     </span>
                   )}
+                  {form.account && s.accounts && !s.accounts.some((a) => a.name === form.account) && (
+                    <div style={{ fontSize: 12, color: "var(--monet-error)", marginTop: 4, lineHeight: 1.6 }}>
+                      这个实例指定的账户「{form.account}」已经不在了：启动不会注入 key 与供应商路由，
+                      harness 起来后没有模型可用。重新选一个账户，或去「账户」页把它加回来
+                      （账户里的「模型」栏也填上，读不到供应商列表时才有兜底）。
+                    </div>
+                  )}
                 </span>
               </div>
               <div style={{ display: "flex", alignItems: "center", paddingTop: 8 }}>

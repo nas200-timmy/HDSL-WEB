@@ -87,6 +87,9 @@ public final class DshAccountRoute {
     /// The entry the harness mounts its supplier routes under.
     private static final String ENTRY = "llm-pi-ai";
 
+    private static final org.jackhuang.hmcl.util.logging.Logger LOG =
+            org.jackhuang.hmcl.util.logging.Logger.LOG;
+
     /// How much of a route's name a key variable keeps. Enough to recognise, short of any limit a
     /// platform puts on a variable's name.
     private static final int READABLE_LIMIT = 24;
@@ -168,6 +171,10 @@ public final class DshAccountRoute {
 
         private @Nullable List<String> served;
 
+        /// Why the supplier named no models, when it named none. Carried so the refusal at
+        /// [#render] can say what actually happened instead of only that nothing came back.
+        private @Nullable String modelsFailure;
+
         private Prepared(String route, String api, String fallbackModel,
                          @Nullable String endpoint, boolean deepSeek) {
             this.route = route;
@@ -204,7 +211,16 @@ public final class DshAccountRoute {
         ///
         /// @param account the account whose supplier is asked
         public void resolveModels(DshAccount account) {
-            resolveModels(account.fetchModels());
+            DshAccount.ModelsAnswer answer = account.fetchModelsAnswer();
+            resolveModels(answer.models(), answer.failure());
+            if (answer.empty() && !fallbackModel.isEmpty()) {
+                // Say it out loud: the launch will succeed and run a model the person named earlier,
+                // and the next person to read the log should not have to guess why the list is one
+                // entry long instead of the vendor's twenty.
+                LOG.warning("Could not read the models of " + endpoint + " for route " + route
+                        + " (" + answer.failure() + "); launching with the model named on the account: "
+                        + fallbackModel);
+            }
         }
 
         /// Records the models the supplier served, for a caller that already asked it.
@@ -214,7 +230,16 @@ public final class DshAccountRoute {
         ///
         /// @param models the model ids
         void resolveModels(List<String> models) {
+            resolveModels(models, null);
+        }
+
+        /// The same, with the reason the supplier named no models.
+        ///
+        /// @param models  the model ids
+        /// @param failure why the list is empty, or `null`
+        void resolveModels(List<String> models, @Nullable String failure) {
             this.served = models;
+            this.modelsFailure = failure;
         }
 
         /// Renders the route's own settings, as they go under `config.providers.<route>`.
@@ -273,10 +298,16 @@ public final class DshAccountRoute {
                 models.add(model);
             }
             if (models.isEmpty()) {
-                throw new DshException("Could not read the models of " + endpoint + ", so there is"
-                        + " no route to write for " + route + ". This route is not one the harness"
-                        + " ships, so it cannot fill the list in either: check that the address answers"
-                        + " and that this machine can reach it, or name a model on the account.");
+                StringBuilder message = new StringBuilder("Could not read the models of ")
+                        .append(endpoint);
+                if (modelsFailure != null && !modelsFailure.isBlank()) {
+                    message.append(" (").append(modelsFailure).append(")");
+                }
+                message.append(", so there is no route to write for ").append(route)
+                        .append(". This route is not one the harness ships, so it cannot fill the list in")
+                        .append(" either: fix this account's key or address, or name a model on it")
+                        .append(" (设置 → 账户 → 模型) and launch again.");
+                throw new DshException(message.toString());
             }
             for (String one : models) {
                 yaml.append("  - id: ").append(YamlScalar.of(one)).append("\n");

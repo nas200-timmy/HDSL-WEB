@@ -169,6 +169,33 @@ class DshAccountRouteTest {
     }
 
     @Test
+    void aModelNamedOnTheAccountIsWhatGetsWrittenWhenTheSupplierSaysNothing() throws Exception {
+        // 降级路径：供应商这一会儿读不到，但账户上存过一个模型名——写它，别中止。
+        DshAccountRoute.Prepared prepared = DshAccountRoute.prepare(accountOn("openrouter")).orElseThrow();
+        prepared.resolveModels(List.of(), "the endpoint answered HTTP 502");
+
+        String yaml = prepared.render();
+
+        assertTrue(yaml.contains("  - id: a-model\n"), yaml);
+        assertEquals(1, yaml.split("- id: ", -1).length - 1, "只写这一个，别把失败编成一串：" + yaml);
+    }
+
+    @Test
+    void theReasonTheSupplierNamedNoModelsReachesTheRefusal() {
+        // 拒绝本身没错，但“为什么”要跟着一起出去：界面只会把它当一句 toast 显示。
+        DshAccount noModel = new DshAccount(DshAccount.AccountKind.THIRD_PARTY, "openrouter", "sk-test",
+                null, null, null, null);
+        DshAccountRoute.Prepared prepared = DshAccountRoute.prepare(noModel).orElseThrow();
+        prepared.resolveModels(List.of(), "the endpoint answered HTTP 401: invalid_api_key");
+
+        DshException refused = assertThrows(DshException.class, prepared::render);
+
+        assertTrue(refused.getMessage().contains("HTTP 401"), refused.getMessage());
+        assertTrue(refused.getMessage().contains("invalid_api_key"), refused.getMessage());
+        assertTrue(refused.getMessage().contains("模型"), "要指路到账户里的那一栏：" + refused.getMessage());
+    }
+
+    @Test
     void theRouteJoinsTheEntryTheHarnessItselfEdits() throws Exception {
         // The whole reason this is a file edit rather than an overlay. The person's own supplier, the
         // models they chose for it and the comments they wrote all have to survive, and the account's

@@ -274,6 +274,11 @@ public final class InstanceRuntime {
                 return account;
             }
         }
+        // 指着一个已经不存在的账户：不拦启动（错 key 比没 key 更糟），但要说一声——
+        // 否则表现为“启动成功、harness 里没有供应商”，人只会看到一片空白。
+        org.jackhuang.hmcl.util.logging.Logger.LOG.warning("Instance " + instance.id()
+                + " names account `" + key + "`, which no longer exists; launching with no account"
+                + " (no key and no route will be injected)");
         return null;
     }
 

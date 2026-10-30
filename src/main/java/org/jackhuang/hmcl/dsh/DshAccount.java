@@ -448,25 +448,33 @@ public record DshAccount(
             org.jackhuang.hmcl.Metadata.NAME + "/" + org.jackhuang.hmcl.Metadata.VERSION
                     + " (+" + org.jackhuang.hmcl.Metadata.HOMEPAGE_URL + ")";
 
-    /// Asks the vendor which models it serves.
+    /// 一次“列出模型”的答案：拿到了哪几个，或者为什么没拿到。
     ///
-    /// The same call the key check makes — the one endpoint every OpenAI-compatible service has — but
-    /// the answer is read instead of the status. The launcher needs it because a **route it writes
-    /// itself is not in the harness's catalogue**, so the harness cannot fill in that route's model
-    /// list the way it does for a vendor it knows; a route with no models cannot be registered at
-    /// all, so the list has to come from somewhere. Asking the vendor is the same place the harness
-    /// would have got it.
+    /// @param models  供应商给的模型 id，按它给的顺序；没拿到就是空表
+    /// @param failure 没拿到的原因（给人看的一句话），拿到了就是 `null`
+    public record ModelsAnswer(List<String> models, @Nullable String failure) {
+
+        /// 一条都没拿到。
+        ///
+        /// @return 是否为空
+        public boolean empty() {
+            return models.isEmpty();
+        }
+    }
+
+    /// Asks the vendor which models it serves, and says why when it cannot.
     ///
     /// **Failure is not an error here.** A launch must not depend on a supplier answering: a network
     /// that cannot reach it today may reach it tomorrow, and the caller falls back to a name it can
-    /// at least register. Only a 2xx with a readable list is an answer; everything else is "no
-    /// answer", which is why this returns a list rather than throwing.
+    /// at least register. So this never throws — but it does *not* throw the reason away either:
+    /// “the endpoint answered HTTP 401 (invalid_api_key)” is the sentence that lets a person fix
+    /// their key, where an empty list leaves them reading “启动失败” with no clue.
     ///
-    /// @return the model ids the vendor named, in the order it named them, or empty
-    public List<String> fetchModels() {
+    /// @return the ids the vendor named, or an empty list plus the reason it is empty
+    public ModelsAnswer fetchModelsAnswer() {
         String address = endpoint();
         if (address == null || address.isBlank()) {
-            return List.of();
+            return new ModelsAnswer(List.of(), "no endpoint is configured for this account");
         }
         DshVendor vendor = vendor();
         String api = vendor == null ? "openai-completions" : vendor.api();
@@ -493,9 +501,15 @@ public record DshAccount(
                 HttpResponse<String> response = client.send(request.build(),
                         HttpResponse.BodyHandlers.ofString());
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                    return List.of();
+                    return new ModelsAnswer(List.of(),
+                            "the endpoint answered HTTP " + response.statusCode() + excerpt(response.body()));
                 }
-                return readModelIds(response.body());
+                List<String> models = readModelIds(response.body());
+                if (models.isEmpty()) {
+                    return new ModelsAnswer(List.of(), "the endpoint answered 2xx but named no models"
+                            + excerpt(response.body()));
+                }
+                return new ModelsAnswer(models, null);
             } finally {
                 HttpClients.closeQuietly(client);
             }
@@ -504,8 +518,53 @@ public record DshAccount(
                 Thread.currentThread().interrupt();
             }
             org.jackhuang.hmcl.util.logging.Logger.LOG.info("Could not read the model list of " + url + ": " + e.getMessage());
-            return List.of();
+            String reason = e instanceof java.net.http.HttpTimeoutException
+                    ? "the request timed out after " + TIMEOUT.toSeconds() + " s"
+                    : (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+            return new ModelsAnswer(List.of(), reason);
         }
+    }
+
+    /// A short, single-line piece of an error body, with the key redacted.
+    ///
+    /// Gateways put the useful part in the body (`invalid_api_key`, `model_not_found`) and the
+    /// useless part in the headers. Newlines and length are cut so this can live inside one
+    /// sentence a person reads in a toast.
+    private @Nullable String excerpt(@Nullable String body) {
+        if (body == null || body.isBlank()) {
+            return "";
+        }
+        String text = body;
+        if (apiKey != null && !apiKey.isBlank()) {
+            text = text.replace(apiKey, "***");
+        }
+        text = text.replaceAll("\\s+", " ").trim();
+        if (text.isEmpty()) {
+            return "";
+        }
+        return ": " + (text.length() > 160 ? text.substring(0, 160) + "…" : text);
+    }
+
+    /// Asks the vendor which models it serves.
+    ///
+    /// The same call the key check makes — the one endpoint every OpenAI-compatible service has — but
+    /// the answer is read instead of the status. The launcher needs it because a **route it writes
+    /// itself is not in the harness's catalogue**, so the harness cannot fill in that route's model
+    /// list the way it does for a vendor it knows; a route with no models cannot be registered at
+    /// all, so the list has to come from somewhere. Asking the vendor is the same place the harness
+    /// would have got it.
+    ///
+    /// **Failure is not an error here.** A launch must not depend on a supplier answering: a network
+    /// that cannot reach it today may reach it tomorrow, and the caller falls back to a name it can
+    /// at least register. Only a 2xx with a readable list is an answer; everything else is "no
+    /// answer", which is why this returns a list rather than throwing.
+    ///
+    /// This is the shape for callers that only want the list; [fetchModelsAnswer] is the same
+    /// request and keeps the reason.
+    ///
+    /// @return the model ids the vendor named, in the order it named them, or empty
+    public List<String> fetchModels() {
+        return fetchModelsAnswer().models();
     }
 
     /// Returns the address a supplier lists its models at.
