@@ -238,7 +238,14 @@ final class PosixPty implements Pty {
                     .toArray(String[]::new);
             int spawned = LibC.INSTANCE.posix_spawn(childPid, program, fileActions, attributes, argv, envp);
             if (spawned != 0) {
-                throw new PtyException("posix_spawn " + program, spawned);
+                // `posix_spawn` is `execve`: no PATH lookup. A bare program name
+                // therefore fails with ENOENT even when the shell finds it, which
+                // reads as "the binary is missing". Say what is actually wrong.
+                String what = program.indexOf('/') >= 0
+                        ? "posix_spawn " + program
+                        : "posix_spawn " + program + " (the PTY spawn does not search PATH; "
+                          + "pass an absolute path)";
+                throw new PtyException(what, spawned);
             }
             return new PosixPty(masterFd, childPid.getValue(), new Libc());
         } catch (IOException | RuntimeException e) {

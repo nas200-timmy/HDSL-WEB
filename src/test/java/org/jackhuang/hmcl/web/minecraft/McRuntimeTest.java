@@ -162,4 +162,19 @@ class McRuntimeTest {
         runtime.kill(instance.id());
         assertEquals(McRuntime.State.STOPPED, await(runtime, instance.id(), McRuntime.State.STOPPED).state());
     }
+
+    @Test
+    void theConfiguredJavaIsResolvedToAPathBecausePosixSpawnDoesNotSearchPath() {
+        // `posix_spawn("java")` is ENOENT: the PTY spawn is execve, not a shell.
+        String resolved = McRuntime.resolveJava("java");
+        assertTrue(Path.of(resolved).isAbsolute(), resolved);
+        assertTrue(Files.isRegularFile(Path.of(resolved)), resolved);
+
+        // An explicit path is kept as given (only made absolute) rather than re-resolved.
+        String explicit = Path.of(System.getProperty("java.home"), "bin", "java").toString();
+        assertEquals(Path.of(explicit).toAbsolutePath().toString(), McRuntime.resolveJava(explicit));
+
+        // A name nobody has stays as given, so the failure can still name it.
+        assertEquals("hdsl-no-such-java-binary", McRuntime.resolveJava("hdsl-no-such-java-binary"));
+    }
 }

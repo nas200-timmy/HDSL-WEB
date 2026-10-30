@@ -384,6 +384,13 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
 | `web/http/ApiGuardFilter` | 不动；MC 异常也走它 |
 | `web/http/StaticServlet` | 不改；SPA 自带页签，运行时按 feature 隐藏 |
 
+> **`mc.java_path` 必须是路径，不能只写 `java`**（v0.6.31 的启动失败就是这个）。
+> 控制台是 PTY，PTY 是用 `posix_spawn` 起的：它和 shell / `ProcessBuilder` 不同，
+> **不搜 `PATH`**（glibc 的 `posix_spawn` 就是 `execve`，会搜的是 `posix_spawnp`）。
+> 现在 `McRuntime.resolveJava` 会先把配置值解析成绝对路径再交给终端：
+> 显式路径原样用，`java` 取面板自己那个 JVM，其余去 `PATH` 上找，找不到才原样返回
+> （这样报错里仍然写的是你配置的值）。
+
 ## 7. 数据布局
 
 ```

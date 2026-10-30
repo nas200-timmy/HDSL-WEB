@@ -58,7 +58,12 @@ public final class McRuntime {
     public static final String BRAND = "minecraft";
 
     /// How long a launch may take to print its readiness line.
-    public static final int READY_TIMEOUT_SECONDS = 120;
+    ///
+    /// The first launch unpacks the bundler's libraries and generates the world;
+    /// on a NAS's disks that is minutes, not seconds — and the marker (`Done (`)
+    /// only appears after world generation. Five minutes is the ceiling before
+    /// the panel decides the server is not coming up.
+    public static final int READY_TIMEOUT_SECONDS = 300;
     /// How long `stop` waits for the server to exit before it is killed.
     public static final int STOP_GRACE_SECONDS = 30;
 
@@ -126,17 +131,69 @@ public final class McRuntime {
     /// @param manager      the instance manager
     /// @param terminals    the terminal registry
     /// @param feature      the feature switch
-    /// @param javaBin      the java executable
+    /// @param javaBin      the java executable (resolved by [resolveJava])
     /// @param versionsRoot the shared versions directory, or `null` to skip the check
     public McRuntime(McInstanceManager manager, TerminalManager terminals,
                      McFeatureState feature, String javaBin, @Nullable Path versionsRoot) {
-        this(manager, terminals, feature, _instance -> List.of(
-                javaBin,
+        this(manager, terminals, feature, javaCommand(javaBin), javaBin, versionsRoot);
+    }
+
+    private static CommandFactory javaCommand(String javaBin) {
+        String program = resolveJava(javaBin);
+        return instance -> List.of(
+                program,
                 "-Xms512M",
-                "-Xmx" + _instance.memoryMb() + "M",
+                "-Xmx" + instance.memoryMb() + "M",
                 "-jar",
                 McInstanceManager.SERVER_JAR_NAME,
-                "nogui"), javaBin, versionsRoot);
+                "nogui");
+    }
+
+    /// Turns the configured `mc.java_path` into something `posix_spawn` accepts.
+    ///
+    /// The console is a PTY, and the PTY spawn hands the first argv element to
+    /// `posix_spawn` as-is: unlike a shell or `ProcessBuilder` it does **no**
+    /// `PATH` lookup (glibc's `posix_spawn` is `execve`; the searching variant is
+    /// `posix_spawnp`). The default `mc.java_path: java` therefore died with
+    /// ENOENT before the server printed a byte — the UI could only say "failed to
+    /// start the server process".
+    ///
+    /// Order: an explicit path is used as given; `java` means the JVM this panel
+    /// is running on; anything else is looked up on `PATH`. When nothing is
+    /// found the value is returned unchanged, so the error still names what the
+    /// operator configured.
+    ///
+    /// @param configured `mc.java_path`, or `null`/blank for the default
+    /// @return an absolute path when one exists, otherwise the input
+    static String resolveJava(@Nullable String configured) {
+        String program = configured == null || configured.isBlank() ? "java" : configured;
+        if (program.indexOf('/') >= 0 || program.indexOf('\\') >= 0) {
+            return Path.of(program).toAbsolutePath().toString();
+        }
+        if ("java".equals(program) || "java.exe".equals(program)) {
+            String home = System.getProperty("java.home");
+            if (home != null && !home.isBlank()) {
+                for (String name : List.of("java", "java.exe")) {
+                    Path candidate = Path.of(home, "bin", name);
+                    if (Files.isRegularFile(candidate)) {
+                        return candidate.toString();
+                    }
+                }
+            }
+        }
+        String path = System.getenv("PATH");
+        if (path != null) {
+            for (String dir : path.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
+                if (dir.isBlank()) {
+                    continue;
+                }
+                Path candidate = Path.of(dir, program);
+                if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) {
+                    return candidate.toAbsolutePath().toString();
+                }
+            }
+        }
+        return program;
     }
 
     /// The same, with an injectable argv for tests.
