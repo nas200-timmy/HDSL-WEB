@@ -77,22 +77,20 @@
 
 ### 4.1 威胁模型：入口即 RCE，本地权限不是边界
 
-Windows 桌面终端不增加**本地**攻击面：能坐到这台机器前、亲手开 `cmd`、亲手 `java -jar`
-的人，本来就能直接执行同样的命令；面板再弹一个控制台，对本地权限是净零。降低的只是
-「本地用户需要被面板防住」这个假设，**不是鉴权**。
-
-真正被改变的是入口的位置：`POST /api/brands/{brand}/instances/{id}/terminal` 能启动
-一个执行 agent 的进程，屏幕还能交互——**在效果上等价于远程代码执行**。因此：
+终端这条路**在效果上等价于远程代码执行**：`POST /api/brands/{brand}/instances/{id}/terminal`
+能启动一个执行 agent 的进程，屏幕还能交互。因此它的安全全压在入口上，而不是"Windows 有没有
+桌面"这种平台差异上——ConPTY 换掉桌面窗口之后，这条不变：
 
 - 端点仍走 `/api/*` 的会话门（`AuthFilter`），没有会话一律 401；
 - 还要开发者密码提权（会话级 30 分钟）；没有提权 403 `developer_elevation_required`；
-- Windows 桌面启动额外要求字面确认 `{"confirm":"open-desktop-terminal"}`，并记审计
-  `terminal.desktop`（谁、从哪个地址）；这是对「只偷到 cookie」的减速带，不是加密证明；
+- 启动的永远是适配器解析出来的 argv（程序 + 参数），**不经 shell**：Windows 上
+  `.cmd`/`.bat`/`.ps1`/`.com` 一律拒绝，因为 `CreateProcess` 会把它们交给 `cmd.exe`；
+  请求体里没有任何"我要跑什么"的位置，两端都只认那条 argv；
 - **部署前提**：面板只监听 loopback 或可信网络；要暴露公网，必须在网络层加保护
   （反代鉴权/VPN/白名单），或者干脆不开终端按钮。文档明确写这条，而不是拿
-  「Windows 有桌面」当安全边界。绑非回环又确实需要把实例网页/实例操作放出去时，开
+  「有终端」本身当安全边界。绑非回环又确实需要把实例网页/实例操作放出去时，开
   `developer_guard.scope: instance`（见 §4.2）：实例网页与启动/停止/装包那一层会要求开发者密码；
-- 反过来，Linux 的 PTY 通道同样受这套入口约束：会话 + 提权 + 单实例单会话。
+- 反过来，Linux/macOS 的 PTY 通道同样受这套入口约束：会话 + 提权 + 单实例单会话。
 
 ### 4.2 总开关与开发者模式
 
@@ -139,8 +137,8 @@ Windows 桌面终端不增加**本地**攻击面：能坐到这台机器前、�
   往往就在某个实例的进程树或某个终端里。
 - **按下时**（`POST /api/developer/estop/engage`，要求提权 + `confirm` 短语）按这个顺序：
   1. 先翻转状态，所有闸门立刻关上（之后再起来的实例也会被拦住，不会漏）；
-  2. 关掉所有终端（POSIX 走进程组 SIGKILL；**Windows 的桌面终端窗口不在面板进程表里，杀不掉，
-     需要人工关闭**）；
+  2. 关掉所有终端（POSIX 走进程组 SIGKILL，Windows 走 Job Object，两平台都是整棵树；终端进程
+     本来就在面板的注册表里，没有"够不着的窗口"）；
   3. 强杀所有实例的整棵进程树：先收集 `descendants()`，再 `destroyForcibly()`，有界等待后再补一轮。
      **不跑 `post-exit` 自定义命令**——紧急停机不该再去执行用户代码。会话尾部可能丢几行。
   4. 审计 `estop.engage`（谁、终端数、进程数、原因）。
@@ -159,7 +157,7 @@ Windows 桌面终端不增加**本地**攻击面：能坐到这台机器前、�
 - 预览清单是**按下那一刻**的快照——按之前最后几秒新起的实例也会被杀，因为状态闸门在 engage 第一步就关上，不会漏。
 - `all` 档会让面板日常操作频繁要密码，这是它存在的意义；默认必须是 `off`，公网部署建议 `instance`。
 - E-Stop 期间**不能装整合包**（装包会起进程，算"启动"）；它也不能用来"清空正在装的包"，等解除。
-- Windows 的桌面终端窗口杀不掉，只能人工关；实例进程的强杀两平台一致。
+- 实例进程与终端的强杀两平台一致；面板进程自己被 `taskkill /F` 时，终端子进程随 Job Object 一起消失。
 - **验证纪律**：E-Stop 只能在独立起的临时面板（临时 `HDSL_DATA`、`HDSL_PORT=0`）上按。生产面板里往往
   正跑着干活的 agent（包括用来修面板的那个），按下去会一起杀掉，而且一小时内回不来。
 
@@ -195,13 +193,13 @@ web/terminal/                 常置包，不依赖 MINA
   TerminalTarget              实例 → home/cwd/env/argv
   BrandTui                    KimiTui / OpencodeTui；ClaudeWebTui 带内核参数（BrandTui.forBrand 故意不返回它）
   ZcodeTui                    ZCode 的官方 TUI（不带 --web 的 bin/zcode.mjs）
-  InstanceTerminal            三个品类共用的门禁 / Windows 分支 / spawn / ticket
+  InstanceTerminal            三个品类共用的门禁 / 平台预检 / spawn / ticket
   TerminalSink                一个挂载者（生产是 WebSocket，测试是收集器）
   TerminalSession             PTY 进程 + 回放缓冲 + attach/detach + 退出
   TerminalManager             按 brand + instanceId 互斥、open/terminate、审计
   TerminalBusyException       同实例第二个终端
   pty/                        伪终端胶水（JNA）
-    Pty / PtySize / PtyException / PosixPty
+    Pty / PtySize / PtyException / PosixPty / ConPty
 web/http/InstancesApiServlet   dsh 的 POST/DELETE /api/instances/{id}/terminal
 web/brand/BrandApiServlet      品牌的 /api/brands/{brand}/instances/{id}/terminal 与 …/terminals（内核清单）
 web/zcode/ZcodeApiServlet      ZCode 的 /api/zcode/instances/{id}/terminal
@@ -240,8 +238,9 @@ servlet，于是所有 `/i/*` 都回 `500 restricted header name: "Host"`；加 
   attr：`POSIX_SPAWN_SETPGROUP` + pgroup=0。
 - 不在 JVM 里 `fork()`；不注册 JNA 回调；泵线程 `poll` + 关闭标志；
   `read` 遇 `EIO` 视为子进程结束；`waitpid` 独立线程收尸。
-- Windows：不用 ConPTY。`Pty.spawn` 在 Windows 抛 `PtyException`；品牌终端改走
-  `DesktopTerminal`（§7.1），在桌面会话里打开真正的控制台窗口。
+- Windows：`CreatePseudoConsole` + `CreateProcessW`（见 §7.1）。进程树靠 Job Object
+  （`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）加 `CREATE_SUSPENDED` → 入 Job → `ResumeThread`；
+  `Pty.spawn` 按平台分流，上层一行不用改。
 
 ## 7. 实施阶段
 
@@ -251,10 +250,10 @@ servlet，于是所有 `/i/*` 都回 `500 restricted header name: "Host"`；加 
 | 1 | 品牌无关的终端核心（`TerminalTarget` + `BrandTui`） | 完成 |
 | 2 | PTY 胶水（JNA） | 完成 |
 | 3 | `TerminalSession` / `TerminalManager` | 完成 |
-| 4 | HTTP 与 WebSocket（ticket、`/ws/terminal`、Windows 桌面终端） | 后端完成，见 §10 缺口 |
+| 4 | HTTP 与 WebSocket（ticket、`/ws/terminal`） | 后端完成，见 §10 缺口 |
 | 5 | xterm 前端 + 底栏启停 | 完成 |
 | 6 | dsh 适配 | 完成（dsh 终端） |
-| 7 | ~~Windows ConPTY~~ | **取消**：Windows 用桌面终端（见 §7.1） |
+| 7 | Windows ConPTY | 完成：`ConPty`（Win10 1809 起，见 §7.1）；桌面终端已删除 |
 | 8 | 移除 SSH 通道（v0.5.3） | 完成：`web/ssh`、MINA 与 eddsa 已删除 |
 | 9 | ZCode 终端（v0.5.71） | 完成：`ZcodeTui`、`/api/zcode/instances/{id}/terminal` |
 | 10 | Claude Web 双内核（v0.5.71） | 完成：社区引擎 / 官方 Claude Code，`…/terminals` + `?kernel=` |
@@ -262,25 +261,31 @@ servlet，于是所有 `/i/*` 都回 `500 restricted header name: "Host"`；加 
 
 品类覆盖顺序：**kimi → opencode → dsh → zcode → claude-web（双内核）**。
 
-### 7.1 Windows：用桌面的终端，不做浏览器 PTY
+### 7.1 Windows：ConPTY
 
-裸部署的 Windows 有桌面和自己的 shell，不需要在浏览器里再复制一个 PTY（服务进程也不共享
-交互桌面）。因此 Windows 上点「终端」时，面板进程（就跑在那个桌面会话里）用 Java 直接
-起一个控制台窗口，并把工作目录与 HOME 指到该实例：
+Windows 上也走浏览器 PTY，用的是系统自带（Win10 1809 / build 17763 起）的
+`CreatePseudoConsole`：不随包发任何二进制，也不需要桌面会话。服务形态（session 0）
+同样可用——这正是换掉桌面终端的主要原因。
 
-- `DesktopTerminal` 在实例工作区写一个 `.cmd`：`cd /d <工作区>`、`set HOME=…`、再执行该
-  品牌的 TUI 命令；
-- 通过 `cmd.exe /c start … cmd.exe /k <script>` 打开，窗口属于桌面，面板不代理键盘；
-- API 返回 `{"mode":"desktop"}`，前端只显示「已在本机桌面打开终端」。
+- **门槛**：build < 17763 或符号探测失败 → 终端接口 409 `terminal_unsupported_platform`，
+  文案里带实际 build 号；**不回落任何桌面窗口**。Win7/8.1 明确不支持（不引 winpty）。
+- **argv-only**：`lpApplicationName` 单独给 `argv[0]`，命令行按 MSVCRT 规则拼（引号、反斜杠
+  加倍），`bInheritHandles` 为 FALSE，伪控制台经属性列表传给子进程；子进程的 stdio 用
+  `STARTF_USESTDHANDLES` + 三个 NULL 交给控制台自己分配（否则 `CreateProcess` 会把面板
+  自己的 stdout 拷给 agent，画面写进面板日志、终端一片空白）。
+- **拒绝 shim**：`command[0]` 以 `.cmd` / `.bat` / `.ps1` / `.com` 结尾直接拒绝——`CreateProcess`
+  会悄悄把它交给 `cmd.exe`，等于在链路里塞进一个 shell；`argv[0]` 还必须是存在的绝对路径。
+- **进程树**：`CREATE_SUSPENDED` → `AssignProcessToJobObject` → `ResumeThread`，
+  Job Object 带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`。终端结束时整棵树一起走；面板进程
+  被强杀时也一样（Job 句柄关闭即杀）。
+- **与 POSIX 的语义差异**：Windows 没有能打到伪控制台子进程的"礼貌信号"
+  （`GenerateConsoleCtrlEvent` 不行），所以 `terminate` 是"给一个自退窗口，然后
+  `TerminateJobObject`"，不等价于 SIGTERM→SIGKILL。这是平台事实，不是缺陷。
+- **平台能力**：一个实例终端 = 一个 `conhost.exe`（数 MB）。只承诺 64 位 JVM；arm64 未实测。
+- **MC 控制台**不动：仍走 pipe（见 `docs/minecraft.md` §15.2 的后续顺序）。
 
-这条路径**故意**经过 `cmd.exe`：它启动的就是用户自己的终端；「不经 shell」的不变量只
-约束 POSIX 的 Web 终端路径。Windows 端也不额外假设密码限制——按部署现实，能坐到这台
-桌面的人本来就能直接开命令行。
-
-**面板必须跑在交互式会话里**（控制台或 RDP）：判断用 `SESSIONNAME`，服务（session 0）
-下它不存在，`reveal` / 桌面终端返回 409，而不是静默弹一个看不见的窗口。把 Windows 当
-服务器、只靠 RDP 运维时，终端窗口开在 RDP 会话里，前提是面板本身就在那个会话启动；
-如果面板是服务，桌面功能不可用——这正是想要的，不在 session 0 里假装有桌面。
+桌面终端（`DesktopTerminal`、`{"mode":"desktop"}`、`open-desktop-terminal` 确认短语）已整类
+删除；前端与 Go 客户端的 `desktop` 分支保留，只对旧面板有意义。
 
 ## 8. 验收
 
@@ -305,7 +310,9 @@ servlet，于是所有 `/i/*` 都回 `500 restricted header name: "Host"`；加 
 
 实现约定：这几家都由适配器解析成「node + 入口 JS」或「原生二进制」，**不经过
 `.bin` shim / `.cjs` 启动器**；环境里 `HOME`（和 Windows 的 `USERPROFILE`）指向实例
-home，因此 TUI 读到的就是网页模式写下的那份会话。
+home，因此 TUI 读到的就是网页模式写下的那份会话。Windows 上这条同样成立：ConPTY 直接
+`CreateProcess` 原生 exe 或 `node.exe` + JS，`.cmd`/`.bat`/`.ps1`/`.com` 一律拒绝——
+交给 `cmd.exe` 就等于在链路里塞进一个 shell。
 
 ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供应商配置跟
 `ZCODE_DATA_BASE_DIR` 走。为了让终端与 web 进程看到同一批会话，`HOME` **保持与 web
@@ -433,8 +440,8 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
   `explorer.exe` / `notepad.exe` 打开，路径由服务端按实例记录计算，请求只能点名
   三个目标之一；dsh 的日志在内存里，`log` 返回 400。
 - **ZCode / Claude Web 的真机终端**：两个适配器的命令形状有单测锁定，但「TUI 到底能不能
-  在 PTY 里起来、中文与 resize 是否正常」只能在 Linux/macOS 上对着真实发行包验证；
-  Windows 面板本来就没有 PTY（走桌面控制台）。
+  在 PTY 里起来、中文与 resize 是否正常」只能在对着真实发行包时验证；Windows 现在也有
+  PTY（ConPTY，Win10 1809 起），但品牌 TUI 在 ConPTY 上的长时间运行还没有人肉证据。
 - **Claude Web 的官方内核是否存在**取决于发行包里有没有 SDK 的平台可选依赖
   （`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`），没有时退回 PATH 上的 `claude`；
   `…/terminals` 端点会把可用性与缺什么如实报出来。

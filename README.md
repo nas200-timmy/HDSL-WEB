@@ -186,35 +186,35 @@ Claude Web 有两个内核可以选：**社区引擎**（`claude-web-engine`，�
   两个 terminal 接口返回 403 `web_shell_disabled`。已经打开的终端不受影响，可以从它自己的
   窗口停止。开关本身也要开发者密码提权 + HTTPS 才会被接受；
 - 面板只应监听回环或可信网络。要暴露公网，必须在网络层再加保护（反代鉴权 / VPN / 白名单），
-  或者干脆关掉这个开关。这里的「Windows 有桌面」不是安全边界；
-- 审计里会记下终端的打开（成功/失败）、桌面启动、agent 退出和强制停止（`terminal.*`、
+  或者干脆关掉这个开关。「有没有桌面」不是安全边界；
+- 审计里会记下终端的打开（成功/失败）、agent 退出和强制停止（`terminal.*`、
   `desktop.reveal`），不记录屏幕内容。
 
-威胁模型与不变量（不经过 shell 启动、进程组隔离、先关 master 再杀树）见
+威胁模型与不变量（不经过 shell 启动、进程树隔离、先关 master 再杀树）见
 [docs/web-shell.md §4](docs/web-shell.md)。
 
-### Windows：终端是桌面快捷方式，不是第二套 PTY
+### Windows：终端也是浏览器 PTY（ConPTY）
 
-裸部署的 Windows 本来就有桌面和自己的 `cmd`，所以这里的「终端」不是浏览器里的远程 PTY，
-而是一个**等价于你自己开一个控制台**的快捷方式：面板进程（就跑在那个桌面会话里）用 Java
-打开一个真正的控制台窗口，工作目录与 `HOME` 指向该实例，效果和自己开 `cmd`、`cd` 过去再敲
-同样的命令一样。
+Win10 1809（build 17763）起，Windows 面板的「终端」和 Linux 一样是浏览器里的真终端：
+后端用系统自带的 `CreatePseudoConsole` 起一个伪控制台，xterm 直接连。不随包发任何二进制，
+**服务形态（session 0）也能用**——终端不再需要桌面。
+
+- 更早的 Windows（Win7/8.1，以及 1809 之前的 Win10）没有这个 API：终端接口返回 409
+  `terminal_unsupported_platform`，文案里带这台机器的实际 build 号，**不回落任何桌面窗口**。
+  `hdsl-web -doctor` 与启动横幅都会先打印一行 `terminal : ConPTY (… build …)` 或
+  `unsupported: needs build 17763, this is <n>`；
+- 启动的永远是适配器解析出来的程序（`node.exe` + 入口 JS，或品牌自己的 exe），
+  **不经过 `cmd`**：`.cmd`/`.bat`/`.ps1`/`.com` 会被拒绝——Windows 会悄悄把它们交给
+  `cmd.exe`，那等于在链路里塞回一个 shell；
+- 整棵进程树归 Job Object，终端结束（`/exit`、底栏停止、E-Stop、面板进程被强杀）时一起消失。
 
 同一类「桌面快捷操作」还有两个，在实例菜单里：
 
 - **打开文件夹** → `explorer.exe <实例 home 或工作区>`；
 - **打开日志** → `notepad.exe <实例日志文件>`。
 
-路径由服务端按实例记录算出来，只接受这几个目标名，前端传不了任意路径。
-
-这些按钮**不增加本地攻击面**：能坐到这台机器前的人本来就能自己开 `cmd`、自己打开资源管理器，
-面板再开一个窗口对本地权限是净零。改变的不是「本地用户要不要被防」，而是「谁能远程点到这个
-按钮」——所以入口鉴权一条不少：面板会话 + 开发者密码 + HTTPS（终端还要求字面确认）。真正
-要防的是远程调用，不是坐在机器前的你。
-
-限制：面板必须跑在控制台或 RDP 会话里（判断依据是 `SESSIONNAME`）。以服务方式运行
-（session 0）没有交互桌面，终端与「打开文件夹 / 日志」都会明确返回 409，而不是悄悄开一个
-看不见的窗口。想完全不用这些功能，把 Web Shell 开关关掉即可。
+路径由服务端按实例记录算出来，只接受这几个目标名，前端传不了任意路径。这两个仍然需要
+交互桌面：以服务方式运行（session 0）时返回 409，而不是悄悄开一个看不见的窗口。
 
 ### 设置与开关
 
@@ -303,8 +303,8 @@ Windows 用 PowerShell 版的同一个脚本（`scripts/install-hdsl-tui.ps1`）
 | `developer_elevation_required` | 提权过期了，重新输入开发者密码 |
 | `terminal_already_open` | 该实例已有一个终端，先去那个窗口里操作或停止 |
 | 关掉网页后 agent 还在跑 | 这是设计行为：关窗只 detach。要真正结束请用 `/exit`、底栏「停止」，或退出面板进程 |
-| Windows 点终端返回 409 | 面板以服务方式运行，没有交互桌面；改在控制台/RDP 会话里启动面板 |
-| 命令行客户端报 `mode=desktop` | 那台面板跑在 Windows 上，终端只能开在它的桌面上；换 Linux/macOS 面板再远程接入 |
+| Windows 点终端返回 409 | build 低于 17763（Win7/8.1/早期 Win10），或该系统没有 ConPTY；错误里带实际 build 号 |
+| 命令行客户端报 `mode=desktop` | 那台面板是旧版本（Windows 桌面终端时代）；升级面板后终端回到浏览器 |
 
 更细的架构、PTY 实现与验收标准见 [docs/web-shell.md](docs/web-shell.md)；
 客户端安装、退出码与 Windows 细节见 [client/README.md](client/README.md)。
@@ -383,9 +383,9 @@ Node 版本范围是 dsh 自己的 `engines` 要求；pnpm 既是 dsh 的安装�
 
 Windows 同样可用：面板认得出系统装的 Node.js（`node.exe` / `npm.cmd` / `pnpm.cmd`）、能装 dsh
 版本与插件、能装品牌工具、能一键装托管 Node 运行时、能在面板内构建 ZCode。实例终端在
-Windows 上走桌面控制台——面板必须在控制台或 RDP 会话里运行；以服务运行（session 0）时没有
-交互桌面，终端与「打开文件夹/日志」会明确返回 409。会话租约观察仍不支持。NTFS 也没有
-`0600` 语义（见
+Win10 1809 起走 ConPTY（浏览器里的真终端，服务形态也可用）；更早的系统返回 409 并带 build 号。
+「打开文件夹/日志」这类桌面操作仍需交互桌面（session 0 返回 409）。会话租约观察仍不支持。
+NTFS 也没有 `0600` 语义（见
 [安全说明](#安全说明)）。逐条实测与限制见 [docs/windows-bare-deploy.md](docs/windows-bare-deploy.md)。
 
 ```bash

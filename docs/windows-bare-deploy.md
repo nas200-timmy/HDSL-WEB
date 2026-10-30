@@ -11,7 +11,7 @@
 > 被抬高了，那是本文要修的第一件事。
 >
 > 落地过程中，本文几条**推测**被真机实测**修正**（§9.1），§3 的问题清单已按处理结果重新标注。
-> 仍未做的只有「实例终端」（§9.3）。
+> 实例终端在 2026-10-31 改成了 ConPTY（§9.5），不再走桌面窗口。
 
 ## 0. 摘要
 
@@ -25,7 +25,7 @@
 | | 现状 |
 |---|---|
 | Windows 上能用的 | 面板本体（Jetty/HTTPS/登录门/静态资源）、纯 Java 的功能（实例台账、日志、反代、证书、导出） |
-| Windows 上不能用的 | 托管 Node 运行时一键安装、**探测已有的系统 Node**（连手动装也白装）、dsh 版本安装与插件、三个品牌工具（kimi/opencode/claude-web）的安装与启动、ZCode 面板内构建、实例终端、实例的自定义命令（`/bin/sh`） |
+| Windows 上不能用的 | 托管 Node 运行时一键安装、**探测已有的系统 Node**（连手动装也白装）、dsh 版本安装与插件、三个品牌工具（kimi/opencode/claude-web）的安装与启动、ZCode 面板内构建、实例的自定义命令（`/bin/sh`） |
 
 ## 1. 排查：证据链
 
@@ -470,7 +470,7 @@ RuntimeLayout                              // 由平台决定
 
 | 项 | 处置 |
 |---|---|
-| 实例终端 | **明确不支持**，被点到时抛的错说清原因（POSIX shell + Linux 终端模拟器）并给出可照抄的替代路径（工作目录 + `DSH_HOME` + 运行时 `bin`）。要真做就是接 `wt`/`powershell`。 |
+| 实例终端 | **Win10 1809+ 可用（ConPTY，§9.5）**；8.1 及以下、以及更早的 Win10 明确不支持，终端接口 409 `terminal_unsupported_platform` 并带实际 build 号。 |
 | `flock` 会话租约 | Windows 直接答「观察不到」，不再每次去 spawn 一个必然失败的进程。 |
 | 关闭实例后端口/进程是否真的释放 | ✅ dsh 实例实测：停止后端口即刻无监听。**品牌/ZCode 在 v0.4.2 改为终止整棵进程树**（`util/ProcessTree`）；opencode 复验：停止后 `listeners=0`、`opencode=0`，状态保持 `stopped`（不再被输出泵误报成「意外退出」）。 |
 | 子进程输出编码混用 | ⬜ 未逐处实测；控制台为 GB18030 时中文进度无乱码（§9.2 第 7 行）。 |
@@ -495,3 +495,23 @@ java -jar build\libs\hdsl-web-<版本>.jar -doctor
 
 派生结论的复现：写一个 `ProcessBuilder` 小程序，分别跑裸 `node`、裸 `npm`、裸 `npm.cmd`、
 全路径 `npm.cmd`、无扩展名全路径 `npm`，看 error code（§1.4 的表就是这样做出来的）。
+
+### 9.5 实例终端：ConPTY 落地记录（2026-10-31）
+
+Windows 上的实例终端从「桌面控制台窗口」换成浏览器 PTY，实现是系统自带的
+`CreatePseudoConsole`（`web/terminal/pty/ConPty.java`）。桌面终端（`DesktopTerminal`、
+`{"mode":"desktop"}`、`open-desktop-terminal` 确认短语）整类删除。
+
+- **门槛**：build ≥ 17763（Win10 1809），并且 `kernel32` 真有 `CreatePseudoConsole` 符号。
+  `-doctor` 与启动横幅都直接打印这一行：`ConPTY (Windows 10.0 build 19045) [ok]`，
+  或者 `unsupported: needs build 17763, this is <n>`。
+- **验证过的**（本机 Win10 19045 / JDK 21）：`cmd.exe /c echo` 往返、UTF-8 输出、
+  `mode con` 前后的 `Columns` 随 `ResizePseudoConsole` 变化、退出码与 EOF、
+  `cmd /c ping` 的**整棵树**随 `terminate` 消失、4 KB 输入分块写入不报错。
+  用例在 `ConPtyWindowsTest`，其它平台自动 skip。
+- **服务形态**：不再依赖桌面（`DesktopIntegration.supported()` 与终端无关了）。session 0 下
+  也能起 ConPTY——这是本次换掉桌面终端的直接原因。
+- **已知差异**：Windows 没有能打到伪控制台子进程的礼貌信号，`terminate` 是「宽限后
+  `TerminateJobObject`」；一个实例终端 = 一个 `conhost.exe`；只承诺 64 位 JVM。
+- **未验证**：arm64 Windows；真机中文输入法（候选框/回显）；真实品牌的 TUI 长时间运行。
+  这几条没有一手证据，按「未验证」对待，不要写成已支持。

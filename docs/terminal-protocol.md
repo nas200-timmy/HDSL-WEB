@@ -116,13 +116,13 @@ Claude Web 专用：列出这次能进入的 Claude Code 内核。别的品类�
   默认（社区引擎优先）；传了但那份没装，返回 409 `terminal_failed` 说明缺什么，**不会**
   静默换成另一个内核。
 
-请求体可以是 `{}`；Windows 桌面模式要求 `{"confirm":"open-desktop-terminal"}`。
+请求体可以是 `{}`。
 
 客户端在界面上把开发者密码、内核选择都画成**终端窗口之前的对话框**：密码通过（必要时先
 设置）→ 需要时选内核 → 才换成终端。协议没变，顺序是客户端行为——两个客户端都靠上面那个
 `developer/status` 把顺序对齐，而不是等到 403 才知道要提权。
 
-POSIX 面板返回：
+面板返回（四个平台同一种，包括 Windows 10 1809+）：
 
 ```json
 {
@@ -135,11 +135,9 @@ POSIX 面板返回：
 }
 ```
 
-Windows 面板返回（没有 ticket，也没有 PTY——终端开在面板所在机器的桌面上）：
-
-```json
-{ "mode": "desktop", "instance": "…", "hint": "…" }
-```
+`mode:"desktop"` 是**旧面板**的形态（Windows 上把控制台开在面板所在机器的桌面，响应体只有
+`instance`/`brand`/`hint`，没有 ticket）。当前版本的 Windows 面板也返回 `mode:"pty"`；
+客户端保留这个分支只是为了连老面板。
 
 `ws` 是**面板内部路径**（根相对），不是公开地址：面板挂在反向代理的 `/hdsl` 下时它仍是
 `/ws/terminal/<ticket>`，由客户端把挂载点前缀加上去（浏览器读 `<base href>` /
@@ -161,7 +159,8 @@ Windows 面板返回（没有 ticket，也没有 PTY——终端开在面板所�
 | 409 | `terminal_already_open` | 同实例已有终端（正常路径是重连，不该看到这个） |
 | 409 | `terminal_failed: …` | 启动 TUI 失败，冒号后是原因（客户端要把这段原因原样给用户，它是可行动的那半句） |
 | 409 | 无 code 前缀 | dsh 实例没装终端插件：整个错误体就是一句中文说明（`未安装终端界面插件，请先到实例的「安装」页安装一个 TUI 插件（推荐 …）。`）。它不带 `code:` 前缀，所以客户端要按这句话本身认出来；语义上是**策略拒绝**，重试无用 |
-| 400 | `confirmation_required` | Windows 面板缺 `confirm` |
+| 409 | `terminal_unsupported_platform: …` | 这台机器没有伪终端：Windows 上 build < 17763（或 `CreatePseudoConsole` 不在），Win7/8.1 属于此列。冒号后带实际 build 号，**不回落任何桌面窗口** |
+| 400 | `confirmation_required` | 仅旧面板的桌面终端模式会回这个；当前版本不会再出现 |
 | 404 | `instance not found` / `no such instance` | 实例不存在 |
 
 ### `DELETE /api/instances/{id}/terminal`

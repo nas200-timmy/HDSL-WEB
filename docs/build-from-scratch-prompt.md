@@ -327,7 +327,11 @@ agent 以面板用户身份跑，同 uid 下可以直接改写 `users.json` / `d
 - 实例响应若是 br/zstd，改写页面会把字节弄坏：见 §2.3。
 
 ### 5.11 Windows
-- 没有 POSIX PTY：终端在桌面开控制台，杀不掉（E-Stop 里要如实说明）。
+- 没有 POSIX PTY：实例终端走 ConPTY（Win10 1809 / build 17763 起），进程树靠 Job Object。
+  低于门槛的机器 409 并带 build 号，**不要**回落桌面窗口。
+- ConPTY 的子进程必须用 `STARTF_USESTDHANDLES` + 三个 NULL 启动，否则 `CreateProcess` 会把
+  面板自己的 stdout 拷给 agent：画面写进面板日志，浏览器里一片空白，而 `exit` 码一切正常
+  （这条只有真机跑得出来，Linux 上编译一次都没有）。
 - 没有 0600 语义：凭据文件可能被同机其它账户读到，文档里写清楚。
 - 路径与 `chmod` 相关代码要 `try { … } catch (UnsupportedOperationException) {}`，别让面板在这些地方崩。
 

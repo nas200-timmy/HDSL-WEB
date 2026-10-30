@@ -25,8 +25,9 @@ type instanceList struct {
 }
 
 // Terminal is the body of POST .../terminal. Mode is "pty" (Ticket and WS are
-// set) or "desktop" (the panel runs on Windows and has no PTY to attach to;
-// Hint explains that to the user).
+// set) or "desktop" (an older panel ran the console on the panel machine's own
+// desktop and had no PTY to attach to; Hint explains that to the user). Panels
+// on Windows answer "pty" from Windows 10 1809 on.
 type Terminal struct {
 	Mode     string `json:"mode"`
 	Protocol int    `json:"protocol"`

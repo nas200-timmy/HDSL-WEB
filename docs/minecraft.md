@@ -1021,18 +1021,19 @@ MC 服务端与 AI agent 是同一类工作负载：执行第三方代码、不�
 
 ### 15.2 Windows 裸部署
 
-- **控制台不是浏览器终端**。Windows 上没有 PTY，现有实例终端走
-  `DesktopTerminal`（`cmd.exe /c start … cmd.exe /k`，在宿主机桌面开一个窗口），
-  不是 `/ws/terminal`。这带来两个直接后果：
-  - 远程用户看不到这个窗口；
-  - 关窗是否杀进程取决于 `cmd.exe /k` 的行为，**不能直接拿来当 MC 控制台**。
+- **实例终端已可用，MC 控制台仍是 pipe**。2026-10-31 起 Windows 的实例终端走 ConPTY
+  （`docs/web-shell.md` §7.1），浏览器里是真终端；MC 的 `McRuntime` 仍走 `pipes`
+  （headless 控制台），未跟着切。后续顺序：先让 `PTY_SUPPORTED` 加上 WINDOWS、把
+  `launchPipe` / `consoleMode` 的 `"pipe"` 分支与 `sendCommand` 的双路径删掉，再单独一轮
+  真机验证（从管道变控制台是行为变化，不跟这次混在一起）。
 - **第一版策略**：Windows 上 MC 以 headless 方式运行，浏览器只提供**日志流 + 命令输入**
   （写 stdin 或走 RCON），不承诺原生控制台；原生窗口标注为实验性/后续。
 - **存储根**：同 §7.1，可弹宿主机原生目录选择器；没有桌面会话时走配置。
 - **`server.jar`**：不要用符号链接（需要权限/开发者模式）；同卷用硬链接，跨卷只能复制。
   更新 jar 时文件被 JVM 占用会失败——先停再换，或换版本目录后切换链接。
 - **路径**：避免 `%TEMP%`；注意 260 字符长路径（需要 `\\?\` 前缀或系统 LongPaths）。
-- **服务形态**：NSSM/WinSW/计划任务。以服务账户运行时桌面窗口不可见，控制台方案要相应调整。
+- **服务形态**：NSSM/WinSW/计划任务。实例终端在 session 0 下也能用（ConPTY 不需要桌面），
+  但 MC 的原生窗口方案仍然要相应调整。
 
 ### 15.3 macOS
 

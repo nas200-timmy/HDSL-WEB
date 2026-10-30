@@ -2,6 +2,34 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 · Windows 面板的实例终端改为浏览器 PTY（ConPTY）；删除桌面控制台回落
+
+> 起因：Windows 上点「终端」开的不是 PTY，而是一个宿主机桌面窗口（`cmd.exe /c start …
+> cmd.exe /k <脚本>`）。它的四个后果都不是能修的细节：脚本里的 `/k` 让 TUI 退出后用户站在
+> cmd 提示符上；远程用户根本看不到这个窗口；面板装成服务（session 0）时没有桌面，终端直接
+> 409；E-Stop 也杀不掉它。
+
+- 新增 `web/terminal/pty/ConPty.java`：`CreatePseudoConsole` + `CreateProcessW`，系统自带，
+  不随包发任何二进制、不加依赖。门槛是 **Win10 1809（build 17763）**，同时探测
+  `kernel32!CreatePseudoConsole` 是否真的在——版本号是给人看的原因，符号是事实。
+  低于门槛的机器终端接口 409 `terminal_unsupported_platform`，文案带实际 build 号，
+  **不回落任何桌面窗口**；Win7/8.1 明确不支持（不引 winpty）。
+- 启动是 **argv-only**：`lpApplicationName` 单独给程序，命令行按 MSVCRT 规则拼；
+  `.cmd`/`.bat`/`.ps1`/`.com` 一律拒绝，因为 `CreateProcess` 会悄悄把它们交给 `cmd.exe`，
+  等于在链路里塞回一个 shell；`argv[0]` 还必须是存在的绝对路径。
+- 进程树归 Job Object（`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`），`CREATE_SUSPENDED` → 入 Job →
+  `ResumeThread`：终端结束时整棵树一起走，面板进程被强杀时也一样。
+- 删除 `DesktopTerminal`（以及它的 `.cmd` 脚本、`{"mode":"desktop"}` 响应、`open-desktop-terminal`
+  确认短语和它的测试）：能重新打开 `cmd /k` 的开关就是这次要消掉的那条攻击面，所以不留配置。
+  前端与 Go 客户端的 `desktop` 分支保留，只对旧面板有意义。
+- 启动横幅与 `-doctor` 改成报告能力：`terminal : ConPTY (Windows 10.0 build 19045)`，或者
+  `unsupported: needs build 17763, this is <n>`。
+- 平台语义差异（写进 `docs/web-shell.md` §7.1）：Windows 没有能打到伪控制台子进程的礼貌信号，
+  `terminate` 是「宽限后 `TerminateJobObject`」，不等价于 SIGTERM；一个终端 = 一个 `conhost.exe`；
+  只承诺 64 位 JVM。
+- Linux/macOS 一个字节都没改；上位 `TerminalSession` / `TerminalManager` / WebSocket / 前端 / Go 客户端
+  一行都没改。
+
 ## v0.6.36 — 2026-10-31 · 容器内置 ffmpeg；MC 复用旧存档；eula 兼容
 
 > 起因三件：实例里的 agent 要截取视频帧，发现容器没有 ffmpeg，正准备从 npm 拉
