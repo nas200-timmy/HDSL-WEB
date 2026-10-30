@@ -601,6 +601,8 @@ export interface ExternalInstance {
   hasApiKey?: boolean;
   /** 仅 zcode：已保存的 API Base URL（编辑表单回填用） */
   baseUrl?: string;
+  /** 仅 zcode：这个实例工作的目录（创建时可选，之后只读） */
+  workspacePath?: string;
 }
 
 // ---------- 全局应用状态 ----------

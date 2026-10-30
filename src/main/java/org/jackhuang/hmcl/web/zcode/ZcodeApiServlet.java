@@ -290,7 +290,12 @@ public final class ZcodeApiServlet extends HttpServlet {
         String name = stringField(body, "name");
         String baseUrl = stringField(body, "baseUrl");
         String apiKey = stringField(body, "apiKey");
-        ZcodeInstance created = manager.create(name, baseUrl, apiKey);
+        String workspace = stringField(body, "workspacePath");
+        // A path the operator typed is taken as given: the instance works where they say,
+        // not in a directory the panel made up for it.
+        java.nio.file.Path workspacePath = workspace == null || workspace.isBlank()
+                ? null : java.nio.file.Path.of(workspace.trim());
+        ZcodeInstance created = manager.create(name, baseUrl, apiKey, workspacePath);
         Json.writePreservingNulls(response, HttpServletResponse.SC_CREATED,
                 Map.of("instance", instanceJson(created)));
     }

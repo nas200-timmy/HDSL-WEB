@@ -31,6 +31,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// The experimental ZCode runtime against the `fake-zcode` node stub: the
@@ -50,6 +51,35 @@ class ZcodeRuntimeTest {
 
     private ZcodeInstanceManager manager() {
         return new ZcodeInstanceManager(dataDir.resolve("zcode/instances"));
+    }
+
+    /// An instance can be pointed at a project the operator already has; the launch
+    /// and the terminal both take the recorded path, not the one the panel would have
+    /// invented.
+    @Test
+    void anInstanceCanWorkInAFolderTheOperatorChose(@TempDir Path project) throws Exception {
+        ZcodeInstanceManager manager = manager();
+        Path chosen = project.resolve("my-project");
+        ZcodeInstance instance = manager.create("lab", null, null, chosen);
+
+        assertEquals(chosen.toAbsolutePath().normalize(), manager.workspaceDirectory(instance));
+        assertTrue(java.nio.file.Files.isDirectory(chosen), "the workspace is created eagerly");
+        assertEquals(chosen.toString(), instance.workspacePath());
+
+        // No choice recorded means the instance's own directory, as before.
+        ZcodeInstance own = manager.create("own", null, null);
+        assertEquals(manager.workspaceDirectory(own),
+                manager.workspaceDirectory(own));
+        assertTrue(manager.workspaceDirectory(own).endsWith("workspace"), manager.workspaceDirectory(own).toString());
+    }
+
+    /// A path the operator typed has to be unambiguous: a relative one would depend on
+    /// the panel's own working directory, which is not theirs to know.
+    @Test
+    void aRelativeWorkspaceIsRefused() {
+        ZcodeInstanceManager manager = manager();
+        assertThrows(ZcodeException.class,
+                () -> manager.create("lab", null, null, Path.of("relative-project")));
     }
 
     @Test

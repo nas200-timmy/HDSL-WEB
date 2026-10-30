@@ -476,7 +476,7 @@ export const api = {
 
   zcodeInstances: () => request<{ instances: ZcodeInstance[] }>("/api/zcode/instances"),
 
-  createZcodeInstance: (body: { name: string; baseUrl?: string; apiKey?: string }) =>
+  createZcodeInstance: (body: { name: string; baseUrl?: string; apiKey?: string; workspacePath?: string }) =>
     request<{ instance: ZcodeInstance }>("/api/zcode/instances", jsonInit("POST", body)),
 
   patchZcodeInstance: (id: string, body: { name?: string; baseUrl?: string; apiKey?: string }) =>

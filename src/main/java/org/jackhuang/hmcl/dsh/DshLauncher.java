@@ -270,6 +270,16 @@ public final class DshLauncher {
             throw new DshException("Instance " + instance.id()
                     + " has no DeepSeek Harness of its own; " + script + " is missing");
         }
+        // A tree that was written by an interrupted install still has `bin.js`; what it
+        // does not have is every package. Refusing it here turns "the agent answers every
+        // request with 'waiting for workingDirectory'" into one sentence that says what
+        // happened and what to do.
+        int empty = org.jackhuang.hmcl.dsh.DshVersionManager.emptyPackages(instance.dshDirectory());
+        if (empty > 0) {
+            throw new DshException("实例 " + instance.id() + " 的 DeepSeek Harness 安装不完整（"
+                    + empty + " 个包目录是空的）：上一次安装被打断了。请在实例页把版本重装一次并等它装完；"
+                    + "用这棵树启动只会得到一串 'waiting for workingDirectory'。");
+        }
 
         Path workspace = instance.workspacePath();
         try {

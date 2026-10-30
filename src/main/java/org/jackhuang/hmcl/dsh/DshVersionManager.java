@@ -802,6 +802,21 @@ public final class DshVersionManager {
             restorePrevious(previous, target);
             throw new DshException("pnpm reported success but " + bin + " is missing");
         }
+        // `bin.js` is one file; the store behind it can still have holes. An install that
+        // was interrupted (the panel stopped, the disk filled) leaves empty package
+        // directories, and the harness then fails at import time with a cascade that
+        // names nothing. Refuse the tree here, where the words can say what to do.
+        int empty = emptyPackages(target);
+        if (empty > 0) {
+            FileUtils.deleteQuietly(target);
+            FileUtils.deleteQuietly(flag);
+            restorePrevious(previous, target);
+            throw new DshException("pnpm reported success but " + empty
+                    + " package directories under " + target.resolve("node_modules/.pnpm")
+                    + " are empty, so the install did not finish. Install this version again"
+                    + " and let it finish — an instance started from this tree would fail with"
+                    + " 'waiting for workingDirectory'.");
+        }
 
         // The tree is already where the instance will use it — the flag comes down, and
         // the version kept aside for a rollback is no longer needed.
@@ -809,6 +824,60 @@ public final class DshVersionManager {
         FileUtils.deleteQuietly(previous);
 
         LOG.info("Installed DSH " + version + " for " + instance.id() + " into " + target);
+    }
+
+    /// Counts the package directories of a pnpm store that hold no `package.json`.
+    ///
+    /// "The entry exists" says nothing about its contents. An install interrupted while
+    /// the store was being written leaves `.pnpm/<id>/node_modules/<name>` as an **empty
+    /// directory**, and the tree still looks installed — the launcher script is there,
+    /// the manifest is there — until the harness starts and a plugin cannot import its
+    /// dependency. The visible symptom names none of it: a dsh instance that is half
+    /// installed answers every session request with a cascade of
+    /// `waiting for workingDirectory`, because the plugin that provides that service is
+    /// the one whose dependency is missing.
+    ///
+    /// `bin.js` is not enough of a check on its own (it is a single file, written before
+    /// the store's links settle), so this walks the store and counts the holes.
+    ///
+    /// @param dshDirectory the instance's `dsh/` directory
+    /// @return how many package directories are empty; `0` when the tree looks complete
+    ///         or cannot be inspected at all (an unreadable tree is not evidence)
+    public static int emptyPackages(Path dshDirectory) {
+        Path store = dshDirectory.resolve("node_modules").resolve(".pnpm");
+        if (!Files.isDirectory(store)) {
+            return 0;
+        }
+        int empty = 0;
+        try (java.util.stream.Stream<Path> entries = Files.list(store)) {
+            for (Path entry : entries.toList()) {
+                Path nested = entry.resolve("node_modules");
+                if (!Files.isDirectory(nested)) {
+                    continue;
+                }
+                try (java.util.stream.Stream<Path> packages = Files.list(nested)) {
+                    for (Path candidate : packages.toList()) {
+                        String name = candidate.getFileName().toString();
+                        if (name.startsWith("@")) {
+                            // A scoped package: `.pnpm/<id>/node_modules/@scope/name`.
+                            try (java.util.stream.Stream<Path> scoped = Files.list(candidate)) {
+                                for (Path packageDir : scoped.toList()) {
+                                    if (!Files.isRegularFile(packageDir.resolve("package.json"))) {
+                                        empty++;
+                                    }
+                                }
+                            }
+                        } else if (!Files.isRegularFile(candidate.resolve("package.json"))) {
+                            empty++;
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            LOG.warning("Could not inspect the package store under " + store, e);
+            return 0;
+        }
+        return empty;
     }
 
     /// Requires a usable Node runtime.

@@ -44,6 +44,22 @@
   `>=0.2.0-rc.2 <0.2.2-0`——`-0` 是 semver 的"含预发布"写法，裸 `<0.2.2` 会按数值比较把
   `0.2.2-alpha.2` 也放进来。不适配时面板直说，并推荐 ACP 版终端（它跨两条线都能跑）。
 
+## 未发布 · dsh 半安装的树会被当成已安装；ZCode 的工作区不能选
+
+> 起因：新建会话失败，错误是一长串 `agent-preset/invalid … waiting for workingDirectory`。
+> 那串话没有一句提到真正的原因：实例里那份 dsh 的 `node_modules` 是**半成品**。
+
+- **半安装检测**（`DshVersionManager.emptyPackages`）：pnpm 的虚拟仓库被中断时，包目录会
+  留下空壳——目录在、`package.json` 不在。树看起来完全正常（`bin.js` 也在），直到 harness
+  启动、某个插件 import 不到依赖，于是依赖 `workingDirectory` 服务的一整排插件全部
+  "waiting for"，报错里全是下游症状。现在两处都查：安装成功后校验整棵仓库（有空壳就回滚并
+  说明），启动前再查一次（报"安装不完整，请重装这个版本"），不再让用户对着
+  `waiting for workingDirectory` 猜。
+  实测：这台机器上那个 `dsh-0.2.1-rc.1` 实例 **132 个包目录是空的**（2930 个正常）。
+- **ZCode 选工作区**：创建实例时可以填一个绝对路径，实例就在那个项目里干活（留空仍是
+  `<实例>/workspace`）。路径写进实例记录，启动与终端读同一份；相对路径直接拒绝（它取决于
+  面板自己的工作目录，不是操作者该知道的东西）。建好之后只读——换工作区等于换一个项目。
+
 ## 未发布 · 启动 ZCode 实例要求系统自己装 node
 
 > 起因：裸 Windows 部署上点「启动」ZCode 实例，`Failed to start the ZCode process:

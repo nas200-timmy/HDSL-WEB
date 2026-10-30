@@ -150,6 +150,26 @@ public final class ZcodeInstanceManager {
     /// @throws ZcodeException when the name is blank or the instance cannot be written
     public ZcodeInstance create(String name, @Nullable String baseUrl, @Nullable String apiKey)
             throws ZcodeException {
+        return create(name, baseUrl, apiKey, null);
+    }
+
+    /// Creates an instance that works on `workspace` instead of its own directory.
+    ///
+    /// A ZCode instance usually points at a project the operator already has; asking them
+    /// to move or copy it into `<instance>/workspace` is the kind of thing that makes a
+    /// tool feel like it was built for somebody else. The path is taken as given (made
+    /// absolute), created when missing, and recorded — the launch and the terminal both
+    /// read it back, so an instance has exactly one answer for "where does it work".
+    ///
+    /// @param name      the display name; must not be blank
+    /// @param baseUrl   the provider base URL, or `null`/blank for the default
+    /// @param apiKey    the provider API key, or `null`/blank for none
+    /// @param workspace the directory to work in, or `null` for the instance's own
+    /// @return the created instance
+    /// @throws ZcodeException when the name is blank, the path is not absolute, or the
+    ///                        instance cannot be written
+    public ZcodeInstance create(String name, @Nullable String baseUrl, @Nullable String apiKey,
+                               @Nullable Path workspace) throws ZcodeException {
         String normalized = name == null ? "" : name.trim();
         if (normalized.isEmpty()) {
             throw new ZcodeException("A ZCode instance needs a name");
@@ -157,13 +177,23 @@ public final class ZcodeInstanceManager {
 
         String id = newTokenLike(9);
         Path directory = root.resolve(id);
+        Path workspacePath = workspaceDirectoryOf(directory);
+        if (workspace != null) {
+            if (!workspace.isAbsolute()) {
+                throw new ZcodeException("工作区必须是绝对路径：" + workspace);
+            }
+            workspacePath = workspace.toAbsolutePath().normalize();
+            if (Files.exists(workspacePath) && !Files.isDirectory(workspacePath)) {
+                throw new ZcodeException("工作区不是目录：" + workspacePath);
+            }
+        }
         ZcodeInstance instance = new ZcodeInstance(id, normalized,
-                workspaceDirectoryOf(directory).toString(),
+                workspacePath.toString(),
                 baseUrl, apiKey, newTokenLike(32), 0, System.currentTimeMillis());
 
         try {
             Files.createDirectories(dataDirectoryOf(directory));
-            Files.createDirectories(workspaceDirectoryOf(directory));
+            Files.createDirectories(workspacePath);
             Files.createDirectories(logDirectoryOf(directory));
         } catch (IOException e) {
             throw new ZcodeException("Failed to create " + directory, e);
@@ -235,6 +265,10 @@ public final class ZcodeInstanceManager {
     /// @param instance the instance
     /// @return the workspace directory
     public Path workspaceDirectory(ZcodeInstance instance) {
+        String recorded = instance.workspacePath();
+        if (recorded != null && !recorded.isBlank()) {
+            return Path.of(recorded);
+        }
         return workspaceDirectoryOf(instanceDirectory(instance.id()));
     }
 

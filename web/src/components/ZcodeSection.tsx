@@ -56,7 +56,7 @@ export function ZcodeSection() {
   const [pluginsTarget, setPluginsTarget] = useState<ExternalInstance | null>(null);
   const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; inst: ExternalInstance } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ name: "", baseUrl: DEFAULT_BASE_URL, apiKey: "" });
+  const [form, setForm] = useState({ name: "", baseUrl: DEFAULT_BASE_URL, apiKey: "", workspace: "" });
   const [formError, setFormError] = useState<string | null>(null);
   const [terminalTarget, setTerminalTarget] = useState<TerminalTargetInfo | null>(null);
   /// Web Shell 总开关（开发者模式里控制）与 HTTPS 状态；任一不满足就不显示终端入口
@@ -109,13 +109,19 @@ export function ZcodeSection() {
       name: instances.length === 0 ? I18N["dsh.brand.zcode.short"] : "",
       baseUrl: DEFAULT_BASE_URL,
       apiKey: "",
+      workspace: "",
     });
     setFormError(null);
     setCreateOpen(true);
   };
 
   const openEdit = (inst: ExternalInstance) => {
-    setForm({ name: inst.name, baseUrl: inst.baseUrl ?? DEFAULT_BASE_URL, apiKey: "" });
+    setForm({
+      name: inst.name,
+      baseUrl: inst.baseUrl ?? DEFAULT_BASE_URL,
+      apiKey: "",
+      workspace: inst.workspacePath ?? "",
+    });
     setFormError(null);
     setEditTarget(inst);
   };
@@ -140,6 +146,8 @@ export function ZcodeSection() {
         name: form.name.trim(),
         baseUrl: form.baseUrl.trim(),
         apiKey: form.apiKey.trim() || undefined,
+        // 空 = 用实例自己的 workspace 目录（面板替你建）
+        workspacePath: form.workspace.trim() || undefined,
       });
       toast("success", "ZCode 实例已创建（实验性功能，不保证可用）");
       setCreateOpen(false);
@@ -411,6 +419,22 @@ export function ZcodeSection() {
             autoFocus
             value={form.name}
             onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+          />
+        </div>
+        <div className="form-row">
+          <span className="form-label">工作区</span>
+          <input
+            className="input"
+            // 工作区决定 agent 在哪个目录里干活；建好之后不再改（改了等于换一个项目，
+            // 会话与相对路径都会对不上），所以编辑时只显示、不接收输入。
+            readOnly={editTarget !== null}
+            placeholder={
+              editTarget
+                ? form.workspace
+                : "留空 = 实例目录下的 workspace；要指向现有项目就填它的绝对路径"
+            }
+            value={form.workspace}
+            onChange={(e) => setForm((f) => ({ ...f, workspace: e.target.value }))}
           />
         </div>
         <div className="form-row">
