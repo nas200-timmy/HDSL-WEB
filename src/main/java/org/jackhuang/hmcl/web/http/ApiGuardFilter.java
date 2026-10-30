@@ -28,7 +28,6 @@ import org.jackhuang.hmcl.util.logging.Logger;
 import org.jetbrains.annotations.NotNullByDefault;
 
 import java.io.IOException;
-import java.util.Locale;
 
 /// Catches whatever a servlet lets escape. An NPE in a handler is a 500 like
 /// any other, but Jetty's default error page is HTML and `/api/*` speaks JSON
@@ -43,21 +42,31 @@ public final class ApiGuardFilter implements Filter {
             throws IOException, ServletException {
         // H2 (glm-5.2): reject oversized request bodies before they reach a handler.
         //
-        // Everything except multipart: handlers on this mapping parse JSON by reading the whole
-        // body into memory, which is the OOM the cap exists for, and they do that whatever the
-        // request's Content-Type says. Multipart uploads share the mapping but stream to a
-        // staging file — a plugin `.tgz` (50 MiB) and a pack `.dspack` (200 MiB, the documented
-        // cap) — so a cap keyed on length alone refused them at 1 MiB.
+        // The cap exists because the JSON handlers on this mapping read the whole body into
+        // memory. Two details matter more than the number:
+        //
+        // 1. **The cap comes from the path, not from `Content-Type`.** Deciding by content type
+        //    meant anyone could label a 4 GB body `multipart/form-data` or `application/zip` and
+        //    walk past the cap on an endpoint that still parsed it as JSON. Only the routes that
+        //    genuinely stream to a file are exempt, and they are listed by name below.
+        // 2. **Unknown length is refused, not trusted.** `Content-Length` is absent on a chunked
+        //    request, and `getContentLengthLong()` then answers -1 — the old check compared only
+        //    `> 1 MiB`, so a chunked body of any size sailed through. A JSON endpoint has no
+        //    reason to accept chunked input; an upload route does, so the rule applies to the
+        //    former only.
         if (request instanceof HttpServletRequest req && response instanceof HttpServletResponse http) {
-            String contentType = req.getContentType();
-            String type = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
-            // Streamed uploads: multipart (plugin/pack) and a raw world zip
-            // (`/api/mc/instances/{id}/world/import`). Both go to a file; only
-            // the in-memory JSON parsers need the cap.
-            boolean streamed = type.startsWith("multipart/form-data") || type.startsWith("application/zip");
-            if (!streamed && req.getContentLengthLong() > 1048576) {
-                Json.error(http, 413, "payload too large");
-                return;
+            String path = req.getRequestURI() == null ? "" : req.getRequestURI();
+            if (expectsBody(req.getMethod()) && !streamed(path)) {
+                long length = req.getContentLengthLong();
+                if (length < 0) {
+                    Json.error(http, HttpServletResponse.SC_LENGTH_REQUIRED,
+                            "content-length required: chunked bodies are not accepted here");
+                    return;
+                }
+                if (length > MAX_JSON_BODY_BYTES) {
+                    Json.error(http, 413, "payload too large");
+                    return;
+                }
             }
         }
         try {
@@ -71,6 +80,27 @@ public final class ApiGuardFilter implements Filter {
             Logger.LOG.warning("Uncaught exception at " + path + ": " + t);
             Json.error(http, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "internal error");
         }
+    }
+
+    /// 1 MiB：JSON 处理器会把正文整段读进内存，这个上限就是为它设的。
+    static final int MAX_JSON_BODY_BYTES = 1048576;
+
+    /// 这些路由把正文流式写文件（multipart 暂存或原始 zip），不适用 JSON 上限。
+    ///
+    /// 名单必须按**路径**写：按 `Content-Type` 判断等于让调用方自己决定走不走闸门。
+    static boolean streamed(String path) {
+        return path.equals("/api/settings/tls")
+                || path.equals("/api/wallpapers")
+                || path.startsWith("/api/wallpapers/")
+                || path.startsWith("/api/packs/")
+                || path.startsWith("/api/plugins/")
+                || path.endsWith("/plugins/install")
+                || path.endsWith("/world/import");
+    }
+
+    /// 只有这三个方法可能带正文；GET/HEAD/DELETE 没有正文，不必要求长度。
+    static boolean expectsBody(String method) {
+        return "POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method);
     }
 
     /// Rethrows what [#doFilter] is declared to throw; anything else becomes a
