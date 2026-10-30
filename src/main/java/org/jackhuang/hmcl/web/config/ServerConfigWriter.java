@@ -227,6 +227,42 @@ public final class ServerConfigWriter {
         writeAtomically(yamlFile, root);
     }
 
+    /// Records (or clears) the acknowledged window in which an unverifiable
+    /// outbound certificate is accepted: `network.accept_unverified_until`.
+    ///
+    /// Kept in the file rather than in memory because the consent is meant to
+    /// survive the restart that usually follows (a new jar, a new network); the
+    /// instant itself is the limit, so a stale entry loads as "expired" and the
+    /// panel is strict again without anyone having to remember.
+    ///
+    /// @param dataDir the directory `server.yaml` lives in
+    /// @param until   when the window closes, or `null` to remove it
+    /// @throws IOException when the file cannot be read or written
+    public static void acceptUnverifiedTls(Path dataDir, @Nullable java.time.Instant until) throws IOException {
+        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
+        Map<String, Object> root = readExisting(yamlFile);
+
+        Object existing = root.get("network");
+        Map<String, Object> network = new LinkedHashMap<>();
+        if (existing instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                network.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        if (until == null) {
+            network.remove("accept_unverified_until");
+        } else {
+            network.put("accept_unverified_until", until.toString());
+        }
+        if (network.isEmpty()) {
+            root.remove("network");
+        } else {
+            root.put("network", network);
+        }
+
+        writeAtomically(yamlFile, root);
+    }
+
     /// Writes the document by replacing the file, so a half-written
     /// `server.yaml` is never what a restart reads. The staging file carries
     /// owner-only permissions: the document can hold a PKCS#12 password.

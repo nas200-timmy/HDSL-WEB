@@ -336,6 +336,9 @@ public final class HdslServer {
         // Registered before the `/api/settings/*` holder below and matched by its longer prefix:
         // the download source is a launcher setting, and TLS is the other thing this path serves.
         context.addServlet(new ServletHolder(new RegistrySettingsApiServlet()), "/api/settings/registry/*");
+        // 出站 TLS 的一次性授权（代理/加速器的根证书不在 Java 的信任库里时）。
+        context.addServlet(new ServletHolder(
+                new org.jackhuang.hmcl.web.http.NetworkApiServlet(config)), "/api/network/*");
         // 日志保留窗口。比 `/api/settings/*` 的 TLS 更长的前缀，Jetty 按最长匹配。
         context.addServlet(new ServletHolder(new LogRetentionApiServlet(
                 config, developerElevation, authService, tlsActive)), "/api/settings/logs/*");

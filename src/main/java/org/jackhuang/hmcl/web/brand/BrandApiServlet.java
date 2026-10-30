@@ -236,6 +236,17 @@ public final class BrandApiServlet extends HttpServlet {
 
     private void versions(Brand brand, PathRef ref, HttpServletResponse response) throws IOException {
         List<String> versions = BrandCatalog.versions(brand);
+        if (versions.isEmpty()) {
+            // An empty picker is indistinguishable from "this project has no releases",
+            // and the certificate failure behind it is the one thing a person can act
+            // on. Say it here, in the place they are looking.
+            org.jackhuang.hmcl.util.platform.OutboundTls.Trouble trouble = BrandCatalog.trouble(brand);
+            if (trouble != null) {
+                Json.error(response, 409, "读不到 " + brand.id() + " 的版本列表。\n\n"
+                        + org.jackhuang.hmcl.util.platform.OutboundTls.explain(trouble));
+                return;
+            }
+        }
         JsonObject body = new JsonObject();
         JsonArray array = new JsonArray();
         versions.forEach(array::add);

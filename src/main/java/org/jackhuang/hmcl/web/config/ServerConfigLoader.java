@@ -159,12 +159,43 @@ public final class ServerConfigLoader {
         if (root.containsKey("logs")) {
             applyLogs(config, mapField(root, "logs"));
         }
+        if (root.containsKey("network")) {
+            applyNetwork(config, mapField(root, "network"));
+        }
         for (String key : root.keySet()) {
             switch (key) {
                 case "bind_host", "port", "public_base_url", "https", "auth", "web_shell",
-                        "developer_guard", "mc", "logs" -> {
+                        "developer_guard", "mc", "logs", "network" -> {
                 }
                 default -> logger.warning(yamlFile + ": unknown key `" + key + "` ignored");
+            }
+        }
+    }
+
+    /// `network:` — 出站 TLS 的一次性授权截止时间。
+    ///
+    /// 写进来的必须是 ISO-8601 时刻；解析不了就拒绝启动，而不是悄悄当成"严格"或
+    /// "永久"——两个方向都是安全上的错答案。
+    private static void applyNetwork(ServerConfig config, Map<String, Object> section) {
+        if (section.containsKey("accept_unverified_until")) {
+            String raw = stringField(section, "accept_unverified_until");
+            if (raw == null || raw.isBlank()) {
+                config.network.acceptUnverifiedUntil = null;
+            } else {
+                try {
+                    config.network.acceptUnverifiedUntil = java.time.Instant.parse(raw.trim());
+                } catch (java.time.format.DateTimeParseException e) {
+                    throw new ConfigException("network.accept_unverified_until is not an ISO-8601 instant: `"
+                            + raw + "`");
+                }
+            }
+        }
+        for (String key : section.keySet()) {
+            switch (key) {
+                case "accept_unverified_until" -> {
+                }
+                default -> throw new ConfigException(
+                        "network: unknown key `" + key + "` (only `accept_unverified_until` is accepted)");
             }
         }
     }

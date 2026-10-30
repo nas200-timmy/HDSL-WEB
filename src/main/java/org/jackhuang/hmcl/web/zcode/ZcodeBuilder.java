@@ -377,11 +377,27 @@ public final class ZcodeBuilder {
                         + " — check the tag or branch name");
             }
         } catch (IOException e) {
-            throw new ZcodeException("could not download the ZCode source from " + url, e);
+            throw new ZcodeException("could not download the ZCode source from " + url
+                    + explainIfCertificate(e), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new ZcodeException("the source download was interrupted", e);
         }
+    }
+
+    /// The half-sentence that turns "download failed" into something a person can
+    /// act on when the failure is a certificate one.
+    ///
+    /// A TLS-inspecting proxy makes every download from GitHub fail here, and the
+    /// bare URL nobody can read is what the report said before.
+    private static String explainIfCertificate(IOException error) {
+        if (!org.jackhuang.hmcl.util.platform.OutboundTls.isTrustFailure(error)) {
+            return "";
+        }
+        org.jackhuang.hmcl.util.platform.OutboundTls.recordTrouble("codeload.github.com", error);
+        return "：TLS 证书没通过校验（" + error.getMessage() + "）。这台机器上可能有反向代理、抓包工具"
+                + "或 GitHub 加速器在转发 HTTPS，它的根证书不在 Java 的信任库里；确认这是你自己的配置后，"
+                + "在「设置 → 网络」里授权一次（一次性、最长 24 小时），否则请检查网络。";
     }
 
     /// Installs the built distribution: reads the `latest.json` the build wrote,

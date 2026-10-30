@@ -18,8 +18,10 @@
 package org.jackhuang.hmcl.web.config;
 
 import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
 
 import java.nio.file.Path;
+import java.time.Instant;
 
 /// The declared configuration of the HDSL-web server, as described in
 /// docs/plan.md ("声明式 HTTPS 设计" and "认证设计").
@@ -230,5 +232,22 @@ public final class ServerConfig {
         public volatile int auditDays = org.jackhuang.hmcl.web.logs.LogRetention.DEFAULT_AUDIT_DAYS;
         /// 面板日志保留天数（`logs.panel_days`）。
         public volatile int panelDays = org.jackhuang.hmcl.web.logs.LogRetention.DEFAULT_PANEL_DAYS;
+    }
+
+    /// `network:` — what the panel is allowed to assume about the machine's
+    /// outbound TLS.
+    ///
+    /// 只有一个字段：一次"我确认这是我自己的代理"的授权何时失效。
+    ///
+    /// 它不是开关，是**有期限的确认**：一台装了 FastGithub / 抓包工具 / 企业网关的
+    /// Windows 机器上，代理的根证书在 Windows 证书库里、不在 Java 的 cacerts 里，
+    /// 于是浏览器打得开、面板报 `PKIX path building failed`。面板不自己跳过校验，
+    /// 它把原因说清楚，等人确认；确认记在这里，重启后仍在期内生效，过期自动收紧。
+    public final NetworkConfig network = new NetworkConfig();
+
+    public static final class NetworkConfig {
+        /// 授权到什么时候为止（`network.accept_unverified_until`，ISO-8601）。
+        /// `null` 表示严格校验——这是默认，也是没有记录时的意思。
+        public volatile @Nullable Instant acceptUnverifiedUntil;
     }
 }

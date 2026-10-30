@@ -55,12 +55,6 @@ public final class Main {
         // resource read into "ZipException: invalid LOC header", and the messages
         // that fail should be able to say so.
         org.jackhuang.hmcl.util.PanelJar.remember(Main.class);
-        // Trust what Windows trusts, before any client is built. A TLS-inspecting
-        // proxy (antivirus, gateway, a GitHub accelerator) puts its root in the
-        // Windows store and not in the JVM's `cacerts`, which is why the browser can
-        // reach a site the panel reports as unreachable — the panel's listings come
-        // back empty and a source tarball "cannot be downloaded".
-        org.jackhuang.hmcl.util.platform.OsTrustStore.prefer();
         // Must be the very first thing: the JDK freezes the restricted-header
         // allow-list when the first HttpClient is constructed, and any static
         // client in a class we happen to touch would do that first (this bit us:
@@ -82,6 +76,12 @@ public final class Main {
         try {
             Map<String, String> env = System.getenv();
             ServerConfig config = ServerConfigLoader.load(env, Logger.LOG);
+
+            // The outbound-TLS window an operator acknowledged last time, if its
+            // hour has not passed. Nothing here widens trust on its own: strict is
+            // the default, and the failure that leads to an acknowledgement is
+            // explained where the empty version list is.
+            org.jackhuang.hmcl.util.platform.OutboundTls.accept(config.network.acceptUnverifiedUntil);
 
             // The launcher's per-user home lives inside the data directory, so
             // a deployment mounts exactly one volume (`/data`, see the plan).

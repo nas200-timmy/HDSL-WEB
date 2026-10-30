@@ -24,6 +24,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -151,7 +154,19 @@ class BrandRuntimeTest {
         Path pkg = prefix(Brand.KIMI);
         BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1);
 
-        assertTrue(BrandRuntime.plan(Brand.KIMI, pkg, instance, null).environment().isEmpty());
+        // The one thing a plan may carry is where kimi's shell is: on Windows it does
+        // not look for a bash itself, and without the hint its first tool call fails.
+        // Nothing else belongs here — no port, no base url: those are flags or npm's
+        // own business, and an environment key added here outlives its reason.
+        Map<String, String> environment = BrandRuntime.plan(Brand.KIMI, pkg, instance, null).environment();
+        Set<String> unexpected = new TreeSet<>(environment.keySet());
+        unexpected.remove("KIMI_SHELL_PATH");
+        assertTrue(unexpected.isEmpty(), "the plan carries an environment key it has no reason to: "
+                + environment);
+        if (environment.containsKey("KIMI_SHELL_PATH")) {
+            assertTrue(environment.get("KIMI_SHELL_PATH").toLowerCase(java.util.Locale.ROOT)
+                    .endsWith("bash.exe"), environment.toString());
+        }
     }
 
     /// The workspace registration is the tool's own wire format — an envelope

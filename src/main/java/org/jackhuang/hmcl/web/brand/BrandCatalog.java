@@ -20,7 +20,9 @@ package org.jackhuang.hmcl.web.brand;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.jackhuang.hmcl.dsh.NpmRegistry;
+import org.jackhuang.hmcl.util.platform.OutboundTls;
 import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -68,10 +70,41 @@ public final class BrandCatalog {
 
     private static final Map<Brand, Snapshot> CACHE = new ConcurrentHashMap<>();
 
-    private static final HttpClient CLIENT = HttpClient.newBuilder()
-            .connectTimeout(TIMEOUT)
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    /// A client per fetch, not a cached one: `HttpClient` captures the JVM's default
+    /// `SSLContext` when it is built, and an acknowledgement given later (see
+    /// [org.jackhuang.hmcl.util.platform.OutboundTls]) has to reach the very next
+    /// request or the picker stays empty until a restart. Building one costs
+    /// milliseconds against a network round trip, and the list itself is cached for
+    /// half an hour.
+    private static HttpClient client() {
+        return HttpClient.newBuilder()
+                .connectTimeout(TIMEOUT)
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
+    }
+
+    /// The last certificate failure per brand, so the picker can say why it is empty
+    /// instead of looking like "this project has no releases".
+    private static final Map<Brand, OutboundTls.Trouble> TROUBLE = new ConcurrentHashMap<>();
+
+    /// The certificate failure that emptied this brand's list, if that is what
+    /// happened and it is recent enough to still be the reason.
+    ///
+    /// @param brand the brand
+    /// @return the failure, or `null`
+    public static @Nullable OutboundTls.Trouble trouble(Brand brand) {
+        OutboundTls.Trouble trouble = TROUBLE.get(brand);
+        if (trouble == null) {
+            return null;
+        }
+        return java.time.Instant.now().isBefore(trouble.at().plus(Duration.ofMinutes(TROUBLE_MEMORY_MINUTES)))
+                ? trouble : null;
+    }
+
+    /// How long a recorded failure keeps being offered as the explanation. Long
+    /// enough to survive a person opening the page after the failed prefetch,
+    /// short enough that a fixed network stops producing a stale excuse.
+    private static final long TROUBLE_MEMORY_MINUTES = 30;
 
     private BrandCatalog() {
     }
@@ -188,7 +221,7 @@ public final class BrandCatalog {
                 .GET()
                 .build();
         try {
-            HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = client().send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
                 LOG.warning("Registry answered " + response.statusCode() + " for " + brand.npmPackage());
                 return new Snapshot(List.of(), "", System.currentTimeMillis());
@@ -198,6 +231,7 @@ public final class BrandCatalog {
             Thread.currentThread().interrupt();
             return new Snapshot(List.of(), "", System.currentTimeMillis());
         } catch (Exception e) {
+            recordIfTrustFailure(brand, URI.create(registry).getHost(), e);
             LOG.warning("Could not fetch versions of " + brand.npmPackage() + " from " + registry, e);
             return new Snapshot(List.of(), "", System.currentTimeMillis());
         }
@@ -223,7 +257,7 @@ public final class BrandCatalog {
                 .build();
         for (int attempt = 1; attempt <= 3; attempt++) {
             try {
-                HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<String> response = client().send(request, HttpResponse.BodyHandlers.ofString());
                 if (response.statusCode() / 100 == 2) {
                     return parseGitHubTags(response.body(), brand.tagPrefix(), brand::isReleaseVersion);
                 }
@@ -232,11 +266,21 @@ public final class BrandCatalog {
                 Thread.currentThread().interrupt();
                 return new Snapshot(List.of(), "", System.currentTimeMillis());
             } catch (Exception e) {
+                recordIfTrustFailure(brand, "api.github.com", e);
                 LOG.warning("Could not fetch tags of " + brand.repoUrl()
                         + " (attempt " + attempt + " of 3)", e);
             }
         }
         return new Snapshot(List.of(), "", System.currentTimeMillis());
+    }
+
+    /// Keeps the certificate failures: they are the ones a person can act on, and
+    /// the ones whose symptom (an empty picker) says nothing on its own.
+    private static void recordIfTrustFailure(Brand brand, String host, Throwable error) {
+        if (OutboundTls.isTrustFailure(error)) {
+            TROUBLE.put(brand, new OutboundTls.Trouble(host,
+                    String.valueOf(error.getMessage()), java.time.Instant.now()));
+        }
     }
 
     /// Parses the `/repos/<slug>/tags` document into a snapshot: each entry's
