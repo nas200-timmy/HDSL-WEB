@@ -249,10 +249,20 @@ export const I18N = {
     "不上报使用数据；账号、会话、实例与密钥只保存在数据目录；对外监听端口只有你显式开启的实例",
   "about.feedback": "反馈",
 
+  // ---- 关于（合规段：数据与隐私 / 可接受使用，见 LegalCard） ----
+  "about.legal": "合规与声明",
+  "about.legal.intro":
+    "两份说人话的说明：面板在你机器上存了什么、发出去什么；把面板开放给别人用时，边界在哪。都没有法律效力，有法律效力的是 LICENSE、NOTICE 与 MC 功能的《使用条款》。",
+  "about.legal.privacy": "数据与隐私",
+  "about.legal.aup": "可接受使用",
+
   // ---- 关于（MC 段：只有功能开启后才出现，见 McAboutCard） ----
   "about.mc": "Minecraft 服务端",
   "about.mc.state": "状态",
-  "about.mc.state.on": "已开启（下方两段文本只在这个功能开启后出现）",
+  "about.mc.state.on": "已开启",
+  "about.mc.state.off": "已关闭（同意记录仍可回看）",
+  "about.mc.consent": "同意记录",
+  "about.mc.fingerprint": "文本指纹",
   "about.mc.intro":
     "前一段说人话：这个功能实际做了什么、哪里容易翻车、出事按什么顺序处理，没有法律效力。后一段是使用条款原文，有法律效力；两段冲突时以条款为准。",
   "about.mc.notes.open": "说明：开服前该知道的事（说人话版）",

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError, isNotImplemented } from "../api";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
 import { BrandManagementPanel } from "../components/BrandManagementPanel";
+import { LegalCard } from "../components/LegalCard";
 import { McAboutCard } from "../components/McAboutCard";
 import { FileDropInput } from "../components/FileDropInput";
 import {
@@ -2462,6 +2463,7 @@ function AboutTab() {
           </span>
         </div>
       </div>
+      <LegalCard />
       <McAboutCard />
     </>
   );
