@@ -272,6 +272,24 @@ function VersionCard({
 }) {
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
+  // 证书不受信任时的"我确认"：点了只会开一个限时窗口，不是永久开关。
+  const [trusting, setTrusting] = useState(false);
+
+  /// 让操作者确认一次：窗口开在服务端（限时、可撤销），前端只把服务端要求的那句话
+  /// 原样回传，确认后重新拉一次版本列表——成功的话错误块自己消失。
+  const acknowledgeTrust = async () => {
+    setTrusting(true);
+    try {
+      const state = await api.networkTrust.state();
+      await api.networkTrust.accept(60, state.acknowledge);
+      toast("success", "已授权 60 分钟：期间无法校验的证书会被接受，日志里会记下每一条");
+      await reload();
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setTrusting(false);
+    }
+  };
   const [installing, setInstalling] = useState(false);
   const [installStatus, setInstallStatus] = useState<BrandInstallStatus | null>(null);
   const [installLogOpen, setInstallLogOpen] = useState(false);
@@ -582,7 +600,26 @@ function VersionCard({
             </button>
           </div>
 
-          {versionsError && <div className="hint error">{versionsError}</div>}
+          {versionsError && (
+            <div className="hint error" style={{ display: "grid", gap: 8 }}>
+              <span style={{ whiteSpace: "pre-wrap" }}>{versionsError}</span>
+              {versionsError.includes("TLS 证书没通过校验") && (
+                <span style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <button
+                    className="btn btn-raised ripple-host"
+                    style={{ height: 28 }}
+                    disabled={trusting}
+                    onClick={() => void acknowledgeTrust()}
+                  >
+                    {trusting ? "处理中…" : "我确认：这是我自己的网络代理"}
+                  </button>
+                  <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                    一次性授权，最长 24 小时后自动恢复严格校验，可随时撤销；期间无法校验的证书会被接受并记进日志。
+                  </span>
+                </span>
+              )}
+            </div>
+          )}
 
           {installing && installStatus && (
             <div className="card" style={{ padding: "10px 12px", display: "grid", gap: 8 }}>

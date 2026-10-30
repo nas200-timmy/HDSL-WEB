@@ -7,12 +7,21 @@
 > 起因：Windows 上装 claude-web / octop / ZCode 全部失败——品牌版本列表是空的，
 > ZCode 源码"could not be downloaded"，而浏览器打开同一批地址一切正常。
 
-- **让 JVM 信任机器自己的根证书**（`OsTrustStore`）：浏览器能打开的站点面板报
-  `PKIX path building failed`，原因是中间人代理（杀毒、企业网关、FastGithub 这类加速器）
-  把自己的根证书装在 **Windows 证书库**里，而 Java 只认自带的 `cacerts`。启动最前面按
-  `Windows-ROOT` 读一次；操作者自己在命令行指定过 `javax.net.ssl.trustStore`/`...Type`
-  就不动，JDK 读不了这个库（没有 `SunMSCAPI`）也不动。修完实测：claude-web 版本列表
-  `0.4.6…`、octop `1.0.3b1`、`codeload.github.com` 的 86 MB 源码包 200。
+- **证书不受信任时说清原因，并且要人确认一次**（`OutboundTls` + `/api/network/trust`）：
+  浏览器能打开的站点面板报 `PKIX path building failed`，原因是中间人代理（杀毒、企业网关、
+  FastGithub 这类加速器）把自己的根证书装在 **Windows 证书库**里，而 Java 只认自带的
+  `cacerts`。以前的表现是"版本列表突然空了，没有任何原因"。现在：
+  - 品牌版本列表因为证书失败而空时，接口回 409 并把人话写进去（谁签的、为什么会这样、
+    两条出路）；ZCode 源码下载失败同样附上这段；
+  - **不自动放宽**：要操作者在「设置 → 网络」（或版本卡的"我确认"按钮）逐字回传
+    `我确认这是我自己的网络代理`，才开一个**一次性、最长 24 小时**的窗口（写进
+    `server.yaml` 的 `network.accept_unverified_until`，重启仍在期内生效，到期自动收紧，
+    随时可撤销），并记审计；
+  - 即便在窗口里也不是直接跳过：先按 Java 的 cacerts、再按机器自己的根证书库（代理的根
+    通常在那儿）校验，两张都不认才接受，并把证书主题/签发者写进日志。
+  - 实测：接口闭合/授权/撤销/重启保持全部按预期；本机当时能复现（`openssl` 看到
+    `CN=FastGithub`），写这段时那台机器上代理已停止拦截（证书变回 Sectigo），所以 409
+    那条只用单测覆盖，没能现场再触发一次。
 - **覆盖运行中的 jar 时把话说清**：Windows 上覆盖一个正在运行的 jar 是能成功的，JVM 继续
   握着旧句柄，直到下一次读资源——`ZipException: invalid LOC header (bad signature)`，
   现象是"文件明明在（`unzip -t` 通过）却读不出来"：自带插件的 tgz 装不上、页面加载不出

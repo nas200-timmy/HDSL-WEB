@@ -610,6 +610,14 @@ export const api = {
   // ---- Node.js 工具链（裸部署一键供给，设置 → Node.js） ----
   nodeStatus: () =>
     request<NodeStatus>("/api/node"),
+
+  /** 出站 TLS 的授权状态与一次性确认（见 NetworkTrust）。 */
+  networkTrust: {
+    state: () => request<NetworkTrust>("/api/network/trust"),
+    accept: (minutes: number, acknowledge: string) =>
+      request<NetworkTrust>("/api/network/trust", jsonInit("POST", { minutes, acknowledge })),
+    revoke: () => request<NetworkTrust>("/api/network/trust", { method: "DELETE" }),
+  },
   nodeInstall: (body: { version?: string; source?: string }) =>
     request<{ taskId: string }>("/api/node/install", jsonInit("POST", body)),
   nodeUninstall: (version: string) =>
@@ -865,6 +873,18 @@ export interface NodeStatus {
   } | null;
   managed: { version: string; suitable: boolean; node: string; pnpm: boolean }[];
   requirement: string;
+}
+
+/** 出站 TLS 的策略：strict 是默认（只认 Java 的 cacerts）；
+ *  accept_unverified 是操作者确认过的窗口（到 acceptedUntil 为止），期间无法校验的
+ *  证书会被接受并在日志里记下。acknowledge 是必须逐字回传的那句话。 */
+export interface NetworkTrust {
+  mode: "strict" | "accept_unverified";
+  acceptedUntil: string | null;
+  acknowledge: string;
+  maxMinutes: number;
+  lastTrouble?: { host: string; reason: string; at: string } | null;
+  explanation?: string;
 }
 
 /** 打开终端的结果：POSIX 返回 ticket + ws，Windows 返回 desktop。 */
