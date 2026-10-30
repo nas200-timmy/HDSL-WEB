@@ -82,9 +82,9 @@ public final class Main {
             Logger.LOG.start(config.dataDir.resolve("logs"));
 
             // 日志保留：启动清理一次，之后每天一次。审计按文件名里的日期算年龄，
-            // 面板日志按 mtime；两者都硬上限三年（见 LogRetention）。
-            new LogRetention(config.dataDir.resolve("logs"), config.logs.auditDays, config.logs.panelDays)
-                    .start();
+            // 面板日志按 mtime；保底 180 天、上限四年，面板接口可往上调（见 LogRetention）。
+            LogRetention.install(new LogRetention(
+                    config.dataDir.resolve("logs"), config.logs.auditDays, config.logs.panelDays));
 
             // 升级迁移：v0.4.8 之前写入的 server.yaml 是 0644，里面躺着 p12 密码；certs/ 下的
             // 私钥/证书包同理。逐份收紧为仅所有者可读写，个别失败只告警、不挡启动。

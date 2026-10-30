@@ -190,10 +190,11 @@ public final class ServerConfigLoader {
 
     private static int retentionDays(Map<String, Object> section, String key) {
         int days = intField(section, key);
+        int floor = org.jackhuang.hmcl.web.logs.LogRetention.FLOOR_DAYS;
         int cap = org.jackhuang.hmcl.web.logs.LogRetention.HARD_CAP_DAYS;
-        if (days < 1 || days > cap) {
-            throw new ConfigException("logs." + key + " must be between 1 and " + cap
-                    + " days (three years), got " + days);
+        if (days < floor || days > cap) {
+            throw new ConfigException("logs." + key + " must be between " + floor
+                    + " and " + cap + " days, got " + days);
         }
         return days;
     }

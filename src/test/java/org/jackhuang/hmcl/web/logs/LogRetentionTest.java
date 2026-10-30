@@ -45,7 +45,7 @@ class LogRetentionTest {
         Path insideWindow = write(dir, "audit-2026-10-29.jsonl");
         Path today = write(dir, "audit-2026-10-30.jsonl");
 
-        assertEquals(1, LogRetention.at(dir, 180, 90, noon()).sweep());
+        assertEquals(1, LogRetention.at(dir, 180, 180, noon()).sweep());
 
         assertFalse(Files.exists(expired), "180 天以外的审计日志应当删除");
         assertTrue(Files.exists(insideWindow));
@@ -57,7 +57,7 @@ class LogRetentionTest {
         Path undated = write(dir, "audit-latest.jsonl");
         setMtime(undated, 0);
 
-        assertEquals(0, LogRetention.at(dir, 30, 30, noon()).sweep());
+        assertEquals(0, LogRetention.at(dir, 180, 180, noon()).sweep());
 
         assertTrue(Files.exists(undated), "名字里没有日期就不按 mtime 猜，宁可留着");
     }
@@ -70,7 +70,7 @@ class LogRetentionTest {
         // 名字最新、mtime 也在窗口外：它仍是「最新那份」，必须留下。
         setMtime(newest, daysAgo(120));
 
-        assertEquals(1, LogRetention.at(dir, 180, 90, noon()).sweep());
+        assertEquals(1, LogRetention.at(dir, 180, 180, noon()).sweep());
 
         assertFalse(Files.exists(oldest));
         assertTrue(Files.exists(newest), "最新的一份永远保留，时钟错了也不能删正在写的文件");
@@ -81,23 +81,23 @@ class LogRetentionTest {
         Path fresh = write(dir, "2026-10-30T12-00-00.log");
         setMtime(fresh, daysAgo(1));
 
-        assertEquals(0, LogRetention.at(dir, 180, 90, noon()).sweep());
+        assertEquals(0, LogRetention.at(dir, 180, 180, noon()).sweep());
         assertTrue(Files.exists(fresh));
     }
 
     @Test
     void missingDirectoryIsNotAnError(@TempDir Path dir) {
-        assertEquals(0, LogRetention.at(dir.resolve("nope"), 180, 90, noon()).sweep());
+        assertEquals(0, LogRetention.at(dir.resolve("nope"), 180, 180, noon()).sweep());
     }
 
     @Test
-    void windowsAreBoundedToThreeYears(@TempDir Path dir) {
+    void windowsAreBoundedToTheFloorAndFourYears(@TempDir Path dir) {
         assertThrows(IllegalArgumentException.class,
-                () -> new LogRetention(dir, LogRetention.HARD_CAP_DAYS + 1, 90));
+                () -> new LogRetention(dir, LogRetention.HARD_CAP_DAYS + 1, 180));
         assertThrows(IllegalArgumentException.class,
-                () -> new LogRetention(dir, 180, 0));
-        // 上界本身是允许的：最多三年，不是「必须短于三年」。
-        new LogRetention(dir, LogRetention.HARD_CAP_DAYS, LogRetention.HARD_CAP_DAYS);
+                () -> new LogRetention(dir, 179, 180));
+        // 两端本身都允许：180 天到 1460 天。
+        new LogRetention(dir, LogRetention.FLOOR_DAYS, LogRetention.HARD_CAP_DAYS);
     }
 
     @Test

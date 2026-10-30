@@ -50,28 +50,37 @@ import java.util.concurrent.TimeUnit;
 /// not be trimmed to its last ten files. The newest file in each family is
 /// always kept — a wrong clock must not delete the log being written.
 ///
-/// [HARD_CAP_DAYS] is three years: long enough for a dispute over a world that
-/// was deleted last season, short enough that the directory cannot grow
-/// without bound. Anything longer is refused rather than clamped, so a typo in
+/// [FLOOR_DAYS] is the floor: below 180 days the audit trail stops being able to
+/// answer "who deleted that world last quarter", so no setting may go under it.
+/// [HARD_CAP_DAYS] is four years: long enough for a dispute over a world that was
+/// deleted last season, short enough that the directory cannot grow without
+/// bound. Anything outside the range is refused rather than clamped, so a typo in
 /// `server.yaml` fails at boot instead of quietly keeping data forever.
 @NotNullByDefault
 public final class LogRetention {
 
-    /// 三年。配置只能更短，不能更长。
-    public static final int HARD_CAP_DAYS = 3 * 365;
+    /// 上限四年。任何窗口都不能超过它。
+    public static final int HARD_CAP_DAYS = 4 * 365;
+
+    /// 保底 180 天：低于这个数，审计就答不上「上季度谁删了那个世界」。
+    public static final int FLOOR_DAYS = 180;
 
     /// 审计日志默认保留 180 天（与《使用条款》5.3 一致）。
-    public static final int DEFAULT_AUDIT_DAYS = 180;
+    public static final int DEFAULT_AUDIT_DAYS = FLOOR_DAYS;
 
-    /// 面板日志默认保留 90 天：排障够用，又不至于把终端输出攒成仓库。
-    public static final int DEFAULT_PANEL_DAYS = 90;
+    /// 面板日志默认 180 天：排障够用，又不至于把终端输出攒成仓库。
+    public static final int DEFAULT_PANEL_DAYS = FLOOR_DAYS;
 
     private static final String AUDIT_PREFIX = "audit-";
     private static final String AUDIT_SUFFIX = ".jsonl";
 
+    /// 运行中唯一的一份（`Main` 启动时装上），供 `LogRetentionApiServlet` 改窗口。
+    private static volatile @org.jetbrains.annotations.Nullable LogRetention installed;
+
     private final Path logsDir;
-    private final int auditDays;
-    private final int panelDays;
+    // 面板可以调窗口，所以不是 final；sweep 每轮重新读一次。
+    private volatile int auditDays;
+    private volatile int panelDays;
     private final Clock clock;
 
     public LogRetention(Path logsDir, int auditDays, int panelDays) {
@@ -86,11 +95,36 @@ public final class LogRetention {
     }
 
     private static int requireWindow(int days, String label) {
-        if (days < 1 || days > HARD_CAP_DAYS) {
-            throw new IllegalArgumentException(label + " retention must be between 1 and "
-                    + HARD_CAP_DAYS + " days, got " + days);
+        if (days < FLOOR_DAYS || days > HARD_CAP_DAYS) {
+            throw new IllegalArgumentException(label + " retention must be between "
+                    + FLOOR_DAYS + " and " + HARD_CAP_DAYS + " days, got " + days);
         }
         return days;
+    }
+
+    /// 装上并开始计时。同一 JVM 只该有一份。
+    public static void install(LogRetention retention) {
+        installed = retention;
+        retention.start();
+    }
+
+    /// 运行中的那一份；没有（比如单元测试）时返回 `null`。
+    public static @org.jetbrains.annotations.Nullable LogRetention installed() {
+        return installed;
+    }
+
+    /// 调窗口。只接受 [FLOOR_DAYS]–[HARD_CAP_DAYS] 之间的值。
+    public void setWindows(int auditDays, int panelDays) {
+        this.auditDays = requireWindow(auditDays, "audit");
+        this.panelDays = requireWindow(panelDays, "panel");
+    }
+
+    public int auditDays() {
+        return auditDays;
+    }
+
+    public int panelDays() {
+        return panelDays;
     }
 
     /// 启动时跑一次，之后每 24 小时一次。守护线程：面板退出时它跟着走。
