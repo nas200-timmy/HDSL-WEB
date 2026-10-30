@@ -26,6 +26,7 @@ import org.jackhuang.hmcl.web.config.ServerConfigLoader;
 import org.jackhuang.hmcl.web.config.WorkspaceDirectory;
 import org.jackhuang.hmcl.web.logs.LogRetention;
 import org.jackhuang.hmcl.web.server.HdslServer;
+import org.jackhuang.hmcl.web.terminal.pty.ConPty;
 import org.jackhuang.hmcl.web.tls.CertificateManager;
 
 import java.io.IOException;
@@ -213,11 +214,10 @@ public final class Main {
             System.out.println("  note     : Windows has no POSIX 0600 semantics - the credential file");
             System.out.println("             may be readable by other accounts on this machine. Single-");
             System.out.println("             user machines are fine; keep the data dir off the public net.");
-            // Said here, once, because the alternative is a user discovering it from a button
-            // that throws: the terminal opens a POSIX shell through a Linux terminal emulator,
-            // and neither exists on this platform.
-            System.out.println("  note     : the instance terminal is not available on Windows (it opens");
-            System.out.println("             a POSIX shell through a Linux terminal emulator).");
+            // Said here, once, because the alternative is a person discovering it from a
+            // button that refuses: which terminal this build can run depends on the Windows
+            // build, and the number is what they can act on.
+            System.out.println("  terminal : " + ConPty.describe());
         }
         System.out.println();
     }

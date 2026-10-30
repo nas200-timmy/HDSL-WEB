@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.dsh;
 
 import org.jackhuang.hmcl.Metadata;
+import org.jackhuang.hmcl.web.terminal.pty.ConPty;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -106,8 +107,12 @@ public final class DshDoctor {
                                     + " keep the user directory nearer the drive root]"
                             : "  [ok]"));
             out.println("  console encoding: " + org.jackhuang.hmcl.util.platform.OperatingSystem.NATIVE_CHARSET);
-            out.println("  instance terminal: not available on this platform"
-                    + " (it opens a POSIX shell through a Linux terminal emulator)");
+            // The doctor is where a refused terminal gets explained: the build number is
+            // the one fact that turns "unsupported" into something a person can act on.
+            out.println("  instance terminal: " + (ConPty.platformSupported()
+                    ? ConPty.describe() + "  [ok]"
+                    : "unsupported: needs build " + ConPty.REQUIRED_BUILD
+                      + ", this is " + ConPty.buildNumber() + "  [unsupported]"));
             out.println();
         }
 
