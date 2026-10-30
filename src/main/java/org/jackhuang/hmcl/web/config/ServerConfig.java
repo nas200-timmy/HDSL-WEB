@@ -198,7 +198,6 @@ public final class ServerConfig {
     /// until the owner enables it; these knobs only bound what may be created
     /// once it is on.
     public final McConfig mc = new McConfig();
-
     public static final class McConfig {
         /// First port the auto-allocator may hand out (`mc.port_start`).
         public volatile int portStart = 25565;
@@ -210,5 +209,17 @@ public final class ServerConfig {
         public volatile int maxMemoryMb = 8192;
         /// The java executable (`mc.java_path`); empty means `java` on PATH.
         public volatile String javaPath = "";
+    }
+
+    /// `logs:` — how long the panel keeps its own files. Windows can be shortened
+    /// freely and lengthened up to [org.jackhuang.hmcl.web.logs.LogRetention#HARD_CAP_DAYS]
+    /// (three years); anything longer is refused at boot rather than clamped.
+    public final LogsConfig logs = new LogsConfig();
+
+    public static final class LogsConfig {
+        /// 审计日志保留天数（`logs.audit_days`）。
+        public volatile int auditDays = org.jackhuang.hmcl.web.logs.LogRetention.DEFAULT_AUDIT_DAYS;
+        /// 面板日志保留天数（`logs.panel_days`）。
+        public volatile int panelDays = org.jackhuang.hmcl.web.logs.LogRetention.DEFAULT_PANEL_DAYS;
     }
 }
