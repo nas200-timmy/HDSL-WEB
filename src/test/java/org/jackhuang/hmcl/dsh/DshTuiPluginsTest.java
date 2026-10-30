@@ -57,6 +57,12 @@ class DshTuiPluginsTest {
         DshTuiPlugins.Entry inproc = DshTuiPlugins.find("@nas200-timmy/dsh-inproc-tui").orElseThrow();
         assertFalse(DshTuiPlugins.fitsHost(inproc, "0.1.7-rc.1"));
         assertTrue(DshTuiPlugins.fitsHost(inproc, "0.2.0-rc.2"));
+        // dsh 0.2.2-alpha.x is outside the plugin's own peer ranges and refuses the
+        // bundle at load ("incompatible with dsh 0.2.2-alpha.2"). The panel must not
+        // claim that combination, or it installs a terminal the host silently skips.
+        assertFalse(DshTuiPlugins.fitsHost(inproc, "0.2.2-alpha.2"),
+                "the bundle's peers stop at 0.2.1-rc.3");
+        assertTrue(DshTuiPlugins.fitsHost(inproc, "0.2.1-rc.3"));
         String fallback = DshTuiPlugins.hostMismatch(inproc, "0.1.7-rc.1");
         assertTrue(fallback.contains("@nas200-timmy/dsh-acp-tui"), fallback);
     }

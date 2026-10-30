@@ -135,7 +135,15 @@ public final class DshTuiPlugins {
                     // A bundle over dsh-base: it uses the 0.2.x agent/stream/approval seams
                     // directly. Verified on 0.2.0-rc.2 and 0.2.1-rc.3 — the 0.2.0 line is
                     // where those seams first appear, so that is the floor.
-                    ">=0.2.0-rc.2",
+                    //
+                    // The ceiling is the plugin's **own** `peerDependencies`, which enumerate
+                    // `@deepseek-ai/dsh-agent` 0.2.0-rc.1 … 0.2.1-rc.3 and nothing newer: dsh
+                    // 0.2.2-alpha.x refuses the bundle outright ("incompatible with dsh
+                    // 0.2.2-alpha.2"), and a panel that claimed otherwise would install a
+                    // terminal the host then silently skips. The bound is written `<0.2.2-0`,
+                    // the semver idiom for "before 0.2.2, prereleases included" — a plain
+                    // `<0.2.2` compares numerically and still admits `0.2.2-alpha.2`.
+                    ">=0.2.0-rc.2 <0.2.2-0",
                     true,
                     "dsh-terminal"),
             new Entry(
@@ -319,19 +327,21 @@ public final class DshTuiPlugins {
         if (entry.bundled() && entry.hasExecutable()) {
             return entry.packageName() + " 需要 dsh " + entry.requiresDsh() + "，这个实例是 " + host
                     + "。它通过 ACP 与 dsh 通信，而 ACP 的 profile 模板从 dsh 0.1.2-rc.1 起才有；"
-                    + "旧宿主没有这个模板，终端会起不来。请把实例升级到要求的 dsh 版本，或改用 "
+                    + "旧宿主没有这个模板，终端会起不来。请把实例换成要求的 dsh 版本（升级或降级），或改用 "
                     + alternativeFor(entry, harnessVersion) + "。";
         }
         if (entry.bundled()) {
             return entry.packageName() + " 需要 dsh " + entry.requiresDsh() + "，这个实例是 " + host
-                    + "。它跑在 harness 进程里，用的是 0.2.x 才有的 agent 流、审批与模型选择服务；"
-                    + "旧宿主没有这些接缝，插件装上也起不来。请把实例升级到要求的 dsh 版本，或改用 "
-                    + alternativeFor(entry, harnessVersion) + "（走 ACP，旧版本也能跑）。";
+                    + "。它跑在 harness 进程里，用的是这条线上才有的 agent 流、审批与模型选择服务；"
+                    + "更旧或更新的宿主都没有同一套接缝（更新的一版改了它们，插件没有验证过，"
+                    + "dsh 自己也会拒绝加载），插件装上也起不来。请把实例换成要求的 dsh 版本"
+                    + "（升级或降级），或改用 "
+                    + alternativeFor(entry, harnessVersion) + "（走 ACP，两条线都能跑）。";
         }
         return entry.packageName() + " 需要 dsh " + entry.requiresDsh() + "，这个实例是 "
                 + host
                 + "。它的工具面来自 dsh 0.2.0 起的 agent-preset 层，装在旧宿主上只会得到一个"
-                + "「没有工具面」的会话。请把实例升级到要求的 dsh 版本，或改用 "
+                + "「没有工具面」的会话。请把实例换成要求的 dsh 版本（升级或降级），或改用 "
                 + spanningEntry() + "（它的 peer 跨两条线）。";
     }
 
