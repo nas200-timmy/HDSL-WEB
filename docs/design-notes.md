@@ -226,7 +226,7 @@ Windows 上常见一种情况：杀毒软件、企业网关或 GitHub 加速器�
 - ZCode 不在稳定性承诺内：实例只绑回环，经 `/i/<id>/` 访问；发行包由面板从上游源码构建，
   能否使用取决于上游。
 - 构建不需要 C++ 编译链：`node-pty` 用预编译，`cpu-features` 是 ssh2 的可选依赖。
-  面板自供 Node 24+、pnpm 与指向系统 bsdtar 的 `tar` shim；构建前用 `vswhere` 预检
+  面板自供 Node 24+、pnpm 与（构建脚本自己的裸 `tar` 需要的）指向系统 bsdtar 的 shim；**面板自己解包源码不再经过系统 tar**——GitHub 的 tarball 用 UTF-8 存文件名，Windows 的 libarchive 按 ANSI 代码页解码，遇到中文文件名会整包解包失败（`Invalid empty pathname`），所以改用面板自带的 kala-compress 读取器；构建前用 `vswhere` 预检
   `cl.exe`，缺了只说明会被跳过，不自动下载编译器。见 `docs/report-2026-10-18-zcode-windows-build.md`。
 
 ## 12. 账户与模型目录

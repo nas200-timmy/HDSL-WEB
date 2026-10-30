@@ -44,6 +44,25 @@
   `>=0.2.0-rc.2 <0.2.2-0`——`-0` 是 semver 的"含预发布"写法，裸 `<0.2.2` 会按数值比较把
   `0.2.2-alpha.2` 也放进来。不适配时面板直说，并推荐 ACP 版终端（它跨两条线都能跑）。
 
+## 未发布 · ZCode 源码解包在中文文件名上整包失败
+
+> 起因：Windows 上点「构建 ZCode」，在"解包源码"这一步失败：
+> `docs/ZCode 项目架构分析与改进建议.md: Invalid empty pathname` 加
+> `tar.exe: Error exit delayed from previous errors`——树其实已经被写了大半。
+
+- 根因是**文件名编码**，不是权限或磁盘：ZCode 仓库里有一个中文名文档，GitHub 的 tarball 用
+  **UTF-8** 存条目名，而 Windows 自带的 `tar.exe`（libarchive）按 **ANSI 代码页**（这台机器是
+  GBK）转换，转不出来的条目它就当成"没有名字"，于是整包以
+  `Invalid empty pathname` 结束。
+- 修法：面板解包源码不再调用系统 tar，改用自带的 kala-compress 读取器（`TarArchiveInputStream`，
+  显式 `UTF-8`），流式解包（90 MB 压缩、解出几百 MB，不落临时文件），保留
+  `--strip-components=1` 的语义、拒绝爬出目标目录的名字、符号链接失败只记日志不中断。
+  安装构建产物那一步用的是同一个函数。
+- 实测：把 `F:\dsh\data\zcodeuild\source.tar.gz`（91 MB、18341 个条目）整个解一遍，
+  14 秒完成，`docs/ZCode 项目架构分析与改进建议.md`（19552 字节）名字正常。
+- 构建脚本自己的裸 `tar` 仍走 `bin/tar.bat` → `System32	ar.exe`，那条没变（脚本里的调用
+  只碰 ASCII 文件名）。
+
 ## 未发布 · 没有系统 Node.js 的机器上实例页白屏
 
 > 起因：裸部署（`java -jar`，机器上没有 node）打开面板，实例页直接报

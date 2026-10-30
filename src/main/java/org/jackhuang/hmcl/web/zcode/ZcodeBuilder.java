@@ -252,8 +252,8 @@ public final class ZcodeBuilder {
 
             step.set(0.15, "解包源码");
             Files.createDirectories(sources);
-            run(step, effective, work, List.of(tarProgram(), "-xzf", tarball.toString(),
-                    "-C", sources.toString(), "--strip-components=1"), Duration.ofMinutes(10));
+            step.log("=== 解包（面板自带的 tar 读取器：系统 tar 会按 ANSI 代码页解码 UTF-8 文件名）");
+            unpack(tarball, sources);
 
             step.set(0.22, "应用反代补丁（" + ZcodePatch.size() + " 处）");
             ZcodePatch.apply(sources);
@@ -436,16 +436,7 @@ public final class ZcodeBuilder {
         try {
             deleteRecursively(target);
             Files.createDirectories(target);
-            // `tar` is `tar.exe` on Windows — Windows 10 1803 and later ship bsdtar in
-            // System32, so the unpack step needs no extra dependency there.
-        Process tar = new ProcessBuilder(Executables.startable(List.of(tarProgram(), "-xzf", tarball.toString(), "-C",
-                        target.toString(), "--strip-components=1")))
-                    .redirectErrorStream(true)
-                    .start();
-            tar.getInputStream().transferTo(java.io.OutputStream.nullOutputStream());
-            if (!tar.waitFor(5, java.util.concurrent.TimeUnit.MINUTES) || tar.exitValue() != 0) {
-                throw new ZcodeException("unpacking the built tarball failed");
-            }
+            unpack(tarball, target);
             if (!Files.isRegularFile(target.resolve("bin/zcode.mjs"))) {
                 throw new ZcodeException("the built tarball has no bin/zcode.mjs — unexpected layout");
             }
@@ -457,9 +448,6 @@ public final class ZcodeBuilder {
             Links.pointAt(releases.getParent().resolve("current"), target);
         } catch (IOException e) {
             throw new ZcodeException("could not install the built ZCode distribution", e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new ZcodeException("unpacking the built tarball was interrupted", e);
         }
         return version;
     }
@@ -480,27 +468,87 @@ public final class ZcodeBuilder {
         }
     }
 
-    /// The `tar` to unpack a release with.
+    /// Unpacks a `.tar.gz` into `target`, dropping the archive's first path component.
     ///
-    /// On Windows the system's own `System32\tar.exe` is asked for by path, rather than
-    /// leaving the name to `PATH`. Git for Windows puts GNU tar in `usr\bin`, which is
-    /// routinely earlier on `PATH` — and GNU tar reads `C:\…` as a *remote host* named `C`,
-    /// failing with "Cannot connect to C: resolve failed" and never looking at the file.
-    /// The two are not interchangeable for a Windows path, and the system one is the one
-    /// that works, so it is named.
+    /// Java, not the system's `tar`. On Windows that is libarchive (`System32	ar.exe`),
+    /// which converts entry names through the ANSI code page; a GitHub source tarball
+    /// stores them as UTF-8 — ZCode ships `docs/ZCode 项目架构分析与改进建议.md` — and on a
+    /// GBK machine the conversion leaves libarchive with an entry it cannot name, so the
+    /// whole extraction fails with `Invalid empty pathname` *after* writing most of the
+    /// tree. The panel already reads tar through kala-compress, with the charset stated
+    /// rather than guessed ([ArchiveFileTree]), so no external program is involved on
+    /// either platform.
     ///
-    /// @return the program to run
-    private static String tarProgram() {
-        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
-                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
-            String systemRoot = System.getenv("SystemRoot");
-            Path systemTar = Path.of(systemRoot == null || systemRoot.isBlank() ? "C:\\Windows" : systemRoot,
-                    "System32", "tar.exe");
-            if (Files.isRegularFile(systemTar)) {
-                return systemTar.toString();
+    /// `.tar.gz` is streamed: the archive is 90 MB compressed and several hundred
+    /// unpacked, which is not something to stage in a temp file first.
+    ///
+    /// @param tarball the archive
+    /// @param target  the directory to unpack into; created when missing
+    /// @throws IOException when the archive cannot be read or written
+    static void unpack(Path tarball, Path target) throws IOException {
+        Files.createDirectories(target);
+        Path root = target.toRealPath();
+        try (java.io.InputStream file = Files.newInputStream(tarball);
+             java.util.zip.GZIPInputStream gzip = new java.util.zip.GZIPInputStream(file);
+             kala.compress.archivers.tar.TarArchiveInputStream tar =
+                     new kala.compress.archivers.tar.TarArchiveInputStream(gzip, StandardCharsets.UTF_8)) {
+            kala.compress.archivers.tar.TarArchiveEntry entry;
+            while ((entry = tar.getNextEntry()) != null) {
+                String name = entry.getName();
+                // `--strip-components=1`: the archive's own top-level directory is dropped.
+                int slash = name.indexOf('/');
+                if (slash < 0 || slash == name.length() - 1) {
+                    continue;
+                }
+                String relative = name.substring(slash + 1);
+                Path destination = root.resolve(relative).normalize();
+                if (!destination.startsWith(root)) {
+                    throw new IOException("the archive holds a name that leaves the tree: " + name);
+                }
+                if (entry.isDirectory()) {
+                    Files.createDirectories(destination);
+                    continue;
+                }
+                Files.createDirectories(destination.getParent());
+                if (entry.isSymbolicLink()) {
+                    link(entry.getLinkName(), destination, root);
+                    continue;
+                }
+                try (java.io.OutputStream out = Files.newOutputStream(destination,
+                        java.nio.file.StandardOpenOption.CREATE,
+                        java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                        java.nio.file.StandardOpenOption.WRITE)) {
+                    tar.transferTo(out);
+                }
+                if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                        != org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS
+                        && (entry.getMode() & 0111) != 0) {
+                    destination.toFile().setExecutable(true, false);
+                }
             }
         }
-        return "tar";
+    }
+
+    /// Creates a link the archive names, or says why it could not.
+    ///
+    /// A source tarball may legitimately hold links, but one that points outside the
+    /// tree is a way to write somewhere else, so it is refused rather than followed.
+    /// A Windows account without Developer Mode cannot create links at all; that is
+    /// logged and the rest of the tree is still unpacked — a build that needs that
+    /// path then fails visibly instead of on a silently truncated tree.
+    private static void link(String linkName, Path destination, Path root) {
+        Path resolved = destination.getParent().resolve(linkName).normalize();
+        if (!resolved.startsWith(root)) {
+            LOG.warning("Skipping an archive link that points outside the tree: " + destination
+                    + " -> " + linkName);
+            return;
+        }
+        try {
+            Files.createSymbolicLink(destination, Path.of(linkName));
+        } catch (IOException | UnsupportedOperationException e) {
+            LOG.warning("Could not create the link " + destination + " -> " + linkName
+                    + " (" + e.getMessage() + ")");
+        }
     }
 
     /// The lowest Node major the upstream build accepts (its `engines` asks for
