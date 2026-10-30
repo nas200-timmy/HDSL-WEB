@@ -42,6 +42,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.EnumSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// A servlet that lets an exception escape used to hand the caller Jetty's
@@ -79,16 +80,17 @@ class ApiGuardFilterTest {
     }
 
     /// The cap exists because every JSON handler reads its whole body into memory. It must
-    /// not swallow the multipart uploads on the same mapping — a pack is documented at
-    /// 200 MiB, a plugin at 50 MiB, and both stream to a staging file instead.
+    /// not swallow the real uploads on the same mapping — a pack is documented at 200 MiB,
+    /// a plugin at 50 MiB — but the exemption is the **route**, not the `Content-Type`: a
+    /// caller who labels a body `multipart/form-data` must not decide for himself that the
+    /// cap does not apply.
     ///
     /// The refused cases announce a 2 MiB body but send none: the filter answers from the
     /// declared length, and a server that answers 413 while the client is still writing the
-    /// body can close the connection under it — measured on CI as
-    /// `HTTP/1.1 header parser received no bytes`. The handler case drains the body first for
+    /// body can close the connection under it. The handler case drains the body first for
     /// the same reason.
     @Test
-    void oversizedJsonIsRejectedButMultipartStillReachesTheHandler() throws Exception {
+    void theBodyCapFollowsTheRouteAndNotTheContentType() throws Exception {
         Server server = new Server(0);
         ServletContextHandler context = new ServletContextHandler();
         context.setContextPath("/");
@@ -101,7 +103,7 @@ class ApiGuardFilterTest {
                 resp.setStatus(200);
                 resp.getWriter().write("reached");
             }
-        }), "/api/upload");
+        }), "/api/*");
         context.addFilter(new FilterHolder(new ApiGuardFilter()), "/api/*",
                 EnumSet.of(DispatcherType.REQUEST));
         server.setHandler(context);
@@ -110,25 +112,33 @@ class ApiGuardFilterTest {
             int port = ((ServerConnector) server.getConnectors()[0]).getLocalPort();
             int announced = 2 * 1024 * 1024;
 
-            assertTrue(statusLineOnly(port, "Content-Type: application/json; charset=utf-8", announced)
-                            .startsWith("HTTP/1.1 413"),
+            assertTrue(statusLineOnly(port, "/api/upload", "Content-Type: application/json; charset=utf-8",
+                            announced).startsWith("HTTP/1.1 413"),
                     "a 2 MiB JSON body must be refused before the handler");
 
             // The handlers parse whatever they are handed, so a body mislabelled as text must
-            // not slip past a cap that keys on Content-Type.
-            assertTrue(statusLineOnly(port, "Content-Type: text/plain", announced).startsWith("HTTP/1.1 413"),
+            // not slip past the cap.
+            assertTrue(statusLineOnly(port, "/api/upload", "Content-Type: text/plain", announced)
+                            .startsWith("HTTP/1.1 413"),
                     "mislabelling the body must not bypass the cap");
 
+            // The same 2 MiB labelled multipart on a JSON route is still refused: the route
+            // decides, not the header the caller chose.
+            assertTrue(statusLineOnly(port, "/api/upload",
+                            "Content-Type: multipart/form-data; boundary=XyZ", announced)
+                            .startsWith("HTTP/1.1 413"),
+                    "a multipart label must not exempt a JSON route");
+
+            // …while the real upload routes stream through.
             HttpResponse<String> multipart = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
-                            URI.create("http://127.0.0.1:" + port + "/api/upload"))
+                            URI.create("http://127.0.0.1:" + port + "/api/packs/install"))
                     .header("Content-Type", "multipart/form-data; boundary=XyZ")
                     .POST(HttpRequest.BodyPublishers.ofByteArray(multipartBody(announced)))
                     .build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(200, multipart.statusCode(), "a 2 MiB multipart upload must reach the handler");
 
-            // A world import is a raw zip stream, not multipart: it must pass too.
             HttpResponse<String> world = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
-                            URI.create("http://127.0.0.1:" + port + "/api/upload"))
+                            URI.create("http://127.0.0.1:" + port + "/api/mc/instances/x/world/import"))
                     .header("Content-Type", "application/zip")
                     .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[announced]))
                     .build(), HttpResponse.BodyHandlers.ofString());
@@ -138,13 +148,72 @@ class ApiGuardFilterTest {
         }
     }
 
+    /// `Content-Length` is absent on a chunked request and `getContentLengthLong()` answers
+    /// -1; before this rule the check was `> 1 MiB`, so a chunked body of any size passed.
+    @Test
+    void aChunkedBodyWithoutLengthIsRefusedOnAJsonRoute() throws Exception {
+        Server server = new Server(0);
+        ServletContextHandler context = new ServletContextHandler();
+        context.setContextPath("/");
+        context.addServlet(new ServletHolder(new HttpServlet() {
+            @Override
+            protected void doPost(HttpServletRequest req, HttpServletResponse resp) {
+                resp.setStatus(200);
+            }
+        }), "/api/*");
+        context.addFilter(new FilterHolder(new ApiGuardFilter()), "/api/*",
+                EnumSet.of(DispatcherType.REQUEST));
+        server.setHandler(context);
+        server.start();
+        try {
+            int port = ((ServerConnector) server.getConnectors()[0]).getLocalPort();
+            assertTrue(statusLineOnlyChunked(port, "/api/upload").startsWith("HTTP/1.1 411"),
+                    "an unknown-length body on a JSON route must be refused, not trusted");
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
+    void onlyUploadRoutesSkipTheJsonCap() {
+        assertTrue(ApiGuardFilter.streamed("/api/settings/tls"));
+        assertTrue(ApiGuardFilter.streamed("/api/wallpapers"));
+        assertTrue(ApiGuardFilter.streamed("/api/wallpapers/3"));
+        assertTrue(ApiGuardFilter.streamed("/api/packs/install"));
+        assertTrue(ApiGuardFilter.streamed("/api/plugins/install"));
+        assertTrue(ApiGuardFilter.streamed("/api/instances/abc/plugins/install"));
+        assertTrue(ApiGuardFilter.streamed("/api/mc/instances/abc/world/import"));
+    }
+
+    @Test
+    void jsonRoutesStayUnderTheCap() {
+        assertFalse(ApiGuardFilter.streamed("/api/settings/logs"));
+        assertFalse(ApiGuardFilter.streamed("/api/settings/registry"));
+        assertFalse(ApiGuardFilter.streamed("/api/auth/login"));
+        assertFalse(ApiGuardFilter.streamed("/api/mc/instances"));
+        assertFalse(ApiGuardFilter.streamed("/api/mc/instances/abc/backups"));
+        assertFalse(ApiGuardFilter.streamed("/api/instances"));
+        assertFalse(ApiGuardFilter.streamed("/api/wallpapers-backup"));
+    }
+
+    @Test
+    void onlyMethodsWithBodiesRequireALength() {
+        assertTrue(ApiGuardFilter.expectsBody("POST"));
+        assertTrue(ApiGuardFilter.expectsBody("PUT"));
+        assertTrue(ApiGuardFilter.expectsBody("PATCH"));
+        assertFalse(ApiGuardFilter.expectsBody("GET"));
+        assertFalse(ApiGuardFilter.expectsBody("HEAD"));
+        assertFalse(ApiGuardFilter.expectsBody("DELETE"));
+    }
+
     /// Sends the request line and headers only, then reads the status line: the body the
     /// headers announce is never written, so nothing races the answer.
-    private static String statusLineOnly(int port, String contentType, int announcedBytes) throws IOException {
+    private static String statusLineOnly(int port, String path, String contentType, int announcedBytes)
+            throws IOException {
         try (Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress("127.0.0.1", port), 5_000);
             socket.setSoTimeout(5_000);
-            String request = "POST /api/upload HTTP/1.1\r\n"
+            String request = "POST " + path + " HTTP/1.1\r\n"
                     + "Host: 127.0.0.1\r\n"
                     + contentType + "\r\n"
                     + "Content-Length: " + announcedBytes + "\r\n"
@@ -156,10 +225,27 @@ class ApiGuardFilterTest {
         }
     }
 
+    /// Same, but with `Transfer-Encoding: chunked` and no body at all.
+    private static String statusLineOnlyChunked(int port, String path) throws IOException {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress("127.0.0.1", port), 5_000);
+            socket.setSoTimeout(5_000);
+            String request = "POST " + path + " HTTP/1.1\r\n"
+                    + "Host: 127.0.0.1\r\n"
+                    + "Content-Type: application/json\r\n"
+                    + "Transfer-Encoding: chunked\r\n"
+                    + "Connection: close\r\n\r\n";
+            socket.getOutputStream().write(request.getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().flush();
+            return new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII))
+                    .readLine();
+        }
+    }
+
     private static byte[] multipartBody(int payloadBytes) {
         byte[] head = ("--XyZ\r\nContent-Disposition: form-data; name=\"file\"; filename=\"x.dspack\"\r\n"
-                + "Content-Type: application/octet-stream\r\n\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        byte[] tail = "\r\n--XyZ--\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                + "Content-Type: application/octet-stream\r\n\r\n").getBytes(StandardCharsets.UTF_8);
+        byte[] tail = "\r\n--XyZ--\r\n".getBytes(StandardCharsets.UTF_8);
         byte[] body = new byte[head.length + payloadBytes + tail.length];
         System.arraycopy(head, 0, body, 0, head.length);
         System.arraycopy(tail, 0, body, head.length + payloadBytes, tail.length);

@@ -59,6 +59,7 @@ import org.jackhuang.hmcl.web.http.ModelsApiServlet;
 import org.jackhuang.hmcl.web.http.BrandSettingsApiServlet;
 import org.jackhuang.hmcl.web.http.PacksApiServlet;
 import org.jackhuang.hmcl.web.http.PluginsApiServlet;
+import org.jackhuang.hmcl.web.http.LogRetentionApiServlet;
 import org.jackhuang.hmcl.web.http.RegistrySettingsApiServlet;
 import org.jackhuang.hmcl.web.http.StaticServlet;
 import org.jackhuang.hmcl.web.http.TasksApiServlet;
@@ -335,6 +336,9 @@ public final class HdslServer {
         // Registered before the `/api/settings/*` holder below and matched by its longer prefix:
         // the download source is a launcher setting, and TLS is the other thing this path serves.
         context.addServlet(new ServletHolder(new RegistrySettingsApiServlet()), "/api/settings/registry/*");
+        // 日志保留窗口。比 `/api/settings/*` 的 TLS 更长的前缀，Jetty 按最长匹配。
+        context.addServlet(new ServletHolder(new LogRetentionApiServlet(
+                config, developerElevation, authService, tlsActive)), "/api/settings/logs/*");
         // The brand page's own data (sources + policy). Same reason for the longer prefix: the
         // `/api/settings/*` holder below is TLS, and Jetty matches the longest path spec.
         context.addServlet(new ServletHolder(new BrandSettingsApiServlet(

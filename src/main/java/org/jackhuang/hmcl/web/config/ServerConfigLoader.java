@@ -156,14 +156,47 @@ public final class ServerConfigLoader {
         if (root.containsKey("mc")) {
             applyMc(config, mapField(root, "mc"));
         }
+        if (root.containsKey("logs")) {
+            applyLogs(config, mapField(root, "logs"));
+        }
         for (String key : root.keySet()) {
             switch (key) {
                 case "bind_host", "port", "public_base_url", "https", "auth", "web_shell",
-                        "developer_guard", "mc" -> {
+                        "developer_guard", "mc", "logs" -> {
                 }
                 default -> logger.warning(yamlFile + ": unknown key `" + key + "` ignored");
             }
         }
+    }
+
+    /// `logs:` — 保留窗口。只能比 [LogRetention#HARD_CAP_DAYS] 短；越界直接拒绝，
+    /// 免得一个手滑的 `3650` 悄悄把「最多三年」变成永久保留。
+    private static void applyLogs(ServerConfig config, Map<String, Object> section) {
+        if (section.containsKey("audit_days")) {
+            config.logs.auditDays = retentionDays(section, "audit_days");
+        }
+        if (section.containsKey("panel_days")) {
+            config.logs.panelDays = retentionDays(section, "panel_days");
+        }
+        for (String key : section.keySet()) {
+            switch (key) {
+                case "audit_days", "panel_days" -> {
+                }
+                default -> throw new ConfigException(
+                        "logs: unknown key `" + key + "` (only `audit_days` and `panel_days` are accepted)");
+            }
+        }
+    }
+
+    private static int retentionDays(Map<String, Object> section, String key) {
+        int days = intField(section, key);
+        int floor = org.jackhuang.hmcl.web.logs.LogRetention.FLOOR_DAYS;
+        int cap = org.jackhuang.hmcl.web.logs.LogRetention.HARD_CAP_DAYS;
+        if (days < floor || days > cap) {
+            throw new ConfigException("logs." + key + " must be between " + floor
+                    + " and " + cap + " days, got " + days);
+        }
+        return days;
     }
 
     private static void applyWebShell(ServerConfig config, Map<String, Object> webShell) {

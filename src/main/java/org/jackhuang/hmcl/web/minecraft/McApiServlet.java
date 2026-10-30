@@ -210,6 +210,12 @@ public final class McApiServlet extends HttpServlet {
             body.addProperty("termsVersion", record.termsVersion());
             body.addProperty("termsAcceptedAt", record.termsAcceptedAt());
             body.addProperty("acceptedBy", record.acceptedBy());
+            // 同意记录回看要能对上「当时看的是哪一版文本」，所以哈希与确认方式一起给。
+            // `acceptedFrom`（来源 IP）故意不给：那是审计字段，不是回看要展示的内容。
+            body.addProperty("termsTextHash", record.termsTextHash());
+            body.addProperty("eulaHash", record.eulaHash());
+            body.addProperty("eulaRetrievedAt", record.eulaRetrievedAt());
+            body.addProperty("ackMethod", record.ackMethod());
         });
         Json.write(response, body);
     }

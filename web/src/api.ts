@@ -729,9 +729,14 @@ export interface McFeature {
   locked: boolean;
   lockRemainingSeconds: number;
   keepFeature: boolean | null;
+  /** 同意记录（有则回看用；功能关闭后仍保留）。 */
   termsVersion?: number;
   termsAcceptedAt?: string;
   acceptedBy?: string;
+  termsTextHash?: string;
+  eulaHash?: string;
+  eulaRetrievedAt?: string;
+  ackMethod?: string;
 }
 
 export interface McEula {

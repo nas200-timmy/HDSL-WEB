@@ -198,6 +198,35 @@ public final class ServerConfigWriter {
         return root;
     }
 
+    /// Records the log-retention windows in `server.yaml`'s `logs:` section.
+    ///
+    /// Only `audit_days` / `panel_days` are touched; any other key an operator
+    /// put under `logs:` rides along untouched, same as every other section.
+    /// The range check lives in the caller (`RetentionUpdate`), so a bad value
+    /// never reaches the file.
+    ///
+    /// @param dataDir   the directory `server.yaml` lives in
+    /// @param auditDays days to keep the audit trail
+    /// @param panelDays days to keep the panel's own log files
+    /// @throws IOException when the file cannot be read or written
+    public static void setLogRetention(Path dataDir, int auditDays, int panelDays) throws IOException {
+        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
+        Map<String, Object> root = readExisting(yamlFile);
+
+        Map<String, Object> logs = new LinkedHashMap<>();
+        Object existing = root.get("logs");
+        if (existing instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                logs.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        logs.put("audit_days", auditDays);
+        logs.put("panel_days", panelDays);
+        root.put("logs", logs);
+
+        writeAtomically(yamlFile, root);
+    }
+
     /// Writes the document by replacing the file, so a half-written
     /// `server.yaml` is never what a restart reads. The staging file carries
     /// owner-only permissions: the document can hold a PKCS#12 password.
