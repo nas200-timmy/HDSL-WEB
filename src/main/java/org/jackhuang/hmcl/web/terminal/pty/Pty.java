@@ -31,9 +31,10 @@ import java.util.Map;
 /// A pseudo terminal running exactly the command it was given.
 ///
 /// There is no shell in the chain: the command's first element is the program
-/// and the rest are its arguments, handed to `posix_spawn` as an argv array.
-/// The child gets its own process group (its pid), so [#terminate] can sweep
-/// the whole tree the agent may have spawned.
+/// and the rest are its arguments, handed to `posix_spawn` as an argv array on
+/// POSIX and to `CreateProcessW` as argv-only on Windows. The child gets its own
+/// process group (POSIX) or job object (Windows), so [#terminate] can sweep the
+/// whole tree the agent may have spawned.
 ///
 /// The three pieces of the contract that matter to the web terminal:
 ///
@@ -42,8 +43,8 @@ import java.util.Map;
 ///   ever started.
 /// - **Input stops first.** Once the child is gone, writes are refused; the
 ///   terminal can never be handed to something else.
-/// - **Resizing is `TIOCSWINSZ` and nothing else**; the kernel delivers
-///   `SIGWINCH` to the foreground process group.
+/// - **Resizing is `TIOCSWINSZ` on POSIX and `ResizePseudoConsole` on Windows**;
+///   either way the child learns the new size.
 @NotNullByDefault
 public interface Pty extends AutoCloseable {
 
@@ -63,6 +64,9 @@ public interface Pty extends AutoCloseable {
         OperatingSystem os = OperatingSystem.CURRENT_OS;
         if (os == OperatingSystem.LINUX || os == OperatingSystem.MACOS) {
             return PosixPty.spawn(command, cwd, environment, size);
+        }
+        if (os == OperatingSystem.WINDOWS) {
+            return ConPty.spawn(command, cwd, environment, size);
         }
         throw new PtyException("pseudo terminals are not supported on " + os + " yet");
     }
