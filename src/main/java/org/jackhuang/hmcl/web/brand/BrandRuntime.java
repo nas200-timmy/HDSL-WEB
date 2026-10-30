@@ -925,13 +925,24 @@ public final class BrandRuntime {
                 STATES.put(id, State.STOPPED);
             } else {
                 String reason = "The " + brand.id() + " process exited unexpectedly";
+                List<String> tail = List.of();
                 try {
-                    List<String> tail = tail(logFile, TAIL_LINES);
+                    tail = tail(logFile, TAIL_LINES);
                     if (!tail.isEmpty()) {
                         reason = reason + " — log tail: " + String.join(" | ", tail);
                     }
                 } catch (IOException ignored) {
                     // The generic reason stands.
+                }
+                // The one tail that reads like nonsense but has a single cause: a
+                // JavaScript brand started through its `.cmd` shim, and the shim asked
+                // PATH for `node`. Say where node is supposed to come from instead of
+                // leaving the operator with a cmd.exe complaint.
+                String joined = String.join(" ", tail);
+                if (joined.contains("'node'") && (joined.contains("不是内部或外部命令")
+                        || joined.contains("not recognized as an internal or external command"))) {
+                    reason = reason + "（PATH 上没有 node：面板本应使用 <data>/hdsl/runtimes 里"
+                            + "托管的运行时；若也没有，请到「设置 → Node.js」一键安装）";
                 }
                 ERRORS.put(id, reason);
                 STATES.put(id, State.ERROR);
