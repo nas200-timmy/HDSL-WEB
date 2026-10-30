@@ -2,6 +2,36 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.6.36 — 2026-10-31 · 容器内置 ffmpeg；MC 复用旧存档；eula 兼容
+
+> 起因三件：实例里的 agent 要截取视频帧，发现容器没有 ffmpeg，正准备从 npm 拉
+> `ffmpeg-static`——那是每个实例各下一份、版本不一、还绕过了镜像的可复现性；
+> 以及“把老服搬进来”这件事需要一个明确边界：搬存档可以，搬代码不行。
+
+- 运行时镜像装 `ffmpeg` + `libavcodec-extra`（Debian 把受专利影响的编码器拆在
+  这个变体里：Xvid、AMR/AMR-WB、JPEG XL、codec2、GSM、Speex、twolame 等）。
+  基础包本身已带 x264 / x265 / SVT-AV1 / rav1e / aom / VP8/VP9 / WebP / Opus / MP3。
+- 构建期断言 `ffmpeg`、`ffprobe` 与 `libx264`/`libx265` 编码器都在，打包回退
+  当场失败，而不是等 agent 截帧时才发现。
+- 边界：Debian 不发 non-free 的 `fdk-aac` 与 `NVENC`（镜像里没有 CUDA）。需要
+  这些的项目应自带静态构建，不要指望镜像补齐。
+- **`eula.txt` 解析**：MC 自己写的文件带注释头，以前只有“整文件等于 `eula=true`”才算接受，
+  于是任何被 MC 启动过一次的服都会在面板里被判为“未接受”。现在逐行解析、跳过注释；
+  同一个键出现多次时**最后一个值生效**（和 Java Properties 一致，也就是 MC 自己的读法）。
+- **复用现有存档**（P1）：创建向导第一步可以直接选旧存档 zip——创建 → 导入存档 →
+  装服务端 → 完成，不用先建再跳页；实例页「世界」仍可随时导出/导入。导入前自动备份、
+  整体替换；顶层目录名和实例的世界目录名不一致会被拒绝（以前会静默套成
+  `world/oldworld/…`，服务器当新世界、存档等于没搬进来）。
+- **玩家名单导入**（P1）：停服时在「玩家」页导入一个 zip，`whitelist.json`、`ops.json`、
+  `banned-players.json`、`banned-ips.json` 放在 zip 根上；只认这四个名字，其它条目
+  （包括 jar）一律忽略，先校验是 JSON 数组再原子替换。
+- **导入自带 `server.jar`（P2）只留骨架**：`McServerImport` 整份注释、`ENABLED = false`，
+  记录威胁模型（同 uid、读得到 `/data` 的口令哈希与证书私钥）、确认流程、SHA-1/SHA-256
+  的验证边界与“未验证”标记的启用条件。见 `docs/minecraft.md §7.4`。
+- `docker-compose.yml`：MC 端口不再默认发布（25565 改成注释示例，写明容器端口必须等于
+  该实例的 `server-port`）；`HDSL_MC_DIR` 可切宿主目录，并提示 `chown 1000:1000`。
+  `.env` 进 `.gitignore` / `.dockerignore`。
+
 ## v0.6.35 — 2026-10-30 · 部署向导、裸部署工具链提示、MC 服务端正式可用
 
 > 起因三件：容器部署要手抄一长串 `docker run`，且 NAS 上常常没有 compose；

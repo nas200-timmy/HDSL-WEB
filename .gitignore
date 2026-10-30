@@ -26,3 +26,6 @@ bench/
 .docker-install.state
 .docker-install.env
 hdsl-web-data/
+
+# 本机环境变量（宿主路径、口令等）；只在部署机上存在
+.env

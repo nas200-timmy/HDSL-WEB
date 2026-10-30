@@ -34,3 +34,6 @@ tmp/
 .docker-install.state
 .docker-install.env
 hdsl-web-data/
+
+# 本机 .env（宿主路径/口令），永远不进构建上下文
+.env

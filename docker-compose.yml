@@ -31,6 +31,10 @@ services:
     # 改端口：在宿主机或 .env 里设 HDSL_PORT，下面三处（ports/environment/healthcheck）会一起跟着变。
     ports:
       - "${HDSL_PORT:-3080}:${HDSL_PORT:-3080}"
+      # Minecraft：**默认不发布**任何游戏端口。要对外开服时按实例逐个加一行，
+      # 且「宿主端口:容器端口」里的容器端口必须等于该实例的 `server-port`
+      # （面板里分配/可改，范围见 mc.port_start / mc.port_end）。多实例就是多行。
+      # - "25565:25565"
       # 可选：同时启用 80 做 HTTP→HTTPS 跳转
       # - "80:80"
 
@@ -73,10 +77,15 @@ services:
       # 命名卷：留在容器外持久保存，重建/升级都不丢
       # - hdsl-workspace:/home/hdsl/workspace
 
-      # ── 3. Minecraft 服务器（可选功能，装上就会用到）──────────────────────
-      # 世界存档、server.jar、日志都在 <卷>/<实例 id>/ 下面。**不挂这个卷就等于
-      # 把存档放在容器里**：重建容器时世界跟着没。要用 MC 功能就保持这一行。
-      - hdsl-mc:/home/hdsl/mc
+      # ── 3. Minecraft 服务器（可选，装上就会用到）──────────────────────────
+      # 默认用命名卷 hdsl-mc：数据在 Docker 卷里，重建容器不丢。
+      # 要改用宿主目录（承接已有服务端/存档），在本机 .env 里设（.env 已被
+      # .gitignore/.dockerignore 排除，不会进仓库，也不会进构建上下文）：
+      #   HDSL_MC_DIR=/path/to/mc-server
+      # 容器内固定是 /home/hdsl/mc。宿主目录必须让 uid/gid 1000 能读写，否则
+      # Docker 会替你建一个 root 拥有的目录，面板启动服务器时会写不进去：
+      #   sudo mkdir -p /path/to/mc-server && sudo chown 1000:1000 /path/to/mc-server
+      - "${HDSL_MC_DIR:-hdsl-mc}:/home/hdsl/mc"
 
     # $$ 让变量交给容器内的 shell 解析，取的是上面 environment 里的 HDSL_PORT
     healthcheck:
@@ -95,6 +104,7 @@ volumes:
   # 面板数据（口令 / 配置 / 证书 / 实例 / pnpm store）
   hdsl-data:
   # Minecraft 世界存档 + 服务端程序（/home/hdsl/mc）
+  # HDSL_MC_DIR 未设置时用它；宿主目录 bind 见上面的说明。
   hdsl-mc:
   # 工作区默认不建卷：不挂时就是容器内目录。要用命名卷保存工作区时，
   # 把上面 volumes 里那行取消注释，并在这里加：

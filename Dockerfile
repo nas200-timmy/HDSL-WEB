@@ -180,6 +180,18 @@ LABEL org.opencontainers.image.licenses="GPL-3.0-only"
 # unzip, zip, bzip2, 7zip  the unpacking half of the toolbox: tar/gzip come with
 #                  the base image and xz/zstd are above, these cover .zip, .bz2
 #                  and .7z — the three that otherwise end in "command not found"
+# ffmpeg           video/audio: extract frames, transcode, remux, probe. Debian's
+#                  build already carries the encoders an agent reaches for
+#                  (x264/x265, SVT-AV1/rav1e/aom, VP8/VP9, WebP, Opus, MP3);
+#                  `libavcodec-extra` swaps in the libavcodec variant with the
+#                  patent-encumbered extras Debian keeps out of the base one
+#                  (Xvid, AMR/AMR-WB, JPEG XL, codec2, GSM, Speex, twolame, …).
+#                  What no Debian package can add is the non-free tier —
+#                  fdk-aac, NVENC — so a project that needs those should ship
+#                  its own static build instead of expecting them here.
+#                  Without this, "grab a frame from this mp4" ends in an agent
+#                  pulling ffmpeg-static from npm: a second, unrelated copy of
+#                  a binary this image can carry once, for every instance.
 ARG NODE_VERSION=22.23.1
 ARG PNPM_VERSION=11.28.2
 # Node 官方 dist 的下载基址。国内网络直连 nodejs.org 会 TLS 握手失败（curl exit 35），
@@ -196,9 +208,11 @@ RUN apt-get update \
       ca-certificates \
       cargo \
       curl \
+      ffmpeg \
       git \
       golang-go \
       less \
+      libavcodec-extra \
       nano \
       openjdk-21-jdk-headless \
       pkg-config \
@@ -214,6 +228,13 @@ RUN apt-get update \
       zip \
       zstd \
  && rm -rf /var/lib/apt/lists/*
+
+# 兜底断言：ffmpeg 与 ffprobe 在，且带最常见的两种编码器。apt 解析出错、
+# 或者哪天 extra 变体的包名变了，都在构建期失败——而不是等 agent 截帧时才发现。
+RUN ffmpeg -hide_banner -version | head -1 \
+ && ffprobe -hide_banner -version | head -1 \
+ && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q 'libx264' \
+ && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q 'libx265'
 
 # Node 22 LTS from the official nodejs.org tarball. The architecture is read
 # from dpkg, so the same Dockerfile builds on amd64 and arm64; the archive is
