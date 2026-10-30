@@ -7,6 +7,19 @@ export function isInstanceRunning(state: string | null | undefined): boolean {
   return normState(state) === "RUNNING";
 }
 
+/// MC 实例的五种状态，翻成面板上的中文（接口里仍是 `STOPPED` 这类枚举）。
+const MC_STATE_LABEL: Record<string, string> = {
+  STOPPED: "已停止",
+  STARTING: "启动中",
+  RUNNING: "运行中",
+  STOPPING: "停止中",
+  FAILED: "启动失败",
+};
+
+export function mcStateLabel(state: string | null | undefined): string {
+  return MC_STATE_LABEL[normState(state)] ?? (state ?? "");
+}
+
 const TERMINAL_TASK_STATES = new Set([
   "DONE",
   "SUCCESS",

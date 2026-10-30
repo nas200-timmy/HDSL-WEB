@@ -12,6 +12,7 @@ import type {
   DeveloperStatus,
 } from "../types";
 import { errMsg } from "../utils";
+import { McFeatureCard } from "./McFeatureCard";
 
 /** 四个源在接口里的名字。 */
 type Kind = "pypi" | "python" | "archive" | "release";
@@ -381,6 +382,8 @@ export function BrandManagementPanel() {
           withElevation={withElevation}
         />
       ))}
+
+      <McFeatureCard />
     </>
   );
 }

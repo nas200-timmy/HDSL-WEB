@@ -15,6 +15,7 @@ import { InstanceDetailPage } from "./pages/InstanceDetailPage";
 import { InstancesPage } from "./pages/InstancesPage";
 import { LoginPage } from "./pages/LoginPage";
 import { MainPage } from "./pages/MainPage";
+import { McInstancePage } from "./pages/McInstancePage";
 import { McPage } from "./pages/McPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
@@ -301,6 +302,7 @@ export default function App() {
             <Route path="/instances/new" element={<InstallInstanceWizard />} />
             <Route path="/instances/:id" element={<InstanceDetailPage />} />
             <Route path="/mc" element={<McPage />} />
+            <Route path="/mc/:id" element={<McInstancePage />} />
             <Route path="/brands" element={<Navigate to="/instances?view=brands" replace />} />
             <Route path="/brands/:brand" element={<BrandDeepLink />} />
             <Route path="/download" element={<DownloadPage />} />

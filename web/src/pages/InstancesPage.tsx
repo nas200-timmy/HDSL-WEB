@@ -26,6 +26,7 @@ import {
 import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
 import { BrandsView, fallbackBrand, isBrandKey, type BrandKey } from "../components/BrandsView";
 import { I18N } from "../i18n";
+import { refreshMcFeature, useMcFeature } from "../mcFeature";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
 import { getState, logout, refreshExternal, refreshInstances, toast, useAppState } from "../store";
 import type { Instance } from "../types";
@@ -41,6 +42,8 @@ export function InstancesPage() {
   const nav = useNavigate();
   const s = useAppState();
   const selectedId = useSelectedInstanceId();
+  const mcFeature = useMcFeature();
+  const mcEnabled = mcFeature?.enabled === true;
   const [searchParams, setSearchParams] = useSearchParams();
 
   // 视图与品牌都从查询串来：`?view=brands` 开品牌视图；带 `?brand=` 的旧链接
@@ -88,6 +91,8 @@ export function InstancesPage() {
 
   useEffect(() => {
     void refreshInstances(!getState().instancesLoaded);
+    // MC 服务端的入口挂在这一页的「品牌实例」下面，所以开关状态在这儿刷一次。
+    void refreshMcFeature();
     let alive = true;
     api
       .developerStatus()
@@ -211,6 +216,20 @@ export function InstancesPage() {
             <span className="side-title">{I18N["dsh.brand.page.title"]}</span>
           </span>
         </button>
+        {/* MC 服务端（第三方功能）：只有功能开启后才出现，而且挂在「品牌实例」
+            这一层下面——它和品牌实例是同一类东西（面板托管的另一套进程），
+            不是面板自己的页面。开关在「设置 → 品牌实例」。 */}
+        {mcEnabled && (
+          <button className="side-item ripple-host" onClick={() => nav("/mc")}>
+            <span className="side-graphic">
+              <TerminalIcon size={20} />
+            </span>
+            <span className="side-text">
+              <span className="side-title">MC 服务器实例</span>
+              <span className="side-subtitle">原版服务端 · 实验性</span>
+            </span>
+          </button>
+        )}
         <div className="sidebar-spacer" />
         <div className="side-actions">
             <button className="side-item ripple-host" onClick={() => nav("/instances/new")}>
@@ -300,14 +319,6 @@ export function InstancesPage() {
                 : "加载中…"}
             </span>
             <span className="spacer" />
-            <button
-              className="tool-btn ripple-host"
-              title="MC 服务端（实验性；首次开启需开发者密码）"
-              onClick={() => nav("/mc")}
-            >
-              <TerminalIcon size={20} />
-              MC 服务端
-            </button>
             <button className="tool-btn ripple-host" title={I18N["search"]} onClick={() => setSearchMode(true)}>
               <SearchIcon size={20} />
               {I18N["search"]}

@@ -633,6 +633,8 @@ export const api = {
     decline: () => request<{ ok: boolean }>("/api/mc/feature/decline", jsonInit("POST", {})),
     versions: () => request<{ versions: McVersion[] }>("/api/mc/versions"),
     instances: () => request<{ instances: McInstance[] }>("/api/mc/instances"),
+    instance: (id: string) =>
+      request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}`),
     create: (body: {
       name: string;
       version: string;

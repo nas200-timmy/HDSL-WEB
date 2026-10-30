@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { api } from "../api";
 import { useMobileLayout } from "../hooks";
 import { I18N } from "../i18n";
 import { closeSidebar, logout, useAppState } from "../store";
@@ -13,7 +12,6 @@ import {
   LogoutIcon,
   PersonIcon,
   SettingsIcon,
-  TerminalIcon,
 } from "./icons";
 
 /** 实例图标：icon 字段是可访问 URL 时显示图片，否则用 dsh 的品牌标志（DeepSeek 鲸鱼）。 */
@@ -46,13 +44,6 @@ export function MainSideBar() {
   const location = useLocation();
   const s = useAppState();
   const mobile = useMobileLayout();
-  // 功能关闭时侧栏不出现 MC 入口（"看不出存在"）；开启入口在实例页。
-  const [mcEnabled, setMcEnabled] = useState(false);
-  useEffect(() => {
-    api.mc.feature()
-      .then((feature) => setMcEnabled(feature.enabled))
-      .catch(() => setMcEnabled(false));
-  }, []);
 
   const account = s.accounts && s.accounts.length > 0 ? s.accounts[0] : null;
   const current = useMemo(() => {
@@ -120,20 +111,6 @@ export function MainSideBar() {
           <span className="side-title">{I18N["dsh.instance.list"]}</span>
         </span>
       </button>
-      {mcEnabled && (
-        <button
-          className={`side-item ripple-host${selected("/mc") ? " selected" : ""}`}
-          onClick={go("/mc")}
-        >
-          <span className="side-graphic">
-            <TerminalIcon size={20} />
-          </span>
-          <span className="side-text">
-            <span className="side-title">MC 服务端</span>
-            <span className="side-subtitle">实验性</span>
-          </span>
-        </button>
-      )}
       <button
         className={`side-item ripple-host${selected("/download") ? " selected" : ""}`}
         onClick={go("/download")}

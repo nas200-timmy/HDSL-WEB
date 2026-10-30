@@ -442,7 +442,7 @@ macOS 后台服务（launchd）没有 GUI，同样走配置。
 | 方法 | 路径 | 说明 | 闸门 |
 |---|---|---|---|
 | GET | `/api/mc/feature` | 状态（`state` / `locked` / `lockRemainingSeconds` / `keepFeature`）、条款版本、EULA 哈希 | 功能闸门 |
-| GET | `/api/mc/eula` | 官方 EULA 原文（带哈希/拉取时间；离线返回 503） | 人类会话 |
+| GET | `/api/mc/eula` | 官方 EULA 正文（已剥离页面外壳与导航，只留协议本身；带哈希/拉取时间；离线返回 503） | 人类会话 |
 | POST | `/api/mc/feature/enable` | 开启（需 `eulaAcknowledged` + `termsAcknowledged` + `eulaHash`/`termsVersion`/`termsTextHash` + `sawDeclineOption`/`uiVersion` + 提权；锁定中 409 + `lockRemainingSeconds`） | 人类会话 |
 | POST | `/api/mc/feature/decline` | 记录"知情后选择不启用"（可选，不改状态） | 人类会话 |
 | POST | `/api/mc/feature/stop` | 「停止 MC 功能」：停所有服 + 起跑 1 小时，进入锁定 | 人类会话 |
@@ -575,8 +575,9 @@ macOS 后台服务（launchd）没有 GUI，同样走配置。
 - `feature.json` 原子写（照 `SettingsManager.writeSnapshot`）
 - `McFeatureFilter`：闸门顺序见 §5.5
 - 审计：`AuditLog.Channel.MC`，记 enable/close/confirm/blocked-enable/各实例动作
-- **EULA 抓取与缓存**：`McEulaSource` 拉官方原文（`https://www.minecraft.net/en-us/eula`），
-  按内容哈希 + 拉取时间缓存；离线且无快照时**拒绝开启**（看不到协议就不能同意）。
+- **EULA 抓取与缓存**：`McApiServlet.fetchEula` 拉官方页面（`https://www.minecraft.net/en-us/eula`），
+  `McHtml.legalText` 剥壳成正文，按正文的 `sha256` + 拉取时间缓存 24 小时；
+  离线且无快照时**拒绝开启**（看不到协议就不能同意）。
   **不随包分发 EULA 全文**（版权内容）；离线环境由部署者导入文本，面板只记哈希
 - 免责：**两个确认**（对 Mojang 的 EULA、对面板的使用条款）+ `termsTextHash` + `eulaHash`；
   开启时逐项校验，不看布尔。只有两项都确认后才写 `eula.txt` 的 `eula=true`——不要在建实例时预写
@@ -613,10 +614,14 @@ macOS 后台服务（launchd）没有 GUI，同样走配置。
 
 ### 10.3 页面
 
-- 分类首页：卡片（状态、端口、玩家数、内存、版本）
-- 详情页：控制台 + 属性 + 玩家 + 备份 + 世界
-- 功能面板（在分类管理里）：状态、倒计时、开启/停止功能/确认关闭/我不想关掉功能
-- 开启向导：提权 → **EULA 阅读器**（§11.4）→ 滚到底 → 两个勾选 → 开启
+- 入口：**实例列表 → 品牌实例**下面的一项「MC 服务器实例」（`/mc`）。功能关闭时
+  这一项根本不渲染；侧栏没有独立页签（§3.3 的「看不出存在」）。
+- 分类首页（`/mc`）：实例卡片 + 新建表单 + 快速启停；点卡片进详情页。
+- 详情页（`/mc/:id`，左侧子页签）：概览（启停/强杀/装版本/重命名/删除）、控制台、
+  服务端设置、世界备份、玩家、世界、日志。
+- 功能面板（**设置 → 品牌实例**，`McFeatureCard`）：状态、倒计时、开启/停止功能/
+  确认关闭/我不想关掉功能。
+- 开启向导：提权 → **EULA 阅读器**（正文由服务端剥壳序列化，`McHtml`）→ 滚到底 → 两个勾选 → 开启
 - 开启向导里始终有次按钮**「我已知晓风险，暂不启用」**：关闭向导、保持 `DISABLED`，
   不写 `eula.txt`、不改状态（文案可以更口语：*我看完了，但我不开*）
 - 停止功能按下后：按钮显示"已按下"（不可再按），旁边出现
@@ -690,7 +695,11 @@ MC 服务端与 AI agent 是同一类工作负载：执行第三方代码、不�
 
 **EULA 原文**
 
-- 展示的是 **MC 官方协议原文**（`https://www.minecraft.net/en-us/eula`），不是摘要。
+- 展示的是 **MC 官方协议正文**（`https://www.minecraft.net/en-us/eula`），不是摘要。
+  页面本身是营销外壳套着协议：服务端先剥掉 `script/style/head`、按块级标签断行、
+  反转义实体，再从协议自己的标题（`Minecraft End(er)-User License Agreement`）
+  开始截取（`McHtml.legalText`）。**不要把原始 HTML 直接丢给阅读器**——那正是
+  之前"看到的全是标签和导航"的原因。
 - 运行时拉取，按内容哈希 + 拉取时间缓存；离线且无快照时**拒绝开启**（看不到协议就不能同意）。
 - **不随包分发 EULA 全文**（版权内容）：离线环境由部署者自行准备文本并在同意页导入，
   面板只记录哈希与时间。能不分发就不分发，比标来源安全。

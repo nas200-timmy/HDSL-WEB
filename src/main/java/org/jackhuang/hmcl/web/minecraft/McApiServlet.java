@@ -254,9 +254,15 @@ public final class McApiServlet extends HttpServlet {
                 return null;
             }
             byte[] bytes = answer.body();
-            String text = new String(bytes, StandardCharsets.UTF_8);
+            String text = McHtml.legalText(new String(bytes, StandardCharsets.UTF_8));
+            if (text.isBlank()) {
+                return null;
+            }
+            // The hash is over the text that is shown, so an enable records
+            // exactly the document the user read — not the page's chrome.
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            String hash = "sha256:" + HexFormat.of().formatHex(digest.digest(bytes));
+            String hash = "sha256:" + HexFormat.of().formatHex(
+                    digest.digest(text.getBytes(StandardCharsets.UTF_8)));
             return new CachedEula(text, hash, Instant.now().toString(), Instant.now());
         } catch (Exception e) {
             return null;
