@@ -252,7 +252,12 @@ public final class FirstPartyPlugins {
             }
             bytes = in.readAllBytes();
         } catch (IOException e) {
-            throw new DshException("读取自带插件 " + bundled.file() + " 失败", e);
+            // The one failure that looks like a broken build but is not: the jar was
+            // replaced while this panel was running, so the ZIP index it holds points
+            // into bytes that have moved. Say that instead of blaming the file.
+            throw new DshException("读取自带插件 " + bundled.file() + " 失败"
+                    + org.jackhuang.hmcl.util.PanelJar.replacedHint()
+                            .map(hint -> "：" + hint).orElse(""), e);
         }
         String recorded = bundled.sha256();
         if (recorded != null && !recorded.isBlank()) {
