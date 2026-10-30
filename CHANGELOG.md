@@ -2,6 +2,39 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 · GitHub 在面板里"搜不到 / 下不下来"；覆盖 jar 后自带插件读失败
+
+> 起因：Windows 上装 claude-web / octop / ZCode 全部失败——品牌版本列表是空的，
+> ZCode 源码"could not be downloaded"，而浏览器打开同一批地址一切正常。
+
+- **让 JVM 信任机器自己的根证书**（`OsTrustStore`）：浏览器能打开的站点面板报
+  `PKIX path building failed`，原因是中间人代理（杀毒、企业网关、FastGithub 这类加速器）
+  把自己的根证书装在 **Windows 证书库**里，而 Java 只认自带的 `cacerts`。启动最前面按
+  `Windows-ROOT` 读一次；操作者自己在命令行指定过 `javax.net.ssl.trustStore`/`...Type`
+  就不动，JDK 读不了这个库（没有 `SunMSCAPI`）也不动。修完实测：claude-web 版本列表
+  `0.4.6…`、octop `1.0.3b1`、`codeload.github.com` 的 86 MB 源码包 200。
+- **覆盖运行中的 jar 时把话说清**：Windows 上覆盖一个正在运行的 jar 是能成功的，JVM 继续
+  握着旧句柄，直到下一次读资源——`ZipException: invalid LOC header (bad signature)`，
+  现象是"文件明明在（`unzip -t` 通过）却读不出来"：自带插件的 tgz 装不上、页面加载不出
+  资源。现在启动时记下自己那个 jar 的大小与时间，读失败且文件已变时直接说"重启面板即可"。
+
+## 未发布 · Windows 冒烟测试：kimi 找不到 bash；进程内 TUI 插件对 dsh 0.2.2 的口径
+
+> 起因：在裸 Windows 面板上验终端时撞到两条。一条是面板该做而没做的（把 Git Bash 告诉
+> kimi-code），一条是面板说了不该说的话（宣称支持一个插件自己都不接受的 dsh 版本）。
+
+- **kimi-code 在 Windows 上不会自己找 bash**：第一次要跑命令就
+  `failed to start shell: Git Bash was not found on this Windows host`，哪怕 Git for Windows
+  装得好好的。面板现在找到它（`ProgramFiles` / `ProgramFiles(x86)` / `LOCALAPPDATA\Programs`
+  下的 `Git\bin\bash.exe`，其次 `PATH`），以 `KIMI_SHELL_PATH` 交给实例——终端与网页模式都设；
+  操作者自己设过就不覆盖。**不采用** `System32\bash.exe` 与 `WindowsApps\bash.exe`：那是 WSL
+  启动器，交给 agent 等于让它跑到另一个系统里执行。
+- **进程内 TUI 插件的 `requiresDsh` 少了上界**：面板只写了 `>=0.2.0-rc.2`，于是一个 dsh
+  `0.2.2-alpha.2` 的实例被判为"适配"，装完之后 dsh 自己拒绝加载（`incompatible with dsh
+  0.2.2-alpha.2`，插件的 `peerDependencies` 只到 `0.2.1-rc.3`）。现在按插件的真实范围写成
+  `>=0.2.0-rc.2 <0.2.2-0`——`-0` 是 semver 的"含预发布"写法，裸 `<0.2.2` 会按数值比较把
+  `0.2.2-alpha.2` 也放进来。不适配时面板直说，并推荐 ACP 版终端（它跨两条线都能跑）。
+
 ## 未发布 · 没有系统 Node.js 的机器上实例页白屏
 
 > 起因：裸部署（`java -jar`，机器上没有 node）打开面板，实例页直接报
