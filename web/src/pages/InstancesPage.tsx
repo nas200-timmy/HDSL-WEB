@@ -369,9 +369,12 @@ export function InstancesPage() {
                           {inst.name}
                           <StateBadge state={inst.state} />
                         </span>
-                        <span className="tlli-subtitle">
+                        <span className="tlli-subtitle" title={inst.error ?? undefined}>
                           {inst.id} · {inst.version}
                           {st === "RUNNING" && inst.url ? ` · ${withBase(inst.url)}` : ""}
+                          {/* 失败要说原因：启动被拒（安装不完整、缺运行时）之前只显示一个
+                              「失败」，原因藏在实例详情的事件流里，等于没有。 */}
+                          {st === "FAILED" && inst.error ? ` · ${inst.error}` : ""}
                         </span>
                       </span>
                       <span className="row-actions" onClick={(e) => e.stopPropagation()}>

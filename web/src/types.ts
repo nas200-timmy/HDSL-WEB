@@ -30,6 +30,8 @@ export interface Instance {
   account?: string | null;
   /** 详情接口附带：最近一次安装的进度/结果（失败原因在这里） */
   installProgress?: InstallProgress;
+  /** state = FAILED 时的原因（启动被拒 / 进程崩溃的尾巴） */
+  error?: string | null;
 }
 
 /** 安装进度（GET /api/instances/{id} 的 installProgress 字段）。 */

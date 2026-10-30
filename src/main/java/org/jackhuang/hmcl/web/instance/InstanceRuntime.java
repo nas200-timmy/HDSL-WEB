@@ -443,7 +443,21 @@ public final class InstanceRuntime {
         json.addProperty("homeMode", instance.homeMode().name().toLowerCase(java.util.Locale.ROOT));
         json.addProperty("port", portOf(instance));
         json.addProperty("portMode", instance.portModeOrDefault().name().toLowerCase(java.util.Locale.ROOT));
-        json.addProperty("state", stateOf(instance.id()));
+        String state = stateOf(instance.id());
+        json.addProperty("state", state);
+        // Why it failed, in the same answer that says it failed. The crash tail was only
+        // ever published on the instance's event stream, so a list/detail reader saw
+        // "FAILED" and nothing else — including for a launch refused before any process
+        // started (a half-installed tree, a missing runtime), where there is no process to
+        // carry a tail.
+        if ("FAILED".equals(state)) {
+            EndedState last = ended.get(instance.id());
+            String reason = last == null ? null
+                    : last.launchError() != null ? last.launchError() : tail(last.process());
+            json.add("error", reason == null
+                    ? com.google.gson.JsonNull.INSTANCE
+                    : new com.google.gson.JsonPrimitive(reason));
+        }
         Optional<DshProcess> running = runningProcess(instance.id());
         if (running.isPresent() && running.get().state() == DshProcess.State.READY) {
             running.get().webUrl().ifPresent(webUrl -> json.addProperty("url", externalUrl(instance.id(), webUrl)));
