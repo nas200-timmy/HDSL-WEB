@@ -91,6 +91,32 @@ class ZcodeTuiTest {
                 "the default `node` must resolve through PATH");
     }
 
+    /// The runtime the panel installed is a first-class answer.
+    ///
+    /// On a bare Windows deployment there is no `node` on `PATH` — the panel installs
+    /// one under `<data>/hdsl/runtimes` so nobody has to — and ZCode used to be
+    /// launched as a bare `node`, which failed with `CreateProcess error=2` while that
+    /// runtime sat right there. The lookups are passed in so this does not depend on
+    /// what the machine running the test happens to have.
+    @Test
+    void thePanelsManagedRuntimeIsUsedWhenNothingIsOnPath(@TempDir Path temp) throws Exception {
+        Path managed = Files.createFile(temp.resolve("node.exe"));
+
+        assertEquals(managed, ZcodeTui.resolveNode(null,
+                java.util.Optional::<Path>empty, () -> java.util.Optional.of(managed)));
+        // …and the system's own node still wins when there is one.
+        Path system = Files.createFile(temp.resolve("system-node.exe"));
+        assertEquals(system, ZcodeTui.resolveNode(null,
+                () -> java.util.Optional.of(system), () -> java.util.Optional.of(managed)));
+    }
+
+    @Test
+    void neitherPathNorAManagedRuntimeSaysWhatToDo() {
+        IOException refused = assertThrows(IOException.class, () -> ZcodeTui.resolveNode(null,
+                java.util.Optional::<Path>empty, java.util.Optional::<Path>empty));
+        assertTrue(refused.getMessage().contains("设置 → Node.js"), refused.getMessage());
+    }
+
     /// The same thing through the public entry: a distribution plus the
     /// servlet's default must produce a runnable argv.
     @Test

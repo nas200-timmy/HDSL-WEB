@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.terminal;
 
+import org.jackhuang.hmcl.dsh.DshNodeRuntime;
 import org.jackhuang.hmcl.util.platform.Executables;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -28,6 +29,8 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 /// ZCode's interactive TUI: `node <release>/bin/zcode.mjs`, nothing else.
 ///
@@ -107,12 +110,46 @@ public final class ZcodeTui {
     /// @param configured the configured Node, may be blank
     /// @return a program that can actually be started
     /// @throws IOException when nothing startable can be resolved
-    static Path resolveNode(@Nullable String configured) throws IOException {
+    public static Path resolveNode(@Nullable String configured) throws IOException {
+        return resolveNode(configured,
+                () -> Executables.resolve("node"),
+                () -> DshNodeRuntime.detectManaged().map(DshNodeRuntime::node));
+    }
+
+    /// The same decision with its two lookups passed in, so a machine's own state
+    /// (does it have a Node? does the panel have a managed one?) is not what the
+    /// test depends on.
+    ///
+    /// The order is the point: what the operator configured, then the system's own
+    /// `node`, then the runtime the panel installed under `<data>/hdsl/runtimes`.
+    /// The last one is what a bare Windows deployment has — the panel installs it
+    /// so nobody has to install Node — and skipping it is why a ZCode instance used
+    /// to fail with `CreateProcess error=2` while a perfectly good runtime sat in
+    /// the data directory.
+    ///
+    /// @param configured the configured Node, may be blank
+    /// @param onPath     what `node` on `PATH` resolves to
+    /// @param managed    the panel's own runtime, if one is installed
+    /// @return a program that can actually be started
+    /// @throws IOException when nothing startable can be resolved
+    static Path resolveNode(@Nullable String configured,
+                            java.util.function.Supplier<java.util.Optional<Path>> onPath,
+                            java.util.function.Supplier<java.util.Optional<Path>> managed)
+            throws IOException {
         if (configured != null && !configured.isBlank()) {
             return Executables.resolve(configured).orElseThrow(() -> new IOException(
                     "zcode.nodePath does not point at a startable program: " + configured));
         }
-        return Executables.resolve("node")
-                .orElseThrow(() -> new IOException("node is not on PATH; set zcode.nodePath or install Node"));
+        java.util.Optional<Path> system = onPath.get();
+        if (system.isPresent()) {
+            return system.get();
+        }
+        java.util.Optional<Path> panel = managed.get();
+        if (panel.isPresent()) {
+            LOG.info("ZCode: no node on PATH; using the panel's managed runtime " + panel.get());
+            return panel.get();
+        }
+        throw new IOException("Node.js 不在 PATH 上，面板也没有托管运行时；"
+                + "到「设置 → Node.js」一键安装（或安装 Node.js LTS 后重启面板）");
     }
 }

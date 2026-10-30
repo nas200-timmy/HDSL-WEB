@@ -44,6 +44,21 @@
   `>=0.2.0-rc.2 <0.2.2-0`——`-0` 是 semver 的"含预发布"写法，裸 `<0.2.2` 会按数值比较把
   `0.2.2-alpha.2` 也放进来。不适配时面板直说，并推荐 ACP 版终端（它跨两条线都能跑）。
 
+## 未发布 · 启动 ZCode 实例要求系统自己装 node
+
+> 起因：裸 Windows 部署上点「启动」ZCode 实例，`Failed to start the ZCode process:
+> Cannot run program "node" … CreateProcess error=2`。面板自己在
+> `<data>/hdsl/runtimes` 装了一个 Node，但它启动实例时写的是裸 `node`——只有 PATH 上
+> 有的机器才成立，而那正是"面板帮你装好、系统里没有"的反面。
+
+- ZCode 实例与 ZCode 终端统一走 `ZcodeTui.resolveNode`：`zcode.nodePath` →
+  PATH 上的 `node` → **面板托管运行时**；一个都没有时给 409 + 可行动的说明（去
+  「设置 → Node.js」一键安装），而不是把 `CreateProcess error=2` 原样扔出来。
+  启动时把 node 所在目录放进子进程 PATH（ZCode 自己的工具也会 spawn node）。
+- 同一类问题顺手堵在品牌启动上：kimi / claude-web 这类 JS 工具由 `.cmd` shim 启动，
+  shim 从 PATH 找 `node`。现在**只在 PATH 上没有 node 时**把面板托管的运行目录放到最前，
+  并写一条日志（octop 是 Python、opencode 是原生二进制，不受影响）。
+
 ## 未发布 · ZCode 源码解包在中文文件名上整包失败
 
 > 起因：Windows 上点「构建 ZCode」，在"解包源码"这一步失败：

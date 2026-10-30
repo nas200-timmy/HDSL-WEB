@@ -260,6 +260,20 @@ public final class BrandRuntime {
                 // Brand-specific environment (Claude Web takes its port from
                 // PORT; it has no port flag).
                 builder.environment().putAll(plan.environment());
+                // A brand whose tool is JavaScript is started through its own shim, and
+                // that shim asks PATH for `node`. A bare Windows deployment does not have
+                // one there — the panel installs its runtime under `<data>/hdsl/runtimes`
+                // — so the directory goes in front only when nothing on PATH answers.
+                // (Octop is Python and does not care; opencode ships a native binary.)
+                if (org.jackhuang.hmcl.util.platform.Executables.resolve("node").isEmpty()) {
+                    org.jackhuang.hmcl.dsh.DshNodeRuntime.detectManaged().ifPresent(runtime -> {
+                        builder.environment().put("PATH", runtime.binDirectory()
+                                + java.io.File.pathSeparator
+                                + builder.environment().getOrDefault("PATH", ""));
+                        LOG.info("Starting " + brand.id() + " instance " + id
+                                + " with the panel's managed Node.js on PATH: " + runtime.binDirectory());
+                    });
+                }
                 process = builder.start();
             } catch (IOException e) {
                 STATES.put(id, State.ERROR);

@@ -374,8 +374,22 @@ public final class ZcodeApiServlet extends HttpServlet {
         // web mode only starts once the terminal is gone, or two processes
         // would write the same config.
         instanceTerminal.close(ZcodeTui.BRAND, id);
+        // The panel's managed runtime is a first-class answer: a bare `node` is what a
+        // Windows deployment does *not* have, and this is where it used to fail
+        // (`CreateProcess error=2`) while a perfectly good runtime sat in the data dir.
+        Path node;
+        try {
+            node = nodeExecutable();
+        } catch (IOException e) {
+            Json.error(response, 409, "找不到可用的 Node.js：" + e.getMessage());
+            return;
+        }
+        Map<String, String> environment = new HashMap<>(System.getenv());
+        // The distribution spawns node for its own tools; PATH has to name the same one.
+        environment.put("PATH", node.getParent() + java.io.File.pathSeparator
+                + environment.getOrDefault("PATH", ""));
         ZcodeRuntime.Status status = ZcodeRuntime.launch(
-                manager, instance, new HashMap<>(System.getenv()), nodePath(), packageDir());
+                manager, instance, environment, node.toString(), packageDir());
         writeStatus(response, id, status);
     }
 
@@ -423,17 +437,20 @@ public final class ZcodeApiServlet extends HttpServlet {
             JsonObject body = instanceTerminal.open(request, id,
                     () -> ZcodeRuntime.stop(id),
                     resume -> ZcodeTui.target(packageDir, manager.dataDirectory(instance),
-                            manager.workspaceDirectory(instance), id, nodePath()));
+                            manager.workspaceDirectory(instance), id, config.zcode.nodePath));
             Json.write(response, body);
         } catch (InstanceTerminal.Refused e) {
             InstanceTerminal.write(request, response, e);
         }
     }
 
-    /// The node executable: the env override, else `node` from `PATH`.
-    private String nodePath() {
-        String configured = config.zcode.nodePath;
-        return configured == null || configured.isBlank() ? "node" : configured;
+    /// The node executable: `zcode.nodePath` when it was set, else the system's
+    /// `node`, else the runtime the panel manages.
+    ///
+    /// @return a node that can actually be started
+    /// @throws IOException when there is none
+    private Path nodeExecutable() throws IOException {
+        return ZcodeTui.resolveNode(config.zcode.nodePath);
     }
 
     // ------------------------------------------------------------------ open --
