@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api, type McInstance, type McVersion } from "../api";
 import { refreshMcFeature, useMcFeature } from "../mcFeature";
 import { AddIcon, RefreshIcon, RocketLaunchIcon } from "../components/icons";
-import { requestDeveloperPassword, isElevationRequired } from "../elevation";
+import { McCreateWizard } from "../components/McCreateWizard";
 import { toast } from "../store";
 import { errMsg, mcStateLabel } from "../utils";
 
@@ -21,6 +21,7 @@ export function McPage() {
   const [versions, setVersions] = useState<McVersion[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -57,16 +58,6 @@ export function McPage() {
     }, 2000);
     return () => window.clearInterval(timer);
   }, [transitioning]);
-
-  const withElevation = async <T,>(call: () => Promise<T>): Promise<T> => {
-    try {
-      return await call();
-    } catch (e) {
-      if (!isElevationRequired(e)) throw e;
-      if (!(await requestDeveloperPassword())) throw e;
-      return await call();
-    }
-  };
 
   const start = async (instance: McInstance) => {
     setBusy(true);
@@ -119,21 +110,26 @@ export function McPage() {
         功能开关在「设置 → 品牌实例」。
       </p>
 
-      <CreateInstanceForm
+      <div className="card" style={{ padding: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13 }}>
+          新建服务器会一次问完：参数 → 版本 → 存储位置 → 下载服务端。走完就能启动。
+        </span>
+        <span style={{ flex: 1 }} />
+        <button
+          className="btn btn-raised"
+          disabled={busy || feature.locked || versions.length === 0}
+          onClick={() => setWizardOpen(true)}
+          title={versions.length === 0 ? "版本清单拉不到（需要联网）" : undefined}
+        >
+          <AddIcon size={16} /> 新建服务器
+        </button>
+      </div>
+
+      <McCreateWizard
+        open={wizardOpen}
         versions={versions}
-        busy={busy || feature.locked}
-        onCreate={async (body) => {
-          setBusy(true);
-          try {
-            await withElevation(() => api.mc.create(body));
-            toast("success", `已创建「${body.name}」`);
-            await load();
-          } catch (e) {
-            toast("error", errMsg(e));
-          } finally {
-            setBusy(false);
-          }
-        }}
+        onClose={() => setWizardOpen(false)}
+        onCreated={() => void load()}
       />
 
       {feature.locked && (
@@ -174,54 +170,6 @@ export function McPage() {
           </div>
         ))
       )}
-    </div>
-  );
-}
-
-function CreateInstanceForm({
-  versions,
-  busy,
-  onCreate,
-}: {
-  versions: McVersion[];
-  busy: boolean;
-  onCreate: (body: { name: string; version: string; memoryMb: number; levelName: string; seed?: string }) => void;
-}) {
-  const [name, setName] = useState("");
-  const [version, setVersion] = useState("");
-  const [memoryMb, setMemoryMb] = useState(2048);
-  const [levelName, setLevelName] = useState("world");
-  const [seed, setSeed] = useState("");
-  const releases = versions.filter((entry) => entry.type === "release").slice(0, 80);
-
-  return (
-    <div className="card" style={{ padding: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-      <input className="input" placeholder="实例名" value={name} onChange={(e) => setName(e.target.value)} style={{ flex: "1 1 140px" }} />
-      <select className="input" value={version} onChange={(e) => setVersion(e.target.value)} style={{ flex: "1 1 140px" }}>
-        <option value="">版本</option>
-        {releases.map((entry) => (
-          <option key={entry.id} value={entry.id}>{entry.id}</option>
-        ))}
-      </select>
-      <input
-        className="input"
-        type="number"
-        min={256}
-        step={256}
-        value={memoryMb}
-        onChange={(e) => setMemoryMb(Number(e.target.value) || 1024)}
-        style={{ width: 120 }}
-        title="内存（MB）"
-      />
-      <input className="input" value={levelName} onChange={(e) => setLevelName(e.target.value)} style={{ width: 120 }} title="世界目录名" />
-      <input className="input" placeholder="种子（可空）" value={seed} onChange={(e) => setSeed(e.target.value)} style={{ width: 120 }} />
-      <button
-        className="btn btn-raised"
-        disabled={busy || !name.trim() || !version}
-        onClick={() => onCreate({ name: name.trim(), version, memoryMb, levelName, seed: seed.trim() || undefined })}
-      >
-        <AddIcon size={16} /> 创建
-      </button>
     </div>
   );
 }

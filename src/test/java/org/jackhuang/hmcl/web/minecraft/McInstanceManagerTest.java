@@ -131,4 +131,65 @@ class McInstanceManagerTest {
         assertEquals(java.util.List.of(), manager.tailLog(manager.create(
                 "empty", "1.21.4", 25566, 25576, 2048, "world", null), 5));
     }
+
+    // ------------------------------------------------- 专用目录 + 旧位置兼容 --
+
+    @Test
+    void newInstancesGoToTheDedicatedRootAndLegacyOnesAreStillListed(@TempDir Path dir) throws Exception {
+        Path external = dir.resolve("home").resolve("mc");
+        Path legacy = dir.resolve("data").resolve("minecraft").resolve("instances");
+        McInstanceManager manager = new McInstanceManager(external, legacy);
+
+        McInstance old = manager.create("old", "1.21.4", 25565, 25575, 2048, "world", null, true);
+        McInstance fresh = manager.create("new", "1.21.4", 25566, 25576, 2048, "world", null);
+
+        assertTrue(Files.isDirectory(legacy.resolve(old.id())));
+        assertTrue(Files.isDirectory(external.resolve(fresh.id())));
+        assertEquals("data", manager.storageOf(old.id()));
+        assertEquals("external", manager.storageOf(fresh.id()));
+        assertEquals(2, manager.list().size());
+        assertNotNull(manager.find(old.id()));
+        assertTrue(manager.propertiesFile(old).startsWith(legacy));
+        assertTrue(manager.propertiesFile(fresh).startsWith(external));
+    }
+
+    @Test
+    void idsStayUniqueAcrossBothRoots(@TempDir Path dir) throws Exception {
+        Path external = dir.resolve("home").resolve("mc");
+        Path legacy = dir.resolve("data").resolve("minecraft").resolve("instances");
+        McInstanceManager manager = new McInstanceManager(external, legacy);
+
+        McInstance old = manager.create("survival", "1.21.4", 25565, 25575, 2048, "world", null, true);
+        McInstance fresh = manager.create("survival", "1.21.4", 25566, 25576, 2048, "world", null);
+
+        assertEquals("survival", old.id());
+        assertEquals("survival-2", fresh.id());
+    }
+
+    @Test
+    void editingPortsIgnoresTheInstanceItself(@TempDir Path dir) throws Exception {
+        McInstanceManager manager = manager(dir);
+        McInstance first = manager.create("a", "1.21.4", 25565, 25575, 2048, "world", null);
+        McInstance second = manager.create("b", "1.21.4", 25566, 25576, 2048, "world", null);
+
+        // 它自己的两个端口不算冲突，别的实例的算。
+        assertFalse(manager.portTaken(25565, first.id()));
+        assertTrue(manager.portTaken(25565, second.id()));
+        assertTrue(manager.portTaken(25565));
+    }
+
+    @Test
+    void newPortsLandInBothTheManifestAndServerProperties(@TempDir Path dir) throws Exception {
+        McInstanceManager manager = manager(dir);
+        McInstance instance = manager.create("ports", "1.21.4", 25565, 25575, 2048, "world", null);
+
+        McInstance updated = manager.updatePorts(instance, 26000, 26001);
+
+        assertEquals(26000, manager.find("ports").port());
+        assertEquals(26001, manager.find("ports").rconPort());
+        String properties = Files.readString(manager.propertiesFile(updated));
+        assertTrue(properties.contains("server-port=26000"));
+        assertTrue(properties.contains("rcon.port=26001"));
+        assertEquals(26000, updated.port());
+    }
 }

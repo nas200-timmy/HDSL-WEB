@@ -243,6 +243,116 @@ export function McPropertiesPanel({ instance }: { instance: McInstance }) {
   );
 }
 
+/** 端口与内存：清单里的三项，启动时读取，所以只能在停服时改。
+ *
+ *  端口不是「面板映射」——服务端直接把 `server-port` 绑在宿主/容器网卡上；
+ *  改这里会同时写 `instance.json` 与 `server.properties`，两边不会各说各话。 */
+export function McNetworkPanel({
+  instance,
+  onChange,
+}: {
+  instance: McInstance;
+  onChange: (next: McInstance) => void;
+}) {
+  const [port, setPort] = useState(instance.port);
+  const [rconPort, setRconPort] = useState(instance.rconPort);
+  const [memoryMb, setMemoryMb] = useState(instance.memoryMb);
+  const [busy, setBusy] = useState(false);
+  const running = instance.state === "RUNNING" || instance.state === "STARTING" || instance.state === "STOPPING";
+
+  useEffect(() => {
+    setPort(instance.port);
+    setRconPort(instance.rconPort);
+    setMemoryMb(instance.memoryMb);
+  }, [instance.port, instance.rconPort, instance.memoryMb]);
+
+  const dirty = port !== instance.port || rconPort !== instance.rconPort || memoryMb !== instance.memoryMb;
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const next = await elevated(() =>
+        api.mc.update(instance.id, { port, rconPort, memoryMb }),
+      );
+      onChange(next);
+      toast("success", "已保存；下次启动生效");
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="comp-row">
+        <span className="comp-label">端口与内存</span>
+        <span className="comp-value mono" style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+          instance.json · server.properties
+        </span>
+      </div>
+      <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+        客户端连的是游戏端口；RCON 端口给面板用（不能与游戏端口相同）。改端口要停服，
+        并记得在防火墙放行新端口。
+      </p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, padding: "10px 8px" }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+          <span>游戏端口</span>
+          <input
+            className="input"
+            type="number"
+            min={1024}
+            max={65535}
+            value={port}
+            disabled={running || busy}
+            onChange={(e) => setPort(Number(e.target.value) || 0)}
+          />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+          <span>RCON 端口</span>
+          <input
+            className="input"
+            type="number"
+            min={1024}
+            max={65535}
+            value={rconPort}
+            disabled={running || busy}
+            onChange={(e) => setRconPort(Number(e.target.value) || 0)}
+          />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+          <span>内存（MB）</span>
+          <input
+            className="input"
+            type="number"
+            min={256}
+            step={256}
+            value={memoryMb}
+            disabled={running || busy}
+            onChange={(e) => setMemoryMb(Number(e.target.value) || 0)}
+          />
+        </label>
+      </div>
+      {instance.dir && (
+        <div style={{ padding: "0 8px 4px", fontSize: 11, color: "var(--monet-on-surface-variant)", wordBreak: "break-all" }}>
+          服务器目录：<span className="mono">{instance.dir}</span>
+          {instance.storage === "external" ? "（专用目录，独立挂载）" : "（面板数据目录）"}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "0 8px 8px" }}>
+        {running && (
+          <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", alignSelf: "center" }}>
+            停服后可改
+          </span>
+        )}
+        <button className="btn btn-raised" disabled={busy || running || !dirty} onClick={() => void save()}>
+          保存
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** 服务端输出：`logs/latest.log` 的尾巴，2 秒一跳。 */
 function LogTail({ instance, height }: { instance: McInstance; height: number }) {
   const [lines, setLines] = useState<string[]>([]);

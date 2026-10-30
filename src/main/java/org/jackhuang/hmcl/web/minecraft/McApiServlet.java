@@ -180,6 +180,16 @@ public final class McApiServlet extends HttpServlet {
                 listVersions(response);
                 return;
             }
+            if ("/storage".equals(path) && "GET".equals(method)) {
+                storageInfo(response);
+                return;
+            }
+            if ("/ports".equals(path) && "GET".equals(method)) {
+                McPorts.Pair pair = McPorts.allocate(manager::portTaken,
+                        config.mc.portStart, config.mc.portEnd);
+                Json.write(response, Map.of("port", pair.game(), "rconPort", pair.rcon()));
+                return;
+            }
             if (path.startsWith("/instances/")) {
                 routeInstance(request, response, method, path.substring("/instances/".length()));
                 return;
@@ -486,12 +496,146 @@ public final class McApiServlet extends HttpServlet {
             rconPort = pair.rcon();
         }
 
-        McInstance instance = manager.create(name, version, port, rconPort, memoryMb, levelName, seed);
+        // 存储位置：默认放专用目录（容器里是 /home/hdsl/mc，挂了卷就跟着容器走）；
+        // `data` 是升级前的旧位置，只有部署提供了它才可选。
+        String storage = stringField(body, "storage");
+        boolean legacy = storage != null && "data".equalsIgnoreCase(storage.trim());
+
+        McInstance instance = manager.create(name, version, port, rconPort, memoryMb, levelName, seed, legacy);
         if (feature.consent().isPresent()) {
             manager.acceptEula(instance);
         }
         audit("mc.instance.create", instance.id(), "success", request);
         Json.write(response, HttpServletResponse.SC_CREATED, instanceJson(instance));
+    }
+
+    /// Where servers can be created, and which one the form should preselect.
+    ///
+    /// Both paths are created (best effort) so the answer is `writable` for a
+    /// directory the operator has not touched yet, and `data` is reported as
+    /// unavailable when this deployment never had one.
+    private void storageInfo(HttpServletResponse response) throws IOException {
+        JsonObject body = new JsonObject();
+        body.add("external", storageJson(manager.root()));
+        java.nio.file.Path legacy = manager.legacyRoot();
+        if (legacy == null) {
+            body.add("data", com.google.gson.JsonNull.INSTANCE);
+        } else {
+            body.add("data", storageJson(legacy));
+        }
+        body.addProperty("default", defaultStorage());
+        Json.write(response, body);
+    }
+
+    private static JsonObject storageJson(java.nio.file.Path directory) {
+        boolean writable;
+        try {
+            java.nio.file.Files.createDirectories(directory);
+            writable = java.nio.file.Files.isWritable(directory);
+        } catch (IOException e) {
+            writable = false;
+        }
+        JsonObject entry = new JsonObject();
+        entry.addProperty("path", directory.toString());
+        entry.addProperty("writable", writable);
+        return entry;
+    }
+
+    private String defaultStorage() {
+        if (java.nio.file.Files.isWritable(manager.root())) {
+            return "external";
+        }
+        return manager.legacyRoot() == null ? "external" : "data";
+    }
+
+    /// Edits an instance: its name, its ports, its heap.
+    ///
+    /// The three are validated together because a port edit has to be checked
+    /// against **other** instances (not against the one being edited), and the
+    /// game reads both ports from `server.properties` at launch — so a change
+    /// here writes the manifest and that file, and is refused while running.
+    private void patchInstance(HttpServletRequest request, HttpServletResponse response,
+                               McInstance instance) throws IOException, McException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+
+        McInstance updated = instance;
+        boolean changed = false;
+        boolean portsChanged = false;
+
+        String name = stringField(body, "name");
+        if (name != null && !name.isBlank()) {
+            updated = updated.withName(name.trim());
+            changed = true;
+        }
+
+        int port = intField(body, "port");
+        int rconPort = intField(body, "rconPort");
+        if (port != 0 || rconPort != 0) {
+            if (runtime.isRunning(instance.id())) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT,
+                        "stop the server before changing its ports");
+                return;
+            }
+            int newPort = port == 0 ? instance.port() : port;
+            int newRcon = rconPort == 0 ? instance.rconPort() : rconPort;
+            try {
+                McPorts.validate(newPort, newRcon);
+            } catch (IllegalArgumentException e) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+                return;
+            }
+            if (manager.portTaken(newPort, instance.id())) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "port " + newPort + " is already used by another instance");
+                return;
+            }
+            if (manager.portTaken(newRcon, instance.id())) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "port " + newRcon + " is already used by another instance");
+                return;
+            }
+            if (newPort != instance.port() || newRcon != instance.rconPort()) {
+                updated = updated.withPorts(newPort, newRcon);
+                changed = true;
+                portsChanged = true;
+            }
+        }
+
+        int memoryMb = intField(body, "memoryMb");
+        if (memoryMb != 0 && memoryMb != instance.memoryMb()) {
+            if (runtime.isRunning(instance.id())) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT,
+                        "stop the server before changing its memory");
+                return;
+            }
+            if (memoryMb < McInstance.MIN_MEMORY_MB || memoryMb > config.mc.maxMemoryMb) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "memoryMb must be between " + McInstance.MIN_MEMORY_MB
+                                + " and " + config.mc.maxMemoryMb);
+                return;
+            }
+            updated = updated.withMemory(memoryMb);
+            changed = true;
+        }
+
+        if (!changed) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "nothing to update: send name, port, rconPort or memoryMb");
+            return;
+        }
+
+        if (portsChanged) {
+            // 清单和 server.properties 两处都写，否则面板说 25566、游戏还在 25565 上听着。
+            manager.updatePorts(updated, updated.port(), updated.rconPort());
+        } else {
+            manager.update(updated);
+        }
+        audit("mc.instance.update", instance.id(), "success", request);
+        Json.write(response, instanceJson(manager.find(instance.id())));
     }
 
     private void routeInstance(HttpServletRequest request, HttpServletResponse response,
@@ -512,15 +656,7 @@ public final class McApiServlet extends HttpServlet {
                 if (!requireElevation(request, response)) {
                     return;
                 }
-                JsonObject body = readJson(request);
-                String name = body == null ? null : stringField(body, "name");
-                if (name == null || name.isBlank()) {
-                    Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "name is required");
-                    return;
-                }
-                manager.update(instance.withName(name.trim()));
-                audit("mc.instance.rename", id, "success", request);
-                Json.write(response, instanceJson(manager.find(id)));
+                patchInstance(request, response, instance);
                 return;
             }
             if ("DELETE".equals(method)) {
@@ -809,6 +945,10 @@ public final class McApiServlet extends HttpServlet {
         body.addProperty("rconPort", instance.rconPort());
         body.addProperty("memoryMb", instance.memoryMb());
         body.addProperty("levelName", instance.levelName());
+        // 文件到底在哪个目录：向导与实例页都把它显示出来——「存档去哪了」这个问题
+        // 应该由界面回答，而不是由用户在 issue 里问。
+        body.addProperty("dir", manager.instanceDirectory(instance.id()).toString());
+        body.addProperty("storage", manager.storageOf(instance.id()));
         if (instance.seed() != null) {
             body.addProperty("seed", instance.seed());
         }

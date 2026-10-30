@@ -280,7 +280,13 @@ RUN set -eux; \
     else \
       npm install -g "pnpm@${PNPM_VERSION}"; \
     fi; \
-    pnpm --version
+    pnpm --version; \
+    # 再把这份 corepack 家目录拷一份到 /opt：`/data` 一旦被宿主目录挂载，
+    # 镜像里预置的 pnpm 就被遮蔽了，空目录会触发一次「下载 pnpm」——首次启动
+    # 的横幅因此读到的是下载日志而不是版本号。entrypoint 在 /data/corepack
+    # 为空时用它播种，用命名卷的部署则完全走不到这一步。
+    mkdir -p /opt/corepack-seed; \
+    cp -a /data/corepack/. /opt/corepack-seed/
 
 # The account everything above runs as. uid/gid 1000 is what a bind-mounted
 # host directory usually expects; a named volume inherits the ownership of
@@ -297,7 +303,7 @@ RUN set -eux; \
 RUN set -eux; \
     groupadd --gid 1000 hdsl; \
     useradd --uid 1000 --gid 1000 --create-home --home-dir /home/hdsl --shell /bin/bash hdsl; \
-    mkdir -p /app /data "${COREPACK_HOME}" /home/hdsl/.config/pnpm /home/hdsl/workspace; \
+    mkdir -p /app /data "${COREPACK_HOME}" /home/hdsl/.config/pnpm /home/hdsl/workspace /home/hdsl/mc; \
     printf 'storeDir: %s\n' "/data/pnpm-store" > /home/hdsl/.config/pnpm/config.yaml; \
     chown -R hdsl:hdsl /data /home/hdsl
 
@@ -319,6 +325,16 @@ COPY LICENSE NOTICE /app/
 RUN printf '%s\n' \
       '#!/bin/sh' \
       'set -e' \
+      '' \
+      '# A host directory mounted on /data hides the pnpm this image baked into' \
+      '# /data/corepack, and corepack then downloads it again on first use —' \
+      '# which the startup banner reports as a version string full of download' \
+      '# text. Seed the empty home from the copy under /opt instead.' \
+      'corepack_home="${COREPACK_HOME:-/data/corepack}"' \
+      'if [ -d /opt/corepack-seed ] && { [ ! -d "$corepack_home" ] || [ -z "$(ls -A "$corepack_home" 2>/dev/null)" ]; }; then' \
+      '  mkdir -p "$corepack_home"' \
+      '  cp -a /opt/corepack-seed/. "$corepack_home"/ 2>/dev/null || true' \
+      'fi' \
       '' \
       '# pnpm 11 reads its settings from the global config file, not from' \
       '# npm_config_* environment variables (only auth and registry still come' \

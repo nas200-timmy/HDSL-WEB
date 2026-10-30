@@ -85,4 +85,21 @@ public record McInstance(
     public McInstance withVersion(String newVersion) {
         return new McInstance(id, name, newVersion, port, rconPort, memoryMb, levelName, seed, createdAt);
     }
+
+    /// The same instance with new ports.
+    ///
+    /// @param newPort     the game port
+    /// @param newRconPort the RCON port
+    /// @return the updated instance
+    public McInstance withPorts(int newPort, int newRconPort) {
+        return new McInstance(id, name, version, newPort, newRconPort, memoryMb, levelName, seed, createdAt);
+    }
+
+    /// The same instance with a new heap size.
+    ///
+    /// @param newMemoryMb the heap size in MB
+    /// @return the updated instance
+    public McInstance withMemory(int newMemoryMb) {
+        return new McInstance(id, name, version, port, rconPort, newMemoryMb, levelName, seed, createdAt);
+    }
 }

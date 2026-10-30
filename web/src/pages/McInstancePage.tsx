@@ -7,6 +7,7 @@ import {
   McBackupsPanel,
   McConsolePanel,
   McLogsPanel,
+  McNetworkPanel,
   McPlayersPanel,
   McPropertiesPanel,
   McWorldPanel,
@@ -285,6 +286,10 @@ export function McInstancePage() {
               <div style={{ padding: "4px 8px 8px", fontSize: 12, color: "var(--monet-on-surface-variant)", lineHeight: 1.7 }}>
                 {instance.version} · 游戏端口 {instance.port} · RCON {instance.rconPort} · 内存 {instance.memoryMb} MB ·
                 世界 <span className="mono">{instance.levelName}</span>
+                <div style={{ wordBreak: "break-all" }}>
+                  目录 <span className="mono">{instance.dir}</span>
+                  {instance.storage === "external" ? "（专用目录，独立挂载）" : "（面板数据目录）"}
+                </div>
                 {instance.error && (
                   <div style={{ color: "var(--monet-error)" }}>{instance.error}</div>
                 )}
@@ -350,7 +355,12 @@ export function McInstancePage() {
         {tab === "console" && (
           <McConsolePanel instance={instance} onOpenTerminal={() => setTerminalOpen(true)} />
         )}
-        {tab === "settings" && <McPropertiesPanel instance={instance} />}
+        {tab === "settings" && (
+          <>
+            <McNetworkPanel instance={instance} onChange={setInstance} />
+            <McPropertiesPanel instance={instance} />
+          </>
+        )}
         {tab === "backups" && <McBackupsPanel instance={instance} />}
         {tab === "players" && <McPlayersPanel instance={instance} />}
         {tab === "world" && <McWorldPanel instance={instance} />}

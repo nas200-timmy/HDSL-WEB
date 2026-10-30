@@ -54,6 +54,10 @@
 本地源码编译与挂载点补丁见 [docs/octop.md](docs/octop.md)；ZCode 的构建与限制见
 [docs/zcode-experimental.md](docs/zcode-experimental.md)；终端的前提、安全模型与开关见
 [实例终端（Web Shell）](#实例终端web-shell)。
+- Minecraft 服务端（默认关闭，第三方功能）：开关在「设置 → 品牌实例」，要在开发者密码下
+  读完 Mojang EULA 与服务条款才能打开；服务端程序不随本项目分发，由 Mojang 官方下载。
+  **存档放在 `/home/hdsl/mc`，容器部署必须把这个路径挂出来**（见[数据与挂载点](#数据与挂载点)）。
+  完整的功能介绍、操作要求与边界见 [docs/minecraft.md](docs/minecraft.md)。
 - 下载源：设置页可选择预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL。保存后立即生效，无需重启。环境变量 `NPM_CONFIG_REGISTRY` 仅作为回退值。细节见 [docs/deployment.md](docs/deployment.md)。
 - 想**从空目录**把整个项目交给另一个模型重写？[docs/build-from-scratch-prompt.md](docs/build-from-scratch-prompt.md) 是一份完整任务提示词：硬约束、功能清单、对外契约、构建与验证命令，以及这一路踩过的坑。
   **只在清空/新建仓库时用**——在现有仓库里接手请读交接稿，别按它重建。
@@ -330,9 +334,14 @@ docker pull ghcr.io/nas200-timmy/hdsl-web:latest
 docker run -d --name hdsl-web --restart unless-stopped \
   -p 3080:3080 \
   -v hdsl-data:/data \
+  -v hdsl-mc:/home/hdsl/mc \
   -e HDSL_ADMIN_PASSWORD='换成一个强口令' \
   ghcr.io/nas200-timmy/hdsl-web:latest
 ```
+
+第二个卷是 MC 服务端的存档与服务端程序（只在开启 MC 功能后用到）。**不挂它，重建容器就等于
+删掉世界**——那里面唯一不可再生的东西就是存档。用宿主目录也行：`-v /srv/mc:/home/hdsl/mc`
+（目录要让 uid/gid 1000 可写）。
 
 版本化标签与 Release 一一对应（如 `ghcr.io/nas200-timmy/hdsl-web:0.6.0`）。从源码构建：
 
@@ -344,6 +353,15 @@ export HDSL_ADMIN_PASSWORD='换成一个强口令'
 docker compose up -d --build
 ```
 
+也可以让向导问完再构建——数据目录、工作区、端口、镜像源一次问清，连 docker 没装都会提示：
+
+```bash
+./docker-install.sh          # 交互；--yes + 参数走非交互，--dry-run 只看计划
+```
+
+它不依赖 compose（NAS 上常常没有），同名容器存在时会问「重启 / 重建容器 / 重新构建镜像」。
+本地构建的镜像名带着版本与时间戳，例如 `hdsl-web:v0.6.34-build-debian13-20261030-1530`。
+
 打开 `http://<主机>:3080`：设了 `HDSL_ADMIN_PASSWORD` 就用 `admin` + 该口令登录；否则自动进入
 初始化引导页，设置用户名和密码后即创建账号并进入面板。默认是纯 HTTP；要 HTTPS 见
 [声明式 HTTPS](#声明式-https)。
@@ -352,6 +370,16 @@ docker compose up -d --build
 
 前提：JDK 17+、Node `^22.19.0 || >=24.0.0`、pnpm（`corepack enable pnpm`，或 `npm i -g pnpm`）。
 Node 版本范围是 dsh 自己的 `engines` 要求；pnpm 既是 dsh 的安装器，也是插件管理的转发目标。
+
+> **只有 JDK 和 jar 也能跑起来**，但装 dsh 版本/插件/品牌工具之前必须先有 Node 与 pnpm，
+> 否则创建实例只会得到一句安装失败。两条路：
+>
+> 1. 面板自己装：实例页顶部会挂一条「缺少 Node.js 工具链」的提示，点「一键安装」即可
+>    （下载到 `<数据目录>/hdsl/runtimes`，含 pnpm，不动系统）；也可以进「设置 → Node.js」。
+> 2. 系统装：`sudo apt install nodejs npm && sudo npm i -g pnpm`（或 nodejs.org 的 LTS 包）。
+>
+> 面板启动时也会在控制台把这条打印出来（`runtime: node MISSING, pnpm MISSING`），`docker logs`
+> 里同样能看到。
 
 Windows 同样可用：面板认得出系统装的 Node.js（`node.exe` / `npm.cmd` / `pnpm.cmd`）、能装 dsh
 版本与插件、能装品牌工具、能一键装托管 Node 运行时、能在面板内构建 ZCode。实例终端在
@@ -402,12 +430,13 @@ Windows 上有两个目录，别混：
 
 ## 数据与挂载点
 
-容器里有一个必须挂的挂载点，另有一个可选的工作区：
+容器里有一个必须挂的挂载点，另有两个可选挂载点：
 
 | 挂载点 | 必须？ | 内容 |
 |---|---|---|
 | `/data` | 必须持久化 | 面板的全部状态：配置、口令、证书、实例、`DSH_HOME`、pnpm store |
 | `/home/hdsl/workspace` | 可选 | dsh 的工作区：会话读写文件的地方，也是 dsh 进程的工作目录。不挂就是容器内目录（重建会丢）；挂了就随你（宿主目录 = dsh 直接编辑真实文件，命名卷 = 留在容器外） |
+| `/home/hdsl/mc` | 可选（开了 MC 功能就必须） | Minecraft 服务端的存档、`server.jar`、日志。**不挂就是容器内目录，重建容器等于删世界**；compose 默认挂 `hdsl-mc` 卷，`docker-install.sh` 也会问 |
 
 `HDSL_DATA`（容器内固定为 `/data`）是必须持久化的目录。dsh 实例的 `DSH_HOME`、pnpm store 都在
 它下面，所以「挂一个卷、备份一个目录」就覆盖全部状态。
@@ -429,6 +458,7 @@ Windows 上有两个目录，别混：
 | `/data/hdsl/logs/` | 从日志窗口导出的日志文件 | 否 |
 | `/data/pnpm-store/` | pnpm 共享仓库（`storeDir`），多实例装同一个包时硬链接复用 | 否（可重建） |
 | `/data/corepack/` | corepack 缓存（`COREPACK_HOME`） | 否 |
+| `/data/minecraft/` | MC 的版本缓存（`versions/`）与删除/导入前的安全备份（`backups/`）；世界本身在 `/home/hdsl/mc` | 备份是，缓存否 |
 
 工作区是 dsh 会话的「项目根」，不是面板放实例的目录。要持久化或让 dsh 直接编辑宿主机目录，
 取消 compose 里对应那行的注释：`- /srv/dsh-workspace:/home/hdsl/workspace`（让 uid/gid 1000

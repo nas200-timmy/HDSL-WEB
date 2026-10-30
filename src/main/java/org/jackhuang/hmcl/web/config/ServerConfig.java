@@ -209,6 +209,11 @@ public final class ServerConfig {
         public volatile int maxMemoryMb = 8192;
         /// The java executable (`mc.java_path`); empty means `java` on PATH.
         public volatile String javaPath = "";
+        /// Where servers (worlds + `server.jar`) live (`mc.dir`). Empty means
+        /// `$HOME/mc` — in the container image that is `/home/hdsl/mc`, the path
+        /// the image and compose file mount so a container rebuild keeps the
+        /// worlds. `HDSL_MC_DIR` overrides both.
+        public volatile String dir = "";
     }
 
     /// `logs:` — how long the panel keeps its own files. The window may only be set

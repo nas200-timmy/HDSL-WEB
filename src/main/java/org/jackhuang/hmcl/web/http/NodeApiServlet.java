@@ -147,12 +147,35 @@ public final class NodeApiServlet extends HttpServlet {
     /// The newest published release the harness supports, from the release
     /// index (tries the chosen source, then the other).
     private static String newestSupported(NodeSource source) throws Exception {
-        List<NodeRelease> releases = NodeRuntimeManager.fetchReleases(source);
+        return pickNewestSupported(NodeRuntimeManager.fetchReleases(source));
+    }
+
+    /// Picks the version one-click install should use.
+    ///
+    /// Pre-releases are skipped: `nodejs.org/dist` publishes them in the same
+    /// index with the same shape (`27.0.0-alpha.0.0.0`), sorted above every
+    /// stable line, and an alpha as the runtime behind every dsh instance is not
+    /// something a one-click button should decide on its own. A caller that
+    /// wants one can still pass `version` explicitly.
+    ///
+    /// @param releases the index as fetched, newest first
+    /// @return the newest stable release the harness supports
+    /// @throws IllegalStateException when the index carries none
+    static String pickNewestSupported(List<NodeRelease> releases) {
         return releases.stream()
                 .map(NodeRelease::version)
+                .filter(version -> !isPrerelease(version))
                 .filter(DshNodeRuntime::isSupportedNodeVersion)
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException(
                         "no supported Node.js release found (" + DshNodeRuntime.requirement() + ")"));
+    }
+
+    /// Reports whether a published version string is a pre-release.
+    ///
+    /// @param version the version without the leading `v`
+    /// @return whether it carries a `-alpha` / `-rc` / `-nightly` suffix
+    static boolean isPrerelease(String version) {
+        return version.indexOf('-') >= 0;
     }
 }

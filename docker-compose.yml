@@ -73,6 +73,11 @@ services:
       # 命名卷：留在容器外持久保存，重建/升级都不丢
       # - hdsl-workspace:/home/hdsl/workspace
 
+      # ── 3. Minecraft 服务器（可选功能，装上就会用到）──────────────────────
+      # 世界存档、server.jar、日志都在 <卷>/<实例 id>/ 下面。**不挂这个卷就等于
+      # 把存档放在容器里**：重建容器时世界跟着没。要用 MC 功能就保持这一行。
+      - hdsl-mc:/home/hdsl/mc
+
     # $$ 让变量交给容器内的 shell 解析，取的是上面 environment 里的 HDSL_PORT
     healthcheck:
       test:
@@ -89,6 +94,8 @@ services:
 volumes:
   # 面板数据（口令 / 配置 / 证书 / 实例 / pnpm store）
   hdsl-data:
+  # Minecraft 世界存档 + 服务端程序（/home/hdsl/mc）
+  hdsl-mc:
   # 工作区默认不建卷：不挂时就是容器内目录。要用命名卷保存工作区时，
   # 把上面 volumes 里那行取消注释，并在这里加：
   # hdsl-workspace:

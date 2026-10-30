@@ -358,9 +358,40 @@ public final class HdslServer {
         org.jackhuang.hmcl.web.minecraft.McFeatureState mcFeature =
                 new org.jackhuang.hmcl.web.minecraft.McFeatureState(
                         config.dataDir.resolve("minecraft").resolve("feature.json"));
+
+        // 服务器（存档 + server.jar）放哪：`mc.dir` → `HDSL_MC_DIR` → `$HOME/mc`。
+        // 镜像里 HOME=/home/hdsl 且已建好 /home/hdsl/mc，compose 与 docker-install.sh
+        // 都在这个路径上挂卷/宿主目录，所以重建容器不会把存档带走。
+        //
+        // HOME 环境变量优先于 JVM 的 `user.home`：systemd 与容器都会设 HOME，而
+        // `user.home` 取的是 passwd 里的家目录——两者不一致时（换用户跑、主机与容器
+        // 路径不同），按 HOME 走才符合「$HOME/mc」这句话的字面意思。
+        String mcDirSetting = System.getenv("HDSL_MC_DIR");
+        if (mcDirSetting == null || mcDirSetting.isBlank()) {
+            mcDirSetting = config.mc.dir;
+        }
+        java.nio.file.Path mcRoot;
+        if (mcDirSetting == null || mcDirSetting.isBlank()) {
+            String home = System.getenv("HOME");
+            if (home == null || home.isBlank()) {
+                home = System.getProperty("user.home");
+            }
+            mcRoot = java.nio.file.Path.of(home, "mc");
+        } else {
+            mcRoot = java.nio.file.Path.of(mcDirSetting.trim()).toAbsolutePath().normalize();
+        }
+        try {
+            java.nio.file.Files.createDirectories(mcRoot);
+        } catch (java.io.IOException e) {
+            logger.warning("Could not create the Minecraft directory " + mcRoot
+                    + "; creating an instance will fail until it exists and is writable", e);
+        }
+        // 旧位置（<data>/minecraft/instances）只读兼容：升级前的服务器还在那儿。
+        java.nio.file.Path mcLegacyRoot = config.dataDir.resolve("minecraft").resolve("instances");
+        logger.info("Minecraft servers live in " + mcRoot
+                + (mcLegacyRoot.toFile().isDirectory() ? " (legacy root also read: " + mcLegacyRoot + ")" : ""));
         org.jackhuang.hmcl.web.minecraft.McInstanceManager mcInstances =
-                new org.jackhuang.hmcl.web.minecraft.McInstanceManager(
-                        config.dataDir.resolve("minecraft").resolve("instances"));
+                new org.jackhuang.hmcl.web.minecraft.McInstanceManager(mcRoot, mcLegacyRoot);
         String mcJava = config.mc.javaPath == null || config.mc.javaPath.isBlank()
                 ? "java" : config.mc.javaPath;
         java.nio.file.Path mcVersionsRoot = config.dataDir.resolve("minecraft").resolve("versions");

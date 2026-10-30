@@ -642,6 +642,10 @@ public final class ZcodeBuilder {
         try {
             List<String> candidates = NodeRuntimeManager.fetchReleases(NodeSource.MIRROR).stream()
                     .map(org.jackhuang.hmcl.dsh.NodeRelease::version)
+                    // 预发布（-alpha / -rc）也排在索引最前，而它们不该被挑来做构建工具链：
+                    // 同一个坑在 `NodeApiServlet.pickNewestSupported` 那边已经踩过（装了
+                    // 27.0.0-alpha 当运行时）。要预发布请显式指定版本。
+                    .filter(version -> !version.contains("-"))
                     .filter(version -> majorOf(version) >= MINIMUM_BUILD_NODE_MAJOR)
                     .toList();
             if (candidates.isEmpty()) {

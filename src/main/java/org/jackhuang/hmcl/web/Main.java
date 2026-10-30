@@ -250,8 +250,27 @@ public final class Main {
             }
             try (java.io.BufferedReader reader = new java.io.BufferedReader(
                     new java.io.InputStreamReader(process.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
-                String line = reader.readLine();
-                return line == null ? null : line.trim();
+                // 版本号不一定是第一行：空 /data 被宿主目录挂载时，corepack 的 shim
+                // 会先打一句「Downloading the pnpm … binary...」再输出真正的版本。
+                // 取第一行版本形状的输出，全都没有才退回第一行非空内容。
+                String first = null;
+                for (int i = 0; i < 20; i++) {
+                    String line = reader.readLine();
+                    if (line == null) {
+                        break;
+                    }
+                    String trimmed = line.trim();
+                    if (trimmed.isEmpty()) {
+                        continue;
+                    }
+                    if (first == null) {
+                        first = trimmed;
+                    }
+                    if (trimmed.matches("^v?\\d+\\.\\d+.*")) {
+                        return trimmed;
+                    }
+                }
+                return first;
             }
         } catch (java.io.IOException | InterruptedException e) {
             if (e instanceof InterruptedException) {

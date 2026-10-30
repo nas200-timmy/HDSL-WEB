@@ -644,6 +644,8 @@ export const api = {
     cancelClose: () => request<McFeature>("/api/mc/feature/cancel-close", jsonInit("POST", {})),
     decline: () => request<{ ok: boolean }>("/api/mc/feature/decline", jsonInit("POST", {})),
     versions: () => request<{ versions: McVersion[] }>("/api/mc/versions"),
+    storage: () => request<McStorage>("/api/mc/storage"),
+    suggestPorts: () => request<{ port: number; rconPort: number }>("/api/mc/ports"),
     instances: () => request<{ instances: McInstance[] }>("/api/mc/instances"),
     instance: (id: string) =>
       request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}`),
@@ -655,9 +657,14 @@ export const api = {
       seed?: string;
       port?: number;
       rconPort?: number;
+      storage?: "external" | "data";
     }) => request<McInstance>("/api/mc/instances", jsonInit("POST", body)),
     rename: (id: string, name: string) =>
       request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}`, jsonInit("PATCH", { name })),
+    update: (
+      id: string,
+      body: { name?: string; port?: number; rconPort?: number; memoryMb?: number },
+    ) => request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}`, jsonInit("PATCH", body)),
     remove: (id: string) =>
       request<{ ok: boolean; backup: string }>(`/api/mc/instances/${encodeURIComponent(id)}`, { method: "DELETE" }),
     start: (id: string) =>
@@ -813,6 +820,17 @@ export interface McInstance {
   state: "STOPPED" | "STARTING" | "RUNNING" | "STOPPING" | "FAILED";
   error?: string;
   consoleAvailable: boolean;
+  /** 服务器目录（存档、server.jar、日志都在这儿） */
+  dir: string;
+  /** 在专用目录（容器里是 /home/hdsl/mc）还是旧的 data 目录 */
+  storage: "external" | "data";
+}
+
+/** GET /api/mc/storage：两个可选存储位置与默认值 */
+export interface McStorage {
+  external: { path: string; writable: boolean };
+  data: { path: string; writable: boolean } | null;
+  default: "external" | "data";
 }
 
 export interface McBackup {

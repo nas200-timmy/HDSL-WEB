@@ -29,3 +29,8 @@ scripts/
 # upload staging directory the server creates at runtime.
 data/
 tmp/
+
+# docker-install.sh 的答案（含口令）与它默认建的数据目录：都不该进构建上下文
+.docker-install.state
+.docker-install.env
+hdsl-web-data/

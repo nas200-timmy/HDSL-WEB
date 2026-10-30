@@ -119,4 +119,21 @@ class McApiTest {
             assertEquals(200, get(wired.port(), "/api/mc/terms").statusCode());
         }
     }
+
+    /// 向导起步的两问：服务器能放哪、默认端口是什么。
+    @Test
+    void theCreateWizardCanAskForStorageAndPorts(@TempDir Path dir) throws Exception {
+        try (Wired wired = wired(dir, true)) {
+            HttpResponse<String> storage = get(wired.port(), "/api/mc/storage");
+            assertEquals(200, storage.statusCode());
+            assertTrue(storage.body().contains("\"external\""));
+            assertTrue(storage.body().contains("\"writable\""));
+            assertTrue(storage.body().contains("\"default\":\"external\""));
+
+            HttpResponse<String> ports = get(wired.port(), "/api/mc/ports");
+            assertEquals(200, ports.statusCode());
+            assertTrue(ports.body().contains("\"port\":"));
+            assertTrue(ports.body().contains("\"rconPort\":"));
+        }
+    }
 }

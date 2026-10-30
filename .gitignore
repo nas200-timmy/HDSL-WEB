@@ -21,3 +21,8 @@ Thumbs.db
 
 # Load test scripts (not shipped)
 bench/
+
+# docker-install.sh 的产物：上次的答案（含口令）与默认数据目录
+.docker-install.state
+.docker-install.env
+hdsl-web-data/

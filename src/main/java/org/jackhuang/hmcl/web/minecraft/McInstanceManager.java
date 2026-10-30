@@ -31,9 +31,11 @@ import java.nio.file.StandardCopyOption;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /// The instances root of the Minecraft surface: one directory per server, a
@@ -62,35 +64,80 @@ public final class McInstanceManager {
 
     private final Path root;
 
-    /// @param root the directory that holds every instance (`<data>/minecraft/instances`)
+    /// Where instances lived before the panel moved them onto their own mount
+    /// (`<data>/minecraft/instances`). Still scanned so an existing server keeps
+    /// working after the move, and offered as a storage choice for deployments
+    /// where the dedicated directory is not writable.
+    private final @Nullable Path legacyRoot;
+
+    /// @param root the directory new instances go into (`/home/hdsl/mc` in the
+    ///             container image, `$HOME/mc` elsewhere)
     public McInstanceManager(Path root) {
-        this.root = root.toAbsolutePath().normalize();
+        this(root, null);
     }
 
-    /// The instances root.
+    /// @param root       the directory new instances go into
+    /// @param legacyRoot the pre-move directory, or `null`
+    public McInstanceManager(Path root, @Nullable Path legacyRoot) {
+        this.root = root.toAbsolutePath().normalize();
+        Path legacy = legacyRoot == null ? null : legacyRoot.toAbsolutePath().normalize();
+        this.legacyRoot = legacy == null || legacy.equals(this.root) ? null : legacy;
+    }
+
+    /// The instances root new servers are created in.
     ///
     /// @return the root
     public Path root() {
         return root;
     }
 
+    /// The pre-move root, when one exists.
+    ///
+    /// @return the legacy root, or `null`
+    public @Nullable Path legacyRoot() {
+        return legacyRoot;
+    }
+
+    /// Every root that may contain instances, primary first.
+    private List<Path> roots() {
+        return legacyRoot == null ? List.of(root) : List.of(root, legacyRoot);
+    }
+
+    /// Which storage area an instance lives in.
+    ///
+    /// @param id the instance id
+    /// @return `external` for the dedicated directory, `data` for the legacy one
+    public String storageOf(String id) {
+        if (legacyRoot != null && Files.isDirectory(legacyRoot.resolve(id))
+                && !Files.isDirectory(root.resolve(id))) {
+            return "data";
+        }
+        return "external";
+    }
+
     /// Lists every readable instance, newest first.
+    ///
+    /// Both roots are scanned; an id that exists in both is listed once, from
+    /// the primary root (that is where a later create would put it).
     ///
     /// @return the instances
     public List<McInstance> list() {
-        if (!Files.isDirectory(root)) {
-            return List.of();
-        }
         List<McInstance> instances = new ArrayList<>();
-        try (Stream<Path> entries = Files.list(root)) {
-            for (Path directory : entries.filter(Files::isDirectory).toList()) {
-                McInstance instance = read(directory);
-                if (instance != null) {
-                    instances.add(instance);
-                }
+        Set<String> seen = new HashSet<>();
+        for (Path root : roots()) {
+            if (!Files.isDirectory(root)) {
+                continue;
             }
-        } catch (IOException e) {
-            LOG.warning("Failed to enumerate Minecraft instances in " + root, e);
+            try (Stream<Path> entries = Files.list(root)) {
+                for (Path directory : entries.filter(Files::isDirectory).toList()) {
+                    McInstance instance = read(directory);
+                    if (instance != null && seen.add(instance.id())) {
+                        instances.add(instance);
+                    }
+                }
+            } catch (IOException e) {
+                LOG.warning("Failed to enumerate Minecraft instances in " + root, e);
+            }
         }
         instances.sort(Comparator.comparingLong(McInstance::createdAt).reversed());
         return instances;
@@ -105,7 +152,13 @@ public final class McInstanceManager {
                 || id.equals(".") || id.equals("..")) {
             return null;
         }
-        return read(root.resolve(id));
+        for (Path root : roots()) {
+            McInstance instance = read(root.resolve(id));
+            if (instance != null) {
+                return instance;
+            }
+        }
+        return null;
     }
 
     /// Creates an instance and writes its manifest and a default
@@ -123,6 +176,25 @@ public final class McInstanceManager {
     /// @throws McException when the ports are taken or the files cannot be written
     public McInstance create(String name, String version, int port, int rconPort,
                              int memoryMb, String levelName, @Nullable String seed) throws McException {
+        return create(name, version, port, rconPort, memoryMb, levelName, seed, false);
+    }
+
+    /// Creates an instance in one of the two storage areas.
+    ///
+    /// @param name      the display name
+    /// @param version   the Minecraft version to install later
+    /// @param port      the game port
+    /// @param rconPort  the RCON port
+    /// @param memoryMb  the heap size
+    /// @param levelName the world directory name
+    /// @param seed      the world seed, or `null` for a random one
+    /// @param legacy    whether to put it in the pre-move directory instead of
+    ///                  the dedicated one (no-op when there is no legacy root)
+    /// @return the created instance
+    /// @throws McException when the ports are taken or the files cannot be written
+    public McInstance create(String name, String version, int port, int rconPort,
+                             int memoryMb, String levelName, @Nullable String seed,
+                             boolean legacy) throws McException {
         McPorts.validate(port, rconPort);
         if (portTaken(port)) {
             throw new McException("port " + port + " is already used by another instance");
@@ -131,7 +203,8 @@ public final class McInstanceManager {
             throw new McException("port " + rconPort + " is already used by another instance");
         }
 
-        String id = uniqueId(name);
+        Path target = legacy && legacyRoot != null ? legacyRoot : root;
+        String id = uniqueId(target, name);
         long now = System.currentTimeMillis();
         McInstance instance;
         try {
@@ -141,7 +214,7 @@ public final class McInstanceManager {
             throw new McException(e.getMessage(), e);
         }
 
-        Path directory = instanceDirectory(id);
+        Path directory = target.resolve(id);
         try {
             Files.createDirectories(directory);
             Files.createDirectories(directory.resolve(LOG_DIR_NAME));
@@ -168,7 +241,7 @@ public final class McInstanceManager {
     /// Removes an instance and everything it owns.
     ///
     /// The caller is responsible for stopping the server and taking a backup
-    /// first; this method only refuses to delete outside the root.
+    /// first; this method only refuses to delete outside the known roots.
     ///
     /// @param id the instance id
     /// @throws McException when the instance does not exist or cannot be removed
@@ -177,9 +250,16 @@ public final class McInstanceManager {
         if (instance == null) {
             throw new McException("Minecraft instance " + id + " does not exist");
         }
-        Path directory = instanceDirectory(id);
-        if (!directory.normalize().startsWith(root)) {
-            throw new McException("Refusing to delete " + directory + ": it is outside the instances directory");
+        Path directory = instanceDirectory(id).normalize();
+        boolean inside = false;
+        for (Path root : roots()) {
+            if (directory.startsWith(root)) {
+                inside = true;
+                break;
+            }
+        }
+        if (!inside) {
+            throw new McException("Refusing to delete " + directory + ": it is outside the instances directories");
         }
         try (Stream<Path> walk = Files.walk(directory)) {
             for (Path path : walk.sorted(Comparator.reverseOrder()).toList()) {
@@ -196,7 +276,22 @@ public final class McInstanceManager {
     /// @param port the port
     /// @return whether it is taken
     public boolean portTaken(int port) {
+        return portTaken(port, null);
+    }
+
+    /// Whether a port is claimed by an instance other than `exceptId`.
+    ///
+    /// Editing an instance's ports has to ignore the instance's own current
+    /// numbers; otherwise every save would look like a conflict with itself.
+    ///
+    /// @param port     the port
+    /// @param exceptId the instance being edited, or `null`
+    /// @return whether another instance holds it
+    public boolean portTaken(int port, @Nullable String exceptId) {
         for (McInstance instance : list()) {
+            if (instance.id().equals(exceptId)) {
+                continue;
+            }
             if (instance.port() == port || instance.rconPort() == port) {
                 return true;
             }
@@ -204,11 +299,15 @@ public final class McInstanceManager {
         return false;
     }
 
-    /// The directory holding an instance.
+    /// The directory holding an instance, searched in both roots.
     ///
     /// @param id the instance id
-    /// @return the directory
+    /// @return the directory (the primary root's path when it does not exist yet)
     public Path instanceDirectory(String id) {
+        if (legacyRoot != null && Files.isDirectory(legacyRoot.resolve(id))
+                && !Files.isDirectory(root.resolve(id))) {
+            return legacyRoot.resolve(id);
+        }
         return root.resolve(id);
     }
 
@@ -283,6 +382,27 @@ public final class McInstanceManager {
         }
     }
 
+    /// Persists new ports to both places that hold them.
+    ///
+    /// The panel reads the manifest and the game reads `server.properties`;
+    /// writing only one of them means the server listens somewhere the panel is
+    /// not looking. The caller validates conflicts (see [#portTaken(int, String)]).
+    ///
+    /// @param instance the instance
+    /// @param port     the new game port
+    /// @param rconPort the new RCON port
+    /// @return the updated instance
+    /// @throws McException when either file cannot be written
+    public McInstance updatePorts(McInstance instance, int port, int rconPort) throws McException {
+        McInstance updated = instance.withPorts(port, rconPort);
+        McProperties properties = properties(instance);
+        properties.set("server-port", String.valueOf(port));
+        properties.set("rcon.port", String.valueOf(rconPort));
+        update(updated);
+        saveProperties(updated, properties);
+        return updated;
+    }
+
     /// Writes the Mojang EULA marker.
     ///
     /// Only call this after the owner accepted: the file is the operator's
@@ -342,7 +462,11 @@ public final class McInstanceManager {
     /// A filesystem-safe id derived from the name, made unique by a numeric
     /// suffix. Chinese names collapse to `mc` — the id is internal, the display
     /// name keeps the user's text.
-    private String uniqueId(@Nullable String name) {
+    ///
+    /// @param target the root the instance is about to be created in
+    /// @param name   the display name
+    /// @return an id no root is using yet
+    private String uniqueId(Path target, @Nullable String name) {
         String base = name == null ? "" : name.trim().toLowerCase(Locale.ROOT);
         StringBuilder slug = new StringBuilder();
         for (int i = 0; i < base.length() && slug.length() < 24; i++) {
@@ -359,10 +483,23 @@ public final class McInstanceManager {
         }
         String id = candidate;
         int suffix = 2;
-        while (Files.exists(instanceDirectory(id))) {
+        while (taken(target, id)) {
             id = candidate + "-" + suffix++;
         }
         return id;
+    }
+
+    /// Whether an id is already a directory in any root.
+    private boolean taken(Path target, String id) {
+        if (Files.exists(target.resolve(id))) {
+            return true;
+        }
+        for (Path root : roots()) {
+            if (Files.exists(root.resolve(id))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static @Nullable McInstance read(Path directory) {

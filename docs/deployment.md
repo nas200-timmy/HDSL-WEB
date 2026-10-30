@@ -244,7 +244,27 @@ services:
       - "127.0.0.1:3080:3080"
     environment:
       HDSL_BIND_HOST: "0.0.0.0"   # 容器内仍需 0.0.0.0 才能被宿主 127.0.0.1 映射访问
+    volumes:
+      # MC 服务端的存档与服务端程序（docs/minecraft.md §7）。不挂这个，
+      # 重建容器就等于删世界——世界是这里唯一不可再生的数据。
+      - hdsl-mc:/home/hdsl/mc
 ```
+
+### 源码部署：`docker-install.sh`
+
+仓库根目录的向导脚本把上面这些事问一遍（数据目录、工作区、MC 数据、端口、绑定地址、镜像源），
+然后在原地 `docker build` + `docker run`。它不依赖 compose，适合 NAS 这类只装了 docker 的机器。
+四条容易踩的规则由它代劳：
+
+| 规则 | 为什么 |
+|---|---|
+| 宿主数据目录自动 `chown 1000:1000` | 镜像以 `hdsl`（uid 1000）运行，运行期没有 chown；root 建的目录会让面板一启动就写不进去 |
+| 端口内外同号 | `HDSL_PORT` 同时决定端口映射、容器内监听和 healthcheck，只改宿主侧会得到「running 但一直 unhealthy」 |
+| 工作区只能挂到 `/home/hdsl/workspace` | 挂 `/home/hdsl` 整层会盖掉 entrypoint 每次启动重写的 pnpm 配置；不挂则重建容器时工作区里的文件会丢 |
+| MC 默认挂到 `/home/hdsl/mc`（`volume:hdsl-mc`） | 世界存档与 `server.jar` 在那儿；不挂 = 存档随容器一起没。`--mc /srv/mc` 换成宿主目录，`--mc none` 明确不挂 |
+
+同名容器已存在时它先问「重启 / 重建容器（不重编）/ 重新构建镜像」，不会静默覆盖；
+`--yes` 加参数即可非交互执行，`--dry-run` 只打印计划。
 
 ---
 
@@ -614,6 +634,41 @@ WantedBy=multi-user.target
 - 想直接监听 1024 以下的端口（例如 443）要给 `AmbientCapabilities=CAP_NET_BIND_SERVICE`，
   或者照 §1/§9 在前面放反代。
 - `journalctl -u hdsl-web -f` 看服务日志；面板自己的日志同时在 `<HDSL_DATA>/logs/` 下。
+
+### 10.1 只有 jar 的机器：Node 与 pnpm 从哪来
+
+**JRE 不能替你完成这件事。** 面板是 Java 写的，但 dsh 本体、插件、品牌工具都是 npm 包，
+要用 `pnpm`（它自己又是 `node` 上的包）去装。所以裸部署有两个必须满足的依赖：
+
+| 依赖 | 谁需要它 | 缺了会怎样 |
+|---|---|---|
+| `node` `^22.19.0 \|\| >=24.0.0` | 装 dsh 版本、插件、品牌工具、ZCode 构建 | 创建实例时安装任务失败，错误里写的是「Node.js was not found on PATH and no panel-managed runtime is installed」 |
+| `pnpm` | `pnpm install` / `pnpm add`，插件管理也转发给它 | 任务失败在 `pnpm` 这一步；`npm` 单独存在没用 |
+
+**三条路，按省事排序：**
+
+1. **面板自己装（不用 root）**：实例页顶部会挂一条「缺少 Node.js 工具链」提示，点一键安装；
+   等价入口是「设置 → Node.js」。运行时下载到 `<HDSL_DATA>/hdsl/runtimes/<版本>/`，
+   pnpm 由该运行时自带的 `npm` 装进同一个目录，面板的其它部分按需把它放到 `PATH` 前面——
+   系统里的 node 不受影响。默认走 npmmirror，官方源是备选。自动挑选的是**最新稳定版**
+   （`-alpha` / `-rc` 之类的预发布会被跳过；要装预发布得在接口里显式给版本号）。
+2. **系统包管理器**：`sudo apt install nodejs npm && sudo npm i -g pnpm`。
+   注意 Debian/Ubuntu 仓库里的 node 常常偏旧，低于 22.19 时 dsh 会拒绝安装，
+   这时回到第 1 条更省事。
+3. **容器**：官方镜像里已经带好 Node 22 + pnpm，见 README「方式一」。
+
+面板启动时会把检测结果打到控制台（`docker logs` 里同样能看到）：
+
+```
+runtime  : node MISSING, pnpm MISSING
+!! installing dsh versions / plugins / brand tools needs
+!! node + pnpm. Either:
+!!   1. one-click a panel-managed runtime (Settings -> Node.js);
+!!   2. or install Node.js LTS yourself: https://nodejs.org
+```
+
+排查时先看这一行：`node 22.23.3, pnpm 11.x` 就是齐了；只有 node 没有 pnpm，
+说明当时是用 `npm i -g pnpm` 之外的方式装的 node（比如 corepack 未启用）。
 
 ## 11. 把 agent 当对手：三条真边界
 

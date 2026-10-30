@@ -6,6 +6,7 @@ import { ConfirmDialog, Dialog } from "../components/Dialog";
 import { InstanceIcon, StateBadge } from "../components/InstanceIcon";
 import { ExportInstanceModal } from "../components/ExportInstanceModal";
 import { TerminalWindow, type TerminalTargetInfo } from "../components/TerminalWindow";
+import { ToolchainBanner } from "../components/ToolchainBanner";
 import {
   AddCircleIcon,
   AddIcon,
@@ -268,6 +269,8 @@ export function InstancesPage() {
       </nav>
 
       <div className="page-content">
+        {/* 裸部署最常见的缺失：Node.js / pnpm。缺了才出现，装好自己消失 */}
+        <ToolchainBanner />
         {brandView ? (
           /* 品牌实例视图：原地换内容（不跳页、不重挂载页面） */
           <BrandsView brand={activeBrand} onSelect={showBrands} />

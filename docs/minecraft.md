@@ -393,21 +393,27 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
 
 ## 7. 数据布局
 
+**服务器本体（存档 + `server.jar` + 日志）与面板数据分开放**：默认在 `$HOME/mc`，
+镜像里就是 `/home/hdsl/mc`。这样容器重建、换镜像、`docker compose down` 都不会碰到世界——
+前提是那个路径挂了卷/宿主目录，compose 与 `docker-install.sh` 默认都会挂。
+
 ```
-<data>/minecraft/                      # 整个目录 0700（若 runAsUser，属组共享 0770）
+<mc 根：$HOME/mc，容器里 /home/hdsl/mc>   # 0700；挂卷时宿主目录需 uid/gid 1000 可写
+  <id>/
+    instance.json                      # 端口、rcon 端口、内存、版本、levelName、创建时间
+    server.properties                  # 受管字段由面板写，未知键与注释保留
+    eula.txt
+    server.jar                         # 指向 versions/ 的硬链接（跨文件系统时复制）
+    <levelName>/                       # 世界存档（默认 world/）
+    logs/latest.log
+
+<data>/minecraft/                      # 面板自己的账本与缓存，跟 /data 一起备份
   feature.json                         # 状态 + 同意记录（锁与去留决定只在内存）
   versions/<mc-version>/
     server.jar
     version.json                       # Mojang 版本 JSON 的裁剪（下载源、sha1、size）
-  runtimes/java-<major>/               # 可选：面板下载的 JRE
-  instances/<id>/
-    instance.json                      # 端口、rcon 端口、内存、版本、levelName、创建时间
-    server.properties                  # 受管字段由面板写，未知键与注释保留
-    eula.txt
-    server.jar                         # 指向 versions/（Windows 复制/硬链接）
-    world/
-    logs/latest.log
-    backups/<timestamp>.zip
+  backups/<timestamp>.zip              # 删除/导入/换版本前的安全备份
+  instances/                           # **旧位置**，只读兼容：升级前的服务器还在这儿
 ```
 
 要点：
@@ -415,24 +421,24 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
 - **版本共享**：`versions/` 复用了 `DshVersionManager` 的"一次安装、多实例共享"。
 - **世界是用户最贵的数据**：删实例、升级版本、覆盖导入，三处都必须**先备份**。
 - **RCON 密码**只写进 `server.properties`（0600），不额外落一份到 `instance.json`。
-- **端口**：`port` 与 `rconPort` 成对；`rcon.port` 也写进 properties。
-- 独立 uid 时，`minecraft/` 归 mc 用户，面板通过同组权限管理；做不到就文档化同 uid 边界。
+- **端口**：`port` 与 `rconPort` 成对；改端口同时写 `instance.json` 与 `server.properties`，
+  且只能在停服时改（游戏启动那一刻读 properties）。
+- 独立 uid 时，MC 根归 mc 用户，面板通过同组权限管理；做不到就文档化同 uid 边界。
 
-### 7.1 存储根：默认绑 data，但可配置
+### 7.1 存储根：默认独立挂载，旧位置仍可用
 
-`<data>/minecraft` 只是默认值。`mc.dataDir` 可以指到别处（容器里的独立卷、Windows 的另一个盘、
-Linux 的 `/srv/minecraft`）。原因是**世界会长到几十上百 GB，备份再翻一倍**；把它和面板数据
-放在同一个卷，最坏结果是 MC 把盘吃满、把面板和所有 agent 一起拖死。
+解析顺序：`server.yaml` 的 `mc.dir` → 环境变量 `HDSL_MC_DIR` → `$HOME/mc`。
+容器镜像把 `/home/hdsl/mc` 建好并归 `hdsl`；`docker-compose.yml` 默认挂 `hdsl-mc` 卷，
+`docker-install.sh` 问一次（默认 `volume:hdsl-mc`）后挂上。
 
 | 姿势 | 做法 | 代价 |
 |---|---|---|
-| 绑死（默认） | `mc.dataDir=<data>/minecraft` | "拷走 /data 就搬完"的承诺完整；需要 §7.2 的护栏 |
-| 独立卷（推荐给大服） | `mc.dataDir=/mc` + 单独挂载 | 备份必须同时覆盖两个位置，文档要写清 |
-| 单实例覆盖（后续） | 每个实例自己的 `worldDir` | 备份/删除/uid 全变复杂，第一版不做 |
+| 独立卷（默认） | `hdsl-mc:/home/hdsl/mc` | 世界与面板数据分开备份；重建容器不动存档 |
+| 宿主目录 | `-v /srv/mc:/home/hdsl/mc` | 要 `chown 1000:1000`；好处是宿主机直接看到世界文件 |
+| 面板数据目录（旧位置） | 创建实例时选「面板数据目录」 | 跟 `/data` 一起备份，但重建容器/换卷时和面板同生共死 |
 
-Windows 裸部署在选择存储根时可以**弹宿主机原生目录选择器**（与 `DesktopTerminal` 同一类
-"在面板所在机器上开窗口"的做法），选完写回 `server.yaml`；没有桌面会话时退回配置/环境变量。
-macOS 后台服务（launchd）没有 GUI，同样走配置。
+创建向导里会显示两个位置的真实路径与可写状态，选哪个就放哪个；已经在旧位置跑着的服务器
+不需要搬家——两个根都会被扫描，`instance.json` 里不记录位置，目录在哪就是哪。
 
 ### 7.2 空间爆炸的护栏
 
@@ -455,8 +461,10 @@ macOS 后台服务（launchd）没有 GUI，同样走配置。
 | POST | `/api/mc/feature/stop` | 「停止 MC 功能」：停所有服 + 起跑 1 小时，进入锁定 | 人类会话 |
 | POST | `/api/mc/feature/confirm-close` | 锁定期间 → `DISABLED`（锁定继续，走完才能 enable） | 人类会话 |
 | POST | `/api/mc/feature/cancel-close` | 「我不想关掉功能」：只表明保留功能 → 保持 `ENABLED`；**锁定继续，1h 内仍不能启服** | 人类会话 |
-| GET/POST | `/api/mc/instances` | 列表 / 创建 | 提权 |
-| GET/PATCH/DELETE | `/api/mc/instances/{id}` | 详情 / 改配置 / 删除 | 提权 |
+| GET/POST | `/api/mc/instances` | 列表 / 创建（创建体含 `storage: external\|data`，不传即专用目录） | 提权 |
+| GET/PATCH/DELETE | `/api/mc/instances/{id}` | 详情 / 改配置（`name`、`port`、`rconPort`、`memoryMb`；端口与内存在停服时可改，端口会同时写 `server.properties`）/ 删除 | 提权 |
+| GET | `/api/mc/storage` | 两个存储位置的真实路径与可写状态、默认值（创建向导用） | 提权 |
+| GET | `/api/mc/ports` | 当前空闲的一对端口建议（创建向导用） | 提权 |
 | POST | `.../start` `.../stop` `.../kill` `.../restart` | 生命周期 | 提权 |
 | GET | `.../logs?tail=N` | 日志尾巴 | 提权 |
 | POST | `.../console/ticket` | 换终端 ticket（复用 `/ws/terminal/{ticket}`） | 提权 |
