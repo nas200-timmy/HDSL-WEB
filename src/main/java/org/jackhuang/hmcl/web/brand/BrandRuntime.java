@@ -40,6 +40,7 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -500,7 +501,12 @@ public final class BrandRuntime {
                 // authenticating proxy this switch is documented for; no token
                 // is ever generated, printed, or handled here.
                 command.add("--dangerous-bypass-auth");
-                return new LaunchPlan(List.copyOf(command), Map.of(), 0);
+                // kimi-code runs its shell tools through a bash, and on Windows it
+                // will not go looking for one: the panel names the Git Bash it can
+                // see, or the agent fails on its first tool call.
+                Map<String, String> environment = new LinkedHashMap<>();
+                org.jackhuang.hmcl.web.terminal.KimiTui.applyShell(environment);
+                return new LaunchPlan(List.copyOf(command), Map.copyOf(environment), 0);
             }
             case OPENCODE -> {
                 int port = allocatePort();

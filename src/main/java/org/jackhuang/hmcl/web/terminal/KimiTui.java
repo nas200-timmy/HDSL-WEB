@@ -43,6 +43,31 @@ import java.util.Map;
 @NotNullByDefault
 public final class KimiTui implements BrandTui {
 
+    /// The variable kimi-code reads for the shell its own tools run in.
+    ///
+    /// On Windows it does not look for a bash by itself: without this it refuses
+    /// with `failed to start shell: Git Bash was not found on this Windows host`
+    /// the first time the agent wants to run a command. The panel is the one that
+    /// can see the machine, so it says where Git for Windows is.
+    static final String SHELL_VARIABLE = "KIMI_SHELL_PATH";
+
+    /// Points kimi-code at a Git Bash, unless the operator already said which shell
+    /// to use (their own `KIMI_SHELL_PATH`, from the panel's environment or the
+    /// instance's).
+    ///
+    /// A no-op on every other platform, and on a Windows machine without Git for
+    /// Windows: there is nothing to point at, and guessing at some other bash is
+    /// how an agent ends up running WSL.
+    ///
+    /// @param environment the child's environment, modified in place
+    public static void applyShell(Map<String, String> environment) {
+        if (environment.containsKey(SHELL_VARIABLE) || System.getenv().containsKey(SHELL_VARIABLE)) {
+            return;
+        }
+        org.jackhuang.hmcl.util.platform.GitBash.find()
+                .ifPresent(bash -> environment.put(SHELL_VARIABLE, bash.toString()));
+    }
+
     @Override
     public TerminalTarget target(Path packageDir, Path home, Path workspace,
                                  String instanceId, @Nullable String resumeSession) throws IOException {
@@ -85,6 +110,7 @@ public final class KimiTui implements BrandTui {
             command.add("--resume");
             command.add(resumeSession);
         }
+        applyShell(environment);
         return new TerminalTarget("kimi", instanceId, command, workspace, Map.copyOf(environment));
     }
 }
