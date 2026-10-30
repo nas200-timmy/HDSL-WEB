@@ -92,6 +92,13 @@ public final class BrandRuntime {
     /// How long a launch waits for the readiness line before giving up.
     public static final int READY_TIMEOUT_SECONDS = 60;
 
+    /// Octop's own readiness wait. Its first start runs `octop init` (uv + a Python
+    /// environment) before uvicorn answers, and on a machine that has never done it
+    /// 60 seconds is not a fair deadline — the panel reported "did not answer" and
+    /// killed a process that was three seconds from being ready. The log-based brands
+    /// announce themselves long before this, so only Octop needs the longer one.
+    public static final int OCTOP_READY_TIMEOUT_SECONDS = 180;
+
     /// Kimi's readiness announcement.
     private static final Pattern KIMI_LOCAL_PORT =
             Pattern.compile("Local:\\s+http://127\\.0\\.0\\.1:(\\d+)/");
@@ -757,7 +764,7 @@ public final class BrandRuntime {
                 .timeout(Duration.ofSeconds(2))
                 .GET()
                 .build();
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(READY_TIMEOUT_SECONDS);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(OCTOP_READY_TIMEOUT_SECONDS);
         while (System.nanoTime() < deadline) {
             if (!process.isAlive()) {
                 return null;
@@ -780,7 +787,9 @@ public final class BrandRuntime {
                 return null;
             }
         }
-        ERRORS.put(id, "octop did not answer /api/health within " + READY_TIMEOUT_SECONDS + " seconds");
+        ERRORS.put(id, "octop did not answer /api/health within " + OCTOP_READY_TIMEOUT_SECONDS
+                + " seconds. Its first start initialises a Python environment (uv) and can be slow; "
+                + "the instance log says where it stopped.");
         STATES.put(id, State.ERROR);
         return null;
     }

@@ -967,6 +967,29 @@ function InstancesCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brand, empty]);
 
+  // 启动要能"看见在动"：Octop 首次启动会初始化 Python 环境，可以慢到一两分钟，
+  // 没有秒数的话看起来就是卡住了（有人因此以为启动失败）。
+  const [startingSince, setStartingSince] = useState<Record<string, number>>({});
+  useEffect(() => {
+    setStartingSince((prev) => {
+      const next: Record<string, number> = {};
+      for (const inst of instances) {
+        if (inst.state === "starting") {
+          next[inst.id] = prev[inst.id] ?? Date.now();
+        }
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instances]);
+  const [, setStartTick] = useState(0);
+  useEffect(() => {
+    if (!instances.some((i) => i.state === "starting")) return;
+    const timer = setInterval(() => setStartTick((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instances]);
+
   // 启动中的实例每 1.5 秒拉一次状态（同 ZcodeSection 的轮询模式）
   useEffect(() => {
     if (!instances.some((i) => i.state === "starting")) return;
@@ -1293,8 +1316,18 @@ function InstancesCard({
                   <span className="tlli-text">
                     <span className="tlli-title">
                       {inst.name}
-                      <span className={`tag ${STATE_TAG[inst.state] ?? "plain"}`}>
+                      <span
+                        className={`tag ${STATE_TAG[inst.state] ?? "plain"}`}
+                        title={
+                          inst.state === "starting"
+                            ? "首次启动可能要一两分钟（Octop 会初始化 Python 环境）。超时或出错时会写明原因，实例日志里有全过程。"
+                            : undefined
+                        }
+                      >
                         {stateText(inst.state)}
+                        {inst.state === "starting" && startingSince[inst.id]
+                          ? ` ${Math.max(0, Math.round((Date.now() - startingSince[inst.id]) / 1000))}s`
+                          : ""}
                       </span>
                       {disabled && <span className="tag plain">策略禁用</span>}
                     </span>
