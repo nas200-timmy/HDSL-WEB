@@ -581,10 +581,10 @@ function NodeTab() {
 
         {/* 托管运行时 */}
         <span style={{ fontSize: 13, fontWeight: 600 }}>面板托管的运行时（存于数据目录，PATH 没有 node 时自动使用）</span>
-        {status && status.managed.length === 0 && (
+        {status && (status.managed ?? []).length === 0 && (
           <span style={{ fontSize: 13, color: "var(--monet-on-surface-variant)" }}>还没有。裸部署（如 Windows 直接 java -jar）可一键安装：</span>
         )}
-        {status?.managed.map((r) => (
+        {(status?.managed ?? []).map((r) => (
           <div key={r.version} className="toolbar-row" style={{ padding: "2px 0" }}>
             <span style={{ fontSize: 13 }}>
               Node.js {r.version}

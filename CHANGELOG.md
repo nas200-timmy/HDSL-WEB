@@ -2,6 +2,22 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 · 没有系统 Node.js 的机器上实例页白屏
+
+> 起因：裸部署（`java -jar`，机器上没有 node）打开面板，实例页直接报
+> `Cannot read properties of undefined (reading 'pnpm')`，整页不渲染。带 node 的开发机和 CI
+> 都看不出来——只有"这台机器没有 Node.js"这一种状态才会撞上。
+
+- `GET /api/node` 的 `system` 字段在"没有系统 Node.js"时是 `null`，但 Gson 的默认写入器**丢掉**
+  `null` 成员，响应里干脆没有这个键。实例页的工具链提示条读 `status.system.pnpm`（先判
+  `system !== null`），丢键之后拿到的是 `undefined`：`system !== null` 为真，`undefined.pnpm`
+  把整页炸掉。
+- 修法：该接口改用 `Json.writePreservingNulls`——账户、实例、目录等"字段允许为 null"的接口本来
+  就走这个写入器，这里是漏掉的一个。
+- 前端同时加固：`system`/`managed` 缺键按 `null` / 空数组处理，读不到也不再炸（这条要等下次
+  用 npm 重建 SPA 才生效；后端那一条对已有的 `web/dist` 立刻有效）。
+- 回归测试 `NodeApiTest.theSystemFieldIsPresentEvenWhenThereIsNoNode`：改回 `Json.write` 即红。
+
 ## 未发布 · Windows 面板的实例终端改为浏览器 PTY（ConPTY）；删除桌面控制台回落
 
 > 起因：Windows 上点「终端」开的不是 PTY，而是一个宿主机桌面窗口（`cmd.exe /c start …

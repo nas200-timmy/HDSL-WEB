@@ -58,9 +58,13 @@ export function ToolchainBanner() {
 
   if (dismissed || status === null) return null;
 
-  const system = status.system;
+  // `system` is spelled `null` by the contract, but a panel from before that was
+  // fixed (or any proxy that eats nulls) can omit the key — and an omitted key
+  // is `undefined`, which slips past a `!== null` test and crashes the page on
+  // `system.pnpm`. Normalise once, here.
+  const system = status.system ?? null;
   const systemOk = system !== null && system.pnpm !== undefined && supports(system.nodeVersion);
-  const managedOk = status.managed.some((r) => r.suitable && r.pnpm);
+  const managedOk = (status.managed ?? []).some((r) => r.suitable && r.pnpm);
   if (systemOk || managedOk) return null;
 
   let reason: string;

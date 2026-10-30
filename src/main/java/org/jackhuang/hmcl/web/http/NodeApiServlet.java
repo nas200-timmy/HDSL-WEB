@@ -86,7 +86,12 @@ public final class NodeApiServlet extends HttpServlet {
             return entry;
         }).toList()));
         body.addProperty("requirement", DshNodeRuntime.requirement());
-        Json.write(response, body);
+        // `system` is `null` when there is no system Node.js, and the contract says
+        // so — the instances page reads `system.pnpm` after a `system !== null`
+        // check, so a *dropped* key is not the same thing as a null one there: it
+        // is `undefined.pnpm` and it whitens the page. Every other endpoint that
+        // spells a field as an explicit null goes through the same writer.
+        Json.writePreservingNulls(response, body);
     }
 
     @Override
