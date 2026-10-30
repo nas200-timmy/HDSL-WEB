@@ -217,8 +217,13 @@ val syncWebDist by tasks.registering(Sync::class) {
     into(layout.projectDirectory.dir("src/main/resources/web"))
 }
 
-tasks.named("processResources") {
+tasks.named<ProcessResources>("processResources") {
     dependsOn(syncWebDist)
+    // 发行物要自带许可证与声明：GPLv3 §4/§5 要求随二进制一并传递许可证并保留声明，
+    // HMCL 的附加条款（§7(b)）要求保留其版权与修改声明。依赖的 META-INF 里只有
+    // 各自的 licence，没有本项目这一份，所以从仓库根显式带进 jar。
+    from(layout.projectDirectory.file("LICENSE"))
+    from(layout.projectDirectory.file("NOTICE"))
 }
 
 // ------------------------------------------------- first-party plugins -----

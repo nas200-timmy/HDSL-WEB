@@ -2372,6 +2372,10 @@ function AboutTab() {
     </a>
   );
 
+  // 正式版版本串是 `x.y.z`；非 tag 构建会带 `+g<sha>`，拆出来单独显示，
+  // 免得用户拿一个带提交号的串去对比发布 tag。
+  const commit = health?.version.match(/\+g([0-9a-f]{7,40})/)?.[1];
+
   return (
     <>
       <div className="section-caption">
@@ -2381,7 +2385,23 @@ function AboutTab() {
       <div className="card">
         <div className="comp-row">
           <span className="comp-label">{I18N["about.project"]}</span>
-          <span className="comp-value">HDSL-web{health ? ` v${health.version}` : ""}</span>
+          <span className="comp-value">HDSL-web</span>
+        </div>
+        <div className="comp-row">
+          <span className="comp-label">{I18N["about.version"]}</span>
+          <span className="comp-value mono">
+            {health ? `v${health.version}` : "—"}
+            {commit && (
+              <span style={{ color: "var(--monet-on-surface-variant)" }}>
+                {" · "}
+                构建 {commit}
+              </span>
+            )}
+          </span>
+        </div>
+        <div className="comp-row">
+          <span className="comp-label">{I18N["about.java"]}</span>
+          <span className="comp-value">{health?.java || "—"}</span>
         </div>
         <div className="comp-row">
           <span className="comp-label">说明</span>
@@ -2397,7 +2417,15 @@ function AboutTab() {
         </div>
         <div className="comp-row">
           <span className="comp-label">{I18N["about.license"]}</span>
-          <span className="comp-value">{I18N["about.license.statement"]}</span>
+          <span className="comp-value" style={{ fontSize: 12 }}>
+            {I18N["about.license.statement"]}
+          </span>
+        </div>
+        <div className="comp-row">
+          <span className="comp-label">{I18N["about.copyright"]}</span>
+          <span className="comp-value" style={{ fontSize: 12 }}>
+            {I18N["about.copyright.web.statement"]}
+          </span>
         </div>
         <div className="comp-row">
           <span className="comp-label">{I18N["about.upstream"]}</span>
@@ -2410,9 +2438,27 @@ function AboutTab() {
           </span>
         </div>
         <div className="comp-row">
+          <span className="comp-label">{I18N["about.thirdparty"]}</span>
+          <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            {I18N["about.thirdparty.statement"]}
+          </span>
+        </div>
+        <div className="comp-row">
           <span className="comp-label">{I18N["about.stack"]}</span>
           <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
             {I18N["about.stack.statement"]}
+          </span>
+        </div>
+        <div className="comp-row">
+          <span className="comp-label">{I18N["about.privacy"]}</span>
+          <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            {I18N["about.privacy.statement"]}
+          </span>
+        </div>
+        <div className="comp-row">
+          <span className="comp-label">{I18N["about.feedback"]}</span>
+          <span className="comp-value mono" style={{ fontSize: 12 }}>
+            {link(`${REPO_URL}/issues`, `${REPO_SLUG}/issues`)}
           </span>
         </div>
       </div>

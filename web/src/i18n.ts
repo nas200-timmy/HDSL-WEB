@@ -229,15 +229,25 @@ export const I18N = {
   "about.project": "项目",
   "about.project.description":
     "把桌面版 HDSL（DeepSeek Harness 启动器）搬进浏览器的单容器实现：面板负责创建、安装、启停实例，dsh 由面板拉起并反代到 /i/<实例id>/ 下使用",
+  "about.version": "版本",
+  "about.java": "Java 运行时",
   "about.repo": "仓库",
   "about.license": "许可证",
-  "about.license.statement": "GPL-3.0（与所基于的上游一致）",
+  "about.license.statement": "GPL-3.0；按 GPL 第 15、16 条不提供任何担保，许可证全文见仓库 LICENSE",
+  "about.copyright.web.statement": "© 2026 HDSL contributors；上游 HMCL © 2020 huangyuhui 及贡献者",
   "about.upstream": "上游",
   "about.upstream.statement":
     "与更上游的 HMCL —— 领域层与界面样式源自它们，完整声明见仓库的 NOTICE",
+  "about.thirdparty": "第三方组件",
+  "about.thirdparty.statement":
+    "Jetty、Bouncy Castle、React、xterm.js 等，逐项授权与声明见仓库 NOTICE",
   "about.stack": "技术栈",
   "about.stack.statement":
     "React · Vite · Material Color Utilities · Material Symbols 图标 · Jetty · Java 21 · Node 22 + pnpm",
+  "about.privacy": "数据与隐私",
+  "about.privacy.statement":
+    "不上报使用数据；账号、会话、实例与密钥只保存在数据目录；对外监听端口只有你显式开启的实例",
+  "about.feedback": "反馈",
 
   // ---- 关于（MC 段：只有功能开启后才出现，见 McAboutCard） ----
   "about.mc": "Minecraft 服务端",

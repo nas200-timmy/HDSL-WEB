@@ -107,7 +107,13 @@ public final class ApiServlet extends HttpServlet {
 
     private void health(HttpServletResponse response) throws IOException {
         long uptimeSec = Math.max(0, (System.currentTimeMillis() - uptimeStartMillis.getAsLong()) / 1000);
-        Json.write(response, Map.of("status", "ok", "version", version, "uptimeSec", uptimeSec));
+        // `java` 是「关于」页要显示的运行时版本：面板自己跑在哪个 JDK 上，
+        // 和实例用的 JDK 是两回事，混在一起会让人以为实例也换了运行时。
+        Json.write(response, Map.of(
+                "status", "ok",
+                "version", version,
+                "java", System.getProperty("java.version", ""),
+                "uptimeSec", uptimeSec));
     }
 
     private void login(HttpServletRequest request, HttpServletResponse response) throws IOException {

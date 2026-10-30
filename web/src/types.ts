@@ -3,6 +3,8 @@
 export interface Health {
   status: string;
   version: string;
+  /** 面板自身运行的 JDK 版本（不是实例用的 JDK）。 */
+  java?: string;
   uptimeSec: number;
 }
 
