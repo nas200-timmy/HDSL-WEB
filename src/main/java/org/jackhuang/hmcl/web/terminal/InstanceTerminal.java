@@ -28,13 +28,12 @@ import org.jackhuang.hmcl.web.developer.DeveloperAuth;
 import org.jackhuang.hmcl.web.developer.DeveloperElevation;
 import org.jackhuang.hmcl.web.http.Json;
 import org.jackhuang.hmcl.web.http.RequestSecurity;
+import org.jackhuang.hmcl.web.terminal.pty.ConPty;
 import org.jackhuang.hmcl.web.terminal.pty.PtySize;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.util.function.BooleanSupplier;
 
 /// The terminal routes' shared half: the gates, the takeover of the web
@@ -150,10 +149,18 @@ public final class InstanceTerminal {
     /// session files. It must return once the process is really gone — an
     /// asynchronous stop followed by a spawn races two processes over one home.
     ///
-    /// @throws Refused when the PTY or the agent cannot be started, or when a
-    ///                 Windows panel is asked without its literal confirmation
+    /// A Windows panel without a pseudo console is refused **before** `stopWeb`:
+    /// a machine that cannot start a terminal should not be the reason the
+    /// instance's web mode went down. The check is a pre-check, not a branch —
+    /// every platform that passes it takes the same `terminals.open` path.
+    ///
+    /// @throws Refused when the PTY or the agent cannot be started, or when this
+    ///                 Windows build has no ConPTY
     public JsonObject open(HttpServletRequest request, String instanceId,
                            @Nullable Runnable stopWeb, TargetFactory factory) throws IOException {
+        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS && !ConPty.platformSupported()) {
+            throw new Refused(409, "terminal_unsupported_platform: " + ConPty.UNSUPPORTED_MESSAGE);
+        }
         if (stopWeb != null) {
             stopWeb.run();
         }
@@ -164,9 +171,6 @@ public final class InstanceTerminal {
             AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.open", instanceId, "failure",
                     actorOf(request), request.getRemoteAddr());
             throw new Refused(409, "terminal_failed: " + e.getMessage());
-        }
-        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
-            return openDesktop(request, instanceId, target);
         }
         // A refresh comes back to the same agent: an existing running session
         // gets a fresh ticket instead of a 409. The process outlives the tab.
@@ -195,31 +199,6 @@ public final class InstanceTerminal {
         return body;
     }
 
-    /// The Windows branch: the console belongs to the desktop, so there is no
-    /// PTY and no ticket, only a window in the instance's workspace.
-    private JsonObject openDesktop(HttpServletRequest request, String instanceId, TerminalTarget target)
-            throws IOException {
-        // A remote caller who only stole a cookie should not pop a console
-        // with a single POST, so the request has to spell the intent out. The
-        // real gates are the session and the developer elevation above.
-        if (!"open-desktop-terminal".equals(readBodyField(request, "confirm"))) {
-            throw new Refused(400, "confirmation_required: send {\"confirm\":\"open-desktop-terminal\"}");
-        }
-        try {
-            DesktopTerminal.open(target);
-        } catch (IOException e) {
-            throw new Refused(409, "terminal_failed: " + e.getMessage());
-        }
-        AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.desktop", instanceId, "success",
-                actorOf(request), request.getRemoteAddr());
-        JsonObject body = new JsonObject();
-        body.addProperty("mode", "desktop");
-        body.addProperty("instance", instanceId);
-        body.addProperty("brand", target.brand());
-        body.addProperty("hint", DesktopTerminal.REMOTE_HINT);
-        return body;
-    }
-
     /// Answers a refusal in the shape the clients parse.
     public static void write(HttpServletRequest request, jakarta.servlet.http.HttpServletResponse response,
                              Refused refused) throws IOException {
@@ -235,18 +214,5 @@ public final class InstanceTerminal {
     private static @Nullable String actorOf(HttpServletRequest request) {
         Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
         return session instanceof AuthService.Session value ? value.username() : null;
-    }
-
-    /// Reads one string field out of the request body, or `null`.
-    static @Nullable String readBodyField(HttpServletRequest request, String field) throws IOException {
-        try (InputStreamReader reader =
-                     new InputStreamReader(request.getInputStream(), StandardCharsets.UTF_8)) {
-            JsonObject body = com.google.gson.JsonParser.parseReader(reader).getAsJsonObject();
-            return body.has(field) && !body.get(field).isJsonNull()
-                    ? body.get(field).getAsString()
-                    : null;
-        } catch (RuntimeException e) {
-            return null;
-        }
     }
 }

@@ -108,10 +108,9 @@ public final class TerminalManager implements AutoCloseable {
     /// Kills every tracked terminal, for the emergency stop.
     ///
     /// Same contract as [terminate] per session (the PTY's process group gets
-    /// SIGKILL after a two-second grace), and the same audit line, so a stop
-    /// leaves the same trail as closing terminals one by one. On Windows this
-    /// registry is empty in normal use — the console belongs to the desktop,
-    /// see [DesktopTerminal].
+    /// SIGKILL after a two-second grace, or the job object is killed on
+    /// Windows), and the same audit line, so a stop leaves the same trail as
+    /// closing terminals one by one.
     ///
     /// @return how many sessions were terminated
     public int terminateAll() {

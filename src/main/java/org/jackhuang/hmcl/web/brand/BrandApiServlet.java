@@ -32,7 +32,6 @@ import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.http.Json;
 import org.jackhuang.hmcl.web.task.TaskService;
 import org.jackhuang.hmcl.web.terminal.BrandTui;
-import org.jackhuang.hmcl.web.terminal.DesktopTerminal;
 import org.jackhuang.hmcl.web.terminal.TerminalManager;
 import org.jackhuang.hmcl.web.terminal.TerminalSession;
 import org.jackhuang.hmcl.web.terminal.TerminalTarget;
@@ -686,13 +685,6 @@ public final class BrandApiServlet extends HttpServlet {
         } catch (RuntimeException e) {
             return null;
         }
-    }
-
-    /// The literal confirmation a desktop-terminal POST must carry. It is a
-    /// speed bump against a stolen cookie, not a cryptographic proof: the real
-    /// gates are the session and the developer elevation before it.
-    private static @Nullable String readConfirmation(HttpServletRequest request) throws IOException {
-        return readBodyField(request, "confirm");
     }
 
     /// Who asked, for the audit trail. `null` when the panel runs with
