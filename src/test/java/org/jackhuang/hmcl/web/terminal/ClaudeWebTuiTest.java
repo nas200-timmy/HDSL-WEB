@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.terminal;
 
+import org.jackhuang.hmcl.dsh.DshNodeRuntime;
 import org.jackhuang.hmcl.util.platform.Executables;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.junit.jupiter.api.Test;
@@ -26,6 +27,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -63,7 +65,6 @@ class ClaudeWebTuiTest {
     @Test
     void kernelsReportWhatIsActuallyInstalled() throws IOException {
         stageEngine();
-
         List<ClaudeWebTui.Kernel> kernels = ClaudeWebTui.kernels(packageDir);
         assertEquals(List.of(ClaudeWebTui.COMMUNITY, ClaudeWebTui.OFFICIAL),
                 kernels.stream().map(ClaudeWebTui.Kernel::id).toList());
@@ -134,6 +135,36 @@ class ClaudeWebTuiTest {
         assertEquals(packageDir.resolve("workspace"), target.cwd());
         assertEquals(packageDir.resolve("home").toString(), target.environment().get("HOME"));
         assertEquals("xterm-256color", target.environment().get("TERM"));
+    }
+
+    /// A bare Windows deployment has no `node` on `PATH`; the panel installs one
+    /// under `<data>/hdsl/runtimes`, and that runtime is what the engine has to
+    /// start from. Asking `PATH` alone failed the community terminal with
+    /// "node is not on PATH" while the Kimi and ZCode terminals already fell back
+    /// to it — the panel had a perfectly good Node the whole time.
+    @Test
+    void theCommunityEngineFallsBackToTheManagedRuntime(@TempDir Path managed) throws IOException {
+        Path node = managed.resolve("bin").resolve(
+                OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS ? "node.exe" : "node");
+        Files.createDirectories(node.getParent());
+        Files.writeString(node, "");
+        DshNodeRuntime runtime = new DshNodeRuntime(node, "22.0.0", null, null, null, null);
+
+        assertEquals(node, ClaudeWebTui.requireNode(Optional::empty, () -> Optional.of(runtime)));
+        // And `PATH` wins when it has one: the machine's own Node is the one the
+        // operator expects, the same order the ZCode terminal resolves it in.
+        assertEquals(node, ClaudeWebTui.requireNode(() -> Optional.of(runtime), Optional::empty));
+    }
+
+    /// Neither place has one: the message names both, so the answer is not a bare
+    /// "install Node" on a panel that could have installed it itself.
+    @Test
+    void noNodeAnywhereSaysWhereOneComesFrom() {
+        IOException expected = assertThrows(IOException.class,
+                () -> ClaudeWebTui.requireNode(Optional::empty, Optional::empty));
+        assertTrue(expected.getMessage().contains("Node.js"), expected.getMessage());
+        assertTrue(expected.getMessage().contains("PATH"), expected.getMessage());
+        assertFalse(expected.getMessage().startsWith("node is not on PATH"), expected.getMessage());
     }
 
     /// A native binary runs as itself: node is not required to start it.

@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.terminal;
 
+import org.jackhuang.hmcl.dsh.DshNodeRuntime;
 import org.jackhuang.hmcl.util.platform.Architecture;
 import org.jackhuang.hmcl.util.platform.Executables;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
@@ -31,6 +32,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.Supplier;
 
 /// Claude Web's interactive terminal **is** the Claude Code CLI it drives.
 ///
@@ -44,7 +47,8 @@ import java.util.Map;
 /// The entry points mirror upstream `server/src/claude-exe.ts`:
 ///
 /// - engine: `<release>/node_modules/claude-web-engine/dist/cli-node.js`, run
-///   with `node` (the package ships a JS entry, not a `bin`);
+///   with `node` (the package ships a JS entry, not a `bin`) — the one on
+///   `PATH`, else the runtime the panel installed (see [requireNode]);
 /// - official: the SDK's platform package
 ///   `@anthropic-ai/claude-agent-sdk-<platform>-<arch>/claude[.exe]`, else a
 ///   `claude` on PATH (a global npm install).
@@ -180,11 +184,10 @@ public final class ClaudeWebTui implements BrandTui {
             environment.put("PATH", node.getParent() + File.pathSeparator
                     + environment.getOrDefault("PATH", ""));
         } else {
-            // A native binary (the official one) does not need node; put it on
-            // the child's PATH when it happens to be there, but never fail.
-            Executables.resolve("node").ifPresent(node ->
-                    environment.put("PATH", node.getParent() + File.pathSeparator
-                            + environment.getOrDefault("PATH", "")));
+            // A native binary (the official one) does not need node; put one on
+            // the child's PATH when there is any — the panel's managed runtime
+            // counts — but never fail over it.
+            putNodeOnPath(environment);
         }
         command.add(entry.toString());
         applyBaseUrl(environment, baseUrl);
@@ -298,7 +301,42 @@ public final class ClaudeWebTui implements BrandTui {
     }
 
     private static Path requireNode() throws IOException {
-        return Executables.resolve("node")
-                .orElseThrow(() -> new IOException("node is not on PATH; install Node before opening a terminal"));
+        return requireNode(DshNodeRuntime::detect, DshNodeRuntime::detectManaged);
+    }
+
+    /// The same decision with its two lookups passed in, so a machine's own state
+    /// (does it have a Node on `PATH`? does the panel have a managed one?) is not
+    /// what a test depends on.
+    ///
+    /// The order is `PATH` first, then the runtimes the panel installed under
+    /// `<data>/hdsl/runtimes`. A bare Windows deployment has only the second — the
+    /// panel installs it so nobody has to install Node — and asking `PATH` alone
+    /// is why the community engine failed with "node is not on PATH" while a
+    /// perfectly good runtime sat in the data directory, next to the one the Kimi
+    /// and ZCode terminals already used.
+    ///
+    /// @param onPath  what `node` on `PATH` resolves to
+    /// @param managed the runtimes the panel installed
+    /// @return a program that can actually be started
+    /// @throws IOException when neither lookup has one
+    static Path requireNode(Supplier<Optional<DshNodeRuntime>> onPath,
+                            Supplier<Optional<DshNodeRuntime>> managed) throws IOException {
+        DshNodeRuntime runtime = onPath.get().or(managed).orElse(null);
+        if (runtime == null) {
+            throw new IOException("no Node runtime: none on PATH and none installed by the panel"
+                    + " (Settings → Node.js installs one, and the community engine needs it)");
+        }
+        return runtime.node();
+    }
+
+    /// Puts whichever Node the child could use on its `PATH`, without requiring
+    /// one: the official kernel runs as a native binary, but the tools it shells
+    /// out to still look for `node`.
+    ///
+    /// @param environment the child environment to amend
+    private static void putNodeOnPath(Map<String, String> environment) {
+        DshNodeRuntime.detect().or(DshNodeRuntime::detectManaged).ifPresent(runtime ->
+                environment.put("PATH", runtime.node().getParent() + File.pathSeparator
+                        + environment.getOrDefault("PATH", "")));
     }
 }
