@@ -650,6 +650,10 @@ public final class BrandApiServlet extends HttpServlet {
         if (instanceTerminal.close(brand.id(), id)) {
             LOG.info("Closed the " + brand.id() + " terminal of " + id + " before launching its web mode");
         }
+        // The terminal's TUI leaves a detached gateway holding the API port; drop
+        // it before the wrapper picks its ports, or every switch lands on a new
+        // pair (and a saved account pointed at the old one).
+        BrandRuntime.releaseTerminalGateway(ref.manager(), instance);
         BrandRuntime.Status status = BrandRuntime.launch(
                 brand, ref.manager(), instance,
                 org.jackhuang.hmcl.web.http.HostHeaders.stripPort(request.getHeader("Host")), packageDir);

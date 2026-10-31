@@ -1098,6 +1098,69 @@ public final class BrandRuntime {
         }
     }
 
+    /// Stops a gateway this home still owns **outside** the wrapper, so the next
+    /// web launch can reuse its recorded ports.
+    ///
+    /// When the terminal was the last mode, its TUI started a *detached* gateway
+    /// (upstream's `--idle-exit`) that outlives the terminal and keeps the API
+    /// port. The wrapper is about to start another one; without this, the port
+    /// allocator finds the pair busy and hands out a different set on every
+    /// switch — which silently invalidates a saved "API 端点" account. The
+    /// wrapper's `--replace` would kill it anyway, just after the ports were
+    /// chosen; this kills it before.
+    ///
+    /// Nothing happens while the web mode is running: then `gateway_state.json`
+    /// names the wrapper's own child, which must keep running.
+    ///
+    /// @param manager  the manager, for the instance's home
+    /// @param instance the instance
+    static void releaseTerminalGateway(BrandInstanceManager manager, BrandInstance instance) {
+        if (!Brand.HERMES.id().equals(instance.brand()) || isRunning(instance.id())) {
+            return;
+        }
+        long pid = gatewayPidOf(manager.homeDirectory(instance));
+        if (pid <= 0) {
+            return;
+        }
+        ProcessHandle.of(pid).filter(ProcessHandle::isAlive).ifPresent(handle -> {
+            LOG.info("Stopping the terminal's detached Hermes gateway (pid " + pid
+                    + ") before launching the web mode");
+            handle.descendants().forEach(ProcessHandle::destroy);
+            handle.destroy();
+            try {
+                handle.onExit().get(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+                // Still running after the grace: take it down and let the wrapper
+                // start its own (--replace covers the rest).
+            }
+            if (handle.isAlive()) {
+                handle.descendants().forEach(ProcessHandle::destroyForcibly);
+                handle.destroyForcibly();
+            }
+        });
+    }
+
+    /// The pid Hermes recorded for this home's gateway, or `0` when the file is
+    /// missing/unreadable. Only the panel's own launch path reads it; the file
+    /// belongs to the agent and is rewritten by every gateway start.
+    static long gatewayPidOf(Path home) {
+        Path state = home.resolve("gateway_state.json");
+        if (!Files.isRegularFile(state)) {
+            return 0;
+        }
+        try {
+            java.util.regex.Matcher matcher = java.util.regex.Pattern
+                    .compile("\"pid\"\\s*:\\s*(\\d+)")
+                    .matcher(Files.readString(state, StandardCharsets.UTF_8));
+            return matcher.find() ? Long.parseLong(matcher.group(1)) : 0;
+        } catch (IOException | NumberFormatException e) {
+            LOG.warning("Could not read the Hermes gateway pid from " + state, e);
+            return 0;
+        }
+    }
+
     /// Reads (or allocates) the instance's port pair.
     ///
     /// Persisted so a restart lands on the same pair: Hermes writes the pair
