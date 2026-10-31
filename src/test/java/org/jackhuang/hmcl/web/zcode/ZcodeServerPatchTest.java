@@ -64,7 +64,7 @@ class ZcodeServerPatchTest {
     void theOwnerBecomesLocalAndNothingElseMoves() throws IOException {
         Path entry = server();
 
-        assertEquals(ZcodeServerPatch.Outcome.PATCHED, ZcodeServerPatch.ensure(release));
+        assertEquals(ZcodeServerPatch.Outcome.PATCHED, ZcodeServerPatch.patch(release));
 
         String patched = Files.readString(entry, StandardCharsets.UTF_8);
         assertTrue(patched.contains("const projectStorageHostId = \"local\";"), patched);
@@ -75,18 +75,35 @@ class ZcodeServerPatchTest {
         assertTrue(patched.contains("await ensureTelemetryDeviceMid();"), patched);
     }
 
-    /// Starting a release is something a panel does many times; the file is
-    /// written once and left alone afterwards.
+    /// Patching is a build step that happens once; the build then starts the
+    /// release, and a start must not rewrite the bytes it just produced.
     @Test
-    void aSecondStartDoesNotTouchTheFileAgain() throws IOException {
+    void aSecondPassDoesNotTouchTheFileAgain() throws IOException {
         Path entry = server();
-        assertEquals(ZcodeServerPatch.Outcome.PATCHED, ZcodeServerPatch.ensure(release));
+        assertEquals(ZcodeServerPatch.Outcome.PATCHED, ZcodeServerPatch.patch(release));
         byte[] once = Files.readAllBytes(entry);
 
-        assertEquals(ZcodeServerPatch.Outcome.ALREADY_PATCHED, ZcodeServerPatch.ensure(release));
+        assertEquals(ZcodeServerPatch.Outcome.PATCHED_ALREADY, ZcodeServerPatch.patch(release));
 
-        assertArrayEquals("the file was rewritten on a start that had nothing to do", once,
+        assertArrayEquals("the file was rewritten on a pass that had nothing to do", once,
                 Files.readAllBytes(entry));
+    }
+
+    /// Verification reads and never writes: a release that was dropped in by hand
+    /// is reported as needing the patch and left exactly as the operator has it.
+    /// Editing an installed release at start would make the same bytes behave
+    /// differently depending on who started them.
+    @Test
+    void verificationNeverWrites() throws IOException {
+        Path entry = server();
+        byte[] upstream = Files.readAllBytes(entry);
+
+        assertEquals(ZcodeServerPatch.Outcome.NEEDS_PATCH, ZcodeServerPatch.verify(release));
+
+        assertArrayEquals("verification rewrote the release", upstream, Files.readAllBytes(entry));
+        // …and after the build's pass it reports the state a launch expects.
+        assertEquals(ZcodeServerPatch.Outcome.PATCHED, ZcodeServerPatch.patch(release));
+        assertEquals(ZcodeServerPatch.Outcome.PATCHED_ALREADY, ZcodeServerPatch.verify(release));
     }
 
     /// Upstream will move this anchor eventually. The release is then left
@@ -100,7 +117,7 @@ class ZcodeServerPatchTest {
                 "const projectStorageHostId = remoteHostIdFromWorkspaceIdentity(", "const owner = (");
         Files.writeString(entry, withoutAnchor, StandardCharsets.UTF_8);
 
-        assertEquals(ZcodeServerPatch.Outcome.ANCHOR_MISSING, ZcodeServerPatch.ensure(release));
+        assertEquals(ZcodeServerPatch.Outcome.ANCHOR_MISSING, ZcodeServerPatch.patch(release));
 
         assertEquals(withoutAnchor, Files.readString(entry, StandardCharsets.UTF_8));
     }
@@ -110,7 +127,7 @@ class ZcodeServerPatchTest {
     void aReleaseWithoutAServerEntryIsNotAServer() throws IOException {
         Files.createDirectories(release.resolve("bin"));
 
-        assertEquals(ZcodeServerPatch.Outcome.NOT_A_SERVER, ZcodeServerPatch.ensure(release));
+        assertEquals(ZcodeServerPatch.Outcome.NOT_A_SERVER, ZcodeServerPatch.patch(release));
     }
 
     private static void assertArrayEquals(String message, byte[] expected, byte[] actual) {

@@ -180,9 +180,11 @@ public final class ZcodeRuntime {
                 Files.createDirectories(logFile.getParent());
                 Files.createDirectories(workspace);
                 // The workbench only has a workspace when the server owns its
-                // project store locally — see ZcodeServerPatch for why upstream
-                // does not, and what that costs in a browser tab.
-                ZcodeServerPatch.report(packageDir, ZcodeServerPatch.ensure(packageDir));
+                // project store locally — see ZcodeServerPatch. The patch travels
+                // in every release this panel builds; a launch only reads it back,
+                // because the same bytes must behave the same way whoever starts
+                // them.
+                ZcodeServerPatch.report(packageDir, ZcodeServerPatch.verify(packageDir));
                 log = Files.newOutputStream(logFile,
                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
                 ProcessBuilder builder = new ProcessBuilder(

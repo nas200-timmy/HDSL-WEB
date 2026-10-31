@@ -440,6 +440,27 @@ public final class ZcodeBuilder {
             if (!Files.isRegularFile(target.resolve("bin/zcode.mjs"))) {
                 throw new ZcodeException("the built tarball has no bin/zcode.mjs — unexpected layout");
             }
+            // The distro patch (see ZcodeServerPatch): upstream's standalone server
+            // hard-codes a project-store owner no client can match, and upstream does
+            // not take contributions, so the panel ships the correction as part of the
+            // release it builds. Applied here, before `current` moves, so every release
+            // in `releases/` is the same bytes; a moved anchor fails the build rather
+            // than shipping a workbench that cannot open a folder.
+            switch (ZcodeServerPatch.patch(target)) {
+                case PATCHED, PATCHED_ALREADY -> {
+                }
+                case ANCHOR_MISSING -> throw new ZcodeException(
+                        "the built ZCode server entry no longer carries the project-owner expression"
+                                + " this panel patches (" + ZcodeServerPatch.SERVER_ENTRY + ");"
+                                + " the web workbench would have no workspace — update ZcodeServerPatch"
+                                + " and docs/zcode-experimental.md to the new anchor");
+                case NOT_A_SERVER -> throw new ZcodeException(
+                        "the built release has no " + ZcodeServerPatch.SERVER_ENTRY
+                                + " — a web-mode release is what this build produces");
+                case NEEDS_PATCH, UNREADABLE -> throw new ZcodeException(
+                        "could not apply the project-owner patch to the built release ("
+                                + target + ")");
+            }
             // A pointer at the release just installed. Where the system permits a link
             // this is a link; where it does not — an ordinary Windows account without
             // Developer Mode — `Links` writes a pointer file instead, because the

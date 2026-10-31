@@ -145,8 +145,8 @@ host 解决不了任何问题。真正的机制是一次字符串不相等：
 | 「创建项目/会话卡住」 | `… project.remote-project-required` | owner 不是 `local` 时，没有 projectId 的会话一律拒绝；而项目又建不出来 |
 | 会话索引空 | `… ZCode Agent runtime is not running` | 上面两条都断了，没有任何路径把该 workspace 的 agent runtime 拉起来 |
 
-**面板的做法：把 owner 钉成 `local`**（`web/zcode/ZcodeServerPatch.java`）。发行包里的
-`server/entry-http.js` 是未压缩的可读 ESM，面板在**启动实例前**把这一句改掉一次：
+**面板的做法：把 owner 钉成 `local`，而且是在构建发行包时钉**（`web/zcode/ZcodeServerPatch.java`）。
+发行包里的 `server/entry-http.js` 是未压缩的可读 ESM，面板在**安装发行包之前**改这一句：
 
 ```js
 const projectStorageHostId = remoteHostIdFromWorkspaceIdentity(…)   →   const projectStorageHostId = "local";
@@ -156,10 +156,16 @@ const projectStorageHostId = remoteHostIdFromWorkspaceIdentity(…)   →   cons
 一个进程、浏览器是唯一客户端）。实测：补丁后服务器建库时 `hosts` 表里是 `('local','local')`，
 不再是 `remote:server:desktop-hloonil`。
 
+**为什么不放在启动时改**：同一份字节不应该因为"谁启动它"而行为不同。补丁是**本发行版的一部分**
+（和构建期改那 5 处前端锚点同性质），装好的 `releases/<版本>/` 因此是确定的字节；启动只做
+**校验**，不写文件。上游不接受 PR，所以这条没有"等他们加开关"的退场时间，按 distro patch 维护。
+
 这条补丁的代价与边界：
 
-- **它是改上游代码**。锚点是上面那句表达式；上游把它挪走时，面板**不会**猜着改，也不阻止
-  启动——只在日志里说一次「这个发行包没有可打的锚点，web 工作台不会有工作目录」，页面照常打开。
+- **它是改上游代码**。锚点是上面那句表达式。**构建时**锚点不在 → 构建明确失败并点名锚点，
+  不会产出"看起来装好了、其实工作台没有工作目录"的发行包；手工放进 `releases/` 的发行包
+  （或 `HDSL_ZCODE_PACKAGE` 指向的）没有被补过，启动时只在日志里说一次「这个发行包不是本面板
+  构建的，web 工作台不会有工作目录」，页面照常打开。
 - 补丁前建的旧项目记录 `host_id = remote:server:x` 会因为 owner 变了而"隐身"（查询按 owner
   过滤）。旧实例的数据目录删掉即可，那本来是一次性数据。
 - `--workspace` 仍然只是"初始 tab 的路径 + `/api/server-info` 里的条目"，**不会自动变成项目**

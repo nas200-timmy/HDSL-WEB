@@ -82,15 +82,44 @@ public final class ZcodeServerPatch {
     private ZcodeServerPatch() {
     }
 
-    /// Patches a release in place, once.
+    /// Patches a release in place. **Build time only** — this is the distro patch
+    /// that ships in every release the panel produces, not something a launch does
+    /// to somebody else's files.
     ///
     /// The file is read, checked and only written when the expression is really
-    /// there — a release that is already patched, or one whose anchor moved, is
-    /// left byte-for-byte alone.
+    /// there; a release that is already patched is left byte-for-byte alone.
     ///
     /// @param release the release root (the directory holding `server/` and `bin/`)
-    /// @return what happened, for the caller to log once
-    public static Outcome ensure(Path release) {
+    /// @return what happened; the builder fails the build on [Outcome#ANCHOR_MISSING]
+    public static Outcome patch(Path release) {
+        Outcome inspected = verify(release);
+        if (inspected != Outcome.NEEDS_PATCH) {
+            return inspected;
+        }
+        Path entry = release.resolve(SERVER_ENTRY);
+        try {
+            String source = Files.readString(entry, StandardCharsets.UTF_8);
+            String patched = OWNER_EXPRESSION.matcher(source)
+                    .replaceFirst(Matcher.quoteReplacement(OWNER_LOCAL));
+            Files.writeString(entry, patched, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            LOG.warning("Could not write the project-owner patch into " + entry, e);
+            return Outcome.UNREADABLE;
+        }
+        return Outcome.PATCHED;
+    }
+
+    /// Reads a release and says whether it carries the patch — **without writing
+    /// anything**.
+    ///
+    /// This is what a launch does: a release this panel built is already patched,
+    /// and one that was dropped in by hand (or built elsewhere) is reported once
+    /// and left alone. Editing an installed release at start would make the same
+    /// bytes behave differently depending on who started them.
+    ///
+    /// @param release the release root (the directory holding `server/` and `bin/`)
+    /// @return what the file says now
+    public static Outcome verify(Path release) {
         Path entry = release.resolve(SERVER_ENTRY);
         if (!Files.isRegularFile(entry)) {
             return Outcome.NOT_A_SERVER;
@@ -102,22 +131,12 @@ public final class ZcodeServerPatch {
             LOG.warning("Could not read " + entry + " to check the project-owner patch", e);
             return Outcome.UNREADABLE;
         }
-        Matcher matcher = OWNER_EXPRESSION.matcher(source);
-        if (!matcher.find()) {
-            // Either we already did this, or upstream moved the anchor. Both are
-            // "nothing to do here", but only one of them is worth saying out loud
-            // every time a release is started — so the already-patched form is
-            // recognised explicitly.
-            return source.contains(OWNER_LOCAL) ? Outcome.ALREADY_PATCHED : Outcome.ANCHOR_MISSING;
+        if (OWNER_EXPRESSION.matcher(source).find()) {
+            return Outcome.NEEDS_PATCH;
         }
-        String patched = matcher.replaceFirst(Matcher.quoteReplacement(OWNER_LOCAL));
-        try {
-            Files.writeString(entry, patched, StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            LOG.warning("Could not write the project-owner patch into " + entry, e);
-            return Outcome.UNREADABLE;
-        }
-        return Outcome.PATCHED;
+        // Either we patched it, or upstream changed the shape of the statement.
+        // Only one of those is worth saying out loud at every launch.
+        return source.contains(OWNER_LOCAL) ? Outcome.PATCHED_ALREADY : Outcome.ANCHOR_MISSING;
     }
 
     /// Reports the patch's state to the panel log, once per launch.
@@ -129,26 +148,32 @@ public final class ZcodeServerPatch {
             return;
         }
         switch (outcome) {
-            case PATCHED -> LOG.info("ZCode server in " + release.getFileName()
-                    + " now owns its project store locally (project-owner patch applied)");
             case ANCHOR_MISSING -> LOG.warning("ZCode server in " + release.getFileName()
                     + " does not carry the project-owner expression this panel patches;"
                     + " the web workbench will show no workspace and cannot create projects."
                     + " The page still opens — see docs/zcode-experimental.md for the anchor");
+            case NEEDS_PATCH -> LOG.warning("ZCode release " + release.getFileName()
+                    + " was not built by this panel and still ships upstream's project-owner"
+                    + " expression: the web workbench will show no workspace and cannot create"
+                    + " projects. Rebuild it from the panel's version card to get the distro patch");
+            case PATCHED, PATCHED_ALREADY -> {
+                // Nothing to say at launch: a release is patched once, in the build,
+                // and started many times.
+            }
             case UNREADABLE, NOT_A_SERVER -> LOG.warning("Could not check " + release
                     + " for the project-owner patch (" + outcome + ")");
-            case ALREADY_PATCHED -> {
-                // Nothing to say: a release is patched once and started many times.
-            }
         }
     }
 
-    /// What [ensure] found.
+    /// What [patch] and [verify] found.
     public enum Outcome {
-        /// The expression was there and the file now says `"local"`.
+        /// [patch] found the expression and wrote the replacement.
         PATCHED,
-        /// The file already carries the patch.
-        ALREADY_PATCHED,
+        /// The file already says `"local"`.
+        PATCHED_ALREADY,
+        /// The expression is there and nothing was written — [verify]'s way of
+        /// saying "this is not the patched bytes this panel builds".
+        NEEDS_PATCH,
         /// The file is a server entry but the expression is gone: upstream changed
         /// it, and the workbench will behave as it did before the patch existed.
         ANCHOR_MISSING,
