@@ -134,28 +134,39 @@ class ZcodeServerPatchTest {
         assertEquals(ZcodeServerPatch.Outcome.NOT_A_SERVER, ZcodeServerPatch.rewrite(release));
     }
 
-    /// The patch is a Windows answer to a Windows-only situation: a bare
-    /// deployment there has no desktop client, so the browser is the only client.
-    /// Elsewhere the desktop application can connect to this server as its host,
-    /// and `remote:server:<id>` is the owner that model needs — so nothing is read
-    /// and nothing is written there.
+    /// The patch used to be a Windows answer to a Windows-only situation, on the
+    /// theory that a Linux deployment has a desktop client. It cost every operator
+    /// who does not use the desktop app the workbench's project features on Linux
+    /// too, so the default flipped: every platform is patched, and the desktop
+    /// deployment opts out.
     @Test
-    void onlyWindowsGetsThePatch() throws IOException {
+    void everyPlatformGetsThePatchUnlessTheOperatorOptsOut() throws IOException {
         Path entry = server();
         byte[] upstream = Files.readAllBytes(entry);
-        var os = org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS;
 
-        assertEquals(os == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS,
-                ZcodeServerPatch.applies(), "the patch is for bare Windows deployments only");
-
-        if (os == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
-            assertEquals(ZcodeServerPatch.Outcome.NEEDS_PATCH, ZcodeServerPatch.verify(release));
-        } else {
+        if (ZcodeServerPatch.keepRemote(System.getenv(ZcodeServerPatch.KEEP_REMOTE_ENV))) {
             assertEquals(ZcodeServerPatch.Outcome.NOT_APPLICABLE, ZcodeServerPatch.verify(release));
             assertEquals(ZcodeServerPatch.Outcome.NOT_APPLICABLE, ZcodeServerPatch.patch(release));
-            assertArrayEquals("a platform the patch does not apply to was written to",
+            assertArrayEquals("an opted-out deployment was written to",
                     upstream, Files.readAllBytes(entry));
+            return;
         }
+
+        assertEquals(ZcodeServerPatch.Outcome.NEEDS_PATCH, ZcodeServerPatch.verify(release));
+        assertEquals(ZcodeServerPatch.Outcome.PATCHED, ZcodeServerPatch.patch(release));
+        assertEquals(ZcodeServerPatch.Outcome.PATCHED_ALREADY, ZcodeServerPatch.verify(release));
+    }
+
+    @Test
+    void theOptOutIsAnEnvironmentVariableAndOnlySaysYesWhenItMeansIt() {
+        assertFalse(ZcodeServerPatch.keepRemote(null), "unset means patched");
+        assertFalse(ZcodeServerPatch.keepRemote(""));
+        assertFalse(ZcodeServerPatch.keepRemote("  "));
+        assertFalse(ZcodeServerPatch.keepRemote("0"));
+        assertFalse(ZcodeServerPatch.keepRemote("false"));
+        assertTrue(ZcodeServerPatch.keepRemote("1"));
+        assertTrue(ZcodeServerPatch.keepRemote("yes"));
+        assertTrue(ZcodeServerPatch.keepRemote(" true "));
     }
 
     private static void assertArrayEquals(String message, byte[] expected, byte[] actual) {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, type McEula, type McTerms } from "../api";
 import { isElevationRequired, requestDeveloperPassword } from "../elevation";
@@ -24,6 +24,7 @@ export function McFeatureCard() {
   const [eulaAccepted, setEulaAccepted] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [enableError, setEnableError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -55,6 +56,7 @@ export function McFeatureCard() {
 
   const openWizard = async () => {
     setWizard(true);
+    setEnableError(null);
     setEula(null);
     setTerms(null);
     setEulaError(null);
@@ -79,6 +81,7 @@ export function McFeatureCard() {
   const enable = async () => {
     if (!eula || !terms) return;
     setBusy(true);
+    setEnableError(null);
     try {
       const next = await withElevation(() =>
         api.mc.enable({
@@ -96,6 +99,10 @@ export function McFeatureCard() {
       toast("success", "MC 服务端功能已开启：入口在「实例列表 → 品牌实例」下面");
       await refreshMcFeature();
     } catch (e) {
+      // Inline as well as a toast: this is the button people press to turn the
+      // feature on, and a toast that has already faded is indistinguishable from a
+      // button that did nothing.
+      setEnableError(errMsg(e));
       toast("error", errMsg(e));
     } finally {
       setBusy(false);
@@ -221,7 +228,9 @@ export function McFeatureCard() {
           onEula={setEulaAccepted}
           onTerms={setTermsAccepted}
           busy={busy}
+          enableError={enableError}
           onEnable={() => void enable()}
+          onRetry={() => void openWizard()}
           onDecline={() => {
             void api.mc.decline().catch(() => undefined);
             setWizard(false);
@@ -254,7 +263,9 @@ function EnableWizard({
   onEula,
   onTerms,
   busy,
+  enableError,
   onEnable,
+  onRetry,
   onDecline,
 }: {
   eula: McEula | null;
@@ -267,16 +278,37 @@ function EnableWizard({
   onEula: (value: boolean) => void;
   onTerms: (value: boolean) => void;
   busy: boolean;
+  enableError: string | null;
   onEnable: () => void;
+  onRetry: () => void;
   onDecline: () => void;
 }) {
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const getScrollReport = useRef(onScroll);
+  getScrollReport.current = onScroll;
+
+  // 条款短到不需要滚动时，`onScroll` 永远不会触发，两个勾选框就永远是灰的——
+  // 整个向导看上去是个摆设。量一次高度，装得下就算读过了。
+  useEffect(() => {
+    const box = boxRef.current;
+    if (box && box.scrollHeight <= box.clientHeight + 4) getScrollReport.current(true);
+  }, [eula]);
+
   return (
     <div style={{ padding: "4px 8px 8px", display: "flex", flexDirection: "column", gap: 10 }}>
       <b>开启 MC 服务端功能</b>
-      {eulaError && <div style={{ color: "var(--monet-error)" }}>{eulaError}</div>}
+      {eulaError && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ color: "var(--monet-error)" }}>{eulaError}</div>
+          <button className="btn btn-raised" disabled={busy} onClick={onRetry}>
+            重试
+          </button>
+        </div>
+      )}
       {eula && (
         <>
           <div
+            ref={boxRef}
             style={{
               height: 260,
               overflow: "auto",
@@ -326,17 +358,26 @@ function EnableWizard({
               </div>
             </details>
           )}
+          {enableError && <div style={{ color: "var(--monet-error)" }}>{enableError}</div>}
+          {!scrolledToEnd && (
+            <div className="dim" style={{ fontSize: 12 }}>
+              读到最后一页才能勾选——条款框滚到底即可（短到不需要滚动时自动算读过）。
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="btn btn-raised" disabled={busy || !eulaAccepted || !termsAccepted} onClick={onEnable}>
               开启
             </button>
-            <button className="btn btn-text" onClick={onDecline}>
-              我已知晓风险，暂不启用
-            </button>
           </div>
         </>
       )}
-      {!eula && !eulaError && <div className="dim">正在拉取官方 EULA…</div>}
+      {!eula && !eulaError && (
+        <div className="dim">正在拉取官方 EULA…（要连 www.minecraft.net，最长会等 20 秒）</div>
+      )}
+      {/* 退出这条路必须在任何状态下都在：拉不到 EULA 时，向导里一个能点的东西都没有。 */}
+      <button className="btn btn-text" onClick={onDecline}>
+        我已知晓风险，暂不启用
+      </button>
     </div>
   );
 }

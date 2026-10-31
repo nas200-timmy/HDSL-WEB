@@ -17,7 +17,6 @@
  */
 package org.jackhuang.hmcl.web.zcode;
 
-import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -56,12 +55,15 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// to `local` makes the server's store look like the desktop's local store, which
 /// is what a self-hosted panel is.
 ///
-/// **Windows only.** A Linux deployment has a second, intended client: the ZCode
-/// desktop application can connect to the panel's server as its host, and that
-/// model is exactly what the upstream owner id encodes — patching it to `local`
-/// there would take the desktop's remote projects away from it. So the patch
-/// applies where the desktop is not part of the picture (a bare Windows
-/// deployment, browser only) and leaves `remote:server:<id>` everywhere else.
+/// **Every platform, since v0.6.45.** This used to be Windows-only, on the theory
+/// that a Linux deployment has a second intended client: the ZCode desktop
+/// application can connect to the panel's server as its host, and
+/// `remote:server:<id>` is the owner that model needs. That theory cost every
+/// operator who does not use the desktop app — which is most of them — the three
+/// symptoms above, on Linux exactly as on Windows. The browser is the client the
+/// panel actually serves, so the owner is pinned everywhere; the one deployment
+/// that does use the desktop as a host can set `HDSL_ZCODE_KEEP_REMOTE=1` and get
+/// upstream's owner back, unpatched.
 ///
 /// **This is a patch to upstream's shipped code.** The anchor is the exact
 /// expression upstream writes today; when it is gone the panel says so once and
@@ -73,6 +75,10 @@ public final class ZcodeServerPatch {
     /// The server entry inside a release: `server/entry-http.js`, the file
     /// `bin/zcode.mjs` spawns for `--web`.
     static final String SERVER_ENTRY = "server/entry-http.js";
+
+    /// The escape hatch for a deployment whose second client really is the ZCode
+    /// desktop application: `1` keeps upstream's `remote:server:<id>` owner.
+    static final String KEEP_REMOTE_ENV = "HDSL_ZCODE_KEEP_REMOTE";
 
     /// What upstream writes: the owner id derived from the server's identity.
     ///
@@ -90,17 +96,29 @@ public final class ZcodeServerPatch {
     private ZcodeServerPatch() {
     }
 
-    /// Whether this platform gets the patch at all.
+    /// Whether a release built on this machine gets the patch.
     ///
-    /// Only Windows: a bare deployment there has no desktop client, so the
-    /// browser is the only client and the owner has to be `local` for the
-    /// workbench to have a workspace. Everywhere else the desktop application can
-    /// connect to this server as its host, and `remote:server:<id>` is the owner
-    /// that model needs — changing it would take those projects away from it.
+    /// Every platform, unless the operator says otherwise. The browser workbench
+    /// is the only client a panel deployment serves, and with upstream's owner it
+    /// cannot list a directory, create a project, or start a session — on Linux
+    /// exactly as on Windows. A deployment that connects the ZCode desktop
+    /// application as a host sets [#KEEP_REMOTE_ENV] and is left alone.
     ///
     /// @return whether a release built on this machine carries the patch
     public static boolean applies() {
-        return OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS;
+        return !keepRemote(System.getenv(KEEP_REMOTE_ENV));
+    }
+
+    /// The opt-out's parsing, named so a test can drive it without an environment.
+    ///
+    /// @param value the raw variable, or `null`
+    /// @return whether upstream's remote owner should be kept
+    static boolean keepRemote(@Nullable String value) {
+        if (value == null) {
+            return false;
+        }
+        String trimmed = value.trim();
+        return !trimmed.isEmpty() && !"0".equals(trimmed) && !"false".equalsIgnoreCase(trimmed);
     }
 
     /// Patches a release in place. **Build time only** — this is the distro patch
@@ -109,8 +127,8 @@ public final class ZcodeServerPatch {
     ///
     /// The file is read, checked and only written when the expression is really
     /// there; a release that is already patched is left byte-for-byte alone, and a
-    /// release built on a platform this patch does not apply to is not touched at
-    /// all ([Outcome#NOT_APPLICABLE]).
+    /// deployment that opted out ([#KEEP_REMOTE_ENV]) is not touched at all
+    /// ([Outcome#NOT_APPLICABLE]).
     ///
     /// @param release the release root (the directory holding `server/` and `bin/`)
     /// @return what happened; the builder fails the build on [Outcome#ANCHOR_MISSING]
@@ -212,8 +230,8 @@ public final class ZcodeServerPatch {
         PATCHED,
         /// The file already says `"local"`.
         PATCHED_ALREADY,
-        /// This platform does not get the patch (see [applies]) — nothing was read
-        /// and nothing was written.
+        /// The panel was told not to patch (see [applies]) — nothing was read and
+        /// nothing was written.
         NOT_APPLICABLE,
         /// The expression is there and nothing was written — [verify]'s way of
         /// saying "this is not the patched bytes this panel builds".

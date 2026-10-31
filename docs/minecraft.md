@@ -512,7 +512,7 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
 | 方法 | 路径 | 说明 | 闸门 |
 |---|---|---|---|
 | GET | `/api/mc/feature` | 状态（`state` / `locked` / `lockRemainingSeconds` / `keepFeature`）、条款版本、EULA 哈希 | 功能闸门 |
-| GET | `/api/mc/eula` | 官方 EULA 正文（已剥离页面外壳与导航，只留协议本身；带哈希/拉取时间；离线返回 503） | 人类会话 |
+| GET | `/api/mc/eula` | 官方 EULA 正文（已剥离页面外壳与导航，只留协议本身；带哈希/拉取时间；Mojang 连不上时回退到上次成功抓取的副本，副本也没有才 503） | 人类会话 |
 | POST | `/api/mc/feature/enable` | 开启（需 `eulaAcknowledged` + `termsAcknowledged` + `eulaHash`/`termsVersion`/`termsTextHash` + `sawDeclineOption`/`uiVersion` + 提权；锁定中 409 + `lockRemainingSeconds`） | 人类会话 |
 | POST | `/api/mc/feature/decline` | 记录"知情后选择不启用"（可选，不改状态） | 人类会话 |
 | POST | `/api/mc/feature/stop` | 「停止 MC 功能」：停所有服 + 起跑 1 小时，进入锁定 | 人类会话 |
@@ -649,8 +649,11 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
 - 审计：`AuditLog.Channel.MC`，记 enable/close/confirm/blocked-enable/各实例动作
 - **EULA 抓取与缓存**：`McApiServlet.fetchEula` 拉官方页面（`https://www.minecraft.net/en-us/eula`），
   `McHtml.legalText` 剥壳成正文，按正文的 `sha256` + 拉取时间缓存 24 小时；
-  离线且无快照时**拒绝开启**（看不到协议就不能同意）。
-  **不随包分发 EULA 全文**（版权内容）；离线环境由部署者导入文本，面板只记哈希
+  **抓成功的那一份同时落盘**（`<data>/minecraft/eula.json`），Mojang 连不上时回退到它、
+  连拉取时间一起照原样展示（日志里记一条 WARNING）。这条是为了「关掉功能之后再也开不起来」：
+  同意记录里存的就是这份文本的哈希，所以回退不会把用户没看过的内容算成看过。
+  连副本都没有时仍然**拒绝开启**（看不到协议就不能同意）。
+  **不随包分发 EULA 全文**（版权内容）
 - 免责：**两个确认**（对 Mojang 的 EULA、对面板的使用条款）+ `termsTextHash` + `eulaHash`；
   开启时逐项校验，不看布尔。只有两项都确认后才写 `eula.txt` 的 `eula=true`——不要在建实例时预写
 - 同一 `eulaHash` 24 小时内跳过滚动，记 `ackMethod="scroll+cached"`；换 hash 重新滚
@@ -693,7 +696,8 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
   服务端设置、世界备份、玩家、世界、日志。
 - 功能面板（**设置 → 品牌实例**，`McFeatureCard`）：状态、倒计时、开启/停止功能/
   确认关闭/我不想关掉功能。
-- 开启向导：提权 → **EULA 阅读器**（正文由服务端剥壳序列化，`McHtml`）→ 滚到底 → 两个勾选 → 开启
+- 开启向导：提权 → **EULA 阅读器**（正文由服务端剥壳序列化，`McHtml`）→ 滚到底 → 两个勾选 → 开启。
+  正文短到不需要滚动时按「已读到底」处理——没有滚动事件，否则勾选框永远是灰的
 - 开启向导里始终有次按钮**「我已知晓风险，暂不启用」**：关闭向导、保持 `DISABLED`，
   不写 `eula.txt`、不改状态（文案可以更口语：*我看完了，但我不开*）
 - 停止功能按下后：按钮显示"已按下"（不可再按），旁边出现

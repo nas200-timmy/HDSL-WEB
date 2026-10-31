@@ -23,6 +23,8 @@ import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.jackhuang.hmcl.Metadata;
+import org.jackhuang.hmcl.util.gson.JsonUtils;
+import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
@@ -45,6 +47,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
@@ -69,6 +72,8 @@ import java.util.function.BooleanSupplier;
 /// (`docs/minecraft.md` §5.4).
 @NotNullByDefault
 public final class McApiServlet extends HttpServlet {
+
+    private static final Logger LOG = Logger.LOG;
 
     /// The official EULA. Fetched at runtime and never bundled: the text is
     /// Mojang's, and the panel's job is to show it, not to distribute it.
@@ -101,6 +106,20 @@ public final class McApiServlet extends HttpServlet {
     private volatile @Nullable CachedEula eula;
 
     private record CachedEula(String text, String hash, String fetchedAt, Instant at) {
+    }
+
+    /// The on-disk copy of that text, so a machine that cannot reach Mojang today can
+    /// still show what it showed yesterday.
+    ///
+    /// This matters more than it looks: the EULA is only needed at the moment the
+    /// feature is switched on, and an operator who turned the feature off (or lost it
+    /// with a reinstall) would otherwise be stuck behind a network they cannot fix
+    /// from the panel — the wizard has nothing to show, so there is nothing to
+    /// accept, and the feature cannot be enabled at all. The text is Mojang's public
+    /// document, the hash in the consent record is over exactly the text that was
+    /// shown, and [CachedEula#fetchedAt] travels with it so the page can say how old
+    /// the copy is.
+    private record StoredEula(String text, String hash, String fetchedAt) {
     }
 
     public McApiServlet(ServerConfig config, McFeatureState feature, McInstanceManager manager,
@@ -243,6 +262,17 @@ public final class McApiServlet extends HttpServlet {
         if (cached == null || Instant.now().isAfter(cached.at().plus(EULA_MAX_AGE))) {
             cached = fetchEula();
             if (cached == null) {
+                // No Mojang today. What was shown before is still the document the user
+                // has to read, and refusing to show it locks the feature off entirely.
+                cached = rememberedEula();
+                if (cached != null) {
+                    LOG.warning("Could not reach Mojang for the EULA; showing the copy fetched at "
+                            + cached.fetchedAt() + " (" + eulaCacheFile() + ")");
+                }
+            } else {
+                rememberEula(cached);
+            }
+            if (cached == null) {
                 Json.error(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
                         "eula_unavailable: could not reach Mojang to fetch the EULA — check the network/proxy and retry "
                         + "(the server download would fail the same way)");
@@ -256,6 +286,46 @@ public final class McApiServlet extends HttpServlet {
         body.addProperty("fetchedAt", cached.fetchedAt());
         body.addProperty("source", EULA_URI.toString());
         Json.write(response, body);
+    }
+
+    /// Where the last successfully fetched EULA is kept.
+    ///
+    /// @return `<data>/minecraft/eula.json`
+    private Path eulaCacheFile() {
+        return config.dataDir.resolve("minecraft").resolve("eula.json");
+    }
+
+    private void rememberEula(CachedEula cached) {
+        Path file = eulaCacheFile();
+        try {
+            Path parent = file.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            JsonUtils.writeToJsonFile(file, new StoredEula(cached.text(), cached.hash(), cached.fetchedAt()));
+        } catch (IOException | RuntimeException e) {
+            // A cache that cannot be written is a warning, not a failed request: the
+            // fetch itself succeeded, which is what the caller asked for.
+            LOG.warning("Could not keep the EULA copy in " + file, e);
+        }
+    }
+
+    private @Nullable CachedEula rememberedEula() {
+        Path file = eulaCacheFile();
+        if (!Files.isRegularFile(file)) {
+            return null;
+        }
+        try {
+            StoredEula stored = JsonUtils.fromJsonFile(file, StoredEula.class);
+            if (stored == null || stored.text() == null || stored.hash() == null) {
+                return null;
+            }
+            return new CachedEula(stored.text(), stored.hash(),
+                    stored.fetchedAt() == null ? "unknown" : stored.fetchedAt(), Instant.EPOCH);
+        } catch (IOException | RuntimeException e) {
+            LOG.warning("Could not read the EULA copy in " + file, e);
+            return null;
+        }
     }
 
     private @Nullable CachedEula fetchEula() {

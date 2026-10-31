@@ -448,9 +448,9 @@ public final class ZcodeBuilder {
             // than shipping a workbench that cannot open a folder.
             switch (ZcodeServerPatch.patch(target)) {
                 case PATCHED, PATCHED_ALREADY, NOT_APPLICABLE, NOT_A_SERVER -> {
-                    // NOT_APPLICABLE is Linux and macOS: there the desktop app can
-                    // connect as the host, so upstream's remote owner is the one that
-                    // model needs and nothing is changed.
+                    // NOT_APPLICABLE means the operator set HDSL_ZCODE_KEEP_REMOTE: that
+                    // deployment uses the ZCode desktop application as a host, so
+                    // upstream's remote owner is the one it needs and nothing is changed.
                     //
                     // NOT_A_SERVER is a build that produced no web half. It is not this
                     // build's job to insist on one: a TUI-only distribution is a release
