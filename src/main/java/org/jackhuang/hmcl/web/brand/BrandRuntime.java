@@ -45,6 +45,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -1188,12 +1189,32 @@ public final class BrandRuntime {
     /// Upstream enables its API server the moment `API_SERVER_KEY` is a usable
     /// secret (16 characters or more) — there is no separate "enabled" flag to
     /// set, and adding one only makes noise.
+    /// The `.env` keys the panel owns. Everything else in that file belongs to
+    /// the operator (Hermes's own "密钥" page and `hermes auth add` write provider
+    /// keys there), so a launch updates these three and **keeps the rest**.
+    private static final Set<String> HERMES_ENV_KEYS =
+            Set.of("API_SERVER_KEY", "API_SERVER_HOST", "API_SERVER_PORT");
+
     static void writeHermesEnv(Path home, String key, int apiPort) throws IOException {
-        String text = "API_SERVER_KEY=" + key + "\n"
-                + "API_SERVER_HOST=127.0.0.1\n"
-                + "API_SERVER_PORT=" + apiPort + "\n";
         Path env = home.resolve(".env");
-        writeAtomically(env, text);
+        StringBuilder text = new StringBuilder();
+        if (Files.isRegularFile(env)) {
+            // A launch used to rewrite this file with only the three API keys —
+            // which wiped a provider key the operator had added, and the chat
+            // then answered "No usable credentials found for provider …". Keep
+            // every line the panel does not own, comments included.
+            for (String line : Files.readAllLines(env, StandardCharsets.UTF_8)) {
+                int equals = line.indexOf('=');
+                String name = (equals < 0 ? line : line.substring(0, equals)).trim();
+                if (!HERMES_ENV_KEYS.contains(name)) {
+                    text.append(line).append('\n');
+                }
+            }
+        }
+        text.append("API_SERVER_KEY=").append(key).append('\n')
+                .append("API_SERVER_HOST=127.0.0.1\n")
+                .append("API_SERVER_PORT=").append(apiPort).append('\n');
+        writeAtomically(env, text.toString());
         Privileges.handToAgent(env, Privileges.AGENT_PRIVATE_FILE);
     }
 
