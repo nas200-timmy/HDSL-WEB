@@ -121,6 +121,26 @@ fetch、Z.ai OAuth 的 `tokenUrl`。上游把这些锚点挪走时构建会**明
 - `POST|DELETE /api/zcode/instances/{id}/terminal`，协议、ticket 与门禁与其他品类完全相同
   （见 `docs/terminal-protocol.md`）。
 
+### web 模式需要一个"桌面宿主"，面板起不出来（2026-10-31 实测）
+
+ZCode 的文件系统不是浏览器的：目录浏览、项目、会话都挂在**宿主**（host）上，宿主通过
+`/ws/host` 连到 `zcode --web` 起的服务。桌面客户端就是那个宿主。面板只起 `--web`
+这一半，于是浏览器被当成**远端客户端**，凡是"要碰磁盘"的动作都会失败：
+
+| 界面上的话 | 服务端（`logs/zcode.log`） | 含义 |
+|---|---|---|
+| 「无法获取系统信息」/「无子目录」 | `project.readDirectory FAIL … Error: project.host-offline` | 没有宿主连上来，目录读不了 |
+| 「创建项目/会话卡住」 | `zcode-agent.sendConversationCommandV4 FAIL … Error: project.remote-project-required` | 远端客户端必须带一个已注册的项目，而项目又要有宿主 |
+| 会话索引空 | `zcode-agent.subscribeSessionsIndexV4 FAIL … ZCode Agent runtime is not running` | 同上 |
+
+**这不是面板在限制 ZCode**：面板没有沙箱，ZCode 进程与面板同权限、同用户，能读整台机器。
+限制来自 ZCode 自己的 host 模型。面板能做的只有两件事，都已做/写明：
+
+- **要真正干活用终端**：面板的终端跑的是 `node <发行包>/bin/zcode.mjs`（不带参数 = 官方
+  TUI），TUI 不需要宿主，文件系统就是本机的。web 模式留给"能看就看"的场合。
+- 想用 web 模式就得让 ZCode 桌面客户端连到同一个服务上（面板不代劳，也不该代劳：那等于
+  在面板里再实现一遍 ZCode 的宿主协议）。
+
 ## 已知限制（都是有意为之）
 
 - **只有面板这一条路**：实例只绑回环、不开令牌，浏览器经 `/i/<id>/` 进来（面板的会话门就是

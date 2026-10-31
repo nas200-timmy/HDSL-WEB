@@ -279,6 +279,11 @@ export function ZcodeSection() {
             </b>
             ——能不能跑通取决于 ZCode 上游。实例只绑回环、经面板反代到 <code>/i/&lt;id&gt;/</code>（同端口同证书、
             同样要登录），凭证以明文保存在实例目录。
+            <br />
+            <b>web 模式的目录浏览与新建会话需要 ZCode 桌面宿主</b>（宿主经 <code>/ws/host</code>
+            连到服务上）；面板只起 <code>--web</code> 这一半，没有宿主时界面会显示「无法获取系统信息 /
+            无子目录」、创建会话卡住——那是 ZCode 的 host 模型，不是面板在限制它（ZCode 进程与面板同权限）。
+            要真正干活请用<b>终端</b>：面板跑的是 ZCode 官方的 TUI，不需要宿主。
           </div>
         </CollapsibleNote>
       </div>
