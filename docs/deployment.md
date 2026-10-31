@@ -441,6 +441,24 @@ docker compose build --build-arg RELEASE_VERSION=0.2.0
 - 回滚就是把旧 tag 的镜像重新 `up -d`；如果新版本写过 `server.yaml` 的新字段，旧版本会给出
   「unknown key … ignored」警告而不影响启动。
 
+### 5.1 容器升级：面板从 `hdsl` 用户切到 root（v0.6.43 起）
+
+v0.6.43 起，镜像不再 `USER hdsl`，面板以 root 跑、每个 agent 进程用 `setpriv` 降到 uid 1000。
+目的是把 `auth/`、`certs/`、`logs/`、`server.yaml` 归 root，让 agent 改不动面板的凭据。
+**卷不用迁，属主在容器启动时自动校正**；但有四件事要知道：
+
+1. **首次启动会做一次 chown**：入口把 `/data` 与 `/home/hdsl` 交给 1000，再把
+   `auth/`、`certs/`、`logs/`、`server.yaml` 收回 root。只在属主不对时递归，之后每次启动
+   只做 `stat`，不会遍历大卷。老卷升级后第一次启动会慢几秒（目录大的话更久），属正常。
+2. **`docker exec` 默认用户变了**：以前默认是 `hdsl`，现在是 root。脚本里凡是靠"默认用户"
+   进容器的都要显式写 `-u 1000`（例如 `docker exec -u 1000 … sh /scripts/verify-privilege-split.sh`）。
+3. **`--user 1000` 覆盖仍然可用**，但降权就失效了（面板自己就是 1000），行为退回"裸部署"那一套：
+   agent 与面板同 uid，秘密文件彼此可写。要这套隔离就别覆盖用户。
+4. **验收**：`docker exec -u 1000 <容器> sh /scripts/verify-privilege-split.sh`。先建一个实例，
+   否则"实例目录可写"那条会跳过。期望 `auth/`、`logs/` 读写都被拒，实例目录与 pnpm store 可写。
+
+供应商 API key 不在这层保护里（agent 与 ACP 要用），见 `docs/design-notes.md §7.5.1`。
+
 ---
 
 ## 6. 运行期下载源（面板设置）
