@@ -358,7 +358,14 @@ public final class InstanceProxyServlet extends HttpServlet {
         boolean octopClient = brand == org.jackhuang.hmcl.web.brand.Brand.OCTOP;
         // Octop is built with a relative base and reads the injected <base>;
         // its chunks must not go through the Kimi/OpenCode script patcher.
-        boolean brandClient = brand != null && !octopClient;
+        //
+        // A prefix-aware brand (Hermes) already emits every reference under the
+        // mount the proxy handed it, so the page/script/stylesheet rewriters are
+        // exactly what must NOT run: they would prefix the dashboard's own
+        // `X-Forwarded-Prefix` output a second time (`/i/<id>/i/<id>/assets/…`
+        // for fonts, measured 2026-11). Its bundle gets one targeted edit
+        // instead — the build-time assets base — see [patchPrefixScript].
+        boolean brandClient = brand != null && !octopClient && !prefixClient;
         // ZCode 与 Kimi Code 同源（共享「原生认识 /i/<id>/ 挂载」的客户端代码），
         // 它的 bundle 同样需要运行时补丁（见 patchBrandScript 的挂载检测放宽）。
         boolean zcodeClient = org.jackhuang.hmcl.web.zcode.ZcodeRuntime.known(instanceId);
@@ -438,7 +445,7 @@ public final class InstanceProxyServlet extends HttpServlet {
             // script under the same rule, so what the page was told and what the
             // browser gets agree.
             boolean holds = canPatchAsset(contentLength);
-            boolean servesScript = (brandClient || zcodeClient) && !servesPage && holds
+            boolean servesScript = (brandClient || prefixClient || zcodeClient) && !servesPage && holds
                     && contentType.contains("javascript");
             boolean servesStyle = brandClient && !servesPage && holds && contentType.contains("text/css");
             copyResponseHeaders(result, response, browserMount, servesPage || servesScript || servesStyle);
@@ -464,7 +471,8 @@ public final class InstanceProxyServlet extends HttpServlet {
                         // ZCode 只放宽挂载检测正则：它原生按 /i/<id>/ 路由，
                         // 品牌那套路由读法补丁会把它的路由读坏。
                         out.write(servesScript
-                                ? (zcodeClient ? patchZcodeScript(asset.bytes())
+                                ? (prefixClient ? patchPrefixScript(asset.bytes(), browserMount)
+                                        : zcodeClient ? patchZcodeScript(asset.bytes())
                                         : patchBrandScript(asset.bytes(), browserMount))
                                 : patchBrandStylesheet(asset.bytes(), browserMount));
                         out.flush();
@@ -901,6 +909,37 @@ public final class InstanceProxyServlet extends HttpServlet {
         text = PRELOAD_BASE.matcher(text).replaceFirst(match -> "=function(" + match.group(1)
                 + "){return\"" + mount + "\"+" + match.group(1) + "}");
         return text.getBytes(StandardCharsets.ISO_8859_1);
+    }
+
+    /// The assets base a **prefix-aware** bundle resolves its lazy chunks and
+    /// preload links against, matched by shape because both identifiers are
+    /// minified: `=function(<dep>){return"/"+<dep>}` (Vite's classic helper) or
+    /// `=function(<dep>){return`/`+<dep>}` (Rolldown/Vite 8, measured 2026-11 on
+    /// Hermes 0.22.5). The base is the only reference in such a bundle that is
+    /// *not* mount-aware: routes import each other relatively, and the dashboard
+    /// prefixes its HTML and CSS from `X-Forwarded-Prefix`, but this one is baked
+    /// at build time.
+    ///
+    /// Left alone, a page under `/i/<id>/` asks the origin root for every lazy
+    /// chunk — the panel's own SPA answers those with `index.html`, the browser
+    /// refuses a module or stylesheet that arrives as `text/html`, and a failed
+    /// CSS preload takes the whole page down (a full-screen background and no
+    /// UI). Measured 2026-11 on the Hermes Chat page.
+    private static final Pattern PREFIX_ASSETS_BASE = Pattern.compile(
+            "=function\\(([A-Za-z_$][A-Za-z0-9_$]*)\\)\\{return([\"`])/\\2\\+\\1\\}");
+
+    /// Rewrites only that assets base to the mount and hands the rest of the
+    /// bundle back byte for byte. A build whose helper changed shape is served
+    /// untouched rather than guessed at.
+    ///
+    /// @param script the bundle, as the instance serves it
+    /// @param mount  the mount with its trailing slash (`/i/<id>/`)
+    /// @return the patched bytes, or {@code script} itself when the anchor is gone
+    static byte[] patchPrefixScript(byte[] script, String mount) {
+        String text = new String(script, StandardCharsets.ISO_8859_1);
+        String patched = PREFIX_ASSETS_BASE.matcher(text)
+                .replaceAll("=function($1){return$2" + mount + "$2+$1}");
+        return patched.getBytes(StandardCharsets.ISO_8859_1);
     }
 
     /// ZCode 的唯一补丁：放宽它原生的 /i/<id>/ 挂载检测正则。Kimi Code / ZCode
