@@ -441,9 +441,9 @@ docker compose build --build-arg RELEASE_VERSION=0.2.0
 - 回滚就是把旧 tag 的镜像重新 `up -d`；如果新版本写过 `server.yaml` 的新字段，旧版本会给出
   「unknown key … ignored」警告而不影响启动。
 
-### 5.1 容器升级：面板从 `hdsl` 用户切到 root（v0.6.43 起）
+### 5.1 容器升级：面板从 `hdsl` 用户切到 root（v0.6.44 起）
 
-v0.6.43 起，镜像不再 `USER hdsl`，面板以 root 跑、每个 agent 进程用 `setpriv` 降到 uid 1000。
+v0.6.44 起，镜像不再 `USER hdsl`，面板以 root 跑、每个 agent 进程用 `setpriv` 降到 uid 1000。
 目的是把 `auth/`、`certs/`、`logs/`、`server.yaml` 归 root，让 agent 改不动面板的凭据。
 **卷不用迁，属主在容器启动时自动校正**；但有四件事要知道：
 
@@ -457,12 +457,12 @@ v0.6.43 起，镜像不再 `USER hdsl`，面板以 root 跑、每个 agent 进�
 4. **验收**：`docker exec -u 1000 <容器> sh /scripts/verify-privilege-split.sh`。先建一个实例，
    否则"实例目录可写"那条会跳过。期望 `auth/`、`logs/` 读写都被拒，实例目录与 pnpm store 可写。
 
-5. **默认工作区不再跟着 root 跑**：面板是 root 之后 `user.home` 是 `/root`，v0.6.43 的默认
-   工作区一度变成 `/root/workspace`（0700，agent 进不去，终端起来 44 ms 就退出）。v0.6.44 起
-   按 `HOME` 解析（镜像里是 `/home/hdsl`），与挂载点一致；`HDSL_WORKSPACE` 仍然可以覆盖。
+5. **默认工作区不再跟着 root 跑**：面板是 root 之后 `user.home` 是 `/root`，工作区若按它解析
+   会落到 `/root/workspace`（0700，agent 进不去，终端起来 44 ms 就退出）。本版按 `HOME` 解析
+   （镜像里是 `/home/hdsl`），与挂载点一致；`HDSL_WORKSPACE` 仍然可以覆盖。
 6. **ACL 管理的存储要当心**：入口会自检"agent 能不能写 `auth/`"，能写就打 WARNING——那说明
    这台机器的文件系统不认 mode 位（QNAP trimacl 一类），隔离不成立。要么换存储，要么用
-   `--build-arg HDSL_AGENT_UID=1001` 重建镜像，详见 `security.md §2.7`。
+   `--build-arg HDSL_AGENT_UID=1001` 重建镜像，详见 `security.md §2.8`。
 
 供应商 API key 不在这层保护里（agent 与 ACP 要用），见 `docs/design-notes.md §7.5.1`。
 

@@ -631,7 +631,7 @@ https:
   启动的是适配器解析出的 argv、**不经 shell**（Windows 上 `.cmd`/`.bat`/`.ps1`/`.com` 一律拒绝）。
   面板只应监听回环或可信网络；公网暴露必须在网络层再加保护。见
   [docs/web-shell.md §4](docs/web-shell.md)。
-- **容器里的身份划分**（v0.6.43 起）：面板是 root、每个 agent 进程降权到 uid 1000，`auth/`、
+- **容器里的身份划分**（v0.6.44 起）：面板是 root、每个 agent 进程降权到 uid 1000，`auth/`、
   `certs/`、`logs/`、`server.yaml` 归 root 0700/0600——agent 读不到也改不了，也 `kill` 不掉面板。
   **裸部署没有这一层**（面板与 agent 同 uid），要隔离就用容器。
 - **不在保护范围内的**：供应商 API key（agent 与 ACP 会话要用它调模型）、实例之间的互相可写、

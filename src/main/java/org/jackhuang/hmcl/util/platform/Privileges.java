@@ -153,7 +153,7 @@ public final class Privileges {
     /// catches the files an agent has to read, and those are what this is for.
     /// `pnpm` is a child process, so a `config.yaml` the panel wrote as root is
     /// one the agent's pnpm cannot open, and a `0600` one is how the first
-    /// v0.6.43 image failed every instance install with `EACCES:
+    /// image with the split failed every instance install with `EACCES:
     /// /home/hdsl/.config/pnpm/config.yaml`. Handing over the mode alone is not
     /// enough either: pnpm's own `config set` rewrites the file, which needs the
     /// directory writable by the same uid.

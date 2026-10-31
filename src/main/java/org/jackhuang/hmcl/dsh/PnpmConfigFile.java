@@ -333,7 +333,7 @@ public final class PnpmConfigFile {
     ///
     /// Inside the container it is the opposite problem. `pnpm` is a child process, so a file
     /// the panel wrote as root is one the agent cannot open at all — that is what made every
-    /// install in the first v0.6.43 image fail with `EACCES` on this very path — and the agent
+    /// install in the first image with the split fail with `EACCES` on this very path — and the agent
     /// also runs `pnpm config set`, which rewrites it. So it belongs to the agent, with the
     /// mode the rest of the split uses (`umask 002` under a setgid directory).
     ///

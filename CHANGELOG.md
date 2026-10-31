@@ -2,21 +2,7 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布
-
-- **修 v0.6.43 的致命回归：agent 读不到 pnpm 的配置**。面板以 root 跑之后，
-  `~/.config/pnpm/config.yaml` 被写成 `root:root 0600`——而 `pnpm` 是 agent 的子进程，
-  连读都读不了。表现是所有实例的安装与插件安装一律 `EACCES: permission denied, open
-  '/home/hdsl/.config/pnpm/config.yaml'`，**升过级的机器上老实例也一起坏**，与宿主存储无关。
-  现在落盘后连属主带 mode 一起交给 agent uid（`Privileges.handToAgent`），父目录同样
-  （`pnpm config set` 要重写它）；启动时会顺手校正已经写坏的那份，不用改设置、不用重建卷。
-- **同一处堵住符号链接**：这个目录归 agent，agent 能在里面放一个 `config.yaml.tmp-…` 指向
-  `/data/server.yaml`，面板若顺着写就等于用 root 的权限替 agent 写文件。临时文件改为随机后缀
-  + `CREATE_NEW` 创建，目标若是符号链接则删除不跟随。
-- 测试补两条：手交属主/mode 的两个 syscall（先 chown 再 chmod 的顺序是必须的）、以及重写后
-  不留下临时文件。
-
-## v0.6.43 — 2026-10-31 · 小版本：容器里面板 root 持有秘密、agent 跑成 uid 1000
+## v0.6.44 — 2026-10-31 · 小版本：容器里面板 root 持有秘密、agent 跑成 uid 1000
 
 > 起因：同 uid 的容器里，agent 能改面板的 `auth/`、`certs/`、`server.yaml` 和审计日志——
 > 0600 保护的是"别的账户"，而 agent 就是同一个账户。要求"agent 改不动口令文件"就必须分成
@@ -39,15 +25,24 @@
   缓解在部署侧（一台机器一套 key、能撤销能轮换），不在面板里。同类的还有"实例之间互相可写"
   与"面板的 HTTP 面没变"。
 
-### 同版本重发：面板以 root 跑之后的三处回归（工作区、pnpm 配置、首启权限）
+### 真机验收暴露的问题，本版一并修掉
 
-> 起因：宿主在真机（QNAP NAS，v0.6.43 镜像）上验收，三条 FAIL。前两条是我引入的回归。
+> 起因：宿主在 QNAP NAS 上跑真机验收，装实例这一步就过不去。这些问题都是两段身份带来的，
+> 也就都在这一版里一起修，不存在"先发一个有问题的版本再补"。
 
 - **默认工作区变成 `/root/workspace`**：面板是 root 后 JVM 的 `user.home` 是 `/root`，而
   agent 是 uid 1000，连 `cd /root` 都进不去（0700）——终端起来 44 ms 就 exit 1。
   新增 `util/platform/UserHome`：**`HOME` 优先于 `user.home`**（systemd 与容器都会设 HOME；
   `user.home` 取的是 passwd 里的家目录，换用户跑就是错的）。workspace、pnpm 全局配置目录、
   整合包安装的默认工作区三处都改用它的同一套规则。
+- **agent 读不到 pnpm 的配置（最致命的一条）**：`~/.config/pnpm/config.yaml` 仍按老办法
+  「临时文件 + 0600 + 原子 rename」写，面板是 root 了，写出来就是 `root:root 0600`。`pnpm`
+  是 agent 的子进程，连读都读不了——所有实例的安装与插件安装一律 `EACCES: permission
+  denied, open '/home/hdsl/.config/pnpm/config.yaml'`。现在落盘后连属主带 mode 一起交给
+  agent uid（`Privileges.handToAgent`），父目录同样（`pnpm config set` 要重写它）；启动时
+  也校正一次，写坏的那份重启就好，不用改设置、不用重建卷。**同一处堵了符号链接**：这个目录
+  归 agent，agent 能放一个 `config.yaml.tmp-…` 指向 `/data/server.yaml`，面板顺着写就是拿
+  root 的权限替 agent 写文件；临时文件改为随机后缀 + `CREATE_NEW`，目标若是链接则删除不跟随。
 - **首启 `logs/` 是组可写**：入口只修"已经存在"的路径，而 `auth/`、`logs/` 是面板启动后才建的，
   继承了 volume 的 setgid + umask 002（`root:hdsl 2775`），要下次重启才纠正。入口改为先
   `mkdir -p` 四个秘密路径再改属主。

@@ -488,7 +488,7 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
   重启即可"，而不是让 ClassNotFound 自己冒出来。
 
 ### 5.23 两段身份之后，"面板写、agent 读"的文件要交还属主
-- **现象**：v0.6.43 首发镜像里所有实例安装全挂，日志只有一行
+- **现象**：两段身份的第一版镜像里所有实例安装全挂，日志只有一行
   `EACCES: permission denied, open '/home/hdsl/.config/pnpm/config.yaml'`；升过级的机器上**老实例也一起坏**。
 - **根因**：面板是 root 了，而这个配置是它用"临时文件 + 0600 + 原子 rename"写的——写出来
   `root:root 0600`，agent 的 `pnpm` 连读都读不了。之前两者同 uid 时这行代码是对的，分成两段身份后

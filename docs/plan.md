@@ -164,7 +164,7 @@ https:
 
 **Phase 4 — 完整功能**：PackMarket 搜索/安装（`DshPackMarket`/`DshPackInstaller`）、整合包导入导出（`DshPackForge`/`DshModpacks`）、会话/工作区管理（`DshSessions`/`DshSessionPacks`）、技能（`DshSkills`）、体检页（`DshDoctor`）、ACP 控制台（`AcpTransport` 抽象 + stdio 传输 + WS 桥，JSON-RPC 行帧↔WS 文本消息）。
 
-**Phase 5 — Docker 与交付**：多阶段 Dockerfile（node 阶段构建 SPA → gradle 阶段产出 `hdsl-web` shadowJar → **运行时基于 `debian:trixie-slim`**：apt 装 `openjdk-21-jre-headless` + 基础工具（curl/ca-certificates/tini），Node 22 LTS 按官方 nodejs.org tarball 装入 `/opt/node`（x64/arm64 双架构，对应 HDSL 的 NodeSource 策略），corepack 启用 pnpm；tini 处理信号，面板以 root 跑、agent 进程降权到 uid 1000（v0.6.43 起的身份划分，见 `docs/design-notes.md §7.5`），SIGTERM → shutdown hook `stopAll()`）；`docker-compose.yml` 便捷示例；README（quickstart、`java -jar` 裸跑说明、挂载点表、HTTPS 配置参考、证书上传步骤）。
+**Phase 5 — Docker 与交付**：多阶段 Dockerfile（node 阶段构建 SPA → gradle 阶段产出 `hdsl-web` shadowJar → **运行时基于 `debian:trixie-slim`**：apt 装 `openjdk-21-jre-headless` + 基础工具（curl/ca-certificates/tini），Node 22 LTS 按官方 nodejs.org tarball 装入 `/opt/node`（x64/arm64 双架构，对应 HDSL 的 NodeSource 策略），corepack 启用 pnpm；tini 处理信号，面板以 root 跑、agent 进程降权到 uid 1000（v0.6.44 起的身份划分，见 `docs/design-notes.md §7.5`），SIGTERM → shutdown hook `stopAll()`）；`docker-compose.yml` 便捷示例；README（quickstart、`java -jar` 裸跑说明、挂载点表、HTTPS 配置参考、证书上传步骤）。
 
 ## 测试策略
 

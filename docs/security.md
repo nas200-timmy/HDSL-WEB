@@ -87,15 +87,15 @@ key 的价值）全是部署者的责任。
   不记屏幕内容、不记 key。
 - 文件 `<data>/logs/audit-*.jsonl`，0600；**保底保留 180 天**（低于这个数就答不上"上季度谁删了那个世界"）。
 
-### 2.7 容器里的身份划分（v0.6.43 起）
+### 2.7 容器里的身份划分（v0.6.44 起）
 
 - **面板是 root**，`auth/`（含开发者口令哈希）、`certs/`（TLS 私钥）、`logs/`（审计）、
   `server.yaml` 是 root `0700/0600`；
 - **每个 agent 进程降权到 uid 1000**（`setpriv`，exec 原地替换，进程组与 PTY 会话不变）；
 - 所以 agent **读不到也改不了**面板的凭据，也 `kill` 不掉面板、ptrace 不了它；
 - **反方向的文件要交还**：pnpm 的 `~/.config/pnpm/config.yaml` 这类"面板写、agent 读"的配置
-  不是秘密，写成 `root 0600` 会让 agent 的 `pnpm` 连读都读不了（v0.6.43 首发就是这样，所有
-  实例安装全挂 `EACCES`）。这类文件由 `Privileges.handToAgent()` 连属主带 mode 一起交给
+  不是秘密，写成 `root 0600` 会让 agent 的 `pnpm` 连读都读不了（两段身份的第一版就是这样，
+  所有实例安装全挂 `EACCES`）。这类文件由 `Privileges.handToAgent()` 连属主带 mode 一起交给
   uid 1000；同一处还顺手拒了"agent 在自家目录里放个符号链接、面板以 root 顺着写"这条路。
 - **裸部署没有这一层**：面板与 agent 同一个 uid，那些 0600 文件对 agent 是可读可写的。
   要隔离请用容器部署。
