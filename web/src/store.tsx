@@ -227,15 +227,16 @@ export async function refreshZcode(showLoading = false): Promise<void> {
   }
 }
 
-/// 跨品牌实例（kimi/opencode 品牌实例 + zcode 实验实例）合并进 external，
+/// 跨品牌实例（各品牌实例 + zcode 实验实例）合并进 external，
 /// 主页启动面板的实例选择菜单与主按钮动作用它。单个品牌失败不影响其它品牌；
 /// 静默失败（不弹 toast）——主页面 5 秒轮询一次，报错会刷爆通知。
 export async function refreshExternal(): Promise<void> {
-  const [kimi, opencode, claudeWeb, octop, zcode] = await Promise.all([
+  const [kimi, opencode, claudeWeb, octop, hermes, zcode] = await Promise.all([
     api.brandInstances("kimi").then((r) => r.instances).catch(() => null),
     api.brandInstances("opencode").then((r) => r.instances).catch(() => null),
     api.brandInstances("claude-web").then((r) => r.instances).catch(() => null),
     api.brandInstances("octop").then((r) => r.instances).catch(() => null),
+    api.brandInstances("hermes").then((r) => r.instances).catch(() => null),
     api.zcodeInstances()
       .then((r) => ({ instances: r.instances, workspacesRoot: r.workspacesRoot }))
       .catch(() => null),
@@ -252,6 +253,9 @@ export async function refreshExternal(): Promise<void> {
   }
   for (const i of octop ?? []) {
     external.push({ brand: "octop", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error, disabled: i.disabled });
+  }
+  for (const i of hermes ?? []) {
+    external.push({ brand: "hermes", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error, disabled: i.disabled });
   }
   for (const i of zcode?.instances ?? []) {
     external.push({
