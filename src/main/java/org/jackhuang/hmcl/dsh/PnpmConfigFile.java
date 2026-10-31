@@ -17,18 +17,24 @@
  */
 package org.jackhuang.hmcl.dsh;
 
+import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
@@ -77,6 +83,19 @@ public final class PnpmConfigFile {
     /// The key that must not be lost — it is what makes two instances share packages instead of
     /// downloading them twice.
     private static final String STORE_KEY = "storeDir";
+
+    /// What the file must be when the agent owns it: readable and writable by the uid pnpm runs
+    /// as, and by nobody else. The group is that same uid (the image gives `hdsl` gid 1000), so
+    /// the group half is what `pnpm config set` needs rather than a second party.
+    private static final Set<PosixFilePermission> AGENT_FILE_PERMISSIONS =
+            PosixFilePermissions.fromString("rw-rw-r--");
+
+    /// The same for the directory: writable by the agent too, because pnpm's own rewrite is a
+    /// temporary file in this directory followed by a rename. No setgid bit here — Java's
+    /// [`PosixFilePermissions#fromString`] cannot spell one, and it would buy nothing: the owner
+    /// is already the agent, whose primary group is that same number.
+    private static final Set<PosixFilePermission> AGENT_DIRECTORY_PERMISSIONS =
+            PosixFilePermissions.fromString("rwxrwxr-x");
 
     private PnpmConfigFile() {
     }
@@ -171,6 +190,14 @@ public final class PnpmConfigFile {
         List<String> kept = new ArrayList<>();
         boolean hadStore = false;
         boolean exists = Files.isRegularFile(file);
+        if (exists && Files.isSymbolicLink(file) && Privileges.dropsChildren()) {
+            // Not followed, and removed. This file lives in the agent's own home, so a link
+            // standing here is a request for a root process to read something the agent cannot
+            // — and whatever it reads is then written back out into a file the agent can open.
+            // What dropping the link costs is one setting this class writes anyway.
+            Files.delete(file);
+            exists = false;
+        }
         if (exists) {
             for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
                 String trimmed = line.trim();
@@ -205,16 +232,33 @@ public final class PnpmConfigFile {
             // newline is a setting nobody set.
             return false;
         }
+        Path parent = file.getParent();
         if (text.equals(readText(file))) {
+            // Nothing to write, but the file may still be the entrypoint's copy: written by root
+            // before the panel started, then read for the life of the container by a pnpm running
+            // as the agent. Settling it here is what makes an upgrade repair a file whose owner is
+            // wrong without waiting for somebody to change a registry.
+            settle(file);
             return false;
         }
-        Path parent = file.getParent();
         if (parent != null) {
             Files.createDirectories(parent);
+            // The directory has to be the agent's too: `pnpm config set` rewrites this file
+            // through a temporary file in the same directory, so a `0755 root:root` one would
+            // leave the agent able to read its configuration and unable to change it.
+            Privileges.handToAgent(parent, AGENT_DIRECTORY_PERMISSIONS);
         }
-        Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
-        Files.writeString(temporary, text, StandardCharsets.UTF_8);
-        restrict(temporary);
+        // Created exclusively, under a name that did not exist: this directory belongs to the
+        // agent, and a name that already exists there may be a symlink it left pointing at
+        // /data/server.yaml. A plain write would follow it and spend the panel's privileges on
+        // the agent's behalf; a name the panel has just created cannot be that link.
+        Path temporary = file.resolveSibling(file.getFileName() + ".tmp-" + UUID.randomUUID());
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        try (OutputStream out = Files.newOutputStream(
+                temporary, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+            out.write(bytes);
+        }
+        settle(temporary);
         try {
             Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
@@ -281,11 +325,24 @@ public final class PnpmConfigFile {
         }
     }
 
-    /// Keeps the file to its owner.
+    /// Puts the file in the state the machine it runs on needs.
     ///
-    /// A registry address is not a secret, but the file beside this one may be, and a
-    /// configuration nobody else can read is one fewer thing to think about.
-    private static void restrict(Path file) {
+    /// Outside a container the panel is the same person the agent is, so the file is kept to
+    /// its owner: a registry address is not a secret, but the file beside this one may be, and
+    /// a configuration nobody else can read is one fewer thing to think about.
+    ///
+    /// Inside the container it is the opposite problem. `pnpm` is a child process, so a file
+    /// the panel wrote as root is one the agent cannot open at all — that is what made every
+    /// install in the first v0.6.43 image fail with `EACCES` on this very path — and the agent
+    /// also runs `pnpm config set`, which rewrites it. So it belongs to the agent, with the
+    /// mode the rest of the split uses (`umask 002` under a setgid directory).
+    ///
+    /// @param file the file to settle
+    private static void settle(Path file) {
+        if (Privileges.dropsChildren()) {
+            Privileges.handToAgent(file, AGENT_FILE_PERMISSIONS);
+            return;
+        }
         try {
             Files.setPosixFilePermissions(file, EnumSet.of(
                     PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));

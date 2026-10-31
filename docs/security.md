@@ -93,6 +93,10 @@ key 的价值）全是部署者的责任。
   `server.yaml` 是 root `0700/0600`；
 - **每个 agent 进程降权到 uid 1000**（`setpriv`，exec 原地替换，进程组与 PTY 会话不变）；
 - 所以 agent **读不到也改不了**面板的凭据，也 `kill` 不掉面板、ptrace 不了它；
+- **反方向的文件要交还**：pnpm 的 `~/.config/pnpm/config.yaml` 这类"面板写、agent 读"的配置
+  不是秘密，写成 `root 0600` 会让 agent 的 `pnpm` 连读都读不了（v0.6.43 首发就是这样，所有
+  实例安装全挂 `EACCES`）。这类文件由 `Privileges.handToAgent()` 连属主带 mode 一起交给
+  uid 1000；同一处还顺手拒了"agent 在自家目录里放个符号链接、面板以 root 顺着写"这条路。
 - **裸部署没有这一层**：面板与 agent 同一个 uid，那些 0600 文件对 agent 是可读可写的。
   要隔离请用容器部署。
 ### 2.8 有些环境里这一层不成立——**程序也无能为力**

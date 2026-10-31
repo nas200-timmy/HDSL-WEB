@@ -143,8 +143,27 @@ class PnpmConfigFileTest {
     @Test
     void theFileIsReadableOnlyByItsOwner() throws IOException {
         assertTrue(PnpmConfigFile.write(ADDRESS));
+        if (org.jackhuang.hmcl.util.platform.Privileges.dropsChildren()) {
+            // Inside the container the panel is root and pnpm is not, so the opposite is
+            // required: a file root owns is one the agent cannot open at all, which is what
+            // made every install fail with `EACCES … /home/hdsl/.config/pnpm/config.yaml`.
+            // Assert that half here rather than skipping the test outright.
+            assertEquals(org.jackhuang.hmcl.util.platform.Privileges.AGENT_UID,
+                    ((Number) Files.getAttribute(configFile(), "unix:uid")).intValue(),
+                    "inside the container the file must belong to the uid pnpm runs as");
+            return;
+        }
         org.jackhuang.hmcl.util.PosixPermissions.assertOwnerOnly(configFile(),
                 "the pnpm config must be owner-only");
+    }
+
+    @Test
+    void aRewriteLeavesNoTemporaryFileBehind() throws IOException {
+        assertTrue(PnpmConfigFile.write(ADDRESS));
+        try (var entries = Files.list(configFile().getParent())) {
+            assertEquals(List.of(configFile()), entries.toList(),
+                    "the file is replaced by a rename; a leftover temporary is one the agent can find");
+        }
     }
 
     @Test

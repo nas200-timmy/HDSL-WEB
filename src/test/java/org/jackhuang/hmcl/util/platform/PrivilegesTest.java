@@ -100,6 +100,73 @@ class PrivilegesTest {
     }
 
     @Test
+    void handingAFileToTheAgentDoesNothingWhereNobodyWasDropped(@TempDir Path directory) throws Exception {
+        // The rule under test is the side effect nobody expects: on a bare deployment the panel
+        // is the same person the agent is, so an ownership change here would be the panel taking
+        // somebody's file. Handing over only has meaning where children were dropped.
+        Path file = Files.writeString(directory.resolve("config.yaml"), "registry: https://a.example\n");
+        java.util.Optional<java.util.Set<java.nio.file.attribute.PosixFilePermission>> before =
+                org.jackhuang.hmcl.util.PosixPermissions.of(file);
+
+        boolean handed = Privileges.handToAgent(
+                file, java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw-r--"));
+
+        if (Privileges.dropsChildren()) {
+            assertTrue(handed, "inside the container the file goes to the agent");
+            return;
+        }
+        assertFalse(handed, "outside the container nothing is handed over");
+        assertEquals(before, org.jackhuang.hmcl.util.PosixPermissions.of(file),
+                "and the mode is left as it was");
+    }
+
+    @Test
+    void handingOverChangesTheModeAsWellAsTheOwner(@TempDir Path directory) throws Exception {
+        // The container's numbers are out of a test's reach, but the two calls they turn into
+        // are not: chown to a uid, then chmod. Driving it with the uid the test already is keeps
+        // it legal without privileges and still covers the part that can be got wrong — the
+        // order. `chown` clears the setgid bit, so a mode set before it is a mode lost.
+        Path file = Files.writeString(directory.resolve("config.yaml"), "registry: https://a.example\n");
+        if (org.jackhuang.hmcl.util.PosixPermissions.of(file).isEmpty()) {
+            return; // no mode bits on this platform: nothing this test can assert
+        }
+        int uid = Privileges.euid();
+        int gid = egid();
+        if (uid < 0 || gid < 0) {
+            return;
+        }
+
+        assertTrue(Privileges.handTo(file, java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw-r--"),
+                uid, gid));
+
+        assertEquals(java.util.Set.of(
+                        java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                        java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                        java.nio.file.attribute.PosixFilePermission.GROUP_READ,
+                        java.nio.file.attribute.PosixFilePermission.GROUP_WRITE,
+                        java.nio.file.attribute.PosixFilePermission.OTHERS_READ),
+                org.jackhuang.hmcl.util.PosixPermissions.of(file).orElseThrow(),
+                "the agent's pnpm has to be able to read it, and `pnpm config set` to rewrite it");
+        assertEquals(uid, ((Number) Files.getAttribute(file, "unix:uid")).intValue());
+        assertEquals(gid, ((Number) Files.getAttribute(file, "unix:gid")).intValue());
+    }
+
+    /// The group id of this process, for the test above.
+    ///
+    /// @return the gid, or `-1` where the platform has no such notion
+    private static int egid() {
+        try {
+            return (int) Files.getAttribute(Path.of("/proc/self"), "unix:gid");
+        } catch (Exception e) {
+            try {
+                return (int) new com.sun.security.auth.module.UnixSystem().getGid();
+            } catch (Exception | LinkageError ignored) {
+                return -1;
+            }
+        }
+    }
+
+    @Test
     void theBannerNoteOnlySpeaksForRootOutsideAContainer() {
         // Whatever this machine is, the note must agree with the predicate the
         // code actually uses — that is the part a regression would break.

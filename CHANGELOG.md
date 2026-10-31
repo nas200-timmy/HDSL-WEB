@@ -2,6 +2,20 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布
+
+- **修 v0.6.43 的致命回归：agent 读不到 pnpm 的配置**。面板以 root 跑之后，
+  `~/.config/pnpm/config.yaml` 被写成 `root:root 0600`——而 `pnpm` 是 agent 的子进程，
+  连读都读不了。表现是所有实例的安装与插件安装一律 `EACCES: permission denied, open
+  '/home/hdsl/.config/pnpm/config.yaml'`，**升过级的机器上老实例也一起坏**，与宿主存储无关。
+  现在落盘后连属主带 mode 一起交给 agent uid（`Privileges.handToAgent`），父目录同样
+  （`pnpm config set` 要重写它）；启动时会顺手校正已经写坏的那份，不用改设置、不用重建卷。
+- **同一处堵住符号链接**：这个目录归 agent，agent 能在里面放一个 `config.yaml.tmp-…` 指向
+  `/data/server.yaml`，面板若顺着写就等于用 root 的权限替 agent 写文件。临时文件改为随机后缀
+  + `CREATE_NEW` 创建，目标若是符号链接则删除不跟随。
+- 测试补两条：手交属主/mode 的两个 syscall（先 chown 再 chmod 的顺序是必须的）、以及重写后
+  不留下临时文件。
+
 ## v0.6.43 — 2026-10-31 · 小版本：容器里面板 root 持有秘密、agent 跑成 uid 1000
 
 > 起因：同 uid 的容器里，agent 能改面板的 `auth/`、`certs/`、`server.yaml` 和审计日志——

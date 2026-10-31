@@ -20,10 +20,13 @@ package org.jackhuang.hmcl.util.platform;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /// Who a child process runs as, and when the panel is allowed to answer that
 /// question differently from "whoever I am".
@@ -39,7 +42,10 @@ import java.util.List;
 /// log) can only be protected by ownership, and a single uid cannot own what it
 /// must not touch. Everything else the panel does — writing instance files,
 /// installing runtimes — keeps working because it writes into directories that
-/// belong to uid 1000 with a group both sides share.
+/// belong to uid 1000 with a group both sides share. The one place that is not
+/// enough is a file the panel writes with a mode of its own choosing, which is
+/// what [#handToAgent] is for: a shared group does not make a `0600` file
+/// readable by anyone.
 ///
 /// On a bare deployment this class is inert: [#inContainer()] is false, so
 /// [#asAgent] returns its argument unchanged and a panel started by systemd as
@@ -138,6 +144,54 @@ public final class Privileges {
     /// Whether child processes are dropped to [#AGENT_UID] on this machine.
     public static boolean dropsChildren() {
         return DROP_CHILDREN;
+    }
+
+    /// Hands a file or directory to the agent, so that the uid its children run
+    /// as can read — and where it needs to, rewrite — what the panel put there.
+    ///
+    /// The split exists to keep some files out of an agent's reach; it also
+    /// catches the files an agent has to read, and those are what this is for.
+    /// `pnpm` is a child process, so a `config.yaml` the panel wrote as root is
+    /// one the agent's pnpm cannot open, and a `0600` one is how the first
+    /// v0.6.43 image failed every instance install with `EACCES:
+    /// /home/hdsl/.config/pnpm/config.yaml`. Handing over the mode alone is not
+    /// enough either: pnpm's own `config set` rewrites the file, which needs the
+    /// directory writable by the same uid.
+    ///
+    /// A no-op outside a container: there the panel already runs as whoever the
+    /// agent runs as, and changing an owner would be changing somebody's file.
+    ///
+    /// @param path        the file or directory
+    /// @param permissions the mode to give it, e.g. `rw-rw-r--`
+    /// @return whether the file was handed over
+    public static boolean handToAgent(Path path, Set<PosixFilePermission> permissions) {
+        return DROP_CHILDREN && handTo(path, permissions, AGENT_UID, AGENT_UID);
+    }
+
+    /// The two calls handing over consists of, with the numbers named so a test
+    /// can drive them: the container branch itself is out of a test's reach, but
+    /// `chown` and `chmod` are not, and they are what the fix depends on.
+    ///
+    /// The order is not free. `chown` clears the setuid and setgid bits, so the
+    /// mode has to come after it or the file ends up readable by nobody but
+    /// root — the exact failure this exists to repair.
+    ///
+    /// @param path        the file or directory
+    /// @param permissions the mode
+    /// @param uid         the owner to set
+    /// @param gid         the group to set
+    /// @return whether both calls succeeded
+    static boolean handTo(Path path, Set<PosixFilePermission> permissions, int uid, int gid) {
+        try {
+            Files.setAttribute(path, "unix:uid", uid);
+            Files.setAttribute(path, "unix:gid", gid);
+            Files.setPosixFilePermissions(path, permissions);
+            return true;
+        } catch (UnsupportedOperationException | IOException | IllegalArgumentException e) {
+            org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                    "Could not hand " + path + " to uid " + uid + ": " + e);
+            return false;
+        }
     }
 
     /// Whether this is a root process outside a container: the panel and every

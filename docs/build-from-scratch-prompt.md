@@ -487,6 +487,24 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
 - **做法**：启动时记录 jar 的路径与 mtime/大小，运行中检测到变化就在页面与日志里说清"jar 被替换了，
   重启即可"，而不是让 ClassNotFound 自己冒出来。
 
+### 5.23 两段身份之后，"面板写、agent 读"的文件要交还属主
+- **现象**：v0.6.43 首发镜像里所有实例安装全挂，日志只有一行
+  `EACCES: permission denied, open '/home/hdsl/.config/pnpm/config.yaml'`；升过级的机器上**老实例也一起坏**。
+- **根因**：面板是 root 了，而这个配置是它用"临时文件 + 0600 + 原子 rename"写的——写出来
+  `root:root 0600`，agent 的 `pnpm` 连读都读不了。之前两者同 uid 时这行代码是对的，分成两段身份后
+  就变成了"面板把 agent 的配置文件锁在自己手里"。`umask 002` 和共享组救不了它：组共享管不到 0600。
+- **做法**：凡是 agent 要读（甚至要改：`pnpm config set` 会重写它）的文件，落盘后连属主带 mode 一起
+  交给 agent uid —— `Privileges.handToAgent(path, "rw-rw-r--")`，父目录也给（`rwxrwxr-x`，pnpm 的
+  重写是在同目录里换文件）。同一处必须顺手堵住符号链接：该目录归 agent，agent 可以放一个
+  `config.yaml.tmp-…` 指向 `/data/server.yaml`，面板要是顺着写就是**用 root 的权限替 agent 写文件**。
+  所以临时文件名带随机后缀、用 `CREATE_NEW` 建（自己建的 inode 不可能是预先埋好的链接），目标若是
+  符号链接就删掉不跟随。
+- **两个 Java 层的坑**：`PosixFilePermissions.fromString` 只认 `rwxst` 里的 `rwx`，给个 `rwxrwsr-x`
+  直接 `IllegalArgumentException`；`chown` 会清掉 setuid/setgid 位，所以**先 chown 再 chmod**，
+  顺序反了文件仍然打不开。
+- **验证**：容器里 `docker exec -u 1000 <容器> pnpm --version` 与 `pnpm config get registry` 都要能跑；
+  再建一个实例装一次。
+
 ---
 
 ## 6. 人工验收清单（自动化测不到的部分）
@@ -508,6 +526,9 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
    必须是 `/home/hdsl/workspace` 或显式设了 `HDSL_WORKSPACE`）。
 10. **PTY 身份**：`ps -o uid= -p <tui pid>` 应是 agent uid，不是 0。终端里跑起来的 agent 也碰不到
    面板的凭据，这是 §5.9 的验收面。
+11. **agent 侧的 pnpm**：`docker exec -u 1000 <容器> pnpm --version` 与 `pnpm config get registry`
+   都要正常返回；`ls -l /home/hdsl/.config/pnpm/config.yaml` 的属主应是 agent uid 而不是 root。
+   这一条不查，坏掉的形态是"面板一切正常，所有安装 `EACCES`"（§5.23）。
 
 ---
 
