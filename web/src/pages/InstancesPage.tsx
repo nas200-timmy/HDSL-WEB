@@ -15,7 +15,6 @@ import {
   DeployedCodeIcon,
   EditIcon,
   FolderIcon,
-  LogoutIcon,
   MoreVertIcon,
   Package2Icon,
   PublicIcon,
@@ -31,7 +30,7 @@ import { McInstancesView } from "../components/McInstancesView";
 import { I18N } from "../i18n";
 import { refreshMcFeature, useMcFeature } from "../mcFeature";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
-import { getState, logout, refreshExternal, refreshInstances, toast, useAppState } from "../store";
+import { getState, refreshExternal, refreshInstances, toast, useAppState } from "../store";
 import type { Instance } from "../types";
 import { errMsg, normState } from "../utils";
 import { withBase } from "../base";
@@ -76,12 +75,6 @@ export function InstancesPage() {
   const showBrands = (brand: BrandKey) => setSearchParams({ view: "brands", brand });
   const showMc = () => setSearchParams({ view: "mc" });
   const showDsh = () => setSearchParams({});
-
-  /// 与设置页「退出登录」同一条路径：服务端吊销会话 + 清 Cookie + 本地清理。
-  const doLogout = async () => {
-    await logout();
-    nav("/login", { replace: true });
-  };
 
   const [query, setQuery] = useState("");
   const [searchMode, setSearchMode] = useState(false);
@@ -267,14 +260,7 @@ export function InstancesPage() {
                 <span className="side-title">{I18N["dsh.settings.global"]}</span>
               </span>
             </button>
-            <button className="side-item ripple-host" onClick={() => void doLogout()}>
-              <span className="side-graphic">
-                <LogoutIcon size={20} />
-              </span>
-              <span className="side-text">
-                <span className="side-title">{I18N["dsh.logout"]}</span>
-              </span>
-            </button>
+
         </div>
       </nav>
 
