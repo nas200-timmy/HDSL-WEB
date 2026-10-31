@@ -76,6 +76,12 @@ Go 1.24。许可证 GPL-3.0-or-later。
   按 **session token** 记账（不是用户名）、10 分钟内 3 次错误锁 10 分钟；`POST /api/developer/elevate`
   响应里额外返回一个 32 字节 **bearer token**（内存、同 TTL、改密码即失效），供无法持 cookie 的脚本
   用 `Authorization: Bearer` 调接口。
+- **出站 TLS 的信任窗口**（`/api/network/trust`）：面板自己连 npm/GitHub 时，机器上的 TLS 检查代理
+  （杀毒、网关、FastGithub 一类）会用自己的根证书签名，`cacerts` 不认——浏览器打得开、面板报
+  `PKIX path building failed`，而用户看到的是"版本列表是空的"。所以：失败要说人话（谁签的、为什么、
+  两条出路），默认严格，放宽必须由人逐字回传一句确认语、1–1440 分钟、写进 `server.yaml`、可撤销、
+  进审计。窗口内也不是直接跳过：先按 `cacerts`、再按机器自己的根证书库校验，两张都不认才接受并记日志。
+  **默认选最新稳定版 Node 的那个坑（§5.15）和这个坑是邻居**：都在"装东西"这条路上。
 - **开发者面只在 HTTPS 下可用**（读主连接器真实状态，尊重 `https.trust_forwarded_proto`）：
   明文 HTTP 下开发者页只给提示与「去 HTTPS 证书」，终端 403 `insecure_transport`，提权/守卫
   409/403 `tls_required`；`/i/*` 的拦截页说明"开发者模式不可用"。**不要**在 HTTP 上放开它。
@@ -148,8 +154,15 @@ Go 1.24。许可证 GPL-3.0-or-later。
   `auth.*`、`web_shell.enabled`、`developer_guard.scope`、`zcode.*`。
 - HTTPS：支持 PEM / PKCS#12 / 自签生成 / 运行时热切换；`redirect_http`、`redirect_same_port`；
   反代终结 TLS 时用 `https.trust_forwarded_proto` 显式打开信任。
-- Dockerfile：多阶段（node 构建 SPA → gradle 打 jar → 运行时 debian-slim），**非 root**、tini 转信号、
-  健康检查打 `/api/health`。
+- Dockerfile：多阶段（node 构建 SPA → gradle 打 jar → runtime），tini 转信号，健康检查打 `/api/health`。
+  **runtime 阶段的底座是构建参数**（`HDSL_BASE`，默认 `debian:trixie-slim`，也可 Fedora / openSUSE），
+  包管理器按 `/etc/os-release` 分派；`tini` 软链到 `/usr/local/bin/tini`（openSUSE 在 `/usr/sbin`）；
+  架构用 `uname -m` 判断而不是 `dpkg`；ffmpeg 的 x264/x265 断言由 `HDSL_ENCODERS=required|optional`
+  控制（非 Debian 底座只有专利-free 构建，必须只告警）。细节见 `docs/deployment.md §4.1`。
+- **容器里的身份是两段**：面板 root（持有 `auth/`、`certs/`、`logs/`、`server.yaml`），agent 进程用
+  `setpriv` 降到 uid 1000；入口负责属主校正与 `umask 002`。裸部署没有这一层。见 §5.9。
+- 仓库自带 `docker-install.sh`（原地构建向导：数据/工作区/MC 目录、端口、镜像源、`--base`），
+  它**不整卷 chown**（那会把秘密交回去），属主交给容器入口。
 - 裸部署（systemd）文档：`HOME` 与 `HDSL_DATA` 必须指向服务用户可写的目录。
 
 ---
@@ -167,7 +180,7 @@ Go 1.24。许可证 GPL-3.0-or-later。
 | 事件 | `WS /ws`：实例状态、任务进度、日志行、外部实例变化 |
 
 审计：`<data>/logs/audit-*.jsonl`，每行一条 JSON，含时间、channel、动作、对象、结果、操作者、来源地址。
-里面会有用户名与地址，别把它当成秘密文件而把它读进 UI；也别忘了它是 0644。
+里面会有用户名与地址——**别把它读进 UI**，它对 agent 也不可写（`0600`，容器里属主是 root）。
 
 ---
 
@@ -190,6 +203,10 @@ cd client/hdsl-tui && gofmt -l . | grep -v '^vendor/' ; go vet ./... ; go test .
 # 单 jar
 flock /tmp/hdsl-gradle.lock ./gradlew --no-daemon shadowJar -PreleaseVersion=<版本>
 unzip -l build/libs/hdsl-web-<版本>.jar | grep -c first-party-plugins   # 必须是 2 个 tgz + index.json
+
+# 入口脚本：它是镜像里 root 阶段跑的那段 shell，构建前先渲染出来做语法检查，
+# 否则只有等镜像构建到那一层才会发现少一个引号（§5.20）
+scripts/render-entrypoint.sh > /tmp/entrypoint.sh && sh -n /tmp/entrypoint.sh
 ```
 
 **然后真的启动一次**（这条最重要，静态检查看不出顺序类问题）：
@@ -201,8 +218,18 @@ HDSL_DATA=/tmp/panel HDSL_PORT=<随机空闲端口> HDSL_BIND_HOST=127.0.0.1 \
 # "restricted header name" / IllegalStateException
 ```
 
+**接口级冒烟**（十几秒，`scripts/api-smoke.py`）：自己起一个临时面板（临时数据目录、随机端口、
+HTTP），把"一个人会点到的路径"念一遍——`/api/node` 的字段、品牌版本（或它为什么为空）、doctor、
+出站证书的信任窗口、ZCode 工作区、dsh 半安装的拒绝、终端四道闸、静态资源。**发版前必须 39/39**。
+它不点浏览器、不装包，所以能跑在任何 CI 上。
+
+**容器验收**（`scripts/verify-privilege-split.sh`）：以 uid 1000 跑，断言 `auth/`、`logs/` 读写
+都被拒，而实例目录与 pnpm store 可写。**镜像能构建不等于隔离生效**——这条只有真容器能回答。
+
 测试纪律：**先红后绿**。每条"修了什么"的用例，先把实现改回去确认它会红，再改回来。断言要写清
 "只有这个修复才会给的理由"，不要写"能跑就算过"。
+构建产物目录若出现 `Truncated class file` / 成批 `NoClassDefFoundError`，先 `rm -rf build/classes`
+重编：半残的增量编译会给出成片假失败，别去改代码。
 
 ---
 
@@ -316,10 +343,31 @@ HDSL_DATA=/tmp/panel HDSL_PORT=<随机空闲端口> HDSL_BIND_HOST=127.0.0.1 \
 - **做法**：独立线程**有界**排水（例如保留最后 64 KiB）+ `waitFor(timeout)`；超时要
   `descendants().forEach(destroyForcibly)` 再杀父进程，并把已捕获输出写进错误信息。
 
-### 5.9 同 uid 不是安全边界
-agent 以面板用户身份跑，同 uid 下可以直接改写 `users.json` / `developer.json` / 证书私钥
-（0600 只挡别的用户），也能读 `/proc/<pid>/environ`。校验和、签名、内存基线告警都挡不住——**不要做
-这些假防线**。需要把 agent 当对手时，只有 OS/容器层有效：外层再认证、拆容器、不同 uid 跑实例。
+### 5.9 同 uid 不是安全边界；两段身份才是
+
+**先记住这条**：agent 与面板同 uid 时，它能直接改写 `users.json` / `developer.json` / 证书私钥
+（0600 只挡别的用户），也能读 `/proc/<pid>/environ`。校验和、签名、内存基线告警**全都挡不住**，
+不要做这些假防线。
+
+因此容器里分两段（`util/platform/Privileges.java`）：
+
+- 面板是 PID 1、uid 0，`auth/`、`certs/`、`logs/`、`server.yaml` 归 root `0700/0600`；
+- 每个 agent 进程派生时前置 `setpriv --reuid=<agent> --regid=<agent> --init-groups --`，
+  跑成镜像里的 `hdsl`。**所有**派生点都要覆盖：dsh 主进程、实例内命令（npm/pnpm）、ACP、
+  品牌实例、ZCode 实例、Octop 的口令操作、MC 的 pipe 控制台、以及 PTY 终端
+  （`posix_spawn` 那条也要，`setpriv` 是 exec 原地替换，进程组与 PTY 会话都不变）。
+- 实例子目录 `1000:1000 2775`（setgid）+ 入口 `umask 002`，所以**面板（root）写进实例目录的文件
+  仍是 `root:hdsl 0664`，agent 照样能改**。不做这一步，root 会把 agent 自己的目录写死，
+  表现是"实例装不了包 / 存档写不进去"。
+- **只在容器里降权**：宿主的 uid 1000 可能是另一个人的账户，塞过去是权限 bug。裸部署不降权，
+  以 root 启动也不拦（拒绝只会换来"那我不用了"），但横幅要写明"你派生的每个 agent 也是 root"。
+- agent uid 是**构建参数**（`HDSL_AGENT_UID`，默认 1000）：见 §5.20 的 ACL 存储。
+
+**ACL 管理的存储会让这一层形同虚设**（QNAP 的 trimacl 是典型）：共享属主被当管理员放行，
+uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示 `700`，只有真访问才暴露。
+**镜像里绕不过去**——所以入口要自检（以 agent 身份试写一次 `auth/`），写得进去就打
+`WARNING: this filesystem does not enforce mode bits for uid <n>`。**假的隔离比没有隔离更糟**：
+让用户以为有防护，比告诉他"这台机器上没有"危险得多。
 
 ### 5.10 反代的其它细则
 - 升级请求（WebSocket）不走 servlet 过滤器：`/i/*` 的守卫与停机检查必须在升级层再做一次。
@@ -351,6 +399,86 @@ agent 以面板用户身份跑，同 uid 下可以直接改写 `users.json` / `d
   `SHA256SUMS.txt` → `git tag -a` → 推 `main`/`web-shell`/tag → `gh release create`（正文写给用户看，
   不抄 CHANGELOG）→ 核三条 CI 与 ghcr 镜像标签。
 
+
+### 5.14 `user.home` 不等于 `HOME`（root 跑面板时尤其）
+- **现象**：容器里升级到"面板 root"之后，默认工作区变成 `/root/workspace`，PTY 起来 44 ms 就
+  `exit 1`，WS 报 "no running terminal"；pnpm 的全局配置写进 `/root/.config`，设置页改的 registry
+  agent 根本读不到。
+- **根因**：JVM 的 `user.home` 来自 **passwd**，不是环境变量。面板以 root 跑时它答 `/root`，
+  而 agent（uid 1000）看到的是 `HOME=/home/hdsl`，`/root` 是 0700，连 `cd` 都进不去。
+- **做法**：所有"用户家目录"的默认值统一走一个 `UserHome.directory()`——**`HOME` 优先**，
+  没有才回落 `user.home`（Windows 上没有 HOME，回落正好）。要覆盖的地方不止 workspace：
+  pnpm 的全局配置文件、整合包安装给的默认工作区、以及任何拼 `~/.xxx` 的地方。
+
+### 5.15 托管 Node"装得上"不等于"跑得起来"
+- **现象**：一键安装 Node 的任务显示 done，`/api/node` 显示 `suitable: true`，但 node 一执行就是
+  `error while loading shared libraries: libatomic.so.1`，pnpm 安装 `exit 127`，日志里只有一行 warning。
+- **根因**：只有一个"文件在不在"的检查，而 Node 26 起的官方二进制动态链接 `libatomic.so.1`，
+  `debian:*-slim`、`ubuntu:*-minimal` 这类镜像不带它。
+- **做法**：解包后**真跑一次** `node --version`（限时、输出有界），跑不起来就删掉那份运行时、
+  任务 failed、把 loader 的原话带进错误；`suitable` 也要表示"能跑"而不只是"版本在范围内"
+  （结果按目录 + 二进制 mtime 缓存，别每次轮询都起进程）。镜像侧顺手装 `libatomic1`。
+- 推论：凡是"下载一个东西然后执行它"的路径，都要有一步"执行一下试试"，而不是只校验文件存在。
+
+### 5.16 Gson 默认会丢掉 `null` 成员
+- **现象**：没有系统 Node 的机器上，实例页整片白屏，控制台报 `Cannot read properties of undefined
+  (reading 'pnpm')`。带 node 的开发机永远复现不了。
+- **根因**：接口的 `system` 字段是 `null`，Gson 的默认 writer **把 null 成员整个删掉**；前端先判
+  `system !== null`，拿到的是 `undefined`，于是穿过判断去读 `.pnpm`。
+- **做法**：允许多个字段为 null 的接口统一用 `writePreservingNulls`（账户/实例/目录那些早就这么做了）；
+  前端同时把"缺键"当 null/空数组处理。**回归测试要在"没有这个工具"的机器上才红**——所以要么给
+  接口留一个可注入的探测点，要么在测试里直接调 payload 构造函数造 null。
+
+### 5.17 TUI 插件的版本上界必须写插件的真实 peer
+- **现象**：在最新的 dsh 上装面板推荐的 TUI 插件，被 dsh 以 `incompatible with dsh 0.2.1-rc.5`
+  拒绝并回滚；用户看到的是"最新版没有终端可用"。
+- **根因**：面板的兼容范围写成了 `<0.2.2-0`（"0.2.2 之前、包含预发布"），于是 `0.2.1-rc.4/rc.5`
+  也算"适配"；而插件自己的 `peerDependencies` 只枚举到 `0.2.1-rc.3`。
+- **做法**：上界照抄插件 peer 里的最后一个（`<0.2.1-rc.4`），不匹配时走**面板侧的解释**（给 ACP
+  备选），别把 dsh 的原话甩给用户。要让新 rc 有终端，得发布一个对那条线真测过的插件版本——
+  **改个范围不算验证**。
+
+### 5.18 启动窗口里不能报 `STOPPED`
+- **现象**：`POST /launch` 回 202，紧接着 `GET /api/instances/<id>` 读到 `STOPPED`，再下一次是
+  `RUNNING`；前端轮询会闪一下"已停止"，自动化脚本会误判。
+- **根因**：启动在任务池里跑（要先做两次探测），进程注册之前 `stateOf` 没有东西可报，落到兜底
+  `return "STOPPED"`。
+- **做法**：接受启动请求时就打一个"launch 在途"标记（在**排队之前**，因为 202 已经发出去了），
+  窗口内回答 `STARTING`；进程注册后清掉。
+
+### 5.19 Dockerfile 的 `ARG` 只有在**首个** `FROM` 之前才对 `FROM` 生效
+- **现象**：镜像构建直接失败：`base name (${HDSL_BASE}) should not be blank`。
+- **根因**：`ARG HDSL_BASE=…` 写在了第三个 `FROM` 前面——那个位置它属于上一阶段的残留作用域，
+  `FROM ${HDSL_BASE}` 展开成空串。
+- **做法**：要在 `FROM` 里用的 `ARG` 一律放文件顶部（第一个 `FROM` 之前）；阶段内用的 `ARG`
+  放在 `FROM` 之后。改了 Dockerfile 就**至少让 CI 构建一次镜像**——shell 语法检查看不出这类问题。
+- 同类的第二个错：构建期断言（比如 ffmpeg 的编码器）**必须在装包之后**，否则那个二进制还不存在。
+
+### 5.20 入口脚本的属主校正：先建目录，再 chown
+- **现象**：首启 `logs/` 是 `root:hdsl 2775`（组可写），要重启一次才变成 `root:root 0700`；
+  另外 `auth/` 也晚一步。于是"刚部署完"的那几分钟里，agent 能写审计目录。
+- **根因**：属主校正只修"已经存在"的路径，而 `auth/`、`logs/` 是**面板启动之后**才建的，
+  它们继承 volume 的 setgid + `umask 002`。
+- **做法**：入口先 `mkdir -p` 那些目录再 chown/chmod。顺序也要对：**整个 `/data` 先归 agent，
+  再把秘密路径抠回 root**——反过来的话，新出现的目录（MC 数据、壁纸、品牌实例）会跟着变 root，
+  agent 就写不动了。
+- 校正要**幂等且便宜**：只在属主不对时递归，之后每次启动只 `stat`。别每次开机遍历几百 GB 的卷。
+- 有些文件系统不认 mode 位（§5.9），所以 chown 之后要**自检**并在日志里喊出来。
+
+### 5.21 解包用 Java，不要 shell 出去调 `tar`
+- **现象**：裸部署（只有 jar）上某条安装路径失败，容器里却好好的；错误是 `tar: not found` 或
+  Windows 上 GNU tar 把 `C:\` 当成远程主机（`Cannot connect to C: resolve failed`）。
+- **根因**：几行 `new ProcessBuilder("tar", "-xzf", …)`——容器里装了 tar，所以谁也没发现。
+- **做法**：解包一律用 Java 库（zip / tar / ar / xz / gzip 都够用），**不依赖宿主**有任何压缩工具；
+  需要 7z/rar 之前先问"这功能真的需要吗"（现实里进面板的归档只有 zip / tar.gz / tar.xz）。
+  容器里装着那套工具是给人工排障用的，**不是**给代码用的——混了就会出现"镜像里能跑、裸部署坏掉"。
+
+### 5.22 面板的 jar 在运行期间被换掉
+- **现象**：替换 jar 之后面板开始报一堆 `NoClassDefFoundError` / 找不到资源，用户完全不知道发生了什么。
+- **根因**：JVM 已经加载的类在内存里，没加载的才去磁盘读——新旧两半混着用。
+- **做法**：启动时记录 jar 的路径与 mtime/大小，运行中检测到变化就在页面与日志里说清"jar 被替换了，
+  重启即可"，而不是让 ClassNotFound 自己冒出来。
+
 ---
 
 ## 6. 人工验收清单（自动化测不到的部分）
@@ -362,6 +490,16 @@ agent 以面板用户身份跑，同 uid 下可以直接改写 `users.json` / `d
 5. 开发者模式：提权 → 开守卫（proxy / instance / all 各试一次）→ 读仍然可用、写被要求密码 →
    E-Stop 三次确认 → 冷却期内解除被拒 → 重启面板后解除。
 6. 品牌安装：portable 与源码构建各一次；中途杀面板，确认重启后会自动恢复/清理半安装。
+7. **容器的身份划分**：`docker exec -u 1000 <容器> sh scripts/verify-privilege-split.sh` ——
+   `auth/`、`logs/` 读写都被拒，实例目录与 pnpm store 可写。**注意 `docker exec` 默认用户不再是
+   agent**，不写 `-u 1000` 等于用 root 去验"agent 能不能写"，什么都验不出来。
+8. **ACL 存储**：`docker logs <容器> | grep "does not enforce mode bits"`。有输出就说明这台机器的
+   文件系统不认 mode 位（QNAP trimacl 一类），隔离在本机不成立——**写进部署记录，别对外声称有**。
+9. **从"单 uid"升级到"两段身份"**：用老卷起一次新镜像，确认入口把 `/data` 校正到 agent、把
+   `auth/`/`certs/`/`logs/`/`server.yaml` 收回 root，且实例仍能启动、终端能开（默认 workspace
+   必须是 `/home/hdsl/workspace` 或显式设了 `HDSL_WORKSPACE`）。
+10. **PTY 身份**：`ps -o uid= -p <tui pid>` 应是 agent uid，不是 0。终端里跑起来的 agent 也碰不到
+   面板的凭据，这是 §5.9 的验收面。
 
 ---
 
@@ -372,4 +510,9 @@ agent 以面板用户身份跑，同 uid 下可以直接改写 `users.json` / `d
 - 不要隐藏不可用功能，要变灰并写原因。
 - 不要在仓库里写真实域名 / 内网地址 / 宿主机路径 / 口令。
 - 不要 force push 远端历史、不要移动已发布的 tag（除非用户明确要求"同版本重发"）。
-- 不要把"测试全绿"当成发布依据：本文里至少 §5.1、§5.7、§5.8 都是**只有跑起来**才看得见的。
+- 不要把"测试全绿"当成发布依据：本文里至少 §5.1、§5.7、§5.8、§5.19、§5.20 都是**只有跑起来**
+  才看得见的；镜像相关的改动还要真的构建一次镜像。
+- 不要把"镜像构建成功"当成"隔离生效"：前者是 Dockerfile，后者要靠 §6 第 7、8 条去验。两者之间
+  隔着文件系统语义（ACL 存储）、入口的属主顺序、以及 `docker exec` 的默认用户。
+- 不要在 ACL 管理的存储上声称有隔离。**接受**是合法选择——只要在部署记录里写明"这台机器没有隔离"，
+  而不是让文档和实际相反。
