@@ -124,25 +124,48 @@ fetch、Z.ai OAuth 的 `tokenUrl`。上游把这些锚点挪走时构建会**明
 - `POST|DELETE /api/zcode/instances/{id}/terminal`，协议、ticket 与门禁与其他品类完全相同
   （见 `docs/terminal-protocol.md`）。
 
-### web 模式需要一个"桌面宿主"，面板起不出来（2026-10-31 实测）
+### web 模式的三个报错，根因是「项目库的 owner 对不上」（2026-10-31 查源码后修正）
 
-ZCode 的文件系统不是浏览器的：目录浏览、项目、会话都挂在**宿主**（host）上，宿主通过
-`/ws/host` 连到 `zcode --web` 起的服务。桌面客户端就是那个宿主。面板只起 `--web`
-这一半，于是浏览器被当成**远端客户端**，凡是"要碰磁盘"的动作都会失败：
+早先这里写的是"web 模式需要一个桌面宿主"。查过上游源码后要更正：`/ws/host` 那条连接是
+**桌面端主动连服务、去调服务的 channel**，服务从来不会反向问 host 要文件系统。所以补一个
+host 解决不了任何问题。真正的机制是一次字符串不相等：
 
-| 界面上的话 | 服务端（`logs/zcode.log`） | 含义 |
+- 独立 server 把项目库的 owner 定成 `remote:server:<serverId>`（源码
+  `packages/services/src/node.ts`，`createServerHostServices`）；
+- 客户端所有导航默认 `hostId = request.hostId ?? "local"`
+  （`packages/services/src/project-workspace-navigation/index.ts`）；
+- `project/index.ts` 的 `route()` 拿两者比较：不等且没有 `resolveHost`（独立 server 构造上
+  不传）→ 抛 `project.host-offline`。
+
+三个界面症状都由这一个不相等引出：
+
+| 界面上的话 | 服务端（`logs/zcode.log`） | 真实原因 |
 |---|---|---|
-| 「无法获取系统信息」/「无子目录」 | `project.readDirectory FAIL … Error: project.host-offline` | 没有宿主连上来，目录读不了 |
-| 「创建项目/会话卡住」 | `zcode-agent.sendConversationCommandV4 FAIL … Error: project.remote-project-required` | 远端客户端必须带一个已注册的项目，而项目又要有宿主 |
-| 会话索引空 | `zcode-agent.subscribeSessionsIndexV4 FAIL … ZCode Agent runtime is not running` | 同上 |
+| 「无法获取系统信息」/「无子目录」 | `project.readDirectory FAIL … project.host-offline` | 浏览器传 `"local"`，server 的 owner 是 `remote:server:x`，被当成"别人的 host" |
+| 「创建项目/会话卡住」 | `… project.remote-project-required` | owner 不是 `local` 时，没有 projectId 的会话一律拒绝；而项目又建不出来 |
+| 会话索引空 | `… ZCode Agent runtime is not running` | 上面两条都断了，没有任何路径把该 workspace 的 agent runtime 拉起来 |
 
-**这不是面板在限制 ZCode**：面板没有沙箱，ZCode 进程与面板同权限、同用户，能读整台机器。
-限制来自 ZCode 自己的 host 模型。面板能做的只有两件事，都已做/写明：
+**面板的做法：把 owner 钉成 `local`**（`web/zcode/ZcodeServerPatch.java`）。发行包里的
+`server/entry-http.js` 是未压缩的可读 ESM，面板在**启动实例前**把这一句改掉一次：
 
-- **要真正干活用终端**：面板的终端跑的是 `node <发行包>/bin/zcode.mjs`（不带参数 = 官方
-  TUI），TUI 不需要宿主，文件系统就是本机的。web 模式留给"能看就看"的场合。
-- 想用 web 模式就得让 ZCode 桌面客户端连到同一个服务上（面板不代劳，也不该代劳：那等于
-  在面板里再实现一遍 ZCode 的宿主协议）。
+```js
+const projectStorageHostId = remoteHostIdFromWorkspaceIdentity(…)   →   const projectStorageHostId = "local";
+```
+
+于是 server 的项目库就是本机的，浏览器也不再是"远端客户端"——这与面板的模型一致（一台机器、
+一个进程、浏览器是唯一客户端）。实测：补丁后服务器建库时 `hosts` 表里是 `('local','local')`，
+不再是 `remote:server:desktop-hloonil`。
+
+这条补丁的代价与边界：
+
+- **它是改上游代码**。锚点是上面那句表达式；上游把它挪走时，面板**不会**猜着改，也不阻止
+  启动——只在日志里说一次「这个发行包没有可打的锚点，web 工作台不会有工作目录」，页面照常打开。
+- 补丁前建的旧项目记录 `host_id = remote:server:x` 会因为 owner 变了而"隐身"（查询按 owner
+  过滤）。旧实例的数据目录删掉即可，那本来是一次性数据。
+- `--workspace` 仍然只是"初始 tab 的路径 + `/api/server-info` 里的条目"，**不会自动变成项目**
+  （上游 `runner.mjs` 与 `server/src/http.ts` 都是这个行为，README 写的"指定项目"与实现有落差）。
+  现在 owner 是本机的了，界面里「新建项目」选那个目录即可；面板要不要替你预置一条项目记录，
+  是下一步的事。
 
 ## 已知限制（都是有意为之）
 
