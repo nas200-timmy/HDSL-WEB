@@ -190,7 +190,7 @@ export function McFeatureCard() {
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "10px 8px 4px" }}>
         {enabled ? (
           <>
-            <button className="btn btn-raised" onClick={() => nav("/mc")}>
+            <button className="btn btn-raised" onClick={() => nav("/instances?view=mc")}>
               打开 MC 实例列表
             </button>
             <button className="btn btn-text danger" disabled={busy || locked} onClick={() => void stopFeature()}>

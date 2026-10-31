@@ -12,6 +12,7 @@ import {
   AddIcon,
   CloseIcon,
   DeleteIcon,
+  DeployedCodeIcon,
   EditIcon,
   FolderIcon,
   LogoutIcon,
@@ -26,6 +27,7 @@ import {
 } from "../components/icons";
 import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
 import { BrandsView, fallbackBrand, isBrandKey, type BrandKey } from "../components/BrandsView";
+import { McInstancesView } from "../components/McInstancesView";
 import { I18N } from "../i18n";
 import { refreshMcFeature, useMcFeature } from "../mcFeature";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
@@ -51,6 +53,9 @@ export function InstancesPage() {
   // （以及 /brands/<品牌> 的重定向）一律按品牌视图处理，不再跳第二层页面。
   const brandParam = searchParams.get("brand");
   const brandView = searchParams.get("view") === "brands" || brandParam != null;
+  // MC 服务端也是这一层：`?view=mc` 把内容区换成 MC 实例列表（见 McInstancesView）。
+  // 以前它是个独立页面（`/mc`），从实例列表点进去要"跳走再点返回"，和品牌实例割裂。
+  const mcView = searchParams.get("view") === "mc";
   const activeBrand: BrandKey = isBrandKey(brandParam) ? brandParam : fallbackBrand(s.external);
 
   // 品牌视图缺省/非法品牌：等第一份跨品牌快照落地再落到「第一个有实例的品牌」，
@@ -69,6 +74,7 @@ export function InstancesPage() {
   }, [brandView, brandParam, externalLoaded, setSearchParams]);
 
   const showBrands = (brand: BrandKey) => setSearchParams({ view: "brands", brand });
+  const showMc = () => setSearchParams({ view: "mc" });
   const showDsh = () => setSearchParams({});
 
   /// 与设置页「退出登录」同一条路径：服务端吊销会话 + 清 Cookie + 本地清理。
@@ -219,11 +225,15 @@ export function InstancesPage() {
         </button>
         {/* MC 服务端（第三方功能）：只有功能开启后才出现，而且挂在「品牌实例」
             这一层下面——它和品牌实例是同一类东西（面板托管的另一套进程），
-            不是面板自己的页面。开关在「设置 → 品牌实例」。 */}
+            所以同样是原地切换（`?view=mc`），不是另一个页面。
+            开关在「设置 → 品牌实例」。 */}
         {mcEnabled && (
-          <button className="side-item ripple-host" onClick={() => nav("/mc")}>
+          <button
+            className={`side-item ripple-host${mcView ? " selected" : ""}`}
+            onClick={showMc}
+          >
             <span className="side-graphic">
-              <TerminalIcon size={20} />
+              <DeployedCodeIcon size={20} />
             </span>
             <span className="side-text">
               <span className="side-title">MC 服务器实例</span>
@@ -271,7 +281,10 @@ export function InstancesPage() {
       <div className="page-content">
         {/* 裸部署最常见的缺失：Node.js / pnpm。缺了才出现，装好自己消失 */}
         <ToolchainBanner />
-        {brandView ? (
+        {mcView ? (
+          /* MC 服务端实例：同一页内的第三层视图，和 dsh 实例列表、品牌实例同级 */
+          <McInstancesView />
+        ) : brandView ? (
           /* 品牌实例视图：原地换内容（不跳页、不重挂载页面） */
           <BrandsView brand={activeBrand} onSelect={showBrands} />
         ) : (

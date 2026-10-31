@@ -161,7 +161,7 @@ export function McInstancePage() {
     try {
       const answer = await withElevation(() => api.mc.remove(id));
       toast("success", `已删除；世界备份：${answer.backup}`);
-      nav("/mc", { replace: true });
+      nav("/instances?view=mc", { replace: true });
     } catch (e) {
       toast("error", errMsg(e));
     } finally {
@@ -206,7 +206,7 @@ export function McInstancePage() {
         <p className="dim">{loadError}</p>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn btn-raised" onClick={() => void load()}>重试</button>
-          <button className="btn btn-text" onClick={() => nav("/mc")}>返回列表</button>
+          <button className="btn btn-text" onClick={() => nav("/instances?view=mc")}>返回列表</button>
         </div>
       </div>
     );
@@ -252,7 +252,7 @@ export function McInstancePage() {
           sections={[{ items: TABS.map((entry) => ({ key: entry.key, title: entry.title, icon: entry.icon, iconActive: entry.iconActive })) }]}
           bottom={
             <>
-              <button className="side-item ripple-host" onClick={() => nav("/mc")}>
+              <button className="side-item ripple-host" onClick={() => nav("/instances?view=mc")}>
                 <span className="side-graphic">
                   <ArrowBackIcon size={20} />
                 </span>
