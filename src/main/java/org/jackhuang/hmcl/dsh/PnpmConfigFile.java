@@ -85,17 +85,14 @@ public final class PnpmConfigFile {
     private static final String STORE_KEY = "storeDir";
 
     /// What the file must be when the agent owns it: readable and writable by the uid pnpm runs
-    /// as, and by nobody else. The group is that same uid (the image gives `hdsl` gid 1000), so
-    /// the group half is what `pnpm config set` needs rather than a second party.
-    private static final Set<PosixFilePermission> AGENT_FILE_PERMISSIONS =
-            PosixFilePermissions.fromString("rw-rw-r--");
+    /// as. Shared with every other panel-written file an agent process consumes — the constants
+    /// live in [Privileges] so the next caller does not invent a third answer.
+    private static final Set<PosixFilePermission> AGENT_FILE_PERMISSIONS = Privileges.AGENT_SHARED_FILE;
 
     /// The same for the directory: writable by the agent too, because pnpm's own rewrite is a
-    /// temporary file in this directory followed by a rename. No setgid bit here — Java's
-    /// [`PosixFilePermissions#fromString`] cannot spell one, and it would buy nothing: the owner
-    /// is already the agent, whose primary group is that same number.
+    /// temporary file in this directory followed by a rename.
     private static final Set<PosixFilePermission> AGENT_DIRECTORY_PERMISSIONS =
-            PosixFilePermissions.fromString("rwxrwxr-x");
+            Privileges.AGENT_SHARED_DIRECTORY;
 
     private PnpmConfigFile() {
     }

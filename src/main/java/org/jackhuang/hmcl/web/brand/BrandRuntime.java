@@ -20,6 +20,7 @@ package org.jackhuang.hmcl.web.brand;
 import org.jackhuang.hmcl.dsh.DshPorts;
 import org.jackhuang.hmcl.util.ProcessTree;
 import org.jackhuang.hmcl.util.platform.Executables;
+import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -126,6 +127,11 @@ public final class BrandRuntime {
 
     private static final int TAIL_LINES = 20;
     private static final int STOP_WAIT_SECONDS = 10;
+    /// Hermes' dashboard is the slow half of its two-process start (the gateway
+    /// answers first, and the dashboard refuses to attach before it does).
+    private static final int HERMES_READY_TIMEOUT_SECONDS = 180;
+    /// Stands in for "this brand never announces readiness on stdout".
+    private static final Pattern NEVER_READY = Pattern.compile("(?!)");
 
     private static final Map<String, Process> PROCESSES = new ConcurrentHashMap<>();
     private static final Map<String, State> STATES = new ConcurrentHashMap<>();
@@ -236,7 +242,9 @@ public final class BrandRuntime {
                 if (brand == Brand.OCTOP) {
                     ensureOctopInitialized(packageDir, home, logFile);
                 }
-                plan = plan(brand, packageDir, instance, publicHost);
+                plan = brand == Brand.HERMES
+                        ? hermesPlan(manager, instance, packageDir)
+                        : plan(brand, packageDir, instance, publicHost);
                 ProcessBuilder builder = new ProcessBuilder(
                         org.jackhuang.hmcl.util.platform.Privileges.asAgent(
                                 Executables.startable(plan.command())));
@@ -295,7 +303,9 @@ public final class BrandRuntime {
 
             Integer port = brand == Brand.OCTOP
                     ? awaitOctopHealth(id, process, plan.port())
-                    : awaitReady(brand, id, process, ready);
+                    : brand == Brand.HERMES
+                            ? awaitHermesHealth(id, process, plan.port())
+                            : awaitReady(brand, id, process, ready);
             READY.remove(id);
             if (port != null) {
                 PORTS.put(id, port);
@@ -464,7 +474,7 @@ public final class BrandRuntime {
         // The launcher is a shim (`kimi`, `opencode`, `claude-web` via tsx), and the
         // process actually holding the port is its child: take the tree down, not
         // just the handle we kept.
-        ProcessTree.terminate(process, STOP_WAIT_SECONDS);
+        ProcessTree.terminate(process, stopWaitSecondsOf(id));
         PROCESSES.remove(id);
         // Deliberately leave STOPPING in place: the pump reaches EOF only after
         // the last process holding the pipe is gone, which can be after this
@@ -597,6 +607,8 @@ public final class BrandRuntime {
                 environment.put("PYTHONDONTWRITEBYTECODE", "1");
                 return new LaunchPlan(List.copyOf(command), java.util.Map.copyOf(environment), port);
             }
+            case HERMES -> throw new IOException(
+                    "Hermes is launched through its generated wrapper; see hermesPlan");
             default -> throw new IOException("unknown brand " + brand);
         }
     }
@@ -886,6 +898,10 @@ public final class BrandRuntime {
             case OPENCODE -> OPENCODE_WEB_INTERFACE;
             case CLAUDE_WEB -> CLAUDE_WEB_LISTENING;
             case OCTOP -> OCTOP_UVICORN;
+            // Hermes announces nothing stable on stdout; readiness is its HTTP
+            // status endpoint (see awaitHermesHealth). A pattern that can never
+            // match keeps the pump free of a second contract.
+            case HERMES -> NEVER_READY;
         };
     }
 
@@ -954,6 +970,483 @@ public final class BrandRuntime {
                 STATES.put(id, State.ERROR);
             }
         }
+    }
+
+    // ---------------------------------------------------------------- Hermes --
+    //
+    // Hermes is the first brand that is **two** processes: `hermes gateway run`
+    // (the OpenAI-compatible API and the agent runtime) and `hermes dashboard`
+    // (the SPA the browser talks to, which refuses to attach until the gateway
+    // answers). One generated `sh` wrapper owns both, so the panel still has a
+    // single process handle per instance — the same handle `stop`, the log pump
+    // and the "is it running" answer all use.
+    //
+    // Two directories are involved, and the split is deliberate:
+    //
+    //   <instance>/panel/       the panel's: wrapper.sh and ports.json. Root
+    //                           owned, 0755. An agent that could edit these
+    //                           could repoint the reverse proxy.
+    //   <instance>/home/panel/  the wrapper's: gateway.pid, dashboard.pid and
+    //                           the lock/run directories Hermes wants under
+    //                           its own HOME. Agent owned, 0700.
+    //
+    // Everything the agent has to read or rewrite is handed over explicitly
+    // (Privileges.handToAgent): the panel writes as root, and a root-owned
+    // 0600 `.env` is a file the gateway cannot open — the exact regression
+    // v0.6.45 fixed for pnpm's config.
+
+    /// The panel's own directory inside an instance: the wrapper and the ports.
+    static final String HERMES_PANEL_DIR = "panel";
+    static final String HERMES_PORTS_FILE = "ports.json";
+    static final String HERMES_WRAPPER_FILE = "wrapper.sh";
+
+    /// The two loopback ports one instance owns.
+    ///
+    /// @param api       where the gateway serves `/v1` and `/health`
+    /// @param dashboard where the dashboard serves the SPA (the proxy target)
+    record HermesPorts(int api, int dashboard) {
+    }
+
+    /// Builds the Hermes launch: ports, `.env`, and the wrapper both children
+    /// run under.
+    ///
+    /// @param manager    the instance manager, for the instance's directories
+    /// @param instance   the instance
+    /// @param packageDir the installed release (`.venv`, `hermes_cli/web_dist`)
+    /// @return the plan; its port is the **dashboard** port, which is what the
+    ///         reverse proxy talks to
+    /// @throws IOException when the files cannot be written
+    static LaunchPlan hermesPlan(BrandInstanceManager manager, BrandInstance instance, Path packageDir)
+            throws IOException {
+        Path instanceDir = manager.instanceDirectory(instance.id());
+        Path home = manager.homeDirectory(instance);
+        Path panel = instanceDir.resolve(HERMES_PANEL_DIR);
+        Files.createDirectories(panel);
+        Files.createDirectories(home);
+
+        HermesPorts ports = hermesPorts(panel);
+        String key = hermesApiKey(home);
+        writeHermesEnv(home, key, ports.api());
+        Path wrapper = writeHermesWrapper(panel, home, ports, packageDir);
+        if (!Privileges.dropsChildren()) {
+            // A bare deployment runs the wrapper as the panel's own user; the
+            // script only has to be executable for that user.
+            makeExecutable(wrapper);
+        }
+        return new LaunchPlan(List.of("/bin/sh", wrapper.toString()), Map.of(), ports.dashboard());
+    }
+
+    /// Reads (or allocates) the instance's port pair.
+    ///
+    /// Persisted so a restart lands on the same pair: Hermes writes the pair
+    /// into its own state and into anything the operator bookmarked. A pair
+    /// found to be taken — an orphan from a crashed panel, another service —
+    /// is replaced once and written back.
+    ///
+    /// @param panel the instance's panel directory
+    /// @return the pair
+    /// @throws IOException when no free port can be found
+    static HermesPorts hermesPorts(Path panel) throws IOException {
+        Path file = panel.resolve(HERMES_PORTS_FILE);
+        if (Files.isRegularFile(file)) {
+            HermesPorts existing = readHermesPorts(file);
+            if (existing != null && DshPorts.isFree(existing.api())
+                    && DshPorts.isFree(existing.dashboard())) {
+                return existing;
+            }
+        }
+        int api = allocatePort();
+        int dashboard;
+        do {
+            dashboard = allocatePort();
+        } while (dashboard == api);
+        HermesPorts ports = new HermesPorts(api, dashboard);
+        writeAtomically(file, "{\"api\":" + ports.api()
+                + ",\"dashboard\":" + ports.dashboard() + "}\n");
+        return ports;
+    }
+
+    /// Parses a ports file; `null` when it does not name two usable numbers.
+    ///
+    /// Hand-parsed rather than Gson: the document is two integers this class
+    /// wrote itself, and a shape it cannot read has to fall back to a fresh
+    /// allocation rather than fail a launch.
+    static @Nullable HermesPorts readHermesPorts(Path file) {
+        try {
+            String text = Files.readString(file, StandardCharsets.UTF_8);
+            int api = intField(text, "api");
+            int dashboard = intField(text, "dashboard");
+            if (api <= 0 || dashboard <= 0 || api > 65535 || dashboard > 65535) {
+                return null;
+            }
+            return new HermesPorts(api, dashboard);
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static int intField(String json, String name) {
+        java.util.regex.Matcher matcher = Pattern
+                .compile("\"" + Pattern.quote(name) + "\"\\s*:\\s*(\\d+)")
+                .matcher(json);
+        return matcher.find() ? Integer.parseInt(matcher.group(1)) : -1;
+    }
+
+    /// The instance's API key: reused from `.env` when one is already there.
+    ///
+    /// Written once and never rotated by the panel — the key is what a saved
+    /// account in the launcher authenticates with, and rotating it on every
+    /// launch would break that account silently.
+    ///
+    /// @param home the instance's HOME
+    /// @return 32 hex characters
+    static String hermesApiKey(Path home) {
+        Path env = home.resolve(".env");
+        if (Files.isRegularFile(env)) {
+            try {
+                for (String line : Files.readAllLines(env, StandardCharsets.UTF_8)) {
+                    String trimmed = line.trim();
+                    if (trimmed.startsWith("API_SERVER_KEY=")) {
+                        String value = trimmed.substring("API_SERVER_KEY=".length()).trim();
+                        if (value.length() >= 16) {
+                            return value;
+                        }
+                    }
+                }
+            } catch (IOException e) {
+                LOG.warning("Could not read the Hermes key from " + env, e);
+            }
+        }
+        byte[] bytes = new byte[16];
+        new SecureRandom().nextBytes(bytes);
+        return java.util.HexFormat.of().formatHex(bytes);
+    }
+
+    /// Writes the gateway's `.env`, atomically and owned by the agent.
+    ///
+    /// Upstream enables its API server the moment `API_SERVER_KEY` is a usable
+    /// secret (16 characters or more) — there is no separate "enabled" flag to
+    /// set, and adding one only makes noise.
+    static void writeHermesEnv(Path home, String key, int apiPort) throws IOException {
+        String text = "API_SERVER_KEY=" + key + "\n"
+                + "API_SERVER_HOST=127.0.0.1\n"
+                + "API_SERVER_PORT=" + apiPort + "\n";
+        Path env = home.resolve(".env");
+        writeAtomically(env, text);
+        Privileges.handToAgent(env, Privileges.AGENT_PRIVATE_FILE);
+    }
+
+    /// Writes the wrapper, atomically, executable by the agent.
+    ///
+    /// The script is regenerated on every launch (the ports and the release
+    /// path are arguments), so an operator who edits it loses the edit — which
+    /// is said at the top of the file itself.
+    static Path writeHermesWrapper(Path panel, Path home, HermesPorts ports, Path packageDir)
+            throws IOException {
+        Path wrapper = panel.resolve(HERMES_WRAPPER_FILE);
+        Path venv = packageDir.resolve(".venv");
+        Path webDist = packageDir.resolve("hermes_cli/web_dist");
+        String script = """
+                #!/bin/sh
+                # Managed by HDSL-web. Do not edit: the panel rewrites this file on every launch.
+                set -eu
+                home="$1"; api_port="$2"; dash_port="$3"; web_dist="$4"; venv="$5"
+                hermes="$venv/bin/hermes"
+                python="$venv/bin/python"
+
+                mkdir -p "$home/panel/locks" "$home/panel/run" "$home/tools"
+
+                export HOME="$home"
+                export HERMES_HOME="$home"
+                export HERMES_RUNTIME_DIR="$home/tools"
+                export HERMES_GATEWAY_LOCK_DIR="$home/panel/locks"
+                export XDG_RUNTIME_DIR="$home/panel/run"
+                export PYTHONDONTWRITEBYTECODE=1
+                export HERMES_WEB_DIST="$web_dist"
+                # Cross-process liveness; the dashboard also reads gateway_state.json,
+                # so an unset value would still work.
+                export GATEWAY_HEALTH_URL="http://127.0.0.1:$api_port/health"
+
+                echo "hermes: gateway starting on $api_port"
+                "$hermes" gateway run &
+                gw=$!
+                echo "$gw" > "$home/panel/gateway.pid"
+
+                probe() {
+                  "$python" -c 'import sys,urllib.request; urllib.request.urlopen(sys.argv[1], timeout=2).read()' \\
+                    "http://127.0.0.1:$api_port/health" >/dev/null 2>&1
+                }
+                i=0
+                while [ "$i" -lt 90 ]; do
+                  if ! kill -0 "$gw" 2>/dev/null; then
+                    echo "hermes: gateway exited during startup" >&2
+                    exit 1
+                  fi
+                  if probe; then break; fi
+                  i=$((i+1)); sleep 1
+                done
+                if [ "$i" -ge 90 ]; then
+                  echo "hermes: gateway /health did not answer in 90s" >&2
+                  kill -TERM "$gw" 2>/dev/null || true
+                  exit 1
+                fi
+                echo "hermes: gateway ready on $api_port"
+
+                "$hermes" dashboard --skip-build --no-open --host 127.0.0.1 --port "$dash_port" &
+                db=$!
+                echo "$db" > "$home/panel/dashboard.pid"
+                echo "hermes: dashboard starting on $dash_port"
+
+                stopped=0
+                stop_children() {
+                  if [ "$stopped" = 1 ]; then return 0; fi
+                  stopped=1
+                  for pid in "$db" "$gw"; do kill -TERM "$pid" 2>/dev/null || true; done
+                  n=0
+                  while [ "$n" -lt 15 ]; do
+                    alive=0
+                    for pid in "$db" "$gw"; do
+                      if kill -0 "$pid" 2>/dev/null; then alive=1; fi
+                    done
+                    if [ "$alive" = 0 ]; then break; fi
+                    n=$((n+1)); sleep 1
+                  done
+                  for pid in "$db" "$gw"; do kill -KILL "$pid" 2>/dev/null || true; done
+                  rm -f "$home/panel/gateway.pid" "$home/panel/dashboard.pid"
+                }
+                trap 'stop_children; exit 0' TERM INT
+                trap 'stop_children' EXIT
+
+                while :; do
+                  if ! kill -0 "$gw" 2>/dev/null; then
+                    echo "hermes: gateway exited" >&2
+                    stop_children
+                    exit 1
+                  fi
+                  if ! kill -0 "$db" 2>/dev/null; then
+                    echo "hermes: dashboard exited" >&2
+                    stop_children
+                    exit 1
+                  fi
+                  sleep 2
+                done
+                """;
+        writeAtomically(wrapper, script);
+        Privileges.handToAgent(wrapper, Privileges.AGENT_PRIVATE_EXECUTABLE);
+        return wrapper;
+    }
+
+    /// Writes a small file atomically (temporary node in the same directory,
+    /// then a rename), so a killed panel never leaves half a wrapper behind.
+    static void writeAtomically(Path file, String text) throws IOException {
+        Path parent = file.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Path temporary = Files.createTempFile(parent, file.getFileName().toString(), ".tmp");
+        try {
+            Files.writeString(temporary, text, StandardCharsets.UTF_8);
+            Files.move(temporary, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException e) {
+            Files.move(temporary, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
+    private static void makeExecutable(Path file) {
+        try {
+            Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rwx------"));
+        } catch (UnsupportedOperationException | IOException ignored) {
+            // Windows: the wrapper is started through `sh`, which does not need a mode.
+        }
+    }
+
+    /// The stop window of an instance, per brand.
+    static int stopWaitSecondsOf(String id) {
+        Brand brand = BRANDS.get(id);
+        return brand == null ? STOP_WAIT_SECONDS : brand.stopWaitSeconds();
+    }
+
+    /// Polls the dashboard's `/api/status` until the gateway reports running.
+    ///
+    /// The dashboard is the slow half of the start: it spawns nothing itself
+    /// but refuses to attach before the gateway's health endpoint answers.
+    /// `overall` is deliberately **not** required to be `ok` — it folds in
+    /// storage and platform components that stay degraded while a messaging
+    /// platform reconnects, which has nothing to do with "is the web UI up".
+    private static @Nullable Integer awaitHermesHealth(String id, Process process, int port) {
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create("http://127.0.0.1:" + port + "/api/status"))
+                .timeout(Duration.ofSeconds(3))
+                .GET()
+                .build();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(HERMES_READY_TIMEOUT_SECONDS);
+        String lastError = "no answer yet";
+        while (System.nanoTime() < deadline) {
+            if (!process.isAlive()) {
+                return null;
+            }
+            try {
+                HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() / 100 == 2) {
+                    if (response.body().contains("\"gateway_running\": true")
+                            || response.body().contains("\"gateway_running\":true")) {
+                        return port;
+                    }
+                    lastError = "gateway_running is false";
+                } else {
+                    lastError = "HTTP " + response.statusCode();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            } catch (IOException e) {
+                lastError = e.getMessage() == null ? e.toString() : e.getMessage();
+            }
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+        ERRORS.put(id, "hermes did not become ready within " + HERMES_READY_TIMEOUT_SECONDS
+                + " seconds (" + lastError + ")");
+        STATES.put(id, State.ERROR);
+        return null;
+    }
+
+    /// The endpoint a launcher account would point at, for the instance page.
+    ///
+    /// @param manager  the manager
+    /// @param instance the instance
+    /// @return the endpoint, or `null` when the instance is not running or has
+    ///         no port pair yet
+    static @Nullable HermesEndpoint hermesEndpoint(BrandInstanceManager manager, BrandInstance instance) {
+        Path panel = manager.instanceDirectory(instance.id()).resolve(HERMES_PANEL_DIR);
+        HermesPorts ports = readHermesPorts(panel.resolve(HERMES_PORTS_FILE));
+        if (ports == null) {
+            return null;
+        }
+        String key = hermesApiKey(manager.homeDirectory(instance));
+        return new HermesEndpoint("http://127.0.0.1:" + ports.api() + "/v1", ports.api(), key,
+                isRunning(instance.id()));
+    }
+
+    /// What `GET /api/brands/hermes/instances/<id>/endpoint` answers.
+    ///
+    /// @param baseUrl the OpenAI-compatible base URL
+    /// @param apiPort the gateway's loopback port
+    /// @param key     the API key the gateway accepts
+    /// @param running whether the instance holds a live process
+    record HermesEndpoint(String baseUrl, int apiPort, String key, boolean running) {
+    }
+
+    /// Kills brand processes left behind by a previous panel process.
+    ///
+    /// The JVM is their parent, so a crash or a `SIGKILL` leaves them orphaned
+    /// and holding ports; the next launch would then find `ports.json` pointing
+    /// at something that is not ours. Only pids this panel wrote **and** whose
+    /// command line still points into the instance are taken down — a pid file
+    /// can outlive its process by days, and the number can be reused.
+    ///
+    /// @param manager the manager to walk
+    public static void reconcile(BrandInstanceManager manager) {
+        List<BrandInstance> instances;
+        try {
+            instances = manager.list();
+        } catch (RuntimeException e) {
+            LOG.warning("Could not list brand instances for reconcile", e);
+            return;
+        }
+        for (BrandInstance instance : instances) {
+            if (!Brand.HERMES.id().equals(instance.brand())) {
+                continue;
+            }
+            Path home = manager.homeDirectory(instance);
+            Path pidDir = home.resolve("panel");
+            Path instanceDir = manager.instanceDirectory(instance.id());
+            for (String name : List.of("gateway.pid", "dashboard.pid")) {
+                Path pidFile = pidDir.resolve(name);
+                long pid = readPid(pidFile);
+                if (pid > 0) {
+                    ProcessHandle.of(pid).ifPresent(handle -> {
+                        if (!handle.isAlive()
+                                || handle.pid() == ProcessHandle.current().pid()
+                                || !underInstance(handle, instanceDir, home)) {
+                            return;
+                        }
+                        handle.descendants().forEach(ProcessHandle::destroyForcibly);
+                        handle.destroyForcibly();
+                        LOG.info("Killed orphaned Hermes process " + handle.pid()
+                                + " of instance " + instance.id());
+                    });
+                }
+                try {
+                    Files.deleteIfExists(pidFile);
+                } catch (IOException e) {
+                    LOG.info("Could not remove " + pidFile + ": " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    private static long readPid(Path file) {
+        try {
+            return Long.parseLong(Files.readString(file, StandardCharsets.UTF_8).trim());
+        } catch (IOException | RuntimeException e) {
+            return 0;
+        }
+    }
+
+    /// Whether a process's command line still points at this instance.
+    static boolean underInstance(ProcessHandle handle, Path instanceDir, Path home) {
+        String command = handle.info().commandLine().orElse("");
+        if (command.isEmpty()) {
+            return false;
+        }
+        return command.contains(instanceDir.toString()) || command.contains(home.toString());
+    }
+
+    /// Stops every running brand instance within one shared deadline.
+    ///
+    /// The panel's own shutdown hook calls this: `docker stop` sends `SIGTERM`
+    /// to PID 1 only, so without it a Hermes gateway outlives the panel until
+    /// the container's grace period expires — and on a bare deployment forever.
+    ///
+    /// @param deadlineMillis how long the whole call may take
+    public static void stopAll(long deadlineMillis) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(deadlineMillis);
+        List<String> ids = new ArrayList<>(PROCESSES.keySet());
+        ids.parallelStream().forEach(id -> {
+            try {
+                stopWithin(id, deadline);
+            } catch (RuntimeException e) {
+                LOG.warning("Could not stop brand instance " + id, e);
+            }
+        });
+    }
+
+    /// Stops one instance, never waiting past the shared deadline.
+    static void stopWithin(String id, long deadlineNanos) {
+        Process process = PROCESSES.get(id);
+        if (process == null || !process.isAlive()) {
+            PROCESSES.remove(id);
+            return;
+        }
+        long remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000L;
+        if (remainingMillis <= 0) {
+            process.destroyForcibly();
+            PROCESSES.remove(id);
+            STATES.put(id, State.STOPPED);
+            return;
+        }
+        ProcessTree.terminate(process, Math.min(stopWaitSecondsOf(id), remainingMillis / 1000L));
+        PROCESSES.remove(id);
+        STATES.put(id, State.STOPPED);
     }
 
     /// Removes ANSI colour escapes — OpenCode colours its banner even when the

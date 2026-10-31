@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -140,6 +141,34 @@ public final class Privileges {
             }
         }
     }
+
+    /// Whether a file or directory is one the agent reads *and* the panel writes with a
+    /// mode of its own: pnpm's `config.yaml`, a generated settings file.
+    ///
+    /// 0664 with the agent as owner. This is what the panel writes when it owns a file
+    /// that is not a secret but is consumed by a process running as uid 1000 — the
+    /// pair `PnpmConfigFile` used to keep privately, promoted here because a second
+    /// caller (the Hermes runtime) needs the same answer.
+    public static final Set<PosixFilePermission> AGENT_SHARED_FILE =
+            PosixFilePermissions.fromString("rw-rw-r--");
+
+    /// A directory with the same rule: the agent writes inside it, the panel may too.
+    public static final Set<PosixFilePermission> AGENT_SHARED_DIRECTORY =
+            PosixFilePermissions.fromString("rwxrwxr-x");
+
+    /// A secret the panel writes and only the agent may read: an `.env` carrying an API
+    /// key. 0600 with the agent as owner — the panel is root and gets in anyway.
+    public static final Set<PosixFilePermission> AGENT_PRIVATE_FILE =
+            PosixFilePermissions.fromString("rw-------");
+
+    /// A directory only the agent may enter: the pid and lock files of a supervised
+    /// process.
+    public static final Set<PosixFilePermission> AGENT_PRIVATE_DIRECTORY =
+            PosixFilePermissions.fromString("rwx------");
+
+    /// An executable only the agent may run: a generated launcher script.
+    public static final Set<PosixFilePermission> AGENT_PRIVATE_EXECUTABLE =
+            PosixFilePermissions.fromString("rwx------");
 
     /// Whether child processes are dropped to [#AGENT_UID] on this machine.
     public static boolean dropsChildren() {

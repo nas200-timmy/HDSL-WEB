@@ -86,7 +86,24 @@ public enum Brand {
     /// The instance id is an opaque token (the same construction every brand
     /// uses), so several Octop servers can coexist without sharing storage
     /// keys; the patched dashboard namespaces `auth_token` by its mount.
-    OCTOP("octop", Source.GITHUB_RELEASE, "https://github.com/TencentCloud/Octop", "v", false);
+    OCTOP("octop", Source.GITHUB_RELEASE, "https://github.com/TencentCloud/Octop", "v", false),
+
+    /// Hermes Agent (Nous Research, MIT): a Python agent with its own web
+    /// dashboard and an OpenAI-compatible gateway.
+    ///
+    /// Installed from the tag's source zip. Its packaging is deliberately not
+    /// pip: `setup.py` raises for wheel/sdist builds outside a Nix build
+    /// (editable installs are exempt, which is what `uv sync` does). Python
+    /// 3.14 and the two front-end products come from the version's own
+    /// `pm/lock.json` and the panel's Node; `hermes_cli/web_dist/index.html` is
+    /// the marker.
+    ///
+    /// Two processes, one wrapper: `hermes gateway run` (the OpenAI-compatible
+    /// API and the agent runtime) and `hermes dashboard` (the SPA the browser
+    /// talks to). The dashboard is prefix-aware — it reads
+    /// `X-Forwarded-Prefix` — so the proxy hands it the mount and stops
+    /// rewriting its pages; see [#serverSidePrefix].
+    HERMES("hermes", Source.GITHUB, "https://github.com/NousResearch/hermes-agent", "v", false);
 
     /// Where a brand's releases come from: an npm registry package, a GitHub
     /// repository's release tags (source zip over HTTPS, no git), or a GitHub
@@ -183,6 +200,12 @@ public enum Brand {
     /// package's executable (NPM) or the built web app (GITHUB). Octop's
     /// portable archive carries the SPA under `packages/octop/dashboard/`.
     public String installMarker() {
+        if (this == HERMES) {
+            // Published atomically by the upstream web build; its presence is the
+            // strongest marker this installer can have (the venv and the TUI are
+            // built before it).
+            return "hermes_cli/web_dist/index.html";
+        }
         if (this == OCTOP) {
             // Written by both installers (portable archive and local source),
             // so one marker proves either layout is complete.
@@ -195,9 +218,13 @@ public enum Brand {
     /// publishes beta tags such as `1.0.3b1`; the other brands are strict
     /// `x.y.z` to keep their CI noise out of the picker.
     public boolean isReleaseVersion(String version) {
-        String pattern = this == OCTOP
-                ? "^\\d+\\.\\d+\\.\\d+(?:[A-Za-z][0-9A-Za-z.-]*)?$"
-                : "^\\d+\\.\\d+\\.\\d+$";
+        String pattern = switch (this) {
+            case OCTOP -> "^\\d+\\.\\d+\\.\\d+(?:[A-Za-z][0-9A-Za-z.-]*)?$";
+            // Hermes also publishes date tags (`v2026.9.24`) that satisfy a plain
+            // three-part rule; a two-digit major keeps those and `+canary.*` out.
+            case HERMES -> "^\\d{1,2}\\.\\d+\\.\\d+$";
+            default -> "^\\d+\\.\\d+\\.\\d+$";
+        };
         return version.matches(pattern);
     }
 
@@ -214,6 +241,37 @@ public enum Brand {
     /// runtime shim keeps every request inside the mount.
     public boolean needsRouterShim() {
         return needsRouterShim;
+    }
+
+    /// Whether the brand's own server is prefix-aware: it reads
+    /// `X-Forwarded-Prefix` and emits every reference under it, so the proxy
+    /// must hand it the mount instead of rewriting its pages.
+    ///
+    /// A proxy that rewrote such a page anyway would double the mount
+    /// (`/i/<id>/i/<id>/assets/…`) and inject a shim the SPA does not want.
+    public boolean serverSidePrefix() {
+        return this == HERMES;
+    }
+
+    /// Whether the installer builds a Python environment from source (uv) rather
+    /// than unpacking an npm package or a portable archive.
+    public boolean pythonSource() {
+        return this == HERMES;
+    }
+
+    /// Whether the brand runs as two supervised processes behind one wrapper
+    /// script — the gateway and its dashboard.
+    public boolean companionProcess() {
+        return this == HERMES;
+    }
+
+    /// Seconds the panel waits for a graceful stop.
+    ///
+    /// Hermes' gateway drains for up to 30 s by default (an active runtime is
+    /// closed rather than killed), and the wrapper needs room to take both
+    /// children down after that.
+    public int stopWaitSeconds() {
+        return this == HERMES ? 40 : 10;
     }
 
     /// Whether instances of this brand can carry **plugins** that the panel

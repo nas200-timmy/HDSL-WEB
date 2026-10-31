@@ -857,6 +857,13 @@ public final class HdslServer {
     /// Stops Jetty, waiting for in-flight connections to drain, and ends every
     /// ACP console the bridge is holding.
     public void stop() throws Exception {
+        // Brand instances are children of the panel too — and unlike the
+        // terminal sessions they are long-running services (`kimi web`, a
+        // Hermes gateway). `docker stop` signals PID 1 only, so without this a
+        // Hermes gateway outlives the panel until the container's grace period
+        // expires, and on a bare deployment for good. The deadline is shared:
+        // N instances must not each spend their own 40 s window.
+        org.jackhuang.hmcl.web.brand.BrandRuntime.stopAll(25_000L);
         // The terminal processes are children of the panel; closing the
         // manager takes their process groups with it.
         terminals.close();

@@ -34,6 +34,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -47,10 +48,13 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
+import java.security.MessageDigest;
+import java.util.zip.GZIPInputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -201,6 +205,22 @@ public final class BrandInstaller {
     }
 
     @FunctionalInterface
+
+    /// A step body that may touch the filesystem: [StepBody] reports only
+    /// [BrandException], and an `IOException` here is the same kind of failure —
+    /// the message the user sees, with the path in it.
+    private interface IOBody {
+        void run() throws IOException, BrandException;
+    }
+
+    private static void ioStep(IOBody body) throws BrandException {
+        try {
+            body.run();
+        } catch (IOException e) {
+            throw new BrandException(e.getMessage() == null ? e.toString() : e.getMessage(), e);
+        }
+    }
+
     private interface StepBody {
         void run() throws BrandException;
     }
@@ -885,6 +905,13 @@ public final class BrandInstaller {
             pointCurrentAt(brandRoot, target);
             return;
         }
+        if (brand == Brand.HERMES) {
+            installHermes(brand, version, brandRoot, target, message);
+            pointCurrentAt(brandRoot, target);
+            message.accept("Installed " + brand.sourceLabel() + " " + version);
+            LOG.info("Installed " + brand.sourceLabel() + " " + version + " into " + target);
+            return;
+        }
         if (brand == Brand.OCTOP) {
             installOctop(brand, version, brandRoot, target, message);
             pointCurrentAt(brandRoot, target);
@@ -1266,6 +1293,490 @@ public final class BrandInstaller {
             writeMarker(target, "source", version);
         });
         message.report("Installed Octop " + version + " from source · 100%", 1.0);
+    }
+
+
+    // ---------------------------------------------------------------- Hermes --
+    //
+    // Hermes is installed from the tag's source zip and built locally, because
+    // upstream publishes no wheel for a plain install (its `setup.py` refuses
+    // wheel/sdist builds outside a Nix sandbox; editable installs are the
+    // sanctioned path, which is exactly what `uv sync` does).
+    //
+    // Three things come from the version's **own** `pm/lock.json` rather than
+    // from constants in this file: the uv release, the CPython build, and their
+    // download artifacts. A pinned uv here would be the next version's bug —
+    // v0.22.5's `uv.lock` is revision 5 and the panel's 0.7.13 cannot parse it
+    // (measured: "invalid lock revision"), the same for 0.9.9.
+    //
+    // The release directory is **not** renamed into place afterwards (unlike
+    // Octop): the venv is an editable install whose `direct_url.json` and PEP
+    // 660 finder carry absolute paths, so a rename breaks `hermes` itself.
+
+    /// The key `pm/lock.json` files its artifacts under, or `null` on a
+    /// platform upstream does not ship for.
+    static @Nullable String hermesPlatform() {
+        String arch = switch (Architecture.CURRENT_ARCH) {
+            case X86_64 -> "x64";
+            case ARM64 -> "arm64";
+            default -> null;
+        };
+        if (arch == null) {
+            return null;
+        }
+        return switch (OperatingSystem.CURRENT_OS) {
+            case LINUX -> "linux-" + arch;
+            case MACOS -> "darwin-" + arch;
+            default -> null;
+        };
+    }
+
+    /// One downloadable artifact: content address plus the fallback URL.
+    record HermesArtifact(String sha256, String url) {
+    }
+
+    /// What `pm/lock.json` pins for one Hermes version.
+    record HermesLock(String uvVersion, HermesArtifact uv, String pythonVersion, HermesArtifact python) {
+    }
+
+    /// Where upstream publishes every artifact it pins, by content address
+    /// (measured 1.9 MB/s against 41 KB/s from the origins themselves).
+    static final String HERMES_CDN = "https://hermes-assets.nousresearch.com/upstream/sha256/";
+
+    /// Reads the versions and artifacts one release pins.
+    ///
+    /// @param release the unpacked source tree
+    /// @return the four values this installer needs
+    /// @throws BrandException when the file is missing, unreadable, or does not
+    ///                          name this platform
+    static HermesLock readHermesLock(Path release) throws BrandException {
+        Path file = release.resolve("pm").resolve("lock.json");
+        String platform = hermesPlatform();
+        if (platform == null) {
+            throw new BrandException("Hermes has no build for " + OperatingSystem.CURRENT_OS
+                    + "/" + Architecture.CURRENT_ARCH + " (pm/lock.json names no artifacts for it)");
+        }
+        try {
+            JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
+                    .getAsJsonObject();
+            JsonObject packages = root.getAsJsonObject("packages");
+            JsonObject uv = packages.getAsJsonObject("uv");
+            JsonObject python = packages.getAsJsonObject("python");
+            return new HermesLock(
+                    uv.get("version").getAsString(),
+                    artifactOf(uv, platform),
+                    python.get("version").getAsString(),
+                    artifactOf(python, platform));
+        } catch (IOException | RuntimeException e) {
+            throw new BrandException("Could not read " + file + ": " + e.getMessage(), e);
+        }
+    }
+
+    private static HermesArtifact artifactOf(JsonObject entry, String platform) throws BrandException {
+        JsonObject artifacts = entry.getAsJsonObject("artifacts");
+        JsonObject artifact = artifacts == null ? null : artifacts.getAsJsonObject(platform);
+        if (artifact == null) {
+            throw new BrandException("pm/lock.json pins no artifact for " + platform);
+        }
+        return new HermesArtifact(artifact.get("sha256").getAsString(), artifact.get("url").getAsString());
+    }
+
+    /// Downloads an artifact by content address, falling back to the URL the
+    /// lock names, and verifies the digest either way.
+    static void downloadArtifact(HermesArtifact artifact, Path destination, Consumer<String> message)
+            throws BrandException {
+        String fromCdn = HERMES_CDN + artifact.sha256();
+        try {
+            message.accept("Downloading " + fromCdn);
+            copyVerified(download(fromCdn), destination, artifact.sha256());
+            return;
+        } catch (BrandException e) {
+            message.accept("Upstream CDN did not serve it (" + e.getMessage() + "); trying " + artifact.url());
+        }
+        copyVerified(download(artifact.url()), destination, artifact.sha256());
+    }
+
+    private static void copyVerified(InputStream in, Path destination, String expectedSha)
+            throws BrandException {
+        try (in) {
+            Files.createDirectories(destination.getParent());
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (OutputStream out = Files.newOutputStream(destination,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE)) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = in.read(buffer)) > 0) {
+                    digest.update(buffer, 0, read);
+                    out.write(buffer, 0, read);
+                }
+            }
+            String actual = HexFormat.of().formatHex(digest.digest());
+            if (!actual.equalsIgnoreCase(expectedSha)) {
+                Files.deleteIfExists(destination);
+                throw new BrandException("Downloaded artifact does not match its sha256 (expected "
+                        + expectedSha + ", got " + actual + ")");
+            }
+        } catch (IOException e) {
+            throw new BrandException("Could not store " + destination + ": " + e.getMessage(), e);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new BrandException("SHA-256 is unavailable in this JVM", e);
+        }
+    }
+
+    /// Unpacks a `.tar.gz` (the shape both of Hermes' toolchain artifacts have),
+    /// keeping symbolic links — CPython's `bin/python3` is a link to the
+    /// interpreter, and a copy would break `hermes`'s shebang resolution.
+    static void extractTarGz(Path archive, Path destination, java.util.function.BooleanSupplier cancelled)
+            throws BrandException {
+        try (InputStream raw = Files.newInputStream(archive);
+             InputStream gzip = new GZIPInputStream(raw);
+             kala.compress.archivers.tar.TarArchiveInputStream tar =
+                     new kala.compress.archivers.tar.TarArchiveInputStream(gzip)) {
+            kala.compress.archivers.tar.TarArchiveEntry entry;
+            while ((entry = tar.getNextEntry()) != null) {
+                if (cancelled.getAsBoolean()) {
+                    throw new BrandException("Install cancelled");
+                }
+                Path target = resolveInside(destination, entry.getName());
+                if (target == null) {
+                    continue;
+                }
+                if (entry.isDirectory()) {
+                    Files.createDirectories(target);
+                    continue;
+                }
+                Files.createDirectories(target.getParent());
+                if (entry.isSymbolicLink()) {
+                    Files.deleteIfExists(target);
+                    Files.createSymbolicLink(target, Path.of(entry.getLinkName()));
+                    continue;
+                }
+                try (OutputStream out = Files.newOutputStream(target,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+                        StandardOpenOption.WRITE)) {
+                    tar.transferTo(out);
+                }
+                if ((entry.getMode() & 0111) != 0) {
+                    try {
+                        Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("rwxr-xr-x"));
+                    } catch (UnsupportedOperationException ignored) {
+                        // Windows: no mode bits.
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new BrandException("Could not unpack " + archive.getFileName() + ": " + e.getMessage(), e);
+        }
+    }
+
+    private static @Nullable Path resolveInside(Path root, String name) {
+        Path candidate = root.resolve(name).normalize();
+        return candidate.startsWith(root.normalize()) ? candidate : null;
+    }
+
+    /// The install itself: eleven stages, each one a step the panel shows.
+    ///
+    /// @param brand     the brand (for messages)
+    /// @param version   the exact version
+    /// @param brandRoot `<data>/brands/hermes`
+    /// @param target    `releases/<version>`, written **in place**
+    static void installHermes(Brand brand, String version, Path brandRoot, Path target, Sink message)
+            throws BrandException {
+        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
+            throw new BrandException("Hermes is not supported on Windows yet: its install builds a Python "
+                    + "environment from source, and this panel does not manage that toolchain there");
+        }
+        String platform = hermesPlatform();
+        if (platform == null) {
+            throw new BrandException("Hermes has no build for " + OperatingSystem.CURRENT_OS
+                    + "/" + Architecture.CURRENT_ARCH);
+        }
+        if (Files.exists(target)) {
+            // In place, never renamed: an editable venv carries absolute paths.
+            FileUtils.deleteDirectoryQuietly(target);
+        }
+        Path log = brandRoot.resolve(INSTALL_LOG);
+        int total = 11;
+
+        String archive = BrandSources.archive().url();
+        String url = archive.replaceAll("/$", "") + "/" + brand.githubSlug() + "/zip/refs/tags/"
+                + brand.releaseTag(version);
+        stage(message, 0, total, "下载源码", 0.00, 0.04, 60, () -> {
+            message.accept("Downloading " + url);
+            extractZip(download(url, message, "下载源码"), target, message::cancelled);
+        });
+
+        HermesLock lock = readHermesLock(target);
+        message.accept("Lock: uv " + lock.uvVersion() + " · CPython " + lock.pythonVersion());
+
+        Path toolchain = brandRoot.resolve("toolchain");
+        Path[] uvHolder = new Path[1];
+        stage(message, 1, total, "准备 uv " + lock.uvVersion(), 0.04, 0.03, 30, () -> ioStep(() -> {
+            Path uv = toolchain.resolve("uv");
+            if (!Files.isRegularFile(uv)) {
+                Path archiveFile = Files.createTempFile(toolchain, "uv", ".tar.gz");
+                try {
+                    downloadArtifact(lock.uv(), archiveFile, message);
+                    Path unpacked = Files.createTempDirectory(toolchain, "uv-");
+                    extractTarGz(archiveFile, unpacked, message::cancelled);
+                    Path binary;
+                    try (Stream<Path> walk = Files.walk(unpacked, 3)) {
+                        binary = walk.filter(path -> path.getFileName().toString().equals("uv"))
+                                .filter(Files::isRegularFile)
+                                .findFirst()
+                                .orElseThrow(() -> new BrandException(
+                                        "the uv archive holds no `uv` binary"));
+                    }
+                    Files.move(binary, uv, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    Files.setPosixFilePermissions(uv, PosixFilePermissions.fromString("rwxr-xr-x"));
+                    FileUtils.deleteDirectoryQuietly(unpacked);
+                } finally {
+                    Files.deleteIfExists(archiveFile);
+                }
+            }
+            uvHolder[0] = uv;
+        }));
+
+        Path[] pythonHolder = new Path[1];
+        stage(message, 2, total, "准备 CPython " + lock.pythonVersion(), 0.07, 0.12, 120, () -> ioStep(() -> {
+            Path pythonRoot = toolchain.resolve("python");
+            Files.createDirectories(pythonRoot);
+            Path destination = pythonRoot.resolve(lock.pythonVersion());
+            Path python = findInterpreter(destination);
+            if (python == null) {
+                Path archiveFile = Files.createTempFile(pythonRoot, "python", ".tar.gz");
+                try {
+                    downloadArtifact(lock.python(), archiveFile, message);
+                    extractTarGz(archiveFile, destination, message::cancelled);
+                } finally {
+                    Files.deleteIfExists(archiveFile);
+                }
+                python = findInterpreter(destination);
+            }
+            if (python == null) {
+                throw new BrandException("the CPython archive holds no interpreter under " + destination);
+            }
+            pythonHolder[0] = python;
+        }));
+
+        Path[] lockBackup = new Path[1];
+        stage(message, 3, total, "改写 lock 的下载源", 0.19, 0.02, 20, () -> ioStep(() -> {
+            Path lockFile = target.resolve("uv.lock");
+            String mirror = BrandSources.pypi().url();
+            String origin = originOf(mirror);
+            if (origin.isEmpty() || mirror.startsWith("https://pypi.org")) {
+                // Nothing to rewrite: the packages are already where uv looks.
+                return;
+            }
+            String text = Files.readString(lockFile, StandardCharsets.UTF_8);
+            String rewritten = text.replace("https://files.pythonhosted.org/packages/",
+                    origin + "/packages/");
+            if (!rewritten.equals(text)) {
+                Path backup = lockFile.resolveSibling("uv.lock.orig");
+                Files.copy(lockFile, backup, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                Files.writeString(lockFile, rewritten, StandardCharsets.UTF_8);
+                lockBackup[0] = backup;
+                message.accept("Rewrote the package hosts in uv.lock to " + origin);
+            }
+        }));
+
+        Map<String, String> pythonEnv = new HashMap<>();
+        pythonEnv.put("UV_CACHE_DIR", brandRoot.resolve("cache/uv").toString());
+        pythonEnv.put("UV_LINK_MODE", "copy");
+        pythonEnv.put("PYTHONDONTWRITEBYTECODE", "1");
+        pythonEnv.put("UV_NO_PROGRESS", "1");
+        pythonEnv.put("PIP_INDEX_URL", BrandSources.pypi().url());
+        stage(message, 4, total, "安装 Python 依赖（uv sync --extra all）", 0.21, 0.55, 300, () ->
+                runChecked(List.of(uvHolder[0].toString(), "sync", "--frozen", "--no-dev",
+                                "--python", pythonHolder[0].toString(), "--extra", "all"),
+                        target, pythonEnv, log, message, "installing the Python environment"));
+
+        Path venv = target.resolve(".venv");
+        Path venvPython = venv.resolve("bin/python");
+        stage(message, 5, total, "写 install-stamp", 0.76, 0.02, 10, () -> {
+            Path script = target.resolve("scripts/write_install_stamp.py");
+            if (!Files.isRegularFile(script)) {
+                throw new BrandException("the source has no scripts/write_install_stamp.py");
+            }
+            List<String> command = new ArrayList<>(List.of(venvPython.toString(), script.toString(),
+                    "-o", target.resolve("install-stamp.json").toString(),
+                    "--base-version", version,
+                    "--update-mechanism", "external",
+                    "--source", "zip"));
+            String commit = tagCommit(brand, version);
+            if (!commit.isEmpty()) {
+                command.add("--commit");
+                command.add(commit);
+            }
+            runChecked(command, target, Map.of(), log, message, "writing the install stamp");
+        });
+
+        DshNodeRuntime node = DshNodeRuntime.detect()
+                .or(DshNodeRuntime::detectManaged)
+                .orElseThrow(() -> new BrandException("Node.js was not found on PATH and no panel-managed "
+                        + "runtime is installed; building Hermes needs one (Settings -> Node.js)"));
+        Map<String, String> nodeEnv = new HashMap<>(node.pathEnvironment());
+        nodeEnv.put("npm_config_registry", NpmRegistry.effective().registry());
+        Path products = brandRoot.resolve("products").resolve(version);
+        Path icons = products.resolve("icons");
+        Path tuiOut = products.resolve("tui");
+        Path webOut = target.resolve("hermes_cli/web_dist");
+
+        stage(message, 6, total, "生成图标", 0.78, 0.03, 30, () -> {
+            Map<String, String> env = new HashMap<>(nodeEnv);
+            env.put("HERMES_PYTHON", venvPython.toString());
+            runChecked(List.of("node", "scripts/generate-icons.mjs",
+                            "--source", target.toString(), "--out", icons.toString()),
+                    target, env, log, message, "generating the icons");
+        });
+
+        stage(message, 7, total, "安装前端依赖（node-deps）", 0.81, 0.08, 120, () ->
+                runChecked(List.of("node", "scripts/build/node-deps.mjs",
+                                "--source", target.toString(),
+                                "--workspace", "ui-tui", "--workspace", "web"),
+                        target, nodeEnv, log, message, "installing the front-end dependencies"));
+
+        stage(message, 8, total, "构建 web 工作台", 0.89, 0.06, 120, () ->
+                runChecked(List.of("node", "scripts/build/web.mjs",
+                                "--source", target.toString(),
+                                "--icons", icons.toString(),
+                                "--out", webOut.toString()),
+                        target, nodeEnv, log, message, "building the web dashboard"));
+
+        stage(message, 9, total, "构建 TUI", 0.95, 0.03, 60, () -> ioStep(() -> {
+            runChecked(List.of("node", "scripts/build/tui.mjs",
+                            "--source", target.toString(), "--out", tuiOut.toString()),
+                    target, nodeEnv, log, message, "building the TUI");
+            Path tuiDist = target.resolve("hermes_cli/tui_dist");
+            FileUtils.deleteDirectoryQuietly(tuiDist);
+            Files.createDirectories(tuiDist);
+            Path built = tuiOut.resolve("dist");
+            if (!Files.isDirectory(built)) {
+                throw new BrandException("the TUI build produced no dist under " + tuiOut);
+            }
+            copyTree(built, tuiDist);
+            Path packageJson = tuiOut.resolve("package.json");
+            if (Files.isRegularFile(packageJson)) {
+                Files.copy(packageJson, tuiDist.resolve("package.json"),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+        }));
+
+        stage(message, 10, total, "收尾（恢复 lock、清理、断言）", 0.98, 0.02, 30, () -> ioStep(() -> {
+            if (lockBackup[0] != null) {
+                Files.move(lockBackup[0], target.resolve("uv.lock"),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            pruneHermesBuild(target, brandRoot, products);
+            for (String marker : List.of("hermes_cli/web_dist/index.html",
+                    "hermes_cli/tui_dist/entry.js", ".venv/bin/hermes", "install-stamp.json")) {
+                if (!Files.exists(target.resolve(marker))) {
+                    throw new BrandException("Hermes " + version + " built without " + marker);
+                }
+            }
+        }));
+        message.report("Installed Hermes " + version + " from source · 100%", 1.0);
+    }
+
+    /// The interpreter inside an unpacked CPython artifact (`python/bin/python3.14`
+    /// in the `install_only` archives).
+    static @Nullable Path findInterpreter(Path root) {
+        if (!Files.isDirectory(root)) {
+            return null;
+        }
+        try (Stream<Path> walk = Files.walk(root, 4)) {
+            return walk.filter(Files::isRegularFile)
+                    .filter(path -> path.getParent() != null
+                            && "bin".equals(path.getParent().getFileName().toString()))
+                    .filter(path -> path.getFileName().toString().matches("python3\\.\\d+"))
+                    .findFirst()
+                    .orElse(null);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /// `https://host[:port]` of a URL, or `""`.
+    static String originOf(String url) {
+        try {
+            URI uri = URI.create(url);
+            if (uri.getScheme() == null || uri.getHost() == null) {
+                return "";
+            }
+            return uri.getScheme() + "://" + uri.getHost()
+                    + (uri.getPort() > 0 ? ":" + uri.getPort() : "");
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
+    /// The commit a release tag points at, for the install stamp.
+    ///
+    /// The REST API's `/commits/<tag>` answers the commit itself; `git
+    /// rev-parse` on an annotated tag would give the tag object's sha, which
+    /// upstream's stamp treats as a fallback and discards.
+    static String tagCommit(Brand brand, String version) {
+        String slug = brand.githubSlug();
+        if (slug.isEmpty()) {
+            return "";
+        }
+        String url = "https://api.github.com/repos/" + slug + "/commits/" + brand.releaseTag(version);
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                    .timeout(Duration.ofSeconds(20))
+                    .header("Accept", "application/vnd.github+json")
+                    .GET()
+                    .build();
+            HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() / 100 != 2) {
+                LOG.info("GitHub answered " + response.statusCode() + " for " + url);
+                return "";
+            }
+            return JsonParser.parseString(response.body()).getAsJsonObject()
+                    .get("sha").getAsString();
+        } catch (IOException | RuntimeException e) {
+            LOG.info("Could not resolve the commit of " + brand.releaseTag(version) + ": " + e.getMessage());
+            return "";
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "";
+        }
+    }
+
+    /// Deletes what the build needed and the runtime does not: the dependency
+    /// trees and the staging products (983 MB → 570 MB, measured).
+    static void pruneHermesBuild(Path target, Path brandRoot, Path products) {
+        for (String relative : List.of("node_modules", "web/node_modules", "ui-tui/node_modules",
+                "tests-js/node_modules")) {
+            FileUtils.deleteDirectoryQuietly(target.resolve(relative));
+        }
+        Path apps = target.resolve("apps");
+        if (Files.isDirectory(apps)) {
+            try (Stream<Path> entries = Files.list(apps)) {
+                for (Path app : entries.toList()) {
+                    FileUtils.deleteDirectoryQuietly(app.resolve("node_modules"));
+                }
+            } catch (IOException e) {
+                LOG.info("Could not prune " + apps + ": " + e.getMessage());
+            }
+        }
+        FileUtils.deleteDirectoryQuietly(products);
+    }
+
+    private static void copyTree(Path source, Path destination) throws IOException {
+        try (Stream<Path> walk = Files.walk(source)) {
+            for (Path path : walk.toList()) {
+                Path relative = source.relativize(path);
+                Path target = destination.resolve(relative.toString());
+                if (Files.isDirectory(path)) {
+                    Files.createDirectories(target);
+                } else {
+                    Files.createDirectories(target.getParent());
+                    Files.copy(path, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+        }
     }
 
     /// Finds a usable `uv`: PATH first, then a per-brand copy downloaded from

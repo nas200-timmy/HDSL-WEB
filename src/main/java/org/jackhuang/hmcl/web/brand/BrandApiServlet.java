@@ -126,6 +126,10 @@ public final class BrandApiServlet extends HttpServlet {
             // Directories a delete could not remove (something held a file inside) were
             // renamed aside; at startup whatever held them is most likely gone.
             manager.sweepTombstones();
+            // A previous panel process may have died without stopping its
+            // children; they hold ports, and `ports.json` would then point at
+            // something that is not ours. Reconcile before anything can launch.
+            BrandRuntime.reconcile(manager);
             brands.put(brand, new PathRef(root, manager));
         }
     }
