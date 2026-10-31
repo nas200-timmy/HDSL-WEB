@@ -1033,7 +1033,13 @@ public final class BrandRuntime {
             // script only has to be executable for that user.
             makeExecutable(wrapper);
         }
-        return new LaunchPlan(List.of("/bin/sh", wrapper.toString()), Map.of(), ports.dashboard());
+        return new LaunchPlan(List.of("/bin/sh", wrapper.toString(),
+                home.toString(),
+                Integer.toString(ports.api()),
+                Integer.toString(ports.dashboard()),
+                packageDir.resolve("hermes_cli/web_dist").toString(),
+                packageDir.resolve(".venv").toString()),
+                Map.of(), ports.dashboard());
     }
 
     /// Reads (or allocates) the instance's port pair.

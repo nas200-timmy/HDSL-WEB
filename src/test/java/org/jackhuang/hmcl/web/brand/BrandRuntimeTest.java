@@ -150,6 +150,27 @@ class BrandRuntimeTest {
     }
 
     @Test
+    void hermesPlanPassesTheWrapperItsFiveArguments() throws IOException {
+        Path brandRoot = Files.createDirectories(dir.resolve("hermes"));
+        BrandInstanceManager manager = new BrandInstanceManager(Brand.HERMES, brandRoot.resolve("instances"));
+        BrandInstance instance = new BrandInstance("abc", "hermes", "demo", "0.22.5", null, 0, 1);
+        Path pkg = Files.createDirectories(dir.resolve("hermes-rel"));
+
+        BrandRuntime.LaunchPlan plan = BrandRuntime.hermesPlan(manager, instance, pkg);
+
+        List<String> command = plan.command();
+        assertEquals("/bin/sh", command.get(0));
+        assertEquals(manager.instanceDirectory(instance.id()).resolve("panel/wrapper.sh").toString(),
+                command.get(1));
+        assertEquals(manager.homeDirectory(instance).toString(), command.get(2));
+        assertTrue(command.get(3).matches("\\d+"), command.toString());
+        assertTrue(command.get(4).matches("\\d+"), command.toString());
+        assertEquals(pkg.resolve("hermes_cli/web_dist").toString(), command.get(5));
+        assertEquals(pkg.resolve(".venv").toString(), command.get(6));
+        assertEquals(7, command.size(), command.toString());
+    }
+
+    @Test
     void npmBrandPlansCarryNoEnvironment() throws IOException {
         Path pkg = prefix(Brand.KIMI);
         BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1);
