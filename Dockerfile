@@ -192,6 +192,12 @@ LABEL org.opencontainers.image.licenses="GPL-3.0-only"
 #                  Without this, "grab a frame from this mp4" ends in an agent
 #                  pulling ffmpeg-static from npm: a second, unrelated copy of
 #                  a binary this image can carry once, for every instance.
+# libatomic1       Node.js' official builds link libatomic.so.1, which
+#                  debian:trixie-slim does not ship. Without it a managed
+#                  runtime unpacks, reports its version, passes every check the
+#                  panel made — and then dies with "error while loading shared
+#                  libraries" the moment anything runs it. 0.1 MB against a
+#                  silent failure on the one-click path.
 ARG NODE_VERSION=22.23.1
 ARG PNPM_VERSION=11.28.2
 # Node 官方 dist 的下载基址。国内网络直连 nodejs.org 会 TLS 握手失败（curl exit 35），
@@ -212,6 +218,7 @@ RUN apt-get update \
       git \
       golang-go \
       less \
+      libatomic1 \
       libavcodec-extra \
       nano \
       openjdk-21-jdk-headless \

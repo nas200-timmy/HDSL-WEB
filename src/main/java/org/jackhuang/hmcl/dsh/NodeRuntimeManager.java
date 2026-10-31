@@ -45,6 +45,9 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -333,6 +336,10 @@ public final class NodeRuntimeManager {
         if (!runtime.isUsable()) {
             throw new DshException("Node.js " + normalized + " unpacked without a node executable");
         }
+        // Unpacked is not the same as runnable: a binary whose shared libraries
+        // are missing passes every check up to here and then fails everywhere
+        // else, so the install is the last place that can say why.
+        verifyRunnable(runtime);
 
         provisionPnpm(runtime, onStage);
 
@@ -414,29 +421,135 @@ public final class NodeRuntimeManager {
     /// @param directory the directory holding `bin/node`
     /// @return the version, or `null` when there is no usable node there
     public static @Nullable String versionOfDirectory(Path directory) {
+        return probe(directory).version();
+    }
+
+    /// What running a runtime's own binary said about it.
+    ///
+    /// Unpacking only checks that `bin/node` is *there*. A binary that is there
+    /// and cannot start is the shape that used to look like a finished install:
+    /// the files are in place, the version in the directory name is right, and
+    /// every later step fails on its own terms — `exit 127` from `npm`, a line
+    /// in the log nobody reads. The usual cause is a shared library the base
+    /// image does not ship: Node's official builds link `libatomic.so.1`, which
+    /// Debian's slim images leave out.
+    ///
+    /// @param version the version the binary reported, or `null` when it did not run
+    /// @param detail  what the process said, kept verbatim for the failure message
+    record NodeProbe(@Nullable String version, String detail) {
+
+        /// Whether the binary answered.
+        boolean runs() {
+            return version != null;
+        }
+    }
+
+    /// Runs `<runtime>/bin/node --version` and keeps its output.
+    ///
+    /// The read is bounded on purpose: a binary that floods its output because
+    /// it is failing must not keep this thread filling a buffer while the
+    /// process it is supposed to be timing stays blocked on a full pipe.
+    static NodeProbe probe(Path directory) {
         Path node = RuntimeLayout.CURRENT.node(directory);
         if (!Files.isRegularFile(node)) {
-            return null;
+            return new NodeProbe(null, "there is no " + node.getFileName() + " under " + directory);
         }
+        Process process;
         try {
-            Process process = new ProcessBuilder(
-                    org.jackhuang.hmcl.util.platform.Executables.startableProgram(node.toString()), "--version")
+            process = new ProcessBuilder(
+                    org.jackhuang.hmcl.util.platform.Executables.startableProgram(node.toString()),
+                    "--version")
                     .redirectErrorStream(true)
                     .start();
-            String output;
-            try (var reader = process.inputReader()) {
-                output = reader.readLine();
-            }
-            if (!process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS) || process.exitValue() != 0) {
-                return null;
-            }
-            return output == null || output.isBlank() ? null : output.trim().replaceFirst("^v", "");
         } catch (IOException e) {
-            return null;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return null;
+            return new NodeProbe(null, String.valueOf(e.getMessage()));
         }
+        String output;
+        try (var reader = process.inputReader()) {
+            StringBuilder collected = new StringBuilder();
+            char[] buffer = new char[1024];
+            int read;
+            while (collected.length() < 4096 && (read = reader.read(buffer)) >= 0) {
+                collected.append(buffer, 0, read);
+            }
+            output = collected.toString().strip();
+        } catch (IOException e) {
+            process.destroyForcibly();
+            return new NodeProbe(null, String.valueOf(e.getMessage()));
+        }
+        try {
+            if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return new NodeProbe(null, "node --version did not answer within 10 seconds");
+            }
+        } catch (InterruptedException e) {
+            process.destroyForcibly();
+            Thread.currentThread().interrupt();
+            return new NodeProbe(null, "interrupted while asking node for its version");
+        }
+        if (process.exitValue() != 0) {
+            return new NodeProbe(null, output.isEmpty()
+                    ? "node --version exited with " + process.exitValue()
+                    : output);
+        }
+        String first = output.lines().findFirst().orElse("").strip();
+        String version = first.replaceFirst("^v", "");
+        return version.isEmpty() || !Character.isDigit(version.charAt(0))
+                ? new NodeProbe(null, "node --version printed " + output)
+                : new NodeProbe(version, output);
+    }
+
+    /// Probe results by runtime directory, keyed by the binary's own timestamp.
+    private static final Map<Path, CachedProbe> PROBES = new ConcurrentHashMap<>();
+
+    private record CachedProbe(long modified, NodeProbe probe) {
+    }
+
+    /// Whether this runtime's binary actually starts.
+    ///
+    /// Cached per directory and invalidated by the binary's modification time:
+    /// the settings page asks on every poll, and spawning one process per poll
+    /// per runtime is not a cost worth paying for a question whose answer only
+    /// changes when the files do.
+    ///
+    /// @param runtime a managed runtime
+    /// @return `false` when the binary is missing, cannot load, or does not answer
+    public static boolean runs(NodeRuntime runtime) {
+        Path node = RuntimeLayout.CURRENT.node(runtime.directory());
+        long modified;
+        try {
+            modified = Files.getLastModifiedTime(node).toMillis();
+        } catch (IOException e) {
+            return false;
+        }
+        CachedProbe cached = PROBES.get(runtime.directory());
+        if (cached != null && cached.modified() == modified) {
+            return cached.probe().runs();
+        }
+        NodeProbe fresh = probe(runtime.directory());
+        PROBES.put(runtime.directory(), new CachedProbe(modified, fresh));
+        return fresh.runs();
+    }
+
+    /// Refuses a runtime whose binary does not run, removing it.
+    ///
+    /// Called once the archive is unpacked and before anything is installed into
+    /// it: a snapshot that cannot execute is not a runtime, and leaving it in
+    /// the list is what made "task done" and "every install exits 127" coexist.
+    ///
+    /// @param runtime the freshly unpacked runtime
+    /// @throws DshException naming the binary's own words
+    static void verifyRunnable(NodeRuntime runtime) throws DshException {
+        NodeProbe probe = probe(runtime.directory());
+        if (probe.runs()) {
+            return;
+        }
+        FileUtils.deleteQuietly(runtime.directory());
+        PROBES.remove(runtime.directory());
+        throw new DshException("Node.js " + runtime.version() + " unpacked but does not run: "
+                + probe.detail()
+                + " — the base image is probably missing a shared library Node.js needs"
+                + " (libatomic1 on Debian-based images)");
     }
 
     /// Adopts a Node installation the user already has.
@@ -471,6 +584,10 @@ public final class NodeRuntimeManager {
         if (!runtime.isUsable()) {
             throw new DshException("The chosen directory does not contain a usable Node.js installation");
         }
+        // The copy is what gets run from now on, so the copy is what has to run:
+        // a tree whose links did not survive the move answers here, not on the
+        // first install someone starts.
+        verifyRunnable(runtime);
         provisionPnpm(runtime, null);
         return runtime;
     }
@@ -517,6 +634,7 @@ public final class NodeRuntimeManager {
         } catch (IOException e) {
             throw new DshException("Failed to remove " + runtime.directory(), e);
         }
+        PROBES.remove(runtime.directory());
         LOG.info("Removed Node.js " + version);
     }
 

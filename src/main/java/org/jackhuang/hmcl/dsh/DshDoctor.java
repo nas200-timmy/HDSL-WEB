@@ -117,7 +117,12 @@ public final class DshDoctor {
         }
 
         out.println("JavaScript toolchain");
-        Optional<DshNodeRuntime> detected = DshNodeRuntime.detect();
+        // The launch path is `detect().or(detectManaged)`: a bare deployment
+        // installs its Node from this panel's own settings page, so a doctor that
+        // only looked at PATH answered "NOT FOUND" over a panel that was running
+        // instances perfectly well.
+        Optional<DshNodeRuntime> system = DshNodeRuntime.detect();
+        Optional<DshNodeRuntime> detected = system.isPresent() ? system : DshNodeRuntime.detectManaged();
         boolean runtimeOk;
         if (detected.isEmpty()) {
             out.println("  node:  NOT FOUND");
@@ -126,6 +131,7 @@ public final class DshDoctor {
         } else {
             DshNodeRuntime runtime = detected.get();
             out.println("  node:  " + runtime.nodeVersion() + "  (" + runtime.node() + ")"
+                    + (system.isPresent() ? "" : "  [panel-managed runtime]")
                     + (runtime.isNodeSupported() ? "  [supported]" : "  [UNSUPPORTED]"));
             out.println("  npm:   " + describe(runtime.npm(), runtime.npmVersion()));
             boolean pnpmTooOld = DshVersionManager.isPnpmTooOld(runtime.pnpmVersion());

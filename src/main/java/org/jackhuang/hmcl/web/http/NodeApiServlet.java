@@ -77,7 +77,7 @@ public final class NodeApiServlet extends HttpServlet {
         body.add("managed", Json.GSON.toJsonTree(managed.stream().map(runtime -> {
             JsonObject entry = new JsonObject();
             entry.addProperty("version", runtime.version());
-            entry.addProperty("suitable", DshNodeRuntime.isSupportedNodeVersion(runtime.version()));
+            entry.addProperty("suitable", suitable(runtime));
             entry.addProperty("node", runtime.node().toString());
             // "Does this runtime have pnpm" is a layout question, not a `bin/` one:
             // on Windows the shim is `pnpm.cmd` in the distribution root, and
@@ -153,6 +153,21 @@ public final class NodeApiServlet extends HttpServlet {
     /// index (tries the chosen source, then the other).
     private static String newestSupported(NodeSource source) throws Exception {
         return pickNewestSupported(NodeRuntimeManager.fetchReleases(source));
+    }
+
+    /// Whether a managed runtime is one this panel can actually use.
+    ///
+    /// It used to mean "the version is inside the supported range", which is how
+    /// a runtime whose binary cannot start — Node's official builds link
+    /// `libatomic.so.1`, and Debian's slim images do not ship it — was
+    /// advertised as `suitable: true` while every install on it exited 127.
+    /// The answer is cached inside [NodeRuntimeManager#runs].
+    ///
+    /// @param runtime a managed runtime
+    /// @return whether it is both supported and able to run
+    static boolean suitable(NodeRuntime runtime) {
+        return DshNodeRuntime.isSupportedNodeVersion(runtime.version())
+                && NodeRuntimeManager.runs(runtime);
     }
 
     /// Picks the version one-click install should use.

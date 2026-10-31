@@ -657,6 +657,12 @@ WantedBy=multi-user.target
    这时回到第 1 条更省事。
 3. **容器**：官方镜像里已经带好 Node 22 + pnpm，见 README「方式一」。
 
+> **精简基础镜像要补 `libatomic1`**。Node 26 起的官方二进制链接 `libatomic.so.1`，而
+> `debian:*-slim`、`ubuntu:*-minimal` 这类镜像不带它。缺了的表现是"装得上、跑不起来"：
+> 解包正常、版本号正常，一执行就 `error while loading shared libraries`。面板现在会在安装
+> 结束时真跑一次 `node --version`，跑不起来就删掉那份运行时并把 loader 原话报出来；生产镜像
+> 也预装了 `libatomic1`。自己裁镜像时请加上它（Fedora/openSUSE 的包名是 `libatomic`）。
+
 面板启动时会把检测结果打到控制台（`docker logs` 里同样能看到）：
 
 ```

@@ -2,6 +2,24 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 · 一键装 Node 会装出个跑不起来的运行时；doctor 认不出托管运行时
+
+> 起因：底座兼容性实测（`report-2026-10-31-base-compat.md`）。在只有 JRE 的
+> `debian:trixie-slim` 上点一键安装，面板默认挑最新稳定版 **Node 26.13.0**，而它的官方
+> 二进制链接 `libatomic.so.1`——那个镜像没有。结果是任务显示 done、`/api/node` 显示
+> `suitable: true`，但 node 一执行就 `error while loading shared libraries`，随后 pnpm
+> 安装 `exit 127`，日志里只有一行 warning。
+
+- **装完真跑一次**：`NodeRuntimeManager.install` 解包后执行 `node --version`（10 秒上限），
+  跑不起来就删掉那份运行时、任务 failed，错误里带 loader 的原话与"基础镜像可能缺 libatomic1"。
+  同一套检查也用在新加的「采用已有安装」路径上——拷贝坏了的树不该等到第一次安装才暴露。
+- **`suitable` 改为"能跑"**：原来只看版本号在不在范围内；现在还要二进制真能回答。结果按
+  目录 + 二进制 mtime 缓存，设置页轮询不会每次都起进程。
+- **doctor 认托管运行时**：与启动路径一致走 `detect().or(detectManaged)`，并标
+  `[panel-managed runtime]`。以前裸部署装好托管 Node、实例跑得好好的，doctor 仍然报红。
+- **生产镜像补 `libatomic1`**：0.1 MB，换掉"一键装最新版装出个不能用的 node"。
+- 文档：`docs/deployment.md` 的裸部署一节写明精简基础镜像要补 `libatomic1`。
+
 ## v0.6.40 — 2026-10-31 · 中版本：Windows 实例终端改浏览器 PTY（ConPTY）、出站 TLS 信任策略、一批 Windows 冒烟修复
 
 ### Claude Code 要的 Git Bash 由面板指明
