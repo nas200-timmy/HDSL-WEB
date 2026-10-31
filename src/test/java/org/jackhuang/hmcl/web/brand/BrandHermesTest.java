@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -65,6 +66,29 @@ class BrandHermesTest {
         assertFalse(Brand.HERMES.isReleaseVersion("2026.9.24"));
         assertFalse(Brand.HERMES.isReleaseVersion("0.22.5+canary.20261031T064409Z"));
         assertFalse(Brand.HERMES.isReleaseVersion("0.22.5.1"));
+    }
+
+    @Test
+    void windowsIsRefusedWithAReasonThePageCanPrint() {
+        for (org.jackhuang.hmcl.util.platform.OperatingSystem os
+                : org.jackhuang.hmcl.util.platform.OperatingSystem.values()) {
+            if (os == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+                assertFalse(Brand.HERMES.installableOn(os), "no shell, no POSIX venv layout");
+                String reason = Brand.HERMES.notInstallableReason(os);
+                assertNotNull(reason);
+                assertTrue(reason.contains("WSL2"), "the way out has to be in the sentence: " + reason);
+            } else {
+                assertTrue(Brand.HERMES.installableOn(os), os + " is supported");
+                assertNull(Brand.HERMES.notInstallableReason(os));
+            }
+            // Every other brand installs everywhere: their installers are npm/portable archives.
+            for (Brand other : Brand.values()) {
+                if (other != Brand.HERMES) {
+                    assertTrue(other.installableOn(os), other + " on " + os);
+                    assertNull(other.notInstallableReason(os));
+                }
+            }
+        }
     }
 
     @Test

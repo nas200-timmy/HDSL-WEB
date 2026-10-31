@@ -1518,9 +1518,9 @@ public final class BrandInstaller {
     /// @param target    `releases/<version>`, written **in place**
     static void installHermes(Brand brand, String version, Path brandRoot, Path target, Sink message)
             throws BrandException {
-        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
-            throw new BrandException("Hermes is not supported on Windows yet: its install builds a Python "
-                    + "environment from source, and this panel does not manage that toolchain there");
+        String unsupported = brand.notInstallableReason(OperatingSystem.CURRENT_OS);
+        if (unsupported != null) {
+            throw new BrandException(unsupported);
         }
         String platform = hermesPlatform();
         if (platform == null) {

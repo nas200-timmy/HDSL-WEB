@@ -248,6 +248,22 @@ public final class BrandApiServlet extends HttpServlet {
     // --------------------------------------------------------------- versions --
 
     private void versions(Brand brand, PathRef ref, HttpServletResponse response) throws IOException {
+        // A platform this brand cannot be installed on answers before anything
+        // touches the network: the page needs "why not", not a version list it
+        // would then refuse to install.
+        String unsupported = brand.notInstallableReason(
+                org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS);
+        if (unsupported != null) {
+            JsonObject body = new JsonObject();
+            body.add("versions", new JsonArray());
+            body.addProperty("latest", "");
+            body.add("releases", new JsonArray());
+            body.add("default", JsonNull.INSTANCE);
+            body.addProperty("supported", false);
+            body.addProperty("reason", unsupported);
+            Json.writePreservingNulls(response, body);
+            return;
+        }
         List<String> versions = BrandCatalog.versions(brand);
         if (versions.isEmpty()) {
             // An empty picker is indistinguishable from "this project has no releases",
@@ -275,6 +291,7 @@ public final class BrandApiServlet extends HttpServlet {
         body.add("releases", installed);
         String def = defaultVersion(ref);
         body.add("default", def == null ? JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(def));
+        body.addProperty("supported", true);
         Json.writePreservingNulls(response, body);
     }
 

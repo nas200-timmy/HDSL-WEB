@@ -526,6 +526,11 @@ export interface BrandVersions {
   releases: { version: string; current: boolean }[];
   /** 新建实例的推荐默认版本；一个版本都没装时为 null */
   default: string | null;
+  /// 这个平台上能不能装（目前只有 Hermes 在 Windows 上为 false）。
+  /// 为 false 时 `versions` 是空的、`reason` 说清为什么——面板不隐藏这一栏，
+  /// 而是把安装入口置灰并把原因摆出来
+  supported?: boolean;
+  reason?: string;
 }
 
 /// 品牌实例自己的管理员凭据（目前只有 Octop 有）。

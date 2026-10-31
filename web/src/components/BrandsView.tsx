@@ -414,6 +414,12 @@ function VersionCard({
   }, [versions, q]);
 
   const installed = versions?.releases ?? [];
+
+  // 这个平台上装不了（Windows 上的 Hermes）：入口置灰、原因原样摆出来。
+  // 不隐藏整张卡——项目规矩是"不可用就变灰并写原因"，不是让它凭空消失。
+  const unsupported = versions?.supported === false;
+  const unsupportedReason = versions?.reason ?? "";
+
   /// 下拉当前值：默认选 /versions 的 latest
   const selected = picked ?? versions?.latest ?? catalog[0] ?? "";
   const selectedInstalled = installed.some((r) => r.version === selected);
@@ -531,13 +537,32 @@ function VersionCard({
           )}
         </span>
         {/* 摘要行的按钮不许被挤：它们是折叠态唯一的操作入口 */}
-        <button className="btn btn-raised ripple-host" style={{ flex: "none" }} onClick={onToggle}>
+        <button
+          className="btn btn-raised ripple-host"
+          style={{ flex: "none" }}
+          disabled={unsupported}
+          title={unsupported ? unsupportedReason : undefined}
+          onClick={onToggle}
+        >
           {I18N["dsh.brand.install_new"]}
           {open ? <ArrowDropUpIcon size={18} /> : <KeyboardArrowDownIcon size={18} />}
         </button>
       </div>
 
-      {!open && (
+      {unsupported && (
+        <div
+          style={{
+            fontSize: 12,
+            lineHeight: 1.7,
+            padding: "4px 2px 0",
+            color: "var(--monet-error)",
+          }}
+        >
+          {unsupportedReason}
+        </div>
+      )}
+
+      {!open && !unsupported && (
         <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", paddingTop: 2 }}>
           {I18N["dsh.brand.version.shared"]}
         </div>
@@ -583,7 +608,7 @@ function VersionCard({
             </select>
             <button
               className="btn btn-raised ripple-host"
-              disabled={busy || installing || !selected || selectedInstalled}
+              disabled={busy || installing || !selected || selectedInstalled || unsupported}
               onClick={() => void doInstall()}
             >
               {installing

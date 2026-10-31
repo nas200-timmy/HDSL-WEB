@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.brand;
 
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -263,6 +264,37 @@ public enum Brand {
     /// script — the gateway and its dashboard.
     public boolean companionProcess() {
         return this == HERMES;
+    }
+
+    /// Whether this panel can install this brand on `os`.
+    ///
+    /// Hermes is Linux/macOS only, and the panel says so instead of failing later:
+    /// its installer builds a Python environment from source and its launcher is a
+    /// POSIX shell script that supervises two processes — neither has an equivalent
+    /// on Windows (`\\Scripts` instead of `bin/`, no `sh`). A Windows user who wants
+    /// Hermes can run the **panel** inside WSL2, where it is just Linux.
+    ///
+    /// @param os the platform the panel is running on
+    /// @return whether an install is offered here
+    public boolean installableOn(OperatingSystem os) {
+        return this != HERMES || os != OperatingSystem.WINDOWS;
+    }
+
+    /// Why [#installableOn] says no, or `null` when it says yes.
+    ///
+    /// One sentence, user-facing: the brand page prints it verbatim under a
+    /// disabled install button, so it has to be worth reading on its own.
+    ///
+    /// @param os the platform the panel is running on
+    /// @return the reason, or `null`
+    public @Nullable String notInstallableReason(OperatingSystem os) {
+        if (installableOn(os)) {
+            return null;
+        }
+        return "Hermes 只能在 Linux / macOS 上安装：它要从源码建一套 Python 环境，"
+                + "并且用一个 shell 脚本同时看住 gateway 与 dashboard 两个进程，"
+                + "Windows 上没有这两样东西。想在 Windows 上用：把**面板本身**装进 WSL2，"
+                + "对面板来说那就是 Linux，安装方式与文档里完全一样。";
     }
 
     /// Seconds the panel waits for a graceful stop.
