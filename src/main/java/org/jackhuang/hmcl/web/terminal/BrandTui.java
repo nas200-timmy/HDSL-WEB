@@ -66,6 +66,7 @@ public interface BrandTui {
         return switch (brand) {
             case KIMI -> new KimiTui();
             case OPENCODE -> new OpencodeTui();
+            case HERMES -> new HermesTui();
             // dsh's TUI is a plugin and gets its adapter in a later stage.
             default -> null;
         };

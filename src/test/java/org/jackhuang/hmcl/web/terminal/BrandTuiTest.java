@@ -133,4 +133,47 @@ class BrandTuiTest {
                 packageDir, packageDir.resolve("home"), packageDir.resolve("workspace"), "oc-1", null));
         assertTrue(expected.getMessage().contains("opencode native binary missing"), expected.getMessage());
     }
+
+    @Test
+    void hermesStartsTheBundledTuiWithTheInstancesNode() throws Exception {
+        Path entry = packageDir.resolve("hermes_cli/tui_dist/entry.js");
+        Files.createDirectories(entry.getParent());
+        Files.writeString(entry, "// tui\n");
+        Path python = packageDir.resolve(".venv/bin/python");
+        Files.createDirectories(python.getParent());
+        Files.writeString(python, "#!/bin/sh\n");
+        Path home = packageDir.resolve("home");
+        Path node = home.resolve("tools/node-test/bin/node");
+        Files.createDirectories(node.getParent());
+        Files.writeString(node, "#!/bin/sh\n");
+        Files.setPosixFilePermissions(node, PosixFilePermissions.fromString("rwx------"));
+        Path workspace = packageDir.resolve("workspace");
+        Files.createDirectories(workspace);
+
+        TerminalTarget target = new HermesTui().target(packageDir, home, workspace, "hermes-1", "session-42");
+
+        assertEquals("hermes", target.brand());
+        assertEquals(node.toString(), target.command().get(0));
+        assertEquals("--expose-gc", target.command().get(1));
+        assertEquals(entry.toString(), target.command().get(2));
+        assertEquals(workspace, target.cwd());
+        assertEquals(home.toString(), target.environment().get("HOME"));
+        assertEquals(home.toString(), target.environment().get("HERMES_HOME"));
+        assertEquals(python.toString(), target.environment().get("HERMES_PYTHON"));
+        assertEquals(packageDir.toString(), target.environment().get("HERMES_PYTHON_SRC_ROOT"));
+        assertEquals(workspace.toString(), target.environment().get("HERMES_CWD"));
+        assertEquals("session-42", target.environment().get("HERMES_TUI_RESUME"));
+        assertTrue(target.environment().get("PATH").startsWith(node.getParent().toString()),
+                target.environment().get("PATH"));
+    }
+
+    @Test
+    void hermesWithoutTheTuiBundleFailsLoudly() throws Exception {
+        Path python = packageDir.resolve(".venv/bin/python");
+        Files.createDirectories(python.getParent());
+        Files.writeString(python, "#!/bin/sh\n");
+        IOException expected = assertThrows(IOException.class, () -> new HermesTui().target(
+                packageDir, packageDir.resolve("home"), packageDir.resolve("workspace"), "hermes-1", null));
+        assertTrue(expected.getMessage().contains("Hermes TUI entry missing"), expected.getMessage());
+    }
 }
