@@ -2,24 +2,6 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布 · 面板以 root 跑之后的三处回归（工作区、pnpm 配置、首启权限）
-
-> 起因：宿主在真机（QNAP NAS，v0.6.43 镜像）上验收，三条 FAIL。前两条是我引入的回归。
-
-- **默认工作区变成 `/root/workspace`**：面板是 root 后 JVM 的 `user.home` 是 `/root`，而
-  agent 是 uid 1000，连 `cd /root` 都进不去（0700）——终端起来 44 ms 就 exit 1。
-  新增 `util/platform/UserHome`：**`HOME` 优先于 `user.home`**（systemd 与容器都会设 HOME；
-  `user.home` 取的是 passwd 里的家目录，换用户跑就是错的）。workspace、pnpm 全局配置目录、
-  整合包安装的默认工作区三处都改用它的同一套规则。
-- **首启 `logs/` 是组可写**：入口只修"已经存在"的路径，而 `auth/`、`logs/` 是面板启动后才建的，
-  继承了 volume 的 setgid + umask 002（`root:hdsl 2775`），要下次重启才纠正。入口改为先
-  `mkdir -p` 四个秘密路径再改属主。
-- **agent uid 可在构建期改**：`--build-arg HDSL_AGENT_UID=1001`。有些存储（QNAP 的 trimacl）
-  把共享属主当管理员放行，mode 位形同虚设——那里唯一的镜像内办法是换一个不是属主的号。
-  镜像里的 `hdsl` 用户、入口的 chown、`Privileges` 的 `setpriv` 读同一个值。
-- **入口自检"隔离是否真的成立"**：以 agent 身份试写一次 `auth/`，成功就打一条 WARNING
-  （这台机器的文件系统不认 mode 位），对应文档 `security.md §2.7`。
-
 ## v0.6.43 — 2026-10-31 · 小版本：容器里面板 root 持有秘密、agent 跑成 uid 1000
 
 > 起因：同 uid 的容器里，agent 能改面板的 `auth/`、`certs/`、`server.yaml` 和审计日志——
@@ -42,6 +24,27 @@
   `launcher-settings.json` 里，agent 读得到（ACP 要用它调模型），这是有意保留的暴露——
   缓解在部署侧（一台机器一套 key、能撤销能轮换），不在面板里。同类的还有"实例之间互相可写"
   与"面板的 HTTP 面没变"。
+
+### 同版本重发：面板以 root 跑之后的三处回归（工作区、pnpm 配置、首启权限）
+
+> 起因：宿主在真机（QNAP NAS，v0.6.43 镜像）上验收，三条 FAIL。前两条是我引入的回归。
+
+- **默认工作区变成 `/root/workspace`**：面板是 root 后 JVM 的 `user.home` 是 `/root`，而
+  agent 是 uid 1000，连 `cd /root` 都进不去（0700）——终端起来 44 ms 就 exit 1。
+  新增 `util/platform/UserHome`：**`HOME` 优先于 `user.home`**（systemd 与容器都会设 HOME；
+  `user.home` 取的是 passwd 里的家目录，换用户跑就是错的）。workspace、pnpm 全局配置目录、
+  整合包安装的默认工作区三处都改用它的同一套规则。
+- **首启 `logs/` 是组可写**：入口只修"已经存在"的路径，而 `auth/`、`logs/` 是面板启动后才建的，
+  继承了 volume 的 setgid + umask 002（`root:hdsl 2775`），要下次重启才纠正。入口改为先
+  `mkdir -p` 四个秘密路径再改属主。
+- **agent uid 可在构建期改**：`--build-arg HDSL_AGENT_UID=1001`。有些存储（QNAP 的 trimacl）
+  把共享属主当管理员放行，mode 位形同虚设——那里唯一的镜像内办法是换一个不是属主的号。
+  镜像里的 `hdsl` 用户、入口的 chown、`Privileges` 的 `setpriv` 读同一个值。
+- **入口自检"隔离是否真的成立"**：以 agent 身份试写一次 `auth/`，成功就打一条 WARNING
+  （这台机器的文件系统不认 mode 位）。
+- **文档写死这件事程序管不了**：`security.md §2.8` 单列一节，讲清 ACL 管理的共享
+  （QNAP trimacl 一类）为什么让 `0700` 形同虚设、为什么 `chmod`/`stat` 会被骗、三条出路
+  （换存储 / 换 uid 重建 / **接受，并在安全评估里如实说没有隔离**）。
 
 ## v0.6.42 — 2026-10-31 · 修复：v0.6.41 的镜像构建失败（Dockerfile 的 ARG 作用域）
 

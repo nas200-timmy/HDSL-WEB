@@ -95,12 +95,33 @@ key 的价值）全是部署者的责任。
 - 所以 agent **读不到也改不了**面板的凭据，也 `kill` 不掉面板、ptrace 不了它；
 - **裸部署没有这一层**：面板与 agent 同一个 uid，那些 0600 文件对 agent 是可读可写的。
   要隔离请用容器部署。
-- **有的文件系统不认 mode 位**：ACL 管理的共享（QNAP 的 trimacl 是典型，部分 NAS 的 export
-  也是）会把**共享属主**当管理员放行，uid 1000 能穿过 0700。这种机器上这一层等于不存在。
-  容器入口启动时会用 `setpriv` 以 agent 身份试写一次 `auth/`，**写得进去就打一条 WARNING**——
-  看到它就说明"隔离在这台机器上不成立"。三条出路：把 `/data` 放到普通 ext4/xfs；用
-  `--build-arg HDSL_AGENT_UID=1001` 重建镜像（换一个不是共享属主的号）；或者接受，只在 §4
-  的清单里记一笔。
+### 2.8 有些环境里这一层不成立——**程序也无能为力**
+
+不是每个文件系统都执行 mode 位。**ACL 管理的共享**（QNAP 的 trimacl 是典型；部分 NAS 的
+SMB/NFS export、某些 Windows 共享卷同样如此）会把**共享属主**当成管理员放行：一个 uid 1000
+的进程即使面对 `root:root 0700` 的目录，也照写不误。
+
+这是**存储层的语义，不是面板的 bug，镜像里也没有办法绕过**：
+
+- 它不归容器管。容器里的 uid 与宿主 1:1 映射，ACL 的判定发生在文件系统那一侧；
+- `chmod` / `chown` 照样"成功"，`stat` 照样显示 `700`——只有真的去访问才暴露真相，所以
+  光看 `ls -l` 会被骗；
+- 因此面板启动时会**自检**：以 agent 身份试写一次 `auth/`。写得进去就打
+
+  ```
+  HDSL-web: WARNING: this filesystem does not enforce mode bits for uid 1000.
+  HDSL-web: auth/, certs/ and logs/ are NOT protected from the agent on this host.
+  ```
+
+  这条日志是唯一可靠的信号。
+
+确认不成立之后只有三条路：
+
+1. **换存储**：`/data` 放到普通 ext4/xfs（loopback 镜像，或关掉共享的"高级文件夹权限"）；
+2. **换 uid**：`--build-arg HDSL_AGENT_UID=1001` 重建镜像。共享属主通常是 1000，换一个不是
+   属主的号就绕开了这条规则（宿主上挂给 MC / 工作区的目录也要跟着归新 uid）；
+3. **接受**：把"这台机器上没有隔离"当成部署事实——**不要在安全评估里声称有**。入口那条
+   WARNING 就是给这种情况留的：它诚实地告诉你，理论上的保护和实际发生的事不是一回事。
 
 ---
 
