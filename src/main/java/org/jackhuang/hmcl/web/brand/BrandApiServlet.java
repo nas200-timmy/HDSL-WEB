@@ -50,6 +50,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
+import org.jackhuang.hmcl.util.platform.Privileges;
 
 /// The REST surface of the third-party brand categories, mapped at
 /// `/api/brands/<brand>/*` (behind the same session gate as every other
@@ -1146,7 +1147,9 @@ public final class BrandApiServlet extends HttpServlet {
         List<String> command = new java.util.ArrayList<>(octopCommand(packageDir));
         command.addAll(List.of("user", "passwd", username, "--password", password));
 
-        ProcessBuilder builder = new ProcessBuilder(command);
+        // As the instance's uid: Octop rewrites its own store, and a root-owned
+        // file there is one the instance can no longer maintain.
+        ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command));
         builder.directory(home.toFile());
         builder.redirectErrorStream(true);
         builder.environment().put("OCTOP_HOME", home.toString());
@@ -1224,7 +1227,7 @@ public final class BrandApiServlet extends HttpServlet {
             }
             List<String> command = new java.util.ArrayList<>(octopCommand(packageDir));
             command.addAll(List.of("--json", "user", "list"));
-            ProcessBuilder builder = new ProcessBuilder(command);
+            ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command));
             builder.directory(home.toFile());
             builder.redirectErrorStream(true);
             builder.environment().put("OCTOP_HOME", home.toString());

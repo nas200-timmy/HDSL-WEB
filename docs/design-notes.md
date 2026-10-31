@@ -184,6 +184,27 @@ Windows 上常见一种情况：杀毒软件、企业网关或 GitHub 加速器�
 - Windows 没有 POSIX 的 0600 语义，凭据文件可能被同机其他账户读到；按单用户机器对待，
   并且不要把数据目录暴露到公网可访问的位置。
 
+### 7.5 身份划分：容器里两段，裸部署一段
+
+面板要写自己的凭据（`auth/developer.json`、`certs/*.key`、`server.yaml`、审计日志），又要
+跑 agent。同一 uid 下这两件事分不开——权限位是给 **uid** 的，不是给进程的——所以"agent 改不动
+口令文件"这个要求在单 uid 部署里**做不到**，不是没做。
+
+容器里因此分两段（`util/platform/Privileges.java`）：
+
+- 面板是 PID 1、uid 0；入口脚本把 `auth/`、`certs/`、`logs/`、`server.yaml` 归 root 0700/0600；
+- 每个 agent 进程派生时前置 `setpriv --reuid=1000 --regid=1000 --init-groups --`，跑成镜像里的 `hdsl`；
+- 实例子目录 `1000:1000 2775`（setgid）+ 入口 `umask 002`，所以**面板（root）写进去的文件是
+  `root:hdsl 0664`，agent 照样能改**——否则 root 会把 agent 自己的目录写死；
+- `setpriv` 是 exec 原地替换：进程组、PTY 会话、"不经 shell"这三条都不变。
+
+裸部署没有这一层：面板与 agent 同 uid，秘密文件对 agent 可读可写。面板**不会**拒绝以 root 启动
+（拒绝只会换来"那我不用了"），但启动横幅会写明"你派生的每个 agent 也是 root"。
+要隔离就用容器部署，或照 `docs/deployment.md §10.0` 用 systemd 沙箱把面板关进 `/data`。
+
+验收：`scripts/verify-privilege-split.sh` 在容器里以 uid 1000 跑，断言 `auth/`、`logs/` 读写都被拒，
+而实例目录与 pnpm store 照常可写。
+
 ## 8. inotify 配额
 
 - dsh 启动要监视自己的 profile 目录。内核配额不足时，node 可能当场退出，也可能永远不打印

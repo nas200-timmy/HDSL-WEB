@@ -41,6 +41,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
+import org.jackhuang.hmcl.util.platform.Privileges;
 
 /// A running DeepSeek Harness child process.
 ///
@@ -164,7 +165,7 @@ public final class DshProcess {
     private DshProcess(DshLauncher.LaunchPlan plan) throws DshException {
         this.plan = plan;
 
-        ProcessBuilder builder = new ProcessBuilder(plan.command());
+        ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(plan.command()));
         builder.directory(plan.workingDirectory().toFile());
         builder.environment().putAll(plan.environment());
 

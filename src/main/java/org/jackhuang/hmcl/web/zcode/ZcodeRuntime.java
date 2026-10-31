@@ -188,6 +188,7 @@ public final class ZcodeRuntime {
                 log = Files.newOutputStream(logFile,
                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
                 ProcessBuilder builder = new ProcessBuilder(
+                        org.jackhuang.hmcl.util.platform.Privileges.asAgent(java.util.List.of(
                         org.jackhuang.hmcl.util.platform.Executables.startableProgram(nodePath),
                         packageDir.resolve("bin/zcode.mjs").toString(),
                         "--web", "--no-open",
@@ -198,7 +199,7 @@ public final class ZcodeRuntime {
                         "--host", "127.0.0.1",
                         "--port", "0",
                         "--no-token",
-                        "--workspace", workspace.toString());
+                        "--workspace", workspace.toString())));
                 builder.directory(workspace.toFile());
                 builder.redirectErrorStream(true);
                 builder.environment().putAll(envMap);

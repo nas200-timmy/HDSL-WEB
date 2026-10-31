@@ -198,6 +198,13 @@ public final class Main {
             System.out.println("  base path: " + config.basePath + " (behind a path-stripping reverse proxy)");
         }
 
+        // 身份：容器里面板是 root 并按进程降权（秘密文件 0700），裸部署不是。
+        // 裸部署以 root 起面板时不拦，但这句必须说，因为它意味着 agent 也是 root。
+        String privileges = org.jackhuang.hmcl.util.platform.Privileges.bannerNote();
+        if (privileges != null) {
+            System.out.println("  note     : " + privileges);
+        }
+
         // ---- 体检段：这两项缺了，面板能启动但"装不了东西 / 打不开页面"，
         // 裸部署（尤其 Windows）控制台是唯一窗口，必须在启动时说清楚 ----
         if (frontendPackaged()) {

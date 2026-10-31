@@ -2,6 +2,25 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 · 容器里的身份划分：面板 root 持有秘密，agent 跑成 uid 1000
+
+> 起因：同 uid 的容器里，agent 能改面板的 `auth/`、`certs/`、`server.yaml` 和审计日志——
+> 0600 保护的是"别的账户"，而 agent 就是同一个账户。要求"agent 改不动口令文件"就必须分成
+> 两个身份，单 uid 下没有别的办法。
+
+- **容器里两段身份**：面板是 PID 1、uid 0；每个 agent 进程派生时前置
+  `setpriv --reuid=1000 --regid=1000 --init-groups --`（`util/platform/Privileges.java`），
+  跑成镜像里的 `hdsl`。入口把 `auth/`、`certs/`、`logs/`、`server.yaml` 归 root 0700/0600；
+  实例子目录 `1000:1000 2775`（setgid）且入口 `umask 002`，所以面板写进去的文件仍是
+  `root:hdsl 0664`，agent 照常能改。`setpriv` 是 exec 原地替换，进程组与 PTY 会话不变。
+- **裸部署不变**：不在容器里就不降权（宿主的 uid 1000 可能是别人，塞过去是权限 bug）；
+  面板与 agent 同 uid。以 root 启动不拦，但启动横幅写明"你派生的每个 agent 也是 root"。
+  systemd 模板补了 `ProtectSystem=strict`、`NoNewPrivileges=yes` 等六条硬化。
+- `docker-install.sh` 不再把整个数据卷 chown 给 1000——那样每次启动都会把秘密交还回去；
+  属主改由容器入口校正（只在属主不对时递归，避免每次开机遍历大卷）。
+- 新增 `scripts/verify-privilege-split.sh`：在容器里以 uid 1000 跑，断言 `auth/`、`logs/`
+  读写被拒，而实例目录与 pnpm store 照常可写。
+
 ## v0.6.42 — 2026-10-31 · 修复：v0.6.41 的镜像构建失败（Dockerfile 的 ARG 作用域）
 
 > v0.6.41 的 jar 与客户端都正常，但 docker 流水线挂了：

@@ -660,6 +660,35 @@ WantedBy=multi-user.target
   或者照 §1/§9 在前面放反代。
 - `journalctl -u hdsl-web -f` 看服务日志；面板自己的日志同时在 `<HDSL_DATA>/logs/` 下。
 
+### 10.0 身份模型：裸部署是单用户，没有隔离
+
+面板和被它启动的每一个 agent（dsh、品牌工具、MC 服务端、终端）在裸部署里都是**同一个系统
+用户**。这意味着 agent 能改面板的配置、凭据与审计日志——同 uid 下权限位不提供保护
+（`auth/` 是 0700，但 agent 就是那个 owner）。
+
+这是有意的取舍：要隔离就必须有两个身份，而在宿主机上"面板能 setuid"就等于"面板是 root"，
+那比现状危险得多。**要隔离请用容器部署**（镜像里面板是 root、agent 是 uid 1000、秘密文件
+0700），或者把不同信任级别的 agent 放到不同机器/容器。
+
+不改身份也能做的硬化（追加到上面的 `[Service]`）：
+
+```ini
+ProtectSystem=strict
+ReadWritePaths=/srv/hdsl /srv/minecraft
+ProtectHome=read-only
+NoNewPrivileges=yes
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+```
+
+- `ProtectSystem=strict`：整个文件系统只读，只有 `ReadWritePaths` 可写，面板被攻破也碰不到
+  `/etc` 和别人的家目录；
+- `NoNewPrivileges=yes` 是这份清单里最值钱的一行：连 sudo/setuid 都堵死；
+- 这些限制对 agent 同样生效——它们本来就是面板派生的进程。
+
+容器部署不需要这些参数，镜像自己做（见 `docs/design-notes.md §7.5`）；容器里的验收用
+`scripts/verify-privilege-split.sh`（以 uid 1000 跑）。
+
 ### 10.1 只有 jar 的机器：Node 与 pnpm 从哪来
 
 **JRE 不能替你完成这件事。** 面板是 Java 写的，但 dsh 本体、插件、品牌工具都是 npm 包，

@@ -40,6 +40,7 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.jackhuang.hmcl.util.platform.Privileges;
 
 /// The POSIX pseudo terminal: `openpty` plus `posix_spawn`, glued with JNA.
 ///
@@ -163,7 +164,11 @@ final class PosixPty implements Pty {
         if (command.isEmpty()) {
             throw new PtyException("empty command");
         }
-        String program = command.get(0);
+        // Agent work runs as the image's uid, not as the panel's. `setpriv` execs in
+        // place, so the child is still the program itself — the process group the
+        // terminal kills, and the "no shell in the chain" rule, are both unchanged.
+        List<String> effective = Privileges.asAgent(command);
+        String program = effective.get(0);
         IntByReference master = new IntByReference();
         IntByReference slave = new IntByReference();
         Memory winsize = winsize(size);
@@ -232,7 +237,7 @@ final class PosixPty implements Pty {
             check(LibC.INSTANCE.posix_spawnattr_setpgroup(attributes, 0), "posix_spawnattr_setpgroup");
 
             IntByReference childPid = new IntByReference();
-            String[] argv = command.toArray(new String[0]);
+            String[] argv = effective.toArray(new String[0]);
             String[] envp = environment.entrySet().stream()
                     .map(entry -> entry.getKey() + "=" + entry.getValue())
                     .toArray(String[]::new);

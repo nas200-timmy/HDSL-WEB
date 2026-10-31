@@ -440,7 +440,9 @@ public final class McRuntime {
         try {
             Path directory = manager.instanceDirectory(id);
             Files.createDirectories(directory);
-            ProcessBuilder builder = new ProcessBuilder(commandFactory.command(instance));
+            ProcessBuilder builder = new ProcessBuilder(
+                    org.jackhuang.hmcl.util.platform.Privileges.asAgent(
+                            commandFactory.command(instance)));
             builder.directory(directory.toFile());
             builder.redirectErrorStream(true);
             builder.environment().putAll(System.getenv());

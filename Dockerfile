@@ -388,6 +388,40 @@ RUN printf '%s\n' \
       '#!/bin/sh' \
       'set -e' \
       '' \
+      '# --- ownership split (container only) -------------------------------' \
+      '# The panel runs as root here, and that is the only way to keep its own' \
+      '# secrets out of the reach of an agent: a single uid cannot own a file it must' \
+      '# not be able to write, so auth/, certs/, server.yaml and logs/ belong to' \
+      '# root 0700, and everything an instance touches belongs to uid 1000.' \
+      '# Files the panel writes into instance directories stay writable by the' \
+      '# agent because those directories are setgid to the shared group and the' \
+      '# umask is 002 (root:hdsl 0664).' \
+      'fix_owner() {' \
+      '  path=$1; owner=$2; mode=$3' \
+      '  [ -e "$path" ] || return 0' \
+      '  current=$(stat -c "%u:%g" "$path" 2>/dev/null || echo "")' \
+      '  if [ "$current" != "$owner" ]; then' \
+      '    chown -R "$owner" "$path" 2>/dev/null || true' \
+      '  fi' \
+      '  chmod "$mode" "$path" 2>/dev/null || true' \
+      '}' \
+      'umask 002' \
+      'if [ "$(id -u)" = "0" ]; then' \
+      '  # The volume belongs to the agent first, then the four secret paths are' \
+      '  # carved back out of it. Doing it in this order is what keeps the model' \
+      '  # working as new directories appear: anything the panel creates under' \
+      '  # /data (a Minecraft data dir, wallpapers, brand instances) inherits the' \
+      '  # setgid group and the 002 umask, so the agent can maintain it without' \
+      '  # anyone adding it to a list here.' \
+      '  mkdir -p "$HDSL_DATA"' \
+      '  fix_owner "$HDSL_DATA" 1000:1000 2775' \
+      '  fix_owner /home/hdsl 1000:1000 2775' \
+      '  fix_owner "$HDSL_DATA/auth" 0:0 700' \
+      '  fix_owner "$HDSL_DATA/certs" 0:0 700' \
+      '  fix_owner "$HDSL_DATA/logs" 0:0 700' \
+      '  fix_owner "$HDSL_DATA/server.yaml" 0:0 600' \
+      'fi' \
+      '' \
       '# A host directory mounted on /data hides the pnpm this image baked into' \
       '# /data/corepack, and corepack then downloads it again on first use —' \
       '# which the startup banner reports as a version string full of download' \
@@ -459,7 +493,11 @@ VOLUME ["/data"]
 # published; everything reaches them through this port.
 EXPOSE 3080
 
-USER hdsl
+# No `USER hdsl` here on purpose: the panel is PID 1 as root so it can hold its
+# own secrets with 0700 and hand every agent process to uid 1000 (`setpriv`, see
+# util/platform/Privileges.java). A deployment that overrides this with
+# `--user 1000` still works — the panel then simply cannot drop anything, and
+# every agent runs as the same uid, which is the bare-metal model.
 
 # -k because the first boot generates a self-signed certificate, which is a
 # perfectly healthy state. Try TLS first, then plain HTTP, so the probe works

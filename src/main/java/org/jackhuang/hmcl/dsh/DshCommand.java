@@ -153,7 +153,8 @@ public final class DshCommand {
         // `npm` is not a file at all — resolving it against this process's PATH would miss
         // the runtime's `npm.cmd` and fail the launch.
         ProcessBuilder builder = new ProcessBuilder(
-                Executables.startable(command, environment.get("PATH")));
+                org.jackhuang.hmcl.util.platform.Privileges.asAgent(
+                        Executables.startable(command, environment.get("PATH"))));
         // What the launcher is configured to download through travels with every child, so a
         // proxy covers the version lists and the plugin installs alike.
         builder.environment().putAll(DshNetworkSettings.environment());

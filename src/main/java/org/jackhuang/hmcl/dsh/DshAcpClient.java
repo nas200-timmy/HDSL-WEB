@@ -39,6 +39,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
+import org.jackhuang.hmcl.util.platform.Privileges;
 
 /// A client for DeepSeek Harness's Agent Client Protocol surface.
 ///
@@ -135,7 +136,7 @@ public final class DshAcpClient implements AutoCloseable {
         this.instance = instance;
         this.listener = listener;
 
-        ProcessBuilder builder = new ProcessBuilder(command);
+        ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command));
         builder.directory(workingDirectory.toFile());
         builder.environment().putAll(environment);
 

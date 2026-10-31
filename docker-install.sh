@@ -466,17 +466,17 @@ build_image() {
         -f "$REPO_DIR/Dockerfile" "$REPO_DIR"
 }
 
-ensure_owner() {   # 宿主目录交给 uid/gid 1000（镜像里的 hdsl）
+ensure_owner() {   # 宿主目录：只建出来，属主交给容器入口去分
+    # 以前这里是 `docker run -u 0 … chown -R 1000:1000`，把整卷交给 hdsl。现在不行了：
+    # 面板在容器里以 root 跑，auth/、certs/、server.yaml、logs/ 必须是 root 0700，
+    # 整卷 chown 等于每次启动把秘密又交还给 agent 的 uid。
+    # 入口脚本（root）每次启动自己校正属主，所以这里只需要保证目录存在。
     local path="$1"
     if [ "$DRY_RUN" = 1 ]; then
-        say "  [dry-run] docker run --rm -u 0 --entrypoint chown -v $path:/mnt/own $IMAGE -R 1000:1000 /mnt/own"
+        say "  [dry-run] mkdir -p $path   # 属主由容器入口校正（面板 root，秘密 0700）"
         return 0
     fi
-    if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-        warn "镜像 $IMAGE 不存在，跳过 $path 的属主修正（起容器后若报权限错误，跑一次 --rebuild）"
-        return 0
-    fi
-    docker run --rm -u 0 --entrypoint chown -v "$path:/mnt/own" "$IMAGE" -R 1000:1000 /mnt/own >/dev/null
+    mkdir -p "$path"
 }
 
 run_container() {

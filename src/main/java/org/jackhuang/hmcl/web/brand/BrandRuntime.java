@@ -237,7 +237,9 @@ public final class BrandRuntime {
                     ensureOctopInitialized(packageDir, home, logFile);
                 }
                 plan = plan(brand, packageDir, instance, publicHost);
-                ProcessBuilder builder = new ProcessBuilder(Executables.startable(plan.command()));
+                ProcessBuilder builder = new ProcessBuilder(
+                        org.jackhuang.hmcl.util.platform.Privileges.asAgent(
+                                Executables.startable(plan.command())));
                 builder.directory(workspace.toFile());
                 builder.redirectErrorStream(true);
                 // The tool's own state lives under its HOME, which is the

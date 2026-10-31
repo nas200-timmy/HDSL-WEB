@@ -1,0 +1,174 @@
+/*
+ * HDSL-web
+ * Copyright (C) 2026  HDSL-web contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+package org.jackhuang.hmcl.util.platform;
+
+import org.jetbrains.annotations.NotNullByDefault;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+/// Who a child process runs as, and when the panel is allowed to answer that
+/// question differently from "whoever I am".
+///
+/// **Only inside a container.** There the image owns uid 1000 as `hdsl` and the
+/// panel is its PID 1, so dropping agent work to 1000 is a name the image
+/// defines. On a bare host the same number belongs to whoever the machine's
+/// administrator made it — handing an agent another person's uid would be a
+/// privilege bug in either direction, so the drop is not attempted there at all.
+///
+/// The reason the panel runs as root in the container is narrow: the files that
+/// must stay out of an agent's reach (`auth/`, `certs/`, `server.yaml`, the audit
+/// log) can only be protected by ownership, and a single uid cannot own what it
+/// must not touch. Everything else the panel does — writing instance files,
+/// installing runtimes — keeps working because it writes into directories that
+/// belong to uid 1000 with a group both sides share.
+///
+/// On a bare deployment this class is inert: [#inContainer()] is false, so
+/// [#asAgent] returns its argument unchanged and a panel started by systemd as
+/// `hdsl` behaves exactly as it always did. A panel started as root on a host is
+/// the operator's own decision (the panel logs it and the security notes say
+/// what it means); it is not refused, because refusing would only start an
+/// argument with whoever chose it.
+@NotNullByDefault
+public final class Privileges {
+
+    /// The uid and gid the image gives to `hdsl`, and therefore the identity
+    /// everything that acts for an instance runs as.
+    public static final int AGENT_UID = 1000;
+
+    /// Set once at startup: whether this JVM is the root inside a container.
+    private static final boolean DROP_CHILDREN = inContainer() && euid() == 0;
+
+    private Privileges() {
+    }
+
+    /// Whether this process runs inside a container.
+    ///
+    /// Three facts, any of which is enough: Docker's marker file, podman's, or a
+    /// cgroup path that names a container runtime. They are all present without
+    /// privileges, which is what makes this usable from a process that may not
+    /// be root.
+    public static boolean inContainer() {
+        return detect(Path.of("/.dockerenv"), Path.of("/run/.containerenv"), Path.of("/proc/self/cgroup"));
+    }
+
+    /// The container marker test, with its inputs named so a test can drive it.
+    ///
+    /// @param dockerEnv    `/ .dockerenv`
+    /// @param containerEnv `/run/.containerenv` (podman)
+    /// @param cgroup       `/proc/self/cgroup`
+    /// @return whether any of them says "container"
+    static boolean detect(Path dockerEnv, Path containerEnv, Path cgroup) {
+        if (Files.exists(dockerEnv) || Files.exists(containerEnv)) {
+            return true;
+        }
+        try {
+            String text = Files.readString(cgroup);
+            return text.contains("docker") || text.contains("kubepods")
+                    || text.contains("libpod") || text.contains("lxc");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /// The effective uid, or `-1` where the platform has no such notion.
+    static int euid() {
+        if (OperatingSystem.CURRENT_OS != OperatingSystem.LINUX
+                && OperatingSystem.CURRENT_OS != OperatingSystem.MACOS) {
+            return -1;
+        }
+        try {
+            return (int) Files.getAttribute(Path.of("/proc/self"), "unix:uid");
+        } catch (Exception e) {
+            // macOS has no /proc; ask the account database instead.
+            try {
+                return (int) new com.sun.security.auth.module.UnixSystem().getUid();
+            } catch (Exception | LinkageError ignored) {
+                return -1;
+            }
+        }
+    }
+
+    /// Whether child processes are dropped to [#AGENT_UID] on this machine.
+    public static boolean dropsChildren() {
+        return DROP_CHILDREN;
+    }
+
+    /// Whether this is a root process outside a container: the panel and every
+    /// agent it starts share that identity, which the startup banner says out
+    /// loud because nothing in the process can fix it.
+    public static boolean rootOutsideContainer() {
+        return euid() == 0 && !inContainer();
+    }
+
+    /// The argv to run `command` with, as an agent.
+    ///
+    /// Inside a container running as root this is
+    /// `setpriv --reuid=1000 --regid=1000 --init-groups -- <command>`; anywhere
+    /// else it is the command itself. `setpriv` execs in place, so the child
+    /// still owns its process group and the PTY's session semantics are
+    /// unchanged.
+    ///
+    /// @param command the program and its arguments, program first
+    /// @return the argv to hand to the process builder
+    public static List<String> asAgent(List<String> command) {
+        return wrap(command, DROP_CHILDREN);
+    }
+
+    /// The wrapping itself, with the decision named so a test can drive both
+    /// branches on any machine.
+    ///
+    /// @param command the program and its arguments
+    /// @param drop    whether to prefix `setpriv`
+    /// @return the argv to hand to the process builder
+    static List<String> wrap(List<String> command, boolean drop) {
+        if (!drop || command.isEmpty()) {
+            return command;
+        }
+        List<String> wrapped = new ArrayList<>(command.size() + 5);
+        wrapped.add(setpriv());
+        wrapped.add("--reuid=" + AGENT_UID);
+        wrapped.add("--regid=" + AGENT_UID);
+        wrapped.add("--init-groups");
+        wrapped.add("--");
+        wrapped.addAll(command);
+        return wrapped;
+    }
+
+    /// The `setpriv` to exec, resolved when the panel can see it. A bare name is
+    /// left alone: the child inherits the panel's `PATH`, and failing here would
+    /// turn a missing tool into a crash instead of the exec error the spawner
+    /// already reports.
+    private static String setpriv() {
+        return Executables.resolve("setpriv").map(Path::toString).orElse("setpriv");
+    }
+
+    /// One line for the startup banner, or `null` when there is nothing to say.
+    ///
+    /// @return the warning, or `null`
+    public static String bannerNote() {
+        if (rootOutsideContainer()) {
+            return "running as root outside a container: every instance and every agent this panel "
+                    + "starts runs as root too, and the panel cannot separate them from its own "
+                    + "credential files (see docs/design-notes.md §7)";
+        }
+        return null;
+    }
+}
