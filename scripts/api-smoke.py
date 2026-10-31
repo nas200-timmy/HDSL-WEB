@@ -223,26 +223,12 @@ def run(panel):
                    "portMode": "auto", "port": 4999, "createdAt": int(time.time() * 1000)},
                   out, ensure_ascii=False)
 
+    # 半安装的树不再"拒绝后干等"：启动请求应当落到既有的"先装再启动"那条路（202 + taskId）。
+    # 用 9.9.9 这个不存在的版本，安装本身会失败——这里验的是**它去装了**，不是装成功。
     status, body = call("POST", "/api/instances/%s/launch" % instance_id, {})
-    state, reason = "", ""
-    for _ in range(40):
-        _, listing = call("GET", "/api/instances")
-        row = next((i for i in listing.get("instances", []) if i.get("id") == instance_id), None)
-        if row:
-            state, reason = row.get("state"), row.get("error") or ""
-            if state == "FAILED":
-                break
-        time.sleep(0.5)
-    # 两种拒绝都算通过：这台机器上没有 node 时，"缺运行时"会先回答（那也是句人话）；
-    # 有 node 时才会轮到"这棵树不完整"。关键是**失败必须带原因**——以前这里只有
-    # 一个 FAILED，原因只存在于事件流里，等于没有。
-    tree_guard = "安装不完整" in reason and "重装" in reason
-    runtime_guard = "Node.js" in reason and ("一键安装" in reason or "was not found" in reason)
-    check("dsh: a launch that cannot work is refused, and the instance says why",
-          state == "FAILED" and (tree_guard or runtime_guard), (status, state, reason))
-    if state == "FAILED" and not tree_guard and runtime_guard:
-        print("      (this machine has no managed Node, so the runtime check answered first;"
-              " the half-install guard is covered by DshEmptyPackagesTest)")
+    check("dsh: a half-installed tree triggers a reinstall instead of a refusal",
+          status == 202 and body.get("state") == "installing" and body.get("taskId"),
+          (status, body))
 
     status, body = call("GET", "/api/instances/%s/tui-plugins" % instance_id)
     plugins = body.get("plugins") or []
