@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -116,10 +117,10 @@ class HermesRuntimeTest {
         Path home = dir.resolve("home");
         Files.createDirectories(home);
 
-        Path wrapper = BrandRuntime.writeHermesWrapper(panel, home,
+        BrandRuntime.HermesWrapper wrapper = BrandRuntime.writeHermesWrapper(panel, home,
                 new BrandRuntime.HermesPorts(21001, 21002), dir.resolve("release"));
 
-        String script = Files.readString(wrapper, StandardCharsets.UTF_8);
+        String script = Files.readString(wrapper.file(), StandardCharsets.UTF_8);
         for (String required : new String[]{
                 "HERMES_GATEWAY_LOCK_DIR", "HERMES_RUNTIME_DIR", "XDG_RUNTIME_DIR",
                 "gateway run", "dashboard --skip-build", "--no-open",
@@ -132,6 +133,12 @@ class HermesRuntimeTest {
         // The children must inherit stdout, or the panel's log page shows only
         // stage markers and never the gateway's own errors.
         assertFalse(script.contains(">/dev/null 2>&1 &"), script);
+        // The order of `$1..$5` in the script and the argv the panel builds are
+        // one contract; the record that carries both is where it is pinned.
+        assertEquals(List.of(home.toString(), "21001", "21002",
+                        dir.resolve("release/hermes_cli/web_dist").toString(),
+                        dir.resolve("release/.venv").toString()),
+                wrapper.arguments());
     }
 
     @Test

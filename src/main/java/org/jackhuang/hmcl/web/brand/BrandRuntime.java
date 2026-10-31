@@ -1027,19 +1027,34 @@ public final class BrandRuntime {
         HermesPorts ports = hermesPorts(panel);
         String key = hermesApiKey(home);
         writeHermesEnv(home, key, ports.api());
-        Path wrapper = writeHermesWrapper(panel, home, ports, packageDir);
+        HermesWrapper wrapper = writeHermesWrapper(panel, home, ports, packageDir);
         if (!Privileges.dropsChildren()) {
             // A bare deployment runs the wrapper as the panel's own user; the
             // script only has to be executable for that user.
-            makeExecutable(wrapper);
+            makeExecutable(wrapper.file());
         }
-        return new LaunchPlan(List.of("/bin/sh", wrapper.toString(),
-                home.toString(),
-                Integer.toString(ports.api()),
-                Integer.toString(ports.dashboard()),
-                packageDir.resolve("hermes_cli/web_dist").toString(),
-                packageDir.resolve(".venv").toString()),
-                Map.of(), ports.dashboard());
+        List<String> command = new ArrayList<>();
+        command.add("/bin/sh");
+        command.add(wrapper.file().toString());
+        command.addAll(wrapper.arguments());
+        // The argv goes into the log: the first version of this launch passed no
+        // arguments at all and died in `set -u`, and the only way to see that was
+        // the wrapper's own cryptic line. Now the log says what was started with.
+        LOG.info("hermes launch: " + String.join(" ", command));
+        return new LaunchPlan(List.copyOf(command), Map.of(), ports.dashboard());
+    }
+
+    /// A generated wrapper and the arguments it expects, produced together.
+    ///
+    /// The script reads `home api_port dash_port web_dist venv` as `$1..$5`, and
+    /// the panel has to hand exactly those over. Keeping both in one value is the
+    /// point: the two used to be written in different places, and when only one
+    /// of them changed the wrapper died on `set -u` with nothing useful in the
+    /// log. It also prints a readable line if the count is ever wrong again.
+    ///
+    /// @param file      the script
+    /// @param arguments what to pass, in order, after the script path
+    record HermesWrapper(Path file, List<String> arguments) {
     }
 
     /// Reads (or allocates) the instance's port pair.
@@ -1147,7 +1162,7 @@ public final class BrandRuntime {
     /// The script is regenerated on every launch (the ports and the release
     /// path are arguments), so an operator who edits it loses the edit — which
     /// is said at the top of the file itself.
-    static Path writeHermesWrapper(Path panel, Path home, HermesPorts ports, Path packageDir)
+    static HermesWrapper writeHermesWrapper(Path panel, Path home, HermesPorts ports, Path packageDir)
             throws IOException {
         Path wrapper = panel.resolve(HERMES_WRAPPER_FILE);
         Path venv = packageDir.resolve(".venv");
@@ -1156,6 +1171,10 @@ public final class BrandRuntime {
                 #!/bin/sh
                 # Managed by HDSL-web. Do not edit: the panel rewrites this file on every launch.
                 set -eu
+                if [ "$#" -ne 5 ]; then
+                  echo "hermes wrapper: expected 5 arguments (home api_port dash_port web_dist venv), got $#" >&2
+                  exit 2
+                fi
                 home="$1"; api_port="$2"; dash_port="$3"; web_dist="$4"; venv="$5"
                 hermes="$venv/bin/hermes"
                 python="$venv/bin/python"
@@ -1239,7 +1258,12 @@ public final class BrandRuntime {
                 """;
         writeAtomically(wrapper, script);
         Privileges.handToAgent(wrapper, Privileges.AGENT_PRIVATE_EXECUTABLE);
-        return wrapper;
+        return new HermesWrapper(wrapper, List.of(
+                home.toString(),
+                Integer.toString(ports.api()),
+                Integer.toString(ports.dashboard()),
+                packageDir.resolve("hermes_cli/web_dist").toString(),
+                packageDir.resolve(".venv").toString()));
     }
 
     /// Writes a small file atomically (temporary node in the same directory,
