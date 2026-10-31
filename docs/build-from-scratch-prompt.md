@@ -204,9 +204,16 @@ cd client/hdsl-tui && gofmt -l . | grep -v '^vendor/' ; go vet ./... ; go test .
 flock /tmp/hdsl-gradle.lock ./gradlew --no-daemon shadowJar -PreleaseVersion=<版本>
 unzip -l build/libs/hdsl-web-<版本>.jar | grep -c first-party-plugins   # 必须是 2 个 tgz + index.json
 
-# 入口脚本：它是镜像里 root 阶段跑的那段 shell，构建前先渲染出来做语法检查，
-# 否则只有等镜像构建到那一层才会发现少一个引号（§5.20）
-scripts/render-entrypoint.sh > /tmp/entrypoint.sh && sh -n /tmp/entrypoint.sh
+# 入口脚本：它是镜像里 root 阶段跑的那段 shell（Dockerfile 里 printf 的那串单引号），
+# 构建前先在本地渲染出来做语法检查——否则要等构建到那一层才发现少一个引号（§5.20）。
+python3 - <<'PY' > /tmp/entrypoint.sh
+import re
+src = open("Dockerfile", encoding="utf-8").read()
+end = src.index("&& chmod 0755 /usr/local/bin/hdsl-entrypoint")
+start = src.rindex("RUN printf '%s\\n' \\", 0, end)
+print("\n".join(re.findall(r"^\s*'((?:[^'\\]|\\.)*)'\s*\\?$", src[start:end], re.M)))
+PY
+sh -n /tmp/entrypoint.sh && echo "entrypoint: 语法 OK, $(wc -l < /tmp/entrypoint.sh) 行"
 ```
 
 **然后真的启动一次**（这条最重要，静态检查看不出顺序类问题）：
@@ -464,6 +471,7 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
   agent 就写不动了。
 - 校正要**幂等且便宜**：只在属主不对时递归，之后每次启动只 `stat`。别每次开机遍历几百 GB 的卷。
 - 有些文件系统不认 mode 位（§5.9），所以 chown 之后要**自检**并在日志里喊出来。
+- 改完入口脚本别忘了 §4 里那段：把它从 Dockerfile 渲染出来 `sh -n` 一遍再构建镜像。
 
 ### 5.21 解包用 Java，不要 shell 出去调 `tar`
 - **现象**：裸部署（只有 jar）上某条安装路径失败，容器里却好好的；错误是 `tar: not found` 或
