@@ -576,6 +576,8 @@ export interface BrandInstance {
   disabled?: boolean;
   /** state = running 时的反代地址（/i/<id>/） */
   url?: string;
+  /** 交互终端是否正开着（Hermes：网页与终端互斥，UI 先问再切换） */
+  terminalOpen?: boolean;
 }
 
 /// 品牌/zcode 实例的**插件通道**（`GET …/instances/<id>/plugins`）。
@@ -604,6 +606,8 @@ export interface ExternalInstance {
   error?: string;
   /** 被单实例策略禁用 */
   disabled?: boolean;
+  /** 交互终端是否正开着（Hermes：网页与终端互斥，UI 先问再切换） */
+  terminalOpen?: boolean;
   /** 仅 zcode：实例是否已配置 API Key */
   hasApiKey?: boolean;
   /** 仅 zcode：已保存的 API Base URL（编辑表单回填用） */

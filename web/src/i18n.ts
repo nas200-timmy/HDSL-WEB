@@ -331,6 +331,15 @@ export const I18N = {
   "dsh.brand.opencode.short": "OpenCode",
   "dsh.brand.claude-web.short": "Claude Web",
   "dsh.brand.hermes.short": "Hermes",
+  // Hermes 的网页与终端共用同一个 gateway，只能开一个（docs/brands.md
+  // 「终端与网页互斥」）。面板在替换另一个模式之前先问一句：说清会关掉什么、
+  // 什么不会丢，确认了再换。
+  "dsh.brand.hermes.switch.terminal.title": "先停掉网页，再开终端",
+  "dsh.brand.hermes.switch.terminal.message":
+    "Hermes 的终端和网页共用同一个 gateway，不能同时开。打开终端会先停止这个实例的网页模式——已经打开的页面会断开，之后要重新「启动」网页。会话本身保存在实例数据里，不会丢。继续吗？",
+  "dsh.brand.hermes.switch.web.title": "先关掉终端，再启动网页",
+  "dsh.brand.hermes.switch.web.message":
+    "这个实例的终端还开着。启动网页会先结束那个终端会话——未提交的输入会丢失，历史会话仍保存在实例里。继续吗？",
   "dsh.brand.octop.short": "Octop",
   "dsh.brand.zcode.short": "ZCode",
   "dsh.brand.thirdparty.warning":

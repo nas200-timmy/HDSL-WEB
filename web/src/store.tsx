@@ -255,7 +255,9 @@ export async function refreshExternal(): Promise<void> {
     external.push({ brand: "octop", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error, disabled: i.disabled });
   }
   for (const i of hermes ?? []) {
-    external.push({ brand: "hermes", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error, disabled: i.disabled });
+    // terminalOpen 必须带上：Hermes 的网页与终端互斥，行内的启动按钮靠它决定
+    // 要不要先弹窗（docs/brands.md「终端与网页互斥」）。
+    external.push({ brand: "hermes", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error, disabled: i.disabled, terminalOpen: i.terminalOpen });
   }
   for (const i of zcode?.instances ?? []) {
     external.push({

@@ -947,6 +947,12 @@ function InstancesCard({
     status: BrandInstallStatus | null;
   } | null>(null);
   const [terminalTarget, setTerminalTarget] = useState<TerminalTargetInfo | null>(null);
+  /// Hermes：网页与终端互斥（docs/brands.md）。替换另一个模式之前先问一句——
+  /// 说清会关掉什么、什么不会丢，确认了再换。
+  const [pendingSwitch, setPendingSwitch] = useState<{
+    inst: ExternalInstance;
+    mode: "terminal" | "web";
+  } | null>(null);
   /// Web Shell 总开关（开发者模式里控制）；关着就不显示终端按钮
   const [webShellEnabled, setWebShellEnabled] = useState(true);
 
@@ -1077,6 +1083,22 @@ function InstancesCard({
     // inst.url 已由后端带挂载点前缀（open/list 端点统一在 REST 边界加 base），
     // 直接打开；只有兜底构造的本地路径才需要 withBase。
     window.open(inst.url ?? withBase(`/i/${inst.id}/`), "_blank", "noopener");
+  };
+
+  /// 打开交互终端。服务端在拿到票据时会先停掉网页模式（互斥），所以过一会儿
+  /// 重读一次列表：这一行的状态是被这次点击改掉的。
+  const openTerminal = (inst: ExternalInstance) => {
+    setTerminalTarget({ kind: "brand", brand, id: inst.id, name: inst.name });
+    window.setTimeout(() => void refreshExternal(), 1500);
+  };
+
+  /// 确认替换另一个模式（Hermes 专用）。
+  const confirmSwitch = () => {
+    const next = pendingSwitch;
+    setPendingSwitch(null);
+    if (!next) return;
+    if (next.mode === "terminal") openTerminal(next.inst);
+    else void doLaunch(next.inst);
   };
 
   const doShowLogs = async (inst: ExternalInstance) => {
@@ -1416,7 +1438,14 @@ function InstancesCard({
                         || installing
                         || (disabled && !running)
                       }
-                      onClick={() => (running ? void doStop(inst) : void doLaunch(inst))}
+                      onClick={() => {
+                        // 启动网页会先关掉这个实例的终端（Hermes 的互斥）：问一句再换。
+                        if (!running && brand === "hermes" && inst.terminalOpen) {
+                          setPendingSwitch({ inst, mode: "web" });
+                          return;
+                        }
+                        running ? void doStop(inst) : void doLaunch(inst);
+                      }}
                     >
                       {running ? <CloseIcon size={18} /> : <RocketLaunchIcon size={18} />}
                     </button>
@@ -1424,9 +1453,14 @@ function InstancesCard({
                       className="icon-btn on-variant ripple-host"
                       title={webShellEnabled ? I18N["terminal.open"] : I18N["terminal.unavailable"]}
                       disabled={!webShellEnabled || installing || disabled}
-                      onClick={() =>
-                        setTerminalTarget({ kind: "brand", brand, id: inst.id, name: inst.name })
-                      }
+                      onClick={() => {
+                        // 打开终端会先停掉这个实例的网页（Hermes 的互斥）：问一句再换。
+                        if (brand === "hermes" && running) {
+                          setPendingSwitch({ inst, mode: "terminal" });
+                          return;
+                        }
+                        openTerminal(inst);
+                      }}
                     >
                       <TerminalIcon size={18} />
                     </button>
@@ -1658,7 +1692,34 @@ function InstancesCard({
         onCancel={() => setPending(null)}
       />
 
-      <TerminalWindow target={terminalTarget} onClose={() => setTerminalTarget(null)} />
+      {/* Hermes：网页与终端互斥，替换另一个模式之前先问（原因与代价在 i18n 里） */}
+      <ConfirmDialog
+        open={pendingSwitch !== null}
+        title={
+          pendingSwitch?.mode === "terminal"
+            ? I18N["dsh.brand.hermes.switch.terminal.title"]
+            : I18N["dsh.brand.hermes.switch.web.title"]
+        }
+        message={
+          pendingSwitch?.mode === "terminal"
+            ? I18N["dsh.brand.hermes.switch.terminal.message"]
+            : I18N["dsh.brand.hermes.switch.web.message"]
+        }
+        confirmLabel={I18N["button.ok"]}
+        busy={busy || busyId !== null}
+        onConfirm={confirmSwitch}
+        onCancel={() => setPendingSwitch(null)}
+      />
+
+      <TerminalWindow
+        target={terminalTarget}
+        onClose={() => {
+          setTerminalTarget(null);
+          // Closing the window ends the session server-side; re-read the list so
+          // `terminalOpen` (and the launch confirmation that reads it) stay true.
+          void refreshExternal();
+        }}
+      />
     </div>
   );
 }

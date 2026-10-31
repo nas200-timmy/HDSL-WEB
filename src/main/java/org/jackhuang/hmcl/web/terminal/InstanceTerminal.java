@@ -142,6 +142,17 @@ public final class InstanceTerminal {
         return terminals.terminate(brand, instanceId);
     }
 
+    /// Whether an interactive terminal is running for this instance.
+    ///
+    /// The web mode and the terminal are exclusive (docs/brands.md), so the
+    /// instance list carries this flag: the UI asks before one mode ends the
+    /// other instead of the switch happening silently behind the click.
+    public boolean isOpen(String brand, String instanceId) {
+        return terminals.find(brand, instanceId)
+                .map(session -> session.state() == TerminalSession.State.RUNNING)
+                .orElse(false);
+    }
+
     /// Takes the instance over and answers the terminal body.
     ///
     /// `stopWeb` brings the instance's web mode down before the TUI starts:

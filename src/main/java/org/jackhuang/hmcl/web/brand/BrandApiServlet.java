@@ -1388,6 +1388,10 @@ public final class BrandApiServlet extends HttpServlet {
         body.addProperty("createdAt", instance.createdAt());
         body.addProperty("state", status.state().name().toLowerCase(java.util.Locale.ROOT));
         body.addProperty("disabled", policy.disabled(brand, instance.id()));
+        // Hermes' web mode and its terminal are exclusive; the UI asks before a
+        // click ends the other mode, so it needs the server's answer (a browser
+        // that never opened a terminal still has to know one is running).
+        body.addProperty("terminalOpen", instanceTerminal.isOpen(brand.id(), instance.id()));
         if (status.error() != null) {
             body.addProperty("error", status.error());
         }
