@@ -2,7 +2,7 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布 · 一键装 Node 会装出个跑不起来的运行时；doctor 认不出托管运行时
+## v0.6.41 — 2026-10-31 · 小版本：Node 装完自检、TUI 插件上界、启动窗口不再假 STOPPED；运行时底座可换（Fedora / openSUSE）
 
 > 起因：底座兼容性实测（`report-2026-10-31-base-compat.md`）。在只有 JRE 的
 > `debian:trixie-slim` 上点一键安装，面板默认挑最新稳定版 **Node 26.13.0**，而它的官方
