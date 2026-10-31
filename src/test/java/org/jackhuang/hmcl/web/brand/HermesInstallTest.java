@@ -77,6 +77,28 @@ class HermesInstallTest {
         }
     }
 
+    /// The exact failure the first shipped version had: the uv stage called
+    /// `Files.createTempFile(toolchain, …)` on a directory nobody had created, so
+    /// every install died with `NoSuchFileException` in "准备 uv" after the 94 MB
+    /// source download had already succeeded.
+    ///
+    /// The directory is now created by the helper the stage codes against, and this
+    /// test performs the call that used to throw on a brand root that does not exist
+    /// yet — the state a fresh container is in.
+    @Test
+    void theToolchainDirectoryIsCreatedBeforeAnythingDownloadsIntoIt() throws IOException {
+        Path brandRoot = dir.resolve("brands/hermes");
+        assertEquals(false, Files.exists(brandRoot), "a fresh brand root has nothing in it");
+
+        Path toolchain = BrandInstaller.toolchainDirectory(brandRoot);
+
+        assertTrue(Files.isDirectory(toolchain));
+        // What the uv stage does first — and what used to throw.
+        Files.deleteIfExists(Files.createTempFile(toolchain, "uv", ".tar.gz"));
+        // Idempotent: the CPython stage asks again, and a second install must not fail.
+        assertEquals(toolchain, BrandInstaller.toolchainDirectory(brandRoot));
+    }
+
     @Test
     void theLockRewriteKeepsThePathAndOnlyChangesTheHost() {
         assertEquals("https://mirror.example.com", BrandInstaller.originOf("https://mirror.example.com/simple"));

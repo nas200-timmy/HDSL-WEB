@@ -313,6 +313,16 @@ public final class BrandInstaller {
     /// `12.3 MB / 260.0 MB` is a number a person can wait on. Without a length the bar stays on the
     /// time-based tick.
     private static java.io.InputStream download(String url, Sink message, String label) throws BrandException {
+        return download(url, message, label, -1, 0);
+    }
+
+    /// The same, also advancing the **overall** bar: `before + weight × bytes-read`.
+    ///
+    /// Without it a download reports its own sub-step only, and the stage's time-based
+    /// tick never takes over (a download prints a line twice a second, which reads as
+    /// "still busy" to the quiet check) — so a four-minute download showed 0%.
+    static java.io.InputStream download(String url, Sink message, String label, double before, double weight)
+            throws BrandException {
         HttpRequest request = HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofMinutes(5))
                 .header("Accept", "*/*")
@@ -325,7 +335,7 @@ public final class BrandInstaller {
                 throw new BrandException("Download answered " + response.statusCode() + ": " + url);
             }
             long total = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
-            ProgressStream stream = new ProgressStream(response.body(), message, label, total);
+            ProgressStream stream = new ProgressStream(response.body(), message, label, total, before, weight);
             stream.watchCancellation();
             return stream;
         } catch (InterruptedException e) {
@@ -345,11 +355,17 @@ public final class BrandInstaller {
         private long read;
         private long lastReport;
 
-        ProgressStream(java.io.InputStream in, Sink message, String label, long total) {
+        private final double before;
+        private final double weight;
+
+        ProgressStream(java.io.InputStream in, Sink message, String label, long total,
+                       double before, double weight) {
             super(in);
             this.message = message;
             this.label = label;
             this.total = total;
+            this.before = before;
+            this.weight = weight;
         }
 
         @Override
@@ -391,10 +407,16 @@ public final class BrandInstaller {
             lastReport = now;
             String rate = speed > 1024 ? " · " + speedText(speed) : "";
             if (total > 0) {
-                message.stage(label, Math.min(0.99, read / (double) total));
+                double done = Math.min(0.99, read / (double) total);
+                message.stage(label, done);
                 long remaining = speed > 1024 ? (long) ((total - read) / speed) : -1;
-                message.accept(label + "：" + megabytes(read) + " / " + megabytes(total) + rate
-                        + (remaining >= 0 ? " · 剩约 " + durationText(remaining) : ""));
+                String line = label + "：" + megabytes(read) + " / " + megabytes(total) + rate
+                        + (remaining >= 0 ? " · 剩约 " + durationText(remaining) : "");
+                if (weight > 0) {
+                    message.report(line, before + weight * done);
+                } else {
+                    message.accept(line);
+                }
             } else {
                 message.stage(label, Math.min(0.9, read / (260.0 * 1024 * 1024)));
                 message.accept(label + "：" + megabytes(read) + rate);
@@ -1313,6 +1335,19 @@ public final class BrandInstaller {
     // Octop): the venv is an editable install whose `direct_url.json` and PEP
     // 660 finder carry absolute paths, so a rename breaks `hermes` itself.
 
+    /// `<brandRoot>/toolchain`, created.
+    ///
+    /// Every artifact this installer stages — uv, CPython — lands in here, and both
+    /// of them need a directory to download into before anything else can happen.
+    /// The creation belongs here rather than at the call sites: the first version of
+    /// this code wrote `Files.createTempFile(toolchain, …)` without it and every
+    /// install died with `NoSuchFileException` in "准备 uv".
+    static Path toolchainDirectory(Path brandRoot) throws IOException {
+        Path toolchain = brandRoot.resolve("toolchain");
+        Files.createDirectories(toolchain);
+        return toolchain;
+    }
+
     /// The key `pm/lock.json` files its artifacts under, or `null` on a
     /// platform upstream does not ship for.
     static @Nullable String hermesPlatform() {
@@ -1502,17 +1537,31 @@ public final class BrandInstaller {
         String archive = BrandSources.archive().url();
         String url = archive.replaceAll("/$", "") + "/" + brand.githubSlug() + "/zip/refs/tags/"
                 + brand.releaseTag(version);
-        stage(message, 0, total, "下载源码", 0.00, 0.04, 60, () -> {
+        stage(message, 0, total, "下载源码", 0.00, 0.10, 240, () -> {
             message.accept("Downloading " + url);
-            extractZip(download(url, message, "下载源码"), target, message::cancelled);
+            // The four minutes this takes at 0.4 MB/s are the longest single step of
+            // the install; without feeding the byte counter into the *overall* bar,
+            // the page sits at 0% and looks dead while it is in fact downloading.
+            extractZip(download(url, message, "下载源码", 0.00, 0.10), target, message::cancelled);
         });
 
         HermesLock lock = readHermesLock(target);
         message.accept("Lock: uv " + lock.uvVersion() + " · CPython " + lock.pythonVersion());
 
-        Path toolchain = brandRoot.resolve("toolchain");
+        BrandSources.Effective pypi = BrandSources.pypi();
+        message.accept("下载源：PyPI=" + pypi.url() + " (" + pypi.source() + ") · npm="
+                + NpmRegistry.effective().registry());
+        if (BrandSources.PYPI_DEFAULT.equals(pypi.url())) {
+            // Measured on this deployment: pythonhosted.org answers at about 80 KB/s,
+            // which turns a 285 MB environment into hours. Saying so at the start is
+            // cheaper than letting somebody conclude the installer hung.
+            message.accept("注意：PyPI 用的是官方源（实测约 80 KB/s，装完要数小时）。"
+                    + "到「设置 → 下载源」选一个国内镜像会快一个数量级。");
+        }
+
         Path[] uvHolder = new Path[1];
-        stage(message, 1, total, "准备 uv " + lock.uvVersion(), 0.04, 0.03, 30, () -> ioStep(() -> {
+        stage(message, 1, total, "准备 uv " + lock.uvVersion(), 0.10, 0.03, 30, () -> ioStep(() -> {
+            Path toolchain = toolchainDirectory(brandRoot);
             Path uv = toolchain.resolve("uv");
             if (!Files.isRegularFile(uv)) {
                 Path archiveFile = Files.createTempFile(toolchain, "uv", ".tar.gz");
@@ -1539,8 +1588,8 @@ public final class BrandInstaller {
         }));
 
         Path[] pythonHolder = new Path[1];
-        stage(message, 2, total, "准备 CPython " + lock.pythonVersion(), 0.07, 0.12, 120, () -> ioStep(() -> {
-            Path pythonRoot = toolchain.resolve("python");
+        stage(message, 2, total, "准备 CPython " + lock.pythonVersion(), 0.13, 0.12, 120, () -> ioStep(() -> {
+            Path pythonRoot = toolchainDirectory(brandRoot).resolve("python");
             Files.createDirectories(pythonRoot);
             Path destination = pythonRoot.resolve(lock.pythonVersion());
             Path python = findInterpreter(destination);
@@ -1561,7 +1610,7 @@ public final class BrandInstaller {
         }));
 
         Path[] lockBackup = new Path[1];
-        stage(message, 3, total, "改写 lock 的下载源", 0.19, 0.02, 20, () -> ioStep(() -> {
+        stage(message, 3, total, "改写 lock 的下载源", 0.25, 0.02, 20, () -> ioStep(() -> {
             Path lockFile = target.resolve("uv.lock");
             String mirror = BrandSources.pypi().url();
             String origin = originOf(mirror);
@@ -1587,7 +1636,7 @@ public final class BrandInstaller {
         pythonEnv.put("PYTHONDONTWRITEBYTECODE", "1");
         pythonEnv.put("UV_NO_PROGRESS", "1");
         pythonEnv.put("PIP_INDEX_URL", BrandSources.pypi().url());
-        stage(message, 4, total, "安装 Python 依赖（uv sync --extra all）", 0.21, 0.55, 300, () ->
+        stage(message, 4, total, "安装 Python 依赖（uv sync --extra all）", 0.27, 0.49, 300, () ->
                 runChecked(List.of(uvHolder[0].toString(), "sync", "--frozen", "--no-dev",
                                 "--python", pythonHolder[0].toString(), "--extra", "all"),
                         target, pythonEnv, log, message, "installing the Python environment"));
@@ -1623,13 +1672,14 @@ public final class BrandInstaller {
         Path tuiOut = products.resolve("tui");
         Path webOut = target.resolve("hermes_cli/web_dist");
 
-        stage(message, 6, total, "生成图标", 0.78, 0.03, 30, () -> {
+        stage(message, 6, total, "生成图标", 0.78, 0.03, 30, () -> ioStep(() -> {
+            Files.createDirectories(icons);
             Map<String, String> env = new HashMap<>(nodeEnv);
             env.put("HERMES_PYTHON", venvPython.toString());
             runChecked(List.of("node", "scripts/generate-icons.mjs",
                             "--source", target.toString(), "--out", icons.toString()),
                     target, env, log, message, "generating the icons");
-        });
+        }));
 
         stage(message, 7, total, "安装前端依赖（node-deps）", 0.81, 0.08, 120, () ->
                 runChecked(List.of("node", "scripts/build/node-deps.mjs",
@@ -2225,7 +2275,7 @@ public final class BrandInstaller {
                 // install (the JVM was killed, or the download failed). It is
                 // not usable, so it must not be offered.
                 if (!hasInstallMarker(directory)) {
-                    LOG.warning("Ignoring incomplete Octop release at " + directory
+                    LOG.warning("Ignoring incomplete brand release at " + directory
                             + " (no install marker); run an install of that version to repair it");
                     continue;
                 }
