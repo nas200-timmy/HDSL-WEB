@@ -90,6 +90,16 @@ class PrivilegesTest {
     }
 
     @Test
+    void theAgentUidIsConfigurableBecauseSomeStorageProtectsOnlyOtherNumbers() {
+        assertEquals(1000, Privileges.agentUid(null));
+        assertEquals(1000, Privileges.agentUid("  "));
+        assertEquals(1001, Privileges.agentUid("1001"));
+        assertEquals(1000, Privileges.agentUid("not-a-number"), "a typo must not become uid 0");
+        assertEquals(1000, Privileges.agentUid("0"));
+        assertEquals(1000, Privileges.agentUid("70000"));
+    }
+
+    @Test
     void theBannerNoteOnlySpeaksForRootOutsideAContainer() {
         // Whatever this machine is, the note must agree with the predicate the
         // code actually uses — that is the part a regression would break.

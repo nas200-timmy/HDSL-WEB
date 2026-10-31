@@ -2,6 +2,24 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 · 面板以 root 跑之后的三处回归（工作区、pnpm 配置、首启权限）
+
+> 起因：宿主在真机（QNAP NAS，v0.6.43 镜像）上验收，三条 FAIL。前两条是我引入的回归。
+
+- **默认工作区变成 `/root/workspace`**：面板是 root 后 JVM 的 `user.home` 是 `/root`，而
+  agent 是 uid 1000，连 `cd /root` 都进不去（0700）——终端起来 44 ms 就 exit 1。
+  新增 `util/platform/UserHome`：**`HOME` 优先于 `user.home`**（systemd 与容器都会设 HOME；
+  `user.home` 取的是 passwd 里的家目录，换用户跑就是错的）。workspace、pnpm 全局配置目录、
+  整合包安装的默认工作区三处都改用它的同一套规则。
+- **首启 `logs/` 是组可写**：入口只修"已经存在"的路径，而 `auth/`、`logs/` 是面板启动后才建的，
+  继承了 volume 的 setgid + umask 002（`root:hdsl 2775`），要下次重启才纠正。入口改为先
+  `mkdir -p` 四个秘密路径再改属主。
+- **agent uid 可在构建期改**：`--build-arg HDSL_AGENT_UID=1001`。有些存储（QNAP 的 trimacl）
+  把共享属主当管理员放行，mode 位形同虚设——那里唯一的镜像内办法是换一个不是属主的号。
+  镜像里的 `hdsl` 用户、入口的 chown、`Privileges` 的 `setpriv` 读同一个值。
+- **入口自检"隔离是否真的成立"**：以 agent 身份试写一次 `auth/`，成功就打一条 WARNING
+  （这台机器的文件系统不认 mode 位），对应文档 `security.md §2.7`。
+
 ## v0.6.43 — 2026-10-31 · 小版本：容器里面板 root 持有秘密、agent 跑成 uid 1000
 
 > 起因：同 uid 的容器里，agent 能改面板的 `auth/`、`certs/`、`server.yaml` 和审计日志——

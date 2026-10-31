@@ -146,7 +146,9 @@ public final class Main {
             // mounts), or HDSL_WORKSPACE when the operator named another
             // folder. Not the directory the launcher keeps its instances in,
             // which is what the domain defaults to.
-            WorkspaceDirectory.install(env, Path.of(System.getProperty("user.home")), Logger.LOG);
+            // 用 HOME 而不是 user.home：容器里面板是 root，user.home 是 /root，
+            // 而 agent 在 uid 1000 下看到的家目录是 /home/hdsl（见 UserHome）。
+            WorkspaceDirectory.install(env, org.jackhuang.hmcl.util.platform.UserHome.directory(env), Logger.LOG);
 
             UserStore users = UserStore.open(config.dataDir, env, Logger.LOG);
             AuthService auth = new AuthService(users, Duration.ofHours(config.auth.sessionTtlHours));
@@ -184,7 +186,8 @@ public final class Main {
         System.out.println("  data dir : " + config.dataDir);
         System.out.println("             (server.yaml / accounts / instances / pnpm store / certificates -");
         System.out.println("              back up or migrate by copying this folder; keep it off the public net)");
-        System.out.println("  workspace: " + WorkspaceDirectory.resolve(env, Path.of(System.getProperty("user.home"))));
+        System.out.println("  workspace: " + WorkspaceDirectory.resolve(env,
+                org.jackhuang.hmcl.util.platform.UserHome.directory(env)));
         System.out.println("  auth     : " + (config.auth.disabled
                 ? "disabled (loopback bind only; do not expose this instance)"
                 : "enabled (session cookie)"));

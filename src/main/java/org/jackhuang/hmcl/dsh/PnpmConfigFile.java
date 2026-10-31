@@ -101,7 +101,7 @@ public final class PnpmConfigFile {
         String xdg = System.getenv("XDG_CONFIG_HOME");
         Path configHome = xdg != null && !xdg.isBlank()
                 ? Path.of(xdg.trim())
-                : Path.of(System.getProperty("user.home", "/home/hdsl"), ".config");
+                : org.jackhuang.hmcl.util.platform.UserHome.directory().resolve(".config");
         return configHome.resolve("pnpm").resolve("config.yaml");
     }
 

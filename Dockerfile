@@ -362,9 +362,10 @@ RUN set -eux; \
 # in pnpm's global config.yaml. So the store location is written there, both
 # here (the default a container gets even if the entrypoint is bypassed) and by
 # the entrypoint below (which can also fold in NPM_CONFIG_REGISTRY).
+ARG HDSL_AGENT_UID=1000
 RUN set -eux; \
-    groupadd --gid 1000 hdsl; \
-    useradd --uid 1000 --gid 1000 --create-home --home-dir /home/hdsl --shell /bin/bash hdsl; \
+    groupadd --gid "${HDSL_AGENT_UID}" hdsl; \
+    useradd --uid "${HDSL_AGENT_UID}" --gid "${HDSL_AGENT_UID}" --create-home --home-dir /home/hdsl --shell /bin/bash hdsl; \
     mkdir -p /app /data "${COREPACK_HOME}" /home/hdsl/.config/pnpm /home/hdsl/workspace /home/hdsl/mc; \
     printf 'storeDir: %s\n' "/data/pnpm-store" > /home/hdsl/.config/pnpm/config.yaml; \
     chown -R hdsl:hdsl /data /home/hdsl
@@ -414,17 +415,35 @@ RUN printf '%s\n' \
       '  # setgid group and the 002 umask, so the agent can maintain it without' \
       '  # anyone adding it to a list here.' \
       '  mkdir -p "$HDSL_DATA"' \
-      '  fix_owner "$HDSL_DATA" 1000:1000 2775' \
-      '  fix_owner /home/hdsl 1000:1000 2775' \
+      '  fix_owner "$HDSL_DATA" ${HDSL_AGENT_UID}:${HDSL_AGENT_UID} 2775' \
+      '  fix_owner /home/hdsl ${HDSL_AGENT_UID}:${HDSL_AGENT_UID} 2775' \
       '  # These two are separate mounts in most deployments; the /home/hdsl pass' \
       '  # above only recurses when that directory itself has the wrong owner, so' \
       '  # a host directory with somebody else uid would otherwise stay unwritable.' \
-      '  fix_owner /home/hdsl/workspace 1000:1000 2775' \
-      '  fix_owner /home/hdsl/mc 1000:1000 2775' \
+      '  fix_owner /home/hdsl/workspace ${HDSL_AGENT_UID}:${HDSL_AGENT_UID} 2775' \
+      '  fix_owner /home/hdsl/mc ${HDSL_AGENT_UID}:${HDSL_AGENT_UID} 2775' \
+      '  # Create them here: the panel would otherwise create auth/ and logs/ itself,' \
+      '  # after this script has run, and a directory created inside the volume' \
+      '  # inherits 1000 + setgid + the 002 umask — group-writable until the *next*' \
+      '  # restart corrects it.' \
+      '  mkdir -p "$HDSL_DATA/auth" "$HDSL_DATA/certs" "$HDSL_DATA/logs"' \
       '  fix_owner "$HDSL_DATA/auth" 0:0 700' \
       '  fix_owner "$HDSL_DATA/certs" 0:0 700' \
       '  fix_owner "$HDSL_DATA/logs" 0:0 700' \
       '  fix_owner "$HDSL_DATA/server.yaml" 0:0 600' \
+      '' \
+      '  # Some storage does not enforce mode bits at all: an ACL-managed share (QNAP' \
+      '  # trimacl, some NAS exports) treats the share owner as an administrator and' \
+      '  # lets it through 0700. There the split below is only on paper, and a silent' \
+      '  # false sense of security is worse than no split — so say it out loud.' \
+      '  if command -v setpriv >/dev/null 2>&1; then' \
+      '    if setpriv --reuid=${HDSL_AGENT_UID} --regid=${HDSL_AGENT_UID} --init-groups -- touch "$HDSL_DATA/auth/.hdsl-probe" 2>/dev/null; then' \
+      '      rm -f "$HDSL_DATA/auth/.hdsl-probe"' \
+      '      echo "HDSL-web: WARNING: this filesystem does not enforce mode bits for uid 1000." >&2' \
+      '      echo "HDSL-web: auth/, certs/ and logs/ are NOT protected from the agent on this host." >&2' \
+      '      echo "HDSL-web: see docs/security.md 2.7 (ACL-managed shares such as QNAP trimacl)." >&2' \
+      '    fi' \
+      '  fi' \
       'fi' \
       '' \
       '# A host directory mounted on /data hides the pnpm this image baked into' \
@@ -485,6 +504,7 @@ RUN printf '%s\n' \
 #                 reaches `docker logs` as ?????. C.UTF-8 is built into Debian's
 #                 glibc, so this costs nothing.
 ENV HDSL_DATA=/data \
+    HDSL_AGENT_UID=${HDSL_AGENT_UID} \
     HDSL_PORT=3080 \
     NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
     PNPM_STORE_DIR=/data/pnpm-store \

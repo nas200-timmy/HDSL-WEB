@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.util.platform;
 
 import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -51,7 +52,35 @@ public final class Privileges {
 
     /// The uid and gid the image gives to `hdsl`, and therefore the identity
     /// everything that acts for an instance runs as.
-    public static final int AGENT_UID = 1000;
+    ///
+    /// It is a build argument (`HDSL_AGENT_UID`) rather than a constant because
+    /// some storage refuses to be protected by mode bits for one particular
+    /// number: a QNAP ACL-managed share treats its owner (usually 1000) as an
+    /// administrator and lets it through 0700. There the only lever inside the
+    /// image is "be a different uid", so the image can be built as 1001 instead.
+    /// The entrypoint reads the same variable, so the two cannot drift.
+    public static final int AGENT_UID = agentUid(System.getenv("HDSL_AGENT_UID"));
+
+    /// Parses the configured uid, falling back to 1000.
+    ///
+    /// @param configured the raw value, or `null`
+    /// @return a usable uid
+    static int agentUid(@Nullable String configured) {
+        if (configured == null || configured.isBlank()) {
+            return 1000;
+        }
+        try {
+            int parsed = Integer.parseInt(configured.trim());
+            if (parsed > 0 && parsed < 65536) {
+                return parsed;
+            }
+        } catch (NumberFormatException ignored) {
+            // fall through to the warning
+        }
+        org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                "HDSL_AGENT_UID='" + configured + "' is not a uid; using 1000");
+        return 1000;
+    }
 
     /// Set once at startup: whether this JVM is the root inside a container.
     private static final boolean DROP_CHILDREN = inContainer() && euid() == 0;

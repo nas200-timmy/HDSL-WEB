@@ -457,6 +457,13 @@ v0.6.43 起，镜像不再 `USER hdsl`，面板以 root 跑、每个 agent 进�
 4. **验收**：`docker exec -u 1000 <容器> sh /scripts/verify-privilege-split.sh`。先建一个实例，
    否则"实例目录可写"那条会跳过。期望 `auth/`、`logs/` 读写都被拒，实例目录与 pnpm store 可写。
 
+5. **默认工作区不再跟着 root 跑**：面板是 root 之后 `user.home` 是 `/root`，v0.6.43 的默认
+   工作区一度变成 `/root/workspace`（0700，agent 进不去，终端起来 44 ms 就退出）。v0.6.44 起
+   按 `HOME` 解析（镜像里是 `/home/hdsl`），与挂载点一致；`HDSL_WORKSPACE` 仍然可以覆盖。
+6. **ACL 管理的存储要当心**：入口会自检"agent 能不能写 `auth/`"，能写就打 WARNING——那说明
+   这台机器的文件系统不认 mode 位（QNAP trimacl 一类），隔离不成立。要么换存储，要么用
+   `--build-arg HDSL_AGENT_UID=1001` 重建镜像，详见 `security.md §2.7`。
+
 供应商 API key 不在这层保护里（agent 与 ACP 要用），见 `docs/design-notes.md §7.5.1`。
 
 ---

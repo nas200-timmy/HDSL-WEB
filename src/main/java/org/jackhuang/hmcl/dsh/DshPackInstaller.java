@@ -1397,7 +1397,7 @@ public final class DshPackInstaller {
                                          @Nullable java.util.function.Consumer<String> report)
             throws DshException {
         DshInstance instance = DshInstanceManager.create(id, version, profile,
-                Path.of(System.getProperty("user.home")),
+                org.jackhuang.hmcl.util.platform.UserHome.directory(),
                 org.jackhuang.hmcl.dsh.DshHomeMode.ISOLATED, null, List.of(), java.util.Map.of());
         try {
             say(report, "Installing DeepSeek Harness " + version);
