@@ -321,6 +321,20 @@ Kimi Code 的客户端认子路径，不需要这段脚本（实验证明：注�
 循环则自己看 `isCancelled()`；已写入的半成品留在安装目录，由**启动时对账**清理（见 `octop.md`
 的「半安装与自动修复」）。
 
+## 新增一个品牌要动的地方（这份清单是被漏出来的）
+
+第一次接 Hermes 时，后端全通、品牌页也能看到，但**实例建出来不显示**——因为漏了其中一条，
+而那条恰好是唯一把"各品牌实例"合成一个列表的地方。按下面顺序过一遍，每条都有个具体现象验收：
+
+| 改哪 | 漏了会怎样 |
+|---|---|
+| `Brand.java`：枚举项 + 能力位（`installMarker` / `isReleaseVersion` / `stopWaitSeconds` …） | 版本列表里没有这个品牌，或装完认不出 |
+| `BrandInstaller.install` 分支 + `BrandRuntime.plan` | 能选版本、装不上 / 起不来 |
+| 反代特判（只有"客户端自己认挂载点或路由"的品牌才需要） | `/i/<id>/` 白屏或双前缀 |
+| **`web/src/store.tsx` 的 `refreshExternal()`** | **实例建出来不显示、按钮一直转，看起来像卡死**（Hermes 第一次就是这样：品牌页自己另拉列表，所以截图是好的） |
+| `web/src/types.ts` 的 `BrandId`、`BrandsView` 的 `BRAND_KEYS/BRAND_TITLE/BRAND_SHORT`、`i18n.ts` | 品牌页没有这一栏，或标题是 undefined |
+| `web/src/actions.ts` 与 `LaunchPane` 的品牌联合类型、`MainPage` 的断言 | 主界面启动/停止按钮传不过去（tsc 会拦，但只在类型收窄的地方） |
+
 ## 已知限制
 
 - **Claude Web 的引擎与账号**：它内置的引擎是社区构建（claude-code-best 基底），可登官方 Claude
