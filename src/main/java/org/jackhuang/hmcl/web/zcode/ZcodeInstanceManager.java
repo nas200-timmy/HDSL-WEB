@@ -258,6 +258,11 @@ public final class ZcodeInstanceManager {
     /// under [workspacesRoot] and is left untouched, because it holds the
     /// operator's project rather than the instance's state.
     ///
+    /// The directory is renamed out of the way before it is emptied (see
+    /// [FileUtils#deleteByTombstone]): the listing keys on the directory name, so an
+    /// instance whose log another program still holds is gone from the list instead of
+    /// lingering as a row that cannot start.
+    ///
     /// @param id the instance id
     /// @throws ZcodeException when the instance does not exist or cannot be removed
     public void delete(String id) throws ZcodeException {
@@ -269,12 +274,48 @@ public final class ZcodeInstanceManager {
         if (!directory.normalize().startsWith(root)) {
             throw new ZcodeException("Refusing to delete " + directory + " because it is outside the ZCode instances directory");
         }
+        // A process started by an earlier panel is not in this one's registry, and on
+        // Windows a directory cannot be removed while any process has it as its current
+        // directory — which is exactly how an instance's tool is started. Without this,
+        // "delete" fails with an empty error while something invisible sits on the tree.
+        int strays = org.jackhuang.hmcl.util.ProcessTree.killReferencing(directory);
+        if (strays > 0) {
+            LOG.info("Stopped " + strays + " process(es) still referencing " + directory);
+        }
+        Path leftover;
         try {
-            FileUtils.deleteDirectory(directory);
+            leftover = FileUtils.deleteByTombstone(directory, ".deleting-" + System.currentTimeMillis());
         } catch (IOException e) {
             throw new ZcodeException("Failed to remove " + directory, e);
         }
+        if (leftover != null) {
+            LOG.warning("Could not delete " + directory + " completely; renamed it to "
+                    + leftover.getFileName() + " and it will be swept later");
+        }
         LOG.info("Removed experimental ZCode instance " + id);
+    }
+
+    /// Removes the tombstones a delete leaves behind.
+    ///
+    /// A directory that could not be deleted is renamed to `<id>.deleting-<millis>` (see
+    /// [delete]), which takes the name away from the instance even when a file inside it is
+    /// still held. Those leftovers are invisible to every list (no `instance.json`), so all
+    /// that is left to do is to try again — at startup, when whatever held them is most
+    /// likely gone.
+    public void sweepTombstones() {
+        if (!Files.isDirectory(root)) {
+            return;
+        }
+        try (Stream<Path> entries = Files.list(root)) {
+            for (Path entry : entries.toList()) {
+                String name = entry.getFileName().toString();
+                if (name.contains(".deleting-") && FileUtils.deleteDirectoryQuietly(entry)) {
+                    LOG.info("Removed the leftover " + name);
+                }
+            }
+        } catch (IOException e) {
+            LOG.warning("Could not sweep the tombstones under " + root, e);
+        }
     }
 
     /// The directory holding an instance's manifest and runtime state.

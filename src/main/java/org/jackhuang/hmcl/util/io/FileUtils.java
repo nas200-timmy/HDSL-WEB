@@ -273,6 +273,31 @@ public final class FileUtils {
         }
     }
 
+    /// Removes a directory tree by taking its name away first.
+    ///
+    /// A delete that fails half-way through leaves a directory that still looks like
+    /// what it was — for an instance, a tree whose install is gone but whose manifest
+    /// remains, which is a row that cannot start. Renaming first makes the removal
+    /// look atomic to everything that finds directories by name: the name is gone
+    /// even when something inside refuses to be removed, and what is left is swept
+    /// later.
+    ///
+    /// @param directory       the directory to remove; a missing one is success
+    /// @param tombstoneSuffix the suffix appended to the directory's name, already
+    ///                        formatted by the caller (for example `.deleting-<millis>`)
+    /// @return `null` when the tree is gone, or the leftover directory when something
+    ///         inside it could not be removed
+    /// @throws IOException when the directory cannot even be renamed, in which case
+    ///                     nothing inside it has been touched
+    public static @Nullable Path deleteByTombstone(Path directory, String tombstoneSuffix) throws IOException {
+        if (!Files.exists(directory))
+            return null;
+
+        Path tombstone = directory.resolveSibling(directory.getFileName() + tombstoneSuffix);
+        Files.move(directory, tombstone);
+        return deleteDirectoryQuietly(tombstone) ? null : tombstone;
+    }
+
     /// Deletes a file or a directory, retrying briefly while the system still holds a
     /// handle on it.
     ///

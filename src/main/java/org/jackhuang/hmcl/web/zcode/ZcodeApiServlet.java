@@ -110,6 +110,9 @@ public final class ZcodeApiServlet extends HttpServlet {
         this.config = config;
         Path root = config.dataDir.resolve("zcode");
         this.manager = new ZcodeInstanceManager(root.resolve("instances"));
+        // Directories a delete could not remove (something held a file inside) were
+        // renamed aside; at startup whatever held them is most likely gone.
+        this.manager.sweepTombstones();
         this.buildSettings = new ZcodeBuilder.Settings(root, buildBin(config.zcode.buildBin), config.zcode.pnpm,
                 config.zcode.sourceUrl, config.zcode.keepSources);
         this.instanceTerminal = new InstanceTerminal(config, terminals, terminalTickets, auth,

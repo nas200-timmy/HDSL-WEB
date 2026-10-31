@@ -2,6 +2,28 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 · 删除实例先拿走名字，再删内容
+
+> 起因：Windows 上删实例删到一半失败——`<id>/dsh` 已经被删空，`instance.json` 却还在，
+> 于是列表里那个实例点开就错。根因是老顺序「先递归删，失败了才改名」：只要中间有一个文件
+> 被别的进程握着，删掉的就已经是安装，留下的却是那个描述它的清单。
+
+- **`FileUtils.deleteByTombstone`**（新）：先 `Files.move` 到 `<id>.deleting-<millis>`，再递归删。
+  列表按目录名找实例，所以改名一成功实例就不在列表里了；**改名失败才抛**（此时内容一点没动，
+  说"删不掉"不是撒谎）；删不掉的残留返回给调用方记日志，由启动清理再删一次。
+- **dsh / 品牌 / ZCode 三处 `delete` 都改走它**，并把「先杀掉还引用该目录的进程」
+  （`ProcessTree.killReferencing`）补到品牌与 ZCode——Windows 上进程把实例目录当 cwd 时，
+  连改名都会失败（实测），这一步以前只有 dsh 有。
+- **tombstone 清理扩到品牌与 ZCode**：两个 manager 各加 `sweepTombstones()`，在启动路径
+  （`BrandApiServlet` / `ZcodeApiServlet` 构造时）各跑一次，与 dsh 在 `Main` 里那次同性质。
+  没有新起定时任务。
+- 回归覆盖：`FileUtilsTombstoneTest`（正常删干净 / 目录不存在 / **内容删不掉时留 tombstone 而不是
+  半个实例** / 连改名都做不到时一点没动）与 `DshInstanceDeleteTest`（`find(id)` 为 null、
+  `instance.json` 与目录名都不在、`delete` 不抛、启动清理能收尾；以及「删失败时安装与清单都还在」
+  ——这条在旧代码上是红的：改名被拒时 `dsh/` 已经被删空，只剩 `instance.json`）。
+  实测补充：Windows 上**活着的文件句柄连目录改名也一起挡住**，所以真正的残留来自「删除被拒、改名还行」
+  （只读文件、杀软/索引器的瞬时占用这类），而不是「文件开着」本身。
+
 ## 未发布 · OpenCode 1.19.5 用 chunked 发资源，bundle 补丁静默失效
 
 > 起因：挂 `/i/<id>/` 的 OpenCode 面板里 markdown 高亮报

@@ -95,7 +95,9 @@ public final class Main {
             org.jackhuang.hmcl.util.platform.OutboundTls.accept(config.network.acceptUnverifiedUntil);
 
             // Directories a delete could not remove (something held a file inside) were
-            // renamed aside; at startup whatever held them is most likely gone.
+            // renamed aside; at startup whatever held them is most likely gone. The brand and
+            // ZCode categories sweep their own roots where their managers are built
+            // (BrandApiServlet / ZcodeApiServlet), which is also this startup path.
             org.jackhuang.hmcl.dsh.DshInstanceManager.sweepTombstones();
 
             Logger.LOG.start(config.dataDir.resolve("logs"));

@@ -104,6 +104,13 @@ HDSL-web/
   pnpm-store/            # 共享 pnpm store（多实例安装提速）
 ```
 
+删除实例（dsh / 品牌 / ZCode 一致）：**名字先拿掉，内容随删**——先把 `<id>` 改名成
+`<id>.deleting-<millis>`，再递归删。列表按目录名找实例，所以改名成功那一刻实例就已经不在
+列表里了；删不掉的残留（清理时被拒：只读文件、杀软/索引器的瞬时占用这类）留成
+`.deleting-<millis>`，由**启动时**的 `DshInstanceManager.sweepTombstones()` / 品牌与 ZCode 各自的
+`sweepTombstones()` 再删一次。改名本身失败才报"删不掉"，此时内容一点没动（Windows 上活着的
+文件句柄连目录改名都会挡住，这也是删除前先 `ProcessTree.killReferencing` 的原因）。
+
 环境变量覆盖：`HDSL_PORT`（默认 **3080**，HTTPS 启用时同端口说 TLS）、`HDSL_ADMIN_PASSWORD`（未设则首启生成并打印到日志）、`NPM_CONFIG_REGISTRY`（npmmirror 等）、`HDSL_DATA=/data`。dsh 实例池仍占 3081–4081（容器内回环，与 3080 不冲突）；可选 `http_redirect_port: 80` 做 HTTP→HTTPS 跳转。
 
 ## 声明式 HTTPS 设计

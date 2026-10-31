@@ -121,7 +121,11 @@ public final class BrandApiServlet extends HttpServlet {
         Path base = config.dataDir.resolve("brands");
         for (Brand brand : Brand.values()) {
             Path root = base.resolve(brand.id());
-            brands.put(brand, new PathRef(root, new BrandInstanceManager(brand, root.resolve("instances"))));
+            BrandInstanceManager manager = new BrandInstanceManager(brand, root.resolve("instances"));
+            // Directories a delete could not remove (something held a file inside) were
+            // renamed aside; at startup whatever held them is most likely gone.
+            manager.sweepTombstones();
+            brands.put(brand, new PathRef(root, manager));
         }
     }
 

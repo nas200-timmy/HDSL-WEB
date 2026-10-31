@@ -256,6 +256,12 @@ public final class DshInstanceManager {
     /// A shared or custom home is never deleted: other instances, or the user's
     /// own `dsh` installation, may still depend on it.
     ///
+    /// The directory loses its name before anything inside it is removed (see
+    /// [FileUtils#deleteByTombstone]), so a file another program holds can no longer
+    /// leave a half-deleted instance behind: the listing keys on the directory name,
+    /// so the row is gone the moment the tree is renamed, whatever is still being
+    /// pumped into it.
+    ///
     /// @param id the instance id
     /// @throws DshException when the instance does not exist or cannot be removed
     public static void delete(String id) throws DshException {
@@ -275,23 +281,15 @@ public final class DshInstanceManager {
         if (strays > 0) {
             LOG.info("Stopped " + strays + " process(es) still referencing " + directory);
         }
+        Path leftover;
         try {
-            FileUtils.deleteDirectory(directory);
+            leftover = FileUtils.deleteByTombstone(directory, ".deleting-" + System.currentTimeMillis());
         } catch (IOException e) {
-            // Still not removable (a file another program holds, a path longer than the
-            // limit). Take the name away instead: a rename usually succeeds where a delete
-            // does not, the record is about to be gone, and the leftover is swept later.
-            Path tombstone = directory.resolveSibling(directory.getFileName()
-                    + ".deleting-" + System.currentTimeMillis());
-            try {
-                Files.move(directory, tombstone);
-            } catch (IOException rename) {
-                e.addSuppressed(rename);
-                throw new DshException("Failed to remove " + directory, e);
-            }
-            FileUtils.deleteDirectoryQuietly(tombstone);
-            LOG.warning("Could not delete " + directory + " (" + e.getMessage()
-                    + "); renamed it to " + tombstone.getFileName() + " and it will be swept later");
+            throw new DshException("Failed to remove " + directory, e);
+        }
+        if (leftover != null) {
+            LOG.warning("Could not delete " + directory + " completely; renamed it to "
+                    + leftover.getFileName() + " and it will be swept later");
         }
         LOG.info("Removed instance " + id);
         fireChanged();
