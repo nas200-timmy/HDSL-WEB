@@ -2,23 +2,55 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布
+## v0.6.50 — 2026-11-01 · 中版本：新增品牌 Hermes Agent（第一个双进程品牌），MC 实例列表并进实例页
 
-- **新增品牌 Hermes Agent（实验）**：从 tag 源码装、`uv sync --extra all` 建环境（Python 3.14.9 与
-  uv 0.13.5 都按版本自己的 `pm/lock.json` 走，不写死），再本地构建 web 与 TUI 两个前端产物。
-  单版本 570 MB，装一次 2–4 分钟。Linux / macOS；Windows 明确拒绝（要 Python 工具链，面板不管）。
-- **第一个双进程品牌**：`gateway` + `dashboard` 由一个生成的 `wrapper.sh` 带起来，面板仍只持有一个
-  进程句柄；dashboard 要等 gateway 的 `/health` 才挂，所以就绪判据换成轮询 `/api/status`
-  （`gateway_running=true`，不看 `overall`）。停止窗口 40 s，面板关停时 `stopAll` 用共享 deadline
-  收全部实例——`docker stop` 只给 PID 1 发信号，没有这一步 gateway 会活到容器 grace 期结束。
-- **反代按品牌特判**：Hermes 的 dashboard 读 `X-Forwarded-Prefix`，所以面板给它补前缀、去掉 `Host`
-  （它只接受回环），并且**不再改写它的页面**——`brandClient=false` 关不掉页面改写，`pump` 为此
-  多了一个 `prefixClient`；再改写一次会变成 `/i/<id>/i/<id>/assets/…`。WebSocket 侧同理丢掉
-  `Host` 与 `Origin`（上游 WS 自己查这两项）。
-- **API 端点**：`GET /api/brands/hermes/instances/<id>/endpoint` 给出 OpenAI 兼容的 `baseUrl`、key 与
-  运行状态；实例卡片的「API 端点」条可一键「添加到账户」（`openai-completions`）。
-- **权限常量集中**：面板替 agent 写的文件有五套模式（共享 0664/0775、私有 0600/0700、可执行 0700），
-  从 `PnpmConfigFile` 提升到 `Privileges`；Hermes 的 `.env`、`wrapper.sh`、`home/` 都按这套交付。
+> 起因：把 Hermes Agent（Nous Research，MIT）接成第四个品牌。它是这批里第一个**两个进程**的品牌
+> （gateway + dashboard），也是第一个**自己认挂载点**的（反代不再改写它的页面）——两条都要求面板
+> 在原来为"单进程品牌"长的骨架上多长出一块。
+
+**Hermes Agent（实验）**
+
+- 从 tag 源码装，`uv sync --frozen --no-dev --extra all` 建环境；Python 3.14.9 与 uv 0.13.5 都按
+  该版本自己的 `pm/lock.json` 取（不写死，版本一换就跟着换），产物走 Nous 的内容寻址 CDN、
+  失败回落 lock 里的 GitHub URL，两边都校验 sha256。前端两个产物（web / TUI）本地构建。
+  单版本 570 MB，装一次 2–4 分钟。
+- **一个 wrapper 带两个进程**：`gateway run` 先起并等 `/health`，再起 `dashboard --skip-build`；
+  面板仍只持有一个进程句柄，谁死了另一个跟着收尾。就绪判据换成轮询 `/api/status`
+  （`gateway_running=true`，不看 `overall`——它把各消息平台也算进去）。停止窗口 40 s，
+  面板关停时 `stopAll` 用共享 deadline 收全部实例（`docker stop` 只给 PID 1 发信号）。
+- **反代按品牌特判**：它读 `X-Forwarded-Prefix` 自己生成全部资源地址，所以面板补前缀、去掉
+  `Host`（它只接受回环），并且**不再改写它的页面**——`brandClient=false` 关不掉页面改写，
+  再改一次就是 `/i/<id>/i/<id>/assets/…`；它的 bundle 只做一处定点修改（Vite 的资源基址）。
+  WebSocket 侧同理丢掉 `Host` 与 `Origin`（上游 WS 自己会查这两项）。
+- **API 端点**：`GET /api/brands/hermes/instances/<id>/endpoint` 给出 OpenAI 兼容的 `baseUrl`、
+  key 与运行状态；实例卡片的「API 端点」条可一键「添加到账户」（`openai-completions`）。
+- **交互 TUI**：实例的终端入口接上它自带的 Ink TUI（用实例自己 `home/tools` 里那份 Node）。
+  打开终端会先停掉 web 模式——同一个 HOME 上两套 agent 会抢状态。
+- **Windows 不提供**：装不了不是点了才报错——品牌页的安装入口置灰并写出原因（要走 WSL2）。
+- **权限**：面板替 agent 写的文件集中成五套模式（共享 0664/0775、私有 0600/0700、可执行 0700），
+  从 `PnpmConfigFile` 提到 `Privileges`；实例的 `home/` 与 `workspace/` 在创建与每次启动时
+  都交给 agent。
+
+**真机上才暴露的六个坑（都已修，写在这里是因为它们都是"两个工件没对上"的形状）**
+
+1. `toolchain/` 目录没建，uv 阶段 `createTempFile` 直接 `NoSuchFileException`——94 MB 下载完才炸。
+2. wrapper 收 5 个位置参数，启动行一个都没传，`set -u` 报 `1: parameter not set`。
+3. 实例 `home/` 是 root 的，Hermes 的 gateway 发现拒绝这种 control path
+   （`unsafe_control_path: … owned by uid 0, expected uid 1000`），症状是聊天面板一直
+   `retrying in 30s`、消息堆在 `queued`。别的品牌不检查属主，看着没事——只因为 `/data` 是
+   setgid 组可写，和 v0.6.45 的 pnpm 是同一个形状。
+4. 启动重写 `.env`，把操作者在 Hermes「密钥」页加的 provider key 抹掉，聊天随即
+   `No usable credentials found`。
+5. 前端 `refreshExternal()` 漏了 hermes：实例建出来不进列表，按钮一直转，看着像卡死。
+6. 前缀感知品牌被当成普通品牌做脚本补丁，Vite 的懒加载基址错位。
+
+**其它**
+
+- **MC 实例列表并进实例页**（`?view=mc`）：和 dsh 实例、品牌实例同级原地切换，不再跳独立页面；
+  顺手修掉一个真实崩溃（`useMemo` 写在早退之后，功能开关一开就是 React #310）。
+- **退出登录**从实例页的子侧栏撤掉（主侧栏与「设置 → 服务器信息」各一处）。
+- 测试：**1155 用例**。新增 `HermesWrapperSmokeTest`——用假 release 真的执行 `/bin/sh wrapper`，
+  断言两个子进程、pid 文件、TERM 后全部收干净。这是第一次有测试跨过 Java ↔ shell 这条边界。
 
 ## v0.6.45 — 2026-10-31 · 修复：MC 功能开启按钮的三条死路；ZCode 的 owner 补丁改成全平台
 
