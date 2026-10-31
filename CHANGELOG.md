@@ -2,7 +2,7 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## v0.6.42 — 2026-10-31 · 修复：v0.6.41 的镜像构建失败
+## v0.6.42 — 2026-10-31 · 修复：v0.6.41 的镜像构建失败（Dockerfile 的 ARG 作用域）
 
 > v0.6.41 的 jar 与客户端都正常，但 docker 流水线挂了：
 > `failed to solve: base name (${HDSL_BASE}) should not be blank`。
