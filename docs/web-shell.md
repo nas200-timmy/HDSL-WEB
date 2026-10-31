@@ -282,6 +282,9 @@ Windows 上也走浏览器 PTY，用的是系统自带（Win10 1809 / build 1776
   （`GenerateConsoleCtrlEvent` 不行），所以 `terminate` 是"给一个自退窗口，然后
   `TerminateJobObject`"，不等价于 SIGTERM→SIGKILL。这是平台事实，不是缺陷。
 - **平台能力**：一个实例终端 = 一个 `conhost.exe`（数 MB）。只承诺 64 位 JVM；arm64 未实测。
+- **身份**：容器里面板是 root，终端进程和别的 agent 一样降权到 uid 1000（`PosixPty.spawn` 里前置
+  `setpriv`，exec 原地替换，进程组与 PTY 会话不变）。所以终端里跑起来的 agent 也碰不到面板的
+  `auth/`、`certs/`、审计日志——见 `docs/design-notes.md §7.5`。
 - **MC 控制台**不动：仍走 pipe（见 `docs/minecraft.md` §15.2 的后续顺序）。
 
 桌面终端（`DesktopTerminal`、`{"mode":"desktop"}`、`open-desktop-terminal` 确认短语）已整类

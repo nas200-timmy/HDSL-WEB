@@ -92,8 +92,8 @@ Go 1.24。许可证 GPL-3.0-or-later。
   要么干脆不改写原样透传，**不要**把压缩字节当文本处理。
 
 ### 2.4 网页终端
-- POSIX 用 `posix_spawn` 起 PTY（不经 shell），子进程自己的进程组；Windows 不做浏览器 PTY，
-  改为在桌面打开控制台窗口并明确告知。
+- POSIX 用 `posix_spawn` 起 PTY（不经 shell），子进程自己的进程组；Windows 从 10 1809 起用
+  `CreatePseudoConsole` 起同样的浏览器 PTY（更早的系统明确 409 拒绝，不回落桌面窗口）。
 - 一次性 ticket（32 字节随机、30 秒 TTL、绑定会话与实例）桥接「POST 开终端」与「WS 挂载」；
   每实例至多一个终端；`setMaxIdleTimeout(0)`（用户发呆时不能被踢）。
 - 退出顺序：关输入 → 有界 drain → 关 master → `SIGKILL` 进程组；面板退出时全关。

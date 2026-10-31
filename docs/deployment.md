@@ -258,7 +258,7 @@ services:
 
 | 规则 | 为什么 |
 |---|---|
-| 宿主数据目录自动 `chown 1000:1000` | 镜像以 `hdsl`（uid 1000）运行，运行期没有 chown；root 建的目录会让面板一启动就写不进去 |
+| 宿主目录的属主由容器入口校正 | 入口每次启动把 `/data`、`/home/hdsl`（含 `workspace`、`mc` 两个挂载点）交给 uid 1000，再把 `auth/`、`certs/`、`logs/`、`server.yaml` 收回 root；脚本自己不再做整卷 chown（那会把秘密交回去） |
 | 端口内外同号 | `HDSL_PORT` 同时决定端口映射、容器内监听和 healthcheck，只改宿主侧会得到「running 但一直 unhealthy」 |
 | 工作区只能挂到 `/home/hdsl/workspace` | 挂 `/home/hdsl` 整层会盖掉 entrypoint 每次启动重写的 pnpm 配置；不挂则重建容器时工作区里的文件会丢 |
 | MC 默认挂到 `/home/hdsl/mc`（`volume:hdsl-mc`） | 世界存档与 `server.jar` 在那儿；不挂 = 存档随容器一起没。`--mc /srv/mc` 换成宿主目录，`--mc none` 明确不挂 |
@@ -300,9 +300,9 @@ docker cp /etc/letsencrypt/live/dsh.example.com/privkey.pem  hdsl-web:/data/cert
 docker compose restart hdsl-web
 ```
 
-> `docker cp` 写入的是 root 属主的文件。HDSL-web 以 `hdsl`(1000) 运行，读取没问题；
-> 但如果你手工改了 `/data/certs` 的目录权限，记得 `chown 1000:1000`。
-> 走面板上传则完全不用操心权限。
+> `docker cp` 写入的是 root 属主的文件；面板现在以 root 运行，读取没问题。
+> **不要**把 `/data/certs` chown 给 1000——那会把面板的私钥交给 agent（入口下次启动也会
+> 把它改回 root 0700）。走面板上传则完全不用操心权限。
 
 ### 手工替换 + 重启
 
@@ -369,9 +369,9 @@ docker run --rm -u 0:0 -v hdsl-data-restore:/data --entrypoint chown hdsl-web:la
 
 ## 4. 多架构构建（buildx）
 
-Dockerfile 对 `amd64` 与 `arm64` 都是自适应的：Node 版本按 `dpkg --print-architecture` 选官方 tarball，
-校验 `SHASUMS256.txt`；三阶段基础镜像（`node:22-bookworm-slim`、`eclipse-temurin:21-jdk`、`debian:trixie-slim`）
-都有两个架构的 manifest。CI（`.github/workflows/docker.yml`）发布的就是
+Dockerfile 对 `amd64` 与 `arm64` 都是自适应的：Node 版本按 `uname -m` 选官方 tarball，
+校验 `SHASUMS256.txt`；三段里前两段钉在构建机架构（`node:22-bookworm-slim`、`eclipse-temurin:21-jdk`），
+第三段的底座由 `HDSL_BASE` 决定（默认 `debian:trixie-slim`，也可换 Fedora / openSUSE，见 §4.1）。CI（`.github/workflows/docker.yml`）发布的就是
 `linux/amd64` + `linux/arm64` 双架构 manifest；构建阶段钉在 `$BUILDPLATFORM`，
 只有 runtime 阶段在目标架构下执行。下面的命令用于本地复现：
 
@@ -547,8 +547,8 @@ curl -fsSk --resolve dsh.example.com:3080:127.0.0.1 https://dsh.example.com:3080
 
 dsh 启动时会用文件监视器（chokidar）盯着自己的 `profiles/<profile>` 目录。内核为此设了一个上限
 `fs.inotify.max_user_watches`（默认 65536），而这个数字**是按用户（uid）算的，容器之间不隔离**：
-面板容器以 `hdsl`(1000) 运行，于是宿主上**任何同样以 uid 1000 运行的程序**——编辑器/IDE 服务、
-文件同步客户端、别的容器——所监视的每一个目录，都从这个数字里扣。一个递归监视整棵工作树的程序
+**实例进程**以 uid 1000 运行（面板自己是 root，配额另算），于是宿主上**任何同样以 uid 1000
+运行的程序**——编辑器/IDE 服务、文件同步客户端、别的容器——所监视的每一个目录，都从这个数字里扣。一个递归监视整棵工作树的程序
 就能把 65536 吃干。
 
 ### 配额用尽时的现象
@@ -571,7 +571,7 @@ dsh 启动时会用文件监视器（chokidar）盯着自己的 `profiles/<profi
 想看原始数字也可以直接问内核：
 
 ```bash
-# 上限（所有 uid 1000 的进程共用的那个数字）
+# 上限（所有 uid 1000 的进程共用的那个数字；面板自己是 root，不占这份）
 cat /proc/sys/fs/inotify/max_user_watches
 # 谁在占（容器里的进程要进各自的容器里数）
 docker exec <容器> sh -c 'for p in /proc/[0-9]*; do n=0; for f in $p/fdinfo/*; do \

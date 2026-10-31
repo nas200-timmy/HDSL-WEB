@@ -416,6 +416,11 @@ RUN printf '%s\n' \
       '  mkdir -p "$HDSL_DATA"' \
       '  fix_owner "$HDSL_DATA" 1000:1000 2775' \
       '  fix_owner /home/hdsl 1000:1000 2775' \
+      '  # These two are separate mounts in most deployments; the /home/hdsl pass' \
+      '  # above only recurses when that directory itself has the wrong owner, so' \
+      '  # a host directory with somebody else uid would otherwise stay unwritable.' \
+      '  fix_owner /home/hdsl/workspace 1000:1000 2775' \
+      '  fix_owner /home/hdsl/mc 1000:1000 2775' \
       '  fix_owner "$HDSL_DATA/auth" 0:0 700' \
       '  fix_owner "$HDSL_DATA/certs" 0:0 700' \
       '  fix_owner "$HDSL_DATA/logs" 0:0 700' \

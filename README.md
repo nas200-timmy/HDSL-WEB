@@ -341,7 +341,7 @@ docker run -d --name hdsl-web --restart unless-stopped \
 
 第二个卷是 MC 服务端的存档与服务端程序（只在开启 MC 功能后用到）。**不挂它，重建容器就等于
 删掉世界**——那里面唯一不可再生的东西就是存档。用宿主目录也行：`-v /srv/mc:/home/hdsl/mc`
-（目录要让 uid/gid 1000 可写）。
+（入口会把它的属主校正到 uid 1000；宿主目录权限异常时也可手工 `chown -R 1000:1000`）。
 
 版本化标签与 Release 一一对应（如 `ghcr.io/nas200-timmy/hdsl-web:0.6.0`）。从源码构建：
 
@@ -625,7 +625,8 @@ https:
   架在反向代理后面，这个预算是所有访问者共用的（`X-Forwarded-For` 是客户端能自己写的，不能信）。
 - 口令用 PBKDF2WithHmacSHA256（per-user 盐、21 万次迭代），文件原子写入并尽量收紧到 0600。
 - **实例终端是一个能执行 agent 的入口，效果上等价于 RCE**：除了会话，还要开发者密码提权
-  （30 分钟滑动），并且只在 HTTPS 下开放；Windows 桌面启动额外要求字面确认。设置 →「开发者
+  （30 分钟滑动），并且只在 HTTPS 下开放；启动的永远是适配器解析出来的 argv（Windows 上
+  `.cmd`/`.bat` 一律拒绝），不经 shell。设置 →「开发者
   模式」里的总开关可以整体关掉，关掉后按钮隐藏、接口 403。面板只应监听回环或可信网络；要暴露
   公网必须在网络层再加保护。见 [docs/web-shell.md §4](docs/web-shell.md)。
 - dsh 只监听回环；TLS 在面板边缘终结，外部能到达的只有面板端口。
@@ -635,6 +636,11 @@ https:
   `X-Forwarded-Proto: https` 时）加 `Secure`；反代把 dsh 的 Cookie Path 改写到 `/i/<id>/`，
   多实例不会互相覆盖。
 - `auth.disabled: true` 只在绑定回环地址时允许。
+- **容器里的身份划分**（v0.6.43 起）：面板是 root、每个 agent 进程用 `setpriv` 降到 uid 1000，
+  `auth/`（账号与开发者密码哈希）、`certs/`（TLS 私钥）、`logs/`（审计）、`server.yaml` 归 root
+  0700/0600，所以 agent 读不到也改不了，也 `kill` 不掉面板。**裸部署没有这一层**：面板与 agent
+  同 uid，要隔离请用容器。供应商 API key 不在保护范围内（agent 与 ACP 要用），见
+  [docs/design-notes.md §7.5](docs/design-notes.md)。
 - 首启自签证书会让浏览器告警，这是预期行为；正式使用请上传受信任的证书。
 
 实现细节见 [docs/design-notes.md](docs/design-notes.md)。
@@ -700,8 +706,10 @@ pnpm store 想放到别处。改 `PNPM_STORE_DIR`（入口脚本会写进 pnpm �
 裸跑时数据放在哪。默认 `./data`；用 `HDSL_DATA` 指定。`hdsl.home` 自动取 `<HDSL_DATA>/hdsl`，
 也可以用 `-Dhdsl.home=/path` 覆盖（优先级更高）。
 
-用 bind mount 而不是命名卷时权限报错。容器里的运行用户是 `hdsl`（uid/gid 1000），绑定的宿主
-目录必须让它可写：`sudo chown -R 1000:1000 ./data`。命名卷没有这个问题。
+用 bind mount 而不是命名卷时权限报错。容器里**面板是 root、agent 是 uid/gid 1000**：入口每次启动
+会把 `/data`、`/home/hdsl`（含 `workspace` 与 `mc` 两个挂载点）校正到 1000，再把 `auth/`、`certs/`、
+`logs/`、`server.yaml` 收回 root。仍报权限错时先看 `stat -c '%u:%g %a' <宿主目录>`，需要时
+`sudo chown -R 1000:1000 ./data`。命名卷没有这个问题。
 
 日志在哪。容器里看 `docker compose logs -f hdsl-web`；服务端日志同时落在 `/data/logs/`，实例
 运行日志从面板的「日志」标签看，导出目录是 `/data/hdsl/logs/`。

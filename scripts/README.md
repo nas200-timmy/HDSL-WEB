@@ -10,10 +10,11 @@ cd web && npm install        # 本机第一次（build.gradle.kts 发现 npm 就
 
 | 脚本 | 验什么 | 需要什么 | 典型耗时 |
 | --- | --- | --- | --- |
-| `api-smoke.py` | **接口层冒烟（36 项）**：自己起一个临时面板（临时数据目录、随机端口、HTTP），把"一个人会点到的路径"逐个念一遍——`/api/node` 的字段、品牌版本（或它为什么为空）、doctor、出站证书的一次性授权、ZCode 工作区、dsh 半安装的拒绝、终端四道闸、静态资源。**不点浏览器、不装包**，十几秒跑完 | 只需一个 jar（`./gradlew shadowJar`） | 约 10 秒 |
+| `api-smoke.py` | **接口层冒烟（39 项）**：自己起一个临时面板（临时数据目录、随机端口、HTTP），把"一个人会点到的路径"逐个念一遍——`/api/node` 的字段、品牌版本（或它为什么为空）、doctor、出站证书的一次性授权、ZCode 工作区、dsh 半安装的拒绝、终端四道闸、静态资源。**不点浏览器、不装包**，十几秒跑完 | 只需一个 jar（`./gradlew shadowJar`） | 约 10 秒 |
 | `mobile-acceptance.py` | 移动端信息架构 + 桌面版式回归（headless Chromium） | python playwright + chromium、一个可登录的实例、当前工作区的 `web/dist` | 半分钟起（不设实例 id 时） |
 | `e2e-real.sh` | 真实 npm 安装 dsh → 启动 → 反代访问 → 停止后 `/i/<id>/` 消失 | 网络（npm registry）、jar | 几分钟 |
 | `e2e-phase4.sh` | Phase 4 全链路：体检 / 整合包市场 / 安装 / 会话·技能·工作区 / 导出并下载 / 反代 / ACP 控制台 | 网络、jar、**热过的 pnpm 缓存** | 几分钟 |
+| `verify-privilege-split.sh` | **容器里的身份划分**：以 uid 1000 跑，断言 `auth/`、`logs/` 读写被拒，而实例目录与 pnpm store 可写 | 一个跑着的面板容器（`docker exec -u 1000 …`） | 几秒 |
 | `acp-probe/AcpProbe.java` | 不是独立脚本：`e2e-phase4.sh` 编译并运行它——带会话 Cookie 连 `/ws` 的 ACP 控制台、发一条消息、按结果退出码判定 | 由脚本用 jar 里的 Jetty 编译 | — |
 
 下面两个**不属于**上面那类开发脚本：它们是给终端用户的客户端安装器，从 GitHub Release
