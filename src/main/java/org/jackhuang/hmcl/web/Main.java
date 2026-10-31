@@ -77,6 +77,17 @@ public final class Main {
             Map<String, String> env = System.getenv();
             ServerConfig config = ServerConfigLoader.load(env, Logger.LOG);
 
+            // The launcher's per-user home lives inside the data directory, so
+            // a deployment mounts exactly one volume (`/data`, see the plan).
+            // An explicit -Dhdsl.home wins, and the property must be set before
+            // the first touch of Metadata, whose static initializer reads it —
+            // which is why nothing below may run earlier: a single call into
+            // DshPaths freezes the home at the OS default and the panel then
+            // looks for instances outside its own data directory.
+            if (System.getProperty("hdsl.home") == null) {
+                System.setProperty("hdsl.home", config.dataDir.resolve("hdsl").toString());
+            }
+
             // The outbound-TLS window an operator acknowledged last time, if its
             // hour has not passed. Nothing here widens trust on its own: strict is
             // the default, and the failure that leads to an acknowledgement is
@@ -86,14 +97,6 @@ public final class Main {
             // Directories a delete could not remove (something held a file inside) were
             // renamed aside; at startup whatever held them is most likely gone.
             org.jackhuang.hmcl.dsh.DshInstanceManager.sweepTombstones();
-
-            // The launcher's per-user home lives inside the data directory, so
-            // a deployment mounts exactly one volume (`/data`, see the plan).
-            // An explicit -Dhdsl.home wins, and the property must be set before
-            // the first touch of Metadata, whose static initializer reads it.
-            if (System.getProperty("hdsl.home") == null) {
-                System.setProperty("hdsl.home", config.dataDir.resolve("hdsl").toString());
-            }
 
             Logger.LOG.start(config.dataDir.resolve("logs"));
 
