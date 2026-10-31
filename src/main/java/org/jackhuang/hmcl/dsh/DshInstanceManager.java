@@ -19,6 +19,7 @@ package org.jackhuang.hmcl.dsh;
 
 import org.jackhuang.hmcl.util.gson.JsonUtils;
 import org.jackhuang.hmcl.util.io.FileUtils;
+import org.jackhuang.hmcl.util.io.Tombstones;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -299,9 +300,12 @@ public final class DshInstanceManager {
     ///
     /// A directory that could not be deleted is renamed to `<id>.deleting-<millis>` (see
     /// [delete]), which takes the name away from the instance even when a file inside it is
-    /// still held. Those leftovers are invisible to every list (no `instance.json`), so all
-    /// that is left to do is to try again — at startup, when whatever held them is most
-    /// likely gone.
+    /// still held. All that is left to do is to try again — at startup, when whatever held
+    /// them is most likely gone.
+    ///
+    /// What counts as a leftover is decided by [Tombstones#isSweepable], never by the suffix
+    /// alone: an instance's directory is named after an id the user chose, so `v1.deleting-2`
+    /// is a perfectly ordinary instance and sweeping it would delete it whole.
     public static void sweepTombstones() {
         if (!Files.isDirectory(DshPaths.INSTANCES)) {
             return;
@@ -313,22 +317,32 @@ public final class DshInstanceManager {
                 // an instance directory a delete could not finish.
                 try (java.util.stream.Stream<Path> entries = Files.list(instance)) {
                     for (Path entry : entries.toList()) {
-                        String name = entry.getFileName().toString();
-                        if (name.contains(".deleting-") && FileUtils.deleteDirectoryQuietly(entry)) {
-                            LOG.info("Removed the leftover " + name);
-                        }
+                        sweepTombstone(entry);
                     }
                 } catch (IOException ignored) {
                     // One unreadable instance is not a reason to skip the rest.
                 }
-                String name = instance.getFileName().toString();
-                if (name.contains(".deleting-") && FileUtils.deleteDirectoryQuietly(instance)) {
-                    LOG.info("Removed the leftover " + name);
-                }
+                sweepTombstone(instance);
             }
         } catch (IOException e) {
             LOG.warning("Could not sweep the tombstones under " + DshPaths.INSTANCES, e);
         }
+    }
+
+    private static void sweepTombstone(Path entry) {
+        if (Tombstones.isSweepable(entry, MANIFEST_NAME, DshInstanceManager::recordedId)
+                && FileUtils.deleteDirectoryQuietly(entry)) {
+            LOG.info("Removed the leftover " + entry.getFileName());
+        }
+    }
+
+    /// The id a directory's manifest records, or `null` when it has none.
+    ///
+    /// @param directory the candidate instance directory
+    /// @return the recorded id
+    private static @Nullable String recordedId(Path directory) {
+        DshInstance instance = read(directory);
+        return instance == null ? null : instance.id();
     }
 
     /// Reports whether an instance id is already taken.

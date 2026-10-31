@@ -861,7 +861,7 @@ public final class DshVersionManager {
         LOG.info("Installed DSH " + version + " for " + instance.id() + " into " + target);
     }
 
-    /// Counts the package directories of a pnpm store that hold no `package.json`.
+    /// Counts the package directories of a pnpm store that hold nothing at all.
     ///
     /// "The entry exists" says nothing about its contents. An install interrupted while
     /// the store was being written leaves `.pnpm/<id>/node_modules/<name>` as an **empty
@@ -871,6 +871,13 @@ public final class DshVersionManager {
     /// installed answers every session request with a cascade of
     /// `waiting for workingDirectory`, because the plugin that provides that service is
     /// the one whose dependency is missing.
+    ///
+    /// The question is "is this directory empty", not "is there a `package.json` in it". A
+    /// pnpm store is a web of symlinks, and a **dangling** one (a directory renamed, moved or
+    /// reinstalled over) resolves to nothing: asking for `package.json` through it says "no",
+    /// which would make a complete tree look like a hole and get it deleted right after a
+    /// successful install. An empty directory says "no" honestly, and one that cannot be read
+    /// at all says nothing, so it is not counted — an unreadable tree is not evidence.
     ///
     /// `bin.js` is not enough of a check on its own (it is a single file, written before
     /// the store's links settle), so this walks the store and counts the holes.
@@ -897,12 +904,12 @@ public final class DshVersionManager {
                             // A scoped package: `.pnpm/<id>/node_modules/@scope/name`.
                             try (java.util.stream.Stream<Path> scoped = Files.list(candidate)) {
                                 for (Path packageDir : scoped.toList()) {
-                                    if (!Files.isRegularFile(packageDir.resolve("package.json"))) {
+                                    if (isEmptyDirectory(packageDir)) {
                                         empty++;
                                     }
                                 }
                             }
-                        } else if (!Files.isRegularFile(candidate.resolve("package.json"))) {
+                        } else if (isEmptyDirectory(candidate)) {
                             empty++;
                         }
                     }
@@ -913,6 +920,23 @@ public final class DshVersionManager {
             return 0;
         }
         return empty;
+    }
+
+    /// Whether a package directory holds no entries at all.
+    ///
+    /// A directory that cannot be listed — a dangling symlink, most of all — is **not** empty:
+    /// whatever is on the other side of a broken link is dsh's problem to report, and calling it
+    /// a hole here would have the caller delete a tree that may be perfectly good.
+    ///
+    /// @param directory the candidate package directory
+    /// @return whether it lists no entries
+    private static boolean isEmptyDirectory(Path directory) {
+        try (java.util.stream.Stream<Path> entries = Files.list(directory)) {
+            return entries.findAny().isEmpty();
+        } catch (IOException | RuntimeException e) {
+            // A dangling link, a directory nobody may read, or not a directory at all.
+            return false;
+        }
     }
 
     /// Requires a usable Node runtime.

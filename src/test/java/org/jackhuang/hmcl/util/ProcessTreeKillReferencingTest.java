@@ -17,13 +17,18 @@
  */
 package org.jackhuang.hmcl.util;
 
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /// Processes nobody can see, named by the path they sit on.
 ///
@@ -62,5 +67,67 @@ class ProcessTreeKillReferencingTest {
         String here = ProcessHandle.current().info().commandLine().orElse("");
         assertTrue(!here.contains(temp.toAbsolutePath().toString()),
                 "the test JVM must not reference the temp directory: " + here);
+    }
+
+    /// The kill is a Windows repair, and Windows is the only place it may run.
+    ///
+    /// What it repairs is a Windows rule: a directory cannot be removed while a process has it
+    /// as its current directory. POSIX unlinks a directory whatever still holds it open, so
+    /// there is nothing to repair — and a command-line match there would take down whatever an
+    /// operator runs on the tree: `tail -f`, an `rsync`, a nightly backup.
+    @Test
+    void aProcessNamingTheDirectoryIsOnlyKilledOnWindows() throws Exception {
+        Path directory = Files.createDirectories(temp.resolve("instances").resolve("demo"));
+        Process probe = spawnNaming(directory);
+        try {
+            assumeTrue(isNamed(directory),
+                    "this machine does not let a process read other command lines, so the rule cannot be exercised either way");
+            int killed = ProcessTree.killReferencing(directory);
+            if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
+                assertTrue(probe.waitFor(10, TimeUnit.SECONDS),
+                        "the stray that names the directory is stopped so the delete can proceed");
+                assertTrue(killed >= 1, "and it is reported as stopped");
+            } else {
+                assertFalse(probe.waitFor(2, TimeUnit.SECONDS),
+                        "nothing on this platform is killed for naming a directory");
+                assertEquals(0, killed);
+            }
+        } finally {
+            probe.destroyForcibly();
+            probe.waitFor(5, TimeUnit.SECONDS);
+        }
+    }
+
+    /// Whether any process's command line names something under `directory`.
+    private static boolean isNamed(Path directory) throws InterruptedException {
+        String needle = directory.toAbsolutePath().normalize().toString();
+        for (int attempt = 0; attempt < 10; attempt++) {
+            boolean found = ProcessHandle.allProcesses()
+                    .anyMatch(handle -> handle.info().commandLine()
+                            .map(command -> command.contains(needle + "\\") || command.contains(needle + "/"))
+                            .orElse(false));
+            if (found) {
+                return true;
+            }
+            Thread.sleep(200);
+        }
+        return false;
+    }
+
+    /// A process that sits on `directory` and names it, with a trailing separator, on its own
+    /// command line.
+    private static Process spawnNaming(Path directory) throws Exception {
+        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
+            // `rem` swallows the path, so any characters in it are harmless; the redirect target
+            // is what puts `<directory>\` on the command line.
+            return new ProcessBuilder("cmd.exe", "/c",
+                    "ping -n 60 127.0.0.1 > nul & rem " + directory.resolve("probe.txt"))
+                    .redirectErrorStream(true)
+                    .start();
+        }
+        return new ProcessBuilder("sh", "-c",
+                "cd \"" + directory + "/\" && sleep 30 && true")
+                .redirectErrorStream(true)
+                .start();
     }
 }

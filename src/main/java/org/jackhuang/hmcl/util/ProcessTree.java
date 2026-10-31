@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.util;
 
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 
 import java.nio.file.Path;
@@ -89,19 +90,6 @@ public final class ProcessTree {
         }
     }
 
-    /// Kills every process whose command line names something under `directory`, and their
-    /// descendants.
-    ///
-    /// The case this exists for: a Windows directory cannot be removed while **any** process
-    /// has it as its current directory, and an instance's agent is started with exactly that
-    /// directory. A panel restarted since then has no record of that child — its registry
-    /// did not survive the restart — so "delete this instance" fails with an empty error
-    /// while a process nobody can see sits on the tree.
-    ///
-    /// Matching is on the command line, which is where a launcher that spawns
-    /// `node <instance>/dsh/... --profile web` names it. The panel's own command line names
-    /// the data directory, not an instance, so it is not matched.
-    ///
     /// Whether a command line names something **inside** `directory`.
     ///
     /// On a path boundary, not by substring: `…\instances\demo` is a prefix of
@@ -120,9 +108,33 @@ public final class ProcessTree {
         return command.equals(needle);
     }
 
+    /// Kills every process whose command line names something under `directory`, and their
+    /// descendants.
+    ///
+    /// The case this exists for: a Windows directory cannot be removed while **any** process
+    /// has it as its current directory, and an instance's agent is started with exactly that
+    /// directory. A panel restarted since then has no record of that child — its registry
+    /// did not survive the restart — so "delete this instance" fails with an empty error
+    /// while a process nobody can see sits on the tree.
+    ///
+    /// **Windows only**, deliberately. Nowhere else does a directory need its users gone
+    /// before it can be removed: POSIX unlinks a file — or a directory — whatever still holds
+    /// it open. Without the platform check, what is left is a kill by command-line substring,
+    /// and an instances tree is exactly where an operator keeps other things running: a
+    /// `tail -f` on a log, an `rsync`, a nightly backup. Sweeping those so that a delete looks
+    /// tidy is far worse than a directory that goes away a moment later, so every other
+    /// platform returns `0` here and touches nothing.
+    ///
+    /// Matching is on the command line, which is where a launcher that spawns
+    /// `node <instance>/dsh/... --profile web` names it. The panel's own command line names
+    /// the data directory, not an instance, so it is not matched.
+    ///
     /// @param directory the directory a process must reference to be killed
-    /// @return how many processes were told to die
+    /// @return how many processes were told to die; always `0` outside Windows
     public static int killReferencing(Path directory) {
+        if (OperatingSystem.CURRENT_OS != OperatingSystem.WINDOWS) {
+            return 0;
+        }
         String needle = directory.toAbsolutePath().normalize().toString();
         List<ProcessHandle> victims = ProcessHandle.allProcesses()
                 .filter(handle -> handle.info().commandLine()

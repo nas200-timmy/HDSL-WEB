@@ -447,19 +447,20 @@ public final class ZcodeBuilder {
             // in `releases/` is the same bytes; a moved anchor fails the build rather
             // than shipping a workbench that cannot open a folder.
             switch (ZcodeServerPatch.patch(target)) {
-                case PATCHED, PATCHED_ALREADY, NOT_APPLICABLE -> {
+                case PATCHED, PATCHED_ALREADY, NOT_APPLICABLE, NOT_A_SERVER -> {
                     // NOT_APPLICABLE is Linux and macOS: there the desktop app can
                     // connect as the host, so upstream's remote owner is the one that
                     // model needs and nothing is changed.
+                    //
+                    // NOT_A_SERVER is a build that produced no web half. It is not this
+                    // build's job to insist on one: a TUI-only distribution is a release
+                    // the panel can install and run, it simply has no workbench to patch.
                 }
                 case ANCHOR_MISSING -> throw new ZcodeException(
                         "the built ZCode server entry no longer carries the project-owner expression"
                                 + " this panel patches (" + ZcodeServerPatch.SERVER_ENTRY + ");"
                                 + " the web workbench would have no workspace — update ZcodeServerPatch"
                                 + " and docs/zcode-experimental.md to the new anchor");
-                case NOT_A_SERVER -> throw new ZcodeException(
-                        "the built release has no " + ZcodeServerPatch.SERVER_ENTRY
-                                + " — a web-mode release is what this build produces");
                 case NEEDS_PATCH, UNREADABLE -> throw new ZcodeException(
                         "could not apply the project-owner patch to the built release ("
                                 + target + ")");
