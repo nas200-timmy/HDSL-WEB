@@ -451,10 +451,12 @@ v0.6.44 起，镜像不再 `USER hdsl`，面板以 root 跑、每个 agent 进�
    `auth/`、`certs/`、`logs/`、`server.yaml` 收回 root。只在属主不对时递归，之后每次启动
    只做 `stat`，不会遍历大卷。老卷升级后第一次启动会慢几秒（目录大的话更久），属正常。
 2. **`docker exec` 默认用户变了**：以前默认是 `hdsl`，现在是 root。脚本里凡是靠"默认用户"
-   进容器的都要显式写 `-u 1000`（例如 `docker exec -u 1000 … sh /scripts/verify-privilege-split.sh`）。
+   进容器的都要显式写 `-u 1000`（例如 `docker exec -u 1000 … sh /tmp/verify-privilege-split.sh`）。
 3. **`--user 1000` 覆盖仍然可用**，但降权就失效了（面板自己就是 1000），行为退回"裸部署"那一套：
    agent 与面板同 uid，秘密文件彼此可写。要这套隔离就别覆盖用户。
-4. **验收**：`docker exec -u 1000 <容器> sh /scripts/verify-privilege-split.sh`。先建一个实例，
+4. **验收**：脚本不在镜像里（它在仓库的 `scripts/`），先拷进去再跑：
+   `docker cp scripts/verify-privilege-split.sh <容器>:/tmp/ && \
+    docker exec -u 1000 <容器> sh /tmp/verify-privilege-split.sh`。先建一个实例，
    否则"实例目录可写"那条会跳过。期望 `auth/`、`logs/` 读写都被拒，实例目录与 pnpm store 可写。
 
 5. **默认工作区不再跟着 root 跑**：面板是 root 之后 `user.home` 是 `/root`，工作区若按它解析
@@ -714,7 +716,7 @@ RestrictSUIDSGID=yes
 - 这些限制对 agent 同样生效——它们本来就是面板派生的进程。
 
 容器部署不需要这些参数，镜像自己做（见 `docs/design-notes.md §7.5`）；容器里的验收用
-`scripts/verify-privilege-split.sh`（以 uid 1000 跑）。
+`scripts/verify-privilege-split.sh`（以 uid 1000 跑，先 `docker cp` 进容器）。
 
 **供应商 API key 不在这层保护之内**：它在 `<用户目录>/launcher-settings.json` 的 `accounts`
 里，agent 读得到（ACP 会话要用它调模型）。这是有意保留的暴露，缓解手段是"一台机器一套 key、

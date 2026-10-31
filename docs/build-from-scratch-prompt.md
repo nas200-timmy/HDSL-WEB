@@ -516,7 +516,8 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
 5. 开发者模式：提权 → 开守卫（proxy / instance / all 各试一次）→ 读仍然可用、写被要求密码 →
    E-Stop 三次确认 → 冷却期内解除被拒 → 重启面板后解除。
 6. 品牌安装：portable 与源码构建各一次；中途杀面板，确认重启后会自动恢复/清理半安装。
-7. **容器的身份划分**：`docker exec -u 1000 <容器> sh scripts/verify-privilege-split.sh` ——
+7. **容器的身份划分**：`docker cp scripts/verify-privilege-split.sh <容器>:/tmp/` 之后
+   `docker exec -u 1000 <容器> sh /tmp/verify-privilege-split.sh` ——
    `auth/`、`logs/` 读写都被拒，实例目录与 pnpm store 可写。**注意 `docker exec` 默认用户不再是
    agent**，不写 `-u 1000` 等于用 root 去验"agent 能不能写"，什么都验不出来。
 8. **ACL 存储**：`docker logs <容器> | grep "does not enforce mode bits"`。有输出就说明这台机器的
