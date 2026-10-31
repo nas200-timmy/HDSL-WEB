@@ -651,7 +651,11 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.write(response, HttpServletResponse.SC_ACCEPTED, java.util.Map.of("state", state.toLowerCase(Locale.ROOT)));
             return;
         }
-        if (!DshVersionManager.isInstalled(instance)) {
+        // `isUsable`, not `isInstalled`: a tree an interrupted install left behind has an
+        // entry script and no packages, which starts and then fails every session with
+        // `waiting for workingDirectory`. Reinstalling is the repair (pnpm alone answers
+        // "already up to date"), and this is the click that should do it.
+        if (!DshVersionManager.isUsable(instance)) {
             if (Boolean.FALSE.equals(boolField(body, "autoInstall"))) {
                 Json.error(response, HttpServletResponse.SC_CONFLICT, "not installed");
                 return;

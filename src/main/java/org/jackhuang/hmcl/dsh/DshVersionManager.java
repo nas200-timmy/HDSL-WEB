@@ -101,6 +101,32 @@ public final class DshVersionManager {
         }
     }
 
+    /// Whether an instance can be started: installed **and** its tree has no holes.
+    ///
+    /// `isInstalled` is the cheap question ("is there an entry script?"), and it is asked
+    /// on every status poll, so it stays cheap. This one walks the package store and is
+    /// asked where the answer decides something: before a launch (a tree an interrupted
+    /// install left behind would start and then fail every session with
+    /// `waiting for workingDirectory`), and before an install is called done.
+    ///
+    /// A holey tree is **repairable by reinstalling** — `pnpm install` alone answers
+    /// "already up to date" and changes nothing, while the panel's install moves the tree
+    /// aside and writes a fresh one — so the launch route uses this to decide "install
+    /// first" instead of refusing.
+    ///
+    /// @param instance the instance to judge
+    /// @return whether the tree looks complete
+    public static boolean isUsable(DshInstance instance) {
+        if (!isInstalled(instance)) {
+            return false;
+        }
+        try {
+            return emptyPackages(instance.dshDirectory()) == 0;
+        } catch (DshException e) {
+            return false;
+        }
+    }
+
     /// Queries the npm registry for every published DeepSeek Harness version.
     ///
     /// Dist-tags are fetched in a second call and merged in, so the caller can
