@@ -561,6 +561,10 @@ public final class BrandRuntime {
                 java.util.Map<String, String> environment = new java.util.LinkedHashMap<>();
                 environment.put("PORT", String.valueOf(port));
                 org.jackhuang.hmcl.web.terminal.ClaudeWebTui.applyBaseUrl(environment, instance.baseUrl());
+                // The server spawns the CLI as a child, and that child is what asks
+                // for a bash on Windows — the variable has to be on the server's
+                // environment for it to reach the agent.
+                org.jackhuang.hmcl.web.terminal.ClaudeWebTui.applyShell(environment);
                 return new LaunchPlan(List.copyOf(command), java.util.Map.copyOf(environment), port);
             }
             case OCTOP -> {

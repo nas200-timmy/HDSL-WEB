@@ -27,6 +27,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -165,6 +166,39 @@ class ClaudeWebTuiTest {
         assertTrue(expected.getMessage().contains("Node.js"), expected.getMessage());
         assertTrue(expected.getMessage().contains("PATH"), expected.getMessage());
         assertFalse(expected.getMessage().startsWith("node is not on PATH"), expected.getMessage());
+    }
+
+    /// Claude Code runs its own shell tools through a bash on Windows and refuses
+    /// the session without one ("Claude Code on Windows requires git-bash"), naming
+    /// `CLAUDE_CODE_GIT_BASH_PATH` in the refusal. The panel is the one that can see
+    /// where Git for Windows is — the same service the Kimi terminal performs.
+    @Test
+    void thePanelNamesTheGitBashClaudeCodeNeeds() {
+        assumeTrue(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS, "the hint is a Windows matter");
+        assumeTrue(!System.getenv().containsKey(ClaudeWebTui.BASH_VARIABLE),
+                "this test is about the case where the operator said nothing");
+        Optional<Path> bash = org.jackhuang.hmcl.util.platform.GitBash.find();
+        assumeTrue(bash.isPresent(), "Git for Windows is not installed on this machine");
+
+        Map<String, String> environment = new java.util.HashMap<>();
+        ClaudeWebTui.applyShell(environment);
+
+        assertEquals(bash.get().toString(), environment.get(ClaudeWebTui.BASH_VARIABLE));
+        String normalized = environment.get(ClaudeWebTui.BASH_VARIABLE)
+                .toLowerCase(java.util.Locale.ROOT).replace('\\', '/');
+        assertFalse(normalized.contains("/windows/system32/"), environment.toString());
+    }
+
+    /// An address the operator named is the one that is used: pointing the agent at
+    /// a different bash than the one they chose is not the panel's call.
+    @Test
+    void anOperatorsOwnShellIsNotOverridden() {
+        Map<String, String> environment = new java.util.HashMap<>();
+        environment.put(ClaudeWebTui.BASH_VARIABLE, "C:\\chosen\\bash.exe");
+
+        ClaudeWebTui.applyShell(environment);
+
+        assertEquals("C:\\chosen\\bash.exe", environment.get(ClaudeWebTui.BASH_VARIABLE));
     }
 
     /// A native binary runs as itself: node is not required to start it.

@@ -68,6 +68,25 @@ public final class ClaudeWebTui implements BrandTui {
     /// The engine's entry inside its package.
     static final String ENGINE_ENTRY = "node_modules/claude-web-engine/dist/cli-node.js";
 
+    /// Where Claude Code looks for the bash its own tools run through on Windows:
+    /// `CLAUDE_CODE_GIT_BASH_PATH` (its own error message names it). The panel can
+    /// see where Git for Windows is, so it says so — the same service the Kimi
+    /// terminal does under `KIMI_SHELL_PATH`.
+    static final String BASH_VARIABLE = "CLAUDE_CODE_GIT_BASH_PATH";
+
+    /// Points Claude Code at a Git Bash, unless the operator already said which
+    /// shell to use (their own `CLAUDE_CODE_GIT_BASH_PATH`, from the panel's
+    /// environment or the instance's).
+    ///
+    /// A no-op on every other platform, and on a Windows machine without Git for
+    /// Windows: there is nothing to point at, and guessing at some other bash is
+    /// how an agent ends up running WSL.
+    ///
+    /// @param environment the child's environment, modified in place
+    public static void applyShell(Map<String, String> environment) {
+        org.jackhuang.hmcl.util.platform.GitBash.applyTo(environment, BASH_VARIABLE);
+    }
+
     /// One kernel the instance can be started on.
     ///
     /// @param id        `community` or `official`
@@ -191,6 +210,10 @@ public final class ClaudeWebTui implements BrandTui {
         }
         command.add(entry.toString());
         applyBaseUrl(environment, baseUrl);
+        // Claude Code runs its own shell tools through a bash on Windows and
+        // refuses the session without one ("Claude Code on Windows requires
+        // git-bash"), naming this variable in the refusal.
+        applyShell(environment);
         return new TerminalTarget(BRAND, instanceId, command, workspace, Map.copyOf(environment));
     }
 

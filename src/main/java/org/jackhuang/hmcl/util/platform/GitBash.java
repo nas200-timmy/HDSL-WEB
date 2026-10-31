@@ -26,6 +26,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 /// Finds the bash a Windows-hosted agent wants for its own tools.
@@ -71,6 +72,29 @@ public final class GitBash {
         // …and whatever `PATH` answers, for an installation somewhere else.
         Executables.resolve("bash").ifPresent(candidates::add);
         return pick(candidates);
+    }
+
+    /// Names the Git Bash this machine has, for a client that refuses to work
+    /// without one.
+    ///
+    /// Two clients ask for it under their own variable — Kimi Code
+    /// (`KIMI_SHELL_PATH`) and Claude Code (`CLAUDE_CODE_GIT_BASH_PATH`) — and the
+    /// rule is the same for both: an address the operator set, in the panel's own
+    /// environment or in the child's, is the one that is used. Nothing is written
+    /// when this machine has no Git Bash: a wrong address is worse than none, and
+    /// the client's own message says what to install.
+    ///
+    /// @param environment the child environment to amend
+    /// @param variable    the client's variable name
+    /// @return whether an address was written
+    public static boolean applyTo(Map<String, String> environment, String variable) {
+        if (environment.containsKey(variable) || System.getenv().containsKey(variable)) {
+            return false;
+        }
+        return find().map(bash -> {
+            environment.put(variable, bash.toString());
+            return true;
+        }).orElse(false);
     }
 
     /// The first candidate that is a real `bash.exe` and not one of the WSL shims.

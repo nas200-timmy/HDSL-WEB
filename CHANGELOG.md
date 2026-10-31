@@ -2,6 +2,24 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 · Claude Code 要的 Git Bash 由面板指明
+
+> 起因：Windows 上开 Claude Code 的终端直接结束，`会话已结束 (1)`，唯一线索是它自己的
+> 那句 "Claude Code on Windows requires git-bash … set `CLAUDE_CODE_GIT_BASH_PATH`"。
+> 机器上装着 Git for Windows，只是它不会自己去找——这跟当年 kimi-code 要
+> `KIMI_SHELL_PATH` 是同一件事，当时只给了 kimi 一家。
+
+- **`GitBash.applyTo(environment, variable)`**（新）：把找到的 `bash.exe` 写进子进程环境，
+  规则只有一条——操作者自己指过的（面板环境或实例环境里的同名变量）一律不动；这台机器
+  没有 Git for Windows 就什么都不写（写个错的路径比不写更糟）。
+- **kimi 与 Claude Code 都走它**：`KimiTui.applyShell` 改为委托（行为不变），
+  `ClaudeWebTui.applyShell` 写 `CLAUDE_CODE_GIT_BASH_PATH`。终端与网页两处都设：
+  网页模式里真正要 bash 的是 claude-web 服务自己拉起的 CLI 子进程，所以
+  `BrandRuntime` 的 claude-web 启动计划里也带上了这条。
+- 实测：`%ProgramFiles%\Git\bin\bash.exe` 被优先命中（这台机器 `%ProgramFiles%` 在 G: 盘，
+  所以不能靠 `C:\Program Files` 写死），`System32` 与 `WindowsApps` 里那两个 WSL shim 仍然拒绝。
+- 回归覆盖：`ClaudeWebTuiTest` 新增「面板会指明 Git Bash」与「操作者指过的不覆盖」两条。
+
 ## 未发布 · 删除实例先拿走名字，再删内容
 
 > 起因：Windows 上删实例删到一半失败——`<id>/dsh` 已经被删空，`instance.json` 却还在，

@@ -61,11 +61,7 @@ public final class KimiTui implements BrandTui {
     ///
     /// @param environment the child's environment, modified in place
     public static void applyShell(Map<String, String> environment) {
-        if (environment.containsKey(SHELL_VARIABLE) || System.getenv().containsKey(SHELL_VARIABLE)) {
-            return;
-        }
-        org.jackhuang.hmcl.util.platform.GitBash.find()
-                .ifPresent(bash -> environment.put(SHELL_VARIABLE, bash.toString()));
+        org.jackhuang.hmcl.util.platform.GitBash.applyTo(environment, SHELL_VARIABLE);
     }
 
     @Override
