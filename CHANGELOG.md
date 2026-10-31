@@ -2,6 +2,18 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.6.42 — 2026-10-31 · 修复：v0.6.41 的镜像构建失败
+
+> v0.6.41 的 jar 与客户端都正常，但 docker 流水线挂了：
+> `failed to solve: base name (${HDSL_BASE}) should not be blank`。
+
+- **`ARG HDSL_BASE` 挪到文件顶部**（首个 `FROM` 之前）。Docker 只认首个 `FROM` 之前声明的
+  ARG，写在第三个 `FROM` 前面它根本不在作用域里，`FROM ${HDSL_BASE}` 拿到的是空串。注释
+  里写清了这条，免得下次再挪回去。
+- **ffmpeg 的编码器断言移回装包之后**：它被上一条改动一起挪到了 `FROM` 之后、`apt-get`
+  之前，那个位置 `ffmpeg` 还不存在——即使第一处修好，也会在这里失败。
+- 其余内容与 v0.6.41 相同。
+
 ## v0.6.41 — 2026-10-31 · 小版本：Node 装完自检、TUI 插件上界、启动窗口不再假 STOPPED；运行时底座可换（Fedora / openSUSE）
 
 > 起因：底座兼容性实测（`report-2026-10-31-base-compat.md`）。在只有 JRE 的

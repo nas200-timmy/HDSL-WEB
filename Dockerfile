@@ -25,6 +25,11 @@
 # is no reason to run them under QEMU. Only the runtime stage below is
 # target-specific (package manager + the Node tarball chosen by uname).
 # =============================================================================
+# `FROM` 里能用的 ARG 只能是首个 FROM 之前声明的（Docker 的全局作用域），
+# 写在第三个 FROM 前面它是不生效的——那会让构建直接报
+# "base name (${HDSL_BASE}) should not be blank"。
+ARG HDSL_BASE=debian:trixie-slim
+
 FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS web
 
 # Where npm fetches packages from. Point this at a mirror when the network is
@@ -133,30 +138,10 @@ RUN test "$(jar tf "$(ls /src/build/libs/hdsl-web-*.jar | head -1)" | grep -c '^
 # `ffmpeg-free` and openSUSE's `ffmpeg-7` are the patent-free builds, and the
 # full set lives in RPM Fusion / Packman — repositories this image does not add.
 # With `optional` the build prints which encoders it lacks instead of failing.
-ARG HDSL_BASE=debian:trixie-slim
 FROM ${HDSL_BASE} AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# 兜底断言：ffmpeg 与 ffprobe 必须在，且按 HDSL_ENCODERS 决定 x264/x265 缺失是失败
-# 还是告警。apt/dnf/zypper 解析出错、或者哪天 extra 变体的包名变了，都在构建期暴露
-# ——而不是等 agent 截帧时才发现。
-ARG HDSL_ENCODERS=required
-RUN set -eux; \
-    ffmpeg -hide_banner -version | head -1; \
-    ffprobe -hide_banner -version | head -1; \
-    missing=""; \
-    for codec in libx264 libx265; do \
-      ffmpeg -hide_banner -encoders 2>/dev/null | grep -q "$codec" || missing="$missing $codec"; \
-    done; \
-    if [ -n "$missing" ]; then \
-      if [ "${HDSL_ENCODERS}" = "required" ]; then \
-        echo "HDSL-web: ffmpeg has no${missing}, and HDSL_ENCODERS=required" >&2; \
-        exit 1; \
-      fi; \
-      echo "HDSL-web: ffmpeg has no${missing} — this base ships the patent-free build;" \
-           "transcoding to H.264/H.265 will fail (RPM Fusion / Packman carry the full one)" >&2; \
-    fi
 
 # OCI 元数据：source 让 ghcr.io 把镜像包自动关联到本仓库（也是 CI 里
 # GITHUB_TOKEN 有权推送同名包的前提），description/licenses 显示在包页面。
@@ -270,6 +255,26 @@ RUN set -eux; \
     esac; \
     ln -sf "$(command -v tini)" /usr/local/bin/tini; \
     /usr/local/bin/tini --version
+
+# 兜底断言：ffmpeg 与 ffprobe 必须在，且按 HDSL_ENCODERS 决定 x264/x265 缺失是失败
+# 还是告警。apt/dnf/zypper 解析出错、或者哪天 extra 变体的包名变了，都在构建期暴露
+# ——而不是等 agent 截帧时才发现。
+ARG HDSL_ENCODERS=required
+RUN set -eux; \
+    ffmpeg -hide_banner -version | head -1; \
+    ffprobe -hide_banner -version | head -1; \
+    missing=""; \
+    for codec in libx264 libx265; do \
+      ffmpeg -hide_banner -encoders 2>/dev/null | grep -q "$codec" || missing="$missing $codec"; \
+    done; \
+    if [ -n "$missing" ]; then \
+      if [ "${HDSL_ENCODERS}" = "required" ]; then \
+        echo "HDSL-web: ffmpeg has no${missing}, and HDSL_ENCODERS=required" >&2; \
+        exit 1; \
+      fi; \
+      echo "HDSL-web: ffmpeg has no${missing} — this base ships the patent-free build;" \
+           "transcoding to H.264/H.265 will fail (RPM Fusion / Packman carry the full one)" >&2; \
+    fi
 
 # Node 22 LTS from the official nodejs.org tarball. The architecture is read
 # from `uname -m` rather than a package manager's answer, so the same Dockerfile
