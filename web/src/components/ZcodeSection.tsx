@@ -142,14 +142,14 @@ export function ZcodeSection() {
     if (!validate()) return;
     setBusy(true);
     try {
-      await api.createZcodeInstance({
+      const r = await api.createZcodeInstance({
         name: form.name.trim(),
         baseUrl: form.baseUrl.trim(),
         apiKey: form.apiKey.trim() || undefined,
-        // 空 = 用实例自己的 workspace 目录（面板替你建）
+        // 空 = 面板在 zcode/workspaces 下自动建一个工作区
         workspacePath: form.workspace.trim() || undefined,
       });
-      toast("success", "ZCode 实例已创建（实验性功能，不保证可用）");
+      toast("success", `已创建，工作区：${r.instance.workspacePath}`);
       setCreateOpen(false);
       await refreshExternal();
     } catch (e) {
@@ -315,8 +315,9 @@ export function ZcodeSection() {
                     </span>
                     {!inst.hasApiKey && <span className="tag plain">无 API Key</span>}
                   </span>
-                  <span className="tlli-subtitle">
+                  <span className="tlli-subtitle" title={inst.workspacePath ?? undefined}>
                     {inst.id}
+                    {inst.workspacePath ? ` · 工作区 ${inst.workspacePath}` : ""}
                     {inst.state === "running" ? " · 经面板反代打开" : ""}
                     {inst.state === "error" && inst.error ? ` · ${inst.error}` : ""}
                   </span>
@@ -436,12 +437,15 @@ export function ZcodeSection() {
             placeholder={
               editTarget
                 ? form.workspace
-                : "留空 = 实例目录下的 workspace；要指向现有项目就填它的绝对路径"
+                : `留空 = 面板自动新建：${s.zcodeWorkspacesRoot ?? "<数据目录>/zcode/workspaces"}/<实例 id>`
             }
             value={form.workspace}
             onChange={(e) => setForm((f) => ({ ...f, workspace: e.target.value }))}
           />
         </div>
+        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+          工作区是 agent 干活的目录。留空时面板立刻建好一个（删实例不会删它）；要指向现有项目就填它的绝对路径。
+        </p>
         <div className="form-row">
           <span className="form-label">API Base URL</span>
           <input
@@ -505,7 +509,7 @@ export function ZcodeSection() {
       <ConfirmDialog
         open={deleteTarget !== null}
         title="删除 ZCode 实例"
-        message={`删除「${deleteTarget?.name ?? ""}」？实例目录（含会话数据与凭证）会一并删除。`}
+        message={`删除「${deleteTarget?.name ?? ""}」？实例目录（含会话数据与凭证）会一并删除。默认工作区在 zcode/workspaces 下，不会被一并删除。`}
         confirmLabel="删除"
         danger
         busy={busy}

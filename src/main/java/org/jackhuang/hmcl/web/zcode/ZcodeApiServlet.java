@@ -278,6 +278,7 @@ public final class ZcodeApiServlet extends HttpServlet {
         }
         JsonObject body = new JsonObject();
         body.add("instances", instances);
+        body.addProperty("workspacesRoot", manager.workspacesRoot().toString());
         Json.writePreservingNulls(response, body);
     }
 

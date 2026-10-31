@@ -168,6 +168,31 @@ class ZcodeApiTest {
         }
     }
 
+    /// A new instance comes with a workspace, built before the first launch and
+    /// placed where the operator can see it — next to the instances, not inside
+    /// one. The listing advertises that root so the UI can show the path.
+    @Test
+    void creatingAnInstanceComesWithAWorkspace() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(), this::loopbackAuthOff)) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+            Path workspacesRoot = dataDir.resolve("zcode").resolve("workspaces");
+
+            HttpResponse<String> created = post(client, base + "/api/zcode/instances", "{\"name\":\"demo\"}");
+            assertEquals(201, created.statusCode(), created.body());
+            String workspacePath = json(created).getAsJsonObject("instance").get("workspacePath").getAsString();
+            assertFalse(workspacePath.isBlank(), "the workspace is reported: " + workspacePath);
+            assertTrue(Files.isDirectory(Path.of(workspacePath)),
+                    "the workspace is created with the instance: " + workspacePath);
+            assertTrue(Path.of(workspacePath).startsWith(workspacesRoot),
+                    "the workspace lives under " + workspacesRoot + ", was " + workspacePath);
+
+            HttpResponse<String> listed = get(client, base + "/api/zcode/instances");
+            assertEquals(200, listed.statusCode(), listed.body());
+            assertEquals(workspacesRoot.toString(), json(listed).get("workspacesRoot").getAsString());
+        }
+    }
+
     // ---------------------------------------------------------------- plugins --
 
     /// The plugin channel is a reserved slot with the brand categories' shape.

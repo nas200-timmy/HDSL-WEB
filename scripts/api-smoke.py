@@ -197,6 +197,25 @@ def run(panel):
           instance.get("workspacePath") == project and os.path.isdir(project), instance)
     status, _ = call("POST", "/api/zcode/instances", {"name": "bad", "workspacePath": "relative/x"})
     check("zcode: a relative workspace is refused", status == 400, status)
+
+    # 创建时不填工作区：面板自己在 <数据目录>/zcode/workspaces 下建好一个并报回来
+    workspaces_root = os.path.join(panel.data, "zcode", "workspaces")
+    status, body = call("POST", "/api/zcode/instances", {"name": "smoke-default-ws"})
+    default_instance = body.get("instance") or {}
+    default_ws = default_instance.get("workspacePath") or ""
+    check("zcode: creating without a path makes a workspace",
+          status == 201 and os.path.dirname(default_ws) == workspaces_root
+          and os.path.isdir(default_ws), (status, default_ws))
+    status, body = call("GET", "/api/zcode/instances")
+    check("zcode: the listing advertises the workspaces root",
+          status == 200 and body.get("workspacesRoot") == workspaces_root,
+          (status, body.get("workspacesRoot")))
+    if default_instance.get("id"):
+        status, _ = call("DELETE", "/api/zcode/instances/%s" % default_instance["id"])
+        # 那是项目目录，不是实例状态：删实例不该把 agent 干过活的目录一起删掉
+        check("zcode: deleting the instance keeps its default workspace",
+              status in (200, 204) and os.path.isdir(default_ws),
+              (status, os.path.isdir(default_ws)))
     if zcode_id:
         status, body = call("POST", "/api/zcode/instances/%s/launch" % zcode_id)
         text = json.dumps(body, ensure_ascii=False)

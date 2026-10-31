@@ -474,7 +474,8 @@ export const api = {
   /** ZCode 发行包检测：HDSL_ZCODE_PACKAGE 或 <dataDir>/zcode/current/ */
   zcodeDist: () => request<ZcodeDistInfo>("/api/zcode/dist"),
 
-  zcodeInstances: () => request<{ instances: ZcodeInstance[] }>("/api/zcode/instances"),
+  zcodeInstances: () =>
+    request<{ instances: ZcodeInstance[]; workspacesRoot?: string }>("/api/zcode/instances"),
 
   createZcodeInstance: (body: { name: string; baseUrl?: string; apiKey?: string; workspacePath?: string }) =>
     request<{ instance: ZcodeInstance }>("/api/zcode/instances", jsonInit("POST", body)),

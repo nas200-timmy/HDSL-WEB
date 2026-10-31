@@ -641,6 +641,8 @@ export interface AppState {
   /** 实验性 ZCode 品类：发行包检测结果（null = 尚未加载） */
   zcodeDist: ZcodeDistInfo | null;
   zcodeLoading: boolean;
+  /** 实验性 ZCode 品类：新建实例默认工作区的父目录（`<数据目录>/zcode/workspaces`）；undefined = 未取到 */
+  zcodeWorkspacesRoot?: string;
   /** 跨品牌实例（kimi/opencode/zcode）——唯一状态源，见 ExternalInstance 的注释 */
   external: ExternalInstance[];
   toasts: Toast[];

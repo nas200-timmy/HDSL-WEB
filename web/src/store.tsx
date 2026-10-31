@@ -236,7 +236,9 @@ export async function refreshExternal(): Promise<void> {
     api.brandInstances("opencode").then((r) => r.instances).catch(() => null),
     api.brandInstances("claude-web").then((r) => r.instances).catch(() => null),
     api.brandInstances("octop").then((r) => r.instances).catch(() => null),
-    api.zcodeInstances().then((r) => r.instances).catch(() => null),
+    api.zcodeInstances()
+      .then((r) => ({ instances: r.instances, workspacesRoot: r.workspacesRoot }))
+      .catch(() => null),
   ]);
   const external: ExternalInstance[] = [];
   for (const i of kimi ?? []) {
@@ -251,13 +253,15 @@ export async function refreshExternal(): Promise<void> {
   for (const i of octop ?? []) {
     external.push({ brand: "octop", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error, disabled: i.disabled });
   }
-  for (const i of zcode ?? []) {
+  for (const i of zcode?.instances ?? []) {
     external.push({
       brand: "zcode", id: i.id, name: i.name, state: i.state, port: i.lastPort,
       error: i.error ?? undefined, hasApiKey: i.hasApiKey, baseUrl: i.baseUrl ?? undefined,
+      workspacePath: i.workspacePath,
     });
   }
-  setState((s) => ({ ...s, external }));
+  // 拿不到时保留上一次的根：一次失败不该把界面上的路径提示变成占位符
+  setState((s) => ({ ...s, external, zcodeWorkspacesRoot: zcode?.workspacesRoot ?? s.zcodeWorkspacesRoot }));
 }
 
 /** WS 事件驱动的实例列表刷新：合并短时间内的多次事件，避免请求风暴。 */

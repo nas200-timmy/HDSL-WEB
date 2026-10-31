@@ -97,12 +97,15 @@ fetch、Z.ai OAuth 的 `tokenUrl`。上游把这些锚点挪走时构建会**明
 ## 实例怎么跑
 
 - 每实例一个目录 `<数据目录>/zcode/instances/<id>/`：`instance.json`（面板记录）、
-  `data/`（作为 `ZCODE_DATA_BASE_DIR`——ZCode 的配置、凭据、会话都在其下）、`workspace/`、
-  `logs/zcode.log`。
+  `data/`（作为 `ZCODE_DATA_BASE_DIR`——ZCode 的配置、凭据、会话都在其下）、
+  `logs/zcode.log`。旧的 `<实例>/workspace/` 不再是默认工作区，只在读历史清单时作为回退。
+- 默认工作区在 `<数据目录>/zcode/workspaces/<id>-<名字>/`，创建实例时立刻建好，路径记进清
+  单并在界面上显示；名字里的非 ASCII 字符会被省略掉，只剩 `<id>`。**删实例不会删它**——那是
+  项目目录，不是实例状态。要指向现有项目就在创建时填它的绝对路径，此时行为与以前一样。
 - 启动命令：`node <发行包>/bin/zcode.mjs --web --no-open --host 127.0.0.1 --port 0
-  --no-token --workspace <实例>/workspace`；面板从 stdout 的就绪行
-  `Local: http://127.0.0.1:<port>/` 解析真实端口。**只绑回环、不开令牌**：对外只有面板这一条路，
-  令牌认证在这里没有位置，面板的会话门就是唯一的门。
+  --no-token --workspace <实例的工作区>`（默认工作区即上面 `workspaces/` 下那个目录；面板从
+  stdout 的就绪行 `Local: http://127.0.0.1:<port>/` 解析真实端口）。**只绑回环、不开令牌**：
+  对外只有面板这一条路，令牌认证在这里没有位置，面板的会话门就是唯一的门。
 - 「打开」= `/i/<id>/`——和 dsh 同一个挂载点，同端口、同证书、同样要登录；请求由面板剥掉前缀
   转发到实例的回环端口，WebSocket 也走同一条中继。
 - 保存 API Key 时写入 `<实例>/data/.zcode/v2/provider_config.json`（ZCode 的个人供应商

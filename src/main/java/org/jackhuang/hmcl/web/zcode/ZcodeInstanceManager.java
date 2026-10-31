@@ -50,8 +50,13 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 ///
 /// An instance directory also holds everything the process owns at runtime:
 /// `data/` (passed to ZCode as `ZCODE_DATA_BASE_DIR`, so each instance's
-/// config, sessions and credentials are private), `workspace/` (the default
-/// workspace) and `logs/zcode.log` (the process's merged stdout and stderr).
+/// config, sessions and credentials are private) and `logs/zcode.log` (the
+/// process's merged stdout and stderr). The default workspace of a new
+/// instance lives next to the instances instead, under
+/// `zcode/workspaces/<id>-<name slug>` — a project directory the operator can
+/// see, keep and reuse, rather than state hidden inside the instance. The
+/// `<instance>/workspace/` directory is only still read as the fallback for
+/// manifests written before that move.
 ///
 /// **Experimental.** Credential injection writes the personal provider config
 /// ZCode reads from `<ZCODE_DATA_BASE_DIR>/.zcode/v2/provider_config.json`.
@@ -71,8 +76,13 @@ public final class ZcodeInstanceManager {
     /// `ZCODE_DATA_BASE_DIR`; ZCode keeps its own state at `.zcode/` below it.
     public static final String DATA_DIR_NAME = "data";
 
-    /// The default working directory the instance is launched with.
+    /// The default workspace directory of old instances, kept only so manifests
+    /// written before the move to [workspacesRoot] still resolve.
     public static final String WORKSPACE_DIR_NAME = "workspace";
+
+    /// The directory under the parent of [root] holding every default
+    /// workspace: `zcode/workspaces/`.
+    public static final String WORKSPACES_DIR_NAME = "workspaces";
 
     /// The process log: merged stdout and stderr, truncated at every launch.
     public static final String LOG_FILE_NAME = "zcode.log";
@@ -82,6 +92,9 @@ public final class ZcodeInstanceManager {
     public static final String PROVIDER_CONFIG_FILE = ".zcode/v2/provider_config.json";
 
     private static final SecureRandom RANDOM = new SecureRandom();
+
+    /// How much of a name a default workspace directory keeps.
+    private static final int SLUG_MAX_LENGTH = 24;
 
     private final Path root;
 
@@ -97,6 +110,18 @@ public final class ZcodeInstanceManager {
     /// @return the instances root
     public Path root() {
         return root;
+    }
+
+    /// The directory holding the default workspace of every instance.
+    ///
+    /// It is a sibling of the instances root, so a workspace outlives the
+    /// instance that created it: deleting an instance removes its manifest,
+    /// its data and its log, never the project the agent worked in.
+    ///
+    /// @return the workspaces root, `<zcode>/workspaces`
+    public Path workspacesRoot() {
+        Path parent = root.getParent();
+        return (parent == null ? root : parent).resolve(WORKSPACES_DIR_NAME);
     }
 
     /// Lists every readable instance, newest first.
@@ -139,9 +164,9 @@ public final class ZcodeInstanceManager {
     /// Creates and persists a new instance.
     ///
     /// The instance receives a random id, a random access token, its own
-    /// `data/` and `workspace/` directories, and — when an API key is given —
-    /// its first provider config. The workspace is created eagerly so a later
-    /// launch cannot fail merely because the directory is missing.
+    /// `data/` directory, a workspace under [workspacesRoot], and — when an API
+    /// key is given — its first provider config. The workspace is created eagerly
+    /// so a later launch cannot fail merely because the directory is missing.
     ///
     /// @param name    the display name; must not be blank
     /// @param baseUrl the provider base URL, or `null`/blank for the default
@@ -153,18 +178,23 @@ public final class ZcodeInstanceManager {
         return create(name, baseUrl, apiKey, null);
     }
 
-    /// Creates an instance that works on `workspace` instead of its own directory.
+    /// Creates an instance that works in a chosen directory, or in a default one.
     ///
     /// A ZCode instance usually points at a project the operator already has; asking them
-    /// to move or copy it into `<instance>/workspace` is the kind of thing that makes a
-    /// tool feel like it was built for somebody else. The path is taken as given (made
+    /// to move or copy it into the instance's own directory is the kind of thing that makes
+    /// a tool feel like it was built for somebody else. The path is taken as given (made
     /// absolute), created when missing, and recorded — the launch and the terminal both
     /// read it back, so an instance has exactly one answer for "where does it work".
+    ///
+    /// With no path given the instance gets a workspace of its own under
+    /// [workspacesRoot], named `<id>-<name slug>`, created right away and recorded in the
+    /// manifest like an operator-provided one. `<instance>/workspace/` is not used for new
+    /// instances any more; it stays as the fallback for manifests that predate the move.
     ///
     /// @param name      the display name; must not be blank
     /// @param baseUrl   the provider base URL, or `null`/blank for the default
     /// @param apiKey    the provider API key, or `null`/blank for none
-    /// @param workspace the directory to work in, or `null` for the instance's own
+    /// @param workspace the directory to work in, or `null` for a default workspace
     /// @return the created instance
     /// @throws ZcodeException when the name is blank, the path is not absolute, or the
     ///                        instance cannot be written
@@ -177,7 +207,7 @@ public final class ZcodeInstanceManager {
 
         String id = newTokenLike(9);
         Path directory = root.resolve(id);
-        Path workspacePath = workspaceDirectoryOf(directory);
+        Path workspacePath = defaultWorkspaceFor(id, normalized);
         if (workspace != null) {
             if (!workspace.isAbsolute()) {
                 throw new ZcodeException("工作区必须是绝对路径：" + workspace);
@@ -222,8 +252,11 @@ public final class ZcodeInstanceManager {
 
     /// Removes an instance and everything it owns.
     ///
-    /// Unlike a shared dsh home, a ZCode instance keeps all its state inside
-    /// its own directory, so deleting the directory deletes the whole instance.
+    /// Unlike a shared dsh home, a ZCode instance keeps its manifest, data and
+    /// log inside its own directory, so deleting the directory deletes the whole
+    /// instance. A default workspace is **not** one of those things: it lives
+    /// under [workspacesRoot] and is left untouched, because it holds the
+    /// operator's project rather than the instance's state.
     ///
     /// @param id the instance id
     /// @throws ZcodeException when the instance does not exist or cannot be removed
@@ -376,6 +409,45 @@ public final class ZcodeInstanceManager {
 
     private Path dataDirectoryOf(Path directory) {
         return directory.resolve(DATA_DIR_NAME);
+    }
+
+    /// The workspace a new instance gets when the operator did not name one.
+    ///
+    /// `<workspaces root>/<id>-<name slug>`, so the directory is recognisable in
+    /// a file manager; a name with nothing usable in it (Chinese, emoji) leaves
+    /// just the id.
+    private Path defaultWorkspaceFor(String id, String name) {
+        String slug = slugOf(name);
+        return workspacesRoot().resolve(slug.isEmpty() ? id : id + "-" + slug);
+    }
+
+    /// Turns a display name into something safe to use as a path segment:
+    /// ASCII letters, digits, `.`, `_` and `-` survive, every other character
+    /// (and every run of them) collapses into a single `-`, and the result is
+    /// capped at [SLUG_MAX_LENGTH] characters with no `.` or `-` at either end.
+    ///
+    /// @param name the display name
+    /// @return the slug; empty when the name contributes no usable characters
+    private static String slugOf(String name) {
+        StringBuilder slug = new StringBuilder();
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+                    || c == '.' || c == '_' || c == '-') {
+                slug.append(c);
+            } else if (slug.length() > 0 && slug.charAt(slug.length() - 1) != '-') {
+                slug.append('-');
+            }
+        }
+        int start = 0;
+        int end = Math.min(slug.length(), SLUG_MAX_LENGTH);
+        while (start < end && (slug.charAt(start) == '.' || slug.charAt(start) == '-')) {
+            start++;
+        }
+        while (end > start && (slug.charAt(end - 1) == '.' || slug.charAt(end - 1) == '-')) {
+            end--;
+        }
+        return slug.substring(start, end);
     }
 
     private Path workspaceDirectoryOf(Path directory) {

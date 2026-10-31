@@ -55,7 +55,8 @@ class ZcodeRuntimeTest {
 
     /// An instance can be pointed at a project the operator already has; the launch
     /// and the terminal both take the recorded path, not the one the panel would have
-    /// invented.
+    /// invented. With no path given the panel invents a visible one: a directory of
+    /// its own under `zcode/workspaces`, created immediately.
     @Test
     void anInstanceCanWorkInAFolderTheOperatorChose(@TempDir Path project) throws Exception {
         ZcodeInstanceManager manager = manager();
@@ -66,11 +67,22 @@ class ZcodeRuntimeTest {
         assertTrue(java.nio.file.Files.isDirectory(chosen), "the workspace is created eagerly");
         assertEquals(chosen.toString(), instance.workspacePath());
 
-        // No choice recorded means the instance's own directory, as before.
+        // No choice recorded means a default workspace of its own, next to the
+        // instances rather than inside the instance directory.
         ZcodeInstance own = manager.create("own", null, null);
-        assertEquals(manager.workspaceDirectory(own),
-                manager.workspaceDirectory(own));
-        assertTrue(manager.workspaceDirectory(own).endsWith("workspace"), manager.workspaceDirectory(own).toString());
+        Path ownWorkspace = manager.workspaceDirectory(own);
+        assertEquals(manager.workspacesRoot(), ownWorkspace.getParent());
+        assertEquals(ownWorkspace, Path.of(own.workspacePath()), "the recorded path is the workspace");
+        assertTrue(Files.isDirectory(ownWorkspace), "the default workspace is created eagerly: " + ownWorkspace);
+        assertTrue(ownWorkspace.getFileName().toString().startsWith(own.id()),
+                "the directory name starts with the id: " + ownWorkspace);
+
+        // A name with no ASCII characters leaves just the id — no dangling suffix.
+        ZcodeInstance chinese = manager.create("项目", null, null);
+        Path chineseWorkspace = manager.workspaceDirectory(chinese);
+        assertEquals(chinese.id(), chineseWorkspace.getFileName().toString());
+        assertEquals(manager.workspacesRoot(), chineseWorkspace.getParent());
+        assertTrue(Files.isDirectory(chineseWorkspace));
     }
 
     /// A path the operator typed has to be unambiguous: a relative one would depend on
