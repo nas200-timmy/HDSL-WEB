@@ -24,6 +24,23 @@ cd web && npm install        # 本机第一次（build.gradle.kts 发现 npm 就
 | `install-hdsl-tui.sh` | Linux / macOS | `--version V`、`--prefix DIR`、`--build`（本机 Go 离线编译）、`--dry-run` |
 | `install-hdsl-tui.ps1` | Windows（PowerShell 5.1+） | 同上，参数写成 `-Version/-Prefix/-Build/-DryRun` |
 
+## api-smoke.py
+
+```bash
+python3 scripts/api-smoke.py            # 自动取 build/libs 里最新的 jar
+python3 scripts/api-smoke.py path/to.jar
+```
+
+它自己起一个临时面板（临时数据目录、随机端口、HTTP），跑完删掉，不碰真实数据。
+
+> **被强杀会留下一个临时面板**：脚本的 `finally` 只在它自己结束时跑；如果它被 `kill -9`、
+> 任务超时或窗口被关掉，那个 `java -jar build/libs/hdsl-web-*.jar` 会继续活着占一个随机端口。
+> Windows 上清理：
+> `powershell -c "Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | ? { $_.CommandLine -match 'build\\\\libs\\\\hdsl-web' } | % { Stop-Process -Id $_.ProcessId -Force }"`
+> Linux 上：`pkill -f 'build/libs/hdsl-web-.*\.jar'`（确认那些不是你要留的面板再执行）。
+> 判断是不是残留：真面板跑的是**你指定的** jar 路径（通常是 `/data` 或部署目录里的那个），
+> 残留跑的是 `build/libs/` 下的构建产物。
+
 ## mobile-acceptance.py
 
 ```bash
