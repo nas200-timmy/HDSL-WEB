@@ -19,6 +19,7 @@ package org.jackhuang.hmcl.util;
 
 import org.jetbrains.annotations.NotNullByDefault;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -86,5 +87,68 @@ public final class ProcessTree {
                 descendant.destroyForcibly();
             }
         }
+    }
+
+    /// Kills every process whose command line names something under `directory`, and their
+    /// descendants.
+    ///
+    /// The case this exists for: a Windows directory cannot be removed while **any** process
+    /// has it as its current directory, and an instance's agent is started with exactly that
+    /// directory. A panel restarted since then has no record of that child — its registry
+    /// did not survive the restart — so "delete this instance" fails with an empty error
+    /// while a process nobody can see sits on the tree.
+    ///
+    /// Matching is on the command line, which is where a launcher that spawns
+    /// `node <instance>/dsh/... --profile web` names it. The panel's own command line names
+    /// the data directory, not an instance, so it is not matched.
+    ///
+    /// Whether a command line names something **inside** `directory`.
+    ///
+    /// On a path boundary, not by substring: `…\instances\demo` is a prefix of
+    /// `…\instances\demo-2`, and a substring test would kill the wrong instance — the one
+    /// that is working while the broken one is deleted.
+    ///
+    /// @param command the process's command line
+    /// @param needle  the directory, normalised
+    /// @return whether the command line references it
+    static boolean references(String command, String needle) {
+        for (String separator : List.of(command.contains("\\") ? "\\" : "/", "\\", "/")) {
+            if (command.contains(needle + separator)) {
+                return true;
+            }
+        }
+        return command.equals(needle);
+    }
+
+    /// @param directory the directory a process must reference to be killed
+    /// @return how many processes were told to die
+    public static int killReferencing(Path directory) {
+        String needle = directory.toAbsolutePath().normalize().toString();
+        List<ProcessHandle> victims = ProcessHandle.allProcesses()
+                .filter(handle -> handle.info().commandLine()
+                        .map(command -> references(command, needle))
+                        .orElse(false))
+                .toList();
+        int killed = 0;
+        for (ProcessHandle victim : victims) {
+            List<ProcessHandle> descendants = victim.descendants().toList();
+            if (victim.destroy()) {
+                killed++;
+            }
+            try {
+                victim.onExit().get(2, TimeUnit.SECONDS);
+            } catch (TimeoutException e) {
+                victim.destroyForcibly();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                victim.destroyForcibly();
+            } catch (ExecutionException e) {
+                // It was already gone; nothing to force.
+            }
+            for (ProcessHandle descendant : descendants) {
+                descendant.destroyForcibly();
+            }
+        }
+        return killed;
     }
 }

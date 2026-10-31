@@ -517,6 +517,15 @@ public final class DshVersionManager {
     /// @throws IOException when the move fails — the caller still has both trees intact
     static void moveAside(Path target, Path previous) throws IOException {
         FileUtils.deleteQuietly(previous);
+        if (Files.exists(previous)) {
+            // The old backup could not be removed (a file still held, a link the walker could
+            // not pass). Moving onto it would fail the whole install with "Failed to prepare",
+            // which is what an instance could never get past. Take a fresh name instead; the
+            // leftover is swept with the tombstones.
+            Path unique = previous.resolveSibling(previous.getFileName() + ".deleting-" + System.currentTimeMillis());
+            Files.move(previous, unique);
+            LOG.warning("Could not remove " + previous + "; moved it to " + unique.getFileName());
+        }
         Files.move(target, previous);
     }
 

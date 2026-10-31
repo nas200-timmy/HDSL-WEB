@@ -476,8 +476,42 @@ public final class FileUtils {
 
         Files.walkFileTree(directory, new SimpleFileVisitor<>() {
             @Override
+            public @NotNull FileVisitResult preVisitDirectory(@NotNull Path dir, @NotNull BasicFileAttributes attrs)
+                    throws IOException {
+                // A directory that is a **reparse point** — a junction (pnpm links its packages
+                // that way on Windows) or a mount point — is a leaf here, not a branch: delete
+                // the link and do not walk into it. Descending either walks a second tree or,
+                // when the target is already gone, hands the walker a path that does not exist:
+                // `Files.delete` then throws NoSuchFileException and the whole delete aborts.
+                // That was "deleting an instance never finishes" — one broken junction inside a
+                // pnpm store was enough, and the same failure blocked reinstalls, whose first
+                // step is to delete the previous tree.
+                if (!dir.equals(directory) && attrs.isOther()) {
+                    Files.delete(dir);
+                    return FileVisitResult.SKIP_SUBTREE;
+                }
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
             public @NotNull FileVisitResult visitFile(@NotNull Path file, @NotNull BasicFileAttributes attrs) throws IOException {
                 Files.delete(file);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public @NotNull FileVisitResult visitFileFailed(@NotNull Path file, @NotNull IOException failure)
+                    throws IOException {
+                // A junction whose target is gone reads as a directory but cannot be opened, so
+                // the walk fails here before any of the methods above are called. Removing the
+                // link is the right answer and always possible; anything else — a file another
+                // program holds — is reported as itself.
+                try {
+                    Files.delete(file);
+                } catch (IOException e) {
+                    e.addSuppressed(failure);
+                    throw e;
+                }
                 return FileVisitResult.CONTINUE;
             }
 

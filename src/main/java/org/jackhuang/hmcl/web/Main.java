@@ -83,6 +83,10 @@ public final class Main {
             // explained where the empty version list is.
             org.jackhuang.hmcl.util.platform.OutboundTls.accept(config.network.acceptUnverifiedUntil);
 
+            // Directories a delete could not remove (something held a file inside) were
+            // renamed aside; at startup whatever held them is most likely gone.
+            org.jackhuang.hmcl.dsh.DshInstanceManager.sweepTombstones();
+
             // The launcher's per-user home lives inside the data directory, so
             // a deployment mounts exactly one volume (`/data`, see the plan).
             // An explicit -Dhdsl.home wins, and the property must be set before

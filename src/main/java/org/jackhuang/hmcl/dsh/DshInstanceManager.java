@@ -267,13 +267,70 @@ public final class DshInstanceManager {
         if (instance.homeMode() != DshHomeMode.ISOLATED && !directory.startsWith(DshPaths.INSTANCES)) {
             throw new DshException("Refusing to delete " + directory + " because it is outside the instance directory");
         }
+        // A process started by an earlier panel is not in this one's registry, and on
+        // Windows a directory cannot be removed while any process has it as its current
+        // directory — which is exactly how an instance's agent is started. Without this,
+        // "delete" fails with an empty error while something invisible sits on the tree.
+        int strays = org.jackhuang.hmcl.util.ProcessTree.killReferencing(directory);
+        if (strays > 0) {
+            LOG.info("Stopped " + strays + " process(es) still referencing " + directory);
+        }
         try {
             FileUtils.deleteDirectory(directory);
         } catch (IOException e) {
-            throw new DshException("Failed to remove " + directory, e);
+            // Still not removable (a file another program holds, a path longer than the
+            // limit). Take the name away instead: a rename usually succeeds where a delete
+            // does not, the record is about to be gone, and the leftover is swept later.
+            Path tombstone = directory.resolveSibling(directory.getFileName()
+                    + ".deleting-" + System.currentTimeMillis());
+            try {
+                Files.move(directory, tombstone);
+            } catch (IOException rename) {
+                e.addSuppressed(rename);
+                throw new DshException("Failed to remove " + directory, e);
+            }
+            FileUtils.deleteDirectoryQuietly(tombstone);
+            LOG.warning("Could not delete " + directory + " (" + e.getMessage()
+                    + "); renamed it to " + tombstone.getFileName() + " and it will be swept later");
         }
         LOG.info("Removed instance " + id);
         fireChanged();
+    }
+
+    /// Removes the tombstones a delete leaves behind.
+    ///
+    /// A directory that could not be deleted is renamed to `<id>.deleting-<millis>` (see
+    /// [delete]), which takes the name away from the instance even when a file inside it is
+    /// still held. Those leftovers are invisible to every list (no `instance.json`), so all
+    /// that is left to do is to try again — at startup, when whatever held them is most
+    /// likely gone.
+    public static void sweepTombstones() {
+        if (!Files.isDirectory(DshPaths.INSTANCES)) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> instances = Files.list(DshPaths.INSTANCES)) {
+            for (Path instance : instances.toList()) {
+                // Inside an instance, a previous tree that could not be removed was renamed to
+                // `dsh.previous.deleting-<millis>`; at the instance level the same suffix marks
+                // an instance directory a delete could not finish.
+                try (java.util.stream.Stream<Path> entries = Files.list(instance)) {
+                    for (Path entry : entries.toList()) {
+                        String name = entry.getFileName().toString();
+                        if (name.contains(".deleting-") && FileUtils.deleteDirectoryQuietly(entry)) {
+                            LOG.info("Removed the leftover " + name);
+                        }
+                    }
+                } catch (IOException ignored) {
+                    // One unreadable instance is not a reason to skip the rest.
+                }
+                String name = instance.getFileName().toString();
+                if (name.contains(".deleting-") && FileUtils.deleteDirectoryQuietly(instance)) {
+                    LOG.info("Removed the leftover " + name);
+                }
+            }
+        } catch (IOException e) {
+            LOG.warning("Could not sweep the tombstones under " + DshPaths.INSTANCES, e);
+        }
     }
 
     /// Reports whether an instance id is already taken.
