@@ -2,7 +2,9 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布 · Claude Code 要的 Git Bash 由面板指明
+## v0.6.40 — 2026-10-31 · 中版本：Windows 实例终端改浏览器 PTY（ConPTY）、出站 TLS 信任策略、一批 Windows 冒烟修复
+
+### Claude Code 要的 Git Bash 由面板指明
 
 > 起因：Windows 上开 Claude Code 的终端直接结束，`会话已结束 (1)`，唯一线索是它自己的
 > 那句 "Claude Code on Windows requires git-bash … set `CLAUDE_CODE_GIT_BASH_PATH`"。
@@ -20,7 +22,7 @@
   所以不能靠 `C:\Program Files` 写死），`System32` 与 `WindowsApps` 里那两个 WSL shim 仍然拒绝。
 - 回归覆盖：`ClaudeWebTuiTest` 新增「面板会指明 Git Bash」与「操作者指过的不覆盖」两条。
 
-## 未发布 · 删除实例先拿走名字，再删内容
+### 删除实例先拿走名字，再删内容
 
 > 起因：Windows 上删实例删到一半失败——`<id>/dsh` 已经被删空，`instance.json` 却还在，
 > 于是列表里那个实例点开就错。根因是老顺序「先递归删，失败了才改名」：只要中间有一个文件
@@ -42,7 +44,7 @@
   实测补充：Windows 上**活着的文件句柄连目录改名也一起挡住**，所以真正的残留来自「删除被拒、改名还行」
   （只读文件、杀软/索引器的瞬时占用这类），而不是「文件开着」本身。
 
-## 未发布 · OpenCode 1.19.5 用 chunked 发资源，bundle 补丁静默失效
+### OpenCode 1.19.5 用 chunked 发资源，bundle 补丁静默失效
 
 > 起因：挂 `/i/<id>/` 的 OpenCode 面板里 markdown 高亮报
 > `Error: Markdown highlighting worker failed`——bundle 里 `new Worker("/assets/…")` 的根绝对路径
@@ -57,7 +59,7 @@
   `content-length`，断言浏览器收到的 body 里是 `<挂载点>assets/worker-x.js` 且带
   `Cache-Control: no-store`），外加超上限时不丢字节（含 gzip 解码后的尾巴）。
 
-## 未发布 · GitHub 在面板里"搜不到 / 下不下来"；覆盖 jar 后自带插件读失败
+### GitHub 在面板里"搜不到 / 下不下来"；覆盖 jar 后自带插件读失败
 
 > 起因：Windows 上装 claude-web / octop / ZCode 全部失败——品牌版本列表是空的，
 > ZCode 源码"could not be downloaded"，而浏览器打开同一批地址一切正常。
@@ -82,7 +84,7 @@
   现象是"文件明明在（`unzip -t` 通过）却读不出来"：自带插件的 tgz 装不上、页面加载不出
   资源。现在启动时记下自己那个 jar 的大小与时间，读失败且文件已变时直接说"重启面板即可"。
 
-## 未发布 · Windows 冒烟测试：kimi 找不到 bash；进程内 TUI 插件对 dsh 0.2.2 的口径
+### Windows 冒烟测试：kimi 找不到 bash；进程内 TUI 插件对 dsh 0.2.2 的口径
 
 > 起因：在裸 Windows 面板上验终端时撞到两条。一条是面板该做而没做的（把 Git Bash 告诉
 > kimi-code），一条是面板说了不该说的话（宣称支持一个插件自己都不接受的 dsh 版本）。
@@ -99,7 +101,7 @@
   `>=0.2.0-rc.2 <0.2.2-0`——`-0` 是 semver 的"含预发布"写法，裸 `<0.2.2` 会按数值比较把
   `0.2.2-alpha.2` 也放进来。不适配时面板直说，并推荐 ACP 版终端（它跨两条线都能跑）。
 
-## 未发布 · dsh 半安装的树会被当成已安装；ZCode 的工作区不能选
+### dsh 半安装的树会被当成已安装；ZCode 的工作区不能选
 
 > 起因：新建会话失败，错误是一长串 `agent-preset/invalid … waiting for workingDirectory`。
 > 那串话没有一句提到真正的原因：实例里那份 dsh 的 `node_modules` 是**半成品**。
@@ -115,7 +117,7 @@
   `<实例>/workspace`）。路径写进实例记录，启动与终端读同一份；相对路径直接拒绝（它取决于
   面板自己的工作目录，不是操作者该知道的东西）。建好之后只读——换工作区等于换一个项目。
 
-## 未发布 · 启动 ZCode 实例要求系统自己装 node
+### 启动 ZCode 实例要求系统自己装 node
 
 > 起因：裸 Windows 部署上点「启动」ZCode 实例，`Failed to start the ZCode process:
 > Cannot run program "node" … CreateProcess error=2`。面板自己在
@@ -130,7 +132,7 @@
   shim 从 PATH 找 `node`。现在**只在 PATH 上没有 node 时**把面板托管的运行目录放到最前，
   并写一条日志（octop 是 Python、opencode 是原生二进制，不受影响）。
 
-## 未发布 · ZCode 源码解包在中文文件名上整包失败
+### ZCode 源码解包在中文文件名上整包失败
 
 > 起因：Windows 上点「构建 ZCode」，在"解包源码"这一步失败：
 > `docs/ZCode 项目架构分析与改进建议.md: Invalid empty pathname` 加
@@ -149,7 +151,7 @@
 - 构建脚本自己的裸 `tar` 仍走 `bin/tar.bat` → `System32	ar.exe`，那条没变（脚本里的调用
   只碰 ASCII 文件名）。
 
-## 未发布 · 没有系统 Node.js 的机器上实例页白屏
+### 没有系统 Node.js 的机器上实例页白屏
 
 > 起因：裸部署（`java -jar`，机器上没有 node）打开面板，实例页直接报
 > `Cannot read properties of undefined (reading 'pnpm')`，整页不渲染。带 node 的开发机和 CI
@@ -165,7 +167,7 @@
   用 npm 重建 SPA 才生效；后端那一条对已有的 `web/dist` 立刻有效）。
 - 回归测试 `NodeApiTest.theSystemFieldIsPresentEvenWhenThereIsNoNode`：改回 `Json.write` 即红。
 
-## 未发布 · Windows 面板的实例终端改为浏览器 PTY（ConPTY）；删除桌面控制台回落
+### Windows 面板的实例终端改为浏览器 PTY（ConPTY）；删除桌面控制台回落
 
 > 起因：Windows 上点「终端」开的不是 PTY，而是一个宿主机桌面窗口（`cmd.exe /c start …
 > cmd.exe /k <脚本>`）。它的四个后果都不是能修的细节：脚本里的 `/k` 让 TUI 退出后用户站在
