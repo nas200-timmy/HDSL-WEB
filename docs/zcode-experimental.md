@@ -160,6 +160,11 @@ const projectStorageHostId = remoteHostIdFromWorkspaceIdentity(…)   →   cons
 （和构建期改那 5 处前端锚点同性质），装好的 `releases/<版本>/` 因此是确定的字节；启动只做
 **校验**，不写文件。上游不接受 PR，所以这条没有"等他们加开关"的退场时间，按 distro patch 维护。
 
+**只在 Windows 打**（`ZcodeServerPatch.applies()`）。Linux / macOS 上有一个**合法的第二客户端**：
+ZCode 桌面程序可以连到这台 server 当它的 host，而 `remote:server:<id>` 这个 owner 正是那套模型
+需要的——在那里改成 `local` 等于把桌面的远端项目从它手里拿走。所以补丁只落在「没有桌面端、
+浏览器是唯一客户端」的裸 Windows 部署上；其它平台连读都不读发行包（`NOT_APPLICABLE`）。
+
 这条补丁的代价与边界：
 
 - **它是改上游代码**。锚点是上面那句表达式。**构建时**锚点不在 → 构建明确失败并点名锚点，

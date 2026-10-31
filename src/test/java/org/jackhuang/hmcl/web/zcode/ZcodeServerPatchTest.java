@@ -64,7 +64,7 @@ class ZcodeServerPatchTest {
     void theOwnerBecomesLocalAndNothingElseMoves() throws IOException {
         Path entry = server();
 
-        assertEquals(ZcodeServerPatch.Outcome.PATCHED, ZcodeServerPatch.patch(release));
+        assertEquals(ZcodeServerPatch.Outcome.PATCHED, ZcodeServerPatch.rewrite(release));
 
         String patched = Files.readString(entry, StandardCharsets.UTF_8);
         assertTrue(patched.contains("const projectStorageHostId = \"local\";"), patched);
@@ -80,10 +80,10 @@ class ZcodeServerPatchTest {
     @Test
     void aSecondPassDoesNotTouchTheFileAgain() throws IOException {
         Path entry = server();
-        assertEquals(ZcodeServerPatch.Outcome.PATCHED, ZcodeServerPatch.patch(release));
+        assertEquals(ZcodeServerPatch.Outcome.PATCHED, ZcodeServerPatch.rewrite(release));
         byte[] once = Files.readAllBytes(entry);
 
-        assertEquals(ZcodeServerPatch.Outcome.PATCHED_ALREADY, ZcodeServerPatch.patch(release));
+        assertEquals(ZcodeServerPatch.Outcome.PATCHED_ALREADY, ZcodeServerPatch.rewrite(release));
 
         assertArrayEquals("the file was rewritten on a pass that had nothing to do", once,
                 Files.readAllBytes(entry));
@@ -102,7 +102,7 @@ class ZcodeServerPatchTest {
 
         assertArrayEquals("verification rewrote the release", upstream, Files.readAllBytes(entry));
         // …and after the build's pass it reports the state a launch expects.
-        assertEquals(ZcodeServerPatch.Outcome.PATCHED, ZcodeServerPatch.patch(release));
+        assertEquals(ZcodeServerPatch.Outcome.PATCHED, ZcodeServerPatch.rewrite(release));
         assertEquals(ZcodeServerPatch.Outcome.PATCHED_ALREADY, ZcodeServerPatch.verify(release));
     }
 
@@ -117,7 +117,7 @@ class ZcodeServerPatchTest {
                 "const projectStorageHostId = remoteHostIdFromWorkspaceIdentity(", "const owner = (");
         Files.writeString(entry, withoutAnchor, StandardCharsets.UTF_8);
 
-        assertEquals(ZcodeServerPatch.Outcome.ANCHOR_MISSING, ZcodeServerPatch.patch(release));
+        assertEquals(ZcodeServerPatch.Outcome.ANCHOR_MISSING, ZcodeServerPatch.rewrite(release));
 
         assertEquals(withoutAnchor, Files.readString(entry, StandardCharsets.UTF_8));
     }
@@ -127,7 +127,31 @@ class ZcodeServerPatchTest {
     void aReleaseWithoutAServerEntryIsNotAServer() throws IOException {
         Files.createDirectories(release.resolve("bin"));
 
-        assertEquals(ZcodeServerPatch.Outcome.NOT_A_SERVER, ZcodeServerPatch.patch(release));
+        assertEquals(ZcodeServerPatch.Outcome.NOT_A_SERVER, ZcodeServerPatch.rewrite(release));
+    }
+
+    /// The patch is a Windows answer to a Windows-only situation: a bare
+    /// deployment there has no desktop client, so the browser is the only client.
+    /// Elsewhere the desktop application can connect to this server as its host,
+    /// and `remote:server:<id>` is the owner that model needs — so nothing is read
+    /// and nothing is written there.
+    @Test
+    void onlyWindowsGetsThePatch() throws IOException {
+        Path entry = server();
+        byte[] upstream = Files.readAllBytes(entry);
+        var os = org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS;
+
+        assertEquals(os == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS,
+                ZcodeServerPatch.applies(), "the patch is for bare Windows deployments only");
+
+        if (os == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            assertEquals(ZcodeServerPatch.Outcome.NEEDS_PATCH, ZcodeServerPatch.verify(release));
+        } else {
+            assertEquals(ZcodeServerPatch.Outcome.NOT_APPLICABLE, ZcodeServerPatch.verify(release));
+            assertEquals(ZcodeServerPatch.Outcome.NOT_APPLICABLE, ZcodeServerPatch.patch(release));
+            assertArrayEquals("a platform the patch does not apply to was written to",
+                    upstream, Files.readAllBytes(entry));
+        }
     }
 
     private static void assertArrayEquals(String message, byte[] expected, byte[] actual) {

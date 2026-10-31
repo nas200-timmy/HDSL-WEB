@@ -447,7 +447,10 @@ public final class ZcodeBuilder {
             // in `releases/` is the same bytes; a moved anchor fails the build rather
             // than shipping a workbench that cannot open a folder.
             switch (ZcodeServerPatch.patch(target)) {
-                case PATCHED, PATCHED_ALREADY -> {
+                case PATCHED, PATCHED_ALREADY, NOT_APPLICABLE -> {
+                    // NOT_APPLICABLE is Linux and macOS: there the desktop app can
+                    // connect as the host, so upstream's remote owner is the one that
+                    // model needs and nothing is changed.
                 }
                 case ANCHOR_MISSING -> throw new ZcodeException(
                         "the built ZCode server entry no longer carries the project-owner expression"

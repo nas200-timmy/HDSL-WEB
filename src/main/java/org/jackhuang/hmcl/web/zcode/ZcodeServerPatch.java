@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.zcode;
 
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -55,6 +56,13 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// to `local` makes the server's store look like the desktop's local store, which
 /// is what a self-hosted panel is.
 ///
+/// **Windows only.** A Linux deployment has a second, intended client: the ZCode
+/// desktop application can connect to the panel's server as its host, and that
+/// model is exactly what the upstream owner id encodes — patching it to `local`
+/// there would take the desktop's remote projects away from it. So the patch
+/// applies where the desktop is not part of the picture (a bare Windows
+/// deployment, browser only) and leaves `remote:server:<id>` everywhere else.
+///
 /// **This is a patch to upstream's shipped code.** The anchor is the exact
 /// expression upstream writes today; when it is gone the panel says so once and
 /// runs the release unpatched (the workbench then behaves as it did before, which
@@ -82,17 +90,55 @@ public final class ZcodeServerPatch {
     private ZcodeServerPatch() {
     }
 
+    /// Whether this platform gets the patch at all.
+    ///
+    /// Only Windows: a bare deployment there has no desktop client, so the
+    /// browser is the only client and the owner has to be `local` for the
+    /// workbench to have a workspace. Everywhere else the desktop application can
+    /// connect to this server as its host, and `remote:server:<id>` is the owner
+    /// that model needs — changing it would take those projects away from it.
+    ///
+    /// @return whether a release built on this machine carries the patch
+    public static boolean applies() {
+        return OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS;
+    }
+
     /// Patches a release in place. **Build time only** — this is the distro patch
     /// that ships in every release the panel produces, not something a launch does
     /// to somebody else's files.
     ///
     /// The file is read, checked and only written when the expression is really
-    /// there; a release that is already patched is left byte-for-byte alone.
+    /// there; a release that is already patched is left byte-for-byte alone, and a
+    /// release built on a platform this patch does not apply to is not touched at
+    /// all ([Outcome#NOT_APPLICABLE]).
     ///
     /// @param release the release root (the directory holding `server/` and `bin/`)
     /// @return what happened; the builder fails the build on [Outcome#ANCHOR_MISSING]
     public static Outcome patch(Path release) {
-        Outcome inspected = verify(release);
+        return applies() ? rewrite(release) : Outcome.NOT_APPLICABLE;
+    }
+
+    /// Reads a release and says whether it carries the patch — **without writing
+    /// anything**.
+    ///
+    /// This is what a launch does: a release this panel built is already patched,
+    /// and one that was dropped in by hand (or built elsewhere) is reported once
+    /// and left alone. Editing an installed release at start would make the same
+    /// bytes behave differently depending on who started them.
+    ///
+    /// @param release the release root (the directory holding `server/` and `bin/`)
+    /// @return what the file says now
+    public static Outcome verify(Path release) {
+        return applies() ? inspect(release) : Outcome.NOT_APPLICABLE;
+    }
+
+    /// The mechanics of [patch], without the platform question — package-private so
+    /// the rules stay testable on a machine the patch does not ship for.
+    ///
+    /// @param release the release root
+    /// @return what the rewrite found
+    static Outcome rewrite(Path release) {
+        Outcome inspected = inspect(release);
         if (inspected != Outcome.NEEDS_PATCH) {
             return inspected;
         }
@@ -109,17 +155,11 @@ public final class ZcodeServerPatch {
         return Outcome.PATCHED;
     }
 
-    /// Reads a release and says whether it carries the patch — **without writing
-    /// anything**.
+    /// The mechanics of [verify], without the platform question.
     ///
-    /// This is what a launch does: a release this panel built is already patched,
-    /// and one that was dropped in by hand (or built elsewhere) is reported once
-    /// and left alone. Editing an installed release at start would make the same
-    /// bytes behave differently depending on who started them.
-    ///
-    /// @param release the release root (the directory holding `server/` and `bin/`)
-    /// @return what the file says now
-    public static Outcome verify(Path release) {
+    /// @param release the release root
+    /// @return what the file says
+    static Outcome inspect(Path release) {
         Path entry = release.resolve(SERVER_ENTRY);
         if (!Files.isRegularFile(entry)) {
             return Outcome.NOT_A_SERVER;
@@ -142,7 +182,7 @@ public final class ZcodeServerPatch {
     /// Reports the patch's state to the panel log, once per launch.
     ///
     /// @param release  the release that was checked
-    /// @param outcome  what [ensure] found
+    /// @param outcome  what [verify] found
     static void report(Path release, @Nullable Outcome outcome) {
         if (outcome == null) {
             return;
@@ -156,9 +196,10 @@ public final class ZcodeServerPatch {
                     + " was not built by this panel and still ships upstream's project-owner"
                     + " expression: the web workbench will show no workspace and cannot create"
                     + " projects. Rebuild it from the panel's version card to get the distro patch");
-            case PATCHED, PATCHED_ALREADY -> {
+            case PATCHED, PATCHED_ALREADY, NOT_APPLICABLE -> {
                 // Nothing to say at launch: a release is patched once, in the build,
-                // and started many times.
+                // and started many times; where the patch does not apply, nothing was
+                // ever expected of it.
             }
             case UNREADABLE, NOT_A_SERVER -> LOG.warning("Could not check " + release
                     + " for the project-owner patch (" + outcome + ")");
@@ -171,6 +212,9 @@ public final class ZcodeServerPatch {
         PATCHED,
         /// The file already says `"local"`.
         PATCHED_ALREADY,
+        /// This platform does not get the patch (see [applies]) — nothing was read
+        /// and nothing was written.
+        NOT_APPLICABLE,
         /// The expression is there and nothing was written — [verify]'s way of
         /// saying "this is not the patched bytes this panel builds".
         NEEDS_PATCH,
