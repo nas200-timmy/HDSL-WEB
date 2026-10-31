@@ -154,6 +154,10 @@ public final class BrandInstanceManager {
         } catch (IOException e) {
             throw new BrandException("Failed to create " + directory, e);
         }
+        // The directories above were just created as root; the tool that will run
+        // in them is the agent. See BrandRuntime.handInstanceDirsToAgent for what
+        // happens when this is skipped (Hermes refuses a root-owned home).
+        BrandRuntime.handInstanceDirsToAgent(this, instance);
 
         write(instance);
         LOG.info("Created " + brand.id() + " instance " + id + " (" + normalized + ", " + version + ")");

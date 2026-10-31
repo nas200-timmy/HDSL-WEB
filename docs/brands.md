@@ -160,6 +160,31 @@ key 在 `<home>/.env` 里（0600，agent 属主），面板不轮换它——换
 
 ### 两段身份下的属主（v0.6.44 起）
 
+**一条通用规则**：实例的 `home/` 与 `workspace/` 由面板（root）创建，创建完必须交给 agent
+（`BrandRuntime.handInstanceDirsToAgent`，`create` 与每次 `launch` 各做一次）。这不是 Hermes
+的特殊要求，而是这一层的基本假设：面板是 root，agent 是 uid 1000，**root 造的东西 uid 1000 不该
+当成自己的**。
+
+Hermes 是第一个真的检查这一点的品牌——它的 gateway 发现会拒绝 root 拥有的 control path：
+
+```
+gateway inaccessible: unsafe_control_path
+  …/instances/<id>/home is owned by uid 0, expected uid 1000 (gateway user); chown it to the gateway user
+```
+
+症状很隐蔽：dashboard 正常、页面能开，但聊天面板一直 `retrying in 30s (attempt N)`，消息堆在
+`queued` 里发不出去。别的品牌（kimi / opencode / claude-web）不检查属主，看起来没事——只是因为
+`/data` 是 setgid 2775、root 建的子目录继承了 `root:hdsl 2775` 还组可写。**那是挂载的巧合，不是
+任何人验证过的性质**，和 v0.6.45 的 pnpm `config.yaml` 是同一个形状。
+
+容器里自己验：
+
+```
+docker exec -u 1000 <容器> sh /tmp/verify-privilege-split.sh   # 第 5 项检查品牌实例目录属主
+```
+
+### Hermes 自己的属主表
+
 | 路径 | 属主 / 模式 | 为什么 |
 |---|---|---|
 | `<home>/.env` | agent, **0600** | gateway 要读 API key；面板是 root，写完交给 uid 1000 |

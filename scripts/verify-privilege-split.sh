@@ -79,6 +79,24 @@ else
     echo "跳过  /data/pnpm-store 还不存在"
 fi
 
+# 5. 品牌实例的 home/workspace 必须归 agent 自己
+#    Hermes 的 gateway 发现会拒绝 root 拥有的 control path（unsafe_control_path），
+#    症状是聊天面板一直 "retrying in 30s" 而消息留在队列里。别的品牌不检查属主，
+#    但同样不该是 root——它们只是恰好落在 setgid 的 /data 上才还能写。
+brand_homes=$(find /data/brands -mindepth 4 -maxdepth 4 -type d \( -name home -o -name workspace \) 2>/dev/null | head -20)
+if [ -n "$brand_homes" ]; then
+    for dir in $brand_homes; do
+        owner=$(stat -c '%u' "$dir" 2>/dev/null || echo '?')
+        if [ "$owner" = "$(id -u)" ]; then
+            ok "品牌实例目录属主正确（$dir）"
+        else
+            bad "品牌实例目录属主是 $owner，应为 $(id -u)：Hermes 会拒绝这种 control path（$dir）"
+        fi
+    done
+else
+    echo "跳过  还没有品牌实例（先建一个再跑）"
+fi
+
 echo
 if [ "$fail" = 1 ]; then
     echo "结论：身份划分没有生效（或方向错了），见上面 FAIL 行"

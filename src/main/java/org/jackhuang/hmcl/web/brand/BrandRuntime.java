@@ -229,6 +229,9 @@ public final class BrandRuntime {
             Path logFile = manager.logFile(instance);
             Path workspace = manager.workspaceDirectory(instance);
             Path home = manager.homeDirectory(instance);
+            // Repair anything the panel created as root before this existed (and
+            // any instance made by an older build): see handInstanceDirsToAgent.
+            handInstanceDirsToAgent(manager, instance);
             Process process;
             OutputStream log;
             LaunchPlan plan;
@@ -1055,6 +1058,43 @@ public final class BrandRuntime {
     /// @param file      the script
     /// @param arguments what to pass, in order, after the script path
     record HermesWrapper(Path file, List<String> arguments) {
+    }
+
+    /// Hands an instance's own directories to the agent.
+    ///
+    /// The panel runs as root, so anything it creates is root-owned — and at least
+    /// one brand refuses to work with a state directory it does not own. Hermes'
+    /// gateway discovery answers `unsafe_control_path` ("…/home is owned by uid 0,
+    /// expected uid 1000 (gateway user); chown it to the gateway user") when its
+    /// home belongs to root, and the symptom is subtle: the dashboard comes up, the
+    /// chat panel keeps reconnecting ("retrying in 30s, attempt 8"), and the
+    /// messages stay queued.
+    ///
+    /// The other brands only *appear* to be fine: `/data` is a setgid 2775 directory
+    /// owned by the agent, so a root-created child inherits `root:hdsl 2775` and
+    /// stays group-writable. That is an accident of the mount, not a property anyone
+    /// checked — and it is exactly the shape of the v0.6.45 pnpm bug.
+    ///
+    /// Called when an instance is created, and again on every launch, so an
+    /// instance made before this existed heals the next time it starts instead of
+    /// needing a hand-run `chown`.
+    ///
+    /// @param manager  the manager, for the instance's directories
+    /// @param instance the instance
+    static void handInstanceDirsToAgent(BrandInstanceManager manager, BrandInstance instance) {
+        if (!Privileges.dropsChildren()) {
+            // A bare deployment runs the panel as the same user the agent is.
+            return;
+        }
+        for (Path dir : List.of(manager.homeDirectory(instance), manager.workspaceDirectory(instance))) {
+            try {
+                Files.createDirectories(dir);
+            } catch (IOException e) {
+                LOG.warning("Could not create " + dir, e);
+                continue;
+            }
+            Privileges.handToAgent(dir, Privileges.AGENT_SHARED_DIRECTORY);
+        }
     }
 
     /// Reads (or allocates) the instance's port pair.
