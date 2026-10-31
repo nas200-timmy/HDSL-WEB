@@ -2,6 +2,21 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 · OpenCode 1.19.5 用 chunked 发资源，bundle 补丁静默失效
+
+> 起因：挂 `/i/<id>/` 的 OpenCode 面板里 markdown 高亮报
+> `Error: Markdown highlighting worker failed`——bundle 里 `new Worker("/assets/…")` 的根绝对路径
+> 没被改写，worker 去面板根取了东西。
+
+- **实例不给 `content-length` 也要补 bundle**（`InstanceProxyServlet`）：补丁原先要求"实例先把长度
+  说出来"，而 OpenCode 1.19.5 的资源响应是 `Transfer-Encoding: chunked`、没有 `content-length`，
+  于是整份 bundle 原样转发。现在长度只用于**提前放弃**（已知超过 16 MB 才不读），未知长度照补；
+  `probeRouterBundle` 同样去掉长度前提（否则这类客户端的整页路由会被判成"没有路由读法"、退回地址
+  还给面板根）。真超过上限时**整份原样发出**：不打补丁，也**不截断**——以前那条路会静默只发前缀。
+- 回归覆盖是端点级的（`BrandAssetChunkedPatchTest`：桩 upstream 手写响应头，`chunked` 且不带
+  `content-length`，断言浏览器收到的 body 里是 `<挂载点>assets/worker-x.js` 且带
+  `Cache-Control: no-store`），外加超上限时不丢字节（含 gzip 解码后的尾巴）。
+
 ## 未发布 · GitHub 在面板里"搜不到 / 下不下来"；覆盖 jar 后自带插件读失败
 
 > 起因：Windows 上装 claude-web / octop / ZCode 全部失败——品牌版本列表是空的，

@@ -392,6 +392,8 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// Three bodies are not streamed but rebuilt: a page (the mount has to be in
     /// its references — see [rewritePage]), and — for a third-party brand client —
     /// its own script and stylesheet ([patchBrandScript], [patchBrandStylesheet]).
+    /// An asset that turns out to hold more than [MAX_SCRIPT_BYTES] is the one
+    /// exception among those three, and it is still sent whole — see [AssetRead].
     /// Everything else streams, which is what keeps `/plugins/events` (SSE) working.
     /// @param mount         the bare `/i/<id>/` — router-bundle cache key and probe
     /// @param browserMount  `mount` under the panel's own base — every surface
@@ -415,14 +417,15 @@ public final class InstanceProxyServlet extends HttpServlet {
             long contentLength = result.headers().firstValueAsLong("content-length").orElse(-1);
             String contentType = result.headers().firstValue("content-type").orElse("").toLowerCase(Locale.ROOT);
             boolean servesPage = contentType.contains("text/html");
-            // An asset is only worth rebuilding when the instance sized it in
-            // advance (the patch changes that length) and it is small enough to
-            // hold. The probe that chose the shim read the entry script under the
-            // same rule, so what the page was told and what the browser gets agree.
-            boolean sized = contentLength >= 0 && contentLength <= MAX_SCRIPT_BYTES;
-            boolean servesScript = (brandClient || zcodeClient) && !servesPage && sized
+            // An asset is worth rebuilding when it is small enough to hold. An
+            // announced length only ever lets this say no early — never yes late
+            // (see canPatchAsset). The probe that chose the shim read the entry
+            // script under the same rule, so what the page was told and what the
+            // browser gets agree.
+            boolean holds = canPatchAsset(contentLength);
+            boolean servesScript = (brandClient || zcodeClient) && !servesPage && holds
                     && contentType.contains("javascript");
-            boolean servesStyle = brandClient && !servesPage && sized && contentType.contains("text/css");
+            boolean servesStyle = brandClient && !servesPage && holds && contentType.contains("text/css");
             copyResponseHeaders(result, response, browserMount, servesPage || servesScript || servesStyle);
             try (InputStream in = result.body(); OutputStream out = response.getOutputStream()) {
                 if (servesPage) {
@@ -437,13 +440,8 @@ public final class InstanceProxyServlet extends HttpServlet {
                             .getBytes(StandardCharsets.UTF_8));
                     out.flush();
                 } else if (servesScript || servesStyle) {
-                    byte[] asset = readAsset(in, result);
-                    if (asset == null) {
-                        // The instance announced a length it did not keep. Nothing sane is left
-                        // to send — the bytes read so far cannot be un-read.
-                        org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
-                                "Asset under " + mount + " outgrew its own content-length");
-                    } else {
+                    AssetRead asset = readAsset(in, result);
+                    if (asset.rest() == null) {
                         // These bytes are no longer the instance's own and must not be kept
                         // under its address: a cached copy without the patch would route the
                         // client by the mount itself and ask for chunks at the panel root.
@@ -451,18 +449,28 @@ public final class InstanceProxyServlet extends HttpServlet {
                         // ZCode 只放宽挂载检测正则：它原生按 /i/<id>/ 路由，
                         // 品牌那套路由读法补丁会把它的路由读坏。
                         out.write(servesScript
-                                ? (zcodeClient ? patchZcodeScript(asset)
-                                        : patchBrandScript(asset, browserMount))
-                                : patchBrandStylesheet(asset, browserMount));
-                    }
-                    out.flush();
-                } else {
-                    byte[] buffer = new byte[BUFFER_SIZE];
-                    int read;
-                    while ((read = in.read(buffer)) >= 0) {
-                        out.write(buffer, 0, read);
+                                ? (zcodeClient ? patchZcodeScript(asset.bytes())
+                                        : patchBrandScript(asset.bytes(), browserMount))
+                                : patchBrandStylesheet(asset.bytes(), browserMount));
                         out.flush();
+                    } else {
+                        // Larger than this servlet will hold — either something that only
+                        // looked like the client's asset, or a client whose bundle grew past
+                        // MAX_SCRIPT_BYTES. Unpatched is the lesser evil (a bundle built for
+                        // the origin root loses the chunks it imports lazily, and the router
+                        // shim falls back to the panel root), but *truncated* is not an
+                        // option: what was read is sent as it is, and the rest of the same
+                        // decoded stream follows, so the browser gets the whole resource.
+                        org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                                "Asset under " + mount + " holds more than " + MAX_SCRIPT_BYTES
+                                        + " bytes — sent untouched (unpatched)");
+                        out.write(asset.bytes());
+                        try (InputStream rest = asset.rest()) {
+                            copyThrough(rest, out);
+                        }
                     }
+                } else {
+                    copyThrough(in, out);
                 }
             }
         } catch (Exception e) {
@@ -764,7 +772,10 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// it exists for are single files a little under 3 MB (measured 2026-10 on
     /// both OpenCode builds); anything much larger is trusted to be something
     /// else and is streamed untouched.
-    private static final long MAX_SCRIPT_BYTES = 16L * 1024 * 1024;
+    ///
+    /// Package-private so the tests can name the boundary the rule is drawn at
+    /// ([canPatchAsset]).
+    static final long MAX_SCRIPT_BYTES = 16L * 1024 * 1024;
 
     /// The one expression a path-routed client turns the browser's address into
     /// its own route with — Solid Router's browser-history adapter, minified but
@@ -956,7 +967,14 @@ public final class InstanceProxyServlet extends HttpServlet {
                     HttpResponse.BodyHandlers.ofInputStream());
             try (InputStream in = response.body()) {
                 long length = response.headers().firstValueAsLong("content-length").orElse(-1);
-                if (response.statusCode() != 200 || length < 0 || length > MAX_SCRIPT_BYTES) {
+                // A length the instance did not announce is not a reason to give up:
+                // OpenCode 1.19.5 answers its assets with `Transfer-Encoding: chunked`
+                // and no content-length at all, and making the length a precondition
+                // read that client as "carries no path read" — it then got the shim
+                // that hands the address back to the panel root. The cap is enforced
+                // by the read itself ([readBytes]); a *known* length over it is still
+                // worth refusing before the bytes are read.
+                if (response.statusCode() != 200 || length > MAX_SCRIPT_BYTES) {
                     return false;
                 }
                 byte[] bundle = readBytes(in, MAX_SCRIPT_BYTES);
@@ -969,6 +987,38 @@ public final class InstanceProxyServlet extends HttpServlet {
         }
     }
 
+    /// Whether a response is small enough to hold, given what the instance said
+    /// about its length.
+    ///
+    /// An announced length is only ever used to *skip* the work: a body the
+    /// instance said is larger than [MAX_SCRIPT_BYTES] is trusted to be
+    /// something else, and is streamed untouched rather than read. Knowing
+    /// nothing is not the same as knowing it is big — **a response of unknown
+    /// length is patched**, and what the read can hold is enforced there
+    /// ([readAsset]). This is not hypothetical: OpenCode 1.19.5 answers its own
+    /// assets `Transfer-Encoding: chunked` with no content-length, and the old
+    /// "sized" rule turned that into "stream it unpatched" — the markdown worker
+    /// was then requested at the panel root and the app reported
+    /// `Markdown highlighting worker failed`. The bundle itself was the same
+    /// 2.7 MB file the sized build served.
+    ///
+    /// Package-private so the rule is directly testable.
+    static boolean canPatchAsset(long contentLength) {
+        return contentLength < 0 || contentLength <= MAX_SCRIPT_BYTES;
+    }
+
+    /// An asset read ahead of the response: the bytes read, and — when the
+    /// stream held more than this servlet will carry — the stream to continue
+    /// from, positioned right after the last byte of [bytes].
+    ///
+    /// `rest == null` means [bytes] is the whole asset and its stream is closed.
+    /// Otherwise the caller sends [bytes] and then what is left of `rest`: past
+    /// the cap the body is no longer patchable, but it is still the file the
+    /// browser asked for, whole. A truncated script is not a smaller script — it
+    /// is one that runs nothing at all.
+    static final record AssetRead(byte[] bytes, @Nullable InputStream rest) {
+    }
+
     /// Reads a script or stylesheet response into memory, decompressing it when
     /// the instance sent it compressed: the patch is matched against the bytes the
     /// browser would run, and a compressed body is not those bytes. The caller
@@ -978,24 +1028,58 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// [readPage]: the patch is then matched against something that is not the
     /// asset, and the file the browser loads is not the one the instance served.
     ///
-    /// @return the bytes, or `null` when the response holds more than
-    ///         [MAX_SCRIPT_BYTES] after all
-    private static byte @Nullable [] readAsset(InputStream in, HttpResponse<InputStream> result) throws IOException {
+    /// @return the bytes, up to [MAX_SCRIPT_BYTES], and the stream to carry on
+    ///         with when there are more of them (see [AssetRead])
+    static AssetRead readAsset(InputStream in, HttpResponse<InputStream> result) throws IOException {
         String encoding = result.headers().firstValue("content-encoding").orElse("").toLowerCase(Locale.ROOT);
         if (encoding.contains("gzip")) {
-            try (GZIPInputStream gzip = new GZIPInputStream(in)) {
-                return readBytes(gzip, MAX_SCRIPT_BYTES);
-            }
+            return readUpTo(new GZIPInputStream(in), MAX_SCRIPT_BYTES);
         }
         if (encoding.contains("deflate")) {
-            try (InflaterInputStream deflate = new InflaterInputStream(in)) {
-                return readBytes(deflate, MAX_SCRIPT_BYTES);
-            }
+            return readUpTo(new InflaterInputStream(in), MAX_SCRIPT_BYTES);
         }
         if (!encoding.isEmpty()) {
             warnUndecodableEncoding(encoding, result);
         }
-        return readBytes(in, MAX_SCRIPT_BYTES);
+        return readUpTo(in, MAX_SCRIPT_BYTES);
+    }
+
+    /// Reads `in` up to `cap` bytes — and no further, so that a body which turns
+    /// out to be too big costs one buffer past the cap rather than the whole
+    /// thing.
+    ///
+    /// The decoder wrappers are deliberately **not** closed on the `rest` path:
+    /// what is left has to be read through the same decompression, or the tail
+    /// of the body would be the compressed bytes it started as.
+    ///
+    /// Package-private so the split is directly testable.
+    ///
+    /// @return the bytes read, and `in` itself when it holds more than that
+    static AssetRead readUpTo(InputStream in, long cap) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[BUFFER_SIZE];
+        long total = 0;
+        while (total <= cap) {
+            int read = in.read(chunk);
+            if (read < 0) {
+                in.close();
+                return new AssetRead(buffer.toByteArray(), null);
+            }
+            buffer.write(chunk, 0, read);
+            total += read;
+        }
+        return new AssetRead(buffer.toByteArray(), in);
+    }
+
+    /// Copies the rest of `in` to `out`, flushing as it goes so a body meant to
+    /// arrive in pieces (SSE) still does.
+    private static void copyThrough(InputStream in, OutputStream out) throws IOException {
+        byte[] buffer = new byte[BUFFER_SIZE];
+        int read;
+        while ((read = in.read(buffer)) >= 0) {
+            out.write(buffer, 0, read);
+            out.flush();
+        }
     }
 
     /// @return the bytes of a stream, or `null` once it holds more than `cap`
