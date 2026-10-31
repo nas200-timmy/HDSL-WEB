@@ -98,12 +98,16 @@ class ZcodeServerPatchTest {
         Path entry = server();
         byte[] upstream = Files.readAllBytes(entry);
 
-        assertEquals(ZcodeServerPatch.Outcome.NEEDS_PATCH, ZcodeServerPatch.verify(release));
+        // inspect/rewrite are the mechanics **without** the platform question: the gate
+        // itself is onlyWindowsGetsThePatch's business, so this rule has to be checkable
+        // on a machine the patch does not ship for (it is not Windows-only logic that
+        // "reading must not write").
+        assertEquals(ZcodeServerPatch.Outcome.NEEDS_PATCH, ZcodeServerPatch.inspect(release));
 
         assertArrayEquals("verification rewrote the release", upstream, Files.readAllBytes(entry));
         // …and after the build's pass it reports the state a launch expects.
         assertEquals(ZcodeServerPatch.Outcome.PATCHED, ZcodeServerPatch.rewrite(release));
-        assertEquals(ZcodeServerPatch.Outcome.PATCHED_ALREADY, ZcodeServerPatch.verify(release));
+        assertEquals(ZcodeServerPatch.Outcome.PATCHED_ALREADY, ZcodeServerPatch.inspect(release));
     }
 
     /// Upstream will move this anchor eventually. The release is then left

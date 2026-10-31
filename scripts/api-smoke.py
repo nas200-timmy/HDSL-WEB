@@ -173,8 +173,8 @@ def run(panel):
     status, body = call("GET", "/api/doctor")
     checks = {c.get("id"): c for c in body.get("checks", [])}
     windows = (checks.get("windows") or {}).get("detail", "")
-    check("doctor: the instance terminal is reported", "instance terminal" in windows,
-          windows[-160:])
+    check("doctor: the instance terminal section matches the platform",
+          ("instance terminal" in windows) == (os.name == "nt"), windows[-160:])
 
     # ---- 出站证书的确认（一次性窗口） ------------------------------------
     status, body = call("GET", "/api/network/trust")
