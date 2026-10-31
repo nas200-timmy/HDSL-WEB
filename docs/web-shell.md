@@ -77,6 +77,8 @@
 
 ### 4.1 威胁模型：入口即 RCE，本地权限不是边界
 
+> 完整的安全说明（威胁清单、误配、免责）在 [`security.md`](security.md)；这一节只讲终端这一条。
+
 终端这条路**在效果上等价于远程代码执行**：`POST /api/brands/{brand}/instances/{id}/terminal`
 能启动一个执行 agent 的进程，屏幕还能交互。因此它的安全全压在入口上，而不是"Windows 有没有
 桌面"这种平台差异上——ConPTY 换掉桌面窗口之后，这条不变：

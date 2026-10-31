@@ -680,6 +680,8 @@ WantedBy=multi-user.target
 
 ### 10.0 身份模型：裸部署是单用户，没有隔离
 
+> 威胁、误配清单与免责见 [`security.md`](security.md)。
+
 面板和被它启动的每一个 agent（dsh、品牌工具、MC 服务端、终端）在裸部署里都是**同一个系统
 用户**。这意味着 agent 能改面板的配置、凭据与审计日志——同 uid 下权限位不提供保护
 （`auth/` 是 0700，但 agent 就是那个 owner）。

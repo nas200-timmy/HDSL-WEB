@@ -53,7 +53,8 @@
 - 品牌实例的安装、版本共享与实验性边界见 [docs/brands.md](docs/brands.md)；Octop 的便携包 /
 本地源码编译与挂载点补丁见 [docs/octop.md](docs/octop.md)；ZCode 的构建与限制见
 [docs/zcode-experimental.md](docs/zcode-experimental.md)；终端的前提、安全模型与开关见
-[实例终端（Web Shell）](#实例终端web-shell)。
+[实例终端（Web Shell）](#实例终端web-shell)。**安全相关的威胁模型、误配自查与免责统一在
+[docs/security.md](docs/security.md)。**
 - Minecraft 服务端（默认关闭，第三方功能）：开关在「设置 → 品牌实例」，要在开发者密码下
   读完 Mojang EULA 与服务条款才能打开；服务端程序不随本项目分发，由 Mojang 官方下载。
   **存档放在 `/home/hdsl/mc`，容器部署必须把这个路径挂出来**（见[数据与挂载点](#数据与挂载点)）。
@@ -612,35 +613,29 @@ https:
 
 ## 安全说明
 
+> 完整的威胁模型、误配自查清单与免责声明在 **[docs/security.md](docs/security.md)**。
+> 这里只留最该知道的部分。
+
 > Windows 没有 POSIX 的 0600 语义：多用户机器上，凭据文件可能被同机其他账户读到。按单用户
 > 机器对待，并且不要把数据目录暴露到公网可访问的位置。
 
-- 登录门：`POST /api/auth/login`、`GET /api/auth/status`、`POST /api/auth/setup`（仅无用户时）
-  与 `GET /api/health` 是公开的（外加不含数据的 SPA 外壳）；`/api/*`、`/ws`、`/i/*` 都要求会话。
-  改密码或改用户名后，同用户的其它会话立即失效（改名的那个会话保留并切换到新用户名）。
-- 登录失败有预算：**同一来源地址**五分钟内 15 次失败之后，第 16 次起拒绝十分钟（响应带
-  `Retry-After`，说明还要等多少秒），期间口令正确也一样进不来；一次成功即清零。预算没花完之前
-  页面上不提示任何计数——只有真的被挡住时才说出来。拒绝发生在核对口令**之前**：核对口令本身
-  （PBKDF2 二十一万次）就是攻击者想花掉的那笔开销。来源地址取的是 TCP 对端地址，所以面板如果
-  架在反向代理后面，这个预算是所有访问者共用的（`X-Forwarded-For` 是客户端能自己写的，不能信）。
-- 口令用 PBKDF2WithHmacSHA256（per-user 盐、21 万次迭代），文件原子写入并尽量收紧到 0600。
-- **实例终端是一个能执行 agent 的入口，效果上等价于 RCE**：除了会话，还要开发者密码提权
-  （30 分钟滑动），并且只在 HTTPS 下开放；启动的永远是适配器解析出来的 argv（Windows 上
-  `.cmd`/`.bat` 一律拒绝），不经 shell。设置 →「开发者
-  模式」里的总开关可以整体关掉，关掉后按钮隐藏、接口 403。面板只应监听回环或可信网络；要暴露
-  公网必须在网络层再加保护。见 [docs/web-shell.md §4](docs/web-shell.md)。
-- dsh 只监听回环；TLS 在面板边缘终结，外部能到达的只有面板端口。
-- 点「停止」会杀整棵进程树：端口立刻关闭，`/i/<id>/` 立刻不可用。dsh 的访问 token 每进程随机、
-  只存内存、重启即换。
-- 面板 Cookie 是 `HttpOnly` + `SameSite=Strict`，HTTPS 下（含受信反代发来
-  `X-Forwarded-Proto: https` 时）加 `Secure`；反代把 dsh 的 Cookie Path 改写到 `/i/<id>/`，
-  多实例不会互相覆盖。
-- `auth.disabled: true` 只在绑定回环地址时允许。
-- **容器里的身份划分**（v0.6.43 起）：面板是 root、每个 agent 进程用 `setpriv` 降到 uid 1000，
-  `auth/`（账号与开发者密码哈希）、`certs/`（TLS 私钥）、`logs/`（审计）、`server.yaml` 归 root
-  0700/0600，所以 agent 读不到也改不了，也 `kill` 不掉面板。**裸部署没有这一层**：面板与 agent
-  同 uid，要隔离请用容器。供应商 API key 不在保护范围内（agent 与 ACP 要用），见
-  [docs/design-notes.md §7.5](docs/design-notes.md)。
+- **登录门**：除了 `POST /api/auth/login|setup`、`GET /api/auth/status`、`GET /api/health` 与
+  不含数据的 SPA 外壳，其余 `/api/*`、`/ws`、`/i/*` 都要会话。口令用 PBKDF2WithHmacSHA256
+  （per-user 盐、21 万次迭代），文件 0600；改口令或改用户名会踢掉该用户的其它会话。
+- **登录失败有预算**：同一来源地址 5 分钟内错 15 次，第 16 次起拒绝 10 分钟（带 `Retry-After`），
+  期间口令正确也进不来；来源取的是 TCP 对端地址（不信 `X-Forwarded-For`），所以面板在反代
+  后面时这份预算是**所有访问者共用**的。
+- **开发者模式是第二把锁**：独立口令（`auth/developer.json`，0600），只在真 HTTPS 下可用，提权
+  30 分钟滑动；它守的是终端、E-Stop、守卫档位、装包这些"能执行代码"的动作。
+- **实例终端效果上等于 RCE**：五道门（E-Stop → 总开关 → HTTPS → 开发者口令 → 提权）之后才启动，
+  启动的是适配器解析出的 argv、**不经 shell**（Windows 上 `.cmd`/`.bat`/`.ps1`/`.com` 一律拒绝）。
+  面板只应监听回环或可信网络；公网暴露必须在网络层再加保护。见
+  [docs/web-shell.md §4](docs/web-shell.md)。
+- **容器里的身份划分**（v0.6.43 起）：面板是 root、每个 agent 进程降权到 uid 1000，`auth/`、
+  `certs/`、`logs/`、`server.yaml` 归 root 0700/0600——agent 读不到也改不了，也 `kill` 不掉面板。
+  **裸部署没有这一层**（面板与 agent 同 uid），要隔离就用容器。
+- **不在保护范围内的**：供应商 API key（agent 与 ACP 会话要用它调模型）、实例之间的互相可写、
+  Windows 的 0600 语义。理由与缓解见 [docs/security.md §6](docs/security.md)。
 - 首启自签证书会让浏览器告警，这是预期行为；正式使用请上传受信任的证书。
 
 实现细节见 [docs/design-notes.md](docs/design-notes.md)。
