@@ -357,6 +357,7 @@ docker compose up -d --build
 
 ```bash
 ./docker-install.sh          # 交互；--yes + 参数走非交互，--dry-run 只看计划
+./docker-install.sh --base fedora   # 换运行时底座（debian 默认，另有 opensuse）
 ```
 
 它不依赖 compose（NAS 上常常没有），同名容器存在时会问「重启 / 重建容器 / 重新构建镜像」。

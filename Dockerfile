@@ -23,7 +23,7 @@
 # Multi-arch builds pin the two build stages to the builder's own architecture:
 # `npm ci`/`vite build` and Gradle produce architecture-neutral output, so there
 # is no reason to run them under QEMU. Only the runtime stage below is
-# target-specific (apt + the Node tarball chosen by dpkg).
+# target-specific (package manager + the Node tarball chosen by uname).
 # =============================================================================
 FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS web
 
@@ -116,13 +116,47 @@ RUN test "$(jar tf "$(ls /src/build/libs/hdsl-web-*.jar | head -1)" | grep -c '^
 
 
 # =============================================================================
-# Stage 3 — runtime: Debian + JDK 21 + Node 22 + pnpm
+# Stage 3 — runtime: JDK + Node 22 + pnpm, on Debian by default
 # =============================================================================
 # Debian 13 (trixie) carries openjdk-21-jre-headless as a first-class package
 # (21.0.11+10-1~deb13u2), so no backports are involved.
-FROM debian:trixie-slim AS runtime
+#
+# The base is a build argument because the same jar was measured on Fedora 44
+# (JDK 25) and openSUSE Tumbleweed (JDK 21) with identical behaviour — see
+# `report-2026-10-31-base-compat.md`. Only this stage differs per distribution:
+#
+#   docker build --build-arg HDSL_BASE=fedora:44 \
+#                --build-arg HDSL_ENCODERS=optional -t hdsl-web:fedora .
+#
+# `HDSL_ENCODERS` is `required` for Debian (libavcodec-extra carries x264/x265,
+# so a missing one is a regression) and `optional` elsewhere: Fedora's
+# `ffmpeg-free` and openSUSE's `ffmpeg-7` are the patent-free builds, and the
+# full set lives in RPM Fusion / Packman — repositories this image does not add.
+# With `optional` the build prints which encoders it lacks instead of failing.
+ARG HDSL_BASE=debian:trixie-slim
+FROM ${HDSL_BASE} AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
+
+# 兜底断言：ffmpeg 与 ffprobe 必须在，且按 HDSL_ENCODERS 决定 x264/x265 缺失是失败
+# 还是告警。apt/dnf/zypper 解析出错、或者哪天 extra 变体的包名变了，都在构建期暴露
+# ——而不是等 agent 截帧时才发现。
+ARG HDSL_ENCODERS=required
+RUN set -eux; \
+    ffmpeg -hide_banner -version | head -1; \
+    ffprobe -hide_banner -version | head -1; \
+    missing=""; \
+    for codec in libx264 libx265; do \
+      ffmpeg -hide_banner -encoders 2>/dev/null | grep -q "$codec" || missing="$missing $codec"; \
+    done; \
+    if [ -n "$missing" ]; then \
+      if [ "${HDSL_ENCODERS}" = "required" ]; then \
+        echo "HDSL-web: ffmpeg has no${missing}, and HDSL_ENCODERS=required" >&2; \
+        exit 1; \
+      fi; \
+      echo "HDSL-web: ffmpeg has no${missing} — this base ships the patent-free build;" \
+           "transcoding to H.264/H.265 will fail (RPM Fusion / Packman carry the full one)" >&2; \
+    fi
 
 # OCI 元数据：source 让 ghcr.io 把镜像包自动关联到本仓库（也是 CI 里
 # GITHUB_TOKEN 有权推送同名包的前提），description/licenses 显示在包页面。
@@ -205,52 +239,47 @@ ARG PNPM_VERSION=11.28.2
 # 镜像与官方逐字节一致（SHASUMS256 校验不变，仍以官方清单为准）。
 ARG NODE_DIST_MIRROR=https://nodejs.org/dist
 
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      7zip \
-      build-essential \
-      busybox-static \
-      bzip2 \
-      ca-certificates \
-      cargo \
-      curl \
-      ffmpeg \
-      git \
-      golang-go \
-      less \
-      libatomic1 \
-      libavcodec-extra \
-      nano \
-      openjdk-21-jdk-headless \
-      pkg-config \
-      procps \
-      python-is-python3 \
-      python3 \
-      rustc \
-      tini \
-      unzip \
-      vim-tiny \
-      wget \
-      xz-utils \
-      zip \
-      zstd \
- && rm -rf /var/lib/apt/lists/*
-
-# 兜底断言：ffmpeg 与 ffprobe 在，且带最常见的两种编码器。apt 解析出错、
-# 或者哪天 extra 变体的包名变了，都在构建期失败——而不是等 agent 截帧时才发现。
-RUN ffmpeg -hide_banner -version | head -1 \
- && ffprobe -hide_banner -version | head -1 \
- && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q 'libx264' \
- && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q 'libx265'
+RUN set -eux; \
+    . /etc/os-release; \
+    case "$ID" in \
+      debian|ubuntu) \
+        apt-get update; \
+        apt-get install -y --no-install-recommends \
+          7zip build-essential busybox-static bzip2 ca-certificates cargo curl \
+          ffmpeg git golang-go less libatomic1 libavcodec-extra nano \
+          openjdk-21-jdk-headless pkg-config procps python-is-python3 python3 \
+          rustc tini unzip vim-tiny wget xz-utils zip zstd; \
+        rm -rf /var/lib/apt/lists/* ;; \
+      fedora) \
+        dnf install -y --setopt=install_weak_deps=False \
+          7zip busybox gcc gcc-c++ make bzip2 ca-certificates cargo curl \
+          ffmpeg-free git golang less libatomic nano pkgconf-pkg-config \
+          procps-ng python3 python-unversioned-command rust tini unzip \
+          vim-minimal wget xz zip zstd; \
+        dnf install -y java-21-openjdk-headless \
+          || dnf install -y java-25-openjdk-headless; \
+        dnf clean all ;; \
+      opensuse*) \
+        zypper --non-interactive install --no-recommends \
+          7zip busybox bzip2 ca-certificates cargo curl ffmpeg-7 gcc gcc-c++ \
+          go java-21-openjdk-headless less libatomic1 make nano pkg-config \
+          procps python3 rust tini unzip vim wget xz zip zstd; \
+        zypper clean --all ;; \
+      *) echo "HDSL-web: unsupported base '$ID'; set HDSL_BASE to a Debian, Fedora or openSUSE image" >&2; \
+         exit 1 ;; \
+    esac; \
+    ln -sf "$(command -v tini)" /usr/local/bin/tini; \
+    /usr/local/bin/tini --version
 
 # Node 22 LTS from the official nodejs.org tarball. The architecture is read
-# from dpkg, so the same Dockerfile builds on amd64 and arm64; the archive is
+# from `uname -m` rather than a package manager's answer, so the same Dockerfile
+# builds on amd64 and arm64 over any of the supported bases; the archive is
 # checked against the release's own SHASUMS256.txt before it is unpacked.
 RUN set -eux; \
-    arch="$(dpkg --print-architecture)"; \
+    arch="$(uname -m)"; \
     case "${arch}" in \
-      amd64) node_arch=x64 ;; \
-      arm64) node_arch=arm64 ;; \
+      x86_64|amd64) node_arch=x64 ;; \
+      aarch64|arm64) node_arch=arm64 ;; \
       *) echo "HDSL-web: unsupported architecture ${arch}" >&2; exit 1 ;; \
     esac; \
     tarball="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz"; \
@@ -271,10 +300,10 @@ RUN set -eux; \
 # right pnpm without disturbing the panel's own.
 ARG NODE24_VERSION=24.14.0
 RUN set -eux; \
-    arch="$(dpkg --print-architecture)"; \
+    arch="$(uname -m)"; \
     case "${arch}" in \
-      amd64) node_arch=x64 ;; \
-      arm64) node_arch=arm64 ;; \
+      x86_64|amd64) node_arch=x64 ;; \
+      aarch64|arm64) node_arch=arm64 ;; \
       *) echo "HDSL-web: unsupported architecture ${arch}" >&2; exit 1 ;; \
     esac; \
     tarball="node-v${NODE24_VERSION}-linux-${node_arch}.tar.xz"; \
@@ -435,6 +464,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
    || curl -fsS "http://127.0.0.1:${HDSL_PORT:-3080}/api/health" >/dev/null 2>&1 \
    || exit 1
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/hdsl-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/tini", "--", "/usr/local/bin/hdsl-entrypoint"]
 # 入口脚本已经 exec java，CMD 只提供 java 之后的参数（写 "java" 会拼成 `java -Xmx1g java -jar …`）
 CMD ["-jar", "/app/hdsl-web.jar"]

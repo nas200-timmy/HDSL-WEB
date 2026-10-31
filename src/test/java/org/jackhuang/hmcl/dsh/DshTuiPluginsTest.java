@@ -63,6 +63,19 @@ class DshTuiPluginsTest {
         assertFalse(DshTuiPlugins.fitsHost(inproc, "0.2.2-alpha.2"),
                 "the bundle's peers stop at 0.2.1-rc.3");
         assertTrue(DshTuiPlugins.fitsHost(inproc, "0.2.1-rc.3"));
+        // …and so do `0.2.1-rc.4` / `-rc.5`, which is what `dsh@latest` publishes.
+        // The panel used to call those a fit (`<0.2.2-0` admits every 0.2.1 prerelease),
+        // and the install then bounced off dsh's own "incompatible with dsh 0.2.1-rc.5"
+        // — leaving the newest instance without a terminal and no panel-side explanation.
+        assertFalse(DshTuiPlugins.fitsHost(inproc, "0.2.1-rc.4"),
+                "a newer 0.2.1 prerelease is not covered by the plugin's peers");
+        assertFalse(DshTuiPlugins.fitsHost(inproc, "0.2.1-rc.5"),
+                "0.2.1-rc.5 is dsh@latest and has no plugin build tested against it");
+        assertFalse(DshTuiPlugins.fitsHost(inproc, "0.2.1"),
+                "the released 0.2.1 is outside the plugin's peer list too");
+        String mismatch = DshTuiPlugins.hostMismatch(inproc, "0.2.1-rc.5");
+        assertTrue(mismatch.contains("0.2.1-rc.5"), mismatch);
+        assertTrue(mismatch.contains("@nas200-timmy/dsh-acp-tui"), mismatch);
         String fallback = DshTuiPlugins.hostMismatch(inproc, "0.1.7-rc.1");
         assertTrue(fallback.contains("@nas200-timmy/dsh-acp-tui"), fallback);
     }

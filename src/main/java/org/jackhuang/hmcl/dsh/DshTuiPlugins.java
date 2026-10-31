@@ -140,10 +140,17 @@ public final class DshTuiPlugins {
                     // `@deepseek-ai/dsh-agent` 0.2.0-rc.1 … 0.2.1-rc.3 and nothing newer: dsh
                     // 0.2.2-alpha.x refuses the bundle outright ("incompatible with dsh
                     // 0.2.2-alpha.2"), and a panel that claimed otherwise would install a
-                    // terminal the host then silently skips. The bound is written `<0.2.2-0`,
-                    // the semver idiom for "before 0.2.2, prereleases included" — a plain
-                    // `<0.2.2` compares numerically and still admits `0.2.2-alpha.2`.
-                    ">=0.2.0-rc.2 <0.2.2-0",
+                    // terminal the host then silently skips.
+                    //
+                    // The bound used to be written `<0.2.2-0`, the semver idiom for "before
+                    // 0.2.2, prereleases included" — which also admits **0.2.1-rc.4 and
+                    // -rc.5**, and those are exactly what `dsh@latest` publishes. The result
+                    // was a panel that called the plugin "a fit", an install that dsh refused
+                    // (`incompatible with dsh 0.2.1-rc.5`) and rolled back, and a user with no
+                    // terminal on the newest harness. The ceiling now names the last peer the
+                    // plugin declares: a new rc needs a plugin build that was actually tested
+                    // against it, not a range that hopes.
+                    ">=0.2.0-rc.2 <0.2.1-rc.4",
                     true,
                     "dsh-terminal"),
             new Entry(

@@ -18,7 +18,21 @@
 - **doctor 认托管运行时**：与启动路径一致走 `detect().or(detectManaged)`，并标
   `[panel-managed runtime]`。以前裸部署装好托管 Node、实例跑得好好的，doctor 仍然报红。
 - **生产镜像补 `libatomic1`**：0.1 MB，换掉"一键装最新版装出个不能用的 node"。
-- 文档：`docs/deployment.md` 的裸部署一节写明精简基础镜像要补 `libatomic1`。
+- **TUI 插件不再对最新的 dsh 撒谎**：`dsh-inproc-tui` 的上界原写作 `<0.2.2-0`，那会把
+  `0.2.1-rc.4` / `-rc.5` 也算成适配——而它们正是 `dsh@latest` 发布的版本；安装会被 dsh 以
+  "incompatible with dsh 0.2.1-rc.5" 拒绝并回滚，用户拿到的现象是"最新版没有终端可用"。
+  上界收窄到插件 peer 里真正声明的最后一个（`<0.2.1-rc.4`），不匹配时走既有的面板侧说明
+  （含 ACP 备选），而不是把 dsh 的原话抛出来。
+- **启动窗口不再报假 STOPPED**：`launchAsync` 在任务排队前就标记"launch 在途"，`stateOf`
+  在进程出现之前回答 STARTING。`POST /launch` 的 202 与紧接着的 `GET` 之间那一瞬，以前会
+  读到一个实例早已离开的状态，前端轮询会闪一下"已停止"，自动化脚本会误判。
+- **换运行时底座**：Dockerfile 的 runtime 阶段按 `/etc/os-release` 分派（Debian / Fedora /
+  openSUSE），**只有一个 Dockerfile**；`tini` 统一软链到 `/usr/local/bin`（openSUSE 在
+  `/usr/sbin`），架构判断改用 `uname -m`，ffmpeg 的 x264/x265 断言由 `HDSL_ENCODERS` 控制
+  （Debian 必须、其它底座只告警，因为完整编解码器在 RPM Fusion / Packman）。
+  `docker-install.sh` 随之进仓库并新增 `--base debian|fedora|opensuse`，原地构建、镜像标签带底座。
+- 文档：`docs/deployment.md` 的裸部署一节写明精简基础镜像要补 `libatomic1`；新增 §4.1
+  说明三个底座的差异（tini 路径、ffmpeg 编码器、Fedora 44 没有 JDK 21）。
 
 ## v0.6.40 — 2026-10-31 · 中版本：Windows 实例终端改浏览器 PTY（ConPTY）、出站 TLS 信任策略、一批 Windows 冒烟修复
 

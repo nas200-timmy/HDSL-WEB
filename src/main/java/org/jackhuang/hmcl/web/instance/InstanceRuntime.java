@@ -87,6 +87,13 @@ public final class InstanceRuntime {
     /// rather than started and immediately killed.
     private final org.jackhuang.hmcl.web.emergency.EmergencyStop emergency;
     private final ConcurrentHashMap<String, EndedState> ended = new ConcurrentHashMap<>();
+    /// Instances whose launch has been accepted but has no process yet. A launch
+    /// runs off the request thread (two probes happen before the spawn), so
+    /// between the `202` and the process appearing there is a window in which
+    /// [stateOf] had nothing to report and answered STOPPED — a state the
+    /// instance had already left, and one that made a poller (or a script) read
+    /// "it stopped by itself" a moment before RUNNING.
+    private final Set<String> launching = ConcurrentHashMap.newKeySet();
     /// Processes whose READY transition has been announced, so a readiness line
     /// (or the attach-time check) only fires the RUNNING event once.
     private final Set<DshProcess> announcedReady = ConcurrentHashMap.newKeySet();
@@ -157,6 +164,12 @@ public final class InstanceRuntime {
         if (running.isPresent()) {
             return running.get().state() == DshProcess.State.STARTING ? "STARTING" : "RUNNING";
         }
+        // A launch that has been accepted but has not produced a process yet. The
+        // window is real — the task pool runs two probes before the spawn — and
+        // answering STOPPED in it is answering about the past.
+        if (launching.contains(instanceId)) {
+            return "STARTING";
+        }
         if (DshProcessManager.isStopping(instanceId)) {
             return "STOPPING";
         }
@@ -209,6 +222,9 @@ public final class InstanceRuntime {
     ///                   `null` to leave the flag out
     public void launchAsync(DshInstance instance, @Nullable String publicHost) {
         String instanceId = instance.id();
+        // Marked before the task is queued, not inside it: the `202` has already
+        // gone out by the time anything runs, so the mark has to exist by then.
+        launching.add(instanceId);
         tasks.execute(() -> {
             try {
                 DshProcess process = launchSync(instance, publicHost);
@@ -219,6 +235,10 @@ public final class InstanceRuntime {
                 JsonObject payload = statePayload(instanceId, "FAILED");
                 payload.addProperty("crashTail", String.valueOf(e.getMessage()));
                 bus.publish(topics(instanceId), payload);
+            } finally {
+                // Cleared after the process was wired (or the failure recorded):
+                // from here on `stateOf` reads the process, which knows better.
+                launching.remove(instanceId);
             }
         });
     }

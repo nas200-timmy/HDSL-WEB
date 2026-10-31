@@ -396,6 +396,31 @@ docker buildx build \
 - `--build-arg RELEASE_VERSION=…` 才会让 jar 带上发布版本号（缺省 `0.1.0-dev`）；它同时写进 jar 的 manifest，
   面板显示的版本来自这里。
 - 想省下 SPA 阶段的重复劳动可以用 registry cache：`--cache-from/--cache-to type=registry,ref=…`。
+- 架构用 `uname -m` 判断，不再问 `dpkg`：换底座时同一条指令照样成立。
+
+### 4.1 换运行时底座（Debian / Fedora / openSUSE）
+
+同一颗 jar 在三个底座上都验过（见 `report-2026-10-31-base-compat.md`）：api-smoke 39/39，
+实例创建 → 安装 → 启动 → 反代 200 → 停止 → 删除全通，Fedora 上还验了真 PTY。
+**只有一个 Dockerfile**：runtime 阶段按 `/etc/os-release` 分派包管理器，其余阶段与底座无关。
+
+```bash
+docker build --build-arg HDSL_BASE=fedora:44 \
+             --build-arg HDSL_ENCODERS=optional \
+             -t hdsl-web:fedora .
+
+./docker-install.sh --base fedora     # 或者用向导，debian 是默认
+```
+
+三个**已知差异**，都不是 bug：
+
+| 差异 | 处置 |
+|---|---|
+| `tini` 路径：Debian/Fedora 在 `/usr/bin`，openSUSE 在 `/usr/sbin` | 镜像里统一软链到 `/usr/local/bin/tini`，`ENTRYPOINT` 只认那个 |
+| ffmpeg 编码器：Debian 的 `libavcodec-extra` 带 x264/x265；Fedora 的 `ffmpeg-free`、openSUSE 的 `ffmpeg-7` 只有专利-free 集合（完整版在 RPM Fusion / Packman，镜像不引第三方仓库） | 非 Debian 底座传 `HDSL_ENCODERS=optional`，构建期打印缺哪几个而不是失败 |
+| JDK：Fedora 44 没有 OpenJDK 21 | 退到 25（实测跑 0.6.40 无问题）；要钉 21 就用 Fedora 42 或更早 |
+
+体积差距明显：Debian 2.28 GB、Fedora 2.38 GB、openSUSE 3.59 GB（`-devel`/`rust`/`go` 的依赖闭合更大）。
 
 ---
 

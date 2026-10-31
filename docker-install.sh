@@ -57,6 +57,7 @@ MC_SET=0
 PASSWORD=""
 PASSWORD_SET=0
 IMAGE=""
+BASE=""              # debian / fedora / opensuse，空 = 沿用上次或 debian
 
 usage() {
     cat <<'EOF'
@@ -84,7 +85,10 @@ usage() {
 其它：
   --release     把最后的版本标签当 RELEASE_VERSION 打进 jar（否则是 0.1.0-dev）
   --no-release  关掉上次记住的 --release
-  --image <tag> 指定镜像名（默认 <最后标签>-build-<系统版本>-<时间戳>）
+  --image <tag> 指定镜像名（默认 <最后标签>-build-<底座>-<时间戳>）
+  --base <底座> 运行时底座：debian（默认）/ fedora / opensuse。
+                都是原地构建，镜像里跑的是同一颗 jar；Fedora/openSUSE 用各自的
+                包管理器和官方仓库，ffmpeg 只有 patent-free 版本（构建期告警，不失败）。
   --install-docker  没有 docker 时代为安装（需要 root 或免密 sudo）
   --dry-run     只打印会执行什么，不构建、不起容器
   --yes         不问，全部用参数或默认值
@@ -115,6 +119,7 @@ while [ "$#" -gt 0 ]; do
         --rebuild) ACTION=rebuild; shift ;;
         --no-build) NO_BUILD=1; shift ;;
         --image) need_value "$@"; IMAGE="$2"; shift 2 ;;
+        --base) need_value "$@"; BASE="$2"; shift 2 ;;
         --release) RELEASE=1; RELEASE_SET=1; shift ;;
         --no-release) RELEASE=0; RELEASE_SET=1; shift ;;
         --install-docker) INSTALL_DOCKER=1; shift ;;
@@ -124,6 +129,22 @@ while [ "$#" -gt 0 ]; do
         *) echo "未知参数：$1" >&2; usage 2 ;;
     esac
 done
+
+# ── 底座 ─────────────────────────────────────────────────────────────────────
+# 同一颗 jar 在三个底座上行为一致（见 docs/deployment.md §4.1 与底座兼容性报告），
+# 差别只在包管理器、tini 路径和 ffmpeg 的编码器集合——那些由 Dockerfile 的
+# runtime 阶段按 /etc/os-release 分派。
+BASE_IMAGE=""
+BASE_CODE=""
+BASE_ENCODERS="required"
+resolve_base() {
+    case "$1" in
+        debian|"")  BASE_IMAGE="debian:trixie-slim";           BASE_CODE=debian; BASE_ENCODERS=required ;;
+        fedora)     BASE_IMAGE="fedora:44";                     BASE_CODE=fedora; BASE_ENCODERS=optional ;;
+        opensuse|suse) BASE_IMAGE="opensuse/tumbleweed:latest"; BASE_CODE=suse;   BASE_ENCODERS=optional ;;
+        *) die "--base 只认 debian / fedora / opensuse（收到：$1）" ;;
+    esac
+}
 
 # ── 输出 ──────────────────────────────────────────────────────────────────────
 
@@ -325,20 +346,6 @@ last_tag() {
     printf '%s' "$tag"
 }
 
-system_version() {
-    local id="" ver=""
-    if [ -r /etc/os-release ]; then
-        # shellcheck disable=SC1091
-        . /etc/os-release
-        id=${ID:-}
-        ver=${VERSION_ID:-}
-    fi
-    if [ -z "$id" ]; then
-        id=$(uname -s | tr '[:upper:]' '[:lower:]')
-        ver=$(uname -r | cut -d. -f1-2)
-    fi
-    printf '%s%s' "$id" "$ver"
-}
 
 sanitize_tag() {
     printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_.-]/-/g'
@@ -348,7 +355,9 @@ sanitize_tag() {
 # 例：hdsl-web:v0.6.34-build-debian13-20261030-202516
 default_image() {
     local tail_part
-    tail_part=$(sanitize_tag "$(last_tag)-build-$(system_version)-$(date +%Y%m%d-%H%M%S)")
+    # 从前这里是 <宿主系统版本>；底座能选之后那个名字会读成 "fedora-debian13"，而宿主
+    # 版本对镜像内容没有意义（jar 是同一颗），时间戳已经足够区分重建。
+    tail_part=$(sanitize_tag "$(last_tag)-build-${BASE_CODE}-$(date +%Y%m%d-%H%M%S)")
     printf 'hdsl-web:%s' "$tail_part"
 }
 
@@ -390,6 +399,7 @@ load_state() {
     PREV_MIRROR=${INSTALL_MIRROR:-}
     PREV_RELEASE=${INSTALL_RELEASE:-}
     PREV_IMAGE=${INSTALL_IMAGE:-}
+    PREV_BASE=${INSTALL_BASE:-}
 }
 
 save_state() {
@@ -403,6 +413,7 @@ save_state() {
         printf 'INSTALL_MIRROR=%q\n' "$MIRROR_MODE"
         printf 'INSTALL_RELEASE=%q\n' "$([ "$RELEASE" = 1 ] && echo yes || echo no)"
         printf 'INSTALL_IMAGE=%q\n' "$IMAGE"
+        printf 'INSTALL_BASE=%q\n' "$BASE_CODE"
     } > "$STATE_FILE"
     chmod 600 "$STATE_FILE"
 }
@@ -441,6 +452,7 @@ build_image() {
         say "  [dry-run] docker build -t $IMAGE \\"
         say "      --build-arg NPM_REGISTRY=$NPM_REGISTRY \\"
         say "      --build-arg NODE_DIST_MIRROR=$NODE_DIST_MIRROR \\"
+        say "      --build-arg HDSL_BASE=$BASE_IMAGE --build-arg HDSL_ENCODERS=$BASE_ENCODERS \\"
         say "      --build-arg RELEASE_VERSION=$RELEASE_VERSION -f Dockerfile ."
         return 0
     fi
@@ -619,6 +631,10 @@ esac
 JAVA_OPTS="${JAVA_OPTS:-$DEFAULT_JAVA_OPTS}"
 # 上次用过 --release，这次（比如 --rebuild）默认沿用：不沿用的话会静默掉回
 # 0.1.0-dev，「同一套配置重建」就变成了「换了个版本」。--no-release 显式关掉。
+# 底座：命令行 > 状态文件 > debian。空串也算"没指定"，这样 --rebuild 沿用上次的底座。
+[ -n "$BASE" ] || BASE="${PREV_BASE:-debian}"
+resolve_base "$BASE"
+
 if [ "$RELEASE_SET" = 0 ] && [ "${PREV_RELEASE:-}" = "yes" ]; then
     RELEASE=1
 fi
@@ -740,6 +756,7 @@ else
     say "  MC 服务器数据：不挂（容器内，重建容器会丢存档）"
 fi
 say "  端口：${BIND}:${PORT} → 容器 ${PORT}"
+say "  底座：$BASE_IMAGE（$BASE_CODE）"
 say "  镜像：$IMAGE"
 say "  镜像源：$MIRROR_MODE"
 say "  jar 版本：$([ "$RELEASE" = 1 ] && echo "发布 $RELEASE_VERSION" || echo '开发版 0.1.0-dev（--release 用最后的标签）')"
