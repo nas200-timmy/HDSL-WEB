@@ -508,7 +508,7 @@ export type WsEvent =
 
 // ---------- 第三方品牌实例（kimi / opencode / claude-web，REST 挂 /api/brands/<brand>/*） ----------
 
-export type BrandId = "kimi" | "opencode" | "claude-web" | "octop";
+export type BrandId = "kimi" | "opencode" | "claude-web" | "octop" | "hermes";
 
 /// 终端内核（只有 Claude Web 有不止一个：社区引擎 claude-web-engine 或官方
 /// Claude Code 二进制）。`available` 为假时 `detail` 说明缺什么。

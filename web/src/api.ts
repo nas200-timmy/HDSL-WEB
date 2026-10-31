@@ -555,6 +555,12 @@ export const api = {
   brandInstances: (brand: BrandId) =>
     request<{ instances: BrandInstance[] }>(`/api/brands/${brand}/instances`),
 
+  /** 只有 hermes 有：OpenAI 兼容端点 + 它的 key（面板会话门之内） */
+  brandEndpoint: (brand: BrandId, id: string) =>
+    request<{ baseUrl: string; apiPort: number; key: string; running: boolean }>(
+      `/api/brands/${brand}/instances/${encodeURIComponent(id)}/endpoint`,
+    ),
+
   /** version 缺省用已装最新；一个版本没装 → 400 */
   createBrandInstance: (brand: BrandId, body: { name: string; version?: string }) =>
     request<{ instance: BrandInstance }>(`/api/brands/${brand}/instances`, jsonInit("POST", body)),

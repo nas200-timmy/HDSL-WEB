@@ -27,6 +27,9 @@ import org.jackhuang.hmcl.dsh.DshProcess;
 import org.jackhuang.hmcl.dsh.DshProcessManager;
 import org.jetbrains.annotations.NotNullByDefault;
 
+import org.jackhuang.hmcl.web.brand.Brand;
+import org.jackhuang.hmcl.web.brand.BrandRuntime;
+
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.util.List;
@@ -68,6 +71,10 @@ public final class InstanceProxyWebSocket implements Session.Listener.AutoDemand
     private final String instanceId;
     private final String targetPath;
     private final List<HttpField> handshakeHeaders;
+    /// The panel's own mount, so the prefix handed to a prefix-aware server is
+    /// the one the browser is actually on (`/panel/i/<id>` when deployed under
+    /// a base path).
+    private final String basePath;
 
     private volatile Session browser;
     private volatile Session upstream;
@@ -79,11 +86,12 @@ public final class InstanceProxyWebSocket implements Session.Listener.AutoDemand
     private final java.util.ArrayDeque<String> pendingText = new java.util.ArrayDeque<>();
 
     public InstanceProxyWebSocket(WebSocketClient client, String instanceId, String targetPath,
-                                  List<HttpField> handshakeHeaders) {
+                                  List<HttpField> handshakeHeaders, String basePath) {
         this.client = client;
         this.instanceId = instanceId;
         this.targetPath = targetPath;
         this.handshakeHeaders = handshakeHeaders;
+        this.basePath = basePath == null ? "" : basePath;
     }
 
     // ----------------------------------------------------------- browser side --
@@ -101,11 +109,26 @@ public final class InstanceProxyWebSocket implements Session.Listener.AutoDemand
         URI target = URI.create("ws://127.0.0.1:" + port + targetPath);
 
         ClientUpgradeRequest upgradeRequest = new ClientUpgradeRequest();
+        // A prefix-aware server puts its own boundary in front of the WebSocket
+        // as well: it checks Host and, when present, Origin against the loopback
+        // host it serves. The browser's Origin is the panel's, so replaying it
+        // would be an instant 403 — both headers are dropped here and the client
+        // derives Host from the loopback URI.
+        Brand brand = BrandRuntime.brandForMount(instanceId);
+        boolean prefixLocked = brand != null && brand.serverSidePrefix();
         for (HttpField field : handshakeHeaders) {
             String name = field.getName();
-            if (!InstanceProxyServlet.HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT))) {
-                upgradeRequest.setHeader(name, field.getValue());
+            String lower = name.toLowerCase(Locale.ROOT);
+            if (InstanceProxyServlet.HOP_BY_HOP.contains(lower)) {
+                continue;
             }
+            if (prefixLocked && (lower.equals("host") || lower.equals("origin"))) {
+                continue;
+            }
+            upgradeRequest.setHeader(name, field.getValue());
+        }
+        if (prefixLocked) {
+            upgradeRequest.setHeader("X-Forwarded-Prefix", basePath + "/i/" + instanceId);
         }
         try {
             client.connect(new UpstreamListener(this), target, upgradeRequest).whenComplete((upstreamSession, error) -> {

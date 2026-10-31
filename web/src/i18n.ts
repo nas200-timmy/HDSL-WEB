@@ -323,12 +323,14 @@ export const I18N = {
   "dsh.brand.kimi": "Kimi Code",
   "dsh.brand.opencode": "OpenCode（实验）",
   "dsh.brand.claude-web": "Claude Web（实验）",
+  "dsh.brand.hermes": "Hermes Agent（实验）",
   "dsh.brand.octop": "Octop（实验）",
   "dsh.brand.zcode": "ZCode（实验）",
   // 「（实验）」是完整显示名的一部分（侧栏标题、第三方警示用），
   // 但实例名不该背这个尾巴（新建实例时预填的就是下面这几条短名）。
   "dsh.brand.opencode.short": "OpenCode",
   "dsh.brand.claude-web.short": "Claude Web",
+  "dsh.brand.hermes.short": "Hermes",
   "dsh.brand.octop.short": "Octop",
   "dsh.brand.zcode.short": "ZCode",
   "dsh.brand.thirdparty.warning":

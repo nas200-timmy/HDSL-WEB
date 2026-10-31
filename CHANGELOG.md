@@ -2,6 +2,24 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布
+
+- **新增品牌 Hermes Agent（实验）**：从 tag 源码装、`uv sync --extra all` 建环境（Python 3.14.9 与
+  uv 0.13.5 都按版本自己的 `pm/lock.json` 走，不写死），再本地构建 web 与 TUI 两个前端产物。
+  单版本 570 MB，装一次 2–4 分钟。Linux / macOS；Windows 明确拒绝（要 Python 工具链，面板不管）。
+- **第一个双进程品牌**：`gateway` + `dashboard` 由一个生成的 `wrapper.sh` 带起来，面板仍只持有一个
+  进程句柄；dashboard 要等 gateway 的 `/health` 才挂，所以就绪判据换成轮询 `/api/status`
+  （`gateway_running=true`，不看 `overall`）。停止窗口 40 s，面板关停时 `stopAll` 用共享 deadline
+  收全部实例——`docker stop` 只给 PID 1 发信号，没有这一步 gateway 会活到容器 grace 期结束。
+- **反代按品牌特判**：Hermes 的 dashboard 读 `X-Forwarded-Prefix`，所以面板给它补前缀、去掉 `Host`
+  （它只接受回环），并且**不再改写它的页面**——`brandClient=false` 关不掉页面改写，`pump` 为此
+  多了一个 `prefixClient`；再改写一次会变成 `/i/<id>/i/<id>/assets/…`。WebSocket 侧同理丢掉
+  `Host` 与 `Origin`（上游 WS 自己查这两项）。
+- **API 端点**：`GET /api/brands/hermes/instances/<id>/endpoint` 给出 OpenAI 兼容的 `baseUrl`、key 与
+  运行状态；实例卡片的「API 端点」条可一键「添加到账户」（`openai-completions`）。
+- **权限常量集中**：面板替 agent 写的文件有五套模式（共享 0664/0775、私有 0600/0700、可执行 0700），
+  从 `PnpmConfigFile` 提升到 `Privileges`；Hermes 的 `.env`、`wrapper.sh`、`home/` 都按这套交付。
+
 ## v0.6.45 — 2026-10-31 · 修复：MC 功能开启按钮的三条死路；ZCode 的 owner 补丁改成全平台
 
 > 起因：0.6.44 上线后真机反馈——MC 的「开启」按钮按下去像摆设，关掉功能重启后再也开不起来；

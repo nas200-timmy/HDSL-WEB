@@ -546,6 +546,10 @@ public final class HdslServer {
             return null;
         }
         String path = upgradeRequest.getHttpURI().getPath();
+        if (!config.basePath.isEmpty() && path.startsWith(config.basePath)) {
+            // The upgrade handler sees the full URI, base path included.
+            path = path.substring(config.basePath.length());
+        }
         String rest = path.startsWith("/i/") ? path.substring("/i/".length()) : "";
         int slash = rest.indexOf('/');
         String instanceId = slash < 0 ? rest : rest.substring(0, slash);
@@ -560,7 +564,8 @@ public final class HdslServer {
         }
         List<HttpField> headers = new ArrayList<>();
         upgradeRequest.getHeaders().forEach(headers::add);
-        return new InstanceProxyWebSocket(proxyWebSocketClient, instanceId, targetPath, headers);
+        return new InstanceProxyWebSocket(proxyWebSocketClient, instanceId, targetPath, headers,
+                config.basePath);
     }
 
     /// Whether the upgrade request carries a valid `hdsl_session` cookie.

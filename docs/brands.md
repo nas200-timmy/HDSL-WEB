@@ -110,6 +110,66 @@ Claude Web 有两个内核（社区引擎 `claude-web-engine`、官方 `@anthrop
 第三方中转不是 Anthropic 的服务，提示词与密钥都会交给对方，而且在不受支持地区使用本身就落在上面
 那条政策里，账号风险自负。
 
+
+## Hermes Agent（第四个品牌，实验）
+
+[Hermes Agent](https://github.com/NousResearch/hermes-agent)（Nous Research，MIT）是这批里第一个
+**不是"一个网页进程"**的品牌：它跑两个进程——`hermes gateway run`（OpenAI 兼容 API + agent 运行时）
+和 `hermes dashboard`（浏览器看的 SPA），而 dashboard 要等 gateway 的 `/health` 才肯挂上去。
+
+| | 事实 |
+|---|---|
+| 来源 | GitHub tag 的源码 zip（`codeload`），不用 PyPI：上游 `setup.py` 在 Nix 之外拒绝构建 wheel/sdist，editable 安装（`uv sync`）才是它认可的路 |
+| Python | 版本自己的 `pm/lock.json` 钉的 **3.14.9**（带 SQLite 3.53.1），不是 `uv python install`（会拿到 3.14.0b2，SQLite 3.50 的 WAL-reset 告警会让 state.db 降级） |
+| uv | 同一个 lock 钉的 **0.13.5**；面板里那个 0.7.13 解析不了 v0.22.5 的 `uv.lock`（revision 5） |
+| 依赖 | `uv sync --frozen --no-dev --extra all`（**不用** `--all-extras`：会拉 `[rl]` 的 torch/wandb 与 `[yc-bench]`） |
+| 前端 | `node-deps.mjs --workspace ui-tui --workspace web` → `web.mjs --icons` → `tui.mjs`；面板自带的 Node 22.23.1 就够（源码 `engines.node` 写的是 `^22.22.0 || ^24.11.0 || >=26`） |
+| 安装标记 | `hermes_cli/web_dist/index.html`（web 构建最后一步原子发布） |
+| 体积 | 单版本 **570 MB**（venv 285 / 源码 274），`toolchain/python` 251 MB 共享，`toolchain/uv` 17 MB |
+| 端口 | 两个，落 `<instance>/panel/ports.json`（首次分配，之后复用；被占则重分配一次） |
+| 就绪 | 轮询 dashboard 的 `/api/status`，要求 `gateway_running=true`；**不**要求 `overall=ok`（它把 storage 与各消息平台也算进去） |
+| 停止窗口 | **40 s**（其余品牌 10 s）：gateway 自己要 drain 30 s |
+| 平台 | Linux / macOS；Windows 直接抛 `BrandException("Hermes is not supported on Windows yet…")` |
+
+### 一个 wrapper 管两个进程
+
+面板对每个实例仍然只持有一个进程句柄。启动时生成 `<instance>/panel/wrapper.sh`（每次重写）：
+
+1. `hermes gateway run &`，等 `/health`（90 s，用 venv 里的 python 探，不依赖 curl）；
+2. `hermes dashboard --skip-build --no-open --host 127.0.0.1 --port <dash>`；
+3. 两个子进程各写一个 pid 到 `<home>/panel/`，`trap` 收尾（TERM → 15 s → KILL），任意一个死掉整组跟着退。
+
+### 反代：它是前缀感知的，所以不能再改写它的页面
+
+dashboard 读 `X-Forwarded-Prefix`，把 `/assets/`、`/fonts/`、`__HERMES_BASE_PATH__` 全部按挂载点生成。
+所以面板做的是**相反**的事：把 `Host` 去掉（它只接受回环，别的值直接 400），补一个
+`X-Forwarded-Prefix: <base>/i/<id>`，然后**不再**改写页面——`brandClient=false` 关不掉页面改写，
+`pump` 为此多了一个 `prefixClient`。再改写一次会变成 `/i/<id>/i/<id>/assets/…`，并注入一段与 SPA
+自己的路由打架的 shim。
+
+WebSocket 同理：上游的 WS 路由不过 HTTP 中间件，自己再查一遍 Host 与 **Origin**，所以转发时
+`Host` 与 `Origin` 都丢掉，只补 prefix。
+
+### API 端点（T3）
+
+gateway 是个 OpenAI 兼容服务，所以实例卡片下面有一个「API 端点」折叠条：
+`GET /api/brands/hermes/instances/<id>/endpoint` 返回 `baseUrl` / `apiPort` / `key` / `running`，
+按钮「添加到账户」直接 `POST /api/accounts`（`protocol: "openai-completions"`）。
+key 在 `<home>/.env` 里（0600，agent 属主），面板不轮换它——换了会让已保存的账户静默失效。
+
+### 两段身份下的属主（v0.6.44 起）
+
+| 路径 | 属主 / 模式 | 为什么 |
+|---|---|---|
+| `<home>/.env` | agent, **0600** | gateway 要读 API key；面板是 root，写完交给 uid 1000 |
+| `<home>/` | agent, 0775 | hermes 要在这里建 `config.yaml`、`state.db`（SQLite 还会建 `-wal`/`-shm`） |
+| `<home>/panel/` | agent, 0700 | wrapper 写的 pid 与锁 |
+| `<instance>/panel/` | **root, 0755** | 面板的：wrapper.sh 与 ports.json。agent 能穿过、不能改——能改就等于能改反代指向 |
+| `toolchain/**` | root, 0755 | `.venv/bin/python` 是指向这里的绝对链接；任何一级 0700 都会让 `hermes` 起不来 |
+
+这条和 v0.6.45 修 pnpm 的 `config.yaml` 是同一个坑：**面板替 agent 写的文件，必须连属主带模式一起
+交过去**（`Privileges.handToAgent`，五套公共模式在 `Privileges` 里）。
+
 ## 为什么 OpenCode 需要一段「路由修正脚本」
 
 OpenCode 的网页客户端**按 URL 路径路由**（bundle 里直接读 `window.location.pathname` 匹配路由表，

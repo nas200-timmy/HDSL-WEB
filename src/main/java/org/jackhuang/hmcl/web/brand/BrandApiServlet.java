@@ -237,6 +237,10 @@ public final class BrandApiServlet extends HttpServlet {
                 reveal(ref, request, response, id);
                 return;
             }
+            if (segments.length == 3 && "endpoint".equals(segments[2]) && "GET".equals(request.getMethod())) {
+                endpoint(brand, ref, response, id);
+                return;
+            }
         }
         Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
     }
@@ -870,6 +874,44 @@ public final class BrandApiServlet extends HttpServlet {
     /// The endpoint exists anyway: the panel's plugin dialog reads this shape,
     /// so the day [Brand#supportsPlugins()] flips and real plugins appear here,
     /// the UI lists them without a change.
+    /// `GET /api/brands/hermes/instances/<id>/endpoint`: the OpenAI-compatible
+    /// endpoint a launcher account would be pointed at, plus the key the
+    /// gateway accepts.
+    ///
+    /// The key is only ever answered here, behind the panel's own session gate
+    /// (`/api/*` passes through `AuthFilter`). Other brands have no such surface
+    /// and answer 404, which keeps the endpoint from becoming a generic
+    /// secret-reader.
+    ///
+    /// @param brand    the brand from the path
+    /// @param ref      the brand's paths and manager
+    /// @param response the answer
+    /// @param id       the instance id
+    private void endpoint(Brand brand, PathRef ref, HttpServletResponse response, String id)
+            throws IOException {
+        if (brand != Brand.HERMES) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
+        BrandInstance instance = ref.manager().find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
+            return;
+        }
+        BrandRuntime.HermesEndpoint endpoint = BrandRuntime.hermesEndpoint(ref.manager(), instance);
+        if (endpoint == null) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "this instance has never been started, so it has no ports yet");
+            return;
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty("baseUrl", endpoint.baseUrl());
+        body.addProperty("apiPort", endpoint.apiPort());
+        body.addProperty("key", endpoint.key());
+        body.addProperty("running", endpoint.running());
+        Json.write(response, body);
+    }
+
     private void plugins(Brand brand, PathRef ref, HttpServletResponse response, String id)
             throws IOException {
         if (ref.manager().find(id) == null) {

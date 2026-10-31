@@ -274,6 +274,14 @@ public final class InstanceProxyServlet extends HttpServlet {
         String mount = "/i/" + instanceId + "/";
         String browserMount = basePath + mount;
 
+        // The brand decides how much of the request the proxy may touch. A
+        // prefix-aware server (Hermes) emits every reference under the mount it
+        // was handed, so the proxy gives it the mount and leaves both the Host
+        // and the page alone; every other brand keeps the dsh treatment.
+        org.jackhuang.hmcl.web.brand.Brand brand =
+                org.jackhuang.hmcl.web.brand.BrandRuntime.brandForMount(instanceId);
+        boolean prefixClient = brand != null && brand.serverSidePrefix();
+
         // The input stream must be claimed before the request goes async. A body
         // is what the client announced — by content-length or by chunked framing;
         // `-1` with neither is a body-less request (the common GET), which must
@@ -295,7 +303,12 @@ public final class InstanceProxyServlet extends HttpServlet {
                 : null;
 
         HttpRequest.Builder builder = HttpRequest.newBuilder(target);
-        copyRequestHeaders(request, builder);
+        copyRequestHeaders(request, builder, prefixClient);
+        if (prefixClient) {
+            // `<basePath>/i/<id>` without the trailing slash: that is the form
+            // upstream reads and echoes into its own references.
+            builder.header("X-Forwarded-Prefix", browserMount.substring(0, browserMount.length() - 1));
+        }
         if (bufferedBody != null) {
             builder.method(request.getMethod(), HttpRequest.BodyPublishers.ofByteArray(bufferedBody));
         } else if (streamedBody != null) {
@@ -342,8 +355,6 @@ public final class InstanceProxyServlet extends HttpServlet {
             }
         });
 
-        org.jackhuang.hmcl.web.brand.Brand brand =
-                org.jackhuang.hmcl.web.brand.BrandRuntime.brandForMount(instanceId);
         boolean octopClient = brand == org.jackhuang.hmcl.web.brand.Brand.OCTOP;
         // Octop is built with a relative base and reads the injected <base>;
         // its chunks must not go through the Kimi/OpenCode script patcher.
@@ -355,7 +366,7 @@ public final class InstanceProxyServlet extends HttpServlet {
         int upstreamPort = port;
         upstream.answer().whenCompleteAsync(
                 (answer, error) -> pump(response, async, upstream, mount, browserMount, brandClient, octopClient,
-                        zcodeClient, routerClient, upstreamPort, answer, error),
+                        zcodeClient, routerClient, prefixClient, upstreamPort, answer, error),
                 tasks.executor());
     }
 
@@ -401,7 +412,7 @@ public final class InstanceProxyServlet extends HttpServlet {
     ///                      URLs, redirect Locations, cookie paths)
     private static void pump(HttpServletResponse response, AsyncContext async, Upstream upstream, String mount,
                              String browserMount, boolean brandClient, boolean octopClient, boolean zcodeClient,
-                             boolean routerClient,
+                             boolean routerClient, boolean prefixClient,
                              int port, @Nullable HttpResponse<InputStream> result, @Nullable Throwable error) {
         try {
             if (error != null || result == null) {
@@ -416,7 +427,11 @@ public final class InstanceProxyServlet extends HttpServlet {
             response.setStatus(result.statusCode());
             long contentLength = result.headers().firstValueAsLong("content-length").orElse(-1);
             String contentType = result.headers().firstValue("content-type").orElse("").toLowerCase(Locale.ROOT);
-            boolean servesPage = contentType.contains("text/html");
+            // A prefix-aware server has already put the mount into its page.
+            // Rewriting it again doubles the mount (`/i/<id>/i/<id>/assets/…`)
+            // and injects a shim that fights the SPA's own router — this is the
+            // one thing `brandClient=false` cannot switch off.
+            boolean servesPage = contentType.contains("text/html") && !prefixClient;
             // An asset is worth rebuilding when it is small enough to hold. An
             // announced length only ever lets this say no early — never yes late
             // (see canPatchAsset). The probe that chose the shim read the entry
@@ -559,13 +574,14 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// content-length (the streamed body has none), passing Host through as it
     /// arrived, and narrowing the Accept-Encoding to the encodings the body
     /// rewriting can undo ([decodableAcceptEncoding]).
-    private static void copyRequestHeaders(HttpServletRequest request, HttpRequest.Builder builder) {
+    private static void copyRequestHeaders(HttpServletRequest request, HttpRequest.Builder builder,
+                                           boolean loopbackHost) {
         Enumeration<String> names = request.getHeaderNames();
         while (names.hasMoreElements()) {
             String name = names.nextElement();
             String lower = name.toLowerCase(Locale.ROOT);
-            if (HOP_BY_HOP.contains(lower) || lower.equals("content-length")
-                    || lower.equals("accept-encoding")) {
+            if (upperIsSkipped(lower, loopbackHost) || HOP_BY_HOP.contains(lower)
+                    || lower.equals("content-length") || lower.equals("accept-encoding")) {
                 // The encodings are set once, narrowed, after the loop: the value
                 // the browser sent is one this servlet may not hand over as it is.
                 continue;
@@ -579,6 +595,22 @@ public final class InstanceProxyServlet extends HttpServlet {
         if (encodings != null) {
             builder.header("accept-encoding", encodings);
         }
+    }
+
+    /// Whether a header must not be forwarded.
+    ///
+    /// `Host` is the one that matters: dsh compares the browser's `Origin`
+    /// against it and refuses rewritten requests, so it passes through for every
+    /// brand — but a **prefix-aware** server refuses a Host it does not serve
+    /// (Hermes answers 400 to anything that is not loopback). There the header is
+    /// dropped and the HTTP client derives it from the loopback URI, which is
+    /// exactly what that server wants.
+    ///
+    /// @param lower       the header name, lower-cased
+    /// @param loopbackHost whether this request is going to a prefix-aware server
+    /// @return whether to leave it out
+    static boolean upperIsSkipped(String lower, boolean loopbackHost) {
+        return loopbackHost && lower.equals("host");
     }
 
     /// The encodings the body rewriting can undo, and the only ones it may ask

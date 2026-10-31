@@ -6,6 +6,7 @@ import { AdminCredentialsDialog } from "../components/AdminCredentialsDialog";
 import { CollapsibleNote } from "../components/CollapsibleNote";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
 import { BrandIcon } from "../components/BrandIcon";
+import { HermesEndpointBar } from "../components/HermesEndpointBar";
 import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
 import { ProgressBar } from "../components/ProgressBar";
 import { ZcodeBuildButton } from "../components/ZcodeBuildDialog";
@@ -77,7 +78,7 @@ function versionOption(version: string, latest: boolean, installed: boolean): st
 /// 其余三个共用 /api/brands/<brand>/*。顺序 = 页签顺序，也是深链缺省时的挑选顺序。
 export type BrandKey = "zcode" | BrandId;
 
-export const BRAND_KEYS: BrandKey[] = ["zcode", "kimi", "opencode", "claude-web", "octop"];
+export const BRAND_KEYS: BrandKey[] = ["zcode", "kimi", "opencode", "claude-web", "octop", "hermes"];
 
 const BRAND_TITLE: Record<BrandKey, string> = {
   zcode: I18N["dsh.brand.zcode"],
@@ -85,6 +86,7 @@ const BRAND_TITLE: Record<BrandKey, string> = {
   opencode: I18N["dsh.brand.opencode"],
   "claude-web": I18N["dsh.brand.claude-web"],
   octop: I18N["dsh.brand.octop"],
+  hermes: I18N["dsh.brand.hermes"],
 };
 
 /// 短名（不带「（实验）」后缀）：写进用户的实例名与「还没有 X 实例」这类句子里，
@@ -95,6 +97,7 @@ const BRAND_SHORT: Record<BrandKey, string> = {
   opencode: I18N["dsh.brand.opencode.short"],
   "claude-web": I18N["dsh.brand.claude-web.short"],
   octop: I18N["dsh.brand.octop.short"],
+  hermes: I18N["dsh.brand.hermes.short"],
 };
 
 export function isBrandKey(value: string | null | undefined): value is BrandKey {
@@ -1340,6 +1343,9 @@ function InstancesCard({
                         : ""}
                       {inst.state === "error" && inst.error ? ` · ${inst.error}` : ""}
                     </span>
+                    {/* Hermes 的 gateway 是个 OpenAI 兼容服务：端点与 key 就在这一行下面，
+                        取一次就能拉进账户页当供应商用（docs/brands.md）。 */}
+                    {brand === "hermes" && <HermesEndpointBar instanceId={inst.id} running={running} />}
                     {installing && (
                       <span
                         className="tlli-subtitle"
