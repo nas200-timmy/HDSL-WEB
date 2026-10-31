@@ -205,6 +205,31 @@ Windows 上常见一种情况：杀毒软件、企业网关或 GitHub 加速器�
 验收：`scripts/verify-privilege-split.sh` 在容器里以 uid 1000 跑，断言 `auth/`、`logs/` 读写都被拒，
 而实例目录与 pnpm store 照常可写。
 
+### 7.5.1 这一层盖住了什么，没盖住什么
+
+**盖住了**：`auth/`（面板账号与开发者密码哈希）、`certs/`（面板自己的 TLS 私钥）、`logs/`
+（审计）、`server.yaml`（开关与闸门配置）。agent 读不到也写不了，所以"改密码哈希接管面板"
+这条路断了——顺带它也 `kill` 不了面板（不同 uid，`/proc/<pid>/mem` 也碰不到）。
+
+**没盖住、而且是有意不盖的：供应商 API key。**
+
+- 位置：`<用户目录>/launcher-settings.json` 的 `accounts` 段。Linux 容器里是
+  `/home/hdsl/.local/share/hdsl/launcher-settings.json`（`HMCL_USER_HOME` 在 Linux 上走 XDG，
+  不是 `~/.hdsl`），属主 uid 1000。
+- 为什么留着：agent 和 ACP 会话要用这把 key 去调模型。把它锁成 root 0600，实例里的 agent
+  就用不了自己的账号；而现在的 dsh 已经能正常从配置文件读 key，不再需要面板往环境变量里
+  注入那套老办法——锁上只会把功能弄坏，不会把风险消掉（agent 本来就能通过 ACP 把 key 用出去）。
+- 因此这是**已知且接受**的暴露：能在容器里以 1000 跑起来的代码，读得到这台面板配的模型 key。
+  缓解在部署侧，不在面板里：
+  - 一台机器一套 key，别把团队共用的生产 key 配进来；
+  - 额度和权限按"这台机器值多少"给，能撤销、能轮换；
+  - 各品牌工具的凭据本来就各自管各自的（kimi / opencode / claude-web 的凭据在各自实例的
+    home 里），面板不集中持有。
+- 同一类还开着的两条：**实例之间仍互相可写**（同为 uid 1000，`instances/` 组可写）；
+  **面板的 HTTP 面没有变**——这次只是让 agent 不能再从文件系统侧面绕过它。
+
+裸部署里这四条全都开着（面板与 agent 同 uid），区别只是多了一条"面板自己的凭据也在里面"。
+
 ## 8. inotify 配额
 
 - dsh 启动要监视自己的 profile 目录。内核配额不足时，node 可能当场退出，也可能永远不打印

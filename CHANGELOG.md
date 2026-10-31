@@ -20,6 +20,10 @@
   属主改由容器入口校正（只在属主不对时递归，避免每次开机遍历大卷）。
 - 新增 `scripts/verify-privilege-split.sh`：在容器里以 uid 1000 跑，断言 `auth/`、`logs/`
   读写被拒，而实例目录与 pnpm store 照常可写。
+- **文档写清这一层盖不住什么**（`design-notes §7.5.1`）：供应商 API key 在
+  `launcher-settings.json` 里，agent 读得到（ACP 要用它调模型），这是有意保留的暴露——
+  缓解在部署侧（一台机器一套 key、能撤销能轮换），不在面板里。同类的还有"实例之间互相可写"
+  与"面板的 HTTP 面没变"。
 
 ## v0.6.42 — 2026-10-31 · 修复：v0.6.41 的镜像构建失败（Dockerfile 的 ARG 作用域）
 

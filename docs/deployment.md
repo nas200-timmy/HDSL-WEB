@@ -689,6 +689,10 @@ RestrictSUIDSGID=yes
 容器部署不需要这些参数，镜像自己做（见 `docs/design-notes.md §7.5`）；容器里的验收用
 `scripts/verify-privilege-split.sh`（以 uid 1000 跑）。
 
+**供应商 API key 不在这层保护之内**：它在 `<用户目录>/launcher-settings.json` 的 `accounts`
+里，agent 读得到（ACP 会话要用它调模型）。这是有意保留的暴露，缓解手段是"一台机器一套 key、
+额度按机器给、能撤销能轮换"。详见 `docs/design-notes.md §7.5.1`。
+
 ### 10.1 只有 jar 的机器：Node 与 pnpm 从哪来
 
 **JRE 不能替你完成这件事。** 面板是 Java 写的，但 dsh 本体、插件、品牌工具都是 npm 包，
