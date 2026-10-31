@@ -136,9 +136,11 @@ Claude Web 有两个内核（社区引擎 `claude-web-engine`、官方 `@anthrop
 
 面板对每个实例仍然只持有一个进程句柄。启动时生成 `<instance>/panel/wrapper.sh`（每次重写）：
 
-1. `hermes gateway run &`，等 `/health`（90 s，用 venv 里的 python 探，不依赖 curl）；
+1. `hermes gateway run --replace &`，等 `/health`（90 s，用 venv 里的 python 探，不依赖 curl）；
 2. `hermes dashboard --skip-build --no-open --host 127.0.0.1 --port <dash>`；
 3. 两个子进程各写一个 pid 到 `<home>/panel/`，`trap` 收尾（TERM → 15 s → KILL），任意一个死掉整组跟着退。
+
+`--replace` 不是随手加的：它和下面「终端与网页互斥」是同一件事的两半。
 
 ### 反代：它是前缀感知的，所以不能再改写它的页面
 
@@ -157,6 +159,43 @@ gateway 是个 OpenAI 兼容服务，所以实例卡片下面有一个「API 端
 `GET /api/brands/hermes/instances/<id>/endpoint` 返回 `baseUrl` / `apiPort` / `key` / `running`，
 按钮「添加到账户」直接 `POST /api/accounts`（`protocol: "openai-completions"`）。
 key 在 `<home>/.env` 里（0600，agent 属主），面板不轮换它——换了会让已保存的账户静默失效。
+
+### 终端与网页互斥（为什么不是「两个都能开」）
+
+Hermes 的终端（`hermes --tui`）不是一个独立的小程序：它自己会**确保一台主机上有一个 gateway**，
+没有就起一个（`gateway_bootstrap.py --start`），而且那个 gateway 是 **detached** 的——终端关掉它
+还活着（`--idle-exit`，600 s 无客户端才退出）。面板的 Web 模式也坚持「gateway 是我的子进程」。
+两套监督者抢同一个 `HERMES_HOME`，于是单独实现任何一半都会留下另一半的坑：
+
+```
+# 打开终端：面板按设计先停 Web（InstanceTerminal.open 的 stopWeb）——
+# 这一步本身是对的，Web 的 gateway 与 dashboard 一起收掉。
+gateway.run: Gateway stopped by an unexpected signal …
+gateway.run: Exiting with code 1 (signal-initiated shutdown without restart request)
+
+# 随后 TUI 起自己的 detached gateway；关掉终端它还在。
+gateway.start: main.py gateway run --quiet --idle-exit
+
+# 这时再开网页：wrapper 的 gateway 看到“已有主机 gateway”，attach 后立刻退出
+✓ The host gateway already serves profile 'default' — nothing to start.
+hermes: gateway exited during startup        → state: error
+```
+
+**所以两者只能开一个，且两半都由面板来切**：
+
+- 打开终端 → 面板先 `BrandRuntime.stop(id)`（`InstanceTerminal.open` 的 `stopWeb`），Web 模式整个
+  下线（dashboard 与 gateway 都走 wrapper 的收尾）；
+- 打开/启动网页 → 面板先关掉该实例的终端会话（`instanceTerminal.close`），wrapper 用
+  `gateway run --replace` 把主机 gateway 拿回来——包括 TUI 留下的那个 detached 副本。
+
+代价写在明处：**切到网页，终端会话就结束了**。没丢的是会话本身——它们都在
+`<home>/state.db` 里，下一次进终端或网页都还在；丢的只是那个 TUI 进程。反过来也一样：进终端时
+网页会下线，浏览器的 `/i/<id>/` 会变成 502/连接失败，重新启动网页即可。
+
+为什么不做成「两个都开」：要么让 TUI 只 attach、绝不启动/替换 gateway（上游目前没有这个开关，
+`gateway ensure` 在必要时会替换），要么让面板不再持有 gateway 子进程、改成 attach 模型（那就
+放弃「实例状态由面板监督」这条线，进程挂了没人知道）。两条都比互斥贵，而且会把失败模式从
+「点了就知道」变成「偶尔聊到一半断线」。
 
 ### 两段身份下的属主（v0.6.44 起）
 

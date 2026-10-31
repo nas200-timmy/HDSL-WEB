@@ -84,6 +84,9 @@ class HermesWrapperSmokeTest {
         try {
             String argv = awaitRecord(record, 2, 10);
             assertTrue(argv.contains("gateway run"), argv);
+            // The web mode and the terminal are exclusive: --replace is what takes
+            // the host gateway back from a detached TUI copy (docs/brands.md).
+            assertTrue(argv.contains("gateway run --replace"), argv);
             assertTrue(argv.contains("dashboard --skip-build --no-open --host 127.0.0.1 --port "
                     + plan.port()), argv);
 

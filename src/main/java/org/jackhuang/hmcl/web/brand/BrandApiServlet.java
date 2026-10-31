@@ -642,6 +642,14 @@ public final class BrandApiServlet extends HttpServlet {
                     brand.sourceLabel() + " " + instance.version() + " is not installed");
             return;
         }
+        // The two modes are exclusive, and the web mode wins (docs/brands.md):
+        // Hermes' terminal starts its own *detached* gateway for the same home,
+        // and the wrapper can only own a gateway the TUI is not holding. Closing
+        // the session here and passing --replace in the wrapper is what makes
+        // "open the web page" always succeed, even after a terminal was used.
+        if (instanceTerminal.close(brand.id(), id)) {
+            LOG.info("Closed the " + brand.id() + " terminal of " + id + " before launching its web mode");
+        }
         BrandRuntime.Status status = BrandRuntime.launch(
                 brand, ref.manager(), instance,
                 org.jackhuang.hmcl.web.http.HostHeaders.stripPort(request.getHeader("Host")), packageDir);

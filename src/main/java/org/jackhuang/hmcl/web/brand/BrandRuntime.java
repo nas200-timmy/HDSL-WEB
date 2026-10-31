@@ -1254,7 +1254,13 @@ public final class BrandRuntime {
                 export GATEWAY_HEALTH_URL="http://127.0.0.1:$api_port/health"
 
                 echo "hermes: gateway starting on $api_port"
-                "$hermes" gateway run &
+                # --replace: the web mode and the terminal are exclusive (see
+                # docs/brands.md). The TUI starts its own detached gateway for this
+                # home and it outlives the terminal, so a plain `gateway run` would
+                # attach to it and exit, leaving the wrapper with a dead child. The
+                # panel closes the terminal before launching this; --replace is what
+                # takes the host gateway back even when the TUI's copy is still up.
+                "$hermes" gateway run --replace &
                 gw=$!
                 echo "$gw" > "$home/panel/gateway.pid"
 
