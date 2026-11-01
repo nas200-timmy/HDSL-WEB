@@ -2,7 +2,15 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布
+## v0.6.55 — 2026-11-01 · 小版本：把「root 建、agent 写」查完；`docker-install.sh` 能换源、能对 buildx 说话
+
+> 起因：一次演示翻车——Octop 实例起不来（`unable to open database file`），MC 实例起不来
+> （`code 1`、控制台 0 字节），而同一条命令在面板外面跑得好好的。两个都是同一个形状：
+> **面板（容器里是 root）建的东西，交给以 agent（uid 1000）运行的子进程去写**。这类 bug 在
+> setgid 数据卷上完全看不见，一旦 `/data` 是普通 bind mount 就全炸。所以这一版不只修撞上的
+> 两个，而是按这条规则把同类路径全查了一遍。
+>
+> 另：`docker-install.sh` 在 Docker Hub 不可达、没装 buildx 的机器上也走不通，一起补了。
 
 **把「root 建、agent 写」这条规则一次查完**
 
@@ -76,6 +84,19 @@
   分类的装法（`docker-buildx-plugin` / `docker-buildx` / dnf），并提示 `--pull <版本>` 这条
   完全不需要 buildx 的路。
 - `--pull` 不受影响：它只做 `docker pull` / `tag` / `run`。
+
+**升级提示**
+
+- 换 jar / 重建容器即可，卷不用迁。老实例的属主问题在这几处修法的第一次启动时自动纠正
+  （都是幂等的），不需要手工 `chown`。
+- 启动日志里如果出现 `Agent-facing directory is owned by uid 0 (expected 1000): …`，那就是
+  这一版修的那一类；下次启动会自动纠正，日志只是告诉你**这个部署的数据目录不是 setgid**。
+- 容器里建议跑一次 `scripts/verify-privilege-split.sh`（以 uid 1000）：它现在把
+  dsh 实例目录与 home、ZCode `data/`、MC 实例目录、品牌 `releases/`、`pnpm-store`、`corepack`
+  逐条 `touch` 实测一遍。
+
+**验证**：全量 1173 用例 0 失败 / 26 跳过；`McRuntimeTest` 新增"子进程零输出退出时说清楚"，
+`PrivilegesTest` 新增"整树交接保住 mode、不跟随链接"。
 
 ## v0.6.54 — 2026-11-01 · 小版本：终端可以同时开了（虚拟线程把 carrier 钉光）
 
