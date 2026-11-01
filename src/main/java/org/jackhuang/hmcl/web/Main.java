@@ -236,6 +236,15 @@ public final class Main {
             System.out.println("  !!   1. one-click a panel-managed runtime (Settings -> Node.js);");
             System.out.println("  !!   2. or install Node.js LTS yourself: https://nodejs.org");
         }
+        if (node != null && !org.jackhuang.hmcl.dsh.DshNodeRuntime.isSupportedNodeVersion(node)) {
+            // Worth a line of its own: a distribution package that is two majors behind is the
+            // normal way to arrive here, and the two symptoms are "dsh refuses to launch" and
+            // "a brand tool dies inside its own ESM loader", neither of which names the version.
+            System.out.println("  !! that Node.js is outside the range the tools run on ("
+                    + org.jackhuang.hmcl.dsh.DshNodeRuntime.requirement() + ")");
+            System.out.println("  !! dsh instances will refuse to start and some brand tools will crash;");
+            System.out.println("  !! the panel's managed runtime (Settings -> Node.js) fixes both");
+        }
         if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
                 == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
             // POSIX 0600 has no NTFS equivalent: Java's setReadable maps onto

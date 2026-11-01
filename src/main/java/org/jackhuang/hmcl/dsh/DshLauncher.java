@@ -128,19 +128,19 @@ public final class DshLauncher {
         String selection = instance.nodeRuntimeOrDefault();
         if (DshNodeRuntime.SYSTEM.equalsIgnoreCase(selection)) {
             // PATH 上没有就走面板托管的运行时（设置 → Node.js 一键安装）——
-            // 裸部署没有系统 Node.js 也能工作。要 pnpm 的那些路径还要再挑一次：
-            // 系统 node 没有 pnpm 时，托管运行时才是能干活的那个。
-            DshNodeRuntime runtime = (needsPnpm ? DshNodeRuntime.detectWithPnpm() : DshNodeRuntime.detect())
+            // 裸部署没有系统 Node.js 也能工作。
+            //
+            // 这里要的不是"PATH 上有个 node"，而是"有个能跑的 node"：Debian/Ubuntu 仓库的
+            // node 常常低于 22.19，选它只会让启动在这里被拒，而数据目录里那份合用的托管
+            // 运行时压根没人问。所以要 pnpm 的路径挑 pnpm，别的挑版本够的。
+            DshNodeRuntime runtime = (needsPnpm ? DshNodeRuntime.detectWithPnpm()
+                    : DshNodeRuntime.detectSupported())
                     .or(DshNodeRuntime::detectManaged)
                     .orElseThrow(() -> new DshException("Node.js was not found on PATH and no panel-managed "
                             + "runtime is installed (" + DshNodeRuntime.requirement()
                             + "). Open Settings -> Node.js for a one-click managed runtime, "
                             + "or install Node.js yourself."));
-            if (!runtime.isNodeSupported()) {
-                throw new DshException("The system Node.js " + runtime.nodeVersion()
-                        + " is outside the supported range (" + DshNodeRuntime.requirement()
-                        + "). Install a suitable runtime on the Node page, or pick one for this instance.");
-            }
+            DshVersionManager.requireSupportedNode(runtime);
             return runtime;
         }
 

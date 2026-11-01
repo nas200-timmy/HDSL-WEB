@@ -275,18 +275,39 @@ public final class BrandRuntime {
                 // PORT; it has no port flag).
                 builder.environment().putAll(plan.environment());
                 // A brand whose tool is JavaScript is started through its own shim, and
-                // that shim asks PATH for `node`. A bare Windows deployment does not have
-                // one there — the panel installs its runtime under `<data>/hdsl/runtimes`
-                // — so the directory goes in front only when nothing on PATH answers.
+                // that shim asks PATH for `node`. Two failures wear the same shape, and both
+                // were real:
+                //   - a bare deployment has no `node` on PATH at all (the panel installs its
+                //     runtime under `<data>/hdsl/runtimes`), so the directory has to go in
+                //     front of PATH;
+                //   - a machine whose PATH carries an *old* `node` is worse, because
+                //     "a node exists" is true: kimi-code 2.4.1 asks `node:zlib` for
+                //     `createZstdDecompress` (Node 22.15+) and died inside its own ESM
+                //     loader with a syntax error that names the module rather than the
+                //     Node.js. So the test is not "is there a node" but "is there one this
+                //     tool can run on", and the panel's managed runtime is the answer when
+                //     PATH's is not.
                 // (Octop is Python and does not care; opencode ships a native binary.)
-                if (org.jackhuang.hmcl.util.platform.Executables.resolve("node").isEmpty()) {
-                    org.jackhuang.hmcl.dsh.DshNodeRuntime.detectManaged().ifPresent(runtime -> {
+                java.util.Optional<org.jackhuang.hmcl.dsh.DshNodeRuntime> onPath =
+                        org.jackhuang.hmcl.dsh.DshNodeRuntime.detect();
+                boolean pathNodeUsable = onPath.map(org.jackhuang.hmcl.dsh.DshNodeRuntime::isNodeSupported)
+                        .orElse(false);
+                if (!pathNodeUsable) {
+                    org.jackhuang.hmcl.dsh.DshNodeRuntime.detectManaged().ifPresentOrElse(runtime -> {
                         builder.environment().put("PATH", runtime.binDirectory()
                                 + java.io.File.pathSeparator
                                 + builder.environment().getOrDefault("PATH", ""));
                         LOG.info("Starting " + brand.id() + " instance " + id
-                                + " with the panel's managed Node.js on PATH: " + runtime.binDirectory());
-                    });
+                                + " with the panel's managed Node.js on PATH: " + runtime.binDirectory()
+                                + " (Node " + runtime.nodeVersion() + "), because PATH's is "
+                                + onPath.map(org.jackhuang.hmcl.dsh.DshNodeRuntime::nodeVersion)
+                                        .orElse("missing"));
+                    }, () -> LOG.warning("Starting " + brand.id() + " instance " + id + " with "
+                            + onPath.map(runtime -> "the Node.js on PATH (" + runtime.nodeVersion() + ")")
+                                    .orElse("no Node.js on PATH")
+                            + ", which is outside the range these tools run on ("
+                            + org.jackhuang.hmcl.dsh.DshNodeRuntime.requirement()
+                            + "); the tool may fail to start — Settings -> Node.js installs a usable one"));
                 }
                 process = builder.start();
             } catch (IOException e) {

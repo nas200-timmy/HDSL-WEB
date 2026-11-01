@@ -179,25 +179,48 @@ public record DshNodeRuntime(
 
     /// The toolchain to use when the caller needs `pnpm`.
     ///
-    /// The order is the point: whatever `PATH` offers **when it carries pnpm**, then
-    /// a managed runtime that does, and only then the plain answer — so a caller that
-    /// has to fail can say "this Node.js has no pnpm" instead of "no Node.js" or,
-    /// worse, "pnpm was not found on PATH" while a working toolchain was installed
-    /// under the data directory.
+    /// The order is the point: whatever `PATH` offers **when it is a supported Node.js that
+    /// carries pnpm**, then a managed runtime (which is supported and installed with pnpm),
+    /// and only then the plain answer — so a caller that has to fail can say "this Node.js
+    /// has no pnpm" or "this Node.js is too old" instead of "no Node.js" or, worse,
+    /// "pnpm was not found on PATH" while a working toolchain was installed under the data
+    /// directory.
     ///
     /// @return the runtime to use, or empty when there is no Node.js at all
     public static Optional<DshNodeRuntime> detectWithPnpm() {
-        return preferPnpm(detect(), detectManaged());
+        return prefer(detect(), detectManaged(),
+                runtime -> runtime.isNodeSupported() && runtime.canManagePlugins());
     }
 
-    /// The choice behind [#detectWithPnpm], with both probes passed in.
+    /// The toolchain to use when the caller needs a Node.js in the supported range.
+    ///
+    /// "A Node.js is on PATH" is not the same answer as "a Node.js this program can use":
+    /// a host whose `PATH` carries Node 20 (Debian/Ubuntu packages are routinely too old)
+    /// made every dsh launch refuse with "outside the supported range" while a supported
+    /// managed runtime sat unused in the data directory, and brand tools crashed inside
+    /// their own ESM loader (`node:zlib has no export named createZstdDecompress`) instead
+    /// of being told which Node.js they needed.
+    ///
+    /// @return the runtime to use, or empty when there is no Node.js at all
+    public static Optional<DshNodeRuntime> detectSupported() {
+        return prefer(detect(), detectManaged(), DshNodeRuntime::isNodeSupported);
+    }
+
+    /// The choice behind [#detectWithPnpm] and [#detectSupported], with both probes passed in.
+    ///
+    /// `PATH` keeps priority when what it offers satisfies `usable` — the operator put it
+    /// there. When it does not, a managed runtime gets the turn. When neither does, `PATH`'s
+    /// own comes back so the caller can name the runtime it is complaining about instead of
+    /// claiming nothing was found.
     ///
     /// @param onPath  what `PATH` offered, if anything
     /// @param managed the panel's own runtime, if one is installed
-    /// @return the runtime to use; `PATH`'s own when nothing has pnpm, so the caller can say why
-    static Optional<DshNodeRuntime> preferPnpm(Optional<DshNodeRuntime> onPath,
-                                              Optional<DshNodeRuntime> managed) {
-        if (onPath.isPresent() && onPath.get().canManagePlugins()) {
+    /// @param usable  what the caller needs from the answer
+    /// @return the runtime to use
+    static Optional<DshNodeRuntime> prefer(Optional<DshNodeRuntime> onPath,
+                                          Optional<DshNodeRuntime> managed,
+                                          java.util.function.Predicate<DshNodeRuntime> usable) {
+        if (onPath.isPresent() && usable.test(onPath.get())) {
             return onPath;
         }
         return managed.isPresent() ? managed : onPath;

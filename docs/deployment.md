@@ -729,7 +729,7 @@ RestrictSUIDSGID=yes
 
 | 依赖 | 谁需要它 | 缺了会怎样 |
 |---|---|---|
-| `node` `^22.19.0 \|\| >=24.0.0` | 装 dsh 版本、插件、品牌工具、ZCode 构建 | 创建实例时安装任务失败，错误里写的是「Node.js was not found on PATH and no panel-managed runtime is installed」 |
+| `node` `^22.19.0 \|\| >=24.0.0` | 装 dsh 版本、插件、品牌工具、ZCode 构建 | 创建实例时安装任务失败，错误里写的是「Node.js was not found on PATH and no panel-managed runtime is installed」；**版本不够**时是另一条：安装会先被拒，启动则报「outside the supported range」，品牌工具会在自己的 ESM loader 里崩（`node:zlib has no export named createZstdDecompress`）——分发版仓库的 `nodejs` 包常常就是 18/20，这两条报错都不会主动点出"版本"这个词，面板启动横幅会 |
 | `pnpm` | `pnpm install` / `pnpm add`，插件管理也转发给它 | 任务失败在 `pnpm` 这一步；`npm` 单独存在没用 |
 
 **三条路，按省事排序：**

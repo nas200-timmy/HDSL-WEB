@@ -583,6 +583,7 @@ public final class DshVersionManager {
         }
 
         DshNodeRuntime runtime = requireRuntimeWithPnpm();
+        requireSupportedNode(runtime);
         if (!runtime.canManagePlugins()) {
             throw runtime.pnpmMissing("changing the boot library");
         }
@@ -753,6 +754,7 @@ public final class DshVersionManager {
         Path previous = previousDirectory(instance);
 
         DshNodeRuntime runtime = requireRuntimeWithPnpm();
+        requireSupportedNode(runtime);
         if (!runtime.canManagePlugins()) {
             throw runtime.pnpmMissing("installing DeepSeek Harness");
         }
@@ -1241,6 +1243,22 @@ public final class DshVersionManager {
             throw new DshException("pnpm " + runtime.pnpmVersion()
                     + " is too old; installing DeepSeek Harness requires pnpm "
                     + DshNodeRuntime.MINIMUM_PNPM + " or newer");
+        }
+    }
+
+    /// Refuses a runtime whose Node.js the harness cannot run on.
+    ///
+    /// Said before an install, not after one: the packages install fine under Node 20 and
+    /// then the *launch* refuses, which reads as "the install worked, the harness is broken"
+    /// a few minutes after the panel had everything it needed to know.
+    ///
+    /// @param runtime the runtime the work would use
+    /// @throws DshException when its Node.js is outside the supported range
+    static void requireSupportedNode(DshNodeRuntime runtime) throws DshException {
+        if (!runtime.isNodeSupported()) {
+            throw new DshException("The Node.js at " + runtime.node() + " is " + runtime.nodeVersion()
+                    + ", outside the range DeepSeek Harness runs on (" + DshNodeRuntime.requirement()
+                    + "). Install a suitable runtime on the Node page, or pick one for this instance.");
         }
     }
 
