@@ -35,10 +35,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// The experimental ZCode runtime against the `fake-zcode` node stub: the
-/// readiness lines are parsed into a port, the pass-through arguments and the
-/// injected `ZCODE_DATA_BASE_DIR` reach the process, a second launch is a
-/// no-op, the log carries the process output, stop is clean, and a process
-/// that exits early leaves `error` with the log's tail.
+/// readiness lines are parsed into a port, the pass-through arguments, the
+/// injected `ZCODE_DATA_BASE_DIR` and the per-instance `HOME` reach the
+/// process, a second launch is a no-op, the log carries the process output,
+/// stop is clean, and a process that exits early leaves `error` with the log's
+/// tail.
 class ZcodeRuntimeTest {
 
     /// The stub distribution, the way `HDSL_ZCODE_PACKAGE` would point at a
@@ -94,6 +95,29 @@ class ZcodeRuntimeTest {
                 () -> manager.create("lab", null, null, Path.of("relative-project")));
     }
 
+    /// The session database follows `HOME` and no other variable, so every instance
+    /// gets a home of its own inside its own directory — on the data volume, where a
+    /// container rebuild cannot reach it — and it exists before anything is started.
+    @Test
+    void everyInstanceGetsItsOwnHomeOnTheDataVolume() throws Exception {
+        ZcodeInstanceManager manager = manager();
+        ZcodeInstance one = manager.create("one", null, null);
+        ZcodeInstance two = manager.create("two", null, null);
+
+        Path first = manager.homeDirectory(one);
+        Path second = manager.homeDirectory(two);
+        assertTrue(Files.isDirectory(first), "created eagerly: " + first);
+        assertTrue(Files.isDirectory(second), "created eagerly: " + second);
+        assertEquals(manager.instanceDirectory(one.id()), first.getParent());
+        assertTrue(!first.equals(second), "instances must not share a home: " + first + " / " + second);
+
+        // Idempotent: a launch of a home that is already there is a no-op, which is
+        // what an instance created by an older panel relies on.
+        Files.writeString(first.resolve("marker"), "kept");
+        assertEquals(first, manager.prepareHome(one));
+        assertTrue(Files.isRegularFile(first.resolve("marker")), "an existing home is left alone");
+    }
+
     @Test
     void launchParsesThePortPassesArgumentsAndStopsCleanly() throws Exception {
         NodeDshStub.assumeNode();
@@ -129,6 +153,12 @@ class ZcodeRuntimeTest {
         assertTrue(!arguments.contains("--token"), "the proxied instance must not mint a token: " + arguments);
         assertEquals(manager.workspaceDirectory(instance).toString(), valueAfter(arguments, "--workspace"));
         assertEquals(manager.dataDirectory(instance).toString(), recorded.get("dataBaseDir").getAsString());
+        // Home is where the session database lives, so it has to be the
+        // instance's own — the panel's home is on the container's writable layer,
+        // where a rebuild erases it while `/data` keeps the index that lists it.
+        assertEquals(manager.homeDirectory(instance).toString(), recorded.get("home").getAsString());
+        assertTrue(Files.isDirectory(manager.homeDirectory(instance)),
+                "the home must exist before the process starts: " + manager.homeDirectory(instance));
 
         // The log carries the readiness announcement for the tail endpoint.
         List<String> log = manager.tailLog(updated, 50);

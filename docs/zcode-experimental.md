@@ -97,7 +97,8 @@ fetch、Z.ai OAuth 的 `tokenUrl`。上游把这些锚点挪走时构建会**明
 ## 实例怎么跑
 
 - 每实例一个目录 `<数据目录>/zcode/instances/<id>/`：`instance.json`（面板记录）、
-  `data/`（作为 `ZCODE_DATA_BASE_DIR`——ZCode 的配置、凭据、会话都在其下）、
+  `data/`（作为 `ZCODE_DATA_BASE_DIR`——ZCode 的凭据与供应商配置在其下）、`home/`
+  （作为 `HOME`——会话库 `home/.zcode/cli/db/db.sqlite` 在其下，见下节）、
   `logs/zcode.log`。旧的 `<实例>/workspace/` 不再是默认工作区，只在读历史清单时作为回退。
 - 默认工作区在 `<数据目录>/zcode/workspaces/<id>-<名字>/`，创建实例时立刻建好，路径记进清
   单并在界面上显示；名字里的非 ASCII 字符会被省略掉，只剩 `<id>`。**删实例不会删它**——那是
@@ -116,9 +117,17 @@ fetch、Z.ai OAuth 的 `tokenUrl`。上游把这些锚点挪走时构建会**明
 - 发行包不带参数启动就是官方 TUI（`bin/zcode.mjs` 会 import `agent/zcode.cjs`，CLI 的
   默认命令是 `tui`）。面板起 `node <发行包>/bin/zcode.mjs`，**不传任何参数**：`--web` 一
   套是 web 模式专属，`--workspace` 也只有 web 分支解析，工作区由进程 cwd 决定。
-- 环境只多设一条 `ZCODE_DATA_BASE_DIR=<实例>/data`（凭据与供应商配置都在它下面）。`HOME`
-  **不改**：会话库跟着 `homedir()` 走（上游 `adapters/src/storage/session-store/paths.ts`），
-  web 模式继承面板的 `HOME`，终端必须和它一致，否则两边看到两套会话。
+- 环境设两条：`ZCODE_DATA_BASE_DIR=<实例>/data`（凭据与供应商配置）和
+  `HOME=<实例>/home`（会话库）。会话库跟着 `homedir()` 走（上游
+  `adapters/src/storage/session-store/paths.ts`），没有任何环境变量能把它挪到别处，所以只能
+  改 `HOME`；web 模式和终端**用同一个** `home/`，两边看到的是同一套会话。
+- 为什么非得有个自己的 home：不设 `HOME` 的时候它继承面板的 `/home/hdsl`，那是容器的可写层，
+  `docker compose up -d` 换镜像就整个换掉；而 `/data` 里还留着列出这些会话的任务索引，于是
+  列表里有、点开报 `Session not found`（2026-11-01 就是这么丢的）。顺带每个实例有独立的
+  `~/.zcode`，两个实例不再共用同一份 `config.json`。
+- 新建实例时把面板 `HOME` 下几个凭据条目**软链**进实例 home（`.gitconfig`、
+  `.git-credentials`、`.netrc`、`.npmrc`、`.ssh`），否则 agent 的 `git`/`ssh` 会突然变哑；
+  面板 home 里没有的就不链，Windows 上建不了链接也不报错。链接只在 home 首次创建时做一次。
 - 缺 `bin/zcode.mjs` 或 `agent/zcode.cjs` 时打开终端直接返回可读原因——只有 web 的构建
   产物没有 agent，放进 PTY 才失败会让人以为是面板的问题。
 - `POST|DELETE /api/zcode/instances/{id}/terminal`，协议、ticket 与门禁与其他品类完全相同

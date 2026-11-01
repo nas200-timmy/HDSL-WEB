@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.zcode;
 
 import org.jackhuang.hmcl.util.ProcessTree;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -43,7 +44,9 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// instance, launched as
 /// `node <package>/bin/zcode.mjs --web --no-open --host 127.0.0.1 --port 0
 /// --no-token --workspace <dir>` with `ZCODE_DATA_BASE_DIR` pointing at
-/// the instance's own `data/` directory. Loopback only and tokenless on
+/// the instance's own `data/` directory and `HOME` at its `home/` — the
+/// second one is what keeps the session database on the data volume (see
+/// [ZcodeInstanceManager#prepareHome]). Loopback only and tokenless on
 /// purpose: the browser reaches the instance through the panel's `/i/<id>/`
 /// mount, where the session gate (and TLS, when enabled) already applies —
 /// do not "align" this with the old loopback-less documentation, that posture
@@ -204,6 +207,16 @@ public final class ZcodeRuntime {
                 builder.redirectErrorStream(true);
                 builder.environment().putAll(envMap);
                 builder.environment().put("ZCODE_DATA_BASE_DIR", manager.dataDirectory(instance).toString());
+                // ZCode keeps the session database under `homedir()`, which no
+                // environment variable of its own can redirect: `HOME` is the
+                // only lever, and without it the database lands on the
+                // container's writable layer and dies with the next rebuild.
+                Path home = manager.prepareHome(instance);
+                builder.environment().put("HOME", home.toString());
+                if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
+                    // Node resolves `~` through USERPROFILE on Windows and ignores HOME.
+                    builder.environment().put("USERPROFILE", home.toString());
+                }
                 process = builder.start();
             } catch (IOException e) {
                 STATES.put(id, State.ERROR);

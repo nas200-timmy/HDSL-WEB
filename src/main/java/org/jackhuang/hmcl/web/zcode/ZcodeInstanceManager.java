@@ -22,12 +22,15 @@ import com.google.gson.JsonObject;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.io.Tombstones;
+import org.jackhuang.hmcl.util.platform.Privileges;
+import org.jackhuang.hmcl.util.platform.UserHome;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.SecureRandom;
@@ -50,9 +53,10 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// from the server config rather than from the launcher's home directory.
 ///
 /// An instance directory also holds everything the process owns at runtime:
-/// `data/` (passed to ZCode as `ZCODE_DATA_BASE_DIR`, so each instance's
-/// config, sessions and credentials are private) and `logs/zcode.log` (the
-/// process's merged stdout and stderr). The default workspace of a new
+/// `data/` (passed to ZCode as `ZCODE_DATA_BASE_DIR`: the provider config and
+/// credentials), `home/` (passed as `HOME`: the session database lives at
+/// `<home>/.zcode/cli/db/db.sqlite`, see [#prepareHome]) and `logs/zcode.log`
+/// (the process's merged stdout and stderr). The default workspace of a new
 /// instance lives next to the instances instead, under
 /// `zcode/workspaces/<id>-<name slug>` — a project directory the operator can
 /// see, keep and reuse, rather than state hidden inside the instance. The
@@ -77,6 +81,11 @@ public final class ZcodeInstanceManager {
     /// `ZCODE_DATA_BASE_DIR`; ZCode keeps its own state at `.zcode/` below it.
     public static final String DATA_DIR_NAME = "data";
 
+    /// The directory inside an instance directory that becomes the process's
+    /// `HOME`; ZCode's session database lives at `.zcode/cli/db/db.sqlite`
+    /// below it.
+    public static final String HOME_DIR_NAME = "home";
+
     /// The default workspace directory of old instances, kept only so manifests
     /// written before the move to [workspacesRoot] still resolve.
     public static final String WORKSPACE_DIR_NAME = "workspace";
@@ -91,6 +100,20 @@ public final class ZcodeInstanceManager {
     /// The provider config this panel writes when an API key is configured,
     /// relative to the instance's data directory.
     public static final String PROVIDER_CONFIG_FILE = ".zcode/v2/provider_config.json";
+
+    /// The entries of the panel's own home a new instance home links in.
+    ///
+    /// They are how `git`, `ssh` and `npm` authenticate. Before the instance got
+    /// a home of its own they were simply there — `HOME` was the panel's — so
+    /// without this an agent that could push yesterday cannot push today, and
+    /// nothing in the panel would say why.
+    ///
+    /// Linked rather than copied on purpose: a credential rotation still reaches
+    /// every instance, and a private key never ends up duplicated inside a
+    /// volume the operator may hand to somebody else. Missing entries are not an
+    /// error — most deployments have none of them.
+    private static final List<String> INHERITED_HOME_ENTRIES = List.of(
+            ".gitconfig", ".git-credentials", ".netrc", ".npmrc", ".ssh");
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -231,6 +254,7 @@ public final class ZcodeInstanceManager {
         }
 
         write(instance);
+        prepareHome(instance);
         try {
             writeProviderConfig(instance);
         } catch (ZcodeException e) {
@@ -345,6 +369,87 @@ public final class ZcodeInstanceManager {
     /// @return the data directory
     public Path dataDirectory(ZcodeInstance instance) {
         return dataDirectoryOf(instanceDirectory(instance.id()));
+    }
+
+    /// The directory passed to the process as `HOME`.
+    ///
+    /// @param instance the instance
+    /// @return the home directory
+    public Path homeDirectory(ZcodeInstance instance) {
+        return instanceDirectory(instance.id()).resolve(HOME_DIR_NAME);
+    }
+
+    /// Creates the instance's home when it is missing, links the panel's shared
+    /// credentials into it, and hands it to the agent.
+    ///
+    /// **Why a home of its own.** The session database is the one piece of ZCode
+    /// state that does not follow `ZCODE_DATA_BASE_DIR`: `getDefaultSessionDbPath()`
+    /// uses `os.homedir()`, with no environment variable to redirect it (see
+    /// `apps/zcode-cli/packages/adapters/src/storage/session-store/paths.ts`).
+    /// While `HOME` was the panel's own, every instance's sessions landed in the
+    /// container's `/home/hdsl` — the writable layer, not the data volume — so a
+    /// rebuild (`docker compose up -d` after an image bump) emptied them while
+    /// `/data` kept the task index that lists them, and the panel then answered
+    /// `Session not found` for a conversation the operator could still see.
+    ///
+    /// Pointing `HOME` at the instance puts the database on the volume and gives
+    /// each instance its own history — two instances no longer share one
+    /// `~/.zcode/config.json` either, which is how one instance's provider key
+    /// used to reach another's.
+    ///
+    /// Idempotent, so both the create path and every launch call it: an instance
+    /// made by an older panel gets its home on the next start.
+    ///
+    /// @param instance the instance
+    /// @return the home directory
+    public Path prepareHome(ZcodeInstance instance) {
+        Path home = homeDirectory(instance);
+        boolean created;
+        try {
+            created = !Files.isDirectory(home);
+            Files.createDirectories(home);
+        } catch (IOException e) {
+            LOG.warning("Could not create the ZCode home " + home, e);
+            return home;
+        }
+        // Only on a fresh home: a link the agent removed on purpose is not put
+        // back on the next launch.
+        if (created) {
+            linkInheritedEntries(home);
+        }
+        // The agent writes below its own home (the session database, logs, its
+        // own tools), and it is a different uid from the panel in a container.
+        Privileges.handToAgent(home, Privileges.AGENT_SHARED_DIRECTORY);
+        return home;
+    }
+
+    /// Links the entries of [INHERITED_HOME_ENTRIES] the panel's home has into
+    /// `home`, skipping the ones already there and the ones that do not exist.
+    ///
+    /// Best effort: Windows refuses `symlink` to an unprivileged process, and a
+    /// missing credential is a working instance that cannot push, not a broken
+    /// one.
+    ///
+    /// @param home the instance home
+    private static void linkInheritedEntries(Path home) {
+        Path panelHome = UserHome.directory();
+        for (String name : INHERITED_HOME_ENTRIES) {
+            Path source = panelHome.resolve(name);
+            Path link = home.resolve(name);
+            if (!Files.exists(source) || Files.exists(link, LinkOption.NOFOLLOW_LINKS)) {
+                continue;
+            }
+            if (source.equals(link)) {
+                // A panel whose home *is* the instance home has nothing to link.
+                continue;
+            }
+            try {
+                Files.createSymbolicLink(link, source);
+            } catch (IOException | UnsupportedOperationException e) {
+                LOG.info("Could not link " + source + " into the ZCode home " + home
+                        + " (" + e + "); the agent will run without it");
+            }
+        }
     }
 
     /// The working directory the process is launched with.

@@ -28,10 +28,10 @@ import org.jetbrains.annotations.Nullable;
 /// The record is deliberately thin, mirroring [org.jackhuang.hmcl.dsh.DshInstance]:
 /// it names the workspace the instance works on, the provider credentials the
 /// panel injects (when given), the access token ZCode itself requires, and the
-/// last port the process announced. Everything else — ZCode's own config,
-/// sessions and credentials — lives under the per-instance `data/` directory
-/// (`ZCODE_DATA_BASE_DIR`), which is what keeps two ZCode instances naturally
-/// isolated from each other and from every dsh instance.
+/// last port the process announced. Everything else — ZCode's own config and
+/// credentials under `data/` (`ZCODE_DATA_BASE_DIR`), its sessions under `home/`
+/// (`HOME`) — lives inside the instance directory, which is what keeps two ZCode
+/// instances naturally isolated from each other and from every dsh instance.
 ///
 /// Instances are immutable; [ZcodeInstanceManager] replaces them on edit.
 ///

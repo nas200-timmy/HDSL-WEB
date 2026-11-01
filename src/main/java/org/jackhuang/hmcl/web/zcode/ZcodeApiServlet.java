@@ -446,7 +446,8 @@ public final class ZcodeApiServlet extends HttpServlet {
             JsonObject body = instanceTerminal.open(request, id,
                     () -> ZcodeRuntime.stop(id),
                     resume -> ZcodeTui.target(packageDir, manager.dataDirectory(instance),
-                            manager.workspaceDirectory(instance), id, config.zcode.nodePath));
+                            manager.prepareHome(instance), manager.workspaceDirectory(instance),
+                            id, config.zcode.nodePath));
             Json.write(response, body);
         } catch (InstanceTerminal.Refused e) {
             InstanceTerminal.write(request, response, e);

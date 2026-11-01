@@ -39,6 +39,7 @@ server.listen(wanted, "127.0.0.1", () => {
       JSON.stringify({
         argv: args,
         dataBaseDir: process.env.ZCODE_DATA_BASE_DIR || null,
+        home: process.env.HOME || null,
       }) + "\n",
     );
   }

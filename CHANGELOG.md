@@ -2,6 +2,20 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布
+
+**ZCode 会话不再随容器重建消失（实验品类）**
+
+- 会话库跟着 `homedir()` 走（上游 `adapters/.../session-store/paths.ts`），而实例的 `HOME`
+  一直是面板自己的 `/home/hdsl`——容器的可写层，换镜像重建就整层换掉；`/data` 里还留着列出
+  这些会话的任务索引，于是列表里有、点开报 `Session not found`。
+- 现在每个实例有自己的 `home/`，web 模式与 TUI 都用它：会话落在数据卷上，实例之间也不再有
+  同一份 `~/.zcode/config.json` 互相覆盖。`HOME` 之外没有别的开关能挪这个库。
+- 新建实例时把面板 `HOME` 下的 `.gitconfig`／`.git-credentials`／`.netrc`／`.npmrc`／`.ssh`
+  软链进实例 home，agent 的 `git`/`ssh` 不会因为换了 HOME 突然不能推送。软链而不是拷贝：
+  换凭据仍是一次生效，私钥也不会被复制进可能被转手的卷里。
+- 旧会话没有迁移：本次之前的会话写在旧位置，改版后不再列出（本部署里那个库当时已是空的）。
+
 ## v0.6.50 — 2026-11-01 · 中版本：新增品牌 Hermes Agent（第一个双进程品牌），MC 实例列表并进实例页
 
 > 起因：把 Hermes Agent（Nous Research，MIT）接成第四个品牌。它是这批里第一个**两个进程**的品牌

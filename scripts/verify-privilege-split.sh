@@ -97,6 +97,31 @@ else
     echo "跳过  还没有品牌实例（先建一个再跑）"
 fi
 
+# 6. ZCode 实例的 home/ 必须归 agent，并且在数据卷上
+#    会话库跟着 homedir() 走，只有 HOME 能把它挪出容器的可写层。归 root 的话
+#    agent 写不了库，看起来就是"发了消息没反应"；落在 /home/hdsl 的话换镜像就丢。
+zcode_homes=$(find /data/zcode/instances -mindepth 2 -maxdepth 2 -type d -name home 2>/dev/null | head -20)
+if [ -n "$zcode_homes" ]; then
+    for dir in $zcode_homes; do
+        owner=$(stat -c '%u' "$dir" 2>/dev/null || echo '?')
+        if [ "$owner" != "$(id -u)" ]; then
+            bad "ZCode 实例 home 属主是 $owner，应为 $(id -u)：agent 写不了会话库（$dir）"
+        elif touch "$dir/.hdsl-probe" 2>/dev/null; then
+            rm -f "$dir/.hdsl-probe" 2>/dev/null
+            ok "ZCode 实例 home 可写（$dir）"
+        else
+            bad "ZCode 实例 home 不可写：会话与日志都落不下来（$dir）"
+        fi
+    done
+else
+    echo "跳过  还没有 ZCode 实例（先建一个再跑）"
+fi
+
+# 7. 面板 home 下不该再有 zcode 的会话库——有就说明有实例还在用可写层
+if [ -f /home/hdsl/.zcode/cli/db/db.sqlite ]; then
+    echo "注意  /home/hdsl/.zcode/cli/db 还在：换成 0.6.51 之前写的会话在这层上，重建即丢"
+fi
+
 echo
 if [ "$fail" = 1 ]; then
     echo "结论：身份划分没有生效（或方向错了），见上面 FAIL 行"

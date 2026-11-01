@@ -19,6 +19,7 @@ package org.jackhuang.hmcl.web.terminal;
 
 import org.jackhuang.hmcl.dsh.DshNodeRuntime;
 import org.jackhuang.hmcl.util.platform.Executables;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -47,10 +48,11 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 ///   at the instance's `data/` directory, exactly as in the web launch;
 /// - the session database follows `homedir()` (`<home>/.zcode/cli/db/db.sqlite`,
 ///   see `apps/zcode-cli/packages/adapters/src/storage/session-store/paths.ts`),
-///   so `HOME` is deliberately **not** overridden: the web process inherits the
-///   panel's `HOME`, and a TUI pointed at another one would list a different
-///   set of sessions — the "configured it in the browser, gone in the terminal"
-///   failure the instance home is supposed to prevent.
+///   so `HOME` points at the instance's `home/` directory — the same one the web
+///   launch passes, which is what keeps the two surfaces on one set of sessions.
+///   Pointing it at the panel's own home instead is what used to put the
+///   database on the container's writable layer, where a rebuild erased it; see
+///   [org.jackhuang.hmcl.web.zcode.ZcodeInstanceManager#prepareHome].
 ///
 /// `--workspace` is deliberately not passed: the working directory already is
 /// the instance workspace, and the runner only understands that flag in web
@@ -65,12 +67,14 @@ public final class ZcodeTui {
     ///
     /// @param packageDir the distribution holding `bin/zcode.mjs`
     /// @param dataDir    the instance's data directory (`ZCODE_DATA_BASE_DIR`)
+    /// @param homeDir    the instance's home directory (`HOME`, where the session
+    ///                   database lives — must be the one the web launch uses)
     /// @param workspace  the instance workspace (the child's cwd)
     /// @param instanceId the instance id
     /// @param nodePath   the configured Node executable, may be blank
     /// @return the argv, cwd and environment to spawn
     /// @throws IOException when the distribution has no entry point or no Node can be resolved
-    public static TerminalTarget target(Path packageDir, Path dataDir, Path workspace,
+    public static TerminalTarget target(Path packageDir, Path dataDir, Path homeDir, Path workspace,
                                         String instanceId, @Nullable String nodePath) throws IOException {
         Path entry = packageDir.resolve("bin/zcode.mjs");
         if (!Files.isRegularFile(entry)) {
@@ -86,9 +90,15 @@ public final class ZcodeTui {
         }
         Path node = resolveNode(nodePath);
         Map<String, String> environment = new HashMap<>(System.getenv());
-        // The session database follows HOME, so it stays the panel's own: the
-        // web process inherits it and the TUI must see the same sessions.
+        // The session database follows HOME, so it has to be the instance's own
+        // home — the same one the web process gets, or the terminal would list a
+        // different set of sessions.
         environment.put("ZCODE_DATA_BASE_DIR", dataDir.toString());
+        environment.put("HOME", homeDir.toString());
+        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
+            // Node resolves `~` through USERPROFILE on Windows and ignores HOME.
+            environment.put("USERPROFILE", homeDir.toString());
+        }
         environment.put("TERM", "xterm-256color");
         environment.put("COLORTERM", "truecolor");
         environment.put("PATH", node.getParent() + File.pathSeparator

@@ -43,7 +43,8 @@ class ZcodeTuiTest {
     @Test
     void missingEntryFailsLoudly() {
         IOException expected = assertThrows(IOException.class, () -> ZcodeTui.target(
-                packageDir, packageDir.resolve("data"), packageDir.resolve("workspace"), "z1", "node"));
+                packageDir, packageDir.resolve("data"), packageDir.resolve("home"),
+                packageDir.resolve("workspace"), "z1", "node"));
         assertTrue(expected.getMessage().contains("bin/zcode.mjs"), expected.getMessage());
     }
 
@@ -57,7 +58,8 @@ class ZcodeTuiTest {
         Files.writeString(agent, "// agent\n");
 
         IOException expected = assertThrows(IOException.class, () -> ZcodeTui.target(
-                packageDir, packageDir.resolve("data"), packageDir.resolve("workspace"), "z1",
+                packageDir, packageDir.resolve("data"), packageDir.resolve("home"),
+                packageDir.resolve("workspace"), "z1",
                 packageDir.resolve("no-such-node").toString()));
         assertTrue(expected.getMessage().contains("zcode.nodePath"), expected.getMessage());
     }
@@ -72,7 +74,8 @@ class ZcodeTuiTest {
         Files.writeString(entry, "// runner\n");
 
         IOException expected = assertThrows(IOException.class, () -> ZcodeTui.target(
-                packageDir, packageDir.resolve("data"), packageDir.resolve("workspace"), "z1", "node"));
+                packageDir, packageDir.resolve("data"), packageDir.resolve("home"),
+                packageDir.resolve("workspace"), "z1", "node"));
         assertTrue(expected.getMessage().contains("agent/zcode.cjs"), expected.getMessage());
     }
 
@@ -130,7 +133,7 @@ class ZcodeTuiTest {
         Files.writeString(agent, "// agent\n");
 
         TerminalTarget target = ZcodeTui.target(packageDir, packageDir.resolve("data"),
-                packageDir.resolve("workspace"), "z1", "node");
+                packageDir.resolve("home"), packageDir.resolve("workspace"), "z1", "node");
 
         assertEquals(2, target.command().size(), target.command().toString());
         assertTrue(Files.isRegularFile(Path.of(target.command().get(0))),
@@ -155,8 +158,9 @@ class ZcodeTuiTest {
         Files.setPosixFilePermissions(node, PosixFilePermissions.fromString("rwx------"));
 
         Path data = packageDir.resolve("data");
+        Path home = packageDir.resolve("home");
         Path workspace = packageDir.resolve("workspace");
-        TerminalTarget target = ZcodeTui.target(packageDir, data, workspace, "z1", node.toString());
+        TerminalTarget target = ZcodeTui.target(packageDir, data, home, workspace, "z1", node.toString());
 
         assertEquals(ZcodeTui.BRAND, target.brand());
         assertEquals("z1", target.instanceId());
@@ -169,9 +173,12 @@ class ZcodeTuiTest {
         assertFalse(target.command().contains("--no-token"), target.command().toString());
         assertEquals(workspace, target.cwd());
         assertEquals(data.toString(), target.environment().get("ZCODE_DATA_BASE_DIR"));
-        // The session database lives under HOME, so the TUI inherits it: the
-        // web process does the same, and both must list the same sessions.
-        assertEquals(System.getenv("HOME"), target.environment().get("HOME"));
+        // The session database lives under HOME, so it has to be the instance's own
+        // home — the same one the web process gets, or the two surfaces would list
+        // different sessions.
+        assertEquals(home.toString(), target.environment().get("HOME"));
+        assertFalse(home.toString().equals(System.getenv("HOME")),
+                "the panel's own home must not leak in: " + target.environment().get("HOME"));
         assertEquals("xterm-256color", target.environment().get("TERM"));
         assertEquals("truecolor", target.environment().get("COLORTERM"));
     }
