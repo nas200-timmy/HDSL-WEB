@@ -28,6 +28,16 @@
 - `--base-registry` 记进状态文件（`INSTALL_BASE_REGISTRY`），重跑不用再给；`--no-mirror` 清掉它。
   显式给了 `--base-registry` 时不再弹那个菜单的仓库部分（否则会把答案盖掉）。
 
+**`docker-install.sh`：先探 buildx，缺了直接给装法**
+
+- 症状：`ERROR: BuildKit is enabled but the buildx component is missing or broken`——Docker 23 起
+  `docker build` 本身就是 buildx，而发行版的 `docker.io` 包不一定带插件（Ubuntu 24.04 上
+  `docker-buildx` 是独立包）。原来的脚本只会把这一行原样吐出来，然后"镜像构建失败"。
+- 「检查 docker」多探一次 `docker buildx version` 并打印结果；真到构建时缺 buildx 就给出按来源
+  分类的装法（`docker-buildx-plugin` / `docker-buildx` / dnf），并提示 `--pull <版本>` 这条
+  完全不需要 buildx 的路。
+- `--pull` 不受影响：它只做 `docker pull` / `tag` / `run`。
+
 ## v0.6.54 — 2026-11-01 · 小版本：终端可以同时开了（虚拟线程把 carrier 钉光）
 
 > 起因：开一个终端正常，开第二个（另一个品牌）只有闪烁的光标。查下来不是"只能单线程"，

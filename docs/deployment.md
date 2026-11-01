@@ -464,6 +464,28 @@ docker build --build-arg HDSL_WEB_BASE=<仓库>/library/node:22-bookworm-slim \
 `--recreate` 等后续操作照旧认它。也可以在 `/etc/docker/daemon.json` 配 `registry-mirrors`——
 那是全局设置，配一次所有 `docker pull` 都受益（包括构建时的底座）。
 
+### 4.3 构建还需要 buildx
+
+`Dockerfile` 里用了 `RUN --mount=type=cache`（BuildKit 语法），而 **Docker 23 起 `docker build`
+本身就是 buildx**——插件不在，命令直接报：
+
+```
+ERROR: BuildKit is enabled but the buildx component is missing or broken.
+```
+
+发行版的 `docker.io` 包不一定把插件带上（Ubuntu 24.04 上 `docker-buildx` 是独立包）。向导会先探
+一次并在缺的时候给出装法，按来源选一条：
+
+```bash
+sudo apt-get install -y docker-buildx-plugin   # Docker 官方源（docker-ce）
+sudo apt-get install -y docker-buildx          # Ubuntu / Debian 发行版
+sudo dnf install -y docker-buildx-plugin       # Fedora / RHEL
+# 或者手动放插件：https://docs.docker.com/go/buildx/
+```
+
+不想装 buildx 也有一条路：`--pull <版本>` 只做 `docker pull` / `docker tag` / `docker run`，
+用不到构建，也就用不到 buildx。
+
 ---
 
 ## 5. 升级与回滚

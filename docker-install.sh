@@ -274,6 +274,28 @@ confirm() {
 docker_present() { command -v docker >/dev/null 2>&1; }
 docker_ready()   { docker info >/dev/null 2>&1; }
 
+# 本地构建要 buildx：Dockerfile 里的 `RUN --mount=type=cache` 是 BuildKit 语法，而
+# Docker 23 起 `docker build` 本身就是 buildx——插件不在，命令直接报
+# "BuildKit is enabled but the buildx component is missing or broken"。
+# Ubuntu 的 docker.io 包并不总是把插件带上（独立包 `docker-buildx`），所以先探一次。
+buildx_ready()   { docker buildx version >/dev/null 2>&1; }
+
+show_buildx_hint() {
+    say ""
+    say "构建需要 buildx，但这台机器上没有（或插件坏了）。"
+    say "Dockerfile 用了 BuildKit 的缓存挂载，没有 buildx 就连第一步都过不去。"
+    say ""
+    say "  1) 装上 buildx（按你 docker 的来源选一条）："
+    say "     sudo apt-get install -y docker-buildx-plugin   # Docker 官方源（docker-ce）"
+    say "     sudo apt-get install -y docker-buildx          # Ubuntu/Debian 发行版的 docker.io"
+    say "     sudo dnf install -y docker-buildx-plugin       # Fedora / RHEL"
+    say "     或手动放插件：https://docs.docker.com/go/buildx/"
+    say ""
+    say "  2) 不想装也行——不构建，直接拉已发布的镜像："
+    say "     ./docker-install.sh --pull $(last_tag | sed 's/^v//')"
+    say "     （多架构 manifest，amd64/arm64 自动挑；不需要 buildx）"
+}
+
 as_root() {
     if [ "$(id -u)" = 0 ]; then
         "$@"
@@ -652,6 +674,10 @@ build_image() {
         pull_image
         return 0
     fi
+    if [ "$DRY_RUN" != 1 ] && ! buildx_ready; then
+        show_buildx_hint
+        die "镜像构建失败：缺少 buildx"
+    fi
     step "构建镜像：$IMAGE"
     local web_base build_base runtime_base
     web_base=$(with_registry "node:22-bookworm-slim")
@@ -831,6 +857,15 @@ load_state
 step "检查 docker"
 ensure_docker
 say "  docker：$(docker --version 2>/dev/null || echo '不可用（dry-run）')"
+# buildx 只有本地构建才需要；--pull 走的是 docker pull/tag/run，一样能起。所以这里只探
+# 不说死，真到要构建时再拦（见 build_image）。
+if [ "$DRY_RUN" != 1 ] && docker_present; then
+    if buildx_ready; then
+        say "  buildx：$(docker buildx version 2>/dev/null | head -1)"
+    else
+        say "  buildx：缺失（本地构建需要它；--pull 不需要）"
+    fi
+fi
 
 # 已有状态作为默认值：重跑时只按回车就是上次的配置
 [ -n "$NAME" ] || NAME="${PREV_NAME:-$DEFAULT_NAME}"
