@@ -2,9 +2,13 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布
+## v0.6.52 — 2026-11-01 · 小版本：挑工具链时按「能不能用」，不按「PATH 上有没有」
 
-**装 dsh 时挑工具链：优先挑带 pnpm 的那个**
+> 起因：在一台干净的阿里云 ECS 上裸部署，`apt install nodejs` 给的是 Node 20，再
+> `npm i -g pnpm` 把 pnpm 补齐——"有 node 有 pnpm"全齐，于是撞出两层同一个坑：面板挑工具链
+> 只看 `PATH` 上**有没有**，不看它**能不能用**。
+
+**第一层：要 pnpm 的路径不看 `PATH` 上的 node 有没有 pnpm**
 
 - 症状：`Installing DSH 0.2.1-rc.5 … failed: pnpm was not found on PATH`。而这台机器上，
   面板的托管运行时（自带 pnpm）就装在数据目录里。
@@ -19,7 +23,7 @@
 - 托管运行时的挑选也改成优先选带 pnpm 的那一个；品牌安装里"没有 pnpm 就拿裸名字
   `pnpm` 去跑"的兜底改成明确报错——那是同一个坑的另一半。
 
-**然后是同一个坑的下一层：`PATH` 上的 node 版本太低**
+**第二层：`PATH` 上的 node 版本太低**
 
 - 症状一：品牌实例启动后立刻死在自己的 ESM loader 里——`node:zlib does not provide an
   export named 'createZstdDecompress'`（kimi-code 2.4.1 需要 Node 22.15+）。症状二：dsh 实例
@@ -32,6 +36,11 @@
   换来的只会是"装好了却起不来"。
 - 启动横幅在 node 版本低于 `^22.19.0 || >=24` 时单独加一行说明（分发版仓库的 node 常常落后
   两三个大版本，而这两条报错都不提版本号）。
+- 容器不受影响：镜像里 node 是 22.23.1、pnpm 由 corepack 装在 `/opt/node/bin`，两条新判据
+  在容器里都成立，走的还是原来那条路。
+
+**验证**：全量 1167 用例 0 失败 / 26 跳过；新增 `DshNodeRuntimeChoiceTest` 六条，其中两条
+直接钉住这次的两个坑（Node 20 带 pnpm 要让位给托管运行时、安装前就拒绝太旧的 node）。
 
 ## v0.6.51 — 2026-11-01 · 小版本：ZCode 会话不再随容器重建消失
 
