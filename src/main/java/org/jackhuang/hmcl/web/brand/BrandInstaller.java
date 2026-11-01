@@ -23,6 +23,7 @@ import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.io.Links;
 import org.jackhuang.hmcl.util.platform.Architecture;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -965,6 +966,11 @@ public final class BrandInstaller {
 
         try {
             Files.createDirectories(target);
+            // `pnpm add` runs as the agent and writes the tree here; the panel is the one that
+            // made the directory. Same rule as an instance home — and the reason a brand
+            // install fails with EACCES on a data directory that is not setgid.
+            Privileges.prepareAgentDirectory(target, Privileges.AGENT_SHARED_DIRECTORY);
+            Privileges.prepareAgentDirectory(releases, Privileges.AGENT_SHARED_DIRECTORY);
             // pnpm add wants a package.json to extend; give it a minimal private one.
             Path manifest = target.resolve("package.json");
             if (!Files.exists(manifest)) {

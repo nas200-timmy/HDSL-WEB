@@ -370,7 +370,6 @@ public final class ZcodeInstanceManager {
     public Path dataDirectory(ZcodeInstance instance) {
         return dataDirectoryOf(instanceDirectory(instance.id()));
     }
-
     /// The directory passed to the process as `HOME`.
     ///
     /// @param instance the instance
@@ -408,6 +407,11 @@ public final class ZcodeInstanceManager {
         // The agent writes below its own home (the session database, logs, its
         // own tools), and it is a different uid from the panel in a container.
         Privileges.prepareAgentDirectory(home, Privileges.AGENT_SHARED_DIRECTORY);
+        // …and under `data/` too: that is where ZCode keeps `tasks-index.sqlite` and the
+        // provider state it rewrites, and the panel is the one that created the directory.
+        // Handing over only `home/` left the other half root-owned, which is invisible on a
+        // setgid volume and fatal on a plain bind mount.
+        Privileges.prepareAgentDirectory(dataDirectory(instance), Privileges.AGENT_SHARED_DIRECTORY);
         if (!Files.isDirectory(home)) {
             return home; // prepareAgentDirectory logged why
         }

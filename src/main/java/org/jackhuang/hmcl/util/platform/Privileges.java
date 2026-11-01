@@ -316,6 +316,41 @@ public final class Privileges {
         return euid() == 0 && !inContainer();
     }
 
+    /// Names the data directories the agent has to write that still belong to the panel.
+    ///
+    /// The class of bug this exists for: the panel (root) creates a directory or a file that a
+    /// child running as the agent then has to write, and nothing hands it over. It stays
+    /// invisible while `/data` is a setgid volume (a root-created child inherits the agent's
+    /// group and `0775`), and turns into "the server exited before it was ready (code 1)" the
+    /// moment the data directory is a plain bind mount. Two of those shipped already — a brand
+    /// initializer that wrote its SQLite database as root, and a Minecraft instance directory.
+    ///
+    /// One line per offender, at startup, instead of a thread dump later. The intent is a
+    /// quick "is this deployment in that state", not a repair: the per-feature hand-overs do
+    /// the repairing, and they run again on every launch.
+    ///
+    /// @param dataDir the panel's data directory
+    public static void auditAgentRoots(Path dataDir) {
+        if (!DROP_CHILDREN) {
+            return;
+        }
+        for (String relative : List.of("hdsl/instances", "hdsl/runtimes", "brands",
+                "zcode/instances", "minecraft/instances", "pnpm-store", "corepack")) {
+            Path root = dataDir.resolve(relative);
+            if (!Files.isDirectory(root)) {
+                continue;
+            }
+            int owner = ownerOf(root);
+            if (owner >= 0 && owner != AGENT_UID) {
+                org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                        "Agent-facing directory is owned by uid " + owner + " (expected " + AGENT_UID + "): "
+                                + root + " — the panel creates these as root, and a child that runs as the agent"
+                                + " has to write them; the per-feature hand-over repairs it on the next launch,"
+                                + " but a data directory that is not setgid is how this bites");
+            }
+        }
+    }
+
     /// The argv to run `command` with, as an agent.
     ///
     /// Inside a container running as root this is

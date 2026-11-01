@@ -21,6 +21,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.jackhuang.hmcl.util.io.FileUtils;
+import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -776,6 +777,9 @@ public final class DshVersionManager {
                 moveAside(target, previous);
             }
             Files.createDirectories(target);
+            // `pnpm install` writes here as the agent; the panel is the one that just made the
+            // directory, so it is the panel's to hand over (same rule as an instance home).
+            Privileges.prepareAgentDirectory(target, Privileges.AGENT_SHARED_DIRECTORY);
             // The flag, raised for as long as the tree is being written. Its presence is
             // what [isInstalled] refuses to overlook — the job the staging directory used
             // to do by holding the tree away from the instance.

@@ -4,6 +4,23 @@
 
 ## 未发布
 
+**把「root 建、agent 写」这条规则一次查完**
+
+- 上一次只修了撞上的那两个（Octop、MC）。按同一条规则又发现三处：
+  - **dsh 实例**：`instances/<id>/` 与 `home/` 由面板（root）创建，harness 和它的 `pnpm`
+    安装都以 agent 身份写进去——启动与安装前现在都会交接（`DshLauncher#prepareInstanceDirectories`，
+    只接管 `<data>/hdsl` 下面的路径，实例指到操作者自己目录的 home/workspace 不动）。
+  - **dsh 安装目标** `instances/<id>/dsh`：面板建目录、`pnpm install` 以 agent 写入。
+  - **品牌版本目录** `brands/<brand>/releases/<version>`：`pnpm add` 以 agent 写入，面板建目录。
+  - **ZCode 的 `data/`**（`ZCODE_DATA_BASE_DIR`）：原来只交接了 `home/`，而 `tasks-index.sqlite`
+    和 provider 状态都在 `data/` 下，同样是 agent 写。
+- 新增启动自检：`Privileges#auditAgentRoots` 在面板启动时把「agent 要写、却还是 panel 属主」
+  的目录各打一行警告——这一类 bug 在 setgid 数据卷上完全看不见，换成普通 bind mount 才炸，
+  所以需要在启动时就说出来。
+- `scripts/verify-privilege-split.sh` 补成一张完整清单（以 agent 身份 `touch` 实测可写性）：
+  dsh 实例目录与 home、ZCode 的 `data/`、MC 实例目录、品牌 `releases/` 的每个版本、
+  `pnpm-store`、`corepack`。
+
 **根建的文件交给 agent：Octop 打不开自己的库，MC 服务器起不来**
 
 - 症状一（Octop 品牌）：实例启动即死，日志里是

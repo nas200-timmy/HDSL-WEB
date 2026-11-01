@@ -186,6 +186,10 @@ public final class Main {
         System.out.println("  data dir : " + config.dataDir);
         System.out.println("             (server.yaml / accounts / instances / pnpm store / certificates -");
         System.out.println("              back up or migrate by copying this folder; keep it off the public net)");
+        // The bug class behind "the server/brand/store never started": the panel creates a
+        // directory as root, the child that has to write it runs as the agent. Invisible on a
+        // setgid volume, fatal on a plain bind mount. One line per offender, at boot.
+        org.jackhuang.hmcl.util.platform.Privileges.auditAgentRoots(config.dataDir);
         System.out.println("  workspace: " + WorkspaceDirectory.resolve(env,
                 org.jackhuang.hmcl.util.platform.UserHome.directory(env)));
         System.out.println("  auth     : " + (config.auth.disabled

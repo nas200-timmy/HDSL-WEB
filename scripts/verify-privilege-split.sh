@@ -122,6 +122,69 @@ if [ -f /home/hdsl/.zcode/cli/db/db.sqlite ]; then
     echo "注意  /home/hdsl/.zcode/cli/db 还在：换成 0.6.51 之前写的会话在这层上，重建即丢"
 fi
 
+# 8. 一张表：agent 的进程要写、而面板（root）创建的所有目录
+#
+#    这是同一个 bug 形状的完整清单——panel 建、agent 写。数据卷是 setgid 2775 时它被
+#    挂载属性盖住（root 建的子目录继承 hdsl 组 + 0775），一旦 /data 换成普通 bind mount
+#    （root:root 0755），每一条都会变成"进程起来就死、一个字都不输出"：
+#    Octop 打不开 octop.db、MC 建不出 logs/、dsh 装不进 pnpm、品牌装不进 releases/。
+#
+#    脚本本身就是以 agent 身份跑的（docker exec -u 1000），所以 touch 就是最终裁决。
+check_agent_tree() {   # <名字> <glob>
+    local label="$1" pattern="$2" found=0 dir owner
+    for dir in $(find $pattern -maxdepth 0 2>/dev/null | head -20); do
+        found=1
+        if [ ! -d "$dir" ]; then
+            continue
+        fi
+        owner=$(stat -c '%u' "$dir" 2>/dev/null || echo '?')
+        if [ "$owner" != "$(id -u)" ]; then
+            bad "$label 属主是 $owner，应为 $(id -u)：$dir"
+        elif touch "$dir/.hdsl-probe" 2>/dev/null; then
+            rm -f "$dir/.hdsl-probe" 2>/dev/null
+            ok "$label 可写（$dir）"
+        else
+            bad "$label 不可写：$dir"
+        fi
+    done
+    if [ "$found" = 0 ]; then
+        echo "跳过  还没有 $label（先建一个再跑）"
+    fi
+}
+
+check_agent_tree "dsh 实例目录"   "/data/hdsl/instances/*"
+check_agent_tree "dsh 实例 home"  "/data/hdsl/instances/*/home"
+check_agent_tree "ZCode 实例 data" "/data/zcode/instances/*/data"
+check_agent_tree "MC 实例目录"    "/data/minecraft/instances/*"
+
+# 品牌：releases 里每个版本都是 pnpm 以 agent 身份写进去的
+brand_releases=$(find /data/brands -mindepth 3 -maxdepth 3 -type d -path '*/releases/*' 2>/dev/null | head -20)
+if [ -n "$brand_releases" ]; then
+    for dir in $brand_releases; do
+        owner=$(stat -c '%u' "$dir" 2>/dev/null || echo '?')
+        if [ "$owner" != "$(id -u)" ]; then
+            bad "品牌版本目录属主是 $owner，应为 $(id -u)：$dir"
+        else
+            ok "品牌版本目录可写（$dir）"
+        fi
+    done
+else
+    echo "跳过  还没有品牌版本（先装一个再跑）"
+fi
+
+# 9. 共享缓存：pnpm store 与 corepack home 归 root 的话，agent 的安装会失败在
+#    "EACCES" 或"又要下载一遍 pnpm"上
+for dir in /data/pnpm-store /data/corepack; do
+    if [ -d "$dir" ]; then
+        owner=$(stat -c '%u' "$dir" 2>/dev/null || echo '?')
+        if [ "$owner" != "$(id -u)" ]; then
+            bad "共享缓存属主是 $owner，应为 $(id -u)：$dir"
+        fi
+    else
+        echo "跳过  $dir 不存在"
+    fi
+done
+
 echo
 if [ "$fail" = 1 ]; then
     echo "结论：身份划分没有生效（或方向错了），见上面 FAIL 行"

@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.dsh;
 
+import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Unmodifiable;
@@ -115,6 +116,37 @@ public final class DshLauncher {
     /// @throws DshException when the selected runtime is missing or unsupported
     public static DshNodeRuntime resolveRuntimeForPnpm(DshInstance instance) throws DshException {
         return resolveRuntime(instance, true);
+    }
+
+    /// Hands an instance's own directories to the agent before anything runs in them.
+    ///
+    /// The panel creates `instances/<id>/` and its `home/` as root; the harness, its `pnpm`
+    /// installs and everything it writes afterwards run as the dropped uid. On a bare host
+    /// that is invisible (`/data` is the same user for both), and inside the container the
+    /// setgid volume papers over it — until the data directory is a plain bind mount, and then
+    /// a harness that cannot write `DSH_HOME` fails in ways that look like the harness's own
+    /// bugs. Same rule as a brand instance (see `BrandRuntime#handInstanceDirsToAgent`).
+    ///
+    /// Only paths inside the panel's own data root are touched: an instance may point its home
+    /// or workspace at the operator's directory, and changing the owner of that would be
+    /// changing their files.
+    ///
+    /// Idempotent, so it runs before every launch and heals an instance created by an older
+    /// panel.
+    ///
+    /// @param instance the instance about to be launched
+    /// @throws DshException when the instance's own paths cannot be resolved
+    static void prepareInstanceDirectories(DshInstance instance) throws DshException {
+        if (!Privileges.dropsChildren()) {
+            return;
+        }
+        Path root = DshPaths.ROOT.toAbsolutePath().normalize();
+        for (Path dir : List.of(instance.instanceDirectory(), instance.homeDirectory())) {
+            Path normalized = dir.toAbsolutePath().normalize();
+            if (normalized.startsWith(root)) {
+                Privileges.prepareAgentDirectory(normalized, Privileges.AGENT_SHARED_DIRECTORY);
+            }
+        }
     }
 
     /// The resolution itself, with "this work needs pnpm" as the flag.
@@ -289,6 +321,7 @@ public final class DshLauncher {
     public static LaunchPlan plan(DshInstance instance, @Nullable DshAccount account,
                                   @Nullable DshAccountRoute.Prepared prepared)
             throws DshException {
+        prepareInstanceDirectories(instance);
         DshNodeRuntime runtime = resolveRuntime(instance);
         // The instance runs its own copy, so there is nothing to look up: either
         // its copy is there or the instance is not ready to run.
