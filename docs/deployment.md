@@ -433,14 +433,24 @@ ERROR: failed to solve: node:22-bookworm-slim: failed to resolve source metadata
 docker.io/library/node:22-bookworm-slim: … dial tcp 208.77.47.172:443: connect: connection refused
 ```
 
-两条路，向导都支持：
+**默认已经避开了这条路**：向导在「国内镜像源」这一项上默认选 `docker.m.daocloud.io`，三个底座
+都从那里拉（镜像站会代理到 Docker Hub，三个底座的多架构 manifest 实测都在）。向导会把这一项
+弹成一个上下键菜单，一次把 npm、Node、底座三件事一起定下来：
+
+```
+镜像源（↑/↓ 选择，回车确认）
+❯ 国内镜像（推荐）｜npm→npmmirror，Node→腾讯，底座→docker.m.daocloud.io
+  国内镜像（备选）｜npm→npmmirror，Node→腾讯，底座→docker.1ms.run
+  官方源｜npm→npmjs.org，Node→nodejs.org，底座→Docker Hub
+```
+
+其它入口：
 
 ```bash
-# 1) 底座换到一个能连的仓库，构建仍在本地做（三个 FROM 一起换）
-./docker-install.sh --base-registry docker.m.daocloud.io
-
-# 2) 不构建，直接拉已发布的镜像（ghcr.io 通、Docker Hub 不通时最省事）
-./docker-install.sh --pull 0.6.54
+./docker-install.sh                          # 菜单：国内（推荐/备选）/ 官方
+./docker-install.sh --no-mirror              # 官方源：npmjs / nodejs.org / Docker Hub
+./docker-install.sh --base-registry docker.1ms.run   # 只换底座仓库，npm/Node 照旧
+./docker-install.sh --pull 0.6.54            # 不构建，直接拉已发布的镜像
 
 # 手工构建时对应三个 ARG
 docker build --build-arg HDSL_WEB_BASE=<仓库>/library/node:22-bookworm-slim \
@@ -448,9 +458,11 @@ docker build --build-arg HDSL_WEB_BASE=<仓库>/library/node:22-bookworm-slim \
              --build-arg HDSL_BASE=<仓库>/library/debian:trixie-slim .
 ```
 
-`--pull` 拉的是 `ghcr.io/nas200-timmy/hdsl-web:<版本>`（多架构 manifest，amd64/arm64 都会自动
-挑对），拉下来后按本地镜像名打标签，所以 `--no-build`、`--recreate` 等后续操作照旧认它。也可以在
-`/etc/docker/daemon.json` 配 `registry-mirrors`——那是全局设置，配一次所有 `docker pull` 都受益。
+底座仓库会被记进状态文件（`.docker-install.state` 的 `INSTALL_BASE_REGISTRY`），下次重跑不用再
+给；`--no-mirror`（官方源）会清掉它。`--pull` 拉的是 `ghcr.io/nas200-timmy/hdsl-web:<版本>`
+（多架构 manifest，amd64/arm64 自动挑对），拉下来后按本地镜像名打标签，所以 `--no-build`、
+`--recreate` 等后续操作照旧认它。也可以在 `/etc/docker/daemon.json` 配 `registry-mirrors`——
+那是全局设置，配一次所有 `docker pull` 都受益（包括构建时的底座）。
 
 ---
 

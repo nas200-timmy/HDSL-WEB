@@ -39,6 +39,12 @@ DEFAULT_JAVA_OPTS="-Xmx1g"
 NPM_MIRROR="https://registry.npmmirror.com/"
 NODE_MIRROR_CN="https://mirrors.cloud.tencent.com/nodejs-release"
 NODE_MIRROR_OFFICIAL="https://nodejs.org/dist"
+# 底座镜像默认走哪个仓库。Docker Hub 在国内网络下经常整个连不上（`registry-1.docker.io`
+# 直接 connection refused），而底座拉不到就一步都走不下去；DaoCloud 的镜像站实测三个底座
+# （node / eclipse-temurin / debian）的多架构 manifest 都在。要回官方用 `--no-mirror`
+# 或 `--base-registry docker.io`。
+DEFAULT_BASE_REGISTRY="docker.m.daocloud.io"
+BASE_REGISTRY_ALT="docker.1ms.run"
 
 # ── 命令行参数 ────────────────────────────────────────────────────────────────
 
@@ -81,9 +87,12 @@ usage() {
   --bind <地址>                   监听地址（默认 0.0.0.0；只本机用 127.0.0.1）
   --name <容器名>                 默认 hdsl-web
   --password <口令>               首启管理员口令（默认留空 = 网页初始化引导）
-  --mirror | --no-mirror          国内镜像源（npm 用 npmmirror，Node 用腾讯）
-  --base-registry <前缀>          底座镜像从哪个仓库拉（如 docker.m.daocloud.io）。
-                                  只在「Docker Hub 连不上、但某个镜像仓库能连」时用；
+  --mirror | --no-mirror          镜像源：国内（npm→npmmirror、Node→腾讯、底座→docker.m.daocloud.io）
+                                  或官方（npmjs / nodejs.org / Docker Hub）。
+                                  不给这个参数时会弹一个上下键菜单，一次把三者都定下来。
+  --base-registry <前缀>          底座镜像从哪个仓库拉，默认 docker.m.daocloud.io。
+                                  给了它就只改底座仓库（npm/Node 那半仍按上次的镜像源）；
+                                  想回 Docker Hub 用 --base-registry docker.io 或 --no-mirror。
                                   构建本身仍在本地做，只是三个 FROM 换了仓库。
   --pull <版本|镜像>              不构建，直接拉已发布的镜像
                                   （ghcr.io/nas200-timmy/hdsl-web:<版本>）。
@@ -195,6 +204,57 @@ ask_password() {
     read -r -s -p "  管理员口令（留空 = 打开网页走初始化引导）: " answer || true
     printf '\n' >&2
     printf '%s' "$answer"
+}
+
+# 上下键单选。stdout 只输出选中项的序号（从 1 起），标题和列表画到 stderr——
+# 和 ask 一样的约定，`$(select_one …)` 拿到的永远是一个数字。
+#
+# 每一项的写法是「名字｜说明」，屏幕上整体显示，返回序号；说明里不要放换行。
+#
+# --yes、或 stdin 不是终端（宿主 agent、管道、CI）时直接取 SELECT_DEFAULT，并把选了哪一项
+# 打到 stderr：非交互的日志里也要看得出用的是哪一套源。
+select_one() {
+    local title=$1
+    shift
+    local -a items=("$@")
+    local count=${#items[@]}
+    local sel=$(( ${SELECT_DEFAULT:-1} - 1 ))
+    if [ "$sel" -lt 0 ] || [ "$sel" -ge "$count" ]; then sel=0; fi
+
+    if [ "$ASSUME_YES" = 1 ] || [ ! -t 0 ]; then
+        printf '  %s → %s\n' "$title" "${items[$sel]%%｜*}" >&2
+        printf '%s' "$((sel + 1))"
+        return 0
+    fi
+
+    local i key rest line
+    printf '  %s（↑/↓ 选择，回车确认）\n' "$title" >&2
+    # 先占住位置：之后每一轮都是「上移 count 行、整块重画」，屏幕不会越滚越长。
+    for i in "${!items[@]}"; do printf '\n' >&2; done
+    while :; do
+        printf '\033[%dA' "$count" >&2
+        for i in "${!items[@]}"; do
+            if [ "$i" = "$sel" ]; then
+                line="  ❯ ${items[$i]}"
+            else
+                line="    ${items[$i]}"
+            fi
+            printf '\r\033[K%s\n' "$line" >&2
+        done
+        IFS= read -rsn1 key || true
+        case "$key" in
+            '') break ;;                      # 回车
+            $'\x03') printf '\n' >&2; exit 130 ;;   # Ctrl-C
+            $'\x1b')
+                IFS= read -rsn2 rest || true
+                case "$rest" in
+                    '[A') sel=$(( (sel - 1 + count) % count )) ;;
+                    '[B') sel=$(( (sel + 1) % count )) ;;
+                esac
+                ;;
+        esac
+    done
+    printf '%s' "$((sel + 1))"
 }
 
 confirm() {
@@ -627,12 +687,20 @@ build_image() {
         # dial tcp … connection refused）不会告诉任何人还有哪两条路可走。
         if grep -qiE "load metadata|failed to resolve source metadata|registry-1\.docker\.io|pull access denied|dial tcp" "$log"; then
             say ""
-            say "  !! 构建卡在拉底座镜像这一步（Docker Hub 不可达或限流）。两条路："
-            say "  !!   1. 换一个能连的仓库再构建："
-            say "  !!      ./docker-install.sh --base-registry docker.m.daocloud.io …"
-            say "  !!   2. 不构建，直接拉已发布的镜像："
-            say "  !!      ./docker-install.sh --pull $(last_tag | sed 's/^v//') …"
-            say "  !! 也可以在 /etc/docker/daemon.json 配 registry-mirrors，那是全局设置。"
+            if [ -n "$BASE_REGISTRY" ]; then
+                say "  !! 构建卡在拉底座镜像这一步，而底座已经走的是 ${BASE_REGISTRY}。"
+                say "  !! 换一个仓库，或者直接拉已发布的镜像："
+                say "  !!   ./docker-install.sh --base-registry ${BASE_REGISTRY_ALT} …   # 换备选镜像站"
+                say "  !!   ./docker-install.sh --pull $(last_tag | sed 's/^v//') …        # 不构建"
+            else
+                say "  !! 构建卡在拉底座镜像这一步（Docker Hub 不可达或限流），而底座走的是 Docker Hub。"
+                say "  !! 换一个能连的仓库，或者直接拉已发布的镜像："
+                say "  !!   ./docker-install.sh --mirror …                        # 国内镜像站"
+                say "  !!   ./docker-install.sh --base-registry ${BASE_REGISTRY_ALT} …   # 换这个镜像站"
+                say "  !!   ./docker-install.sh --pull $(last_tag | sed 's/^v//') …        # 不构建"
+            fi
+            say "  !! 也可以在 /etc/docker/daemon.json 配 registry-mirrors，那是全局设置（配一次，"
+            say "  !! 所有 docker pull 都受益，包括构建时的底座）。"
         fi
         rm -f "$log"
         die "镜像构建失败"
@@ -793,8 +861,29 @@ BIND=$(ask "监听地址（0.0.0.0=局域网，127.0.0.1=只本机）" "$BIND")
 if [ "$PASSWORD_SET" = 0 ]; then
     PASSWORD=$(ask_password)
 fi
-if [ -z "$MIRROR" ]; then
-    MIRROR=$(ask "国内镜像源（npm 走 npmmirror、Node 走腾讯）" "yes")
+if [ -z "$MIRROR" ] && [ "$BASE_REGISTRY_SET" = 0 ]; then
+    # 一个菜单同时决定 npm/Node 和底座仓库：这三个来源本来就是一件事（能不能连上），
+    # 分成两个问题问，答案还可能互相矛盾。
+    # 默认项跟着上次走：上次选了官方源 → 停在"官方源"；上次记着备选仓库 → 停在备选。
+    if [ "${PREV_MIRROR:-yes}" = no ]; then
+        SELECT_DEFAULT=3
+    elif [ "${PREV_BASE_REGISTRY:-}" = "$BASE_REGISTRY_ALT" ]; then
+        SELECT_DEFAULT=2
+    else
+        SELECT_DEFAULT=1
+    fi
+    mirror_choice=$(select_one "镜像源" \
+        "国内镜像（推荐）｜npm→npmmirror，Node→腾讯，底座→${DEFAULT_BASE_REGISTRY}" \
+        "国内镜像（备选）｜npm→npmmirror，Node→腾讯，底座→${BASE_REGISTRY_ALT}" \
+        "官方源｜npm→npmjs.org，Node→nodejs.org，底座→Docker Hub")
+    case "$mirror_choice" in
+        1) MIRROR=yes; BASE_REGISTRY="$DEFAULT_BASE_REGISTRY"; BASE_REGISTRY_SET=1 ;;
+        2) MIRROR=yes; BASE_REGISTRY="$BASE_REGISTRY_ALT";     BASE_REGISTRY_SET=1 ;;
+        *) MIRROR=no ;;
+    esac
+elif [ -z "$MIRROR" ]; then
+    # 仓库已经用 --base-registry 点名了，菜单里那三套会把答案盖掉；只问 npm/Node 这半。
+    MIRROR="${PREV_MIRROR:-yes}"
 fi
 
 case "$MIRROR" in
@@ -802,12 +891,12 @@ case "$MIRROR" in
     *)               MIRROR_MODE=no;  NPM_REGISTRY="https://registry.npmjs.org/"; NODE_DIST_MIRROR="$NODE_MIRROR_OFFICIAL" ;;
 esac
 
-# 底座仓库的默认值：命令行 > 上次记住的 > 不指定（Docker Hub）。
+# 底座仓库的默认值：命令行 > 上次记住的 > 默认镜像站。
 # 走官方源（--no-mirror）时把上次记住的仓库清掉，除非这次又显式给了——"官方源"就该
 # 三个来源全是官方的，只清 npm 和 Node 会留下一个别人看不懂的不一致。
 if [ "$BASE_REGISTRY_SET" = 0 ]; then
     if [ "$MIRROR_MODE" = yes ]; then
-        BASE_REGISTRY="${PREV_BASE_REGISTRY:-}"
+        BASE_REGISTRY="${PREV_BASE_REGISTRY:-$DEFAULT_BASE_REGISTRY}"
     else
         BASE_REGISTRY=""
     fi
@@ -950,7 +1039,7 @@ elif [ -n "$BASE_REGISTRY" ]; then
 else
     say "  来源：本地构建"
 fi
-say "  镜像源：$MIRROR_MODE"
+say "  镜像源：$([ "$MIRROR_MODE" = yes ] && echo '国内（npm→npmmirror，Node→腾讯）' || echo '官方（npmjs / nodejs.org）')"
 say "  jar 版本：$([ "$RELEASE" = 1 ] && echo "发布 $RELEASE_VERSION" || echo '开发版 0.1.0-dev（--release 用最后的标签）')"
 say "  口令：$([ -n "$PASSWORD" ] && echo '已设置' || echo '留空，打开网页走初始化引导')"
 

@@ -18,6 +18,16 @@
 - 顺手修一个真 bug：`--base fedora` / `--base opensuse` 的 `HDSL_BASE`、`HDSL_ENCODERS`
   **只在 dry-run 里打印过，真构建时一个都没传**——选 Fedora 会静默构建出 Debian 的镜像。
 
+**`docker-install.sh`：默认走国内镜像站，镜像源改成一个上下键菜单**
+
+- 底座仓库默认改成 `docker.m.daocloud.io`（三个底座的多架构 manifest 实测都在），
+  不用再每次补 `--base-registry`；要回官方用 `--no-mirror` 或 `--base-registry docker.io`。
+- 「国内镜像源」这一问改成菜单，一次把 npm、Node、底座三件事一起定下来：
+  国内（推荐，底座 DaoCloud）/ 国内（备选，底座 `docker.1ms.run`）/ 官方源。
+  默认项跟着上次走；`--yes` 或非 TTY 时直接取默认项并在 stderr 说明选了哪个。
+- `--base-registry` 记进状态文件（`INSTALL_BASE_REGISTRY`），重跑不用再给；`--no-mirror` 清掉它。
+  显式给了 `--base-registry` 时不再弹那个菜单的仓库部分（否则会把答案盖掉）。
+
 ## v0.6.54 — 2026-11-01 · 小版本：终端可以同时开了（虚拟线程把 carrier 钉光）
 
 > 起因：开一个终端正常，开第二个（另一个品牌）只有闪烁的光标。查下来不是"只能单线程"，
