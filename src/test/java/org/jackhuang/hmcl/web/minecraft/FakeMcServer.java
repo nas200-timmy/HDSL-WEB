@@ -36,6 +36,11 @@ public final class FakeMcServer {
 
     public static void main(String[] args) throws Exception {
         String mode = args.length > 0 ? args[0].toLowerCase(Locale.ROOT) : "ok";
+        if (mode.equals("silent")) {
+            // A child that dies before its first byte — the shape a permission or exec
+            // failure takes, and the one the panel has to explain without any output.
+            System.exit(1);
+        }
         System.out.println("[Server thread/INFO]: Starting minecraft server version 1.21.4");
         System.out.flush();
         if (mode.equals("crash")) {

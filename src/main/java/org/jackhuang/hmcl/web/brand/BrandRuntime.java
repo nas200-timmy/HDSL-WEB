@@ -688,6 +688,7 @@ public final class BrandRuntime {
     /// `<home>/octop-admin.txt` (0600) once; later launches leave it alone.
     private static void ensureOctopInitialized(Path packageDir, Path home, Path logFile) throws IOException {
         if (Files.isRegularFile(home.resolve("octop.db"))) {
+            handOctopState(home);
             return;
         }
         Path sourceOctop = packageDir.resolve(".venv/bin/octop");
@@ -709,7 +710,11 @@ public final class BrandRuntime {
         command.add("admin");
         command.add("--admin-password");
         command.add(password);
-        ProcessBuilder builder = new ProcessBuilder(command);
+        // As the agent, not as the panel: `octop init` writes the control-plane database and
+        // `plugins/` into `home`, and the runtime that opens them later is the dropped uid.
+        // Running the initializer as root is exactly how `octop.db` came out `root:root 600`
+        // and the runtime died with `sqlite3.OperationalError: unable to open database file`.
+        ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command));
         builder.directory(home.toFile());
         builder.redirectErrorStream(true);
         builder.environment().put("HOME", home.toString());
@@ -806,7 +811,34 @@ public final class BrandRuntime {
         }
         Files.writeString(logFile, text, StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        handOctopState(home);
         LOG.info("Initialised Octop at " + home + " (admin credentials in octop-admin.txt)");
+    }
+
+    /// Makes sure the state Octop's runtime must open belongs to the agent.
+    ///
+    /// An instance initialised by an older panel has `octop.db`, `credential.txt` and
+    /// `plugins/` owned by root (the initializer ran as the panel user), while the runtime is
+    /// the dropped uid: the first thing Octop does is open that database, so the instance died
+    /// at boot with `sqlite3.OperationalError: unable to open database file` — with nothing in
+    /// its own log to say why. Repairing on every launch is what makes those instances start
+    /// again after an upgrade, without a hand-run `chown`.
+    ///
+    /// Cheap when there is nothing to do: one `stat` on the database decides it.
+    ///
+    /// @param home the instance home
+    private static void handOctopState(Path home) {
+        if (!Privileges.dropsChildren()) {
+            return;
+        }
+        Path db = home.resolve("octop.db");
+        int owner = Privileges.ownerOf(db);
+        if (owner < 0 || owner == Privileges.AGENT_UID) {
+            return;
+        }
+        int handed = Privileges.handTreeToAgent(home);
+        LOG.info("Handed " + handed + " entries of the Octop state at " + home
+                + " to the agent (it was created as root, uid " + owner + ")");
     }
 
     /// Polls Octop's `/api/health` until it answers or the process dies. Its

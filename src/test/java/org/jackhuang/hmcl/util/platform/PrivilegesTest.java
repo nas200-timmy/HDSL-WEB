@@ -225,4 +225,34 @@ class PrivilegesTest {
         assertTrue(Files.isRegularFile(blocker), "the blocker is untouched");
         assertFalse(Files.exists(blocker.resolve("below")), "and nothing was created under it");
     }
+
+    /// Handing a whole tree over must not touch modes: such a tree holds executables
+    /// (`.venv/bin/octop`), and a file mode applied to those takes the execute bit away. It
+    /// must also skip symlinks — `chown` follows them, and a link inside an instance may point
+    /// anywhere.
+    @Test
+    void handingATreeKeepsEveryModeAndFollowsNoLink(@TempDir Path directory) throws Exception {
+        Path root = Files.createDirectories(directory.resolve("home"));
+        Path script = Files.writeString(root.resolve("run.sh"), "#!/bin/sh\n");
+        Files.setPosixFilePermissions(script, java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+        Path data = Files.createDirectories(root.resolve("plugins"));
+        Path outside = Files.writeString(directory.resolve("outside.txt"), "x");
+        Path link = root.resolve("escape");
+        try {
+            Files.createSymbolicLink(link, outside);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            link = null; // no symlinks on this filesystem: the rest still holds
+        }
+        var before = org.jackhuang.hmcl.util.PosixPermissions.of(script);
+
+        Privileges.handTreeToAgent(root);
+
+        assertEquals(before, org.jackhuang.hmcl.util.PosixPermissions.of(script),
+                "a tree hand-over changes owners, never modes");
+        assertTrue(Files.isDirectory(data));
+        if (link != null) {
+            assertTrue(Files.isSymbolicLink(link), "the link itself stays a link");
+        }
+        assertEquals(Files.exists(outside), true, "and the file it points at is untouched");
+    }
 }

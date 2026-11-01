@@ -135,6 +135,23 @@ class McRuntimeTest {
         assertNotNull(status.error());
     }
 
+    /// A server that dies before it prints anything is the shape a permission or exec failure
+    /// takes (the reported one: the instance directory was root's while the server ran as the
+    /// agent). "code 1" alone sends people to look at Minecraft, so the message says the child
+    /// never spoke and what to check.
+    @Test
+    void aServerThatDiesWithoutPrintingSaysSo() throws Exception {
+        McInstance instance = installedInstance("mute", "1.21.4");
+        McRuntime runtime = runtime("silent");
+
+        runtime.launch(instance.id());
+        McRuntime.Status status = await(runtime, instance.id(), McRuntime.State.FAILED);
+        assertEquals(McRuntime.State.FAILED, status.state());
+        assertNotNull(status.error());
+        assertTrue(status.error().contains("printed nothing at all"), status.error());
+        assertTrue(status.error().contains(McInstanceManager.SERVER_JAR_NAME), status.error());
+    }
+
     @Test
     void aMissingJarOrEulaIsRefusedBeforeAnythingIsSpawned() throws Exception {
         McInstance instance = manager.create("bare", "1.21.4", 25566, 25576, 1024, "world", null);

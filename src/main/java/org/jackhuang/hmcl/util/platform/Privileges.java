@@ -253,6 +253,62 @@ public final class Privileges {
         handToAgent(dir, permissions);
     }
 
+    /// Hands every entry under `root` to the agent, keeping each mode as it is.
+    ///
+    /// For state the panel created **before** the agent ever ran: `octop init` used to run as
+    /// the panel user, which left a root-owned `octop.db` and `plugins/` behind, and the
+    /// runtime — a different uid — then died on the first thing it does:
+    /// `sqlite3.OperationalError: unable to open database file`. The cure is to run such an
+    /// initializer as the agent (which is what the callers do now); this is the repair for
+    /// the trees it already wrote.
+    ///
+    /// Ownership only, no mode: the tree may hold executables (`.venv/bin/octop`), and
+    /// applying a file mode to them would take away the execute bit the runtime needs.
+    /// Symlinks are skipped rather than followed — a link inside an instance may point
+    /// anywhere, and `chown` through it would reach outside the instance.
+    ///
+    /// @param root the directory to hand over
+    /// @return how many entries changed owner
+    public static int handTreeToAgent(Path root) {
+        if (!DROP_CHILDREN || !Files.isDirectory(root)) {
+            return 0;
+        }
+        int[] handed = {0};
+        try (java.util.stream.Stream<Path> entries = Files.walk(root)) {
+            for (Path path : entries.toList()) {
+                if (Files.isSymbolicLink(path)) {
+                    continue;
+                }
+                try {
+                    // NOFOLLOW here as well: `setAttribute` follows links by default, and a
+                    // symlinked entry would otherwise chown its target.
+                    Files.setAttribute(path, "unix:uid", AGENT_UID, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                    Files.setAttribute(path, "unix:gid", AGENT_UID, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                    handed[0]++;
+                } catch (UnsupportedOperationException | IOException | IllegalArgumentException e) {
+                    org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                            "Could not hand " + path + " to uid " + AGENT_UID + ": " + e);
+                }
+            }
+        } catch (IOException e) {
+            org.jackhuang.hmcl.util.logging.Logger.LOG.warning("Could not walk " + root, e);
+        }
+        return handed[0];
+    }
+
+    /// The owner of a file or directory, or `-1` where the platform has no such notion.
+    ///
+    /// @param path the entry
+    /// @return the uid, or `-1`
+    public static int ownerOf(Path path) {
+        try {
+            Object uid = Files.getAttribute(path, "unix:uid", java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            return uid instanceof Integer value ? value : -1;
+        } catch (UnsupportedOperationException | IOException | IllegalArgumentException e) {
+            return -1;
+        }
+    }
+
     /// Whether this is a root process outside a container: the panel and every
     /// agent it starts share that identity, which the startup banner says out
     /// loud because nothing in the process can fix it.

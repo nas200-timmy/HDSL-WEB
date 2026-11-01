@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.minecraft;
 
+import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jackhuang.hmcl.util.platform.VirtualThreads;
 import org.jackhuang.hmcl.web.terminal.TerminalManager;
 import org.jackhuang.hmcl.web.terminal.TerminalSession;
@@ -278,6 +279,13 @@ public final class McRuntime {
             throw new McException("the EULA has not been accepted for this instance");
         }
         checkJava(instance);
+        // The server runs as the agent (see the PTY spawn's `Privileges.asAgent`), and the
+        // panel is the one that created the instance directory and wrote `server.jar` into it.
+        // Same rule as a brand instance: whatever the panel made for an agent's process has to
+        // be the agent's. Without it the child can start and then die before Minecraft writes
+        // its first log line — which reads as "exited before it was ready (code 1)" with no
+        // output at all.
+        prepareDirectories(instance);
 
         if (!PTY_SUPPORTED) {
             launchPipe(instance);
@@ -314,7 +322,12 @@ public final class McRuntime {
             }
             if (!readyReached && previous != State.STOPPING) {
                 states.put(id, State.FAILED);
-                errors.put(id, "the server exited before it was ready (code " + session.exitCode() + ")");
+                errors.put(id, "the server exited before it was ready (code " + session.exitCode() + ")"
+                        + (session.silentFailure()
+                                ? " — it printed nothing at all, which is what a child that could not"
+                                  + " start looks like: check that the server's user can read "
+                                  + McInstanceManager.SERVER_JAR_NAME + " and write the instance directory"
+                                : ""));
             } else {
                 states.put(id, State.STOPPED);
             }
@@ -559,6 +572,37 @@ public final class McRuntime {
             return accepted;
         } catch (IOException e) {
             return false;
+        }
+    }
+
+    /// Hands the instance's directory and jar to the agent before a server is spawned.
+    ///
+    /// The panel is the one that created the instance directory and wrote `server.jar` into
+    /// it, and the server itself runs as the dropped uid. On a host whose `/data` is a plain
+    /// bind mount (no setgid, umask 022) those come out `root:root 0755`: the jar is readable,
+    /// but the child cannot create `world/`, `logs/` or `crash-reports/`, and Java exits
+    /// before Minecraft writes anything — the panel can then only report "exited before it was
+    /// ready (code 1)" with an empty console.
+    ///
+    /// Cheap when there is nothing to do: one `stat` on the jar decides it, and everything
+    /// below is skipped outside a container where children are not dropped.
+    ///
+    /// @param instance the instance about to be started
+    /// @throws McException when the server's user cannot read the jar even after the hand-over
+    private void prepareDirectories(McInstance instance) throws McException {
+        Path directory = manager.instanceDirectory(instance.id());
+        Path jar = manager.serverJar(instance);
+        if (!Privileges.dropsChildren() || Privileges.ownerOf(jar) == Privileges.AGENT_UID) {
+            return;
+        }
+        int handed = Privileges.handTreeToAgent(directory);
+        LOG.info("Handed " + handed + " entries of the Minecraft instance " + instance.id()
+                + " to the agent (it was created as root)");
+        // The jar is the one file a refusal can be built on: without read access the server
+        // cannot start at all, and saying that is better than watching java exit by itself.
+        if (!Files.isReadable(jar)) {
+            throw new McException(McInstanceManager.SERVER_JAR_NAME + " is not readable by the "
+                    + "server's user: " + jar);
         }
     }
 

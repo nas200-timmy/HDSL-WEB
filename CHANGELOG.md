@@ -4,6 +4,28 @@
 
 ## 未发布
 
+**根建的文件交给 agent：Octop 打不开自己的库，MC 服务器起不来**
+
+- 症状一（Octop 品牌）：实例启动即死，日志里是
+  `sqlite3.OperationalError: unable to open database file`。
+- 症状二（MC 实例）：点启动立刻变成 `failed: the server exited before it was ready (code 1)`，
+  控制台 0 字节，`logs/`、`world/` 一个都没生成；把同一条 `java -jar server.jar nogui` 拿到
+  面板外面跑，18 秒就 `Done`。
+- 同一个原因：**面板（root）创建的东西，交给 agent（uid 1000）的进程去用**。
+  - Octop：`octop init` 原来是面板以 root 跑的，`octop.db`、`credential.txt`、`plugins/` 全成了
+    `root:root 600`，而运行时是 hdsl——它开机第一件事就是打开那个库。
+  - MC：实例目录与 `server.jar` 同样是 root 建的；`/data` 若不是 setgid（宿主 bind mount、
+    umask 022），子进程连 `logs/` 都建不出来，Java 在 Minecraft 写第一行日志之前就退出。
+- 修法：
+  - `octop init` 改为以 agent 身份执行（`Privileges.asAgent`），新建的实例一开始就是对的；
+    老实例在下次启动时由 `handOctopState` 把整棵树交给 agent（只改属主、不动 mode）。
+  - MC 启动前调 `prepareDirectories`：先看 `server.jar` 的属主，不是 agent 就把实例树交过去；
+    交完仍读不到 jar 就直接拒绝并点名文件，而不是让孩子自己退出。
+  - 子进程一个字节都没输出就退出时，错误信息补一句"它什么都没打印"和该查什么（jar 可读性 /
+    目录可写性），而不是只给一个 `code 1`。
+  - `Privileges.handTreeToAgent`：整树只改属主（保留 mode，`.venv/bin` 的可执行位不能被抹），
+    且跳过符号链接（`chown` 会跟随链接，实例里的链接可能指向外面）。
+
 **`docker-install.sh`：Docker Hub 拉不到底座时，现在有两条路**
 
 - 症状：`docker-install.sh` 在构建第一步就死——`failed to resolve source metadata for
