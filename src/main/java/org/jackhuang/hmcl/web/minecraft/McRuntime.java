@@ -460,7 +460,11 @@ public final class McRuntime {
         PipeServer pipe = new PipeServer(process, manager.logFile(instance));
         pipes.put(id, pipe);
         process.onExit().thenRun(() -> finish(id, process.exitValue(), ready));
-        VirtualThreads.start(() -> pumpPipe(pipe, ready));
+        // The pipe pump blocks in a native read for as long as the server runs, so it is a
+        // platform thread: a virtual one pins its carrier for that whole time, and one server
+        // on a one-core machine would take the only carrier there is. See
+        // VirtualThreads#startPlatform for the terminal that hit this first.
+        VirtualThreads.startPlatform(() -> pumpPipe(pipe, ready), "hdsl-mc-pipe-" + id);
         ready.orTimeout(READY_TIMEOUT_SECONDS, TimeUnit.SECONDS).whenComplete((ignored, error) -> {
             if (error != null) {
                 states.put(id, State.FAILED);

@@ -344,7 +344,22 @@ public final class TaskService {
     }
 
     private final EventBus bus;
-    private final ExecutorService executor = VirtualThreads.newPerTaskExecutor();
+    /// One thread per task, and deliberately a **platform** thread.
+    ///
+    /// Task work here is a child process end to end: `pnpm install`, `npm ci`, an MC server
+    /// boot. It waits in `Process.waitFor()` and reads pipes — native calls, which a virtual
+    /// thread cannot unmount from, so every running task pins its carrier for as long as the
+    /// install takes (minutes). On a 1-core machine that is the whole carrier pool.
+    ///
+    /// This is also what the JDK 17 fallback of [VirtualThreads#newPerTaskExecutor] already
+    /// did; on 21 it silently became virtual threads. Virtual threads get their turn in the
+    /// I/O-bound places (HTTP, sockets), not here.
+    private final ExecutorService executor = java.util.concurrent.Executors.newCachedThreadPool(
+            runnable -> {
+                Thread thread = new Thread(runnable, "hdsl-task");
+                thread.setDaemon(true);
+                return thread;
+            });
     private final Semaphore installSlots = new Semaphore(MAX_INSTALLS);
     private final ConcurrentHashMap<String, Task> tasks = new ConcurrentHashMap<>();
     /// Instance id → the install task currently working on it.

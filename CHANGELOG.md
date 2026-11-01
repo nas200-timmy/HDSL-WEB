@@ -15,6 +15,15 @@
 - 现在这三个循环走新增的 `VirtualThreads.startPlatform`（daemon 平台线程）。这条规则别处早就
   是这么写的：`BrandRuntime`、`ZcodeRuntime`、`DshAcpClient` 的子进程输出泵一直是
   `new Thread(...)`，PTY 是唯一用了虚拟线程的那个。
+- **同一条规则一次收干净**（否则只是把同一颗雷往别处挪）：
+  - `TaskService` 的任务线程：安装/启动全程在等子进程（`Process.waitFor`）和读管道，一个任务
+    就钉住一个 carrier 几分钟。改回平台线程池——这也正是 JDK 17 上本来就走的路径，21 上"顺手
+    变成虚拟线程"才是那次偏差。
+  - MC 服务器的管道泵（`McRuntime.pumpPipe`）：一个服务器进程跑多久，它就在本地 read 里等多久。
+  - 这样"会阻塞在本地调用里"的活（PTY、子进程管道、`waitpid`）全在平台线程上；虚拟线程只留给
+    真正会被 JDK 卸载的 I/O（HTTP、socket、`Thread.sleep`）。
+- 核数无关：每个终端固定 2 条平台线程，不再占用 carrier。1 核能开两个终端（只是慢），24/64 核
+  更不会有原来的悬崖。
 - 测试：`VirtualThreadsPlatformTest`（`startPlatform` 必须是 daemon 且不是虚拟线程）、
   `TerminalManagerTest.twoTerminalsOfTwoBrandsBothProduceTheirOwnOutput`（两个品牌同时开、
   各收各的字节）。
