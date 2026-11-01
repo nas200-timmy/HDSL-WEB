@@ -234,7 +234,9 @@ class TerminalSessionTest {
         assertEquals(0, doubleRuns.get(), "a listener must not be run twice");
     }
 
-    private static final class Collector implements TerminalSink {
+    /// Package-private so the manager's multi-terminal test can reuse it: a sink that keeps
+    /// what it was sent and can be waited on.
+    static final class Collector implements TerminalSink {
 
         private final StringBuilder text = new StringBuilder();
         private final java.util.concurrent.CountDownLatch exit = new java.util.concurrent.CountDownLatch(1);

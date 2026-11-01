@@ -190,8 +190,12 @@ public final class ConPty implements Pty {
         this.process = process;
         this.job = job;
         this.thread = thread;
-        this.pump = VirtualThreads.start(this::pump);
-        VirtualThreads.start(this::reap);
+        // Platform threads, not virtual ones: the pump blocks in a native read and
+        // the reaper in a wait-for-the-process downcall, and a virtual thread cannot
+        // unmount while one of those runs — two carriers per terminal, which is how
+        // a second terminal starves on a small machine (see VirtualThreads#startPlatform).
+        this.pump = VirtualThreads.startPlatform(this::pump, "hdsl-conpty-pump");
+        VirtualThreads.startPlatform(this::reap, "hdsl-conpty-reap");
     }
 
     /// Whether this machine can run a browser terminal at all.

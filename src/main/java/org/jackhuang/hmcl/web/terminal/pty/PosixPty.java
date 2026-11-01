@@ -151,8 +151,13 @@ final class PosixPty implements Pty {
         this.master = new MasterFd(syscalls, masterFd);
         this.syscalls = syscalls;
         this.pid = pid;
-        this.pump = VirtualThreads.start(this::pump);
-        VirtualThreads.start(this::reap);
+        // Platform threads, not virtual ones: both of these block inside a native
+        // call (`poll`+`read`, `waitpid`) and a virtual thread cannot unmount while
+        // that runs. Two per terminal — four for two terminals on a 4-core box —
+        // pinned every carrier, and the second terminal's pump never started: the
+        // child ran, the socket was up, the screen stayed empty.
+        this.pump = VirtualThreads.startPlatform(this::pump, "hdsl-pty-" + pid);
+        VirtualThreads.startPlatform(this::reap, "hdsl-pty-reap-" + pid);
     }
 
     /// Starts `command` on a new pseudo terminal.

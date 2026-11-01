@@ -85,7 +85,12 @@ public final class TerminalSession {
         this.instanceId = instanceId;
         this.pty = pty;
         this.replay = new byte[replayBytes];
-        this.pump = VirtualThreads.start(this::pump);
+        // A platform thread for the same reason the PTY's own pump is one: this
+        // loop blocks inside a native read, which pins whatever thread runs it.
+        // Two virtual threads per terminal (this one and the PTY's reaper) were
+        // enough to take every carrier of a 4-core box and leave the second
+        // terminal's pump unscheduled — a running child behind an empty screen.
+        this.pump = VirtualThreads.startPlatform(this::pump, "hdsl-terminal-" + instanceId);
     }
 
     public String instanceId() {

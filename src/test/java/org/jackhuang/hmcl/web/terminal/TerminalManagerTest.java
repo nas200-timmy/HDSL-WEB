@@ -91,6 +91,36 @@ class TerminalManagerTest {
         assertTrue(manager.size() == 0);
     }
 
+    /// Two terminals of **different brands**, both live at the same time, each with its own
+    /// bytes. The reported failure was exactly this: the first brand's terminal worked and the
+    /// second sat at a blinking cursor, because the pump of the second one never got a thread
+    /// (see [VirtualThreads#startPlatform] — the PTY pumps used to be virtual, and a blocked
+    /// native read pins its carrier, of which a small machine has one per core).
+    @Test
+    void twoTerminalsOfTwoBrandsBothProduceTheirOwnOutput() throws Exception {
+        try (TerminalManager manager = new TerminalManager(1024)) {
+            TerminalSession kimi = manager.open(target("kimi", "i5"), new PtySize(80, 24));
+            TerminalSession kimiAgain = manager.open(target("opencode", "i6"), new PtySize(80, 24));
+            TerminalSessionTest.Collector first = new TerminalSessionTest.Collector();
+            TerminalSessionTest.Collector second = new TerminalSessionTest.Collector();
+            kimi.attach(first);
+            kimiAgain.attach(second);
+
+            kimi.input().write("first-terminal\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            kimi.input().flush();
+            kimiAgain.input().write("second-terminal\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            kimiAgain.input().flush();
+
+            first.await("first-terminal", Duration.ofSeconds(10));
+            second.await("second-terminal", Duration.ofSeconds(10));
+            // `/bin/cat` echoes; each session's output must not appear in the other's screen.
+            assertTrue(!first.text().contains("second-terminal"), first.text());
+            assertTrue(!second.text().contains("first-terminal"), second.text());
+            assertTrue(kimi.state() == TerminalSession.State.RUNNING);
+            assertTrue(kimiAgain.state() == TerminalSession.State.RUNNING);
+        }
+    }
+
     private static TerminalTarget target(String brand, String instanceId) {
         return new TerminalTarget(brand, instanceId, List.of("/bin/cat"),
                 Path.of("/tmp"), ENV);

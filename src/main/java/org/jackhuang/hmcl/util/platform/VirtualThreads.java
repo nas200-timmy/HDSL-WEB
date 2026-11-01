@@ -99,4 +99,29 @@ public final class VirtualThreads {
             return null;
         }
     }
+
+    /// Starts `task` on a daemon **platform** thread, named `name`.
+    ///
+    /// For work that blocks inside a native call — a PTY `poll`/`read`, a
+    /// `waitpid`, a foreign-function wait. A virtual thread cannot unmount from
+    /// its carrier while such a downcall is running, so each blocked call holds
+    /// one carrier for as long as it blocks, and the carrier pool is only
+    /// `availableProcessors` wide. A terminal spends **two** of them (its pump
+    /// and its reaper); two terminals on a 4-core box therefore took every
+    /// carrier and the second one never got to run a byte — a live WebSocket, a
+    /// running child, and an empty screen.
+    ///
+    /// The child-process pumps elsewhere in the launcher (`BrandRuntime`,
+    /// `ZcodeRuntime`, `DshAcpClient`) are platform threads for the same reason;
+    /// the PTY was the one place that used the virtual-thread helper.
+    ///
+    /// @param task the work
+    /// @param name the thread name
+    /// @return the started thread
+    public static Thread startPlatform(Runnable task, String name) {
+        Thread thread = new Thread(task, name);
+        thread.setDaemon(true);
+        thread.start();
+        return thread;
+    }
 }

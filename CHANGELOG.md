@@ -2,6 +2,23 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布
+
+**两个终端不能同时用：PTY 的阻塞读取跑在虚拟线程上，把 carrier 钉光了**
+
+- 症状：开一个终端正常，再开第二个（另一个品牌）只有一个闪烁的光标——进程在跑、WebSocket
+  连着，一个字节都没到屏幕。
+- 原因：`PosixPty` 的 pump 与 reaper、`TerminalSession` 的 pump 用的是虚拟线程。这三个循环
+  都阻塞在**本地调用**里（`poll` + `read`、`waitpid`），而虚拟线程在 FFI 下调期间**不能从
+  carrier 上卸载**——每个被钉住的 carrier 就是一颗核。每终端两个、第二个终端再来两个，4 核
+  机器上 carrier 正好被占满，第二个终端的 pump 排不上队。
+- 现在这三个循环走新增的 `VirtualThreads.startPlatform`（daemon 平台线程）。这条规则别处早就
+  是这么写的：`BrandRuntime`、`ZcodeRuntime`、`DshAcpClient` 的子进程输出泵一直是
+  `new Thread(...)`，PTY 是唯一用了虚拟线程的那个。
+- 测试：`VirtualThreadsPlatformTest`（`startPlatform` 必须是 daemon 且不是虚拟线程）、
+  `TerminalManagerTest.twoTerminalsOfTwoBrandsBothProduceTheirOwnOutput`（两个品牌同时开、
+  各收各的字节）。
+
 ## v0.6.53 — 2026-11-01 · 小版本：排队中的安装有状态了，三个终端也按版本挑 node
 
 > 起因：ARM 冒烟同时提交三个品牌安装，第三个一直显示 `running`、消息空、进度 -1，被
