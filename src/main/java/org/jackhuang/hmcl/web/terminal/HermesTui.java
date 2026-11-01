@@ -114,7 +114,7 @@ public final class HermesTui implements BrandTui {
                 }
             }
         }
-        DshNodeRuntime runtime = DshNodeRuntime.detect()
+        DshNodeRuntime runtime = DshNodeRuntime.detectSupported()
                 .or(DshNodeRuntime::detectManaged)
                 .orElse(null);
         if (runtime != null) {

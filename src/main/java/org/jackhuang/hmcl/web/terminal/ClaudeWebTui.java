@@ -358,7 +358,7 @@ public final class ClaudeWebTui implements BrandTui {
     ///
     /// @param environment the child environment to amend
     private static void putNodeOnPath(Map<String, String> environment) {
-        DshNodeRuntime.detect().or(DshNodeRuntime::detectManaged).ifPresent(runtime ->
+        DshNodeRuntime.detectSupported().ifPresent(runtime ->
                 environment.put("PATH", runtime.node().getParent() + File.pathSeparator
                         + environment.getOrDefault("PATH", "")));
     }

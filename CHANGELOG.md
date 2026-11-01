@@ -2,6 +2,28 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布
+
+**装的活排队时不再是「running 加一条空消息」**
+
+- 症状：同时提交三个品牌安装，第三个在 `/api/tasks` 里一直 `running`、`message` 为空、
+  `fraction` 为 -1，看起来就像卡死；只有 `jcmd` 的线程栈才看得出它停在
+  `Semaphore.acquire()`。ARM 冒烟那次就是这么误判成"失败"的。
+- 原因：安装槽位（同时最多 2 个）只有"拿到"和"没拿到"两种表现，没拿到的那段等待既没有
+  状态也没有说明。
+- 现在排队中的任务报 `queued`，并带一条说明（"等待安装槽位（同时进行 2 个安装，轮到就
+  自动开始）"）；拿到槽位时回到 `running` 并清掉那行说明。
+- 排队中的任务**可以取消**了：原来的 `cancel` 只看 `running` / `waiting_approval`，停在
+  `acquire()` 里的任务根本不看取消标志。
+- 顺带把它从「会不会被当成已完成而清理」「会不会被当成"最近一次安装"」两处排除掉
+  （`pruneTerminal` / `lastInstall` 现在按"是否终态"判断，不再逐个枚举状态）。
+
+**Kimi / Claude Web / Hermes 终端也跟着按版本挑 node**
+
+- 上一版把「挑工具链按能不能用」落到了 dsh 安装/启动、品牌 web 模式和 Hermes 的运行时；
+  三个 TUI 的 node 选择还是 `detect().or(detectManaged)`，系统 Node 20 一样会让 kimi 的
+  终端崩在 ESM loader 里。现在统一走 `detectSupported()`。
+
 ## v0.6.52 — 2026-11-01 · 小版本：挑工具链时按「能不能用」，不按「PATH 上有没有」
 
 > 起因：在一台干净的阿里云 ECS 上裸部署，`apt install nodejs` 给的是 Node 20，再

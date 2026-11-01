@@ -84,8 +84,11 @@ public final class KimiTui implements BrandTui {
         }
         // The panel may run without node on its own PATH (the managed runtime
         // lives under <data>/hdsl/runtimes); prefer that runtime, then fall
-        // back to the system PATH.
-        DshNodeRuntime runtime = DshNodeRuntime.detect()
+        // back to the system PATH. "Which node" is a version question too: kimi-code
+        // 2.4.1 imports `createZstdDecompress` from `node:zlib` (Node 22.15+), and a
+        // distribution Node 20 dies inside the ESM loader with a message about the module
+        // rather than the version — so a supported runtime wins even when PATH has one.
+        DshNodeRuntime runtime = DshNodeRuntime.detectSupported()
                 .or(DshNodeRuntime::detectManaged)
                 .orElse(null);
         Map<String, String> environment = new HashMap<>(BrandTui.environment(home));

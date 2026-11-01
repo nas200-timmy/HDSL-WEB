@@ -35,6 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /// Runs the blocking work behind the asynchronous API endpoints and tracks it.
@@ -55,6 +56,14 @@ public final class TaskService {
 
     /// How a task is doing.
     public enum TaskState {
+        /// An install that is waiting for one of the [MAX_INSTALLS] slots.
+        ///
+        /// Its own state because `running` used to mean both "started" and "waiting for
+        /// two long installs to finish": a third install reported `running` with an empty
+        /// message for as long as the other two took, which reads as "started and hung" —
+        /// it is how three brand installs submitted together looked like a failure on an
+        /// ARM smoke run.
+        QUEUED("queued"),
         RUNNING("running"),
         /// Parked on a human decision: the work reported that it needs an
         /// approval (a plugin's install scripts) and waits for
@@ -72,6 +81,11 @@ public final class TaskService {
         /// The JSON spelling of the state.
         public String wireName() {
             return wireName;
+        }
+
+        /// Whether the task can still change: anything but the two terminal states.
+        boolean live() {
+            return this != DONE && this != FAILED;
         }
     }
 
@@ -276,6 +290,20 @@ public final class TaskService {
             this.state = TaskState.RUNNING;
         }
 
+        /// Marks the task as waiting for an install slot, with the reason on screen.
+        ///
+        /// @param waitingMessage what the row says while it waits
+        private void queue(String waitingMessage) {
+            this.state = TaskState.QUEUED;
+            this.message = waitingMessage;
+        }
+
+        /// Leaves [TaskState#QUEUED] once a slot is in hand.
+        private void leaveQueue() {
+            this.state = TaskState.RUNNING;
+            this.message = "";
+        }
+
         private TaskInfo snapshot() {
             return new TaskInfo(id, kind, instanceId, state.wireName(), message, fraction,
                     stage, stageKey, stageFraction, error, approval, result);
@@ -425,7 +453,7 @@ public final class TaskService {
                 if (task.isCancelled()) {
                     throw new InterruptedException("cancelled");
                 }
-                installSlots.acquire();
+                awaitInstallSlot(task);
             }
             try {
                 if (task.isCancelled()) {
@@ -458,15 +486,46 @@ public final class TaskService {
         }
     }
 
+    /// How often a queued install looks over at the slots.
+    private static final long SLOT_POLL_MILLIS = 250;
+
+    /// Waits for one of the [MAX_INSTALLS] slots, saying so while it waits.
+    ///
+    /// Three things differ from the bare `acquire()` this replaces:
+    ///
+    /// - the wait is **visible**: the task reports [TaskState#QUEUED] and a message, instead
+    ///   of calling itself `running` with nothing to show — three installs submitted together
+    ///   is exactly how a smoke run mistook a queue for a hang;
+    /// - the wait is **cancellable**: `cancel` used to be a no-op for a parked task, because
+    ///   the worker sat inside `acquire()` with no reason to look at the flag;
+    /// - a slot is only ever released by the task that took it (see the `finally` in [run]).
+    ///
+    /// @param task the install task
+    /// @throws InterruptedException when the task is cancelled while queued
+    private void awaitInstallSlot(Task task) throws InterruptedException {
+        if (installSlots.tryAcquire()) {
+            return;
+        }
+        task.queue("等待安装槽位（同时进行 " + MAX_INSTALLS + " 个安装，轮到就自动开始）");
+        publish(task);
+        while (!installSlots.tryAcquire(SLOT_POLL_MILLIS, TimeUnit.MILLISECONDS)) {
+            if (task.isCancelled()) {
+                throw new InterruptedException("cancelled");
+            }
+        }
+        task.leaveQueue();
+        publish(task);
+    }
+
     /// Drops the oldest finished tasks beyond [maxRetainedTerminal]. Called
     /// from the completion path of every task, so the bound holds without a
     /// sweeper thread — the occasional few-hundred-entry scan is cheap next
-    /// to the work that just finished. Running tasks and ones parked on an
-    /// approval are never candidates.
+    /// to the work that just finished. Running, queued and approval-parked
+    /// tasks are never candidates.
     private void pruneTerminal() {
         List<Task> finished = new ArrayList<>();
         for (Task task : tasks.values()) {
-            if (task.state() != TaskState.RUNNING && task.state() != TaskState.WAITING_APPROVAL) {
+            if (!task.state().live()) {
                 finished.add(task);
             }
         }
@@ -515,8 +574,7 @@ public final class TaskService {
     /// @return whether a task with that id exists
     public boolean cancel(String taskId) {
         Task task = tasks.get(taskId);
-        if (task == null || (task.state() != TaskState.RUNNING
-                && task.state() != TaskState.WAITING_APPROVAL)) {
+        if (task == null || !task.state().live()) {
             return false;
         }
         task.cancelled.set(true);
@@ -628,7 +686,7 @@ public final class TaskService {
         Task newest = null;
         for (Task task : tasks.values()) {
             if (!"install".equals(task.kind()) || !instanceId.equals(task.instanceId())
-                    || task.state() == TaskState.RUNNING) {
+                    || task.state().live()) {
                 continue;
             }
             if (newest == null || task.sequence > newest.sequence) {

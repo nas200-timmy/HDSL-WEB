@@ -547,7 +547,9 @@ export interface BrandAdminCredentials {
 
 /// GET /api/brands/<brand>/install：安装任务状态
 export interface BrandInstallStatus {
-  state: "running" | "done" | "failed" | "none";
+  /// `queued`：前面的安装占满了槽位，这个还没开始（旧后端没有这个状态，
+  /// 那时排队中的任务报的是 `running` 加一条空 message，看着像卡死）
+  state: "queued" | "running" | "done" | "failed" | "none";
   message: string;
   fraction: number;
   /// 正在进行的安装任务 id，用来「停止」；旧后端没有这个字段
