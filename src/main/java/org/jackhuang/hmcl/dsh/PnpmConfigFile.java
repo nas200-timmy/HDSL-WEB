@@ -239,11 +239,10 @@ public final class PnpmConfigFile {
             return false;
         }
         if (parent != null) {
-            Files.createDirectories(parent);
             // The directory has to be the agent's too: `pnpm config set` rewrites this file
             // through a temporary file in the same directory, so a `0755 root:root` one would
             // leave the agent able to read its configuration and unable to change it.
-            Privileges.handToAgent(parent, AGENT_DIRECTORY_PERMISSIONS);
+            Privileges.prepareAgentDirectory(parent, AGENT_DIRECTORY_PERMISSIONS);
         }
         // Created exclusively, under a name that did not exist: this directory belongs to the
         // agent, and a name that already exists there may be a symlink it left pointing at

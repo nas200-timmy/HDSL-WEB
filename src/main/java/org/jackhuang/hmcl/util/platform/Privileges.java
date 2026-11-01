@@ -223,6 +223,36 @@ public final class Privileges {
         }
     }
 
+    /// Creates `dir` if it is missing, then hands it to the agent with `permissions`.
+    ///
+    /// "The panel makes a directory its agent will live in" is one rule, and it
+    /// used to be spelled out at every such directory: a brand's `home/` and
+    /// `workspace/`, Hermes' `panel/`, `locks/`, `run/`, `tools/`, a ZCode
+    /// instance's `home/`. Written separately they drifted — the brand homes were
+    /// created as root and handed over on launch, Hermes' own bootstrap then
+    /// refused exactly that (`unsafe_control_path: …/home is owned by uid 0,
+    /// expected uid 1000`) — so the pairing lives here once.
+    ///
+    /// Creation failures are logged, not thrown: every caller is on a path where
+    /// the tool that needs the directory will report the same thing more loudly,
+    /// and failing an install because a directory the tool creates anyway could
+    /// not be pre-created helps nobody.
+    ///
+    /// A no-op half outside a container, where nobody was dropped: the directory
+    /// is still created, but nobody's ownership is changed (see [#handToAgent]).
+    ///
+    /// @param dir         the directory; missing parents are created too
+    /// @param permissions [#AGENT_SHARED_DIRECTORY] or [#AGENT_PRIVATE_DIRECTORY]
+    public static void prepareAgentDirectory(Path dir, Set<PosixFilePermission> permissions) {
+        try {
+            Files.createDirectories(dir);
+        } catch (IOException e) {
+            org.jackhuang.hmcl.util.logging.Logger.LOG.warning("Could not create " + dir, e);
+            return;
+        }
+        handToAgent(dir, permissions);
+    }
+
     /// Whether this is a root process outside a container: the panel and every
     /// agent it starts share that identity, which the startup banner says out
     /// loud because nothing in the process can fix it.

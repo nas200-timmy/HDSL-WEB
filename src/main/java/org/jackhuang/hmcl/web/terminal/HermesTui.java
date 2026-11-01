@@ -60,20 +60,17 @@ public final class HermesTui implements BrandTui {
 
         // The terminal can be the first thing an instance runs, before the web
         // plan has created these; the TUI's gateway bootstrap refuses a home
-        // owned by root, so prepare them as the agent user here too.
-        Files.createDirectories(home);
-        Privileges.handToAgent(home, Privileges.AGENT_SHARED_DIRECTORY);
+        // owned by root, so prepare them as the agent user here too. The
+        // create-then-hand-over rule is Privileges#prepareAgentDirectory.
         Path panel = home.resolve("panel");
         Path locks = panel.resolve("locks");
         Path run = panel.resolve("run");
         Path tools = home.resolve("tools");
-        Files.createDirectories(locks);
-        Files.createDirectories(run);
-        Files.createDirectories(tools);
-        Privileges.handToAgent(panel, Privileges.AGENT_PRIVATE_DIRECTORY);
-        Privileges.handToAgent(locks, Privileges.AGENT_PRIVATE_DIRECTORY);
-        Privileges.handToAgent(run, Privileges.AGENT_PRIVATE_DIRECTORY);
-        Privileges.handToAgent(tools, Privileges.AGENT_SHARED_DIRECTORY);
+        Privileges.prepareAgentDirectory(home, Privileges.AGENT_SHARED_DIRECTORY);
+        Privileges.prepareAgentDirectory(panel, Privileges.AGENT_PRIVATE_DIRECTORY);
+        Privileges.prepareAgentDirectory(locks, Privileges.AGENT_PRIVATE_DIRECTORY);
+        Privileges.prepareAgentDirectory(run, Privileges.AGENT_PRIVATE_DIRECTORY);
+        Privileges.prepareAgentDirectory(tools, Privileges.AGENT_SHARED_DIRECTORY);
 
         Map<String, String> environment = new HashMap<>(BrandTui.environment(home));
         environment.put("HERMES_HOME", home.toString());

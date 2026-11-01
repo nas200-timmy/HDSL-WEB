@@ -200,7 +200,8 @@ hermes: gateway exited during startup        → state: error
 ### 两段身份下的属主（v0.6.44 起）
 
 **一条通用规则**：实例的 `home/` 与 `workspace/` 由面板（root）创建，创建完必须交给 agent
-（`BrandRuntime.handInstanceDirsToAgent`，`create` 与每次 `launch` 各做一次）。这不是 Hermes
+（`Privileges.prepareAgentDirectory(dir, 模式)` 一句话做两件事：建目录 + 交属主；品牌侧的列表是
+`BrandRuntime.handInstanceDirsToAgent`，`create` 与每次 `launch` 各调一次）。这不是 Hermes
 的特殊要求，而是这一层的基本假设：面板是 root，agent 是 uid 1000，**root 造的东西 uid 1000 不该
 当成自己的**。
 

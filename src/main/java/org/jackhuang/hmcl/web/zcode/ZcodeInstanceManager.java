@@ -404,22 +404,18 @@ public final class ZcodeInstanceManager {
     /// @return the home directory
     public Path prepareHome(ZcodeInstance instance) {
         Path home = homeDirectory(instance);
-        boolean created;
-        try {
-            created = !Files.isDirectory(home);
-            Files.createDirectories(home);
-        } catch (IOException e) {
-            LOG.warning("Could not create the ZCode home " + home, e);
-            return home;
+        boolean created = !Files.isDirectory(home);
+        // The agent writes below its own home (the session database, logs, its
+        // own tools), and it is a different uid from the panel in a container.
+        Privileges.prepareAgentDirectory(home, Privileges.AGENT_SHARED_DIRECTORY);
+        if (!Files.isDirectory(home)) {
+            return home; // prepareAgentDirectory logged why
         }
         // Only on a fresh home: a link the agent removed on purpose is not put
         // back on the next launch.
         if (created) {
             linkInheritedEntries(home);
         }
-        // The agent writes below its own home (the session database, logs, its
-        // own tools), and it is a different uid from the panel in a container.
-        Privileges.handToAgent(home, Privileges.AGENT_SHARED_DIRECTORY);
         return home;
     }
 

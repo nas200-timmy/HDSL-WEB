@@ -176,4 +176,53 @@ class PrivilegesTest {
             assertNull(Privileges.bannerNote());
         }
     }
+
+    /// The "create it, then hand it over" pairing the three brands share. What a
+    /// test can pin here is the part every caller relies on: the directory exists
+    /// afterwards, nested parents included, and calling it again is a no-op rather
+    /// than a failure — an instance is created once and launched many times.
+    @Test
+    void preparingAnAgentDirectoryCreatesItAndKeepsWorkingWhenCalledAgain(@TempDir Path directory)
+            throws Exception {
+        Path home = directory.resolve("instances/abc/home");
+        Privileges.prepareAgentDirectory(home, Privileges.AGENT_SHARED_DIRECTORY);
+        assertTrue(Files.isDirectory(home), "nested parents are created too: " + home);
+
+        Path panel = home.resolve("panel");
+        Privileges.prepareAgentDirectory(panel, Privileges.AGENT_PRIVATE_DIRECTORY);
+        assertTrue(Files.isDirectory(panel));
+
+        Path marker = Files.writeString(home.resolve("state.db"), "kept\n");
+        Privileges.prepareAgentDirectory(home, Privileges.AGENT_SHARED_DIRECTORY);
+        assertTrue(Files.isRegularFile(marker), "a second pass must not clear what is already there");
+
+        // Inside the container the mode is the one asked for; outside nobody is
+        // dropped, so nothing is changed (see handToAgent).
+        if (Privileges.dropsChildren()) {
+            assertEquals(java.util.Set.of(
+                            java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                            java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                            java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE,
+                            java.nio.file.attribute.PosixFilePermission.GROUP_READ,
+                            java.nio.file.attribute.PosixFilePermission.GROUP_WRITE,
+                            java.nio.file.attribute.PosixFilePermission.GROUP_EXECUTE,
+                            java.nio.file.attribute.PosixFilePermission.OTHERS_READ,
+                            java.nio.file.attribute.PosixFilePermission.OTHERS_EXECUTE),
+                    org.jackhuang.hmcl.util.PosixPermissions.of(home).orElseThrow(),
+                    "0775: the agent writes inside it, the panel may too");
+            assertEquals(Privileges.AGENT_UID,
+                    ((Number) Files.getAttribute(home, "unix:uid")).intValue());
+        }
+    }
+
+    /// A path that cannot be created is logged, not thrown: the caller is always a
+    /// start-up path, and the tool that needs the directory reports the same thing
+    /// better than an exception from here would.
+    @Test
+    void aDirectoryThatCannotBeCreatedDoesNotThrow(@TempDir Path directory) throws Exception {
+        Path blocker = Files.writeString(directory.resolve("not-a-directory"), "x");
+        Privileges.prepareAgentDirectory(blocker.resolve("below"), Privileges.AGENT_SHARED_DIRECTORY);
+        assertTrue(Files.isRegularFile(blocker), "the blocker is untouched");
+        assertFalse(Files.exists(blocker.resolve("below")), "and nothing was created under it");
+    }
 }

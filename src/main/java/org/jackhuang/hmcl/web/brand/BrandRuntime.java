@@ -1078,23 +1078,15 @@ public final class BrandRuntime {
     ///
     /// Called when an instance is created, and again on every launch, so an
     /// instance made before this existed heals the next time it starts instead of
-    /// needing a hand-run `chown`.
+    /// needing a hand-run `chown`. The create-then-hand-over rule itself is
+    /// [Privileges#prepareAgentDirectory], so this is only the list of directories
+    /// a brand owns.
     ///
     /// @param manager  the manager, for the instance's directories
     /// @param instance the instance
     static void handInstanceDirsToAgent(BrandInstanceManager manager, BrandInstance instance) {
-        if (!Privileges.dropsChildren()) {
-            // A bare deployment runs the panel as the same user the agent is.
-            return;
-        }
         for (Path dir : List.of(manager.homeDirectory(instance), manager.workspaceDirectory(instance))) {
-            try {
-                Files.createDirectories(dir);
-            } catch (IOException e) {
-                LOG.warning("Could not create " + dir, e);
-                continue;
-            }
-            Privileges.handToAgent(dir, Privileges.AGENT_SHARED_DIRECTORY);
+            Privileges.prepareAgentDirectory(dir, Privileges.AGENT_SHARED_DIRECTORY);
         }
     }
 
