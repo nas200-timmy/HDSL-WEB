@@ -24,6 +24,10 @@
 #
 set -euo pipefail
 
+# 原始参数：加完 docker 组后要用 `sg docker -c` 原样重跑本脚本（见 fix_docker_access），
+# 那时 $@ 已经被下面的解析循环吃光了。
+ORIG_ARGS=("$@")
+
 REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 STATE_FILE="$REPO_DIR/.docker-install.state"
 ENV_FILE="$REPO_DIR/.docker-install.env"
@@ -59,6 +63,7 @@ PASSWORD_SET=0
 IMAGE=""
 BASE=""              # debian / fedora / opensuse，空 = 沿用上次或 debian
 BASE_REGISTRY=""     # 底座镜像的仓库前缀，空 = Docker Hub（docker.io）
+BASE_REGISTRY_SET=0  # 命令行显式给了 --base-registry 时置 1（否则沿用状态文件里的）
 PREBUILT=""          # 非空 = 不构建，直接拉这个已发布的镜像
 
 usage() {
@@ -128,7 +133,7 @@ while [ "$#" -gt 0 ]; do
         --no-build) NO_BUILD=1; shift ;;
         --image) need_value "$@"; IMAGE="$2"; shift 2 ;;
         --base) need_value "$@"; BASE="$2"; shift 2 ;;
-        --base-registry) need_value "$@"; BASE_REGISTRY="$2"; shift 2 ;;
+        --base-registry) need_value "$@"; BASE_REGISTRY="$2"; BASE_REGISTRY_SET=1; shift 2 ;;
         --pull) need_value "$@"; PREBUILT="$2"; shift 2 ;;
         --release) RELEASE=1; RELEASE_SET=1; shift ;;
         --no-release) RELEASE=0; RELEASE_SET=1; shift ;;
@@ -219,6 +224,96 @@ as_root() {
     fi
 }
 
+# 当前用户与 docker 组的关系，分两处查：
+#   group_db_has_user  /etc/group 里有没有点名（usermod 生效了没有）
+#   group_active_now   当前进程的补充组里有没有 docker（当前会话拿到了没有）
+group_db_has_user() {
+    getent group docker 2>/dev/null | awk -F: '{print $4}' | tr ',' '\n' | grep -qx "$1"
+}
+
+# 注意：这里不能写 `id -nG 用户名`。带用户名查的是 NSS/数据库里的组，
+# usermod 之后立刻就会显示 docker——那正是「加了组但当前会话没拿到」的误判来源。
+# 不带参数查的才是当前进程实际持有的补充组。
+group_active_now() {
+    id -nG 2>/dev/null | tr ' ' '\n' | grep -qx docker
+}
+
+# docker info 报 permission denied 时走这里。
+#
+# 只查 /etc/group 会把「刚 usermod、还没重新登录」误报成没问题；只查 id -nG 又
+# 分不清「没加组」和「加了但会话旧」。两处都查，结论才是确定的：
+#   都没有 → 代加组；加了但会话没有 → 用 sg 带上组重跑，不必重新登录。
+fix_docker_access() {
+    local user self quoted
+    user=$(id -un)
+    self="$REPO_DIR/$(basename "${BASH_SOURCE[0]}")"
+
+    if [ "$(id -u)" = 0 ]; then
+        say ""
+        say "以 root 运行仍被拒绝，不是组权限问题。检查 socket 和守护进程："
+        say "  ls -l ${DOCKER_HOST:-/var/run/docker.sock}"
+        say "  systemctl status docker"
+        exit 1
+    fi
+
+    if group_active_now; then
+        say ""
+        say "$user 已经在当前会话的 docker 组里，但访问 docker 仍被拒绝。"
+        say "这不是「没加组」，检查 socket 的属组和权限："
+        say "  ls -l ${DOCKER_HOST:-/var/run/docker.sock}"
+        say "  期望：srw-rw---- root docker"
+        exit 1
+    fi
+
+    if group_db_has_user "$user"; then
+        say ""
+        say "$user 已经写进 /etc/group 的 docker（加组命令生效了），"
+        say "但当前登录会话是加组之前启动的，进程还拿不到这个组——"
+        say "重开终端没用，要用 sg 进组，或者整个会话重新登录。"
+    else
+        if ! getent group docker >/dev/null 2>&1; then
+            say ""
+            say "系统里没有 docker 组（rootless docker 的权限不在 /etc/group）。"
+            say "检查：ls -l ${DOCKER_HOST:-/var/run/docker.sock}"
+            exit 1
+        fi
+        say ""
+        say "$user 不在 docker 组里，正在加入（需要 root 或免密 sudo）……"
+        if ! do_root usermod -aG docker "$user"; then
+            say ""
+            say "加组失败。手动执行后重跑本脚本："
+            say "  sudo usermod -aG docker $user"
+            exit 1
+        fi
+        if [ "$DRY_RUN" = 1 ]; then
+            return 0
+        fi
+    fi
+
+    # 已经用 sg 重跑过一次还是不行：别再来一次，直接说清楚要重新登录。
+    if [ "${HDSL_DOCKER_GROUP_REEXEC:-}" = 1 ]; then
+        say ""
+        say "已经用 sg 重跑过一次，当前会话仍然拿不到 docker 组。"
+        say "请注销后重新登录（GUI 要整个会话重登）。"
+        exit 1
+    fi
+
+    # 不用重新登录：sg 在子 shell 里带上 docker 组，把本脚本原样重跑。
+    # 先试一下 sg 能不能真的进组，免得它在这里要密码、把脚本挂住。
+    if command -v sg >/dev/null 2>&1 && sg docker -c true </dev/null >/dev/null 2>&1; then
+        say "  用 sg 带上 docker 组重新执行本脚本（不需要重新登录）……"
+        quoted=$(printf '%q ' "$self" "${ORIG_ARGS[@]}")
+        exec env HDSL_DOCKER_GROUP_REEXEC=1 sg docker -c "$quoted"
+    fi
+
+    say ""
+    say "组已经加上了，但当前会话仍然拿不到。任选其一："
+    say "  1) 注销后重新登录（GUI 也要整个会话重登，新开终端不算）"
+    say "  2) 不用重登，直接用 sg 进组跑："
+    say "     sg docker -c '$(printf '%q ' "$self" "${ORIG_ARGS[@]}")'"
+    exit 1
+}
+
 show_install_hint() {
     local pm="手动"
     for cand in apt-get dnf yum apk pacman zypper; do
@@ -237,7 +332,9 @@ show_install_hint() {
     esac
     say ""
     say "装完把当前用户加进 docker 组（否则每条命令都要 sudo，且脚本读不到状态）："
-    say "  sudo usermod -aG docker $(id -un)   # 之后重新登录一次"
+    say "  sudo usermod -aG docker $(id -un)"
+    say "  sg docker -c './docker-install.sh'   # 不想重新登录就先用 sg 进组"
+    say "  # 或者注销后重新登录（GUI 要整个会话重登，新开终端不算）"
     say ""
     say "或者让本脚本代装：./docker-install.sh --install-docker"
 }
@@ -298,12 +395,8 @@ install_docker_now() {
     fi
 
     command -v docker >/dev/null 2>&1 || die "安装命令跑完了，但 PATH 里仍然没有 docker"
-    if ! docker_ready; then
-        say ""
-        say "docker 装好了但当前用户连不上守护进程。执行下面这行，然后重新登录，再跑本脚本："
-        say "  sudo usermod -aG docker $(id -un)"
-        exit 1
-    fi
+    # 权限/守护进程的问题统一交给 ensure_docker：那里会分辨「没加组」「加了但会话旧」。
+    ensure_docker
 }
 
 ensure_docker() {
@@ -316,10 +409,7 @@ ensure_docker() {
         err=$(docker info 2>&1 || true)
         case "$err" in
             *"Permission denied"*|*"permission denied"*)
-                say ""
-                say "docker 在，但当前用户没有权限（不在 docker 组）。执行："
-                say "  sudo usermod -aG docker $(id -un)   # 之后重新登录"
-                exit 1
+                fix_docker_access
                 ;;
         esac
         if command -v systemctl >/dev/null 2>&1; then
@@ -410,6 +500,7 @@ load_state() {
     PREV_RELEASE=${INSTALL_RELEASE:-}
     PREV_IMAGE=${INSTALL_IMAGE:-}
     PREV_BASE=${INSTALL_BASE:-}
+    PREV_BASE_REGISTRY=${INSTALL_BASE_REGISTRY:-}
 }
 
 save_state() {
@@ -424,6 +515,9 @@ save_state() {
         printf 'INSTALL_RELEASE=%q\n' "$([ "$RELEASE" = 1 ] && echo yes || echo no)"
         printf 'INSTALL_IMAGE=%q\n' "$IMAGE"
         printf 'INSTALL_BASE=%q\n' "$BASE_CODE"
+        # 记住底座仓库：Docker Hub 不通的机器上，不记的话每次重跑都得再补一次
+        # --base-registry（报告里那次"跑不通"有一半是这么来的）。
+        printf 'INSTALL_BASE_REGISTRY=%q\n' "$BASE_REGISTRY"
     } > "$STATE_FILE"
     chmod 600 "$STATE_FILE"
 }
@@ -707,6 +801,17 @@ case "$MIRROR" in
     yes|y|Y|Yes|YES) MIRROR_MODE=yes; NPM_REGISTRY="$NPM_MIRROR"; NODE_DIST_MIRROR="$NODE_MIRROR_CN" ;;
     *)               MIRROR_MODE=no;  NPM_REGISTRY="https://registry.npmjs.org/"; NODE_DIST_MIRROR="$NODE_MIRROR_OFFICIAL" ;;
 esac
+
+# 底座仓库的默认值：命令行 > 上次记住的 > 不指定（Docker Hub）。
+# 走官方源（--no-mirror）时把上次记住的仓库清掉，除非这次又显式给了——"官方源"就该
+# 三个来源全是官方的，只清 npm 和 Node 会留下一个别人看不懂的不一致。
+if [ "$BASE_REGISTRY_SET" = 0 ]; then
+    if [ "$MIRROR_MODE" = yes ]; then
+        BASE_REGISTRY="${PREV_BASE_REGISTRY:-}"
+    else
+        BASE_REGISTRY=""
+    fi
+fi
 
 JAVA_OPTS="${JAVA_OPTS:-$DEFAULT_JAVA_OPTS}"
 # 上次用过 --release，这次（比如 --rebuild）默认沿用：不沿用的话会静默掉回
