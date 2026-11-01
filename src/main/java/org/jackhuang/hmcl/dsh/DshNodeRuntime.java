@@ -356,11 +356,17 @@ public record DshNodeRuntime(
                 && parsed.compareTo(MINIMUM_NODE_22) >= 0;
     }
 
+    /// The Node.js range DeepSeek Harness runs on, as the user reads it.
+    ///
+    /// Kept apart from [#requirement] because it is the half that is about the *version*: a
+    /// banner line saying "that Node.js is outside …" should name the range and nothing else.
+    public static final String NODE_RANGE = "^22.19.0 || >=24.0.0";
+
     /// Returns the toolchain requirement shown to the user.
     ///
     /// @return a human-readable requirement string
     public static String requirement() {
-        return "Node.js ^22.19.0 || >=24.0.0, plus pnpm " + MINIMUM_PNPM
+        return "Node.js " + NODE_RANGE + ", plus pnpm " + MINIMUM_PNPM
                 + " or newer for installing DeepSeek Harness; pnpm is also needed for plugin management";
     }
 
