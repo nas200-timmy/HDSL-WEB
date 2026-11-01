@@ -422,6 +422,36 @@ docker build --build-arg HDSL_BASE=fedora:44 \
 
 体积差距明显：Debian 2.28 GB、Fedora 2.38 GB、openSUSE 3.59 GB（`-devel`/`rust`/`go` 的依赖闭合更大）。
 
+### 4.2 Docker Hub 不可达时（构建拉不到底座）
+
+构建要用三个**底座镜像**：`node:22-bookworm-slim`（前端）、`eclipse-temurin:21-jdk`（编译
+jar）、以及运行时底座（默认 `debian:trixie-slim`）。Docker Hub 被墙、被限流、或被出口策略挡掉
+时，构建第一步就会失败：
+
+```
+ERROR: failed to solve: node:22-bookworm-slim: failed to resolve source metadata for
+docker.io/library/node:22-bookworm-slim: … dial tcp 208.77.47.172:443: connect: connection refused
+```
+
+两条路，向导都支持：
+
+```bash
+# 1) 底座换到一个能连的仓库，构建仍在本地做（三个 FROM 一起换）
+./docker-install.sh --base-registry docker.m.daocloud.io
+
+# 2) 不构建，直接拉已发布的镜像（ghcr.io 通、Docker Hub 不通时最省事）
+./docker-install.sh --pull 0.6.54
+
+# 手工构建时对应三个 ARG
+docker build --build-arg HDSL_WEB_BASE=<仓库>/library/node:22-bookworm-slim \
+             --build-arg HDSL_BUILD_BASE=<仓库>/library/eclipse-temurin:21-jdk \
+             --build-arg HDSL_BASE=<仓库>/library/debian:trixie-slim .
+```
+
+`--pull` 拉的是 `ghcr.io/nas200-timmy/hdsl-web:<版本>`（多架构 manifest，amd64/arm64 都会自动
+挑对），拉下来后按本地镜像名打标签，所以 `--no-build`、`--recreate` 等后续操作照旧认它。也可以在
+`/etc/docker/daemon.json` 配 `registry-mirrors`——那是全局设置，配一次所有 `docker pull` 都受益。
+
 ---
 
 ## 5. 升级与回滚

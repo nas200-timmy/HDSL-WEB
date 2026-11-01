@@ -28,9 +28,15 @@
 # `FROM` 里能用的 ARG 只能是首个 FROM 之前声明的（Docker 的全局作用域），
 # 写在第三个 FROM 前面它是不生效的——那会让构建直接报
 # "base name (${HDSL_BASE}) should not be blank"。
+#
+# 三个底座都做成 ARG，是因为「Docker Hub 在这台机器上不可达」是常态而不是意外
+# （国内网络、企业代理、只放行某个镜像仓库的出口）。脚本的 --base-registry 用它们
+# 把 `docker.io/library/…` 换成一个能连上的仓库，构建本身一个字都不用改。
 ARG HDSL_BASE=debian:trixie-slim
+ARG HDSL_WEB_BASE=node:22-bookworm-slim
+ARG HDSL_BUILD_BASE=eclipse-temurin:21-jdk
 
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS web
+FROM --platform=$BUILDPLATFORM ${HDSL_WEB_BASE} AS web
 
 # Where npm fetches packages from. Point this at a mirror when the network is
 # slow, e.g. --build-arg NPM_REGISTRY=https://registry.npmmirror.com/
@@ -68,7 +74,7 @@ RUN test -f /web/dist/assets-img/wallpapers/2021-08-26.jpg
 # A JDK, not a JRE: the Gradle wrapper compiles gradle/wrapper/GradleWrapperNeo.java
 # on demand, which needs javac. Pinned to $BUILDPLATFORM for the same reason as
 # the web stage — the jar is architecture-neutral.
-FROM --platform=$BUILDPLATFORM eclipse-temurin:21-jdk AS build
+FROM --platform=$BUILDPLATFORM ${HDSL_BUILD_BASE} AS build
 
 WORKDIR /src
 

@@ -58,6 +58,8 @@ PASSWORD=""
 PASSWORD_SET=0
 IMAGE=""
 BASE=""              # debian / fedora / opensuse，空 = 沿用上次或 debian
+BASE_REGISTRY=""     # 底座镜像的仓库前缀，空 = Docker Hub（docker.io）
+PREBUILT=""          # 非空 = 不构建，直接拉这个已发布的镜像
 
 usage() {
     cat <<'EOF'
@@ -75,6 +77,12 @@ usage() {
   --name <容器名>                 默认 hdsl-web
   --password <口令>               首启管理员口令（默认留空 = 网页初始化引导）
   --mirror | --no-mirror          国内镜像源（npm 用 npmmirror，Node 用腾讯）
+  --base-registry <前缀>          底座镜像从哪个仓库拉（如 docker.m.daocloud.io）。
+                                  只在「Docker Hub 连不上、但某个镜像仓库能连」时用；
+                                  构建本身仍在本地做，只是三个 FROM 换了仓库。
+  --pull <版本|镜像>              不构建，直接拉已发布的镜像
+                                  （ghcr.io/nas200-timmy/hdsl-web:<版本>）。
+                                  Docker Hub 完全不可达、ghcr.io 能连时走这条。
 
 动作（同名容器已存在时）：
   --restart     只重启现有容器
@@ -120,6 +128,8 @@ while [ "$#" -gt 0 ]; do
         --no-build) NO_BUILD=1; shift ;;
         --image) need_value "$@"; IMAGE="$2"; shift 2 ;;
         --base) need_value "$@"; BASE="$2"; shift 2 ;;
+        --base-registry) need_value "$@"; BASE_REGISTRY="$2"; shift 2 ;;
+        --pull) need_value "$@"; PREBUILT="$2"; shift 2 ;;
         --release) RELEASE=1; RELEASE_SET=1; shift ;;
         --no-release) RELEASE=0; RELEASE_SET=1; shift ;;
         --install-docker) INSTALL_DOCKER=1; shift ;;
@@ -446,24 +456,94 @@ container_status() {
     printf '%s' "${status:-missing}"
 }
 
+# 把底座镜像名换到 --base-registry 指的那个仓库。
+#
+# Docker Hub 上的官方镜像在 API 里都带 `library/` 前缀，`docker pull debian:…` 只是
+# 客户端替你补的；换成别的仓库时必须把这一节写全，否则镜像是
+# `docker.m.daocloud.io/debian:…`——那里没有这个仓库，报的错反而更难懂。
+with_registry() {
+    if [ -z "$BASE_REGISTRY" ]; then
+        printf '%s' "$1"
+        return
+    fi
+    local prefix="${BASE_REGISTRY%/}"
+    case "$prefix" in
+        */library) printf '%s/%s' "$prefix" "$1" ;;
+        *)         printf '%s/library/%s' "$prefix" "$1" ;;
+    esac
+}
+
+# 已发布的镜像（--pull）。本地名不变，所以状态文件、--no-build、容器重建都照旧认它。
+pull_image() {
+    local source
+    case "$PREBUILT" in
+        */*|*:*) source="$PREBUILT" ;;
+        *)       source="ghcr.io/nas200-timmy/hdsl-web:$PREBUILT" ;;
+    esac
+    step "拉取镜像：$source"
+    if [ "$DRY_RUN" = 1 ]; then
+        say "  [dry-run] docker pull $source"
+        say "  [dry-run] docker tag $source $IMAGE"
+        return 0
+    fi
+    if ! docker pull "$source"; then
+        die "拉不到 $source
+   ghcr.io 也不通的话，只能本地构建；那时用 --base-registry 把底座换到一个能连的仓库。"
+    fi
+    docker tag "$source" "$IMAGE"
+}
+
 build_image() {
+    if [ -n "$PREBUILT" ]; then
+        pull_image
+        return 0
+    fi
     step "构建镜像：$IMAGE"
+    local web_base build_base runtime_base
+    web_base=$(with_registry "node:22-bookworm-slim")
+    build_base=$(with_registry "eclipse-temurin:21-jdk")
+    runtime_base=$(with_registry "$BASE_IMAGE")
     if [ "$DRY_RUN" = 1 ]; then
         say "  [dry-run] docker build -t $IMAGE \\"
         say "      --build-arg NPM_REGISTRY=$NPM_REGISTRY \\"
         say "      --build-arg NODE_DIST_MIRROR=$NODE_DIST_MIRROR \\"
-        say "      --build-arg HDSL_BASE=$BASE_IMAGE --build-arg HDSL_ENCODERS=$BASE_ENCODERS \\"
+        say "      --build-arg HDSL_BASE=$runtime_base --build-arg HDSL_ENCODERS=$BASE_ENCODERS \\"
+        say "      --build-arg HDSL_WEB_BASE=$web_base --build-arg HDSL_BUILD_BASE=$build_base \\"
         say "      --build-arg RELEASE_VERSION=$RELEASE_VERSION -f Dockerfile ."
         return 0
     fi
     # Dockerfile 里的 `RUN --mount=type=cache` 要 BuildKit；老引擎（NAS 上的 20.10）
     # 默认关着，不显式打开会在这一步报 "the --mount option requires BuildKit"。
-    DOCKER_BUILDKIT=1 docker build \
+    #
+    # 底座那三个 ARG 以前只在 dry-run 里出现，真构建时一个都没传——`--base fedora`
+    # 于是静默构建出了 Debian 的镜像。现在它们和仓库前缀走同一条路。
+    local log
+    log=$(mktemp)
+    if ! DOCKER_BUILDKIT=1 docker build \
         -t "$IMAGE" \
         --build-arg "NPM_REGISTRY=$NPM_REGISTRY" \
         --build-arg "NODE_DIST_MIRROR=$NODE_DIST_MIRROR" \
+        --build-arg "HDSL_BASE=$runtime_base" \
+        --build-arg "HDSL_ENCODERS=$BASE_ENCODERS" \
+        --build-arg "HDSL_WEB_BASE=$web_base" \
+        --build-arg "HDSL_BUILD_BASE=$build_base" \
         --build-arg "RELEASE_VERSION=$RELEASE_VERSION" \
-        -f "$REPO_DIR/Dockerfile" "$REPO_DIR"
+        -f "$REPO_DIR/Dockerfile" "$REPO_DIR" 2>&1 | tee "$log"; then
+        # 「拉不到底座」是这台机器上最常见的一种失败，而且它的报错（load metadata /
+        # dial tcp … connection refused）不会告诉任何人还有哪两条路可走。
+        if grep -qiE "load metadata|failed to resolve source metadata|registry-1\.docker\.io|pull access denied|dial tcp" "$log"; then
+            say ""
+            say "  !! 构建卡在拉底座镜像这一步（Docker Hub 不可达或限流）。两条路："
+            say "  !!   1. 换一个能连的仓库再构建："
+            say "  !!      ./docker-install.sh --base-registry docker.m.daocloud.io …"
+            say "  !!   2. 不构建，直接拉已发布的镜像："
+            say "  !!      ./docker-install.sh --pull $(last_tag | sed 's/^v//') …"
+            say "  !! 也可以在 /etc/docker/daemon.json 配 registry-mirrors，那是全局设置。"
+        fi
+        rm -f "$log"
+        die "镜像构建失败"
+    fi
+    rm -f "$log"
 }
 
 ensure_owner() {   # 宿主目录：只建出来，属主交给容器入口去分
@@ -758,6 +838,13 @@ fi
 say "  端口：${BIND}:${PORT} → 容器 ${PORT}"
 say "  底座：$BASE_IMAGE（$BASE_CODE）"
 say "  镜像：$IMAGE"
+if [ -n "$PREBUILT" ]; then
+    say "  来源：拉取已发布的镜像（不本地构建）"
+elif [ -n "$BASE_REGISTRY" ]; then
+    say "  来源：本地构建，底座从 ${BASE_REGISTRY%/}/library 拉"
+else
+    say "  来源：本地构建"
+fi
 say "  镜像源：$MIRROR_MODE"
 say "  jar 版本：$([ "$RELEASE" = 1 ] && echo "发布 $RELEASE_VERSION" || echo '开发版 0.1.0-dev（--release 用最后的标签）')"
 say "  口令：$([ -n "$PASSWORD" ] && echo '已设置' || echo '留空，打开网页走初始化引导')"

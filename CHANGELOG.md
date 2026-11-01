@@ -2,6 +2,22 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布
+
+**`docker-install.sh`：Docker Hub 拉不到底座时，现在有两条路**
+
+- 症状：`docker-install.sh` 在构建第一步就死——`failed to resolve source metadata for
+  docker.io/library/node:22-bookworm-slim: … dial tcp … connect: connection refused`。
+  脚本此时只说"构建失败"，没有提它其实还有别的走法。
+- 新增 `--base-registry <前缀>`：三个底座镜像（前端用的 `node`、编译用的 `eclipse-temurin`、
+  运行时底座）一起换到指定仓库，构建仍在本地做。Dockerfile 里这三个底座原先只有运行时那个是
+  ARG，另两个写死在 `FROM` 里。
+- 新增 `--pull <版本|镜像>`：不构建，直接拉 `ghcr.io/nas200-timmy/hdsl-web:<版本>`（多架构，
+  amd64/arm64 自动挑）并按本地镜像名打标签，后续 `--no-build` / `--recreate` 照旧认它。
+- 构建失败时识别「拉不到底座」这一类错误，并把这两条路印出来。
+- 顺手修一个真 bug：`--base fedora` / `--base opensuse` 的 `HDSL_BASE`、`HDSL_ENCODERS`
+  **只在 dry-run 里打印过，真构建时一个都没传**——选 Fedora 会静默构建出 Debian 的镜像。
+
 ## v0.6.54 — 2026-11-01 · 小版本：终端可以同时开了（虚拟线程把 carrier 钉光）
 
 > 起因：开一个终端正常，开第二个（另一个品牌）只有闪烁的光标。查下来不是"只能单线程"，
