@@ -582,9 +582,9 @@ public final class DshVersionManager {
             throw new DshException("Instance " + instance.id() + " has no DeepSeek Harness to change");
         }
 
-        DshNodeRuntime runtime = requireRuntime();
+        DshNodeRuntime runtime = requireRuntimeWithPnpm();
         if (!runtime.canManagePlugins()) {
-            throw new DshException("pnpm was not found on PATH; changing the boot library requires it");
+            throw runtime.pnpmMissing("changing the boot library");
         }
 
         writeManifest(target, instance.version(), appBoot, runtime,
@@ -752,9 +752,9 @@ public final class DshVersionManager {
         Path flag = installingFlag(instance);
         Path previous = previousDirectory(instance);
 
-        DshNodeRuntime runtime = requireRuntime();
+        DshNodeRuntime runtime = requireRuntimeWithPnpm();
         if (!runtime.canManagePlugins()) {
-            throw new DshException("pnpm was not found on PATH; installing DeepSeek Harness requires it");
+            throw runtime.pnpmMissing("installing DeepSeek Harness");
         }
         requireSupportedPnpm(runtime);
 
@@ -948,9 +948,32 @@ public final class DshVersionManager {
         // 落在 <data>/hdsl/runtimes）——裸部署没有系统 Node.js 也能装实例。
         return DshNodeRuntime.detect()
                 .or(DshNodeRuntime::detectManaged)
-                .orElseThrow(() -> new DshException("Node.js was not found on PATH and no panel-managed runtime "
-                        + "is installed (" + DshNodeRuntime.requirement() + "). "
-                        + "Open Settings -> Node.js for a one-click managed runtime, or install Node.js yourself."));
+                .orElseThrow(DshVersionManager::noRuntime);
+    }
+
+    /// Requires a Node runtime that carries `pnpm`, for the work that cannot run without it.
+    ///
+    /// Node alone is not enough here: installing DeepSeek Harness, changing an
+    /// instance's boot library and touching plugins all go through `pnpm`, and a
+    /// machine whose `PATH` has a Node.js without pnpm reports "pnpm was not found
+    /// on PATH" even when the panel's own managed runtime — the one that is
+    /// installed *with* pnpm — is sitting in the data directory. [DshNodeRuntime#detectWithPnpm]
+    /// is the order that avoids that, and [requirePnpm] is the failure the caller
+    /// reports when nothing qualifies.
+    ///
+    /// @return a runtime with pnpm
+    /// @throws DshException when there is no Node.js at all
+    public static DshNodeRuntime requireRuntimeWithPnpm() throws DshException {
+        return DshNodeRuntime.detectWithPnpm().orElseThrow(DshVersionManager::noRuntime);
+    }
+
+    /// The refusal for a machine with no usable Node.js at all.
+    ///
+    /// @return the exception to throw
+    private static DshException noRuntime() {
+        return new DshException("Node.js was not found on PATH and no panel-managed runtime "
+                + "is installed (" + DshNodeRuntime.requirement() + "). "
+                + "Open Settings -> Node.js for a one-click managed runtime, or install Node.js yourself.");
     }
 
     /// Reads the published version list from the registry.

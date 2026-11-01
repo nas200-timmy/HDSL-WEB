@@ -950,14 +950,17 @@ public final class BrandInstaller {
         }
 
         Path bin = target.resolve(brand.installMarker());
-        DshNodeRuntime runtime = DshNodeRuntime.detect()
-                .or(DshNodeRuntime::detectManaged)
+        // "A Node.js with pnpm" rather than "a Node.js": the install runs `pnpm add`, and a
+        // PATH-probed runtime without one is how the managed runtime — installed *with*
+        // pnpm — came to be ignored while every brand install failed on a bare `pnpm`.
+        DshNodeRuntime runtime = DshNodeRuntime.detectWithPnpm()
                 .orElseThrow(() -> new BrandException("Node.js was not found on PATH and no panel-managed runtime "
                         + "is installed; installing " + brand.npmPackage() + " needs one. "
                         + "Open Settings -> Node.js for a one-click managed runtime, or install Node.js yourself."));
-        String pnpm = runtime.pnpm() == null
-                ? "pnpm"
-                : runtime.pnpm().toString();
+        if (!runtime.canManagePlugins()) {
+            throw new BrandException(runtime.pnpmMissing("installing " + brand.sourceLabel()).getMessage());
+        }
+        String pnpm = runtime.pnpm().toString();
         String registry = NpmRegistry.effective().registry();
 
         try {

@@ -99,11 +99,38 @@ public final class DshLauncher {
     /// @return the resolved runtime
     /// @throws DshException when the selected runtime is missing or unsupported
     public static DshNodeRuntime resolveRuntime(DshInstance instance) throws DshException {
+        return resolveRuntime(instance, false);
+    }
+
+    /// Resolves the runtime to use for work that runs `pnpm`: plugins, `dsh plugin` resolves.
+    ///
+    /// The difference shows up on a machine whose `PATH` has a Node.js without pnpm
+    /// while a managed runtime — installed *with* pnpm — sits in the data directory.
+    /// The instance's own choice is still honoured; only the "whatever PATH offers"
+    /// half gets the pnpm-aware order, so an instance pinned to a managed runtime
+    /// keeps using that one (and, if that one has no pnpm, is told so).
+    ///
+    /// @param instance the instance
+    /// @return the resolved runtime
+    /// @throws DshException when the selected runtime is missing or unsupported
+    public static DshNodeRuntime resolveRuntimeForPnpm(DshInstance instance) throws DshException {
+        return resolveRuntime(instance, true);
+    }
+
+    /// The resolution itself, with "this work needs pnpm" as the flag.
+    ///
+    /// @param instance the instance
+    /// @param needsPnpm whether to prefer a runtime that carries `pnpm`
+    /// @return the resolved runtime
+    /// @throws DshException when the selected runtime is missing or unsupported
+    private static DshNodeRuntime resolveRuntime(DshInstance instance, boolean needsPnpm)
+            throws DshException {
         String selection = instance.nodeRuntimeOrDefault();
         if (DshNodeRuntime.SYSTEM.equalsIgnoreCase(selection)) {
             // PATH 上没有就走面板托管的运行时（设置 → Node.js 一键安装）——
-            // 裸部署没有系统 Node.js 也能工作。
-            DshNodeRuntime runtime = DshNodeRuntime.detect()
+            // 裸部署没有系统 Node.js 也能工作。要 pnpm 的那些路径还要再挑一次：
+            // 系统 node 没有 pnpm 时，托管运行时才是能干活的那个。
+            DshNodeRuntime runtime = (needsPnpm ? DshNodeRuntime.detectWithPnpm() : DshNodeRuntime.detect())
                     .or(DshNodeRuntime::detectManaged)
                     .orElseThrow(() -> new DshException("Node.js was not found on PATH and no panel-managed "
                             + "runtime is installed (" + DshNodeRuntime.requirement()

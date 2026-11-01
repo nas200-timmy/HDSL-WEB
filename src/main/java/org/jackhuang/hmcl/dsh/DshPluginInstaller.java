@@ -109,9 +109,9 @@ public final class DshPluginInstaller {
             DshTuiPlugins.refuseAppProfile(spec, profile);
         }
 
-        DshNodeRuntime runtime = DshLauncher.resolveRuntime(instance);
+        DshNodeRuntime runtime = DshLauncher.resolveRuntimeForPnpm(instance);
         if (!runtime.canManagePlugins()) {
-            throw new DshException("pnpm was not found on PATH; installing plugins requires it");
+            throw runtime.pnpmMissing("installing plugins");
         }
 
         Path home = instance.homeDirectory();
@@ -235,9 +235,9 @@ public final class DshPluginInstaller {
     /// @throws DshException when pnpm is missing or the resolve fails
     public static void resolve(DshInstance instance, String profile, @Nullable Consumer<String> onLine)
             throws DshException {
-        DshNodeRuntime runtime = DshLauncher.resolveRuntime(instance);
+        DshNodeRuntime runtime = DshLauncher.resolveRuntimeForPnpm(instance);
         if (!runtime.canManagePlugins()) {
-            throw new DshException("pnpm was not found on PATH; installing plugins requires it");
+            throw runtime.pnpmMissing("installing plugins");
         }
         runPluginCommand(instance, runtime, instance.homeDirectory(), profile, List.of("install"), onLine);
     }
@@ -290,9 +290,9 @@ public final class DshPluginInstaller {
             return;
         }
 
-        DshNodeRuntime runtime = DshLauncher.resolveRuntime(instance);
+        DshNodeRuntime runtime = DshLauncher.resolveRuntimeForPnpm(instance);
         if (!runtime.canManagePlugins()) {
-            throw new DshException("pnpm was not found on PATH; removing plugins requires it");
+            throw runtime.pnpmMissing("removing plugins");
         }
 
         report(onLine, "Removing " + String.join(", ", specs) + " ...");

@@ -744,6 +744,13 @@ RestrictSUIDSGID=yes
    这时回到第 1 条更省事。
 3. **容器**：官方镜像里已经带好 Node 22 + pnpm，见 README「方式一」。
 
+**"系统里有 node" 不等于 "能装东西"。** 装 dsh 版本、改启动库、装插件、装品牌工具走的都是
+`pnpm`，所以这几条路径挑工具链时会**优先挑带 pnpm 的那个**：`PATH` 上的 node 有 pnpm 就用它，
+没有就用手上面板的托管运行时（它自带 pnpm），两者都没有才报错——报错会点名是哪个 node、
+缺的是 pnpm、以及两条出路。原先只看 `PATH` 上的 node 在不在，于是"装了系统 node、没装 pnpm"
+的机器一律失败在 "pnpm was not found on PATH"，而数据目录里那个能干活儿的托管运行时根本没人问。
+启动 dsh 本身仍然只要求 node（`PATH` 优先，其次托管运行时），那一步不需要 pnpm。
+
 > **精简基础镜像要补 `libatomic1`**。Node 26 起的官方二进制链接 `libatomic.so.1`，而
 > `debian:*-slim`、`ubuntu:*-minimal` 这类镜像不带它。缺了的表现是"装得上、跑不起来"：
 > 解包正常、版本号正常，一执行就 `error while loading shared libraries`。面板现在会在安装

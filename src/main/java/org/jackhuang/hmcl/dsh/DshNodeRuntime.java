@@ -146,12 +146,61 @@ public record DshNodeRuntime(
     /// runtimes are installed under `<data>/hdsl/runtimes` from the panel's
     /// Settings → Node.js page.
     ///
+    /// A runtime that carries `pnpm` wins over one that does not. Managed runtimes
+    /// are installed *with* pnpm beside them ([NodeRuntimeManager]), so that is the
+    /// one toolchain on a machine guaranteed to be able to install the harness —
+    /// and picking the other one is how "the panel has everything it needs" turned
+    /// into "pnpm was not found on PATH".
+    ///
     /// @return the managed runtime, or empty when none is installed
     public static Optional<DshNodeRuntime> detectManaged() {
-        return org.jackhuang.hmcl.dsh.NodeRuntimeManager.listInstalled().stream()
-                .filter(runtime -> isSupportedNodeVersion(runtime.version()))
-                .findFirst()
-                .map(DshNodeRuntime::fromManaged);
+        // Runtimes without a supported Node.js release are skipped either way: one that
+        // cannot run the harness is no answer, pnpm or not.
+        Optional<DshNodeRuntime> withPnpm = detectManaged(true);
+        return withPnpm.isPresent() ? withPnpm : detectManaged(false);
+    }
+
+    /// The managed-runtime search, with "must carry pnpm" as the flag.
+    ///
+    /// @param needsPnpm whether the answer must have a `pnpm` of its own
+    /// @return the managed runtime, or empty when none qualifies
+    private static Optional<DshNodeRuntime> detectManaged(boolean needsPnpm) {
+        for (NodeRuntime runtime : NodeRuntimeManager.listInstalled()) {
+            if (!isSupportedNodeVersion(runtime.version())) {
+                continue;
+            }
+            DshNodeRuntime described = fromManaged(runtime);
+            if (!needsPnpm || described.canManagePlugins()) {
+                return Optional.of(described);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /// The toolchain to use when the caller needs `pnpm`.
+    ///
+    /// The order is the point: whatever `PATH` offers **when it carries pnpm**, then
+    /// a managed runtime that does, and only then the plain answer — so a caller that
+    /// has to fail can say "this Node.js has no pnpm" instead of "no Node.js" or,
+    /// worse, "pnpm was not found on PATH" while a working toolchain was installed
+    /// under the data directory.
+    ///
+    /// @return the runtime to use, or empty when there is no Node.js at all
+    public static Optional<DshNodeRuntime> detectWithPnpm() {
+        return preferPnpm(detect(), detectManaged());
+    }
+
+    /// The choice behind [#detectWithPnpm], with both probes passed in.
+    ///
+    /// @param onPath  what `PATH` offered, if anything
+    /// @param managed the panel's own runtime, if one is installed
+    /// @return the runtime to use; `PATH`'s own when nothing has pnpm, so the caller can say why
+    static Optional<DshNodeRuntime> preferPnpm(Optional<DshNodeRuntime> onPath,
+                                              Optional<DshNodeRuntime> managed) {
+        if (onPath.isPresent() && onPath.get().canManagePlugins()) {
+            return onPath;
+        }
+        return managed.isPresent() ? managed : onPath;
     }
 
     /// Probes the toolchain on the current `PATH`.
@@ -221,6 +270,23 @@ public record DshNodeRuntime(
     /// @return whether `pnpm` is available
     public boolean canManagePlugins() {
         return pnpm != null;
+    }
+
+    /// The refusal for work that needs `pnpm` and cannot have it.
+    ///
+    /// The runtime is named because that is the whole puzzle: "pnpm was not found
+    /// on PATH" is true of a machine that has `/opt/node/bin/node` and nothing
+    /// beside it, and it says nothing about the two things that fix it — installing
+    /// pnpm, or using the panel's managed runtime, which is installed with pnpm
+    /// beside it.
+    ///
+    /// @param action what was being attempted, in the caller's words
+    /// @return the exception to throw
+    public DshException pnpmMissing(String action) {
+        return new DshException("pnpm " + MINIMUM_PNPM + "+ was not found: the Node.js at " + node
+                + " has none beside it, PATH has none, and no panel-managed runtime provides one — "
+                + action + " needs it. Install it (`npm install -g pnpm`) or install a managed runtime "
+                + "on Settings -> Node.js, which carries pnpm.");
     }
 
     /// Returns the environment entries that put this runtime's tools first.
