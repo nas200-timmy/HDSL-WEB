@@ -21,6 +21,7 @@ import org.jackhuang.hmcl.util.platform.StreamPump;
 import org.jackhuang.hmcl.util.Lang;
 
 import java.io.IOException;
+import java.nio.charset.Charset;
 import java.util.*;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -153,11 +154,23 @@ public final class ManagedProcess {
     }
 
     public void pumpInputStream(Consumer<String> onLogLine) {
-        addRelatedThread(Lang.thread(new StreamPump(process.getInputStream(), onLogLine, OperatingSystem.NATIVE_CHARSET), "ProcessInputStreamPump", true));
+        pumpInputStream(onLogLine, OperatingSystem.NATIVE_CHARSET);
+    }
+
+    /// Pumps the process's stdout with an explicit charset. Protocol streams whose
+    /// encoding the process does not vary by platform — ACP's JSON-RPC lines are
+    /// UTF-8 by specification — must not be decoded with the console's code page.
+    public void pumpInputStream(Consumer<String> onLogLine, Charset charset) {
+        addRelatedThread(Lang.thread(new StreamPump(process.getInputStream(), onLogLine, charset), "ProcessInputStreamPump", true));
     }
 
     public void pumpErrorStream(Consumer<String> onLogLine) {
-        addRelatedThread(Lang.thread(new StreamPump(process.getErrorStream(), onLogLine, OperatingSystem.NATIVE_CHARSET), "ProcessErrorStreamPump", true));
+        pumpErrorStream(onLogLine, OperatingSystem.NATIVE_CHARSET);
+    }
+
+    /// Pumps the process's stderr with an explicit charset; see [#pumpInputStream(Consumer, Charset)].
+    public void pumpErrorStream(Consumer<String> onLogLine, Charset charset) {
+        addRelatedThread(Lang.thread(new StreamPump(process.getErrorStream(), onLogLine, charset), "ProcessErrorStreamPump", true));
     }
 
     /**

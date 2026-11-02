@@ -149,7 +149,7 @@ public final class DshAcpClient implements AutoCloseable {
         this.writer = new BufferedWriter(
                 new OutputStreamWriter(process.getProcess().getOutputStream(), StandardCharsets.UTF_8));
 
-        process.pumpInputStream(this::handleLine);
+        process.pumpInputStream(this::handleLine, StandardCharsets.UTF_8);
         process.pumpErrorStream(line -> {
             synchronized (stderrTail) {
                 stderrTail.addLast(line);
@@ -158,7 +158,7 @@ public final class DshAcpClient implements AutoCloseable {
                 }
             }
             LOG.info("[acp] " + line);
-        });
+        }, StandardCharsets.UTF_8);
 
         this.readerThread = new Thread(this::awaitExit, "HDSL acp waiter");
         this.readerThread.setDaemon(true);
