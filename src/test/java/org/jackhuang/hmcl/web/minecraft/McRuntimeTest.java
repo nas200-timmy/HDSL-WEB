@@ -234,4 +234,44 @@ class McRuntimeTest {
         // A name nobody has stays as given, so the failure can still name it.
         assertEquals("hdsl-no-such-java-binary", McRuntime.resolveJava("hdsl-no-such-java-binary"));
     }
+
+    @Test
+    void javaEightIsParsedAsMajorEightNotOne() {
+        assertEquals(8, McRuntime.parseJavaMajor("java version \"1.8.0_401\"\nJava(TM) SE Runtime"));
+        assertEquals(17, McRuntime.parseJavaMajor("openjdk version \"17.0.9\" 2023-10-17"));
+        assertEquals(21, McRuntime.parseJavaMajor("java version \"21\" 2023-09-19 LTS"));
+        assertEquals(11, McRuntime.parseJavaMajor("openjdk version \"11.0.2\" 2019-01-15"));
+        assertEquals(0, McRuntime.parseJavaMajor("not a java version line"));
+        assertEquals(0, McRuntime.parseJavaMajor(null));
+    }
+
+    @Test
+    void javaInfoReportsThePanelRuntimeByDefault() {
+        McRuntime runtime = new McRuntime(manager, terminals, feature, "java", null);
+        McRuntime.JavaInfo info = runtime.javaInfo();
+        assertTrue(info.ok(), info.error());
+        assertEquals("panel", info.source());
+        assertTrue(info.major() >= 17, "the panel itself requires JDK 17+: " + info.major());
+        assertNotNull(info.version());
+        assertTrue(Path.of(info.path()).isAbsolute(), info.path());
+    }
+
+    @Test
+    void aConfiguredJavaThatDoesNotExistIsNotSilentlyAccepted() {
+        McRuntime runtime = new McRuntime(manager, terminals, feature,
+                Path.of(dir.toString(), "no-such-java").toString(), null);
+        McRuntime.JavaInfo info = runtime.javaInfo();
+        assertFalse(info.ok());
+        assertNotNull(info.error());
+        assertTrue(info.error().contains("does not exist"), info.error());
+    }
+
+    @Test
+    void initialHeapNeverExceedsTheConfiguredMaximum() {
+        // The create form accepts 256 MB; a fixed -Xms512M made the JVM refuse
+        // to start before Minecraft wrote its first line.
+        assertEquals(List.of("-Xms256M", "-Xmx256M"), McRuntime.heapArgs(256));
+        assertEquals(List.of("-Xms512M", "-Xmx2048M"), McRuntime.heapArgs(2048));
+        assertEquals(List.of("-Xms512M", "-Xmx512M"), McRuntime.heapArgs(512));
+    }
 }

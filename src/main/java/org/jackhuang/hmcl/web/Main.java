@@ -212,6 +212,21 @@ public final class Main {
             System.out.println("  note     : " + privileges);
         }
 
+        // Platform capabilities that change what the panel can offer. The same
+        // sentences are shown on the brand tab / MC card; printing them once at
+        // boot means a bare-deploy operator does not have to click through the
+        // UI to find out why an install button is greyed out.
+        for (org.jackhuang.hmcl.web.brand.Brand brand : org.jackhuang.hmcl.web.brand.Brand.values()) {
+            String reason = brand.notInstallableReason(
+                    org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS);
+            if (reason != null) {
+                System.out.println("  platform : " + brand.id() + " not installable - " + reason);
+            }
+        }
+        System.out.println("  minecraft: console " + org.jackhuang.hmcl.web.minecraft.McRuntime.consoleKind()
+                + (org.jackhuang.hmcl.web.minecraft.McRuntime.consoleKind().equals("pipe")
+                    ? " (log + command box; no PTY on this platform)" : " (interactive terminal)"));
+
         // ---- 体检段：这两项缺了，面板能启动但"装不了东西 / 打不开页面"，
         // 裸部署（尤其 Windows）控制台是唯一窗口，必须在启动时说清楚 ----
         if (frontendPackaged()) {

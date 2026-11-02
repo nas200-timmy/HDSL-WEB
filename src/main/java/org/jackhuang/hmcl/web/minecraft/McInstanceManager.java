@@ -261,6 +261,10 @@ public final class McInstanceManager {
         if (!inside) {
             throw new McException("Refusing to delete " + directory + ": it is outside the instances directories");
         }
+        // A panel killed before it could stop its children leaves a `java`
+        // process whose command line names this directory (the server jar path
+        // is absolute). Windows also refuses to remove files it holds.
+        org.jackhuang.hmcl.util.ProcessTree.killReferencing(directory);
         try (Stream<Path> walk = Files.walk(directory)) {
             for (Path path : walk.sorted(Comparator.reverseOrder()).toList()) {
                 Files.deleteIfExists(path);

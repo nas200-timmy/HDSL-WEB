@@ -78,6 +78,7 @@ import org.jackhuang.hmcl.web.zcode.ZcodeApiServlet;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
@@ -125,6 +126,7 @@ public final class HdslServer {
     /// The web terminal's sessions (docs/web-shell.md), the only way into a
     /// TUI from the panel.
     private final org.jackhuang.hmcl.web.terminal.TerminalManager terminals;
+    private final org.jackhuang.hmcl.web.minecraft.McRuntime mcRuntime;
     private final Logger logger;
     private final AtomicLong startedAtMillis;
     private final AtomicBoolean hookInstalled = new AtomicBoolean();
@@ -134,6 +136,7 @@ public final class HdslServer {
                        @Nullable SslContextFactory.Server sslContextFactory, WebSocketClient proxyWebSocketClient,
                        AcpSessionManager acpSessions,
                        org.jackhuang.hmcl.web.terminal.TerminalManager terminals,
+                       org.jackhuang.hmcl.web.minecraft.McRuntime mcRuntime,
                        Logger logger, AtomicLong startedAtMillis) {
         this.server = server;
         this.baseHttpConfig = baseHttpConfig;
@@ -143,6 +146,7 @@ public final class HdslServer {
         this.proxyWebSocketClient = proxyWebSocketClient;
         this.acpSessions = acpSessions;
         this.terminals = terminals;
+        this.mcRuntime = mcRuntime;
         this.logger = logger;
         this.startedAtMillis = startedAtMillis;
     }
@@ -389,6 +393,22 @@ public final class HdslServer {
             logger.warning("Could not create the Minecraft directory " + mcRoot
                     + "; creating an instance will fail until it exists and is writable", e);
         }
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            String lower = mcRoot.toString().toLowerCase(java.util.Locale.ROOT);
+            if (lower.contains("systemprofile") || lower.startsWith("c:\\windows")) {
+                logger.warning("Minecraft servers would live under a system-account path: " + mcRoot
+                        + ". Run the panel as a dedicated non-admin user, or set HDSL_MC_DIR / mc.dir"
+                        + " to a folder you control.");
+            }
+            if (mcRoot.toString().length() > 120) {
+                logger.warning("The Minecraft server path is " + mcRoot.toString().length()
+                        + " characters long; Windows' default MAX_PATH is 260. Prefer a short HDSL_MC_DIR.");
+            }
+        }
+        if (!java.nio.file.Files.isWritable(mcRoot)) {
+            logger.warning("The Minecraft server directory is not writable: " + mcRoot);
+        }
         // 旧位置（<data>/minecraft/instances）只读兼容：升级前的服务器还在那儿。
         java.nio.file.Path mcLegacyRoot = config.dataDir.resolve("minecraft").resolve("instances");
         logger.info("Minecraft servers live in " + mcRoot
@@ -401,6 +421,10 @@ public final class HdslServer {
         org.jackhuang.hmcl.web.minecraft.McRuntime mcRuntime =
                 new org.jackhuang.hmcl.web.minecraft.McRuntime(
                         mcInstances, terminals, mcFeature, mcJava, mcVersionsRoot);
+        org.jackhuang.hmcl.web.minecraft.McRuntime.JavaInfo mcJavaInfo = mcRuntime.javaInfo();
+        logger.info("Minecraft console: " + org.jackhuang.hmcl.web.minecraft.McRuntime.consoleKind()
+                + "; java: " + (mcJavaInfo.path().isBlank() ? "(none)" : mcJavaInfo.path())
+                + (mcJavaInfo.ok() ? " (" + mcJavaInfo.version() + ")" : " — " + mcJavaInfo.error()));
         org.jackhuang.hmcl.web.minecraft.McVersions mcVersions =
                 new org.jackhuang.hmcl.web.minecraft.McVersions(mcVersionsRoot);
         org.jackhuang.hmcl.web.minecraft.McBackups mcBackups =
@@ -481,7 +505,7 @@ public final class HdslServer {
         org.jackhuang.hmcl.web.http.HostHeaderSupport.verify();
 
         HdslServer built = new HdslServer(server, httpConfig, mainConnector, redirectConnector, ssl,
-                proxyWebSocketClient, acpSessions, terminals, logger, startedAtMillis);
+                proxyWebSocketClient, acpSessions, terminals, mcRuntime, logger, startedAtMillis);
         self.set(built);
         return built;
     }
@@ -869,6 +893,11 @@ public final class HdslServer {
         // expires, and on a bare deployment for good. The deadline is shared:
         // N instances must not each spend their own 40 s window.
         org.jackhuang.hmcl.web.brand.BrandRuntime.stopAll(25_000L);
+        // Minecraft servers are children too. On POSIX they are terminal
+        // sessions, which `terminals.close()` would take down; on Windows they
+        // are plain pipe processes that would otherwise outlive the panel and
+        // keep the game port. Ask every server to `stop`, then kill stragglers.
+        mcRuntime.stopAll(Duration.ofSeconds(15));
         // The terminal processes are children of the panel; closing the
         // manager takes their process groups with it.
         terminals.close();

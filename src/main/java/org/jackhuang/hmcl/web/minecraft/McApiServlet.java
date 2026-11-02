@@ -204,7 +204,8 @@ public final class McApiServlet extends HttpServlet {
                 return;
             }
             if ("/ports".equals(path) && "GET".equals(method)) {
-                McPorts.Pair pair = McPorts.allocate(manager::portTaken,
+                McPorts.Pair pair = McPorts.allocate(
+                        port -> manager.portTaken(port) || !McPorts.isFree(port),
                         config.mc.portStart, config.mc.portEnd);
                 Json.write(response, Map.of("port", pair.game(), "rconPort", pair.rcon()));
                 return;
@@ -246,7 +247,62 @@ public final class McApiServlet extends HttpServlet {
             body.addProperty("eulaRetrievedAt", record.eulaRetrievedAt());
             body.addProperty("ackMethod", record.ackMethod());
         });
+        // Even while the feature is disabled these two are readable: the card
+        // has to be able to say "this is where the servers will live and this is
+        // the Java they will use" before the user commits to enabling it.
+        body.addProperty("console", McRuntime.consoleKind());
+        body.add("java", javaJson());
+        body.add("storage", storageJson());
         Json.write(response, body);
+    }
+
+    private JsonObject javaJson() {
+        McRuntime.JavaInfo info = runtime.javaInfo();
+        JsonObject java = new JsonObject();
+        java.addProperty("path", info.path());
+        if (info.version() == null) {
+            java.add("version", com.google.gson.JsonNull.INSTANCE);
+        } else {
+            java.addProperty("version", info.version());
+        }
+        java.addProperty("major", info.major());
+        java.addProperty("source", info.source());
+        java.addProperty("ok", info.ok());
+        if (info.error() != null) {
+            java.addProperty("error", info.error());
+        }
+        return java;
+    }
+
+    private JsonObject storageJson() {
+        JsonObject storage = new JsonObject();
+        storage.addProperty("root", manager.root().toString());
+        storage.addProperty("source", storageSource());
+        boolean writable;
+        try {
+            writable = java.nio.file.Files.isDirectory(manager.root())
+                    && java.nio.file.Files.isWritable(manager.root());
+        } catch (RuntimeException e) {
+            writable = false;
+        }
+        storage.addProperty("writable", writable);
+        if (manager.legacyRoot() == null) {
+            storage.add("legacy", com.google.gson.JsonNull.INSTANCE);
+        } else {
+            storage.addProperty("legacy", manager.legacyRoot().toString());
+        }
+        return storage;
+    }
+
+    private String storageSource() {
+        String env = System.getenv("HDSL_MC_DIR");
+        if (env != null && !env.isBlank()) {
+            return "HDSL_MC_DIR";
+        }
+        if (config.mc.dir != null && !config.mc.dir.isBlank()) {
+            return "mc.dir";
+        }
+        return "$HOME/mc";
     }
 
     private void terms(HttpServletResponse response) throws IOException {
@@ -561,9 +617,16 @@ public final class McApiServlet extends HttpServlet {
         int port = intField(body, "port");
         int rconPort = intField(body, "rconPort");
         if (port == 0 || rconPort == 0) {
-            McPorts.Pair pair = McPorts.allocate(manager::portTaken, config.mc.portStart, config.mc.portEnd);
+            McPorts.Pair pair = McPorts.allocate(
+                    candidate -> manager.portTaken(candidate) || !McPorts.isFree(candidate),
+                    config.mc.portStart, config.mc.portEnd);
             port = pair.game();
             rconPort = pair.rcon();
+        } else if (!McPorts.isFree(port)) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "game port " + port + " is already in use on this machine;"
+                            + " stop whatever is listening on it, or pick another port");
+            return;
         }
 
         // 存储位置：默认放专用目录（容器里是 /home/hdsl/mc，挂了卷就跟着容器走）；
@@ -1046,7 +1109,10 @@ public final class McApiServlet extends HttpServlet {
         if (status.error() != null) {
             body.addProperty("error", status.error());
         }
-        body.addProperty("consoleAvailable", runtime.console(instance.id()).isPresent());
+        // `console()` only names a PTY session. A Windows pipe server has its
+        // console in the log + input box, and the UI must still enable the
+        // button — that was the one path where the fix was invisible.
+        body.addProperty("consoleAvailable", runtime.consoleMode(instance.id()) != null);
         return body;
     }
 

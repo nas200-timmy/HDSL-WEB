@@ -58,7 +58,9 @@
 - Minecraft 服务端（默认关闭，第三方功能）：开关在「设置 → 品牌实例」，要在开发者密码下
   读完 Mojang EULA 与服务条款才能打开；服务端程序不随本项目分发，由 Mojang 官方下载。
   **存档放在 `/home/hdsl/mc`，容器部署必须把这个路径挂出来**（见[数据与挂载点](#数据与挂载点)）。
-  完整的功能介绍、操作要求与边界见 [docs/minecraft.md](docs/minecraft.md)。
+  Windows 裸部署走 headless 控制台（日志 + 命令输入，没有 PTY）；Java 默认复用面板自己的
+  运行时，所选版本需要更高版本时请自备并配置 `mc.java_path`。设置页会显示实际服务器目录
+  与 Java 来源。完整的功能介绍、操作要求与边界见 [docs/minecraft.md](docs/minecraft.md)。
 - 下载源：设置页可选择预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL。保存后立即生效，无需重启。环境变量 `NPM_CONFIG_REGISTRY` 仅作为回退值。细节见 [docs/deployment.md](docs/deployment.md)。
 - 想**从空目录**把整个项目交给另一个模型重写？[docs/build-from-scratch-prompt.md](docs/build-from-scratch-prompt.md) 是一份完整任务提示词：硬约束、功能清单、对外契约、构建与验证命令，以及这一路踩过的坑。
   **只在清空/新建仓库时用**——在现有仓库里接手请读交接稿，别按它重建。

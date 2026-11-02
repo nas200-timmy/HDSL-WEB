@@ -1,7 +1,8 @@
 # Minecraft 服务端管理（MC 服务器）
 
-> 状态：**实验性实现，默认关闭**（2026-10-30）。Windows 的管道控制台只实现了代码路径，
-> 尚未真机验证；本功能不主动宣传。本文是实现契约，不是使用说明。
+> 状态：**实验性实现，默认关闭**（2026-10-30）。Windows 的管道控制台已有完整代码路径，
+> 并新增 `McRuntimePipeTest` 在 Linux 上覆盖启停/命令/`stopAll`/端口占用；**真机 Windows
+> 仍待验收**（ConPTY 切换是独立的一步）。本功能不主动宣传。本文是实现契约，不是使用说明。
 >
 > 一句话：把原版 Minecraft 服务端当作**第三种 surface**接入面板，复用现有的实例模型、
 > 进程/终端、端口分配、任务与审计；游戏端口独立暴露，**默认关闭**，开启需提权与免责确认；
@@ -1030,17 +1031,32 @@ MC 服务端与 AI agent 是同一类工作负载：执行第三方代码、不�
 
 - **实例终端已可用，MC 控制台仍是 pipe**。2026-10-31 起 Windows 的实例终端走 ConPTY
   （`docs/web-shell.md` §7.1），浏览器里是真终端；MC 的 `McRuntime` 仍走 `pipes`
-  （headless 控制台），未跟着切。后续顺序：先让 `PTY_SUPPORTED` 加上 WINDOWS、把
-  `launchPipe` / `consoleMode` 的 `"pipe"` 分支与 `sendCommand` 的双路径删掉，再单独一轮
-  真机验证（从管道变控制台是行为变化，不跟这次混在一起）。
+  （headless 控制台），未跟着切。后续顺序：先让 `McRuntime.ptySupported()` 在 Windows 上返回
+  `ConPty.platformSupported()`、把 `launchPipe` / `consoleMode` 的 `"pipe"` 分支与
+  `sendCommand` 的双路径删掉，再单独一轮真机验证（从管道变控制台是行为变化，不跟这次混在一起）。
 - **第一版策略**：Windows 上 MC 以 headless 方式运行，浏览器只提供**日志流 + 命令输入**
-  （写 stdin 或走 RCON），不承诺原生控制台；原生窗口标注为实验性/后续。
-- **存储根**：同 §7.1，可弹宿主机原生目录选择器；没有桌面会话时走配置。
+  （写 stdin 或走 RCON），不承诺原生控制台；原生窗口标注为实验性/后续。设置页的 MC 卡片
+  会在功能关闭时也显示“控制台：日志 + 命令输入（本平台没有 PTY）”。
+- **退出与孤儿**：`McRuntime.stopAll()` 在面板关闭时先对所有运行中的实例写 `stop`，共享
+  一个截止时间，超时才 `ProcessTree.terminate`。Windows 上这是必须的——pipe 进程不是
+  `terminals` 的子会话，面板退出不会自动带走它们，会留下占着 25565 的 `java.exe`。
+- **端口**：启动前用 `McPorts.isFree()` 做真实 bind 探测；游戏端口总是查，RCON 只在
+  `enable-rcon=true` 时查。`/api/mc/ports` 也会避开操作系统上已有人监听的端口。
+  Windows 上不做 `SO_REUSEADDR` 探测，否则旁边有监听也会被误判为空闲。
+- **Java**：默认复用面板自己的 JVM（裸部署能启动面板就至少有一个 Java）；`java -version`
+  的结果与来源通过 `GET /api/mc/feature` 的 `java` 字段暴露。版本不够时启动前报“需要 Java N
+  或更新，当前是 M”，并提示 `mc.java_path` / `JAVA_HOME`。面板**不代管 JRE**，也不随包分发。
+- **编码**：子进程固定 `-Dfile.encoding=UTF-8`（含 `sun.stdout/stderr.encoding`），与 pipe
+  pump 的 UTF-8 解码一致；JDK 17 + 中文 Windows 不再出现 GBK 乱码。
+- **存储根**：`HDSL_MC_DIR` → `mc.dir` → `$HOME/mc`；`GET /api/mc/feature` 的 `storage`
+  给出实际路径、来源与可写性。Windows 服务以 SYSTEM 运行时会落在 `systemprofile` 下，
+  启动日志会明确警告；含中文/空格的路径可用，但建议短路径（>120 字符会提示 MAX_PATH）。
 - **`server.jar`**：不要用符号链接（需要权限/开发者模式）；同卷用硬链接，跨卷只能复制。
-  更新 jar 时文件被 JVM 占用会失败——先停再换，或换版本目录后切换链接。
-- **路径**：避免 `%TEMP%`；注意 260 字符长路径（需要 `\\?\` 前缀或系统 LongPaths）。
+  更新 jar 时文件被 JVM 占用会失败——先停再换，或换版本目录后切换链接。删除实例前会调用
+  `ProcessTree.killReferencing`，把命令行里带着该实例目录的残留 `java` 进程收掉。
 - **服务形态**：NSSM/WinSW/计划任务。实例终端在 session 0 下也能用（ConPTY 不需要桌面），
-  但 MC 的原生窗口方案仍然要相应调整。
+  但 MC 的原生窗口方案仍然要相应调整。服务停止要能触发 JVM shutdown hook，否则世界可能
+  来不及保存。
 
 ### 15.3 macOS
 

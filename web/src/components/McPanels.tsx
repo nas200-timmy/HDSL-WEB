@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type McBackup, type McInstance } from "../api";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
+import { useMcFeature } from "../mcFeature";
 import { toast } from "../store";
 import { errMsg } from "../utils";
 
@@ -394,6 +395,8 @@ export function McConsolePanel({
   const [pipe, setPipe] = useState(false);
   const [line, setLine] = useState("");
   const [busy, setBusy] = useState(false);
+  const feature = useMcFeature();
+  const platformPipe = feature?.console === "pipe";
 
   const open = async () => {
     setBusy(true);
@@ -428,7 +431,7 @@ export function McConsolePanel({
         <span className="comp-label">控制台</span>
         <span className="comp-value">
           <button className="btn btn-text" disabled={busy || !instance.consoleAvailable} onClick={() => void open()}>
-            {pipe ? "重新连接" : "打开交互终端"}
+            {pipe ? "重新连接" : platformPipe ? "打开控制台（日志 + 命令）" : "打开交互终端"}
           </button>
         </span>
       </div>
@@ -436,7 +439,9 @@ export function McConsolePanel({
         {instance.consoleAvailable
           ? pipe
             ? "这台服务端没有 PTY：命令从下面的输入框送进去，输出仍然在这里。"
-            : "交互终端走 Web Shell（PTY）；这一块只是输出预览。"
+            : platformPipe
+              ? "本平台没有 PTY：打开后是日志 + 命令输入框，不是交互终端。"
+              : "交互终端走 Web Shell（PTY）；这一块只是输出预览。"
           : "服务端起来之后才有控制台。"}
       </p>
       <LogTail instance={instance} height={420} />

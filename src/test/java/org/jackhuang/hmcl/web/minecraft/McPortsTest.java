@@ -19,7 +19,10 @@ package org.jackhuang.hmcl.web.minecraft;
 
 import org.junit.jupiter.api.Test;
 
+import java.net.ServerSocket;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -52,5 +55,13 @@ class McPortsTest {
     @Test
     void allocateFailsLoudlyWhenTheRangeIsFull() {
         assertThrows(IllegalStateException.class, () -> McPorts.allocate(port -> true, 25565, 25566));
+    }
+
+    @Test
+    void aPortWithAListenerIsNotFree() throws Exception {
+        try (ServerSocket socket = new ServerSocket(0)) {
+            assertFalse(McPorts.isFree(socket.getLocalPort()),
+                    "a real listener must be seen even though no instance claims the port");
+        }
     }
 }

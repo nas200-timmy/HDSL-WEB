@@ -129,7 +129,7 @@ Claude Web 有两个内核（社区引擎 `claude-web-engine`、官方 `@anthrop
 | 端口 | 两个，落 `<instance>/panel/ports.json`（首次分配，之后复用；被占则重分配一次） |
 | 就绪 | 轮询 dashboard 的 `/api/status`，要求 `gateway_running=true`；**不**要求 `overall=ok`（它把 storage 与各消息平台也算进去） |
 | 停止窗口 | **40 s**（其余品牌 10 s）：gateway 自己要 drain 30 s |
-| 平台 | **Linux / macOS**。Windows 上不提供安装：面板在品牌页把安装入口置灰并写出原因（`Brand.installableOn` 是唯一判断，`/api/brands/hermes/versions` 直接回 `supported:false` + 原因，连 GitHub 都不去请求）。想在 Windows 上用 Hermes，请把**面板本身**装进 WSL2——对面板来说那就是 Linux |
+| 平台 | **Linux / macOS**。Windows 上不提供安装：`Brand.installableOn` 是唯一判断，`/api/brands/hermes/versions` 直接回 `supported:false` + 原因（连 GitHub 都不去请求）；`GET /api/brands/capabilities` 让品牌页签在点进去之前就标“不可用”；`POST /api/brands/hermes/instances` 与 `BrandRuntime.launch` 也会用同一句原因拒绝，避免从 Linux 拷来的 `/data` 在 Windows 上死在 `error 193`。想在 Windows 上用 Hermes，请把**面板本身**装进 WSL2——对面板来说那就是 Linux |
 | 为什么 Windows 不行 | 两点都不是小改：安装要从源码建一套 Python 环境（venv 是 `.venv/Scripts/` 而不是 `bin/`），运行时靠一个 `sh` 脚本同时看住 gateway 与 dashboard 两个进程（Windows 没有 `/bin/sh`）。官方 `install.ps1` 解决的是"一台机器一份安装"，与面板"多版本共存 + 每实例一份 HOME"不是同一个问题 |
 
 ### 一个 wrapper 管两个进程

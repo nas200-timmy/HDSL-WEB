@@ -2,6 +2,71 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 · web-shell · MC 的 Windows 裸部署收口；Java/存储位置可见；Hermes 平台提醒前置
+
+> 这一轮不新增功能面，只把「Windows 裸部署跑 MC」从“代码里有”变成“能解释、能收尾”。
+> 顺序上先保证进程与端口不会留下孤儿，再把 Java 和目录摊开给用户看，最后把 Hermes
+> 的 Windows 限制从品牌页提前到页签与创建/启动入口。
+
+**MC：面板退出时不再留下 Windows 孤儿服务端**
+
+- `McRuntime.stopAll()` 现在会遍历所有运行中的实例：先写 `stop` 进 stdin，共享一个截止时间等
+  优雅退出，超时才 `ProcessTree.terminate`（Windows 上会连子进程一起收）。`HdslServer.stop()`
+  在关终端之前调用它。
+- 之前 Windows 的 pipe 进程只存在 `McRuntime.pipes` 里，`HdslServer.stop()` 只停了品牌和
+  `terminals`，于是关面板/重启服务后 `java.exe` 会继续占着 25565 和世界文件，新面板却显示
+  `STOPPED`。这就是“裸跑 Windows 全是问题”里最典型的一条。
+
+**MC：启动前先看端口，删除前先清残留**
+
+- `McPorts.isFree()` 做真实 bind 探测（Linux 允许 `SO_REUSEADDR` 以忽略 `TIME_WAIT`；
+  Windows/macOS 不允许，否则旁边有监听也会误报空闲）。启动前检查游戏端口，RCON 只在
+  `server.properties` 的 `enable-rcon=true` 时才检查。
+- `/api/mc/ports` 和创建时的自动分配现在同时避开“实例台账占用”和“操作系统上真的有人监听”。
+- 实例的 `server.jar` 参数改成绝对路径；删除实例前调用 `ProcessTree.killReferencing`，这样
+  面板被硬杀后留下的、命令行里带着该实例目录的 `java` 进程能在 Windows 上被收掉。
+
+**MC：控制台入口在 Windows 上是真的可点**
+
+- `consoleAvailable` 原来只看 PTY 会话，pipe 服务端永远显示“不可用”。现在按
+  `consoleMode()` 判断；Windows 上按钮文案是“打开控制台（日志 + 命令）”，并在打开前
+  就说明本平台没有 PTY，不再先假装能开交互终端。
+
+**MC：Java 与编码**
+
+- 默认 `mc.java_path` 继续解析到面板自己的 JVM（裸部署能跑起来就证明至少有一个 Java），
+  新增 `GET /api/mc/feature` 的 `java` 字段：路径、`java -version`、主版本、来源
+  （`panel` / `configured`）以及 `ok/error`。设置页在功能关闭时也能看到这些。
+- 配置了不存在/跑不起来的 Java 时，启动前直接报出路径和原因，不再静默跳过检查后让
+  Minecraft 自己失败；`java -version` 的 `1.8.0_x` 现在解析成 8，而不是 1。
+- 子进程加 `-Dfile.encoding=UTF-8` / `-Dsun.stdout.encoding=UTF-8` /
+  `-Dsun.stderr.encoding=UTF-8`：JDK 17 + 中文 Windows 的默认 GBK 与 pipe pump 的 UTF-8
+  不再互相打架。
+- `-Xms` 不再固定 512M：创建表单允许 256M，固定值会让 JVM 在 Minecraft 打印第一行前
+  就以“初始堆大于最大堆”退出。`-Xms` 取 `min(512, -Xmx)`。
+
+**MC：把服务器目录摊开**
+
+- `GET /api/mc/feature` 新增 `storage`：实际根目录、来源（`HDSL_MC_DIR` / `mc.dir` /
+  `$HOME/mc`）、是否可写、旧位置。设置页的 MC 卡片无论开关状态都显示
+  “服务器目录 + Java + 控制台形态”，并说明每个实例在 `<root>/<id>/`、改配置不会搬已建实例。
+- Windows 启动时额外检查：目录落在 `systemprofile` / `C:\Windows` 下（SYSTEM 服务账户）、
+  路径超过 120 字符、目录不可写，各打一行警告；这些是“按钮能点但服务端起不来”的常见根因。
+
+**Hermes：平台限制前置**
+
+- 新增 `GET /api/brands/capabilities`（纯本地、不请求网络）：每个品牌在这台机器上能不能装、
+  不能装的原因。品牌页签先渲染“不可用”标签，`title` 里是同一句原因。
+- `POST /api/brands/<brand>/instances` 与 `BrandRuntime.launch` 也检查
+  `Brand.installableOn`：从 Linux 拷过来的 `/data` 里若已有 Hermes 实例，在 Windows 上会得到
+  “Hermes 只能在 Linux / macOS 上安装…”而不是 `error 193`。
+- 启动横幅在 Windows 上打印平台受限的品牌与 MC 控制台形态；文案仍只从
+  `Brand.notInstallableReason` 出，不在前端复制判断。
+
+**验证**：新增 `McRuntimePipeTest`（在 Linux 上跑 Windows 的 pipe 路径：启停、命令、stopAll、
+端口占用）、`McPorts.isFree`、`McRuntimeTest` 的 Java/堆参数用例、`BrandApiTest` 的
+capabilities 用例；`npm run typecheck` 通过。
+
 ## v0.6.55 — 2026-11-01 · 小版本：把「root 建、agent 写」查完；`docker-install.sh` 能换源、能对 buildx 说话
 
 > 起因：一次演示翻车——Octop 实例起不来（`unable to open database file`），MC 实例起不来

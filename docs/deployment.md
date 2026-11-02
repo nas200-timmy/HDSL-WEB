@@ -834,6 +834,34 @@ runtime  : node MISSING, pnpm MISSING
 排查时先看这一行：`node 22.23.3, pnpm 11.x` 就是齐了；只有 node 没有 pnpm，
 说明当时是用 `npm i -g pnpm` 之外的方式装的 node（比如 corepack 未启用）。
 
+### 10.2 Windows 裸部署：MC 的 Java、目录与服务形态
+
+MC 服务端是**独立于面板的 Java 进程**，所以裸部署要分清两件事：
+
+- **面板自己的 JRE 已经存在**——你能双击/注册服务把 `hdsl-web.jar` 跑起来，就至少有一个
+  Java 运行时。`mc.java_path` 留空时，MC 默认就用这一个（`java.home/bin/java.exe`），
+  不需要先装第二份 JDK。
+- 但**版本可能不够**：1.20.5+ 需要 Java 21，而面板最低支持 JDK 17。设置页的“MC 服务端”
+  卡片会显示当前 Java 的路径、版本与来源；创建实例时如果所选版本要求更高，会当场提示。
+  自备 Java 21+ 后，把绝对路径填进 `server.yaml` 的 `mc.java_path`，或设
+  `HDSL_MC_JAVA_PATH`。面板**不代管、也不随包分发 JRE**。
+
+**目录**：默认 `%USERPROFILE%\mc`（`$HOME/mc`），可用 `mc.dir` 或 `HDSL_MC_DIR` 改。
+设置页在功能关闭时就显示实际根目录与来源；每个实例在 `<root>/<id>/`，存档、
+`server.jar`、日志都在那里。**改配置不会搬动已建实例**，旧实例页面仍显示各自的真实路径。
+Windows 上注意：
+
+- 不要用 SYSTEM / LocalSystem 跑面板：`%USERPROFILE%` 会落到
+  `C:\Windows\system32\config\systemprofile`，启动日志会明确警告。用专用非管理员账户。
+- 路径尽量短；超过 120 字符会警告（Windows 默认 `MAX_PATH=260`）。
+- 不要放网络盘/FAT；用本地 NTFS。
+
+**服务形态**：NSSM / WinSW / 计划任务。服务停止方式要能让 JVM 走 shutdown hook，面板会
+先对所有 MC 实例写 `stop` 再退出；直接 `TerminateProcess` 会跳过世界保存。
+
+**控制台**：Windows 没有 PTY，MC 是“日志 + 命令输入框”，不是交互终端。设置页与实例页
+都会在打开前说明；功能本身可用，只是形态与 Linux/macOS 不同。
+
 ## 11. 把 agent 当对手：三条真边界
 
 面板的凭据（`auth/users.json`、`developer.json`、证书私钥）都是 0600，**这只挡别的用户**。agent 以面板

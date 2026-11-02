@@ -168,6 +168,55 @@ export function McFeatureCard() {
         {enabled && " 实例入口在「实例列表 → 品牌实例」下面。"}
       </p>
 
+      {feature && (
+        <div style={{ padding: "6px 8px 0", fontSize: 12, lineHeight: 1.8, color: "var(--monet-on-surface-variant)" }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" }}>
+            <span>服务器目录：</span>
+            <span className="mono" style={{ wordBreak: "break-all" }}>{feature.storage.root}</span>
+            <span className="dim">（{feature.storage.source}）</span>
+            <button
+              className="btn btn-text"
+              style={{ padding: "0 4px", minHeight: 0 }}
+              onClick={() => {
+                const text = feature.storage.root;
+                if (!navigator.clipboard?.writeText) {
+                  toast("info", "当前页面（非 HTTPS）不允许剪贴板写入，请手动选中路径");
+                  return;
+                }
+                void navigator.clipboard.writeText(text)
+                  .then(() => toast("success", "路径已复制"))
+                  .catch(() => toast("error", "复制失败，请手动选中路径"));
+              }}
+            >
+              复制
+            </button>
+            {!feature.storage.writable && (
+              <span style={{ color: "var(--monet-error)" }}>当前不可写，创建实例前请先修好目录权限</span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" }}>
+            <span>控制台：</span>
+            <span>{feature.console === "pipe" ? "日志 + 命令输入（本平台没有 PTY）" : "PTY 交互终端"}</span>
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" }}>
+            <span>Java：</span>
+            <span className="mono" style={{ wordBreak: "break-all" }}>{feature.java.path || "（未解析）"}</span>
+            <span className={feature.java.ok ? "dim" : undefined}
+                  style={feature.java.ok ? undefined : { color: "var(--monet-error)" }}>
+              {feature.java.ok
+                ? `（${feature.java.version ?? "版本未知"}，${feature.java.source === "panel" ? "来自面板运行时" : "来自 mc.java_path"}）`
+                : `（不可用：${feature.java.error ?? "未知原因"}）`}
+            </span>
+          </div>
+          <div className="dim" style={{ fontSize: 11 }}>
+            面板不随包分发 JDK/JRE：默认复用面板自己的 Java；所选 MC 版本需要更高版本时，
+            请自备 Java 21+ 并设置 server.yaml 的 `mc.java_path` 或环境变量 `HDSL_MC_JAVA_PATH`。
+            每个实例在 `&lt;服务器目录&gt;/&lt;id&gt;/`，存档、server.jar 与日志都在那里；
+            改 `mc.dir` / `HDSL_MC_DIR` 不会搬动已建实例。
+          </div>
+        </div>
+      )}
+
       {locked && (
         <div style={{ padding: "8px 8px 0", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 13 }}>
           <b>已按下停止功能</b>

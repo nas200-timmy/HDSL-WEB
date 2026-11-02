@@ -215,6 +215,14 @@ public final class BrandRuntime {
     /// @return the status after the attempt
     public static Status launch(Brand brand, BrandInstanceManager manager, BrandInstance instance,
                                 @Nullable String publicHost, Path packageDir) {
+        String unsupported = brand.notInstallableReason(
+                org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS);
+        if (unsupported != null) {
+            String refusedId = instance.id();
+            ERRORS.put(refusedId, unsupported);
+            STATES.put(refusedId, State.ERROR);
+            return status(refusedId);
+        }
         String id = instance.id();
         synchronized (lockFor(id)) {
             Process existing = PROCESSES.get(id);

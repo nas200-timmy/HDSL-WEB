@@ -99,6 +99,12 @@ class McApiTest {
             HttpResponse<String> feature = get(wired.port(), "/api/mc/feature");
             assertEquals(200, feature.statusCode());
             assertTrue(feature.body().contains("DISABLED"));
+            // The card has to be able to show where servers will live and
+            // which Java will run them before the user enables anything.
+            assertTrue(feature.body().contains("\"java\""));
+            assertTrue(feature.body().contains("\"storage\""));
+            assertTrue(feature.body().contains("\"source\":\"panel\""));
+            assertTrue(feature.body().contains("\"root\""));
 
             HttpResponse<String> terms = get(wired.port(), "/api/mc/terms");
             assertEquals(200, terms.statusCode());

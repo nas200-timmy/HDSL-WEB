@@ -17,8 +17,10 @@
  */
 package org.jackhuang.hmcl.web.brand;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jackhuang.hmcl.web.TestSupport;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -51,6 +53,30 @@ class BrandApiTest {
         try (TestSupport.RunningServer running = start()) {
             HttpResponse<String> response = get(running, "/api/brands/nope/versions");
             assertEquals(404, response.statusCode(), response.body());
+        }
+    }
+
+    /// The tab row asks this before opening a brand, so "Hermes cannot be
+    /// installed here" is visible without waiting for a version list.
+    @Test
+    void capabilitiesComeFromTheSameBrandDecision() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpResponse<String> response = get(running, "/api/brands/capabilities");
+            assertEquals(200, response.statusCode(), response.body());
+            JsonObject body = JsonParser.parseString(response.body()).getAsJsonObject();
+            JsonArray brands = body.getAsJsonArray("brands");
+            assertEquals(Brand.values().length, brands.size(), response.body());
+
+            for (int i = 0; i < brands.size(); i++) {
+                JsonObject entry = brands.get(i).getAsJsonObject();
+                Brand brand = Brand.fromId(entry.get("id").getAsString());
+                assertTrue(brand != null, entry.toString());
+                String reason = brand.notInstallableReason(OperatingSystem.CURRENT_OS);
+                assertEquals(reason == null, entry.get("installable").getAsBoolean(), entry.toString());
+                if (reason != null) {
+                    assertEquals(reason, entry.get("reason").getAsString());
+                }
+            }
         }
     }
 

@@ -44,6 +44,7 @@ import type {
   BrandInstallStatus,
   BrandInstance,
   BrandVersions,
+  BrandCapabilities,
   InstancePlugins,
   TerminalKernel,
 } from "./types";
@@ -537,6 +538,9 @@ export const api = {
 
   brandVersions: (brand: BrandId) => request<BrandVersions>(`/api/brands/${brand}/versions`),
 
+  /** 纯本地：每个品牌在这台机器上能不能装，用于页签上的提醒 */
+  brandCapabilities: () => request<BrandCapabilities>("/api/brands/capabilities"),
+
   brandReleases: (brand: BrandId) =>
     request<{ releases: { version: string; path: string; current: boolean }[] }>(
       `/api/brands/${brand}/releases`,
@@ -785,6 +789,28 @@ export interface McFeature {
   eulaHash?: string;
   eulaRetrievedAt?: string;
   ackMethod?: string;
+  /** 这个平台的控制台形态：Linux/macOS 是 PTY，Windows 是日志 + 命令。 */
+  console: "pty" | "pipe";
+  /** 服务端将用哪个 Java 启动 MC（默认就是面板自己的运行时）。 */
+  java: McJavaInfo;
+  /** 新实例会落到哪个根目录，以及这个设置来自哪里。 */
+  storage: McFeatureStorage;
+}
+
+export interface McJavaInfo {
+  path: string;
+  version: string | null;
+  major: number;
+  source: "panel" | "configured" | "none";
+  ok: boolean;
+  error?: string;
+}
+
+export interface McFeatureStorage {
+  root: string;
+  source: string;
+  writable: boolean;
+  legacy: string | null;
 }
 
 export interface McEula {

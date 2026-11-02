@@ -515,3 +515,22 @@ Windows 上的实例终端从「桌面控制台窗口」换成浏览器 PTY，�
   `TerminateJobObject`」；一个实例终端 = 一个 `conhost.exe`；只承诺 64 位 JVM。
 - **未验证**：arm64 Windows；真机中文输入法（候选框/回显）；真实品牌的 TUI 长时间运行。
   这几条没有一手证据，按「未验证」对待，不要写成已支持。
+
+### 9.6 MC 服务端（2026-11-02）
+
+MC 在 Windows 上走 headless `pipes`（日志 + 命令框），不走 ConPTY。本轮补的是这条路径的
+生命周期与可解释性，**还没有真机 Windows 验收**；Linux 侧的 `McRuntimePipeTest` 用
+`ptySupported=false` 覆盖同一段代码。
+
+- 面板退出时 `McRuntime.stopAll()` 会先写 `stop`，超时才 `ProcessTree.terminate`；
+  之前 pipe 进程不在 `terminals` 里，关面板后会留下占端口的 `java.exe`。
+- 启动前 `McPorts.isFree()` 做真实 bind 探测；删除实例前 `ProcessTree.killReferencing`
+  收掉命令行里带该实例目录的残留进程（`server.jar` 已改为绝对路径）。
+- `mc.java_path` 默认解析到面板自己的 JVM；`GET /api/mc/feature` 暴露路径/版本/来源，
+  设置页在功能关闭时也能看到。配置了不存在的 Java 会在启动前明确报错。
+- 子进程固定 UTF-8；`-Xms` 不再固定 512M（创建表单允许 256M）。
+- 存储根默认 `%USERPROFILE%\mc`，`HDSL_MC_DIR` / `mc.dir` 可改；SYSTEM 账户、超长路径、
+  不可写目录会在启动时警告。
+
+真机验收顺序见 `docs/minecraft.md` §15.2 与 §6.2；在拿到一手证据前，不要把 Windows 的
+MC 写成“已验证”。

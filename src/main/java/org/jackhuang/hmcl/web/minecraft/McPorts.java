@@ -17,8 +17,12 @@
  */
 package org.jackhuang.hmcl.web.minecraft;
 
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.util.function.IntPredicate;
 
 /// The two ports a Minecraft server owns: the game port and RCON.
@@ -68,6 +72,30 @@ public final class McPorts {
     /// @throws IllegalArgumentException when either port is out of range or they are equal
     public static Pair validate(int game, int rcon) {
         return new Pair(game, rcon);
+    }
+
+    /// Whether the operating system will let a server bind this port now.
+    ///
+    /// This is deliberately a real bind, not a table lookup: on a bare
+    /// deployment the port may belong to some unrelated service, or to a
+    /// Minecraft server left behind by a panel that was killed. `SO_REUSEADDR`
+    /// is enabled only where it is safe for a *probe*: it lets Linux ignore a
+    /// lingering `TIME_WAIT`, while on Windows/macOS it would also let the
+    /// probe succeed next to a real listener.
+    ///
+    /// @param port the port
+    /// @return whether a listener can bind it
+    public static boolean isFree(int port) {
+        if (!inRange(port)) {
+            return false;
+        }
+        try (ServerSocket socket = new ServerSocket()) {
+            socket.setReuseAddress(OperatingSystem.CURRENT_OS == OperatingSystem.LINUX);
+            socket.bind(new InetSocketAddress(port));
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /// Picks a free pair inside `[start, end]`.

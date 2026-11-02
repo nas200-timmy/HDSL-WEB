@@ -17,6 +17,8 @@
  */
 package org.jackhuang.hmcl.web.minecraft;
 
+import org.jackhuang.hmcl.util.ProcessTree;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jackhuang.hmcl.util.platform.VirtualThreads;
 import org.jackhuang.hmcl.web.terminal.TerminalManager;
@@ -33,6 +35,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +43,8 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /// Starts, stops and watches one Minecraft server per instance.
 ///
@@ -100,20 +105,53 @@ public final class McRuntime {
     private final CommandFactory commandFactory;
     private final @Nullable String javaBin;
     private final @Nullable Path versionsRoot;
+    private final boolean ptySupported;
+    private final String javaSource;
 
     private final Map<String, State> states = new ConcurrentHashMap<>();
     private final Map<String, String> errors = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<Void>> readiness = new ConcurrentHashMap<>();
     /// Windows has no PTY; those servers run as a plain child process with
     /// piped stdio. The console is then the log + a command box, not a terminal
-    /// (docs/minecraft.md §15.2).
+    /// (docs/minecraft.md §15.2). Kept separate from [ptySupported] because
+    /// these two maps are the authoritative record of what is actually running.
     private final Map<String, PipeServer> pipes = new ConcurrentHashMap<>();
-    private static final boolean PTY_SUPPORTED =
-            org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
-                    == org.jackhuang.hmcl.util.platform.OperatingSystem.LINUX
-            || org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
-                    == org.jackhuang.hmcl.util.platform.OperatingSystem.MACOS;
-    private static final Map<String, Integer> JAVA_MAJOR = new ConcurrentHashMap<>();
+    private static final Map<String, JavaProbe> JAVA_PROBES = new ConcurrentHashMap<>();
+
+    /// What the panel knows about the `java` it will start servers with.
+    ///
+    /// @param path    the resolved executable, or `""` when none could be resolved
+    /// @param version the `java -version` string, or `null` when it could not be read
+    /// @param major   the parsed major version (8 for `1.8.0_…`), or `0`
+    /// @param source  `panel`, `configured`, or `none`
+    /// @param ok      whether `-version` actually ran
+    /// @param error   why it is not ok, or `null`
+    public record JavaInfo(String path, @Nullable String version, int major,
+                           String source, boolean ok, @Nullable String error) {
+    }
+
+    private record JavaProbe(@Nullable String version, int major, @Nullable String error) {
+    }
+
+    /// Whether this platform's console can be a real PTY.
+    ///
+    /// Windows deliberately stays on the pipe console in this round: ConPTY is
+    /// implemented for instance terminals, but switching Minecraft's console is
+    /// a separate behaviour change that needs a real-Windows pass
+    /// (`docs/minecraft.md` §15.2). Tests inject `false` to exercise the pipe
+    /// path on Linux.
+    static boolean ptySupported() {
+        return OperatingSystem.CURRENT_OS == OperatingSystem.LINUX
+                || OperatingSystem.CURRENT_OS == OperatingSystem.MACOS;
+    }
+
+    /// The console shape this platform can offer, for the feature card and the
+    /// console panel to say before a server is even running.
+    ///
+    /// @return `"pty"` or `"pipe"`
+    public static String consoleKind() {
+        return ptySupported() ? "pty" : "pipe";
+    }
 
     /// The production wiring: `java -Xmx<memory>M -jar server.jar nogui`.
     ///
@@ -136,33 +174,107 @@ public final class McRuntime {
     /// @param versionsRoot the shared versions directory, or `null` to skip the check
     public McRuntime(McInstanceManager manager, TerminalManager terminals,
                      McFeatureState feature, String javaBin, @Nullable Path versionsRoot) {
-        this(manager, terminals, feature, javaCommand(javaBin), javaBin, versionsRoot);
+        this(manager, terminals, feature, null, resolveJava(javaBin), versionsRoot,
+                ptySupported(), javaSource(javaBin));
     }
 
-    private static CommandFactory javaCommand(String javaBin) {
-        String program = resolveJava(javaBin);
-        return instance -> List.of(
-                program,
-                "-Xms512M",
-                "-Xmx" + instance.memoryMb() + "M",
-                "-jar",
-                McInstanceManager.SERVER_JAR_NAME,
-                "nogui");
+    /// The same, with an injectable argv for tests.
+    ///
+    /// @param manager        the instance manager
+    /// @param terminals      the terminal registry
+    /// @param feature        the feature switch
+    /// @param commandFactory the argv builder
+    public McRuntime(McInstanceManager manager, TerminalManager terminals,
+                     McFeatureState feature, CommandFactory commandFactory) {
+        this(manager, terminals, feature, commandFactory, null, null, ptySupported(), "none");
+    }
+
+    /// Test wiring that forces the pipe console on any platform, so the
+    /// Windows path is covered by the Linux test suite.
+    ///
+    /// @param manager        the instance manager
+    /// @param terminals      the terminal registry
+    /// @param feature        the feature switch
+    /// @param commandFactory the argv builder
+    /// @param ptySupported   `false` to exercise the pipe console
+    McRuntime(McInstanceManager manager, TerminalManager terminals,
+              McFeatureState feature, CommandFactory commandFactory, boolean ptySupported) {
+        this(manager, terminals, feature, commandFactory, null, null, ptySupported, "none");
+    }
+
+    private McRuntime(McInstanceManager manager, TerminalManager terminals, McFeatureState feature,
+                      @Nullable CommandFactory commandFactory, @Nullable String javaBin,
+                      @Nullable Path versionsRoot, boolean ptySupported, String javaSource) {
+        this.manager = manager;
+        this.terminals = terminals;
+        this.feature = feature;
+        this.javaBin = javaBin;
+        this.versionsRoot = versionsRoot;
+        this.ptySupported = ptySupported;
+        this.javaSource = javaSource;
+        CommandFactory factory = commandFactory;
+        if (factory == null && javaBin != null) {
+            String program = javaBin;
+            factory = instance -> {
+                List<String> command = new ArrayList<>();
+                command.add(program);
+                command.addAll(heapArgs(instance.memoryMb()));
+                // The pipe pump decodes UTF-8. On JDK 17 + a Chinese Windows
+                // code page the child would otherwise write GBK (JEP 400 made
+                // UTF-8 the default only in 18). Keep both sides on one charset
+                // instead of decoding differently in different places.
+                command.add("-Dfile.encoding=UTF-8");
+                command.add("-Dsun.stdout.encoding=UTF-8");
+                command.add("-Dsun.stderr.encoding=UTF-8");
+                command.add("-jar");
+                // Absolute: a command line that names the instance directory is
+                // what `ProcessTree.killReferencing` uses to reap an orphan on
+                // Windows after a panel crash.
+                command.add(manager.serverJar(instance).toString());
+                command.add("nogui");
+                return command;
+            };
+        }
+        if (factory == null) {
+            throw new IllegalArgumentException("a command factory is required when no java executable is configured");
+        }
+        this.commandFactory = factory;
+    }
+
+    /// `-Xms` must never exceed `-Xmx`: the create form accepts 256 MB, and a
+    /// fixed `-Xms512M` made every such server die with "Initial heap size set
+    /// to a larger value than the maximum heap size" before Minecraft printed
+    /// anything.
+    ///
+    /// @param memoryMb the instance's configured heap ceiling
+    /// @return the two heap arguments
+    static List<String> heapArgs(int memoryMb) {
+        int maximum = Math.max(256, memoryMb);
+        int initial = Math.min(512, maximum);
+        return List.of("-Xms" + initial + "M", "-Xmx" + maximum + "M");
+    }
+
+    private static String javaSource(@Nullable String configured) {
+        if (configured == null || configured.isBlank()
+                || "java".equals(configured) || "java.exe".equals(configured)) {
+            return "panel";
+        }
+        return "configured";
     }
 
     /// Turns the configured `mc.java_path` into something `posix_spawn` accepts.
     ///
-    /// The console is a PTY, and the PTY spawn hands the first argv element to
-    /// `posix_spawn` as-is: unlike a shell or `ProcessBuilder` it does **no**
-    /// `PATH` lookup (glibc's `posix_spawn` is `execve`; the searching variant is
-    /// `posix_spawnp`). The default `mc.java_path: java` therefore died with
-    /// ENOENT before the server printed a byte — the UI could only say "failed to
-    /// start the server process".
+    /// The console is a PTY on POSIX, and the PTY spawn hands the first argv
+    /// element to `posix_spawn` as-is: unlike a shell or `ProcessBuilder` it does
+    /// **no** `PATH` lookup (glibc's `posix_spawn` is `execve`; the searching
+    /// variant is `posix_spawnp`). The default `mc.java_path: java` therefore
+    /// died with ENOENT before the server printed a byte — the UI could only say
+    /// "failed to start the server process".
     ///
     /// Order: an explicit path is used as given; `java` means the JVM this panel
-    /// is running on; anything else is looked up on `PATH`. When nothing is
-    /// found the value is returned unchanged, so the error still names what the
-    /// operator configured.
+    /// is running on; anything else is looked up through `JAVA_HOME` and then
+    /// `PATH`. When nothing is found the value is returned unchanged, so the
+    /// error still names what the operator configured.
     ///
     /// @param configured `mc.java_path`, or `null`/blank for the default
     /// @return an absolute path when one exists, otherwise the input
@@ -182,40 +294,116 @@ public final class McRuntime {
                 }
             }
         }
+        String javaHome = System.getenv("JAVA_HOME");
+        if (javaHome != null && !javaHome.isBlank()) {
+            for (String name : executableNames(program)) {
+                Path candidate = Path.of(javaHome, "bin", name);
+                if (Files.isRegularFile(candidate)) {
+                    return candidate.toAbsolutePath().toString();
+                }
+            }
+        }
         String path = System.getenv("PATH");
         if (path != null) {
-            for (String dir : path.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
+            for (String dir : path.split(Pattern.quote(java.io.File.pathSeparator))) {
                 if (dir.isBlank()) {
                     continue;
                 }
-                Path candidate = Path.of(dir, program);
-                if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) {
-                    return candidate.toAbsolutePath().toString();
+                for (String name : executableNames(program)) {
+                    Path candidate = Path.of(dir, name);
+                    if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) {
+                        return candidate.toAbsolutePath().toString();
+                    }
                 }
             }
         }
         return program;
     }
 
-    /// The same, with an injectable argv for tests.
-    ///
-    /// @param manager        the instance manager
-    /// @param terminals      the terminal registry
-    /// @param feature        the feature switch
-    /// @param commandFactory the argv builder
-    public McRuntime(McInstanceManager manager, TerminalManager terminals,
-                     McFeatureState feature, CommandFactory commandFactory) {
-        this(manager, terminals, feature, commandFactory, null, null);
+    private static List<String> executableNames(String program) {
+        if (program.toLowerCase(java.util.Locale.ROOT).endsWith(".exe")) {
+            return List.of(program);
+        }
+        return List.of(program, program + ".exe");
     }
 
-    private McRuntime(McInstanceManager manager, TerminalManager terminals, McFeatureState feature,
-                      CommandFactory commandFactory, @Nullable String javaBin, @Nullable Path versionsRoot) {
-        this.manager = manager;
-        this.terminals = terminals;
-        this.feature = feature;
-        this.commandFactory = commandFactory;
-        this.javaBin = javaBin;
-        this.versionsRoot = versionsRoot;
+    /// The Java this runtime will start servers with, or why it cannot.
+    ///
+    /// @return the probe result; `-version` is cached per executable
+    public JavaInfo javaInfo() {
+        if (javaBin == null) {
+            return new JavaInfo("", null, 0, javaSource, false,
+                    "no Java executable is configured for Minecraft servers");
+        }
+        JavaProbe probe = JAVA_PROBES.computeIfAbsent(javaBin, McRuntime::probeJava);
+        return new JavaInfo(javaBin, probe.version(), probe.major(), javaSource,
+                probe.error() == null, probe.error());
+    }
+
+    private static JavaProbe probeJava(String program) {
+        boolean pathLike = program.indexOf('/') >= 0 || program.indexOf('\\') >= 0;
+        if (pathLike && !Files.isRegularFile(Path.of(program))) {
+            return new JavaProbe(null, 0, "the file does not exist");
+        }
+        try {
+            Process process = new ProcessBuilder(program, "-version")
+                    .redirectErrorStream(true)
+                    .start();
+            String output;
+            try (var in = process.getInputStream()) {
+                output = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            }
+            if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return new JavaProbe(null, 0, "`java -version` did not finish within 10 seconds");
+            }
+            String version = parseJavaVersion(output);
+            int major = parseJavaMajor(output);
+            if (major <= 0) {
+                String tail = output.strip().lines().findFirst().orElse("");
+                return new JavaProbe(version, 0, "`java -version` printed no version"
+                        + (tail.isEmpty() ? "" : ": " + tail));
+            }
+            return new JavaProbe(version, major, null);
+        } catch (Exception e) {
+            String message = e.getMessage();
+            return new JavaProbe(null, 0, message == null || message.isBlank()
+                    ? e.getClass().getSimpleName() : message);
+        }
+    }
+
+    /// The quoted version from `java -version`, or `null`.
+    ///
+    /// @param output the merged stdout/stderr of `java -version`
+    /// @return the version string
+    static @Nullable String parseJavaVersion(@Nullable String output) {
+        if (output == null) {
+            return null;
+        }
+        Matcher matcher = Pattern.compile("(?:java|openjdk) version \"([^\"]+)\"").matcher(output);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+
+    /// The major version from `java -version`, with the Java 8 `1.8.0_x` form
+    /// handled explicitly.
+    ///
+    /// @param output the merged stdout/stderr of `java -version`
+    /// @return the major version, or `0` when it cannot be read
+    static int parseJavaMajor(@Nullable String output) {
+        String version = parseJavaVersion(output);
+        if (version == null) {
+            return 0;
+        }
+        String[] parts = version.split("[._+\\-]");
+        try {
+            int first = Integer.parseInt(parts[0]);
+            if (first == 1 && parts.length > 1) {
+                return Integer.parseInt(parts[1]);
+            }
+            return first;
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     /// The state of an instance.
@@ -286,8 +474,9 @@ public final class McRuntime {
         // its first log line — which reads as "exited before it was ready (code 1)" with no
         // output at all.
         prepareDirectories(instance);
+        checkPorts(instance);
 
-        if (!PTY_SUPPORTED) {
+        if (!ptySupported) {
             launchPipe(instance);
             return;
         }
@@ -351,11 +540,8 @@ public final class McRuntime {
     /// @param id the instance id
     /// @throws McException when it is not running
     public void stop(String id) throws McException {
-        if (!PTY_SUPPORTED) {
-            PipeServer pipe = pipes.get(id);
-            if (pipe == null) {
-                throw new McException("the server for " + id + " is not running");
-            }
+        PipeServer pipe = pipes.get(id);
+        if (pipe != null) {
             states.put(id, State.STOPPING);
             writePipe(pipe, "stop\n");
             CompletableFuture<Void> exited = new CompletableFuture<>();
@@ -364,7 +550,7 @@ public final class McRuntime {
                 if (error != null) {
                     LOG.warning("Minecraft instance " + id + " did not stop within "
                             + STOP_GRACE_SECONDS + "s; killing it");
-                    pipe.process.destroyForcibly();
+                    ProcessTree.terminate(pipe.process, 2);
                 }
             });
             return;
@@ -400,13 +586,90 @@ public final class McRuntime {
         PipeServer pipe = pipes.get(id);
         if (pipe != null) {
             states.put(id, State.STOPPING);
-            pipe.process.destroyForcibly();
+            ProcessTree.terminate(pipe.process, 2);
             return;
         }
         TerminalSession session = terminals.find(BRAND, id)
                 .orElseThrow(() -> new McException("the server for " + id + " is not running"));
         states.put(id, State.STOPPING);
         session.terminate(Duration.ofSeconds(2));
+    }
+
+    /// Stops every running server and waits up to `grace` for a clean exit.
+    ///
+    /// This is the panel's own shutdown path. Without it a pipe-console server
+    /// (Windows) is a plain child process the JVM does not take with it: the
+    /// panel exits, the server keeps the port and the world, and the next panel
+    /// has no record of it. The same walk also protects POSIX sessions, where
+    /// `terminals.close()` would eventually do it, by asking each server to
+    /// `stop` first and only killing what stays behind.
+    ///
+    /// @param grace the total time to wait, shared by all instances
+    public void stopAll(Duration grace) {
+        List<String> ids = new ArrayList<>();
+        for (McInstance instance : manager.list()) {
+            if (isRunning(instance.id())) {
+                ids.add(instance.id());
+            }
+        }
+        if (ids.isEmpty()) {
+            return;
+        }
+        Map<String, CompletableFuture<Void>> exits = new HashMap<>();
+        for (String id : ids) {
+            states.put(id, State.STOPPING);
+            PipeServer pipe = pipes.get(id);
+            if (pipe != null) {
+                try {
+                    writePipe(pipe, "stop\n");
+                } catch (McException e) {
+                    LOG.warning("Could not ask Minecraft instance " + id + " to stop: " + e.getMessage());
+                }
+                CompletableFuture<Void> exited = new CompletableFuture<>();
+                pipe.process.onExit().thenRun(() -> exited.complete(null));
+                exits.put(id, exited);
+                continue;
+            }
+            terminals.find(BRAND, id).ifPresent(session -> {
+                try {
+                    OutputStream input = session.input();
+                    synchronized (input) {
+                        input.write("stop\n".getBytes(StandardCharsets.US_ASCII));
+                        input.flush();
+                    }
+                } catch (IOException e) {
+                    LOG.warning("Could not ask Minecraft instance " + id + " to stop: " + e.getMessage());
+                }
+                CompletableFuture<Void> exited = new CompletableFuture<>();
+                session.onExit(() -> exited.complete(null));
+                exits.put(id, exited);
+            });
+        }
+        long deadline = System.nanoTime() + grace.toNanos();
+        for (Map.Entry<String, CompletableFuture<Void>> entry : exits.entrySet()) {
+            long remaining = deadline - System.nanoTime();
+            try {
+                if (remaining > 0) {
+                    entry.getValue().get(remaining, TimeUnit.NANOSECONDS);
+                }
+            } catch (Exception ignored) {
+                // Fall through to the forceful pass below with what is left.
+            }
+        }
+        for (String id : ids) {
+            PipeServer pipe = pipes.get(id);
+            if (pipe != null) {
+                if (pipe.process.isAlive()) {
+                    LOG.warning("Minecraft instance " + id + " did not stop in time; killing it");
+                    ProcessTree.terminate(pipe.process, 2);
+                }
+                continue;
+            }
+            terminals.find(BRAND, id).ifPresent(session -> {
+                LOG.warning("Minecraft instance " + id + " did not stop in time; killing it");
+                session.terminate(Duration.ofSeconds(2));
+            });
+        }
     }
 
     /// The console shape of a running instance: a real terminal on POSIX, a
@@ -612,19 +875,47 @@ public final class McRuntime {
     /// `version.json` by [McVersions]); the panel runs `<java> -version` once and
     /// caches the result. When either side is unknown the check is skipped —
     /// the server's own error is then the fallback, not a wrong refusal.
+    /// Refuses to start when the game or RCON port is already bound.
+    ///
+    /// The most common cause on Windows is a server from a panel process that
+    /// died before it could stop its children: the new panel has no record of
+    /// it, but the port is still held. Saying that here is much cheaper than
+    /// letting Java fail after the world is half-loaded.
+    private void checkPorts(McInstance instance) throws McException {
+        if (!McPorts.isFree(instance.port())) {
+            throw new McException("The Minecraft game port " + instance.port()
+                    + " is already in use — another server, or a leftover from a previous"
+                    + " panel process, is listening. Stop it or change this instance's port.");
+        }
+        // RCON is off by default. Checking its port unconditionally would refuse
+        // to start a server over a number the server will never bind.
+        boolean rcon = "true".equalsIgnoreCase(manager.properties(instance).get("enable-rcon"));
+        if (rcon && !McPorts.isFree(instance.rconPort())) {
+            throw new McException("The Minecraft RCON port " + instance.rconPort()
+                    + " is already in use — another server, or a leftover from a previous"
+                    + " panel process, is listening. Stop it or change this instance's port.");
+        }
+    }
+
     private void checkJava(McInstance instance) throws McException {
         if (versionsRoot == null || javaBin == null) {
             return;
+        }
+        JavaInfo java = javaInfo();
+        if (!java.ok()) {
+            throw new McException("The Java configured for Minecraft servers cannot be run: `"
+                    + java.path() + "` — " + java.error()
+                    + "; point mc.java_path at a working JDK/JRE (Java 21+ for modern versions),"
+                    + " or unset it to use the panel's own runtime");
         }
         int required = requiredJava(instance.version());
         if (required <= 0) {
             return;
         }
-        int actual = javaMajor();
-        if (actual > 0 && actual < required) {
+        if (java.major() > 0 && java.major() < required) {
             throw new McException("Minecraft " + instance.version() + " needs Java " + required
-                    + " or newer, but `" + javaBin + "` is Java " + actual
-                    + "; point mc.java_path at a newer JDK");
+                    + " or newer, but `" + java.path() + "` is Java " + java.major()
+                    + "; point mc.java_path at a newer JDK/JRE or install one and set JAVA_HOME");
         }
     }
 
@@ -641,33 +932,6 @@ public final class McRuntime {
         } catch (Exception e) {
             return 0;
         }
-    }
-
-    private int javaMajor() {
-        String bin = javaBin;
-        if (bin == null) {
-            return 0;
-        }
-        return JAVA_MAJOR.computeIfAbsent(bin, candidate -> {
-            try {
-                Process process = new ProcessBuilder(candidate, "-version")
-                        .redirectErrorStream(true)
-                        .start();
-                String output;
-                try (var in = process.getInputStream()) {
-                    output = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-                }
-                if (!process.waitFor(10, TimeUnit.SECONDS)) {
-                    process.destroyForcibly();
-                    return 0;
-                }
-                java.util.regex.Matcher matcher =
-                        java.util.regex.Pattern.compile("version \"(\\d+)").matcher(output);
-                return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
-            } catch (Exception e) {
-                return 0;
-            }
-        });
     }
 
     /// Watches the output for the readiness line. Vanilla prints

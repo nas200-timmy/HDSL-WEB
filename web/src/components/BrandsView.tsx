@@ -138,9 +138,31 @@ export function BrandsView({
   // 窄屏页签用短名（去掉「（实验）」）：五个品牌全带后缀时一行放不下，
   // 而实验标记在下面的警示条里还会说一次，不必每个页签都占那六个字。
   const mobile = useMobileLayout();
+  const [capabilities, setCapabilities] = useState<
+    Record<string, { installable: boolean; reason?: string }>
+  >({});
 
   useEffect(() => {
     void refreshExternal();
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    void api.brandCapabilities()
+      .then((answer) => {
+        if (!alive) return;
+        const next: Record<string, { installable: boolean; reason?: string }> = {};
+        for (const item of answer.brands) {
+          next[item.id] = { installable: item.installable, reason: item.reason };
+        }
+        setCapabilities(next);
+      })
+      .catch(() => {
+        // 能力查询失败不影响品牌页本身：安装入口仍会从 /versions 拿到原因。
+      });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const warning = I18N["dsh.brand.thirdparty.warning"].replace("%s", BRAND_TITLE[brand]);
@@ -152,10 +174,13 @@ export function BrandsView({
         {BRAND_KEYS.map((k) => {
           const count = s.external.filter((e) => e.brand === k).length;
           const active = k === brand;
+          const capability = capabilities[k];
+          const blocked = capability?.installable === false;
           return (
             <button
               key={k}
               className="tool-btn ripple-host"
+              title={blocked ? capability?.reason : undefined}
               style={
                 active
                   ? { background: "var(--monet-secondary-container)", color: "var(--monet-on-secondary-container)" }
@@ -165,6 +190,11 @@ export function BrandsView({
             >
               <BrandIcon brand={k} size={mobile ? 14 : 16} />
               {mobile ? BRAND_SHORT[k] : BRAND_TITLE[k]}
+              {blocked && (
+                <span className="tag plain" style={{ marginLeft: mobile ? 2 : 4 }}>
+                  不可用
+                </span>
+              )}
               {count > 0 && (
                 <span className="tag plain" style={{ marginLeft: mobile ? 2 : 4 }}>
                   {count}
@@ -923,6 +953,11 @@ function InstancesCard({
   const s = useAppState();
   const selectedId = useSelectedInstanceId();
   const mobile = useMobileLayout();
+  // The version card already knows this from /versions; the create row uses
+  // the same answer so a platform that cannot install this brand never shows
+  // an enabled "create" button.
+  const unsupported = versions?.supported === false;
+  const unsupportedReason = versions?.reason ?? "";
   const [form, setForm] = useState({ name: "", version: "" });
   const [busy, setBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -1328,7 +1363,8 @@ function InstancesCard({
             )}
             <button
               className="btn btn-outline ripple-host"
-              disabled={busy || !form.name.trim() || !createVersion}
+              disabled={busy || unsupported || !form.name.trim() || !createVersion}
+              title={unsupported ? unsupportedReason : undefined}
               onClick={() => void doCreate()}
             >
               {I18N["dsh.brand.create"]}

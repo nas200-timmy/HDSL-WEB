@@ -533,6 +533,16 @@ export interface BrandVersions {
   reason?: string;
 }
 
+/// 页签行用的平台能力，不触发任何网络请求。
+export interface BrandCapabilities {
+  platform: string;
+  brands: {
+    id: BrandId;
+    installable: boolean;
+    reason?: string;
+  }[];
+}
+
 /// 品牌实例自己的管理员凭据（目前只有 Octop 有）。
 export interface BrandAdminCredentials {
   username: string;

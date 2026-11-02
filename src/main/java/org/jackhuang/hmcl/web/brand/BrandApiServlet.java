@@ -141,6 +141,10 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
             return;
         }
+        if (segments.length == 1 && "capabilities".equals(segments[0]) && "GET".equals(request.getMethod())) {
+            capabilities(response);
+            return;
+        }
         Brand brand = Brand.fromId(segments[0]);
         if (brand == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "unknown brand");
@@ -154,6 +158,31 @@ public final class BrandApiServlet extends HttpServlet {
         } catch (BrandException e) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
         }
+    }
+
+    /// The platform capabilities of every brand, without touching a network.
+    ///
+    /// This exists so the tab row can say "Hermes is not installable here"
+    /// before the user opens that brand and waits for a version list. The
+    /// sentence itself still comes from [Brand#notInstallableReason] — one
+    /// source, so the tab, the install button and the launch refusal cannot
+    /// drift apart.
+    private void capabilities(HttpServletResponse response) throws IOException {
+        JsonArray array = new JsonArray();
+        for (Brand brand : Brand.values()) {
+            JsonObject entry = new JsonObject();
+            entry.addProperty("id", brand.id());
+            String reason = brand.notInstallableReason(OperatingSystem.CURRENT_OS);
+            entry.addProperty("installable", reason == null);
+            if (reason != null) {
+                entry.addProperty("reason", reason);
+            }
+            array.add(entry);
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty("platform", OperatingSystem.CURRENT_OS.name());
+        body.add("brands", array);
+        Json.write(response, body);
     }
 
     private void route(Brand brand, PathRef ref, HttpServletRequest request, HttpServletResponse response,
@@ -466,6 +495,11 @@ public final class BrandApiServlet extends HttpServlet {
 
     private void createInstance(Brand brand, PathRef ref, HttpServletRequest request, HttpServletResponse response)
             throws IOException, BrandException {
+        String unsupported = brand.notInstallableReason(OperatingSystem.CURRENT_OS);
+        if (unsupported != null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, unsupported);
+            return;
+        }
         JsonObject body = body(request, response);
         if (body == null) {
             return;
