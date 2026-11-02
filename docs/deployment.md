@@ -230,6 +230,12 @@ curl -sS -i -N https://dsh.example.com/hdsl/ws   -H 'Connection: Upgrade' -H 'Up
 - 面板：容器内 `3080`，HTTPS 开启时同端口直接说 TLS（`redirect_same_port` 默认开：同一端口
   收到明文请求会 308 跳到 https）。
 - dsh 实例：容器内回环 `3081–4081`，**只监听回环、不要发布**，一切经 `/i/<id>/` 走 3080。
+- MC 服务端：**默认一个游戏端口都不发布**。它说的是二进制 TCP，反代帮不上忙，要玩就得把
+  宿主端口映射进来，而且 **容器内端口必须等于该实例的 `server-port`**（面板分配范围见
+  `mc.port_start` / `mc.port_end`，默认 `25565–25665`）。多实例就是多行。三种开法：
+  - `docker-install.sh` 交互时问一次（回车 = 不开），或 `--mc-ports 25565-25575`；
+  - compose 里按实例加 `- "25565:25565"`（`docker-compose.override.yml` 是留给这种本机差异的）；
+  - 已经起好的容器：`docker run` 那行改不了，只能 `./docker-install.sh --recreate` 重来。
 - `https.redirect_http: true` 会让面板额外监听 `redirect_port`（默认 80）做 308→HTTPS 跳转；
   **外层代理已经占着 80 时不要开它**，否则两个进程抢同一个端口。跳转交给 nginx 更省事。
 
@@ -252,9 +258,9 @@ services:
 
 ### 源码部署：`docker-install.sh`
 
-仓库根目录的向导脚本把上面这些事问一遍（数据目录、工作区、MC 数据、端口、绑定地址、镜像源），
-然后在原地 `docker build` + `docker run`。它不依赖 compose，适合 NAS 这类只装了 docker 的机器。
-四条容易踩的规则由它代劳：
+仓库根目录的向导脚本把上面这些事问一遍（数据目录、工作区、MC 数据、**MC 端口**、面板端口、
+绑定地址、镜像源），然后在原地 `docker build` + `docker run`。它不依赖 compose，适合 NAS 这类
+只装了 docker 的机器。五条容易踩的规则由它代劳：
 
 | 规则 | 为什么 |
 |---|---|
@@ -262,9 +268,18 @@ services:
 | 端口内外同号 | `HDSL_PORT` 同时决定端口映射、容器内监听和 healthcheck，只改宿主侧会得到「running 但一直 unhealthy」 |
 | 工作区只能挂到 `/home/hdsl/workspace` | 挂 `/home/hdsl` 整层会盖掉 entrypoint 每次启动重写的 pnpm 配置；不挂则重建容器时工作区里的文件会丢 |
 | MC 默认挂到 `/home/hdsl/mc`（`volume:hdsl-mc`） | 世界存档与 `server.jar` 在那儿；不挂 = 存档随容器一起没。`--mc /srv/mc` 换成宿主目录，`--mc none` 明确不挂 |
+| **MC 端口默认不发布** | 开服是暴露面。要开就在配置里填 `25565`（或 `25565-25575`），或者 `--mc-ports 25565`；宿主与容器同号，实例的 `server-port` 要跟它一致 |
 
 同名容器已存在时它先问「重启 / 重建容器（不重编）/ 重新构建镜像」，不会静默覆盖；
 `--yes` 加参数即可非交互执行，`--dry-run` 只打印计划。
+
+**先体检**：`./docker-install.sh --doctor` 不改任何东西，只把 docker / 守护进程 / buildx /
+compose / 磁盘 / 面板端口 / MC 端口逐条列出来，缺什么就给这台机器上能用的那条命令。
+「照着提示做完还是跑不通」多半是提示缺了一步——Ubuntu 的 `docker.io` 不带 buildx 就是
+典型，所以提示是按本机包管理器现算的。
+
+> 仓库里这个脚本的权限位曾经记成 `100644`，新克隆下来 `./docker-install.sh` 会直接
+> `Permission denied`。如果你的克隆早于这一版，先 `chmod +x docker-install.sh`。
 
 ---
 
@@ -473,18 +488,34 @@ docker build --build-arg HDSL_WEB_BASE=<仓库>/library/node:22-bookworm-slim \
 ERROR: BuildKit is enabled but the buildx component is missing or broken.
 ```
 
-发行版的 `docker.io` 包不一定把插件带上（Ubuntu 24.04 上 `docker-buildx` 是独立包）。向导会先探
-一次并在缺的时候给出装法，按来源选一条：
+发行版的 `docker.io` 包不一定把插件带上（Ubuntu 24.04 上 `docker-buildx` 是独立包；更老的
+Ubuntu 连这个包名都没有）。按本机的包管理器装：
 
 ```bash
-sudo apt-get install -y docker-buildx-plugin   # Docker 官方源（docker-ce）
-sudo apt-get install -y docker-buildx          # Ubuntu / Debian 发行版
-sudo dnf install -y docker-buildx-plugin       # Fedora / RHEL
-# 或者手动放插件：https://docs.docker.com/go/buildx/
+sudo apt-get install -y docker-buildx          # Ubuntu 23.10+ / Debian 12+
+sudo dnf install -y docker-buildx-plugin       # Fedora / RHEL（Docker 官方源）
+sudo zypper install -y docker-buildx           # openSUSE
+sudo pacman -S --needed docker-buildx          # Arch
+sudo apk add docker-cli-buildx                 # Alpine
+```
+
+老的 Ubuntu / Debian 没有 `docker-buildx` 这个包时，用官方源里的 `docker-buildx-plugin`
+（先按 <https://docs.docker.com/engine/install/> 加源），或者把插件二进制直接放进用户目录——
+任何发行版通用，不需要包管理器：
+
+```bash
+docker create --name buildx-tmp docker/buildx-bin:latest \
+  && docker cp buildx-tmp:/buildx ~/.docker/cli-plugins/docker-buildx \
+  && docker rm buildx-tmp && chmod +x ~/.docker/cli-plugins/docker-buildx
+docker buildx version
 ```
 
 不想装 buildx 也有一条路：`--pull <版本>` 只做 `docker pull` / `docker tag` / `docker run`，
 用不到构建，也就用不到 buildx。
+
+**先体检再动手**：`./docker-install.sh --doctor` 会把 docker、守护进程、buildx、compose、磁盘、
+面板端口、MC 端口逐条过一遍，缺什么直接给这台机器上能用的那条命令（只读，不装任何东西）。
+`--install-docker` 会在装 docker 时顺带补 buildx。
 
 ---
 

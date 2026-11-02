@@ -360,11 +360,16 @@ docker compose up -d --build
 
 ```bash
 ./docker-install.sh          # 交互；--yes + 参数走非交互，--dry-run 只看计划
+./docker-install.sh --doctor # 只体检：docker/buildx/端口/磁盘，缺什么给什么命令
 ./docker-install.sh --base fedora   # 换运行时底座（debian 默认，另有 opensuse）
+./docker-install.sh --mc-ports 25565-25575  # 顺带把 MC 游戏端口映射到宿主（默认不开）
 ```
 
 它不依赖 compose（NAS 上常常没有），同名容器存在时会问「重启 / 重建容器 / 重新构建镜像」。
 本地构建的镜像名带着版本与时间戳，例如 `hdsl-web:v0.6.34-build-debian13-20261030-1530`。
+构建需要 buildx：Ubuntu 的 `docker.io` 常常不带它，`--doctor` 会照本机包管理器给出准确的那条
+命令（`apt-get install docker-buildx` / `dnf install docker-buildx-plugin` / `pacman -S docker-buildx` …），
+`--install-docker` 装 docker 时会顺带补上。
 
 打开 `http://<主机>:3080`：设了 `HDSL_ADMIN_PASSWORD` 就用 `admin` + 该口令登录；否则自动进入
 初始化引导页，设置用户名和密码后即创建账号并进入面板。默认是纯 HTTP；要 HTTPS 见

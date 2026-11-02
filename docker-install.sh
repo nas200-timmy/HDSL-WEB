@@ -14,13 +14,16 @@
 #
 # 非交互（宿主 agent、批量部署用）：
 #   ./docker-install.sh --yes --data /srv/hdsl-data --workspace /srv/dsh-ws --port 3080
+#   ./docker-install.sh --yes --mc-ports 25565-25575   # 顺带把 MC 端口映射到宿主
 #   ./docker-install.sh --yes --restart     # 只重启现有容器，不碰镜像
 #   ./docker-install.sh --yes --recreate    # 删容器重建（用现有镜像，不重新编译）
 #   ./docker-install.sh --yes --rebuild     # 重新构建镜像后重建容器
 #   ./docker-install.sh --dry-run           # 只打印会执行什么
+#   ./docker-install.sh --doctor            # 只体检：依赖、docker、buildx、端口、磁盘
 #
 # 连 docker 都没装（绝对冷启动）：脚本会说明装法；加 --install-docker 则由它代装
-# （需要 root 或免密 sudo）。
+# （需要 root 或免密 sudo）。缺 buildx 时给的是**按发行版区分的完整命令**——Ubuntu
+# 的 docker.io 包常常不带它，这正是「照着提示做完仍然构建不了」的来源。
 #
 set -euo pipefail
 
@@ -64,6 +67,9 @@ WORKSPACE=""
 WORKSPACE_SET=0      # 交互里明确选了「不挂」时置 1，避免被状态文件里的旧值顶掉
 MC=""
 MC_SET=0
+MC_PORTS=""          # 25565 / 25565-25575 / 25565,25566；空 = 不把 MC 端口映射到宿主
+MC_PORTS_SET=0       # 命令行或交互里明确给过
+DOCTOR=0             # --doctor：只体检，不构建、不起容器、不写状态
 PASSWORD=""
 PASSWORD_SET=0
 IMAGE=""
@@ -83,6 +89,12 @@ usage() {
   --mc <路径|volume:名称|none>    MC 服务器数据挂到 /home/hdsl/mc
                                   （默认 volume:hdsl-mc；none = 不挂，重建容器会丢存档）
   --no-mc                         同 --mc none
+  --mc-ports <规格|none>          把 MC 游戏端口映射到宿主：`25565`、`25565-25575`、
+                                  `25565,25566`（最多 128 个）。默认 `none`：不对外开服。
+                                  交互运行时会在「配置」里问一次，回车 = 不开。
+                                  注意容器内端口必须等于该实例的 `server-port`
+                                  （面板分配范围见 mc.port_start / mc.port_end）。
+  --no-mc-ports                   同 --mc-ports none
   --port <端口>                   面板端口（默认 3080，容器内外同号）
   --bind <地址>                   监听地址（默认 0.0.0.0；只本机用 127.0.0.1）
   --name <容器名>                 默认 hdsl-web
@@ -111,7 +123,8 @@ usage() {
   --base <底座> 运行时底座：debian（默认）/ fedora / opensuse。
                 都是原地构建，镜像里跑的是同一颗 jar；Fedora/openSUSE 用各自的
                 包管理器和官方仓库，ffmpeg 只有 patent-free 版本（构建期告警，不失败）。
-  --install-docker  没有 docker 时代为安装（需要 root 或免密 sudo）
+  --install-docker  没有 docker 时代为安装（需要 root 或免密 sudo）；缺 buildx 时也一并装
+  --doctor      只做体检，什么都不改：docker / buildx / 端口 / 磁盘 / 发行版提示
   --dry-run     只打印会执行什么，不构建、不起容器
   --yes         不问，全部用参数或默认值
   -h, --help    本帮助
@@ -130,6 +143,8 @@ while [ "$#" -gt 0 ]; do
         --no-workspace) WORKSPACE=""; WORKSPACE_SET=1; shift ;;
         --mc) need_value "$@"; MC="$2"; MC_SET=1; shift 2 ;;
         --no-mc) MC=""; MC_SET=1; shift ;;
+        --mc-ports) need_value "$@"; MC_PORTS="$2"; MC_PORTS_SET=1; shift 2 ;;
+        --no-mc-ports) MC_PORTS=""; MC_PORTS_SET=1; shift ;;
         --port) need_value "$@"; PORT="$2"; shift 2 ;;
         --bind) need_value "$@"; BIND="$2"; shift 2 ;;
         --name) need_value "$@"; NAME="$2"; shift 2 ;;
@@ -147,6 +162,7 @@ while [ "$#" -gt 0 ]; do
         --release) RELEASE=1; RELEASE_SET=1; shift ;;
         --no-release) RELEASE=0; RELEASE_SET=1; shift ;;
         --install-docker) INSTALL_DOCKER=1; shift ;;
+        --doctor) DOCTOR=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         --yes|-y) ASSUME_YES=1; shift ;;
         -h|--help) usage 0 ;;
@@ -284,16 +300,81 @@ show_buildx_hint() {
     say ""
     say "构建需要 buildx，但这台机器上没有（或插件坏了）。"
     say "Dockerfile 用了 BuildKit 的缓存挂载，没有 buildx 就连第一步都过不去。"
+    say "Ubuntu 的 docker.io 包经常**不带**它——这就是「照着提示装完还是构建不了」的常见来源。"
     say ""
-    say "  1) 装上 buildx（按你 docker 的来源选一条）："
-    say "     sudo apt-get install -y docker-buildx-plugin   # Docker 官方源（docker-ce）"
-    say "     sudo apt-get install -y docker-buildx          # Ubuntu/Debian 发行版的 docker.io"
-    say "     sudo dnf install -y docker-buildx-plugin       # Fedora / RHEL"
-    say "     或手动放插件：https://docs.docker.com/go/buildx/"
+    say "  1) 按这台机器的包管理器装："
+    buildx_install_hint
     say ""
     say "  2) 不想装也行——不构建，直接拉已发布的镜像："
     say "     ./docker-install.sh --pull $(last_tag | sed 's/^v//')"
     say "     （多架构 manifest，amd64/arm64 自动挑；不需要 buildx）"
+}
+
+# ── 发行版 / 包管理器 ─────────────────────────────────────────────────────────
+
+# 提示里给出的必须是在**这台机器上真能装上**的那一条：包名各发行版不一样，
+# 写错一个就让人白跑一趟。
+detect_pm() {
+    local cand
+    for cand in apt-get dnf yum zypper pacman apk; do
+        if command -v "$cand" >/dev/null 2>&1; then printf '%s' "$cand"; return 0; fi
+    done
+    printf ''
+}
+
+pm_family() {
+    case "$(detect_pm)" in
+        apt-get) printf 'apt' ;;
+        dnf|yum) printf 'dnf' ;;
+        zypper)  printf 'zypper' ;;
+        pacman)  printf 'pacman' ;;
+        apk)     printf 'apk' ;;
+        *)       printf 'unknown' ;;
+    esac
+}
+
+os_pretty_name() {
+    if [ -r /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        printf '%s' "${PRETTY_NAME:-${NAME:-unknown}}"
+    else
+        printf '%s' "$(uname -srm)"
+    fi
+}
+
+docker_install_hint() {
+    case "$(pm_family)" in
+        apt)    printf 'sudo apt-get update && sudo apt-get install -y docker.io' ;;
+        dnf)    printf 'sudo dnf install -y moby-engine' ;;
+        zypper) printf 'sudo zypper --non-interactive install docker' ;;
+        pacman) printf 'sudo pacman -S --needed docker' ;;
+        apk)    printf 'sudo apk add docker && sudo rc-update add docker default && sudo service docker start' ;;
+        *)      printf 'curl -fsSL https://get.docker.com | sudo sh' ;;
+    esac
+}
+
+buildx_install_hint() {
+    case "$(pm_family)" in
+        apt)
+            say "  sudo apt-get update && sudo apt-get install -y docker-buildx"
+            say "    # Ubuntu 23.10+ / Debian 12+ 有这个包；更老的发行版没有这个包名，"
+            say "    # 改用 Docker 官方源里的 docker-buildx-plugin（见 docs.docker.com/engine/install）"
+            ;;
+        dnf)
+            say "  sudo dnf install -y docker-buildx-plugin     # Docker 官方源里的名字"
+            say "  sudo dnf install -y docker-buildx           # 有的版本用这个包名"
+            ;;
+        zypper) say "  sudo zypper install -y docker-buildx" ;;
+        pacman) say "  sudo pacman -S --needed docker-buildx" ;;
+        apk)    say "  sudo apk add docker-cli-buildx" ;;
+        *)      say "  # 没有认出来的包管理器：用下面的通用办法" ;;
+    esac
+    say "  通用兜底（任何发行版，不需要包管理器；docker 已经在时可用）："
+    say "    docker create --name buildx-tmp docker/buildx-bin:latest \\"
+    say "      && docker cp buildx-tmp:/buildx ~/.docker/cli-plugins/docker-buildx \\"
+    say "      && docker rm buildx-tmp && chmod +x ~/.docker/cli-plugins/docker-buildx"
+    say "    docker buildx version"
 }
 
 as_root() {
@@ -307,10 +388,23 @@ as_root() {
 }
 
 # 当前用户与 docker 组的关系，分两处查：
-#   group_db_has_user  /etc/group 里有没有点名（usermod 生效了没有）
-#   group_active_now   当前进程的补充组里有没有 docker（当前会话拿到了没有）
+#   group_db_has_user  /etc/group（或 NSS）里有没有点名——usermod 生效了没有
+#   group_active_now   当前进程的补充组里有没有 docker——当前会话拿到了没有
+#
+# 主组也算：有人把 `docker` 设成了主组（或在容器/镜像里就是这么配的），只看
+# `/etc/group` 的成员列表会漏掉，脚本就会说「没加组」——这正是被抱怨过的
+# 「明明加了，判定没过」。getent 不在时退回直接读 /etc/group。
 group_db_has_user() {
-    getent group docker 2>/dev/null | awk -F: '{print $4}' | tr ',' '\n' | grep -qx "$1"
+    local user="$1" members=""
+    if [ "$(id -gn "$user" 2>/dev/null)" = docker ]; then
+        return 0
+    fi
+    if command -v getent >/dev/null 2>&1; then
+        members=$(getent group docker 2>/dev/null | awk -F: '{print $4}')
+    elif [ -r /etc/group ]; then
+        members=$(awk -F: '$1=="docker" {print $4}' /etc/group)
+    fi
+    printf '%s' "$members" | tr ',' '\n' | grep -qx "$user"
 }
 
 # 注意：这里不能写 `id -nG 用户名`。带用户名查的是 NSS/数据库里的组，
@@ -318,6 +412,23 @@ group_db_has_user() {
 # 不带参数查的才是当前进程实际持有的补充组。
 group_active_now() {
     id -nG 2>/dev/null | tr ' ' '\n' | grep -qx docker
+}
+
+# 出问题时把三件事一起摊开：你是谁、这个会话有什么组、数据库里 docker 组有谁。
+# 以前只给一句结论，用户看不出「加到了 root 身上」或者「加的是另一个账号」。
+show_group_diagnosis() {
+    local members=""
+    if command -v getent >/dev/null 2>&1; then
+        members=$(getent group docker 2>/dev/null | awk -F: '{print $4}')
+    elif [ -r /etc/group ]; then
+        members=$(awk -F: '$1=="docker" {print $4}' /etc/group)
+    fi
+    say "  当前用户：$(id -un)（uid $(id -u)）"
+    say "  这个会话的组：$(id -nG 2>/dev/null)"
+    say "  /etc/group 里的 docker 成员：${members:-（空）}"
+    case ",${members}," in
+        *,root,*) say "  注意：docker 组里加的是 root，不是 $(id -un)——用 sudo 跑过 usermod 时很容易这样。" ;;
+    esac
 }
 
 # docker info 报 permission denied 时走这里。
@@ -329,6 +440,8 @@ fix_docker_access() {
     local user self quoted
     user=$(id -un)
     self="$REPO_DIR/$(basename "${BASH_SOURCE[0]}")"
+
+    show_group_diagnosis
 
     if [ "$(id -u)" = 0 ]; then
         say ""
@@ -349,13 +462,13 @@ fix_docker_access() {
 
     if group_db_has_user "$user"; then
         say ""
-        say "$user 已经写进 /etc/group 的 docker（加组命令生效了），"
-        say "但当前登录会话是加组之前启动的，进程还拿不到这个组——"
+        say "组已经加好了（/etc/group 里有 $user）——这一步不是失败。"
+        say "只是当前登录会话是加组之前启动的，进程还拿不到它；"
         say "重开终端没用，要用 sg 进组，或者整个会话重新登录。"
     else
-        if ! getent group docker >/dev/null 2>&1; then
+        if ! getent group docker >/dev/null 2>&1 && [ ! -r /etc/group ]; then
             say ""
-            say "系统里没有 docker 组（rootless docker 的权限不在 /etc/group）。"
+            say "读不到 docker 组（rootless docker 的权限不在 /etc/group）。"
             say "检查：ls -l ${DOCKER_HOST:-/var/run/docker.sock}"
             exit 1
         fi
@@ -365,10 +478,22 @@ fix_docker_access() {
             say ""
             say "加组失败。手动执行后重跑本脚本："
             say "  sudo usermod -aG docker $user"
+            say "  # 如果刚才那条 sudo 是别的用户在跑，确认加的是 $(id -un)，不是 root："
+            say "  getent group docker"
             exit 1
         fi
         if [ "$DRY_RUN" = 1 ]; then
             return 0
+        fi
+        # 加完立刻复核：写进去了就明说，没写进去就别再往下走。
+        if group_db_has_user "$user"; then
+            say "  已写入 /etc/group：$(getent group docker 2>/dev/null || awk -F: '$1=="docker"' /etc/group)"
+        else
+            say ""
+            say "usermod 跑完了，但 /etc/group 里仍然没有 $user。"
+            say "常见原因：sudoers 里限定、NSS 用了 LDAP/sssd、或者根文件系统只读。"
+            say "请手动确认后重跑：getent group docker"
+            exit 1
         fi
     fi
 
@@ -389,36 +514,41 @@ fix_docker_access() {
     fi
 
     say ""
-    say "组已经加上了，但当前会话仍然拿不到。任选其一："
+    say "组是真的加上了，只是这个会话拿不到它——不算失败。任选其一："
     say "  1) 注销后重新登录（GUI 也要整个会话重登，新开终端不算）"
-    say "  2) 不用重登，直接用 sg 进组跑："
+    say "  2) 在当前终端里进组（之后的命令都有效）：newgrp docker"
+    say "  3) 一条命令搞定，不用重登："
     say "     sg docker -c '$(printf '%q ' "$self" "${ORIG_ARGS[@]}")'"
+    say ""
+    say "验证加成功了没有：getent group docker    ← 里面应当有 $(id -un)"
     exit 1
 }
 
 show_install_hint() {
-    local pm="手动"
-    for cand in apt-get dnf yum apk pacman zypper; do
-        if command -v "$cand" >/dev/null 2>&1; then pm=$cand; break; fi
-    done
+    local pm
+    pm=$(detect_pm)
     say ""
-    say "这台机器上没有 docker。装法（任选其一，二选一开始）："
-    case "$pm" in
-        apt-get) say "  sudo apt-get update && sudo apt-get install -y docker.io" ;;
-        dnf)     say "  sudo dnf install -y moby-engine    # 或 docker-ce，见 docs.docker.com" ;;
-        yum)     say "  sudo yum install -y docker" ;;
-        apk)     say "  sudo apk add docker && sudo rc-update add docker default && sudo service docker start" ;;
-        pacman)  say "  sudo pacman -S docker && sudo systemctl enable --now docker" ;;
-        zypper)  say "  sudo zypper install docker" ;;
-        *)       say "  官方文档：https://docs.docker.com/engine/install/" ;;
-    esac
+    say "这台机器上没有 docker（$(os_pretty_name)）。"
     say ""
-    say "装完把当前用户加进 docker 组（否则每条命令都要 sudo，且脚本读不到状态）："
-    say "  sudo usermod -aG docker $(id -un)"
-    say "  sg docker -c './docker-install.sh'   # 不想重新登录就先用 sg 进组"
-    say "  # 或者注销后重新登录（GUI 要整个会话重登，新开终端不算）"
+    say "  1) 装 docker："
+    say "     $(docker_install_hint)"
+    [ -n "$pm" ] || say "     （没认出包管理器，用上面的通用安装脚本）"
     say ""
-    say "或者让本脚本代装：./docker-install.sh --install-docker"
+    say "  2) 装完确认守护进程在跑："
+    say "     docker info        ← 报 permission denied 就继续第 3 步"
+    say "     # 没有 systemd（WSL/容器里）时手动起：sudo dockerd &"
+    say ""
+    say "  3) 把当前用户加进 docker 组（否则每条命令都要 sudo）："
+    say "     sudo usermod -aG docker $(id -un)"
+    say "     getent group docker      ← 这里应当出现 $(id -un)"
+    say "     sg docker -c './docker-install.sh'   # 不想重新登录就先用 sg 进组"
+    say "     # 或者注销后重新登录（GUI 要整个会话重登，新开终端不算）"
+    say ""
+    say "  4) 构建还要 buildx（Ubuntu 的 docker.io 常常不带它）："
+    buildx_install_hint
+    say ""
+    say "或者让本脚本代装 docker + buildx：./docker-install.sh --install-docker"
+    say "只想先看看缺什么：./docker-install.sh --doctor"
 }
 
 # 以 root 跑一条安装命令；--dry-run 时只打印。
@@ -431,10 +561,8 @@ do_root() {
 }
 
 install_docker_now() {
-    local pm=""
-    for cand in apt-get dnf yum apk pacman zypper; do
-        if command -v "$cand" >/dev/null 2>&1; then pm=$cand; break; fi
-    done
+    local pm
+    pm=$(detect_pm)
     [ -n "$pm" ] || die "认不出包管理器，请照上面的提示手动安装"
 
     if [ "$DRY_RUN" = 0 ]; then
@@ -477,6 +605,25 @@ install_docker_now() {
     fi
 
     command -v docker >/dev/null 2>&1 || die "安装命令跑完了，但 PATH 里仍然没有 docker"
+
+    # 顺手把 buildx 装上：Dockerfile 用了 BuildKit 的缓存挂载，缺它构建一步都走不了，
+    # 而 Ubuntu 的 docker.io 正好常常不带。装不上不算致命（--pull 不需要它），给提示。
+    if ! buildx_ready; then
+        step "补装 buildx"
+        case "$pm" in
+            apt-get) do_root sh -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y docker-buildx' || true ;;
+            dnf)     do_root dnf install -y docker-buildx-plugin || do_root dnf install -y docker-buildx || true ;;
+            yum)     do_root yum install -y docker-buildx-plugin || true ;;
+            zypper)  do_root zypper --non-interactive install docker-buildx || true ;;
+            pacman)  do_root pacman -S --needed --noconfirm docker-buildx || true ;;
+            apk)     do_root apk add --no-cache docker-cli-buildx || true ;;
+        esac
+        if ! buildx_ready; then
+            warn "buildx 仍然没装上；本地构建会失败（--pull 不受影响）"
+            show_buildx_hint
+        fi
+    fi
+
     # 权限/守护进程的问题统一交给 ensure_docker：那里会分辨「没加组」「加了但会话旧」。
     ensure_docker
 }
@@ -566,6 +713,64 @@ PY
     fi
 }
 
+# ── MC 端口映射 ───────────────────────────────────────────────────────────────
+
+# 规格展开成「一行一个端口」：`25565` / `25565-25575` / `25565,25566`。
+#
+# 失败用退出码表达，不在管道里 die：管道里的 exit 只结束子 shell，脚本会带着一个
+# 半截列表继续往下跑——那正是「校验看着有、实际没拦住」的来源。
+#   2 = 不是数字；3 = 范围写反；4 = 超过 128 个（输入错的典型形状）
+mc_ports_expand() {
+    local spec="$1" item from to p
+    local -a out=()
+    case "$spec" in
+        ""|none|no|-|NONE|None) return 0 ;;
+    esac
+    local IFS=','
+    for item in $spec; do
+        [ -n "$item" ] || continue
+        case "$item" in
+            *-*) from=${item%%-*}; to=${item##*-} ;;
+            *)   from=$item; to=$item ;;
+        esac
+        case "$from" in ''|*[!0-9]*) return 2 ;; esac
+        case "$to"   in ''|*[!0-9]*) return 2 ;; esac
+        [ "$from" -le "$to" ] || return 3
+        p=$from
+        while [ "$p" -le "$to" ]; do
+            out+=("$p")
+            p=$((p + 1))
+            [ "${#out[@]}" -le 128 ] || return 4
+        done
+    done
+    [ "${#out[@]}" -gt 0 ] || return 0
+    printf '%s\n' "${out[@]}" | awk 'NF && !seen[$0]++'
+}
+
+# 校验并展开；不合格就带着原因退出。
+mc_ports_checked() {
+    local spec="$1" out="" rc=0
+    out=$(mc_ports_expand "$spec") && rc=0 || rc=$?
+    case "$rc" in
+        0) printf '%s' "$out" ;;
+        2) die "MC 端口必须是数字（收到：$spec）；例：25565 或 25565-25575" ;;
+        3) die "MC 端口范围写反了（收到：$spec）；例：25565-25575" ;;
+        4) die "MC 端口一次最多映射 128 个（收到：$spec）" ;;
+        *) die "MC 端口看不懂（收到：$spec）" ;;
+    esac
+}
+
+mc_ports_summary() {
+    local list count
+    list=$(mc_ports_checked "$MC_PORTS")
+    if [ -z "$list" ]; then
+        printf '不对外开服（MC 端口没有映射到宿主）'
+        return 0
+    fi
+    count=$(printf '%s\n' "$list" | wc -l | tr -d ' ')
+    printf '%s 个端口：%s' "$count" "$(printf '%s' "$list" | paste -sd, -)"
+}
+
 # ── 状态文件 ──────────────────────────────────────────────────────────────────
 
 load_state() {
@@ -578,6 +783,7 @@ load_state() {
     PREV_DATA=${INSTALL_DATA:-}
     PREV_WORKSPACE=${INSTALL_WORKSPACE:-}
     PREV_MC=${INSTALL_MC:-}
+    PREV_MC_PORTS=${INSTALL_MC_PORTS:-}
     PREV_MIRROR=${INSTALL_MIRROR:-}
     PREV_RELEASE=${INSTALL_RELEASE:-}
     PREV_IMAGE=${INSTALL_IMAGE:-}
@@ -593,6 +799,7 @@ save_state() {
         printf 'INSTALL_DATA=%q\n' "$DATA"
         printf 'INSTALL_WORKSPACE=%q\n' "$WORKSPACE"
         printf 'INSTALL_MC=%q\n' "$MC"
+        printf 'INSTALL_MC_PORTS=%q\n' "$MC_PORTS"
         printf 'INSTALL_MIRROR=%q\n' "$MIRROR_MODE"
         printf 'INSTALL_RELEASE=%q\n' "$([ "$RELEASE" = 1 ] && echo yes || echo no)"
         printf 'INSTALL_IMAGE=%q\n' "$IMAGE"
@@ -767,11 +974,19 @@ run_container() {
     fi
 
     step "启动容器：$NAME"
+    # MC 端口一行一个 `-p 宿主:容器`，两边同号：容器里的服务端监听的就是实例的
+    # `server-port`，宿主端口跟它不一致只会让人对不上号。
+    local mc_mappings=() p
+    while read -r p; do
+        [ -n "$p" ] || continue
+        mc_mappings+=(-p "${BIND}:${p}:${p}")
+    done <<< "${MC_PORT_LIST:-}"
     local cmd=(docker run -d
         --name "$NAME"
         --restart unless-stopped
         --stop-timeout 40
         -p "${BIND}:${PORT}:${PORT}"
+        ${mc_mappings[@]+"${mc_mappings[@]}"}
         --env-file "$ENV_FILE"
         "${mounts[@]}"
         "$IMAGE")
@@ -848,11 +1063,126 @@ remove_container() {
 
 image_exists() { docker image inspect "$1" >/dev/null 2>&1; }
 
+# ── 体检（--doctor）───────────────────────────────────────────────────────────
+#
+# 只读：不装包、不构建、不起容器、不写状态。每一条都给「现在是什么」与「怎么修」——
+# 「照着提示做完仍然跑不通」几乎都出在提示缺了一步（Ubuntu 的 docker.io 不带 buildx
+# 就是典型），所以这里的提示按本机包管理器现算，不再是一段万能文案。
+doctor() {
+    local failures=0 warnings=0 err avail p busy
+    step "体检（只读：不装包、不构建、不起容器、不写状态）"
+    say "  系统：$(os_pretty_name)"
+    say "  包管理器：$(detect_pm || true)"
+
+    if docker_present; then
+        say "  [✓] docker：$(docker --version 2>/dev/null)"
+    else
+        say "  [✗] docker：没有"
+        say "      装法：$(docker_install_hint)"
+        failures=$((failures + 1))
+    fi
+
+    if docker_present; then
+        if docker_ready; then
+            say "  [✓] docker 守护进程：可用"
+        else
+            err=$(docker info 2>&1 || true)
+            case "$err" in
+                *[Pp]ermission\ denied*)
+                    say "  [✗] docker 守护进程：在跑，但当前用户没有权限"
+                    show_group_diagnosis
+                    say "      修：sudo usermod -aG docker $(id -un)，然后 newgrp docker（或重新登录）"
+                    ;;
+                *)
+                    say "  [✗] docker 守护进程：连不上"
+                    say "      修：systemctl start docker（没有 systemd 时：sudo dockerd &）"
+                    ;;
+            esac
+            failures=$((failures + 1))
+        fi
+    fi
+
+    if docker_present; then
+        if buildx_ready; then
+            say "  [✓] buildx：$(docker buildx version 2>/dev/null | head -1)"
+        else
+            say "  [!] buildx：缺失（只有本地构建要用；--pull 不需要）"
+            buildx_install_hint
+            warnings=$((warnings + 1))
+        fi
+        if docker compose version >/dev/null 2>&1; then
+            say "  [✓] docker compose：可用（可选）"
+        else
+            say "  [·] docker compose：没有（可选：本脚本用 docker run）"
+        fi
+    fi
+
+    if command -v df >/dev/null 2>&1; then
+        avail=$(df -Pk "$REPO_DIR" 2>/dev/null | awk 'NR==2{print int($4/1024/1024)}')
+        if [ -n "${avail:-}" ] && [ "$avail" -ge 4 ]; then
+            say "  [✓] 磁盘：${avail} GiB 可用（构建约需 3–4 GiB）"
+        else
+            say "  [!] 磁盘：只有 ${avail:-?} GiB 可用（构建约需 3–4 GiB）"
+            warnings=$((warnings + 1))
+        fi
+    fi
+
+    if port_in_use "$PORT"; then
+        if docker port "$NAME" 2>/dev/null | grep -qE "[:.]${PORT}\$"; then
+            say "  [✓] 端口 $PORT（面板）：由本脚本的容器 $NAME 占着（升级时正常）"
+        else
+            say "  [!] 端口 $PORT（面板）：已被占用——换 --port，或先停掉占用它的进程"
+            warnings=$((warnings + 1))
+        fi
+    else
+        say "  [✓] 端口 $PORT（面板）：空闲"
+    fi
+
+    if [ -n "$(mc_ports_expand "$MC_PORTS" 2>/dev/null)" ]; then
+        busy=""
+        while read -r p; do
+            [ -n "$p" ] || continue
+            port_in_use "$p" && busy="$busy $p"
+        done <<< "$(mc_ports_expand "$MC_PORTS")"
+        if [ -n "$busy" ]; then
+            say "  [!] MC 端口被占用：$busy"
+            warnings=$((warnings + 1))
+        else
+            say "  [✓] MC 端口：$(mc_ports_summary)"
+        fi
+    else
+        say "  [·] MC 端口：没有映射（默认不开服；要开用 --mc-ports 25565）"
+    fi
+
+    say ""
+    if [ "$failures" -gt 0 ]; then
+        say "结论：$failures 项必须先修好（见上面的「装法」「修」）。"
+        exit 1
+    fi
+    if [ "$warnings" -gt 0 ]; then
+        say "结论：必需项齐全，$warnings 项提醒看一眼。可以 ./docker-install.sh 开始了。"
+    else
+        say "结论：齐全。可以 ./docker-install.sh 开始了。"
+    fi
+}
+
 # ── 主流程 ────────────────────────────────────────────────────────────────────
 
 [ -f "$REPO_DIR/Dockerfile" ] || die "这个目录里没有 Dockerfile，请在仓库根目录运行"
 
 load_state
+
+if [ "$DOCTOR" = 1 ]; then
+    # 体检用的是「这次会用的配置」：命令行 > 状态文件 > 默认值。它不能走 ensure_docker
+    # ——那条路径会试图装包、加组，而 --doctor 的承诺是「什么都不改」。
+    [ -n "$NAME" ] || NAME="${PREV_NAME:-$DEFAULT_NAME}"
+    [ -n "$PORT" ] || PORT="${PREV_PORT:-$DEFAULT_PORT}"
+    if [ "$MC_PORTS_SET" = 0 ]; then
+        MC_PORTS="${PREV_MC_PORTS:-}"
+    fi
+    doctor
+    exit 0
+fi
 
 step "检查 docker"
 ensure_docker
@@ -878,6 +1208,10 @@ fi
 if [ "$MC_SET" = 0 ] && [ -z "$MC" ]; then
     MC="${PREV_MC:-volume:hdsl-mc}"
 fi
+if [ "$MC_PORTS_SET" = 0 ]; then
+    # 默认不映射：开服是暴露面，不能因为重跑一次脚本就悄悄多开一组端口。
+    MC_PORTS="${PREV_MC_PORTS:-}"
+fi
 if [ -z "$MIRROR" ]; then
     MIRROR="${PREV_MIRROR:-}"
 fi
@@ -891,6 +1225,9 @@ NAME=$(ask "容器名" "$NAME")
 DATA=$(ask "面板数据（/data；宿主路径或 volume:名称）" "$DATA")
 WORKSPACE=$(ask "工作区（挂到 /home/hdsl/workspace；留空或 none = 不挂，重建即丢）" "$WORKSPACE")
 MC=$(ask "MC 服务器数据（挂到 /home/hdsl/mc；volume:名称 或宿主路径；none = 不挂）" "$MC")
+say "  MC 端口：容器里的服务端要局域网能连，就得在这里映射到宿主。"
+say "  格式 25565 / 25565-25575 / 25565,25566；留空 = 不对外开服（默认）。"
+MC_PORTS=$(ask "MC 游戏端口（映射到宿主）" "$MC_PORTS")
 PORT=$(ask "面板端口（容器内外同号）" "$PORT")
 BIND=$(ask "监听地址（0.0.0.0=局域网，127.0.0.1=只本机）" "$BIND")
 if [ "$PASSWORD_SET" = 0 ]; then
@@ -981,6 +1318,12 @@ fi
 [ -n "$DATA" ] || die "数据目录不能为空"
 [ -n "$NAME" ] || die "容器名不能为空"
 
+# MC 端口：现在校验并归一成逗号列表。不合格在这里停，别等 docker run 吐英文。
+MC_PORT_LIST=$(mc_ports_checked "$MC_PORTS")
+if [ -n "$MC_PORT_LIST" ]; then
+    MC_PORTS=$(printf '%s\n' "$MC_PORT_LIST" | paste -sd, -)
+fi
+
 # docker 的容器名/卷名只允许这些字符；提前拦，别等 docker 报一串英文
 case "$NAME" in
     *[!a-zA-Z0-9_.-]*) die "容器名只能用字母、数字、下划线、点、短横线：$NAME" ;;
@@ -1065,6 +1408,7 @@ else
     say "  MC 服务器数据：不挂（容器内，重建容器会丢存档）"
 fi
 say "  端口：${BIND}:${PORT} → 容器 ${PORT}"
+say "  MC 端口：$(mc_ports_summary)"
 say "  底座：$BASE_IMAGE（$BASE_CODE）"
 say "  镜像：$IMAGE"
 if [ -n "$PREBUILT" ]; then
@@ -1177,6 +1521,10 @@ if [ -n "$MC" ]; then
     esac
 else
     say "  MC 数据：没挂（存档在容器内，重建容器会丢）"
+fi
+say "  MC 端口：$(mc_ports_summary)"
+if [ -n "$MC_PORT_LIST" ]; then
+    say "            （宿主与容器同号；实例的 server-port 要与之一致，多实例就多开几个）"
 fi
 if [ -z "$PASSWORD" ]; then
     say "  首次打开会进入初始化引导，创建第一个管理员账号。"

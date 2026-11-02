@@ -2,6 +2,46 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 · 部署脚本：MC 端口可映射；缺什么软件按发行版给准确命令
+
+> 出发点是一次「照着文档在 Ubuntu 上做完，还是没跑通」：一是加组判定看起来在说
+> 「没过」，二是提示里给的安装命令本身缺东西（Ubuntu 的 `docker.io` 不带 buildx）。
+> 脚本自身不改行为的时候，至少要把这两件事查干净、说清楚。
+
+**MC 端口：默认仍然不开，但要开不必再手改命令**
+
+- `docker-install.sh` 在「配置」里多问一项 **MC 游戏端口**（`25565` / `25565-25575` /
+  `25565,25566`，最多 128 个），回车 = 不开；非交互用 `--mc-ports` / `--no-mc-ports`。
+  宿主与容器同号，会校验数字、范围方向和数量，`docker run` 里逐条变成 `-p 宿主:容器`。
+- 没开 MC 时行为和以前完全一致；开了之后安装结束的摘要会列出映射了哪几个端口，
+  并提醒实例的 `server-port` 要与之一致。
+
+**`--doctor`：只体检，不改任何东西**
+
+- 一条命令过一遍 docker CLI、守护进程与权限、buildx、compose、构建所需磁盘、面板端口、
+  MC 端口；每一条给「现在是什么」和「这台机器上能用的那条修法」。
+- 面板端口被**本脚本自己的容器**占着时按「升级时正常」处理，不再当成冲突告警。
+
+**加组判定：三种状态说清楚，不再把「已加好」报成失败**
+
+- `group_db_has_user` 现在也认「主组就是 docker」这种配法；读不到 `getent` 时退回直接读
+  `/etc/group`。
+- 出问题时打印三行：你是谁、这个会话有什么组、`/etc/group` 里的 docker 成员是谁——
+  加到 `root` 身上、或加的是另一个账号，一眼能看出来。
+- `usermod` 之后立刻复核并明说「已写入 /etc/group」；仍然拿不到组时明确写「不算失败」，
+  并给出 `newgrp docker` / `sg` / 重新登录三条路。
+
+**提示里的命令按发行版现算（apt / dnf / zypper / pacman / apk）**
+
+- 装 docker、装 buildx 各一段，包名按本机包管理器给；老发行版没有 `docker-buildx`
+  这个包名时，给 Docker 官方源里的 `docker-buildx-plugin`，以及任何发行版都能用的兜底：
+  用 `docker/buildx-bin` 镜像把插件二进制拷进 `~/.docker/cli-plugins/`。
+- `--install-docker` 装完 docker 会顺手补 buildx；补不上只告警（`--pull` 不需要它）。
+- **`docker-install.sh` 在仓库里的权限位是 `100644`**——新克隆下来 `./docker-install.sh` 直接
+  `Permission denied`。改成 `100755`，`scripts/install-hdsl-tui.sh` 与
+  `scripts/verify-privilege-split.sh` 一并修正。
+- `README` 与 `docs/deployment.md` 同步：MC 端口三种开法、`--doctor`、各发行版的 buildx 装法。
+
 ## 未发布 · web-shell · MC 的 Windows 裸部署收口；Java/存储位置可见；Hermes 平台提醒前置
 
 > 这一轮不新增功能面，只把「Windows 裸部署跑 MC」从“代码里有”变成“能解释、能收尾”。
