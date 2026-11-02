@@ -364,6 +364,25 @@ export interface DoctorReport {
 }
 
 /// GET /api/developer/status：开发者模式的当前状态。
+/** agent 密码：与开发者密码分开保存的「较小的那把钥匙」。 */
+export interface AgentPasswordStatus {
+  /** 是否已设置 */
+  set: boolean;
+  /** 当前守卫档位下它是否有意义（off / proxy 下没有） */
+  applicable: boolean;
+  /** 设置时勾选的、这串密码最多能发出去的范围 */
+  scopes: string[];
+}
+
+/** 一张借给 agent 的票；token 本身永远不出现在列表里。 */
+export interface AgentGrantRow {
+  id: string;
+  label: string;
+  scopes: string[];
+  instanceId?: string;
+  expiresAt: string;
+}
+
 export interface DeveloperStatus {
   /** 是否已设置开发者密码 */
   devPasswordSet: boolean;

@@ -44,6 +44,8 @@ import {
   useWallpapers,
 } from "../wallpaper";
 import type {
+  AgentGrantRow,
+  AgentPasswordStatus,
   DeveloperGuardScope,
   DeveloperStatus,
   DoctorCheck,
@@ -1537,6 +1539,221 @@ function developerError(e: unknown): string {
   return raw;
 }
 
+/* ---------------- agent 访问 ---------------- */
+
+/// agent 密码与开发者密码是**两把不同的钥匙**：这一串可以在不给开发者密码的情况下交给
+/// 一个 agent，它换到的票只能带动下面勾选的那几类范围，而且必须有人正在提权时才换得到。
+const AGENT_SCOPE_LABEL: Record<string, string> = {
+  read: "读取面板",
+  mc: "Minecraft 服务器",
+  instances: "创建/删除实例",
+  config: "面板配置",
+  plugins: "安装插件",
+};
+
+const AGENT_SCOPE_HINT: Record<string, string> = {
+  read: "查看实例、日志、任务列表",
+  mc: "启停服务器、发送控制台命令",
+  instances: "创建、删除、启停其它实例",
+  config: "账号、模型、TLS、网络",
+  plugins: "装/卸插件与整合包",
+};
+
+/// 距离某个 ISO 时间还有多少秒。
+function secondsUntil(iso: string): number {
+  const at = Date.parse(iso);
+  return Number.isFinite(at) ? Math.max(0, Math.floor((at - Date.now()) / 1000)) : 0;
+}
+
+/// 「agent 访问」：一把较小的钥匙，加上它发出去的票。
+function AgentAccessCard() {
+  const [status, setStatus] = useState<AgentPasswordStatus | null>(null);
+  const [grants, setGrants] = useState<AgentGrantRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [password, setPassword] = useState("");
+  const [scopes, setScopes] = useState<string[]>(["read"]);
+
+  const refresh = async () => {
+    try {
+      const [nextStatus, nextGrants] = await Promise.all([api.agentPassword(), api.agentGrants()]);
+      setStatus(nextStatus);
+      setGrants(nextGrants.grants);
+      setError(null);
+    } catch (e) {
+      setError(developerError(e));
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const toggle = (scope: string) => {
+    setScopes((previous) =>
+      previous.includes(scope) ? previous.filter((item) => item !== scope) : [...previous, scope],
+    );
+  };
+
+  const save = async () => {
+    if (!password) return setError("请输入 agent 密码");
+    if (scopes.length === 0) return setError("至少要勾选一类范围");
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus(await api.setAgentPassword(password, scopes));
+      setPassword("");
+      toast("success", "agent 密码已设置，旧密码发出的票已全部失效");
+      await refresh();
+    } catch (e) {
+      setError(developerError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus(await api.clearAgentPassword());
+      toast("success", "agent 密码已清除，它发出的票已全部失效");
+      await refresh();
+    } catch (e) {
+      setError(developerError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (id: string) => {
+    setError(null);
+    try {
+      await api.revokeAgentGrant(id);
+      toast("success", "已掐掉这张票");
+      await refresh();
+    } catch (e) {
+      setError(developerError(e));
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="comp-row">
+        <span className="comp-label">agent 访问</span>
+        <span className="comp-value">
+          <span className={`tag ${status?.set ? "running" : "plain"}`}>{status?.set ? "已设置" : "未设置"}</span>
+        </span>
+      </div>
+      <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+        给 agent 用的<b>较小的那把钥匙</b>：把它交给一个 agent，不必交出开发者密码。它换到的票只能带动下面
+        勾选的范围，<b>而且必须有人正在提权</b>——没人提权时它什么都打不开，票也不会活得比这次提权更久。
+        把这串密码输进上面的提权框只会得到「密码不正确」。
+      </p>
+
+      {status && !status.applicable && (
+        <div className="form-error" style={{ marginTop: 4 }}>
+          当前开发者守卫是「只反代」或「关闭」，会话本身就能访问这些接口，agent 密码不会带来任何新能力，
+          因此后端会直接拒绝它。需要先把守卫调到「反代 + 实例操作」或「全部 API」。
+        </div>
+      )}
+
+      <div className="comp-row">
+        <span className="comp-label">{status?.set ? "更换 agent 密码" : "agent 密码"}</span>
+        <span className="comp-value">
+          <input
+            className="input"
+            type="password"
+            autoComplete="new-password"
+            placeholder="至少 8 位"
+            value={password}
+            disabled={busy}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </span>
+      </div>
+
+      <div className="comp-row" style={{ alignItems: "flex-start" }}>
+        <span className="comp-label">它最多能做什么</span>
+        <span className="comp-value" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {Object.keys(AGENT_SCOPE_LABEL).map((scope) => (
+            <label key={scope} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={scopes.includes(scope)}
+                disabled={busy}
+                onChange={() => toggle(scope)}
+              />
+              <span>{AGENT_SCOPE_LABEL[scope]}</span>
+              <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>{AGENT_SCOPE_HINT[scope]}</span>
+            </label>
+          ))}
+        </span>
+      </div>
+      <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "0 8px", lineHeight: 1.6 }}>
+        这里勾的是<b>上限</b>：调用方可以要得更少，但要不了更多。全部勾上等于把面板交给它——那是你的选择，
+        不是默认值。
+      </p>
+
+      {error && <div className="form-error">{error}</div>}
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingTop: 6 }}>
+        <button className="btn btn-text danger ripple-host" disabled={busy || !status?.set} onClick={() => void clear()}>
+          清除 agent 密码
+        </button>
+        <button
+          className="btn btn-raised ripple-host"
+          style={{ marginLeft: "auto" }}
+          disabled={busy}
+          onClick={() => void save()}
+        >
+          {busy ? "处理中…" : status?.set ? "更换并作废旧票" : "设置 agent 密码"}
+        </button>
+      </div>
+
+      <div className="comp-row" style={{ marginTop: 10 }}>
+        <span className="comp-label">当前授权</span>
+        <span className="comp-value">
+          <span className={`tag ${grants.length > 0 ? "running" : "plain"}`}>{grants.length} 张</span>
+        </span>
+      </div>
+      {grants.length === 0 ? (
+        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "0 8px 8px", lineHeight: 1.6 }}>
+          还没有 agent 拿着票。票是借出去的权力，随提权一起消失。
+        </p>
+      ) : (
+        <div style={{ padding: "0 8px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
+          {grants.map((grant) => (
+            <div
+              key={grant.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontSize: 13,
+                borderTop: "1px solid var(--monet-outline-variant)",
+                paddingTop: 6,
+              }}
+            >
+              <span style={{ fontWeight: 500 }}>{grant.label}</span>
+              <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                {grant.scopes.map((scope) => AGENT_SCOPE_LABEL[scope] ?? scope).join(" · ")}
+                {grant.instanceId ? ` · ${grant.instanceId}` : ""}
+              </span>
+              <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                剩 {formatRemaining(secondsUntil(grant.expiresAt))}
+              </span>
+              <button className="btn btn-text danger ripple-host" onClick={() => void revoke(grant.id)}>
+                掐掉
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /// 设置页的「开发者模式」：进入需要开发者密码，进去后可以开关 Web Shell、
 /// 修改开发者密码。实例终端打开前的二次确认用的是同一个密码。
 function DeveloperTab() {
@@ -2102,6 +2319,8 @@ function DeveloperTab() {
           改密码或注销即失效，别写进脚本文件。
         </p>
       </div>
+
+      <AgentAccessCard />
 
       <div className="card" style={{ borderColor: "var(--monet-error)" }}>
         <div className="comp-row">

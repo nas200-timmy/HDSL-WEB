@@ -1,5 +1,7 @@
 import type {
   Account,
+  AgentGrantRow,
+  AgentPasswordStatus,
   BrandAdminCredentials,
   BrandSettings,
   BrandSourceProbe,
@@ -201,6 +203,19 @@ export const api = {
       `/api/brands/${brand}/instances/${encodeURIComponent(id)}/reveal`,
       jsonInit("POST", { target }),
     ),
+  /** agent 密码的状态：是否已设置、当前守卫档位下是否可用、它的上限范围 */
+  agentPassword: () => request<AgentPasswordStatus>("/api/developer/agent-password"),
+  /** 设置 agent 密码并声明它最多能发什么；需要先提权，会清掉旧密码发出的全部票 */
+  setAgentPassword: (password: string, scopes: string[]) =>
+    request<AgentPasswordStatus>("/api/developer/agent-password", jsonInit("POST", { password, scopes })),
+  /** 清除 agent 密码，并掐掉它发出的全部票；需要先提权 */
+  clearAgentPassword: () =>
+    request<AgentPasswordStatus>("/api/developer/agent-password/clear", { method: "POST" }),
+  /** 当前活着的 agent 票（不含 token 本身） */
+  agentGrants: () => request<{ grants: AgentGrantRow[] }>("/api/developer/agent-grants"),
+  /** 掐掉一张票，立即生效 */
+  revokeAgentGrant: (id: string) =>
+    request<{ ok: boolean }>(`/api/developer/agent-grants/${encodeURIComponent(id)}`, { method: "DELETE" }),
   developerStatus: () => request<DeveloperStatus>("/api/developer/status"),
   elevateDeveloper: (password: string) =>
     request<{ elevated: boolean; expiresAt: string; token?: string }>(
