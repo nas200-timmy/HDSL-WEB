@@ -360,6 +360,20 @@ public final class DshTuiPlugins {
     /// @return the refusal text
     public static String hostMismatch(Entry entry, @Nullable String harnessVersion) {
         String host = harnessVersion == null || harnessVersion.isBlank() ? "未知版本" : harnessVersion;
+        if (!entry.terminal()) {
+            // A capability is not a screen, so the "use the ACP one instead" advice the
+            // bundled branches give is meaningless here. What actually breaks on an old
+            // host is the **authorisation path**: the agent password is handed over on a
+            // settings page that rides the 0.2.x client slot. A smoke on 0.1.2/0.1.5/0.1.7
+            // showed the plugin mounts and its bundle is served there, but with no page to
+            // type the password into, the tools answer `panel_not_authorized` forever —
+            // installed, unusable. So the button is off, and this says why.
+            return entry.packageName() + " 需要 dsh " + entry.requiresDsh() + "，这个实例是 " + host
+                    + "。它是**能力插件**而不是终端：授权要在「更多设置 → Agent 预设」里输入面板的 "
+                    + "agent 密码，那一页用的是 0.2.x 的客户端设置槽位。旧宿主上它多半装得上、也加载得起来，"
+                    + "但没有那一页就没法把授权交给它，工具会一直回 panel_not_authorized——装了也用不了。"
+                    + "请把实例升到 0.2.x（清单里列的版本都实测过）。";
+        }
         if (entry.bundled() && entry.hasExecutable()) {
             return entry.packageName() + " 需要 dsh " + entry.requiresDsh() + "，这个实例是 " + host
                     + "。它通过 ACP 与 dsh 通信，而 ACP 的 profile 模板从 dsh 0.1.2-rc.1 起才有；"

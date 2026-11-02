@@ -146,6 +146,22 @@ class DshTuiPluginsTest {
         }
     }
 
+
+    /// The refusal for an old host has to make sense for the kind of entry it is about.
+    /// A capability cannot be told to "use the ACP terminal instead" — it is not a
+    /// terminal, and what is missing on 0.1.x is the settings page that authorises it.
+    @Test
+    void aCapabilityRefusalTalksAboutAuthorisationNotTerminals() {
+        DshTuiPlugins.Entry capability = DshTuiPlugins.find("@nas200-timmy/dsh-panel-agent").orElseThrow();
+        String text = DshTuiPlugins.hostMismatch(capability, "0.1.7-rc.2");
+        assertTrue(text.contains("能力插件"), text);
+        assertTrue(text.contains("agent 密码"), text);
+        assertFalse(text.contains("ACP"), "a capability is not a terminal, so ACP is not the answer: " + text);
+        assertFalse(DshTuiPlugins.fitsHost(capability, "0.1.7-rc.2"), "0.1.x is not offered");
+        assertTrue(DshTuiPlugins.fitsHost(capability, "0.2.1-alpha.1"));
+        assertTrue(DshTuiPlugins.fitsHost(capability, "0.2.2-alpha.2"));
+    }
+
     @Test
     void theKnownPackagesAreTheOnesCurated() {
         assertEquals(List.of(
