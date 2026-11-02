@@ -2,7 +2,12 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布 · 部署脚本：MC 端口可映射；缺什么软件按发行版给准确命令
+## v0.6.56 — 2026-11-02 · 部署脚本能体检、能开 MC 端口；MC 的 Windows 裸部署收口
+
+> 这一版两件事：把「照文档做完还是跑不通」的几处根因修掉（加组判定、提示缺 buildx、
+> 脚本权限位），并把 Windows 裸部署跑 MC 的收尾补齐。功能面不变，默认行为不变。
+
+### 部署脚本：MC 端口可映射；缺什么软件按发行版给准确命令
 
 > 出发点是一次「照着文档在 Ubuntu 上做完，还是没跑通」：一是加组判定看起来在说
 > 「没过」，二是提示里给的安装命令本身缺东西（Ubuntu 的 `docker.io` 不带 buildx）。
@@ -42,7 +47,7 @@
   `scripts/verify-privilege-split.sh` 一并修正。
 - `README` 与 `docs/deployment.md` 同步：MC 端口三种开法、`--doctor`、各发行版的 buildx 装法。
 
-## 未发布 · web-shell · MC 的 Windows 裸部署收口；Java/存储位置可见；Hermes 平台提醒前置
+### MC 的 Windows 裸部署收口；Java/存储位置可见；Hermes 平台提醒前置
 
 > 这一轮不新增功能面，只把「Windows 裸部署跑 MC」从“代码里有”变成“能解释、能收尾”。
 > 顺序上先保证进程与端口不会留下孤儿，再把 Java 和目录摊开给用户看，最后把 Hermes
