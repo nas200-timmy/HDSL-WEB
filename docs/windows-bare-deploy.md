@@ -532,5 +532,36 @@ MC 在 Windows 上走 headless `pipes`（日志 + 命令框），不走 ConPTY�
 - 存储根默认 `%USERPROFILE%\mc`，`HDSL_MC_DIR` / `mc.dir` 可改；SYSTEM 账户、超长路径、
   不可写目录会在启动时警告。
 
-真机验收顺序见 `docs/minecraft.md` §15.2 与 §6.2；在拿到一手证据前，不要把 Windows 的
-MC 写成“已验证”。
+真机验收顺序见 `docs/minecraft.md` §15.2 与 §6.2；2026-11-02 已按该顺序在真机跑通一次
+（§9.7），`1.21.11` 起服到 `Done`、控制台有回显、停止后端口释放。版本与 Java 的对应见 §9.7。
+
+### 9.7 全功能裸部署冒烟（2026-11-02）
+
+环境：Windows 10 `19045.6466`、JDK 21.0.12、**PATH 里没有任何 Node**（模拟只装了 JDK 的
+干净机器），面板用发布 jar 起在 `127.0.0.1:3080`（HTTP），由宿主机经 SSH 隧道驱动。
+
+| 面 | 结果 |
+|---|---|
+| 接口 42 项（登录 / health / node / doctor / 品牌版本 / 证书窗口 / ZCode / 半安装 / 终端四道闸 / SPA） | ✅ 除「干净机器没有 JS 工具链」按设计报 fail 外全过 |
+| 一键装托管运行时 | ✅ `26.13.0`（`win-x64.zip`，根目录 `node.exe`）+ `pnpm 11.28.10` |
+| dsh `0.2.2-alpha.2` | ✅ 装、启、`/i/<id>/` 200；ACP 控制台收到回复 |
+| kimi `2.4.1` / opencode `1.19.5` | ✅ 装、启、反代 200；各自 `acp` 子命令握手 + 问候 |
+| MC | ✅ enable → 下 jar → `Done (2.646s)` → 25565 监听 → 控制台 `list` 有回显 → stop 后端口释放 |
+| 实例终端（ConPTY） | ✅ ticket → WS `ready` → 3986 字节 ANSI（kimi TUI）→ `resize` 无报错 → `DELETE` 收进程 |
+
+**冒烟抓到的缺陷：ACP 中文被按控制台代码页解码**
+
+`ManagedProcess.pumpInputStream` / `pumpErrorStream` 原来固定用
+`OperatingSystem.NATIVE_CHARSET`；中文 Windows 上是 GBK，而 ACP 的 JSON-RPC 行是 UTF-8。
+结果是 ACP 控制台里的中文回复变成「浣犲ソ」这类乱码，个别字节还会直接丢失（实测回复里的
+「一」就丢了）。
+
+已修：`ManagedProcess` 增加带 `Charset` 的重载，`DshAcpClient` 的 stdout / stderr 明确用
+UTF-8。复验：同一句问候返回「你好，很高兴见到你！😊」。全量测试 1182 项 / 2 失败
+（`BrandTuiTest`，宿主机没 node）/ 74 跳过，与基线一致。
+
+**MC 的版本—Java 对应（真机结论）**
+
+`26.3` 要求 Java 25+，面板在启动前明确拒绝（"needs Java 25 or newer, but `java` is Java
+21"）；只装了 JDK 21 的机器应选 `1.21.x`（本次用 `1.21.11` 跑通）。这条错误信息本身是
+可行动的，不是「启动失败」。

@@ -2,6 +2,38 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.6.57 — 2026-11-02 · ACP 中文不再乱码；Windows 裸部署全功能冒烟
+
+> 这一版只修一处真缺陷：ACP 的 stdio 被按控制台代码页解码，中文 Windows 上回复变成乱码还会
+> 丢字。顺手把这次真机冒烟的结果写进文档，并修掉冒烟脚本里那条自己会误报的版本断言。
+
+### ACP 控制台：固定 UTF-8，不再跟随控制台代码页
+
+- `ManagedProcess.pumpInputStream` / `pumpErrorStream` 原来固定用
+  `OperatingSystem.NATIVE_CHARSET`。中文 Windows 上是 GBK，而 ACP 的 JSON-RPC 行按规范是
+  UTF-8——于是 ACP 控制台里的中文回复显示成「浣犲ソ」这类乱码，个别字节还会被替换掉
+  （实测「你好，很高兴见到你，祝你今天一切顺利！」里的「一」直接丢了）。
+- `ManagedProcess` 增加带 `Charset` 的重载；`DshAcpClient` 的 stdout / stderr 明确用 UTF-8。
+  POSIX 行为不变（`NATIVE_CHARSET` 本来就是 UTF-8），dsh 主进程与控制台命令的日志口径
+  也不动——只把「协议流」这一条从控制台代码页里摘出来。
+- 复验：Windows 10 + JDK 21 裸部署，同一句问候返回「你好，很高兴见到你！😊」。
+  全量测试 1182 项 / 2 失败（`BrandTuiTest`，宿主机没 node）/ 74 跳过，与基线一致。
+
+### 文档：Windows 裸部署的全功能冒烟记录
+
+- `docs/windows-bare-deploy.md` §9.7：干净 PATH（无 Node）下，接口 42 项、一键装托管运行时
+  `26.13.0`、dsh / kimi / opencode 三个 agent 的 ACP 问候、MC 起服到 `Done`、ConPTY 终端
+  字节流的实测结果，以及上面这条乱码缺陷的定性与修法。
+- `docs/minecraft.md` §15.2：补「MC 版本 ↔ Java」对应——`26.x` 要 Java 25+，只有 JDK 21 的
+  机器选 `1.21.x`（`1.21.11` 已验证）；面板会在启动前拒绝并报出实际 Java 版本。
+- `docs/deployment.md` §4：写明**本地 `RELEASE_VERSION` 构建出来的镜像不等于发布产物**，
+  版本号只决定 jar 里的字符串；核对 jar 哈希要跟 Release 的 `SHA256SUMS.txt` 比。
+
+### 验证脚本
+
+- `scripts/api-smoke.py` 不再把 claude-web 的版本写死成 `0.4`（latest 已是 `0.5.0`，会让脚本
+  误报）；改成只校验版本号的形状。
+
 ## v0.6.56 — 2026-11-02 · 部署脚本能体检、能开 MC 端口；MC 的 Windows 裸部署收口
 
 > 这一版两件事：把「照文档做完还是跑不通」的几处根因修掉（加组判定、提示缺 buildx、

@@ -410,6 +410,10 @@ docker buildx build \
 - **两个架构都必须能构建**：`nodejs.org` 与 npm registry 都要可达；`corepack prepare` 会下载 pnpm。
 - `--build-arg RELEASE_VERSION=…` 才会让 jar 带上发布版本号（缺省 `0.1.0-dev`）；它同时写进 jar 的 manifest，
   面板显示的版本来自这里。
+- 本地构建出来的镜像**不是发布产物**：`RELEASE_VERSION` 只决定 jar 里的版本字符串，不保证
+  jar 与 GitHub Release 的资产一致（拿旧源码配新版本号重建很常见）。核对时比
+  `docker exec <容器> sha256sum /app/hdsl-web.jar` 与 Release 里的 `SHA256SUMS.txt`；
+  排障或升级优先用 `ghcr.io/nas200-timmy/hdsl-web:<版本>`。
 - 想省下 SPA 阶段的重复劳动可以用 registry cache：`--cache-from/--cache-to type=registry,ref=…`。
 - 架构用 `uname -m` 判断，不再问 `dpkg`：换底座时同一条指令照样成立。
 

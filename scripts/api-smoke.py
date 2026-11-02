@@ -19,6 +19,7 @@
 import glob
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -159,7 +160,7 @@ def run(panel):
           status == 200 and "system" in body and "managed" in body, (status, body))
     check("node: the managed runtimes are a list", isinstance(body.get("managed"), list), body.get("managed"))
 
-    for brand, prefix in (("claude-web", "0.4"), ("octop", "1.0")):
+    for brand in ("claude-web", "octop"):
         status, body = call("GET", "/api/brands/%s/versions" % brand)
         versions = body.get("versions") or []
         # Either the list arrives, or the answer explains why it cannot (a proxy's
@@ -168,7 +169,10 @@ def run(panel):
         check("brands: %s versions, or a reason" % brand,
               (status == 200 and versions) or explained, (status, body.get("error"), versions[:3]))
         if status == 200 and versions:
-            check("brands: %s looks right" % brand, versions[0].startswith(prefix), versions[:3])
+            # Only the shape is the contract: pinning a major here means every upstream
+            # release turns this check red for no reason (claude-web 0.5.0 did).
+            check("brands: %s versions look like versions" % brand,
+                  re.match(r"^\d+\.\d+", versions[0]) is not None, versions[:3])
 
     status, body = call("GET", "/api/doctor")
     checks = {c.get("id"): c for c in body.get("checks", [])}
