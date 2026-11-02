@@ -34,7 +34,7 @@ for (const file of manifest.files ?? []) {
 // cannot boot.
 if (manifest.bin) problems.push('a panel bridge must not ship a bin: it belongs in the instance profile')
 
-const sources = ['src/index.js', 'src/client.js', 'src/tools.js']
+const sources = ['src/index.js', 'src/client.js', 'src/tools.js', 'lib/client.js']
 for (const source of sources) {
   const path = join(root, source)
   if (!existsSync(path)) {

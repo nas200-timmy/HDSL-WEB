@@ -1,6 +1,6 @@
 {
   "name": "@nas200-timmy/dsh-panel-agent",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "HDSL-web's panel bridge for DeepSeek Harness 0.2.x: lets an agent read and operate the panel that hosts it, through a scoped bearer grant the operator mints in the panel and revokes there.",
   "keywords": [
     "dsh",
@@ -15,10 +15,12 @@
   "main": "./src/index.js",
   "exports": {
     ".": "./src/index.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "src",
+    "lib",
     "cordis.patch.yml",
     "README.md",
     "NOTICE",
@@ -34,6 +36,13 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
     }
   },
   "peerDependencies": {

@@ -288,16 +288,26 @@ val stageFirstPartyPlugin = firstPartyPlugins.map { plugin ->
         val stage = layout.buildDirectory.dir("staged-plugins/${plugin.dirName}")
         into(stage)
         from(pluginRoot.dir(plugin.dirName)) {
-            include("package.json", "README.md", "LICENSE", "cordis.patch.yml", "bin/**", "src/**")
+            include("package.json", "README.md", "LICENSE", "cordis.patch.yml", "bin/**", "src/**", "lib/**")
         }
-        if (pluginRoot.dir("shared").asFile.isDirectory) {
+        // `plugins/shared/` is the two terminals' common toolbox, not a package.
+        // Copy it only into a plugin that actually imports from it: a hand-written
+        // client bundle (`lib/client.js`) has no use for a terminal screen model,
+        // and shipping it anyway would put reviewed-looking code in a tarball
+        // that never runs it.
+        val usesShared = pluginRoot.dir(plugin.dirName).asFile
+            .walkTopDown()
+            .any { it.isFile && it.extension in setOf("js", "mjs") &&
+                (it.parentFile?.name != "test") &&
+                it.readText().contains("shared/") }
+        if (usesShared && pluginRoot.dir("shared").asFile.isDirectory) {
             from(pluginRoot.dir("shared")) {
                 include("**/*.js")
                 into("shared")
             }
         }
         inputs.dir(pluginRoot.dir(plugin.dirName))
-        if (pluginRoot.dir("shared").asFile.isDirectory) inputs.dir(pluginRoot.dir("shared"))
+        if (usesShared && pluginRoot.dir("shared").asFile.isDirectory) inputs.dir(pluginRoot.dir("shared"))
         outputs.dir(stage)
         doLast {
             val root = stage.get().asFile
