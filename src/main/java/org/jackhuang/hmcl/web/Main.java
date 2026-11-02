@@ -73,6 +73,17 @@ public final class Main {
             System.exit(2);
         }
 
+        // Before anything that touches a file: from here on the panel may spend a while
+        // cleaning up after a failed delete (a leftover `node_modules` tree takes 20–40 s on
+        // Windows) before the banner appears, and a console with no output at all for a minute
+        // and a half reads as "it hung". The pid is enough to go look at the process.
+        //
+        // Deliberately no version here: `Metadata`'s static initialiser reads `hdsl.home`,
+        // which is only set once the configuration is loaded — touching it now would freeze the
+        // per-user home at the OS default and the panel would look for instances outside its own
+        // data directory. The banner below prints the version properly.
+        System.out.println("HDSL-web starting (pid " + ProcessHandle.current().pid() + ")");
+
         try {
             Map<String, String> env = System.getenv();
             ServerConfig config = ServerConfigLoader.load(env, Logger.LOG);
@@ -98,7 +109,17 @@ public final class Main {
             // renamed aside; at startup whatever held them is most likely gone. The brand and
             // ZCode categories sweep their own roots where their managers are built
             // (BrandApiServlet / ZcodeApiServlet), which is also this startup path.
+            //
+            // Timed, because this is the one step that can block the banner by minutes: a
+            // leftover tree is a whole `node_modules`, and deleting one takes 20–40 s on
+            // Windows. Silence during it is what made a slow start look like a hang, so a slow
+            // sweep says so (a fast one stays quiet — this prints nothing on the normal path).
+            long sweepStarted = System.nanoTime();
             org.jackhuang.hmcl.dsh.DshInstanceManager.sweepTombstones();
+            long sweepMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - sweepStarted);
+            if (sweepMillis >= 1000) {
+                System.out.println("  startup: cleaned up leftover directories in " + sweepMillis + " ms");
+            }
 
             Logger.LOG.start(config.dataDir.resolve("logs"));
 
