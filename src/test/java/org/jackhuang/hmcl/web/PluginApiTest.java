@@ -398,9 +398,18 @@ class PluginApiTest {
                         "the page links to where the plugin comes from: " + entry);
                 assertFalse(entry.get("description").getAsString().isBlank());
                 assertEquals(known.profile(), entry.get("profile").getAsString(),
-                        "the profile is where the package goes, and it is not the instance's");
-                assertNotEquals("web", entry.get("profile").getAsString(),
-                        "a terminal plugin never shares the web profile with the web app");
+                        "the profile is where the package goes");
+                // The rule inverts by kind: a terminal is an app plugin and must stay out
+                // of the instance's own profile; a capability lives there on purpose.
+                if (known.terminal()) {
+                    assertNotEquals("web", entry.get("profile").getAsString(),
+                            "a terminal plugin never shares the web profile with the web app");
+                    assertEquals("terminal", entry.get("kind").getAsString());
+                } else {
+                    assertEquals("web", entry.get("profile").getAsString(),
+                            "a capability plugin belongs in the instance's own profile");
+                    assertEquals("capability", entry.get("kind").getAsString());
+                }
             }
 
             JsonObject recommended = plugins.get(0).getAsJsonObject();

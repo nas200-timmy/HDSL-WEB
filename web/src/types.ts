@@ -109,10 +109,14 @@ export interface InstalledPlugin {
   pending?: boolean;
 }
 
-/** 面板精选的 TUI 终端插件（GET /api/dsh/tui-plugins 的 plugins[] 一条，见 DshTuiPlugins） */
+/** 面板精选的第一方插件（GET /api/dsh/tui-plugins 的 plugins[] 一条，见 DshTuiPlugins）。
+ *  `kind` 区分终端与能力：终端是 app 插件、各有各的 profile；能力插件与实例的 web 应用
+ *  同 profile，只给这个实例加东西，不接管屏幕。旧面板没有这个字段，按终端处理。 */
 export interface TuiPluginItem {
   id: string;
   packageName: string;
+  /** terminal | capability；缺字段视为终端（旧面板） */
+  kind?: "terminal" | "capability";
   /** 面板锁定的安装规格 `包名@版本` —— 版本锁定就发生在这里 */
   spec: string;
   name: string;
@@ -132,6 +136,8 @@ export interface TuiPluginItem {
 
 /** 某个实例上候选 TUI 插件的安装状态（GET /api/instances/{id}/tui-plugins 的一条） */
 export interface TuiPluginState {
+  /** terminal | capability；缺字段视为终端 */
+  kind?: "terminal" | "capability";
   packageName: string;
   /** 该插件的 profile；状态是从这个 profile 的清单里读出来的，不是实例的 web */
   profile: string;

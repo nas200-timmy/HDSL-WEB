@@ -78,6 +78,9 @@ public final class DshApiServlet extends HttpServlet {
             json.add("bin", entry.bin() == null
                     ? JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(entry.bin()));
             json.addProperty("profile", entry.profile());
+            // "terminal" vs "capability": the page groups by this, and a capability
+            // is never offered as "the terminal to open".
+            json.addProperty("kind", entry.terminal() ? "terminal" : "capability");
             // First-party: the panel ships the tarball, so the install needs no registry.
             json.addProperty("bundled", entry.bundled());
             if (entry.requiresDsh() != null) {

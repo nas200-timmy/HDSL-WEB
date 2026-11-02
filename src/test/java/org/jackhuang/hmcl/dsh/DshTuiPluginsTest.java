@@ -121,15 +121,28 @@ class DshTuiPluginsTest {
         }
     }
 
-    /// The profile is the field this list exists for: a terminal interface is an app
-    /// plugin, so it is installed into the profile its authors document and started
-    /// there — never into one of the profiles the harness ships an app for.
+    /// The profile is the field this list exists for, and the rule **inverts** by kind.
+    ///
+    /// A terminal interface is an app plugin: it is installed into the profile its
+    /// authors document and started there — never into one of the profiles the harness
+    /// ships an app for, because two app plugins in one profile parse the same argv and
+    /// the second one exits.
+    ///
+    /// A capability plugin is the opposite: it has no screen, and it must live in the
+    /// instance's own `web` profile so the app that renders its settings page is the one
+    /// that loads it. Pointing it at a terminal profile would be the same collision from
+    /// the other side.
     @Test
-    void everyEntryNamesAProfileThatIsNotAnAppProfile() {
+    void aProfileMatchesTheKindOfEntry() {
         for (DshTuiPlugins.Entry entry : DshTuiPlugins.ENTRIES) {
             assertFalse(entry.profile().isBlank(), entry.packageName() + " must name its profile");
-            assertEquals(DshSurface.OTHER, DshSurface.ofProfile(entry.profile()),
-                    entry.packageName() + " points at an app profile, which is the combination that does not boot");
+            if (entry.terminal()) {
+                assertEquals(DshSurface.OTHER, DshSurface.ofProfile(entry.profile()),
+                        entry.packageName() + " points at an app profile, which is the combination that does not boot");
+            } else {
+                assertEquals(DshSurface.WEB, DshSurface.ofProfile(entry.profile()),
+                        entry.packageName() + " is a capability and belongs in the web profile");
+            }
         }
     }
 
@@ -141,7 +154,8 @@ class DshTuiPluginsTest {
                         "@deepseek-harness-tui/dsh-tui",
                         "@huiliyi37/dsh-tianshu-tui",
                         "@tomowang/dsh-tui",
-                        "@xmoon76/dsh-pi-tui"),
+                        "@xmoon76/dsh-pi-tui",
+                        "@nas200-timmy/dsh-panel-agent"),
                 DshTuiPlugins.ENTRIES.stream().map(DshTuiPlugins.Entry::packageName).toList());
 
         assertTrue(DshTuiPlugins.find("@xmoon76/dsh-pi-tui").isPresent());

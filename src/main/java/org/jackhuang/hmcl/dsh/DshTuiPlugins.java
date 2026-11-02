@@ -81,6 +81,10 @@ public final class DshTuiPlugins {
     ///                    several may be installed on purpose — the ACP terminal is the
     ///                    fallback for an instance whose version moves — but only the first
     ///                    fitting one is started (see `DshTui#terminalPlugin`)
+    /// @param terminal    whether this is a terminal interface. A **capability** plugin
+    ///                    (`false`) shares the instance's own `web` profile, must never be
+    ///                    picked as "the terminal to start", and is what the panel calls a
+    ///                    first-party capability: things the instance gets, not a screen.
     public record Entry(
             String id,
             String packageName,
@@ -93,7 +97,8 @@ public final class DshTuiPlugins {
             String profile,
             @Nullable String requiresDsh,
             boolean bundled,
-            @Nullable String runtimeGroup) {
+            @Nullable String runtimeGroup,
+            boolean terminal) {
 
         /// Returns the specification the installer is given.
         ///
@@ -152,7 +157,8 @@ public final class DshTuiPlugins {
                     // against it, not a range that hopes.
                     ">=0.2.0-rc.2 <0.2.1-rc.4",
                     true,
-                    "dsh-terminal"),
+                    "dsh-terminal",
+                    true),
             new Entry(
                     "dsh-acp-tui",
                     "@nas200-timmy/dsh-acp-tui",
@@ -169,7 +175,8 @@ public final class DshTuiPlugins {
                     // every line whose CLI ships the acp profile template (0.1.2-rc.1 onwards).
                     ">=0.1.2-rc.1",
                     true,
-                    "dsh-terminal"),
+                    "dsh-terminal",
+                    true),
             new Entry(
                     "deepseek-harness-tui",
                     "@deepseek-harness-tui/dsh-tui",
@@ -186,7 +193,8 @@ public final class DshTuiPlugins {
                     // preset layer of its own.
                     null,
                     false,
-                    null),
+                    null,
+                    true),
             new Entry(
                     "tianshu-tui",
                     "@huiliyi37/dsh-tianshu-tui",
@@ -201,7 +209,8 @@ public final class DshTuiPlugins {
                     // README: 需 ≥ 0.2.0-rc.1（npm next）；peers 全是 ^0.2.0-rc.1。
                     ">=0.2.0-rc.1",
                     false,
-                    null),
+                    null,
+                    true),
             new Entry(
                     "tomowang-tui",
                     "@tomowang/dsh-tui",
@@ -216,7 +225,8 @@ public final class DshTuiPlugins {
                     // peers 全是 ^0.2.1-rc.3。
                     ">=0.2.1-rc.3",
                     false,
-                    null),
+                    null,
+                    true),
             new Entry(
                     "pi-tui",
                     "@xmoon76/dsh-pi-tui",
@@ -230,7 +240,26 @@ public final class DshTuiPlugins {
                     // 唯一把要求直接写出来的一个：`engines.dsh: >=0.2.1-rc.2`。
                     ">=0.2.1-rc.2",
                     false,
-                    null));
+                    null,
+                    true),
+            // 一个**能力**插件，不是终端：它和实例自己的 web 应用共用一个 profile，
+            // 因为它要渲染设置页、要被面板的界面看见；装进终端 profile 会和 dsh-web-app
+            // 抢同一份 argv。`requiresDsh` 里列的是逐个跑过冒烟的版本，不是猜的区间。
+            new Entry(
+                    "dsh-panel-agent",
+                    "@nas200-timmy/dsh-panel-agent",
+                    "0.1.4",
+                    "hdsl-web 面板桥",
+                    "https://github.com/nas200-timmy/HDSL-WEB",
+                    "GPL-3.0-or-later",
+                    "让实例里的 agent 知道自己在一个 HDSL-web 面板里，并能带着面板签发的、随时可掐掉的"
+                            + "授权去读面板状态、管理 Minecraft 服务器。不是终端，装进实例自己的 profile。",
+                    null,
+                    WEB_PROFILE,
+                    "0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2 || 0.2.1-alpha.3 || 0.2.1-alpha.4 || 0.2.1-alpha.5 || 0.2.1-rc.1 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-alpha.2",
+                    true,
+                    null,
+                    false));
 
     private DshTuiPlugins() {
     }

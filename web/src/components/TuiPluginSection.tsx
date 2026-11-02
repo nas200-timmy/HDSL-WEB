@@ -165,7 +165,13 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
           </button>
         </div>
       ) : (
-        (catalog ?? []).map((plugin, index) => {
+        // 能力插件排在终端后面，并自带一条标题——它们不是终端，装进的是实例自己的
+        // profile，点「终端」也不会启动它们。
+        [...(catalog ?? [])]
+          .sort((a, b) => (a.kind === "capability" ? 1 : 0) - (b.kind === "capability" ? 1 : 0))
+          .map((plugin, index, ordered) => {
+          const firstCapability =
+            plugin.kind === "capability" && ordered.findIndex((item) => item.kind === "capability") === index;
           const state = stateOf.get(plugin.packageName);
           // 清单里声明了 ≠ 文件在磁盘上：pnpm 先写 package.json 再拉包，中途失败会留下一个
           // 「有声明、没文件」的 profile，它起不来。旧面板没有 filesPresent 字段，缺字段
@@ -184,6 +190,11 @@ export function TuiPluginSection({ instance }: { instance: Instance }) {
           const shownVersion = declared ? state?.installedVersion ?? plugin.version : plugin.version;
           return (
             <div key={plugin.id}>
+              {firstCapability && (
+                <div className="section-caption" style={{ marginTop: 12 }}>
+                  面板能力（不是终端）
+                </div>
+              )}
               <div className="tlli" style={{ cursor: "default", alignItems: "flex-start" }}>
                 <span className="tlli-graphic">
                   <Package2Icon size={32} />

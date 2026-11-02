@@ -1021,6 +1021,7 @@ public final class InstancesApiServlet extends HttpServlet {
             JsonObject json = new JsonObject();
             json.addProperty("packageName", entry.packageName());
             json.addProperty("profile", entry.profile());
+            json.addProperty("kind", entry.terminal() ? "terminal" : "capability");
             json.addProperty("installed", installed);
             // Declared is not landed: pnpm writes the dependency before it fetches, so a
             // run that failed half-way leaves a profile that claims a plugin whose files

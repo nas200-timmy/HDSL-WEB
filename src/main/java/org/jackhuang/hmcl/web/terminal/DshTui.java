@@ -208,6 +208,11 @@ public final class DshTui {
         DshTuiPlugins.Entry declared = null;
         DshTuiPlugins.Entry misfit = null;
         for (DshTuiPlugins.Entry entry : DshTuiPlugins.ENTRIES) {
+            // A capability plugin is listed in the same catalogue but is not a screen:
+            // picking it here would open a "terminal" that is really the panel bridge.
+            if (!entry.terminal()) {
+                continue;
+            }
             Map<String, String> dependencies =
                     DshPluginInstaller.readDependencies(instance.homeDirectory(), entry.profile());
             if (!DshTuiPlugins.isInstalled(entry, dependencies.keySet())) {
