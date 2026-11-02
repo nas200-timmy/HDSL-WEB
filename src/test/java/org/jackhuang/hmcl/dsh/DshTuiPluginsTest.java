@@ -155,8 +155,10 @@ class DshTuiPluginsTest {
         DshTuiPlugins.Entry capability = DshTuiPlugins.find("@nas200-timmy/dsh-panel-agent").orElseThrow();
         String text = DshTuiPlugins.hostMismatch(capability, "0.1.7-rc.2");
         assertTrue(text.contains("能力插件"), text);
-        assertTrue(text.contains("agent 密码"), text);
+        assertTrue(text.contains("0.2.x") || text.contains("0.2.0"), text);
         assertFalse(text.contains("ACP"), "a capability is not a terminal, so ACP is not the answer: " + text);
+        // 不能写成"装得上但用不了"——那是在邀请人去试。
+        assertFalse(text.contains("装得上") || text.contains("也用不了"), text);
         assertFalse(DshTuiPlugins.fitsHost(capability, "0.1.7-rc.2"), "0.1.x is not offered");
         assertTrue(DshTuiPlugins.fitsHost(capability, "0.2.1-alpha.1"));
         assertTrue(DshTuiPlugins.fitsHost(capability, "0.2.2-alpha.2"));
