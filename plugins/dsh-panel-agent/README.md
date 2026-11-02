@@ -1,0 +1,89 @@
+# dsh-panel-agent
+
+把 HDSL-web 面板的能力交给面板里的 agent，但**权限不交给插件**。
+
+## 为什么需要它
+
+agent 本来就能用 shell 起一个 Minecraft 服务端。问题不是它做不到，而是它那么做之后
+**面板以为的世界和真实的世界不一样了**：端口被占、面板显示 STOPPED、两份日志写同一个
+world。这个插件存在的唯一理由是让 agent 走面板自己会记账的那条路。
+
+顺带解决第二件事：agent 不知道自己在一个面板里。上下文里的那两段话让它知道，这比任何
+工具都更能阻止"野生实例"。
+
+## 权限在谁手里
+
+```
+       插件（这个包）                面板（root 进程）
+       ─────────────                ─────────────────
+工具 schema：能问什么          AgentScopes：能做什么
+持有 bearer token              校验 scope、拒绝自杀、写审计
+不知道密码                     知道是谁、能随时掐掉
+```
+
+**关键：插件里的白名单是装饰品。** agent 和插件同一个 OS 用户，能改插件的代码。真正的
+边界在 `AuthFilter` 里，那里 agent 改不动。
+
+## 授权怎么发生
+
+1. 操作员在面板登录，输入开发者密码提权（30 分钟，可一次性延长到 3 小时）。
+2. 面板的设置页列出**可授予的范围**（读取 / Minecraft / 实例 / 配置 / 插件），勾选后
+   `POST /api/developer/agent-token` 换一张**有身份的票**。
+3. 票交给这个插件，只存在内存里。
+4. 操作员随时可以在面板上看到这张票并**掐掉**；时间一到它自己失效。
+
+票上写着 label、能碰的类、绑定哪个实例、什么时候死。面板的列表因此能画出"谁、能碰
+什么、还剩多久"。
+
+## 工具
+
+| 工具 | 路由 | 需要的范围 |
+|---|---|---|
+| `panel_get` | `GET /api/...` | `read` |
+| `panel_mc` | `/api/mc/instances/{id}/…` | `mc` |
+| `panel_create_mc` | `POST /api/mc/instances` | `instances` |
+
+被拒绝时返回结构化错误，永远是 `{ok:false, error}`，不会抛异常、不会挂住回合：
+
+- `panel_not_authorized` —— 没票或票已失效，请操作员重新授权
+- `agent_scope_denied` —— 票没有这一类权限
+- `self_operation_refused` —— 想停自己所在的实例，面板直接拒绝
+
+## 票从哪来
+
+两条路，都不需要开发者密码：
+
+1. **现成的票**——`HSDL_PANEL_TOKEN`，或设置页写入的凭据。
+2. **agent 密码**——`HSDL_PANEL_AGENT_PASSWORD`（或配置项 `agentPassword`）。插件在第一次
+   调用时拿它去 `POST /api/developer/agent-auth` 换票，票缓存在内存里直到 `expiresAt`。
+
+agent 密码是**面板里单独设置的一串**，不是开发者密码：
+
+- 它换到的票只能带动操作员在设置密码时勾选的那几类范围，调用方要更多也没用；
+- 把它输进网页的提权表单只会得到"密码错误"——两个秘密存在两个文件里，走两扇门；
+- **必须已经有人提权过**：没人处在提权窗口里时，接口回 `409 agent_password_not_elevated`，
+  而且换到的票不会活过那个窗口——agent 密码单独存在时什么都打不开；
+- 面板守卫在 `off` / `proxy` 两档直接拒绝它（那两档用会话就够，票只会多一个泄漏点）；
+- 改或清 agent 密码，面板会掐掉它发出的全部票。
+
+代码里没有保存密码的字段：它只在换票那一次出现在内存里。
+
+面板地址 `HSDL_PANEL_URL`，默认 `https://127.0.0.1:3080`。
+
+## 兼容性
+
+只依赖 `@deepseek-ai/dsh-tools` 和 `@deepseek-ai/dsh-system-prompt` 两个接缝，出网用
+Node 自带的 `fetch`。`peerDependencies` 逐个枚举实测过的 harness 版本，而不是写区间——
+npm 的 semver 下 `>=0.2.0-rc.2 <0.3` 这种区间**不匹配** `0.2.1-rc.3`，这个坑仓库的
+`plugins/README.md` 已经记过一次。
+
+缺服务时降级而不是 park：没有 `tools` 就只保留上下文那两段话，这是最坏情况下仍然阻止
+野生进程的那一半。
+
+## 检查
+
+```sh
+node plugins/dsh-panel-agent/scripts/check.mjs
+```
+
+离线、无依赖：校验清单、确认每个源码文件能被 `node --check` 解析、并拒绝任何运行时依赖。

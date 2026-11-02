@@ -210,10 +210,15 @@ public final class HdslServer {
         }
 
         int ttlSeconds = Math.toIntExact(java.time.Duration.ofHours(config.auth.sessionTtlHours).toSeconds());
+        // The elevation registry is created before the session gate: an agent
+        // reaches `/api/*` with a bearer token rather than a cookie, so the
+        // gate has to know the grants to admit one.
+        org.jackhuang.hmcl.web.developer.DeveloperElevation developerElevation =
+                new org.jackhuang.hmcl.web.developer.DeveloperElevation();
         AuthFilter authFilter = new AuthFilter(authService, config.auth.disabled,
                 request -> request.isSecure()
                         || org.jackhuang.hmcl.web.http.RequestSecurity.forwardedHttps(request, config),
-                ttlSeconds, config.basePath);
+                ttlSeconds, config.basePath, developerElevation);
 
         // The Phase 2 services: the event bus every WebSocket payload flows
         // through, the task pool behind installs and launches, and the
@@ -281,14 +286,16 @@ public final class HdslServer {
         // The developer credential and its elevation gate the web terminal and
         // the other sensitive developer routes (docs/web-shell.md §4.1).
         org.jackhuang.hmcl.web.developer.DeveloperAuth developerAuth;
+        org.jackhuang.hmcl.web.developer.DeveloperAuth agentAuth;
         try {
             developerAuth = org.jackhuang.hmcl.web.developer.DeveloperAuth.open(config.dataDir);
+            // A second secret, in its own file: the lesser one an operator can
+            // hand to an agent without handing over the panel.
+            agentAuth = org.jackhuang.hmcl.web.developer.DeveloperAuth.openAgent(config.dataDir);
         } catch (java.io.IOException e) {
             throw new IllegalStateException("Cannot open the developer credential store in "
                     + config.dataDir, e);
         }
-        org.jackhuang.hmcl.web.developer.DeveloperElevation developerElevation =
-                new org.jackhuang.hmcl.web.developer.DeveloperElevation();
         java.util.function.BooleanSupplier tlsActive = () -> {
             HdslServer live = self.get();
             return live != null && live.tlsActive();
@@ -335,7 +342,7 @@ public final class HdslServer {
                 config, taskService, terminals, terminalTickets,
                 authService, developerAuth, developerElevation, tlsActive, emergencyStop)), "/api/brands/*");
         context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.developer.DeveloperApiServlet(
-                developerAuth, developerElevation, authService, config, tlsActive,
+                developerAuth, agentAuth, developerElevation, authService, config, tlsActive,
                 emergencyStop, terminals, runtime)), "/api/developer/*");
         // Registered before the `/api/settings/*` holder below and matched by its longer prefix:
         // the download source is a launcher setting, and TLS is the other thing this path serves.

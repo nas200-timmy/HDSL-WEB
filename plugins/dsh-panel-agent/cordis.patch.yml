@@ -1,0 +1,16 @@
+# The dsh-panel-agent bundle patch: the panel bridge, and nothing else.
+#
+# This is **not** an app plugin: it does not own the screen and it must never be
+# installed in a terminal's profile. It is mounted next to whatever front end
+# the instance runs (web or TUI) and adds two things — a prompt section that
+# tells the model it is inside HDSL-web, and three tools that reach the panel
+# through a bearer grant.
+#
+# `inject` here is row-level (loader) inject: ordering only. The plugin's own
+# code-level inject holds just `tools` and `systemPrompt`, so a harness that is
+# missing an optional service still loads it rather than parking it forever with
+# no error and no tools (the failure mode dsh-inproc-tui documents).
+
+- insert:
+    - id: dsh-panel-agent
+      name: '@nas200-timmy/dsh-panel-agent'

@@ -57,16 +57,26 @@ public final class AuthFilter implements Filter {
     /// is keyed by it, so that logging one session out logs its elevation out
     /// too.
     public static final String SESSION_TOKEN_ATTRIBUTE = "session.token";
+    /// The [org.jackhuang.hmcl.web.developer.DeveloperElevation.AgentGrant]
+    /// behind an agent bearer token, once this filter has admitted one.
+    public static final String AGENT_GRANT_ATTRIBUTE = "session.agent";
 
     public static final String LOGIN_PATH = "/api/auth/login";
     public static final String STATUS_PATH = "/api/auth/status";
     public static final String SETUP_PATH = "/api/auth/setup";
     public static final String HEALTH_PATH = "/api/health";
+    /// The agent password's door. Reachable without a session on purpose: a
+    /// curl one-liner must be able to use the lesser secret, and it grants
+    /// strictly less than this cookie ever would.
+    public static final String AGENT_AUTH_PATH = "/api/developer/agent-auth";
 
     private final AuthService authService;
     private final boolean authDisabled;
     private final java.util.function.Predicate<HttpServletRequest> secureRequest;
     private final int cookieMaxAgeSeconds;
+    /// The grants behind agent bearer tokens: an agent has no browser, so the
+    /// cookie is not a door it can use.
+    private final org.jackhuang.hmcl.web.developer.DeveloperElevation elevation;
     /// 会话 Cookie 的 Path：根挂载是 `/`，子路径挂载是挂载点本身。
     /// 同一个域名下挂两个面板（`/a/`、`/b/`）时，Path=/ 的同名 Cookie 会互相覆盖，
     /// 表现为「登录 A 之后 B 掉线」。
@@ -85,14 +95,17 @@ public final class AuthFilter implements Filter {
     ///                      the root). The cookie is scoped to it, so two panels
     ///                      mounted on one origin (`/a/` and `/b/`) do not
     ///                      overwrite each other's session.
+    /// @param elevation     the agent grants behind bearer tokens
     public AuthFilter(AuthService authService, boolean authDisabled,
                       java.util.function.Predicate<HttpServletRequest> secureRequest, int ttlSeconds,
-                      String basePath) {
+                      String basePath,
+                      org.jackhuang.hmcl.web.developer.DeveloperElevation elevation) {
         this.authService = authService;
         this.authDisabled = authDisabled;
         this.secureRequest = secureRequest;
         this.cookieMaxAgeSeconds = ttlSeconds;
         this.cookiePath = basePath == null || basePath.isBlank() ? "/" : basePath;
+        this.elevation = elevation;
     }
 
     @Override
@@ -112,9 +125,72 @@ public final class AuthFilter implements Filter {
             req.setAttribute(SESSION_ATTRIBUTE, session.get());
             req.setAttribute(SESSION_TOKEN_ATTRIBUTE, token);
             chain.doFilter(request, response);
-        } else {
-            Json.error(resp, HttpServletResponse.SC_UNAUTHORIZED, "unauthorized");
+            return;
         }
+
+        Boolean agent = admitAgent(req, resp);
+        if (agent != null) {
+            if (agent) {
+                chain.doFilter(request, response);
+            }
+            return;
+        }
+        Json.error(resp, HttpServletResponse.SC_UNAUTHORIZED, "unauthorized");
+    }
+
+    /// Admits a request carrying an agent bearer token, or answers the refusal.
+    ///
+    /// This is the panel's own gate for callers that are not a browser: the
+    /// grant behind the token says **what** may be reached
+    /// ([org.jackhuang.hmcl.web.developer.AgentScopes]), and the two refusals
+    /// below say **what never may be**, whatever the grant claims.
+    ///
+    /// The session attribute is filled with a synthetic `agent:<label>`
+    /// session so every existing handler and the audit trail name the agent
+    /// rather than the operator whose password minted the token. That is the
+    /// whole point of the label: `audit.jsonl` must be able to answer "who did
+    /// this" without a second table.
+    ///
+    /// @param req  the request
+    /// @param resp the response to write a refusal to
+    /// @return `null` when no agent token is present, `true` when the request
+    ///         may continue, `false` when a refusal has been written
+    private @Nullable Boolean admitAgent(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        String header = req.getHeader("Authorization");
+        if (header == null || !header.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            return null;
+        }
+        String bearer = header.substring(7).trim();
+        var grant = elevation.agentGrant(bearer);
+        if (grant == null) {
+            // Unknown, expired and revoked tokens all read as "not an agent":
+            // the caller gets the same 401 as a missing cookie, so a probe
+            // cannot tell a wrong token from a dead one.
+            return null;
+        }
+        String method = req.getMethod();
+        String path = req.getRequestURI();
+        if (org.jackhuang.hmcl.web.developer.AgentScopes.forbidden(method, path)) {
+            Json.error(resp, HttpServletResponse.SC_FORBIDDEN, "agent_scope_denied: this route is closed to agents");
+            return false;
+        }
+        String needed = org.jackhuang.hmcl.web.developer.AgentScopes.required(method, path);
+        if (needed == null || !grant.scopes().contains(needed)) {
+            Json.error(resp, HttpServletResponse.SC_FORBIDDEN,
+                    "agent_scope_denied: " + (needed == null ? "this route has no agent scope" : needed));
+            return false;
+        }
+        if (org.jackhuang.hmcl.web.developer.AgentScopes.selfFatal(method, path, grant.instanceId())) {
+            // The tool call could never return: the process serving it is the
+            // one being stopped. Refusing is honest; queueing would promise an
+            // executor that no longer exists.
+            Json.error(resp, HttpServletResponse.SC_CONFLICT,
+                    "self_operation_refused: an agent cannot stop or take over its own instance");
+            return false;
+        }
+        req.setAttribute(SESSION_ATTRIBUTE, new AuthService.Session("agent:" + grant.label(), grant.expiresAt()));
+        req.setAttribute(AGENT_GRANT_ATTRIBUTE, grant);
+        return true;
     }
 
     /// Builds the session cookie. Shared with the login endpoint so the
@@ -151,7 +227,8 @@ public final class AuthFilter implements Filter {
         return ("POST".equals(method) && LOGIN_PATH.equals(path))
                 || ("GET".equals(method) && STATUS_PATH.equals(path))
                 || ("POST".equals(method) && SETUP_PATH.equals(path))
-                || ("GET".equals(method) && HEALTH_PATH.equals(path));
+                || ("GET".equals(method) && HEALTH_PATH.equals(path))
+                || ("POST".equals(method) && AGENT_AUTH_PATH.equals(path));
     }
 
     private static @Nullable String cookieValue(HttpServletRequest request, String name) {

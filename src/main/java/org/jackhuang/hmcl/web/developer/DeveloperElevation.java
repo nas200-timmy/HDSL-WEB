@@ -23,7 +23,11 @@ import org.jetbrains.annotations.Nullable;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /// The thirty-minute developer-mode elevation, shared by every door that
@@ -74,6 +78,28 @@ public final class DeveloperElevation {
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
+    /// One agent grant as the panel presents it: who holds it, what it may do,
+    /// which instance it belongs to, and when it dies.
+    ///
+    /// The token itself never appears in this record — [#id] is the handle the
+    /// operator clicks to revoke, so a page that lists grants never carries a
+    /// credential it could hand to a screenshot or a bug report.
+    ///
+    /// @param id         short handle, unique among live grants
+    /// @param label      what the operator typed on the settings page
+    /// @param scopes     the capability classes of [AgentScopes]
+    /// @param instanceId the instance the agent runs in, or `null`
+    /// @param expiresAt  when the grant dies
+    public record AgentGrant(String id, String label, Set<String> scopes,
+                             @Nullable String instanceId, Instant expiresAt) {
+    }
+
+    /// What the panel remembers about an agent bearer token beyond its expiry.
+    private record AgentInfo(String id, String label, Set<String> scopes,
+                             @Nullable String instanceId) {
+    }
+
+
     private final ConcurrentHashMap<String, Elevation> elevations = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Failures> failures = new ConcurrentHashMap<>();
 
@@ -108,12 +134,18 @@ public final class DeveloperElevation {
         }
         Elevation elevation = elevations.get(key);
         if (elevation != null && elevation.expiry.isAfter(now)) {
-            synchronized (elevation) {
-                // 只往前滑、绝不缩短：一次常规使用（开终端、开关页…）不能把
-                // 已经延长到 3 小时的提权砍回 30 分钟。
-                Instant slid = now.plus(TTL);
-                if (slid.isAfter(elevation.expiry)) {
-                    elevation.expiry = slid;
+            // An agent grant is a promise with a date on it: the operator was
+            // shown "剩 2:47" when they approved it. Sliding that would let a
+            // chatty agent renew itself forever, so agent keys keep the expiry
+            // they were minted with and simply die.
+            if (elevation.agent == null) {
+                synchronized (elevation) {
+                    // 只往前滑、绝不缩短：一次常规使用（开终端、开关页…）不能把
+                    // 已经延长到 3 小时的提权砍回 30 分钟。
+                    Instant slid = now.plus(TTL);
+                    if (slid.isAfter(elevation.expiry)) {
+                        elevation.expiry = slid;
+                    }
                 }
             }
             return true;
@@ -130,8 +162,8 @@ public final class DeveloperElevation {
     /// remaining time and simply earns a new extension coupon.
     public void elevate(String key) {
         Instant fresh = Instant.now().plus(TTL);
-        elevations.merge(key, new Elevation(fresh, false), (existing, unused) -> {
-            Elevation next = new Elevation(fresh, false);
+        elevations.merge(key, new Elevation(fresh, false, null), (existing, unused) -> {
+            Elevation next = new Elevation(fresh, false, null);
             if (existing.expiry.isAfter(next.expiry)) {
                 next.expiry = existing.expiry;
             }
@@ -211,6 +243,152 @@ public final class DeveloperElevation {
         return require(BEARER_PREFIX + token, true);
     }
 
+    /// Mints a bearer token **for an agent**, carrying its label, its
+    /// capability classes and the instance it belongs to.
+    ///
+    /// The caller must have proved the developer password already — this method
+    /// mints authority without checking any, exactly like [#mintToken]. What it
+    /// adds is who: a token minted here can be listed on the panel, told apart
+    /// from the operator's own elevation, and revoked on its own.
+    ///
+    /// The token never slides. `ttl` is capped at [EXTENDED_TTL]: the operator
+    /// is shown the expiry when they approve, and an agent that used its
+    /// credential every few minutes must not be able to renew it forever.
+    ///
+    /// @param label      what the operator typed on the settings page
+    /// @param scopes     the capability classes of [AgentScopes]
+    /// @param instanceId the instance the agent runs in, or `null`
+    /// @param ttl        how long it lives, clamped to `[1s, EXTENDED_TTL]`
+    /// @return the token, to be handed to that agent and to nobody else
+    public String mintAgentToken(String label, Set<String> scopes, @Nullable String instanceId,
+                                 Duration ttl, @Nullable Instant notAfter) {
+        byte[] tokenBytes = new byte[32];
+        RANDOM.nextBytes(tokenBytes);
+        String token = Base64.getUrlEncoder().withoutPadding().encodeToString(tokenBytes);
+        byte[] idBytes = new byte[6];
+        RANDOM.nextBytes(idBytes);
+        String id = Base64.getUrlEncoder().withoutPadding().encodeToString(idBytes).toLowerCase(Locale.ROOT);
+        Duration life = ttl.isNegative() || ttl.isZero() ? Duration.ofSeconds(1) : ttl;
+        if (life.compareTo(EXTENDED_TTL) > 0) {
+            life = EXTENDED_TTL;
+        }
+        Instant expiry = Instant.now().plus(life);
+        // A grant is borrowed power: it never outlives the elevation that
+        // authorized it. Without this an operator's 30-minute window could mint
+        // a 3-hour credential and walk away.
+        if (notAfter != null && expiry.isAfter(notAfter)) {
+            expiry = notAfter;
+        }
+        elevations.put(BEARER_PREFIX + token,
+                new Elevation(expiry, false,
+                        new AgentInfo(id, label == null || label.isBlank() ? "agent" : label,
+                                Set.copyOf(scopes), instanceId)));
+        return token;
+    }
+
+    /// The grant behind a bearer token, or `null` when it is unknown, expired
+    /// or not an agent token.
+    ///
+    /// Reading does **not** slide the expiry: an agent that keeps calling must
+    /// still lose its credential at the moment the operator was promised.
+    ///
+    /// @param token the bearer token from the `Authorization` header
+    /// @return the grant, or `null`
+    public @Nullable AgentGrant agentGrant(String token) {
+        if (token == null || token.isBlank()) {
+            return null;
+        }
+        Elevation elevation = elevations.get(BEARER_PREFIX + token);
+        if (elevation == null || elevation.agent == null || !elevation.expiry.isAfter(Instant.now())) {
+            return null;
+        }
+        AgentInfo agent = elevation.agent;
+        return new AgentGrant(agent.id(), agent.label(), agent.scopes(), agent.instanceId(), elevation.expiry);
+    }
+
+    /// Every live agent grant, newest expiry last — what the panel's list draws.
+    ///
+    /// @return the grants, never `null`
+    public List<AgentGrant> agentGrants() {
+        Instant now = Instant.now();
+        List<AgentGrant> grants = new ArrayList<>();
+        for (Elevation elevation : elevations.values()) {
+            AgentInfo agent = elevation.agent;
+            if (agent != null && elevation.expiry.isAfter(now)) {
+                grants.add(new AgentGrant(agent.id(), agent.label(), agent.scopes(),
+                        agent.instanceId(), elevation.expiry));
+            }
+        }
+        grants.sort((a, b) -> a.expiresAt().compareTo(b.expiresAt()));
+        return grants;
+    }
+
+    /// Ends one agent grant: the token stops working on the next request.
+    ///
+    /// @param id the grant's handle from [AgentGrant#id]
+    /// @return whether a live grant was found and removed
+    public boolean revokeAgent(String id) {
+        if (id == null || id.isBlank()) {
+            return false;
+        }
+        boolean removed = false;
+        for (var entry : elevations.entrySet()) {
+            AgentInfo agent = entry.getValue().agent;
+            if (agent != null && agent.id().equals(id)) {
+                removed |= elevations.remove(entry.getKey(), entry.getValue());
+            }
+        }
+        return removed;
+    }
+
+    /// Ends every agent grant, leaving the operator's own elevation alone.
+    ///
+    /// Called when the agent password is set or cleared: rotating the secret
+    /// that minted a grant must not leave its holders running, and it must not
+    /// sign the operator out either.
+    ///
+    /// @return how many grants were dropped
+    public int revokeAllAgents() {
+        int before = 0;
+        for (Elevation elevation : elevations.values()) {
+            if (elevation.agent != null) {
+                before++;
+            }
+        }
+        elevations.entrySet().removeIf(entry -> entry.getValue().agent != null);
+        return before;
+    }
+
+    /// The latest expiry among the **human** elevations still running, or
+    /// `null` when nobody is elevated.
+    ///
+    /// This is what makes an agent grant *borrowed* authority: the agent
+    /// password is worthless until a person has proved the developer password,
+    /// and a grant never outlives the window that authorized it. The panel
+    /// answers `agent_password_not_elevated` when this returns `null`, so the
+    /// operator learns the precondition instead of seeing a mysterious 401.
+    ///
+    /// @return the latest live human expiry, or `null`
+    public @Nullable Instant latestHumanExpiry() {
+        Instant now = Instant.now();
+        Instant latest = null;
+        for (var entry : elevations.entrySet()) {
+            // Only a **session** elevation counts. Every `/elevate` also mints
+            // an anonymous bearer token for scripts; that one is keyed by
+            // `bearer:` and belongs to nobody, so counting it would let a
+            // forgotten token keep every agent password alive.
+            if (!entry.getKey().startsWith(SESSION_PREFIX)) {
+                continue;
+            }
+            Elevation elevation = entry.getValue();
+            if (elevation.agent == null && elevation.expiry.isAfter(now)
+                    && (latest == null || elevation.expiry.isAfter(latest))) {
+                latest = elevation.expiry;
+            }
+        }
+        return latest;
+    }
+
     /// Whether wrong passwords locked this key.
     public boolean isLocked(String key, Instant now) {
         Failures record = failures.computeIfAbsent(key, k -> new Failures());
@@ -263,10 +441,14 @@ public final class DeveloperElevation {
     private static final class Elevation {
         private Instant expiry;
         private boolean extended;
+        /// Non-null only for a grant minted for an agent: those never slide,
+        /// and their scope decides what the bearer may reach.
+        private final @Nullable AgentInfo agent;
 
-        private Elevation(Instant expiry, boolean extended) {
+        private Elevation(Instant expiry, boolean extended, @Nullable AgentInfo agent) {
             this.expiry = expiry;
             this.extended = extended;
+            this.agent = agent;
         }
     }
 

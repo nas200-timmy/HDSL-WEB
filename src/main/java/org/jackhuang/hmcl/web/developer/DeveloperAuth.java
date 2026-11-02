@@ -67,6 +67,9 @@ public final class DeveloperAuth {
 
     /// Name of the file inside `<data>/auth/`.
     public static final String FILE_NAME = "developer.json";
+    /// The agent password's own file, next to the developer one and unreadable
+    /// by anyone but the panel's user.
+    public static final String FILE_NAME_AGENT = "agent.json";
 
     private static final int SALT_BYTES = 16;
     private static final int KEY_BITS = 256;
@@ -76,7 +79,13 @@ public final class DeveloperAuth {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     /// One stored hash. `saltB64`/`hashB64` are standard base64.
-    public record StoredHash(String saltB64, int iterations, String hashB64, String createdAt) {
+    ///
+    /// `scopes` is meaningful only for the **agent** store: it caps what that
+    /// lesser password may grant, so the operator can hand an agent a secret
+    /// that is not the developer password without also handing it the panel.
+    /// Gson leaves it `null` for the developer store's file, which predates it.
+    public record StoredHash(String saltB64, int iterations, String hashB64, String createdAt,
+                             @Nullable java.util.List<String> scopes) {
     }
 
     private final Path file;
@@ -93,15 +102,40 @@ public final class DeveloperAuth {
     ///
     /// @param dataDir the HDSL_DATA directory
     public static DeveloperAuth open(Path dataDir) throws IOException {
+        return open(dataDir, FILE_NAME);
+    }
+
+    /// Opens the **agent** store: a second secret, deliberately not the
+    /// developer password, that an operator can hand to an agent when handing
+    /// over the developer password would be too much.
+    ///
+    /// It is a different file and a different `DeveloperAuth` instance, so
+    /// `POST /api/developer/elevate` cannot accidentally accept it: the browser
+    /// form verifies one store, and the agent route verifies the other.
+    ///
+    /// @param dataDir the HDSL_DATA directory
+    /// @return the store, empty when no agent password was ever set
+    public static DeveloperAuth openAgent(Path dataDir) throws IOException {
+        return open(dataDir, FILE_NAME_AGENT);
+    }
+
+    private static DeveloperAuth open(Path dataDir, String fileName) throws IOException {
         Path authDir = dataDir.resolve("auth");
         Files.createDirectories(authDir);
         setOwnerOnly(authDir);
 
-        Path file = authDir.resolve(FILE_NAME);
+        Path file = authDir.resolve(fileName);
         if (Files.exists(file)) {
             return new DeveloperAuth(file, load(file));
         }
         return new DeveloperAuth(file, null);
+    }
+
+    /// What this store's password may grant, when it is the agent store.
+    ///
+    /// @return the stored cap, or `null` when the file predates the field
+    public synchronized @Nullable java.util.List<String> scopes() {
+        return stored == null ? null : stored.scopes();
     }
 
     /// Whether a developer password has been set.
@@ -117,6 +151,16 @@ public final class DeveloperAuth {
     /// @throws IllegalArgumentException when the password is too short or
     ///                                  equals the panel password
     public synchronized void set(String password, UserStore users) throws IOException {
+        set(password, users, null);
+    }
+
+    /// Stores a password together with the cap on what it may grant.
+    ///
+    /// @param password the new secret; at least [PASSWORD_MIN_LENGTH] characters
+    /// @param users    the panel user store, to keep the two from being equal
+    /// @param scopes   the classes this secret may mint, or `null` for none
+    public synchronized void set(String password, UserStore users,
+                                 @Nullable java.util.List<String> scopes) throws IOException {
         if (password == null || password.length() < PASSWORD_MIN_LENGTH) {
             throw new IllegalArgumentException("the developer password must be at least "
                     + PASSWORD_MIN_LENGTH + " characters");
@@ -125,7 +169,7 @@ public final class DeveloperAuth {
         if (admin != null && users.verify(admin.username(), password)) {
             throw new IllegalArgumentException("the developer password must differ from the panel password");
         }
-        StoredHash created = create(password, DEFAULT_ITERATIONS);
+        StoredHash created = create(password, DEFAULT_ITERATIONS, scopes);
         save(file, created);
         stored = created;
     }
@@ -155,7 +199,8 @@ public final class DeveloperAuth {
         stored = null;
     }
 
-    private static StoredHash create(String password, int iterations) {
+    private static StoredHash create(String password, int iterations,
+                                     @Nullable java.util.List<String> scopes) {
         byte[] salt = new byte[SALT_BYTES];
         RANDOM.nextBytes(salt);
         byte[] hash = pbkdf2(password, salt, iterations);
@@ -163,7 +208,8 @@ public final class DeveloperAuth {
                 Base64.getEncoder().encodeToString(salt),
                 iterations,
                 Base64.getEncoder().encodeToString(hash),
-                Instant.now().toString());
+                Instant.now().toString(),
+                scopes == null ? null : java.util.List.copyOf(scopes));
     }
 
     private static byte[] pbkdf2(String password, byte[] salt, int iterations) {
