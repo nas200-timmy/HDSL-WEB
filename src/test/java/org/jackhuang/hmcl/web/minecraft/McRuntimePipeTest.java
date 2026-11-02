@@ -76,9 +76,10 @@ class McRuntimePipeTest {
     }
 
     private McInstance installedInstance(String name) throws Exception {
-        // Pick ports the host will actually let us bind; the fixed 25565 in the
-        // PTY tests is fine (the fake server never listens), but the pipe path
-        // checks the ports before spawning.
+        // Pick ports the host will actually let us bind: `launch` checks them
+        // before spawning on **both** paths, so a fixed 25565 only works on a
+        // machine where nothing else listens there — and when the panel itself
+        // publishes the MC port, that machine is not this one.
         McPorts.Pair ports = McPorts.allocate(
                 port -> manager.portTaken(port) || !McPorts.isFree(port), 26000, 26999);
         McInstance instance = manager.create(name, "1.21.4", ports.game(), ports.rcon(),

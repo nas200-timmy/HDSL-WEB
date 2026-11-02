@@ -75,10 +75,18 @@ class McRuntimeTest {
     }
 
     private McInstance installedInstance(String name, String version) throws Exception {
-        McInstance instance = manager.create(name, version, 25565, 25575, 1024, "world", null);
+        // 端口必须是真的空闲的：`launch` 现在启动前会 bind 一次做探测，
+        // 固定写 25565 的用例在“这台机器上已经有人在听 25565”时就必红
+        // （面板自己发布了 MC 端口也是这样）。
+        McPorts.Pair ports = freePorts();
+        McInstance instance = manager.create(name, version, ports.game(), ports.rcon(), 1024, "world", null);
         Files.writeString(manager.serverJar(instance), "");
         manager.acceptEula(instance);
         return instance;
+    }
+
+    private McPorts.Pair freePorts() {
+        return McPorts.allocate(port -> manager.portTaken(port) || !McPorts.isFree(port), 26000, 26999);
     }
 
     private McRuntime runtime(String... mode) {
@@ -154,7 +162,8 @@ class McRuntimeTest {
 
     @Test
     void aMissingJarOrEulaIsRefusedBeforeAnythingIsSpawned() throws Exception {
-        McInstance instance = manager.create("bare", "1.21.4", 25566, 25576, 1024, "world", null);
+        McPorts.Pair ports = freePorts();
+        McInstance instance = manager.create("bare", "1.21.4", ports.game(), ports.rcon(), 1024, "world", null);
         McRuntime runtime = runtime();
 
         McException noJar = assertThrows(McException.class, () -> runtime.launch(instance.id()));
