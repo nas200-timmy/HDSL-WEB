@@ -1641,12 +1641,26 @@ function AgentAccessCard() {
     }
   };
 
+  const scopeRow = (scope: string) => (
+    <label
+      key={scope}
+      style={{ display: "grid", gridTemplateColumns: "16px 92px 1fr", alignItems: "center", gap: 8, fontSize: 13 }}
+    >
+      <input type="checkbox" checked={scopes.includes(scope)} disabled={busy} onChange={() => toggle(scope)} />
+      <span>{AGENT_SCOPE_LABEL[scope]}</span>
+      <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>{AGENT_SCOPE_HINT[scope]}</span>
+    </label>
+  );
+
   return (
     <div className="card">
       <div className="comp-row">
         <span className="comp-label">agent 访问</span>
         <span className="comp-value">
           <span className={`tag ${status?.set ? "running" : "plain"}`}>{status?.set ? "已设置" : "未设置"}</span>
+          <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            当前授权 {grants.length} 张
+          </span>
         </span>
       </div>
       <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
@@ -1656,7 +1670,7 @@ function AgentAccessCard() {
       </p>
 
       {status && !status.applicable && (
-        <div className="form-error" style={{ marginTop: 4 }}>
+        <div className="form-error" style={{ margin: "4px 8px 0" }}>
           当前开发者守卫是「只反代」或「关闭」，会话本身就能访问这些接口，agent 密码不会带来任何新能力，
           因此后端会直接拒绝它。需要先把守卫调到「反代 + 实例操作」或「全部 API」。
         </div>
@@ -1667,6 +1681,7 @@ function AgentAccessCard() {
         <span className="comp-value">
           <input
             className="input"
+            style={{ maxWidth: 320 }}
             type="password"
             autoComplete="new-password"
             placeholder="至少 8 位"
@@ -1674,77 +1689,61 @@ function AgentAccessCard() {
             disabled={busy}
             onChange={(e) => setPassword(e.target.value)}
           />
+          {status?.set && !password && (
+            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+              改范围也要重新输入这串密码——保存时会连它一起重写
+            </span>
+          )}
         </span>
       </div>
 
       <div className="comp-row" style={{ alignItems: "flex-start" }}>
-        <span className="comp-label">它最多能做什么</span>
-        <span className="comp-value" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {Object.keys(AGENT_SCOPE_LABEL).map((scope) => (
-            <label key={scope} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-              <input
-                type="checkbox"
-                checked={scopes.includes(scope)}
-                disabled={busy}
-                onChange={() => toggle(scope)}
-              />
-              <span>{AGENT_SCOPE_LABEL[scope]}</span>
-              <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>{AGENT_SCOPE_HINT[scope]}</span>
-            </label>
-          ))}
+        <span className="comp-label" style={{ paddingTop: 2 }}>它最多能做什么</span>
+        <span className="comp-value" style={{ display: "grid", gap: 6, maxWidth: 640 }}>
+          {Object.keys(AGENT_SCOPE_LABEL).map(scopeRow)}
+          <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", lineHeight: 1.6, marginTop: 2 }}>
+            这里勾的是<b>上限</b>：调用方可以要得更少，但要不了更多。全部勾上等于把面板交给它——那是你的选择，
+            不是默认值。
+          </span>
         </span>
       </div>
-      <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "0 8px", lineHeight: 1.6 }}>
-        这里勾的是<b>上限</b>：调用方可以要得更少，但要不了更多。全部勾上等于把面板交给它——那是你的选择，
-        不是默认值。
-      </p>
 
-      {error && <div className="form-error">{error}</div>}
+      {error && <div className="form-error" style={{ margin: "0 8px" }}>{error}</div>}
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingTop: 6 }}>
-        <button className="btn btn-text danger ripple-host" disabled={busy || !status?.set} onClick={() => void clear()}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "10px 8px 6px" }}>
+        <button className="btn btn-outline ripple-host" disabled={busy || !status?.set} onClick={() => void clear()}>
           清除 agent 密码
         </button>
         <button
           className="btn btn-raised ripple-host"
-          style={{ marginLeft: "auto" }}
-          disabled={busy}
+          disabled={busy || !password || scopes.length === 0}
           onClick={() => void save()}
         >
           {busy ? "处理中…" : status?.set ? "更换并作废旧票" : "设置 agent 密码"}
         </button>
       </div>
 
-      <div className="comp-row" style={{ marginTop: 10 }}>
+      <div className="comp-row" style={{ borderTop: "1px solid var(--monet-outline-variant)", borderBottom: "none" }}>
         <span className="comp-label">当前授权</span>
-        <span className="comp-value">
-          <span className={`tag ${grants.length > 0 ? "running" : "plain"}`}>{grants.length} 张</span>
+        <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+          {grants.length === 0
+            ? "还没有 agent 拿着票。票是借出去的权力，随提权一起消失。"
+            : `${grants.length} 张票正在使用`}
         </span>
       </div>
-      {grants.length === 0 ? (
-        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "0 8px 8px", lineHeight: 1.6 }}>
-          还没有 agent 拿着票。票是借出去的权力，随提权一起消失。
-        </p>
-      ) : (
-        <div style={{ padding: "0 8px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
+      {grants.length > 0 && (
+        <div style={{ display: "grid", gap: 4, padding: "0 8px 8px" }}>
           {grants.map((grant) => (
             <div
               key={grant.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                fontSize: 13,
-                borderTop: "1px solid var(--monet-outline-variant)",
-                paddingTop: 6,
-              }}
+              style={{ display: "grid", gridTemplateColumns: "160px 1fr auto auto", alignItems: "center", gap: 10, fontSize: 13 }}
             >
-              <span style={{ fontWeight: 500 }}>{grant.label}</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{grant.label}</span>
               <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
                 {grant.scopes.map((scope) => AGENT_SCOPE_LABEL[scope] ?? scope).join(" · ")}
                 {grant.instanceId ? ` · ${grant.instanceId}` : ""}
               </span>
-              <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+              <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", fontVariantNumeric: "tabular-nums" }}>
                 剩 {formatRemaining(secondsUntil(grant.expiresAt))}
               </span>
               <button className="btn btn-text danger ripple-host" onClick={() => void revoke(grant.id)}>
@@ -1758,8 +1757,7 @@ function AgentAccessCard() {
   );
 }
 
-/// 设置页的「开发者模式」：进入需要开发者密码，进去后可以开关 Web Shell、
-/// 修改开发者密码。实例终端打开前的二次确认用的是同一个密码。
+
 function DeveloperTab() {
   const [, setSearchParams] = useSearchParams();
   const [status, setStatus] = useState<DeveloperStatus | null>(null);
