@@ -1130,7 +1130,8 @@ public final class McApiServlet extends HttpServlet {
                     "developer_password_not_set: set the developer password before enabling the Minecraft feature");
             return false;
         }
-        if (elevation.require(keyOf(request), sessionAlive(request))) {
+        if (org.jackhuang.hmcl.web.auth.AuthFilter.isAgent(request)
+                || elevation.require(keyOf(request), sessionAlive(request))) {
             return true;
         }
         Json.error(response, HttpServletResponse.SC_FORBIDDEN,

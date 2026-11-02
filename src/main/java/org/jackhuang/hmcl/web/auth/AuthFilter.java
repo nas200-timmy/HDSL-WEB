@@ -60,6 +60,11 @@ public final class AuthFilter implements Filter {
     /// The [org.jackhuang.hmcl.web.developer.DeveloperElevation.AgentGrant]
     /// behind an agent bearer token, once this filter has admitted one.
     public static final String AGENT_GRANT_ATTRIBUTE = "session.agent";
+    /// Set only on an admitted agent request: the servlets' own
+    /// `requireElevation` checks use it to see that the grant already passed
+    /// this filter's scope gate, instead of asking for a password the agent
+    /// never had.
+    public static final String AGENT_BEARER_ATTRIBUTE = "session.agent.bearer";
 
     public static final String LOGIN_PATH = "/api/auth/login";
     public static final String STATUS_PATH = "/api/auth/status";
@@ -190,7 +195,27 @@ public final class AuthFilter implements Filter {
         }
         req.setAttribute(SESSION_ATTRIBUTE, new AuthService.Session("agent:" + grant.label(), grant.expiresAt()));
         req.setAttribute(AGENT_GRANT_ATTRIBUTE, grant);
+        req.setAttribute(AGENT_BEARER_ATTRIBUTE, bearer);
         return true;
+    }
+
+    /// Whether this request was admitted by an agent grant rather than a
+    /// browser session.
+    ///
+    /// A route's own `requireElevation` exists to police **people**: it asks for
+    /// the developer password. An agent never has one, and never should — its
+    /// authority is the grant's scope, which this filter has already enforced
+    /// before the servlet runs. So the per-action check reads this and steps
+    /// aside, rather than handing the agent a "elevate first" it can never
+    /// satisfy.
+    ///
+    /// The *closed* routes are unaffected: `AgentScopes.forbidden` refuses them
+    /// here, long before any servlet sees the request.
+    ///
+    /// @param request the request
+    /// @return whether the request carries an admitted agent grant
+    public static boolean isAgent(HttpServletRequest request) {
+        return request.getAttribute(AGENT_GRANT_ATTRIBUTE) != null;
     }
 
     /// Builds the session cookie. Shared with the login endpoint so the

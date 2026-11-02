@@ -138,6 +138,30 @@ class AgentGrantApiTest {
         }
     }
 
+
+    @Test
+    void aScopedAgentAlsoSatisfiesTheRoutesOwnElevationCheck() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "https://127.0.0.1:" + running.port();
+            String cookie = elevatedSession(client, base);
+
+            HttpResponse<String> minted = post(client, base + "/api/developer/agent-token",
+                    "{\"label\":\"probe\",\"scopes\":[\"read\",\"mc\"]}", cookie);
+            assertEquals(200, minted.statusCode(), minted.body());
+            String token = json(minted).get("token").getAsString();
+
+            // `console/input` calls requireElevation itself. An agent never has
+            // the developer password, so without [AuthFilter#isAgent] the route
+            // answers "elevate first" — an instruction it can never follow — and
+            // the `mc` scope would be worth almost nothing.
+            HttpResponse<String> console = post(client, base + "/api/mc/instances/nope/console/input",
+                    "{\"line\":\"list\"}", null, token);
+            assertTrue(console.statusCode() != 403 || !console.body().contains("developer_elevation_required"),
+                    "an agent must not be asked for the developer password: " + console.body());
+        }
+    }
+
     @Test
     void scopesAreClassifiedHereAndDenyByDefault() {
         // Reads are reads; the credential-leaking ones are closed.

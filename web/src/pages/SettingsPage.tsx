@@ -1579,6 +1579,10 @@ function AgentAccessCard() {
       const [nextStatus, nextGrants] = await Promise.all([api.agentPassword(), api.agentGrants()]);
       setStatus(nextStatus);
       setGrants(nextGrants.grants);
+      // 勾选框要反映**已经存下来的上限**，而不是页面初始的那个 ["read"]：
+      // 否则进来看到的是"只勾了读取"，与保存时那次选择不符，改密码时还容易
+      // 顺手把上限缩掉。
+      setScopes(nextStatus.scopes.length > 0 ? nextStatus.scopes : ["read"]);
       setError(null);
     } catch (e) {
       setError(developerError(e));

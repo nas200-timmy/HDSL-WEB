@@ -519,7 +519,8 @@ public final class BrandSettingsApiServlet extends HttpServlet {
                     "tls_required: the developer password is only accepted over HTTPS");
             return false;
         }
-        if (!elevation.require(keyOf(request), sessionAlive(request))) {
+        if (!org.jackhuang.hmcl.web.auth.AuthFilter.isAgent(request)
+                && !elevation.require(keyOf(request), sessionAlive(request))) {
             Json.error(response, HttpServletResponse.SC_FORBIDDEN,
                     "developer_elevation_required: elevate with the developer password first");
             return false;
