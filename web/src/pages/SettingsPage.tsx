@@ -1714,7 +1714,7 @@ function AgentAccessCard() {
           />
           {status?.set && !password && (
             <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-              改范围也要重新输入这串密码——保存时会连它一起重写
+              更换这串密码会作废它发出的全部票；只想改范围，用下面的「保存范围」
             </span>
           )}
         </span>
@@ -1731,12 +1731,12 @@ function AgentAccessCard() {
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}>
             <button
               className="btn btn-outline ripple-host"
-              disabled={busy || scopes.length === 0 || !rangeChanged}
+              disabled={busy || !status?.set || scopes.length === 0 || !rangeChanged}
               onClick={() => void saveScopes()}
             >
-              {rangeChanged ? "保存范围" : "范围未改动"}
+              {!status?.set ? "先设置密码" : rangeChanged ? "保存范围" : "范围未改动"}
             </button>
-            {rangeChanged && (
+            {status?.set && rangeChanged && (
               <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
                 勾选改了还没保存——保存后会作废旧范围发出的票
               </span>
@@ -1794,7 +1794,8 @@ function AgentAccessCard() {
   );
 }
 
-
+/// 设置页的「开发者模式」：进入需要开发者密码，进去后可以开关 Web Shell、
+/// 修改开发者密码、给 agent 发一张有限权力的票。实例终端打开前的二次确认用的是同一个密码。
 function DeveloperTab() {
   const [, setSearchParams] = useSearchParams();
   const [status, setStatus] = useState<DeveloperStatus | null>(null);

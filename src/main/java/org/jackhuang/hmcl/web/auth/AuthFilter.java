@@ -60,12 +60,6 @@ public final class AuthFilter implements Filter {
     /// The [org.jackhuang.hmcl.web.developer.DeveloperElevation.AgentGrant]
     /// behind an agent bearer token, once this filter has admitted one.
     public static final String AGENT_GRANT_ATTRIBUTE = "session.agent";
-    /// Set only on an admitted agent request: the servlets' own
-    /// `requireElevation` checks use it to see that the grant already passed
-    /// this filter's scope gate, instead of asking for a password the agent
-    /// never had.
-    public static final String AGENT_BEARER_ATTRIBUTE = "session.agent.bearer";
-
     public static final String LOGIN_PATH = "/api/auth/login";
     public static final String STATUS_PATH = "/api/auth/status";
     public static final String SETUP_PATH = "/api/auth/setup";
@@ -195,7 +189,6 @@ public final class AuthFilter implements Filter {
         }
         req.setAttribute(SESSION_ATTRIBUTE, new AuthService.Session("agent:" + grant.label(), grant.expiresAt()));
         req.setAttribute(AGENT_GRANT_ATTRIBUTE, grant);
-        req.setAttribute(AGENT_BEARER_ATTRIBUTE, bearer);
         return true;
     }
 
