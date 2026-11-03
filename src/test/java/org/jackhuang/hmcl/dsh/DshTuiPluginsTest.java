@@ -152,7 +152,22 @@ class DshTuiPluginsTest {
     /// terminal, and what is missing on 0.1.x is the settings page that authorises it.
     @Test
     void aCapabilityRefusalTalksAboutAuthorisationNotTerminals() {
-        DshTuiPlugins.Entry capability = DshTuiPlugins.find("@nas200-timmy/dsh-panel-agent").orElseThrow();
+        // 这一版不再随面板发布能力插件（面板桥已移除），但 `terminal` 这个区分还在：
+        // 用一条测试用的 Entry 守住 `hostMismatch` 的另一个分支。
+        DshTuiPlugins.Entry capability = new DshTuiPlugins.Entry(
+                "probe-capability",
+                "@probe/capability",
+                "1.0.0",
+                "probe",
+                null,
+                "GPL-3.0-or-later",
+                "a capability plugin used by this test",
+                null,
+                DshTuiPlugins.WEB_PROFILE,
+                ">=0.2.0-rc.2",
+                true,
+                null,
+                false);
         String text = DshTuiPlugins.hostMismatch(capability, "0.1.7-rc.2");
         assertTrue(text.contains("能力插件"), text);
         assertTrue(text.contains("0.2.x") || text.contains("0.2.0"), text);
@@ -172,8 +187,7 @@ class DshTuiPluginsTest {
                         "@deepseek-harness-tui/dsh-tui",
                         "@huiliyi37/dsh-tianshu-tui",
                         "@tomowang/dsh-tui",
-                        "@xmoon76/dsh-pi-tui",
-                        "@nas200-timmy/dsh-panel-agent"),
+                        "@xmoon76/dsh-pi-tui"),
                 DshTuiPlugins.ENTRIES.stream().map(DshTuiPlugins.Entry::packageName).toList());
 
         assertTrue(DshTuiPlugins.find("@xmoon76/dsh-pi-tui").isPresent());

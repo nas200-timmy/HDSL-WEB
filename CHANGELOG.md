@@ -4,12 +4,19 @@
 
 ## 未发布
 
-**面板桥：agent 能操作面板，而拿不到开发者密码**
+**面板桥插件已移除；面板侧的授权接口保留**
 
-- 新的第一方插件 `@nas200-timmy/dsh-panel-agent` 0.1.5 出现在「安装 → TUI 插件」里，
-  单独归为「面板能力（不是终端）」：它和实例自己的 web 应用共用 profile，点「终端」不会
-  启动它。插件把面板签发的一张票交给实例里的 agent，票能做什么由操作员在开发者页
-  「agent 访问」勾选，随时可掐。
+- `plugins/dsh-panel-agent`（`@nas200-timmy/dsh-panel-agent` 0.1.5）不再随面板发布，也不再
+  出现在「安装 → TUI 插件」的清单里。agent 不需要一个桥才能用票：面板签发的就是一张
+  bearer token，任何客户端带上 `Authorization: Bearer` 就能调 `/api`。
+- 面板侧的能力都在，与插件无关：`/api/developer/agent-auth` 用 agent 密码换票、
+  `/api/developer/agent-token` 用已提权的会话换票、`/api/developer/agent-grants` 列出与
+  吊销。票的 scope、实例绑定、审计身份 `agent:<label>` 都不变。
+- `DshTuiPlugins` 的 `terminal` 区分保留（终端是 app 插件、各有 profile；能力插件与实例
+  共用 web profile），只是这一版不再有随面板发布的能力插件。
+
+**agent 能操作面板，而拿不到开发者密码**
+
 - 之前每条按动作的提权检查都先要开发者密码——agent 没有这串密码，也不该有。现在
   `AuthFilter.isAgent` 让「mc 控制台输入」「日志保留」「品牌设置」「实例终端」这些 servlet
   认出请求是凭票进来的：真正的门是票里的 scope，而 scope 早在过滤器里验过。所有 servlet
@@ -38,14 +45,6 @@
 - 勾选范围可以单独保存，不必重输 agent 密码：改的是策略，不是凭据。保存后旧范围发出的
   票全部作废——它们比新策略更宽。勾选框也回显服务端**已存下来的**上限，改动未保存时
   明说。
-- 0.1.x 的 dsh 上这个插件装得上、也用不了（交付 agent 密码的那页设置界面从 0.2.x 才有）。
-  面板据此把按钮置灰并写清原因，而不是提示「可以试」。
-
-**面板桥的设置页曾经是一张空白卡片**
-
-- 客户端入口把 `react/jsx-runtime` 的 `jsx(type, props, key)` 当成 `createElement` 使：
-  第三个参数是 **key**，所有文本节点静默消失，整页只剩空卡片。改用
-  `React.createElement`（第三个参数起是 children），并补一条回归测试。
 
 **启动第一行立刻打印**
 

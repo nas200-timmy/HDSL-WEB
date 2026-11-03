@@ -14,24 +14,10 @@ plugins/
   dsh-acp-tui/         ← ACP 终端：面板直接启动的程序（0.1.2 起）
     package.json       bin/dsh-acp-tui.js
     src/…
-  dsh-panel-agent/     ← 面板桥：**不是终端**，装进实例自己的 web profile
-    package.json       声明 dsh.bundle.patch，没有 bin
-    cordis.patch.yml
-    src/…
 ```
 
-## `dsh-panel-agent` 的不同之处
-
-上面两个终端是 **app 插件**，各有各的 profile，运行时二选一。这个不是：它没有 `bin`，也不
-接管屏幕，只往实例里加两样东西——一段告诉模型"你在 HDSL-web 里"的提示，和三个经
-bearer 票访问面板的工具。
-
-**它必须装进实例自己的 profile，不能装进任何终端 profile。** 装进终端 profile 会和
-`dsh-web-app` 抢同一份 argv。
-
-权限**不在这个包里**：插件的白名单是装饰品（agent 与插件同一个 OS 用户，能改文件）。
-真正的边界在面板的 `AuthFilter` + `AgentScopes`，那里 agent 改不动。票由操作员在面板上
-用开发者密码换取，面板列出、随时掐掉，到期自灭。
+这里只有**终端界面**。给 agent 用的面板桥（`dsh-panel-agent`）已移除：面板侧的授权接口
+（agent 密码、票、吊销）还在，agent 用面板签发的 bearer token 直接调 `/api`，不需要插件。
 
 
 `shared/` 不是独立包：每个 tarball 里带一份拷贝（`package/shared`），打包时的 staging
