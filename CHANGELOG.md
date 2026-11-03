@@ -11,10 +11,26 @@
   启动它。插件把面板签发的一张票交给实例里的 agent，票能做什么由操作员在开发者页
   「agent 访问」勾选，随时可掐。
 - 之前每条按动作的提权检查都先要开发者密码——agent 没有这串密码，也不该有。现在
-  `AuthFilter.isAgent` 让「mc 控制台输入」「日志保留」「品牌设置」这些 servlet 认出请求是
-  凭票进来的：真正的门是票里的 scope，而 scope 早在过滤器里验过。被 `AgentScopes.forbidden`
-  划为禁区的那几条路（开发者页、`/api/auth/*`、`/exports`、`/open`）照旧在网关就被拒，
-  servlet 根本看不到请求。
+  `AuthFilter.isAgent` 让「mc 控制台输入」「日志保留」「品牌设置」「实例终端」这些 servlet
+  认出请求是凭票进来的：真正的门是票里的 scope，而 scope 早在过滤器里验过。所有 servlet
+  侧的提权检查统一走 `AuthFilter.elevationSatisfied`，新加一处不会忘了 agent 分支。
+- `DeveloperGuardFilter`（开发者守卫）与 `DeveloperElevation#requireToken` 之前还有一个
+  混用：agent 票和「脚本用的提权 token」存在同一个 `bearer:` 命名空间里，守卫过滤器把 agent
+  票当成完整开发者提权放行。现在守卫对 agent 明确让路（scope 才是它的门），`requireToken`
+  只认人那张——一张 `read` 票不再等于开发者密码。
+- **范围模型收口到 API 边界**：`read` 只覆盖 `/api/*` 的 GET。`/i/*`（反代）与 `/ws/*`
+  （事件流）是浏览器通道，任何 scope 都不放行——此前 `GET -> READ` 的捷径会把
+  `GET /i/<id>/...` 也算成读。
+- **凭据类路由在网关拒绝**：`/api/brands/*/admin-password` 加入 `AgentScopes.forbidden`。
+  这条不是锦上添花：品牌实例创建后的 15 分钟窗口里，读管理员密码**不需要任何提权**，
+  servlet 里的 scope 检查根本不会跑。同类的 `/open`、`/exports`、`/developer/*`、`/auth/*`
+  继续拒绝。
+- **响应字段也摘**：ZCode 实例的 `token`、dsh 实例的 `url`（query 里是访问 token）对 agent
+  不输出。`read` 让 agent 知道实例在跑，不等于把开启它的凭据交出去。
+- **安全判断改用容器解码后的路由路径**：此前 `AuthFilter` 读原始 `getRequestURI()`，而
+  servlet 按解码路径分发——`%61dmin-password` 在原始 URI 里不是这个名字，解码后却是它。
+  现在两边读同一份 `servletPath + pathInfo`，并统一去掉尾斜杠（`.../terminal/` 也按
+  `.../terminal` 处理）。
 - 勾选范围可以单独保存，不必重输 agent 密码：改的是策略，不是凭据。保存后旧范围发出的
   票全部作废——它们比新策略更宽。勾选框也回显服务端**已存下来的**上限，改动未保存时
   明说。

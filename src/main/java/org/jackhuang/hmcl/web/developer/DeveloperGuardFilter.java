@@ -86,7 +86,10 @@ public final class DeveloperGuardFilter implements Filter {
             chain.doFilter(request, response);
             return;
         }
-        String path = http.getRequestURI();
+        // The decoded path the dispatcher routes, not the raw URI: `%69nstances`
+        // must not walk past the emergency stop or the guard because it is not
+        // spelled `/instances` in the request line.
+        String path = decodedPath(http);
         String method = http.getMethod();
         boolean navigation = isNavigation(http);
 
@@ -95,6 +98,18 @@ public final class DeveloperGuardFilter implements Filter {
                     "紧急停机中：实例网页、终端与实例启动都被冻结。冷却结束或重启面板后才能恢复。",
                     "The panel is in emergency stop: instance pages, terminals and instance starts are frozen.",
                     false);
+            return;
+        }
+
+        // This guard polices **people**: it asks for the developer password. An
+        // agent never has one — its authority is the grant's scope, and
+        // [AuthFilter] enforced that before this filter ran. Letting it through
+        // is what keeps the `mc` and `instances` scopes from dying on a password
+        // wall the agent cannot climb. The closed routes never reach here:
+        // AuthFilter answers them 403 first. The emergency stop above still
+        // applies to agents, because it freezes work, not a door.
+        if (org.jackhuang.hmcl.web.auth.AuthFilter.isAgent(http)) {
+            chain.doFilter(request, response);
             return;
         }
 
@@ -278,6 +293,18 @@ public final class DeveloperGuardFilter implements Filter {
             return "";
         }
         return header.substring(7).trim();
+    }
+
+    /// The decoded path the dispatcher will route, falling back to the raw URI
+    /// when no servlet has matched yet.
+    private static String decodedPath(HttpServletRequest request) {
+        String servletPath = request.getServletPath();
+        if (servletPath != null && !servletPath.isEmpty()) {
+            String pathInfo = request.getPathInfo();
+            return pathInfo == null ? servletPath : servletPath + pathInfo;
+        }
+        String path = request.getRequestURI();
+        return path == null ? "" : path;
     }
 
     private boolean sessionAlive(HttpServletRequest request) {

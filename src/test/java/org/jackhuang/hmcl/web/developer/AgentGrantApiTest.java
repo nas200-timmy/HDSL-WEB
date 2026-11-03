@@ -162,6 +162,43 @@ class AgentGrantApiTest {
         }
     }
 
+    /// 这张票能读面板，但读不到两样东西：浏览器通道，和凭据本身。
+    @Test
+    void theProxyAndAGeneratedCredentialStayOutOfReach() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "https://127.0.0.1:" + running.port();
+            String cookie = elevatedSession(client, base);
+
+            HttpResponse<String> minted = post(client, base + "/api/developer/agent-token",
+                    "{\"label\":\"probe\",\"scopes\":[\"read\",\"instances\"]}", cookie);
+            assertEquals(200, minted.statusCode(), minted.body());
+            String token = json(minted).get("token").getAsString();
+
+            // `/i/*` is the browser's proxy into an instance, not an API. A
+            // `read` grant must not turn it into "a GET, so allowed".
+            HttpResponse<String> proxy = getWithBearer(client, base + "/i/whatever/", token);
+            assertEquals(403, proxy.statusCode(), proxy.body());
+            assertTrue(proxy.body().contains("agent_scope_denied"), proxy.body());
+
+            // Octop's generated admin password is a credential. The first-run
+            // window returns it without elevation, so only the scope gate can
+            // keep it out of a model's context.
+            HttpResponse<String> credential = getWithBearer(client,
+                    base + "/api/brands/octop/instances/nope/admin-password", token);
+            assertEquals(403, credential.statusCode(), credential.body());
+            assertTrue(credential.body().contains("agent_scope_denied"), credential.body());
+
+            // The gate must read the same decoded path the servlet routes on.
+            // `%61dmin-password` is not that name in the raw URI, but the
+            // dispatcher decodes it back into the closed route.
+            HttpResponse<String> encoded = getWithBearer(client,
+                    base + "/api/brands/octop/instances/nope/%61dmin-password", token);
+            assertEquals(403, encoded.statusCode(), encoded.body());
+            assertTrue(encoded.body().contains("agent_scope_denied"), encoded.body());
+        }
+    }
+
     @Test
     void scopesAreClassifiedHereAndDenyByDefault() {
         // Reads are reads; the credential-leaking ones are closed.
@@ -170,6 +207,20 @@ class AgentGrantApiTest {
         assertTrue(AgentScopes.forbidden("GET", "/api/exports/x.dspack"));
         assertTrue(AgentScopes.forbidden("POST", "/api/developer/agent-token"));
         assertTrue(AgentScopes.forbidden("POST", "/api/auth/password"));
+        // A generated brand admin password is a credential, and the first-run
+        // window answers it with no elevation at all — the gateway has to close
+        // it, because a servlet-side check never runs.
+        assertTrue(AgentScopes.forbidden("GET", "/api/brands/octop/instances/x/admin-password"));
+        assertTrue(AgentScopes.forbidden("POST", "/api/brands/octop/instances/x/admin-password"));
+        // A trailing slash is the same route: the dispatcher ignores it, so the
+        // gate must too.
+        assertTrue(AgentScopes.forbidden("GET", "/api/brands/octop/instances/x/admin-password/"));
+
+        // The scope model stops at the API boundary: the reverse proxy and the
+        // event streams are browser channels, never "a GET, so a read".
+        assertNull(AgentScopes.required("GET", "/i/inst-a/"));
+        assertNull(AgentScopes.required("GET", "/ws/events"));
+        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/health"));
 
         // Writes land in their own classes.
         assertEquals(AgentScopes.MC, AgentScopes.required("POST", "/api/mc/instances/x/start"));
@@ -183,6 +234,8 @@ class AgentGrantApiTest {
         // Self-fatal needs both the route and the matching instance.
         assertTrue(AgentScopes.selfFatal("POST", "/api/instances/a/stop", "a"));
         assertTrue(AgentScopes.selfFatal("POST", "/api/instances/a/terminal", "a"));
+        assertTrue(AgentScopes.selfFatal("POST", "/api/instances/a/terminal/", "a"),
+                "a trailing slash must not open the way out");
         assertTrue(AgentScopes.selfFatal("DELETE", "/api/instances/a", "a"));
         assertFalse(AgentScopes.selfFatal("POST", "/api/instances/b/stop", "a"));
         assertFalse(AgentScopes.selfFatal("POST", "/api/instances/a/launch", "a"));

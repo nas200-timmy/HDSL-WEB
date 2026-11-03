@@ -107,6 +107,28 @@ public final class AuthFilter implements Filter {
         this.elevation = elevation;
     }
 
+    /// The request path as this panel's routes are written.
+    ///
+    /// **Decoded, because the servlet routes on the decoded path.** Security
+    /// decisions made on `getRequestURI()` see `%61dmin-password`, while the
+    /// servlet sees `admin-password` and serves it — a scope check on the raw
+    /// URI is a check on a different string than the one being dispatched. The
+    /// container's `servletPath + pathInfo` is the decoded pair the dispatcher
+    /// itself used, so the gate and the route cannot disagree.
+    ///
+    /// A mount point is not part of it: `servletPath` excludes the context
+    /// path, and a proxy that keeps its prefix has to strip it before the
+    /// servlet mapping matches at all.
+    private String pathOf(HttpServletRequest request) {
+        String servletPath = request.getServletPath();
+        if (servletPath != null && !servletPath.isEmpty()) {
+            String pathInfo = request.getPathInfo();
+            return pathInfo == null ? servletPath : servletPath + pathInfo;
+        }
+        String path = request.getRequestURI();
+        return path == null ? "" : path;
+    }
+
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
             throws IOException, ServletException {
@@ -168,7 +190,7 @@ public final class AuthFilter implements Filter {
             return null;
         }
         String method = req.getMethod();
-        String path = req.getRequestURI();
+        String path = pathOf(req);
         if (org.jackhuang.hmcl.web.developer.AgentScopes.forbidden(method, path)) {
             Json.error(resp, HttpServletResponse.SC_FORBIDDEN, "agent_scope_denied: this route is closed to agents");
             return false;
@@ -211,6 +233,30 @@ public final class AuthFilter implements Filter {
         return request.getAttribute(AGENT_GRANT_ATTRIBUTE) != null;
     }
 
+    /// The answer a servlet's own `requireElevation` should use.
+    ///
+    /// Two callers, two proofs: a person proves the developer password (the
+    /// elevation behind `key`), an agent proves its grant's scope — which this
+    /// filter already checked before the servlet ran. Asking the agent for a
+    /// password it cannot have turns a working scope into a dead end; that is
+    /// exactly what the `mc` grant hit on `console/input`.
+    ///
+    /// Every servlet-side elevation check goes through here so a new one cannot
+    /// forget the agent branch. The routes in
+    /// [org.jackhuang.hmcl.web.developer.AgentScopes#forbidden] never get this
+    /// far: the filter answers them 403 first.
+    ///
+    /// @param request      the request
+    /// @param elevation    the elevation store
+    /// @param key          the caller's elevation key
+    /// @param sessionAlive whether the session behind `key` is still valid
+    /// @return whether the action may proceed
+    public static boolean elevationSatisfied(HttpServletRequest request,
+                                             org.jackhuang.hmcl.web.developer.DeveloperElevation elevation,
+                                             String key, boolean sessionAlive) {
+        return isAgent(request) || elevation.require(key, sessionAlive);
+    }
+
     /// Builds the session cookie. Shared with the login endpoint so the
     /// attributes can never drift apart between the two places that set it.
     ///
@@ -239,9 +285,9 @@ public final class AuthFilter implements Filter {
         return cookie;
     }
 
-    private static boolean isPublic(HttpServletRequest request) {
+    private boolean isPublic(HttpServletRequest request) {
         String method = request.getMethod();
-        String path = request.getRequestURI();
+        String path = pathOf(request);
         return ("POST".equals(method) && LOGIN_PATH.equals(path))
                 || ("GET".equals(method) && STATUS_PATH.equals(path))
                 || ("POST".equals(method) && SETUP_PATH.equals(path))

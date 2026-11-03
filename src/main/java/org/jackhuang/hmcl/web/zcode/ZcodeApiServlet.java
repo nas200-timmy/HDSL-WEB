@@ -25,6 +25,7 @@ import com.google.gson.JsonParser;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.developer.DeveloperAuth;
@@ -167,7 +168,7 @@ public final class ZcodeApiServlet extends HttpServlet {
             }
             if (segments.length == 1 && "instances".equals(segments[0])) {
                 switch (request.getMethod()) {
-                    case "GET" -> listInstances(response);
+                    case "GET" -> listInstances(request, response);
                     case "POST" -> createInstance(request, response);
                     default -> Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
                 }
@@ -177,7 +178,7 @@ public final class ZcodeApiServlet extends HttpServlet {
                 String id = segments[1];
                 if (segments.length == 2) {
                     switch (request.getMethod()) {
-                        case "GET" -> getInstance(response, id);
+                        case "GET" -> getInstance(request, response, id);
                         case "PATCH" -> patchInstance(request, response, id);
                         case "DELETE" -> deleteInstance(response, id);
                         default -> Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
@@ -274,10 +275,10 @@ public final class ZcodeApiServlet extends HttpServlet {
 
     // --------------------------------------------------------------- instances --
 
-    private void listInstances(HttpServletResponse response) throws IOException {
+    private void listInstances(HttpServletRequest request, HttpServletResponse response) throws IOException {
         JsonArray instances = new JsonArray();
         for (ZcodeInstance instance : manager.list()) {
-            instances.add(instanceJson(instance));
+            instances.add(instanceJson(instance, request));
         }
         JsonObject body = new JsonObject();
         body.add("instances", instances);
@@ -301,16 +302,17 @@ public final class ZcodeApiServlet extends HttpServlet {
                 ? null : java.nio.file.Path.of(workspace.trim());
         ZcodeInstance created = manager.create(name, baseUrl, apiKey, workspacePath);
         Json.writePreservingNulls(response, HttpServletResponse.SC_CREATED,
-                Map.of("instance", instanceJson(created)));
+                Map.of("instance", instanceJson(created, request)));
     }
 
-    private void getInstance(HttpServletResponse response, String id) throws IOException {
+    private void getInstance(HttpServletRequest request, HttpServletResponse response, String id)
+            throws IOException {
         ZcodeInstance instance = manager.find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such ZCode instance");
             return;
         }
-        Json.writePreservingNulls(response, Map.of("instance", instanceJson(instance)));
+        Json.writePreservingNulls(response, Map.of("instance", instanceJson(instance, request)));
     }
 
     private void patchInstance(HttpServletRequest request, HttpServletResponse response, String id)
@@ -347,7 +349,7 @@ public final class ZcodeApiServlet extends HttpServlet {
         // Save-time credential injection, best effort by design: a future ZCode
         // that renames the file simply stops reading what we write here.
         manager.writeProviderConfig(patched);
-        Json.writePreservingNulls(response, Map.of("instance", instanceJson(patched)));
+        Json.writePreservingNulls(response, Map.of("instance", instanceJson(patched, request)));
     }
 
     private void deleteInstance(HttpServletResponse response, String id) throws IOException, ZcodeException {
@@ -592,9 +594,12 @@ public final class ZcodeApiServlet extends HttpServlet {
     // --------------------------------------------------------------- response --
 
     /// The wire shape of one instance: the manifest fields minus the secret,
-    /// plus runtime state. `token` travels to the panel's own admin only —
-    /// this API is session-gated like every other `/api/*` route.
-    private JsonObject instanceJson(ZcodeInstance instance) {
+    /// plus runtime state. `token` travels to the panel's own admin — and only
+    /// to a **browser**: `read` lets an agent see that an instance runs, but the
+    /// token opens it, so the field is dropped for a bearer request. The
+    /// session-gated assumption this comment used to make stopped holding when
+    /// agent grants were added.
+    private JsonObject instanceJson(ZcodeInstance instance, HttpServletRequest request) {
         ZcodeRuntime.Status status = ZcodeRuntime.status(instance.id());
         JsonObject body = new JsonObject();
         body.addProperty("id", instance.id());
@@ -603,7 +608,9 @@ public final class ZcodeApiServlet extends HttpServlet {
         body.add("baseUrl", instance.baseUrl() == null
                 ? JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(instance.baseUrl()));
         body.addProperty("hasApiKey", instance.apiKey() != null && !instance.apiKey().isBlank());
-        body.addProperty("token", instance.token());
+        if (!AuthFilter.isAgent(request)) {
+            body.addProperty("token", instance.token());
+        }
         body.addProperty("lastPort", instance.lastPort());
         body.addProperty("createdAt", instance.createdAt());
         body.addProperty("state", status.state().name().toLowerCase(java.util.Locale.ROOT));

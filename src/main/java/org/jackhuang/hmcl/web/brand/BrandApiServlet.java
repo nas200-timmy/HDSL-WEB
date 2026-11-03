@@ -1013,6 +1013,15 @@ public final class BrandApiServlet extends HttpServlet {
     /// plain-HTTP panel, where elevation is impossible by design.
     private void adminPassword(Brand brand, PathRef ref, HttpServletRequest request,
                                HttpServletResponse response, String id) throws IOException {
+        // Defence in depth: AgentScopes already refuses every `.../admin-password`
+        // route in the filter — the first-run window answers without any
+        // elevation, so this method cannot be the only guard. Say the same thing
+        // here in case a future route reaches it another way.
+        if (AuthFilter.isAgent(request)) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "agent_scope_denied: admin credentials are not handed to agents");
+            return;
+        }
         if (brand != Brand.OCTOP) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                     "admin-password is not supported for " + brand.id());

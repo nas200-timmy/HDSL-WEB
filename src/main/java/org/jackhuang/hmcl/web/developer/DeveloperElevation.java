@@ -233,6 +233,13 @@ public final class DeveloperElevation {
 
     /// Passes a bearer token's elevation, or answers `false`.
     ///
+    /// **Agent grants are not elevation tokens.** Both live under `bearer:`,
+    /// but a grant is scoped authority handed to a model, and letting
+    /// `requireToken` accept one would make every agent token a full developer
+    /// proof in the guard filter and the WebSocket upgrade gate — the scope
+    /// check would be the only thing standing between a `read` grant and an
+    /// instance page. Refusing here keeps the two credentials apart.
+    ///
     /// Unknown, expired and revoked tokens are all just `false`: the caller
     /// answers one code (`developer_elevation_required`) so a probe cannot tell
     /// "wrong token" from "expired token".
@@ -240,7 +247,12 @@ public final class DeveloperElevation {
         if (token.isBlank()) {
             return false;
         }
-        return require(BEARER_PREFIX + token, true);
+        String key = BEARER_PREFIX + token;
+        Elevation elevation = elevations.get(key);
+        if (elevation == null || elevation.agent != null) {
+            return false;
+        }
+        return require(key, true);
     }
 
     /// Mints a bearer token **for an agent**, carrying its label, its

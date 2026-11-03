@@ -40,9 +40,16 @@ import java.util.Set;
 ///    another route.
 ///
 /// Credential-leaking reads are refused outright: `GET /api/instances/{id}/open`
-/// answers a URL carrying the instance's access token, and `/api/exports/*`
-/// serves build artifacts that may embed session content. Neither belongs in a
-/// model's context.
+/// answers a URL carrying the instance's access token, `/api/exports/*` serves
+/// build artifacts that may embed session content, and a brand instance's
+/// `admin-password` is a generated credential — the first-run window hands it
+/// out without any elevation, so only this layer can close it. None of them
+/// belongs in a model's context.
+///
+/// The scope model also stops at the API boundary: `/i/*` (the reverse proxy)
+/// and `/ws/*` (the event streams) are browser channels and are never reachable
+/// with a grant, whatever class it names. An agent that needs an instance's
+/// state asks the API for it; the panel then records who asked.
 @NotNullByDefault
 public final class AgentScopes {
 
@@ -80,25 +87,44 @@ public final class AgentScopes {
     ///
     /// The developer routes mint and revoke credentials, so an agent holding
     /// one must not reach them; the auth routes would let it change the
-    /// operator's password; the two reads below hand out another credential.
+    /// operator's password; the reads below hand out another credential.
+    ///
+    /// The path must already be the **decoded** one the servlet routes on (see
+    /// `AuthFilter#pathOf`) — otherwise `%61dmin-password` passes this check and
+    /// the servlet decodes it back into the closed route.
     ///
     /// @param method the request method
-    /// @param path   the request path
+    /// @param path   the decoded request path
     /// @return whether the route is closed to agents
     public static boolean forbidden(@Nullable String method, @Nullable String path) {
         if (path == null) {
             return true;
         }
-        if (path.startsWith("/api/developer/") || path.equals("/api/developer")) {
+        String route = stripTrailingSlash(path);
+        if (route.startsWith("/api/developer/") || route.equals("/api/developer")) {
             return true;
         }
-        if (path.startsWith("/api/auth/")) {
+        if (route.startsWith("/api/auth/")) {
             return true;
         }
-        if (path.startsWith("/api/exports")) {
+        if (route.startsWith("/api/exports")) {
             return true;
         }
-        return ("GET".equals(method) || "HEAD".equals(method)) && path.endsWith("/open");
+        // A generated admin password is a credential, not a setting: the panel
+        // hands it to the operator's browser, never to a model's context. It is
+        // closed here rather than in the servlet because the first-run window
+        // (`GET .../admin-password` on a fresh instance) answers **without any
+        // elevation at all** — a scope check in the servlet would never run.
+        if (route.endsWith("/admin-password")) {
+            return true;
+        }
+        return ("GET".equals(method) || "HEAD".equals(method)) && route.endsWith("/open");
+    }
+
+    /// Drops one trailing slash so a route matches whether or not the caller
+    /// wrote it, while leaving "/" alone.
+    private static String stripTrailingSlash(String path) {
+        return path.length() > 1 && path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
     }
 
     /// The class a request needs, or `null` when no class covers it — which the
@@ -109,6 +135,15 @@ public final class AgentScopes {
     /// @return the required class, or `null` for "not covered"
     public static @Nullable String required(@Nullable String method, @Nullable String path) {
         if (path == null || method == null) {
+            return null;
+        }
+        // Only `/api/*` is an API. The reverse proxy (`/i/*`), the event
+        // streams (`/ws/*`) and the static shell are browser channels: an agent
+        // reaches the panel through the API or not at all. The `GET -> READ`
+        // shortcut below must not swallow them — before this guard a
+        // `GET /i/<id>/...` counted as a read, so a `read` grant could have
+        // pulled a proxied instance page into a model's context.
+        if (!path.startsWith("/api/") && !path.equals("/api")) {
             return null;
         }
         if ("GET".equals(method) || "HEAD".equals(method)) {
@@ -153,13 +188,14 @@ public final class AgentScopes {
         if (path == null || instanceId == null || instanceId.isBlank()) {
             return false;
         }
+        String route = stripTrailingSlash(path);
         String self = "/api/instances/" + instanceId;
-        if (path.equals(self)) {
+        if (route.equals(self)) {
             return "DELETE".equals(method);
         }
-        if (path.equals(self + "/stop")) {
+        if (route.equals(self + "/stop")) {
             return "POST".equals(method);
         }
-        return path.equals(self + "/terminal");
+        return route.equals(self + "/terminal");
     }
 }

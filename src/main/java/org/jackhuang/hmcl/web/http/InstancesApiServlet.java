@@ -160,7 +160,7 @@ public final class InstancesApiServlet extends HttpServlet {
         try {
             if (segments.length == 0) {
                 switch (request.getMethod()) {
-                    case "GET" -> listInstances(response);
+                    case "GET" -> listInstances(request, response);
                     case "POST" -> createInstance(request, response);
                     default -> Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
                 }
@@ -169,7 +169,7 @@ public final class InstancesApiServlet extends HttpServlet {
             String id = segments[0];
             if (segments.length == 1) {
                 switch (request.getMethod()) {
-                    case "GET" -> getInstance(response, id);
+                    case "GET" -> getInstance(request, response, id);
                     case "PATCH" -> updateInstance(request, response, id);
                     case "DELETE" -> deleteInstance(request, response, id);
                     default -> Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
@@ -199,11 +199,13 @@ public final class InstancesApiServlet extends HttpServlet {
 
     // ------------------------------------------------------------------ list --
 
-    private void listInstances(HttpServletResponse response) throws IOException {
+    private void listInstances(HttpServletRequest request, HttpServletResponse response) throws IOException {
         JsonObject body = new JsonObject();
         JsonArray array = new JsonArray();
         for (DshInstance instance : DshInstanceManager.list()) {
-            array.add(runtime.toJson(instance));
+            JsonObject json = runtime.toJson(instance);
+            redactForAgent(request, json);
+            array.add(json);
         }
         body.add("instances", array);
         Json.writePreservingNulls(response, body);
@@ -263,7 +265,7 @@ public final class InstancesApiServlet extends HttpServlet {
         runtime.announceCreated(instance);
 
         JsonObject created = new JsonObject();
-        created.add("instance", instanceBody(instance));
+        created.add("instance", instanceBody(request, instance));
         // The launcher behaviour: "new instance" means "I want to run this", so
         // the install starts here instead of waiting for a second click on the
         // detail page. The instance already exists when this runs, so a failure
@@ -301,13 +303,14 @@ public final class InstancesApiServlet extends HttpServlet {
 
     // ------------------------------------------------------------------ detail --
 
-    private void getInstance(HttpServletResponse response, String id) throws IOException {
+    private void getInstance(HttpServletRequest request, HttpServletResponse response, String id)
+            throws IOException {
         DshInstance instance = DshInstanceManager.find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
             return;
         }
-        JsonObject body = instanceBody(instance);
+        JsonObject body = instanceBody(request, instance);
         body.add("installProgress", runtime.installProgress(id));
         Json.writePreservingNulls(response, body);
     }
@@ -408,7 +411,7 @@ public final class InstancesApiServlet extends HttpServlet {
         DshInstanceManager.update(instance);
         runtime.announceUpdated(instance);
         JsonObject updated = new JsonObject();
-        updated.add("instance", instanceBody(instance));
+        updated.add("instance", instanceBody(request, instance));
         Json.writePreservingNulls(response, updated);
     }
 
@@ -1893,8 +1896,23 @@ public final class InstancesApiServlet extends HttpServlet {
 
     /// The JSON envelope of one instance, plus `installProgress` where the
     /// contract calls for it.
-    private JsonObject instanceBody(DshInstance instance) {
-        return runtime.toJson(instance);
+    private JsonObject instanceBody(HttpServletRequest request, DshInstance instance) {
+        JsonObject json = runtime.toJson(instance);
+        redactForAgent(request, json);
+        return json;
+    }
+
+    /// Drops the fields an agent must not carry away.
+    ///
+    /// `url` is `/i/<id>/?<query>` and dsh puts its access token in that query.
+    /// `read` lets an agent see *that* an instance runs, not the credential that
+    /// opens it — the same reason `.../open` is closed in
+    /// [org.jackhuang.hmcl.web.developer.AgentScopes#forbidden]. A browser keeps
+    /// the field; it never crosses into a model's context.
+    private static void redactForAgent(HttpServletRequest request, JsonObject json) {
+        if (AuthFilter.isAgent(request)) {
+            json.remove("url");
+        }
     }
 
     /// Splits the path after `/api/instances` into decoded segments.

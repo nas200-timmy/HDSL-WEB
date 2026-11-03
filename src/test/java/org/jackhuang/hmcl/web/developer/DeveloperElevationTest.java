@@ -79,4 +79,24 @@ class DeveloperElevationTest {
         elevation.clearFailures(key);
         assertFalse(elevation.isLocked(key, now));
     }
+
+    /// 两种 bearer 存在同一个命名空间里，但权限差一整层：脚本 token 是开发者
+    /// 自己的提权，agent 票只是一张限定范围的许可。让 `requireToken` 认后者，
+    /// 守卫过滤器和 WebSocket 升级门就会把 `read` 票当成完整开发者证明。
+    @Test
+    void anAgentGrantIsNotADeveloperProof() {
+        DeveloperElevation elevation = new DeveloperElevation();
+
+        String human = elevation.mintToken();
+        assertTrue(elevation.requireToken(human));
+
+        String agent = elevation.mintAgentToken("probe", java.util.Set.of(AgentScopes.READ),
+                null, java.time.Duration.ofMinutes(5), null);
+        assertFalse(elevation.requireToken(agent),
+                "an agent grant must never satisfy a developer-password gate");
+        assertTrue(elevation.agentGrant(agent) != null, "it is still a live agent grant");
+
+        elevation.revokeAgent(elevation.agentGrant(agent).id());
+        assertFalse(elevation.requireToken(agent));
+    }
 }
