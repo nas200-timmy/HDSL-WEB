@@ -202,6 +202,13 @@ public final class AuthFilter implements Filter {
             return false;
         }
         if (org.jackhuang.hmcl.web.developer.AgentScopes.selfFatal(method, path, grant.instanceId())) {
+            // Recorded, because from the agent's side this looks like a mysterious
+            // refusal: the operator has to be able to see that a token tried to stop
+            // an instance the panel could not prove was somebody else's.
+            org.jackhuang.hmcl.web.audit.AuditLog.log(
+                    org.jackhuang.hmcl.web.audit.AuditLog.Channel.WEB, "agent.selfFatal", path,
+                    "refused (" + (grant.instanceId() == null ? "unbound" : grant.instanceId()) + ")",
+                    "agent:" + grant.label(), req.getRemoteAddr());
             // The tool call could never return: the process serving it is the
             // one being stopped. Refusing is honest; queueing would promise an
             // executor that no longer exists.

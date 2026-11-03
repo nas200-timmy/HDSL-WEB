@@ -1592,9 +1592,7 @@ function AgentAccessCard() {
       ]);
       setStatus(nextStatus);
       setGrants(nextGrants.grants);
-      const ids = (nextInstances.instances ?? []).map((instance) => instance.id);
-      setInstanceIds(ids);
-      setTarget((current) => (current && ids.includes(current) ? current : ids[0] ?? ""));
+      setInstanceIds((nextInstances.instances ?? []).map((instance) => instance.id));
       // 勾选框要反映**已经存下来的上限**，而不是页面初始的那个 ["read"]：
       // 否则进来看到的是"只勾了读取"，与保存时那次选择不符，改密码时还容易
       // 顺手把上限缩掉。
@@ -1703,9 +1701,7 @@ function AgentAccessCard() {
       ]);
       setStatus(nextStatus);
       setGrants(nextGrants.grants);
-      const ids = (nextInstances.instances ?? []).map((instance) => instance.id);
-      setInstanceIds(ids);
-      setTarget((current) => (current && ids.includes(current) ? current : ids[0] ?? ""));
+      setInstanceIds((nextInstances.instances ?? []).map((instance) => instance.id));
       setSavedScopes(nextStatus.scopes);
     } catch (e) {
       setError(developerError(e));
@@ -1882,16 +1878,18 @@ function AgentAccessCard() {
           <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
             按上面勾选的范围签一张票，同时生成一段可直接粘进 agent 输入框的话（面板地址、token、范围、有效期）。
             token 只显示这一次，刷新页面就没了；有效期与开发者提权相同，也可以提前掐掉。
+            <b>不绑定实例的票不能停、删或打开任何实例的终端</b>——面板分不清"停别人"和"停自己"，
+            而 agent 迟早会去停自己所在的那个。它仍然能读状态、创建实例、启动实例。
           </span>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>绑定实例</span>
             <select
               className="input"
-              style={{ maxWidth: 260 }}
+              style={{ maxWidth: 280 }}
               value={target}
               onChange={(e) => setTarget(e.target.value)}
             >
-              <option value="">不绑定（不许停/删/开终端）</option>
+              <option value="">不绑定（可读、可建、可启停其它实例）</option>
               {instanceIds.map((id) => (
                 <option key={id} value={id}>{id}</option>
               ))}
