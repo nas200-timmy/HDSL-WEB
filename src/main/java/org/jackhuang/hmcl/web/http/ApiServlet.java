@@ -69,14 +69,20 @@ public final class ApiServlet extends HttpServlet {
     private final boolean authDisabled;
     private final String version;
     private final LongSupplier uptimeStartMillis;
+    /// 开发者提权：登出要一并结束它。提权本身绑在 session token 上，而
+    /// `AuthService.logout` 只删 session——不清这里，登出后 30 分钟内
+    /// `/api/developer/agent-auth` 仍能凭 agent 密码发票。
+    private final org.jackhuang.hmcl.web.developer.DeveloperElevation elevation;
 
     public ApiServlet(AuthService authService, AuthFilter authFilter, boolean authDisabled,
-                      String version, LongSupplier uptimeStartMillis) {
+                      String version, LongSupplier uptimeStartMillis,
+                      org.jackhuang.hmcl.web.developer.DeveloperElevation elevation) {
         this.authService = authService;
         this.authFilter = authFilter;
         this.authDisabled = authDisabled;
         this.version = version;
         this.uptimeStartMillis = uptimeStartMillis;
+        this.elevation = elevation;
     }
 
     @Override
@@ -324,6 +330,12 @@ public final class ApiServlet extends HttpServlet {
         // （docs/web-shell.md §3），下次提权后重连即可接回。
         if (token != null && !token.isBlank()) {
             TerminalWebSocket.closeForSession(token);
+            // 提权是 session 的，session 没了就不该留着。不清的话，
+            // `latestHumanExpiry` 仍然非空，agent 密码在登出后还能继续发票。
+            // 票本身由 `DeveloperElevation#agentGrant` 的实时检查兜住：最后
+            // 一个提权结束，手里的票立即失效。
+            elevation.clear(org.jackhuang.hmcl.web.developer.DeveloperElevation.key(
+                    token, request.getRemoteAddr()));
         }
         response.addCookie(authFilter.clearedSessionCookie(request));
         Json.write(response, Map.of("ok", true));

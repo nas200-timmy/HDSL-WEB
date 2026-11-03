@@ -298,11 +298,18 @@ public final class DeveloperElevation {
         return token;
     }
 
-    /// The grant behind a bearer token, or `null` when it is unknown, expired
-    /// or not an agent token.
+    /// The grant behind a bearer token, or `null` when it is unknown, expired,
+    /// not an agent token, or **nobody is elevated any more**.
     ///
     /// Reading does **not** slide the expiry: an agent that keeps calling must
     /// still lose its credential at the moment the operator was promised.
+    ///
+    /// The live-elevation check is what makes "borrowed power" literal. Minting
+    /// already caps the expiry at the human window, but that window can also end
+    /// early — logout clears it, and 「停止提权」 clears it. Without this check a
+    /// grant would stay usable until its own date even though the loan was
+    /// returned; with it, the grant dies the moment the last elevated session
+    /// ends.
     ///
     /// @param token the bearer token from the `Authorization` header
     /// @return the grant, or `null`
@@ -314,14 +321,26 @@ public final class DeveloperElevation {
         if (elevation == null || elevation.agent == null || !elevation.expiry.isAfter(Instant.now())) {
             return null;
         }
+        if (latestHumanExpiry() == null) {
+            return null;
+        }
         AgentInfo agent = elevation.agent;
         return new AgentGrant(agent.id(), agent.label(), agent.scopes(), agent.instanceId(), elevation.expiry);
     }
 
     /// Every live agent grant, newest expiry last — what the panel's list draws.
     ///
+    /// "Live" includes the loan: when nobody is elevated the grants are already
+    /// unusable ([#agentGrant] refuses them), so the list must not keep showing
+    /// agents as if they were still working. The tokens stay in memory — a
+    /// later elevation does not revive them, because the operator is expected
+    /// to mint a fresh one — but they are not presented as active.
+    ///
     /// @return the grants, never `null`
     public List<AgentGrant> agentGrants() {
+        if (latestHumanExpiry() == null) {
+            return List.of();
+        }
         Instant now = Instant.now();
         List<AgentGrant> grants = new ArrayList<>();
         for (Elevation elevation : elevations.values()) {

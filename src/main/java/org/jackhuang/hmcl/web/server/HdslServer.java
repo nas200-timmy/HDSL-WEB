@@ -315,7 +315,8 @@ public final class HdslServer {
         context.addFilter(new FilterHolder(guardFilter), "/api/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(new FilterHolder(guardFilter), "/i/*", EnumSet.of(DispatcherType.REQUEST));
         context.addServlet(new ServletHolder(new ApiServlet(
-                authService, authFilter, config.auth.disabled, Metadata.VERSION, startedAtMillis::get)), "/api/*");
+                authService, authFilter, config.auth.disabled, Metadata.VERSION, startedAtMillis::get,
+                developerElevation)), "/api/*");
         ServletHolder instancesHolder = new ServletHolder(new InstancesApiServlet(runtime, taskService, config, terminals, terminalTickets,
                 authService, developerAuth, developerElevation, tlsActive, emergencyStop));
         instancesHolder.getRegistration().setMultipartConfig(multipart);

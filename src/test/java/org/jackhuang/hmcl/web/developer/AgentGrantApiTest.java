@@ -199,6 +199,28 @@ class AgentGrantApiTest {
         }
     }
 
+    /// 票是借来的权力：出借人走了（登出），票就不能再用。
+    @Test
+    void loggingOutEndsTheGrantItAuthorized() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "https://127.0.0.1:" + running.port();
+            String cookie = elevatedSession(client, base);
+
+            HttpResponse<String> minted = post(client, base + "/api/developer/agent-token",
+                    "{\"label\":\"probe\",\"scopes\":[\"read\"],\"ttlSeconds\":3600}", cookie);
+            assertEquals(200, minted.statusCode(), minted.body());
+            String token = json(minted).get("token").getAsString();
+            assertEquals(200, getWithBearer(client, base + "/api/instances", token).statusCode());
+
+            assertEquals(200, post(client, base + "/api/auth/logout", "{}", cookie).statusCode());
+
+            // The grant's own expiry is an hour away; the window that lent it
+            // the authority is gone, so the next call is just unauthenticated.
+            assertEquals(401, getWithBearer(client, base + "/api/instances", token).statusCode());
+        }
+    }
+
     @Test
     void scopesAreClassifiedHereAndDenyByDefault() {
         // Reads are reads; the credential-leaking ones are closed.

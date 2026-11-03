@@ -23,6 +23,7 @@ import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// The shared developer elevation: per session, sliding, and dead with its
@@ -86,6 +87,10 @@ class DeveloperElevationTest {
     @Test
     void anAgentGrantIsNotADeveloperProof() {
         DeveloperElevation elevation = new DeveloperElevation();
+        // 票是借来的权力：它只在有人提权的窗口里成立。`mintAgentToken` 的调用方
+        // 负责验提权，这里显式建一个 session 提权来代表那个窗口。
+        String humanKey = DeveloperElevation.key("probe-session", null);
+        elevation.elevate(humanKey);
 
         String human = elevation.mintToken();
         assertTrue(elevation.requireToken(human));
@@ -98,5 +103,24 @@ class DeveloperElevationTest {
 
         elevation.revokeAgent(elevation.agentGrant(agent).id());
         assertFalse(elevation.requireToken(agent));
+    }
+
+    /// 窗口结束，票立刻失效——不等它自己的到期时间。登出会清掉 session 提权，
+    /// 「停止提权」也清；两者都不该留下能用的票。
+    @Test
+    void endingTheWindowEndsTheGrant() {
+        DeveloperElevation elevation = new DeveloperElevation();
+        String humanKey = DeveloperElevation.key("probe-session", null);
+        elevation.elevate(humanKey);
+
+        String agent = elevation.mintAgentToken("probe", java.util.Set.of(AgentScopes.READ),
+                null, java.time.Duration.ofHours(1), null);
+        assertTrue(elevation.agentGrant(agent) != null);
+        assertEquals(1, elevation.agentGrants().size());
+
+        elevation.clear(humanKey);
+
+        assertNull(elevation.agentGrant(agent), "without a lender the loan is void");
+        assertTrue(elevation.agentGrants().isEmpty(), "the panel must not show a dead grant as active");
     }
 }
