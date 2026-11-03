@@ -1575,6 +1575,9 @@ function AgentAccessCard() {
   const [scopes, setScopes] = useState<string[]>(["read"]);
   /// 服务端当前的那一份，用来判断勾选是否还没保存
   const [savedScopes, setSavedScopes] = useState<string[]>([]);
+  /// 手上这张一次性票：生成后只显示这一次，刷新即丢
+  const [minted, setMinted] = useState<{ text: string; expiresAt: string } | null>(null);
+  const [minting, setMinting] = useState(false);
 
   const refresh = async () => {
     try {
@@ -1634,6 +1637,64 @@ function AgentAccessCard() {
     } finally {
       setBusy(false);
     }
+  };
+
+  /// 给 agent 的一段话：只有地址和用法，不带任何警告。
+  ///
+  /// 地址写死 `127.0.0.1`：agent 与面板在同一台机器上，走回环比让模型记住
+  /// 真实域名安全——提示词会被贴进会话记录，域名不该跟着走。
+  const buildPrompt = (token: string, expiresAt: string, granted: string[]) => {
+    const port = window.location.port || "3080";
+    const panel = `https://127.0.0.1:${port}`;
+    const scopeText = granted.map((scope) => AGENT_SCOPE_LABEL[scope] ?? scope).join("、");
+    return [
+      "你现在获得了一张 HDSL-web 面板的授权票。",
+      "",
+      `面板：${panel}`,
+      `用法：/api 请求带上 Authorization: Bearer ${token}`,
+      `范围：${scopeText}`,
+      `有效期：与开发者提权同生命周期，最晚到 ${new Date(expiresAt).toLocaleString()}`,
+    ].join("\n");
+  };
+
+  const copyText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  /// 签一张票，同时把「给 agent 的那段话」复制到剪贴板。
+  const mintForAgent = async () => {
+    if (scopes.length === 0) return setError("至少要勾选一类范围");
+    setMinting(true);
+    setError(null);
+    try {
+      const answer = await api.mintAgentToken({ label: "手动复制", scopes });
+      const text = buildPrompt(answer.token, answer.expiresAt, answer.scopes);
+      const copied = await copyText(text);
+      setMinted({ text, expiresAt: answer.expiresAt });
+      toast(copied ? "success" : "info",
+        copied ? "提示词已复制，粘进 agent 的输入框即可" : "已生成，请手动复制下面的文字");
+      // 只刷新票列表与状态：不要把刚勾选的范围重置回 agent 密码的上限，
+      // 否则操作员想按不同范围再签一张时要重新勾一遍。
+      const [nextStatus, nextGrants] = await Promise.all([api.agentPassword(), api.agentGrants()]);
+      setStatus(nextStatus);
+      setGrants(nextGrants.grants);
+      setSavedScopes(nextStatus.scopes);
+    } catch (e) {
+      setError(developerError(e));
+    } finally {
+      setMinting(false);
+    }
+  };
+
+  const copyMinted = async () => {
+    if (!minted) return;
+    const copied = await copyText(minted.text);
+    toast(copied ? "success" : "error", copied ? "已再次复制" : "复制失败：浏览器拒绝了剪贴板访问");
   };
 
   const clear = async () => {
@@ -1790,6 +1851,54 @@ function AgentAccessCard() {
           ))}
         </div>
       )}
+
+      {/* 把票交给 agent：签一张、复制一段话。这张票不经过 agent 密码，任何守卫档位都能签。 */}
+      <div className="comp-row" style={{ borderTop: "1px solid var(--monet-outline-variant)", borderBottom: "none", alignItems: "flex-start" }}>
+        <span className="comp-label" style={{ paddingTop: 2 }}>把票交给 agent</span>
+        <span className="comp-value" style={{ display: "grid", gap: 6, maxWidth: 720 }}>
+          <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+            按上面勾选的范围签一张票，同时生成一段可直接粘进 agent 输入框的话（面板地址、token、范围、有效期）。
+            token 只显示这一次，刷新页面就没了；有效期与开发者提权相同，也可以提前掐掉。
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button
+              className="btn btn-raised ripple-host"
+              disabled={minting || scopes.length === 0}
+              onClick={() => void mintForAgent()}
+            >
+              {minting ? "生成中…" : "生成票并复制给 agent"}
+            </button>
+            {minted && (
+              <button className="btn btn-outline ripple-host" onClick={() => void copyMinted()}>
+                再次复制
+              </button>
+            )}
+            {scopes.length === 0 && (
+              <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>先勾选至少一类范围</span>
+            )}
+          </div>
+          {minted && (
+            <>
+              <textarea
+                readOnly
+                value={minted.text}
+                rows={10}
+                onFocus={(e) => e.currentTarget.select()}
+                style={{
+                  width: "100%",
+                  fontSize: 12,
+                  lineHeight: 1.55,
+                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                  resize: "vertical",
+                }}
+              />
+              <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                这张票到 {new Date(minted.expiresAt).toLocaleString()} 失效。复制失败的话，点一下上面的框全选再复制。
+              </span>
+            </>
+          )}
+        </span>
+      </div>
     </div>
   );
 }
