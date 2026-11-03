@@ -2,69 +2,35 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## v0.6.60 — 2026-11-03 · agent 授权收口；票一键复制；面板桥插件移除；启动第一行立刻打印
+## v0.6.60 — 2026-11-03 · agent 访问收口为「只用 agent 密码换票」；启动第一行立刻打印
 
-**给 agent 的票可以一键复制成一段话**
+> 上一轮加的「面板生成票并一键复制」整套撤掉：那条路给出的是不绑定实例的票，agent 拿它
+> 停掉跑着自己的实例，就是 dsh 自杀的来源。agent 现在只用自己的密码换票，权限模型回到
+> 当时：五类 scope，加上可选的实例绑定。
 
-- 设置页「agent 访问」多一块「把票交给 agent」：按上面勾选的范围签一张票，同时把
-  面板地址、token、范围、有效期拼成一段话复制到剪贴板，直接粘进 agent 输入框。
-- 地址写 `https://127.0.0.1:<端口>`：提示词会进会话记录，真实域名不该跟着走。
-- 票的有效期与开发者提权同生命周期（签发时截断，提权结束即失效），也可以提前掐掉。
-- 走 `POST /api/developer/agent-token`，用当前提权会话，不经过 agent 密码；任何守卫
-  档位都能签。票立刻出现在下面的授权列表里，可照常掐掉。
-- token 只显示这一次，刷新即丢；复制失败时保留只读文本框，点一下全选再复制。
+**agent 访问：只保留 agent 密码**
 
-**面板桥插件已移除；面板侧的授权接口保留**
-
-- `plugins/dsh-panel-agent`（`@nas200-timmy/dsh-panel-agent` 0.1.5）不再随面板发布，也不再
-  出现在「安装 → TUI 插件」的清单里。agent 不需要一个桥才能用票：面板签发的就是一张
-  bearer token，任何客户端带上 `Authorization: Bearer` 就能调 `/api`。
-- 面板侧的能力都在，与插件无关：`/api/developer/agent-auth` 用 agent 密码换票、
-  `/api/developer/agent-token` 用已提权的会话换票、`/api/developer/agent-grants` 列出与
-  吊销。票的 scope、实例绑定、审计身份 `agent:<label>` 都不变。
-- `DshTuiPlugins` 的 `terminal` 区分保留（终端是 app 插件、各有 profile；能力插件与实例
-  共用 web profile），只是这一版不再有随面板发布的能力插件。
-
-**agent 能操作面板，而拿不到开发者密码**
-
-- 之前每条按动作的提权检查都先要开发者密码——agent 没有这串密码，也不该有。现在
-  `AuthFilter.isAgent` 让「mc 控制台输入」「日志保留」「品牌设置」「实例终端」这些 servlet
-  认出请求是凭票进来的：真正的门是票里的 scope，而 scope 早在过滤器里验过。所有 servlet
-  侧的提权检查统一走 `AuthFilter.elevationSatisfied`，新加一处不会忘了 agent 分支。
-- `DeveloperGuardFilter`（开发者守卫）与 `DeveloperElevation#requireToken` 之前还有一个
-  混用：agent 票和「脚本用的提权 token」存在同一个 `bearer:` 命名空间里，守卫过滤器把 agent
-  票当成完整开发者提权放行。现在守卫对 agent 明确让路（scope 才是它的门），`requireToken`
-  只认人那张——一张 `read` 票不再等于开发者密码。
-- **登出会结束提权**。此前登出只删 session，而 `latestHumanExpiry` 仍看得到那个提权，
-  于是登出后 30 分钟内 agent 密码还能继续发票、已经发出去的票也照用。现在登出清掉该
-  session 的提权；`agentGrant` 每次请求再查「此刻有没有人提权」，最后一个人结束后票当场
-  失效。面板的票列表也只显示**此刻能用的**票，不再把死票画成在用。
-- **范围模型收口到 API 边界**：`read` 只覆盖 `/api/*` 的 GET。`/i/*`（反代）与 `/ws/*`
-  （事件流）是浏览器通道，任何 scope 都不放行——此前 `GET -> READ` 的捷径会把
-  `GET /i/<id>/...` 也算成读。
-- **凭据类路由在网关拒绝**：`/api/brands/*/admin-password` 加入 `AgentScopes.forbidden`。
-  这条不是锦上添花：品牌实例创建后的 15 分钟窗口里，读管理员密码**不需要任何提权**，
-  servlet 里的 scope 检查根本不会跑。同类的 `/open`、`/exports`、`/developer/*`、`/auth/*`
-  继续拒绝。
-- **响应字段也摘**：ZCode 实例的 `token`、dsh 实例的 `url`（query 里是访问 token）对 agent
-  不输出。`read` 让 agent 知道实例在跑，不等于把开启它的凭据交出去。
-- **安全判断改用容器解码后的路由路径**：此前 `AuthFilter` 读原始 `getRequestURI()`，而
-  servlet 按解码路径分发——`%61dmin-password` 在原始 URI 里不是这个名字，解码后却是它。
-  现在两边读同一份 `servletPath + pathInfo`，并统一去掉尾斜杠（`.../terminal/` 也按
-  `.../terminal` 处理）。
-- 勾选范围可以单独保存，不必重输 agent 密码：改的是策略，不是凭据。保存后旧范围发出的
-  票全部作废——它们比新策略更宽。勾选框也回显服务端**已存下来的**上限，改动未保存时
-  明说。
+- 只有一条门：`POST /api/developer/agent-auth`。agent 用自己的密码换一张 bearer 票；免会话
+  （curl 可用），但**必须有人正在提权**，票的寿命被这次提权截断，操作员登出 /「停止提权」
+  后票当场失效。
+- agent 密码可以单独设上限（`read` / `mc` / `instances` / `config` / `plugins`），调用方只能
+  要得更少；默认只给 `read`。
+- **删除了**面板侧的 `POST /api/developer/agent-token` 与设置页的「生成票并一键复制」：
+  那套能签出不带 `instanceId` 的票，等于绕过「别停自己」的自检。面板现在不提供任何
+  生成票的入口，票只能由 agent 用密码换。
+- 实例绑定仍在：换票时带 `instanceId`，面板会拒绝停 / 删 / 开该实例的终端
+  （`409 self_operation_refused`）。**不带绑定时面板无法判断「这是不是我」，会放行**——
+  这是当时的真实边界：防的是模型犯傻，不是恶意。
+- 面板桥插件 `plugins/dsh-panel-agent` 不随面板发布；`/i/*` 与 `/ws/*` 仍是浏览器通道，
+  任何 scope 都不放行；凭据类路由（`admin-password`、`/open`、`/exports`、`/developer/*`、
+  `/auth/*`）继续在网关拒绝。
+- 保留上一轮的正确性修复：登出清提权、守卫对 agent 让路但 agent 票 ≠ 开发者令牌、
+  按解密后的路由路径判断、响应里摘掉 `url` / `token`。
 
 **启动第一行立刻打印**
 
-- 症状：换 jar 后启动，控制台一分钟多没有任何输出，看起来像卡死（实测等待 90 秒）。
-- 原因：横幅之前要清扫上次删除失败留下的残留目录（`<data>/hdsl/instances/*.deleting-*`），
-  每一棵都是完整的 `node_modules`，Windows 上删一棵 20–40 秒——这段时间一个字都不打。
-- 现在启动第一件事就是 `HDSL-web starting (pid N)`；清扫超过 1 秒会补一行
-  `startup: cleaned up leftover directories in N ms`，下次再慢能直接看到是这一步。
-  正常启动（清扫很快）不会多任何输出。
-- 清扫本身没挪位置（保持同步），因为删除路径与单测依赖它；只是不再无声无息。
+- 换 jar 后如果数据目录里有上次删除失败的残留树，清扫会花几十秒且没有任何输出。
+  现在启动第一件事打印 `HDSL-web starting (pid N)`；清扫超过 1 秒补一行耗时。
 
 ## v0.6.57 — 2026-11-02 · ACP 中文不再乱码；Windows 裸部署全功能冒烟
 

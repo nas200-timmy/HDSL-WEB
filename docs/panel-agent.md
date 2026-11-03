@@ -1,7 +1,8 @@
 # 面板与 agent：第二把钥匙
 
 > 状态：面板侧、设置页（开发者 → agent 访问）与授权列表均已落地。agent 侧的桥插件已移除，
-> 票由面板签发后交给 agent，直接用 `Authorization: Bearer` 调 `/api`。
+> 票由 agent 用 **agent 密码**自己换（`/api/developer/agent-auth`），之后用
+> `Authorization: Bearer` 调 `/api`。面板不提供「生成票」的按钮或端点。
 
 ## 1. 要解决的问题
 
@@ -12,7 +13,7 @@ agent 能做的事从来不是问题——它本来就能用 shell 起一个 Min
 所以这套东西的目标不是"给 agent 能力"，是**让正确做法比旁路更省事**：
 
 1. 模型知道自己在面板里（`systemPrompt.context`）；
-2. 需要操作时走面板自己会记账的那条路（工具 + `/api`）；
+2. 需要访问时走面板的 API（`/api`），票由自己用 agent 密码换；
 3. 出了问题能查到是谁干的（审计里的 `agent:<label>`）。
 
 ## 2. 两把锁，两扇门
