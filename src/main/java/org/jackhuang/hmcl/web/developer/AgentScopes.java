@@ -185,17 +185,39 @@ public final class AgentScopes {
     /// @param instanceId the instance the grant is bound to, or `null`
     /// @return whether the panel must refuse the request
     public static boolean selfFatal(@Nullable String method, @Nullable String path, @Nullable String instanceId) {
-        if (path == null || instanceId == null || instanceId.isBlank()) {
+        if (path == null || method == null) {
             return false;
         }
         String route = stripTrailingSlash(path);
-        String self = "/api/instances/" + instanceId;
-        if (route.equals(self)) {
-            return "DELETE".equals(method);
+        if (!fatalRoute(route, method)) {
+            return false;
         }
-        if (route.equals(self + "/stop")) {
-            return "POST".equals(method);
+        // An **unbound** grant cannot be reasoned about: the panel has no idea
+        // which instance the caller runs in, so it cannot tell "stop that other
+        // one" from "stop myself". Refusing is the only safe answer — a token
+        // handed over by the panel's copy button starts out unbound, and an
+        // agent told to "use /api" will eventually try to restart the thing it
+        // is running inside.
+        if (instanceId == null || instanceId.isBlank()) {
+            return true;
         }
-        return route.equals(self + "/terminal");
+        return route.equals("/api/instances/" + instanceId) && "DELETE".equals(method)
+                || route.equals("/api/instances/" + instanceId + "/stop") && "POST".equals(method)
+                || route.equals("/api/instances/" + instanceId + "/terminal");
+    }
+
+    /// The three routes that would end the process making the call.
+    ///
+    /// @param route  the path without a trailing slash
+    /// @param method the request method
+    /// @return whether the route is one of them
+    private static boolean fatalRoute(String route, String method) {
+        if (route.startsWith("/api/instances/") && "DELETE".equals(method)) {
+            return route.split("/").length == 4;
+        }
+        if (route.endsWith("/stop")) {
+            return "POST".equals(method) && route.startsWith("/api/instances/");
+        }
+        return route.endsWith("/terminal") && route.startsWith("/api/instances/");
     }
 }

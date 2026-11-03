@@ -261,7 +261,17 @@ class AgentGrantApiTest {
         assertTrue(AgentScopes.selfFatal("DELETE", "/api/instances/a", "a"));
         assertFalse(AgentScopes.selfFatal("POST", "/api/instances/b/stop", "a"));
         assertFalse(AgentScopes.selfFatal("POST", "/api/instances/a/launch", "a"));
-        assertFalse(AgentScopes.selfFatal("POST", "/api/instances/a/stop", null));
+        // **Unbound is refused, not allowed.** A token from the panel's copy
+        // button carries no instance, so the panel cannot tell "that other one"
+        // from "myself" — and an agent that reads the prompt ("use /api") will
+        // eventually stop the instance it is running in. That is exactly how
+        // the first copy-button token killed its own session.
+        assertTrue(AgentScopes.selfFatal("POST", "/api/instances/a/stop", null));
+        assertTrue(AgentScopes.selfFatal("DELETE", "/api/instances/a", null));
+        assertTrue(AgentScopes.selfFatal("POST", "/api/instances/a/terminal", null));
+        // Not a fatal route: an unbound grant is still free to start things.
+        assertFalse(AgentScopes.selfFatal("POST", "/api/instances/a/launch", null));
+        assertFalse(AgentScopes.selfFatal("GET", "/api/instances/a", null));
 
         // Defaults are read-only.
         assertEquals(Set.of(AgentScopes.READ), AgentScopes.DEFAULT);

@@ -1578,12 +1578,23 @@ function AgentAccessCard() {
   /// 手上这张一次性票：生成后只显示这一次，刷新即丢
   const [minted, setMinted] = useState<{ text: string; expiresAt: string } | null>(null);
   const [minting, setMinting] = useState(false);
+  /// 这张票绑给哪个实例。**不绑的票不许停/删/开终端**——面板分不清"停别人"和
+  /// "停自己"，而 agent 迟早会去停自己所在的那个。
+  const [instanceIds, setInstanceIds] = useState<string[]>([]);
+  const [target, setTarget] = useState<string>("");
 
   const refresh = async () => {
     try {
-      const [nextStatus, nextGrants] = await Promise.all([api.agentPassword(), api.agentGrants()]);
+      const [nextStatus, nextGrants, nextInstances] = await Promise.all([
+        api.agentPassword(),
+        api.agentGrants(),
+        api.instances().catch(() => ({ instances: [] as { id: string }[] })),
+      ]);
       setStatus(nextStatus);
       setGrants(nextGrants.grants);
+      const ids = (nextInstances.instances ?? []).map((instance) => instance.id);
+      setInstanceIds(ids);
+      setTarget((current) => (current && ids.includes(current) ? current : ids[0] ?? ""));
       // 勾选框要反映**已经存下来的上限**，而不是页面初始的那个 ["read"]：
       // 否则进来看到的是"只勾了读取"，与保存时那次选择不符，改密码时还容易
       // 顺手把上限缩掉。
@@ -1643,7 +1654,7 @@ function AgentAccessCard() {
   ///
   /// 地址写死 `127.0.0.1`：agent 与面板在同一台机器上，走回环比让模型记住
   /// 真实域名安全——提示词会被贴进会话记录，域名不该跟着走。
-  const buildPrompt = (token: string, expiresAt: string, granted: string[]) => {
+  const buildPrompt = (token: string, expiresAt: string, granted: string[], boundInstance?: string) => {
     const port = window.location.port || "3080";
     const panel = `https://127.0.0.1:${port}`;
     const scopeText = granted.map((scope) => AGENT_SCOPE_LABEL[scope] ?? scope).join("、");
@@ -1653,6 +1664,7 @@ function AgentAccessCard() {
       `面板：${panel}`,
       `用法：/api 请求带上 Authorization: Bearer ${token}`,
       `范围：${scopeText}`,
+      ...(boundInstance ? [`绑定实例：${boundInstance}（这张票不能停、删或打开它自己的终端）`] : []),
       `有效期：与开发者提权同生命周期，最晚到 ${new Date(expiresAt).toLocaleString()}`,
     ].join("\n");
   };
@@ -1672,17 +1684,28 @@ function AgentAccessCard() {
     setMinting(true);
     setError(null);
     try {
-      const answer = await api.mintAgentToken({ label: "手动复制", scopes });
-      const text = buildPrompt(answer.token, answer.expiresAt, answer.scopes);
+      const answer = await api.mintAgentToken({
+        label: "手动复制",
+        scopes,
+        ...(target ? { instanceId: target } : {}),
+      });
+      const text = buildPrompt(answer.token, answer.expiresAt, answer.scopes, target);
       const copied = await copyText(text);
       setMinted({ text, expiresAt: answer.expiresAt });
       toast(copied ? "success" : "info",
         copied ? "提示词已复制，粘进 agent 的输入框即可" : "已生成，请手动复制下面的文字");
       // 只刷新票列表与状态：不要把刚勾选的范围重置回 agent 密码的上限，
       // 否则操作员想按不同范围再签一张时要重新勾一遍。
-      const [nextStatus, nextGrants] = await Promise.all([api.agentPassword(), api.agentGrants()]);
+      const [nextStatus, nextGrants, nextInstances] = await Promise.all([
+        api.agentPassword(),
+        api.agentGrants(),
+        api.instances().catch(() => ({ instances: [] as { id: string }[] })),
+      ]);
       setStatus(nextStatus);
       setGrants(nextGrants.grants);
+      const ids = (nextInstances.instances ?? []).map((instance) => instance.id);
+      setInstanceIds(ids);
+      setTarget((current) => (current && ids.includes(current) ? current : ids[0] ?? ""));
       setSavedScopes(nextStatus.scopes);
     } catch (e) {
       setError(developerError(e));
@@ -1861,6 +1884,18 @@ function AgentAccessCard() {
             token 只显示这一次，刷新页面就没了；有效期与开发者提权相同，也可以提前掐掉。
           </span>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>绑定实例</span>
+            <select
+              className="input"
+              style={{ maxWidth: 260 }}
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+            >
+              <option value="">不绑定（不许停/删/开终端）</option>
+              {instanceIds.map((id) => (
+                <option key={id} value={id}>{id}</option>
+              ))}
+            </select>
             <button
               className="btn btn-raised ripple-host"
               disabled={minting || scopes.length === 0}
