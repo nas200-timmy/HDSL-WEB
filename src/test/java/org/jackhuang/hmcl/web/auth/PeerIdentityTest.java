@@ -47,28 +47,44 @@ class PeerIdentityTest {
 
     private static final Map<String, String> ENV = Map.of("TERM", "dumb");
 
-    /// `/proc` as the test wants it: a chosen inode, a chosen owner, and a
-    /// chosen parent map.
+    /// `/proc` as the test wants it: a chosen caller pid, a chosen parent map,
+    /// and pids whose membership the kernel would refuse (the reused-pid case).
     private static final class FakeProc implements PeerIdentity.Proc {
-        @Nullable Long inode;
-        @Nullable Long owner;
+        @Nullable Long caller;
         final Map<Long, Long> parents = new HashMap<>();
-        int inodeCalls;
+        /// Pids that claim a root by chain but are not under it — the stale
+        /// parent a reused pid produced.
+        final java.util.Set<Long> notUnder = new java.util.HashSet<>();
+        int callerCalls;
 
         @Override
-        public @Nullable Long callerInode(int callerPort, int panelPort) {
-            inodeCalls++;
-            return inode;
-        }
-
-        @Override
-        public @Nullable Long socketOwner(long inode) {
-            return owner;
+        public @Nullable Long callerPid(int callerPort, int panelPort) {
+            callerCalls++;
+            return caller;
         }
 
         @Override
         public @Nullable Long parentPid(long pid) {
             return parents.get(pid);
+        }
+
+        @Override
+        public boolean descendsFrom(long pid, long ancestor) {
+            if (notUnder.contains(pid)) {
+                return false;
+            }
+            long current = pid;
+            for (int depth = 0; depth < 64 && current > 0; depth++) {
+                if (current == ancestor) {
+                    return true;
+                }
+                Long parent = parents.get(current);
+                if (parent == null) {
+                    return false;
+                }
+                current = parent;
+            }
+            return false;
         }
     }
 
@@ -90,8 +106,7 @@ class PeerIdentityTest {
             assertTrue(root > 0, "the terminal must name its root pid");
 
             FakeProc proc = new FakeProc();
-            proc.inode = 5L;
-            proc.owner = 999L;
+            proc.caller = 999L;
             proc.parents.put(999L, root);
             PeerIdentity identity = new PeerIdentity(terminals, proc);
 
@@ -108,8 +123,7 @@ class PeerIdentityTest {
             long root = session.pid();
 
             FakeProc proc = new FakeProc();
-            proc.inode = 5L;
-            proc.owner = root;
+            proc.caller = root;
             PeerIdentity identity = new PeerIdentity(terminals, proc);
 
             assertEquals(new PeerIdentity.Ref("zcode", "probe"), identity.derive(40000, 3080));
@@ -123,8 +137,7 @@ class PeerIdentityTest {
             openProbe(terminals, "kimi", "probe");
 
             FakeProc proc = new FakeProc();
-            proc.inode = 5L;
-            proc.owner = 999L;
+            proc.caller = 999L;
             // The caller's parent is the panel itself: not an instance, and
             // never a licence.
             proc.parents.put(999L, ProcessHandle.current().pid());
@@ -141,18 +154,12 @@ class PeerIdentityTest {
             openProbe(terminals, "kimi", "probe");
 
             FakeProc broken = new FakeProc();
-            broken.inode = 5L;
-            broken.owner = 999L;
+            broken.caller = 999L;
             // No parent on record: the process is gone or unreadable.
             assertNull(new PeerIdentity(terminals, broken).derive(40000, 3080));
 
-            FakeProc noSocket = new FakeProc();
-            noSocket.owner = 999L;
-            assertNull(new PeerIdentity(terminals, noSocket).derive(40000, 3080));
-
-            FakeProc noOwner = new FakeProc();
-            noOwner.inode = 5L;
-            assertNull(new PeerIdentity(terminals, noOwner).derive(40000, 3080));
+            FakeProc noCaller = new FakeProc();
+            assertNull(new PeerIdentity(terminals, noCaller).derive(40000, 3080));
         }
     }
 
@@ -163,13 +170,12 @@ class PeerIdentityTest {
             TerminalSession session = openProbe(terminals, "kimi", "probe");
 
             FakeProc proc = new FakeProc();
-            proc.inode = 5L;
-            proc.owner = session.pid();
+            proc.caller = session.pid();
             PeerIdentity identity = new PeerIdentity(terminals, proc);
 
             assertEquals(new PeerIdentity.Ref("kimi", "probe"), identity.derive(40000, 3080));
             assertEquals(new PeerIdentity.Ref("kimi", "probe"), identity.derive(40000, 3080));
-            assertEquals(1, proc.inodeCalls, "the second call on one port must reuse the answer");
+            assertEquals(1, proc.callerCalls, "the second call on one port must reuse the answer");
         }
     }
 
@@ -209,5 +215,66 @@ class PeerIdentityTest {
         assertEquals(-1, PeerIdentity.LinuxProc.portOf("0100007F"));
         assertEquals(-1, PeerIdentity.LinuxProc.portOf("0100007F:"));
         assertEquals(-1, PeerIdentity.LinuxProc.portOf("0100007F:GGGG"));
+    }
+
+    @Test
+    @EnabledOnOs(OS.LINUX)
+    void aRootClaimedThroughAReusedPidIsRejectedByMembership() throws Exception {
+        try (TerminalManager terminals = new TerminalManager()) {
+            TerminalSession session = openProbe(terminals, "kimi", "probe");
+            long root = session.pid();
+
+            FakeProc proc = new FakeProc();
+            // The chain points at the root — through a parent that died and
+            // whose pid the root then reused. The chain says yes; membership
+            // says the caller is not under that root, and membership wins.
+            proc.caller = 998L;
+            proc.parents.put(998L, root);
+            proc.notUnder.add(998L);
+
+            assertNull(new PeerIdentity(terminals, proc).derive(40000, 3080));
+        }
+    }
+
+    /// The Windows row scan, against synthetic `GetExtendedTcpTable` rows.
+    ///
+    /// An IPv4 row is six dwords (state, local address, local port, remote
+    /// address, remote port, pid) with the ports in network byte order inside
+    /// the dwords; an IPv6 row is fourteen, with the local port seventh, the
+    /// remote port twelfth and the pid fourteenth. The caller's row answers;
+    /// the panel's own mirror row and a non-established row do not.
+    @Test
+    void windowsRowsNameTheirOwner() {
+        int callerPort = 0x409C;  // network order for 40000
+        int panelPort = 0x080C;   // network order for 3080
+
+        int[] caller = {5, 0x0100007F, callerPort, 0x0100007F, panelPort, 4321};
+        int[] panelSide = {5, 0x0100007F, panelPort, 0x0100007F, callerPort, 7};
+        int[] timeWait = {6, 0x0100007F, callerPort, 0x0100007F, panelPort, 9999};
+
+        int[] v4 = new int[caller.length + panelSide.length + timeWait.length];
+        System.arraycopy(caller, 0, v4, 0, caller.length);
+        System.arraycopy(panelSide, 0, v4, caller.length, panelSide.length);
+        System.arraycopy(timeWait, 0, v4, caller.length + panelSide.length, timeWait.length);
+        assertEquals(4321L, PeerIdentity.WindowsProc.scan(v4, 6, 2, 4, 5, 40000, 3080));
+        // The panel's own mirror row is not the caller's: alone, it answers
+        // nothing in the caller's direction.
+        assertNull(PeerIdentity.WindowsProc.scan(panelSide, 6, 2, 4, 5, 40000, 3080));
+
+        int[] v6Caller = new int[14];
+        v6Caller[0] = 5;
+        v6Caller[6] = callerPort;
+        v6Caller[11] = panelPort;
+        v6Caller[13] = 8765;
+        assertEquals(8765L, PeerIdentity.WindowsProc.scan(v6Caller, 14, 6, 11, 13, 40000, 3080));
+        assertNull(PeerIdentity.WindowsProc.scan(v6Caller, 14, 6, 11, 13, 3080, 40000));
+
+        // A non-established row never answers, whatever its ports.
+        int[] closed = {12, 0x0100007F, callerPort, 0x0100007F, panelPort, 1111};
+        assertNull(PeerIdentity.WindowsProc.scan(closed, 6, 2, 4, 5, 40000, 3080));
+
+        assertEquals(0x9C40, PeerIdentity.WindowsProc.networkPort(0x409C));
+        assertEquals(0x0C08, PeerIdentity.WindowsProc.networkPort(0x080C));
+        assertEquals(3080, PeerIdentity.WindowsProc.networkPort(0x080C));
     }
 }
