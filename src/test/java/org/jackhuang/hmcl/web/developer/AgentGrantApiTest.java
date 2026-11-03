@@ -379,6 +379,11 @@ class AgentGrantApiTest {
             JsonObject token = json(minted);
             String bearer = token.get("token").getAsString();
             assertTrue(token.get("scopes").toString().contains("instances"), minted.body());
+            // The panel names its own address — the connector's real port, not
+            // a default the browser or the prompt might have guessed.
+            assertTrue(token.has("panel"), minted.body());
+            assertTrue(token.get("panel").getAsString().endsWith(":" + running.port()),
+                    "the answer must name the panel's own port: " + token.get("panel"));
 
             // 用起来与任何票一样。
             assertEquals(200, getWithBearer(client, base + "/api/instances", bearer).statusCode());

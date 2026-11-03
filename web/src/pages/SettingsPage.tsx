@@ -1668,17 +1668,18 @@ function AgentAccessCard() {
 
   /// 给 agent 的一段话：地址、用法、范围、期限，和一条它该知道的拒绝规则。
   ///
-  /// 地址写死 `127.0.0.1`：agent 与面板在同一台机器上，走回环比让模型记住
-  /// 真实域名安全——提示词会被贴进会话记录，域名不该跟着走。
-  const buildPrompt = (token: string, expiresAt: string, granted: string[], instanceId?: string) => {
-    const port = window.location.port || "3080";
-    const panel = `https://127.0.0.1:${port}`;
+  /// 地址优先用服务端报的那个（连接器真实端口 + 协议 + 挂载前缀）——操作员
+  /// 可能经反代或域名浏览，`location.port` 在 443 下是空的，瞎猜默认端口会把
+  /// agent 指到错的门上。服务端没给时才退回浏览器自己的信息。
+  const buildPrompt = (token: string, expiresAt: string, granted: string[], instanceId?: string, panel?: string) => {
+    const fallback = `${window.location.protocol}//127.0.0.1:${window.location.port || "3080"}`;
+    const base = panel ?? fallback;
     const scopeText = granted.map((scope) => AGENT_SCOPE_LABEL[scope] ?? scope).join("、");
     return [
       "你现在获得了一张 HDSL-web 面板的授权票。",
       "",
-      `面板：${panel}`,
-      `用法：/api 请求带上 Authorization: Bearer ${token}`,
+      `面板：${base}`,
+      `用法：${base}/api 请求带上 Authorization: Bearer ${token}`,
       `范围：${scopeText}`,
       ...(instanceId ? [`绑定实例：${instanceId}`] : []),
       `有效期：与开发者提权同生命周期，最晚到 ${new Date(expiresAt).toLocaleString()}`,
@@ -1709,7 +1710,7 @@ function AgentAccessCard() {
         scopes,
         instanceId: bindTo.trim() || undefined,
       });
-      const text = buildPrompt(answer.token, answer.expiresAt, answer.scopes, answer.instanceId);
+      const text = buildPrompt(answer.token, answer.expiresAt, answer.scopes, answer.instanceId, answer.panel);
       const copied = await copyText(text);
       setMinted({ text, expiresAt: answer.expiresAt });
       toast(copied ? "success" : "info",

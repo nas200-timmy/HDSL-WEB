@@ -74,6 +74,11 @@ public final class DeveloperApiServlet extends HttpServlet {
     /// Which instance a caller runs in, derived from the kernel: the mint
     /// binds the grant to it, so the binding is a fact rather than a claim.
     private final org.jackhuang.hmcl.web.auth.PeerIdentity identity;
+    /// The panel's real serving port, live: the connector picks an ephemeral
+    /// port when the configuration asks for one, and the loopback address the
+    /// prompt hands to an agent must name whatever the panel actually runs on,
+    /// not the default.
+    private final java.util.function.IntSupplier panelPort;
     /// Failed panel-password confirmations, per source address — the second
     /// confirmation must not become an unthrottled oracle for the panel
     /// password.
@@ -90,7 +95,8 @@ public final class DeveloperApiServlet extends HttpServlet {
                                DeveloperElevation elevation,
                                AuthService auth, ServerConfig config, BooleanSupplier tlsActive,
                                EmergencyStop emergency, TerminalManager terminals, InstanceRuntime runtime,
-                               org.jackhuang.hmcl.web.auth.PeerIdentity identity) {
+                               org.jackhuang.hmcl.web.auth.PeerIdentity identity,
+                               java.util.function.IntSupplier panelPort) {
         this.devAuth = devAuth;
         this.agentAuth = agentAuth;
         this.elevation = elevation;
@@ -101,6 +107,7 @@ public final class DeveloperApiServlet extends HttpServlet {
         this.terminals = terminals;
         this.runtime = runtime;
         this.identity = identity;
+        this.panelPort = panelPort;
     }
 
     @Override
@@ -661,6 +668,10 @@ public final class DeveloperApiServlet extends HttpServlet {
                 "mint", actorOf(request), request.getRemoteAddr(), minted);
         JsonObject answer = new JsonObject();
         answer.addProperty("token", token);
+        String panel = panelUrl();
+        if (panel != null) {
+            answer.addProperty("panel", panel);
+        }
         if (grant != null) {
             answer.addProperty("id", grant.id());
             answer.addProperty("expiresAt", grant.expiresAt().toString());
@@ -673,6 +684,25 @@ public final class DeveloperApiServlet extends HttpServlet {
         scopes.forEach(array::add);
         answer.add("scopes", array);
         Json.write(response, answer);
+    }
+
+    /// The loopback address the agent should call, as the panel itself knows
+    /// it — not as the operator's browser reached it.
+    ///
+    /// The operator may be browsing through a reverse proxy on 443 or a
+    /// hostname; the prompt must not guess the port from that. The panel names
+    /// its own connector, its own scheme, and its own mount point, so a token
+    /// handed across a desk still lands on the right door from inside.
+    ///
+    /// @return the base URL, or `null` when the port is not answerable yet
+    private @Nullable String panelUrl() {
+        int port = panelPort.getAsInt();
+        if (port <= 0) {
+            return null;
+        }
+        String scheme = tlsActive.getAsBoolean() ? "https" : "http";
+        String path = config.basePath == null ? "" : config.basePath;
+        return scheme + "://127.0.0.1:" + port + path;
     }
 
     /// The developer page's 「停止提权」: drops this session's elevation

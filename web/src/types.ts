@@ -396,6 +396,8 @@ export interface AgentToken {
   label: string;
   scopes: string[];
   instanceId?: string;
+  /** 面板自己报的回环地址（真实端口、协议、挂载前缀），给提示词用 */
+  panel?: string;
   expiresAt: string;
 }
 
