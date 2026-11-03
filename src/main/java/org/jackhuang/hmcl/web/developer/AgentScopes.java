@@ -175,6 +175,13 @@ public final class AgentScopes {
 
     /// Whether this request would end the process making it.
     ///
+    /// Three categories write the same operations under different prefixes —
+    /// dsh (`/api/instances/{id}/…`), brands
+    /// (`/api/brands/{brand}/instances/{id}/…`) and ZCode
+    /// (`/api/zcode/instances/{id}/…`). Every one of them must be recognized:
+    /// covering only the dsh shape left an unbound token free to stop a brand
+    /// or ZCode instance, which is the same self-kill under another URL.
+    ///
     /// Only the instance that owns the token counts: stopping *another*
     /// instance is ordinary work, and the agent may do it when its grant holds
     /// [#INSTANCES]. Opening a terminal is included because the launcher stops
@@ -188,8 +195,8 @@ public final class AgentScopes {
         if (path == null || method == null) {
             return false;
         }
-        String route = stripTrailingSlash(path);
-        if (!fatalRoute(route, method)) {
+        String target = fatalTarget(stripTrailingSlash(path), method);
+        if (target == null) {
             return false;
         }
         // An **unbound** grant cannot be reasoned about: the panel has no idea
@@ -201,23 +208,61 @@ public final class AgentScopes {
         if (instanceId == null || instanceId.isBlank()) {
             return true;
         }
-        return route.equals("/api/instances/" + instanceId) && "DELETE".equals(method)
-                || route.equals("/api/instances/" + instanceId + "/stop") && "POST".equals(method)
-                || route.equals("/api/instances/" + instanceId + "/terminal");
+        return target.equals(instanceId);
     }
 
-    /// The three routes that would end the process making the call.
+    /// The instance a route would stop, delete or take over, or `null` when the
+    /// route is not one of those.
     ///
     /// @param route  the path without a trailing slash
     /// @param method the request method
-    /// @return whether the route is one of them
-    private static boolean fatalRoute(String route, String method) {
-        if (route.startsWith("/api/instances/") && "DELETE".equals(method)) {
-            return route.split("/").length == 4;
+    /// @return the instance id the route targets, or `null` for a non-fatal route
+    private static @Nullable String fatalTarget(String route, String method) {
+        String[] parts = route.split("/", -1);
+        // ["", "api", category, …]
+        if (parts.length < 4 || !"api".equals(parts[1])) {
+            return null;
         }
-        if (route.endsWith("/stop")) {
-            return "POST".equals(method) && route.startsWith("/api/instances/");
+        if ("instances".equals(parts[2])) {
+            if (parts.length == 4 && "DELETE".equals(method)) {
+                return parts[3];
+            }
+            if (parts.length == 5 && "POST".equals(method) && "stop".equals(parts[4])) {
+                return parts[3];
+            }
+            if (parts.length == 5 && "terminal".equals(parts[4])) {
+                // POST opens it (which stops the web runtime first), DELETE kills it.
+                return parts[3];
+            }
+            return null;
         }
-        return route.endsWith("/terminal") && route.startsWith("/api/instances/");
+        if ("zcode".equals(parts[2])) {
+            if (parts.length < 5 || !"instances".equals(parts[3])) {
+                return null;
+            }
+            String id = parts[4];
+            if (parts.length == 5 && "DELETE".equals(method)) {
+                return id;
+            }
+            if (parts.length == 6 && "POST".equals(method) && "stop".equals(parts[5])) {
+                return id;
+            }
+            return parts.length == 6 && "terminal".equals(parts[5]) ? id : null;
+        }
+        if ("brands".equals(parts[2])) {
+            // ["", "api", "brands", "<brand>", "instances", "<id>", …]
+            if (parts.length < 6 || !"instances".equals(parts[4])) {
+                return null;
+            }
+            String id = parts[5];
+            if (parts.length == 6 && "DELETE".equals(method)) {
+                return id;
+            }
+            if (parts.length == 7 && "POST".equals(method) && "stop".equals(parts[6])) {
+                return id;
+            }
+            return parts.length == 7 && "terminal".equals(parts[6]) ? id : null;
+        }
+        return null;
     }
 }

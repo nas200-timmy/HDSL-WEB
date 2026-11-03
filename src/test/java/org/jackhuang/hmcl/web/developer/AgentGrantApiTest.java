@@ -273,6 +273,26 @@ class AgentGrantApiTest {
         assertFalse(AgentScopes.selfFatal("POST", "/api/instances/a/launch", null));
         assertFalse(AgentScopes.selfFatal("GET", "/api/instances/a", null));
 
+        // Brands and ZCode write the same three operations under their own
+        // prefixes. Covering only the dsh shape left an unbound token able to
+        // stop a brand instance — the same self-kill under another URL.
+        assertTrue(AgentScopes.selfFatal("POST", "/api/brands/kimi/instances/a/stop", "a"));
+        assertTrue(AgentScopes.selfFatal("DELETE", "/api/brands/kimi/instances/a", "a"));
+        assertTrue(AgentScopes.selfFatal("POST", "/api/brands/kimi/instances/a/terminal", "a"));
+        assertTrue(AgentScopes.selfFatal("POST", "/api/brands/kimi/instances/a/stop/", "a"),
+                "a trailing slash must not open the way out");
+        assertTrue(AgentScopes.selfFatal("POST", "/api/brands/kimi/instances/a/stop", null),
+                "an unbound token cannot be reasoned about here either");
+        assertFalse(AgentScopes.selfFatal("POST", "/api/brands/kimi/instances/b/stop", "a"));
+        assertTrue(AgentScopes.selfFatal("POST", "/api/zcode/instances/a/stop", "a"));
+        assertTrue(AgentScopes.selfFatal("DELETE", "/api/zcode/instances/a", null));
+        assertTrue(AgentScopes.selfFatal("POST", "/api/zcode/instances/a/terminal", "a"));
+        assertFalse(AgentScopes.selfFatal("POST", "/api/zcode/instances/b/stop", "a"));
+        // Launch is refused by the servlet when a terminal is open (it would close the
+        // caller); the scope table stays out of it so a launch with no terminal is
+        // still ordinary work.
+        assertFalse(AgentScopes.selfFatal("POST", "/api/brands/kimi/instances/a/launch", "a"));
+
         // Defaults are read-only.
         assertEquals(Set.of(AgentScopes.READ), AgentScopes.DEFAULT);
     }
