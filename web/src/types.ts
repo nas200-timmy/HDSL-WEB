@@ -385,7 +385,6 @@ export interface AgentGrantRow {
   id: string;
   label: string;
   scopes: string[];
-  instanceId?: string;
   expiresAt: string;
 }
 
@@ -395,7 +394,6 @@ export interface AgentToken {
   id: string;
   label: string;
   scopes: string[];
-  instanceId?: string;
   expiresAt: string;
 }
 

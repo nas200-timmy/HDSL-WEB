@@ -295,7 +295,6 @@ public final class DeveloperApiServlet extends HttpServlet {
             return;
         }
         String label = stringField(body, "label");
-        String instanceId = stringField(body, "instanceId");
         Set<String> scopes = new LinkedHashSet<>();
         if (body.has("scopes") && body.get("scopes").isJsonArray()) {
             for (var element : body.getAsJsonArray("scopes")) {
@@ -324,7 +323,7 @@ public final class DeveloperApiServlet extends HttpServlet {
                 ttl = Duration.ofSeconds(seconds);
             }
         }
-        String token = elevation.mintAgentToken(label, scopes, instanceId, ttl,
+        String token = elevation.mintAgentToken(label, scopes, ttl,
                 elevation.latestHumanExpiry());
         var grant = elevation.agentGrant(token);
         AuditLog.log(AuditLog.Channel.WEB, "developer.agent", grant == null ? null : grant.id(),
@@ -335,9 +334,6 @@ public final class DeveloperApiServlet extends HttpServlet {
             answer.addProperty("id", grant.id());
             answer.addProperty("expiresAt", grant.expiresAt().toString());
             answer.addProperty("label", grant.label());
-            if (grant.instanceId() != null) {
-                answer.addProperty("instanceId", grant.instanceId());
-            }
         }
         JsonArray array = new JsonArray();
         scopes.forEach(array::add);
@@ -355,9 +351,6 @@ public final class DeveloperApiServlet extends HttpServlet {
             row.addProperty("id", grant.id());
             row.addProperty("label", grant.label());
             row.addProperty("expiresAt", grant.expiresAt().toString());
-            if (grant.instanceId() != null) {
-                row.addProperty("instanceId", grant.instanceId());
-            }
             JsonArray scopes = new JsonArray();
             grant.scopes().forEach(scopes::add);
             row.add("scopes", scopes);
@@ -521,7 +514,7 @@ public final class DeveloperApiServlet extends HttpServlet {
         agentPasswordStatus(response);
     }
 
-    /// `POST /api/developer/agent-auth {password, label, instanceId?}`: the door
+    /// `POST /api/developer/agent-auth {password, label}`: the door
     /// a script or an agent itself knocks on.
     ///
     /// It is reachable **without a session** — that is the whole point, a curl
@@ -582,7 +575,6 @@ public final class DeveloperApiServlet extends HttpServlet {
         }
         agentPasswordThrottle.clear(address);
         String label = stringField(body, "label");
-        String instanceId = stringField(body, "instanceId");
         // The request may narrow the cap, never widen it.
         Set<String> requested = new LinkedHashSet<>();
         if (body.has("scopes") && body.get("scopes").isJsonArray()) {
@@ -592,14 +584,29 @@ public final class DeveloperApiServlet extends HttpServlet {
                 }
             }
         }
-        java.util.List<String> cap = agentAuth.scopes();
+        // The scope classes shrank to read-only. A stored cap may still name
+        // classes this build no longer offers; those grant nothing, and a cap
+        // that names none of them falls back to the default so an operator who
+        // set the password before the change is not locked out.
+        Set<String> cap = new LinkedHashSet<>();
+        java.util.List<String> stored = agentAuth.scopes();
+        if (stored != null) {
+            for (String scope : stored) {
+                if (AgentScopes.known(scope)) {
+                    cap.add(scope);
+                }
+            }
+        }
+        if (cap.isEmpty()) {
+            cap.addAll(AgentScopes.DEFAULT);
+        }
         Set<String> granted = new LinkedHashSet<>();
         for (String scope : (requested.isEmpty() ? AgentScopes.DEFAULT : requested)) {
             if (!AgentScopes.known(scope)) {
                 Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "unknown_scope: " + scope);
                 return;
             }
-            if (cap != null && cap.contains(scope)) {
+            if (cap.contains(scope)) {
                 granted.add(scope);
             }
         }
@@ -616,7 +623,7 @@ public final class DeveloperApiServlet extends HttpServlet {
                 ttl = Duration.ofSeconds(seconds);
             }
         }
-        String token = elevation.mintAgentToken(label, granted, instanceId, ttl, humanExpiry);
+        String token = elevation.mintAgentToken(label, granted, ttl, humanExpiry);
         var grant = elevation.agentGrant(token);
         AuditLog.log(AuditLog.Channel.WEB, "agent.auth", grant == null ? null : grant.id(),
                 "success", "agent:" + (label == null || label.isBlank() ? "agent" : label), address);
@@ -625,9 +632,6 @@ public final class DeveloperApiServlet extends HttpServlet {
         if (grant != null) {
             answer.addProperty("id", grant.id());
             answer.addProperty("expiresAt", grant.expiresAt().toString());
-            if (grant.instanceId() != null) {
-                answer.addProperty("instanceId", grant.instanceId());
-            }
         }
         JsonArray array = new JsonArray();
         granted.forEach(array::add);

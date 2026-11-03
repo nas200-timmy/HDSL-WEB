@@ -681,14 +681,6 @@ public final class BrandApiServlet extends HttpServlet {
         // and the wrapper can only own a gateway the TUI is not holding. Closing
         // the session here and passing --replace in the wrapper is what makes
         // "open the web page" always succeed, even after a terminal was used.
-        // An agent must not take over a terminal it may itself be running in:
-        // `close` would end the caller mid-request. A person clicking launch
-        // still takes over, because a person is not the process being replaced.
-        if (AuthFilter.isAgent(request) && instanceTerminal.isOpen(brand.id(), id)) {
-            Json.error(response, HttpServletResponse.SC_CONFLICT,
-                    "self_operation_refused: launching would close a terminal the agent may be running in");
-            return;
-        }
         if (instanceTerminal.close(brand.id(), id)) {
             LOG.info("Closed the " + brand.id() + " terminal of " + id + " before launching its web mode");
         }

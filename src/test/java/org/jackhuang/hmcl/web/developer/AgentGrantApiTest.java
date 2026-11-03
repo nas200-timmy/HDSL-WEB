@@ -99,28 +99,29 @@ class AgentGrantApiTest {
     }
 
     @Test
-    void anAgentCannotStopItsOwnInstance() throws Exception {
+    void anAgentCannotStopAnything() throws Exception {
         try (TestSupport.RunningServer running = start()) {
             HttpClient client = TestSupport.trustAllClient();
             String base = "https://127.0.0.1:" + running.port();
             String cookie = elevatedSession(client, base);
 
             HttpResponse<String> minted = post(client, base + "/api/developer/agent-token",
-                    "{\"label\":\"probe\",\"scopes\":[\"read\",\"instances\"],\"instanceId\":\"inst-a\"}", cookie);
+                    "{\"label\":\"probe\",\"scopes\":[\"read\"]}", cookie);
             assertEquals(200, minted.statusCode(), minted.body());
             String token = json(minted).get("token").getAsString();
 
-            // The scope allows stopping instances; the instance it is bound to
-            // is the one it may not touch. The call would kill the process
-            // serving it, so the answer is a refusal, not a promise.
+            // Writes are not "denied for this one instance" — they are not in the
+            // grant at all. A read-only token cannot stop its own instance or any
+            // other, which is what makes the self-kill structurally impossible.
             HttpResponse<String> suicide = post(client, base + "/api/instances/inst-a/stop", "{}", null, token);
-            assertEquals(409, suicide.statusCode(), suicide.body());
-            assertTrue(suicide.body().contains("self_operation_refused"));
+            assertEquals(403, suicide.statusCode(), suicide.body());
+            assertTrue(suicide.body().contains("agent_scope_denied"), suicide.body());
 
-            // Another instance is ordinary work.
             HttpResponse<String> other = post(client, base + "/api/instances/inst-b/stop", "{}", null, token);
-            assertTrue(other.statusCode() != 409 && other.statusCode() != 403,
-                    "stopping another instance must pass the gate, got " + other.statusCode() + " " + other.body());
+            assertEquals(403, other.statusCode(), other.body());
+
+            // Reading the list still works.
+            assertEquals(200, getWithBearer(client, base + "/api/instances", token).statusCode());
         }
     }
 
@@ -140,25 +141,25 @@ class AgentGrantApiTest {
 
 
     @Test
-    void aScopedAgentAlsoSatisfiesTheRoutesOwnElevationCheck() throws Exception {
+    void anAgentIsRefusedByItsScopeBeforeAnyPasswordWall() throws Exception {
         try (TestSupport.RunningServer running = start()) {
             HttpClient client = TestSupport.trustAllClient();
             String base = "https://127.0.0.1:" + running.port();
             String cookie = elevatedSession(client, base);
 
             HttpResponse<String> minted = post(client, base + "/api/developer/agent-token",
-                    "{\"label\":\"probe\",\"scopes\":[\"read\",\"mc\"]}", cookie);
+                    "{\"label\":\"probe\",\"scopes\":[\"read\"]}", cookie);
             assertEquals(200, minted.statusCode(), minted.body());
             String token = json(minted).get("token").getAsString();
 
-            // `console/input` calls requireElevation itself. An agent never has
-            // the developer password, so without [AuthFilter#isAgent] the route
-            // answers "elevate first" — an instruction it can never follow — and
-            // the `mc` scope would be worth almost nothing.
+            // `console/input` is one of the routes whose servlet asks for
+            // elevation. An agent must be stopped by its scope, with a code that
+            // says why, not told to enter a developer password it can never have.
             HttpResponse<String> console = post(client, base + "/api/mc/instances/nope/console/input",
                     "{\"line\":\"list\"}", null, token);
-            assertTrue(console.statusCode() != 403 || !console.body().contains("developer_elevation_required"),
-                    "an agent must not be asked for the developer password: " + console.body());
+            assertEquals(403, console.statusCode(), console.body());
+            assertTrue(console.body().contains("agent_scope_denied"), console.body());
+            assertFalse(console.body().contains("developer_elevation_required"), console.body());
         }
     }
 
@@ -171,7 +172,7 @@ class AgentGrantApiTest {
             String cookie = elevatedSession(client, base);
 
             HttpResponse<String> minted = post(client, base + "/api/developer/agent-token",
-                    "{\"label\":\"probe\",\"scopes\":[\"read\",\"instances\"]}", cookie);
+                    "{\"label\":\"probe\",\"scopes\":[\"read\"]}", cookie);
             assertEquals(200, minted.statusCode(), minted.body());
             String token = json(minted).get("token").getAsString();
 
@@ -242,56 +243,39 @@ class AgentGrantApiTest {
         // event streams are browser channels, never "a GET, so a read".
         assertNull(AgentScopes.required("GET", "/i/inst-a/"));
         assertNull(AgentScopes.required("GET", "/ws/events"));
-        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/health"));
+        // Read-only: the instance lists and one entry in them are the whole
+        // surface. Nothing an agent can call changes state, which is also why it
+        // can never stop the instance it is running in — that route is not on
+        // the menu, not merely refused by a special case.
+        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/instances"));
+        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/instances/a"));
+        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/instances/a/"));
+        assertEquals(AgentScopes.READ, AgentScopes.required("HEAD", "/api/instances"));
+        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/brands/kimi/instances"));
+        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/brands/kimi/instances/a"));
+        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/zcode/instances"));
+        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/zcode/instances/a"));
 
-        // Writes land in their own classes.
-        assertEquals(AgentScopes.MC, AgentScopes.required("POST", "/api/mc/instances/x/start"));
-        assertEquals(AgentScopes.INSTANCES, AgentScopes.required("POST", "/api/instances"));
-        assertEquals(AgentScopes.PLUGINS, AgentScopes.required("POST", "/api/instances/x/plugins/install"));
-        assertEquals(AgentScopes.CONFIG, AgentScopes.required("POST", "/api/settings/tls"));
+        // Nothing deeper and nothing else: logs, plugins, accounts, settings,
+        // health and every mutation are outside the grant.
+        assertNull(AgentScopes.required("GET", "/api/instances/a/logs"));
+        assertNull(AgentScopes.required("GET", "/api/instances/a/plugins"));
+        assertNull(AgentScopes.required("GET", "/api/accounts"));
+        assertNull(AgentScopes.required("GET", "/api/settings/registry"));
+        assertNull(AgentScopes.required("GET", "/api/health"));
+        assertNull(AgentScopes.required("POST", "/api/instances"));
+        assertNull(AgentScopes.required("DELETE", "/api/instances/a"));
+        assertNull(AgentScopes.required("POST", "/api/instances/a/stop"));
+        assertNull(AgentScopes.required("POST", "/api/instances/a/launch"));
+        assertNull(AgentScopes.required("POST", "/api/instances/a/terminal"));
+        assertNull(AgentScopes.required("POST", "/api/brands/kimi/instances/a/stop"));
+        assertNull(AgentScopes.required("DELETE", "/api/zcode/instances/a"));
 
         // A route nobody classified is closed, not open.
         assertNull(AgentScopes.required("POST", "/api/something-new"));
 
-        // Self-fatal needs both the route and the matching instance.
-        assertTrue(AgentScopes.selfFatal("POST", "/api/instances/a/stop", "a"));
-        assertTrue(AgentScopes.selfFatal("POST", "/api/instances/a/terminal", "a"));
-        assertTrue(AgentScopes.selfFatal("POST", "/api/instances/a/terminal/", "a"),
-                "a trailing slash must not open the way out");
-        assertTrue(AgentScopes.selfFatal("DELETE", "/api/instances/a", "a"));
-        assertFalse(AgentScopes.selfFatal("POST", "/api/instances/b/stop", "a"));
-        assertFalse(AgentScopes.selfFatal("POST", "/api/instances/a/launch", "a"));
-        // **Unbound is refused, not allowed.** A token from the panel's copy
-        // button carries no instance, so the panel cannot tell "that other one"
-        // from "myself" — and an agent that reads the prompt ("use /api") will
-        // eventually stop the instance it is running in. That is exactly how
-        // the first copy-button token killed its own session.
-        assertTrue(AgentScopes.selfFatal("POST", "/api/instances/a/stop", null));
-        assertTrue(AgentScopes.selfFatal("DELETE", "/api/instances/a", null));
-        assertTrue(AgentScopes.selfFatal("POST", "/api/instances/a/terminal", null));
-        // Not a fatal route: an unbound grant is still free to start things.
-        assertFalse(AgentScopes.selfFatal("POST", "/api/instances/a/launch", null));
-        assertFalse(AgentScopes.selfFatal("GET", "/api/instances/a", null));
-
-        // Brands and ZCode write the same three operations under their own
-        // prefixes. Covering only the dsh shape left an unbound token able to
-        // stop a brand instance — the same self-kill under another URL.
-        assertTrue(AgentScopes.selfFatal("POST", "/api/brands/kimi/instances/a/stop", "a"));
-        assertTrue(AgentScopes.selfFatal("DELETE", "/api/brands/kimi/instances/a", "a"));
-        assertTrue(AgentScopes.selfFatal("POST", "/api/brands/kimi/instances/a/terminal", "a"));
-        assertTrue(AgentScopes.selfFatal("POST", "/api/brands/kimi/instances/a/stop/", "a"),
-                "a trailing slash must not open the way out");
-        assertTrue(AgentScopes.selfFatal("POST", "/api/brands/kimi/instances/a/stop", null),
-                "an unbound token cannot be reasoned about here either");
-        assertFalse(AgentScopes.selfFatal("POST", "/api/brands/kimi/instances/b/stop", "a"));
-        assertTrue(AgentScopes.selfFatal("POST", "/api/zcode/instances/a/stop", "a"));
-        assertTrue(AgentScopes.selfFatal("DELETE", "/api/zcode/instances/a", null));
-        assertTrue(AgentScopes.selfFatal("POST", "/api/zcode/instances/a/terminal", "a"));
-        assertFalse(AgentScopes.selfFatal("POST", "/api/zcode/instances/b/stop", "a"));
-        // Launch is refused by the servlet when a terminal is open (it would close the
-        // caller); the scope table stays out of it so a launch with no terminal is
-        // still ordinary work.
-        assertFalse(AgentScopes.selfFatal("POST", "/api/brands/kimi/instances/a/launch", "a"));
+        // One class, on purpose.
+        assertEquals(Set.of(AgentScopes.READ), AgentScopes.KNOWN);
 
         // Defaults are read-only.
         assertEquals(Set.of(AgentScopes.READ), AgentScopes.DEFAULT);

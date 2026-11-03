@@ -30,14 +30,13 @@ import java.util.Set;
 /// session behind it. The design keeps the blast radius small in the only place
 /// the agent cannot rewrite — **here, in the root process**:
 ///
-/// 1. **Deny by default.** A request that matches no class below is refused,
-///    so a route added later is closed to agents until someone says otherwise.
-/// 2. **Self-fatal operations are refused.** Stopping the instance whose
-///    process is running the call, or opening its terminal (which stops the web
-///    runtime first), would kill the caller mid-request: the tool call could
-///    never return and the transcript would end in silence. The panel answers
-///    `409 self_operation_refused` instead, and the agent is expected to pick
-///    another route.
+/// 1. **Deny by default.** A request that matches no rule below is refused, so a
+///    route added later is closed to agents until someone says otherwise.
+/// 2. **Read-only.** A grant carries one class, [#READ], and it reaches only the
+///    instance lists and their details — no create, no stop, no delete, no
+///    terminal, no plugin or setting. Nothing an agent can call changes state,
+///    which is why it can also never kill the instance it is running in: the
+///    action that would do that is not on the menu.
 ///
 /// Credential-leaking reads are refused outright: `GET /api/instances/{id}/open`
 /// answers a URL carrying the instance's access token, `/api/exports/*` serves
@@ -48,28 +47,19 @@ import java.util.Set;
 ///
 /// The scope model also stops at the API boundary: `/i/*` (the reverse proxy)
 /// and `/ws/*` (the event streams) are browser channels and are never reachable
-/// with a grant, whatever class it names. An agent that needs an instance's
-/// state asks the API for it; the panel then records who asked.
+/// with a grant.
 @NotNullByDefault
 public final class AgentScopes {
 
-    /// Every `GET`/`HEAD` the panel serves, minus the leaks below.
+    /// Reading the instance lists (dsh, brands, ZCode) and one entry in them.
+    /// It is the only class a grant may hold.
     public static final String READ = "read";
-    /// `/api/mc/*`: the only surface where a stray process would corrupt state
-    /// the panel owns (port, world, console).
-    public static final String MC = "mc";
-    /// Creating, deleting, launching and stopping **other** instances.
-    public static final String INSTANCES = "instances";
-    /// Accounts, models, TLS, network trust, node runtimes, wallpapers.
-    public static final String CONFIG = "config";
-    /// Installing or removing plugins, packs and skills.
-    public static final String PLUGINS = "plugins";
 
-    /// Every class a grant may name, in the order the panel presents them.
-    public static final Set<String> KNOWN = Set.of(READ, MC, INSTANCES, CONFIG, PLUGINS);
+    /// Every class a grant may name. One entry on purpose: an agent gets a
+    /// window into the instance lists, not a hand on the panel.
+    public static final Set<String> KNOWN = Set.of(READ);
 
-    /// What a grant holds when the operator ticks nothing: reading the panel,
-    /// and nothing that changes it.
+    /// What a grant holds when the caller names nothing.
     public static final Set<String> DEFAULT = Set.of(READ);
 
     private AgentScopes() {
@@ -137,132 +127,39 @@ public final class AgentScopes {
         if (path == null || method == null) {
             return null;
         }
-        // Only `/api/*` is an API. The reverse proxy (`/i/*`), the event
-        // streams (`/ws/*`) and the static shell are browser channels: an agent
-        // reaches the panel through the API or not at all. The `GET -> READ`
-        // shortcut below must not swallow them — before this guard a
-        // `GET /i/<id>/...` counted as a read, so a `read` grant could have
-        // pulled a proxied instance page into a model's context.
-        if (!path.startsWith("/api/") && !path.equals("/api")) {
+        if (!"GET".equals(method) && !"HEAD".equals(method)) {
             return null;
         }
-        if ("GET".equals(method) || "HEAD".equals(method)) {
-            return READ;
-        }
-        if (path.startsWith("/api/mc/") || path.equals("/api/mc")) {
-            return MC;
-        }
-        if (path.startsWith("/api/instances")) {
-            return path.contains("/plugins") ? PLUGINS : INSTANCES;
-        }
-        if (path.startsWith("/api/zcode/") || path.startsWith("/api/brands/")) {
-            return INSTANCES;
-        }
-        if (path.startsWith("/api/plugins/") || path.startsWith("/api/packs/")) {
-            return PLUGINS;
-        }
-        if (path.startsWith("/api/accounts") || path.startsWith("/api/models")
-                || path.startsWith("/api/settings") || path.startsWith("/api/network")
-                || path.startsWith("/api/node") || path.startsWith("/api/vendors")
-                || path.startsWith("/api/wallpapers")) {
-            return CONFIG;
-        }
-        if (path.startsWith("/api/tasks")) {
-            return INSTANCES;
-        }
-        return null;
+        return isInstanceListRead(stripTrailingSlash(path)) ? READ : null;
     }
 
-    /// Whether this request would end the process making it.
+    /// Whether the path is one of the instance lists, or one entry in one of
+    /// them. Nothing deeper: a log, a plugin list or an export is not "the
+    /// list", and none of them is reachable with a grant.
     ///
-    /// Three categories write the same operations under different prefixes —
-    /// dsh (`/api/instances/{id}/…`), brands
-    /// (`/api/brands/{brand}/instances/{id}/…`) and ZCode
-    /// (`/api/zcode/instances/{id}/…`). Every one of them must be recognized:
-    /// covering only the dsh shape left an unbound token free to stop a brand
-    /// or ZCode instance, which is the same self-kill under another URL.
+    /// dsh:   `/api/instances`, `/api/instances/{id}`
+    /// brand: `/api/brands/{brand}/instances`, `.../instances/{id}`
+    /// ZCode: `/api/zcode/instances`, `/api/zcode/instances/{id}`
     ///
-    /// Only the instance that owns the token counts: stopping *another*
-    /// instance is ordinary work, and the agent may do it when its grant holds
-    /// [#INSTANCES]. Opening a terminal is included because the launcher stops
-    /// the web runtime first — the same death by a quieter route.
-    ///
-    /// @param method     the request method
-    /// @param path       the request path
-    /// @param instanceId the instance the grant is bound to, or `null`
-    /// @return whether the panel must refuse the request
-    public static boolean selfFatal(@Nullable String method, @Nullable String path, @Nullable String instanceId) {
-        if (path == null || method == null) {
-            return false;
-        }
-        String target = fatalTarget(stripTrailingSlash(path), method);
-        if (target == null) {
-            return false;
-        }
-        // An **unbound** grant cannot be reasoned about: the panel has no idea
-        // which instance the caller runs in, so it cannot tell "stop that other
-        // one" from "stop myself". Refusing is the only safe answer — a token
-        // handed over by the panel's copy button starts out unbound, and an
-        // agent told to "use /api" will eventually try to restart the thing it
-        // is running inside.
-        if (instanceId == null || instanceId.isBlank()) {
-            return true;
-        }
-        return target.equals(instanceId);
-    }
-
-    /// The instance a route would stop, delete or take over, or `null` when the
-    /// route is not one of those.
-    ///
-    /// @param route  the path without a trailing slash
-    /// @param method the request method
-    /// @return the instance id the route targets, or `null` for a non-fatal route
-    private static @Nullable String fatalTarget(String route, String method) {
+    /// @param route the path without a trailing slash
+    /// @return whether an agent may read it
+    private static boolean isInstanceListRead(String route) {
         String[] parts = route.split("/", -1);
-        // ["", "api", category, …]
-        if (parts.length < 4 || !"api".equals(parts[1])) {
-            return null;
+        if (parts.length < 3 || !"api".equals(parts[1])) {
+            return false;
         }
         if ("instances".equals(parts[2])) {
-            if (parts.length == 4 && "DELETE".equals(method)) {
-                return parts[3];
-            }
-            if (parts.length == 5 && "POST".equals(method) && "stop".equals(parts[4])) {
-                return parts[3];
-            }
-            if (parts.length == 5 && "terminal".equals(parts[4])) {
-                // POST opens it (which stops the web runtime first), DELETE kills it.
-                return parts[3];
-            }
-            return null;
+            return parts.length == 3 || parts.length == 4;
         }
         if ("zcode".equals(parts[2])) {
-            if (parts.length < 5 || !"instances".equals(parts[3])) {
-                return null;
-            }
-            String id = parts[4];
-            if (parts.length == 5 && "DELETE".equals(method)) {
-                return id;
-            }
-            if (parts.length == 6 && "POST".equals(method) && "stop".equals(parts[5])) {
-                return id;
-            }
-            return parts.length == 6 && "terminal".equals(parts[5]) ? id : null;
+            return parts.length >= 4 && "instances".equals(parts[3])
+                    && (parts.length == 4 || parts.length == 5);
         }
         if ("brands".equals(parts[2])) {
-            // ["", "api", "brands", "<brand>", "instances", "<id>", …]
-            if (parts.length < 6 || !"instances".equals(parts[4])) {
-                return null;
-            }
-            String id = parts[5];
-            if (parts.length == 6 && "DELETE".equals(method)) {
-                return id;
-            }
-            if (parts.length == 7 && "POST".equals(method) && "stop".equals(parts[6])) {
-                return id;
-            }
-            return parts.length == 7 && "terminal".equals(parts[6]) ? id : null;
+            return parts.length >= 5 && "instances".equals(parts[4])
+                    && (parts.length == 5 || parts.length == 6);
         }
-        return null;
+        return false;
     }
+
 }

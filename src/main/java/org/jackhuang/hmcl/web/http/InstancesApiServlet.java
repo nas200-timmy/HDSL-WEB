@@ -431,14 +431,6 @@ public final class InstancesApiServlet extends HttpServlet {
         // process is the terminal reads STOPPED and passes the gate below —
         // which is exactly why the close cannot wait for it.
         //
-        // An agent must not take over a terminal it may itself be running in:
-        // `close` would end the caller mid-request. A person clicking launch
-        // still takes over, because a person is not the process being replaced.
-        if (AuthFilter.isAgent(request) && instanceTerminal.isOpen("dsh", id)) {
-            Json.error(response, HttpServletResponse.SC_CONFLICT,
-                    "self_operation_refused: launching would close a terminal the agent may be running in");
-            return;
-        }
         instanceTerminal.close("dsh", id);
         String state = runtime.stateOf(id);
         if (state.equals("RUNNING") || state.equals("STARTING") || state.equals("STOPPING")) {

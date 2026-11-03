@@ -93,9 +93,10 @@ class AgentPasswordTest {
             assertEquals(200, post(client, base + "/api/developer/agent-password",
                     "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\"]}", cookie).statusCode());
 
-            // The caller asks for more than the cap; it gets the cap.
+            // The caller asks for a class the build no longer offers; it is
+            // refused by name rather than silently dropped.
             HttpResponse<String> minted = post(client, base + "/api/developer/agent-auth",
-                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"label\":\"probe\",\"scopes\":[\"read\",\"mc\"]}",
+                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"label\":\"probe\",\"scopes\":[\"read\"]}",
                     null);
             assertEquals(200, minted.statusCode(), minted.body());
             JsonObject grant = json(minted);
@@ -105,12 +106,12 @@ class AgentPasswordTest {
             assertEquals(200, getWithBearer(client, base + "/api/instances", token).statusCode());
             assertEquals(403, post(client, base + "/api/mc/instances/x/start", "{}", null, token).statusCode());
 
-            // Asking for a class the cap does not hold is refused, not silently
-            // widened: the caller learns the secret's shape.
+            // Asking for a class this build does not know is refused, not
+            // silently widened: the caller learns the secret's shape.
             HttpResponse<String> tooWide = post(client, base + "/api/developer/agent-auth",
                     "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"plugins\"]}", null);
-            assertEquals(403, tooWide.statusCode(), tooWide.body());
-            assertTrue(tooWide.body().contains("agent_scope_denied"));
+            assertEquals(400, tooWide.statusCode(), tooWide.body());
+            assertTrue(tooWide.body().contains("unknown_scope"));
         }
     }
 
@@ -239,25 +240,31 @@ class AgentPasswordTest {
             String base = base(running);
             String cookie = elevatedSession(client, base);
             assertEquals(200, post(client, base + "/api/developer/agent-password",
-                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\",\"mc\"]}", cookie).statusCode());
+                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\"]}", cookie).statusCode());
 
             String token = json(post(client, base + "/api/developer/agent-auth",
-                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\",\"mc\"]}", null))
+                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\"]}", null))
                     .get("token").getAsString();
 
-            // Narrowing what a secret may grant is a policy edit: it must not need the
+            // Editing what a secret may grant is a policy edit: it must not need the
             // secret again, or the page shows a selection that never reaches the server.
             HttpResponse<String> narrowed = post(client, base + "/api/developer/agent-password/scopes",
                     "{\"scopes\":[\"read\"]}", cookie);
             assertEquals(200, narrowed.statusCode(), narrowed.body());
             assertEquals("[\"read\"]", json(narrowed).get("scopes").toString());
 
-            // The ticket minted under the wider cap is gone with it.
+            // The ticket minted before the edit is gone with it.
             assertEquals(401, getWithBearer(client, base + "/api/instances", token).statusCode());
 
-            // The password itself still works, and now mints only the narrowed cap.
+            // A class this build no longer offers cannot be written into the cap.
+            HttpResponse<String> removed = post(client, base + "/api/developer/agent-password/scopes",
+                    "{\"scopes\":[\"mc\"]}", cookie);
+            assertEquals(400, removed.statusCode(), removed.body());
+            assertTrue(removed.body().contains("unknown_scope"));
+
+            // The password itself still works, and mints the only class there is.
             HttpResponse<String> minted = post(client, base + "/api/developer/agent-auth",
-                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\",\"mc\"]}", null);
+                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\"]}", null);
             assertEquals(200, minted.statusCode(), minted.body());
             assertEquals("[\"read\"]", json(minted).get("scopes").toString());
         }

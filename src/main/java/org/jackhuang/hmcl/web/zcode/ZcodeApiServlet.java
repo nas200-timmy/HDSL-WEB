@@ -186,7 +186,7 @@ public final class ZcodeApiServlet extends HttpServlet {
                     return;
                 }
                 if (segments.length == 3 && "launch".equals(segments[2]) && "POST".equals(request.getMethod())) {
-                    launch(request, response, id);
+                    launch(response, id);
                     return;
                 }
                 if (segments.length == 3 && "stop".equals(segments[2]) && "POST".equals(request.getMethod())) {
@@ -370,7 +370,7 @@ public final class ZcodeApiServlet extends HttpServlet {
 
     // ------------------------------------------------------------ launch / stop --
 
-    private void launch(HttpServletRequest request, HttpServletResponse response, String id) throws IOException {
+    private void launch(HttpServletResponse response, String id) throws IOException {
         ZcodeInstance instance = manager.find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such ZCode instance");
@@ -385,14 +385,6 @@ public final class ZcodeApiServlet extends HttpServlet {
         // web mode only starts once the terminal is gone, or two processes
         // would write the same config.
         //
-        // An agent must not take over a terminal it may itself be running in:
-        // `close` would end the caller mid-request. A person clicking launch
-        // still takes over, because a person is not the process being replaced.
-        if (AuthFilter.isAgent(request) && instanceTerminal.isOpen(ZcodeTui.BRAND, id)) {
-            Json.error(response, HttpServletResponse.SC_CONFLICT,
-                    "self_operation_refused: launching would close a terminal the agent may be running in");
-            return;
-        }
         instanceTerminal.close(ZcodeTui.BRAND, id);
         // The panel's managed runtime is a first-class answer: a bare `node` is what a
         // Windows deployment does *not* have, and this is where it used to fail
