@@ -360,6 +360,65 @@ class AgentGrantApiTest {
                 });
     }
 
+    /// 一键签票回来了：提权会话直接签、未绑定也敢发——因为挡住自杀的已经是
+    /// 请求时的身份推导，不是签发时写进票里的那行字。
+    @Test
+    void anOperatorMintedTokenCannotKillItsHolderEither() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "https://127.0.0.1:" + running.port();
+            String cookie = elevatedSession(client, base);
+
+            // 没有会话连门都进不去；提权会话可以直接签。
+            assertEquals(401, post(client, base + "/api/developer/agent-token",
+                    "{\"label\":\"nope\",\"scopes\":[\"read\"]}", null).statusCode());
+
+            HttpResponse<String> minted = post(client, base + "/api/developer/agent-token",
+                    "{\"label\":\"one-click\",\"scopes\":[\"read\",\"instances\"]}", cookie);
+            assertEquals(200, minted.statusCode(), minted.body());
+            JsonObject token = json(minted);
+            String bearer = token.get("token").getAsString();
+            assertTrue(token.get("scopes").toString().contains("instances"), minted.body());
+
+            // 用起来与任何票一样。
+            assertEquals(200, getWithBearer(client, base + "/api/instances", bearer).statusCode());
+
+            // 致命操作也像任何票一样被拒：未绑定、且本测试的 JVM 谁的实例
+            // 都不是，三个家族都答 409。
+            HttpResponse<String> stop = post(client, base + "/api/instances/inst-a/stop", "{}", null, bearer);
+            assertEquals(409, stop.statusCode(), stop.body());
+            assertTrue(stop.body().contains("self_operation_refused"), stop.body());
+            HttpResponse<String> brand = post(client, base + "/api/brands/kimi/instances/inst-a/stop", "{}", null, bearer);
+            assertEquals(409, brand.statusCode(), brand.body());
+
+            // 绑定了实例的票指名道姓：那儿拒绝，别处放行。
+            HttpResponse<String> bound = post(client, base + "/api/developer/agent-token",
+                    "{\"label\":\"bound\",\"scopes\":[\"instances\"],\"instanceId\":\"inst-a\"}", cookie);
+            assertEquals(200, bound.statusCode(), bound.body());
+            String boundBearer = json(bound).get("token").getAsString();
+            HttpResponse<String> self = post(client, base + "/api/zcode/instances/inst-a/stop", "{}", null, boundBearer);
+            assertEquals(409, self.statusCode(), self.body());
+            HttpResponse<String> other = post(client, base + "/api/instances/inst-b/stop", "{}", null, boundBearer);
+            assertTrue(other.statusCode() != 409 && other.statusCode() != 403,
+                    "stopping another instance must pass the gate, got " + other.statusCode() + " " + other.body());
+
+            // 票签不出自己的继任者：developer 路由对 agent 一律关闭。
+            HttpResponse<String> relay = post(client, base + "/api/developer/agent-token",
+                    "{\"label\":\"relay\",\"scopes\":[\"instances\"]}", null, bearer);
+            assertEquals(403, relay.statusCode(), relay.body());
+            assertTrue(relay.body().contains("agent_scope_denied"), relay.body());
+
+            // 操作员签的票同样进列表、同样掐得掉。
+            HttpResponse<String> listed = get(client, base + "/api/developer/agent-grants", cookie);
+            assertEquals(200, listed.statusCode(), listed.body());
+            String id = token.get("id").getAsString();
+            assertTrue(listed.body().contains(id), listed.body());
+            assertFalse(listed.body().contains(bearer), "the listing must never carry the token");
+            assertEquals(200, delete(client, base + "/api/developer/agent-grants/" + id, cookie).statusCode());
+            assertEquals(401, getWithBearer(client, base + "/api/instances", bearer).statusCode());
+        }
+    }
+
     private static HttpResponse<String> deleteWithBearer(HttpClient client, String url, String bearer)
             throws Exception {
         return client.send(HttpRequest.newBuilder(URI.create(url))

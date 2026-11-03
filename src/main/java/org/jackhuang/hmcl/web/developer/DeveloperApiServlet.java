@@ -176,6 +176,10 @@ public final class DeveloperApiServlet extends HttpServlet {
             agentAuth(request, response);
             return;
         }
+        if ("/agent-token".equals(path) && "POST".equals(method)) {
+            mintAgentToken(request, response);
+            return;
+        }
         if (path != null && path.startsWith("/agent-grants/") && "DELETE".equals(method)) {
             revokeAgentGrant(response, path.substring("/agent-grants/".length()));
             return;
@@ -576,6 +580,97 @@ public final class DeveloperApiServlet extends HttpServlet {
         }
         JsonArray array = new JsonArray();
         granted.forEach(array::add);
+        answer.add("scopes", array);
+        Json.write(response, answer);
+    }
+
+    /// `POST /api/developer/agent-token`: an elevated session signs a bearer
+    /// token the operator can hand to an agent directly — the one-click path,
+    /// back because the fatal-operation gate no longer trusts what a token
+    /// claims about its holder.
+    ///
+    /// The token is the same kind [#agentAuth] mints: same registry, same
+    /// listing, same revocation, same death when the elevation that signed it
+    /// ends. What differs is who asked — the operator, with the developer
+    /// password already proved — so the scopes are the operator's own choice
+    /// and the agent password's cap does not apply. Agents cannot reach this
+    /// route: `AgentScopes#forbidden` closes all of `/api/developer/*` to
+    /// them, so no token can sign its own successor.
+    ///
+    /// An `instanceId` binds the token to one instance. On Linux that is
+    /// optional — the gate derives the caller's instance from the connection
+    /// on every request and refuses self-directed fatal operations whatever
+    /// the token says — but elsewhere the binding is the only guard left, and
+    /// an unbound token there simply cannot stop, delete or take over.
+    private void mintAgentToken(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireTls(request, response)) {
+            return;
+        }
+        if (!elevation.require(keyOf(request), sessionAlive(request))) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return;
+        }
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        String label = stringField(body, "label");
+        String instanceId = stringField(body, "instanceId");
+        Set<String> scopes = new LinkedHashSet<>();
+        if (body.has("scopes") && body.get("scopes").isJsonArray()) {
+            for (var element : body.getAsJsonArray("scopes")) {
+                if (element.isJsonPrimitive()) {
+                    scopes.add(element.getAsString());
+                }
+            }
+        }
+        if (scopes.isEmpty()) {
+            scopes.addAll(AgentScopes.DEFAULT);
+        }
+        for (String scope : scopes) {
+            if (!AgentScopes.known(scope)) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "unknown_scope: " + scope + " (known: " + AgentScopes.KNOWN + ")");
+                return;
+            }
+        }
+        // The agent's life is capped at the operator's own ceiling. A longer
+        // claim is clamped, not refused: the settings page renders the result,
+        // so the operator sees what they actually got.
+        Duration ttl = DeveloperElevation.EXTENDED_TTL;
+        if (body.has("ttlSeconds") && body.get("ttlSeconds").isJsonPrimitive()) {
+            long seconds = body.get("ttlSeconds").getAsLong();
+            if (seconds > 0) {
+                ttl = Duration.ofSeconds(seconds);
+            }
+        }
+        String token = elevation.mintAgentToken(label, scopes, instanceId, ttl,
+                elevation.latestHumanExpiry());
+        var grant = elevation.agentGrant(token);
+        java.util.Map<String, Object> minted = new java.util.LinkedHashMap<>();
+        minted.put("scopes", java.util.List.copyOf(scopes));
+        if (instanceId != null) {
+            minted.put("caller", instanceId);
+        }
+        if (grant != null) {
+            minted.put("expiresAt", grant.expiresAt().toString());
+        }
+        AuditLog.log(AuditLog.Channel.WEB, "developer.agent", grant == null ? null : grant.id(),
+                "mint", actorOf(request), request.getRemoteAddr(), minted);
+        JsonObject answer = new JsonObject();
+        answer.addProperty("token", token);
+        if (grant != null) {
+            answer.addProperty("id", grant.id());
+            answer.addProperty("expiresAt", grant.expiresAt().toString());
+            answer.addProperty("label", grant.label());
+            if (grant.instanceId() != null) {
+                answer.addProperty("instanceId", grant.instanceId());
+            }
+        }
+        JsonArray array = new JsonArray();
+        scopes.forEach(array::add);
         answer.add("scopes", array);
         Json.write(response, answer);
     }

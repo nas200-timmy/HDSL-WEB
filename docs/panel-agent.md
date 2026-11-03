@@ -1,8 +1,10 @@
 # 面板与 agent：第二把钥匙
 
-> 状态：面板侧、设置页（开发者 → agent 访问）与授权列表均已落地。agent 侧的桥插件已移除，
-> 票由 agent 用 **agent 密码**自己换（`/api/developer/agent-auth`），之后用
-> `Authorization: Bearer` 调 `/api`。面板不提供「生成票」的按钮或端点。
+> 状态：面板侧、设置页（开发者 → agent 访问）与授权列表均已落地。agent 侧的桥插件已移除。
+> 换票有两条路：agent 用 **agent 密码**自己换（`/api/developer/agent-auth`，免会话），或
+> 操作员在设置页用提权会话**直接签一张并一键复制**（`/api/developer/agent-token`）。之后
+> 都用 `Authorization: Bearer` 调 `/api`。两条路签出的是同一种票；操作员签票之所以敢
+> 不绑定实例，是因为自杀闸认的是**请求时的调用者身份**，不是票上写的那行字。
 
 ## 1. 要解决的问题
 
@@ -21,7 +23,9 @@ agent 能做的事从来不是问题——它本来就能用 shell 起一个 Min
 ```
 开发者密码  ──/api/developer/elevate──▶  会话提权（30 分钟，可延一次到 3 小时）——人用
 
-agent 密码  ──/api/developer/agent-auth──▶  直接发票，不需要会话（curl 可用）
+agent 密码  ──/api/developer/agent-auth──▶  agent 自己换票，不需要会话（curl 可用）
+
+提权会话    ──/api/developer/agent-token──▶  操作员直接签票（设置页一键复制）
 ```
 
 **两个密码存在两个文件里**（`auth/developer.json` / `auth/agent.json`），由两个不同的入口
@@ -30,6 +34,13 @@ agent 密码  ──/api/developer/agent-auth──▶  直接发票，不需要
 - 网页的提权表单永远**不会**接受 agent 密码——把较小的那串密码输进浏览器里，得到的是
   "密码错误"，而不是提权；
 - agent 那扇门也**不会**接受开发者密码。
+
+第三条路（`agent-token`）不是第三把钥匙：它就是提权会话本身在签票，范围由操作员当场勾选，
+不受 agent 密码上限的约束——因为授权人就是操作员本人。签出的票与密码换的票同生同死：进
+同一个注册表、同一张列表、同样随提权结束失效、同样掐得掉。agent 拿着这种票**签不出下一
+张**（`/api/developer/*` 对票关闭）。它曾经被整套撤掉，因为那时挡自杀的只有票上的绑定，
+操作员签出的未绑定票等于把枪递给 agent；现在闸门认请求时的调用者身份（见 §3），这条路
+才敢回来。
 
 ### 借来的权力：agent 密码必须先有人提权
 
@@ -190,8 +201,9 @@ outcome 记成 `self_stop` / `self_delete` / `self_launch`，不与 `success` �
 
 | 方法 | 路径 | 需要 | 作用 |
 |---|---|---|---|
-| `POST` | `/api/developer/agent-auth` | 仅 agent 密码（**免会话**），且必须有人已提权 | 换一张受 cap 限制的票；**绑定由这条连接推导**（住在实例里换票即自动绑对），推导不出才用 body 里的 `instanceId` |
-| `GET` | `/api/developer/agent-grants` | 已提权 | 列出当前所有票 |
+| `POST` | `/api/developer/agent-auth` | 仅 agent 密码（**免会话**），且必须有人已提权 | agent 自己换票；**绑定由这条连接推导**（住在实例里换票即自动绑对），推导不出才用 body 里的 `instanceId` |
+| `POST` | `/api/developer/agent-token` | 已提权的会话 | 操作员直接签票（设置页「生成票并一键复制」）；`instanceId` 可选，Linux 上留空也安全 |
+| `GET` | `/api/developer/agent-grants` | 已提权 | 列出当前所有票（密码换的与签的混在一起） |
 | `DELETE` | `/api/developer/agent-grants/{id}` | 已提权 | 掐掉一张 |
 | `GET/POST` | `/api/developer/agent-password[/clear]` | 已提权 | 设置/查看/清除 agent 密码与它的 cap |
 

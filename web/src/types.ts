@@ -389,6 +389,16 @@ export interface AgentGrantRow {
   expiresAt: string;
 }
 
+/** `POST /api/developer/agent-token` 的应答：token 只在这里出现一次。 */
+export interface AgentToken {
+  token: string;
+  id: string;
+  label: string;
+  scopes: string[];
+  instanceId?: string;
+  expiresAt: string;
+}
+
 export interface DeveloperStatus {
   /** 是否已设置开发者密码 */
   devPasswordSet: boolean;

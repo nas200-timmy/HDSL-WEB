@@ -2,6 +2,7 @@ import type {
   Account,
   AgentGrantRow,
   AgentPasswordStatus,
+  AgentToken,
   BrandAdminCredentials,
   BrandSettings,
   BrandSourceProbe,
@@ -216,6 +217,9 @@ export const api = {
     request<AgentPasswordStatus>("/api/developer/agent-password/clear", { method: "POST" }),
   /** 当前活着的 agent 票（不含 token 本身） */
   agentGrants: () => request<{ grants: AgentGrantRow[] }>("/api/developer/agent-grants"),
+  /** 用当前提权会话直接签一张票交给 agent；token 只在这个应答里出现一次 */
+  mintAgentToken: (body: { label?: string; scopes: string[]; instanceId?: string; ttlSeconds?: number }) =>
+    request<AgentToken>("/api/developer/agent-token", jsonInit("POST", body)),
   /** 掐掉一张票，立即生效 */
   revokeAgentGrant: (id: string) =>
     request<{ ok: boolean }>(`/api/developer/agent-grants/${encodeURIComponent(id)}`, { method: "DELETE" }),
