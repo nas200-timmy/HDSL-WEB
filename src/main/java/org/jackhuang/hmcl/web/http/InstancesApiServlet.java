@@ -430,7 +430,6 @@ public final class InstancesApiServlet extends HttpServlet {
         // `stateOf` only knows the web process, so an instance whose only
         // process is the terminal reads STOPPED and passes the gate below —
         // which is exactly why the close cannot wait for it.
-        //
         instanceTerminal.close("dsh", id);
         String state = runtime.stateOf(id);
         if (state.equals("RUNNING") || state.equals("STARTING") || state.equals("STOPPING")) {

@@ -201,6 +201,14 @@ public final class AuthFilter implements Filter {
                     "agent_scope_denied: " + (needed == null ? "this route has no agent scope" : needed));
             return false;
         }
+        if (org.jackhuang.hmcl.web.developer.AgentScopes.selfFatal(method, path, grant.instanceId())) {
+            // The tool call could never return: the process serving it is the
+            // one being stopped. Refusing is honest; queueing would promise an
+            // executor that no longer exists.
+            Json.error(resp, HttpServletResponse.SC_CONFLICT,
+                    "self_operation_refused: an agent cannot stop or take over its own instance");
+            return false;
+        }
         req.setAttribute(SESSION_ATTRIBUTE, new AuthService.Session("agent:" + grant.label(), grant.expiresAt()));
         req.setAttribute(AGENT_GRANT_ATTRIBUTE, grant);
         return true;

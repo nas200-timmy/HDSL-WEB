@@ -147,10 +147,6 @@ public final class DeveloperApiServlet extends HttpServlet {
             revoke(request, response);
             return;
         }
-        if ("/agent-token".equals(path) && "POST".equals(method)) {
-            mintAgentToken(request, response);
-            return;
-        }
         if ("/agent-grants".equals(path) && "GET".equals(method)) {
             listAgentGrants(response);
             return;
@@ -268,79 +264,6 @@ public final class DeveloperApiServlet extends HttpServlet {
         Json.write(response, body);
     }
 
-    /// `POST /api/developer/agent-token`: exchanges an **elevated** session for
-    /// a bearer token an AI agent can carry itself.
-    ///
-    /// The developer password was proved by `/elevate`; this route only decides
-    /// **how far** the token reaches. Keeping the two apart is what lets the
-    /// panel record a different actor, a narrower scope and a shorter life than
-    /// the operator's own elevation — and lets revoking one agent leave the
-    /// operator signed in.
-    ///
-    /// The scopes name [AgentScopes] classes. Omitted or empty means
-    /// [AgentScopes#DEFAULT] (read only), never "everything": a caller that
-    /// forgot to say what it wanted must not get the most.
-    private void mintAgentToken(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        if (!requireTls(request, response)) {
-            return;
-        }
-        if (!elevation.require(keyOf(request), sessionAlive(request))) {
-            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
-                    "developer_elevation_required: elevate with the developer password first");
-            return;
-        }
-        JsonObject body = readJson(request);
-        if (body == null) {
-            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
-            return;
-        }
-        String label = stringField(body, "label");
-        Set<String> scopes = new LinkedHashSet<>();
-        if (body.has("scopes") && body.get("scopes").isJsonArray()) {
-            for (var element : body.getAsJsonArray("scopes")) {
-                if (element.isJsonPrimitive()) {
-                    scopes.add(element.getAsString());
-                }
-            }
-        }
-        if (scopes.isEmpty()) {
-            scopes.addAll(AgentScopes.DEFAULT);
-        }
-        for (String scope : scopes) {
-            if (!AgentScopes.known(scope)) {
-                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
-                        "unknown_scope: " + scope + " (known: " + AgentScopes.KNOWN + ")");
-                return;
-            }
-        }
-        // The agent's life is capped at the operator's own ceiling. A longer
-        // claim is clamped, not refused: the settings page renders the result,
-        // so the operator sees what they actually got.
-        Duration ttl = DeveloperElevation.EXTENDED_TTL;
-        if (body.has("ttlSeconds") && body.get("ttlSeconds").isJsonPrimitive()) {
-            long seconds = body.get("ttlSeconds").getAsLong();
-            if (seconds > 0) {
-                ttl = Duration.ofSeconds(seconds);
-            }
-        }
-        String token = elevation.mintAgentToken(label, scopes, ttl,
-                elevation.latestHumanExpiry());
-        var grant = elevation.agentGrant(token);
-        AuditLog.log(AuditLog.Channel.WEB, "developer.agent", grant == null ? null : grant.id(),
-                "mint", actorOf(request), request.getRemoteAddr());
-        JsonObject answer = new JsonObject();
-        answer.addProperty("token", token);
-        if (grant != null) {
-            answer.addProperty("id", grant.id());
-            answer.addProperty("expiresAt", grant.expiresAt().toString());
-            answer.addProperty("label", grant.label());
-        }
-        JsonArray array = new JsonArray();
-        scopes.forEach(array::add);
-        answer.add("scopes", array);
-        Json.write(response, answer);
-    }
-
     /// `GET /api/developer/agent-grants`: every live agent grant, for the
     /// panel's list. The tokens themselves never leave the server.
     private void listAgentGrants(HttpServletResponse response) throws IOException {
@@ -351,6 +274,9 @@ public final class DeveloperApiServlet extends HttpServlet {
             row.addProperty("id", grant.id());
             row.addProperty("label", grant.label());
             row.addProperty("expiresAt", grant.expiresAt().toString());
+            if (grant.instanceId() != null) {
+                row.addProperty("instanceId", grant.instanceId());
+            }
             JsonArray scopes = new JsonArray();
             grant.scopes().forEach(scopes::add);
             row.add("scopes", scopes);
@@ -514,7 +440,7 @@ public final class DeveloperApiServlet extends HttpServlet {
         agentPasswordStatus(response);
     }
 
-    /// `POST /api/developer/agent-auth {password, label}`: the door
+    /// `POST /api/developer/agent-auth {password, label, instanceId?}`: the door
     /// a script or an agent itself knocks on.
     ///
     /// It is reachable **without a session** — that is the whole point, a curl
@@ -575,6 +501,7 @@ public final class DeveloperApiServlet extends HttpServlet {
         }
         agentPasswordThrottle.clear(address);
         String label = stringField(body, "label");
+        String instanceId = stringField(body, "instanceId");
         // The request may narrow the cap, never widen it.
         Set<String> requested = new LinkedHashSet<>();
         if (body.has("scopes") && body.get("scopes").isJsonArray()) {
@@ -584,29 +511,14 @@ public final class DeveloperApiServlet extends HttpServlet {
                 }
             }
         }
-        // The scope classes shrank to read-only. A stored cap may still name
-        // classes this build no longer offers; those grant nothing, and a cap
-        // that names none of them falls back to the default so an operator who
-        // set the password before the change is not locked out.
-        Set<String> cap = new LinkedHashSet<>();
-        java.util.List<String> stored = agentAuth.scopes();
-        if (stored != null) {
-            for (String scope : stored) {
-                if (AgentScopes.known(scope)) {
-                    cap.add(scope);
-                }
-            }
-        }
-        if (cap.isEmpty()) {
-            cap.addAll(AgentScopes.DEFAULT);
-        }
+        java.util.List<String> cap = agentAuth.scopes();
         Set<String> granted = new LinkedHashSet<>();
         for (String scope : (requested.isEmpty() ? AgentScopes.DEFAULT : requested)) {
             if (!AgentScopes.known(scope)) {
                 Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "unknown_scope: " + scope);
                 return;
             }
-            if (cap.contains(scope)) {
+            if (cap != null && cap.contains(scope)) {
                 granted.add(scope);
             }
         }
@@ -623,7 +535,7 @@ public final class DeveloperApiServlet extends HttpServlet {
                 ttl = Duration.ofSeconds(seconds);
             }
         }
-        String token = elevation.mintAgentToken(label, granted, ttl, humanExpiry);
+        String token = elevation.mintAgentToken(label, granted, instanceId, ttl, humanExpiry);
         var grant = elevation.agentGrant(token);
         AuditLog.log(AuditLog.Channel.WEB, "agent.auth", grant == null ? null : grant.id(),
                 "success", "agent:" + (label == null || label.isBlank() ? "agent" : label), address);
@@ -632,6 +544,9 @@ public final class DeveloperApiServlet extends HttpServlet {
         if (grant != null) {
             answer.addProperty("id", grant.id());
             answer.addProperty("expiresAt", grant.expiresAt().toString());
+            if (grant.instanceId() != null) {
+                answer.addProperty("instanceId", grant.instanceId());
+            }
         }
         JsonArray array = new JsonArray();
         granted.forEach(array::add);

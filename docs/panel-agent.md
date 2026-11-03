@@ -2,10 +2,6 @@
 
 > 状态：面板侧、设置页（开发者 → agent 访问）与授权列表均已落地。agent 侧的桥插件已移除，
 > 票由面板签发后交给 agent，直接用 `Authorization: Bearer` 调 `/api`。
->
-> 2026-11 起票是**只读**的：只能读实例列表与单个实例的状态。没有任何写操作——不创建、
-> 不启动、不停止、不删除、不开终端、不改设置。这同时消掉了"agent 停掉跑着自己的实例"
-> 那类自杀问题：会结束调用者进程的动作根本不在授权面里。
 
 ## 1. 要解决的问题
 
@@ -16,18 +12,13 @@ agent 能做的事从来不是问题——它本来就能用 shell 起一个 Min
 所以这套东西的目标不是"给 agent 能力"，是**让正确做法比旁路更省事**：
 
 1. 模型知道自己在面板里（`systemPrompt.context`）；
-2. 需要看实例状态时走面板的 API（只读列表与单实例），而不是自己扫端口；
-3. 出了问题能查到是谁看的（审计里的 `agent:<label>`）。
-
-写操作（建、启、停、删、开终端）不在这套授权里：它们仍由人来做，或者在明确人工确认后由
-操作员自己执行。这是 2026-11 收口后的边界。
+2. 需要操作时走面板自己会记账的那条路（工具 + `/api`）；
+3. 出了问题能查到是谁干的（审计里的 `agent:<label>`）。
 
 ## 2. 两把锁，两扇门
 
 ```
-开发者密码  ──/api/developer/elevate──▶  会话提权（30 分钟，可延一次到 3 小时）
-                                          │
-                                          └─/api/developer/agent-token──▶ 给 agent 的票
+开发者密码  ──/api/developer/elevate──▶  会话提权（30 分钟，可延一次到 3 小时）——人用
 
 agent 密码  ──/api/developer/agent-auth──▶  直接发票，不需要会话（curl 可用）
 ```
@@ -74,20 +65,25 @@ agent 密码**不是**一条独立的路。用它换票之前，必须已经有�
 
 ## 3. 范围（scope）在服务端定，不在客户端里
 
-`AgentScopes` 只认一个类：
+`AgentScopes` 把面板的接口分成五类：
 
 | scope | 覆盖 |
 |---|---|
-| `read` | `GET /api/instances`、`GET /api/instances/{id}`，以及品牌 / ZCode 的实例列表与条目 |
+| `read` | `/api/*` 的 GET（凭据类路由除外，见下） |
+| `mc` | `/api/mc/*` 的启停与控制台 |
+| `instances` | 建/删/启停**别的**实例 |
+| `config` | 账号、模型、TLS、网络、Node 运行时、壁纸 |
+| `plugins` | 装/卸插件、整合包、技能 |
 
-没有 `mc` / `instances` / `config` / `plugins`。agent 不能创建、启动、停止、删除实例，不能
-开终端，不能改插件、账号或设置。**写操作不是在某一层被特判拒绝，而是根本不在授权面里。**
-
-三条额外规则，都在 `AuthFilter` 里：
+四条额外规则，都在 `AuthFilter` 里：
 
 - **未分类的路由一律拒绝**（默认关闭），新接口不会因为没人记得加规则而对 agent 敞开；
-  列表之外的读——日志、插件清单、导出、健康检查——同样在拒绝之列。
-- **只在 API 边界内**：`/i/*`（反代）与 `/ws/*`（事件流）是浏览器通道，任何持票调用都不放行。
+- **自杀类操作一律拒绝**（409 `self_operation_refused`）：停自己所在的实例、开自己的终端
+  （开终端会先停 web 运行时）。这类操作如果放行，工具调用永远拿不到返回——进程正是被调用
+  方自己杀掉的。**拒绝比排队诚实**：排队等于承诺一个已经不存在的执行者。
+- **只在 API 边界内**：`/i/*`（反代）与 `/ws/*`（事件流）是浏览器通道，任何 scope 都不放行。
+  `read` 不等于"所有 GET"——它只覆盖 `/api/*`。agent 要实例状态就问 API，面板因此记得住
+  是谁问的。
 - **凭据不出面板**：`/api/brands/*/admin-password`、`/api/exports/*`、`*/open`，以及整个
   `/developer/*`、`/auth/*`，都在网关拒绝，与 scope 无关。字段也要摘：ZCode 的 `token`、
   dsh 实例的 `url`（query 里是访问 token）对 agent 不输出。
@@ -95,9 +91,9 @@ agent 密码**不是**一条独立的路。用它换票之前，必须已经有�
 判断用的是 **servlet 实际路由的那份解码路径**，不是原始 URI：`%61dmin-password` 在原始
 URI 里不叫这个名字，经容器解码后就是它。读原始 URI 的检查等于检查了另一个字符串。
 
-路由自己的提权检查（`requireElevation`）仍然对 agent 让路：人的门是开发者密码，agent 的门
-是 scope，而 scope 已经在过滤器里验过。只读之后没有需要提权的路由能走到 servlet；这层保留
-是为了将来若放宽范围，不至于又把人那道门横在 agent 前面。
+路由自己的提权检查（`requireElevation`）对 agent 一律让路：人的门是开发者密码，agent 的门
+是 scope，而 scope 已经在过滤器里验过。要求 agent 输一个它永远没有的密码，等于把已经授权
+的范围变成死路。`/api/mc/*/console/input` 之前就是这么坏的。
 
 反过来，**agent 票不是开发者令牌**：两者都以 `Bearer` 出现，但 `DeveloperElevation#requireToken`
 只认人那张。否则一张 `read` 票在守卫过滤器里就成了完整提权。
@@ -146,7 +142,6 @@ URI 里不叫这个名字，经容器解码后就是它。读原始 URI 的检�
 | 方法 | 路径 | 需要 | 作用 |
 |---|---|---|---|
 | `POST` | `/api/developer/agent-auth` | 仅 agent 密码（**免会话**），且必须有人已提权 | 换一张受 cap 限制的票 |
-| `POST` | `/api/developer/agent-token` | 已提权的会话 | 换一张任意已授权范围的票 |
 | `GET` | `/api/developer/agent-grants` | 已提权 | 列出当前所有票 |
 | `DELETE` | `/api/developer/agent-grants/{id}` | 已提权 | 掐掉一张 |
 | `GET/POST` | `/api/developer/agent-password[/clear]` | 已提权 | 设置/查看/清除 agent 密码与它的 cap |

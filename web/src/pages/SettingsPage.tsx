@@ -1542,10 +1542,21 @@ function developerError(e: unknown): string {
 /* ---------------- agent 访问 ---------------- */
 
 /// agent 密码与开发者密码是**两把不同的钥匙**：这一串可以在不给开发者密码的情况下交给
-/// 一个 agent，它换到的票只有一个能力——读取实例列表（dsh / 品牌 / ZCode 及其条目）。
-/// 没有任何写操作，因此 agent 不可能停掉跑着自己的那个实例。
+/// 一个 agent，它换到的票只能带动下面勾选的那几类范围，而且必须有人正在提权时才换得到。
 const AGENT_SCOPE_LABEL: Record<string, string> = {
-  read: "只读",
+  read: "读取面板",
+  mc: "Minecraft 服务器",
+  instances: "创建/删除实例",
+  config: "面板配置",
+  plugins: "安装插件",
+};
+
+const AGENT_SCOPE_HINT: Record<string, string> = {
+  read: "查看实例、日志、任务列表",
+  mc: "启停服务器、发送控制台命令",
+  instances: "创建、删除、启停其它实例",
+  config: "账号、模型、TLS、网络",
+  plugins: "装/卸插件与整合包",
 };
 
 /// 距离某个 ISO 时间还有多少秒。
@@ -1561,18 +1572,20 @@ function AgentAccessCard() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [password, setPassword] = useState("");
-  /// 手上这张一次性票：生成后只显示这一次，刷新即丢
-  const [minted, setMinted] = useState<{ text: string; expiresAt: string } | null>(null);
-  const [minting, setMinting] = useState(false);
+  const [scopes, setScopes] = useState<string[]>(["read"]);
+  /// 服务端当前的那一份，用来判断勾选是否还没保存
+  const [savedScopes, setSavedScopes] = useState<string[]>([]);
 
   const refresh = async () => {
     try {
-      const [nextStatus, nextGrants] = await Promise.all([
-        api.agentPassword(),
-        api.agentGrants(),
-      ]);
+      const [nextStatus, nextGrants] = await Promise.all([api.agentPassword(), api.agentGrants()]);
       setStatus(nextStatus);
       setGrants(nextGrants.grants);
+      // 勾选框要反映**已经存下来的上限**，而不是页面初始的那个 ["read"]：
+      // 否则进来看到的是"只勾了读取"，与保存时那次选择不符，改密码时还容易
+      // 顺手把上限缩掉。
+      setScopes(nextStatus.scopes.length > 0 ? nextStatus.scopes : ["read"]);
+      setSavedScopes(nextStatus.scopes);
       setError(null);
     } catch (e) {
       setError(developerError(e));
@@ -1583,12 +1596,19 @@ function AgentAccessCard() {
     void refresh();
   }, []);
 
+  const toggle = (scope: string) => {
+    setScopes((previous) =>
+      previous.includes(scope) ? previous.filter((item) => item !== scope) : [...previous, scope],
+    );
+  };
+
   const save = async () => {
     if (!password) return setError("请输入 agent 密码");
+    if (scopes.length === 0) return setError("至少要勾选一类范围");
     setBusy(true);
     setError(null);
     try {
-      setStatus(await api.setAgentPassword(password, ["read"]));
+      setStatus(await api.setAgentPassword(password, scopes));
       setPassword("");
       toast("success", "agent 密码已设置，旧密码发出的票已全部失效");
       await refresh();
@@ -1599,56 +1619,21 @@ function AgentAccessCard() {
     }
   };
 
-  /// 给 agent 的一段话：只有地址和用法，不带任何警告。
-  ///
-  /// 地址写死 `127.0.0.1`：agent 与面板在同一台机器上，走回环比让模型记住
-  /// 真实域名安全——提示词会被贴进会话记录，域名不该跟着走。
-  const buildPrompt = (token: string, expiresAt: string) => {
-    const port = window.location.port || "3080";
-    const panel = `https://127.0.0.1:${port}`;
-    return [
-      "你现在获得了一张 HDSL-web 面板的只读票。",
-      "",
-      `面板：${panel}`,
-      `用法：GET /api/instances（以及单个实例）时带上 Authorization: Bearer ${token}`,
-      "范围：只读——dsh / 品牌 / ZCode 的实例列表与单个实例的状态。",
-      "不能创建、启动、停止、删除实例，不能开终端，也不能改任何设置。",
-      `有效期：与开发者提权同生命周期，最晚到 ${new Date(expiresAt).toLocaleString()}`,
-    ].join("\n");
-  };
-
-  const copyText = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  /// 签一张票，同时把「给 agent 的那段话」复制到剪贴板。
-  const mintForAgent = async () => {
-    setMinting(true);
+  /// 只保存范围：不需要重新输入密码。
+  const saveScopes = async () => {
+    if (scopes.length === 0) return setError("至少要勾选一类范围");
+    setBusy(true);
     setError(null);
     try {
-      const answer = await api.mintAgentToken({ label: "手动复制", scopes: ["read"] });
-      const text = buildPrompt(answer.token, answer.expiresAt);
-      const copied = await copyText(text);
-      setMinted({ text, expiresAt: answer.expiresAt });
-      toast(copied ? "success" : "info",
-        copied ? "提示词已复制，粘进 agent 的输入框即可" : "已生成，请手动复制下面的文字");
+      const next = await api.setAgentScopes(scopes);
+      setStatus(next);
+      toast("success", "范围已保存，旧范围发出的票已作废");
       await refresh();
     } catch (e) {
       setError(developerError(e));
     } finally {
-      setMinting(false);
+      setBusy(false);
     }
-  };
-
-  const copyMinted = async () => {
-    if (!minted) return;
-    const copied = await copyText(minted.text);
-    toast(copied ? "success" : "error", copied ? "已再次复制" : "复制失败：浏览器拒绝了剪贴板访问");
   };
 
   const clear = async () => {
@@ -1675,6 +1660,20 @@ function AgentAccessCard() {
       setError(developerError(e));
     }
   };
+
+  const rangeChanged =
+    scopes.length !== savedScopes.length || scopes.some((scope) => !savedScopes.includes(scope));
+
+  const scopeRow = (scope: string) => (
+    <label
+      key={scope}
+      style={{ display: "grid", gridTemplateColumns: "16px 92px 1fr", alignItems: "center", gap: 8, fontSize: 13 }}
+    >
+      <input type="checkbox" checked={scopes.includes(scope)} disabled={busy} onChange={() => toggle(scope)} />
+      <span>{AGENT_SCOPE_LABEL[scope]}</span>
+      <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>{AGENT_SCOPE_HINT[scope]}</span>
+    </label>
+  );
 
   return (
     <div className="card">
@@ -1715,23 +1714,34 @@ function AgentAccessCard() {
           />
           {status?.set && !password && (
             <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-              更换这串密码会作废它发出的全部票；它的能力固定为只读，不需要再选范围
+              更换这串密码会作废它发出的全部票；只想改范围，用下面的「保存范围」
             </span>
           )}
         </span>
       </div>
 
       <div className="comp-row" style={{ alignItems: "flex-start" }}>
-        <span className="comp-label" style={{ paddingTop: 2 }}>它能做什么</span>
+        <span className="comp-label" style={{ paddingTop: 2 }}>它最多能做什么</span>
         <span className="comp-value" style={{ display: "grid", gap: 6, maxWidth: 640 }}>
-          <span style={{ fontSize: 13 }}>
-            <b>只读：实例列表</b>
+          {Object.keys(AGENT_SCOPE_LABEL).map(scopeRow)}
+          <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", lineHeight: 1.6, marginTop: 2 }}>
+            这里勾的是<b>上限</b>：调用方可以要得更少，但要不了更多。全部勾上等于把面板交给它——那是你的选择，
+            不是默认值。
           </span>
-          <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
-            只能 GET dsh / 品牌 / ZCode 的实例列表与单个实例的状态。不能创建、启动、停止、删除实例，
-            不能开终端，不能改插件或设置——写操作在鉴权过滤器就被拒绝，不是靠某一个特判。
-            这也意味着 agent 不可能停掉跑着自己的那个实例。
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}>
+            <button
+              className="btn btn-outline ripple-host"
+              disabled={busy || !status?.set || scopes.length === 0 || !rangeChanged}
+              onClick={() => void saveScopes()}
+            >
+              {!status?.set ? "先设置密码" : rangeChanged ? "保存范围" : "范围未改动"}
+            </button>
+            {status?.set && rangeChanged && (
+              <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                勾选改了还没保存——保存后会作废旧范围发出的票
+              </span>
+            )}
+          </div>
         </span>
       </div>
 
@@ -1743,7 +1753,7 @@ function AgentAccessCard() {
         </button>
         <button
           className="btn btn-raised ripple-host"
-          disabled={busy || !password}
+          disabled={busy || !password || scopes.length === 0}
           onClick={() => void save()}
         >
           {busy ? "处理中…" : status?.set ? "更换并作废旧票" : "设置 agent 密码"}
@@ -1768,6 +1778,7 @@ function AgentAccessCard() {
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{grant.label}</span>
               <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
                 {grant.scopes.map((scope) => AGENT_SCOPE_LABEL[scope] ?? scope).join(" · ")}
+                {grant.instanceId ? ` · ${grant.instanceId}` : ""}
               </span>
               <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", fontVariantNumeric: "tabular-nums" }}>
                 剩 {formatRemaining(secondsUntil(grant.expiresAt))}
@@ -1779,52 +1790,6 @@ function AgentAccessCard() {
           ))}
         </div>
       )}
-
-      {/* 把票交给 agent：签一张、复制一段话。这张票不经过 agent 密码，任何守卫档位都能签。 */}
-      <div className="comp-row" style={{ borderTop: "1px solid var(--monet-outline-variant)", borderBottom: "none", alignItems: "flex-start" }}>
-        <span className="comp-label" style={{ paddingTop: 2 }}>把票交给 agent</span>
-        <span className="comp-value" style={{ display: "grid", gap: 6, maxWidth: 720 }}>
-          <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
-            签一张只读票，同时生成一段可直接粘进 agent 输入框的话（面板地址、token、范围、有效期）。
-            token 只显示这一次，刷新页面就没了；有效期与开发者提权相同，也可以提前掐掉。
-            票只能读实例列表与单个实例的状态，没有任何写操作。
-          </span>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <button
-              className="btn btn-raised ripple-host"
-              disabled={minting}
-              onClick={() => void mintForAgent()}
-            >
-              {minting ? "生成中…" : "生成票并复制给 agent"}
-            </button>
-            {minted && (
-              <button className="btn btn-outline ripple-host" onClick={() => void copyMinted()}>
-                再次复制
-              </button>
-            )}
-          </div>
-          {minted && (
-            <>
-              <textarea
-                readOnly
-                value={minted.text}
-                rows={10}
-                onFocus={(e) => e.currentTarget.select()}
-                style={{
-                  width: "100%",
-                  fontSize: 12,
-                  lineHeight: 1.55,
-                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                  resize: "vertical",
-                }}
-              />
-              <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                这张票到 {new Date(minted.expiresAt).toLocaleString()} 失效。复制失败的话，点一下上面的框全选再复制。
-              </span>
-            </>
-          )}
-        </span>
-      </div>
     </div>
   );
 }

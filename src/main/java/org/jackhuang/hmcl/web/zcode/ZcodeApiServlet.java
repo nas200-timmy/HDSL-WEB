@@ -384,7 +384,6 @@ public final class ZcodeApiServlet extends HttpServlet {
         // The TUI and the web process share the instance's data directory: the
         // web mode only starts once the terminal is gone, or two processes
         // would write the same config.
-        //
         instanceTerminal.close(ZcodeTui.BRAND, id);
         // The panel's managed runtime is a first-class answer: a bare `node` is what a
         // Windows deployment does *not* have, and this is where it used to fail

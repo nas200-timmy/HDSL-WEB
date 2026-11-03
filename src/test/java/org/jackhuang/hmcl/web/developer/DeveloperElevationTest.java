@@ -96,7 +96,7 @@ class DeveloperElevationTest {
         assertTrue(elevation.requireToken(human));
 
         String agent = elevation.mintAgentToken("probe", java.util.Set.of(AgentScopes.READ),
-                java.time.Duration.ofMinutes(5), null);
+                null, java.time.Duration.ofMinutes(5), null);
         assertFalse(elevation.requireToken(agent),
                 "an agent grant must never satisfy a developer-password gate");
         assertTrue(elevation.agentGrant(agent) != null, "it is still a live agent grant");
@@ -114,7 +114,7 @@ class DeveloperElevationTest {
         elevation.elevate(humanKey);
 
         String agent = elevation.mintAgentToken("probe", java.util.Set.of(AgentScopes.READ),
-                java.time.Duration.ofHours(1), null);
+                null, java.time.Duration.ofHours(1), null);
         assertTrue(elevation.agentGrant(agent) != null);
         assertEquals(1, elevation.agentGrants().size());
 

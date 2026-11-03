@@ -130,10 +130,9 @@ public final class InstanceTerminal {
         String token = sessionToken(request);
         boolean sessionAlive = token == null || token.isBlank() || auth.isAlive(token);
         String key = DeveloperElevation.key(token, request.getRemoteAddr());
-        // Agent grants are read-only now: the terminal routes are refused in
-        // AuthFilter before this check runs. The `elevationSatisfied` call stays
-        // so that widening a scope later does not strand the agent behind a
-        // password wall it can never climb.
+        // 终端对 agent 也开放（scope 已经在 AuthFilter 验过）：它能管别的实例，
+        // 就能在那个实例里开终端；自己的实例由 `selfFatal` 挡掉，因为开终端会先
+        // 停掉正在服务的 web runtime。要求它输开发者密码只会让它永远做不到。
         if (!AuthFilter.elevationSatisfied(
                 request, developerElevation, key, sessionAlive)) {
             throw new Refused(403, "developer_elevation_required: elevate with the developer password first");

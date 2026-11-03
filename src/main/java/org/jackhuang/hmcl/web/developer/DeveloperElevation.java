@@ -79,7 +79,7 @@ public final class DeveloperElevation {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     /// One agent grant as the panel presents it: who holds it, what it may do,
-    /// and when it dies.
+    /// which instance it belongs to, and when it dies.
     ///
     /// The token itself never appears in this record — [#id] is the handle the
     /// operator clicks to revoke, so a page that lists grants never carries a
@@ -88,12 +88,15 @@ public final class DeveloperElevation {
     /// @param id         short handle, unique among live grants
     /// @param label      what the operator typed on the settings page
     /// @param scopes     the capability classes of [AgentScopes]
+    /// @param instanceId the instance the agent runs in, or `null`
     /// @param expiresAt  when the grant dies
-    public record AgentGrant(String id, String label, Set<String> scopes, Instant expiresAt) {
+    public record AgentGrant(String id, String label, Set<String> scopes,
+                             @Nullable String instanceId, Instant expiresAt) {
     }
 
     /// What the panel remembers about an agent bearer token beyond its expiry.
-    private record AgentInfo(String id, String label, Set<String> scopes) {
+    private record AgentInfo(String id, String label, Set<String> scopes,
+                             @Nullable String instanceId) {
     }
 
 
@@ -266,9 +269,10 @@ public final class DeveloperElevation {
     ///
     /// @param label      what the operator typed on the settings page
     /// @param scopes     the capability classes of [AgentScopes]
+    /// @param instanceId the instance the agent runs in, or `null`
     /// @param ttl        how long it lives, clamped to `[1s, EXTENDED_TTL]`
     /// @return the token, to be handed to that agent and to nobody else
-    public String mintAgentToken(String label, Set<String> scopes,
+    public String mintAgentToken(String label, Set<String> scopes, @Nullable String instanceId,
                                  Duration ttl, @Nullable Instant notAfter) {
         byte[] tokenBytes = new byte[32];
         RANDOM.nextBytes(tokenBytes);
@@ -290,7 +294,7 @@ public final class DeveloperElevation {
         elevations.put(BEARER_PREFIX + token,
                 new Elevation(expiry, false,
                         new AgentInfo(id, label == null || label.isBlank() ? "agent" : label,
-                                Set.copyOf(scopes))));
+                                Set.copyOf(scopes), instanceId)));
         return token;
     }
 
@@ -321,7 +325,7 @@ public final class DeveloperElevation {
             return null;
         }
         AgentInfo agent = elevation.agent;
-        return new AgentGrant(agent.id(), agent.label(), agent.scopes(), elevation.expiry);
+        return new AgentGrant(agent.id(), agent.label(), agent.scopes(), agent.instanceId(), elevation.expiry);
     }
 
     /// Every live agent grant, newest expiry last — what the panel's list draws.
@@ -343,7 +347,7 @@ public final class DeveloperElevation {
             AgentInfo agent = elevation.agent;
             if (agent != null && elevation.expiry.isAfter(now)) {
                 grants.add(new AgentGrant(agent.id(), agent.label(), agent.scopes(),
-                        elevation.expiry));
+                        agent.instanceId(), elevation.expiry));
             }
         }
         grants.sort((a, b) -> a.expiresAt().compareTo(b.expiresAt()));

@@ -385,15 +385,7 @@ export interface AgentGrantRow {
   id: string;
   label: string;
   scopes: string[];
-  expiresAt: string;
-}
-
-/** `POST /api/developer/agent-token` 的应答：token 只在这里出现一次。 */
-export interface AgentToken {
-  token: string;
-  id: string;
-  label: string;
-  scopes: string[];
+  instanceId?: string;
   expiresAt: string;
 }
 

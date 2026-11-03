@@ -38,8 +38,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/// The agent credential: a bearer token minted from an elevated session, and
-/// the two walls that keep it from doing what no agent should do.
+/// The agent credential: a bearer token the agent mints with the agent
+/// password, and the two walls that keep it from doing what no agent should do.
 ///
 /// The token has no browser behind it, so it has to pass the session gate on
 /// its own — which is exactly why every rule here lives in the panel's root
@@ -48,6 +48,7 @@ class AgentGrantApiTest {
 
     private static final String PANEL_PASSWORD = "panel-password-1";
     private static final String DEV_PASSWORD = "dev-password-1";
+    private static final String AGENT_PASSWORD = "agent-password-1";
 
     @TempDir
     Path dataDir;
@@ -59,12 +60,9 @@ class AgentGrantApiTest {
             String base = "https://127.0.0.1:" + running.port();
             String cookie = elevatedSession(client, base);
 
-            // A read grant: minted from the operator's elevation, scoped to reads.
-            HttpResponse<String> minted = post(client, base + "/api/developer/agent-token",
-                    "{\"label\":\"probe\",\"scopes\":[\"read\"],\"instanceId\":\"inst-a\",\"ttlSeconds\":600}",
-                    cookie);
-            assertEquals(200, minted.statusCode(), minted.body());
-            JsonObject mint = json(minted);
+            // A read grant: the agent exchanges the agent password for it.
+            JsonObject mint = mint(client, base, cookie,
+                    "\"label\":\"probe\",\"scopes\":[\"read\"],\"instanceId\":\"inst-a\",\"ttlSeconds\":600}");
             String token = mint.get("token").getAsString();
             String id = mint.get("id").getAsString();
             assertTrue(mint.get("scopes").toString().contains("read"));
@@ -99,29 +97,27 @@ class AgentGrantApiTest {
     }
 
     @Test
-    void anAgentCannotStopAnything() throws Exception {
+    void anAgentCannotStopItsOwnInstance() throws Exception {
         try (TestSupport.RunningServer running = start()) {
             HttpClient client = TestSupport.trustAllClient();
             String base = "https://127.0.0.1:" + running.port();
             String cookie = elevatedSession(client, base);
 
-            HttpResponse<String> minted = post(client, base + "/api/developer/agent-token",
-                    "{\"label\":\"probe\",\"scopes\":[\"read\"]}", cookie);
-            assertEquals(200, minted.statusCode(), minted.body());
-            String token = json(minted).get("token").getAsString();
+            String token = mint(client, base, cookie,
+                    "\"label\":\"probe\",\"scopes\":[\"read\",\"instances\"],\"instanceId\":\"inst-a\"}")
+                    .get("token").getAsString();
 
-            // Writes are not "denied for this one instance" — they are not in the
-            // grant at all. A read-only token cannot stop its own instance or any
-            // other, which is what makes the self-kill structurally impossible.
+            // The scope allows stopping instances; the instance it is bound to
+            // is the one it may not touch. The call would kill the process
+            // serving it, so the answer is a refusal, not a promise.
             HttpResponse<String> suicide = post(client, base + "/api/instances/inst-a/stop", "{}", null, token);
-            assertEquals(403, suicide.statusCode(), suicide.body());
-            assertTrue(suicide.body().contains("agent_scope_denied"), suicide.body());
+            assertEquals(409, suicide.statusCode(), suicide.body());
+            assertTrue(suicide.body().contains("self_operation_refused"));
 
+            // Another instance is ordinary work.
             HttpResponse<String> other = post(client, base + "/api/instances/inst-b/stop", "{}", null, token);
-            assertEquals(403, other.statusCode(), other.body());
-
-            // Reading the list still works.
-            assertEquals(200, getWithBearer(client, base + "/api/instances", token).statusCode());
+            assertTrue(other.statusCode() != 409 && other.statusCode() != 403,
+                    "stopping another instance must pass the gate, got " + other.statusCode() + " " + other.body());
         }
     }
 
@@ -132,8 +128,10 @@ class AgentGrantApiTest {
             String base = "https://127.0.0.1:" + running.port();
             String cookie = elevatedSession(client, base);
 
-            HttpResponse<String> refused = post(client, base + "/api/developer/agent-token",
-                    "{\"label\":\"probe\",\"scopes\":[\"root\"]}", cookie);
+            assertEquals(200, post(client, base + "/api/developer/agent-password",
+                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\"]}", cookie).statusCode());
+            HttpResponse<String> refused = post(client, base + "/api/developer/agent-auth",
+                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"label\":\"probe\",\"scopes\":[\"root\"]}", null);
             assertEquals(400, refused.statusCode(), refused.body());
             assertTrue(refused.body().contains("unknown_scope"));
         }
@@ -141,25 +139,24 @@ class AgentGrantApiTest {
 
 
     @Test
-    void anAgentIsRefusedByItsScopeBeforeAnyPasswordWall() throws Exception {
+    void aScopedAgentAlsoSatisfiesTheRoutesOwnElevationCheck() throws Exception {
         try (TestSupport.RunningServer running = start()) {
             HttpClient client = TestSupport.trustAllClient();
             String base = "https://127.0.0.1:" + running.port();
             String cookie = elevatedSession(client, base);
 
-            HttpResponse<String> minted = post(client, base + "/api/developer/agent-token",
-                    "{\"label\":\"probe\",\"scopes\":[\"read\"]}", cookie);
-            assertEquals(200, minted.statusCode(), minted.body());
-            String token = json(minted).get("token").getAsString();
+            String token = mint(client, base, cookie,
+                    "\"label\":\"probe\",\"scopes\":[\"read\",\"mc\"]}")
+                    .get("token").getAsString();
 
-            // `console/input` is one of the routes whose servlet asks for
-            // elevation. An agent must be stopped by its scope, with a code that
-            // says why, not told to enter a developer password it can never have.
+            // `console/input` calls requireElevation itself. An agent never has
+            // the developer password, so without [AuthFilter#isAgent] the route
+            // answers "elevate first" — an instruction it can never follow — and
+            // the `mc` scope would be worth almost nothing.
             HttpResponse<String> console = post(client, base + "/api/mc/instances/nope/console/input",
                     "{\"line\":\"list\"}", null, token);
-            assertEquals(403, console.statusCode(), console.body());
-            assertTrue(console.body().contains("agent_scope_denied"), console.body());
-            assertFalse(console.body().contains("developer_elevation_required"), console.body());
+            assertTrue(console.statusCode() != 403 || !console.body().contains("developer_elevation_required"),
+                    "an agent must not be asked for the developer password: " + console.body());
         }
     }
 
@@ -171,10 +168,9 @@ class AgentGrantApiTest {
             String base = "https://127.0.0.1:" + running.port();
             String cookie = elevatedSession(client, base);
 
-            HttpResponse<String> minted = post(client, base + "/api/developer/agent-token",
-                    "{\"label\":\"probe\",\"scopes\":[\"read\"]}", cookie);
-            assertEquals(200, minted.statusCode(), minted.body());
-            String token = json(minted).get("token").getAsString();
+            String token = mint(client, base, cookie,
+                    "\"label\":\"probe\",\"scopes\":[\"read\",\"instances\"]}")
+                    .get("token").getAsString();
 
             // `/i/*` is the browser's proxy into an instance, not an API. A
             // `read` grant must not turn it into "a GET, so allowed".
@@ -208,10 +204,9 @@ class AgentGrantApiTest {
             String base = "https://127.0.0.1:" + running.port();
             String cookie = elevatedSession(client, base);
 
-            HttpResponse<String> minted = post(client, base + "/api/developer/agent-token",
-                    "{\"label\":\"probe\",\"scopes\":[\"read\"],\"ttlSeconds\":3600}", cookie);
-            assertEquals(200, minted.statusCode(), minted.body());
-            String token = json(minted).get("token").getAsString();
+            String token = mint(client, base, cookie,
+                    "\"label\":\"probe\",\"scopes\":[\"read\"],\"ttlSeconds\":3600}")
+                    .get("token").getAsString();
             assertEquals(200, getWithBearer(client, base + "/api/instances", token).statusCode());
 
             assertEquals(200, post(client, base + "/api/auth/logout", "{}", cookie).statusCode());
@@ -228,7 +223,7 @@ class AgentGrantApiTest {
         assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/instances"));
         assertTrue(AgentScopes.forbidden("GET", "/api/instances/inst-a/open"));
         assertTrue(AgentScopes.forbidden("GET", "/api/exports/x.dspack"));
-        assertTrue(AgentScopes.forbidden("POST", "/api/developer/agent-token"));
+        assertTrue(AgentScopes.forbidden("POST", "/api/developer/agent-auth"));
         assertTrue(AgentScopes.forbidden("POST", "/api/auth/password"));
         // A generated brand admin password is a credential, and the first-run
         // window answers it with no elevation at all — the gateway has to close
@@ -243,42 +238,42 @@ class AgentGrantApiTest {
         // event streams are browser channels, never "a GET, so a read".
         assertNull(AgentScopes.required("GET", "/i/inst-a/"));
         assertNull(AgentScopes.required("GET", "/ws/events"));
-        // Read-only: the instance lists and one entry in them are the whole
-        // surface. Nothing an agent can call changes state, which is also why it
-        // can never stop the instance it is running in — that route is not on
-        // the menu, not merely refused by a special case.
-        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/instances"));
-        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/instances/a"));
-        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/instances/a/"));
-        assertEquals(AgentScopes.READ, AgentScopes.required("HEAD", "/api/instances"));
-        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/brands/kimi/instances"));
-        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/brands/kimi/instances/a"));
-        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/zcode/instances"));
-        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/zcode/instances/a"));
+        assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/health"));
 
-        // Nothing deeper and nothing else: logs, plugins, accounts, settings,
-        // health and every mutation are outside the grant.
-        assertNull(AgentScopes.required("GET", "/api/instances/a/logs"));
-        assertNull(AgentScopes.required("GET", "/api/instances/a/plugins"));
-        assertNull(AgentScopes.required("GET", "/api/accounts"));
-        assertNull(AgentScopes.required("GET", "/api/settings/registry"));
-        assertNull(AgentScopes.required("GET", "/api/health"));
-        assertNull(AgentScopes.required("POST", "/api/instances"));
-        assertNull(AgentScopes.required("DELETE", "/api/instances/a"));
-        assertNull(AgentScopes.required("POST", "/api/instances/a/stop"));
-        assertNull(AgentScopes.required("POST", "/api/instances/a/launch"));
-        assertNull(AgentScopes.required("POST", "/api/instances/a/terminal"));
-        assertNull(AgentScopes.required("POST", "/api/brands/kimi/instances/a/stop"));
-        assertNull(AgentScopes.required("DELETE", "/api/zcode/instances/a"));
+        // Writes land in their own classes.
+        assertEquals(AgentScopes.MC, AgentScopes.required("POST", "/api/mc/instances/x/start"));
+        assertEquals(AgentScopes.INSTANCES, AgentScopes.required("POST", "/api/instances"));
+        assertEquals(AgentScopes.PLUGINS, AgentScopes.required("POST", "/api/instances/x/plugins/install"));
+        assertEquals(AgentScopes.CONFIG, AgentScopes.required("POST", "/api/settings/tls"));
 
         // A route nobody classified is closed, not open.
         assertNull(AgentScopes.required("POST", "/api/something-new"));
 
-        // One class, on purpose.
-        assertEquals(Set.of(AgentScopes.READ), AgentScopes.KNOWN);
+        // Self-fatal needs both the route and the matching instance.
+        assertTrue(AgentScopes.selfFatal("POST", "/api/instances/a/stop", "a"));
+        assertTrue(AgentScopes.selfFatal("POST", "/api/instances/a/terminal", "a"));
+        assertTrue(AgentScopes.selfFatal("POST", "/api/instances/a/terminal/", "a"),
+                "a trailing slash must not open the way out");
+        assertTrue(AgentScopes.selfFatal("DELETE", "/api/instances/a", "a"));
+        assertFalse(AgentScopes.selfFatal("POST", "/api/instances/b/stop", "a"));
+        assertFalse(AgentScopes.selfFatal("POST", "/api/instances/a/launch", "a"));
+        assertFalse(AgentScopes.selfFatal("POST", "/api/instances/a/stop", null));
 
         // Defaults are read-only.
         assertEquals(Set.of(AgentScopes.READ), AgentScopes.DEFAULT);
+    }
+
+    /// Mints a token the way the product does now: the agent exchanges the
+    /// agent password for it. The cap is opened to every class so the scope
+    /// under test is what decides.
+    private JsonObject mint(HttpClient client, String base, String cookie, String fields) throws Exception {
+        assertEquals(200, post(client, base + "/api/developer/agent-password",
+                "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\",\"mc\",\"instances\",\"config\",\"plugins\"]}",
+                cookie).statusCode());
+        HttpResponse<String> minted = post(client, base + "/api/developer/agent-auth",
+                "{\"password\":\"" + AGENT_PASSWORD + "\"," + fields, null);
+        assertEquals(200, minted.statusCode(), minted.body());
+        return json(minted);
     }
 
     private TestSupport.RunningServer start() throws Exception {
@@ -286,6 +281,9 @@ class AgentGrantApiTest {
                 Map.of(UserStore.ENV_ADMIN_PASSWORD, PANEL_PASSWORD), config -> {
                     config.bindHost = "127.0.0.1";
                     config.https.enabled = true;
+                    // `agent-auth` is only meaningful where the session alone
+                    // would not already reach /api/*.
+                    config.developerGuard.scope = org.jackhuang.hmcl.web.config.DeveloperGuardScope.ALL;
                 });
     }
 
