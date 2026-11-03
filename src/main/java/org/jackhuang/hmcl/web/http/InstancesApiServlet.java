@@ -443,7 +443,8 @@ public final class InstancesApiServlet extends HttpServlet {
         DshInstanceManager.delete(id);
         runtime.forget(id);
         runtime.announceDeleted(instance);
-        AuditLog.log(AuditLog.Channel.WEB, "instance.delete", id, "success",
+        AuditLog.log(AuditLog.Channel.WEB, "instance.delete", id,
+                AuthFilter.selfDirected(request, "dsh", id) ? "self_delete" : "success",
                 actorOf(request), request.getRemoteAddr());
         Json.write(response, java.util.Map.of("ok", true));
     }
@@ -686,7 +687,8 @@ public final class InstancesApiServlet extends HttpServlet {
         }
         String publicHost = resolvePublicHost(body, request);
         runtime.launchAsync(instance, publicHost);
-        AuditLog.log(AuditLog.Channel.WEB, "instance.launch", id, "success",
+        AuditLog.log(AuditLog.Channel.WEB, "instance.launch", id,
+                AuthFilter.selfDirected(request, "dsh", id) ? "self_launch" : "success",
                 actorOf(request), request.getRemoteAddr());
         Json.write(response, HttpServletResponse.SC_ACCEPTED, java.util.Map.of("state", "starting"));
     }
@@ -856,7 +858,8 @@ public final class InstancesApiServlet extends HttpServlet {
             // it hears the truth instead of waiting for a refresh.
             runtime.announceState(id);
         }
-        AuditLog.log(AuditLog.Channel.WEB, "instance.stop", id, "success",
+        AuditLog.log(AuditLog.Channel.WEB, "instance.stop", id,
+                AuthFilter.selfDirected(request, "dsh", id) ? "self_stop" : "success",
                 actorOf(request), request.getRemoteAddr());
         if (webStopping) {
             Json.write(response, HttpServletResponse.SC_ACCEPTED, java.util.Map.of("state", "stopping"));

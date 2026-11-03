@@ -215,10 +215,18 @@ public final class HdslServer {
         // gate has to know the grants to admit one.
         org.jackhuang.hmcl.web.developer.DeveloperElevation developerElevation =
                 new org.jackhuang.hmcl.web.developer.DeveloperElevation();
+        // The web terminal's manager, hoisted above the session gate: the gate
+        // derives which instance a caller runs in from the terminal roots and
+        // the web-process roots, so it needs the manager before the first
+        // request, not after the first terminal.
+        org.jackhuang.hmcl.web.terminal.TerminalManager terminals =
+                new org.jackhuang.hmcl.web.terminal.TerminalManager();
+        org.jackhuang.hmcl.web.auth.PeerIdentity peerIdentity =
+                new org.jackhuang.hmcl.web.auth.PeerIdentity(terminals);
         AuthFilter authFilter = new AuthFilter(authService, config.auth.disabled,
                 request -> request.isSecure()
                         || org.jackhuang.hmcl.web.http.RequestSecurity.forwardedHttps(request, config),
-                ttlSeconds, config.basePath, developerElevation);
+                ttlSeconds, config.basePath, developerElevation, peerIdentity);
 
         // The Phase 2 services: the event bus every WebSocket payload flows
         // through, the task pool behind installs and launches, and the
@@ -243,9 +251,8 @@ public final class HdslServer {
         // The web terminal (docs/web-shell.md): the agent TUI runs on a PTY
         // inside the panel; the browser is only a viewer. Tickets bridge the
         // authenticated POST and the WebSocket handshake, and the manager owns
-        // the one-terminal-per-instance rule.
-        org.jackhuang.hmcl.web.terminal.TerminalManager terminals =
-                new org.jackhuang.hmcl.web.terminal.TerminalManager();
+        // the one-terminal-per-instance rule. The manager itself lives above,
+        // beside the session gate that identifies callers by it.
         org.jackhuang.hmcl.web.terminal.TerminalTickets terminalTickets =
                 new org.jackhuang.hmcl.web.terminal.TerminalTickets();
         org.jackhuang.hmcl.web.terminal.TerminalWebSocket.configure(
@@ -344,7 +351,7 @@ public final class HdslServer {
                 authService, developerAuth, developerElevation, tlsActive, emergencyStop)), "/api/brands/*");
         context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.developer.DeveloperApiServlet(
                 developerAuth, agentAuth, developerElevation, authService, config, tlsActive,
-                emergencyStop, terminals, runtime)), "/api/developer/*");
+                emergencyStop, terminals, runtime, peerIdentity)), "/api/developer/*");
         // Registered before the `/api/settings/*` holder below and matched by its longer prefix:
         // the download source is a launcher setting, and TLS is the other thing this path serves.
         context.addServlet(new ServletHolder(new RegistrySettingsApiServlet()), "/api/settings/registry/*");

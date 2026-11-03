@@ -71,6 +71,9 @@ public final class DeveloperApiServlet extends HttpServlet {
     private final EmergencyStop emergency;
     private final TerminalManager terminals;
     private final InstanceRuntime runtime;
+    /// Which instance a caller runs in, derived from the kernel: the mint
+    /// binds the grant to it, so the binding is a fact rather than a claim.
+    private final org.jackhuang.hmcl.web.auth.PeerIdentity identity;
     /// Failed panel-password confirmations, per source address — the second
     /// confirmation must not become an unthrottled oracle for the panel
     /// password.
@@ -86,7 +89,8 @@ public final class DeveloperApiServlet extends HttpServlet {
     public DeveloperApiServlet(DeveloperAuth devAuth, DeveloperAuth agentAuth,
                                DeveloperElevation elevation,
                                AuthService auth, ServerConfig config, BooleanSupplier tlsActive,
-                               EmergencyStop emergency, TerminalManager terminals, InstanceRuntime runtime) {
+                               EmergencyStop emergency, TerminalManager terminals, InstanceRuntime runtime,
+                               org.jackhuang.hmcl.web.auth.PeerIdentity identity) {
         this.devAuth = devAuth;
         this.agentAuth = agentAuth;
         this.elevation = elevation;
@@ -96,6 +100,7 @@ public final class DeveloperApiServlet extends HttpServlet {
         this.emergency = emergency;
         this.terminals = terminals;
         this.runtime = runtime;
+        this.identity = identity;
     }
 
     @Override
@@ -501,7 +506,14 @@ public final class DeveloperApiServlet extends HttpServlet {
         }
         agentPasswordThrottle.clear(address);
         String label = stringField(body, "label");
-        String instanceId = stringField(body, "instanceId");
+        String claimed = stringField(body, "instanceId");
+        // The binding is derived, not asked for: the panel asks the kernel
+        // which instance this connection's process tree belongs to and binds
+        // that. A caller that cannot be placed keeps whatever it claimed —
+        // a claim only ever produces extra refusals, never fewer.
+        org.jackhuang.hmcl.web.auth.PeerIdentity.Ref identified =
+                identity.derive(request.getRemotePort(), request.getLocalPort());
+        String instanceId = identified != null ? identified.wire() : claimed;
         // The request may narrow the cap, never widen it.
         Set<String> requested = new LinkedHashSet<>();
         if (body.has("scopes") && body.get("scopes").isJsonArray()) {
@@ -537,8 +549,22 @@ public final class DeveloperApiServlet extends HttpServlet {
         }
         String token = elevation.mintAgentToken(label, granted, instanceId, ttl, humanExpiry);
         var grant = elevation.agentGrant(token);
+        // The mint is the one line every later question comes back to: what
+        // was granted, where it lives, how long it lasts, and whether the
+        // binding was derived or merely claimed.
+        java.util.Map<String, Object> minted = new java.util.LinkedHashMap<>();
+        minted.put("scopes", java.util.List.copyOf(granted));
+        if (instanceId != null) {
+            minted.put("caller", instanceId);
+        }
+        if (identified == null && claimed != null && !claimed.isBlank()) {
+            minted.put("claimed", claimed);
+        }
+        if (grant != null) {
+            minted.put("expiresAt", grant.expiresAt().toString());
+        }
         AuditLog.log(AuditLog.Channel.WEB, "agent.auth", grant == null ? null : grant.id(),
-                "success", "agent:" + (label == null || label.isBlank() ? "agent" : label), address);
+                "success", "agent:" + (label == null || label.isBlank() ? "agent" : label), address, minted);
         JsonObject answer = new JsonObject();
         answer.addProperty("token", token);
         if (grant != null) {

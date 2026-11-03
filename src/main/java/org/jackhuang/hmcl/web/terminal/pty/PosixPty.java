@@ -396,6 +396,11 @@ final class PosixPty implements Pty {
         return pumpEnded.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
     }
 
+    @Override
+    public long pid() {
+        return pid;
+    }
+
     /// `waitpid` on the root process, then the end of the session.
     ///
     /// The order is the security contract: input is refused first, then the

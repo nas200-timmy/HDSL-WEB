@@ -174,29 +174,146 @@ public final class AgentScopes {
         return null;
     }
 
+    /// The instance a route would end or take over, with the family that owns
+    /// its id space and whether the ending is conditional.
+    ///
+    /// `launch` is not unconditionally fatal — it closes the target's terminal
+    /// first, so it ends the caller only when the caller lives in that terminal
+    /// (or when the panel cannot tell). The three hard operations (`stop`,
+    /// `delete`, `terminal`) end whoever is running inside the target, whatever
+    /// mode it is in.
+    ///
+    /// @param family the id-space owner: `dsh`, a brand id, or `zcode`
+    /// @param id     the instance id the route names
+    /// @param launch whether this is the conditional case
+    public record Fatal(String family, String id, boolean launch) {
+
+        /// Whether a grant bound to `bound` names this target.
+        ///
+        /// A binding the panel derived itself is `family/id`; one the caller
+        /// claimed at mint time is a bare id, matched on the id alone — the
+        /// spaces do not collide in practice, and a wrong claim only produces
+        /// an extra refusal.
+        ///
+        /// @param bound the grant's instance binding, or `null`
+        /// @return whether the binding names this target
+        public boolean matchesBound(@Nullable String bound) {
+            if (bound == null || bound.isBlank()) {
+                return false;
+            }
+            int slash = bound.indexOf('/');
+            if (slash < 0) {
+                return bound.equals(id);
+            }
+            return family.equals(bound.substring(0, slash)) && id.equals(bound.substring(slash + 1));
+        }
+
+        /// Whether an identity the panel derived names this target.
+        ///
+        /// @param refFamily the derived caller's family
+        /// @param refId     the derived caller's instance id
+        /// @return whether both name the same instance
+        public boolean matches(String refFamily, String refId) {
+            return family.equals(refFamily) && id.equals(refId);
+        }
+    }
+
+    /// The instance a fatal route targets, or `null` when the route is not one.
+    ///
+    /// Three families write the same operations under different prefixes — dsh
+    /// (`/api/instances/{id}/…`), brands (`/api/brands/{brand}/instances/{id}/…`)
+    /// and ZCode (`/api/zcode/instances/{id}/…`). Every one of them must be
+    /// recognised: covering only the dsh shape once left the other two free to
+    /// end the instance the caller was running in, which is the same death
+    /// under another URL. The path must be the **decoded** one the servlet
+    /// routes on, exactly like [#forbidden].
+    ///
+    /// @param method the request method
+    /// @param path   the decoded request path
+    /// @return the target, or `null` for a route that ends nobody
+    public static @Nullable Fatal fatalTarget(@Nullable String method, @Nullable String path) {
+        if (method == null || path == null) {
+            return null;
+        }
+        String route = stripTrailingSlash(path);
+        String[] parts = route.split("/", -1);
+        // ["", "api", family, …]
+        if (parts.length < 4 || !"api".equals(parts[1])) {
+            return null;
+        }
+        switch (parts[2]) {
+            case "instances" -> {
+                // dsh: ["", "api", "instances", id, op?]
+                if (parts.length == 4 && "DELETE".equals(method)) {
+                    return new Fatal("dsh", parts[3], false);
+                }
+                return parts.length == 5 ? operation("dsh", parts[3], parts[4], method) : null;
+            }
+            case "zcode" -> {
+                // ["", "api", "zcode", "instances", id, op?]
+                if (parts.length < 5 || !"instances".equals(parts[3])) {
+                    return null;
+                }
+                String id = parts[4];
+                if (parts.length == 5 && "DELETE".equals(method)) {
+                    return new Fatal("zcode", id, false);
+                }
+                return parts.length == 6 ? operation("zcode", id, parts[5], method) : null;
+            }
+            case "brands" -> {
+                // ["", "api", "brands", brand, "instances", id, op?]
+                if (parts.length < 6 || !"instances".equals(parts[4])) {
+                    return null;
+                }
+                String id = parts[5];
+                if (parts.length == 6 && "DELETE".equals(method)) {
+                    return new Fatal(parts[3], id, false);
+                }
+                return parts.length == 7 ? operation(parts[3], id, parts[6], method) : null;
+            }
+            default -> {
+                return null;
+            }
+        }
+    }
+
+    /// The fatal operation one family serves under `{base}/{op}`.
+    ///
+    /// `terminal` is fatal under any method: `POST` opens it (stopping the web
+    /// runtime first) and `DELETE` kills it, and the caller may be running in
+    /// either.
+    private static @Nullable Fatal operation(String family, String id, String op, String method) {
+        switch (op) {
+            case "stop" -> {
+                return "POST".equals(method) ? new Fatal(family, id, false) : null;
+            }
+            case "terminal" -> {
+                return new Fatal(family, id, false);
+            }
+            case "launch" -> {
+                return "POST".equals(method) ? new Fatal(family, id, true) : null;
+            }
+            default -> {
+                return null;
+            }
+        }
+    }
+
     /// Whether this request would end the process making it.
     ///
-    /// Only the instance that owns the token counts: stopping *another*
+    /// Only the instance the grant is bound to counts: stopping *another*
     /// instance is ordinary work, and the agent may do it when its grant holds
     /// [#INSTANCES]. Opening a terminal is included because the launcher stops
-    /// the web runtime first — the same death by a quieter route.
+    /// the web runtime first — the same death by a quieter route. `launch` is
+    /// deliberately not here: it ends the caller only when the target's
+    /// terminal is open, a condition this static answer cannot see.
     ///
     /// @param method     the request method
     /// @param path       the request path
     /// @param instanceId the instance the grant is bound to, or `null`
     /// @return whether the panel must refuse the request
     public static boolean selfFatal(@Nullable String method, @Nullable String path, @Nullable String instanceId) {
-        if (path == null || instanceId == null || instanceId.isBlank()) {
-            return false;
-        }
-        String route = stripTrailingSlash(path);
-        String self = "/api/instances/" + instanceId;
-        if (route.equals(self)) {
-            return "DELETE".equals(method);
-        }
-        if (route.equals(self + "/stop")) {
-            return "POST".equals(method);
-        }
-        return route.equals(self + "/terminal");
+        Fatal target = fatalTarget(method, path);
+        return target != null && !target.launch() && target.matchesBound(instanceId);
     }
 }

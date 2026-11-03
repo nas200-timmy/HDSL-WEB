@@ -90,6 +90,16 @@ public interface Pty extends AutoCloseable {
     /// `128 + signal` when it was killed by a signal.
     int waitFor();
 
+    /// The pid of the root process the terminal runs, or `-1` when the platform
+    /// does not name one.
+    ///
+    /// The panel uses it to recognise which instance a connection comes from
+    /// ([org.jackhuang.hmcl.web.auth.PeerIdentity]); it is a fact about the
+    /// child the kernel set, never something a caller supplies.
+    ///
+    /// @return the child's pid, or `-1`
+    long pid();
+
     /// Ends the child's process group: `SIGTERM`, then `SIGKILL` if it outlives
     /// `grace`. Safe to call more than once.
     void terminate(Duration grace);

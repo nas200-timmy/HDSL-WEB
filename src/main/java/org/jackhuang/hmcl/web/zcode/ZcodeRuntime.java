@@ -130,6 +130,21 @@ public final class ZcodeRuntime {
         return process != null && process.isAlive();
     }
 
+    /// The live ZCode instance roots as the panel's caller identification sees
+    /// them ([org.jackhuang.hmcl.web.auth.PeerIdentity]).
+    ///
+    /// @return `pid → instance id`, never `null`
+    public static Map<Long, String> liveRootPids() {
+        Map<Long, String> roots = new java.util.HashMap<>();
+        for (Map.Entry<String, Process> entry : PROCESSES.entrySet()) {
+            Process process = entry.getValue();
+            if (process.isAlive()) {
+                roots.put(process.pid(), entry.getKey());
+            }
+        }
+        return roots;
+    }
+
     /// Whether this runtime has ever seen the id — the `/i/<id>/` proxy uses it
     /// to tell "no such instance" (404) from "known but not running" (502).
     ///

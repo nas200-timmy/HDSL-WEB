@@ -25,6 +25,7 @@ import com.google.gson.JsonParser;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
@@ -180,17 +181,17 @@ public final class ZcodeApiServlet extends HttpServlet {
                     switch (request.getMethod()) {
                         case "GET" -> getInstance(request, response, id);
                         case "PATCH" -> patchInstance(request, response, id);
-                        case "DELETE" -> deleteInstance(response, id);
+                        case "DELETE" -> deleteInstance(request, response, id);
                         default -> Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
                     }
                     return;
                 }
                 if (segments.length == 3 && "launch".equals(segments[2]) && "POST".equals(request.getMethod())) {
-                    launch(response, id);
+                    launch(request, response, id);
                     return;
                 }
                 if (segments.length == 3 && "stop".equals(segments[2]) && "POST".equals(request.getMethod())) {
-                    stop(response, id);
+                    stop(request, response, id);
                     return;
                 }
                 if (segments.length == 3 && "terminal".equals(segments[2])
@@ -352,7 +353,8 @@ public final class ZcodeApiServlet extends HttpServlet {
         Json.writePreservingNulls(response, Map.of("instance", instanceJson(patched, request)));
     }
 
-    private void deleteInstance(HttpServletResponse response, String id) throws IOException, ZcodeException {
+    private void deleteInstance(HttpServletRequest request, HttpServletResponse response, String id)
+            throws IOException, ZcodeException {
         ZcodeInstance instance = manager.find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such ZCode instance");
@@ -365,12 +367,25 @@ public final class ZcodeApiServlet extends HttpServlet {
         }
         instanceTerminal.close(ZcodeTui.BRAND, id);
         manager.delete(id);
+        AuditLog.log(AuditLog.Channel.WEB, "zcode.instance.delete", id,
+                AuthFilter.selfDirected(request, ZcodeTui.BRAND, id) ? "self_delete" : "success",
+                actorOf(request), request.getRemoteAddr());
         response.setStatus(204);
+    }
+
+    /// The actor behind a request, for the audit trail: the session's
+    /// username, which for an agent grant is `agent:<label>`.
+    ///
+    /// @param request the request
+    /// @return the actor, or `null` when there is no session
+    private static @Nullable String actorOf(HttpServletRequest request) {
+        Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
+        return session instanceof AuthService.Session value ? value.username() : null;
     }
 
     // ------------------------------------------------------------ launch / stop --
 
-    private void launch(HttpServletResponse response, String id) throws IOException {
+    private void launch(HttpServletRequest request, HttpServletResponse response, String id) throws IOException {
         ZcodeInstance instance = manager.find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such ZCode instance");
@@ -401,10 +416,13 @@ public final class ZcodeApiServlet extends HttpServlet {
                 + environment.getOrDefault("PATH", ""));
         ZcodeRuntime.Status status = ZcodeRuntime.launch(
                 manager, instance, environment, node.toString(), packageDir());
+        AuditLog.log(AuditLog.Channel.WEB, "zcode.instance.launch", id,
+                AuthFilter.selfDirected(request, ZcodeTui.BRAND, id) ? "self_launch" : "success",
+                actorOf(request), request.getRemoteAddr());
         writeStatus(response, id, status);
     }
 
-    private void stop(HttpServletResponse response, String id) throws IOException {
+    private void stop(HttpServletRequest request, HttpServletResponse response, String id) throws IOException {
         ZcodeInstance instance = manager.find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such ZCode instance");
@@ -412,6 +430,9 @@ public final class ZcodeApiServlet extends HttpServlet {
         }
         instanceTerminal.close(ZcodeTui.BRAND, id);
         ZcodeRuntime.stop(id);
+        AuditLog.log(AuditLog.Channel.WEB, "zcode.instance.stop", id,
+                AuthFilter.selfDirected(request, ZcodeTui.BRAND, id) ? "self_stop" : "success",
+                actorOf(request), request.getRemoteAddr());
         writeStatus(response, id, ZcodeRuntime.status(id));
     }
 

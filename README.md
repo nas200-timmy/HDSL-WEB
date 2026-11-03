@@ -637,9 +637,11 @@ https:
 - **agent 访问是另一把较小的钥匙**：agent 用自己的密码（`auth/agent.json`）走
   `POST /api/developer/agent-auth` 换票——免会话，但必须有人正在提权，票随提权一起失效。
   scope 五类（read / mc / instances / config / plugins），默认只读，未分类路由一律拒绝；
-  `/i/*`、`/ws/*` 与凭据类路由对票永不开放。换票时带 `instanceId` 可以挡住「agent 停掉
-  自己」；不带则面板无法判断，只能靠 agent 自己不做。面板不提供生成票的按钮，票只有
-  agent 密码这一个来源。见 [docs/panel-agent.md](docs/panel-agent.md)。
+  `/i/*`、`/ws/*` 与凭据类路由对票永不开放。**自杀闸靠内核身份**：面板从请求连接反查
+  `/proc` 推导调用者住在哪个实例，三个家族（dsh / 品牌 / ZCode）的停 / 删 / 开终端 /
+  launch 打到自己一律 `409` 并写明原因；推导不出又未绑定的票，致命操作一律拒绝。在实例
+  里换票，票会自动绑对自己的 `family/id`，模型不用知道自己是谁。面板不提供生成票的按钮，
+  票只有 agent 密码这一个来源。见 [docs/panel-agent.md](docs/panel-agent.md)。
 - **实例终端效果上等于 RCE**：五道门（E-Stop → 总开关 → HTTPS → 开发者口令 → 提权）之后才启动，
   启动的是适配器解析出的 argv、**不经 shell**（Windows 上 `.cmd`/`.bat`/`.ps1`/`.com` 一律拒绝）。
   面板只应监听回环或可信网络；公网暴露必须在网络层再加保护。见

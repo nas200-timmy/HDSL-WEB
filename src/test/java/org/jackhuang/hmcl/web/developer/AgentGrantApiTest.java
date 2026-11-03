@@ -121,6 +121,79 @@ class AgentGrantApiTest {
         }
     }
 
+    /// An unbound token is an unidentified caller: the fatal operations are
+    /// closed in **every** family, not just the dsh shape. The 0.6.60 hole was
+    /// exactly here — `/api/brands/…` and `/api/zcode/…` went straight through
+    /// and ended the instance the caller was running in.
+    @Test
+    void anUnboundGrantMayNotStopAnythingInAnyFamily() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "https://127.0.0.1:" + running.port();
+            String cookie = elevatedSession(client, base);
+
+            // No instanceId, and this test's JVM is nobody's instance: the
+            // panel cannot place the caller, so nothing fatal is answered.
+            String token = mint(client, base, cookie,
+                    "\"label\":\"probe\",\"scopes\":[\"read\",\"instances\"]}")
+                    .get("token").getAsString();
+
+            HttpResponse<String> dsh = post(client, base + "/api/instances/inst-a/stop", "{}", null, token);
+            assertEquals(409, dsh.statusCode(), dsh.body());
+            assertTrue(dsh.body().contains("self_operation_refused"), dsh.body());
+            assertTrue(dsh.body().contains("cannot identify"), dsh.body());
+
+            HttpResponse<String> brand = post(client, base + "/api/brands/kimi/instances/inst-a/stop", "{}", null, token);
+            assertEquals(409, brand.statusCode(), brand.body());
+            assertTrue(brand.body().contains("self_operation_refused"), brand.body());
+
+            HttpResponse<String> zcode = post(client, base + "/api/zcode/instances/inst-a/stop", "{}", null, token);
+            assertEquals(409, zcode.statusCode(), zcode.body());
+
+            HttpResponse<String> deleted = deleteWithBearer(client,
+                    base + "/api/brands/kimi/instances/inst-a", token);
+            assertEquals(409, deleted.statusCode(), deleted.body());
+
+            HttpResponse<String> terminal = post(client, base + "/api/zcode/instances/inst-a/terminal", "{}", null, token);
+            assertEquals(409, terminal.statusCode(), terminal.body());
+
+            // Launching a stopped instance ends nobody inside it: the gate
+            // steps aside and the route answers for itself.
+            HttpResponse<String> launch = post(client, base + "/api/brands/kimi/instances/inst-a/launch",
+                    "{}", null, token);
+            assertTrue(launch.statusCode() != 409, launch.body());
+        }
+    }
+
+    /// A binding the caller claimed at mint time still guards the other two
+    /// families: the brand and ZCode shapes answered to no binding in 0.6.60.
+    @Test
+    void aClaimedBindingGuardsTheBrandAndZcodeShapes() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "https://127.0.0.1:" + running.port();
+            String cookie = elevatedSession(client, base);
+
+            String token = mint(client, base, cookie,
+                    "\"label\":\"probe\",\"scopes\":[\"read\",\"instances\"],\"instanceId\":\"inst-a\"}")
+                    .get("token").getAsString();
+
+            HttpResponse<String> brand = post(client, base + "/api/brands/kimi/instances/inst-a/stop", "{}", null, token);
+            assertEquals(409, brand.statusCode(), brand.body());
+            assertTrue(brand.body().contains("self_operation_refused"), brand.body());
+
+            HttpResponse<String> zcode = post(client, base + "/api/zcode/instances/inst-a/terminal", "{}", null, token);
+            assertEquals(409, zcode.statusCode(), zcode.body());
+
+            // The same operation on another instance is ordinary work.
+            HttpResponse<String> other = post(client, base + "/api/brands/kimi/instances/inst-b/stop",
+                    "{}", null, token);
+            assertTrue(other.statusCode() != 409 && other.statusCode() != 403,
+                    "stopping another brand instance must pass the gate, got "
+                            + other.statusCode() + " " + other.body());
+        }
+    }
+
     @Test
     void theGrantCannotClaimAScopeThisBuildDoesNotKnow() throws Exception {
         try (TestSupport.RunningServer running = start()) {
@@ -285,6 +358,13 @@ class AgentGrantApiTest {
                     // would not already reach /api/*.
                     config.developerGuard.scope = org.jackhuang.hmcl.web.config.DeveloperGuardScope.ALL;
                 });
+    }
+
+    private static HttpResponse<String> deleteWithBearer(HttpClient client, String url, String bearer)
+            throws Exception {
+        return client.send(HttpRequest.newBuilder(URI.create(url))
+                        .header("Authorization", "Bearer " + bearer).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
     }
 
     private static String elevatedSession(HttpClient client, String base) throws Exception {

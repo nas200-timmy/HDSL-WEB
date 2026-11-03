@@ -285,6 +285,14 @@ public final class DshProcess {
         return process.isRunning();
     }
 
+    /// The pid of the instance's root process, as the panel's caller
+    /// identification sees it ([org.jackhuang.hmcl.web.auth.PeerIdentity]).
+    ///
+    /// @return the pid
+    public long pid() {
+        return process.getProcess().pid();
+    }
+
     /// Returns how long the process has been running.
     ///
     /// @return the elapsed time since start

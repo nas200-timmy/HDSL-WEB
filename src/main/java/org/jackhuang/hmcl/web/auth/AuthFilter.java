@@ -76,6 +76,10 @@ public final class AuthFilter implements Filter {
     /// The grants behind agent bearer tokens: an agent has no browser, so the
     /// cookie is not a door it can use.
     private final org.jackhuang.hmcl.web.developer.DeveloperElevation elevation;
+    /// Which instance a caller runs in, derived from the kernel. The
+    /// fatal-operation gate reads it: a caller that names no instance
+    /// identifies nobody, and nobody may not stop one.
+    private final PeerIdentity identity;
     /// 会话 Cookie 的 Path：根挂载是 `/`，子路径挂载是挂载点本身。
     /// 同一个域名下挂两个面板（`/a/`、`/b/`）时，Path=/ 的同名 Cookie 会互相覆盖，
     /// 表现为「登录 A 之后 B 掉线」。
@@ -95,16 +99,19 @@ public final class AuthFilter implements Filter {
     ///                      mounted on one origin (`/a/` and `/b/`) do not
     ///                      overwrite each other's session.
     /// @param elevation     the agent grants behind bearer tokens
+    /// @param identity      the caller's instance, derived per connection
     public AuthFilter(AuthService authService, boolean authDisabled,
                       java.util.function.Predicate<HttpServletRequest> secureRequest, int ttlSeconds,
                       String basePath,
-                      org.jackhuang.hmcl.web.developer.DeveloperElevation elevation) {
+                      org.jackhuang.hmcl.web.developer.DeveloperElevation elevation,
+                      PeerIdentity identity) {
         this.authService = authService;
         this.authDisabled = authDisabled;
         this.secureRequest = secureRequest;
         this.cookieMaxAgeSeconds = ttlSeconds;
         this.cookiePath = basePath == null || basePath.isBlank() ? "/" : basePath;
         this.elevation = elevation;
+        this.identity = identity;
     }
 
     /// The request path as this panel's routes are written.
@@ -152,7 +159,13 @@ public final class AuthFilter implements Filter {
         Boolean agent = admitAgent(req, resp);
         if (agent != null) {
             if (agent) {
-                chain.doFilter(request, response);
+                try {
+                    chain.doFilter(request, response);
+                } finally {
+                    // The context must not leak onto whatever this thread
+                    // serves next, and an exception must not keep it either.
+                    org.jackhuang.hmcl.web.audit.AuditLog.endAgentFields();
+                }
             }
             return;
         }
@@ -163,8 +176,18 @@ public final class AuthFilter implements Filter {
     ///
     /// This is the panel's own gate for callers that are not a browser: the
     /// grant behind the token says **what** may be reached
-    /// ([org.jackhuang.hmcl.web.developer.AgentScopes]), and the two refusals
+    /// ([org.jackhuang.hmcl.web.developer.AgentScopes]), and the refusals
     /// below say **what never may be**, whatever the grant claims.
+    ///
+    /// The fatal-operation gate is identity-driven, not self-reported: the
+    /// instance the caller runs in is derived from the connection's process
+    /// tree ([PeerIdentity]) and compared against the route's target. A
+    /// caller the panel cannot place — outside every tree, or outside this
+    /// network namespace — falls back to the grant's binding, and a grant
+    /// that binds nothing may not stop, delete or take over anything: the
+    /// operation may be aimed at the caller's own instance, and that call
+    /// would never return. A caller that proves the developer password
+    /// (a session) is a person's hand and never passes through here.
     ///
     /// The session attribute is filled with a synthetic `agent:<label>`
     /// session so every existing handler and the audit trail name the agent
@@ -182,7 +205,7 @@ public final class AuthFilter implements Filter {
             return null;
         }
         String bearer = header.substring(7).trim();
-        var grant = elevation.agentGrant(bearer);
+        org.jackhuang.hmcl.web.developer.DeveloperElevation.AgentGrant grant = elevation.agentGrant(bearer);
         if (grant == null) {
             // Unknown, expired and revoked tokens all read as "not an agent":
             // the caller gets the same 401 as a missing cookie, so a probe
@@ -192,26 +215,135 @@ public final class AuthFilter implements Filter {
         String method = req.getMethod();
         String path = pathOf(req);
         if (org.jackhuang.hmcl.web.developer.AgentScopes.forbidden(method, path)) {
+            auditDenied(req, path, grant, "route_closed", null);
             Json.error(resp, HttpServletResponse.SC_FORBIDDEN, "agent_scope_denied: this route is closed to agents");
             return false;
         }
         String needed = org.jackhuang.hmcl.web.developer.AgentScopes.required(method, path);
         if (needed == null || !grant.scopes().contains(needed)) {
+            auditDenied(req, path, grant, "scope_denied",
+                    needed == null ? "this route has no agent scope" : needed);
             Json.error(resp, HttpServletResponse.SC_FORBIDDEN,
                     "agent_scope_denied: " + (needed == null ? "this route has no agent scope" : needed));
             return false;
         }
-        if (org.jackhuang.hmcl.web.developer.AgentScopes.selfFatal(method, path, grant.instanceId())) {
-            // The tool call could never return: the process serving it is the
-            // one being stopped. Refusing is honest; queueing would promise an
-            // executor that no longer exists.
-            Json.error(resp, HttpServletResponse.SC_CONFLICT,
-                    "self_operation_refused: an agent cannot stop or take over its own instance");
-            return false;
+        org.jackhuang.hmcl.web.developer.AgentScopes.Fatal target =
+                org.jackhuang.hmcl.web.developer.AgentScopes.fatalTarget(method, path);
+        if (target != null) {
+            String refusal = fatalRefusal(req, path, grant, target, method);
+            if (refusal != null) {
+                Json.error(resp, HttpServletResponse.SC_CONFLICT, refusal);
+                return false;
+            }
         }
         req.setAttribute(SESSION_ATTRIBUTE, new AuthService.Session("agent:" + grant.label(), grant.expiresAt()));
         req.setAttribute(AGENT_GRANT_ATTRIBUTE, grant);
+        org.jackhuang.hmcl.web.audit.AuditLog.beginAgentFields(
+                new org.jackhuang.hmcl.web.audit.AuditLog.AgentFields(grant.id(), grant.scopes(), grant.instanceId()));
         return true;
+    }
+
+    /// The refusal for a fatal operation, or `null` when it may proceed.
+    ///
+    /// Priority is the kernel's: a derived identity outranks whatever the
+    /// grant claims, in both directions — a caller proven to live elsewhere
+    /// may stop the target even when the grant binds it, and a caller proven
+    /// to live inside it is refused whatever the grant claims.
+    ///
+    /// @param req    the request
+    /// @param path   the decoded path, for the message
+    /// @param grant  the grant behind the token
+    /// @param target the instance the route would end or take over
+    /// @param method the request method, for the message
+    /// @return the refusal to answer, or `null`
+    private @Nullable String fatalRefusal(HttpServletRequest req, String path,
+                                          org.jackhuang.hmcl.web.developer.DeveloperElevation.AgentGrant grant,
+                                          org.jackhuang.hmcl.web.developer.AgentScopes.Fatal target,
+                                          String method) {
+        PeerIdentity.Ref self = identity.derive(req.getRemotePort(), req.getLocalPort());
+        String targetName = target.family() + "/" + target.id();
+        if (self != null) {
+            if (target.matches(self.family(), self.instanceId())) {
+                auditDenied(req, path, grant, "self_refused", null, self.wire());
+                return "self_operation_refused: " + method + " " + path + " would end instance " + targetName
+                        + " — the very instance this request is running in (the panel identified the calling"
+                        + " process tree). Killing the process that is waiting for this answer means the tool"
+                        + " call never returns, so the panel refuses. Ask the operator to do this from the panel,"
+                        + " or run it from outside the instance.";
+            }
+            return null;
+        }
+        if (target.matchesBound(grant.instanceId())) {
+            auditDenied(req, path, grant, "self_refused", null, grant.instanceId());
+            return "self_operation_refused: " + method + " " + path + " would end instance " + targetName
+                    + " — the instance this grant is bound to. Killing the process that is waiting for this"
+                    + " answer means the tool call never returns, so the panel refuses. Ask the operator to do"
+                    + " this from the panel, or run it from outside the instance.";
+        }
+        if (target.launch()) {
+            if (identity.terminalOpen(target.family(), target.id())) {
+                auditDenied(req, path, grant, "self_refused_launch", null, null);
+                return "self_operation_refused: " + method + " " + path + " would close the running terminal of "
+                        + targetName + ", and the panel cannot identify this caller — it may be the one inside"
+                        + " that terminal, and that tool call would never return. Mint the token from inside your"
+                        + " instance so the panel can derive your identity, or let the operator launch it.";
+            }
+            // A stopped instance has nobody inside it to kill; the launch may go.
+            return null;
+        }
+        if (grant.instanceId() == null || grant.instanceId().isBlank()) {
+            auditDenied(req, path, grant, "self_refused_unidentified", null, null);
+            return "self_operation_refused: the panel cannot identify which instance this caller runs in and the"
+                    + " grant binds none, so " + method + " " + path + " is refused — it may be aimed at the"
+                    + " caller's own instance, and that tool call would never return. Mint the token from inside"
+                    + " your instance (the panel then derives and binds the identity), or pass instanceId; the"
+                    + " operator can always do this from the panel.";
+        }
+        return null;
+    }
+
+    /// Records a refusal this gate wrote, so the trail shows the attempt —
+    /// the panel's most safety-relevant answers are not its quietest ones.
+    private static void auditDenied(HttpServletRequest req, String path,
+                                    org.jackhuang.hmcl.web.developer.DeveloperElevation.AgentGrant grant,
+                                    String outcome, @Nullable String scope) {
+        auditDenied(req, path, grant, outcome, scope, null);
+    }
+
+    private static void auditDenied(HttpServletRequest req, String path,
+                                    org.jackhuang.hmcl.web.developer.DeveloperElevation.AgentGrant grant,
+                                    String outcome, @Nullable String scope, @Nullable String identity) {
+        java.util.Map<String, Object> extra = new java.util.LinkedHashMap<>();
+        extra.put("route", path);
+        extra.put("scopes", java.util.List.copyOf(grant.scopes()));
+        if (grant.instanceId() != null) {
+            extra.put("caller", grant.instanceId());
+        }
+        if (scope != null) {
+            extra.put("scope", scope);
+        }
+        if (identity != null) {
+            extra.put("identity", identity);
+        }
+        org.jackhuang.hmcl.web.audit.AuditLog.log(org.jackhuang.hmcl.web.audit.AuditLog.Channel.WEB,
+                "agent.denied", path, outcome, "agent:" + grant.label(), req.getRemoteAddr(), extra);
+    }
+
+    /// Whether an admitted agent grant names `family/id` — for marking an
+    /// executed operation that hit the grant's own instance, in case a route
+    /// family ever slips past [org.jackhuang.hmcl.web.developer.AgentScopes#fatalTarget].
+    ///
+    /// @param request the request, admitted by an agent grant or not
+    /// @param family  the instance's family
+    /// @param id      the instance's id
+    /// @return whether the grant is bound to that instance
+    public static boolean selfDirected(HttpServletRequest request, String family, String id) {
+        Object attribute = request.getAttribute(AGENT_GRANT_ATTRIBUTE);
+        if (!(attribute instanceof org.jackhuang.hmcl.web.developer.DeveloperElevation.AgentGrant grant)) {
+            return false;
+        }
+        return new org.jackhuang.hmcl.web.developer.AgentScopes.Fatal(family, id, false)
+                .matchesBound(grant.instanceId());
     }
 
     /// Whether this request was admitted by an agent grant rather than a

@@ -223,7 +223,7 @@ public final class BrandApiServlet extends HttpServlet {
                 switch (request.getMethod()) {
                     case "GET" -> getInstance(brand, ref, request, response, id);
                     case "PATCH" -> patchInstance(brand, ref, request, response, id);
-                    case "DELETE" -> deleteInstance(brand, ref, response, id);
+                    case "DELETE" -> deleteInstance(brand, ref, request, response, id);
                     default -> Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
                 }
                 return;
@@ -233,7 +233,7 @@ public final class BrandApiServlet extends HttpServlet {
                 return;
             }
             if (segments.length == 3 && "stop".equals(segments[2]) && "POST".equals(request.getMethod())) {
-                stop(brand, ref, response, id);
+                stop(brand, ref, request, response, id);
                 return;
             }
             if (segments.length == 3 && "open".equals(segments[2]) && "GET".equals(request.getMethod())) {
@@ -626,7 +626,8 @@ public final class BrandApiServlet extends HttpServlet {
         Json.writePreservingNulls(response, Map.of("instance", instanceJson(brand, patched, request)));
     }
 
-    private void deleteInstance(Brand brand, PathRef ref, HttpServletResponse response, String id)
+    private void deleteInstance(Brand brand, PathRef ref, HttpServletRequest request,
+                                HttpServletResponse response, String id)
             throws IOException, BrandException {
         BrandInstance instance = ref.manager().find(id);
         if (instance == null) {
@@ -642,6 +643,9 @@ public final class BrandApiServlet extends HttpServlet {
         }
         instanceTerminal.close(brand.id(), id);
         ref.manager().delete(id);
+        AuditLog.log(AuditLog.Channel.WEB, "brand.instance.delete", brand.id() + "/" + id,
+                AuthFilter.selfDirected(request, brand.id(), id) ? "self_delete" : "success",
+                actorOf(request), request.getRemoteAddr());
         response.setStatus(204);
     }
 
@@ -675,8 +679,7 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                     brand.sourceLabel() + " " + instance.version() + " is not installed");
             return;
-        }
-        // The two modes are exclusive, and the web mode wins (docs/brands.md):
+        }        // The two modes are exclusive, and the web mode wins (docs/brands.md):
         // Hermes' terminal starts its own *detached* gateway for the same home,
         // and the wrapper can only own a gateway the TUI is not holding. Closing
         // the session here and passing --replace in the wrapper is what makes
@@ -691,10 +694,14 @@ public final class BrandApiServlet extends HttpServlet {
         BrandRuntime.Status status = BrandRuntime.launch(
                 brand, ref.manager(), instance,
                 org.jackhuang.hmcl.web.http.HostHeaders.stripPort(request.getHeader("Host")), packageDir);
+        AuditLog.log(AuditLog.Channel.WEB, "brand.instance.launch", brand.id() + "/" + id,
+                AuthFilter.selfDirected(request, brand.id(), id) ? "self_launch" : "success",
+                actorOf(request), request.getRemoteAddr());
         writeStatus(response, status);
     }
 
-    private void stop(Brand brand, PathRef ref, HttpServletResponse response, String id) throws IOException {
+    private void stop(Brand brand, PathRef ref, HttpServletRequest request, HttpServletResponse response, String id)
+            throws IOException {
         BrandInstance instance = ref.manager().find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
@@ -705,6 +712,9 @@ public final class BrandApiServlet extends HttpServlet {
         // would be a lie the next browser tab could still see.
         instanceTerminal.close(brand.id(), id);
         BrandRuntime.stop(id);
+        AuditLog.log(AuditLog.Channel.WEB, "brand.instance.stop", brand.id() + "/" + id,
+                AuthFilter.selfDirected(request, brand.id(), id) ? "self_stop" : "success",
+                actorOf(request), request.getRemoteAddr());
         writeStatus(response, BrandRuntime.status(id));
     }
 

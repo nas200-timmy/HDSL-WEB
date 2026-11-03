@@ -271,8 +271,25 @@ public final class DshProcessManager {
     /// Stops every running process.
     ///
     /// Called from the JVM shutdown hook; also safe to call directly.
-    public static void stopAll() {
-        for (DshProcess process : List.copyOf(RUNNING.values())) {
+    /// The live dsh instance roots as the panel's caller identification sees
+    /// them ([org.jackhuang.hmcl.web.auth.PeerIdentity]).
+    ///
+    /// @return `pid → instance id`, never `null`
+    public static Map<Long, String> liveRootPids() {
+        Map<Long, String> roots = new java.util.HashMap<>();
+        for (Map.Entry<String, DshProcess> entry : RUNNING.entrySet()) {
+            if (!entry.getValue().isRunning()) {
+                continue;
+            }
+            long pid = entry.getValue().pid();
+            if (pid > 0) {
+                roots.put(pid, entry.getKey());
+            }
+        }
+        return roots;
+    }
+
+    public static void stopAll() {        for (DshProcess process : List.copyOf(RUNNING.values())) {
             try {
                 process.stop();
             } catch (RuntimeException e) {

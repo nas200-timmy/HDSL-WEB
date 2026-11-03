@@ -87,11 +87,78 @@ public final class AuditLog {
     /// the operation it observed down with it.
     public static void log(Channel channel, String action, @Nullable String object,
                            String outcome, @Nullable String actor, @Nullable String ip) {
+        log(channel, action, object, outcome, actor, ip, null);
+    }
+
+    /// Records one event with extra fields.
+    ///
+    /// The extra fields are merged after the base ones and after whatever the
+    /// current [AgentFields] context carries, so a caller naming a field
+    /// explicitly is never overridden by the context.
+    ///
+    /// @param extra the fields, values serialised as JSON, or `null`
+    public static void log(Channel channel, String action, @Nullable String object,
+                           String outcome, @Nullable String actor, @Nullable String ip,
+                           @Nullable java.util.Map<String, Object> extra) {
         AuditLog log = instance;
         if (log == null) {
             return;
         }
-        log.write(channel, action, object, outcome, actor, ip);
+        log.write(channel, action, object, outcome, actor, ip, extra);
+    }
+
+    /// The agent context every entry written on this thread carries.
+    ///
+    /// Set by the session gate when it admits an agent grant and cleared when
+    /// the request ends, so every action an agent takes is logged with the
+    /// grant that authorized it and the instance the grant is bound to — the
+    /// fields the trail needs to answer "which agent, on whose authority,
+    /// running where" without a second table.
+    public static final class AgentFields {
+
+        private final java.util.Map<String, Object> fields = new java.util.LinkedHashMap<>();
+
+        /// Adds the grant's identity and capabilities.
+        ///
+        /// @param grantId  the grant's id
+        /// @param scopes   the capability classes the grant holds
+        /// @param binding  the instance the grant is bound to (`family/id`), or `null`
+        public AgentFields(String grantId, java.util.Set<String> scopes, @Nullable String binding) {
+            fields.put("grant", grantId);
+            fields.put("scopes", java.util.List.copyOf(scopes));
+            if (binding != null && !binding.isBlank()) {
+                fields.put("caller", binding);
+            }
+        }
+
+        /// One more field, for a refusal's reason or a mint's expiry.
+        ///
+        /// @param key   the field name
+        /// @param value the value
+        /// @return this
+        public AgentFields put(String key, Object value) {
+            fields.put(key, value);
+            return this;
+        }
+    }
+
+    private static final ThreadLocal<@Nullable AgentFields> AGENT_FIELDS = new ThreadLocal<>();
+
+    /// Marks this thread as serving an admitted agent request.
+    ///
+    /// Cleared by [#endAgentFields] when the request ends. A handler that hops
+    /// threads mid-request loses the context — the synchronous routes that
+    /// matter (the fatal ones) never do.
+    ///
+    /// @param fields the agent context
+    public static void beginAgentFields(AgentFields fields) {
+        AGENT_FIELDS.set(fields);
+    }
+
+    /// Drops the agent context, in a `finally` so an exception cannot leak it
+    /// onto the next request this thread serves.
+    public static void endAgentFields() {
+        AGENT_FIELDS.set(null);
     }
 
     private final Path logsDir;
@@ -104,7 +171,8 @@ public final class AuditLog {
     }
 
     private void write(Channel channel, String action, @Nullable String object,
-                       String outcome, @Nullable String actor, @Nullable String ip) {
+                       String outcome, @Nullable String actor, @Nullable String ip,
+                       @Nullable java.util.Map<String, Object> extra) {
         JsonObject event = new JsonObject();
         event.addProperty("ts", Instant.now().toString());
         event.addProperty("channel", channel.wireName);
@@ -119,6 +187,17 @@ public final class AuditLog {
         if (ip != null) {
             event.addProperty("ip", ip);
         }
+        AgentFields context = AGENT_FIELDS.get();
+        if (context != null) {
+            for (var entry : context.fields.entrySet()) {
+                add(event, entry.getKey(), entry.getValue());
+            }
+        }
+        if (extra != null) {
+            for (var entry : extra.entrySet()) {
+                add(event, entry.getKey(), entry.getValue());
+            }
+        }
         synchronized (lock) {
             try {
                 BufferedWriter out = writerForToday();
@@ -128,6 +207,14 @@ public final class AuditLog {
             } catch (IOException | RuntimeException e) {
                 Logger.LOG.warning("Audit write failed: " + e);
             }
+        }
+    }
+
+    /// Adds one extra field, letting a null value mean "omit" so a refusal
+    /// without a derived identity does not carry a misleading `"caller":null`.
+    private static void add(JsonObject event, String key, @Nullable Object value) {
+        if (value != null) {
+            event.add(key, GSON.toJsonTree(value));
         }
     }
 

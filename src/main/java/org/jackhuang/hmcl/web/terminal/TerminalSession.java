@@ -97,6 +97,14 @@ public final class TerminalSession {
         return instanceId;
     }
 
+    /// The pid of the terminal's root process — the instance's live root, as
+    /// [org.jackhuang.hmcl.web.auth.PeerIdentity] sees it.
+    ///
+    /// @return the pid, or `-1` when the platform does not name one
+    public long pid() {
+        return pty.pid();
+    }
+
     public State state() {
         return state;
     }

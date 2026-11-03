@@ -183,6 +183,38 @@ public final class BrandRuntime {
         return process != null && process.isAlive();
     }
 
+    /// One live brand web process as the panel's caller identification sees it
+    /// ([org.jackhuang.hmcl.web.auth.PeerIdentity]).
+    ///
+    /// @param brand      the brand's id
+    /// @param instanceId the instance the process serves
+    /// @param pid        the root process the panel started
+    public record LiveRoot(String brand, String instanceId, long pid) {
+    }
+
+    /// The live brand processes as identification roots.
+    ///
+    /// A wrapper may own several children (Hermes runs its gateway and its
+    /// dashboard under one); the root is still the one process the panel
+    /// started, and every descendant walks up to it.
+    ///
+    /// @return the live roots, never `null`
+    public static List<LiveRoot> liveRoots() {
+        List<LiveRoot> roots = new ArrayList<>();
+        for (Map.Entry<String, Process> entry : PROCESSES.entrySet()) {
+            Process process = entry.getValue();
+            if (!process.isAlive()) {
+                continue;
+            }
+            Brand brand = BRANDS.get(entry.getKey());
+            if (brand == null) {
+                continue;
+            }
+            roots.add(new LiveRoot(brand.id(), entry.getKey(), process.pid()));
+        }
+        return roots;
+    }
+
     /// Whether this runtime has ever seen the id — the `/i/<id>/` proxy uses it
     /// to tell "no such instance" (404) from "known but not running" (502).
     ///

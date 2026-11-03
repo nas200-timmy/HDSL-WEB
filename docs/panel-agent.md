@@ -79,9 +79,11 @@ agent 密码**不是**一条独立的路。用它换票之前，必须已经有�
 四条额外规则，都在 `AuthFilter` 里：
 
 - **未分类的路由一律拒绝**（默认关闭），新接口不会因为没人记得加规则而对 agent 敞开；
-- **自杀类操作一律拒绝**（409 `self_operation_refused`）：停自己所在的实例、开自己的终端
-  （开终端会先停 web 运行时）。这类操作如果放行，工具调用永远拿不到返回——进程正是被调用
-  方自己杀掉的。**拒绝比排队诚实**：排队等于承诺一个已经不存在的执行者。
+- **自杀类操作一律拒绝**（409 `self_operation_refused`，拒绝正文会写明原因与出路）：三个
+  家族——dsh（`/api/instances/{id}/…`）、品牌（`/api/brands/{brand}/instances/{id}/…`）、
+  ZCode（`/api/zcode/instances/{id}/…`）——的 stop / delete / terminal / launch 都算。这类
+  操作如果放行，工具调用永远拿不到返回——进程正是被调用方自己杀掉的。**拒绝比排队诚实**：
+  排队等于承诺一个已经不存在的执行者；
 - **只在 API 边界内**：`/i/*`（反代）与 `/ws/*`（事件流）是浏览器通道，任何 scope 都不放行。
   `read` 不等于"所有 GET"——它只覆盖 `/api/*`。agent 要实例状态就问 API，面板因此记得住
   是谁问的。
@@ -91,6 +93,31 @@ agent 密码**不是**一条独立的路。用它换票之前，必须已经有�
 
 判断用的是 **servlet 实际路由的那份解码路径**，不是原始 URI：`%61dmin-password` 在原始
 URI 里不叫这个名字，经容器解码后就是它。读原始 URI 的检查等于检查了另一个字符串。
+
+### 自杀判定靠身份，不靠自报
+
+自杀规则的核心问题是「调用者住在哪个实例里」。答案不再问调用者，而是**从内核推导**
+（`PeerIdentity`）：请求从回环端口进来，面板按 `/proc/net/tcp` 找到那条 socket 的 inode，
+再按 `/proc/*/fd` 找到持有它的进程，沿 ppid 链上行——每个实例的根进程都是面板亲手起的、
+互为兄弟，所以链上**第一个**命中的实例根就是调用者的家。走到面板自身或链断（`setsid` 脱
+树、容器外脚本、本地代理）就是「身份不明」。
+
+判定优先级（`AuthFilter#fatalRefusal`）：
+
+| 调用者身份 | 目标是自己 | 目标是别的实例 |
+|---|---|---|
+| 内核推导出 X | **409**（内核事实，压倒一切声明） | 放行 |
+| 推导不出，票绑定了 X | **409**（自报绑定兜底） | 放行 |
+| 推导不出，未绑定 | **409**（hard-fatal 一律拒绝） | **409**（身份不明的调用者不许停/删/接管任何实例） |
+
+`launch` 单列：它只在目标实例终端开着时致命（launch 会先关终端）。身份明确且目标不是
+自己 → 放行；身份不明且目标终端开着 → 409；终端没开 → 放行（停着的实例里没有可杀的人）。
+
+由此得到两个性质：**藏身份只会丢权限**（`setsid` 之后致命操作全被拒，不会被误认成别人），
+**偷来的票没有致死力**（从别的进程发，推导结果是身份不明，致命操作照样拒）。
+
+会话（人）不经过这条闸：人用开发者密码提权后停掉跑着 agent 的实例是运维，面板照常执行、
+照常审计——这扇门从来只分辨 agent，不分辨人。
 
 路由自己的提权检查（`requireElevation`）对 agent 一律让路：人的门是开发者密码，agent 的门
 是 scope，而 scope 已经在过滤器里验过。要求 agent 输一个它永远没有的密码，等于把已经授权
@@ -105,6 +132,9 @@ URI 里不叫这个名字，经容器解码后就是它。读原始 URI 的检�
 ## 4. 票的生命周期
 
 - 票由面板内存持有，**不落盘**；面板重启即失效。
+- **绑定是换票时推导的，不是自报的**：agent-auth 那条连接本身会被反查一遍，调用者住在哪个
+  实例里，`instanceId` 就绑哪个（wire 形式 `family/id`，如 `kimi/DClDN1J3w0C_`）。推导不出
+  时才退回调用者自报的值——自报只会多拒绝，不会少拒绝。**在实例里换票，票就自动绑对自己**。
 - **必须先有人提权，而且用的时候还得有人提权。** 发票时到期时间被提权窗口截断；每次请求
   还会再查一次「此刻有没有人提权」。出借人走了（登出、「停止提权」、改或清开发者密码），
   票当场失效，不用等它自己的到期时间。
@@ -120,19 +150,37 @@ URI 里不叫这个名字，经容器解码后就是它。读原始 URI 的检�
 ## 5. 审计
 
 每张票带着 label 进场，`AuthFilter` 把请求伪装成一个 `agent:<label>` 的会话，所以**所有
-既有的 `actorOf(request)` 调用点都不用改**，`audit.jsonl` 里直接就能分出人干的还是模型干的：
+既有的 `actorOf(request)` 调用点都不用改**，`audit.jsonl` 里直接就能分出人干的还是模型干的。
+
+agent 请求还会带三样**机器判定**的字段（`AuditLog` 的请求上下文，每个 handler 不用改）：
+`grant`（票 id）、`scopes`（实际持有的类别）、`caller`（推导/绑定的 `family/id`）。gate 的
+**拒绝也留痕**（`action: agent.denied`）：scope 拒绝记 `route_closed` / `scope_denied:*`，
+自杀拒绝记 `self_refused` / `self_refused_unidentified` / `self_refused_launch`——护栏起
+作用时看得见，护栏缺席时事后也查得出。真的执行出去的自指操作（本不该发生，防御纵深）
+outcome 记成 `self_stop` / `self_delete` / `self_launch`，不与 `success` 混排。
 
 ```jsonl
 {"channel":"web","action":"developer.agent","object":"AbC123","outcome":"mint","actor":"nas200"}
-{"channel":"terminal","action":"mc.instance.start","object":"vanilla-1.14.4","outcome":"success","actor":"agent:dsh-0.2.1-alpha.1"}
+{"channel":"web","action":"agent.auth","object":"joh9by87","outcome":"success","actor":"agent:probe","caller":"kimi/DClDN1J3w0C_","scopes":["read","instances"],"grant":"joh9by87"}
+{"channel":"web","action":"agent.denied","object":"/api/brands/kimi/instances/DClDN1J3w0C_/stop","outcome":"self_refused","actor":"agent:probe","identity":"kimi/DClDN1J3w0C_","route":"/api/brands/kimi/instances/DClDN1J3w0C_/stop"}
+{"channel":"web","action":"instance.stop","object":"vanilla-1.14.4","outcome":"success","actor":"agent:dsh-0.2.1-alpha.1","caller":"kimi/DClDN1J3w0C_","grant":"joh9by87"}
 ```
 
 ## 6. 已知的边界
 
-- **给开发者密码就没办法了。** 操作员若把开发者密码交给 agent，上面所有限制都可以被绕过
-  ——它可以直接提权，再自己发票。这套设计只保证"不需要给开发者密码也能让 agent 干活"。
-- **票据泄漏的后果被 scope 兜住。** agent 与面板同一用户，理论上能读到自己进程里的票；但
-  即使拿到票，能碰的也只有操作员授权的那几类，且随时可以在面板上掐掉。
+- **给开发者密码就没办法了。** 操作员若把开发者密码（连同登录）交给 agent，上面所有限制
+  都可以被绕过——它可以直接提权，再自己发票。会话走的门不装自杀闸：人停掉跑着 agent 的
+  实例是运维。这套设计只保证"不需要给开发者密码也能让 agent 干活"。
+- **票据泄漏的后果被 scope 兜住，致死力被身份兜住。** agent 与面板同一用户，理论上能读到
+  自己进程里的票；但即使拿到票，能碰的也只有操作员授权的那几类，且随时可以在面板上掐掉。
+  而且致命操作看的是**当下这条连接**的身份：偷来的票从别的进程发，推导不出原主，stop /
+  delete / terminal / launch 照样被拒——票能带走的是读与常规变更，不是致死力。
+- **藏在树外就没有致命权限。** `setsid` 脱树、经本地系统代理、容器外脚本，推导都是
+  「身份不明」：hard-fatal 一律拒绝。这挡的是"藏起来骗闸门"——骗成功的结果只是丢权限，
+  不是得到权限。代价是容器外的合法脚本（CI、巡检）想停实例得让操作员做，或换票时自报
+  `instanceId`。
+- **身份推导是 Linux 的。** `/proc` 反查只在 Linux 容器里成立；其它平台上推导恒为
+  「身份不明」，退化为自报绑定 + 未绑定拒绝致命操作的保守行为。
 - **无人值守没有面板权限。** 这是设计选择，不是缺陷：票到期就得有人重新授权。
 - **日志不是脱敏的。** `read` 能读日志，而日志里可能印着 URL、端口、模型回复。面板摘掉了
   结构化凭据（`token`、`url` 字段），但不做日志正文的脱敏——那是运维数据，agent 读得到是
@@ -142,12 +190,12 @@ URI 里不叫这个名字，经容器解码后就是它。读原始 URI 的检�
 
 | 方法 | 路径 | 需要 | 作用 |
 |---|---|---|---|
-| `POST` | `/api/developer/agent-auth` | 仅 agent 密码（**免会话**），且必须有人已提权 | 换一张受 cap 限制的票 |
+| `POST` | `/api/developer/agent-auth` | 仅 agent 密码（**免会话**），且必须有人已提权 | 换一张受 cap 限制的票；**绑定由这条连接推导**（住在实例里换票即自动绑对），推导不出才用 body 里的 `instanceId` |
 | `GET` | `/api/developer/agent-grants` | 已提权 | 列出当前所有票 |
 | `DELETE` | `/api/developer/agent-grants/{id}` | 已提权 | 掐掉一张 |
 | `GET/POST` | `/api/developer/agent-password[/clear]` | 已提权 | 设置/查看/清除 agent 密码与它的 cap |
 
-`curl` 一把梭：
+`curl` 一把梭（在实例里执行时，面板会从这条连接推导出 `caller: family/你的实例id` 并绑进票里）：
 
 ```sh
 TOKEN=$(curl -sk https://127.0.0.1:3080/api/developer/agent-auth \

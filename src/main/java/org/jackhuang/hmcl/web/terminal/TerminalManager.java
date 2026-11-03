@@ -23,10 +23,11 @@ import org.jackhuang.hmcl.web.terminal.pty.PtySize;
 import org.jetbrains.annotations.NotNullByDefault;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-
 /// The registry of running terminals: one per instance, at most.
 ///
 /// The manager owns the lifecycle the web layer cannot be trusted with:
@@ -90,6 +91,38 @@ public final class TerminalManager implements AutoCloseable {
     /// The running terminal of an instance, if any.
     public Optional<TerminalSession> find(String brand, String instanceId) {
         return Optional.ofNullable(sessions.get(key(brand, instanceId)));
+    }
+
+    /// One live terminal as the panel's caller identification sees it
+    /// ([org.jackhuang.hmcl.web.auth.PeerIdentity]).
+    ///
+    /// @param brand      the registry key's brand half: `dsh`, a brand id, or `zcode`
+    /// @param instanceId the instance the terminal belongs to
+    /// @param pid        the terminal's root process
+    public record LiveTerminal(String brand, String instanceId, long pid) {
+    }
+
+    /// Every terminal this manager is running, for caller identification.
+    ///
+    /// Each root pid names exactly one instance, because the panel — not a
+    /// shell — spawned it: the trees the fatal-operation gate walks are these
+    /// keys and nothing else.
+    ///
+    /// @return the live terminals, never `null`
+    public List<LiveTerminal> liveTerminals() {
+        List<LiveTerminal> live = new ArrayList<>();
+        for (Map.Entry<String, TerminalSession> entry : sessions.entrySet()) {
+            String key = entry.getKey();
+            int split = key.indexOf('\u0000');
+            if (split <= 0 || split == key.length() - 1) {
+                continue;
+            }
+            long pid = entry.getValue().pid();
+            if (pid > 0) {
+                live.add(new LiveTerminal(key.substring(0, split), key.substring(split + 1), pid));
+            }
+        }
+        return live;
     }
 
     /// Kills the instance's terminal, if one is running.

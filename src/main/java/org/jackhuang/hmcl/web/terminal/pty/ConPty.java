@@ -172,6 +172,7 @@ public final class ConPty implements Pty {
     private @Nullable Pointer pseudoConsole;
 
     private final Pointer process;
+    private final long pid;
     private final @Nullable Pointer job;
     private final @Nullable Pointer thread;
 
@@ -182,12 +183,13 @@ public final class ConPty implements Pty {
     private final Thread pump;
     private volatile int exitCode = -1;
 
-    private ConPty(Leased input, Leased output, Pointer pseudoConsole, Pointer process,
+    private ConPty(Leased input, Leased output, Pointer pseudoConsole, Pointer process, long pid,
                    @Nullable Pointer job, @Nullable Pointer thread) {
         this.input = input;
         this.output = output;
         this.pseudoConsole = pseudoConsole;
         this.process = process;
+        this.pid = pid;
         this.job = job;
         this.thread = thread;
         // Platform threads, not virtual ones: the pump blocks in a native read and
@@ -338,7 +340,8 @@ public final class ConPty implements Pty {
                 throw new PtyException("ResumeThread", Native.getLastError());
             }
 
-            ConPty pty = new ConPty(new Leased(ourIn), new Leased(ourOut), pseudoConsole, process, job, thread);
+            ConPty pty = new ConPty(new Leased(ourIn), new Leased(ourOut), pseudoConsole, process,
+                    information.dwProcessId & 0xFFFFFFFFL, job, thread);
             running = true;
             return pty;
         } finally {
@@ -580,6 +583,11 @@ public final class ConPty implements Pty {
             Thread.currentThread().interrupt();
             return -1;
         }
+    }
+
+    @Override
+    public long pid() {
+        return pid;
     }
 
     /// Gives the child `grace` to leave on its own, then kills its job object.
