@@ -31,7 +31,6 @@ import org.jackhuang.hmcl.web.zcode.ZcodeRuntime;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -321,41 +320,11 @@ public final class PeerIdentity {
             }
         }
 
+        /// The descriptor scan, with the uid split handled inside
+        /// [SocketOwnerLookup]: a root panel cannot read a uid-1000 agent's
+        /// `/proc/<pid>/fd`, so there it asks a child that runs as that uid.
         private static @Nullable Long socketOwner(long inode) {
-            String target = "socket:[" + inode + "]";
-            File[] pids = new File("/proc").listFiles();
-            if (pids == null) {
-                return null;
-            }
-            for (File pidDir : pids) {
-                long pid = pidOf(pidDir);
-                if (pid <= 0 || pid == ProcessHandle.current().pid()) {
-                    continue;
-                }
-                File[] fds = pidDir.toPath().resolve("fd").toFile().listFiles();
-                if (fds == null) {
-                    continue;
-                }
-                for (File fd : fds) {
-                    try {
-                        if (target.equals(Files.readSymbolicLink(fd.toPath()).toString())) {
-                            return pid;
-                        }
-                    } catch (IOException | RuntimeException ignored) {
-                        // A descriptor that vanished mid-scan, or a process we
-                        // may not read: not the answer, and not an error.
-                    }
-                }
-            }
-            return null;
-        }
-
-        private static long pidOf(File pidDir) {
-            try {
-                return Long.parseLong(pidDir.getName());
-            } catch (NumberFormatException e) {
-                return -1;
-            }
+            return SocketOwnerLookup.owner(inode);
         }
 
         @Override

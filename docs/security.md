@@ -140,7 +140,10 @@ SMB/NFS export、某些 Windows 共享卷同样如此）会把**共享属主**�
   `read`；未分类路由一律拒绝；`/i/*`（反代）与 `/ws/*`（事件流）任何 scope 都不放行；
   凭据类路由（`admin-password`、`/open`、`/exports`、`/developer/*`、`/auth/*`）在网关拒绝。
 - **自杀闸靠内核身份，不靠自报**：面板按平台原生接口推导**调用者住在哪个实例**——Linux
-  走 `/proc`（socket inode → 持有进程 → ppid 链），Windows 走 `GetExtendedTcpTable` 的
+  走 `/proc`（socket inode → 持有进程 → ppid 链；容器里面板是 root、实例是 uid 1000，而
+  默认的 root 没有 `CAP_SYS_PTRACE`、读不了 agent 的 fd 表，所以「inode → 持有进程」这一步
+  交给一个 `setpriv` 到 agent uid 的子进程完成，面板自身不被授予该能力，见
+  `SocketOwnerLookup`），Windows 走 `GetExtendedTcpTable` 的
   TCP owner 表（连接自带 pid）加 JDK 进程快照，两端都在命中实例根后用成员关系复核、挡
   PID 复用。三个家族（dsh / 品牌 / ZCode）的 stop / 删 / 开终端 / launch 都在闸上：推导出
   是自己 → `409 self_operation_refused`（正文写明原因）；推导不出时用票的绑定兜底；

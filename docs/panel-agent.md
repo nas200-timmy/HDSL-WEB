@@ -109,7 +109,10 @@ URI 里不叫这个名字，经容器解码后就是它。读原始 URI 的检�
 
 自杀规则的核心问题是「调用者住在哪个实例里」。答案不再问调用者，而是**从内核推导**
 （`PeerIdentity`），Linux 与 Windows 各用各的原生接口：请求从回环端口进来，Linux 按
-`/proc/net/tcp` 找 socket 的 inode、再按 `/proc/*/fd` 找持有进程；Windows 直接问
+`/proc/net/tcp` 找 socket 的 inode、再按 `/proc/*/fd` 找持有进程（容器里面板是 root、实例
+是 uid 1000，而默认的 root 没有 `CAP_SYS_PTRACE`、读不了别人的 fd 表，所以这一步由一个
+`setpriv` 到 agent uid 的子进程完成，面板本身不被授予该能力；见 `SocketOwnerLookup`）；
+Windows 直接问
 `GetExtendedTcpTable`（`netstat -ano` 底下那张表），每行自带 owning pid。然后沿父进程链
 上行——每个实例的根进程都是面板亲手起的、互为兄弟，所以链上**第一个**命中的实例根就是
 调用者的家。命中后还有一道**成员校验**：父链是快照语义，死掉的祖先 pid 被复用可能指错根，
