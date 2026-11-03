@@ -163,6 +163,10 @@ public final class DeveloperApiServlet extends HttpServlet {
             setAgentPassword(request, response);
             return;
         }
+        if ("/agent-password/scopes".equals(path) && "POST".equals(method)) {
+            setAgentScopes(request, response);
+            return;
+        }
         if ("/agent-password/clear".equals(path) && "POST".equals(method)) {
             clearAgentPassword(request, response);
             return;
@@ -442,6 +446,59 @@ public final class DeveloperApiServlet extends HttpServlet {
         elevation.revokeAllAgents();
         AuditLog.log(AuditLog.Channel.WEB, "developer.agentPassword", null, "set",
                 actorOf(request), request.getRemoteAddr());
+        agentPasswordStatus(response);
+    }
+
+    /// `POST /api/developer/agent-password/scopes {scopes}`: changes **only** the
+    /// cap, without the password.
+    ///
+    /// Retyping the secret to narrow what it may grant was backwards: the
+    /// operator is reducing risk, and the page made that the hardest edit on
+    /// it. The hash is untouched; every grant the old cap minted is dropped,
+    /// because those tickets were wider than the policy now says.
+    private void setAgentScopes(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireTls(request, response)) {
+            return;
+        }
+        if (!elevation.require(keyOf(request), sessionAlive(request))) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return;
+        }
+        if (!agentAuth.isSet()) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "agent_password_not_set: set the agent password first");
+            return;
+        }
+        JsonObject body = readJson(request);
+        Set<String> scopes = new LinkedHashSet<>();
+        if (body != null && body.has("scopes") && body.get("scopes").isJsonArray()) {
+            for (var element : body.getAsJsonArray("scopes")) {
+                if (element.isJsonPrimitive()) {
+                    scopes.add(element.getAsString());
+                }
+            }
+        }
+        if (scopes.isEmpty()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "scopes must name at least one class");
+            return;
+        }
+        for (String scope : scopes) {
+            if (!AgentScopes.known(scope)) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "unknown_scope: " + scope + " (known: " + AgentScopes.KNOWN + ")");
+                return;
+            }
+        }
+        try {
+            agentAuth.setScopes(java.util.List.copyOf(scopes));
+        } catch (IllegalStateException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, "agent_password_not_set");
+            return;
+        }
+        int dropped = elevation.revokeAllAgents();
+        AuditLog.log(AuditLog.Channel.WEB, "developer.agentPassword", null,
+                "scopes (" + dropped + " grant(s) dropped)", actorOf(request), request.getRemoteAddr());
         agentPasswordStatus(response);
     }
 

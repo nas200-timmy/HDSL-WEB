@@ -231,6 +231,38 @@ class AgentPasswordTest {
         }
     }
 
+
+    @Test
+    void theScopeCapIsEditedWithoutRetypingThePassword() throws Exception {
+        try (TestSupport.RunningServer running = start(DeveloperGuardScope.ALL)) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = base(running);
+            String cookie = elevatedSession(client, base);
+            assertEquals(200, post(client, base + "/api/developer/agent-password",
+                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\",\"mc\"]}", cookie).statusCode());
+
+            String token = json(post(client, base + "/api/developer/agent-auth",
+                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\",\"mc\"]}", null))
+                    .get("token").getAsString();
+
+            // Narrowing what a secret may grant is a policy edit: it must not need the
+            // secret again, or the page shows a selection that never reaches the server.
+            HttpResponse<String> narrowed = post(client, base + "/api/developer/agent-password/scopes",
+                    "{\"scopes\":[\"read\"]}", cookie);
+            assertEquals(200, narrowed.statusCode(), narrowed.body());
+            assertEquals("[\"read\"]", json(narrowed).get("scopes").toString());
+
+            // The ticket minted under the wider cap is gone with it.
+            assertEquals(401, getWithBearer(client, base + "/api/instances", token).statusCode());
+
+            // The password itself still works, and now mints only the narrowed cap.
+            HttpResponse<String> minted = post(client, base + "/api/developer/agent-auth",
+                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\",\"mc\"]}", null);
+            assertEquals(200, minted.statusCode(), minted.body());
+            assertEquals("[\"read\"]", json(minted).get("scopes").toString());
+        }
+    }
+
     private TestSupport.RunningServer start(DeveloperGuardScope scope) throws Exception {
         Consumer<ServerConfig> config = server -> {
             server.bindHost = "127.0.0.1";

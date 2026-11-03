@@ -208,6 +208,9 @@ export const api = {
   /** 设置 agent 密码并声明它最多能发什么；需要先提权，会清掉旧密码发出的全部票 */
   setAgentPassword: (password: string, scopes: string[]) =>
     request<AgentPasswordStatus>("/api/developer/agent-password", jsonInit("POST", { password, scopes })),
+  /** 只改 agent 密码能授予的范围，不动密码本身；会掐掉旧范围发出的票 */
+  setAgentScopes: (scopes: string[]) =>
+    request<AgentPasswordStatus>("/api/developer/agent-password/scopes", jsonInit("POST", { scopes })),
   /** 清除 agent 密码，并掐掉它发出的全部票；需要先提权 */
   clearAgentPassword: () =>
     request<AgentPasswordStatus>("/api/developer/agent-password/clear", { method: "POST" }),

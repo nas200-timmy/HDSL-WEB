@@ -1573,6 +1573,8 @@ function AgentAccessCard() {
   const [busy, setBusy] = useState(false);
   const [password, setPassword] = useState("");
   const [scopes, setScopes] = useState<string[]>(["read"]);
+  /// 服务端当前的那一份，用来判断勾选是否还没保存
+  const [savedScopes, setSavedScopes] = useState<string[]>([]);
 
   const refresh = async () => {
     try {
@@ -1583,6 +1585,7 @@ function AgentAccessCard() {
       // 否则进来看到的是"只勾了读取"，与保存时那次选择不符，改密码时还容易
       // 顺手把上限缩掉。
       setScopes(nextStatus.scopes.length > 0 ? nextStatus.scopes : ["read"]);
+      setSavedScopes(nextStatus.scopes);
       setError(null);
     } catch (e) {
       setError(developerError(e));
@@ -1616,6 +1619,23 @@ function AgentAccessCard() {
     }
   };
 
+  /// 只保存范围：不需要重新输入密码。
+  const saveScopes = async () => {
+    if (scopes.length === 0) return setError("至少要勾选一类范围");
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.setAgentScopes(scopes);
+      setStatus(next);
+      toast("success", "范围已保存，旧范围发出的票已作废");
+      await refresh();
+    } catch (e) {
+      setError(developerError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const clear = async () => {
     setBusy(true);
     setError(null);
@@ -1640,6 +1660,9 @@ function AgentAccessCard() {
       setError(developerError(e));
     }
   };
+
+  const rangeChanged =
+    scopes.length !== savedScopes.length || scopes.some((scope) => !savedScopes.includes(scope));
 
   const scopeRow = (scope: string) => (
     <label
@@ -1705,6 +1728,20 @@ function AgentAccessCard() {
             这里勾的是<b>上限</b>：调用方可以要得更少，但要不了更多。全部勾上等于把面板交给它——那是你的选择，
             不是默认值。
           </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}>
+            <button
+              className="btn btn-outline ripple-host"
+              disabled={busy || scopes.length === 0 || !rangeChanged}
+              onClick={() => void saveScopes()}
+            >
+              {rangeChanged ? "保存范围" : "范围未改动"}
+            </button>
+            {rangeChanged && (
+              <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                勾选改了还没保存——保存后会作废旧范围发出的票
+              </span>
+            )}
+          </div>
         </span>
       </div>
 

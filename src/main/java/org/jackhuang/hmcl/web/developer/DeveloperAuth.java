@@ -131,6 +131,26 @@ public final class DeveloperAuth {
         return new DeveloperAuth(file, null);
     }
 
+    /// Rewrites the cap without touching the password hash.
+    ///
+    /// Changing what the lesser secret may grant is a **policy** edit, not a
+    /// credential edit: forcing the operator to retype the password for it made
+    /// the checkbox a lie — the page showed a new selection that never reached
+    /// the server.
+    ///
+    /// @param scopes the classes this secret may mint
+    /// @throws IllegalStateException when no password is set
+    public synchronized void setScopes(java.util.List<String> scopes) throws IOException {
+        StoredHash current = stored;
+        if (current == null) {
+            throw new IllegalStateException("no password is set");
+        }
+        StoredHash next = new StoredHash(current.saltB64(), current.iterations(),
+                current.hashB64(), current.createdAt(), java.util.List.copyOf(scopes));
+        save(file, next);
+        stored = next;
+    }
+
     /// What this store's password may grant, when it is the agent store.
     ///
     /// @return the stored cap, or `null` when the file predates the field
