@@ -2,6 +2,42 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.6.61 — 2026-11-03 · agent 自杀闸改用内核身份推导；Windows 覆盖；一键签票回归
+
+> 这一版换掉「票上自报 instanceId」这条判断：面板不再相信调用者说自己在哪，而是从内核
+> 事实推导它属于哪个实例。Linux 走 `/proc`，Windows 走 `GetExtendedTcpTable`。在能推出
+> 身份的地方，未绑定的票也不再能停掉跑着自己的实例。
+
+### 自杀闸：从「自报」到「内核身份」
+
+- 新增 `web/auth/PeerIdentity`：
+  - **Linux**：请求的对端端口 → `/proc/net/tcp{,6}` 里 ESTABLISHED 的对端 socket inode →
+    `/proc/<pid>/fd` 的持有者 → 父链 → 实例根；
+  - **Windows**：`GetExtendedTcpTable(TCP_TABLE_OWNER_PID_ALL)` 直接给出连接与 owner pid，
+    父链与成员校验用 JDK 的进程快照；
+  - 只有同 netns 的 loopback 调用能推出身份；其余情况答 `null`，不猜。
+- **优先级是内核的**：推导出的身份压过票上的绑定，两个方向都压。证明在目标实例里 → 409
+  `self_operation_refused`；证明在别处 → 放行（即使票绑的是目标）。
+- **推不出身份时 fail-closed**：票绑了目标 → 拒；票未绑定 → 停 / 删 / 开终端一律拒；
+  `launch` 只在目标终端正开着时拒（停着的实例里没人可杀）。
+- 覆盖 dsh / 品牌 / ZCode 三族的停、删、终端，以及 `launch`。
+- 3 秒缓存（按调用方端口）；读不到 `/proc` 或 Windows API 失败都退化为 `null`，不抛错。
+
+### 一键签票回归，未绑定也安全
+
+- 设置页恢复「生成票并复制给 agent」与 `POST /api/developer/agent-token`。因为身份判断
+  来自内核，未绑定的票在推不出身份时对致命操作 fail-closed，不再是绕过自杀闸的后门。
+- 提示词里的面板地址改由服务端自报，不再用 `window.location.port || 3080` 猜端口。
+
+### 边界（写进文档）
+
+- **反代 / 跨 netns**：身份推不出 → 未绑定票不能停 / 删 / 开终端；绑定票仍可管别的实例。
+- **进程脱管**（double-fork 到 init）会走不到实例根；未绑定票因此被拒，但「绑定到别的
+  实例」的票停自己仍会放行——需要故意脱管 + 绑错同时发生。
+- **Windows** 已有实现与假表单测，真机验收仍建议补一次。
+
+文档：`docs/panel-agent.md`、`docs/security.md` §2.9、`README` 同步。
+
 ## v0.6.60 — 2026-11-03 · agent 访问收口为「只用 agent 密码换票」；启动第一行立刻打印
 
 > 上一轮加的「面板生成票并一键复制」整套撤掉：那条路给出的是不绑定实例的票，agent 拿它
