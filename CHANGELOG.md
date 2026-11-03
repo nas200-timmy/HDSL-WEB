@@ -2,6 +2,31 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.6.62 — 2026-11-03 · 容器里的身份推导修好：由 agent uid 的子进程读 /proc
+
+> v0.6.61 的自杀闸在容器里恒为「推不出身份」：面板是 root、实例是 uid 1000，而镜像的
+> 默认 capability 集没有 `CAP_SYS_PTRACE`，root 读不了 agent 的 `/proc/<pid>/fd`。于是
+> 未绑定的票对停 / 删 / 开终端一律被拒——连指向别的实例的操作也拒。
+
+### 修复
+
+- 新增 `web/auth/SocketOwnerLookup`：`inode → pid` 的扫描在有 uid 分离的部署里交给一个
+  `setpriv` 到 agent uid 的探针子进程（与实例同一 uid，内核允许读对方的 fd 表），面板
+  自身不被授予 `CAP_SYS_PTRACE`。无 uid 分离的裸部署仍走进程内扫描，行为不变。
+- 探针有并发上限（4）与 4 秒超时；取不到 `java`、无 classpath、非零退出、输出不可解析、
+  超时——一律 `null`，闸继续 fail-closed，不猜。
+- `PeerIdentity` 的 `socketOwner` 改为调用它；其余链条（`/proc/net/tcp{,6}` 找 inode、
+  父链上行、命中后成员校验）不变。
+
+### 验证
+
+- 容器内实测：root 读 `/proc/<uid 1000>/fd` 为 `EACCES`；同一个 inode 由 uid 1000 的
+  探针正确解析出 pid。
+- 新增 `SocketOwnerLookupTest` 5 项（进程内扫描、探针、fail-closed、无 uid 分离分支）。
+- 后端 1223 项，仅 2 个已知的 `BrandTuiTest` 失败（宿主机没有 node）。
+
+文档：`docs/panel-agent.md`、`docs/security.md` 同步说明容器里的 uid 分离与探针。
+
 ## v0.6.61 — 2026-11-03 · agent 自杀闸改用内核身份推导；Windows 覆盖；一键签票回归
 
 > 这一版换掉「票上自报 instanceId」这条判断：面板不再相信调用者说自己在哪，而是从内核
