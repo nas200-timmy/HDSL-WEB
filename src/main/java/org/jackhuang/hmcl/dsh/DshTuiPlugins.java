@@ -248,7 +248,7 @@ public final class DshTuiPlugins {
             new Entry(
                     "dsh-panel-agent",
                     "@nas200-timmy/dsh-panel-agent",
-                    "0.1.4",
+                    "0.1.5",
                     "hdsl-web 面板桥",
                     "https://github.com/nas200-timmy/HDSL-WEB",
                     "GPL-3.0-or-later",

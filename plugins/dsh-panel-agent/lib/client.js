@@ -18,12 +18,15 @@ window.__ModuleLoader__.load({
   id: '@nas200-timmy/dsh-panel-agent',
   factory: (require) => {
     const React = require('react')
-    const jsx = require('react/jsx-runtime')
     const module = { exports: {} }
     const exports = module.exports
 
-    const h = jsx.jsx
-    const hf = jsx.jsxs
+    // `react/jsx-runtime`'s `jsx(type, props, key)` takes its third argument as the
+    // **key**, not as children — every text node passed that way vanishes silently, and
+    // the page renders as an empty card (this is exactly what shipped once).
+    // `createElement` takes varargs children and has no such trap.
+    const h = React.createElement
+    const hf = React.createElement
 
     const SCOPES = [
       ['read', '读取面板', '实例、日志、任务列表'],

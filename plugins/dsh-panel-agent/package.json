@@ -1,6 +1,6 @@
 {
   "name": "@nas200-timmy/dsh-panel-agent",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "HDSL-web's panel bridge for DeepSeek Harness 0.2.x: lets an agent read and operate the panel that hosts it, through a scoped bearer grant the operator mints in the panel and revokes there.",
   "keywords": [
     "dsh",
