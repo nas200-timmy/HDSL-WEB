@@ -117,6 +117,10 @@ public final class BrandApiServlet extends HttpServlet {
         this.developerElevation = developerElevation;
         this.tlsActive = tlsActive;
         this.policy = new BrandPolicy(config.dataDir);
+        // The launch path needs the brand defaults even when no HTTP request
+        // carries them; bind the same instance rather than reading the file a
+        // second time per launch.
+        BrandRuntime.bindPolicy(this.policy, config.dataDir);
         this.instanceTerminal = new InstanceTerminal(config, terminals, terminalTickets, auth,
                 developerAuth, developerElevation, tlsActive, emergency);
         Path base = config.dataDir.resolve("brands");
@@ -622,7 +626,25 @@ public final class BrandApiServlet extends HttpServlet {
         if (body.has("baseUrl")) {
             patched = patched.withBaseUrl(baseUrlFrom(brand, body));
         }
+        if (body.has("nodeRuntime")) {
+            com.google.gson.JsonElement element = body.get("nodeRuntime");
+            String selector = element.isJsonNull() ? null : element.getAsString().trim();
+            if (selector != null && selector.isBlank()) {
+                selector = null;
+            }
+            if (selector != null && org.jackhuang.hmcl.dsh.NodeSelection.parse(selector).kind()
+                    == org.jackhuang.hmcl.dsh.NodeSelection.Kind.INVALID) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "unknown nodeRuntime selector: " + selector);
+                return;
+            }
+            patched = patched.withNodeRuntime(selector);
+        }
         ref.manager().update(patched);
+        if (body.has("nodeRuntime")) {
+            AuditLog.log(AuditLog.Channel.WEB, "brand.node", brand.id() + "/" + id, "success",
+                    actorOf(request), request.getRemoteAddr());
+        }
         Json.writePreservingNulls(response, Map.of("instance", instanceJson(brand, patched, request)));
     }
 
@@ -1434,6 +1456,20 @@ public final class BrandApiServlet extends HttpServlet {
         body.addProperty("brand", instance.brand());
         body.addProperty("name", instance.name());
         body.addProperty("version", instance.version());
+        if (instance.nodeRuntime() == null) {
+            body.add("nodeRuntime", com.google.gson.JsonNull.INSTANCE);
+        } else {
+            body.addProperty("nodeRuntime", instance.nodeRuntime());
+        }
+        org.jackhuang.hmcl.dsh.NodeSelection.Resolution node = org.jackhuang.hmcl.dsh.NodeSelection.resolve(
+                org.jackhuang.hmcl.dsh.NodeSelection.parse(instance.nodeRuntime()),
+                brandFallback(brand), false);
+        JsonObject resolvedNode = new JsonObject();
+        resolvedNode.addProperty("version", node.version());
+        resolvedNode.addProperty("source", node.source().name().toLowerCase(java.util.Locale.ROOT));
+        resolvedNode.addProperty("compatible", node.compatible());
+        resolvedNode.addProperty("reason", node.reason());
+        body.add("nodeResolved", resolvedNode);
         if (brand == Brand.CLAUDE_WEB) {
             body.addProperty("baseUrl", instance.baseUrl());
         }
@@ -1452,6 +1488,16 @@ public final class BrandApiServlet extends HttpServlet {
             body.addProperty("url", openUrl(brand, instance, request));
         }
         return body;
+    }
+
+    /// The selector a brand instance follows when its own is `inherit`: the
+    /// brand default, unless that is itself `inherit`, in which case the
+    /// launcher default wins.
+    private String brandFallback(Brand brand) {
+        String brandDefault = policy.get(brand).nodeRuntime();
+        return org.jackhuang.hmcl.dsh.NodeSelection.parse(brandDefault).isInherit()
+                ? org.jackhuang.hmcl.setting.SettingsManager.settings().defaultNodeRuntime()
+                : brandDefault;
     }
 
     /// Where the browser reaches a running instance: the panel's own mount —

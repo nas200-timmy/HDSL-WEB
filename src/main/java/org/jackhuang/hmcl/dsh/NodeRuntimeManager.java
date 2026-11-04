@@ -41,8 +41,11 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -197,6 +200,153 @@ public final class NodeRuntimeManager {
         return null;
     }
 
+    /// The file that annotates the distribution directories: which versions the
+    /// operator disabled, and when each was last used. The directories stay the
+    /// source of truth for "what is installed" — this file never adds one.
+    private static final Path STATE = DshPaths.RUNTIMES.resolve("state.json");
+
+    private static final Object STATE_LOCK = new Object();
+
+    /// Whether a version is disabled. A disabled runtime is skipped by
+    /// `auto`/channel resolution; an explicit exact pin still resolves, so an
+    /// operator who asks for it by name keeps it.
+    ///
+    /// @param version the exact version
+    /// @return whether it is disabled
+    public static boolean isDisabled(String version) {
+        JsonObject state = readState();
+        if (!state.has("disabled") || !state.get("disabled").isJsonArray()) {
+            return false;
+        }
+        for (JsonElement element : state.getAsJsonArray("disabled")) {
+            if (element.isJsonPrimitive() && version.equals(element.getAsString())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Enables or disables a version. Disabling only changes resolution; it
+    /// never stops a running instance.
+    ///
+    /// @param version  the exact version
+    /// @param disabled whether to exclude it from automatic resolution
+    /// @throws DshException when the state file cannot be written
+    public static void setDisabled(String version, boolean disabled) throws DshException {
+        synchronized (STATE_LOCK) {
+            JsonObject state = readState();
+            List<String> keep = new ArrayList<>();
+            if (state.has("disabled") && state.get("disabled").isJsonArray()) {
+                for (JsonElement element : state.getAsJsonArray("disabled")) {
+                    if (element.isJsonPrimitive()) {
+                        String value = element.getAsString();
+                        if (!value.equals(version)) {
+                            keep.add(value);
+                        }
+                    }
+                }
+            }
+            if (disabled) {
+                keep.add(version);
+            }
+            JsonArray next = new JsonArray();
+            keep.forEach(next::add);
+            state.add("disabled", next);
+            writeState(state);
+        }
+    }
+
+    /// Records that a version was just used to launch something. Best effort:
+    /// a launch must not fail because its timestamp could not be written.
+    ///
+    /// @param version the exact version
+    public static void touch(String version) {
+        synchronized (STATE_LOCK) {
+            try {
+                JsonObject state = readState();
+                JsonObject lastUsed = state.has("lastUsed") && state.get("lastUsed").isJsonObject()
+                        ? state.getAsJsonObject("lastUsed")
+                        : new JsonObject();
+                lastUsed.addProperty(version, java.time.Instant.now().toString());
+                state.add("lastUsed", lastUsed);
+                writeState(state);
+            } catch (DshException e) {
+                LOG.warning("Could not record the last use of Node.js " + version, e);
+            }
+        }
+    }
+
+    /// The last time a version was recorded as used, or `null`.
+    ///
+    /// @param version the exact version
+    /// @return an ISO timestamp, or `null`
+    public static @Nullable String lastUsed(String version) {
+        JsonObject state = readState();
+        if (!state.has("lastUsed") || !state.get("lastUsed").isJsonObject()) {
+            return null;
+        }
+        JsonObject lastUsed = state.getAsJsonObject("lastUsed");
+        return lastUsed.has(version) && lastUsed.get(version).isJsonPrimitive()
+                ? lastUsed.get(version).getAsString()
+                : null;
+    }
+
+    /// Removes a version from the state file. Called by [#uninstall]; a failure
+    /// is logged, not fatal (a stale entry only affects a reinstall).
+    static void forgetState(String version) {
+        synchronized (STATE_LOCK) {
+            try {
+                JsonObject state = readState();
+                if (state.has("disabled") && state.get("disabled").isJsonArray()) {
+                    JsonArray keep = new JsonArray();
+                    for (JsonElement element : state.getAsJsonArray("disabled")) {
+                        if (element.isJsonPrimitive() && !version.equals(element.getAsString())) {
+                            keep.add(element);
+                        }
+                    }
+                    state.add("disabled", keep);
+                }
+                if (state.has("lastUsed") && state.get("lastUsed").isJsonObject()) {
+                    state.getAsJsonObject("lastUsed").remove(version);
+                }
+                if (state.has("digests") && state.get("digests").isJsonObject()) {
+                    state.getAsJsonObject("digests").remove(version);
+                }
+                writeState(state);
+            } catch (DshException e) {
+                LOG.warning("Could not clean the state for Node.js " + version, e);
+            }
+        }
+    }
+
+    private static JsonObject readState() {
+        if (!Files.isRegularFile(STATE)) {
+            return new JsonObject();
+        }
+        try {
+            JsonElement parsed = JsonParser.parseString(Files.readString(STATE));
+            return parsed.isJsonObject() ? parsed.getAsJsonObject() : new JsonObject();
+        } catch (IOException | RuntimeException e) {
+            LOG.warning("Could not read " + STATE, e);
+            return new JsonObject();
+        }
+    }
+
+    private static void writeState(JsonObject state) throws DshException {
+        try {
+            Files.createDirectories(DshPaths.RUNTIMES);
+            Path temp = STATE.resolveSibling(STATE.getFileName() + ".tmp");
+            Files.writeString(temp, state.toString());
+            try {
+                Files.move(temp, STATE, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (IOException e) {
+                Files.move(temp, STATE, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException e) {
+            throw new DshException("Failed to write " + STATE, e);
+        }
+    }
+
     /// Fetches the published Node releases that have a build for this platform.
     ///
     /// @param source where to read the index from
@@ -305,6 +455,9 @@ public final class NodeRuntimeManager {
         try {
             stage(onStage, "Downloading " + fileName);
             download(url, archive, onStage);
+
+            stage(onStage, "Verifying " + fileName);
+            verifyChecksum(archive, normalized, fileName, source);
 
             stage(onStage, "Unpacking " + fileName);
             extractArchive(archive, staging);
@@ -635,7 +788,169 @@ public final class NodeRuntimeManager {
             throw new DshException("Failed to remove " + runtime.directory(), e);
         }
         PROBES.remove(runtime.directory());
+        forgetState(version);
+        NodeChannels.forget(version);
         LOG.info("Removed Node.js " + version);
+    }
+
+    /// Verifies an archive against the release's `SHASUMS256.txt` and records its
+    /// digest either way.
+    ///
+    /// A mirror that does not publish the list is not a reason to refuse the
+    /// install — npmmirror does not — but the digest is still computed and stored
+    /// with `verified: false`, so the Node page can say which installs were
+    /// checked against a published hash. A **mismatch** is fatal: the archive is
+    /// deleted and the install fails before anything is unpacked.
+    ///
+    /// @param archive  the downloaded archive
+    /// @param version  the version
+    /// @param fileName the archive's name in the checksum list
+    /// @param source   where it was downloaded from
+    /// @throws IOException when the digest cannot be read or does not match
+    static void verifyChecksum(Path archive, String version, String fileName, NodeSource source) throws IOException {
+        String digest = sha256(archive);
+        String expected = publishedChecksum(version, fileName, source);
+        if (expected == null) {
+            LOG.warning("No SHASUMS256 entry for " + fileName + " on " + source.host()
+                    + " or the other source; installing it unverified");
+            recordDigest(version, digest, false);
+            return;
+        }
+        if (!expected.equalsIgnoreCase(digest)) {
+            throw new IOException("checksum mismatch for " + fileName + ": expected "
+                    + expected + ", got " + digest);
+        }
+        recordDigest(version, digest, true);
+    }
+
+    /// Reads the digest `fileName` should have. The chosen source is asked first,
+    /// then the other: a mirror that omits the list still gets verified against
+    /// the official one when that host is reachable.
+    ///
+    /// @param version  the version
+    /// @param fileName the archive's name
+    /// @param source   the chosen source
+    /// @return the published hash, or `null` when neither source has it
+    static @Nullable String publishedChecksum(String version, String fileName, NodeSource source) {
+        List<NodeSource> candidates = new ArrayList<>();
+        candidates.add(source);
+        for (NodeSource other : NodeSource.values()) {
+            if (other != source) {
+                candidates.add(other);
+            }
+        }
+        for (NodeSource candidate : candidates) {
+            try {
+                HttpURLConnection connection = NetworkUtils.createHttpConnection(
+                        candidate.checksumsUrl(version));
+                connection.setInstanceFollowRedirects(true);
+                connection.connect();
+                if (connection.getResponseCode() / 100 != 2) {
+                    continue;
+                }
+                try (InputStream in = connection.getInputStream()) {
+                    String text = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                    String found = checksumFrom(text, fileName);
+                    if (found != null) {
+                        return found;
+                    }
+                }
+            } catch (IOException | RuntimeException e) {
+                LOG.debug("Could not read " + candidate.checksumsUrl(version) + ": " + e.getMessage());
+            }
+        }
+        return null;
+    }
+
+    /// The hash a `SHASUMS256.txt` names for `fileName`, or `null`.
+    ///
+    /// @param text     the checksum file's contents
+    /// @param fileName the archive's name
+    /// @return the hash, or `null` when the list does not name it
+    static @Nullable String checksumFrom(String text, String fileName) {
+        for (String line : text.split("\\R")) {
+            String[] parts = line.trim().split("\\s+");
+            if (parts.length >= 2 && parts[1].replaceFirst("^\\*", "").equals(fileName)) {
+                return parts[0];
+            }
+        }
+        return null;
+    }
+
+    /// The SHA-256 of a file, lowercase hex.
+    ///
+    /// @param file the file
+    /// @return the digest
+    /// @throws IOException when the file or the algorithm cannot be read
+    static String sha256(Path file) throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (InputStream in = Files.newInputStream(file)) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = in.read(buffer)) >= 0) {
+                    digest.update(buffer, 0, read);
+                }
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IOException("SHA-256 is unavailable", e);
+        }
+    }
+
+    private static void recordDigest(String version, String digest, boolean verified) {
+        synchronized (STATE_LOCK) {
+            try {
+                JsonObject state = readState();
+                JsonObject digests = state.has("digests") && state.get("digests").isJsonObject()
+                        ? state.getAsJsonObject("digests") : new JsonObject();
+                JsonObject entry = new JsonObject();
+                entry.addProperty("sha256", digest);
+                entry.addProperty("verified", verified);
+                digests.add(version, entry);
+                state.add("digests", digests);
+                writeState(state);
+            } catch (DshException e) {
+                LOG.warning("Could not record the digest of Node.js " + version, e);
+            }
+        }
+    }
+
+    /// The recorded SHA-256 of a version, or `null`.
+    ///
+    /// @param version the exact version
+    /// @return the digest
+    public static @Nullable String digest(String version) {
+        JsonObject state = readState();
+        if (!state.has("digests") || !state.get("digests").isJsonObject()) {
+            return null;
+        }
+        JsonElement element = state.getAsJsonObject("digests").get(version);
+        if (element == null || !element.isJsonObject()) {
+            return null;
+        }
+        JsonObject entry = element.getAsJsonObject();
+        return entry.has("sha256") && entry.get("sha256").isJsonPrimitive()
+                ? entry.get("sha256").getAsString()
+                : null;
+    }
+
+    /// Whether a version's digest matched a published checksum.
+    ///
+    /// @param version the exact version
+    /// @return whether it was verified
+    public static boolean digestVerified(String version) {
+        JsonObject state = readState();
+        if (!state.has("digests") || !state.get("digests").isJsonObject()) {
+            return false;
+        }
+        JsonElement element = state.getAsJsonObject("digests").get(version);
+        if (element == null || !element.isJsonObject()) {
+            return false;
+        }
+        JsonObject entry = element.getAsJsonObject();
+        return entry.has("verified") && entry.get("verified").isJsonPrimitive()
+                && entry.get("verified").getAsBoolean();
     }
 
     /// Streams a URL to a file, reporting progress.

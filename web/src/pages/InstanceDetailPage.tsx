@@ -125,7 +125,8 @@ export function InstanceDetailPage() {
   const tab: DetailTab = TAB_ALIASES[tabParam] ?? "manage";
   const setTab = (t: DetailTab) => setSearchParams({ tab: t }, { replace: true });
 
-  const [form, setForm] = useState({ name: "", homeMode: "ISOLATED", portMode: "auto", port: "", account: "" });
+  const [form, setForm] = useState({ name: "", homeMode: "ISOLATED", portMode: "auto", port: "", account: "", nodeRuntime: "" });
+  const [nodeOptions, setNodeOptions] = useState<import("../api").NodeStatus | null>(null);
   const [formDirty, setFormDirty] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -201,18 +202,39 @@ export function InstanceDetailPage() {
       portMode: instance.portMode === "fixed" ? "fixed" : "auto",
       port: instance.port != null ? String(instance.port) : "",
       account: instance.account ?? "",
+      nodeRuntime: instance.nodeRuntime ?? "",
     };
     setForm((prev) =>
       prev.name === next.name &&
       prev.homeMode === next.homeMode &&
       prev.portMode === next.portMode &&
       prev.port === next.port &&
-      prev.account === next.account
+      prev.account === next.account &&
+      prev.nodeRuntime === next.nodeRuntime
         ? prev
         : next,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instance?.id, instance?.name, instance?.homeMode, instance?.portMode, instance?.port, instance?.account, formDirty]);
+  }, [instance?.id, instance?.name, instance?.homeMode, instance?.portMode, instance?.port, instance?.account, instance?.nodeRuntime, formDirty]);
+
+  // The Node selector needs the installed majors and exact versions; the page
+  // already asks `/api/node` for the settings tab, so reuse the same contract.
+  useEffect(() => {
+    void api.nodeStatus().then(setNodeOptions).catch(() => setNodeOptions(null));
+  }, []);
+
+  const nodeConsumer = nodeOptions?.consumers.find((c) => c.kind === "instance" && c.id === id);
+
+  const revertNode = async () => {
+    try {
+      await api.nodeRevert({ kind: "instance", id });
+      toast("success", "已切回上次成功启动的 Node.js");
+      await refreshInstances();
+      setNodeOptions(await api.nodeStatus());
+    } catch (e) {
+      toast("error", `回退失败：${errMsg(e)}`);
+    }
+  };
 
   // 版本选择器的初值跟随实例：路由 /instances/:id 不会重挂组件，换实例或实例
   // 版本变化时必须重置，否则会把上一个实例的版本当成这个实例的「重装」目标
@@ -277,6 +299,7 @@ export function InstanceDetailPage() {
       name: form.name.trim() || instance.name,
       homeMode: form.homeMode,
       account: form.account || null,
+      nodeRuntime: form.nodeRuntime || null,
     };
     if (form.portMode === "fixed") {
       const n = Number(form.port);
@@ -674,6 +697,36 @@ export function InstanceDetailPage() {
                 </span>
               </div>
               <div className="comp-row">
+                <span className="comp-label">Node.js</span>
+                <span className="comp-value">
+                  <select
+                    className="input"
+                    style={{ fontWeight: 400 }}
+                    value={form.nodeRuntime}
+                    onChange={(e) => {
+                      setForm((f) => ({ ...f, nodeRuntime: e.target.value }));
+                      setFormDirty(true);
+                    }}
+                  >
+                    <option value="">跟随默认</option>
+                    <option value="auto">自动（PATH 优先，回落到托管）</option>
+                    {(nodeOptions?.channels ?? []).filter((c) => c.installed).map((c) => (
+                      <option key={c.name} value={c.name}>
+                        Node {c.name}{c.lts ? "（LTS）" : ""}{c.resolved ? ` · ${c.resolved}` : ""}
+                      </option>
+                    ))}
+                    {(nodeOptions?.runtimes ?? []).map((r) => (
+                      <option key={r.version} value={r.version}>精确 {r.version}</option>
+                    ))}
+                    {form.nodeRuntime !== "" && form.nodeRuntime !== "auto"
+                      && !(nodeOptions?.channels ?? []).some((c) => c.name === form.nodeRuntime && c.installed)
+                      && !(nodeOptions?.runtimes ?? []).some((r) => r.version === form.nodeRuntime) && (
+                        <option value={form.nodeRuntime}>{form.nodeRuntime}</option>
+                      )}
+                  </select>
+                </span>
+              </div>
+              <div className="comp-row">
                 <span className="comp-label">{I18N["dsh.instance.port.mode"]}</span>
                 <span className="comp-value">
                   <select
@@ -839,6 +892,26 @@ export function InstanceDetailPage() {
               <span className="comp-label">{I18N["dsh.install.home"]}</span>
               <span className="comp-value">
                 {HOME_MODES.find((m) => m.value === instance.homeMode)?.title ?? instance.homeMode}
+              </span>
+            </div>
+            <div className="comp-row">
+              <span className="comp-label">Node.js</span>
+              <span className="comp-value" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                {instance.nodeRuntime ?? "跟随默认"}
+                {instance.nodeResolved?.version ? ` → ${instance.nodeResolved.version}` : ""}
+                {instance.nodeResolved && !instance.nodeResolved.compatible && (
+                  <span className="tag plain">不满足</span>
+                )}
+                {nodeConsumer?.requirement && (
+                  <span className="tag plain" title="该版本声明的 engines.node">
+                    要求 {nodeConsumer.requirement}
+                  </span>
+                )}
+                {nodeConsumer?.lastGood && nodeConsumer.lastGood !== nodeConsumer.resolved && (
+                  <button className="btn btn-text ripple-host" style={{ height: 24 }} onClick={() => void revertNode()}>
+                    回退到 {nodeConsumer.lastGood}
+                  </button>
+                )}
               </span>
             </div>
             <div className="comp-row">

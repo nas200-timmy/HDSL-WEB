@@ -37,18 +37,19 @@ public record BrandInstance(
         @SerializedName("version") String version,
         @SerializedName("baseUrl") @Nullable String baseUrl,
         @SerializedName("lastPort") int lastPort,
-        @SerializedName("createdAt") long createdAt) {
+        @SerializedName("createdAt") long createdAt,
+        @SerializedName("nodeRuntime") @Nullable String nodeRuntime) {
 
     public BrandInstance withName(String newName) {
-        return new BrandInstance(id, brand, newName, version, baseUrl, lastPort, createdAt);
+        return new BrandInstance(id, brand, newName, version, baseUrl, lastPort, createdAt, nodeRuntime);
     }
 
     public BrandInstance withVersion(String newVersion) {
-        return new BrandInstance(id, brand, name, newVersion, baseUrl, lastPort, createdAt);
+        return new BrandInstance(id, brand, name, newVersion, baseUrl, lastPort, createdAt, nodeRuntime);
     }
 
     public BrandInstance withLastPort(int newLastPort) {
-        return new BrandInstance(id, brand, name, version, baseUrl, newLastPort, createdAt);
+        return new BrandInstance(id, brand, name, version, baseUrl, newLastPort, createdAt, nodeRuntime);
     }
 
     /// The endpoint the tool should talk to instead of its own default.
@@ -62,6 +63,16 @@ public record BrandInstance(
     /// @param newBaseUrl the endpoint, or `null`/blank for the default
     /// @return the instance with the endpoint recorded
     public BrandInstance withBaseUrl(@Nullable String newBaseUrl) {
-        return new BrandInstance(id, brand, name, version, newBaseUrl, lastPort, createdAt);
+        return new BrandInstance(id, brand, name, version, newBaseUrl, lastPort, createdAt, nodeRuntime);
+    }
+
+    /// The Node.js selector this instance runs on, or `null` to follow the
+    /// brand default. The syntax is [org.jackhuang.hmcl.dsh.NodeSelection]'s:
+    /// `auto`, a major (`22`), an exact version, or `inherit`.
+    ///
+    /// @param newRuntime the selector, or `null`
+    /// @return the instance with the selector recorded
+    public BrandInstance withNodeRuntime(@Nullable String newRuntime) {
+        return new BrandInstance(id, brand, name, version, baseUrl, lastPort, createdAt, newRuntime);
     }
 }

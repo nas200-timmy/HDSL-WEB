@@ -222,6 +222,11 @@ public final class BrandSettingsApiServlet extends HttpServlet {
             }
             body.addProperty("lockedRoute", entry.lockedRoute());
             body.addProperty("sourceBuild", entry.sourceBuild());
+            if (entry.nodeRuntime() == null) {
+                body.add("nodeRuntime", JsonNull.INSTANCE);
+            } else {
+                body.addProperty("nodeRuntime", entry.nodeRuntime());
+            }
             JsonArray instances = new JsonArray();
             for (BrandInstance instance : manager(brand).list()) {
                 JsonObject row = new JsonObject();
@@ -269,6 +274,23 @@ public final class BrandSettingsApiServlet extends HttpServlet {
         boolean singleInstance = single != null && single;
         boolean lockedRoute = locked != null && locked;
         boolean sourceBuild = source != null && source;
+        // Omitted means "leave it as it is": this PUT replaces the whole entry,
+        // and an older client that knows nothing about the field must not clear
+        // a brand default somebody set in the new UI.
+        String nodeRuntime = policy.get(brand).nodeRuntime();
+        if (body.has("nodeRuntime")) {
+            JsonElement element = body.get("nodeRuntime");
+            nodeRuntime = element.isJsonNull() ? null : element.getAsString().trim();
+            if (nodeRuntime != null && nodeRuntime.isBlank()) {
+                nodeRuntime = null;
+            }
+            if (nodeRuntime != null && org.jackhuang.hmcl.dsh.NodeSelection.parse(nodeRuntime).kind()
+                    == org.jackhuang.hmcl.dsh.NodeSelection.Kind.INVALID) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "unknown nodeRuntime selector: " + nodeRuntime);
+                return;
+            }
+        }
         List<String> capabilities = capabilities(brand);
         if (lockedRoute && !capabilities.contains("lockedRoute")) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
@@ -299,7 +321,11 @@ public final class BrandSettingsApiServlet extends HttpServlet {
                     }
                 }
             }
-            policy.set(brand, new BrandPolicy.Entry(singleInstance, survivor, lockedRoute, sourceBuild));
+            policy.set(brand, new BrandPolicy.Entry(singleInstance, survivor, lockedRoute, sourceBuild, nodeRuntime));
+            if (body.has("nodeRuntime")) {
+                AuditLog.log(AuditLog.Channel.WEB, "brand.node", brand.id(), "success",
+                        actorOf(request), request.getRemoteAddr());
+            }
             if (brand == Brand.OCTOP) {
                 BrandRuntime.setLockedOctopSurvivor(lockedRoute ? survivor : null);
             }

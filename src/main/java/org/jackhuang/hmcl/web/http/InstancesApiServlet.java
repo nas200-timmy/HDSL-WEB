@@ -408,7 +408,26 @@ public final class InstancesApiServlet extends HttpServlet {
             instance = DshPorts.withMode(instance, DshPortMode.AUTO);
         }
 
+        if (body.has("nodeRuntime")) {
+            com.google.gson.JsonElement element = body.get("nodeRuntime");
+            String selector = element.isJsonNull() ? null : element.getAsString().trim();
+            if (selector != null && selector.isBlank()) {
+                selector = null;
+            }
+            if (selector != null && org.jackhuang.hmcl.dsh.NodeSelection.parse(selector).kind()
+                    == org.jackhuang.hmcl.dsh.NodeSelection.Kind.INVALID) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "unknown nodeRuntime selector: " + selector);
+                return;
+            }
+            instance = instance.withNodeRuntime(selector);
+        }
+
         DshInstanceManager.update(instance);
+        if (body.has("nodeRuntime")) {
+            AuditLog.log(AuditLog.Channel.WEB, "instance.node", id, "success",
+                    actorOf(request), request.getRemoteAddr());
+        }
         runtime.announceUpdated(instance);
         JsonObject updated = new JsonObject();
         updated.add("instance", instanceBody(request, instance));

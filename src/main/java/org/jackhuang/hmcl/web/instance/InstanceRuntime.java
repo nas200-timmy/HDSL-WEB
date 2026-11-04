@@ -28,6 +28,7 @@ import org.jackhuang.hmcl.dsh.DshLauncher;
 import org.jackhuang.hmcl.dsh.DshProcess;
 import org.jackhuang.hmcl.dsh.DshProcessManager;
 import org.jackhuang.hmcl.dsh.DshVersionManager;
+import org.jackhuang.hmcl.dsh.NodeLastGood;
 import org.jackhuang.hmcl.setting.SettingsManager;
 import org.jackhuang.hmcl.util.logging.LogLine;
 import org.jackhuang.hmcl.web.event.EventBus;
@@ -366,6 +367,16 @@ public final class InstanceRuntime {
         if (process.state() != DshProcess.State.READY || !announcedReady.add(process)) {
             return;
         }
+        DshInstance instance = DshInstanceManager.find(instanceId);
+        if (instance != null) {
+            try {
+                NodeLastGood.record(NodeLastGood.dshKey(instanceId),
+                        DshLauncher.resolveRuntime(instance).nodeVersion());
+            } catch (DshException e) {
+                org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                        "Could not record the last good Node.js for " + instanceId, e);
+            }
+        }
         JsonObject payload = statePayload(instanceId, "RUNNING");
         process.webUrl().ifPresent(webUrl -> payload.addProperty("url", externalUrl(instanceId, webUrl)));
         bus.publish(topics(instanceId), payload);
@@ -460,6 +471,20 @@ public final class InstanceRuntime {
         json.addProperty("id", instance.id());
         json.addProperty("name", instance.id());
         json.addProperty("version", instance.version());
+        if (instance.nodeRuntime() == null) {
+            json.add("nodeRuntime", com.google.gson.JsonNull.INSTANCE);
+        } else {
+            json.addProperty("nodeRuntime", instance.nodeRuntime());
+        }
+        org.jackhuang.hmcl.dsh.NodeSelection.Resolution node = org.jackhuang.hmcl.dsh.NodeSelection.resolve(
+                org.jackhuang.hmcl.dsh.NodeSelection.parse(instance.nodeRuntime()),
+                org.jackhuang.hmcl.dsh.DshEnvironment.nodeRuntimeDefault(), false);
+        com.google.gson.JsonObject nodeJson = new com.google.gson.JsonObject();
+        nodeJson.addProperty("version", node.version());
+        nodeJson.addProperty("source", node.source().name().toLowerCase(java.util.Locale.ROOT));
+        nodeJson.addProperty("compatible", node.compatible());
+        nodeJson.addProperty("reason", node.reason());
+        json.add("nodeResolved", nodeJson);
         json.addProperty("homeMode", instance.homeMode().name().toLowerCase(java.util.Locale.ROOT));
         json.addProperty("port", portOf(instance));
         json.addProperty("portMode", instance.portModeOrDefault().name().toLowerCase(java.util.Locale.ROOT));

@@ -32,6 +32,18 @@ export interface Instance {
   installProgress?: InstallProgress;
   /** state = FAILED 时的原因（启动被拒 / 进程崩溃的尾巴） */
   error?: string | null;
+  /** 该实例的 Node.js 选择：null = 跟随默认；auto / 大版本 / 精确版本 */
+  nodeRuntime?: string | null;
+  /** 服务端对该选择的解析结果（GET/PATCH 实例时给出） */
+  nodeResolved?: NodeResolution | null;
+}
+
+/** 一次 Node.js 选择的解析结果。 */
+export interface NodeResolution {
+  version: string | null;
+  source: "system" | "managed" | "channel" | "exact" | "none";
+  compatible: boolean;
+  reason: string;
 }
 
 /** 安装进度（GET /api/instances/{id} 的 installProgress 字段）。 */
@@ -428,6 +440,8 @@ export interface BrandPolicyEntry {
   survivor: string | null;
   lockedRoute: boolean;
   sourceBuild: boolean;
+  /** 品牌默认 Node.js 选择：null = 跟随全局默认；auto / 大版本 / 精确版本 */
+  nodeRuntime: string | null;
   instances: {
     id: string;
     name: string;
@@ -724,6 +738,8 @@ export interface PatchInstanceBody {
   autoPort?: boolean;
   /** 绑定账户名；null 表示解绑（不使用） */
   account?: string | null;
+  /** Node.js 选择：null/省略 = 跟随默认；auto / 大版本 / 精确版本 */
+  nodeRuntime?: string | null;
 }
 
 // ---------- ZCode（实验性） ----------

@@ -88,6 +88,16 @@ public enum NodeSource {
         return base + "v" + version + "/" + fileName;
     }
 
+    /// Returns the URL of the release's published SHA-256 list. Not every mirror
+    /// carries it; the installer falls back to the other source and records the
+    /// digest as unverified when neither does.
+    ///
+    /// @param version the version without its leading `v`
+    /// @return the URL
+    public String checksumsUrl(String version) {
+        return base + "v" + version + "/SHASUMS256.txt";
+    }
+
     /// Resolves a source from its stored name.
     ///
     /// @param value the stored name, possibly `null` or of the wrong case

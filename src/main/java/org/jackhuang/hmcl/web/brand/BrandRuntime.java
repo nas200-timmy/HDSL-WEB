@@ -82,6 +82,32 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 @NotNullByDefault
 public final class BrandRuntime {
 
+    /// The brand policy that holds each brand's default Node selector. Bound by
+    /// `BrandApiServlet` at startup; `null` in tests that never launch.
+    private static volatile @Nullable BrandPolicy policy;
+
+    /// The panel's data directory, for reading a release's own `engines.node`.
+    private static volatile @Nullable Path dataDir;
+
+    /// Binds the policy used for brand-default Node resolution.
+    ///
+    /// @param brandPolicy the policy instance
+    /// @param directory   the panel's data directory
+    public static void bindPolicy(BrandPolicy brandPolicy, Path directory) {
+        policy = brandPolicy;
+        dataDir = directory;
+    }
+
+    /// The selector a brand instance follows when its own is `inherit`: the
+    /// brand default, unless that is itself `inherit`, in which case the
+    /// launcher default wins.
+    private static String nodeFallback(Brand brand) {
+        String brandDefault = policy == null ? null : policy.get(brand).nodeRuntime();
+        return org.jackhuang.hmcl.dsh.NodeSelection.parse(brandDefault).isInherit()
+                ? org.jackhuang.hmcl.setting.SettingsManager.settings().defaultNodeRuntime()
+                : brandDefault;
+    }
+
     /// The lifecycle states an instance can be in.
     public enum State {
         CREATED, STARTING, RUNNING, STOPPED, ERROR
@@ -276,6 +302,9 @@ public final class BrandRuntime {
             Process process;
             OutputStream log;
             LaunchPlan plan;
+            // Declared here so the readiness half (after the catch) can record the
+            // runtime this launch actually used.
+            org.jackhuang.hmcl.dsh.DshNodeRuntime resolvedNode = null;
             try {
                 Files.createDirectories(logFile.getParent());
                 Files.createDirectories(workspace);
@@ -328,26 +357,66 @@ public final class BrandRuntime {
                 //     tool can run on", and the panel's managed runtime is the answer when
                 //     PATH's is not.
                 // (Octop is Python and does not care; opencode ships a native binary.)
-                java.util.Optional<org.jackhuang.hmcl.dsh.DshNodeRuntime> onPath =
-                        org.jackhuang.hmcl.dsh.DshNodeRuntime.detect();
-                boolean pathNodeUsable = onPath.map(org.jackhuang.hmcl.dsh.DshNodeRuntime::isNodeSupported)
-                        .orElse(false);
-                if (!pathNodeUsable) {
-                    org.jackhuang.hmcl.dsh.DshNodeRuntime.detectManaged().ifPresentOrElse(runtime -> {
-                        builder.environment().put("PATH", runtime.binDirectory()
-                                + java.io.File.pathSeparator
-                                + builder.environment().getOrDefault("PATH", ""));
-                        LOG.info("Starting " + brand.id() + " instance " + id
-                                + " with the panel's managed Node.js on PATH: " + runtime.binDirectory()
-                                + " (Node " + runtime.nodeVersion() + "), because PATH's is "
-                                + onPath.map(org.jackhuang.hmcl.dsh.DshNodeRuntime::nodeVersion)
-                                        .orElse("missing"));
-                    }, () -> LOG.warning("Starting " + brand.id() + " instance " + id + " with "
-                            + onPath.map(runtime -> "the Node.js on PATH (" + runtime.nodeVersion() + ")")
-                                    .orElse("no Node.js on PATH")
-                            + ", which is outside the range these tools run on ("
-                            + org.jackhuang.hmcl.dsh.DshNodeRuntime.requirement()
-                            + "); the tool may fail to start — Settings -> Node.js installs a usable one"));
+                //
+                // The selector is resolved through the same `NodeSelection` the
+                // DSH launcher uses: the instance's own value, then the brand
+                // default, then the launcher default. An explicit channel or
+                // exact version that cannot be resolved refuses the launch with
+                // a sentence, instead of starting a tool that dies inside its
+                // own ESM loader. `auto` keeps the old observe-and-continue
+                // behaviour, because a brand that does not need Node must not
+                // be blocked by it.
+                org.jackhuang.hmcl.dsh.NodeSelection selection =
+                        org.jackhuang.hmcl.dsh.NodeSelection.parse(instance.nodeRuntime());
+                String fallback = nodeFallback(brand);
+                org.jackhuang.hmcl.dsh.NodeSelection effective = selection.isInherit()
+                        ? org.jackhuang.hmcl.dsh.NodeSelection.parse(fallback)
+                        : selection;
+                boolean explicit = switch (effective.kind()) {
+                    case CHANNEL, EXACT, INVALID -> true;
+                    default -> false;
+                };
+                org.jackhuang.hmcl.dsh.NodeSelection.Resolution node =
+                        org.jackhuang.hmcl.dsh.NodeSelection.resolve(selection, fallback, false);
+                resolvedNode = node.runtime();
+                if (explicit && (resolvedNode == null || !node.compatible())) {
+                    String reason = "Cannot start the " + brand.id() + " instance " + id
+                            + " on Node.js: " + node.reason();
+                    STATES.put(id, State.ERROR);
+                    ERRORS.put(id, reason);
+                    LOG.warning(reason);
+                    return new Status(State.ERROR, reason);
+                }
+                if (resolvedNode != null) {
+                    String declared = dataDir == null
+                            ? null
+                            : BrandNodeRequirement.of(dataDir, brand, instance.version());
+                    if (declared != null
+                            && !org.jackhuang.hmcl.dsh.NodeSemver.satisfies(
+                                    resolvedNode.nodeVersion(), declared)) {
+                        String reason = "Cannot start the " + brand.id() + " instance " + id
+                                + " on Node.js " + resolvedNode.nodeVersion()
+                                + ": this release declares engines.node " + declared;
+                        STATES.put(id, State.ERROR);
+                        ERRORS.put(id, reason);
+                        LOG.warning(reason);
+                        return new Status(State.ERROR, reason);
+                    }
+                }
+                if (resolvedNode != null) {
+                    builder.environment().put("PATH", resolvedNode.binDirectory()
+                            + java.io.File.pathSeparator
+                            + builder.environment().getOrDefault("PATH", ""));
+                    if (org.jackhuang.hmcl.dsh.NodeRuntimeManager.findInstalled(resolvedNode.nodeVersion()) != null) {
+                        org.jackhuang.hmcl.dsh.NodeRuntimeManager.touch(resolvedNode.nodeVersion());
+                    }
+                    LOG.info("Starting " + brand.id() + " instance " + id + " with "
+                            + node.source().name().toLowerCase(java.util.Locale.ROOT)
+                            + " Node.js " + resolvedNode.nodeVersion() + " (" + resolvedNode.binDirectory() + ")");
+                } else {
+                    LOG.warning("Starting " + brand.id() + " instance " + id
+                            + " without a usable Node.js (" + node.reason()
+                            + "); the tool may fail to start — Settings -> Node.js installs one");
                 }
                 process = builder.start();
             } catch (IOException e) {
@@ -381,6 +450,11 @@ public final class BrandRuntime {
                 }
                 if (brand == Brand.CLAUDE_WEB) {
                     registerClaudeWebWorkspace(port, workspace);
+                }
+                if (resolvedNode != null) {
+                    org.jackhuang.hmcl.dsh.NodeLastGood.record(
+                            org.jackhuang.hmcl.dsh.NodeLastGood.brandKey(brand.id(), id),
+                            resolvedNode.nodeVersion());
                 }
                 STATES.put(id, State.RUNNING);
                 LOG.info(brand.id() + " instance " + id + " is running on port " + port);

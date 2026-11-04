@@ -339,4 +339,31 @@ class BrandApiTest {
             assertEquals(201, created.statusCode(), created.body());
         }
     }
+
+    /// The per-instance Node selector: stored, echoed with its resolution, and
+    /// refused when the resolver does not understand it.
+    @Test
+    void aBrandInstanceNodeSelectorIsStoredAndResolved() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            Path release = dataDir.resolve("brands/claude-web/releases/0.3.2");
+            Files.createDirectories(release.resolve("web/dist"));
+            Files.writeString(release.resolve("web/dist/index.html"), "<!doctype html>\n");
+
+            HttpResponse<String> created = post(TestSupport.client(), running,
+                    "/api/brands/claude-web/instances", "{\"name\":\"Node\",\"version\":\"0.3.2\"}");
+            assertEquals(201, created.statusCode(), created.body());
+            String id = instance(created).get("id").getAsString();
+            String path = "/api/brands/claude-web/instances/" + id;
+
+            HttpResponse<String> set = request(TestSupport.client(), "PATCH", running, path,
+                    "{\"nodeRuntime\":\"22\"}");
+            assertEquals(200, set.statusCode(), set.body());
+            assertEquals("22", instance(set).get("nodeRuntime").getAsString());
+            assertTrue(instance(set).has("nodeResolved"), set.body());
+
+            HttpResponse<String> bad = request(TestSupport.client(), "PATCH", running, path,
+                    "{\"nodeRuntime\":\"banana\"}");
+            assertEquals(400, bad.statusCode(), bad.body());
+        }
+    }
 }

@@ -168,7 +168,7 @@ class HermesRuntimeTest {
     @Test
     void theEndpointIsNullBeforeAnyPortsExist() throws IOException {
         BrandInstanceManager manager = new BrandInstanceManager(Brand.HERMES, dir.resolve("instances"));
-        BrandInstance instance = new BrandInstance("abc", "hermes", "demo", "0.22.5", null, 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "hermes", "demo", "0.22.5", null, 0, 1, null);
         assertNull(BrandRuntime.hermesEndpoint(manager, instance));
 
         Path panel = manager.instanceDirectory("abc").resolve("panel");

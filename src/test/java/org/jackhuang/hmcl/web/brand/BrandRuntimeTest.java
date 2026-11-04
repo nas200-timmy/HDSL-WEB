@@ -44,7 +44,7 @@ class BrandRuntimeTest {
     @Test
     void kimiCommandCarriesTheProxyContract() throws IOException {
         Path pkg = prefix(Brand.KIMI);
-        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1, null);
 
         List<String> command = BrandRuntime.command(Brand.KIMI, pkg, instance, "dsh.example.com");
 
@@ -62,7 +62,7 @@ class BrandRuntimeTest {
     @Test
     void kimiCommandOmitsTheAllowlistWithoutAHost() throws IOException {
         Path pkg = prefix(Brand.KIMI);
-        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1, null);
 
         List<String> command = BrandRuntime.command(Brand.KIMI, pkg, instance, null);
 
@@ -72,7 +72,7 @@ class BrandRuntimeTest {
     @Test
     void opencodeCommandUsesAPanelAllocatedPort() throws IOException {
         Path pkg = prefix(Brand.OPENCODE);
-        BrandInstance instance = new BrandInstance("abc", "opencode", "demo", "1.18.35", null, 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "opencode", "demo", "1.18.35", null, 0, 1, null);
 
         List<String> command = BrandRuntime.command(Brand.OPENCODE, pkg, instance, null);
 
@@ -83,7 +83,7 @@ class BrandRuntimeTest {
 
     @Test
     void commandRefusesAPrefixWithoutTheExecutable() {
-        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1, null);
 
         assertThrows(IOException.class,
                 () -> BrandRuntime.command(Brand.KIMI, dir, instance, null));
@@ -98,7 +98,7 @@ class BrandRuntimeTest {
         Files.createDirectories(entry.getParent());
         createExecutable(tsx);
         Files.createFile(entry);
-        BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1", null, 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1", null, 0, 1, null);
 
         BrandRuntime.LaunchPlan plan = BrandRuntime.plan(Brand.CLAUDE_WEB, pkg, instance, null);
 
@@ -124,7 +124,7 @@ class BrandRuntimeTest {
         createExecutable(tsx);
         Files.createFile(entry);
         BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1",
-                "https://gateway.example.com", 0, 1);
+                "https://gateway.example.com", 0, 1, null);
 
         BrandRuntime.LaunchPlan plan = BrandRuntime.plan(Brand.CLAUDE_WEB, pkg, instance, null);
 
@@ -132,7 +132,7 @@ class BrandRuntimeTest {
         assertTrue(plan.environment().containsKey("PORT"), plan.environment().toString());
 
         // Unset stays unset: the CLI keeps its own default.
-        BrandInstance plain = new BrandInstance("abc", "claude-web", "demo", "0.2.1", null, 0, 1);
+        BrandInstance plain = new BrandInstance("abc", "claude-web", "demo", "0.2.1", null, 0, 1, null);
         assertFalse(BrandRuntime.plan(Brand.CLAUDE_WEB, pkg, plain, null)
                 .environment().containsKey("ANTHROPIC_BASE_URL"));
     }
@@ -143,7 +143,7 @@ class BrandRuntimeTest {
         Path tsx = pkg.resolve("node_modules/.bin/tsx");
         Files.createDirectories(tsx.getParent());
         createExecutable(tsx);
-        BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1", null, 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "claude-web", "demo", "0.2.1", null, 0, 1, null);
 
         assertThrows(IOException.class,
                 () -> BrandRuntime.plan(Brand.CLAUDE_WEB, pkg, instance, null));
@@ -153,7 +153,7 @@ class BrandRuntimeTest {
     void hermesPlanPassesTheWrapperItsFiveArguments() throws IOException {
         Path brandRoot = Files.createDirectories(dir.resolve("hermes"));
         BrandInstanceManager manager = new BrandInstanceManager(Brand.HERMES, brandRoot.resolve("instances"));
-        BrandInstance instance = new BrandInstance("abc", "hermes", "demo", "0.22.5", null, 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "hermes", "demo", "0.22.5", null, 0, 1, null);
         Path pkg = Files.createDirectories(dir.resolve("hermes-rel"));
 
         BrandRuntime.LaunchPlan plan = BrandRuntime.hermesPlan(manager, instance, pkg);
@@ -173,7 +173,7 @@ class BrandRuntimeTest {
     @Test
     void npmBrandPlansCarryNoEnvironment() throws IOException {
         Path pkg = prefix(Brand.KIMI);
-        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1);
+        BrandInstance instance = new BrandInstance("abc", "kimi", "demo", "2.1.1", null, 0, 1, null);
 
         // The one thing a plan may carry is where kimi's shell is: on Windows it does
         // not look for a bash itself, and without the hint its first tool call fails.

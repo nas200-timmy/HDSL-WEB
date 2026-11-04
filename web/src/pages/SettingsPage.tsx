@@ -561,18 +561,152 @@ function NodeTab() {
     }
   };
 
+  const doDefault = async (selection: string) => {
+    setBusy(true);
+    try {
+      await api.nodeDefault(selection);
+      toast("success", `全局默认已设为 ${selection === "auto" ? "自动" : selection}`);
+      reload();
+    } catch (e) {
+      toast("error", `设置默认失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doDisable = async (version: string, disabled: boolean) => {
+    setBusy(true);
+    try {
+      await api.nodeDisable(version, disabled);
+      toast("success", `${disabled ? "已禁用" : "已启用"} Node.js ${version}`);
+      reload();
+    } catch (e) {
+      toast("error", `${disabled ? "禁用" : "启用"}失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doUpdateChannel = async (name: string) => {
+    setBusy(true);
+    try {
+      const r = await api.nodeChannelUpdate(name);
+      if (r.taskId) {
+        setInstalling(r.taskId);
+        setTaskMsg(`更新 Node ${name} → ${r.version}`);
+        toast("success", `开始安装 Node ${r.version}`);
+      } else {
+        toast("success", `Node ${name} 已指向 ${r.version}`);
+        reload();
+      }
+    } catch (e) {
+      toast("error", `更新失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doGc = async () => {
+    if (!window.confirm("删除未使用且超出保留数的 Node.js 运行时？被实例、品牌或回退锚点占用的不会删除。")) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await api.nodeGc(2);
+      toast("success", r.removed.length > 0 ? `已清理：${r.removed.join("、")}` : "没有可清理的运行时");
+      reload();
+    } catch (e) {
+      toast("error", `清理失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doMigrate = async (channel: string, consumers: import("../api").NodeConsumer[]) => {
+    setBusy(true);
+    try {
+      for (const consumer of consumers) {
+        if (consumer.kind === "instance") {
+          await api.patchInstance(consumer.id, { nodeRuntime: channel });
+        } else if (consumer.kind === "brand-instance" && consumer.brand) {
+          await api.patchBrandInstance(consumer.brand as import("../types").BrandId, consumer.id, {
+            nodeRuntime: channel,
+          });
+        }
+      }
+      toast("success", `已迁移 ${consumers.length} 个消费者到 Node ${channel}`);
+      reload();
+    } catch (e) {
+      toast("error", `迁移失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const changeConsumer = async (consumer: import("../api").NodeConsumer, value: string) => {
+    setBusy(true);
+    try {
+      if (consumer.kind === "instance") {
+        await api.patchInstance(consumer.id, { nodeRuntime: value });
+      } else if (consumer.kind === "brand-instance" && consumer.brand) {
+        await api.patchBrandInstance(consumer.brand as import("../types").BrandId, consumer.id, {
+          nodeRuntime: value,
+        });
+      }
+      toast("success", "已更新 Node.js 选择（下次启动生效）");
+      reload();
+    } catch (e) {
+      toast("error", `更新失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const currentDefault = status?.default === "system" ? "auto" : status?.default ?? "auto";
+  const defaultKnown = currentDefault === "auto"
+    || (status?.channels ?? []).some((c) => c.name === currentDefault && c.installed)
+    || (status?.runtimes ?? []).some((r) => r.version === currentDefault);
+  const consumerRows = (status?.consumers ?? []).filter(
+    (c) => c.kind === "instance" || c.kind === "brand-instance",
+  );
+
   return (
     <>
       <div className="section-caption">
         <LocalCafeIcon size={16} />
         {I18N["dsh.node.title"]}
       </div>
-      <div className="card" style={{ display: "grid", gap: 8, padding: 12 }}>
-        <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-          安装 dsh 版本、插件与品牌工具需要 Node.js 工具链：{status?.requirement ?? "…"}
-        </span>
 
-        {/* 系统 node */}
+      <div className="card" style={{ display: "grid", gap: 8, padding: 12 }}>
+        <div className="comp-row" style={{ padding: "6px 0" }}>
+          <span className="comp-label" style={{ width: "auto", flex: "none" }}>全局默认</span>
+          <span className="comp-value" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <select
+              className="input"
+              style={{ minWidth: 220, height: 32 }}
+              disabled={busy || status === null}
+              value={currentDefault}
+              onChange={(e) => void doDefault(e.target.value)}
+            >
+              <option value="auto">自动（PATH 优先，回落到托管）</option>
+              {(status?.channels ?? []).filter((c) => c.installed).map((c) => (
+                <option key={c.name} value={c.name}>
+                  Node {c.name}{c.lts ? "（LTS）" : ""}{c.resolved ? ` · ${c.resolved}` : ""}
+                </option>
+              ))}
+              {(status?.runtimes ?? []).map((r) => (
+                <option key={r.version} value={r.version}>精确 {r.version}</option>
+              ))}
+              {!defaultKnown && currentDefault !== "auto" && (
+                <option value={currentDefault}>{currentDefault}（未安装）</option>
+              )}
+            </select>
+            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+              安装 dsh 版本、插件与品牌工具需要 Node.js：{status?.requirement ?? "…"}
+            </span>
+          </span>
+        </div>
+
         <div className="comp-row" style={{ padding: "6px 0" }}>
           <span className="comp-label" style={{ width: "auto", flex: "none" }}>系统 PATH</span>
           <span className="comp-value" style={{ fontSize: 13 }}>
@@ -581,27 +715,183 @@ function NodeTab() {
               : "未检测到 node"}
           </span>
         </div>
+      </div>
 
-        {/* 托管运行时 */}
-        <span style={{ fontSize: 13, fontWeight: 600 }}>面板托管的运行时（存于数据目录，PATH 没有 node 时自动使用）</span>
-        {status && (status.managed ?? []).length === 0 && (
-          <span style={{ fontSize: 13, color: "var(--monet-on-surface-variant)" }}>还没有。裸部署（如 Windows 直接 java -jar）可一键安装：</span>
-        )}
-        {(status?.managed ?? []).map((r) => (
-          <div key={r.version} className="toolbar-row" style={{ padding: "2px 0" }}>
-            <span style={{ fontSize: 13 }}>
-              Node.js {r.version}
-              {!r.suitable && <span className="tag plain" style={{ marginLeft: 6 }}>版本不适配</span>}
-              <span className={`tag ${r.pnpm ? "running" : "plain"}`} style={{ marginLeft: 6 }}>{r.pnpm ? "pnpm 就绪" : "无 pnpm"}</span>
-            </span>
-            <span className="spacer" />
-            <button className="btn btn-text ripple-host" style={{ height: 28 }} disabled={busy} onClick={() => void doUninstall(r.version)}>
-              卸载
-            </button>
+      <div className="section-caption">
+        <span>大版本</span>
+      </div>
+      {(status?.channels ?? []).length === 0 && (
+        <div className="card" style={{ fontSize: 13, color: "var(--monet-on-surface-variant)" }}>
+          还没有面板托管的运行时。下面可以一键安装一个，安装后会按大版本出现在这里。
+        </div>
+      )}
+      {(status?.channels ?? []).map((channel) => {
+        const exact = (status?.runtimes ?? []).filter((r) => r.version.split(".")[0] === channel.name);
+        const stale = (status?.consumers ?? []).filter((c) =>
+          (c.kind === "instance" || c.kind === "brand-instance")
+          && c.resolved != null
+          && c.selector === c.resolved
+          && c.resolved !== channel.resolved
+          && c.resolved.split(".")[0] === channel.name);
+        return (
+          <div key={channel.name} className="card" style={{ display: "grid", gap: 6, padding: 12 }}>
+            <div className="toolbar-row">
+              <span style={{ fontSize: 15, fontWeight: 600 }}>Node {channel.name}</span>
+              {channel.lts && <span className="tag running">LTS</span>}
+              {channel.installed ? (
+                <span className={`tag ${channel.healthy ? "running" : "plain"}`}>
+                  {channel.healthy ? "健康" : "不可运行"}
+                </span>
+              ) : (
+                <span className="tag plain">未安装</span>
+              )}
+              {channel.installed && !channel.supported && (
+                <span className="tag plain" title="低于面板支持的 Node 范围">低于面板要求</span>
+              )}
+              {channel.disabled && <span className="tag plain">已禁用</span>}
+              <span className="spacer" />
+              <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                当前 {channel.resolved ?? "未安装"}
+                {channel.tracked && channel.tracked !== channel.resolved ? ` · 指针 ${channel.tracked}` : ""}
+              </span>
+              <button
+                className="btn btn-text ripple-host"
+                style={{ height: 28 }}
+                disabled={busy}
+                onClick={() => void doUpdateChannel(channel.name)}
+              >
+                {channel.installed ? "更新到最新" : "安装"}
+              </button>
+              <button
+                className="btn btn-text ripple-host"
+                style={{ height: 28 }}
+                disabled={busy || !channel.installed}
+                onClick={() => void doDefault(channel.name)}
+              >
+                设为默认
+              </button>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+              被使用：{channel.consumers.length ? channel.consumers.join("、") : "暂无"}
+            </div>
+            {stale.length > 0 && (
+              <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span>
+                  有 {stale.length} 个精确版本仍停在旧版本：
+                  {stale.map((c) => (c.brand ? `${c.brand}/${c.id}` : c.id)).join("、")}
+                </span>
+                <button
+                  className="btn btn-text ripple-host"
+                  style={{ height: 24 }}
+                  disabled={busy}
+                  onClick={() => void doMigrate(channel.name, stale)}
+                >
+                  迁移到 Node {channel.name}
+                </button>
+              </div>
+            )}
+            {exact.map((runtime) => (
+              <div key={runtime.version} className="toolbar-row" style={{ padding: "2px 0" }}>
+                <span style={{ fontSize: 13 }}>
+                  {runtime.version}
+                  {!runtime.healthy && <span className="tag plain" style={{ marginLeft: 6 }}>不可运行</span>}
+                  {!runtime.supported && <span className="tag plain" style={{ marginLeft: 6 }}>低于面板要求</span>}
+                  {runtime.disabled && <span className="tag plain" style={{ marginLeft: 6 }}>已禁用</span>}
+                  <span className={`tag ${runtime.pnpm ? "running" : "plain"}`} style={{ marginLeft: 6 }}>
+                    {runtime.pnpm ? "pnpm 就绪" : "无 pnpm"}
+                  </span>
+                  <span
+                    className={`tag ${runtime.verified ? "running" : "plain"}`}
+                    style={{ marginLeft: 6 }}
+                    title={runtime.sha256 ?? "没有记录摘要"}
+                  >
+                    {runtime.verified ? "校验 ✓" : "未校验"}
+                  </span>
+                  {runtime.sizeMb >= 0 && (
+                    <span style={{ marginLeft: 6, color: "var(--monet-on-surface-variant)" }}>{runtime.sizeMb} MB</span>
+                  )}
+                </span>
+                <span style={{ marginLeft: 10, fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                  {runtime.usedBy.length ? `被 ${runtime.usedBy.join("、")} 使用` : "空闲"}
+                </span>
+                <span className="spacer" />
+                <button
+                  className="btn btn-text ripple-host"
+                  style={{ height: 28 }}
+                  disabled={busy}
+                  onClick={() => void doDisable(runtime.version, !runtime.disabled)}
+                >
+                  {runtime.disabled ? "启用" : "禁用"}
+                </button>
+                <button
+                  className="btn btn-text ripple-host"
+                  style={{ height: 28 }}
+                  disabled={busy || runtime.usedBy.length > 0}
+                  title={runtime.usedBy.length > 0 ? "仍有消费者，先迁移它们" : ""}
+                  onClick={() => void doUninstall(runtime.version)}
+                >
+                  卸载
+                </button>
+              </div>
+            ))}
           </div>
-        ))}
+        );
+      })}
 
-        {/* 一键安装 */}
+      <div className="section-caption">
+        <span>使用方</span>
+      </div>
+      <div className="card" style={{ display: "grid", gap: 4, padding: 12 }}>
+        {consumerRows.length === 0 && (
+          <span style={{ fontSize: 13, color: "var(--monet-on-surface-variant)" }}>还没有 DSH 或品牌实例。</span>
+        )}
+        {consumerRows.map((consumer) => {
+          const known = consumer.selector === "inherit"
+            || consumer.selector === "auto"
+            || (status?.channels ?? []).some((c) => c.name === consumer.selector && c.installed)
+            || (status?.runtimes ?? []).some((r) => r.version === consumer.selector);
+          return (
+            <div
+              key={`${consumer.kind}:${consumer.brand ?? ""}:${consumer.id}`}
+              className="toolbar-row"
+              style={{ padding: "3px 0", flexWrap: "wrap", gap: 6 }}
+            >
+              <span style={{ fontSize: 13 }}>
+                {consumer.brand ? `${consumer.brand}/${consumer.id}` : consumer.id}
+              </span>
+              <span className="tag plain">{consumer.resolved ?? "未解析"}</span>
+              {consumer.requirement && <span className="tag plain">要求 {consumer.requirement}</span>}
+              {!consumer.compatible && <span className="tag plain">不满足</span>}
+              {consumer.running && <span className="tag running">运行中</span>}
+              <span className="spacer" />
+              <select
+                className="input"
+                style={{ height: 30, maxWidth: 230 }}
+                value={consumer.selector}
+                disabled={busy}
+                onChange={(e) => void changeConsumer(consumer, e.target.value)}
+              >
+                <option value="inherit">跟随默认</option>
+                <option value="auto">自动</option>
+                {(status?.channels ?? []).filter((channel) => channel.installed).map((channel) => (
+                  <option key={channel.name} value={channel.name}>
+                    Node {channel.name}
+                  </option>
+                ))}
+                {(status?.runtimes ?? []).map((runtime) => (
+                  <option key={runtime.version} value={runtime.version}>精确 {runtime.version}</option>
+                ))}
+                {!known && <option value={consumer.selector}>{consumer.selector}</option>}
+              </select>
+            </div>
+          );
+        })}
+        <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+          运行中的实例需要先停止才能切换；品牌默认值在「设置 → 品牌实例」里。
+        </span>
+      </div>
+
+      <div className="card" style={{ display: "grid", gap: 8, padding: 12 }}>
         <div className="toolbar-row" style={{ padding: "4px 0", flexWrap: "wrap" }}>
           <select className="input" style={{ height: 36, maxWidth: 160 }} value={source} onChange={(e) => setSource(e.target.value as "mirror" | "official")}>
             <option value="mirror">国内镜像（npmmirror）</option>
@@ -610,10 +900,11 @@ function NodeTab() {
           <button className="btn btn-raised ripple-host" disabled={busy || installing !== null} onClick={() => void doInstall()}>
             {installing ? "安装中…" : "一键安装最新适配版本"}
           </button>
+          <button className="btn btn-text ripple-host" disabled={busy} onClick={() => void doGc()}>
+            清理未使用
+          </button>
         </div>
         {taskMsg && <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>{taskMsg}</span>}
-
-        {/* 手动安装 */}
         <div className="hint info" style={{ margin: 0 }}>
           <span style={{ flex: 1 }}>也可以自己装：下载 Node.js LTS（nodejs.org），装完重启面板即可被探测到。</span>
           <button className="btn btn-text ripple-host" style={{ height: 28 }} onClick={() => window.open("https://nodejs.org", "_blank", "noopener")}>

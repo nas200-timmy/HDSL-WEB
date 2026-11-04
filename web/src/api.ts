@@ -245,7 +245,13 @@ export const api = {
   brandSettings: () => request<BrandSettings>("/api/settings/brands"),
   setBrandPolicy: (
     brand: BrandId,
-    body: { singleInstance: boolean; survivor: string | null; lockedRoute: boolean; sourceBuild: boolean },
+    body: {
+      singleInstance: boolean;
+      survivor: string | null;
+      lockedRoute: boolean;
+      sourceBuild: boolean;
+      nodeRuntime?: string | null;
+    },
   ) => request<{ ok: boolean }>(`/api/settings/brands/policy/${brand}`, jsonInit("PUT", body)),
   setBrandSources: (body: BrandSourcesBody) =>
     request<BrandSettings>("/api/settings/brands/sources", jsonInit("POST", body)),
@@ -593,7 +599,7 @@ export const api = {
 
   /** 运行中改 version → 409；未安装的 version → 400 */
   /** baseUrl 目前只有 claude-web 接受（ANTHROPIC_BASE_URL）；传空串表示清除 */
-  patchBrandInstance: (brand: BrandId, id: string, body: { name?: string; version?: string; baseUrl?: string }) =>
+  patchBrandInstance: (brand: BrandId, id: string, body: { name?: string; version?: string; baseUrl?: string; nodeRuntime?: string | null }) =>
     request<{ instance: BrandInstance }>(
       `/api/brands/${brand}/instances/${encodeURIComponent(id)}`,
       jsonInit("PATCH", body),
@@ -655,6 +661,35 @@ export const api = {
     request<{ taskId: string }>("/api/node/install", jsonInit("POST", body)),
   nodeUninstall: (version: string) =>
     request<{ ok: boolean }>("/api/node/uninstall", jsonInit("POST", { version })),
+  /** 预检一个选择：下拉框在应用前拿它显示「会解析到哪个版本、是否满足」。 */
+  nodeResolve: (selector: string, brand?: string) =>
+    request<import("./types").NodeResolution>(
+      `/api/node/resolve?selector=${encodeURIComponent(selector)}${brand ? `&brand=${encodeURIComponent(brand)}` : ""}`,
+    ),
+  /** 全局默认选择。 */
+  nodeDefault: (selection: string) =>
+    request<{ ok: boolean; default: string }>("/api/node/default", jsonInit("POST", { selection })),
+  /** 禁用/启用一个精确版本（只影响自动解析，不杀进程）。 */
+  nodeDisable: (version: string, disabled: boolean) =>
+    request<{ ok: boolean; version: string; disabled: boolean }>(
+      "/api/node/disable",
+      jsonInit("POST", { version, disabled }),
+    ),
+  /** 把一个大版本更新到上游最新（已安装则只移动指针）。 */
+  nodeChannelUpdate: (name: string, source?: "mirror" | "official") =>
+    request<{ ok?: boolean; taskId?: string; channel: string; version: string }>(
+      "/api/node/channels/update",
+      jsonInit("POST", { name, source }),
+    ),
+  /** 回到某个消费者上次成功启动的精确版本。 */
+  nodeRevert: (body: { kind: "instance" | "brand-instance"; brand?: string; id: string }) =>
+    request<{ ok: boolean; nodeRuntime: string }>("/api/node/revert", jsonInit("POST", body)),
+  /** 删除未使用且超出保留数的运行时。 */
+  nodeGc: (keepPerMajor = 2) =>
+    request<{ ok: boolean; removed: string[]; keepPerMajor: number }>(
+      "/api/node/gc",
+      jsonInit("POST", { keepPerMajor }),
+    ),
   /** 日志保留窗口（关于 → 日志）。PUT 要开发者提权，且只能往上调。 */
   panelLogs: {
     retention: () => request<LogRetention>("/api/settings/logs"),
@@ -928,6 +963,58 @@ export interface NodeStatus {
   } | null;
   managed: { version: string; suitable: boolean; node: string; pnpm: boolean }[];
   requirement: string;
+  /** 全局默认选择：auto / 大版本 / 精确版本 */
+  default: string;
+  /** 每个已安装大版本一张卡 */
+  channels: NodeChannel[];
+  /** 每个已安装的精确版本 */
+  runtimes: NodeRuntimeInfo[];
+  /** 谁在用哪个运行时 */
+  consumers: NodeConsumer[];
+}
+
+export interface NodeChannel {
+  name: string;
+  major: number;
+  lts: boolean;
+  /** 通道指针（上次「更新」记录到的版本），或 null */
+  tracked: string | null;
+  resolved: string | null;
+  installed: boolean;
+  disabled: boolean;
+  healthy: boolean;
+  /** 是否在面板支持的 Node 范围内（18/20 低于要求，装得上但 dsh 用不了） */
+  supported: boolean;
+  consumers: string[];
+}
+
+export interface NodeRuntimeInfo {
+  version: string;
+  path: string;
+  healthy: boolean;
+  disabled: boolean;
+  pnpm: boolean;
+  sizeMb: number;
+  lastUsedAt: string | null;
+  usedBy: string[];
+  sha256: string | null;
+  verified: boolean;
+  supported: boolean;
+}
+
+export interface NodeConsumer {
+  kind: "instance" | "brand-instance" | "zcode-build" | "task";
+  brand: string | null;
+  id: string;
+  selector: string;
+  resolved: string | null;
+  source: string;
+  compatible: boolean;
+  running: boolean;
+  /** 消费者自己声明的 engines.node（品牌包），或 null */
+  requirement: string | null;
+  /** 上次成功启动的精确版本，或 null */
+  lastGood: string | null;
 }
 
 /** 出站 TLS 的策略：strict 是默认（只认 Java 的 cacerts）；

@@ -28,7 +28,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/// The three last-resort switches: defaults, survivor semantics and validation.
+/// The last-resort switches: defaults, survivor semantics, validation and the
+/// brand-wide Node selector.
 class BrandPolicyTest {
 
     @Test
@@ -39,6 +40,7 @@ class BrandPolicyTest {
         assertNull(entry.survivor());
         assertFalse(entry.lockedRoute());
         assertFalse(entry.sourceBuild());
+        assertNull(entry.nodeRuntime());
         assertFalse(policy.disabled(Brand.OCTOP, "any-token"));
         assertNull(policy.lockedSurvivor());
     }
@@ -48,9 +50,9 @@ class BrandPolicyTest {
         BrandPolicy policy = new BrandPolicy(dataDir);
         assertThrows(IllegalArgumentException.class,
                 () -> policy.set(Brand.OCTOP,
-                        new BrandPolicy.Entry(true, null, false, false)));
+                        new BrandPolicy.Entry(true, null, false, false, null)));
 
-        policy.set(Brand.OCTOP, new BrandPolicy.Entry(true, "keep-me", false, false));
+        policy.set(Brand.OCTOP, new BrandPolicy.Entry(true, "keep-me", false, false, null));
         assertFalse(policy.disabled(Brand.OCTOP, "keep-me"));
         assertTrue(policy.disabled(Brand.OCTOP, "other"));
         // Other brands are independent.
@@ -62,16 +64,16 @@ class BrandPolicyTest {
         BrandPolicy policy = new BrandPolicy(dataDir);
         assertThrows(IllegalArgumentException.class,
                 () -> policy.set(Brand.OCTOP,
-                        new BrandPolicy.Entry(false, null, true, false)));
+                        new BrandPolicy.Entry(false, null, true, false, null)));
         assertThrows(IllegalArgumentException.class,
                 () -> policy.set(Brand.OCTOP,
-                        new BrandPolicy.Entry(true, null, true, false)));
+                        new BrandPolicy.Entry(true, null, true, false, null)));
     }
 
     @Test
     void lockedRouteSurvivesAReadBack(@TempDir Path dataDir) throws Exception {
         BrandPolicy policy = new BrandPolicy(dataDir);
-        policy.set(Brand.OCTOP, new BrandPolicy.Entry(true, "keep-me", true, false));
+        policy.set(Brand.OCTOP, new BrandPolicy.Entry(true, "keep-me", true, false, null));
         assertEquals("keep-me", policy.lockedSurvivor());
         assertEquals("keep-me", new BrandPolicy(dataDir).lockedSurvivor());
     }
@@ -79,9 +81,19 @@ class BrandPolicyTest {
     @Test
     void writerKeepsOtherBrands(@TempDir Path dataDir) throws Exception {
         BrandPolicy policy = new BrandPolicy(dataDir);
-        policy.set(Brand.KIMI, new BrandPolicy.Entry(true, "kimi-one", false, false));
-        policy.set(Brand.OCTOP, new BrandPolicy.Entry(true, "octop-one", false, false));
+        policy.set(Brand.KIMI, new BrandPolicy.Entry(true, "kimi-one", false, false, null));
+        policy.set(Brand.OCTOP, new BrandPolicy.Entry(true, "octop-one", false, false, null));
         assertEquals("kimi-one", policy.get(Brand.KIMI).survivor());
         assertEquals("octop-one", policy.get(Brand.OCTOP).survivor());
+    }
+
+    @Test
+    void nodeRuntimeSurvivesAReadBackAndIsValidated(@TempDir Path dataDir) throws Exception {
+        BrandPolicy policy = new BrandPolicy(dataDir);
+        policy.set(Brand.KIMI, BrandPolicy.Entry.DEFAULTS.withNodeRuntime("22"));
+        assertEquals("22", new BrandPolicy(dataDir).get(Brand.KIMI).nodeRuntime());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> policy.set(Brand.KIMI, BrandPolicy.Entry.DEFAULTS.withNodeRuntime("not a selector")));
     }
 }

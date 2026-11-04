@@ -330,7 +330,7 @@ public final class HdslServer {
         context.addServlet(instancesHolder, "/api/instances/*");
         context.addServlet(new ServletHolder(new VersionsApiServlet(taskService)), "/api/versions");
         context.addServlet(new ServletHolder(new TasksApiServlet(taskService)), "/api/tasks/*");
-        context.addServlet(new ServletHolder(new NodeApiServlet(taskService)), "/api/node/*");
+        context.addServlet(new ServletHolder(new NodeApiServlet(taskService, config)), "/api/node/*");
         context.addServlet(new ServletHolder(new PluginsApiServlet()), "/api/plugins/*");
         // The curated terminal-plugin list lives under its own prefix: it is not the
         // community catalogue (that is `/api/plugins/catalog`) and it has no

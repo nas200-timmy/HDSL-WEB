@@ -32,6 +32,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -71,6 +72,75 @@ class NodeApiTest {
             assertTrue(body.get("managed").isJsonArray(), body.toString());
             assertTrue(body.has("requirement"), body.toString());
             assertFalse(body.get("requirement").getAsString().isBlank(), body.toString());
+            assertTrue(body.has("default"), body.toString());
+            assertTrue(body.has("channels"), body.toString());
+            assertTrue(body.get("channels").isJsonArray(), body.toString());
+            assertTrue(body.has("runtimes"), body.toString());
+            assertTrue(body.get("runtimes").isJsonArray(), body.toString());
+            assertTrue(body.has("consumers"), body.toString());
+            assertTrue(body.get("consumers").isJsonArray(), body.toString());
+            assertFalse(body.getAsJsonArray("consumers").isEmpty(), body.toString());
+            JsonObject consumer = body.getAsJsonArray("consumers").get(0).getAsJsonObject();
+            assertTrue(consumer.has("requirement"), consumer.toString());
+            assertTrue(consumer.has("lastGood"), consumer.toString());
         }
+    }
+
+    @Test
+    void resolveAnswersWithTheResolverThePageUses() throws Exception {
+        try (TestSupport.RunningServer server = TestSupport.start(dataDir, Map.of(), config -> {
+            config.bindHost = "127.0.0.1";
+            config.auth.disabled = true;
+        })) {
+            HttpResponse<String> ok = get(server, "/api/node/resolve?selector=auto");
+            assertEquals(200, ok.statusCode(), ok.body());
+            JsonObject body = JsonParser.parseString(ok.body()).getAsJsonObject();
+            assertTrue(body.has("version"), body.toString());
+            assertTrue(body.has("source"), body.toString());
+            assertTrue(body.has("compatible"), body.toString());
+            assertTrue(body.has("reason"), body.toString());
+
+            HttpResponse<String> invalid = get(server, "/api/node/resolve?selector=banana");
+            assertEquals(400, invalid.statusCode(), invalid.body());
+        }
+    }
+
+    @Test
+    void gcAndRevertDoNotInventAnything() throws Exception {
+        try (TestSupport.RunningServer server = TestSupport.start(dataDir, Map.of(), config -> {
+            config.bindHost = "127.0.0.1";
+            config.auth.disabled = true;
+        })) {
+            HttpResponse<String> gc = post(server, "/api/node/gc", "{}");
+            assertEquals(200, gc.statusCode(), gc.body());
+            assertTrue(JsonParser.parseString(gc.body()).getAsJsonObject()
+                    .get("removed").isJsonArray(), gc.body());
+
+            HttpResponse<String> revert = post(server, "/api/node/revert",
+                    "{\"kind\":\"instance\",\"id\":\"nope\"}");
+            assertEquals(404, revert.statusCode(), revert.body());
+        }
+    }
+
+    private static HttpResponse<String> post(TestSupport.RunningServer server, String path, String body)
+            throws Exception {
+        return HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build()
+                .send(HttpRequest.newBuilder(URI.create(server.baseUrl() + path))
+                        .timeout(Duration.ofSeconds(20))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(body))
+                        .build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> get(TestSupport.RunningServer server, String path) throws Exception {
+        return HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build()
+                .send(HttpRequest.newBuilder(URI.create(server.baseUrl() + path))
+                        .timeout(Duration.ofSeconds(20))
+                        .GET()
+                        .build(), HttpResponse.BodyHandlers.ofString());
     }
 }

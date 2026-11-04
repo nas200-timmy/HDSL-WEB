@@ -61,6 +61,7 @@ const CAPABILITY_LABEL: Record<string, string> = {
 export function BrandManagementPanel() {
   const [settings, setSettings] = useState<BrandSettings | null>(null);
   const [status, setStatus] = useState<DeveloperStatus | null>(null);
+  const [node, setNode] = useState<import("../api").NodeStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [probes, setProbes] = useState<Record<string, Record<string, BrandSourceProbe>>>({});
@@ -70,9 +71,14 @@ export function BrandManagementPanel() {
   const load = async () => {
     setLoadError(null);
     try {
-      const [next, developer] = await Promise.all([api.brandSettings(), api.developerStatus()]);
+      const [next, developer, nodeStatus] = await Promise.all([
+        api.brandSettings(),
+        api.developerStatus(),
+        api.nodeStatus().catch(() => null),
+      ]);
       setSettings(next);
       setStatus(developer);
+      setNode(nodeStatus);
       const initial: Record<string, Draft> = {
         pypi: { preset: next.sources.pypi.preset, url: next.sources.pypi.url },
         python: { preset: next.sources.python.preset, url: next.sources.python.url },
@@ -377,6 +383,7 @@ export function BrandManagementPanel() {
         <BrandPolicyCard
           key={entry.brand}
           entry={entry}
+          node={node}
           editable={editable}
           onSaved={load}
           withElevation={withElevation}
@@ -391,11 +398,13 @@ export function BrandManagementPanel() {
 /// 一个品牌的策略卡片：能力位决定显示哪些开关，新增品牌不需要改这里。
 function BrandPolicyCard({
   entry,
+  node,
   editable,
   onSaved,
   withElevation,
 }: {
   entry: BrandPolicyEntry;
+  node: import("../api").NodeStatus | null;
   editable: boolean;
   onSaved: () => Promise<void>;
   withElevation: <T,>(action: () => Promise<T>) => Promise<T>;
@@ -404,6 +413,7 @@ function BrandPolicyCard({
   const [survivor, setSurvivor] = useState<string | null>(entry.survivor);
   const [lockedRoute, setLockedRoute] = useState(entry.lockedRoute);
   const [sourceBuild, setSourceBuild] = useState(entry.sourceBuild);
+  const [nodeRuntime, setNodeRuntime] = useState(entry.nodeRuntime ?? "");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -411,6 +421,7 @@ function BrandPolicyCard({
     setSurvivor(entry.survivor);
     setLockedRoute(entry.lockedRoute);
     setSourceBuild(entry.sourceBuild);
+    setNodeRuntime(entry.nodeRuntime ?? "");
   }, [entry]);
 
   const capabilities = entry.capabilities ?? [];
@@ -429,6 +440,7 @@ function BrandPolicyCard({
           survivor: singleInstance ? survivor : null,
           lockedRoute: singleInstance && lockedRoute,
           sourceBuild,
+          nodeRuntime: nodeRuntime || null,
         }),
       );
       toast("success", `${entry.brand} 的策略已保存`);
@@ -437,6 +449,21 @@ function BrandPolicyCard({
       toast("error", errMsg(e));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const consumerFor = (instanceId: string) =>
+    node?.consumers.find(
+      (c) => c.kind === "brand-instance" && c.brand === entry.brand && c.id === instanceId,
+    );
+
+  const revert = async (instanceId: string) => {
+    try {
+      await api.nodeRevert({ kind: "brand-instance", brand: entry.brand, id: instanceId });
+      toast("success", "已切回上次成功启动的 Node.js");
+      await onSaved();
+    } catch (e) {
+      toast("error", `回退失败：${errMsg(e)}`);
     }
   };
 
@@ -506,6 +533,36 @@ function BrandPolicyCard({
           </label>
         )}
 
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+          默认 Node.js
+          <select
+            className="input"
+            style={{ flex: "none", maxWidth: 280 }}
+            value={nodeRuntime}
+            disabled={!editable}
+            onChange={(e) => setNodeRuntime(e.target.value)}
+          >
+            <option value="">跟随全局默认</option>
+            <option value="auto">自动（PATH 优先，回落到托管）</option>
+            {(node?.channels ?? []).filter((c) => c.installed).map((c) => (
+              <option key={c.name} value={c.name}>
+                Node {c.name}{c.lts ? "（LTS）" : ""}{c.resolved ? ` · ${c.resolved}` : ""}
+              </option>
+            ))}
+            {(node?.runtimes ?? []).map((r) => (
+              <option key={r.version} value={r.version}>精确 {r.version}</option>
+            ))}
+            {nodeRuntime !== "" && nodeRuntime !== "auto"
+              && !(node?.channels ?? []).some((c) => c.name === nodeRuntime && c.installed)
+              && !(node?.runtimes ?? []).some((r) => r.version === nodeRuntime) && (
+                <option value={nodeRuntime}>{nodeRuntime}</option>
+              )}
+          </select>
+          <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            实例自己没选时继承它
+          </span>
+        </label>
+
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button
             className="btn btn-raised ripple-host"
@@ -544,6 +601,27 @@ function BrandPolicyCard({
                 <span className="tag plain">{i.version}</span>
                 {i.id === survivor && singleInstance && <span className="tag running">保留</span>}
                 {i.disabled && <span className="tag plain">禁用</span>}
+                {(() => {
+                  const consumer = consumerFor(i.id);
+                  if (!consumer) return null;
+                  return (
+                    <>
+                      {consumer.requirement && (
+                        <span className="tag plain" title="engines.node">要求 {consumer.requirement}</span>
+                      )}
+                      {!consumer.compatible && <span className="tag plain">Node 不满足</span>}
+                      {consumer.lastGood && consumer.lastGood !== consumer.resolved && (
+                        <button
+                          className="btn btn-text ripple-host"
+                          style={{ height: 22 }}
+                          onClick={() => void revert(i.id)}
+                        >
+                          回退到 {consumer.lastGood}
+                        </button>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             ))
           )}

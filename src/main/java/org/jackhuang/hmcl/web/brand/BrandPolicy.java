@@ -54,25 +54,31 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 public final class BrandPolicy {
 
     /// One brand's policy. `survivor` is an instance id (an opaque token), not
-    /// a display name.
+    /// a display name. `nodeRuntime` is the brand-wide Node.js selector a
+    /// `BrandInstance` follows when its own is `null`/`inherit`.
     public record Entry(boolean singleInstance, @Nullable String survivor,
-                        boolean lockedRoute, boolean sourceBuild) {
-        public static final Entry DEFAULTS = new Entry(false, null, false, false);
+                        boolean lockedRoute, boolean sourceBuild,
+                        @Nullable String nodeRuntime) {
+        public static final Entry DEFAULTS = new Entry(false, null, false, false, null);
 
         public Entry withSingleInstance(boolean value) {
-            return new Entry(value, survivor, lockedRoute, sourceBuild);
+            return new Entry(value, survivor, lockedRoute, sourceBuild, nodeRuntime);
         }
 
         public Entry withSurvivor(@Nullable String value) {
-            return new Entry(singleInstance, value, lockedRoute, sourceBuild);
+            return new Entry(singleInstance, value, lockedRoute, sourceBuild, nodeRuntime);
         }
 
         public Entry withLockedRoute(boolean value) {
-            return new Entry(singleInstance, survivor, value, sourceBuild);
+            return new Entry(singleInstance, survivor, value, sourceBuild, nodeRuntime);
         }
 
         public Entry withSourceBuild(boolean value) {
-            return new Entry(singleInstance, survivor, lockedRoute, value);
+            return new Entry(singleInstance, survivor, lockedRoute, value, nodeRuntime);
+        }
+
+        public Entry withNodeRuntime(@Nullable String value) {
+            return new Entry(singleInstance, survivor, lockedRoute, sourceBuild, value);
         }
     }
 
@@ -119,7 +125,17 @@ public final class BrandPolicy {
         if (entry.lockedRoute() && (!entry.singleInstance() || survivor == null)) {
             throw new IllegalArgumentException("lockedRoute requires singleInstance and a survivor");
         }
-        Entry normalized = new Entry(entry.singleInstance(), survivor, entry.lockedRoute(), entry.sourceBuild());
+        String nodeRuntime = entry.nodeRuntime() == null ? null : entry.nodeRuntime().trim();
+        if (nodeRuntime != null && nodeRuntime.isEmpty()) {
+            nodeRuntime = null;
+        }
+        if (nodeRuntime != null
+                && org.jackhuang.hmcl.dsh.NodeSelection.parse(nodeRuntime).kind()
+                        == org.jackhuang.hmcl.dsh.NodeSelection.Kind.INVALID) {
+            throw new IllegalArgumentException("unknown nodeRuntime selector: " + nodeRuntime);
+        }
+        Entry normalized = new Entry(entry.singleInstance(), survivor, entry.lockedRoute(),
+                entry.sourceBuild(), nodeRuntime);
         Map<String, Entry> all = load();
         all.put(brand.id(), normalized);
         write(all);
@@ -141,11 +157,15 @@ public final class BrandPolicy {
                 String survivor = object.has("survivor") && object.get("survivor").isJsonPrimitive()
                         ? object.get("survivor").getAsString()
                         : null;
+                String nodeRuntime = object.has("nodeRuntime") && object.get("nodeRuntime").isJsonPrimitive()
+                        ? object.get("nodeRuntime").getAsString()
+                        : null;
                 entries.put(id, new Entry(
                         bool(object, "singleInstance"),
                         survivor == null || survivor.isBlank() ? null : survivor,
                         bool(object, "lockedRoute"),
-                        bool(object, "sourceBuild")));
+                        bool(object, "sourceBuild"),
+                        nodeRuntime == null || nodeRuntime.isBlank() ? null : nodeRuntime));
             }
         } catch (RuntimeException | IOException e) {
             LOG.warning("Could not read " + file + "; using default brand policy", e);
@@ -172,6 +192,11 @@ public final class BrandPolicy {
             }
             object.addProperty("lockedRoute", entry.lockedRoute());
             object.addProperty("sourceBuild", entry.sourceBuild());
+            if (entry.nodeRuntime() == null) {
+                object.add("nodeRuntime", null);
+            } else {
+                object.addProperty("nodeRuntime", entry.nodeRuntime());
+            }
             root.add(item.getKey(), object);
         }
         Path tmp = file.resolveSibling(file.getFileName() + ".tmp");

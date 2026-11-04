@@ -158,7 +158,8 @@ public final class DshLauncher {
     private static DshNodeRuntime resolveRuntime(DshInstance instance, boolean needsPnpm)
             throws DshException {
         String selection = instance.nodeRuntimeOrDefault();
-        if (DshNodeRuntime.SYSTEM.equalsIgnoreCase(selection)) {
+        NodeSelection parsed = NodeSelection.parse(selection);
+        if (parsed.kind() == NodeSelection.Kind.AUTO || parsed.kind() == NodeSelection.Kind.INHERIT) {
             // PATH 上没有就走面板托管的运行时（设置 → Node.js 一键安装）——
             // 裸部署没有系统 Node.js 也能工作。
             //
@@ -176,12 +177,18 @@ public final class DshLauncher {
             return runtime;
         }
 
-        NodeRuntime managed = NodeRuntimeManager.findInstalled(selection);
-        if (managed == null) {
-            throw new DshException("Node.js " + selection
-                    + " is not installed; install it on the Node page or switch this instance to the system runtime");
+        // A channel (`22`, `lts`) or an exact version. The resolver is the same
+        // one the Node page uses, so the dropdown and the launch cannot disagree.
+        NodeSelection.Resolution resolved = NodeSelection.resolve(parsed, null, needsPnpm);
+        DshNodeRuntime runtime = resolved.runtime();
+        if (runtime == null) {
+            throw new DshException("Node.js " + selection + " 不可用: " + resolved.reason()
+                    + "；在「设置 → Node.js」安装它，或把这个实例切到「自动」");
         }
-        return DshNodeRuntime.fromManaged(managed);
+        if (NodeRuntimeManager.findInstalled(runtime.nodeVersion()) != null) {
+            NodeRuntimeManager.touch(runtime.nodeVersion());
+        }
+        return runtime;
     }
 
     /// How long a version is given to answer a help request.
