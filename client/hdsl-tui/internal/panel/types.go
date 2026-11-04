@@ -14,10 +14,44 @@ type Health struct {
 
 // Instance is one entry of GET /api/instances or
 // GET /api/brands/{brand}/instances. Both endpoints use the same shape.
+//
+// The first three fields are the contract the client was written against; the
+// rest arrived with the panel's instance and Node.js work. An older panel omits
+// them, and the zero value is the honest answer — "this panel does not report
+// it" — rather than an error.
 type Instance struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	State string `json:"state"`
+
+	// Version is the harness/product version the instance runs.
+	Version string `json:"version"`
+	// Port is the DSH instance's web port; LastPort is what the brand
+	// surfaces report instead.
+	Port     int `json:"port"`
+	LastPort int `json:"lastPort"`
+	// URL is the panel-relative mount a browser opens; empty while stopped.
+	URL string `json:"url"`
+	// Error is why a failed instance failed, in the same answer that says
+	// "failed" (v0.6.x; earlier panels leave it empty).
+	Error string `json:"error"`
+	// Account is the DSH instance's provider account key, when it has one.
+	Account string `json:"account"`
+	// Brand is the brand id, present on brand instance rows.
+	Brand string `json:"brand"`
+	// TerminalOpen says a Web Shell terminal is up for this instance.
+	TerminalOpen bool `json:"terminalOpen"`
+	// Disabled is the brand policy's "do not launch this" flag.
+	Disabled bool `json:"disabled"`
+}
+
+// PortOf is the port the instance listens on: DSH reports `port`, the brand
+// surfaces report `lastPort`.
+func (i Instance) PortOf() int {
+	if i.Port != 0 {
+		return i.Port
+	}
+	return i.LastPort
 }
 
 type instanceList struct {
@@ -105,6 +139,22 @@ func (e Elevation) Expiry() time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// AgentToken is the body of POST /api/developer/agent-token: the bearer grant
+// handed to an agent. The token itself appears exactly once, in this answer.
+type AgentToken struct {
+	Token      string   `json:"token"`
+	ID         string   `json:"id"`
+	Label      string   `json:"label"`
+	Scopes     []string `json:"scopes"`
+	InstanceID string   `json:"instanceId"`
+	ExpiresAt  string   `json:"expiresAt"`
+}
+
+// Expiry parses ExpiresAt the same way the elevation does.
+func (t AgentToken) Expiry() time.Time {
+	return Elevation{ExpiresAt: t.ExpiresAt}.Expiry()
 }
 
 type loginBody struct {

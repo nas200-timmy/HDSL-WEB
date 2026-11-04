@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"strings"
@@ -151,6 +152,19 @@ func (s *Screen) Suspend() {
 
 // Resume re-enters the alternate screen after Suspend.
 func (s *Screen) Resume() error { return s.enter() }
+
+// CopyToClipboard asks the terminal to place text on the system clipboard
+// using OSC 52. Terminals that do not implement it ignore the sequence; the
+// screen is not redrawn and nothing else changes. Base64 keeps newlines and
+// non-ASCII intact.
+func (s *Screen) CopyToClipboard(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.out == nil || text == "" {
+		return
+	}
+	_, _ = fmt.Fprintf(s.out, "\x1b]52;c;%s\a", base64.StdEncoding.EncodeToString([]byte(text)))
+}
 
 // AttachInput routes the terminal's bytes to w instead of decoding them. The
 // caller closes the other side of the pipe when the terminal ends.

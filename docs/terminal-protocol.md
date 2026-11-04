@@ -60,6 +60,25 @@
 总是可用，对未提权的会话是幂等空操作。要求 HTTPS。200 → `{"elevated":false}`。
 网页（开发者模式页）与 hdsl-tui（主菜单 → 开发者提权）共用这两个端点。
 
+### `POST /api/developer/agent-token`
+
+用当前提权会话给 agent 签一张 bearer 票。需要已提权；没提权时 403
+`developer_elevation_required`。请求体：
+
+```json
+{"label":"hdsl-tui","scopes":["read","mc"]}
+```
+
+`token` 只在这一个应答里出现一次：
+
+```json
+{"token":"…","id":"AbC123","label":"hdsl-tui","scopes":["read","mc"],
+ "expiresAt":"2026-11-04T15:00:00Z"}
+```
+
+范围限于 `read|mc|instances|config|plugins`；有效期被当前提权窗口截断，面板侧可随时吊销。
+hdsl-tui 把它和 `https://127.0.0.1:<端口>` 拼成一段提示词，并用 OSC 52 请求终端复制。
+
 ### `GET /api/developer/status`
 
 开发者模式此刻的状态。两个客户端都在**打开终端之前**读它，好把对话框排成同一个顺序
@@ -85,6 +104,22 @@
   元素形状同上（另带 `version` 等字段）
 - ZCode（实验性品类）：`GET /api/zcode/instances`，元素形状同上（`state ∈ created /
   starting / running / stopped / error`）
+
+v0.6.x 起元素还可能带（旧面板缺字段就是空/零，客户端据此显示“面板未报告”）：
+`version`、`port`（dsh）或 `lastPort`（品牌）、`url`（浏览器挂载点）、`error`（启动失败
+原因）、`account`（dsh 的供应商账户）、`terminalOpen`、`disabled`。
+
+### `POST .../launch` 与 `POST .../stop`
+
+三条路由与终端同前缀：dsh `/api/instances/{id}/…`、品牌
+`/api/brands/{brand}/instances/{id}/…`、ZCode `/api/zcode/instances/{id}/…`。请求体 `{}`。
+
+- `launch`：202 `{"state":"starting"}`；版本没装时先装再起，回
+  `{"state":"installing","taskId":…}`；
+- `stop`：202 `{"state":"stopping"}`，或 200 `{"state":"stopped"}`（只有终端在跑时）。
+
+两者都可能先经过开发者守卫；被拒时客户端按 403 `developer_elevation_required` 提示去提权。
+hdsl-tui 的实例菜单里就是这两项。
 
 `claude-web` 的内核就是 Claude Code CLI（社区引擎 `claude-web-engine` 或官方二进制），
 所以它也有终端，只是要先选内核——见下面的 `terminals` 端点与 `?kernel=` 参数。

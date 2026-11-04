@@ -210,6 +210,31 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"elevated": true, "expiresAt": "2026-10-23T15:34:56Z"})
 		return
+	case method == "POST" && r.URL.Path == "/api/developer/agent-token":
+		var body struct {
+			Label  string   `json:"label"`
+			Scopes []string `json:"scopes"`
+		}
+		_ = json.Unmarshal([]byte(readBody(r)), &body)
+		if !s.Elevated {
+			writeError(w, http.StatusForbidden,
+				"developer_elevation_required: elevate with the developer password first")
+			return
+		}
+		if body.Label == "" {
+			body.Label = "agent"
+		}
+		if len(body.Scopes) == 0 {
+			body.Scopes = []string{"read"}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"token":     "agent-token-" + body.Label,
+			"id":        "grant-1",
+			"label":     body.Label,
+			"scopes":    body.Scopes,
+			"expiresAt": "2026-10-23T12:34:56Z",
+		})
+		return
 	case method == "POST" && r.URL.Path == "/api/developer/revoke":
 		s.Elevated = false
 		writeJSON(w, http.StatusOK, map[string]any{"elevated": false})
@@ -236,6 +261,14 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if method == "POST" && (strings.HasSuffix(r.URL.Path, "/launch") || strings.HasSuffix(r.URL.Path, "/stop")) {
+		state := "starting"
+		if strings.HasSuffix(r.URL.Path, "/stop") {
+			state = "stopping"
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"state": state})
+		return
+	}
 	if !strings.HasSuffix(r.URL.Path, "/terminal") {
 		writeError(w, http.StatusNotFound, "not found")
 		return

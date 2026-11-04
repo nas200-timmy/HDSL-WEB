@@ -727,6 +727,7 @@ func (a *App) mainMenu(ctx context.Context) (int, bool) {
 			Subtitle: "已连接 " + a.server + "（面板 " + a.health.Version + "）",
 			Items: []ui.Item{
 				{Label: "选择实例并连接", Note: "进入 agent 的终端"},
+				{Label: "给 agent 签票", Note: "生成提示词并复制"},
 				{Label: "开发者提权", Note: elevationNote(a.elevatedUntil)},
 				{Label: "会话与连接信息"},
 				{Label: "清除保存的登录信息"},
@@ -742,14 +743,16 @@ func (a *App) mainMenu(ctx context.Context) (int, bool) {
 		case 0:
 			a.pickInstance(ctx)
 		case 1:
-			a.elevate(ctx)
+			a.mintAgentTicket(ctx)
 		case 2:
-			a.sessionInfo()
+			a.elevate(ctx)
 		case 3:
-			a.clearSavedLogin()
+			a.sessionInfo()
 		case 4:
-			return 0, true
+			a.clearSavedLogin()
 		case 5:
+			return 0, true
+		case 6:
 			return cli.ExitOK, false
 		}
 	}

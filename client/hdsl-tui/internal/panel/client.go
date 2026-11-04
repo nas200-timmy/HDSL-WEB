@@ -310,6 +310,26 @@ func (c *Client) elevationAction(ctx context.Context, path string) (Elevation, e
 	return elevation, nil
 }
 
+// MintAgentToken mints a bearer grant for an agent (POST
+// /api/developer/agent-token). It requires a developer elevation; without one
+// the panel answers 403, which the caller reports as "elevate first" rather
+// than retrying.
+func (c *Client) MintAgentToken(ctx context.Context, label string, scopes []string) (AgentToken, error) {
+	body := map[string]any{"scopes": scopes}
+	if label != "" {
+		body["label"] = label
+	}
+	_, data, err := c.do(ctx, http.MethodPost, "/api/developer/agent-token", nil, body)
+	if err != nil {
+		return AgentToken{}, err
+	}
+	var token AgentToken
+	if err := json.Unmarshal(data, &token); err != nil {
+		return AgentToken{}, &TransportError{Op: "POST /api/developer/agent-token", Err: err}
+	}
+	return token, nil
+}
+
 // DeveloperStatus reads GET /api/developer/status: whether a developer password
 // exists, whether this session is elevated, whether the web shell switch is on
 // and whether the panel is speaking TLS. A panel older than this endpoint
@@ -362,18 +382,39 @@ func (c *Client) instances(ctx context.Context, path string) ([]Instance, error)
 	return list.Instances, nil
 }
 
-// terminalPath is the open/close terminal endpoint. An empty brand means the
-// DSH instance surface; the brand categories mirror it under /api/brands, and
-// ZCode has its own category prefix.
-func terminalPath(brand, id string) string {
+// instancePath is the base of one instance's REST surface: launch, stop, and
+// the terminal that hangs off it. An empty brand means the DSH surface; the
+// brand categories mirror it under /api/brands, and ZCode has its own prefix.
+func instancePath(brand, id string) string {
 	id = url.PathEscape(id)
 	switch {
 	case brand == "" || brand == "dsh":
-		return "/api/instances/" + id + "/terminal"
+		return "/api/instances/" + id
 	case brand == "zcode":
-		return "/api/zcode/instances/" + id + "/terminal"
+		return "/api/zcode/instances/" + id
 	}
-	return "/api/brands/" + url.PathEscape(brand) + "/instances/" + id + "/terminal"
+	return "/api/brands/" + url.PathEscape(brand) + "/instances/" + id
+}
+
+// terminalPath is the open/close terminal endpoint.
+func terminalPath(brand, id string) string {
+	return instancePath(brand, id) + "/terminal"
+}
+
+// LaunchInstance starts an instance (POST .../launch). The panel answers 202
+// with the state it entered — "starting", or "installing" when the version is
+// not on disk yet — and the client only needs the request to have been
+// accepted.
+func (c *Client) LaunchInstance(ctx context.Context, brand, id string) error {
+	_, _, err := c.do(ctx, http.MethodPost, instancePath(brand, id)+"/launch", nil, map[string]string{})
+	return err
+}
+
+// StopInstance stops an instance (POST .../stop). It also ends a running
+// terminal, which is the only process some instances have.
+func (c *Client) StopInstance(ctx context.Context, brand, id string) error {
+	_, _, err := c.do(ctx, http.MethodPost, instancePath(brand, id)+"/stop", nil, map[string]string{})
+	return err
 }
 
 // OpenTerminal asks for a ticket. resume reattaches to an existing agent
