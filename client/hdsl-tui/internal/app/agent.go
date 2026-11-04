@@ -90,8 +90,13 @@ func (a *App) mintAgentTicket(ctx context.Context) {
 		}
 		prompt := agentPrompt(a.server, ticket)
 		a.screen.CopyToClipboard(prompt)
-		a.message("签票成功", prompt+
-			"\n\n已请求终端复制到剪贴板；终端不支持 OSC 52 时，请用鼠标选中上面的文字复制。")
+		// The token gets its own screen on purpose: a terminal that ignores
+		// OSC 52 still leaves the operator a single line to copy by hand or
+		// type into the agent's own TUI.
+		a.message("票已签发", "Token（单独一行，可手动输入到 agent 的终端）：\n\n"+
+			ticket.Token+"\n\n范围："+scopeText(ticket.Scopes)+"\n"+expiryLine(ticket))
+		a.message("给 agent 的提示词", prompt+
+			"\n\n已请求终端复制；终端不支持 OSC 52 时，用鼠标选中上面的文字复制。")
 		return
 	}
 }
@@ -100,18 +105,23 @@ func (a *App) mintAgentTicket(ctx context.Context) {
 // panel address is the loopback one: the prompt ends up in a transcript, and
 // the real host name has no business there.
 func agentPrompt(server string, ticket panel.AgentToken) string {
-	expires := "与开发者提权同生命周期"
-	if at := ticket.Expiry(); !at.IsZero() {
-		expires += "，最晚到 " + at.Local().Format("2006-01-02 15:04")
-	}
 	return strings.Join([]string{
 		"你现在获得了一张 HDSL-web 面板的授权票。",
 		"",
 		"面板：" + loopbackPanelURL(server),
 		"用法：/api 请求带上 Authorization: Bearer " + ticket.Token,
 		"范围：" + scopeText(ticket.Scopes),
-		"有效期：" + expires,
+		expiryLine(ticket),
 	}, "\n")
+}
+
+// expiryLine is the one sentence both screens repeat: the ticket inherits the
+// developer window, and the window's end is the ticket's latest possible end.
+func expiryLine(ticket panel.AgentToken) string {
+	if at := ticket.Expiry(); !at.IsZero() {
+		return "有效期：与开发者提权同生命周期，最晚到 " + at.Local().Format("2006-01-02 15:04")
+	}
+	return "有效期：与开发者提权同生命周期"
 }
 
 // loopbackPanelURL rewrites the connected address to 127.0.0.1. Port 443 (or

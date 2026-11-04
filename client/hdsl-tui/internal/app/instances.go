@@ -19,6 +19,10 @@ type group struct {
 // brandOrder is the menu order of the instance surfaces: the three brand
 // categories, then ZCode — an experimental category with its own endpoints
 // (`/api/zcode/*`), but the same instance and terminal contract.
+//
+// Octop is deliberately absent: it has no terminal, so a client whose only job
+// is attaching to one would be offering a dead end. Its instances stay on the
+// web page.
 var brandOrder = []string{"kimi", "opencode", "claude-web", "zcode"}
 
 func brandTitle(brand string) string {
