@@ -682,8 +682,8 @@ function NodeTab() {
           <span className="comp-label" style={{ width: "auto", flex: "none" }}>全局默认</span>
           <span className="comp-value" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <select
-              className="input"
-              style={{ minWidth: 220, height: 32 }}
+              className="input node-select"
+              style={{ minWidth: 240, minHeight: 32 }}
               disabled={busy || status === null}
               value={currentDefault}
               onChange={(e) => void doDefault(e.target.value)}
@@ -865,8 +865,8 @@ function NodeTab() {
               {consumer.running && <span className="tag running">运行中</span>}
               <span className="spacer" />
               <select
-                className="input"
-                style={{ height: 30, maxWidth: 230 }}
+                className="input node-consumer-select"
+                style={{ minHeight: 30 }}
                 value={consumer.selector}
                 disabled={busy}
                 onChange={(e) => void changeConsumer(consumer, e.target.value)}
@@ -893,7 +893,7 @@ function NodeTab() {
 
       <div className="card" style={{ display: "grid", gap: 8, padding: 12 }}>
         <div className="toolbar-row" style={{ padding: "4px 0", flexWrap: "wrap" }}>
-          <select className="input" style={{ height: 36, maxWidth: 160 }} value={source} onChange={(e) => setSource(e.target.value as "mirror" | "official")}>
+          <select className="input node-source-select" style={{ minHeight: 36 }} value={source} onChange={(e) => setSource(e.target.value as "mirror" | "official")}>
             <option value="mirror">国内镜像（npmmirror）</option>
             <option value="official">官方 nodejs.org</option>
           </select>
