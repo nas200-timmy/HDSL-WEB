@@ -85,18 +85,31 @@ public final class DeveloperElevation {
     /// operator clicks to revoke, so a page that lists grants never carries a
     /// credential it could hand to a screenshot or a bug report.
     ///
+    /// How a grant came to exist.
+    ///
+    /// The difference decides what a remote caller still has to prove when
+    /// [org.jackhuang.hmcl.web.config.ServerConfig.AgentConfig#remoteNeedsSession]
+    /// is on: a browser mint (`SESSION`) already means a person opened the
+    /// panel and copied the token out, while a password mint (`PASSWORD`)
+    /// means only that the long-lived agent password was at hand.
+    public enum MintedBy {
+        PASSWORD,
+        SESSION
+    }
+
     /// @param id         short handle, unique among live grants
     /// @param label      what the operator typed on the settings page
     /// @param scopes     the capability classes of [AgentScopes]
     /// @param instanceId the instance the agent runs in, or `null`
     /// @param expiresAt  when the grant dies
+    /// @param mintedBy   which door minted it
     public record AgentGrant(String id, String label, Set<String> scopes,
-                             @Nullable String instanceId, Instant expiresAt) {
+                             @Nullable String instanceId, Instant expiresAt, MintedBy mintedBy) {
     }
 
     /// What the panel remembers about an agent bearer token beyond its expiry.
     private record AgentInfo(String id, String label, Set<String> scopes,
-                             @Nullable String instanceId) {
+                             @Nullable String instanceId, MintedBy mintedBy) {
     }
 
 
@@ -271,9 +284,10 @@ public final class DeveloperElevation {
     /// @param scopes     the capability classes of [AgentScopes]
     /// @param instanceId the instance the agent runs in, or `null`
     /// @param ttl        how long it lives, clamped to `[1s, EXTENDED_TTL]`
+    /// @param mintedBy   which door minted it
     /// @return the token, to be handed to that agent and to nobody else
     public String mintAgentToken(String label, Set<String> scopes, @Nullable String instanceId,
-                                 Duration ttl, @Nullable Instant notAfter) {
+                                 Duration ttl, @Nullable Instant notAfter, MintedBy mintedBy) {
         byte[] tokenBytes = new byte[32];
         RANDOM.nextBytes(tokenBytes);
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(tokenBytes);
@@ -294,7 +308,7 @@ public final class DeveloperElevation {
         elevations.put(BEARER_PREFIX + token,
                 new Elevation(expiry, false,
                         new AgentInfo(id, label == null || label.isBlank() ? "agent" : label,
-                                Set.copyOf(scopes), instanceId)));
+                                Set.copyOf(scopes), instanceId, mintedBy)));
         return token;
     }
 
@@ -325,7 +339,8 @@ public final class DeveloperElevation {
             return null;
         }
         AgentInfo agent = elevation.agent;
-        return new AgentGrant(agent.id(), agent.label(), agent.scopes(), agent.instanceId(), elevation.expiry);
+        return new AgentGrant(agent.id(), agent.label(), agent.scopes(), agent.instanceId(),
+                elevation.expiry, agent.mintedBy());
     }
 
     /// Every live agent grant, newest expiry last — what the panel's list draws.
@@ -347,7 +362,7 @@ public final class DeveloperElevation {
             AgentInfo agent = elevation.agent;
             if (agent != null && elevation.expiry.isAfter(now)) {
                 grants.add(new AgentGrant(agent.id(), agent.label(), agent.scopes(),
-                        agent.instanceId(), elevation.expiry));
+                        agent.instanceId(), elevation.expiry, agent.mintedBy()));
             }
         }
         grants.sort((a, b) -> a.expiresAt().compareTo(b.expiresAt()));

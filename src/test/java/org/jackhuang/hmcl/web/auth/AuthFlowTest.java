@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -63,6 +64,23 @@ class AuthFlowTest {
             String setCookie = login.headers().firstValue("set-cookie").orElseThrow();
             assertTrue(setCookie.contains("Path=/hdsl"), setCookie);
         }
+    }
+
+    /// 票没有会话，拿到就能用；所以它只被接受来自本机的请求。地址判断要和
+    /// `InetAddress` 同一口径，IPv4-mapped 的 `::ffff:127.0.0.1` 也算回环。
+    @Test
+    void agentTokensAreOnlyHonouredFromLoopback() {
+        assertTrue(AuthFilter.isLoopback("127.0.0.1"));
+        assertTrue(AuthFilter.isLoopback("127.0.0.8"));
+        assertTrue(AuthFilter.isLoopback("::1"));
+        assertTrue(AuthFilter.isLoopback("::ffff:127.0.0.1"));
+        assertFalse(AuthFilter.isLoopback("192.168.1.10"));
+        assertFalse(AuthFilter.isLoopback("172.17.0.1"));
+        assertFalse(AuthFilter.isLoopback("10.0.0.5"));
+        assertFalse(AuthFilter.isLoopback("8.8.8.8"));
+        assertFalse(AuthFilter.isLoopback(null));
+        assertFalse(AuthFilter.isLoopback(""));
+        assertFalse(AuthFilter.isLoopback("not-an-address"));
     }
 
     @Test
@@ -228,5 +246,32 @@ class AuthFlowTest {
             builder.header("Cookie", cookie);
         }
         return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    /// 票的来源规则：本机不需要人；远程要么票是浏览器签的，要么带着有效会话。
+    @Test
+    void anAgentGrantOffTheLoopbackNeedsAPersonBehindIt() {
+        // 开关关着：维持现状，哪儿都能用。
+        assertTrue(AuthFilter.remoteAllowed(false, false, false, false));
+        // 本机：不需要人。
+        assertTrue(AuthFilter.remoteAllowed(true, true, false, false));
+        // 浏览器签发的票：操作员已经打开过面板并复制过 token。
+        assertTrue(AuthFilter.remoteAllowed(true, false, true, false));
+        // 密码签发的票：非本机 + 无会话 = 拒。
+        assertFalse(AuthFilter.remoteAllowed(true, false, false, false));
+        // 密码签发的票 + 有效会话 = 放。
+        assertTrue(AuthFilter.remoteAllowed(true, false, false, true));
+    }
+
+    @Test
+    void loopbackParsingCoversTheFormsTheKernelReports() {
+        assertTrue(AuthFilter.isLoopback("127.0.0.1"));
+        assertTrue(AuthFilter.isLoopback("127.0.0.53"));
+        assertTrue(AuthFilter.isLoopback("::1"));
+        assertTrue(AuthFilter.isLoopback("::ffff:127.0.0.1"));
+        assertFalse(AuthFilter.isLoopback("172.17.0.1"));
+        assertFalse(AuthFilter.isLoopback("10.0.0.5"));
+        assertFalse(AuthFilter.isLoopback(null));
+        assertFalse(AuthFilter.isLoopback(""));
     }
 }

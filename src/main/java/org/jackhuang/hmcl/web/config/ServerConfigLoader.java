@@ -52,6 +52,7 @@ public final class ServerConfigLoader {
     public static final String ENV_TRUST_FORWARDED_PROTO = "HDSL_TRUST_FORWARDED_PROTO";
     public static final String ENV_WEB_SHELL_ENABLED = "HDSL_WEB_SHELL_ENABLED";
     public static final String ENV_DEVELOPER_GUARD = "HDSL_DEVELOPER_GUARD";
+    public static final String ENV_AGENT_REMOTE_NEEDS_SESSION = "HDSL_AGENT_REMOTE_NEEDS_SESSION";
     public static final String ENV_ZCODE_PACKAGE = "HDSL_ZCODE_PACKAGE";
     public static final String ENV_ZCODE_NODE = "HDSL_ZCODE_NODE";
     public static final String ENV_ZCODE_BUILD_BIN = "HDSL_ZCODE_BUILD_BIN";
@@ -153,6 +154,9 @@ public final class ServerConfigLoader {
         if (root.containsKey("developer_guard")) {
             applyDeveloperGuard(config, mapField(root, "developer_guard"));
         }
+        if (root.containsKey("agent")) {
+            applyAgent(config, mapField(root, "agent"));
+        }
         if (root.containsKey("mc")) {
             applyMc(config, mapField(root, "mc"));
         }
@@ -165,7 +169,7 @@ public final class ServerConfigLoader {
         for (String key : root.keySet()) {
             switch (key) {
                 case "bind_host", "port", "public_base_url", "https", "auth", "web_shell",
-                        "developer_guard", "mc", "logs", "network" -> {
+                        "developer_guard", "agent", "mc", "logs", "network" -> {
                 }
                 default -> logger.warning(yamlFile + ": unknown key `" + key + "` ignored");
             }
@@ -243,6 +247,19 @@ public final class ServerConfigLoader {
         for (String key : section.keySet()) {
             if (!key.equals("scope")) {
                 throw new ConfigException("developer_guard: unknown key `" + key + "` (only `scope` is accepted)");
+            }
+        }
+    }
+
+    /// `agent:` — how far a ticket reaches (docs/panel-agent.md).
+    private static void applyAgent(ServerConfig config, Map<String, Object> section) {
+        if (section.containsKey("remote_needs_session")) {
+            config.agent.remoteNeedsSession = booleanField(section, "remote_needs_session");
+        }
+        for (String key : section.keySet()) {
+            if (!key.equals("remote_needs_session")) {
+                throw new ConfigException(
+                        "agent: unknown key `" + key + "` (only `remote_needs_session` is accepted)");
             }
         }
     }
@@ -362,6 +379,15 @@ public final class ServerConfigLoader {
         }
         if (env.containsKey(ENV_DEVELOPER_GUARD)) {
             config.developerGuard.scope = guardScope(env.get(ENV_DEVELOPER_GUARD), ENV_DEVELOPER_GUARD);
+        }
+        if (env.containsKey(ENV_AGENT_REMOTE_NEEDS_SESSION)) {
+            String value = env.get(ENV_AGENT_REMOTE_NEEDS_SESSION);
+            config.agent.remoteNeedsSession = switch (value) {
+                case "true" -> true;
+                case "false" -> false;
+                default -> throw new ConfigException(ENV_AGENT_REMOTE_NEEDS_SESSION
+                        + " must be `true` or `false`, got `" + value + "`");
+            };
         }
         if (env.containsKey(ENV_MC_PORT_START)) {
             config.mc.portStart = parseInt(env.get(ENV_MC_PORT_START), ENV_MC_PORT_START);

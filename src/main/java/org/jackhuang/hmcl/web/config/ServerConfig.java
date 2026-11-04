@@ -196,6 +196,22 @@ public final class ServerConfig {
         public volatile DeveloperGuardScope scope = DeveloperGuardScope.OFF;
     }
 
+    /// How far an agent grant reaches (docs/panel-agent.md).
+    public final AgentConfig agent = new AgentConfig();
+
+    public static final class AgentConfig {
+        /// When on, a ticket used from **outside the loopback** must be backed
+        /// by a browser session — unless the ticket was minted from a browser
+        /// in the first place (`/api/developer/agent-token`), which already
+        /// proves a person opened the panel.
+        ///
+        /// Off by default: it is a deployment decision, and a reverse proxy
+        /// makes every request look like loopback, so turning it on without
+        /// checking the topology would either do nothing or lock out the
+        /// agents. See `docs/panel-agent.md` §"来源限制".
+        public volatile boolean remoteNeedsSession = false;
+    }
+
     /// The Minecraft surface (docs/minecraft.md). The feature itself stays off
     /// until the owner enables it; these knobs only bound what may be created
     /// once it is on.

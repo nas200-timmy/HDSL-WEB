@@ -80,6 +80,9 @@ public final class AuthFilter implements Filter {
     /// fatal-operation gate reads it: a caller that names no instance
     /// identifies nobody, and nobody may not stop one.
     private final PeerIdentity identity;
+    /// 非回环来源使用票时是否必须有浏览器会话；浏览器签发的票不受限
+    /// （见 [org.jackhuang.hmcl.web.config.ServerConfig.AgentConfig]）。
+    private final boolean agentRemoteNeedsSession;
     /// 会话 Cookie 的 Path：根挂载是 `/`，子路径挂载是挂载点本身。
     /// 同一个域名下挂两个面板（`/a/`、`/b/`）时，Path=/ 的同名 Cookie 会互相覆盖，
     /// 表现为「登录 A 之后 B 掉线」。
@@ -100,11 +103,15 @@ public final class AuthFilter implements Filter {
     ///                      overwrite each other's session.
     /// @param elevation     the agent grants behind bearer tokens
     /// @param identity      the caller's instance, derived per connection
+    /// @param agentRemoteNeedsSession whether a grant used off the loopback
+    ///                      must be backed by a browser session (unless it was
+    ///                      minted from a browser)
     public AuthFilter(AuthService authService, boolean authDisabled,
                       java.util.function.Predicate<HttpServletRequest> secureRequest, int ttlSeconds,
                       String basePath,
                       org.jackhuang.hmcl.web.developer.DeveloperElevation elevation,
-                      PeerIdentity identity) {
+                      PeerIdentity identity,
+                      boolean agentRemoteNeedsSession) {
         this.authService = authService;
         this.authDisabled = authDisabled;
         this.secureRequest = secureRequest;
@@ -112,6 +119,7 @@ public final class AuthFilter implements Filter {
         this.cookiePath = basePath == null || basePath.isBlank() ? "/" : basePath;
         this.elevation = elevation;
         this.identity = identity;
+        this.agentRemoteNeedsSession = agentRemoteNeedsSession;
     }
 
     /// The request path as this panel's routes are written.
@@ -147,15 +155,10 @@ public final class AuthFilter implements Filter {
             return;
         }
 
-        String token = cookieValue(req, SESSION_COOKIE);
-        Optional<AuthService.Session> session = token == null ? Optional.empty() : authService.verify(token);
-        if (session.isPresent()) {
-            req.setAttribute(SESSION_ATTRIBUTE, session.get());
-            req.setAttribute(SESSION_TOKEN_ATTRIBUTE, token);
-            chain.doFilter(request, response);
-            return;
-        }
-
+        // A bearer grant is decided first: a request carrying both a cookie and
+        // a ticket keeps the ticket's scope and its `agent:<label>` identity.
+        // The cookie is then only a second factor (see
+        // `agentRemoteNeedsSession`), never a way to widen the grant.
         Boolean agent = admitAgent(req, resp);
         if (agent != null) {
             if (agent) {
@@ -167,6 +170,15 @@ public final class AuthFilter implements Filter {
                     org.jackhuang.hmcl.web.audit.AuditLog.endAgentFields();
                 }
             }
+            return;
+        }
+
+        String token = cookieValue(req, SESSION_COOKIE);
+        Optional<AuthService.Session> session = token == null ? Optional.empty() : authService.verify(token);
+        if (session.isPresent()) {
+            req.setAttribute(SESSION_ATTRIBUTE, session.get());
+            req.setAttribute(SESSION_TOKEN_ATTRIBUTE, token);
+            chain.doFilter(request, response);
             return;
         }
         Json.error(resp, HttpServletResponse.SC_UNAUTHORIZED, "unauthorized");
@@ -214,6 +226,14 @@ public final class AuthFilter implements Filter {
         }
         String method = req.getMethod();
         String path = pathOf(req);
+        if (!remoteGrantAllowed(req, grant)) {
+            auditDenied(req, path, grant, "remote_session_required", null);
+            Json.error(resp, HttpServletResponse.SC_FORBIDDEN,
+                    "agent_remote_session_required: this ticket was minted with the agent password and is"
+                            + " being used from outside the loopback; sign in to the panel first, or mint"
+                            + " the ticket from the panel's agent page");
+            return false;
+        }
         if (org.jackhuang.hmcl.web.developer.AgentScopes.forbidden(method, path)) {
             auditDenied(req, path, grant, "route_closed", null);
             Json.error(resp, HttpServletResponse.SC_FORBIDDEN, "agent_scope_denied: this route is closed to agents");
@@ -365,6 +385,44 @@ public final class AuthFilter implements Filter {
         return request.getAttribute(AGENT_GRANT_ATTRIBUTE) != null;
     }
 
+    /// Whether this grant may be used from this connection.
+    ///
+    /// Off the loopback, `agent.remoteNeedsSession` asks for a person: either
+    /// the ticket came from the panel's own mint button
+    /// ([org.jackhuang.hmcl.web.developer.DeveloperElevation.MintedBy#SESSION],
+    /// which already means somebody opened the panel and copied it out), or
+    /// the request carries a live session cookie. A `PASSWORD` ticket with
+    /// neither is refused — that is the case where a leaked long-lived secret
+    /// would otherwise be enough from anywhere on the network.
+    private boolean remoteGrantAllowed(HttpServletRequest request,
+                                       org.jackhuang.hmcl.web.developer.DeveloperElevation.AgentGrant grant) {
+        return remoteAllowed(agentRemoteNeedsSession,
+                isLoopback(request.getRemoteAddr()),
+                grant.mintedBy() == org.jackhuang.hmcl.web.developer.DeveloperElevation.MintedBy.SESSION,
+                hasLiveSession(request));
+    }
+
+    /// The rule behind {@link #remoteGrantAllowed}, as a pure function so the
+    /// three inputs can be exercised without a socket.
+    ///
+    /// @param enabled            whether the switch is on
+    /// @param loopback           whether the caller is the local machine
+    /// @param mintedFromBrowser  whether a person minted the ticket in the panel
+    /// @param sessionAlive       whether the request carries a live session
+    /// @return whether the grant may be used
+    static boolean remoteAllowed(boolean enabled, boolean loopback,
+                                 boolean mintedFromBrowser, boolean sessionAlive) {
+        if (!enabled || loopback) {
+            return true;
+        }
+        return mintedFromBrowser || sessionAlive;
+    }
+
+    private boolean hasLiveSession(HttpServletRequest request) {
+        String token = cookieValue(request, SESSION_COOKIE);
+        return token != null && !token.isBlank() && authService.verify(token).isPresent();
+    }
+
     /// The answer a servlet's own `requireElevation` should use.
     ///
     /// Two callers, two proofs: a person proves the developer password (the
@@ -415,6 +473,24 @@ public final class AuthFilter implements Filter {
         cookie.setSecure(secureRequest.test(request));
         cookie.setAttribute("SameSite", "Strict");
         return cookie;
+    }
+
+    /// Whether the peer is this machine's loopback.
+    ///
+    /// `127.0.0.0/8`, `::1`, and IPv4-mapped forms all count. Anything else —
+    /// a LAN address, a docker bridge, a public address — needs a session
+    /// cookie before an agent token will be honoured.
+    ///
+    /// Package-private so the address parsing can be tested without a socket.
+    static boolean isLoopback(@Nullable String address) {
+        if (address == null || address.isBlank()) {
+            return false;
+        }
+        try {
+            return java.net.InetAddress.getByName(address).isLoopbackAddress();
+        } catch (java.net.UnknownHostException e) {
+            return false;
+        }
     }
 
     private boolean isPublic(HttpServletRequest request) {

@@ -2,6 +2,21 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布
+
+**agent 票的来源限制：非回环要有人**
+
+- 新增开关 `agent.remoteNeedsSession`（默认关）。打开后，从**非回环**地址使用 agent 票时：
+  - 浏览器签发的票（`POST /api/developer/agent-token`）照常可用——它本来就意味着有人
+    打开面板、把 token 复制出去；
+  - agent 密码换来的票（`POST /api/developer/agent-auth`）必须同时带一个有效的登录会话，
+    否则 403 `agent_remote_session_required`。长期密码泄漏不再等于远程可用；
+  - 本机回环不受影响。
+- 票现在记录签发方式（`MintedBy`），`AuthFilter` 先验票、再判来源。带票又带 Cookie 的
+  请求按票处理：票的 scope 和 `agent:<label>` 审计身份不会被会话放大。
+- 反代部署时 `getRemoteAddr()` 是反代地址（通常是 `127.0.0.1`），这条规则会当成回环
+  放行；那种部署要在反代上限制来源（见 `docs/panel-agent.md`）。
+
 ## v0.6.63 — 2026-11-04 · Node 运行时管理：大版本通道、校验、回退与 GC
 
 > 这一版把 Node.js 从“安装前提”变成面板托管的运行时：按大版本看、下载校验、

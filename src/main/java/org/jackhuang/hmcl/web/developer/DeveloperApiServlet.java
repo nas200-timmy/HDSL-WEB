@@ -558,7 +558,8 @@ public final class DeveloperApiServlet extends HttpServlet {
                 ttl = Duration.ofSeconds(seconds);
             }
         }
-        String token = elevation.mintAgentToken(label, granted, instanceId, ttl, humanExpiry);
+        String token = elevation.mintAgentToken(label, granted, instanceId, ttl, humanExpiry,
+                DeveloperElevation.MintedBy.PASSWORD);
         var grant = elevation.agentGrant(token);
         // The mint is the one line every later question comes back to: what
         // was granted, where it lives, how long it lasts, and whether the
@@ -654,7 +655,7 @@ public final class DeveloperApiServlet extends HttpServlet {
             }
         }
         String token = elevation.mintAgentToken(label, scopes, instanceId, ttl,
-                elevation.latestHumanExpiry());
+                elevation.latestHumanExpiry(), DeveloperElevation.MintedBy.SESSION);
         var grant = elevation.agentGrant(token);
         java.util.Map<String, Object> minted = new java.util.LinkedHashMap<>();
         minted.put("scopes", java.util.List.copyOf(scopes));

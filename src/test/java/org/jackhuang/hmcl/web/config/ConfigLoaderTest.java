@@ -60,6 +60,24 @@ class ConfigLoaderTest {
         assertEquals(168, config.auth.sessionTtlHours);
     }
 
+    /// 非回环票的开关：yaml 能读、环境变量能覆盖，默认关。
+    @Test
+    void theAgentRemoteSessionSwitchIsRead() throws Exception {
+        assertFalse(load(Map.of()).agent.remoteNeedsSession, "default stays off");
+
+        Files.writeString(dataDir.resolve("server.yaml"), """
+                agent:
+                  remote_needs_session: true
+                """);
+        assertTrue(load(Map.of()).agent.remoteNeedsSession);
+
+        Files.writeString(dataDir.resolve("server.yaml"), "");
+        assertTrue(load(Map.of(ServerConfigLoader.ENV_AGENT_REMOTE_NEEDS_SESSION, "true"))
+                .agent.remoteNeedsSession);
+        assertFalse(load(Map.of(ServerConfigLoader.ENV_AGENT_REMOTE_NEEDS_SESSION, "false"))
+                .agent.remoteNeedsSession);
+    }
+
     @Test
     void everyYamlFieldIsRead() throws Exception {
         Files.writeString(dataDir.resolve("server.yaml"), """
