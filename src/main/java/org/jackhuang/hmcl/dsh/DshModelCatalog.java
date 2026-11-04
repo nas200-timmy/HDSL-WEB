@@ -440,7 +440,25 @@ public final class DshModelCatalog {
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
         try {
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            // `send` with `BodyHandlers.ofString` is bounded by the request timeout only up to
+            // the response head in practice: a slow body can hang for minutes while the page's
+            // own 30-second abort fires first. Waiting on the future bounds the whole exchange,
+            // body included — which is the one a five-megabyte document actually spends time on.
+            java.util.concurrent.CompletableFuture<HttpResponse<String>> pending =
+                    client.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response;
+            try {
+                response = pending.get(TIMEOUT.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (java.util.concurrent.TimeoutException e) {
+                pending.cancel(true);
+                throw new IOException("timed out after " + TIMEOUT.toSeconds() + "s waiting for the body", e);
+            } catch (java.util.concurrent.ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof IOException io) {
+                    throw io;
+                }
+                throw new IOException(cause == null ? "request failed" : cause.toString(), cause);
+            }
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new IOException("HTTP " + response.statusCode());
             }

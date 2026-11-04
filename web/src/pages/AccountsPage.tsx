@@ -208,7 +208,8 @@ export function AccountsPage() {
   const accounts = s.accounts;
   const providers = s.modelProviders ?? [];
   const pickedVendor = picked && picked !== CUSTOM_VENDOR ? picked : null;
-  const updated = agoText(s.modelProvidersAt);
+  const builtin = s.modelProvidersSource === "builtin";
+  const updated = builtin ? null : agoText(s.modelProvidersAt);
   const q = vendorQuery.trim().toLowerCase();
   const visibleProviders = providers.filter(
     (p) =>
@@ -365,7 +366,7 @@ export function AccountsPage() {
               </button>
               <span className="vendor-count">
                 {providers.length > 0
-                  ? `共 ${providers.length} 家供应商${updated ? ` · ${updated}` : ""}`
+                  ? `共 ${providers.length} 家${builtin ? "内置供应商（目录未就绪）" : "供应商"}${updated ? ` · ${updated}` : ""}`
                   : s.modelProvidersLoading
                     ? "正在获取供应商名单…"
                     : "共 0 家供应商"}
@@ -418,6 +419,12 @@ export function AccountsPage() {
             {s.modelProvidersError && (
               <p style={{ fontSize: 12, marginTop: 10 }}>
                 模型目录加载失败（{s.modelProvidersError}），可直接使用自定义 Endpoint 手填模型名。
+              </p>
+            )}
+            {builtin && !s.modelProvidersError && (
+              <p style={{ fontSize: 12, marginTop: 10, color: "var(--monet-on-surface-variant)" }}>
+                模型目录暂时不可达，下面是面板内置的供应商（DeepSeek、Moonshot、智谱等可直接添加）。
+                稍后点「刷新」重试完整目录。
               </p>
             )}
           </>

@@ -34,6 +34,7 @@ const initialState: AppState = {
   modelProvidersLoading: false,
   modelProvidersError: null,
   modelProvidersAt: null,
+  modelProvidersSource: null,
   zcodeDist: null,
   zcodeLoading: false,
   external: [],
@@ -344,6 +345,7 @@ export async function loadModelProviders(force = false): Promise<void> {
       modelProviders: r.providers,
       modelProvidersLoading: false,
       modelProvidersAt: r.fetchedAt ?? Date.now(),
+      modelProvidersSource: r.source,
     }));
   } catch (e) {
     const msg = isNotImplemented(e) ? "后端尚未支持模型目录" : errMsg(e);

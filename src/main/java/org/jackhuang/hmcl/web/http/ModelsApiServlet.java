@@ -77,6 +77,29 @@ public final class ModelsApiServlet extends HttpServlet {
     private @Nullable DshModelCatalog.Catalog cached;
     private long cachedAtMillis;
     private @Nullable String cachedSource;
+    /// When a background refresh last started, so a broken network is retried on the stale TTL
+    /// rather than once per page load.
+    private long lastRefreshAttemptMillis;
+
+    /// A refresh already in flight: the page asks on every open, and a broken network must not
+    /// turn that into one fetch per open.
+    private final java.util.concurrent.atomic.AtomicBoolean refreshing =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
+    /// One background refresher. Daemon, because a panel shutting down must not wait for a
+    /// five-megabyte download it no longer needs.
+    private static final java.util.concurrent.ExecutorService REFRESH =
+            java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "models-catalog-refresh");
+                thread.setDaemon(true);
+                return thread;
+            });
+
+    /// What the merged list looks like with no directory at all: the suppliers this launcher
+    /// ships, and nothing from models.dev. Serving it beats a 502 — the account page can still
+    /// create a DeepSeek account while the directory is unreachable.
+    private static final DshModelCatalog.Catalog BUILTIN_ONLY =
+            new DshModelCatalog.Catalog(0L, List.of());
 
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -103,10 +126,7 @@ public final class ModelsApiServlet extends HttpServlet {
 
     /// Writes the merged list.
     private void providers(boolean refresh, HttpServletResponse response) throws IOException {
-        DshModelCatalog.Catalog catalog = catalog(refresh, response);
-        if (catalog == null) {
-            return;
-        }
+        DshModelCatalog.Catalog catalog = catalog(refresh);
         List<Supplier> suppliers = suppliers(catalog);
         JsonArray array = new JsonArray();
         for (Supplier supplier : suppliers) {
@@ -128,10 +148,7 @@ public final class ModelsApiServlet extends HttpServlet {
     /// directory's view of them can be listed instead. A page never asks for one: every id it has
     /// came from the list.
     private void provider(String id, boolean refresh, HttpServletResponse response) throws IOException {
-        DshModelCatalog.Catalog catalog = catalog(refresh, response);
-        if (catalog == null) {
-            return;
-        }
+        DshModelCatalog.Catalog catalog = catalog(refresh);
         Supplier found = null;
         for (Supplier supplier : suppliers(catalog)) {
             if (supplier.id().equalsIgnoreCase(id)) {
@@ -156,20 +173,50 @@ public final class ModelsApiServlet extends HttpServlet {
         Json.writePreservingNulls(response, body);
     }
 
-    /// Returns the directory, fetching it when what is held is too old.
+    /// Returns the directory, from memory, from disk, or from upstream — and never blocks the
+    /// account page on a network that is not answering.
     ///
-    /// Writes the error answer and returns `null` when there is neither a fetch nor a copy.
+    /// The order is deliberate:
     ///
-    /// @param refresh whether to ask upstream regardless of the copy's age
-    /// @param response where to write a failure
-    /// @return the directory, or `null`
-    private @Nullable DshModelCatalog.Catalog catalog(boolean refresh, HttpServletResponse response)
-            throws IOException {
+    /// 1. a copy held in memory that is inside the TTL is the answer;
+    /// 2. otherwise the copy on disk is served immediately and a refresh runs in the background
+    ///    (a stale list is worth more than a page that waits);
+    /// 3. with no copy anywhere, the suppliers this launcher ships are served as
+    ///    `source: "builtin"` and the same background refresh runs;
+    /// 4. `?refresh=1` is the exception: the operator asked, so it fetches now, and falls back to
+    ///    whatever is held when the fetch fails.
+    ///
+    /// @param refresh whether to ask upstream now instead of in the background
+    /// @return the directory to merge from, never `null`
+    private DshModelCatalog.Catalog catalog(boolean refresh) {
         synchronized (cacheLock) {
-            if (!refresh && cached != null && System.currentTimeMillis() - cachedAtMillis < CACHE_TTL_MILLIS) {
+            if (cached == null) {
+                DshModelCatalog.Catalog disk = DshModelCatalog.readCached();
+                if (disk != null) {
+                    cached = disk;
+                    cachedAtMillis = disk.fetchedAtMillis();
+                    cachedSource = "cache";
+                }
+            }
+            if (!refresh && cached != null
+                    && System.currentTimeMillis() - cachedAtMillis < CACHE_TTL_MILLIS) {
                 return cached;
             }
+            if (!refresh) {
+                DshModelCatalog.Catalog held = cached;
+                refreshInBackground();
+                if (held != null) {
+                    return held;
+                }
+                cachedSource = "builtin";
+                return BUILTIN_ONLY;
+            }
         }
+        return refreshNow();
+    }
+
+    /// Fetches once, updating the cache; on failure answers what is held, or the built-in list.
+    private DshModelCatalog.Catalog refreshNow() {
         try {
             DshModelCatalog.Catalog fetched = DshModelCatalog.fetch();
             synchronized (cacheLock) {
@@ -179,21 +226,54 @@ public final class ModelsApiServlet extends HttpServlet {
             }
             return fetched;
         } catch (DshException e) {
-            DshModelCatalog.Catalog kept = DshModelCatalog.readCached();
-            if (kept == null) {
-                Json.error(response, HttpServletResponse.SC_BAD_GATEWAY, e.getMessage());
-                return null;
-            }
-            LOG.info("Serving the kept model catalogue: " + e.getMessage());
+            DshModelCatalog.Catalog kept;
             synchronized (cacheLock) {
-                cached = kept;
-                // Aged to the point of being retried soon, not to the point of being trusted for
-                // another twelve hours: the fetch failed this time and may well work the next.
-                cachedAtMillis = System.currentTimeMillis() - CACHE_TTL_MILLIS + STALE_TTL_MILLIS;
-                cachedSource = "cache";
+                kept = cached;
             }
-            return kept;
+            if (kept == null) {
+                kept = DshModelCatalog.readCached();
+            }
+            if (kept != null) {
+                LOG.info("Serving the kept model catalogue: " + e.getMessage());
+                synchronized (cacheLock) {
+                    cached = kept;
+                    // Aged to the point of being retried soon, not to the point of being trusted
+                    // for another twelve hours: the fetch failed this time and may work next time.
+                    cachedAtMillis = System.currentTimeMillis() - CACHE_TTL_MILLIS + STALE_TTL_MILLIS;
+                    cachedSource = "cache";
+                }
+                return kept;
+            }
+            LOG.info("Serving the built-in supplier list; the model catalogue is unreachable: "
+                    + e.getMessage());
+            synchronized (cacheLock) {
+                cachedSource = "builtin";
+            }
+            return BUILTIN_ONLY;
         }
+    }
+
+    /// Starts a refresh unless one is already running or one was tried within the stale window.
+    /// The request that triggers it does not wait: the point is to keep the page responsive on a
+    /// broken network, not to turn every page load into another five-megabyte attempt.
+    private void refreshInBackground() {
+        synchronized (cacheLock) {
+            long now = System.currentTimeMillis();
+            if (lastRefreshAttemptMillis != 0 && now - lastRefreshAttemptMillis < STALE_TTL_MILLIS) {
+                return;
+            }
+            lastRefreshAttemptMillis = now;
+        }
+        if (!refreshing.compareAndSet(false, true)) {
+            return;
+        }
+        REFRESH.submit(() -> {
+            try {
+                refreshNow();
+            } finally {
+                refreshing.set(false);
+            }
+        });
     }
 
     private String source() {

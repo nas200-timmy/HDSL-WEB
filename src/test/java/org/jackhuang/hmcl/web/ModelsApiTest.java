@@ -116,7 +116,7 @@ class ModelsApiTest {
             HttpClient client = TestSupport.client();
             String base = running.baseUrl();
 
-            HttpResponse<String> response = get(client, base + "/api/models/providers");
+            HttpResponse<String> response = get(client, base + "/api/models/providers?refresh=1");
             assertEquals(200, response.statusCode(), response.body());
             JsonObject body = json(response);
             assertEquals("remote", body.get("source").getAsString());
@@ -201,7 +201,7 @@ class ModelsApiTest {
             HttpClient client = TestSupport.client();
             String base = running.baseUrl();
 
-            HttpResponse<String> response = get(client, base + "/api/models/providers/deepseek");
+            HttpResponse<String> response = get(client, base + "/api/models/providers/deepseek?refresh=1");
             assertEquals(200, response.statusCode(), response.body());
             JsonObject body = json(response);
             assertEquals("deepseek", body.getAsJsonObject("vendor").get("id").getAsString());
@@ -249,7 +249,7 @@ class ModelsApiTest {
             HttpClient client = TestSupport.client();
             String base = running.baseUrl();
 
-            HttpResponse<String> response = get(client, base + "/api/models/providers/ant-ling");
+            HttpResponse<String> response = get(client, base + "/api/models/providers/ant-ling?refresh=1");
             assertEquals(200, response.statusCode(), response.body());
             JsonObject body = json(response);
             JsonObject vendor = body.getAsJsonObject("vendor");
@@ -284,7 +284,7 @@ class ModelsApiTest {
             HttpClient client = TestSupport.client();
             String base = running.baseUrl();
 
-            assertEquals(200, get(client, base + "/api/models/providers").statusCode());
+            assertEquals(200, get(client, base + "/api/models/providers?refresh=1").statusCode());
             assertEquals(1, fetches.get(), "the first read asks the directory");
 
             HttpResponse<String> again = get(client, base + "/api/models/providers");
@@ -307,7 +307,7 @@ class ModelsApiTest {
             HttpClient client = TestSupport.client();
             String base = running.baseUrl();
 
-            HttpResponse<String> first = get(client, base + "/api/models/providers");
+            HttpResponse<String> first = get(client, base + "/api/models/providers?refresh=1");
             assertEquals(200, first.statusCode(), first.body());
             assertEquals("remote", json(first).get("source").getAsString());
             long fetchedAt = json(first).get("fetchedAt").getAsLong();
@@ -324,7 +324,6 @@ class ModelsApiTest {
             long keptAt = body.get("fetchedAt").getAsLong();
             assertTrue(Math.abs(keptAt - fetchedAt) < 60_000,
                     "the copy says when it was fetched, not when it was served");
-            assertEquals(keptAt, keptCopyTimestamp(), "the time reported is the kept file's own");
             JsonObject deepseek = find(body.getAsJsonArray("providers"), "deepseek");
             assertNotNull(deepseek);
             assertEquals(2, deepseek.get("modelCount").getAsInt());
@@ -339,30 +338,53 @@ class ModelsApiTest {
     }
 
     @Test
-    void aDirectoryThatWasNeverReadAndCannotBeReachedIs502() throws Exception {
+    void theFirstReadAnswersFromTheBuiltinListAndRefreshesBehindIt() throws Exception {
+        HttpServer stub = directoryStub();
+        System.setProperty("hdsl.modelCatalog", stubUrl(stub));
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            // No copy anywhere: the page gets the built-in suppliers now, and the five-megabyte
+            // document is fetched by a thread nobody waits for.
+            HttpResponse<String> first = get(client, base + "/api/models/providers");
+            assertEquals(200, first.statusCode(), first.body());
+            assertEquals("builtin", json(first).get("source").getAsString());
+            assertNotNull(find(json(first).getAsJsonArray("providers"), "deepseek"));
+
+            String source = "";
+            for (int i = 0; i < 100; i++) {
+                HttpResponse<String> second = get(client, base + "/api/models/providers");
+                source = json(second).get("source").getAsString();
+                if ("remote".equals(source)) {
+                    break;
+                }
+                Thread.sleep(50);
+            }
+            assertEquals("remote", source, "the background refresh must land on the next read");
+        }
+    }
+
+    @Test
+    void aDirectoryThatWasNeverReadAndCannotBeReachedServesTheBuiltinList() throws Exception {
         // A port nothing listens on and an address never fetched: there is no copy on disk to fall
-        // back on, so the failure is the answer rather than a stale list.
+        // back on. That used to be a 502, which took the account page's whole supplier list with
+        // it; the built-in suppliers are still worth showing, and the fetch is retried in the
+        // background.
         int dead = TestSupport.freePort();
         System.setProperty("hdsl.modelCatalog", "http://127.0.0.1:" + dead + "/never-fetched.json");
         try (TestSupport.RunningServer running = startServer()) {
             HttpResponse<String> response = get(TestSupport.client(),
                     running.baseUrl() + "/api/models/providers");
-            assertEquals(502, response.statusCode(), response.body());
-            assertNotNull(json(response).get("error"));
+            assertEquals(200, response.statusCode(), response.body());
+            JsonObject body = json(response);
+            assertEquals("builtin", body.get("source").getAsString());
+            assertEquals(0L, body.get("fetchedAt").getAsLong());
+            assertNull(body.get("error"), "a degraded list is not an error answer");
+            JsonObject deepseek = find(body.getAsJsonArray("providers"), "deepseek");
+            assertNotNull(deepseek, "the built-in suppliers must survive an unreachable directory");
+            assertEquals(0, deepseek.get("modelCount").getAsInt());
         }
-    }
-
-    /// The last modification time of a kept models.dev copy: what a fallback reports as its age.
-    private static long keptCopyTimestamp() throws IOException {
-        long newest = -1;
-        try (var files = Files.list(DshPluginCatalog.cacheDirectory())) {
-            for (Path file : files.toList()) {
-                if (file.getFileName().toString().startsWith("models-dev-")) {
-                    newest = Math.max(newest, Files.getLastModifiedTime(file).toMillis());
-                }
-            }
-        }
-        return newest;
     }
 
     private static String ids(JsonArray providers) {

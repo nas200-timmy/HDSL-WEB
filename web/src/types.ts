@@ -710,6 +710,8 @@ export interface AppState {
   modelProvidersError: string | null;
   /** 目录数据的抓取时间（毫秒），用于"x 分钟前更新" */
   modelProvidersAt: number | null;
+  /** 这份名单从哪来：`remote` / `cache` / `builtin`（模型目录不可达时的内置供应商） */
+  modelProvidersSource: string | null;
   /** 实验性 ZCode 品类：发行包检测结果（null = 尚未加载） */
   zcodeDist: ZcodeDistInfo | null;
   zcodeLoading: boolean;
