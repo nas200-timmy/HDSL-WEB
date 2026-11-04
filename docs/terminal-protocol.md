@@ -121,6 +121,23 @@ v0.6.x 起元素还可能带（旧面板缺字段就是空/零，客户端据此
 两者都可能先经过开发者守卫；被拒时客户端按 403 `developer_elevation_required` 提示去提权。
 hdsl-tui 的实例菜单里就是这两项。
 
+### Minecraft 控制台
+
+MC 功能开启时才存在；关闭时整个 `/api/mc/*` 回 **404**（不是 403）。
+
+- `GET /api/mc/instances` → `{"instances":[{"id","name","version","port","state",
+  "consoleAvailable",…}]}`；
+- `POST /api/mc/instances/{id}/start` / `.../stop`；
+- `POST /api/mc/instances/{id}/console/ticket` → 与 agent 终端同形：
+  - PTY：`{"mode":"pty","protocol":1,"ticket":"…","ws":"/ws/terminal/…"}`，客户端按同一套
+    WebSocket 协议附着；
+  - Windows 管道模式：`{"mode":"pipe"}`，**没有 ticket**，控制台只能在网页看（日志 + 输入框）；
+  - 服务器没跑：409 `the server is not running`。
+
+列表与 ticket 都要开发者提权。**离开控制台是 `Ctrl-] q`，不是输入 `stop`**——`stop` 是
+服务器命令，会真的停服。hdsl-tui 在附着前把这句话单独显示一次；`Ctrl-] k` 在 MC 上下文里
+等同离开（没有“停掉控制台”这个端点）。
+
 `claude-web` 的内核就是 Claude Code CLI（社区引擎 `claude-web-engine` 或官方二进制），
 所以它也有终端，只是要先选内核——见下面的 `terminals` 端点与 `?kernel=` 参数。
 

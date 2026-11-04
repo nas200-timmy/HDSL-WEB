@@ -482,3 +482,53 @@ func (c *Client) CloseTerminal(ctx context.Context, brand, id string) (bool, err
 	}
 	return body.Killed, nil
 }
+
+// MCInstances lists the Minecraft servers (GET /api/mc/instances). The whole
+// surface answers 404 when the feature is off; the caller turns that into
+// "not enabled" rather than a transport failure.
+func (c *Client) MCInstances(ctx context.Context) ([]MCInstance, error) {
+	_, data, err := c.do(ctx, http.MethodGet, "/api/mc/instances", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var list struct {
+		Instances []MCInstance `json:"instances"`
+	}
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, &TransportError{Op: "GET /api/mc/instances", Err: err}
+	}
+	return list.Instances, nil
+}
+
+// mcPath is one operation under a Minecraft instance.
+func mcPath(id, op string) string {
+	return "/api/mc/instances/" + url.PathEscape(id) + "/" + op
+}
+
+// MCConsoleTicket asks for the console ticket of one server
+// (POST .../console/ticket). A PTY server answers the same shape as the agent
+// terminal; a Windows pipe server answers `mode:"pipe"` with no ticket, which
+// means the console only exists on the web page.
+func (c *Client) MCConsoleTicket(ctx context.Context, id string) (Terminal, error) {
+	_, data, err := c.do(ctx, http.MethodPost, mcPath(id, "console/ticket"), nil, map[string]string{})
+	if err != nil {
+		return Terminal{}, err
+	}
+	var terminal Terminal
+	if err := json.Unmarshal(data, &terminal); err != nil {
+		return Terminal{}, &TransportError{Op: "POST /api/mc/instances console/ticket", Err: err}
+	}
+	return terminal, nil
+}
+
+// MCStart starts one server (POST .../start).
+func (c *Client) MCStart(ctx context.Context, id string) error {
+	_, _, err := c.do(ctx, http.MethodPost, mcPath(id, "start"), nil, map[string]string{})
+	return err
+}
+
+// MCStop stops one server (POST .../stop).
+func (c *Client) MCStop(ctx context.Context, id string) error {
+	_, _, err := c.do(ctx, http.MethodPost, mcPath(id, "stop"), nil, map[string]string{})
+	return err
+}

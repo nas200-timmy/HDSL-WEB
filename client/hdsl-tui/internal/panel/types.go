@@ -157,6 +157,19 @@ func (t AgentToken) Expiry() time.Time {
 	return Elevation{ExpiresAt: t.ExpiresAt}.Expiry()
 }
 
+// MCInstance is one Minecraft server as GET /api/mc/instances reports it.
+type MCInstance struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Port    int    `json:"port"`
+	State   string `json:"state"`
+	// ConsoleAvailable is false when no console names this instance — the
+	// panel's own "can I attach at all" answer.
+	ConsoleAvailable bool   `json:"consoleAvailable"`
+	Error            string `json:"error"`
+}
+
 type loginBody struct {
 	OK       bool   `json:"ok"`
 	Username string `json:"username"`

@@ -728,6 +728,7 @@ func (a *App) mainMenu(ctx context.Context) (int, bool) {
 			Items: []ui.Item{
 				{Label: "选择实例并连接", Note: "进入 agent 的终端"},
 				{Label: "给 agent 签票", Note: "生成提示词并复制"},
+				{Label: "Minecraft 控制台", Note: "连接服务器自己的控制台"},
 				{Label: "开发者提权", Note: elevationNote(a.elevatedUntil)},
 				{Label: "会话与连接信息"},
 				{Label: "清除保存的登录信息"},
@@ -745,14 +746,16 @@ func (a *App) mainMenu(ctx context.Context) (int, bool) {
 		case 1:
 			a.mintAgentTicket(ctx)
 		case 2:
-			a.elevate(ctx)
+			a.mcConsole(ctx)
 		case 3:
-			a.sessionInfo()
+			a.elevate(ctx)
 		case 4:
-			a.clearSavedLogin()
+			a.sessionInfo()
 		case 5:
-			return 0, true
+			a.clearSavedLogin()
 		case 6:
+			return 0, true
+		case 7:
 			return cli.ExitOK, false
 		}
 	}

@@ -31,6 +31,36 @@ func (a *App) attach(ctx context.Context, brand string, instance panel.Instance)
 	if !ok {
 		return
 	}
+	a.runTerminal(ctx, terminal, terminalSession{
+		detachNote: "agent 仍在后台运行。重新进来一次就能接回同一个会话。",
+		onKill: func(ctx context.Context) {
+			a.busy("正在停止终端…")
+			killed, err := a.client.CloseTerminal(ctx, brand, instance.ID)
+			if err != nil {
+				a.message("停止终端失败", explain(err))
+				return
+			}
+			if killed {
+				a.message("终端已停止", "agent 进程已结束，实例本身没有受影响。")
+			} else {
+				a.message("没有终端在跑", "这个实例当前没有正在运行的 Web Shell 终端。")
+			}
+		},
+	})
+}
+
+// terminalSession is what the caller knows about the terminal it just opened:
+// what leaving means, and whether Ctrl-] k has an endpoint to call. A Minecraft
+// console has none — the server must keep running when the operator leaves.
+type terminalSession struct {
+	detachNote string
+	onKill     func(context.Context)
+}
+
+// runTerminal pumps one open terminal until it ends. It is shared by the agent
+// terminal and the Minecraft console: the wire protocol is the same, only the
+// words around "leave" differ.
+func (a *App) runTerminal(ctx context.Context, terminal panel.Terminal, session terminalSession) {
 	if terminal.Desktop() {
 		a.message("这个面板没有 PTY", terminal.Hint)
 		return
@@ -52,7 +82,7 @@ func (a *App) attach(ctx context.Context, brand string, instance panel.Instance)
 	}
 	defer conn.Close()
 
-	// Hand the real screen back to the agent, then take it again afterwards.
+	// Hand the real screen back to the terminal, then take it again afterwards.
 	a.screen.Suspend()
 	resumed := false
 	defer func() {
@@ -83,22 +113,22 @@ func (a *App) attach(ctx context.Context, brand string, instance panel.Instance)
 	}
 	switch result.Command {
 	case pterm.CommandDetach:
-		a.message("已离开终端", "agent 仍在后台运行。重新进来一次就能接回同一个会话。")
+		note := session.detachNote
+		if note == "" {
+			note = "仍在后台运行。重新进来一次就能接回同一个会话。"
+		}
+		a.message("已离开终端", note)
 	case pterm.CommandKill:
-		a.busy("正在停止终端…")
-		killed, err := a.client.CloseTerminal(ctx, brand, instance.ID)
-		if err != nil {
-			a.message("停止终端失败", explain(err))
+		if session.onKill == nil {
+			// No stop endpoint (a console): treat "kill" as leaving, because
+			// killing the console is not a thing the server knows how to do.
+			a.message("已离开控制台", "服务器继续运行。")
 			return
 		}
-		if killed {
-			a.message("终端已停止", "agent 进程已结束，实例本身没有受影响。")
-		} else {
-			a.message("没有终端在跑", "这个实例当前没有正在运行的 Web Shell 终端。")
-		}
+		session.onKill(ctx)
 	default:
 		if result.ExitKnown {
-			a.message("终端已结束", fmt.Sprintf("agent 自己退出了（退出码 %d）。面板会话仍然登录着。", result.ExitCode))
+			a.message("终端已结束", fmt.Sprintf("对方自己退出了（退出码 %d）。面板会话仍然登录着。", result.ExitCode))
 			return
 		}
 		if result.CloseCode != 0 {

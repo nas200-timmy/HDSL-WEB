@@ -58,6 +58,8 @@ type Server struct {
 
 	// DSHInstances is the answer of GET /api/instances.
 	DSHInstances []map[string]any
+	// MCInstances is the answer of GET /api/mc/instances.
+	MCInstances []map[string]any
 	// BrandInstances is keyed by brand id.
 	BrandInstances map[string][]map[string]any
 	// Terminal is called for POST .../terminal; returning false falls back to
@@ -91,6 +93,10 @@ func New() *Server {
 		WebShellEnabled:   true,
 		HTTPS:             true,
 		DSHInstances:      []map[string]any{{"id": "dsh-1", "name": "main", "state": "running"}},
+		MCInstances: []map[string]any{
+			{"id": "mc-1", "name": "vanilla", "version": "1.21.11", "port": 25565,
+				"state": "running", "consoleAvailable": true},
+		},
 		BrandInstances: map[string][]map[string]any{
 			"kimi":       {{"id": "kimi-1", "name": "kimi-one", "state": "stopped"}},
 			"opencode":   {},
@@ -253,6 +259,9 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 			"estop":           estop,
 		})
 		return
+	case method == "GET" && r.URL.Path == "/api/mc/instances":
+		writeJSON(w, http.StatusOK, map[string]any{"instances": s.MCInstances})
+		return
 	case method == "GET" && len(segments) == 2 && segments[0] == "api" && segments[1] == "instances":
 		writeJSON(w, http.StatusOK, map[string]any{"instances": s.DSHInstances})
 		return
@@ -261,12 +270,30 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if method == "POST" && (strings.HasSuffix(r.URL.Path, "/launch") || strings.HasSuffix(r.URL.Path, "/stop")) {
-		state := "starting"
+	if method == "POST" && (strings.HasSuffix(r.URL.Path, "/launch") ||
+		strings.HasSuffix(r.URL.Path, "/start") ||
+		strings.HasSuffix(r.URL.Path, "/stop")) {
 		if strings.HasSuffix(r.URL.Path, "/stop") {
-			state = "stopping"
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "state": "stopping"})
+			return
 		}
-		writeJSON(w, http.StatusAccepted, map[string]any{"state": state})
+		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "state": "starting"})
+		return
+	}
+	if method == "POST" && strings.HasSuffix(r.URL.Path, "/console/ticket") {
+		parts := split(r.URL.Path)
+		id := "mc-1"
+		if len(parts) >= 4 {
+			id = parts[3]
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"mode":     "pty",
+			"protocol": 1,
+			"instance": id,
+			"brand":    "mc",
+			"ticket":   "mc-ticket-" + id,
+			"ws":       "/ws/terminal/mc-ticket-" + id,
+		})
 		return
 	}
 	if !strings.HasSuffix(r.URL.Path, "/terminal") {
