@@ -50,13 +50,14 @@ public final class DshPackageRegistry {
     /// @return the published versions, newest first
     /// @throws DshException when npm is unavailable or the query fails
     public static List<String> fetchVersions(String packageName) throws DshException {
-        DshNodeRuntime runtime = DshNodeRuntime.detect()
-                .or(DshNodeRuntime::detectManaged)
+        DshNodeRuntime runtime = DshNodeRuntime.detectForNpm()
                 .orElseThrow(() -> new DshException("Node.js was not found on PATH and no panel-managed "
                         + "runtime is installed (" + DshNodeRuntime.requirement() + "). "
                         + "Open Settings -> Node.js for a one-click managed runtime, or install Node.js yourself."));
         if (!runtime.canInstall()) {
-            throw new DshException("npm was not found on PATH; listing plugin versions requires it");
+            throw new DshException("the Node.js this panel would use has no npm (" + runtime.node() + "); "
+                    + "listing plugin versions requires it. Open Settings -> Node.js and install the "
+                    + "panel-managed runtime, which ships with npm.");
         }
 
         List<String> command = List.of(runtime.npm().toString(), "view", packageName, "versions", "--json");

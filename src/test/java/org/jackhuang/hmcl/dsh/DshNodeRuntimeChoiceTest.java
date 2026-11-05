@@ -48,6 +48,33 @@ class DshNodeRuntimeChoiceTest {
     private static final Predicate<DshNodeRuntime> NEEDS_SUPPORTED_NODE =
             DshNodeRuntime::isNodeSupported;
 
+    /// What a registry read asks for: a Node.js that can run `npm`.
+    private static final Predicate<DshNodeRuntime> NEEDS_NPM = DshNodeRuntime::canInstall;
+
+    /// Debian and Ubuntu ship `nodejs` and `npm` as **separate packages**, so a `PATH` Node
+    /// without npm is the normal state on those hosts rather than a broken one. Reading the
+    /// registry used to take that runtime and refuse with "npm was not found on PATH" while
+    /// the managed runtime — installed with npm — sat unused in the data directory.
+    @Test
+    void aPathRuntimeWithoutNpmYieldsToTheManagedOne() {
+        DshNodeRuntime system = nodeWithoutNpm("/usr/bin/node", "22.19.0");
+        DshNodeRuntime managed = runtime("/data/hdsl/runtimes/22.19.0/bin/node", "22.19.0", null);
+
+        assertEquals(Optional.of(managed),
+                DshNodeRuntime.prefer(Optional.of(system), Optional.of(managed), NEEDS_NPM),
+                "the managed runtime is the one that can reach the registry");
+    }
+
+    @Test
+    void aPathRuntimeWithNpmIsKeptForRegistryReads() {
+        DshNodeRuntime system = runtime("/usr/bin/node", "22.19.0", null);
+        DshNodeRuntime managed = runtime("/data/hdsl/runtimes/22.19.0/bin/node", "22.19.0", null);
+
+        assertEquals(Optional.of(system),
+                DshNodeRuntime.prefer(Optional.of(system), Optional.of(managed), NEEDS_NPM),
+                "what the operator put on PATH wins when it can do the job");
+    }
+
     @Test
     void aPathRuntimeWithoutPnpmYieldsToTheManagedOne() {
         DshNodeRuntime system = runtime("/usr/bin/node", "22.19.0", null);
@@ -135,5 +162,14 @@ class DshNodeRuntimeChoiceTest {
     private static DshNodeRuntime runtime(String node, String version, String pnpm) {
         return new DshNodeRuntime(Path.of(node), version, Path.of("/usr/bin/npm"), "10.9.9",
                 pnpm == null ? null : Path.of(pnpm), pnpm == null ? null : "11.7.0");
+    }
+
+    /// The Debian/Ubuntu shape: `node` is installed, `npm` is not.
+    ///
+    /// @param node    the node path
+    /// @param version the node version
+    /// @return the descriptor
+    private static DshNodeRuntime nodeWithoutNpm(String node, String version) {
+        return new DshNodeRuntime(Path.of(node), version, null, null, null, null);
     }
 }

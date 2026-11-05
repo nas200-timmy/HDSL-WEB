@@ -945,16 +945,18 @@ public final class DshVersionManager {
         }
     }
 
-    /// Requires a usable Node runtime.
+    /// Requires a Node runtime that can talk to the npm registry.
+    ///
+    /// Every caller of this one runs `npm`: it reads version lists, dist-tags and
+    /// registry metadata. So a `PATH` Node without npm gives way to the panel's own
+    /// runtime (设置 → Node.js 一键安装，落在 `<data>/hdsl/runtimes`) — otherwise a host
+    /// whose `nodejs` package shipped without npm reports "npm was not found on PATH"
+    /// while a working toolchain sits in the data directory unused.
     ///
     /// @return the detected runtime
     /// @throws DshException when no `node` was found at all
     public static DshNodeRuntime requireRuntime() throws DshException {
-        // PATH 上没有就走面板托管的运行时（设置 → Node.js 一键安装，
-        // 落在 <data>/hdsl/runtimes）——裸部署没有系统 Node.js 也能装实例。
-        return DshNodeRuntime.detect()
-                .or(DshNodeRuntime::detectManaged)
-                .orElseThrow(DshVersionManager::noRuntime);
+        return DshNodeRuntime.detectForNpm().orElseThrow(DshVersionManager::noRuntime);
     }
 
     /// Requires a Node runtime that carries `pnpm`, for the work that cannot run without it.

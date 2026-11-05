@@ -192,6 +192,20 @@ public record DshNodeRuntime(
                 runtime -> runtime.isNodeSupported() && runtime.canManagePlugins());
     }
 
+    /// The toolchain to use when the caller needs `npm` — reading the registry and the
+    /// version lists.
+    ///
+    /// Debian and Ubuntu ship `nodejs` without npm (it is a separate `npm` package), so
+    /// "a Node.js is on PATH" is routinely a runtime that cannot query a registry. Asking
+    /// `PATH` first and refusing afterwards made those hosts report "npm was not found on
+    /// PATH" while the panel's own runtime — installed with npm — sat in the data
+    /// directory unused.
+    ///
+    /// @return the runtime to use, or empty when there is no Node.js at all
+    public static Optional<DshNodeRuntime> detectForNpm() {
+        return prefer(detect(), detectManaged(), DshNodeRuntime::canInstall);
+    }
+
     /// The toolchain to use when the caller needs a Node.js in the supported range.
     ///
     /// "A Node.js is on PATH" is not the same answer as "a Node.js this program can use":
