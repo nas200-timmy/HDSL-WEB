@@ -1873,6 +1873,8 @@ function AgentAccessCard() {
   const [minting, setMinting] = useState(false);
   /// 可选的实例绑定：Linux 上可留空（面板会在每次请求时识别调用者），其它平台建议填
   const [bindTo, setBindTo] = useState("");
+  /// 来源开关单独保存：它不属于密码，也不随「保存范围」一起提交
+  const [sourceBusy, setSourceBusy] = useState(false);
 
   const refresh = async () => {
     try {
@@ -1956,6 +1958,20 @@ function AgentAccessCard() {
       await refresh();
     } catch (e) {
       setError(developerError(e));
+    }
+  };
+
+  /// 来源开关：默认只认本机。关掉之前前端已经写明后果，点一下直接落盘。
+  const toggleLoopback = async (next: boolean) => {
+    setSourceBusy(true);
+    setError(null);
+    try {
+      setStatus(await api.setAgentLoopback(next));
+      toast("success", next ? "已限制为只允许本机使用票" : "已允许非回环地址使用票");
+    } catch (e) {
+      setError(developerError(e));
+    } finally {
+      setSourceBusy(false);
     }
   };
 
@@ -2108,6 +2124,27 @@ function AgentAccessCard() {
               </span>
             )}
           </div>
+        </span>
+      </div>
+
+      <div className="comp-row" style={{ alignItems: "flex-start" }}>
+        <span className="comp-label" style={{ paddingTop: 2 }}>票的来源</span>
+        <span className="comp-value" style={{ display: "grid", gap: 6, maxWidth: 640 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={status?.loopbackOnly ?? true}
+              disabled={!status || sourceBusy}
+              onChange={(e) => void toggleLoopback(e.target.checked)}
+            />
+            <span>只允许本机（回环）使用票</span>
+          </label>
+          <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+            默认打开：agent 和面板在同一台机器上，票从局域网或公网地址进来一律拒绝（403{" "}
+            <span className="mono">agent_loopback_only</span>）。关掉之后非回环也能用票；如果配置里同时打开了{" "}
+            <span className="mono">agent.remote_needs_session</span>，agent 密码换来的票仍需要一个登录会话。
+            反代部署时面板看到的来源恒为 127.0.0.1，这条限制等于不生效——那种部署要在反代上限制来源。
+          </span>
         </span>
       </div>
 

@@ -390,6 +390,10 @@ export interface AgentPasswordStatus {
   applicable: boolean;
   /** 设置时勾选的、这串密码最多能发出去的范围 */
   scopes: string[];
+  /** 票是否只认本机回环（默认是） */
+  loopbackOnly: boolean;
+  /** 非回环使用票是否必须有登录会话（loopbackOnly 关闭时才生效） */
+  remoteNeedsSession: boolean;
 }
 
 /** 一张借给 agent 的票；token 本身永远不出现在列表里。 */

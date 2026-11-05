@@ -215,6 +215,9 @@ export const api = {
   /** 清除 agent 密码，并掐掉它发出的全部票；需要先提权 */
   clearAgentPassword: () =>
     request<AgentPasswordStatus>("/api/developer/agent-password/clear", { method: "POST" }),
+  /** 票是否只允许从本机回环使用；默认是，关掉才轮到 agent.remote_needs_session */
+  setAgentLoopback: (loopbackOnly: boolean) =>
+    request<AgentPasswordStatus>("/api/developer/agent-loopback", jsonInit("POST", { loopbackOnly })),
   /** 当前活着的 agent 票（不含 token 本身） */
   agentGrants: () => request<{ grants: AgentGrantRow[] }>("/api/developer/agent-grants"),
   /** 用当前提权会话直接签一张票交给 agent；token 只在这个应答里出现一次 */

@@ -53,6 +53,7 @@ public final class ServerConfigLoader {
     public static final String ENV_WEB_SHELL_ENABLED = "HDSL_WEB_SHELL_ENABLED";
     public static final String ENV_DEVELOPER_GUARD = "HDSL_DEVELOPER_GUARD";
     public static final String ENV_AGENT_REMOTE_NEEDS_SESSION = "HDSL_AGENT_REMOTE_NEEDS_SESSION";
+    public static final String ENV_AGENT_LOOPBACK_ONLY = "HDSL_AGENT_LOOPBACK_ONLY";
     public static final String ENV_ZCODE_PACKAGE = "HDSL_ZCODE_PACKAGE";
     public static final String ENV_ZCODE_NODE = "HDSL_ZCODE_NODE";
     public static final String ENV_ZCODE_BUILD_BIN = "HDSL_ZCODE_BUILD_BIN";
@@ -253,13 +254,16 @@ public final class ServerConfigLoader {
 
     /// `agent:` — how far a ticket reaches (docs/panel-agent.md).
     private static void applyAgent(ServerConfig config, Map<String, Object> section) {
+        if (section.containsKey("loopback_only")) {
+            config.agent.loopbackOnly = booleanField(section, "loopback_only");
+        }
         if (section.containsKey("remote_needs_session")) {
             config.agent.remoteNeedsSession = booleanField(section, "remote_needs_session");
         }
         for (String key : section.keySet()) {
-            if (!key.equals("remote_needs_session")) {
+            if (!key.equals("loopback_only") && !key.equals("remote_needs_session")) {
                 throw new ConfigException(
-                        "agent: unknown key `" + key + "` (only `remote_needs_session` is accepted)");
+                        "agent: unknown key `" + key + "` (only `loopback_only` and `remote_needs_session` are accepted)");
             }
         }
     }
@@ -379,6 +383,15 @@ public final class ServerConfigLoader {
         }
         if (env.containsKey(ENV_DEVELOPER_GUARD)) {
             config.developerGuard.scope = guardScope(env.get(ENV_DEVELOPER_GUARD), ENV_DEVELOPER_GUARD);
+        }
+        if (env.containsKey(ENV_AGENT_LOOPBACK_ONLY)) {
+            String value = env.get(ENV_AGENT_LOOPBACK_ONLY);
+            config.agent.loopbackOnly = switch (value) {
+                case "true" -> true;
+                case "false" -> false;
+                default -> throw new ConfigException(ENV_AGENT_LOOPBACK_ONLY
+                        + " must be `true` or `false`, got `" + value + "`");
+            };
         }
         if (env.containsKey(ENV_AGENT_REMOTE_NEEDS_SESSION)) {
             String value = env.get(ENV_AGENT_REMOTE_NEEDS_SESSION);

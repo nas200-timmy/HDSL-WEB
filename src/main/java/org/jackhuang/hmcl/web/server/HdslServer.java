@@ -227,7 +227,7 @@ public final class HdslServer {
                 request -> request.isSecure()
                         || org.jackhuang.hmcl.web.http.RequestSecurity.forwardedHttps(request, config),
                 ttlSeconds, config.basePath, developerElevation, peerIdentity,
-                config.agent.remoteNeedsSession);
+                config.agent.remoteNeedsSession, config.agent.loopbackOnly);
 
         // The Phase 2 services: the event bus every WebSocket payload flows
         // through, the task pool behind installs and launches, and the

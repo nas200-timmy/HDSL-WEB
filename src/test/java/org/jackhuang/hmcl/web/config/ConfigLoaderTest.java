@@ -78,6 +78,22 @@ class ConfigLoaderTest {
                 .agent.remoteNeedsSession);
     }
 
+    /// 票的来源：默认只认回环；yaml 与环境变量都能放开。
+    @Test
+    void ticketsAreLoopbackOnlyByDefault() throws Exception {
+        assertTrue(load(Map.of()).agent.loopbackOnly, "an agent runs beside the panel by default");
+
+        Files.writeString(dataDir.resolve("server.yaml"), """
+                agent:
+                  loopback_only: false
+                """);
+        assertFalse(load(Map.of()).agent.loopbackOnly);
+
+        Files.writeString(dataDir.resolve("server.yaml"), "");
+        assertFalse(load(Map.of(ServerConfigLoader.ENV_AGENT_LOOPBACK_ONLY, "false"))
+                .agent.loopbackOnly);
+    }
+
     @Test
     void everyYamlFieldIsRead() throws Exception {
         Files.writeString(dataDir.resolve("server.yaml"), """

@@ -84,6 +84,8 @@ public final class AuthFilter implements Filter {
     /// 非回环来源使用票时是否必须有浏览器会话；浏览器签发的票不受限
     /// （见 [org.jackhuang.hmcl.web.config.ServerConfig.AgentConfig]）。
     private final boolean agentRemoteNeedsSession;
+    /// 票是否只认本机回环（默认是）。比上一条更严：非回环一律拒，不看会话。
+    private final boolean agentLoopbackOnly;
     /// 会话 Cookie 的 Path：根挂载是 `/`，子路径挂载是挂载点本身。
     /// 同一个域名下挂两个面板（`/a/`、`/b/`）时，Path=/ 的同名 Cookie 会互相覆盖，
     /// 表现为「登录 A 之后 B 掉线」。
@@ -112,7 +114,8 @@ public final class AuthFilter implements Filter {
                       String basePath,
                       org.jackhuang.hmcl.web.developer.DeveloperElevation elevation,
                       PeerIdentity identity,
-                      boolean agentRemoteNeedsSession) {
+                      boolean agentRemoteNeedsSession,
+                      boolean agentLoopbackOnly) {
         this.authService = authService;
         this.authDisabled = authDisabled;
         this.secureRequest = secureRequest;
@@ -121,6 +124,7 @@ public final class AuthFilter implements Filter {
         this.elevation = elevation;
         this.identity = identity;
         this.agentRemoteNeedsSession = agentRemoteNeedsSession;
+        this.agentLoopbackOnly = agentLoopbackOnly;
     }
 
     /// The request path as this panel's routes are written.
@@ -228,9 +232,12 @@ public final class AuthFilter implements Filter {
         String method = req.getMethod();
         String path = pathOf(req);
         if (!remoteGrantAllowed(req, grant)) {
-            auditDenied(req, path, grant, "remote_session_required", null);
-            Json.error(resp, HttpServletResponse.SC_FORBIDDEN,
-                    "agent_remote_session_required: this ticket was minted with the agent password and is"
+            boolean loopbackRule = agentLoopbackOnly && !isLoopback(req.getRemoteAddr());
+            auditDenied(req, path, grant, loopbackRule ? "loopback_only" : "remote_session_required", null);
+            Json.error(resp, HttpServletResponse.SC_FORBIDDEN, loopbackRule
+                    ? "agent_loopback_only: this ticket is only usable from the panel's loopback;"
+                            + " the operator can allow remote tickets in 开发者模式 → agent 访问"
+                    : "agent_remote_session_required: this ticket was minted with the agent password and is"
                             + " being used from outside the loopback; sign in to the panel first, or mint"
                             + " the ticket from the panel's agent page");
             return false;
@@ -402,19 +409,36 @@ public final class AuthFilter implements Filter {
 
     /// Whether this grant may be used from this connection.
     ///
-    /// Off the loopback, `agent.remoteNeedsSession` asks for a person: either
-    /// the ticket came from the panel's own mint button
-    /// ([org.jackhuang.hmcl.web.developer.DeveloperElevation.MintedBy#SESSION],
-    /// which already means somebody opened the panel and copied it out), or
-    /// the request carries a live session cookie. A `PASSWORD` ticket with
-    /// neither is refused — that is the case where a leaked long-lived secret
-    /// would otherwise be enough from anywhere on the network.
+    /// Two rules, strictest first: [#grantUsable]'s loopback rule (on by
+    /// default) refuses every remote ticket, and only when the operator turned
+    /// that off does [remoteAllowed]'s "remote needs a person" apply.
     private boolean remoteGrantAllowed(HttpServletRequest request,
                                        org.jackhuang.hmcl.web.developer.DeveloperElevation.AgentGrant grant) {
-        return remoteAllowed(agentRemoteNeedsSession,
+        return grantUsable(agentLoopbackOnly, agentRemoteNeedsSession,
                 isLoopback(request.getRemoteAddr()),
                 grant.mintedBy() == org.jackhuang.hmcl.web.developer.DeveloperElevation.MintedBy.SESSION,
                 hasLiveSession(request));
+    }
+
+    /// The source rule as a pure function, so the matrix can be exercised
+    /// without a socket.
+    ///
+    /// @param loopbackOnly      whether tickets are loopback-only (the default)
+    /// @param remoteNeedsSession whether a remote ticket needs a session
+    ///                           (only consulted when `loopbackOnly` is off)
+    /// @param loopback          whether the caller is the local machine
+    /// @param mintedFromBrowser whether a person minted the ticket in the panel
+    /// @param sessionAlive      whether the request carries a live session
+    /// @return whether the grant may be used
+    static boolean grantUsable(boolean loopbackOnly, boolean remoteNeedsSession, boolean loopback,
+                               boolean mintedFromBrowser, boolean sessionAlive) {
+        if (loopback) {
+            return true;
+        }
+        if (loopbackOnly) {
+            return false;
+        }
+        return remoteAllowed(remoteNeedsSession, false, mintedFromBrowser, sessionAlive);
     }
 
     /// The rule behind {@link #remoteGrantAllowed}, as a pure function so the
@@ -493,11 +517,12 @@ public final class AuthFilter implements Filter {
     /// Whether the peer is this machine's loopback.
     ///
     /// `127.0.0.0/8`, `::1`, and IPv4-mapped forms all count. Anything else —
-    /// a LAN address, a docker bridge, a public address — needs a session
-    /// cookie before an agent token will be honoured.
+    /// a LAN address, a docker bridge, a public address — is "remote" for
+    /// every agent-ticket rule.
     ///
-    /// Package-private so the address parsing can be tested without a socket.
-    static boolean isLoopback(@Nullable String address) {
+    /// Public so the developer routes can refuse a remote agent password with
+    /// the same definition the request gate uses.
+    public static boolean isLoopback(@Nullable String address) {
         if (address == null || address.isBlank()) {
             return false;
         }

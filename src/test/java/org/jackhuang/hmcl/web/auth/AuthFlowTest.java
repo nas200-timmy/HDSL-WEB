@@ -263,6 +263,22 @@ class AuthFlowTest {
         assertTrue(AuthFilter.remoteAllowed(true, false, false, true));
     }
 
+    /// 默认姿态：票只认本机。关掉回环限制之后才轮到「远程要有人」。
+    @Test
+    void ticketsAreLoopbackOnlyUntilTheOperatorSaysOtherwise() {
+        // 本机永远放行，两条规则都不看来源证明。
+        assertTrue(AuthFilter.grantUsable(true, true, true, false, false));
+        // 回环限制开着：远程无论是浏览器签的票还是带会话，都拒。
+        assertFalse(AuthFilter.grantUsable(true, false, false, true, true));
+        assertFalse(AuthFilter.grantUsable(true, false, false, false, false));
+        // 关掉之后：remote_needs_session 关 = 远程放行。
+        assertTrue(AuthFilter.grantUsable(false, false, false, false, false));
+        // 打开 remote_needs_session：远程要有浏览器票或会话。
+        assertFalse(AuthFilter.grantUsable(false, true, false, false, false));
+        assertTrue(AuthFilter.grantUsable(false, true, false, true, false));
+        assertTrue(AuthFilter.grantUsable(false, true, false, false, true));
+    }
+
     @Test
     void loopbackParsingCoversTheFormsTheKernelReports() {
         assertTrue(AuthFilter.isLoopback("127.0.0.1"));

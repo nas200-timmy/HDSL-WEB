@@ -179,6 +179,10 @@ public final class DeveloperApiServlet extends HttpServlet {
             clearAgentPassword(request, response);
             return;
         }
+        if ("/agent-loopback".equals(path) && "POST".equals(method)) {
+            setAgentLoopback(request, response);
+            return;
+        }
         if ("/agent-auth".equals(path) && "POST".equals(method)) {
             agentAuth(request, response);
             return;
@@ -359,6 +363,8 @@ public final class DeveloperApiServlet extends HttpServlet {
             cap.forEach(scopes::add);
         }
         body.add("scopes", scopes);
+        body.addProperty("loopbackOnly", config.agent.loopbackOnly);
+        body.addProperty("remoteNeedsSession", config.agent.remoteNeedsSession);
         Json.write(response, body);
     }
 
@@ -469,6 +475,42 @@ public final class DeveloperApiServlet extends HttpServlet {
         agentPasswordStatus(response);
     }
 
+    /// `POST /api/developer/agent-loopback {loopbackOnly}`: whether tickets
+    /// are honoured from the panel's loopback only.
+    ///
+    /// On by default, because an agent runs beside the panel: a ticket arriving
+    /// from a LAN or public address has travelled further than a credential
+    /// meant for a local tool should. Turning it off is a deployment decision
+    /// (a remote agent the operator really wants), and the finer
+    /// `agent.remote_needs_session` key still applies to what is left.
+    private void setAgentLoopback(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireTls(request, response)) {
+            return;
+        }
+        if (!elevation.require(keyOf(request), sessionAlive(request))) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return;
+        }
+        Boolean loopbackOnly = booleanField(readJson(request), "loopbackOnly");
+        if (loopbackOnly == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "loopbackOnly is required");
+            return;
+        }
+        try {
+            ServerConfigWriter.updateAgentLoopbackOnly(config.dataDir, loopbackOnly);
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "the agent source rule could not be stored: " + e.getMessage());
+            return;
+        }
+        config.agent.loopbackOnly = loopbackOnly;
+        AuditLog.log(AuditLog.Channel.WEB, "developer.agentLoopback", null,
+                loopbackOnly ? "loopback-only" : "allow-remote",
+                actorOf(request), request.getRemoteAddr());
+        agentPasswordStatus(response);
+    }
+
     /// `POST /api/developer/agent-password/clear`: removes the lesser secret
     /// and every grant it ever minted.
     private void clearAgentPassword(HttpServletRequest request, HttpServletResponse response)
@@ -530,6 +572,15 @@ public final class DeveloperApiServlet extends HttpServlet {
             return;
         }
         String address = request.getRemoteAddr();
+        // The default posture: a ticket is for a tool beside the panel. A
+        // remote caller asking for one would only get a credential the reuse
+        // gate refuses later, so say it here.
+        if (config.agent.loopbackOnly && !AuthFilter.isLoopback(address)) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "agent_loopback_only: tickets are only issued to the panel's loopback;"
+                            + " the operator can allow remote tickets in 开发者模式 → agent 访问");
+            return;
+        }
         Instant now = Instant.now();
         if (agentPasswordThrottle.isBlocked(address, now)) {
             Json.error(response, 429, "too many failed attempts; try again later");

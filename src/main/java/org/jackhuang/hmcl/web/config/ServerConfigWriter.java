@@ -176,6 +176,30 @@ public final class ServerConfigWriter {
         writeAtomically(yamlFile, root);
     }
 
+    /// Records the agent-ticket source rule in `server.yaml`
+    /// (`agent.loopback_only`). The finer `agent.remote_needs_session` key, if
+    /// present, rides along untouched.
+    ///
+    /// @param dataDir      the data directory `server.yaml` lives in
+    /// @param loopbackOnly whether tickets are honoured from loopback only
+    /// @throws IOException when the file cannot be read or written
+    public static void updateAgentLoopbackOnly(Path dataDir, boolean loopbackOnly) throws IOException {
+        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
+        Map<String, Object> root = readExisting(yamlFile);
+
+        Object current = root.get("agent");
+        Map<String, Object> section = new LinkedHashMap<>();
+        if (current instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                section.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        section.put("loopback_only", loopbackOnly);
+        root.put("agent", section);
+
+        writeAtomically(yamlFile, root);
+    }
+
     /// Reads the existing document, or an empty map when there is none.
     private static Map<String, Object> readExisting(Path yamlFile) throws IOException {
         Map<String, Object> root = new LinkedHashMap<>();

@@ -376,6 +376,33 @@ class AgentGrantApiTest {
         }
     }
 
+    /// 票的来源：默认只认本机回环，改一次立即生效并落进 server.yaml。
+    @Test
+    void theSourceRuleDefaultsToLoopbackAndIsSaved() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "https://127.0.0.1:" + running.port();
+            String cookie = elevatedSession(client, base);
+
+            JsonObject initial = json(get(client, base + "/api/developer/agent-password", cookie));
+            assertTrue(initial.get("loopbackOnly").getAsBoolean(),
+                    "an agent runs beside the panel; the default is loopback-only: " + initial);
+
+            HttpResponse<String> off = post(client, base + "/api/developer/agent-loopback",
+                    "{\"loopbackOnly\":false}", cookie);
+            assertEquals(200, off.statusCode(), off.body());
+            assertFalse(json(off).get("loopbackOnly").getAsBoolean());
+
+            // 状态接口读的是内存值；它已经跟着改了，说明没有只写文件。
+            assertFalse(json(get(client, base + "/api/developer/agent-password", cookie))
+                    .get("loopbackOnly").getAsBoolean());
+
+            // 没有提权动不了它：这条路由和设置密码同一扇门。
+            assertEquals(401, post(client, base + "/api/developer/agent-loopback",
+                    "{\"loopbackOnly\":true}", null).statusCode());
+        }
+    }
+
     /// Mints a token the way the product does now: the agent exchanges the
     /// agent password for it. The cap is opened to every class so the scope
     /// under test is what decides.

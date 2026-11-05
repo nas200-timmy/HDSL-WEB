@@ -200,15 +200,24 @@ public final class ServerConfig {
     public final AgentConfig agent = new AgentConfig();
 
     public static final class AgentConfig {
+        /// When on (the default), a ticket is only honoured from the panel's
+        /// **loopback**: an agent runs beside the panel, so a ticket arriving
+        /// from a LAN or public address is a credential that has travelled
+        /// further than it should. Off restores the older "usable anywhere"
+        /// posture and falls back to [#remoteNeedsSession] for the finer rule.
+        ///
+        /// A reverse proxy makes every request look like loopback, so this
+        /// switch bounds direct exposure, not a proxied deployment. See
+        /// `docs/panel-agent.md` §"来源限制".
+        public volatile boolean loopbackOnly = true;
+
         /// When on, a ticket used from **outside the loopback** must be backed
         /// by a browser session — unless the ticket was minted from a browser
         /// in the first place (`/api/developer/agent-token`), which already
         /// proves a person opened the panel.
         ///
-        /// Off by default: it is a deployment decision, and a reverse proxy
-        /// makes every request look like loopback, so turning it on without
-        /// checking the topology would either do nothing or lock out the
-        /// agents. See `docs/panel-agent.md` §"来源限制".
+        /// Only consulted when [#loopbackOnly] is off; with the loopback rule
+        /// on, remote tickets are refused whatever they carry.
         public volatile boolean remoteNeedsSession = false;
     }
 

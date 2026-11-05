@@ -4,6 +4,15 @@
 
 ## 未发布
 
+**agent 票默认只认本机回环**
+
+- 新增 `agent.loopback_only`（默认开），设置页「开发者模式 → agent 访问 → 票的来源」
+  可以切换：打开时非回环地址使用票一律 403 `agent_loopback_only`；关掉后才轮到
+  `agent.remote_needs_session` 那条规则。
+- `agent-auth` 在回环限制开着时直接拒绝远程换票，不再发一张注定用不了的票。
+- 反代部署看到的来源恒为 `127.0.0.1`，这条限制等于不生效；那种部署要在反代上限制来源
+  （`docs/panel-agent.md` §4）。
+
 **MC 控制台成为 agent 的独立权限（`mc-console`）**
 
 - 新增 scope `mc-console`：勾上才允许 agent 用
