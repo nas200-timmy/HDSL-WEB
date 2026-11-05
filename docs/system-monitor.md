@@ -58,7 +58,20 @@ cgroup 有限额时，`使用中 = memory.current - memory.stat:file`，`已缓�
 票拿不到——这不是安全边界（容器里的 agent 直接读 `/proc` 就行），是显式的
 "允许"声明，方便审计。
 
-## 4. 平台差异
+## 4. 平台差异与文案
+
+快照里带 `host: {os, environment}`：`os` 是 `linux` / `windows` / `macos` /
+`other`，`environment` 是 `container` / `wsl` / `native`（Linux 看
+`/.dockerenv`、cgroup、`container` 环境变量与 `/proc/version`）。页面的说明按
+这两个字段切换，不再写死 Linux：
+
+- 每核：「容器里显示的是宿主机核心」/「WSL 里是 Linux 虚拟机的核心」/「每个逻辑处理器」；
+- 磁盘：「宿主机级读数」/「虚拟机级读数」/「按物理磁盘统计」；
+- 网络：「容器自己的网络命名空间」/「WSL 自己的」/「按网络接口统计」；
+- 内存：Linux 讲页缓存与 slab，Windows 明说“缓存暂未采集”，只显示使用中与空闲；
+- 能力位为 false 时显示「这一版/当前平台暂未采集 X」，而不是假装 0，也不画空网格。
+
+
 
 | 值 | Linux | Windows |
 |---|---|---|

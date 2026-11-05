@@ -883,11 +883,18 @@ export interface SystemPanelSelf {
   uptimeSec: number;
 }
 
+/** 面板运行在哪：页面文案按它切换（"容器里…"只在容器里说）。 */
+export interface SystemHost {
+  os: "linux" | "windows" | "macos" | "other";
+  environment: "container" | "wsl" | "native";
+}
+
 /** 一帧快照；`at` 是 ISO 时间串，历史按它排序/去重。 */
 export interface SystemSnapshot {
   at: string;
   /** 这一帧所属的采样档位：1000 = 有人用，30000 = 低频守护 */
   intervalMs: number;
+  host: SystemHost;
   capabilities: SystemCapabilities;
   cpu: SystemCpu;
   memory: SystemMemory;

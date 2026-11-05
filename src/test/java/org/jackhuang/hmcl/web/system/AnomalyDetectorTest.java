@@ -33,6 +33,7 @@ class AnomalyDetectorTest {
     private static SystemSnapshot snapshot(double cpu, double memoryRatio, double diskRatio, double load) {
         return new SystemSnapshot(
                 T0.toString(), 1000,
+                new SystemSnapshot.Host("linux", "native"),
                 new SystemSnapshot.Capabilities(true, false, false, false),
                 new SystemSnapshot.Cpu(cpu, 8, -1, new double[]{cpu}, new double[]{load, load, load}),
                 new SystemSnapshot.Memory(1000, (long) (memoryRatio * 1000), 1000 - (long) (memoryRatio * 1000),
@@ -93,6 +94,7 @@ class AnomalyDetectorTest {
         AnomalyDetector detector = new AnomalyDetector();
         SystemSnapshot unknown = new SystemSnapshot(
                 T0.toString(), 1000,
+                new SystemSnapshot.Host("linux", "native"),
                 new SystemSnapshot.Capabilities(false, false, false, false),
                 new SystemSnapshot.Cpu(-1, 8, -1, new double[0], new double[0]),
                 new SystemSnapshot.Memory(0, 0, 0, 0, 0, 0, 0, "host"),

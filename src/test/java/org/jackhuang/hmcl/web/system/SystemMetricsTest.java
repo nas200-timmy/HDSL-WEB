@@ -73,9 +73,11 @@ class SystemMetricsTest {
         Files.createDirectories(temp.resolve("sys/block/sda"));
 
         SystemMetrics metrics = new SystemMetrics(temp.resolve("data"), temp.resolve("proc"),
-                temp.resolve("sys/block"));
+                temp.resolve("sys/block"), HostInfo.NATIVE_LINUX);
         try {
             SystemSnapshot first = metrics.sampleNow();
+            assertEquals("linux", first.host().os(), "the snapshot says where it was taken");
+            assertEquals("native", first.host().environment());
             assertTrue(first.capabilities().perCore());
             assertEquals(2, first.cpu().count());
             assertEquals(-1, first.cpu().load(), "the first sample has nothing to compare");

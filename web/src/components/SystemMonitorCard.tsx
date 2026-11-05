@@ -79,6 +79,39 @@ function coreColor(value: number): string {
   return `rgba(78, 111, 255, ${alpha.toFixed(2)})`;
 }
 
+/// 平台说明：同一句话在原生、容器、WSL 下不是一回事。
+function perCoreNote(host: SystemSnapshot["host"]): string {
+  if (host.environment === "container") return "容器里显示的是宿主机核心";
+  if (host.environment === "wsl") return "WSL 里显示的是 Linux 虚拟机的核心";
+  return "每个逻辑处理器";
+}
+
+function diskNote(host: SystemSnapshot["host"]): string {
+  if (host.environment === "container") return "容器里这是宿主机级读数";
+  if (host.environment === "wsl") return "WSL 里这是虚拟机级读数";
+  return "按物理磁盘统计";
+}
+
+function networkNote(host: SystemSnapshot["host"]): string {
+  if (host.environment === "container") return "容器自己的网络命名空间";
+  if (host.environment === "wsl") return "WSL 自己的网络命名空间";
+  return "按网络接口统计";
+}
+
+function memoryNote(host: SystemSnapshot["host"]): string {
+  if (host.os === "linux") {
+    return "Linux 会主动拿页缓存和 slab 填内存、需要时再回收，所以“已缓存/可回收”不是被占用。";
+  }
+  if (host.os === "windows") {
+    return "Windows 的已缓存/待机内存暂未采集：这里只显示“使用中”和“空闲”。";
+  }
+  return "当前平台只采集“使用中”和“空闲”。";
+}
+
+function missingReading(host: SystemSnapshot["host"], what: string): string {
+  return host.os === "windows" ? `Windows 版暂未采集${what}` : `当前平台暂未采集${what}`;
+}
+
 /// 坐标轴的天花板：1/2/5×10^n，比原始最大值高一点，读起来像刻度。
 function niceMax(value: number): number {
   if (value <= 1) return 1;
@@ -493,13 +526,21 @@ export function SystemMonitorCard() {
                     max={1}
                     format={(value) => `${(value * 100).toFixed(0)}%`}
                   />
-                  <div className="perf-label" style={{ margin: "10px 0 6px" }}>
-                    逻辑处理器（容器里显示的是宿主机核心）
-                    {cpu!.quotaCores > 0 && cpu!.quotaCores < cpu!.count
-                      ? ` · 配额 ${cpu!.quotaCores.toFixed(2)} 核`
-                      : ""}
-                  </div>
-                  <CoreGrid cores={cpu!.cores} />
+                  {capabilities!.perCore ? (
+                    <>
+                      <div className="perf-label" style={{ margin: "10px 0 6px" }}>
+                        逻辑处理器（{perCoreNote(snapshot.host)}）
+                        {cpu!.quotaCores > 0 && cpu!.quotaCores < cpu!.count
+                          ? ` · 配额 ${cpu!.quotaCores.toFixed(2)} 核`
+                          : ""}
+                      </div>
+                      <CoreGrid cores={cpu!.cores} />
+                    </>
+                  ) : (
+                    <div className="perf-label" style={{ margin: "10px 0 6px" }}>
+                      {missingReading(snapshot.host, "每核占用")}，只显示总占用。
+                    </div>
+                  )}
                 </div>
                 <div className="perf-side">
                   <div className="comp-row">
@@ -556,24 +597,29 @@ export function SystemMonitorCard() {
                       <span className="chip" style={{ background: COLOR_MEMORY }} />
                       使用中 <b className="mono">{fmtBytes(memory!.usedBytes)}</b>（{pct(memoryRatio)}）
                     </span>
-                    <span>
-                      <span className="chip" style={{ background: COLOR_CACHED }} />
-                      已缓存 <b className="mono">{fmtBytes(memoryCached)}</b>
-                    </span>
-                    <span>
-                      <span className="chip" style={{ background: "#c3cbe0" }} />
-                      可回收 <b className="mono">{fmtBytes(memoryReclaimable)}</b>
-                    </span>
+                    {(memoryCached > 0 || memoryReclaimable > 0) && (
+                      <>
+                        <span>
+                          <span className="chip" style={{ background: COLOR_CACHED }} />
+                          已缓存 <b className="mono">{fmtBytes(memoryCached)}</b>
+                        </span>
+                        <span>
+                          <span className="chip" style={{ background: "#c3cbe0" }} />
+                          可回收 <b className="mono">{fmtBytes(memoryReclaimable)}</b>
+                        </span>
+                      </>
+                    )}
                     <span>
                       <span className="chip" style={{ background: "rgba(128, 128, 128, 0.22)" }} />
                       空闲 <b className="mono">{fmtBytes(memoryFree)}</b>
                     </span>
                     <span>
-                      可用 <b className="mono">{fmtBytes(memory!.availableBytes)}</b>（= 已缓存 + 可回收 + 空闲）
+                      可用 <b className="mono">{fmtBytes(memory!.availableBytes)}</b>（=
+                      {memoryCached + memoryReclaimable > 0 ? "已缓存 + 可回收 + 空闲" : "空闲"}）
                     </span>
                   </div>
                   <div className="perf-label" style={{ marginTop: 4 }}>
-                    Linux 会主动拿页缓存和 slab 填内存、需要时再回收，所以"已缓存/可回收"不是被占用。
+                    {memoryNote(snapshot.host)}
                   </div>
                 </div>
                 <div className="perf-side">
@@ -656,7 +702,7 @@ export function SystemMonitorCard() {
                         ]}
                       />
                       <div className="perf-label" style={{ margin: "4px 0" }}>
-                        容器里这是宿主机级读数
+                        {diskNote(snapshot.host)}
                       </div>
                       {snapshot.disks.map((disk) => (
                         <div className="comp-row" key={disk.name}>
@@ -671,7 +717,7 @@ export function SystemMonitorCard() {
                     <div className="comp-row">
                       <span className="comp-label">磁盘</span>
                       <span className="comp-value" style={{ fontSize: 12 }}>
-                        当前平台不支持磁盘吞吐读数
+                        {missingReading(snapshot.host, "磁盘吞吐")}
                       </span>
                     </div>
                   )}
@@ -719,7 +765,7 @@ export function SystemMonitorCard() {
                         ]}
                       />
                       <div className="perf-label" style={{ margin: "4px 0" }}>
-                        容器自己的网络命名空间
+                        {networkNote(snapshot.host)}
                       </div>
                       {snapshot.networks.map((network) => (
                         <div className="comp-row" key={network.name}>
@@ -734,7 +780,7 @@ export function SystemMonitorCard() {
                     <div className="comp-row">
                       <span className="comp-label">网络</span>
                       <span className="comp-value" style={{ fontSize: 12 }}>
-                        当前平台不支持网络吞吐读数
+                        {missingReading(snapshot.host, "网络吞吐")}
                       </span>
                     </div>
                   )}

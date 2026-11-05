@@ -68,6 +68,7 @@ public final class SystemMetrics {
     public static final int HISTORY_SIZE = 240;
 
     private final Path dataDir;
+    private final HostInfo hostInfo;
     private final Path procRoot;
     private final Path sysBlockRoot;
     private final OperatingSystemMXBean os;
@@ -102,9 +103,15 @@ public final class SystemMetrics {
 
     /// A sampler against explicit roots, for tests.
     SystemMetrics(Path dataDir, Path procRoot, Path sysBlockRoot) {
+        this(dataDir, procRoot, sysBlockRoot, HostInfo.detect());
+    }
+
+    /// A sampler with an explicit host description, for tests.
+    SystemMetrics(Path dataDir, Path procRoot, Path sysBlockRoot, HostInfo hostInfo) {
         this.dataDir = dataDir;
         this.procRoot = procRoot;
         this.sysBlockRoot = sysBlockRoot;
+        this.hostInfo = hostInfo;
         this.os = (OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
     }
 
@@ -262,6 +269,7 @@ public final class SystemMetrics {
         SystemSnapshot snapshot = new SystemSnapshot(
                 at.toString(),
                 interval,
+                new SystemSnapshot.Host(hostInfo.os(), hostInfo.environment()),
                 new SystemSnapshot.Capabilities(cores.length > 0, !disks.isEmpty(), !networks.isEmpty(), false),
                 new SystemSnapshot.Cpu(cpuLoad, coreCount, limits.cpuQuotaCores(), cores, loadAverage),
                 memory,

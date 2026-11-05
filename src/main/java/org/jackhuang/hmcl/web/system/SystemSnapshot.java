@@ -35,6 +35,7 @@ import java.util.List;
 public record SystemSnapshot(
         String at,
         long intervalMs,
+        Host host,
         Capabilities capabilities,
         Cpu cpu,
         Memory memory,
@@ -43,6 +44,14 @@ public record SystemSnapshot(
         List<NetworkRate> networks,
         List<Gpu> gpus,
         Panel panel) {
+
+    /// Which operating system, and whether it is a sandbox. The page's notes
+    /// switch on this: "容器里显示的是宿主机核心" is only true in a container.
+    ///
+    /// @param os          `linux`, `windows`, `macos` or `other`
+    /// @param environment `container`, `wsl` or `native`
+    public record Host(String os, String environment) {
+    }
 
     /// What this host can actually show.
     ///
