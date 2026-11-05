@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.minecraft;
 
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jackhuang.hmcl.web.terminal.TerminalManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
@@ -273,6 +274,77 @@ class McRuntimeTest {
         assertFalse(info.ok());
         assertNotNull(info.error());
         assertTrue(info.error().contains("does not exist"), info.error());
+    }
+
+    /// Since 26.x Minecraft requires Java 25. The official image ships JDK 21 as
+    /// the default JVM and 25 beside it, so the panel picks the installed one per
+    /// version — "install one and point `mc.java_path` at it" is not advice a
+    /// container user can follow, and moving the whole machine's default to 25
+    /// would take 1.16 off the combination it was tested on.
+    @Test
+    void aVersionThatNeedsANewerJavaGetsTheInstalledOne() throws Exception {
+        Assumptions.assumeFalse(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS,
+                "the fake JDKs are shell scripts");
+        Path java21 = fakeJava(dir.resolve("jdk21"), "21.0.9");
+        Path java25 = fakeJava(dir.resolve("jdk25"), "25.0.1");
+
+        assertEquals(java21.toString(),
+                McRuntime.selectJava(java21.toString(), 21, 21, List.of(java21, java25)),
+                "a JVM that already satisfies the version is left alone");
+        assertEquals(java21.toString(),
+                McRuntime.selectJava(java21.toString(), 21, 17, List.of(java21, java25)),
+                "older versions keep the combination they were tested on");
+        assertEquals(java25.toString(),
+                McRuntime.selectJava(java21.toString(), 21, 25, List.of(java21, java25)),
+                "a version that needs 25 gets the JDK that has it");
+        assertEquals(java21.toString(),
+                McRuntime.selectJava(java21.toString(), 21, 25, List.of(java21)),
+                "with no suitable JDK the panel's own comes back, so the refusal can name it");
+    }
+
+    @Test
+    void theLowestJdkThatSatisfiesTheVersionWins() throws Exception {
+        Assumptions.assumeFalse(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS,
+                "the fake JDKs are shell scripts");
+        Path java21 = fakeJava(dir.resolve("jdk21"), "21.0.9");
+        Path java25 = fakeJava(dir.resolve("jdk25"), "25.0.1");
+        Path java29 = fakeJava(dir.resolve("jdk29"), "29.0.2");
+
+        assertEquals(java25.toString(),
+                McRuntime.selectJava(java21.toString(), 21, 25, List.of(java21, java25, java29)),
+                "a version that asks for 25 is not asking for 29");
+    }
+
+    /// The scan against whatever this machine actually has. The depth is the part
+    /// that can silently break: `/usr/lib/jvm/<jdk>/bin/java` is three levels
+    /// below the root, and an off-by-one finds nothing and reports "no suitable
+    /// JDK" on a machine that has one.
+    @Test
+    void theInstalledJdksAreFoundWhereTheDistributionsPutThem() {
+        Assumptions.assumeTrue(OperatingSystem.CURRENT_OS == OperatingSystem.LINUX,
+                "the layout under test is the Linux one");
+        Assumptions.assumeTrue(Files.isDirectory(Path.of("/usr/lib/jvm")));
+
+        List<Path> candidates = McRuntime.javaCandidates();
+
+        assertFalse(candidates.isEmpty(), "the JDK running this test sits in /usr/lib/jvm");
+        for (Path candidate : candidates) {
+            assertEquals("java", candidate.getFileName().toString(), candidate.toString());
+            assertEquals("bin", candidate.getParent().getFileName().toString(), candidate.toString());
+            assertTrue(Files.isRegularFile(candidate), candidate.toString());
+        }
+    }
+
+    /// A JDK in a temp directory that answers `-version` like the real thing.
+    ///
+    /// @param home    the fake JDK root
+    /// @param version the version it reports
+    /// @return its `bin/java`
+    private static Path fakeJava(Path home, String version) throws Exception {
+        Path java = Files.createDirectories(home.resolve("bin")).resolve("java");
+        Files.writeString(java, "#!/bin/sh\necho 'openjdk version \"" + version + "\" 2025-09-16' >&2\n");
+        assertTrue(java.toFile().setExecutable(true), "the fake JDK has to be executable");
+        return java;
     }
 
     @Test

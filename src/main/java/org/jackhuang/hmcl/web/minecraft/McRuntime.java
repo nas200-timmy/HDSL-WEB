@@ -123,7 +123,7 @@ public final class McRuntime {
     /// @param path    the resolved executable, or `""` when none could be resolved
     /// @param version the `java -version` string, or `null` when it could not be read
     /// @param major   the parsed major version (8 for `1.8.0_…`), or `0`
-    /// @param source  `panel`, `configured`, or `none`
+    /// @param source  `panel`, `configured`, `installed`, or `none`
     /// @param ok      whether `-version` actually ran
     /// @param error   why it is not ok, or `null`
     public record JavaInfo(String path, @Nullable String version, int major,
@@ -214,10 +214,9 @@ public final class McRuntime {
         this.javaSource = javaSource;
         CommandFactory factory = commandFactory;
         if (factory == null && javaBin != null) {
-            String program = javaBin;
             factory = instance -> {
                 List<String> command = new ArrayList<>();
-                command.add(program);
+                command.add(javaFor(instance));
                 command.addAll(heapArgs(instance.memoryMb()));
                 // The pipe pump decodes UTF-8. On JDK 17 + a Chinese Windows
                 // code page the child would otherwise write GBK (JEP 400 made
@@ -335,9 +334,115 @@ public final class McRuntime {
             return new JavaInfo("", null, 0, javaSource, false,
                     "no Java executable is configured for Minecraft servers");
         }
-        JavaProbe probe = JAVA_PROBES.computeIfAbsent(javaBin, McRuntime::probeJava);
+        JavaProbe probe = probe(javaBin);
         return new JavaInfo(javaBin, probe.version(), probe.major(), javaSource,
                 probe.error() == null, probe.error());
+    }
+
+    /// The `java` an instance is actually launched with.
+    ///
+    /// `mc.java_path` wins outright — an operator who named a JDK meant it. So does
+    /// a JVM that already satisfies the version. The default is the panel's own JVM
+    /// (the combination this panel was tested with), except when the instance's
+    /// `version.json` asks for a newer major than that JVM offers **and** a suitable
+    /// JDK is installed beside it. Since 26.x Minecraft requires Java 25 while the
+    /// official image's default JVM is 21: "install one and point mc.java_path at
+    /// it" is not advice a container user can follow, and refusing every newer
+    /// version on an image that already ships the JDK is the wrong answer.
+    ///
+    /// @param instance the instance about to start
+    /// @return the java executable
+    String javaFor(McInstance instance) {
+        if (javaBin == null || !"panel".equals(javaSource)) {
+            return javaBin;
+        }
+        int required = requiredJava(instance.version());
+        if (required <= 0) {
+            return javaBin;
+        }
+        return selectJava(javaBin, javaInfo().major(), required, javaCandidates());
+    }
+
+    /// The selection itself, with the installed JDKs passed in so a test can drive it.
+    ///
+    /// The **lowest** JDK that satisfies the version is chosen, not the newest: a
+    /// version that asks for 25 is not asking for 29.
+    ///
+    /// @param chosen      the panel's own java
+    /// @param chosenMajor its major version, or `0` when unknown
+    /// @param required    what the Minecraft version asks for
+    /// @param candidates  installed JDKs to consider
+    /// @return the java to run
+    static String selectJava(String chosen, int chosenMajor, int required, List<Path> candidates) {
+        if (chosenMajor > 0 && chosenMajor >= required) {
+            return chosen;
+        }
+        Path best = null;
+        int bestMajor = Integer.MAX_VALUE;
+        for (Path candidate : candidates) {
+            String program = candidate.toString();
+            if (program.equals(chosen)) {
+                continue;
+            }
+            int major = probe(program).major();
+            if (major >= required && major < bestMajor) {
+                best = candidate;
+                bestMajor = major;
+            }
+        }
+        return best == null ? chosen : best.toString();
+    }
+
+    /// The JDKs installed beside the panel, for the versions that need a newer one.
+    ///
+    /// Linux keeps them under `/usr/lib/jvm` (Debian, RHEL) or `/usr/lib64/jvm`
+    /// (SUSE); macOS under `/Library/Java/JavaVirtualMachines`. Windows is not
+    /// scanned: a JDK there is a directory somebody unzipped somewhere, and
+    /// `mc.java_path` is the documented way to name it.
+    ///
+    /// @return every `bin/java` found, at most one JVM directory below each root
+    static List<Path> javaCandidates() {
+        List<Path> found = new ArrayList<>();
+        switch (OperatingSystem.CURRENT_OS) {
+            case LINUX -> {
+                // <root>/<jdk>/bin/java — depth 3, counting the root as 0.
+                for (String root : List.of("/usr/lib/jvm", "/usr/lib64/jvm")) {
+                    collectJava(Path.of(root), 3, found);
+                }
+            }
+            // <root>/<jdk>/Contents/Home/bin/java
+            case MACOS -> collectJava(Path.of("/Library/Java/JavaVirtualMachines"), 5, found);
+            default -> {
+            }
+        }
+        found.sort(java.util.Comparator.comparing(Path::toString));
+        return List.copyOf(found);
+    }
+
+    private static void collectJava(Path root, int depth, List<Path> found) {
+        if (!Files.isDirectory(root)) {
+            return;
+        }
+        try (var stream = Files.walk(root, depth)) {
+            stream.filter(McRuntime::isJavaExecutable).forEach(path -> found.add(path.toAbsolutePath()));
+        } catch (IOException | RuntimeException e) {
+            // An unreadable JVM directory is not worth failing a start over; the
+            // panel's own java still works for everything that does not need 25.
+            LOG.warning("Could not scan " + root + " for JDKs: " + e.getMessage());
+        }
+    }
+
+    private static boolean isJavaExecutable(Path path) {
+        Path name = path.getFileName();
+        Path parent = path.getParent();
+        return name != null && "java".equals(name.toString())
+                && parent != null && parent.getFileName() != null
+                && "bin".equals(parent.getFileName().toString())
+                && Files.isRegularFile(path);
+    }
+
+    private static JavaProbe probe(String program) {
+        return JAVA_PROBES.computeIfAbsent(program, McRuntime::probeJava);
     }
 
     private static JavaProbe probeJava(String program) {
@@ -901,7 +1006,13 @@ public final class McRuntime {
         if (versionsRoot == null || javaBin == null) {
             return;
         }
-        JavaInfo java = javaInfo();
+        // The executable that will actually launch, not the panel's own: when the
+        // version asks for 25 and the image ships one, the refusal below must not
+        // be about the JVM nobody was going to use.
+        String program = javaFor(instance);
+        JavaProbe probe = probe(program);
+        JavaInfo java = new JavaInfo(program, probe.version(), probe.major(), sourceOf(program),
+                probe.error() == null, probe.error());
         if (!java.ok()) {
             throw new McException("The Java configured for Minecraft servers cannot be run: `"
                     + java.path() + "` — " + java.error()
@@ -915,8 +1026,20 @@ public final class McRuntime {
         if (java.major() > 0 && java.major() < required) {
             throw new McException("Minecraft " + instance.version() + " needs Java " + required
                     + " or newer, but `" + java.path() + "` is Java " + java.major()
-                    + "; point mc.java_path at a newer JDK/JRE or install one and set JAVA_HOME");
+                    + "; install a newer JDK/JRE (the container image ships JDK 25 under /usr/lib/jvm)"
+                    + " or point mc.java_path at one");
         }
+    }
+
+    /// Where `program` came from, for the refusal text and the API.
+    ///
+    /// @param program the executable that will run
+    /// @return `configured`, `panel`, or `installed`
+    private String sourceOf(String program) {
+        if (!"panel".equals(javaSource)) {
+            return javaSource;
+        }
+        return program.equals(javaBin) ? "panel" : "installed";
     }
 
     private int requiredJava(String version) {

@@ -2,7 +2,22 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布
+## v0.6.71 — 2026-11-06 · 镜像内置 JDK 25；审计修复一轮
+
+**容器镜像内置 JDK 25，MC 按版本挑 JVM**
+
+- 三个发行版分支都多装一份 JDK 25（Debian `openjdk-25-jdk-headless`、Fedora
+  与 openSUSE `java-25-openjdk-headless`；拿不到时只告警，不中断构建）。
+  起因是审计里那条：官方镜像装得上 `26.x`，却因为只有 Java 21 而启动不了——
+  `Minecraft 26.3 needs Java 25 or newer`。
+- 默认 `java` 仍钉在 21（Dockerfile 里用 `update-alternatives` 钉回来并打印
+  实际默认值）：面板自己、以及 1.16 那批老版本，都留在实测过的组合上。
+- 新版本要更高 Java 时由面板按实例挑：`McRuntime#javaFor` 在版本要求的主版本
+  高于面板自身 JVM 时，扫本机已装的 JDK（Linux `/usr/lib/jvm`、`/usr/lib64/jvm`；
+  macOS `/Library/Java/JavaVirtualMachines`）并选**满足要求的最低那个**。
+  `mc.java_path` 与 `JAVA_HOME` 仍然一票否决。`java.source` 新增 `installed`，
+  MC 卡片上据此说明"来自本机已安装的 JDK"。
+- 启动前的拒绝文案同步：点名实际会跑的那个 java，并指出镜像里 25 的位置。
 
 **审计修复：口径、崩溃与一处性能洼地**
 

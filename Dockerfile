@@ -168,6 +168,13 @@ LABEL org.opencontainers.image.licenses="GPL-3.0-only"
 #                  repairs things by hand, and `javac`/`jar`/`jcmd` are the tools
 #                  that get reached for. Drags in util-linux -> flock(1), which
 #                  the session-lease check shells out to.
+# openjdk-25-jdk-headless  the second JDK, for Minecraft only. Since 26.x the
+#                  server requires Java 25; without it the official image can
+#                  install those versions and then refuse to start them. The
+#                  default `java` stays 21 (pinned below), and the panel picks
+#                  this one per instance when the version asks for it
+#                  (`McRuntime#javaFor`) — old versions keep the combination
+#                  they were tested on.
 #
 # The rest of this list is a deliberate **build toolchain**, even though the
 # panel itself compiles nothing: this container is the environment people
@@ -238,7 +245,8 @@ RUN set -eux; \
         apt-get install -y --no-install-recommends \
           7zip build-essential busybox-static bzip2 ca-certificates cargo curl \
           ffmpeg git golang-go less libatomic1 libavcodec-extra nano \
-          openjdk-21-jdk-headless openssh-client openssh-server pkg-config procps \
+          openjdk-21-jdk-headless openjdk-25-jdk-headless openssh-client openssh-server \
+          pkg-config procps \
           python-is-python3 python3 rsync rustc sshpass tini unzip vim-tiny \
           wget xz-utils zip zstd; \
         rm -rf /var/lib/apt/lists/* ;; \
@@ -250,6 +258,9 @@ RUN set -eux; \
           sshpass tini unzip vim-minimal wget xz zip zstd; \
         dnf install -y java-21-openjdk-headless \
           || dnf install -y java-25-openjdk-headless; \
+        dnf install -y java-25-openjdk-headless \
+          || echo "HDSL-web: this base has no java-25-openjdk-headless; Minecraft versions" \
+                  "that require Java 25 will refuse to start" >&2; \
         dnf clean all ;; \
       opensuse*) \
         zypper --non-interactive install --no-recommends \
@@ -257,12 +268,29 @@ RUN set -eux; \
           go java-21-openjdk-headless less libatomic1 make nano openssh \
           pkg-config procps python3 rsync rust sshpass tini unzip vim wget xz \
           zip zstd; \
+        zypper --non-interactive install --no-recommends java-25-openjdk-headless \
+          || echo "HDSL-web: this base has no java-25-openjdk-headless; Minecraft versions" \
+                  "that require Java 25 will refuse to start" >&2; \
         zypper clean --all ;; \
       *) echo "HDSL-web: unsupported base '$ID'; set HDSL_BASE to a Debian, Fedora or openSUSE image" >&2; \
          exit 1 ;; \
     esac; \
     ln -sf "$(command -v tini)" /usr/local/bin/tini; \
     /usr/local/bin/tini --version
+
+# 默认 JVM 钉在 21：面板自己、以及 1.16 那批老版本 MC，都是按 21 实测过的组合。
+# 装 25 会把 update-alternatives 的默认值抢过去（它只按版本号排序），所以这里显式
+# 钉回来——「新版本 MC 用 25」应当是面板按版本挑（`McRuntime#javaFor`），而不是整台
+# 机器的默认 JVM 跟着变。钉不上不中断构建：发行版的 alternative 名不一定叫 java，
+# 该包也可能没注册；打印实际默认值与已安装的 JVM 供排查。
+RUN set -eux; \
+    for root in /usr/lib/jvm /usr/lib64/jvm; do \
+      for target in "$root"/java-21-openjdk*/bin/java; do \
+        if [ -x "$target" ]; then update-alternatives --set java "$target" || true; fi; \
+      done; \
+    done; \
+    java -version 2>&1 | head -1; \
+    ls -d /usr/lib/jvm/* /usr/lib64/jvm/* 2>/dev/null || true
 
 # 兜底断言：ffmpeg 与 ffprobe 必须在，且按 HDSL_ENCODERS 决定 x264/x265 缺失是失败
 # 还是告警。apt/dnf/zypper 解析出错、或者哪天 extra 变体的包名变了，都在构建期暴露

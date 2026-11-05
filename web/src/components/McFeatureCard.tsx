@@ -204,13 +204,18 @@ export function McFeatureCard() {
             <span className={feature.java.ok ? "dim" : undefined}
                   style={feature.java.ok ? undefined : { color: "var(--monet-error)" }}>
               {feature.java.ok
-                ? `（${feature.java.version ?? "版本未知"}，${feature.java.source === "panel" ? "来自面板运行时" : "来自 mc.java_path"}）`
+                ? `（${feature.java.version ?? "版本未知"}，${feature.java.source === "panel"
+                    ? "来自面板运行时"
+                    : feature.java.source === "installed"
+                      ? "来自本机已安装的 JDK（按 MC 版本要求挑选）"
+                      : "来自 mc.java_path"}）`
                 : `（不可用：${feature.java.error ?? "未知原因"}）`}
             </span>
           </div>
           <div className="dim" style={{ fontSize: 11 }}>
-            面板不随包分发 JDK/JRE：默认复用面板自己的 Java；所选 MC 版本需要更高版本时，
-            请自备 Java 21+ 并设置 server.yaml 的 `mc.java_path` 或环境变量 `HDSL_MC_JAVA_PATH`。
+            面板默认复用自身的 Java；所选 MC 版本要求更高的 Java 时，会用本机已装且满足要求的
+            那份 JDK（容器镜像内置 21 与 25，面板自身仍跑 21），都没有时才拒绝启动。也可以
+            自备 Java 并设置 server.yaml 的 `mc.java_path` 或环境变量 `HDSL_MC_JAVA_PATH`。
             每个实例在 `&lt;服务器目录&gt;/&lt;id&gt;/`，存档、server.jar 与日志都在那里；
             改 `mc.dir` / `HDSL_MC_DIR` 不会搬动已建实例。
           </div>

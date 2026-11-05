@@ -1046,9 +1046,18 @@ MC 服务端与 AI agent 是同一类工作负载：执行第三方代码、不�
 - **Java**：默认复用面板自己的 JVM（裸部署能启动面板就至少有一个 Java）；`java -version`
   的结果与来源通过 `GET /api/mc/feature` 的 `java` 字段暴露。版本不够时启动前报“需要 Java N
   或更新，当前是 M”，并提示 `mc.java_path` / `JAVA_HOME`。面板**不代管 JRE**，也不随包分发。
-- **版本与 Java 的对应**：2026 年的 `26.x` 服务端要求 Java 25+；只有 JDK 21 的机器请在创建
-  实例时选 `1.21.x`（`1.21.11` 已于 Windows 裸部署真机跑通）。面板会按所选版本在启动前
-  拒绝并给出实际 Java 版本，不会拖到 `UnsupportedClassVersionError` 才说话。
+- **按版本挑 JVM**（v0.6.71 起）：所选版本要求的主版本号高于面板自身 JVM 时，面板会扫本机
+  已装的 JDK 并选**满足要求的最低那个**（Linux：`/usr/lib/jvm`、`/usr/lib64/jvm`；
+  macOS：`/Library/Java/JavaVirtualMachines`；Windows 不扫，用 `mc.java_path` 指定）。
+  选了哪个会体现在 `java.source`：`panel`（面板自己的）、`installed`（本机另一份 JDK）、
+  `configured`（`mc.java_path` 指定）。`mc.java_path` 与 `JAVA_HOME` 仍然一票否决。
+  官方容器镜像因此内置 JDK 21 与 25：默认 `java` 钉在 21（面板与老版本 MC 沿用实测组合），
+  只有 26.x 这类要 25 的版本才用 25。
+- **版本与 Java 的对应**：2026 年的 `26.x` 服务端要求 Java 25+。容器镜像里直接可用；
+  裸部署只装了 JDK 21 的机器仍建议在创建实例时选 `1.21.x`（`1.21.11` 已于 Windows 裸部署
+  真机跑通），或自己装一份 JDK 25 ——面板会自己找到它，不必改配置。
+  面板会按所选版本在启动前拒绝并给出实际 Java 版本，不会拖到 `UnsupportedClassVersionError`
+  才说话。
 - **编码**：子进程固定 `-Dfile.encoding=UTF-8`（含 `sun.stdout/stderr.encoding`），与 pipe
   pump 的 UTF-8 解码一致；JDK 17 + 中文 Windows 不再出现 GBK 乱码。
 - **存储根**：`HDSL_MC_DIR` → `mc.dir` → `$HOME/mc`；`GET /api/mc/feature` 的 `storage`
