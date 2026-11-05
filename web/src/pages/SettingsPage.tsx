@@ -82,7 +82,6 @@ function formatRemaining(seconds: number | undefined): string {
 type SettingsTab =
   | "general"
   | "node"
-  | "launcher-general"
   | "appearance"
   | "download-source"
   | "brands"
@@ -105,7 +104,6 @@ export function SettingsPage() {
     [
       "general",
       "node",
-      "launcher-general",
       "appearance",
       "download-source",
       "brands",
@@ -146,11 +144,6 @@ export function SettingsPage() {
           {
             title: I18N["launcher"],
             items: [
-              {
-                key: "launcher-general",
-                title: I18N["settings.launcher.general"],
-                icon: <TuneIcon size={20} />,
-              },
               {
                 key: "appearance",
                 title: I18N["dsh.settings.appearance"],
@@ -205,7 +198,6 @@ export function SettingsPage() {
       >
         {tab === "general" && <GeneralTab />}
         {tab === "node" && <NodeTab />}
-        {tab === "launcher-general" && <LauncherGeneralTab />}
         {tab === "appearance" && <AppearanceTab />}
         {tab === "download-source" && <DownloadSourceTab />}
         {tab === "brands" && <BrandManagementPanel />}
@@ -971,38 +963,6 @@ function NodeTab() {
           <button className="btn btn-text ripple-host" style={{ height: 28 }} onClick={() => window.open("https://nodejs.org", "_blank", "noopener")}>
             打开 nodejs.org
           </button>
-        </div>
-      </div>
-    </>
-  );
-}
-
-/* ---------------- 启动器 · 通用（网页版映射：语言/服务器信息入口） ---------------- */
-
-function LauncherGeneralTab() {
-  const [, setSearchParams] = useSearchParams();
-  return (
-    <>
-      <div className="section-caption">
-        <TuneIcon size={16} />
-        {I18N["settings.launcher.general"]}
-      </div>
-      <div className="card">
-        <div className="comp-row">
-          <span className="comp-label">界面语言</span>
-          <span className="comp-value">简体中文（网页版暂只提供中文界面）</span>
-        </div>
-        <div className="comp-row">
-          <span className="comp-label">服务器信息</span>
-          <span className="comp-value">
-            <button
-              className="btn btn-text"
-              style={{ height: 28 }}
-              onClick={() => setSearchParams({ tab: "general" }, { replace: true })}
-            >
-              前往「通用」查看
-            </button>
-          </span>
         </div>
       </div>
     </>
