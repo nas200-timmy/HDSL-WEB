@@ -1189,3 +1189,17 @@ select.input {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+.mem-bar {
+  display: flex;
+  height: 20px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--monet-surface-container-high);
+  border: 1px solid var(--monet-outline-variant);
+}
+
+.mem-bar > div {
+  height: 100%;
+  transition: width 200ms var(--ease);
+}

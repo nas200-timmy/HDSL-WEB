@@ -54,7 +54,9 @@ class SystemMetricsTest {
         stat(100, 100, 100, 100);
         write("proc/meminfo", """
                 MemTotal: 1000 kB
+                MemFree: 200 kB
                 MemAvailable: 400 kB
+                Cached: 200 kB
                 SwapTotal: 200 kB
                 SwapFree: 100 kB
                 """);
@@ -83,9 +85,16 @@ class SystemMetricsTest {
             assertEquals(1, first.networks().size());
             assertEquals(-1, first.networks().get(0).rxBytesPerSec());
             assertEquals(1234L * 1024, first.panel().rssBytes());
-            assertTrue(first.memory().totalBytes() > 0);
+            assertEquals(1000L * 1024, first.memory().totalBytes());
+            assertEquals(600L * 1024, first.memory().usedBytes());
+            assertEquals(400L * 1024, first.memory().availableBytes());
+            assertEquals(200L * 1024, first.memory().cachedBytes());
+            assertEquals(200L * 1024, first.memory().freeBytes());
             assertEquals(first.memory().totalBytes(),
                     first.memory().usedBytes() + first.memory().availableBytes());
+            assertEquals(first.memory().availableBytes(),
+                    first.memory().cachedBytes() + first.memory().freeBytes(),
+                    "the bar's three segments add up to the whole memory");
             assertEquals(3, first.cpu().loadAverage().length);
 
             Thread.sleep(250);

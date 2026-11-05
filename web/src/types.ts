@@ -839,6 +839,10 @@ export interface SystemMemory {
   totalBytes: number;
   usedBytes: number;
   availableBytes: number;
+  /** 完全空闲的物理内存 */
+  freeBytes: number;
+  /** 页缓存 + buffers，可回收，Linux 看起来"满"就是因为它 */
+  cachedBytes: number;
   swapTotalBytes: number;
   swapUsedBytes: number;
   /** cgroup = 数字是容器限额；host = 宿主/整机 */

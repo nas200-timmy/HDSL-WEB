@@ -336,25 +336,44 @@ public final class SystemMetrics {
         }
     }
 
+    /// The four numbers a task manager puts on its memory page: in use,
+    /// available, cached (reclaimable) and free.
+    ///
+    /// Linux fills memory with page cache on purpose, so "total minus free"
+    /// would read as permanently full. The split follows the kernel's own
+    /// definition instead: `available` already includes the reclaimable cache,
+    /// so `used = total - available`, and the bar is
+    /// `used | cached | free` where `cached + free == available`.
     private SystemSnapshot.Memory memory(CgroupLimits.Limits limits) {
         String text = read(procRoot.resolve("meminfo"));
         ProcMeminfo.Memory host = text == null ? null : ProcMeminfo.parse(text);
         long total = host == null ? os.getTotalMemorySize() : host.totalBytes();
         long available = host == null ? os.getFreeMemorySize() : host.availableBytes();
+        long free = host == null ? os.getFreeMemorySize() : host.freeBytes();
+        long cached = host == null ? 0 : host.cachedBytes();
         long swapTotal = host == null ? Math.max(0, os.getTotalSwapSpaceSize()) : host.swapTotalBytes();
         long swapFree = host == null ? Math.max(0, os.getFreeSwapSpaceSize()) : host.swapFreeBytes();
         String source = "host";
         if (limits.memoryLimitBytes() > 0) {
             total = limits.memoryLimitBytes();
-            long used = limits.memoryUsedBytes() >= 0
+            long current = limits.memoryUsedBytes() >= 0
                     ? limits.memoryUsedBytes()
-                    : Math.min(Math.max(0, (host == null ? os.getTotalMemorySize() - os.getFreeMemorySize() : host.totalBytes() - host.availableBytes())), total);
-            available = Math.max(0, total - used);
+                    : Math.min(Math.max(0, host == null
+                            ? os.getTotalMemorySize() - os.getFreeMemorySize()
+                            : host.totalBytes() - host.availableBytes()), total);
+            cached = limits.fileCacheBytes() >= 0
+                    ? Math.max(0, Math.min(limits.fileCacheBytes(), current))
+                    : 0;
+            long usedByCgroup = Math.max(0, current - cached);
+            available = Math.max(0, total - usedByCgroup);
+            free = Math.max(0, total - usedByCgroup - cached);
             source = "cgroup";
         }
         long used = Math.max(0, total - available);
+        cached = Math.max(0, Math.min(cached, Math.max(0, total - used)));
+        free = Math.max(0, Math.min(free, Math.max(0, total - used - cached)));
         long swapUsed = Math.max(0, swapTotal - swapFree);
-        return new SystemSnapshot.Memory(total, used, available, swapTotal, swapUsed, source);
+        return new SystemSnapshot.Memory(total, used, available, free, cached, swapTotal, swapUsed, source);
     }
 
     /// The data directory's filesystem and, when it is a different one, the

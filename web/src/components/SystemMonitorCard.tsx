@@ -8,12 +8,13 @@ import { TuneIcon } from "./icons";
 /// 后端环形缓冲的容量；首次打开要一次拿满，之后只取最新一帧。
 const HISTORY_MAX = 240;
 
-type PerfTab = "overview" | "cpu" | "gpu" | "disk" | "network";
+type PerfTab = "overview" | "cpu" | "memory" | "gpu" | "disk" | "network";
 
 /// 顺序照任务管理器的性能页：总览打头，然后是 CPU、GPU、硬盘、网络。
 const TABS: Array<{ id: PerfTab; label: string }> = [
   { id: "overview", label: "总览" },
   { id: "cpu", label: "CPU" },
+  { id: "memory", label: "内存" },
   { id: "gpu", label: "GPU" },
   { id: "disk", label: "硬盘" },
   { id: "network", label: "网络" },
@@ -25,6 +26,7 @@ const COLOR_READ = "#2aa198";
 const COLOR_WRITE = "#e8a33d";
 const COLOR_RX = "#4e6fff";
 const COLOR_TX = "#e05d5d";
+const COLOR_CACHED = "#9aa7c7";
 
 /// 0..1 的占用写成百分比；-1 是"还在采第一个差值"。
 function pct(value: number): string {
@@ -235,6 +237,31 @@ function CoreGrid({ cores }: { cores: number[] }) {
   );
 }
 
+/// 内存构成条：使用中 | 已缓存 | 可回收 | 空闲。
+///
+/// `available = cached + reclaimable + free`（available 里还含 slab 这类
+/// "不用到就不释放"的内核缓存），所以三块加起来正好是可用内存；把可回收单独
+/// 画一段，条子才不会剩一截莫名其妙的空档。
+function MemoryBar({ memory }: { memory: SystemSnapshot["memory"] }) {
+  const total = Math.max(1, memory.totalBytes);
+  const available = Math.max(0, memory.availableBytes);
+  const cached = Math.min(Math.max(0, memory.cachedBytes), available);
+  const free = Math.min(Math.max(0, memory.freeBytes), Math.max(0, available - cached));
+  const reclaimable = Math.max(0, available - cached - free);
+  const width = (value: number) => `${Math.max(0, Math.min(100, (value / total) * 100)).toFixed(2)}%`;
+  return (
+    <div
+      className="mem-bar"
+      title={`使用中 ${fmtBytes(memory.usedBytes)} · 已缓存 ${fmtBytes(cached)} · 可回收 ${fmtBytes(reclaimable)} · 空闲 ${fmtBytes(free)}`}
+    >
+      <div style={{ width: width(memory.usedBytes), background: COLOR_MEMORY }} />
+      <div style={{ width: width(cached), background: COLOR_CACHED }} />
+      <div style={{ width: width(reclaimable), background: "#c3cbe0" }} />
+      <div style={{ width: width(free), background: "rgba(128, 128, 128, 0.22)" }} />
+    </div>
+  );
+}
+
 /// 通用 → 系统资源：任务管理器式的性能页。
 ///
 /// 一排标签页（总览 / CPU / GPU / 硬盘 / 网络），默认总览。数据全部来自
@@ -304,7 +331,8 @@ export function SystemMonitorCard() {
       if (!Number.isFinite(t)) continue;
       if (sample.cpu.load >= 0) cpu.push({ t, v: sample.cpu.load });
       if (sample.memory.totalBytes > 0) {
-        memory.push({ t, v: sample.memory.usedBytes / sample.memory.totalBytes });
+        // 任务管理器的内存图是"0 到总量"的绝对刻度，不是百分比。
+        memory.push({ t, v: sample.memory.usedBytes });
       }
       const readRate = totalRate(sample.disks.map((disk) => disk.readBytesPerSec));
       const writeRate = totalRate(sample.disks.map((disk) => disk.writeBytesPerSec));
@@ -318,6 +346,14 @@ export function SystemMonitorCard() {
     return { cpu, memory, read, write, rx, tx };
   }, [history]);
 
+  const memoryMax = useMemo(() => {
+    let max = 0;
+    for (const sample of history.slice(-60)) {
+      max = Math.max(max, sample.memory.totalBytes);
+    }
+    return max || 1;
+  }, [history]);
+
   const cpu = snapshot?.cpu;
   const memory = snapshot?.memory;
   const capabilities = snapshot?.capabilities;
@@ -326,6 +362,13 @@ export function SystemMonitorCard() {
   const netRx = snapshot ? totalRate(snapshot.networks.map((network) => network.rxBytesPerSec)) : -1;
   const netTx = snapshot ? totalRate(snapshot.networks.map((network) => network.txBytesPerSec)) : -1;
   const memoryRatio = memory && memory.totalBytes > 0 ? memory.usedBytes / memory.totalBytes : -1;
+  // 内存条的三块非使用区：页缓存、其他可回收（slab 等）、真正空闲。
+  const memoryAvailable = memory ? Math.max(0, memory.availableBytes) : 0;
+  const memoryCached = memory ? Math.min(Math.max(0, memory.cachedBytes), memoryAvailable) : 0;
+  const memoryFree = memory
+    ? Math.min(Math.max(0, memory.freeBytes), Math.max(0, memoryAvailable - memoryCached))
+    : 0;
+  const memoryReclaimable = Math.max(0, memoryAvailable - memoryCached - memoryFree);
   const activeTab: PerfTab = mobile ? "overview" : tab;
 
   return (
@@ -400,10 +443,10 @@ export function SystemMonitorCard() {
                     <div className="bar" style={{ width: `${Math.max(0, Math.min(100, memoryRatio * 100))}%` }} />
                   </div>
                   <LineChart
-                    series={[{ label: "内存", color: COLOR_MEMORY, points: points.memory }]}
+                    series={[{ label: "使用中", color: COLOR_MEMORY, points: points.memory }]}
                     height={48}
-                    max={1}
-                    format={(value) => `${(value * 100).toFixed(0)}%`}
+                    max={memoryMax}
+                    format={fmtBytes}
                   />
 
                   <div className="comp-row">
@@ -477,6 +520,81 @@ export function SystemMonitorCard() {
                     <span className="comp-label">线程</span>
                     <span className="comp-value mono" style={{ fontSize: 12 }}>
                       {snapshot.panel.threads}
+                    </span>
+                  </div>
+                  <div className="comp-row">
+                    <span className="comp-label">采样</span>
+                    <span className="comp-value mono" style={{ fontSize: 12 }}>
+                      {Math.round(snapshot.intervalMs / 1000)} 秒
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "memory" && (
+              <div className="perf-layout">
+                <div className="perf-main">
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10, padding: "2px 2px 4px" }}>
+                    <span className="perf-big">{pct(memoryRatio)}</span>
+                    <span className="perf-label">
+                      {fmtBytes(memory!.usedBytes)} / {fmtBytes(memory!.totalBytes)} 使用中
+                    </span>
+                  </div>
+                  <LineChart
+                    series={[{ label: "使用中", color: COLOR_MEMORY, points: points.memory }]}
+                    height={190}
+                    max={memory!.totalBytes || memoryMax}
+                    format={fmtBytes}
+                  />
+                  <div className="perf-label" style={{ margin: "10px 0 6px" }}>
+                    内存构成
+                  </div>
+                  <MemoryBar memory={memory!} />
+                  <div className="perf-legend" style={{ marginTop: 6 }}>
+                    <span>
+                      <span className="chip" style={{ background: COLOR_MEMORY }} />
+                      使用中 <b className="mono">{fmtBytes(memory!.usedBytes)}</b>（{pct(memoryRatio)}）
+                    </span>
+                    <span>
+                      <span className="chip" style={{ background: COLOR_CACHED }} />
+                      已缓存 <b className="mono">{fmtBytes(memoryCached)}</b>
+                    </span>
+                    <span>
+                      <span className="chip" style={{ background: "#c3cbe0" }} />
+                      可回收 <b className="mono">{fmtBytes(memoryReclaimable)}</b>
+                    </span>
+                    <span>
+                      <span className="chip" style={{ background: "rgba(128, 128, 128, 0.22)" }} />
+                      空闲 <b className="mono">{fmtBytes(memoryFree)}</b>
+                    </span>
+                    <span>
+                      可用 <b className="mono">{fmtBytes(memory!.availableBytes)}</b>（= 已缓存 + 可回收 + 空闲）
+                    </span>
+                  </div>
+                  <div className="perf-label" style={{ marginTop: 4 }}>
+                    Linux 会主动拿页缓存和 slab 填内存、需要时再回收，所以"已缓存/可回收"不是被占用。
+                  </div>
+                </div>
+                <div className="perf-side">
+                  <div className="comp-row">
+                    <span className="comp-label">来源</span>
+                    <span className="comp-value" style={{ fontSize: 12 }}>
+                      {memory!.source === "cgroup" ? "容器限额" : "整机"}
+                    </span>
+                  </div>
+                  <div className="comp-row">
+                    <span className="comp-label">交换</span>
+                    <span className="comp-value mono" style={{ fontSize: 12 }}>
+                      {memory!.swapTotalBytes > 0
+                        ? `${fmtBytes(memory!.swapUsedBytes)} / ${fmtBytes(memory!.swapTotalBytes)}`
+                        : "未启用"}
+                    </span>
+                  </div>
+                  <div className="comp-row">
+                    <span className="comp-label">面板占用</span>
+                    <span className="comp-value mono" style={{ fontSize: 12 }}>
+                      {fmtBytes(snapshot.panel.rssBytes)}
                     </span>
                   </div>
                   <div className="comp-row">

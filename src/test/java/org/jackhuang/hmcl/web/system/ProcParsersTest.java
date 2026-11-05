@@ -95,11 +95,16 @@ class ProcParsersTest {
                 MemTotal:       32568908 kB
                 MemFree:         2517832 kB
                 MemAvailable:   11508008 kB
+                Buffers:         1239168 kB
+                Cached:          6888240 kB
                 SwapTotal:       5242876 kB
                 SwapFree:        4534212 kB
                 """);
         assertEquals(32568908L * 1024, memory.totalBytes());
         assertEquals(11508008L * 1024, memory.availableBytes());
+        assertEquals(2517832L * 1024, memory.freeBytes());
+        assertEquals((1239168L + 6888240L) * 1024, memory.cachedBytes(),
+                "buffers + page cache is what Linux calls cached");
         assertEquals(4534212L * 1024, memory.swapFreeBytes());
 
         ProcMeminfo.Memory old = ProcMeminfo.parse("""
@@ -115,6 +120,9 @@ class ProcParsersTest {
         assertEquals(-1, CgroupLimits.parseCpuQuota("max 100000"));
         assertEquals(-1, CgroupLimits.parseCpuQuota(""));
         assertEquals(-1, CgroupLimits.parseCpuQuota("garbage"));
+        assertEquals(12345, CgroupLimits.statValue("anon 1\nfile 12345\n", "file"),
+                "memory.stat is the only place cgroup v2 reports page cache");
+        assertEquals(-1, CgroupLimits.statValue(null, "file"));
     }
 
     @Test

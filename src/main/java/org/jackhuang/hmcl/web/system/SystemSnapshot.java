@@ -62,10 +62,15 @@ public record SystemSnapshot(
     }
 
     /// @param totalBytes     limit the panel should show (cgroup when it applies)
-    /// @param usedBytes      total minus what is still available
+    /// @param usedBytes      memory holding something that is not reclaimable
     /// @param availableBytes what a new workload could still allocate
+    ///                       (`cachedBytes + freeBytes`, the way the kernel
+    ///                       counts reclaimable cache)
+    /// @param freeBytes      memory holding nothing at all
+    /// @param cachedBytes    page cache and buffers, reclaimable on demand
     /// @param source         `cgroup` or `host` — what `totalBytes` describes
     public record Memory(long totalBytes, long usedBytes, long availableBytes,
+                         long freeBytes, long cachedBytes,
                          long swapTotalBytes, long swapUsedBytes, String source) {
     }
 

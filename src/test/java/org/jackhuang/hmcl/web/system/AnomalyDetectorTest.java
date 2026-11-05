@@ -36,7 +36,7 @@ class AnomalyDetectorTest {
                 new SystemSnapshot.Capabilities(true, false, false, false),
                 new SystemSnapshot.Cpu(cpu, 8, -1, new double[]{cpu}, new double[]{load, load, load}),
                 new SystemSnapshot.Memory(1000, (long) (memoryRatio * 1000), 1000 - (long) (memoryRatio * 1000),
-                        0, 0, "host"),
+                        0, 0, 0, 0, "host"),
                 List.of(),
                 List.of(new SystemSnapshot.MountUsage("/data", 1000, (long) (diskRatio * 1000))),
                 List.of(),
@@ -95,7 +95,7 @@ class AnomalyDetectorTest {
                 T0.toString(), 1000,
                 new SystemSnapshot.Capabilities(false, false, false, false),
                 new SystemSnapshot.Cpu(-1, 8, -1, new double[0], new double[0]),
-                new SystemSnapshot.Memory(0, 0, 0, 0, 0, "host"),
+                new SystemSnapshot.Memory(0, 0, 0, 0, 0, 0, 0, "host"),
                 List.of(), List.of(), List.of(), List.of(),
                 new SystemSnapshot.Panel(-1, -1, 1, 1));
         assertTrue(check(detector, unknown, 600).isEmpty());

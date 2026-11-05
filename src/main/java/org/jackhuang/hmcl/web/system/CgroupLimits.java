@@ -22,6 +22,7 @@ import org.jetbrains.annotations.NotNullByDefault;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import org.jetbrains.annotations.Nullable;
 
 /// What the container's cgroup says about memory and CPU, when it says
 /// anything at all.
@@ -46,8 +47,12 @@ public final class CgroupLimits {
     /// @param memoryLimitBytes the cgroup memory ceiling, or `-1` when unlimited
     /// @param memoryUsedBytes  the cgroup's current usage, or `-1` when unknown
     /// @param cpuQuotaCores    the CPU quota in cores, or `-1` when unlimited
-    public record Limits(long memoryLimitBytes, long memoryUsedBytes, double cpuQuotaCores) {
-        public static final Limits NONE = new Limits(-1, -1, -1);
+    /// @param fileCacheBytes   page cache inside the cgroup, or `-1` when unknown.
+    ///                         `memory.current` includes it, so "in use" has to
+    ///                         subtract it or Linux looks permanently full.
+    public record Limits(long memoryLimitBytes, long memoryUsedBytes, double cpuQuotaCores,
+                         long fileCacheBytes) {
+        public static final Limits NONE = new Limits(-1, -1, -1, -1);
     }
 
     private static final Path V2 = Path.of("/sys/fs/cgroup");
@@ -69,6 +74,7 @@ public final class CgroupLimits {
         long limit = parseLong(text(root.resolve("memory.max")), -1);
         long used = parseLong(text(root.resolve("memory.current")), -1);
         double quota = parseCpuQuota(text(root.resolve("cpu.max")));
+        long cache = statValue(text(root.resolve("memory.stat")), "file");
         if (limit < 0 && used < 0 && quota < 0) {
             // cgroup v1: the same numbers under different names.
             limit = parseLong(text(V1_MEMORY.resolve("memory.limit_in_bytes")), -1);
@@ -78,12 +84,27 @@ public final class CgroupLimits {
             if (quotaMicros > 0 && periodMicros > 0) {
                 quota = (double) quotaMicros / periodMicros;
             }
+            cache = statValue(text(V1_MEMORY.resolve("memory.stat")), "total_cache");
         }
         // A v1 host reports a huge sentinel (PAGE_COUNTER_MAX) for "unlimited".
         if (limit > 1L << 50) {
             limit = -1;
         }
-        return new Limits(limit, used, quota);
+        return new Limits(limit, used, quota, cache);
+    }
+
+    /// One numeric line of `memory.stat` (`file 12345`, `total_cache 12345`).
+    static long statValue(@Nullable String text, String key) {
+        if (text == null) {
+            return -1;
+        }
+        for (String line : text.split("\n")) {
+            String[] fields = line.trim().split("\\s+");
+            if (fields.length == 2 && fields[0].equals(key)) {
+                return parseLong(fields[1], -1);
+            }
+        }
+        return -1;
     }
 
     /// `200000 100000` means two cores; `max 100000` means no quota.

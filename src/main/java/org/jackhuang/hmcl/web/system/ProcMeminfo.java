@@ -36,9 +36,13 @@ public final class ProcMeminfo {
     ///
     /// @param totalBytes     memory installed (or the cgroup limit, when one applies)
     /// @param availableBytes what the kernel says can still be allocated
+    /// @param freeBytes      memory that is not holding anything at all
+    /// @param cachedBytes    page cache + buffers: reclaimable, which is why
+    ///                       Linux looks "full" while `availableBytes` stays high
     /// @param swapTotalBytes swap size
     /// @param swapFreeBytes  swap still free
-    public record Memory(long totalBytes, long availableBytes, long swapTotalBytes, long swapFreeBytes) {
+    public record Memory(long totalBytes, long availableBytes, long freeBytes, long cachedBytes,
+                         long swapTotalBytes, long swapFreeBytes) {
     }
 
     private ProcMeminfo() {
@@ -65,11 +69,14 @@ public final class ProcMeminfo {
                 // A line this parser does not understand is not worth failing over.
             }
         }
+        long free = fields.getOrDefault("MemFree", 0L);
         return new Memory(
                 fields.getOrDefault("MemTotal", 0L),
                 // Kernels before 3.14 have no MemAvailable; MemFree is the best
                 // available substitute there.
-                fields.getOrDefault("MemAvailable", fields.getOrDefault("MemFree", 0L)),
+                fields.getOrDefault("MemAvailable", free),
+                free,
+                fields.getOrDefault("Buffers", 0L) + fields.getOrDefault("Cached", 0L),
                 fields.getOrDefault("SwapTotal", 0L),
                 fields.getOrDefault("SwapFree", 0L));
     }
