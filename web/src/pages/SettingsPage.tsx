@@ -7,6 +7,7 @@ import { LegalCard } from "../components/LegalCard";
 import { McAboutCard } from "../components/McAboutCard";
 import { LogsCard } from "../components/LogsCard";
 import { SystemMonitorCard } from "../components/SystemMonitorCard";
+import { StorageCard } from "../components/StorageCard";
 import { FileDropInput } from "../components/FileDropInput";
 import {
   AddIcon,
@@ -52,6 +53,7 @@ import type {
   DoctorCheck,
   DoctorReport,
   EmergencyStopPreview,
+  PanelInfo,
   Health,
   RegistrySettings,
   RegistryTestResult,
@@ -222,6 +224,7 @@ function GeneralTab() {
   const s = useAppState();
   const nav = useNavigate();
   const [health, setHealth] = useState<Health | null>(null);
+  const [panel, setPanel] = useState<PanelInfo | null>(null);
   const [loadedAt, setLoadedAt] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -234,6 +237,8 @@ function GeneralTab() {
       const h = await api.health();
       setHealth(h);
       setLoadedAt(Date.now());
+      // 面板坐标是补充信息：拿不到也不该让整张卡变成错误。
+      api.panelInfo().then(setPanel).catch(() => undefined);
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -295,6 +300,34 @@ function GeneralTab() {
               <span className="comp-label">运行时长</span>
               <span className="comp-value">{uptime != null ? formatUptime(uptime) : "—"}</span>
             </div>
+            <div className="comp-row">
+              <span className="comp-label">监听地址</span>
+              <span className="comp-value mono">
+                {panel ? `${panel.bindHost}:${panel.port}` : "—"}
+              </span>
+            </div>
+            <div className="comp-row">
+              <span className="comp-label">访问基址</span>
+              <span className="comp-value mono">{panel ? panel.basePath || "/" : "—"}</span>
+            </div>
+            <div className="comp-row">
+              <span className="comp-label">数据目录</span>
+              <span className="comp-value mono" style={{ fontSize: 12, wordBreak: "break-all" }}>
+                {panel?.dataDir ?? "—"}
+              </span>
+            </div>
+            <div className="comp-row">
+              <span className="comp-label">公开地址</span>
+              <span className="comp-value mono" style={{ fontSize: 12, wordBreak: "break-all" }}>
+                {panel?.publicBaseUrl || "—"}
+              </span>
+            </div>
+            <div className="comp-row">
+              <span className="comp-label">运行环境</span>
+              <span className="comp-value mono">
+                {panel ? `Java ${panel.java}` : health.java ? `Java ${health.java}` : "—"}
+              </span>
+            </div>
             <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 6 }}>
               <button className="btn btn-text ripple-host" disabled={loading} onClick={() => void load()}>
                 <RefreshIcon size={15} />
@@ -342,9 +375,11 @@ function GeneralTab() {
         </div>
       </div>
 
+      <StorageCard />
+
       <div className="section-caption">
         <InfoIcon size={16} />
-        存储与日志
+        日志
       </div>
       <LogsCard />
 

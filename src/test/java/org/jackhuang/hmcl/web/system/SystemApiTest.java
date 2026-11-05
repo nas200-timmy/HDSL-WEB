@@ -77,6 +77,14 @@ class SystemApiTest {
             assertTrue(snapshot.has("memory"), stats.toString());
             assertTrue(snapshot.has("capabilities"), stats.toString());
             assertTrue(stats.has("history"), stats.toString());
+
+            HttpResponse<String> storage = get(client, base + "/api/system/storage", cookie);
+            assertEquals(200, storage.statusCode(), storage.body());
+            JsonObject report = json(storage);
+            assertEquals(running.dataDir().toAbsolutePath().normalize().toString(),
+                    report.get("dataDir").getAsString());
+            assertTrue(report.has("buckets"), report.toString());
+            assertTrue(report.has("mount"), report.toString());
         }
     }
 

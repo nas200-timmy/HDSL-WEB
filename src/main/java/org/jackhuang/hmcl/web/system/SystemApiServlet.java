@@ -26,6 +26,7 @@ import org.jackhuang.hmcl.Metadata;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.http.Json;
 import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.util.List;
@@ -55,6 +56,11 @@ public final class SystemApiServlet extends HttpServlet {
     private final ServerConfig config;
     private final LongSupplier startedAtMillis;
     private final IntSupplier boundPort;
+    /// Walking the data directory is seconds, not milliseconds; the page gets a
+    /// cached report and can ask for a fresh walk explicitly.
+    private static final long STORAGE_TTL_MS = 60_000;
+    private volatile StorageUsage.@Nullable Report storageReport;
+    private volatile long storageAt;
 
     public SystemApiServlet(SystemMetrics metrics, ServerConfig config, LongSupplier startedAtMillis,
                             IntSupplier boundPort) {
@@ -78,6 +84,10 @@ public final class SystemApiServlet extends HttpServlet {
         }
         if ("/info".equals(path)) {
             info(response);
+            return;
+        }
+        if ("/storage".equals(path)) {
+            storage(request, response);
             return;
         }
         Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
@@ -119,6 +129,22 @@ public final class SystemApiServlet extends HttpServlet {
                 : "self-signed-or-http");
         body.addProperty("startedAt", startedAtMillis.getAsLong());
         Json.write(response, body);
+    }
+
+    private void storage(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        boolean refresh = "1".equals(request.getParameter("refresh"));
+        StorageUsage.Report cached = storageReport;
+        if (cached == null || refresh || System.currentTimeMillis() - storageAt >= STORAGE_TTL_MS) {
+            synchronized (this) {
+                cached = storageReport;
+                if (cached == null || refresh || System.currentTimeMillis() - storageAt >= STORAGE_TTL_MS) {
+                    cached = StorageUsage.compute(config.dataDir);
+                    storageReport = cached;
+                    storageAt = System.currentTimeMillis();
+                }
+            }
+        }
+        Json.write(response, cached);
     }
 
     private static int parseInt(String text, int fallback) {

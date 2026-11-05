@@ -51,6 +51,7 @@ import type {
   InstancePlugins,
   TerminalKernel,
   SystemStats,
+  SystemStorage,
   PanelInfo,
 } from "./types";
 
@@ -126,6 +127,9 @@ export const api = {
     request<SystemStats>(`/api/system/stats${history > 0 ? `?history=${history}` : ""}`),
   /** 面板自己的坐标：监听地址、真实端口、数据目录、版本。 */
   panelInfo: () => request<PanelInfo>("/api/system/info"),
+  /** 数据目录占用；refresh=true 强制重新遍历（后端默认缓存 60 秒）。 */
+  systemStorage: (refresh = false) =>
+    request<SystemStorage>(`/api/system/storage${refresh ? "?refresh=1" : ""}`),
 
   login: (username: string, password: string) =>
     request<{ ok: boolean; username: string }>("/api/auth/login", jsonInit("POST", { username, password })),

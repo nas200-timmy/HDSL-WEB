@@ -913,3 +913,25 @@ export interface PanelInfo {
   security: string;
   startedAt: number;
 }
+
+/** GET /api/system/storage：数据目录按顶层子目录分桶的大小。 */
+export interface StorageBucket {
+  name: string;
+  label: string;
+  bytes: number;
+}
+
+export interface StorageMount {
+  path: string;
+  totalBytes: number;
+  usedBytes: number;
+}
+
+export interface SystemStorage {
+  dataDir: string;
+  totalBytes: number;
+  buckets: StorageBucket[];
+  mount: StorageMount;
+  /** 上一次真正遍历的时间（ISO）；缓存命中时不变 */
+  computedAt: string;
+}
