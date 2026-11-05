@@ -291,6 +291,11 @@ public final class BrandSettingsApiServlet extends HttpServlet {
         String nodeRuntime = policy.get(brand).nodeRuntime();
         if (body.has("nodeRuntime")) {
             JsonElement element = body.get("nodeRuntime");
+            if (!element.isJsonNull() && (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString())) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "nodeRuntime must be a string selector or null");
+                return;
+            }
             nodeRuntime = element.isJsonNull() ? null : element.getAsString().trim();
             if (nodeRuntime != null && nodeRuntime.isBlank()) {
                 nodeRuntime = null;

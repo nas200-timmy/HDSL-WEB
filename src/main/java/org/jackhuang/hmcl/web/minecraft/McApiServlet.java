@@ -1095,7 +1095,12 @@ public final class McApiServlet extends HttpServlet {
                 Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "`" + key + "` is not a managed field");
                 return;
             }
-            properties.set(key, body.get(key).getAsString());
+            String value = stringField(body, key);
+            if (value == null) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "`" + key + "` must be a string");
+                return;
+            }
+            properties.set(key, value);
         }
         manager.saveProperties(instance, properties);
         audit("mc.instance.properties", instance.id(), "success", request);

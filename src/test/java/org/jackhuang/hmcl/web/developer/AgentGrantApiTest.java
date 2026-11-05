@@ -429,6 +429,49 @@ class AgentGrantApiTest {
         }
     }
 
+    /// 畸形 JSON 是客户端错误，不是服务器错误。
+    ///
+    /// 审计里四个请求（`{"password":{}}` 打到 elevate / agent-auth、`label` 给成
+    /// 对象、`ttlSeconds` 给成 `"abc"`）全部答 500：`stringField` 只挡了
+    /// `isJsonNull()`，对象的 `getAsString()` 直接抛出来，没人接。这几个接口是
+    /// 提权链的入口，500 既瞒下了真因，也把"输入不合法"和"面板坏了"混成一条。
+    @Test
+    void malformedBodiesAreClientErrorsAndNotServerErrors() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "https://127.0.0.1:" + running.port();
+            String cookie = elevatedSession(client, base);
+
+            // 必填的口令给成了对象。
+            HttpResponse<String> elevate = post(client, base + "/api/developer/elevate",
+                    "{\"password\":{}}", cookie);
+            assertEquals(400, elevate.statusCode(), elevate.body());
+
+            HttpResponse<String> setPassword = post(client, base + "/api/developer/agent-password",
+                    "{\"password\":{}}", cookie);
+            assertEquals(400, setPassword.statusCode(), setPassword.body());
+
+            assertEquals(200, post(client, base + "/api/developer/agent-password",
+                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\"]}", cookie).statusCode());
+
+            HttpResponse<String> agentAuth = post(client, base + "/api/developer/agent-auth",
+                    "{\"password\":{}}", null);
+            assertEquals(400, agentAuth.statusCode(), agentAuth.body());
+
+            // 有效期给成了字符串。
+            HttpResponse<String> ttl = post(client, base + "/api/developer/agent-auth",
+                    "{\"password\":\"" + AGENT_PASSWORD + "\",\"label\":\"probe\",\"ttlSeconds\":\"abc\"}", null);
+            assertEquals(400, ttl.statusCode(), ttl.body());
+            assertTrue(ttl.body().contains("ttlSeconds"), ttl.body());
+
+            // 可省略的字段给错了类型：忽略即可，但不能变成 500。
+            HttpResponse<String> label = post(client, base + "/api/developer/agent-token",
+                    "{\"label\":{},\"scopes\":[\"read\"]}", cookie);
+            assertTrue(label.statusCode() < 500,
+                    "a malformed optional field must not be a 500: " + label.statusCode() + " " + label.body());
+        }
+    }
+
     /// Mints a token the way the product does now: the agent exchanges the
     /// agent password for it. The cap is opened to every class so the scope
     /// under test is what decides.

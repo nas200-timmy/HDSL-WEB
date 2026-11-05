@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.developer;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import jakarta.servlet.http.HttpServlet;
@@ -635,8 +636,13 @@ public final class DeveloperApiServlet extends HttpServlet {
             return;
         }
         Duration ttl = DeveloperElevation.EXTENDED_TTL;
-        if (body.has("ttlSeconds") && body.get("ttlSeconds").isJsonPrimitive()) {
-            long seconds = body.get("ttlSeconds").getAsLong();
+        if (body.has("ttlSeconds") && !body.get("ttlSeconds").isJsonNull()) {
+            Long seconds = longField(body, "ttlSeconds");
+            if (seconds == null) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "ttlSeconds must be a number of seconds");
+                return;
+            }
             if (seconds > 0) {
                 ttl = Duration.ofSeconds(seconds);
             }
@@ -731,8 +737,13 @@ public final class DeveloperApiServlet extends HttpServlet {
         // claim is clamped, not refused: the settings page renders the result,
         // so the operator sees what they actually got.
         Duration ttl = DeveloperElevation.EXTENDED_TTL;
-        if (body.has("ttlSeconds") && body.get("ttlSeconds").isJsonPrimitive()) {
-            long seconds = body.get("ttlSeconds").getAsLong();
+        if (body.has("ttlSeconds") && !body.get("ttlSeconds").isJsonNull()) {
+            Long seconds = longField(body, "ttlSeconds");
+            if (seconds == null) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "ttlSeconds must be a number of seconds");
+                return;
+            }
             if (seconds > 0) {
                 ttl = Duration.ofSeconds(seconds);
             }
@@ -1154,10 +1165,37 @@ public final class DeveloperApiServlet extends HttpServlet {
         }
     }
 
+    /// Reads a string field, and only a string. `{"password":{}}` used to reach
+    /// `getAsString()` and come back as a 500: a body that does not have the
+    /// shape the endpoint documents is a client mistake, and the caller answers
+    /// it with the same 400 it uses for a missing field.
     private static @Nullable String stringField(@Nullable JsonObject body, String field) {
-        return body != null && body.has(field) && !body.get(field).isJsonNull()
-                ? body.get(field).getAsString()
+        JsonElement element = fieldOf(body, field);
+        return element != null && element.isJsonPrimitive() && element.getAsJsonPrimitive().isString()
+                ? element.getAsString()
                 : null;
+    }
+
+    /// Same contract for numbers: a JSON object or `"abc"` reads as absent so the
+    /// caller can refuse it, instead of throwing out of `getAsLong()`.
+    private static @Nullable Long longField(@Nullable JsonObject body, String field) {
+        JsonElement element = fieldOf(body, field);
+        if (element == null || !element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
+            return null;
+        }
+        try {
+            return element.getAsLong();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static @Nullable JsonElement fieldOf(@Nullable JsonObject body, String field) {
+        if (body == null || !body.has(field)) {
+            return null;
+        }
+        JsonElement element = body.get(field);
+        return element.isJsonNull() ? null : element;
     }
 
     private static @Nullable Boolean booleanField(@Nullable JsonObject body, String field) {

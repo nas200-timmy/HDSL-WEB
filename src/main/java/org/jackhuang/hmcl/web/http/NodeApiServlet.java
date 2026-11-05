@@ -209,7 +209,7 @@ public final class NodeApiServlet extends HttpServlet {
             return;
         }
         NodeSource source = body != null && body.has("source")
-                ? NodeSource.of(body.get("source").getAsString())
+                ? NodeSource.of(stringField(body, "source"))
                 : NodeSource.MIRROR;
 
         String picked;
@@ -324,7 +324,13 @@ public final class NodeApiServlet extends HttpServlet {
         JsonObject body = parseBody(request);
         int keep = 2;
         if (body != null && body.has("keepPerMajor") && body.get("keepPerMajor").isJsonPrimitive()) {
-            keep = body.get("keepPerMajor").getAsInt();
+            // A `keepPerMajor` that is not a number is not worth a 500: the
+            // endpoint reports what it removed, and 2 is the conservative floor.
+            try {
+                keep = body.get("keepPerMajor").getAsInt();
+            } catch (RuntimeException e) {
+                keep = 2;
+            }
         }
         List<String> removed = environment.gc(keep);
         AuditLog.log(AuditLog.Channel.WEB, "node.gc",
@@ -335,11 +341,12 @@ public final class NodeApiServlet extends HttpServlet {
 
     private void uninstall(HttpServletRequest request, HttpServletResponse response) throws IOException {
         JsonObject body = parseBody(request);
-        if (body == null || !body.has("version")) {
+        String version = stringField(body, "version");
+        if (version == null || version.isBlank()) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "version is required");
             return;
         }
-        String version = body.get("version").getAsString().trim();
+        version = version.trim();
         List<NodeEnvironment.Consumer> consumers = environment.consumersOf(version);
         if (!consumers.isEmpty()) {
             JsonArray array = new JsonArray();
@@ -382,10 +389,11 @@ public final class NodeApiServlet extends HttpServlet {
 
     private void install(HttpServletRequest request, HttpServletResponse response) throws IOException {
         JsonObject body = parseBody(request);
-        String version = body == null || !body.has("version") ? null : body.get("version").getAsString().trim();
+        String requested = stringField(body, "version");
+        String version = requested == null ? null : requested.trim();
         // 面板用户群主要在国内：默认 npmmirror，官方源可作退路（索引查询本身双源互备）。
         NodeSource source = body != null && body.has("source")
-                ? NodeSource.of(body.get("source").getAsString())
+                ? NodeSource.of(stringField(body, "source"))
                 : NodeSource.MIRROR;
 
         // 进度回调里要用任务句柄：TaskWork 把本任务直接交给任务体，句柄在
