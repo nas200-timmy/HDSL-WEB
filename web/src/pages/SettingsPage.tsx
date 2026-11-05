@@ -6,6 +6,7 @@ import { BrandManagementPanel } from "../components/BrandManagementPanel";
 import { LegalCard } from "../components/LegalCard";
 import { McAboutCard } from "../components/McAboutCard";
 import { LogsCard } from "../components/LogsCard";
+import { SystemMonitorCard } from "../components/SystemMonitorCard";
 import { FileDropInput } from "../components/FileDropInput";
 import {
   AddIcon,
@@ -303,6 +304,8 @@ function GeneralTab() {
           </>
         ) : null}
       </div>
+
+      <SystemMonitorCard />
 
       <div className="section-caption">
         <TuneIcon size={16} />

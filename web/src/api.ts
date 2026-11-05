@@ -50,6 +50,8 @@ import type {
   BrandCapabilities,
   InstancePlugins,
   TerminalKernel,
+  SystemStats,
+  PanelInfo,
 } from "./types";
 
 export class ApiError extends Error {
@@ -119,6 +121,11 @@ async function request<T>(path: string, init?: RequestInit, opts?: { skipUnautho
 
 export const api = {
   health: () => request<Health>("/api/health"),
+  /** 机器读数：最新一帧，history>0 时顺带取历史（首次打开用 240）。 */
+  systemStats: (history = 0) =>
+    request<SystemStats>(`/api/system/stats${history > 0 ? `?history=${history}` : ""}`),
+  /** 面板自己的坐标：监听地址、真实端口、数据目录、版本。 */
+  panelInfo: () => request<PanelInfo>("/api/system/info"),
 
   login: (username: string, password: string) =>
     request<{ ok: boolean; username: string }>("/api/auth/login", jsonInit("POST", { username, password })),

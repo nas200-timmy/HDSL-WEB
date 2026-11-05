@@ -812,3 +812,104 @@ export interface Wallpaper {
 export interface WallpaperList {
   wallpapers: Wallpaper[];
 }
+
+/* ---------------- 系统资源（通用 → 系统资源） ---------------- */
+
+/** 这台机器能画什么；后端按平台给能力位，前端只按它渲染。 */
+export interface SystemCapabilities {
+  perCore: boolean;
+  diskIo: boolean;
+  network: boolean;
+  gpu: boolean;
+}
+
+export interface SystemCpu {
+  /** 0..1；-1 = 还在采第一个差值 */
+  load: number;
+  count: number;
+  /** cgroup CPU 配额（核），-1 = 无限制 */
+  quotaCores: number;
+  /** 每核 0..1；不支持时为空数组 */
+  cores: number[];
+  /** 1/5/15 分钟负载；Windows 上为空 */
+  loadAverage: number[];
+}
+
+export interface SystemMemory {
+  totalBytes: number;
+  usedBytes: number;
+  availableBytes: number;
+  swapTotalBytes: number;
+  swapUsedBytes: number;
+  /** cgroup = 数字是容器限额；host = 宿主/整机 */
+  source: "cgroup" | "host";
+}
+
+export interface SystemDiskRate {
+  name: string;
+  readBytesPerSec: number;
+  writeBytesPerSec: number;
+}
+
+export interface SystemMount {
+  path: string;
+  totalBytes: number;
+  usedBytes: number;
+}
+
+export interface SystemNetworkRate {
+  name: string;
+  rxBytesPerSec: number;
+  txBytesPerSec: number;
+}
+
+export interface SystemGpu {
+  index: number;
+  name: string;
+  utilization: number;
+  memoryUsedBytes: number;
+  memoryTotalBytes: number;
+  temperatureC: number;
+}
+
+export interface SystemPanelSelf {
+  cpuLoad: number;
+  rssBytes: number;
+  threads: number;
+  uptimeSec: number;
+}
+
+/** 一帧快照；`at` 是 ISO 时间串，历史按它排序/去重。 */
+export interface SystemSnapshot {
+  at: string;
+  /** 这一帧所属的采样档位：1000 = 有人用，30000 = 低频守护 */
+  intervalMs: number;
+  capabilities: SystemCapabilities;
+  cpu: SystemCpu;
+  memory: SystemMemory;
+  disks: SystemDiskRate[];
+  mounts: SystemMount[];
+  networks: SystemNetworkRate[];
+  gpus: SystemGpu[];
+  panel: SystemPanelSelf;
+}
+
+/** GET /api/system/stats：最新一帧 + 历史（首次打开时带 history=240）。 */
+export interface SystemStats {
+  snapshot: SystemSnapshot | null;
+  history: SystemSnapshot[];
+}
+
+/** GET /api/system/info：面板自己的坐标。 */
+export interface PanelInfo {
+  version: string;
+  java: string;
+  bindHost: string;
+  port: number;
+  basePath: string;
+  dataDir: string;
+  publicBaseUrl: string;
+  https: boolean;
+  security: string;
+  startedAt: number;
+}
