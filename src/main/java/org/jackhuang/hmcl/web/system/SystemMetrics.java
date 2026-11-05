@@ -69,6 +69,9 @@ public final class SystemMetrics {
 
     private final Path dataDir;
     private final HostInfo hostInfo;
+    /// The Windows readers, or `null` everywhere else (and when JNA cannot
+    /// reach the native libraries — the page then hides those cards).
+    private final @Nullable WindowsMetrics windows;
     private final Path procRoot;
     private final Path sysBlockRoot;
     private final OperatingSystemMXBean os;
@@ -112,6 +115,7 @@ public final class SystemMetrics {
         this.procRoot = procRoot;
         this.sysBlockRoot = sysBlockRoot;
         this.hostInfo = hostInfo;
+        this.windows = "windows".equals(hostInfo.os()) ? WindowsMetrics.create() : null;
         this.os = (OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
     }
 
@@ -173,6 +177,9 @@ public final class SystemMetrics {
             pending = null;
         }
         executor.shutdownNow();
+        if (windows != null) {
+            windows.close();
+        }
     }
 
     /// Samples once and appends to the ring, without touching the schedule.
@@ -228,8 +235,13 @@ public final class SystemMetrics {
         double seconds = previousNanos == 0 ? 0 : (nowNanos - previousNanos) / 1_000_000_000.0;
         boolean ratesUsable = seconds >= 0.2;
 
-        String statText = read(procRoot.resolve("stat"));
-        Map<String, ProcStat.Times> cpuTimes = statText == null ? Map.of() : ProcStat.parse(statText);
+        Map<String, ProcStat.Times> cpuTimes;
+        if (windows != null) {
+            cpuTimes = windowsCpuTimes();
+        } else {
+            String statText = read(procRoot.resolve("stat"));
+            cpuTimes = statText == null ? Map.of() : ProcStat.parse(statText);
+        }
 
         double[] loadAverage = loadAverage(read(procRoot.resolve("loadavg")));
         double cpuLoad = -1;
@@ -260,9 +272,13 @@ public final class SystemMetrics {
         CgroupLimits.Limits limits = CgroupLimits.read();
         SystemSnapshot.Memory memory = memory(limits);
 
-        List<SystemSnapshot.DiskRate> disks = disks(previousDisk, ratesUsable, seconds);
+        List<SystemSnapshot.DiskRate> disks = windows != null
+                ? windowsDisks()
+                : disks(previousDisk, ratesUsable, seconds);
         List<SystemSnapshot.MountUsage> mounts = mounts();
-        List<SystemSnapshot.NetworkRate> networks = networks(previousNet, ratesUsable, seconds);
+        List<SystemSnapshot.NetworkRate> networks = windows != null
+                ? windowsNetworks()
+                : networks(previousNet, ratesUsable, seconds);
 
         SystemSnapshot.Panel panel = panel();
 
@@ -280,8 +296,10 @@ public final class SystemMetrics {
                 panel);
 
         previousCpu = cpuTimes;
-        previousDisk = lastDiskRaw;
-        previousNet = lastNetRaw;
+        if (windows == null) {
+            previousDisk = lastDiskRaw;
+            previousNet = lastNetRaw;
+        }
         previousNanos = nowNanos;
         return snapshot;
     }
@@ -312,6 +330,46 @@ public final class SystemMetrics {
             double rx = ratesUsable ? ProcNetDev.bytesPerSecond(before, entry.getValue(), seconds, false) : -1;
             double tx = ratesUsable ? ProcNetDev.bytesPerSecond(before, entry.getValue(), seconds, true) : -1;
             out.add(new SystemSnapshot.NetworkRate(entry.getKey(), rx, tx));
+        }
+        return out;
+    }
+
+    /// Windows per-processor times in the same shape the Linux parser returns:
+    /// cumulative busy and idle, ready for a difference.
+    private Map<String, ProcStat.Times> windowsCpuTimes() {
+        List<WindowsMetrics.CpuTimes> times = windows == null ? List.of() : windows.cpuTimes();
+        if (times.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, ProcStat.Times> out = new LinkedHashMap<>();
+        long total = 0;
+        long idle = 0;
+        for (int index = 0; index < times.size(); index++) {
+            WindowsMetrics.CpuTimes core = times.get(index);
+            out.put("cpu" + index, new ProcStat.Times(core.total(), core.idle()));
+            total += core.total();
+            idle += core.idle();
+        }
+        out.put("cpu", new ProcStat.Times(total, idle));
+        return out;
+    }
+
+    /// PDH reports rates, not counters: one entry for the whole disk set.
+    private List<SystemSnapshot.DiskRate> windowsDisks() {
+        WindowsMetrics.DiskRates rates = windows == null ? null : windows.diskRates();
+        if (rates == null) {
+            return List.of();
+        }
+        return List.of(new SystemSnapshot.DiskRate("total",
+                rates.readBytesPerSecond(), rates.writeBytesPerSecond()));
+    }
+
+    private List<SystemSnapshot.NetworkRate> windowsNetworks() {
+        List<WindowsMetrics.NetworkRate> rates = windows == null ? List.of() : windows.networkRates();
+        List<SystemSnapshot.NetworkRate> out = new ArrayList<>(rates.size());
+        for (WindowsMetrics.NetworkRate rate : rates) {
+            out.add(new SystemSnapshot.NetworkRate(rate.name(),
+                    rate.rxBytesPerSecond(), rate.txBytesPerSecond()));
         }
         return out;
     }
@@ -353,6 +411,20 @@ public final class SystemMetrics {
     /// so `used = total - available`, and the bar is
     /// `used | cached | free` where `cached + free == available`.
     private SystemSnapshot.Memory memory(CgroupLimits.Limits limits) {
+        if (windows != null) {
+            WindowsMetrics.MemoryInfo info = windows.memory();
+            if (info != null) {
+                long total = info.totalBytes();
+                long available = Math.min(info.availableBytes(), Math.max(1, total));
+                long cached = Math.max(0, Math.min(info.cachedBytes(), available));
+                long free = Math.max(0, available - cached);
+                long used = Math.max(0, total - available);
+                long swapTotal = Math.max(0, os.getTotalSwapSpaceSize());
+                long swapFree = Math.max(0, os.getFreeSwapSpaceSize());
+                return new SystemSnapshot.Memory(total, used, available, free, cached,
+                        swapTotal, Math.max(0, swapTotal - swapFree), "host");
+            }
+        }
         String text = read(procRoot.resolve("meminfo"));
         ProcMeminfo.Memory host = text == null ? null : ProcMeminfo.parse(text);
         long total = host == null ? os.getTotalMemorySize() : host.totalBytes();

@@ -706,7 +706,9 @@ export function SystemMonitorCard() {
                       </div>
                       {snapshot.disks.map((disk) => (
                         <div className="comp-row" key={disk.name}>
-                          <span className="comp-label mono">{disk.name}</span>
+                          <span className="comp-label mono">
+                            {disk.name === "total" ? "全部磁盘" : disk.name}
+                          </span>
                           <span className="comp-value mono" style={{ fontSize: 12 }}>
                             读 {fmtRate(disk.readBytesPerSec)} · 写 {fmtRate(disk.writeBytesPerSec)}
                           </span>

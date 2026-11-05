@@ -75,13 +75,18 @@ cgroup 有限额时，`使用中 = memory.current - memory.stat:file`，`已缓�
 
 | 值 | Linux | Windows |
 |---|---|---|
-| 总 CPU | `/proc/stat` 差值 | JDK `getCpuLoad()` |
-| 每核 | `/proc/stat` 的 `cpuN` 行 | 预留（`NtQuerySystemInformation` + JNA） |
-| 内存 | meminfo；有 cgroup 限额时显示限额 | JDK `getTotalMemorySize()` 等 |
-| 磁盘吞吐 | `/proc/diskstats`（**宿主机级**） | 预留（PDH） |
-| 网络吞吐 | `/proc/net/dev`（容器自己的命名空间） | 预留 |
+| 总 CPU | `/proc/stat` 差值 | `NtQuerySystemInformation` 的每核累计值 |
+| 每核 | `/proc/stat` 的 `cpuN` 行 | `NtQuerySystemInformation(SystemProcessorPerformanceInformation)`（JNA/ntdll） |
+| 内存 | meminfo；有 cgroup 限额时显示限额 | `GetPerformanceInfo`：物理总量、可用、`SystemCache` |
+| 磁盘吞吐 | `/proc/diskstats`（**宿主机级**） | PDH `\PhysicalDisk(_Total)\Disk Read/Write Bytes/sec` |
+| 网络吞吐 | `/proc/net/dev`（容器自己的命名空间） | PDH `\Network Interface(*)\Bytes Received/Sent/sec` |
 | 负载 | `/proc/loadavg` | 无（`—`） |
 | GPU | 预留：`gpu: []` + `capabilities.gpu=false` | 同左 |
+
+Windows 上任何一个读取失败（性能计数器损坏是常见故障、DLL 不可用、JNA
+加载失败）都只会把对应的能力位变成 `false`，页面隐藏那张卡或写“暂未采集”，
+不会显示 0。`NtQuerySystemInformation` 一次只覆盖当前处理器组（≤64 个逻辑
+处理器），超过 64 核的机器会只显示当前组。
 
 **容器里 CPU 与内存不是命名空间隔离的**：`--cpus=2` 的容器仍然看得到宿主全部
 核心，所以框框画的是宿主核心；有 cgroup 配额时会在旁边标「配额 x 核」。磁盘
