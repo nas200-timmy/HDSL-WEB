@@ -93,7 +93,11 @@ class PnpmConfigFileTest {
         String xdg = System.getenv("XDG_CONFIG_HOME");
         Path expected = xdg != null && !xdg.isBlank()
                 ? Path.of(xdg.trim()).resolve("pnpm/config.yaml")
-                : Path.of(System.getProperty("user.home"), ".config", "pnpm/config.yaml");
+                // Same source the product uses: `$HOME`, not the passwd entry. They differ
+                // under systemd, sudo and any container that starts a process with HOME set
+                // to something else, and `user.home` is only the second one.
+                : org.jackhuang.hmcl.util.platform.UserHome.directory()
+                        .resolve(".config/pnpm/config.yaml");
         assertEquals(expected, PnpmConfigFile.path());
     }
 
