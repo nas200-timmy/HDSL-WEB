@@ -8,6 +8,24 @@ import { TuneIcon } from "./icons";
 /// 后端环形缓冲的容量；首次打开要一次拿满，之后只取最新一帧。
 const HISTORY_MAX = 240;
 
+type PerfTab = "overview" | "cpu" | "gpu" | "disk" | "network";
+
+/// 顺序照任务管理器的性能页：总览打头，然后是 CPU、GPU、硬盘、网络。
+const TABS: Array<{ id: PerfTab; label: string }> = [
+  { id: "overview", label: "总览" },
+  { id: "cpu", label: "CPU" },
+  { id: "gpu", label: "GPU" },
+  { id: "disk", label: "硬盘" },
+  { id: "network", label: "网络" },
+];
+
+const COLOR_CPU = "#4e6fff";
+const COLOR_MEMORY = "#7a5af8";
+const COLOR_READ = "#2aa198";
+const COLOR_WRITE = "#e8a33d";
+const COLOR_RX = "#4e6fff";
+const COLOR_TX = "#e05d5d";
+
 /// 0..1 的占用写成百分比；-1 是"还在采第一个差值"。
 function pct(value: number): string {
   return value < 0 ? "—" : `${(value * 100).toFixed(0)}%`;
@@ -59,57 +77,173 @@ function coreColor(value: number): string {
   return `rgba(78, 111, 255, ${alpha.toFixed(2)})`;
 }
 
-/// 一分钟量级的迷你折线，不引图表库：一个 canvas 就够。
-function Sparkline({ points, height = 34 }: { points: Array<{ t: number; v: number }>; height?: number }) {
+/// 坐标轴的天花板：1/2/5×10^n，比原始最大值高一点，读起来像刻度。
+function niceMax(value: number): number {
+  if (value <= 1) return 1;
+  const power = Math.pow(10, Math.floor(Math.log10(value)));
+  const scaled = value / power;
+  const step = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10;
+  return step * power;
+}
+
+function withAlpha(hex: string, alpha: number): string {
+  const value = hex.replace("#", "");
+  const red = parseInt(value.substring(0, 2), 16);
+  const green = parseInt(value.substring(2, 4), 16);
+  const blue = parseInt(value.substring(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+interface Point {
+  t: number;
+  v: number;
+}
+
+interface Series {
+  label: string;
+  color: string;
+  points: Point[];
+}
+
+/// 多条折线的迷你图：网格 + 面积填充 + 左侧刻度，尺寸跟容器走。
+function LineChart({ series, height = 120, max, format }: {
+  series: Series[];
+  height?: number;
+  max?: number;
+  format?: (value: number) => string;
+}) {
   const ref = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
-    const ratio = window.devicePixelRatio || 1;
-    const width = Math.max(1, canvas.clientWidth || 300);
-    canvas.width = Math.floor(width * ratio);
-    canvas.height = Math.floor(height * ratio);
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.scale(ratio, ratio);
-    context.clearRect(0, 0, width, height);
 
-    context.globalAlpha = 0.25;
-    context.strokeStyle = "#4e6fff";
-    context.lineWidth = 1;
-    context.beginPath();
-    context.moveTo(0, height - 0.5);
-    context.lineTo(width, height - 0.5);
-    context.stroke();
-    context.globalAlpha = 1;
+    const draw = () => {
+      const ratio = window.devicePixelRatio || 1;
+      const width = Math.max(1, canvas.clientWidth);
+      canvas.width = Math.floor(width * ratio);
+      canvas.height = Math.floor(height * ratio);
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, width, height);
 
-    if (points.length < 2) return;
-    const first = points[0].t;
-    const span = Math.max(1, points[points.length - 1].t - first);
-    context.beginPath();
-    points.forEach((point, index) => {
-      const x = ((point.t - first) / span) * width;
-      const y = height - Math.max(0, Math.min(1, point.v)) * (height - 2) - 1;
-      if (index === 0) context.moveTo(x, y);
-      else context.lineTo(x, y);
-    });
-    context.strokeStyle = "#4e6fff";
-    context.lineWidth = 1.5;
-    context.stroke();
-  }, [points, height]);
+      const points = series.flatMap((item) => item.points);
+      if (points.length < 2) {
+        return;
+      }
+      const minT = Math.min(...points.map((point) => point.t));
+      const maxT = Math.max(...points.map((point) => point.t));
+      const spanT = Math.max(1, maxT - minT);
+      const ceiling = max ?? niceMax(Math.max(...points.map((point) => point.v), 0));
+      const padLeft = 6;
+      const padRight = 6;
+      const padTop = 8;
+      const padBottom = 10;
+      const plotWidth = width - padLeft - padRight;
+      const plotHeight = height - padTop - padBottom;
+
+      // 网格：四条横线，刻度只有顶和底，够任务管理器那个味道了。
+      context.strokeStyle = "rgba(128, 128, 128, 0.22)";
+      context.lineWidth = 1;
+      context.font = "10px system-ui, sans-serif";
+      context.fillStyle = "rgba(128, 128, 128, 0.85)";
+      for (let line = 0; line <= 4; line++) {
+        const y = padTop + (plotHeight * line) / 4;
+        context.beginPath();
+        context.moveTo(padLeft, y);
+        context.lineTo(padLeft + plotWidth, y);
+        context.stroke();
+      }
+      context.fillText(format ? format(ceiling) : ceiling.toFixed(0), padLeft + 2, padTop + 9);
+      context.fillText("0", padLeft + 2, padTop + plotHeight - 2);
+
+      for (const item of series) {
+        const available = item.points.filter((point) => point.v >= 0);
+        if (available.length < 2) continue;
+        context.beginPath();
+        available.forEach((point, index) => {
+          const x = padLeft + ((point.t - minT) / spanT) * plotWidth;
+          const y = padTop + plotHeight - (Math.min(point.v, ceiling) / ceiling) * plotHeight;
+          if (index === 0) context.moveTo(x, y);
+          else context.lineTo(x, y);
+        });
+        context.strokeStyle = item.color;
+        context.lineWidth = 1.6;
+        context.stroke();
+
+        context.lineTo(padLeft + plotWidth, padTop + plotHeight);
+        context.lineTo(padLeft, padTop + plotHeight);
+        context.closePath();
+        context.fillStyle = withAlpha(item.color, 0.16);
+        context.fill();
+      }
+    };
+
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [series, height, max, format]);
 
   return <canvas ref={ref} style={{ width: "100%", height, display: "block" }} />;
 }
 
-/// 通用 → 系统资源：总览 + 每核 + 内存 + 磁盘 + 网络。
+function Legend({ items }: { items: Array<{ color: string; label: string; value: string }> }) {
+  return (
+    <div className="perf-legend">
+      {items.map((item) => (
+        <span key={item.label}>
+          <span className="chip" style={{ background: item.color }} />
+          {item.label} <b className="mono">{item.value}</b>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/// 每个逻辑线程一个小块——"数框框"。核不多时把百分比写在块里。
+function CoreGrid({ cores }: { cores: number[] }) {
+  const showText = cores.length <= 32;
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: `repeat(auto-fill, minmax(${showText ? 40 : 24}px, 1fr))`,
+        gap: 5,
+      }}
+    >
+      {cores.map((value, index) => (
+        <div
+          key={index}
+          title={`逻辑处理器 ${index} · ${pct(value)}`}
+          style={{
+            height: showText ? 28 : 22,
+            borderRadius: 4,
+            background: coreColor(value),
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 10,
+            color: value > 0.55 ? "#fff" : "var(--monet-on-surface)",
+          }}
+        >
+          {showText ? pct(value) : ""}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/// 通用 → 系统资源：任务管理器式的性能页。
 ///
-/// 数据全部来自 `/api/system/stats`；这里**不做任何平台判断**——后端的能力位
-/// 决定哪张子卡值得画，前端只负责画。采样频率也不由这里决定：请求再快，
-/// 后端也只是把最新一帧给你。
+/// 一排标签页（总览 / CPU / GPU / 硬盘 / 网络），默认总览。数据全部来自
+/// `/api/system/stats`；平台差异由后端的能力位决定，采样频率也由后端决定
+/// ——请求再快，拿到的也只是最新一帧。
 export function SystemMonitorCard() {
-  // 手机上只看总览：小屏幕摆不下每核框框和四张明细卡，滚半页也读不完。
+  // 手机上只看总览：小屏幕摆不下每核框框和四张明细页，滚半页也读不完。
   const mobile = useMobileLayout();
+  const [tab, setTab] = useState<PerfTab>("overview");
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null);
   const [history, setHistory] = useState<SystemSnapshot[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -156,23 +290,33 @@ export function SystemMonitorCard() {
     };
   }, [intervalMs, paused]);
 
-  const cpuPoints = useMemo(
-    () =>
-      history
-        .map((sample) => ({ t: Date.parse(sample.at), v: sample.cpu.load }))
-        .filter((point) => Number.isFinite(point.t) && point.v >= 0),
-    [history],
-  );
-  const memoryPoints = useMemo(
-    () =>
-      history
-        .map((sample) => ({
-          t: Date.parse(sample.at),
-          v: sample.memory.totalBytes > 0 ? sample.memory.usedBytes / sample.memory.totalBytes : -1,
-        }))
-        .filter((point) => Number.isFinite(point.t) && point.v >= 0),
-    [history],
-  );
+  const points = useMemo(() => {
+    const cpu: Point[] = [];
+    const memory: Point[] = [];
+    const read: Point[] = [];
+    const write: Point[] = [];
+    const rx: Point[] = [];
+    const tx: Point[] = [];
+    // 和任务管理器一样只画最近 60 个采样点：一个历史尖峰不该把接下来两小时的
+    // 纵轴顶死，让当前的活动看起来像一条平线。
+    for (const sample of history.slice(-60)) {
+      const t = Date.parse(sample.at);
+      if (!Number.isFinite(t)) continue;
+      if (sample.cpu.load >= 0) cpu.push({ t, v: sample.cpu.load });
+      if (sample.memory.totalBytes > 0) {
+        memory.push({ t, v: sample.memory.usedBytes / sample.memory.totalBytes });
+      }
+      const readRate = totalRate(sample.disks.map((disk) => disk.readBytesPerSec));
+      const writeRate = totalRate(sample.disks.map((disk) => disk.writeBytesPerSec));
+      if (readRate >= 0) read.push({ t, v: readRate });
+      if (writeRate >= 0) write.push({ t, v: writeRate });
+      const rxRate = totalRate(sample.networks.map((network) => network.rxBytesPerSec));
+      const txRate = totalRate(sample.networks.map((network) => network.txBytesPerSec));
+      if (rxRate >= 0) rx.push({ t, v: rxRate });
+      if (txRate >= 0) tx.push({ t, v: txRate });
+    }
+    return { cpu, memory, read, write, rx, tx };
+  }, [history]);
 
   const cpu = snapshot?.cpu;
   const memory = snapshot?.memory;
@@ -182,6 +326,7 @@ export function SystemMonitorCard() {
   const netRx = snapshot ? totalRate(snapshot.networks.map((network) => network.rxBytesPerSec)) : -1;
   const netTx = snapshot ? totalRate(snapshot.networks.map((network) => network.txBytesPerSec)) : -1;
   const memoryRatio = memory && memory.totalBytes > 0 ? memory.usedBytes / memory.totalBytes : -1;
+  const activeTab: PerfTab = mobile ? "overview" : tab;
 
   return (
     <>
@@ -190,6 +335,22 @@ export function SystemMonitorCard() {
         系统资源
       </div>
       <div className="card">
+        {!mobile && (
+          <div className="perf-tabs" role="tablist">
+            {TABS.map((item) => (
+              <button
+                key={item.id}
+                role="tab"
+                aria-selected={activeTab === item.id}
+                className={`perf-tab${activeTab === item.id ? " active" : ""}`}
+                onClick={() => setTab(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {error && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 8px" }}>
             <span style={{ color: "var(--monet-error)" }}>读取失败：{error}</span>
@@ -198,6 +359,7 @@ export function SystemMonitorCard() {
             </button>
           </div>
         )}
+
         {!snapshot ? (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 12 }}>
             <span className="spinner" />
@@ -205,63 +367,262 @@ export function SystemMonitorCard() {
           </div>
         ) : (
           <>
-            <div className="comp-row">
-              <span className="comp-label">CPU</span>
-              <span className="comp-value">
-                <b>{pct(cpu!.load)}</b>
-                <span style={{ color: "var(--monet-on-surface-variant)" }}>
-                  {" "}
-                  · {cpu!.count} 核
-                  {cpu!.quotaCores > 0 && cpu!.quotaCores < cpu!.count
-                    ? ` · 配额 ${cpu!.quotaCores.toFixed(2)} 核`
-                    : ""}
-                </span>
-              </span>
-            </div>
-            <div style={{ padding: "0 8px 6px" }}>
-              <Sparkline points={cpuPoints} />
-            </div>
+            {activeTab === "overview" && (
+              <div className="perf-layout">
+                <div className="perf-main">
+                  <div className="comp-row">
+                    <span className="comp-label">CPU</span>
+                    <span className="comp-value">
+                      <b>{pct(cpu!.load)}</b>
+                      <span style={{ color: "var(--monet-on-surface-variant)" }}>
+                        {" "}
+                        · {cpu!.count} 核
+                        {cpu!.quotaCores > 0 && cpu!.quotaCores < cpu!.count
+                          ? ` · 配额 ${cpu!.quotaCores.toFixed(2)} 核`
+                          : ""}
+                      </span>
+                    </span>
+                  </div>
+                  <LineChart
+                    series={[{ label: "CPU", color: COLOR_CPU, points: points.cpu }]}
+                    height={64}
+                    max={1}
+                    format={(value) => `${(value * 100).toFixed(0)}%`}
+                  />
 
-            <div className="comp-row">
-              <span className="comp-label">内存</span>
-              <span className="comp-value">
-                {fmtBytes(memory!.usedBytes)} / {fmtBytes(memory!.totalBytes)}（{pct(memoryRatio)}）
-              </span>
-            </div>
-            <div className="progress" style={{ margin: "0 8px 6px" }}>
-              <div className="bar" style={{ width: `${Math.max(0, Math.min(100, memoryRatio * 100))}%` }} />
-            </div>
-            <div style={{ padding: "0 8px 6px" }}>
-              <Sparkline points={memoryPoints} height={26} />
-            </div>
+                  <div className="comp-row">
+                    <span className="comp-label">内存</span>
+                    <span className="comp-value">
+                      {fmtBytes(memory!.usedBytes)} / {fmtBytes(memory!.totalBytes)}（{pct(memoryRatio)}）
+                    </span>
+                  </div>
+                  <div className="progress" style={{ margin: "0 8px 6px" }}>
+                    <div className="bar" style={{ width: `${Math.max(0, Math.min(100, memoryRatio * 100))}%` }} />
+                  </div>
+                  <LineChart
+                    series={[{ label: "内存", color: COLOR_MEMORY, points: points.memory }]}
+                    height={48}
+                    max={1}
+                    format={(value) => `${(value * 100).toFixed(0)}%`}
+                  />
 
-            <div className="comp-row">
-              <span className="comp-label">负载</span>
-              <span className="comp-value mono">
-                {cpu!.loadAverage.length > 0
-                  ? cpu!.loadAverage.map((value) => value.toFixed(2)).join(" / ")
-                  : "—"}
-              </span>
-            </div>
-            <div className="comp-row">
-              <span className="comp-label">磁盘吞吐</span>
-              <span className="comp-value mono">
-                {capabilities!.diskIo ? `读 ${fmtRate(diskRead)} · 写 ${fmtRate(diskWrite)}` : "不支持"}
-              </span>
-            </div>
-            <div className="comp-row">
-              <span className="comp-label">网络吞吐</span>
-              <span className="comp-value mono">
-                {capabilities!.network ? `↓ ${fmtRate(netRx)} · ↑ ${fmtRate(netTx)}` : "不支持"}
-              </span>
-            </div>
-            <div className="comp-row">
-              <span className="comp-label">面板自身</span>
-              <span className="comp-value mono" style={{ fontSize: 12 }}>
-                CPU {pct(snapshot.panel.cpuLoad)} · 内存 {fmtBytes(snapshot.panel.rssBytes)} ·{" "}
-                {snapshot.panel.threads} 线程
-              </span>
-            </div>
+                  <div className="comp-row">
+                    <span className="comp-label">负载</span>
+                    <span className="comp-value mono">
+                      {cpu!.loadAverage.length > 0
+                        ? cpu!.loadAverage.map((value) => value.toFixed(2)).join(" / ")
+                        : "—"}
+                    </span>
+                  </div>
+                  <div className="comp-row">
+                    <span className="comp-label">磁盘吞吐</span>
+                    <span className="comp-value mono">
+                      {capabilities!.diskIo ? `读 ${fmtRate(diskRead)} · 写 ${fmtRate(diskWrite)}` : "不支持"}
+                    </span>
+                  </div>
+                  <div className="comp-row">
+                    <span className="comp-label">网络吞吐</span>
+                    <span className="comp-value mono">
+                      {capabilities!.network ? `↓ ${fmtRate(netRx)} · ↑ ${fmtRate(netTx)}` : "不支持"}
+                    </span>
+                  </div>
+                  <div className="comp-row">
+                    <span className="comp-label">面板自身</span>
+                    <span className="comp-value mono" style={{ fontSize: 12 }}>
+                      CPU {pct(snapshot.panel.cpuLoad)} · 内存 {fmtBytes(snapshot.panel.rssBytes)} ·{" "}
+                      {snapshot.panel.threads} 线程
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "cpu" && (
+              <div className="perf-layout">
+                <div className="perf-main">
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10, padding: "2px 2px 4px" }}>
+                    <span className="perf-big">{pct(cpu!.load)}</span>
+                    <span className="perf-label">总占用 · {cpu!.count} 个逻辑处理器</span>
+                  </div>
+                  <LineChart
+                    series={[{ label: "CPU", color: COLOR_CPU, points: points.cpu }]}
+                    height={190}
+                    max={1}
+                    format={(value) => `${(value * 100).toFixed(0)}%`}
+                  />
+                  <div className="perf-label" style={{ margin: "10px 0 6px" }}>
+                    逻辑处理器（容器里显示的是宿主机核心）
+                    {cpu!.quotaCores > 0 && cpu!.quotaCores < cpu!.count
+                      ? ` · 配额 ${cpu!.quotaCores.toFixed(2)} 核`
+                      : ""}
+                  </div>
+                  <CoreGrid cores={cpu!.cores} />
+                </div>
+                <div className="perf-side">
+                  <div className="comp-row">
+                    <span className="comp-label">负载</span>
+                    <span className="comp-value mono" style={{ fontSize: 12 }}>
+                      {cpu!.loadAverage.length > 0
+                        ? cpu!.loadAverage.map((value) => value.toFixed(2)).join(" / ")
+                        : "—"}
+                    </span>
+                  </div>
+                  <div className="comp-row">
+                    <span className="comp-label">面板 CPU</span>
+                    <span className="comp-value mono" style={{ fontSize: 12 }}>
+                      {pct(snapshot.panel.cpuLoad)}
+                    </span>
+                  </div>
+                  <div className="comp-row">
+                    <span className="comp-label">线程</span>
+                    <span className="comp-value mono" style={{ fontSize: 12 }}>
+                      {snapshot.panel.threads}
+                    </span>
+                  </div>
+                  <div className="comp-row">
+                    <span className="comp-label">采样</span>
+                    <span className="comp-value mono" style={{ fontSize: 12 }}>
+                      {Math.round(snapshot.intervalMs / 1000)} 秒
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "gpu" && (
+              <div className="perf-layout">
+                <div className="perf-main">
+                  {snapshot.gpus.length === 0 ? (
+                    <div className="comp-row">
+                      <span className="comp-label">GPU</span>
+                      <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                        当前构建未启用 GPU 采集（预留）。检测到显卡后这里会显示利用率、显存与温度。
+                      </span>
+                    </div>
+                  ) : (
+                    snapshot.gpus.map((gpu) => (
+                      <div key={gpu.index}>
+                        <div className="perf-big">{pct(gpu.utilization)}</div>
+                        <div className="perf-label">
+                          {gpu.name} · 显存 {fmtBytes(gpu.memoryUsedBytes)} / {fmtBytes(gpu.memoryTotalBytes)} ·{" "}
+                          {gpu.temperatureC.toFixed(0)}°C
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === "disk" && (
+              <div className="perf-layout">
+                <div className="perf-main">
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10, padding: "2px 2px 4px" }}>
+                    <span className="perf-big">{fmtRate(diskRead)}</span>
+                    <span className="perf-label">读 · 写 {fmtRate(diskWrite)}</span>
+                  </div>
+                  {capabilities!.diskIo ? (
+                    <>
+                      <LineChart
+                        series={[
+                          { label: "读", color: COLOR_READ, points: points.read },
+                          { label: "写", color: COLOR_WRITE, points: points.write },
+                        ]}
+                        height={170}
+                        format={fmtRate}
+                      />
+                      <Legend
+                        items={[
+                          { color: COLOR_READ, label: "读", value: fmtRate(diskRead) },
+                          { color: COLOR_WRITE, label: "写", value: fmtRate(diskWrite) },
+                        ]}
+                      />
+                      <div className="perf-label" style={{ margin: "4px 0" }}>
+                        容器里这是宿主机级读数
+                      </div>
+                      {snapshot.disks.map((disk) => (
+                        <div className="comp-row" key={disk.name}>
+                          <span className="comp-label mono">{disk.name}</span>
+                          <span className="comp-value mono" style={{ fontSize: 12 }}>
+                            读 {fmtRate(disk.readBytesPerSec)} · 写 {fmtRate(disk.writeBytesPerSec)}
+                          </span>
+                        </div>
+                      ))}
+                    </>
+                  ) : (
+                    <div className="comp-row">
+                      <span className="comp-label">磁盘</span>
+                      <span className="comp-value" style={{ fontSize: 12 }}>
+                        当前平台不支持磁盘吞吐读数
+                      </span>
+                    </div>
+                  )}
+                  {snapshot.mounts.map((mount) => {
+                    const ratio = mount.totalBytes > 0 ? mount.usedBytes / mount.totalBytes : 0;
+                    return (
+                      <div key={mount.path} style={{ padding: "6px 0 2px" }}>
+                        <div className="comp-row" style={{ borderBottom: "none", padding: 0 }}>
+                          <span className="comp-label mono">{mount.path}</span>
+                          <span className="comp-value" style={{ fontSize: 12 }}>
+                            {fmtBytes(mount.usedBytes)} / {fmtBytes(mount.totalBytes)}（{pct(ratio)}）
+                          </span>
+                        </div>
+                        <div className="progress" style={{ marginTop: 4 }}>
+                          <div className="bar" style={{ width: `${Math.max(0, Math.min(100, ratio * 100))}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {activeTab === "network" && (
+              <div className="perf-layout">
+                <div className="perf-main">
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10, padding: "2px 2px 4px" }}>
+                    <span className="perf-big">{fmtRate(netRx)}</span>
+                    <span className="perf-label">接收 · 发送 {fmtRate(netTx)}</span>
+                  </div>
+                  {capabilities!.network ? (
+                    <>
+                      <LineChart
+                        series={[
+                          { label: "接收", color: COLOR_RX, points: points.rx },
+                          { label: "发送", color: COLOR_TX, points: points.tx },
+                        ]}
+                        height={170}
+                        format={fmtRate}
+                      />
+                      <Legend
+                        items={[
+                          { color: COLOR_RX, label: "接收", value: fmtRate(netRx) },
+                          { color: COLOR_TX, label: "发送", value: fmtRate(netTx) },
+                        ]}
+                      />
+                      <div className="perf-label" style={{ margin: "4px 0" }}>
+                        容器自己的网络命名空间
+                      </div>
+                      {snapshot.networks.map((network) => (
+                        <div className="comp-row" key={network.name}>
+                          <span className="comp-label mono">{network.name}</span>
+                          <span className="comp-value mono" style={{ fontSize: 12 }}>
+                            ↓ {fmtRate(network.rxBytesPerSec)} · ↑ {fmtRate(network.txBytesPerSec)}
+                          </span>
+                        </div>
+                      ))}
+                    </>
+                  ) : (
+                    <div className="comp-row">
+                      <span className="comp-label">网络</span>
+                      <span className="comp-value" style={{ fontSize: 12 }}>
+                        当前平台不支持网络吞吐读数
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div
               style={{
@@ -269,7 +630,8 @@ export function SystemMonitorCard() {
                 alignItems: "center",
                 gap: 8,
                 flexWrap: "wrap",
-                padding: "6px 8px 10px",
+                padding: "8px 8px 6px",
+                borderTop: "1px solid var(--monet-outline-variant)",
                 fontSize: 12,
                 color: "var(--monet-on-surface-variant)",
               }}
@@ -300,124 +662,6 @@ export function SystemMonitorCard() {
           </>
         )}
       </div>
-
-      {!mobile && snapshot && capabilities!.perCore && (
-        <div className="card">
-          <div className="comp-row">
-            <span className="comp-label">每核占用</span>
-            <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-              {cpu!.count} 个逻辑核（容器里显示的是宿主机核心）
-            </span>
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(22px, 1fr))",
-              gap: 4,
-              padding: "4px 8px 10px",
-            }}
-          >
-            {cpu!.cores.map((value, index) => (
-              <div
-                key={index}
-                title={`核 ${index} · ${pct(value)}`}
-                style={{ height: 22, borderRadius: 4, background: coreColor(value) }}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {!mobile && snapshot && (
-        <div className="card">
-          <div className="comp-row">
-            <span className="comp-label">内存明细</span>
-            <span className="comp-value mono" style={{ fontSize: 12 }}>
-              {memory!.source === "cgroup" ? "容器限额" : "整机"} · 可用 {fmtBytes(memory!.availableBytes)}
-            </span>
-          </div>
-          <div className="comp-row">
-            <span className="comp-label">交换</span>
-            <span className="comp-value mono" style={{ fontSize: 12 }}>
-              {memory!.swapTotalBytes > 0
-                ? `${fmtBytes(memory!.swapUsedBytes)} / ${fmtBytes(memory!.swapTotalBytes)}`
-                : "未启用"}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {!mobile && snapshot && capabilities!.diskIo && (
-        <div className="card">
-          <div className="comp-row">
-            <span className="comp-label">磁盘</span>
-            <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-              容器里这是宿主机级读数
-            </span>
-          </div>
-          {snapshot.disks.map((disk) => (
-            <div className="comp-row" key={disk.name}>
-              <span className="comp-label mono">{disk.name}</span>
-              <span className="comp-value mono" style={{ fontSize: 12 }}>
-                读 {fmtRate(disk.readBytesPerSec)} · 写 {fmtRate(disk.writeBytesPerSec)}
-              </span>
-            </div>
-          ))}
-          {snapshot.mounts.map((mount) => {
-            const ratio = mount.totalBytes > 0 ? mount.usedBytes / mount.totalBytes : 0;
-            return (
-              <div key={mount.path} style={{ padding: "2px 8px 8px" }}>
-                <div className="comp-row" style={{ borderBottom: "none", padding: 0 }}>
-                  <span className="comp-label mono">{mount.path}</span>
-                  <span className="comp-value" style={{ fontSize: 12 }}>
-                    {fmtBytes(mount.usedBytes)} / {fmtBytes(mount.totalBytes)}（{pct(ratio)}）
-                  </span>
-                </div>
-                <div className="progress" style={{ marginTop: 4 }}>
-                  <div className="bar" style={{ width: `${Math.max(0, Math.min(100, ratio * 100))}%` }} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {!mobile && snapshot && capabilities!.network && (
-        <div className="card">
-          <div className="comp-row">
-            <span className="comp-label">网络</span>
-            <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-              容器自己的网络命名空间
-            </span>
-          </div>
-          {snapshot.networks.map((network) => (
-            <div className="comp-row" key={network.name}>
-              <span className="comp-label mono">{network.name}</span>
-              <span className="comp-value mono" style={{ fontSize: 12 }}>
-                ↓ {fmtRate(network.rxBytesPerSec)} · ↑ {fmtRate(network.txBytesPerSec)}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {!mobile && snapshot && capabilities!.gpu && snapshot.gpus.length > 0 && (
-        <div className="card">
-          <div className="comp-row">
-            <span className="comp-label">GPU</span>
-            <span className="comp-value" />
-          </div>
-          {snapshot.gpus.map((gpu) => (
-            <div className="comp-row" key={gpu.index}>
-              <span className="comp-label mono">{gpu.name}</span>
-              <span className="comp-value mono" style={{ fontSize: 12 }}>
-                {pct(gpu.utilization)} · 显存 {fmtBytes(gpu.memoryUsedBytes)} / {fmtBytes(gpu.memoryTotalBytes)} ·{" "}
-                {gpu.temperatureC.toFixed(0)}°C
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
     </>
   );
 }

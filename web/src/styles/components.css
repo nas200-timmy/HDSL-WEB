@@ -1106,3 +1106,86 @@ select.input {
 .wallpaper-add.busy input[type="file"] {
   cursor: default;
 }
+
+/* ---------------- 系统资源（任务管理器式性能页） ---------------- */
+
+.perf-tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--monet-outline-variant);
+  margin: 0 0 6px;
+  padding: 0 4px;
+}
+
+.perf-tab {
+  height: 34px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: var(--monet-on-surface-variant);
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+
+.perf-tab.active {
+  color: var(--monet-primary);
+  border-bottom-color: var(--monet-primary);
+  font-weight: 600;
+}
+
+.perf-layout {
+  display: flex;
+  gap: 14px;
+  padding: 4px 6px 8px;
+  flex-wrap: wrap;
+}
+
+.perf-main {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+
+.perf-side {
+  flex: 0 0 220px;
+  display: grid;
+  gap: 2px;
+  align-content: start;
+}
+
+.perf-big {
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.perf-label {
+  font-size: 12px;
+  color: var(--monet-on-surface-variant);
+}
+
+.perf-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  padding: 2px 0 6px;
+}
+
+.perf-legend .chip {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+@media (max-width: 760px), (max-height: 520px) {
+  .perf-side {
+    flex-basis: 100%;
+    grid-template-columns: 1fr 1fr;
+  }
+}
