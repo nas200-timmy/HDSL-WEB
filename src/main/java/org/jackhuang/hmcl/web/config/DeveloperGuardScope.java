@@ -90,13 +90,18 @@ public enum DeveloperGuardScope {
     /// explains why it is being refused.
     ///
     /// Deliberately narrow: health, the auth endpoints, the developer endpoints
-    /// themselves. Everything else — including `/api/instances` — is gated at
-    /// [ALL].
+    /// themselves, and `/api/system/*` — the host readings are exactly what a
+    /// shell in the same container can read, so a password prompt there would
+    /// be theatre, not a boundary (and the monitor card must work at [ALL] or
+    /// the general page would look broken).
     public static boolean alwaysAllowed(String path) {
         if (path.startsWith("/api/auth/")) {
             return true;
         }
         if (path.startsWith("/api/developer/")) {
+            return true;
+        }
+        if (path.startsWith("/api/system/")) {
             return true;
         }
         return path.equals("/api/health") || path.equals("/api/version") || path.equals("/api");

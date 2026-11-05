@@ -183,6 +183,7 @@ public final class AuthFilter implements Filter {
         if (session.isPresent()) {
             req.setAttribute(SESSION_ATTRIBUTE, session.get());
             req.setAttribute(SESSION_TOKEN_ATTRIBUTE, token);
+            org.jackhuang.hmcl.web.system.SystemActivity.touch();
             chain.doFilter(request, response);
             return;
         }
@@ -266,6 +267,7 @@ public final class AuthFilter implements Filter {
         }
         req.setAttribute(SESSION_ATTRIBUTE, new AuthService.Session("agent:" + grant.label(), grant.expiresAt()));
         req.setAttribute(AGENT_GRANT_ATTRIBUTE, grant);
+        org.jackhuang.hmcl.web.system.SystemActivity.touch();
         org.jackhuang.hmcl.web.audit.AuditLog.beginAgentFields(
                 new org.jackhuang.hmcl.web.audit.AuditLog.AgentFields(grant.id(), grant.scopes(), grant.instanceId()));
         return true;

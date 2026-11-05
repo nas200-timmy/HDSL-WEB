@@ -65,6 +65,12 @@ public final class AgentScopes {
     /// (history, output stream, everything typed). An operator who lets an
     /// agent start and stop servers may still refuse to hand it that.
     public static final String MC_CONSOLE = "mc-console";
+    /// `/api/system/*`: the host's own readings (CPU, memory, disk, network).
+    /// Separate from [READ] so a ticket that may read the panel does not
+    /// automatically get a picture of the machine it runs on. It is not a
+    /// security boundary — an agent with a shell can read `/proc` itself — but
+    /// it is an explicit, auditable "yes" instead of an accident.
+    public static final String SYSTEM = "system";
     /// Creating, deleting, launching and stopping **other** instances.
     public static final String INSTANCES = "instances";
     /// Accounts, models, TLS, network trust, node runtimes, wallpapers.
@@ -73,7 +79,7 @@ public final class AgentScopes {
     public static final String PLUGINS = "plugins";
 
     /// Every class a grant may name, in the order the panel presents them.
-    public static final Set<String> KNOWN = Set.of(READ, MC, MC_CONSOLE, INSTANCES, CONFIG, PLUGINS);
+    public static final Set<String> KNOWN = Set.of(READ, MC, MC_CONSOLE, SYSTEM, INSTANCES, CONFIG, PLUGINS);
 
     /// What a grant holds when the operator ticks nothing: reading the panel,
     /// and nothing that changes it.
@@ -162,6 +168,12 @@ public final class AgentScopes {
         // pulled a proxied instance page into a model's context.
         if (!path.startsWith("/api/") && !path.equals("/api")) {
             return null;
+        }
+        // The machine's readings are their own class, checked before the
+        // "every GET is a read" shortcut below: a read-only ticket must not
+        // inherit them by accident.
+        if (path.startsWith("/api/system/") || path.equals("/api/system")) {
+            return SYSTEM;
         }
         if ("GET".equals(method) || "HEAD".equals(method)) {
             return READ;

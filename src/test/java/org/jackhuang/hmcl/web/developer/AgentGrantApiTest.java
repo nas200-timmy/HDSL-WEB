@@ -324,6 +324,10 @@ class AgentGrantApiTest {
                 "a trailing slash must not fall back to the wider class");
         assertEquals(AgentScopes.MC, AgentScopes.required("POST", "/api/mc/instances/x/console/input"));
         assertEquals(AgentScopes.MC, AgentScopes.required("POST", "/api/mc/instances/x/console"));
+        // The host's own readings are their own class, and a plain read ticket
+        // must not inherit them through the "every GET is a read" shortcut.
+        assertEquals(AgentScopes.SYSTEM, AgentScopes.required("GET", "/api/system/stats"));
+        assertEquals(AgentScopes.SYSTEM, AgentScopes.required("GET", "/api/system/info"));
         assertEquals(AgentScopes.INSTANCES, AgentScopes.required("POST", "/api/instances"));
         assertEquals(AgentScopes.PLUGINS, AgentScopes.required("POST", "/api/instances/x/plugins/install"));
         assertEquals(AgentScopes.CONFIG, AgentScopes.required("POST", "/api/settings/tls"));
@@ -376,6 +380,28 @@ class AgentGrantApiTest {
         }
     }
 
+    /// 系统读数单独一类：`read` 票能看面板，但看不到宿主机。
+    @Test
+    void systemReadingsNeedTheirOwnScope() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "https://127.0.0.1:" + running.port();
+            String cookie = elevatedSession(client, base);
+
+            String readOnly = mint(client, base, cookie,
+                    "\"label\":\"reader\",\"scopes\":[\"read\"]}").get("token").getAsString();
+            HttpResponse<String> denied = getWithBearer(client, base + "/api/system/stats", readOnly);
+            assertEquals(403, denied.statusCode(), denied.body());
+            assertTrue(denied.body().contains("agent_scope_denied"), denied.body());
+
+            String withSystem = mint(client, base, cookie,
+                    "\"label\":\"monitor\",\"scopes\":[\"read\",\"system\"]}").get("token").getAsString();
+            HttpResponse<String> stats = getWithBearer(client, base + "/api/system/stats", withSystem);
+            assertEquals(200, stats.statusCode(), stats.body());
+            assertTrue(stats.body().contains("\"history\""), stats.body());
+        }
+    }
+
     /// 票的来源：默认只认本机回环，改一次立即生效并落进 server.yaml。
     @Test
     void theSourceRuleDefaultsToLoopbackAndIsSaved() throws Exception {
@@ -408,7 +434,7 @@ class AgentGrantApiTest {
     /// under test is what decides.
     private JsonObject mint(HttpClient client, String base, String cookie, String fields) throws Exception {
         assertEquals(200, post(client, base + "/api/developer/agent-password",
-                "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\",\"mc\",\"mc-console\",\"instances\",\"config\",\"plugins\"]}",
+                "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\",\"mc\",\"mc-console\",\"system\",\"instances\",\"config\",\"plugins\"]}",
                 cookie).statusCode());
         HttpResponse<String> minted = post(client, base + "/api/developer/agent-auth",
                 "{\"password\":\"" + AGENT_PASSWORD + "\"," + fields, null);

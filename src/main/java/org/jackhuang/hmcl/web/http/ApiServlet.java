@@ -166,6 +166,7 @@ public final class ApiServlet extends HttpServlet {
         // 口令是对的，此前那些失败也就不再算数——这个记录问的正是这件事。
         loginThrottle.clear(address);
         AuditLog.log(AuditLog.Channel.WEB, "login", null, "success", username, address);
+        org.jackhuang.hmcl.web.system.SystemActivity.touch();
         response.addCookie(authFilter.sessionCookie(request, token.get()));
         Json.write(response, new LoginBody(true, username));
     }
@@ -222,6 +223,7 @@ public final class ApiServlet extends HttpServlet {
             return;
         }
         response.addCookie(authFilter.sessionCookie(request, token.get()));
+        org.jackhuang.hmcl.web.system.SystemActivity.touch();
         AuditLog.log(AuditLog.Channel.WEB, "auth.setup", null, "success", username, request.getRemoteAddr());
         Json.write(response, HttpServletResponse.SC_CREATED, new SetupBody(true, username));
     }

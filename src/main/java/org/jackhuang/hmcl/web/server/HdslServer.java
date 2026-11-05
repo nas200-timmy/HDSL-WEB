@@ -127,6 +127,10 @@ public final class HdslServer {
     /// TUI from the panel.
     private final org.jackhuang.hmcl.web.terminal.TerminalManager terminals;
     private final org.jackhuang.hmcl.web.minecraft.McRuntime mcRuntime;
+    /// The machine's own readings (docs/web-shell.md §通用 → 系统资源). One
+    /// sampler for every viewer; it runs in two gears and never faster than a
+    /// second.
+    private final org.jackhuang.hmcl.web.system.SystemMetrics systemMetrics;
     private final Logger logger;
     private final AtomicLong startedAtMillis;
     private final AtomicBoolean hookInstalled = new AtomicBoolean();
@@ -137,6 +141,7 @@ public final class HdslServer {
                        AcpSessionManager acpSessions,
                        org.jackhuang.hmcl.web.terminal.TerminalManager terminals,
                        org.jackhuang.hmcl.web.minecraft.McRuntime mcRuntime,
+                       org.jackhuang.hmcl.web.system.SystemMetrics systemMetrics,
                        Logger logger, AtomicLong startedAtMillis) {
         this.server = server;
         this.baseHttpConfig = baseHttpConfig;
@@ -147,6 +152,7 @@ public final class HdslServer {
         this.acpSessions = acpSessions;
         this.terminals = terminals;
         this.mcRuntime = mcRuntime;
+        this.systemMetrics = systemMetrics;
         this.logger = logger;
         this.startedAtMillis = startedAtMillis;
     }
@@ -259,6 +265,14 @@ public final class HdslServer {
         org.jackhuang.hmcl.web.terminal.TerminalWebSocket.configure(
                 terminals, terminalTickets, authService, config.auth.disabled, developerElevation);
 
+        // The machine's own readings (通用 → 系统资源). One sampler for every
+        // viewer, two gears, never faster than a second; it starts slow and
+        // switches to the fast gear when a request touches SystemActivity.
+        org.jackhuang.hmcl.web.system.SystemMetrics systemMetrics =
+                new org.jackhuang.hmcl.web.system.SystemMetrics(config.dataDir);
+        systemMetrics.start();
+        org.jackhuang.hmcl.web.system.SystemActivity.install(systemMetrics::touch);
+
         // The client behind the `/i/*` WebSocket relay; its life is the
         // server's own. Its message limits are raised for the same reason the
         // server-side ones are (see InstanceProxyWebSocket#MAX_MESSAGE_BYTES):
@@ -322,6 +336,8 @@ public final class HdslServer {
                         config, developerAuth, developerElevation, authService, emergencyStop, tlsActive);
         context.addFilter(new FilterHolder(guardFilter), "/api/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(new FilterHolder(guardFilter), "/i/*", EnumSet.of(DispatcherType.REQUEST));
+        context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.system.SystemApiServlet(
+                systemMetrics, config, startedAtMillis::get, mainConnector::getLocalPort)), "/api/system/*");
         context.addServlet(new ServletHolder(new ApiServlet(
                 authService, authFilter, config.auth.disabled, Metadata.VERSION, startedAtMillis::get,
                 developerElevation)), "/api/*");
@@ -522,7 +538,7 @@ public final class HdslServer {
         org.jackhuang.hmcl.web.http.HostHeaderSupport.verify();
 
         HdslServer built = new HdslServer(server, httpConfig, mainConnector, redirectConnector, ssl,
-                proxyWebSocketClient, acpSessions, terminals, mcRuntime, logger, startedAtMillis);
+                proxyWebSocketClient, acpSessions, terminals, mcRuntime, systemMetrics, logger, startedAtMillis);
         self.set(built);
         return built;
     }
@@ -919,6 +935,7 @@ public final class HdslServer {
         // manager takes their process groups with it.
         terminals.close();
         acpSessions.closeAll();
+        systemMetrics.close();
         server.stop();
         proxyWebSocketClient.stop();
     }

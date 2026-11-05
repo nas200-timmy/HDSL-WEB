@@ -22,6 +22,7 @@ var agentScopes = []agentScope{
 	{"read", "读取面板", "实例、日志、任务"},
 	{"mc", "Minecraft", "启停服务器、控制台命令"},
 	{"mc-console", "MC 控制台", "附着 PTY 控制台，实时读写"},
+	{"system", "系统性能", "CPU、内存、磁盘读数"},
 	{"instances", "管理实例", "建删启停其它实例"},
 	{"config", "面板配置", "账号、模型、TLS"},
 	{"plugins", "插件与整合包", "装/卸插件、整合包"},

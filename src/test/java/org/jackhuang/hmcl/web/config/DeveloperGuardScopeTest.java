@@ -91,6 +91,11 @@ class DeveloperGuardScopeTest {
         assertTrue(DeveloperGuardScope.alwaysAllowed("/api/auth/logout"));
         assertTrue(DeveloperGuardScope.alwaysAllowed("/api/developer/status"));
         assertTrue(DeveloperGuardScope.alwaysAllowed("/api/developer/elevate"));
+        // The host readings are what a shell in the same container can read, so
+        // gating them behind a password would be theatre; the monitor card must
+        // also work at `all` or the general page looks broken.
+        assertTrue(DeveloperGuardScope.alwaysAllowed("/api/system/stats"));
+        assertTrue(DeveloperGuardScope.alwaysAllowed("/api/system/info"));
         // Everything else is gated at `all` — including the instance list, which
         // is exactly what the scope is for.
         assertFalse(DeveloperGuardScope.alwaysAllowed("/api/instances"));
