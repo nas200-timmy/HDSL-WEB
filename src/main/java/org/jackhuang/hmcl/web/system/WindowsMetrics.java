@@ -92,7 +92,7 @@ final class WindowsMetrics {
     private static final int PDH_ITEM_BYTES = 24; // LPWSTR + PDH_FMT_COUNTERVALUE on x64
 
     private final Ntdll ntdll;
-    private final Psapi psapi;
+    private final Kernel32 kernel32;
     private final Pdh pdh;
     private final @Nullable Pointer query;
     private final @Nullable Pointer diskRead;
@@ -100,9 +100,9 @@ final class WindowsMetrics {
     private final @Nullable Pointer netReceived;
     private final @Nullable Pointer netSent;
 
-    private WindowsMetrics(Ntdll ntdll, Psapi psapi, Pdh pdh) {
+    private WindowsMetrics(Ntdll ntdll, Kernel32 kernel32, Pdh pdh) {
         this.ntdll = ntdll;
-        this.psapi = psapi;
+        this.kernel32 = kernel32;
         this.pdh = pdh;
         PointerByReference handle = new PointerByReference();
         Pointer opened = null;
@@ -131,9 +131,9 @@ final class WindowsMetrics {
     static @Nullable WindowsMetrics create() {
         try {
             Ntdll ntdll = Native.load("ntdll", Ntdll.class);
-            Psapi psapi = Native.load("psapi", Psapi.class);
+            Kernel32 kernel32 = Native.load("kernel32", Kernel32.class);
             Pdh pdh = Native.load("pdh", Pdh.class);
-            return new WindowsMetrics(ntdll, psapi, pdh);
+            return new WindowsMetrics(ntdll, kernel32, pdh);
         } catch (Throwable e) {
             // UnsatisfiedLinkError, a missing DLL, a stubbed JNA on a test host:
             // all of them mean "no Windows readings", not "crash the panel".
@@ -187,14 +187,19 @@ final class WindowsMetrics {
     }
 
     /// Physical memory, or `null` when the call fails.
+    ///
+    /// `GlobalMemoryStatusEx` rather than `GetPerformanceInfo`: the latter's
+    /// `SIZE_T`-heavy struct came back misaligned on the first Windows test
+    /// (a page count multiplied by a garbage page size — an absurd total),
+    /// while this structure is two DWORDs and seven DWORDLONGs with no padding
+    /// surprises. Windows' standby cache is not collected yet, so `cached` is
+    /// zero and the page simply does not draw that segment.
     MemoryInfo memory() {
-        PerformanceInformation info = new PerformanceInformation();
-        if (!psapi.GetPerformanceInfo(info, info.size())) {
+        MemoryStatusEx status = new MemoryStatusEx();
+        if (!kernel32.GlobalMemoryStatusEx(status)) {
             return null;
         }
-        long pageSize = Math.max(1, info.PageSize);
-        return new MemoryInfo(info.PhysicalTotal * pageSize, info.PhysicalAvailable * pageSize,
-                info.SystemCache * pageSize);
+        return new MemoryInfo(status.ullTotalPhys, status.ullAvailPhys, 0);
     }
 
     /// Disk rates over the PDH collection interval, or `null` when the counters
@@ -296,8 +301,8 @@ final class WindowsMetrics {
                                      int informationLength, IntByReference returnLength);
     }
 
-    interface Psapi extends Library {
-        boolean GetPerformanceInfo(PerformanceInformation information, int size);
+    interface Kernel32 extends Library {
+        boolean GlobalMemoryStatusEx(MemoryStatusEx status);
     }
 
     interface Pdh extends Library {
@@ -316,30 +321,24 @@ final class WindowsMetrics {
         int PdhCloseQuery(Pointer query);
     }
 
-    /// `PERFORMANCE_INFORMATION` from psapi.h. `SIZE_T` is a pointer-width
-    /// unsigned integer; the panel ships 64-bit, where JNA's `long` matches it.
-    @Structure.FieldOrder({"cb", "CommitTotal", "CommitLimit", "CommittedPages", "CommitPeak",
-            "PhysicalTotal", "PhysicalAvailable", "SystemCache", "KernelTotal", "KernelPaged",
-            "KernelNonpaged", "PageSize", "HandleCount", "ProcessCount", "ThreadCount"})
-    public static final class PerformanceInformation extends Structure {
-        public int cb;
-        public long CommitTotal;
-        public long CommitLimit;
-        public long CommittedPages;
-        public long CommitPeak;
-        public long PhysicalTotal;
-        public long PhysicalAvailable;
-        public long SystemCache;
-        public long KernelTotal;
-        public long KernelPaged;
-        public long KernelNonpaged;
-        public long PageSize;
-        public long HandleCount;
-        public long ProcessCount;
-        public long ThreadCount;
+    /// `MEMORYSTATUSEX` from sysinfoapi.h: two DWORDs followed by seven
+    /// DWORDLONGs, 64 bytes on a 64-bit process with no padding surprises.
+    @Structure.FieldOrder({"dwLength", "dwMemoryLoad", "ullTotalPhys", "ullAvailPhys",
+            "ullTotalPageFile", "ullAvailPageFile", "ullTotalVirtual", "ullAvailVirtual",
+            "ullAvailExtendedVirtual"})
+    public static final class MemoryStatusEx extends Structure {
+        public int dwLength;
+        public int dwMemoryLoad;
+        public long ullTotalPhys;
+        public long ullAvailPhys;
+        public long ullTotalPageFile;
+        public long ullAvailPageFile;
+        public long ullTotalVirtual;
+        public long ullAvailVirtual;
+        public long ullAvailExtendedVirtual;
 
-        public PerformanceInformation() {
-            cb = size();
+        public MemoryStatusEx() {
+            dwLength = size();
         }
     }
 

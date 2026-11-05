@@ -15,8 +15,9 @@
   （container / wsl / native），「容器里…」只在容器里说；Windows 上明说
   缓存/每核等暂未采集，不再出现 Linux 专属文案或空网格。
 - Windows 原生读数（JNA，无新依赖）：每核 CPU 走
-  `NtQuerySystemInformation`，内存走 `GetPerformanceInfo`（含 `SystemCache`），
-  磁盘/网络走 PDH 计数器；任何一项取不到就降级为能力位 false，不编 0。
+  `NtQuerySystemInformation`，内存走 `GlobalMemoryStatusEx`（总量与可用；
+  Windows 的 standby 缓存暂未采集），磁盘/网络走 PDH 计数器；任何一项取不到
+  就降级为能力位 false，不编 0。
   超过 64 个逻辑处理器时只覆盖当前处理器组。
 - 采样器两档：有人用面板时 1 秒一帧，没人时 30 秒；**不接受客户端指定频率**。
   240 帧历史只在内存，重启即丢，不写日志；首次打开带历史，曲线不用等。

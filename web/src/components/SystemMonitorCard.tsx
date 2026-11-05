@@ -83,7 +83,7 @@ function coreColor(value: number): string {
 function perCoreNote(host: SystemSnapshot["host"]): string {
   if (host.environment === "container") return "容器里显示的是宿主机核心";
   if (host.environment === "wsl") return "WSL 里显示的是 Linux 虚拟机的核心";
-  return "每个逻辑处理器";
+  return "";
 }
 
 function diskNote(host: SystemSnapshot["host"]): string {
@@ -529,7 +529,8 @@ export function SystemMonitorCard() {
                   {capabilities!.perCore ? (
                     <>
                       <div className="perf-label" style={{ margin: "10px 0 6px" }}>
-                        逻辑处理器（{perCoreNote(snapshot.host)}）
+                        逻辑处理器
+                        {perCoreNote(snapshot.host) ? `（${perCoreNote(snapshot.host)}）` : ""}
                         {cpu!.quotaCores > 0 && cpu!.quotaCores < cpu!.count
                           ? ` · 配额 ${cpu!.quotaCores.toFixed(2)} 核`
                           : ""}
@@ -630,7 +631,9 @@ export function SystemMonitorCard() {
                     </span>
                   </div>
                   <div className="comp-row">
-                    <span className="comp-label">交换</span>
+                    <span className="comp-label">
+                      {snapshot.host.os === "windows" ? "页面文件" : "交换"}
+                    </span>
                     <span className="comp-value mono" style={{ fontSize: 12 }}>
                       {memory!.swapTotalBytes > 0
                         ? `${fmtBytes(memory!.swapUsedBytes)} / ${fmtBytes(memory!.swapTotalBytes)}`

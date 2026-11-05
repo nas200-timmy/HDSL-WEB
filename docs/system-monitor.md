@@ -77,7 +77,7 @@ cgroup 有限额时，`使用中 = memory.current - memory.stat:file`，`已缓�
 |---|---|---|
 | 总 CPU | `/proc/stat` 差值 | `NtQuerySystemInformation` 的每核累计值 |
 | 每核 | `/proc/stat` 的 `cpuN` 行 | `NtQuerySystemInformation(SystemProcessorPerformanceInformation)`（JNA/ntdll） |
-| 内存 | meminfo；有 cgroup 限额时显示限额 | `GetPerformanceInfo`：物理总量、可用、`SystemCache` |
+| 内存 | meminfo；有 cgroup 限额时显示限额 | `GlobalMemoryStatusEx`：物理总量、可用；Vista 的 standby 缓存暂未采集 |
 | 磁盘吞吐 | `/proc/diskstats`（**宿主机级**） | PDH `\PhysicalDisk(_Total)\Disk Read/Write Bytes/sec` |
 | 网络吞吐 | `/proc/net/dev`（容器自己的命名空间） | PDH `\Network Interface(*)\Bytes Received/Sent/sec` |
 | 负载 | `/proc/loadavg` | 无（`—`） |

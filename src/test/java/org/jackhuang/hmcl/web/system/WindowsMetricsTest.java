@@ -82,10 +82,10 @@ class WindowsMetricsTest {
 
     @Test
     void theStructsHaveTheSizesTheApisExpect() {
-        assumeTrue(Native.POINTER_SIZE == 8, "SIZE_T is 8 bytes in the shipped 64-bit build");
-        WindowsMetrics.PerformanceInformation info = new WindowsMetrics.PerformanceInformation();
-        assertEquals(120, info.size(), "DWORD + 14 SIZE_T, with the padding Windows inserts");
-        assertEquals(120, info.cb);
+        assumeTrue(Native.POINTER_SIZE == 8, "the layout assumes a 64-bit process");
+        WindowsMetrics.MemoryStatusEx status = new WindowsMetrics.MemoryStatusEx();
+        assertEquals(64, status.size(), "two DWORDs + seven DWORDLONGs");
+        assertEquals(64, status.dwLength);
         assertEquals(16, new WindowsMetrics.PdhCounterValue().size(), "DWORD + padding + double");
     }
 }
