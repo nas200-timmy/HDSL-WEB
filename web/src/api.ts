@@ -872,7 +872,8 @@ export interface McJavaInfo {
   path: string;
   version: string | null;
   major: number;
-  source: "panel" | "configured" | "none";
+  // installed = 本机另一份 JDK：所选 MC 版本要求更高时，面板挑满足要求的最低那份。
+  source: "panel" | "installed" | "configured" | "none";
   ok: boolean;
   error?: string;
 }
