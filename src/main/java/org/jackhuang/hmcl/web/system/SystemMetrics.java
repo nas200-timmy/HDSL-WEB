@@ -394,7 +394,11 @@ public final class SystemMetrics {
             return entries
                     .map(path -> path.getFileName().toString())
                     .filter(name -> !name.startsWith("loop") && !name.startsWith("dm-")
-                            && !name.startsWith("ram") && !name.startsWith("zram"))
+                            && !name.startsWith("ram") && !name.startsWith("zram")
+                            // An optical drive is a block device but not a disk
+                            // whose throughput anybody watches; the same for
+                            // network block devices.
+                            && !name.startsWith("sr") && !name.startsWith("nbd"))
                     .sorted()
                     .toList();
         } catch (IOException | RuntimeException e) {

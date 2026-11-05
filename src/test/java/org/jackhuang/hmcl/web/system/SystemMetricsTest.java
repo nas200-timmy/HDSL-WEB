@@ -71,6 +71,7 @@ class SystemMetricsTest {
         write("proc/loadavg", "0.50 0.40 0.30 1/100 1234");
         write("proc/self/status", "VmRSS:\t  1234 kB\n");
         Files.createDirectories(temp.resolve("sys/block/sda"));
+        Files.createDirectories(temp.resolve("sys/block/sr0"));
 
         SystemMetrics metrics = new SystemMetrics(temp.resolve("data"), temp.resolve("proc"),
                 temp.resolve("sys/block"), HostInfo.NATIVE_LINUX);
@@ -83,6 +84,7 @@ class SystemMetricsTest {
             assertEquals(-1, first.cpu().load(), "the first sample has nothing to compare");
             assertEquals(-1, first.cpu().cores()[0]);
             assertEquals(1, first.disks().size(), "only the whole device, never its partition");
+            assertEquals("sda", first.disks().get(0).name(), "an optical drive is not a disk");
             assertEquals(-1, first.disks().get(0).readBytesPerSec());
             assertEquals(1, first.networks().size());
             assertEquals(-1, first.networks().get(0).rxBytesPerSec());
