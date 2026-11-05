@@ -25,6 +25,10 @@
 - 文档：`docs/security.md §2.9` 补上 agent 密码只在 `instance`/`all` 两档有效、
   scope 实为七类；`docs/windows-bare-deploy.md` 补上「别用 SSH 会话里的
   `Start-Process` 常驻面板」（OpenSSH 的 job object 会随会话断掉带走整棵树）。
+- `/api/versions` 与插件版本列表不再被「PATH 上有 node、却没有 npm」卡住。
+  Debian/Ubuntu 把两者拆成两个包，这类主机以前会答 "npm was not found on
+  PATH"，即使面板已经装好带 npm 的托管运行时；现在 PATH 那个查不了 registry
+  就让位给托管运行时（PATH 优先，只要它能干活）。
 
 ## v0.6.70 — 2026-11-05 · 通用页性能面板；Windows 原生读数；品牌最后手段收敛
 
