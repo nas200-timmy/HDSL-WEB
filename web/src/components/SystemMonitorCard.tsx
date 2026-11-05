@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { SystemSnapshot, SystemStats } from "../types";
 import { errMsg } from "../utils";
+import { useMobileLayout } from "../hooks";
 import { TuneIcon } from "./icons";
 
 /// 后端环形缓冲的容量；首次打开要一次拿满，之后只取最新一帧。
@@ -107,6 +108,8 @@ function Sparkline({ points, height = 34 }: { points: Array<{ t: number; v: numb
 /// 决定哪张子卡值得画，前端只负责画。采样频率也不由这里决定：请求再快，
 /// 后端也只是把最新一帧给你。
 export function SystemMonitorCard() {
+  // 手机上只看总览：小屏幕摆不下每核框框和四张明细卡，滚半页也读不完。
+  const mobile = useMobileLayout();
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null);
   const [history, setHistory] = useState<SystemSnapshot[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -274,6 +277,7 @@ export function SystemMonitorCard() {
               <span>
                 采样 {Math.round(snapshot.intervalMs / 1000)} 秒一帧
                 {snapshot.intervalMs >= 30_000 ? "（低频守护：暂时没人使用面板）" : ""}
+                {mobile ? " · 手机端只显示总览" : ""}
               </span>
               <span>· 最后更新 {new Date(snapshot.at).toLocaleTimeString()}</span>
               <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
@@ -297,7 +301,7 @@ export function SystemMonitorCard() {
         )}
       </div>
 
-      {snapshot && capabilities!.perCore && (
+      {!mobile && snapshot && capabilities!.perCore && (
         <div className="card">
           <div className="comp-row">
             <span className="comp-label">每核占用</span>
@@ -324,7 +328,7 @@ export function SystemMonitorCard() {
         </div>
       )}
 
-      {snapshot && (
+      {!mobile && snapshot && (
         <div className="card">
           <div className="comp-row">
             <span className="comp-label">内存明细</span>
@@ -343,7 +347,7 @@ export function SystemMonitorCard() {
         </div>
       )}
 
-      {snapshot && capabilities!.diskIo && (
+      {!mobile && snapshot && capabilities!.diskIo && (
         <div className="card">
           <div className="comp-row">
             <span className="comp-label">磁盘</span>
@@ -378,7 +382,7 @@ export function SystemMonitorCard() {
         </div>
       )}
 
-      {snapshot && capabilities!.network && (
+      {!mobile && snapshot && capabilities!.network && (
         <div className="card">
           <div className="comp-row">
             <span className="comp-label">网络</span>
@@ -397,7 +401,7 @@ export function SystemMonitorCard() {
         </div>
       )}
 
-      {snapshot && capabilities!.gpu && snapshot.gpus.length > 0 && (
+      {!mobile && snapshot && capabilities!.gpu && snapshot.gpus.length > 0 && (
         <div className="card">
           <div className="comp-row">
             <span className="comp-label">GPU</span>
