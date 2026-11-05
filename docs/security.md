@@ -141,9 +141,13 @@ SMB/NFS export、某些 Windows 共享卷同样如此）会把**共享属主**�
   只会得到「密码不正确」。
 - **一条门**：`POST /api/developer/agent-auth`。免会话（curl 可用），但要求**此刻有人正在
   提权**；换出的票寿命被提权窗口截断，操作员登出或「停止提权」后票当场失效。
-- **scope 五类**：`read`（`/api/*` 的 GET）、`mc`、`instances`、`config`、`plugins`。默认只给
-  `read`；未分类路由一律拒绝；`/i/*`（反代）与 `/ws/*`（事件流）任何 scope 都不放行；
-  凭据类路由（`admin-password`、`/open`、`/exports`、`/developer/*`、`/auth/*`）在网关拒绝。
+  **只在 `developer_guard.scope` 为 `instance` / `all` 时存在**：默认的 `off` 档下会话本身
+  已经约等于全权限，这条门答 `409 agent_password_not_applicable`，面板上对应的按钮也不亮。
+- **scope 七类**：`read`（`/api/*` 的 GET）、`mc`（启停、单行指令、日志）、`mc-console`
+  （MC 的 PTY 控制台 attach，单独一类）、`system`（宿主机 CPU/内存/磁盘/网络读数）、
+  `instances`、`config`、`plugins`。默认只给 `read`；未分类路由一律拒绝；`/i/*`（反代）与
+  `/ws/*`（事件流）任何 scope 都不放行；凭据类路由（`admin-password`、`/open`、`/exports`、
+  `/developer/*`、`/auth/*`）在网关拒绝。
 - **自杀闸靠内核身份，不靠自报**：面板按平台原生接口推导**调用者住在哪个实例**——Linux
   走 `/proc`（socket inode → 持有进程 → ppid 链；容器里面板是 root、实例是 uid 1000，而
   默认的 root 没有 `CAP_SYS_PTRACE`、读不了 agent 的 fd 表，所以「inode → 持有进程」这一步

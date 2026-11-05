@@ -496,6 +496,12 @@ java -jar build\libs\hdsl-web-<版本>.jar -doctor
 派生结论的复现：写一个 `ProcessBuilder` 小程序，分别跑裸 `node`、裸 `npm`、裸 `npm.cmd`、
 全路径 `npm.cmd`、无扩展名全路径 `npm`，看 error code（§1.4 的表就是这样做出来的）。
 
+**别在 SSH 会话里 `Start-Process` 常驻面板。** Windows 自带的 OpenSSH 把登录 shell 放进一个
+job object，会话一断就把整棵树带走：面板和你从它拉起的实例一起消失，日志最后一行还停在
+"listening"，看着像自己退了。要常驻就用**任务计划程序**（触发器 "计算机启动时"，勾选
+"不管用户是否登录都运行"）或 nssm 注册成服务，两者都不挂在任何交互式会话的 job 上。
+临时排查时才用交互式会话，且那条会话断之前别指望它活着。
+
 ### 9.5 实例终端：ConPTY 落地记录（2026-10-31）
 
 Windows 上的实例终端从「桌面控制台窗口」换成浏览器 PTY，实现是系统自带的
