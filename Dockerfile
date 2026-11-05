@@ -238,23 +238,25 @@ RUN set -eux; \
         apt-get install -y --no-install-recommends \
           7zip build-essential busybox-static bzip2 ca-certificates cargo curl \
           ffmpeg git golang-go less libatomic1 libavcodec-extra nano \
-          openjdk-21-jdk-headless pkg-config procps python-is-python3 python3 \
-          rustc tini unzip vim-tiny wget xz-utils zip zstd; \
+          openjdk-21-jdk-headless openssh-client openssh-server pkg-config procps \
+          python-is-python3 python3 rsync rustc sshpass tini unzip vim-tiny \
+          wget xz-utils zip zstd; \
         rm -rf /var/lib/apt/lists/* ;; \
       fedora) \
         dnf install -y --setopt=install_weak_deps=False \
           7zip busybox gcc gcc-c++ make bzip2 ca-certificates cargo curl \
-          ffmpeg-free git golang less libatomic nano pkgconf-pkg-config \
-          procps-ng python3 python-unversioned-command rust tini unzip \
-          vim-minimal wget xz zip zstd; \
+          ffmpeg-free git golang less libatomic nano openssh-clients openssh-server \
+          pkgconf-pkg-config procps-ng python3 python-unversioned-command rsync rust \
+          sshpass tini unzip vim-minimal wget xz zip zstd; \
         dnf install -y java-21-openjdk-headless \
           || dnf install -y java-25-openjdk-headless; \
         dnf clean all ;; \
       opensuse*) \
         zypper --non-interactive install --no-recommends \
           7zip busybox bzip2 ca-certificates cargo curl ffmpeg-7 gcc gcc-c++ \
-          go java-21-openjdk-headless less libatomic1 make nano pkg-config \
-          procps python3 rust tini unzip vim wget xz zip zstd; \
+          go java-21-openjdk-headless less libatomic1 make nano openssh \
+          pkg-config procps python3 rsync rust sshpass tini unzip vim wget xz \
+          zip zstd; \
         zypper clean --all ;; \
       *) echo "HDSL-web: unsupported base '$ID'; set HDSL_BASE to a Debian, Fedora or openSUSE image" >&2; \
          exit 1 ;; \
@@ -281,6 +283,15 @@ RUN set -eux; \
       echo "HDSL-web: ffmpeg has no${missing} — this base ships the patent-free build;" \
            "transcoding to H.264/H.265 will fail (RPM Fusion / Packman carry the full one)" >&2; \
     fi
+
+# 兜底断言：SSH 工具链随镜像走。容器里 agent 出站用 ssh/scp/rsync，面板的
+# 终端通道与运维排查也依赖它们；任何一个包名在某个发行版里对不上，在这里失败，
+# 而不是等到用户第一次 ssh 才发现命令不存在。
+RUN set -eux; \
+    for tool in ssh ssh-keygen scp sftp ssh-agent ssh-add ssh-keyscan sshpass rsync; do \
+      command -v "$tool" >/dev/null || { echo "HDSL-web: missing ${tool}" >&2; exit 1; }; \
+    done; \
+    ssh -V
 
 # Node 22 LTS from the official nodejs.org tarball. The architecture is read
 # from `uname -m` rather than a package manager's answer, so the same Dockerfile
