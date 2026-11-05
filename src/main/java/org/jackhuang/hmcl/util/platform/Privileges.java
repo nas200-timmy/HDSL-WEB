@@ -395,12 +395,25 @@ public final class Privileges {
 
     /// One line for the startup banner, or `null` when there is nothing to say.
     ///
+    /// Both directions are worth a line, and they are different failures. Root
+    /// outside a container means the panel cannot separate an agent from its own
+    /// files at all. A container whose main process is **not** root — an image
+    /// that sets `USER`, or a compose file with `user:` — is the quieter one:
+    /// everything still starts, but every child runs under the panel's own uid,
+    /// so the split this class exists for is off and nothing else says so.
+    ///
     /// @return the warning, or `null`
     public static String bannerNote() {
         if (rootOutsideContainer()) {
             return "running as root outside a container: every instance and every agent this panel "
                     + "starts runs as root too, and the panel cannot separate them from its own "
                     + "credential files (see docs/design-notes.md §7)";
+        }
+        if (inContainer() && euid() > 0) {
+            return "this container does not run the panel as root (image USER, or `user:` in the "
+                    + "compose file): instances and agents share uid " + euid() + " with the panel, "
+                    + "so the UID split described in docs/security.md is NOT active — remove the "
+                    + "override to get it back";
         }
         return null;
     }

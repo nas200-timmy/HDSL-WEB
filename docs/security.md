@@ -99,6 +99,11 @@ key 的价值）全是部署者的责任。
   uid 1000；同一处还顺手拒了"agent 在自家目录里放个符号链接、面板以 root 顺着写"这条路。
 - **裸部署没有这一层**：面板与 agent 同一个 uid，那些 0600 文件对 agent 是可读可写的。
   要隔离请用容器部署。
+- **容器里改成非 root 运行，这一层同样不成立**：镜像设了 `USER`，或 compose 里写了
+  `user:`，面板就不再是 root，`setpriv` 这步没有意义，所有子进程都跟面板同一个 uid。
+  服务照常启动，所以面板在启动横幅里明说一句
+  （`this container does not run the panel as root … the UID split … is NOT active`）——
+  启动正常不等于隔离生效，去掉那个覆盖项才有。
 ### 2.8 有些环境里这一层不成立——**程序也无能为力**
 
 不是每个文件系统都执行 mode 位。**ACL 管理的共享**（QNAP 的 trimacl 是典型；部分 NAS 的

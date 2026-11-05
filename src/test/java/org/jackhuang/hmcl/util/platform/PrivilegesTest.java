@@ -26,6 +26,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -166,14 +167,22 @@ class PrivilegesTest {
         }
     }
 
+    /// The banner note exists for the two ways the UID split can be off, and
+    /// they are different sentences. A machine that is neither says nothing —
+    /// that is the case the note must not fire on, or operators learn to skip it.
     @Test
-    void theBannerNoteOnlySpeaksForRootOutsideAContainer() {
-        // Whatever this machine is, the note must agree with the predicate the
-        // code actually uses — that is the part a regression would break.
+    void theBannerNoteSpeaksForBothWaysTheSplitCanBeOff() {
+        String note = Privileges.bannerNote();
         if (Privileges.rootOutsideContainer()) {
-            assertTrue(Privileges.bannerNote().contains("root"));
+            assertNotNull(note);
+            assertTrue(note.contains("root"));
+        } else if (Privileges.inContainer() && Privileges.euid() > 0) {
+            // An image with `USER`, or a compose file with `user:`: everything
+            // still starts, and every child shares the panel's uid.
+            assertNotNull(note);
+            assertTrue(note.contains("NOT active"), note);
         } else {
-            assertNull(Privileges.bannerNote());
+            assertNull(note);
         }
     }
 
