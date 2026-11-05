@@ -7,15 +7,36 @@
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Docker%20%7C%20Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)]()
 
-把 [HDSL](https://github.com/MCXCC303/HDSL)（Hello DeepSeek! Launcher，桌面版）搬进浏览器的单容器版本：
-打开网页 → 登录 → 建实例 → 点「启动」→ 在同一域名、端口与证书下用它自己的网页界面。除了 dsh，
-还能把 Kimi Code、OpenCode、Claude Web、ZCode 一起装进来，并且给每个实例配一个**原地终端**。
-界面按桌面版复刻（HMCL 视觉语言、Material You 主题、同款图标与动画），实例/版本/插件/账户/整合包/
-会话/技能/体检/ACP 控制台都在。
+把 [HDSL](https://github.com/MCXCC303/HDSL)（Hello DeepSeek! Launcher，桌面版）搬进浏览器的单容器版本。
+
+打开网页 → 登录 → 建实例 → 点「启动」，在同一个域名、端口与证书下用 agent 自己的界面。除 dsh 外，
+Kimi Code、OpenCode、Claude Web、Octop、Hermes、ZCode 也能一起装；每个实例都配一个**原地终端**。
+
+界面按桌面版复刻（HMCL 视觉语言、Material You 主题、同款图标与动画）：实例、版本、插件、账户、
+整合包、会话、技能、体检与 ACP 控制台都在。
 
 ![主界面](docs/screenshots/02-main.webp)
 
-## 现在能做什么
+## 目录
+
+- [亮点](#亮点)
+- [截图](#截图)
+- [功能速览](#功能速览)
+- [架构](#架构)
+- [实例终端（Web Shell）](#实例终端web-shell)
+- [快速开始](#快速开始) — Release / Docker Compose / 裸 `java -jar`
+- [首次登录与初始化引导](#首次登录与初始化引导)
+- [数据与挂载点](#数据与挂载点)
+- [声明式 HTTPS](#声明式-https)
+- [环境变量](#环境变量)
+- [反向代理](#反向代理)
+- [安全说明](#安全说明)
+- [构建与开发](#构建与开发)
+- [常见问题](#常见问题)
+- [设计说明](docs/design-notes.md)
+- [许可](#许可)
+
+## 亮点
 
 ### 六种 Agent，一个面板，想换就换
 
@@ -43,61 +64,36 @@
 - **两层钥匙**：面板密码 + 开发者密码第二因子；Web Shell 只在 HTTPS 下开，也能整体关掉。
 - **备份只有一个目录**：配置、证书、账号、实例、`DSH_HOME`、pnpm store 全在 `/data` 下，拷走那一个卷就搬完了（工作区可以另挂宿主机目录）。
 
-### 一些细节
+## 截图
 
-- 交付：一个可执行 fat jar（`java -jar hdsl-web.jar`）和一个 Debian 容器镜像。
-- 运行前提：JDK 17+；Node `^22.19.0 || >=24.0.0` 与 pnpm（dsh 由 pnpm 安装、由 node 运行）。
-- 手机可用：窄屏（≤760px）或矮屏（≤520px）自动切换移动版式——主导航收成抽屉、内页子侧栏变顶部横向标签条、启动面板变成贴底整条操作栏；可点区域按触摸标准放大到 44px，支持「加到主屏幕」。桌面上版式不变。规则见 [docs/ui-spec.md §14](docs/ui-spec.md)。
-- 账户：为某个模型供应商填一次 API Key。供应商与模型名来自 [models.dev](https://models.dev) 目录（200+ 家，选中供应商即带出端点、协议与密钥环境变量提示），默认模型可搜索也可手输；目录拉不到时退回纯手输。规则见 [docs/ui-spec.md §4](docs/ui-spec.md)。
-- 创建实例即开始安装；未安装的实例点「启动」会先装再启。进度与失败原因都在面板上。细节见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md)。
-- 品牌实例的安装、版本共享与实验性边界见 [docs/brands.md](docs/brands.md)；Octop 的便携包 /
-本地源码编译与挂载点补丁见 [docs/octop.md](docs/octop.md)；ZCode 的构建与限制见
-[docs/zcode-experimental.md](docs/zcode-experimental.md)；终端的前提、安全模型与开关见
-[实例终端（Web Shell）](#实例终端web-shell)。**安全相关的威胁模型、误配自查与免责统一在
-[docs/security.md](docs/security.md)。**
-- Minecraft 服务端（默认关闭，第三方功能）：开关在「设置 → 品牌实例」，要在开发者密码下
-  读完 Mojang EULA 与服务条款才能打开；服务端程序不随本项目分发，由 Mojang 官方下载。
-  **存档放在 `/home/hdsl/mc`，容器部署必须把这个路径挂出来**（见[数据与挂载点](#数据与挂载点)）。
-  Windows 裸部署走 headless 控制台（日志 + 命令输入，没有 PTY）；Java 默认复用面板自己的
-  运行时，所选版本需要更高版本时请自备并配置 `mc.java_path`。设置页会显示实际服务器目录
-  与 Java 来源。完整的功能介绍、操作要求与边界见 [docs/minecraft.md](docs/minecraft.md)。
-- 下载源：设置页可选择预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL。保存后立即生效，无需重启。环境变量 `NPM_CONFIG_REGISTRY` 仅作为回退值。细节见 [docs/deployment.md](docs/deployment.md)。
-- 想**从空目录**把整个项目交给另一个模型重写？[docs/build-from-scratch-prompt.md](docs/build-from-scratch-prompt.md) 是一份完整任务提示词：硬约束、功能清单、对外契约、构建与验证命令，以及这一路踩过的坑。
-  **只在清空/新建仓库时用**——在现有仓库里接手请读交接稿，别按它重建。
-
-<details>
-<summary>更多截图（初始化引导 / 实例列表 / 品牌实例 / 下载 / 设置）</summary>
-
-| 初始化引导（首启建号） | 实例列表 |
+| | |
 |---|---|
-| ![初始化](docs/screenshots/01-setup.webp) | ![实例列表](docs/screenshots/03-instances.webp) |
-
-| 品牌实例（实例列表页内原地切换） |
-|---|
-| ![品牌实例](docs/screenshots/06-brands.webp) |
-
-| 下载（真实 npm 版本列表） | 设置 |
-|---|---|
+| ![主界面](docs/screenshots/02-main.webp) | ![实例列表](docs/screenshots/03-instances.webp) |
+| 主界面与启动面板 | 实例列表（DSH / 品牌两层） |
 | ![下载](docs/screenshots/04-download.webp) | ![设置](docs/screenshots/05-settings.webp) |
+| 下载（真实 npm 版本列表） | 设置（通用） |
+| ![品牌实例](docs/screenshots/06-brands.webp) | ![Node.js](docs/screenshots/07-node.webp) |
+| 品牌实例（6 个品牌，原地切换） | Node.js 运行时（18–26 按大版本） |
+| ![Minecraft](docs/screenshots/08-mc.webp) | ![初始化](docs/screenshots/01-setup.webp) |
+| Minecraft 服务端（默认关闭） | 首启初始化（建管理员账号） |
 
-</details>
+> 截图来自一份演示数据集：5 个停止态的 dsh 实例，没有真实账号、供应商、路径或口令。
+> 重新生成的做法见 [docs/screenshots/README.md](docs/screenshots/README.md)。
 
-## 目录
+## 功能速览
 
-- [现在能做什么](#现在能做什么)
-- [架构](#架构)
-- [实例终端（Web Shell）](#实例终端web-shell)
-- [快速开始](#快速开始)（Release 下载 / Docker Compose / 裸 `java -jar`）
-- [首次登录与初始化引导](#首次登录与初始化引导)
-- [数据与挂载点](#数据与挂载点)
-- [声明式 HTTPS](#声明式-https)
-- [环境变量](#环境变量)
-- [反向代理](#反向代理)
-- [安全说明](#安全说明)
-- [构建与开发](#构建与开发)
-- [常见问题](#常见问题)
-- [设计说明](docs/design-notes.md)
-- [许可](#许可)
+| 项目 | 说明 |
+|---|---|
+| 交付 | 一个可执行 fat jar（`java -jar hdsl-web.jar`）和一个 Debian 容器镜像 |
+| 运行前提 | JDK 17+；Node `^22.19.0 || >=24.0.0` 与 pnpm（dsh 由 pnpm 安装、由 node 运行） |
+| 手机 | 窄屏（≤760px）或矮屏（≤520px）自动切换移动版式：主导航收成抽屉、子侧栏变顶部标签条、启动面板变成贴底操作栏；可点区域 44px；支持「加到主屏幕」。见 [docs/ui-spec.md §14](docs/ui-spec.md) |
+| 账户 | 为供应商填一次 API Key；供应商与模型来自 [models.dev](https://models.dev)（200+ 家，选中即带出端点、协议与密钥变量），也可手输；目录不可达时退回内置供应商与手输。见 [docs/ui-spec.md §4](docs/ui-spec.md) |
+| 创建实例 | 创建即安装；未安装的实例点「启动」会先装再启；进度与失败原因都在面板上。见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md) |
+| 品牌实例 | 安装、版本共享与实验性边界见 [docs/brands.md](docs/brands.md)；Octop 见 [docs/octop.md](docs/octop.md)；ZCode 见 [docs/zcode-experimental.md](docs/zcode-experimental.md) |
+| Minecraft | 默认关闭的第三方功能；开关在「设置 → 品牌实例」，需开发者密码并阅读 Mojang EULA 与服务条款。存档在 `/home/hdsl/mc`，容器部署必须挂出来。见 [docs/minecraft.md](docs/minecraft.md) |
+| 下载源 | 设置页可选预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL；保存即生效。见 [docs/deployment.md](docs/deployment.md) |
+| 安全 | 威胁模型、误配自查与免责统一在 [docs/security.md](docs/security.md) |
+| 从零重建 | [docs/build-from-scratch-prompt.md](docs/build-from-scratch-prompt.md) 是一份完整任务提示词，**只在新仓库用** |
 
 ## 架构
 
