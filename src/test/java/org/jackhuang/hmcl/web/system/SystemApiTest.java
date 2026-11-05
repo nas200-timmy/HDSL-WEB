@@ -88,6 +88,38 @@ class SystemApiTest {
         }
     }
 
+    /// The stats body is built once per sample and reused, so the two things a
+    /// cache can get wrong are its shape (`history` trimmed to `max`, empty when
+    /// not asked for) and its length (written from the cached bytes, not from a
+    /// second serialisation).
+    @Test
+    void theCachedStatsBodyKeepsItsShapeAndItsLength() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir,
+                Map.of(UserStore.ENV_ADMIN_PASSWORD, PANEL_PASSWORD), config -> {
+                    config.bindHost = "127.0.0.1";
+                    config.https.enabled = true;
+                })) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "https://127.0.0.1:" + running.port();
+            String cookie = login(client, base);
+            awaitSnapshot(client, base + "/api/system/stats?history=5", cookie);
+
+            HttpResponse<String> small = get(client, base + "/api/system/stats?history=2", cookie);
+            assertEquals(200, small.statusCode(), small.body());
+            assertTrue(json(small).getAsJsonArray("history").size() <= 2, small.body());
+            assertEquals(small.body().getBytes(StandardCharsets.UTF_8).length,
+                    Integer.parseInt(small.headers().firstValue("content-length").orElse("-1")),
+                    "the response is whatever was cached, so its length has to be the cached length");
+
+            HttpResponse<String> none = get(client, base + "/api/system/stats", cookie);
+            assertEquals(200, none.statusCode(), none.body());
+            assertEquals(0, json(none).getAsJsonArray("history").size(),
+                    "history is opt-in: no parameter, no samples");
+            assertTrue(!json(none).get("snapshot").isJsonNull(),
+                    "the newest sample is in the body either way");
+        }
+    }
+
     /// The sampler starts at boot and its first tick is immediate; poll briefly
     /// so the test does not depend on request timing.
     private static JsonObject awaitSnapshot(HttpClient client, String url, String cookie) throws Exception {

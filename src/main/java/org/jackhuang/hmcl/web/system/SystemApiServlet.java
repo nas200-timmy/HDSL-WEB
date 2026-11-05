@@ -29,7 +29,10 @@ import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
 
@@ -61,6 +64,24 @@ public final class SystemApiServlet extends HttpServlet {
     private static final long STORAGE_TTL_MS = 60_000;
     private volatile StorageUsage.@Nullable Report storageReport;
     private volatile long storageAt;
+
+    /// Whole responses, keyed by the sequence of the sample they end on and by
+    /// `?history=`. Rebuilding this per request was the one endpoint an order of
+    /// magnitude below the rest: 240 snapshots to serialise, ~250 KB to write,
+    /// 811 rps against 9k on the audit box, and a cheap way for a `system`-scoped
+    /// agent to burn CPU. Caching the JSON tree alone got 837 → 1.4k; the body
+    /// is only built once per sample now, so the remaining cost is the write.
+    private final Map<Integer, CachedBody> bodies = new LinkedHashMap<>(8, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<Integer, CachedBody> eldest) {
+            return size() > 8;
+        }
+    };
+
+    /// @param sequence the sample the body ends on
+    /// @param bytes    the serialised response
+    private record CachedBody(long sequence, byte[] bytes) {
+    }
 
     public SystemApiServlet(SystemMetrics metrics, ServerConfig config, LongSupplier startedAtMillis,
                             IntSupplier boundPort) {
@@ -97,17 +118,38 @@ public final class SystemApiServlet extends HttpServlet {
         metrics.start();
         int history = parseInt(request.getParameter("history"), 0);
         history = Math.max(0, Math.min(history, SystemMetrics.HISTORY_SIZE));
-        List<SystemSnapshot> samples = metrics.history(history);
 
-        JsonObject body = new JsonObject();
-        SystemSnapshot latest = metrics.latest();
-        body.add("snapshot", latest == null ? com.google.gson.JsonNull.INSTANCE : Json.GSON.toJsonTree(latest));
-        JsonArray array = new JsonArray();
-        for (SystemSnapshot sample : samples) {
-            array.add(Json.GSON.toJsonTree(sample));
+        // One frame for both halves of the answer: the sequence and the samples
+        // come out of the same lock, so a cached body can never be filed under
+        // a sample it does not end on.
+        byte[] bytes = body(metrics.historyFrame(SystemMetrics.HISTORY_SIZE), history);
+        response.setStatus(HttpServletResponse.SC_OK);
+        response.setContentType(Json.CONTENT_TYPE);
+        response.setContentLength(bytes.length);
+        response.getOutputStream().write(bytes);
+    }
+
+    /// The response for `history=max`, built at most once per sample.
+    private byte[] body(SystemMetrics.Frame frame, int max) {
+        List<SystemSnapshot> samples = frame.samples();
+        synchronized (this) {
+            CachedBody cached = bodies.get(max);
+            if (cached != null && cached.sequence() == frame.sequence()) {
+                return cached.bytes();
+            }
+            SystemSnapshot latest = samples.isEmpty() ? null : samples.get(samples.size() - 1);
+            JsonObject body = new JsonObject();
+            body.add("snapshot",
+                    latest == null ? com.google.gson.JsonNull.INSTANCE : Json.GSON.toJsonTree(latest));
+            JsonArray array = new JsonArray(max);
+            for (int i = Math.max(0, samples.size() - max); i < samples.size(); i++) {
+                array.add(Json.GSON.toJsonTree(samples.get(i)));
+            }
+            body.add("history", array);
+            byte[] bytes = Json.GSON.toJson(body).getBytes(StandardCharsets.UTF_8);
+            bodies.put(max, new CachedBody(frame.sequence(), bytes));
+            return bytes;
         }
-        body.add("history", array);
-        Json.write(response, body);
     }
 
     private void info(HttpServletResponse response) throws IOException {

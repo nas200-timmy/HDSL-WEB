@@ -129,6 +129,33 @@ class SystemMetricsTest {
         }
     }
 
+    /// The API caches its serialised ring keyed on this number, so a frame must
+    /// carry the sequence of the newest sample it contains — read under one
+    /// lock, or the cache files a list under the wrong sample.
+    @Test
+    void theHistoryFrameCarriesTheSequenceOfItsNewestSample() {
+        SystemMetrics metrics = new SystemMetrics(temp.resolve("data"), temp.resolve("nope"),
+                temp.resolve("nope-block"));
+        try {
+            SystemMetrics.Frame empty = metrics.historyFrame(240);
+            assertEquals(0, empty.sequence(), "nothing has been sampled yet");
+            assertTrue(empty.samples().isEmpty());
+
+            metrics.sampleNow();
+            SystemMetrics.Frame first = metrics.historyFrame(240);
+            assertEquals(1, first.sequence());
+            assertEquals(1, first.samples().size());
+
+            metrics.sampleNow();
+            SystemMetrics.Frame second = metrics.historyFrame(240);
+            assertEquals(2, second.sequence(), "the sequence moves once per sample");
+            assertEquals(2, second.samples().size());
+            assertEquals(1, metrics.historyFrame(1).samples().size(), "max still trims the tail");
+        } finally {
+            metrics.close();
+        }
+    }
+
     @Test
     void aMissingProcTreeDegradesInsteadOfThrowing() {
         SystemMetrics metrics = new SystemMetrics(temp.resolve("data"), temp.resolve("nope"),

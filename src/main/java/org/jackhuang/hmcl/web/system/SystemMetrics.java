@@ -90,6 +90,12 @@ public final class SystemMetrics {
     private boolean started;
     private long intervalMs = SLOW_INTERVAL_MS;
 
+    /// How many samples have been appended since this process started. The API
+    /// serialises the ring once per value and reuses it until the next one, so
+    /// this is the cache key: 240 snapshots per request was 811 rps against
+    /// 9k for every other endpoint on the same box.
+    private long sequence;
+
     // Raw counters from the previous sample, for the rates.
     private Map<String, ProcStat.Times> previousCpu = Map.of();
     private Map<String, ProcDiskStats.Counters> previousDisk = Map.of();
@@ -169,6 +175,23 @@ public final class SystemMetrics {
         return List.copyOf(out);
     }
 
+    /// The history together with the counter of the newest sample in it.
+    ///
+    /// A caller that caches its serialised form keys on [#Frame#sequence] and
+    /// must not read the samples separately: two locks means a list that ends on
+    /// a different sample than the number it was filed under.
+    ///
+    /// @param max how many to keep
+    /// @return the frame
+    public synchronized Frame historyFrame(int max) {
+        return new Frame(sequence, history(max));
+    }
+
+    /// @param sequence samples appended since start; strictly increasing
+    /// @param samples the newest `max` snapshots, oldest first
+    public record Frame(long sequence, List<SystemSnapshot> samples) {
+    }
+
     /// Stops the sampler; used by tests and shutdown.
     public synchronized void close() {
         started = false;
@@ -188,13 +211,20 @@ public final class SystemMetrics {
     SystemSnapshot sampleNow() {
         SystemSnapshot snapshot = sample(Instant.now(), intervalMs, System.nanoTime());
         synchronized (this) {
-            latest = snapshot;
-            history.addLast(snapshot);
-            while (history.size() > HISTORY_SIZE) {
-                history.removeFirst();
-            }
+            record(snapshot);
         }
         return snapshot;
+    }
+
+    /// Appends a sample to the ring and bumps the sequence the API's cache
+    /// watches. The caller holds the monitor.
+    private void record(SystemSnapshot snapshot) {
+        latest = snapshot;
+        history.addLast(snapshot);
+        while (history.size() > HISTORY_SIZE) {
+            history.removeFirst();
+        }
+        sequence++;
     }
 
     private synchronized void schedule(long delayMs) {
@@ -211,11 +241,7 @@ public final class SystemMetrics {
             SystemSnapshot snapshot = sample(Instant.now(), delay, System.nanoTime());
             synchronized (this) {
                 intervalMs = delay;
-                latest = snapshot;
-                history.addLast(snapshot);
-                while (history.size() > HISTORY_SIZE) {
-                    history.removeFirst();
-                }
+                record(snapshot);
             }
             for (AnomalyDetector.Alert alert : anomalies.check(snapshot, Instant.now())) {
                 Logger.LOG.warning("[monitor] " + alert.message());
