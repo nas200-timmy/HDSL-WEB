@@ -340,6 +340,14 @@ function GeneralTab() {
 
       <SystemMonitorCard />
 
+      <StorageCard />
+
+      <div className="section-caption">
+        <InfoIcon size={16} />
+        日志
+      </div>
+      <LogsCard />
+
       <div className="section-caption">
         <TuneIcon size={16} />
         修改密码
@@ -374,14 +382,6 @@ function GeneralTab() {
           </button>
         </div>
       </div>
-
-      <StorageCard />
-
-      <div className="section-caption">
-        <InfoIcon size={16} />
-        日志
-      </div>
-      <LogsCard />
 
       <div className="section-caption">
         <PublicIcon size={16} />
