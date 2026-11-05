@@ -77,13 +77,14 @@ agent 密码**不是**一条独立的路。用它换票之前，必须已经有�
 
 ## 3. 范围（scope）在服务端定，不在客户端里
 
-`AgentScopes` 把面板的接口分成六类：
+`AgentScopes` 把面板的接口分成七类：
 
 | scope | 覆盖 |
 |---|---|
 | `read` | `/api/*` 的 GET（凭据类路由除外，见下） |
 | `mc` | `/api/mc/*` 的启停与控制台命令 |
 | `mc-console` | **只**多给一条：MC 服控制台的 PTY 票据（`POST .../console/ticket` → `/ws/terminal/{ticket}`） |
+| `system` | `/api/system/*`：宿主机 CPU/内存/磁盘/网络读数与数据目录占用 |
 | `instances` | 建/删/启停**别的**实例 |
 | `config` | 账号、模型、TLS、网络、Node 运行时、壁纸 |
 | `plugins` | 装/卸插件、整合包、技能 |
