@@ -2,6 +2,30 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布
+
+**审计修复：口径、崩溃与一处性能洼地**
+
+- 开发者接口收到畸形 JSON 时答 500 而不是 400。`{"password":{}}`（elevate /
+  agent-auth / agent-password）与 `"ttlSeconds":"abc"` 会一路走到 Gson 的
+  `getAsString()` / `getAsLong()` 抛出来，被容器兜成 `internal error`：提权链
+  的入口把「你发错了」说成「面板坏了」。现在按字段类型判定，必填项答 400，
+  可省略项忽略。同类写法一并收紧：MC 的 `server.properties` 提交、品牌设置的
+  `nodeRuntime`、Node 页的 `source` / `version` / `keepPerMajor`。
+- 容器以非 root 运行时，启动横幅明说「UID 隔离没生效」。镜像设了 `USER` 或
+  compose 写了 `user:` 时面板不再是 root，`setpriv` 那一层不存在，实例和
+  agent 与面板同 uid、能读 `auth/` `certs/` `logs/`——而这样的部署一切照常
+  启动，没人会发现自己少了这层保护。`docs/security.md §2.7` 补同一条。
+- `GET /api/system/stats?history=240` 曾经是压测里唯一的洼地（同机 811 rps，
+  其它端点 9k；p99 301 ms）。整份响应现在按采样序号缓存，只在采样器前进时
+  重建，其余请求直接写缓存字节。
+- `PnpmConfigFileTest` 的期望路径改用 `$HOME`，与产品代码同源。原先用
+  `user.home`（passwd 那条），在 systemd / sudo / 容器把 `HOME` 指到别处的
+  环境里必挂——审计里唯一失败的用例就是它。
+- 文档：`docs/security.md §2.9` 补上 agent 密码只在 `instance`/`all` 两档有效、
+  scope 实为七类；`docs/windows-bare-deploy.md` 补上「别用 SSH 会话里的
+  `Start-Process` 常驻面板」（OpenSSH 的 job object 会随会话断掉带走整棵树）。
+
 ## v0.6.70 — 2026-11-05 · 通用页性能面板；Windows 原生读数；品牌最后手段收敛
 
 **通用页补全：系统资源、面板坐标、数据目录与日志**
