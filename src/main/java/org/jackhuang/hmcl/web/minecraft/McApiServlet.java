@@ -907,7 +907,24 @@ public final class McApiServlet extends HttpServlet {
                     Json.write(response, body);
                     return;
                 }
-                String ticket = tickets.issue(id, McRuntime.BRAND, sessionToken(request));
+                String ticket;
+                if (AuthFilter.isAgent(request)) {
+                    // An agent has no session cookie for the handshake, so the
+                    // ticket names the grant instead; `mc-console` (checked by
+                    // the request filter) is the class that allowed this call.
+                    // The ticket still has to be presented together with that
+                    // grant's bearer token — the URL alone attaches nothing.
+                    var grant = AuthFilter.agentGrant(request);
+                    if (grant == null) {
+                        Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                                "agent_scope_denied: no agent grant on this request");
+                        return;
+                    }
+                    ticket = tickets.issueForAgent(id, McRuntime.BRAND, grant.id());
+                    audit("mc.instance.console.ticket", id, "agent", request);
+                } else {
+                    ticket = tickets.issue(id, McRuntime.BRAND, sessionToken(request));
+                }
                 JsonObject body = new JsonObject();
                 body.addProperty("mode", "pty");
                 body.addProperty("protocol", TerminalWebSocket.PROTOCOL);

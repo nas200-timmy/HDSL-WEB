@@ -42,6 +42,26 @@ class TerminalTicketsTest {
     }
 
     @Test
+    void anAgentTicketCarriesItsGrantInsteadOfASession() {
+        TerminalTickets tickets = new TerminalTickets();
+        String issued = tickets.issueForAgent("mc-1", "minecraft", "grant-1");
+
+        TerminalTickets.Ticket granted = tickets.consume(issued);
+        assertNotNull(granted);
+        assertEquals("grant-1", granted.agentGrantId());
+        assertNull(granted.sessionToken(), "an agent has no session cookie to bind");
+        assertNull(tickets.consume(issued), "the second consume must not find it");
+    }
+
+    @Test
+    void aBrowserTicketNamesNoGrant() {
+        TerminalTickets tickets = new TerminalTickets();
+        TerminalTickets.Ticket granted = tickets.consume(tickets.issue("kimi-1", "kimi", "session-token"));
+        assertNotNull(granted);
+        assertNull(granted.agentGrantId());
+    }
+
+    @Test
     void anExpiredTicketIsRefused() throws Exception {
         TerminalTickets tickets = new TerminalTickets(Duration.ofMillis(20));
         String issued = tickets.issue("kimi-1", "kimi", null);

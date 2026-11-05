@@ -44,9 +44,13 @@ public final class TerminalTickets {
     /// @param instanceId   the instance the terminal was opened for
     /// @param brand        the brand id (`dsh`, `kimi`, …) the terminal serves
     /// @param sessionToken the panel session that asked for it, or `null` when
-    ///                     authentication is disabled
+    ///                     authentication is disabled or the asker was an agent
+    /// @param agentGrantId the agent grant that asked for it, or `null` for a
+    ///                     browser ticket; the handshake requires that grant's
+    ///                     bearer token, so the URL alone cannot attach
     /// @param expiresAt    when the ticket stops being valid
-    public record Ticket(String instanceId, String brand, @Nullable String sessionToken, Instant expiresAt) {
+    public record Ticket(String instanceId, String brand, @Nullable String sessionToken,
+                         @Nullable String agentGrantId, Instant expiresAt) {
     }
 
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -68,11 +72,31 @@ public final class TerminalTickets {
     /// @param brand      the brand id the terminal serves
     /// @param sessionToken the session that asked, or `null` without auth
     public String issue(String instanceId, String brand, @Nullable String sessionToken) {
+        return issue(instanceId, brand, sessionToken, null);
+    }
+
+    /// Issues a ticket for an **agent's** attach: no session cookie exists on
+    /// that side, so the handshake proves the holder with the grant's bearer
+    /// token instead. The id travels in the ticket (never the token — this
+    /// string ends up in a URL) and is compared against the bearer at
+    /// handshake time.
+    ///
+    /// @param instanceId   the instance the terminal was opened for
+    /// @param brand        the brand id the terminal serves
+    /// @param agentGrantId the grant that asked for it
+    /// @return the ticket
+    public String issueForAgent(String instanceId, String brand, String agentGrantId) {
+        return issue(instanceId, brand, null, agentGrantId);
+    }
+
+    private String issue(String instanceId, String brand, @Nullable String sessionToken,
+                         @Nullable String agentGrantId) {
         prune();
         byte[] bytes = new byte[32];
         RANDOM.nextBytes(bytes);
         String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        tickets.put(ticket, new Ticket(instanceId, brand, sessionToken, Instant.now().plus(ttl)));
+        tickets.put(ticket, new Ticket(instanceId, brand, sessionToken, agentGrantId,
+                Instant.now().plus(ttl)));
         return ticket;
     }
 

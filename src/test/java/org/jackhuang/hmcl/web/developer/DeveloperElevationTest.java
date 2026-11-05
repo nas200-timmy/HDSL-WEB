@@ -123,4 +123,28 @@ class DeveloperElevationTest {
         assertNull(elevation.agentGrant(agent), "without a lender the loan is void");
         assertTrue(elevation.agentGrants().isEmpty(), "the panel must not show a dead grant as active");
     }
+
+    /// The id list exists for teardown, not for display: a grant whose window
+    /// already ended is not "active" any more, but its console socket may still
+    /// be open and only the id can find it.
+    @Test
+    void agentGrantIdsOutliveTheWindowSoSocketsCanBeFound() {
+        DeveloperElevation elevation = new DeveloperElevation();
+        String humanKey = DeveloperElevation.key("probe-session", null);
+        elevation.elevate(humanKey);
+
+        String agent = elevation.mintAgentToken("probe", java.util.Set.of(AgentScopes.MC_CONSOLE),
+                "mc/one", java.time.Duration.ofHours(1), null, DeveloperElevation.MintedBy.SESSION);
+        DeveloperElevation.AgentGrant grant = elevation.agentGrant(agent);
+        assertTrue(grant != null);
+
+        elevation.clear(humanKey);
+
+        assertNull(elevation.agentGrant(agent));
+        assertTrue(elevation.agentGrantIds().contains(grant.id()),
+                "teardown must still find the grant whose console is attached");
+
+        elevation.revokeAllAgents();
+        assertTrue(elevation.agentGrantIds().isEmpty());
+    }
 }

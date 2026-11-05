@@ -4,6 +4,18 @@
 
 ## 未发布
 
+**MC 控制台成为 agent 的独立权限（`mc-console`）**
+
+- 新增 scope `mc-console`：勾上才允许 agent 用
+  `POST /api/mc/instances/{id}/console/ticket` 换 PTY 票据并附着 `/ws/terminal/{ticket}`；
+  不勾时 `mc` 保持原样（启停、`console/input`、日志），行为与之前一致。
+- agent 的 ticket 绑定**票 id**而不是会话 cookie：WebSocket 握手必须带同一张票的
+  `Authorization: Bearer`，URL 里的 ticket 单独 attach 不了任何东西。
+- 控制台每 30 秒回查一次票是否还活着；掐票、票到期、最后一次开发者提权结束都会关掉这条
+  连接（显式掐票立即关）。
+- 设置页「它最多能做什么」与 hdsl-tui「给 agent 签票」都多了这个勾选项；
+  `docs/panel-agent.md` §3 与 §7.1、`docs/minecraft.md` 接口表同步。
+
 **模型目录拉不到时，账户页不再被拖死**
 
 - `GET /api/models/providers` 在没有目录副本时不再回 502：先返回内置供应商

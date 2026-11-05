@@ -25,6 +25,7 @@ import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.jackhuang.hmcl.web.developer.DeveloperElevation;
 import org.jackhuang.hmcl.web.http.Json;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -385,6 +386,20 @@ public final class AuthFilter implements Filter {
         return request.getAttribute(AGENT_GRANT_ATTRIBUTE) != null;
     }
 
+    /// The grant behind an admitted agent request, or `null` for a browser
+    /// session.
+    ///
+    /// Servlet code reads this when it must carry the grant's identity into a
+    /// credential of its own — the MC console ticket names the grant so the
+    /// WebSocket handshake can refuse a ticket presented by anybody else.
+    ///
+    /// @param request the request
+    /// @return the grant, or `null`
+    public static @Nullable DeveloperElevation.AgentGrant agentGrant(HttpServletRequest request) {
+        Object attribute = request.getAttribute(AGENT_GRANT_ATTRIBUTE);
+        return attribute instanceof DeveloperElevation.AgentGrant grant ? grant : null;
+    }
+
     /// Whether this grant may be used from this connection.
     ///
     /// Off the loopback, `agent.remoteNeedsSession` asks for a person: either
@@ -500,7 +515,15 @@ public final class AuthFilter implements Filter {
                 || ("GET".equals(method) && STATUS_PATH.equals(path))
                 || ("POST".equals(method) && SETUP_PATH.equals(path))
                 || ("GET".equals(method) && HEALTH_PATH.equals(path))
-                || ("POST".equals(method) && AGENT_AUTH_PATH.equals(path));
+                || ("POST".equals(method) && AGENT_AUTH_PATH.equals(path))
+                // The terminal socket authenticates itself at the handshake:
+                // a one-use ticket **plus** either the session cookie it was
+                // issued to or the agent grant it names (see
+                // TerminalWebSocket#onOpen). This filter cannot judge a
+                // ticket — it would have to consume it — so the endpoint is
+                // the gate, and skipping the cookie check here is what lets an
+                // agent attach a console it was granted.
+                || ("GET".equals(method) && path.startsWith("/ws/terminal/"));
     }
 
     private static @Nullable String cookieValue(HttpServletRequest request, String name) {

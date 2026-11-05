@@ -32,6 +32,10 @@ import jakarta.websocket.server.ServerEndpoint;
 import jakarta.websocket.server.ServerEndpointConfig;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
+import org.jackhuang.hmcl.web.audit.AuditLog;
+import org.jackhuang.hmcl.web.developer.AgentScopes;
+import org.jackhuang.hmcl.web.developer.DeveloperElevation;
+import org.jackhuang.hmcl.web.minecraft.McRuntime;
 import org.jackhuang.hmcl.web.terminal.pty.PtySize;
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -42,6 +46,10 @@ import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /// The terminal's WebSocket at `/ws/terminal/{ticket}`.
 ///
@@ -69,18 +77,35 @@ public final class TerminalWebSocket implements TerminalSink, TerminalSockets.So
     private static volatile TerminalTickets tickets;
     private static volatile AuthService authService;
     private static volatile boolean authDisabled = true;
+    /// Agent grants, for the handshake of a ticket an agent asked for: the
+    /// ticket names the grant, the handshake proves the bearer still is that
+    /// grant and still holds `mc-console`.
+    private static volatile DeveloperElevation elevation;
     /// Live sockets by the session that opened them: logout severs exactly
     /// the connections the logged-out session was using.
     private static final TerminalSockets SOCKETS = new TerminalSockets();
+    /// Re-checks an agent's grant while its console is attached. A grant dies
+    /// on expiry, on revocation and when the last human elevation ends — none
+    /// of those sends anything to this socket, so it has to look.
+    private static final ScheduledExecutorService GRANT_WATCH =
+            Executors.newSingleThreadScheduledExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "terminal-grant-watch");
+                thread.setDaemon(true);
+                return thread;
+            });
+    /// How often an attached agent console asks whether its grant still lives.
+    private static final long GRANT_POLL_SECONDS = 30;
 
     /// Installed once by the composition root, before the endpoint accepts
     /// handshakes.
     public static void configure(TerminalManager manager, TerminalTickets tickets,
-                                 AuthService authService, boolean authDisabled) {
+                                 AuthService authService, boolean authDisabled,
+                                 DeveloperElevation elevation) {
         TerminalWebSocket.manager = manager;
         TerminalWebSocket.tickets = tickets;
         TerminalWebSocket.authService = authService;
         TerminalWebSocket.authDisabled = authDisabled;
+        TerminalWebSocket.elevation = elevation;
     }
 
     /// Closes every terminal socket `sessionToken` opened. Called from the
@@ -89,9 +114,25 @@ public final class TerminalWebSocket implements TerminalSink, TerminalSockets.So
         return SOCKETS.closeForSession(sessionToken);
     }
 
+    /// Closes the console socket an agent grant opened, if any. Called when the
+    /// grant is revoked: a revoked credential must not keep a live terminal.
+    ///
+    /// @param grantId the grant's handle
+    /// @return how many sockets were closed
+    public static int closeForAgent(String grantId) {
+        return SOCKETS.closeForSession(AGENT_SOCKET_PREFIX + grantId);
+    }
+
+    /// The registry key an agent console is tracked under. It cannot collide
+    /// with a session token: session tokens are base64url and this is not.
+    private static final String AGENT_SOCKET_PREFIX = "agent:";
+
     private volatile @Nullable Session ws;
     private volatile @Nullable TerminalSession terminal;
+    /// The registry key this socket is tracked under: a session token, or
+    /// `agent:<grantId>` for a console an agent attached.
     private volatile @Nullable String sessionToken;
+    private volatile @Nullable ScheduledFuture<?> grantWatch;
 
     @OnOpen
     public void onOpen(Session ws) {
@@ -115,6 +156,19 @@ public final class TerminalWebSocket implements TerminalSink, TerminalSockets.So
             close(ws, 1008, "unknown or expired ticket");
             return;
         }
+        if (granted.agentGrantId() != null) {
+            DeveloperElevation.AgentGrant grant = agentGrantFor(ws, granted);
+            if (grant == null) {
+                close(ws, 1008, "ticket does not belong to this agent");
+                return;
+            }
+            this.sessionToken = AGENT_SOCKET_PREFIX + grant.id();
+            attach(manager, granted, ws);
+            watchGrant(ws, grant);
+            AuditLog.log(AuditLog.Channel.TERMINAL, "terminal.attach", granted.instanceId(),
+                    "success", "agent:" + grant.label(), "agent-console");
+            return;
+        }
         if (!authDisabled) {
             Object token = ws.getUserProperties().get("token");
             if (granted.sessionToken() == null || !granted.sessionToken().equals(token)) {
@@ -123,6 +177,63 @@ public final class TerminalWebSocket implements TerminalSink, TerminalSockets.So
                 return;
             }
         }
+        this.sessionToken = granted.sessionToken();
+        attach(manager, granted, ws);
+    }
+
+    /// The grant a ticket names, or `null` when the handshake's bearer does not
+    /// prove it.
+    ///
+    /// Three things must hold at the same time: the bearer is a live grant
+    /// ([DeveloperElevation#agentGrant] already refuses expired ones, revoked
+    /// ones and grants whose human elevation ended), it is **the** grant the
+    /// ticket was issued for, and it still holds `mc-console`. The ticket is
+    /// in the URL; the bearer is not, which is why the URL alone attaches
+    /// nothing.
+    ///
+    /// @param ws      the handshake
+    /// @param granted the consumed ticket
+    /// @return the grant, or `null` to refuse
+    private static @Nullable DeveloperElevation.AgentGrant agentGrantFor(Session ws,
+                                                                       TerminalTickets.Ticket granted) {
+        Object bearer = ws.getUserProperties().get("bearer");
+        return authorizeAgentTicket(elevation, bearer instanceof String token ? token : null, granted);
+    }
+
+    /// The authorization itself, split from the handshake so the matrix can be
+    /// exercised without a socket.
+    ///
+    /// @param store   the grant registry, or `null` when the endpoint was never
+    ///                configured
+    /// @param bearer  the handshake's `Authorization: Bearer`, or `null`
+    /// @param granted the consumed ticket
+    /// @return the grant, or `null` to refuse
+    static @Nullable DeveloperElevation.AgentGrant authorizeAgentTicket(
+            @Nullable DeveloperElevation store, @Nullable String bearer,
+            TerminalTickets.Ticket granted) {
+        if (bearer == null || bearer.isBlank() || store == null) {
+            Logger.LOG.warning("Terminal WebSocket rejected: agent ticket without a bearer token");
+            return null;
+        }
+        DeveloperElevation.AgentGrant grant = store.agentGrant(bearer);
+        if (grant == null) {
+            Logger.LOG.warning("Terminal WebSocket rejected: unknown or expired agent grant");
+            return null;
+        }
+        if (!grant.id().equals(granted.agentGrantId())) {
+            Logger.LOG.warning("Terminal WebSocket rejected: ticket does not belong to this agent");
+            return null;
+        }
+        if (!grant.scopes().contains(AgentScopes.MC_CONSOLE)
+                || !McRuntime.BRAND.equals(granted.brand())) {
+            Logger.LOG.warning("Terminal WebSocket rejected: grant lacks the mc-console class");
+            return null;
+        }
+        return grant;
+    }
+
+    /// Finds the running terminal and attaches this socket to it.
+    private void attach(TerminalManager manager, TerminalTickets.Ticket granted, Session ws) {
         Optional<TerminalSession> found = manager.find(granted.brand(), granted.instanceId());
         if (found.isEmpty() || found.get().state() != TerminalSession.State.RUNNING) {
             Logger.LOG.warning("Terminal WebSocket rejected: no running terminal for instance "
@@ -132,13 +243,41 @@ public final class TerminalWebSocket implements TerminalSink, TerminalSockets.So
         }
         TerminalSession session = found.get();
         this.terminal = session;
-        this.sessionToken = granted.sessionToken();
         sendText(ws, readyJson(granted.instanceId(), granted.brand()));
         session.attach(this);
-        if (granted.sessionToken() != null) {
-            SOCKETS.register(granted.sessionToken(), this);
+        if (sessionToken != null) {
+            SOCKETS.register(sessionToken, this);
         }
         Logger.LOG.info("Terminal WebSocket attached: " + granted.instanceId());
+    }
+
+    /// Keeps an agent console honest while it is open: the grant it borrowed
+    /// can end without the socket hearing about it (expiry, revocation, the
+    /// last human elevation ending). The watch closes the socket then, instead
+    /// of leaving a live console behind a dead credential.
+    private void watchGrant(Session ws, DeveloperElevation.AgentGrant grant) {
+        DeveloperElevation store = elevation;
+        Object bearer = ws.getUserProperties().get("bearer");
+        if (store == null || !(bearer instanceof String token)) {
+            return;
+        }
+        grantWatch = GRANT_WATCH.scheduleAtFixedRate(() -> {
+            DeveloperElevation.AgentGrant live = store.agentGrant(token);
+            if (live == null || !live.id().equals(grant.id()) || !ws.isOpen()) {
+                cancelGrantWatch();
+                if (ws.isOpen()) {
+                    close(ws, 1008, "agent grant ended");
+                }
+            }
+        }, GRANT_POLL_SECONDS, GRANT_POLL_SECONDS, TimeUnit.SECONDS);
+    }
+
+    private void cancelGrantWatch() {
+        ScheduledFuture<?> watch = grantWatch;
+        grantWatch = null;
+        if (watch != null) {
+            watch.cancel(false);
+        }
     }
 
     /// The `ready` control frame. Static and separate from the handshake so the
@@ -202,6 +341,7 @@ public final class TerminalWebSocket implements TerminalSink, TerminalSockets.So
     }
 
     private void detach() {
+        cancelGrantWatch();
         String token = sessionToken;
         sessionToken = null;
         if (token != null) {
@@ -303,24 +443,46 @@ public final class TerminalWebSocket implements TerminalSink, TerminalSockets.So
         }
     }
 
-    /// Authentication for the terminal socket: the same session cookie as the
-    /// panel, plus the token that the ticket was issued to.
+    /// Authentication for the terminal socket: a valid session cookie, or —
+    /// for a ticket an agent asked for — the grant's bearer token.
+    ///
+    /// The two are not interchangeable: `onOpen` compares the cookie against
+    /// the ticket's session and the bearer against the ticket's grant, so a
+    /// bearer cannot open a browser ticket and a cookie cannot open an agent's.
     public static final class SessionConfigurator extends ServerEndpointConfig.Configurator {
         @Override
         public void modifyHandshake(ServerEndpointConfig config, HandshakeRequest request,
                                     HandshakeResponse response) {
             String token = sessionCookie(request);
+            String bearer = authorization(request);
             if (!authDisabled) {
                 AuthService auth = authService;
                 if (auth == null) {
                     throw new IllegalStateException("no AuthService installed");
                 }
-                if (token == null || auth.verify(token).isEmpty()) {
+                boolean sessionOk = token != null && auth.verify(token).isPresent();
+                if (!sessionOk && bearer == null) {
                     Logger.LOG.warning("Terminal WebSocket handshake rejected: missing or invalid session cookie");
                     throw new SecurityException("unauthorized");
                 }
             }
             config.getUserProperties().put("token", token);
+            config.getUserProperties().put("bearer", bearer);
+        }
+
+        private static @Nullable String authorization(HandshakeRequest request) {
+            for (Map.Entry<String, List<String>> header : request.getHeaders().entrySet()) {
+                if (!"authorization".equalsIgnoreCase(header.getKey())) {
+                    continue;
+                }
+                for (String value : header.getValue()) {
+                    if (value != null && value.regionMatches(true, 0, "Bearer ", 0, 7)) {
+                        String token = value.substring(7).trim();
+                        return token.isEmpty() ? null : token;
+                    }
+                }
+            }
+            return null;
         }
 
         private static @Nullable String sessionCookie(HandshakeRequest request) {

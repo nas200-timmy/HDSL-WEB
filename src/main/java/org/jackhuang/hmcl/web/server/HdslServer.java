@@ -257,7 +257,7 @@ public final class HdslServer {
         org.jackhuang.hmcl.web.terminal.TerminalTickets terminalTickets =
                 new org.jackhuang.hmcl.web.terminal.TerminalTickets();
         org.jackhuang.hmcl.web.terminal.TerminalWebSocket.configure(
-                terminals, terminalTickets, authService, config.auth.disabled);
+                terminals, terminalTickets, authService, config.auth.disabled, developerElevation);
 
         // The client behind the `/i/*` WebSocket relay; its life is the
         // server's own. Its message limits are raised for the same reason the

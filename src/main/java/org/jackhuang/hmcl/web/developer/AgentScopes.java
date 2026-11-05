@@ -59,6 +59,12 @@ public final class AgentScopes {
     /// `/api/mc/*`: the only surface where a stray process would corrupt state
     /// the panel owns (port, world, console).
     public static final String MC = "mc";
+    /// The MC server's **PTY console**: attaching to `/ws/terminal/{ticket}`.
+    /// It sits on top of [MC] rather than inside it because attaching is not
+    /// one more command — it is a live, bidirectional terminal into the server
+    /// (history, output stream, everything typed). An operator who lets an
+    /// agent start and stop servers may still refuse to hand it that.
+    public static final String MC_CONSOLE = "mc-console";
     /// Creating, deleting, launching and stopping **other** instances.
     public static final String INSTANCES = "instances";
     /// Accounts, models, TLS, network trust, node runtimes, wallpapers.
@@ -67,7 +73,7 @@ public final class AgentScopes {
     public static final String PLUGINS = "plugins";
 
     /// Every class a grant may name, in the order the panel presents them.
-    public static final Set<String> KNOWN = Set.of(READ, MC, INSTANCES, CONFIG, PLUGINS);
+    public static final Set<String> KNOWN = Set.of(READ, MC, MC_CONSOLE, INSTANCES, CONFIG, PLUGINS);
 
     /// What a grant holds when the operator ticks nothing: reading the panel,
     /// and nothing that changes it.
@@ -128,6 +134,16 @@ public final class AgentScopes {
         return path.length() > 1 && path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
     }
 
+    /// Whether `path` is the MC console's PTY ticket route.
+    ///
+    /// `/api/mc/instances/{id}/console/ticket` (with or without the trailing
+    /// slash the dispatcher ignores). `console/input` is deliberately not here:
+    /// one command through the server's stdin stays ordinary `mc` work.
+    private static boolean consoleTicket(String path) {
+        String route = stripTrailingSlash(path);
+        return route.startsWith("/api/mc/instances/") && route.endsWith("/console/ticket");
+    }
+
     /// The class a request needs, or `null` when no class covers it — which the
     /// caller must read as a refusal, not as "no class needed".
     ///
@@ -151,7 +167,11 @@ public final class AgentScopes {
             return READ;
         }
         if (path.startsWith("/api/mc/") || path.equals("/api/mc")) {
-            return MC;
+            // The PTY ticket is the one MC route that hands over a live
+            // terminal instead of running one command: it asks for its own
+            // class, so `mc` alone keeps its old reach (start/stop, input,
+            // logs) and gains no attach.
+            return consoleTicket(path) ? MC_CONSOLE : MC;
         }
         if (path.startsWith("/api/instances")) {
             return path.contains("/plugins") ? PLUGINS : INSTANCES;

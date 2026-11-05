@@ -311,8 +311,40 @@ public final class DeveloperApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such grant");
             return;
         }
+        // A revoked credential must not keep a live MC console: the socket is
+        // not re-checked per byte, so revocation has to find it by its handle.
+        org.jackhuang.hmcl.web.terminal.TerminalWebSocket.closeForAgent(id);
         AuditLog.log(AuditLog.Channel.WEB, "developer.agent", id, "revoke", null, null);
         Json.write(response, java.util.Map.of("ok", true));
+    }
+
+    /// Drops every agent grant **and** the console sockets they opened.
+    ///
+    /// The ids are taken before the registry is emptied because the sockets are
+    /// tracked by grant id, and a grant whose human elevation already ended is
+    /// not in [DeveloperElevation#agentGrants] any more — but its socket is
+    /// still open, so [#agentGrantIds] is the list to use.
+    ///
+    /// @return how many grants were dropped
+    private int dropAgentGrants() {
+        java.util.List<String> ids = elevation.agentGrantIds();
+        int dropped = elevation.revokeAllAgents();
+        for (String id : ids) {
+            org.jackhuang.hmcl.web.terminal.TerminalWebSocket.closeForAgent(id);
+        }
+        return dropped;
+    }
+
+    /// Ends **every** elevation, human and agent, and closes the console
+    /// sockets the agents opened. Used when the developer password is changed
+    /// or cleared: proof of the old secret must be worthless, and a live
+    /// console is proof that outlived its credential.
+    private void clearAllElevations() {
+        java.util.List<String> ids = elevation.agentGrantIds();
+        elevation.clearAll();
+        for (String id : ids) {
+            org.jackhuang.hmcl.web.terminal.TerminalWebSocket.closeForAgent(id);
+        }
     }
 
     /// `GET /api/developer/agent-password`: whether the lesser secret exists,
@@ -378,7 +410,7 @@ public final class DeveloperApiServlet extends HttpServlet {
         }
         // A new agent password kills every grant the old one minted: rotating a
         // secret must not leave the previous holders running.
-        elevation.revokeAllAgents();
+        dropAgentGrants();
         AuditLog.log(AuditLog.Channel.WEB, "developer.agentPassword", null, "set",
                 actorOf(request), request.getRemoteAddr());
         agentPasswordStatus(response);
@@ -431,7 +463,7 @@ public final class DeveloperApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "agent_password_not_set");
             return;
         }
-        int dropped = elevation.revokeAllAgents();
+        int dropped = dropAgentGrants();
         AuditLog.log(AuditLog.Channel.WEB, "developer.agentPassword", null,
                 "scopes (" + dropped + " grant(s) dropped)", actorOf(request), request.getRemoteAddr());
         agentPasswordStatus(response);
@@ -450,7 +482,7 @@ public final class DeveloperApiServlet extends HttpServlet {
             return;
         }
         agentAuth.clear();
-        elevation.revokeAllAgents();
+        dropAgentGrants();
         AuditLog.log(AuditLog.Channel.WEB, "developer.agentPassword", null, "clear",
                 actorOf(request), request.getRemoteAddr());
         agentPasswordStatus(response);
@@ -721,7 +753,7 @@ public final class DeveloperApiServlet extends HttpServlet {
         // cookie: a grant is borrowed power, and handing the source of the loan
         // back has to end it too. The agents learn through the same 401 they
         // would learn from an expiry.
-        int dropped = elevation.revokeAllAgents();
+        int dropped = dropAgentGrants();
         AuditLog.log(AuditLog.Channel.WEB, "developer.elevation", "revoke", "success",
                 actorOf(request) + (dropped > 0 ? " (dropped " + dropped + " agent grant(s))" : ""),
                 request.getRemoteAddr());
@@ -769,7 +801,7 @@ public final class DeveloperApiServlet extends HttpServlet {
             return;
         }
         // A new secret means every elevation minted against the old one dies.
-        elevation.clearAll();
+        clearAllElevations();
         JsonObject answer = new JsonObject();
         answer.addProperty("ok", true);
         answer.addProperty("devPasswordSet", true);
@@ -795,7 +827,7 @@ public final class DeveloperApiServlet extends HttpServlet {
                     "the developer password could not be cleared: " + e.getMessage());
             return;
         }
-        elevation.clearAll();
+        clearAllElevations();
         JsonObject answer = new JsonObject();
         answer.addProperty("ok", true);
         answer.addProperty("devPasswordSet", false);

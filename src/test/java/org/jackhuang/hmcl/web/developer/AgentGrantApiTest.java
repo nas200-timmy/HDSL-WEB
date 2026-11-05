@@ -315,6 +315,15 @@ class AgentGrantApiTest {
 
         // Writes land in their own classes.
         assertEquals(AgentScopes.MC, AgentScopes.required("POST", "/api/mc/instances/x/start"));
+        // The console's PTY ticket is its own class: `mc` alone keeps the old
+        // reach (start/stop, one-line input, logs) and gains no attach.
+        assertEquals(AgentScopes.MC_CONSOLE,
+                AgentScopes.required("POST", "/api/mc/instances/x/console/ticket"));
+        assertEquals(AgentScopes.MC_CONSOLE,
+                AgentScopes.required("POST", "/api/mc/instances/x/console/ticket/"),
+                "a trailing slash must not fall back to the wider class");
+        assertEquals(AgentScopes.MC, AgentScopes.required("POST", "/api/mc/instances/x/console/input"));
+        assertEquals(AgentScopes.MC, AgentScopes.required("POST", "/api/mc/instances/x/console"));
         assertEquals(AgentScopes.INSTANCES, AgentScopes.required("POST", "/api/instances"));
         assertEquals(AgentScopes.PLUGINS, AgentScopes.required("POST", "/api/instances/x/plugins/install"));
         assertEquals(AgentScopes.CONFIG, AgentScopes.required("POST", "/api/settings/tls"));
@@ -336,12 +345,43 @@ class AgentGrantApiTest {
         assertEquals(Set.of(AgentScopes.READ), AgentScopes.DEFAULT);
     }
 
+    /// `mc` keeps its old reach; the PTY ticket is the one route that asks for
+    /// the narrower `mc-console` class. Without it the answer is a scope
+    /// refusal, not a ticket the handshake would have to sort out later.
+    @Test
+    void theMcConsoleTicketIsItsOwnClassOnTheWire() throws Exception {
+        try (TestSupport.RunningServer running = start()) {
+            HttpClient client = TestSupport.trustAllClient();
+            String base = "https://127.0.0.1:" + running.port();
+            String cookie = elevatedSession(client, base);
+
+            String mcOnly = mint(client, base, cookie,
+                    "\"label\":\"mc-only\",\"scopes\":[\"read\",\"mc\"]}").get("token").getAsString();
+            HttpResponse<String> denied = post(client, base + "/api/mc/instances/x/console/ticket", "{}", null, mcOnly);
+            assertEquals(403, denied.statusCode(), denied.body());
+            assertTrue(denied.body().contains("agent_scope_denied"), denied.body());
+
+            // One command through stdin is still ordinary `mc` work.
+            HttpResponse<String> input = post(client, base + "/api/mc/instances/x/console/input",
+                    "{\"line\":\"list\"}", null, mcOnly);
+            assertTrue(input.statusCode() != 403, "console/input must stay inside mc: " + input.body());
+
+            String withConsole = mint(client, base, cookie,
+                    "\"label\":\"mc-console\",\"scopes\":[\"read\",\"mc\",\"mc-console\"]}")
+                    .get("token").getAsString();
+            HttpResponse<String> allowed = post(client, base + "/api/mc/instances/x/console/ticket",
+                    "{}", null, withConsole);
+            assertTrue(allowed.statusCode() != 403,
+                    "the class must open the ticket route, got " + allowed.statusCode() + " " + allowed.body());
+        }
+    }
+
     /// Mints a token the way the product does now: the agent exchanges the
     /// agent password for it. The cap is opened to every class so the scope
     /// under test is what decides.
     private JsonObject mint(HttpClient client, String base, String cookie, String fields) throws Exception {
         assertEquals(200, post(client, base + "/api/developer/agent-password",
-                "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\",\"mc\",\"instances\",\"config\",\"plugins\"]}",
+                "{\"password\":\"" + AGENT_PASSWORD + "\",\"scopes\":[\"read\",\"mc\",\"mc-console\",\"instances\",\"config\",\"plugins\"]}",
                 cookie).statusCode());
         HttpResponse<String> minted = post(client, base + "/api/developer/agent-auth",
                 "{\"password\":\"" + AGENT_PASSWORD + "\"," + fields, null);

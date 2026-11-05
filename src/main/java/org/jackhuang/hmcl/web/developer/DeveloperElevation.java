@@ -369,6 +369,25 @@ public final class DeveloperElevation {
         return grants;
     }
 
+    /// The handles of every agent grant still in the registry, without the
+    /// "is anybody elevated" filter [#agentGrants] applies.
+    ///
+    /// Used when dropping grants to also close the console sockets they opened:
+    /// the socket is not re-checked per byte, so the panel has to find it by
+    /// the grant's handle. A grant already unusable because nobody is elevated
+    /// must still be listed here, or its socket would outlive the loan.
+    ///
+    /// @return the grant ids, never `null`
+    public List<String> agentGrantIds() {
+        List<String> ids = new ArrayList<>();
+        for (Elevation elevation : elevations.values()) {
+            if (elevation.agent != null) {
+                ids.add(elevation.agent.id());
+            }
+        }
+        return ids;
+    }
+
     /// Ends one agent grant: the token stops working on the next request.
     ///
     /// @param id the grant's handle from [AgentGrant#id]

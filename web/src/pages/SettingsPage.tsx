@@ -1837,6 +1837,7 @@ function developerError(e: unknown): string {
 const AGENT_SCOPE_LABEL: Record<string, string> = {
   read: "读取面板",
   mc: "Minecraft 服务器",
+  "mc-console": "MC 控制台",
   instances: "创建/删除实例",
   config: "面板配置",
   plugins: "安装插件",
@@ -1845,6 +1846,7 @@ const AGENT_SCOPE_LABEL: Record<string, string> = {
 const AGENT_SCOPE_HINT: Record<string, string> = {
   read: "查看实例、日志、任务列表",
   mc: "启停服务器、发送控制台命令",
+  "mc-console": "附着服务器 PTY 控制台，实时读写",
   instances: "创建、删除、启停其它实例",
   config: "账号、模型、TLS、网络",
   plugins: "装/卸插件与整合包",

@@ -77,15 +77,23 @@ agent 密码**不是**一条独立的路。用它换票之前，必须已经有�
 
 ## 3. 范围（scope）在服务端定，不在客户端里
 
-`AgentScopes` 把面板的接口分成五类：
+`AgentScopes` 把面板的接口分成六类：
 
 | scope | 覆盖 |
 |---|---|
 | `read` | `/api/*` 的 GET（凭据类路由除外，见下） |
-| `mc` | `/api/mc/*` 的启停与控制台 |
+| `mc` | `/api/mc/*` 的启停与控制台命令 |
+| `mc-console` | **只**多给一条：MC 服控制台的 PTY 票据（`POST .../console/ticket` → `/ws/terminal/{ticket}`） |
 | `instances` | 建/删/启停**别的**实例 |
 | `config` | 账号、模型、TLS、网络、Node 运行时、壁纸 |
 | `plugins` | 装/卸插件、整合包、技能 |
+
+`mc-console` 单独一类，是因为它不是"再发一条命令"：附着上去的是一条**双向的活终端**——历史、
+输出流、实时回显全都有。只勾 `mc` 时，agent 仍能启停、发 `console/input`、读日志，但拿不到
+票据；勾上之后 `console/ticket` 才放行，ticket 里记的是这张票的 id 而不是会话 cookie，
+WebSocket 握手时**必须同时带同一张票的 `Authorization: Bearer`**——URL 里的 ticket 单独
+attach 不了任何东西。附着期间每 30 秒回查一次票是否还活着，票被掐、到期或最后一次提权结束
+都会把这条控制台关掉。
 
 四条额外规则，都在 `AuthFilter` 里：
 
@@ -241,6 +249,29 @@ TOKEN=$(curl -sk https://127.0.0.1:3080/api/developer/agent-auth \
 curl -sk https://127.0.0.1:3080/api/mc/instances \
   -H "Authorization: Bearer $TOKEN"
 ```
+
+### 7.1 让 agent 接管 MC 控制台
+
+票里要有 `mc-console`（不勾就只有 `mc` 的老能力：启停、`console/input`、日志）。换票时
+一起要：
+
+```sh
+TOKEN=$(curl -sk https://127.0.0.1:3080/api/developer/agent-auth \
+  -H 'Content-Type: application/json' \
+  -d '{"password":"<agent password>","label":"mc-bot","scopes":["read","mc","mc-console"]}' \
+  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+
+TICKET=$(curl -sk -X POST https://127.0.0.1:3080/api/mc/instances/<id>/console/ticket \
+  -H "Authorization: Bearer $TOKEN" | sed -n 's/.*"ticket":"\([^"]*\)".*/\1/p')
+```
+
+然后用**同一个 Bearer** 连 `wss://127.0.0.1:3080/ws/terminal/$TICKET`（自定义请求头：
+`Authorization: Bearer $TOKEN`）。ticket 30 秒内有效、只能用一次；token 不在 URL 里，所以
+日志、历史记录、`Referer` 拿到的 ticket 单独没用。
+
+- 这是**独占**的浏览器通道吗？不是——它和网页控制台共用同一个 PTY，两边都能看、都能输入。
+- 票没了，控制台就断：掐票、到期、最后一次提权结束，30 秒内这条 WebSocket 会被关掉
+  （显式掐票是立即关）。
 
 ## 8. 还没做的
 

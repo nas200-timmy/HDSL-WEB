@@ -525,7 +525,7 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
 | GET | `/api/mc/ports` | 当前空闲的一对端口建议（创建向导用） | 提权 |
 | POST | `.../start` `.../stop` `.../kill` `.../restart` | 生命周期 | 提权 |
 | GET | `.../logs?tail=N` | 日志尾巴 | 提权 |
-| POST | `.../console/ticket` | 换终端 ticket（复用 `/ws/terminal/{ticket}`） | 提权 |
+| POST | `.../console/ticket` | 换终端 ticket（复用 `/ws/terminal/{ticket}`）；agent 的票走 `mc-console`，ticket 绑定**票**而不是会话，握手时要带同一张票的 Bearer | 提权 / `mc-console` |
 | GET/PUT | `.../properties` | 受管字段读写 | 提权 |
 | GET | `.../players` | 在线列表（RCON） | 提权 |
 | POST | `.../players/{name}/kick\|op\|deop\|ban` | 玩家管理 | 提权 |
