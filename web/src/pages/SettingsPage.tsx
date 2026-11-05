@@ -309,7 +309,6 @@ function GeneralTab() {
         修改密码
       </div>
       <PasswordCard />
-
       <div className="section-caption">
         <InfoIcon size={16} />
         修改用户名
@@ -338,6 +337,30 @@ function GeneralTab() {
             退出登录
           </button>
         </div>
+      </div>
+
+      <div className="section-caption">
+        <InfoIcon size={16} />
+        存储与日志
+      </div>
+      <LogsCard />
+
+      <div className="section-caption">
+        <PublicIcon size={16} />
+        界面语言
+      </div>
+      <div className="card">
+        <div className="comp-row">
+          <span className="comp-label">语言</span>
+          <span className="comp-value">
+            <select className="input" disabled style={{ maxWidth: 240 }} value="zh-Hans">
+              <option value="zh-Hans">简体中文</option>
+            </select>
+          </span>
+        </div>
+        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 8px" }}>
+          目前只提供中文界面。这里的位置是为将来接入其它语言留的——接口和文案表已经分开，加语言时这里会出现选项。
+        </p>
       </div>
     </>
   );
@@ -3286,7 +3309,6 @@ function AboutTab() {
       </div>
       <LegalCard />
       <McAboutCard />
-      <LogsCard />
     </>
   );
 }
