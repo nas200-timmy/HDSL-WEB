@@ -426,9 +426,11 @@ function BrandPolicyCard({
 
   const capabilities = entry.capabilities ?? [];
   const instances = entry.instances;
+  /// 单实例/固定反代只在这两个品牌上出现：它们的 agent 卡死时，这是唯一还开着的门。
+  const lastResort = capabilities.includes("singleInstance");
 
   const save = async () => {
-    if (singleInstance && !survivor) {
+    if (lastResort && singleInstance && !survivor) {
       toast("error", "单实例模式必须先选择保留实例");
       return;
     }
@@ -436,9 +438,9 @@ function BrandPolicyCard({
     try {
       await withElevation(() =>
         api.setBrandPolicy(entry.brand, {
-          singleInstance,
-          survivor: singleInstance ? survivor : null,
-          lockedRoute: singleInstance && lockedRoute,
+          singleInstance: lastResort && singleInstance,
+          survivor: lastResort && singleInstance ? survivor : null,
+          lockedRoute: lastResort && singleInstance && lockedRoute,
           sourceBuild,
           nodeRuntime: nodeRuntime || null,
         }),
@@ -472,53 +474,57 @@ function BrandPolicyCard({
       <div className="comp-row">
         <span className="comp-label">{entry.brand} 策略</span>
         <span className="comp-value">
-          <span className="tag plain">最后手段</span>
+          <span className="tag plain">{lastResort ? "最后手段" : "Node.js 运行时"}</span>
         </span>
       </div>
       <div style={{ display: "grid", gap: 10, padding: "10px 8px 4px" }}>
-        <label className="input-check">
-          <input
-            type="checkbox"
-            checked={singleInstance}
-            disabled={!editable}
-            onChange={(e) => {
-              const on = e.target.checked;
-              setSingleInstance(on);
-              if (on && !survivor && instances.length > 0) setSurvivor(instances[0].id);
-              if (!on) setLockedRoute(false);
-            }}
-          />
-          单实例模式：只保留一个实例，其余灰掉并禁用
-        </label>
+        {lastResort && (
+          <>
+            <label className="input-check">
+              <input
+                type="checkbox"
+                checked={singleInstance}
+                disabled={!editable}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  setSingleInstance(on);
+                  if (on && !survivor && instances.length > 0) setSurvivor(instances[0].id);
+                  if (!on) setLockedRoute(false);
+                }}
+              />
+              单实例模式：只保留一个实例，其余灰掉并禁用
+            </label>
 
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-          保留实例
-          <select
-            className="input"
-            style={{ flex: "none", maxWidth: 260 }}
-            value={survivor ?? ""}
-            disabled={!editable || !singleInstance || instances.length === 0}
-            onChange={(e) => setSurvivor(e.target.value || null)}
-          >
-            <option value="">请选择</option>
-            {instances.map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.name} · {i.id}
-              </option>
-            ))}
-          </select>
-        </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+              保留实例
+              <select
+                className="input"
+                style={{ flex: "none", maxWidth: 260 }}
+                value={survivor ?? ""}
+                disabled={!editable || !singleInstance || instances.length === 0}
+                onChange={(e) => setSurvivor(e.target.value || null)}
+              >
+                <option value="">请选择</option>
+                {instances.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name} · {i.id}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-        {capabilities.includes("lockedRoute") && (
-          <label className="input-check" style={{ opacity: singleInstance ? 1 : 0.55 }}>
-            <input
-              type="checkbox"
-              checked={lockedRoute}
-              disabled={!editable || !singleInstance || !survivor}
-              onChange={(e) => setLockedRoute(e.target.checked)}
-            />
-            固定反代路径 <span className="mono">/i/{entry.brand}/</span>（要求单实例）
-          </label>
+            {capabilities.includes("lockedRoute") && (
+              <label className="input-check" style={{ opacity: singleInstance ? 1 : 0.55 }}>
+                <input
+                  type="checkbox"
+                  checked={lockedRoute}
+                  disabled={!editable || !singleInstance || !survivor}
+                  onChange={(e) => setLockedRoute(e.target.checked)}
+                />
+                固定反代路径 <span className="mono">/i/{entry.brand}/</span>（要求单实例）
+              </label>
+            )}
+          </>
         )}
 
         {capabilities.includes("sourceBuild") && (
@@ -573,7 +579,9 @@ function BrandPolicyCard({
             {saving ? "保存中…" : "保存策略"}
           </button>
           <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-            固定路径只对保留实例生效；关闭策略不会删除数据。
+            {lastResort
+              ? "固定路径只对保留实例生效；关闭策略不会删除数据。"
+              : "只影响这个品牌的默认 Node.js，不改动实例数据。"}
           </span>
         </div>
 

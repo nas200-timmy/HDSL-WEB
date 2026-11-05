@@ -20,6 +20,7 @@ package org.jackhuang.hmcl.web.brand;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -42,7 +43,8 @@ class BrandPolicyTest {
         assertFalse(entry.sourceBuild());
         assertNull(entry.nodeRuntime());
         assertFalse(policy.disabled(Brand.OCTOP, "any-token"));
-        assertNull(policy.lockedSurvivor());
+        assertNull(policy.lockedSurvivor(Brand.OCTOP));
+        assertNull(policy.lockedSurvivor(Brand.OPENCODE));
     }
 
     @Test
@@ -74,17 +76,41 @@ class BrandPolicyTest {
     void lockedRouteSurvivesAReadBack(@TempDir Path dataDir) throws Exception {
         BrandPolicy policy = new BrandPolicy(dataDir);
         policy.set(Brand.OCTOP, new BrandPolicy.Entry(true, "keep-me", true, false, null));
-        assertEquals("keep-me", policy.lockedSurvivor());
-        assertEquals("keep-me", new BrandPolicy(dataDir).lockedSurvivor());
+        assertEquals("keep-me", policy.lockedSurvivor(Brand.OCTOP));
+        assertEquals("keep-me", new BrandPolicy(dataDir).lockedSurvivor(Brand.OCTOP));
     }
 
     @Test
     void writerKeepsOtherBrands(@TempDir Path dataDir) throws Exception {
         BrandPolicy policy = new BrandPolicy(dataDir);
-        policy.set(Brand.KIMI, new BrandPolicy.Entry(true, "kimi-one", false, false, null));
+        policy.set(Brand.OPENCODE, new BrandPolicy.Entry(true, "oc-one", true, false, null));
         policy.set(Brand.OCTOP, new BrandPolicy.Entry(true, "octop-one", false, false, null));
-        assertEquals("kimi-one", policy.get(Brand.KIMI).survivor());
+        assertEquals("oc-one", policy.get(Brand.OPENCODE).survivor());
         assertEquals("octop-one", policy.get(Brand.OCTOP).survivor());
+    }
+
+    /// The last-resort switches exist only for the two brands whose own agent
+    /// can wedge them; a policy file written before that narrowing is read back
+    /// with the switches dropped, so no instance stays disabled without a
+    /// control to undo it.
+    @Test
+    void theLastResortSwitchesBelongToOctopAndOpencode(@TempDir Path dataDir) throws Exception {
+        BrandPolicy policy = new BrandPolicy(dataDir);
+        assertThrows(IllegalArgumentException.class,
+                () -> policy.set(Brand.KIMI, new BrandPolicy.Entry(true, "kimi-one", false, false, null)));
+        assertThrows(IllegalArgumentException.class,
+                () -> policy.set(Brand.HERMES, new BrandPolicy.Entry(false, null, true, false, null)));
+
+        Files.createDirectories(dataDir.resolve("brands"));
+        Files.writeString(dataDir.resolve("brands").resolve("policy.json"), """
+                {"kimi":{"singleInstance":true,"survivor":"kimi-one","lockedRoute":true}}
+                """);
+        BrandPolicy.Entry kimi = new BrandPolicy(dataDir).get(Brand.KIMI);
+        assertFalse(kimi.singleInstance());
+        assertNull(kimi.survivor());
+        assertFalse(kimi.lockedRoute());
+        assertFalse(new BrandPolicy(dataDir).disabled(Brand.KIMI, "other"));
+        assertNull(new BrandPolicy(dataDir).lockedSurvivor(Brand.KIMI));
     }
 
     @Test

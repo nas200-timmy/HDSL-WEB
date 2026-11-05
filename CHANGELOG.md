@@ -4,6 +4,15 @@
 
 ## 未发布
 
+**最后手段只留给 Octop 与 OpenCode**
+
+- 单实例 + 固定反代只对 Octop、OpenCode 开放（`Brand#supportsLastResort`）；其余品牌的策略卡
+  不再显示这两个开关，API 也拒绝；老 `policy.json` 里的残留字段读取时丢弃，不会让实例一直
+  灰着又没有开关可关。
+- 固定反代按品牌通用：`/i/octop/` 与 `/i/opencode/` 各自指向自己的保留实例，页面、反代、
+  WebSocket 中继都用同一套别名解析。OpenCode 的路由补丁按新挂载名工作，原有 token 路径不受影响。
+- `/i/opencode/` 加入实例 id 保留字，避免 dsh 实例与固定路径重名。
+
 **agent 票默认只认本机回环**
 
 - 新增 `agent.loopback_only`（默认开），设置页「开发者模式 → agent 访问 → 票的来源」

@@ -2062,8 +2062,9 @@ public final class InstancesApiServlet extends HttpServlet {
         // that resolved to one would turn a name the user typed into an error rather than a suffix.
         while (DshInstanceManager.exists(candidate)
                 || Files.exists(DshPaths.instanceDirectory(candidate), LinkOption.NOFOLLOW_LINKS)
-                // `/i/octop/` is reserved for the last-resort Octop mount.
-                || "octop".equals(candidate)) {
+                // `/i/octop/` and `/i/opencode/` are reserved for the last-resort brand mounts.
+                || "octop".equals(candidate)
+                || "opencode".equals(candidate)) {
             candidate = base + "-" + suffix;
             suffix++;
         }

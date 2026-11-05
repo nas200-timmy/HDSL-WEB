@@ -37,15 +37,22 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// `<data>/brands/policy.json`.
 ///
 /// Every switch defaults off, so an untouched panel behaves exactly like a
-/// normal multi-instance brand. The three last-resort switches are:
+/// normal multi-instance brand. The last-resort switches exist only for the
+/// brands whose own agent can wedge the tool hard enough that the panel needs
+/// a fixed door back in ([Brand#supportsLastResort] — Octop and OpenCode):
 ///
 /// - `singleInstance`: only one instance of this brand may run. Enabling it
 ///   requires naming the survivor; the others are disabled (not deleted) and
 ///   the API refuses to launch, open or change them.
-/// - `lockedRoute`: serve the survivor at the fixed `/i/octop/` mount. It
+/// - `lockedRoute`: serve the survivor at the fixed `/i/<brand>/` mount. It
 ///   requires `singleInstance`, because a fixed path can only name one target.
 /// - `sourceBuild`: install releases by compiling the upstream source instead
-///   of using the prebuilt portable archive. Windows refuses it.
+///   of using the prebuilt portable archive. Windows refuses it. (Octop only;
+///   this is not a last-resort switch.)
+///
+/// A file written by an older build may still name a survivor for a brand that
+/// no longer offers the switches; [#get] drops those fields on read, so the
+/// policy cannot outlive the capability.
 ///
 /// The file is read on every access rather than cached: the brand API and the
 /// developer API are different servlets, and a stale cache in one would make
@@ -90,9 +97,21 @@ public final class BrandPolicy {
 
     /// The current policy for a brand; defaults when the file or entry is
     /// missing (a fresh panel, or a brand added after the file was written).
+    ///
+    /// A brand that no longer offers the last-resort switches cannot carry
+    /// them: a file written before that capability was narrowed still names a
+    /// survivor, and honouring it would keep the instance disabled with no
+    /// switch in the page to turn it off.
     public Entry get(Brand brand) {
         Entry entry = load().get(brand.id());
-        return entry == null ? Entry.DEFAULTS : entry;
+        if (entry == null) {
+            return Entry.DEFAULTS;
+        }
+        if (!brand.supportsLastResort()
+                && (entry.singleInstance() || entry.lockedRoute() || entry.survivor() != null)) {
+            return entry.withSingleInstance(false).withSurvivor(null).withLockedRoute(false);
+        }
+        return entry;
     }
 
     /// Whether an instance is disabled by the single-instance policy. The
@@ -102,11 +121,29 @@ public final class BrandPolicy {
         return entry.singleInstance() && !instanceId.equals(entry.survivor());
     }
 
-    /// The survivor that should answer `/i/octop/`, or `null` when the fixed
+    /// The survivor that should answer `/i/<brand>/`, or `null` when the fixed
     /// route is off.
-    public @Nullable String lockedSurvivor() {
-        Entry entry = get(Brand.OCTOP);
+    public @Nullable String lockedSurvivor(Brand brand) {
+        if (!brand.supportsLastResort()) {
+            return null;
+        }
+        Entry entry = get(brand);
         return entry.lockedRoute() ? entry.survivor() : null;
+    }
+
+    /// Every brand currently publishing a fixed route, as the runtime needs it
+    /// at boot.
+    ///
+    /// @return brand → survivor id, in enum order
+    public Map<Brand, String> lockedSurvivors() {
+        Map<Brand, String> survivors = new LinkedHashMap<>();
+        for (Brand brand : Brand.values()) {
+            String survivor = lockedSurvivor(brand);
+            if (survivor != null) {
+                survivors.put(brand, survivor);
+            }
+        }
+        return survivors;
     }
 
     /// Writes one brand's policy. Validation lives here so the HTTP layer and
@@ -118,6 +155,10 @@ public final class BrandPolicy {
         String survivor = entry.survivor() == null ? null : entry.survivor().trim();
         if (survivor != null && survivor.isEmpty()) {
             survivor = null;
+        }
+        if (!brand.supportsLastResort() && (entry.singleInstance() || entry.lockedRoute())) {
+            throw new IllegalArgumentException(
+                    "singleInstance and lockedRoute are only available for octop and opencode");
         }
         if (entry.singleInstance() && survivor == null) {
             throw new IllegalArgumentException("singleInstance requires a survivor instance");

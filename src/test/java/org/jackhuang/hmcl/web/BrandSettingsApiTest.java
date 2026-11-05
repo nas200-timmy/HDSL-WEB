@@ -185,11 +185,19 @@ class BrandSettingsApiTest {
             for (JsonElement element : octop.getAsJsonArray("capabilities")) {
                 capabilities.add(element.getAsString());
             }
-            assertEquals(List.of("lockedRoute", "sourceBuild"), capabilities);
+            assertEquals(List.of("singleInstance", "lockedRoute", "sourceBuild"), capabilities);
+
+            JsonObject opencode = brandEntry(body.getAsJsonObject("policy"), Brand.OPENCODE.id());
+            List<String> opencodeCapabilities = new ArrayList<>();
+            for (JsonElement element : opencode.getAsJsonArray("capabilities")) {
+                opencodeCapabilities.add(element.getAsString());
+            }
+            assertEquals(List.of("singleInstance", "lockedRoute"), opencodeCapabilities,
+                    "OpenCode has the last-resort door but no source build");
 
             JsonObject kimi = brandEntry(body.getAsJsonObject("policy"), Brand.KIMI.id());
             assertEquals(0, kimi.getAsJsonArray("capabilities").size(),
-                    "an npm brand has neither of those switches");
+                    "an npm brand has none of those switches");
 
             // Read is open; the page still says where each source came from.
             assertTrue(List.of("environment", "default").contains(
@@ -357,6 +365,17 @@ class BrandSettingsApiTest {
                     cookie);
             assertEquals(400, wrongBrand.statusCode(), wrongBrand.body());
             assertTrue(wrongBrand.body().contains("lockedRoute"), wrongBrand.body());
+
+            // 单实例也只对那两个品牌开放：老页面即使发上来也得拒绝。
+            HttpResponse<String> singleOnKimi = put(client, base + "/api/settings/brands/policy/kimi",
+                    "{\"singleInstance\":true,\"survivor\":\"x\",\"lockedRoute\":false}", cookie);
+            assertEquals(400, singleOnKimi.statusCode(), singleOnKimi.body());
+            assertTrue(singleOnKimi.body().contains("singleInstance"), singleOnKimi.body());
+
+            // OpenCode 有最后手段，同一个请求在这里是合法的（实例不存在时由 survivor 校验拒绝）。
+            HttpResponse<String> opencode = put(client, base + "/api/settings/brands/policy/opencode",
+                    "{\"singleInstance\":false,\"survivor\":null,\"lockedRoute\":false}", cookie);
+            assertEquals(200, opencode.statusCode(), opencode.body());
 
             HttpResponse<String> unknown = put(client, base + "/api/settings/brands/policy/nope",
                     "{}", cookie);

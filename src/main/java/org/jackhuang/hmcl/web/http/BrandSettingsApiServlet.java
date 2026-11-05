@@ -248,8 +248,19 @@ public final class BrandSettingsApiServlet extends HttpServlet {
 
     /// The switches a brand actually has. Data, not a special case in the page: a brand that grows
     /// one later only changes this method.
+    ///
+    /// `singleInstance`/`lockedRoute` exist only where the tool's own agent can wedge the product
+    /// ([Brand#supportsLastResort]); `sourceBuild` stays Octop's.
     private static List<String> capabilities(Brand brand) {
-        return brand == Brand.OCTOP ? List.of("lockedRoute", "sourceBuild") : List.of();
+        List<String> capabilities = new java.util.ArrayList<>();
+        if (brand.supportsLastResort()) {
+            capabilities.add("singleInstance");
+            capabilities.add("lockedRoute");
+        }
+        if (brand == Brand.OCTOP) {
+            capabilities.add("sourceBuild");
+        }
+        return capabilities;
     }
 
     /// Applies a policy change for one brand.
@@ -292,6 +303,11 @@ public final class BrandSettingsApiServlet extends HttpServlet {
             }
         }
         List<String> capabilities = capabilities(brand);
+        if (singleInstance && !capabilities.contains("singleInstance")) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "singleInstance is not supported for " + brand.id());
+            return;
+        }
         if (lockedRoute && !capabilities.contains("lockedRoute")) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                     "lockedRoute is not supported for " + brand.id());
@@ -326,8 +342,8 @@ public final class BrandSettingsApiServlet extends HttpServlet {
                 AuditLog.log(AuditLog.Channel.WEB, "brand.node", brand.id(), "success",
                         actorOf(request), request.getRemoteAddr());
             }
-            if (brand == Brand.OCTOP) {
-                BrandRuntime.setLockedOctopSurvivor(lockedRoute ? survivor : null);
+            if (brand.supportsLastResort()) {
+                BrandRuntime.setLockedSurvivor(brand, lockedRoute ? survivor : null);
             }
             AuditLog.log(AuditLog.Channel.WEB, "brand.policy", brand.id(), "success",
                     actorOf(request), request.getRemoteAddr());

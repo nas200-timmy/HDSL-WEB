@@ -38,23 +38,25 @@ class BrandMountPathTest {
     @Test
     void theLockedSurvivorGetsTheFixedMount() {
         assertEquals("/i/octop/", BrandApiServlet.mountPath("", Brand.OCTOP, "abc123", "abc123"));
+        assertEquals("/i/opencode/", BrandApiServlet.mountPath("", Brand.OPENCODE, "abc123", "abc123"));
     }
 
     @Test
     void aSubPathMountIsCarriedThrough() {
         assertEquals("/hdsl/i/abc123/", BrandApiServlet.mountPath("/hdsl", Brand.OCTOP, "abc123", null));
         assertEquals("/hdsl/i/octop/", BrandApiServlet.mountPath("/hdsl", Brand.OCTOP, "abc123", "abc123"));
+        assertEquals("/hdsl/i/opencode/", BrandApiServlet.mountPath("/hdsl", Brand.OPENCODE, "abc123", "abc123"));
     }
 
     @Test
-    void theAliasBelongsToOctopOnly() {
-        // The policy can only ever name an Octop survivor; other brands must not
-        // pick up an `/i/octop/` URL by accident.
+    void theAliasBelongsToTheTwoLastResortBrands() {
+        // Only the brands whose policy can name a survivor publish a fixed door;
+        // every other brand keeps its token mount whatever the policy claims.
         for (Brand brand : Brand.values()) {
-            if (brand == Brand.OCTOP) {
-                continue;
-            }
-            assertEquals("/i/abc123/", BrandApiServlet.mountPath("", brand, "abc123", "abc123"),
+            String expected = brand.supportsLastResort()
+                    ? "/i/" + brand.id() + "/"
+                    : "/i/abc123/";
+            assertEquals(expected, BrandApiServlet.mountPath("", brand, "abc123", "abc123"),
                     brand.id());
         }
     }

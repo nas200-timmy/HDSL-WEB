@@ -254,6 +254,17 @@ public enum Brand {
         return this == HERMES;
     }
 
+    /// Whether this brand offers the **last-resort** policy: one surviving
+    /// instance and the fixed `/i/<brand>/` route to it.
+    ///
+    /// Only the two tools whose own agent can wedge hard enough to take the
+    /// whole brand down need that fallback — Octop's dashboard and OpenCode's
+    /// web client. Every other brand keeps plain multi-instance behaviour, and
+    /// the policy API refuses the switches for them.
+    public boolean supportsLastResort() {
+        return this == OCTOP || this == OPENCODE;
+    }
+
     /// Whether the installer builds a Python environment from source (uv) rather
     /// than unpacking an npm package or a portable archive.
     public boolean pythonSource() {

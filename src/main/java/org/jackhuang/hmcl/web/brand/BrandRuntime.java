@@ -175,10 +175,14 @@ public final class BrandRuntime {
     /// How much of its output is kept for the failure message and the log.
     private static final int OCTOP_INIT_OUTPUT_CAP = 64 * 1024;
 
-    /// The instance that answers the last-resort `/i/octop/` mount, when the
-    /// developer policy turns `lockedRoute` on. `null` means the normal token
-    /// mounts only.
-    private static volatile @Nullable String LOCKED_OCTOP_SURVIVOR;
+    /// The instance that answers each brand's last-resort `/i/<brand>/` mount,
+    /// when the developer policy turns `lockedRoute` on. An absent entry means
+    /// the normal token mounts only.
+    ///
+    /// Per brand, not one global: Octop and OpenCode can each publish their own
+    /// fixed door ([Brand#supportsLastResort]).
+    private static final java.util.concurrent.ConcurrentHashMap<Brand, String> LOCKED_SURVIVORS =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private BrandRuntime() {
     }
@@ -478,32 +482,45 @@ public final class BrandRuntime {
         return BRANDS.get(id);
     }
 
-    /// Selects the survivor that answers `/i/octop/`, or clears the fixed
+    /// Selects the survivor that answers `/i/<brand>/`, or clears the fixed
     /// route. Called at boot and whenever the developer policy changes.
-    public static void setLockedOctopSurvivor(@Nullable String instanceId) {
-        LOCKED_OCTOP_SURVIVOR = instanceId == null || instanceId.isBlank() ? null : instanceId;
+    ///
+    /// @param brand      the brand whose fixed door this is
+    /// @param instanceId the survivor's id, or `null` to close the door
+    public static void setLockedSurvivor(Brand brand, @Nullable String instanceId) {
+        if (instanceId == null || instanceId.isBlank()) {
+            LOCKED_SURVIVORS.remove(brand);
+        } else {
+            LOCKED_SURVIVORS.put(brand, instanceId);
+        }
     }
 
-    /// The survivor id behind `/i/octop/`, or `null` when the fixed route is
+    /// The survivor id behind `/i/<brand>/`, or `null` when the fixed route is
     /// off.
-    public static @Nullable String lockedOctopSurvivor() {
-        return LOCKED_OCTOP_SURVIVOR;
+    public static @Nullable String lockedSurvivor(Brand brand) {
+        return LOCKED_SURVIVORS.get(brand);
     }
 
-    /// The brand a mount id names. A normal mount id is an instance id; the
-    /// reserved `/i/octop/` alias is the one that has no instance of its own.
+    /// The brand a mount id names. A normal mount id is an instance id; a
+    /// reserved `/<brand>/` alias (only for brands with a live fixed route)
+    /// names its brand and has no instance of its own.
     public static @Nullable Brand brandForMount(String mountId) {
-        if ("octop".equals(mountId) && LOCKED_OCTOP_SURVIVOR != null) {
-            return Brand.OCTOP;
+        Brand reserved = Brand.fromId(mountId);
+        if (reserved != null && reserved.supportsLastResort() && LOCKED_SURVIVORS.containsKey(reserved)) {
+            return reserved;
         }
         return brandOf(mountId);
     }
 
-    /// The target a mount id resolves to: normally the instance id, but the
-    /// fixed alias forwards to the survivor.
+    /// The target a mount id resolves to: normally the instance id, but a
+    /// brand's fixed alias forwards to that brand's survivor.
     public static String targetForMount(String mountId) {
-        if ("octop".equals(mountId) && LOCKED_OCTOP_SURVIVOR != null) {
-            return LOCKED_OCTOP_SURVIVOR;
+        Brand reserved = Brand.fromId(mountId);
+        if (reserved != null && reserved.supportsLastResort()) {
+            String survivor = LOCKED_SURVIVORS.get(reserved);
+            if (survivor != null) {
+                return survivor;
+            }
         }
         return mountId;
     }
