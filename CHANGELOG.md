@@ -2,7 +2,7 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布
+## v0.6.73 — 2026-11-07 · 实例 home 属主修复（cordis.yml EACCES）；构建换源提速
 
 **实例 home 里 root 属主的文件：`EACCES …/profiles/web/cordis.yml` 的真正原因**
 
