@@ -19,6 +19,7 @@ package org.jackhuang.hmcl.dsh;
 
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
+import org.jackhuang.hmcl.util.platform.Privileges;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -108,6 +109,7 @@ public final class DshDefaultModel {
                 }
                 throw e;
             }
+            Privileges.handWrittenFile(file, DshPaths.ROOT);
             return true;
         } catch (IOException e) {
             throw new DshException("Failed to set the default model in " + file, e);

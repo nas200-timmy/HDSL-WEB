@@ -147,6 +147,43 @@ public final class DshLauncher {
                 Privileges.prepareAgentDirectory(normalized, Privileges.AGENT_SHARED_DIRECTORY);
             }
         }
+        // Those two directories are all an empty instance has. A used one also has `profiles/`,
+        // `storages/` and `settings.yaml`, and a home written by an older panel — or by the `--help`
+        // probe before it ran as the agent — has them root-owned: chowning the top directory heals
+        // nothing there, and the harness dies writing the profile it composes beside them
+        // (`EACCES …/profiles/web/cordis.yml`). Hand the whole tree over once, when one of the names
+        // a harness writes is still somebody else's; a healthy home pays a stat per name, not a walk.
+        Path home = instance.homeDirectory().toAbsolutePath().normalize();
+        if (home.startsWith(root) && hasForeignEntries(home, instance.profile())) {
+            int handed = Privileges.handTreeToAgent(home);
+            LOG.info("Handed " + handed + " entries of " + home + " to uid " + Privileges.AGENT_UID
+                    + " so the harness can write its own profile");
+        }
+    }
+
+    /// Reports whether a home still holds an entry the harness has to write that belongs to somebody else.
+    ///
+    /// The names are the ones a harness rewrites — the profile directory and its patch layer, the
+    /// settings it composes, the storages it appends to — plus the home itself, which is where an
+    /// older panel's `docker cp` or a root-run `dsh` leaves its mark.
+    ///
+    /// @param home    the instance's `DSH_HOME`
+    /// @param profile the profile the instance boots
+    /// @return whether a hand-over of the whole tree is worth the walk
+    private static boolean hasForeignEntries(Path home, String profile) {
+        for (String name : List.of("", "profiles", "profiles/" + profile,
+                "profiles/" + profile + "/cordis.patch.yml", "storages", "sessions",
+                "attachments", "settings.yaml", ".env")) {
+            Path entry = name.isEmpty() ? home : home.resolve(name);
+            if (!Files.exists(entry)) {
+                continue;
+            }
+            int owner = Privileges.ownerOf(entry);
+            if (owner >= 0 && owner != Privileges.AGENT_UID) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// The resolution itself, with "this work needs pnpm" as the flag.
@@ -239,9 +276,15 @@ public final class DshLauncher {
         try {
             DshNodeRuntime runtime = resolveRuntime(instance);
             Path script = instance.dshEntryPoint();
-            ProcessBuilder builder = new ProcessBuilder(
-                    runtime.node().toString(), script.toString(),
-                    "--profile", instance.profile(), "--help");
+            // As the agent, not as the panel. A `--help` is not read-only: it composes the profile
+            // first, and composing writes `cordis.yml`, `cordis.patch.yml` and `package.json` into
+            // `$DSH_HOME/profiles/<profile>`. Run as root — which is what this probe did — those
+            // files arrive root-owned, and every later launch, dropping to the agent, fails to
+            // rewrite them with `EACCES` that looks like the harness's own bug. Same argv, one
+            // wrapper: see `Privileges#asAgent`.
+            ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(
+                    List.of(runtime.node().toString(), script.toString(),
+                            "--profile", instance.profile(), "--help")));
             builder.redirectErrorStream(true);
             builder.environment().put("DSH_HOME", instance.homeDirectory().toString());
             if (instance.workspacePath() != null) {

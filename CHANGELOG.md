@@ -4,6 +4,27 @@
 
 ## 未发布
 
+**实例 home 里 root 属主的文件：`EACCES …/profiles/web/cordis.yml` 的真正原因**
+
+- `--help` 能力探测以前以面板身份（容器里是 root）运行。`dsh --profile <p> --help` 并不只读
+  帮助：它先组合 profile，把 `cordis.yml`、`cordis.patch.yml`、`package.json` 写进
+  `$DSH_HOME/profiles/<profile>/`。这些文件从此属于 root，而之后每次启动都降权到 uid 1000，
+  于是写同一个 `cordis.yml` 得到 `EACCES`——报错长得像上游 bug，其实是面板自己留下的。
+  探测现在包一层 `Privileges#asAgent`，与真正的启动同一个身份。
+- 面板往实例 home 写的每一处，写完都把**文件连同目录**交接给 agent
+  （`Privileges#handWrittenFile`）：账户路由与插件开关的 `cordis.patch.yml`、注入的
+  `settings.yaml`、默认模型、`.env`、`pnpm-workspace.yaml`、安装清单，以及插件包解包出来的
+  每个文件。只对面板数据目录**以内**的路径生效——实例的 home 可以指向用户自己的目录
+  （`DshHomeMode.CUSTOM`），那里的属主不是面板能改的。
+- `DshLauncher#prepareInstanceDirectories` 不再只 chown `instances/<id>/` 和 `home/` 两个顶层
+  目录：它会检查 `profiles/`、`storages/`、`profiles/<p>/cordis.patch.yml` 这些 harness 要写的
+  路径，发现属主不是 agent 就把整棵 home 交接一次。被旧面板写坏的老实例，下次启动自愈；健康
+  的实例只付每路径一次 stat，不做遍历。
+- 同类一起修掉：品牌安装在解包/构建完成后把 `releases/<version>` 整棵树交接给 agent（Hermes
+  的 venv、opencode 的二进制目录都属于这种"安装器 root 写、运行时 agent 用"的树）；插件包
+  解包逐文件交接，并在 pnpm 之前先准备好 profile 目录，否则 `pnpm install` 直接 EACCES。
+- 测试：`PrivilegesTest` 增加两条——数据根内的写入会交接文件与目录、数据根外的写入保持原样。
+
 **本地构建提速：apt 换源 + 缓存挂载**
 
 - 新增 `--build-arg APT_MIRROR=<scheme://host>`：构建期把 Debian/Ubuntu 的 apt sources

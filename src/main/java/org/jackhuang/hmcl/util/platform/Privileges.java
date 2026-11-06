@@ -296,6 +296,40 @@ public final class Privileges {
         return handed[0];
     }
 
+    /// Hands a file the panel has just written — and the directory holding it — to the agent.
+    ///
+    /// The pattern this exists for has shipped three times. A panel that writes into a tree its
+    /// agent also writes leaves a `0644` root-owned file in a `0755` root-owned directory, and the
+    /// child running as [#AGENT_UID] then fails on the file **beside** it: `EACCES … cordis.yml`
+    /// next to the `cordis.patch.yml` the panel wrote, `EACCES … settings.yaml` after the panel put
+    /// the first line in it. That reads like an upstream bug and is not one.
+    ///
+    /// Called **after** the write, not before: the directory exists by then, and a directory an
+    /// earlier panel created as root is repaired by the same call.
+    ///
+    /// Only entries under `dataRoot` are touched. An instance may point its home at the operator's
+    /// own directory, and changing the owner of a file the operator made is not the panel's to do
+    /// — the same limit [#prepareAgentDirectory]'s callers observe for their directories.
+    ///
+    /// A no-op outside a container, where nobody was dropped: see [#handToAgent].
+    ///
+    /// @param file     what was written
+    /// @param dataRoot the panel's own data directory
+    public static void handWrittenFile(Path file, Path dataRoot) {
+        if (!DROP_CHILDREN) {
+            return;
+        }
+        Path normalized = file.toAbsolutePath().normalize();
+        if (!normalized.startsWith(dataRoot.toAbsolutePath().normalize())) {
+            return;
+        }
+        Path parent = normalized.getParent();
+        if (parent != null) {
+            handToAgent(parent, AGENT_SHARED_DIRECTORY);
+        }
+        handToAgent(normalized, AGENT_SHARED_FILE);
+    }
+
     /// The owner of a file or directory, or `-1` where the platform has no such notion.
     ///
     /// @param path the entry

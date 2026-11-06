@@ -21,6 +21,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
+import org.jackhuang.hmcl.util.platform.Privileges;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -414,6 +415,7 @@ public final class DshPluginPatch {
             } catch (java.nio.file.AtomicMoveNotSupportedException e) {
                 Files.move(staging, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
+            Privileges.handWrittenFile(file, DshPaths.ROOT);
         } catch (IOException e) {
             throw new DshException("Could not write " + file, e);
         }

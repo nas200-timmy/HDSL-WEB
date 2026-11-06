@@ -274,6 +274,11 @@ public final class DshVersionManager {
             var gson = new com.google.gson.GsonBuilder().setPrettyPrinting().create();
             Files.writeString(prefix.resolve("package.json"), gson.toJson(manifest));
             Files.writeString(prefix.resolve("pnpm-workspace.yaml"), workspace.toString());
+            // `pnpm install` runs as the agent in this prefix, and a manifest and a workspace file
+            // it cannot rewrite are the same failure as a root-owned profile: the tool that owns
+            // its own configuration cannot save it. See `Privileges#handWrittenFile`.
+            Privileges.handWrittenFile(prefix.resolve("package.json"), DshPaths.ROOT);
+            Privileges.handWrittenFile(prefix.resolve("pnpm-workspace.yaml"), DshPaths.ROOT);
         } catch (IOException e) {
             throw new DshException("Failed to write the manifest for " + version, e);
         }

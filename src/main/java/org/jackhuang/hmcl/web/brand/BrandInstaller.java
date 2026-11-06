@@ -925,11 +925,13 @@ public final class BrandInstaller {
         }
         if (installed) {
             message.accept(brand.sourceLabel() + " " + version + " is already installed");
+            handReleaseToAgent(target);
             pointCurrentAt(brandRoot, target);
             return;
         }
         if (brand == Brand.HERMES) {
             installHermes(brand, version, brandRoot, target, message);
+            handReleaseToAgent(target);
             pointCurrentAt(brandRoot, target);
             message.accept("Installed " + brand.sourceLabel() + " " + version);
             LOG.info("Installed " + brand.sourceLabel() + " " + version + " into " + target);
@@ -937,6 +939,7 @@ public final class BrandInstaller {
         }
         if (brand == Brand.OCTOP) {
             installOctop(brand, version, brandRoot, target, message);
+            handReleaseToAgent(target);
             pointCurrentAt(brandRoot, target);
             message.accept("Installed " + brand.sourceLabel() + " " + version);
             LOG.info("Installed " + brand.sourceLabel() + " " + version + " into " + target);
@@ -944,6 +947,7 @@ public final class BrandInstaller {
         }
         if (brand.source() == Brand.Source.GITHUB) {
             installGitHub(brand, version, brandRoot, target, message);
+            handReleaseToAgent(target);
             pointCurrentAt(brandRoot, target);
             message.accept("Installed " + brand.sourceLabel() + " " + version);
             LOG.info("Installed " + brand.sourceLabel() + " " + version + " into " + target);
@@ -1035,6 +1039,7 @@ public final class BrandInstaller {
                     + " installed without its executable (" + bin + "); the package's install scripts may have "
                     + "been skipped or failed — see " + log);
         }
+        handReleaseToAgent(target);
         pointCurrentAt(brandRoot, target);
         message.accept("Installed " + brand.npmPackage() + " " + version);
         LOG.info("Installed " + brand.npmPackage() + " " + version + " into " + target);
@@ -2451,6 +2456,24 @@ public final class BrandInstaller {
         } catch (IOException e) {
             LOG.warning("Failed to read " + log, e);
             return List.of();
+        }
+    }
+
+    /// Hands a freshly installed release to the agent.
+    ///
+    /// The installer runs as the panel — root inside the container — so everything it unpacks is
+    /// root-owned. A brand that writes inside its own release directory (a build cache, a
+    /// self-updating shim, `__pycache__` under a venv) then fails with the same `EACCES` that made
+    /// the harness's composed profile unreadable. Ownership only: modes stay what the installer
+    /// made them, because a release holds executables.
+    ///
+    /// A no-op outside a container, where the panel and the agent are the same user.
+    ///
+    /// @param target the release directory
+    private static void handReleaseToAgent(Path target) {
+        int handed = Privileges.handTreeToAgent(target);
+        if (handed > 0) {
+            LOG.info("Handed " + handed + " entries of " + target + " to uid " + Privileges.AGENT_UID);
         }
     }
 

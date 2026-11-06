@@ -264,4 +264,47 @@ class PrivilegesTest {
         }
         assertEquals(Files.exists(outside), true, "and the file it points at is untouched");
     }
+
+    /// The file the panel just wrote has to change hands, together with the directory that holds
+    /// it — the failure this repairs is `EACCES` on the file *beside* it: the harness composes
+    /// `cordis.yml` next to the `cordis.patch.yml` the panel wrote, and it runs as the agent.
+    @Test
+    void aWrittenFileInsideTheDataRootGoesToTheAgent(@TempDir Path directory) throws Exception {
+        Path dataRoot = Files.createDirectories(directory.resolve("data"));
+        Path profile = Files.createDirectories(dataRoot.resolve("instances/abc/home/profiles/web"));
+        Path patch = Files.writeString(profile.resolve("cordis.patch.yml"), "[]\n");
+        int fileOwner = Privileges.ownerOf(patch);
+        int directoryOwner = Privileges.ownerOf(profile);
+
+        Privileges.handWrittenFile(patch, dataRoot);
+
+        if (!Privileges.dropsChildren()) {
+            // Outside the container nobody was dropped, so nothing may move: the panel and the
+            // agent are the same person and an ownership change would be taking their file.
+            assertEquals(fileOwner, Privileges.ownerOf(patch));
+            assertEquals(directoryOwner, Privileges.ownerOf(profile));
+            return;
+        }
+        assertEquals(Privileges.AGENT_UID, Privileges.ownerOf(patch),
+                "the agent has to be able to rewrite the patch layer");
+        assertEquals(Privileges.AGENT_UID, Privileges.ownerOf(profile),
+                "and to write the composed profile beside it");
+    }
+
+    /// An instance may point its home at the operator's own directory (`DshHomeMode.CUSTOM`).
+    /// The hand-over is therefore limited to the panel's data root, or the first launch would
+    /// take ownership of someone's files.
+    @Test
+    void aWrittenFileOutsideTheDataRootIsLeftAlone(@TempDir Path directory) throws Exception {
+        Path dataRoot = Files.createDirectories(directory.resolve("data"));
+        Path operator = Files.createDirectories(directory.resolve("operator"));
+        Path file = Files.writeString(operator.resolve("settings.yaml"), "provider: x\n");
+        int owner = Privileges.ownerOf(file);
+        int parentOwner = Privileges.ownerOf(operator);
+
+        Privileges.handWrittenFile(file, dataRoot);
+
+        assertEquals(owner, Privileges.ownerOf(file));
+        assertEquals(parentOwner, Privileges.ownerOf(operator));
+    }
 }

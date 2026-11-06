@@ -25,6 +25,7 @@ import org.jackhuang.hmcl.util.DigestUtils;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
 import org.jackhuang.hmcl.util.io.HttpClients;
 import org.jackhuang.hmcl.util.io.SafePaths;
+import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -993,6 +994,9 @@ public final class DshPackInstaller {
                 refuseIfUnsafe(name, target);
                 SafePaths.createDirectories(root, target.getParent());
                 Files.copy(zip, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                // The extraction runs as the panel; the harness runs as the agent and rewrites
+                // `cordis.yml` beside the patch this pack just landed. See `Privileges#handWrittenFile`.
+                Privileges.handWrittenFile(target, root);
                 files++;
             }
         } catch (IOException e) {
@@ -1044,6 +1048,7 @@ public final class DshPackInstaller {
                 refuseIfUnsafe(member, target);
                 SafePaths.createDirectories(destination, target.getParent());
                 Files.copy(tar, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                Privileges.handWrittenFile(target, destination);
                 if (isMachine) {
                     machine++;
                 } else {
@@ -1242,6 +1247,11 @@ public final class DshPackInstaller {
             throws DshException {
         Path home = instance.homeDirectory();
         Path profiles = home.resolve("profiles").resolve(instance.profile());
+        // The pack's files land as root, and `DshPluginInstaller.resolve` runs pnpm as the agent
+        // right after them. A root-owned profile directory is where that install dies — before
+        // the pack is even usable — so the directory is prepared here and every file that lands
+        // is handed over beside the write (see `land`).
+        Privileges.prepareAgentDirectory(profiles, Privileges.AGENT_SHARED_DIRECTORY);
 
         // What the pack declares about launchers is said here rather than at the gate, because there
         // is no gate: the specification is explicit that a pack it does not declare support for is

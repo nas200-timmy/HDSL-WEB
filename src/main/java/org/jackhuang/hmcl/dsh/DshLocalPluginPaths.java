@@ -22,6 +22,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
+import org.jackhuang.hmcl.util.platform.Privileges;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -315,6 +316,7 @@ public final class DshLocalPluginPaths {
                 Files.setPosixFilePermissions(staging, permissions);
             }
             Files.move(staging, file, StandardCopyOption.REPLACE_EXISTING);
+            Privileges.handWrittenFile(file, DshPaths.ROOT);
         } finally {
             // A move that went through left nothing behind. One that did not must not leave
             // half a record beside the record still in place.

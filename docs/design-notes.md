@@ -200,6 +200,13 @@ Windows 上常见一种情况：杀毒软件、企业网关或 GitHub 加速器�
 - 每个 agent 进程派生时前置 `setpriv --reuid=1000 --regid=1000 --init-groups --`，跑成镜像里的 `hdsl`；
 - 实例子目录 `1000:1000 2775`（setgid）+ 入口 `umask 002`，所以**面板（root）写进去的文件是
   `root:hdsl 0664`，agent 照样能改**——否则 root 会把 agent 自己的目录写死；
+- 但"setgid 卷 + `umask 002`"是**部署的意外，不是面板能依赖的性质**：普通 bind mount、别的入口
+  脚本、或老实例里已经存在的 root 文件，都会让上一条不成立，症状是 `EACCES …/profiles/web/
+  cordis.yml` 这类"长得像上游 bug"的失败。所以面板自己往 agent 要写的树里写东西（`DSH_HOME`、
+  品牌 home、安装树）时，**写完就交接**（`Privileges#handWrittenFile`、`#handTreeToAgent`），
+  不靠挂载参数；每次启动 `DshLauncher#prepareInstanceDirectories` 还会看一眼关键路径的属主，
+  发现是别人的就把整棵树交接一次（老实例自愈）。同一条规则也用在"以 root 跑一次 `--help`"这种
+  看似只读的动作上——它并不只读；
 - `setpriv` 是 exec 原地替换：进程组、PTY 会话、"不经 shell"这三条都不变。
 
 裸部署没有这一层：面板与 agent 同 uid，秘密文件对 agent 可读可写。面板**不会**拒绝以 root 启动

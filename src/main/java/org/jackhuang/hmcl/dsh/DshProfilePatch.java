@@ -19,6 +19,7 @@ package org.jackhuang.hmcl.dsh;
 
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
+import org.jackhuang.hmcl.util.platform.Privileges;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -75,6 +76,7 @@ public final class DshProfilePatch {
             } catch (IOException e) {
                 throw new DshException("Could not write " + patch, e);
             }
+            Privileges.handWrittenFile(patch, DshPaths.ROOT);
             LOG.info("Removed inserts from " + patch + " that its own bundles already apply");
         }
         return edit.withConfiguration();
@@ -591,6 +593,7 @@ public final class DshProfilePatch {
             } catch (java.nio.file.AtomicMoveNotSupportedException e) {
                 Files.move(staging, patch, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
+            Privileges.handWrittenFile(patch, DshPaths.ROOT);
         } catch (IOException e) {
             throw new DshException("Could not write " + patch, e);
         }

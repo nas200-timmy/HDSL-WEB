@@ -19,6 +19,7 @@ package org.jackhuang.hmcl.dsh;
 
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
+import org.jackhuang.hmcl.util.platform.Privileges;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -325,6 +326,7 @@ public final class DshBuildScripts {
         try {
             Files.writeString(staging, body, StandardCharsets.UTF_8);
             Files.move(staging, file, StandardCopyOption.REPLACE_EXISTING);
+            Privileges.handWrittenFile(file, DshPaths.ROOT);
         } catch (IOException e) {
             throw new DshException("Failed to write " + file, e);
         }
