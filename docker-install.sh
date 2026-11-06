@@ -1286,9 +1286,9 @@ if [ -z "$MIRROR" ] && [ "$BASE_REGISTRY_SET" = 0 ]; then
         SELECT_DEFAULT=1
     fi
     mirror_choice=$(select_one "镜像源" \
-        "国内镜像（推荐）｜npm→npmmirror，Node→腾讯，底座→${DEFAULT_BASE_REGISTRY}" \
-        "国内镜像（备选）｜npm→npmmirror，Node→腾讯，底座→${BASE_REGISTRY_ALT}" \
-        "官方源｜npm→npmjs.org，Node→nodejs.org，底座→Docker Hub")
+        "国内镜像（推荐）｜npm→npmmirror，Node→腾讯，apt→TUNA，底座→${DEFAULT_BASE_REGISTRY}" \
+        "国内镜像（备选）｜npm→npmmirror，Node→腾讯，apt→TUNA，底座→${BASE_REGISTRY_ALT}" \
+        "官方源｜npm→npmjs.org，Node→nodejs.org，apt→deb.debian.org，底座→Docker Hub")
     case "$mirror_choice" in
         1) MIRROR=yes; BASE_REGISTRY="$DEFAULT_BASE_REGISTRY"; BASE_REGISTRY_SET=1 ;;
         2) MIRROR=yes; BASE_REGISTRY="$BASE_REGISTRY_ALT";     BASE_REGISTRY_SET=1 ;;
