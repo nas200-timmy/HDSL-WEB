@@ -2,6 +2,14 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.6.72 — 2026-11-06 · 补上类型检查漏掉的那个联合类型
+
+- `McJavaInfo.source` 的联合类型补上 `installed`。v0.6.71 里 `McRuntime` 已经会按
+  MC 版本挑本机另一份 JDK 并把来源记成 `installed`，前端类型还停在
+  `panel` / `configured` / `none`，于是 `tsc --noEmit` 报 TS2367、`build` 工作流
+  两条腿都红——本地 `npm run build` 走的是 vite，不做类型检查，所以没在发布前拦住。
+  构建产物与 v0.6.71 相同，这一版只是让发布对应的检查是绿的。
+
 ## v0.6.71 — 2026-11-06 · 镜像内置 JDK 25；审计修复一轮
 
 **容器镜像内置 JDK 25，MC 按版本挑 JVM**
