@@ -148,6 +148,18 @@ FROM ${HDSL_BASE} AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# 包管理器的下载源。国内网络上的 `deb.debian.org` 是构建里最慢的一段（`apt-get
+# update` 要拉 ~10 MB 的索引，装包再拉几百 MB），而这跟底座镜像走哪个仓库没有关系
+# ——底座换了镜像站，`apt` 仍然直连 Debian。传一个 scheme+host 就把 sources 里的
+# 主机换掉（`deb.debian.org` / `security.debian.org` / Ubuntu 的 archive 与 security），
+# 路径不变，所以 `debian-security` 这类路径在各种镜像站上都对得上。
+#
+#   docker build --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn .
+#
+# 只处理 Debian/Ubuntu；Fedora/openSUSE 的分支不动（各自的 repo 文件里主机名不统一，
+# 猜错比不改更糟）。
+ARG APT_MIRROR=
+
 
 # OCI 元数据：source 让 ghcr.io 把镜像包自动关联到本仓库（也是 CI 里
 # GITHUB_TOKEN 有权推送同名包的前提），description/licenses 显示在包页面。
@@ -237,7 +249,23 @@ ARG PNPM_VERSION=11.28.2
 # 镜像与官方逐字节一致（SHASUMS256 校验不变，仍以官方清单为准）。
 ARG NODE_DIST_MIRROR=https://nodejs.org/dist
 
-RUN set -eux; \
+# 两个 apt 缓存挂载：索引和 .deb 都不进镜像层，只在构建器里留着。这一条是「改一行
+# Dockerfile 就等五分钟」的解药——包清单没变时 `apt-get update` 直接命中本地索引，
+# 装包也不用重新下载。`sharing=locked` 让并发构建排队而不是互相踩。
+#
+# 有了缓存挂载就不需要 `rm -rf /var/lib/apt/lists/*` 了：那份目录本来就不属于镜像。
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    set -eux; \
+    if [ -n "${APT_MIRROR}" ]; then \
+      for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do \
+        [ -f "$f" ] || continue; \
+        sed -i -E "s#https?://(deb|security)\.debian\.org#${APT_MIRROR}#g; \
+                   s#https?://(archive|security)\.ubuntu\.com#${APT_MIRROR}#g" "$f"; \
+      done; \
+      echo "HDSL-web: apt sources now point at ${APT_MIRROR}"; \
+      cat /etc/apt/sources.list.d/*.sources 2>/dev/null || cat /etc/apt/sources.list 2>/dev/null || true; \
+    fi; \
     . /etc/os-release; \
     case "$ID" in \
       debian|ubuntu) \
@@ -249,7 +277,7 @@ RUN set -eux; \
           pkg-config procps \
           python-is-python3 python3 rsync rustc sshpass tini unzip vim-tiny \
           wget xz-utils zip zstd; \
-        rm -rf /var/lib/apt/lists/* ;; \
+        ;; \
       fedora) \
         dnf install -y --setopt=install_weak_deps=False \
           7zip busybox gcc gcc-c++ make bzip2 ca-certificates cargo curl \

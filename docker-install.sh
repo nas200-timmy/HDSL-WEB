@@ -48,6 +48,10 @@ NODE_MIRROR_OFFICIAL="https://nodejs.org/dist"
 # 或 `--base-registry docker.io`。
 DEFAULT_BASE_REGISTRY="docker.m.daocloud.io"
 BASE_REGISTRY_ALT="docker.1ms.run"
+# 系统包管理器的下载源（只对 Debian/Ubuntu 底座生效）。底座镜像换了仓库，`apt` 仍然
+# 直连 `deb.debian.org`：`apt-get update` 要拉 ~10 MB 索引、装包再拉几百 MB，这是本地
+# 构建里最慢的一段，也是「改一行 Dockerfile 等五分钟」的主因之一。
+APT_MIRROR_CN="http://mirrors.tuna.tsinghua.edu.cn"
 
 # ── 命令行参数 ────────────────────────────────────────────────────────────────
 
@@ -76,6 +80,8 @@ IMAGE=""
 BASE=""              # debian / fedora / opensuse，空 = 沿用上次或 debian
 BASE_REGISTRY=""     # 底座镜像的仓库前缀，空 = Docker Hub（docker.io）
 BASE_REGISTRY_SET=0  # 命令行显式给了 --base-registry 时置 1（否则沿用状态文件里的）
+APT_MIRROR=""        # apt 下载源（scheme+host），空 = 用发行版默认的 deb.debian.org
+APT_MIRROR_SET=0     # 命令行显式给了 --apt-mirror 时置 1
 PREBUILT=""          # 非空 = 不构建，直接拉这个已发布的镜像
 
 usage() {
@@ -106,6 +112,13 @@ usage() {
                                   给了它就只改底座仓库（npm/Node 那半仍按上次的镜像源）；
                                   想回 Docker Hub 用 --base-registry docker.io 或 --no-mirror。
                                   构建本身仍在本地做，只是三个 FROM 换了仓库。
+  --apt-mirror <scheme://host>    Debian/Ubuntu 底座的 apt 下载源，例如
+                                  http://mirrors.tuna.tsinghua.edu.cn 。
+                                  这是本地构建最大的一块（apt-get update 的索引 +
+                                  几百 MB 包体），和底座仓库是两回事：底座走镜像站时
+                                  apt 仍然直连 deb.debian.org。--mirror 会在国内模式下
+                                  自动带上它，--no-mirror 会清掉。
+  --no-apt-mirror                 显式用发行版默认源。
   --pull <版本|镜像>              不构建，直接拉已发布的镜像
                                   （ghcr.io/nas200-timmy/hdsl-web:<版本>）。
                                   Docker Hub 完全不可达、ghcr.io 能连时走这条。
@@ -158,6 +171,8 @@ while [ "$#" -gt 0 ]; do
         --image) need_value "$@"; IMAGE="$2"; shift 2 ;;
         --base) need_value "$@"; BASE="$2"; shift 2 ;;
         --base-registry) need_value "$@"; BASE_REGISTRY="$2"; BASE_REGISTRY_SET=1; shift 2 ;;
+        --apt-mirror) need_value "$@"; APT_MIRROR="${2%/}"; APT_MIRROR_SET=1; shift 2 ;;
+        --no-apt-mirror) APT_MIRROR=""; APT_MIRROR_SET=1; shift ;;
         --pull) need_value "$@"; PREBUILT="$2"; shift 2 ;;
         --release) RELEASE=1; RELEASE_SET=1; shift ;;
         --no-release) RELEASE=0; RELEASE_SET=1; shift ;;
@@ -789,6 +804,7 @@ load_state() {
     PREV_IMAGE=${INSTALL_IMAGE:-}
     PREV_BASE=${INSTALL_BASE:-}
     PREV_BASE_REGISTRY=${INSTALL_BASE_REGISTRY:-}
+    PREV_APT_MIRROR=${INSTALL_APT_MIRROR:-}
 }
 
 save_state() {
@@ -807,6 +823,8 @@ save_state() {
         # 记住底座仓库：Docker Hub 不通的机器上，不记的话每次重跑都得再补一次
         # --base-registry（报告里那次"跑不通"有一半是这么来的）。
         printf 'INSTALL_BASE_REGISTRY=%q\n' "$BASE_REGISTRY"
+        # apt 源同理：国内机器上它决定了每次重建要不要再等十分钟。
+        printf 'INSTALL_APT_MIRROR=%q\n' "$APT_MIRROR"
     } > "$STATE_FILE"
     chmod 600 "$STATE_FILE"
 }
@@ -894,6 +912,7 @@ build_image() {
         say "  [dry-run] docker build -t $IMAGE \\"
         say "      --build-arg NPM_REGISTRY=$NPM_REGISTRY \\"
         say "      --build-arg NODE_DIST_MIRROR=$NODE_DIST_MIRROR \\"
+        say "      --build-arg APT_MIRROR=$APT_MIRROR \\"
         say "      --build-arg HDSL_BASE=$runtime_base --build-arg HDSL_ENCODERS=$BASE_ENCODERS \\"
         say "      --build-arg HDSL_WEB_BASE=$web_base --build-arg HDSL_BUILD_BASE=$build_base \\"
         say "      --build-arg RELEASE_VERSION=$RELEASE_VERSION -f Dockerfile ."
@@ -910,15 +929,32 @@ build_image() {
         -t "$IMAGE" \
         --build-arg "NPM_REGISTRY=$NPM_REGISTRY" \
         --build-arg "NODE_DIST_MIRROR=$NODE_DIST_MIRROR" \
+        --build-arg "APT_MIRROR=$APT_MIRROR" \
         --build-arg "HDSL_BASE=$runtime_base" \
         --build-arg "HDSL_ENCODERS=$BASE_ENCODERS" \
         --build-arg "HDSL_WEB_BASE=$web_base" \
         --build-arg "HDSL_BUILD_BASE=$build_base" \
         --build-arg "RELEASE_VERSION=$RELEASE_VERSION" \
         -f "$REPO_DIR/Dockerfile" "$REPO_DIR" 2>&1 | tee "$log"; then
-        # 「拉不到底座」是这台机器上最常见的一种失败，而且它的报错（load metadata /
-        # dial tcp … connection refused）不会告诉任何人还有哪两条路可走。
-        if grep -qiE "load metadata|failed to resolve source metadata|registry-1\.docker\.io|pull access denied|dial tcp" "$log"; then
+        # 失败有两种，报错长得很像：拉不到底座镜像，和构建**里面**的包管理器连不上。
+        # 以前只认前者，于是 `apt-get update` 卡在 deb.debian.org 时给出的建议是
+        # "换个镜像仓库"——照做没用，因为 apt 根本不走那个仓库。
+        local pull=0 apt=0
+        if grep -qiE "load metadata|failed to resolve source metadata|registry-1\.docker\.io|pull access denied" "$log"; then
+            pull=1
+        fi
+        if grep -qiE "deb\.debian\.org|security\.debian\.org|archive\.ubuntu\.com|Could not connect to|Temporary failure resolving|^Err:|E: Failed to fetch" "$log"; then
+            apt=1
+        fi
+        if [ "$apt" = 1 ] && [ "$pull" = 0 ]; then
+            say ""
+            say "  !! 构建卡在容器里的 apt 下载这一步（${APT_MIRROR:-发行版默认源 deb.debian.org}）。"
+            say "  !! apt 的源和底座镜像的仓库是两回事，换仓库不影响它："
+            say "  !!   ./docker-install.sh --mirror …                                  # 国内镜像站（一并带上 apt 源）"
+            say "  !!   ./docker-install.sh --apt-mirror http://mirrors.tuna.tsinghua.edu.cn …"
+            say "  !!   ./docker-install.sh --pull $(last_tag | sed 's/^v//') …                 # 不构建，直接拉已发布的镜像"
+            say "  !! 中断不会白等：已经建好的层和 apt 缓存都留着，重跑从断点继续。"
+        elif [ "$pull" = 1 ]; then
             say ""
             if [ -n "$BASE_REGISTRY" ]; then
                 say "  !! 构建卡在拉底座镜像这一步，而底座已经走的是 ${BASE_REGISTRY}。"
@@ -934,6 +970,11 @@ build_image() {
             fi
             say "  !! 也可以在 /etc/docker/daemon.json 配 registry-mirrors，那是全局设置（配一次，"
             say "  !! 所有 docker pull 都受益，包括构建时的底座）。"
+        elif grep -qi "dial tcp\|connection refused\|i/o timeout" "$log"; then
+            say ""
+            say "  !! 构建里有连接超时。先分清是哪一段：翻上面的日志，`load metadata` 是拉底座，"
+            say "  !! `apt-get` / `npm` / `gradlew` 是构建内部。前者换 --base-registry，后两者"
+            say "  !! 用 --mirror（apt / npm / Node 一起换）。"
         fi
         rm -f "$log"
         die "镜像构建失败"
@@ -1263,6 +1304,18 @@ case "$MIRROR" in
     *)               MIRROR_MODE=no;  NPM_REGISTRY="https://registry.npmjs.org/"; NODE_DIST_MIRROR="$NODE_MIRROR_OFFICIAL" ;;
 esac
 
+# apt 源跟着镜像源走：国内模式带上 TUNA（`apt-get update` 那 ~10 MB 索引 + 几百 MB
+# 包体全在那一步），官方模式清空、用发行版默认。显式给了 --apt-mirror / --no-apt-mirror
+# 就不动它。上次记住的值在重建时优先，省得每次--rebuild 都要再写一遍。
+if [ "$APT_MIRROR_SET" = 0 ]; then
+    if [ "$MIRROR_MODE" = yes ]; then
+        APT_MIRROR="${PREV_APT_MIRROR:-$APT_MIRROR_CN}"
+    else
+        APT_MIRROR=""
+    fi
+fi
+APT_MIRROR="${APT_MIRROR%/}"
+
 # 底座仓库的默认值：命令行 > 上次记住的 > 默认镜像站。
 # 走官方源（--no-mirror）时把上次记住的仓库清掉，除非这次又显式给了——"官方源"就该
 # 三个来源全是官方的，只清 npm 和 Node 会留下一个别人看不懂的不一致。
@@ -1419,6 +1472,13 @@ else
     say "  来源：本地构建"
 fi
 say "  镜像源：$([ "$MIRROR_MODE" = yes ] && echo '国内（npm→npmmirror，Node→腾讯）' || echo '官方（npmjs / nodejs.org）')"
+if [ -n "$PREBUILT" ]; then
+    :
+elif [ -n "$APT_MIRROR" ]; then
+    say "  apt 源：$APT_MIRROR（Debian/Ubuntu 底座）"
+else
+    say "  apt 源：发行版默认（deb.debian.org）$([ "$MIRROR_MODE" = yes ] && echo ' — 国内网络下这里最慢，用 --apt-mirror 换' || true)"
+fi
 say "  jar 版本：$([ "$RELEASE" = 1 ] && echo "发布 $RELEASE_VERSION" || echo '开发版 0.1.0-dev（--release 用最后的标签）')"
 say "  口令：$([ -n "$PASSWORD" ] && echo '已设置' || echo '留空，打开网页走初始化引导')"
 

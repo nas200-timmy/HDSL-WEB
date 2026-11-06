@@ -483,6 +483,41 @@ docker build --build-arg HDSL_WEB_BASE=<仓库>/library/node:22-bookworm-slim \
 `--recreate` 等后续操作照旧认它。也可以在 `/etc/docker/daemon.json` 配 `registry-mirrors`——
 那是全局设置，配一次所有 `docker pull` 都受益（包括构建时的底座）。
 
+### 4.2.1 构建慢：apt 是另一半（`--apt-mirror`）
+
+换掉底座仓库之后**构建仍可能很慢**，因为容器里的 `apt` 还是直连 `deb.debian.org`：
+`apt-get update` 要拉 ~10 MB 索引，装包再拉几百 MB（工具链 + 两个 JDK），这一段和底座仓库
+是两个完全不同的来源。国内网络下的典型表现是构建停在
+
+```
+#28 2.799 Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9678 kB]
+```
+
+现在两项都做了：
+
+- **`--apt-mirror <scheme://host>`**（`--mirror` 在国内模式下自动带上 TUNA，
+  `--no-mirror` 清掉，也可单独 `--no-apt-mirror`）：构建期把 Debian/Ubuntu 的 sources 主机
+  换成它，路径不变（`…/debian`、`…/debian-security` 都对得上）。只影响 Debian/Ubuntu 底座。
+- **apt 缓存挂载**：`/var/cache/apt` 与 `/var/lib/apt/lists` 是 BuildKit cache mount，
+  索引和 `.deb` 留在构建器里、不进镜像。改一行 Dockerfile 不会再重新下载整个工具链。
+
+实测口径（一台国内网络机器，`dists/trixie/main/binary-amd64/Packages.xz`）：
+
+```
+deb.debian.org   20 s 只下到 2.86 MB（142 KB/s）
+TUNA              1.09 s 下完 9.68 MB（8.9 MB/s）   ← 62 倍
+```
+
+热缓存之后重复构建这一步直接 `CACHED`。
+
+```bash
+./docker-install.sh --mirror …                      # apt + npm + Node + 底座，一次到位
+./docker-install.sh --apt-mirror http://mirrors.ustc.edu.cn …
+docker build --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn .
+```
+
+中断也不白等：已建好的层与 apt 缓存都留着，重跑从断点继续。
+
 ### 4.3 构建还需要 buildx
 
 `Dockerfile` 里用了 `RUN --mount=type=cache`（BuildKit 语法），而 **Docker 23 起 `docker build`

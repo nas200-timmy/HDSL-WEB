@@ -2,6 +2,24 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布
+
+**本地构建提速：apt 换源 + 缓存挂载**
+
+- 新增 `--build-arg APT_MIRROR=<scheme://host>`：构建期把 Debian/Ubuntu 的 apt sources
+  主机换掉（路径不变，`/debian` 与 `/debian-security` 都对得上）。换底座仓库和换 apt 源
+  是两件事——底座走镜像站时 `apt` 仍然直连 `deb.debian.org`，而国内网络上那一步要拉
+  ~10 MB 索引 + 几百 MB 包体。同一台机器实测：`deb.debian.org` 20 秒只下到 2.86 MB
+  （142 KB/s），TUNA 1.09 秒下完 9.68 MB。
+- `docker-install.sh` 的镜像源菜单现在连它一起定：国内模式带上
+  `http://mirrors.tuna.tsinghua.edu.cn`，官方源清掉；另有 `--apt-mirror` / `--no-apt-mirror`
+  单独控制，选择记进状态文件（`INSTALL_APT_MIRROR`），`--rebuild` 不用再写一遍。
+- `/var/cache/apt` 与 `/var/lib/apt/lists` 改成 BuildKit cache mount：索引与 `.deb` 留在
+  构建器里、不进镜像，改一行 Dockerfile 不再重新下载整个工具链。
+- 构建失败的提示分成两种：以前只要日志里有 `dial tcp` 就说"卡在拉底座镜像"，而
+  `apt-get` 连不上 `deb.debian.org` 时给出的正是这条建议——照做没用。现在按
+  `load metadata` 与 `apt`/`Err:` 分开，各自给对应的开关，并说明中断后重跑会从断点继续。
+
 ## v0.6.72 — 2026-11-06 · 补上类型检查漏掉的那个联合类型
 
 - `McJavaInfo.source` 的联合类型补上 `installed`。v0.6.71 里 `McRuntime` 已经会按
