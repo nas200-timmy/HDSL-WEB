@@ -368,7 +368,11 @@ public final class Privileges {
         if (!DROP_CHILDREN) {
             return;
         }
-        for (String relative : List.of("hdsl/instances", "hdsl/runtimes", "brands",
+        // `hdsl/runtimes` is deliberately **not** on this list. A managed Node.js installation is
+        // the agent's interpreter, and it only has to read and execute it; a tree the agent could
+        // rewrite is one where tampering with `node` survives everything else. Root-owned `0755`
+        // is the correct state there, not an offender — see `NodeRuntimeManager`.
+        for (String relative : List.of("hdsl/instances", "brands",
                 "zcode/instances", "minecraft/instances", "pnpm-store", "corepack")) {
             Path root = dataDir.resolve(relative);
             if (!Files.isDirectory(root)) {

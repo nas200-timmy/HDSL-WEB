@@ -207,6 +207,10 @@ Windows 上常见一种情况：杀毒软件、企业网关或 GitHub 加速器�
   不靠挂载参数；每次启动 `DshLauncher#prepareInstanceDirectories` 还会看一眼关键路径的属主，
   发现是别人的就把整棵树交接一次（老实例自愈）。同一条规则也用在"以 root 跑一次 `--help`"这种
   看似只读的动作上——它并不只读；
+- 顺带一条容易被忘掉的事实：`Privileges#prepareAgentDirectory` 用的是 `0775`，而 `chmod` 到
+  `0775` 会**清掉 setgid 位**。所以 `instances/<id>` 与 `home` 从第一次启动起就已经不在
+  `/data` 那条 setgid 链上了——`/data` 的 `2775` 只兜得住这两个目录之外的兄弟。任何"root 在
+  home 里建的东西会自动继承 hdsl 组"的推理，从这一刻起都不成立；
 - `setpriv` 是 exec 原地替换：进程组、PTY 会话、"不经 shell"这三条都不变。
 
 裸部署没有这一层：面板与 agent 同 uid，秘密文件对 agent 可读可写。面板**不会**拒绝以 root 启动

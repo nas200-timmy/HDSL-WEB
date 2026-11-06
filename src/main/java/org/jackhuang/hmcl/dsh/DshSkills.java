@@ -20,6 +20,7 @@ package org.jackhuang.hmcl.dsh;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Unmodifiable;
+import org.jackhuang.hmcl.util.platform.Privileges;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -430,6 +431,11 @@ public final class DshSkills {
         }
         try {
             Files.createDirectories(directory);
+            // `home/skills` is the agent's: the harness renames, disables and deletes what lives
+            // there. The copy below runs as the panel (root inside the container), so the directory
+            // and everything copied into it change hands right after — a root-owned pack is one the
+            // harness can read but never maintain.
+            Privileges.prepareAgentDirectory(directory, Privileges.AGENT_SHARED_DIRECTORY);
             if (bundle) {
                 copyTree(source, target);
             } else {
@@ -437,6 +443,10 @@ public final class DshSkills {
             }
         } catch (IOException e) {
             throw new DshException("Failed to install " + source, e);
+        }
+        Privileges.handTreeToAgent(target);
+        if (!bundle) {
+            Privileges.handWrittenFile(target, DshPaths.ROOT);
         }
 
         DshSkill installed = read(target);
@@ -686,6 +696,7 @@ public final class DshSkills {
             } catch (AtomicMoveNotSupportedException e) {
                 Files.move(staging, file, StandardCopyOption.REPLACE_EXISTING);
             }
+            Privileges.handWrittenFile(file, DshPaths.ROOT);
         } catch (IOException e) {
             throw new DshException("Failed to write " + file, e);
         }

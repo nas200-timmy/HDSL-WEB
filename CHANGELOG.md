@@ -23,6 +23,16 @@
 - 同类一起修掉：品牌安装在解包/构建完成后把 `releases/<version>` 整棵树交接给 agent（Hermes
   的 venv、opencode 的二进制目录都属于这种"安装器 root 写、运行时 agent 用"的树）；插件包
   解包逐文件交接，并在 pnpm 之前先准备好 profile 目录，否则 `pnpm install` 直接 EACCES。
+- 技能包安装（`DshSkills#install`）同样以 root 拷贝，现在拷完把 `home/skills` 连同目标一起
+  交接给 agent——harness 要重命名、禁用、删除自己技能目录里的东西；面板切换启用状态时写回的
+  `SKILL.md` 也一并交接。
+- 启动自检不再把 `hdsl/runtimes` 列为"漏交接"。托管 Node 是 agent 的解释器，**只读执行**，
+  root 属主 `0755` 是设计而不是缺陷——agent 能改写自己的解释器，等于给持久化留门；真要做
+  横向隔离是 per-instance uid 的事，不是给这棵树换属主。
+- `scripts/verify-privilege-split.sh` 补两项：递归扫描实例 home 里非 agent 属主的条目（顶层
+  检查看不见 `profiles/web`）、断言托管运行时对 agent **不可写**。
+- 文档补一条容易被忘掉的事实：`Privileges#prepareAgentDirectory` 用 `0775`，`chmod` 会清掉
+  setgid 位，所以 `instances/<id>` 与 `home` 从第一次启动起就不在 `/data` 的 setgid 链上。
 - 测试：`PrivilegesTest` 增加两条——数据根内的写入会交接文件与目录、数据根外的写入保持原样。
 
 **本地构建提速：apt 换源 + 缓存挂载**

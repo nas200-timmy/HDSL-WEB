@@ -129,6 +129,10 @@ fi
 #    （root:root 0755），每一条都会变成"进程起来就死、一个字都不输出"：
 #    Octop 打不开 octop.db、MC 建不出 logs/、dsh 装不进 pnpm、品牌装不进 releases/。
 #
+#    注意 setgid 只在 `/data` 这一层：面板的 prepareAgentDirectory 用 0775，会把
+#    `instances/<id>` 与 `home` 上的 setgid 位清掉，所以 home 里的子目录早就退回
+#    root:root——home 内的污染必须靠下面的 8b 才看得见。
+#
 #    脚本本身就是以 agent 身份跑的（docker exec -u 1000），所以 touch 就是最终裁决。
 check_agent_tree() {   # <名字> <glob>
     local label="$1" pattern="$2" found=0 dir owner
@@ -156,6 +160,31 @@ check_agent_tree "dsh 实例目录"   "/data/hdsl/instances/*"
 check_agent_tree "dsh 实例 home"  "/data/hdsl/instances/*/home"
 check_agent_tree "ZCode 实例 data" "/data/zcode/instances/*/data"
 check_agent_tree "MC 实例目录"    "/data/minecraft/instances/*"
+
+# 8b. 递归：home 里任何一条非 agent 属主的条目，都会让 harness 写不了"自己那一半"。
+#     cordis.yml 就写在面板留下的 cordis.patch.yml 旁边，父目录 root 0755 就是 EACCES。
+#     自愈发生在同一实例的下一次启动（DshLauncher#prepareInstanceDirectories），所以这里
+#     报 FAIL 的意思通常是"还没重启过"，而不是"永远修不好"。
+for home in $(find /data/hdsl/instances -mindepth 2 -maxdepth 2 -type d -name home 2>/dev/null | head -20); do
+    foreign=$(find "$home" ! -uid "$(id -u)" -print -quit 2>/dev/null)
+    if [ -n "$foreign" ]; then
+        bad "dsh 实例 home 里有非 agent 属主的条目：$foreign"
+    else
+        ok "dsh 实例 home 整树归 agent（$home）"
+    fi
+done
+
+# 8c. 托管运行时反过来：agent 只读执行，能写反而是横向风险（可篡改所有实例共用的
+#     node/pnpm）。root 属主是设计，不是漏交接——所以这里断言"不可写"。
+for dir in /data/hdsl/runtimes/*; do
+    [ -d "$dir" ] || continue
+    if touch "$dir/.hdsl-probe" 2>/dev/null; then
+        rm -f "$dir/.hdsl-probe" 2>/dev/null
+        bad "agent 能写托管运行时（应为只读）：$dir"
+    else
+        ok "托管运行时只读（$dir）"
+    fi
+done
 
 # 品牌：releases 里每个版本都是 pnpm 以 agent 身份写进去的
 brand_releases=$(find /data/brands -mindepth 3 -maxdepth 3 -type d -path '*/releases/*' 2>/dev/null | head -20)
