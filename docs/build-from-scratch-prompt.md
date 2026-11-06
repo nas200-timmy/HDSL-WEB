@@ -5,9 +5,11 @@
 > **如果你是在已有的 HDSL-web 仓库里接手工作，不要按本文重建。** 代码已经在这里了，照本文动手
 > 只会覆盖真实实现、丢掉这些修复的来龙去脉。那种情况请读：
 >
-> - [`session-handoff-2026-10-27.md`](session-handoff-2026-10-27.md) —— 当前状态、未发布的改动、发版流程、踩过的坑；
+> - [`CHANGELOG.md`](../CHANGELOG.md) 最近一节 —— 当前状态与最近一轮改动；
+> - 最新的 `session-handoff-*.md` —— 接手时的现场、发版流程、踩过的坑；
 > - [`plan.md`](plan.md) —— 原始设计；
-> - 各模块文档（`web-shell.md`、`brands.md`、`octop.md`、`deployment.md`、`design-notes.md`）。
+> - 各模块文档（`web-shell.md`、`brands.md`、`octop.md`、`deployment.md`、`design-notes.md`、
+>   `panel-agent.md`、`system-monitor.md`）与施工图 [`ui-spec.md`](ui-spec.md)。
 >
 > 本文的唯一用途：**仓库被清空、或换一个模型从空目录重写时**，把「要求」和「坑」一次性交代清楚。
 > 判断标准很简单——你所在的目录里已经有 `src/`、`web/`、`plugins/` 了吗？有，就关掉本文。
@@ -34,10 +36,15 @@
    **紧急停机**（E-Stop）。
 6. 产出一个 Go 客户端（`client/hdsl-tui`），能在服务器上交互式挑实例、开终端，5 平台交叉编译。
 7. 全套文档：部署、协议、设计笔记、安全模型、会话交接稿，中文，与实现一致。
+8. **前端界面是桌面版的像素级复刻**（§2.10）：桌面与手机都能用；品牌实例在实例列表页**原地切换**，
+   不开第三层页面；不可用功能一律变灰并写明原因。
+9. **面板自己的 agent 票**（§2.11）：给跑在面板里的 agent 一把限权的钥匙（只读列表 / 启停 / 终端 /
+   MC 控制台等），与管理员会话、开发者密码都分开；带「自杀闸」。
 
 技术栈固定为：**Java 17**（`options.release = 17`，允许用更高 JDK 编译，但**不得使用 JDK 18+ API**）、
-Gradle（shadow 插件打单 jar）、Jetty 12（ee10）、Gson、JNA（仅 PTY）、React 18 + Vite + xterm 6、
-Go 1.24。许可证 GPL-3.0-or-later。
+Gradle（shadow 插件打单 jar）、Jetty 12（ee10）、Gson、JNA（仅 PTY）；前端 React 18 + react-router 6 +
+TypeScript（strict）+ Vite 6 + xterm 6 + `@material/material-color-utilities`（Monet 取色）、`es-check`
+做语法下限检查；客户端 Go 1.24。**不引 UI 组件库、不引 CSS 框架**。许可证 GPL-3.0-or-later。
 
 ---
 
@@ -117,7 +124,11 @@ Go 1.24。许可证 GPL-3.0-or-later。
   `ctrl+j` 换行、`ctrl+s` 插话、`shift+tab` 计划模式、状态栏（模型 · 档位 · 计划 · cwd · 会话 · 上下文）。
 
 ### 2.6 品牌目录
-- 六类品牌，安装源分三种：GitHub Release（dsh、Octop）、npm（Kimi、OpenCode）、ZCode（自建分发）。
+- **五个品牌**（Kimi Code、OpenCode、Claude Web、Octop、Hermes）加 **dsh** 与 **ZCode** 两个独立实例
+  家族；安装源分四种：npm（Kimi、OpenCode）、GitHub Release（Octop）、GitHub 源码构建（Claude Web、
+  Hermes）、自建分发（ZCode）。dsh 自己也是 GitHub Release 安装。
+- Claude Web 有两个特殊处：官方内核在**不受支持地区会被 Anthropic 直接 403**（要给出人话提示并允许
+  改走社区引擎），以及实例级 `ANTHROPIC_BASE_URL` 覆盖（网关/中转，界面里能改）。
   每个品牌的：版本目录、安装（含进度与日志）、启动/停止、端口分配（回环）、策略、终端入口、页面反代。
 - **安装目录必须有完成标记**：安装成功后写 marker（Octop 是 `octop-install.json`），只有带 marker
   的目录才算"已安装"；`*.previous` 这类暂存名不是版本（§5.7）。
@@ -164,6 +175,46 @@ Go 1.24。许可证 GPL-3.0-or-later。
 - 仓库自带 `docker-install.sh`（原地构建向导：数据/工作区/MC 目录、端口、镜像源、`--base`），
   它**不整卷 chown**（那会把秘密交回去），属主交给容器入口。
 - 裸部署（systemd）文档：`HOME` 与 `HDSL_DATA` 必须指向服务用户可写的目录。
+
+### 2.10 前端界面（SPA）
+
+界面不是"够用的管理后台"，是**桌面版 HDSL 的像素级复刻**：同一套装饰边框、左侧导航、内页骨架、
+配色与字号。施工图纸是 [`ui-spec.md`](ui-spec.md)，颜色 / 间距 / 字号以它为准。
+
+- **颜色只走变量**：`root.css` 是唯一色源（Monet 从壁纸取色 + 深浅色），组件里**不许写死色值**。
+- **页面清单**（每个都要有加载 / 空 / 错误三态）：主页（当前实例 + 启动面板）、实例列表、实例详情
+  （启动 / 浏览 / 管理三组）、品牌实例层、下载页、设置页、账户页、新建实例向导、性能页。
+- **品牌层是实例列表页的一个视图，不是第三层页面**：点品牌**原地**把 `/instances` 换成品牌卡片，
+  不新增路由层级；只有进入某个实例详情才用路由。手机端靠这条活命，三层返回没人受得了。
+- **不可用要变灰，不许隐藏**（§1 已列为硬约束）：置灰的按钮旁边写「为什么 + 去哪儿解决」，例如
+  「需要 HTTPS → 去证书页」。开发者面在明文 HTTP 下整页只给提示与「去 HTTPS」入口。
+- **危险动作的视觉要分开**：停止实例是**红色药丸**按钮；删除、紧急停机各要二次 / 三次确认；终端的
+  「关闭」与「停止实例」是两个动作，文案不许混。
+- **终端**（xterm 6）：CJK 等宽字体栈；整帧未变不写字节、组词期间缓冲（§5.4）；工具栏显示「已接收
+  N KB」；WS 断开要有可见原因与重连；后端 409 的原文要展示，不许留白屏。
+- **手机版式**（两处判定必须逐字一致：`styles/mobile.css` 与 `hooks.ts`）：
+  `(max-width: 760px), (max-height: 520px)` 是布局断点，`(hover: none) and (pointer: coarse)` 是触摸
+  优化——两者独立。侧栏变抽屉、子侧栏变横向标签条、启动面板变贴底操作栏、`100dvh` +
+  `env(safe-area-inset-*)`、可点区域 44px、输入框 16px（iOS 聚焦不缩放）。桌面端样式**零变化**。
+- **构建**：`base` 必须是 `"/"`（相对 base 会让 `/instances/x` 刷新白屏）；`minify` 必须为 `false`
+  （§5.4.2）；`npm run compat` 跑 `es-check` ES2020，防止写出旧浏览器打不开的语法。
+- **图标与法务**：品牌 logo 只在「许可证 + 商标」都允许时使用，来源逐个记进 `NOTICE`；上游是 MIT
+  **不等于**可以用它的 logo，没有明确授权就用中性图形 + 文字标签。
+- **文案**：中文优先、动词开头、短句；API 错误统一 `{"error":"<code>: <照着做的一句话>"}`，前端按
+  `<code>` 前缀分流（如 `tls_required` → 弹 HTTPS 提示），不要把后端英文原话直接甩给用户。
+- **验收**：改版前后各留一张截图（`docs/screenshots/`）；真机至少过一遍 §6 的界面四条。
+
+### 2.11 面板 agent 的票（`panel-agent`）
+
+- 目的：让跑在面板里的 agent 能查实例、必要时启停，而**不把管理员会话**交给它。
+- 两把锁：agent 密码换票；票带 scope（只读列表 / 启停 / 开终端 / MC 控制台等**七类**），scope 在
+  **服务端**定，客户端传什么都不算数。agent 密码只在需要写的那几档有效。
+- 票默认只认**本机回环**来源；非回环要显式打开，并要求已登录会话。
+- **自杀闸**：票不许对「自己所在的那个实例」做停 / 删 / 开终端；判定靠**内核身份推导**
+  （socket inode → 持有进程 → 父链），不靠 agent 自报。dsh / 品牌 / ZCode 三个家族与 launch 路径
+  都要覆盖——漏一条就是「agent 把面板里自己在跑的实例停掉」。
+- 与开发者密码分开：开发者密码是**人**的第二把钥匙（§2.2），票是 agent 的限权钥匙，不要互相替代。
+- 审计里每条票操作都要有来源与 scope。
 
 ---
 
@@ -277,6 +328,16 @@ HTTP），把"一个人会点到的路径"念一遍——`/api/node` 的字段�
 - **做法**：work 需要句柄就用 `TaskWork` 重载（`submit(kind, id, own -> …)`，句柄直接传进来），
   不要靠调用方事后赋值；测试里的「等它跑起来」一律给 30 秒（CI 机器比本机慢得多）。
 
+### 5.4.2 Vite 的 `minify` 会打坏 xterm 6
+
+- **现象**：WS 已连上、后端日志显示字节已发，浏览器里终端**从第一屏就是空白**；控制台一条
+  `ReferenceError: i is not defined`，堆栈落在 xterm 的 `requestMode`。
+- **根因**：xterm 6 的 `requestMode` 用了 `return f=…,p=…; var f,p` 这种写法，esbuild 的二次压缩会把
+  它改坏；异常发生在 xterm 的写队列里，队列随后**整体停摆**——之后所有输出都不再解析。最初的触发者
+  是 opencode：它启动时连发 6 个 DECRQM 查询（`\x1b[?2026$p` 一类）。
+- **做法**：`vite.config.ts` 里 `build.minify: false`（体积只多约 9 KB gzip）；升级 xterm 或换打包器
+  前，先做一次最小复现：发一屏文本，再发一个 `\x1b[?2026$p`，看那屏文本还在不在。
+
 ### 5.5 TUI 自己的输入细节
 - composer 行首是 `│ ` + `❯ `（四格），光标列按 3 格算会压住最后两个字；Tab 需要在按键解码表里有
   `0x09`，否则"补全坏了"其实是键从来没到应用；`ctrl+j` 是换行，别解码成 enter。
@@ -365,7 +426,9 @@ HTTP），把"一个人会点到的路径"念一遍——`/api/node` 的字段�
   （`posix_spawn` 那条也要，`setpriv` 是 exec 原地替换，进程组与 PTY 会话都不变）。
 - 实例子目录 `1000:1000 2775`（setgid）+ 入口 `umask 002`，所以**面板（root）写进实例目录的文件
   仍是 `root:hdsl 0664`，agent 照样能改**。不做这一步，root 会把 agent 自己的目录写死，
-  表现是"实例装不了包 / 存档写不进去"。
+  表现是"实例装不了包 / 存档写不进去"。**但这条在 `instances/<id>` 与 `home` 这一层不成立**：
+  `Privileges#prepareAgentDirectory` 用 `0775`，`chmod` 会清掉 setgid 位，home 内部从第一次启动起
+  就不在 setgid 链上。所以「面板往 home 里写」必须显式交接属主（§5.24），不能指望挂载参数。
 - **只在容器里降权**：宿主的 uid 1000 可能是另一个人的账户，塞过去是权限 bug。裸部署不降权，
   以 root 启动也不拦（拒绝只会换来"那我不用了"），但横幅要写明"你派生的每个 agent 也是 root"。
 - agent uid 是**构建参数**（`HDSL_AGENT_UID`，默认 1000）：见 §5.20 的 ACL 存储。
@@ -400,6 +463,9 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
   `docker`（tag 触发，多架构推 ghcr）。
 - `docker` 有一道"只有最新版本标签才移动 `latest`"的闸门：tag 刚推上去时 tags API 可能还没可见，
   闸门会判成非最新 → `latest` 不动。**重跑一次该 tag 的 workflow** 即可，不必改代码。
+- **偶发红先看是不是超时**：`ZcodeBuilderTest` 的用例带 120 秒上限、且共享静态构建状态——CI 慢下来
+  超时一次，后面三条会连带报「a ZCode build is already running」。先 `gh run rerun <id> --failed`
+  确认，再动代码；根治要把「超时后复位状态」做进测试隔离。
 - `github.com:443` 会间歇不可达（`GnuTLS recv error` / 连接超时），而 `api.github.com` 正常：
   推送失败先重试；实在不行可以用 Git API 重放提交，然后 `git fetch` 把本地对齐（sha 会不同，内容一致）。
 - 发布流程：`web-shell` → `--no-ff` 合 `main` → `shadowJar -PreleaseVersion=<版本>` → `sha256sum` 写
@@ -505,6 +571,33 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
 - **验证**：容器里 `docker exec -u 1000 <容器> pnpm --version` 与 `pnpm config get registry` 都要能跑；
   再建一个实例装一次。
 
+### 5.24 「面板写、agent 也写」的树：写完就交接，别用 root 跑"看似只读"的命令
+
+- **现象**：某个实例启动即失败，日志是
+  `EACCES: permission denied, open '/data/hdsl/instances/<id>/home/profiles/web/cordis.yml'`；同一台
+  机器上别的实例正常，**重启容器也不修**（入口的递归 chown 只在顶层属主不对时才跑）。
+- **根因 1（触发器）**：`dsh --profile <p> --help` 不是只读——它先**组合 profile**，把 `cordis.yml`、
+  `cordis.patch.yml`、`package.json` 写进 `$DSH_HOME/profiles/<p>/`。这个能力探测以面板身份（容器里
+  root）跑，文件于是归 root；之后每次启动都降权到 agent，写同一个 `cordis.yml` 就被拒。**凡是"问一句
+  这个程序支不支持某参数"的命令，都可能带副作用。**
+- **根因 2（为什么只有 home 里坏）**：启动前只 chown 了 `instances/<id>/` 与 `home/` 两个顶层目录；
+  `profiles/` 是面板后来以 root 建的，而 `prepareAgentDirectory` 的 `0775` 会把 setgid 清掉（§5.9），
+  home 内部从此不再继承 hdsl 组。`/data` 的 `2775` 只兜得住这两个目录之外的兄弟。
+- **做法**：
+  1. 所有"替实例跑"的命令（探测、安装、打包校验）一律 `Privileges.asAgent`；
+  2. 面板往实例树写文件后，**文件连同父目录**交给 agent
+     （`Privileges.handWrittenFile(file, dataRoot)`，只对数据目录内生效——`CUSTOM` home 指向用户自己的
+     目录时不许动）。覆盖：账户路由、插件补丁、注入设置、默认模型、`.env`、`pnpm-workspace.yaml`、
+     安装清单、插件包解包、技能包安装；
+  3. 启动前做一次「关键路径属主检查」（`home`、`profiles`、`profiles/<p>/cordis.patch.yml`、
+     `storages`、`settings.yaml`、`.env`），不对就整棵 home 交接（`handTreeToAgent`，幂等）——
+     健康实例只付几次 stat，被写坏的老实例下次启动自愈；
+  4. 品牌安装（npm / GitHub / Hermes / Octop）完成后把 `releases/<version>` 整树交接；
+  5. 自检脚本要**递归**查 home（顶层的 `touch` 看不见 `profiles/web`），并反过来断言 `runtimes/`
+     对 agent **不可写**——托管 Node 是解释器，只读执行才对；agent 能改写解释器等于给持久化留门。
+- **验证**：新实例、被 `--help` 污染过的老实例各启动一次；容器里
+  `docker exec -u 1000 <容器> sh /tmp/verify-privilege-split.sh` 全绿（含递归与 runtimes 两项）。
+
 ---
 
 ## 6. 人工验收清单（自动化测不到的部分）
@@ -530,6 +623,12 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
 11. **agent 侧的 pnpm**：`docker exec -u 1000 <容器> pnpm --version` 与 `pnpm config get registry`
    都要正常返回；`ls -l /home/hdsl/.config/pnpm/config.yaml` 的属主应是 agent uid 而不是 root。
    这一条不查，坏掉的形态是"面板一切正常，所有安装 `EACCES`"（§5.23）。
+12. **界面**：品牌层在 `/instances` 原地切换（不跳第三层）；停止是红色药丸；开发者面在 HTTP 下只给
+    提示 + 「去 HTTPS」；手机竖屏与横屏（844×390）各看一眼：抽屉、标签条、贴底操作栏。
+13. **终端时长**：提权 30 分钟滑动——连续操作时不会中途被踢；放着不动半小时回来，终端仍在
+    （`setMaxIdleTimeout(0)`），只是提权可能过期、需要重新确认。
+14. **属主交接**：老实例（被旧面板写坏过的）启动一次后 `home` 整树归 agent；新实例从第一次启动起
+    就不该出现 root 文件（§5.24）。
 
 ---
 
@@ -538,6 +637,10 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
 - 不要在 HTTP 上放开开发者模式（没有 TLS 时"提权"就是明文传密码）。
 - 不要给进程内检查加"哈希文件保护"之类的假防线（§5.9）。
 - 不要隐藏不可用功能，要变灰并写原因。
+- 不要用"顶层 chown"冒充"交接"：`profiles/` 这类子目录是面板后来建的，顶层检查看不见（§5.24）。
+- 不要把"问一句 `--help`"当只读：它会组合 profile、会写文件（§5.24）。
+- 不要引 UI 组件库或 CSS 框架，也不要在组件里写死颜色（§2.10）。
+- 不要用未经授权的商标做图标；没有授权就用中性图形 + 文字。
 - 不要在仓库里写真实域名 / 内网地址 / 宿主机路径 / 口令。
 - 不要 force push 远端历史、不要移动已发布的 tag（除非用户明确要求"同版本重发"）。
 - 不要把"测试全绿"当成发布依据：本文里至少 §5.1、§5.7、§5.8、§5.19、§5.20 都是**只有跑起来**
