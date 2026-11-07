@@ -36,6 +36,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -105,6 +106,9 @@ public final class McRuntime {
     private final CommandFactory commandFactory;
     private final @Nullable String javaBin;
     private final @Nullable Path versionsRoot;
+    /// Where the panel's own JREs live (`<data>/minecraft/java`), or `null` when
+    /// this wiring cannot manage them (tests, embedded).
+    private final @Nullable Path javaRoot;
     private final boolean ptySupported;
     private final String javaSource;
 
@@ -174,8 +178,24 @@ public final class McRuntime {
     /// @param versionsRoot the shared versions directory, or `null` to skip the check
     public McRuntime(McInstanceManager manager, TerminalManager terminals,
                      McFeatureState feature, String javaBin, @Nullable Path versionsRoot) {
+        this(manager, terminals, feature, javaBin, versionsRoot, null);
+    }
+
+    /// The production wiring plus the version metadata directory and the
+    /// panel-owned Java runtimes, so a launch can pick a JRE the panel
+    /// installed instead of only whatever the host happens to carry.
+    ///
+    /// @param manager      the instance manager
+    /// @param terminals    the terminal registry
+    /// @param feature      the feature switch
+    /// @param javaBin      the java executable (resolved by [resolveJava])
+    /// @param versionsRoot the shared versions directory, or `null` to skip the check
+    /// @param javaRoot     the managed JRE directory, or `null` to only use the host's
+    public McRuntime(McInstanceManager manager, TerminalManager terminals,
+                     McFeatureState feature, String javaBin, @Nullable Path versionsRoot,
+                     @Nullable Path javaRoot) {
         this(manager, terminals, feature, null, resolveJava(javaBin), versionsRoot,
-                ptySupported(), javaSource(javaBin));
+                ptySupported(), javaSource(javaBin), javaRoot);
     }
 
     /// The same, with an injectable argv for tests.
@@ -186,7 +206,7 @@ public final class McRuntime {
     /// @param commandFactory the argv builder
     public McRuntime(McInstanceManager manager, TerminalManager terminals,
                      McFeatureState feature, CommandFactory commandFactory) {
-        this(manager, terminals, feature, commandFactory, null, null, ptySupported(), "none");
+        this(manager, terminals, feature, commandFactory, null, null, ptySupported(), "none", null);
     }
 
     /// Test wiring that forces the pipe console on any platform, so the
@@ -199,17 +219,19 @@ public final class McRuntime {
     /// @param ptySupported   `false` to exercise the pipe console
     McRuntime(McInstanceManager manager, TerminalManager terminals,
               McFeatureState feature, CommandFactory commandFactory, boolean ptySupported) {
-        this(manager, terminals, feature, commandFactory, null, null, ptySupported, "none");
+        this(manager, terminals, feature, commandFactory, null, null, ptySupported, "none", null);
     }
 
     private McRuntime(McInstanceManager manager, TerminalManager terminals, McFeatureState feature,
                       @Nullable CommandFactory commandFactory, @Nullable String javaBin,
-                      @Nullable Path versionsRoot, boolean ptySupported, String javaSource) {
+                      @Nullable Path versionsRoot, boolean ptySupported, String javaSource,
+                      @Nullable Path javaRoot) {
         this.manager = manager;
         this.terminals = terminals;
         this.feature = feature;
         this.javaBin = javaBin;
         this.versionsRoot = versionsRoot;
+        this.javaRoot = javaRoot;
         this.ptySupported = ptySupported;
         this.javaSource = javaSource;
         CommandFactory factory = commandFactory;
@@ -344,11 +366,13 @@ public final class McRuntime {
     /// `mc.java_path` wins outright — an operator who named a JDK meant it. So does
     /// a JVM that already satisfies the version. The default is the panel's own JVM
     /// (the combination this panel was tested with), except when the instance's
-    /// `version.json` asks for a newer major than that JVM offers **and** a suitable
-    /// JDK is installed beside it. Since 26.x Minecraft requires Java 25 while the
-    /// official image's default JVM is 21: "install one and point mc.java_path at
-    /// it" is not advice a container user can follow, and refusing every newer
-    /// version on an image that already ships the JDK is the wrong answer.
+    /// version asks for a newer major than that JVM offers **and** a suitable
+    /// JRE/JDK is available: first the ones this panel installed itself
+    /// (`<data>/minecraft/java`), then the ones the host carries. Since 26.x
+    /// Minecraft requires Java 25 while the official image's default JVM is 21:
+    /// "install one and point mc.java_path at it" is not advice a container user
+    /// can follow, and refusing every newer version on an image that already
+    /// ships the JDK is the wrong answer.
     ///
     /// @param instance the instance about to start
     /// @return the java executable
@@ -360,7 +384,39 @@ public final class McRuntime {
         if (required <= 0) {
             return javaBin;
         }
-        return selectJava(javaBin, javaInfo().major(), required, javaCandidates());
+        List<Path> candidates = new ArrayList<>();
+        candidates.addAll(managedCandidates(javaRoot));
+        candidates.addAll(javaCandidates());
+        return selectJava(javaBin, javaInfo().major(), required, candidates);
+    }
+
+    /// The JREs the panel installed under `<data>/minecraft/java`, as executables.
+    ///
+    /// @param javaRoot the managed directory, or `null`
+    /// @return the `bin/java` executables, oldest feature release first
+    static List<Path> managedCandidates(@Nullable Path javaRoot) {
+        if (javaRoot == null || !Files.isDirectory(javaRoot)) {
+            return List.of();
+        }
+        List<Path> found = new ArrayList<>();
+        try (var entries = Files.list(javaRoot)) {
+            for (Path directory : entries.filter(Files::isDirectory).toList()) {
+                if (!directory.getFileName().toString().matches("\\d+")) {
+                    continue;
+                }
+                for (String name : List.of("java", "java.exe")) {
+                    Path candidate = directory.resolve("bin").resolve(name);
+                    if (Files.isRegularFile(candidate)) {
+                        found.add(candidate);
+                        break;
+                    }
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            LOG.warning("Could not scan " + javaRoot + " for managed JREs: " + e.getMessage());
+        }
+        found.sort(Comparator.comparing(path -> path.toString()));
+        return List.copyOf(found);
     }
 
     /// The selection itself, with the installed JDKs passed in so a test can drive it.
@@ -1034,18 +1090,37 @@ public final class McRuntime {
     /// Where `program` came from, for the refusal text and the API.
     ///
     /// @param program the executable that will run
-    /// @return `configured`, `panel`, or `installed`
+    /// @return `configured`, `panel`, `managed`, or `installed`
     private String sourceOf(String program) {
         if (!"panel".equals(javaSource)) {
             return javaSource;
         }
-        return program.equals(javaBin) ? "panel" : "installed";
+        if (program.equals(javaBin)) {
+            return "panel";
+        }
+        if (javaRoot != null) {
+            Path root = javaRoot.toAbsolutePath().normalize();
+            Path candidate = Path.of(program).toAbsolutePath().normalize();
+            if (candidate.startsWith(root)) {
+                return "managed";
+            }
+        }
+        return "installed";
     }
 
+    /// The Java feature release an instance needs.
+    ///
+    /// The version metadata is authoritative; when it is absent — a
+    /// third-party core, or a jar an operator dropped in by hand — the
+    /// documented vanilla requirement table answers instead, so a launch is
+    /// never attempted on a JVM that is certainly too old.
     private int requiredJava(String version) {
+        if (versionsRoot == null) {
+            return McJavaRuntimes.recommendFor(version);
+        }
         Path metadata = versionsRoot.resolve(version).resolve("version.json");
         if (!Files.isRegularFile(metadata)) {
-            return 0;
+            return McJavaRuntimes.recommendFor(version);
         }
         try {
             com.google.gson.JsonObject record =

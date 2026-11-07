@@ -451,9 +451,14 @@ public final class HdslServer {
         String mcJava = config.mc.javaPath == null || config.mc.javaPath.isBlank()
                 ? "java" : config.mc.javaPath;
         java.nio.file.Path mcVersionsRoot = config.dataDir.resolve("minecraft").resolve("versions");
+        // 面板自托管的 JRE（Adoptium）：`<data>/minecraft/java/<feature>/`。和 Node
+        // runtime 同一个思路——版本化、隔离、一次调用删掉；`mc.java_path` 仍然优先。
+        java.nio.file.Path mcJavaRoot = config.dataDir.resolve("minecraft").resolve("java");
+        org.jackhuang.hmcl.web.minecraft.McJavaRuntimes mcJavaRuntimes =
+                new org.jackhuang.hmcl.web.minecraft.McJavaRuntimes(mcJavaRoot);
         org.jackhuang.hmcl.web.minecraft.McRuntime mcRuntime =
                 new org.jackhuang.hmcl.web.minecraft.McRuntime(
-                        mcInstances, terminals, mcFeature, mcJava, mcVersionsRoot);
+                        mcInstances, terminals, mcFeature, mcJava, mcVersionsRoot, mcJavaRoot);
         org.jackhuang.hmcl.web.minecraft.McRuntime.JavaInfo mcJavaInfo = mcRuntime.javaInfo();
         logger.info("Minecraft console: " + org.jackhuang.hmcl.web.minecraft.McRuntime.consoleKind()
                 + "; java: " + (mcJavaInfo.path().isBlank() ? "(none)" : mcJavaInfo.path())
@@ -466,7 +471,7 @@ public final class HdslServer {
         context.addFilter(new FilterHolder(new org.jackhuang.hmcl.web.minecraft.McFeatureFilter(
                 mcFeature, config.basePath)), "/api/mc/*", EnumSet.of(DispatcherType.REQUEST));
         context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.minecraft.McApiServlet(
-                config, mcFeature, mcInstances, mcRuntime, mcVersions, mcBackups, taskService,
+                config, mcFeature, mcInstances, mcRuntime, mcVersions, mcJavaRuntimes, mcBackups, taskService,
                 terminalTickets, authService, developerAuth, developerElevation, tlsActive, emergencyStop)), "/api/mc/*");
 
         context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService, config.basePath)), "/i/*");

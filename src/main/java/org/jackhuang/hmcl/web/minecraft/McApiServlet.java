@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.minecraft;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import jakarta.servlet.http.HttpServlet;
@@ -89,6 +90,7 @@ public final class McApiServlet extends HttpServlet {
     private final McInstanceManager manager;
     private final McRuntime runtime;
     private final McVersions versions;
+    private final McJavaRuntimes javaRuntimes;
     private final McBackups backups;
     private final TaskService tasks;
     private final TerminalTickets tickets;
@@ -123,7 +125,8 @@ public final class McApiServlet extends HttpServlet {
     }
 
     public McApiServlet(ServerConfig config, McFeatureState feature, McInstanceManager manager,
-                        McRuntime runtime, McVersions versions, McBackups backups, TaskService tasks,
+                        McRuntime runtime, McVersions versions, McJavaRuntimes javaRuntimes,
+                        McBackups backups, TaskService tasks,
                         TerminalTickets tickets, AuthService auth,
                         DeveloperAuth developerAuth, DeveloperElevation elevation,
                         BooleanSupplier tlsActive, EmergencyStop emergency) {
@@ -132,6 +135,7 @@ public final class McApiServlet extends HttpServlet {
         this.manager = manager;
         this.runtime = runtime;
         this.versions = versions;
+        this.javaRuntimes = javaRuntimes;
         this.backups = backups;
         this.tasks = tasks;
         this.tickets = tickets;
@@ -197,6 +201,18 @@ public final class McApiServlet extends HttpServlet {
             }
             if ("/versions".equals(path) && "GET".equals(method)) {
                 listVersions(response);
+                return;
+            }
+            if ("/java/runtimes".equals(path) && "GET".equals(method)) {
+                javaRuntimes(request, response);
+                return;
+            }
+            if ("/java/install".equals(path) && "POST".equals(method)) {
+                installJava(request, response);
+                return;
+            }
+            if (path.startsWith("/java/") && path.endsWith("/remove") && "POST".equals(method)) {
+                removeJava(request, response, path);
                 return;
             }
             if ("/storage".equals(path) && "GET".equals(method)) {
@@ -271,6 +287,15 @@ public final class McApiServlet extends HttpServlet {
         if (info.error() != null) {
             java.addProperty("error", info.error());
         }
+        // 面板自托管的 JRE 也在这里给：卡片要能在此之前就说清「面板自己装了哪些」。
+        JsonArray managed = new JsonArray();
+        for (McJavaRuntimes.Installed runtime : javaRuntimes.listInstalled()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("feature", runtime.feature());
+            item.addProperty("path", runtime.path().toString());
+            managed.add(item);
+        }
+        java.add("managed", managed);
         return java;
     }
 
@@ -576,6 +601,95 @@ public final class McApiServlet extends HttpServlet {
             items.add(Map.of("id", entry.id(), "type", entry.type()));
         }
         Json.write(response, Map.of("versions", items));
+    }
+
+    // --------------------------------------------------------------------- java --
+
+    /// The Java runtimes the panel owns, plus what Adoptium offers for this host.
+    ///
+    /// A failing API is reported as `source: "unavailable"` rather than an error:
+    /// the installed list is still exactly what a launch would use, and a card
+    /// that shows it is more useful than a blank one.
+    private void javaRuntimes(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = new JsonObject();
+        JsonArray installed = new JsonArray();
+        for (McJavaRuntimes.Installed runtime : javaRuntimes.listInstalled()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("feature", runtime.feature());
+            item.addProperty("path", runtime.path().toString());
+            installed.add(item);
+        }
+        body.add("installed", installed);
+        body.addProperty("root", javaRuntimes.root().toString());
+        String version = request.getParameter("version");
+        body.addProperty("recommended", version == null || version.isBlank()
+                ? 0 : McJavaRuntimes.recommendFor(version));
+        JsonArray available = new JsonArray();
+        try {
+            for (McJavaRuntimes.Release release : javaRuntimes.available()) {
+                JsonObject item = new JsonObject();
+                item.addProperty("feature", release.feature());
+                item.addProperty("version", release.version());
+                item.addProperty("size", release.size());
+                available.add(item);
+            }
+            body.addProperty("source", "api");
+        } catch (McException e) {
+            body.addProperty("source", "unavailable");
+            body.addProperty("error", e.getMessage());
+        }
+        body.add("available", available);
+        Json.write(response, body);
+    }
+
+    /// Downloads and unpacks one JRE as a task: tens of megabytes on a possibly
+    /// slow link, and the request must not stay open for it.
+    private void installJava(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireElevation(request, response)) {
+            return;
+        }
+        JsonObject body = readJson(request);
+        int feature = body == null ? 0 : intField(body, "feature");
+        if (feature < 8 || feature > 40) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "feature must be a Java feature release between 8 and 40");
+            return;
+        }
+        try {
+            TaskService.Task task = tasks.submit("mc-java-install", Integer.toString(feature), live -> {
+                live.update("Downloading Java " + feature, -1);
+                McJavaRuntimes.Installed installed = javaRuntimes.install(feature, (copied, total) -> {
+                    String progress = (copied / (1024 * 1024)) + " / "
+                            + (total > 0 ? (total / (1024 * 1024)) + " MB" : "? MB");
+                    live.update("Downloading Java " + feature + ": " + progress,
+                            total > 0 ? (double) copied / total : -1);
+                });
+                return "Installed Java " + installed.feature() + " (" + installed.path() + ")";
+            }, null);
+            audit("mc.java.install", Integer.toString(feature), "submitted", request);
+            response.setStatus(HttpServletResponse.SC_ACCEPTED);
+            Json.write(response, Map.of("taskId", task.id()));
+        } catch (TaskService.InstanceBusyException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+        }
+    }
+
+    private void removeJava(HttpServletRequest request, HttpServletResponse response, String path)
+            throws IOException {
+        if (!requireElevation(request, response)) {
+            return;
+        }
+        String[] parts = path.split("/");
+        int feature;
+        try {
+            feature = Integer.parseInt(parts.length > 2 ? parts[2] : "");
+        } catch (NumberFormatException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "feature is required in the path");
+            return;
+        }
+        boolean removed = javaRuntimes.remove(feature);
+        audit("mc.java.remove", Integer.toString(feature), removed ? "success" : "absent", request);
+        Json.write(response, Map.of("ok", true, "removed", removed));
     }
 
     private void createInstance(HttpServletRequest request, HttpServletResponse response)
