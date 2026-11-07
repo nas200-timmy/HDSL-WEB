@@ -24,6 +24,14 @@ export function McJavaRuntimeCard() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
+  // The settings page never loads the MC snapshot on its own, and this card
+  // used to refresh only when already enabled — so it stayed hidden forever on
+  // a fresh /settings load. Ask once on mount, then follow the answer.
+  const [checked, setChecked] = useState(false);
+
+  useEffect(() => {
+    void refreshMcFeature().finally(() => setChecked(true));
+  }, []);
 
   const load = () => {
     if (!enabled) return;
@@ -44,7 +52,6 @@ export function McJavaRuntimeCard() {
       return;
     }
     load();
-    void refreshMcFeature();
   }, [enabled]);
 
   const remove = async (featureRelease: number) => {
@@ -71,7 +78,23 @@ export function McJavaRuntimeCard() {
   };
 
   if (!enabled) {
-    return null;
+    // Unknown yet: saying "not enabled" before the answer arrives would flash
+    // on every visit. Once we know, say why the section is empty instead of
+    // making the card look broken.
+    if (!checked) {
+      return null;
+    }
+    return (
+      <>
+        <div className="section-caption">
+          <span>Java 运行时（Minecraft）</span>
+        </div>
+        <div className="card" style={{ padding: 12, fontSize: 13, lineHeight: 1.7 }}>
+          MC 功能未开启，Java 托管不可用。开关在「设置 → 品牌实例 → MC 服务端」；
+          开启后这里会出现已安装的 JDK 与「安装 JDK…」。
+        </div>
+      </>
+    );
   }
 
   const installed = snapshot?.installed ?? [];

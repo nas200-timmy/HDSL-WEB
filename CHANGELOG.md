@@ -12,6 +12,9 @@
   再选发行版（许可、平台覆盖、更新节奏各一段说明），最后确认安装。某个发行版没有该主版本时
   按钮禁用并写明（实测 Microsoft 没有 8，OpenJDK 只有 17/21/25）。
 - 托管列表显示发行版与完整版本；`runtime.json` 记录 `vendor`，旧记录按 Temurin 处理。
+- **修卡片不显示**：设置页从不加载 MC 功能快照，而卡片只在"已开启"时才去刷新——
+  直接打开 /settings 时永远看不到它。改为挂载即刷新；功能未开启时给一行说明，
+  而不是静默消失。
 - API：`POST /api/mc/java/install` 增加 `vendor`；`GET .../runtimes` 的 `available` 带
   `vendor`/`vendorLabel`，并新增 `vendors`（每个目录是否读到）。Oracle 仍被下载前的
   主机检查挡住。
