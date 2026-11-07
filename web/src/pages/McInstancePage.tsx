@@ -6,6 +6,7 @@ import { TerminalWindow } from "../components/TerminalWindow";
 import {
   McBackupsPanel,
   McConsolePanel,
+  McFilesPanel,
   McLogsPanel,
   McNetworkPanel,
   McPlayersPanel,
@@ -29,12 +30,13 @@ import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { toast } from "../store";
 import { errMsg, mcStateLabel } from "../utils";
 
-type McTab = "overview" | "console" | "settings" | "backups" | "players" | "world" | "logs";
+type McTab = "overview" | "console" | "settings" | "files" | "backups" | "players" | "world" | "logs";
 
 const TABS: { key: McTab; title: string; icon: React.ReactNode; iconActive?: React.ReactNode }[] = [
   { key: "overview", title: "概览", icon: <SettingsFillIcon size={20} /> },
   { key: "console", title: "控制台", icon: <TerminalIcon size={20} /> },
   { key: "settings", title: "服务端设置", icon: <Package2Icon size={20} /> },
+  { key: "files", title: "插件/模组", icon: <Package2Icon size={20} /> },
   { key: "backups", title: "世界备份", icon: <InfoIcon size={20} /> },
   { key: "players", title: "玩家", icon: <PersonIcon size={20} /> },
   { key: "world", title: "世界", icon: <PublicIcon size={20} /> },
@@ -363,6 +365,7 @@ export function McInstancePage() {
         )}
         {tab === "backups" && <McBackupsPanel instance={instance} />}
         {tab === "players" && <McPlayersPanel instance={instance} />}
+        {tab === "files" && <McFilesPanel instance={instance} />}
         {tab === "world" && <McWorldPanel instance={instance} />}
         {tab === "logs" && <McLogsPanel instance={instance} />}
       </div>

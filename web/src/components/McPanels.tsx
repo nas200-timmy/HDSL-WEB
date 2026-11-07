@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type McBackup, type McInstance } from "../api";
+import { api, type McBackup, type McInstance, type McModFile, type McModHit } from "../api";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { useMcFeature } from "../mcFeature";
 import { toast } from "../store";
@@ -677,6 +677,238 @@ export function McWorldPanel({ instance }: { instance: McInstance }) {
       )}
       {note && <div style={{ padding: "0 8px 8px", fontSize: 13 }}>{note}</div>}
       {error && <div style={{ color: "var(--monet-error)", padding: "0 8px 8px", fontSize: 13 }}>{error}</div>}
+    </div>
+  );
+}
+
+/** 插件/模组：磁盘上的文件 + Modrinth 搜索安装。
+ *
+ *  文件夹跟着核心走：Paper/Folia/Purpur 是 `plugins/`，Fabric 是 `mods/`；
+ *  原版两者都不加载，所以这个面板在 vanilla 实例里不出现。
+ *  停用就是重命名成 `.jar.disabled`——加载器不读它，人也能手改回来。 */
+export function McFilesPanel({ instance }: { instance: McInstance }) {
+  const kind: "mods" | "plugins" = instance.core === "fabric" ? "mods" : "plugins";
+  const noun = kind === "mods" ? "模组" : "插件";
+  const [files, setFiles] = useState<McModFile[]>([]);
+  const [loader, setLoader] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<McModHit[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  const load = async () => {
+    try {
+      const answer = await api.mc.files(instance.id, kind);
+      setFiles(answer.files);
+      setLoader(answer.folder.loader ?? null);
+      setError(null);
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, [instance.id, kind]);
+
+  const toggle = async (file: McModFile) => {
+    setBusy(true);
+    try {
+      await elevated(() => api.mc.toggleFile(instance.id, kind, file.name, !file.enabled));
+      await load();
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (file: McModFile) => {
+    if (!window.confirm(`删除 ${file.name}？文件会被直接删掉，不进备份。`)) return;
+    setBusy(true);
+    try {
+      await elevated(() => api.mc.deleteFile(instance.id, kind, file.name));
+      await load();
+      toast("success", "已删除");
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const upload = async (file: File) => {
+    setBusy(true);
+    try {
+      await elevated(() => api.mc.uploadFile(instance.id, kind, file));
+      await load();
+      toast("success", `已上传 ${file.name}`);
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const search = async () => {
+    setSearching(true);
+    try {
+      setHits((await api.mc.modrinthSearch(instance.core, instance.version, query)).hits);
+      setError(null);
+    } catch (e) {
+      setError(errMsg(e));
+      setHits([]);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const install = async (hit: McModHit) => {
+    setBusy(true);
+    try {
+      const answer = await elevated(() => api.mc.modrinthInstall(instance.id, hit.projectId));
+      await load();
+      toast("success", `已安装 ${answer.name}`);
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (instance.core === "vanilla") {
+    return (
+      <div className="hint info">
+        <span style={{ flex: 1 }}>
+          原版服务端不加载插件或模组。要装{kind === "mods" ? "模组" : "插件"}，
+          请新建一个 Paper/Folia/Purpur/Fabric 实例。
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <b>{noun}目录</b>
+        <code style={{ fontSize: 12 }}>{kind}/</code>
+        {loader && <span className="tag plain">loader: {loader}</span>}
+        <span className="dim" style={{ fontSize: 12 }}>
+          停用 = 重命名为 `.jar.disabled`；加载器不读它，改回名字就恢复。
+        </span>
+        <label className="btn btn-text" style={{ cursor: busy ? "not-allowed" : "pointer", marginLeft: "auto" }}>
+          上传 {noun}.jar
+          <input
+            type="file"
+            accept=".jar"
+            disabled={busy}
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void upload(file);
+            }}
+          />
+        </label>
+      </div>
+
+      {error && (
+        <div className="hint error">
+          <span style={{ flex: 1 }}>{error}</span>
+        </div>
+      )}
+
+      {files.length === 0 ? (
+        <div className="dim" style={{ fontSize: 13 }}>目录是空的。</div>
+      ) : (
+        <div className="card" style={{ padding: 0 }}>
+          {files.map((file) => (
+            <div
+              key={file.name}
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                padding: "8px 10px",
+                borderBottom: "1px solid var(--monet-outline-variant)",
+                flexWrap: "wrap",
+              }}
+            >
+              <span style={{ fontSize: 13, wordBreak: "break-all", flex: 1 }}>{file.name}</span>
+              {file.clientOnly && (
+                <span className="tag plain" title="元数据自称纯客户端，服务端加载通常无效">
+                  客户端专用
+                </span>
+              )}
+              <span className="dim" style={{ fontSize: 11 }}>{formatBytes(file.bytes)}</span>
+              <span className={`tag ${file.enabled ? "running" : "plain"}`}>
+                {file.enabled ? "已启用" : "已停用"}
+              </span>
+              <button className="btn btn-text" disabled={busy} onClick={() => void toggle(file)}>
+                {file.enabled ? "停用" : "启用"}
+              </button>
+              <button className="btn btn-text danger" disabled={busy} onClick={() => void remove(file)}>
+                删除
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "grid", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input
+            className="input"
+            style={{ flex: 1, minWidth: 220 }}
+            value={query}
+            placeholder={`在 Modrinth 搜索 ${noun}（只看 ${instance.version} + ${loader ?? instance.core} 兼容）`}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void search();
+            }}
+          />
+          <button className="btn btn-raised" disabled={searching} onClick={() => void search()}>
+            {searching ? "搜索中…" : "搜索"}
+          </button>
+        </div>
+        {hits.length > 0 && (
+          <div className="card" style={{ padding: 0 }}>
+            {hits.map((hit) => (
+              <div
+                key={hit.projectId}
+                style={{
+                  display: "grid",
+                  gap: 2,
+                  padding: "8px 10px",
+                  borderBottom: "1px solid var(--monet-outline-variant)",
+                }}
+              >
+                <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                  <b style={{ fontSize: 13 }}>{hit.title}</b>
+                  <span className="dim" style={{ fontSize: 11 }}>
+                    {hit.author} · {hit.downloads.toLocaleString()} 次下载
+                  </span>
+                  <button
+                    className="btn btn-text"
+                    style={{ marginLeft: "auto" }}
+                    disabled={busy}
+                    onClick={() => void install(hit)}
+                  >
+                    安装
+                  </button>
+                </div>
+                <span className="dim" style={{ fontSize: 12, lineHeight: 1.5 }}>{hit.description}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {hits.length === 0 && !searching && (
+          <span className="dim" style={{ fontSize: 12 }}>
+            安装的是最新兼容版本，安装前会校验 Modrinth 公布的 SHA-512。
+          </span>
+        )}
+      </div>
     </div>
   );
 }

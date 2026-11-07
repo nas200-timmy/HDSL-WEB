@@ -92,6 +92,7 @@ public final class McApiServlet extends HttpServlet {
     private final McVersions versions;
     private final McCores cores;
     private final McJavaRuntimes javaRuntimes;
+    private final McMods mods = new McMods();
     private final McBackups backups;
     private final TaskService tasks;
     private final TerminalTickets tickets;
@@ -252,6 +253,14 @@ public final class McApiServlet extends HttpServlet {
                         port -> manager.portTaken(port) || !McPorts.isFree(port),
                         config.mc.portStart, config.mc.portEnd);
                 Json.write(response, Map.of("port", pair.game(), "rconPort", pair.rcon()));
+                return;
+            }
+            if ("/modrinth/search".equals(path) && "GET".equals(method)) {
+                modrinthSearch(request, response);
+                return;
+            }
+            if ("/modrinth/install".equals(path) && "POST".equals(method)) {
+                modrinthInstall(request, response);
                 return;
             }
             if (path.startsWith("/instances/")) {
@@ -1151,6 +1160,7 @@ public final class McApiServlet extends HttpServlet {
                 List<String> lines = manager.tailLog(instance, Math.max(1, Math.min(2000, tail)));
                 Json.write(response, Map.of("lines", lines));
             }
+            case "files" -> files(request, response, method, instance, segments);
             case "backups" -> backups(request, response, method, instance, segments);
             case "console" -> {
                 String consoleAction = segments.length > 2 ? segments[2] : "";
@@ -1387,6 +1397,140 @@ public final class McApiServlet extends HttpServlet {
     }
 
     // ------------------------------------------------------------------- helpers --
+
+    // ------------------------------------------------------------- plugins & mods --
+
+    /// `/instances/{id}/files…`: list, upload, toggle, delete.
+    private void files(HttpServletRequest request, HttpServletResponse response, String method,
+                       McInstance instance, String[] segments) throws IOException, McException {
+        McMods.Folder folder = McMods.folderOf(instance.core());
+        if (folder == null) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "this server core loads neither plugins nor mods");
+            return;
+        }
+        java.nio.file.Path directory = manager.instanceDirectory(instance.id());
+        String kind = McMods.requireKind(segments.length > 2 ? segments[2] : request.getParameter("kind"));
+        if (segments.length == 2) {
+            if (!"GET".equals(method)) {
+                Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
+                return;
+            }
+            JsonObject body = new JsonObject();
+            JsonObject folderJson = new JsonObject();
+            folderJson.addProperty("kind", kind);
+            if (folder.loader() != null) {
+                folderJson.addProperty("loader", folder.loader());
+            }
+            body.add("folder", folderJson);
+            JsonArray items = new JsonArray();
+            for (McMods.Entry entry : mods.list(directory, kind)) {
+                JsonObject item = new JsonObject();
+                item.addProperty("name", entry.name());
+                item.addProperty("enabled", entry.enabled());
+                item.addProperty("bytes", entry.bytes());
+                item.addProperty("clientOnly", entry.clientOnly());
+                items.add(item);
+            }
+            body.add("files", items);
+            Json.write(response, body);
+            return;
+        }
+        if (segments.length == 3 && "PUT".equals(method)) {
+            if (!requireElevation(request, response)) {
+                return;
+            }
+            String stored = mods.upload(directory, kind, request.getParameter("name"),
+                    request.getInputStream());
+            audit("mc.instance.mod.upload", instance.id() + "/" + stored, "success", request);
+            Json.write(response, HttpServletResponse.SC_CREATED,
+                    Map.of("ok", true, "name", stored));
+            return;
+        }
+        if (segments.length == 4) {
+            String name = segments[3];
+            if ("DELETE".equals(method)) {
+                if (!requireElevation(request, response)) {
+                    return;
+                }
+                mods.delete(directory, kind, name);
+                audit("mc.instance.mod.delete", instance.id() + "/" + name, "success", request);
+                Json.write(response, Map.of("ok", true));
+                return;
+            }
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
+        if (segments.length == 5 && "toggle".equals(segments[4]) && "POST".equals(method)) {
+            if (!requireElevation(request, response)) {
+                return;
+            }
+            JsonObject body = readJson(request);
+            boolean enabled = body != null && body.has("enabled")
+                    && body.get("enabled").isJsonPrimitive() && body.get("enabled").getAsBoolean();
+            String renamed = mods.toggle(directory, kind, segments[3], enabled);
+            audit("mc.instance.mod.toggle", instance.id() + "/" + renamed,
+                    enabled ? "enabled" : "disabled", request);
+            Json.write(response, Map.of("ok", true, "name", renamed, "enabled", enabled));
+            return;
+        }
+        Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+    }
+
+    /// `GET /api/mc/modrinth/search`: what this instance could install.
+    private void modrinthSearch(HttpServletRequest request, HttpServletResponse response)
+            throws IOException, McException {
+        McMods.Folder folder = McMods.folderOf(request.getParameter("core"));
+        if (folder == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "this core loads neither plugins nor mods");
+            return;
+        }
+        List<JsonObject> items = new ArrayList<>();
+        for (McMods.Hit hit : mods.search(request.getParameter("query"), folder,
+                request.getParameter("version"))) {
+            JsonObject item = new JsonObject();
+            item.addProperty("projectId", hit.projectId());
+            item.addProperty("slug", hit.slug());
+            item.addProperty("title", hit.title());
+            item.addProperty("author", hit.author());
+            item.addProperty("downloads", hit.downloads());
+            item.addProperty("description", hit.description());
+            items.add(item);
+        }
+        Json.write(response, Map.of("hits", items));
+    }
+
+    /// `POST /api/mc/modrinth/install`: newest compatible version into the instance.
+    private void modrinthInstall(HttpServletRequest request, HttpServletResponse response)
+            throws IOException, McException {
+        if (!requireElevation(request, response)) {
+            return;
+        }
+        JsonObject body = readJson(request);
+        String id = body == null ? null : stringField(body, "instanceId");
+        String projectId = body == null ? null : stringField(body, "projectId");
+        if (id == null || projectId == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "instanceId and projectId are required");
+            return;
+        }
+        McInstance instance = manager.find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "instance not found");
+            return;
+        }
+        McMods.Folder folder = McMods.folderOf(instance.core());
+        if (folder == null) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "this server core loads neither plugins nor mods");
+            return;
+        }
+        String name = mods.install(manager.instanceDirectory(instance.id()), folder,
+                projectId, instance.version());
+        audit("mc.instance.mod.install", instance.id() + "/" + name, "success", request);
+        Json.write(response, Map.of("ok", true, "name", name));
+    }
 
     private JsonObject instanceJson(McInstance instance) {
         McRuntime.Status status = runtime.status(instance.id());

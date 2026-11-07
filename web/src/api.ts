@@ -755,6 +755,37 @@ export const api = {
         `/api/mc/java/${feature}/remove`, jsonInit("POST", {}),
       ),
     versions: () => request<{ versions: McVersion[] }>("/api/mc/versions"),
+    /** 实例的插件/模组目录（kind: mods | plugins）。 */
+    files: (id: string, kind: "mods" | "plugins") =>
+      request<{ folder: { kind: string; loader?: string }; files: McModFile[] }>(
+        `/api/mc/instances/${encodeURIComponent(id)}/files?kind=${kind}`,
+      ),
+    toggleFile: (id: string, kind: "mods" | "plugins", name: string, enabled: boolean) =>
+      request<{ ok: boolean; name: string; enabled: boolean }>(
+        `/api/mc/instances/${encodeURIComponent(id)}/files/${kind}/${encodeURIComponent(name)}/toggle`,
+        jsonInit("POST", { enabled }),
+      ),
+    deleteFile: (id: string, kind: "mods" | "plugins", name: string) =>
+      request<{ ok: boolean }>(
+        `/api/mc/instances/${encodeURIComponent(id)}/files/${kind}/${encodeURIComponent(name)}`,
+        { method: "DELETE" },
+      ),
+    uploadFile: (id: string, kind: "mods" | "plugins", file: File) =>
+      request<{ ok: boolean; name: string }>(
+        `/api/mc/instances/${encodeURIComponent(id)}/files/${kind}?name=${encodeURIComponent(file.name)}`,
+        { method: "PUT", body: file },
+        { timeoutMs: 5 * 60 * 1000 },
+      ),
+    modrinthSearch: (core: string, version: string, query: string) =>
+      request<{ hits: McModHit[] }>(
+        `/api/mc/modrinth/search?core=${encodeURIComponent(core)}&version=${encodeURIComponent(version)}`
+        + `&query=${encodeURIComponent(query)}`,
+      ),
+    modrinthInstall: (instanceId: string, projectId: string) =>
+      request<{ ok: boolean; name: string }>(
+        "/api/mc/modrinth/install", jsonInit("POST", { instanceId, projectId }),
+        { timeoutMs: 5 * 60 * 1000 },
+      ),
     storage: () => request<McStorage>("/api/mc/storage"),
     suggestPorts: () => request<{ port: number; rconPort: number }>("/api/mc/ports"),
     instances: () => request<{ instances: McInstance[] }>("/api/mc/instances"),
@@ -967,6 +998,25 @@ export interface McCoreInfo {
   label: string;
   thirdParty: boolean;
   versions: string[];
+}
+
+/** 插件/模组目录里的一个文件。 */
+export interface McModFile {
+  name: string;
+  enabled: boolean;
+  bytes: number;
+  /** 元数据自称纯客户端：服务端加载会报错或没效果。 */
+  clientOnly: boolean;
+}
+
+/** Modrinth 搜索命中。 */
+export interface McModHit {
+  projectId: string;
+  slug: string;
+  title: string;
+  author: string;
+  downloads: number;
+  description: string;
 }
 
 /** GET /api/mc/java/runtimes：面板托管的 JRE 与 Adoptium 可下载项。 */
