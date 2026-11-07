@@ -898,6 +898,10 @@ public final class McApiServlet extends HttpServlet {
             JsonObject item = new JsonObject();
             item.addProperty("feature", runtime.feature());
             item.addProperty("path", runtime.path().toString());
+            item.addProperty("vendor", runtime.vendor() == null
+                    ? McJavaRuntimes.Vendor.TEMURIN.id() : runtime.vendor().id());
+            item.addProperty("vendorLabel", runtime.vendor() == null
+                    ? McJavaRuntimes.Vendor.TEMURIN.label() : runtime.vendor().label());
             if (runtime.version() == null) {
                 item.add("version", com.google.gson.JsonNull.INSTANCE);
             } else {
@@ -966,18 +970,44 @@ public final class McApiServlet extends HttpServlet {
         }
         body.add("consumers", consumers);
         JsonArray available = new JsonArray();
-        try {
-            for (McJavaRuntimes.Release release : javaRuntimes.available()) {
-                JsonObject item = new JsonObject();
-                item.addProperty("feature", release.feature());
-                item.addProperty("version", release.version());
-                item.addProperty("size", release.size());
-                available.add(item);
+        JsonArray vendors = new JsonArray();
+        // The settings card only lists what is installed; the catalogue costs
+        // several seconds (three vendors), so it is opt-in for the wizard.
+        boolean withCatalogue = !"0".equals(request.getParameter("catalog"));
+        boolean anyVendor = false;
+        String firstError = null;
+        for (McJavaRuntimes.Vendor vendor : withCatalogue
+                ? McJavaRuntimes.Vendor.values()
+                : new McJavaRuntimes.Vendor[0]) {
+            JsonObject entry = new JsonObject();
+            entry.addProperty("id", vendor.id());
+            entry.addProperty("label", vendor.label());
+            try {
+                for (McJavaRuntimes.Release release : javaRuntimes.available(vendor)) {
+                    JsonObject item = new JsonObject();
+                    item.addProperty("vendor", vendor.id());
+                    item.addProperty("vendorLabel", vendor.label());
+                    item.addProperty("feature", release.feature());
+                    item.addProperty("version", release.version());
+                    item.addProperty("size", release.size());
+                    available.add(item);
+                }
+                entry.addProperty("ok", true);
+                anyVendor = true;
+            } catch (McException e) {
+                entry.addProperty("ok", false);
+                entry.addProperty("error", e.getMessage());
+                if (firstError == null) {
+                    firstError = vendor.label() + ": " + e.getMessage();
+                }
             }
-            body.addProperty("source", "api");
-        } catch (McException e) {
-            body.addProperty("source", "unavailable");
-            body.addProperty("error", e.getMessage());
+            vendors.add(entry);
+        }
+        body.add("vendors", vendors);
+        body.addProperty("source", !withCatalogue ? "skipped"
+                : anyVendor ? "api" : "unavailable");
+        if (withCatalogue && !anyVendor && firstError != null) {
+            body.addProperty("error", firstError);
         }
         body.add("available", available);
         Json.write(response, body);
@@ -996,18 +1026,29 @@ public final class McApiServlet extends HttpServlet {
                     "feature must be a Java feature release between 8 and 40");
             return;
         }
+        String vendorId = body == null ? null : stringField(body, "vendor");
+        McJavaRuntimes.Vendor vendor = vendorId == null || vendorId.isBlank()
+                ? McJavaRuntimes.Vendor.TEMURIN : McJavaRuntimes.Vendor.of(vendorId);
+        if (vendor == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "unknown JDK vendor `" + vendorId + "`");
+            return;
+        }
         try {
-            TaskService.Task task = tasks.submit("mc-java-install", Integer.toString(feature), live -> {
-                live.update("Downloading Java " + feature, -1);
-                McJavaRuntimes.Installed installed = javaRuntimes.install(feature, (copied, total) -> {
+            TaskService.Task task = tasks.submit("mc-java-install",
+                    feature + "-" + vendor.id(), live -> {
+                live.update("Downloading " + vendor.label() + " " + feature, -1);
+                McJavaRuntimes.Installed installed = javaRuntimes.install(feature, vendor,
+                        (copied, total) -> {
                     String progress = (copied / (1024 * 1024)) + " / "
                             + (total > 0 ? (total / (1024 * 1024)) + " MB" : "? MB");
-                    live.update("Downloading Java " + feature + ": " + progress,
+                    live.update("Downloading " + vendor.label() + " " + feature + ": " + progress,
                             total > 0 ? (double) copied / total : -1);
                 });
-                return "Installed Java " + installed.feature() + " (" + installed.path() + ")";
+                return "Installed " + vendor.label() + " " + installed.feature()
+                        + " (" + installed.path() + ")";
             }, null);
-            audit("mc.java.install", Integer.toString(feature), "submitted", request);
+            audit("mc.java.install", feature + "/" + vendor.id(), "submitted", request);
             response.setStatus(HttpServletResponse.SC_ACCEPTED);
             Json.write(response, Map.of("taskId", task.id()));
         } catch (TaskService.InstanceBusyException e) {

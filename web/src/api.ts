@@ -759,11 +759,15 @@ export const api = {
         { method: "PUT", body: file },
         { timeoutMs: 10 * 60 * 1000 },
       ),
-    javaRuntimes: (version?: string) =>
-      request<McJavaRuntimesSnapshot>(
-        `/api/mc/java/runtimes${version ? `?version=${encodeURIComponent(version)}` : ""}`),
-    installJava: (feature: number) =>
-      request<{ taskId: string }>("/api/mc/java/install", jsonInit("POST", { feature })),
+    /** `withCatalogue=false` 只读已安装列表（设置卡片用）；向导才需要三个发行版的目录。 */
+    javaRuntimes: (version?: string, withCatalogue = false) => {
+      const params = new URLSearchParams();
+      if (version) params.set("version", version);
+      params.set("catalog", withCatalogue ? "1" : "0");
+      return request<McJavaRuntimesSnapshot>(`/api/mc/java/runtimes?${params.toString()}`);
+    },
+    installJava: (feature: number, vendor = "temurin") =>
+      request<{ taskId: string }>("/api/mc/java/install", jsonInit("POST", { feature, vendor })),
     removeJava: (feature: number) =>
       request<{ ok: boolean; removed: boolean }>(
         `/api/mc/java/${feature}/remove`, jsonInit("POST", {}),
@@ -1099,10 +1103,13 @@ export interface McModHit {
 
 /** GET /api/mc/java/runtimes：面板托管的 JRE 与 Adoptium 可下载项。 */
 export interface McJavaRuntimesSnapshot {
-  installed: { feature: number; path: string; version?: string | null; bytes?: number }[];
-  available: { feature: number; version: string; size: number }[];
+  installed: { feature: number; path: string; vendor?: string; vendorLabel?: string;
+    version?: string | null; bytes?: number }[];
+  available: { vendor: string; vendorLabel: string; feature: number; version: string; size: number }[];
+  /** 每个发行版的目录是否读到了（Foojay 挂了不影响 Temurin）。 */
+  vendors?: { id: string; label: string; ok: boolean; error?: string }[];
   recommended: number;
-  source: "api" | "unavailable";
+  source: "api" | "unavailable" | "skipped";
   error?: string;
   root: string;
   /** 面板自身 JVM；只读展示，面板不会安装或改动它。 */

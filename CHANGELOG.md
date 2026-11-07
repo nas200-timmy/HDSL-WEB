@@ -4,6 +4,18 @@
 
 ## 未发布
 
+**Java 托管：三家发行版 + 安装向导**
+
+- 下载源从单一 Temurin 扩成三家：`temurin`（Adoptium API）、`microsoft`、`openjdk`
+  （后两家经 Foojay DisCo 取元数据）。校验和仍以厂商伴随文件为准，读不到就跳过该包。
+- 安装改成向导：先选 LTS 主版本（8/11/17/21/25，旁边是「MC 版本 → 最低 Java」对照表），
+  再选发行版（许可、平台覆盖、更新节奏各一段说明），最后确认安装。某个发行版没有该主版本时
+  按钮禁用并写明（实测 Microsoft 没有 8，OpenJDK 只有 17/21/25）。
+- 托管列表显示发行版与完整版本；`runtime.json` 记录 `vendor`，旧记录按 Temurin 处理。
+- API：`POST /api/mc/java/install` 增加 `vendor`；`GET .../runtimes` 的 `available` 带
+  `vendor`/`vendorLabel`，并新增 `vendors`（每个目录是否读到）。Oracle 仍被下载前的
+  主机检查挡住。
+
 **Java 托管：换成 JDK，并且把"装好却执行不了"的可执行位修掉**
 
 - **解包丢执行位**：`Files.newOutputStream` 创建的文件按 umask 落成 `0644`，`bin/java`

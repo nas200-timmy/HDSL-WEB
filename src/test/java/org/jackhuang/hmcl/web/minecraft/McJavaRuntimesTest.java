@@ -194,6 +194,45 @@ class McJavaRuntimesTest {
     }
 
     @Test
+    void readsMicrosoftBuildsThroughFoojayAndInstallsOne(@TempDir Path dir) throws Exception {
+        byte[] pkg = tarGzJre("#!/bin/sh\nexit 0\n");
+        String checksum = sha256(pkg);
+        HttpServer host = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        String base = "http://127.0.0.1:" + host.getAddress().getPort();
+        host.createContext("/packages", exchange -> respond(exchange,
+                ("""
+                        {"result":[{"id":"p21","jdk_version":21,"java_version":"21.0.13",
+                          "size":%d,"archive_type":"tar.gz"}]}
+                        """.formatted(pkg.length)).getBytes(StandardCharsets.UTF_8)));
+        host.createContext("/ids/p21", exchange -> respond(exchange,
+                ("""
+                        {"result":[{"filename":"jdk.tar.gz",
+                          "direct_download_uri":"%s/pkg.tar.gz",
+                          "checksum":"","checksum_type":"sha256",
+                          "checksum_uri":"%s/pkg.sha256"}]}
+                        """.formatted(base, base)).getBytes(StandardCharsets.UTF_8)));
+        host.createContext("/pkg.sha256", exchange -> respond(exchange,
+                (checksum + "  jdk.tar.gz\n").getBytes(StandardCharsets.UTF_8)));
+        host.createContext("/pkg.tar.gz", exchange -> respond(exchange, pkg));
+        host.start();
+        try {
+            McJavaRuntimes runtimes = new McJavaRuntimes(dir.resolve("java"),
+                    URI.create("http://127.0.0.1:1"), URI.create(base));
+            var releases = runtimes.available(McJavaRuntimes.Vendor.MICROSOFT);
+            assertEquals(1, releases.size());
+            assertEquals(checksum, releases.get(0).sha256());
+            assertEquals(McJavaRuntimes.Vendor.MICROSOFT, releases.get(0).vendor());
+            McJavaRuntimes.Installed installed = runtimes.install(21,
+                    McJavaRuntimes.Vendor.MICROSOFT, null);
+            assertTrue(Files.isRegularFile(installed.path()));
+            assertEquals(McJavaRuntimes.Vendor.MICROSOFT,
+                    runtimes.listInstalled().get(0).vendor());
+        } finally {
+            host.stop(0);
+        }
+    }
+
+    @Test
     void refusesOracleDownloadHosts() {
         assertFalse(McJavaRuntimes.isRedistributable(URI.create(
                 "https://download.oracle.com/java/21/latest/jdk-21_linux-x64_bin.tar.gz")));

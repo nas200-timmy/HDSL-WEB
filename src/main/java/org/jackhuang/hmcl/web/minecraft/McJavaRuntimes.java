@@ -49,6 +49,7 @@ import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
@@ -92,6 +93,54 @@ public final class McJavaRuntimes {
     /// Oracle builds does not get around it.
     private static final List<String> NON_REDISTRIBUTABLE_HOSTS =
             List.of("oracle.com", "oraclecloud.com", "java.com");
+    /// Foojay DisCo: the only catalogue that lists Microsoft's and the OpenJDK
+    /// project's builds with checksums. Temurin keeps using Adoptium's own API;
+    /// this is for the two distributions that publish no API of their own.
+    private static final URI FOOJAY_API = URI.create("https://api.foojay.io/disco/v3.0");
+    /// The long-term-support releases the wizard offers. 8 is here because old
+    /// Minecraft versions still ask for it, not because it is modern.
+    public static final List<Integer> LTS = List.of(8, 11, 17, 21, 25);
+
+    /// One JDK distribution the panel can install.
+    ///
+    /// Oracle's builds are deliberately absent: they may be used but not
+    /// redistributed, and downloading one on an operator's behalf is
+    /// redistribution (see [#isRedistributable]).
+    public enum Vendor {
+        TEMURIN("temurin", "Eclipse Temurin"),
+        MICROSOFT("microsoft", "Microsoft Build of OpenJDK"),
+        OPENJDK("openjdk", "OpenJDK（官方参考构建）");
+
+        private final String id;
+        private final String label;
+
+        Vendor(String id, String label) {
+            this.id = id;
+            this.label = label;
+        }
+
+        public String id() {
+            return id;
+        }
+
+        public String label() {
+            return label;
+        }
+
+        /// @param id the catalogue id (`temurin`, `microsoft`, `openjdk`)
+        /// @return the vendor, or `null` when the id is unknown
+        public static @Nullable Vendor of(@Nullable String id) {
+            if (id == null) {
+                return null;
+            }
+            for (Vendor vendor : values()) {
+                if (vendor.id.equalsIgnoreCase(id.trim())) {
+                    return vendor;
+                }
+            }
+            return null;
+        }
+    }
     /// How long the release metadata is reused before it is fetched again.
     private static final Duration METADATA_TTL = Duration.ofMinutes(10);
     /// A JDK package is ~200 MB unpacked to ~300 MB; anything past this is not one.
@@ -107,21 +156,28 @@ public final class McJavaRuntimes {
     /// @param version the full version Adoptium reported (`21.0.5+11`), or
     ///                `null` for a directory written before this was recorded
     /// @param bytes   the unpacked size on disk, or `0` when unknown
-    public record Installed(int feature, Path path, @Nullable String version, long bytes) {
+    public record Installed(int feature, Path path, @Nullable String version, long bytes,
+                            @Nullable Vendor vendor) {
 
         public Installed(int feature, Path path) {
-            this(feature, path, null, 0);
+            this(feature, path, null, 0, null);
+        }
+
+        public Installed(int feature, Path path, @Nullable String version, long bytes) {
+            this(feature, path, version, bytes, Vendor.TEMURIN);
         }
     }
 
     /// One downloadable JDK package.
     ///
     /// @param feature the Java feature release
-    /// @param version the full version string Adoptium reports (`21.0.5+11`)
+    /// @param version the full version string the catalogue reports (`21.0.5+11`)
     /// @param url     where the archive lives
     /// @param sha256  the package's SHA-256, lowercase hex
     /// @param size    the package size in bytes, or `-1` when unknown
-    public record Release(int feature, String version, String url, String sha256, long size) {
+    /// @param vendor  which JDK distribution this is
+    public record Release(int feature, String version, String url, String sha256, long size,
+                          Vendor vendor) {
     }
 
     private record Cached(List<Release> releases, Instant at) {
@@ -129,14 +185,15 @@ public final class McJavaRuntimes {
 
     private final Path root;
     private final URI api;
+    private final URI foojay;
     private final HttpClient client;
-    private volatile @Nullable Cached cached;
+    private final Map<Vendor, Cached> caches = new java.util.concurrent.ConcurrentHashMap<>();
 
     /// The manager for `<data>/minecraft/java`.
     ///
     /// @param root the directory that holds one subdirectory per feature release
     public McJavaRuntimes(Path root) {
-        this(root, apiFromEnvironment());
+        this(root, apiFromEnvironment(), FOOJAY_API);
     }
 
     /// The same, with an overridable API base (mirrors, tests).
@@ -144,8 +201,18 @@ public final class McJavaRuntimes {
     /// @param root the runtimes directory
     /// @param api  the Adoptium-compatible API base
     public McJavaRuntimes(Path root, URI api) {
+        this(root, api, FOOJAY_API);
+    }
+
+    /// The same, with both catalogues injectable (tests).
+    ///
+    /// @param root   the runtimes directory
+    /// @param api    the Adoptium-compatible API base
+    /// @param foojay the Foojay DisCo base
+    public McJavaRuntimes(Path root, URI api, URI foojay) {
         this.root = root.toAbsolutePath().normalize();
         this.api = api;
+        this.foojay = foojay;
         // Adoptium answers with a 302 to `objects.githubusercontent.com` for
         // every package, so a client that does not follow redirects turns
         // "install a JDK" into "HTTP 302" on the first try. `NORMAL` follows
@@ -196,7 +263,14 @@ public final class McJavaRuntimes {
                     String version = record == null ? null : string(record, "version");
                     long bytes = record == null ? 0 : record.has("bytes")
                             ? record.get("bytes").getAsLong() : 0;
-                    found.add(new Installed(feature, java, version, bytes));
+                    Vendor vendor = Vendor.TEMURIN;
+                    if (record != null) {
+                        Vendor parsed = Vendor.of(string(record, "vendor"));
+                        if (parsed != null) {
+                            vendor = parsed;
+                        }
+                    }
+                    found.add(new Installed(feature, java, version, bytes, vendor));
                 } catch (NumberFormatException e) {
                     LOG.debug("Ignoring `" + name + "` in " + root + ": not a Java feature release");
                 }
@@ -252,45 +326,55 @@ public final class McJavaRuntimes {
         return true;
     }
 
-    /// The release to download for a feature release.
+    /// The release to download for a feature release, from Eclipse Temurin.
     ///
     /// @param feature the feature release
     /// @return the package metadata
     /// @throws McException when the API cannot be read or publishes no package
     public Release resolve(int feature) throws McException {
+        return resolve(feature, Vendor.TEMURIN);
+    }
+
+    /// The release to download for a feature release, from one distribution.
+    ///
+    /// @param feature the feature release
+    /// @param vendor  the distribution
+    /// @return the package metadata
+    /// @throws McException when the catalogue cannot be read or publishes no package
+    public Release resolve(int feature, Vendor vendor) throws McException {
         if (feature < 8 || feature > 40) {
             throw new McException("unsupported Java feature release " + feature);
         }
-        Cached current = cached;
-        if (current != null && Instant.now().isBefore(current.at().plus(METADATA_TTL))) {
-            for (Release release : current.releases()) {
-                if (release.feature() == feature) {
-                    return release;
-                }
-            }
-        }
-        List<Release> releases = fetchReleases();
-        cached = new Cached(releases, Instant.now());
-        for (Release release : releases) {
+        for (Release release : available(vendor)) {
             if (release.feature() == feature) {
                 return release;
             }
         }
-        throw new McException("Adoptium publishes no JDK " + feature + " for "
+        throw new McException(vendor.label() + " publishes no JDK " + feature + " for "
                 + platformLabel());
     }
 
-    /// Every feature release Adoptium publishes for this platform.
+    /// Every feature release Eclipse Temurin publishes for this platform.
     ///
     /// @return the releases, newest first
     /// @throws McException when the API cannot be read
     public List<Release> available() throws McException {
-        Cached current = cached;
+        return available(Vendor.TEMURIN);
+    }
+
+    /// Every feature release one distribution publishes for this platform.
+    ///
+    /// @param vendor the distribution
+    /// @return the releases, newest first
+    /// @throws McException when the catalogue cannot be read
+    public List<Release> available(Vendor vendor) throws McException {
+        Cached current = caches.get(vendor);
         if (current != null && Instant.now().isBefore(current.at().plus(METADATA_TTL))) {
             return current.releases();
         }
-        List<Release> releases = fetchReleases();
-        cached = new Cached(releases, Instant.now());
+        List<Release> releases = vendor == Vendor.TEMURIN
+                ? fetchAdoptium() : fetchFoojay(vendor);
+        caches.put(vendor, new Cached(releases, Instant.now()));
         return releases;
     }
 
@@ -305,7 +389,19 @@ public final class McJavaRuntimes {
     /// @return the installed runtime
     /// @throws McException when the download, the hash check or the unpack fails
     public Installed install(int feature, @Nullable McVersions.Progress progress) throws McException {
-        Release release = resolve(feature);
+        return install(feature, Vendor.TEMURIN, progress);
+    }
+
+    /// The same, from a chosen distribution.
+    ///
+    /// @param feature  the feature release
+    /// @param vendor   the distribution
+    /// @param progress the download sink, or `null`
+    /// @return the installed runtime
+    /// @throws McException when the download, the hash check or the unpack fails
+    public Installed install(int feature, Vendor vendor, @Nullable McVersions.Progress progress)
+            throws McException {
+        Release release = resolve(feature, vendor);
         // Checked before a single byte is fetched: a panel that downloaded an
         // Oracle JDK would be redistributing it, which its licence does not allow.
         URI packageUri;
@@ -361,6 +457,7 @@ public final class McJavaRuntimes {
             record.addProperty("version", release.version());
             record.addProperty("url", release.url());
             record.addProperty("sha256", release.sha256());
+            record.addProperty("vendor", release.vendor().id());
             record.addProperty("bytes", bytes);
             record.addProperty("installedAt", Instant.now().toString());
             JsonUtils.writeToJsonFile(target.resolve("runtime.json"), record);
@@ -369,7 +466,7 @@ public final class McJavaRuntimes {
             if (installed == null) {
                 throw new McException("the JDK " + feature + " did not unpack into " + target);
             }
-            return new Installed(feature, installed, release.version(), bytes);
+            return new Installed(feature, installed, release.version(), bytes, release.vendor());
         } catch (IOException e) {
             throw new McException("Failed to install Java " + feature + ": " + e.getMessage(), e);
         } finally {
@@ -450,7 +547,7 @@ public final class McJavaRuntimes {
         return 8;
     }
 
-    private List<Release> fetchReleases() throws McException {
+    private List<Release> fetchAdoptium() throws McException {
         String base = api.toString().replaceAll("/+$", "");
         JsonElement info = fetchJson(URI.create(base + "/v3/info/available_releases"));
         JsonArray features = info.isJsonObject() && info.getAsJsonObject().has("available_releases")
@@ -509,10 +606,109 @@ public final class McJavaRuntimes {
                 version = semver == null ? "" : semver;
             }
             long size = pkg.has("size") ? pkg.get("size").getAsLong() : -1;
-            releases.add(new Release(feature, version, url, checksum.toLowerCase(Locale.ROOT), size));
+            releases.add(new Release(feature, version, url, checksum.toLowerCase(Locale.ROOT), size, Vendor.TEMURIN));
         }
         releases.sort(Comparator.comparingInt(Release::feature).reversed());
         return List.copyOf(releases);
+    }
+
+    /// Microsoft's and the OpenJDK project's builds, through Foojay DisCo.
+    ///
+    /// Neither publishes a catalogue API of its own, and both ship the checksum
+    /// as a companion file rather than inline — Foojay points at that file and
+    /// the hash is read from there. A package whose checksum cannot be read is
+    /// skipped: an unverifiable 200 MB archive is not something to unpack.
+    private List<Release> fetchFoojay(Vendor vendor) throws McException {
+        String os = foojayOs();
+        String arch = platformArch();
+        String archive = "windows".equals(os) ? "zip" : "tar.gz";
+        URI list = URI.create(foojay + "/packages?distribution=" + vendor.id()
+                + "&operating_system=" + os + "&architecture=" + arch
+                + "&package_type=jdk&release_status=ga&latest=available&archive_type=" + archive);
+        JsonElement root = fetchJson(list);
+        if (!root.isJsonObject() || !root.getAsJsonObject().has("result")
+                || !root.getAsJsonObject().get("result").isJsonArray()) {
+            throw new McException(list + " did not answer a package list");
+        }
+        // One entry per feature release; the catalogue may list several archive
+        // types for the same one, and `latest=available` already picked a patch.
+        Map<Integer, JsonObject> byFeature = new java.util.TreeMap<>(Comparator.reverseOrder());
+        for (JsonElement element : root.getAsJsonObject().getAsJsonArray("result")) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject item = element.getAsJsonObject();
+            if (!item.has("jdk_version") || !item.get("jdk_version").isJsonPrimitive()) {
+                continue;
+            }
+            int feature;
+            try {
+                feature = item.get("jdk_version").getAsInt();
+            } catch (RuntimeException e) {
+                continue;
+            }
+            if (!LTS.contains(feature)) {
+                continue;
+            }
+            byFeature.putIfAbsent(feature, item);
+        }
+        List<Release> releases = new ArrayList<>();
+        for (Map.Entry<Integer, JsonObject> entry : byFeature.entrySet()) {
+            int feature = entry.getKey();
+            String id = string(entry.getValue(), "id");
+            if (id == null) {
+                continue;
+            }
+            try {
+                JsonElement detailRoot = fetchJson(URI.create(foojay + "/ids/" + id));
+                JsonArray detail = detailRoot.isJsonObject()
+                        && detailRoot.getAsJsonObject().has("result")
+                        && detailRoot.getAsJsonObject().get("result").isJsonArray()
+                        ? detailRoot.getAsJsonObject().getAsJsonArray("result") : null;
+                if (detail == null || detail.isEmpty() || !detail.get(0).isJsonObject()) {
+                    continue;
+                }
+                JsonObject pkg = detail.get(0).getAsJsonObject();
+                String url = string(pkg, "direct_download_uri");
+                String checksum = string(pkg, "checksum");
+                if (checksum == null || checksum.isBlank()) {
+                    String checksumUri = string(pkg, "checksum_uri");
+                    if (checksumUri != null && !checksumUri.isBlank()) {
+                        checksum = firstSha256(fetchText(URI.create(checksumUri)));
+                    }
+                }
+                if (url == null || checksum == null || checksum.isBlank()) {
+                    LOG.warning("Skipping " + vendor.id() + " " + feature
+                            + ": no checksum is published");
+                    continue;
+                }
+                String version = string(entry.getValue(), "java_version");
+                long size = entry.getValue().has("size")
+                        ? entry.getValue().get("size").getAsLong() : -1;
+                releases.add(new Release(feature, version == null ? "" : version, url,
+                        checksum.toLowerCase(Locale.ROOT), size, vendor));
+            } catch (McException e) {
+                LOG.warning("Could not read " + vendor.id() + " " + feature + ": " + e.getMessage());
+            }
+        }
+        if (releases.isEmpty()) {
+            throw new McException(vendor.label() + " lists no JDK for " + platformLabel());
+        }
+        releases.sort(Comparator.comparingInt(Release::feature).reversed());
+        return List.copyOf(releases);
+    }
+
+    private static String foojayOs() {
+        return switch (OperatingSystem.CURRENT_OS) {
+            case WINDOWS -> "windows";
+            case MACOS -> "macos";
+            default -> "linux";
+        };
+    }
+
+    private static @Nullable String firstSha256(String text) {
+        Matcher matcher = Pattern.compile("\\b[0-9a-fA-F]{64}\\b").matcher(text);
+        return matcher.find() ? matcher.group().toLowerCase(Locale.ROOT) : null;
     }
 
     /// `assets/latest/<feature>` answers an array (newer API) or an object with
@@ -795,6 +991,14 @@ public final class McJavaRuntimes {
 
     private JsonElement fetchJson(URI uri) throws McException {
         try {
+            return JsonParser.parseString(fetchText(uri));
+        } catch (RuntimeException e) {
+            throw new McException(uri + " did not answer JSON", e);
+        }
+    }
+
+    private String fetchText(URI uri) throws McException {
+        try {
             HttpRequest request = HttpRequest.newBuilder(uri)
                     .timeout(Duration.ofSeconds(30))
                     .header("User-Agent", "HDSL-web")
@@ -804,14 +1008,12 @@ public final class McJavaRuntimes {
             if (answer.statusCode() != 200) {
                 throw new McException(uri + " answered HTTP " + answer.statusCode());
             }
-            return JsonParser.parseString(answer.body());
+            return answer.body();
         } catch (IOException e) {
             throw new McException("Failed to read " + uri + ": " + e.getMessage(), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new McException("Reading " + uri + " was interrupted", e);
-        } catch (RuntimeException e) {
-            throw new McException(uri + " did not answer JSON", e);
         }
     }
 

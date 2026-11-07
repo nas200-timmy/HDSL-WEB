@@ -1372,14 +1372,28 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
   向导会说明原因——不能因为一个 API 挂住就让界面看起来「只有原版」，也不能让一次上游
   超时把整页拖到代理的读超时。
 
-### 19.3 面板自托管 Java（Adoptium JDK）
+### 19.3 面板自托管 Java（三家发行版）
 
 - `McJavaRuntimes`（`web/minecraft/McJavaRuntimes.java`）把 **JDK** 装到
   `<data>/minecraft/java/<feature>/`，**不装进系统目录**：免 root、随数据卷持久、Win/Linux 一致。
   选 JDK 而不是 JRE，是因为多出来的 `javac` 与工具不占多少空间（解包后约 300 MB/版本），
   却省掉"某个插件工具链非要 JDK"时的二次往返。
-- 数据源 Adoptium API v3（`image_type=jdk`，`HDSL_JAVA_API` 可换镜像）；下载后校验上游
-  SHA-256 才解包，zip 与 tar.gz 都支持，先解到临时目录再原子落位。
+- **三家发行版**，安装向导里选（`/api/mc/java/install` 的 `vendor`）：
+
+  | id | 发行版 | 目录来源 | 说明 |
+  |---|---|---|---|
+  | `temurin` | Eclipse Temurin | Adoptium API v3 | 默认；平台覆盖最全、更新最稳，API 直接给 sha256 |
+  | `microsoft` | Microsoft Build of OpenJDK | Foojay DisCo | 微软构建，Windows/Azure 打磨多；校验和在伴随文件里 |
+  | `openjdk` | OpenJDK 官方参考构建 | Foojay DisCo | 最贴近上游、无厂商补丁；只有 GA，补丁版本以新目录发布 |
+
+  Temurin 之外的两家没有自己的目录 API，元数据经 Foojay DisCo 取；**校验和仍以厂商
+  发布的 `.sha256`/`.sha256sum.txt` 为准**（Foojay 只给地址，不给结论）。读不到校验和的包直接跳过。
+- **向导**（`McJavaInstallWizard`）：先选 LTS 主版本（8/11/17/21/25），旁边是对照表
+  「MC 版本范围 → 最低 Java」；再选发行版（每家一段说明：许可、平台、更新节奏）；
+  最后确认并安装。某个发行版没有该主版本时按钮禁用并写明（实测 Microsoft 没有 8，
+  OpenJDK 只有 17/21/25）。
+- 下载后**先校验 SHA-256 再解包**（Temurin 用 Adoptium 给的，另外两家用厂商伴随文件里的），
+  zip 与 tar.gz 都支持，先解到临时目录再原子落位；`HDSL_JAVA_API` 只覆盖 Temurin 的 API 基址。
 - **权限是显式设的，不是从归档里抄的**：解包用的是面板的 umask，`bin/java` 会落成 `0644`
   ——谁都执行不了，root 也不行（`execve` 至少要一个执行位）。安装完成后统一规范：
   目录 `0755`、`bin/*` 与 `lib/jspawnhelper` `0755`、其余 `0644`。属主**保持面板自己**，
