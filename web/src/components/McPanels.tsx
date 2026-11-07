@@ -722,7 +722,7 @@ export function McWorldPanel({ instance }: { instance: McInstance }) {
             </div>
           )}
           <p className="dim" style={{ fontSize: 12, margin: 0, lineHeight: 1.6 }}>
-            导入会先备份当前世界，再整体替换；不会合并两个世界。zip 上限 16 GB，5 GB 的世界也能导入。
+            导入会先备份当前世界，再整体替换；不会合并两个世界。zip 上限 128 GB，几十 GB 的世界也能导入（需要足够的磁盘空间——不可压缩的世界首次导入约 2 倍，覆盖旧世界约 4 倍）。
             导入分两步：先把 zip 传完（上面的进度条），再由后台解压——页面关掉任务也会继续，但建议等它结束。
             zip 里的目录可以叫 <span className="mono">{instance.levelName}/…</span>，也可以直接是世界内容
             （平铺或 <span className="mono">region/…</span> 这种层级）。

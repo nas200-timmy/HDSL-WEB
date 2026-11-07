@@ -44,12 +44,14 @@ import java.util.zip.ZipOutputStream;
 @NotNullByDefault
 public final class McWorlds {
 
-    /// How large an upload may be. A 5 GB world plus its staging copy and a safety backup
-    /// fits; the number only stops a mistaken upload from filling the disk.
-    public static final long MAX_IMPORT_BYTES = 16L * 1024 * 1024 * 1024;
+    /// How large an upload may be. Modded worlds run to tens of gigabytes; this only stops a
+    /// mistaken upload — the real gate is free disk space (see [#requireFreeSpace]).
+    public static final long MAX_IMPORT_BYTES = 128L * 1024 * 1024 * 1024;
 
-    /// How many bytes one import may unpack. A zip bomb is a wrong file, not a world.
-    static final long MAX_EXTRACTED_BYTES = 32L * 1024 * 1024 * 1024;
+    /// Hard ceiling for an unpack, whatever the archive says. The adaptive limit is four times
+    /// the archive, so a world that zips to 50 GB may unpack to 200 GB; this constant only
+    /// stops a zip bomb from being believed.
+    static final long MAX_EXTRACTED_BYTES = 512L * 1024 * 1024 * 1024;
 
     private static final Logger LOG = Logger.LOG;
 
@@ -96,10 +98,11 @@ public final class McWorlds {
 
     /// Progress of an unpack.
     public interface Progress {
-        /// @param files files written so far
-        /// @param total entries in the archive
-        /// @param bytes bytes written so far
-        void unpacked(int files, int total, long bytes);
+        /// @param files      files written so far
+        /// @param total      entries in the archive
+        /// @param bytes      bytes written so far
+        /// @param totalBytes bytes the archive declares it will write, or `0` when unknown
+        void unpacked(int files, int total, long bytes, long totalBytes);
     }
 
     /// Saves the uploaded body next to the instance, enforcing the size cap.
@@ -149,7 +152,51 @@ public final class McWorlds {
     public static String importArchive(McInstance instance, McInstanceManager manager,
                                        McBackups backups, Path archive,
                                        @Nullable Progress progress) throws McException {
-        return importArchive(instance, manager, backups, archive, progress, MAX_EXTRACTED_BYTES);
+        long archiveBytes;
+        try {
+            archiveBytes = Files.size(archive);
+        } catch (IOException e) {
+            throw new McException("Failed to read the uploaded world: " + e.getMessage(), e);
+        }
+        return importArchive(instance, manager, backups, archive, progress,
+                MAX_EXTRACTED_BYTES);
+    }
+
+    /// The fallback limit for an archive whose directory does not record sizes: four times the
+    /// archive, floored at 2 GiB and capped at [#MAX_EXTRACTED_BYTES].
+    ///
+    /// It is only a fallback. The declared uncompressed total is the real number when it is
+    /// there — a world of already-compressed region files barely shrinks, and a test world of
+    /// zeros shrinks to almost nothing, so a ratio is the wrong primary rule.
+    ///
+    /// @param archiveBytes the archive's size
+    /// @return the byte limit for the unpack
+    static long extractedLimit(long archiveBytes) {
+        long four = archiveBytes > Long.MAX_VALUE / 4 ? Long.MAX_VALUE : archiveBytes * 4;
+        return Math.min(MAX_EXTRACTED_BYTES, Math.max(2L * 1024 * 1024 * 1024, four));
+    }
+
+    /// The logical size of a tree, or `0` when it does not exist.
+    ///
+    /// @param root the directory
+    /// @return bytes
+    static long sizeOf(Path root) {
+        if (!Files.isDirectory(root)) {
+            return 0;
+        }
+        long[] total = {0};
+        try (var walk = Files.walk(root)) {
+            walk.filter(Files::isRegularFile).forEach(path -> {
+                try {
+                    total[0] += Files.size(path);
+                } catch (IOException ignored) {
+                    // A file that vanished mid-walk is not worth failing the estimate for.
+                }
+            });
+        } catch (IOException ignored) {
+            // Best effort.
+        }
+        return total[0];
     }
 
     /// The same, with the unpack limit named so a test can drive it.
@@ -169,17 +216,44 @@ public final class McWorlds {
         Path staging = instanceDir.resolve(".world-import");
         try {
             long archiveBytes = Files.size(archive);
-            requireFreeSpace(instanceDir, archiveBytes);
             Files.createDirectories(staging);
             String stripPrefix = instance.levelName() + "/";
             int entries = 0;
             long extracted = 0;
+            long reportedAt = 0;
             int total;
             // `ZipFile` rather than `ZipInputStream`: the central directory gives the entry
-            // count up front, which is what makes a percentage possible at all. The 5 GB case
-            // reads the directory once and streams each entry exactly as before.
+            // count and the uncompressed total up front, which is what makes a byte-accurate
+            // percentage (and an accurate disk check) possible at all.
             try (var zip = new java.util.zip.ZipFile(archive.toFile(), java.nio.charset.StandardCharsets.UTF_8)) {
                 total = zip.size();
+                long declaredTotal = 0;
+                var sizes = zip.entries();
+                while (sizes.hasMoreElements()) {
+                    var entry = sizes.nextElement();
+                    if (entry.getSize() > 0) {
+                        declaredTotal += entry.getSize();
+                    }
+                }
+                if (declaredTotal <= 0) {
+                    // A zip written without sizes in the directory: estimate from the archive.
+                    declaredTotal = extractedLimit(archiveBytes);
+                }
+                if (declaredTotal > MAX_EXTRACTED_BYTES) {
+                    throw new McException("the world unpacks to more than the panel accepts ("
+                            + (MAX_EXTRACTED_BYTES / (1024 * 1024 * 1024)) + " GiB)");
+                }
+                // Peak: the uploaded archive, the unpack beside the old world, the old world
+                // itself, and the safety zip of it taken before the swap. The backup is a zip
+                // of region files, so assume it is as large as the world it copies.
+                long oldWorld = sizeOf(manager.worldDirectory(instance));
+                requireFreeSpace(instanceDir, archiveBytes + declaredTotal
+                        + 2 * oldWorld + 1024L * 1024 * 1024);
+                // The declared size is the number to trust; the floor stops a directory that
+                // under-reports from writing past a couple of gigabytes before we notice.
+                long totalBytes = declaredTotal;
+                maxExtracted = Math.min(maxExtracted,
+                        Math.max(declaredTotal, 2L * 1024 * 1024 * 1024));
                 var iteration = zip.entries();
                 while (iteration.hasMoreElements()) {
                     var entry = iteration.nextElement();
@@ -218,8 +292,10 @@ public final class McWorlds {
                         extracted = copyEntry(entryIn, out, extracted, maxExtracted);
                     }
                     entries++;
-                    if (progress != null && (entries % 64 == 0 || entries == total)) {
-                        progress.unpacked(entries, total, extracted);
+                    if (progress != null && (entries % 64 == 0 || entries == total
+                            || extracted - reportedAt >= 64L * 1024 * 1024)) {
+                        reportedAt = extracted;
+                        progress.unpacked(entries, total, extracted, totalBytes);
                     }
                 }
             }
@@ -256,17 +332,16 @@ public final class McWorlds {
 
     /// Refuses an unpack the disk cannot hold.
     ///
-    /// The peak is the archive, the unpacked tree, and (when a world is replaced) a safety zip
-    /// of the old one. Three times the archive plus a gigabyte is a floor, not a promise — the
-    /// point is to say no before a nearly-full disk turns a 5 GB import into a partial tree.
+    /// The caller names what the operation needs: the archive, the unpacked tree, the old world
+    /// (which stays until the swap), the safety zip, and a gigabyte of slack. Saying no here is
+    /// what keeps a 50 GB import from turning into a partial tree on a nearly-full disk.
     ///
-    /// @param instanceDir  where the unpack goes
-    /// @param archiveBytes the archive's size
+    /// @param instanceDir where the unpack goes
+    /// @param needed      bytes the operation needs, including slack
     /// @throws McException when there is clearly not enough room
-    public static void requireFreeSpace(Path instanceDir, long archiveBytes) throws McException {
+    public static void requireFreeSpace(Path instanceDir, long needed) throws McException {
         try {
             long usable = Files.getFileStore(instanceDir).getUsableSpace();
-            long needed = archiveBytes * 3 + 1024L * 1024 * 1024;
             if (usable < needed) {
                 throw new McException("not enough free space for this import: about "
                         + (needed / (1024 * 1024)) + " MB needed, " + (usable / (1024 * 1024))

@@ -1454,8 +1454,10 @@ public final class McApiServlet extends HttpServlet {
         }
         java.nio.file.Path archive = McWorlds.archiveFile(manager, instance);
         if (declared > 0) {
-            // Say no before 5 GB crosses the network, not after it lands on a full disk.
-            McWorlds.requireFreeSpace(manager.instanceDirectory(id), declared);
+            // Say no before tens of gigabytes cross the network, not after they land on a full
+            // disk. The unpacked size is unknown here; this is the archive plus slack.
+            McWorlds.requireFreeSpace(manager.instanceDirectory(id),
+                    declared + 1024L * 1024 * 1024);
         }
         try {
             try (java.io.InputStream in = request.getInputStream()) {
@@ -1464,10 +1466,12 @@ public final class McApiServlet extends HttpServlet {
             TaskService.Task task = tasks.submit("mc-world-import", id, live -> {
                 live.update("Unpacking the world", 0.02);
                 String safety = McWorlds.importArchive(instance, manager, backups, archive,
-                        (files, total, bytes) -> live.update(
+                        (files, total, bytes, totalBytes) -> live.update(
                                 "Unpacking " + files + "/" + total + " files ("
-                                        + (bytes / (1024 * 1024)) + " MB)",
-                                total > 0 ? 0.05 + 0.9 * files / total : -1));
+                                        + (bytes / (1024 * 1024)) + " MB"
+                                        + (totalBytes > 0 ? " / " + (totalBytes / (1024 * 1024)) : "")
+                                        + ")",
+                                totalBytes > 0 ? 0.05 + 0.9 * bytes / totalBytes : -1));
                 JsonObject result = new JsonObject();
                 result.addProperty("safety", safety == null ? "" : safety);
                 live.attachResult(result);

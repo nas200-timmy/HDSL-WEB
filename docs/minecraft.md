@@ -478,7 +478,8 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
    向导第一步可以顺手选上旧存档 zip；也可以之后在实例页导入。
 2. 停服（旧服也要停；`session.lock` 还在说明没停干净）。
 3. 向导里选了 zip，就会被导入；没选就实例页 →「世界」→ 导入世界 zip。zip 里可以是
-   `<level-name>/…`，也可以平铺（世界内容直接在根上）；上限 2 GB，超过就分卷或先清理。
+   `<level-name>/…`，也可以平铺（世界内容直接在根上）；上传上限 128 GiB，但开始解压前会
+   按世界大小检查空闲空间，磁盘不够会先拒绝，不会留下半个世界。
    **顶层目录名和实例的世界目录名不一致会被拒绝**（以前会静默变成 `world/oldworld/…`，
    服务器找不到 `world/level.dat`，就当成新世界——等于存档没搬进来）。遇到这种 zip，
    把向导里的「世界目录名」改成那个名字，或者重新打包。
@@ -487,7 +488,7 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
 5. 启动。第一次启动会按新版本升级世界——**导入时已经自动备份**，不满意可以回滚那份备份。
 
 实现落点：`POST /api/mc/instances/{id}/world/import`（`McApiServlet.java` 的 `case "world"`），
-`McWorlds.importZip` 负责 zip-slip 校验、2 GB 上限、导入前备份与整体替换；前端在
+`McWorlds.importZip` 负责 zip-slip 校验、大小与空闲空间检查、导入前备份与整体替换；前端在
 `McPanels.tsx` 的 `McWorldPanel`（导出 / 导入按钮）与 `McCreateWizard`（创建时选 zip）。
 名单导入：`POST /api/mc/instances/{id}/player-lists`，`McPlayerLists.importZip`，前端在
 `McPlayersPanel`。
@@ -655,10 +656,13 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
 - 覆盖：同名世界给"覆盖 / 另存为 / 取消"，覆盖前强制备份
 - 备份：**运行中直接拒绝**（409），停机后整包；不做"边跑边 zip"，那种包看起来能
   恢复、实际可能少半个 region
-- 大世界（1–5 GB）的实际链路：浏览器用 XHR 上传并显示字节进度 → 面板把正文落到
-  `<实例>/.world-import.zip`（上限 **16 GiB**）→ 立刻返回任务 id，**解压与备份在后台任务里**
-  （`mc-world-import`，进度文案是"Unpacking n/N files"），所以反向代理的 60 秒读超时不会把
-  一个已经传完的导入变成 504。解压上限 32 GiB，且开始前要求"归档 × 3 + 1 GiB"的空闲空间；
+- 大世界（几 GB 到几十 GB）的实际链路：浏览器用 XHR 上传并显示字节进度 → 面板把正文落到
+  `<实例>/.world-import.zip`（上限 **128 GiB**）→ 立刻返回任务 id，**解压与备份在后台任务里**
+  （`mc-world-import`，进度文案是"Unpacking n/N files (x MB / y MB)"，按字节而非文件数推进），
+  所以反向代理的 60 秒读超时不会把一个已经传完的导入变成 504。解压上限以 zip 目录里
+  **声明的解压总大小**为准（最高 512 GiB；目录没写大小时按归档 × 4、最低 2 GiB 估算）；
+  解压前按"归档 + 解压后大小 + 旧世界 + 旧世界的备份 + 1 GiB"检查空闲空间（不可压缩的
+  世界：首次导入约 2 倍，覆盖已有世界约 4 倍——50 GB 的世界分别约需 100 GB / 200 GB 空闲）。
   导出仍然是流式响应，浏览器直接下载，不经过页面内存。
   **反代要一起调**：nginx 默认 `client_max_body_size 1m`，不调会把上传挡在面板之外（413）；
   再加 `proxy_request_buffering off`（否则 nginx 先把 5 GB 缓冲到它自己的盘）与足够的
