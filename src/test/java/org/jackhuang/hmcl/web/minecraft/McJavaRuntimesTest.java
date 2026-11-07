@@ -194,6 +194,71 @@ class McJavaRuntimesTest {
     }
 
     @Test
+    void followsTheRedirectAdoptiumAnswersWith(@TempDir Path dir) throws Exception {
+        byte[] pkg = zipJre("#!/bin/sh\nexit 0\n");
+        String checksum = sha256(pkg);
+        HttpServer host = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        String base = "http://127.0.0.1:" + host.getAddress().getPort();
+        host.createContext("/v3/info/available_releases", exchange -> respond(exchange,
+                "{\"available_releases\":[21]}".getBytes(StandardCharsets.UTF_8)));
+        host.createContext("/v3/assets/latest/21/hotspot", exchange -> respond(exchange,
+                ("""
+                        [{"version":{"semver":"21.0.5+11","major":21},
+                          "binary":{"package":{"link":"%s/redirect.zip","checksum":"%s","size":%d}}}]
+                        """.formatted(base, checksum, pkg.length))
+                        .getBytes(StandardCharsets.UTF_8)));
+        // Adoptium's real link is a 302 to another host; a client that does not
+        // follow it fails the install with "answered HTTP 302".
+        host.createContext("/redirect.zip", exchange -> {
+            exchange.getResponseHeaders().add("Location", base + "/jdk.zip");
+            exchange.sendResponseHeaders(302, -1);
+            exchange.close();
+        });
+        host.createContext("/jdk.zip", exchange -> respond(exchange, pkg));
+        host.start();
+        try {
+            McJavaRuntimes runtimes = new McJavaRuntimes(dir.resolve("java"), URI.create(base));
+            McJavaRuntimes.Installed installed = runtimes.install(21, null);
+            assertTrue(Files.isRegularFile(installed.path()));
+        } finally {
+            host.stop(0);
+        }
+    }
+
+    @Test
+    void theUnpackedJavaIsExecutableAndMeasured(@TempDir Path dir) throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                java.io.File.separatorChar == '/', "POSIX permissions only");
+        byte[] pkg = tarGzJre("#!/bin/sh\nexit 0\n");
+        String checksum = sha256(pkg);
+        HttpServer host = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        String base = "http://127.0.0.1:" + host.getAddress().getPort();
+        host.createContext("/v3/info/available_releases", exchange -> respond(exchange,
+                "{\"available_releases\":[21]}".getBytes(StandardCharsets.UTF_8)));
+        host.createContext("/v3/assets/latest/21/hotspot", exchange -> respond(exchange,
+                ("""
+                        [{"version":{"semver":"21.0.5+11","major":21},
+                          "binary":{"package":{"link":"%s/jdk.tar.gz","checksum":"%s","size":%d}}}]
+                        """.formatted(base, checksum, pkg.length)).getBytes(StandardCharsets.UTF_8)));
+        host.createContext("/jdk.tar.gz", exchange -> respond(exchange, pkg));
+        host.start();
+        try {
+            McJavaRuntimes runtimes = new McJavaRuntimes(dir.resolve("java"), URI.create(base));
+            McJavaRuntimes.Installed installed = runtimes.install(21, null);
+            // The archive is unpacked with the panel's umask, so `bin/java` comes
+            // out 0644 unless the panel sets the mode: not executable by anyone,
+            // including root. This is the regression that test exists for.
+            assertTrue(Files.isExecutable(installed.path()), installed.path().toString());
+            assertTrue(installed.bytes() > 0);
+            McJavaRuntimes.Installed listed = runtimes.listInstalled().get(0);
+            assertEquals("21.0.5+11", listed.version());
+            assertEquals(installed.bytes(), listed.bytes());
+        } finally {
+            host.stop(0);
+        }
+    }
+
+    @Test
     void refusesAPackageThatDoesNotMatchItsChecksum(@TempDir Path dir) throws Exception {
         byte[] pkg = zipJre("payload");
         HttpServer adoptium = fakeAdoptium(pkg, "00".repeat(32), "jre.zip");

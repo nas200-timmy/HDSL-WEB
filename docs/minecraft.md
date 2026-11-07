@@ -6,7 +6,7 @@
 >
 > 2026-11 增量（§19）：**第三方核心**（Paper/Folia/Purpur/Fabric）走**第二道关**——
 > 只有主功能开启后才能开启，独立条款与同意记录，关闭主功能前必须先关它；
-> 同时新增**面板自托管 JRE**（Adoptium）、**插件/模组管理**（Modrinth 安装、`.jar.disabled`
+> 同时新增**面板自托管 JDK**（Adoptium）、**插件/模组管理**（Modrinth 安装、`.jar.disabled`
 > 启停）与 **Forge/NeoForge 安装器**（跑上游 installer，解析 `unix_args.txt` 启动）。
 > mrpack 整合包仍在后续。
 >
@@ -1084,7 +1084,8 @@ MC 服务端与 AI agent 是同一类工作负载：执行第三方代码、不�
   Windows 上不做 `SO_REUSEADDR` 探测，否则旁边有监听也会被误判为空闲。
 - **Java**：默认复用面板自己的 JVM（裸部署能启动面板就至少有一个 Java）；`java -version`
   的结果与来源通过 `GET /api/mc/feature` 的 `java` 字段暴露。版本不够时启动前报“需要 Java N
-  或更新，当前是 M”，并提示 `mc.java_path` / `JAVA_HOME`。面板**不代管 JRE**，也不随包分发。
+  或更新，当前是 M”，并提示 `mc.java_path` / `JAVA_HOME`。系统 Java 面板不碰；
+  需要时可以从 Adoptium 装一份**托管 JDK**（见 §19.3），它和系统 JDK 是两个选项。
 - **按版本挑 JVM**（v0.6.71 起）：所选版本要求的主版本号高于面板自身 JVM 时，面板会扫本机
   已装的 JDK 并选**满足要求的最低那个**（Linux：`/usr/lib/jvm`、`/usr/lib64/jvm`；
   macOS：`/Library/Java/JavaVirtualMachines`；Windows 不扫，用 `mc.java_path` 指定）。
@@ -1371,20 +1372,31 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
   向导会说明原因——不能因为一个 API 挂住就让界面看起来「只有原版」，也不能让一次上游
   超时把整页拖到代理的读超时。
 
-### 19.3 面板自托管 Java（Adoptium）
+### 19.3 面板自托管 Java（Adoptium JDK）
 
-- `McJavaRuntimes`（`web/minecraft/McJavaRuntimes.java`）把 JRE 装到
-  `<data>/minecraft/java/<feature>/`，**不装进系统目录**：免 root、随面板清理、Win/Linux 一致；
-  实例也可以只为自己钉一个 Java（高级设置），此时 `mc.java_path` 让位；系统 Java 永远是显式选项。
-- 数据源 Adoptium API v3（`HDSL_JAVA_API` 可换镜像）；下载后校验上游 SHA-256 才解包，
-  zip 与 tar.gz 都支持，先解到临时目录再原子落位。
+- `McJavaRuntimes`（`web/minecraft/McJavaRuntimes.java`）把 **JDK** 装到
+  `<data>/minecraft/java/<feature>/`，**不装进系统目录**：免 root、随数据卷持久、Win/Linux 一致。
+  选 JDK 而不是 JRE，是因为多出来的 `javac` 与工具不占多少空间（解包后约 300 MB/版本），
+  却省掉"某个插件工具链非要 JDK"时的二次往返。
+- 数据源 Adoptium API v3（`image_type=jdk`，`HDSL_JAVA_API` 可换镜像）；下载后校验上游
+  SHA-256 才解包，zip 与 tar.gz 都支持，先解到临时目录再原子落位。
+- **权限是显式设的，不是从归档里抄的**：解包用的是面板的 umask，`bin/java` 会落成 `0644`
+  ——谁都执行不了，root 也不行（`execve` 至少要一个执行位）。安装完成后统一规范：
+  目录 `0755`、`bin/*` 与 `lib/jspawnhelper` `0755`、其余 `0644`。属主**保持面板自己**，
+  不交给 agent：和 Node runtime 同一条理由，agent 只该读和执行，不该能改 `java`。
+  `<data>/minecraft/java` 本身也显式 `0755`，否则 umask 077 的镜像里 agent 连目录都进不去。
 - 启动选 Java 的顺序：实例「高级设置」里指定的 `javaPath` > `mc.java_path` > 面板托管里满足
   要求的最低版本 > 宿主机已装 JDK > 面板自身 JVM。指定的路径必须来自 `GET .../java` 的
   `options`，停服才能改；选中的 JDK 被删掉时启动会明确报错，而不是悄悄换一个。
   版本要求先读 `version.json` 的 `javaMajor`，缺失时用内置推荐表（1.20.5+→21、1.18–1.20.4→17、
   1.17→16、≤1.16.5→8、26.x→25）。
-- API：`GET /api/mc/java/runtimes`（含推荐版本与 Adoptium 可下载项）、
-  `POST /api/mc/java/install`（任务）、`POST /api/mc/java/{feature}/remove`。
+- API：`GET /api/mc/java/runtimes`（托管列表 + 推荐版本 + Adoptium 可下载项 +
+  **只读的面板 JVM / PATH java** + 把实例钉在托管版本上的 consumers）、
+  `POST /api/mc/java/install`（任务）、`POST /api/mc/java/{feature}/remove`
+  （有实例钉在该版本时 409，先去实例高级设置改掉）。
+- UI：设置页「Node.js」一节下面多一张「Java 运行时（Minecraft）」卡片，只在 MC 功能开启后
+  出现（`/api/mc/*` 的门禁）。面板自身 JVM、PATH 上的 `java`、MC 当前生效的 Java 三行
+  **只读展示**，卡片上没有任何控件能换掉它们。
 
 ### 19.4 插件 / 模组
 

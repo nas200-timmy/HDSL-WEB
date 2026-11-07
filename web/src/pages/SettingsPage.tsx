@@ -34,6 +34,7 @@ import {
   PublicIcon,
 } from "../components/icons";
 import { SubSideBar } from "../components/SideBar";
+import { McJavaRuntimeCard } from "../components/McJavaRuntimeCard";
 import { I18N } from "../i18n";
 import { logout, setState, toast, useAppState } from "../store";
 import { bindSystemThemeListener, DEFAULT_SEED, resetSeed, setSeed, setThemeMode, useThemeMode, useThemeSeed, type ThemeMode } from "../theme";
@@ -965,6 +966,8 @@ function NodeTab() {
           </button>
         </div>
       </div>
+
+      <McJavaRuntimeCard />
     </>
   );
 }

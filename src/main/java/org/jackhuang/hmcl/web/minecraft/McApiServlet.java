@@ -898,6 +898,12 @@ public final class McApiServlet extends HttpServlet {
             JsonObject item = new JsonObject();
             item.addProperty("feature", runtime.feature());
             item.addProperty("path", runtime.path().toString());
+            if (runtime.version() == null) {
+                item.add("version", com.google.gson.JsonNull.INSTANCE);
+            } else {
+                item.addProperty("version", runtime.version());
+            }
+            item.addProperty("bytes", runtime.bytes());
             installed.add(item);
         }
         body.add("installed", installed);
@@ -905,6 +911,60 @@ public final class McApiServlet extends HttpServlet {
         String version = request.getParameter("version");
         body.addProperty("recommended", version == null || version.isBlank()
                 ? 0 : McJavaRuntimes.recommendFor(version));
+        // Two Javas the panel never touches: its own JVM and whatever `java`
+        // resolves to on PATH. They are here so an operator can compare, not so
+        // the page can point anything at them.
+        JsonObject panel = new JsonObject();
+        panel.addProperty("version", System.getProperty("java.version"));
+        panel.addProperty("vendor", System.getProperty("java.vm.name"));
+        panel.addProperty("home", System.getProperty("java.home"));
+        body.add("panel", panel);
+        McRuntime.JavaInfo pathJava = McRuntime.pathJavaInfo();
+        JsonObject system = new JsonObject();
+        system.addProperty("path", pathJava.path());
+        if (pathJava.version() == null) {
+            system.add("version", com.google.gson.JsonNull.INSTANCE);
+        } else {
+            system.addProperty("version", pathJava.version());
+        }
+        system.addProperty("major", pathJava.major());
+        system.addProperty("ok", pathJava.ok());
+        if (pathJava.error() != null) {
+            system.addProperty("error", pathJava.error());
+        }
+        body.add("system", system);
+        // Which instances pin a managed runtime, so the page can refuse to delete
+        // the one a server is started with.
+        JsonArray consumers = new JsonArray();
+        java.nio.file.Path managedRoot = javaRuntimes.root().toAbsolutePath().normalize();
+        for (McInstance instance : manager.list()) {
+            String pinned = instance.javaPath();
+            if (pinned == null) {
+                continue;
+            }
+            java.nio.file.Path pinnedPath;
+            try {
+                pinnedPath = java.nio.file.Path.of(pinned).toAbsolutePath().normalize();
+            } catch (RuntimeException e) {
+                continue;
+            }
+            if (!pinnedPath.startsWith(managedRoot) || pinnedPath.equals(managedRoot)) {
+                continue;
+            }
+            int featureRelease;
+            try {
+                featureRelease = Integer.parseInt(managedRoot.relativize(pinnedPath).getName(0).toString());
+            } catch (RuntimeException e) {
+                continue;
+            }
+            JsonObject item = new JsonObject();
+            item.addProperty("feature", featureRelease);
+            item.addProperty("id", instance.id());
+            item.addProperty("path", pinned);
+            item.addProperty("running", runtime.isRunning(instance.id()));
+            consumers.add(item);
+        }
+        body.add("consumers", consumers);
         JsonArray available = new JsonArray();
         try {
             for (McJavaRuntimes.Release release : javaRuntimes.available()) {
@@ -967,6 +1027,27 @@ public final class McApiServlet extends HttpServlet {
         } catch (NumberFormatException e) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "feature is required in the path");
             return;
+        }
+        // A runtime an instance was pinned to is that instance's launcher; deleting
+        // it turns "start" into a mystery failure. The pin lives in the instance's
+        // advanced settings, so the fix is there, not here.
+        java.nio.file.Path managed = javaRuntimes.root().toAbsolutePath().normalize()
+                .resolve(Integer.toString(feature));
+        for (McInstance instance : manager.list()) {
+            String pinned = instance.javaPath();
+            if (pinned == null) {
+                continue;
+            }
+            try {
+                if (java.nio.file.Path.of(pinned).toAbsolutePath().normalize().startsWith(managed)) {
+                    Json.error(response, HttpServletResponse.SC_CONFLICT,
+                            "instance " + instance.id() + " is pinned to this Java; change its"
+                                    + " advanced settings first");
+                    return;
+                }
+            } catch (RuntimeException e) {
+                // An unparsable path cannot be this runtime; keep looking.
+            }
         }
         boolean removed = javaRuntimes.remove(feature);
         audit("mc.java.remove", Integer.toString(feature), removed ? "success" : "absent", request);

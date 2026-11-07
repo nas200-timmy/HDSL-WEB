@@ -1099,12 +1099,18 @@ export interface McModHit {
 
 /** GET /api/mc/java/runtimes：面板托管的 JRE 与 Adoptium 可下载项。 */
 export interface McJavaRuntimesSnapshot {
-  installed: { feature: number; path: string }[];
+  installed: { feature: number; path: string; version?: string | null; bytes?: number }[];
   available: { feature: number; version: string; size: number }[];
   recommended: number;
   source: "api" | "unavailable";
   error?: string;
   root: string;
+  /** 面板自身 JVM；只读展示，面板不会安装或改动它。 */
+  panel: { version: string; vendor: string; home: string };
+  /** PATH 上的 java；只读展示。 */
+  system: { path: string; version: string | null; major: number; ok: boolean; error?: string };
+  /** 把实例钉在某个托管版本上的记录，删除时用来拒绝。 */
+  consumers?: { feature: number; id: string; path: string; running: boolean }[];
 }
 
 export interface McInstance {

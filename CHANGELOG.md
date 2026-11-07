@@ -4,6 +4,23 @@
 
 ## 未发布
 
+**Java 托管：换成 JDK，并且把"装好却执行不了"的可执行位修掉**
+
+- **解包丢执行位**：`Files.newOutputStream` 创建的文件按 umask 落成 `0644`，`bin/java`
+  因此谁都执行不了——包括 root（`execve` 至少要一个执行位）。安装完成后统一规范化：
+  目录 `0755`、`bin/*` 与 `lib/jspawnhelper` `0755`、其余 `0644`；`<data>/minecraft/java`
+  也显式 `0755`，否则 umask 077 的镜像里 agent 连目录都进不去。属主仍归面板，不交给 agent：
+  agent 只读、可执行，不能改 `java`。加了一条 POSIX 回归用例。
+- **JRE → JDK**：`image_type=jdk`。空间换省事：多出来的 `javac` 与工具解包后约 300 MB/版本，
+  但省掉"某个插件工具链非要 JDK"的二次往返。
+- **设置页加卡片**：设置 → Node.js 下面新增「Java 运行时（Minecraft）」，只在 MC 功能开启后
+  出现。托管列表（主版本 / 完整版本 / 占用 / 路径 / 删除）、Adoptium 可下载项、一键安装（任务）。
+- **只读展示**：面板自身 JVM、PATH 上的 `java`、MC 当前生效的 Java 三行只显示不给按钮——
+  这三样面板一律不碰。
+- **删除保护**：有实例把 `javaPath` 钉在该托管版本上时 `POST /api/mc/java/{feature}/remove`
+  回 409，先去实例高级设置改掉。
+- `GET /api/mc/java/runtimes` 增加 `panel` / `system` / `consumers` 与托管项的 `version`/`bytes`。
+
 **MC 第三方核心下载源：官方直连已不可用，改成多源 + 配额守卫 + 手动导入**
 
 - **PaperMC v2 已官方下线**（HTTP 410 `{"error":"sunset"}`）。面板写死 v2，就算网络通也拿不到

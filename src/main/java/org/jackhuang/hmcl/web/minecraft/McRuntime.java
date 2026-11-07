@@ -373,6 +373,19 @@ public final class McRuntime {
                 probe.error() == null, probe.error());
     }
 
+    /// The `java` on `PATH`, whatever Minecraft is configured to use.
+    ///
+    /// Display only: the settings page shows it beside the panel's own JVM so an
+    /// operator can see what the host carries, and neither is ever installed,
+    /// removed or pointed at by this panel.
+    ///
+    /// @return the PATH java, or a probe that says why there is none
+    public static JavaInfo pathJavaInfo() {
+        JavaProbe probe = probe("java");
+        return new JavaInfo("java", probe.version(), probe.major(), "installed",
+                probe.error() == null, probe.error());
+    }
+
     /// The Java an instance will actually use, probed, with where it came from.
     ///
     /// @param instance the instance

@@ -62,7 +62,7 @@ import java.util.zip.ZipFile;
 /// want 21 or 25 while the host may carry nothing, or only an old JDK. Pointing
 /// `mc.java_path` at a hand-installed JDK is fine for an operator who has one,
 /// but not an answer a container user can follow. So the panel can fetch an
-/// Adoptium JRE into `<data>/minecraft/java/<feature>/` — versioned, isolated,
+/// Adoptium JDK into `<data>/minecraft/java/<feature>/` — versioned, isolated,
 /// auditable and removed with one call, exactly like the Node runtimes it
 /// already owns (`NodeRuntimeManager`). `mc.java_path` still wins outright:
 /// naming a JDK is a decision, and the panel does not overrule it.
@@ -84,7 +84,7 @@ public final class McJavaRuntimes {
     public static final URI DEFAULT_API = URI.create("https://api.adoptium.net");
     /// How long the release metadata is reused before it is fetched again.
     private static final Duration METADATA_TTL = Duration.ofMinutes(10);
-    /// A JRE package is ~190 MB; anything past this is not one.
+    /// A JDK package is ~200 MB unpacked to ~300 MB; anything past this is not one.
     private static final long MAX_PACKAGE_BYTES = 512L * 1024 * 1024;
 
     private static final Logger LOG = Logger.LOG;
@@ -94,10 +94,17 @@ public final class McJavaRuntimes {
     /// @param feature the Java feature release (`21`), which is also the
     ///                directory name
     /// @param path    the `java` executable
-    public record Installed(int feature, Path path) {
+    /// @param version the full version Adoptium reported (`21.0.5+11`), or
+    ///                `null` for a directory written before this was recorded
+    /// @param bytes   the unpacked size on disk, or `0` when unknown
+    public record Installed(int feature, Path path, @Nullable String version, long bytes) {
+
+        public Installed(int feature, Path path) {
+            this(feature, path, null, 0);
+        }
     }
 
-    /// One downloadable JRE package.
+    /// One downloadable JDK package.
     ///
     /// @param feature the Java feature release
     /// @param version the full version string Adoptium reports (`21.0.5+11`)
@@ -129,7 +136,14 @@ public final class McJavaRuntimes {
     public McJavaRuntimes(Path root, URI api) {
         this.root = root.toAbsolutePath().normalize();
         this.api = api;
-        this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
+        // Adoptium answers with a 302 to `objects.githubusercontent.com` for
+        // every package, so a client that does not follow redirects turns
+        // "install a JDK" into "HTTP 302" on the first try. `NORMAL` follows
+        // http→https and https→https, and refuses https→http.
+        this.client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(15))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
     }
 
     private static URI apiFromEnvironment() {
@@ -167,7 +181,12 @@ public final class McJavaRuntimes {
                 }
                 String name = directory.getFileName().toString();
                 try {
-                    found.add(new Installed(Integer.parseInt(name), java));
+                    int feature = Integer.parseInt(name);
+                    JsonObject record = readRecord(directory);
+                    String version = record == null ? null : string(record, "version");
+                    long bytes = record == null ? 0 : record.has("bytes")
+                            ? record.get("bytes").getAsLong() : 0;
+                    found.add(new Installed(feature, java, version, bytes));
                 } catch (NumberFormatException e) {
                     LOG.debug("Ignoring `" + name + "` in " + root + ": not a Java feature release");
                 }
@@ -179,8 +198,25 @@ public final class McJavaRuntimes {
         return found;
     }
 
-    /// The executable of the installed runtime for one feature release.
-    ///
+    private static @Nullable JsonObject readRecord(Path directory) {
+        Path file = directory.resolve("runtime.json");
+        if (!Files.isRegularFile(file)) {
+            return null;
+        }
+        try {
+            return JsonUtils.fromJsonFile(file, JsonObject.class);
+        } catch (Exception e) {
+            LOG.warning("Ignoring the unreadable runtime record " + file, e);
+            return null;
+        }
+    }
+
+    private static @Nullable String string(JsonObject object, String name) {
+        return object.has(name) && object.get(name).isJsonPrimitive()
+                ? object.get(name).getAsString() : null;
+    }
+
+    /// The executable of the installed runtime for one feature release.    ///
     /// @param feature the feature release
     /// @return the `java` executable, or `null` when it is not installed
     public @Nullable Path findInstalled(int feature) {
@@ -212,7 +248,7 @@ public final class McJavaRuntimes {
                 return release;
             }
         }
-        throw new McException("Adoptium publishes no JRE " + feature + " for "
+        throw new McException("Adoptium publishes no JDK " + feature + " for "
                 + platformLabel());
     }
 
@@ -230,7 +266,7 @@ public final class McJavaRuntimes {
         return releases;
     }
 
-    /// Downloads and unpacks one JRE into `<root>/<feature>/`.
+    /// Downloads and unpacks one JDK into `<root>/<feature>/`.
     ///
     /// The archive is unpacked into a temporary directory beside the target and
     /// only then moved into place, so a failed download never leaves a
@@ -247,36 +283,51 @@ public final class McJavaRuntimes {
         Path packageFile = null;
         try {
             Files.createDirectories(root);
-            packageFile = Files.createTempFile(root, "jre-" + feature, ".part");
+            // The server runs as a different uid and has to reach `bin/java`
+            // through this directory. `createDirectories` honours the umask, so
+            // an image built with 077 would leave it 0700 and the JDK installed
+            // but unreachable — the mode is set on purpose, ownership is not
+            // touched (the tree stays the panel's, like the Node runtimes).
+            setMode(root, "rwxr-xr-x");
+            packageFile = Files.createTempFile(root, "jdk-" + feature, ".part");
             download(release, packageFile, progress);
             String actual = sha256Of(packageFile);
             if (!actual.equalsIgnoreCase(release.sha256())) {
-                throw new McException("the JRE " + feature + " download failed its SHA-256 check (expected "
+                throw new McException("the JDK " + feature + " download failed its SHA-256 check (expected "
                         + release.sha256() + ", got " + actual + ")");
             }
-            staging = Files.createTempDirectory(root, "jre-" + feature + ".tmp");
+            staging = Files.createTempDirectory(root, "jdk-" + feature + ".tmp");
             unpack(packageFile, staging, release.url());
             Path executable = javaBinOf(staging);
             if (executable == null) {
-                throw new McException("the JRE " + feature + " archive has no bin/java"
+                throw new McException("the JDK " + feature + " archive has no bin/java"
                         + " (it unpacked, but not into the expected shape)");
             }
             deleteRecursively(target);
             Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING);
             staging = null;
+            // An archive's entries are written with the panel's umask, not the
+            // mode the distribution shipped: `bin/java` came out 0644 and could
+            // not be executed by anyone — root included, because `execve` wants
+            // at least one execute bit. This tree belongs to the panel and the
+            // server runs as a different uid, so the modes are set explicitly
+            // here instead of trusted from the archive headers.
+            normalizeModes(target);
+            long bytes = sizeOf(target);
             JsonObject record = new JsonObject();
             record.addProperty("feature", feature);
             record.addProperty("version", release.version());
             record.addProperty("url", release.url());
             record.addProperty("sha256", release.sha256());
+            record.addProperty("bytes", bytes);
             record.addProperty("installedAt", Instant.now().toString());
             JsonUtils.writeToJsonFile(target.resolve("runtime.json"), record);
             LOG.info("Installed Java " + release.version() + " into " + target);
             Path installed = javaBinOf(target);
             if (installed == null) {
-                throw new McException("the JRE " + feature + " did not unpack into " + target);
+                throw new McException("the JDK " + feature + " did not unpack into " + target);
             }
-            return new Installed(feature, installed);
+            return new Installed(feature, installed, release.version(), bytes);
         } catch (IOException e) {
             throw new McException("Failed to install Java " + feature + ": " + e.getMessage(), e);
         } finally {
@@ -385,14 +436,14 @@ public final class McJavaRuntimes {
                 continue;
             }
             URI uri = URI.create(base + "/v3/assets/latest/" + feature + "/hotspot?os=" + os
-                    + "&architecture=" + arch + "&image_type=jre");
+                    + "&architecture=" + arch + "&image_type=jdk");
             JsonElement root;
             try {
                 root = fetchJson(uri);
             } catch (McException e) {
                 // One missing feature release is not a broken API: skip it and
                 // let the others answer (Adoptium has gaps for old releases).
-                LOG.debug("No JRE " + feature + " for " + os + "/" + arch + ": " + e.getMessage());
+                LOG.debug("No JDK " + feature + " for " + os + "/" + arch + ": " + e.getMessage());
                 continue;
             }
             JsonObject asset = firstAsset(root);
@@ -457,7 +508,7 @@ public final class McJavaRuntimes {
                     .build();
             HttpResponse<InputStream> answer = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
             if (answer.statusCode() != 200) {
-                throw new McException("the JRE download answered HTTP " + answer.statusCode());
+                throw new McException("the JDK download answered HTTP " + answer.statusCode());
             }
             long lastReport = 0;
             long copied = 0;
@@ -467,7 +518,7 @@ public final class McJavaRuntimes {
                 while ((read = in.read(buffer)) >= 0) {
                     copied += read;
                     if (copied > MAX_PACKAGE_BYTES) {
-                        throw new McException("the JRE download is larger than the panel accepts");
+                        throw new McException("the JDK download is larger than the panel accepts");
                     }
                     out.write(buffer, 0, read);
                     if (progress != null && copied - lastReport >= 1024 * 1024) {
@@ -480,18 +531,75 @@ public final class McJavaRuntimes {
                 progress.update(copied, release.size());
             }
             if (release.size() >= 0 && copied != release.size()) {
-                throw new McException("the JRE download is " + copied + " bytes, the API says "
+                throw new McException("the JDK download is " + copied + " bytes, the API says "
                         + release.size());
             }
         } catch (IOException e) {
-            throw new McException("Failed to download the JRE: " + e.getMessage(), e);
+            throw new McException("Failed to download the JDK: " + e.getMessage(), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new McException("the JRE download was interrupted", e);
+            throw new McException("the JDK download was interrupted", e);
         }
     }
 
-    /// Unpacks a JRE archive into `target`, dropping the single top-level
+    /// Makes an unpacked runtime runnable by the user the server runs as.
+    ///
+    /// Directories `0755`, launchers under `bin/` and `lib/jspawnhelper` `0755`,
+    /// everything else `0644`. Ownership is deliberately left alone: like the
+    /// Node runtimes, this tree belongs to the panel and must not be rewritable
+    /// by the process it starts. That also keeps it out of the agent hand-over
+    /// path — root-owned `0755` is the correct state, not an offender.
+    private static void normalizeModes(Path root) throws IOException {
+        try (var walk = Files.walk(root)) {
+            for (Path path : walk.toList()) {
+                if (Files.isSymbolicLink(path)) {
+                    continue;
+                }
+                boolean runnable = Files.isDirectory(path) || isLauncher(path);
+                setMode(path, runnable ? "rwxr-xr-x" : "rw-r--r--");
+            }
+        }
+    }
+
+    private static boolean isLauncher(Path path) {
+        Path parent = path.getParent();
+        if (parent != null && "bin".equals(parent.getFileName().toString())) {
+            return true;
+        }
+        return "jspawnhelper".equals(path.getFileName().toString());
+    }
+
+    private static void setMode(Path path, String mode) {
+        try {
+            Files.setPosixFilePermissions(path, java.nio.file.attribute.PosixFilePermissions.fromString(mode));
+        } catch (UnsupportedOperationException e) {
+            // Windows: there is no mode to set, and NTFS has no execute bit.
+        } catch (IOException e) {
+            LOG.warning("Could not set the mode of " + path + " to " + mode, e);
+        }
+    }
+
+    /// The unpacked size of a runtime, for the settings page.
+    private static long sizeOf(Path root) {
+        long[] total = {0};
+        try (var walk = Files.walk(root)) {
+            for (Path path : walk.toList()) {
+                if (!Files.isRegularFile(path)) {
+                    continue;
+                }
+                try {
+                    total[0] += Files.size(path);
+                } catch (IOException ignored) {
+                    // A file that vanished mid-walk costs its size, not the answer.
+                }
+            }
+        } catch (IOException e) {
+            LOG.warning("Could not measure " + root, e);
+        }
+        return total[0];
+    }
+
+    /// Unpacks a JDK archive into `target`, dropping the single top-level
     /// directory the distribution ships (`.zip` and `.tar.gz` both do).
     private static void unpack(Path archive, Path target, String url) throws McException {
         try {
@@ -501,7 +609,7 @@ public final class McJavaRuntimes {
                 unpackTarGz(archive, target);
             }
         } catch (IOException e) {
-            throw new McException("Failed to unpack the JRE: " + e.getMessage(), e);
+            throw new McException("Failed to unpack the JDK: " + e.getMessage(), e);
         }
     }
 
@@ -670,11 +778,6 @@ public final class McJavaRuntimes {
                 ? parent.getAsJsonObject(name) : null;
     }
 
-    private static @Nullable String string(JsonObject object, String name) {
-        return object.has(name) && object.get(name).isJsonPrimitive()
-                ? object.get(name).getAsString() : null;
-    }
-
     private static String sha256Of(Path file) throws McException {
         try (InputStream in = Files.newInputStream(file)) {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -691,7 +794,7 @@ public final class McJavaRuntimes {
         }
     }
 
-    /// Whether this platform can run a JRE the panel downloads.
+    /// Whether this platform can run a JDK the panel downloads.
     ///
     /// @return `true` when Adoptium publishes for it
     public static boolean supported() {
