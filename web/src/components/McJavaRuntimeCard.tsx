@@ -217,6 +217,10 @@ export function McJavaRuntimeCard() {
             </span>
           </div>
         )}
+        <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+          托管源只提供 <b>Eclipse Temurin</b>（GPLv2+CE，允许再分发）。Oracle JDK 的许可不允许
+          面板代下载，因此不在下载源内；需要时请自行安装后用实例的高级设置指向它。
+        </span>
       </div>
 
       {/* 只读区：这两个 Java 是面板/容器自己的，任何按钮都不该碰它们。 */}

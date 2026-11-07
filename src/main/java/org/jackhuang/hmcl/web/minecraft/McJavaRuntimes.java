@@ -82,6 +82,16 @@ public final class McJavaRuntimes {
 
     /// Adoptium's public API; `HDSL_JAVA_API` overrides it for mirrors.
     public static final URI DEFAULT_API = URI.create("https://api.adoptium.net");
+    /// Hosts whose JDK builds the panel refuses to download.
+    ///
+    /// Oracle JDK 17/21 is free to *use* under NFTC but not to redistribute, and
+    /// JDK 8/11 are paid for production. A panel that fetched one on an
+    /// operator's behalf would be redistributing it, so the resolved package URL
+    /// is checked before a byte is downloaded. The check is on the URL, not on
+    /// the name of the source: pointing `HDSL_JAVA_API` at a mirror that serves
+    /// Oracle builds does not get around it.
+    private static final List<String> NON_REDISTRIBUTABLE_HOSTS =
+            List.of("oracle.com", "oraclecloud.com", "java.com");
     /// How long the release metadata is reused before it is fetched again.
     private static final Duration METADATA_TTL = Duration.ofMinutes(10);
     /// A JDK package is ~200 MB unpacked to ~300 MB; anything past this is not one.
@@ -224,6 +234,24 @@ public final class McJavaRuntimes {
         return java == null ? null : java.toAbsolutePath();
     }
 
+    /// Whether a package may be fetched at all.
+    ///
+    /// @param uri the resolved package URL
+    /// @return `false` for Oracle's download hosts, `true` otherwise
+    static boolean isRedistributable(URI uri) {
+        String host = uri.getHost();
+        if (host == null) {
+            return true;
+        }
+        String lower = host.toLowerCase(Locale.ROOT);
+        for (String forbidden : NON_REDISTRIBUTABLE_HOSTS) {
+            if (lower.equals(forbidden) || lower.endsWith("." + forbidden)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /// The release to download for a feature release.
     ///
     /// @param feature the feature release
@@ -278,6 +306,20 @@ public final class McJavaRuntimes {
     /// @throws McException when the download, the hash check or the unpack fails
     public Installed install(int feature, @Nullable McVersions.Progress progress) throws McException {
         Release release = resolve(feature);
+        // Checked before a single byte is fetched: a panel that downloaded an
+        // Oracle JDK would be redistributing it, which its licence does not allow.
+        URI packageUri;
+        try {
+            packageUri = URI.create(release.url());
+        } catch (IllegalArgumentException e) {
+            throw new McException("the upstream package URL is not a URI: " + release.url(), e);
+        }
+        if (!isRedistributable(packageUri)) {
+            throw new McException("refusing to download " + packageUri.getHost()
+                    + ": Oracle JDK is licensed for the operator's own use, not for"
+                    + " redistribution by a panel. Install it yourself and point"
+                    + " mc.java_path at it, or use the bundled Eclipse Temurin source");
+        }
         Path target = root.resolve(Integer.toString(feature));
         Path staging = null;
         Path packageFile = null;

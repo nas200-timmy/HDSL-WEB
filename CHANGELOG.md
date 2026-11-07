@@ -19,6 +19,9 @@
   这三样面板一律不碰。
 - **删除保护**：有实例把 `javaPath` 钉在该托管版本上时 `POST /api/mc/java/{feature}/remove`
   回 409，先去实例高级设置改掉。
+- **不下载 Oracle JDK**：`install` 在下载前检查解析出的包 URL 主机（`oracle.com` 及其子域、
+  `oraclecloud.com`、`java.com`），命中即拒绝并说明原因。Oracle JDK 的许可允许免费使用、
+  不允许再分发，面板代下载即再分发。自己装的 Oracle JDK 仍可经 `mc.java_path` 使用。
 - `GET /api/mc/java/runtimes` 增加 `panel` / `system` / `consumers` 与托管项的 `version`/`bytes`。
 
 **MC 第三方核心下载源：官方直连已不可用，改成多源 + 配额守卫 + 手动导入**

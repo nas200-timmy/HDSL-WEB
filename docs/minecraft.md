@@ -1390,6 +1390,11 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
   `options`，停服才能改；选中的 JDK 被删掉时启动会明确报错，而不是悄悄换一个。
   版本要求先读 `version.json` 的 `javaMajor`，缺失时用内置推荐表（1.20.5+→21、1.18–1.20.4→17、
   1.17→16、≤1.16.5→8、26.x→25）。
+- **不下载 Oracle JDK**：Oracle JDK 17/21 可以在 NFTC 下免费「使用」，但不允许再分发；
+  JDK 8/11 生产环境还要付费。面板代下载就是再分发，所以 `install` 在**发出第一个字节之前**
+  检查解析出的包 URL 主机（`oracle.com` / `oraclecloud.com` / `java.com` 及其子域），命中即拒绝。
+  检查的是 URL 而不是源的名字：把 `HDSL_JAVA_API` 指到一个发 Oracle 包的镜像也绕不过去。
+  操作者自己装的 Oracle JDK 仍可通过 `mc.java_path` / 实例 `javaPath` 使用——那是他自己的许可责任。
 - API：`GET /api/mc/java/runtimes`（托管列表 + 推荐版本 + Adoptium 可下载项 +
   **只读的面板 JVM / PATH java** + 把实例钉在托管版本上的 consumers）、
   `POST /api/mc/java/install`（任务）、`POST /api/mc/java/{feature}/remove`

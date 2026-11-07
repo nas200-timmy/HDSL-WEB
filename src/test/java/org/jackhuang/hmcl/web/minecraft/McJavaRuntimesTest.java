@@ -194,6 +194,43 @@ class McJavaRuntimesTest {
     }
 
     @Test
+    void refusesOracleDownloadHosts() {
+        assertFalse(McJavaRuntimes.isRedistributable(URI.create(
+                "https://download.oracle.com/java/21/latest/jdk-21_linux-x64_bin.tar.gz")));
+        assertFalse(McJavaRuntimes.isRedistributable(URI.create(
+                "https://javadl.oracle.com/webapps/download/GetFile/x")));
+        assertFalse(McJavaRuntimes.isRedistributable(URI.create(
+                "https://java.com/download/jdk.zip")));
+        assertTrue(McJavaRuntimes.isRedistributable(URI.create(
+                "https://github.com/adoptium/temurin21-binaries/releases/download/x/jdk.tar.gz")));
+        assertTrue(McJavaRuntimes.isRedistributable(URI.create(
+                "https://mirrors.example.org/jdk.tar.gz")));
+    }
+
+    @Test
+    void refusesToInstallADownloadFromOracle(@TempDir Path dir) throws Exception {
+        HttpServer host = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        host.createContext("/v3/info/available_releases", exchange -> respond(exchange,
+                "{\"available_releases\":[21]}".getBytes(StandardCharsets.UTF_8)));
+        host.createContext("/v3/assets/latest/21/hotspot", exchange -> respond(exchange,
+                ("""
+                        [{"version":{"semver":"21.0.1+1","major":21},
+                          "binary":{"package":{"link":"https://download.oracle.com/java/21/jdk.tar.gz",
+                            "checksum":"%s","size":10}}}]
+                        """.formatted("00".repeat(32))).getBytes(StandardCharsets.UTF_8)));
+        host.start();
+        try {
+            McJavaRuntimes runtimes = new McJavaRuntimes(dir.resolve("java"),
+                    URI.create("http://127.0.0.1:" + host.getAddress().getPort()));
+            McException refused = assertThrows(McException.class, () -> runtimes.install(21, null));
+            assertTrue(refused.getMessage().contains("Oracle"), refused.getMessage());
+            assertFalse(Files.exists(dir.resolve("java").resolve("21")));
+        } finally {
+            host.stop(0);
+        }
+    }
+
+    @Test
     void followsTheRedirectAdoptiumAnswersWith(@TempDir Path dir) throws Exception {
         byte[] pkg = zipJre("#!/bin/sh\nexit 0\n");
         String checksum = sha256(pkg);
