@@ -796,6 +796,7 @@ export function McFilesPanel({ instance }: { instance: McInstance }) {
         {loader && <span className="tag plain">loader: {loader}</span>}
         <span className="dim" style={{ fontSize: 12 }}>
           停用 = 重命名为 `.jar.disabled`；加载器不读它，改回名字就恢复。
+          启停、上传、安装都在下次启动时生效，运行中的服务器不会被热改。
         </span>
         <label className="btn btn-text" style={{ cursor: busy ? "not-allowed" : "pointer", marginLeft: "auto" }}>
           上传 {noun}.jar
