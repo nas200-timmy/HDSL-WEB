@@ -28,8 +28,9 @@
   agent 只读、可执行，不能改 `java`。加了一条 POSIX 回归用例。
 - **JRE → JDK**：`image_type=jdk`。空间换省事：多出来的 `javac` 与工具解包后约 300 MB/版本，
   但省掉"某个插件工具链非要 JDK"的二次往返。
-- **设置页加卡片**：设置 → Node.js 下面新增「Java 运行时（Minecraft）」，只在 MC 功能开启后
-  出现。托管列表（主版本 / 完整版本 / 占用 / 路径 / 删除）、Adoptium 可下载项、一键安装（任务）。
+- **设置页加独立页签**：侧栏「Node.js」下面新增「Java 运行时」（`?tab=java`），不和 Node
+  混在同一页；只在 MC 功能开启后可用。托管列表（发行版 / 完整版本 / 占用 / 路径 / 删除）、
+  安装向导。
 - **只读展示**：面板自身 JVM、PATH 上的 `java`、MC 当前生效的 Java 三行只显示不给按钮——
   这三样面板一律不碰。
 - **删除保护**：有实例把 `javaPath` 钉在该托管版本上时 `POST /api/mc/java/{feature}/remove`

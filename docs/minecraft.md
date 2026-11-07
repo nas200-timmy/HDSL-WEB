@@ -1413,9 +1413,10 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
   **只读的面板 JVM / PATH java** + 把实例钉在托管版本上的 consumers）、
   `POST /api/mc/java/install`（任务）、`POST /api/mc/java/{feature}/remove`
   （有实例钉在该版本时 409，先去实例高级设置改掉）。
-- UI：设置页「Node.js」一节下面多一张「Java 运行时（Minecraft）」卡片，只在 MC 功能开启后
-  出现（`/api/mc/*` 的门禁）。面板自身 JVM、PATH 上的 `java`、MC 当前生效的 Java 三行
-  **只读展示**，卡片上没有任何控件能换掉它们。
+- UI：设置侧栏「Node.js」下面多一个**独立页签**「Java 运行时」（`?tab=java`），不和
+  Node.js 混在同一页。页签内容只在 MC 功能开启后可用（`/api/mc/*` 的门禁）；未开启时
+  显示一行说明。面板自身 JVM、PATH 上的 `java`、MC 当前生效的 Java 三行**只读展示**，
+  页面上没有任何控件能换掉它们。
 
 ### 19.4 插件 / 模组
 

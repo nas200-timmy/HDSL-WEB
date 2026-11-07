@@ -83,6 +83,7 @@ function formatRemaining(seconds: number | undefined): string {
 type SettingsTab =
   | "general"
   | "node"
+  | "java"
   | "appearance"
   | "download-source"
   | "brands"
@@ -105,6 +106,7 @@ export function SettingsPage() {
     [
       "general",
       "node",
+      "java",
       "appearance",
       "download-source",
       "brands",
@@ -139,6 +141,12 @@ export function SettingsPage() {
                 title: I18N["dsh.node.title"],
                 icon: <LocalCafeIcon size={20} />,
                 iconActive: <LocalCafeFillIcon size={20} />,
+              },
+              {
+                key: "java",
+                title: "Java 运行时",
+                icon: <DeployedCodeIcon size={20} />,
+                iconActive: <DeployedCodeFillIcon size={20} />,
               },
             ],
           },
@@ -199,6 +207,7 @@ export function SettingsPage() {
       >
         {tab === "general" && <GeneralTab />}
         {tab === "node" && <NodeTab />}
+        {tab === "java" && <JavaTab />}
         {tab === "appearance" && <AppearanceTab />}
         {tab === "download-source" && <DownloadSourceTab />}
         {tab === "brands" && <BrandManagementPanel />}
@@ -967,6 +976,19 @@ function NodeTab() {
         </div>
       </div>
 
+    </>
+  );
+}
+
+/* ---------------- Java 运行时：MC 专用，和 Node 并列但不混在一起 ---------------- */
+
+function JavaTab() {
+  return (
+    <>
+      <div className="section-caption">
+        <DeployedCodeIcon size={16} />
+        Java 运行时（Minecraft）
+      </div>
       <McJavaRuntimeCard />
     </>
   );

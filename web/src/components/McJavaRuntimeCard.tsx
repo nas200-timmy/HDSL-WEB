@@ -86,9 +86,6 @@ export function McJavaRuntimeCard() {
     }
     return (
       <>
-        <div className="section-caption">
-          <span>Java 运行时（Minecraft）</span>
-        </div>
         <div className="card" style={{ padding: 12, fontSize: 13, lineHeight: 1.7 }}>
           MC 功能未开启，Java 托管不可用。开关在「设置 → 品牌实例 → MC 服务端」；
           开启后这里会出现已安装的 JDK 与「安装 JDK…」。
@@ -102,10 +99,6 @@ export function McJavaRuntimeCard() {
 
   return (
     <>
-      <div className="section-caption">
-        <span>Java 运行时（Minecraft）</span>
-      </div>
-
       <div className="card" style={{ display: "grid", gap: 8, padding: 12 }}>
         <div className="toolbar-row" style={{ padding: "4px 0", flexWrap: "wrap" }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>面板托管的 JDK</span>
