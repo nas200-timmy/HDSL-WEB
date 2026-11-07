@@ -2,6 +2,37 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.6.75 — 2026-11-07 · MC 第三方核心：Paper/Folia/Purpur/Fabric、托管 Java、插件/模组
+
+**MC 服务端从"只跑原版"变成"能跑插件服"，但第三方核心是一道独立的关**
+
+- **第二道关**：`feature.json` 增 `thirdParty` 状态与独立同意记录（`McThirdPartyConsent`），
+  条款文本 `third-party-terms-v1.txt` 随包、hash 回显；只有主功能开启后才能开，
+  关闭主功能时级联关闭，有第三方实例在跑时拒绝关闭第三方核心，
+  关闭主功能前必须先关第三方（回 409）。关闭时 `/third-party/*` 随主功能一起 404。
+  审计 `mc.thirdparty.*`。
+- **核心目录**：新增 `McCores`，直连上游公开 API——Paper/Folia（`api.papermc.io/v2`，SHA-256）、
+  Purpur（`api.purpurmc.org/v2`，MD5）、Fabric（`meta.fabricmc.net/v2` 启动器 jar，上游无哈希，
+  只校验 zip 并如实标注）；三个 base URL 都可换镜像，不接聚合单点。
+  共享 `cores/<core>/<version>/server.jar`，实例里硬链接。实例清单新增 `core` 字段，
+  旧清单缺省 vanilla，零迁移。启动参数四种核心统一 `-jar server.jar nogui`，
+  进程/终端/端口/审计全部复用。
+- **面板自托管 Java**：`McJavaRuntimes` 走 Adoptium API v3（`HDSL_JAVA_API` 可换镜像），
+  装到 `<data>/minecraft/java/<feature>/`，sha256 校验后才解包（zip/tar.gz 都支持），
+  先解临时目录再原子落位。选 Java 顺序：`mc.java_path` > 面板托管的最低满足版本 >
+  宿主机 JDK > 面板自身 JVM；版本要求缺失时按内置表（1.20.5+→21、1.18+→17、≤1.16.5→8、26.x→25）。
+  装系统目录的方案被否：免 root、随面板清理、Win/Linux 一致，`mc.java_path` 仍可指系统 Java。
+- **插件/模组**：`McMods` 按核心映射 `plugins/`（Paper 系）与 `mods/`（Fabric）；
+  停用=重命名 `.jar.disabled`；上传只收 jar、zip 校验、不覆盖；Modrinth 搜索按 loader
+  与游戏版本过滤，安装取最新兼容版本并校验 SHA-512 才落盘；客户端专用 mod 只按元数据
+  （`fabric.mod.json`/`mods.toml`/`quilt.mod.json`）标注，不自动禁用。
+- **前端**：创建向导新增核心选择器（版本列表跟着核心走）；设置页 MC 卡片新增
+  "第三方核心"开关（条款正文 + 勾选 + 提权）与托管 JRE 展示；实例页新增「插件/模组」页签
+  （上传、启停、删除、Modrinth 搜索安装）。
+- **契约文档**：`docs/minecraft.md` 新增 §19（第二道关、核心目录、托管 Java、插件/模组、
+  仍未做清单），§2/§4.2 的"只做原版"表述已同步。
+- 未做（明确不在本版）：Forge/NeoForge 安装器、mrpack 整合包部署。
+
 ## v0.6.74 — 2026-11-07 · TUI 插件跟上 dsh 0.2.2-rc.1；审批详情修复
 
 **TUI 插件声明跟上 dsh 0.2.2-rc.1；审批详情不再显示 `[object Object]`**

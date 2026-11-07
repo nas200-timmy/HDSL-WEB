@@ -4,12 +4,17 @@
 > 并新增 `McRuntimePipeTest` 在 Linux 上覆盖启停/命令/`stopAll`/端口占用；**真机 Windows
 > 仍待验收**（ConPTY 切换是独立的一步）。本功能不主动宣传。本文是实现契约，不是使用说明。
 >
-> 一句话：把原版 Minecraft 服务端当作**第三种 surface**接入面板，复用现有的实例模型、
+> 2026-11 增量（§19）：**第三方核心**（Paper/Folia/Purpur/Fabric）走**第二道关**——
+> 只有主功能开启后才能开启，独立条款与同意记录，关闭主功能前必须先关它；
+> 同时新增**面板自托管 JRE**（Adoptium）与**插件/模组管理**（Modrinth 安装、`.jar.disabled`
+> 启停）。Forge/NeoForge 安装器与 mrpack 整合包仍在后续。
+>
+> 一句话：把 Minecraft 服务端当作**第三种 surface**接入面板，复用现有的实例模型、
 > 进程/终端、端口分配、任务与审计；游戏端口独立暴露，**默认关闭**，开启需提权与免责确认；
 > 关闭走「停止功能 → 确认关闭」两步，中间那一小时只活在内存里（重启即消失）。
 >
 > 落地前先读 §3（设计理念）与 §5（状态机）；§6 是"能复用多少"的关键结论，
-> §12 是"哪里会翻车"。
+> §12 是"哪里会翻车"，§19 是第三方核心的契约。
 
 ## 1. 是什么
 
@@ -29,7 +34,9 @@ AI agent 后续可经 **scoped token** 调用同一套原语（破坏性操作�
 
 - **不是反代**。MC 客户端说的是二进制 TCP（25565），现有 `/i/*` 是 HTTP/WebSocket，
   转不了。游戏端口必须单独暴露（例外：Dynmap/BlueMap 这类网页地图是 HTTP，可正常反代）。
-- **不是模组/插件市场**。MVP 只做原版；Paper/Fabric/Forge 明确列为后续。
+- **不是模组/插件市场**。第三方核心（Paper/Folia/Purpur/Fabric）在**第二道关**之后可用，
+  插件/模组可管理并从 Modrinth 安装（§19）；但 Forge/NeoForge 安装器与整合包（mrpack）
+  仍不在第一版范围内，面板也不做市场本身——它只调用上游公开接口。
 - **不是沙箱**。默认与面板同 uid（§11.3 写明边界）；`runAsUser` 是可选增强。
 - **不是编译期开关**。运行时开关，代码始终在包里，前端页签运行时隐藏（§3.8）。
 - **不是"面板替玩家开服"**。面板管进程与数据，游戏协议与行为归 Mojang/上游。
@@ -163,10 +170,13 @@ Java 没有 `#ifdef`。真要"编不进去"只有两条路：source set + SPI，
 
 ### 4.2 非目标（第一版）
 
-- Paper / Purpur / Fabric / Forge；插件/模组市场
+- Forge / NeoForge 安装器；mrpack 整合包部署（§19 末尾写明为什么先不做）
 - TPS 曲线与性能图表（Paper 可后续）
 - 定时任务、多世界管理、跨主机编排
 - 编译期裁剪（只保留变体设计，不实现）
+
+> 已移出非目标：Paper / Purpur / Folia / Fabric 与插件/模组管理——它们在**第二道关**
+> 之后提供（§19），默认仍然不存在。
 
 ## 5. 功能开关状态机
 
@@ -482,6 +492,10 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
 `McPlayersPanel`。
 
 ### 7.4 导入自带 `server.jar` 与插件（P2，**当前禁用**）
+
+> 第三方核心（Paper/Folia/Purpur/Fabric）已改走 §19 的上游目录与哈希校验，
+> **与本节的"任意 jar 导入"不是同一件事**：本节说的是操作者自己丢进来的程序，
+> 没有任何已知哈希可比对。
 
 这一节是给以后的人看的：代码骨架在
 `src/main/java/org/jackhuang/hmcl/web/minecraft/McServerImport.java`，**整份注释掉、常量
@@ -1260,3 +1274,82 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
     正确方向是"落盘 + 审计 + 显式的强制恢复入口"，而不是悄悄改成不可逆。
 20. **"我不想关掉功能"要不要也记审计**：本文按"记"（它是一次明确的去留决定，
     比默认到期更能说明"用户知道自己留着这个功能"）。
+
+## 19. 第三方核心与插件/模组（2026-11 增量）
+
+这一节是新增能力的实现契约。核心原则不变：**默认关闭、404 而非 403、摩擦跟爆炸半径走**。
+
+### 19.1 第二道关：第三方核心
+
+主功能（Mojang 原版）之外，第三方核心（Paper / Folia / Purpur / Fabric）有一个**独立开关**：
+
+| 状态 | 存在哪 | 面板表现 |
+|---|---|---|
+| `DISABLED`（默认） | `feature.json` 的 `thirdParty` | `/api/mc/cores` 只返回 vanilla；创建第三方核心返回 404；界面上没有第三方卡片 |
+| `ENABLED` | 同上 + `thirdPartyConsent` | 核心列表出现四个第三方核心；创建向导可选；插件/模组页签可用 |
+
+规则：
+
+- **只有主功能 `ENABLED` 时才能开启**（`McFeatureState#enableThirdParty` 抛 `IllegalStateException`，
+  接口回 409）。主功能关闭时 `/third-party/*` 与主功能一起 404。
+- **开启 = 提权 + 条款逐字确认 + 审计**。条款文本随包（`third-party-terms-v1.txt`），
+  客户端回显面板公布的 `sha256`，服务端比对后才落盘同意记录（`McThirdPartyConsent`）。
+- **关闭第三方核心**：有第三方实例在运行时拒绝（409，提示先停）；关闭后已建实例保留，
+  新建时不再提供。
+- **关闭主功能前必须先关第三方**（`POST /feature/stop` 回 409）。
+  `confirmClose` 会级联把 `thirdParty` 落成 `DISABLED`——子功能不能活在被关闭的主功能下面。
+- 审计前缀：`mc.thirdparty.enable|disable|declined`。
+- 提示语与文案必须写清"面板不担保这些程序的可用性与安全性"；它们不是 Mojang 的产品。
+
+### 19.2 核心目录与下载
+
+`McCores`（`web/minecraft/McCores.java`）直连各上游公开接口，**不经聚合单点**：
+
+| 核心 | 上游 | 校验 | 镜像覆盖 |
+|---|---|---|---|
+| Paper / Folia | `api.papermc.io/v2` | 上游公布 SHA-256 | `HDSL_PAPER_API` |
+| Purpur | `api.purpurmc.org/v2` | 上游公布 MD5 | `HDSL_PURPUR_API` |
+| Fabric | `meta.fabricmc.net/v2` | 上游无哈希：只校验 zip，并在 UI/文档如实标注 | `HDSL_FABRIC_API` |
+| Vanilla | Mojang 清单 | SHA-1 + 面板自记 SHA-256 + 可选 pin | `HDSL_MC_MANIFEST` |
+
+- 共享存储：`<data>/minecraft/cores/<core>/<version>/server.jar` + `version.json`
+  （core / version / build / url / 哈希 / size / `javaMajor`）。实例里的 `server.jar` 是硬链接，
+  跨卷时退化为复制。
+- 实例清单新增 `core` 字段（旧清单缺省 `vanilla`，零迁移）。`/cores` 的版本列表按核心来源给出，
+  前端选择核心后切换版本下拉。
+- 启动参数对四种第三方核心都是 `java … -jar server.jar nogui`（Paper 系与 Fabric 启动器都吃这个），
+  因此进程/终端/端口/审计全部复用，未新增 surface。
+
+### 19.3 面板自托管 Java（Adoptium）
+
+- `McJavaRuntimes`（`web/minecraft/McJavaRuntimes.java`）把 JRE 装到
+  `<data>/minecraft/java/<feature>/`，**不装进系统目录**：免 root、随面板清理、Win/Linux 一致；
+  `mc.java_path` 仍然优先——系统 Java 永远是显式选项。
+- 数据源 Adoptium API v3（`HDSL_JAVA_API` 可换镜像）；下载后校验上游 SHA-256 才解包，
+  zip 与 tar.gz 都支持，先解到临时目录再原子落位。
+- 启动选 Java 的顺序：`mc.java_path` > 面板托管里满足要求的最低版本 > 宿主机已装 JDK > 面板自身 JVM。
+  版本要求先读 `version.json` 的 `javaMajor`，缺失时用内置推荐表（1.20.5+→21、1.18–1.20.4→17、
+  1.17→16、≤1.16.5→8、26.x→25）。
+- API：`GET /api/mc/java/runtimes`（含推荐版本与 Adoptium 可下载项）、
+  `POST /api/mc/java/install`（任务）、`POST /api/mc/java/{feature}/remove`。
+
+### 19.4 插件 / 模组
+
+- 文件夹跟着核心走：Paper/Folia/Purpur → `plugins/`，Fabric → `mods/`，vanilla → 明确拒绝。
+- **停用 = 改名**：`x.jar` ⇄ `x.jar.disabled`。没有 sidecar 状态，手改即可恢复。
+- 上传：只收 `.jar`，zip 魔数校验，不覆盖同名文件；路径穿越在解析层拦截。
+- Modrinth 搜索/安装（`HDSL_MODRINTH_API` 可换镜像）：按核心映射 project_type
+  （plugin / mod）、loader 与游戏版本过滤；安装取最新兼容版本，**SHA-512 校验通过才落盘**。
+- 客户端专用识别：读 `fabric.mod.json#environment`、`META-INF/mods.toml#side`、
+  `quilt.mod.json`，只做标注，不自动禁用（误判会关掉能用的东西）。
+- API：`GET|PUT|DELETE /api/mc/instances/{id}/files…`、`POST …/{name}/toggle`、
+  `GET /api/mc/modrinth/search`、`POST /api/mc/modrinth/install`；写操作提权 + 审计
+  （`mc.instance.mod.*`）。
+
+### 19.5 仍未做（明确列出）
+
+- **Forge / NeoForge 安装器**：需要跑 installer、解析 `unix_args.txt`/`run.bat`、镜像 libraries，
+  是独立的一大块；纯模组服与混合服（Mohist/Arclight）都依赖它。
+- **mrpack 整合包**：Fabric 系可以复用现有核心 + 插件/模组能力，但 Forge 系要等安装器；
+  此外还要处理 `overrides/`、`env.server == unsupported` 过滤与 sha512 校验。
+- 这两项都不在本次增量里，文档与 UI 不得暗示它们已经可用。
