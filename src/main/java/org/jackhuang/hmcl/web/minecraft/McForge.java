@@ -102,12 +102,13 @@ public final class McForge {
         /// @param javaBin   the java executable the panel selected
         /// @param installer the installer jar
         /// @param directory the instance directory (the installer's cwd)
+        /// @param mirror    a Maven mirror for the installer's libraries, or `null`
         /// @param log       receives the installer's output lines
         /// @return the exit code
         /// @throws IOException          when the process cannot start
         /// @throws InterruptedException when the wait is interrupted
-        int run(String javaBin, Path installer, Path directory, java.util.function.Consumer<String> log)
-                throws IOException, InterruptedException;
+        int run(String javaBin, Path installer, Path directory, @Nullable String mirror,
+                java.util.function.Consumer<String> log) throws IOException, InterruptedException;
     }
 
     private record Cached(List<Build> builds, java.time.Instant at) {
@@ -156,7 +157,13 @@ public final class McForge {
         this.neoMaven = neoMaven;
         this.sources = sources;
         this.runner = runner;
-        this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
+        // BMCLAPI answers its Maven tree with a 302 (to a CERNET/USTC mirror) and
+        // JDK's default is NEVER: without this, a domestic source silently fails
+        // its metadata read and the installer falls back to the slow official host.
+        this.client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(15))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
     }
 
     private static URI mavenFromEnv(String variable, URI fallback) {
@@ -266,12 +273,20 @@ public final class McForge {
         // any start, so the start-time hand-over cannot prepare this directory; it has to be
         // the agent's before the first file is written by it.
         Privileges.prepareAgentDirectory(instanceDir, Privileges.AGENT_SHARED_DIRECTORY);
+        if (progress != null) {
+            progress.stage("Downloading " + core + " " + mcVersion + " installer");
+        }
         Path installer = installFile(instanceDir, build, progress);
+        String mirror = mirrorFor(core);
+        if (progress != null) {
+            progress.stage("Installing " + core + " " + mcVersion
+                    + (mirror == null ? "" : " (libraries via mirror)"));
+        }
         try {
             List<String> tail = new ArrayList<>();
             int exit;
             try {
-                exit = runner.run(javaBin, installer, instanceDir, line -> {
+                exit = runner.run(javaBin, installer, instanceDir, mirror, line -> {
                     synchronized (tail) {
                         tail.add(line);
                         if (tail.size() > 40) {
@@ -364,6 +379,15 @@ public final class McForge {
         Path directory = instanceDir.resolve(INSTALLER_DIR);
         try {
             Files.createDirectories(directory);
+            // A previous attempt killed mid-download leaves `.part` files that are
+            // never resumed (the name is random); clearing them keeps the state
+            // honest and the directory from growing across retries.
+            try (var stale = Files.list(directory)) {
+                for (Path leftover : stale.filter(path -> path.getFileName().toString()
+                        .endsWith(".part")).toList()) {
+                    Files.deleteIfExists(leftover);
+                }
+            }
             Path target = directory.resolve(build.core() + "-" + build.loaderVersion() + "-installer.jar");
             Path temp = Files.createTempFile(directory, "installer", ".part");
             try {
@@ -399,6 +423,11 @@ public final class McForge {
                 byte[] buffer = new byte[64 * 1024];
                 int read;
                 while ((read = in.read(buffer)) >= 0) {
+                    if (Thread.currentThread().isInterrupted()) {
+                        // TaskService#cancel interrupts the worker; a slow link can
+                        // take minutes, and a cancel that does nothing is a lie.
+                        throw new McException("the installer download was cancelled");
+                    }
                     copied += read;
                     if (copied > MAX_INSTALLER_BYTES) {
                         throw new McException("the installer is larger than the panel accepts");
@@ -527,22 +556,30 @@ public final class McForge {
                     collectForgeFromMaven(builds, McSources.BMCLAPI_MAVEN);
                 } catch (McException e) {
                     failures.add(source + " forge: " + e.getMessage());
+                    LOG.warning("The " + source + " source could not list forge builds: "
+                            + e.getMessage());
                 }
                 try {
                     collectNeoForgeFromMaven(builds, McSources.BMCLAPI_MAVEN);
                 } catch (McException e) {
                     failures.add(source + " neoforge: " + e.getMessage());
+                    LOG.warning("The " + source + " source could not list neoforge builds: "
+                            + e.getMessage());
                 }
             } else {
                 try {
                     collectForge(builds);
                 } catch (McException e) {
                     failures.add(source + " forge: " + e.getMessage());
+                    LOG.warning("The " + source + " source could not list forge builds: "
+                            + e.getMessage());
                 }
                 try {
                     collectNeoForge(builds);
                 } catch (McException e) {
                     failures.add(source + " neoforge: " + e.getMessage());
+                    LOG.warning("The " + source + " source could not list neoforge builds: "
+                            + e.getMessage());
                 }
             }
         }
@@ -570,6 +607,19 @@ public final class McForge {
             order.add(McSources.OFFICIAL);
         }
         return List.copyOf(order);
+    }
+
+    /// The Maven mirror the installer should fetch its libraries from.
+    ///
+    /// This is about the libraries, not about where the installer jar came from:
+    /// BMCLAPI proxies the whole Maven tree, so it is used whenever the operator
+    /// listed it for this core — even if the *build* was found on the official
+    /// host. `--mirror` needs the trailing slash (Forge concatenates strings).
+    @Nullable String mirrorFor(String core) {
+        if (sources == null || !sources.orderFor(core).contains(McSources.BMCLAPI)) {
+            return null;
+        }
+        return McSources.BMCLAPI_MAVEN.toString().replaceAll("/+$", "") + "/";
     }
 
     /// Forge's promotions: `1.21.4-recommended` / `1.21.4-latest` → loader build.
@@ -793,14 +843,30 @@ public final class McForge {
     }
 
     /// Runs the installer the way upstream documents: `java -jar … --installServer`.
+    /// The argv for Forge's installer.
+    ///
+    /// `--mirror` must end with a slash: the installer concatenates it with the
+    /// artifact path, so `.../maven` + `com/...` becomes `mavencom/...` and every
+    /// library 404s back to the official host.
+    static List<String> installerArgv(String javaBin, Path installer, @Nullable String mirror) {
+        List<String> argv = new ArrayList<>(List.of(javaBin, "-jar", installer.toString(),
+                "--installServer"));
+        if (mirror != null) {
+            argv.add("--mirror");
+            argv.add(mirror.endsWith("/") ? mirror : mirror + "/");
+        }
+        return argv;
+    }
+
     private static int runInstaller(String javaBin, Path installer, Path directory,
+                                    @Nullable String mirror,
                                     java.util.function.Consumer<String> log)
             throws IOException, InterruptedException {
         // The installer is third-party code, and inside the container the panel is root:
         // running it as the panel would hand a Maven mirror's jar the panel's own credentials.
         // It runs as the agent, like the server it is installing for.
         ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(
-                java.util.List.of(javaBin, "-jar", installer.toString(), "--installServer")));
+                installerArgv(javaBin, installer, mirror)));
         builder.directory(directory.toFile());
         builder.redirectErrorStream(true);
         Process process = builder.start();

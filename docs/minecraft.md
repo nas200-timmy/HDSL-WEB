@@ -1447,6 +1447,19 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
 - 启动：`McRuntime` 先看 `launch.json`，有则用 `java @unix_args.txt nogui`
   （或 `-jar forge-….jar nogui`），没有才退回 `-jar server.jar`。**判"已安装"也不能只看
   `server.jar`**：Forge/NeoForge 根本没有这个文件，只看 jar 会把装好的实例拒在启动门外。
+- **重定向**：BMCLAPI 的 Maven 树是 `302`（→ CERNET/USTC 镜像），JDK 默认 `NEVER` 不跟随，
+  于是国内源看起来"死了"、每次安装都悄悄回退到官方 `maven.minecraftforge.net`。
+  `McForge` 的客户端改 `followRedirects(NORMAL)`；只影响元数据与 installer 的获取。
+- **libraries 也走镜像**：installer 自己下载的 libraries 与 installer jar 来自哪里无关，
+  所以只要该核心的源列表里有 `bmclapi`，安装时就追加
+  `--mirror https://bmclapi2.bangbang93.com/maven/`。**结尾斜杠是必需的**：installer 是
+  字符串拼接，少了它会拼成 `mavencom/…` 然后 404 回退官方。
+- **中断**：下载循环按块检查 `Thread.interrupted()`，`TaskService#cancel` 除了杀子进程还会
+  `interrupt()` worker——没有子进程的下载原来"取消无效"。
+- **重试**：安装开始前清掉 `.installer/*.part`（上次被杀留下的半截文件不会续传，只会堆积）。
+- **阶段文案**：`Progress.stage(...)` 区分「Downloading …」与「Installing …」，
+  慢速下载不会再显示成"正在安装"。
+- 每个源失败都打 WARNING（`bmclapi forge: HTTP 302` 这类），不再静默跳过。
 - 边界（写进 UI 提示）：安装耗时数分钟、libraries 占 100–300 MB 且跟实例走；
   混合服（Mohist/Arclight）与 mrpack 整合包仍不在范围内。
 

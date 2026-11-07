@@ -127,7 +127,7 @@ class McForgeTest {
         try {
             McForge forge = new McForge(URI.create(base(upstream)),
                     URI.create(base(upstream) + "/promotions_slim.json"),
-                    URI.create(base(upstream)), (java, installer, directory, log) -> 0);
+                    URI.create(base(upstream)), (java, installer, directory, mirror, log) -> 0);
             List<String> versions = forge.gameVersions("forge");
             assertEquals(List.of("1.21.4", "1.20.1", "1.19.2"), versions);
             // The recommended promotion wins over the newer "latest" one.
@@ -153,10 +153,15 @@ class McForgeTest {
         try {
             Path instance = dir.resolve("instance");
             Files.createDirectories(instance);
+            // A killed attempt leaves `.part` files behind; the next install has to
+            // start from a clean directory instead of stacking them up.
+            Path stale = instance.resolve(".installer").resolve("installer123.part");
+            Files.createDirectories(stale.getParent());
+            Files.writeString(stale, "half");
             boolean[] ran = {false};
             McForge forge = new McForge(URI.create(base(upstream)),
                     URI.create(base(upstream) + "/promotions_slim.json"),
-                    URI.create(base(upstream)), (java, file, directory, log) -> {
+                    URI.create(base(upstream)), (java, file, directory, mirror, log) -> {
                         ran[0] = true;
                         log.accept("installer started");
                         Path args = directory.resolve(
@@ -179,6 +184,7 @@ class McForgeTest {
             // The installer jar is not left behind in the instance.
             assertFalse(Files.exists(instance.resolve(".installer")
                     .resolve("forge-54.0.15-installer.jar")));
+            assertFalse(Files.exists(stale), "a stale .part survived the install");
         } finally {
             upstream.stop(0);
         }
@@ -190,7 +196,7 @@ class McForgeTest {
         try {
             McForge forge = new McForge(URI.create(base(upstream)),
                     URI.create(base(upstream) + "/promotions_slim.json"),
-                    URI.create(base(upstream)), (java, file, directory, log) -> {
+                    URI.create(base(upstream)), (java, file, directory, mirror, log) -> {
                         log.accept("cannot reach maven");
                         return 3;
                     });
@@ -212,7 +218,7 @@ class McForgeTest {
         try {
             McForge forge = new McForge(URI.create(base(upstream)),
                     URI.create(base(upstream) + "/promotions_slim.json"),
-                    URI.create(base(upstream)), (java, file, directory, log) -> 0);
+                    URI.create(base(upstream)), (java, file, directory, mirror, log) -> 0);
             Path instance = dir.resolve("instance");
             Files.createDirectories(instance);
             McException failure = assertThrows(McException.class,
@@ -231,7 +237,7 @@ class McForgeTest {
             Files.createDirectories(instance);
             McForge forge = new McForge(URI.create(base(upstream)),
                     URI.create(base(upstream) + "/promotions_slim.json"),
-                    URI.create(base(upstream)), (java, file, directory, log) -> {
+                    URI.create(base(upstream)), (java, file, directory, mirror, log) -> {
                         try {
                             Files.write(directory.resolve("forge-1.12.2-14.23.5.2860.jar"), zipBytes());
                         } catch (Exception e) {
@@ -262,5 +268,59 @@ class McForgeTest {
         }
         // A profile that points outside the instance is not a launch profile.
         assertNull(McForge.launchArguments(dir));
+    }
+
+    @Test
+    void installerArgvAddsTheMirrorWithATrailingSlash(@TempDir Path dir) {
+        List<String> with = McForge.installerArgv("java", dir.resolve("i.jar"),
+                "https://bmclapi2.bangbang93.com/maven");
+        assertEquals("--mirror", with.get(with.size() - 2), with.toString());
+        assertEquals("https://bmclapi2.bangbang93.com/maven/", with.get(with.size() - 1),
+                with.toString());
+        List<String> without = McForge.installerArgv("java", dir.resolve("i.jar"), null);
+        assertFalse(without.contains("--mirror"), without.toString());
+        assertTrue(without.contains("--installServer"), without.toString());
+    }
+
+    @Test
+    void theInstallerMirrorIsUsedOnlyWhenBmclapiIsListed() {
+        McSources sources = new McSources(null);
+        sources.setOrder("forge", List.of("official"));
+        McForge plain = new McForge(sources);
+        assertNull(plain.mirrorFor("forge"));
+
+        sources.setOrder("forge", List.of("bmclapi", "official"));
+        McForge mirrored = new McForge(sources);
+        String mirror = mirrored.mirrorFor("forge");
+        assertNotNull(mirror);
+        assertTrue(mirror.endsWith("/"), mirror);
+        assertTrue(mirror.contains("bmclapi"), mirror);
+    }
+
+    @Test
+    void followsARedirectOnThePromotionsFile(@TempDir Path dir) throws Exception {
+        HttpServer upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        String base = base(upstream);
+        upstream.createContext("/promotions_slim.json", exchange -> {
+            exchange.getResponseHeaders().add("Location", base + "/promotions-real.json");
+            exchange.sendResponseHeaders(302, -1);
+            exchange.close();
+        });
+        upstream.createContext("/promotions-real.json", exchange -> respond(exchange, """
+                {"promos":{"1.21.4-recommended":"54.0.15"}}
+                """));
+        upstream.createContext("/releases/net/neoforged/neoforge/maven-metadata.xml",
+                exchange -> respond(exchange, "<metadata/>"));
+        upstream.start();
+        try {
+            // BMCLAPI answers its Maven tree with a 302; without follow-redirects
+            // the source looked dead and every install fell back to the slow host.
+            McForge forge = new McForge(URI.create(base),
+                    URI.create(base + "/promotions_slim.json"), URI.create(base),
+                    (java, installer, directory, mirror, log) -> 0);
+            assertEquals(List.of("1.21.4"), forge.gameVersions("forge"));
+        } finally {
+            upstream.stop(0);
+        }
     }
 }

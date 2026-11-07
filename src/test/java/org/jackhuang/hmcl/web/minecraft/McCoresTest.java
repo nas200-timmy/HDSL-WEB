@@ -211,7 +211,7 @@ class McCoresTest {
                 URI.create("http://127.0.0.1:1/manifest.json"));
         URI unreachable = URI.create("http://127.0.0.1:1");
         McForge forge = new McForge(unreachable, unreachable, unreachable,
-                (java, installer, directory, log) -> 0);
+                (java, installer, directory, mirror, log) -> 0);
         McCores cores = new McCores(versions, Path.of("build", "test-cores"),
                 unreachable, unreachable, unreachable, forge);
         List<McCores.CoreInfo> off = cores.catalog(false);

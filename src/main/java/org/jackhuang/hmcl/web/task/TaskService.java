@@ -602,6 +602,11 @@ public final class TaskService {
         Thread worker = task.worker;
         if (worker != null) {
             org.jackhuang.hmcl.dsh.DshCommand.stopRunning(worker);
+            // Killing the children is not enough for work that has no child — a
+            // 200 MB download is one socket read at a time. The worker checks for
+            // interruption between chunks; without this, "cancel" left the task
+            // running and the `.part` growing.
+            worker.interrupt();
         }
         return true;
     }

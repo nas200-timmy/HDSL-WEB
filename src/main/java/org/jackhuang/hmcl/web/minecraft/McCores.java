@@ -487,6 +487,9 @@ public final class McCores {
         Artifact artifact = resolve(core, version);
         Path shared = coresRoot.resolve(core).resolve(version).resolve(McInstanceManager.SERVER_JAR_NAME);
         if (!reusable(shared, artifact)) {
+            if (progress != null) {
+                progress.stage("Downloading " + core + " " + version);
+            }
             download(artifact, shared, progress);
         }
         link(shared, manager.serverJar(instance));
@@ -641,6 +644,9 @@ public final class McCores {
                     byte[] buffer = new byte[64 * 1024];
                     int read;
                     while ((read = in.read(buffer)) >= 0) {
+                        if (Thread.currentThread().isInterrupted()) {
+                            throw new McException("the server download was cancelled");
+                        }
                         copied += read;
                         if (copied > MAX_JAR_BYTES) {
                             throw new McException("the uploaded jar is larger than the panel accepts");
@@ -986,6 +992,9 @@ public final class McCores {
                     byte[] buffer = new byte[64 * 1024];
                     int read;
                     while ((read = in.read(buffer)) >= 0) {
+                        if (Thread.currentThread().isInterrupted()) {
+                            throw new McException("the server download was cancelled");
+                        }
                         copied += read;
                         if (copied > MAX_JAR_BYTES) {
                             throw new McException("the server download is larger than the panel accepts");

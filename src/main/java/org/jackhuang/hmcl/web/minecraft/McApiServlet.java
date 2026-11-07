@@ -1431,13 +1431,29 @@ public final class McApiServlet extends HttpServlet {
                 // as a task and report bytes, instead of holding the request open.
                 try {
                     TaskService.Task task = tasks.submit("mc-install", id, live -> {
-                        live.update("Downloading " + instance.core() + " " + version, -1);
+                        // The byte counter only covers downloads; the phase label comes
+                        // from the core itself, so a slow installer download no longer
+                        // reads as "Installing" for five minutes.
+                        java.util.concurrent.atomic.AtomicReference<String> phase =
+                                new java.util.concurrent.atomic.AtomicReference<>(
+                                        "Downloading " + instance.core() + " " + version);
+                        live.update(phase.get(), -1);
                         cores.install(instance, manager, version.trim(),
-                                (copied, total) -> {
-                                    String progress = (copied / (1024 * 1024)) + " / "
-                                            + (total > 0 ? (total / (1024 * 1024)) + " MB" : "? MB");
-                                    live.update("Installing " + version + ": " + progress,
-                                            total > 0 ? (double) copied / total : -1);
+                                new McVersions.Progress() {
+                                    @Override
+                                    public void update(long copied, long total) {
+                                        String progress = (copied / (1024 * 1024)) + " / "
+                                                + (total > 0 ? (total / (1024 * 1024)) + " MB"
+                                                : "? MB");
+                                        live.update(phase.get() + ": " + progress,
+                                                total > 0 ? (double) copied / total : -1);
+                                    }
+
+                                    @Override
+                                    public void stage(String next) {
+                                        phase.set(next);
+                                        live.update(next, -1);
+                                    }
                                 }, runtime.javaFor(instance));
                         return "Installed " + instance.core() + " " + version;
                     }, null);

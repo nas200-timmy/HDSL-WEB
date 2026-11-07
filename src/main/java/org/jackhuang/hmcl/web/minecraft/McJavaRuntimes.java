@@ -754,6 +754,9 @@ public final class McJavaRuntimes {
                 byte[] buffer = new byte[64 * 1024];
                 int read;
                 while ((read = in.read(buffer)) >= 0) {
+                    if (Thread.currentThread().isInterrupted()) {
+                        throw new McException("the JDK download was cancelled");
+                    }
                     copied += read;
                     if (copied > MAX_PACKAGE_BYTES) {
                         throw new McException("the JDK download is larger than the panel accepts");

@@ -173,6 +173,15 @@ public final class McVersions {
     @FunctionalInterface
     public interface Progress {
         void update(long copied, long total);
+
+        /// A coarse phase label ("Downloading …", "Installing …").
+        ///
+        /// The byte counter alone cannot tell a 9 MB installer download from the
+        /// installer's own work: the UI said "Installing" for five minutes of a
+        /// slow download. Implementations that only care about bytes can ignore
+        /// this — it has a default so every existing lambda still compiles.
+        default void stage(String stage) {
+        }
     }
 
     private ServerDownload resolve(String versionId) throws McException {
@@ -250,6 +259,9 @@ public final class McVersions {
                     byte[] buffer = new byte[64 * 1024];
                     int read;
                     while ((read = in.read(buffer)) >= 0) {
+                        if (Thread.currentThread().isInterrupted()) {
+                            throw new McException("the server download was cancelled");
+                        }
                         copied += read;
                         if (copied > MAX_JAR_BYTES) {
                             throw new McException("the server download is larger than the panel accepts");

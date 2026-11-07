@@ -4,6 +4,21 @@
 
 ## 未发布
 
+**Forge 安装：国内源被静默跳过、慢在官方 Maven**
+
+- **BMCLAPI 302 不跟随**：`McForge` 的 HttpClient 只有 `connectTimeout`，JDK 默认
+  `Redirect.NEVER`；BMCLAPI 的 Maven 树是 302（→ CERNET/USTC），元数据读取直接抛异常，
+  源被记为失败后回退官方 `maven.minecraftforge.net`（实测 24 KB/s–2.8 MB/s 波动）。
+  改为 `followRedirects(NORMAL)`。
+- **installer 的 libraries 也走镜像**：只要源列表里有 `bmclapi`，就追加
+  `--mirror https://bmclapi2.bangbang93.com/maven/`。**结尾斜杠必需**——installer 字符串
+  拼接，少了会变成 `mavencom/...` 并回退官方。
+- **取消真正生效**：`TaskService#cancel` 现在会 `interrupt()` worker；三处下载循环
+  （核心 jar / JDK / installer）按块检查中断。原来没有子进程的下载"取消失败"。
+- **重试清理**：安装前删除 `.installer/*.part`，不再堆积被杀留下的半截文件。
+- **阶段文案**：`Progress.stage()` 区分下载与安装，慢速下载不再显示成"正在安装"。
+- **源失败告警**：每个源失败都打 WARNING，不再静默跳过。
+
 **Java 托管：三家发行版 + 安装向导**
 
 - 下载源从单一 Temurin 扩成三家：`temurin`（Adoptium API）、`microsoft`、`openjdk`
