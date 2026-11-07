@@ -1,0 +1,621 @@
+/*
+ * HDSL-web
+ * Copyright (C) 2026  HDSL-web contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+package org.jackhuang.hmcl.web.minecraft;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import org.jackhuang.hmcl.util.gson.JsonUtils;
+import org.jackhuang.hmcl.util.logging.Logger;
+import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/// Forge and NeoForge: the two cores that are installed rather than downloaded
+/// as a ready jar.
+///
+/// **Why an installer.** Forge and NeoForge do not publish a runnable server
+/// jar. Their `installer.jar` downloads the Minecraft server, patches it, and
+/// writes a launch profile (`libraries/…/unix_args.txt`, a Java argument file
+/// with the classpath and main class). The panel runs the installer once per
+/// instance, then launches with `java @unix_args.txt nogui` — the same shape
+/// `run.sh` uses, minus the shell.
+///
+/// **Per instance, not shared.** A Forge install is a tree of libraries plus a
+/// patched server jar that the installer writes into the working directory.
+/// Sharing it between instances would mean every instance sharing one world
+/// directory, so the panel installs into the instance. The installer itself is
+/// cached in the instance's `.installer/` directory and deleted afterwards.
+///
+/// **Versions come from upstream metadata.** Forge's `promotions_slim.json`
+/// says which loader build each game version gets (recommended, else latest);
+/// NeoForge's Maven metadata lists builds whose first two numbers encode the
+/// game version (`21.4.123` → 1.21.4). No aggregator in between.
+@NotNullByDefault
+public final class McForge {
+
+    /// Forge's Maven; `HDSL_FORGE_MAVEN` overrides it for a mirror.
+    public static final URI DEFAULT_FORGE_MAVEN = URI.create("https://maven.minecraftforge.net");
+    /// Forge's version promotions; `HDSL_FORGE_PROMOTIONS` overrides it.
+    public static final URI DEFAULT_FORGE_PROMOTIONS =
+            URI.create("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json");
+    /// NeoForge's Maven; `HDSL_NEOFORGE_MAVEN` overrides it.
+    public static final URI DEFAULT_NEOFORGE_MAVEN = URI.create("https://maven.neoforged.net");
+
+    /// The file the installer leaves in the instance directory.
+    public static final String LAUNCH_FILE = "launch.json";
+    private static final String INSTALLER_DIR = ".installer";
+    private static final long MAX_INSTALLER_BYTES = 64L * 1024 * 1024;
+    private static final Duration METADATA_TTL = Duration.ofMinutes(10);
+
+    private static final Logger LOG = Logger.LOG;
+
+    /// One installable combination.
+    ///
+    /// @param core          `forge` or `neoforge`
+    /// @param mcVersion     the game version
+    /// @param loaderVersion the loader build (`54.0.16`, `21.4.123`)
+    /// @param installerUrl  the installer jar
+    public record Build(String core, String mcVersion, String loaderVersion, String installerUrl) {
+    }
+
+    /// Runs the installer; injectable so a test does not need a JVM download.
+    @FunctionalInterface
+    public interface InstallerRunner {
+        /// @param javaBin   the java executable the panel selected
+        /// @param installer the installer jar
+        /// @param directory the instance directory (the installer's cwd)
+        /// @param log       receives the installer's output lines
+        /// @return the exit code
+        /// @throws IOException          when the process cannot start
+        /// @throws InterruptedException when the wait is interrupted
+        int run(String javaBin, Path installer, Path directory, java.util.function.Consumer<String> log)
+                throws IOException, InterruptedException;
+    }
+
+    private record Cached(List<Build> builds, java.time.Instant at) {
+    }
+
+    private final URI forgeMaven;
+    private final URI forgePromotions;
+    private final URI neoMaven;
+    private final HttpClient client;
+    private final InstallerRunner runner;
+    private volatile @Nullable Cached cached;
+
+    public McForge() {
+        this(mavenFromEnv("HDSL_FORGE_MAVEN", DEFAULT_FORGE_MAVEN),
+                mavenFromEnv("HDSL_FORGE_PROMOTIONS", DEFAULT_FORGE_PROMOTIONS),
+                mavenFromEnv("HDSL_NEOFORGE_MAVEN", DEFAULT_NEOFORGE_MAVEN),
+                McForge::runInstaller);
+    }
+
+    /// The same, with overridable endpoints and an injectable runner (tests).
+    ///
+    /// @param forgeMaven      Forge's Maven base
+    /// @param forgePromotions the promotions JSON
+    /// @param neoMaven        NeoForge's Maven base
+    /// @param runner          how the installer is executed
+    public McForge(URI forgeMaven, URI forgePromotions, URI neoMaven, InstallerRunner runner) {
+        this.forgeMaven = forgeMaven;
+        this.forgePromotions = forgePromotions;
+        this.neoMaven = neoMaven;
+        this.runner = runner;
+        this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
+    }
+
+    private static URI mavenFromEnv(String variable, URI fallback) {
+        String value = System.getenv(variable);
+        if (value != null && !value.isBlank()) {
+            try {
+                return URI.create(value.strip());
+            } catch (IllegalArgumentException e) {
+                LOG.warning("Ignoring " + variable + "=`" + value + "`: " + e.getMessage());
+            }
+        }
+        return fallback;
+    }
+
+    /// Whether an id is one of the two installed cores.
+    ///
+    /// @param core the core id
+    /// @return whether it is `forge` or `neoforge`
+    public static boolean isInstalledCore(@Nullable String core) {
+        return "forge".equals(core) || "neoforge".equals(core);
+    }
+
+    /// The game versions one core can install, newest first.
+    ///
+    /// @param core `forge` or `neoforge`
+    /// @return the game versions
+    /// @throws McException when the metadata cannot be read
+    public List<String> gameVersions(String core) throws McException {
+        List<Build> builds = cachedBuilds();
+        List<String> versions = new ArrayList<>();
+        for (Build build : builds) {
+            if (build.core().equals(core) && !versions.contains(build.mcVersion())) {
+                versions.add(build.mcVersion());
+            }
+        }
+        versions.sort(McForge::compareVersions);
+        java.util.Collections.reverse(versions);
+        if (versions.isEmpty()) {
+            throw new McException("the upstream metadata lists no " + core + " versions");
+        }
+        return versions;
+    }
+
+    /// The build to install for one game version.
+    ///
+    /// Forge prefers its `recommended` promotion and falls back to `latest`;
+    /// NeoForge takes the newest stable build whose first two numbers name the
+    /// game version.
+    ///
+    /// @param core      `forge` or `neoforge`
+    /// @param mcVersion the game version
+    /// @return the build
+    /// @throws McException when upstream publishes nothing for it
+    public Build resolve(String core, String mcVersion) throws McException {
+        Build best = null;
+        for (Build build : cachedBuilds()) {
+            if (!build.core().equals(core) || !build.mcVersion().equals(mcVersion)) {
+                continue;
+            }
+            if (best == null || compareVersions(build.loaderVersion(), best.loaderVersion()) > 0) {
+                best = build;
+            }
+        }
+        if (best == null) {
+            throw new McException(core + " has no build for " + mcVersion);
+        }
+        return best;
+    }
+
+    /// Installs one core build into an instance directory and records how to
+    /// launch it.
+    ///
+    /// @param instanceDir the instance directory
+    /// @param core        `forge` or `neoforge`
+    /// @param mcVersion   the game version
+    /// @param javaBin     the java executable to run the installer with
+    /// @param progress    download progress, or `null`
+    /// @return the recorded launch description
+    /// @throws McException when the download, the checksum, the installer or the
+    ///                      launch-file discovery fails
+    public Launch install(Path instanceDir, String core, String mcVersion, String javaBin,
+                          @Nullable McVersions.Progress progress) throws McException {
+        Build build = resolve(core, mcVersion);
+        Path installer = installFile(instanceDir, build, progress);
+        try {
+            List<String> tail = new ArrayList<>();
+            int exit;
+            try {
+                exit = runner.run(javaBin, installer, instanceDir, line -> {
+                    synchronized (tail) {
+                        tail.add(line);
+                        if (tail.size() > 40) {
+                            tail.remove(0);
+                        }
+                    }
+                });
+            } catch (IOException e) {
+                throw new McException("Failed to start the " + core + " installer: " + e.getMessage(), e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new McException("the " + core + " installer was interrupted", e);
+            }
+            if (exit != 0) {
+                String detail = String.join("\n", tail);
+                throw new McException("the " + core + " installer exited with code " + exit
+                        + (detail.isBlank() ? "" : ":\n" + detail));
+            }
+            Launch launch = discover(instanceDir, build);
+            JsonObject record = new JsonObject();
+            record.addProperty("core", core);
+            record.addProperty("mcVersion", build.mcVersion());
+            record.addProperty("loaderVersion", build.loaderVersion());
+            if (launch.argsFile() != null) {
+                record.addProperty("argsFile", launch.argsFile().toString());
+            } else if (launch.jar() != null) {
+                record.addProperty("jar", launch.jar());
+            }
+            record.addProperty("installedAt", java.time.Instant.now().toString());
+            try {
+                JsonUtils.writeToJsonFile(instanceDir.resolve(LAUNCH_FILE), record);
+            } catch (IOException e) {
+                throw new McException("Failed to record the launch profile: " + e.getMessage(), e);
+            }
+            LOG.info("Installed " + core + " " + build.loaderVersion() + " for " + mcVersion
+                    + " into " + instanceDir);
+            return launch;
+        } finally {
+            try {
+                Files.deleteIfExists(installer);
+            } catch (IOException e) {
+                LOG.warning("Could not delete " + installer, e);
+            }
+        }
+    }
+
+    /// The extra argv for a Forge/NeoForge instance, or `null` when the
+    /// instance has no `launch.json` (it has not been installed yet).
+    ///
+    /// @param instanceDir the instance directory
+    /// @return `@unix_args.txt nogui` or `-jar forge-….jar nogui`, or `null`
+    public static @Nullable List<String> launchArguments(Path instanceDir) {
+        Path file = instanceDir.resolve(LAUNCH_FILE);
+        if (!Files.isRegularFile(file)) {
+            return null;
+        }
+        try {
+            JsonObject record = JsonUtils.fromJsonFile(file, JsonObject.class);
+            if (record == null) {
+                return null;
+            }
+            if (record.has("argsFile") && record.get("argsFile").isJsonPrimitive()) {
+                String relative = record.get("argsFile").getAsString();
+                Path argsFile = instanceDir.resolve(relative).normalize();
+                if (!argsFile.startsWith(instanceDir.normalize())) {
+                    return null;
+                }
+                return List.of("@" + argsFile, "nogui");
+            }
+            if (record.has("jar") && record.get("jar").isJsonPrimitive()) {
+                String jar = record.get("jar").getAsString();
+                Path jarFile = instanceDir.resolve(jar).normalize();
+                if (!jarFile.startsWith(instanceDir.normalize()) || !Files.isRegularFile(jarFile)) {
+                    return null;
+                }
+                return List.of("-jar", jarFile.toString(), "nogui");
+            }
+        } catch (IOException | RuntimeException e) {
+            LOG.warning("Could not read " + file + ": " + e.getMessage());
+        }
+        return null;
+    }
+
+    private Path installFile(Path instanceDir, Build build, @Nullable McVersions.Progress progress)
+            throws McException {
+        Path directory = instanceDir.resolve(INSTALLER_DIR);
+        try {
+            Files.createDirectories(directory);
+            Path target = directory.resolve(build.core() + "-" + build.loaderVersion() + "-installer.jar");
+            Path temp = Files.createTempFile(directory, "installer", ".part");
+            try {
+                download(build.installerUrl(), temp, progress);
+                verifySha1(build.installerUrl(), temp);
+                requireZip(temp);
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+            } finally {
+                Files.deleteIfExists(temp);
+            }
+            return target;
+        } catch (IOException e) {
+            throw new McException("Failed to prepare the " + build.core() + " installer: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    private void download(String url, Path target, @Nullable McVersions.Progress progress)
+            throws McException {
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                    .timeout(Duration.ofMinutes(15))
+                    .header("User-Agent", "HDSL-web")
+                    .GET()
+                    .build();
+            HttpResponse<InputStream> answer = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            if (answer.statusCode() != 200) {
+                throw new McException("the installer download answered HTTP " + answer.statusCode());
+            }
+            long copied = 0;
+            long lastReport = 0;
+            try (InputStream in = answer.body(); OutputStream out = Files.newOutputStream(target)) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = in.read(buffer)) >= 0) {
+                    copied += read;
+                    if (copied > MAX_INSTALLER_BYTES) {
+                        throw new McException("the installer is larger than the panel accepts");
+                    }
+                    out.write(buffer, 0, read);
+                    if (progress != null && copied - lastReport >= 512 * 1024) {
+                        lastReport = copied;
+                        progress.update(copied, -1);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new McException("Failed to download the installer: " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new McException("the installer download was interrupted", e);
+        }
+    }
+
+    /// Verifies the installer against the `.sha1` upstream publishes beside it.
+    ///
+    /// A mirror may not carry the companion file; in that case the download is
+    /// accepted with the zip check alone, which is stated in the class comment.
+    private void verifySha1(String url, Path file) throws McException {
+        String text;
+        try {
+            text = fetchText(URI.create(url + ".sha1")).strip();
+        } catch (McException e) {
+            return;
+        }
+        if (text.isEmpty()) {
+            return;
+        }
+        String expected = text.split("\s+")[0].toLowerCase(Locale.ROOT);
+        String actual;
+        try (InputStream in = Files.newInputStream(file)) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-1");
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = in.read(buffer)) >= 0) {
+                digest.update(buffer, 0, read);
+            }
+            actual = HexFormat.of().formatHex(digest.digest());
+        } catch (IOException e) {
+            throw new McException("Failed to hash the installer: " + e.getMessage(), e);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new McException("SHA-1 is not available in this JVM", e);
+        }
+        if (!actual.equals(expected)) {
+            throw new McException("the installer failed its SHA-1 check (expected " + expected
+                    + ", got " + actual + ")");
+        }
+    }
+
+    /// Finds what the installer left behind: the modern argument file first,
+    /// then the pre-1.17 launcher jar.
+    private static Launch discover(Path instanceDir, Build build) throws McException {
+        Path args = findArgsFile(instanceDir);
+        if (args != null) {
+            Path relative = instanceDir.normalize().relativize(args.normalize());
+            return new Launch(relative, null);
+        }
+        for (String name : List.of("forge", "neoforge")) {
+            try (var stream = Files.list(instanceDir)) {
+                for (Path file : stream.toList()) {
+                    String fileName = file.getFileName().toString();
+                    if (fileName.startsWith(name + "-") && fileName.endsWith(".jar")
+                            && !fileName.contains("installer") && Files.isRegularFile(file)) {
+                        return new Launch(null, fileName);
+                    }
+                }
+            } catch (IOException e) {
+                throw new McException("Failed to inspect " + instanceDir + ": " + e.getMessage(), e);
+            }
+        }
+        throw new McException("the " + build.core() + " installer finished but left no launch profile"
+                + " (no libraries/…/unix_args.txt and no launcher jar)");
+    }
+
+    private static @Nullable Path findArgsFile(Path instanceDir) {
+        Path libraries = instanceDir.resolve("libraries");
+        if (!Files.isDirectory(libraries)) {
+            return null;
+        }
+        try (var stream = Files.walk(libraries, 6)) {
+            return stream.filter(path -> path.getFileName().toString().equals("unix_args.txt"))
+                    .filter(Files::isRegularFile)
+                    .max(Comparator.comparing(Path::toString))
+                    .orElse(null);
+        } catch (IOException | RuntimeException e) {
+            LOG.warning("Could not scan " + libraries + " for unix_args.txt: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private static void requireZip(Path file) throws McException {
+        try (InputStream in = Files.newInputStream(file)) {
+            byte[] magic = in.readNBytes(4);
+            if (magic.length < 4 || magic[0] != 'P' || magic[1] != 'K') {
+                throw new McException("the downloaded installer is not a jar (zip) archive");
+            }
+        } catch (IOException e) {
+            throw new McException("Failed to inspect " + file, e);
+        }
+    }
+
+    private List<Build> cachedBuilds() throws McException {
+        Cached current = cached;
+        if (current != null && java.time.Instant.now().isBefore(current.at().plus(METADATA_TTL))) {
+            return current.builds();
+        }
+        List<Build> builds = new ArrayList<>();
+        collectForge(builds);
+        collectNeoForge(builds);
+        List<Build> result = List.copyOf(builds);
+        cached = new Cached(result, java.time.Instant.now());
+        return result;
+    }
+
+    /// Forge's promotions: `1.21.4-recommended` / `1.21.4-latest` → loader build.
+    private void collectForge(List<Build> builds) throws McException {
+        JsonObject root = fetchJson(forgePromotions);
+        JsonObject promos = root.has("promos") && root.get("promos").isJsonObject()
+                ? root.getAsJsonObject("promos") : null;
+        if (promos == null) {
+            throw new McException(forgePromotions + " has no `promos` object");
+        }
+        List<String> mcVersions = new ArrayList<>();
+        java.util.Map<String, String> recommended = new java.util.HashMap<>();
+        java.util.Map<String, String> latest = new java.util.HashMap<>();
+        for (var entry : promos.entrySet()) {
+            String key = entry.getKey();
+            String build = entry.getValue().isJsonPrimitive() ? entry.getValue().getAsString() : null;
+            if (build == null || build.isBlank()) {
+                continue;
+            }
+            if (key.endsWith("-recommended")) {
+                String mc = key.substring(0, key.length() - "-recommended".length());
+                recommended.put(mc, build);
+                mcVersions.add(mc);
+            } else if (key.endsWith("-latest")) {
+                String mc = key.substring(0, key.length() - "-latest".length());
+                latest.put(mc, build);
+                mcVersions.add(mc);
+            }
+        }
+        for (String mc : mcVersions) {
+            String build = recommended.getOrDefault(mc, latest.get(mc));
+            if (build == null) {
+                continue;
+            }
+            String full = mc + "-" + build;
+            String url = base(forgeMaven) + "/net/minecraftforge/forge/" + full
+                    + "/forge-" + full + "-installer.jar";
+            builds.add(new Build("forge", mc, build, url));
+        }
+    }
+
+    /// NeoForge's Maven metadata: `<version>21.4.123</version>` → game 1.21.4.
+    private void collectNeoForge(List<Build> builds) throws McException {
+        String xml = fetchText(URI.create(base(neoMaven)
+                + "/releases/net/neoforged/neoforge/maven-metadata.xml"));
+        Matcher matcher = Pattern.compile("<version>([^<]+)</version>").matcher(xml);
+        while (matcher.find()) {
+            String version = matcher.group(1).trim();
+            if (version.contains("-beta") || version.contains("-alpha")) {
+                continue;
+            }
+            String[] parts = version.split("\\.");
+            if (parts.length < 3) {
+                continue;
+            }
+            String mc;
+            try {
+                int major = Integer.parseInt(parts[0]);
+                int minor = Integer.parseInt(parts[1]);
+                mc = "1." + major + "." + minor;
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            String url = base(neoMaven) + "/releases/net/neoforged/neoforge/" + version
+                    + "/neoforge-" + version + "-installer.jar";
+            builds.add(new Build("neoforge", mc, version, url));
+        }
+    }
+
+    /// Runs the installer the way upstream documents: `java -jar … --installServer`.
+    private static int runInstaller(String javaBin, Path installer, Path directory,
+                                    java.util.function.Consumer<String> log)
+            throws IOException, InterruptedException {
+        ProcessBuilder builder = new ProcessBuilder(javaBin, "-jar", installer.toString(),
+                "--installServer");
+        builder.directory(directory.toFile());
+        builder.redirectErrorStream(true);
+        Process process = builder.start();
+        try (var reader = new java.io.BufferedReader(new java.io.InputStreamReader(
+                process.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                log.accept(line);
+            }
+        }
+        if (!process.waitFor(20, TimeUnit.MINUTES)) {
+            process.destroyForcibly();
+            return -1;
+        }
+        return process.exitValue();
+    }
+
+    /// Numeric version comparison (`1.21.4` > `1.21.1`; `54.0.16` > `54.0.9`).
+    static int compareVersions(String left, String right) {
+        String[] a = left.split("[^0-9]+");
+        String[] b = right.split("[^0-9]+");
+        for (int i = 0; i < Math.max(a.length, b.length); i++) {
+            int x = i < a.length && !a[i].isBlank() ? parseInt(a[i]) : 0;
+            int y = i < b.length && !b[i].isBlank() ? parseInt(b[i]) : 0;
+            if (x != y) {
+                return Integer.compare(x, y);
+            }
+        }
+        return 0;
+    }
+
+    private static int parseInt(String value) {
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private static String base(URI uri) {
+        return uri.toString().replaceAll("/+$", "");
+    }
+
+    private JsonObject fetchJson(URI uri) throws McException {
+        try {
+            return JsonParser.parseString(fetchText(uri)).getAsJsonObject();
+        } catch (RuntimeException e) {
+            throw new McException(uri + " did not answer a JSON object", e);
+        }
+    }
+
+    private String fetchText(URI uri) throws McException {
+        try {
+            HttpRequest request = HttpRequest.newBuilder(uri)
+                    .timeout(Duration.ofSeconds(30))
+                    .header("User-Agent", "HDSL-web")
+                    .GET()
+                    .build();
+            HttpResponse<String> answer = client.send(request, HttpResponse.BodyHandlers.ofString());
+            if (answer.statusCode() != 200) {
+                throw new McException(uri + " answered HTTP " + answer.statusCode());
+            }
+            return answer.body();
+        } catch (IOException e) {
+            throw new McException("Failed to read " + uri + ": " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new McException("Reading " + uri + " was interrupted", e);
+        }
+    }
+
+    /// What the installer recorded, for the API and the tests.
+    ///
+    /// @param argsFile the relative argument file, or `null` for a launcher jar
+    /// @param jar      the launcher jar's name, or `null` for an argument file
+    public record Launch(@Nullable Path argsFile, @Nullable String jar) {
+    }
+}

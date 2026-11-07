@@ -20,6 +20,37 @@ export function mcStateLabel(state: string | null | undefined): string {
   return MC_STATE_LABEL[normState(state)] ?? (state ?? "");
 }
 
+/// 服务端核心显示名：列表与详情页的徽章用，未知值原样返回（不吞错）。
+const MC_CORE_LABEL: Record<string, string> = {
+  vanilla: "原版",
+  paper: "Paper",
+  folia: "Folia",
+  purpur: "Purpur",
+  fabric: "Fabric",
+  forge: "Forge",
+  neoforge: "NeoForge",
+};
+
+export function mcCoreLabel(core: string | null | undefined): string {
+  return MC_CORE_LABEL[(core ?? "").toLowerCase()] ?? (core ?? "");
+}
+
+/// 第三方核心说明：创建向导与实例页共用一段话，避免两处口径漂移。
+export function mcCoreNote(core: string | null | undefined): string {
+  switch ((core ?? "").toLowerCase()) {
+    case "paper":
+    case "folia":
+    case "purpur":
+    case "fabric":
+      return "服务端由上游发布，面板下载并校验上游哈希；装好后可在「插件/模组」页签装插件或模组。";
+    case "forge":
+    case "neoforge":
+      return "需要运行上游安装器（数分钟，libraries 会写进实例目录，约 100–300 MB）；装好后可在「插件/模组」页签装模组。";
+    default:
+      return "服务端由 Mojang 官方下载并校验；原版不加载插件或模组。";
+  }
+}
+
 const TERMINAL_TASK_STATES = new Set([
   "DONE",
   "SUCCESS",

@@ -2,6 +2,27 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.6.76 — 2026-11-07 · MC：Forge/NeoForge 安装器（安装式核心）
+
+**Forge 与 NeoForge 不是下载一个 jar 就能跑：面板现在会跑安装器，再用它写出的启动参数启动**
+
+- 新增 `McForge`：Forge 用 `promotions_slim.json` 选构建（`recommended` 优先，否则
+  `latest`），NeoForge 用 Maven metadata（前两个数字编码游戏版本，跳过 beta/alpha）；
+  三个上游地址都可换镜像（`HDSL_FORGE_MAVEN` / `HDSL_FORGE_PROMOTIONS` / `HDSL_NEOFORGE_MAVEN`）。
+- 安装流程：下载 installer（校验上游 `.sha1`，镜像没有时退化为 zip 校验）→
+  `java -jar <installer> --installServer`（cwd = 实例目录，输出进任务日志，20 分钟超时）→
+  找 `libraries/**/unix_args.txt`（老版本退回启动器 jar）→ 写 `launch.json` → 删除 installer。
+  安装器输出与退出码会带进错误信息，失败时看得到"卡在哪"。
+- 启动：`McRuntime` 先读 `launch.json`，用 `@unix_args.txt nogui`（或 `-jar forge-….jar nogui`），
+  没有才回到 `-jar server.jar`。安装器跑的 java 与实例实际启动用的是同一个（托管 JRE 优先）。
+- 插件/模组：Forge/NeoForge 归入 `mods/`（loader = forge / neoforge），Modrinth 搜索与安装
+  自动带上 loader 与游戏版本过滤；Paper 系的 `plugins/` 不变。
+- 前端：核心下拉出现 Forge / NeoForge；向导按核心给出提示（安装器耗时、libraries 占
+  100–300 MB 且跟实例走）；实例列表与详情页加核心徽章；完成页文案从"已下载"改成"已就绪"。
+- 测试：`McForgeTest` 覆盖 promotions/Maven 解析、安装编排与 `launch.json`、
+  安装器失败输出、`.sha1` 不匹配拒绝、老版本启动器 jar 回退、`launch.json` 路径逃逸拒绝。
+- 仍未做：mrpack 整合包、混合服（Mohist/Arclight）。
+
 ## v0.6.75 — 2026-11-07 · MC 第三方核心：Paper/Folia/Purpur/Fabric、托管 Java、插件/模组
 
 **MC 服务端从"只跑原版"变成"能跑插件服"，但第三方核心是一道独立的关**

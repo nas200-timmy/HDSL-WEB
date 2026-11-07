@@ -136,6 +136,8 @@ public final class McMods {
             case "folia" -> new Folder("plugins", "folia");
             case "purpur" -> new Folder("plugins", "purpur");
             case "fabric" -> new Folder("mods", "fabric");
+            case "forge" -> new Folder("mods", "forge");
+            case "neoforge" -> new Folder("mods", "neoforge");
             default -> null;
         };
     }

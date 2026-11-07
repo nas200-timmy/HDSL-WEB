@@ -1140,12 +1140,13 @@ public final class McApiServlet extends HttpServlet {
                 try {
                     TaskService.Task task = tasks.submit("mc-install", id, live -> {
                         live.update("Downloading " + instance.core() + " " + version, -1);
-                        cores.install(instance, manager, version.trim(), (copied, total) -> {
-                            String progress = (copied / (1024 * 1024)) + " / "
-                                    + (total > 0 ? (total / (1024 * 1024)) + " MB" : "? MB");
-                            live.update("Downloading " + version + ": " + progress,
-                                    total > 0 ? (double) copied / total : -1);
-                        });
+                        cores.install(instance, manager, version.trim(),
+                                (copied, total) -> {
+                                    String progress = (copied / (1024 * 1024)) + " / "
+                                            + (total > 0 ? (total / (1024 * 1024)) + " MB" : "? MB");
+                                    live.update("Installing " + version + ": " + progress,
+                                            total > 0 ? (double) copied / total : -1);
+                                }, runtime.javaFor(instance));
                         return "Installed " + instance.core() + " " + version;
                     }, null);
                     audit("mc.instance.install", id + "@" + version, "submitted", request);

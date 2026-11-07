@@ -207,15 +207,17 @@ class McCoresTest {
     void theCatalogueHidesThirdPartyCoresWhileTheGateIsOff() throws Exception {
         McVersions versions = new McVersions(Path.of("build", "test-cores-versions"),
                 URI.create("http://127.0.0.1:1/manifest.json"));
+        URI unreachable = URI.create("http://127.0.0.1:1");
+        McForge forge = new McForge(unreachable, unreachable, unreachable,
+                (java, installer, directory, log) -> 0);
         McCores cores = new McCores(versions, Path.of("build", "test-cores"),
-                URI.create("http://127.0.0.1:1"), URI.create("http://127.0.0.1:1"),
-                URI.create("http://127.0.0.1:1"));
+                unreachable, unreachable, unreachable, forge);
         List<McCores.CoreInfo> off = cores.catalog(false);
         assertEquals(1, off.size());
         assertEquals(McInstance.CORE_VANILLA, off.get(0).id());
         List<McCores.CoreInfo> on = cores.catalog(true);
-        assertEquals(5, on.size(), on.toString());
-        assertEquals(List.of("vanilla", "paper", "folia", "purpur", "fabric"),
+        assertEquals(7, on.size(), on.toString());
+        assertEquals(List.of("vanilla", "paper", "folia", "purpur", "fabric", "forge", "neoforge"),
                 on.stream().map(McCores.CoreInfo::id).toList());
     }
 
@@ -223,7 +225,9 @@ class McCoresTest {
     void coreIdsAreValidatedAndClassified() {
         assertTrue(McCores.known("paper"));
         assertTrue(McCores.known("vanilla"));
-        assertFalse(McCores.known("forge"));
+        assertTrue(McCores.known("forge"));
+        assertTrue(McCores.known("neoforge"));
+        assertFalse(McCores.known("mohist"));
         assertFalse(McCores.known(""));
         assertFalse(McCores.known(null));
         assertTrue(McCores.isThirdParty("fabric"));

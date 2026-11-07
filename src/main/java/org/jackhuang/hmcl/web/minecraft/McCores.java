@@ -71,8 +71,11 @@ public final class McCores {
     /// Fabric's meta API; the server launcher jar comes from it directly.
     public static final URI DEFAULT_FABRIC_API = URI.create("https://meta.fabricmc.net");
 
-    /// The cores this class installs itself; `vanilla` is [McVersions].
-    public static final List<String> THIRD_PARTY = List.of("paper", "folia", "purpur", "fabric");
+    /// The cores this class installs itself; `vanilla` is [McVersions], and
+    /// `forge`/`neoforge` delegate to [McForge] because they are installed
+    /// rather than downloaded as a ready jar.
+    public static final List<String> THIRD_PARTY =
+            List.of("paper", "folia", "purpur", "fabric", "forge", "neoforge");
 
     private static final Logger LOG = Logger.LOG;
     private static final long MAX_JAR_BYTES = 512L * 1024 * 1024;
@@ -90,6 +93,7 @@ public final class McCores {
     }
 
     private final McVersions vanilla;
+    private final McForge forge;
     private final Path coresRoot;
     private final URI paperApi;
     private final URI purpurApi;
@@ -102,6 +106,15 @@ public final class McCores {
         this(vanilla, coresRoot, DEFAULT_PAPER_API, DEFAULT_PURPUR_API, DEFAULT_FABRIC_API);
     }
 
+    /// The same, with the Forge/NeoForge installer wired in (tests, mirrors).
+    ///
+    /// @param vanilla   the Mojang catalogue
+    /// @param coresRoot the shared directory
+    /// @param forge     the Forge/NeoForge installer
+    public McCores(McVersions vanilla, Path coresRoot, McForge forge) {
+        this(vanilla, coresRoot, DEFAULT_PAPER_API, DEFAULT_PURPUR_API, DEFAULT_FABRIC_API, forge);
+    }
+
     /// The same, with overridable API bases (mirrors, tests).
     ///
     /// @param vanilla   the Mojang catalogue
@@ -110,7 +123,21 @@ public final class McCores {
     /// @param purpurApi Purpur's API base
     /// @param fabricApi Fabric's meta API base
     public McCores(McVersions vanilla, Path coresRoot, URI paperApi, URI purpurApi, URI fabricApi) {
+        this(vanilla, coresRoot, paperApi, purpurApi, fabricApi, new McForge());
+    }
+
+    /// The same, with every endpoint and the installer injectable.
+    ///
+    /// @param vanilla   the Mojang catalogue
+    /// @param coresRoot the shared directory
+    /// @param paperApi  PaperMC's API base
+    /// @param purpurApi Purpur's API base
+    /// @param fabricApi Fabric's meta API base
+    /// @param forge     the Forge/NeoForge installer
+    public McCores(McVersions vanilla, Path coresRoot, URI paperApi, URI purpurApi, URI fabricApi,
+                   McForge forge) {
         this.vanilla = vanilla;
+        this.forge = forge;
         this.coresRoot = coresRoot.toAbsolutePath().normalize();
         this.paperApi = paperApi;
         this.purpurApi = purpurApi;
@@ -144,6 +171,8 @@ public final class McCores {
             case "folia" -> "Folia";
             case "purpur" -> "Purpur";
             case "fabric" -> "Fabric";
+            case "forge" -> "Forge";
+            case "neoforge" -> "NeoForge";
             default -> "Vanilla";
         };
     }
@@ -200,6 +229,7 @@ public final class McCores {
             case "folia" -> paperVersions("folia");
             case "purpur" -> purpurVersions();
             case "fabric" -> fabricVersions();
+            case "forge", "neoforge" -> forge.gameVersions(core);
             default -> throw new McException("unknown server core `" + core + "`");
         };
     }
@@ -215,12 +245,33 @@ public final class McCores {
     ///                      hash does not match
     public McInstance install(McInstance instance, McInstanceManager manager, String version,
                               @Nullable McVersions.Progress progress) throws McException {
+        return install(instance, manager, version, progress, "java");
+    }
+
+    /// The same, with the java the installer runs under.
+    ///
+    /// @param instance the instance
+    /// @param manager  the instance manager
+    /// @param version  the game version
+    /// @param progress the download sink, or `null`
+    /// @param javaBin  the java executable for the Forge/NeoForge installer
+    /// @return the instance with its version updated
+    /// @throws McException when the core is unknown or the install fails
+    public McInstance install(McInstance instance, McInstanceManager manager, String version,
+                              @Nullable McVersions.Progress progress, String javaBin)
+            throws McException {
         String core = instance.core();
         if (McInstance.CORE_VANILLA.equals(core)) {
             return vanilla.install(instance, manager, version);
         }
         if (!THIRD_PARTY.contains(core)) {
             throw new McException("unknown server core `" + core + "`");
+        }
+        if (McForge.isInstalledCore(core)) {
+            forge.install(manager.instanceDirectory(instance.id()), core, version, javaBin, progress);
+            McInstance updated = instance.withVersion(version);
+            manager.update(updated);
+            return updated;
         }
         Artifact artifact = resolve(core, version);
         Path shared = coresRoot.resolve(core).resolve(version).resolve(McInstanceManager.SERVER_JAR_NAME);

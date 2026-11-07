@@ -6,8 +6,9 @@
 >
 > 2026-11 增量（§19）：**第三方核心**（Paper/Folia/Purpur/Fabric）走**第二道关**——
 > 只有主功能开启后才能开启，独立条款与同意记录，关闭主功能前必须先关它；
-> 同时新增**面板自托管 JRE**（Adoptium）与**插件/模组管理**（Modrinth 安装、`.jar.disabled`
-> 启停）。Forge/NeoForge 安装器与 mrpack 整合包仍在后续。
+> 同时新增**面板自托管 JRE**（Adoptium）、**插件/模组管理**（Modrinth 安装、`.jar.disabled`
+> 启停）与 **Forge/NeoForge 安装器**（跑上游 installer，解析 `unix_args.txt` 启动）。
+> mrpack 整合包仍在后续。
 >
 > 一句话：把 Minecraft 服务端当作**第三种 surface**接入面板，复用现有的实例模型、
 > 进程/终端、端口分配、任务与审计；游戏端口独立暴露，**默认关闭**，开启需提权与免责确认；
@@ -34,8 +35,8 @@ AI agent 后续可经 **scoped token** 调用同一套原语（破坏性操作�
 
 - **不是反代**。MC 客户端说的是二进制 TCP（25565），现有 `/i/*` 是 HTTP/WebSocket，
   转不了。游戏端口必须单独暴露（例外：Dynmap/BlueMap 这类网页地图是 HTTP，可正常反代）。
-- **不是模组/插件市场**。第三方核心（Paper/Folia/Purpur/Fabric）在**第二道关**之后可用，
-  插件/模组可管理并从 Modrinth 安装（§19）；但 Forge/NeoForge 安装器与整合包（mrpack）
+- **不是模组/插件市场**。第三方核心（Paper/Folia/Purpur/Fabric/Forge/NeoForge）在
+  **第二道关**之后可用，插件/模组可管理并从 Modrinth 安装（§19）；整包（mrpack）
   仍不在第一版范围内，面板也不做市场本身——它只调用上游公开接口。
 - **不是沙箱**。默认与面板同 uid（§11.3 写明边界）；`runAsUser` 是可选增强。
 - **不是编译期开关**。运行时开关，代码始终在包里，前端页签运行时隐藏（§3.8）。
@@ -170,7 +171,7 @@ Java 没有 `#ifdef`。真要"编不进去"只有两条路：source set + SPI，
 
 ### 4.2 非目标（第一版）
 
-- Forge / NeoForge 安装器；mrpack 整合包部署（§19 末尾写明为什么先不做）
+- mrpack 整合包部署（§19.5 写明边界）
 - TPS 曲线与性能图表（Paper 可后续）
 - 定时任务、多世界管理、跨主机编排
 - 编译期裁剪（只保留变体设计，不实现）
@@ -1310,6 +1311,7 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
 | Paper / Folia | `api.papermc.io/v2` | 上游公布 SHA-256 | `HDSL_PAPER_API` |
 | Purpur | `api.purpurmc.org/v2` | 上游公布 MD5 | `HDSL_PURPUR_API` |
 | Fabric | `meta.fabricmc.net/v2` | 上游无哈希：只校验 zip，并在 UI/文档如实标注 | `HDSL_FABRIC_API` |
+| Forge / NeoForge | Forge maven + promotions / NeoForge maven | installer jar 校验上游 `.sha1`（镜像不提供时退化为 zip 校验） | `HDSL_FORGE_MAVEN`、`HDSL_FORGE_PROMOTIONS`、`HDSL_NEOFORGE_MAVEN` |
 | Vanilla | Mojang 清单 | SHA-1 + 面板自记 SHA-256 + 可选 pin | `HDSL_MC_MANIFEST` |
 
 - 共享存储：`<data>/minecraft/cores/<core>/<version>/server.jar` + `version.json`
@@ -1335,7 +1337,8 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
 
 ### 19.4 插件 / 模组
 
-- 文件夹跟着核心走：Paper/Folia/Purpur → `plugins/`，Fabric → `mods/`，vanilla → 明确拒绝。
+- 文件夹跟着核心走：Paper/Folia/Purpur → `plugins/`，Fabric/Forge/NeoForge → `mods/`，
+  vanilla → 明确拒绝。
 - **停用 = 改名**：`x.jar` ⇄ `x.jar.disabled`。没有 sidecar 状态，手改即可恢复。
 - 上传：只收 `.jar`，zip 魔数校验，不覆盖同名文件；路径穿越在解析层拦截。
 - Modrinth 搜索/安装（`HDSL_MODRINTH_API` 可换镜像）：按核心映射 project_type
@@ -1346,10 +1349,25 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
   `GET /api/mc/modrinth/search`、`POST /api/mc/modrinth/install`；写操作提权 + 审计
   （`mc.instance.mod.*`）。
 
-### 19.5 仍未做（明确列出）
+### 19.5 Forge / NeoForge（安装式核心）
 
-- **Forge / NeoForge 安装器**：需要跑 installer、解析 `unix_args.txt`/`run.bat`、镜像 libraries，
-  是独立的一大块；纯模组服与混合服（Mohist/Arclight）都依赖它。
-- **mrpack 整合包**：Fabric 系可以复用现有核心 + 插件/模组能力，但 Forge 系要等安装器；
-  此外还要处理 `overrides/`、`env.server == unsupported` 过滤与 sha512 校验。
-- 这两项都不在本次增量里，文档与 UI 不得暗示它们已经可用。
+- 上游不发"现成可跑的 jar"：`installer.jar` 会下载原版、打补丁、在 `libraries/…` 下写
+  `unix_args.txt`（Java 参数文件，含 classpath 与主类）。面板因此**按实例安装**：
+  工作目录就是实例目录，安装器下载的 libraries 写在那里；共享会让每个实例共用同一个世界目录。
+- 版本来源：Forge 用 `promotions_slim.json`（`recommended` 优先，否则 `latest`）；
+  NeoForge 用 maven metadata，前两个数字编码游戏版本（`21.4.123` → 1.21.4，跳过 beta/alpha）。
+- 安装流程：下载 installer（校验上游 `.sha1`，镜像没有则 zip 校验）→
+  `java -jar <installer> --installServer`（cwd = 实例目录，输出进任务日志，超时 20 分钟）→
+  找 `libraries/**/unix_args.txt`；老版本没有则退回启动器 jar → 写 `launch.json`
+  （`argsFile` 或 `jar`），删掉 installer。
+- 启动：`McRuntime` 先看 `launch.json`，有则用 `java @unix_args.txt nogui`
+  （或 `-jar forge-….jar nogui`），没有才退回 `-jar server.jar`。
+- 边界（写进 UI 提示）：安装耗时数分钟、libraries 占 100–300 MB 且跟实例走；
+  混合服（Mohist/Arclight）与 mrpack 整合包仍不在范围内。
+
+### 19.6 仍未做（明确列出）
+
+- **mrpack 整合包**：Fabric 系可复用现有核心 + 插件/模组能力；Forge 系虽然已有安装器，
+  但还需要处理 `overrides/`、`env.server == unsupported` 过滤、每文件 sha512 与
+  `dependencies.fabric-loader` 的版本固定，留作下一版。
+- 混合服（Mohist/Arclight/Banner）：插件与模组同时加载，需要自己的兼容性说明，暂不做。

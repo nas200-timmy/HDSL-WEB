@@ -3,7 +3,7 @@ import { api, type McCoreInfo, type McInstance, type McStorage, type McVersion }
 import { Dialog } from "./Dialog";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { toast } from "../store";
-import { errMsg } from "../utils";
+import { errMsg, mcCoreNote } from "../utils";
 import { CheckCircleIcon, WarningIcon } from "./icons";
 
 /** MC 实例创建向导：填参数 → 选版本 → 选存储 → 下载服务端 → 直接可启动。
@@ -260,14 +260,7 @@ export function McCreateWizard({
                 </select>
               </Field>
             )}
-            <Field
-              label="Minecraft 版本"
-              hint={
-                selectedCore && selectedCore.thirdParty
-                  ? `服务端由 ${selectedCore.label} 上游发布，面板下载并校验上游哈希`
-                  : "服务端由 Mojang 官方下载，首次安装约 50 MB"
-              }
-            >
+            <Field label="Minecraft 版本" hint={mcCoreNote(selectedCore?.id ?? core)}>
               <select className="input" value={version} onChange={(e) => setVersion(e.target.value)}>
                 <option value="">选择一个版本</option>
                 {coreVersions.map((id) => (
@@ -279,8 +272,9 @@ export function McCreateWizard({
             </Field>
             <div className="hint info" style={{ margin: 0 }}>
               <span style={{ flex: 1 }}>
-                服务端程序不随本项目分发，安装时从上游下载并按上游公布的哈希校验。
-                同一核心同一版本在面板里只存一份，多实例共用。
+                {selectedCore?.id === "forge" || selectedCore?.id === "neoforge"
+                  ? "Forge/NeoForge 没有现成的服务端 jar：面板会运行上游安装器，把 libraries 写进这个实例的目录，耗时数分钟。"
+                  : "服务端程序不随本项目分发，安装时从上游下载并按上游公布的哈希校验。同一核心同一版本在面板里只存一份，多实例共用。"}
               </span>
             </div>
             <div className="hint warning" style={{ margin: 0 }}>
@@ -336,7 +330,7 @@ export function McCreateWizard({
                 <ProgressBar fraction={progress?.fraction ?? -1} />
                 <div style={{ fontSize: 13 }}>{progress?.message || "正在准备下载…"}</div>
                 <div className="dim" style={{ fontSize: 12 }}>
-                  下载由服务端任务执行，关掉这个对话框也会继续；完成后回实例列表能看到。
+                  下载/安装由服务端任务执行，关掉这个对话框也会继续；完成后回实例列表能看到。
                 </div>
               </>
             )}
@@ -347,7 +341,7 @@ export function McCreateWizard({
           <div style={{ display: "grid", gap: 8 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <CheckCircleIcon size={18} />
-              <span style={{ fontWeight: 600 }}>服务端已下载，可以直接启动</span>
+              <span style={{ fontWeight: 600 }}>服务端已就绪，可以直接启动</span>
             </div>
             <div className="dim" style={{ fontSize: 12, lineHeight: 1.7 }}>
               {instance.name} · {instance.version} · 端口 {instance.port} · RCON {instance.rconPort}

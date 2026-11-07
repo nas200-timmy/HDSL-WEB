@@ -15,7 +15,7 @@ import {
 } from "./icons";
 import { McCreateWizard } from "./McCreateWizard";
 import { toast } from "../store";
-import { errMsg, mcStateLabel, normState } from "../utils";
+import { errMsg, mcCoreLabel, mcStateLabel, normState } from "../utils";
 
 /// MC 服务端实例视图，嵌在「实例列表」页里原地切换（`?view=mc`）。
 ///
@@ -225,6 +225,7 @@ export function McInstancesView() {
                   <span className="tlli-text">
                     <span className="tlli-title">
                       {instance.name}
+                      <span className="tag plain">{mcCoreLabel(instance.core)}</span>
                       <span
                         className={`tag ${
                           state === "RUNNING" ? "running" : state === "FAILED" ? "failed" : "plain"

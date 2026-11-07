@@ -28,7 +28,7 @@ import {
 } from "../components/icons";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { toast } from "../store";
-import { errMsg, mcStateLabel } from "../utils";
+import { errMsg, mcCoreLabel, mcStateLabel } from "../utils";
 
 type McTab = "overview" | "console" | "settings" | "files" | "backups" | "players" | "world" | "logs";
 
@@ -280,7 +280,12 @@ export function McInstancePage() {
           <>
             <div className="card">
               <div className="comp-row">
-                <span className="comp-label">{instance.name}</span>
+                <span className="comp-label">
+                  {instance.name}
+                  <span className="tag plain" style={{ marginLeft: 8 }}>
+                    {mcCoreLabel(instance.core)}
+                  </span>
+                </span>
                 <span className="comp-value">
                   <span className={`tag ${running ? "running" : "plain"}`}>{mcStateLabel(instance.state)}</span>
                 </span>

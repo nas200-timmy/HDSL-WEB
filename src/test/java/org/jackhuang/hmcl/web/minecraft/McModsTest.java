@@ -191,6 +191,8 @@ class McModsTest {
         assertEquals("plugins", McMods.folderOf("paper").kind());
         assertEquals("plugins", McMods.folderOf("purpur").kind());
         assertEquals("mods", McMods.folderOf("fabric").kind());
+        assertEquals("mods", McMods.folderOf("forge").kind());
+        assertEquals("mods", McMods.folderOf("neoforge").kind());
         assertEquals(null, McMods.folderOf("vanilla"));
     }
 }

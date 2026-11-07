@@ -247,6 +247,17 @@ public final class McRuntime {
                 command.add("-Dfile.encoding=UTF-8");
                 command.add("-Dsun.stdout.encoding=UTF-8");
                 command.add("-Dsun.stderr.encoding=UTF-8");
+                // Forge and NeoForge do not run from a jar: their installer leaves
+                // a Java argument file (`@libraries/…/unix_args.txt`) or, before
+                // 1.17, a launcher jar. Both are discovered per instance, so a
+                // core that was never installed falls through to the jar path and
+                // fails there with the usual "server.jar is missing".
+                java.util.List<String> launch = McForge.launchArguments(
+                        manager.instanceDirectory(instance.id()));
+                if (launch != null) {
+                    command.addAll(launch);
+                    return command;
+                }
                 command.add("-jar");
                 // Absolute: a command line that names the instance directory is
                 // what `ProcessTree.killReferencing` uses to reap an orphan on
