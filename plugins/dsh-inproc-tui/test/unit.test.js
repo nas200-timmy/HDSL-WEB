@@ -12,6 +12,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
+import { textOf } from '../../shared/i18n.js'
 import {
   argsFromProcess,
   isUserQuestionError,
@@ -175,4 +176,16 @@ test('a launch asked to resume replays the log it resumed', () => {
   const start = /async start\(\) \{[\s\S]*?\n  \}/u.exec(app)
   assert.ok(start !== null, 'the startup path is still there')
   assert.match(start[0], /if \(resumed\) this\.replayHistory\(this\.session\.history\(\)\)/u)
+})
+
+test('a localized harness text is one language, never an object', () => {
+  const reason = { en: 'Bash needs approval', zh: 'bash 需要确认' }
+  assert.equal(textOf(reason, 'zh'), 'bash 需要确认')
+  assert.equal(textOf(reason, 'en'), 'Bash needs approval')
+  assert.equal(textOf(reason, 'fr'), 'Bash needs approval', 'unknown language falls back to a translation')
+  assert.equal(textOf('plain', 'zh'), 'plain')
+  assert.equal(textOf(null, 'zh'), '')
+  assert.equal(textOf({}, 'zh'), '')
+  assert.equal(textOf({ zh: '  ', en: 'only english' }, 'zh'), 'only english',
+    'a blank translation is not a translation')
 })

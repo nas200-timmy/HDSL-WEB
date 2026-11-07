@@ -61,8 +61,14 @@ class DshTuiPluginsTest {
         // bundle at load ("incompatible with dsh 0.2.2-alpha.2"). The panel must not
         // claim that combination, or it installs a terminal the host silently skips.
         assertFalse(DshTuiPlugins.fitsHost(inproc, "0.2.2-alpha.2"),
-                "the bundle's peers stop at 0.2.1-rc.3");
+                "the bundle's peers do not name an alpha of 0.2.2");
         assertTrue(DshTuiPlugins.fitsHost(inproc, "0.2.1-rc.3"));
+        // 0.2.2-rc.1 is the line the 0.2.2 plugin was run against, and its peers name
+        // that exact version — so the pair fits, while a later rc of the same line (never
+        // tested) does not.
+        assertTrue(DshTuiPlugins.fitsHost(inproc, "0.2.2-rc.1"));
+        assertFalse(DshTuiPlugins.fitsHost(inproc, "0.2.2-rc.2"),
+                "a later 0.2.2 prerelease is not in the plugin's peer list");
         // …and so do `0.2.1-rc.4` / `-rc.5`, which is what `dsh@latest` publishes.
         // The panel used to call those a fit (`<0.2.2-0` admits every 0.2.1 prerelease),
         // and the install then bounced off dsh's own "incompatible with dsh 0.2.1-rc.5"

@@ -2,6 +2,19 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布
+
+**TUI 插件声明跟上 dsh 0.2.2-rc.1；审批详情不再显示 `[object Object]`**
+
+- `plugins/dsh-inproc-tui` 升到 `0.2.2`，三个 `peerDependencies` 追加 `|| 0.2.2-rc.1`——按版本
+  精确列出，不写 `<0.3`：semver 的预发布规则会让通配漏掉 rc，写宽了反而装不上。面板的
+  `DshTuiPlugins.Entry` 同步版本与 `requiresDsh`，所以 0.2.2-rc.1 的实例能装、能开终端，而没跑过的
+  `0.2.2-alpha.2` / 后来的 `0.2.2-rc.2` 仍然被拒（dsh 自己也会拒绝加载，面板不该假装可以）。
+- 审批对话框的详情行把 `request.displayReason` 当字符串拼接，而它在 0.2.x 是本地化对象
+  `{ en, zh, … }`，于是显示成 `[object Object]`。新增 `shared/i18n.js#textOf`：先取界面语言、再回落
+  到其它语言，字符串原样通过；追问的 `question` / `detail` 同样走它。旧的 0.2.1-rc.3 上就存在这个问题，
+  与 0.2.2 的接缝无关。
+
 ## v0.6.73 — 2026-11-07 · 实例 home 属主修复（cordis.yml EACCES）；构建换源提速
 
 **实例 home 里 root 属主的文件：`EACCES …/profiles/web/cordis.yml` 的真正原因**

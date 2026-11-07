@@ -44,9 +44,9 @@ inside the panel jar, so the install needs no registry. The panel then opens the
 terminal by booting this profile — a pure bundle has no executable of its own.
 
 **0.2.x only.** The bundle patch is written against the 0.2.x service seams, and
-the panel's catalogue pins it to `>=0.2.0-rc.2`; the peer ranges are
-`>=0.2.0-rc.2 <0.3` for the same reason, so a later 0.2.x cannot pass the gate
-while sitting outside the peers (verified on 0.2.0-rc.2 and 0.2.1-rc.3). An older
+the panel's catalogue pins this build to the harness lines it was actually run
+against; the peer ranges enumerate them (`0.2.0-rc.1` … `0.2.1-rc.3`, plus
+`0.2.2-rc.1`), so a line nobody ran the terminal against cannot pass the gate. An older
 instance gets `dsh-acp-tui` instead, which speaks ACP and is meant for exactly
 that case.
 

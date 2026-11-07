@@ -243,7 +243,8 @@ plugins/                        # 第一方插件源码，一个目录一个 npm
 - **`dsh-inproc-tui`（进程内）**：**mode bundle**，叠在 `dsh-base` 上、跑在 harness 进程里，
   所以有真·逐字流式、思考增量、`approval/request` 审批与 `user-questions/request` 追问、
   进程内模型切换和压缩。代价是只认 **0.2.x** 的服务接缝（`requiresDsh >=0.2.0-rc.2`，
-  实测 0.2.0-rc.2 与 0.2.1-rc.3 都能跑）。面板用 `dsh --profile dsh-inproc-tui` 启动它。
+  实测 0.2.0-rc.2、0.2.1-rc.3 与 0.2.2-rc.1 都能跑）。面板用 `dsh --profile dsh-inproc-tui`
+  启动它。
 - **`dsh-acp-tui`（兼容备用）**：**独立程序**，不 import 任何 harness 包，用 ACP v1 与
   `dsh --profile acp` 通信，因此从 **0.1.2-rc.1** 起都能跑；面板用
   `node …/bin/dsh-acp-tui.js` 启动它。它是**绝对的兼容选项**：实例升级、降级都拿它兜底。

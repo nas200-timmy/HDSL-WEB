@@ -18,7 +18,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { isAbsolute, relative as relativePath, resolve as resolvePath } from 'node:path'
 
-import { createI18n, detectLanguage } from '../../shared/i18n.js'
+import { createI18n, detectLanguage, textOf } from '../../shared/i18n.js'
 import { createTheme, detectMode } from '../../shared/term/theme.js'
 import { Screen } from '../../shared/term/screen.js'
 import { createKeyDecoder } from '../../shared/term/keys.js'
@@ -580,7 +580,9 @@ export class TerminalApp {
         request,
         key,
         toolName,
-        detail: request.displayReason ?? request.reason ?? '',
+        // `displayReason` is a localized object on 0.2.x (`{ en, zh, … }`), not a string:
+        // rendering it raw is where `[object Object]` came from.
+        detail: textOf(request.displayReason ?? request.reason, this.language),
         /** Why the dialog is up, so the footer can say "critical 模式下需要确认". */
         why: verdict.reason,
         plan: verdict.severity === 'plan',
@@ -689,7 +691,8 @@ export class TerminalApp {
           render: () => ({
             kind: 'permission',
             title: question.header ?? this.i18n.t('question.title'),
-            detail: [question.question, question.detail].filter(Boolean).join('\n'),
+            detail: [textOf(question.question, this.language),
+              textOf(question.detail, this.language)].filter(Boolean).join('\n'),
             options: options.length > 0
               ? options
               : [{ label: this.i18n.t('question.no-options'), value: null }],

@@ -381,6 +381,34 @@ export function detectLanguage(env) {
  *
  * @param {'en'|'zh'} [language]
  */
+/**
+ * Returns a text the harness may serve localized, as a plain string.
+ *
+ * dsh's approval requests carry `displayReason` as an object of translations
+ * (`{ en, zh, … }`); older lines sent a plain string. Rendered through
+ * `String()`, the object prints as `[object Object]` — which is exactly what the
+ * approval row said before this existed. The interface language is tried first,
+ * then every other language the object names, so a missing translation degrades
+ * to the other language rather than to nothing.
+ *
+ * @param {unknown} value the text, a localized object, or null
+ * @param {string} [language] the interface language ('zh' or 'en')
+ * @returns {string}
+ */
+export function textOf(value, language = 'en') {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (typeof value !== 'object') return String(value)
+  const preferred = value[language]
+  if (typeof preferred === 'string' && preferred.trim() !== '') return preferred
+  for (const key of Object.keys(value)) {
+    const text = value[key]
+    if (typeof text === 'string' && text.trim() !== '') return text
+  }
+  return ''
+}
+
 export function createI18n(language = 'en') {
   const table = TABLES[language] ?? TABLES.en
   const fallback = TABLES.en
