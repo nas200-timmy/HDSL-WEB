@@ -180,7 +180,7 @@ export function McJavaInstallWizard({
   return (
     <Dialog
       open={open}
-      xl
+      wide
       title={`安装 JDK · ${STEP_TITLES[step]}`}
       onClose={() => {
         if (!busy) onClose();
@@ -231,16 +231,16 @@ export function McJavaInstallWizard({
         </div>
 
         {step === 0 && (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-              gap: 14,
-            }}
-          >
-            <div style={{ display: "grid", gap: 8, alignContent: "start" }}>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>要哪个 LTS 主版本？</div>
-              {loading && <span className="dim" style={{ fontSize: 12 }}>正在读取可用版本…</span>}
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>要哪个 LTS 主版本？</div>
+            {loading && <span className="dim" style={{ fontSize: 12 }}>正在读取可用版本…</span>}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+                gap: 8,
+              }}
+            >
               {[25, 21, 17, 11, 8].map((candidate) => (
                 <button
                   key={candidate}
@@ -255,27 +255,18 @@ export function McJavaInstallWizard({
                     border: candidate === feature ? "1px solid var(--monet-primary)" : undefined,
                   }}
                 >
-                  <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <b style={{ fontSize: 14 }}>Java {candidate}</b>
                     <span className="tag plain">LTS</span>
-                    {availableFeatures.has(candidate) ? (
-                      <span className="tag running">可下载</span>
-                    ) : (
-                      <span className="tag plain">该发行版暂无</span>
-                    )}
                   </span>
                   <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
-                    {MC_REQUIREMENTS.filter((row) => row.java <= candidate).length > 0
-                      ? `可运行的 MC：${MC_REQUIREMENTS.filter((row) => row.java <= candidate)
-                          .map((row) => row.range)
-                          .join("、")}`
-                      : "—"}
+                    {availableFeatures.has(candidate) ? "可下载" : "该发行版暂无"}
                   </span>
                 </button>
               ))}
             </div>
 
-            <div className="card" style={{ padding: 10, display: "grid", gap: 6, alignContent: "start" }}>
+            <div className="card" style={{ padding: 10, display: "grid", gap: 6 }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>Minecraft 需要的最低 Java</div>
               {MC_REQUIREMENTS.map((row) => (
                 <div
@@ -308,36 +299,40 @@ export function McJavaInstallWizard({
                   disabled={!has}
                   onClick={() => setVendor(entry.id)}
                   style={{
-                    padding: 12,
+                    padding: 10,
                     textAlign: "left",
-                    display: "grid",
-                    gap: 5,
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "center",
+                    flexWrap: "wrap",
                     cursor: has ? "pointer" : "not-allowed",
                     opacity: has ? 1 : 0.55,
                     border: entry.id === vendor ? "1px solid var(--monet-primary)" : undefined,
                   }}
                 >
-                  <span style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <b style={{ fontSize: 14 }}>{entry.name}</b>
-                    {has ? (
-                      <span className="tag running">有 Java {feature}</span>
-                    ) : (
-                      <span className="tag plain">没有 Java {feature}</span>
-                    )}
-                    {health && !health.ok && <span className="tag failed">目录读取失败</span>}
-                  </span>
-                  <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                    {entry.summary}
-                  </span>
-                  <span style={{ fontSize: 11 }}>{entry.license}</span>
-                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11, lineHeight: 1.7 }}>
-                    {entry.points.map((point) => (
-                      <li key={point}>{point}</li>
-                    ))}
-                  </ul>
+                  <b style={{ fontSize: 13 }}>{entry.name}</b>
+                  {has ? (
+                    <span className="tag running">有 Java {feature}</span>
+                  ) : (
+                    <span className="tag plain">没有 Java {feature}</span>
+                  )}
+                  {health && !health.ok && <span className="tag failed">目录读取失败</span>}
+                  {entry.id === vendor && <span className="tag running">已选</span>}
                 </button>
               );
             })}
+            <div className="card" style={{ padding: 12, display: "grid", gap: 5 }}>
+              <b style={{ fontSize: 13 }}>{vendorInfo.name}</b>
+              <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                {vendorInfo.summary}
+              </span>
+              <span style={{ fontSize: 11 }}>{vendorInfo.license}</span>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11, lineHeight: 1.7 }}>
+                {vendorInfo.points.map((point) => (
+                  <li key={point}>{point}</li>
+                ))}
+              </ul>
+            </div>
             <span className="dim" style={{ fontSize: 11, lineHeight: 1.6 }}>
               Oracle JDK 不在此列：它的许可允许使用、不允许再分发，面板代下载就等于再分发。
               需要时请自行安装，然后在实例的高级设置里指向它。

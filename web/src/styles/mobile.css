@@ -238,10 +238,8 @@
     padding: 16px 16px 12px;
   }
 
-  .dialog.wide,
-  .dialog.xl {
+  .dialog.wide {
     width: calc(100vw - 24px);
-    max-width: none;
   }
 
   .popup-menu {

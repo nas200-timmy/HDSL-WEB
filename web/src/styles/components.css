@@ -409,13 +409,6 @@ select.input {
   width: 560px;
 }
 
-/* 向导 / 对照表：比 wide 再宽一档。max-width 必须在这里重写，
-   否则仍然是 .dialog 的 560px 上限。 */
-.dialog.xl {
-  width: 780px;
-  max-width: min(780px, calc(100vw - 64px));
-}
-
 /* 认证页（登录 / 首次初始化）卡片：原来是内联 minWidth 340 / width 380，
    在 360px 手机上必然溢出，所以挪到这里，窄屏由 mobile.css 收窄。 */
 .auth-card {
