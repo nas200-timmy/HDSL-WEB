@@ -409,6 +409,13 @@ select.input {
   width: 560px;
 }
 
+/* 向导 / 对照表：比 wide 再宽一档。max-width 必须在这里重写，
+   否则仍然是 .dialog 的 560px 上限。 */
+.dialog.xl {
+  width: 780px;
+  max-width: min(780px, calc(100vw - 64px));
+}
+
 /* 认证页（登录 / 首次初始化）卡片：原来是内联 minWidth 340 / width 380，
    在 360px 手机上必然溢出，所以挪到这里，窄屏由 mobile.css 收窄。 */
 .auth-card {
@@ -432,11 +439,24 @@ select.input {
   overflow-y: auto;
   margin-top: 8px;
   flex: 1;
+  /* A flex child will not shrink below its content unless this is 0; without
+     it a long dialog grows past `.dialog`'s max-height and the last rows are
+     simply cut off — the wizard's footer looked "covered" rather than scrolled. */
+  min-height: 0;
 }
 
 /* jfx-layout-body：正文 pref 400 */
 .dialog:not(.wide) .dialog-body {
   max-width: 400px;
+}
+
+.dialog-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 10px;
+  flex-wrap: wrap;
 }
 
 .dialog-actions {

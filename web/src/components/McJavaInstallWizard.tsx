@@ -180,20 +180,64 @@ export function McJavaInstallWizard({
   return (
     <Dialog
       open={open}
-      wide
+      xl
       title={`安装 JDK · ${STEP_TITLES[step]}`}
       onClose={() => {
         if (!busy) onClose();
       }}
       closeOnBackdrop={!busy}
+      footer={
+        <>
+          <button
+            className="btn btn-text"
+            disabled={busy || step === 0}
+            onClick={() => setStep((current) => (Math.max(0, current - 1) as Step))}
+          >
+            上一步
+          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-text" disabled={busy} onClick={onClose}>
+              {done ? "关闭" : "取消"}
+            </button>
+            {step === 0 && (
+              <button className="btn btn-raised" onClick={() => setStep(1)}>
+                下一步
+              </button>
+            )}
+            {step === 1 && (
+              <button
+                className="btn btn-raised"
+                disabled={!chosen}
+                onClick={() => {
+                  setStep(2);
+                  void install();
+                }}
+              >
+                下载并安装
+              </button>
+            )}
+            {step === 2 && done && (
+              <button className="btn btn-raised" onClick={onClose}>
+                完成
+              </button>
+            )}
+          </div>
+        </>
+      }
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 560 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, width: "100%" }}>
         <div className="dim" style={{ fontSize: 12 }}>
           {step < 2 ? `第 ${step + 1} / 2 步` : done ? "安装完成" : "正在安装"}
         </div>
 
         {step === 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 14 }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+              gap: 14,
+            }}
+          >
             <div style={{ display: "grid", gap: 8, alignContent: "start" }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>要哪个 LTS 主版本？</div>
               {loading && <span className="dim" style={{ fontSize: 12 }}>正在读取可用版本…</span>}
@@ -348,42 +392,6 @@ export function McJavaInstallWizard({
           </div>
         )}
 
-        <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center" }}>
-          <button
-            className="btn btn-text"
-            disabled={busy || step === 0}
-            onClick={() => setStep((current) => (Math.max(0, current - 1) as Step))}
-          >
-            上一步
-          </button>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-text" disabled={busy} onClick={onClose}>
-              {done ? "关闭" : "取消"}
-            </button>
-            {step === 0 && (
-              <button className="btn btn-raised" onClick={() => setStep(1)}>
-                下一步
-              </button>
-            )}
-            {step === 1 && (
-              <button
-                className="btn btn-raised"
-                disabled={!chosen}
-                onClick={() => {
-                  setStep(2);
-                  void install();
-                }}
-              >
-                下载并安装
-              </button>
-            )}
-            {step === 2 && done && (
-              <button className="btn btn-raised" onClick={onClose}>
-                完成
-              </button>
-            )}
-          </div>
-        </div>
       </div>
     </Dialog>
   );

@@ -10,12 +10,16 @@ export interface DialogProps {
   /** 点遮罩是否关闭（审批类对话框应传 false） */
   closeOnBackdrop?: boolean;
   wide?: boolean;
+  /** 更宽的一档（向导、对照表）：比 wide 再宽 220px，窄屏仍然铺满。 */
+  xl?: boolean;
   /** 不显示右上角关闭按钮 */
   hideClose?: boolean;
+  /** 固定在滚动区外面的按钮行：正文很长时按钮仍然可见。 */
+  footer?: ReactNode;
 }
 
 /** HMCL 弹窗：遮罩 rgba(0,0,0,0.1)、surface-container-high、圆角 4、padding 24 24 16 24，缩放淡入。 */
-export function Dialog({ open, title, children, onClose, closeOnBackdrop = true, wide, hideClose }: DialogProps) {
+export function Dialog({ open, title, children, onClose, closeOnBackdrop = true, wide, xl, hideClose, footer }: DialogProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -36,7 +40,12 @@ export function Dialog({ open, title, children, onClose, closeOnBackdrop = true,
         if (closeOnBackdrop && e.target === e.currentTarget) onClose?.();
       }}
     >
-      <div className={`dialog${wide ? " wide" : ""}`} role="dialog" aria-modal="true" ref={ref}>
+      <div
+        className={`dialog${wide ? " wide" : ""}${xl ? " xl" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        ref={ref}
+      >
         <div className="dialog-title">
           <span style={{ flex: 1, minWidth: 0 }}>{title}</span>
           {!hideClose && onClose && (
@@ -46,6 +55,7 @@ export function Dialog({ open, title, children, onClose, closeOnBackdrop = true,
           )}
         </div>
         <div className="dialog-body">{children}</div>
+        {footer && <div className="dialog-footer">{footer}</div>}
       </div>
     </div>,
     document.body,
