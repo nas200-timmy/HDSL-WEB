@@ -719,6 +719,12 @@ public final class McApiServlet extends HttpServlet {
 
     /// Where third-party cores are fetched from, and what each source has left.
     private void sourcesJson(HttpServletResponse response) throws IOException {
+        if (!feature.thirdPartyEnabled()) {
+            // Same rule as every other third-party route while the gate is off:
+            // the surface does not exist (404, not 403).
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
         McSources sources = cores.sources();
         if (sources == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
@@ -765,6 +771,10 @@ public final class McApiServlet extends HttpServlet {
     /// stored, so a typo cannot silently disable a core.
     private void updateSources(HttpServletRequest request, HttpServletResponse response)
             throws IOException {
+        if (!feature.thirdPartyEnabled()) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
         if (!requireElevation(request, response)) {
             return;
         }
