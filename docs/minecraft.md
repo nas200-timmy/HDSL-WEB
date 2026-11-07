@@ -1331,25 +1331,45 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
 - 审计前缀：`mc.thirdparty.enable|disable|declined`。
 - 提示语与文案必须写清"面板不担保这些程序的可用性与安全性"；它们不是 Mojang 的产品。
 
-### 19.2 核心目录与下载
+### 19.2 核心目录与下载源
 
-`McCores`（`web/minecraft/McCores.java`）直连各上游公开接口，**不经聚合单点**：
+`McCores`（`web/minecraft/McCores.java`）不再直连单一上游：每个核心有**有序的源列表**，
+由 `McSources` 管（`<data>/minecraft/sources.json`）。第一个能应答的源获胜，`official`
+永远保留在列表里；镜像不可用或配额用尽时被跳过，而不是硬撞。
 
-| 核心 | 上游 | 校验 | 镜像覆盖 |
+| 核心 | 官方源 | 国内镜像 | 校验 |
 |---|---|---|---|
-| Paper / Folia | `api.papermc.io/v2` | 上游公布 SHA-256 | `HDSL_PAPER_API` |
-| Purpur | `api.purpurmc.org/v2` | 上游公布 MD5 | `HDSL_PURPUR_API` |
-| Fabric | `meta.fabricmc.net/v2` | 上游无哈希：只校验 zip，并在 UI/文档如实标注 | `HDSL_FABRIC_API` |
-| Forge / NeoForge | Forge maven + promotions / NeoForge maven | installer jar 校验上游 `.sha1`（镜像不提供时退化为 zip 校验） | `HDSL_FORGE_MAVEN`、`HDSL_FORGE_PROMOTIONS`、`HDSL_NEOFORGE_MAVEN` |
-| Vanilla | Mojang 清单 | SHA-1 + 面板自记 SHA-256 + 可选 pin | `HDSL_MC_MANIFEST` |
+| Paper / Folia | `fill.papermc.io/v3` | `mslmc` | 上游公布 SHA-256 |
+| Purpur | `api.purpurmc.org/v2` | `mslmc` | 官方 MD5 / 镜像 SHA-256 |
+| Fabric | `meta.fabricmc.net/v2` | `mslmc` | 上游无哈希：只校验 zip，并在 UI/文档如实标注 |
+| Forge / NeoForge | Forge maven + promotions / NeoForge maven | BMCLAPI maven、`mslmc` | installer `.sha1`；镜像不提供时退化为 zip 校验 |
+| Vanilla | Mojang 清单 | —（BMCLAPI 只是 302 回源，无收益） | SHA-1 + 面板自记 SHA-256 + 可选 pin |
 
-- 共享存储：`<data>/minecraft/cores/<core>/<version>/server.jar` + `version.json`
-  （core / version / build / url / 哈希 / size / `javaMajor`）。实例里的 `server.jar` 是硬链接，
-  跨卷时退化为复制。
+为什么换掉直连：从国内网络看，`meta.fabricmc.net` / `api.purpurmc.org` /
+`maven.minecraftforge.net` 会直接超时；PaperMC 的 v2 API 已经**官方下线**（HTTP 410
+`sunset`），写死在 v2 的核心目录永远拿不到版本。这不是"网慢"，是四个不可达的上游加一个
+已退役的接口。
+
+- **配额与缓存**：MSL 的下载地址接口是 30 次/小时、60 次/天（响应头
+  `x-ratelimit-limit|remaining|reset` 会被记录）。解析出来的 `url + hash` 写在
+  `cores/<core>/<version>/artifact.json`，**同一个「核心 / 版本」只问一次**；进程重启、
+  第二个实例、第二次打开向导都命中缓存。配额用尽时该源被跳过，直到 `resetAt`。
+- **共享存储**：`<data>/minecraft/cores/<core>/<version>/server.jar` + `version.json`
+  （core / version / build / source / url / 哈希 / size / `javaMajor`）。实例里的 `server.jar`
+  是硬链接，跨卷时退化为复制。
+- **手动导入**：`PUT /api/mc/instances/{id}/core?version=…` 上传一个 jar，落在同一处，
+  `artifact.json` 记 `source: manual`。所有源都不可达时这是兜底；原版不接受上传（那条路没坏）。
+- **署名**：使用 MSL 时按其条款显示「本服务由 MSL 开服器提供」与官网链接，只在启用该源时出现。
 - 实例清单新增 `core` 字段（旧清单缺省 `vanilla`，零迁移）。`/cores` 的版本列表按核心来源给出，
   前端选择核心后切换版本下拉。
-- 启动参数对四种第三方核心都是 `java … -jar server.jar nogui`（Paper 系与 Fabric 启动器都吃这个），
-  因此进程/终端/端口/审计全部复用，未新增 surface。
+- 启动参数对所有第三方核心都是 `java … -jar server.jar nogui`（Paper 系与 Fabric 启动器都吃这个），
+  Forge/NeoForge 用安装器写出的 `@unix_args.txt`；进程/终端/端口/审计全部复用，未新增 surface。
+- `/api/mc/cores` 的第三方上游是**并行**读取的，整体 12 秒封顶；成功缓存 10 分钟、
+  失败缓存 2 分钟，`?refresh=1` 强制重读（创建向导的「重试」）。同一个核心的多个源之间是
+  **竞速**而不是排队：官方源超时不阻塞镜像，第一个答上来的列表直接采用（实测目录总耗时
+  从 12.7 秒降到 1.0 秒）。某个上游超时时该核心仍会出现在下拉里，只是版本列表为空，
+  向导会说明原因——不能因为一个 API 挂住就让界面看起来「只有原版」，也不能让一次上游
+  超时把整页拖到代理的读超时。
 
 ### 19.3 面板自托管 Java（Adoptium）
 
@@ -1398,7 +1418,24 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
 - 边界（写进 UI 提示）：安装耗时数分钟、libraries 占 100–300 MB 且跟实例走；
   混合服（Mohist/Arclight）与 mrpack 整合包仍不在范围内。
 
-### 19.6 仍未做（明确列出）
+### 19.6 界面：原版与第三方彻底分开
+
+- 侧栏是**两个入口**，不是同一列表里的标签：
+  - 「MC 原版服务器实例」→ `?view=mc`，`GET /api/mc/instances?scope=vanilla`；
+  - 「MC 第三方服务器实例」→ `?view=mc-third`，`GET /api/mc/instances?scope=thirdparty`。
+  后者只在主功能与第二道关都开启后出现；直接访问旧链接而第二道关关闭时，页面给一句话说明，
+  不渲染列表。
+- 原版向导（`McCreateWizard`）保持原来的四步，核心选择器被收成只剩原版——多出来的镜像与
+  第三方核心不该让原版链路变复杂。
+- 第三方向导（`McThirdPartyWizard`）是另一套五步：**核心 → 版本（可搜索）→ 运行环境
+  （内存推荐值、Java 推荐、端口）→ 实例信息（名字、世界、存储、存档）→ 安装**。
+  安装失败时给出三个出口：重试、检查下载源、**手动导入 server.jar**。
+- 第三方那一栏的「全局设置」打开 `McThirdPartySettings`：每个源的说明与配额余量、
+  每个核心的尝试顺序（可增删、可上下移动）、自定义镜像基址。保存走
+  `POST /api/mc/third-party/sources`（提权 + 审计 `mc.thirdparty.sources`）。
+  启用了带署名要求的源时，这一页显示对应署名。
+
+### 19.7 仍未做（明确列出）
 
 - **mrpack 整合包**：Fabric 系可复用现有核心 + 插件/模组能力；Forge 系虽然已有安装器，
   但还需要处理 `overrides/`、`env.server == unsupported` 过滤、每文件 sha512 与

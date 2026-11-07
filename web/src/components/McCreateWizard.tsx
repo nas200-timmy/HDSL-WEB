@@ -24,11 +24,14 @@ const STEP_TITLES = ["基本信息", "游戏版本", "存储位置", "下载服�
 export function McCreateWizard({
   open,
   versions,
+  thirdPartyCores = true,
   onClose,
   onCreated,
 }: {
   open: boolean;
   versions: McVersion[];
+  /** 原版那一栏传 `false`：核心选择器只剩原版，第三方入口在另一栏。 */
+  thirdPartyCores?: boolean;
   onClose: () => void;
   onCreated: (instance: McInstance) => void;
 }) {
@@ -45,6 +48,8 @@ export function McCreateWizard({
   const [version, setVersion] = useState("");
   const [core, setCore] = useState("vanilla");
   const [cores, setCores] = useState<McCoreInfo[]>([]);
+  const [coresLoading, setCoresLoading] = useState(false);
+  const [coreError, setCoreError] = useState<string | null>(null);
   const [storage, setStorage] = useState<McStorage | null>(null);
   const [storageChoice, setStorageChoice] = useState<"external" | "data">("external");
   const [busy, setBusy] = useState(false);
@@ -57,10 +62,27 @@ export function McCreateWizard({
 
   const releases = versions.filter((entry) => entry.type === "release").slice(0, 80);
   // 核心列表来自 `/api/mc/cores`：第二道关关闭时后端只返回 vanilla。
-  const selectedCore = cores.find((entry) => entry.id === core) ?? null;
+  // 原版那一栏只保留 vanilla，第三方核心的去处是「MC 第三方服务器实例」。
+  const visibleCores = thirdPartyCores ? cores : cores.filter((entry) => !entry.thirdParty);
+  const selectedCore = visibleCores.find((entry) => entry.id === core) ?? null;
   const coreVersions = selectedCore
     ? selectedCore.versions.slice(0, 200)
     : releases.map((entry) => entry.id);
+
+  /// 核心列表包含六个上游，第一次打开可能要等几秒；失败时不要静默退回原版，
+  /// 否则用户只会看到「只能下原版」。重试按钮复用同一段。
+  const loadCores = (refresh = false) => {
+    setCoresLoading(true);
+    setCoreError(null);
+    void api.mc
+      .cores(refresh)
+      .then((answer) => setCores(answer.cores))
+      .catch((e) => {
+        setCores([]);
+        setCoreError(errMsg(e));
+      })
+      .finally(() => setCoresLoading(false));
+  };
 
   // 打开时取一份建议端口与存储信息：端口不能和已有实例撞，路径要显示真实值。
   useEffect(() => {
@@ -72,10 +94,7 @@ export function McCreateWizard({
     setTaskId(null);
     setProgress(null);
     setCore("vanilla");
-    void api.mc
-      .cores()
-      .then((answer) => setCores(answer.cores))
-      .catch(() => setCores([]));
+    loadCores();
     void api.mc
       .suggestPorts()
       .then((pair) => {
@@ -254,7 +273,28 @@ export function McCreateWizard({
 
         {step === 1 && (
           <div style={{ display: "grid", gap: 8 }}>
-            {cores.length > 1 && (
+            {thirdPartyCores && coresLoading && (
+              <div className="hint info" style={{ margin: 0 }}>
+                <span style={{ flex: 1 }}>正在读取服务端核心列表…（Paper / Purpur / Fabric / Forge 等上游）</span>
+              </div>
+            )}
+            {thirdPartyCores && !coresLoading && (coreError || cores.length <= 1) && (
+              <div className="hint warning" style={{ margin: 0 }}>
+                <span style={{ flex: 1 }}>
+                  {coreError
+                    ? `核心列表读取失败：${coreError}。可以重试，或先建原版。`
+                    : feature == null
+                      ? "正在读取 MC 功能状态…"
+                      : feature.thirdParty
+                        ? "第三方核心已开启，但上游版本列表还没读到（可能是网络或上游 API 超时）。可以重试，或先建原版。"
+                        : "当前只提供原版核心。第三方核心需要在「设置 → 品牌实例 → MC 服务端 → 第三方核心」开启并同意条款。"}
+                </span>
+                <button className="btn btn-text" style={{ marginLeft: 8 }} onClick={() => loadCores(true)}>
+                  重试
+                </button>
+              </div>
+            )}
+            {thirdPartyCores && cores.length > 1 && (
               <Field
                 label="服务端核心"
                 hint="原版 = Mojang 官方服务器；Paper/Folia/Purpur/Fabric/Forge 等为第三方核心，需单独开启并同意条款"
@@ -265,11 +305,11 @@ export function McCreateWizard({
                   onChange={(e) => {
                     const next = e.target.value;
                     setCore(next);
-                    const nextVersions = cores.find((entry) => entry.id === next)?.versions ?? [];
+                    const nextVersions = visibleCores.find((entry) => entry.id === next)?.versions ?? [];
                     if (!nextVersions.includes(version)) setVersion("");
                   }}
                 >
-                  {cores.map((entry) => (
+                  {visibleCores.map((entry) => (
                     <option key={entry.id} value={entry.id}>
                       {entry.label}
                       {entry.thirdParty ? "（第三方）" : ""}
@@ -288,6 +328,14 @@ export function McCreateWizard({
                 ))}
               </select>
             </Field>
+            {selectedCore?.thirdParty && selectedCore.versions.length === 0 && (
+              <div className="hint warning" style={{ margin: 0 }}>
+                <span style={{ flex: 1 }}>
+                  {selectedCore.label} 的上游版本列表暂时没读到（可能是网络或上游 API 超时）。
+                  点上面的「重试」，或换一个核心。
+                </span>
+              </div>
+            )}
             <div className="hint info" style={{ margin: 0 }}>
               <span style={{ flex: 1 }}>
                 {selectedCore?.id === "forge" || selectedCore?.id === "neoforge"

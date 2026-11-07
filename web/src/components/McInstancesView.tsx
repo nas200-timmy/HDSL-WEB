@@ -12,8 +12,11 @@ import {
   RefreshIcon,
   RocketLaunchIcon,
   SearchIcon,
+  SettingsFillIcon,
 } from "./icons";
 import { McCreateWizard } from "./McCreateWizard";
+import { McThirdPartyWizard } from "./McThirdPartyWizard";
+import { McThirdPartySettings } from "./McThirdPartySettings";
 import { toast } from "../store";
 import { errMsg, mcCoreLabel, mcStateLabel, normState } from "../utils";
 
@@ -24,14 +27,16 @@ import { errMsg, mcCoreLabel, mcStateLabel, normState } from "../utils";
 ///
 /// 版式与 dsh 实例列表一致：工具栏一张卡（刷新 / 计数 / 新建），列表一张卡、卡内
 /// `.list-body` 真的滚动。手机上沿用同一套响应式规则，不需要另写一份。
-export function McInstancesView() {
+export function McInstancesView({ scope = "vanilla" }: { scope?: "vanilla" | "thirdparty" }) {
   const nav = useNavigate();
   const feature = useMcFeature();
+  const thirdParty = scope === "thirdparty";
   const [instances, setInstances] = useState<McInstance[]>([]);
   const [versions, setVersions] = useState<McVersion[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [searchMode, setSearchMode] = useState(false);
 
@@ -39,11 +44,13 @@ export function McInstancesView() {
     setLoading(true);
     try {
       // 版本清单要联网：拉不到只让「创建/装版本」退化，不该把整个列表变成错误页。
-      const list = await api.mc.instances();
+      const list = await api.mc.instances(scope);
       setInstances(list.instances);
-      api.mc.versions()
-        .then((catalog) => setVersions(catalog.versions))
-        .catch(() => setVersions([]));
+      if (!thirdParty) {
+        api.mc.versions()
+          .then((catalog) => setVersions(catalog.versions))
+          .catch(() => setVersions([]));
+      }
     } catch (e) {
       toast("error", errMsg(e));
     } finally {
@@ -57,7 +64,7 @@ export function McInstancesView() {
 
   useEffect(() => {
     if (feature?.enabled) void load();
-  }, [feature?.enabled]);
+  }, [feature?.enabled, scope]);
 
   // 起停是服务端推进的异步状态，有过渡态时轻量轮询。
   const transitioning = instances.some(
@@ -107,7 +114,7 @@ export function McInstancesView() {
   if (!feature?.enabled) {
     return (
       <div className="card" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-        <h2 style={{ margin: 0 }}>MC 服务端（第三方功能）</h2>
+        <h2 style={{ margin: 0 }}>{thirdParty ? "MC 第三方服务器实例" : "MC 原版服务器实例"}</h2>
         <p className="dim" style={{ margin: 0, lineHeight: 1.7 }}>
           还没开启。开关在「设置 → 品牌实例」里的「MC 服务端」卡片：需要开发者密码，
           读完 Mojang 的 EULA 与服务条款后开启。开启之后，入口才会出现在这一栏下面。
@@ -115,6 +122,24 @@ export function McInstancesView() {
         <div>
           <button className="btn btn-raised" onClick={() => nav("/settings?tab=brands")}>
             去品牌实例管理
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 第三方核心的第二道关：未开启时这一栏不该"存在"，即便用户手里有旧链接。
+  if (thirdParty && feature.thirdParty !== true) {
+    return (
+      <div className="card" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+        <h2 style={{ margin: 0 }}>MC 第三方服务器实例</h2>
+        <p className="dim" style={{ margin: 0, lineHeight: 1.7 }}>
+          第三方核心还没开启。它是在「MC 原版服务器实例」之上的第二道关：先开启原版功能，
+          再在「设置 → 品牌实例」里同意第三方核心条款。开启之前，这里没有可用的服务端。
+        </p>
+        <div>
+          <button className="btn btn-raised" onClick={() => nav("/settings?tab=brands")}>
+            去开启第三方核心
           </button>
         </div>
       </div>
@@ -162,7 +187,8 @@ export function McInstancesView() {
             刷新
           </button>
           <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-            {instances.length} 个服务器{running > 0 ? ` · ${running} 个运行中` : ""}
+            {instances.length} 个{thirdParty ? "第三方" : "原版"}服务器
+            {running > 0 ? ` · ${running} 个运行中` : ""}
           </span>
           <span className="spacer" />
           {instances.length > 0 && (
@@ -176,12 +202,20 @@ export function McInstancesView() {
             </button>
           )}
           <button
-            className="btn btn-raised"
-            disabled={busy || feature.locked || versions.length === 0}
-            onClick={() => setWizardOpen(true)}
-            title={versions.length === 0 ? "版本清单拉不到（需要联网）" : undefined}
+            className="tool-btn ripple-host"
+            title="下载源与配额"
+            onClick={() => setSettingsOpen(true)}
           >
-            <AddIcon size={16} /> 新建服务器
+            <SettingsFillIcon size={20} />
+            全局设置
+          </button>
+          <button
+            className="btn btn-raised"
+            disabled={busy || feature.locked || (!thirdParty && versions.length === 0)}
+            onClick={() => setWizardOpen(true)}
+            title={!thirdParty && versions.length === 0 ? "版本清单拉不到（需要联网）" : undefined}
+          >
+            <AddIcon size={16} /> {thirdParty ? "新建第三方服务器" : "新建原版服务器"}
           </button>
         </div>
       )}
@@ -200,11 +234,13 @@ export function McInstancesView() {
         <div className="list-body scroll-hover">
           {filtered.length === 0 ? (
             <div className="empty-state">
-              <span>{query ? "没有匹配的服务器" : "还没有 MC 服务器"}</span>
+              <span>{query ? "没有匹配的服务器" : thirdParty ? "还没有第三方服务器" : "还没有原版服务器"}</span>
               <span className="empty-sub">
                 {query
                   ? "换个关键词，或清掉搜索框。"
-                  : "选一个版本建一个：参数 → 版本 → 存储位置 → 下载服务端，走完就能启动。"}
+                  : thirdParty
+                    ? "选一个核心与版本建一个：Paper / Purpur / Folia / Fabric / Forge / NeoForge，走完向导就能启动。"
+                    : "选一个 Mojang 版本建一个：参数 → 版本 → 存储位置 → 下载服务端，走完就能启动。"}
               </span>
             </div>
           ) : (
@@ -289,16 +325,38 @@ export function McInstancesView() {
         }}
       >
         <InfoIcon size={14} style={{ verticalAlign: "-2px", marginRight: 4 }} />
-        客户端连的是游戏端口，不是面板；默认只建议局域网或加防火墙。
-        <b> 服务端程序不随本项目分发</b>，首次安装时从 Mojang 官方下载。
+        {thirdParty ? (
+          <>
+            第三方核心由各上游项目发布，面板只负责下载、校验与运行；
+            <b> 下载源可在「全局设置」里调整</b>，源都不可达时可以手动导入核心 jar。
+          </>
+        ) : (
+          <>
+            客户端连的是游戏端口，不是面板；默认只建议局域网或加防火墙。
+            <b> 服务端程序不随本项目分发</b>，首次安装时从 Mojang 官方下载。
+          </>
+        )}
       </p>
 
-      <McCreateWizard
-        open={wizardOpen}
-        versions={versions}
-        onClose={() => setWizardOpen(false)}
-        onCreated={() => void load()}
-      />
+      {thirdParty ? (
+        <McThirdPartyWizard
+          open={wizardOpen}
+          onClose={() => setWizardOpen(false)}
+          onCreated={() => void load()}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+      ) : (
+        <McCreateWizard
+          open={wizardOpen}
+          versions={versions}
+          thirdPartyCores={false}
+          onClose={() => setWizardOpen(false)}
+          onCreated={() => void load()}
+        />
+      )}
+      {thirdParty && (
+        <McThirdPartySettings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      )}
     </div>
   );
 }

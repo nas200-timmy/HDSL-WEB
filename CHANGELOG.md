@@ -4,6 +4,32 @@
 
 ## 未发布
 
+**MC 第三方核心下载源：官方直连已不可用，改成多源 + 配额守卫 + 手动导入**
+
+- **PaperMC v2 已官方下线**（HTTP 410 `{"error":"sunset"}`）。面板写死 v2，就算网络通也拿不到
+  Paper/Folia 的版本——这是核心目录"看起来是空"的直接原因。迁到 `fill.papermc.io/v3`，
+  build 里直接带下载 URL 与 sha256。
+- **新增 `McSources` 源层**（`<data>/minecraft/sources.json`）：每个核心是一张**有序源表**，
+  官方源永远保留；国内镜像（MSL，可选 BMCLAPI）在官方不可达时接管。同一个核心的多个源
+  **并行竞速**，官方源超时不阻塞镜像——实测核心目录总耗时从 12.7 秒降到 1.0 秒，
+  Paper/Purpur/Folia/Fabric/Forge/NeoForge 六家全部有版本。判定依据是实测：
+  从国内网络看 `meta.fabricmc.net` / `api.purpurmc.org` / `maven.minecraftforge.net` 直接超时，
+  而 `file.mslmc.cn` 42 MB 的 jar 1.35 秒下完（约 32 MB/s）。
+- **配额守卫**：MSL 的下载地址接口是 30 次/小时、60 次/天（响应头
+  `x-ratelimit-limit|remaining|reset` 会落盘）。解析出的 URL 与哈希写进
+  `cores/<core>/<version>/artifact.json`，同一个「核心 / 版本」只问一次；用满后跳过该源，
+  而不是继续撞。
+- **Forge / NeoForge 回退**：官方 maven 超时时改从 BMCLAPI 的 maven 元数据构建版本表，
+  再不行用 MSL 的 installer 地址（loader 版本从文件名解析）。安装流程不变。
+- **界面拆成两栏**：「MC 原版服务器实例」（`?view=mc`）与「MC 第三方服务器实例」
+  （`?view=mc-third`），后者只在第二道关开启后出现；列表按 `scope` 隔离，原版向导不再显示
+  第三方核心选项。
+- **第三方独立向导**：核心 → 版本（可搜索）→ 运行环境（内存推荐值、Java 推荐、端口）→
+  实例信息 → 安装；失败时可直接**上传 server.jar**（`PUT /api/mc/instances/{id}/core`）。
+- **全局设置**：第三方那一栏新增下载源设置（顺序、自定义基址、配额余量、MSL 署名），
+  保存走 `POST /api/mc/third-party/sources`（提权 + 审计）。
+- 文档同步：`docs/minecraft.md` §19.2 重写为源表契约，新增 §19.6（界面与全局设置）。
+
 **MC 上线前排查：上传被 1 MiB 截断、Forge 安装器以 root 运行、官方/第三方没分开**
 
 - **插件/模组上传**：正文是 jar，走的 `PUT /api/mc/instances/<id>/files/<kind>` 不在
@@ -37,6 +63,10 @@
   不检查下限的口径，和 `mc.max_memory_mb` 大于硬顶时的错位。Java 选择写进 `instance.json`
   的 `javaPath`（空＝自动），只能从 `GET .../java` 的菜单里选，停服才能改；选中的 JDK
   消失时启动明确报错，不静默换一个。
+- **第三方核心列表**：`/api/mc/cores` 原来串行等六个上游，Paper/Forge 不可达时整页要两分多钟，
+  反代一超时就只剩原版；改为并行读取 + 整体 12 秒封顶 + 成功 10 分钟 / 失败 2 分钟缓存，
+  `?refresh=1` 供向导的「重试」强制重读。创建向导增加加载中、读取失败、第三方未开启三种提示，
+  不再把「第二道关没开」或「上游超时」静默伪装成只有 Vanilla 可选。
 - **大世界导入/导出**：上传上限从 2 GB 提到 **128 GiB**；解压上限取 zip 声明的解压总大小
   （最高 512 GiB），并在解压前按"归档 + 解压后大小 + 旧世界 + 它的备份"检查空闲空间——50 GB
   的世界首次导入约需 100 GB、覆盖旧世界约需 200 GB，不够就拒绝，而不是解到一半填满盘。

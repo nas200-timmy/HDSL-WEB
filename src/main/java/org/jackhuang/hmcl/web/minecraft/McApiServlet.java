@@ -195,7 +195,7 @@ public final class McApiServlet extends HttpServlet {
             }
             if ("/instances".equals(path)) {
                 if ("GET".equals(method)) {
-                    listInstances(response);
+                    listInstances(request, response);
                     return;
                 }
                 if ("POST".equals(method)) {
@@ -204,7 +204,7 @@ public final class McApiServlet extends HttpServlet {
                 }
             }
             if ("/cores".equals(path) && "GET".equals(method)) {
-                listCores(response);
+                listCores(request, response);
                 return;
             }
             if ("/versions".equals(path) && "GET".equals(method)) {
@@ -230,6 +230,16 @@ public final class McApiServlet extends HttpServlet {
             if ("/third-party/decline".equals(path) && "POST".equals(method)) {
                 audit("mc.thirdparty.declined", "third-party cores", "success", request);
                 Json.write(response, Map.of("ok", true));
+                return;
+            }
+            // 下载源设置：顺序、自定义基址、配额余量。只在第三方核心开启后存在，
+            // 和其余第三方端点同一个口径。
+            if ("/third-party/sources".equals(path) && "GET".equals(method)) {
+                sourcesJson(response);
+                return;
+            }
+            if ("/third-party/sources".equals(path) && "POST".equals(method)) {
+                updateSources(request, response);
                 return;
             }
             if ("/java/runtimes".equals(path) && "GET".equals(method)) {
@@ -639,9 +649,17 @@ public final class McApiServlet extends HttpServlet {
 
     // ---------------------------------------------------------------- instances --
 
-    private void listInstances(HttpServletResponse response) throws IOException {
+    private void listInstances(HttpServletRequest request, HttpServletResponse response)
+            throws IOException {
+        String scope = request.getParameter("scope");
         List<JsonObject> items = new ArrayList<>();
         for (McInstance instance : manager.list()) {
+            if ("vanilla".equals(scope) && McCores.isThirdParty(instance.core())) {
+                continue;
+            }
+            if ("thirdparty".equals(scope) && !McCores.isThirdParty(instance.core())) {
+                continue;
+            }
             items.add(instanceJson(instance));
         }
         Json.write(response, Map.of("instances", items));
@@ -659,9 +677,10 @@ public final class McApiServlet extends HttpServlet {
 
     /// The catalogue the create form shows: vanilla always, third-party cores
     /// only while the second gate is on.
-    private void listCores(HttpServletResponse response) throws IOException {
+    private void listCores(HttpServletRequest request, HttpServletResponse response) throws IOException {
         List<JsonObject> items = new ArrayList<>();
-        for (McCores.CoreInfo core : cores.catalog(feature.thirdPartyEnabled())) {
+        boolean refresh = "1".equals(request.getParameter("refresh"));
+        for (McCores.CoreInfo core : cores.catalog(feature.thirdPartyEnabled(), refresh)) {
             JsonObject item = new JsonObject();
             item.addProperty("id", core.id());
             item.addProperty("label", core.label());
@@ -696,6 +715,95 @@ public final class McApiServlet extends HttpServlet {
         body.addProperty("text", McThirdPartyTerms.text());
         body.addProperty("hash", McThirdPartyTerms.hash());
         Json.write(response, body);
+    }
+
+    /// Where third-party cores are fetched from, and what each source has left.
+    private void sourcesJson(HttpServletResponse response) throws IOException {
+        McSources sources = cores.sources();
+        if (sources == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
+        JsonArray list = new JsonArray();
+        for (McSources.Source source : McSources.known()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("id", source.id());
+            item.addProperty("label", source.label());
+            item.addProperty("note", source.note());
+            item.addProperty("attribution", source.attribution());
+            JsonArray supported = new JsonArray();
+            source.cores().forEach(supported::add);
+            item.add("cores", supported);
+            McSources.Quota quota = sources.quota(source.id());
+            JsonObject quotaJson = new JsonObject();
+            quotaJson.addProperty("limit", quota.limit());
+            quotaJson.addProperty("remaining", quota.remaining());
+            quotaJson.addProperty("resetAt", quota.resetAt());
+            quotaJson.addProperty("used", quota.used());
+            quotaJson.addProperty("exhausted", sources.exhausted(source.id()));
+            item.add("quota", quotaJson);
+            list.add(item);
+        }
+        JsonObject order = new JsonObject();
+        for (Map.Entry<String, List<String>> entry : sources.order().entrySet()) {
+            JsonArray ids = new JsonArray();
+            entry.getValue().forEach(ids::add);
+            order.add(entry.getKey(), ids);
+        }
+        JsonObject custom = new JsonObject();
+        sources.customBases().forEach(custom::addProperty);
+        JsonObject body = new JsonObject();
+        body.add("sources", list);
+        body.add("order", order);
+        body.add("custom", custom);
+        body.addProperty("userAgent", McSources.USER_AGENT);
+        Json.write(response, body);
+    }
+
+    /// Rewrites the order and/or the custom bases. Every id is validated
+    /// against [McSources#supports]; unknown entries are dropped rather than
+    /// stored, so a typo cannot silently disable a core.
+    private void updateSources(HttpServletRequest request, HttpServletResponse response)
+            throws IOException {
+        if (!requireElevation(request, response)) {
+            return;
+        }
+        McSources sources = cores.sources();
+        if (sources == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        if (body.has("order") && body.get("order").isJsonObject()) {
+            for (Map.Entry<String, com.google.gson.JsonElement> entry
+                    : body.getAsJsonObject("order").entrySet()) {
+                if (!entry.getValue().isJsonArray()) {
+                    continue;
+                }
+                List<String> ids = new ArrayList<>();
+                for (com.google.gson.JsonElement element : entry.getValue().getAsJsonArray()) {
+                    if (element.isJsonPrimitive()) {
+                        ids.add(element.getAsString());
+                    }
+                }
+                sources.setOrder(entry.getKey().toLowerCase(java.util.Locale.ROOT), ids);
+            }
+        }
+        if (body.has("custom") && body.get("custom").isJsonObject()) {
+            for (Map.Entry<String, com.google.gson.JsonElement> entry
+                    : body.getAsJsonObject("custom").entrySet()) {
+                if (!entry.getValue().isJsonPrimitive()) {
+                    continue;
+                }
+                sources.setCustomBase(entry.getKey(), entry.getValue().getAsString());
+            }
+        }
+        audit("mc.thirdparty.sources", "download sources", "success", request);
+        sourcesJson(response);
     }
 
     /// Enables the second gate: 提权 → 条款逐字确认（回显 hash）→ 审计.
@@ -1214,6 +1322,36 @@ public final class McApiServlet extends HttpServlet {
                 Json.write(response, Map.of("lines", lines));
             }
             case "files" -> files(request, response, method, instance, segments);
+            // 手动导入核心 jar：所有下载源都不可达时的兜底。只对第三方核心开放，
+            // 原版仍然只能从 Mojang 清单装——那条路径本来就没坏过。
+            case "core" -> {
+                if (!"PUT".equals(method)) {
+                    Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "method not allowed");
+                    return;
+                }
+                if (!requireElevation(request, response)) {
+                    return;
+                }
+                if (!McCores.isThirdParty(instance.core())) {
+                    Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                            "vanilla cores are installed from the Mojang manifest, not uploaded");
+                    return;
+                }
+                if (runtime.isRunning(id)) {
+                    Json.error(response, HttpServletResponse.SC_CONFLICT,
+                            "stop the server before replacing its core");
+                    return;
+                }
+                String version = request.getParameter("version");
+                if (version == null || version.isBlank()) {
+                    Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "version is required");
+                    return;
+                }
+                McInstance updated = cores.installUploaded(instance, manager, version.strip(),
+                        request.getInputStream());
+                audit("mc.instance.core.upload", id + "/" + version.strip(), "success", request);
+                Json.write(response, instanceJson(updated));
+            }
             case "backups" -> backups(request, response, method, instance, segments);
             case "console" -> {
                 String consoleAction = segments.length > 2 ? segments[2] : "";

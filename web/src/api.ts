@@ -734,7 +734,8 @@ export const api = {
     cancelClose: () => request<McFeature>("/api/mc/feature/cancel-close", jsonInit("POST", {})),
     decline: () => request<{ ok: boolean }>("/api/mc/feature/decline", jsonInit("POST", {})),
     /** 第三方核心目录：第二道关关闭时只返回 vanilla。 */
-    cores: () => request<{ cores: McCoreInfo[] }>("/api/mc/cores"),
+    cores: (refresh = false) =>
+      request<{ cores: McCoreInfo[] }>(`/api/mc/cores${refresh ? "?refresh=1" : ""}`),
     thirdParty: () => request<{ state: "DISABLED" | "ENABLED"; enabled: boolean; termsVersion: number;
       termsTextHash?: string; acceptedAt?: string; acceptedBy?: string; ackMethod?: string }>(
       "/api/mc/third-party/feature"),
@@ -745,6 +746,19 @@ export const api = {
       request<{ state: string; enabled: boolean }>("/api/mc/third-party/disable", jsonInit("POST", {})),
     declineThirdParty: () =>
       request<{ ok: boolean }>("/api/mc/third-party/decline", jsonInit("POST", {})),
+    /** 下载源顺序、自定义基址与配额余量。 */
+    sources: () => request<McSourcesSnapshot>("/api/mc/third-party/sources"),
+    updateSources: (body: {
+      order?: Record<string, string[]>;
+      custom?: Record<string, string>;
+    }) => request<McSourcesSnapshot>("/api/mc/third-party/sources", jsonInit("POST", body)),
+    /** 手动导入核心 jar：所有下载源都不可达时的兜底。 */
+    uploadCore: (id: string, version: string, file: File) =>
+      request<McInstance>(
+        `/api/mc/instances/${encodeURIComponent(id)}/core?version=${encodeURIComponent(version)}`,
+        { method: "PUT", body: file },
+        { timeoutMs: 10 * 60 * 1000 },
+      ),
     javaRuntimes: (version?: string) =>
       request<McJavaRuntimesSnapshot>(
         `/api/mc/java/runtimes${version ? `?version=${encodeURIComponent(version)}` : ""}`),
@@ -788,7 +802,11 @@ export const api = {
       ),
     storage: () => request<McStorage>("/api/mc/storage"),
     suggestPorts: () => request<{ port: number; rconPort: number }>("/api/mc/ports"),
-    instances: () => request<{ instances: McInstance[] }>("/api/mc/instances"),
+    /** 实例列表。`scope` 把原版和第三方彻底分开：界面上它们是两个入口。 */
+    instances: (scope?: "vanilla" | "thirdparty") =>
+      request<{ instances: McInstance[] }>(
+        `/api/mc/instances${scope ? `?scope=${scope}` : ""}`,
+      ),
     instance: (id: string) =>
       request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}`),
     instanceJava: (id: string) =>
@@ -1031,6 +1049,33 @@ export interface McCoreInfo {
   label: string;
   thirdParty: boolean;
   versions: string[];
+}
+
+/** 一个下载源还剩多少（`-1` = 未知，`0` + `exhausted` = 这一窗口用完了）。 */
+export interface McSourceQuota {
+  limit: number;
+  remaining: number;
+  resetAt: number;
+  used: number;
+  exhausted: boolean;
+}
+
+export interface McSourceInfo {
+  id: string;
+  label: string;
+  note: string;
+  /** 启用时界面必须显示提供方署名（MSL 的条款要求）。 */
+  attribution: boolean;
+  cores: string[];
+  quota: McSourceQuota;
+}
+
+/** GET /api/mc/third-party/sources */
+export interface McSourcesSnapshot {
+  sources: McSourceInfo[];
+  order: Record<string, string[]>;
+  custom: Record<string, string>;
+  userAgent: string;
 }
 
 /** 插件/模组目录里的一个文件。 */

@@ -465,9 +465,14 @@ public final class HdslServer {
                 + (mcJavaInfo.ok() ? " (" + mcJavaInfo.version() + ")" : " — " + mcJavaInfo.error()));
         org.jackhuang.hmcl.web.minecraft.McVersions mcVersions =
                 new org.jackhuang.hmcl.web.minecraft.McVersions(mcVersionsRoot);
+        // 下载源设置：哪一个镜像、什么顺序、还剩多少配额。落盘在
+        // `<data>/minecraft/sources.json`，和实例目录分开——换源不该影响存档。
+        org.jackhuang.hmcl.web.minecraft.McSources mcSources =
+                new org.jackhuang.hmcl.web.minecraft.McSources(
+                        config.dataDir.resolve("minecraft").resolve("sources.json"));
         org.jackhuang.hmcl.web.minecraft.McCores mcCores =
                 new org.jackhuang.hmcl.web.minecraft.McCores(mcVersions,
-                        config.dataDir.resolve("minecraft").resolve("cores"));
+                        config.dataDir.resolve("minecraft").resolve("cores"), mcSources);
         org.jackhuang.hmcl.web.minecraft.McBackups mcBackups =
                 new org.jackhuang.hmcl.web.minecraft.McBackups(
                         config.dataDir.resolve("minecraft").resolve("backups"));

@@ -55,6 +55,10 @@ export function InstancesPage() {
   // MC 服务端也是这一层：`?view=mc` 把内容区换成 MC 实例列表（见 McInstancesView）。
   // 以前它是个独立页面（`/mc`），从实例列表点进去要"跳走再点返回"，和品牌实例割裂。
   const mcView = searchParams.get("view") === "mc";
+  // 第三方核心是独立的一栏：和原版实例彻底分开，各自的列表、各自的向导、
+  // 各自的全局设置（下载源）。开关在「设置 → 品牌实例 → 第三方核心」。
+  const mcThirdView = searchParams.get("view") === "mc-third";
+  const mcThirdEnabled = mcFeature?.thirdParty === true;
   const activeBrand: BrandKey = isBrandKey(brandParam) ? brandParam : fallbackBrand(s.external);
 
   // 品牌视图缺省/非法品牌：等第一份跨品牌快照落地再落到「第一个有实例的品牌」，
@@ -74,6 +78,7 @@ export function InstancesPage() {
 
   const showBrands = (brand: BrandKey) => setSearchParams({ view: "brands", brand });
   const showMc = () => setSearchParams({ view: "mc" });
+  const showMcThird = () => setSearchParams({ view: "mc-third" });
   const showDsh = () => setSearchParams({});
 
   const [query, setQuery] = useState("");
@@ -229,8 +234,24 @@ export function InstancesPage() {
               <DeployedCodeIcon size={20} />
             </span>
             <span className="side-text">
-              <span className="side-title">MC 服务器实例</span>
+              <span className="side-title">MC 原版服务器实例</span>
               <span className="side-subtitle">原版服务端 · 实验性</span>
+            </span>
+          </button>
+        )}
+        {/* 第三方核心：原版功能开启、且第二道关也开启后才出现。独立一栏，
+            不复用原版列表——两条链路的下载、向导、设置都不该互相影响。 */}
+        {mcEnabled && mcThirdEnabled && (
+          <button
+            className={`side-item ripple-host${mcThirdView ? " selected" : ""}`}
+            onClick={showMcThird}
+          >
+            <span className="side-graphic">
+              <Package2Icon size={20} />
+            </span>
+            <span className="side-text">
+              <span className="side-title">MC 第三方服务器实例</span>
+              <span className="side-subtitle">Paper / Fabric / Forge · 插件与模组</span>
             </span>
           </button>
         )}
@@ -267,9 +288,12 @@ export function InstancesPage() {
       <div className="page-content">
         {/* 裸部署最常见的缺失：Node.js / pnpm。缺了才出现，装好自己消失 */}
         <ToolchainBanner />
-        {mcView ? (
-          /* MC 服务端实例：同一页内的第三层视图，和 dsh 实例列表、品牌实例同级 */
-          <McInstancesView />
+        {mcThirdView ? (
+          /* 第三方核心：独立一栏，独立列表与向导 */
+          <McInstancesView scope="thirdparty" />
+        ) : mcView ? (
+          /* MC 原版服务端实例：同一页内的第三层视图 */
+          <McInstancesView scope="vanilla" />
         ) : brandView ? (
           /* 品牌实例视图：原地换内容（不跳页、不重挂载页面） */
           <BrandsView brand={activeBrand} onSelect={showBrands} />

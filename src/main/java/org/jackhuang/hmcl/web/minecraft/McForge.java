@@ -116,6 +116,7 @@ public final class McForge {
     private final URI forgeMaven;
     private final URI forgePromotions;
     private final URI neoMaven;
+    private final @Nullable McSources sources;
     private final HttpClient client;
     private final InstallerRunner runner;
     private volatile @Nullable Cached cached;
@@ -124,7 +125,18 @@ public final class McForge {
         this(mavenFromEnv("HDSL_FORGE_MAVEN", DEFAULT_FORGE_MAVEN),
                 mavenFromEnv("HDSL_FORGE_PROMOTIONS", DEFAULT_FORGE_PROMOTIONS),
                 mavenFromEnv("HDSL_NEOFORGE_MAVEN", DEFAULT_NEOFORGE_MAVEN),
-                McForge::runInstaller);
+                McForge::runInstaller, null);
+    }
+
+    /// The production constructor: bases come from the operator's source order,
+    /// and the fallback to MSL is allowed when that source is enabled.
+    ///
+    /// @param sources the source settings
+    public McForge(McSources sources) {
+        this(mavenFromEnv("HDSL_FORGE_MAVEN", DEFAULT_FORGE_MAVEN),
+                mavenFromEnv("HDSL_FORGE_PROMOTIONS", DEFAULT_FORGE_PROMOTIONS),
+                mavenFromEnv("HDSL_NEOFORGE_MAVEN", DEFAULT_NEOFORGE_MAVEN),
+                McForge::runInstaller, sources);
     }
 
     /// The same, with overridable endpoints and an injectable runner (tests).
@@ -134,9 +146,15 @@ public final class McForge {
     /// @param neoMaven        NeoForge's Maven base
     /// @param runner          how the installer is executed
     public McForge(URI forgeMaven, URI forgePromotions, URI neoMaven, InstallerRunner runner) {
+        this(forgeMaven, forgePromotions, neoMaven, runner, null);
+    }
+
+    private McForge(URI forgeMaven, URI forgePromotions, URI neoMaven, InstallerRunner runner,
+                    @Nullable McSources sources) {
         this.forgeMaven = forgeMaven;
         this.forgePromotions = forgePromotions;
         this.neoMaven = neoMaven;
+        this.sources = sources;
         this.runner = runner;
         this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
     }
@@ -167,7 +185,18 @@ public final class McForge {
     /// @return the game versions
     /// @throws McException when the metadata cannot be read
     public List<String> gameVersions(String core) throws McException {
-        List<Build> builds = cachedBuilds();
+        List<Build> builds;
+        try {
+            builds = cachedBuilds();
+        } catch (McException e) {
+            // The Maven metadata is the first thing a domestic line loses.
+            // MSL publishes the same version list and is not metered for it.
+            List<String> mirrored = mslmcVersions(core);
+            if (!mirrored.isEmpty()) {
+                return mirrored;
+            }
+            throw e;
+        }
         List<String> versions = new ArrayList<>();
         for (Build build : builds) {
             if (build.core().equals(core) && !versions.contains(build.mcVersion())) {
@@ -194,15 +223,26 @@ public final class McForge {
     /// @throws McException when upstream publishes nothing for it
     public Build resolve(String core, String mcVersion) throws McException {
         Build best = null;
-        for (Build build : cachedBuilds()) {
-            if (!build.core().equals(core) || !build.mcVersion().equals(mcVersion)) {
-                continue;
+        try {
+            for (Build build : cachedBuilds()) {
+                if (!build.core().equals(core) || !build.mcVersion().equals(mcVersion)) {
+                    continue;
+                }
+                if (best == null || compareVersions(build.loaderVersion(), best.loaderVersion()) > 0) {
+                    best = build;
+                }
             }
-            if (best == null || compareVersions(build.loaderVersion(), best.loaderVersion()) > 0) {
-                best = build;
+        } catch (McException e) {
+            best = mslmcBuild(core, mcVersion);
+            if (best == null) {
+                throw e;
             }
         }
         if (best == null) {
+            Build mirrored = mslmcBuild(core, mcVersion);
+            if (mirrored != null) {
+                return mirrored;
+            }
             throw new McException(core + " has no build for " + mcVersion);
         }
         return best;
@@ -346,7 +386,7 @@ public final class McForge {
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(url))
                     .timeout(Duration.ofMinutes(15))
-                    .header("User-Agent", "HDSL-web")
+                    .header("User-Agent", McSources.USER_AGENT)
                     .GET()
                     .build();
             HttpResponse<InputStream> answer = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
@@ -477,11 +517,59 @@ public final class McForge {
             return current.builds();
         }
         List<Build> builds = new ArrayList<>();
-        collectForge(builds);
-        collectNeoForge(builds);
+        List<String> failures = new ArrayList<>();
+        for (String source : buildSources()) {
+            // Each collector gets its own try: Forge's promotions file and
+            // NeoForge's Maven are different hosts, and one being unreachable
+            // must not take the other's version list with it.
+            if (McSources.BMCLAPI.equals(source)) {
+                try {
+                    collectForgeFromMaven(builds, McSources.BMCLAPI_MAVEN);
+                } catch (McException e) {
+                    failures.add(source + " forge: " + e.getMessage());
+                }
+                try {
+                    collectNeoForgeFromMaven(builds, McSources.BMCLAPI_MAVEN);
+                } catch (McException e) {
+                    failures.add(source + " neoforge: " + e.getMessage());
+                }
+            } else {
+                try {
+                    collectForge(builds);
+                } catch (McException e) {
+                    failures.add(source + " forge: " + e.getMessage());
+                }
+                try {
+                    collectNeoForge(builds);
+                } catch (McException e) {
+                    failures.add(source + " neoforge: " + e.getMessage());
+                }
+            }
+        }
+        if (builds.isEmpty()) {
+            throw new McException("could not read the Forge/NeoForge metadata"
+                    + (failures.isEmpty() ? "" : " (" + String.join("; ", failures) + ")"));
+        }
         List<Build> result = List.copyOf(builds);
         cached = new Cached(result, java.time.Instant.now());
         return result;
+    }
+
+    /// Which sources can answer a *build list*. MSL can name the game versions
+    /// and hand out one installer per version, but it does not publish loader
+    /// builds, so it is consulted on demand in [resolve] instead.
+    private List<String> buildSources() {
+        if (sources == null) {
+            return List.of(McSources.OFFICIAL);
+        }
+        java.util.LinkedHashSet<String> order = new java.util.LinkedHashSet<>();
+        order.addAll(sources.orderFor("forge"));
+        order.addAll(sources.orderFor("neoforge"));
+        order.remove(McSources.MSLMC);
+        if (order.isEmpty()) {
+            order.add(McSources.OFFICIAL);
+        }
+        return List.copyOf(order);
     }
 
     /// Forge's promotions: `1.21.4-recommended` / `1.21.4-latest` → loader build.
@@ -525,7 +613,11 @@ public final class McForge {
 
     /// NeoForge's Maven metadata: `<version>21.4.123</version>` → game 1.21.4.
     private void collectNeoForge(List<Build> builds) throws McException {
-        String xml = fetchText(URI.create(base(neoMaven)
+        collectNeoForgeFromMaven(builds, neoMaven);
+    }
+
+    private void collectNeoForgeFromMaven(List<Build> builds, URI maven) throws McException {
+        String xml = fetchText(URI.create(base(maven)
                 + "/releases/net/neoforged/neoforge/maven-metadata.xml"));
         Matcher matcher = Pattern.compile("<version>([^<]+)</version>").matcher(xml);
         while (matcher.find()) {
@@ -545,9 +637,158 @@ public final class McForge {
             } catch (NumberFormatException e) {
                 continue;
             }
-            String url = base(neoMaven) + "/releases/net/neoforged/neoforge/" + version
+            String url = base(maven) + "/releases/net/neoforged/neoforge/" + version
                     + "/neoforge-" + version + "-installer.jar";
             builds.add(new Build("neoforge", mc, version, url));
+        }
+    }
+
+    /// Forge's Maven metadata. Used when the promotions JSON is unreachable —
+    /// which is the normal state on a domestic line, and the reason BMCLAPI
+    /// proxies the Maven tree instead of the promotions file.
+    ///
+    /// `<version>1.20.4-49.2.13</version>` → game 1.20.4, loader 49.2.13.
+    private void collectForgeFromMaven(List<Build> builds, URI maven) throws McException {
+        String xml = fetchText(URI.create(base(maven)
+                + "/net/minecraftforge/forge/maven-metadata.xml"));
+        Matcher matcher = Pattern.compile("<version>([^<]+)</version>").matcher(xml);
+        while (matcher.find()) {
+            String full = matcher.group(1).trim();
+            int dash = full.lastIndexOf('-');
+            if (dash <= 0 || dash == full.length() - 1) {
+                continue;
+            }
+            String mc = full.substring(0, dash);
+            String loader = full.substring(dash + 1);
+            String url = base(maven) + "/net/minecraftforge/forge/" + full
+                    + "/forge-" + full + "-installer.jar";
+            builds.add(new Build("forge", mc, loader, url));
+        }
+    }
+
+    // -------------------------------------------------------------------- mslmc --
+
+    /// Whether MSL may be asked at all: enabled for one of the two cores, and
+    /// not out of its download quota.
+    private boolean mslmcEnabled() {
+        if (sources == null || sources.exhausted(McSources.MSLMC)) {
+            return false;
+        }
+        return sources.orderFor("forge").contains(McSources.MSLMC)
+                || sources.orderFor("neoforge").contains(McSources.MSLMC);
+    }
+
+    /// The game versions MSL lists for one core. Empty when MSL is unavailable.
+    private List<String> mslmcVersions(String core) throws McException {
+        if (!mslmcEnabled()) {
+            return List.of();
+        }
+        JsonObject root = mslmcGet("/mirrors/" + core, false);
+        if (!root.has("data") || !root.get("data").isJsonObject()) {
+            return List.of();
+        }
+        JsonObject data = root.getAsJsonObject("data");
+        List<String> versions = new ArrayList<>();
+        if (data.has("versions") && data.get("versions").isJsonArray()) {
+            for (var element : data.getAsJsonArray("versions")) {
+                if (element.isJsonPrimitive()) {
+                    versions.add(element.getAsString());
+                }
+            }
+        }
+        return versions;
+    }
+
+    /// One installer from MSL, or `null` when the source is off or the call
+    /// fails. `resolve` treats `null` as "this source has nothing".
+    private @Nullable Build mslmcBuild(String core, String mcVersion) {
+        if (!mslmcEnabled()) {
+            return null;
+        }
+        try {
+            JsonObject root = mslmcGet("/download/server/" + core + "/" + mcVersion, true);
+            if (!root.has("data") || !root.get("data").isJsonObject()) {
+                return null;
+            }
+            JsonObject data = root.getAsJsonObject("data");
+            if (!data.has("url") || !data.get("url").isJsonPrimitive()) {
+                return null;
+            }
+            String url = data.get("url").getAsString();
+            return new Build(core, mcVersion, loaderFromUrl(core, url), url);
+        } catch (McException e) {
+            LOG.warning("MSL could not resolve " + core + " " + mcVersion + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    /// The loader version is encoded in the installer's file name:
+    /// `forge-1.20.4-49.2.13-installer.jar` → `49.2.13`,
+    /// `neoforge-20.4.253-installer.jar` → `20.4.253`.
+    static String loaderFromUrl(String core, String url) {
+        String name = url.substring(url.lastIndexOf('/') + 1);
+        String prefix = core + "-";
+        String suffix = "-installer.jar";
+        if (name.startsWith(prefix) && name.endsWith(suffix) && name.length() > prefix.length() + suffix.length()) {
+            String middle = name.substring(prefix.length(), name.length() - suffix.length());
+            if ("forge".equals(core)) {
+                int dash = middle.indexOf('-');
+                return dash > 0 ? middle.substring(dash + 1) : middle;
+            }
+            return middle;
+        }
+        return "latest";
+    }
+
+    private JsonObject mslmcGet(String path, boolean metered) throws McException {
+        URI custom = sources == null ? null : sources.customBase("mslmc");
+        String api = base(custom != null ? custom : McSources.MSLMC_API);
+        URI uri = URI.create(api + path);
+        if (metered) {
+            sources.spend(McSources.MSLMC);
+        }
+        try {
+            HttpRequest request = HttpRequest.newBuilder(uri)
+                    .timeout(Duration.ofSeconds(8))
+                    .header("User-Agent", McSources.USER_AGENT)
+                    .GET()
+                    .build();
+            HttpResponse<String> answer = client.send(request, HttpResponse.BodyHandlers.ofString());
+            if (sources != null) {
+                sources.observe(McSources.MSLMC,
+                        headerInt(answer, "x-ratelimit-limit"),
+                        headerInt(answer, "x-ratelimit-remaining"),
+                        headerLong(answer, "x-ratelimit-reset"));
+            }
+            if (answer.statusCode() != 200) {
+                throw new McException(uri + " answered HTTP " + answer.statusCode());
+            }
+            return JsonParser.parseString(answer.body()).getAsJsonObject();
+        } catch (IOException e) {
+            throw new McException("Failed to read " + uri + ": " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new McException("Reading " + uri + " was interrupted", e);
+        } catch (RuntimeException e) {
+            throw new McException(uri + " did not answer JSON", e);
+        }
+    }
+
+    private static int headerInt(HttpResponse<?> answer, String name) {
+        String value = answer.headers().firstValue(name).orElse("");
+        try {
+            return value.isBlank() ? -1 : Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private static long headerLong(HttpResponse<?> answer, String name) {
+        String value = answer.headers().firstValue(name).orElse("");
+        try {
+            return value.isBlank() ? 0 : Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 
@@ -629,8 +870,8 @@ public final class McForge {
     private String fetchText(URI uri) throws McException {
         try {
             HttpRequest request = HttpRequest.newBuilder(uri)
-                    .timeout(Duration.ofSeconds(30))
-                    .header("User-Agent", "HDSL-web")
+                    .timeout(Duration.ofSeconds(8))
+                    .header("User-Agent", McSources.USER_AGENT)
                     .GET()
                     .build();
             HttpResponse<String> answer = client.send(request, HttpResponse.BodyHandlers.ofString());

@@ -78,14 +78,14 @@ class McCoresTest {
         String sha256 = hex("SHA-256", jar);
         HttpServer api = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         String base = "http://127.0.0.1:" + api.getAddress().getPort();
-        api.createContext("/v2/projects/paper/versions/1.21.4", exchange -> respond(exchange,
+        api.createContext("/v3/projects/paper/versions/1.21.4/builds", exchange -> respond(exchange,
                 ("""
-                        {"builds":[{"build":12,"downloads":{}},
-                          {"build":13,"downloads":{"application":{
-                            "name":"paper-1.21.4-13.jar","sha256":"%s"}}}]}
-                        """.formatted(sha256)).getBytes(StandardCharsets.UTF_8)));
-        api.createContext("/v2/projects/paper/versions/1.21.4/builds/13/downloads/paper-1.21.4-13.jar",
-                exchange -> respond(exchange, jar));
+                        [{"id":13,"downloads":{"server:default":{
+                          "name":"paper-1.21.4-13.jar",
+                          "url":"%s/downloads/paper-1.21.4-13.jar",
+                          "checksums":{"sha256":"%s"},"size":%d}}}]
+                        """.formatted(base, sha256, jar.length)).getBytes(StandardCharsets.UTF_8)));
+        api.createContext("/downloads/paper-1.21.4-13.jar", exchange -> respond(exchange, jar));
         api.start();
         try {
             McVersions versions = new McVersions(dir.resolve("versions"),
@@ -115,13 +115,15 @@ class McCoresTest {
         byte[] jar = zipBytes("paper");
         HttpServer api = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         String base = "http://127.0.0.1:" + api.getAddress().getPort();
-        api.createContext("/v2/projects/paper/versions/1.21.4", exchange -> respond(exchange,
+        api.createContext("/v3/projects/paper/versions/1.21.4/builds", exchange -> respond(exchange,
                 ("""
-                        {"builds":[{"build":1,"downloads":{"application":{
-                          "name":"paper.jar","sha256":"%s"}}}]}
-                        """.formatted("00".repeat(32))).getBytes(StandardCharsets.UTF_8)));
-        api.createContext("/v2/projects/paper/versions/1.21.4/builds/1/downloads/paper.jar",
-                exchange -> respond(exchange, jar));
+                        [{"id":1,"downloads":{"server:default":{
+                          "name":"paper.jar",
+                          "url":"%s/downloads/paper.jar",
+                          "checksums":{"sha256":"%s"},"size":%d}}}]
+                        """.formatted(base, "00".repeat(32), jar.length))
+                        .getBytes(StandardCharsets.UTF_8)));
+        api.createContext("/downloads/paper.jar", exchange -> respond(exchange, jar));
         api.start();
         try {
             McVersions versions = new McVersions(dir.resolve("versions"),
