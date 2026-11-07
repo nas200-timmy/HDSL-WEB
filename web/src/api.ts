@@ -733,6 +733,27 @@ export const api = {
     confirmClose: () => request<McFeature>("/api/mc/feature/confirm-close", jsonInit("POST", {})),
     cancelClose: () => request<McFeature>("/api/mc/feature/cancel-close", jsonInit("POST", {})),
     decline: () => request<{ ok: boolean }>("/api/mc/feature/decline", jsonInit("POST", {})),
+    /** 第三方核心目录：第二道关关闭时只返回 vanilla。 */
+    cores: () => request<{ cores: McCoreInfo[] }>("/api/mc/cores"),
+    thirdParty: () => request<{ state: "DISABLED" | "ENABLED"; enabled: boolean; termsVersion: number;
+      termsTextHash?: string; acceptedAt?: string; acceptedBy?: string; ackMethod?: string }>(
+      "/api/mc/third-party/feature"),
+    thirdPartyTerms: () => request<McTerms>("/api/mc/third-party/terms"),
+    enableThirdParty: (body: { termsVersion: number; termsTextHash: string; uiVersion: string }) =>
+      request<{ state: string; enabled: boolean }>("/api/mc/third-party/enable", jsonInit("POST", body)),
+    disableThirdParty: () =>
+      request<{ state: string; enabled: boolean }>("/api/mc/third-party/disable", jsonInit("POST", {})),
+    declineThirdParty: () =>
+      request<{ ok: boolean }>("/api/mc/third-party/decline", jsonInit("POST", {})),
+    javaRuntimes: (version?: string) =>
+      request<McJavaRuntimesSnapshot>(
+        `/api/mc/java/runtimes${version ? `?version=${encodeURIComponent(version)}` : ""}`),
+    installJava: (feature: number) =>
+      request<{ taskId: string }>("/api/mc/java/install", jsonInit("POST", { feature })),
+    removeJava: (feature: number) =>
+      request<{ ok: boolean; removed: boolean }>(
+        `/api/mc/java/${feature}/remove`, jsonInit("POST", {}),
+      ),
     versions: () => request<{ versions: McVersion[] }>("/api/mc/versions"),
     storage: () => request<McStorage>("/api/mc/storage"),
     suggestPorts: () => request<{ port: number; rconPort: number }>("/api/mc/ports"),
@@ -742,6 +763,7 @@ export const api = {
     create: (body: {
       name: string;
       version: string;
+      core?: string;
       memoryMb?: number;
       levelName?: string;
       seed?: string;
@@ -862,6 +884,8 @@ export interface McFeature {
   ackMethod?: string;
   /** 这个平台的控制台形态：Linux/macOS 是 PTY，Windows 是日志 + 命令。 */
   console: "pty" | "pipe";
+  /** 第二道关：第三方核心是否已开启（只在 enabled=true 时有意义）。 */
+  thirdParty?: boolean;
   /** 服务端将用哪个 Java 启动 MC（默认就是面板自己的运行时）。 */
   java: McJavaInfo;
   /** 新实例会落到哪个根目录，以及这个设置来自哪里。 */
@@ -872,9 +896,12 @@ export interface McJavaInfo {
   path: string;
   version: string | null;
   major: number;
+  // managed = 面板自己装的 JRE（<data>/minecraft/java/<feature>）；
   // installed = 本机另一份 JDK：所选 MC 版本要求更高时，面板挑满足要求的最低那份。
-  source: "panel" | "installed" | "configured" | "none";
+  source: "panel" | "managed" | "installed" | "configured" | "none";
   ok: boolean;
+  /** 面板托管的 JRE 列表（Adoptium，sha256 校验后才落位）。 */
+  managed?: { feature: number; path: string }[];
   error?: string;
 }
 
@@ -934,10 +961,30 @@ export interface McVersion {
   type: string;
 }
 
+/** GET /api/mc/cores：一个服务端核心及其可用游戏版本。 */
+export interface McCoreInfo {
+  id: string;
+  label: string;
+  thirdParty: boolean;
+  versions: string[];
+}
+
+/** GET /api/mc/java/runtimes：面板托管的 JRE 与 Adoptium 可下载项。 */
+export interface McJavaRuntimesSnapshot {
+  installed: { feature: number; path: string }[];
+  available: { feature: number; version: string; size: number }[];
+  recommended: number;
+  source: "api" | "unavailable";
+  error?: string;
+  root: string;
+}
+
 export interface McInstance {
   id: string;
   name: string;
   version: string;
+  /** 服务端核心：vanilla / paper / folia / purpur / fabric */
+  core: string;
   port: number;
   rconPort: number;
   memoryMb: number;

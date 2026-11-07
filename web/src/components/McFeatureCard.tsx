@@ -26,10 +26,28 @@ export function McFeatureCard() {
   const [busy, setBusy] = useState(false);
   const [enableError, setEnableError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  // 第二道关：第三方核心。只在主功能开启后存在（关闭时后端 404）。
+  const [thirdParty, setThirdParty] = useState<{ state: string; enabled: boolean } | null>(null);
+  const [tpTerms, setTpTerms] = useState<McTerms | null>(null);
+  const [tpDialog, setTpDialog] = useState(false);
+  const [tpAccepted, setTpAccepted] = useState(false);
+  const [tpError, setTpError] = useState<string | null>(null);
+  const [tpBusy, setTpBusy] = useState(false);
 
   useEffect(() => {
     void refreshMcFeature();
   }, []);
+
+  useEffect(() => {
+    if (feature?.enabled !== true) {
+      setThirdParty(null);
+      return;
+    }
+    void api.mc
+      .thirdParty()
+      .then((answer) => setThirdParty({ state: answer.state, enabled: answer.enabled }))
+      .catch(() => setThirdParty(null));
+  }, [feature?.enabled, feature?.thirdParty]);
 
   const locked = feature?.locked === true;
   useEffect(() => {
@@ -148,6 +166,55 @@ export function McFeatureCard() {
     }
   };
 
+  const openThirdParty = async () => {
+    setTpDialog(true);
+    setTpError(null);
+    setTpAccepted(false);
+    try {
+      setTpTerms(await api.mc.thirdPartyTerms());
+    } catch (e) {
+      setTpError(errMsg(e));
+    }
+  };
+
+  const enableThirdParty = async () => {
+    if (!tpTerms) return;
+    setTpBusy(true);
+    setTpError(null);
+    try {
+      await withElevation(() =>
+        api.mc.enableThirdParty({
+          termsVersion: tpTerms.version,
+          termsTextHash: tpTerms.hash,
+          uiVersion: "1.0.0",
+        }),
+      );
+      setTpDialog(false);
+      setThirdParty({ state: "ENABLED", enabled: true });
+      toast("success", "第三方核心已开启：新建服务器时可选 Paper / Folia / Purpur / Fabric");
+      await refreshMcFeature();
+    } catch (e) {
+      setTpError(errMsg(e));
+      toast("error", errMsg(e));
+    } finally {
+      setTpBusy(false);
+    }
+  };
+
+  const disableThirdParty = async () => {
+    setTpBusy(true);
+    try {
+      await withElevation(() => api.mc.disableThirdParty());
+      setThirdParty({ state: "DISABLED", enabled: false });
+      toast("info", "第三方核心已关闭：已建实例保留，新建时不再提供");
+      await refreshMcFeature();
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setTpBusy(false);
+    }
+  };
+
   const enabled = feature?.enabled === true;
 
   return (
@@ -213,13 +280,64 @@ export function McFeatureCard() {
             </span>
           </div>
           <div className="dim" style={{ fontSize: 11 }}>
-            面板默认复用自身的 Java；所选 MC 版本要求更高的 Java 时，会用本机已装且满足要求的
-            那份 JDK（容器镜像内置 21 与 25，面板自身仍跑 21），都没有时才拒绝启动。也可以
-            自备 Java 并设置 server.yaml 的 `mc.java_path` 或环境变量 `HDSL_MC_JAVA_PATH`。
+            面板默认复用自身的 Java；所选 MC 版本要求更高的 Java 时，会先用面板自托管的
+            JRE（Adoptium，`&lt;数据目录&gt;/minecraft/java/&lt;feature&gt;/`），再用本机已装的
+            JDK，都没有时才拒绝启动。
+            {feature.java.managed && feature.java.managed.length > 0
+              ? ` 已托管：${feature.java.managed.map((entry) => `Java ${entry.feature}`).join("、")}。`
+              : " 目前没有托管 JRE，需要时可用 API 安装（`POST /api/mc/java/install`）。"}
             每个实例在 `&lt;服务器目录&gt;/&lt;id&gt;/`，存档、server.jar 与日志都在那里；
             改 `mc.dir` / `HDSL_MC_DIR` 不会搬动已建实例。
           </div>
         </div>
+      )}
+
+      {enabled && (
+        <div
+          style={{
+            padding: "10px 8px 0",
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            flexWrap: "wrap",
+            fontSize: 13,
+          }}
+        >
+          <b>第三方核心</b>
+          <span className={`tag ${thirdParty?.enabled ? "running" : "plain"}`}>
+            {thirdParty?.enabled ? "已开启" : "未开启"}
+          </span>
+          {thirdParty?.enabled ? (
+            <button className="btn btn-text" disabled={tpBusy} onClick={() => void disableThirdParty()}>
+              关闭第三方核心
+            </button>
+          ) : (
+            <button className="btn btn-raised" disabled={tpBusy} onClick={() => void openThirdParty()}>
+              开启第三方核心
+            </button>
+          )}
+          <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            Paper / Folia / Purpur / Fabric：从各上游下载，面板不担保可用性。
+            只有主功能开启后才能开；关闭主功能前必须先关它。
+          </span>
+        </div>
+      )}
+
+      {tpDialog && enabled && (
+        <ThirdPartyWizard
+          terms={tpTerms}
+          accepted={tpAccepted}
+          onAccept={setTpAccepted}
+          busy={tpBusy}
+          error={tpError}
+          onEnable={() => void enableThirdParty()}
+          onRetry={() => void openThirdParty()}
+          onCancel={() => {
+            if (tpBusy) return;
+            void api.mc.declineThirdParty().catch(() => undefined);
+            setTpDialog(false);
+          }}
+        />
       )}
 
       {locked && (
@@ -432,6 +550,80 @@ function EnableWizard({
       <button className="btn btn-text" onClick={onDecline}>
         我已知晓风险，暂不启用
       </button>
+    </div>
+  );
+}
+
+/// 第二道关的确认面板：条款正文 + 一个勾选。
+///
+/// 比主功能的开启向导轻：这里没有 EULA 要拉、没有滚动门槛——条款是面板自己的
+/// 风险告知，读完勾上就是决定。取消会记一条 `mc.thirdparty.declined` 审计。
+function ThirdPartyWizard({
+  terms,
+  accepted,
+  onAccept,
+  busy,
+  error,
+  onEnable,
+  onRetry,
+  onCancel,
+}: {
+  terms: McTerms | null;
+  accepted: boolean;
+  onAccept: (value: boolean) => void;
+  busy: boolean;
+  error: string | null;
+  onEnable: () => void;
+  onRetry: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div style={{ padding: "4px 8px 8px", display: "flex", flexDirection: "column", gap: 10 }}>
+      <b>开启第三方服务端核心</b>
+      {error && !terms && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ color: "var(--monet-error)" }}>{error}</div>
+          <button className="btn btn-raised" disabled={busy} onClick={onRetry}>
+            重试
+          </button>
+        </div>
+      )}
+      {terms && (
+        <>
+          <div
+            style={{
+              height: 240,
+              overflow: "auto",
+              border: "1px solid var(--monet-outline-variant)",
+              padding: 8,
+              fontSize: 12,
+              lineHeight: 1.6,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {terms.text}
+          </div>
+          <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={accepted}
+              onChange={(event) => onAccept(event.target.checked)}
+            />
+            <span>
+              我已阅读并理解上述条款（v{terms.version}，sha256:{terms.hash.slice(7, 19)}…）。
+              第三方核心由各上游提供，面板不担保其可用性与安全性。
+            </span>
+          </label>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button className="btn btn-text" disabled={busy} onClick={onCancel}>
+              取消
+            </button>
+            <button className="btn btn-raised" disabled={busy || !accepted} onClick={onEnable}>
+              {busy ? "开启中…" : "开启第三方核心"}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

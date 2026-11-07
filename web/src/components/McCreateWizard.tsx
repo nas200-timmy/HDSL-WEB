@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type McInstance, type McStorage, type McVersion } from "../api";
+import { api, type McCoreInfo, type McInstance, type McStorage, type McVersion } from "../api";
 import { Dialog } from "./Dialog";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { toast } from "../store";
@@ -39,6 +39,8 @@ export function McCreateWizard({
   const [port, setPort] = useState(25565);
   const [rconPort, setRconPort] = useState(25575);
   const [version, setVersion] = useState("");
+  const [core, setCore] = useState("vanilla");
+  const [cores, setCores] = useState<McCoreInfo[]>([]);
   const [storage, setStorage] = useState<McStorage | null>(null);
   const [storageChoice, setStorageChoice] = useState<"external" | "data">("external");
   const [busy, setBusy] = useState(false);
@@ -50,6 +52,11 @@ export function McCreateWizard({
   const [progress, setProgress] = useState<{ fraction: number; message: string } | null>(null);
 
   const releases = versions.filter((entry) => entry.type === "release").slice(0, 80);
+  // 核心列表来自 `/api/mc/cores`：第二道关关闭时后端只返回 vanilla。
+  const selectedCore = cores.find((entry) => entry.id === core) ?? null;
+  const coreVersions = selectedCore
+    ? selectedCore.versions.slice(0, 200)
+    : releases.map((entry) => entry.id);
 
   // 打开时取一份建议端口与存储信息：端口不能和已有实例撞，路径要显示真实值。
   useEffect(() => {
@@ -60,6 +67,11 @@ export function McCreateWizard({
     setWorldImported(false);
     setTaskId(null);
     setProgress(null);
+    setCore("vanilla");
+    void api.mc
+      .cores()
+      .then((answer) => setCores(answer.cores))
+      .catch(() => setCores([]));
     void api.mc
       .suggestPorts()
       .then((pair) => {
@@ -121,6 +133,7 @@ export function McCreateWizard({
           api.mc.create({
             name: name.trim(),
             version,
+            core,
             memoryMb,
             levelName: levelName.trim() || "world",
             seed: seed.trim() || undefined,
@@ -226,26 +239,54 @@ export function McCreateWizard({
 
         {step === 1 && (
           <div style={{ display: "grid", gap: 8 }}>
-            <Field label="Minecraft 版本" hint="服务端由 Mojang 官方下载，首次安装约 50 MB">
+            {cores.length > 1 && (
+              <Field label="服务端核心" hint="Paper/Folia/Purpur 为插件服，Fabric 为模组服；原版即 Mojang 官方">
+                <select
+                  className="input"
+                  value={core}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setCore(next);
+                    const nextVersions = cores.find((entry) => entry.id === next)?.versions ?? [];
+                    if (!nextVersions.includes(version)) setVersion("");
+                  }}
+                >
+                  {cores.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.label}
+                      {entry.thirdParty ? "（第三方）" : ""}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
+            <Field
+              label="Minecraft 版本"
+              hint={
+                selectedCore && selectedCore.thirdParty
+                  ? `服务端由 ${selectedCore.label} 上游发布，面板下载并校验上游哈希`
+                  : "服务端由 Mojang 官方下载，首次安装约 50 MB"
+              }
+            >
               <select className="input" value={version} onChange={(e) => setVersion(e.target.value)}>
                 <option value="">选择一个版本</option>
-                {releases.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.id}
+                {coreVersions.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
                   </option>
                 ))}
               </select>
             </Field>
             <div className="hint info" style={{ margin: 0 }}>
               <span style={{ flex: 1 }}>
-                服务端程序不随本项目分发，安装时从 Mojang 官方下载并校验。
-                同一版本的 `server.jar` 在面板里只存一份，多实例共用。
+                服务端程序不随本项目分发，安装时从上游下载并按上游公布的哈希校验。
+                同一核心同一版本在面板里只存一份，多实例共用。
               </span>
             </div>
             <div className="hint warning" style={{ margin: 0 }}>
               <span style={{ flex: 1 }}>
                 已有服务器要搬过来？把版本选成<b>和旧服一致</b>的那个，建完后到实例页「世界」
-                导入旧存档的 zip——只搬存档，服务端程序仍用官方下载；插件、白名单与 OP 名单不随存档走。
+                导入旧存档的 zip——只搬存档，服务端程序仍用上游下载；插件、白名单与 OP 名单不随存档走。
               </span>
             </div>
           </div>
