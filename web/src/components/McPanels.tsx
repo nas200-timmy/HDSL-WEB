@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, type McBackup, type McInstance, type McModFile, type McModHit } from "../api";
+import { api, type McBackup, type McInstance, type McJavaProbe, type McModFile, type McModHit } from "../api";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
-import { useMcFeature } from "../mcFeature";
+import { refreshMcFeature, useMcFeature } from "../mcFeature";
 import { toast } from "../store";
 import { errMsg } from "../utils";
 
@@ -162,6 +162,49 @@ const BOOL_FIELDS = new Set(["online-mode", "white-list", "enforce-whitelist", "
 const NUMBER_FIELDS = new Set(["max-players", "spawn-protection", "view-distance", "simulation-distance"]);
 const EDITABLE = PROPERTY_FIELDS.map((field) => field.key);
 
+/// 一个受管字段的输入控件；基础设置与高级设置共用同一套渲染。
+function PropertyInput({
+  field,
+  value,
+  onChange,
+}: {
+  field: { key: string; label: string; hint: string };
+  value: string | undefined;
+  onChange: (key: string, value: string) => void;
+}) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+      <span>{field.label}</span>
+      {BOOL_FIELDS.has(field.key) ? (
+        <select className="input" value={value ?? "false"} onChange={(e) => onChange(field.key, e.target.value)}>
+          <option value="true">{BOOL_LABEL.true}</option>
+          <option value="false">{BOOL_LABEL.false}</option>
+        </select>
+      ) : field.key === "difficulty" ? (
+        <select className="input" value={value ?? "normal"} onChange={(e) => onChange(field.key, e.target.value)}>
+          {Object.entries(DIFFICULTY_LABEL).map(([option, label]) => (
+            <option key={option} value={option}>{label}</option>
+          ))}
+        </select>
+      ) : field.key === "gamemode" ? (
+        <select className="input" value={value ?? "survival"} onChange={(e) => onChange(field.key, e.target.value)}>
+          {Object.entries(GAMEMODE_LABEL).map(([option, label]) => (
+            <option key={option} value={option}>{label}</option>
+          ))}
+        </select>
+      ) : (
+        <input
+          className="input"
+          type={NUMBER_FIELDS.has(field.key) ? "number" : "text"}
+          value={value ?? ""}
+          onChange={(e) => onChange(field.key, e.target.value)}
+        />
+      )}
+      <span style={{ color: "var(--monet-on-surface-variant)", lineHeight: 1.5 }}>{field.hint}</span>
+    </label>
+  );
+}
+
 /** `server.properties` 的受管字段；未知键和注释留在文件里，但这里不编辑。 */
 export function McPropertiesPanel({ instance }: { instance: McInstance }) {
   const [values, setValues] = useState<Record<string, string>>({});
@@ -206,35 +249,7 @@ export function McPropertiesPanel({ instance }: { instance: McInstance }) {
       {error && <div style={{ color: "var(--monet-error)", padding: "6px 8px" }}>{error}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, padding: "10px 8px" }}>
         {PROPERTY_FIELDS.map((field) => (
-          <label key={field.key} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
-            <span>{field.label}</span>
-            {BOOL_FIELDS.has(field.key) ? (
-              <select className="input" value={values[field.key] ?? "false"} onChange={(e) => set(field.key, e.target.value)}>
-                <option value="true">{BOOL_LABEL.true}</option>
-                <option value="false">{BOOL_LABEL.false}</option>
-              </select>
-            ) : field.key === "difficulty" ? (
-              <select className="input" value={values[field.key] ?? "normal"} onChange={(e) => set(field.key, e.target.value)}>
-                {Object.entries(DIFFICULTY_LABEL).map(([value, label]) => (
-                  <option key={value} value={value}>{label}</option>
-                ))}
-              </select>
-            ) : field.key === "gamemode" ? (
-              <select className="input" value={values[field.key] ?? "survival"} onChange={(e) => set(field.key, e.target.value)}>
-                {Object.entries(GAMEMODE_LABEL).map(([value, label]) => (
-                  <option key={value} value={value}>{label}</option>
-                ))}
-              </select>
-            ) : (
-              <input
-                className="input"
-                type={NUMBER_FIELDS.has(field.key) ? "number" : "text"}
-                value={values[field.key] ?? ""}
-                onChange={(e) => set(field.key, e.target.value)}
-              />
-            )}
-            <span style={{ color: "var(--monet-on-surface-variant)", lineHeight: 1.5 }}>{field.hint}</span>
-          </label>
+          <PropertyInput key={field.key} field={field} value={values[field.key]} onChange={set} />
         ))}
       </div>
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "0 8px 8px" }}>
@@ -244,38 +259,196 @@ export function McPropertiesPanel({ instance }: { instance: McInstance }) {
   );
 }
 
-/** 端口与内存：清单里的三项，启动时读取，所以只能在停服时改。
+/** 每 256 MB 一档，和创建向导的 step 一致。 */
+const MEMORY_STEP_MB = 256;
+
+/// 这个核心至少需要的堆。模组核心比原版吃得多；推荐值只会往上抬，不会低于它。
+function memoryFloor(core: string): number {
+  switch (core) {
+    case "forge":
+    case "neoforge":
+      return 4096;
+    case "fabric":
+    case "paper":
+    case "folia":
+    case "purpur":
+      return 2048;
+    default:
+      return 1024;
+  }
+}
+
+function formatMegabytes(mb: number): string {
+  if (!Number.isFinite(mb) || mb <= 0) return "—";
+  return mb >= 1024 ? `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1)} GB` : `${mb} MB`;
+}
+
+function javaSourceLabel(source: string): string {
+  switch (source) {
+    case "panel":
+      return "面板自带 JVM";
+    case "managed":
+      return "面板托管 JRE";
+    case "installed":
+      return "系统 JDK";
+    case "configured":
+      return "配置的 Java（mc.java_path）";
+    default:
+      return "未知来源";
+  }
+}
+
+function javaOptionLabel(option: McJavaProbe): string {
+  const version = option.major > 0 ? `Java ${option.major}` : "Java（版本未知）";
+  const parts = option.path.split(/[\\/]/).filter(Boolean);
+  const home = parts.length >= 3 ? parts[parts.length - 3] : option.path;
+  // 托管 JRE 的目录名就是主版本，没必要再写一次；面板/系统 JDK 用 JDK 目录名区分。
+  const suffix = option.source === "managed" ? "" : ` · ${home}`;
+  return `${javaSourceLabel(option.source)} · ${version}${suffix}`;
+}
+
+/** 高级设置：默认不用动、需要时才来找的项——内存、端口、RCON 与 Java。
  *
- *  端口不是「面板映射」——服务端直接把 `server-port` 绑在宿主/容器网卡上；
- *  改这里会同时写 `instance.json` 与 `server.properties`，两边不会各说各话。 */
-export function McNetworkPanel({
+ *  这些项改错会让人连不上服、让面板查不到玩家，或让服起在一个不合适的
+ *  JDK 上，所以不放在日常设置里。内存、端口与 Java 写 `instance.json`（启动时
+ *  读取），只能在停服时改；RCON 开关写 `server.properties`，下次启动生效。
+ *  内存以手动为准，「推荐值」只填一次、不持续跟踪：堆随宿主负载漂移会让服主
+ *  很难复现上次为什么卡。 */
+export function McAdvancedPanel({
   instance,
   onChange,
 }: {
   instance: McInstance;
   onChange: (next: McInstance) => void;
 }) {
+  const feature = useMcFeature();
+  const minMb = feature?.limits?.minMemoryMb ?? 256;
+  const maxMb = feature?.limits?.maxMemoryMb ?? 8192;
+
   const [port, setPort] = useState(instance.port);
   const [rconPort, setRconPort] = useState(instance.rconPort);
-  const [memoryMb, setMemoryMb] = useState(instance.memoryMb);
+  const [memory, setMemory] = useState(String(instance.memoryMb));
+  const [javaSelected, setJavaSelected] = useState<string | null>(instance.javaPath ?? null);
+  const [javaOptions, setJavaOptions] = useState<McJavaProbe[]>([]);
+  const [javaEffective, setJavaEffective] = useState<McJavaProbe | null>(null);
+  const [javaError, setJavaError] = useState<string | null>(null);
+  const [rconEnabled, setRconEnabled] = useState("false");
+  const [rconOriginal, setRconOriginal] = useState("false");
+  const [instances, setInstances] = useState<McInstance[]>([]);
+  const [availableBytes, setAvailableBytes] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [rconBusy, setRconBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const running = instance.state === "RUNNING" || instance.state === "STARTING" || instance.state === "STOPPING";
+
+  // 直接打开实例页时，共享快照可能还没拉过；没有它就只能用默认上限。
+  useEffect(() => {
+    if (!feature) void refreshMcFeature();
+  }, [feature]);
 
   useEffect(() => {
     setPort(instance.port);
     setRconPort(instance.rconPort);
-    setMemoryMb(instance.memoryMb);
-  }, [instance.port, instance.rconPort, instance.memoryMb]);
+    setMemory(String(instance.memoryMb));
+    setJavaSelected(instance.javaPath ?? null);
+  }, [instance.port, instance.rconPort, instance.memoryMb, instance.javaPath]);
 
-  const dirty = port !== instance.port || rconPort !== instance.rconPort || memoryMb !== instance.memoryMb;
+  useEffect(() => {
+    let cancelled = false;
+    void api.mc.instanceJava(instance.id)
+      .then((answer) => {
+        if (!cancelled) {
+          setJavaSelected(answer.selected ?? null);
+          setJavaOptions(answer.options);
+          setJavaEffective(answer.effective);
+          setJavaError(null);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setJavaError(errMsg(e));
+      });
+    void api.mc.properties(instance.id)
+      .then((answer) => {
+        if (!cancelled) {
+          const current = answer.properties["enable-rcon"] === "true" ? "true" : "false";
+          setRconEnabled(current);
+          setRconOriginal(current);
+          setError(null);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError(errMsg(e));
+      });
+    void api.mc.instances()
+      .then((answer) => {
+        if (!cancelled) setInstances(answer.instances);
+      })
+      .catch(() => undefined);
+    void api.systemStats(0)
+      .then((stats) => {
+        if (!cancelled) setAvailableBytes(stats.snapshot?.memory.availableBytes ?? null);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [instance.id]);
 
-  const save = async () => {
+  const memoryMb = Number(memory);
+  const memoryValid = Number.isInteger(memoryMb) && memoryMb >= minMb && memoryMb <= maxMb;
+  const heap = memoryValid ? `-Xms${Math.min(512, memoryMb)}M -Xmx${memoryMb}M` : null;
+  const floorMb = memoryFloor(instance.core);
+  const runningCount = instances.filter(
+    (entry) => entry.state === "RUNNING" || entry.state === "STARTING",
+  ).length;
+  const committedMb = instances.reduce((sum, entry) => sum + entry.memoryMb, 0);
+
+  const recommend = (): number => {
+    if (availableBytes == null) {
+      return Math.min(maxMb, Math.max(floorMb, 2048));
+    }
+    // 给这台服留 75% 的可分配份额，其余留给面板、页缓存和下一台服。
+    const share = availableBytes / Math.max(1, runningCount + 1);
+    const target = Math.floor((share * 0.75) / (MEMORY_STEP_MB * 1024 * 1024)) * MEMORY_STEP_MB;
+    return Math.min(maxMb, Math.max(floorMb, target));
+  };
+
+  const applyRecommendation = () => {
+    const value = recommend();
+    setMemory(String(value));
+    const availableMb = availableBytes == null ? null : Math.floor(availableBytes / (1024 * 1024));
+    setNote(
+      `已填入 ${value} MB：` +
+        (availableMb == null
+          ? `读不到宿主内存，按 ${instance.core} 的常见值填`
+          : `宿主可用 ${formatMegabytes(availableMb)}，运行中 ${runningCount} 个实例，按 75% 份额估算`) +
+        `；${instance.core} 的下限是 ${floorMb} MB。保存后下次启动生效。`,
+    );
+  };
+
+  const javaChanged = (javaSelected ?? null) !== (instance.javaPath ?? null);
+  const dirty = port !== instance.port || rconPort !== instance.rconPort
+    || (memoryValid && memoryMb !== instance.memoryMb) || javaChanged;
+
+  const saveInstance = async () => {
+    if (!memoryValid) {
+      toast("error", `内存必须在 ${minMb}–${maxMb} MB 之间`);
+      return;
+    }
     setBusy(true);
     try {
-      const next = await elevated(() =>
-        api.mc.update(instance.id, { port, rconPort, memoryMb }),
-      );
+      const next = await elevated(() => api.mc.update(instance.id, {
+        port, rconPort, memoryMb, javaPath: javaSelected,
+      }));
       onChange(next);
+      setJavaSelected(next.javaPath ?? null);
+      void api.mc.instanceJava(instance.id)
+        .then((answer) => {
+          setJavaOptions(answer.options);
+          setJavaEffective(answer.effective);
+        })
+        .catch(() => undefined);
       toast("success", "已保存；下次启动生效");
     } catch (e) {
       toast("error", errMsg(e));
@@ -284,19 +457,111 @@ export function McNetworkPanel({
     }
   };
 
+  const saveRcon = async () => {
+    setRconBusy(true);
+    try {
+      await elevated(() => api.mc.saveProperties(instance.id, { "enable-rcon": rconEnabled }));
+      setRconOriginal(rconEnabled);
+      toast("success", "已保存；下次启动生效");
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setRconBusy(false);
+    }
+  };
+
   return (
     <div className="card">
       <div className="comp-row">
-        <span className="comp-label">端口与内存</span>
+        <span className="comp-label">高级设置</span>
         <span className="comp-value mono" style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
           instance.json · server.properties
         </span>
       </div>
       <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
-        客户端连的是游戏端口；RCON 端口给面板用（不能与游戏端口相同）。改端口要停服，
-        并记得在防火墙放行新端口。
+        默认不用动、需要时才来找的项：内存、端口、RCON 与 Java。端口不是「面板映射」——服务端
+        直接把游戏端口绑在宿主/容器网卡上，改完记得在防火墙放行；内存、端口与 Java 要停服才能改，
+        RCON 开关下次启动生效。
       </p>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, padding: "10px 8px" }}>
+
+      <div className="comp-row" style={{ paddingTop: 6 }}>
+        <span className="comp-label">资源</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, padding: "4px 8px 8px" }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+          <span>内存上限（MB）</span>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              className="input"
+              type="number"
+              min={minMb}
+              max={maxMb}
+              step={MEMORY_STEP_MB}
+              value={memory}
+              disabled={running || busy}
+              onChange={(e) => setMemory(e.target.value)}
+              style={{ flex: 1, minWidth: 90 }}
+            />
+            <button className="btn btn-text" disabled={running || busy} onClick={applyRecommendation}>
+              推荐值
+            </button>
+          </div>
+          <span style={{ color: "var(--monet-on-surface-variant)", lineHeight: 1.5 }}>
+            范围 {minMb}–{maxMb} MB（部署上限）。
+            {heap ? ` 启动参数 ${heap}。` : " 请输入范围内的整数。"}
+          </span>
+        </label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+          <span>宿主内存</span>
+          <span className="mono">
+            {availableBytes == null ? "未知" : `${formatMegabytes(Math.floor(availableBytes / (1024 * 1024)))} 可用`}
+          </span>
+          <span style={{ color: "var(--monet-on-surface-variant)", lineHeight: 1.5 }}>
+            所有实例的堆上限合计 {formatMegabytes(committedMb)}；合计超过可用内存时，服之间会互相挤。
+          </span>
+        </div>
+      </div>
+      {note && (
+        <div style={{ padding: "0 8px 8px", fontSize: 12, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+          {note}
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, padding: "0 8px 8px" }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+          <span>Java 运行时</span>
+          <select
+            className="input"
+            value={javaSelected ?? ""}
+            disabled={running || busy}
+            onChange={(e) => setJavaSelected(e.target.value || null)}
+          >
+            <option value="">自动（按 MC 版本要求）</option>
+            {javaOptions.map((option) => (
+              <option key={option.path} value={option.path}>{javaOptionLabel(option)}</option>
+            ))}
+            {javaSelected && !javaOptions.some((option) => option.path === javaSelected) && (
+              <option value={javaSelected}>当前选择（已不可用）· {javaSelected}</option>
+            )}
+          </select>
+          <span style={{ color: "var(--monet-on-surface-variant)", lineHeight: 1.5 }}>
+            {javaEffective
+              ? `当前使用：${javaEffective.path}（${javaSourceLabel(javaEffective.source)}，Java ${
+                  javaEffective.major > 0 ? javaEffective.major : "?"
+                }）${javaEffective.ok ? "" : `；${javaEffective.error ?? "无法运行"}`}`
+              : "自动：面板 JVM 满足版本就用它，不够时用面板托管或系统里的 JDK。"}
+            ；停服后才能改。
+          </span>
+        </label>
+      </div>
+      {javaError && (
+        <div style={{ padding: "0 8px 8px", fontSize: 12, color: "var(--monet-error)" }}>{javaError}</div>
+      )}
+
+      <div className="comp-row" style={{ paddingTop: 4 }}>
+        <span className="comp-label">网络</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, padding: "4px 8px 8px" }}>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
           <span>游戏端口</span>
           <input
@@ -308,6 +573,9 @@ export function McNetworkPanel({
             disabled={running || busy}
             onChange={(e) => setPort(Number(e.target.value) || 0)}
           />
+          <span style={{ color: "var(--monet-on-surface-variant)", lineHeight: 1.5 }}>
+            客户端连这个端口；RCON 端口给面板用，不能相同。
+          </span>
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
           <span>RCON 端口</span>
@@ -320,35 +588,63 @@ export function McNetworkPanel({
             disabled={running || busy}
             onChange={(e) => setRconPort(Number(e.target.value) || 0)}
           />
+          <span style={{ color: "var(--monet-on-surface-variant)", lineHeight: 1.5 }}>
+            只给面板与本地工具用，不要发布到公网。
+          </span>
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
-          <span>内存（MB）</span>
-          <input
+          <span>RCON</span>
+          <select
             className="input"
-            type="number"
-            min={256}
-            step={256}
-            value={memoryMb}
-            disabled={running || busy}
-            onChange={(e) => setMemoryMb(Number(e.target.value) || 0)}
-          />
+            value={rconEnabled}
+            disabled={rconBusy}
+            onChange={(e) => setRconEnabled(e.target.value)}
+          >
+            <option value="true">开启</option>
+            <option value="false">关闭</option>
+          </select>
+          <span style={{ color: "var(--monet-on-surface-variant)", lineHeight: 1.5 }}>
+            面板用它执行命令、查在线玩家与导入名单；默认关闭。
+          </span>
         </label>
       </div>
-      {instance.dir && (
-        <div style={{ padding: "0 8px 4px", fontSize: 11, color: "var(--monet-on-surface-variant)", wordBreak: "break-all" }}>
-          服务器目录：<span className="mono">{instance.dir}</span>
-          {instance.storage === "external" ? "（专用目录，独立挂载）" : "（面板数据目录）"}
-        </div>
-      )}
+      {error && <div style={{ color: "var(--monet-error)", padding: "0 8px 8px", fontSize: 12 }}>{error}</div>}
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "0 8px 8px" }}>
+        <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", alignSelf: "center" }}>
+          RCON 开关下次启动生效
+        </span>
+        <button
+          className="btn btn-text"
+          disabled={rconBusy || rconEnabled === rconOriginal}
+          onClick={() => void saveRcon()}
+        >
+          保存 RCON 开关
+        </button>
+      </div>
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "0 8px 8px" }}>
         {running && (
           <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", alignSelf: "center" }}>
             停服后可改
           </span>
         )}
-        <button className="btn btn-raised" disabled={busy || running || !dirty} onClick={() => void save()}>
-          保存
+        <button
+          className="btn btn-raised"
+          disabled={busy || running || !dirty || !memoryValid}
+          onClick={() => void saveInstance()}
+        >
+          保存端口、内存与 Java
         </button>
+      </div>
+
+      <div style={{ borderTop: "1px solid var(--monet-outline-variant)", padding: "6px 8px 8px", fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.7, wordBreak: "break-all" }}>
+        <div>
+          服务器目录：<span className="mono">{instance.dir}</span>
+          {instance.storage === "external" ? "（专用目录，独立挂载）" : "（面板数据目录）"}
+        </div>
+        <div>
+          Java：<span className="mono">{feature?.java.path || "—"}</span>
+          {feature?.java.version ? ` (${feature.java.version})` : ""}
+        </div>
       </div>
     </div>
   );
@@ -584,7 +880,7 @@ export function McPlayersPanel({ instance }: { instance: McInstance }) {
       </div>
       {listsNote && <div style={{ padding: "4px 8px 0", fontSize: 12 }}>{listsNote}</div>}
       <p className="dim" style={{ fontSize: 12, margin: 0, padding: "0 8px 8px" }}>
-        需要 server.properties 里开启 RCON（<code>enable-rcon=true</code>）；默认是关的。
+        在「服务端设置 → 高级设置」里开启 RCON；默认关闭，改了下次启动生效。
       </p>
     </div>
   );

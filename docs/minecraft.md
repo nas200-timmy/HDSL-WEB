@@ -468,7 +468,7 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
 |---|---|---|
 | 世界存档 | ✅ | 创建向导可直接选旧存档 zip（创建 → 导入 → 装服务端 → 完成）；实例页「世界」也能随时导出/导入。导入前自动备份，整体替换不合并 |
 | 白名单 / OP / 封禁名单 | ✅ | 「玩家」页 →「导入名单 zip…」：`whitelist.json`、`ops.json`、`banned-players.json`、`banned-ips.json` 放在 zip 根上；只认这四个名字，其它条目会被忽略（塞不进 jar） |
-| `server.properties` | ➖ | 受管的 12 项在「服务端设置」里重填；未知键不迁移 |
+| `server.properties` | ➖ | 受管字段在「服务端设置」（12 项）与「高级设置」（RCON 开关）里重填；未知键不迁移 |
 | `server.jar` | ❌ | P1 明确不做：改为在面板里选同一个版本，由 Mojang 官方下载并校验 SHA-1 |
 | `plugins/`、`mods/` | ❌ | 都是代码，按 P2 的边界处理（见 7.4），P1 一律不带 |
 
@@ -528,7 +528,7 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
 
 | 方法 | 路径 | 说明 | 闸门 |
 |---|---|---|---|
-| GET | `/api/mc/feature` | 状态（`state` / `locked` / `lockRemainingSeconds` / `keepFeature`）、条款版本、EULA 哈希 | 功能闸门 |
+| GET | `/api/mc/feature` | 状态（`state` / `locked` / `lockRemainingSeconds` / `keepFeature`）、条款版本、EULA 哈希、`limits`（`minMemoryMb` / `maxMemoryMb` / `maxInstances`，供高级设置校验） | 功能闸门 |
 | GET | `/api/mc/eula` | 官方 EULA 正文（已剥离页面外壳与导航，只留协议本身；带哈希/拉取时间；Mojang 连不上时回退到上次成功抓取的副本，副本也没有才 503） | 人类会话 |
 | POST | `/api/mc/feature/enable` | 开启（需 `eulaAcknowledged` + `termsAcknowledged` + `eulaHash`/`termsVersion`/`termsTextHash` + `sawDeclineOption`/`uiVersion` + 提权；锁定中 409 + `lockRemainingSeconds`） | 人类会话 |
 | POST | `/api/mc/feature/decline` | 记录"知情后选择不启用"（可选，不改状态） | 人类会话 |
@@ -536,7 +536,8 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
 | POST | `/api/mc/feature/confirm-close` | 锁定期间 → `DISABLED`（锁定继续，走完才能 enable） | 人类会话 |
 | POST | `/api/mc/feature/cancel-close` | 「我不想关掉功能」：只表明保留功能 → 保持 `ENABLED`；**锁定继续，1h 内仍不能启服** | 人类会话 |
 | GET/POST | `/api/mc/instances` | 列表 / 创建（创建体含 `storage: external\|data`，不传即专用目录） | 提权 |
-| GET/PATCH/DELETE | `/api/mc/instances/{id}` | 详情 / 改配置（`name`、`port`、`rconPort`、`memoryMb`；端口与内存在停服时可改，端口会同时写 `server.properties`）/ 删除 | 提权 |
+| GET/PATCH/DELETE | `/api/mc/instances/{id}` | 详情 / 改配置（`name`、`port`、`rconPort`、`memoryMb`、`javaPath`；端口、内存与 Java 在停服时可改，端口会同时写 `server.properties`；`memoryMb` 的范围是 256–`mc.max_memory_mb`，且硬顶 16384；`javaPath` 必须是 `GET .../java` 列出的路径，`null` 表示自动）/ 删除 | 提权 |
+| GET | `/api/mc/instances/{id}/java` | 这台实例实际会用的 Java（`effective`）与可选的运行时菜单（`options`）；`selected` 为空表示自动 | 提权 |
 | GET | `/api/mc/storage` | 两个存储位置的真实路径与可写状态、默认值（创建向导用） | 提权 |
 | GET | `/api/mc/ports` | 当前空闲的一对端口建议（创建向导用） | 提权 |
 | POST | `.../start` `.../stop` `.../kill` `.../restart` | 生命周期 | 提权 |
@@ -554,6 +555,16 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
 - 长操作返回 `{ taskId }`，进度走 WS（`mc:<id>`），与现有任务模型一致。
 - 创建/启动带 **幂等键**，防止 agent 重试建出三个服。
 - 不接受任意 URL/jar；只接受版本清单里的版本 ID。
+
+内存上限由 `mc.max_memory_mb` 决定（默认 8192 MB，硬顶 16384 MB）；`GET /api/mc/feature`
+的 `limits` 是界面唯一的来源，避免前端写死一个服务端会拒绝的数字。实例页的「服务端设置 →
+高级设置」只放默认不用动、需要时才找的项：内存（手动输入 + 一次性「推荐值」）、端口、
+RCON 开关与 Java 运行时；MOTD、正版验证、视距这些仍在「服务端设置」里。推荐值按宿主可用内存、当前运行
+中的 MC 实例数与核心类型估算（原版 1024、Paper/Purpur/Folia/Fabric 2048、Forge/NeoForge
+4096 的下限），填进输入框后仍由人确认保存，不持续跟踪——堆随宿主负载漂移会让服主难以复现
+问题。RCON 默认关闭；开启后「玩家」页的命令与在线列表才可用。Java 默认「自动」（按版本
+要求挑），需要固定在某个 JDK/JRE 时选 `GET .../java` 给出的一个路径；选中后该实例的启动
+不再走自动挑选，停服才能改。
 
 ### 8.2 磁盘数据结构
 
@@ -593,6 +604,7 @@ E-Stop 命中时，MC 服务器也应当被停（因为它已经在 `terminateAl
   "port": 25565,
   "rconPort": 25575,
   "memoryMb": 2048,
+  "javaPath": null,
   "levelName": "world",
   "seed": "12345",
   "createdAt": "2026-10-29T01:00:00Z",
@@ -1077,7 +1089,8 @@ MC 服务端与 AI agent 是同一类工作负载：执行第三方代码、不�
   已装的 JDK 并选**满足要求的最低那个**（Linux：`/usr/lib/jvm`、`/usr/lib64/jvm`；
   macOS：`/Library/Java/JavaVirtualMachines`；Windows 不扫，用 `mc.java_path` 指定）。
   选了哪个会体现在 `java.source`：`panel`（面板自己的）、`installed`（本机另一份 JDK）、
-  `configured`（`mc.java_path` 指定）。`mc.java_path` 与 `JAVA_HOME` 仍然一票否决。
+  `configured`（`mc.java_path` 指定）。实例在「高级设置」里指定的 Java 优先于自动挑选，
+  其次 `mc.java_path`。
   官方容器镜像因此内置 JDK 21 与 25：默认 `java` 钉在 21（面板与老版本 MC 沿用实测组合），
   只有 26.x 这类要 25 的版本才用 25。
 - **版本与 Java 的对应**：2026 年的 `26.x` 服务端要求 Java 25+。容器镜像里直接可用；
@@ -1342,10 +1355,12 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
 
 - `McJavaRuntimes`（`web/minecraft/McJavaRuntimes.java`）把 JRE 装到
   `<data>/minecraft/java/<feature>/`，**不装进系统目录**：免 root、随面板清理、Win/Linux 一致；
-  `mc.java_path` 仍然优先——系统 Java 永远是显式选项。
+  实例也可以只为自己钉一个 Java（高级设置），此时 `mc.java_path` 让位；系统 Java 永远是显式选项。
 - 数据源 Adoptium API v3（`HDSL_JAVA_API` 可换镜像）；下载后校验上游 SHA-256 才解包，
   zip 与 tar.gz 都支持，先解到临时目录再原子落位。
-- 启动选 Java 的顺序：`mc.java_path` > 面板托管里满足要求的最低版本 > 宿主机已装 JDK > 面板自身 JVM。
+- 启动选 Java 的顺序：实例「高级设置」里指定的 `javaPath` > `mc.java_path` > 面板托管里满足
+  要求的最低版本 > 宿主机已装 JDK > 面板自身 JVM。指定的路径必须来自 `GET .../java` 的
+  `options`，停服才能改；选中的 JDK 被删掉时启动会明确报错，而不是悄悄换一个。
   版本要求先读 `version.json` 的 `javaMajor`，缺失时用内置推荐表（1.20.5+→21、1.18–1.20.4→17、
   1.17→16、≤1.16.5→8、26.x→25）。
 - API：`GET /api/mc/java/runtimes`（含推荐版本与 Adoptium 可下载项）、

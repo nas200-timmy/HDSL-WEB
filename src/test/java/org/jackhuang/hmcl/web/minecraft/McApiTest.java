@@ -107,6 +107,11 @@ class McApiTest {
             assertTrue(feature.body().contains("\"storage\""));
             assertTrue(feature.body().contains("\"source\":\"panel\""));
             assertTrue(feature.body().contains("\"root\""));
+            // The advanced panel validates a manual heap value from these; the
+            // SPA must not hardcode a ceiling the server would reject.
+            assertTrue(feature.body().contains("\"limits\""));
+            assertTrue(feature.body().contains("\"minMemoryMb\":256"));
+            assertTrue(feature.body().contains("\"maxMemoryMb\":8192"));
 
             HttpResponse<String> terms = get(wired.port(), "/api/mc/terms");
             assertEquals(200, terms.statusCode());

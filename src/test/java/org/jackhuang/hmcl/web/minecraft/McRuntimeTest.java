@@ -302,6 +302,27 @@ class McRuntimeTest {
                 "with no suitable JDK the panel's own comes back, so the refusal can name it");
     }
 
+    /// The advanced setting exists so one server can stay on a JDK the operator
+    /// picked, even when the panel's own JVM or the version heuristic would pick
+    /// another. A pin is not a hint: it is the executable that will run.
+    @Test
+    void anInstancesPinnedJavaWinsOverThePanelRuntime() throws Exception {
+        Assumptions.assumeFalse(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS,
+                "the fake JDK is a shell script");
+        Path java17 = fakeJava(dir.resolve("jdk17"), "17.0.9");
+        McPorts.Pair ports = freePorts();
+        McInstance instance = manager.create("pinned", "1.21.4", ports.game(), ports.rcon(),
+                1024, "world", null).withJava(java17.toString());
+
+        McRuntime runtime = new McRuntime(manager, terminals, feature, "java", null);
+        assertEquals(java17.toString(), runtime.javaFor(instance));
+        McRuntime.JavaInfo info = runtime.javaInfoFor(instance);
+        assertTrue(info.ok(), info.error());
+        assertEquals(17, info.major());
+        assertEquals("installed", info.source());
+        assertEquals(java17.toString(), info.path());
+    }
+
     @Test
     void theLowestJdkThatSatisfiesTheVersionWins() throws Exception {
         Assumptions.assumeFalse(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS,

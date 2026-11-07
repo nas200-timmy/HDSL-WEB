@@ -8,7 +8,7 @@ import {
   McConsolePanel,
   McFilesPanel,
   McLogsPanel,
-  McNetworkPanel,
+  McAdvancedPanel,
   McPlayersPanel,
   McPropertiesPanel,
   McWorldPanel,
@@ -367,8 +367,8 @@ export function McInstancePage() {
         )}
         {tab === "settings" && (
           <>
-            <McNetworkPanel instance={instance} onChange={setInstance} />
             <McPropertiesPanel instance={instance} />
+            <McAdvancedPanel instance={instance} onChange={setInstance} />
           </>
         )}
         {tab === "backups" && <McBackupsPanel instance={instance} />}

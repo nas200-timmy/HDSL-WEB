@@ -39,7 +39,8 @@ public record McInstance(
         @SerializedName("levelName") String levelName,
         @SerializedName("seed") @Nullable String seed,
         @SerializedName("createdAt") long createdAt,
-        @SerializedName("core") @Nullable String core) {
+        @SerializedName("core") @Nullable String core,
+        @SerializedName("javaPath") @Nullable String javaPath) {
 
     /// The smallest heap worth starting a server with.
     public static final int MIN_MEMORY_MB = 256;
@@ -54,6 +55,13 @@ public record McInstance(
     public McInstance(String id, String name, String version, int port, int rconPort,
                       int memoryMb, String levelName, @Nullable String seed, long createdAt) {
         this(id, name, version, port, rconPort, memoryMb, levelName, seed, createdAt, CORE_VANILLA);
+    }
+
+    /// The shape callers written before the per-instance Java choice used.
+    public McInstance(String id, String name, String version, int port, int rconPort,
+                      int memoryMb, String levelName, @Nullable String seed, long createdAt,
+                      @Nullable String core) {
+        this(id, name, version, port, rconPort, memoryMb, levelName, seed, createdAt, core, null);
     }
 
     public McInstance {
@@ -86,6 +94,9 @@ public record McInstance(
         if (seed != null && seed.isBlank()) {
             seed = null;
         }
+        if (javaPath != null) {
+            javaPath = javaPath.isBlank() ? null : javaPath.trim();
+        }
     }
 
     /// The same instance with a new display name.
@@ -93,7 +104,7 @@ public record McInstance(
     /// @param newName the name
     /// @return the updated instance
     public McInstance withName(String newName) {
-        return new McInstance(id, newName, version, port, rconPort, memoryMb, levelName, seed, createdAt, core);
+        return new McInstance(id, newName, version, port, rconPort, memoryMb, levelName, seed, createdAt, core, javaPath);
     }
 
     /// The same instance with a new version.
@@ -101,7 +112,7 @@ public record McInstance(
     /// @param newVersion the version
     /// @return the updated instance
     public McInstance withVersion(String newVersion) {
-        return new McInstance(id, name, newVersion, port, rconPort, memoryMb, levelName, seed, createdAt, core);
+        return new McInstance(id, name, newVersion, port, rconPort, memoryMb, levelName, seed, createdAt, core, javaPath);
     }
 
     /// The same instance with a new core.
@@ -109,7 +120,7 @@ public record McInstance(
     /// @param newCore the core id (`vanilla`, `paper`, …)
     /// @return the updated instance
     public McInstance withCore(String newCore) {
-        return new McInstance(id, name, version, port, rconPort, memoryMb, levelName, seed, createdAt, newCore);
+        return new McInstance(id, name, version, port, rconPort, memoryMb, levelName, seed, createdAt, newCore, javaPath);
     }
 
     /// The same instance with new ports.
@@ -118,7 +129,7 @@ public record McInstance(
     /// @param newRconPort the RCON port
     /// @return the updated instance
     public McInstance withPorts(int newPort, int newRconPort) {
-        return new McInstance(id, name, version, newPort, newRconPort, memoryMb, levelName, seed, createdAt, core);
+        return new McInstance(id, name, version, newPort, newRconPort, memoryMb, levelName, seed, createdAt, core, javaPath);
     }
 
     /// The same instance with a new heap size.
@@ -126,6 +137,15 @@ public record McInstance(
     /// @param newMemoryMb the heap size in MB
     /// @return the updated instance
     public McInstance withMemory(int newMemoryMb) {
-        return new McInstance(id, name, version, port, rconPort, newMemoryMb, levelName, seed, createdAt, core);
+        return new McInstance(id, name, version, port, rconPort, newMemoryMb, levelName, seed, createdAt, core, javaPath);
+    }
+
+    /// The same instance pinned to one Java executable, or back to automatic
+    /// when `newJavaPath` is `null`.
+    ///
+    /// @param newJavaPath the executable, or `null` for automatic selection
+    /// @return the updated instance
+    public McInstance withJava(@Nullable String newJavaPath) {
+        return new McInstance(id, name, version, port, rconPort, memoryMb, levelName, seed, createdAt, core, newJavaPath);
     }
 }

@@ -38,6 +38,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -372,10 +373,57 @@ public final class McRuntime {
                 probe.error() == null, probe.error());
     }
 
+    /// The Java an instance will actually use, probed, with where it came from.
+    ///
+    /// @param instance the instance
+    /// @return the probe result
+    public JavaInfo javaInfoFor(McInstance instance) {
+        String program = javaFor(instance);
+        if (program == null) {
+            return new JavaInfo("", null, 0, "none", false,
+                    "no Java executable is configured for Minecraft servers");
+        }
+        JavaProbe probe = probe(program);
+        return new JavaInfo(program, probe.version(), probe.major(),
+                sourceOf(instance, program), probe.error() == null, probe.error());
+    }
+
+    /// Every Java the advanced settings may pin an instance to.
+    ///
+    /// The panel's own JVM first (the combination this build was tested with),
+    /// then the JREs the panel installed, then the host's JDKs. Paths are unique;
+    /// the list is only a menu, not a trust boundary — the caller still names one
+    /// of these paths, and the probe above is what decides whether it runs.
+    ///
+    /// @return the candidates, panel first
+    List<JavaInfo> javaOptions() {
+        Map<String, JavaInfo> byPath = new LinkedHashMap<>();
+        if (javaBin != null) {
+            JavaInfo own = javaInfo();
+            byPath.put(own.path(), own);
+        }
+        for (Path candidate : managedCandidates(javaRoot)) {
+            String path = candidate.toString();
+            byPath.computeIfAbsent(path, ignored -> probeInfo(path, "managed"));
+        }
+        for (Path candidate : javaCandidates()) {
+            String path = candidate.toString();
+            byPath.computeIfAbsent(path, ignored -> probeInfo(path, "installed"));
+        }
+        return List.copyOf(byPath.values());
+    }
+
+    private static JavaInfo probeInfo(String program, String source) {
+        JavaProbe probe = probe(program);
+        return new JavaInfo(program, probe.version(), probe.major(), source,
+                probe.error() == null, probe.error());
+    }
+
     /// The `java` an instance is actually launched with.
     ///
-    /// `mc.java_path` wins outright — an operator who named a JDK meant it. So does
-    /// a JVM that already satisfies the version. The default is the panel's own JVM
+    /// An instance's own pin wins outright — that is what the advanced setting is
+    /// for. Next is `mc.java_path` (an operator who named a JDK meant it), then a
+    /// JVM that already satisfies the version. The default is the panel's own JVM
     /// (the combination this panel was tested with), except when the instance's
     /// version asks for a newer major than that JVM offers **and** a suitable
     /// JRE/JDK is available: first the ones this panel installed itself
@@ -388,6 +436,10 @@ public final class McRuntime {
     /// @param instance the instance about to start
     /// @return the java executable
     String javaFor(McInstance instance) {
+        String pinned = instance.javaPath();
+        if (pinned != null && !pinned.isBlank()) {
+            return pinned;
+        }
         if (javaBin == null || !"panel".equals(javaSource)) {
             return javaBin;
         }
@@ -1125,15 +1177,15 @@ public final class McRuntime {
         // The executable that will actually launch, not the panel's own: when the
         // version asks for 25 and the image ships one, the refusal below must not
         // be about the JVM nobody was going to use.
-        String program = javaFor(instance);
-        JavaProbe probe = probe(program);
-        JavaInfo java = new JavaInfo(program, probe.version(), probe.major(), sourceOf(program),
-                probe.error() == null, probe.error());
+        JavaInfo java = javaInfoFor(instance);
         if (!java.ok()) {
-            throw new McException("The Java configured for Minecraft servers cannot be run: `"
-                    + java.path() + "` — " + java.error()
-                    + "; point mc.java_path at a working JDK/JRE (Java 21+ for modern versions),"
-                    + " or unset it to use the panel's own runtime");
+            String hint = instance.javaPath() != null
+                    ? "pick another JDK/JRE in this instance's advanced settings, or clear the"
+                            + " selection to use the panel's own runtime"
+                    : "point mc.java_path at a working JDK/JRE (Java 21+ for modern versions),"
+                            + " or unset it to use the panel's own runtime";
+            throw new McException("The Java used for Minecraft servers cannot be run: `"
+                    + java.path() + "` — " + java.error() + "; " + hint);
         }
         int required = requiredJava(instance.version());
         if (required <= 0) {
@@ -1145,6 +1197,30 @@ public final class McRuntime {
                     + "; install a newer JDK/JRE (the container image ships JDK 25 under /usr/lib/jvm)"
                     + " or point mc.java_path at one");
         }
+    }
+
+    /// Where the instance's chosen Java came from, for the refusal text and the API.
+    ///
+    /// A pin can point at the panel JVM, a managed JRE or a host JDK; the source
+    /// is what lets the UI say which menu entry the selection came from.
+    ///
+    /// @param instance the instance
+    /// @param program  the executable that will run
+    /// @return `configured`, `panel`, `managed`, or `installed`
+    private String sourceOf(McInstance instance, String program) {
+        if (instance.javaPath() != null && instance.javaPath().equals(program)) {
+            if (javaBin != null && program.equals(javaBin)) {
+                return javaSource;
+            }
+            if (javaRoot != null) {
+                Path root = javaRoot.toAbsolutePath().normalize();
+                if (Path.of(program).toAbsolutePath().normalize().startsWith(root)) {
+                    return "managed";
+                }
+            }
+            return "installed";
+        }
+        return sourceOf(program);
     }
 
     /// Where `program` came from, for the refusal text and the API.

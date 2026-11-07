@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type McCoreInfo, type McInstance, type McStorage, type McVersion } from "../api";
 import { Dialog } from "./Dialog";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
+import { useMcFeature } from "../mcFeature";
 import { toast } from "../store";
 import { errMsg, mcCoreNote } from "../utils";
 import { CheckCircleIcon, WarningIcon } from "./icons";
@@ -31,6 +32,9 @@ export function McCreateWizard({
   onClose: () => void;
   onCreated: (instance: McInstance) => void;
 }) {
+  const feature = useMcFeature();
+  const minMemoryMb = feature?.limits?.minMemoryMb ?? 256;
+  const maxMemoryMb = feature?.limits?.maxMemoryMb ?? 8192;
   const [step, setStep] = useState<Step>(0);
   const [name, setName] = useState("");
   const [memoryMb, setMemoryMb] = useState(2048);
@@ -193,8 +197,19 @@ export function McCreateWizard({
             <Field label="RCON 端口" hint="面板用它执行命令与查在线玩家，不能和游戏端口相同">
               <input className="input" type="number" min={1024} max={65535} value={rconPort} onChange={(e) => setRconPort(Number(e.target.value) || 0)} />
             </Field>
-            <Field label="内存（MB）">
-              <input className="input" type="number" min={256} step={256} value={memoryMb} onChange={(e) => setMemoryMb(Number(e.target.value) || 1024)} />
+            <Field
+              label="内存（MB）"
+              hint={`范围 ${minMemoryMb}–${maxMemoryMb} MB；创建后可以在实例页「服务端设置 → 高级设置」里调整，也能点「推荐值」。`}
+            >
+              <input
+                className="input"
+                type="number"
+                min={minMemoryMb}
+                max={maxMemoryMb}
+                step={256}
+                value={memoryMb}
+                onChange={(e) => setMemoryMb(Number(e.target.value) || 1024)}
+              />
             </Field>
             <Field label="世界目录名" hint="存档文件夹名，默认 world">
               <input className="input" value={levelName} onChange={(e) => setLevelName(e.target.value)} />

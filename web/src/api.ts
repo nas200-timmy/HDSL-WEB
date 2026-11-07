@@ -791,6 +791,8 @@ export const api = {
     instances: () => request<{ instances: McInstance[] }>("/api/mc/instances"),
     instance: (id: string) =>
       request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}`),
+    instanceJava: (id: string) =>
+      request<McInstanceJava>(`/api/mc/instances/${encodeURIComponent(id)}/java`),
     create: (body: {
       name: string;
       version: string;
@@ -806,7 +808,7 @@ export const api = {
       request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}`, jsonInit("PATCH", { name })),
     update: (
       id: string,
-      body: { name?: string; port?: number; rconPort?: number; memoryMb?: number },
+      body: { name?: string; port?: number; rconPort?: number; memoryMb?: number; javaPath?: string | null },
     ) => request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}`, jsonInit("PATCH", body)),
     remove: (id: string) =>
       request<{ ok: boolean; backup: string }>(`/api/mc/instances/${encodeURIComponent(id)}`, { method: "DELETE" }),
@@ -944,6 +946,14 @@ export interface McFeature {
   java: McJavaInfo;
   /** 新实例会落到哪个根目录，以及这个设置来自哪里。 */
   storage: McFeatureStorage;
+  /** 每个实例的堆上限范围；来源是 `server.yaml` 的 `mc.max_memory_mb`。 */
+  limits?: McFeatureLimits;
+}
+
+export interface McFeatureLimits {
+  minMemoryMb: number;
+  maxMemoryMb: number;
+  maxInstances: number;
 }
 
 export interface McJavaInfo {
@@ -1063,6 +1073,8 @@ export interface McInstance {
   port: number;
   rconPort: number;
   memoryMb: number;
+  /** 高级设置里选的 java 可执行文件；空/缺省 = 按版本要求自动挑。 */
+  javaPath?: string | null;
   levelName: string;
   seed?: string;
   createdAt: number;
@@ -1080,6 +1092,22 @@ export interface McStorage {
   external: { path: string; writable: boolean };
   data: { path: string; writable: boolean } | null;
   default: "external" | "data";
+}
+
+/// GET /api/mc/instances/{id}/java：这台实例会用的 Java 与可选的运行时。
+export interface McJavaProbe {
+  path: string;
+  version: string | null;
+  major: number;
+  source: "panel" | "managed" | "installed" | "configured" | "none" | string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface McInstanceJava {
+  selected: string | null;
+  effective: McJavaProbe;
+  options: McJavaProbe[];
 }
 
 export interface McBackup {

@@ -83,7 +83,7 @@ public final class McApiServlet extends HttpServlet {
     private static final Set<String> MANAGED_PROPERTIES = Set.of(
             "motd", "max-players", "online-mode", "white-list", "enforce-whitelist",
             "difficulty", "gamemode", "pvp", "allow-flight", "spawn-protection",
-            "view-distance", "simulation-distance");
+            "view-distance", "simulation-distance", "enable-rcon");
 
     private final ServerConfig config;
     private final McFeatureState feature;
@@ -307,6 +307,13 @@ public final class McApiServlet extends HttpServlet {
         body.addProperty("thirdParty", feature.thirdPartyEnabled());
         body.add("java", javaJson());
         body.add("storage", storageJson());
+        // The advanced panel draws the input's bounds and the recommendation from
+        // here; a hardcoded 8192 in the SPA would drift from server.yaml.
+        JsonObject limits = new JsonObject();
+        limits.addProperty("minMemoryMb", McInstance.MIN_MEMORY_MB);
+        limits.addProperty("maxMemoryMb", maxMemoryMb());
+        limits.addProperty("maxInstances", config.mc.maxInstances);
+        body.add("limits", limits);
         Json.write(response, body);
     }
 
@@ -873,9 +880,10 @@ public final class McApiServlet extends HttpServlet {
         if (memoryMb == 0) {
             memoryMb = 2048;
         }
-        if (memoryMb > config.mc.maxMemoryMb) {
+        if (memoryMb < McInstance.MIN_MEMORY_MB || memoryMb > maxMemoryMb()) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "memoryMb must not exceed " + config.mc.maxMemoryMb);
+                    "memoryMb must be between " + McInstance.MIN_MEMORY_MB
+                            + " and " + maxMemoryMb());
             return;
         }
         String levelName = stringField(body, "levelName");
@@ -1033,19 +1041,48 @@ public final class McApiServlet extends HttpServlet {
                         "stop the server before changing its memory");
                 return;
             }
-            if (memoryMb < McInstance.MIN_MEMORY_MB || memoryMb > config.mc.maxMemoryMb) {
+            if (memoryMb < McInstance.MIN_MEMORY_MB || memoryMb > maxMemoryMb()) {
                 Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                         "memoryMb must be between " + McInstance.MIN_MEMORY_MB
-                                + " and " + config.mc.maxMemoryMb);
+                                + " and " + maxMemoryMb());
                 return;
             }
             updated = updated.withMemory(memoryMb);
             changed = true;
         }
 
+        if (body.has("javaPath")) {
+            com.google.gson.JsonElement raw = body.get("javaPath");
+            if (!raw.isJsonNull() && (!raw.isJsonPrimitive() || !raw.getAsJsonPrimitive().isString())) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "javaPath must be a string or null");
+                return;
+            }
+            String requested = stringField(body, "javaPath");
+            String desired = requested == null || requested.isBlank() ? null : requested.trim();
+            boolean same = desired == null
+                    ? instance.javaPath() == null
+                    : desired.equals(instance.javaPath());
+            if (!same) {
+                if (runtime.isRunning(instance.id())) {
+                    Json.error(response, HttpServletResponse.SC_CONFLICT,
+                            "stop the server before changing its Java");
+                    return;
+                }
+                if (desired != null && runtime.javaOptions().stream()
+                        .noneMatch(option -> option.path().equals(desired))) {
+                    Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                            "that Java is not one of the runtimes this panel can use");
+                    return;
+                }
+                updated = updated.withJava(desired);
+                changed = true;
+            }
+        }
+
         if (!changed) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "nothing to update: send name, port, rconPort or memoryMb");
+                    "nothing to update: send name, port, rconPort, memoryMb or javaPath");
             return;
         }
 
@@ -1238,6 +1275,14 @@ public final class McApiServlet extends HttpServlet {
                 body.addProperty("ticket", ticket);
                 body.addProperty("ws", "/ws/terminal/" + ticket);
                 Json.write(response, body);
+            }
+            case "java" -> {
+                if (!"GET".equals(method)) {
+                    Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED,
+                            "method not allowed");
+                    return;
+                }
+                instanceJava(response, instance);
             }
             case "world" -> {
                 String worldAction = segments.length > 2 ? segments[2] : "";
@@ -1627,6 +1672,42 @@ public final class McApiServlet extends HttpServlet {
         Json.write(response, Map.of("ok", true, "name", name));
     }
 
+    /// `GET /instances/{id}/java`: which Java this instance will use, and the
+    /// menu of runtimes the advanced setting may pin it to.
+    private void instanceJava(HttpServletResponse response, McInstance instance) throws IOException {
+        JsonObject body = new JsonObject();
+        if (instance.javaPath() == null) {
+            body.add("selected", com.google.gson.JsonNull.INSTANCE);
+        } else {
+            body.addProperty("selected", instance.javaPath());
+        }
+        body.add("effective", javaProbeJson(runtime.javaInfoFor(instance)));
+        JsonArray options = new JsonArray();
+        for (McRuntime.JavaInfo option : runtime.javaOptions()) {
+            options.add(javaProbeJson(option));
+        }
+        body.add("options", options);
+        Json.write(response, body);
+    }
+
+    /// One probed Java in the shape the instance page reads.
+    private static JsonObject javaProbeJson(McRuntime.JavaInfo info) {
+        JsonObject body = new JsonObject();
+        body.addProperty("path", info.path());
+        if (info.version() == null) {
+            body.add("version", com.google.gson.JsonNull.INSTANCE);
+        } else {
+            body.addProperty("version", info.version());
+        }
+        body.addProperty("major", info.major());
+        body.addProperty("source", info.source());
+        body.addProperty("ok", info.ok());
+        if (info.error() != null) {
+            body.addProperty("error", info.error());
+        }
+        return body;
+    }
+
     private JsonObject instanceJson(McInstance instance) {
         McRuntime.Status status = runtime.status(instance.id());
         JsonObject body = new JsonObject();
@@ -1639,6 +1720,9 @@ public final class McApiServlet extends HttpServlet {
         body.addProperty("port", instance.port());
         body.addProperty("rconPort", instance.rconPort());
         body.addProperty("memoryMb", instance.memoryMb());
+        // `null`/empty = automatic (the version's requirement decides); otherwise
+        // the executable selected in the advanced settings.
+        body.addProperty("javaPath", instance.javaPath());
         body.addProperty("levelName", instance.levelName());
         // 文件到底在哪个目录：向导与实例页都把它显示出来——「存档去哪了」这个问题
         // 应该由界面回答，而不是由用户在 issue 里问。
@@ -1657,6 +1741,15 @@ public final class McApiServlet extends HttpServlet {
         // button — that was the one path where the fix was invisible.
         body.addProperty("consoleAvailable", runtime.consoleMode(instance.id()) != null);
         return body;
+    }
+
+    /// The per-instance heap ceiling this deployment accepts: `mc.max_memory_mb`
+    /// cannot raise the model's hard cap, only lower it.
+    ///
+    /// @return megabytes
+    private int maxMemoryMb() {
+        return Math.max(McInstance.MIN_MEMORY_MB,
+                Math.min(config.mc.maxMemoryMb, McInstance.MAX_MEMORY_MB));
     }
 
     /// Step-up for the operations that start processes, delete data or change
