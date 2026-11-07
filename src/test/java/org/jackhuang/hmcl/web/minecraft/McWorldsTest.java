@@ -165,4 +165,29 @@ class McWorldsTest {
             assertTrue(entry.getName().startsWith("world/"), entry.getName());
         }
     }
+
+    /// A zip that expands past the limit is refused while unpacking, before it fills the disk.
+    /// The limit is named here so the test does not need a 32 GiB archive.
+    @Test
+    void anArchiveThatUnpacksTooFarIsRefused(@TempDir Path dir) throws Exception {
+        McInstanceManager manager = new McInstanceManager(dir.resolve("instances"));
+        McInstance instance = setup(dir, manager);
+        McBackups backups = new McBackups(dir.resolve("backups"));
+
+        ByteArrayOutputStream packed = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(packed)) {
+            zip.putNextEntry(new ZipEntry(instance.levelName() + "/level.dat"));
+            zip.write(new byte[4096]);
+            zip.closeEntry();
+        }
+        Path archive = dir.resolve("world.zip");
+        Files.write(archive, packed.toByteArray());
+
+        McException error = assertThrows(McException.class,
+                () -> McWorlds.importArchive(instance, manager, backups, archive, null, 1024));
+        assertTrue(error.getMessage().contains("unpacks to more than"), error.getMessage());
+        assertEquals("original",
+                Files.readString(manager.worldDirectory(instance).resolve("level.dat")),
+                "a refused import must leave the old world alone");
+    }
 }

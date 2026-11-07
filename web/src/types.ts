@@ -79,6 +79,8 @@ export interface Task {
 export interface TaskResult {
   instanceId?: string;
   filename?: string;
+  /** 世界导入成功后，导入前那份世界的备份名 */
+  safety?: string;
 }
 
 /** Task 附带本地更新时间，用于"最近活跃任务"启发式匹配 */

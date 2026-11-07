@@ -337,7 +337,9 @@ public final class TaskService {
     /// racing the first for the same id.
     private static final java.util.Set<String> INSTALL_LIKE =
             java.util.Set.of("install", "plugin-install", "plugin-remove", "plugin-local",
-                    "pack-install");
+                    // Disk-bound rather than install, but it owns the instance the same way: a
+                    // second one must not start, and the server must not be launched mid-swap.
+                    "pack-install", "mc-world-import");
 
     private static boolean installLike(@Nullable String kind) {
         return kind != null && INSTALL_LIKE.contains(kind);

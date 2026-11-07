@@ -862,25 +862,48 @@ export const api = {
         `/api/mc/instances/${encodeURIComponent(id)}/players/${encodeURIComponent(name)}/${action}`,
         jsonInit("POST", {}),
       ),
-    exportWorld: async (id: string): Promise<Blob> => {
-      const res = await fetch(`api/mc/instances/${encodeURIComponent(id)}/world/export`, {
-        credentials: "same-origin",
-        cache: "no-store",
-      });
-      if (!res.ok) throw new ApiError(res.status, await res.text());
-      return res.blob();
-    },
-    importWorld: async (id: string, file: File): Promise<{ ok: boolean; safety: string }> => {
-      const res = await fetch(`api/mc/instances/${encodeURIComponent(id)}/world/import`, {
-        method: "POST",
-        credentials: "same-origin",
-        cache: "no-store",
-        body: file,
-        headers: { "Content-Type": "application/zip" },
-      });
-      if (!res.ok) throw new ApiError(res.status, await res.text());
-      return (await res.json()) as { ok: boolean; safety: string };
-    },
+    /** 提权探针：浏览器自己的下载带不了 elevated() 的重试，先在这里过一遍密码。 */
+    authorizeWorld: (id: string) =>
+      request<void>(`/api/mc/instances/${encodeURIComponent(id)}/world/authorize`, jsonInit("POST", {})),
+    /** 下载 URL：交给浏览器流式下载。5 GB 的 zip 不能先 res.blob() 进内存。 */
+    exportWorldUrl: (id: string) =>
+      new URL(`api/mc/instances/${encodeURIComponent(id)}/world/export`, document.baseURI).toString(),
+    /**
+     * 上传世界 zip。用 XHR 而不是 fetch：只有 XHR 有上传进度事件。
+     * 服务端把正文落盘后返回任务 id，解压与备份在后台任务里跑。
+     */
+    importWorld: (
+      id: string,
+      file: File,
+      onProgress?: (sent: number, total: number) => void,
+    ): Promise<{ taskId: string }> =>
+      new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open(
+          "POST",
+          new URL(`api/mc/instances/${encodeURIComponent(id)}/world/import`, document.baseURI).toString(),
+        );
+        xhr.withCredentials = true;
+        xhr.setRequestHeader("Content-Type", "application/zip");
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) onProgress?.(event.loaded, event.total);
+        };
+        xhr.upload.onload = () => onProgress?.(file.size, file.size);
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              resolve(JSON.parse(xhr.responseText) as { taskId: string });
+            } catch {
+              reject(new ApiError(xhr.status, "服务器返回了无法解析的响应"));
+            }
+          } else {
+            reject(new ApiError(xhr.status, xhr.responseText));
+          }
+        };
+        xhr.onerror = () => reject(new ApiError(0, "无法连接服务器"));
+        xhr.onabort = () => reject(new ApiError(0, "上传已取消"));
+        xhr.send(file);
+      }),
     importPlayerLists: async (
       id: string,
       file: File,

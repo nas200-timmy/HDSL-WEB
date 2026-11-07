@@ -1107,6 +1107,14 @@ public final class McApiServlet extends HttpServlet {
                     Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
                     return;
                 }
+                // A world being unpacked is a directory mid-swap; starting now would read a
+                // world that is about to be moved away.
+                if (tasks.activeInstallLike(id)
+                        .filter(info -> "mc-world-import".equals(info.kind())).isPresent()) {
+                    Json.error(response, HttpServletResponse.SC_CONFLICT,
+                            "a world import is running for this instance; wait for it to finish");
+                    return;
+                }
                 runtime.launch(id);
                 audit("mc.instance.start", id, "success", request);
                 Json.write(response, instanceJson(instance));
@@ -1236,6 +1244,13 @@ public final class McApiServlet extends HttpServlet {
                 if (!requireElevation(request, response)) {
                     return;
                 }
+                // The browser's own download can only carry a cookie, not the retry wrapper the
+                // JSON calls use: this probe lets the page ask for the developer password first,
+                // then hand the URL to the browser.
+                if ("authorize".equals(worldAction) && "POST".equals(method)) {
+                    response.setStatus(HttpServletResponse.SC_NO_CONTENT);
+                    return;
+                }
                 if (runtime.isRunning(id)) {
                     Json.error(response, HttpServletResponse.SC_CONFLICT,
                             "stop the server before moving the world");
@@ -1245,16 +1260,13 @@ public final class McApiServlet extends HttpServlet {
                     response.setContentType("application/zip");
                     response.setHeader("Content-Disposition",
                             "attachment; filename=\"" + id + "-" + instance.levelName() + ".zip\"");
+                    // Streamed, not buffered: a 5 GB world leaves the panel as it is read.
                     McWorlds.export(instance, manager, response.getOutputStream());
                     audit("mc.instance.world.export", id, "success", request);
                     return;
                 }
                 if ("import".equals(worldAction) && "POST".equals(method)) {
-                    String safety = McWorlds.importZip(instance, manager, backups, request.getInputStream());
-                    audit("mc.instance.world.import", id
-                            + (safety == null ? "" : " (safety " + safety + ")"), "success", request);
-                    Json.write(response, Map.of("ok", true,
-                            "safety", safety == null ? "" : safety));
+                    importWorld(request, response, id, instance);
                     return;
                 }
                 Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
@@ -1413,6 +1425,66 @@ public final class McApiServlet extends HttpServlet {
         manager.saveProperties(instance, properties);
         audit("mc.instance.properties", instance.id(), "success", request);
         Json.write(response, Map.of("properties", properties.asMap()));
+    }
+
+    /// `POST /instances/{id}/world/import`: save the body, unpack it on a task.
+    ///
+    /// The upload itself is still one request — that is what lets the browser show true byte
+    /// progress. Unpacking is not: a 5 GB world is minutes of disk work, and a proxy with a
+    /// 60-second read timeout would turn a finished install into a 504.
+    ///
+    /// @param request  the request whose body is the zip
+    /// @param response the response
+    /// @param id       the instance id
+    /// @param instance the instance
+    /// @throws IOException  when the body cannot be saved
+    /// @throws McException when the upload is too large or the task cannot be submitted
+    private void importWorld(HttpServletRequest request, HttpServletResponse response,
+                             String id, McInstance instance) throws IOException, McException {
+        if (tasks.activeInstallLike(id).isPresent()) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "another install or import is already running for this instance");
+            return;
+        }
+        long declared = request.getContentLengthLong();
+        if (declared > McWorlds.MAX_IMPORT_BYTES) {
+            Json.error(response, 413, "the world zip is larger than the panel accepts ("
+                    + (McWorlds.MAX_IMPORT_BYTES / (1024 * 1024 * 1024)) + " GiB)");
+            return;
+        }
+        java.nio.file.Path archive = McWorlds.archiveFile(manager, instance);
+        if (declared > 0) {
+            // Say no before 5 GB crosses the network, not after it lands on a full disk.
+            McWorlds.requireFreeSpace(manager.instanceDirectory(id), declared);
+        }
+        try {
+            try (java.io.InputStream in = request.getInputStream()) {
+                McWorlds.save(in, archive);
+            }
+            TaskService.Task task = tasks.submit("mc-world-import", id, live -> {
+                live.update("Unpacking the world", 0.02);
+                String safety = McWorlds.importArchive(instance, manager, backups, archive,
+                        (files, total, bytes) -> live.update(
+                                "Unpacking " + files + "/" + total + " files ("
+                                        + (bytes / (1024 * 1024)) + " MB)",
+                                total > 0 ? 0.05 + 0.9 * files / total : -1));
+                JsonObject result = new JsonObject();
+                result.addProperty("safety", safety == null ? "" : safety);
+                live.attachResult(result);
+                return safety == null
+                        ? "World imported"
+                        : "World imported; the previous world is in backup " + safety;
+            });
+            audit("mc.instance.world.import", id, "submitted", request);
+            response.setStatus(HttpServletResponse.SC_ACCEPTED);
+            Json.write(response, Map.of("taskId", task.id()));
+        } catch (TaskService.InstanceBusyException e) {
+            java.nio.file.Files.deleteIfExists(archive);
+            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+        } catch (McException | IOException | RuntimeException e) {
+            java.nio.file.Files.deleteIfExists(archive);
+            throw e;
+        }
     }
 
     // ------------------------------------------------------------------- helpers --

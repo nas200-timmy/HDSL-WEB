@@ -590,24 +590,30 @@ export function McPlayersPanel({ instance }: { instance: McInstance }) {
   );
 }
 
-/** 世界导入/导出（zip）。两者都要求先停服。 */
+/** 世界导入/导出（zip）。两者都要求先停服；大世界走浏览器流式下载与后台解压。 */
 export function McWorldPanel({ instance }: { instance: McInstance }) {
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "uploading" | "working">("idle");
+  const [sent, setSent] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [taskNote, setTaskNote] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const download = async () => {
     setBusy(true);
     setError(null);
+    setNote(null);
     try {
-      const blob = await elevated(() => api.mc.exportWorld(instance.id));
-      const url = URL.createObjectURL(blob);
+      // 下载由浏览器发起（cookie 会跟上），所以提权要先单独过一遍。
+      await elevated(() => api.mc.authorizeWorld(instance.id));
       const link = document.createElement("a");
-      link.href = url;
+      link.href = api.mc.exportWorldUrl(instance.id);
       link.download = `${instance.id}-${instance.levelName}.zip`;
+      document.body.appendChild(link);
       link.click();
-      URL.revokeObjectURL(url);
-      setNote("已导出世界 zip");
+      link.remove();
+      setNote("下载已开始：进度看浏览器的下载栏。大世界是流式传输，不会占用页面内存。");
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -619,17 +625,44 @@ export function McWorldPanel({ instance }: { instance: McInstance }) {
     if (!window.confirm(`用 ${file.name} 覆盖当前世界？当前世界会先自动备份。`)) return;
     setBusy(true);
     setError(null);
+    setNote(null);
+    setTaskNote(null);
+    setPhase("uploading");
+    setSent(0);
+    setTotal(file.size);
     try {
-      const answer = await elevated(() => api.mc.importWorld(instance.id, file));
-      setNote(`已导入；导入前的世界备份：${answer.safety || "（原本没有世界）"}`);
+      await elevated(() => api.mc.authorizeWorld(instance.id));
+      const { taskId } = await api.mc.importWorld(instance.id, file, (now, all) => {
+        setSent(now);
+        setTotal(all);
+      });
+      // 上传完成，解压与备份在后台任务里；轮询文案，别让页面看起来卡死。
+      setPhase("working");
+      for (let i = 0; i < 3600; i += 1) {
+        const task = await api.task(taskId);
+        if (task.message) setTaskNote(task.message);
+        if (task.state === "done") {
+          const safety = task.result?.safety;
+          setNote(`已导入${safety ? `；导入前的世界备份：${safety}` : "（原本没有世界）"}`);
+          break;
+        }
+        if (task.state === "failed" || task.state === "cancelled") {
+          setError(task.error || "导入失败");
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
     } catch (e) {
       setError(errMsg(e));
     } finally {
       setBusy(false);
+      setPhase("idle");
+      setTaskNote(null);
     }
   };
 
   const running = instance.state === "RUNNING";
+  const percent = total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 0;
 
   return (
     <div className="card">
@@ -647,7 +680,7 @@ export function McWorldPanel({ instance }: { instance: McInstance }) {
             <button className="btn btn-raised" disabled={busy} onClick={() => void download()}>
               导出世界（zip）
             </button>
-            <label className="btn btn-raised" style={{ cursor: "pointer" }}>
+            <label className="btn btn-raised" style={{ cursor: busy ? "default" : "pointer" }}>
               导入世界…
               <input
                 type="file"
@@ -662,10 +695,37 @@ export function McWorldPanel({ instance }: { instance: McInstance }) {
               />
             </label>
           </div>
+          {phase !== "idle" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div
+                style={{
+                  height: 6,
+                  borderRadius: 3,
+                  background: "var(--monet-surface-variant)",
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    width: phase === "uploading" ? `${percent}%` : "100%",
+                    height: "100%",
+                    background: "var(--monet-primary)",
+                    transition: "width 0.2s",
+                  }}
+                />
+              </div>
+              <span className="dim" style={{ fontSize: 12 }}>
+                {phase === "uploading"
+                  ? `上传中 ${percent}%（${formatBytes(sent)} / ${formatBytes(total)}）`
+                  : taskNote || "服务器正在解压…"}
+              </span>
+            </div>
+          )}
           <p className="dim" style={{ fontSize: 12, margin: 0, lineHeight: 1.6 }}>
-            导入会先备份当前世界，再整体替换；不会合并两个世界。
+            导入会先备份当前世界，再整体替换；不会合并两个世界。zip 上限 16 GB，5 GB 的世界也能导入。
+            导入分两步：先把 zip 传完（上面的进度条），再由后台解压——页面关掉任务也会继续，但建议等它结束。
             zip 里的目录可以叫 <span className="mono">{instance.levelName}/…</span>，也可以直接是世界内容
-            （平铺或 <span className="mono">region/…</span> 这种层级）；上限 2 GB。
+            （平铺或 <span className="mono">region/…</span> 这种层级）。
             <b>顶层目录名和上面的世界目录名不一致会被拒绝</b>——否则服务器找不到
             <span className="mono">level.dat</span>，会当成新世界。改世界目录名或重新打包即可。
             <br />
@@ -681,11 +741,6 @@ export function McWorldPanel({ instance }: { instance: McInstance }) {
   );
 }
 
-/** 插件/模组：磁盘上的文件 + Modrinth 搜索安装。
- *
- *  文件夹跟着核心走：Paper/Folia/Purpur 是 `plugins/`，Fabric 是 `mods/`；
- *  原版两者都不加载，所以这个面板在 vanilla 实例里不出现。
- *  停用就是重命名成 `.jar.disabled`——加载器不读它，人也能手改回来。 */
 export function McFilesPanel({ instance }: { instance: McInstance }) {
   const kind: "mods" | "plugins" = instance.core === "fabric" ? "mods" : "plugins";
   const noun = kind === "mods" ? "模组" : "插件";
