@@ -72,6 +72,7 @@ class McApiTest {
                 URI.create("http://127.0.0.1:1/manifest.json"));
         McBackups backups = new McBackups(dir.resolve("backups"));
         McApiServlet servlet = new McApiServlet(config, feature, manager, runtime, versions,
+                new McCores(versions, dir.resolve("cores")),
                 new McJavaRuntimes(dir.resolve("java")), backups,
                 new TaskService(new EventBus()), new TerminalTickets(), null, null, null,
                 () -> true, new EmergencyStop());

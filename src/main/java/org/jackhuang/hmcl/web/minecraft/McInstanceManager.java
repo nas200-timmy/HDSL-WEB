@@ -195,6 +195,27 @@ public final class McInstanceManager {
     public McInstance create(String name, String version, int port, int rconPort,
                              int memoryMb, String levelName, @Nullable String seed,
                              boolean legacy) throws McException {
+        return create(name, version, port, rconPort, memoryMb, levelName, seed, legacy,
+                McInstance.CORE_VANILLA);
+    }
+
+    /// The same, with the server core the instance runs.
+    ///
+    /// @param name      the display name
+    /// @param version   the game version
+    /// @param port      the game port
+    /// @param rconPort  the RCON port
+    /// @param memoryMb  the heap size
+    /// @param levelName the world directory name
+    /// @param seed      the world seed, or `null` for a random one
+    /// @param legacy    whether to put it in the pre-move directory instead of
+    ///                  the dedicated one (no-op when there is no legacy root)
+    /// @param core      the core id (`vanilla`, `paper`, …)
+    /// @return the created instance
+    /// @throws McException when the ports are taken or the files cannot be written
+    public McInstance create(String name, String version, int port, int rconPort,
+                             int memoryMb, String levelName, @Nullable String seed,
+                             boolean legacy, String core) throws McException {
         McPorts.validate(port, rconPort);
         if (portTaken(port)) {
             throw new McException("port " + port + " is already used by another instance");
@@ -209,7 +230,7 @@ public final class McInstanceManager {
         McInstance instance;
         try {
             instance = new McInstance(id, name == null ? "" : name.trim(), version.trim(),
-                    port, rconPort, memoryMb, levelName, seed, now);
+                    port, rconPort, memoryMb, levelName, seed, now, core);
         } catch (IllegalArgumentException e) {
             throw new McException(e.getMessage(), e);
         }

@@ -38,12 +38,23 @@ public record McInstance(
         @SerializedName("memoryMb") int memoryMb,
         @SerializedName("levelName") String levelName,
         @SerializedName("seed") @Nullable String seed,
-        @SerializedName("createdAt") long createdAt) {
+        @SerializedName("createdAt") long createdAt,
+        @SerializedName("core") @Nullable String core) {
 
     /// The smallest heap worth starting a server with.
     public static final int MIN_MEMORY_MB = 256;
     /// A cap the panel refuses to exceed even when asked: one server is not the host.
     public static final int MAX_MEMORY_MB = 16384;
+    /// The Mojang jar; the default for every manifest written before the panel
+    /// could run anything else.
+    public static final String CORE_VANILLA = "vanilla";
+
+    /// The same instance as a vanilla one: the shape every caller written
+    /// before third-party cores used.
+    public McInstance(String id, String name, String version, int port, int rconPort,
+                      int memoryMb, String levelName, @Nullable String seed, long createdAt) {
+        this(id, name, version, port, rconPort, memoryMb, levelName, seed, createdAt, CORE_VANILLA);
+    }
 
     public McInstance {
         if (id == null || id.isBlank() || id.contains("/") || id.contains("\\")
@@ -55,6 +66,9 @@ public record McInstance(
         }
         if (version == null || version.isBlank()) {
             throw new IllegalArgumentException("an instance needs a version");
+        }
+        if (core == null || core.isBlank()) {
+            core = CORE_VANILLA;
         }
         McPorts.validate(port, rconPort);
         if (memoryMb < MIN_MEMORY_MB || memoryMb > MAX_MEMORY_MB) {
@@ -75,7 +89,7 @@ public record McInstance(
     /// @param newName the name
     /// @return the updated instance
     public McInstance withName(String newName) {
-        return new McInstance(id, newName, version, port, rconPort, memoryMb, levelName, seed, createdAt);
+        return new McInstance(id, newName, version, port, rconPort, memoryMb, levelName, seed, createdAt, core);
     }
 
     /// The same instance with a new version.
@@ -83,7 +97,15 @@ public record McInstance(
     /// @param newVersion the version
     /// @return the updated instance
     public McInstance withVersion(String newVersion) {
-        return new McInstance(id, name, newVersion, port, rconPort, memoryMb, levelName, seed, createdAt);
+        return new McInstance(id, name, newVersion, port, rconPort, memoryMb, levelName, seed, createdAt, core);
+    }
+
+    /// The same instance with a new core.
+    ///
+    /// @param newCore the core id (`vanilla`, `paper`, …)
+    /// @return the updated instance
+    public McInstance withCore(String newCore) {
+        return new McInstance(id, name, version, port, rconPort, memoryMb, levelName, seed, createdAt, newCore);
     }
 
     /// The same instance with new ports.
@@ -92,7 +114,7 @@ public record McInstance(
     /// @param newRconPort the RCON port
     /// @return the updated instance
     public McInstance withPorts(int newPort, int newRconPort) {
-        return new McInstance(id, name, version, newPort, newRconPort, memoryMb, levelName, seed, createdAt);
+        return new McInstance(id, name, version, newPort, newRconPort, memoryMb, levelName, seed, createdAt, core);
     }
 
     /// The same instance with a new heap size.
@@ -100,6 +122,6 @@ public record McInstance(
     /// @param newMemoryMb the heap size in MB
     /// @return the updated instance
     public McInstance withMemory(int newMemoryMb) {
-        return new McInstance(id, name, version, port, rconPort, newMemoryMb, levelName, seed, createdAt);
+        return new McInstance(id, name, version, port, rconPort, newMemoryMb, levelName, seed, createdAt, core);
     }
 }

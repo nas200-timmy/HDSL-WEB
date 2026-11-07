@@ -90,6 +90,7 @@ public final class McApiServlet extends HttpServlet {
     private final McInstanceManager manager;
     private final McRuntime runtime;
     private final McVersions versions;
+    private final McCores cores;
     private final McJavaRuntimes javaRuntimes;
     private final McBackups backups;
     private final TaskService tasks;
@@ -125,7 +126,8 @@ public final class McApiServlet extends HttpServlet {
     }
 
     public McApiServlet(ServerConfig config, McFeatureState feature, McInstanceManager manager,
-                        McRuntime runtime, McVersions versions, McJavaRuntimes javaRuntimes,
+                        McRuntime runtime, McVersions versions, McCores cores,
+                        McJavaRuntimes javaRuntimes,
                         McBackups backups, TaskService tasks,
                         TerminalTickets tickets, AuthService auth,
                         DeveloperAuth developerAuth, DeveloperElevation elevation,
@@ -135,6 +137,7 @@ public final class McApiServlet extends HttpServlet {
         this.manager = manager;
         this.runtime = runtime;
         this.versions = versions;
+        this.cores = cores;
         this.javaRuntimes = javaRuntimes;
         this.backups = backups;
         this.tasks = tasks;
@@ -199,8 +202,33 @@ public final class McApiServlet extends HttpServlet {
                     return;
                 }
             }
+            if ("/cores".equals(path) && "GET".equals(method)) {
+                listCores(response);
+                return;
+            }
             if ("/versions".equals(path) && "GET".equals(method)) {
                 listVersions(response);
+                return;
+            }
+            if ("/third-party/feature".equals(path) && "GET".equals(method)) {
+                thirdPartyJson(response);
+                return;
+            }
+            if ("/third-party/terms".equals(path) && "GET".equals(method)) {
+                thirdPartyTerms(response);
+                return;
+            }
+            if ("/third-party/enable".equals(path) && "POST".equals(method)) {
+                enableThirdParty(request, response);
+                return;
+            }
+            if ("/third-party/disable".equals(path) && "POST".equals(method)) {
+                disableThirdParty(request, response);
+                return;
+            }
+            if ("/third-party/decline".equals(path) && "POST".equals(method)) {
+                audit("mc.thirdparty.declined", "third-party cores", "success", request);
+                Json.write(response, Map.of("ok", true));
                 return;
             }
             if ("/java/runtimes".equals(path) && "GET".equals(method)) {
@@ -267,6 +295,7 @@ public final class McApiServlet extends HttpServlet {
         // has to be able to say "this is where the servers will live and this is
         // the Java they will use" before the user commits to enabling it.
         body.addProperty("console", McRuntime.consoleKind());
+        body.addProperty("thirdParty", feature.thirdPartyEnabled());
         body.add("java", javaJson());
         body.add("storage", storageJson());
         Json.write(response, body);
@@ -518,6 +547,13 @@ public final class McApiServlet extends HttpServlet {
         if (!requireElevation(request, response)) {
             return;
         }
+        // The second gate hangs off this one; closing the surface while it is on
+        // would leave a sub-feature enabled under a disabled feature.
+        if (feature.thirdPartyEnabled()) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "disable third-party cores before stopping the Minecraft feature");
+            return;
+        }
         List<String> ids = new ArrayList<>();
         for (McInstance instance : manager.list()) {
             if (runtime.isRunning(instance.id())) {
@@ -603,8 +639,119 @@ public final class McApiServlet extends HttpServlet {
         Json.write(response, Map.of("versions", items));
     }
 
-    // --------------------------------------------------------------------- java --
+    // --------------------------------------------------------------------- cores --
 
+    /// The catalogue the create form shows: vanilla always, third-party cores
+    /// only while the second gate is on.
+    private void listCores(HttpServletResponse response) throws IOException {
+        List<JsonObject> items = new ArrayList<>();
+        for (McCores.CoreInfo core : cores.catalog(feature.thirdPartyEnabled())) {
+            JsonObject item = new JsonObject();
+            item.addProperty("id", core.id());
+            item.addProperty("label", core.label());
+            item.addProperty("thirdParty", McCores.isThirdParty(core.id()));
+            JsonArray versions = new JsonArray();
+            core.versions().forEach(versions::add);
+            item.add("versions", versions);
+            items.add(item);
+        }
+        Json.write(response, Map.of("cores", items));
+    }
+
+    // --------------------------------------------------------------- third-party --
+
+    private void thirdPartyJson(HttpServletResponse response) throws IOException {
+        JsonObject body = new JsonObject();
+        body.addProperty("state", feature.thirdPartyState().name());
+        body.addProperty("enabled", feature.thirdPartyEnabled());
+        body.addProperty("termsVersion", McThirdPartyTerms.VERSION);
+        feature.thirdPartyConsent().ifPresent(record -> {
+            body.addProperty("termsTextHash", record.termsTextHash());
+            body.addProperty("acceptedAt", record.acceptedAt());
+            body.addProperty("acceptedBy", record.acceptedBy());
+            body.addProperty("ackMethod", record.ackMethod());
+        });
+        Json.write(response, body);
+    }
+
+    private void thirdPartyTerms(HttpServletResponse response) throws IOException {
+        JsonObject body = new JsonObject();
+        body.addProperty("version", McThirdPartyTerms.VERSION);
+        body.addProperty("text", McThirdPartyTerms.text());
+        body.addProperty("hash", McThirdPartyTerms.hash());
+        Json.write(response, body);
+    }
+
+    /// Enables the second gate: 提权 → 条款逐字确认（回显 hash）→ 审计.
+    ///
+    /// The EULA belongs to Mojang and is not re-accepted here; what this gate
+    /// asks about is other people's software and the panel's lack of warranty.
+    private void enableThirdParty(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireElevation(request, response)) {
+            return;
+        }
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        String termsTextHash = stringField(body, "termsTextHash");
+        String uiVersion = stringField(body, "uiVersion");
+        int termsVersion = intField(body, "termsVersion");
+        if (termsTextHash == null || uiVersion == null || termsVersion < 1) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "termsTextHash, termsVersion and uiVersion are required");
+            return;
+        }
+        if (termsVersion != McThirdPartyTerms.VERSION) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "the third-party terms changed to v" + McThirdPartyTerms.VERSION + "; show them again");
+            return;
+        }
+        if (!McThirdPartyTerms.hash().equals(termsTextHash)) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "the third-party terms text does not match what this build offers");
+            return;
+        }
+        String now = Instant.now().toString();
+        McThirdPartyConsent record = new McThirdPartyConsent(termsVersion, termsTextHash, now,
+                actorOf(request) == null ? "unknown" : actorOf(request),
+                request.getRemoteAddr(), "checkbox", uiVersion,
+                request.getHeader("User-Agent"), Metadata.VERSION);
+        try {
+            feature.enableThirdParty(record);
+        } catch (McFeatureState.LockedException e) {
+            response.setStatus(HttpServletResponse.SC_CONFLICT);
+            Json.write(response, Map.of("error", "mc_locked", "remainingSeconds", e.remainingSeconds()));
+            return;
+        } catch (IllegalStateException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+            return;
+        }
+        audit("mc.thirdparty.enable", "terms v" + termsVersion, "success", request);
+        thirdPartyJson(response);
+    }
+
+    /// Closes the second gate. Running third-party servers have to be stopped
+    /// first: the gate is about what may run, and flipping it under a live
+    /// process would leave the panel supervising something it just disowned.
+    private void disableThirdParty(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireElevation(request, response)) {
+            return;
+        }
+        for (McInstance instance : manager.list()) {
+            if (McCores.isThirdParty(instance.core()) && runtime.isRunning(instance.id())) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT,
+                        "stop " + instance.id() + " before disabling third-party cores");
+                return;
+            }
+        }
+        feature.disableThirdParty();
+        audit("mc.thirdparty.disable", "third-party cores", "success", request);
+        thirdPartyJson(response);
+    }
+
+    // --------------------------------------------------------------------- java --
     /// The Java runtimes the panel owns, plus what Adoptium offers for this host.
     ///
     /// A failing API is reported as `source: "unavailable"` rather than an error:
@@ -748,7 +895,25 @@ public final class McApiServlet extends HttpServlet {
         String storage = stringField(body, "storage");
         boolean legacy = storage != null && "data".equalsIgnoreCase(storage.trim());
 
-        McInstance instance = manager.create(name, version, port, rconPort, memoryMb, levelName, seed, legacy);
+        // 核心类型：默认原版。第三方核心在第二道关关闭时"不存在"（404），
+        // 与整个 MC 功能关闭时的口径一致——不泄露"这里有东西可以开"。
+        String core = stringField(body, "core");
+        if (core == null || core.isBlank()) {
+            core = McInstance.CORE_VANILLA;
+        }
+        core = core.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!McCores.known(core)) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "unknown server core `" + core + "`");
+            return;
+        }
+        if (McCores.isThirdParty(core) && !feature.thirdPartyEnabled()) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
+
+        McInstance instance = manager.create(name, version, port, rconPort, memoryMb, levelName, seed,
+                legacy, core);
         if (feature.consent().isPresent()) {
             manager.acceptEula(instance);
         }
@@ -965,14 +1130,14 @@ public final class McApiServlet extends HttpServlet {
                 // as a task and report bytes, instead of holding the request open.
                 try {
                     TaskService.Task task = tasks.submit("mc-install", id, live -> {
-                        live.update("Downloading Minecraft " + version, -1);
-                        versions.install(instance, manager, version.trim(), (copied, total) -> {
+                        live.update("Downloading " + instance.core() + " " + version, -1);
+                        cores.install(instance, manager, version.trim(), (copied, total) -> {
                             String progress = (copied / (1024 * 1024)) + " / "
                                     + (total > 0 ? (total / (1024 * 1024)) + " MB" : "? MB");
                             live.update("Downloading " + version + ": " + progress,
                                     total > 0 ? (double) copied / total : -1);
                         });
-                        return "Installed Minecraft " + version;
+                        return "Installed " + instance.core() + " " + version;
                     }, null);
                     audit("mc.instance.install", id + "@" + version, "submitted", request);
                     response.setStatus(HttpServletResponse.SC_ACCEPTED);
@@ -1229,6 +1394,7 @@ public final class McApiServlet extends HttpServlet {
         body.addProperty("id", instance.id());
         body.addProperty("name", instance.name());
         body.addProperty("version", instance.version());
+        body.addProperty("core", instance.core());
         body.addProperty("port", instance.port());
         body.addProperty("rconPort", instance.rconPort());
         body.addProperty("memoryMb", instance.memoryMb());

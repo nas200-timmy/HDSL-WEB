@@ -55,7 +55,13 @@ public final class McFeatureState {
     /// `state` is a `String` on purpose: the shared Gson lower-cases enum
     /// constants, and the contract in `docs/minecraft.md` spells the states
     /// `DISABLED` / `ENABLED`. Converting here keeps the file readable by hand.
-    private record Recorded(@SerializedName("state") String state, @Nullable McConsent consent) {
+    /// `thirdParty` is the second gate: it says whether the panel may run
+    /// anything other than Mojang's jar, and it only ever turns on while
+    /// `state` is `ENABLED`.
+    private record Recorded(@SerializedName("state") String state,
+                            @Nullable McConsent consent,
+                            @SerializedName("thirdParty") @Nullable String thirdParty,
+                            @Nullable McThirdPartyConsent thirdPartyConsent) {
     }
 
     /// The public state, as it appears in `feature.json`.
@@ -89,6 +95,9 @@ public final class McFeatureState {
 
     private volatile State state = State.DISABLED;
     private volatile @Nullable McConsent consent;
+    /// The second gate: whether anything other than Mojang's jar may run.
+    private volatile State thirdParty = State.DISABLED;
+    private volatile @Nullable McThirdPartyConsent thirdPartyConsent;
     /// Whether the lock is running. A separate flag, not "start == 0": the
     /// monotonic clock itself may legitimately read 0 (and tests start there).
     private volatile boolean lockActive;
@@ -136,6 +145,61 @@ public final class McFeatureState {
     /// @return the record
     public Optional<McConsent> consent() {
         return Optional.ofNullable(consent);
+    }
+
+    /// The second gate's persisted state.
+    ///
+    /// @return `ENABLED` only while the owner has enabled third-party cores
+    public State thirdPartyState() {
+        sync();
+        return thirdParty;
+    }
+
+    /// Whether third-party server cores may be created and run.
+    ///
+    /// @return whether the second gate is on
+    public boolean thirdPartyEnabled() {
+        return thirdPartyState() == State.ENABLED;
+    }
+
+    /// The acceptance record of the last third-party enable, if any.
+    ///
+    /// @return the record
+    public Optional<McThirdPartyConsent> thirdPartyConsent() {
+        return Optional.ofNullable(thirdPartyConsent);
+    }
+
+    /// Turns the second gate on, with the acceptance record of this enable.
+    ///
+    /// The gate exists only inside an enabled Minecraft feature: asking for it
+    /// while the surface is off is a programming error, not a request the panel
+    /// can honour.
+    ///
+    /// @param record what was shown and accepted
+    /// @throws IllegalStateException when the Minecraft feature is disabled
+    /// @throws LockedException       when the lock is still running
+    public void enableThirdParty(McThirdPartyConsent record) throws LockedException {
+        sync();
+        if (state != State.ENABLED) {
+            throw new IllegalStateException("the Minecraft feature is disabled");
+        }
+        if (lockActive) {
+            throw new LockedException(lockRemainingSeconds());
+        }
+        thirdParty = State.ENABLED;
+        thirdPartyConsent = record;
+        save();
+    }
+
+    /// Turns the second gate off without losing the acceptance record: the
+    /// record explains the last enable, and re-enabling replaces it.
+    public void disableThirdParty() {
+        sync();
+        if (thirdParty == State.DISABLED) {
+            return;
+        }
+        thirdParty = State.DISABLED;
+        save();
     }
 
     /// Whether the lock is running.
@@ -204,6 +268,9 @@ public final class McFeatureState {
             throw new IllegalStateException("the feature was already kept");
         }
         state = State.DISABLED;
+        // Closing the surface closes the second gate with it: a feature that
+        // does not exist cannot keep a sub-feature enabled.
+        thirdParty = State.DISABLED;
         keepFeature = Boolean.FALSE;
         save();
     }
@@ -268,6 +335,13 @@ public final class McFeatureState {
             }
             state = parseState(recorded.state());
             consent = recorded.consent();
+            thirdParty = parseState(recorded.thirdParty());
+            thirdPartyConsent = recorded.thirdPartyConsent();
+            // A file that says "third party on, feature off" is not a state the
+            // panel can act on: the sub-feature cannot outlive its surface.
+            if (state != State.ENABLED) {
+                thirdParty = State.DISABLED;
+            }
         } catch (Exception e) {
             LOG.warning("Failed to read the Minecraft feature state " + file, e);
         }
@@ -286,7 +360,7 @@ public final class McFeatureState {
     }
 
     private void save() {
-        Recorded recorded = new Recorded(state.name(), consent);
+        Recorded recorded = new Recorded(state.name(), consent, thirdParty.name(), thirdPartyConsent);
         try {
             Path parent = file.getParent();
             if (parent != null) {

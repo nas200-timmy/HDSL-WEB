@@ -465,13 +465,17 @@ public final class HdslServer {
                 + (mcJavaInfo.ok() ? " (" + mcJavaInfo.version() + ")" : " — " + mcJavaInfo.error()));
         org.jackhuang.hmcl.web.minecraft.McVersions mcVersions =
                 new org.jackhuang.hmcl.web.minecraft.McVersions(mcVersionsRoot);
+        org.jackhuang.hmcl.web.minecraft.McCores mcCores =
+                new org.jackhuang.hmcl.web.minecraft.McCores(mcVersions,
+                        config.dataDir.resolve("minecraft").resolve("cores"));
         org.jackhuang.hmcl.web.minecraft.McBackups mcBackups =
                 new org.jackhuang.hmcl.web.minecraft.McBackups(
                         config.dataDir.resolve("minecraft").resolve("backups"));
         context.addFilter(new FilterHolder(new org.jackhuang.hmcl.web.minecraft.McFeatureFilter(
                 mcFeature, config.basePath)), "/api/mc/*", EnumSet.of(DispatcherType.REQUEST));
         context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.minecraft.McApiServlet(
-                config, mcFeature, mcInstances, mcRuntime, mcVersions, mcJavaRuntimes, mcBackups, taskService,
+                config, mcFeature, mcInstances, mcRuntime, mcVersions, mcCores, mcJavaRuntimes,
+                mcBackups, taskService,
                 terminalTickets, authService, developerAuth, developerElevation, tlsActive, emergencyStop)), "/api/mc/*");
 
         context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService, config.basePath)), "/i/*");
