@@ -355,4 +355,22 @@ class McRuntimeTest {
         assertEquals(List.of("-Xms512M", "-Xmx2048M"), McRuntime.heapArgs(2048));
         assertEquals(List.of("-Xms512M", "-Xmx512M"), McRuntime.heapArgs(512));
     }
+
+    /// A Minecraft server loads third-party plugins and mods, so it gets a whitelist of the
+    /// panel's environment rather than a copy: `HDSL_ADMIN_PASSWORD` and friends stay behind.
+    @Test
+    void theChildEnvironmentDropsThePanelsSecrets() {
+        java.util.Map<String, String> source = java.util.Map.of(
+                "PATH", "/usr/bin", "HOME", "/home/hdsl", "LANG", "C.UTF-8", "TZ", "Asia/Shanghai",
+                "HDSL_ADMIN_PASSWORD", "secret", "HDSL_AGENT_PASSWORD", "secret",
+                "DEEPSEEK_API_KEY", "sk-x");
+        java.util.Map<String, String> environment = McRuntime.childEnvironment(source);
+        assertEquals("/usr/bin", environment.get("PATH"));
+        assertEquals("/home/hdsl", environment.get("HOME"));
+        assertEquals("C.UTF-8", environment.get("LANG"));
+        assertEquals("Asia/Shanghai", environment.get("TZ"));
+        assertFalse(environment.containsKey("HDSL_ADMIN_PASSWORD"));
+        assertFalse(environment.containsKey("HDSL_AGENT_PASSWORD"));
+        assertFalse(environment.containsKey("DEEPSEEK_API_KEY"));
+    }
 }

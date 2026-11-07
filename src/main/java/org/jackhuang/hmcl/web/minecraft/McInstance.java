@@ -79,6 +79,10 @@ public record McInstance(
                 || levelName.equals(".") || levelName.equals("..")) {
             throw new IllegalArgumentException("invalid level name");
         }
+        if (seed != null && (seed.indexOf('\n') >= 0 || seed.indexOf('\r') >= 0
+                || seed.indexOf('\0') >= 0)) {
+            throw new IllegalArgumentException("invalid seed");
+        }
         if (seed != null && seed.isBlank()) {
             seed = null;
         }

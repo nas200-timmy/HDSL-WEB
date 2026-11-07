@@ -238,6 +238,11 @@ public final class McInstanceManager {
         Path directory = target.resolve(id);
         try {
             Files.createDirectories(directory);
+            // Forge/NeoForge run their installer as the agent **before** the first start, so
+            // the directory has to be the agent's from creation; the start-time hand-over
+            // happens too late for that path.
+            org.jackhuang.hmcl.util.platform.Privileges.prepareAgentDirectory(
+                    directory, org.jackhuang.hmcl.util.platform.Privileges.AGENT_SHARED_DIRECTORY);
             Files.createDirectories(directory.resolve(LOG_DIR_NAME));
             write(instance);
             defaultProperties(instance).save(propertiesFile(instance));

@@ -194,6 +194,12 @@ public final class McProperties {
     /// @param key the key
     /// @param value the value
     public void set(String key, String value) {
+        if (value != null && (value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0
+                || value.indexOf('\0') >= 0)) {
+            // `key=value` is a line. A value carrying a line break is a second property the
+            // caller was not allowed to write.
+            throw new IllegalArgumentException("a property value must be a single line");
+        }
         for (Line line : lines) {
             if (!line.removed && key.equals(line.key)) {
                 line.value = value;

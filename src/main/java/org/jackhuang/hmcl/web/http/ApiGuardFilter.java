@@ -85,6 +85,11 @@ public final class ApiGuardFilter implements Filter {
     /// 1 MiB：JSON 处理器会把正文整段读进内存，这个上限就是为它设的。
     static final int MAX_JSON_BODY_BYTES = 1048576;
 
+    /// `/api/mc/instances/<id>/files/<kind>` 的正文就是插件/模组 jar。挂载点前缀可有可无，
+    /// 所以正则允许前面还有 `/hdsl` 一类；具体大小由 `McMods` 自己的上限兜底。
+    private static final java.util.regex.Pattern MC_FILE_UPLOAD =
+            java.util.regex.Pattern.compile(".*/api/mc/instances/[^/]+/files/[^/]+");
+
     /// 这些路由把正文流式写文件（multipart 暂存或原始 zip），不适用 JSON 上限。
     ///
     /// 名单必须按**路径**写：按 `Content-Type` 判断等于让调用方自己决定走不走闸门。
@@ -95,7 +100,8 @@ public final class ApiGuardFilter implements Filter {
                 || path.startsWith("/api/packs/")
                 || path.startsWith("/api/plugins/")
                 || path.endsWith("/plugins/install")
-                || path.endsWith("/world/import");
+                || path.endsWith("/world/import")
+                || MC_FILE_UPLOAD.matcher(path).matches();
     }
 
     /// 只有这三个方法可能带正文；GET/HEAD/DELETE 没有正文，不必要求长度。

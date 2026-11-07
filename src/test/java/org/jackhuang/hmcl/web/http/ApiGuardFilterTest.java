@@ -103,6 +103,11 @@ class ApiGuardFilterTest {
                 resp.setStatus(200);
                 resp.getWriter().write("reached");
             }
+
+            @Override
+            protected void doPut(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+                doPost(req, resp);
+            }
         }), "/api/*");
         context.addFilter(new FilterHolder(new ApiGuardFilter()), "/api/*",
                 EnumSet.of(DispatcherType.REQUEST));
@@ -143,6 +148,16 @@ class ApiGuardFilterTest {
                     .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[announced]))
                     .build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(200, world.statusCode(), "a 2 MiB world zip must reach the handler");
+
+            // The plugin/mod upload is a raw jar on a PUT. Before this route was exempt, any
+            // real plugin (over 1 MiB) died here with 413 and never reached `McMods.upload`.
+            HttpResponse<String> mod = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                            URI.create("http://127.0.0.1:" + port
+                                    + "/api/mc/instances/x/files/mods?name=example.jar"))
+                    .header("Content-Type", "application/java-archive")
+                    .PUT(HttpRequest.BodyPublishers.ofByteArray(new byte[announced]))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, mod.statusCode(), "a 2 MiB plugin upload must reach the handler");
         } finally {
             server.stop();
         }
@@ -183,6 +198,8 @@ class ApiGuardFilterTest {
         assertTrue(ApiGuardFilter.streamed("/api/plugins/install"));
         assertTrue(ApiGuardFilter.streamed("/api/instances/abc/plugins/install"));
         assertTrue(ApiGuardFilter.streamed("/api/mc/instances/abc/world/import"));
+        assertTrue(ApiGuardFilter.streamed("/api/mc/instances/abc/files/mods"));
+        assertTrue(ApiGuardFilter.streamed("/api/mc/instances/abc/files/plugins"));
     }
 
     @Test
@@ -192,6 +209,7 @@ class ApiGuardFilterTest {
         assertFalse(ApiGuardFilter.streamed("/api/auth/login"));
         assertFalse(ApiGuardFilter.streamed("/api/mc/instances"));
         assertFalse(ApiGuardFilter.streamed("/api/mc/instances/abc/backups"));
+        assertFalse(ApiGuardFilter.streamed("/api/mc/instances/abc/start"));
         assertFalse(ApiGuardFilter.streamed("/api/instances"));
         assertFalse(ApiGuardFilter.streamed("/api/wallpapers-backup"));
     }

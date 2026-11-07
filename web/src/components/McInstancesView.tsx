@@ -226,6 +226,9 @@ export function McInstancesView() {
                     <span className="tlli-title">
                       {instance.name}
                       <span className="tag plain">{mcCoreLabel(instance.core)}</span>
+                      <span className="tag plain">
+                        {instance.thirdParty ? "第三方" : "官方"}
+                      </span>
                       <span
                         className={`tag ${
                           state === "RUNNING" ? "running" : state === "FAILED" ? "failed" : "plain"

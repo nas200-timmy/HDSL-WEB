@@ -2,6 +2,33 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布
+
+**MC 上线前排查：上传被 1 MiB 截断、Forge 安装器以 root 运行、官方/第三方没分开**
+
+- **插件/模组上传**：正文是 jar，走的 `PUT /api/mc/instances/<id>/files/<kind>` 不在
+  `ApiGuardFilter` 的流式白名单里，于是 >1 MiB 的插件在到达处理器前就被 413 拒绝（`McMods`
+  自己的上限是 256 MiB）。白名单补上这条路径，并加一条 2 MiB PUT 的回归用例。
+- **Forge/NeoForge 安装器**：以前是裸 `ProcessBuilder`，容器里面板是 root，于是第三方
+  installer 以 root 跑，能读 `auth/`、`certs/`、`server.yaml`；现在走 `Privileges#asAgent`，
+  安装前把实例目录交给 agent，装完再交接整棵树。`.sha1` 取不到时不再静默跳过，日志写明
+  "只剩 zip 结构校验"。安装器的 20 分钟超时也修了——原来是先读到 EOF 再 `waitFor`，安装器
+  挂住时超时永远不生效，现在是独立线程排水 + 有界 `waitFor` + 超时杀进程树。
+- **Forge/NeoForge 装好却起不来**：启动前置检查只看 `server.jar`，而这两个核心根本没有这个
+  文件。改为 `server.jar 或 launch.json`，并让属主交接用同一个判据（以前会跳过 Forge 实例，
+  然后以 "server.jar is not readable" 拒绝）。
+- **官方 / 第三方分开**：实例 JSON 增加 `thirdParty`，列表与详情页显示「官方 / 第三方」徽章；
+  第二道关同时管启动——关掉第三方后，已建实例也不能启动（404），不只是不能再新建。
+- **RCON 密码不再从 GET 回显**：`GET .../properties` 以前把 `rcon.password` 一起返回；现在
+  读接口剔除它。属性写入拒绝换行（`motd` 里塞 `
+` 能写出额外的 `key=value` 行）。
+  世界种子同样拒绝换行。
+- **子进程环境收紧**：Minecraft 子进程（PTY 与 pipe 两条路径）以前继承面板全部环境变量，
+  包括 `HDSL_ADMIN_PASSWORD` / `HDSL_AGENT_PASSWORD` 一类；现在只给
+  `PATH/HOME/LANG/TZ/TEMP/SystemRoot…` 白名单，面板的 `HDSL_*` 不透传。
+- 文档同步：备份要求停机（不是热备）、RCON 端口不要发布、第三方核心六个、安装器身份与
+  `.sha1` 缺失时的真实保证。
+
 ## v0.6.76 — 2026-11-07 · MC：Forge/NeoForge 安装器（安装式核心）
 
 **Forge 与 NeoForge 不是下载一个 jar 就能跑：面板现在会跑安装器，再用它写出的启动参数启动**

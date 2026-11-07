@@ -1100,6 +1100,13 @@ public final class McApiServlet extends HttpServlet {
         String action = segments.length > 1 ? segments[1] : "";
         switch (action) {
             case "start" -> {
+                // The second gate is about the program, not about the moment it was created:
+                // a third-party core created while the gate was on must not start after it
+                // was switched off. 404 keeps "there is something here" from leaking.
+                if (McCores.isThirdParty(instance.core()) && !feature.thirdPartyEnabled()) {
+                    Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+                    return;
+                }
                 runtime.launch(id);
                 audit("mc.instance.start", id, "success", request);
                 Json.write(response, instanceJson(instance));
@@ -1364,7 +1371,12 @@ public final class McApiServlet extends HttpServlet {
     private void properties(HttpServletRequest request, HttpServletResponse response,
                             String method, McInstance instance) throws IOException, McException {
         if ("GET".equals(method)) {
-            Json.write(response, Map.of("properties", manager.properties(instance).asMap()));
+            // `rcon.password` is a generated secret the panel uses itself; returning it here
+            // made every read of this endpoint a credential read.
+            java.util.Map<String, String> visible =
+                    new java.util.LinkedHashMap<>(manager.properties(instance).asMap());
+            visible.remove("rcon.password");
+            Json.write(response, Map.of("properties", visible));
             return;
         }
         if (!"PUT".equals(method)) {
@@ -1388,6 +1400,12 @@ public final class McApiServlet extends HttpServlet {
             String value = stringField(body, key);
             if (value == null) {
                 Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "`" + key + "` must be a string");
+                return;
+            }
+            if (value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0) {
+                // A newline in a value writes an extra `key=value` line into server.properties.
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "`" + key + "` must be a single line");
                 return;
             }
             properties.set(key, value);
@@ -1540,6 +1558,8 @@ public final class McApiServlet extends HttpServlet {
         body.addProperty("name", instance.name());
         body.addProperty("version", instance.version());
         body.addProperty("core", instance.core());
+        // 官方（Mojang 原版）与第三方核心在界面与启动门上要分得开：第三方要过第二道关。
+        body.addProperty("thirdParty", McCores.isThirdParty(instance.core()));
         body.addProperty("port", instance.port());
         body.addProperty("rconPort", instance.rconPort());
         body.addProperty("memoryMb", instance.memoryMb());

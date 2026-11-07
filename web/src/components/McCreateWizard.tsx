@@ -240,7 +240,10 @@ export function McCreateWizard({
         {step === 1 && (
           <div style={{ display: "grid", gap: 8 }}>
             {cores.length > 1 && (
-              <Field label="服务端核心" hint="Paper/Folia/Purpur 为插件服，Fabric 为模组服；原版即 Mojang 官方">
+              <Field
+                label="服务端核心"
+                hint="原版 = Mojang 官方服务器；Paper/Folia/Purpur/Fabric/Forge 等为第三方核心，需单独开启并同意条款"
+              >
                 <select
                   className="input"
                   value={core}

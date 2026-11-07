@@ -24,6 +24,7 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class McPropertiesTest {
@@ -105,5 +106,17 @@ class McPropertiesTest {
         McProperties reloaded = McProperties.load(file);
         assertEquals("true", reloaded.get("enable-rcon"));
         assertTrue(Files.readString(file).contains("# hand-written"));
+    }
+
+    /// `key=value` is a line: a value carrying a line break writes a second property the
+    /// caller was not allowed to set (for example `enable-rcon=true`).
+    @Test
+    void aValueWithANewlineIsRefused() {
+        McProperties properties = McProperties.parse(SAMPLE);
+        assertThrows(IllegalArgumentException.class, () -> properties.set("motd", "a\nb"));
+        assertThrows(IllegalArgumentException.class, () -> properties.set("motd", "a\rb"));
+        assertThrows(IllegalArgumentException.class, () -> properties.set("motd", "a\0b"));
+        assertTrue(properties.render().contains("motd=A Minecraft Server"),
+                "a refused write must leave the old line alone");
     }
 }

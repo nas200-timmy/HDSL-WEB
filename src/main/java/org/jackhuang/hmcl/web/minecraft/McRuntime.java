@@ -632,8 +632,11 @@ public final class McRuntime {
         if (pipes.containsKey(id)) {
             throw new McException("the server for " + id + " is already running");
         }
-        if (!Files.isRegularFile(manager.serverJar(instance))) {
-            throw new McException(McInstanceManager.SERVER_JAR_NAME + " is not installed for this instance");
+        if (!installed(instance)) {
+            // Neither a jar nor a Forge/NeoForge launch profile: say what to do instead of
+            // naming one file that the installed core may never have.
+            throw new McException("nothing to start for this instance: install "
+                    + McInstanceManager.SERVER_JAR_NAME + " or a Forge/NeoForge core first");
         }
         if (!eulaAccepted(instance)) {
             throw new McException("the EULA has not been accepted for this instance");
@@ -653,7 +656,7 @@ public final class McRuntime {
             return;
         }
 
-        Map<String, String> environment = new HashMap<>(System.getenv());
+        Map<String, String> environment = childEnvironment(System.getenv());
         TerminalTarget target = new TerminalTarget(BRAND, id,
                 commandFactory.command(instance), manager.instanceDirectory(id), environment);
 
@@ -893,7 +896,8 @@ public final class McRuntime {
                             commandFactory.command(instance)));
             builder.directory(directory.toFile());
             builder.redirectErrorStream(true);
-            builder.environment().putAll(System.getenv());
+            builder.environment().clear();
+            builder.environment().putAll(childEnvironment(System.getenv()));
             process = builder.start();
         } catch (IOException e) {
             states.put(id, State.FAILED);
@@ -1025,9 +1029,18 @@ public final class McRuntime {
     /// @param instance the instance about to be started
     /// @throws McException when the server's user cannot read the jar even after the hand-over
     private void prepareDirectories(McInstance instance) throws McException {
+        if (!Privileges.dropsChildren()) {
+            return;
+        }
         Path directory = manager.instanceDirectory(instance.id());
         Path jar = manager.serverJar(instance);
-        if (!Privileges.dropsChildren() || Privileges.ownerOf(jar) == Privileges.AGENT_UID) {
+        // Forge/NeoForge have **no** `server.jar`: the installer leaves a launch profile. A
+        // marker chosen as "the jar, else launch.json" is what keeps the hand-over from
+        // skipping exactly those instances — and then refusing them with "server.jar is not
+        // readable", which is what an unconditional jar check did.
+        Path marker = Files.isRegularFile(jar) ? jar : directory.resolve(McForge.LAUNCH_FILE);
+        if (Privileges.ownerOf(directory) == Privileges.AGENT_UID
+                && Privileges.ownerOf(marker) == Privileges.AGENT_UID) {
             return;
         }
         int handed = Privileges.handTreeToAgent(directory);
@@ -1035,10 +1048,46 @@ public final class McRuntime {
                 + " to the agent (it was created as root)");
         // The jar is the one file a refusal can be built on: without read access the server
         // cannot start at all, and saying that is better than watching java exit by itself.
-        if (!Files.isReadable(jar)) {
+        if (Files.isRegularFile(jar) && !Files.isReadable(jar)) {
             throw new McException(McInstanceManager.SERVER_JAR_NAME + " is not readable by the "
                     + "server's user: " + jar);
         }
+    }
+
+    /// Whether the instance has something to start.
+    ///
+    /// An installed core is either a `server.jar` (vanilla, Paper, Fabric) or a launch profile
+    /// the Forge/NeoForge installer left behind. Requiring the jar refused to start exactly the
+    /// cores that had just been installed successfully.
+    ///
+    /// @param instance the instance
+    /// @return whether a launch target exists
+    private boolean installed(McInstance instance) {
+        if (Files.isRegularFile(manager.serverJar(instance))) {
+            return true;
+        }
+        return McForge.launchArguments(manager.instanceDirectory(instance.id())) != null;
+    }
+
+    /// The environment a Minecraft child is given.
+    ///
+    /// A whitelist, not `System.getenv()`: the child loads third-party plugins and mods, and the
+    /// panel's environment may hold `HDSL_ADMIN_PASSWORD`, `HDSL_AGENT_PASSWORD` or proxy
+    /// credentials. The panel's own `HDSL_*` names never travel to a game server.
+    ///
+    /// @param source the panel's environment
+    /// @return what the child may see
+    static Map<String, String> childEnvironment(Map<String, String> source) {
+        Map<String, String> environment = new HashMap<>();
+        for (String key : List.of("PATH", "HOME", "USERPROFILE", "LANG", "LC_ALL", "LC_CTYPE",
+                "TZ", "TEMP", "TMP", "TMPDIR", "SystemRoot", "windir", "COMSPEC", "PATHEXT",
+                "JAVA_HOME")) {
+            String value = source.get(key);
+            if (value != null) {
+                environment.put(key, value);
+            }
+        }
+        return environment;
     }
 
     /// Refuses a Java too old for the version **before** spawning anything.

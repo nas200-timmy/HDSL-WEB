@@ -285,6 +285,9 @@ export function McInstancePage() {
                   <span className="tag plain" style={{ marginLeft: 8 }}>
                     {mcCoreLabel(instance.core)}
                   </span>
+                  <span className="tag plain" style={{ marginLeft: 4 }}>
+                    {instance.thirdParty ? "第三方" : "官方"}
+                  </span>
                 </span>
                 <span className="comp-value">
                   <span className={`tag ${running ? "running" : "plain"}`}>{mcStateLabel(instance.state)}</span>

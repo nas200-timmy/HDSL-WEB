@@ -1033,8 +1033,10 @@ export interface McInstance {
   id: string;
   name: string;
   version: string;
-  /** 服务端核心：vanilla / paper / folia / purpur / fabric */
+  /** 服务端核心：vanilla / paper / folia / purpur / fabric / forge / neoforge */
   core: string;
+  /** 是否是第三方核心（非 Mojang 原版）；界面据此标注「官方 / 第三方」 */
+  thirdParty?: boolean;
   port: number;
   rconPort: number;
   memoryMb: number;

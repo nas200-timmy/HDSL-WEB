@@ -19,8 +19,10 @@ package org.jackhuang.hmcl.web.minecraft;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.jackhuang.hmcl.util.ProcessTree;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
 import org.jackhuang.hmcl.util.logging.Logger;
+import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -220,6 +222,10 @@ public final class McForge {
     public Launch install(Path instanceDir, String core, String mcVersion, String javaBin,
                           @Nullable McVersions.Progress progress) throws McException {
         Build build = resolve(core, mcVersion);
+        // The installer runs as the agent (see runInstaller). A Forge install happens before
+        // any start, so the start-time hand-over cannot prepare this directory; it has to be
+        // the agent's before the first file is written by it.
+        Privileges.prepareAgentDirectory(instanceDir, Privileges.AGENT_SHARED_DIRECTORY);
         Path installer = installFile(instanceDir, build, progress);
         try {
             List<String> tail = new ArrayList<>();
@@ -260,6 +266,10 @@ public final class McForge {
             } catch (IOException e) {
                 throw new McException("Failed to record the launch profile: " + e.getMessage(), e);
             }
+            // Everything the installer left — `libraries/`, `unix_args.txt`, `launch.json` —
+            // is the server's to read and, for some loaders, to extend. Older panels created
+            // the tree as root; hand it over so a launch does not trip on its own files.
+            Privileges.handTreeToAgent(instanceDir);
             LOG.info("Installed " + core + " " + build.loaderVersion() + " for " + mcVersion
                     + " into " + instanceDir);
             return launch;
@@ -377,12 +387,18 @@ public final class McForge {
         try {
             text = fetchText(URI.create(url + ".sha1")).strip();
         } catch (McException e) {
+            // A mirror without a `.sha1` is not a reason to refuse the install, but it is a
+            // reason to say out loud that the jar was only checked as a zip.
+            LOG.warning("No .sha1 published for " + url + "; the installer is unverified beyond"
+                    + " its zip structure: " + e.getMessage());
             return;
         }
         if (text.isEmpty()) {
+            LOG.warning("The .sha1 for " + url + " is empty; the installer is unverified beyond"
+                    + " its zip structure");
             return;
         }
-        String expected = text.split("\s+")[0].toLowerCase(Locale.ROOT);
+        String expected = text.split("\\s+")[0].toLowerCase(Locale.ROOT);
         String actual;
         try (InputStream in = Files.newInputStream(file)) {
             MessageDigest digest = MessageDigest.getInstance("SHA-1");
@@ -539,23 +555,41 @@ public final class McForge {
     private static int runInstaller(String javaBin, Path installer, Path directory,
                                     java.util.function.Consumer<String> log)
             throws IOException, InterruptedException {
-        ProcessBuilder builder = new ProcessBuilder(javaBin, "-jar", installer.toString(),
-                "--installServer");
+        // The installer is third-party code, and inside the container the panel is root:
+        // running it as the panel would hand a Maven mirror's jar the panel's own credentials.
+        // It runs as the agent, like the server it is installing for.
+        ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(
+                java.util.List.of(javaBin, "-jar", installer.toString(), "--installServer")));
         builder.directory(directory.toFile());
         builder.redirectErrorStream(true);
         Process process = builder.start();
-        try (var reader = new java.io.BufferedReader(new java.io.InputStreamReader(
-                process.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                log.accept(line);
+        // Drained on its own thread. Reading first and waiting afterwards is how a deadline
+        // never fires: an installer that hangs without closing stdout blocks the read forever,
+        // and the request thread with it (the same shape as docs §5.8).
+        Thread pump = new Thread(() -> {
+            try (var reader = new java.io.BufferedReader(new java.io.InputStreamReader(
+                    process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    log.accept(line);
+                }
+            } catch (IOException ignored) {
+                // The process is gone or was killed; the exit code carries the answer.
             }
+        }, "mc-forge-installer");
+        pump.setDaemon(true);
+        pump.start();
+        try {
+            if (!process.waitFor(20, TimeUnit.MINUTES)) {
+                ProcessTree.terminate(process, 2);
+                return -1;
+            }
+            pump.join(2_000);
+            return process.exitValue();
+        } catch (InterruptedException e) {
+            ProcessTree.terminate(process, 2);
+            throw e;
         }
-        if (!process.waitFor(20, TimeUnit.MINUTES)) {
-            process.destroyForcibly();
-            return -1;
-        }
-        return process.exitValue();
     }
 
     /// Numeric version comparison (`1.21.4` > `1.21.1`; `54.0.16` > `54.0.9`).
