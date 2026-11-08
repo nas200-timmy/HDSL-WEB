@@ -94,6 +94,16 @@ public final class McCores {
 
     private static final Logger LOG = Logger.LOG;
     private static final long MAX_JAR_BYTES = 512L * 1024 * 1024;
+    /// A source that answers the headers but then trickles below this average
+    /// over a ten-second window is treated as dead, and the next source is
+    /// tried. Official Purpur does exactly that from some networks: 200 OK,
+    /// then single-digit KiB/s for a 50 MB jar. Without this, the task sits on
+    /// the request timeout while a working mirror waits.
+    private static final Duration DOWNLOAD_WINDOW = Duration.ofSeconds(10);
+    private static final long DOWNLOAD_WINDOW_MIN_BYTES = 640L * 1024;
+    /// The absolute ceiling for one jar; the window above catches the common
+    /// "headers answer, body trickles" case, this stops a silent socket.
+    private static final Duration DOWNLOAD_TIMEOUT = Duration.ofMinutes(10);
     /// A successful version list is reused for ten minutes; a failed one for two,
     /// so an unreachable upstream is not retried on every wizard open — that
     /// retry is what turned one slow API into a two-minute page.
@@ -484,13 +494,10 @@ public final class McCores {
             manager.update(updated);
             return updated;
         }
-        Artifact artifact = resolve(core, version);
         Path shared = coresRoot.resolve(core).resolve(version).resolve(McInstanceManager.SERVER_JAR_NAME);
-        if (!reusable(shared, artifact)) {
-            if (progress != null) {
-                progress.stage("Downloading " + core + " " + version);
-            }
-            download(artifact, shared, progress);
+        Artifact cached = readArtifactCache(core, version);
+        if (cached == null || !reusable(shared, cached)) {
+            downloadFromAnySource(core, version, shared, progress);
         }
         link(shared, manager.serverJar(instance));
         McInstance updated = instance.withVersion(version);
@@ -498,21 +505,22 @@ public final class McCores {
         return updated;
     }
 
-    /// The artifact for one core version, without downloading it.
+    /// Downloads one core version, trying the configured sources in order.
     ///
-    /// The cached answer beside the jar wins; otherwise the sources are tried in
-    /// order and the first one that resolves is written back. A source that is
-    /// out of quota, or that cannot serve this core, is skipped without a call.
+    /// A source that resolves the URL but then fails — 404, a bad hash, or a
+    /// body that trickles below [DOWNLOAD_WINDOW_MIN_BYTES] — does not end the
+    /// install: the next source is asked. The artifact cache is written only
+    /// after a verified download, so a failed source cannot poison the next
+    /// attempt with its URL.
     ///
-    /// @param core    the core id
-    /// @param version the game version
-    /// @return where it is and what hash it must match
-    /// @throws McException when the core or the version is unknown
-    Artifact resolve(String core, String version) throws McException {
-        Artifact cached = readArtifactCache(core, version);
-        if (cached != null) {
-            return cached;
-        }
+    /// @param core     the core id
+    /// @param version  the game version
+    /// @param target   where the verified jar goes
+    /// @param progress the byte sink, or `null`
+    /// @return the artifact that was downloaded
+    /// @throws McException when every source fails
+    private Artifact downloadFromAnySource(String core, String version, Path target,
+                                           @Nullable McVersions.Progress progress) throws McException {
         List<String> order = sources == null ? McSources.fallbackOrder() : sources.orderFor(core);
         List<String> failures = new ArrayList<>();
         for (String source : order) {
@@ -523,13 +531,32 @@ public final class McCores {
                 failures.add(source + ": quota spent until " + sources.quota(source).resetAt());
                 continue;
             }
+            Artifact artifact;
             try {
-                Artifact artifact = resolveFrom(source, core, version);
+                artifact = resolveFrom(source, core, version);
+            } catch (McException e) {
+                // A cancelled task must stop, not shop for another mirror.
+                if (Thread.currentThread().isInterrupted()) {
+                    throw e;
+                }
+                failures.add(source + ": " + e.getMessage());
+                LOG.warning("The " + source + " source could not resolve " + core + " " + version
+                        + ": " + e.getMessage());
+                continue;
+            }
+            try {
+                if (progress != null) {
+                    progress.stage("Downloading " + core + " " + version);
+                }
+                download(artifact, target, progress);
                 writeArtifactCache(core, version, artifact);
                 return artifact;
             } catch (McException e) {
+                if (Thread.currentThread().isInterrupted()) {
+                    throw e;
+                }
                 failures.add(source + ": " + e.getMessage());
-                LOG.warning("The " + source + " source could not resolve " + core + " " + version
+                LOG.warning("The " + source + " source could not download " + core + " " + version
                         + ": " + e.getMessage());
             }
         }
@@ -967,6 +994,14 @@ public final class McCores {
 
     // ---------------------------------------------------------------- downloads --
 
+    /// Whether a download window has moved too few bytes to be worth keeping.
+    ///
+    /// Package-private so the cutoff is testable without a ten-second socket.
+    static boolean tooSlow(long bytes, long elapsedNanos) {
+        return elapsedNanos >= DOWNLOAD_WINDOW.toNanos()
+                && bytes < DOWNLOAD_WINDOW_MIN_BYTES;
+    }
+
     private void download(Artifact artifact, Path target, @Nullable McVersions.Progress progress)
             throws McException {
         try {
@@ -974,7 +1009,7 @@ public final class McCores {
             Path temp = Files.createTempFile(target.getParent(), "core", ".jar.part");
             try {
                 HttpRequest request = HttpRequest.newBuilder(URI.create(artifact.url()))
-                        .timeout(Duration.ofMinutes(30))
+                        .timeout(DOWNLOAD_TIMEOUT)
                         .header("User-Agent", McSources.USER_AGENT)
                         .GET()
                         .build();
@@ -988,6 +1023,8 @@ public final class McCores {
                         ? null : MessageDigest.getInstance(artifact.algorithm());
                 long copied = 0;
                 long lastReport = 0;
+                long windowStart = System.nanoTime();
+                long windowBytes = 0;
                 try (InputStream in = answer.body(); OutputStream out = Files.newOutputStream(temp)) {
                     byte[] buffer = new byte[64 * 1024];
                     int read;
@@ -996,8 +1033,22 @@ public final class McCores {
                             throw new McException("the server download was cancelled");
                         }
                         copied += read;
+                        windowBytes += read;
                         if (copied > MAX_JAR_BYTES) {
                             throw new McException("the server download is larger than the panel accepts");
+                        }
+                        long now = System.nanoTime();
+                        long elapsed = now - windowStart;
+                        if (tooSlow(windowBytes, elapsed)) {
+                            throw new McException("the " + artifact.source()
+                                    + " download is too slow ("
+                                    + (windowBytes / 1024) + " KiB in "
+                                    + TimeUnit.NANOSECONDS.toSeconds(elapsed)
+                                    + " s); trying the next source");
+                        }
+                        if (elapsed >= DOWNLOAD_WINDOW.toNanos()) {
+                            windowStart = now;
+                            windowBytes = 0;
                         }
                         if (digest != null) {
                             digest.update(buffer, 0, read);

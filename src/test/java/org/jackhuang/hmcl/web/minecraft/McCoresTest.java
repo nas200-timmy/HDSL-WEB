@@ -31,6 +31,7 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -171,6 +172,69 @@ class McCoresTest {
         } finally {
             api.stop(0);
         }
+    }
+
+    @Test
+    void aFailedDownloadFallsBackToTheNextSource(@TempDir Path dir) throws Exception {
+        byte[] jar = zipBytes("purpur");
+        String md5 = hex("MD5", jar);
+        String sha256 = hex("SHA-256", jar);
+
+        HttpServer official = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        String officialBase = "http://127.0.0.1:" + official.getAddress().getPort();
+        official.createContext("/v2/purpur/1.21.4", exchange -> respond(exchange,
+                "{\"builds\":{\"latest\":\"2062\",\"all\":[\"2062\"]}}"
+                        .getBytes(StandardCharsets.UTF_8)));
+        official.createContext("/v2/purpur/1.21.4/2062", exchange -> respond(exchange,
+                ("{\"md5\":\"" + md5 + "\"}").getBytes(StandardCharsets.UTF_8)));
+        official.createContext("/v2/purpur/1.21.4/2062/download", exchange -> {
+            exchange.sendResponseHeaders(500, -1);
+            exchange.close();
+        });
+        official.start();
+
+        HttpServer msl = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        String mslBase = "http://127.0.0.1:" + msl.getAddress().getPort();
+        String jarUrl = mslBase + "/purpur.jar";
+        msl.createContext("/download/server/purpur/1.21.4", exchange -> respond(exchange,
+                ("{\"data\":{\"url\":\"" + jarUrl + "\",\"sha256\":\"" + sha256 + "\"}}")
+                        .getBytes(StandardCharsets.UTF_8)));
+        msl.createContext("/purpur.jar", exchange -> respond(exchange, jar));
+        msl.start();
+
+        try {
+            McSources sources = new McSources(null);
+            sources.setOrder("purpur", List.of("official", "mslmc"));
+            sources.setCustomBase("purpur", officialBase);
+            sources.setCustomBase("mslmc", mslBase);
+
+            McCores cores = new McCores(new McVersions(dir.resolve("versions"),
+                    URI.create("http://127.0.0.1:1/manifest.json")),
+                    dir.resolve("cores"), sources);
+            McInstanceManager manager = new McInstanceManager(dir.resolve("instances"));
+            McInstance instance = manager.create("purpur", "1.21.4", 25565, 25575, 1024, "world",
+                    null, false, "purpur");
+
+            cores.install(instance, manager, "1.21.4", null);
+
+            assertArrayEquals(jar, Files.readAllBytes(manager.serverJar(instance)));
+            String artifact = Files.readString(dir.resolve("cores").resolve("purpur")
+                    .resolve("1.21.4").resolve("artifact.json"));
+            assertTrue(artifact.contains("\"source\": \"mslmc\"")
+                    || artifact.contains("\"source\":\"mslmc\""), artifact);
+        } finally {
+            official.stop(0);
+            msl.stop(0);
+        }
+    }
+
+    @Test
+    void theDownloadWindowRejectsATrickle() {
+        assertTrue(McCores.tooSlow(50L * 1024, TimeUnit.SECONDS.toNanos(10)),
+                "50 KiB in 10 s is the official-Purpur trickle that hung an install");
+        assertFalse(McCores.tooSlow(640L * 1024, TimeUnit.SECONDS.toNanos(10)));
+        assertFalse(McCores.tooSlow(0, TimeUnit.SECONDS.toNanos(9)),
+                "a window shorter than the cutoff has not had time to judge");
     }
 
     @Test

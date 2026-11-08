@@ -1365,6 +1365,15 @@ public final class McApiServlet extends HttpServlet {
                     Json.error(response, HttpServletResponse.SC_CONFLICT, "stop the server before deleting it");
                     return;
                 }
+                // An install may still be downloading into this directory after
+                // the page was closed. Cancel it before the backup/delete, or the
+                // task keeps writing into a directory that no longer exists and
+                // stays "running" in the task list forever.
+                tasks.activeInstallLike(id).ifPresent(info -> {
+                    if (tasks.cancel(info.id())) {
+                        LOG.info("Cancelled the install task of deleted instance " + id);
+                    }
+                });
                 // The world is the only irreplaceable thing here: a delete always
                 // leaves a snapshot behind, and refuses when one cannot be taken.
                 McBackups.Backup safety = backups.create(instance, manager);
