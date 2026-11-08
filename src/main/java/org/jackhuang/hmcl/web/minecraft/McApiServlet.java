@@ -1856,6 +1856,15 @@ public final class McApiServlet extends HttpServlet {
                 item.addProperty("enabled", entry.enabled());
                 item.addProperty("bytes", entry.bytes());
                 item.addProperty("clientOnly", entry.clientOnly());
+                if (entry.projectId() != null) {
+                    item.addProperty("projectId", entry.projectId());
+                }
+                if (entry.title() != null) {
+                    item.addProperty("title", entry.title());
+                }
+                if (entry.versionNumber() != null) {
+                    item.addProperty("versionNumber", entry.versionNumber());
+                }
                 items.add(item);
             }
             body.add("files", items);
@@ -1912,9 +1921,12 @@ public final class McApiServlet extends HttpServlet {
                     "this core loads neither plugins nor mods");
             return;
         }
+        int offset = parseInt(request.getParameter("offset"), 0);
+        int limit = parseInt(request.getParameter("limit"), 20);
+        McMods.SearchResult found = mods.search(request.getParameter("query"), folder,
+                request.getParameter("version"), Math.max(0, offset), limit);
         List<JsonObject> items = new ArrayList<>();
-        for (McMods.Hit hit : mods.search(request.getParameter("query"), folder,
-                request.getParameter("version"))) {
+        for (McMods.Hit hit : found.hits()) {
             JsonObject item = new JsonObject();
             item.addProperty("projectId", hit.projectId());
             item.addProperty("slug", hit.slug());
@@ -1924,7 +1936,14 @@ public final class McApiServlet extends HttpServlet {
             item.addProperty("description", hit.description());
             items.add(item);
         }
-        Json.write(response, Map.of("hits", items));
+        JsonArray array = new JsonArray();
+        items.forEach(array::add);
+        JsonObject body = new JsonObject();
+        body.add("hits", array);
+        body.addProperty("totalHits", found.totalHits());
+        body.addProperty("offset", Math.max(0, offset));
+        body.addProperty("relaxed", found.relaxed());
+        Json.write(response, body);
     }
 
     /// `POST /api/mc/modrinth/install`: newest compatible version into the instance.

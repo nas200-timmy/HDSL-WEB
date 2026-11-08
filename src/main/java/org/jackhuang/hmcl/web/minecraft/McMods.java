@@ -44,6 +44,7 @@ import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.zip.ZipFile;
 
 /// Plugins and mods inside one instance: the files on disk, and installing from
@@ -66,6 +67,10 @@ public final class McMods {
 
     /// Modrinth's public API; `HDSL_MODRINTH_API` overrides it for mirrors.
     public static final URI DEFAULT_API = URI.create("https://api.modrinth.com/v2");
+    /// The domestic Modrinth mirror. Used as a fallback, never instead of the
+    /// official API when that one answers: the hash we verify comes from the
+    /// same response, so the source has to be the one the operator expects.
+    public static final URI MCIM_API = URI.create("https://mod.mcimirror.top/modrinth/v2");
     /// A mod jar is megabytes; anything past this is not one.
     private static final long MAX_JAR_BYTES = 256L * 1024 * 1024;
 
@@ -77,7 +82,13 @@ public final class McMods {
     /// @param enabled  whether the loader will read it (`.jar` vs `.jar.disabled`)
     /// @param bytes    the file size
     /// @param clientOnly whether every descriptor inside the jar marks it client-side
-    public record Entry(String name, boolean enabled, long bytes, boolean clientOnly) {
+    public record Entry(String name, boolean enabled, long bytes, boolean clientOnly,
+                        @Nullable String projectId, @Nullable String title,
+                        @Nullable String versionNumber) {
+
+        public Entry(String name, boolean enabled, long bytes, boolean clientOnly) {
+            this(name, enabled, bytes, clientOnly, null, null, null);
+        }
     }
 
     /// One search hit from Modrinth.
@@ -90,6 +101,15 @@ public final class McMods {
     /// @param description one-line summary
     public record Hit(String projectId, String slug, String title, String author,
                       long downloads, String description) {
+    }
+
+    /// One page of search results.
+    ///
+    /// @param hits      this page
+    /// @param totalHits how many the query matches in total
+    /// @param relaxed   the version filter was dropped: these results do not
+    ///                  claim compatibility, and install will check again
+    public record SearchResult(List<Hit> hits, int totalHits, boolean relaxed) {
     }
 
     /// What the instance's core loads.
@@ -182,7 +202,11 @@ public final class McMods {
                 } else {
                     continue;
                 }
-                entries.add(new Entry(name, enabled, Files.size(file), clientOnly(file)));
+                JsonObject meta = readSidecar(file);
+                entries.add(new Entry(name, enabled, Files.size(file), clientOnly(file),
+                        meta == null ? null : string(meta, "projectId"),
+                        meta == null ? null : string(meta, "title"),
+                        meta == null ? null : string(meta, "versionNumber")));
             }
         } catch (IOException e) {
             throw new McException("Failed to read " + directory + ": " + e.getMessage(), e);
@@ -238,6 +262,7 @@ public final class McMods {
             if (!Files.deleteIfExists(file)) {
                 throw new McException("`" + name + "` is not there");
             }
+            Files.deleteIfExists(sidecarOf(file));
         } catch (IOException e) {
             throw new McException("Failed to delete `" + name + "`: " + e.getMessage(), e);
         }
@@ -296,22 +321,60 @@ public final class McMods {
     /// @param version the instance's game version
     /// @return the hits, best first
     /// @throws McException when the API cannot be read
-    public List<Hit> search(String query, Folder folder, String version) throws McException {
+    public SearchResult search(String query, Folder folder, String version) throws McException {
+        return search(query, folder, version, 0, 20);
+    }
+
+    /// One page of search results.
+    ///
+    /// The version facet is dropped when it would hide everything: plugins often
+    /// list only the releases they tested against, and "no results" is a worse
+    /// answer than "these may work, install will check". The second page is
+    /// marked [SearchResult#relaxed] so the UI can say so.
+    ///
+    /// @param query   the search text; Chinese terms are translated first
+    /// @param folder  what the instance loads
+    /// @param version the instance's game version
+    /// @param offset  how many hits to skip
+    /// @param limit   how many to return (1–50)
+    /// @return the page
+    /// @throws McException when the API cannot be read
+    public SearchResult search(String query, Folder folder, String version, int offset, int limit)
+            throws McException {
+        int size = Math.max(1, Math.min(50, limit));
+        String text = translate(query);
+        SearchResult strict = searchOnce(text, folder, version, offset, size, false);
+        if (!strict.hits().isEmpty() || version == null || version.isBlank()) {
+            return strict;
+        }
+        SearchResult relaxed = searchOnce(text, folder, version, offset, size, true);
+        return new SearchResult(relaxed.hits(), relaxed.totalHits(), true);
+    }
+
+    private SearchResult searchOnce(String query, Folder folder, String version, int offset,
+                                    int limit, boolean withoutVersion) throws McException {
         String projectType = folder.kind().equals("plugins") ? "plugin" : "mod";
-        StringBuilder url = new StringBuilder(base())
-                .append("/search?limit=20&index=relevance&query=")
-                .append(URLEncoder.encode(query == null ? "" : query, StandardCharsets.UTF_8));
         List<String> facets = new ArrayList<>();
         facets.add("[\"project_type:" + projectType + "\"]");
         if (folder.loader() != null) {
-            facets.add("[\"categories:" + folder.loader() + "\"]");
+            if ("plugins".equals(folder.kind())) {
+                // Paper runs Bukkit and Spigot plugins too; filtering on `paper`
+                // alone hides most of the catalogue. Inner array is OR.
+                facets.add("[\"categories:paper\",\"categories:spigot\","
+                        + "\"categories:bukkit\",\"categories:purpur\",\"categories:folia\"]");
+            } else {
+                facets.add("[\"categories:" + folder.loader() + "\"]");
+            }
         }
-        if (version != null && !version.isBlank()) {
+        if (!withoutVersion && version != null && !version.isBlank()) {
             facets.add("[\"versions:" + version.trim() + "\"]");
         }
-        url.append("&facets=").append(URLEncoder.encode("[" + String.join(",", facets) + "]",
-                StandardCharsets.UTF_8));
-        JsonObject root = fetchJson(URI.create(url.toString()));
+        String path = "/search?limit=" + limit + "&offset=" + Math.max(0, offset)
+                + "&index=relevance&query="
+                + URLEncoder.encode(query == null ? "" : query, StandardCharsets.UTF_8)
+                + "&facets=" + URLEncoder.encode("[" + String.join(",", facets) + "]",
+                        StandardCharsets.UTF_8);
+        JsonObject root = readWithFallback(path);
         JsonArray hits = root.has("hits") && root.get("hits").isJsonArray()
                 ? root.getAsJsonArray("hits") : new JsonArray();
         List<Hit> results = new ArrayList<>();
@@ -332,7 +395,36 @@ public final class McMods {
             results.add(new Hit(projectId, slug == null ? projectId : slug, title,
                     author == null ? "" : author, downloads, description == null ? "" : description));
         }
-        return List.copyOf(results);
+        int total = root.has("total_hits") ? root.get("total_hits").getAsInt() : results.size();
+        return new SearchResult(List.copyOf(results), total, withoutVersion);
+    }
+
+    /// A handful of Chinese terms for the queries a Chinese operator actually
+    /// types. Modrinth has no Chinese metadata, so "经济" would otherwise return
+    /// nothing useful — this is a dictionary, not a translation service.
+    private static final Map<String, String> ZH = Map.ofEntries(
+            Map.entry("经济", "economy"), Map.entry("商店", "shop"),
+            Map.entry("领地", "claim"), Map.entry("权限", "permissions"),
+            Map.entry("传送", "teleport"), Map.entry("小地图", "minimap"),
+            Map.entry("优化", "optimization"), Map.entry("反作弊", "anticheat"),
+            Map.entry("菜单", "menu"), Map.entry("聊天", "chat"),
+            Map.entry("世界", "world"), Map.entry("备份", "backup"),
+            Map.entry("任务", "quest"), Map.entry("技能", "skills"),
+            Map.entry("附魔", "enchant"), Map.entry("家具", "furniture"),
+            Map.entry("枪械", "gun"), Map.entry("载具", "vehicle"),
+            Map.entry("建筑", "building"), Map.entry("箱子", "chest"),
+            Map.entry("刷怪", "mob"), Map.entry("经济系统", "economy"),
+            Map.entry("出生点", "spawn"), Map.entry("保护", "protection"));
+
+    static String translate(@Nullable String query) {
+        if (query == null || query.isBlank()) {
+            return query == null ? "" : query;
+        }
+        String text = query;
+        for (Map.Entry<String, String> entry : ZH.entrySet()) {
+            text = text.replace(entry.getKey(), entry.getValue());
+        }
+        return text.strip();
     }
 
     /// Installs the newest compatible version of a project into the instance.
@@ -346,21 +438,22 @@ public final class McMods {
     ///                      fails, or the hash does not match
     public String install(Path instanceDir, Folder folder, String projectId, String version)
             throws McException {
-        StringBuilder url = new StringBuilder(base())
-                .append("/project/").append(URLEncoder.encode(projectId, StandardCharsets.UTF_8))
+        StringBuilder path = new StringBuilder("/project/")
+                .append(URLEncoder.encode(projectId, StandardCharsets.UTF_8))
                 .append("/version");
         List<String> params = new ArrayList<>();
         if (folder.loader() != null) {
-            params.add("loaders=" + URLEncoder.encode("[\"" + folder.loader() + "\"]", StandardCharsets.UTF_8));
+            params.add("loaders=" + URLEncoder.encode("[\"" + folder.loader() + "\"]",
+                    StandardCharsets.UTF_8));
         }
         if (version != null && !version.isBlank()) {
             params.add("game_versions=" + URLEncoder.encode("[\"" + version.trim() + "\"]",
                     StandardCharsets.UTF_8));
         }
         if (!params.isEmpty()) {
-            url.append("?").append(String.join("&", params));
+            path.append("?").append(String.join("&", params));
         }
-        JsonElement root = fetchJsonElement(URI.create(url.toString()));
+        JsonElement root = readElementWithFallback(path.toString());
         JsonArray versions = root.isJsonArray() ? root.getAsJsonArray() : null;
         if (versions == null || versions.isEmpty()) {
             throw new McException("no version of " + projectId + " works with this core and game version");
@@ -400,7 +493,31 @@ public final class McMods {
         } catch (IOException e) {
             throw new McException("Failed to install `" + safe + "`: " + e.getMessage(), e);
         }
+        // The sidecar is what makes the file list useful later: without it the
+        // UI can only show `SomePlugin-1.2.3.jar` and has no idea what project
+        // it came from or which version it is.
+        JsonObject meta = new JsonObject();
+        meta.addProperty("projectId", projectId);
+        addIfPresent(meta, "versionId", string(first, "id"));
+        addIfPresent(meta, "versionNumber", string(first, "version_number"));
+        try {
+            JsonObject project = readWithFallback("/project/"
+                    + URLEncoder.encode(projectId, StandardCharsets.UTF_8));
+            addIfPresent(meta, "slug", string(project, "slug"));
+            addIfPresent(meta, "title", string(project, "title"));
+        } catch (McException e) {
+            LOG.warning("Could not read the project metadata for " + projectId + ": "
+                    + e.getMessage());
+        }
+        meta.addProperty("installedAt", java.time.Instant.now().toString());
+        writeSidecar(target, meta);
         return safe;
+    }
+
+    private static void addIfPresent(JsonObject object, String name, @Nullable String value) {
+        if (value != null && !value.isBlank()) {
+            object.addProperty(name, value);
+        }
     }
 
     private void download(String url, Path target, String algorithm, @Nullable String digest)
@@ -530,7 +647,72 @@ public final class McMods {
     }
 
     private String base() {
-        return api.toString().replaceAll("/+$", "");
+        return base(api);
+    }
+
+    private static String base(URI uri) {
+        return uri.toString().replaceAll("/+$", "");
+    }
+
+    /// Reads a path from the official API, then from the mirror if the official
+    /// one is unreachable. The response (and therefore the hash) still comes
+    /// from one place; the fallback changes the host, not the trust model.
+    private JsonElement readElementWithFallback(String path) throws McException {
+        try {
+            return fetchJsonElement(URI.create(base() + path));
+        } catch (McException first) {
+            if (api.equals(MCIM_API)) {
+                throw first;
+            }
+            LOG.warning("The Modrinth API failed (" + first.getMessage()
+                    + "); trying the mirror at " + MCIM_API);
+            try {
+                return fetchJsonElement(URI.create(base(MCIM_API) + path));
+            } catch (McException second) {
+                LOG.warning("The Modrinth mirror failed too: " + second.getMessage());
+                throw first;
+            }
+        }
+    }
+
+    private JsonObject readWithFallback(String path) throws McException {
+        JsonElement element = readElementWithFallback(path);
+        if (!element.isJsonObject()) {
+            throw new McException(path + " did not answer a JSON object");
+        }
+        return element.getAsJsonObject();
+    }
+
+    /// The `.panel.json` beside a jar, shared by its enabled and disabled names.
+    static Path sidecarOf(Path jar) {
+        String name = jar.getFileName().toString();
+        if (name.endsWith(".disabled")) {
+            name = name.substring(0, name.length() - ".disabled".length());
+        }
+        return jar.resolveSibling(name + ".panel.json");
+    }
+
+    private static void writeSidecar(Path jar, JsonObject meta) {
+        try {
+            Files.writeString(sidecarOf(jar), meta.toString(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            LOG.warning("Could not record the installed metadata for " + jar, e);
+        }
+    }
+
+    private static @Nullable JsonObject readSidecar(Path jar) {
+        Path file = sidecarOf(jar);
+        if (!Files.isRegularFile(file)) {
+            return null;
+        }
+        try {
+            JsonElement element = JsonParser.parseString(Files.readString(file,
+                    StandardCharsets.UTF_8));
+            return element.isJsonObject() ? element.getAsJsonObject() : null;
+        } catch (IOException | RuntimeException e) {
+            LOG.warning("Could not read the installed metadata " + file, e);
+            return null;
+        }
     }
 
     private JsonObject fetchJson(URI uri) throws McException {

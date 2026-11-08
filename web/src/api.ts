@@ -794,10 +794,10 @@ export const api = {
         { method: "PUT", body: file },
         { timeoutMs: 5 * 60 * 1000 },
       ),
-    modrinthSearch: (core: string, version: string, query: string) =>
-      request<{ hits: McModHit[] }>(
+    modrinthSearch: (core: string, version: string, query: string, offset = 0, limit = 20) =>
+      request<{ hits: McModHit[]; totalHits: number; offset: number; relaxed: boolean }>(
         `/api/mc/modrinth/search?core=${encodeURIComponent(core)}&version=${encodeURIComponent(version)}`
-        + `&query=${encodeURIComponent(query)}`,
+        + `&query=${encodeURIComponent(query)}&offset=${offset}&limit=${limit}`,
       ),
     modrinthInstall: (instanceId: string, projectId: string) =>
       request<{ ok: boolean; name: string }>(
@@ -1089,6 +1089,10 @@ export interface McModFile {
   bytes: number;
   /** 元数据自称纯客户端：服务端加载会报错或没效果。 */
   clientOnly: boolean;
+  /** 从 Modrinth 安装时记下的项目信息（`.panel.json`），手工放的文件没有。 */
+  projectId?: string;
+  title?: string;
+  versionNumber?: string;
 }
 
 /** Modrinth 搜索命中。 */

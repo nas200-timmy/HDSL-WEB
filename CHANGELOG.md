@@ -4,6 +4,19 @@
 
 ## 未发布
 
+**插件/模组：中文搜索、分页、批量管理与安装元数据**
+
+- 搜索只写 `categories:paper`，把 Bukkit/Spigot 插件全滤掉了；改成 OR
+  （paper/spigot/bukkit/purpur/folia）。
+- 中文查询先过一张常用词表（经济→economy、领地→claim、优化→optimization…），
+  否则 Modrinth 上中文搜索几乎总是空结果。
+- 结果从固定 20 条改为分页（offset/limit + totalHits，界面「加载更多」）；
+  严格版本过滤 0 条时自动放宽并标注 `relaxed`，安装时仍会再校验。
+- 官方 API 失败时自动回落 `mod.mcimirror.top/modrinth/v2`（只换 host，不换校验）。
+- 安装后写 `<jar>.panel.json`（项目、标题、版本），列表显示标题与版本号；
+  删除文件时一并清理。
+- 管理面补齐：按名字/标题/版本过滤、全选、批量启用/停用/删除。
+
 **Forge 安装：国内源被静默跳过、慢在官方 Maven**
 
 - **BMCLAPI 302 不跟随**：`McForge` 的 HttpClient 只有 `connectTimeout`，JDK 默认

@@ -150,7 +150,7 @@ class McModsTest {
             McMods mods = new McMods(URI.create(base));
             McMods.Folder folder = McMods.folderOf("fabric");
             assertEquals("mods", folder.kind());
-            List<McMods.Hit> hits = mods.search("sodium", folder, "1.21.4");
+            List<McMods.Hit> hits = mods.search("sodium", folder, "1.21.4").hits();
             assertEquals(1, hits.size());
             assertEquals("Sodium", hits.get(0).title());
 

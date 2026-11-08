@@ -1424,8 +1424,20 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
   vanilla → 明确拒绝。
 - **停用 = 改名**：`x.jar` ⇄ `x.jar.disabled`。没有 sidecar 状态，手改即可恢复。
 - 上传：只收 `.jar`，zip 魔数校验，不覆盖同名文件；路径穿越在解析层拦截。
-- Modrinth 搜索/安装（`HDSL_MODRINTH_API` 可换镜像）：按核心映射 project_type
-  （plugin / mod）、loader 与游戏版本过滤；安装取最新兼容版本，**SHA-512 校验通过才落盘**。
+- Modrinth 搜索/安装（`HDSL_MODRINTH_API` 可换镜像，官方不可达时自动回落
+  `mod.mcimirror.top/modrinth/v2`）：按核心映射 project_type（plugin / mod）与 loader；
+  安装取最新兼容版本，**SHA-512 校验通过才落盘**。
+  - **插件不只用 `paper` 一个分类**：Paper 能加载 Bukkit/Spigot 插件，所以分类用
+    OR（paper / spigot / bukkit / purpur / folia），否则目录被砍掉一大半。
+  - **中文查询先翻译**：内置一张常用词表（经济→economy、领地→claim、优化→optimization…），
+    没有这一层，中文搜索几乎总是空结果。
+  - **分页**：`?offset=&limit=`，返回 `totalHits`；每次 20 条，界面上「加载更多」。
+  - **版本过滤可放宽**：严格过滤 0 条时去掉版本 facet 再查一次，结果标 `relaxed`，
+    安装时仍按游戏版本重新校验。
+- **装完记元数据**：从 Modrinth 安装的文件旁边写 `<jar>.panel.json`
+  （projectId / slug / title / versionId / versionNumber / installedAt）。列表据此显示
+  「标题 + 版本」而不是一串文件名；删除时一并清掉，停用改名不影响它。
+- 管理面：按名字/标题/版本过滤已装文件、全选后批量启用/停用/删除、单个启停与删除。
 - 客户端专用识别：读 `fabric.mod.json#environment`、`META-INF/mods.toml#side`、
   `quilt.mod.json`，只做标注，不自动禁用（误判会关掉能用的东西）。
 - API：`GET|PUT|DELETE /api/mc/instances/{id}/files…`、`POST …/{name}/toggle`、

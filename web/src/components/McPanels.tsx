@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type McBackup, type McInstance, type McJavaProbe, type McModFile, type McModHit } from "../api";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { refreshMcFeature, useMcFeature } from "../mcFeature";
@@ -1044,8 +1044,12 @@ export function McFilesPanel({ instance }: { instance: McInstance }) {
   const [loader, setLoader] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<McModHit[]>([]);
+  const [totalHits, setTotalHits] = useState(0);
+  const [relaxed, setRelaxed] = useState(false);
   const [searching, setSearching] = useState(false);
 
   const load = async () => {
@@ -1053,6 +1057,7 @@ export function McFilesPanel({ instance }: { instance: McInstance }) {
       const answer = await api.mc.files(instance.id, kind);
       setFiles(answer.files);
       setLoader(answer.folder.loader ?? null);
+      setSelected((current) => current.filter((name) => answer.files.some((f) => f.name === name)));
       setError(null);
     } catch (e) {
       setError(errMsg(e));
@@ -1062,6 +1067,16 @@ export function McFilesPanel({ instance }: { instance: McInstance }) {
   useEffect(() => {
     void load();
   }, [instance.id, kind]);
+
+  const visible = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return files;
+    return files.filter((file) =>
+      [file.name, file.title ?? "", file.versionNumber ?? ""]
+        .some((text) => text.toLowerCase().includes(q)));
+  }, [files, filter]);
+
+  const enabledCount = files.filter((file) => file.enabled).length;
 
   const toggle = async (file: McModFile) => {
     setBusy(true);
@@ -1089,6 +1104,47 @@ export function McFilesPanel({ instance }: { instance: McInstance }) {
     }
   };
 
+  const bulkToggle = async (enabled: boolean) => {
+    const targets = files.filter((file) => selected.includes(file.name) && file.enabled !== enabled);
+    if (targets.length === 0) return;
+    setBusy(true);
+    let done = 0;
+    try {
+      for (const file of targets) {
+        await elevated(() => api.mc.toggleFile(instance.id, kind, file.name, enabled));
+        done++;
+      }
+      toast("success", `已${enabled ? "启用" : "停用"} ${done} 个${noun}`);
+      setSelected([]);
+      await load();
+    } catch (e) {
+      toast("error", errMsg(e));
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const bulkDelete = async () => {
+    const targets = files.filter((file) => selected.includes(file.name));
+    if (targets.length === 0) return;
+    if (!window.confirm(`删除选中的 ${targets.length} 个${noun}？文件会直接删掉，不进备份。`)) return;
+    setBusy(true);
+    try {
+      for (const file of targets) {
+        await elevated(() => api.mc.deleteFile(instance.id, kind, file.name));
+      }
+      toast("success", `已删除 ${targets.length} 个${noun}`);
+      setSelected([]);
+      await load();
+    } catch (e) {
+      toast("error", errMsg(e));
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const upload = async (file: File) => {
     setBusy(true);
     try {
@@ -1102,14 +1158,20 @@ export function McFilesPanel({ instance }: { instance: McInstance }) {
     }
   };
 
-  const search = async () => {
+  const search = async (more = false) => {
     setSearching(true);
+    const offset = more ? hits.length : 0;
     try {
-      setHits((await api.mc.modrinthSearch(instance.core, instance.version, query)).hits);
+      const answer = await api.mc.modrinthSearch(
+        instance.core, instance.version, query, offset, 20,
+      );
+      setHits(more ? [...hits, ...answer.hits] : answer.hits);
+      setTotalHits(answer.totalHits);
+      setRelaxed(answer.relaxed);
       setError(null);
     } catch (e) {
       setError(errMsg(e));
-      setHits([]);
+      if (!more) setHits([]);
     } finally {
       setSearching(false);
     }
@@ -1139,15 +1201,17 @@ export function McFilesPanel({ instance }: { instance: McInstance }) {
     );
   }
 
+  const allVisibleSelected = visible.length > 0 && visible.every((file) => selected.includes(file.name));
+
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <b>{noun}目录</b>
         <code style={{ fontSize: 12 }}>{kind}/</code>
         {loader && <span className="tag plain">loader: {loader}</span>}
+        <span className="tag plain">{files.length} 个 · {enabledCount} 启用</span>
         <span className="dim" style={{ fontSize: 12 }}>
-          停用 = 重命名为 `.jar.disabled`；加载器不读它，改回名字就恢复。
-          启停、上传、安装都在下次启动时生效，运行中的服务器不会被热改。
+          停用 = 重命名为 `.jar.disabled`；启停、上传、安装都在下次启动时生效。
         </span>
         <label className="btn btn-text" style={{ cursor: busy ? "not-allowed" : "pointer", marginLeft: "auto" }}>
           上传 {noun}.jar
@@ -1171,11 +1235,57 @@ export function McFilesPanel({ instance }: { instance: McInstance }) {
         </div>
       )}
 
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          className="input"
+          style={{ flex: 1, minWidth: 200 }}
+          placeholder={`在已装的${noun}里过滤（名字 / 标题 / 版本）`}
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+          <input
+            type="checkbox"
+            checked={allVisibleSelected}
+            onChange={(e) => {
+              setSelected(e.target.checked ? visible.map((file) => file.name) : []);
+            }}
+          />
+          全选
+        </label>
+        <button
+          className="btn btn-text"
+          disabled={busy || selected.length === 0}
+          onClick={() => void bulkToggle(true)}
+        >
+          启用选中
+        </button>
+        <button
+          className="btn btn-text"
+          disabled={busy || selected.length === 0}
+          onClick={() => void bulkToggle(false)}
+        >
+          停用选中
+        </button>
+        <button
+          className="btn btn-text danger"
+          disabled={busy || selected.length === 0}
+          onClick={() => void bulkDelete()}
+        >
+          删除选中
+        </button>
+        {selected.length > 0 && (
+          <span className="dim" style={{ fontSize: 12 }}>已选 {selected.length} 个</span>
+        )}
+      </div>
+
       {files.length === 0 ? (
         <div className="dim" style={{ fontSize: 13 }}>目录是空的。</div>
+      ) : visible.length === 0 ? (
+        <div className="dim" style={{ fontSize: 13 }}>没有匹配的{ noun }。</div>
       ) : (
         <div className="card" style={{ padding: 0 }}>
-          {files.map((file) => (
+          {visible.map((file) => (
             <div
               key={file.name}
               style={{
@@ -1187,13 +1297,30 @@ export function McFilesPanel({ instance }: { instance: McInstance }) {
                 flexWrap: "wrap",
               }}
             >
-              <span style={{ fontSize: 13, wordBreak: "break-all", flex: 1 }}>{file.name}</span>
+              <input
+                type="checkbox"
+                checked={selected.includes(file.name)}
+                onChange={(e) => {
+                  setSelected((current) => e.target.checked
+                    ? [...current, file.name]
+                    : current.filter((name) => name !== file.name));
+                }}
+              />
+              <span style={{ display: "grid", gap: 2, flex: 1, minWidth: 180 }}>
+                <span style={{ fontSize: 13, wordBreak: "break-all" }}>
+                  {file.title ?? file.name}
+                </span>
+                <span className="dim" style={{ fontSize: 11, wordBreak: "break-all" }}>
+                  {file.title ? `${file.name} · ` : ""}
+                  {file.versionNumber ? `${file.versionNumber} · ` : ""}
+                  {formatBytes(file.bytes)}
+                </span>
+              </span>
               {file.clientOnly && (
                 <span className="tag plain" title="元数据自称纯客户端，服务端加载通常无效">
                   客户端专用
                 </span>
               )}
-              <span className="dim" style={{ fontSize: 11 }}>{formatBytes(file.bytes)}</span>
               <span className={`tag ${file.enabled ? "running" : "plain"}`}>
                 {file.enabled ? "已启用" : "已停用"}
               </span>
@@ -1214,7 +1341,7 @@ export function McFilesPanel({ instance }: { instance: McInstance }) {
             className="input"
             style={{ flex: 1, minWidth: 220 }}
             value={query}
-            placeholder={`在 Modrinth 搜索 ${noun}（只看 ${instance.version} + ${loader ?? instance.core} 兼容）`}
+            placeholder={`在 Modrinth 搜索 ${noun}（中文词会先转成英文；兼容 ${instance.version} + ${loader ?? instance.core}）`}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") void search();
@@ -1224,36 +1351,58 @@ export function McFilesPanel({ instance }: { instance: McInstance }) {
             {searching ? "搜索中…" : "搜索"}
           </button>
         </div>
+
         {hits.length > 0 && (
-          <div className="card" style={{ padding: 0 }}>
-            {hits.map((hit) => (
-              <div
-                key={hit.projectId}
-                style={{
-                  display: "grid",
-                  gap: 2,
-                  padding: "8px 10px",
-                  borderBottom: "1px solid var(--monet-outline-variant)",
-                }}
-              >
-                <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <b style={{ fontSize: 13 }}>{hit.title}</b>
-                  <span className="dim" style={{ fontSize: 11 }}>
-                    {hit.author} · {hit.downloads.toLocaleString()} 次下载
-                  </span>
-                  <button
-                    className="btn btn-text"
-                    style={{ marginLeft: "auto" }}
-                    disabled={busy}
-                    onClick={() => void install(hit)}
-                  >
-                    安装
-                  </button>
+          <>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span className="dim" style={{ fontSize: 12 }}>
+                共 {totalHits.toLocaleString()} 个结果，已显示 {hits.length} 个
+              </span>
+              {relaxed && (
+                <span className="tag plain" title="没有找到明确标注该游戏版本的条目，这里放宽了版本过滤；安装时仍会再校验">
+                  已放宽版本过滤
+                </span>
+              )}
+            </div>
+            <div className="card" style={{ padding: 0 }}>
+              {hits.map((hit) => (
+                <div
+                  key={hit.projectId}
+                  style={{
+                    display: "grid",
+                    gap: 2,
+                    padding: "8px 10px",
+                    borderBottom: "1px solid var(--monet-outline-variant)",
+                  }}
+                >
+                  <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                    <b style={{ fontSize: 13 }}>{hit.title}</b>
+                    <span className="dim" style={{ fontSize: 11 }}>
+                      {hit.author} · {hit.downloads.toLocaleString()} 次下载
+                    </span>
+                    <button
+                      className="btn btn-text"
+                      style={{ marginLeft: "auto" }}
+                      disabled={busy}
+                      onClick={() => void install(hit)}
+                    >
+                      安装
+                    </button>
+                  </div>
+                  <span className="dim" style={{ fontSize: 12, lineHeight: 1.5 }}>{hit.description}</span>
                 </div>
-                <span className="dim" style={{ fontSize: 12, lineHeight: 1.5 }}>{hit.description}</span>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+            {hits.length < totalHits && (
+              <button
+                className="btn btn-text"
+                disabled={searching}
+                onClick={() => void search(true)}
+              >
+                {searching ? "加载中…" : "加载更多"}
+              </button>
+            )}
+          </>
         )}
         {hits.length === 0 && !searching && (
           <span className="dim" style={{ fontSize: 12 }}>
