@@ -33,6 +33,11 @@ MC 服务端第一版功能完成，作为一条明确的分界。此后 MC 相�
 - 属主：`PI_WEB_DATA_DIR` 不预建——默认 `$HOME/.pi-web` 由 agent 自己创建；wrapper
   写在已交接给 agent 的实例 home 下并显式 0644，避免 root 属主目录/文件在干净容器里
   造成 `EACCES`（与 v0.6.45 的 pnpm 属主问题同一类）。
+- 就绪探测统一走 HTTP/1.1：pi-web 的 Fastify 对 JDK HttpClient 默认的明文
+  HTTP/2 升级（`Upgrade: h2c`）回 400，面板把 400 当成「没起来」，等满 180 秒
+  后判定失败——实例端口不落盘，「打开网页」报 not running，`/i/<id>/` 回 502。
+  失败路径同时改为收掉整棵进程树，并在下次启动前清理 marker 指向的旧 sessiond，
+  避免 `SessiondStateOwnershipConflictError` 把重试也堵死。
 
 **插件/模组：中文搜索、分页、批量管理与安装元数据**
 

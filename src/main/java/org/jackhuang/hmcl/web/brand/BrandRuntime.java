@@ -474,8 +474,14 @@ public final class BrandRuntime {
             }
 
             Process removed = PROCESSES.remove(id);
-            if (removed != null && removed.isAlive()) {
-                removed.destroyForcibly();
+            if (removed != null) {
+                // A brand's wrapper owns more than the handle we kept (PI WEB
+                // starts a session daemon and a web gateway under one), so
+                // destroying only the wrapper leaves both children holding the
+                // state directory and its ports — and the next launch then
+                // meets its own orphan ("another session daemon already owns
+                // this state"). Take the whole tree down, as stop() does.
+                ProcessTree.terminate(removed, stopWaitSecondsOf(id));
             }
             State state = STATES.getOrDefault(id, State.ERROR);
             return new Status(state, state == State.ERROR ? ERRORS.get(id) : null);
@@ -989,9 +995,7 @@ public final class BrandRuntime {
     /// log line is uvicorn's, not a stable readiness contract; the health
     /// endpoint is the one Octop itself documents.
     private static @Nullable Integer awaitOctopHealth(String id, Process process, int port) {
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(2))
-                .build();
+        HttpClient client = loopbackClient();
         HttpRequest request = HttpRequest.newBuilder(
                         URI.create("http://127.0.0.1:" + port + "/api/health"))
                 .timeout(Duration.ofSeconds(2))
@@ -1363,6 +1367,11 @@ public final class BrandRuntime {
                     + " (expected " + daemonEntry + " and " + webEntry + ")");
         }
 
+        // A panel restart or a failed launch can leave the previous daemon
+        // holding this instance's state directory. It refuses to yield, so the
+        // new wrapper would die before the gateway starts; take it down here.
+        reclaimPiWebState(instance, home);
+
         int daemonPort = allocatePort();
         int webPort = allocatePort();
         while (webPort == daemonPort) {
@@ -1394,6 +1403,65 @@ public final class BrandRuntime {
         // TUI of the same instance is executing from.
         environment.put("PI_WEB_SKIP_VERSION_CHECK", "1");
         return new LaunchPlan(List.copyOf(command), java.util.Map.copyOf(environment), webPort, daemonPort);
+    }
+
+    /// Stops a session daemon a previous launch left behind, if it still owns
+    /// this instance's state directory.
+    ///
+    /// pi-web writes an ownership marker into `~/.pi-web` and refuses to start
+    /// a second daemon on the same directory. When the panel's launch fails
+    /// after the daemon is already up, the daemon survives its wrapper and the
+    /// next launch can never claim the state. The marker names the pid; the
+    /// command line is checked before killing, because a pid may have been
+    /// reused since the marker was written.
+    ///
+    /// The web gateway is a sibling, not a descendant, and is deliberately not
+    /// guessed at here: the port allocator simply will not hand out the port it
+    /// still holds.
+    ///
+    /// @param instance the instance being launched
+    /// @param home     its home, where the marker lives
+    private static void reclaimPiWebState(BrandInstance instance, Path home) {
+        Path marker = home.resolve(".pi-web").resolve("sessiond-owner.json");
+        if (!Files.isRegularFile(marker)) {
+            return;
+        }
+        long pid;
+        try {
+            java.util.regex.Matcher matcher = Pattern.compile("\"pid\"\\s*:\\s*(\\d+)")
+                    .matcher(Files.readString(marker, StandardCharsets.UTF_8));
+            pid = matcher.find() ? Long.parseLong(matcher.group(1)) : 0;
+        } catch (IOException | NumberFormatException e) {
+            LOG.warning("Could not read the PI WEB session daemon pid from " + marker, e);
+            return;
+        }
+        if (pid <= 0) {
+            return;
+        }
+        ProcessHandle.of(pid).filter(ProcessHandle::isAlive).ifPresent(handle -> {
+            String command = handle.info().commandLine().orElse("");
+            if (!command.contains("pi-web-cn") || !command.contains("sessiond")) {
+                return;
+            }
+            LOG.info("Stopping the orphaned PI WEB session daemon (pid " + pid
+                    + ") of instance " + instance.id() + " before launching");
+            handle.descendants().forEach(ProcessHandle::destroyForcibly);
+            handle.destroyForcibly();
+            try {
+                handle.onExit().get(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+                // Still running: leave the marker alone rather than pretend.
+            }
+        });
+        if (ProcessHandle.of(pid).filter(ProcessHandle::isAlive).isEmpty()) {
+            try {
+                Files.deleteIfExists(marker);
+            } catch (IOException e) {
+                LOG.info("Could not remove the PI WEB ownership marker " + marker + ": " + e.getMessage());
+            }
+        }
     }
 
     /// The Node.js that runs PI WEB's wrapper.
@@ -1446,9 +1514,7 @@ public final class BrandRuntime {
     }
 
     private static @Nullable Integer awaitPiWebReady(String id, Process process, int port, int daemonPort) {
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(2))
-                .build();
+        HttpClient client = loopbackClient();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(PI_WEB_READY_TIMEOUT_SECONDS);
         boolean webReady = false;
         boolean daemonReady = false;
@@ -1472,15 +1538,34 @@ public final class BrandRuntime {
                 return null;
             }
         }
-        ERRORS.put(id, "pi-web did not become ready within " + PI_WEB_READY_TIMEOUT_SECONDS
+        String reason = "pi-web did not become ready within " + PI_WEB_READY_TIMEOUT_SECONDS
                 + " seconds (web " + (webReady ? "up" : "not answering")
                 + ", session daemon " + (daemonReady ? "up" : "not answering")
-                + "). The instance log says where it stopped.");
+                + "). The instance log says where it stopped.";
+        ERRORS.put(id, reason);
         STATES.put(id, State.ERROR);
+        // The instance card shows this reason, but the panel log is where an
+        // operator starts; a silent timeout looks like a crash.
+        LOG.warning(reason);
         return null;
     }
 
-    private static boolean answers(HttpClient client, String url) {
+    /// The HTTP client every loopback readiness probe uses.
+    ///
+    /// HTTP/1.1 is deliberate. The JDK client defaults to HTTP/2 and, on a
+    /// cleartext URL, opens with `Upgrade: h2c`; pi-web's Fastify server
+    /// answers that upgrade with 400. A probe on the default client therefore
+    /// never sees the 200 the endpoint serves, the launch waits out its whole
+    /// readiness timeout, and the panel declares a healthy instance dead.
+    /// Browsers and curl speak HTTP/1.1 here; the probe should too.
+    static HttpClient loopbackClient() {
+        return HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(2))
+                .build();
+    }
+
+    static boolean answers(HttpClient client, String url) {
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(url))
                     .timeout(Duration.ofSeconds(2))
@@ -1864,7 +1949,7 @@ public final class BrandRuntime {
     /// storage and platform components that stay degraded while a messaging
     /// platform reconnects, which has nothing to do with "is the web UI up".
     private static @Nullable Integer awaitHermesHealth(String id, Process process, int port) {
-        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+        HttpClient client = loopbackClient();
         HttpRequest request = HttpRequest.newBuilder(
                         URI.create("http://127.0.0.1:" + port + "/api/status"))
                 .timeout(Duration.ofSeconds(3))
