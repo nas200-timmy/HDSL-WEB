@@ -30,6 +30,9 @@ MC 服务端第一版功能完成，作为一条明确的分界。此后 MC 相�
   路由走查询串，所以不做页面改写、不注入 runtime shim。
 - 安装后自检 `pi-web-sessiond --check-runtime` 判定浏览器终端（`node-pty`）是否
   可用，结果写入 release.json；Pi TUI 不受影响。
+- 属主：`PI_WEB_DATA_DIR` 不预建——默认 `$HOME/.pi-web` 由 agent 自己创建；wrapper
+  写在已交接给 agent 的实例 home 下并显式 0644，避免 root 属主目录/文件在干净容器里
+  造成 `EACCES`（与 v0.6.45 的 pnpm 属主问题同一类）。
 
 **插件/模组：中文搜索、分页、批量管理与安装元数据**
 

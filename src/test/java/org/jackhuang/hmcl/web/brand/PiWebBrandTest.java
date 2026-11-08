@@ -130,7 +130,7 @@ class PiWebBrandTest {
 
         assertEquals(5, plan.command().size(), plan.command().toString());
         Path wrapper = Path.of(plan.command().get(1));
-        assertEquals("pi-web-wrapper.mjs", wrapper.getFileName().toString());
+        assertEquals(".pi-web-wrapper.mjs", wrapper.getFileName().toString());
         assertTrue(Files.isRegularFile(wrapper));
         String script = Files.readString(wrapper, StandardCharsets.UTF_8);
         assertTrue(script.contains("/health"), "the wrapper waits for the daemon before the gateway");
@@ -147,6 +147,12 @@ class PiWebBrandTest {
         assertEquals(String.valueOf(plan.port()), plan.environment().get("PI_WEB_PORT"));
         assertEquals("1", plan.environment().get("PI_WEB_SKIP_VERSION_CHECK"),
                 "the panel owns the release; pi-web must not update itself");
+        // The tool's state lives under the instance home, which the launcher hands
+        // to the agent; a root-created data directory is the uid bug this avoids.
+        assertFalse(plan.environment().containsKey("PI_WEB_DATA_DIR"));
+        assertTrue(wrapper.startsWith(manager.homeDirectory(instance)));
+        assertEquals("rw-r--r--", java.nio.file.attribute.PosixFilePermissions.toString(
+                Files.getPosixFilePermissions(wrapper)), "node reads the wrapper as the agent");
         assertTrue(plan.environment().get("PI_WEB_PI_PACKAGE_DIR").contains(Brand.PI_SDK_PACKAGE));
     }
 

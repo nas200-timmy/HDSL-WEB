@@ -446,10 +446,13 @@ peer 范围覆盖多个 Pi 大版本，而按 SDK `VERSION` 分支的适配（�
 说 web 的就绪不等 daemon，只等 web 会把"会话永远加载不出来"标成 running。
 
 端口在面板侧预分配，走回环 TCP 而不是 unix socket，避免品牌实例目录过深触发 socket
-路径长度上限：
+路径长度上限。**数据目录不写进环境变量**：pi-web 的默认值是 `$HOME/.pi-web`，而 HOME
+就是实例 home（已交给 agent），所以目录由将要用它的那个 uid 自己创建——面板预先建一个
+root 属主的目录，正是容器里 `EACCES` 那一类 uid bug。wrapper 也写在实例 home 下
+（`~/.pi-web-wrapper.mjs`，0644），因为 home 已交给 agent，`node` 读得到；实例目录本身
+不保证 agent 可穿越。
 
 ```
-PI_WEB_DATA_DIR=<instance>/pi-web-data
 PI_WEB_SESSIOND_HOST=127.0.0.1
 PI_WEB_SESSIOND_PORT=<daemon 端口>
 PI_WEB_SESSIOND_URL=http://127.0.0.1:<daemon 端口>

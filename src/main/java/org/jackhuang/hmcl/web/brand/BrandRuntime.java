@@ -1274,6 +1274,15 @@ public final class BrandRuntime {
     /// `PI_WEB_SESSIOND_PORT` (loopback TCP rather than a unix socket, so the
     /// path-length limit of a deep brand instance directory cannot break it) and
     /// the web process reaches it through `PI_WEB_SESSIOND_URL`.
+    ///
+    /// **Ownership.** The wrapper is written under the instance **home**, not the
+    /// instance directory: the home is the directory `handInstanceDirsToAgent`
+    /// already hands to the agent (2775, agent-owned), so `node` can read the
+    /// script there even in a panel that runs as root with a restrictive umask.
+    /// The tool's own state is left to the tool — `PI_WEB_DATA_DIR` is not set, so
+    /// pi-web creates `~/.pi-web` itself, as the agent, inside that same home.
+    /// A root-created data directory the agent only half-owned is exactly the
+    /// class of bug this avoids.
     private static final String PI_WEB_WRAPPER = """
             import { spawn } from "node:child_process";
 
@@ -1343,11 +1352,8 @@ public final class BrandRuntime {
     ///                   terminal-only release before getting here)
     static LaunchPlan piWebPlan(BrandInstanceManager manager, BrandInstance instance, Path packageDir)
             throws IOException {
-        Path instanceDir = manager.instanceDirectory(instance.id());
         Path home = manager.homeDirectory(instance);
-        Path data = instanceDir.resolve("pi-web-data");
-        Files.createDirectories(data);
-        Files.createDirectories(home);
+        Privileges.prepareAgentDirectory(home, Privileges.AGENT_SHARED_DIRECTORY);
 
         String scoped = "node_modules/@chainingintention/pi-web-cn/dist/server/";
         Path daemonEntry = packageDir.resolve(scoped + "sessiond.js");
@@ -1362,8 +1368,9 @@ public final class BrandRuntime {
         while (webPort == daemonPort) {
             webPort = allocatePort();
         }
-        Path wrapper = instanceDir.resolve("pi-web-wrapper.mjs");
+        Path wrapper = home.resolve(".pi-web-wrapper.mjs");
         Files.writeString(wrapper, PI_WEB_WRAPPER, StandardCharsets.UTF_8);
+        makeReadableByAgent(wrapper);
 
         List<String> command = List.of(
                 piWebNode(instance).toString(),
@@ -1373,7 +1380,9 @@ public final class BrandRuntime {
                 String.valueOf(daemonPort));
 
         java.util.Map<String, String> environment = new java.util.LinkedHashMap<>();
-        environment.put("PI_WEB_DATA_DIR", data.toString());
+        // No PI_WEB_DATA_DIR: the default is `$HOME/.pi-web`, and HOME is the
+        // instance home. Letting the tool create it means the owner is the uid
+        // that will write to it.
         environment.put("PI_WEB_SESSIOND_HOST", "127.0.0.1");
         environment.put("PI_WEB_SESSIOND_PORT", String.valueOf(daemonPort));
         environment.put("PI_WEB_SESSIOND_URL", "http://127.0.0.1:" + daemonPort);
@@ -1420,6 +1429,22 @@ public final class BrandRuntime {
     /// so a launch is only ready when the daemon's `/health` answers too.
     /// Without the second poll, "running" would be a page whose sessions never
     /// load.
+    /// Gives a panel-written file a mode the agent can read, whatever the
+    /// umask. Ownership stays the panel's (the file is rewritten on launch);
+    /// only the mode is widened, because `node` runs as the agent.
+    private static void makeReadableByAgent(Path file) {
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            return;
+        }
+        try {
+            Files.setPosixFilePermissions(file,
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"));
+        } catch (IOException | UnsupportedOperationException e) {
+            LOG.warning("Could not make " + file + " readable: " + e.getMessage());
+        }
+    }
+
     private static @Nullable Integer awaitPiWebReady(String id, Process process, int port, int daemonPort) {
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(2))
