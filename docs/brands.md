@@ -495,6 +495,15 @@ pi-web 的客户端用 `base: "./"` 构建，所有请求经 `appUrl.ts` 解析�
   python3/make/g++）。失败只影响网页内置终端，不影响 Pi TUI 与网页聊天。
 - **会话恢复**：`PiTui` 暂不接 resume 参数（Pi CLI 的恢复 flag 未经真机验证），终端
   每次开新会话。
+- **浏览器终端（重要）**：`pi-web.terminal` 是上游**必需**插件，普通启动不能禁用
+  （`pi-web plugins safe-start set none` 是恢复模式，会同时停掉其它服务端插件）。它给的
+  是 daemon 同 uid 的交互式 shell，cwd 为实例 workspace；**面板的五道终端门（E-Stop /
+  总开关 / HTTPS / 开发者口令 / 提权）不覆盖它**，它只有 pi-web 自己的访问密码 + 面板
+  会话。因此：
+  - 不要把 pi-web 的端口直接暴露，实例只能经 `/i/<id>/` 访问；首次打开必须设访问密码；
+  - agent uid 能看到所有实例的数据，不应有 sudo / docker 等价权限；
+  - 它与 agent 的执行能力是同一个边界：关掉网页终端也不会阻止 agent 运行命令；
+  - 需要与面板终端同等门禁时，只能不部署 PI WEB，或把它隔离到独立 uid / 容器。
 
 ## 已知限制
 

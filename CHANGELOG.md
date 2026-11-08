@@ -39,6 +39,9 @@ MC 服务端第一版功能完成，作为一条明确的分界。此后 MC 相�
   失败路径同时改为收掉整棵进程树，并在下次启动前清理 marker 指向的旧 sessiond，
   避免 `SessiondStateOwnershipConflictError` 把重试也堵死。
 
+- 文档：PI WEB 的浏览器终端是上游必需插件，门禁只有它自己的访问密码；在
+  `docs/security.md`、`docs/brands.md`、`docs/web-shell.md` 写明这条边界。
+
 **插件/模组：中文搜索、分页、批量管理与安装元数据**
 
 - 搜索只写 `categories:paper`，把 Bukkit/Spigot 插件全滤掉了；改成 OR
