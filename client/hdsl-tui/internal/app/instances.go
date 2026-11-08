@@ -23,13 +23,17 @@ type group struct {
 // Octop is deliberately absent: it has no terminal, so a client whose only job
 // is attaching to one would be offering a dead end. Its instances stay on the
 // web page.
-var brandOrder = []string{"kimi", "opencode", "claude-web", "zcode"}
+var brandOrder = []string{"kimi", "opencode", "claude-web", "pi-web", "zcode"}
 
 func brandTitle(brand string) string {
-	if brand == "zcode" {
+	switch brand {
+	case "zcode":
 		return "ZCode 实例（实验）"
+	case "pi-web":
+		return "PI WEB 实例（实验）"
+	default:
+		return brand + " 实例"
 	}
-	return brand + " 实例"
 }
 
 func (a *App) loadGroups(ctx context.Context) ([]group, bool) {

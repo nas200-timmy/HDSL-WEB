@@ -109,6 +109,9 @@ func TestBrandNormalisation(t *testing.T) {
 	if got := normaliseBrand("kimi"); got != "kimi" {
 		t.Errorf("normaliseBrand(kimi) = %q", got)
 	}
+	if got := normaliseBrand("pi-web"); got != "pi-web" {
+		t.Errorf("normaliseBrand(pi-web) = %q", got)
+	}
 	if got := normaliseBrand(""); got != "" {
 		t.Errorf("normaliseBrand(\"\") = %q", got)
 	}

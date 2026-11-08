@@ -42,6 +42,12 @@ MC 服务端第一版功能完成，作为一条明确的分界。此后 MC 相�
 - 文档：PI WEB 的浏览器终端是上游必需插件，门禁只有它自己的访问密码；在
   `docs/security.md`、`docs/brands.md`、`docs/web-shell.md` 写明这条边界。
 
+**终端客户端：补上 PI WEB 分类**
+
+- `hdsl-tui` 的 `--brand`、实例选择器与帮助文本增加 `pi-web`，终端仍走同一份
+  `/api/brands/pi-web/instances/<id>/terminal` 契约；`--resume` 照旧透传（服务端
+  的 Pi TUI 暂未接恢复参数，不报错）。
+
 **插件/模组：中文搜索、分页、批量管理与安装元数据**
 
 - 搜索只写 `categories:paper`，把 Bukkit/Spigot 插件全滤掉了；改成 OR

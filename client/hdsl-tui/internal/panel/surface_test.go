@@ -12,6 +12,7 @@ func TestSurfacePaths(t *testing.T) {
 		"kimi":       "/api/brands/kimi/instances",
 		"opencode":   "/api/brands/opencode/instances",
 		"claude-web": "/api/brands/claude-web/instances",
+		"pi-web":     "/api/brands/pi-web/instances",
 		"zcode":      "/api/zcode/instances",
 	}
 	for brand, want := range listCases {
@@ -25,6 +26,7 @@ func TestSurfacePaths(t *testing.T) {
 		"dsh":        "/api/instances/i1/terminal",
 		"kimi":       "/api/brands/kimi/instances/i1/terminal",
 		"claude-web": "/api/brands/claude-web/instances/i1/terminal",
+		"pi-web":     "/api/brands/pi-web/instances/i1/terminal",
 		"zcode":      "/api/zcode/instances/i1/terminal",
 	}
 	for brand, want := range terminalCases {
