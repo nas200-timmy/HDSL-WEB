@@ -149,6 +149,14 @@ public enum Brand {
     /// The Pi SDK package a PI WEB release runs on.
     public static final String PI_SDK_PACKAGE = "@earendil-works/pi-coding-agent";
 
+    /// The first Hermes release that pins Node 26.
+    ///
+    /// 0.22.5's `engines.node` was `^22.22.0 || ^24.11.0 || >=26.0.0`; 0.22.6
+    /// tightened it to `>=26`, and the repository's `.npmrc` sets
+    /// `engine-strict=true`, so `npm ci` **fails** on Node 22/24 instead of
+    /// warning. The panel can say so before a four-minute source download.
+    public static final String HERMES_NODE_26_FROM = "0.22.6";
+
     /// The verified pi-web ↔ Pi SDK pairs.
     ///
     /// A pair is a contract, not a preference: PI WEB's peer range covers
@@ -329,6 +337,23 @@ public enum Brand {
     /// @return the SDK version, or `null` for other brands and unverified pairs
     public @Nullable String pairedSdkVersion(String version) {
         return this == PI_WEB && version != null ? PI_WEB_PAIRS.get(version) : null;
+    }
+
+    /// The Node requirement a release declares, known without installing it.
+    ///
+    /// Only Hermes has a threshold the panel can know up front: from
+    /// [#HERMES_NODE_26_FROM] on, every release requires Node 26. Older Hermes
+    /// releases still accept Node 22/24, so they answer `null` (no hint), not
+    /// "any version".
+    ///
+    /// @param version the release version
+    /// @return the range, or `null` when there is nothing to warn about
+    public @Nullable String knownNodeRequirement(String version) {
+        if (this != HERMES || version == null || version.isBlank()) {
+            return null;
+        }
+        return org.jackhuang.hmcl.dsh.NodeSemver.satisfies(version, ">=" + HERMES_NODE_26_FROM)
+                ? ">=26" : null;
     }
 
     /// Whether this brand offers a version in its picker.

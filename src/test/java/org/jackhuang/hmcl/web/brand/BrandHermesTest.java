@@ -18,6 +18,12 @@
 package org.jackhuang.hmcl.web.brand;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -46,6 +52,29 @@ class BrandHermesTest {
             assertFalse(other.companionProcess(), other.name());
             assertEquals(10, other.stopWaitSeconds(), other.name());
         }
+    }
+
+    @Test
+    void node26IsRequiredFrom0226() {
+        // 0.22.5 still allowed Node 22/24; 0.22.6 tightened engines.node to
+        // `>=26` and upstream's .npmrc makes that a hard npm ci failure.
+        assertNull(Brand.HERMES.knownNodeRequirement("0.22.5"));
+        assertNull(Brand.HERMES.knownNodeRequirement("0.21.9"));
+        assertEquals(">=26", Brand.HERMES.knownNodeRequirement("0.22.6"));
+        assertEquals(">=26", Brand.HERMES.knownNodeRequirement("0.22.7"));
+        assertEquals(">=26", Brand.HERMES.knownNodeRequirement("1.0.0"));
+        // Other brands have no such threshold and answer null everywhere.
+        assertNull(Brand.KIMI.knownNodeRequirement("0.22.6"));
+    }
+
+    @Test
+    void anUnpackedReleaseDeclaresItsNodeRange(@TempDir Path release) throws IOException {
+        Files.writeString(release.resolve("package.json"),
+                "{\"name\":\"hermes-agent\",\"engines\":{\"node\":\">=26\"}}\n",
+                StandardCharsets.UTF_8);
+        assertEquals(">=26", BrandNodeRequirement.ofDirectory(release));
+        // No package.json / no engines is "no declared constraint", not an error.
+        assertNull(BrandNodeRequirement.ofDirectory(release.resolve("missing")));
     }
 
     @Test

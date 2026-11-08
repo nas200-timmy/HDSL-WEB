@@ -589,9 +589,21 @@ export interface BrandVersions {
     webAvailable?: boolean;
     /** 仅 pi-web：安装时自检的浏览器终端能力（node-pty） */
     ptyAvailable?: boolean;
+    /** 这个 release 声明的 engines.node（目前只有 Hermes 0.22.6+ 是 >=26） */
+    nodeRequirement?: string;
+    /** 该声明与当前品牌 Node 是否兼容 */
+    nodeCompatible?: boolean;
   }[];
   /** 仅 pi-web：当前推荐版本配对的 Pi SDK */
   pairedSdk?: string;
+  /** 各版本声明的 engines.node（版本 → 范围），用于在选项与卡片上标「需 Node 26」 */
+  nodeRequirements?: Record<string, string>;
+  /** 各版本的要求是否被当前品牌 Node 满足 */
+  nodeCompatibility?: Record<string, boolean>;
+  /** 最新版本的要求是否满足；无要求时缺省 */
+  latestNodeCompatible?: boolean;
+  /** 这台机器上该品牌当前解析到的 Node */
+  node?: { version?: string | null; source?: string };
   /** 新建实例的推荐默认版本；一个版本都没装时为 null */
   default: string | null;
   /// 这个平台上能不能装（目前只有 Hermes 在 Windows 上为 false）。

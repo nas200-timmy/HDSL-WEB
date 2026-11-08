@@ -86,6 +86,24 @@ public final class BrandNodeRequirement {
         }
     }
 
+    /// The declared range of a release directory that is not installed yet
+    /// (the installer reads it right after unpacking the source).
+    ///
+    /// @param releaseDir the unpacked release directory
+    /// @return the range, or `null` when the source declares none
+    public static @Nullable String ofDirectory(Path releaseDir) {
+        Path file = releaseDir.resolve("package.json");
+        if (!Files.isRegularFile(file)) {
+            return null;
+        }
+        try {
+            return read(file);
+        } catch (IOException | RuntimeException e) {
+            LOG.warning("Could not read the Node requirement of " + file, e);
+            return null;
+        }
+    }
+
     private static @Nullable String read(Path file) throws IOException {
         JsonElement parsed = JsonParser.parseString(Files.readString(file));
         if (!parsed.isJsonObject()) {

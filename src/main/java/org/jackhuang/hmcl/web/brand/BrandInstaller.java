@@ -18,6 +18,9 @@
 package org.jackhuang.hmcl.web.brand;
 
 import org.jackhuang.hmcl.dsh.DshNodeRuntime;
+import org.jackhuang.hmcl.dsh.NodeRuntime;
+import org.jackhuang.hmcl.dsh.NodeRuntimeManager;
+import org.jackhuang.hmcl.dsh.NodeSemver;
 import org.jackhuang.hmcl.dsh.NpmRegistry;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.io.Links;
@@ -1803,6 +1806,13 @@ public final class BrandInstaller {
             throw new BrandException("Hermes has no build for " + OperatingSystem.CURRENT_OS
                     + "/" + Architecture.CURRENT_ARCH);
         }
+        String knownRequirement = brand.knownNodeRequirement(version);
+        if (knownRequirement != null) {
+            // Fail before the four-minute source download, not after npm ci:
+            // upstream's .npmrc sets engine-strict, so a wrong Node is a hard
+            // failure rather than a warning.
+            requireHermesNode(brand, version, knownRequirement);
+        }
         if (Files.exists(target)) {
             // In place, never renamed: an editable venv carries absolute paths.
             FileUtils.deleteDirectoryQuietly(target);
@@ -1937,10 +1947,22 @@ public final class BrandInstaller {
             runChecked(command, target, Map.of(), log, message, "writing the install stamp");
         });
 
-        DshNodeRuntime node = DshNodeRuntime.detect()
-                .or(DshNodeRuntime::detectManaged)
-                .orElseThrow(() -> new BrandException("Node.js was not found on PATH and no panel-managed "
-                        + "runtime is installed; building Hermes needs one (Settings -> Node.js)"));
+        // The source declares its own engines.node; prefer that over the static
+        // threshold, and use the Node this brand resolves to — the same one a
+        // launch will use. Silently building on another runtime would only move
+        // the failure to "the server will not start".
+        String declared = BrandNodeRequirement.ofDirectory(target);
+        String requirement = declared != null ? declared : knownRequirement;
+        DshNodeRuntime node;
+        if (requirement != null) {
+            node = requireHermesNode(brand, version, requirement);
+            message.accept("构建用 Node " + node.nodeVersion() + "（要求 " + requirement + "）");
+        } else {
+            node = DshNodeRuntime.detect()
+                    .or(DshNodeRuntime::detectManaged)
+                    .orElseThrow(() -> new BrandException("Node.js was not found on PATH and no panel-managed "
+                            + "runtime is installed; building Hermes needs one (Settings -> Node.js)"));
+        }
         Map<String, String> nodeEnv = new HashMap<>(node.pathEnvironment());
         nodeEnv.put("npm_config_registry", NpmRegistry.effective().registry());
         Path products = brandRoot.resolve("products").resolve(version);
@@ -2003,6 +2025,49 @@ public final class BrandInstaller {
             }
         }));
         message.report("Installed Hermes " + version + " from source · 100%", 1.0);
+    }
+
+    /// The Node this brand resolves to, checked against a release's declared
+    /// range.
+    ///
+    /// The runtime must be the one a launch would use: Hermes' launcher and its
+    /// build share PATH, and upstream's `engine-strict` turns the mismatch into
+    /// an `npm ci` failure. Building on a different runtime would make the
+    /// install succeed and the start fail — the failure the panel exists to
+    /// prevent, just moved one step later.
+    private static DshNodeRuntime requireHermesNode(Brand brand, String version, String range)
+            throws BrandException {
+        org.jackhuang.hmcl.dsh.NodeSelection.Resolution current = BrandRuntime.currentNode(brand);
+        if (current.runtime() != null
+                && NodeSemver.satisfies(current.runtime().nodeVersion(), range)) {
+            return current.runtime();
+        }
+        throw new BrandException(hermesNodeGuidance(version, range, current));
+    }
+
+    /// One actionable sentence: what the release needs, what the panel would
+    /// actually run, which installed runtimes would do, and where to switch.
+    private static String hermesNodeGuidance(String version, String range,
+                                             org.jackhuang.hmcl.dsh.NodeSelection.Resolution current) {
+        List<String> compatible = new ArrayList<>();
+        for (NodeRuntime runtime : NodeRuntimeManager.listInstalled()) {
+            if (NodeSemver.satisfies(runtime.version(), range)) {
+                compatible.add(runtime.version() + "（面板托管）");
+            }
+        }
+        if (DshNodeRuntime.detect()
+                .filter(runtime -> NodeSemver.satisfies(runtime.nodeVersion(), range)).isPresent()) {
+            compatible.add("PATH 上的 Node");
+        }
+        String now = current.version() == null ? "未找到可用的 Node" : current.version();
+        String fix = compatible.isEmpty()
+                ? "请到「设置 → Node.js」安装 Node 26，再把品牌/实例的 Node 运行时设成它"
+                : "面板里已有满足要求的 " + String.join("、", compatible)
+                        + "：到「设置 → 品牌实例」把 hermes 的 Node 运行时切到它"
+                        + "（或在该实例上单独指定）";
+        return "Hermes " + version + " 要求 Node " + range
+                + "（上游 .npmrc 开了 engine-strict，Node 版本不对时 npm ci 会直接失败）。"
+                + "当前使用的是 " + now + "。" + fix + "，然后重新安装。";
     }
 
     /// The interpreter inside an unpacked CPython artifact (`python/bin/python3.14`

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { launchBrandInstance, stopBrandInstance } from "../actions";
 import { api } from "../api";
 import { withBase } from "../base";
@@ -64,14 +65,25 @@ function stateText(state: string): string {
 /// 版本选项的文案：`2.1.1 最新 未装` / `2.1.0 已装`。
 /// 用空格而不是全角括号——行内那个选择器在手机上只有 120 来像素宽，
 /// 带括号会被裁成「2.1.0（已装」，反而不如短一档的写法好认。
-function versionOption(version: string, latest: boolean, installed: boolean): string {
+function versionOption(
+  version: string,
+  latest: boolean,
+  installed: boolean,
+  nodeRequirement?: string,
+): string {
   return [
     version,
     latest ? I18N["dsh.brand.latest"] : "",
     installed ? I18N["dsh.brand.version.installed"] : I18N["dsh.brand.version.uninstalled"],
+    nodeRequirement ? `需 Node ${nodeRangeLabel(nodeRequirement)}` : "",
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+/// `>=26` → `26+`；其它范围原样显示。
+function nodeRangeLabel(range: string): string {
+  return range.startsWith(">=") ? `${range.slice(2).trim()}+` : range;
 }
 
 /// 四个品牌键：zcode 是实验品类（自己的 REST 族），
@@ -328,6 +340,7 @@ function VersionCard({
   const [installing, setInstalling] = useState(false);
   const [installStatus, setInstallStatus] = useState<BrandInstallStatus | null>(null);
   const [installLogOpen, setInstallLogOpen] = useState(false);
+  const nav = useNavigate();
   const [installLog, setInstallLog] = useState<string[]>([]);
   const [installTaskId, setInstallTaskId] = useState<string | null>(null);
   const [installStartedAt, setInstallStartedAt] = useState<number | null>(null);
@@ -455,6 +468,10 @@ function VersionCard({
   /// 下拉当前值：默认选 /versions 的 latest
   const selected = picked ?? versions?.latest ?? catalog[0] ?? "";
   const selectedInstalled = installed.some((r) => r.version === selected);
+  const hermesLatestRequirement = brand === "hermes"
+    ? versions?.nodeRequirements?.[versions?.latest ?? ""]
+    : undefined;
+  const hermesNodeCompatible = versions?.latestNodeCompatible !== false;
 
   const installFraction = installStatus && installStatus.fraction >= 0 ? installStatus.fraction : null;
   const installPercent = installFraction === null ? null : Math.round(installFraction * 100);
@@ -600,6 +617,25 @@ function VersionCard({
         </div>
       )}
 
+      {!open && brand === "hermes" && hermesLatestRequirement && !hermesNodeCompatible && (
+        <div
+          className="hint error"
+          style={{ marginTop: 4, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+        >
+          <span style={{ flex: 1, fontSize: 12, lineHeight: 1.5 }}>
+            最新版本 <b>{versions?.latest}</b> 需要 Node {nodeRangeLabel(hermesLatestRequirement)}；
+            当前是 {versions?.node?.version ?? "未找到"}。先到「设置 → Node.js」装 26，
+            再到「设置 → 品牌实例」把 Hermes 的默认 Node 设为 26；不升就选 0.22.5 及更早版本。
+          </span>
+          <button className="btn btn-text" style={{ height: 26 }} onClick={() => nav("/settings?tab=node")}>
+            装 Node 26
+          </button>
+          <button className="btn btn-text" style={{ height: 26 }} onClick={() => nav("/settings?tab=brands")}>
+            设置 Hermes 运行时
+          </button>
+        </div>
+      )}
+
       {open && (
         // 展开态自带限高与滚动：内容再长也不会把下面的实例卡挤成零高
         <div
@@ -633,6 +669,7 @@ function VersionCard({
                     v,
                     v === versions?.latest,
                     installed.some((r) => r.version === v),
+                    versions?.nodeRequirements?.[v],
                   )}
                 </option>
               ))}
@@ -689,6 +726,11 @@ function VersionCard({
                   {r.webAvailable !== false && r.ptyAvailable === false && (
                     <span className="tag plain">{I18N["dsh.brand.pi-web.pty.missing"]}</span>
                   )}
+                  {r.nodeRequirement && (
+                    <span className={`tag ${r.nodeCompatible === false ? "failed" : "plain"}`}>
+                      需 Node {nodeRangeLabel(r.nodeRequirement)}
+                    </span>
+                  )}
                   {r.current && <span className="tag running">{I18N["dsh.brand.current"]}</span>}
                 </div>
               ))}
@@ -733,6 +775,38 @@ function VersionCard({
               </span>
             </div>
           )}
+
+          {brand === "hermes" && versions?.node && (() => {
+            const latest = versions.latest;
+            const requirement = latest ? versions.nodeRequirements?.[latest] : undefined;
+            if (!requirement) return null;
+            const compatible = versions.latestNodeCompatible !== false;
+            const current = versions.node?.version ?? "未找到";
+            return (
+              <div className={`hint ${compatible ? "info" : "error"}`} style={{ display: "grid", gap: 6 }}>
+                <span style={{ lineHeight: 1.6 }}>
+                  最新版本 <b>{latest}</b> 要求 <b>Node {nodeRangeLabel(requirement)}</b>；
+                  这台面板当前是 <b>{current}</b>。
+                  {!compatible && (
+                    <> 新版本在 Node 22/24 上会直接构建失败（上游 `engine-strict`，`npm ci` 报错），
+                      不是网络问题。</>
+                  )}
+                </span>
+                <span style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <button className="btn btn-raised" style={{ height: 28 }} onClick={() => nav("/settings?tab=node")}>
+                    装 Node 26
+                  </button>
+                  <button className="btn btn-text" style={{ height: 28 }} onClick={() => nav("/settings?tab=brands")}>
+                    设置 Hermes 的默认 Node
+                  </button>
+                  <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+                    装完 26 还要在「品牌实例」里把 Hermes 的默认 Node 指到 26（或在该实例上单独指定）；
+                    不升 Node 就选 0.22.5 及更早版本。
+                  </span>
+                </span>
+              </div>
+            );
+          })()}
 
           {versionsError && (
             <div className="hint error" style={{ display: "grid", gap: 8 }}>
@@ -1562,7 +1636,8 @@ function InstancesCard({
                     >
                       {catalog.map((v) => (
                         <option key={v} value={v}>
-                          {versionOption(v, false, installed.some((r) => r.version === v))}
+                          {versionOption(v, false, installed.some((r) => r.version === v),
+                            versions?.nodeRequirements?.[v])}
                         </option>
                       ))}
                       {/* 上游撤掉的版本会不在目录里：补一条占位，免得选择器回落到别的版本 */}

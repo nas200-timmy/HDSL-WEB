@@ -314,6 +314,39 @@ public final class BrandApiServlet extends HttpServlet {
         versions.forEach(array::add);
         body.add("versions", array);
         body.addProperty("latest", BrandCatalog.latest(brand));
+        // Node requirements: the picker can warn *before* a four-minute download.
+        // Installed releases answer from their own package.json; uninstalled ones
+        // from the brand's known threshold (Hermes 0.22.6+ -> >=26).
+        org.jackhuang.hmcl.dsh.NodeSelection.Resolution currentNode = BrandRuntime.currentNode(brand);
+        JsonObject nodeRequirements = new JsonObject();
+        JsonObject nodeCompatibility = new JsonObject();
+        for (String version : versions) {
+            String requirement = nodeRequirementFor(brand, ref, version);
+            if (requirement == null) {
+                continue;
+            }
+            nodeRequirements.addProperty(version, requirement);
+            nodeCompatibility.addProperty(version, currentNode.version() != null
+                    && org.jackhuang.hmcl.dsh.NodeSemver.satisfies(currentNode.version(), requirement));
+        }
+        if (nodeRequirements.size() > 0) {
+            body.add("nodeRequirements", nodeRequirements);
+            body.add("nodeCompatibility", nodeCompatibility);
+            String latest = BrandCatalog.latest(brand);
+            String latestRequirement = nodeRequirementFor(brand, ref, latest);
+            if (latestRequirement != null) {
+                body.addProperty("latestNodeCompatible", currentNode.version() != null
+                        && org.jackhuang.hmcl.dsh.NodeSemver.satisfies(currentNode.version(), latestRequirement));
+            }
+        }
+        JsonObject nodeInfo = new JsonObject();
+        if (currentNode.version() == null) {
+            nodeInfo.add("version", JsonNull.INSTANCE);
+        } else {
+            nodeInfo.addProperty("version", currentNode.version());
+        }
+        nodeInfo.addProperty("source", currentNode.source().name().toLowerCase(java.util.Locale.ROOT));
+        body.add("node", nodeInfo);
         if (brand == Brand.PI_WEB) {
             String paired = brand.pairedSdkVersion(BrandCatalog.latest(brand));
             if (paired != null) {
@@ -326,6 +359,7 @@ public final class BrandApiServlet extends HttpServlet {
             item.addProperty("version", release.version());
             item.addProperty("current", release.current());
             addReleaseAudit(item, brand, java.nio.file.Path.of(release.path()));
+            addNodeRequirement(item, brand, ref, release.version());
             installed.add(item);
         }
         body.add("releases", installed);
@@ -343,11 +377,35 @@ public final class BrandApiServlet extends HttpServlet {
             item.addProperty("path", release.path());
             item.addProperty("current", release.current());
             addReleaseAudit(item, brand, java.nio.file.Path.of(release.path()));
+            addNodeRequirement(item, brand, ref, release.version());
             array.add(item);
         }
         JsonObject body = new JsonObject();
         body.add("releases", array);
         Json.write(response, body);
+    }
+
+    /// The `engines.node` a release declares, for the page's version card.
+    ///
+    /// Installed releases answer from their own `package.json`; uninstalled ones
+    /// from [Brand#knownNodeRequirement] (Hermes 0.22.6+ is `>=26`). The
+    /// compatibility bit is computed against the Node this brand resolves to
+    /// right now, so the UI does not have to compare ranges itself.
+    private static void addNodeRequirement(JsonObject item, Brand brand, PathRef ref, String version) {
+        String requirement = nodeRequirementFor(brand, ref, version);
+        if (requirement == null) {
+            return;
+        }
+        item.addProperty("nodeRequirement", requirement);
+        org.jackhuang.hmcl.dsh.NodeSelection.Resolution node = BrandRuntime.currentNode(brand);
+        item.addProperty("nodeCompatible", node.version() != null
+                && org.jackhuang.hmcl.dsh.NodeSemver.satisfies(node.version(), requirement));
+    }
+
+    private static @Nullable String nodeRequirementFor(Brand brand, PathRef ref, String version) {
+        java.nio.file.Path release = ref.root().resolve(BrandInstaller.RELEASES_DIR).resolve(version);
+        String installed = BrandNodeRequirement.ofDirectory(release);
+        return installed != null ? installed : brand.knownNodeRequirement(version);
     }
 
     /// Whether an installed release can start the brand's web process.

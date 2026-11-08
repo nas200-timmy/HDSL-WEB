@@ -488,6 +488,17 @@ public final class BrandRuntime {
         }
     }
 
+    /// The Node runtime this brand resolves to right now (the same selector a
+    /// launch uses), so the version picker can say whether a release's declared
+    /// range is satisfied before anyone clicks install.
+    ///
+    /// @param brand the brand
+    /// @return the resolution; `runtime()` is `null` when nothing usable exists
+    static org.jackhuang.hmcl.dsh.NodeSelection.Resolution currentNode(Brand brand) {
+        return org.jackhuang.hmcl.dsh.NodeSelection.resolve(
+                org.jackhuang.hmcl.dsh.NodeSelection.parse(null), nodeFallback(brand), false);
+    }
+
     /// The brand an instance belongs to, when this runtime knows it.
     ///
     /// @param id the instance id
