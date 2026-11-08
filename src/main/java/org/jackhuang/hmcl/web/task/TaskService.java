@@ -477,7 +477,15 @@ public final class TaskService {
                     throw new InterruptedException("cancelled");
                 }
                 String message = callWithApprovals(task, work, approvalDecider);
-                task.finish(TaskState.DONE, message == null ? "" : message, null);
+                // A cancel may land while the work is between its own cancellation
+                // checks, in which case the work returns a normal message. The
+                // outcome is still "cancelled": reporting `done` would tell the
+                // page an install the operator stopped had succeeded.
+                if (task.isCancelled()) {
+                    task.finish(TaskState.FAILED, "cancelled", "cancelled");
+                } else {
+                    task.finish(TaskState.DONE, message == null ? "" : message, null);
+                }
             } finally {
                 if (installBound) {
                     installSlots.release();

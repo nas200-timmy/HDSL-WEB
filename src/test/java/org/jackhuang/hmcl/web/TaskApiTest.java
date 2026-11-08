@@ -195,8 +195,12 @@ class TaskApiTest {
         assertTrue(started.await(30, TimeUnit.SECONDS), "the work must start");
         assertTrue(tasks.cancel(task.id()), "a running task can be cancelled");
         await(() -> !"running".equals(tasks.get(task.id()).orElseThrow().state()));
-        assertEquals("done", tasks.get(task.id()).orElseThrow().state());
-        assertEquals("stopped early", tasks.get(task.id()).orElseThrow().message());
+        // `cancel()` interrupts the worker, so the work's own loop throws rather
+        // than returning a cooperative message — and even a work that does return
+        // normally must not be reported as `done`. Either way the outcome is the
+        // cancellation, not a successful task.
+        assertEquals("failed", tasks.get(task.id()).orElseThrow().state());
+        assertEquals("cancelled", tasks.get(task.id()).orElseThrow().message());
         // Cancelling a finished task is a no-op; an unknown id too.
         assertTrue(!tasks.cancel(task.id()));
         assertTrue(!tasks.cancel("no-such-task"));
@@ -363,7 +367,8 @@ class TaskApiTest {
             assertEquals(200, cancelled.statusCode());
             assertTrue(JsonParser.parseString(cancelled.body()).getAsJsonObject().get("ok").getAsBoolean());
             await(() -> !"running".equals(tasks.get(taskId).orElseThrow().state()));
-            assertEquals("stopped early", tasks.get(taskId).orElseThrow().message());
+            assertEquals("cancelled", tasks.get(taskId).orElseThrow().message(),
+                    "a cancelled task is never reported as done");
 
             // A finished task is a 409, an unknown one a 404.
             HttpResponse<String> finished = client.send(
