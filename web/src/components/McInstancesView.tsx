@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, type McInstance, type McVersion } from "../api";
 import { refreshMcFeature, useMcFeature } from "../mcFeature";
@@ -17,8 +17,9 @@ import {
 import { McCreateWizard } from "./McCreateWizard";
 import { McThirdPartyWizard } from "./McThirdPartyWizard";
 import { McThirdPartySettings } from "./McThirdPartySettings";
-import { toast } from "../store";
-import { errMsg, mcCoreLabel, mcStateLabel, normState } from "../utils";
+import { ProgressBar } from "./ProgressBar";
+import { findTaskForInstance, seedTasks, toast, useAppState } from "../store";
+import { errMsg, isTerminalTaskState, mcCoreLabel, mcStateLabel, normState } from "../utils";
 
 /// MC 服务端实例视图，嵌在「实例列表」页里原地切换（`?view=mc`）。
 ///
@@ -30,6 +31,7 @@ import { errMsg, mcCoreLabel, mcStateLabel, normState } from "../utils";
 export function McInstancesView({ scope = "vanilla" }: { scope?: "vanilla" | "thirdparty" }) {
   const nav = useNavigate();
   const feature = useMcFeature();
+  const taskState = useAppState();
   const thirdParty = scope === "thirdparty";
   const [instances, setInstances] = useState<McInstance[]>([]);
   const [versions, setVersions] = useState<McVersion[]>([]);
@@ -63,8 +65,42 @@ export function McInstancesView({ scope = "vanilla" }: { scope?: "vanilla" | "th
   }, []);
 
   useEffect(() => {
-    if (feature?.enabled) void load();
+    if (feature?.enabled) {
+      void load();
+      // 创建向导可能在别的标签页/弹窗里启动了安装；列表挂载时先认领一次任务。
+      void seedTasks();
+    }
   }, [feature?.enabled, scope]);
+
+  /// 每个实例正在跑的安装任务：进度条与「安装中」状态都从这里来。
+  const activeInstalls = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof findTaskForInstance>>();
+    for (const task of Object.values(taskState.tasks)) {
+      if (!task || task.kind !== "mc-install" || isTerminalTaskState(task.state) || !task.instance) continue;
+      const current = map.get(task.instance);
+      if (!current || current.seenAt < task.seenAt) map.set(task.instance, task);
+    }
+    return map;
+  }, [taskState.tasks]);
+
+  const activeInstallKey = useMemo(
+    () => [...activeInstalls.keys()].sort().join(","),
+    [activeInstalls],
+  );
+
+  // WS 任务事件是主路径；轮询兜底，防 WebSocket 断线时进度停在原地。
+  useEffect(() => {
+    if (!activeInstallKey) return;
+    const timer = window.setInterval(() => { void seedTasks(); }, 3000);
+    return () => window.clearInterval(timer);
+  }, [activeInstallKey]);
+
+  // 安装结束后刷新列表：版本号、错误状态都可能变了。
+  const previousActive = useRef("");
+  useEffect(() => {
+    if (previousActive.current && !activeInstallKey) void load();
+    previousActive.current = activeInstallKey;
+  }, [activeInstallKey]);
 
   // 起停是服务端推进的异步状态，有过渡态时轻量轮询。
   const transitioning = instances.some(
@@ -248,6 +284,7 @@ export function McInstancesView({ scope = "vanilla" }: { scope?: "vanilla" | "th
               const state = normState(instance.state);
               const up = state === "RUNNING" || state === "STARTING";
               const busyState = state === "STARTING" || state === "STOPPING";
+              const installTask = activeInstalls.get(instance.id) ?? null;
               return (
                 <div
                   key={instance.id}
@@ -278,6 +315,44 @@ export function McInstancesView({ scope = "vanilla" }: { scope?: "vanilla" | "th
                       {instance.memoryMb} MB
                       {instance.storage === "data" ? " · data 目录" : ""}
                     </span>
+                    {installTask && (
+                      <span
+                        className="tlli-subtitle"
+                        style={{ display: "flex", alignItems: "center", gap: 8 }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <span style={{ flex: 1, minWidth: 60 }}>
+                          <ProgressBar fraction={installTask.fraction} />
+                        </span>
+                        <span
+                          style={{
+                            whiteSpace: "nowrap",
+                            maxWidth: "60%",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {installTask.message || "正在下载服务端…"}
+                          {typeof installTask.fraction === "number" && installTask.fraction >= 0
+                            ? ` ${Math.round(installTask.fraction * 100)}%`
+                            : ""}
+                        </span>
+                        <button
+                          className="btn btn-text"
+                          style={{ height: 24, flex: "none" }}
+                          onClick={() => {
+                            void api.cancelTask(installTask.id)
+                              .then(() => {
+                                toast("info", "已请求取消安装");
+                                void seedTasks();
+                              })
+                              .catch((e) => toast("error", errMsg(e)));
+                          }}
+                        >
+                          取消
+                        </button>
+                      </span>
+                    )}
                     {/* 失败要说原因：只说「失败」等于没说，原因藏在详情页的事件流里。 */}
                     {state === "FAILED" && instance.error && (
                       <span className="tlli-subtitle" style={{ color: "var(--monet-error)" }}>
@@ -289,13 +364,15 @@ export function McInstancesView({ scope = "vanilla" }: { scope?: "vanilla" | "th
                     <button
                       className="icon-btn on-variant ripple-host"
                       title={
-                        feature.locked
-                          ? "锁定期间不能启服"
-                          : up
-                            ? "停止（先存盘再关）"
-                            : "启动"
+                        installTask
+                          ? "服务端还在下载/安装，装完才能启动"
+                          : feature.locked
+                            ? "锁定期间不能启服"
+                            : up
+                              ? "停止（先存盘再关）"
+                              : "启动"
                       }
-                      disabled={busy || feature.locked || busyState}
+                      disabled={busy || feature.locked || busyState || installTask !== null}
                       onClick={() => void toggle(instance)}
                     >
                       {up ? <CancelIcon size={18} /> : <RocketLaunchIcon size={18} />}

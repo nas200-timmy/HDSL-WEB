@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, type McInstance, type McVersion } from "../api";
 import { SubSideBar } from "../components/SideBar";
+import { ProgressBar } from "../components/ProgressBar";
 import { TerminalWindow } from "../components/TerminalWindow";
 import {
   McBackupsPanel,
@@ -62,7 +63,9 @@ export function McInstancePage() {
   const [busy, setBusy] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
-  const [installNote, setInstallNote] = useState<string | null>(null);
+  /// 版本安装（下载/解包/Forge installer）的实时进度；null = 没有进行中的安装。
+  const [installTask, setInstallTask] = useState<{ id: string; fraction: number; message: string } | null>(null);
+  const [coreVersions, setCoreVersions] = useState<string[]>([]);
 
   const load = async () => {
     try {
@@ -80,6 +83,27 @@ export function McInstancePage() {
     void load();
     api.mc.versions().then((catalog) => setVersions(catalog.versions)).catch(() => setVersions([]));
   }, [id]);
+
+  // 第三方核心的版本目录和原版不是同一份：Paper/Fabric/Forge 各自的版本列表
+  // 来自核心目录，拿 Mojang 的清单去换版本会装错或直接失败。
+  useEffect(() => {
+    if (!instance || instance.core === "vanilla") {
+      setCoreVersions([]);
+      return;
+    }
+    let alive = true;
+    api.mc.cores()
+      .then(({ cores }) => {
+        if (!alive) return;
+        setCoreVersions(cores.find((entry) => entry.id === instance.core)?.versions ?? []);
+      })
+      .catch(() => {
+        if (alive) setCoreVersions([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [instance?.core]);
 
   useEffect(() => {
     if (instance) setNameDraft((current) => (current === "" ? instance.name : current));
@@ -173,13 +197,18 @@ export function McInstancePage() {
 
   const install = async (version: string) => {
     setBusy(true);
-    setInstallNote(`正在下载 ${version}…`);
+    setInstallTask({ id: "", fraction: -1, message: `正在下载 ${version}…` });
     try {
       const { taskId } = await withElevation(() => api.mc.install(id, version));
-      // 下载是任务：轮询到结束，顺便把任务的进度文案显示出来。
+      // 下载是任务：轮询到结束，顺便把任务的进度与百分比显示出来。
+      setInstallTask({ id: taskId, fraction: -1, message: `正在下载 ${version}…` });
       for (let i = 0; i < 900; i += 1) {
         const task = await api.task(taskId);
-        if (task.message) setInstallNote(task.message);
+        setInstallTask({
+          id: taskId,
+          fraction: typeof task.fraction === "number" ? task.fraction : -1,
+          message: task.message ?? "",
+        });
         if (task.state === "done") {
           toast("success", task.message || `已安装 ${version}`);
           break;
@@ -194,12 +223,19 @@ export function McInstancePage() {
     } catch (e) {
       toast("error", errMsg(e));
     } finally {
-      setInstallNote(null);
+      setInstallTask(null);
       setBusy(false);
     }
   };
 
-  const releases = useMemo(() => versions.filter((entry) => entry.type === "release").slice(0, 80), [versions]);
+  /// 版本下拉的目录：原版用 Mojang 清单，第三方用该核心自己的版本列表。
+  const switchVersions = useMemo(() => {
+    if (!instance) return [] as string[];
+    if (instance.core === "vanilla") {
+      return versions.filter((entry) => entry.type === "release").slice(0, 80).map((entry) => entry.id);
+    }
+    return coreVersions;
+  }, [instance?.core, versions, coreVersions]);
 
   if (loadError) {
     return (
@@ -331,7 +367,7 @@ export function McInstancePage() {
                   <select
                     className="input"
                     defaultValue=""
-                    disabled={busy || running}
+                    disabled={busy || running || installTask !== null}
                     onChange={(e) => {
                       const choice = e.target.value;
                       e.target.value = "";
@@ -340,15 +376,39 @@ export function McInstancePage() {
                     style={{ width: 150 }}
                   >
                     <option value="">装版本…</option>
-                    {releases.map((entry) => (
-                      <option key={entry.id} value={entry.id}>{entry.id}</option>
+                    {switchVersions.map((entry) => (
+                      <option key={entry} value={entry}>{entry}</option>
                     ))}
                   </select>
-                  <span className="dim" style={{ fontSize: 12 }}>从 Mojang 官方下载并校验 SHA-1；停服才能换</span>
+                  <span className="dim" style={{ fontSize: 12 }}>
+                    {instance.core === "vanilla"
+                      ? "从 Mojang 官方下载并校验 SHA-1；停服才能换"
+                      : `从 ${mcCoreLabel(instance.core)} 上游下载并校验；停服才能换`}
+                  </span>
                 </span>
               </div>
-              {installNote && (
-                <div style={{ padding: "0 8px 8px", fontSize: 12 }}>{installNote}</div>
+              {installTask && (
+                <div style={{ padding: "0 8px 8px", display: "grid", gap: 6 }}>
+                  <ProgressBar fraction={installTask.fraction} />
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}>
+                    <span style={{ flex: 1 }}>{installTask.message || "正在下载服务端…"}</span>
+                    {installTask.fraction >= 0 && (
+                      <span className="mono">{Math.round(installTask.fraction * 100)}%</span>
+                    )}
+                    <button
+                      className="btn btn-text"
+                      style={{ height: 24 }}
+                      disabled={!installTask.id}
+                      onClick={() => {
+                        void api.cancelTask(installTask.id)
+                          .then(() => toast("info", "已请求取消安装"))
+                          .catch((e) => toast("error", errMsg(e)));
+                      }}
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
               )}
               <div className="comp-row">
                 <span className="comp-label">删除实例</span>

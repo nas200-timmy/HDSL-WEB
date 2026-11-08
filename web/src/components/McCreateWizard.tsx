@@ -3,7 +3,7 @@ import { api, type McCoreInfo, type McInstance, type McStorage, type McVersion }
 import { Dialog } from "./Dialog";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { useMcFeature } from "../mcFeature";
-import { toast } from "../store";
+import { seedTasks, toast } from "../store";
 import { errMsg, mcCoreNote } from "../utils";
 import { CheckCircleIcon, WarningIcon } from "./icons";
 
@@ -178,6 +178,8 @@ export function McCreateWizard({
       }
       const task = await elevated(() => api.mc.install(created.id, version));
       setTaskId(task.taskId);
+      // 让实例列表立刻拿到这个任务：用户通常不会等下载完就关掉向导。
+      void seedTasks();
       setStep(3);
     } catch (e) {
       setError(errMsg(e));
@@ -396,7 +398,8 @@ export function McCreateWizard({
                 <ProgressBar fraction={progress?.fraction ?? -1} />
                 <div style={{ fontSize: 13 }}>{progress?.message || "正在准备下载…"}</div>
                 <div className="dim" style={{ fontSize: 12 }}>
-                  下载/安装由服务端任务执行，关掉这个对话框也会继续；完成后回实例列表能看到。
+                  下载/安装由服务端任务执行，关掉这个对话框也会继续；实例列表里会显示进度条，
+                  装完才能点启动。
                 </div>
               </>
             )}
@@ -467,6 +470,11 @@ export function McCreateWizard({
               {step === 2 && (
                 <button className="btn btn-raised" disabled={busy} onClick={() => void startInstall()}>
                   {busy ? "创建中…" : "开始下载并安装"}
+                </button>
+              )}
+              {step === 3 && !error && (
+                <button className="btn btn-text" onClick={onClose}>
+                  后台继续
                 </button>
               )}
               {step === 3 && error && (

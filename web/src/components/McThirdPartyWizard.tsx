@@ -9,7 +9,7 @@ import {
 import { Dialog } from "./Dialog";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { useMcFeature } from "../mcFeature";
-import { toast } from "../store";
+import { seedTasks, toast } from "../store";
 import { errMsg, mcCoreLabel, mcCoreNote } from "../utils";
 import { CheckCircleIcon, RefreshIcon, WarningIcon } from "./icons";
 
@@ -261,6 +261,8 @@ export function McThirdPartyWizard({
       }
       const task = await elevated(() => api.mc.install(created.id, version));
       setTaskId(task.taskId);
+      // 用户通常不会等下载完就关掉向导；先把任务放进 store，列表据此显示进度。
+      void seedTasks();
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -628,6 +630,11 @@ export function McThirdPartyWizard({
             上一步
           </button>
           <div style={{ display: "flex", gap: 8 }}>
+            {step === 4 && (
+              <button className="btn btn-text" onClick={onClose}>
+                后台继续
+              </button>
+            )}
             <button className="btn btn-text" disabled={busy} onClick={onClose}>
               取消
             </button>
