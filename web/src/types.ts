@@ -565,7 +565,7 @@ export type WsEvent =
 
 // ---------- 第三方品牌实例（kimi / opencode / claude-web，REST 挂 /api/brands/<brand>/*） ----------
 
-export type BrandId = "kimi" | "opencode" | "claude-web" | "octop" | "hermes";
+export type BrandId = "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "pi-web";
 
 /// 终端内核（只有 Claude Web 有不止一个：社区引擎 claude-web-engine 或官方
 /// Claude Code 二进制）。`available` 为假时 `detail` 说明缺什么。
@@ -580,7 +580,18 @@ export interface TerminalKernel {
 export interface BrandVersions {
   versions: string[];
   latest: string;
-  releases: { version: string; current: boolean }[];
+  releases: {
+    version: string;
+    current: boolean;
+    /** 仅 pi-web：这个 release 配对的 Pi SDK 版本 */
+    pairedSdk?: string;
+    /** 仅 pi-web：这个 release 能不能起网页（false = 只装了终端的降级 release） */
+    webAvailable?: boolean;
+    /** 仅 pi-web：安装时自检的浏览器终端能力（node-pty） */
+    ptyAvailable?: boolean;
+  }[];
+  /** 仅 pi-web：当前推荐版本配对的 Pi SDK */
+  pairedSdk?: string;
   /** 新建实例的推荐默认版本；一个版本都没装时为 null */
   default: string | null;
   /// 这个平台上能不能装（目前只有 Hermes 在 Windows 上为 false）。
@@ -647,6 +658,16 @@ export interface BrandInstance {
   url?: string;
   /** 交互终端是否正开着（Hermes：网页与终端互斥，UI 先问再切换） */
   terminalOpen?: boolean;
+  /** 仅 pi-web：这个实例起不起网页（false = 仅终端形态） */
+  webEnabled?: boolean;
+  /** 仅 pi-web：实例被锁在当前 release，品牌升级不跟随 */
+  versionLocked?: boolean;
+  /** 仅 pi-web：当前 release 能不能起网页 */
+  releaseWebAvailable?: boolean;
+  /** 仅 pi-web：当前 release 的浏览器终端（node-pty）是否可用 */
+  releasePtyAvailable?: boolean;
+  /** 仅 pi-web：当前 release 配对的 Pi SDK */
+  pairedSdk?: string;
 }
 
 /// 品牌/zcode 实例的**插件通道**（`GET …/instances/<id>/plugins`）。
@@ -662,7 +683,7 @@ export interface InstancePlugins {
 /// 这是**唯一**的跨品牌实例状态源：BrandsView（品牌层）/ ZcodeSection / LaunchPane /
 /// MainPage 都从这里读，写入只发生在 refreshExternal。
 export interface ExternalInstance {
-  brand: "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "zcode";
+  brand: "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "pi-web" | "zcode";
   id: string;
   name: string;
   state: string;
@@ -683,6 +704,16 @@ export interface ExternalInstance {
   baseUrl?: string;
   /** 仅 zcode：这个实例工作的目录（创建时可选，之后只读） */
   workspacePath?: string;
+  /** 仅 pi-web：仅终端形态 */
+  webEnabled?: boolean;
+  /** 仅 pi-web：锁在当前 release */
+  versionLocked?: boolean;
+  /** 仅 pi-web：当前 release 不能起网页（降级） */
+  releaseWebAvailable?: boolean;
+  /** 仅 pi-web：当前 release 的浏览器终端不可用 */
+  releasePtyAvailable?: boolean;
+  /** 仅 pi-web：当前 release 配对的 Pi SDK */
+  pairedSdk?: string;
 }
 
 // ---------- 全局应用状态 ----------

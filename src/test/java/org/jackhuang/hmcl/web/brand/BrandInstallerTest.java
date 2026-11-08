@@ -50,7 +50,7 @@ class BrandInstallerTest {
         // which platform it ran on.
         org.jackhuang.hmcl.util.io.Links.pointAt(root.resolve("current"), current);
 
-        List<BrandInstaller.Release> releases = BrandInstaller.releases(root);
+        List<BrandInstaller.Release> releases = BrandInstaller.releases(Brand.KIMI, root);
 
         assertEquals(List.of("2.1.1", "2.1.0", "2.0.2"),
                 releases.stream().map(BrandInstaller.Release::version).toList());
@@ -63,7 +63,7 @@ class BrandInstallerTest {
         install(Brand.OPENCODE, "1.9.0");
         install(Brand.OPENCODE, "1.18.0");
 
-        List<BrandInstaller.Release> releases = BrandInstaller.releases(root);
+        List<BrandInstaller.Release> releases = BrandInstaller.releases(Brand.OPENCODE, root);
 
         assertEquals(List.of("1.18.0", "1.9.0"),
                 releases.stream().map(BrandInstaller.Release::version).toList());

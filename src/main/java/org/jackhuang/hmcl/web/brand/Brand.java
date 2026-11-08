@@ -21,6 +21,8 @@ import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Map;
+
 /// The third-party tool categories the panel can install and serve, beyond the
 /// dsh and ZCode ones.
 ///
@@ -104,7 +106,30 @@ public enum Brand {
     /// talks to). The dashboard is prefix-aware — it reads
     /// `X-Forwarded-Prefix` — so the proxy hands it the mount and stops
     /// rewriting its pages; see [#serverSidePrefix].
-    HERMES("hermes", Source.GITHUB, "https://github.com/NousResearch/hermes-agent", "v", false);
+    HERMES("hermes", Source.GITHUB, "https://github.com/NousResearch/hermes-agent", "v", false),
+
+    /// PI WEB (the Chinese-localization fork of pi-web, MIT): a browser
+    /// control plane for the Pi Coding Agent, shipped as an npm package.
+    ///
+    /// **A release is a pair, not a package.** The web app reuses the host Pi
+    /// SDK (`@earendil-works/pi-coding-agent`), and the Pi TUI in the same
+    /// release is that same SDK's `pi` binary. The installer therefore adds
+    /// both at once, and [#pairedSdkVersion] is the one table that says which
+    /// Pi a given pi-web build may run on. Only pairs listed there are offered
+    /// — see [#isVerifiedPair] — because a pi-web release outside its peer
+    /// range loses the version-specific adapters it was built against.
+    ///
+    /// **Two processes, one wrapper**: `pi-web-sessiond` (sessions and tools)
+    /// and `pi-web-server` (the web/API gateway). The web process connects to
+    /// the daemon over a unix socket and deliberately does not start it; the
+    /// generated wrapper starts the daemon first, waits for the socket, then
+    /// execs the web process.
+    ///
+    /// **The client is deployment-relative**: Vite is built with `base: "./"`,
+    /// every request is resolved once against `document.baseURI`, and routes
+    /// live in the query string. A subpath mount therefore needs no HTML, shim
+    /// or router patch — see [#relativeClient].
+    PI_WEB("pi-web", Source.NPM, "@chainingintention/pi-web-cn", "pi-web", false);
 
     /// Where a brand's releases come from: an npm registry package, a GitHub
     /// repository's release tags (source zip over HTTPS, no git), or a GitHub
@@ -120,6 +145,21 @@ public enum Brand {
     private final String locator;
     private final String aux;
     private final boolean needsRouterShim;
+
+    /// The Pi SDK package a PI WEB release runs on.
+    public static final String PI_SDK_PACKAGE = "@earendil-works/pi-coding-agent";
+
+    /// The verified pi-web ↔ Pi SDK pairs.
+    ///
+    /// A pair is a contract, not a preference: PI WEB's peer range covers
+    /// several Pi majors, and code paths keyed on the SDK's own `VERSION`
+    /// (management MCP authentication, for one) only exist for some of them.
+    /// The panel therefore offers **only** the pairs listed here — one at a
+    /// time in the picker — while older releases stay on disk for the instances
+    /// that pinned them. Adding a new pairing is this map plus an install
+    /// audit, not a UI change.
+    private static final Map<String, String> PI_WEB_PAIRS = Map.of(
+            "2.202611.8", "1.4.0");
 
     /// @param locator the npm package (NPM) or the repository URL (GITHUB)
     /// @param aux the executable inside `node_modules/.bin/` (NPM) or the
@@ -252,6 +292,55 @@ public enum Brand {
     /// (`/i/<id>/i/<id>/assets/…`) and inject a shim the SPA does not want.
     public boolean serverSidePrefix() {
         return this == HERMES;
+    }
+
+    /// Whether the brand's web client resolves every request against the
+    /// document base instead of owning the origin root.
+    ///
+    /// PI WEB is built that way on purpose (`base: "./"`, routes in the query
+    /// string), so a mount under `/i/<id>/` needs no page rewrite, no runtime
+    /// shim and no router patch — the references it builds are already inside
+    /// the mount. The proxy uses this to leave its HTML and scripts untouched.
+    public boolean relativeClient() {
+        return this == PI_WEB;
+    }
+
+    /// Whether the brand's terminal and its web mode can run at the same time.
+    ///
+    /// For PI WEB they share one `HOME`/Pi agent directory but run separate
+    /// sessions, and the TUI does not start or replace the daemon — the same
+    /// reason Hermes cannot do it (its TUI starts a detached gateway). Every
+    /// other brand keeps the panel's "the terminal takes the instance over"
+    /// rule.
+    public boolean terminalCoexistsWithWeb() {
+        return this == PI_WEB;
+    }
+
+    /// Whether the panel offers a **terminal-only** form for this brand: an
+    /// instance that never starts the web process, for users who want the TUI
+    /// and nothing else (or whose web install was degraded).
+    public boolean supportsTerminalOnly() {
+        return this == PI_WEB;
+    }
+
+    /// The Pi SDK version a PI WEB release is verified against.
+    ///
+    /// @param version the pi-web version
+    /// @return the SDK version, or `null` for other brands and unverified pairs
+    public @Nullable String pairedSdkVersion(String version) {
+        return this == PI_WEB && version != null ? PI_WEB_PAIRS.get(version) : null;
+    }
+
+    /// Whether this brand offers a version in its picker.
+    ///
+    /// Only PI WEB restricts the list: a release outside the verified pairs has
+    /// no Pi to install with it, so offering it would promise an install the
+    /// panel cannot complete. Older releases already installed stay usable.
+    ///
+    /// @param version the upstream version
+    /// @return whether the picker may show it
+    public boolean offersVersion(String version) {
+        return this != PI_WEB || PI_WEB_PAIRS.containsKey(version);
     }
 
     /// Whether this brand offers the **last-resort** policy: one surviving

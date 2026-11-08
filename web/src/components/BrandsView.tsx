@@ -78,7 +78,7 @@ function versionOption(version: string, latest: boolean, installed: boolean): st
 /// 其余三个共用 /api/brands/<brand>/*。顺序 = 页签顺序，也是深链缺省时的挑选顺序。
 export type BrandKey = "zcode" | BrandId;
 
-export const BRAND_KEYS: BrandKey[] = ["zcode", "kimi", "opencode", "claude-web", "octop", "hermes"];
+export const BRAND_KEYS: BrandKey[] = ["zcode", "kimi", "opencode", "claude-web", "octop", "hermes", "pi-web"];
 
 const BRAND_TITLE: Record<BrandKey, string> = {
   zcode: I18N["dsh.brand.zcode"],
@@ -87,6 +87,7 @@ const BRAND_TITLE: Record<BrandKey, string> = {
   "claude-web": I18N["dsh.brand.claude-web"],
   octop: I18N["dsh.brand.octop"],
   hermes: I18N["dsh.brand.hermes"],
+  "pi-web": I18N["dsh.brand.pi-web"],
 };
 
 /// 短名（不带「（实验）」后缀）：写进用户的实例名与「还没有 X 实例」这类句子里，
@@ -98,6 +99,7 @@ const BRAND_SHORT: Record<BrandKey, string> = {
   "claude-web": I18N["dsh.brand.claude-web.short"],
   octop: I18N["dsh.brand.octop.short"],
   hermes: I18N["dsh.brand.hermes.short"],
+  "pi-web": I18N["dsh.brand.pi-web.short"],
 };
 
 export function isBrandKey(value: string | null | undefined): value is BrandKey {
@@ -465,12 +467,12 @@ function VersionCard({
     return minutes > 0 ? `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒` : `${seconds} 秒`;
   };
 
-  const doInstall = async () => {
+  const doInstall = async (mode?: "full" | "terminal-only") => {
     if (!selected) return;
     setBusy(true);
     try {
       const started = Date.now();
-      const accepted = await api.brandInstall(brand, selected);
+      const accepted = await api.brandInstall(brand, selected, mode);
       setInstalling(true);
       setInstallTaskId(accepted.taskId);
       setInstallStartedAt(started);
@@ -657,6 +659,80 @@ function VersionCard({
               {I18N["button.refresh"]}
             </button>
           </div>
+
+          {brand === "pi-web" && (
+            <div className="hint" style={{ display: "grid", gap: 4, fontSize: 12, lineHeight: 1.6 }}>
+              <span>
+                {I18N["dsh.brand.pi-web.recommended"]}：{selected || "—"}
+                {versions?.pairedSdk ? ` + Pi SDK ${versions.pairedSdk}` : ""}
+              </span>
+              <span style={{ color: "var(--monet-on-surface-variant)" }}>
+                只列出已验证配对；更早的 release 已装仍可继续使用。
+              </span>
+            </div>
+          )}
+
+          {brand === "pi-web" && installed.length > 0 && (
+            <div style={{ display: "grid", gap: 3 }}>
+              {installed.map((r) => (
+                <div
+                  key={r.version}
+                  style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}
+                >
+                  <span className="mono">{r.version}</span>
+                  {r.pairedSdk ? (
+                    <span style={{ color: "var(--monet-on-surface-variant)" }}>+ Pi {r.pairedSdk}</span>
+                  ) : null}
+                  {r.webAvailable === false && (
+                    <span className="tag plain">{I18N["dsh.brand.pi-web.web.missing"]}</span>
+                  )}
+                  {r.webAvailable !== false && r.ptyAvailable === false && (
+                    <span className="tag plain">{I18N["dsh.brand.pi-web.pty.missing"]}</span>
+                  )}
+                  {r.current && <span className="tag running">{I18N["dsh.brand.current"]}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {brand === "pi-web" && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button
+                className="btn btn-outline ripple-host"
+                style={{ height: 28 }}
+                disabled={busy || installing || !selected || unsupported}
+                onClick={() => void doInstall("terminal-only")}
+              >
+                {I18N["dsh.brand.pi-web.install.terminalOnly"]}
+              </button>
+              <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+                只装 Pi SDK，不起网页；之后要网页再装完整配对即可。
+              </span>
+            </div>
+          )}
+
+          {!installing && installStatus?.state === "failed" && brand === "pi-web" && (
+            <div className="hint error" style={{ display: "grid", gap: 6 }}>
+              <strong>{I18N["dsh.brand.pi-web.degraded.title"]}</strong>
+              <span style={{ whiteSpace: "pre-wrap" }}>{installStatus.error ?? installStatus.message}</span>
+              <span style={{ fontSize: 12 }}>{I18N["dsh.brand.pi-web.degraded.hint"]}</span>
+              <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+                {I18N["dsh.brand.pi-web.degraded.lost"]}
+              </span>
+              <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="btn btn-raised ripple-host" style={{ height: 28 }}
+                  disabled={busy || !selected}
+                  onClick={() => void doInstall("terminal-only")}>
+                  {I18N["dsh.brand.pi-web.install.terminalOnly"]}
+                </button>
+                <button className="btn btn-outline ripple-host" style={{ height: 28 }}
+                  disabled={busy || !selected}
+                  onClick={() => void doInstall()}>
+                  换源重试
+                </button>
+              </span>
+            </div>
+          )}
 
           {versionsError && (
             <div className="hint error" style={{ display: "grid", gap: 8 }}>
@@ -958,7 +1034,7 @@ function InstancesCard({
   // an enabled "create" button.
   const unsupported = versions?.supported === false;
   const unsupportedReason = versions?.reason ?? "";
-  const [form, setForm] = useState({ name: "", version: "" });
+  const [form, setForm] = useState({ name: "", version: "", web: true });
   const [busy, setBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; inst: ExternalInstance } | null>(null);
@@ -970,6 +1046,8 @@ function InstancesCard({
   const [baseUrlValue, setBaseUrlValue] = useState("");
   const [pluginsTarget, setPluginsTarget] = useState<ExternalInstance | null>(null);
   const [adminTarget, setAdminTarget] = useState<ExternalInstance | null>(null);
+  /// 仅 pi-web：运行形态与版本锁
+  const [runTarget, setRunTarget] = useState<ExternalInstance | null>(null);
   const [logTarget, setLogTarget] = useState<ExternalInstance | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<ExternalInstance | null>(null);
@@ -1072,9 +1150,9 @@ function InstancesCard({
     if (!name || !createVersion) return;
     setBusy(true);
     try {
-      await api.createBrandInstance(brand, { name, version: createVersion });
+      await api.createBrandInstance(brand, { name, version: createVersion, webEnabled: form.web });
       toast("success", "实例已创建");
-      setForm({ name: "", version: "" });
+      setForm({ name: "", version: "", web: true });
       await refreshExternal();
     } catch (e) {
       const raw = errMsg(e);
@@ -1361,9 +1439,24 @@ function InstancesCard({
                 ))}
               </select>
             )}
+            {brand === "pi-web" && (
+              <select
+                className="input"
+                style={{ flex: "none", maxWidth: mobile ? 108 : 150, height: 36 }}
+                value={form.web ? "web" : "terminal"}
+                onChange={(e) => setForm((f) => ({ ...f, web: e.target.value === "web" }))}
+              >
+                <option value="web">{I18N["dsh.brand.pi-web.mode.both"]}</option>
+                <option value="terminal">{I18N["dsh.brand.pi-web.mode.terminal"]}</option>
+              </select>
+            )}
             <button
               className="btn btn-outline ripple-host"
-              disabled={busy || unsupported || !form.name.trim() || !createVersion}
+              disabled={
+                busy || unsupported || !form.name.trim() || !createVersion
+                || (brand === "pi-web" && form.web
+                  && installed.find((r) => r.version === createVersion)?.webAvailable === false)
+              }
               title={unsupported ? unsupportedReason : undefined}
               onClick={() => void doCreate()}
             >
@@ -1387,6 +1480,8 @@ function InstancesCard({
             const installing = rowInstall?.id === inst.id;
             const version = inst.version ?? "";
             const disabled = !!inst.disabled;
+            const terminalOnly = brand === "pi-web" && inst.webEnabled === false;
+            const locked = brand === "pi-web" && !!inst.versionLocked;
             return (
               <div key={inst.id}>
                 <div className="tlli" style={{ padding: "6px 12px", opacity: disabled ? 0.55 : undefined }}>
@@ -1416,6 +1511,15 @@ function InstancesCard({
                           : ""}
                       </span>
                       {disabled && <span className="tag plain">策略禁用</span>}
+                      {terminalOnly && (
+                        <span className="tag plain">{I18N["dsh.brand.pi-web.terminalOnly"]}</span>
+                      )}
+                      {locked && (
+                        <span className="tag plain">{I18N["dsh.brand.pi-web.versionLocked"]}</span>
+                      )}
+                      {brand === "pi-web" && !terminalOnly && inst.releaseWebAvailable === false && (
+                        <span className="tag plain">{I18N["dsh.brand.pi-web.web.missing"]}</span>
+                      )}
                     </span>
                     <span className="tlli-subtitle">
                       {inst.id} · {version}
@@ -1452,7 +1556,8 @@ function InstancesCard({
                       className="input"
                       style={{ flex: "none", maxWidth: mobile ? 150 : 124, height: mobile ? 32 : 36 }}
                       value={version}
-                      disabled={busy || installing || disabled}
+                      disabled={busy || installing || disabled || locked}
+                      title={locked ? I18N["dsh.brand.pi-web.lock.hint"] : undefined}
                       onChange={(e) => void pickVersion(inst, e.target.value)}
                     >
                       {catalog.map((v) => (
@@ -1465,6 +1570,7 @@ function InstancesCard({
                     </select>
                     <button
                       className="icon-btn on-variant ripple-host"
+                      style={{ display: terminalOnly ? "none" : undefined }}
                       title={running ? I18N["dsh.stop"] : I18N["dsh.launch"]}
                       // "停止"对策略禁用的实例仍然要能点：后端明确允许把被禁用的实例关掉，
                       // 否则政策切换（或面板外改了 policy.json）之后只能看着它跑。
@@ -1502,6 +1608,7 @@ function InstancesCard({
                     </button>
                     <button
                       className="icon-btn on-variant ripple-host"
+                      style={{ display: terminalOnly ? "none" : undefined }}
                       title={I18N["dsh.brand.open"]}
                       disabled={!running || disabled}
                       onClick={() => doOpen(inst)}
@@ -1530,6 +1637,18 @@ function InstancesCard({
         anchor={menuAnchor?.el ?? null}
         onClose={() => setMenuAnchor(null)}
       >
+        {brand === "pi-web" && (
+          <PopupItem
+            icon={<RocketLaunchIcon size={16} />}
+            onClick={() => {
+              const inst = menuAnchor?.inst;
+              setMenuAnchor(null);
+              if (inst) setRunTarget(inst);
+            }}
+          >
+            {I18N["dsh.brand.pi-web.run"]}
+          </PopupItem>
+        )}
         <PopupItem
           icon={<InfoIcon size={16} />}
           onClick={() => {
@@ -1614,6 +1733,9 @@ function InstancesCard({
       </PopupMenu>
 
       <InfoDialog brand={brand} inst={infoTarget} onClose={() => setInfoTarget(null)} />
+      {brand === "pi-web" && (
+        <PiWebRunDialog inst={runTarget} onClose={() => setRunTarget(null)} />
+      )}
       <PluginsDialog brand={brand} inst={pluginsTarget} onClose={() => setPluginsTarget(null)} />
       <AdminCredentialsDialog brand={brand} instance={adminTarget} onClose={() => setAdminTarget(null)} />
 
@@ -1939,6 +2061,123 @@ function PluginsDialog({
       <div className="dialog-actions">
         <button className="btn btn-text" onClick={onClose}>
           {I18N["button.ok"]}
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+/// PI WEB 的"运行与版本"决策面（docs/brands.md）：形态与版本锁都是**实例**属性，
+/// 放在这里而不是安装弹窗里——它们有长期后果，用户下次进来还应当看得见。
+///
+/// 保存即生效：改形态会停/起网页进程；版本锁只影响后续品牌升级是否跟随。
+function PiWebRunDialog({ inst, onClose }: { inst: ExternalInstance | null; onClose: () => void }) {
+  const [web, setWeb] = useState(true);
+  const [locked, setLocked] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (inst) {
+      setWeb(inst.webEnabled !== false);
+      setLocked(!!inst.versionLocked);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inst?.id]);
+
+  const running = inst?.state === "running" || inst?.state === "starting";
+  const webBlocked = inst?.releaseWebAvailable === false;
+  const ptyMissing = inst?.releasePtyAvailable === false;
+
+  const save = async () => {
+    if (!inst) return;
+    setBusy(true);
+    try {
+      await api.patchBrandInstance("pi-web", inst.id, { webEnabled: web, versionLocked: locked });
+      toast("success", "已保存");
+      await refreshExternal();
+      onClose();
+    } catch (e) {
+      toast("error", `保存失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={inst !== null} title={`${I18N["dsh.brand.pi-web.run"]} · ${inst?.name ?? ""}`} onClose={onClose} wide>
+      {inst && (
+        <div style={{ display: "grid", gap: 12 }}>
+          <div className="comp-row">
+            <span className="comp-label">{I18N["dsh.brand.versions"]}</span>
+            <span className="comp-value mono">
+              {inst.version}
+              {inst.pairedSdk ? ` + Pi SDK ${inst.pairedSdk}` : ""}
+            </span>
+          </div>
+          {ptyMissing && (
+            <div className="hint error" style={{ lineHeight: 1.6 }}>
+              {I18N["dsh.brand.pi-web.pty.missing"]}：网页可以运行，但浏览器内终端不可用
+              （node-pty 没有在 Linux 上编译成功）。装好 python3 / make / g++ 后重新安装这个 release 即可。
+            </div>
+          )}
+
+          <div style={{ display: "grid", gap: 6 }}>
+            <span className="form-label">{I18N["dsh.brand.pi-web.mode"]}</span>
+            <label className="input-check">
+              <input
+                type="radio"
+                name={`pi-web-mode-${inst.id}`}
+                checked={web}
+                disabled={busy || webBlocked}
+                onChange={() => setWeb(true)}
+              />
+              <span>{I18N["dsh.brand.pi-web.mode.both"]}</span>
+            </label>
+            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", paddingLeft: 26 }}>
+              {I18N["dsh.brand.pi-web.mode.both.hint"]}
+            </span>
+            <label className="input-check">
+              <input
+                type="radio"
+                name={`pi-web-mode-${inst.id}`}
+                checked={!web}
+                disabled={busy || running}
+                onChange={() => setWeb(false)}
+              />
+              <span>{I18N["dsh.brand.pi-web.mode.terminal"]}</span>
+            </label>
+            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", paddingLeft: 26 }}>
+              {I18N["dsh.brand.pi-web.mode.terminal.hint"]}
+              {running ? " 先停止实例才能关掉网页。" : ""}
+            </span>
+            {webBlocked && (
+              <span style={{ fontSize: 12, color: "var(--monet-error)" }}>
+                当前 release 是仅终端安装：先安装完整配对，才能打开网页。
+              </span>
+            )}
+          </div>
+
+          <div style={{ display: "grid", gap: 4 }}>
+            <label className="input-check">
+              <input
+                type="checkbox"
+                checked={locked}
+                disabled={busy}
+                onChange={(e) => setLocked(e.target.checked)}
+              />
+              <span>{I18N["dsh.brand.pi-web.lock"]}</span>
+            </label>
+            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", paddingLeft: 26 }}>
+              {I18N["dsh.brand.pi-web.lock.hint"]}
+            </span>
+          </div>
+        </div>
+      )}
+      <div className="dialog-actions">
+        <button className="btn btn-text dim" disabled={busy} onClick={onClose}>
+          {I18N["button.cancel"]}
+        </button>
+        <button className="btn btn-raised" disabled={busy || !inst} onClick={() => void save()}>
+          {busy ? "保存中…" : I18N["button.save"]}
         </button>
       </div>
     </Dialog>

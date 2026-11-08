@@ -232,12 +232,13 @@ export async function refreshZcode(showLoading = false): Promise<void> {
 /// 主页启动面板的实例选择菜单与主按钮动作用它。单个品牌失败不影响其它品牌；
 /// 静默失败（不弹 toast）——主页面 5 秒轮询一次，报错会刷爆通知。
 export async function refreshExternal(): Promise<void> {
-  const [kimi, opencode, claudeWeb, octop, hermes, zcode] = await Promise.all([
+  const [kimi, opencode, claudeWeb, octop, hermes, piWeb, zcode] = await Promise.all([
     api.brandInstances("kimi").then((r) => r.instances).catch(() => null),
     api.brandInstances("opencode").then((r) => r.instances).catch(() => null),
     api.brandInstances("claude-web").then((r) => r.instances).catch(() => null),
     api.brandInstances("octop").then((r) => r.instances).catch(() => null),
     api.brandInstances("hermes").then((r) => r.instances).catch(() => null),
+    api.brandInstances("pi-web").then((r) => r.instances).catch(() => null),
     api.zcodeInstances()
       .then((r) => ({ instances: r.instances, workspacesRoot: r.workspacesRoot }))
       .catch(() => null),
@@ -259,6 +260,15 @@ export async function refreshExternal(): Promise<void> {
     // terminalOpen 必须带上：Hermes 的网页与终端互斥，行内的启动按钮靠它决定
     // 要不要先弹窗（docs/brands.md「终端与网页互斥」）。
     external.push({ brand: "hermes", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort, version: i.version, error: i.error, disabled: i.disabled, terminalOpen: i.terminalOpen });
+  }
+  for (const i of piWeb ?? []) {
+    external.push({
+      brand: "pi-web", id: i.id, name: i.name, state: i.state, url: i.url, port: i.lastPort,
+      version: i.version, error: i.error, disabled: i.disabled,
+      webEnabled: i.webEnabled, versionLocked: i.versionLocked,
+      releaseWebAvailable: i.releaseWebAvailable, releasePtyAvailable: i.releasePtyAvailable,
+      pairedSdk: i.pairedSdk,
+    });
   }
   for (const i of zcode?.instances ?? []) {
     external.push({

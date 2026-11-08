@@ -157,6 +157,10 @@ public final class BrandRuntime {
     /// Hermes' dashboard is the slow half of its two-process start (the gateway
     /// answers first, and the dashboard refuses to attach before it does).
     private static final int HERMES_READY_TIMEOUT_SECONDS = 180;
+    /// PI WEB's readiness wait: the daemon opens its state and discovers
+    /// projects, and the web process imports the Pi SDK before it answers;
+    /// both are polled (see [awaitPiWebReady]), not matched on a log line.
+    private static final int PI_WEB_READY_TIMEOUT_SECONDS = 180;
     /// Stands in for "this brand never announces readiness on stdout".
     private static final Pattern NEVER_READY = Pattern.compile("(?!)");
 
@@ -321,7 +325,9 @@ public final class BrandRuntime {
                 }
                 plan = brand == Brand.HERMES
                         ? hermesPlan(manager, instance, packageDir)
-                        : plan(brand, packageDir, instance, publicHost);
+                        : brand == Brand.PI_WEB
+                                ? piWebPlan(manager, instance, packageDir)
+                                : plan(brand, packageDir, instance, publicHost);
                 ProcessBuilder builder = new ProcessBuilder(
                         org.jackhuang.hmcl.util.platform.Privileges.asAgent(
                                 Executables.startable(plan.command())));
@@ -443,7 +449,9 @@ public final class BrandRuntime {
                     ? awaitOctopHealth(id, process, plan.port())
                     : brand == Brand.HERMES
                             ? awaitHermesHealth(id, process, plan.port())
-                            : awaitReady(brand, id, process, ready);
+                            : brand == Brand.PI_WEB
+                                    ? awaitPiWebReady(id, process, plan.port(), plan.companionPort())
+                                    : awaitReady(brand, id, process, ready);
             READY.remove(id);
             if (port != null) {
                 PORTS.put(id, port);
@@ -650,7 +658,10 @@ public final class BrandRuntime {
     /// @param command the executable and arguments
     /// @param environment extra environment variables, on top of the panel's
     ///                      own (HOME etc.)
-    record LaunchPlan(List<String> command, Map<String, String> environment, int port) {
+    record LaunchPlan(List<String> command, Map<String, String> environment, int port, int companionPort) {
+        LaunchPlan(List<String> command, Map<String, String> environment, int port) {
+            this(command, environment, port, 0);
+        }
     }
 
     /// Builds the brand's launch command.
@@ -765,6 +776,8 @@ public final class BrandRuntime {
             }
             case HERMES -> throw new IOException(
                     "Hermes is launched through its generated wrapper; see hermesPlan");
+            case PI_WEB -> throw new IOException(
+                    "PI WEB is launched through its generated wrapper; see piWebPlan");
             default -> throw new IOException("unknown brand " + brand);
         }
     }
@@ -1090,6 +1103,10 @@ public final class BrandRuntime {
             // status endpoint (see awaitHermesHealth). A pattern that can never
             // match keeps the pump free of a second contract.
             case HERMES -> NEVER_READY;
+            // PI WEB announces a ready line, but the port is pre-allocated and the
+            // answer that matters is its health endpoint plus the daemon socket;
+            // the launch path polls those (see awaitPiWebReady).
+            case PI_WEB -> NEVER_READY;
         };
     }
 
@@ -1243,6 +1260,215 @@ public final class BrandRuntime {
     /// @param file      the script
     /// @param arguments what to pass, in order, after the script path
     record HermesWrapper(Path file, List<String> arguments) {
+    }
+
+    /// PI WEB's launcher: two processes behind one Node wrapper.
+    ///
+    /// This is a `.mjs` file rather than a shell script on purpose — pi-web runs
+    /// on Windows too, and the wrapper only has to start two Node entrypoints in
+    /// order. The daemon is started first because the web process deliberately
+    /// does not start it; the wrapper waits for the daemon's `/health` before
+    /// starting the gateway, and takes both down together.
+    ///
+    /// Ports are pre-allocated and travel in the arguments: the daemon listens on
+    /// `PI_WEB_SESSIOND_PORT` (loopback TCP rather than a unix socket, so the
+    /// path-length limit of a deep brand instance directory cannot break it) and
+    /// the web process reaches it through `PI_WEB_SESSIOND_URL`.
+    private static final String PI_WEB_WRAPPER = """
+            import { spawn } from "node:child_process";
+
+            const [daemonEntry, webEntry, daemonPort] = process.argv.slice(2);
+            const children = [];
+            const childrenByRole = {};
+
+            const start = (role, entry) => {
+              const child = spawn(process.execPath, [entry], { stdio: "inherit", env: process.env });
+              children.push(child);
+              childrenByRole[role] = child;
+              return child;
+            };
+
+            const shutdown = (signal) => {
+              for (const child of children) {
+                try { child.kill(signal); } catch {}
+              }
+            };
+
+            process.on("SIGTERM", () => { shutdown("SIGTERM"); setTimeout(() => process.exit(0), 8000).unref(); });
+            process.on("SIGINT", () => { shutdown("SIGINT"); setTimeout(() => process.exit(0), 8000).unref(); });
+
+            const waitFor = async (url, timeoutMs) => {
+              const deadline = Date.now() + timeoutMs;
+              while (Date.now() < deadline) {
+                try {
+                  const response = await fetch(url);
+                  if (response.ok) return true;
+                } catch {}
+                await new Promise((resolve) => setTimeout(resolve, 200));
+              }
+              return false;
+            };
+
+            const daemon = start("daemon", daemonEntry);
+            daemon.on("exit", (code) => {
+              if (childrenByRole.web === undefined) {
+                console.error("pi-web wrapper: the session daemon exited before the web gateway started (" + code + ")");
+                process.exit(code ?? 1);
+              }
+            });
+
+            if (!await waitFor(`http://127.0.0.1:${daemonPort}/health`, 60000)) {
+              console.error("pi-web wrapper: the session daemon did not answer /health within 60 s");
+              shutdown("SIGTERM");
+              process.exit(1);
+            }
+
+            const web = start("web", webEntry);
+            web.on("exit", (code, signal) => {
+              shutdown("SIGTERM");
+              process.exit(code ?? (signal ? 1 : 0));
+            });
+            daemon.on("exit", (code) => {
+              console.error("pi-web wrapper: the session daemon exited (" + code + "); stopping the web gateway");
+              try { web.kill("SIGTERM"); } catch {}
+              process.exit(code ?? 1);
+            });
+            """;
+
+    /// Builds PI WEB's two-process launch plan.
+    ///
+    /// @param manager    the manager, for the instance's home and data directory
+    /// @param instance   the instance
+    /// @param packageDir the installed release (a full one; the caller refuses a
+    ///                   terminal-only release before getting here)
+    static LaunchPlan piWebPlan(BrandInstanceManager manager, BrandInstance instance, Path packageDir)
+            throws IOException {
+        Path instanceDir = manager.instanceDirectory(instance.id());
+        Path home = manager.homeDirectory(instance);
+        Path data = instanceDir.resolve("pi-web-data");
+        Files.createDirectories(data);
+        Files.createDirectories(home);
+
+        String scoped = "node_modules/@chainingintention/pi-web-cn/dist/server/";
+        Path daemonEntry = packageDir.resolve(scoped + "sessiond.js");
+        Path webEntry = packageDir.resolve(scoped + "index.js");
+        if (!Files.isRegularFile(daemonEntry) || !Files.isRegularFile(webEntry)) {
+            throw new IOException("pi-web entry points missing under " + packageDir
+                    + " (expected " + daemonEntry + " and " + webEntry + ")");
+        }
+
+        int daemonPort = allocatePort();
+        int webPort = allocatePort();
+        while (webPort == daemonPort) {
+            webPort = allocatePort();
+        }
+        Path wrapper = instanceDir.resolve("pi-web-wrapper.mjs");
+        Files.writeString(wrapper, PI_WEB_WRAPPER, StandardCharsets.UTF_8);
+
+        List<String> command = List.of(
+                piWebNode(instance).toString(),
+                wrapper.toString(),
+                daemonEntry.toString(),
+                webEntry.toString(),
+                String.valueOf(daemonPort));
+
+        java.util.Map<String, String> environment = new java.util.LinkedHashMap<>();
+        environment.put("PI_WEB_DATA_DIR", data.toString());
+        environment.put("PI_WEB_SESSIOND_HOST", "127.0.0.1");
+        environment.put("PI_WEB_SESSIOND_PORT", String.valueOf(daemonPort));
+        environment.put("PI_WEB_SESSIOND_URL", "http://127.0.0.1:" + daemonPort);
+        environment.put("PI_WEB_HOST", "127.0.0.1");
+        environment.put("PI_WEB_PORT", String.valueOf(webPort));
+        environment.put("PI_WEB_PI_PACKAGE_DIR",
+                packageDir.resolve("node_modules").resolve(Brand.PI_SDK_PACKAGE).toString());
+        // The panel owns the release; a self-update would replace the tree the
+        // TUI of the same instance is executing from.
+        environment.put("PI_WEB_SKIP_VERSION_CHECK", "1");
+        return new LaunchPlan(List.copyOf(command), java.util.Map.copyOf(environment), webPort, daemonPort);
+    }
+
+    /// The Node.js that runs PI WEB's wrapper.
+    ///
+    /// The wrapper spawns the two entrypoints with `process.execPath`, so this
+    /// one choice determines both. It follows the same selector the brand
+    /// launcher resolves later ([nodeFallback], the instance's own override),
+    /// and falls back to a bare `node` when nothing is managed — the same
+    /// degraded path the other JavaScript brands take.
+    private static Path piWebNode(BrandInstance instance) {
+        org.jackhuang.hmcl.dsh.NodeSelection.Resolution resolution =
+                org.jackhuang.hmcl.dsh.NodeSelection.resolve(
+                        org.jackhuang.hmcl.dsh.NodeSelection.parse(instance.nodeRuntime()),
+                        nodeFallback(Brand.PI_WEB), false);
+        org.jackhuang.hmcl.dsh.DshNodeRuntime runtime = resolution.runtime();
+        if (runtime != null) {
+            Path binary = runtime.binDirectory().resolve(
+                    org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                            == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS
+                                    ? "node.exe" : "node");
+            if (Files.isRegularFile(binary)) {
+                return binary;
+            }
+        }
+        return Path.of(org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS ? "node.exe" : "node");
+    }
+
+    /// Polls PI WEB's two halves until both answer.
+    ///
+    /// The web process's `/api/pi-web/health` answers before the daemon is up —
+    /// upstream says so on purpose (a UI restart must not wait for sessiond) —
+    /// so a launch is only ready when the daemon's `/health` answers too.
+    /// Without the second poll, "running" would be a page whose sessions never
+    /// load.
+    private static @Nullable Integer awaitPiWebReady(String id, Process process, int port, int daemonPort) {
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(2))
+                .build();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(PI_WEB_READY_TIMEOUT_SECONDS);
+        boolean webReady = false;
+        boolean daemonReady = false;
+        while (System.nanoTime() < deadline) {
+            if (!process.isAlive()) {
+                return null;
+            }
+            if (!daemonReady) {
+                daemonReady = answers(client, "http://127.0.0.1:" + daemonPort + "/health");
+            }
+            if (!webReady) {
+                webReady = answers(client, "http://127.0.0.1:" + port + "/api/pi-web/health");
+            }
+            if (webReady && daemonReady) {
+                return port;
+            }
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+        ERRORS.put(id, "pi-web did not become ready within " + PI_WEB_READY_TIMEOUT_SECONDS
+                + " seconds (web " + (webReady ? "up" : "not answering")
+                + ", session daemon " + (daemonReady ? "up" : "not answering")
+                + "). The instance log says where it stopped.");
+        STATES.put(id, State.ERROR);
+        return null;
+    }
+
+    private static boolean answers(HttpClient client, String url) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                    .timeout(Duration.ofSeconds(2))
+                    .GET()
+                    .build();
+            HttpResponse<Void> response = client.send(request, HttpResponse.BodyHandlers.discarding());
+            return response.statusCode() / 100 == 2;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /// Hands an instance's own directories to the agent.

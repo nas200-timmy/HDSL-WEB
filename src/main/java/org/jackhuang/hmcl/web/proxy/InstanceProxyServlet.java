@@ -365,7 +365,7 @@ public final class InstanceProxyServlet extends HttpServlet {
         // `X-Forwarded-Prefix` output a second time (`/i/<id>/i/<id>/assets/…`
         // for fonts, measured 2026-11). Its bundle gets one targeted edit
         // instead — the build-time assets base — see [patchPrefixScript].
-        boolean brandClient = brand != null && !octopClient && !prefixClient;
+        boolean brandClient = brand != null && !octopClient && !prefixClient && !brand.relativeClient();
         // ZCode 与 Kimi Code 同源（共享「原生认识 /i/<id>/ 挂载」的客户端代码），
         // 它的 bundle 同样需要运行时补丁（见 patchBrandScript 的挂载检测放宽）。
         boolean zcodeClient = org.jackhuang.hmcl.web.zcode.ZcodeRuntime.known(instanceId);

@@ -15,6 +15,22 @@ MC 服务端第一版功能完成，作为一条明确的分界。此后 MC 相�
 
 ## 未发布
 
+**PI WEB 品牌（第五个品牌，实验）：终端为主，网页是添头**
+
+- 一个 release 是一个**配对**：`@chainingintention/pi-web-cn` + 它验证过的
+  `@earendil-works/pi-coding-agent`（当前 2.202611.8 + 1.4.0）。安装器一次
+  `pnpm add` 两个包；版本选择器只列已验证配对，更早的已装 release 继续可用。
+- 终端与网页共用同一个实例 HOME/agent 目录：`pi-web-sessiond` + `pi-web-server`
+  由生成的 Node wrapper 启动（先 daemon，等 `/health` 再起 web），面板轮询两端
+  就绪才把实例标成 running。
+- 实例级形态：终端+网页（默认）/ 仅终端（不占端口、不挂载 `/i/<id>/`）；版本锁
+  让实例不跟随品牌升级。安装失败（node-pty 未编译、web 包装不上）在版本卡原位
+  给出「只装 Pi 终端」的降级，实例卡与「运行与版本…」对话框展示降级原因。
+- 反代直接挂 `/i/<id>/`：pi-web 的客户端按 `document.baseURI` 解析所有请求、
+  路由走查询串，所以不做页面改写、不注入 runtime shim。
+- 安装后自检 `pi-web-sessiond --check-runtime` 判定浏览器终端（`node-pty`）是否
+  可用，结果写入 release.json；Pi TUI 不受影响。
+
 **插件/模组：中文搜索、分页、批量管理与安装元数据**
 
 - 搜索只写 `categories:paper`，把 Bukkit/Spigot 插件全滤掉了；改成 OR

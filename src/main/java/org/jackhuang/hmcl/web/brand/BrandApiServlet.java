@@ -314,15 +314,22 @@ public final class BrandApiServlet extends HttpServlet {
         versions.forEach(array::add);
         body.add("versions", array);
         body.addProperty("latest", BrandCatalog.latest(brand));
+        if (brand == Brand.PI_WEB) {
+            String paired = brand.pairedSdkVersion(BrandCatalog.latest(brand));
+            if (paired != null) {
+                body.addProperty("pairedSdk", paired);
+            }
+        }
         JsonArray installed = new JsonArray();
-        for (BrandInstaller.Release release : BrandInstaller.releases(ref.root())) {
+        for (BrandInstaller.Release release : BrandInstaller.releases(brand, ref.root())) {
             JsonObject item = new JsonObject();
             item.addProperty("version", release.version());
             item.addProperty("current", release.current());
+            addReleaseAudit(item, brand, java.nio.file.Path.of(release.path()));
             installed.add(item);
         }
         body.add("releases", installed);
-        String def = defaultVersion(ref);
+        String def = defaultVersion(brand, ref);
         body.add("default", def == null ? JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(def));
         body.addProperty("supported", true);
         Json.writePreservingNulls(response, body);
@@ -330,11 +337,12 @@ public final class BrandApiServlet extends HttpServlet {
 
     private void releases(Brand brand, PathRef ref, HttpServletResponse response) throws IOException {
         JsonArray array = new JsonArray();
-        for (BrandInstaller.Release release : BrandInstaller.releases(ref.root())) {
+        for (BrandInstaller.Release release : BrandInstaller.releases(brand, ref.root())) {
             JsonObject item = new JsonObject();
             item.addProperty("version", release.version());
             item.addProperty("path", release.path());
             item.addProperty("current", release.current());
+            addReleaseAudit(item, brand, java.nio.file.Path.of(release.path()));
             array.add(item);
         }
         JsonObject body = new JsonObject();
@@ -342,9 +350,48 @@ public final class BrandApiServlet extends HttpServlet {
         Json.write(response, body);
     }
 
+    /// Whether an installed release can start the brand's web process.
+    ///
+    /// Only PI WEB can answer `false`: a terminal-only release carries the Pi
+    /// SDK and nothing else. Other brands' releases are their web app.
+    private static boolean hasWeb(Brand brand, PathRef ref, String version) {
+        if (brand != Brand.PI_WEB) {
+            return true;
+        }
+        java.nio.file.Path release = ref.root().resolve(BrandInstaller.RELEASES_DIR).resolve(version);
+        BrandInstaller.ReleaseInfo info = BrandInstaller.releaseInfo(release);
+        return info != null ? info.webAvailable()
+                : java.nio.file.Files.exists(release.resolve("node_modules/.bin/pi-web"));
+    }
+
+    /// What a PI WEB release contains, for the page's version card.
+    ///
+    /// A release installed before the audit existed has no `release.json`; the
+    /// executable on disk is the same answer the installer used then, so the
+    /// page still gets a usable shape.
+    private static void addReleaseAudit(JsonObject item, Brand brand, java.nio.file.Path releasePath) {
+        if (brand != Brand.PI_WEB) {
+            return;
+        }
+        String version = item.has("version") ? item.get("version").getAsString() : "";
+        String paired = brand.pairedSdkVersion(version);
+        if (paired != null) {
+            item.addProperty("pairedSdk", paired);
+        }
+        BrandInstaller.ReleaseInfo info = BrandInstaller.releaseInfo(releasePath);
+        if (info != null) {
+            item.addProperty("webAvailable", info.webAvailable());
+            item.addProperty("ptyAvailable", info.ptyAvailable());
+        } else {
+            item.addProperty("webAvailable",
+                    java.nio.file.Files.exists(releasePath.resolve("node_modules/.bin/pi-web")));
+            item.addProperty("ptyAvailable", true);
+        }
+    }
+
     /// The version a new instance gets: the newest installed release.
-    private static @Nullable String defaultVersion(PathRef ref) {
-        List<BrandInstaller.Release> releases = BrandInstaller.releases(ref.root());
+    private static @Nullable String defaultVersion(Brand brand, PathRef ref) {
+        List<BrandInstaller.Release> releases = BrandInstaller.releases(brand, ref.root());
         return releases.isEmpty() ? null : releases.get(0).version();
     }
 
@@ -365,6 +412,15 @@ public final class BrandApiServlet extends HttpServlet {
         if (!BrandCatalog.versions(brand).contains(target)) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                     target + " is not a published " + brand.sourceLabel() + " version");
+            return;
+        }
+        String modeValue = stringField(body, "mode");
+        BrandInstaller.Mode installMode = "terminal-only".equalsIgnoreCase(modeValue)
+                ? BrandInstaller.Mode.TERMINAL_ONLY
+                : BrandInstaller.Mode.FULL;
+        if (installMode == BrandInstaller.Mode.TERMINAL_ONLY && !brand.supportsTerminalOnly()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    brand.id() + " has no terminal-only release; only pi-web does");
             return;
         }
         boolean sourceBuild = brand == Brand.OCTOP && policy.get(brand).sourceBuild();
@@ -426,16 +482,18 @@ public final class BrandApiServlet extends HttpServlet {
             JsonObject installing = new JsonObject();
             installing.addProperty("version", target);
             installing.addProperty("sourceBuild", sourceBuild);
+            installing.addProperty("mode", installMode.name().toLowerCase(java.util.Locale.ROOT));
             live.attachResult(installing);
             try {
                 if (sourceBuild) {
                     BrandInstaller.installOctopSource(brand, target, ref.root(),
                             ref.root().resolve(BrandInstaller.RELEASES_DIR).resolve(target), progress);
                 } else {
-                    BrandInstaller.install(brand, target, ref.root(), progress);
+                    BrandInstaller.install(brand, target, ref.root(), progress, installMode);
                 }
                 return "Installed " + brand.sourceLabel() + " " + target
-                        + (sourceBuild ? " (source build)" : "");
+                        + (sourceBuild ? " (source build)" : "")
+                        + (installMode == BrandInstaller.Mode.TERMINAL_ONLY ? " (terminal only)" : "");
             } catch (BrandException e) {
                 throw new RuntimeException(e.getMessage(), e);
             }
@@ -515,7 +573,7 @@ public final class BrandApiServlet extends HttpServlet {
             version = version.trim();
         }
         if (version == null || version.isBlank()) {
-            version = defaultVersion(ref);
+            version = defaultVersion(brand, ref);
         }
         if (version == null || version.isBlank()) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
@@ -539,6 +597,25 @@ public final class BrandApiServlet extends HttpServlet {
             return;
         }
         BrandInstance created = ref.manager().create(name, version);
+        boolean webEnabled = true;
+        if (body.has("webEnabled") && !body.get("webEnabled").isJsonNull()) {
+            webEnabled = body.get("webEnabled").getAsBoolean();
+        }
+        if (!webEnabled && !brand.supportsTerminalOnly()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    brand.id() + " instances always run their web mode");
+            return;
+        }
+        if (webEnabled && brand == Brand.PI_WEB && !hasWeb(brand, ref, version)) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    brand.sourceLabel() + " " + version + " was installed as a terminal-only release; "
+                            + "install the full pair before creating a web instance");
+            return;
+        }
+        if (!webEnabled) {
+            created = created.withWebEnabled(false);
+            ref.manager().update(created);
+        }
         if (body.has("baseUrl")) {
             created = created.withBaseUrl(baseUrlFrom(brand, body));
             ref.manager().update(created);
@@ -601,12 +678,52 @@ public final class BrandApiServlet extends HttpServlet {
             return;
         }
         boolean touchesVersion = body.has("version");
+        boolean webAfter = body.has("webEnabled")
+                ? body.get("webEnabled").getAsBoolean()
+                : instance.webEnabledOrDefault();
         if (touchesVersion && BrandRuntime.isRunning(id)) {
             Json.error(response, HttpServletResponse.SC_CONFLICT,
                     "stop the instance before changing its version");
             return;
         }
+        if (touchesVersion && instance.versionLockedOrDefault()) {
+            String requested = stringField(body, "version");
+            if (requested != null && !requested.isBlank() && !requested.trim().equals(instance.version())) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT,
+                        "version_locked: this instance is pinned to " + instance.version()
+                                + "; unlock it first if the move is intended");
+                return;
+            }
+        }
         BrandInstance patched = instance;
+        if (body.has("versionLocked")) {
+            if (!brand.supportsTerminalOnly()) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        brand.id() + " instances cannot be pinned to a release");
+                return;
+            }
+            patched = patched.withVersionLocked(body.get("versionLocked").getAsBoolean());
+        }
+        if (body.has("webEnabled")) {
+            if (!brand.supportsTerminalOnly()) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        brand.id() + " instances always run their web mode");
+                return;
+            }
+            boolean enabled = body.get("webEnabled").getAsBoolean();
+            if (!enabled && BrandRuntime.isRunning(id)) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT,
+                        "stop the instance before turning its web mode off");
+                return;
+            }
+            if (enabled && !hasWeb(brand, ref, patched.version())) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        brand.sourceLabel() + " " + patched.version()
+                                + " is a terminal-only release; install the full pair to run its web mode");
+                return;
+            }
+            patched = patched.withWebEnabled(enabled);
+        }
         String name = stringField(body, "name");
         if (name != null && !name.trim().isEmpty() && !name.trim().equals(instance.name())) {
             patched = patched.withName(name.trim());
@@ -617,6 +734,13 @@ public final class BrandApiServlet extends HttpServlet {
                     && BrandInstaller.packageDir(brand, ref.root(), version.trim()) == null) {
                 Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                         brand.sourceLabel() + " " + version.trim() + " is not installed");
+                return;
+            }
+            if (version != null && !version.isBlank() && !version.trim().equals(instance.version())
+                    && webAfter && !hasWeb(brand, ref, version.trim())) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT,
+                        brand.sourceLabel() + " " + version.trim()
+                                + " is a terminal-only release; this instance runs its web mode");
                 return;
             }
             if (version != null && !version.isBlank() && !version.trim().equals(instance.version())) {
@@ -701,12 +825,22 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                     brand.sourceLabel() + " " + instance.version() + " is not installed");
             return;
-        }        // The two modes are exclusive, and the web mode wins (docs/brands.md):
-        // Hermes' terminal starts its own *detached* gateway for the same home,
-        // and the wrapper can only own a gateway the TUI is not holding. Closing
-        // the session here and passing --replace in the wrapper is what makes
-        // "open the web page" always succeed, even after a terminal was used.
-        if (instanceTerminal.close(brand.id(), id)) {
+        }
+        if (brand.supportsTerminalOnly() && !instance.webEnabledOrDefault()) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "terminal_only: this instance runs the Pi terminal only; turn its web mode on first");
+            return;
+        }
+        if (!hasWeb(brand, ref, instance.version())) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    brand.sourceLabel() + " " + instance.version()
+                            + " is a terminal-only release; install the full pair to run its web mode");
+            return;
+        }
+        // The two modes are exclusive only for brands whose TUI starts a second
+        // supervisor on the same state (Hermes). PI WEB's terminal and web share
+        // one agent directory but run separate sessions, so they may coexist.
+        if (!brand.terminalCoexistsWithWeb() && instanceTerminal.close(brand.id(), id)) {
             LOG.info("Closed the " + brand.id() + " terminal of " + id + " before launching its web mode");
         }
         // The terminal's TUI leaves a detached gateway holding the API port; drop
@@ -869,7 +1003,9 @@ public final class BrandApiServlet extends HttpServlet {
             // the terminal takes the instance over, and the footer's start
             // button brings the web mode back when the user wants it.
             JsonObject body = instanceTerminal.open(request, id,
-                    () -> BrandRuntime.stop(id),
+                    brand.terminalCoexistsWithWeb()
+                            ? () -> { }
+                            : () -> BrandRuntime.stop(id),
                     resume -> tui.target(packageDir, ref.manager().homeDirectory(instance),
                             ref.manager().workspaceDirectory(instance), id, resume));
             Json.write(response, body);
@@ -934,6 +1070,11 @@ public final class BrandApiServlet extends HttpServlet {
         }
         if (!BrandRuntime.isRunning(id)) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "the instance is not running");
+            return;
+        }
+        if (brand.supportsTerminalOnly() && !instance.webEnabledOrDefault()) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "terminal_only: this instance has no web mode");
             return;
         }
         JsonObject body = new JsonObject();
@@ -1456,6 +1597,20 @@ public final class BrandApiServlet extends HttpServlet {
         body.addProperty("brand", instance.brand());
         body.addProperty("name", instance.name());
         body.addProperty("version", instance.version());
+        if (brand == Brand.PI_WEB) {
+            body.addProperty("webEnabled", instance.webEnabledOrDefault());
+            body.addProperty("versionLocked", instance.versionLockedOrDefault());
+            String paired = brand.pairedSdkVersion(instance.version());
+            body.addProperty("pairedSdk", paired == null ? "" : paired);
+            java.nio.file.Path release = config.dataDir.resolve("brands").resolve(brand.id())
+                    .resolve(BrandInstaller.RELEASES_DIR).resolve(instance.version());
+            BrandInstaller.ReleaseInfo info = BrandInstaller.releaseInfo(release);
+            boolean webAvailable = info != null
+                    ? info.webAvailable()
+                    : java.nio.file.Files.exists(release.resolve("node_modules/.bin/pi-web"));
+            body.addProperty("releaseWebAvailable", webAvailable);
+            body.addProperty("releasePtyAvailable", info == null || info.ptyAvailable());
+        }
         if (instance.nodeRuntime() == null) {
             body.add("nodeRuntime", com.google.gson.JsonNull.INSTANCE);
         } else {

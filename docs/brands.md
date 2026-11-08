@@ -289,6 +289,7 @@ Kimi Code 的客户端认子路径，不需要这段脚本（实验证明：注�
 | OpenCode | `assets/img/brand-opencode.svg` | `anomalyco/opencode` 的 `packages/identity/mark.svg`（MIT，仓库原址 `sst/opencode`）。自带底色与描边，直接 `<img>` |
 | ZCode | `assets/img/brand-zcode.svg` | Simple Icons 分发的 Z.ai 标志（文件 CC0，标志本身来自 z.ai 官方 logo）。**故意不用 ZCode 仓库里那份**：它的 `NOTICE` 对"图标"有笼统保留条款，许可明确的那份优先 |
 | Claude Web | **不上图** | 社区仓库的图标就是 Anthropic 的珊瑚色星芒标，而 Anthropic 商标条款写明"须事先书面许可、不得改动"。故只保留文字标签 + 中性图标 |
+| PI WEB | **不上图** | 上游 pi-web 与本地化分支都没有为标志附明确的可再分发许可；按本仓库惯例回退中性图标，只做文字标识 |
 
 商标与著作权是两件事：上表的文件许可（MIT / CC0）解决的是**分发**，
 标志本身仍是各权利人的**商标**——声明里写明了"不表示隶属/赞助/认可"，且未改色改形。
@@ -412,6 +413,85 @@ Kimi Code 的客户端认子路径，不需要这段脚本（实验证明：注�
 | **`web/src/store.tsx` 的 `refreshExternal()`** | **实例建出来不显示、按钮一直转，看起来像卡死**（Hermes 第一次就是这样：品牌页自己另拉列表，所以截图是好的） |
 | `web/src/types.ts` 的 `BrandId`、`BrandsView` 的 `BRAND_KEYS/BRAND_TITLE/BRAND_SHORT`、`i18n.ts` | 品牌页没有这一栏，或标题是 undefined |
 | `web/src/actions.ts` 与 `LaunchPane` 的品牌联合类型、`MainPage` 的断言 | 主界面启动/停止按钮传不过去（tsc 会拦，但只在类型收窄的地方） |
+
+## PI WEB（第五个品牌，实验）
+
+### 一个 release 是一个配对
+
+PI WEB 的网页守进程复用宿主的 Pi SDK，而同一个 release 里的 Pi TUI 就是那份 SDK 的
+`pi`。因此面板安装的是**一对**版本，不是单独一个包：
+
+```
+releases/<pi-web 版本>/
+├── node_modules/@chainingintention/pi-web-cn      ← 网页 + sessiond
+├── node_modules/@earendil-works/pi-coding-agent   ← Pi TUI + SDK
+└── release.json                                   ← 安装审计结果
+```
+
+配对表在 `Brand.PI_WEB_PAIRS`（当前 `2.202611.8` ↔ `1.4.0`）。它是**契约**：pi-web 的
+peer 范围覆盖多个 Pi 大版本，而按 SDK `VERSION` 分支的适配（例如管理侧 MCP 认证）只对
+其中一些存在。所以版本选择器只列已验证配对；更早的 release 已装仍可继续使用（这是
+"单档可选、底层可回退"的 B 方案）。
+
+`release.json` 记录 `{piWeb, piSdk, webAvailable, ptyAvailable, installedAt}`。
+`webAvailable=false` 表示这个 release 只装了 Pi SDK（仅终端），`ptyAvailable=false`
+表示网页能跑但浏览器内终端不可用（`node-pty` 在 Linux 上没有预编译，需要 C++ 工具链）。
+
+### 两个进程，一个 Node wrapper
+
+`pi-web-sessiond`（会话/工具）与 `pi-web-server`（网页/API）是两个进程。web **故意不**
+启动 daemon（`SessionDaemonClient` 只连 socket/URL），所以面板生成一个
+`<instance>/pi-web-wrapper.mjs`：先起 daemon，等它的 `/health`，再起 web；任一退出就收掉
+另一个。就绪判定同时轮询 daemon 的 `/health` 与 web 的 `/api/pi-web/health`——上游明确
+说 web 的就绪不等 daemon，只等 web 会把"会话永远加载不出来"标成 running。
+
+端口在面板侧预分配，走回环 TCP 而不是 unix socket，避免品牌实例目录过深触发 socket
+路径长度上限：
+
+```
+PI_WEB_DATA_DIR=<instance>/pi-web-data
+PI_WEB_SESSIOND_HOST=127.0.0.1
+PI_WEB_SESSIOND_PORT=<daemon 端口>
+PI_WEB_SESSIOND_URL=http://127.0.0.1:<daemon 端口>
+PI_WEB_HOST=127.0.0.1
+PI_WEB_PORT=<web 端口>
+PI_WEB_PI_PACKAGE_DIR=<release>/node_modules/@earendil-works/pi-coding-agent
+PI_WEB_SKIP_VERSION_CHECK=1
+```
+
+`PI_WEB_SKIP_VERSION_CHECK` 是刻意的：版本由面板管，`pi-web update` 会替换实例 TUI
+正在执行的目录。
+
+### 反代：相对客户端，零改写
+
+pi-web 的客户端用 `base: "./"` 构建，所有请求经 `appUrl.ts` 解析一次到
+`document.baseURI`，路由走查询串。因此它属于"相对客户端"类别（`Brand#relativeClient`）：
+`/i/<id>/` 只做既有的剥前缀、cookie `Path` 改写、`Location` 改写与 WebSocket 转发，
+**不注入 runtime shim、不改写 HTML/脚本**。这一点和 Hermes 的"前缀感知"不同：Hermes 的
+服务端自己读 `X-Forwarded-Prefix`，而 pi-web 的服务端始终只认根路径。
+
+### 形态、版本锁与降级
+
+- **终端 + 网页**（默认）：网页由 wrapper 起；TUI 可从实例卡另开，两者共用同一个 HOME
+  与 `~/.pi/agent`，读写同一批会话。与 Hermes 不同，**两者可以同时开**。
+- **仅终端**：不启动 web、不分配端口、不挂载 `/i/<id>/`；实例卡隐藏"打开网页"。
+  创建时可选定，之后在「运行与版本…」对话框里改回来（改回时若当前 release 是仅终端
+  安装，会拒绝并说明先装完整配对）。
+- **版本锁**：实例固定在自己的 release，品牌换推荐配对时不跟随；版本选择器禁用，
+  `PATCH` 换版本返回 `version_locked`。
+- **降级**：安装失败时版本卡原位给出决策——「只装 Pi 终端」（只装 SDK，
+  `webAvailable=false`）、「换源重试」或取消；实例卡徽标与「运行与版本…」对话框展示
+  `webAvailable` / `ptyAvailable` 与原因。降级实例可以被锁定，避免下一次升级又切到
+  一个同样没有网页的 release。
+
+### 已知边界
+
+- **Pi TUI 的语言**：这个分支汉化的是 PI WEB 自己（网页、`pi-web` 命令与服务端提示），
+  Pi 本体的 TUI 不在这个包里。
+- **node-pty**：`1.1.0` 只带 darwin/win32 预编译；Linux 上走 `node-gyp`（需要
+  python3/make/g++）。失败只影响网页内置终端，不影响 Pi TUI 与网页聊天。
+- **会话恢复**：`PiTui` 暂不接 resume 参数（Pi CLI 的恢复 flag 未经真机验证），终端
+  每次开新会话。
 
 ## 已知限制
 

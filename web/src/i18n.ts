@@ -325,12 +325,40 @@ export const I18N = {
   "dsh.brand.claude-web": "Claude Web（实验）",
   "dsh.brand.hermes": "Hermes Agent（实验）",
   "dsh.brand.octop": "Octop（实验）",
+  "dsh.brand.pi-web": "PI WEB（实验）",
   "dsh.brand.zcode": "ZCode（实验）",
   // 「（实验）」是完整显示名的一部分（侧栏标题、第三方警示用），
   // 但实例名不该背这个尾巴（新建实例时预填的就是下面这几条短名）。
   "dsh.brand.opencode.short": "OpenCode",
   "dsh.brand.claude-web.short": "Claude Web",
   "dsh.brand.hermes.short": "Hermes",
+  "dsh.brand.pi-web.short": "PI WEB",
+  // PI WEB：终端与网页共用同一个 agent 目录但各自跑会话，所以可以同时开；
+  // 这里只描述"形态"与"版本锁"这两个决策，不做互斥确认。
+  "dsh.brand.pi-web.mode": "运行形态",
+  "dsh.brand.pi-web.mode.both": "终端 + 网页",
+  "dsh.brand.pi-web.mode.terminal": "仅终端",
+  "dsh.brand.pi-web.mode.both.hint":
+    "同一个 Pi：终端和网页读写同一个 agent 目录与会话。网页只是多一个入口。",
+  "dsh.brand.pi-web.mode.terminal.hint":
+    "不启动网页进程，只保留 Pi 的 TUI。会话、凭据、Pi 包都保留，随时可以切回来。",
+  "dsh.brand.pi-web.lock": "锁定版本",
+  "dsh.brand.pi-web.lock.hint":
+    "锁定后这台实例不跟随品牌的推荐配对升级；切版本需要先解锁。",
+  "dsh.brand.pi-web.terminalOnly": "仅终端",
+  "dsh.brand.pi-web.versionLocked": "版本已锁",
+  "dsh.brand.pi-web.pair": "配对",
+  "dsh.brand.pi-web.run": "运行与版本…",
+  "dsh.brand.pi-web.pty.missing": "浏览器终端不可用",
+  "dsh.brand.pi-web.web.missing": "仅终端 release",
+  "dsh.brand.pi-web.install.terminalOnly": "只装 Pi 终端",
+  "dsh.brand.pi-web.degraded.title": "安装未完成",
+  "dsh.brand.pi-web.degraded.hint":
+    "网页这一半没装上。可以只保留 Pi 终端（会话、凭据、Pi 包都保留），或者换源重试。",
+  "dsh.brand.pi-web.degraded.continue": "继续（网页无终端）",
+  "dsh.brand.pi-web.degraded.lost":
+    "失去：网页界面、浏览器内终端、网页文件面板　保留：Pi 终端、会话、凭据、Pi 包",
+  "dsh.brand.pi-web.recommended": "当前推荐配对",
   // Hermes 的网页与终端共用同一个 gateway，只能开一个（docs/brands.md
   // 「终端与网页互斥」）。面板在替换另一个模式之前先问一句：说清会关掉什么、
   // 什么不会丢，确认了再换。

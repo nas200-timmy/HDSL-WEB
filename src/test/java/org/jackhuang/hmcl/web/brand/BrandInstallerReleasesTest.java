@@ -65,7 +65,7 @@ class BrandInstallerReleasesTest {
         release("2.0.0", false);                       // half-installed: no marker
         release("1.0.3b1" + BrandInstaller.PREVIOUS_SUFFIX, true);  // staging name
 
-        List<BrandInstaller.Release> releases = BrandInstaller.releases(brandRoot);
+        List<BrandInstaller.Release> releases = BrandInstaller.releases(Brand.OCTOP, brandRoot);
         assertEquals(1, releases.size(), releases.toString());
         assertEquals("1.0.3b1", releases.get(0).version());
     }
@@ -86,7 +86,7 @@ class BrandInstallerReleasesTest {
             assertTrue(entries.anyMatch(path -> path.getFileName().toString().startsWith("1.0.3b1.broken-")),
                     "the broken tree is moved aside");
         }
-        assertEquals("1.0.3b1", BrandInstaller.releases(brandRoot).get(0).version());
+        assertEquals("1.0.3b1", BrandInstaller.releases(Brand.OCTOP, brandRoot).get(0).version());
     }
 
     @Test
@@ -112,7 +112,7 @@ class BrandInstallerReleasesTest {
         assertTrue(Files.exists(staged), "the staged copy stays where it is");
         assertFalse(Files.exists(releasesDir().resolve("1.0.3b1").resolve("octop-install.json")),
                 "nothing claims to be installed");
-        assertTrue(BrandInstaller.releases(brandRoot).isEmpty());
+        assertTrue(BrandInstaller.releases(Brand.OCTOP, brandRoot).isEmpty());
     }
 
     @Test

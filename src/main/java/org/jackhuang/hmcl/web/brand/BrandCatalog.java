@@ -131,14 +131,24 @@ public final class BrandCatalog {
     /// actually bundles are offered. Other brands pass their picker through.
     private static Snapshot installable(Brand brand) {
         Snapshot snapshot = snapshot(brand);
-        if (brand != Brand.OCTOP) {
-            return snapshot;
+        if (brand == Brand.OCTOP) {
+            List<String> versions = snapshot.versions().stream()
+                    .filter(BrandInstaller::hasBundledOctopDashboard)
+                    .toList();
+            String latest = versions.isEmpty() ? "" : versions.get(0);
+            return new Snapshot(versions, latest, snapshot.fetchedAt());
         }
-        List<String> versions = snapshot.versions().stream()
-                .filter(BrandInstaller::hasBundledOctopDashboard)
-                .toList();
-        String latest = versions.isEmpty() ? "" : versions.get(0);
-        return new Snapshot(versions, latest, snapshot.fetchedAt());
+        if (brand == Brand.PI_WEB) {
+            // One verified pair at a time (Brand#PI_WEB_PAIRS): the picker shows
+            // what the panel can actually install with a matching Pi, not every
+            // tag the registry happens to carry.
+            List<String> versions = snapshot.versions().stream()
+                    .filter(brand::offersVersion)
+                    .toList();
+            String latest = versions.isEmpty() ? "" : versions.get(0);
+            return new Snapshot(versions, latest, snapshot.fetchedAt());
+        }
+        return snapshot;
     }
 
     /// Prefetches every brand's list — called once at server startup so the

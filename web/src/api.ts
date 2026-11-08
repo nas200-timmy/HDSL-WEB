@@ -584,13 +584,13 @@ export const api = {
   brandCapabilities: () => request<BrandCapabilities>("/api/brands/capabilities"),
 
   brandReleases: (brand: BrandId) =>
-    request<{ releases: { version: string; path: string; current: boolean }[] }>(
+    request<{ releases: { version: string; path: string; current: boolean; pairedSdk?: string; webAvailable?: boolean; ptyAvailable?: boolean }[] }>(
       `/api/brands/${brand}/releases`,
     ),
 
   /** 开始安装指定版本；品牌内同时只允许一个安装（409） */
-  brandInstall: (brand: BrandId, version: string) =>
-    request<{ taskId: string }>(`/api/brands/${brand}/install`, jsonInit("POST", { version })),
+  brandInstall: (brand: BrandId, version: string, mode?: "full" | "terminal-only") =>
+    request<{ taskId: string }>(`/api/brands/${brand}/install`, jsonInit("POST", { version, mode })),
 
   brandInstallStatus: (brand: BrandId) =>
     request<BrandInstallStatus>(`/api/brands/${brand}/install`),
@@ -608,12 +608,12 @@ export const api = {
     ),
 
   /** version 缺省用已装最新；一个版本没装 → 400 */
-  createBrandInstance: (brand: BrandId, body: { name: string; version?: string }) =>
+  createBrandInstance: (brand: BrandId, body: { name: string; version?: string; webEnabled?: boolean }) =>
     request<{ instance: BrandInstance }>(`/api/brands/${brand}/instances`, jsonInit("POST", body)),
 
   /** 运行中改 version → 409；未安装的 version → 400 */
   /** baseUrl 目前只有 claude-web 接受（ANTHROPIC_BASE_URL）；传空串表示清除 */
-  patchBrandInstance: (brand: BrandId, id: string, body: { name?: string; version?: string; baseUrl?: string; nodeRuntime?: string | null }) =>
+  patchBrandInstance: (brand: BrandId, id: string, body: { name?: string; version?: string; baseUrl?: string; nodeRuntime?: string | null; webEnabled?: boolean; versionLocked?: boolean }) =>
     request<{ instance: BrandInstance }>(
       `/api/brands/${brand}/instances/${encodeURIComponent(id)}`,
       jsonInit("PATCH", body),

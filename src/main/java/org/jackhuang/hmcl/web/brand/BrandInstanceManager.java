@@ -145,7 +145,7 @@ public final class BrandInstanceManager {
         String id = newTokenLike(9);
         Path directory = root.resolve(id);
         BrandInstance instance = new BrandInstance(id, brand.id(), normalized,
-                version.trim(), null, 0, System.currentTimeMillis(), null);
+                version.trim(), null, 0, System.currentTimeMillis(), null, null, null);
 
         try {
             Files.createDirectories(homeDirectoryOf(directory));

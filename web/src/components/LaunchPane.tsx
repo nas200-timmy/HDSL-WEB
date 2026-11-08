@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { launchBrandInstance, launchInstance, stopBrandInstance, stopInstance } from "../actions";
 import { I18N } from "../i18n";
 import { setSelectedInstanceId, useSelectedInstanceId } from "../selection";
-import { useAppState } from "../store";
+import { toast, useAppState } from "../store";
 import type { ExternalInstance, Instance } from "../types";
 import { normState } from "../utils";
 import { BrandIcon } from "./BrandIcon";
@@ -30,7 +30,7 @@ export interface LaunchEntry {
   name: string;
   /** 已归一化（大写）：RUNNING / STARTING / STOPPED … */
   state: string;
-  kind: "dsh" | "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "zcode";
+  kind: "dsh" | "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "pi-web" | "zcode";
   /** kind = dsh 时的原始实例；品牌/zcode 实例为 null */
   dsh: Instance | null;
   /** 品牌/zcode 条目；dsh 实例为 null */
@@ -44,6 +44,7 @@ const BRAND_LABEL: Record<string, string> = {
   "claude-web": I18N["dsh.brand.claude-web"],
   octop: I18N["dsh.brand.octop"],
   hermes: I18N["dsh.brand.hermes.short"],
+  "pi-web": I18N["dsh.brand.pi-web.short"],
   zcode: I18N["dsh.brand.zcode"],
 };
 export { BRAND_LABEL };
@@ -91,6 +92,9 @@ export function LaunchPane() {
       if (!current.dsh) return;
       if (running) void stopInstance(current.dsh);
       else void launchInstance(current.dsh);
+    } else if (current.external?.brand === "pi-web" && current.external.webEnabled === false) {
+      if (running) void stopBrandInstance(current.kind, current.id);
+      else toast("info", "这是仅终端实例：在「品牌实例」页点终端按钮打开 Pi 的 TUI");
     } else {
       if (running) void stopBrandInstance(current.kind, current.id);
       else void launchBrandInstance(current.kind, { id: current.id, name: current.name });
@@ -101,7 +105,11 @@ export function LaunchPane() {
     <div className="launch-pane">
       <button className="launch-main ripple-host" onClick={onAction}>
         <span className="launch-action">
-          {current ? actionLabel(current.state) : I18N["dsh.launch.no_instance"]}
+          {current
+            ? current.external?.brand === "pi-web" && current.external.webEnabled === false
+              ? I18N["dsh.brand.pi-web.terminalOnly"]
+              : actionLabel(current.state)
+            : I18N["dsh.launch.no_instance"]}
         </span>
         <span className="launch-target">
           {current ? current.name : I18N["dsh.launch.no_instance.hint"]}

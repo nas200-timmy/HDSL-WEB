@@ -102,6 +102,30 @@ public final class BrandInstaller {
     public record Release(String version, String path, boolean current) {
     }
 
+    /// What an install is allowed to include.
+    ///
+    /// PI WEB is the only brand with two shapes: the full pair (web + Pi SDK)
+    /// and the **terminal-only** release (the Pi SDK alone). The second exists
+    /// for two callers — an operator who wants the TUI and nothing else, and
+    /// the degradation path when the web package cannot be installed — and it
+    /// is a property of the release on disk, not a runtime toggle.
+    public enum Mode {
+        /// The web app and the Pi SDK it runs on.
+        FULL,
+        /// Only the Pi SDK: the TUI works, there is no web process to start.
+        TERMINAL_ONLY
+    }
+
+    /// What a PI WEB release contains, written next to it as `release.json`.
+    ///
+    /// `webAvailable` is the difference between "this directory is a pair" and
+    /// "this directory is a Pi terminal"; `ptyAvailable` is the install-time
+    /// answer to "can the web app provide its browser terminal" (node-pty's
+    /// native module, which Linux builds from source).
+    public record ReleaseInfo(String version, String pairedSdk, boolean webAvailable,
+                              boolean ptyAvailable, long installedAt) {
+    }
+
     /// Where an install reports progress: one human line and a 0–1 fraction.
     ///
     /// The fraction is what drives the panel's bar and its ETA, so the installer reports it at
@@ -914,10 +938,23 @@ public final class BrandInstaller {
     ///                          fails, or the installed release is incomplete
     public static void install(Brand brand, String version, Path brandRoot, Progress progress)
             throws BrandException {
+        install(brand, version, brandRoot, progress, Mode.FULL);
+    }
+
+    /// The same, choosing what the release contains.
+    ///
+    /// @param mode [Mode#FULL] for the pair, [Mode#TERMINAL_ONLY] for the Pi SDK alone
+    public static void install(Brand brand, String version, Path brandRoot, Progress progress, Mode mode)
+            throws BrandException {
+        if (mode != Mode.FULL && brand != Brand.PI_WEB) {
+            throw new BrandException(brand.id() + " has no terminal-only release; only pi-web does");
+        }
         Sink message = new Sink(progress);
         Path releases = brandRoot.resolve(RELEASES_DIR);
         Path target = releases.resolve(version);
-        boolean installed = Files.exists(target.resolve(brand.installMarker()));
+        boolean installed = brand == Brand.PI_WEB
+                ? releaseUsable(brand, target, mode)
+                : Files.exists(target.resolve(brand.installMarker()));
         if (installed && brand == Brand.OCTOP) {
             // A source-built release has the same marker; asking for the
             // package layout must replace it, not report "already installed".
@@ -927,6 +964,16 @@ public final class BrandInstaller {
             message.accept(brand.sourceLabel() + " " + version + " is already installed");
             handReleaseToAgent(target);
             pointCurrentAt(brandRoot, target);
+            return;
+        }
+        if (brand == Brand.PI_WEB) {
+            installPiWeb(brand, version, brandRoot, target, message, mode);
+            handReleaseToAgent(target);
+            pointCurrentAt(brandRoot, target);
+            message.accept("Installed " + brand.sourceLabel() + " " + version
+                    + (mode == Mode.TERMINAL_ONLY ? " (terminal only)" : ""));
+            LOG.info("Installed " + brand.sourceLabel() + " " + version + " into " + target
+                    + " (" + mode + ")");
             return;
         }
         if (brand == Brand.HERMES) {
@@ -1043,6 +1090,221 @@ public final class BrandInstaller {
         pointCurrentAt(brandRoot, target);
         message.accept("Installed " + brand.npmPackage() + " " + version);
         LOG.info("Installed " + brand.npmPackage() + " " + version + " into " + target);
+    }
+
+    /// The PI WEB install: one pnpm command adds the web app and the Pi SDK it
+    /// is verified against, then an audit records what the release can do.
+    ///
+    /// `node-pty` has no Linux prebuild (measured on 1.1.0: the tarball carries
+    /// darwin and win32 only), so the browser terminal depends on a C++
+    /// toolchain there. Upstream ships it as an *optional* dependency, which
+    /// means a failed build never fails the install — the web app runs and its
+    /// terminal does not. The audit therefore asks the package's own runtime
+    /// check (`pi-web-sessiond --check-runtime`, which loads the bundled
+    /// terminal provider) instead of guessing from file names.
+    private static void installPiWeb(Brand brand, String version, Path brandRoot, Path target,
+                                     Sink message, Mode mode) throws BrandException {
+        String sdk = brand.pairedSdkVersion(version);
+        if (sdk == null) {
+            throw new BrandException("no verified Pi pairing for " + brand.sourceLabel() + " " + version
+                    + "; the panel installs only the pairs its adapter was written for");
+        }
+        DshNodeRuntime runtime = DshNodeRuntime.detectWithPnpm()
+                .orElseThrow(() -> new BrandException("Node.js was not found on PATH and no panel-managed runtime "
+                        + "is installed; installing " + brand.npmPackage() + " needs one. "
+                        + "Open Settings -> Node.js for a one-click managed runtime, or install Node.js yourself."));
+        if (!runtime.canManagePlugins()) {
+            throw new BrandException(runtime.pnpmMissing("installing " + brand.sourceLabel()).getMessage());
+        }
+        String pnpm = runtime.pnpm().toString();
+        String registry = NpmRegistry.effective().registry();
+
+        try {
+            Files.createDirectories(target);
+            Privileges.prepareAgentDirectory(target, Privileges.AGENT_SHARED_DIRECTORY);
+            Privileges.prepareAgentDirectory(target.getParent(), Privileges.AGENT_SHARED_DIRECTORY);
+            Path manifest = target.resolve("package.json");
+            if (!Files.exists(manifest)) {
+                Files.writeString(manifest,
+                        "{\"name\":\"hdsl-brand-" + brand.id() + "\",\"private\":true}\n",
+                        StandardCharsets.UTF_8);
+            }
+        } catch (IOException e) {
+            throw new BrandException("Failed to prepare " + target, e);
+        }
+
+        List<String> command = new ArrayList<>(List.of(pnpm, "add", "--dir", target.toString()));
+        if (mode == Mode.FULL) {
+            command.add(brand.npmPackage() + "@" + version);
+        }
+        command.add(Brand.PI_SDK_PACKAGE + "@" + sdk);
+        command.add("--reporter=append-only");
+        command.add("--registry=" + registry);
+        command.add("--config.dangerously-allow-all-builds=true");
+        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
+            command.add("--config.node-linker=hoisted");
+        }
+
+        message.accept(mode == Mode.FULL
+                ? "Installing " + brand.npmPackage() + " " + version + " with Pi " + sdk
+                : "Installing only the Pi terminal (" + Brand.PI_SDK_PACKAGE + "@" + sdk + "), without the web app");
+        LOG.info("Installing " + brand.sourceLabel() + " " + version + " (" + mode + "): "
+                + String.join(" ", command));
+
+        Path log = brandRoot.resolve(INSTALL_LOG);
+        try (OutputStreamAppend output = new OutputStreamAppend(log);
+                BufferedReader reader = run(command, target, runtime.pathEnvironment(), output)) {
+            StringBuilder tail = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.writeLine(line);
+                if (tail.length() > 0) {
+                    tail.append(" | ");
+                }
+                tail.append(line);
+                if (tail.length() > 2000) {
+                    tail.delete(0, tail.length() - 1000);
+                }
+                message.accept(line);
+            }
+            int code = output.exitCode();
+            if (code != 0) {
+                throw new BrandException(brand.sourceLabel() + " " + version
+                        + " failed to install (exit " + code + "): " + tail
+                        + (mode == Mode.FULL
+                                ? " — if only the web app failed, install the terminal-only release instead"
+                                : ""));
+            }
+        } catch (IOException e) {
+            throw new BrandException("Failed to run pnpm for " + brand.sourceLabel(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BrandException("Installing " + brand.sourceLabel() + " was interrupted", e);
+        }
+
+        Path sdkManifest = target.resolve("node_modules").resolve(Brand.PI_SDK_PACKAGE)
+                .resolve("package.json");
+        if (!Files.isRegularFile(sdkManifest)) {
+            throw new BrandException("The Pi SDK (" + Brand.PI_SDK_PACKAGE + "@" + sdk
+                    + ") is missing after the install; see " + log);
+        }
+        if (mode == Mode.FULL && !Files.exists(target.resolve("node_modules/.bin/pi-web"))) {
+            throw new BrandException(brand.npmPackage() + " " + version
+                    + " installed without its executable; see " + log);
+        }
+
+        boolean pty = mode == Mode.FULL && checkTerminalPrerequisite(target, brandRoot, runtime, message);
+        writeReleaseInfo(target, new ReleaseInfo(version, sdk, mode == Mode.FULL, pty,
+                System.currentTimeMillis()));
+    }
+
+    /// Asks pi-web's own runtime check whether the browser terminal can load.
+    ///
+    /// The launcher's `--check-runtime` runs `runtimePreflight --terminal`, which
+    /// loads the bundled terminal provider and reports the native module. A
+    /// non-zero exit is the one authoritative "no PTY here" answer; the install
+    /// continues either way, and the release records what it found.
+    ///
+    /// @return whether the browser terminal is available
+    private static boolean checkTerminalPrerequisite(Path target, Path brandRoot, DshNodeRuntime runtime,
+                                                     Sink message) {
+        Path launcher = target.resolve("node_modules/.bin/pi-web-sessiond");
+        if (!Files.exists(launcher)) {
+            message.accept("Terminal check skipped: pi-web-sessiond is missing from the release");
+            return false;
+        }
+        List<String> command = List.of(
+                org.jackhuang.hmcl.util.platform.Executables.resolve(launcher.toString()).toString(),
+                "--check-runtime");
+        try (OutputStreamAppend output = new OutputStreamAppend(brandRoot.resolve(INSTALL_LOG));
+                BufferedReader reader = run(command, target, runtime.pathEnvironment(), output)) {
+            StringBuilder detail = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.writeLine(line);
+                detail.append(line).append('\n');
+            }
+            int code = output.exitCode();
+            if (code == 0) {
+                message.accept("Browser terminal ready (node-pty loaded)");
+                return true;
+            }
+            message.accept("Browser terminal unavailable (node-pty did not load): " + bounded(detail.toString()));
+            message.accept("The web app still runs; its in-browser terminal does not. "
+                    + "Install a C++ toolchain (python3, make, g++) and repair the release to enable it.");
+            return false;
+        } catch (Exception e) {
+            message.accept("Could not run the terminal prerequisite check: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private static String bounded(String text) {
+        String trimmed = text.strip();
+        return trimmed.length() > 500 ? trimmed.substring(trimmed.length() - 500) : trimmed;
+    }
+
+    /// Whether a release directory is usable by this brand.
+    ///
+    /// PI WEB answers on the Pi SDK alone: a terminal-only release has no
+    /// `pi-web` executable and is still a release. Every other brand keeps its
+    /// single marker.
+    static boolean releaseUsable(Brand brand, Path target) {
+        if (brand != Brand.PI_WEB) {
+            return Files.exists(target.resolve(brand.installMarker()));
+        }
+        return Files.isRegularFile(target.resolve("node_modules")
+                .resolve(Brand.PI_SDK_PACKAGE).resolve("package.json"));
+    }
+
+    /// The same, for a caller that needs a specific shape: [Mode#FULL] also
+    /// needs the web executable, [Mode#TERMINAL_ONLY] is satisfied by the SDK.
+    private static boolean releaseUsable(Brand brand, Path target, Mode mode) {
+        if (!releaseUsable(brand, target)) {
+            return false;
+        }
+        return brand != Brand.PI_WEB || mode != Mode.FULL
+                || Files.exists(target.resolve("node_modules/.bin/pi-web"));
+    }
+
+    /// Reads a PI WEB release's `release.json`, or `null` when it has none.
+    ///
+    /// Old releases (installed before the audit existed) answer `null`; the
+    /// caller treats that as "assume the pair is there", which is what the
+    /// files on disk say.
+    public static @Nullable ReleaseInfo releaseInfo(Path target) {
+        Path file = target.resolve("release.json");
+        if (!Files.isRegularFile(file)) {
+            return null;
+        }
+        try {
+            JsonObject json = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8))
+                    .getAsJsonObject();
+            return new ReleaseInfo(
+                    json.has("piWeb") ? json.get("piWeb").getAsString() : "",
+                    json.has("piSdk") ? json.get("piSdk").getAsString() : "",
+                    !json.has("webAvailable") || json.get("webAvailable").getAsBoolean(),
+                    json.has("ptyAvailable") && json.get("ptyAvailable").getAsBoolean(),
+                    json.has("installedAt") ? json.get("installedAt").getAsLong() : 0L);
+        } catch (RuntimeException | IOException e) {
+            LOG.warning("Could not read " + file, e);
+            return null;
+        }
+    }
+
+    private static void writeReleaseInfo(Path target, ReleaseInfo info) throws BrandException {
+        JsonObject json = new JsonObject();
+        json.addProperty("piWeb", info.version());
+        json.addProperty("piSdk", info.pairedSdk());
+        json.addProperty("webAvailable", info.webAvailable());
+        json.addProperty("ptyAvailable", info.ptyAvailable());
+        json.addProperty("installedAt", info.installedAt());
+        Path file = target.resolve("release.json");
+        try {
+            Files.writeString(file, json + "\n", StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new BrandException("Failed to record the release audit in " + file, e);
+        }
     }
 
     /// The GitHub-brand install: download the tag's source zip, unpack it,
@@ -2063,12 +2325,18 @@ public final class BrandInstaller {
     /// ask one brand for its marker. Octop's `octop-install.json` is checked
     /// first because that is the one this class writes; the per-brand markers of
     /// the other categories are the fallback.
-    private static boolean hasInstallMarker(Path directory) {
+    private static boolean hasInstallMarker(Brand brand, Path directory) {
+        if (releaseUsable(brand, directory)) {
+            return true;
+        }
+        // A directory shared with another brand (the Octop source build's staging
+        // area) can still carry that brand's marker; the caller only asks whether
+        // this directory is a complete install of *something* it can name.
         if (!markerMode(directory).isEmpty()) {
             return true;
         }
-        for (Brand brand : Brand.values()) {
-            if (Files.exists(directory.resolve(brand.installMarker()))) {
+        for (Brand other : Brand.values()) {
+            if (Files.exists(directory.resolve(other.installMarker()))) {
                 return true;
             }
         }
@@ -2269,7 +2537,7 @@ public final class BrandInstaller {
     ///
     /// @param brandRoot the brand's directory
     /// @return the releases
-    public static List<Release> releases(Path brandRoot) {
+    public static List<Release> releases(Brand brand, Path brandRoot) {
         Path releases = brandRoot.resolve(RELEASES_DIR);
         if (!Files.isDirectory(releases)) {
             return List.of();
@@ -2288,7 +2556,7 @@ public final class BrandInstaller {
                 // A directory without an install marker is a half-finished
                 // install (the JVM was killed, or the download failed). It is
                 // not usable, so it must not be offered.
-                if (!hasInstallMarker(directory)) {
+                if (!hasInstallMarker(brand, directory)) {
                     LOG.warning("Ignoring incomplete brand release at " + directory
                             + " (no install marker); run an install of that version to repair it");
                     continue;
@@ -2343,14 +2611,14 @@ public final class BrandInstaller {
             }
             String version = name.substring(0, name.length() - PREVIOUS_SUFFIX.length());
             Path target = releases.resolve(version);
-            if (Files.isDirectory(target) && hasInstallMarker(target)) {
+            if (Files.isDirectory(target) && hasInstallMarker(Brand.OCTOP, target)) {
                 // The build finished (or was never interrupted): nothing to do.
                 continue;
             }
             // Only a *complete* staging copy is worth restoring: if the previous
             // build died too, `.previous` has no marker either, and moving it
             // back would just rename one broken tree.
-            if (!hasInstallMarker(previous)) {
+            if (!hasInstallMarker(Brand.OCTOP, previous)) {
                 LOG.warning("Ignoring an incomplete staged Octop release at " + previous
                         + "; reinstall that version to repair it");
                 continue;
@@ -2402,7 +2670,7 @@ public final class BrandInstaller {
     /// @return the prefix, or `null`
     public static @Nullable Path packageDir(Brand brand, Path brandRoot, String version) {
         Path candidate = brandRoot.resolve(RELEASES_DIR).resolve(version);
-        return Files.exists(candidate.resolve(brand.installMarker()))
+        return releaseUsable(brand, candidate)
                 ? candidate
                 : null;
     }
@@ -2415,10 +2683,10 @@ public final class BrandInstaller {
     /// @return the default package directory, or `null` when nothing is installed
     public static @Nullable Path defaultPackage(Brand brand, Path brandRoot) {
         Path current = currentLink(brandRoot);
-        if (current != null && Files.exists(current.resolve(brand.installMarker()))) {
+        if (current != null && releaseUsable(brand, current)) {
             return current;
         }
-        List<Release> releases = releases(brandRoot);
+        List<Release> releases = releases(brand, brandRoot);
         return releases.isEmpty() ? null : Path.of(releases.get(0).path());
     }
 

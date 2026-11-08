@@ -38,18 +38,49 @@ public record BrandInstance(
         @SerializedName("baseUrl") @Nullable String baseUrl,
         @SerializedName("lastPort") int lastPort,
         @SerializedName("createdAt") long createdAt,
-        @SerializedName("nodeRuntime") @Nullable String nodeRuntime) {
+        @SerializedName("nodeRuntime") @Nullable String nodeRuntime,
+        /// `null` means the historical default, which is **web on**: manifests
+        /// written before PI WEB existed have no such field and every other
+        /// brand's web mode is the whole point of its instance.
+        @SerializedName("webEnabled") @Nullable Boolean webEnabled,
+        /// A locked instance keeps the release it was created on when the brand
+        /// moves to a newer verified pair. `null` means unlocked.
+        @SerializedName("versionLocked") @Nullable Boolean versionLocked) {
+
+    /// The pre-PI-WEB shape, kept for callers that do not care about the two
+    /// new choices (tests and the other brands' manifests): web on, unlocked.
+    public BrandInstance(String id, String brand, String name, String version, @Nullable String baseUrl,
+                         int lastPort, long createdAt, @Nullable String nodeRuntime) {
+        this(id, brand, name, version, baseUrl, lastPort, createdAt, nodeRuntime, null, null);
+    }
+
+    /// Whether this instance starts its web process at all.
+    ///
+    /// PI WEB is the only brand with a terminal-only form; for every other
+    /// brand the answer is `true` whatever the manifest says, because the
+    /// panel's whole surface for them is the web UI.
+    public boolean webEnabledOrDefault() {
+        return webEnabled == null || webEnabled;
+    }
+
+    /// Whether the instance is pinned to its current release.
+    public boolean versionLockedOrDefault() {
+        return versionLocked != null && versionLocked;
+    }
 
     public BrandInstance withName(String newName) {
-        return new BrandInstance(id, brand, newName, version, baseUrl, lastPort, createdAt, nodeRuntime);
+        return new BrandInstance(id, brand, newName, version, baseUrl, lastPort, createdAt, nodeRuntime,
+                webEnabled, versionLocked);
     }
 
     public BrandInstance withVersion(String newVersion) {
-        return new BrandInstance(id, brand, name, newVersion, baseUrl, lastPort, createdAt, nodeRuntime);
+        return new BrandInstance(id, brand, name, newVersion, baseUrl, lastPort, createdAt, nodeRuntime,
+                webEnabled, versionLocked);
     }
 
     public BrandInstance withLastPort(int newLastPort) {
-        return new BrandInstance(id, brand, name, version, baseUrl, newLastPort, createdAt, nodeRuntime);
+        return new BrandInstance(id, brand, name, version, baseUrl, newLastPort, createdAt, nodeRuntime,
+                webEnabled, versionLocked);
     }
 
     /// The endpoint the tool should talk to instead of its own default.
@@ -63,7 +94,8 @@ public record BrandInstance(
     /// @param newBaseUrl the endpoint, or `null`/blank for the default
     /// @return the instance with the endpoint recorded
     public BrandInstance withBaseUrl(@Nullable String newBaseUrl) {
-        return new BrandInstance(id, brand, name, version, newBaseUrl, lastPort, createdAt, nodeRuntime);
+        return new BrandInstance(id, brand, name, version, newBaseUrl, lastPort, createdAt, nodeRuntime,
+                webEnabled, versionLocked);
     }
 
     /// The Node.js selector this instance runs on, or `null` to follow the
@@ -73,6 +105,25 @@ public record BrandInstance(
     /// @param newRuntime the selector, or `null`
     /// @return the instance with the selector recorded
     public BrandInstance withNodeRuntime(@Nullable String newRuntime) {
-        return new BrandInstance(id, brand, name, version, baseUrl, lastPort, createdAt, newRuntime);
+        return new BrandInstance(id, brand, name, version, baseUrl, lastPort, createdAt, newRuntime,
+                webEnabled, versionLocked);
+    }
+
+    /// The terminal-only / terminal-and-web choice.
+    ///
+    /// @param enabled whether the web process should start with this instance
+    /// @return the instance with the choice recorded
+    public BrandInstance withWebEnabled(boolean enabled) {
+        return new BrandInstance(id, brand, name, version, baseUrl, lastPort, createdAt, nodeRuntime,
+                enabled, versionLocked);
+    }
+
+    /// Whether the instance follows the brand's verified pair or keeps its own.
+    ///
+    /// @param locked whether the current release is pinned
+    /// @return the instance with the lock recorded
+    public BrandInstance withVersionLocked(boolean locked) {
+        return new BrandInstance(id, brand, name, version, baseUrl, lastPort, createdAt, nodeRuntime,
+                webEnabled, locked);
     }
 }
