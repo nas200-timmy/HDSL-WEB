@@ -687,12 +687,11 @@ public final class HdslServer {
         proxyWebSocketClient.start();
         server.start();
         startedAtMillis.set(System.currentTimeMillis());
-        // The brand version pickers read the npm registries; warming the cache
-        // off-thread keeps the first picker render instant without delaying
-        // the health check.
-        Thread warmBrands = new Thread(BrandCatalog::warm, "brand-catalog-warm");
-        warmBrands.setDaemon(true);
-        warmBrands.start();
+        // Do not touch the registries here: startup must print its banner and
+        // answer health checks without waiting for GitHub. The idle loop reads
+        // the disk cache immediately and only goes to the network after the
+        // panel has been up for a few minutes and stayed quiet.
+        BrandCatalog.startBackgroundRefresh();
         if (hookInstalled.compareAndSet(false, true)) {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 try {

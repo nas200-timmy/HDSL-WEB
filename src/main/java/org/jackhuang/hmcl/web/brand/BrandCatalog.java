@@ -93,6 +93,20 @@ public final class BrandCatalog {
     /// off (1h, then 2h, then 4h).
     static final int BACKOFF_AFTER_FAILURES = 3;
 
+    /// With nobody opening the panel, GitHub is checked this often. A release
+    /// is rare, and a 304 costs nothing, so three hours is enough to keep the
+    /// picker current without turning an idle panel into a poller.
+    static final long IDLE_REFRESH_MILLIS = Duration.ofHours(3).toMillis();
+
+    /// The first background check waits this long after the server is up. The
+    /// startup path itself never touches the network: a panel that prints its
+    /// banner immediately is a panel nobody mistakes for hung.
+    static final long BACKGROUND_INITIAL_DELAY_MINUTES = 10;
+
+    /// How often the idle check runs. The actual refresh still waits for
+    /// [#IDLE_REFRESH_MILLIS] since the last access/check.
+    static final long BACKGROUND_CHECK_MINUTES = 15;
+
     /// The HTTP timeout for one round trip.
     private static final Duration TIMEOUT = Duration.ofSeconds(15);
 
@@ -137,6 +151,9 @@ public final class BrandCatalog {
     }
 
     private static final Map<Brand, Entry> CACHE = new ConcurrentHashMap<>();
+    private static final java.util.concurrent.atomic.AtomicBoolean BACKGROUND_STARTED =
+            new java.util.concurrent.atomic.AtomicBoolean();
+    private static volatile long lastUserAccessAt;
     private static final Map<Brand, CompletableFuture<Entry>> INFLIGHT = new ConcurrentHashMap<>();
 
     /// When the user last pressed refresh, per brand. Kept out of the persisted
@@ -268,16 +285,62 @@ public final class BrandCatalog {
                 ? trouble : null;
     }
 
-    /// Prefetches every brand's list. Kept for callers that want to warm the
-    /// cache; the page itself never waits for it.
-    public static void warm() {
-        for (Brand brand : Brand.values()) {
-            try {
-                load(brand, false);
-            } catch (RuntimeException e) {
-                LOG.warning("Could not warm the " + brand.id() + " version catalog", e);
-            }
+    /// Records that someone is using the brand surface. While this is recent,
+    /// the on-access 1-hour TTL is the only refresh path; the idle scheduler
+    /// stays out of the way.
+    static void noteUserAccess() {
+        lastUserAccessAt = System.currentTimeMillis();
+    }
+
+    /// Starts the idle refresh loop: first check ten minutes after the server
+    /// is ready, then every fifteen minutes, refreshing a GitHub brand only
+    /// when nobody has used the panel for three hours and its cache is that old.
+    ///
+    /// Nothing here runs during startup: the banner and the health check must
+    /// not wait for a registry. Called once from [org.jackhuang.hmcl.web.server.HdslServer].
+    public static void startBackgroundRefresh() {
+        if (!BACKGROUND_STARTED.compareAndSet(false, true)) {
+            return;
         }
+        java.util.concurrent.ScheduledExecutorService scheduler =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor(runnable -> {
+                    Thread thread = new Thread(runnable, "brand-catalog-idle");
+                    thread.setDaemon(true);
+                    return thread;
+                });
+        scheduler.scheduleWithFixedDelay(BrandCatalog::backgroundTick,
+                BACKGROUND_INITIAL_DELAY_MINUTES, BACKGROUND_CHECK_MINUTES, TimeUnit.MINUTES);
+    }
+
+    /// One idle check: only GitHub brands, only when the panel has been quiet
+    /// long enough for a background request to be invisible to any reader.
+    private static void backgroundTick() {
+        long now = System.currentTimeMillis();
+        if (now - lastUserAccessAt < IDLE_REFRESH_MILLIS) {
+            return;
+        }
+        for (Brand brand : Brand.values()) {
+            if (!brand.fromGitHub() || !dueForIdleRefresh(brand, now)) {
+                continue;
+            }
+            CompletableFuture.runAsync(() -> {
+                try {
+                    load(brand, false);
+                } catch (RuntimeException e) {
+                    LOG.warning("Idle refresh of the " + brand.id() + " catalog failed", e);
+                }
+            });
+        }
+    }
+
+    /// Whether the idle loop should refresh this brand now.
+    static boolean dueForIdleRefresh(Brand brand, long now) {
+        if (!brand.fromGitHub() || now - lastUserAccessAt < IDLE_REFRESH_MILLIS) {
+            return false;
+        }
+        Entry entry = CACHE.get(brand);
+        return entry == null || entry.fetchedAt() <= 0
+                || now - entry.checkedAt() >= IDLE_REFRESH_MILLIS;
     }
 
     /// A token was saved or cleared: the quota and the rate-limit window
@@ -297,6 +360,7 @@ public final class BrandCatalog {
         CACHE.clear();
         INFLIGHT.clear();
         LAST_MANUAL.clear();
+        lastUserAccessAt = 0;
         cacheFile = null;
     }
 

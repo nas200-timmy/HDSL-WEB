@@ -143,6 +143,9 @@ public final class BrandApiServlet extends HttpServlet {
 
     @Override
     protected void service(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        // Someone is using the brand surface: the idle scheduler must not
+        // compete with the 1-hour on-access refresh.
+        BrandCatalog.noteUserAccess();
         String[] segments = split(request.getPathInfo());
         if (segments.length == 0) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");

@@ -83,6 +83,27 @@ class BrandCatalogCacheTest {
     }
 
     @Test
+    void idleRefreshWaitsThreeHoursAndStaysQuietWhileSomeoneIsUsingThePanel() throws IOException {
+        long now = System.currentTimeMillis();
+        long fourHoursAgo = now - 4 * 60 * 60 * 1000L;
+        writeCache("""
+                {"claude-web":{"etag":"","versions":["1.0.0"],"latest":"1.0.0",
+                 "fetchedAt":%d,"checkedAt":%d,"limit":60,"remaining":50,"resetAt":0,
+                 "failures":0,"backoffUntil":0,"lastAttemptAt":0,"rateLimitedUntil":0}}"""
+                .formatted(fourHoursAgo, fourHoursAgo));
+
+        BrandCatalog.bind(dataDir);
+
+        assertTrue(BrandCatalog.dueForIdleRefresh(Brand.CLAUDE_WEB, now),
+                "an entry older than three hours is due when nobody is around");
+        BrandCatalog.noteUserAccess();
+        assertFalse(BrandCatalog.dueForIdleRefresh(Brand.CLAUDE_WEB, now),
+                "recent brand-surface activity hands refresh back to the on-access 1-hour TTL");
+        assertFalse(BrandCatalog.dueForIdleRefresh(Brand.KIMI, now),
+                "npm brands never use the GitHub idle loop");
+    }
+
+    @Test
     void aStoredTokenIsReadButNeverReturnedAsPartOfStatus() throws IOException {
         Path auth = dataDir.resolve("auth").resolve("github.json");
         Files.createDirectories(auth.getParent());
