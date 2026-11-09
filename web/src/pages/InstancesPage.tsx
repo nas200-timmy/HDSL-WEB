@@ -338,7 +338,12 @@ export function InstancesPage() {
                   {query ? I18N["search.no_results_found"] : I18N["dsh.instance.empty"]}
                 </span>
                 {!query && (
-                  <span className="empty-sub">{I18N["dsh.instance.empty.hint"]}</span>
+                  <>
+                    <span className="empty-sub">{I18N["dsh.instance.empty.hint"]}</span>
+                    <button className="btn btn-raised" onClick={() => nav("/instances/new")}>
+                      创建实例
+                    </button>
+                  </>
                 )}
               </div>
             ) : (

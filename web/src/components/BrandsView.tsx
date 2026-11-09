@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { launchBrandInstance, stopBrandInstance } from "../actions";
 import { api } from "../api";
 import { withBase } from "../base";
@@ -277,10 +277,14 @@ export function BrandsView({
 
 /// 单品牌的内容：版本卡与实例卡共用**同一份**版本目录（api.brandVersions 只拉一次）。
 function BrandPane({ brand }: { brand: BrandId }) {
+  const [searchParams] = useSearchParams();
+  const autoCreate = searchParams.get("create") === "1";
   const [versions, setVersions] = useState<BrandVersions | null>(null);
   const [versionsError, setVersionsError] = useState<string | null>(null);
-  // 默认折叠：实例是主对象，版本是偶尔才动的共享构建
-  const [versionsOpen, setVersionsOpen] = useState(false);
+  // 默认折叠：实例是主对象，版本是偶尔才动的共享构建。
+  // 从「创建实例」的选品牌页过来（?create=1）时先展开，第一次来的用户
+  // 能直接看到「安装新版本」或创建表单。
+  const [versionsOpen, setVersionsOpen] = useState(autoCreate);
 
   const reload = async (force = false) => {
     try {
@@ -290,6 +294,10 @@ function BrandPane({ brand }: { brand: BrandId }) {
       setVersionsError(errMsg(e));
     }
   };
+
+  useEffect(() => {
+    if (autoCreate) setVersionsOpen(true);
+  }, [autoCreate]);
 
   useEffect(() => {
     void reload();
@@ -310,6 +318,7 @@ function BrandPane({ brand }: { brand: BrandId }) {
         brand={brand}
         versions={versions}
         reload={reload}
+        autoFocusCreate={autoCreate}
         onOpenVersions={() => setVersionsOpen(true)}
       />
     </>
@@ -1187,14 +1196,20 @@ function InstancesCard({
   brand,
   versions,
   reload,
+  autoFocusCreate,
   onOpenVersions,
 }: {
   brand: BrandId;
   versions: BrandVersions | null;
   reload: (force?: boolean) => Promise<void>;
+  autoFocusCreate?: boolean;
   onOpenVersions: () => void;
 }) {
   const s = useAppState();
+  const nameRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (autoFocusCreate && versions !== null) nameRef.current?.focus();
+  }, [autoFocusCreate, versions]);
   const selectedId = useSelectedInstanceId();
   const mobile = useMobileLayout();
   // The version card already knows this from /versions; the create row uses
@@ -1571,6 +1586,7 @@ function InstancesCard({
         ) : (
           <>
             <input
+              ref={nameRef}
               className="input"
               style={{ flex: mobile ? "1 1 80px" : "1 1 140px", maxWidth: mobile ? 150 : 220 }}
               placeholder={I18N["dsh.instance.name"]}
@@ -1657,7 +1673,7 @@ function InstancesCard({
                   <label className="input-check">
                     <input
                       type="radio"
-                      name={`brand-instance-${brand}`}
+                      name="instance-select"
                       checked={inst.id === selectedId}
                       onChange={() => setSelectedInstanceId(inst.id)}
                     />

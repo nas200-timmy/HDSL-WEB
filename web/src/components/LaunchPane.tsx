@@ -1,10 +1,10 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { launchBrandInstance, launchInstance, stopBrandInstance, stopInstance } from "../actions";
 import { I18N } from "../i18n";
+import { BRAND_LABEL, useLaunchEntry, type LaunchEntry } from "../launchEntry";
 import { setSelectedInstanceId, useSelectedInstanceId } from "../selection";
 import { toast, useAppState } from "../store";
-import type { ExternalInstance, Instance } from "../types";
 import { normState } from "../utils";
 import { BrandIcon } from "./BrandIcon";
 import { ArrowDropUpIcon } from "./icons";
@@ -22,53 +22,6 @@ function actionLabel(state: string): string {
     default:
       return I18N["dsh.launch"];
   }
-}
-
-/// 主按钮与实例选择菜单统一用的"当前实例"形状（dsh 实例或跨品牌外部实例）
-export interface LaunchEntry {
-  id: string;
-  name: string;
-  /** 已归一化（大写）：RUNNING / STARTING / STOPPED … */
-  state: string;
-  kind: "dsh" | "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "pi-web" | "zcode";
-  /** kind = dsh 时的原始实例；品牌/zcode 实例为 null */
-  dsh: Instance | null;
-  /** 品牌/zcode 条目；dsh 实例为 null */
-  external: ExternalInstance | null;
-}
-
-const BRAND_LABEL: Record<string, string> = {
-  dsh: I18N["dsh.brand.dsh"],
-  kimi: I18N["dsh.brand.kimi"],
-  opencode: I18N["dsh.brand.opencode"],
-  "claude-web": I18N["dsh.brand.claude-web"],
-  octop: I18N["dsh.brand.octop"],
-  hermes: I18N["dsh.brand.hermes.short"],
-  "pi-web": I18N["dsh.brand.pi-web.short"],
-  zcode: I18N["dsh.brand.zcode"],
-};
-export { BRAND_LABEL };
-
-/**
- * 按"当前选中实例 id"解析启动面板的当前条目：
- * 先在 dsh 实例里找，再在跨品牌外部实例（kimi/opencode/zcode）里找；
- * 无选中或选中已不存在 → null（现有空态）。
- */
-export function useLaunchEntry(): LaunchEntry | null {
-  const s = useAppState();
-  const selectedId = useSelectedInstanceId();
-  return useMemo(() => {
-    if (!selectedId) return null;
-    const dsh = s.instances.find((i) => i.id === selectedId);
-    if (dsh) {
-      return { id: dsh.id, name: dsh.name, state: normState(dsh.state), kind: "dsh", dsh, external: null };
-    }
-    const ext = s.external.find((e) => e.id === selectedId);
-    if (ext) {
-      return { id: ext.id, name: ext.name, state: normState(ext.state), kind: ext.brand, dsh: null, external: ext };
-    }
-    return null;
-  }, [s.instances, s.external, selectedId]);
 }
 
 /**
