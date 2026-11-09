@@ -121,6 +121,9 @@ public final class BrandApiServlet extends HttpServlet {
         // carries them; bind the same instance rather than reading the file a
         // second time per launch.
         BrandRuntime.bindPolicy(this.policy, config.dataDir);
+        // The version catalog keeps its cache and the GitHub token under the
+        // panel's data directory; bind them once before any request can ask.
+        BrandCatalog.bind(config.dataDir);
         this.instanceTerminal = new InstanceTerminal(config, terminals, terminalTickets, auth,
                 developerAuth, developerElevation, tlsActive, emergency);
         Path base = config.dataDir.resolve("brands");
@@ -192,7 +195,7 @@ public final class BrandApiServlet extends HttpServlet {
     private void route(Brand brand, PathRef ref, HttpServletRequest request, HttpServletResponse response,
                        String[] segments) throws IOException, BrandException {
         if (segments.length == 1 && "versions".equals(segments[0]) && "GET".equals(request.getMethod())) {
-            versions(brand, ref, response);
+            versions(brand, ref, request, response);
             return;
         }
         if (segments.length == 1 && "releases".equals(segments[0]) && "GET".equals(request.getMethod())) {
@@ -280,7 +283,8 @@ public final class BrandApiServlet extends HttpServlet {
 
     // --------------------------------------------------------------- versions --
 
-    private void versions(Brand brand, PathRef ref, HttpServletResponse response) throws IOException {
+    private void versions(Brand brand, PathRef ref, HttpServletRequest request,
+                          HttpServletResponse response) throws IOException {
         // A platform this brand cannot be installed on answers before anything
         // touches the network: the page needs "why not", not a version list it
         // would then refuse to install.
@@ -297,7 +301,9 @@ public final class BrandApiServlet extends HttpServlet {
             Json.writePreservingNulls(response, body);
             return;
         }
-        List<String> versions = BrandCatalog.versions(brand);
+        boolean force = "1".equals(request.getParameter("refresh"));
+        BrandCatalog.Snapshot snapshot = BrandCatalog.load(brand, force);
+        List<String> versions = snapshot.versions();
         if (versions.isEmpty()) {
             // An empty picker is indistinguishable from "this project has no releases",
             // and the certificate failure behind it is the one thing a person can act
@@ -313,7 +319,30 @@ public final class BrandApiServlet extends HttpServlet {
         JsonArray array = new JsonArray();
         versions.forEach(array::add);
         body.add("versions", array);
-        body.addProperty("latest", BrandCatalog.latest(brand));
+        body.addProperty("latest", snapshot.latest());
+        BrandCatalog.Status catalogStatus = BrandCatalog.status(brand);
+        JsonObject catalog = new JsonObject();
+        catalog.addProperty("source", catalogStatus.source());
+        catalog.addProperty("fetchedAt", catalogStatus.fetchedAt());
+        catalog.addProperty("checkedAt", catalogStatus.checkedAt());
+        catalog.addProperty("ttlMillis", catalogStatus.ttlMillis());
+        catalog.addProperty("limit", catalogStatus.limit());
+        catalog.addProperty("remaining", catalogStatus.remaining());
+        catalog.addProperty("resetAt", catalogStatus.resetAt());
+        catalog.addProperty("refreshCooldownUntil", catalogStatus.refreshCooldownUntil());
+        catalog.addProperty("rateLimitedUntil", catalogStatus.rateLimitedUntil());
+        catalog.addProperty("backoffUntil", catalogStatus.backoffUntil());
+        catalog.addProperty("failures", catalogStatus.failures());
+        catalog.addProperty("tokenConfigured", catalogStatus.tokenConfigured());
+        if (catalogStatus.tokenLogin() != null) {
+            catalog.addProperty("tokenLogin", catalogStatus.tokenLogin());
+        }
+        if (versions.isEmpty()) {
+            catalog.addProperty("reason", catalogStatus.rateLimitedUntil() > System.currentTimeMillis()
+                    ? "rate_limited"
+                    : catalogStatus.fetchedAt() <= 0 ? "never_fetched" : "empty");
+        }
+        body.add("catalog", catalog);
         // Node requirements: the picker can warn *before* a four-minute download.
         // Installed releases answer from their own package.json; uninstalled ones
         // from the brand's known threshold (Hermes 0.22.6+ -> >=26).
@@ -332,7 +361,7 @@ public final class BrandApiServlet extends HttpServlet {
         if (nodeRequirements.size() > 0) {
             body.add("nodeRequirements", nodeRequirements);
             body.add("nodeCompatibility", nodeCompatibility);
-            String latest = BrandCatalog.latest(brand);
+            String latest = snapshot.latest();
             String latestRequirement = nodeRequirementFor(brand, ref, latest);
             if (latestRequirement != null) {
                 body.addProperty("latestNodeCompatible", currentNode.version() != null
@@ -348,7 +377,7 @@ public final class BrandApiServlet extends HttpServlet {
         nodeInfo.addProperty("source", currentNode.source().name().toLowerCase(java.util.Locale.ROOT));
         body.add("node", nodeInfo);
         if (brand == Brand.PI_WEB) {
-            String paired = brand.pairedSdkVersion(BrandCatalog.latest(brand));
+            String paired = brand.pairedSdkVersion(snapshot.latest());
             if (paired != null) {
                 body.addProperty("pairedSdk", paired);
             }

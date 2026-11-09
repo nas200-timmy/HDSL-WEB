@@ -81,6 +81,22 @@ function versionOption(
     .join(" ");
 }
 
+/// 时间点（本地时区），`0` 表示未知。
+function fmtClock(ms: number): string {
+  return ms > 0 ? new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+}
+
+/// 剩余时长，用于冷却/限流倒计时。
+function fmtRemaining(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return minutes > 0 ? `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒` : `${seconds} 秒`;
+}
+
+/// 这些品牌的版本目录走 GitHub API，有 IP 级配额；其它是 npm registry。
+const GITHUB_BRANDS = new Set<BrandId>(["claude-web", "octop", "hermes"]);
+
 /// `>=26` → `26+`；其它范围原样显示。
 function nodeRangeLabel(range: string): string {
   return range.startsWith(">=") ? `${range.slice(2).trim()}+` : range;
@@ -266,10 +282,10 @@ function BrandPane({ brand }: { brand: BrandId }) {
   // 默认折叠：实例是主对象，版本是偶尔才动的共享构建
   const [versionsOpen, setVersionsOpen] = useState(false);
 
-  const reload = async () => {
+  const reload = async (force = false) => {
     try {
       setVersionsError(null);
-      setVersions(await api.brandVersions(brand));
+      setVersions(await api.brandVersions(brand, force));
     } catch (e) {
       setVersionsError(errMsg(e));
     }
@@ -315,7 +331,7 @@ function VersionCard({
   versionsError: string | null;
   open: boolean;
   onToggle: () => void;
-  reload: () => Promise<void>;
+  reload: (force?: boolean) => Promise<void>;
 }) {
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
@@ -346,6 +362,13 @@ function VersionCard({
   const [installStartedAt, setInstallStartedAt] = useState<number | null>(null);
   const [stopping, setStopping] = useState(false);
   const [, forceTick] = useState(0);
+  const [, clockTick] = useState(0);
+
+  // 冷却/限流/额度重置都是"到点自己变"的状态，页面上要有倒计时。
+  useEffect(() => {
+    const timer = window.setInterval(() => clockTick((n) => n + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [busy, setBusy] = useState(false);
   const installLogRef = useRef<HTMLPreElement | null>(null);
 
@@ -472,6 +495,24 @@ function VersionCard({
     ? versions?.nodeRequirements?.[versions?.latest ?? ""]
     : undefined;
   const hermesNodeCompatible = versions?.latestNodeCompatible !== false;
+  const catalogStatus = versions?.catalog;
+  const clock = Date.now();
+  const isGitHubBrand = GITHUB_BRANDS.has(brand);
+  const cooldownUntil = catalogStatus?.refreshCooldownUntil ?? 0;
+  const cooling = cooldownUntil > clock;
+  const rateLimitedUntil = catalogStatus?.rateLimitedUntil ?? 0;
+  const rateLimited = rateLimitedUntil > clock;
+  const backoffUntil = catalogStatus?.backoffUntil ?? 0;
+  const backingOff = backoffUntil > clock;
+  const catalogSource = catalogStatus?.source === "network"
+    ? "实时"
+    : catalogStatus?.source === "disk" ? "磁盘缓存" : catalogStatus?.source === "memory" ? "内存" : "未知";
+  const nextAuto = catalogStatus && catalogStatus.checkedAt && catalogStatus.ttlMillis
+    ? catalogStatus.checkedAt + catalogStatus.ttlMillis
+    : 0;
+  const quotaText = catalogStatus && catalogStatus.limit !== undefined && catalogStatus.limit >= 0
+    ? `GitHub 额度 ${catalogStatus.remaining}/${catalogStatus.limit} · ${fmtClock(catalogStatus.resetAt ?? 0)} 重置`
+    : "";
 
   const installFraction = installStatus && installStatus.fraction >= 0 ? installStatus.fraction : null;
   const installPercent = installFraction === null ? null : Math.round(installFraction * 100);
@@ -598,6 +639,50 @@ function VersionCard({
         </button>
       </div>
 
+      {catalogStatus && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "2px 10px",
+            fontSize: 11,
+            color: "var(--monet-on-surface-variant)",
+            padding: "4px 2px 0",
+            lineHeight: 1.5,
+          }}
+        >
+          <span>
+            数据 {catalogStatus.fetchedAt ? fmtClock(catalogStatus.fetchedAt) : "尚未获取"} · {catalogSource}
+          </span>
+          {nextAuto > 0 && (
+            <span>
+              {rateLimited || backingOff
+                ? "自动刷新已暂停"
+                : nextAuto > clock
+                  ? `下次自动刷新 ${fmtClock(nextAuto)}`
+                  : "即将在后台刷新"}
+            </span>
+          )}
+          {quotaText && <span>{quotaText}</span>}
+          {!isGitHubBrand && catalogStatus.limit === undefined && <span>npm registry</span>}
+          {isGitHubBrand && (
+            <span>
+              {catalogStatus.tokenConfigured
+                ? `令牌 @${catalogStatus.tokenLogin ?? "已配置"}（5000/时）`
+                : "未配置令牌（匿名 60/时）"}
+            </span>
+          )}
+          {cooling && <span>刷新冷却 {fmtRemaining(cooldownUntil - clock)}</span>}
+          {rateLimited && <span>额度用尽，{fmtClock(rateLimitedUntil)} 后重试</span>}
+          {backingOff && (
+            <span>
+              连续失败 {catalogStatus.failures ?? 0} 次，{fmtClock(backoffUntil)} 后自动重试
+            </span>
+          )}
+          {catalogStatus.reason === "never_fetched" && <span>尚未成功获取过版本列表</span>}
+        </div>
+      )}
+
       {unsupported && (
         <div
           style={{
@@ -689,11 +774,20 @@ function VersionCard({
             <span className="spacer" />
             <button
               className="tool-btn ripple-host"
-              title={I18N["button.refresh"]}
-              onClick={() => void reload()}
+              title={
+                rateLimited
+                  ? `GitHub 额度用尽，${fmtClock(rateLimitedUntil)} 后重试`
+                  : cooling
+                    ? `刷新冷却中，还剩 ${fmtRemaining(cooldownUntil - clock)}`
+                    : backingOff
+                      ? `连续失败，${fmtClock(backoffUntil)} 后自动重试`
+                      : "立即向远端确认版本列表"
+              }
+              disabled={busy || installing || cooling || rateLimited || backingOff}
+              onClick={() => void reload(true)}
             >
               <RefreshIcon size={18} />
-              {I18N["button.refresh"]}
+              {cooling ? `冷却 ${fmtRemaining(cooldownUntil - clock)}` : I18N["button.refresh"]}
             </button>
           </div>
 
@@ -1097,7 +1191,7 @@ function InstancesCard({
 }: {
   brand: BrandId;
   versions: BrandVersions | null;
-  reload: () => Promise<void>;
+  reload: (force?: boolean) => Promise<void>;
   onOpenVersions: () => void;
 }) {
   const s = useAppState();

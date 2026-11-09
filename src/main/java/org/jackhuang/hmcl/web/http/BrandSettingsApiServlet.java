@@ -37,6 +37,7 @@ import org.jackhuang.hmcl.web.brand.BrandInstanceManager;
 import org.jackhuang.hmcl.web.brand.BrandPolicy;
 import org.jackhuang.hmcl.web.brand.BrandRuntime;
 import org.jackhuang.hmcl.web.brand.BrandSources;
+import org.jackhuang.hmcl.web.brand.GitHubToken;
 import org.jackhuang.hmcl.web.developer.DeveloperElevation;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -97,6 +98,7 @@ public final class BrandSettingsApiServlet extends HttpServlet {
         this.auth = auth;
         this.tlsActive = tlsActive;
         this.policy = new BrandPolicy(config.dataDir);
+        GitHubToken.bind(config.dataDir);
     }
 
     @Override
@@ -114,6 +116,22 @@ public final class BrandSettingsApiServlet extends HttpServlet {
                 return;
             }
             setPolicy(request, response, route.substring("/policy/".length()));
+            return;
+        }
+        if ("GET".equals(method) && "/github-token".equals(route)) {
+            response.setHeader("Cache-Control", "no-store");
+            Json.writePreservingNulls(response, describeGitHubToken(GitHubToken.status()));
+            return;
+        }
+        if (("POST".equals(method) || "DELETE".equals(method)) && "/github-token".equals(route)) {
+            if (!requireElevation(request, response)) {
+                return;
+            }
+            if ("DELETE".equals(method)) {
+                clearGitHubToken(request, response);
+            } else {
+                saveGitHubToken(request, response);
+            }
             return;
         }
         if ("POST".equals(method) && "/sources".equals(route)) {
@@ -139,6 +157,55 @@ public final class BrandSettingsApiServlet extends HttpServlet {
             return;
         }
         Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+    }
+
+    /// The token's status: whether one is configured and which login it is,
+    /// never the token itself.
+    private static JsonObject describeGitHubToken(GitHubToken.Status status) {
+        JsonObject body = new JsonObject();
+        body.addProperty("configured", status.configured());
+        if (status.login() == null) {
+            body.add("login", JsonNull.INSTANCE);
+        } else {
+            body.addProperty("login", status.login());
+        }
+        return body;
+    }
+
+    private void saveGitHubToken(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = body(request, response);
+        if (body == null) {
+            return;
+        }
+        String token = stringField(body, "token");
+        if (token == null || token.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "token is required");
+            return;
+        }
+        try {
+            GitHubToken.Status status = GitHubToken.save(token);
+            AuditLog.log(AuditLog.Channel.WEB, "settings.github-token", "set", "success",
+                    actorOf(request), request.getRemoteAddr());
+            response.setHeader("Cache-Control", "no-store");
+            Json.writePreservingNulls(response, describeGitHubToken(status));
+        } catch (GitHubToken.InvalidTokenException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_GATEWAY,
+                    "无法保存 GitHub 令牌：" + e.getMessage());
+        }
+    }
+
+    private void clearGitHubToken(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        try {
+            GitHubToken.clear();
+            AuditLog.log(AuditLog.Channel.WEB, "settings.github-token", "clear", "success",
+                    actorOf(request), request.getRemoteAddr());
+            response.setStatus(HttpServletResponse.SC_NO_CONTENT);
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "无法删除 GitHub 令牌：" + e.getMessage());
+        }
     }
 
     /// Describes the sources and the policy as the page needs them.

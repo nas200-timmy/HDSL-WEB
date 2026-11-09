@@ -67,12 +67,13 @@ registry 拉包（pnpm store 跨实例去重）；git 源品牌（Claude Web）�
 实测（2026-10-12，本机网络）：`github.com:443` 的 **git 传输会被拦腰切断**——`expected flush after ref
 listing`、GnuTLS `-110`、乃至 130 秒连接超时，成功率大约三成；而同一时刻 `api.github.com` 0.6 秒
 200，`codeload.github.com` 的源码 zip 1.5 秒下完 11 MB。于是这一品牌**完全不碰 git**：版本列表走
-REST API（未认证 60 次/小时，30 分钟缓存远够），安装走 zip 下载 + 解包，下载失败自动重试 3 次。
+REST API（未认证 60 次/小时；版本目录有磁盘缓存、ETag 与单飞，见「版本目录：缓存、配额与刷新」），
+安装走 zip 下载 + 解包，下载失败自动重试 3 次。
 附带两个好处：镜像不需要 `git` 二进制；下载是普通 HTTPS，失败信息是明确的 HTTP 状态码/超时，
 比 git 协议一堆含糊的中断好诊断。
 
-另外：版本目录**从不缓存空结果**——网络抽风时抓空是常态，缓存空列表会让下拉框在网络恢复后仍空白
-整整 30 分钟（这正是首次上线后「读取不出来」的原因）。
+版本目录的失败语义见「版本目录：缓存、配额与刷新」：缓存优先、失败保留旧列表，
+一次网络抽风不会把下拉框变成空。
 
 ### 「打开文件夹…」在容器里为什么不能用
 
@@ -315,6 +316,41 @@ Kimi Code 的客户端认子路径，不需要这段脚本（实验证明：注�
   支持插件，能力位（`Brand.supportsPlugins()`）一律 false、列表为空，界面显示「该品牌暂不支持插件」
   并说明通道已预留。前端只按这个响应渲染：将来某个品牌有了真插件，后端把 `supported` 置真、把
   `plugins` 填上，界面不用改一行。
+
+## 版本目录：缓存、配额与刷新
+
+品牌页的版本选择器不是每次打开都问远端。它按下面的顺序回答，任何一层有数据就
+立即渲染：
+
+| 层 | 来源 | 失败时 |
+| --- | --- | --- |
+| L1 | 内存 | — |
+| L2 | `cache/brand-catalog.json` | 用缓存渲染，标「磁盘缓存 · 时间」 |
+| L3 | 远端 | 保留 L2，并标注原因；**从不清空已有列表** |
+
+GitHub 品牌（Claude Web / Octop / Hermes）的 TTL 是 **1 小时**，刷新带
+`If-None-Match`：304 不消耗 GitHub 配额，只把 `checkedAt` 往前推。Kimi /
+OpenCode / PI WEB 走 npm registry，TTL 30 分钟。同一品牌同时只有一个请求在飞
+（单飞），定时、页面加载和手动刷新共享它。
+
+手动刷新按品牌冷却 **10 分钟**，冷却期内按钮禁用并显示倒计时；它绕过 TTL，
+但不会绕过限流和退避。
+
+**配额与退避**：每次 GitHub 响应都读 `X-RateLimit-Limit/Remaining/Reset`。
+剩余 ≤ 10 时停止自动刷新（手动仍可试），额度用尽时页面显示重置时间；403/429
+不重试。连续失败 3 次后自动刷新按 1h → 2h → 4h 退避，成功一次即恢复。
+
+**GitHub 令牌**：`<data>/auth/github.json`，0600、面板属主。它只给面板的
+`/tags`、`/commits`、`/rate_limit` 调用使用；品牌进程（agent）不需要也读不到。
+设置 → 品牌实例里可以填写/删除，保存前用 `/rate_limit` 校验，界面只显示
+「是否配置 + 登录名」。令牌把匿名 60 次/小时提高到 5000 次/小时。
+**面板不读 `GITHUB_TOKEN` 环境变量**：`ProcessBuilder` 会把面板环境复制给每个
+品牌子进程，那等于把令牌交给 agent；需要令牌请用这里的文件。
+
+`GET /api/brands/<brand>/versions` 的 `catalog` 字段携带这些状态
+（`source` / `fetchedAt` / `checkedAt` / `ttlMillis` / `limit` / `remaining` /
+`resetAt` / `refreshCooldownUntil` / `rateLimitedUntil` / `backoffUntil` /
+`failures` / `tokenConfigured` / `tokenLogin`）；`?refresh=1` 是手动刷新。
 
 ## 设置 → 品牌实例（下载源与最后手段）
 
