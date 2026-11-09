@@ -3,18 +3,17 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { launchInstance, openDsh, stopInstance } from "../actions";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
+import { BrandIcon } from "../components/BrandIcon";
 import { InstanceIcon, StateBadge } from "../components/InstanceIcon";
 import { ExportInstanceModal } from "../components/ExportInstanceModal";
 import { TerminalWindow, type TerminalTargetInfo } from "../components/TerminalWindow";
 import { ToolchainBanner } from "../components/ToolchainBanner";
 import {
-  AddCircleIcon,
   AddIcon,
   CloseIcon,
   DeleteIcon,
   DeployedCodeIcon,
   EditIcon,
-  FolderIcon,
   MoreVertIcon,
   Package2Icon,
   PublicIcon,
@@ -177,35 +176,13 @@ export function InstancesPage() {
           onClick={showDsh}
         >
           <span className="side-graphic">
-            <FolderIcon size={20} />
+            <BrandIcon brand="dsh" size={20} />
           </span>
           <span className="side-text">
-            <span className="side-title">instances</span>
-            <span className="side-subtitle">服务端实例目录</span>
+            <span className="side-title">DeepSeek Harness</span>
+            <span className="side-subtitle">服务端实例</span>
           </span>
-          <button
-            className="icon-btn on-variant ripple-host"
-            style={{ width: 24, height: 24 }}
-            title="实例文件夹由服务端管理"
-            onClick={(e) => {
-              e.stopPropagation();
-              toast("info", "网页版使用服务端实例目录，无法移除");
-            }}
-          >
-            <CloseIcon size={14} />
-          </button>
         </div>
-        <button
-          className="side-item ripple-host"
-          onClick={() => toast("info", "网页版使用服务端实例目录，无需添加")}
-        >
-          <span className="side-graphic">
-            <AddCircleIcon size={20} />
-          </span>
-          <span className="side-text">
-            <span className="side-title">{I18N["dsh.directory.add"]}</span>
-          </span>
-        </button>
         {/* 第三方品牌实例：同一页内的第二层视图，点它右侧内容区原地换成品牌区
             （不再跳 /brands）。桌面靠 side-category 的 1px 底线分割，移动端靠
             .sidebar-sub > div + div 的左边线——两边都不额外写 CSS */}
