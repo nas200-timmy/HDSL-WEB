@@ -576,6 +576,37 @@ export interface TerminalKernel {
   detail?: string | null;
 }
 
+/// GitHub/npm 版本目录的缓存与配额状态（`GET /api/brands/<brand>/versions` 的 `catalog`）。
+export interface BrandCatalogStatus {
+  /** 这份列表最后一次来自哪里：内存 / 磁盘 / 刚拉的网络 */
+  source?: "memory" | "disk" | "network" | "none";
+  /** 数据本身的抓取时间（304 不更新它） */
+  fetchedAt?: number;
+  /** 最后一次向远端确认的时间（304 会更新它） */
+  checkedAt?: number;
+  /** 这个品牌的自动刷新周期（GitHub 1 小时，npm 30 分钟） */
+  ttlMillis?: number;
+  /** GitHub 配额；-1 = 未知（npm 源或还没拿到头） */
+  limit?: number;
+  remaining?: number;
+  resetAt?: number;
+  /** 手动刷新冷却结束时间（本地防连点） */
+  refreshCooldownUntil?: number;
+  rateLimitedUntil?: number;
+  backoffUntil?: number;
+  failures?: number;
+  tokenConfigured?: boolean;
+  tokenLogin?: string | null;
+  /** 列表为空时的原因：never_fetched / rate_limited / empty */
+  reason?: string;
+}
+
+/// GitHub 访问令牌的状态（不回传令牌本身）。
+export interface GitHubTokenStatus {
+  configured: boolean;
+  login: string | null;
+}
+
 /// GET /api/brands/<brand>/versions：全部干净 semver（最新在前）+ 已装列表 + 新建实例默认版本
 export interface BrandVersions {
   versions: string[];
@@ -604,6 +635,8 @@ export interface BrandVersions {
   latestNodeCompatible?: boolean;
   /** 这台机器上该品牌当前解析到的 Node */
   node?: { version?: string | null; source?: string };
+  /** 版本目录的缓存/配额状态 */
+  catalog?: BrandCatalogStatus;
   /** 新建实例的推荐默认版本；一个版本都没装时为 null */
   default: string | null;
   /// 这个平台上能不能装（目前只有 Hermes 在 Windows 上为 false）。

@@ -10,6 +10,7 @@ import { ElevationHost } from "./components/ElevationDialog";
 import { AccountsPage } from "./pages/AccountsPage";
 import { DownloadPage } from "./pages/DownloadPage";
 import { InstallInstanceWizard } from "./pages/InstallInstanceWizard";
+import { NewInstancePage } from "./pages/NewInstancePage";
 import { InstallModpackWizard } from "./pages/InstallModpackWizard";
 import { InstanceDetailPage } from "./pages/InstanceDetailPage";
 import { InstancesPage } from "./pages/InstancesPage";
@@ -298,7 +299,8 @@ export default function App() {
           <Route element={<Shell />}>
             <Route path="/" element={<MainPage />} />
             <Route path="/instances" element={<InstancesPage />} />
-            <Route path="/instances/new" element={<InstallInstanceWizard />} />
+            <Route path="/instances/new" element={<NewInstancePage />} />
+            <Route path="/instances/new/dsh" element={<InstallInstanceWizard />} />
             <Route path="/instances/:id" element={<InstanceDetailPage />} />
             {/* 旧路径兼容：MC 列表现在是实例页里的一层视图（?view=mc） */}
             <Route path="/mc" element={<Navigate to="/instances?view=mc" replace />} />

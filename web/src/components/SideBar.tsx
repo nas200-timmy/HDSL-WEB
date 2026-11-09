@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMobileLayout } from "../hooks";
+import { BRAND_LABEL, useLaunchEntry, type LaunchEntry } from "../launchEntry";
 import { I18N } from "../i18n";
 import { closeSidebar, logout, useAppState } from "../store";
 import type { Instance } from "../types";
@@ -46,10 +47,28 @@ export function MainSideBar() {
   const mobile = useMobileLayout();
 
   const account = s.accounts && s.accounts.length > 0 ? s.accounts[0] : null;
-  const current = useMemo(() => {
+  // 全局只有一个"当前实例"：dsh 与品牌实例共用 selection。没有选择时退回
+  // 第一个运行中的 dsh，保持老行为。
+  const entry = useLaunchEntry();
+  const fallback = useMemo<LaunchEntry | null>(() => {
     const running = s.instances.find((i) => normState(i.state) === "RUNNING");
-    return running ?? s.instances[0] ?? null;
-  }, [s.instances]);
+    const inst = running ?? s.instances[0] ?? null;
+    if (inst) {
+      return { id: inst.id, name: inst.name, state: normState(inst.state), kind: "dsh", dsh: inst, external: null };
+    }
+    // 没有 dsh 实例时也不要让侧栏空着：品牌实例同样是"当前实例"的候选。
+    const ext = s.external.find((e) => normState(e.state) === "RUNNING") ?? s.external[0] ?? null;
+    return ext
+      ? { id: ext.id, name: ext.name, state: normState(ext.state), kind: ext.brand, dsh: null, external: ext }
+      : null;
+  }, [s.instances, s.external]);
+  const current = entry ?? fallback;
+  const currentSelected = current
+    ? current.kind === "dsh"
+      ? location.pathname.startsWith("/instances/") && location.pathname !== "/instances"
+      : location.pathname === "/instances"
+        && new URLSearchParams(location.search).get("brand") === current.kind
+    : false;
 
   // 手机上选了就去目的地并把抽屉收起来（桌面版式下 closeSidebar 是空操作）
   const goTo = (path: string) => {
@@ -89,14 +108,31 @@ export function MainSideBar() {
 
       <div className="side-category">{I18N["instance"]}</div>
       <button
-        className={`side-item ripple-host${location.pathname.startsWith("/instances/") && location.pathname !== "/instances" ? " selected" : ""}`}
-        onClick={() => current && goTo(`/instances/${current.id}`)}
+        className={`side-item ripple-host${currentSelected ? " selected" : ""}`}
+        onClick={() => {
+          if (!current) return;
+          goTo(current.kind === "dsh"
+            ? `/instances/${current.id}`
+            : `/instances?view=brands&brand=${current.kind}`);
+        }}
       >
-        <InstanceGraphic inst={current} />
+        {current?.kind === "dsh" && current.dsh ? (
+          <InstanceGraphic inst={current.dsh} />
+        ) : current ? (
+          <span className="side-graphic lg">
+            <BrandIcon brand={current.kind} size={32} />
+          </span>
+        ) : (
+          <InstanceGraphic inst={null} />
+        )}
         <span className="side-text">
           <span className="side-title">{current?.name ?? I18N["dsh.instance.none"]}</span>
           <span className="side-subtitle">
-            {current ? current.version : I18N["dsh.instance.install"]}
+            {current
+              ? current.kind === "dsh"
+                ? current.dsh?.version ?? BRAND_LABEL.dsh
+                : current.external?.version || BRAND_LABEL[current.kind] || current.kind
+              : I18N["dsh.instance.install"]}
           </span>
         </span>
       </button>

@@ -28,6 +28,9 @@ function useWindowTitle(): string {
       return I18N["instance.manage.manage.title"].replace("%s", inst?.name ?? params.id);
     }
     if (p === "/instances/new") {
+      return `${I18N["dsh.instance.install"]} - 选择品牌`;
+    }
+    if (p === "/instances/new/dsh") {
       const step = searchParams.get("step") === "2" ? I18N["dsh.install.step.quick"] : I18N["dsh.install.step.version"];
       return `${I18N["dsh.instance.install"]} - ${step}`;
     }

@@ -15,6 +15,7 @@ import type {
   EmergencyStopPreview,
   ExportChoices,
   ExportRecord,
+  GitHubTokenStatus,
   Health,
   Instance,
   InstalledPlugin,
@@ -578,7 +579,15 @@ export const api = {
 
   // ---------- 第三方品牌实例（kimi / opencode，REST 挂 /api/brands/<brand>/*） ----------
 
-  brandVersions: (brand: BrandId) => request<BrandVersions>(`/api/brands/${brand}/versions`),
+  brandVersions: (brand: BrandId, refresh = false) =>
+    request<BrandVersions>(`/api/brands/${brand}/versions${refresh ? "?refresh=1" : ""}`),
+
+  /** 面板托管的 GitHub 访问令牌（只回传是否配置与登录名，不回传令牌）。 */
+  gitHubToken: () => request<GitHubTokenStatus>("/api/settings/brands/github-token"),
+  saveGitHubToken: (token: string) =>
+    request<GitHubTokenStatus>("/api/settings/brands/github-token", jsonInit("POST", { token })),
+  clearGitHubToken: () =>
+    request<unknown>("/api/settings/brands/github-token", { method: "DELETE" }),
 
   /** 纯本地：每个品牌在这台机器上能不能装，用于页签上的提醒 */
   brandCapabilities: () => request<BrandCapabilities>("/api/brands/capabilities"),

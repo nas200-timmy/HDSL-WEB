@@ -40,7 +40,7 @@ export const I18N = {
   "button.refresh": "刷新",
   "search.no_results_found": "搜索无结果",
   "dsh.instance.empty": "还没有实例",
-  "dsh.instance.empty.hint": "你可以切换到其他实例文件夹，或者点「安装新实例」创建一个。",
+  "dsh.instance.empty.hint": "点「安装新实例」先选品牌：dsh、Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB。",
   "dsh.instance.select": "选择",
   "dsh.instance.open_browser": "在浏览器中打开",
   "dsh.instance.open_home": "打开实例目录",

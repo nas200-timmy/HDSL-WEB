@@ -10,6 +10,7 @@ import type {
   BrandSourceProbe,
   BrandSourceState,
   DeveloperStatus,
+  GitHubTokenStatus,
 } from "../types";
 import { errMsg } from "../utils";
 import { McFeatureCard } from "./McFeatureCard";
@@ -379,6 +380,8 @@ export function BrandManagementPanel() {
         </span>
       </div>
 
+      <GitHubTokenCard editable={editable} withElevation={withElevation} />
+
       {settings.policy.brands.map((entry) => (
         <BrandPolicyCard
           key={entry.brand}
@@ -392,6 +395,117 @@ export function BrandManagementPanel() {
 
       <McFeatureCard />
     </>
+  );
+}
+
+/// GitHub 访问令牌：面板自己用，agent 读不到。
+///
+/// 版本目录的匿名额度是 60 次/小时/IP；一个只读令牌提高到 5000 次/小时。
+/// 令牌只回传"是否配置 + 登录名"，本身永远不会出现在浏览器里。
+function GitHubTokenCard({
+  editable,
+  withElevation,
+}: {
+  editable: boolean;
+  withElevation: <T,>(action: () => Promise<T>) => Promise<T>;
+}) {
+  const [status, setStatus] = useState<GitHubTokenStatus | null>(null);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api.gitHubToken()
+      .then((value) => { if (alive) setStatus(value); })
+      .catch(() => { if (alive) setStatus(null); });
+    return () => { alive = false; };
+  }, []);
+
+  const save = async () => {
+    const token = draft.trim();
+    if (!token) return;
+    setBusy(true);
+    try {
+      const next = await withElevation(() => api.saveGitHubToken(token));
+      setStatus(next);
+      setDraft("");
+      toast("success", next.login ? `已保存 GitHub 令牌（@${next.login}）` : "已保存 GitHub 令牌");
+    } catch (e) {
+      toast("error", `保存失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async () => {
+    if (!window.confirm("删除面板保存的 GitHub 令牌？删除后回到匿名额度（60 次/小时）。")) return;
+    setBusy(true);
+    try {
+      await withElevation(() => api.clearGitHubToken());
+      setStatus({ configured: false, login: null });
+      toast("info", "已删除 GitHub 令牌");
+    } catch (e) {
+      toast("error", `删除失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="comp-row">
+        <span className="comp-label">GitHub 访问令牌</span>
+        <span className="comp-value">
+          {status?.configured ? (
+            <span className="tag running">已配置{status.login ? ` @${status.login}` : ""}</span>
+          ) : (
+            <span className="tag plain">未配置（匿名 60 次/时）</span>
+          )}
+        </span>
+      </div>
+      <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+        GitHub 版本列表的匿名额度是 <b>60 次/小时/IP</b>；填一个只读令牌后是
+        <b> 5000 次/小时</b>。建议用 fine-grained PAT，只勾 public repositories 的只读权限；
+        面板只调公开的 tags/commits/rate_limit 接口。令牌存在面板自己的
+        <code> auth/github.json</code>（0600，agent 进程读不到），不会回显，也不会返回浏览器。
+      </p>
+      <div className="comp-row">
+        <span className="comp-label">{status?.configured ? "替换令牌" : "填写令牌"}</span>
+        <span className="comp-value" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input
+            className="input"
+            type="password"
+            autoComplete="off"
+            placeholder="github_pat_… / ghp_…"
+            value={draft}
+            disabled={!editable || busy}
+            onChange={(e) => setDraft(e.target.value)}
+            style={{ flex: 1, minWidth: 220 }}
+          />
+          <button
+            className="btn btn-outline ripple-host"
+            disabled={!editable || busy || !draft.trim()}
+            onClick={() => void save()}
+          >
+            {busy ? "保存中…" : "保存"}
+          </button>
+          {status?.configured && (
+            <button
+              className="btn btn-text danger"
+              disabled={!editable || busy}
+              onClick={() => void clear()}
+            >
+              删除
+            </button>
+          )}
+        </span>
+      </div>
+      {!editable && (
+        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "0 8px 8px" }}>
+          需要 HTTPS 且已用开发者密码提权才能修改。
+        </p>
+      )}
+    </div>
   );
 }
 
