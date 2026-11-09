@@ -468,9 +468,12 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
   确认，再动代码；根治要把「超时后复位状态」做进测试隔离。
 - `github.com:443` 会间歇不可达（`GnuTLS recv error` / 连接超时），而 `api.github.com` 正常：
   推送失败先重试；实在不行可以用 Git API 重放提交，然后 `git fetch` 把本地对齐（sha 会不同，内容一致）。
-- 发布流程：`web-shell` → `--no-ff` 合 `main` → `shadowJar -PreleaseVersion=<版本>` → `sha256sum` 写
-  `SHA256SUMS.txt` → `git tag -a` → 推 `main`/`web-shell`/tag → `gh release create`（正文写给用户看，
-  不抄 CHANGELOG）→ 核三条 CI 与 ghcr 镜像标签。
+- 发布流程：`web-shell` → **`--no-ff` 合 `main`** → `shadowJar -PreleaseVersion=<版本>` →
+  `sha256sum` 写 `SHA256SUMS.txt` → `git tag -a` → 推 `main`/`web-shell`/tag → `gh release create`
+  （正文写给用户看，不抄 CHANGELOG）→ 核三条 CI 与 ghcr 镜像标签。
+- 合并必须留合并点：**不要用 `--ff-only` 发布**，否则 `main` 上是一条直线，看不出哪批提交属于
+  哪个版本。换机器后先设 `git config merge.ff false` 与 `git config pull.ff only`（`pull` 仍只
+  允许快进，避免日常拉取意外产生合并提交），发布时仍显式写 `--no-ff`。
 
 
 ### 5.14 `user.home` 不等于 `HOME`（root 跑面板时尤其）
