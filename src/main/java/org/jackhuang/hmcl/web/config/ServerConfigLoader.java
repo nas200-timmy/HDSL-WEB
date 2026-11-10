@@ -19,6 +19,7 @@ package org.jackhuang.hmcl.web.config;
 
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
 import org.snakeyaml.engine.v2.api.Load;
 import org.snakeyaml.engine.v2.api.LoadSettings;
 import org.snakeyaml.engine.v2.exceptions.MarkedYamlEngineException;
@@ -65,6 +66,13 @@ public final class ServerConfigLoader {
     public static final String ENV_MC_MAX_INSTANCES = "HDSL_MC_MAX_INSTANCES";
     public static final String ENV_MC_MAX_MEMORY_MB = "HDSL_MC_MAX_MEMORY_MB";
     public static final String ENV_MC_JAVA_PATH = "HDSL_MC_JAVA_PATH";
+    public static final String ENV_MEDIA_ROOT = "HDSL_MEDIA_ROOT";
+    public static final String ENV_FFMPEG_PATH = "HDSL_FFMPEG_PATH";
+    public static final String ENV_TRANSCODE_MAX_CONCURRENT = "HDSL_TRANSCODE_MAX_CONCURRENT";
+    public static final String ENV_TRANSCODE_MAX_QUEUE = "HDSL_TRANSCODE_MAX_QUEUE";
+    public static final String ENV_TRANSCODE_FAILURE_POLICY = "HDSL_TRANSCODE_FAILURE_POLICY";
+    public static final String ENV_TRANSCODE_FAILURE_TIMEOUT_MINUTES = "HDSL_TRANSCODE_FAILURE_TIMEOUT_MINUTES";
+    public static final String ENV_TRANSCODE_AUTO_RESUME = "HDSL_TRANSCODE_AUTO_RESUME";
 
     public static final String YAML_FILE_NAME = "server.yaml";
 
@@ -161,6 +169,9 @@ public final class ServerConfigLoader {
         if (root.containsKey("mc")) {
             applyMc(config, mapField(root, "mc"));
         }
+        if (root.containsKey("transcode")) {
+            applyTranscode(config, mapField(root, "transcode"));
+        }
         if (root.containsKey("logs")) {
             applyLogs(config, mapField(root, "logs"));
         }
@@ -170,7 +181,7 @@ public final class ServerConfigLoader {
         for (String key : root.keySet()) {
             switch (key) {
                 case "bind_host", "port", "public_base_url", "https", "auth", "web_shell",
-                        "developer_guard", "agent", "mc", "logs", "network" -> {
+                        "developer_guard", "agent", "mc", "transcode", "logs", "network" -> {
                 }
                 default -> logger.warning(yamlFile + ": unknown key `" + key + "` ignored");
             }
@@ -304,6 +315,62 @@ public final class ServerConfigLoader {
         }
     }
 
+    /// `transcode:` in `server.yaml`: deployment-controlled limits. The feature
+    /// switch is not here (it is the runtime `feature.json`); a copied config must
+    /// not turn transcoding on by itself.
+    private static void applyTranscode(ServerConfig config, Map<String, Object> section) {
+        ServerConfig.TranscodeConfig target = config.transcode;
+        if (section.containsKey("media_root")) {
+            target.mediaRoot = stringField(section, "media_root");
+        }
+        if (section.containsKey("ffmpeg_path")) {
+            target.ffmpegPath = stringField(section, "ffmpeg_path");
+        }
+        if (section.containsKey("max_concurrent")) {
+            target.maxConcurrent = intField(section, "max_concurrent");
+            if (target.maxConcurrent < 1 || target.maxConcurrent > 8) {
+                throw new ConfigException("transcode.max_concurrent must be between 1 and 8");
+            }
+        }
+        if (section.containsKey("max_queue")) {
+            target.maxQueue = intField(section, "max_queue");
+            if (target.maxQueue < 1 || target.maxQueue > 1000) {
+                throw new ConfigException("transcode.max_queue must be between 1 and 1000");
+            }
+        }
+        if (section.containsKey("failure_policy")) {
+            target.failurePolicy = failurePolicy(stringField(section, "failure_policy"), "transcode.failure_policy");
+        }
+        if (section.containsKey("failure_timeout_minutes")) {
+            target.failureTimeoutMinutes = intField(section, "failure_timeout_minutes");
+            if (target.failureTimeoutMinutes < 1 || target.failureTimeoutMinutes > 1440) {
+                throw new ConfigException("transcode.failure_timeout_minutes must be between 1 and 1440");
+            }
+        }
+        if (section.containsKey("auto_resume")) {
+            target.autoResume = booleanField(section, "auto_resume");
+        }
+        for (String key : section.keySet()) {
+            switch (key) {
+                case "media_root", "ffmpeg_path", "max_concurrent", "max_queue",
+                        "failure_policy", "failure_timeout_minutes", "auto_resume" -> {
+                }
+                default -> throw new ConfigException("transcode: unknown key `" + key + "`");
+            }
+        }
+    }
+
+    private static String failurePolicy(@Nullable String value, String label) {
+        if (value == null) {
+            throw new ConfigException(label + " is required");
+        }
+        return switch (value) {
+            case "ask", "timeout-auto", "full-auto" -> value;
+            default -> throw new ConfigException(label
+                    + " must be `ask`, `timeout-auto` or `full-auto`, got `" + value + "`");
+        };
+    }
+
     private static void applyHttps(ServerConfig config, Map<String, Object> https) {
         ServerConfig.HttpsConfig target = config.https;
         if (https.containsKey("enabled")) {
@@ -416,6 +483,46 @@ public final class ServerConfigLoader {
         }
         if (env.containsKey(ENV_MC_JAVA_PATH)) {
             config.mc.javaPath = env.get(ENV_MC_JAVA_PATH);
+        }
+        if (env.containsKey(ENV_MEDIA_ROOT)) {
+            config.transcode.mediaRoot = env.get(ENV_MEDIA_ROOT);
+        }
+        if (env.containsKey(ENV_FFMPEG_PATH)) {
+            config.transcode.ffmpegPath = env.get(ENV_FFMPEG_PATH);
+        }
+        if (env.containsKey(ENV_TRANSCODE_MAX_CONCURRENT)) {
+            config.transcode.maxConcurrent = parseInt(env.get(ENV_TRANSCODE_MAX_CONCURRENT),
+                    ENV_TRANSCODE_MAX_CONCURRENT);
+            if (config.transcode.maxConcurrent < 1 || config.transcode.maxConcurrent > 8) {
+                throw new ConfigException(ENV_TRANSCODE_MAX_CONCURRENT + " must be between 1 and 8");
+            }
+        }
+        if (env.containsKey(ENV_TRANSCODE_MAX_QUEUE)) {
+            config.transcode.maxQueue = parseInt(env.get(ENV_TRANSCODE_MAX_QUEUE), ENV_TRANSCODE_MAX_QUEUE);
+            if (config.transcode.maxQueue < 1 || config.transcode.maxQueue > 1000) {
+                throw new ConfigException(ENV_TRANSCODE_MAX_QUEUE + " must be between 1 and 1000");
+            }
+        }
+        if (env.containsKey(ENV_TRANSCODE_FAILURE_POLICY)) {
+            config.transcode.failurePolicy = failurePolicy(env.get(ENV_TRANSCODE_FAILURE_POLICY),
+                    ENV_TRANSCODE_FAILURE_POLICY);
+        }
+        if (env.containsKey(ENV_TRANSCODE_FAILURE_TIMEOUT_MINUTES)) {
+            config.transcode.failureTimeoutMinutes = parseInt(env.get(ENV_TRANSCODE_FAILURE_TIMEOUT_MINUTES),
+                    ENV_TRANSCODE_FAILURE_TIMEOUT_MINUTES);
+            if (config.transcode.failureTimeoutMinutes < 1 || config.transcode.failureTimeoutMinutes > 1440) {
+                throw new ConfigException(ENV_TRANSCODE_FAILURE_TIMEOUT_MINUTES
+                        + " must be between 1 and 1440");
+            }
+        }
+        if (env.containsKey(ENV_TRANSCODE_AUTO_RESUME)) {
+            String value = env.get(ENV_TRANSCODE_AUTO_RESUME);
+            config.transcode.autoResume = switch (value) {
+                case "true" -> true;
+                case "false" -> false;
+                default -> throw new ConfigException(ENV_TRANSCODE_AUTO_RESUME
+                        + " must be `true` or `false`, got `" + value + "`");
+            };
         }
         if (env.containsKey(ENV_ZCODE_PACKAGE)) {
             config.zcode.packageDir = env.get(ENV_ZCODE_PACKAGE);

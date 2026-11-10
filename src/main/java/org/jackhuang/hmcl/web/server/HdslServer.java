@@ -392,6 +392,19 @@ public final class HdslServer {
         wallpaperHolder.getRegistration().setMultipartConfig(wallpaperMultipart);
         context.addServlet(wallpaperHolder, "/api/wallpapers/*");
 
+        // The transcode surface (docs/transcode.md). Off by default: while the
+        // feature is DISABLED the gate answers 404 for everything but the enable
+        // flow, so the panel looks exactly like one without this feature. The
+        // state lives in <data>/transcode/feature.json, not server.yaml.
+        org.jackhuang.hmcl.web.transcode.TranscodeFeatureState transcodeFeature =
+                new org.jackhuang.hmcl.web.transcode.TranscodeFeatureState(
+                        org.jackhuang.hmcl.web.transcode.TranscodePaths.featureFile(config));
+        context.addFilter(new FilterHolder(new org.jackhuang.hmcl.web.transcode.TranscodeFeatureFilter(
+                transcodeFeature, config.basePath)), "/api/transcode/*", EnumSet.of(DispatcherType.REQUEST));
+        context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.transcode.TranscodeApiServlet(
+                config, transcodeFeature, authService, developerAuth, developerElevation, tlsActive)),
+                "/api/transcode/*");
+
         // The Minecraft surface (docs/minecraft.md). Off by default: while the
         // feature is DISABLED the gate answers 404 for everything but the enable
         // flow, so the panel looks exactly like one without this feature.

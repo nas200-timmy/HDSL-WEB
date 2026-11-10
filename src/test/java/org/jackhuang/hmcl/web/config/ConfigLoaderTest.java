@@ -267,4 +267,47 @@ class ConfigLoaderTest {
                 () -> load(Map.of()));
         assertTrue(e.getMessage().contains("scopes"), e.getMessage());
     }
+
+    @Test
+    void transcodeSettingsAreReadFromYamlAndEnvironment() throws Exception {
+        Files.writeString(dataDir.resolve("server.yaml"), """
+                transcode:
+                  media_root: /srv/video
+                  ffmpeg_path: /opt/ffmpeg/bin/ffmpeg
+                  max_concurrent: 2
+                  max_queue: 50
+                  failure_policy: timeout-auto
+                  failure_timeout_minutes: 15
+                  auto_resume: false
+                """);
+
+        ServerConfig config = load(Map.of());
+        assertEquals("/srv/video", config.transcode.mediaRoot);
+        assertEquals("/opt/ffmpeg/bin/ffmpeg", config.transcode.ffmpegPath);
+        assertEquals(2, config.transcode.maxConcurrent);
+        assertEquals(50, config.transcode.maxQueue);
+        assertEquals("timeout-auto", config.transcode.failurePolicy);
+        assertEquals(15, config.transcode.failureTimeoutMinutes);
+        assertFalse(config.transcode.autoResume);
+
+        Map<String, String> env = Map.of(
+                ServerConfigLoader.ENV_MEDIA_ROOT, "/mnt/media",
+                ServerConfigLoader.ENV_TRANSCODE_MAX_CONCURRENT, "1",
+                ServerConfigLoader.ENV_TRANSCODE_FAILURE_POLICY, "full-auto");
+        ServerConfig overridden = load(env);
+        assertEquals("/mnt/media", overridden.transcode.mediaRoot);
+        assertEquals(1, overridden.transcode.maxConcurrent);
+        assertEquals("full-auto", overridden.transcode.failurePolicy);
+    }
+
+    @Test
+    void anUnknownTranscodeFailurePolicyIsAnError() throws Exception {
+        Files.writeString(dataDir.resolve("server.yaml"), """
+                transcode:
+                  failure_policy: sometimes
+                """);
+        ServerConfigLoader.ConfigException e = assertThrows(ServerConfigLoader.ConfigException.class,
+                () -> load(Map.of()));
+        assertTrue(e.getMessage().contains("transcode.failure_policy"), e.getMessage());
+    }
 }
