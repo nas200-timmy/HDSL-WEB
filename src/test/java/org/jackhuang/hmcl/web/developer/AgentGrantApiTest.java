@@ -328,6 +328,14 @@ class AgentGrantApiTest {
         // must not inherit them through the "every GET is a read" shortcut.
         assertEquals(AgentScopes.SYSTEM, AgentScopes.required("GET", "/api/system/stats"));
         assertEquals(AgentScopes.SYSTEM, AgentScopes.required("GET", "/api/system/info"));
+        // Transcode has its own pair: control/presets vs raw media access, and
+        // the feature switch is always operator-only.
+        assertEquals(AgentScopes.TRANSCODE, AgentScopes.required("GET", "/api/transcode/queue"));
+        assertEquals(AgentScopes.TRANSCODE, AgentScopes.required("POST", "/api/transcode/queue/jobs"));
+        assertEquals(AgentScopes.TRANSCODE, AgentScopes.required("GET", "/api/transcode/presets"));
+        assertEquals(AgentScopes.TRANSCODE_RAW, AgentScopes.required("GET", "/api/transcode/media/list"));
+        assertTrue(AgentScopes.forbidden("POST", "/api/transcode/feature/enable"));
+        assertTrue(AgentScopes.forbidden("POST", "/api/transcode/feature/disable"));
         assertEquals(AgentScopes.INSTANCES, AgentScopes.required("POST", "/api/instances"));
         assertEquals(AgentScopes.PLUGINS, AgentScopes.required("POST", "/api/instances/x/plugins/install"));
         assertEquals(AgentScopes.CONFIG, AgentScopes.required("POST", "/api/settings/tls"));
