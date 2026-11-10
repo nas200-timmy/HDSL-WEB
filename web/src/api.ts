@@ -1017,6 +1017,13 @@ export const api = {
     toolsExtract: (input: string, type: "video" | "audio" | "subtitle", index: number, output: string) =>
       request<TranscodeJob>("/api/transcode/tools/extract",
         jsonInit("POST", { input, type, index, output })),
+    qualityStart: (body: { reference: string; encoded: string; metrics: string[]; start?: string; duration?: string }) =>
+      request<TranscodeQualityJob>("/api/transcode/tools/quality", jsonInit("POST", body)),
+    qualityJob: (id: string) =>
+      request<TranscodeQualityJob>(`/api/transcode/tools/quality/${encodeURIComponent(id)}`),
+    qualityCancel: (id: string) =>
+      request<TranscodeQualityJob>(`/api/transcode/tools/quality/${encodeURIComponent(id)}/cancel`,
+        jsonInit("POST", {})),
   },
 };
 
@@ -1171,6 +1178,30 @@ export interface TranscodeQueueSnapshot {
   maxConcurrent: number;
   maxQueue: number;
   jobs: TranscodeJob[];
+}
+
+export interface TranscodeQualityFrame {
+  n: number;
+  value: number;
+}
+
+export interface TranscodeQualityMetric {
+  average: number;
+  frames: TranscodeQualityFrame[];
+}
+
+export interface TranscodeQualityJob {
+  id: string;
+  reference: string;
+  encoded: string;
+  metrics: string[];
+  state: "running" | "done" | "failed" | "cancelled";
+  progress: number;
+  message: string;
+  error?: string | null;
+  createdAt: number;
+  endedAt: number;
+  results: Record<string, TranscodeQualityMetric>;
 }
 
 /// GET /api/mc/feature：功能开关与内存锁。

@@ -121,6 +121,10 @@ public final class TranscodeApiServlet extends HttpServlet {
             queueJobGet(request, response, path.substring("/queue/jobs/".length()));
             return;
         }
+        if (path.startsWith("/tools/quality/")) {
+            qualityGet(request, response, path.substring("/tools/quality/".length()));
+            return;
+        }
         Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
     }
 
@@ -150,9 +154,14 @@ public final class TranscodeApiServlet extends HttpServlet {
             case "/tools/merge" -> mergeTool(request, response);
             case "/tools/mux" -> muxTool(request, response);
             case "/tools/extract" -> extractTool(request, response);
+            case "/tools/quality" -> qualityTool(request, response);
             default -> {
                 if (path.startsWith("/queue/jobs/")) {
                     queueJobAction(request, response, path.substring("/queue/jobs/".length()));
+                } else if (path.startsWith("/tools/quality/") && path.endsWith("/cancel")) {
+                    String rest = path.substring("/tools/quality/".length(),
+                            path.length() - "/cancel".length());
+                    qualityCancel(response, rest);
                 } else {
                     Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
                 }
@@ -524,6 +533,46 @@ public final class TranscodeApiServlet extends HttpServlet {
             }
         }
         return result;
+    }
+
+    private void qualityTool(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        try {
+            var job = module.quality().start(
+                    stringField(body, "reference"),
+                    stringField(body, "encoded"),
+                    stringArray(body, "metrics"),
+                    stringField(body, "start"),
+                    stringField(body, "duration"));
+            audit("transcode.tool.quality", job.id, "success", request);
+            Json.write(response, job);
+        } catch (IOException | IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    private void qualityGet(HttpServletRequest request, HttpServletResponse response, String rest)
+            throws IOException {
+        var job = module.quality().job(rest);
+        if (job.isEmpty()) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "quality job not found");
+            return;
+        }
+        Json.write(response, job.get());
+    }
+
+    private void qualityCancel(HttpServletResponse response, String id) throws IOException {
+        var job = module.quality().job(id);
+        if (job.isEmpty()) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "quality job not found");
+            return;
+        }
+        module.quality().cancel(id);
+        Json.write(response, job.get());
     }
 
     private void queueJobGet(HttpServletRequest request, HttpServletResponse response, String rest)

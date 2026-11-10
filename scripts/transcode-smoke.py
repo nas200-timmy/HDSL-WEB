@@ -249,6 +249,30 @@ def main() -> None:
             check((media / "extracted.mkv").is_file(), "extracted.mkv missing")
             print("PASS: extract tool")
 
+            status, quality = request(base, "POST", "/api/transcode/tools/quality",
+                                      {"reference": "input.mp4", "encoded": final["output"],
+                                       "metrics": ["psnr", "ssim"]})
+            check(status == 200, f"quality start -> {status}: {quality}")
+            assert isinstance(quality, dict)
+            quality_id = quality["id"]
+            quality_final = None
+            for _ in range(120):
+                status, quality_final = request(
+                    base, "GET", f"/api/transcode/tools/quality/{quality_id}")
+                check(status == 200, f"quality -> {status}")
+                assert isinstance(quality_final, dict)
+                if quality_final["state"] in ("done", "failed", "cancelled"):
+                    break
+                time.sleep(0.5)
+            check(quality_final is not None and quality_final["state"] == "done",
+                  f"quality ended as {quality_final and quality_final['state']}: "
+                  f"{quality_final and quality_final.get('error')}")
+            for metric in ("psnr", "ssim"):
+                result = quality_final["results"].get(metric)
+                check(result is not None, f"quality result missing: {metric}")
+                check(result["frames"], f"quality frames missing: {metric}")
+            print("PASS: quality metrics")
+
             status, _ = request(base, "GET", "/api/transcode/queue/jobs/unknown")
             check(status == 404, f"unknown job -> {status} (expected 404)")
             print("PASS: 404 contract")

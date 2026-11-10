@@ -21,6 +21,7 @@ import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.event.EventBus;
 import org.jackhuang.hmcl.web.transcode.media.MediaBrowser;
 import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
+import org.jackhuang.hmcl.web.transcode.quality.QualityService;
 import org.jackhuang.hmcl.web.transcode.queue.TranscodeQueue;
 import org.jackhuang.hmcl.web.transcode.runtime.TranscodeRuntime;
 import org.jackhuang.hmcl.web.transcode.tools.TranscodeTools;
@@ -44,6 +45,7 @@ public final class TranscodeModule {
     private final PresetStore presets;
     private final TranscodeQueue queue;
     private final TranscodeTools tools;
+    private final QualityService quality;
 
     public TranscodeModule(ServerConfig config, EventBus eventBus) {
         this.config = config;
@@ -53,6 +55,7 @@ public final class TranscodeModule {
         this.presets = new PresetStore(TranscodePaths.dataDir(config).resolve("presets"));
         this.queue = new TranscodeQueue(this, eventBus);
         this.tools = new TranscodeTools(this);
+        this.quality = new QualityService(this);
         if (feature.enabled()) {
             queue.start();
         }
@@ -84,6 +87,10 @@ public final class TranscodeModule {
 
     public TranscodeTools tools() {
         return tools;
+    }
+
+    public QualityService quality() {
+        return quality;
     }
 
     public Path dataDir() {
