@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.transcode;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import jakarta.servlet.http.HttpServlet;
@@ -31,6 +32,8 @@ import org.jackhuang.hmcl.web.developer.DeveloperAuth;
 import org.jackhuang.hmcl.web.developer.DeveloperElevation;
 import org.jackhuang.hmcl.web.http.Json;
 import org.jackhuang.hmcl.web.http.RequestSecurity;
+import org.jackhuang.hmcl.web.transcode.media.MediaBrowser;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegProbe;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -50,6 +53,7 @@ import java.util.function.BooleanSupplier;
 @NotNullByDefault
 public final class TranscodeApiServlet extends HttpServlet {
 
+    private final TranscodeModule module;
     private final ServerConfig config;
     private final TranscodeFeatureState feature;
     private final AuthService auth;
@@ -57,11 +61,12 @@ public final class TranscodeApiServlet extends HttpServlet {
     private final DeveloperElevation elevation;
     private final BooleanSupplier tlsActive;
 
-    public TranscodeApiServlet(ServerConfig config, TranscodeFeatureState feature,
+    public TranscodeApiServlet(TranscodeModule module,
                                AuthService auth, DeveloperAuth developerAuth,
                                DeveloperElevation elevation, BooleanSupplier tlsActive) {
-        this.config = config;
-        this.feature = feature;
+        this.module = module;
+        this.config = module.config();
+        this.feature = module.feature();
         this.auth = auth;
         this.developerAuth = developerAuth;
         this.elevation = elevation;
@@ -77,6 +82,18 @@ public final class TranscodeApiServlet extends HttpServlet {
         }
         if ("/terms".equals(path)) {
             termsJson(response);
+            return;
+        }
+        if ("/capabilities".equals(path)) {
+            capabilities(response);
+            return;
+        }
+        if ("/media/list".equals(path)) {
+            mediaList(request, response);
+            return;
+        }
+        if ("/media/probe".equals(path)) {
+            mediaProbe(request, response);
             return;
         }
         Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
@@ -139,6 +156,73 @@ public final class TranscodeApiServlet extends HttpServlet {
         body.addProperty("text", TranscodeTerms.text());
         body.addProperty("hash", TranscodeTerms.hash());
         Json.write(response, body);
+    }
+
+    private void capabilities(HttpServletResponse response) throws IOException {
+        FfmpegProbe.FfmpegInfo info = module.runtime().info();
+        JsonObject body = new JsonObject();
+        body.addProperty("available", info.available());
+        body.addProperty("version", info.version());
+        body.addProperty("ffmpeg", info.ffmpeg() == null ? null : info.ffmpeg().toString());
+        body.addProperty("ffprobe", info.ffprobe() == null ? null : info.ffprobe().toString());
+        body.addProperty("error", info.error());
+        body.addProperty("probedAt", info.probedAt());
+        JsonArray encoders = new JsonArray();
+        info.encoders().forEach(encoders::add);
+        body.add("encoders", encoders);
+        JsonArray hwaccels = new JsonArray();
+        info.hwaccels().forEach(hwaccels::add);
+        body.add("hwaccels", hwaccels);
+        JsonArray filters = new JsonArray();
+        info.filters().forEach(filters::add);
+        body.add("filters", filters);
+        Path media = module.mediaRoot();
+        body.addProperty("mediaRoot", media.toString());
+        body.addProperty("mediaRootExists", Files.isDirectory(media));
+        body.addProperty("mediaRootWritable", Files.isDirectory(media) && Files.isWritable(media));
+        body.addProperty("maxConcurrent", config.transcode.maxConcurrent);
+        body.addProperty("maxQueue", config.transcode.maxQueue);
+        Json.write(response, body);
+    }
+
+    private void mediaList(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String relative = request.getParameter("path");
+        int page = intParameter(request, "page", 0);
+        int pageSize = intParameter(request, "pageSize", 200);
+        try {
+            MediaBrowser.Listing listing = module.media().list(module.mediaRoot(), relative, page, pageSize);
+            Json.write(response, listing);
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    private void mediaProbe(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String relative = request.getParameter("path");
+        if (relative == null || relative.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "path is required");
+            return;
+        }
+        try {
+            Json.write(response, module.media().probe(module.mediaRoot(), relative));
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "probe interrupted");
+        }
+    }
+
+    private static int intParameter(HttpServletRequest request, String name, int fallback) {
+        String value = request.getParameter(name);
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 
     private void enable(HttpServletRequest request, HttpServletResponse response) throws IOException {
