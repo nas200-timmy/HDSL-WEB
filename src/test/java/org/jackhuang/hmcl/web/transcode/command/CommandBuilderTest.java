@@ -122,4 +122,21 @@ class CommandBuilderTest {
         assertThrows(IllegalArgumentException.class,
                 () -> CommandBuilder.build(preset, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
     }
+    @Test
+    void writesMetadataAttachmentsAndChapters(@TempDir Path dir) {
+        TranscodePreset preset = preset();
+        preset.metadataTitle = "My film";
+        preset.metadataArtist = "Someone";
+        preset.copyAttachments = true;
+        Path chapters = dir.resolve("chapters.txt");
+        var args = CommandBuilder.build(preset, dir.resolve("in.mkv"), dir.resolve("out.mkv"), chapters);
+        String command = joined(args);
+        assertTrue(command.contains("-metadata title=My film"));
+        assertTrue(command.contains("-metadata artist=Someone"));
+        assertTrue(command.contains("-map 0:t?"));
+        assertTrue(command.contains("-c:t copy"));
+        assertTrue(command.contains(chapters.toString()));
+        assertTrue(command.contains("-map_chapters 1"));
+    }
+
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   api,
   type TranscodePreset,
@@ -9,6 +9,7 @@ import {
 } from "../../api";
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
+import { Dialog } from "../../components/Dialog";
 
 export function PresetsPage() {
   const [summaries, setSummaries] = useState<TranscodePresetSummary[]>([]);
@@ -18,6 +19,8 @@ export function PresetsPage() {
   const [draft, setDraft] = useState<TranscodePreset>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [filterDialog, setFilterDialog] = useState(false);
+  const fileInput = useRef<HTMLInputElement | null>(null);
 
   const loadList = async (preferred?: string) => {
     try {
@@ -103,6 +106,48 @@ export function PresetsPage() {
     }
   };
 
+  const importFile = async (file: File) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const data = JSON.parse(await file.text()) as Record<string, unknown>;
+      const id = window.prompt("导入为预设 id（字母/数字/._-）",
+        file.name.replace(/\.(3fui|json)$/i, ""));
+      if (!id) return;
+      const saved = await api.transcode.importPreset(id, data);
+      toast("success", "预设已导入");
+      await loadList(saved.id);
+    } catch (e) {
+      setError(errMsg(e));
+      toast("error", errMsg(e));
+    } finally {
+      setBusy(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  };
+
+  const exportFile = async (format: "json" | "3fui") => {
+    if (!entry) return;
+    try {
+      const data = await api.transcode.exportPreset(entry.id, format);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${entry.id}.${format}`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast("error", errMsg(e));
+    }
+  };
+
+  const appendFilter = (filter: string) => {
+    const current = typeof draft.filterGraph === "string" ? draft.filterGraph.trim() : "";
+    update("filterGraph", current ? `${current},${filter}` : filter);
+    setFilterDialog(false);
+  };
+
   const update = (id: string, value: unknown) => {
     setDraft((current) => ({ ...current, [id]: value }));
   };
@@ -117,6 +162,22 @@ export function PresetsPage() {
           <button className="btn btn-text" disabled={busy} onClick={() => void loadList()}>
             刷新
           </button>
+          <button className="btn btn-text" disabled={busy} onClick={() => fileInput.current?.click()}>
+            导入
+          </button>
+          <button className="btn btn-text" disabled={busy || !entry} onClick={() => void exportFile("3fui")}>
+            导出 .3fui
+          </button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".json,.3fui,application/json"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void importFile(file);
+            }}
+          />
         </div>
         <div className="list-body scroll-hover" style={{ maxHeight: 520 }}>
           {summaries.map((preset) => (
@@ -202,6 +263,13 @@ export function PresetsPage() {
           <div className="card" key={section.title}>
             <div className="comp-row">
               <span className="comp-label">{section.title}</span>
+              {section.title.includes("滤镜") && (
+                <span className="comp-value">
+                  <button className="btn btn-text" disabled={entry?.builtin === true} onClick={() => setFilterDialog(true)}>
+                    滤镜选择
+                  </button>
+                </span>
+              )}
             </div>
             <div style={{ display: "grid", gap: 6, padding: "4px 8px 8px" }}>
               {section.fields.map((field) => (
@@ -215,6 +283,75 @@ export function PresetsPage() {
               ))}
             </div>
           </div>
+        ))}
+
+        <CustomArgsEditor draft={draft} disabled={entry?.builtin === true} update={update} />
+      </div>
+
+      <Dialog open={filterDialog} title="追加视频滤镜" onClose={() => setFilterDialog(false)}>
+        <div style={{ display: "grid", gap: 6, maxWidth: 420 }}>
+          {FILTERS.map((filter) => (
+            <button key={filter.value} className="btn btn-text" style={{ justifyContent: "flex-start" }}
+                    onClick={() => appendFilter(filter.value)}>
+              {filter.label} <span className="mono" style={{ fontSize: 11, opacity: 0.7 }}>{filter.value}</span>
+            </button>
+          ))}
+        </div>
+      </Dialog>
+    </div>
+  );
+}
+
+const FILTERS = [
+  { label: "缩放到 1080p", value: "scale=-2:1080" },
+  { label: "缩放到 720p", value: "scale=-2:720" },
+  { label: "固定帧率 30", value: "fps=30" },
+  { label: "去隔行", value: "yadif" },
+  { label: "裁掉顶部 10%", value: "crop=iw:ih*0.9:0:0" },
+  { label: "水平翻转", value: "hflip" },
+  { label: "垂直翻转", value: "vflip" },
+  { label: "顺时针旋转 90°", value: "transpose=1" },
+  { label: "轻量调色", value: "eq=contrast=1.05:saturation=1.1" },
+];
+
+function CustomArgsEditor({
+  draft,
+  disabled,
+  update,
+}: {
+  draft: TranscodePreset;
+  disabled: boolean;
+  update: (id: string, value: unknown) => void;
+}) {
+  const listText = (value: unknown) => Array.isArray(value) ? value.join("\n") : "";
+  const setList = (id: string, text: string) =>
+    update(id, text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+  return (
+    <div className="card">
+      <div className="comp-row">
+        <span className="comp-label">自定义参数</span>
+        <span className="comp-value" style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+          每行一个 argv，不做 shell 解析
+        </span>
+      </div>
+      <div style={{ display: "grid", gap: 6, padding: "4px 8px 8px" }}>
+        {[
+          ["inputArgs", "输入前参数"],
+          ["videoArgs", "视频附加参数"],
+          ["audioArgs", "音频附加参数"],
+          ["subtitleArgs", "字幕附加参数"],
+          ["outputArgs", "输出前参数"],
+        ].map(([id, label]) => (
+          <label key={id} style={{ display: "grid", gap: 3, fontSize: 12 }}>
+            <span>{label}</span>
+            <textarea
+              className="input"
+              rows={2}
+              disabled={disabled}
+              value={listText(draft[id])}
+              onChange={(e) => setList(id, e.target.value)}
+            />
+          </label>
         ))}
       </div>
     </div>
@@ -242,6 +379,20 @@ function Field({
           onChange={(e) => onChange(e.target.checked)}
         />
         {field.label}
+      </label>
+    );
+  }
+  if (field.type === "textarea") {
+    return (
+      <label style={{ display: "grid", gap: 3, fontSize: 12 }}>
+        <span>{field.label}</span>
+        <textarea
+          className="input"
+          rows={3}
+          value={String(value ?? "")}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+        />
       </label>
     );
   }

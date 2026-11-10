@@ -108,11 +108,24 @@ public final class PresetSchema {
                 )
         }));
 
-        sections.add(section("高级", new JsonArray[]{
+        sections.add(section("元数据 / 章节 / 附件", new JsonArray[]{
                 fields(
-                        text("filterGraph", "附加滤镜", ""),
-                        booleanField("copyMetadata", "复制元数据", true),
-                        booleanField("copyChapters", "复制章节", true)
+                        text("metadataTitle", "标题", ""),
+                        text("metadataArtist", "艺术家", ""),
+                        text("metadataAlbum", "专辑", ""),
+                        text("metadataComment", "备注", ""),
+                        text("metadataDate", "日期", ""),
+                        text("metadataGenre", "流派", ""),
+                        text("chaptersFile", "章节文件（ffmetadata，相对媒体根）", ""),
+                        booleanField("copyMetadata", "复制源元数据", true),
+                        booleanField("copyChapters", "复制源章节", true),
+                        booleanField("copyAttachments", "复制附件（字体等）", true)
+                )
+        }));
+
+        sections.add(section("滤镜 / 高级", new JsonArray[]{
+                fields(
+                        textarea("filterGraph", "附加滤镜链", "")
                 )
         }));
 
@@ -153,6 +166,12 @@ public final class PresetSchema {
             array.add(option);
         }
         field.add("options", array);
+        return field;
+    }
+
+    private static JsonObject textarea(String id, String label, String value) {
+        JsonObject field = base(id, label, "textarea");
+        field.addProperty("default", value);
         return field;
     }
 

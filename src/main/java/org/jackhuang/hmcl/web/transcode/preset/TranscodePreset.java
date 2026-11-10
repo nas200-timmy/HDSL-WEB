@@ -92,7 +92,18 @@ public final class TranscodePreset {
     public String subtitleFontSize = "";
     public String subtitleMap = "0:s?";
 
-    // ---- metadata / custom args ------------------------------------------
+    // ---- metadata / chapters / attachments -------------------------------
+    public String metadataTitle = "";
+    public String metadataArtist = "";
+    public String metadataAlbum = "";
+    public String metadataComment = "";
+    public String metadataDate = "";
+    public String metadataGenre = "";
+    public boolean copyAttachments = true;
+    /// Relative to the media root; empty means "use the input's chapters".
+    public String chaptersFile = "";
+
+    // ---- filters / custom args -------------------------------------------
     public String filterGraph = "";
     public boolean copyMetadata = true;
     public boolean copyChapters = true;

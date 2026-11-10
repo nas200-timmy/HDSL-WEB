@@ -184,7 +184,9 @@ public final class TranscodeQueue {
         }
         // Build once before accepting: a preset that cannot produce a command should
         // fail at submit, not after the job has already taken a queue slot.
-        CommandBuilder.build(preset, inputPath, directory.resolve("preview.mkv"));
+        Path chapters = preset.chaptersFile == null || preset.chaptersFile.isBlank()
+                ? null : module.media().resolve(mediaRoot, preset.chaptersFile);
+        CommandBuilder.build(preset, inputPath, directory.resolve("preview.mkv"), chapters);
 
         TranscodeJob job = new TranscodeJob();
         job.id = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
@@ -484,8 +486,10 @@ public final class TranscodeQueue {
             part = partPath(output, job.id);
             Files.deleteIfExists(part);
             job.durationMs = job.tool.isBlank() ? durationMs(input) : -1;
+            Path chapters = job.preset.chaptersFile == null || job.preset.chaptersFile.isBlank()
+                    ? null : module.media().resolve(mediaRoot, job.preset.chaptersFile);
             List<String> args = job.tool.isBlank()
-                    ? CommandBuilder.build(job.preset, input, part)
+                    ? CommandBuilder.build(job.preset, input, part, chapters)
                     : toolArgs(job.command, part);
             List<String> command = new ArrayList<>(args.size() + 1);
             command.add(info.ffmpeg().toString());

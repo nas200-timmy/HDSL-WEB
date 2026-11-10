@@ -979,6 +979,13 @@ export const api = {
       request<TranscodePresetEntry>("/api/transcode/presets", jsonInit("POST", { id, preset })),
     deletePreset: (id: string) =>
       request<{ ok: boolean }>(`/api/transcode/presets/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    importPreset: (id: string, data: Record<string, unknown>, name?: string) =>
+      request<TranscodePresetEntry>("/api/transcode/presets/import",
+        jsonInit("POST", { id, name, data })),
+    exportPreset: (id: string, format: "json" | "3fui") =>
+      request<Record<string, unknown>>(
+        `/api/transcode/presets/${encodeURIComponent(id)}/export?format=${format}`,
+      ),
     preview: (body: { presetId?: string; preset?: Record<string, unknown>; input: string; outputDir?: string }) =>
       request<TranscodePreview>("/api/transcode/preview", jsonInit("POST", body)),
     queue: () => request<TranscodeQueueSnapshot>("/api/transcode/queue"),
@@ -1101,7 +1108,7 @@ export interface TranscodePresetEntry {
 export interface TranscodeSchemaField {
   id: string;
   label: string;
-  type: "text" | "select" | "switch";
+  type: "text" | "textarea" | "select" | "switch";
   default: string | boolean;
   options?: string[];
 }

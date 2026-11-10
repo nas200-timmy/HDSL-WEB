@@ -40,6 +40,12 @@ public final class CommandBuilder {
 
     /// Builds the arguments for one job. `input` and `output` are absolute paths.
     public static List<String> build(TranscodePreset preset, Path input, Path output) {
+        return build(preset, input, output, null);
+    }
+
+    /// The same, with an optional ffmetadata chapters file (already resolved under the
+    /// media root by the caller).
+    public static List<String> build(TranscodePreset preset, Path input, Path output, Path chapters) {
         preset.validate();
         List<String> args = new ArrayList<>();
         args.add("-hide_banner");
@@ -57,6 +63,10 @@ public final class CommandBuilder {
         args.addAll(preset.inputArgs);
         args.add("-i");
         args.add(input.toString());
+        if (chapters != null) {
+            args.add("-i");
+            args.add(chapters.toString());
+        }
 
         String video = preset.videoEncoder == null ? "" : preset.videoEncoder;
         boolean copyVideo = "copy".equals(video);
@@ -75,6 +85,10 @@ public final class CommandBuilder {
         if ("copy".equals(preset.subtitleMode)) {
             args.add("-map");
             args.add(preset.subtitleMap == null || preset.subtitleMap.isBlank() ? "0:s?" : preset.subtitleMap);
+        }
+        if (preset.copyAttachments) {
+            args.add("-map");
+            args.add("0:t?");
         }
 
         List<String> filters = filters(preset, vaapi);
@@ -180,6 +194,10 @@ public final class CommandBuilder {
             }
         }
         args.addAll(preset.subtitleArgs);
+        if (preset.copyAttachments) {
+            args.add("-c:t");
+            args.add("copy");
+        }
 
         if (preset.copyMetadata) {
             args.add("-map_metadata");
@@ -188,8 +206,13 @@ public final class CommandBuilder {
             args.add("-map_metadata");
             args.add("-1");
         }
+        metadata(args, preset);
         args.add("-map_chapters");
-        args.add(preset.copyChapters ? "0" : "-1");
+        if (chapters != null) {
+            args.add("1");
+        } else {
+            args.add(preset.copyChapters ? "0" : "-1");
+        }
         if ("mp4".equalsIgnoreCase(preset.container)) {
             args.add("-movflags");
             args.add("+faststart");
@@ -213,6 +236,22 @@ public final class CommandBuilder {
             }
         }
         return result.toString();
+    }
+
+    private static void metadata(List<String> args, TranscodePreset preset) {
+        putMetadata(args, "title", preset.metadataTitle);
+        putMetadata(args, "artist", preset.metadataArtist);
+        putMetadata(args, "album", preset.metadataAlbum);
+        putMetadata(args, "comment", preset.metadataComment);
+        putMetadata(args, "date", preset.metadataDate);
+        putMetadata(args, "genre", preset.metadataGenre);
+    }
+
+    private static void putMetadata(List<String> args, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            args.add("-metadata");
+            args.add(key + "=" + value);
+        }
     }
 
     private static void addQuality(List<String> args, TranscodePreset preset, String encoder) {

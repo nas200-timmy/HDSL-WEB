@@ -35,6 +35,7 @@ import org.jackhuang.hmcl.web.http.RequestSecurity;
 import org.jackhuang.hmcl.web.transcode.media.MediaBrowser;
 import org.jackhuang.hmcl.web.transcode.preset.PresetSchema;
 import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
+import org.jackhuang.hmcl.web.transcode.preset.PresetTransfer;
 import org.jackhuang.hmcl.web.transcode.preset.TranscodePreset;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegProbe;
 import org.jackhuang.hmcl.web.transcode.command.CommandBuilder;
@@ -109,7 +110,7 @@ public final class TranscodeApiServlet extends HttpServlet {
             return;
         }
         if (path.startsWith("/presets/")) {
-            preset(response, path.substring("/presets/".length()));
+            preset(request, response, path.substring("/presets/".length()));
             return;
         }
         if ("/queue".equals(path)) {
@@ -132,6 +133,7 @@ public final class TranscodeApiServlet extends HttpServlet {
             case "/feature/disable" -> disable(request, response);
             case "/presets" -> savePreset(request, response);
             case "/preview" -> preview(request, response);
+            case "/presets/import" -> importPreset(request, response);
             case "/queue/start" -> {
                 module.queue().startQueue();
                 Json.write(response, module.queue().snapshot());
@@ -311,13 +313,65 @@ public final class TranscodeApiServlet extends HttpServlet {
         Json.write(response, body);
     }
 
-    private void preset(HttpServletResponse response, String id) throws IOException {
+    private void preset(HttpServletRequest request, HttpServletResponse response, String id) throws IOException {
+        if (id.endsWith("/export")) {
+            exportPreset(response, id.substring(0, id.length() - "/export".length()),
+                    request.getParameter("format"));
+            return;
+        }
         var entry = module.presets().get(id);
         if (entry.isEmpty()) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "preset not found");
             return;
         }
         Json.write(response, entry.get());
+    }
+
+    private void exportPreset(HttpServletResponse response, String id, String format) throws IOException {
+        var entry = module.presets().get(id);
+        if (entry.isEmpty()) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "preset not found");
+            return;
+        }
+        if ("3fui".equalsIgnoreCase(format)) {
+            Json.write(response, PresetTransfer.to3fui(entry.get().preset()));
+        } else {
+            Json.write(response, entry.get().preset());
+        }
+    }
+
+    private void importPreset(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        JsonObject data = body.has("data") && body.get("data").isJsonObject()
+                ? body.getAsJsonObject("data") : body;
+        String id = stringField(body, "id");
+        if (id == null || id.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "id is required");
+            return;
+        }
+        try {
+            TranscodePreset preset = PresetTransfer.looksLike3fui(data)
+                    ? PresetTransfer.from3fui(data)
+                    : Json.GSON.fromJson(data, TranscodePreset.class);
+            if (preset == null) {
+                throw new IllegalArgumentException("preset is not an object");
+            }
+            String name = stringField(body, "name");
+            if (name != null && !name.isBlank()) {
+                preset.name = name;
+            }
+            PresetStore.PresetEntry saved = module.presets().save(id.trim(), preset);
+            audit("transcode.preset.import", id.trim(), "success", request);
+            Json.write(response, saved);
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+        }
     }
 
     private void savePreset(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -373,7 +427,9 @@ public final class TranscodeApiServlet extends HttpServlet {
                 outputDir = input.getParent();
             }
             Path output = CommandBuilder.outputPath(preset, input, outputDir);
-            var args = CommandBuilder.build(preset, input, output);
+            Path chapters = preset.chaptersFile == null || preset.chaptersFile.isBlank()
+                    ? null : module.media().resolve(module.mediaRoot(), preset.chaptersFile);
+            var args = CommandBuilder.build(preset, input, output, chapters);
             JsonArray array = new JsonArray();
             args.forEach(array::add);
             JsonObject result = new JsonObject();
