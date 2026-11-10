@@ -130,6 +130,11 @@ public final class AgentScopes {
         if (route.startsWith("/api/transcode/feature")) {
             return true;
         }
+        // Settings are an operator decision; an agent may run jobs, not change
+        // the unattended failure policy behind the operator's back.
+        if (route.startsWith("/api/transcode/settings")) {
+            return true;
+        }
         if (route.startsWith("/api/exports")) {
             return true;
         }

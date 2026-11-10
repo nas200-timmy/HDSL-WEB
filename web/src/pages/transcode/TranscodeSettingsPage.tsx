@@ -1,13 +1,17 @@
 import { useEffect, useState } from "react";
 import { api, type TranscodeCapabilities } from "../../api";
-import { refreshTranscodeFeature, useTranscodeFeature } from "../../transcodeFeature";
+import { refreshTranscodeFeature, setTranscodeFeature, useTranscodeFeature } from "../../transcodeFeature";
 import { errMsg } from "../../utils";
+import { toast } from "../../store";
 
 export function TranscodeSettingsPage() {
   const feature = useTranscodeFeature();
   const [capabilities, setCapabilities] = useState<TranscodeCapabilities | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [policy, setPolicy] = useState("ask");
+  const [timeoutMinutes, setTimeoutMinutes] = useState(10);
+  const [saving, setSaving] = useState(false);
 
   const load = async () => {
     setBusy(true);
@@ -26,11 +30,27 @@ export function TranscodeSettingsPage() {
     void load();
   }, []);
 
-  const policy = feature?.failurePolicy === "ask"
-    ? "询问（默认）"
-    : feature?.failurePolicy === "timeout-auto"
-      ? `超时自动降级（${feature.failureTimeoutMinutes} 分钟）`
-      : "完全自动化";
+  useEffect(() => {
+    if (!feature) return;
+    setPolicy(feature.failurePolicy);
+    setTimeoutMinutes(feature.failureTimeoutMinutes);
+  }, [feature?.failurePolicy, feature?.failureTimeoutMinutes]);
+
+  const savePolicy = async () => {
+    setSaving(true);
+    try {
+      const next = await api.transcode.updateSettings({
+        failurePolicy: policy,
+        failureTimeoutMinutes: timeoutMinutes,
+      });
+      setTranscodeFeature(next);
+      toast("success", "失败策略已保存");
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <>
@@ -105,9 +125,19 @@ export function TranscodeSettingsPage() {
             {capabilities?.maxQueue ?? feature?.maxQueue ?? "—"}
           </span>
         </div>
-        <div className="comp-row">
-          <span className="comp-label">失败策略</span>
-          <span className="comp-value">{policy}</span>
+        <div style={{ display: "grid", gap: 6, padding: "4px 8px 8px" }}>
+          <label style={{ fontSize: 12 }}>失败策略</label>
+          <select className="input" value={policy} onChange={(e) => setPolicy(e.target.value)}>
+            <option value="ask">询问（默认）</option>
+            <option value="timeout-auto">超时自动降级</option>
+            <option value="full-auto">完全自动化（立即降级）</option>
+          </select>
+          <label style={{ fontSize: 12 }}>超时时间（分钟，仅询问/超时自动降级）</label>
+          <input className="input" type="number" min={1} max={1440} value={timeoutMinutes}
+                 onChange={(e) => setTimeoutMinutes(Number(e.target.value) || 10)} />
+          <button className="btn btn-raised" disabled={saving} onClick={() => void savePolicy()}>
+            {saving ? "保存中…" : "保存失败策略"}
+          </button>
         </div>
         <div className="comp-row">
           <span className="comp-label">重启恢复队列</span>

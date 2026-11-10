@@ -222,6 +222,25 @@ public final class ServerConfigWriter {
         return root;
     }
 
+    /// Persists the transcode failure policy so "完全自动化" survives a restart.
+    /// Only the two policy keys are touched; other `transcode:` keys ride along.
+    public static void setTranscodeFailurePolicy(Path dataDir, String policy, int timeoutMinutes)
+            throws IOException {
+        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
+        Map<String, Object> root = readExisting(yamlFile);
+        Map<String, Object> transcode = new LinkedHashMap<>();
+        Object existing = root.get("transcode");
+        if (existing instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                transcode.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        transcode.put("failure_policy", policy);
+        transcode.put("failure_timeout_minutes", timeoutMinutes);
+        root.put("transcode", transcode);
+        writeAtomically(yamlFile, root);
+    }
+
     /// Records the log-retention windows in `server.yaml`'s `logs:` section.
     ///
     /// Only `audit_days` / `panel_days` are touched; any other key an operator

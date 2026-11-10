@@ -28,6 +28,7 @@ import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
+import org.jackhuang.hmcl.web.config.ServerConfigWriter;
 import org.jackhuang.hmcl.web.developer.DeveloperAuth;
 import org.jackhuang.hmcl.web.developer.DeveloperElevation;
 import org.jackhuang.hmcl.web.http.Json;
@@ -47,6 +48,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
 import java.util.function.BooleanSupplier;
 
 /// The transcode feature's own REST surface. At this stage it only owns the
@@ -166,6 +168,45 @@ public final class TranscodeApiServlet extends HttpServlet {
                     Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
                 }
             }
+        }
+    }
+
+    @Override
+    protected void doPut(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String path = path(request);
+        if (!"/settings".equals(path)) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        String policy = stringField(body, "failurePolicy");
+        if (policy == null || !List.of("ask", "timeout-auto", "full-auto").contains(policy)) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "failurePolicy must be ask, timeout-auto or full-auto");
+            return;
+        }
+        int timeout = intField(body, "failureTimeoutMinutes");
+        if (body.has("failureTimeoutMinutes") && (timeout < 1 || timeout > 1440)) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "failureTimeoutMinutes must be between 1 and 1440");
+            return;
+        }
+        try {
+            ServerConfigWriter.setTranscodeFailurePolicy(config.dataDir, policy,
+                    body.has("failureTimeoutMinutes") ? timeout : config.transcode.failureTimeoutMinutes);
+            config.transcode.failurePolicy = policy;
+            if (body.has("failureTimeoutMinutes")) {
+                config.transcode.failureTimeoutMinutes = timeout;
+            }
+            audit("transcode.settings.update", policy + "/"
+                    + config.transcode.failureTimeoutMinutes, "success", request);
+            featureJson(response);
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
 

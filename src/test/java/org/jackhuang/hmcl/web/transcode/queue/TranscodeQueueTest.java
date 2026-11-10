@@ -176,4 +176,77 @@ class TranscodeQueueTest {
         }
     }
 
+    @Test
+    void timeoutAutoFallsBackAfterTheDecisionWindow(@TempDir Path dir) throws Exception {
+        Assumptions.assumeFalse(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS,
+                "the fake ffmpeg uses a POSIX shell script");
+
+        Path media = Files.createDirectory(dir.resolve("media"));
+        Files.writeString(media.resolve("input.mp4"), "source");
+        Path bin = Files.createDirectory(dir.resolve("bin"));
+        Path ffmpeg = bin.resolve("ffmpeg");
+        Path ffprobe = bin.resolve("ffprobe");
+        script(ffmpeg, """
+                #!/bin/sh
+                case "$*" in
+                  *-version*) echo "ffmpeg version 7.1.5"; exit 0 ;;
+                  *-encoders*) echo " V....D libx264 H.264"; exit 0 ;;
+                  *-hwaccels*) echo "Hardware acceleration methods:"; echo "vaapi"; exit 0 ;;
+                  *-filters*) echo " TSC scale V->V Scale"; exit 0 ;;
+                  *hevc_vaapi*) echo "Invalid FrameType:0"; exit 1 ;;
+                esac
+                for last; do :; done
+                echo "out_time_us=1000000"
+                echo "speed=2.0x"
+                echo "progress=end"
+                printf x > "$last"
+                exit 0
+                """);
+        script(ffprobe, """
+                #!/bin/sh
+                echo '{"streams":[{"codec_type":"video"},{"codec_type":"audio"}],"format":{"duration":"2.0"}}'
+                """);
+
+        ServerConfig config = new ServerConfig();
+        config.dataDir = dir.resolve("data");
+        config.transcode.ffmpegPath = ffmpeg.toString();
+        config.transcode.mediaRoot = media.toString();
+        config.transcode.failurePolicy = "timeout-auto";
+        config.transcode.failureTimeoutMinutes = 1;
+
+        TranscodeModule module = new TranscodeModule(config, new EventBus());
+        module.feature().enable(consent());
+        module.queue().start();
+        try {
+            var preset = module.presets().get("hevc-vaapi").orElseThrow().preset();
+            var job = module.queue().submit("input.mp4", "", "hevc-vaapi", preset);
+            String id = job.get("id").getAsString();
+            module.queue().startQueue();
+
+            String state = "";
+            for (int i = 0; i < 100; i++) {
+                Thread.sleep(50);
+                state = module.queue().jobJson(id).orElseThrow().get("state").getAsString();
+                if ("waiting_decision".equals(state) || "failed".equals(state)) {
+                    break;
+                }
+            }
+            assertEquals("waiting_decision", state, module.queue().snapshot().toString());
+
+            module.queue().onDecisionTimeout(id);
+            for (int i = 0; i < 100; i++) {
+                Thread.sleep(50);
+                state = module.queue().jobJson(id).orElseThrow().get("state").getAsString();
+                if ("done".equals(state) || "failed".equals(state)) {
+                    break;
+                }
+            }
+            var finalJob = module.queue().jobJson(id).orElseThrow();
+            assertEquals("done", state, module.queue().snapshot().toString());
+            assertEquals("libx265", finalJob.get("fallbackTo").getAsString());
+        } finally {
+            module.queue().stop();
+        }
+    }
+
 }

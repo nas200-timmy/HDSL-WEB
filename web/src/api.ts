@@ -1024,6 +1024,8 @@ export const api = {
     qualityCancel: (id: string) =>
       request<TranscodeQualityJob>(`/api/transcode/tools/quality/${encodeURIComponent(id)}/cancel`,
         jsonInit("POST", {})),
+    updateSettings: (body: { failurePolicy: string; failureTimeoutMinutes?: number }) =>
+      request<TranscodeFeature>("/api/transcode/settings", jsonInit("PUT", body)),
   },
 };
 

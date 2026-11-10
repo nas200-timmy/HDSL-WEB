@@ -310,4 +310,12 @@ class ConfigLoaderTest {
                 () -> load(Map.of()));
         assertTrue(e.getMessage().contains("transcode.failure_policy"), e.getMessage());
     }
+    @Test
+    void theTranscodeFailurePolicyCanBePersisted() throws Exception {
+        ServerConfigWriter.setTranscodeFailurePolicy(dataDir, "full-auto", 7);
+        ServerConfig reloaded = load(Map.of());
+        assertEquals("full-auto", reloaded.transcode.failurePolicy);
+        assertEquals(7, reloaded.transcode.failureTimeoutMinutes);
+    }
+
 }

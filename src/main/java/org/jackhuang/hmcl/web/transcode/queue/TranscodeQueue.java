@@ -763,7 +763,8 @@ public final class TranscodeQueue {
         }
     }
 
-    private void onDecisionTimeout(String id) {
+    // Package-private so a test can exercise the timeout branch without waiting a minute.
+    void onDecisionTimeout(String id) {
         synchronized (lock) {
             TranscodeJob job = find(id);
             decisionTimeouts.remove(id);
