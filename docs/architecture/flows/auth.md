@@ -20,7 +20,7 @@ sequenceDiagram
   U-->>B: 已登录 / 首次设置状态
   B->>D: POST /api/developer/elevate（开发者密码）
   D-->>B: 提权会话（绑定当前 session token）
-  B->>D: POST /api/developer/agent（面板签发）
+  B->>D: POST /api/developer/agent-token（面板签发）
   D-->>B: Bearer + scopes + expiresAt
   Note over B,D: Agent 也可用 Agent 密码走 POST /api/developer/agent-auth 换票
 
@@ -61,10 +61,25 @@ sequenceDiagram
 
 ## 关键点
 
-- **公开路由**：`/api/auth/login`、`/api/auth/status`、`/api/auth/setup`、`/api/health`、`/api/developer/agent-auth` 不需要会话；其余 `/api/*`、`/i/*`、`/ws/*` 默认要过门。
+- **公开路由**：`POST /api/auth/login`、`GET /api/auth/status`、`POST /api/auth/setup`、`GET /api/health`、`POST /api/developer/agent-auth` 不需要会话；其余 `/api/*`、`/i/*`、`/ws/*` 默认要过门。
+- **终端 socket 是例外，但例外本身也是门**：`GET /ws/terminal/*` 在 `AuthFilter` 里被跳过，因为票据只能由终端握手自己校验——一次性 ticket **加上** 签发给它的会话 Cookie 或它点名的 Agent 授权（见 `TerminalWebSocket#onOpen`）。滤波层若先消费 ticket 就会把票作废。
 - **两种凭据不互相提权**：Bearer 票据有自己的一套 scope，不会因为同时带了 Cookie 就扩大；Cookie 只作为远程 Agent 的第二个因子。
-- **scope**：`read`、`mc`、`mc-console`、`system`、`instances`、`config`、`plugins`。`GET`/`HEAD` 默认落到 `read`，`/api/system/*` 单独要 `system`。
+- **scope 判定**（`AgentScopes.required`）：
+
+  | 路由 | scope |
+  |---|---|
+  | `GET` / `HEAD`（任何 `/api/*` 的默认落点） | `read` |
+  | `/api/system/*` | `system` |
+  | `/api/mc/*` | `mc` |
+  | `/api/mc/instances/{id}/console/ticket` | `mc-console`（单独一类：拿到 ticket 等于拿到活终端） |
+  | `/api/instances*` | `instances`；路径里带 `/plugins` 时是 `plugins` |
+  | `/api/zcode/*`、`/api/brands/*`、`/api/tasks*` | `instances` |
+  | `/api/plugins/*`、`/api/packs/*` | `plugins` |
+  | `/api/accounts*`、`/api/models*`、`/api/settings*`、`/api/network*`、`/api/node*`、`/api/vendors*`、`/api/wallpapers*` | `config` |
+  | 未列到的**非** `GET/HEAD` 路由（如 `POST /api/developer/*`、`/api/exports/*`、`/api/dsh/*` 的写操作） | 无 → 拒绝 |
+
+- **`/i/*` 与 `/ws/*` 对 Agent 关闭**：这两类是浏览器通道（反代页面、事件流），`required` 对它们返回 `null`。唯一的终端通道是上面那条 ticket 路由。
 - **默认拒绝**：`AgentScopes.required` 没覆盖的路由返回 `null`，`AuthFilter` 直接按拒绝处理；新路由不会自动对 Agent 开放。
-- **自杀闸**：`PeerIdentity` 从内核连接信息推导调用者所在实例；无法定位时按保守策略处理。停、删、接管自己所在实例会返回 `409 self_operation_refused`。
+- **自杀闸**：`PeerIdentity` 从内核连接信息推导调用者所在实例；无法定位时按保守策略处理（停、删、接管自己所在实例返回 `409 self_operation_refused`）。
 - **开发者提权**：`DeveloperGuardFilter` 加在 `AuthFilter` 之后，负责终端、E-Stop、敏感设置等路由的二次确认；未登录仍应先得到 401，而不是 guard 的拒绝。
 - **审计**：放行和拒绝都写 `audit.jsonl`；Agent 请求记录 `agent:<label>`、scopes、grant id，不记录票据本身。
