@@ -227,6 +227,28 @@ def main() -> None:
             check("ffmpeg" in log.get("log", ""), "job log does not contain the command")
             print("PASS: log")
 
+            status, extract = request(base, "POST", "/api/transcode/tools/extract",
+                                       {"input": "input.mp4", "type": "video", "index": 0,
+                                        "output": "extracted.mkv"})
+            check(status == 200, f"extract -> {status}: {extract}")
+            assert isinstance(extract, dict)
+            extract_id = extract["id"]
+            extract_final = None
+            for _ in range(120):
+                status, snapshot = request(base, "GET", "/api/transcode/queue")
+                check(status == 200, f"queue -> {status}")
+                assert isinstance(snapshot, dict)
+                extract_final = next(
+                    (item for item in snapshot.get("jobs", []) if item["id"] == extract_id), None)
+                if extract_final and extract_final["state"] in ("done", "failed", "cancelled"):
+                    break
+                time.sleep(0.5)
+            check(extract_final is not None, "extract job disappeared")
+            check(extract_final["state"] == "done",
+                  f"extract ended as {extract_final['state']}: {extract_final.get('error')}")
+            check((media / "extracted.mkv").is_file(), "extracted.mkv missing")
+            print("PASS: extract tool")
+
             status, _ = request(base, "GET", "/api/transcode/queue/jobs/unknown")
             check(status == 404, f"unknown job -> {status} (expected 404)")
             print("PASS: 404 contract")
