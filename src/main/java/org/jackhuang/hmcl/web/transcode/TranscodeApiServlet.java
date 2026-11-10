@@ -33,7 +33,11 @@ import org.jackhuang.hmcl.web.developer.DeveloperElevation;
 import org.jackhuang.hmcl.web.http.Json;
 import org.jackhuang.hmcl.web.http.RequestSecurity;
 import org.jackhuang.hmcl.web.transcode.media.MediaBrowser;
+import org.jackhuang.hmcl.web.transcode.preset.PresetSchema;
+import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
+import org.jackhuang.hmcl.web.transcode.preset.TranscodePreset;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegProbe;
+import org.jackhuang.hmcl.web.transcode.command.CommandBuilder;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -96,6 +100,18 @@ public final class TranscodeApiServlet extends HttpServlet {
             mediaProbe(request, response);
             return;
         }
+        if ("/presets".equals(path)) {
+            presets(response);
+            return;
+        }
+        if ("/presets/schema".equals(path)) {
+            Json.write(response, PresetSchema.json());
+            return;
+        }
+        if (path.startsWith("/presets/")) {
+            preset(response, path.substring("/presets/".length()));
+            return;
+        }
         Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
     }
 
@@ -106,7 +122,32 @@ public final class TranscodeApiServlet extends HttpServlet {
             case "/feature/enable" -> enable(request, response);
             case "/feature/decline" -> decline(request, response);
             case "/feature/disable" -> disable(request, response);
+            case "/presets" -> savePreset(request, response);
+            case "/preview" -> preview(request, response);
             default -> Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+        }
+    }
+
+    @Override
+    protected void doDelete(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String path = path(request);
+        if (!path.startsWith("/presets/")) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
+        String id = path.substring("/presets/".length());
+        try {
+            if (!module.presets().delete(id)) {
+                Json.error(response, HttpServletResponse.SC_NOT_FOUND, "preset not found or read-only");
+                return;
+            }
+            JsonObject body = new JsonObject();
+            body.addProperty("ok", true);
+            Json.write(response, body);
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
 
@@ -223,6 +264,116 @@ public final class TranscodeApiServlet extends HttpServlet {
         } catch (NumberFormatException e) {
             return fallback;
         }
+    }
+
+    private void presets(HttpServletResponse response) throws IOException {
+        JsonArray array = new JsonArray();
+        for (PresetStore.PresetEntry entry : module.presets().list()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("id", entry.id());
+            item.addProperty("builtin", entry.builtin());
+            item.addProperty("name", entry.preset().name);
+            item.addProperty("description", entry.preset().description);
+            array.add(item);
+        }
+        JsonObject body = new JsonObject();
+        body.add("presets", array);
+        Json.write(response, body);
+    }
+
+    private void preset(HttpServletResponse response, String id) throws IOException {
+        var entry = module.presets().get(id);
+        if (entry.isEmpty()) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "preset not found");
+            return;
+        }
+        Json.write(response, entry.get());
+    }
+
+    private void savePreset(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        String id = stringField(body, "id");
+        if (id == null || id.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "id is required");
+            return;
+        }
+        if (!body.has("preset") || !body.get("preset").isJsonObject()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "preset is required");
+            return;
+        }
+        try {
+            TranscodePreset preset = Json.GSON.fromJson(body.getAsJsonObject("preset"), TranscodePreset.class);
+            PresetStore.PresetEntry saved = module.presets().save(id.trim(), preset);
+            audit("transcode.preset.save", id.trim(), "success", request);
+            Json.write(response, saved);
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+        }
+    }
+
+    private void preview(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        String inputPath = stringField(body, "input");
+        if (inputPath == null || inputPath.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "input is required");
+            return;
+        }
+        try {
+            TranscodePreset preset = resolvePreset(body);
+            preset.validate();
+            Path input = module.media().resolve(module.mediaRoot(), inputPath);
+            String requestedDir = stringField(body, "outputDir");
+            String presetDir = preset.outputDir;
+            Path outputDir;
+            if (requestedDir != null && !requestedDir.isBlank()) {
+                outputDir = module.media().resolveForWrite(module.mediaRoot(), requestedDir);
+            } else if (presetDir != null && !presetDir.isBlank()) {
+                outputDir = module.media().resolveForWrite(module.mediaRoot(), presetDir);
+            } else {
+                outputDir = input.getParent();
+            }
+            Path output = CommandBuilder.outputPath(preset, input, outputDir);
+            var args = CommandBuilder.build(preset, input, output);
+            JsonArray array = new JsonArray();
+            args.forEach(array::add);
+            JsonObject result = new JsonObject();
+            result.addProperty("input", input.toString());
+            result.addProperty("output", output.toString());
+            result.add("args", array);
+            result.addProperty("command", CommandBuilder.display(args));
+            Json.write(response, result);
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    private TranscodePreset resolvePreset(JsonObject body) {
+        String presetId = stringField(body, "presetId");
+        if (presetId != null && !presetId.isBlank()) {
+            return module.presets().get(presetId)
+                    .orElseThrow(() -> new IllegalArgumentException("preset not found: " + presetId))
+                    .preset();
+        }
+        if (body.has("preset") && body.get("preset").isJsonObject()) {
+            TranscodePreset preset = Json.GSON.fromJson(body.getAsJsonObject("preset"), TranscodePreset.class);
+            if (preset == null) {
+                throw new IllegalArgumentException("preset is not an object");
+            }
+            return preset;
+        }
+        throw new IllegalArgumentException("presetId or preset is required");
     }
 
     private void enable(HttpServletRequest request, HttpServletResponse response) throws IOException {

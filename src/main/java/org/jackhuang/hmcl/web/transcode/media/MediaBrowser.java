@@ -124,6 +124,34 @@ public final class MediaBrowser {
         return real;
     }
 
+    /// Resolves a path for writing: it may not exist yet, but it must stay below the root.
+    /// The parent is created by the caller (the queue does that right before a job).
+    public Path resolveForWrite(Path root, String relative) throws IOException {
+        Path base = realRoot(root);
+        if (relative == null || relative.isBlank() || ".".equals(relative)) {
+            return base;
+        }
+        Path target;
+        try {
+            target = base.resolve(relative).normalize();
+        } catch (RuntimeException e) {
+            throw new IOException("invalid path: " + relative);
+        }
+        if (!target.startsWith(base)) {
+            throw new IOException("path escapes the media root: " + relative);
+        }
+        // If the directory exists, its real path must still be inside the root (a
+        // symlinked output directory must not silently move writes outside the share).
+        if (Files.exists(target)) {
+            Path real = target.toRealPath();
+            if (!real.startsWith(base)) {
+                throw new IOException("path escapes the media root through a link: " + relative);
+            }
+            return real;
+        }
+        return target;
+    }
+
     private static Path realRoot(Path root) throws IOException {
         if (!Files.isDirectory(root)) {
             throw new IOException("the media root does not exist: " + root);

@@ -19,6 +19,7 @@ package org.jackhuang.hmcl.web.transcode;
 
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.transcode.media.MediaBrowser;
+import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
 import org.jackhuang.hmcl.web.transcode.runtime.TranscodeRuntime;
 import org.jetbrains.annotations.NotNullByDefault;
 
@@ -37,12 +38,14 @@ public final class TranscodeModule {
     private final TranscodeFeatureState feature;
     private final TranscodeRuntime runtime;
     private final MediaBrowser media;
+    private final PresetStore presets;
 
     public TranscodeModule(ServerConfig config) {
         this.config = config;
         this.feature = new TranscodeFeatureState(TranscodePaths.featureFile(config));
         this.runtime = new TranscodeRuntime(config);
         this.media = new MediaBrowser(runtime);
+        this.presets = new PresetStore(TranscodePaths.dataDir(config).resolve("presets"));
     }
 
     public ServerConfig config() {
@@ -59,6 +62,10 @@ public final class TranscodeModule {
 
     public MediaBrowser media() {
         return media;
+    }
+
+    public PresetStore presets() {
+        return presets;
     }
 
     public Path dataDir() {
