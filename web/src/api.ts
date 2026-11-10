@@ -952,7 +952,57 @@ export const api = {
       return (await res.json()) as { ok: boolean; files: Record<string, number> };
     },
   },
+  transcode: {
+    feature: () => request<TranscodeFeature>("/api/transcode/feature"),
+    terms: () => request<TranscodeTerms>("/api/transcode/terms"),
+    enable: (body: {
+      termsAcknowledged: boolean;
+      termsVersion: number;
+      termsTextHash: string;
+      sawDeclineOption: boolean;
+      uiVersion: string;
+    }) => request<TranscodeFeature>("/api/transcode/feature/enable", jsonInit("POST", body)),
+    decline: () => request<TranscodeFeature>("/api/transcode/feature/decline", jsonInit("POST", {})),
+    disable: () => request<TranscodeFeature>("/api/transcode/feature/disable", jsonInit("POST", {})),
+  },
 };
+
+/// GET /api/transcode/feature：转码功能开关、媒体根与运行参数。
+export interface TranscodeFeature {
+  state: "DISABLED" | "ENABLED";
+  enabled: boolean;
+  termsVersion: number;
+  termsTextHash: string;
+  mediaRoot: string;
+  mediaRootExists: boolean;
+  mediaRootWritable: boolean;
+  maxConcurrent: number;
+  maxQueue: number;
+  failurePolicy: "ask" | "timeout-auto" | "full-auto";
+  failureTimeoutMinutes: number;
+  autoResume: boolean;
+  consent?: TranscodeConsentInfo;
+}
+
+export interface TranscodeConsentInfo {
+  termsVersion: number;
+  termsTextHash: string;
+  acceptedAt: string;
+  acceptedBy: string;
+  acceptedFrom: string;
+  ackMethod: string;
+  uiVersion: string;
+  clientUa?: string | null;
+  buildCommit: string;
+  sawDeclineOption: boolean;
+}
+
+/// GET /api/transcode/terms：启用前展示的须知。
+export interface TranscodeTerms {
+  version: number;
+  text: string;
+  hash: string;
+}
 
 /// GET /api/mc/feature：功能开关与内存锁。
 export interface McFeature {

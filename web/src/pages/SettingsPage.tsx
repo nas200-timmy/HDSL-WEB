@@ -7,6 +7,7 @@ import { LegalCard } from "../components/LegalCard";
 import { McAboutCard } from "../components/McAboutCard";
 import { LogsCard } from "../components/LogsCard";
 import { SystemMonitorCard } from "../components/SystemMonitorCard";
+import { TranscodeFeatureCard } from "../components/TranscodeFeatureCard";
 import { StorageCard } from "../components/StorageCard";
 import { FileDropInput } from "../components/FileDropInput";
 import {
@@ -341,6 +342,8 @@ function GeneralTab() {
       </div>
 
       <SystemMonitorCard />
+
+      <TranscodeFeatureCard />
 
       <StorageCard />
 
