@@ -18,6 +18,9 @@ export function TranscodeSettingsPage() {
   const [installSha, setInstallSha] = useState("");
   const [installVersion, setInstallVersion] = useState("");
   const [installJob, setInstallJob] = useState<TranscodeInstallJob | null>(null);
+  const [probeEncoderName, setProbeEncoderName] = useState("libx264");
+  const [probeResult, setProbeResult] = useState<{ ok: boolean; encoder: string; exitCode: number; output: string } | null>(null);
+  const [probing, setProbing] = useState(false);
 
   const load = async () => {
     setBusy(true);
@@ -250,6 +253,33 @@ export function TranscodeSettingsPage() {
                 <span key={name} className="tag plain" style={{ fontSize: 11 }}>{name}</span>
               ))}
           </div>
+        )}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", padding: "0 8px 8px", flexWrap: "wrap" }}>
+          <select className="input" style={{ width: "auto", minWidth: 160 }} value={probeEncoderName}
+                  onChange={(e) => setProbeEncoderName(e.target.value)}>
+            {(capabilities?.encoders ?? [])
+              .filter((name) => /264|265|av1|vp9|vaapi|qsv|nvenc/.test(name))
+              .map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+          <button className="btn btn-text" disabled={probing} onClick={() => {
+            setProbing(true);
+            setProbeResult(null);
+            void api.transcode.probeEncoder(probeEncoderName)
+              .then(setProbeResult)
+              .finally(() => setProbing(false));
+          }}>
+            {probing ? "测试中…" : "测试 1 帧"}
+          </button>
+          <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+            列出 ≠ 能编：QSV/VAAPI/NVENC 用 1 帧实测，失败会给出 ffmpeg 输出。
+          </span>
+        </div>
+        {probeResult && (
+          <pre style={{ margin: "0 8px 8px", padding: 8, maxHeight: 160, overflow: "auto", fontSize: 10,
+                        background: "var(--monet-surface-container-low)", whiteSpace: "pre-wrap" }}>
+            {probeResult.ok ? "OK" : "FAILED"} ({probeResult.exitCode})
+            {"\n"}{probeResult.output || "（无输出）"}
+          </pre>
         )}
       </div>
     </>

@@ -39,6 +39,7 @@ import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
 import org.jackhuang.hmcl.web.transcode.preset.PresetTransfer;
 import org.jackhuang.hmcl.web.transcode.preset.TranscodePreset;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegProbe;
+import org.jackhuang.hmcl.web.transcode.runtime.HardwareProbe;
 import org.jackhuang.hmcl.web.transcode.command.CommandBuilder;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -162,6 +163,7 @@ public final class TranscodeApiServlet extends HttpServlet {
             case "/tools/extract" -> extractTool(request, response);
             case "/tools/quality" -> qualityTool(request, response);
             case "/runtime/install" -> runtimeInstall(request, response);
+            case "/capabilities/probe" -> capabilityProbe(request, response);
             default -> {
                 if (path.startsWith("/queue/jobs/")) {
                     queueJobAction(request, response, path.substring("/queue/jobs/".length()));
@@ -583,6 +585,16 @@ public final class TranscodeApiServlet extends HttpServlet {
             }
         }
         return result;
+    }
+
+    private void capabilityProbe(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        String encoder = body == null ? null : stringField(body, "encoder");
+        if (encoder == null || encoder.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "encoder is required");
+            return;
+        }
+        Json.write(response, HardwareProbe.probe(module, encoder));
     }
 
     private void runtimeInstall(HttpServletRequest request, HttpServletResponse response) throws IOException {

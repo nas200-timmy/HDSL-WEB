@@ -139,4 +139,29 @@ class CommandBuilderTest {
         assertTrue(command.contains("-map_chapters 1"));
     }
 
+    @Test
+    void qsvGetsLowPowerAndImageEncodersDropAudioSubtitles(@TempDir Path dir) {
+        TranscodePreset qsv = preset();
+        qsv.videoEncoder = "hevc_qsv";
+        qsv.qualityMode = "cqp";
+        qsv.qualityValue = "24";
+        var qsvArgs = CommandBuilder.build(qsv, dir.resolve("in.mkv"), dir.resolve("out.mkv"));
+        assertTrue(joined(qsvArgs).contains("-low_power 1"));
+
+        TranscodePreset image = preset();
+        image.videoEncoder = "mjpeg";
+        image.container = "jpg";
+        image.audioMode = "copy";
+        image.subtitleMode = "copy";
+        image.copyAttachments = true;
+        var imageArgs = CommandBuilder.build(image, dir.resolve("in.mkv"), dir.resolve("out.jpg"));
+        String command = joined(imageArgs);
+        assertTrue(command.contains("-an"));
+        assertTrue(command.contains("-sn"));
+        assertTrue(command.contains("-frames:v 1"));
+        assertTrue(!command.contains("-map 0:a?"));
+        assertTrue(!command.contains("-map 0:s?"));
+        assertTrue(!command.contains("-map 0:t?"));
+    }
+
 }

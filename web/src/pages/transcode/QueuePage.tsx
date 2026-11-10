@@ -265,6 +265,12 @@ export function QueuePage() {
             {selectedJob ? selectedJob.id : "选择一个任务"}
           </span>
         </div>
+        {selectedJob?.command && selectedJob.command.length > 0 && (
+          <pre style={{ margin: "0 8px 4px", padding: 6, maxHeight: 70, overflow: "auto", fontSize: 10,
+                        background: "var(--monet-surface-container)", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+            {selectedJob.command.join(" ")}
+          </pre>
+        )}
         <pre
           style={{
             margin: "4px 8px 8px",

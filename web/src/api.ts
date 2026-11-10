@@ -965,6 +965,9 @@ export const api = {
     decline: () => request<TranscodeFeature>("/api/transcode/feature/decline", jsonInit("POST", {})),
     disable: () => request<TranscodeFeature>("/api/transcode/feature/disable", jsonInit("POST", {})),
     capabilities: () => request<TranscodeCapabilities>("/api/transcode/capabilities"),
+    probeEncoder: (encoder: string) =>
+      request<{ ok: boolean; encoder: string; exitCode: number; output: string }>(
+        "/api/transcode/capabilities/probe", jsonInit("POST", { encoder })),
     mediaList: (path = "", page = 0, pageSize = 200) =>
       request<TranscodeMediaListing>(
         `/api/transcode/media/list?path=${encodeURIComponent(path)}&page=${page}&pageSize=${pageSize}`,

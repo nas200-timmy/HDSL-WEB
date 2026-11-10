@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type TranscodeMediaEntry, type TranscodePresetSummary, type TranscodePreview } from "../../api";
+import { api, type TranscodeMediaEntry, type TranscodePreset, type TranscodePresetSummary, type TranscodePreview } from "../../api";
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
 import { MediaBrowserPanel, fmtBytes, probeSummary } from "./common";
@@ -13,6 +13,23 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
   const [preview, setPreview] = useState<TranscodePreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [presetDetail, setPresetDetail] = useState<TranscodePreset | null>(null);
+
+  useEffect(() => {
+    if (!presetId) {
+      setPresetDetail(null);
+      return;
+    }
+    let cancelled = false;
+    void api.transcode.preset(presetId).then((entry) => {
+      if (!cancelled) setPresetDetail(entry.preset);
+    }).catch(() => {
+      if (!cancelled) setPresetDetail(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [presetId]);
 
   useEffect(() => {
     void api.transcode
@@ -36,8 +53,32 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
     }
   };
 
+  const checkFoolproof = (): boolean => {
+    if (!presetDetail) return true;
+    const encoder = String(presetDetail.videoEncoder ?? "");
+    const container = String(presetDetail.container ?? "").toLowerCase();
+    if (!encoder || !container) {
+      const message = !encoder ? "预设没有视频编码器" : "预设没有输出容器";
+      setError(message);
+      toast("error", message);
+      return false;
+    }
+    const restrictive = ["mp4", "mov", "avi", "flv", "ts", "m2ts"];
+    const keepsTracks = presetDetail.subtitleMode === "copy"
+      || presetDetail.copyAttachments === true
+      || presetDetail.copyChapters === true;
+    if (restrictive.includes(container) && keepsTracks) {
+      const proceed = window.confirm(
+        `当前容器 ${container.toUpperCase()} 可能装不下全部字幕/附件/章节。\n` +
+        `建议把预设容器改成 MKV。仍然继续入队吗？`,
+      );
+      if (!proceed) return false;
+    }
+    return true;
+  };
+
   const previewCommand = async () => {
-    if (!selected || !presetId) return;
+    if (!selected || !presetId || !checkFoolproof()) return;
     setBusy(true);
     setError(null);
     try {
@@ -54,7 +95,7 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
   };
 
   const enqueue = async () => {
-    if (!selected || !presetId) return;
+    if (!selected || !presetId || !checkFoolproof()) return;
     setBusy(true);
     setError(null);
     try {

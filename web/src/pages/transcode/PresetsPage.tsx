@@ -149,7 +149,33 @@ export function PresetsPage() {
   };
 
   const update = (id: string, value: unknown) => {
-    setDraft((current) => ({ ...current, [id]: value }));
+    setDraft((current) => {
+      const next = { ...current, [id]: value };
+      if (id === "videoEncoder") {
+        const encoder = String(value);
+        const image = /^(mjpeg|png|webp|libwebp|bmp|tiff|gif|avif|libaom-av1|jxl|libjxl|jpegxl)$/.test(encoder);
+        const hardware = /_vaapi|_qsv|_nvenc/.test(encoder);
+        if (image) {
+          next.audioMode = "none";
+          next.subtitleMode = "none";
+          next.copyAttachments = false;
+          next.copyChapters = false;
+        } else if (hardware) {
+          // VAAPI/QSV/NVENC do not understand x264's `slower`/profile/tune in the
+          // same way; clearing them avoids the classic compression_level failure.
+          next.qualityMode = "cqp";
+          next.preset = "";
+          next.profile = "";
+          next.tune = "";
+        } else if (next.qualityMode !== "bitrate") {
+          next.qualityMode = "crf";
+        }
+      }
+      if (id === "qualityMode" && value === "bitrate") {
+        // A bitrate mode does not use CRF/CQP; keep the field as the user typed.
+      }
+      return next;
+    });
   };
 
   return (

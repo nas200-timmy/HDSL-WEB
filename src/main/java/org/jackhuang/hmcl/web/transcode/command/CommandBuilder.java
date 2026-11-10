@@ -71,6 +71,7 @@ public final class CommandBuilder {
         String video = preset.videoEncoder == null ? "" : preset.videoEncoder;
         boolean copyVideo = "copy".equals(video);
         boolean noVideo = "none".equals(video);
+        boolean image = isImageEncoder(video);
 
         if (noVideo) {
             args.add("-vn");
@@ -78,15 +79,15 @@ public final class CommandBuilder {
             args.add("-map");
             args.add(preset.videoMap == null || preset.videoMap.isBlank() ? "0:v:0?" : preset.videoMap);
         }
-        if (!"none".equals(preset.audioMode)) {
+        if (!image && !"none".equals(preset.audioMode)) {
             args.add("-map");
             args.add(preset.audioMap == null || preset.audioMap.isBlank() ? "0:a?" : preset.audioMap);
         }
-        if ("copy".equals(preset.subtitleMode)) {
+        if (!image && "copy".equals(preset.subtitleMode)) {
             args.add("-map");
             args.add(preset.subtitleMap == null || preset.subtitleMap.isBlank() ? "0:s?" : preset.subtitleMap);
         }
-        if (preset.copyAttachments) {
+        if (!image && preset.copyAttachments) {
             args.add("-map");
             args.add("0:t?");
         }
@@ -103,6 +104,10 @@ public final class CommandBuilder {
                 args.add("-c:v");
                 args.add(video);
                 addQuality(args, preset, video);
+                if (video.endsWith("_qsv") && !preset.videoArgs.contains("-low_power")) {
+                    args.add("-low_power");
+                    args.add("1");
+                }
                 if (softwareEncoder(video) && !blank(preset.preset)) {
                     args.add("-preset");
                     args.add(preset.preset);
@@ -158,7 +163,10 @@ public final class CommandBuilder {
             args.addAll(preset.videoArgs);
         }
 
-        switch (preset.audioMode) {
+        if (image) {
+            args.add("-an");
+            args.add("-sn");
+        } else switch (preset.audioMode) {
             case "none" -> args.add("-an");
             case "copy" -> {
                 args.add("-c:a");
@@ -183,20 +191,22 @@ public final class CommandBuilder {
             }
         }
 
-        switch (preset.subtitleMode) {
-            case "none" -> args.add("-sn");
-            case "copy" -> {
-                args.add("-c:s");
+        if (!image) {
+            switch (preset.subtitleMode) {
+                case "none" -> args.add("-sn");
+                case "copy" -> {
+                    args.add("-c:s");
+                    args.add("copy");
+                }
+                default -> {
+                    // `burn` is handled in filters(); no subtitle stream is copied.
+                }
+            }
+            args.addAll(preset.subtitleArgs);
+            if (preset.copyAttachments) {
+                args.add("-c:t");
                 args.add("copy");
             }
-            default -> {
-                // `burn` is handled in filters(); no subtitle stream is copied.
-            }
-        }
-        args.addAll(preset.subtitleArgs);
-        if (preset.copyAttachments) {
-            args.add("-c:t");
-            args.add("copy");
         }
 
         if (preset.copyMetadata) {
@@ -208,10 +218,16 @@ public final class CommandBuilder {
         }
         metadata(args, preset);
         args.add("-map_chapters");
-        if (chapters != null) {
+        if (image) {
+            args.add("-1");
+        } else if (chapters != null) {
             args.add("1");
         } else {
             args.add(preset.copyChapters ? "0" : "-1");
+        }
+        if (image) {
+            args.add("-frames:v");
+            args.add("1");
         }
         if ("mp4".equalsIgnoreCase(preset.container)) {
             args.add("-movflags");
@@ -312,6 +328,17 @@ public final class CommandBuilder {
             filters.add(preset.tenBit ? "format=p010le,hwupload" : "format=nv12,hwupload");
         }
         return filters;
+    }
+
+    private static boolean isImageEncoder(String encoder) {
+        if (encoder == null || encoder.isBlank()) {
+            return false;
+        }
+        return switch (encoder) {
+            case "mjpeg", "png", "webp", "libwebp", "bmp", "tiff", "gif", "avif", "libaom-av1",
+                 "jxl", "libjxl", "jpegxl" -> true;
+            default -> false;
+        };
     }
 
     private static boolean softwareEncoder(String encoder) {
