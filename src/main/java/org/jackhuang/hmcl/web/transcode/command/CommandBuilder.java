@@ -353,6 +353,14 @@ public final class CommandBuilder {
     /// Resolves the output path. The caller has already made `outputDir` absolute and
     /// inside the media root.
     public static Path outputPath(TranscodePreset preset, Path input, Path outputDir) {
+        return outputPath(preset, input, outputDir, java.util.Set.of());
+    }
+
+    /// The same, also avoiding paths the queue has already promised to another job.
+    /// `Files.exists()` alone is not enough: queued jobs have not written their output
+    /// yet, so three submissions of the same input would pick the same name.
+    public static Path outputPath(TranscodePreset preset, Path input, Path outputDir,
+                                  java.util.Set<Path> reserved) {
         String container = preset.container == null || preset.container.isBlank()
                 ? extension(input)
                 : preset.container;
@@ -363,10 +371,11 @@ public final class CommandBuilder {
             default -> preset.outputSuffix == null ? "_transcoded" : preset.outputSuffix;
         };
         Path directory = outputDir == null ? input.getParent() : outputDir;
-        Path candidate = directory.resolve(stem + suffix + "." + container);
+        Path candidate = directory.resolve(stem + suffix + "." + container).toAbsolutePath().normalize();
         int counter = 1;
-        while (java.nio.file.Files.exists(candidate) && counter < 10_000) {
-            candidate = directory.resolve(stem + suffix + "_" + counter + "." + container);
+        while ((java.nio.file.Files.exists(candidate) || reserved.contains(candidate)) && counter < 10_000) {
+            candidate = directory.resolve(stem + suffix + "_" + counter + "." + container)
+                    .toAbsolutePath().normalize();
             counter++;
         }
         return candidate;

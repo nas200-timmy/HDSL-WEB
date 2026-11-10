@@ -46,9 +46,11 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -84,6 +86,9 @@ public final class TranscodeQueue {
     private final Path queueFile;
     private final Object lock = new Object();
     private final List<TranscodeJob> jobs = new ArrayList<>();
+    /// Outputs promised to queued/running jobs. `Files.exists()` cannot see a file
+    /// that has not been written yet, so the queue reserves the name at submit time.
+    private final Set<Path> reservedOutputs = new HashSet<>();
 
     private final ExecutorService workers = Executors.newCachedThreadPool(runnable -> {
         Thread thread = new Thread(runnable, "transcode-worker");
@@ -155,6 +160,7 @@ public final class TranscodeQueue {
                     job.state = TranscodeJob.State.CANCELLED;
                     job.error = "transcode feature disabled";
                     job.endedAt = now;
+                    releaseReservation(job);
                     if (job.process != null) {
                         processes.add(job.process);
                         job.process = null;
@@ -191,7 +197,6 @@ public final class TranscodeQueue {
         TranscodeJob job = new TranscodeJob();
         job.id = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         job.input = relative(inputPath);
-        job.output = relative(CommandBuilder.outputPath(preset, inputPath, directory));
         job.preset = preset.copy();
         job.presetId = presetId == null ? "" : presetId;
         job.presetName = preset.name == null ? "" : preset.name;
@@ -204,6 +209,9 @@ public final class TranscodeQueue {
             if (active >= module.config().transcode.maxQueue) {
                 throw new IOException("the transcode queue is full (" + module.config().transcode.maxQueue + ")");
             }
+            Path outputPath = CommandBuilder.outputPath(preset, inputPath, directory, reservedOutputs);
+            reservedOutputs.add(outputPath);
+            job.output = relative(outputPath);
             jobs.add(job);
             saveLocked();
         }
@@ -227,7 +235,6 @@ public final class TranscodeQueue {
         TranscodeJob job = new TranscodeJob();
         job.id = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         job.input = label;
-        job.output = relative(output);
         job.preset = new TranscodePreset();
         job.preset.container = extension(output);
         job.presetName = tool;
@@ -241,6 +248,9 @@ public final class TranscodeQueue {
             if (active >= module.config().transcode.maxQueue) {
                 throw new IOException("the transcode queue is full (" + module.config().transcode.maxQueue + ")");
             }
+            Path unique = uniqueOutput(output);
+            reservedOutputs.add(unique);
+            job.output = relative(unique);
             jobs.add(job);
             saveLocked();
         }
@@ -283,6 +293,7 @@ public final class TranscodeQueue {
                     job.state = TranscodeJob.State.CANCELLED;
                     job.error = "stopped by the operator";
                     job.endedAt = now;
+                    releaseReservation(job);
                     if (job.process != null) {
                         processes.add(job.process);
                         job.process = null;
@@ -307,6 +318,7 @@ public final class TranscodeQueue {
             job.state = TranscodeJob.State.CANCELLED;
             job.error = "cancelled by the operator";
             job.endedAt = System.currentTimeMillis();
+            releaseReservation(job);
             if (job.process != null) {
                 process = job.process;
                 job.process = null;
@@ -329,6 +341,7 @@ public final class TranscodeQueue {
                 return false;
             }
             job.resetForRetry();
+            reservedOutputs.add(mediaRoot.resolve(job.output).toAbsolutePath().normalize());
             saveLocked();
         }
         publishQueue();
@@ -522,8 +535,11 @@ public final class TranscodeQueue {
                 handleFailure(job, "ffmpeg exited with code " + code + tail(log), part);
                 return;
             }
-            if (job.tool.isBlank() ? !validOutput(part, job.preset) : !validAnyOutput(part)) {
-                handleFailure(job, "ffmpeg finished but the output has no usable stream" + tail(log), part);
+            String invalid = job.tool.isBlank()
+                    ? invalidOutputReason(part, job.preset, input)
+                    : invalidAnyOutputReason(part);
+            if (invalid != null) {
+                handleFailure(job, invalid + tail(log), part);
                 return;
             }
             move(part, output);
@@ -533,6 +549,7 @@ public final class TranscodeQueue {
             job.endedAt = System.currentTimeMillis();
             job.sizeBytes = Files.size(output);
             part = null;
+            releaseReservation(job);
             publishJob(job);
         } catch (Exception e) {
             if (job.state != TranscodeJob.State.CANCELLED) {
@@ -731,6 +748,7 @@ public final class TranscodeQueue {
                     job.error = "stopped by the operator";
                     job.message = "failed";
                     job.endedAt = System.currentTimeMillis();
+                    releaseReservation(job);
                     runState = RunState.PAUSED;
                 }
                 case "fallback" -> {
@@ -780,6 +798,7 @@ public final class TranscodeQueue {
                 job.error = "decision timed out after " + timeoutMinutes() + " minutes";
                 job.message = "failed";
                 job.endedAt = System.currentTimeMillis();
+                releaseReservation(job);
                 runState = RunState.PAUSED;
             }
             saveLocked();
@@ -835,6 +854,7 @@ public final class TranscodeQueue {
         job.error = message;
         job.message = "failed";
         job.endedAt = System.currentTimeMillis();
+        releaseReservation(job);
         if (part != null) {
             try {
                 Files.deleteIfExists(part);
@@ -869,22 +889,25 @@ public final class TranscodeQueue {
         return -1;
     }
 
-    private boolean validAnyOutput(Path output) {
+    private @Nullable String invalidAnyOutputReason(Path output) {
         if (!Files.isRegularFile(output) || fileSize(output) <= 0) {
-            return false;
+            return "输出文件为空或不存在";
         }
         try {
             JsonObject probe = module.runtime().probeMedia(output);
             JsonArray streams = probe.has("streams") ? probe.getAsJsonArray("streams") : new JsonArray();
-            return !streams.isEmpty();
+            return streams.isEmpty() ? "输出没有可用流" : null;
         } catch (Exception e) {
-            return false;
+            return "ffprobe 无法读取输出：" + e.getMessage();
         }
     }
 
-    private boolean validOutput(Path output, TranscodePreset preset) {
+    /// Validates the produced file against what the preset promised. Audio is only
+    /// required when the **input** actually has audio: a video-only source must not
+    /// fail a copy-audio preset just because there was nothing to copy.
+    private @Nullable String invalidOutputReason(Path output, TranscodePreset preset, Path input) {
         if (!Files.isRegularFile(output) || fileSize(output) <= 0) {
-            return false;
+            return "输出文件为空或不存在";
         }
         try {
             JsonObject probe = module.runtime().probeMedia(output);
@@ -898,15 +921,33 @@ public final class TranscodeQueue {
                 if ("audio".equals(type)) audio = true;
             }
             if (!"none".equals(preset.videoEncoder) && !video) {
-                return false;
+                return "输出没有视频流";
             }
-            if (!"none".equals(preset.audioMode) && !audio) {
-                return false;
+            if ("none".equals(preset.videoEncoder) && !audio) {
+                return "预设是纯音频，但输入/输出没有音频";
             }
-            return true;
+            if (!"none".equals(preset.audioMode) && hasAudio(input) && !audio) {
+                return "预设要求音频轨，但输出没有音频（输入有音频）";
+            }
+            return null;
         } catch (Exception e) {
-            return false;
+            return "ffprobe 无法读取输出：" + e.getMessage();
         }
+    }
+
+    private boolean hasAudio(Path input) {
+        try {
+            JsonObject probe = module.runtime().probeMedia(input);
+            JsonArray streams = probe.has("streams") ? probe.getAsJsonArray("streams") : new JsonArray();
+            for (JsonElement element : streams) {
+                JsonObject stream = element.getAsJsonObject();
+                if ("audio".equals(stream.has("codec_type") ? stream.get("codec_type").getAsString() : "")) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
     }
 
     private static long fileSize(Path path) {
@@ -957,6 +998,34 @@ public final class TranscodeQueue {
         }
     }
 
+    private Path uniqueOutput(Path desired) {
+        Path candidate = desired.toAbsolutePath().normalize();
+        if (!Files.exists(candidate) && !reservedOutputs.contains(candidate)) {
+            return candidate;
+        }
+        String name = candidate.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        String stem = dot > 0 ? name.substring(0, dot) : name;
+        String extension = dot > 0 ? name.substring(dot) : "";
+        Path directory = candidate.getParent();
+        int counter = 1;
+        while (counter < 10_000) {
+            Path next = directory.resolve(stem + "_" + counter + extension).toAbsolutePath().normalize();
+            if (!Files.exists(next) && !reservedOutputs.contains(next)) {
+                return next;
+            }
+            counter++;
+        }
+        throw new IllegalStateException("cannot find a free output name for " + desired);
+    }
+
+    private void releaseReservation(TranscodeJob job) {
+        if (job.output == null || job.output.isBlank()) {
+            return;
+        }
+        reservedOutputs.remove(mediaRoot.resolve(job.output).toAbsolutePath().normalize());
+    }
+
     private String relative(Path path) {
         try {
             return mediaRoot.toRealPath().relativize(path.toRealPath()).toString().replace('\\', '/');
@@ -1002,6 +1071,12 @@ public final class TranscodeQueue {
             jobs.clear();
             if (record.jobs() != null) {
                 jobs.addAll(record.jobs());
+            }
+            reservedOutputs.clear();
+            for (TranscodeJob job : jobs) {
+                if (!job.state.terminal() && job.output != null && !job.output.isBlank()) {
+                    reservedOutputs.add(mediaRoot.resolve(job.output).toAbsolutePath().normalize());
+                }
             }
             long now = System.currentTimeMillis();
             for (TranscodeJob job : jobs) {

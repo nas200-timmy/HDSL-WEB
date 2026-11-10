@@ -249,4 +249,91 @@ class TranscodeQueueTest {
         }
     }
 
+    @Test
+    void repeatedSubmissionsReserveDistinctOutputs(@TempDir Path dir) throws Exception {
+        Path media = Files.createDirectory(dir.resolve("media"));
+        Files.writeString(media.resolve("input.mp4"), "source");
+
+        ServerConfig config = new ServerConfig();
+        config.dataDir = dir.resolve("data");
+        config.transcode.mediaRoot = media.toString();
+
+        TranscodeModule module = new TranscodeModule(config, new EventBus());
+        module.feature().enable(consent());
+        module.queue().start();
+        try {
+            var preset = module.presets().get("h264-quality").orElseThrow().preset();
+            String first = module.queue().submit("input.mp4", "", "h264-quality", preset)
+                    .get("output").getAsString();
+            String second = module.queue().submit("input.mp4", "", "h264-quality", preset)
+                    .get("output").getAsString();
+            String third = module.queue().submit("input.mp4", "", "h264-quality", preset)
+                    .get("output").getAsString();
+            assertEquals(3, java.util.Set.of(first, second, third).size(),
+                    "queued jobs must not share an output path");
+            assertEquals("input_transcoded.mkv", first);
+            assertEquals("input_transcoded_1.mkv", second);
+            assertEquals("input_transcoded_2.mkv", third);
+        } finally {
+            module.queue().stop();
+        }
+    }
+
+    @Test
+    void aVideoOnlySourceDoesNotFailAnAudioCopyPreset(@TempDir Path dir) throws Exception {
+        Assumptions.assumeFalse(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS,
+                "the fake ffmpeg uses a POSIX shell script");
+
+        Path media = Files.createDirectory(dir.resolve("media"));
+        Files.writeString(media.resolve("input.mp4"), "source");
+        Path bin = Files.createDirectory(dir.resolve("bin"));
+        Path ffmpeg = bin.resolve("ffmpeg");
+        Path ffprobe = bin.resolve("ffprobe");
+        script(ffmpeg, """
+                #!/bin/sh
+                case "$*" in
+                  *-version*) echo "ffmpeg version 7.1.5"; exit 0 ;;
+                  *-encoders*) echo " V....D libx264 H.264"; exit 0 ;;
+                  *-hwaccels*) echo "Hardware acceleration methods:"; echo "vaapi"; exit 0 ;;
+                  *-filters*) echo " TSC scale V->V Scale"; exit 0 ;;
+                esac
+                for last; do :; done
+                echo "out_time_us=1000000"
+                echo "progress=end"
+                printf x > "$last"
+                exit 0
+                """);
+        // Video only: no audio stream in the source or the output.
+        script(ffprobe, """
+                #!/bin/sh
+                echo '{"streams":[{"codec_type":"video"}],"format":{"duration":"2.0"}}'
+                """);
+
+        ServerConfig config = new ServerConfig();
+        config.dataDir = dir.resolve("data");
+        config.transcode.ffmpegPath = ffmpeg.toString();
+        config.transcode.mediaRoot = media.toString();
+
+        TranscodeModule module = new TranscodeModule(config, new EventBus());
+        module.feature().enable(consent());
+        module.queue().start();
+        try {
+            var preset = module.presets().get("h264-quality").orElseThrow().preset();
+            var job = module.queue().submit("input.mp4", "", "h264-quality", preset);
+            String id = job.get("id").getAsString();
+            module.queue().startQueue();
+            String state = "";
+            for (int i = 0; i < 100; i++) {
+                Thread.sleep(50);
+                state = module.queue().jobJson(id).orElseThrow().get("state").getAsString();
+                if ("done".equals(state) || "failed".equals(state)) {
+                    break;
+                }
+            }
+            assertEquals("done", state, module.queue().snapshot().toString());
+        } finally {
+            module.queue().stop();
+        }
+    }
+
 }
