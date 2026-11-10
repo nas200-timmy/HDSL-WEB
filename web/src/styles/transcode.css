@@ -834,6 +834,11 @@
   padding: 0 0 8px;
 }
 
+.tc-manage-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .tc-manage-toolbar {
   display: flex;
   align-items: center;

@@ -331,7 +331,12 @@ export function PresetsPage() {
   });
 
   const search = fieldSearch.trim().toLowerCase();
-  const sections = (schema?.sections ?? []).filter((section) => activeSection === null || activeSection === section.title);
+  // 参数总览只显示总览；具体字段按分区进入。“全部参数”是给熟练用户的兜底。
+  const sections = activeSection === null
+    ? []
+    : activeSection === "全部参数"
+      ? (schema?.sections ?? [])
+      : (schema?.sections ?? []).filter((section) => section.title === activeSection);
   const visibleSections = (search
     ? sections.map((section) => ({
         ...section,
@@ -345,6 +350,9 @@ export function PresetsPage() {
     })).filter((section) => section.fields.length > 0);
 
   const managing = activeSection === "预设管理";
+  const shownCommand = managing ? managedPreview : preview;
+  const shownError = managing ? managedError : previewError;
+  const shownBusy = managing ? false : previewBusy;
 
   return (
     <div className="tc-workbench">
@@ -378,6 +386,12 @@ export function PresetsPage() {
         ))}
         <div className="tc-nav-divider" />
         <div
+          className={`tc-nav-item${activeSection === "全部参数" ? " selected" : ""}`}
+          onClick={() => setActiveSection("全部参数")}
+        >
+          全部参数
+        </div>
+        <div
           className={`tc-nav-item${activeSection === "自定义参数" ? " selected" : ""}`}
           onClick={() => setActiveSection("自定义参数")}
         >
@@ -392,26 +406,37 @@ export function PresetsPage() {
       <section className="tc-editor">
         <div className="card tc-editor-head">
           <div className="tc-editor-title">
-            <input
-              className="input tc-name"
-              value={String(draft.name ?? "")}
-              placeholder="预设名称"
-              disabled={entry?.builtin === true || managing}
-              onChange={(e) => update("name", e.target.value)}
-            />
-            <span className="mono tc-id">
-              {managing ? "预设管理 · 单击预览，双击应用" : entry ? entry.id : "未保存的自定义参数"}
-              {!managing && entry?.builtin ? "（只读）" : ""}
-            </span>
-            {dirty && !managing && <span className="tag plain">未保存</span>}
+            {managing ? (
+              <>
+                <span className="tc-manage-title">预设管理</span>
+                <span className="mono tc-id">单击预览，双击或「应用此预设」读入参数面板</span>
+              </>
+            ) : (
+              <>
+                <input
+                  className="input tc-name"
+                  value={String(draft.name ?? "")}
+                  placeholder="预设名称"
+                  disabled={entry?.builtin === true}
+                  onChange={(e) => update("name", e.target.value)}
+                />
+                <span className="mono tc-id">
+                  {entry ? entry.id : "未保存的自定义参数"}
+                  {entry?.builtin ? "（只读）" : ""}
+                </span>
+                {dirty && <span className="tag plain">未保存</span>}
+              </>
+            )}
           </div>
-          <input
-            className="input"
-            value={String(draft.description ?? "")}
-            placeholder="描述（可选）"
-            disabled={entry?.builtin === true || managing}
-            onChange={(e) => update("description", e.target.value)}
-          />
+          {!managing && (
+            <input
+              className="input"
+              value={String(draft.description ?? "")}
+              placeholder="描述（可选）"
+              disabled={entry?.builtin === true}
+              onChange={(e) => update("description", e.target.value)}
+            />
+          )}
           <div className="tc-editor-actions">
             {managing ? (
               <>
@@ -572,21 +597,9 @@ export function PresetsPage() {
                       <span>字幕</span><span className="mono">{String(managedEntry.preset.subtitleMode ?? "—")}</span>
                       <span>描述</span><span>{String(managedEntry.preset.description ?? "—")}</span>
                     </div>
-                    <pre className="tc-command">{managedPreview || "（无法生成命令行）"}</pre>
                     <div className="tc-manage-actions">
                       <button className="btn btn-raised" disabled={busy} onClick={() => void applyManaged()}>
                         应用此预设
-                      </button>
-                      <button
-                        className="btn btn-text"
-                        disabled={!managedPreview}
-                        onClick={() => void navigator.clipboard?.writeText(managedPreview).then(
-                          () => toast("success", "命令行已复制"),
-                          () => toast("error", "复制失败（需要 HTTPS 或 localhost）"),
-                        )}
-                      >
-                        <ContentCopyIcon size={16} />
-                        复制命令行
                       </button>
                       {!managedEntry.builtin && (
                         <button
@@ -624,7 +637,7 @@ export function PresetsPage() {
           </div>
         ) : (
           <>
-            {(activeSection === null || activeSection === "自定义参数") && (
+            {activeSection === null && (
               <div className="card tc-overview-card">
                 <div className="tc-card-title">参数总览</div>
                 <div className="tc-overview-grid">
@@ -674,7 +687,7 @@ export function PresetsPage() {
               </div>
             ))}
 
-            {(activeSection === null || activeSection === "自定义参数") && (
+            {activeSection === "自定义参数" && (
               <CustomArgsEditor draft={draft} disabled={entry?.builtin === true} update={update} />
             )}
           </>
@@ -685,17 +698,17 @@ export function PresetsPage() {
       <aside className="tc-inspector">
         <div className="card tc-command-card">
           <div className="tc-card-title">
-            实时命令行
+            {managing ? "预设命令行" : "实时命令行"}
             <span className="tc-command-state">
-              {previewBusy ? "生成中…" : previewError ? "生成失败" : "只生成，不执行"}
+              {shownBusy ? "生成中…" : shownError ? "生成失败" : managing ? "选中预设的命令" : "只生成，不执行"}
             </span>
           </div>
           <div className="tc-command-actions">
             <button
               className="btn btn-text"
-              disabled={!preview}
+              disabled={!shownCommand}
               onClick={() => {
-                void navigator.clipboard?.writeText(preview).then(
+                void navigator.clipboard?.writeText(shownCommand).then(
                   () => toast("success", "命令行已复制"),
                   () => toast("error", "复制失败（需要 HTTPS 或 localhost）"),
                 );
@@ -706,16 +719,21 @@ export function PresetsPage() {
             </button>
             <button
               className="btn btn-text"
-              disabled={previewBusy}
-              onClick={() => setDraft((current) => ({ ...current }))}
+              disabled={managing ? !managedId : shownBusy}
+              onClick={() => {
+                if (managing && managedId) void inspectPreset(managedId);
+                else setDraft((current) => ({ ...current }));
+              }}
             >
               立即刷新
             </button>
           </div>
-          {previewError ? (
-            <div className="tc-command-error">{previewError}</div>
+          {shownError ? (
+            <div className="tc-command-error">{shownError}</div>
           ) : (
-            <pre className="tc-command">{preview || "改一个参数就会在这里看到命令"}</pre>
+            <pre className="tc-command">
+              {shownCommand || (managing ? "选择一个预设查看命令行" : "改一个参数就会在这里看到命令")}
+            </pre>
           )}
           <p className="tc-command-note">
             输入/输出用 <span className="mono">&lt;输入文件&gt;</span> 占位；实际入队时会替换成媒体根里的真实路径。
