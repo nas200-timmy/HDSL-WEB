@@ -5,6 +5,17 @@ import { errMsg } from "../../utils";
 import { toast } from "../../store";
 import { ProgressBar } from "../../components/ProgressBar";
 
+const INSTALL_SOURCES = [
+  { id: "linux-source", label: "Linux 源码 · ffmpeg 7.1.5", kind: "compile" as const,
+    url: "https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz" },
+  { id: "linux-static", label: "Linux 静态包 · BtbN GPL", kind: "static" as const,
+    url: "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-linux64-gpl.tar.xz" },
+  { id: "win-static", label: "Windows 静态包 · gyan.dev", kind: "static" as const,
+    url: "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" },
+  { id: "mac-static", label: "macOS 静态包 · evermeet.cx", kind: "static" as const,
+    url: "https://evermeet.cx/ffmpeg/getrelease/zip" },
+];
+
 export function TranscodeSettingsPage() {
   const feature = useTranscodeFeature();
   const [capabilities, setCapabilities] = useState<TranscodeCapabilities | null>(null);
@@ -137,6 +148,19 @@ export function TranscodeSettingsPage() {
           </select>
           {installKind !== "package" && (
             <>
+              <select className="input" value=""
+                      onChange={(e) => {
+                        const source = INSTALL_SOURCES.find((item) => item.id === e.target.value);
+                        if (source) {
+                          setInstallKind(source.kind);
+                          setInstallUrl(source.url);
+                        }
+                      }}>
+                <option value="">填入常用来源…</option>
+                {INSTALL_SOURCES.map((source) => (
+                  <option key={source.id} value={source.id}>{source.label}</option>
+                ))}
+              </select>
               <input className="input"
                      placeholder={installKind === "compile"
                        ? "https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz"
