@@ -10,6 +10,26 @@
 > 相关约定：功能默认关闭，关闭时与 MC 一样「当它不存在」；UI 只用面板现有 HMCL/Monet 风格；
 > 队列在服务端运行，浏览器只是观察窗。
 
+## 实现状态（2026-11-10）
+
+已落地并能通过 `scripts/transcode-smoke.py`：
+
+- 功能门（`feature.json`、关闭即 404、开发者密码启用）、`transcode:` 配置。
+- ffmpeg/ffprobe 定位与能力探测、媒体根浏览、ffprobe 媒体信息。
+- 预设存储/内置预设/命令生成/预览，前端六页（概览/准备文件/编码队列/预设/工具/设置）。
+- 服务端队列、真实 ffmpeg 执行、进度、日志、暂停/恢复、输出 `.part` 原子改名。
+- 失败决策三档、QSV→VAAPI→CPU 降级链、失败弹窗与「应用队列」。
+- 合并/混流/抽流工具入队；GPU 监控（NVIDIA/AMD/Intel sysfs，任务管理器式四图）。
+- Agent scope `transcode` / `transcode-raw`；容器媒体根、`/dev/dri`/NVIDIA 直通参数与冒烟脚本。
+
+尚未完成（后续提交）：
+
+- 质量评测（PSNR/SSIM/XPSNR/VMAF）与逐帧曲线。
+- ffmpeg 静态包下载 / apt-dnf 安装 / 源码编译的在线 UI（当前只支持路径检测与手配）。
+- 3FUI 参数面板的剩余字段（元数据/章节/附件/滤镜选择器/自定义参数编辑器）与 `.3fui` 导入导出。
+- Windows 的 AMD/Intel GPU 进程表；多 GPU 图表选择；Intel 整卡利用率。
+- 失败策略的超时链路测试、无人值守策略的持久化设置。
+
 ## Context
 
 HDSL-web 目前是「一个 JVM、一个端口」的控制面：实例、品牌、MC、ZCode、终端、Agent 票据都已就位。
