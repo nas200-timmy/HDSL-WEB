@@ -5,7 +5,7 @@ import { Dialog } from "../../components/Dialog";
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
 import { ContentCopyIcon, RefreshIcon } from "../../components/icons";
-import { fmtBytes, fmtDuration, pct, stateLabel, stateTone } from "./common";
+import { fmtBytes, fmtDuration, pct, stateLabel, stateTone, HelpNote } from "./common";
 
 /**
  * 编码队列。
@@ -206,6 +206,15 @@ export function QueuePage() {
           </button>
         </div>
       </div>
+
+      <HelpNote title="队列怎么用">
+        <ul>
+          <li><b>开始 / 继续</b>：允许队列派发任务；<b>暂停派发</b>只是不再启动新任务，正在跑的不受影响；<b>停止全部</b>会终止 ffmpeg，已完成的输出保留。</li>
+          <li><b>当前 / 下一个 / #N</b>：当前正在跑的任务、下一个将被派发的任务、以及排队位次。关掉网页不会停止任务，队列在服务端继续。</li>
+          <li>任务失败会停在这里等你决定：<b>停止此任务</b>放弃它；<b>仅此任务降级</b>换同硬件的等价编码器重试一次；<b>降级并应用队列</b>后续同类任务也自动降级；<b>完全自动化</b>以后不再询问。</li>
+          <li>点任务行看详情与实时输出；<b>日志</b>里可以只看错误，<b>复制命令行</b>用于手工复现。</li>
+        </ul>
+      </HelpNote>
 
       {waiting && (
         <div className="card tc-decision">

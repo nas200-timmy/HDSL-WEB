@@ -3,6 +3,7 @@ import { api, type TranscodeQualityJob } from "../../api";
 import { ProgressBar } from "../../components/ProgressBar";
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
+import { HelpNote } from "./common";
 
 export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +71,15 @@ export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
 
   return (
     <div style={{ display: "grid", gap: 8 }}>
+      <HelpNote title="工具怎么用">
+        <ul>
+          <li><b>合并</b>：多个完整文件首尾相接，要求编码/分辨率/音轨布局一致；直接 copy，不重编码。</li>
+          <li><b>混流</b>：从多个文件各挑轨道重新封装；流映射每行一个，如 <span className="mono">0:v:0</span>、<span className="mono">1:a:0</span>，序号是输入文件下标。</li>
+          <li><b>抽流</b>：从单个文件提取一条轨道（视频/音频/字幕），输出扩展名由编码决定。</li>
+          <li><b>质量评测</b>：参考文件对比待测文件，逐帧算 PSNR/SSIM/XPSNR；VMAF 需要 ffmpeg 带 libvmaf，耗时与片长成正比。</li>
+          <li>所有路径都相对媒体根；生成的任务会进入编码队列，可在「编码队列」看进度与日志。</li>
+        </ul>
+      </HelpNote>
       {error && (
         <div className="card">
           <div className="comp-row">
@@ -82,6 +92,7 @@ export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
         <div className="card" style={{ flex: "1 1 300px", minWidth: 280 }}>
           <div className="comp-row"><span className="comp-label">合并</span><span className="comp-value">concat · copy</span></div>
+          <p className="tc-tool-desc">把多个完整文件按顺序拼成一个；编码/分辨率/音轨布局要一致，直接 copy 不重编码。</p>
           <div style={{ display: "grid", gap: 5, padding: "4px 8px 8px" }}>
             <label style={{ fontSize: 12 }}>输入（每行一个，相对媒体根）</label>
             <textarea className="input" rows={4} value={mergeInputs} onChange={(e) => setMergeInputs(e.target.value)} />
@@ -96,6 +107,7 @@ export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
 
         <div className="card" style={{ flex: "1 1 300px", minWidth: 280 }}>
           <div className="comp-row"><span className="comp-label">混流</span><span className="comp-value">多输入 · copy</span></div>
+          <p className="tc-tool-desc">从多个文件各挑轨道重新封装；映射行里的第一个数字是输入文件下标。</p>
           <div style={{ display: "grid", gap: 5, padding: "4px 8px 8px" }}>
             <label style={{ fontSize: 12 }}>输入（每行一个）</label>
             <textarea className="input" rows={3} value={muxInputs} onChange={(e) => setMuxInputs(e.target.value)} />
@@ -112,6 +124,7 @@ export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
 
         <div className="card" style={{ flex: "1 1 300px", minWidth: 280 }}>
           <div className="comp-row"><span className="comp-label">抽流</span><span className="comp-value">单流 · copy</span></div>
+          <p className="tc-tool-desc">从单个文件提取一条轨道；输出扩展名按编码自动选（h264→.h264、aac→.aac、srt→.srt）。</p>
           <div style={{ display: "grid", gap: 5, padding: "4px 8px 8px" }}>
             <label style={{ fontSize: 12 }}>输入</label>
             <input className="input" value={extractInput} onChange={(e) => setExtractInput(e.target.value)} />
@@ -144,6 +157,7 @@ export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
             PSNR / SSIM / XPSNR / VMAF（需要 ffmpeg 带对应滤镜）
           </span>
         </div>
+          <p className="tc-tool-desc">参考文件 vs 待测文件，逐帧算指标；PSNR/SSIM/XPSNR 需要 ffmpeg 对应滤镜，VMAF 另需 libvmaf。</p>
         <div style={{ display: "grid", gap: 6, padding: "4px 8px 8px" }}>
           <label style={{ fontSize: 12 }}>参考文件（相对媒体根）</label>
           <input className="input" value={qualityReference}

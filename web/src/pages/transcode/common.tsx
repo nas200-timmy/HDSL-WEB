@@ -1,7 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api, type TranscodeMediaEntry, type TranscodeMediaListing } from "../../api";
 import { errMsg } from "../../utils";
 import { ArrowBackIcon, ArrowForwardIcon, FolderIcon, FolderOpenIcon, RefreshIcon } from "../../components/icons";
+
+/**
+ * 页级说明：默认折叠，标题一行，展开后是一段人话。
+ * 3FUI 的每个子页都有这种说明；这里统一成一个组件，避免每页自己写样式。
+ */
+export function HelpNote({ title = "使用说明", children }: { title?: string; children: ReactNode }) {
+  return (
+    <details className="tc-help" open>
+      <summary>{title}</summary>
+      <div className="tc-help-body">{children}</div>
+    </details>
+  );
+}
 
 export function fmtBytes(bytes: number | null | undefined): string {
   if (bytes == null || bytes < 0) return "—";

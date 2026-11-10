@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type TranscodeCapabilities, type TranscodePresetSummary, type TranscodeQueueSnapshot } from "../../api";
 import { errMsg } from "../../utils";
-import { pct, stateLabel } from "./common";
+import { pct, stateLabel, HelpNote } from "./common";
 
 const COMMON_ENCODERS = [
   "libx264", "libx265", "libvpx-vp9", "libaom-av1",
@@ -76,6 +76,15 @@ export function OverviewPage({ onOpenTab }: { onOpenTab: (tab: string) => void }
           </button>
         </div>
       </div>
+
+      <HelpNote title="转码是什么 / 会不会动到我的文件">
+        <ul>
+          <li>转码是<b>可选功能</b>，默认关闭；启用需要开发者密码 + HTTPS + 阅读须知。关闭后导航和数据都保留。</li>
+          <li>它只读写<b>媒体根</b>里的文件，不会碰面板数据、实例目录或系统目录；输出默认放在源文件旁边，同名会加后缀。</li>
+          <li>首次使用按上面的 1→4 步走；不想碰参数就用「内置预设」，它们和 Windows 版 3FUI 的预设文件互通（.3fui 可导入/导出）。</li>
+          <li>硬件编码器不可用时会按「设置 → 失败策略」自动降级到软件编码，任务不会凭空消失。</li>
+        </ul>
+      </HelpNote>
 
       {presets.length > 0 && (
         <div className="card tc-builtin">

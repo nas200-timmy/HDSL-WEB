@@ -4,6 +4,7 @@ import { refreshTranscodeFeature, setTranscodeFeature, useTranscodeFeature } fro
 import { errMsg } from "../../utils";
 import { toast } from "../../store";
 import { ProgressBar } from "../../components/ProgressBar";
+import { HelpNote } from "./common";
 
 const INSTALL_SOURCES = [
   { id: "linux-source", label: "Linux 源码 · ffmpeg 7.1.5", kind: "compile" as const,
@@ -106,6 +107,16 @@ export function TranscodeSettingsPage() {
           </div>
         </div>
       )}
+
+      <HelpNote title="设置项怎么理解">
+        <ul>
+          <li><b>失败策略</b>：<b>询问</b>每次失败都等你决定；<b>超时自动降级</b>等到超时时间后自动换等价编码器；<b>完全自动化</b>失败立即降级、不再询问。</li>
+          <li><b>并发 / 队列上限</b>来自 <span className="mono">server.yaml</span> 的 <span className="mono">transcode:</span> 段或 <span className="mono">HDSL_TRANSCODE_*</span> 环境变量，改完要重启面板。</li>
+          <li><b>媒体根</b>是转码读写文件的范围；<b>ffmpeg 路径</b>留空就用镜像/系统自带的。</li>
+          <li>关闭转码功能后 <span className="mono">/api/transcode/*</span> 返回 404，导航入口也会消失；数据与预设保留。</li>
+          <li>「探测编码器」只跑 1 帧试编码，用来区分“参数写错”和“硬件根本不可用”。</li>
+        </ul>
+      </HelpNote>
 
       <div className="card">
         <div className="comp-row">

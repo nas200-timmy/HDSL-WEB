@@ -12,6 +12,7 @@ import { toast } from "../../store";
 import { errMsg } from "../../utils";
 import { Dialog } from "../../components/Dialog";
 import { ContentCopyIcon, RefreshIcon, SearchIcon } from "../../components/icons";
+import { HelpNote } from "./common";
 
 /**
  * 参数面板工作台。
@@ -370,6 +371,7 @@ export function PresetsPage() {
             key={section.title}
             className={`tc-nav-item${activeSection === section.title ? " selected" : ""}`}
             onClick={() => setActiveSection(section.title)}
+            title={section.hint}
           >
             {section.title}
           </div>
@@ -484,8 +486,21 @@ export function PresetsPage() {
 
         {error && <div className="card tc-error">{error}</div>}
 
+        <HelpNote title="参数面板怎么用">
+          <ul>
+            <li><b>参数总览</b>看当前的关键项；红色警告可以点，直接跳到出问题的分区。</li>
+            <li>右侧<b>实时命令行</b>用 <span className="mono">&lt;输入文件&gt;</span> 占位，改任何参数 600ms 后自动刷新；它只生成、不执行。</li>
+            <li><b>预设管理</b>：单击只预览，双击或「应用此预设」才会读进参数面板；内置预设只读，改完用「另存为」。</li>
+            <li>字段下方的一行灰字是该项的说明；下拉框选中项也会解释自己的含义。</li>
+            <li>「只看已改」只显示与基线不同的字段；「搜索参数」按名称/当前值过滤。</li>
+          </ul>
+        </HelpNote>
+
         {managing ? (
           <div className="card tc-manage">
+            <div className="tc-manage-hint">
+              单击左侧预设只预览（不改当前参数），双击或点「应用此预设」才读进参数面板。内置预设只读。
+            </div>
             <div className="tc-manage-toolbar">
               <div className="tc-search">
                 <SearchIcon size={16} />
@@ -643,6 +658,7 @@ export function PresetsPage() {
             {visibleSections.map((section) => (
               <div className="card tc-fields-card" key={section.title}>
                 <div className="tc-card-title">{section.title}</div>
+                {section.hint && <div className="tc-section-hint">{section.hint}</div>}
                 <div className="tc-fields-grid">
                   {section.fields.map((field) => (
                     <Field

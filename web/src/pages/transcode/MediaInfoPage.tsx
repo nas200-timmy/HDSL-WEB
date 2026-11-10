@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type TranscodeMediaEntry } from "../../api";
 import { errMsg } from "../../utils";
-import { MediaBrowserPanel, fmtBytes, fmtDuration } from "./common";
+import { MediaBrowserPanel, fmtBytes, fmtDuration, HelpNote } from "./common";
 
 /**
  * ffprobe 媒体信息：不是把 JSON 摊在页面上，而是按 3FUI 的“封装信息 + 流信息”读法
@@ -136,6 +136,14 @@ export function MediaInfoPage() {
       <MediaBrowserPanel selected={selected?.path} onSelect={(entry) => void select(entry)} />
 
       <div className="tc-media-info">
+        <HelpNote title="媒体信息怎么读">
+          <ul>
+            <li><b>封装信息</b>是容器层：文件、容器格式、时长、大小、总码率、流数量。</li>
+            <li><b>流信息</b>每行一条轨道：规格列里是 profile/level、分辨率 · 像素格式 · 位深；音频是采样率 · 声道。</li>
+            <li>「语言 / 标题」来自文件元数据（tags）与默认轨标记；排障需要看全量字段时再展开最下面的原始 JSON。</li>
+            <li>这里只探测、不修改文件；要转码请去「准备文件」或「参数面板」。</li>
+          </ul>
+        </HelpNote>
         <div className="card">
           <div className="tc-card-title">封装信息</div>
           {!selected && <div className="tc-empty">从左侧选择一个媒体文件</div>}

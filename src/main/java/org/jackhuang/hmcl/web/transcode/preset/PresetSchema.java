@@ -41,7 +41,7 @@ public final class PresetSchema {
         root.addProperty("version", 2);
         JsonArray sections = new JsonArray();
 
-        sections.add(section("输出", new JsonArray[]{
+        sections.add(section("输出", "决定输出文件的名字、位置与容器。MKV 能装下全部轨道；MP4 兼容性最好但字幕/附件受限。", new JsonArray[]{
                 fields(
                         hint(select("container", "输出容器", "mkv", "mkv", "mp4", "mov", "webm", "avi", "ts", "m4a"),
                                 "mkv 能装下全部音轨/字幕/附件；mp4 兼容性最好但字幕与附件受限",
@@ -65,7 +65,7 @@ public final class PresetSchema {
                 )
         }));
 
-        sections.add(section("编码器与质量", new JsonArray[]{
+        sections.add(section("编码器与质量", "先选编码器，再定质量。软件编码用 CRF（越小越清晰），硬件编码用 CQP；preset 只对软件编码有效。", new JsonArray[]{
                 fields(
                         hint(select("videoEncoder", "视频编码器", "libx264",
                                 "copy", "none", "libx264", "libx265", "libvpx-vp9", "libaom-av1",
@@ -117,7 +117,7 @@ public final class PresetSchema {
                 )
         }));
 
-        sections.add(section("画面帧", new JsonArray[]{
+        sections.add(section("画面帧", "留空 = 跟随源视频。只填宽或高会按比例缩放；裁剪/旋转/去隔行按需开。", new JsonArray[]{
                 fields(
                         hint(text("width", "宽", ""), "留空跟随源；只填一边另一边按比例"),
                         hint(text("height", "高", ""), "留空跟随源；常用 1080 / 720"),
@@ -128,7 +128,7 @@ public final class PresetSchema {
                 )
         }));
 
-        sections.add(section("色彩", new JsonArray[]{
+        sections.add(section("色彩", "普通转码留空。只有 HDR↔SDR 转换或需要强制标记色彩时才填。", new JsonArray[]{
                 fields(
                         hint(select("colorPrimaries", "primaries", "",
                                 "", "bt709", "bt2020", "smpte170m", "smpte240m"), "SDR 用 bt709；HDR 用 bt2020"),
@@ -141,7 +141,7 @@ public final class PresetSchema {
                 )
         }));
 
-        sections.add(section("音频", new JsonArray[]{
+        sections.add(section("音频", "默认 copy 原样保留全部音轨，不重编码；要统一格式或减小体积时改 encode。", new JsonArray[]{
                 fields(
                         hint(select("audioMode", "音频模式", "copy", "copy", "encode", "none"),
                                 "copy 原样保留全部音轨（不重编码）；encode 重编码；none 丢弃音频",
@@ -159,7 +159,7 @@ public final class PresetSchema {
                 )
         }));
 
-        sections.add(section("字幕", new JsonArray[]{
+        sections.add(section("字幕", "copy 保留字幕轨；burn 烧进画面（需要字体）；none 丢弃。", new JsonArray[]{
                 fields(
                         hint(select("subtitleMode", "字幕模式", "copy", "copy", "burn", "none"),
                                 "copy 原样保留字幕轨；burn 烧进画面；none 丢弃",
@@ -175,7 +175,7 @@ public final class PresetSchema {
                 )
         }));
 
-        sections.add(section("元数据 / 章节 / 附件", new JsonArray[]{
+        sections.add(section("元数据 / 章节 / 附件", "默认全保留，刮削信息不会丢；MP4 等受限容器会丢弃部分项。", new JsonArray[]{
                 fields(
                         hint(text("metadataTitle", "标题", ""), "留空不写入"),
                         hint(text("metadataArtist", "艺术家", ""), "留空不写入"),
@@ -192,7 +192,7 @@ public final class PresetSchema {
                 )
         }));
 
-        sections.add(section("滤镜 / 高级", new JsonArray[]{
+        sections.add(section("滤镜 / 高级", "普通转码不用改。滤镜按 ffmpeg 语法写，逗号分隔，例如 scale=-2:1080,yadif。", new JsonArray[]{
                 fields(
                         hint(textarea("filterGraph", "附加滤镜链", ""),
                                 "逗号分隔的 ffmpeg 滤镜，例 scale=-2:1080,yadif；留空不加滤镜")
@@ -203,9 +203,10 @@ public final class PresetSchema {
         return root;
     }
 
-    private static JsonObject section(String title, JsonArray[] groups) {
+    private static JsonObject section(String title, String hint, JsonArray[] groups) {
         JsonObject section = new JsonObject();
         section.addProperty("title", title);
+        section.addProperty("hint", hint);
         JsonArray fields = new JsonArray();
         for (JsonArray group : groups) {
             for (int i = 0; i < group.size(); i++) {

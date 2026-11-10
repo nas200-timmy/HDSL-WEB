@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type TranscodeMediaEntry, type TranscodePreset, type TranscodePresetSummary, type TranscodePreview } from "../../api";
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
-import { MediaBrowserPanel, fmtBytes, probeSummary } from "./common";
+import { MediaBrowserPanel, fmtBytes, probeSummary, HelpNote } from "./common";
 
 export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
   const [presets, setPresets] = useState<TranscodePresetSummary[]>([]);
@@ -145,6 +145,14 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
       </div>
 
       <div style={{ flex: "1 1 300px", minWidth: 0, display: "grid", gap: 8 }}>
+        <HelpNote title="准备文件怎么用">
+          <ul>
+            <li>从左边的媒体根里点一个文件，选一个预设，下面会自动出现这条命令；确认无误再「加入队列」。</li>
+            <li>「输出目录」留空 = 输出到源文件旁边；填相对路径则必须在媒体根内且有写权限。</li>
+            <li>预设来自「参数面板 → 保存为预设」；内置预设只读，需要改就用另存为。</li>
+            <li>MP4/MOV 等受限容器装不下全部字幕/附件时会先弹确认，建议改用 MKV。</li>
+          </ul>
+        </HelpNote>
         <div className="card">
           <div className="comp-row">
             <span className="comp-label">已选文件</span>

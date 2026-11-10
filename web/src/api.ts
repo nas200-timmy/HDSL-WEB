@@ -1140,6 +1140,8 @@ export interface TranscodeSchemaField {
 
 export interface TranscodeSchemaSection {
   title: string;
+  /// One-line explanation of the whole section.
+  hint?: string;
   fields: TranscodeSchemaField[];
 }
 
