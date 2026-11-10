@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type TranscodeCapabilities, type TranscodeQueueSnapshot } from "../../api";
+import { api, type TranscodeCapabilities, type TranscodePresetSummary, type TranscodeQueueSnapshot } from "../../api";
 import { errMsg } from "../../utils";
 import { pct, stateLabel } from "./common";
 
@@ -11,6 +11,7 @@ const COMMON_ENCODERS = [
 export function OverviewPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
   const [capabilities, setCapabilities] = useState<TranscodeCapabilities | null>(null);
   const [queue, setQueue] = useState<TranscodeQueueSnapshot | null>(null);
+  const [presets, setPresets] = useState<TranscodePresetSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
@@ -26,6 +27,9 @@ export function OverviewPage({ onOpenTab }: { onOpenTab: (tab: string) => void }
 
   useEffect(() => {
     void load();
+    void api.transcode.presets()
+      .then((answer) => setPresets(answer.presets.filter((preset) => preset.builtin)))
+      .catch(() => setPresets([]));
     const timer = window.setInterval(() => void load(), 2000);
     return () => window.clearInterval(timer);
   }, []);
@@ -43,6 +47,54 @@ export function OverviewPage({ onOpenTab }: { onOpenTab: (tab: string) => void }
           <div className="comp-row">
             <span className="comp-label">读取失败</span>
             <span className="comp-value" style={{ color: "var(--monet-error)" }}>{error}</span>
+          </div>
+        </div>
+      )}
+
+      <div className="card tc-guide">
+        <div className="tc-card-title">开始转码</div>
+        <div className="tc-guide-steps">
+          <button className="tc-guide-step" onClick={() => onOpenTab("prepare")}>
+            <b>1</b>
+            <span>准备文件</span>
+            <small>在媒体根里选片</small>
+          </button>
+          <button className="tc-guide-step" onClick={() => onOpenTab("presets")}>
+            <b>2</b>
+            <span>参数面板</span>
+            <small>定编码器与质量</small>
+          </button>
+          <button className="tc-guide-step" onClick={() => onOpenTab("prepare")}>
+            <b>3</b>
+            <span>加入队列</span>
+            <small>一键入队</small>
+          </button>
+          <button className="tc-guide-step" onClick={() => onOpenTab("queue")}>
+            <b>4</b>
+            <span>编码队列</span>
+            <small>看进度与日志</small>
+          </button>
+        </div>
+      </div>
+
+      {presets.length > 0 && (
+        <div className="card tc-builtin">
+          <div className="tc-card-title">内置预设</div>
+          <div className="tc-builtin-list">
+            {presets.map((preset) => (
+              <button
+                key={preset.id}
+                className="tc-builtin-item"
+                title={preset.description}
+                onClick={() => {
+                  sessionStorage.setItem("transcode.presetId", preset.id);
+                  onOpenTab("presets");
+                }}
+              >
+                <span>{preset.name}</span>
+                <small>{preset.description}</small>
+              </button>
+            ))}
           </div>
         </div>
       )}

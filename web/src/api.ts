@@ -989,7 +989,7 @@ export const api = {
       request<Record<string, unknown>>(
         `/api/transcode/presets/${encodeURIComponent(id)}/export?format=${format}`,
       ),
-    preview: (body: { presetId?: string; preset?: Record<string, unknown>; input: string; outputDir?: string }) =>
+    preview: (body: { presetId?: string; preset?: Record<string, unknown>; input?: string; outputDir?: string }) =>
       request<TranscodePreview>("/api/transcode/preview", jsonInit("POST", body)),
     queue: () => request<TranscodeQueueSnapshot>("/api/transcode/queue"),
     startQueue: () => request<TranscodeQueueSnapshot>("/api/transcode/queue/start", jsonInit("POST", {})),
@@ -1130,6 +1130,12 @@ export interface TranscodeSchemaField {
   type: "text" | "textarea" | "select" | "switch";
   default: string | boolean;
   options?: string[];
+  /// One-line explanation under the control (the web port of 3FUI's field description).
+  hint?: string;
+  /// Per-option explanations for a select, keyed by option value.
+  optionHints?: Record<string, string>;
+  /// Fields the overview and the beginner flow read first.
+  important?: boolean;
 }
 
 export interface TranscodeSchemaSection {
@@ -1178,6 +1184,10 @@ export interface TranscodeJob {
   frame: number;
   error?: string | null;
   encoder?: string | null;
+  fallbackFrom?: string | null;
+  fallbackTo?: string | null;
+  fallbackAttempted?: boolean;
+  decisionDeadline?: number;
   logFile?: string | null;
   createdAt: number;
   startedAt: number;

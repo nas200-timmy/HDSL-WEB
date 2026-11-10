@@ -469,33 +469,40 @@ public final class TranscodeApiServlet extends HttpServlet {
             return;
         }
         String inputPath = stringField(body, "input");
-        if (inputPath == null || inputPath.isBlank()) {
-            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "input is required");
-            return;
-        }
+        boolean placeholder = inputPath == null || inputPath.isBlank();
         try {
             TranscodePreset preset = resolvePreset(body);
             preset.validate();
-            Path input = module.media().resolve(module.mediaRoot(), inputPath);
-            String requestedDir = stringField(body, "outputDir");
-            String presetDir = preset.outputDir;
-            Path outputDir;
-            if (requestedDir != null && !requestedDir.isBlank()) {
-                outputDir = module.media().resolveForWrite(module.mediaRoot(), requestedDir);
-            } else if (presetDir != null && !presetDir.isBlank()) {
-                outputDir = module.media().resolveForWrite(module.mediaRoot(), presetDir);
+            Path input;
+            Path output;
+            Path chapters = null;
+            if (placeholder) {
+                // The parameter panel asks for a command before a file is chosen: the
+                // argv is what matters, so build it with the same placeholders 3FUI shows.
+                input = Path.of("<输入文件>");
+                output = Path.of("<输出文件>");
             } else {
-                outputDir = input.getParent();
+                input = module.media().resolve(module.mediaRoot(), inputPath);
+                String requestedDir = stringField(body, "outputDir");
+                String presetDir = preset.outputDir;
+                Path outputDir;
+                if (requestedDir != null && !requestedDir.isBlank()) {
+                    outputDir = module.media().resolveForWrite(module.mediaRoot(), requestedDir);
+                } else if (presetDir != null && !presetDir.isBlank()) {
+                    outputDir = module.media().resolveForWrite(module.mediaRoot(), presetDir);
+                } else {
+                    outputDir = input.getParent();
+                }
+                output = CommandBuilder.outputPath(preset, input, outputDir);
+                chapters = preset.chaptersFile == null || preset.chaptersFile.isBlank()
+                        ? null : module.media().resolve(module.mediaRoot(), preset.chaptersFile);
             }
-            Path output = CommandBuilder.outputPath(preset, input, outputDir);
-            Path chapters = preset.chaptersFile == null || preset.chaptersFile.isBlank()
-                    ? null : module.media().resolve(module.mediaRoot(), preset.chaptersFile);
             var args = CommandBuilder.build(preset, input, output, chapters);
             JsonArray array = new JsonArray();
             args.forEach(array::add);
             JsonObject result = new JsonObject();
-            result.addProperty("input", input.toString());
-            result.addProperty("output", output.toString());
+            result.addProperty("input", placeholder ? "<输入文件>" : input.toString());
+            result.addProperty("output", placeholder ? "<输出文件>" : output.toString());
             result.add("args", array);
             result.addProperty("command", CommandBuilder.display(args));
             Json.write(response, result);

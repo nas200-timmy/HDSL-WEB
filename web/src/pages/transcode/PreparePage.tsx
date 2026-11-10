@@ -6,7 +6,7 @@ import { MediaBrowserPanel, fmtBytes, probeSummary } from "./common";
 
 export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
   const [presets, setPresets] = useState<TranscodePresetSummary[]>([]);
-  const [presetId, setPresetId] = useState("");
+  const [presetId, setPresetId] = useState(() => sessionStorage.getItem("transcode.presetId") ?? "");
   const [selected, setSelected] = useState<TranscodeMediaEntry | null>(null);
   const [probe, setProbe] = useState<Record<string, unknown> | null>(null);
   const [outputDir, setOutputDir] = useState("");
@@ -79,12 +79,12 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
   };
 
   const previewCommand = async () => {
-    if (!selected || !presetId || !checkFoolproof()) return;
+    if (!selected || !presetDetail || !checkFoolproof()) return;
     setBusy(true);
     setError(null);
     try {
       setPreview(await api.transcode.preview({
-        presetId,
+        preset: presetDetail,
         input: selected.path,
         outputDir: outputDir.trim() || undefined,
       }));
@@ -94,6 +94,29 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
       setBusy(false);
     }
   };
+
+  // 选中文件 + 预设后自动预览命令（600ms 防抖）：3FUI 的自检入口，不用先点按钮。
+  useEffect(() => {
+    if (!selected || !presetDetail) {
+      setPreview(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void api.transcode
+        .preview({ preset: presetDetail, input: selected.path, outputDir: outputDir.trim() || undefined })
+        .then((answer) => {
+          if (!cancelled) setPreview(answer);
+        })
+        .catch(() => {
+          if (!cancelled) setPreview(null);
+        });
+    }, 600);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [selected, presetDetail, outputDir]);
 
   const enqueue = async () => {
     if (!selected || !presetId || !checkFoolproof()) return;
@@ -143,7 +166,10 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
               className="input"
               value={presetId}
               disabled={busy || presets.length === 0}
-              onChange={(e) => setPresetId(e.target.value)}
+              onChange={(e) => {
+                setPresetId(e.target.value);
+                if (e.target.value) sessionStorage.setItem("transcode.presetId", e.target.value);
+              }}
             >
               <option value="">选择参数面板 / 预设…</option>
               {presets.map((preset) => (
@@ -152,6 +178,15 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
                 </option>
               ))}
             </select>
+            {presetDetail && (
+              <div className="tc-prepare-summary">
+                <span className="tag plain">{String(presetDetail.videoEncoder ?? "—")}</span>
+                <span className="tag plain">{String(presetDetail.container ?? "—")}</span>
+                <span className="tag plain">{String(presetDetail.qualityMode ?? "")} {String(presetDetail.qualityValue ?? "")}</span>
+                <span className="tag plain">音频 {String(presetDetail.audioMode ?? "—")}</span>
+                <span className="tag plain">字幕 {String(presetDetail.subtitleMode ?? "—")}</span>
+              </div>
+            )}
             <label style={{ fontSize: 12 }}>输出目录（相对媒体根；空 = 源目录）</label>
             <input
               className="input"

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   api,
   type TranscodePreset,
@@ -10,8 +11,25 @@ import {
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
 import { Dialog } from "../../components/Dialog";
+import { ContentCopyIcon, RefreshIcon, SearchIcon } from "../../components/icons";
+
+/**
+ * 参数面板工作台。
+ *
+ * 交互按 3FUI 的流程复刻，而不是 HMCL 的“一张长表单”：
+ *   左：预设列表（单击预览，双击应用）  中左：分区导航
+ *   中：当前分区的字段（控制 + 说明）    右：参数总览 + 实时命令行
+ *
+ * 命令行不需要先选文件——后端支持用 `<输入文件>` 占位符生成，改任何参数
+ * 600ms 后自动刷新，和 3FUI 的“参数总览”一样是自检入口。
+ */
+
+type FieldIssue = { field: string; text: string };
+
+const RESTRICTIVE_CONTAINERS = ["mp4", "mov", "avi", "flv", "ts", "m2ts", "m4v"];
 
 export function PresetsPage() {
+  const nav = useNavigate();
   const [summaries, setSummaries] = useState<TranscodePresetSummary[]>([]);
   const [schema, setSchema] = useState<TranscodeSchema | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -19,19 +37,39 @@ export function PresetsPage() {
   const [draft, setDraft] = useState<TranscodePreset>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filterDialog, setFilterDialog] = useState(false);
-  const [inputPath, setInputPath] = useState("");
-  const [preview, setPreview] = useState<string>("");
-  const [previewError, setPreviewError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<string | null>(null);
+  const [presetSearch, setPresetSearch] = useState("");
+  const [fieldSearch, setFieldSearch] = useState("");
+  const [onlyChanged, setOnlyChanged] = useState(false);
+  const [preview, setPreview] = useState("");
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [saveAsOpen, setSaveAsOpen] = useState(false);
+  const [saveAsId, setSaveAsId] = useState("");
+  const [saveAsName, setSaveAsName] = useState("");
   const fileInput = useRef<HTMLInputElement | null>(null);
+  const previewSeq = useRef(0);
+
+  const baseDraft = useMemo(() => {
+    if (!schema) return {} as TranscodePreset;
+    const base: TranscodePreset = { name: "", description: "" };
+    for (const section of schema.sections) {
+      for (const field of section.fields) base[field.id] = field.default;
+    }
+    base.inputArgs = [];
+    base.videoArgs = [];
+    base.audioArgs = [];
+    base.subtitleArgs = [];
+    base.outputArgs = [];
+    return base;
+  }, [schema]);
 
   const loadList = async (preferred?: string) => {
     try {
       const answer = await api.transcode.presets();
       setSummaries(answer.presets);
-      const target = preferred ?? selectedId;
-      if (target) await select(target);
+      if (preferred) await select(preferred);
     } catch (e) {
       setError(errMsg(e));
     }
@@ -44,6 +82,9 @@ export function PresetsPage() {
       const answer = await api.transcode.preset(id);
       setEntry(answer);
       setDraft({ ...answer.preset });
+      setDirty(false);
+      setActiveSection(null);
+      sessionStorage.setItem("transcode.presetId", id);
     } catch (e) {
       setError(errMsg(e));
     }
@@ -51,26 +92,73 @@ export function PresetsPage() {
 
   useEffect(() => {
     void api.transcode.schema().then(setSchema).catch((e) => setError(errMsg(e)));
-    void loadList();
+    const preferred = sessionStorage.getItem("transcode.presetId");
+    void loadList(preferred && preferred.length > 0 ? preferred : undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    if (!schema || entry || Object.keys(draft).length > 0) return;
-    // No auto-selected preset: start from the schema's defaults, and only use a
-    // built-in/user preset after the operator explicitly clicks it.
-    const base: TranscodePreset = { name: "", description: "" };
-    for (const section of schema.sections) {
-      for (const field of section.fields) {
-        base[field.id] = field.default;
+    if (!schema || entry || dirty) return;
+    if (Object.keys(draft).length > 0) return;
+    setDraft(baseDraft);
+  }, [schema, entry, draft, baseDraft, dirty]);
+
+  // 实时命令行：改参数后 600ms 自动刷新，失败只显示在预览区，不弹 toast。
+  useEffect(() => {
+    if (!schema || Object.keys(draft).length === 0) return;
+    const seq = ++previewSeq.current;
+    const timer = window.setTimeout(() => {
+      if (!draft.container || !draft.videoEncoder || !draft.qualityMode || !draft.qualityValue) {
+        setPreview("");
+        setPreviewError("容器、视频编码器、质量模式与质量值是生成命令的必填项");
+        return;
       }
-    }
-    base.inputArgs = [];
-    base.videoArgs = [];
-    base.audioArgs = [];
-    base.subtitleArgs = [];
-    base.outputArgs = [];
-    setDraft(base);
-  }, [schema, entry, draft]);
+      setPreviewBusy(true);
+      void api.transcode
+        .preview({ preset: draft })
+        .then((answer) => {
+          if (seq !== previewSeq.current) return;
+          setPreview(answer.command);
+          setPreviewError(null);
+        })
+        .catch((e) => {
+          if (seq !== previewSeq.current) return;
+          setPreview("");
+          setPreviewError(errMsg(e));
+        })
+        .finally(() => {
+          if (seq === previewSeq.current) setPreviewBusy(false);
+        });
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [draft, schema]);
+
+  const update = (id: string, value: unknown) => {
+    setDirty(true);
+    setDraft((current) => {
+      const next = { ...current, [id]: value };
+      // 与 3FUI 一致的编码器联动：图片编码器丢音/字幕，硬件编码器清掉软件档位。
+      if (id === "videoEncoder") {
+        const encoder = String(value);
+        const image = /^(mjpeg|png|webp|libwebp|bmp|tiff|gif|avif|libaom-av1|jxl|libjxl|jpegxl)$/.test(encoder);
+        const hardware = /_vaapi|_qsv|_nvenc/.test(encoder);
+        if (image) {
+          next.audioMode = "none";
+          next.subtitleMode = "none";
+          next.copyAttachments = false;
+          next.copyChapters = false;
+        } else if (hardware) {
+          next.qualityMode = next.qualityMode === "bitrate" ? "bitrate" : "cqp";
+          next.preset = "";
+          next.profile = "";
+          next.tune = "";
+        } else if (next.qualityMode !== "bitrate") {
+          next.qualityMode = "crf";
+        }
+      }
+      return next;
+    });
+  };
 
   const save = async (id: string, next: TranscodePreset) => {
     setBusy(true);
@@ -79,6 +167,9 @@ export function PresetsPage() {
       const saved = await api.transcode.savePreset(id, next);
       setEntry(saved);
       setDraft({ ...saved.preset });
+      setDirty(false);
+      setSelectedId(saved.id);
+      sessionStorage.setItem("transcode.presetId", saved.id);
       await loadList(saved.id);
       toast("success", "预设已保存");
     } catch (e) {
@@ -89,36 +180,25 @@ export function PresetsPage() {
     }
   };
 
+  const openSaveAs = () => {
+    const id = selectedId ? `${selectedId}-copy` : "my-preset";
+    setSaveAsId(id);
+    setSaveAsName(String(draft.name ?? (entry?.builtin ? `${entry.id} 副本` : "我的参数")));
+    setSaveAsOpen(true);
+  };
+
   const saveAs = async () => {
-    if (!entry) return;
-    const id = window.prompt("新预设 id（字母/数字/._-）", `${entry.id}-copy`);
-    if (!id) return;
-    const name = window.prompt("预设名称", `${entry.preset.name ?? entry.id} 副本`);
-    if (!name) return;
-    await save(id, { ...draft, name });
-  };
-
-  const saveBlank = async () => {
-    if (!schema) return;
-    const id = window.prompt("保存为参数集 id（字母/数字/._-）", "my-params");
-    if (!id) return;
-    const name = window.prompt("参数集名称", "我的参数");
-    if (!name) return;
-    await save(id, { ...draft, name });
-    setActiveSection(null);
-  };
-
-  const create = async () => {
-    if (!schema) return;
-    const id = window.prompt("新预设 id（字母/数字/._-）", "my-preset");
-    if (!id) return;
-    const preset: TranscodePreset = { name: "新预设", description: "" };
-    for (const section of schema.sections) {
-      for (const field of section.fields) {
-        preset[field.id] = field.default;
-      }
+    const id = saveAsId.trim();
+    if (!/^[A-Za-z0-9._-]+$/.test(id)) {
+      toast("error", "id 只能包含字母、数字、点、下划线和短横线");
+      return;
     }
-    await save(id, preset);
+    if (!saveAsName.trim()) {
+      toast("error", "名称不能为空");
+      return;
+    }
+    setSaveAsOpen(false);
+    await save(id, { ...draft, name: saveAsName.trim() });
   };
 
   const remove = async () => {
@@ -130,6 +210,9 @@ export function PresetsPage() {
       toast("success", "预设已删除");
       setSelectedId(null);
       setEntry(null);
+      setDraft(baseDraft);
+      setDirty(false);
+      sessionStorage.removeItem("transcode.presetId");
       await loadList();
     } catch (e) {
       toast("error", errMsg(e));
@@ -138,28 +221,12 @@ export function PresetsPage() {
     }
   };
 
-  const previewCommand = async () => {
-    if (!inputPath.trim()) {
-      setPreviewError("先填一个相对媒体根的输入文件（例如 input.mp4）");
-      return;
-    }
-    setPreviewError(null);
-    try {
-      const answer = await api.transcode.preview({ preset: draft, input: inputPath.trim() });
-      setPreview(answer.command);
-    } catch (e) {
-      setPreviewError(errMsg(e));
-      setPreview("");
-    }
-  };
-
   const importFile = async (file: File) => {
     setBusy(true);
     setError(null);
     try {
       const data = JSON.parse(await file.text()) as Record<string, unknown>;
-      const id = window.prompt("导入为预设 id（字母/数字/._-）",
-        file.name.replace(/\.(3fui|json)$/i, ""));
+      const id = window.prompt("导入为预设 id（字母/数字/._-）", file.name.replace(/\.(3fui|json)$/i, ""));
       if (!id) return;
       const saved = await api.transcode.importPreset(id, data);
       toast("success", "预设已导入");
@@ -189,267 +256,278 @@ export function PresetsPage() {
     }
   };
 
-  const appendFilter = (filter: string) => {
-    const current = typeof draft.filterGraph === "string" ? draft.filterGraph.trim() : "";
-    update("filterGraph", current ? `${current},${filter}` : filter);
-    setFilterDialog(false);
-  };
-
-  const update = (id: string, value: unknown) => {
-    setDraft((current) => {
-      const next = { ...current, [id]: value };
-      if (id === "videoEncoder") {
-        const encoder = String(value);
-        const image = /^(mjpeg|png|webp|libwebp|bmp|tiff|gif|avif|libaom-av1|jxl|libjxl|jpegxl)$/.test(encoder);
-        const hardware = /_vaapi|_qsv|_nvenc/.test(encoder);
-        if (image) {
-          next.audioMode = "none";
-          next.subtitleMode = "none";
-          next.copyAttachments = false;
-          next.copyChapters = false;
-        } else if (hardware) {
-          // VAAPI/QSV/NVENC do not understand x264's `slower`/profile/tune in the
-          // same way; clearing them avoids the classic compression_level failure.
-          next.qualityMode = "cqp";
-          next.preset = "";
-          next.profile = "";
-          next.tune = "";
-        } else if (next.qualityMode !== "bitrate") {
-          next.qualityMode = "crf";
+  const changedFields = useMemo(() => {
+    const changed = new Set<string>();
+    if (!schema) return changed;
+    const baseline = entry?.preset ?? baseDraft;
+    for (const section of schema.sections) {
+      for (const field of section.fields) {
+        if (JSON.stringify(draft[field.id]) !== JSON.stringify(baseline[field.id])) changed.add(field.id);
+        else if (JSON.stringify(field.default) !== JSON.stringify(baseline[field.id])) {
+          // 新参数集：与 schema 默认值不同也算改过
+          if (!entry) changed.add(field.id);
         }
       }
-      if (id === "qualityMode" && value === "bitrate") {
-        // A bitrate mode does not use CRF/CQP; keep the field as the user typed.
-      }
-      return next;
-    });
-  };
+    }
+    return changed;
+  }, [draft, entry, schema, baseDraft]);
 
-  const warnings: string[] = [];
-  if (!draft.videoEncoder) warnings.push("没有选择视频编码器");
-  if (!draft.container) warnings.push("没有选择输出容器");
-  if (!draft.qualityValue) warnings.push("没有设置质量值/码率");
-  if (draft.audioMode === "copy" && draft.subtitleMode === "copy") {
-    warnings.push("音频/字幕均为 copy：请确认目标容器装得下全部轨道");
-  }
+  const issues = useMemo<FieldIssue[]>(() => {
+    const list: FieldIssue[] = [];
+    if (!draft.container) list.push({ field: "container", text: "没有选择输出容器" });
+    if (!draft.videoEncoder) list.push({ field: "videoEncoder", text: "没有选择视频编码器" });
+    if (!draft.qualityValue) list.push({ field: "qualityValue", text: "没有设置质量值 / 码率" });
+    const container = String(draft.container ?? "").toLowerCase();
+    if (String(draft.subtitleMode) === "burn" && !String(draft.subtitleFile ?? "").trim()) {
+      list.push({ field: "subtitleFile", text: "字幕模式是「烧录」，但没有指定字幕文件" });
+    }
+    if (RESTRICTIVE_CONTAINERS.includes(container)) {
+      if (String(draft.subtitleMode) === "copy") {
+        list.push({ field: "container", text: `${container.toUpperCase()} 只能装 mov_text 字幕，copy 其它字幕会报错` });
+      }
+      if (draft.copyAttachments === true) {
+        list.push({ field: "copyAttachments", text: `${container.toUpperCase()} 不支持附件流（字体/封面）` });
+      }
+      if (draft.copyChapters === true) {
+        list.push({ field: "copyChapters", text: `${container.toUpperCase()} 对章节支持有限，可能被丢弃` });
+      }
+    }
+    if (/_vaapi|_qsv|_nvenc/.test(String(draft.videoEncoder ?? "")) && String(draft.preset ?? "") !== "") {
+      list.push({ field: "preset", text: "硬件编码器会忽略软件 preset，保存前会被自动清空" });
+    }
+    return list;
+  }, [draft]);
+
+  const overview = useMemo(() => {
+    const video = String(draft.videoEncoder ?? "");
+    const quality = `${String(draft.qualityMode ?? "")} ${String(draft.qualityValue ?? "")}`.trim();
+    return [
+      { label: "视频", value: video || "—", field: "videoEncoder" },
+      { label: "质量", value: quality || "—", field: "qualityValue" },
+      { label: "容器", value: String(draft.container ?? "—"), field: "container" },
+      { label: "音频", value: String(draft.audioMode ?? "—"), field: "audioMode" },
+      { label: "字幕", value: String(draft.subtitleMode ?? "—"), field: "subtitleMode" },
+      { label: "命名", value: String(draft.outputNaming ?? "—"), field: "outputNaming" },
+    ];
+  }, [draft]);
+
+  const filteredPresets = summaries.filter((preset) => {
+    const q = presetSearch.trim().toLowerCase();
+    if (!q) return true;
+    return preset.name.toLowerCase().includes(q) || preset.id.toLowerCase().includes(q)
+      || preset.description.toLowerCase().includes(q);
+  });
+
+  const search = fieldSearch.trim().toLowerCase();
+  const sections = (schema?.sections ?? []).filter((section) => activeSection === null || activeSection === section.title);
+  const visibleSections = (search
+    ? sections.map((section) => ({
+        ...section,
+        fields: section.fields.filter((field) =>
+          field.label.toLowerCase().includes(search) || field.id.toLowerCase().includes(search)
+          || String(draft[field.id] ?? "").toLowerCase().includes(search)),
+      })).filter((section) => section.fields.length > 0)
+    : sections).map((section) => ({
+      ...section,
+      fields: onlyChanged ? section.fields.filter((field) => changedFields.has(field.id)) : section.fields,
+    })).filter((section) => section.fields.length > 0);
 
   return (
-    <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
-      <div className="card" style={{ flex: "0 1 200px", minWidth: 180, padding: 0 }}>
-        <div style={{ padding: "8px 10px 4px", fontSize: 12, fontWeight: 600 }}>
-          {entry ? "参数面板" : "自定义参数"}
-          <div style={{ fontSize: 11, fontWeight: 400, color: "var(--monet-on-surface-variant)",
-                        overflow: "hidden", textOverflow: "ellipsis" }}>
-            {entry ? entry.id : "未选择参数集"}
-          </div>
+    <div className="tc-workbench">
+      {/* ── 预设列表 ─────────────────────────────────────────────── */}
+      <aside className="card tc-preset-list">
+        <div className="tc-side-head">
+          <span>预设</span>
+          <button className="btn btn-text" disabled={busy} onClick={() => void loadList()}>
+            <RefreshIcon size={16} />
+          </button>
         </div>
-        <div className="list-body scroll-hover" style={{ maxHeight: 560 }}>
-          <div
-            className={`tlli ripple-host${activeSection === null ? " selected" : ""}`}
-            style={{ padding: "6px 10px", cursor: "pointer",
-                     background: activeSection === null ? "var(--monet-secondary-container)" : undefined }}
-            onClick={() => setActiveSection(null)}
+        <div className="tc-search">
+          <SearchIcon size={16} />
+          <input value={presetSearch} placeholder="搜索预设" onChange={(e) => setPresetSearch(e.target.value)} />
+        </div>
+        <div className="tc-side-actions">
+          <button
+            className="btn btn-text"
+            disabled={busy || !schema}
+            onClick={() => {
+              setEntry(null);
+              setSelectedId(null);
+              setDraft(baseDraft);
+              setDirty(false);
+              setActiveSection(null);
+              sessionStorage.removeItem("transcode.presetId");
+            }}
           >
-            <span className="tlli-text"><span className="tlli-title">参数总览</span></span>
-          </div>
-          <div
-            className={`tlli ripple-host${activeSection === "预设管理" ? " selected" : ""}`}
-            style={{ padding: "6px 10px", cursor: "pointer",
-                     background: activeSection === "预设管理" ? "var(--monet-secondary-container)" : undefined }}
-            onClick={() => setActiveSection("预设管理")}
-          >
-            <span className="tlli-text"><span className="tlli-title">预设管理</span></span>
-          </div>
-          {schema?.sections.map((section) => (
+            新建
+          </button>
+          <button className="btn btn-text" disabled={busy} onClick={() => fileInput.current?.click()}>
+            导入
+          </button>
+          <button className="btn btn-text" disabled={busy || !entry} onClick={() => void exportFile("3fui")}>
+            导出
+          </button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".json,.3fui,application/json"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void importFile(file);
+            }}
+          />
+        </div>
+        <div className="tc-preset-scroll scroll-hover">
+          {filteredPresets.length === 0 && (
+            <div className="tc-empty">没有匹配的预设</div>
+          )}
+          {filteredPresets.map((preset) => (
             <div
-              key={section.title}
-              className={`tlli ripple-host${activeSection === section.title ? " selected" : ""}`}
-              style={{ padding: "6px 10px", cursor: "pointer",
-                       background: activeSection === section.title ? "var(--monet-secondary-container)" : undefined }}
-              onClick={() => setActiveSection(section.title)}
+              key={preset.id}
+              className={`tc-preset-item${selectedId === preset.id ? " selected" : ""}`}
+              onClick={() => void select(preset.id)}
+              title={preset.description || preset.id}
             >
-              <span className="tlli-text"><span className="tlli-title">{section.title}</span></span>
+              <span className="tc-preset-name">
+                {preset.name}
+                <span className={`tag ${preset.builtin ? "plain" : "running"}`}>{preset.builtin ? "内置" : "自定义"}</span>
+              </span>
+              <span className="tc-preset-desc">{preset.description || preset.id}</span>
             </div>
           ))}
+        </div>
+      </aside>
+
+      {/* ── 分区导航 ─────────────────────────────────────────────── */}
+      <aside className="card tc-section-nav">
+        <div
+          className={`tc-nav-item${activeSection === null ? " selected" : ""}`}
+          onClick={() => setActiveSection(null)}
+        >
+          参数总览
+        </div>
+        {(schema?.sections ?? []).map((section) => (
           <div
-            className={`tlli ripple-host${activeSection === "自定义参数" ? " selected" : ""}`}
-            style={{ padding: "6px 10px", cursor: "pointer",
-                     background: activeSection === "自定义参数" ? "var(--monet-secondary-container)" : undefined }}
-            onClick={() => setActiveSection("自定义参数")}
+            key={section.title}
+            className={`tc-nav-item${activeSection === section.title ? " selected" : ""}`}
+            onClick={() => setActiveSection(section.title)}
           >
-            <span className="tlli-text"><span className="tlli-title">自定义参数</span></span>
+            {section.title}
+          </div>
+        ))}
+        <div
+          className={`tc-nav-item${activeSection === "自定义参数" ? " selected" : ""}`}
+          onClick={() => setActiveSection("自定义参数")}
+        >
+          自定义参数
+        </div>
+        <div className="tc-nav-divider" />
+        <button className="tc-nav-item" onClick={() => nav("/transcode?tab=prepare")}>
+          去准备文件 →
+        </button>
+      </aside>
+
+      {/* ── 参数区 ───────────────────────────────────────────────── */}
+      <section className="tc-editor">
+        <div className="card tc-editor-head">
+          <div className="tc-editor-title">
+            <input
+              className="input tc-name"
+              value={String(draft.name ?? "")}
+              placeholder="预设名称"
+              disabled={entry?.builtin === true}
+              onChange={(e) => update("name", e.target.value)}
+            />
+            <span className="mono tc-id">{entry ? entry.id : "未保存的自定义参数"}{entry?.builtin ? "（只读）" : ""}</span>
+            {dirty && <span className="tag plain">未保存</span>}
+          </div>
+          <input
+            className="input"
+            value={String(draft.description ?? "")}
+            placeholder="描述（可选）"
+            disabled={entry?.builtin === true}
+            onChange={(e) => update("description", e.target.value)}
+          />
+          <div className="tc-editor-actions">
+            {entry?.builtin ? (
+              <button className="btn btn-raised" disabled={busy} onClick={openSaveAs}>
+                另存为
+              </button>
+            ) : entry ? (
+              <>
+                <button className="btn btn-raised" disabled={busy || !dirty} onClick={() => void save(entry.id, draft)}>
+                  保存
+                </button>
+                <button className="btn btn-text" disabled={busy} onClick={openSaveAs}>
+                  另存为
+                </button>
+                <button className="btn btn-text danger" disabled={busy} onClick={() => void remove()}>
+                  删除
+                </button>
+              </>
+            ) : (
+              <button className="btn btn-raised" disabled={busy || !schema} onClick={openSaveAs}>
+                保存为预设
+              </button>
+            )}
+            <span style={{ flex: 1 }} />
+            <div className="tc-search-inline">
+              <SearchIcon size={16} />
+              <input value={fieldSearch} placeholder="搜索参数" onChange={(e) => setFieldSearch(e.target.value)} />
+            </div>
+            <label className="tc-check">
+              <input type="checkbox" checked={onlyChanged} onChange={(e) => setOnlyChanged(e.target.checked)} />
+              只看已改
+            </label>
           </div>
         </div>
-      </div>
 
-      <div style={{ flex: "1 1 560px", minWidth: 0, display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div style={{ flex: "1 1 420px", minWidth: 0, display: "grid", gap: 8 }}>
         {error && (
-          <div className="card">
-            <div className="comp-row">
-              <span className="comp-label">错误</span>
-              <span className="comp-value" style={{ color: "var(--monet-error)" }}>{error}</span>
-            </div>
-          </div>
+          <div className="card tc-error">{error}</div>
         )}
-        {activeSection === null && warnings.length > 0 && (
-          <div className="card">
-            <div className="comp-row">
-              <span className="comp-label">参数总览 · 警告</span>
-              <span className="comp-value" style={{ fontSize: 12 }}>{warnings.length} 条</span>
-            </div>
-            <div style={{ display: "grid", gap: 2, padding: "4px 8px 8px", fontSize: 12 }}>
-              {warnings.map((warning, index) => (
-                <span key={warning} style={{ color: "var(--monet-error)" }}>
-                  {index + 1}. {warning}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-        {activeSection === "预设管理" && (
-          <div className="card" style={{ padding: 0 }}>
-            <div style={{ display: "flex", gap: 6, padding: "8px 8px 4px", flexWrap: "wrap" }}>
-              <button className="btn btn-text" disabled={busy || !schema} onClick={() => void create()}>
-                新建
-              </button>
-              <button className="btn btn-text" disabled={busy} onClick={() => void loadList()}>
-                刷新
-              </button>
-              <button className="btn btn-text" disabled={busy} onClick={() => fileInput.current?.click()}>
-                导入
-              </button>
-              <button className="btn btn-text" disabled={busy || !entry} onClick={() => void exportFile("3fui")}>
-                导出 .3fui
-              </button>
-              <input
-                ref={fileInput}
-                type="file"
-                accept=".json,.3fui,application/json"
-                style={{ display: "none" }}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) void importFile(file);
-                }}
-              />
-            </div>
-            <div style={{ padding: "0 10px 6px", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-              只有点击下面的条目才会使用该参数集；默认是未选择的“自定义参数”。
-            </div>
-            <div className="list-body scroll-hover" style={{ maxHeight: 520 }}>
-              {summaries.map((preset) => (
-                <div
-                  key={preset.id}
-                  className={`tlli ripple-host${selectedId === preset.id ? " selected" : ""}`}
-                  style={{ padding: "7px 10px", cursor: "pointer",
-                           background: selectedId === preset.id ? "var(--monet-secondary-container)" : undefined }}
-                  onClick={() => {
-                    void select(preset.id);
-                    setActiveSection(null);
-                  }}
-                >
-                  <span className="tlli-text" style={{ minWidth: 0 }}>
-                    <span className="tlli-title" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {preset.name}
-                      <span className={`tag ${preset.builtin ? "plain" : "running"}`} style={{ fontSize: 10, marginLeft: 6 }}>
-                        {preset.builtin ? "内置" : "自定义"}
-                      </span>
-                    </span>
-                    <span className="tlli-subtitle" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {preset.description || preset.id}
-                    </span>
-                  </span>
+
+        {(activeSection === null || activeSection === "自定义参数") && (
+          <div className="card tc-overview-card">
+            <div className="tc-card-title">参数总览</div>
+            <div className="tc-overview-grid">
+              {overview.map((item) => (
+                <div key={item.label} className="tc-overview-cell">
+                  <span className="tc-overview-label">{item.label}</span>
+                  <span className="tc-overview-value mono">{item.value}</span>
                 </div>
               ))}
             </div>
-          </div>
-        )}
-
-        {activeSection !== "预设管理" && !entry && (
-          <div className="card">
-            <div className="comp-row">
-              <span className="comp-label">未选择参数集</span>
-              <span className="comp-value" style={{ fontSize: 12 }}>当前为自定义参数</span>
-            </div>
-            <p style={{ fontSize: 12, padding: "4px 8px", color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
-              不会自动套用任何内置预设。改完字段后可另存为参数集，或在准备文件里选择“参数面板 / 预设”。
-            </p>
-            <div style={{ display: "grid", gap: 6, padding: "4px 8px 8px", gridTemplateColumns: "1fr 2fr" }}>
-              <input className="input" placeholder="名称" value={String(draft.name ?? "")}
-                     onChange={(e) => update("name", e.target.value)} />
-              <input className="input" placeholder="描述" value={String(draft.description ?? "")}
-                     onChange={(e) => update("description", e.target.value)} />
-            </div>
-            <div style={{ display: "flex", gap: 8, padding: "0 8px 8px" }}>
-              <button className="btn btn-raised" disabled={busy} onClick={() => void saveBlank()}>
-                另存为参数集
-              </button>
-            </div>
-          </div>
-        )}
-
-        {activeSection !== "预设管理" && entry && (
-          <div className="card">
-            <div className="comp-row">
-              <span className="comp-label">参数集</span>
-              <span className="comp-value mono" style={{ fontSize: 12 }}>
-                {entry.id} {entry.builtin ? "（只读）" : ""}
-              </span>
-            </div>
-            <div style={{ display: "grid", gap: 6, padding: "4px 8px 8px" }}>
-              <label style={{ fontSize: 12 }}>名称</label>
-              <input
-                className="input"
-                value={String(draft.name ?? "")}
-                disabled={entry.builtin}
-                onChange={(e) => update("name", e.target.value)}
-              />
-              <label style={{ fontSize: 12 }}>描述</label>
-              <input
-                className="input"
-                value={String(draft.description ?? "")}
-                disabled={entry.builtin}
-                onChange={(e) => update("description", e.target.value)}
-              />
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", paddingTop: 4 }}>
-                {entry.builtin ? (
-                  <button className="btn btn-raised" disabled={busy} onClick={() => void saveAs()}>
-                    另存为
+            {issues.length > 0 && (
+              <div className="tc-issues">
+                {issues.map((issue) => (
+                  <button
+                    key={issue.text}
+                    className="tc-issue"
+                    onClick={() => {
+                      const section = schema?.sections.find((s) => s.fields.some((f) => f.id === issue.field));
+                      if (section) setActiveSection(section.title);
+                    }}
+                  >
+                    {issue.text}
                   </button>
-                ) : (
-                  <>
-                    <button className="btn btn-raised" disabled={busy} onClick={() => void save(entry.id, draft)}>
-                      保存
-                    </button>
-                    <button className="btn btn-text danger" disabled={busy} onClick={() => void remove()}>
-                      删除
-                    </button>
-                  </>
-                )}
+                ))}
               </div>
-            </div>
+            )}
+            {issues.length === 0 && <div className="tc-ok">参数没有明显问题</div>}
           </div>
         )}
 
-        {schema?.sections.filter((section) => activeSection === null || activeSection === section.title).map((section) => (
-          <div className="card" key={section.title}>
-            <div className="comp-row">
-              <span className="comp-label">{section.title}</span>
-              {section.title.includes("滤镜") && (
-                <span className="comp-value">
-                  <button className="btn btn-text" disabled={entry?.builtin === true} onClick={() => setFilterDialog(true)}>
-                    滤镜选择
-                  </button>
-                </span>
-              )}
-            </div>
-            <div style={{ display: "grid", gap: 6, padding: "4px 8px 8px",
-                          gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>
+        {visibleSections.map((section) => (
+          <div className="card tc-fields-card" key={section.title}>
+            <div className="tc-card-title">{section.title}</div>
+            <div className="tc-fields-grid">
               {section.fields.map((field) => (
                 <Field
                   key={field.id}
                   field={field}
                   value={draft[field.id] ?? field.default}
+                  changed={changedFields.has(field.id)}
                   disabled={entry?.builtin === true}
                   onChange={(value) => update(field.id, value)}
                 />
@@ -461,58 +539,77 @@ export function PresetsPage() {
         {(activeSection === null || activeSection === "自定义参数") && (
           <CustomArgsEditor draft={draft} disabled={entry?.builtin === true} update={update} />
         )}
-        </div>
+      </section>
 
-        <div className="card" style={{ flex: "0 1 340px", minWidth: 280, position: "sticky", top: 8 }}>
-          <div className="comp-row">
-            <span className="comp-label">命令行预览</span>
-            <span className="comp-value" style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
-              只生成，不执行
+      {/* ── 右侧：命令行 ─────────────────────────────────────────── */}
+      <aside className="tc-inspector">
+        <div className="card tc-command-card">
+          <div className="tc-card-title">
+            实时命令行
+            <span className="tc-command-state">
+              {previewBusy ? "生成中…" : previewError ? "生成失败" : "只生成，不执行"}
             </span>
           </div>
-          <div style={{ display: "grid", gap: 5, padding: "4px 8px 8px" }}>
-            <input className="input" value={inputPath} placeholder="输入文件（相对媒体根）"
-                   onChange={(e) => setInputPath(e.target.value)} />
-            <button className="btn btn-text" disabled={!schema} onClick={() => void previewCommand()}>
-              生成命令
+          <div className="tc-command-actions">
+            <button
+              className="btn btn-text"
+              disabled={!preview}
+              onClick={() => {
+                void navigator.clipboard?.writeText(preview).then(
+                  () => toast("success", "命令行已复制"),
+                  () => toast("error", "复制失败（需要 HTTPS 或 localhost）"),
+                );
+              }}
+            >
+              <ContentCopyIcon size={16} />
+              复制
             </button>
-            {previewError && (
-              <span style={{ fontSize: 11, color: "var(--monet-error)" }}>{previewError}</span>
-            )}
-            <pre style={{ margin: 0, padding: 8, maxHeight: 360, overflow: "auto", fontSize: 10,
-                          lineHeight: 1.5, background: "var(--monet-surface-container-low)",
-                          whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-              {preview || "选择参数集、填输入文件后生成"}
-            </pre>
+            <button
+              className="btn btn-text"
+              disabled={previewBusy}
+              onClick={() => {
+                // 触发上面的防抖 effect：改一个无意义字段会立刻重算，不必等 600ms。
+                setDraft((current) => ({ ...current }));
+              }}
+            >
+              立即刷新
+            </button>
           </div>
+          {previewError ? (
+            <div className="tc-command-error">{previewError}</div>
+          ) : (
+            <pre className="tc-command">{preview || "改一个参数就会在这里看到命令"}</pre>
+          )}
+          <p className="tc-command-note">
+            输入/输出用 <span className="mono">&lt;输入文件&gt;</span> 占位；实际入队时会替换成媒体根里的真实路径。
+          </p>
         </div>
-      </div>
+      </aside>
 
-      <Dialog open={filterDialog} title="追加视频滤镜" onClose={() => setFilterDialog(false)}>
-        <div style={{ display: "grid", gap: 6, maxWidth: 420 }}>
-          {FILTERS.map((filter) => (
-            <button key={filter.value} className="btn btn-text" style={{ justifyContent: "flex-start" }}
-                    onClick={() => appendFilter(filter.value)}>
-              {filter.label} <span className="mono" style={{ fontSize: 11, opacity: 0.7 }}>{filter.value}</span>
-            </button>
-          ))}
+      <Dialog
+        open={saveAsOpen}
+        title="保存为预设"
+        onClose={() => setSaveAsOpen(false)}
+        footer={
+          <>
+            <button className="btn btn-text" onClick={() => setSaveAsOpen(false)}>取消</button>
+            <button className="btn btn-raised" disabled={busy} onClick={() => void saveAs()}>保存</button>
+          </>
+        }
+      >
+        <div style={{ display: "grid", gap: 8 }}>
+          <label style={{ fontSize: 12 }}>预设 id（字母/数字/._-）</label>
+          <input className="input" value={saveAsId} onChange={(e) => setSaveAsId(e.target.value)} />
+          <label style={{ fontSize: 12 }}>名称</label>
+          <input className="input" value={saveAsName} onChange={(e) => setSaveAsName(e.target.value)} />
+          <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+            同名 id 会覆盖已有用户预设；内置预设不会被修改。
+          </span>
         </div>
       </Dialog>
     </div>
   );
 }
-
-const FILTERS = [
-  { label: "缩放到 1080p", value: "scale=-2:1080" },
-  { label: "缩放到 720p", value: "scale=-2:720" },
-  { label: "固定帧率 30", value: "fps=30" },
-  { label: "去隔行", value: "yadif" },
-  { label: "裁掉顶部 10%", value: "crop=iw:ih*0.9:0:0" },
-  { label: "水平翻转", value: "hflip" },
-  { label: "垂直翻转", value: "vflip" },
-  { label: "顺时针旋转 90°", value: "transpose=1" },
-  { label: "轻量调色", value: "eq=contrast=1.05:saturation=1.1" },
-];
 
 function CustomArgsEditor({
   draft,
@@ -523,18 +620,13 @@ function CustomArgsEditor({
   disabled: boolean;
   update: (id: string, value: unknown) => void;
 }) {
-  const listText = (value: unknown) => Array.isArray(value) ? value.join("\n") : "";
+  const listText = (value: unknown) => (Array.isArray(value) ? value.join("\n") : "");
   const setList = (id: string, text: string) =>
     update(id, text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
   return (
-    <div className="card">
-      <div className="comp-row">
-        <span className="comp-label">自定义参数</span>
-        <span className="comp-value" style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
-          每行一个 argv，不做 shell 解析
-        </span>
-      </div>
-      <div style={{ display: "grid", gap: 6, padding: "4px 8px 8px" }}>
+    <div className="card tc-fields-card">
+      <div className="tc-card-title">自定义参数</div>
+      <div className="tc-custom-grid">
         {[
           ["inputArgs", "输入前参数"],
           ["videoArgs", "视频附加参数"],
@@ -542,8 +634,8 @@ function CustomArgsEditor({
           ["subtitleArgs", "字幕附加参数"],
           ["outputArgs", "输出前参数"],
         ].map(([id, label]) => (
-          <label key={id} style={{ display: "grid", gap: 3, fontSize: 12 }}>
-            <span>{label}</span>
+          <label key={id} className="tc-field">
+            <span className="tc-field-label">{label}</span>
             <textarea
               className="input"
               rows={2}
@@ -551,6 +643,7 @@ function CustomArgsEditor({
               value={listText(draft[id])}
               onChange={(e) => setList(id, e.target.value)}
             />
+            <span className="tc-field-hint">每行一个 argv，不做 shell 解析</span>
           </label>
         ))}
       </div>
@@ -561,45 +654,45 @@ function CustomArgsEditor({
 function Field({
   field,
   value,
+  changed,
   disabled,
   onChange,
 }: {
   field: TranscodeSchemaField;
   value: unknown;
+  changed: boolean;
   disabled: boolean;
   onChange: (value: unknown) => void;
 }) {
-  if (field.type === "switch") {
-    return (
-      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
-        <input
-          type="checkbox"
-          checked={value === true}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.checked)}
-        />
+  const optionHint = field.type === "select"
+    ? field.optionHints?.[String(value ?? "")]
+    : undefined;
+  return (
+    <label className={`tc-field${field.important ? " important" : ""}`}>
+      <span className="tc-field-label">
         {field.label}
-      </label>
-    );
-  }
-  if (field.type === "textarea") {
-    return (
-      <label style={{ display: "grid", gap: 3, fontSize: 12 }}>
-        <span>{field.label}</span>
+        {changed && <span className="tc-changed-dot" title="与基线不同" />}
+      </span>
+      {field.type === "switch" ? (
+        <span className="tc-switch">
+          <input
+            type="checkbox"
+            checked={value === true}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.checked)}
+          />
+          <span>{value === true ? "开启" : "关闭"}</span>
+        </span>
+      ) : field.type === "textarea" ? (
         <textarea
           className="input"
           rows={3}
           value={String(value ?? "")}
           disabled={disabled}
+          placeholder={field.hint}
           onChange={(e) => onChange(e.target.value)}
         />
-      </label>
-    );
-  }
-  return (
-    <label style={{ display: "grid", gap: 3, fontSize: 12 }}>
-      <span>{field.label}</span>
-      {field.type === "select" ? (
+      ) : field.type === "select" ? (
         <select
           className="input"
           value={String(value ?? "")}
@@ -607,7 +700,7 @@ function Field({
           onChange={(e) => onChange(e.target.value)}
         >
           {(field.options ?? []).map((option) => (
-            <option key={option} value={option}>
+            <option key={option} value={option} title={field.optionHints?.[option]}>
               {option || "（默认）"}
             </option>
           ))}
@@ -619,6 +712,9 @@ function Field({
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
         />
+      )}
+      {(optionHint || field.hint) && (
+        <span className="tc-field-hint">{optionHint ?? field.hint}</span>
       )}
     </label>
   );
