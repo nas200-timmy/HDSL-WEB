@@ -18,7 +18,10 @@
 package org.jackhuang.hmcl.web.system;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -51,4 +54,26 @@ class GpuReaderTest {
         assertEquals(-1, gpus.get(0).utilization(), 0.0001);
         assertEquals(-1, gpus.get(0).memoryUsedBytes());
     }
+    @Test
+    void readsAmdSysfsAndFallsBackToUnknownCards(@TempDir Path dir) throws Exception {
+        Path card0 = dir.resolve("card0");
+        Path device0 = Files.createDirectories(card0.resolve("device"));
+        Files.writeString(device0.resolve("vendor"), "0x1002\n");
+        Files.writeString(device0.resolve("gpu_busy_percent"), "50\n");
+        Files.writeString(device0.resolve("mem_info_vram_used"), "1024\n");
+        Files.writeString(device0.resolve("mem_info_vram_total"), "2048\n");
+
+        Path card1 = dir.resolve("card1");
+        Path device1 = Files.createDirectories(card1.resolve("device"));
+        // vendor unreadable: still show a card so /dev/dri being mounted is not
+        // reported as "no GPU at all".
+
+        var reader = new GpuReaders.LinuxGpuReader(dir);
+        var gpus = reader.read();
+        assertEquals(2, gpus.size());
+        assertEquals("AMD", gpus.get(0).vendor());
+        assertEquals(0.5, gpus.get(0).utilization(), 0.0001);
+        assertEquals("unknown", gpus.get(1).vendor());
+    }
+
 }

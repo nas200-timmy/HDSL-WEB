@@ -283,10 +283,37 @@ final class GpuReaders {
                         result.add(amd(device, result.size()));
                     } else if ("0x8086".equalsIgnoreCase(vendor)) {
                         result.add(intel(device, result.size()));
+                    } else if (vendor.isBlank()) {
+                        // sysfs is sometimes masked/partially visible inside a container.
+                        // Showing an "unknown" card with empty charts is more honest than
+                        // claiming there is no GPU when /dev/dri is mounted.
+                        result.add(unknown(device, result.size(), card.getFileName().toString()));
                     }
                 }
             } catch (IOException ignored) {
                 return result;
+            }
+            if (result.isEmpty()) {
+                // Some container setups expose only renderD* nodes; card* may be absent.
+                try (var stream = Files.list(drm)) {
+                    List<Path> renders = stream
+                            .filter(path -> path.getFileName().toString().matches("renderD[0-9]+"))
+                            .sorted()
+                            .toList();
+                    for (Path render : renders) {
+                        Path device = render.resolve("device");
+                        if (Files.isDirectory(device)) {
+                            result.add(unknown(device, result.size(), render.getFileName().toString()));
+                        }
+                    }
+                } catch (IOException ignored) {
+                }
+            }
+            if (result.isEmpty() && Files.isDirectory(Path.of("/dev/dri"))) {
+                // The device node is mounted but sysfs is masked: still show a GPU panel
+                // with empty charts instead of claiming the host has no GPU.
+                result.add(new SystemSnapshot.Gpu(0, "DRM GPU", "unknown", "dev/dri",
+                        -1, -1, -1, -1, -1, -1, -1));
             }
             return result;
         }
@@ -304,6 +331,12 @@ final class GpuReaders {
             return new SystemSnapshot.Gpu(index, "AMD GPU", "AMD", "sysfs",
                     utilization < 0 ? -1 : utilization / 100.0, -1, -1,
                     used, total, temp, -1);
+        }
+
+        private static SystemSnapshot.Gpu unknown(Path device, int index, String node) {
+            double temp = hwmon(device, "temp1_input");
+            return new SystemSnapshot.Gpu(index, "DRM " + node, "unknown", "sysfs",
+                    -1, -1, -1, -1, -1, temp, -1);
         }
 
         private static SystemSnapshot.Gpu intel(Path device, int index) {
