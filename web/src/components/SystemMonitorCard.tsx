@@ -306,6 +306,7 @@ export function SystemMonitorCard() {
   const [tab, setTab] = useState<PerfTab>("overview");
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null);
   const [history, setHistory] = useState<SystemSnapshot[]>([]);
+  const [gpuIndex, setGpuIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [intervalMs, setIntervalMs] = useState(2000);
   const [paused, setPaused] = useState(false);
@@ -385,7 +386,7 @@ export function SystemMonitorCard() {
     const decoder: Point[] = [];
     const memory: Point[] = [];
     for (const sample of history.slice(-60)) {
-      const gpu = sample.gpus[0];
+      const gpu = sample.gpus[gpuIndex] ?? sample.gpus[0];
       if (!gpu) continue;
       const t = Date.parse(sample.at);
       if (!Number.isFinite(t)) continue;
@@ -395,7 +396,7 @@ export function SystemMonitorCard() {
       if (gpu.memoryUsedBytes >= 0) memory.push({ t, v: gpu.memoryUsedBytes });
     }
     return { utilization, encoder, decoder, memory };
-  }, [history]);
+  }, [history, gpuIndex]);
 
   const memoryMax = useMemo(() => {
     let max = 0;
@@ -677,6 +678,23 @@ export function SystemMonitorCard() {
             {activeTab === "gpu" && (
               <div className="perf-layout">
                 <div className="perf-main">
+                  {snapshot.gpus.length > 0 && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 2px 6px" }}>
+                      <span className="perf-label">显卡</span>
+                      <select
+                        className="input"
+                        style={{ width: "auto", minWidth: 180 }}
+                        value={Math.min(gpuIndex, snapshot.gpus.length - 1)}
+                        onChange={(e) => setGpuIndex(Number(e.target.value) || 0)}
+                      >
+                        {snapshot.gpus.map((gpu, index) => (
+                          <option key={gpu.index} value={index}>
+                            {index}: {gpu.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                   {snapshot.gpus.length === 0 ? (
                     <div className="comp-row">
                       <span className="comp-label">GPU</span>
@@ -685,20 +703,23 @@ export function SystemMonitorCard() {
                       </span>
                     </div>
                   ) : (
-                    snapshot.gpus.map((gpu) => (
-                      <div key={gpu.index} style={{ paddingBottom: 8 }}>
-                        <div className="perf-big">{pct(gpu.utilization)}</div>
-                        <div className="perf-label">
-                          {gpu.name} · {gpu.vendor || "GPU"} · {gpu.backend || ""} ·{" "}
-                          编码 {pct(gpu.encoderUtilization ?? -1)} · 解码 {pct(gpu.decoderUtilization ?? -1)}
+                    (() => {
+                      const gpu = snapshot.gpus[Math.min(gpuIndex, snapshot.gpus.length - 1)];
+                      return (
+                        <div style={{ paddingBottom: 8 }}>
+                          <div className="perf-big">{pct(gpu.utilization)}</div>
+                          <div className="perf-label">
+                            {gpu.name} · {gpu.vendor || "GPU"} · {gpu.backend || ""} ·{" "}
+                            编码 {pct(gpu.encoderUtilization ?? -1)} · 解码 {pct(gpu.decoderUtilization ?? -1)}
+                          </div>
+                          <div className="perf-label">
+                            显存 {fmtBytes(gpu.memoryUsedBytes)} / {fmtBytes(gpu.memoryTotalBytes)} ·{" "}
+                            {gpu.temperatureC >= 0 ? `${gpu.temperatureC.toFixed(0)}°C` : "温度 —"} ·{" "}
+                            {(gpu.powerW ?? -1) >= 0 ? `${gpu.powerW!.toFixed(0)} W` : "功耗 —"}
+                          </div>
                         </div>
-                        <div className="perf-label">
-                          显存 {fmtBytes(gpu.memoryUsedBytes)} / {fmtBytes(gpu.memoryTotalBytes)} ·{" "}
-                          {gpu.temperatureC >= 0 ? `${gpu.temperatureC.toFixed(0)}°C` : "温度 —"} ·{" "}
-                          {(gpu.powerW ?? -1) >= 0 ? `${gpu.powerW!.toFixed(0)} W` : "功耗 —"}
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })()
                   )}
                   {snapshot.gpus.length > 0 && (
                     <div style={{ display: "grid", gap: 8, paddingTop: 4 }}>
