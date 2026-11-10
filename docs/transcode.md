@@ -24,6 +24,8 @@
 - 元数据/章节/附件、滤镜选择器、自定义参数编辑器、`.3fui` 双向尽力映射。
 - ffmpeg 静态包 / apt-dnf / 源码编译的在线安装 UI（SHA-256、进度、日志、取消）。
 - 失败策略持久化（写回 server.yaml）与超时链路测试。
+- 3FUI 防呆：图片编码器跳过音/字幕、QSV `-low_power 1`、VAAPI 自动注入、
+  容器兼容提醒、编码器切换清理 preset/profile/tune、1 帧实测、任务 argv 展示。
 - Agent scope `transcode` / `transcode-raw`；容器媒体根、`/dev/dri`/NVIDIA 直通参数与冒烟脚本。
 
 尚未完成（后续提交）：
@@ -31,6 +33,10 @@
 - Windows 的 AMD/Intel GPU 进程表与 Intel 整卡利用率（Linux sysfs/NVIDIA 已有；
   Windows 目前只有 nvidia-smi 摘要，性能页的显卡下拉已支持多卡）。
 - Windows PDH 每进程 GPU 引擎计数的解析与前端进程表。
+- 3FUI 防呆尚未完全搬：容器兼容目前是“继续/取消”确认，不是“改 MKV /
+  丢弃不兼容项 / 取消”三选；编码器参数值列表只做了切换清理，没有逐项校验；
+  编码器故障探测仍是失败后决策，不是启动探测/任务前检查/stderr 三层自动；
+  Agent 写操作确认卡与工具目录、应急上传三重校验仍未做。
 
 ## Context
 
