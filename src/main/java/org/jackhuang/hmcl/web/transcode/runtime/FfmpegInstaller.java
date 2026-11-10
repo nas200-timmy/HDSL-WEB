@@ -99,9 +99,9 @@ public final class FfmpegInstaller {
         if (!List.of("static", "package", "compile").contains(kind)) {
             throw new IOException("kind must be static, package or compile");
         }
-        if (("static".equals(kind) || "compile".equals(kind))) {
-            if (url == null || url.isBlank() || sha256 == null || sha256.isBlank()) {
-                throw new IOException("url and sha256 are required for " + kind);
+        if ("static".equals(kind) || "compile".equals(kind)) {
+            if (url == null || url.isBlank()) {
+                throw new IOException("url is required for " + kind);
             }
             validateUrl(url);
         }
@@ -272,9 +272,10 @@ public final class FfmpegInstaller {
             }
         }
         String actual = HexFormat.of().formatHex(digest.digest());
-        if (!actual.equalsIgnoreCase(sha256.trim())) {
+        String expected = expectedSha(sha256, uri, archive.getFileName().toString());
+        if (!actual.equalsIgnoreCase(expected)) {
             Files.deleteIfExists(archive);
-            throw new IOException("SHA-256 mismatch: expected " + sha256 + ", got " + actual);
+            throw new IOException("SHA-256 mismatch: expected " + expected + ", got " + actual);
         }
         job.progress = 0.7;
         return archive;
@@ -300,6 +301,58 @@ public final class FfmpegInstaller {
         makeExecutable(current.resolve("ffmpeg"));
         makeExecutable(current.resolve("ffprobe"));
         job.progress = 0.95;
+    }
+
+    /// `auto` (or an empty field) means "read the publisher's sidecar": `<url>.sha256`,
+    /// then `checksums.sha256` / `SHA256SUMS` in the same directory. If none exists the
+    /// job fails with the exact URL it tried; a custom URL must still supply a hash.
+    private static String expectedSha(@Nullable String sha256, URI uri, String fileName)
+            throws IOException, InterruptedException {
+        if (sha256 != null && !sha256.isBlank() && !"auto".equalsIgnoreCase(sha256)) {
+            return sha256.trim();
+        }
+        for (String candidate : List.of(uri.toString() + ".sha256",
+                uri.resolve("checksums.sha256").toString(),
+                uri.resolve("SHA256SUMS").toString())) {
+            String body = fetchSmall(candidate);
+            if (body == null) {
+                continue;
+            }
+            for (String line : body.split("\\R")) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+                String[] parts = trimmed.split("\s+");
+                if (parts.length >= 2 && parts[1].contains(fileName)) {
+                    String hash = parts[0].replace("*", "");
+                    if (hash.matches("[0-9a-fA-F]{64}")) {
+                        return hash;
+                    }
+                }
+                if (parts.length == 1 && parts[0].matches("[0-9a-fA-F]{64}")) {
+                    return parts[0];
+                }
+            }
+        }
+        throw new IOException("no SHA-256 sidecar at " + uri + ".sha256; fill the SHA-256 field");
+    }
+
+    private static @Nullable String fetchSmall(String url) throws IOException, InterruptedException {
+        try {
+            HttpClient client = HttpClient.newBuilder()
+                    .followRedirects(HttpClient.Redirect.NORMAL)
+                    .connectTimeout(Duration.ofSeconds(5))
+                    .build();
+            HttpResponse<String> response = client.send(
+                    HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10)).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() == 200 && response.body().length() < 2_000_000) {
+                return response.body();
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return null;
     }
 
     private static void extract(Path archive, Path destination) throws Exception {

@@ -137,9 +137,12 @@ export function TranscodeSettingsPage() {
           </select>
           {installKind !== "package" && (
             <>
-              <input className="input" placeholder="https 下载地址（zip / tar.xz）"
+              <input className="input"
+                     placeholder={installKind === "compile"
+                       ? "https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz"
+                       : "https://…/ffmpeg-release-essentials.zip 或 .tar.xz"}
                      value={installUrl} onChange={(e) => setInstallUrl(e.target.value)} />
-              <input className="input" placeholder="SHA-256（必填）"
+              <input className="input" placeholder="SHA-256（留空 = 自动读取 .sha256 / checksums.sha256）"
                      value={installSha} onChange={(e) => setInstallSha(e.target.value)} />
               <input className="input" placeholder="安装目录名（可选，例如 7.1.5）"
                      value={installVersion} onChange={(e) => setInstallVersion(e.target.value)} />
@@ -147,7 +150,7 @@ export function TranscodeSettingsPage() {
           )}
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn btn-raised" disabled={installJob?.state === "running"
-              || (installKind !== "package" && (!installUrl || !installSha))}
+              || (installKind !== "package" && !installUrl)}
                     onClick={() => void startInstall()}>
               {installKind === "package" ? "开始安装" : installKind === "static" ? "下载并安装" : "开始编译"}
             </button>
@@ -159,7 +162,8 @@ export function TranscodeSettingsPage() {
             )}
           </div>
           <p style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
-            静态包必须提供 SHA-256；源码编译需要 make/gcc/pkg-config 与 libx264/libx265/libva 开发包。
+            SHA-256 留空时面板会尝试读取发布方的 `.sha256` / `checksums.sha256`；读不到会失败并给
+            出地址，不会跳过校验。源码编译需要 make/gcc/pkg-config 与 libx264/libx265/libva 开发包。
             包管理器安装只对当前容器有效，重建后需重装；静态包与编译结果在数据卷里。
           </p>
           {installJob && (
