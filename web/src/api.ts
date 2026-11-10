@@ -964,6 +964,40 @@ export const api = {
     }) => request<TranscodeFeature>("/api/transcode/feature/enable", jsonInit("POST", body)),
     decline: () => request<TranscodeFeature>("/api/transcode/feature/decline", jsonInit("POST", {})),
     disable: () => request<TranscodeFeature>("/api/transcode/feature/disable", jsonInit("POST", {})),
+    capabilities: () => request<TranscodeCapabilities>("/api/transcode/capabilities"),
+    mediaList: (path = "", page = 0, pageSize = 200) =>
+      request<TranscodeMediaListing>(
+        `/api/transcode/media/list?path=${encodeURIComponent(path)}&page=${page}&pageSize=${pageSize}`,
+      ),
+    mediaProbe: (path: string) =>
+      request<Record<string, unknown>>(`/api/transcode/media/probe?path=${encodeURIComponent(path)}`),
+    presets: () => request<{ presets: TranscodePresetSummary[] }>("/api/transcode/presets"),
+    preset: (id: string) =>
+      request<TranscodePresetEntry>(`/api/transcode/presets/${encodeURIComponent(id)}`),
+    schema: () => request<TranscodeSchema>("/api/transcode/presets/schema"),
+    savePreset: (id: string, preset: Record<string, unknown>) =>
+      request<TranscodePresetEntry>("/api/transcode/presets", jsonInit("POST", { id, preset })),
+    deletePreset: (id: string) =>
+      request<{ ok: boolean }>(`/api/transcode/presets/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    preview: (body: { presetId?: string; preset?: Record<string, unknown>; input: string; outputDir?: string }) =>
+      request<TranscodePreview>("/api/transcode/preview", jsonInit("POST", body)),
+    queue: () => request<TranscodeQueueSnapshot>("/api/transcode/queue"),
+    startQueue: () => request<TranscodeQueueSnapshot>("/api/transcode/queue/start", jsonInit("POST", {})),
+    pauseQueue: () => request<TranscodeQueueSnapshot>("/api/transcode/queue/pause", jsonInit("POST", {})),
+    stopQueue: () => request<TranscodeQueueSnapshot>("/api/transcode/queue/stop", jsonInit("POST", {})),
+    submitJob: (body: { input: string; presetId?: string; preset?: Record<string, unknown>; outputDir?: string }) =>
+      request<TranscodeJob>("/api/transcode/queue/jobs", jsonInit("POST", body)),
+    job: (id: string) =>
+      request<TranscodeJob>(`/api/transcode/queue/jobs/${encodeURIComponent(id)}`),
+    jobLog: (id: string, tail = 500) =>
+      request<{ id: string; log: string }>(
+        `/api/transcode/queue/jobs/${encodeURIComponent(id)}/log?tail=${tail}`,
+      ),
+    jobAction: (id: string, action: "cancel" | "retry" | "pause" | "resume") =>
+      request<TranscodeQueueSnapshot>(
+        `/api/transcode/queue/jobs/${encodeURIComponent(id)}/${action}`,
+        jsonInit("POST", {}),
+      ),
   },
 };
 
@@ -1002,6 +1036,121 @@ export interface TranscodeTerms {
   version: number;
   text: string;
   hash: string;
+}
+
+export interface TranscodeCapabilities {
+  available: boolean;
+  version: string;
+  ffmpeg?: string | null;
+  ffprobe?: string | null;
+  error?: string | null;
+  probedAt: number;
+  encoders: string[];
+  hwaccels: string[];
+  filters: string[];
+  mediaRoot: string;
+  mediaRootExists: boolean;
+  mediaRootWritable: boolean;
+  maxConcurrent: number;
+  maxQueue: number;
+}
+
+export interface TranscodeMediaEntry {
+  name: string;
+  path: string;
+  directory: boolean;
+  size: number;
+  modified: string;
+  kind: "directory" | "video" | "audio" | "subtitle" | "image" | "other";
+}
+
+export interface TranscodeMediaListing {
+  path: string;
+  offset: number;
+  total: number;
+  entries: TranscodeMediaEntry[];
+}
+
+export interface TranscodePresetSummary {
+  id: string;
+  builtin: boolean;
+  name: string;
+  description: string;
+}
+
+export type TranscodePreset = Record<string, unknown>;
+
+export interface TranscodePresetEntry {
+  id: string;
+  builtin: boolean;
+  preset: TranscodePreset;
+}
+
+export interface TranscodeSchemaField {
+  id: string;
+  label: string;
+  type: "text" | "select" | "switch";
+  default: string | boolean;
+  options?: string[];
+}
+
+export interface TranscodeSchemaSection {
+  title: string;
+  fields: TranscodeSchemaField[];
+}
+
+export interface TranscodeSchema {
+  version: number;
+  sections: TranscodeSchemaSection[];
+}
+
+export interface TranscodePreview {
+  input: string;
+  output: string;
+  args: string[];
+  command: string;
+}
+
+export type TranscodeJobState =
+  | "queued"
+  | "running"
+  | "paused"
+  | "stopping"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export interface TranscodeJob {
+  id: string;
+  input: string;
+  output: string;
+  presetId: string;
+  presetName: string;
+  preset: TranscodePreset;
+  state: TranscodeJobState;
+  fraction: number;
+  message: string;
+  speed: number;
+  fps: number;
+  bitrate: string;
+  outTimeMs: number;
+  durationMs: number;
+  sizeBytes: number;
+  frame: number;
+  error?: string | null;
+  encoder?: string | null;
+  logFile?: string | null;
+  createdAt: number;
+  startedAt: number;
+  endedAt: number;
+  command: string[];
+}
+
+export interface TranscodeQueueSnapshot {
+  runState: "idle" | "running" | "paused";
+  maxConcurrent: number;
+  maxQueue: number;
+  jobs: TranscodeJob[];
 }
 
 /// GET /api/mc/feature：功能开关与内存锁。

@@ -11,6 +11,12 @@ import {
   TuneIcon,
 } from "../components/icons";
 import { refreshTranscodeFeature, useTranscodeFeature } from "../transcodeFeature";
+import { OverviewPage } from "./transcode/OverviewPage";
+import { PreparePage } from "./transcode/PreparePage";
+import { QueuePage } from "./transcode/QueuePage";
+import { PresetsPage } from "./transcode/PresetsPage";
+import { ToolsPage } from "./transcode/ToolsPage";
+import { TranscodeSettingsPage } from "./transcode/TranscodeSettingsPage";
 
 type TranscodeTab = "overview" | "prepare" | "queue" | "presets" | "tools" | "settings";
 
@@ -23,16 +29,16 @@ const TABS: Array<{ key: TranscodeTab; title: string; icon: ReactNode; iconActiv
   { key: "settings", title: "设置", icon: <SettingsIcon size={20} /> },
 ];
 
-/// 转码模块的二级页面骨架：左侧固定六项，右侧内容区。
-///
-/// 功能关闭时整个页面不存在（回首页）；开启后才有入口。本提交先落壳与
-/// 环境状态，准备文件/队列/预设/工具/设置随后按各自提交接入。
+/// The transcode module's second-level page: a fixed six-item sidebar and a content area.
+/// The feature gate is in [TranscodeFeatureFilter] on the server; this page sends a
+/// disabled panel back home, so a stale tab cannot keep a removed surface alive.
 export function TranscodePage() {
   const feature = useTranscodeFeature();
   const nav = useNavigate();
   const [params, setParams] = useSearchParams();
   const raw = params.get("tab");
   const tab: TranscodeTab = TABS.some((entry) => entry.key === raw) ? (raw as TranscodeTab) : "overview";
+  const openTab = (next: string) => setParams({ tab: next }, { replace: true });
 
   useEffect(() => {
     void refreshTranscodeFeature();
@@ -53,7 +59,7 @@ export function TranscodePage() {
     <div className="page-with-sidebar">
       <SubSideBar
         activeKey={tab}
-        onSelect={(key) => setParams({ tab: key }, { replace: true })}
+        onSelect={(key) => openTab(key)}
         sections={[{ items: TABS }]}
         bottom={
           <button className="side-item ripple-host" onClick={() => nav("/")}>
@@ -72,95 +78,13 @@ export function TranscodePage() {
           <TuneIcon size={16} />
           转码 · {TABS.find((entry) => entry.key === tab)?.title}
         </div>
-
-        {tab === "overview" && <OverviewCard />}
-        {tab !== "overview" && (
-          <div className="card">
-            <div className="comp-row">
-              <span className="comp-label">{TABS.find((entry) => entry.key === tab)?.title}</span>
-              <span className="comp-value">
-                <span className="tag plain">建设中</span>
-              </span>
-            </div>
-            <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 8px", lineHeight: 1.6 }}>
-              功能门与页面骨架已就位；这个分区在后续提交里接入。
-            </p>
-          </div>
-        )}
+        {tab === "overview" && <OverviewPage onOpenTab={openTab} />}
+        {tab === "prepare" && <PreparePage onOpenTab={openTab} />}
+        {tab === "queue" && <QueuePage />}
+        {tab === "presets" && <PresetsPage />}
+        {tab === "tools" && <ToolsPage />}
+        {tab === "settings" && <TranscodeSettingsPage />}
       </div>
     </div>
-  );
-}
-
-function OverviewCard() {
-  const feature = useTranscodeFeature();
-  if (!feature) return null;
-  const policy =
-    feature.failurePolicy === "ask"
-      ? "询问（默认）"
-      : feature.failurePolicy === "timeout-auto"
-        ? `超时自动降级（${feature.failureTimeoutMinutes} 分钟）`
-        : "完全自动化";
-  const mediaState = !feature.mediaRootExists
-    ? "目录不存在"
-    : feature.mediaRootWritable
-      ? "可写"
-      : "只读";
-  return (
-    <>
-      <div className="card">
-        <div className="comp-row">
-          <span className="comp-label">功能状态</span>
-          <span className="comp-value">
-            <span className="tag running">已开启</span>
-          </span>
-        </div>
-        <div className="comp-row">
-          <span className="comp-label">媒体根</span>
-          <span className="comp-value mono" style={{ fontSize: 12 }}>
-            {feature.mediaRoot} · {mediaState}
-          </span>
-        </div>
-        <div className="comp-row">
-          <span className="comp-label">并发 / 队列上限</span>
-          <span className="comp-value">
-            {feature.maxConcurrent} / {feature.maxQueue}
-          </span>
-        </div>
-        <div className="comp-row">
-          <span className="comp-label">失败策略</span>
-          <span className="comp-value">{policy}</span>
-        </div>
-        <div className="comp-row">
-          <span className="comp-label">重启后恢复队列</span>
-          <span className="comp-value">{feature.autoResume ? "是" : "否"}</span>
-        </div>
-      </div>
-
-      {(!feature.mediaRootExists || !feature.mediaRootWritable) && (
-        <div className="card">
-          <div className="comp-row">
-            <span className="comp-label" style={{ color: "var(--monet-error)" }}>
-              媒体根需要处理
-            </span>
-          </div>
-          <p style={{ fontSize: 13, padding: "4px 8px 8px", lineHeight: 1.7 }}>
-            {feature.mediaRootExists
-              ? "媒体根当前不可写：可以读取源文件，但入队前需要选一个可写的输出目录。"
-              : "媒体根目录还不存在：请先创建它并让面板运行用户可写（容器里是 /home/hdsl/video 的挂载）。"}
-          </p>
-        </div>
-      )}
-
-      <div className="card">
-        <div className="comp-row">
-          <span className="comp-label">下一步</span>
-        </div>
-        <p style={{ fontSize: 13, padding: "4px 8px 8px", lineHeight: 1.7 }}>
-          准备文件、编码队列、全量预设、工具与设置分区会按计划逐步接入。队列在服务端运行，
-          关闭网页不会影响正在编码的任务。
-        </p>
-      </div>
-    </>
   );
 }
