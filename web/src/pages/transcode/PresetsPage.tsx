@@ -30,7 +30,7 @@ export function PresetsPage() {
     try {
       const answer = await api.transcode.presets();
       setSummaries(answer.presets);
-      const target = preferred ?? selectedId ?? answer.presets[0]?.id;
+      const target = preferred ?? selectedId;
       if (target) await select(target);
     } catch (e) {
       setError(errMsg(e));
@@ -53,6 +53,24 @@ export function PresetsPage() {
     void api.transcode.schema().then(setSchema).catch((e) => setError(errMsg(e)));
     void loadList();
   }, []);
+
+  useEffect(() => {
+    if (!schema || entry || Object.keys(draft).length > 0) return;
+    // No auto-selected preset: start from the schema's defaults, and only use a
+    // built-in/user preset after the operator explicitly clicks it.
+    const base: TranscodePreset = { name: "", description: "" };
+    for (const section of schema.sections) {
+      for (const field of section.fields) {
+        base[field.id] = field.default;
+      }
+    }
+    base.inputArgs = [];
+    base.videoArgs = [];
+    base.audioArgs = [];
+    base.subtitleArgs = [];
+    base.outputArgs = [];
+    setDraft(base);
+  }, [schema, entry, draft]);
 
   const save = async (id: string, next: TranscodePreset) => {
     setBusy(true);
@@ -78,6 +96,16 @@ export function PresetsPage() {
     const name = window.prompt("预设名称", `${entry.preset.name ?? entry.id} 副本`);
     if (!name) return;
     await save(id, { ...draft, name });
+  };
+
+  const saveBlank = async () => {
+    if (!schema) return;
+    const id = window.prompt("保存为参数集 id（字母/数字/._-）", "my-params");
+    if (!id) return;
+    const name = window.prompt("参数集名称", "我的参数");
+    if (!name) return;
+    await save(id, { ...draft, name });
+    setActiveSection(null);
   };
 
   const create = async () => {
@@ -207,60 +235,15 @@ export function PresetsPage() {
 
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
-      <div className="card" style={{ flex: "0 1 220px", minWidth: 200, padding: 0 }}>
-        <div style={{ padding: "8px 10px 2px", fontSize: 12, fontWeight: 600 }}>参数集</div>
-        <div style={{ display: "flex", gap: 6, padding: "4px 8px 4px", flexWrap: "wrap" }}>
-          <button className="btn btn-text" disabled={busy || !schema} onClick={() => void create()}>
-            新建
-          </button>
-          <button className="btn btn-text" disabled={busy} onClick={() => void loadList()}>
-            刷新
-          </button>
-          <button className="btn btn-text" disabled={busy} onClick={() => fileInput.current?.click()}>
-            导入
-          </button>
-          <button className="btn btn-text" disabled={busy || !entry} onClick={() => void exportFile("3fui")}>
-            导出 .3fui
-          </button>
-          <input
-            ref={fileInput}
-            type="file"
-            accept=".json,.3fui,application/json"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void importFile(file);
-            }}
-          />
+      <div className="card" style={{ flex: "0 1 200px", minWidth: 180, padding: 0 }}>
+        <div style={{ padding: "8px 10px 4px", fontSize: 12, fontWeight: 600 }}>
+          {entry ? "参数面板" : "自定义参数"}
+          <div style={{ fontSize: 11, fontWeight: 400, color: "var(--monet-on-surface-variant)",
+                        overflow: "hidden", textOverflow: "ellipsis" }}>
+            {entry ? entry.id : "未选择参数集"}
+          </div>
         </div>
-        <div className="list-body scroll-hover" style={{ maxHeight: 520 }}>
-          {summaries.map((preset) => (
-            <div
-              key={preset.id}
-              className={`tlli ripple-host${selectedId === preset.id ? " selected" : ""}`}
-              style={{
-                padding: "7px 10px",
-                cursor: "pointer",
-                background: selectedId === preset.id ? "var(--monet-secondary-container)" : undefined,
-              }}
-              onClick={() => void select(preset.id)}
-            >
-              <span className="tlli-text" style={{ minWidth: 0 }}>
-                <span className="tlli-title" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {preset.name}
-                  <span className={`tag ${preset.builtin ? "plain" : "running"}`} style={{ fontSize: 10, marginLeft: 6 }}>
-                    {preset.builtin ? "内置" : "自定义"}
-                  </span>
-                </span>
-                <span className="tlli-subtitle" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {preset.description || preset.id}
-                </span>
-              </span>
-            </div>
-          ))}
-        </div>
-        <div style={{ padding: "8px 10px 2px", fontSize: 12, fontWeight: 600 }}>参数分类</div>
-        <div className="list-body scroll-hover" style={{ maxHeight: 280 }}>
+        <div className="list-body scroll-hover" style={{ maxHeight: 560 }}>
           <div
             className={`tlli ripple-host${activeSection === null ? " selected" : ""}`}
             style={{ padding: "6px 10px", cursor: "pointer",
@@ -268,6 +251,14 @@ export function PresetsPage() {
             onClick={() => setActiveSection(null)}
           >
             <span className="tlli-text"><span className="tlli-title">参数总览</span></span>
+          </div>
+          <div
+            className={`tlli ripple-host${activeSection === "预设管理" ? " selected" : ""}`}
+            style={{ padding: "6px 10px", cursor: "pointer",
+                     background: activeSection === "预设管理" ? "var(--monet-secondary-container)" : undefined }}
+            onClick={() => setActiveSection("预设管理")}
+          >
+            <span className="tlli-text"><span className="tlli-title">预设管理</span></span>
           </div>
           {schema?.sections.map((section) => (
             <div
@@ -316,7 +307,88 @@ export function PresetsPage() {
             </div>
           </div>
         )}
-        {entry && (
+        {activeSection === "预设管理" && (
+          <div className="card" style={{ padding: 0 }}>
+            <div style={{ display: "flex", gap: 6, padding: "8px 8px 4px", flexWrap: "wrap" }}>
+              <button className="btn btn-text" disabled={busy || !schema} onClick={() => void create()}>
+                新建
+              </button>
+              <button className="btn btn-text" disabled={busy} onClick={() => void loadList()}>
+                刷新
+              </button>
+              <button className="btn btn-text" disabled={busy} onClick={() => fileInput.current?.click()}>
+                导入
+              </button>
+              <button className="btn btn-text" disabled={busy || !entry} onClick={() => void exportFile("3fui")}>
+                导出 .3fui
+              </button>
+              <input
+                ref={fileInput}
+                type="file"
+                accept=".json,.3fui,application/json"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void importFile(file);
+                }}
+              />
+            </div>
+            <div style={{ padding: "0 10px 6px", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+              只有点击下面的条目才会使用该参数集；默认是未选择的“自定义参数”。
+            </div>
+            <div className="list-body scroll-hover" style={{ maxHeight: 520 }}>
+              {summaries.map((preset) => (
+                <div
+                  key={preset.id}
+                  className={`tlli ripple-host${selectedId === preset.id ? " selected" : ""}`}
+                  style={{ padding: "7px 10px", cursor: "pointer",
+                           background: selectedId === preset.id ? "var(--monet-secondary-container)" : undefined }}
+                  onClick={() => {
+                    void select(preset.id);
+                    setActiveSection(null);
+                  }}
+                >
+                  <span className="tlli-text" style={{ minWidth: 0 }}>
+                    <span className="tlli-title" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {preset.name}
+                      <span className={`tag ${preset.builtin ? "plain" : "running"}`} style={{ fontSize: 10, marginLeft: 6 }}>
+                        {preset.builtin ? "内置" : "自定义"}
+                      </span>
+                    </span>
+                    <span className="tlli-subtitle" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {preset.description || preset.id}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeSection !== "预设管理" && !entry && (
+          <div className="card">
+            <div className="comp-row">
+              <span className="comp-label">未选择参数集</span>
+              <span className="comp-value" style={{ fontSize: 12 }}>当前为自定义参数</span>
+            </div>
+            <p style={{ fontSize: 12, padding: "4px 8px", color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+              不会自动套用任何内置预设。改完字段后可另存为参数集，或在准备文件里选择“参数面板 / 预设”。
+            </p>
+            <div style={{ display: "grid", gap: 6, padding: "4px 8px 8px", gridTemplateColumns: "1fr 2fr" }}>
+              <input className="input" placeholder="名称" value={String(draft.name ?? "")}
+                     onChange={(e) => update("name", e.target.value)} />
+              <input className="input" placeholder="描述" value={String(draft.description ?? "")}
+                     onChange={(e) => update("description", e.target.value)} />
+            </div>
+            <div style={{ display: "flex", gap: 8, padding: "0 8px 8px" }}>
+              <button className="btn btn-raised" disabled={busy} onClick={() => void saveBlank()}>
+                另存为参数集
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeSection !== "预设管理" && entry && (
           <div className="card">
             <div className="comp-row">
               <span className="comp-label">参数集</span>
@@ -401,7 +473,7 @@ export function PresetsPage() {
           <div style={{ display: "grid", gap: 5, padding: "4px 8px 8px" }}>
             <input className="input" value={inputPath} placeholder="输入文件（相对媒体根）"
                    onChange={(e) => setInputPath(e.target.value)} />
-            <button className="btn btn-text" disabled={!entry} onClick={() => void previewCommand()}>
+            <button className="btn btn-text" disabled={!schema} onClick={() => void previewCommand()}>
               生成命令
             </button>
             {previewError && (
