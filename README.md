@@ -125,6 +125,9 @@ OpenCode、Claude Web 与 ZCode 同理——各有自己的网页进程，用同
 `Host` 必须原样透传。细节见 [docs/deployment.md](docs/deployment.md) 与
 [docs/design-notes.md](docs/design-notes.md)。
 
+> 架构图见 [docs/architecture/](docs/architecture/README.md)：`context.md` 是系统上下文，
+> `full.md` 是全量模块与数据布局，`flows/` 是 MC 安装、品牌启动、认证三条关键时序。
+
 ## 实例终端（Web Shell）
 
 实例行上的「终端」按钮就地打开该实例的原生 TUI：Kimi Code、OpenCode、ZCode（实验性
