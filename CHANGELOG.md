@@ -2,6 +2,83 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 — 2026-11-10 · 转码模块（web-shell 分支）
+
+> **尚未合并 `main`，也未发布**。以下改动只在本地 `web-shell`；按约定等容器/人肉测试
+> 通过后再合并。交接细节见 [`docs/session-handoff-2026-11-10.md`](docs/session-handoff-2026-11-10.md)。
+
+**功能门：默认关闭，关闭即不存在**
+
+- 转码状态存 `<data>/transcode/feature.json`，`server.yaml` 的 `transcode:` 只放运行参数；
+  关闭时 `/api/transcode/*` 除 `feature/terms/enable/decline` 外一律 404，导航不出现。
+- 启用要求开发者密码 + HTTPS + 须知确认；记录条款版本/哈希/接受人/来源/UA。
+- 急停联动：暂停队列并终止 ffmpeg 子进程。
+
+**服务端队列与失败策略**
+
+- `TranscodeQueue` 在服务端调度：第一次显式开始后自动补位，关网页/断 WS 不影响；
+  `.part` → 原子改名，stderr/进度/日志持久化；暂停/恢复走 SIGSTOP/SIGCONT。
+- 失败三档：`ask`（默认）/ `timeout-auto` / `full-auto`；硬件失败按 QSV→VAAPI→CPU
+  降级，每任务最多一次；运行中任务不会被自动重启。
+- `/queue/jobs/{id}/decision` 支持停止/仅此任务降级/降级并应用队列/完全自动化；
+  策略可写回 `server.yaml`，重启仍生效。
+
+**预设、命令与互通**
+
+- 面板自己的 schema（容器/视频/画面/音频/字幕/元数据/章节/附件/滤镜/自定义参数），
+  命令生成只产出 argv，不拼 shell；内置预设只读，用户预设原子写。
+- 元数据、附件复制、章节文件、滤镜选择器、自定义参数编辑器；`.3fui` 双向尽力映射，
+  支持导入/导出。
+- 图片编码器强制跳过音/字幕；QSV 自动 `-low_power 1`；VAAPI 注入设备与 hwupload；
+  切硬件编码器清理软件 preset/profile/tune。
+
+**工具与质量评测**
+
+- 合并（concat+copy）、混流（多输入 `-map`）、抽流（单流 copy）复用队列的日志/进度/取消。
+- PSNR/SSIM/XPSNR/VMAF 后台评测，逐帧 stats 曲线、平均值、取消；`inf` 封顶 100，
+  没有 `libvmaf` 时 VMAF 由后端拒绝。
+
+**GPU 监控**
+
+- 性能页 GPU tab 增加任务管理器式四图（总利用率/编码/解码/显存）与多卡下拉。
+- Linux：NVIDIA `nvidia-smi`、AMD sysfs+hwmon、Intel sysfs；macOS 不可用。
+- Windows 目前只有 nvidia-smi 摘要；AMD/Intel 的 PDH 每进程 GPU 引擎计数仍未做。
+
+**容器、媒体根与 ffmpeg 安装**
+
+- 容器媒体根固定 `/home/hdsl/video`（`HDSL_VIDEO_DIR` 决定宿主挂载）；入口校正 uid 1000，
+  并按 `/dev/dri/renderD128` 的 GID 给 `hdsl` 加组；compose/安装脚本增加
+  `--video` / `--hw auto|vaapi|nvidia|none`。
+- 设置页可在线安装 ffmpeg：静态包（https + 必填 SHA-256）、apt-get/dnf/zypper、
+  源码编译；任务有进度/日志/取消，下载拒绝私网/环回。
+- **Docker apt 注意**：`debian:trixie-slim` 第一次 `apt-get update` 时没有
+  `ca-certificates`，`APT_MIRROR=https://…` 会证书校验失败；apt 这一段用 `http://`。
+- **Java truststore 显式化**：镜像显式安装 `ca-certificates-java` 并断言
+  `/etc/ssl/certs/java/cacerts` 存在；它和 apt 的系统 CA 是两套东西，缺了会在运行期
+  报 PKIX。
+
+**Agent**
+
+- 新增 `transcode` / `transcode-raw` scope；媒体根浏览要求 raw，其余转码操作要求 transcode。
+- `/api/transcode/feature*`、`/settings*`、`/runtime/*` 对 agent 始终关闭：启用/关功能、
+  改失败策略、装运行时是操作员动作。
+
+**防呆（补 3FUI §7 的一部分）**
+
+- 入队前检查编码器/容器；限制性容器 + 保留字幕/附件/章节时提醒改 MKV。
+- 设置页“测试 1 帧”真实跑 testsrc→null，区分“ffmpeg 列出”与“本机驱动能编”。
+- 队列显示任务实际 argv；原子写、队列持久化、媒体根路径限制沿用。
+- 未全搬：容器兼容三选、编码器参数值逐项校验、三层故障探测、Agent 写确认、
+  应急上传三重校验。详见交接文档。
+
+**验证**
+
+- `./gradlew test` 全量绿；`npm run typecheck` / `npm run build` 绿；
+  `./gradlew shadowJar` 成功。
+- `python3 scripts/transcode-smoke.py` 11 项全 PASS（真实 ffmpeg：capabilities / media /
+  presets / preview / submit / encode / log / extract / quality / 404）。
+- 本机无 Docker，镜像未实际构建；`docker-install.sh` 只做了语法检查。
+
 ## v0.6.82 — 2026-11-10 · 创建实例先选品牌；GitHub 版本目录缓存与配额
 
 **第三方核心下载：慢源自动换、删除实例不再留下孤儿任务**
