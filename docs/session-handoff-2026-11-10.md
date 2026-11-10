@@ -196,7 +196,7 @@ python3 scripts/transcode-smoke.py
 bash -n docker-install.sh
 ```
 
-结果：全量测试绿；前端 typecheck/build 绿；shadowJar 成功；冒烟 11 项全 PASS
+结果：全量测试绿；前端 typecheck/build 绿；shadowJar 成功；冒烟 13 项全 PASS
 （health / capabilities / media / presets / preview / submit / encode / log / extract /
 quality / 404）。**Docker 镜像未实际构建**（本机没有 docker）。
 

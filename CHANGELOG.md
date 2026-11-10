@@ -89,7 +89,7 @@
 
 - `./gradlew test` 全量绿；`npm run typecheck` / `npm run build` 绿；
   `./gradlew shadowJar` 成功。
-- `python3 scripts/transcode-smoke.py` 11 项全 PASS（真实 ffmpeg：capabilities / media /
+- `python3 scripts/transcode-smoke.py` 13 项全 PASS（真实 ffmpeg：capabilities / media /
   presets / preview / submit / encode / log / extract / quality / 404）。
 - 本机无 Docker，镜像未实际构建；`docker-install.sh` 只做了语法检查。
 
