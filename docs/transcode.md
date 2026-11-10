@@ -19,16 +19,18 @@
 - 预设存储/内置预设/命令生成/预览，前端六页（概览/准备文件/编码队列/预设/工具/设置）。
 - 服务端队列、真实 ffmpeg 执行、进度、日志、暂停/恢复、输出 `.part` 原子改名。
 - 失败决策三档、QSV→VAAPI→CPU 降级链、失败弹窗与「应用队列」。
-- 合并/混流/抽流工具入队；GPU 监控（NVIDIA/AMD/Intel sysfs，任务管理器式四图）。
+- 合并/混流/抽流工具入队；质量评测 PSNR/SSIM/XPSNR/VMAF 与逐帧曲线。
+- GPU 监控（NVIDIA/AMD/Intel sysfs，任务管理器式四图，多卡下拉选择）。
+- 元数据/章节/附件、滤镜选择器、自定义参数编辑器、`.3fui` 双向尽力映射。
+- ffmpeg 静态包 / apt-dnf / 源码编译的在线安装 UI（SHA-256、进度、日志、取消）。
+- 失败策略持久化（写回 server.yaml）与超时链路测试。
 - Agent scope `transcode` / `transcode-raw`；容器媒体根、`/dev/dri`/NVIDIA 直通参数与冒烟脚本。
 
 尚未完成（后续提交）：
 
-- 质量评测（PSNR/SSIM/XPSNR/VMAF）与逐帧曲线。
-- ffmpeg 静态包下载 / apt-dnf 安装 / 源码编译的在线 UI（当前只支持路径检测与手配）。
-- 3FUI 参数面板的剩余字段（元数据/章节/附件/滤镜选择器/自定义参数编辑器）与 `.3fui` 导入导出。
-- Windows 的 AMD/Intel GPU 进程表；多 GPU 图表选择；Intel 整卡利用率。
-- 失败策略的超时链路测试、无人值守策略的持久化设置。
+- Windows 的 AMD/Intel GPU 进程表与 Intel 整卡利用率（Linux sysfs/NVIDIA 已有；
+  Windows 目前只有 nvidia-smi 摘要，性能页的显卡下拉已支持多卡）。
+- Windows PDH 每进程 GPU 引擎计数的解析与前端进程表。
 
 ## Context
 
