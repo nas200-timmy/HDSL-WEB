@@ -80,14 +80,17 @@
 
 ### 1.4 前端六页
 
-`/transcode` 二级页：概览 / 准备文件 / 编码队列 / 预设 / 工具 / 设置。
+`/transcode` 二级页：概览 / 准备文件 / 编码队列 / **参数面板** / 工具 / 设置。
+
+- “预设”页面已改为参数面板：左侧参数集、中间分区字段（两列）、右侧粘性
+  命令行预览；准备页默认不选预设，必须显式选“参数面板 / 预设”才可入队。
 
 - 概览：ffmpeg/编码器/媒体根/队列状态。
 - 准备文件：媒体根服务端浏览、ffprobe 摘要、预设/输出目录、命令预览、入队；
   入队前检查编码器/容器，限制性容器 + 保留项时弹窗提醒改 MKV。
 - 编码队列：运行状态、开始/暂停/停止、任务表、当前任务大进度条、任务 argv、ffmpeg 日志；
   `WAITING_DECISION` 卡片四动作。
-- 预设：schema 驱动表单、内置只读/另存为、自定义参数编辑器、滤镜选择弹窗、导入/导出。
+- 参数面板：schema 驱动表单、内置只读/另存为、自定义参数编辑器、滤镜选择弹窗、导入/导出、命令行预览。
 - 工具：媒体信息、合并/混流/抽流、质量评测。
 - 设置：ffmpeg 安装、1 帧实测、媒体根、并发/队列、失败策略、编码器矩阵。
 
@@ -122,6 +125,9 @@
 
 - `SystemSnapshot.Gpu` 扩展 vendor/backend/encoder/decoder/power；`SystemMetrics` 注入
   `GpuReader`；性能页 GPU tab 四图（利用率/编码/解码/显存）+ 多卡下拉。
+- GPU 页已改成四个紧凑指标卡 + 2×2 折线图；没有数据也画空网格。Linux DRM 回退：
+  `vendor` 读不到给 unknown 卡、只有 `renderD*` 也列、`/dev/dri` 已挂载但 sysfs
+  不可读时给占位卡，便于区分“没显卡”和“没权限读 sysfs”。
 - Linux：NVIDIA `nvidia-smi`、AMD sysfs+hwmon、Intel sysfs（频率，整卡利用率没有稳定 sysfs）。
 - Windows：目前仅 nvidia-smi 摘要；AMD/Intel 的 PDH 每进程 GPU 引擎计数**未做**。
 
