@@ -37,6 +37,7 @@ public final class TranscodeJob {
         @SerializedName("queued") QUEUED,
         @SerializedName("running") RUNNING,
         @SerializedName("paused") PAUSED,
+        @SerializedName("waiting_decision") WAITING_DECISION,
         @SerializedName("stopping") STOPPING,
         @SerializedName("done") DONE,
         @SerializedName("failed") FAILED,
@@ -69,6 +70,10 @@ public final class TranscodeJob {
     public int frame = -1;
     public @Nullable String error;
     public @Nullable String encoder;
+    public @Nullable String fallbackFrom;
+    public @Nullable String fallbackTo;
+    public boolean fallbackAttempted;
+    public long decisionDeadline = -1;
     public @Nullable String logFile;
     public long createdAt = System.currentTimeMillis();
     public long startedAt = -1;
@@ -95,6 +100,10 @@ public final class TranscodeJob {
         frame = -1;
         error = null;
         encoder = null;
+        fallbackFrom = null;
+        fallbackTo = null;
+        fallbackAttempted = false;
+        decisionDeadline = -1;
         startedAt = -1;
         endedAt = -1;
         command = List.of();

@@ -35,6 +35,7 @@ export function stateLabel(state: string): string {
       queued: "排队中",
       running: "运行中",
       paused: "已暂停",
+      waiting_decision: "待决定",
       stopping: "停止中",
       done: "完成",
       failed: "失败",
@@ -47,6 +48,7 @@ export function stateTone(state: string): string {
   if (state === "done") return "running";
   if (state === "failed") return "danger";
   if (state === "running") return "running";
+  if (state === "waiting_decision") return "danger";
   return "plain";
 }
 

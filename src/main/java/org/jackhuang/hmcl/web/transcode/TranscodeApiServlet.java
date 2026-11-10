@@ -464,13 +464,24 @@ public final class TranscodeApiServlet extends HttpServlet {
         }
         String id = parts[0];
         try {
-            boolean changed = switch (parts[1]) {
-                case "cancel" -> module.queue().cancel(id);
-                case "retry" -> module.queue().retry(id);
-                case "pause" -> module.queue().pause(id);
-                case "resume" -> module.queue().resume(id);
-                default -> false;
-            };
+            boolean changed;
+            if ("decision".equals(parts[1])) {
+                JsonObject body = readJson(request);
+                String action = body == null ? null : stringField(body, "action");
+                if (action == null || action.isBlank()) {
+                    Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "action is required");
+                    return;
+                }
+                changed = module.queue().decide(id, action);
+            } else {
+                changed = switch (parts[1]) {
+                    case "cancel" -> module.queue().cancel(id);
+                    case "retry" -> module.queue().retry(id);
+                    case "pause" -> module.queue().pause(id);
+                    case "resume" -> module.queue().resume(id);
+                    default -> false;
+                };
+            }
             if (!changed) {
                 Json.error(response, HttpServletResponse.SC_CONFLICT, "the job is not in a state that allows this action");
                 return;

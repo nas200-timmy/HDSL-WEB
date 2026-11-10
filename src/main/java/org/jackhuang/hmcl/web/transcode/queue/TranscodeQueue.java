@@ -47,11 +47,15 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /// The server-side encode queue.
 ///
@@ -91,6 +95,12 @@ public final class TranscodeQueue {
         thread.setDaemon(true);
         return thread;
     });
+    private final ScheduledExecutorService timeoutScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "transcode-decision-timeout");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final Map<String, ScheduledFuture<?>> decisionTimeouts = new ConcurrentHashMap<>();
 
     private volatile RunState runState = RunState.IDLE;
     private boolean started;
@@ -138,6 +148,7 @@ public final class TranscodeQueue {
             }
             started = false;
             runState = RunState.IDLE;
+            cancelAllDecisionTimeouts();
             long now = System.currentTimeMillis();
             for (TranscodeJob job : jobs) {
                 if (!job.state.terminal()) {
@@ -226,6 +237,7 @@ public final class TranscodeQueue {
         List<Process> processes = new ArrayList<>();
         synchronized (lock) {
             runState = RunState.IDLE;
+            cancelAllDecisionTimeouts();
             long now = System.currentTimeMillis();
             for (TranscodeJob job : jobs) {
                 if (!job.state.terminal()) {
@@ -387,6 +399,7 @@ public final class TranscodeQueue {
             long active = jobs.stream()
                     .filter(job -> job.state == TranscodeJob.State.RUNNING
                             || job.state == TranscodeJob.State.PAUSED
+                            || job.state == TranscodeJob.State.WAITING_DECISION
                             || job.state == TranscodeJob.State.STOPPING)
                     .count();
             int slots = module.config().transcode.maxConcurrent - (int) active;
@@ -463,11 +476,11 @@ public final class TranscodeQueue {
                 return;
             }
             if (code != 0) {
-                fail(job, "ffmpeg exited with code " + code + tail(log), part);
+                handleFailure(job, "ffmpeg exited with code " + code + tail(log), part);
                 return;
             }
             if (!validOutput(part, job.preset)) {
-                fail(job, "ffmpeg finished but the output has no usable stream" + tail(log), part);
+                handleFailure(job, "ffmpeg finished but the output has no usable stream" + tail(log), part);
                 return;
             }
             move(part, output);
@@ -544,6 +557,213 @@ public final class TranscodeQueue {
         event.add("job", Json.GSON.toJsonTree(job));
         bus.publish("transcode:queue", event);
         bus.publish("transcode:job:" + job.id, event);
+    }
+
+    /// A hardware failure does not go straight to FAILED: the operator gets a decision
+    /// (or the policy decides). `full-auto` degrades immediately; the other two tiers
+    /// park the job and pause the queue.
+    private void handleFailure(TranscodeJob job, String message, @Nullable Path part) {
+        if (job.state == TranscodeJob.State.CANCELLED || job.state == TranscodeJob.State.FAILED) {
+            return;
+        }
+        if (part != null) {
+            try {
+                Files.deleteIfExists(part);
+            } catch (IOException ignored) {
+            }
+        }
+        String fallback = fallbackEncoder(job.preset.videoEncoder);
+        if (fallback != null && !job.fallbackAttempted) {
+            if ("full-auto".equals(policy())) {
+                applyFallback(job);
+                publishJob(job);
+                dispatch();
+                return;
+            }
+            synchronized (lock) {
+                job.state = TranscodeJob.State.WAITING_DECISION;
+                job.error = message;
+                job.message = "waiting for decision";
+                job.decisionDeadline = System.currentTimeMillis() + timeoutMinutes() * 60_000L;
+                runState = RunState.PAUSED;
+                saveLocked();
+            }
+            appendLog(job, "\n# WAITING FOR DECISION: " + message + "\n");
+            publishJob(job);
+            publishQueue();
+            scheduleDecisionTimeout(job.id);
+            return;
+        }
+        fail(job, message, null);
+    }
+
+    /// Applies the next step of the hardware chain. Called under [lock] or with a job
+    /// that is not running; it also persists, so callers do not have to remember to.
+    private boolean applyFallback(TranscodeJob job) {
+        synchronized (lock) {
+            if (job.preset == null || job.fallbackAttempted) {
+                return false;
+            }
+            String from = job.preset.videoEncoder;
+            String to = fallbackEncoder(from);
+            if (to == null) {
+                return false;
+            }
+            job.fallbackFrom = from;
+            job.fallbackTo = to;
+            job.fallbackAttempted = true;
+            job.preset.videoEncoder = to;
+            job.preset.qualityMode = to.endsWith("_vaapi") ? "cqp" : "crf";
+            if (job.preset.qualityValue == null || job.preset.qualityValue.isBlank()) {
+                job.preset.qualityValue = "23";
+            }
+            if (to.startsWith("lib") && (job.preset.preset == null || job.preset.preset.isBlank())) {
+                job.preset.preset = "medium";
+            }
+            job.encoder = to;
+            job.state = TranscodeJob.State.QUEUED;
+            job.fraction = -1;
+            job.message = "queued after fallback";
+            job.error = null;
+            job.outTimeMs = -1;
+            job.speed = -1;
+            job.fps = -1;
+            job.bitrate = "";
+            job.sizeBytes = -1;
+            job.frame = -1;
+            job.startedAt = -1;
+            job.endedAt = -1;
+            job.decisionDeadline = -1;
+            job.command = List.of();
+            saveLocked();
+            return true;
+        }
+    }
+
+    private void applyFallbackToQueued(TranscodeJob failed) {
+        synchronized (lock) {
+            String original = failed.fallbackFrom != null ? failed.fallbackFrom : failed.encoder;
+            for (TranscodeJob job : jobs) {
+                if (job == failed || job.state != TranscodeJob.State.QUEUED) {
+                    continue;
+                }
+                if (original != null && original.equals(job.encoder) && !job.fallbackAttempted) {
+                    applyFallback(job);
+                }
+            }
+            saveLocked();
+        }
+    }
+
+    /// Resolves a parked job. `stop` fails it and leaves the queue paused; the three
+    /// fallback actions degrade it (and optionally the queued jobs of the same
+    /// hardware family) and resume dispatch.
+    public boolean decide(String id, String action) {
+        synchronized (lock) {
+            TranscodeJob job = find(id);
+            if (job == null || job.state != TranscodeJob.State.WAITING_DECISION) {
+                return false;
+            }
+            cancelDecisionTimeout(id);
+            switch (action) {
+                case "stop" -> {
+                    job.state = TranscodeJob.State.FAILED;
+                    job.error = "stopped by the operator";
+                    job.message = "failed";
+                    job.endedAt = System.currentTimeMillis();
+                    runState = RunState.PAUSED;
+                }
+                case "fallback" -> {
+                    applyFallback(job);
+                    runState = RunState.RUNNING;
+                }
+                case "fallback-queue", "auto" -> {
+                    applyFallback(job);
+                    applyFallbackToQueued(job);
+                    runState = RunState.RUNNING;
+                }
+                default -> {
+                    return false;
+                }
+            }
+            saveLocked();
+        }
+        publishQueue();
+        dispatch();
+        return true;
+    }
+
+    private void scheduleDecisionTimeout(String id) {
+        long minutes = timeoutMinutes();
+        ScheduledFuture<?> future = timeoutScheduler.schedule(
+                () -> onDecisionTimeout(id), Math.max(1, minutes), TimeUnit.MINUTES);
+        ScheduledFuture<?> previous = decisionTimeouts.put(id, future);
+        if (previous != null) {
+            previous.cancel(false);
+        }
+    }
+
+    private void onDecisionTimeout(String id) {
+        synchronized (lock) {
+            TranscodeJob job = find(id);
+            decisionTimeouts.remove(id);
+            if (job == null || job.state != TranscodeJob.State.WAITING_DECISION) {
+                return;
+            }
+            if ("timeout-auto".equals(policy())) {
+                applyFallback(job);
+                applyFallbackToQueued(job);
+                runState = RunState.RUNNING;
+            } else {
+                job.state = TranscodeJob.State.FAILED;
+                job.error = "decision timed out after " + timeoutMinutes() + " minutes";
+                job.message = "failed";
+                job.endedAt = System.currentTimeMillis();
+                runState = RunState.PAUSED;
+            }
+            saveLocked();
+        }
+        publishQueue();
+        dispatch();
+    }
+
+    private void cancelDecisionTimeout(String id) {
+        ScheduledFuture<?> future = decisionTimeouts.remove(id);
+        if (future != null) {
+            future.cancel(false);
+        }
+    }
+
+    private void cancelAllDecisionTimeouts() {
+        for (ScheduledFuture<?> future : decisionTimeouts.values()) {
+            future.cancel(false);
+        }
+        decisionTimeouts.clear();
+    }
+
+    private String policy() {
+        String value = module.config().transcode.failurePolicy;
+        return value == null ? "ask" : value;
+    }
+
+    private int timeoutMinutes() {
+        return Math.max(1, module.config().transcode.failureTimeoutMinutes);
+    }
+
+    private static @Nullable String fallbackEncoder(@Nullable String encoder) {
+        if (encoder == null) {
+            return null;
+        }
+        return switch (encoder) {
+            case "h264_qsv" -> "h264_vaapi";
+            case "hevc_qsv" -> "hevc_vaapi";
+            case "h264_vaapi" -> "libx264";
+            case "hevc_vaapi" -> "libx265";
+            case "h264_nvenc" -> "libx264";
+            case "hevc_nvenc" -> "libx265";
+            case "av1_qsv" -> "libaom-av1";
+            default -> null;
+        };
     }
 
     private void fail(TranscodeJob job, String message, @Nullable Path part) {

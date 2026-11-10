@@ -64,6 +64,17 @@ export function QueuePage() {
     }
   };
 
+  const decide = async (id: string, decision: "stop" | "fallback" | "fallback-queue" | "auto") => {
+    setBusy(true);
+    try {
+      setSnapshot(await api.transcode.jobDecision(id, decision));
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const queueAction = async (name: "start" | "pause" | "stop") => {
     setBusy(true);
     try {
@@ -81,6 +92,7 @@ export function QueuePage() {
   };
 
   const running = snapshot?.jobs.find((job) => job.state === "running" || job.state === "paused") ?? null;
+  const waiting = snapshot?.jobs.find((job) => job.state === "waiting_decision") ?? null;
   const selectedJob = snapshot?.jobs.find((job) => job.id === selected) ?? null;
 
   return (
@@ -126,6 +138,32 @@ export function QueuePage() {
           </span>
         </div>
       </div>
+
+      {waiting && (
+        <div className="card" style={{ borderColor: "var(--monet-error)" }}>
+          <div className="comp-row">
+            <span className="comp-label" style={{ color: "var(--monet-error)" }}>编码失败，等待决定</span>
+            <span className="comp-value mono" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
+              {waiting.input} · {waiting.encoder}
+            </span>
+          </div>
+          <p style={{ fontSize: 12, padding: "4px 8px", lineHeight: 1.6 }}>{waiting.error}</p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "0 8px 8px" }}>
+            <button className="btn btn-text" disabled={busy} onClick={() => void decide(waiting.id, "stop")}>
+              停止此任务
+            </button>
+            <button className="btn btn-text" disabled={busy} onClick={() => void decide(waiting.id, "fallback")}>
+              仅此任务降级
+            </button>
+            <button className="btn btn-raised" disabled={busy} onClick={() => void decide(waiting.id, "fallback-queue")}>
+              降级并应用队列
+            </button>
+            <button className="btn btn-text" disabled={busy} onClick={() => void decide(waiting.id, "auto")}>
+              完全自动化
+            </button>
+          </div>
+        </div>
+      )}
 
       {running && (
         <div className="card">
@@ -188,7 +226,11 @@ export function QueuePage() {
                 </div>
               </span>
               <span className="row-actions" onClick={(event) => event.stopPropagation()}>
-                {job.state === "failed" || job.state === "cancelled" ? (
+                {job.state === "waiting_decision" ? (
+                  <button className="btn btn-text danger" disabled={busy} onClick={() => void decide(job.id, "fallback")}>
+                    降级
+                  </button>
+                ) : job.state === "failed" || job.state === "cancelled" ? (
                   <button className="btn btn-text" disabled={busy} onClick={() => void action(job.id, "retry")}>
                     重试
                   </button>

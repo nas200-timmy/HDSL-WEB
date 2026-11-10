@@ -998,6 +998,11 @@ export const api = {
         `/api/transcode/queue/jobs/${encodeURIComponent(id)}/${action}`,
         jsonInit("POST", {}),
       ),
+    jobDecision: (id: string, action: "stop" | "fallback" | "fallback-queue" | "auto") =>
+      request<TranscodeQueueSnapshot>(
+        `/api/transcode/queue/jobs/${encodeURIComponent(id)}/decision`,
+        jsonInit("POST", { action }),
+      ),
   },
 };
 
@@ -1115,6 +1120,7 @@ export type TranscodeJobState =
   | "queued"
   | "running"
   | "paused"
+  | "waiting_decision"
   | "stopping"
   | "done"
   | "failed"
