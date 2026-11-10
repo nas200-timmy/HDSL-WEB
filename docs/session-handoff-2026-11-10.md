@@ -23,6 +23,24 @@
 - 设计稿/状态清单在 [`docs/transcode.md`](transcode.md)；架构流程图 `docs/architecture/flows/transcode.md`
   按仓库约定「先改代码，再改图」，**尚未补**。
 
+### 0.1 测试容器实测（2026-11-10，真实片源）
+
+- 测试镜像 `hdsl-web:test-c6faebf`，容器 `hdsl-web-test`（13080），独立数据卷 + 媒体卷；
+  通过真实 UI/API 启用（管理员 → 开发者提权 → 条款 → ENABLED），不是脚本预置。
+- 通过：启用流程重启保持、媒体根 1000 可写、6 个内置预设、H.264/H.265/VP9/remux/audio-only、
+  奇数高度、并发 1、取消无残留、硬件失败降级、路径越界/未知预设 400。
+- 真实片源：`[DBD-Raws][缘之空][08][1080P][BDRip][HEVC-10bit][FLAC].mkv`
+  （HEVC 10bit + FLAC，25:45，426 MB）→ `mp4-h264` 约 5 分 08 秒（5.04×），
+  426 MB → 360 MB；SSIM All 0.978 / PSNR 平均 29.6 dB；左右对比肉眼无明显差别。
+- 这轮发现并已修：
+  - **P0 输出覆盖**：同输入同预设连续提交共用输出名。现在提交即预留 + 队列持久化重建 +
+    工具任务 uniqueOutput；测试断言 `_transcoded/_1/_2`。
+  - **P1 无音轨误判**：视频预设 + 视频-only 输入被 `validOutput` 判失败。现在只有输入
+    本身有音频才要求输出音频，错误文案区分空文件/无视频流/纯音频/音频缺失。
+- 仍成立：转码中重启会把 RUNNING 标成 `interrupted by a panel restart`（不留孤儿进程）；
+  `auto_resume=true` 只续排队任务，不续被中断的运行任务。独立 `docker run` 不设
+  `HDSL_MEDIA_ROOT` 时默认 `<data>/video`，目录必须预先存在，否则 400；compose 已处理。
+
 ## 1. 这一版做了什么
 
 ### 1.1 功能门（默认关闭，关闭即 404）
@@ -93,7 +111,8 @@
 ### 1.7 防呆（3FUI §7 的一部分）
 
 已补：图片编码器强制 `-an -sn` + `-frames:v 1`；QSV 自动 `-low_power 1`；VAAPI 自动注入；
-容器限制提醒；切硬件编码器清理 preset/profile/tune；1 帧实测；任务 argv 展示。
+容器限制提醒；切硬件编码器清理 preset/profile/tune；1 帧实测；任务 argv 展示；
+提交即预留输出名（防重复提交覆盖）；视频-only 输入不因音频 copy 预设误判失败。
 
 **仍未全搬**：容器兼容是“继续/取消”确认，不是三选；编码器参数值只做切换清理，没有逐项校验；
 故障探测是失败后决策，不是三层自动；Agent 写操作确认卡与工具目录、应急上传三重校验未做。
