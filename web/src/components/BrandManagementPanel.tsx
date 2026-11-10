@@ -14,6 +14,7 @@ import type {
 } from "../types";
 import { errMsg } from "../utils";
 import { McFeatureCard } from "./McFeatureCard";
+import { TranscodeFeatureCard } from "./TranscodeFeatureCard";
 
 /** 四个源在接口里的名字。 */
 type Kind = "pypi" | "python" | "archive" | "release";
@@ -393,6 +394,7 @@ export function BrandManagementPanel() {
         />
       ))}
 
+      <TranscodeFeatureCard />
       <McFeatureCard />
     </>
   );
