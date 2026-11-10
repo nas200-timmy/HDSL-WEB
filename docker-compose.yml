@@ -42,6 +42,8 @@ services:
       # 数据目录（镜像内已固定为 /data，此处显式写出便于阅读）
       HDSL_DATA: /data
       HDSL_PORT: "${HDSL_PORT:-3080}"
+      # 转码媒体根：容器内固定 /home/hdsl/video，宿主目录由 HDSL_VIDEO_DIR 决定
+      HDSL_MEDIA_ROOT: /home/hdsl/video
       # 首次启动的管理员口令；留空则打开网页走初始化引导创建账号
       HDSL_ADMIN_PASSWORD: ${HDSL_ADMIN_PASSWORD:-}
       # 下载源。npm 读这个环境变量；入口脚本会把它写进 pnpm 的全局 config.yaml，
@@ -87,6 +89,28 @@ services:
       #   sudo mkdir -p /path/to/mc-server && sudo chown 1000:1000 /path/to/mc-server
       - "${HDSL_MC_DIR:-hdsl-mc}:/home/hdsl/mc"
 
+      # ── 4. 转码媒体库（可选；启用转码功能后使用）────────────────────────
+      # 容器内固定 /home/hdsl/video。NAS 上把 HDSL_VIDEO_DIR 指到真实视频目录：
+      #   HDSL_VIDEO_DIR=/volume1/video
+      # 不设置时用命名卷 hdsl-video（重建容器不丢，但不在 NAS 共享里）。
+      # 宿主目录必须让 uid/gid 1000 能读写；只读时只能读入，输出要另选可写目录。
+      - "${HDSL_VIDEO_DIR:-hdsl-video}:/home/hdsl/video"
+
+    # 硬件编码直通（可选）：基础 compose 不写 devices，没设备时才能正常启动。
+    # Intel/AMD VAAPI/QSV：宿主机有 /dev/dri 时加下面两行；renderD128 的 GID 由
+    # 入口脚本自动识别并加入 hdsl 用户，所以通常不需要手写 group_add。
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # NVIDIA NVENC：需要宿主机装 nvidia-container-toolkit，然后加：
+    #   deploy:
+    #     resources:
+    #       reservations:
+    #         devices:
+    #           - driver: nvidia
+    #             count: all
+    #             capabilities: [gpu]
+    # 也可用 `docker run --gpus all` 或安装脚本的 --hw nvidia。
+
     # $$ 让变量交给容器内的 shell 解析，取的是上面 environment 里的 HDSL_PORT
     healthcheck:
       test:
@@ -106,6 +130,8 @@ volumes:
   # Minecraft 世界存档 + 服务端程序（/home/hdsl/mc）
   # HDSL_MC_DIR 未设置时用它；宿主目录 bind 见上面的说明。
   hdsl-mc:
+  # 转码媒体库（/home/hdsl/video）；HDSL_VIDEO_DIR 指向宿主目录时不使用它。
+  hdsl-video:
   # 工作区默认不建卷：不挂时就是容器内目录。要用命名卷保存工作区时，
   # 把上面 volumes 里那行取消注释，并在这里加：
   # hdsl-workspace:
