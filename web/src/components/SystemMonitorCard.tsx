@@ -379,6 +379,24 @@ export function SystemMonitorCard() {
     return { cpu, memory, read, write, rx, tx };
   }, [history]);
 
+  const gpuPoints = useMemo(() => {
+    const utilization: Point[] = [];
+    const encoder: Point[] = [];
+    const decoder: Point[] = [];
+    const memory: Point[] = [];
+    for (const sample of history.slice(-60)) {
+      const gpu = sample.gpus[0];
+      if (!gpu) continue;
+      const t = Date.parse(sample.at);
+      if (!Number.isFinite(t)) continue;
+      if (gpu.utilization >= 0) utilization.push({ t, v: gpu.utilization });
+      if ((gpu.encoderUtilization ?? -1) >= 0) encoder.push({ t, v: gpu.encoderUtilization! });
+      if ((gpu.decoderUtilization ?? -1) >= 0) decoder.push({ t, v: gpu.decoderUtilization! });
+      if (gpu.memoryUsedBytes >= 0) memory.push({ t, v: gpu.memoryUsedBytes });
+    }
+    return { utilization, encoder, decoder, memory };
+  }, [history]);
+
   const memoryMax = useMemo(() => {
     let max = 0;
     for (const sample of history.slice(-60)) {
@@ -663,19 +681,48 @@ export function SystemMonitorCard() {
                     <div className="comp-row">
                       <span className="comp-label">GPU</span>
                       <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                        当前构建未启用 GPU 采集（预留）。检测到显卡后这里会显示利用率、显存与温度。
+                        当前主机没有可读的 GPU：Linux 需要 /sys/class/drm 或 nvidia-smi；Windows 目前支持 nvidia-smi。
                       </span>
                     </div>
                   ) : (
                     snapshot.gpus.map((gpu) => (
-                      <div key={gpu.index}>
+                      <div key={gpu.index} style={{ paddingBottom: 8 }}>
                         <div className="perf-big">{pct(gpu.utilization)}</div>
                         <div className="perf-label">
-                          {gpu.name} · 显存 {fmtBytes(gpu.memoryUsedBytes)} / {fmtBytes(gpu.memoryTotalBytes)} ·{" "}
-                          {gpu.temperatureC.toFixed(0)}°C
+                          {gpu.name} · {gpu.vendor || "GPU"} · {gpu.backend || ""} ·{" "}
+                          编码 {pct(gpu.encoderUtilization ?? -1)} · 解码 {pct(gpu.decoderUtilization ?? -1)}
+                        </div>
+                        <div className="perf-label">
+                          显存 {fmtBytes(gpu.memoryUsedBytes)} / {fmtBytes(gpu.memoryTotalBytes)} ·{" "}
+                          {gpu.temperatureC >= 0 ? `${gpu.temperatureC.toFixed(0)}°C` : "温度 —"} ·{" "}
+                          {(gpu.powerW ?? -1) >= 0 ? `${gpu.powerW!.toFixed(0)} W` : "功耗 —"}
                         </div>
                       </div>
                     ))
+                  )}
+                  {snapshot.gpus.length > 0 && (
+                    <div style={{ display: "grid", gap: 8, paddingTop: 4 }}>
+                      <div>
+                        <div className="perf-label">GPU 利用率</div>
+                        <LineChart series={[{ label: "GPU", color: COLOR_CPU, points: gpuPoints.utilization }]}
+                                   height={110} max={1} format={pct} />
+                      </div>
+                      <div>
+                        <div className="perf-label">编码单元</div>
+                        <LineChart series={[{ label: "编码", color: COLOR_READ, points: gpuPoints.encoder }]}
+                                   height={110} max={1} format={pct} />
+                      </div>
+                      <div>
+                        <div className="perf-label">解码单元</div>
+                        <LineChart series={[{ label: "解码", color: COLOR_WRITE, points: gpuPoints.decoder }]}
+                                   height={110} max={1} format={pct} />
+                      </div>
+                      <div>
+                        <div className="perf-label">显存使用</div>
+                        <LineChart series={[{ label: "显存", color: COLOR_MEMORY, points: gpuPoints.memory }]}
+                                   height={110} format={fmtBytes} />
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>

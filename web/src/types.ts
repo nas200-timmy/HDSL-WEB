@@ -948,10 +948,15 @@ export interface SystemNetworkRate {
 export interface SystemGpu {
   index: number;
   name: string;
+  vendor?: string;
+  backend?: string;
   utilization: number;
+  encoderUtilization?: number;
+  decoderUtilization?: number;
   memoryUsedBytes: number;
   memoryTotalBytes: number;
   temperatureC: number;
+  powerW?: number;
 }
 
 export interface SystemPanelSelf {

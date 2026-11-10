@@ -99,9 +99,12 @@ public record SystemSnapshot(
     public record NetworkRate(String name, double rxBytesPerSec, double txBytesPerSec) {
     }
 
-    /// Reserved for the GPU reader; this build never fills the list.
-    public record Gpu(int index, String name, double utilization,
-                      long memoryUsedBytes, long memoryTotalBytes, double temperatureC) {
+    /// One GPU as the monitor tab draws it. Unknown values are `-1`, never `0`:
+    /// `0%` reads as "idle", while `-1` tells the page to print a dash.
+    public record Gpu(int index, String name, String vendor, String backend,
+                      double utilization, double encoderUtilization, double decoderUtilization,
+                      long memoryUsedBytes, long memoryTotalBytes,
+                      double temperatureC, double powerW) {
     }
 
     /// The panel's own footprint.
