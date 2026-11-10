@@ -3,7 +3,7 @@
 
 .tc-workbench {
   display: grid;
-  grid-template-columns: 200px 152px minmax(0, 1fr) 340px;
+  grid-template-columns: 152px minmax(0, 1fr) 340px;
   gap: 8px;
   align-items: start;
 }
@@ -774,9 +774,178 @@
   font-size: 10px;
 }
 
+/* ── 预设管理（纵向导航里的一页） ─────────────────────────────────── */
+
+.tc-manage {
+  padding: 0 0 8px;
+}
+
+.tc-manage-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  flex-wrap: wrap;
+}
+
+.tc-manage-toolbar .tc-search {
+  flex: 1 1 220px;
+  margin: 0;
+}
+
+.tc-manage-body {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.tc-manage-list {
+  max-height: 560px;
+  overflow: auto;
+  border-right: 1px solid var(--monet-outline-variant);
+  padding-right: 6px;
+}
+
+.tc-manage-preview {
+  display: grid;
+  gap: 3px;
+  align-content: start;
+  min-width: 0;
+}
+
+.tc-manage-rows {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 3px 8px;
+  padding: 2px 2px 4px;
+  font-size: 12px;
+}
+
+.tc-manage-rows > span:nth-child(odd) {
+  color: var(--monet-on-surface-variant);
+}
+
+.tc-manage-preview .tc-command {
+  margin: 2px 0 6px;
+  max-height: 240px;
+}
+
+.tc-manage-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.tc-manage-actions .btn {
+  min-height: 28px;
+  font-size: 12px;
+}
+
+/* ── ffprobe 媒体信息 ──────────────────────────────────────────── */
+
+.tc-media {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.6fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.tc-media-info {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tc-media-grid {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 4px 10px;
+  padding: 2px 10px 8px;
+  font-size: 12px;
+}
+
+.tc-media-grid > span:nth-child(odd) {
+  color: var(--monet-on-surface-variant);
+}
+
+.tc-media-grid > span:nth-child(even) {
+  overflow-wrap: anywhere;
+}
+
+.tc-streams {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.tc-streams th,
+.tc-streams td {
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--monet-outline-variant);
+  vertical-align: top;
+}
+
+.tc-streams th {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--monet-on-surface-variant);
+}
+
+.tc-streams td.mono,
+.tc-streams th.mono {
+  font-family: var(--mono, ui-monospace, monospace);
+}
+
+.tc-streams tr:last-child td {
+  border-bottom: 0;
+}
+
+.tc-stream-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.tc-stream-dim {
+  color: var(--monet-on-surface-variant);
+  font-size: 11px;
+}
+
+.tc-raw {
+  padding: 0 10px 8px;
+}
+
+.tc-raw summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--monet-on-surface-variant);
+}
+
+.tc-raw pre {
+  margin: 6px 0 0;
+  padding: 8px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: 4px;
+  background: var(--monet-surface-container-low);
+  font-size: 10.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+@media (max-width: 1100px) {
+  .tc-media {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 1350px) {
   .tc-workbench {
-    grid-template-columns: 190px 140px minmax(0, 1fr);
+    grid-template-columns: 140px minmax(0, 1fr);
   }
 
   .tc-inspector {
@@ -795,24 +964,21 @@
 
 @media (max-width: 1100px) {
   .tc-workbench {
-    grid-template-columns: 170px minmax(0, 1fr);
+    grid-template-columns: 132px minmax(0, 1fr);
   }
 
   .tc-section-nav {
     grid-column: 1;
-    grid-row: 2;
-  }
-
-  .tc-preset-list {
-    grid-column: 1;
-    grid-row: 1;
-    max-height: 320px;
-    position: static;
+    grid-row: 1 / span 2;
   }
 
   .tc-editor {
     grid-column: 2;
-    grid-row: 1 / span 2;
+    grid-row: 1;
+  }
+
+  .tc-manage-body {
+    grid-template-columns: 1fr;
   }
 
   .tc-queue-body {

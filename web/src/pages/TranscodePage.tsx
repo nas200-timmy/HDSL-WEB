@@ -7,10 +7,12 @@ import {
   FolderOpenIcon,
   FormatListBulletedIcon,
   HomeIcon,
+  InfoIcon,
   SettingsIcon,
   TuneIcon,
 } from "../components/icons";
 import { refreshTranscodeFeature, useTranscodeFeature } from "../transcodeFeature";
+import { MediaInfoPage } from "./transcode/MediaInfoPage";
 import { OverviewPage } from "./transcode/OverviewPage";
 import { PreparePage } from "./transcode/PreparePage";
 import { QueuePage } from "./transcode/QueuePage";
@@ -18,13 +20,14 @@ import { PresetsPage } from "./transcode/PresetsPage";
 import { ToolsPage } from "./transcode/ToolsPage";
 import { TranscodeSettingsPage } from "./transcode/TranscodeSettingsPage";
 
-type TranscodeTab = "overview" | "prepare" | "queue" | "presets" | "tools" | "settings";
+type TranscodeTab = "overview" | "prepare" | "queue" | "presets" | "mediainfo" | "tools" | "settings";
 
 const TABS: Array<{ key: TranscodeTab; title: string; icon: ReactNode; iconActive?: ReactNode }> = [
   { key: "overview", title: "概览", icon: <HomeIcon size={20} /> },
   { key: "prepare", title: "准备文件", icon: <FolderOpenIcon size={20} /> },
   { key: "queue", title: "编码队列", icon: <FormatListBulletedIcon size={20} /> },
   { key: "presets", title: "参数面板", icon: <TuneIcon size={20} /> },
+  { key: "mediainfo", title: "媒体信息", icon: <InfoIcon size={20} /> },
   { key: "tools", title: "工具", icon: <ExtensionIcon size={20} /> },
   { key: "settings", title: "设置", icon: <SettingsIcon size={20} /> },
 ];
@@ -82,6 +85,7 @@ export function TranscodePage() {
         {tab === "prepare" && <PreparePage onOpenTab={openTab} />}
         {tab === "queue" && <QueuePage />}
         {tab === "presets" && <PresetsPage />}
+        {tab === "mediainfo" && <MediaInfoPage />}
         {tab === "tools" && <ToolsPage onOpenTab={openTab} />}
         {tab === "settings" && <TranscodeSettingsPage />}
       </div>

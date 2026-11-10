@@ -16,12 +16,9 @@ import { ContentCopyIcon, RefreshIcon, SearchIcon } from "../../components/icons
 /**
  * 参数面板工作台。
  *
- * 交互按 3FUI 的流程复刻，而不是 HMCL 的“一张长表单”：
- *   左：预设列表（单击预览，双击应用）  中左：分区导航
- *   中：当前分区的字段（控制 + 说明）    右：参数总览 + 实时命令行
- *
- * 命令行不需要先选文件——后端支持用 `<输入文件>` 占位符生成，改任何参数
- * 600ms 后自动刷新，和 3FUI 的“参数总览”一样是自检入口。
+ * 纵向导航是唯一的入口：参数总览 / 预设管理 / 各参数分区 / 自定义参数。
+ * “预设管理”不是常驻侧栏，而是像 3FUI 那样的一页——单击预览，双击或“应用”才
+ * 把它读进参数面板；右侧始终是参数总览 + 实时命令行。
  */
 
 type FieldIssue = { field: string; text: string };
@@ -48,6 +45,11 @@ export function PresetsPage() {
   const [saveAsOpen, setSaveAsOpen] = useState(false);
   const [saveAsId, setSaveAsId] = useState("");
   const [saveAsName, setSaveAsName] = useState("");
+  // 预设管理页：单击预览的那一份，不直接影响正在编辑的 draft
+  const [managedId, setManagedId] = useState<string | null>(null);
+  const [managedEntry, setManagedEntry] = useState<TranscodePresetEntry | null>(null);
+  const [managedPreview, setManagedPreview] = useState("");
+  const [managedError, setManagedError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const previewSeq = useRef(0);
 
@@ -83,7 +85,6 @@ export function PresetsPage() {
       setEntry(answer);
       setDraft({ ...answer.preset });
       setDirty(false);
-      setActiveSection(null);
       sessionStorage.setItem("transcode.presetId", id);
     } catch (e) {
       setError(errMsg(e));
@@ -231,6 +232,7 @@ export function PresetsPage() {
       const saved = await api.transcode.importPreset(id, data);
       toast("success", "预设已导入");
       await loadList(saved.id);
+      setActiveSection("预设管理");
     } catch (e) {
       setError(errMsg(e));
       toast("error", errMsg(e));
@@ -240,20 +242,30 @@ export function PresetsPage() {
     }
   };
 
-  const exportFile = async (format: "json" | "3fui") => {
-    if (!entry) return;
+  // 预设管理：单击只预览（不动当前参数），双击/“应用”才读进参数面板。
+  const inspectPreset = async (id: string) => {
+    setManagedId(id);
+    setManagedError(null);
     try {
-      const data = await api.transcode.exportPreset(entry.id, format);
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `${entry.id}.${format}`;
-      link.click();
-      URL.revokeObjectURL(url);
+      const answer = await api.transcode.preset(id);
+      setManagedEntry(answer);
+      try {
+        const command = await api.transcode.preview({ preset: answer.preset });
+        setManagedPreview(command.command);
+      } catch {
+        setManagedPreview("");
+      }
     } catch (e) {
-      toast("error", errMsg(e));
+      setManagedError(errMsg(e));
+      setManagedEntry(null);
     }
+  };
+
+  const applyManaged = async () => {
+    if (!managedId) return;
+    await select(managedId);
+    setActiveSection(null);
+    toast("success", "已应用预设到参数面板");
   };
 
   const changedFields = useMemo(() => {
@@ -263,9 +275,8 @@ export function PresetsPage() {
     for (const section of schema.sections) {
       for (const field of section.fields) {
         if (JSON.stringify(draft[field.id]) !== JSON.stringify(baseline[field.id])) changed.add(field.id);
-        else if (JSON.stringify(field.default) !== JSON.stringify(baseline[field.id])) {
-          // 新参数集：与 schema 默认值不同也算改过
-          if (!entry) changed.add(field.id);
+        else if (!entry && JSON.stringify(field.default) !== JSON.stringify(baseline[field.id])) {
+          changed.add(field.id);
         }
       }
     }
@@ -332,74 +343,11 @@ export function PresetsPage() {
       fields: onlyChanged ? section.fields.filter((field) => changedFields.has(field.id)) : section.fields,
     })).filter((section) => section.fields.length > 0);
 
+  const managing = activeSection === "预设管理";
+
   return (
     <div className="tc-workbench">
-      {/* ── 预设列表 ─────────────────────────────────────────────── */}
-      <aside className="card tc-preset-list">
-        <div className="tc-side-head">
-          <span>预设</span>
-          <button className="btn btn-text" disabled={busy} onClick={() => void loadList()}>
-            <RefreshIcon size={16} />
-          </button>
-        </div>
-        <div className="tc-search">
-          <SearchIcon size={16} />
-          <input value={presetSearch} placeholder="搜索预设" onChange={(e) => setPresetSearch(e.target.value)} />
-        </div>
-        <div className="tc-side-actions">
-          <button
-            className="btn btn-text"
-            disabled={busy || !schema}
-            onClick={() => {
-              setEntry(null);
-              setSelectedId(null);
-              setDraft(baseDraft);
-              setDirty(false);
-              setActiveSection(null);
-              sessionStorage.removeItem("transcode.presetId");
-            }}
-          >
-            新建
-          </button>
-          <button className="btn btn-text" disabled={busy} onClick={() => fileInput.current?.click()}>
-            导入
-          </button>
-          <button className="btn btn-text" disabled={busy || !entry} onClick={() => void exportFile("3fui")}>
-            导出
-          </button>
-          <input
-            ref={fileInput}
-            type="file"
-            accept=".json,.3fui,application/json"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void importFile(file);
-            }}
-          />
-        </div>
-        <div className="tc-preset-scroll scroll-hover">
-          {filteredPresets.length === 0 && (
-            <div className="tc-empty">没有匹配的预设</div>
-          )}
-          {filteredPresets.map((preset) => (
-            <div
-              key={preset.id}
-              className={`tc-preset-item${selectedId === preset.id ? " selected" : ""}`}
-              onClick={() => void select(preset.id)}
-              title={preset.description || preset.id}
-            >
-              <span className="tc-preset-name">
-                {preset.name}
-                <span className={`tag ${preset.builtin ? "plain" : "running"}`}>{preset.builtin ? "内置" : "自定义"}</span>
-              </span>
-              <span className="tc-preset-desc">{preset.description || preset.id}</span>
-            </div>
-          ))}
-        </div>
-      </aside>
-
-      {/* ── 分区导航 ─────────────────────────────────────────────── */}
+      {/* ── 纵向导航（预设管理是其中一项，不是常驻侧栏）───────────────── */}
       <aside className="card tc-section-nav">
         <div
           className={`tc-nav-item${activeSection === null ? " selected" : ""}`}
@@ -407,6 +355,16 @@ export function PresetsPage() {
         >
           参数总览
         </div>
+        <div
+          className={`tc-nav-item${managing ? " selected" : ""}`}
+          onClick={() => {
+            setActiveSection("预设管理");
+            if (!managedId && selectedId) void inspectPreset(selectedId);
+          }}
+        >
+          预设管理
+        </div>
+        <div className="tc-nav-divider" />
         {(schema?.sections ?? []).map((section) => (
           <div
             key={section.title}
@@ -416,19 +374,19 @@ export function PresetsPage() {
             {section.title}
           </div>
         ))}
+        <div className="tc-nav-divider" />
         <div
           className={`tc-nav-item${activeSection === "自定义参数" ? " selected" : ""}`}
           onClick={() => setActiveSection("自定义参数")}
         >
           自定义参数
         </div>
-        <div className="tc-nav-divider" />
         <button className="tc-nav-item" onClick={() => nav("/transcode?tab=prepare")}>
           去准备文件 →
         </button>
       </aside>
 
-      {/* ── 参数区 ───────────────────────────────────────────────── */}
+      {/* ── 参数区 / 预设管理 ─────────────────────────────────────── */}
       <section className="tc-editor">
         <div className="card tc-editor-head">
           <div className="tc-editor-title">
@@ -436,21 +394,58 @@ export function PresetsPage() {
               className="input tc-name"
               value={String(draft.name ?? "")}
               placeholder="预设名称"
-              disabled={entry?.builtin === true}
+              disabled={entry?.builtin === true || managing}
               onChange={(e) => update("name", e.target.value)}
             />
-            <span className="mono tc-id">{entry ? entry.id : "未保存的自定义参数"}{entry?.builtin ? "（只读）" : ""}</span>
-            {dirty && <span className="tag plain">未保存</span>}
+            <span className="mono tc-id">
+              {managing ? "预设管理 · 单击预览，双击应用" : entry ? entry.id : "未保存的自定义参数"}
+              {!managing && entry?.builtin ? "（只读）" : ""}
+            </span>
+            {dirty && !managing && <span className="tag plain">未保存</span>}
           </div>
           <input
             className="input"
             value={String(draft.description ?? "")}
             placeholder="描述（可选）"
-            disabled={entry?.builtin === true}
+            disabled={entry?.builtin === true || managing}
             onChange={(e) => update("description", e.target.value)}
           />
           <div className="tc-editor-actions">
-            {entry?.builtin ? (
+            {managing ? (
+              <>
+                <button
+                  className="btn btn-text"
+                  disabled={busy || !schema}
+                  onClick={() => {
+                    setEntry(null);
+                    setSelectedId(null);
+                    setDraft(baseDraft);
+                    setDirty(false);
+                    setActiveSection(null);
+                    sessionStorage.removeItem("transcode.presetId");
+                  }}
+                >
+                  新建
+                </button>
+                <button className="btn btn-text" disabled={busy} onClick={() => void loadList()}>
+                  <RefreshIcon size={16} />
+                  刷新
+                </button>
+                <button className="btn btn-text" disabled={busy} onClick={() => fileInput.current?.click()}>
+                  导入
+                </button>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept=".json,.3fui,application/json"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void importFile(file);
+                  }}
+                />
+              </>
+            ) : entry?.builtin ? (
               <button className="btn btn-raised" disabled={busy} onClick={openSaveAs}>
                 另存为
               </button>
@@ -472,72 +467,201 @@ export function PresetsPage() {
               </button>
             )}
             <span style={{ flex: 1 }} />
-            <div className="tc-search-inline">
-              <SearchIcon size={16} />
-              <input value={fieldSearch} placeholder="搜索参数" onChange={(e) => setFieldSearch(e.target.value)} />
-            </div>
-            <label className="tc-check">
-              <input type="checkbox" checked={onlyChanged} onChange={(e) => setOnlyChanged(e.target.checked)} />
-              只看已改
-            </label>
+            {!managing && (
+              <>
+                <div className="tc-search-inline">
+                  <SearchIcon size={16} />
+                  <input value={fieldSearch} placeholder="搜索参数" onChange={(e) => setFieldSearch(e.target.value)} />
+                </div>
+                <label className="tc-check">
+                  <input type="checkbox" checked={onlyChanged} onChange={(e) => setOnlyChanged(e.target.checked)} />
+                  只看已改
+                </label>
+              </>
+            )}
           </div>
         </div>
 
-        {error && (
-          <div className="card tc-error">{error}</div>
-        )}
+        {error && <div className="card tc-error">{error}</div>}
 
-        {(activeSection === null || activeSection === "自定义参数") && (
-          <div className="card tc-overview-card">
-            <div className="tc-card-title">参数总览</div>
-            <div className="tc-overview-grid">
-              {overview.map((item) => (
-                <div key={item.label} className="tc-overview-cell">
-                  <span className="tc-overview-label">{item.label}</span>
-                  <span className="tc-overview-value mono">{item.value}</span>
-                </div>
-              ))}
+        {managing ? (
+          <div className="card tc-manage">
+            <div className="tc-manage-toolbar">
+              <div className="tc-search">
+                <SearchIcon size={16} />
+                <input value={presetSearch} placeholder="搜索预设" onChange={(e) => setPresetSearch(e.target.value)} />
+              </div>
+              {managedEntry && !managedEntry.builtin && (
+                <button
+                  className="btn btn-text danger"
+                  disabled={busy}
+                  onClick={() => {
+                    if (!window.confirm(`删除预设「${managedEntry.preset.name ?? managedEntry.id}」？`)) return;
+                    void api.transcode.deletePreset(managedEntry.id).then(() => {
+                      toast("success", "预设已删除");
+                      setManagedId(null);
+                      setManagedEntry(null);
+                      setManagedPreview("");
+                      if (selectedId === managedEntry.id) {
+                        setSelectedId(null);
+                        setEntry(null);
+                        setDraft(baseDraft);
+                      }
+                      return loadList();
+                    }).catch((e) => toast("error", errMsg(e)));
+                  }}
+                >
+                  删除此预设
+                </button>
+              )}
             </div>
-            {issues.length > 0 && (
-              <div className="tc-issues">
-                {issues.map((issue) => (
-                  <button
-                    key={issue.text}
-                    className="tc-issue"
-                    onClick={() => {
-                      const section = schema?.sections.find((s) => s.fields.some((f) => f.id === issue.field));
-                      if (section) setActiveSection(section.title);
-                    }}
+            <div className="tc-manage-body">
+              <div className="tc-manage-list scroll-hover">
+                {filteredPresets.length === 0 && <div className="tc-empty">没有匹配的预设</div>}
+                {filteredPresets.map((preset) => (
+                  <div
+                    key={preset.id}
+                    className={`tc-preset-item${managedId === preset.id ? " selected" : ""}`}
+                    onClick={() => void inspectPreset(preset.id)}
+                    onDoubleClick={() => void select(preset.id).then(() => {
+                      setActiveSection(null);
+                      toast("success", "已应用预设到参数面板");
+                    })}
+                    title="单击预览，双击应用"
                   >
-                    {issue.text}
-                  </button>
+                    <span className="tc-preset-name">
+                      {preset.name}
+                      <span className={`tag ${preset.builtin ? "plain" : "running"}`}>{preset.builtin ? "内置" : "自定义"}</span>
+                      {selectedId === preset.id && <span className="tag running">当前</span>}
+                    </span>
+                    <span className="tc-preset-desc">{preset.description || preset.id}</span>
+                  </div>
                 ))}
               </div>
-            )}
-            {issues.length === 0 && <div className="tc-ok">参数没有明显问题</div>}
-          </div>
-        )}
-
-        {visibleSections.map((section) => (
-          <div className="card tc-fields-card" key={section.title}>
-            <div className="tc-card-title">{section.title}</div>
-            <div className="tc-fields-grid">
-              {section.fields.map((field) => (
-                <Field
-                  key={field.id}
-                  field={field}
-                  value={draft[field.id] ?? field.default}
-                  changed={changedFields.has(field.id)}
-                  disabled={entry?.builtin === true}
-                  onChange={(value) => update(field.id, value)}
-                />
-              ))}
+              <div className="tc-manage-preview">
+                {managedError && <div className="tc-error">{managedError}</div>}
+                {!managedEntry && !managedError && (
+                  <div className="tc-empty">选择左侧预设查看参数与命令行</div>
+                )}
+                {managedEntry && (
+                  <>
+                    <div className="tc-card-title">
+                      {String(managedEntry.preset.name ?? managedEntry.id)}
+                      <span className="mono tc-id">{managedEntry.id}</span>
+                    </div>
+                    <div className="tc-manage-rows">
+                      <span>视频</span><span className="mono">{String(managedEntry.preset.videoEncoder ?? "—")}</span>
+                      <span>质量</span><span className="mono">{String(managedEntry.preset.qualityMode ?? "")} {String(managedEntry.preset.qualityValue ?? "")}</span>
+                      <span>容器</span><span className="mono">{String(managedEntry.preset.container ?? "—")}</span>
+                      <span>音频</span><span className="mono">{String(managedEntry.preset.audioMode ?? "—")}</span>
+                      <span>字幕</span><span className="mono">{String(managedEntry.preset.subtitleMode ?? "—")}</span>
+                      <span>描述</span><span>{String(managedEntry.preset.description ?? "—")}</span>
+                    </div>
+                    <pre className="tc-command">{managedPreview || "（无法生成命令行）"}</pre>
+                    <div className="tc-manage-actions">
+                      <button className="btn btn-raised" disabled={busy} onClick={() => void applyManaged()}>
+                        应用此预设
+                      </button>
+                      <button
+                        className="btn btn-text"
+                        disabled={!managedPreview}
+                        onClick={() => void navigator.clipboard?.writeText(managedPreview).then(
+                          () => toast("success", "命令行已复制"),
+                          () => toast("error", "复制失败（需要 HTTPS 或 localhost）"),
+                        )}
+                      >
+                        <ContentCopyIcon size={16} />
+                        复制命令行
+                      </button>
+                      {!managedEntry.builtin && (
+                        <button
+                          className="btn btn-text"
+                          disabled={busy}
+                          onClick={() => {
+                            void select(managedEntry.id).then(() => {
+                              setActiveSection(null);
+                              openSaveAs();
+                            });
+                          }}
+                        >
+                          另存为副本
+                        </button>
+                      )}
+                      <button
+                        className="btn btn-text"
+                        onClick={() => void api.transcode.exportPreset(managedEntry.id, "3fui").then((data) => {
+                          const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                          const url = URL.createObjectURL(blob);
+                          const link = document.createElement("a");
+                          link.href = url;
+                          link.download = `${managedEntry.id}.3fui`;
+                          link.click();
+                          URL.revokeObjectURL(url);
+                        }).catch((e) => toast("error", errMsg(e)))}
+                      >
+                        导出 .3fui
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
-        ))}
+        ) : (
+          <>
+            {(activeSection === null || activeSection === "自定义参数") && (
+              <div className="card tc-overview-card">
+                <div className="tc-card-title">参数总览</div>
+                <div className="tc-overview-grid">
+                  {overview.map((item) => (
+                    <div key={item.label} className="tc-overview-cell">
+                      <span className="tc-overview-label">{item.label}</span>
+                      <span className="tc-overview-value mono">{item.value}</span>
+                    </div>
+                  ))}
+                </div>
+                {issues.length > 0 && (
+                  <div className="tc-issues">
+                    {issues.map((issue) => (
+                      <button
+                        key={issue.text}
+                        className="tc-issue"
+                        onClick={() => {
+                          const section = schema?.sections.find((s) => s.fields.some((f) => f.id === issue.field));
+                          if (section) setActiveSection(section.title);
+                        }}
+                      >
+                        {issue.text}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {issues.length === 0 && <div className="tc-ok">参数没有明显问题</div>}
+              </div>
+            )}
 
-        {(activeSection === null || activeSection === "自定义参数") && (
-          <CustomArgsEditor draft={draft} disabled={entry?.builtin === true} update={update} />
+            {visibleSections.map((section) => (
+              <div className="card tc-fields-card" key={section.title}>
+                <div className="tc-card-title">{section.title}</div>
+                <div className="tc-fields-grid">
+                  {section.fields.map((field) => (
+                    <Field
+                      key={field.id}
+                      field={field}
+                      value={draft[field.id] ?? field.default}
+                      changed={changedFields.has(field.id)}
+                      disabled={entry?.builtin === true}
+                      onChange={(value) => update(field.id, value)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+
+            {(activeSection === null || activeSection === "自定义参数") && (
+              <CustomArgsEditor draft={draft} disabled={entry?.builtin === true} update={update} />
+            )}
+          </>
         )}
       </section>
 
@@ -567,10 +691,7 @@ export function PresetsPage() {
             <button
               className="btn btn-text"
               disabled={previewBusy}
-              onClick={() => {
-                // 触发上面的防抖 effect：改一个无意义字段会立刻重算，不必等 600ms。
-                setDraft((current) => ({ ...current }));
-              }}
+              onClick={() => setDraft((current) => ({ ...current }))}
             >
               立即刷新
             </button>

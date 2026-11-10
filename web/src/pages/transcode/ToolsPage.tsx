@@ -1,13 +1,10 @@
 import { useEffect, useState } from "react";
-import { api, type TranscodeMediaEntry, type TranscodeQualityJob } from "../../api";
+import { api, type TranscodeQualityJob } from "../../api";
 import { ProgressBar } from "../../components/ProgressBar";
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
-import { MediaBrowserPanel, probeSummary } from "./common";
 
 export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
-  const [selected, setSelected] = useState<TranscodeMediaEntry | null>(null);
-  const [probe, setProbe] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -25,17 +22,6 @@ export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
   const [qualityMetrics, setQualityMetrics] = useState<string[]>(["psnr", "ssim"]);
   const [qualityJob, setQualityJob] = useState<TranscodeQualityJob | null>(null);
   const [qualityError, setQualityError] = useState<string | null>(null);
-
-  const select = async (entry: TranscodeMediaEntry) => {
-    setSelected(entry);
-    setProbe(null);
-    setError(null);
-    try {
-      setProbe(await api.transcode.mediaProbe(entry.path));
-    } catch (e) {
-      setError(errMsg(e));
-    }
-  };
 
   const lines = (text: string) => text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 
@@ -84,46 +70,14 @@ export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
 
   return (
     <div style={{ display: "grid", gap: 8 }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div style={{ flex: "1 1 380px", minWidth: 0 }}>
-          <MediaBrowserPanel selected={selected?.path} onSelect={(entry) => void select(entry)} />
-        </div>
-        <div className="card" style={{ flex: "1 1 380px", minWidth: 0 }}>
+      {error && (
+        <div className="card">
           <div className="comp-row">
-            <span className="comp-label">媒体信息</span>
-            <span className="comp-value mono" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
-              {selected?.path || "从左侧选择"}
-            </span>
+            <span className="comp-label">错误</span>
+            <span className="comp-value" style={{ color: "var(--monet-error)", fontSize: 12 }}>{error}</span>
           </div>
-          {probe && (
-            <div className="comp-row">
-              <span className="comp-label">摘要</span>
-              <span className="comp-value" style={{ fontSize: 12 }}>{probeSummary(probe)}</span>
-            </div>
-          )}
-          {error && (
-            <div className="comp-row">
-              <span className="comp-label" style={{ color: "var(--monet-error)" }}>错误</span>
-              <span className="comp-value" style={{ fontSize: 12 }}>{error}</span>
-            </div>
-          )}
-          <pre
-            style={{
-              margin: "4px 8px 8px",
-              padding: 8,
-              maxHeight: 300,
-              overflow: "auto",
-              fontSize: 11,
-              lineHeight: 1.45,
-              background: "var(--monet-surface-container-low)",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-all",
-            }}
-          >
-            {probe ? JSON.stringify(probe, null, 2) : "选择文件后显示 ffprobe JSON"}
-          </pre>
         </div>
-      </div>
+      )}
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
         <div className="card" style={{ flex: "1 1 300px", minWidth: 280 }}>
