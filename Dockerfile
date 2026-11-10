@@ -156,6 +156,10 @@ ARG DEBIAN_FRONTEND=noninteractive
 #
 #   docker build --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn .
 #
+# 用 **http://**：debian:trixie-slim 这类底座在第一次 `apt-get update` 时还没有
+# `ca-certificates`，此时 https 镜像站会直接报 CERTIFICATE_VERIFY_FAILED。装完
+# ca-certificates 之后再换 https 才行；最省事的是 apt 这一段始终用 http。
+#
 # 只处理 Debian/Ubuntu；Fedora/openSUSE 的分支不动（各自的 repo 文件里主机名不统一，
 # 猜错比不改更糟）。
 ARG APT_MIRROR=
@@ -271,12 +275,21 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       debian|ubuntu) \
         apt-get update; \
         apt-get install -y --no-install-recommends \
-          7zip build-essential busybox-static bzip2 ca-certificates cargo curl \
-          ffmpeg git golang-go less libatomic1 libavcodec-extra nano \
+          7zip build-essential busybox-static bzip2 ca-certificates ca-certificates-java \
+          cargo curl ffmpeg git golang-go less libatomic1 libavcodec-extra nano \
           openjdk-21-jdk-headless openjdk-25-jdk-headless openssh-client openssh-server \
           pkg-config procps \
           python-is-python3 python3 rsync rustc sshpass tini unzip vim-tiny \
           wget xz-utils zip zstd; \
+        # Java 的出站 HTTPS 用的是 JDK 自己的 cacerts，不是 OpenSSL 的 bundle。\
+        # Debian 的 openjdk-* 已经依赖 ca-certificates-java，这里再显式装一次并\
+        # 断言 postinst 真的生成了 truststore；缺了的话 models.dev / registry\
+        # 都会在运行期才报 PKIX，构建期先拦住。\
+        test -s /etc/ssl/certs/java/cacerts || { \
+          echo "HDSL-web: Java truststore /etc/ssl/certs/java/cacerts is missing;" >&2; \
+          echo "HDSL-web: install ca-certificates-java or Java HTTPS will fail (PKIX)." >&2; \
+          exit 1; \
+        }; \
         ;; \
       fedora) \
         dnf install -y --setopt=install_weak_deps=False \
