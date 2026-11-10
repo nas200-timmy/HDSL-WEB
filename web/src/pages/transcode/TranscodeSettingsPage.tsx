@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { api, type TranscodeCapabilities } from "../../api";
+import { api, type TranscodeCapabilities, type TranscodeInstallJob } from "../../api";
 import { refreshTranscodeFeature, setTranscodeFeature, useTranscodeFeature } from "../../transcodeFeature";
 import { errMsg } from "../../utils";
 import { toast } from "../../store";
+import { ProgressBar } from "../../components/ProgressBar";
 
 export function TranscodeSettingsPage() {
   const feature = useTranscodeFeature();
@@ -12,6 +13,11 @@ export function TranscodeSettingsPage() {
   const [policy, setPolicy] = useState("ask");
   const [timeoutMinutes, setTimeoutMinutes] = useState(10);
   const [saving, setSaving] = useState(false);
+  const [installKind, setInstallKind] = useState<"static" | "package" | "compile">("package");
+  const [installUrl, setInstallUrl] = useState("");
+  const [installSha, setInstallSha] = useState("");
+  const [installVersion, setInstallVersion] = useState("");
+  const [installJob, setInstallJob] = useState<TranscodeInstallJob | null>(null);
 
   const load = async () => {
     setBusy(true);
@@ -35,6 +41,30 @@ export function TranscodeSettingsPage() {
     setPolicy(feature.failurePolicy);
     setTimeoutMinutes(feature.failureTimeoutMinutes);
   }, [feature?.failurePolicy, feature?.failureTimeoutMinutes]);
+
+  useEffect(() => {
+    if (!installJob || installJob.state !== "running") return;
+    const timer = window.setInterval(() => {
+      void api.transcode.runtimeJob(installJob.id).then((job) => {
+        setInstallJob(job);
+        if (job.state === "done") void load();
+      }).catch(() => undefined);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [installJob]);
+
+  const startInstall = async () => {
+    try {
+      setInstallJob(await api.transcode.runtimeInstall({
+        kind: installKind,
+        url: installKind === "package" ? undefined : installUrl,
+        sha256: installKind === "package" ? undefined : installSha,
+        version: installVersion || undefined,
+      }));
+    } catch (e) {
+      toast("error", errMsg(e));
+    }
+  };
 
   const savePolicy = async () => {
     setSaving(true);
@@ -86,13 +116,70 @@ export function TranscodeSettingsPage() {
             {capabilities?.ffprobe || "—"}
           </span>
         </div>
-        <div style={{ display: "flex", gap: 8, padding: "8px" }}>
+        <div style={{ display: "flex", gap: 8, padding: "8px", flexWrap: "wrap" }}>
           <button className="btn btn-text" disabled={busy} onClick={() => void load()}>
             {busy ? "探测中…" : "重新探测"}
           </button>
           <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", alignSelf: "center" }}>
-            下载 / 指定路径等在线安装功能在后续提交接入；当前可用 `transcode.ffmpeg_path` / `HDSL_FFMPEG_PATH`。
+            也可以手动配置 `transcode.ffmpeg_path` / `HDSL_FFMPEG_PATH`。
           </span>
+        </div>
+        <div style={{ display: "grid", gap: 6, padding: "0 8px 8px", borderTop: "1px solid var(--monet-outline-variant)" }}>
+          <label style={{ fontSize: 12, paddingTop: 8 }}>在线安装</label>
+          <select className="input" value={installKind}
+                  onChange={(e) => setInstallKind(e.target.value as typeof installKind)}>
+            <option value="package">包管理器（apt-get / dnf / zypper）</option>
+            <option value="static">下载静态包（Windows/macOS/Linux）</option>
+            <option value="compile">源码编译（最后手段）</option>
+          </select>
+          {installKind !== "package" && (
+            <>
+              <input className="input" placeholder="https 下载地址（zip / tar.xz）"
+                     value={installUrl} onChange={(e) => setInstallUrl(e.target.value)} />
+              <input className="input" placeholder="SHA-256（必填）"
+                     value={installSha} onChange={(e) => setInstallSha(e.target.value)} />
+              <input className="input" placeholder="安装目录名（可选，例如 7.1.5）"
+                     value={installVersion} onChange={(e) => setInstallVersion(e.target.value)} />
+            </>
+          )}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-raised" disabled={installJob?.state === "running"
+              || (installKind !== "package" && (!installUrl || !installSha))}
+                    onClick={() => void startInstall()}>
+              {installKind === "package" ? "开始安装" : installKind === "static" ? "下载并安装" : "开始编译"}
+            </button>
+            {installJob?.state === "running" && (
+              <button className="btn btn-text danger"
+                      onClick={() => void api.transcode.runtimeCancel(installJob.id).then(setInstallJob)}>
+                取消
+              </button>
+            )}
+          </div>
+          <p style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+            静态包必须提供 SHA-256；源码编译需要 make/gcc/pkg-config 与 libx264/libx265/libva 开发包。
+            包管理器安装只对当前容器有效，重建后需重装；静态包与编译结果在数据卷里。
+          </p>
+          {installJob && (
+            <>
+              <div className="comp-row">
+                <span className="comp-label">安装状态</span>
+                <span className="comp-value">
+                  <span className={`tag ${installJob.state === "done" ? "running" : "plain"}`}>
+                    {installJob.state === "done" ? "完成" : installJob.state === "failed" ? "失败"
+                      : installJob.state === "cancelled" ? "已取消" : installJob.message || "运行中"}
+                  </span>
+                </span>
+              </div>
+              <ProgressBar fraction={installJob.progress} />
+              {installJob.error && (
+                <span style={{ fontSize: 12, color: "var(--monet-error)" }}>{installJob.error}</span>
+              )}
+              <pre style={{ margin: 0, padding: 8, maxHeight: 180, overflow: "auto", fontSize: 10,
+                            background: "var(--monet-surface-container-low)", whiteSpace: "pre-wrap" }}>
+                {installJob.log || "（暂无输出）"}
+              </pre>
+            </>
+          )}
         </div>
       </div>
 

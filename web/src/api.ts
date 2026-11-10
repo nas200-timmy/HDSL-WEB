@@ -1026,6 +1026,13 @@ export const api = {
         jsonInit("POST", {})),
     updateSettings: (body: { failurePolicy: string; failureTimeoutMinutes?: number }) =>
       request<TranscodeFeature>("/api/transcode/settings", jsonInit("PUT", body)),
+    runtimeInstall: (body: { kind: "static" | "package" | "compile"; url?: string; sha256?: string; version?: string }) =>
+      request<TranscodeInstallJob>("/api/transcode/runtime/install", jsonInit("POST", body)),
+    runtimeJob: (id: string) =>
+      request<TranscodeInstallJob>(`/api/transcode/runtime/install/${encodeURIComponent(id)}`),
+    runtimeCancel: (id: string) =>
+      request<TranscodeInstallJob>(`/api/transcode/runtime/install/${encodeURIComponent(id)}/cancel`,
+        jsonInit("POST", {})),
   },
 };
 
@@ -1204,6 +1211,18 @@ export interface TranscodeQualityJob {
   createdAt: number;
   endedAt: number;
   results: Record<string, TranscodeQualityMetric>;
+}
+
+export interface TranscodeInstallJob {
+  id: string;
+  kind: "static" | "package" | "compile";
+  state: "running" | "done" | "failed" | "cancelled";
+  progress: number;
+  message: string;
+  log: string;
+  error?: string | null;
+  createdAt: number;
+  endedAt: number;
 }
 
 /// GET /api/mc/feature：功能开关与内存锁。

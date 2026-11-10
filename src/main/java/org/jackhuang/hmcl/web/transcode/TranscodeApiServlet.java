@@ -127,6 +127,10 @@ public final class TranscodeApiServlet extends HttpServlet {
             qualityGet(request, response, path.substring("/tools/quality/".length()));
             return;
         }
+        if (path.startsWith("/runtime/install/")) {
+            runtimeGet(response, path.substring("/runtime/install/".length()));
+            return;
+        }
         Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
     }
 
@@ -157,9 +161,14 @@ public final class TranscodeApiServlet extends HttpServlet {
             case "/tools/mux" -> muxTool(request, response);
             case "/tools/extract" -> extractTool(request, response);
             case "/tools/quality" -> qualityTool(request, response);
+            case "/runtime/install" -> runtimeInstall(request, response);
             default -> {
                 if (path.startsWith("/queue/jobs/")) {
                     queueJobAction(request, response, path.substring("/queue/jobs/".length()));
+                } else if (path.startsWith("/runtime/install/") && path.endsWith("/cancel")) {
+                    String rest = path.substring("/runtime/install/".length(),
+                            path.length() - "/cancel".length());
+                    runtimeCancel(response, rest);
                 } else if (path.startsWith("/tools/quality/") && path.endsWith("/cancel")) {
                     String rest = path.substring("/tools/quality/".length(),
                             path.length() - "/cancel".length());
@@ -574,6 +583,44 @@ public final class TranscodeApiServlet extends HttpServlet {
             }
         }
         return result;
+    }
+
+    private void runtimeInstall(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        try {
+            var job = module.installer().start(
+                    stringField(body, "kind"),
+                    stringField(body, "url"),
+                    stringField(body, "sha256"),
+                    stringField(body, "version"));
+            audit("transcode.runtime.install", job.kind, "success", request);
+            Json.write(response, job);
+        } catch (IOException | IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    private void runtimeGet(HttpServletResponse response, String id) throws IOException {
+        var job = module.installer().job(id);
+        if (job.isEmpty()) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "install job not found");
+            return;
+        }
+        Json.write(response, job.get());
+    }
+
+    private void runtimeCancel(HttpServletResponse response, String id) throws IOException {
+        var job = module.installer().job(id);
+        if (job.isEmpty()) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "install job not found");
+            return;
+        }
+        module.installer().cancel(id);
+        Json.write(response, job.get());
     }
 
     private void qualityTool(HttpServletRequest request, HttpServletResponse response) throws IOException {

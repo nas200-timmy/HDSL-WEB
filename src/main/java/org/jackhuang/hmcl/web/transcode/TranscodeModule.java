@@ -23,6 +23,7 @@ import org.jackhuang.hmcl.web.transcode.media.MediaBrowser;
 import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
 import org.jackhuang.hmcl.web.transcode.quality.QualityService;
 import org.jackhuang.hmcl.web.transcode.queue.TranscodeQueue;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegInstaller;
 import org.jackhuang.hmcl.web.transcode.runtime.TranscodeRuntime;
 import org.jackhuang.hmcl.web.transcode.tools.TranscodeTools;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -46,6 +47,7 @@ public final class TranscodeModule {
     private final TranscodeQueue queue;
     private final TranscodeTools tools;
     private final QualityService quality;
+    private final FfmpegInstaller installer;
 
     public TranscodeModule(ServerConfig config, EventBus eventBus) {
         this.config = config;
@@ -56,6 +58,7 @@ public final class TranscodeModule {
         this.queue = new TranscodeQueue(this, eventBus);
         this.tools = new TranscodeTools(this);
         this.quality = new QualityService(this);
+        this.installer = new FfmpegInstaller(this);
         if (feature.enabled()) {
             queue.start();
         }
@@ -91,6 +94,10 @@ public final class TranscodeModule {
 
     public QualityService quality() {
         return quality;
+    }
+
+    public FfmpegInstaller installer() {
+        return installer;
     }
 
     public Path dataDir() {
