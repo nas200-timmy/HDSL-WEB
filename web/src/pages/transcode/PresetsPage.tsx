@@ -23,6 +23,7 @@ export function PresetsPage() {
   const [inputPath, setInputPath] = useState("");
   const [preview, setPreview] = useState<string>("");
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
 
   const loadList = async (preferred?: string) => {
@@ -196,6 +197,14 @@ export function PresetsPage() {
     });
   };
 
+  const warnings: string[] = [];
+  if (!draft.videoEncoder) warnings.push("没有选择视频编码器");
+  if (!draft.container) warnings.push("没有选择输出容器");
+  if (!draft.qualityValue) warnings.push("没有设置质量值/码率");
+  if (draft.audioMode === "copy" && draft.subtitleMode === "copy") {
+    warnings.push("音频/字幕均为 copy：请确认目标容器装得下全部轨道");
+  }
+
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
       <div className="card" style={{ flex: "0 1 220px", minWidth: 200, padding: 0 }}>
@@ -250,6 +259,36 @@ export function PresetsPage() {
             </div>
           ))}
         </div>
+        <div style={{ padding: "8px 10px 2px", fontSize: 12, fontWeight: 600 }}>参数分类</div>
+        <div className="list-body scroll-hover" style={{ maxHeight: 280 }}>
+          <div
+            className={`tlli ripple-host${activeSection === null ? " selected" : ""}`}
+            style={{ padding: "6px 10px", cursor: "pointer",
+                     background: activeSection === null ? "var(--monet-secondary-container)" : undefined }}
+            onClick={() => setActiveSection(null)}
+          >
+            <span className="tlli-text"><span className="tlli-title">参数总览</span></span>
+          </div>
+          {schema?.sections.map((section) => (
+            <div
+              key={section.title}
+              className={`tlli ripple-host${activeSection === section.title ? " selected" : ""}`}
+              style={{ padding: "6px 10px", cursor: "pointer",
+                       background: activeSection === section.title ? "var(--monet-secondary-container)" : undefined }}
+              onClick={() => setActiveSection(section.title)}
+            >
+              <span className="tlli-text"><span className="tlli-title">{section.title}</span></span>
+            </div>
+          ))}
+          <div
+            className={`tlli ripple-host${activeSection === "自定义参数" ? " selected" : ""}`}
+            style={{ padding: "6px 10px", cursor: "pointer",
+                     background: activeSection === "自定义参数" ? "var(--monet-secondary-container)" : undefined }}
+            onClick={() => setActiveSection("自定义参数")}
+          >
+            <span className="tlli-text"><span className="tlli-title">自定义参数</span></span>
+          </div>
+        </div>
       </div>
 
       <div style={{ flex: "1 1 560px", minWidth: 0, display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -259,6 +298,21 @@ export function PresetsPage() {
             <div className="comp-row">
               <span className="comp-label">错误</span>
               <span className="comp-value" style={{ color: "var(--monet-error)" }}>{error}</span>
+            </div>
+          </div>
+        )}
+        {activeSection === null && warnings.length > 0 && (
+          <div className="card">
+            <div className="comp-row">
+              <span className="comp-label">参数总览 · 警告</span>
+              <span className="comp-value" style={{ fontSize: 12 }}>{warnings.length} 条</span>
+            </div>
+            <div style={{ display: "grid", gap: 2, padding: "4px 8px 8px", fontSize: 12 }}>
+              {warnings.map((warning, index) => (
+                <span key={warning} style={{ color: "var(--monet-error)" }}>
+                  {index + 1}. {warning}
+                </span>
+              ))}
             </div>
           </div>
         )}
@@ -305,7 +359,7 @@ export function PresetsPage() {
           </div>
         )}
 
-        {schema?.sections.map((section) => (
+        {schema?.sections.filter((section) => activeSection === null || activeSection === section.title).map((section) => (
           <div className="card" key={section.title}>
             <div className="comp-row">
               <span className="comp-label">{section.title}</span>
@@ -332,7 +386,9 @@ export function PresetsPage() {
           </div>
         ))}
 
-        <CustomArgsEditor draft={draft} disabled={entry?.builtin === true} update={update} />
+        {(activeSection === null || activeSection === "自定义参数") && (
+          <CustomArgsEditor draft={draft} disabled={entry?.builtin === true} update={update} />
+        )}
         </div>
 
         <div className="card" style={{ flex: "0 1 340px", minWidth: 280, position: "sticky", top: 8 }}>
