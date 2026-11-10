@@ -36,7 +36,8 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
       .presets()
       .then((answer) => {
         setPresets(answer.presets);
-        if (answer.presets.length > 0) setPresetId(answer.presets[0].id);
+        // No auto-selection: opening the page must not silently enqueue with the
+        // first built-in preset. The operator picks a starting point explicitly.
       })
       .catch((e) => setError(errMsg(e)));
   }, []);
@@ -144,6 +145,7 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
               disabled={busy || presets.length === 0}
               onChange={(e) => setPresetId(e.target.value)}
             >
+              <option value="">选择参数面板 / 预设…</option>
               {presets.map((preset) => (
                 <option key={preset.id} value={preset.id}>
                   {preset.name}{preset.builtin ? "" : "（自定义）"}
@@ -159,7 +161,10 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
               onChange={(e) => setOutputDir(e.target.value)}
             />
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", paddingTop: 4 }}>
-              <button className="btn btn-text" disabled={busy || !selected} onClick={() => void previewCommand()}>
+              <button className="btn btn-text" disabled={busy} onClick={() => onOpenTab("presets")}>
+                打开参数面板
+              </button>
+              <button className="btn btn-text" disabled={busy || !selected || !presetId} onClick={() => void previewCommand()}>
                 预览命令
               </button>
               <button className="btn btn-raised" disabled={busy || !selected || !presetId} onClick={() => void enqueue()}>

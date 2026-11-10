@@ -24,7 +24,7 @@ const TABS: Array<{ key: TranscodeTab; title: string; icon: ReactNode; iconActiv
   { key: "overview", title: "概览", icon: <HomeIcon size={20} /> },
   { key: "prepare", title: "准备文件", icon: <FolderOpenIcon size={20} /> },
   { key: "queue", title: "编码队列", icon: <FormatListBulletedIcon size={20} /> },
-  { key: "presets", title: "预设", icon: <TuneIcon size={20} /> },
+  { key: "presets", title: "参数面板", icon: <TuneIcon size={20} /> },
   { key: "tools", title: "工具", icon: <ExtensionIcon size={20} /> },
   { key: "settings", title: "设置", icon: <SettingsIcon size={20} /> },
 ];

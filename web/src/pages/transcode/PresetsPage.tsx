@@ -20,6 +20,9 @@ export function PresetsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filterDialog, setFilterDialog] = useState(false);
+  const [inputPath, setInputPath] = useState("");
+  const [preview, setPreview] = useState<string>("");
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
 
   const loadList = async (preferred?: string) => {
@@ -106,6 +109,21 @@ export function PresetsPage() {
     }
   };
 
+  const previewCommand = async () => {
+    if (!inputPath.trim()) {
+      setPreviewError("先填一个相对媒体根的输入文件（例如 input.mp4）");
+      return;
+    }
+    setPreviewError(null);
+    try {
+      const answer = await api.transcode.preview({ preset: draft, input: inputPath.trim() });
+      setPreview(answer.command);
+    } catch (e) {
+      setPreviewError(errMsg(e));
+      setPreview("");
+    }
+  };
+
   const importFile = async (file: File) => {
     setBusy(true);
     setError(null);
@@ -180,8 +198,9 @@ export function PresetsPage() {
 
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
-      <div className="card" style={{ flex: "0 1 240px", minWidth: 220, padding: 0 }}>
-        <div style={{ display: "flex", gap: 6, padding: "8px 8px 4px", flexWrap: "wrap" }}>
+      <div className="card" style={{ flex: "0 1 220px", minWidth: 200, padding: 0 }}>
+        <div style={{ padding: "8px 10px 2px", fontSize: 12, fontWeight: 600 }}>参数集</div>
+        <div style={{ display: "flex", gap: 6, padding: "4px 8px 4px", flexWrap: "wrap" }}>
           <button className="btn btn-text" disabled={busy || !schema} onClick={() => void create()}>
             新建
           </button>
@@ -233,7 +252,8 @@ export function PresetsPage() {
         </div>
       </div>
 
-      <div style={{ flex: "1 1 480px", minWidth: 0, display: "grid", gap: 8 }}>
+      <div style={{ flex: "1 1 560px", minWidth: 0, display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 420px", minWidth: 0, display: "grid", gap: 8 }}>
         {error && (
           <div className="card">
             <div className="comp-row">
@@ -245,7 +265,7 @@ export function PresetsPage() {
         {entry && (
           <div className="card">
             <div className="comp-row">
-              <span className="comp-label">预设</span>
+              <span className="comp-label">参数集</span>
               <span className="comp-value mono" style={{ fontSize: 12 }}>
                 {entry.id} {entry.builtin ? "（只读）" : ""}
               </span>
@@ -297,7 +317,8 @@ export function PresetsPage() {
                 </span>
               )}
             </div>
-            <div style={{ display: "grid", gap: 6, padding: "4px 8px 8px" }}>
+            <div style={{ display: "grid", gap: 6, padding: "4px 8px 8px",
+                          gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>
               {section.fields.map((field) => (
                 <Field
                   key={field.id}
@@ -312,6 +333,31 @@ export function PresetsPage() {
         ))}
 
         <CustomArgsEditor draft={draft} disabled={entry?.builtin === true} update={update} />
+        </div>
+
+        <div className="card" style={{ flex: "0 1 340px", minWidth: 280, position: "sticky", top: 8 }}>
+          <div className="comp-row">
+            <span className="comp-label">命令行预览</span>
+            <span className="comp-value" style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+              只生成，不执行
+            </span>
+          </div>
+          <div style={{ display: "grid", gap: 5, padding: "4px 8px 8px" }}>
+            <input className="input" value={inputPath} placeholder="输入文件（相对媒体根）"
+                   onChange={(e) => setInputPath(e.target.value)} />
+            <button className="btn btn-text" disabled={!entry} onClick={() => void previewCommand()}>
+              生成命令
+            </button>
+            {previewError && (
+              <span style={{ fontSize: 11, color: "var(--monet-error)" }}>{previewError}</span>
+            )}
+            <pre style={{ margin: 0, padding: 8, maxHeight: 360, overflow: "auto", fontSize: 10,
+                          lineHeight: 1.5, background: "var(--monet-surface-container-low)",
+                          whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+              {preview || "选择参数集、填输入文件后生成"}
+            </pre>
+          </div>
+        </div>
       </div>
 
       <Dialog open={filterDialog} title="追加视频滤镜" onClose={() => setFilterDialog(false)}>
