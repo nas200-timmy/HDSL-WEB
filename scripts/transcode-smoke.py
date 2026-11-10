@@ -273,6 +273,50 @@ def main() -> None:
                 check(result["frames"], f"quality frames missing: {metric}")
             print("PASS: quality metrics")
 
+            # P0 regression: two submissions of the same input/preset must not share
+            # an output path while both are still queued.
+            request(base, "POST", "/api/transcode/queue/pause", {})
+            outputs = []
+            ids = []
+            for _ in range(2):
+                status, extra = request(base, "POST", "/api/transcode/queue/jobs",
+                                        {"presetId": "h264-quality", "input": "input.mp4"})
+                check(status == 200, f"duplicate submit -> {status}: {extra}")
+                assert isinstance(extra, dict)
+                outputs.append(extra["output"])
+                ids.append(extra["id"])
+            check(len(set(outputs)) == 2, f"duplicate submissions shared output paths: {outputs}")
+            for job_id in ids:
+                request(base, "POST", f"/api/transcode/queue/jobs/{job_id}/cancel", {})
+            request(base, "POST", "/api/transcode/queue/start", {})
+            print("PASS: output reservation")
+
+            # P1 regression: a video-only source must not fail an audio-copy preset.
+            video_only = media / "video_only.mp4"
+            subprocess.run(
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                 "-f", "lavfi", "-i", "testsrc=duration=1:size=128x72:rate=10",
+                 "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video_only)],
+                check=True, timeout=60,
+            )
+            status, vo_job = request(base, "POST", "/api/transcode/queue/jobs",
+                                     {"presetId": "h264-quality", "input": "video_only.mp4"})
+            check(status == 200, f"video-only submit -> {status}: {vo_job}")
+            assert isinstance(vo_job, dict)
+            vo_final = None
+            for _ in range(120):
+                status, snapshot = request(base, "GET", "/api/transcode/queue")
+                check(status == 200, f"queue -> {status}")
+                assert isinstance(snapshot, dict)
+                vo_final = next((item for item in snapshot.get("jobs", []) if item["id"] == vo_job["id"]), None)
+                if vo_final and vo_final["state"] in ("done", "failed", "cancelled"):
+                    break
+                time.sleep(0.5)
+            check(vo_final is not None and vo_final["state"] == "done",
+                  f"video-only job ended as {vo_final and vo_final['state']}: "
+                  f"{vo_final and vo_final.get('error')}")
+            print("PASS: video-only source")
+
             status, _ = request(base, "GET", "/api/transcode/queue/jobs/unknown")
             check(status == 404, f"unknown job -> {status} (expected 404)")
             print("PASS: 404 contract")
