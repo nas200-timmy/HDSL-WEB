@@ -34,6 +34,7 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、ZCode 也能一起装；每
 - [构建与开发](#构建与开发)
 - [常见问题](#常见问题)
 - [设计说明](docs/design-notes.md)
+- [转码模块设计稿（规划中）](docs/transcode.md)
 - [许可](#许可)
 
 ## 亮点
