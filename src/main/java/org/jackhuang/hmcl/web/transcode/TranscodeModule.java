@@ -18,8 +18,10 @@
 package org.jackhuang.hmcl.web.transcode;
 
 import org.jackhuang.hmcl.web.config.ServerConfig;
+import org.jackhuang.hmcl.web.event.EventBus;
 import org.jackhuang.hmcl.web.transcode.media.MediaBrowser;
 import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
+import org.jackhuang.hmcl.web.transcode.queue.TranscodeQueue;
 import org.jackhuang.hmcl.web.transcode.runtime.TranscodeRuntime;
 import org.jetbrains.annotations.NotNullByDefault;
 
@@ -39,13 +41,18 @@ public final class TranscodeModule {
     private final TranscodeRuntime runtime;
     private final MediaBrowser media;
     private final PresetStore presets;
+    private final TranscodeQueue queue;
 
-    public TranscodeModule(ServerConfig config) {
+    public TranscodeModule(ServerConfig config, EventBus eventBus) {
         this.config = config;
         this.feature = new TranscodeFeatureState(TranscodePaths.featureFile(config));
         this.runtime = new TranscodeRuntime(config);
         this.media = new MediaBrowser(runtime);
         this.presets = new PresetStore(TranscodePaths.dataDir(config).resolve("presets"));
+        this.queue = new TranscodeQueue(this, eventBus);
+        if (feature.enabled()) {
+            queue.start();
+        }
     }
 
     public ServerConfig config() {
@@ -66,6 +73,10 @@ public final class TranscodeModule {
 
     public PresetStore presets() {
         return presets;
+    }
+
+    public TranscodeQueue queue() {
+        return queue;
     }
 
     public Path dataDir() {

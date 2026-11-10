@@ -112,6 +112,14 @@ public final class TranscodeApiServlet extends HttpServlet {
             preset(response, path.substring("/presets/".length()));
             return;
         }
+        if ("/queue".equals(path)) {
+            Json.write(response, module.queue().snapshot());
+            return;
+        }
+        if (path.startsWith("/queue/jobs/")) {
+            queueJobGet(request, response, path.substring("/queue/jobs/".length()));
+            return;
+        }
         Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
     }
 
@@ -124,7 +132,26 @@ public final class TranscodeApiServlet extends HttpServlet {
             case "/feature/disable" -> disable(request, response);
             case "/presets" -> savePreset(request, response);
             case "/preview" -> preview(request, response);
-            default -> Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            case "/queue/start" -> {
+                module.queue().startQueue();
+                Json.write(response, module.queue().snapshot());
+            }
+            case "/queue/pause" -> {
+                module.queue().pauseQueue();
+                Json.write(response, module.queue().snapshot());
+            }
+            case "/queue/stop" -> {
+                module.queue().stopAll();
+                Json.write(response, module.queue().snapshot());
+            }
+            case "/queue/jobs" -> submitJob(request, response);
+            default -> {
+                if (path.startsWith("/queue/jobs/")) {
+                    queueJobAction(request, response, path.substring("/queue/jobs/".length()));
+                } else {
+                    Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+                }
+            }
         }
     }
 
@@ -376,6 +403,87 @@ public final class TranscodeApiServlet extends HttpServlet {
         throw new IllegalArgumentException("presetId or preset is required");
     }
 
+    private void queueJobGet(HttpServletRequest request, HttpServletResponse response, String rest)
+            throws IOException {
+        String[] parts = rest.split("/");
+        if (parts.length == 1) {
+            var job = module.queue().jobJson(parts[0]);
+            if (job.isEmpty()) {
+                Json.error(response, HttpServletResponse.SC_NOT_FOUND, "job not found");
+                return;
+            }
+            Json.write(response, job.get());
+            return;
+        }
+        if (parts.length == 2 && "log".equals(parts[1])) {
+            if (module.queue().jobJson(parts[0]).isEmpty()) {
+                Json.error(response, HttpServletResponse.SC_NOT_FOUND, "job not found");
+                return;
+            }
+            int tail = intParameter(request, "tail", 500);
+            JsonObject body = new JsonObject();
+            body.addProperty("id", parts[0]);
+            body.addProperty("log", module.queue().log(parts[0], tail));
+            Json.write(response, body);
+            return;
+        }
+        Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+    }
+
+    private void submitJob(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        String input = stringField(body, "input");
+        if (input == null || input.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "input is required");
+            return;
+        }
+        try {
+            TranscodePreset preset = resolvePreset(body);
+            String presetId = stringField(body, "presetId");
+            String outputDir = stringField(body, "outputDir");
+            JsonObject job = module.queue().submit(input, outputDir, presetId, preset);
+            audit("transcode.queue.submit", job.get("id").getAsString(), "success", request);
+            Json.write(response, job);
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    private void queueJobAction(HttpServletRequest request, HttpServletResponse response, String rest)
+            throws IOException {
+        String[] parts = rest.split("/");
+        if (parts.length != 2) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
+        String id = parts[0];
+        try {
+            boolean changed = switch (parts[1]) {
+                case "cancel" -> module.queue().cancel(id);
+                case "retry" -> module.queue().retry(id);
+                case "pause" -> module.queue().pause(id);
+                case "resume" -> module.queue().resume(id);
+                default -> false;
+            };
+            if (!changed) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, "the job is not in a state that allows this action");
+                return;
+            }
+            audit("transcode.queue." + parts[1], id, "success", request);
+            Json.write(response, module.queue().snapshot());
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
+    }
+
     private void enable(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (!requireElevation(request, response)) {
             return;
@@ -428,6 +536,7 @@ public final class TranscodeApiServlet extends HttpServlet {
                 Metadata.VERSION,
                 true);
         feature.enable(record);
+        module.queue().start();
         audit("transcode.feature.enable", "terms v" + termsVersion + " (" + termsTextHash + ")", "success", request);
         featureJson(response);
     }
@@ -441,6 +550,12 @@ public final class TranscodeApiServlet extends HttpServlet {
         if (!requireElevation(request, response)) {
             return;
         }
+        if (module.queue().activeCount() > 0 && !"1".equals(request.getParameter("force"))) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "transcode_busy: stop the queue or pass force=1 to stop it and disable");
+            return;
+        }
+        module.queue().stop();
         feature.disable();
         audit("transcode.feature.disable", "transcode feature", "success", request);
         featureJson(response);
