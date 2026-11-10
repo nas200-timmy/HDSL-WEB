@@ -1003,6 +1003,13 @@ export const api = {
         `/api/transcode/queue/jobs/${encodeURIComponent(id)}/decision`,
         jsonInit("POST", { action }),
       ),
+    toolsMerge: (inputs: string[], output: string) =>
+      request<TranscodeJob>("/api/transcode/tools/merge", jsonInit("POST", { inputs, output })),
+    toolsMux: (inputs: string[], maps: string[], output: string) =>
+      request<TranscodeJob>("/api/transcode/tools/mux", jsonInit("POST", { inputs, maps, output })),
+    toolsExtract: (input: string, type: "video" | "audio" | "subtitle", index: number, output: string) =>
+      request<TranscodeJob>("/api/transcode/tools/extract",
+        jsonInit("POST", { input, type, index, output })),
   },
 };
 

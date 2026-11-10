@@ -82,7 +82,7 @@ export function TranscodePage() {
         {tab === "prepare" && <PreparePage onOpenTab={openTab} />}
         {tab === "queue" && <QueuePage />}
         {tab === "presets" && <PresetsPage />}
-        {tab === "tools" && <ToolsPage />}
+        {tab === "tools" && <ToolsPage onOpenTab={openTab} />}
         {tab === "settings" && <TranscodeSettingsPage />}
       </div>
     </div>

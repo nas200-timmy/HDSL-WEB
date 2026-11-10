@@ -57,6 +57,9 @@ public final class TranscodeJob {
     public String output = "";
     public String presetId = "";
     public String presetName = "";
+    /// Non-empty for queue-backed tools (merge / mux / extract); the command is
+    /// then already built instead of coming from the preset.
+    public String tool = "";
     public TranscodePreset preset;
     public State state = State.QUEUED;
     public double fraction = -1;
@@ -104,6 +107,7 @@ public final class TranscodeJob {
         fallbackTo = null;
         fallbackAttempted = false;
         decisionDeadline = -1;
+        tool = "";
         startedAt = -1;
         endedAt = -1;
         command = List.of();

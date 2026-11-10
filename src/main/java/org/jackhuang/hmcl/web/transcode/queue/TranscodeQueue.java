@@ -212,6 +212,43 @@ public final class TranscodeQueue {
         return jobJson(job.id).orElseThrow();
     }
 
+    /// Adds a job whose argv is already decided by a tool. The queue still owns the
+    /// process, log, progress, cancellation and the server-side lifetime; only the
+    /// command construction is different.
+    public JsonObject submitCommand(String label, String outputRel, List<String> args, String tool)
+            throws IOException {
+        start();
+        Path output = module.media().resolveForWrite(mediaRoot, outputRel);
+        if (Files.isDirectory(output)) {
+            throw new IOException("output must be a file path, not a directory: " + outputRel);
+        }
+        TranscodeJob job = new TranscodeJob();
+        job.id = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        job.input = label;
+        job.output = relative(output);
+        job.preset = new TranscodePreset();
+        job.preset.container = extension(output);
+        job.presetName = tool;
+        job.tool = tool;
+        job.encoder = "copy";
+        job.command = List.copyOf(args);
+        job.logFile = logsDir.resolve(job.id + ".log").toString();
+        job.createdAt = System.currentTimeMillis();
+        synchronized (lock) {
+            long active = jobs.stream().filter(candidate -> !candidate.state.terminal()).count();
+            if (active >= module.config().transcode.maxQueue) {
+                throw new IOException("the transcode queue is full (" + module.config().transcode.maxQueue + ")");
+            }
+            jobs.add(job);
+            saveLocked();
+        }
+        publishQueue();
+        if (runState == RunState.RUNNING) {
+            dispatch();
+        }
+        return jobJson(job.id).orElseThrow();
+    }
+
     /// First explicit start (or resume after a pause).
     public void startQueue() {
         start();
@@ -446,8 +483,10 @@ public final class TranscodeQueue {
             }
             part = partPath(output, job.id);
             Files.deleteIfExists(part);
-            job.durationMs = durationMs(input);
-            List<String> args = CommandBuilder.build(job.preset, input, part);
+            job.durationMs = job.tool.isBlank() ? durationMs(input) : -1;
+            List<String> args = job.tool.isBlank()
+                    ? CommandBuilder.build(job.preset, input, part)
+                    : toolArgs(job.command, part);
             List<String> command = new ArrayList<>(args.size() + 1);
             command.add(info.ffmpeg().toString());
             command.addAll(args);
@@ -479,7 +518,7 @@ public final class TranscodeQueue {
                 handleFailure(job, "ffmpeg exited with code " + code + tail(log), part);
                 return;
             }
-            if (!validOutput(part, job.preset)) {
+            if (job.tool.isBlank() ? !validOutput(part, job.preset) : !validAnyOutput(part)) {
                 handleFailure(job, "ffmpeg finished but the output has no usable stream" + tail(log), part);
                 return;
             }
@@ -562,6 +601,23 @@ public final class TranscodeQueue {
     /// A hardware failure does not go straight to FAILED: the operator gets a decision
     /// (or the policy decides). `full-auto` degrades immediately; the other two tiers
     /// park the job and pause the queue.
+    /// Replaces the output placeholder in a tool command with the real `.part` path.
+    /// Tool args are stored with the final output last; this keeps the queue's atomic
+    /// rename contract without every tool knowing about it.
+    private static List<String> toolArgs(List<String> stored, Path part) {
+        List<String> args = new ArrayList<>(stored);
+        if (!args.isEmpty()) {
+            args.set(args.size() - 1, part.toString());
+        }
+        return args;
+    }
+
+    private static String extension(Path path) {
+        String name = path.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        return dot > 0 ? name.substring(dot + 1) : "mkv";
+    }
+
     private void handleFailure(TranscodeJob job, String message, @Nullable Path part) {
         if (job.state == TranscodeJob.State.CANCELLED || job.state == TranscodeJob.State.FAILED) {
             return;
@@ -806,6 +862,19 @@ public final class TranscodeQueue {
         } catch (Exception ignored) {
         }
         return -1;
+    }
+
+    private boolean validAnyOutput(Path output) {
+        if (!Files.isRegularFile(output) || fileSize(output) <= 0) {
+            return false;
+        }
+        try {
+            JsonObject probe = module.runtime().probeMedia(output);
+            JsonArray streams = probe.has("streams") ? probe.getAsJsonArray("streams") : new JsonArray();
+            return !streams.isEmpty();
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private boolean validOutput(Path output, TranscodePreset preset) {

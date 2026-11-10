@@ -23,6 +23,7 @@ import org.jackhuang.hmcl.web.transcode.media.MediaBrowser;
 import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
 import org.jackhuang.hmcl.web.transcode.queue.TranscodeQueue;
 import org.jackhuang.hmcl.web.transcode.runtime.TranscodeRuntime;
+import org.jackhuang.hmcl.web.transcode.tools.TranscodeTools;
 import org.jetbrains.annotations.NotNullByDefault;
 
 import java.nio.file.Path;
@@ -42,6 +43,7 @@ public final class TranscodeModule {
     private final MediaBrowser media;
     private final PresetStore presets;
     private final TranscodeQueue queue;
+    private final TranscodeTools tools;
 
     public TranscodeModule(ServerConfig config, EventBus eventBus) {
         this.config = config;
@@ -50,6 +52,7 @@ public final class TranscodeModule {
         this.media = new MediaBrowser(runtime);
         this.presets = new PresetStore(TranscodePaths.dataDir(config).resolve("presets"));
         this.queue = new TranscodeQueue(this, eventBus);
+        this.tools = new TranscodeTools(this);
         if (feature.enabled()) {
             queue.start();
         }
@@ -77,6 +80,10 @@ public final class TranscodeModule {
 
     public TranscodeQueue queue() {
         return queue;
+    }
+
+    public TranscodeTools tools() {
+        return tools;
     }
 
     public Path dataDir() {

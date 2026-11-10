@@ -145,6 +145,9 @@ public final class TranscodeApiServlet extends HttpServlet {
                 Json.write(response, module.queue().snapshot());
             }
             case "/queue/jobs" -> submitJob(request, response);
+            case "/tools/merge" -> mergeTool(request, response);
+            case "/tools/mux" -> muxTool(request, response);
+            case "/tools/extract" -> extractTool(request, response);
             default -> {
                 if (path.startsWith("/queue/jobs/")) {
                     queueJobAction(request, response, path.substring("/queue/jobs/".length()));
@@ -401,6 +404,70 @@ public final class TranscodeApiServlet extends HttpServlet {
             return preset;
         }
         throw new IllegalArgumentException("presetId or preset is required");
+    }
+
+    private void mergeTool(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        try {
+            JsonObject job = module.tools().merge(
+                    stringArray(body, "inputs"), stringField(body, "output"));
+            audit("transcode.tool.merge", job.get("id").getAsString(), "success", request);
+            Json.write(response, job);
+        } catch (IOException | IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    private void muxTool(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        try {
+            JsonObject job = module.tools().mux(
+                    stringArray(body, "inputs"), stringArray(body, "maps"), stringField(body, "output"));
+            audit("transcode.tool.mux", job.get("id").getAsString(), "success", request);
+            Json.write(response, job);
+        } catch (IOException | IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    private void extractTool(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        try {
+            JsonObject job = module.tools().extract(
+                    stringField(body, "input"),
+                    stringField(body, "type"),
+                    intField(body, "index"),
+                    stringField(body, "output"));
+            audit("transcode.tool.extract", job.get("id").getAsString(), "success", request);
+            Json.write(response, job);
+        } catch (IOException | IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    private static java.util.List<String> stringArray(JsonObject body, String name) {
+        if (!body.has(name) || !body.get(name).isJsonArray()) {
+            return java.util.List.of();
+        }
+        java.util.List<String> result = new java.util.ArrayList<>();
+        for (var element : body.getAsJsonArray(name)) {
+            if (element.isJsonPrimitive()) {
+                result.add(element.getAsString());
+            }
+        }
+        return result;
     }
 
     private void queueJobGet(HttpServletRequest request, HttpServletResponse response, String rest)
