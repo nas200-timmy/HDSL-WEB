@@ -36,7 +36,7 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
   },
   qualityMode: {
     crf: "CRF 恒定质量",
-    cqp: "CQP 固定 QP",
+    cqp: "CQP 固定质量",
     bitrate: "固定码率",
   },
   preset: {
@@ -75,7 +75,17 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
     yuv420p10le: "10-bit 4:2:0",
     yuv422p10le: "10-bit 4:2:2",
     yuv444p10le: "10-bit 4:4:4",
+    yuv420p12le: "12-bit 4:2:0",
+    yuv444p12le: "12-bit 4:4:4",
     p010le: "10-bit P010（HDR）",
+    p016le: "16-bit P016",
+    nv12: "8-bit NV12 半平面",
+    nv16: "8-bit NV16 半平面",
+    gbrp: "平面 RGB",
+    gbrp10le: "10-bit 平面 RGB",
+    gray: "灰度 8-bit",
+    gray10le: "灰度 10-bit",
+    qsv: "QSV 内部格式",
   },
   rotate: {
     "": "不旋转",
@@ -164,41 +174,57 @@ const VIDEO_ENCODER_FIELDS = new Set([
   "width", "height", "fps", "crop", "rotate", "deinterlace", "filterGraph",
   "colorPrimaries", "colorTransfer", "colorMatrix", "colorRange",
 ]);
-const HARDWARE_IGNORED_FIELDS = new Set(["profile", "tune"]);
 const AUDIO_ENCODE_FIELDS = new Set(["audioEncoder", "audioBitrate", "audioChannels", "audioSampleRate"]);
 const SUBTITLE_BURN_FIELDS = new Set(["subtitleFile", "subtitleFont", "subtitleFontSize"]);
+const NO_TUNE_FAMILIES = new Set(["qsvH264", "qsvHevc", "vaapiH264", "vaapiHevc"]);
+const RESTRICTIVE_ATTACHMENT_CONTAINERS = new Set(["mp4", "mov", "avi", "ts", "m4a"]);
+
+/// 编码器家族：决定速度档、profile、tune、像素格式，键与后端 PresetSchema 的 optionGroups 一致。
+export function encoderFamily(encoder: string): string {
+  switch (encoder) {
+    case "libx264": return "x264";
+    case "libx265": return "x265";
+    case "libvpx-vp9": return "vp9";
+    case "libaom-av1": return "av1";
+    case "h264_nvenc": return "nvencH264";
+    case "hevc_nvenc": return "nvencHevc";
+    case "h264_vaapi": return "vaapiH264";
+    case "hevc_vaapi": return "vaapiHevc";
+    case "h264_qsv": return "qsvH264";
+    case "hevc_qsv": return "qsvHevc";
+    default: return "x264";
+  }
+}
 
 /// 各编码器家族的速度档：可选值与切换时的默认档。
-/// 软件 x264/x265 与 QSV 用命名档位，NVENC 用 p1–p7，H.264 VAAPI 用数值 quality（越大越快），
-/// HEVC VAAPI 在当前 ffmpeg 里没有速度控制。
 const SPEED_PRESETS: Record<string, { values: string[]; fallback: string }> = {
-  software: {
+  x264: {
     values: ["", "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"],
     fallback: "medium",
   },
-  nvenc: { values: ["", "p1", "p2", "p3", "p4", "p5", "p6", "p7"], fallback: "p4" },
-  qsv: { values: ["", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], fallback: "medium" },
-  vaapi: { values: ["", "0", "1", "2", "3", "4", "5", "6", "7", "8"], fallback: "" },
-  vaapiHevc: { values: [], fallback: "" },
+  x265: {
+    values: ["", "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"],
+    fallback: "medium",
+  },
+  vp9: { values: ["", "0", "1", "2", "3", "4", "5", "6", "7", "8"], fallback: "" },
+  av1: { values: ["", "0", "1", "2", "3", "4", "5", "6", "7", "8"], fallback: "" },
+  nvencH264: { values: ["", "p1", "p2", "p3", "p4", "p5", "p6", "p7"], fallback: "p4" },
+  nvencHevc: { values: ["", "p1", "p2", "p3", "p4", "p5", "p6", "p7"], fallback: "p4" },
+  qsvH264: { values: ["", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], fallback: "medium" },
+  qsvHevc: { values: ["", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], fallback: "medium" },
+  vaapiH264: { values: ["", "0", "1", "2", "3", "4", "5", "6", "7", "8"], fallback: "" },
+  vaapiHevc: { values: ["", "0", "1", "2", "3", "4", "5", "6", "7", "8"], fallback: "" },
 };
 
-export function speedGroup(encoder: string): string {
-  if (encoder.endsWith("_nvenc")) return "nvenc";
-  if (encoder.endsWith("_qsv")) return "qsv";
-  if (encoder === "h264_vaapi") return "vaapi";
-  if (encoder === "hevc_vaapi") return "vaapiHevc";
-  return "software";
-}
-
-/// 当前编码器可用的速度档；schema 的 optionGroups 是权威列表，拿不到时退回默认列表。
+/// 当前编码器可用的速度档；schema 的 optionGroups 是权威列表，拿不到时退回本地映射。
 export function speedPresetOptions(fieldOptions: string[] | undefined, encoder: string): string[] {
-  return SPEED_PRESETS[speedGroup(encoder)]?.values ?? fieldOptions ?? [];
+  return SPEED_PRESETS[encoderFamily(encoder)]?.values ?? fieldOptions ?? [];
 }
 
 /// 切换编码器后把旧速度档换成新编码器能接受的值；不认识就落到该家族的默认档。
 export function remapSpeedPreset(encoder: string, current: unknown): string {
-  const group = SPEED_PRESETS[speedGroup(encoder)];
-  if (!group || group.values.length === 0) return "";
+  const group = SPEED_PRESETS[encoderFamily(encoder)];
+  if (!group) return String(current ?? "");
   const value = String(current ?? "");
   return group.values.includes(value) ? value : group.fallback;
 }
@@ -206,15 +232,34 @@ export function remapSpeedPreset(encoder: string, current: unknown): string {
 /// 返回空串表示可编辑；否则是「为什么变灰」的说明，同时显示在字段下方。
 export function inactiveReason(fieldId: string, preset: TranscodePreset): string {
   const encoder = String(preset.videoEncoder ?? "");
-  const hardware = /_vaapi|_qsv|_nvenc/.test(encoder);
+  const family = encoderFamily(encoder);
+  const container = String(preset.container ?? "").toLowerCase();
   if ((encoder === "copy" || encoder === "none") && VIDEO_ENCODER_FIELDS.has(fieldId)) {
     return encoder === "none" ? "视频已丢弃，此项不生效" : "不重新编码，此项不生效";
   }
-  if (fieldId === "preset" && encoder === "hevc_vaapi") {
-    return "此 VAAPI 编码器不提供速度档";
+  if (fieldId === "tune" && NO_TUNE_FAMILIES.has(family)) {
+    return "此编码器没有 tune 选项";
   }
-  if (hardware && HARDWARE_IGNORED_FIELDS.has(fieldId)) {
-    return "硬件编码忽略此项";
+  if (fieldId === "profile" && family === "vp9") {
+    return "VP9 没有 profile 选项";
+  }
+  if (fieldId === "tenBit" && String(preset.pixelFormat ?? "") !== "") {
+    return "已指定像素格式，10-bit 开关不生效";
+  }
+  if (fieldId === "outputSuffix" && String(preset.outputNaming ?? "") !== "suffix") {
+    return "自动命名不是「追加后缀」";
+  }
+  if (fieldId === "subtitleMap" && String(preset.subtitleMode ?? "copy") !== "copy") {
+    return "字幕不是「保留字幕轨」，map 不生效";
+  }
+  if (fieldId === "audioMap" && String(preset.audioMode ?? "copy") === "none") {
+    return "已丢弃音频，map 不生效";
+  }
+  if (fieldId === "videoMap" && encoder === "none") {
+    return "已丢弃视频，map 不生效";
+  }
+  if (fieldId === "copyAttachments" && RESTRICTIVE_ATTACHMENT_CONTAINERS.has(container)) {
+    return "此容器不支持附件流";
   }
   if (String(preset.audioMode ?? "copy") !== "encode" && AUDIO_ENCODE_FIELDS.has(fieldId)) {
     return "音频未重新编码，此项不生效";

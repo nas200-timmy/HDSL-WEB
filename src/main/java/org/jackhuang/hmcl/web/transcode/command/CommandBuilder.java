@@ -109,12 +109,16 @@ public final class CommandBuilder {
                     args.add("1");
                 }
                 if (!blank(preset.preset)) {
-                    if (softwareEncoder(video) || video.endsWith("_nvenc") || video.endsWith("_qsv")) {
-                        args.add("-preset");
+                    if ("libvpx-vp9".equals(video) || "libaom-av1".equals(video)) {
+                        // VP9/AV1 软件编码的速度档是 -cpu-used（0 最慢 ~ 8 最快）。
+                        args.add("-cpu-used");
                         args.add(preset.preset);
-                    } else if ("h264_vaapi".equals(video)) {
+                    } else if (video.endsWith("_vaapi")) {
                         // VAAPI's speed control is `-quality` (larger = faster), not `-preset`.
                         args.add("-quality");
+                        args.add(preset.preset);
+                    } else if (softwareEncoder(video) || video.endsWith("_nvenc") || video.endsWith("_qsv")) {
+                        args.add("-preset");
                         args.add(preset.preset);
                     }
                 }

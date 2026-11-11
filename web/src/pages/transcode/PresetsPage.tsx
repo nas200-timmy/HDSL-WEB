@@ -15,9 +15,9 @@ import { Dialog } from "../../components/Dialog";
 import { ContentCopyIcon, RefreshIcon, SearchIcon } from "../../components/icons";
 import { HelpNote } from "./common";
 import {
+  encoderFamily,
   inactiveReason,
   remapSpeedPreset,
-  speedGroup,
   speedPresetOptions,
   valueLabel,
   valueTip,
@@ -148,7 +148,13 @@ export function PresetsPage() {
     setDirty(true);
     setDraft((current) => {
       const next = { ...current, [id]: value };
-      // 与 3FUI 一致的编码器联动：图片编码器丢音/字幕，硬件编码器清掉软件档位。
+      const findField = (fieldId: string) =>
+        schema?.sections.flatMap((section) => section.fields).find((field) => field.id === fieldId);
+      const allowedValues = (fieldId: string, group: string) =>
+        findField(fieldId)?.optionGroups?.[group];
+
+      // 与 3FUI 一致的编码器联动：图片编码器丢音/字幕，硬件换质量模式，速度档/profile/
+      // tune/pixelFormat 换成新编码器能接受的值（不认识的清空）。
       if (id === "videoEncoder") {
         const encoder = String(value);
         const image = /^(mjpeg|png|webp|libwebp|bmp|tiff|gif|avif|libaom-av1|jxl|libjxl|jpegxl)$/.test(encoder);
@@ -159,21 +165,56 @@ export function PresetsPage() {
           next.copyAttachments = false;
           next.copyChapters = false;
           next.preset = "";
-        } else if (hardware) {
-          next.qualityMode = next.qualityMode === "bitrate" ? "bitrate" : "cqp";
-          // 速度档随编码器家族切换：NVENC p1–p7、QSV 命名档、H.264 VAAPI 数值档。
-          next.preset = remapSpeedPreset(encoder, next.preset);
-          next.profile = "";
-          next.tune = "";
+        } else if (encoder === "copy" || encoder === "none") {
+          next.preset = "";
         } else {
-          if (next.qualityMode !== "bitrate") {
-            next.qualityMode = "crf";
+          const family = encoderFamily(encoder);
+          next.preset = remapSpeedPreset(encoder, next.preset);
+          // CRF 只给软件编码；硬件统一用 CQP，固定码率两种都保留。
+          next.qualityMode = next.qualityMode === "bitrate" ? "bitrate" : hardware ? "cqp" : "crf";
+          for (const fieldId of ["pixelFormat", "profile", "tune"]) {
+            const allowed = allowedValues(fieldId, family);
+            if (allowed && next[fieldId] !== "" && !allowed.includes(String(next[fieldId]))) {
+              next[fieldId] = "";
+            }
           }
-          next.preset = encoder === "copy" || encoder === "none"
-            ? ""
-            : remapSpeedPreset(encoder, next.preset);
         }
       }
+
+      // 容器决定视频/音频编码器与附件能力：选到不兼容的值就地换掉/关掉。
+      if (id === "container") {
+        const container = String(value).toLowerCase();
+        const allowedVideo = allowedValues("videoEncoder", container);
+        if (allowedVideo && next.videoEncoder && !allowedVideo.includes(String(next.videoEncoder))) {
+          const fallback = container === "webm" ? "libvpx-vp9" : container === "m4a" ? "none" : "libx264";
+          next.videoEncoder = fallback;
+          next.preset = fallback === "none" ? "" : remapSpeedPreset(fallback, "");
+          next.qualityMode = "crf";
+          next.pixelFormat = "";
+          next.profile = "";
+          next.tune = "";
+        }
+        const allowedAudio = allowedValues("audioEncoder", container);
+        if (allowedAudio && next.audioEncoder && !allowedAudio.includes(String(next.audioEncoder))) {
+          next.audioEncoder = container === "webm" ? "libopus" : "aac";
+        }
+        if (["mp4", "mov", "avi", "ts", "m4a"].includes(container)) {
+          next.copyAttachments = false;
+        }
+      }
+
+      // 质量模式换挡时把值也换成对应形态：码率 ↔ 质量值。
+      if (id === "qualityMode") {
+        const mode = String(value);
+        const currentValue = String(next.qualityValue ?? "");
+        const bitrateLike = /^\d+(?:\.\d+)?[kKmM]$/.test(currentValue);
+        if (mode === "bitrate" && !bitrateLike) {
+          next.qualityValue = "2500k";
+        } else if (mode !== "bitrate" && bitrateLike) {
+          next.qualityValue = "20";
+        }
+      }
+
       return next;
     });
   };
@@ -308,6 +349,10 @@ export function PresetsPage() {
     const container = String(draft.container ?? "").toLowerCase();
     if (String(draft.subtitleMode) === "burn" && !String(draft.subtitleFile ?? "").trim()) {
       list.push({ field: "subtitleFile", text: "字幕模式是「烧录」，但没有指定字幕文件" });
+    }
+    if ((String(draft.videoEncoder) === "copy" || String(draft.videoEncoder) === "none")
+      && String(draft.subtitleMode) === "burn") {
+      list.push({ field: "subtitleMode", text: "视频不重新编码时不能烧录字幕，请改字幕模式或选一个视频编码器" });
     }
     if (RESTRICTIVE_CONTAINERS.includes(container)) {
       if (String(draft.subtitleMode) === "copy") {
@@ -566,6 +611,7 @@ export function PresetsPage() {
             <li>右侧<b>实时命令行</b>用 <span className="mono">&lt;输入文件&gt;</span> 占位，改任何参数 600ms 后自动刷新；它只生成、不执行。</li>
             <li><b>预设管理</b>：单击只预览，双击或「应用此预设」才会读进参数面板；内置预设只读，改完用「另存为」。</li>
             <li>字段名旁的 <b>ⓘ</b> 悬停显示这一项的完整说明；下拉框里每一项都写成「中文名 + 原始取值」，并附一行解释。</li>
+            <li>换视频编码器或输出容器后，速度档、质量模式、profile/tune/像素格式、音频/视频编码器会自动换成可用值；不适用的字段会变灰。</li>
             <li>控件下方的灰字解释当前选中的值；参数总览和预设预览的每个值也可以悬停查看原始取值与含义。</li>
             <li>「只看已改」只显示与基线不同的字段；「搜索参数」按名称/当前值过滤。</li>
           </ul>
@@ -749,6 +795,8 @@ export function PresetsPage() {
                       changed={changedFields.has(field.id)}
                       disabled={entry?.builtin === true}
                       encoder={String(draft.videoEncoder ?? "")}
+                      container={String(draft.container ?? "")}
+                      qualityMode={String(draft.qualityMode ?? "")}
                       inactiveReason={inactiveReason(field.id, draft)}
                       onChange={(value) => update(field.id, value)}
                     />
@@ -882,6 +930,8 @@ function Field({
   changed,
   disabled,
   encoder,
+  container,
+  qualityMode,
   inactiveReason,
   onChange,
 }: {
@@ -890,6 +940,8 @@ function Field({
   changed: boolean;
   disabled: boolean;
   encoder: string;
+  container: string;
+  qualityMode: string;
   inactiveReason?: string;
   onChange: (value: unknown) => void;
 }) {
@@ -899,16 +951,26 @@ function Field({
   const reason = inactiveReason ?? "";
   const controlDisabled = disabled || reason !== "";
   const hint = reason || (field.type === "select" ? optionHint ?? field.hint : field.hint);
-  // 速度档随编码器变化：优先用 schema 的 optionGroups，旧后端没有该字段时退回本地映射。
+  // 选项随前置条件变化：音频编码器按容器，其余按编码器家族。schema 的 optionGroups 是权威列表。
+  const group = field.id === "audioEncoder" || field.id === "videoEncoder"
+    ? container.toLowerCase()
+    : encoderFamily(encoder);
+  const groupOptions = field.optionGroups?.[group];
   const selectOptions = field.type !== "select"
     ? []
-    : field.id !== "preset"
-      ? field.options ?? []
-      : field.optionGroups?.[speedGroup(encoder)] ?? speedPresetOptions(field.options, encoder);
+    : groupOptions ?? (field.id === "preset" ? speedPresetOptions(field.options, encoder) : field.options ?? []);
+  // 质量值的名字随模式变化，避免 CRF/CQP/码率共用一个含糊的标签。
+  const label = field.id === "qualityValue"
+    ? qualityMode === "bitrate"
+      ? "目标码率（如 2500k / 5M）"
+      : qualityMode === "cqp"
+        ? "CQP 值（越小越好）"
+        : "CRF 值（越小越清晰）"
+    : field.label;
   return (
     <div className={`tc-field${field.important ? " important" : ""}${reason ? " inactive" : ""}`}>
       <span className="tc-field-label">
-        {field.label}
+        {label}
         {field.hint && (
           <span className="tc-info-dot" tabIndex={0} aria-label={field.hint}>
             i

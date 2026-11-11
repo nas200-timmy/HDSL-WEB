@@ -68,7 +68,7 @@ public final class PresetSchema {
 
         sections.add(section("编码器与质量", "先选编码器，再定质量。软件编码用 CRF（越小越清晰），硬件编码用 CQP；preset 只对软件编码有效。", new JsonArray[]{
                 fields(
-                        hint(select("videoEncoder", "视频编码器", "libx264",
+                        videoEncoderGroups(hint(select("videoEncoder", "视频编码器", "libx264",
                                 "copy", "none", "libx264", "libx265", "libvpx-vp9", "libaom-av1",
                                 "h264_nvenc", "hevc_nvenc", "h264_vaapi", "hevc_vaapi",
                                 "h264_qsv", "hevc_qsv"),
@@ -84,21 +84,21 @@ public final class PresetSchema {
                                 "h264_vaapi", "Intel/AMD 核显 H.264",
                                 "hevc_vaapi", "Intel/AMD 核显 H.265（推荐硬编）",
                                 "h264_qsv", "Intel QSV H.264",
-                                "hevc_qsv", "Intel QSV H.265（部分平台不可用）"),
+                                "hevc_qsv", "Intel QSV H.265（部分平台不可用）")),
                         important(),
-                        hint(select("qualityMode", "质量模式", "crf", "crf", "cqp", "bitrate"),
-                                "crf 恒定质量（软件编码推荐）；cqp 固定 QP（硬件）；bitrate 固定码率",
+                        qualityModeGroups(hint(select("qualityMode", "质量模式", "crf", "crf", "cqp", "bitrate"),
+                                "crf 恒定质量（软件编码推荐）；cqp 固定质量（硬件）；bitrate 固定码率",
                                 "crf", "恒定质量，越小越清晰（推荐）",
-                                "cqp", "固定 QP，硬件编码常用",
-                                "bitrate", "固定码率，按目标体积/带宽"),
+                                "cqp", "固定质量/QP，硬件编码常用",
+                                "bitrate", "固定码率，按目标体积/带宽")),
                         hint(text("qualityValue", "质量值 / 码率", "20"),
                                 "x264/x265 CRF 常用 18–28；硬件 CQP 常用 20–28；bitrate 写 2500k 或 5M"),
                         important(),
                         speedPresets(hint(select("preset", "编码速度档 preset", "medium",
                                 "", "ultrafast", "superfast", "veryfast", "faster", "fast",
                                 "medium", "slow", "slower", "veryslow"),
-                                "软件编码用 ultrafast…veryslow；NVENC 用 p1–p7；QSV 用 veryfast…veryslow；"
-                                        + "H.264 VAAPI 用 quality 0–8（越大越快）。越慢同画质越小",
+                                "软件编码用 ultrafast…veryslow；VP9/AV1 用 0–8；NVENC 用 p1–p7；"
+                                        + "QSV 用 veryfast…veryslow；VAAPI 用 0–8（越大越快）",
                                 "", "自动（由编码器决定）",
                                 "ultrafast", "最快，体积最大",
                                 "superfast", "很快，体积偏大",
@@ -116,21 +116,59 @@ public final class PresetSchema {
                                 "p5", "NVENC 慢，质量好",
                                 "p6", "NVENC 更慢，质量更好",
                                 "p7", "NVENC 最慢，质量最好",
-                                "0", "VAAPI 最慢，质量最好",
-                                "1", "VAAPI 更慢，质量更好",
-                                "2", "VAAPI 慢，质量偏上",
-                                "3", "VAAPI 略慢于平衡",
-                                "4", "VAAPI 平衡",
-                                "5", "VAAPI 略快于平衡",
-                                "6", "VAAPI 快，质量偏低",
-                                "7", "VAAPI 更快，质量更低",
-                                "8", "VAAPI 最快，质量最低")),
-                        hint(text("profile", "编码 profile（档次）", ""), "留空自动；H.264 常用 high，H.265 常用 main"),
+                                "0", "最慢，质量最好",
+                                "1", "更慢，质量更好",
+                                "2", "慢，质量偏上",
+                                "3", "略慢于平衡",
+                                "4", "平衡",
+                                "5", "略快于平衡",
+                                "6", "快，质量偏低",
+                                "7", "更快，质量更低",
+                                "8", "最快，质量最低")),
+                        profileGroups(hint(select("profile", "编码 profile（档次）", "",
+                                "", "baseline", "main", "high", "high10", "high422", "high444",
+                                "main10", "main12", "mainstillpicture", "high444p", "rext", "mainsp", "scc",
+                                "0", "1", "2"),
+                                "随编码器变化；留空由编码器决定",
+                                "", "自动",
+                                "baseline", "最低兼容（H.264）",
+                                "main", "主流档次（H.265 常用）",
+                                "high", "高质量（H.264 常用）",
+                                "high10", "10-bit（H.264）",
+                                "high422", "4:2:2（H.264）",
+                                "high444", "4:4:4（H.264）",
+                                "main10", "10-bit（H.265）",
+                                "main12", "12-bit（H.265）",
+                                "mainstillpicture", "静态图像（H.265）",
+                                "high444p", "4:4:4（NVENC H.264）",
+                                "rext", "范围扩展（NVENC/QSV H.265）",
+                                "mainsp", "可分级（QSV H.265）",
+                                "scc", "屏幕内容（QSV H.265）",
+                                "0", "AV1 profile 0（main）",
+                                "1", "AV1 profile 1（high）",
+                                "2", "AV1 profile 2（professional）")),
                         hint(text("level", "编码 level（级别）", ""), "留空自动；设备兼容问题时可指定 4.1/5.1"),
-                        hint(text("tune", "画面调优 tune", ""), "留空自动；x264 可用 film/animation/grain"),
-                        hint(select("pixelFormat", "像素格式", "",
-                                "", "yuv420p", "yuv422p", "yuv444p", "yuv420p10le", "yuv422p10le", "yuv444p10le", "p010le"),
-                                "留空跟随源；8-bit 用 yuv420p；10-bit HDR 用 yuv420p10le / p010le",
+                        tuneGroups(hint(select("tune", "画面调优 tune", "",
+                                "", "film", "animation", "grain", "stillimage", "psnr", "ssim",
+                                "fastdecode", "zerolatency", "hq", "ll", "ull", "lossless"),
+                                "随编码器变化；留空自动",
+                                "", "自动",
+                                "film", "实拍电影素材（x264/x265）",
+                                "animation", "动画（x264/x265）",
+                                "grain", "保留胶片颗粒（x264/x265）",
+                                "stillimage", "静态图像（x264/x265）",
+                                "psnr", "按 PSNR 优化",
+                                "ssim", "按 SSIM 优化",
+                                "fastdecode", "优先解码速度",
+                                "zerolatency", "低延迟（直播）",
+                                "hq", "NVENC 高质量",
+                                "ll", "NVENC 低延迟",
+                                "ull", "NVENC 超低延迟",
+                                "lossless", "NVENC 无损")),
+                        pixelFormatGroups(hint(select("pixelFormat", "像素格式", "",
+                                "", "yuv420p", "yuv422p", "yuv444p", "yuv420p10le", "yuv422p10le", "yuv444p10le",
+                                "p010le", "nv12", "p016le", "nv16", "gbrp", "gbrp10le", "gray", "gray10le", "qsv"),
+                                "随编码器变化；留空跟随源。8-bit 用 yuv420p，10-bit 用 yuv420p10le / p010le",
                                 "", "跟随源视频，不改像素格式",
                                 "yuv420p", "8-bit 4:2:0，兼容性最好",
                                 "yuv422p", "8-bit 4:2:2，采集/中间格式",
@@ -138,7 +176,15 @@ public final class PresetSchema {
                                 "yuv420p10le", "10-bit 4:2:0，HDR/高精度",
                                 "yuv422p10le", "10-bit 4:2:2，专业中间格式",
                                 "yuv444p10le", "10-bit 4:4:4，无色度抽样",
-                                "p010le", "10-bit P010，HDR 常用"),
+                                "p010le", "10-bit P010，硬件/HDR 常用",
+                                "nv12", "8-bit 4:2:0 半平面，硬件常用",
+                                "p016le", "16-bit P016",
+                                "nv16", "8-bit 4:2:2 半平面",
+                                "gbrp", "平面 RGB",
+                                "gbrp10le", "10-bit 平面 RGB",
+                                "gray", "灰度 8-bit",
+                                "gray10le", "灰度 10-bit",
+                                "qsv", "QSV 内部格式（仅 QSV）")),
                         hint(booleanField("tenBit", "10-bit（未指定像素格式时）", false),
                                 "只在像素格式留空时生效；会转 yuv420p10le"),
                         hint(text("gop", "关键帧间隔 GOP", ""), "留空由编码器决定；按秒算可填 250（约 10 秒 @25fps）"),
@@ -210,14 +256,14 @@ public final class PresetSchema {
                                 "encode", "按下面的编码器/码率重编码",
                                 "none", "丢弃音频"),
                         important(),
-                        hint(select("audioEncoder", "音频编码器", "aac", "aac", "libopus", "libmp3lame", "flac", "ac3", "eac3"),
-                                "encode 时生效；mp4 常用 aac，mkv 可用 flac/opus",
+                        audioEncoderGroups(hint(select("audioEncoder", "音频编码器", "aac", "aac", "libopus", "libmp3lame", "flac", "ac3", "eac3"),
+                                "encode 时生效；选项随输出容器变化（webm 只能 Opus，mp4 系不能 FLAC/Opus）",
                                 "aac", "AAC，MP4 最通用",
                                 "libopus", "Opus，MKV/WebM 推荐，同码率更好",
                                 "libmp3lame", "MP3，老设备兼容",
                                 "flac", "FLAC，无损，体积大",
                                 "ac3", "AC-3，老家庭影院兼容",
-                                "eac3", "E-AC-3，杜比数字+"),
+                                "eac3", "E-AC-3，杜比数字+")),
                         hint(text("audioBitrate", "音频码率", "192k"), "encode 时生效，例 192k / 320k"),
                         hint(text("audioChannels", "声道数", ""), "留空跟随源；2=立体声，6=5.1"),
                         hint(text("audioSampleRate", "采样率", ""), "留空跟随源；常用 48000"),
@@ -330,27 +376,127 @@ public final class PresetSchema {
         return field;
     }
 
-    /// The speed control is encoder-specific, so the schema carries one option list per
-    /// encoder family: software x264/x265, NVENC (p1–p7), QSV (named presets), and the
-    /// numeric `-quality` level of H.264 VAAPI. HEVC VAAPI has no such control.
+    // 编码器家族：决定速度档、profile、tune、像素格式的可用值。
+    // 键与前端 labels.ts 的 encoderFamily() 保持一致。
+    private static final String[] SOFTWARE_SPEED = {"", "ultrafast", "superfast", "veryfast", "faster", "fast",
+            "medium", "slow", "slower", "veryslow"};
+    private static final String[] NVENC_SPEED = {"", "p1", "p2", "p3", "p4", "p5", "p6", "p7"};
+    private static final String[] QSV_SPEED = {"", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"};
+    private static final String[] NUMERIC_SPEED = {"", "0", "1", "2", "3", "4", "5", "6", "7", "8"};
+
+    /// 速度档随编码器家族变化：x264/x265 命名档，VP9/AV1 与 VAAPI 数值档，NVENC p1–p7，QSV 命名档。
     private static JsonObject speedPresets(JsonObject field) {
-        JsonObject groups = new JsonObject();
-        groups.add("software", strings("", "ultrafast", "superfast", "veryfast", "faster", "fast",
-                "medium", "slow", "slower", "veryslow"));
-        groups.add("nvenc", strings("", "p1", "p2", "p3", "p4", "p5", "p6", "p7"));
-        groups.add("qsv", strings("", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"));
-        groups.add("vaapi", strings("", "0", "1", "2", "3", "4", "5", "6", "7", "8"));
-        groups.add("vaapiHevc", new JsonArray());
-        field.add("optionGroups", groups);
+        putGroup(field, "x264", SOFTWARE_SPEED);
+        putGroup(field, "x265", SOFTWARE_SPEED);
+        putGroup(field, "vp9", NUMERIC_SPEED);
+        putGroup(field, "av1", NUMERIC_SPEED);
+        putGroup(field, "nvencH264", NVENC_SPEED);
+        putGroup(field, "nvencHevc", NVENC_SPEED);
+        putGroup(field, "qsvH264", QSV_SPEED);
+        putGroup(field, "qsvHevc", QSV_SPEED);
+        putGroup(field, "vaapiH264", NUMERIC_SPEED);
+        putGroup(field, "vaapiHevc", NUMERIC_SPEED);
         return field;
     }
 
-    private static JsonArray strings(String... values) {
+    /// CRF 只有软件编码器支持；硬件编码器用 CQP + 固定码率。
+    private static JsonObject qualityModeGroups(JsonObject field) {
+        putGroup(field, "x264", "crf", "cqp", "bitrate");
+        putGroup(field, "x265", "crf", "cqp", "bitrate");
+        putGroup(field, "vp9", "crf", "bitrate");
+        putGroup(field, "av1", "crf", "bitrate");
+        putGroup(field, "nvencH264", "cqp", "bitrate");
+        putGroup(field, "nvencHevc", "cqp", "bitrate");
+        putGroup(field, "qsvH264", "cqp", "bitrate");
+        putGroup(field, "qsvHevc", "cqp", "bitrate");
+        putGroup(field, "vaapiH264", "cqp", "bitrate");
+        putGroup(field, "vaapiHevc", "cqp", "bitrate");
+        return field;
+    }
+
+    private static JsonObject profileGroups(JsonObject field) {
+        putGroup(field, "x264", "", "baseline", "main", "high", "high10", "high422", "high444");
+        putGroup(field, "x265", "", "main", "main10", "main12", "mainstillpicture");
+        putGroup(field, "vp9");
+        putGroup(field, "av1", "", "0", "1", "2");
+        putGroup(field, "nvencH264", "", "baseline", "main", "high", "high10", "high422", "high444p");
+        putGroup(field, "nvencHevc", "", "main", "main10", "rext");
+        putGroup(field, "qsvH264", "", "baseline", "main", "high");
+        putGroup(field, "qsvHevc", "", "main", "main10", "mainsp", "rext", "scc");
+        putGroup(field, "vaapiH264", "", "baseline", "main", "high");
+        putGroup(field, "vaapiHevc", "", "main", "main10");
+        return field;
+    }
+
+    private static JsonObject tuneGroups(JsonObject field) {
+        String[] x26x = {"", "film", "animation", "grain", "stillimage", "psnr", "ssim", "fastdecode", "zerolatency"};
+        putGroup(field, "x264", x26x);
+        putGroup(field, "x265", x26x);
+        putGroup(field, "vp9", "", "psnr", "ssim");
+        putGroup(field, "av1", "", "psnr", "ssim");
+        putGroup(field, "nvencH264", "", "hq", "ll", "ull", "lossless");
+        putGroup(field, "nvencHevc", "", "hq", "ll", "ull", "lossless");
+        putGroup(field, "qsvH264");
+        putGroup(field, "qsvHevc");
+        putGroup(field, "vaapiH264");
+        putGroup(field, "vaapiHevc");
+        return field;
+    }
+
+    private static JsonObject pixelFormatGroups(JsonObject field) {
+        putGroup(field, "x264", "", "yuv420p", "yuv422p", "yuv444p", "yuv420p10le", "yuv422p10le", "yuv444p10le",
+                "nv12", "nv16", "gray", "gray10le");
+        putGroup(field, "x265", "", "yuv420p", "yuv422p", "yuv444p", "yuv420p10le", "yuv422p10le", "yuv444p10le",
+                "yuv420p12le", "yuv444p12le", "gbrp", "gbrp10le");
+        putGroup(field, "vp9", "", "yuv420p", "yuv422p", "yuv444p", "yuv420p10le", "yuv422p10le", "yuv444p10le",
+                "gbrp", "gbrp10le");
+        putGroup(field, "av1", "", "yuv420p", "yuv422p", "yuv444p", "yuv420p10le", "yuv422p10le", "yuv444p10le",
+                "gbrp", "gbrp10le");
+        putGroup(field, "nvencH264", "", "yuv420p", "nv12", "p010le", "yuv444p", "p016le", "nv16", "gbrp", "gbrp10le");
+        putGroup(field, "nvencHevc", "", "yuv420p", "nv12", "p010le", "yuv444p", "p016le", "nv16", "gbrp", "gbrp10le");
+        putGroup(field, "qsvH264", "", "nv12", "qsv");
+        putGroup(field, "qsvHevc", "", "nv12", "p010le", "qsv");
+        putGroup(field, "vaapiH264", "", "nv12");
+        putGroup(field, "vaapiHevc", "", "nv12", "p010le");
+        return field;
+    }
+
+    /// 容器约束视频编码器：WebM 只装 VP9/AV1，M4A 是纯音频容器。
+    private static JsonObject videoEncoderGroups(JsonObject field) {
+        String[] all = {"copy", "none", "libx264", "libx265", "libvpx-vp9", "libaom-av1",
+                "h264_nvenc", "hevc_nvenc", "h264_vaapi", "hevc_vaapi", "h264_qsv", "hevc_qsv"};
+        putGroup(field, "mkv", all);
+        putGroup(field, "mp4", all);
+        putGroup(field, "mov", all);
+        putGroup(field, "avi", all);
+        putGroup(field, "ts", all);
+        putGroup(field, "m4a", "none");
+        putGroup(field, "webm", "none", "libvpx-vp9", "libaom-av1");
+        return field;
+    }
+
+    /// 音频编码器的可选值由容器决定：webm 只能 Opus，mp4 系装不下 FLAC/Opus。
+    private static JsonObject audioEncoderGroups(JsonObject field) {
+        String[] all = {"aac", "libopus", "libmp3lame", "flac", "ac3", "eac3"};
+        String[] mp4 = {"aac", "libmp3lame", "ac3", "eac3"};
+        putGroup(field, "mkv", all);
+        putGroup(field, "mp4", mp4);
+        putGroup(field, "mov", mp4);
+        putGroup(field, "m4a", mp4);
+        putGroup(field, "webm", "libopus");
+        putGroup(field, "avi", "aac", "libmp3lame", "ac3");
+        putGroup(field, "ts", "aac", "libmp3lame", "ac3", "eac3");
+        return field;
+    }
+
+    private static void putGroup(JsonObject field, String key, String... values) {
+        JsonObject groups = field.has("optionGroups") ? field.getAsJsonObject("optionGroups") : new JsonObject();
         JsonArray array = new JsonArray();
         for (String value : values) {
             array.add(value);
         }
-        return array;
+        groups.add(key, array);
+        field.add("optionGroups", groups);
     }
 
     private static JsonObject hint(JsonObject field, String hint, String... optionHints) {
