@@ -110,6 +110,9 @@ flowchart LR
 - **队列在服务端**：`runState` 只有 `IDLE / RUNNING / PAUSED`；`max_concurrent`（默认 1）控制同时编码数，`max_queue`（默认 20）在提交时拒绝。浏览器关掉、Agent 断开都不影响已入队的任务。
 - **重启语义**：运行中的任务在重启后标 `failed: interrupted`（不会留下孤儿 ffmpeg），排队任务保留；`autoResume` 只决定重启后是否继续派发，不是断点续跑。
 - **输出不互相覆盖**：提交时就预留输出名，同一个输入同预设连续提交会得到不同文件名；完成时 `.part` 原子改名，失败/取消删 `.part` 并释放预留，retry 重新预留。
+- **队列记录可删、磁盘产物不删**：`DELETE /queue/jobs/{id}` 移除单条记录与它的日志，`POST /queue/clear` 批量清掉 `done / failed / cancelled`；两者都同步释放输出名预留、取消决策超时、重写 `queue.json`，但**不删已生成的输出文件**。运行 / 暂停 / 停止中的任务必须先 `cancel`（后端 409、前端按钮置灰），与 3FUI 的 `可移除` 一致。
+- **改预设要显式重置**：任务保存的是提交时的预设快照，事后编辑预设不自动生效。`POST /queue/jobs/{id}/reset-preset` 替换快照、清空进度/日志/降级与决策状态、按新容器重新规划输出名（目录沿用任务的，旧产物保留，新名加序号）并回到 `queued`；工具任务（合并/混流/抽流）没有可替换的预设，会被拒绝。`可重置` 比 3FUI 宽一档：未开始的任务也允许换预设。
+- **队列是工作台，不是列表**：动词作用于**勾选集合**（`POST /queue/action` 逐条返回成败，部分失败仍 200），顺序是一等公民（`POST /queue/reorder` 要求全量 ids，运行中 / 暂停 / 待决定的任务位置钉死），**能力位由服务端下发**（`caps`）——前端自己推断状态会维护出一份必然漂移的状态机。页面订阅 `/ws` 的 `transcode:queue` 事件，1 秒轮询退成 30 秒兜底。
 - **失败分三档**（`transcode.failure_policy`）：`ask`（默认，等人决定）、`timeout-auto`（10 分钟没人管就自动降级，`failureTimeoutMinutes` 可调）、`full-auto`（立即降级）。降级动作可以只影响当前任务，也可以顺带把同编码器族的**排队**任务一起改；`stop` 会把队列停在 `PAUSED`，让人先看日志。
 - **硬件失败先实测再报错**：能力探测走 `capabilities/probe`，用 1 帧真实编码试 QSV/VAAPI/NVENC，而不是只看 `-encoders` 列表；QSV 带 `-low_power 1`，VAAPI 注入设备参数。拿不到编码器就直接标不可用，不静默换成软件编码。
 - **队列也跑工具**：合并 / 混流 / 抽流通过 `submitCommand` 入同一个队列，拿到同样的日志、进度、取消与 `.part` 改名；质量评测（PSNR / SSIM / XPSNR / VMAF，VMAF 需要 `libvmaf`）在 `tools/quality` 下单独起 job，逐帧曲线由前端画。

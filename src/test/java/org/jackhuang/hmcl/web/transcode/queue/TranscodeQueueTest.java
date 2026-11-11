@@ -336,4 +336,237 @@ class TranscodeQueueTest {
         }
     }
 
+    /// Queue housekeeping is pure state: no ffmpeg child is needed, so this runs on
+    /// Windows too (unlike the fake-shell encode tests above).
+    @Test
+    void removesClearsAndRePresetsJobs(@TempDir Path dir) throws Exception {
+        Path media = Files.createDirectory(dir.resolve("media"));
+        Files.writeString(media.resolve("input.mp4"), "source");
+
+        ServerConfig config = new ServerConfig();
+        config.dataDir = dir.resolve("data");
+        config.transcode.mediaRoot = media.toString();
+        TranscodeModule module = new TranscodeModule(config, new EventBus());
+        module.feature().enable(consent());
+        module.queue().start();
+        try {
+            var preset = module.presets().get("h264-quality").orElseThrow().preset();
+            var job = module.queue().submit("input.mp4", "", "h264-quality", preset);
+            String id = job.get("id").getAsString();
+            String originalOutput = job.get("output").getAsString();
+
+            // A job keeps its submitted snapshot until it is explicitly reset.
+            var replacement = preset.copy();
+            replacement.name = "custom mp4";
+            replacement.container = "mp4";
+            replacement.subtitleMode = "none";
+            assertTrue(module.queue().resetPreset(id, "custom-mp4", replacement));
+            var reset = module.queue().jobJson(id).orElseThrow();
+            assertEquals("queued", reset.get("state").getAsString());
+            assertEquals("custom-mp4", reset.get("presetId").getAsString());
+            assertEquals("mp4", reset.getAsJsonObject("preset").get("container").getAsString());
+            assertTrue(!originalOutput.equals(reset.get("output").getAsString()),
+                    "reset must re-plan the output for the new container");
+
+            // Removing releases the reservation, so a fresh submit can reuse the name.
+            assertTrue(module.queue().remove(id));
+            assertTrue(module.queue().jobJson(id).isEmpty());
+            var again = module.queue().submit("input.mp4", "", "h264-quality", preset);
+            assertEquals(originalOutput, again.get("output").getAsString());
+
+            // clearTerminal drops finished records but leaves the queue usable.
+            assertTrue(module.queue().cancel(again.get("id").getAsString()));
+            assertEquals(1, module.queue().clearTerminal());
+            assertEquals(0, module.queue().snapshot().getAsJsonArray("jobs").size());
+        } finally {
+            module.queue().stop();
+        }
+    }
+
+    /// The two promises the reset dialog makes: an already produced file is never
+    /// overwritten, and tool jobs have no preset to replace. Pure state, no ffmpeg.
+    @Test
+    void resetPresetKeepsTheOldOutputAndRefusesToolJobs(@TempDir Path dir) throws Exception {
+        Path media = Files.createDirectory(dir.resolve("media"));
+        Files.writeString(media.resolve("input.mp4"), "source");
+
+        ServerConfig config = new ServerConfig();
+        config.dataDir = dir.resolve("data");
+        config.transcode.mediaRoot = media.toString();
+        TranscodeModule module = new TranscodeModule(config, new EventBus());
+        module.feature().enable(consent());
+        module.queue().start();
+        try {
+            var preset = module.presets().get("h264-quality").orElseThrow().preset();
+            var job = module.queue().submit("input.mp4", "", "h264-quality", preset);
+            String id = job.get("id").getAsString();
+            String firstOutput = job.get("output").getAsString();
+
+            // Stop it (the operator's "效果不对" path) and leave the old file behind.
+            assertTrue(module.queue().cancel(id));
+            Path produced = media.resolve(firstOutput);
+            Files.writeString(produced, "already encoded");
+
+            var replacement = preset.copy();
+            replacement.name = "same again";
+            assertTrue(module.queue().resetPreset(id, "h264-quality", replacement));
+            var after = module.queue().jobJson(id).orElseThrow();
+            assertEquals("queued", after.get("state").getAsString());
+            assertTrue(!firstOutput.equals(after.get("output").getAsString()),
+                    "reset must not reuse a name that already exists on disk");
+            assertEquals("already encoded", Files.readString(produced),
+                    "reset must not touch the file the previous encode produced");
+
+            // A tool job has no preset of its own: reset refuses, remove still works.
+            var tool = module.queue().submitCommand("提取", "extract.mkv",
+                    java.util.List.of("ffmpeg", "-i", "input.mp4", "extract.mkv"), "extract");
+            String toolId = tool.get("id").getAsString();
+            assertTrue(!module.queue().resetPreset(toolId, "h264-quality", preset),
+                    "tool jobs must not be re-presetted");
+            assertTrue(!module.queue().remove("no-such-job"));
+            assertTrue(module.queue().remove(toolId));
+
+            // Nothing terminal is left, so clearTerminal is a no-op and the queued job survives.
+            assertEquals(0, module.queue().clearTerminal());
+            assertEquals(1, module.queue().snapshot().getAsJsonArray("jobs").size());
+        } finally {
+            module.queue().stop();
+        }
+    }
+
+    /// Retry must not turn a tool job into a broken preset job, and must not claim an
+    /// output name that another job has taken since the cancel released it.
+    @Test
+    void retryKeepsToolJobsAndAvoidsTakenOutputNames(@TempDir Path dir) throws Exception {
+        Path media = Files.createDirectory(dir.resolve("media"));
+        Files.writeString(media.resolve("input.mp4"), "source");
+
+        ServerConfig config = new ServerConfig();
+        config.dataDir = dir.resolve("data");
+        config.transcode.mediaRoot = media.toString();
+        TranscodeModule module = new TranscodeModule(config, new EventBus());
+        module.feature().enable(consent());
+        module.queue().start();
+        try {
+            var args = java.util.List.of("ffmpeg", "-i", "input.mp4", "extract.mkv");
+            var tool = module.queue().submitCommand("提取 0:v:0 · input.mp4", "extract.mkv", args, "extract");
+            String toolId = tool.get("id").getAsString();
+
+            // The label is not a path: after this cancel the job must stay a tool job.
+            assertTrue(module.queue().cancel(toolId));
+
+            // Someone else takes the name the cancelled job just released.
+            var second = module.queue().submitCommand("提取 0:a:0 · input.mp4", "extract.mkv", args, "extract");
+            assertEquals("extract.mkv", second.get("output").getAsString());
+
+            assertTrue(module.queue().retry(toolId));
+            var back = module.queue().jobJson(toolId).orElseThrow();
+            assertEquals("queued", back.get("state").getAsString());
+            assertEquals("extract", back.get("tool").getAsString(),
+                    "retry must keep a tool job a tool job");
+            assertEquals("ffmpeg", back.getAsJsonArray("command").get(0).getAsString(),
+                    "retry must keep the tool argv");
+            assertTrue(!second.get("output").getAsString().equals(back.get("output").getAsString()),
+                    "retry must not claim a name another job already reserved");
+        } finally {
+            module.queue().stop();
+        }
+    }
+
+    /// `caps` is what the UI trusts instead of re-deriving the state machine, and
+    /// `syncPreset` is the batch form of reset-preset. Both are pure state.
+    @Test
+    void capsAndBatchPresetSync(@TempDir Path dir) throws Exception {
+        Path media = Files.createDirectory(dir.resolve("media"));
+        Files.writeString(media.resolve("a.mp4"), "source");
+        Files.writeString(media.resolve("b.mp4"), "source");
+
+        ServerConfig config = new ServerConfig();
+        config.dataDir = dir.resolve("data");
+        config.transcode.mediaRoot = media.toString();
+        TranscodeModule module = new TranscodeModule(config, new EventBus());
+        module.feature().enable(consent());
+        module.queue().start();
+        try {
+            var preset = module.presets().get("h264-quality").orElseThrow().preset();
+            var queued = module.queue().submit("a.mp4", "", "h264-quality", preset);
+            var stopped = module.queue().submit("b.mp4", "", "h264-quality", preset);
+            String queuedId = queued.get("id").getAsString();
+            String stoppedId = stopped.get("id").getAsString();
+            assertTrue(module.queue().cancel(stoppedId));
+
+            var queuedCaps = module.queue().jobJson(queuedId).orElseThrow().getAsJsonObject("caps");
+            assertTrue(queuedCaps.get("start").getAsBoolean(), "a queued job can be started");
+            assertTrue(queuedCaps.get("stop").getAsBoolean(), "a queued job can be cancelled");
+            assertTrue(queuedCaps.get("remove").getAsBoolean());
+            assertTrue(queuedCaps.get("reset").getAsBoolean());
+            assertTrue(queuedCaps.get("reorder").getAsBoolean());
+            assertTrue(!queuedCaps.get("pause").getAsBoolean(), "nothing to pause before it runs");
+            assertTrue(!queuedCaps.get("resume").getAsBoolean());
+
+            var stoppedCaps = module.queue().jobJson(stoppedId).orElseThrow().getAsJsonObject("caps");
+            assertTrue(!stoppedCaps.get("start").getAsBoolean(), "only queued jobs can start");
+            assertTrue(!stoppedCaps.get("stop").getAsBoolean(), "a cancelled job is already stopped");
+            assertTrue(stoppedCaps.get("remove").getAsBoolean());
+            assertTrue(stoppedCaps.get("reset").getAsBoolean());
+
+            // Batch preset sync touches the queued job only and reports what it skipped.
+            var replacement = preset.copy();
+            replacement.name = "batch h265";
+            var counts = module.queue().syncPreset("h265-quality", replacement, java.util.List.of());
+            assertEquals(1, counts.get("updated").getAsInt());
+            assertEquals(1, counts.get("skippedTerminal").getAsInt());
+            assertEquals(0, counts.get("skippedTool").getAsInt());
+            var after = module.queue().jobJson(queuedId).orElseThrow();
+            assertEquals("h265-quality", after.get("presetId").getAsString());
+            assertEquals("queued", after.get("state").getAsString());
+
+            // A tool job has no preset to swap and is counted separately; the preset job
+            // is still queued (the queue never started), so it is updated again.
+            var tool = module.queue().submitCommand("提取", "extract.mkv",
+                    java.util.List.of("ffmpeg", "-i", "a.mp4", "extract.mkv"), "extract");
+            var withTool = module.queue().syncPreset("h264-quality", preset, java.util.List.of());
+            assertEquals(1, withTool.get("updated").getAsInt());
+            assertEquals(1, withTool.get("skippedTool").getAsInt());
+            assertTrue(module.queue().jobJson(tool.get("id").getAsString()).isPresent());
+        } finally {
+            module.queue().stop();
+        }
+    }
+
+    /// Reordering must refuse a partial list, duplicates and unknown ids instead of
+    /// applying half of it, and must keep the accepted order in the snapshot.
+    @Test
+    void reorderRequiresTheWholeOrder(@TempDir Path dir) throws Exception {
+        Path media = Files.createDirectory(dir.resolve("media"));
+        Files.writeString(media.resolve("a.mp4"), "source");
+        Files.writeString(media.resolve("b.mp4"), "source");
+        Files.writeString(media.resolve("c.mp4"), "source");
+
+        ServerConfig config = new ServerConfig();
+        config.dataDir = dir.resolve("data");
+        config.transcode.mediaRoot = media.toString();
+        TranscodeModule module = new TranscodeModule(config, new EventBus());
+        module.feature().enable(consent());
+        module.queue().start();
+        try {
+            var preset = module.presets().get("h264-quality").orElseThrow().preset();
+            String a = module.queue().submit("a.mp4", "", "h264-quality", preset).get("id").getAsString();
+            String b = module.queue().submit("b.mp4", "", "h264-quality", preset).get("id").getAsString();
+            String c = module.queue().submit("c.mp4", "", "h264-quality", preset).get("id").getAsString();
+
+            assertTrue(!module.queue().reorder(java.util.List.of(a)), "a partial order is refused");
+            assertTrue(!module.queue().reorder(java.util.List.of(a, a, b, c)), "duplicates are refused");
+            assertTrue(!module.queue().reorder(java.util.List.of(a, b, "no-such-job")),
+                    "an unknown id is refused");
+
+            assertTrue(module.queue().reorder(java.util.List.of(c, b, a)));
+            var jobs = module.queue().snapshot().getAsJsonArray("jobs");
+            assertEquals(c, jobs.get(0).getAsJsonObject().get("id").getAsString());
+            assertEquals(a, jobs.get(2).getAsJsonObject().get("id").getAsString());
+        } finally {
+            module.queue().stop();
+        }
+    }
+
 }

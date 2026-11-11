@@ -83,7 +83,7 @@ export function TranscodePage() {
         </div>
         {tab === "overview" && <OverviewPage onOpenTab={openTab} />}
         {tab === "prepare" && <PreparePage onOpenTab={openTab} />}
-        {tab === "queue" && <QueuePage />}
+        {tab === "queue" && <QueuePage onOpenTab={openTab} />}
         {tab === "presets" && <PresetsPage />}
         {tab === "mediainfo" && <MediaInfoPage />}
         {tab === "tools" && <ToolsPage onOpenTab={openTab} />}

@@ -164,6 +164,14 @@ public final class TranscodeApiServlet extends HttpServlet {
                 module.queue().stopAll();
                 Json.write(response, module.queue().snapshot());
             }
+            case "/queue/clear" -> {
+                int removed = module.queue().clearTerminal();
+                audit("transcode.queue.clear", Integer.toString(removed), "success", request);
+                Json.write(response, module.queue().snapshot());
+            }
+            case "/queue/action" -> queueBatchAction(request, response);
+            case "/queue/reorder" -> queueReorder(request, response);
+            case "/queue/sync-preset" -> queueSyncPreset(request, response);
             case "/queue/jobs" -> submitJob(request, response);
             case "/tools/merge" -> mergeTool(request, response);
             case "/tools/mux" -> muxTool(request, response);
@@ -231,6 +239,21 @@ public final class TranscodeApiServlet extends HttpServlet {
     @Override
     protected void doDelete(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String path = path(request);
+        if (path.startsWith("/queue/jobs/")) {
+            String id = path.substring("/queue/jobs/".length());
+            if (id.isBlank() || id.contains("/")) {
+                Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+                return;
+            }
+            if (!module.queue().remove(id)) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT,
+                        "the job is not in a state that allows this action");
+                return;
+            }
+            audit("transcode.queue.remove", id, "success", request);
+            Json.write(response, module.queue().snapshot());
+            return;
+        }
         if (!path.startsWith("/presets/")) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
             return;
@@ -829,8 +852,19 @@ public final class TranscodeApiServlet extends HttpServlet {
                     return;
                 }
                 changed = module.queue().decide(id, action);
+            } else if ("reset-preset".equals(parts[1])) {
+                JsonObject body = readJson(request);
+                if (body == null) {
+                    Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                            "request body must be a JSON object");
+                    return;
+                }
+                TranscodePreset replacement = resolvePreset(body);
+                replacement.validate();
+                changed = module.queue().resetPreset(id, stringField(body, "presetId"), replacement);
             } else {
                 changed = switch (parts[1]) {
+                    case "start" -> module.queue().startJob(id);
                     case "cancel" -> module.queue().cancel(id);
                     case "retry" -> module.queue().retry(id);
                     case "pause" -> module.queue().pause(id);
@@ -847,6 +881,107 @@ public final class TranscodeApiServlet extends HttpServlet {
         } catch (IllegalArgumentException e) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
         } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    /// One request, many jobs. Each id is handled on its own so a single refusal (a job
+    /// that is still running) does not sink the batch; the response stays 200 and the
+    /// caller reads `results` to explain what was skipped and why.
+    private void queueBatchAction(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "request body must be a JSON object");
+            return;
+        }
+        String action = stringField(body, "action");
+        java.util.List<String> ids = stringArray(body, "ids");
+        if (action == null || action.isBlank() || ids.isEmpty()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "action and ids are required");
+            return;
+        }
+        JsonArray results = new JsonArray();
+        int applied = 0;
+        for (String id : ids) {
+            JsonObject item = new JsonObject();
+            item.addProperty("id", id);
+            boolean changed;
+            try {
+                changed = switch (action) {
+                    case "start" -> module.queue().startJob(id);
+                    case "cancel", "stop" -> module.queue().cancel(id);
+                    case "retry" -> module.queue().retry(id);
+                    case "pause" -> module.queue().pause(id);
+                    case "resume" -> module.queue().resume(id);
+                    case "remove" -> module.queue().remove(id);
+                    default -> false;
+                };
+            } catch (IOException | IllegalArgumentException e) {
+                item.addProperty("ok", false);
+                item.addProperty("reason", e.getMessage() == null
+                        ? e.getClass().getSimpleName() : e.getMessage());
+                results.add(item);
+                continue;
+            }
+            item.addProperty("ok", changed);
+            if (changed) {
+                applied++;
+            } else {
+                item.addProperty("reason", "the job is not in a state that allows this action");
+            }
+            results.add(item);
+        }
+        audit("transcode.queue." + action, applied + "/" + ids.size(), "success", request);
+        JsonObject answer = new JsonObject();
+        answer.addProperty("ok", applied == ids.size());
+        answer.addProperty("applied", applied);
+        answer.add("results", results);
+        answer.add("queue", module.queue().snapshot());
+        Json.write(response, answer);
+    }
+
+    /// The whole order in one shot: partial reorders would be ambiguous while other
+    /// clients keep submitting, so a list that does not cover every job is refused.
+    private void queueReorder(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "request body must be a JSON object");
+            return;
+        }
+        java.util.List<String> ids = stringArray(body, "ids");
+        if (ids.isEmpty()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "ids is required");
+            return;
+        }
+        if (!module.queue().reorder(ids)) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "the order must list every job once and keep running jobs in place");
+            return;
+        }
+        audit("transcode.queue.reorder", Integer.toString(ids.size()), "success", request);
+        Json.write(response, module.queue().snapshot());
+    }
+
+    /// Batch form of `reset-preset`: only not-yet-started jobs are re-pointed, and the
+    /// counts say how many were touched versus skipped (tool job / already running).
+    private void queueSyncPreset(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "request body must be a JSON object");
+            return;
+        }
+        try {
+            TranscodePreset preset = resolvePreset(body);
+            preset.validate();
+            JsonObject result = module.queue().syncPreset(stringField(body, "presetId"), preset,
+                    stringArray(body, "ids"));
+            audit("transcode.queue.sync-preset", result.get("updated").getAsString(), "success", request);
+            result.add("queue", module.queue().snapshot());
+            Json.write(response, result);
+        } catch (IllegalArgumentException e) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
         }
     }

@@ -513,9 +513,78 @@
   min-width: 0;
 }
 
+/* 左列：控制条 + 列表。控制条放在这里，宽度天然与列表一致，不跟右侧详情拉平。 */
+.tc-queue-left {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tc-queue-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 8px;
+}
+
+/* 两条有意图的行：上行队列级，下行选中级。窄屏时行内仍可折行。 */
+.tc-tb-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-height: 28px;
+}
+
+.tc-tb-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tc-tb-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 6px;
+  background: var(--monet-outline-variant);
+}
+
+.tc-queue-toolbar .btn.tc-tb {
+  min-height: 26px;
+  padding: 0 7px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.tc-tb-count {
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+  white-space: nowrap;
+}
+
+.tc-tb-count b {
+  color: var(--monet-primary);
+}
+
+.tc-queue-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.tc-queue-check input {
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
 .tc-queue-row {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 190px auto;
+  grid-template-columns: 18px 38px minmax(0, 1fr) 165px auto;
   gap: 8px;
   align-items: center;
   padding: 6px 8px;
@@ -524,6 +593,11 @@
 }
 
 .tc-queue-row:hover {
+  background: var(--monet-surface-container);
+}
+
+/* 勾选集合用浅底，详情目标用深底：两者可以同时成立。 */
+.tc-queue-row.picked {
   background: var(--monet-surface-container);
 }
 
@@ -607,6 +681,8 @@
   display: flex;
   gap: 2px;
   justify-content: flex-end;
+  /* 每行现在有 停止 / 移除 / 重置预设 等操作，窄屏下允许折行而不挤掉任务名 */
+  flex-wrap: wrap;
 }
 
 .tc-queue-row-actions .btn {
@@ -642,6 +718,51 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tc-detail-steps,
+.tc-detail-switches {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 10px 2px;
+}
+
+.tc-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 6px;
+  font-size: 11px;
+}
+
+.tc-step-args {
+  grid-column: 1 / -1;
+  font-size: 10.5px;
+  color: var(--monet-on-surface-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tc-switch-record {
+  display: grid;
+  gap: 2px;
+  padding-left: 8px;
+  border-left: 2px solid var(--monet-outline-variant);
+  font-size: 11px;
+}
+
+.tc-switch-trigger {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--monet-primary);
+}
+
+.tc-switch-reason {
+  font-size: 10.5px;
+  color: var(--monet-on-surface-variant);
+  overflow-wrap: anywhere;
 }
 
 .tc-detail-error {

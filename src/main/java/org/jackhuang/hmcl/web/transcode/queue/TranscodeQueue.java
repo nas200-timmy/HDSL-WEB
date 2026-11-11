@@ -38,6 +38,7 @@ import org.jetbrains.annotations.Nullable;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -46,6 +47,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.HashSet;
 import java.util.Locale;
@@ -321,6 +323,9 @@ public final class TranscodeQueue {
             job.state = TranscodeJob.State.CANCELLED;
             job.error = "cancelled by the operator";
             job.endedAt = System.currentTimeMillis();
+            // A parked job owes a decision; cancelling it means nobody has to answer.
+            cancelDecisionTimeout(id);
+            job.decisionDeadline = -1;
             releaseReservation(job);
             if (job.process != null) {
                 process = job.process;
@@ -343,8 +348,22 @@ public final class TranscodeQueue {
                     || job.state == TranscodeJob.State.CANCELLED)) {
                 return false;
             }
+            // A tool job keeps its argv in `command` and a label in `input`, and
+            // resetForRetry() clears both. Put them back, or the retry would try to
+            // transcode a file named like "提取 0:v:0 · input.mp4".
+            String tool = job.tool;
+            List<String> command = job.command;
+            String encoder = job.encoder;
             job.resetForRetry();
-            reservedOutputs.add(mediaRoot.resolve(job.output).toAbsolutePath().normalize());
+            job.tool = tool == null ? "" : tool;
+            job.command = command == null ? List.of() : command;
+            job.encoder = encoder;
+            // Cancel/remove released the name, so a job submitted in between may have
+            // taken it. Keep the old name when it is still free, otherwise pick `_1`
+            // instead of letting two jobs write the same file.
+            Path output = uniqueOutput(mediaRoot.resolve(job.output));
+            reservedOutputs.add(output);
+            job.output = relative(output);
             saveLocked();
         }
         publishQueue();
@@ -354,21 +373,307 @@ public final class TranscodeQueue {
         return true;
     }
 
+    /// Removes one job from the queue. Running/paused jobs must be stopped first:
+    /// the UI greys the button out and the API refuses with 409. Only the queue
+    /// record goes away — media files already produced are never deleted, which
+    /// matches 3FUI's `remove` contract.
+    public boolean remove(String id) {
+        synchronized (lock) {
+            TranscodeJob job = find(id);
+            if (job == null || !removable(job)) {
+                return false;
+            }
+            cleanupLocked(job);
+            jobs.remove(job);
+            saveLocked();
+        }
+        publishQueue();
+        if (runState == RunState.RUNNING) {
+            dispatch();
+        }
+        return true;
+    }
+
+    /// Drops every terminal record (done / failed / cancelled). Queued, running and
+    /// waiting-for-decision jobs stay: a decision is still owed to the operator.
+    public int clearTerminal() {
+        List<TranscodeJob> dropped = new ArrayList<>();
+        synchronized (lock) {
+            for (TranscodeJob job : jobs) {
+                if (job.state.terminal()) {
+                    cleanupLocked(job);
+                    dropped.add(job);
+                }
+            }
+            if (dropped.isEmpty()) {
+                return 0;
+            }
+            jobs.removeAll(dropped);
+            saveLocked();
+        }
+        publishQueue();
+        if (runState == RunState.RUNNING) {
+            dispatch();
+        }
+        return dropped.size();
+    }
+
+    /// Starts one queued job now: it jumps to the front of the queued segment and the
+    /// queue is switched to RUNNING, so `dispatch()` picks it at the first free slot.
+    ///
+    /// 3FUI's `开始任务` launches the job without looking at the concurrency limit; that
+    /// lets the operator silently break the limit they configured, so this one still
+    /// goes through `dispatchNow()`.
+    public boolean startJob(String id) {
+        synchronized (lock) {
+            TranscodeJob job = find(id);
+            if (job == null || job.state != TranscodeJob.State.QUEUED || job.process != null) {
+                return false;
+            }
+            TranscodeJob firstQueued = null;
+            for (TranscodeJob candidate : jobs) {
+                if (candidate != job && candidate.state == TranscodeJob.State.QUEUED) {
+                    firstQueued = candidate;
+                    break;
+                }
+            }
+            if (firstQueued != null) {
+                jobs.remove(job);
+                jobs.add(jobs.indexOf(firstQueued), job);
+            }
+            runState = RunState.RUNNING;
+            saveLocked();
+        }
+        publishQueue();
+        dispatch();
+        return true;
+    }
+
+    /// Reorders the whole queue. `ids` must name every job exactly once and no job that
+    /// owns a slot (running / paused / stopping / waiting for a decision) may move —
+    /// same rule as 3FUI's `可排序`; violating either refuses the whole request instead
+    /// of applying half of it.
+    public boolean reorder(List<String> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return false;
+        }
+        synchronized (lock) {
+            if (ids.size() != jobs.size()) {
+                return false;
+            }
+            Map<String, TranscodeJob> byId = new HashMap<>();
+            for (TranscodeJob job : jobs) {
+                byId.put(job.id, job);
+            }
+            if (new HashSet<>(ids).size() != ids.size() || byId.size() != ids.size()
+                    || !byId.keySet().containsAll(ids)) {
+                return false;
+            }
+            for (int i = 0; i < jobs.size(); i++) {
+                TranscodeJob current = jobs.get(i);
+                if (!reorderable(current) && !ids.get(i).equals(current.id)) {
+                    return false;
+                }
+            }
+            List<TranscodeJob> next = new ArrayList<>(jobs.size());
+            for (String id : ids) {
+                next.add(byId.get(id));
+            }
+            jobs.clear();
+            jobs.addAll(next);
+            saveLocked();
+        }
+        publishQueue();
+        return true;
+    }
+
+    /// Re-queues a stopped/finished job with a different parameter preset.
+    ///
+    /// A job owns a snapshot of the preset it was submitted with, so editing a
+    /// preset later never changes an existing encode. This is the explicit
+    /// "use this preset instead" action: replace the snapshot, clear progress,
+    /// log and decision state, and re-plan the output (the container may have
+    /// changed). An already produced file is kept — the fresh encode gets a `_1`
+    /// name instead of overwriting it. Tool jobs (merge/mux/extract) have no
+    /// preset of their own and are refused.
+    public boolean resetPreset(String id, String presetId, TranscodePreset preset) throws IOException {
+        boolean changed = applyPreset(id, presetId, preset, false);
+        if (changed) {
+            publishQueue();
+            if (runState == RunState.RUNNING) {
+                dispatch();
+            }
+        }
+        return changed;
+    }
+
+    /// Re-points queued jobs at another preset, the batch form of [resetPreset]. Only
+    /// not-yet-started jobs are touched: rewriting the preset of a running encode would
+    /// swap its argv mid-flight. Tool jobs have no preset, terminal records are left to
+    /// `clearTerminal`. Returns the counts the UI shows in a toast.
+    public JsonObject syncPreset(String presetId, TranscodePreset preset, @Nullable List<String> ids) {
+        List<String> targets = new ArrayList<>();
+        int skippedTool = 0;
+        int skippedActive = 0;
+        int skippedTerminal = 0;
+        synchronized (lock) {
+            boolean filtered = ids != null && !ids.isEmpty();
+            for (TranscodeJob job : jobs) {
+                if (filtered && !ids.contains(job.id)) {
+                    continue;
+                }
+                if (job.state.terminal()) {
+                    skippedTerminal++;
+                } else if (job.tool != null && !job.tool.isBlank()) {
+                    skippedTool++;
+                } else if (!presetSwappable(job, true)) {
+                    skippedActive++;
+                } else {
+                    targets.add(job.id);
+                }
+            }
+        }
+        int updated = 0;
+        int failed = 0;
+        for (String id : targets) {
+            try {
+                if (applyPreset(id, presetId, preset, true)) {
+                    updated++;
+                } else {
+                    failed++;
+                }
+            } catch (IOException | IllegalArgumentException e) {
+                failed++;
+            }
+        }
+        JsonObject result = new JsonObject();
+        result.addProperty("updated", updated);
+        result.addProperty("failed", failed);
+        result.addProperty("skippedTool", skippedTool);
+        result.addProperty("skippedActive", skippedActive);
+        result.addProperty("skippedTerminal", skippedTerminal);
+        if (updated > 0) {
+            publishQueue();
+            if (runState == RunState.RUNNING) {
+                dispatch();
+            }
+        }
+        return result;
+    }
+
+    /// The shared "point this job at another preset" flow. Validation runs outside the
+    /// lock so a slow media resolve cannot stall every other API call; the mutation then
+    /// re-checks the state, because the job may have started in between.
+    private boolean applyPreset(String id, String presetId, TranscodePreset preset, boolean queuedOnly)
+            throws IOException {
+        Path input;
+        Path directory;
+        synchronized (lock) {
+            TranscodeJob job = find(id);
+            if (job == null || !presetSwappable(job, queuedOnly)) {
+                return false;
+            }
+            input = module.media().resolve(mediaRoot, job.input);
+            Path parent = Path.of(job.output).getParent();
+            directory = module.media().resolveForWrite(mediaRoot,
+                    parent == null ? "." : parent.toString());
+        }
+        // Validate before mutating: a preset that cannot produce a command must
+        // fail here, not after the job has gone back to QUEUED.
+        Path chapters = preset.chaptersFile == null || preset.chaptersFile.isBlank()
+                ? null : module.media().resolve(mediaRoot, preset.chaptersFile);
+        Path subtitle = preset.subtitleFile == null || preset.subtitleFile.isBlank()
+                ? null : module.media().resolve(mediaRoot, preset.subtitleFile);
+        CommandBuilder.buildPasses(preset, input, directory.resolve("preview.mkv"), chapters, subtitle);
+
+        synchronized (lock) {
+            TranscodeJob job = find(id);
+            if (job == null || !presetSwappable(job, queuedOnly)) {
+                return false;
+            }
+            releaseReservation(job);
+            Path output = CommandBuilder.outputPath(preset, input, directory, reservedOutputs);
+            reservedOutputs.add(output);
+            job.output = relative(output);
+            cancelDecisionTimeout(id);
+            deleteLog(job);
+            job.resetForRetry();
+            // The encoder history belongs to the old preset; a new preset starts clean.
+            job.switchRecords = new ArrayList<>();
+            job.preset = preset.copy();
+            job.presetId = presetId == null ? "" : presetId;
+            job.presetName = preset.name == null ? "" : preset.name;
+            job.encoder = preset.videoEncoder;
+            saveLocked();
+        }
+        return true;
+    }
+
+    private static boolean presetSwappable(TranscodeJob job, boolean queuedOnly) {
+        if (queuedOnly) {
+            return job.state == TranscodeJob.State.QUEUED
+                    && job.process == null
+                    && (job.tool == null || job.tool.isBlank());
+        }
+        return resettable(job);
+    }
+
+    private static boolean removable(TranscodeJob job) {
+        return job.process == null
+                && job.state != TranscodeJob.State.RUNNING
+                && job.state != TranscodeJob.State.PAUSED
+                && job.state != TranscodeJob.State.STOPPING;
+    }
+
+    private static boolean resettable(TranscodeJob job) {
+        return removable(job) && (job.tool == null || job.tool.isBlank());
+    }
+
+    /// Position may only change for jobs that own no slot: a running / paused /
+    /// judging job must keep its place or the "当前 / 下一个" reading becomes a lie.
+    private static boolean reorderable(TranscodeJob job) {
+        return job.process == null
+                && job.state != TranscodeJob.State.RUNNING
+                && job.state != TranscodeJob.State.PAUSED
+                && job.state != TranscodeJob.State.STOPPING
+                && job.state != TranscodeJob.State.WAITING_DECISION;
+    }
+
+    /// Shared cleanup for remove / clear: cancel a pending decision timer, release
+    /// the promised output name and drop the job's log file. Called while holding lock.
+    private void cleanupLocked(TranscodeJob job) {
+        cancelDecisionTimeout(job.id);
+        releaseReservation(job);
+        deleteLog(job);
+    }
+
+    private void deleteLog(TranscodeJob job) {
+        if (job.logFile == null || job.logFile.isBlank()) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(Path.of(job.logFile));
+        } catch (IOException e) {
+            Logger.LOG.warning("Could not remove the transcode log " + job.logFile, e);
+        }
+    }
+
     /// SIGSTOP/SIGCONT on a POSIX host. Windows has no equivalent Java API; the
     /// caller gets a clear refusal instead of a silent no-op.
     public boolean pause(String id) throws IOException {
-        return signal(id, "STOP", TranscodeJob.State.PAUSED);
+        return signal(id, "STOP", TranscodeJob.State.RUNNING, TranscodeJob.State.PAUSED);
     }
 
     public boolean resume(String id) throws IOException {
-        return signal(id, "CONT", TranscodeJob.State.RUNNING);
+        return signal(id, "CONT", TranscodeJob.State.PAUSED, TranscodeJob.State.RUNNING);
     }
 
-    private boolean signal(String id, String signal, TranscodeJob.State target) throws IOException {
+    private boolean signal(String id, String signal, TranscodeJob.State expected,
+                           TranscodeJob.State target) throws IOException {
         Process process;
         synchronized (lock) {
             TranscodeJob job = find(id);
-            if (job == null || job.state != TranscodeJob.State.RUNNING || job.process == null) {
+            if (job == null || job.state != expected || job.process == null) {
                 return false;
             }
             if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
@@ -396,7 +701,7 @@ public final class TranscodeQueue {
     public Optional<JsonObject> jobJson(String id) {
         synchronized (lock) {
             TranscodeJob job = find(id);
-            return job == null ? Optional.empty() : Optional.of(Json.GSON.toJsonTree(job).getAsJsonObject());
+            return job == null ? Optional.empty() : Optional.of(jobView(job));
         }
     }
 
@@ -406,9 +711,38 @@ public final class TranscodeQueue {
             body.addProperty("runState", runState.name().toLowerCase(Locale.ROOT));
             body.addProperty("maxConcurrent", module.config().transcode.maxConcurrent);
             body.addProperty("maxQueue", module.config().transcode.maxQueue);
-            body.add("jobs", Json.GSON.toJsonTree(jobs));
+            JsonArray array = new JsonArray();
+            for (TranscodeJob job : jobs) {
+                array.add(jobView(job));
+            }
+            body.add("jobs", array);
             return body;
         }
+    }
+
+    /// The job as the UI sees it: the stored fields plus a `caps` block saying which
+    /// actions are legal right now. The frontend must not re-derive this from `state`
+    /// — the two copies drifted apart once already (`resettable` is wider than 3FUI's).
+    /// `caps` is derived, never persisted.
+    private JsonObject jobView(TranscodeJob job) {
+        JsonObject view = Json.GSON.toJsonTree(job).getAsJsonObject();
+        JsonObject caps = new JsonObject();
+        caps.addProperty("start", job.state == TranscodeJob.State.QUEUED && job.process == null);
+        caps.addProperty("pause", job.state == TranscodeJob.State.RUNNING
+                && job.process != null && pausesNatively());
+        caps.addProperty("resume", job.state == TranscodeJob.State.PAUSED && job.process != null);
+        caps.addProperty("stop", !job.state.terminal() && job.state != TranscodeJob.State.STOPPING);
+        caps.addProperty("remove", removable(job));
+        caps.addProperty("reset", resettable(job));
+        caps.addProperty("reorder", reorderable(job));
+        view.add("caps", caps);
+        return view;
+    }
+
+    /// `pause`/`resume` shell out to `kill -STOP/CONT`; Windows has no equivalent, so
+    /// the button must not be offered there at all instead of failing after the click.
+    private static boolean pausesNatively() {
+        return OperatingSystem.CURRENT_OS != OperatingSystem.WINDOWS;
     }
 
     public long activeCount() {
@@ -432,13 +766,38 @@ public final class TranscodeQueue {
             return "";
         }
         try {
-            List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-            int limit = Math.max(1, Math.min(2000, tail));
-            int from = Math.max(0, lines.size() - limit);
-            return String.join("\n", lines.subList(from, lines.size()));
+            return String.join("\n", readTail(file, Math.max(1, Math.min(2000, tail))));
         } catch (IOException e) {
             return "";
         }
+    }
+
+    /// Reads only the tail of a log instead of `readAllLines`: an encode that has been
+    /// running for hours leaves a file far larger than the 80–600 lines the UI shows,
+    /// and the queue page polls this every 1.5s.
+    private static List<String> readTail(Path file, int limit) throws IOException {
+        long size = Files.size(file);
+        int window = (int) Math.min(size, 256 * 1024);
+        if (window <= 0) {
+            return List.of();
+        }
+        byte[] buffer = new byte[window];
+        try (RandomAccessFile raf = new RandomAccessFile(file.toFile(), "r")) {
+            raf.seek(size - window);
+            raf.readFully(buffer);
+        }
+        String[] lines = new String(buffer, StandardCharsets.UTF_8).split("\n", -1);
+        int from = Math.max(0, lines.length - limit);
+        List<String> result = new ArrayList<>(Math.min(limit, lines.length));
+        for (int i = from; i < lines.length; i++) {
+            // The window may begin mid-line; that fragment is not a real log line.
+            if (i == 0 && window < size) {
+                continue;
+            }
+            String line = lines[i].endsWith("\r") ? lines[i].substring(0, lines[i].length() - 1) : lines[i];
+            result.add(line);
+        }
+        return result;
     }
 
     private void dispatch() {
@@ -514,6 +873,7 @@ public final class TranscodeQueue {
             Files.createDirectories(log.getParent());
             Files.writeString(log, "", StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            job.steps = new ArrayList<>();
             for (int passIndex = 0; passIndex < passes.size(); passIndex++) {
                 List<String> pass = passes.get(passIndex);
                 List<String> command = new ArrayList<>(pass.size() + 1);
@@ -521,6 +881,11 @@ public final class TranscodeQueue {
                 command.addAll(pass);
                 job.command = List.copyOf(command);
                 String passLabel = passes.size() > 1 ? "pass " + (passIndex + 1) + "/" + passes.size() + ": " : "";
+                TranscodeJob.Step step = new TranscodeJob.Step();
+                step.name = stepName(job, passes.size(), passIndex);
+                step.state = "running";
+                step.args = List.copyOf(command);
+                job.steps.add(step);
                 Files.writeString(log, "# " + passLabel + CommandBuilder.display(command) + "\n",
                         StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
                 ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command));
@@ -539,14 +904,17 @@ public final class TranscodeQueue {
                 int code = process.waitFor();
                 job.process = null;
                 if (job.state == TranscodeJob.State.CANCELLED) {
+                    step.state = "cancelled";
                     Files.deleteIfExists(part);
                     cleanupPassLog(part);
                     return;
                 }
                 if (code != 0) {
+                    step.state = "failed";
                     handleFailure(job, "ffmpeg exited with code " + code + tail(log), part);
                     return;
                 }
+                step.state = "done";
             }
             cleanupPassLog(part);
             String invalid = job.tool.isBlank()
@@ -644,7 +1012,7 @@ public final class TranscodeQueue {
     private void publishJob(TranscodeJob job) {
         JsonObject event = new JsonObject();
         event.addProperty("type", "transcode-job");
-        event.add("job", Json.GSON.toJsonTree(job));
+        event.add("job", jobView(job));
         bus.publish("transcode:queue", event);
         bus.publish("transcode:job:" + job.id, event);
     }
@@ -667,6 +1035,16 @@ public final class TranscodeQueue {
         String name = path.getFileName().toString();
         int dot = name.lastIndexOf('.');
         return dot > 0 ? name.substring(dot + 1) : "mkv";
+    }
+
+    private static String stepName(TranscodeJob job, int passCount, int passIndex) {
+        if (job.tool != null && !job.tool.isBlank()) {
+            return job.tool;
+        }
+        if (passCount > 1) {
+            return passIndex == 0 ? "分析（第一遍）" : "出片（第二遍）";
+        }
+        return "编码";
     }
 
     private void handleFailure(TranscodeJob job, String message, @Nullable Path part) {
@@ -705,9 +1083,15 @@ public final class TranscodeQueue {
         fail(job, message, null);
     }
 
+    private boolean applyFallback(TranscodeJob job) {
+        return applyFallback(job, "policy");
+    }
+
     /// Applies the next step of the hardware chain. Called under [lock] or with a job
     /// that is not running; it also persists, so callers do not have to remember to.
-    private boolean applyFallback(TranscodeJob job) {
+    /// `trigger` records who asked for the hop so the log dialog can explain a chain of
+    /// fallbacks later (`operator`, `timeout`, `policy`, `queue`).
+    private boolean applyFallback(TranscodeJob job, String trigger) {
         synchronized (lock) {
             if (job.preset == null || job.fallbackAttempted) {
                 return false;
@@ -717,6 +1101,16 @@ public final class TranscodeQueue {
             if (to == null) {
                 return false;
             }
+            TranscodeJob.SwitchRecord record = new TranscodeJob.SwitchRecord();
+            record.at = System.currentTimeMillis();
+            record.from = from == null ? "" : from;
+            record.to = to;
+            record.trigger = trigger;
+            record.reason = job.error == null ? "" : job.error.strip();
+            if (record.reason.length() > 400) {
+                record.reason = record.reason.substring(0, 400) + "…";
+            }
+            job.switchRecords.add(record);
             job.fallbackFrom = from;
             job.fallbackTo = to;
             job.fallbackAttempted = true;
@@ -759,7 +1153,7 @@ public final class TranscodeQueue {
                     continue;
                 }
                 if (original != null && original.equals(job.encoder) && !job.fallbackAttempted) {
-                    applyFallback(job);
+                    applyFallback(job, "queue");
                 }
             }
             saveLocked();
@@ -786,11 +1180,11 @@ public final class TranscodeQueue {
                     runState = RunState.PAUSED;
                 }
                 case "fallback" -> {
-                    applyFallback(job);
+                    applyFallback(job, "operator");
                     runState = RunState.RUNNING;
                 }
                 case "fallback-queue", "auto" -> {
-                    applyFallback(job);
+                    applyFallback(job, "operator");
                     applyFallbackToQueued(job);
                     runState = RunState.RUNNING;
                 }
@@ -824,7 +1218,7 @@ public final class TranscodeQueue {
                 return;
             }
             if ("timeout-auto".equals(policy())) {
-                applyFallback(job);
+                applyFallback(job, "timeout");
                 applyFallbackToQueued(job);
                 runState = RunState.RUNNING;
             } else {

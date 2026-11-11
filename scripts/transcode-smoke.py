@@ -317,6 +317,42 @@ def main() -> None:
                   f"{vo_final and vo_final.get('error')}")
             print("PASS: video-only source")
 
+            # Queue housekeeping: stop -> edit/save a preset -> reset this job onto
+            # the new snapshot, then remove / clear records without touching files.
+            request(base, "POST", "/api/transcode/queue/pause", {})
+            other_preset = next(
+                (item["id"] for item in presets.get("presets", []) if item["id"] != "h264-quality"),
+                None,
+            )
+            check(other_preset is not None, "no second preset available for reset-preset")
+            target = ids[0]
+            status, reset = request(base, "POST", f"/api/transcode/queue/jobs/{target}/reset-preset",
+                                    {"presetId": other_preset})
+            check(status == 200, f"reset-preset -> {status}: {reset}")
+            assert isinstance(reset, dict)
+            refreshed = next((item for item in reset.get("jobs", []) if item["id"] == target), None)
+            check(refreshed is not None, "reset-preset dropped the job")
+            check(refreshed["state"] == "queued", f"reset-preset state -> {refreshed['state']}")
+            check(refreshed["presetId"] == other_preset,
+                  f"reset-preset kept the old snapshot: {refreshed['presetId']}")
+            print("PASS: reset-preset")
+
+            status, removed = request(base, "DELETE", f"/api/transcode/queue/jobs/{target}")
+            check(status == 200, f"remove job -> {status}: {removed}")
+            assert isinstance(removed, dict)
+            check(all(item["id"] != target for item in removed.get("jobs", [])),
+                  "removed job is still in the queue")
+            print("PASS: remove job")
+
+            status, cleared = request(base, "POST", "/api/transcode/queue/clear", {})
+            check(status == 200, f"clear finished -> {status}: {cleared}")
+            assert isinstance(cleared, dict)
+            check(not any(item["state"] in ("done", "failed", "cancelled")
+                          for item in cleared.get("jobs", [])),
+                  "clear left terminal records behind")
+            check((media / "extracted.mkv").is_file(), "clear deleted a produced file")
+            print("PASS: clear finished")
+
             status, _ = request(base, "GET", "/api/transcode/queue/jobs/unknown")
             check(status == 404, f"unknown job -> {status} (expected 404)")
             print("PASS: 404 contract")

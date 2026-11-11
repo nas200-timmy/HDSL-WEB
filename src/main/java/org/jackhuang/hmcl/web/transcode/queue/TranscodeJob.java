@@ -22,6 +22,7 @@ import org.jackhuang.hmcl.web.transcode.preset.TranscodePreset;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /// One queued/running/finished encode.
@@ -82,12 +83,36 @@ public final class TranscodeJob {
     public long startedAt = -1;
     public long endedAt = -1;
     public List<String> command = List.of();
+    /// Encoder switches this job went through, newest last. Kept across retries so a
+    /// fallback that failed twice can still be explained.
+    public List<SwitchRecord> switchRecords = new ArrayList<>();
+    /// The argv of every pass, with its own state. Rebuilt on each run.
+    public List<Step> steps = new ArrayList<>();
 
     public transient @Nullable Process process;
     public transient long lastPublishAt;
 
     public TranscodeJob() {
         this.preset = new TranscodePreset();
+    }
+
+    /// One hardware-fallback hop: who triggered it, from which encoder to which, why.
+    public static final class SwitchRecord {
+        public long at = System.currentTimeMillis();
+        public String from = "";
+        public String to = "";
+        /// `operator`, `timeout`, `policy` or `queue`.
+        public String trigger = "";
+        public String reason = "";
+        public List<String> droppedArgs = List.of();
+    }
+
+    /// One ffmpeg invocation of this job. A two-pass preset has two, a tool job one.
+    public static final class Step {
+        public String name = "";
+        /// `pending`, `running`, `done`, `failed` or `cancelled`.
+        public String state = "pending";
+        public List<String> args = List.of();
     }
 
     public void resetForRetry() {
@@ -111,5 +136,6 @@ public final class TranscodeJob {
         startedAt = -1;
         endedAt = -1;
         command = List.of();
+        steps = new ArrayList<>();
     }
 }

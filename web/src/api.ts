@@ -1001,8 +1001,33 @@ export const api = {
     startQueue: () => request<TranscodeQueueSnapshot>("/api/transcode/queue/start", jsonInit("POST", {})),
     pauseQueue: () => request<TranscodeQueueSnapshot>("/api/transcode/queue/pause", jsonInit("POST", {})),
     stopQueue: () => request<TranscodeQueueSnapshot>("/api/transcode/queue/stop", jsonInit("POST", {})),
+    clearFinished: () => request<TranscodeQueueSnapshot>("/api/transcode/queue/clear", jsonInit("POST", {})),
     submitJob: (body: { input: string; presetId?: string; preset?: Record<string, unknown>; outputDir?: string }) =>
       request<TranscodeJob>("/api/transcode/queue/jobs", jsonInit("POST", body)),
+    removeJob: (id: string) =>
+      request<TranscodeQueueSnapshot>(
+        `/api/transcode/queue/jobs/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      ),
+    resetJobPreset: (id: string, presetId: string) =>
+      request<TranscodeQueueSnapshot>(
+        `/api/transcode/queue/jobs/${encodeURIComponent(id)}/reset-preset`,
+        jsonInit("POST", { presetId }),
+      ),
+    startJob: (id: string) =>
+      request<TranscodeQueueSnapshot>(
+        `/api/transcode/queue/jobs/${encodeURIComponent(id)}/start`,
+        jsonInit("POST", {}),
+      ),
+    queueBatch: (action: "start" | "stop" | "cancel" | "retry" | "pause" | "resume" | "remove", ids: string[]) =>
+      request<TranscodeBatchResult>("/api/transcode/queue/action", jsonInit("POST", { action, ids })),
+    reorderQueue: (ids: string[]) =>
+      request<TranscodeQueueSnapshot>("/api/transcode/queue/reorder", jsonInit("POST", { ids })),
+    syncQueuePreset: (presetId: string, ids: string[] = []) =>
+      request<TranscodePresetSyncResult>(
+        "/api/transcode/queue/sync-preset",
+        jsonInit("POST", { presetId, ids }),
+      ),
     job: (id: string) =>
       request<TranscodeJob>(`/api/transcode/queue/jobs/${encodeURIComponent(id)}`),
     jobLog: (id: string, tail = 500) =>
@@ -1207,6 +1232,8 @@ export interface TranscodeJob {
   presetId: string;
   presetName: string;
   preset: TranscodePreset;
+  /** Non-empty for queue-backed tools (merge / mux / extract); those jobs have no preset of their own. */
+  tool?: string;
   state: TranscodeJobState;
   fraction: number;
   message: string;
@@ -1228,6 +1255,55 @@ export interface TranscodeJob {
   startedAt: number;
   endedAt: number;
   command: string[];
+  /** Every encoder hop this job went through, newest last. */
+  switchRecords?: TranscodeSwitchRecord[];
+  /** One entry per ffmpeg invocation (a two-pass preset has two). */
+  steps?: TranscodeJobStep[];
+  /** Computed server-side. Never derive button availability from `state` in the UI. */
+  caps: TranscodeJobCaps;
+}
+
+/** What the server allows right now; the UI only renders what is true here. */
+export interface TranscodeJobCaps {
+  start: boolean;
+  pause: boolean;
+  resume: boolean;
+  stop: boolean;
+  remove: boolean;
+  reset: boolean;
+  reorder: boolean;
+}
+
+export interface TranscodeSwitchRecord {
+  at: number;
+  from: string;
+  to: string;
+  /** `operator`, `timeout`, `policy` or `queue`. */
+  trigger: string;
+  reason: string;
+  droppedArgs?: string[];
+}
+
+export interface TranscodeJobStep {
+  name: string;
+  state: "pending" | "running" | "done" | "failed" | "cancelled";
+  args: string[];
+}
+
+export interface TranscodeBatchResult {
+  ok: boolean;
+  applied: number;
+  results: Array<{ id: string; ok: boolean; reason?: string }>;
+  queue: TranscodeQueueSnapshot;
+}
+
+export interface TranscodePresetSyncResult {
+  updated: number;
+  failed: number;
+  skippedTool: number;
+  skippedActive: number;
+  skippedTerminal: number;
+  queue: TranscodeQueueSnapshot;
 }
 
 export interface TranscodeQueueSnapshot {
