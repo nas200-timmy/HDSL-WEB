@@ -66,6 +66,13 @@ public final class PresetSchema {
                 )
         }));
 
+        sections.add(section("剪辑", "剪掉片头片尾。输入侧定位：重新编码时精确到帧，copy 时落在最近的关键帧。", new JsonArray[]{
+                fields(
+                        hint(text("trimStart", "开始时间", ""), "留空从头开始；例 00:01:30、90 或 1:30"),
+                        hint(text("trimEnd", "结束时间", ""), "留空到结尾；与开始时间格式相同，是绝对时间")
+                )
+        }));
+
         sections.add(section("编码器与质量", "先选编码器，再定质量。软件编码用 CRF（越小越清晰），硬件编码用 CQP；preset 只对软件编码有效。", new JsonArray[]{
                 fields(
                         videoEncoderGroups(hint(select("videoEncoder", "视频编码器", "libx264",
@@ -213,6 +220,35 @@ public final class PresetSchema {
                 )
         }));
 
+        sections.add(section("画面增强", "默认关闭。降噪/锐化/去色带会明显增加编码时间；调色留空表示不改。", new JsonArray[]{
+                fields(
+                        hint(select("denoise", "降噪", "", "", "hqdn3d", "nlmeans", "atadenoise", "bm3d"),
+                                "hqdn3d 适合普通噪声；nlmeans/bm3d 更慢；atadenoise 轻量",
+                                "", "不降噪",
+                                "hqdn3d", "时空域降噪，速度与效果均衡",
+                                "nlmeans", "高级降噪，效果更好但很慢",
+                                "atadenoise", "轻量时间域降噪",
+                                "bm3d", "高质量降噪，适合严重噪声"),
+                        hint(text("denoiseParams", "降噪参数", ""),
+                                "留空用 ffmpeg 默认；hqdn3d 可写 4 个参数，如 4:3:6:4.5"),
+                        hint(select("sharpen", "锐化", "", "", "cas", "unsharp"),
+                                "cas 轻量自适应；unsharp 传统锐化",
+                                "", "不锐化",
+                                "cas", "自适应对比度锐化，轻量",
+                                "unsharp", "传统反遮罩锐化，参数更细"),
+                        hint(text("sharpenParams", "锐化参数", ""),
+                                "留空用默认；unsharp 可写 5:5:1.0:5:5:0.0"),
+                        hint(booleanField("deband", "去色带", false),
+                                "去除渐变色带，动画/低码率素材常用"),
+                        hint(text("debandParams", "去色带参数", ""),
+                                "留空用默认；例 1thr=0.02:2thr=0.02"),
+                        hint(text("eqBrightness", "亮度 brightness", ""), "默认 0，范围 -1~1；例 0.03"),
+                        hint(text("eqContrast", "对比度 contrast", ""), "默认 1；例 1.1 稍强"),
+                        hint(text("eqSaturation", "饱和度 saturation", ""), "默认 1；例 1.2 更艳"),
+                        hint(text("eqGamma", "伽马 gamma", ""), "默认 1；例 0.95 稍暗")
+                )
+        }));
+
         sections.add(section("色彩", "普通转码留空。只有 HDR↔SDR 转换或需要强制标记色彩时才填。", new JsonArray[]{
                 fields(
                         hint(select("colorPrimaries", "色彩原色 primaries", "",
@@ -268,7 +304,17 @@ public final class PresetSchema {
                         hint(text("audioChannels", "声道数", ""), "留空跟随源；2=立体声，6=5.1"),
                         hint(text("audioSampleRate", "采样率", ""), "留空跟随源；常用 48000"),
                         hint(text("audioMap", "音频流选择 map", "0:a?"),
-                                "0:a? 全部音轨；只要第一条写 0:a:0?")
+                                "0:a? 全部音轨；只要第一条写 0:a:0?"),
+                        hint(text("audioVolume", "音量（倍数或 dB）", ""),
+                                "只在重新编码时生效；例 1.0 原样、0.8 减小、-3dB 降低 3 dB"),
+                        hint(booleanField("loudnormEnabled", "响度标准化", false),
+                                "按 EBU R128 统一响度；只在重新编码时生效"),
+                        hint(text("loudnormI", "目标响度 I", "-16"),
+                                "单位 LUFS；常用 -16（播客/网页）、-23（广播）"),
+                        hint(text("loudnormTP", "峰值 TP", "-1.5"),
+                                "单位 dBTP；常用 -1.5 或 -2"),
+                        hint(text("loudnormLRA", "动态范围 LRA", "11"),
+                                "单位 LU；常用 11，越大保留越多动态")
                 )
         }));
 
@@ -284,6 +330,8 @@ public final class PresetSchema {
                                 "只在 burn 时使用；ASS/SRT 都行，中文字体缺失会显示方块"),
                         hint(text("subtitleFont", "字体", ""), "burn 时生效，例 Noto Sans CJK SC"),
                         hint(text("subtitleFontSize", "字号", ""), "burn 时生效，例 24"),
+                        hint(text("subtitleStyle", "额外字幕样式", ""),
+                                "force_style 片段，例 Bold=1,Outline=1；留空只改字体/字号"),
                         hint(text("subtitleMap", "字幕流选择 map", "0:s?"), "0:s? 全部字幕；0:s:0? 第一条")
                 )
         }));
@@ -296,6 +344,8 @@ public final class PresetSchema {
                         hint(text("metadataComment", "备注", ""), "留空不写入"),
                         hint(text("metadataDate", "日期", ""), "留空不写入"),
                         hint(text("metadataGenre", "流派", ""), "留空不写入"),
+                        hint(textarea("metadataExtra", "额外元数据（每行 key=value）", ""),
+                                "例 encoder=HDSL-web；每行一条，没有等号的行会被忽略"),
                         hint(text("chaptersFile", "章节文件（ffmetadata，相对媒体根）", ""),
                                 "留空沿用源章节；填写则用这个 ffmetadata 文件"),
                         hint(booleanField("copyMetadata", "复制源元数据", true), "保留标题/演员等刮削信息"),

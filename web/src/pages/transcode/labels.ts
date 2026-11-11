@@ -142,6 +142,18 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
     burn: "烧录进画面",
     none: "丢弃字幕",
   },
+  denoise: {
+    "": "不降噪",
+    hqdn3d: "hqdn3d 时空降噪",
+    nlmeans: "nlmeans 高级降噪",
+    atadenoise: "atadenoise 轻量降噪",
+    bm3d: "bm3d 高质量降噪",
+  },
+  sharpen: {
+    "": "不锐化",
+    cas: "cas 自适应锐化",
+    unsharp: "unsharp 传统锐化",
+  },
 };
 
 /// 中文短名；没有映射时退回原始取值（空值显示“（默认）”）。
@@ -173,9 +185,14 @@ const VIDEO_ENCODER_FIELDS = new Set([
   "pixelFormat", "tenBit", "gop", "threads",
   "width", "height", "fps", "crop", "rotate", "deinterlace", "filterGraph",
   "colorPrimaries", "colorTransfer", "colorMatrix", "colorRange",
+  "denoise", "denoiseParams", "sharpen", "sharpenParams", "deband", "debandParams",
+  "eqBrightness", "eqContrast", "eqSaturation", "eqGamma",
 ]);
-const AUDIO_ENCODE_FIELDS = new Set(["audioEncoder", "audioBitrate", "audioChannels", "audioSampleRate"]);
-const SUBTITLE_BURN_FIELDS = new Set(["subtitleFile", "subtitleFont", "subtitleFontSize"]);
+const AUDIO_ENCODE_FIELDS = new Set([
+  "audioEncoder", "audioBitrate", "audioChannels", "audioSampleRate",
+  "audioVolume", "loudnormEnabled", "loudnormI", "loudnormTP", "loudnormLRA",
+]);
+const SUBTITLE_BURN_FIELDS = new Set(["subtitleFile", "subtitleFont", "subtitleFontSize", "subtitleStyle"]);
 const NO_TUNE_FAMILIES = new Set(["qsvH264", "qsvHevc", "vaapiH264", "vaapiHevc"]);
 const RESTRICTIVE_ATTACHMENT_CONTAINERS = new Set(["mp4", "mov", "avi", "ts", "m4a"]);
 
@@ -243,6 +260,15 @@ export function inactiveReason(fieldId: string, preset: TranscodePreset): string
   if (fieldId === "profile" && family === "vp9") {
     return "VP9 没有 profile 选项";
   }
+  if (fieldId === "denoiseParams" && String(preset.denoise ?? "") === "") {
+    return "未选择降噪方式";
+  }
+  if (fieldId === "sharpenParams" && String(preset.sharpen ?? "") === "") {
+    return "未选择锐化方式";
+  }
+  if (fieldId === "debandParams" && preset.deband !== true) {
+    return "去色带未开启";
+  }
   if (fieldId === "tenBit" && String(preset.pixelFormat ?? "") !== "") {
     return "已指定像素格式，10-bit 开关不生效";
   }
@@ -263,6 +289,9 @@ export function inactiveReason(fieldId: string, preset: TranscodePreset): string
   }
   if (String(preset.audioMode ?? "copy") !== "encode" && AUDIO_ENCODE_FIELDS.has(fieldId)) {
     return "音频未重新编码，此项不生效";
+  }
+  if (["loudnormI", "loudnormTP", "loudnormLRA"].includes(fieldId) && preset.loudnormEnabled !== true) {
+    return "响度标准化未开启";
   }
   if (String(preset.subtitleMode ?? "copy") !== "burn" && SUBTITLE_BURN_FIELDS.has(fieldId)) {
     return "字幕未烧录，此项不生效";

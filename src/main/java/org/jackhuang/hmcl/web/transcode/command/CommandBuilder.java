@@ -40,12 +40,18 @@ public final class CommandBuilder {
 
     /// Builds the arguments for one job. `input` and `output` are absolute paths.
     public static List<String> build(TranscodePreset preset, Path input, Path output) {
-        return build(preset, input, output, null);
+        return build(preset, input, output, null, null);
     }
 
     /// The same, with an optional ffmetadata chapters file (already resolved under the
     /// media root by the caller).
     public static List<String> build(TranscodePreset preset, Path input, Path output, Path chapters) {
+        return build(preset, input, output, chapters, null);
+    }
+
+    /// The same, with an optional subtitle file resolved under the media root. The panel
+    /// otherwise has no cwd that would make a relative subtitle path work.
+    public static List<String> build(TranscodePreset preset, Path input, Path output, Path chapters, Path subtitle) {
         preset.validate();
         List<String> args = new ArrayList<>();
         args.add("-hide_banner");
@@ -59,6 +65,15 @@ public final class CommandBuilder {
         if (vaapi) {
             args.add("-vaapi_device");
             args.add("/dev/dri/renderD128");
+        }
+        // 输入侧定位：重新编码时精确到帧，copy 时落在关键帧。
+        if (!blank(preset.trimStart)) {
+            args.add("-ss");
+            args.add(preset.trimStart);
+        }
+        if (!blank(preset.trimEnd)) {
+            args.add("-to");
+            args.add(preset.trimEnd);
         }
         args.addAll(preset.inputArgs);
         args.add("-i");
@@ -92,7 +107,7 @@ public final class CommandBuilder {
             args.add("0:t?");
         }
 
-        List<String> filters = filters(preset, vaapi);
+        List<String> filters = filters(preset, vaapi, subtitle);
         if ("burn".equals(preset.subtitleMode) && copyVideo) {
             throw new IllegalArgumentException("burning subtitles requires video re-encoding; choose an encoder instead of copy");
         }
@@ -203,6 +218,14 @@ public final class CommandBuilder {
             }
         }
 
+        if (!image && "encode".equals(preset.audioMode)) {
+            List<String> audioFilters = audioFilters(preset);
+            if (!audioFilters.isEmpty()) {
+                args.add("-af");
+                args.add(String.join(",", audioFilters));
+            }
+        }
+
         if (!image) {
             switch (preset.subtitleMode) {
                 case "none" -> args.add("-sn");
@@ -273,6 +296,14 @@ public final class CommandBuilder {
         putMetadata(args, "comment", preset.metadataComment);
         putMetadata(args, "date", preset.metadataDate);
         putMetadata(args, "genre", preset.metadataGenre);
+        if (!blank(preset.metadataExtra)) {
+            for (String line : preset.metadataExtra.split("\\R")) {
+                int split = line.indexOf('=');
+                if (split > 0) {
+                    putMetadata(args, line.substring(0, split).trim(), line.substring(split + 1).trim());
+                }
+            }
+        }
     }
 
     private static void putMetadata(List<String> args, String key, String value) {
@@ -310,7 +341,7 @@ public final class CommandBuilder {
         }
     }
 
-    private static List<String> filters(TranscodePreset preset, boolean vaapi) {
+    private static List<String> filters(TranscodePreset preset, boolean vaapi, Path subtitle) {
         List<String> filters = new ArrayList<>();
         if (!blank(preset.width) || !blank(preset.height)) {
             filters.add("scale=" + (blank(preset.width) ? "-2" : preset.width)
@@ -335,14 +366,63 @@ public final class CommandBuilder {
         if ("yadif".equals(preset.deinterlace)) {
             filters.add("yadif");
         }
+        // 画面增强：降噪 → 锐化 → 去色带 → 简易调色（与 FFmpegFreeUI 的参数顺序一致）。
+        if (!blank(preset.denoise)) {
+            filters.add(preset.denoise + (blank(preset.denoiseParams) ? "" : "=" + preset.denoiseParams));
+        }
+        if (!blank(preset.sharpen)) {
+            filters.add(preset.sharpen + (blank(preset.sharpenParams) ? "" : "=" + preset.sharpenParams));
+        }
+        if (preset.deband) {
+            filters.add("deband" + (blank(preset.debandParams) ? "" : "=" + preset.debandParams));
+        }
+        List<String> eq = new ArrayList<>();
+        if (!blank(preset.eqBrightness)) eq.add("brightness=" + preset.eqBrightness);
+        if (!blank(preset.eqContrast)) eq.add("contrast=" + preset.eqContrast);
+        if (!blank(preset.eqSaturation)) eq.add("saturation=" + preset.eqSaturation);
+        if (!blank(preset.eqGamma)) eq.add("gamma=" + preset.eqGamma);
+        if (!eq.isEmpty()) {
+            filters.add("eq=" + String.join(":", eq));
+        }
         if (!blank(preset.filterGraph)) {
             filters.add(preset.filterGraph);
         }
-        if ("burn".equals(preset.subtitleMode) && !blank(preset.subtitleFile)) {
-            filters.add("subtitles=" + preset.subtitleFile.replace("\\", "/").replace(":", "\\:"));
+        if ("burn".equals(preset.subtitleMode) && (subtitle != null || !blank(preset.subtitleFile))) {
+            String path = subtitle != null ? subtitle.toString() : preset.subtitleFile;
+            StringBuilder filter = new StringBuilder("subtitles=")
+                    .append(path.replace("\\", "/").replace(":", "\\:"));
+            List<String> style = new ArrayList<>();
+            if (!blank(preset.subtitleFont)) {
+                style.add("FontName=" + preset.subtitleFont);
+            }
+            if (!blank(preset.subtitleFontSize)) {
+                style.add("FontSize=" + preset.subtitleFontSize);
+            }
+            if (!blank(preset.subtitleStyle)) {
+                style.add(preset.subtitleStyle);
+            }
+            if (!style.isEmpty()) {
+                filter.append(":force_style='").append(String.join(",", style)).append("'");
+            }
+            filters.add(filter.toString());
         }
         if (vaapi) {
             filters.add(preset.tenBit ? "format=p010le,hwupload" : "format=nv12,hwupload");
+        }
+        return filters;
+    }
+
+    /// 音频滤镜：音量 → 响度标准化（只在重新编码时调用）。
+    private static List<String> audioFilters(TranscodePreset preset) {
+        List<String> filters = new ArrayList<>();
+        if (!blank(preset.audioVolume)) {
+            filters.add("volume=" + preset.audioVolume);
+        }
+        if (preset.loudnormEnabled) {
+            String i = blank(preset.loudnormI) ? "-16" : preset.loudnormI;
+            String tp = blank(preset.loudnormTP) ? "-1.5" : preset.loudnormTP;
+            String lra = blank(preset.loudnormLRA) ? "11" : preset.loudnormLRA;
+            filters.add("loudnorm=I=" + i + ":TP=" + tp + ":LRA=" + lra);
         }
         return filters;
     }

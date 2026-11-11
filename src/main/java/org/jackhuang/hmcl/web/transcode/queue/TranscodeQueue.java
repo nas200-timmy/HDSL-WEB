@@ -192,7 +192,9 @@ public final class TranscodeQueue {
         // fail at submit, not after the job has already taken a queue slot.
         Path chapters = preset.chaptersFile == null || preset.chaptersFile.isBlank()
                 ? null : module.media().resolve(mediaRoot, preset.chaptersFile);
-        CommandBuilder.build(preset, inputPath, directory.resolve("preview.mkv"), chapters);
+        Path subtitle = preset.subtitleFile == null || preset.subtitleFile.isBlank()
+                ? null : module.media().resolve(mediaRoot, preset.subtitleFile);
+        CommandBuilder.build(preset, inputPath, directory.resolve("preview.mkv"), chapters, subtitle);
 
         TranscodeJob job = new TranscodeJob();
         job.id = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
@@ -501,8 +503,10 @@ public final class TranscodeQueue {
             job.durationMs = job.tool.isBlank() ? durationMs(input) : -1;
             Path chapters = job.preset.chaptersFile == null || job.preset.chaptersFile.isBlank()
                     ? null : module.media().resolve(mediaRoot, job.preset.chaptersFile);
+            Path subtitle = job.preset.subtitleFile == null || job.preset.subtitleFile.isBlank()
+                    ? null : module.media().resolve(mediaRoot, job.preset.subtitleFile);
             List<String> args = job.tool.isBlank()
-                    ? CommandBuilder.build(job.preset, input, part, chapters)
+                    ? CommandBuilder.build(job.preset, input, part, chapters, subtitle)
                     : toolArgs(job.command, part);
             List<String> command = new ArrayList<>(args.size() + 1);
             command.add(info.ffmpeg().toString());

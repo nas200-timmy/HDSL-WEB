@@ -476,6 +476,7 @@ public final class TranscodeApiServlet extends HttpServlet {
             Path input;
             Path output;
             Path chapters = null;
+            Path subtitle = null;
             if (placeholder) {
                 // The parameter panel asks for a command before a file is chosen: the
                 // argv is what matters, so build it with the same placeholders 3FUI shows.
@@ -496,8 +497,10 @@ public final class TranscodeApiServlet extends HttpServlet {
                 output = CommandBuilder.outputPath(preset, input, outputDir);
                 chapters = preset.chaptersFile == null || preset.chaptersFile.isBlank()
                         ? null : module.media().resolve(module.mediaRoot(), preset.chaptersFile);
+                subtitle = preset.subtitleFile == null || preset.subtitleFile.isBlank()
+                        ? null : module.media().resolve(module.mediaRoot(), preset.subtitleFile);
             }
-            var args = CommandBuilder.build(preset, input, output, chapters);
+            var args = CommandBuilder.build(preset, input, output, chapters, subtitle);
             JsonArray array = new JsonArray();
             args.forEach(array::add);
             JsonObject result = new JsonObject();

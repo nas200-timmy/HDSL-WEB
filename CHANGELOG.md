@@ -33,6 +33,16 @@
   QSV 的恒定质量改用 `-global_quality`，不再生成它不认识的 `-qp`。
 - 依赖项自动变灰并说明原因：视频「直接复制/丢弃」时质量、编码档位、画面、色彩等参数不可调；
   音频非 `encode` 时编码器/码率/声道/采样率不可调；字幕非 `burn` 时字体/字号/字幕文件不可调。
+- 移植 FFmpegFreeUI / 3FUI 的常用参数页：
+  - 剪辑区间：开始/结束时间，后端生成 `-ss`/`-to`（输入侧定位）。
+  - 画面增强：降噪（hqdn3d/nlmeans/atadenoise/bm3d）、锐化（cas/unsharp）、去色带、
+    简易调色（brightness/contrast/saturation/gamma），参数留空用 ffmpeg 默认；降噪/锐化/
+    去色带的参数框只在启用后可用。
+  - 音频处理：音量（倍数或 dB）、EBU R128 响度标准化（I/TP/LRA）；只在音频重新编码时可用。
+  - 字幕烧录：字体/字号/额外 `force_style` 现在真正写进 filter；字幕文件按媒体根解析成绝对路径，
+    不再因为面板 cwd 不同而找不到文件。
+  - 元数据：新增“额外元数据（每行 key=value）”，可写任意 ffmpeg metadata 键。
+- 后端：`CommandBuilder` 增加 `-af`（音量/loudnorm）、画面增强滤镜链、trim 输入参数与额外元数据。
 - 后端：视频 `copy` 时不再输出 `-vf` 与色彩标记，避免生成 ffmpeg 直接报错的命令。
 - 参数面板改成三栏工作台：预设列表（单击应用）/ 分区导航 / 字段区 + 右侧参数总览与实时命令行；
   字段旁直接显示一行说明，下拉逐项解释（schema 新增 `hint` / `optionHints` / `important`）。

@@ -90,6 +90,8 @@ public final class TranscodePreset {
     public String subtitleFile = "";
     public String subtitleFont = "";
     public String subtitleFontSize = "";
+    /// Extra `force_style` entries, e.g. `Bold=1,Outline=1`.
+    public String subtitleStyle = "";
     public String subtitleMap = "0:s?";
 
     // ---- metadata / chapters / attachments -------------------------------
@@ -102,6 +104,26 @@ public final class TranscodePreset {
     public boolean copyAttachments = true;
     /// Relative to the media root; empty means "use the input's chapters".
     public String chaptersFile = "";
+
+    // ---- trim / video enhancement / audio filters -------------------------
+    public String trimStart = "";
+    public String trimEnd = "";
+    public String denoise = "";
+    public String denoiseParams = "";
+    public String sharpen = "";
+    public String sharpenParams = "";
+    public boolean deband = false;
+    public String debandParams = "";
+    public String eqBrightness = "";
+    public String eqContrast = "";
+    public String eqSaturation = "";
+    public String eqGamma = "";
+    public String audioVolume = "";
+    public boolean loudnormEnabled = false;
+    public String loudnormI = "-16";
+    public String loudnormTP = "-1.5";
+    public String loudnormLRA = "11";
+    public String metadataExtra = "";
 
     // ---- filters / custom args -------------------------------------------
     public String filterGraph = "";
