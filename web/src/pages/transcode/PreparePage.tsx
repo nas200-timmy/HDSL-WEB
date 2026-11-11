@@ -3,6 +3,7 @@ import { api, type TranscodeMediaEntry, type TranscodePreset, type TranscodePres
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
 import { MediaBrowserPanel, fmtBytes, probeSummary, HelpNote } from "./common";
+import { valueLabel } from "./labels";
 
 export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
   const [presets, setPresets] = useState<TranscodePresetSummary[]>([]);
@@ -188,11 +189,15 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
             </select>
             {presetDetail && (
               <div className="tc-prepare-summary">
-                <span className="tag plain">{String(presetDetail.videoEncoder ?? "—")}</span>
-                <span className="tag plain">{String(presetDetail.container ?? "—")}</span>
-                <span className="tag plain">{String(presetDetail.qualityMode ?? "")} {String(presetDetail.qualityValue ?? "")}</span>
-                <span className="tag plain">音频 {String(presetDetail.audioMode ?? "—")}</span>
-                <span className="tag plain">字幕 {String(presetDetail.subtitleMode ?? "—")}</span>
+                <span className="tag plain" title={String(presetDetail.videoEncoder ?? "")}>
+                  {valueLabel("videoEncoder", presetDetail.videoEncoder)}
+                </span>
+                <span className="tag plain">{valueLabel("container", presetDetail.container)}</span>
+                <span className="tag plain" title={String(presetDetail.qualityMode ?? "")}>
+                  {valueLabel("qualityMode", presetDetail.qualityMode)} {String(presetDetail.qualityValue ?? "")}
+                </span>
+                <span className="tag plain">音频 {valueLabel("audioMode", presetDetail.audioMode)}</span>
+                <span className="tag plain">字幕 {valueLabel("subtitleMode", presetDetail.subtitleMode)}</span>
               </div>
             )}
             <label style={{ fontSize: 12 }}>输出目录（相对媒体根；空 = 源目录）</label>

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
   api,
@@ -13,6 +14,7 @@ import { errMsg } from "../../utils";
 import { Dialog } from "../../components/Dialog";
 import { ContentCopyIcon, RefreshIcon, SearchIcon } from "../../components/icons";
 import { HelpNote } from "./common";
+import { valueLabel, valueTip } from "./labels";
 
 /**
  * 参数面板工作台。
@@ -311,17 +313,46 @@ export function PresetsPage() {
   }, [draft]);
 
   const overview = useMemo(() => {
-    const video = String(draft.videoEncoder ?? "");
-    const quality = `${String(draft.qualityMode ?? "")} ${String(draft.qualityValue ?? "")}`.trim();
+    const qualityValue = String(draft.qualityValue ?? "").trim();
     return [
-      { label: "视频", value: video || "—", field: "videoEncoder" },
-      { label: "质量", value: quality || "—", field: "qualityValue" },
-      { label: "容器", value: String(draft.container ?? "—"), field: "container" },
-      { label: "音频", value: String(draft.audioMode ?? "—"), field: "audioMode" },
-      { label: "字幕", value: String(draft.subtitleMode ?? "—"), field: "subtitleMode" },
-      { label: "命名", value: String(draft.outputNaming ?? "—"), field: "outputNaming" },
+      {
+        label: "视频",
+        value: valueLabel("videoEncoder", draft.videoEncoder),
+        field: "videoEncoder",
+        tip: valueTip(schema, "videoEncoder", draft.videoEncoder),
+      },
+      {
+        label: "质量",
+        value: `${valueLabel("qualityMode", draft.qualityMode)} ${qualityValue}`.trim(),
+        field: "qualityValue",
+        tip: `${valueTip(schema, "qualityMode", draft.qualityMode)}\n质量值：${qualityValue || "（未填）"}`,
+      },
+      {
+        label: "容器",
+        value: valueLabel("container", draft.container),
+        field: "container",
+        tip: valueTip(schema, "container", draft.container),
+      },
+      {
+        label: "音频",
+        value: valueLabel("audioMode", draft.audioMode),
+        field: "audioMode",
+        tip: valueTip(schema, "audioMode", draft.audioMode),
+      },
+      {
+        label: "字幕",
+        value: valueLabel("subtitleMode", draft.subtitleMode),
+        field: "subtitleMode",
+        tip: valueTip(schema, "subtitleMode", draft.subtitleMode),
+      },
+      {
+        label: "命名",
+        value: valueLabel("outputNaming", draft.outputNaming),
+        field: "outputNaming",
+        tip: valueTip(schema, "outputNaming", draft.outputNaming),
+      },
     ];
-  }, [draft]);
+  }, [draft, schema]);
 
   const filteredPresets = summaries.filter((preset) => {
     const q = presetSearch.trim().toLowerCase();
@@ -377,9 +408,9 @@ export function PresetsPage() {
         {(schema?.sections ?? []).map((section) => (
           <div
             key={section.title}
-            className={`tc-nav-item${activeSection === section.title ? " selected" : ""}`}
+            className={`tc-nav-item${activeSection === section.title ? " selected" : ""}${section.hint ? " tc-tip" : ""}`}
             onClick={() => setActiveSection(section.title)}
-            title={section.hint}
+            data-tip={section.hint}
           >
             {section.title}
           </div>
@@ -516,7 +547,8 @@ export function PresetsPage() {
             <li><b>参数总览</b>看当前的关键项；红色警告可以点，直接跳到出问题的分区。</li>
             <li>右侧<b>实时命令行</b>用 <span className="mono">&lt;输入文件&gt;</span> 占位，改任何参数 600ms 后自动刷新；它只生成、不执行。</li>
             <li><b>预设管理</b>：单击只预览，双击或「应用此预设」才会读进参数面板；内置预设只读，改完用「另存为」。</li>
-            <li>字段下方的一行灰字是该项的说明；下拉框选中项也会解释自己的含义。</li>
+            <li>字段名旁的 <b>ⓘ</b> 悬停显示这一项的完整说明；下拉框里每一项都写成「中文名 + 原始取值」，并附一行解释。</li>
+            <li>控件下方的灰字解释当前选中的值；参数总览和预设预览的每个值也可以悬停查看原始取值与含义。</li>
             <li>「只看已改」只显示与基线不同的字段；「搜索参数」按名称/当前值过滤。</li>
           </ul>
         </HelpNote>
@@ -590,11 +622,29 @@ export function PresetsPage() {
                       <span className="mono tc-id">{managedEntry.id}</span>
                     </div>
                     <div className="tc-manage-rows">
-                      <span>视频</span><span className="mono">{String(managedEntry.preset.videoEncoder ?? "—")}</span>
-                      <span>质量</span><span className="mono">{String(managedEntry.preset.qualityMode ?? "")} {String(managedEntry.preset.qualityValue ?? "")}</span>
-                      <span>容器</span><span className="mono">{String(managedEntry.preset.container ?? "—")}</span>
-                      <span>音频</span><span className="mono">{String(managedEntry.preset.audioMode ?? "—")}</span>
-                      <span>字幕</span><span className="mono">{String(managedEntry.preset.subtitleMode ?? "—")}</span>
+                      <span>视频</span>
+                      <span className="mono tc-tip" data-tip={valueTip(schema, "videoEncoder", managedEntry.preset.videoEncoder)}>
+                        {valueLabel("videoEncoder", managedEntry.preset.videoEncoder)}
+                      </span>
+                      <span>质量</span>
+                      <span
+                        className="mono tc-tip"
+                        data-tip={`${valueTip(schema, "qualityMode", managedEntry.preset.qualityMode)}\n质量值：${String(managedEntry.preset.qualityValue ?? "（未填）")}`}
+                      >
+                        {valueLabel("qualityMode", managedEntry.preset.qualityMode)} {String(managedEntry.preset.qualityValue ?? "")}
+                      </span>
+                      <span>容器</span>
+                      <span className="mono tc-tip" data-tip={valueTip(schema, "container", managedEntry.preset.container)}>
+                        {valueLabel("container", managedEntry.preset.container)}
+                      </span>
+                      <span>音频</span>
+                      <span className="mono tc-tip" data-tip={valueTip(schema, "audioMode", managedEntry.preset.audioMode)}>
+                        {valueLabel("audioMode", managedEntry.preset.audioMode)}
+                      </span>
+                      <span>字幕</span>
+                      <span className="mono tc-tip" data-tip={valueTip(schema, "subtitleMode", managedEntry.preset.subtitleMode)}>
+                        {valueLabel("subtitleMode", managedEntry.preset.subtitleMode)}
+                      </span>
                       <span>描述</span><span>{String(managedEntry.preset.description ?? "—")}</span>
                     </div>
                     <div className="tc-manage-actions">
@@ -642,7 +692,7 @@ export function PresetsPage() {
                 <div className="tc-card-title">参数总览</div>
                 <div className="tc-overview-grid">
                   {overview.map((item) => (
-                    <div key={item.label} className="tc-overview-cell">
+                    <div key={item.label} className="tc-overview-cell tc-tip" data-tip={item.tip}>
                       <span className="tc-overview-label">{item.label}</span>
                       <span className="tc-overview-value mono">{item.value}</span>
                     </div>
@@ -822,10 +872,17 @@ function Field({
   const optionHint = field.type === "select"
     ? field.optionHints?.[String(value ?? "")]
     : undefined;
+  const hint = field.type === "select" ? optionHint ?? field.hint : field.hint;
   return (
-    <label className={`tc-field${field.important ? " important" : ""}`}>
+    <div className={`tc-field${field.important ? " important" : ""}`}>
       <span className="tc-field-label">
         {field.label}
+        {field.hint && (
+          <span className="tc-info-dot" tabIndex={0} aria-label={field.hint}>
+            i
+            <span className="tc-info-tip">{field.hint}</span>
+          </span>
+        )}
         {changed && <span className="tc-changed-dot" title="与基线不同" />}
       </span>
       {field.type === "switch" ? (
@@ -848,18 +905,14 @@ function Field({
           onChange={(e) => onChange(e.target.value)}
         />
       ) : field.type === "select" ? (
-        <select
-          className="input"
+        <ParamSelect
+          fieldId={field.id}
           value={String(value ?? "")}
+          options={field.options ?? []}
+          hints={field.optionHints}
           disabled={disabled}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          {(field.options ?? []).map((option) => (
-            <option key={option} value={option} title={field.optionHints?.[option]}>
-              {option || "（默认）"}
-            </option>
-          ))}
-        </select>
+          onChange={onChange}
+        />
       ) : (
         <input
           className="input"
@@ -868,9 +921,148 @@ function Field({
           onChange={(e) => onChange(e.target.value)}
         />
       )}
-      {(optionHint || field.hint) && (
-        <span className="tc-field-hint">{optionHint ?? field.hint}</span>
+      {hint && <span className="tc-field-hint">{hint}</span>}
+    </div>
+  );
+}
+
+/**
+ * 仿 3FUI 的 ModernComboBox：收起时显示中文短名；展开后每一项是
+ * 「中文名 + 原始取值 + 一行说明」，不用去猜 libx264 / crf 是干什么的。
+ */
+function ParamSelect({
+  fieldId,
+  value,
+  options,
+  hints,
+  disabled,
+  onChange,
+}: {
+  fieldId: string;
+  value: string;
+  options: string[];
+  hints?: Record<string, string>;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const [box, setBox] = useState<{ left: number; top: number; width: number } | null>(null);
+  const trigger = useRef<HTMLButtonElement | null>(null);
+  const panel = useRef<HTMLDivElement | null>(null);
+
+  const measure = () => {
+    const element = trigger.current;
+    if (!element) return;
+    const rect = element.getBoundingClientRect();
+    const width = Math.max(rect.width, 300);
+    const height = Math.min(340, options.length * 52 + 10);
+    let left = rect.left;
+    if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
+    let top = rect.bottom + 4;
+    if (top + height > window.innerHeight - 8) top = Math.max(8, rect.top - height - 4);
+    setBox({ left, top, width });
+  };
+
+  const openList = () => {
+    if (disabled) return;
+    trigger.current?.focus();
+    setActive(Math.max(0, options.indexOf(value)));
+    measure();
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (panel.current?.contains(target) || trigger.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const close = () => setOpen(false);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open]);
+
+  const choose = (index: number) => {
+    const next = options[index];
+    if (next !== undefined && next !== value) onChange(next);
+    setOpen(false);
+    trigger.current?.focus();
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (!open) {
+      if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openList();
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setOpen(false);
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActive((index) => Math.min(options.length - 1, index + 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActive((index) => Math.max(0, index - 1));
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      choose(active);
+    } else if (event.key === "Tab") {
+      setOpen(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        ref={trigger}
+        className="input tc-select-trigger"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => (open ? setOpen(false) : openList())}
+        onKeyDown={onKeyDown}
+      >
+        <span className="tc-select-current">{valueLabel(fieldId, value)}</span>
+        <span className="tc-select-caret" aria-hidden="true" />
+      </button>
+      {open && box && createPortal(
+        <div
+          ref={panel}
+          className="tc-select-panel scroll-hover"
+          role="listbox"
+          style={{ left: box.left, top: box.top, width: box.width }}
+        >
+          {options.map((option, index) => (
+            <div
+              key={option === "" ? "（默认）" : option}
+              role="option"
+              aria-selected={option === value}
+              className={`tc-select-option${option === value ? " selected" : ""}${index === active ? " active" : ""}`}
+              onPointerEnter={() => setActive(index)}
+              onClick={() => choose(index)}
+            >
+              <span className="tc-select-option-head">
+                <span className="tc-select-option-label">{valueLabel(fieldId, option)}</span>
+                <span className="mono tc-select-option-value">{option === "" ? "空" : option}</span>
+              </span>
+              {hints?.[option] && <span className="tc-select-option-hint">{hints[option]}</span>}
+            </div>
+          ))}
+        </div>,
+        document.body,
       )}
-    </label>
+    </>
   );
 }

@@ -6,6 +6,7 @@ import { toast } from "../../store";
 import { errMsg } from "../../utils";
 import { ContentCopyIcon, RefreshIcon } from "../../components/icons";
 import { fmtBytes, fmtDuration, pct, stateLabel, stateTone, HelpNote } from "./common";
+import { valueLabel } from "./labels";
 
 /**
  * 编码队列。
@@ -264,7 +265,7 @@ export function QueuePage() {
                   <span className="tc-queue-name" title={job.input}>{job.input}</span>
                   <span className="tc-queue-sub">
                     <span className={`tag ${stateTone(job.state)}`}>{stateLabel(job.state)}</span>
-                    <span className="mono">{job.encoder ?? job.presetName ?? "—"}</span>
+                    <span className="mono">{job.encoder ? valueLabel("videoEncoder", job.encoder) : job.presetName ?? "—"}</span>
                     {job.fallbackAttempted && <span className="tag plain">已降级</span>}
                     {job.output && <span className="tc-queue-out mono" title={job.output}>{job.output}</span>}
                   </span>
@@ -308,7 +309,10 @@ export function QueuePage() {
                 <span>输入</span><span className="mono">{selectedJob.input}</span>
                 <span>输出</span><span className="mono">{selectedJob.output || "—"}</span>
                 <span>预设</span><span className="mono">{selectedJob.presetName || selectedJob.presetId || "—"}</span>
-                <span>编码器</span><span className="mono">{selectedJob.encoder || "—"}</span>
+                <span>编码器</span>
+                <span className="mono" title={selectedJob.encoder ?? undefined}>
+                  {selectedJob.encoder ? valueLabel("videoEncoder", selectedJob.encoder) : "—"}
+                </span>
                 <span>进度</span><span className="mono">{pct(selectedJob.fraction)} · {selectedJob.speed > 0 ? `${selectedJob.speed.toFixed(1)}x` : "—"}</span>
                 <span>帧</span><span className="mono">{selectedJob.frame >= 0 ? selectedJob.frame : "—"}</span>
                 <span>码率</span><span className="mono">{selectedJob.bitrate || "—"}</span>

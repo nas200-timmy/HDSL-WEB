@@ -29,7 +29,8 @@ import org.jetbrains.annotations.NotNullByDefault;
 ///
 /// `hint` is the one-line explanation under a control (the web port of 3FUI's per-field
 /// description). `important` marks the fields the overview and the beginner flow read.
-/// `optionHints` explains individual select values without changing the wire format.
+/// `optionHints` explains individual select values without changing the wire format; the
+/// frontend shows it after the Chinese option name and in the hover tooltip.
 @NotNullByDefault
 public final class PresetSchema {
 
@@ -93,26 +94,39 @@ public final class PresetSchema {
                         hint(text("qualityValue", "质量值 / 码率", "20"),
                                 "x264/x265 CRF 常用 18–28；硬件 CQP 常用 20–28；bitrate 写 2500k 或 5M"),
                         important(),
-                        hint(select("preset", "编码 preset", "medium",
+                        hint(select("preset", "编码速度档 preset", "medium",
                                 "", "ultrafast", "superfast", "veryfast", "faster", "fast",
                                 "medium", "slow", "slower", "veryslow"),
                                 "软件编码的速度/压缩档；越慢同画质越小。硬件编码不支持时会被自动清空",
-                                "", "自动",
+                                "", "自动（由编码器决定）",
                                 "ultrafast", "最快，体积最大",
+                                "superfast", "很快，体积偏大",
+                                "veryfast", "快，体积略大",
+                                "faster", "偏快，压缩率略低",
+                                "fast", "稍快于默认",
                                 "medium", "默认平衡",
                                 "slow", "更小体积，更慢",
+                                "slower", "更小体积，明显更慢",
                                 "veryslow", "最慢，压缩最好"),
-                        hint(text("profile", "profile", ""), "留空自动；H.264 常用 high，H.265 常用 main"),
-                        hint(text("level", "level", ""), "留空自动；设备兼容问题时可指定 4.1/5.1"),
-                        hint(text("tune", "tune", ""), "留空自动；x264 可用 film/animation/grain"),
+                        hint(text("profile", "编码 profile（档次）", ""), "留空自动；H.264 常用 high，H.265 常用 main"),
+                        hint(text("level", "编码 level（级别）", ""), "留空自动；设备兼容问题时可指定 4.1/5.1"),
+                        hint(text("tune", "画面调优 tune", ""), "留空自动；x264 可用 film/animation/grain"),
                         hint(select("pixelFormat", "像素格式", "",
                                 "", "yuv420p", "yuv422p", "yuv444p", "yuv420p10le", "yuv422p10le", "yuv444p10le", "p010le"),
-                                "留空跟随源；8-bit 用 yuv420p；10-bit HDR 用 yuv420p10le / p010le"),
+                                "留空跟随源；8-bit 用 yuv420p；10-bit HDR 用 yuv420p10le / p010le",
+                                "", "跟随源视频，不改像素格式",
+                                "yuv420p", "8-bit 4:2:0，兼容性最好",
+                                "yuv422p", "8-bit 4:2:2，采集/中间格式",
+                                "yuv444p", "8-bit 4:4:4，无色度抽样",
+                                "yuv420p10le", "10-bit 4:2:0，HDR/高精度",
+                                "yuv422p10le", "10-bit 4:2:2，专业中间格式",
+                                "yuv444p10le", "10-bit 4:4:4，无色度抽样",
+                                "p010le", "10-bit P010，HDR 常用"),
                         hint(booleanField("tenBit", "10-bit（未指定像素格式时）", false),
                                 "只在像素格式留空时生效；会转 yuv420p10le"),
-                        hint(text("gop", "GOP", ""), "关键帧间隔；留空由编码器决定"),
+                        hint(text("gop", "关键帧间隔 GOP", ""), "留空由编码器决定；按秒算可填 250（约 10 秒 @25fps）"),
                         hint(text("threads", "线程数", ""), "留空自动；限制 CPU 占用时可填 4/6"),
-                        hint(text("videoMap", "视频流 map", "0:v:0?"),
+                        hint(text("videoMap", "视频流选择 map", "0:v:0?"),
                                 "0:v:0? 第一条视频；0:v? 保留全部视频流（copy 时常用）")
                 )
         }));
@@ -122,22 +136,52 @@ public final class PresetSchema {
                         hint(text("width", "宽", ""), "留空跟随源；只填一边另一边按比例"),
                         hint(text("height", "高", ""), "留空跟随源；常用 1080 / 720"),
                         hint(text("fps", "帧率", ""), "留空跟随源；可写 30 或 30000/1001"),
-                        hint(text("crop", "裁剪（w:h:x:y）", ""), "例 1920:800:0:140（宽:高:左上角 x:y）"),
-                        hint(select("rotate", "旋转", "", "", "90", "180", "270"), "顺时针旋转画面"),
-                        hint(select("deinterlace", "去隔行", "", "", "yadif"), "DVD/电视源用 yadif")
+                        hint(text("crop", "裁剪（宽:高:x:y）", ""), "例 1920:800:0:140（宽:高:左上角 x:y）"),
+                        hint(select("rotate", "旋转", "", "", "90", "180", "270"),
+                                "顺时针旋转画面；手机竖拍视频常用",
+                                "", "不旋转，保持源方向",
+                                "90", "顺时针旋转 90°",
+                                "180", "旋转 180°（上下颠倒）",
+                                "270", "逆时针旋转 90°"),
+                        hint(select("deinterlace", "去隔行", "", "", "yadif"),
+                                "DVD/电视源用 yadif",
+                                "", "不去隔行",
+                                "yadif", "按帧去隔行，DVD/电视源常用")
                 )
         }));
 
         sections.add(section("色彩", "普通转码留空。只有 HDR↔SDR 转换或需要强制标记色彩时才填。", new JsonArray[]{
                 fields(
-                        hint(select("colorPrimaries", "primaries", "",
-                                "", "bt709", "bt2020", "smpte170m", "smpte240m"), "SDR 用 bt709；HDR 用 bt2020"),
-                        hint(select("colorTransfer", "transfer", "",
+                        hint(select("colorPrimaries", "色彩原色 primaries", "",
+                                "", "bt709", "bt2020", "smpte170m", "smpte240m"),
+                                "SDR 用 bt709；HDR 用 bt2020",
+                                "", "跟随源，不强制标记",
+                                "bt709", "BT.709，SDR 高清标准",
+                                "bt2020", "BT.2020，HDR 广色域",
+                                "smpte170m", "SMPTE 170M，NTSC/SD",
+                                "smpte240m", "SMPTE 240M，老 HD 标准"),
+                        hint(select("colorTransfer", "传输特性 transfer", "",
                                 "", "bt709", "smpte2084", "arib-std-b67", "bt2020-10", "bt2020-12"),
-                                "HDR10 用 smpte2084；HLG 用 arib-std-b67"),
-                        hint(select("colorMatrix", "matrix", "",
-                                "", "bt709", "bt2020nc", "smpte170m", "smpte240m"), "HDR 用 bt2020nc"),
-                        hint(select("colorRange", "range", "", "", "tv", "pc"), "视频通常 tv（有限范围）")
+                                "HDR10 用 smpte2084；HLG 用 arib-std-b67",
+                                "", "跟随源，不强制标记",
+                                "bt709", "BT.709，SDR 标准曲线",
+                                "smpte2084", "PQ，HDR10 使用",
+                                "arib-std-b67", "HLG，广播电视 HDR",
+                                "bt2020-10", "BT.2020 10-bit 曲线",
+                                "bt2020-12", "BT.2020 12-bit 曲线"),
+                        hint(select("colorMatrix", "色彩矩阵 matrix", "",
+                                "", "bt709", "bt2020nc", "smpte170m", "smpte240m"),
+                                "HDR 用 bt2020nc",
+                                "", "跟随源，不强制标记",
+                                "bt709", "BT.709 矩阵，SDR 常用",
+                                "bt2020nc", "BT.2020 非恒定矩阵，HDR 用",
+                                "smpte170m", "SMPTE 170M，NTSC/SD",
+                                "smpte240m", "SMPTE 240M，老 HD 标准"),
+                        hint(select("colorRange", "取值范围 range", "", "", "tv", "pc"),
+                                "视频通常 tv（有限范围）",
+                                "", "跟随源，不强制标记",
+                                "tv", "有限范围（16–235），视频标准",
+                                "pc", "全范围（0–255），屏幕截图/游戏录制")
                 )
         }));
 
@@ -150,11 +194,17 @@ public final class PresetSchema {
                                 "none", "丢弃音频"),
                         important(),
                         hint(select("audioEncoder", "音频编码器", "aac", "aac", "libopus", "libmp3lame", "flac", "ac3", "eac3"),
-                                "encode 时生效；mp4 常用 aac，mkv 可用 flac/opus"),
+                                "encode 时生效；mp4 常用 aac，mkv 可用 flac/opus",
+                                "aac", "AAC，MP4 最通用",
+                                "libopus", "Opus，MKV/WebM 推荐，同码率更好",
+                                "libmp3lame", "MP3，老设备兼容",
+                                "flac", "FLAC，无损，体积大",
+                                "ac3", "AC-3，老家庭影院兼容",
+                                "eac3", "E-AC-3，杜比数字+"),
                         hint(text("audioBitrate", "音频码率", "192k"), "encode 时生效，例 192k / 320k"),
                         hint(text("audioChannels", "声道数", ""), "留空跟随源；2=立体声，6=5.1"),
                         hint(text("audioSampleRate", "采样率", ""), "留空跟随源；常用 48000"),
-                        hint(text("audioMap", "音频流 map", "0:a?"),
+                        hint(text("audioMap", "音频流选择 map", "0:a?"),
                                 "0:a? 全部音轨；只要第一条写 0:a:0?")
                 )
         }));
@@ -171,7 +221,7 @@ public final class PresetSchema {
                                 "只在 burn 时使用；ASS/SRT 都行，中文字体缺失会显示方块"),
                         hint(text("subtitleFont", "字体", ""), "burn 时生效，例 Noto Sans CJK SC"),
                         hint(text("subtitleFontSize", "字号", ""), "burn 时生效，例 24"),
-                        hint(text("subtitleMap", "字幕流 map", "0:s?"), "0:s? 全部字幕；0:s:0? 第一条")
+                        hint(text("subtitleMap", "字幕流选择 map", "0:s?"), "0:s? 全部字幕；0:s:0? 第一条")
                 )
         }));
 
