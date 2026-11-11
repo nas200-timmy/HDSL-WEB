@@ -77,21 +77,30 @@ public final class PresetSchema {
                 fields(
                         videoEncoderGroups(hint(select("videoEncoder", "视频编码器", "libx264",
                                 "copy", "none", "libx264", "libx265", "libvpx-vp9", "libaom-av1",
-                                "h264_nvenc", "hevc_nvenc", "h264_vaapi", "hevc_vaapi",
-                                "h264_qsv", "hevc_qsv"),
+                                "libsvtav1", "librav1e",
+                                "h264_nvenc", "hevc_nvenc", "av1_nvenc",
+                                "h264_vaapi", "hevc_vaapi", "vp9_vaapi", "av1_vaapi",
+                                "h264_qsv", "hevc_qsv", "vp9_qsv", "av1_qsv"),
                                 "copy 不重编码；x264 兼容性最好；x265 同画质更小；VAAPI/QSV 走核显",
                                 "copy", "直接复制视频流，不重编码",
                                 "none", "丢弃视频（纯音频输出）",
                                 "libx264", "H.264 软件编码，兼容性最好",
                                 "libx265", "H.265 软件编码，同画质约小 30–50%",
                                 "libvpx-vp9", "VP9 软件编码，WebM 生态",
-                                "libaom-av1", "AV1 软件编码，压缩强、速度慢",
+                                "libaom-av1", "AV1 软件编码（aom），压缩强、速度慢",
+                                "libsvtav1", "AV1 软件编码（SVT-AV1），比 aom 快很多",
+                                "librav1e", "AV1 软件编码（rav1e），速度档数值越大越快",
                                 "h264_nvenc", "NVIDIA 硬件 H.264",
                                 "hevc_nvenc", "NVIDIA 硬件 H.265",
+                                "av1_nvenc", "NVIDIA 硬件 AV1（RTX 40 系起）",
                                 "h264_vaapi", "Intel/AMD 核显 H.264",
                                 "hevc_vaapi", "Intel/AMD 核显 H.265（推荐硬编）",
+                                "vp9_vaapi", "Intel/AMD 核显 VP9",
+                                "av1_vaapi", "Intel/AMD 核显 AV1（较新硬件）",
                                 "h264_qsv", "Intel QSV H.264",
-                                "hevc_qsv", "Intel QSV H.265（部分平台不可用）")),
+                                "hevc_qsv", "Intel QSV H.265（部分平台不可用）",
+                                "vp9_qsv", "Intel QSV VP9",
+                                "av1_qsv", "Intel QSV AV1（Arc 起）")),
                         important(),
                         qualityModeGroups(hint(select("qualityMode", "质量模式", "crf", "crf", "cqp", "bitrate"),
                                 "crf 恒定质量（软件编码推荐）；cqp 固定质量（硬件）；bitrate 固定码率",
@@ -435,6 +444,9 @@ public final class PresetSchema {
     private static final String[] NVENC_SPEED = {"", "p1", "p2", "p3", "p4", "p5", "p6", "p7"};
     private static final String[] QSV_SPEED = {"", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"};
     private static final String[] NUMERIC_SPEED = {"", "0", "1", "2", "3", "4", "5", "6", "7", "8"};
+    private static final String[] SVT_SPEED = {"", "0", "1", "2", "3", "4", "5", "6", "7",
+            "8", "9", "10", "11", "12", "13"};
+    private static final String[] RAV1E_SPEED = {"", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"};
 
     /// 速度档随编码器家族变化：x264/x265 命名档，VP9/AV1 与 VAAPI 数值档，NVENC p1–p7，QSV 命名档。
     private static JsonObject speedPresets(JsonObject field) {
@@ -448,6 +460,13 @@ public final class PresetSchema {
         putGroup(field, "qsvHevc", QSV_SPEED);
         putGroup(field, "vaapiH264", NUMERIC_SPEED);
         putGroup(field, "vaapiHevc", NUMERIC_SPEED);
+        putGroup(field, "nvencAv1", NVENC_SPEED);
+        putGroup(field, "qsvVp9", QSV_SPEED);
+        putGroup(field, "qsvAv1", QSV_SPEED);
+        putGroup(field, "vaapiVp9");
+        putGroup(field, "vaapiAv1");
+        putGroup(field, "av1svt", SVT_SPEED);
+        putGroup(field, "av1rav1e", RAV1E_SPEED);
         return field;
     }
 
@@ -463,6 +482,13 @@ public final class PresetSchema {
         putGroup(field, "qsvHevc", "cqp", "bitrate");
         putGroup(field, "vaapiH264", "cqp", "bitrate");
         putGroup(field, "vaapiHevc", "cqp", "bitrate");
+        putGroup(field, "nvencAv1", "cqp", "bitrate");
+        putGroup(field, "qsvVp9", "cqp", "bitrate");
+        putGroup(field, "qsvAv1", "cqp", "bitrate");
+        putGroup(field, "vaapiVp9", "cqp", "bitrate");
+        putGroup(field, "vaapiAv1", "cqp", "bitrate");
+        putGroup(field, "av1svt", "crf", "bitrate");
+        putGroup(field, "av1rav1e", "crf", "bitrate");
         return field;
     }
 
@@ -477,6 +503,13 @@ public final class PresetSchema {
         putGroup(field, "qsvHevc", "", "main", "main10", "mainsp", "rext", "scc");
         putGroup(field, "vaapiH264", "", "baseline", "main", "high");
         putGroup(field, "vaapiHevc", "", "main", "main10");
+        putGroup(field, "nvencAv1", "");
+        putGroup(field, "qsvVp9", "");
+        putGroup(field, "qsvAv1", "");
+        putGroup(field, "vaapiVp9", "");
+        putGroup(field, "vaapiAv1", "");
+        putGroup(field, "av1svt", "");
+        putGroup(field, "av1rav1e", "");
         return field;
     }
 
@@ -492,6 +525,13 @@ public final class PresetSchema {
         putGroup(field, "qsvHevc");
         putGroup(field, "vaapiH264");
         putGroup(field, "vaapiHevc");
+        putGroup(field, "nvencAv1", "", "hq", "ll", "ull", "lossless");
+        putGroup(field, "qsvVp9");
+        putGroup(field, "qsvAv1");
+        putGroup(field, "vaapiVp9");
+        putGroup(field, "vaapiAv1");
+        putGroup(field, "av1svt");
+        putGroup(field, "av1rav1e");
         return field;
     }
 
@@ -510,20 +550,31 @@ public final class PresetSchema {
         putGroup(field, "qsvHevc", "", "nv12", "p010le", "qsv");
         putGroup(field, "vaapiH264", "", "nv12");
         putGroup(field, "vaapiHevc", "", "nv12", "p010le");
+        putGroup(field, "nvencAv1", "", "yuv420p", "nv12", "p010le", "yuv444p", "p016le", "gbrp", "gbrp10le");
+        putGroup(field, "qsvVp9", "", "nv12", "p010le");
+        putGroup(field, "qsvAv1", "", "nv12", "p010le");
+        putGroup(field, "vaapiVp9", "", "nv12");
+        putGroup(field, "vaapiAv1", "", "nv12", "p010le");
+        putGroup(field, "av1svt", "", "yuv420p", "yuv420p10le");
+        putGroup(field, "av1rav1e", "", "yuv420p", "yuv420p10le", "yuv444p", "yuv444p10le");
         return field;
     }
 
     /// 容器约束视频编码器：WebM 只装 VP9/AV1，M4A 是纯音频容器。
     private static JsonObject videoEncoderGroups(JsonObject field) {
         String[] all = {"copy", "none", "libx264", "libx265", "libvpx-vp9", "libaom-av1",
-                "h264_nvenc", "hevc_nvenc", "h264_vaapi", "hevc_vaapi", "h264_qsv", "hevc_qsv"};
+                "libsvtav1", "librav1e",
+                "h264_nvenc", "hevc_nvenc", "av1_nvenc",
+                "h264_vaapi", "hevc_vaapi", "vp9_vaapi", "av1_vaapi",
+                "h264_qsv", "hevc_qsv", "vp9_qsv", "av1_qsv"};
         putGroup(field, "mkv", all);
         putGroup(field, "mp4", all);
         putGroup(field, "mov", all);
         putGroup(field, "avi", all);
         putGroup(field, "ts", all);
         putGroup(field, "m4a", "none");
-        putGroup(field, "webm", "none", "libvpx-vp9", "libaom-av1");
+        putGroup(field, "webm", "none", "libvpx-vp9", "libaom-av1", "libsvtav1", "librav1e",
+                "vp9_qsv", "vp9_vaapi", "av1_qsv", "av1_vaapi", "av1_nvenc");
         return field;
     }
 

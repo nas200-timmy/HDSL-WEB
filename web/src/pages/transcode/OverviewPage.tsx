@@ -4,8 +4,10 @@ import { errMsg } from "../../utils";
 import { pct, stateLabel, HelpNote } from "./common";
 
 const COMMON_ENCODERS = [
-  "libx264", "libx265", "libvpx-vp9", "libaom-av1",
-  "h264_nvenc", "hevc_nvenc", "h264_vaapi", "hevc_vaapi", "h264_qsv", "hevc_qsv", "aac",
+  "libx264", "libx265", "libvpx-vp9", "libaom-av1", "libsvtav1", "librav1e",
+  "h264_nvenc", "hevc_nvenc", "av1_nvenc",
+  "h264_vaapi", "hevc_vaapi", "vp9_vaapi", "av1_vaapi",
+  "h264_qsv", "hevc_qsv", "vp9_qsv", "av1_qsv", "aac",
 ];
 
 export function OverviewPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {

@@ -725,9 +725,12 @@ public final class TranscodeQueue {
             if (job.preset.qualityValue == null || job.preset.qualityValue.isBlank()) {
                 job.preset.qualityValue = "23";
             }
-            if (to.startsWith("lib") && (job.preset.preset == null || job.preset.preset.isBlank())) {
-                job.preset.preset = "medium";
-            }
+            job.preset.preset = switch (to) {
+                case "libvpx-vp9", "libaom-av1", "libsvtav1" -> "8";
+                case "librav1e" -> "6";
+                case "h264_vaapi", "hevc_vaapi", "vp9_vaapi" -> "";
+                default -> "medium";
+            };
             job.encoder = to;
             job.state = TranscodeJob.State.QUEUED;
             job.fraction = -1;
@@ -868,11 +871,15 @@ public final class TranscodeQueue {
         return switch (encoder) {
             case "h264_qsv" -> "h264_vaapi";
             case "hevc_qsv" -> "hevc_vaapi";
+            case "vp9_qsv" -> "vp9_vaapi";
+            case "av1_qsv" -> "libaom-av1";
             case "h264_vaapi" -> "libx264";
             case "hevc_vaapi" -> "libx265";
+            case "vp9_vaapi" -> "libvpx-vp9";
+            case "av1_vaapi" -> "libsvtav1";
             case "h264_nvenc" -> "libx264";
             case "hevc_nvenc" -> "libx265";
-            case "av1_qsv" -> "libaom-av1";
+            case "av1_nvenc" -> "libsvtav1";
             default -> null;
         };
     }

@@ -134,10 +134,16 @@ public final class CommandBuilder {
                         // VP9/AV1 软件编码的速度档是 -cpu-used（0 最慢 ~ 8 最快）。
                         args.add("-cpu-used");
                         args.add(preset.preset);
-                    } else if (video.endsWith("_vaapi")) {
-                        // VAAPI's speed control is `-quality` (larger = faster), not `-preset`.
-                        args.add("-quality");
+                    } else if ("librav1e".equals(video)) {
+                        // rav1e 的速度档是 `-speed`（0 最慢 ~ 10 最快），没有 -preset。
+                        args.add("-speed");
                         args.add(preset.preset);
+                    } else if (video.endsWith("_vaapi")) {
+                        // VAAPI 的 H.264/H.265 有 `-quality`；VP9/AV1 VAAPI 没有这个旋钮。
+                        if ("h264_vaapi".equals(video) || "hevc_vaapi".equals(video)) {
+                            args.add("-quality");
+                            args.add(preset.preset);
+                        }
                     } else if (softwareEncoder(video) || video.endsWith("_nvenc") || video.endsWith("_qsv")) {
                         args.add("-preset");
                         args.add(preset.preset);
@@ -376,6 +382,10 @@ public final class CommandBuilder {
                 args.add("-cq");
             }
             args.add(preset.qualityValue);
+        } else if ("librav1e".equals(encoder)) {
+            // rav1e 没有 -crf，恒定质量走 -qp。
+            args.add("-qp");
+            args.add(preset.qualityValue);
         } else if ("cqp".equals(mode)) {
             args.add("-qp");
             args.add(preset.qualityValue);
@@ -476,7 +486,7 @@ public final class CommandBuilder {
             return false;
         }
         return switch (encoder) {
-            case "mjpeg", "png", "webp", "libwebp", "bmp", "tiff", "gif", "avif", "libaom-av1",
+            case "mjpeg", "png", "webp", "libwebp", "bmp", "tiff", "gif", "avif",
                  "jxl", "libjxl", "jpegxl" -> true;
             default -> false;
         };

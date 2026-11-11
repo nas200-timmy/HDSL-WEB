@@ -157,7 +157,7 @@ export function PresetsPage() {
       // tune/pixelFormat 换成新编码器能接受的值（不认识的清空）。
       if (id === "videoEncoder") {
         const encoder = String(value);
-        const image = /^(mjpeg|png|webp|libwebp|bmp|tiff|gif|avif|libaom-av1|jxl|libjxl|jpegxl)$/.test(encoder);
+        const image = /^(mjpeg|png|webp|libwebp|bmp|tiff|gif|avif|jxl|libjxl|jpegxl)$/.test(encoder);
         const hardware = /_vaapi|_qsv|_nvenc/.test(encoder);
         if (image) {
           next.audioMode = "none";

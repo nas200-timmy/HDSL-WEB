@@ -201,4 +201,61 @@ class CommandBuilderTest {
                 () -> CommandBuilder.buildPasses(hardware, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
     }
 
+    @Test
+    void newAv1AndVp9EncodersGetTheirOwnFlags(@TempDir Path dir) {
+        TranscodePreset svt = preset();
+        svt.videoEncoder = "libsvtav1";
+        svt.qualityValue = "35";
+        svt.preset = "8";
+        String svtCommand = joined(CommandBuilder.build(svt, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(svtCommand.contains("-c:v libsvtav1"));
+        assertTrue(svtCommand.contains("-preset 8"));
+        assertTrue(svtCommand.contains("-crf 35"));
+
+        TranscodePreset rav1e = preset();
+        rav1e.videoEncoder = "librav1e";
+        rav1e.qualityValue = "100";
+        rav1e.preset = "6";
+        String rav1eCommand = joined(CommandBuilder.build(rav1e, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(rav1eCommand.contains("-speed 6"));
+        assertTrue(rav1eCommand.contains("-qp 100"));
+        assertTrue(!rav1eCommand.contains("-crf"));
+
+        TranscodePreset vp9Vaapi = preset();
+        vp9Vaapi.videoEncoder = "vp9_vaapi";
+        vp9Vaapi.qualityMode = "cqp";
+        vp9Vaapi.qualityValue = "30";
+        vp9Vaapi.preset = "4";
+        String vaapiCommand = joined(CommandBuilder.build(vp9Vaapi, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(vaapiCommand.contains("-vaapi_device"));
+        assertTrue(vaapiCommand.contains("-qp 30"));
+        assertTrue(vaapiCommand.contains("hwupload"));
+        assertTrue(!vaapiCommand.contains("-quality"));
+
+        TranscodePreset av1Qsv = preset();
+        av1Qsv.videoEncoder = "av1_qsv";
+        av1Qsv.qualityMode = "cqp";
+        av1Qsv.qualityValue = "30";
+        av1Qsv.preset = "medium";
+        String qsvCommand = joined(CommandBuilder.build(av1Qsv, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(qsvCommand.contains("-preset medium"));
+        assertTrue(qsvCommand.contains("-global_quality 30"));
+
+        TranscodePreset av1Nvenc = preset();
+        av1Nvenc.videoEncoder = "av1_nvenc";
+        av1Nvenc.qualityMode = "cqp";
+        av1Nvenc.qualityValue = "28";
+        av1Nvenc.preset = "p4";
+        String nvencCommand = joined(CommandBuilder.build(av1Nvenc, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(nvencCommand.contains("-preset p4"));
+        assertTrue(nvencCommand.contains("-qp 28"));
+
+        TranscodePreset aom = preset();
+        aom.videoEncoder = "libaom-av1";
+        aom.preset = "8";
+        String aomCommand = joined(CommandBuilder.build(aom, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(aomCommand.contains("-map 0:a?"));
+        assertTrue(!aomCommand.contains("-frames:v"));
+    }
+
 }

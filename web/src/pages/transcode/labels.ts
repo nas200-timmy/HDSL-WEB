@@ -27,12 +27,19 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
     libx265: "H.265（x265）",
     "libvpx-vp9": "VP9（libvpx）",
     "libaom-av1": "AV1（aom）",
+    libsvtav1: "AV1（SVT-AV1）",
+    librav1e: "AV1（rav1e）",
     h264_nvenc: "H.264（NVENC）",
     hevc_nvenc: "H.265（NVENC）",
+    av1_nvenc: "AV1（NVENC）",
     h264_vaapi: "H.264（VAAPI）",
     hevc_vaapi: "H.265（VAAPI）",
+    vp9_vaapi: "VP9（VAAPI）",
+    av1_vaapi: "AV1（VAAPI）",
     h264_qsv: "H.264（QSV）",
     hevc_qsv: "H.265（QSV）",
+    vp9_qsv: "VP9（QSV）",
+    av1_qsv: "AV1（QSV）",
   },
   qualityMode: {
     crf: "CRF 恒定质量",
@@ -193,7 +200,14 @@ const AUDIO_ENCODE_FIELDS = new Set([
   "audioVolume", "loudnormEnabled", "loudnormI", "loudnormTP", "loudnormLRA",
 ]);
 const SUBTITLE_BURN_FIELDS = new Set(["subtitleFile", "subtitleFont", "subtitleFontSize", "subtitleStyle"]);
-const NO_TUNE_FAMILIES = new Set(["qsvH264", "qsvHevc", "vaapiH264", "vaapiHevc"]);
+const NO_TUNE_FAMILIES = new Set([
+  "qsvH264", "qsvHevc", "vaapiH264", "vaapiHevc",
+  "qsvVp9", "qsvAv1", "vaapiVp9", "vaapiAv1", "av1svt", "av1rav1e",
+]);
+const PROFILELESS_FAMILIES = new Set([
+  "vp9", "nvencAv1", "qsvVp9", "qsvAv1", "vaapiVp9", "vaapiAv1", "av1svt", "av1rav1e",
+]);
+const NO_SPEED_FAMILIES = new Set(["vaapiVp9", "vaapiAv1"]);
 const RESTRICTIVE_ATTACHMENT_CONTAINERS = new Set(["mp4", "mov", "avi", "ts", "m4a"]);
 
 /// 编码器家族：决定速度档、profile、tune、像素格式，键与后端 PresetSchema 的 optionGroups 一致。
@@ -203,12 +217,19 @@ export function encoderFamily(encoder: string): string {
     case "libx265": return "x265";
     case "libvpx-vp9": return "vp9";
     case "libaom-av1": return "av1";
+    case "libsvtav1": return "av1svt";
+    case "librav1e": return "av1rav1e";
     case "h264_nvenc": return "nvencH264";
     case "hevc_nvenc": return "nvencHevc";
+    case "av1_nvenc": return "nvencAv1";
     case "h264_vaapi": return "vaapiH264";
     case "hevc_vaapi": return "vaapiHevc";
+    case "vp9_vaapi": return "vaapiVp9";
+    case "av1_vaapi": return "vaapiAv1";
     case "h264_qsv": return "qsvH264";
     case "hevc_qsv": return "qsvHevc";
+    case "vp9_qsv": return "qsvVp9";
+    case "av1_qsv": return "qsvAv1";
     default: return "x264";
   }
 }
@@ -227,10 +248,20 @@ const SPEED_PRESETS: Record<string, { values: string[]; fallback: string }> = {
   av1: { values: ["", "0", "1", "2", "3", "4", "5", "6", "7", "8"], fallback: "" },
   nvencH264: { values: ["", "p1", "p2", "p3", "p4", "p5", "p6", "p7"], fallback: "p4" },
   nvencHevc: { values: ["", "p1", "p2", "p3", "p4", "p5", "p6", "p7"], fallback: "p4" },
+  nvencAv1: { values: ["", "p1", "p2", "p3", "p4", "p5", "p6", "p7"], fallback: "p4" },
   qsvH264: { values: ["", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], fallback: "medium" },
   qsvHevc: { values: ["", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], fallback: "medium" },
+  qsvVp9: { values: ["", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], fallback: "medium" },
+  qsvAv1: { values: ["", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], fallback: "medium" },
   vaapiH264: { values: ["", "0", "1", "2", "3", "4", "5", "6", "7", "8"], fallback: "" },
   vaapiHevc: { values: ["", "0", "1", "2", "3", "4", "5", "6", "7", "8"], fallback: "" },
+  vaapiVp9: { values: [], fallback: "" },
+  vaapiAv1: { values: [], fallback: "" },
+  av1svt: {
+    values: ["", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"],
+    fallback: "8",
+  },
+  av1rav1e: { values: ["", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"], fallback: "6" },
 };
 
 /// 当前编码器可用的速度档；schema 的 optionGroups 是权威列表，拿不到时退回本地映射。
@@ -257,8 +288,11 @@ export function inactiveReason(fieldId: string, preset: TranscodePreset): string
   if (fieldId === "tune" && NO_TUNE_FAMILIES.has(family)) {
     return "此编码器没有 tune 选项";
   }
-  if (fieldId === "profile" && family === "vp9") {
-    return "VP9 没有 profile 选项";
+  if (fieldId === "preset" && NO_SPEED_FAMILIES.has(family)) {
+    return "此编码器没有速度档";
+  }
+  if (fieldId === "profile" && PROFILELESS_FAMILIES.has(family)) {
+    return "此编码器没有 profile 选项";
   }
   if (fieldId === "denoiseParams" && String(preset.denoise ?? "") === "") {
     return "未选择降噪方式";
