@@ -2,10 +2,11 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布 — 2026-11-10 · 转码模块（web-shell 分支）
+## 未发布 — 2026-11-10 · 转码模块（已合并到 `main`）
 
-> **尚未合并 `main`，也未发布**。以下改动只在本地 `web-shell`；按约定等容器/人肉测试
-> 通过后再合并。交接细节见 [`docs/session-handoff-2026-11-10.md`](docs/session-handoff-2026-11-10.md)。
+> **已本地合并到 `main`，未 push、未发布**。合并点 `33032362a`（`merge: web-shell → main`），
+> 合并后 `main` 的树与 `web-shell` 完全一致；按约定等容器/人肉测试通过后再推 GitHub。
+> 交接细节见 [`docs/session-handoff-2026-11-10.md`](docs/session-handoff-2026-11-10.md)。
 
 **参数工作台与队列（2026-11-11，UI 第二轮）**
 
