@@ -2,11 +2,11 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布 — 2026-11-10 · 转码模块（已合并到 `main`）
+## v0.6.83 — 2026-11-11 · 转码模块：批量编码、硬件加速与 GPU 监控
 
-> **已本地合并到 `main`，未 push、未发布**。合并点 `33032362a`（`merge: web-shell → main`），
-> 合并后 `main` 的树与 `web-shell` 完全一致；按约定等容器/人肉测试通过后再推 GitHub。
-> 交接细节见 [`docs/session-handoff-2026-11-10.md`](docs/session-handoff-2026-11-10.md)。
+> 首个把「转码」当作一等功能的版本：默认关闭，关闭时与 MC 一样「当它不存在」；
+> 启用要开发者密码 + HTTPS + 阅读须知。设计取舍、剩余项与实机测试记录见
+> [`docs/transcode.md`](docs/transcode.md)。
 
 **参数工作台与队列（2026-11-11，UI 第二轮）**
 
@@ -176,10 +176,18 @@
 - 真实 1080p HEVC 10bit + FLAC 25:45 测试：mp4-h264 预设约 5 分 08 秒
   （5.04×），426 MB → 360 MB，SSIM All 0.978 / PSNR 平均 29.6 dB。
 
+**终端客户端：补上 Hermes 分类**
+
+- 面板早就有 `hermes --tui` 适配器，客户端菜单却只列 kimi/opencode/claude-web/pi-web/zcode，
+  Hermes 实例必须手敲 `--brand hermes`。现在菜单、`--brand` 文档与 404 提示都同步到
+  这六个品牌；Octop 仍然不列——它没有终端，列出来只是死路。
+- 测试夹具补 hermes；离线（`GOFLAGS=-mod=vendor GOPROXY=off`）`go build` / `go vet` /
+  `go test ./...` 全绿。
+
 **验证**
 
 - `./gradlew test` 全量绿；`npm run typecheck` / `npm run build` 绿；
-  `./gradlew shadowJar` 成功。
+  `./gradlew shadowJar -PreleaseVersion=0.6.83` 成功。
 - `python3 scripts/transcode-smoke.py` 13 项全 PASS（真实 ffmpeg：capabilities / media /
   presets / preview / submit / encode / log / extract / quality / 404）。
 - 本机无 Docker，镜像未实际构建；`docker-install.sh` 只做了语法检查。
