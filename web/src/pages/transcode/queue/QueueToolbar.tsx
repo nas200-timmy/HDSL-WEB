@@ -7,8 +7,9 @@ interface QueueToolbarProps {
   total: number;
   selectedCount: number;
   finishedCount: number;
-  /** The one selected job may change position (server truth, `caps.reorder`). */
-  canMove: boolean;
+  /** Why the selection cannot move up/down, or null when it can (server-side `caps.reorder`). */
+  moveUpBlocker: string | null;
+  moveDownBlocker: string | null;
   busy: boolean;
   onQueueAction: (action: "start" | "pause" | "stop") => void;
   onBatch: (action: QueueBatchAction) => void;
@@ -28,7 +29,8 @@ export function QueueToolbar({
   total,
   selectedCount,
   finishedCount,
-  canMove,
+  moveUpBlocker,
+  moveDownBlocker,
   busy,
   onQueueAction,
   onBatch,
@@ -39,7 +41,6 @@ export function QueueToolbar({
   onClearFinished,
 }: QueueToolbarProps) {
   const none = busy || selectedCount === 0;
-  const one = busy || selectedCount !== 1;
   return (
     <div className="card tc-queue-toolbar" role="toolbar" aria-label="队列控制">
       <div className="tc-tb-row">
@@ -101,10 +102,10 @@ export function QueueToolbar({
           重置预设
         </button>
         <span className="tc-tb-sep" />
-        <button className="btn btn-text tc-tb" disabled={one || !canMove} title={canMove ? "上移一位" : "正在执行的任务不能移动"} onClick={() => onMove(-1)}>
+        <button className="btn btn-text tc-tb" disabled={busy || moveUpBlocker != null} title={moveUpBlocker ?? "上移一位"} onClick={() => onMove(-1)}>
           上移
         </button>
-        <button className="btn btn-text tc-tb" disabled={one || !canMove} title={canMove ? "下移一位" : "正在执行的任务不能移动"} onClick={() => onMove(1)}>
+        <button className="btn btn-text tc-tb" disabled={busy || moveDownBlocker != null} title={moveDownBlocker ?? "下移一位"} onClick={() => onMove(1)}>
           下移
         </button>
         <span className="tc-tb-sep" />

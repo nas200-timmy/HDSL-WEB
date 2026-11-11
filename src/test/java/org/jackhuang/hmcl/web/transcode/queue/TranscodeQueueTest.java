@@ -569,4 +569,84 @@ class TranscodeQueueTest {
         }
     }
 
+    /// A job parked for a decision pauses the queue so nothing starts behind it. Removing
+    /// that job must lift the pause: the operator did not press 暂停, and the queued work
+    /// would otherwise sit there until someone noticed.
+    @Test
+    void removingAParkedJobResumesTheQueue(@TempDir Path dir) throws Exception {
+        Assumptions.assumeFalse(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS,
+                "the fake ffmpeg uses a POSIX shell script");
+
+        Path media = Files.createDirectory(dir.resolve("media"));
+        Files.writeString(media.resolve("input.mp4"), "source");
+        Path bin = Files.createDirectory(dir.resolve("bin"));
+        Path ffmpeg = bin.resolve("ffmpeg");
+        Path ffprobe = bin.resolve("ffprobe");
+        script(ffmpeg, """
+                #!/bin/sh
+                case "$*" in
+                  *-version*) echo "ffmpeg version 7.1.5"; exit 0 ;;
+                  *-encoders*) echo " V....D libx264 H.264"; exit 0 ;;
+                  *-hwaccels*) echo "Hardware acceleration methods:"; echo "vaapi"; exit 0 ;;
+                  *-filters*) echo " TSC scale V->V Scale"; exit 0 ;;
+                  *hevc_vaapi*) echo "Invalid FrameType:0"; exit 1 ;;
+                esac
+                for last; do :; done
+                echo "out_time_us=1000000"
+                echo "speed=2.0x"
+                echo "progress=end"
+                printf x > "$last"
+                exit 0
+                """);
+        script(ffprobe, """
+                #!/bin/sh
+                echo '{"streams":[{"codec_type":"video"},{"codec_type":"audio"}],"format":{"duration":"2.0"}}'
+                """);
+
+        ServerConfig config = new ServerConfig();
+        config.dataDir = dir.resolve("data");
+        config.transcode.ffmpegPath = ffmpeg.toString();
+        config.transcode.mediaRoot = media.toString();
+        config.transcode.failurePolicy = "ask";
+
+        TranscodeModule module = new TranscodeModule(config, new EventBus());
+        module.feature().enable(consent());
+        module.queue().start();
+        try {
+            var hardware = module.presets().get("hevc-vaapi").orElseThrow().preset();
+            var software = module.presets().get("h264-quality").orElseThrow().preset();
+            String parked = module.queue().submit("input.mp4", "", "hevc-vaapi", hardware)
+                    .get("id").getAsString();
+            String behind = module.queue().submit("input.mp4", "", "h264-quality", software)
+                    .get("id").getAsString();
+            module.queue().startQueue();
+
+            String state = "";
+            for (int i = 0; i < 100; i++) {
+                Thread.sleep(50);
+                state = module.queue().jobJson(parked).orElseThrow().get("state").getAsString();
+                if ("waiting_decision".equals(state) || "failed".equals(state)) {
+                    break;
+                }
+            }
+            assertEquals("waiting_decision", state, module.queue().snapshot().toString());
+            assertEquals("paused", module.queue().snapshot().get("runState").getAsString());
+
+            assertTrue(module.queue().remove(parked), module.queue().snapshot().toString());
+            // The park is gone, so the pause it caused must be gone with it.
+            assertEquals("running", module.queue().snapshot().get("runState").getAsString());
+
+            for (int i = 0; i < 100; i++) {
+                Thread.sleep(50);
+                state = module.queue().jobJson(behind).orElseThrow().get("state").getAsString();
+                if ("done".equals(state) || "failed".equals(state)) {
+                    break;
+                }
+            }
+            assertEquals("done", state, module.queue().snapshot().toString());
+        } finally {
+            module.queue().stop();
+        }
+    }
+
 }

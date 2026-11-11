@@ -81,6 +81,12 @@ public final class TranscodeQueue {
         @SerializedName("paused") PAUSED
     }
 
+    /// A deliberate pause (`队列暂停`): nothing lifts it except the operator.
+    private static final String PAUSE_OPERATOR = "operator";
+    /// A pause that exists only because a job is parked for a decision. It is lifted
+    /// automatically when the last parked job leaves the queue.
+    private static final String PAUSE_DECISION = "decision";
+
     private final TranscodeModule module;
     private final EventBus bus;
     private final Path dataDir;
@@ -111,6 +117,12 @@ public final class TranscodeQueue {
     private final Map<String, ScheduledFuture<?>> decisionTimeouts = new ConcurrentHashMap<>();
 
     private volatile RunState runState = RunState.IDLE;
+    /// Why the queue is paused. `decision` means a job is parked waiting for the
+    /// operator; once the last such job is gone (removed, cancelled, re-pointed) the
+    /// pause has no reason left and dispatch must resume on its own. `operator` is a
+    /// deliberate pause and is never lifted implicitly. Persisted with the queue so a
+    /// restart cannot turn a parked pause into a silent manual one.
+    private String pauseReason = PAUSE_OPERATOR;
     private boolean started;
 
     public TranscodeQueue(TranscodeModule module, EventBus bus) {
@@ -138,6 +150,7 @@ public final class TranscodeQueue {
             started = true;
             if (runState == RunState.RUNNING && !module.config().transcode.autoResume) {
                 runState = RunState.PAUSED;
+                pauseReason = PAUSE_OPERATOR;
             }
             saveLocked();
         }
@@ -271,6 +284,7 @@ public final class TranscodeQueue {
         start();
         synchronized (lock) {
             runState = RunState.RUNNING;
+            pauseReason = PAUSE_OPERATOR;
             saveLocked();
         }
         publishQueue();
@@ -281,9 +295,29 @@ public final class TranscodeQueue {
     public void pauseQueue() {
         synchronized (lock) {
             runState = RunState.PAUSED;
+            pauseReason = PAUSE_OPERATOR;
             saveLocked();
         }
         publishQueue();
+    }
+
+    /// Lifts a decision-pause once no job is waiting for a decision anymore. Without
+    /// this, removing (or re-pointing) the parked job leaves the whole queue paused and
+    /// the jobs behind it never start — the operator did not press 暂停, so the pause is
+    /// not theirs to clear. Called while holding [lock]; returns true when the queue
+    /// moved back to RUNNING and the caller should dispatch.
+    private boolean resumeAfterDecisionLocked() {
+        if (runState != RunState.PAUSED || !PAUSE_DECISION.equals(pauseReason)) {
+            return false;
+        }
+        for (TranscodeJob job : jobs) {
+            if (job.state == TranscodeJob.State.WAITING_DECISION) {
+                return false;
+            }
+        }
+        runState = RunState.RUNNING;
+        pauseReason = PAUSE_OPERATOR;
+        return true;
     }
 
     /// Cancel everything that is not finished. The queue goes back to IDLE.
@@ -291,6 +325,7 @@ public final class TranscodeQueue {
         List<Process> processes = new ArrayList<>();
         synchronized (lock) {
             runState = RunState.IDLE;
+            pauseReason = PAUSE_OPERATOR;
             cancelAllDecisionTimeouts();
             long now = System.currentTimeMillis();
             for (TranscodeJob job : jobs) {
@@ -327,6 +362,7 @@ public final class TranscodeQueue {
             cancelDecisionTimeout(id);
             job.decisionDeadline = -1;
             releaseReservation(job);
+            resumeAfterDecisionLocked();
             if (job.process != null) {
                 process = job.process;
                 job.process = null;
@@ -385,6 +421,7 @@ public final class TranscodeQueue {
             }
             cleanupLocked(job);
             jobs.remove(job);
+            resumeAfterDecisionLocked();
             saveLocked();
         }
         publishQueue();
@@ -409,6 +446,7 @@ public final class TranscodeQueue {
                 return 0;
             }
             jobs.removeAll(dropped);
+            resumeAfterDecisionLocked();
             saveLocked();
         }
         publishQueue();
@@ -604,6 +642,7 @@ public final class TranscodeQueue {
             job.presetId = presetId == null ? "" : presetId;
             job.presetName = preset.name == null ? "" : preset.name;
             job.encoder = preset.videoEncoder;
+            resumeAfterDecisionLocked();
             saveLocked();
         }
         return true;
@@ -1072,6 +1111,7 @@ public final class TranscodeQueue {
                 job.message = "waiting for decision";
                 job.decisionDeadline = System.currentTimeMillis() + timeoutMinutes() * 60_000L;
                 runState = RunState.PAUSED;
+                pauseReason = PAUSE_DECISION;
                 saveLocked();
             }
             appendLog(job, "\n# WAITING FOR DECISION: " + message + "\n");
@@ -1178,15 +1218,18 @@ public final class TranscodeQueue {
                     job.endedAt = System.currentTimeMillis();
                     releaseReservation(job);
                     runState = RunState.PAUSED;
+                    pauseReason = PAUSE_OPERATOR;
                 }
                 case "fallback" -> {
                     applyFallback(job, "operator");
                     runState = RunState.RUNNING;
+                    pauseReason = PAUSE_OPERATOR;
                 }
                 case "fallback-queue", "auto" -> {
                     applyFallback(job, "operator");
                     applyFallbackToQueued(job);
                     runState = RunState.RUNNING;
+                    pauseReason = PAUSE_OPERATOR;
                 }
                 default -> {
                     return false;
@@ -1221,6 +1264,7 @@ public final class TranscodeQueue {
                 applyFallback(job, "timeout");
                 applyFallbackToQueued(job);
                 runState = RunState.RUNNING;
+                pauseReason = PAUSE_OPERATOR;
             } else {
                 job.state = TranscodeJob.State.FAILED;
                 job.error = "decision timed out after " + timeoutMinutes() + " minutes";
@@ -1228,6 +1272,7 @@ public final class TranscodeQueue {
                 job.endedAt = System.currentTimeMillis();
                 releaseReservation(job);
                 runState = RunState.PAUSED;
+                pauseReason = PAUSE_OPERATOR;
             }
             saveLocked();
         }
@@ -1484,7 +1529,7 @@ public final class TranscodeQueue {
             Files.createDirectories(dataDir);
             Path temp = Files.createTempFile(dataDir, "queue", ".json");
             try {
-                JsonUtils.writeToJsonFile(temp, new QueueRecord(runState, List.copyOf(jobs)));
+                JsonUtils.writeToJsonFile(temp, new QueueRecord(runState, List.copyOf(jobs), pauseReason));
                 move(temp, queueFile);
             } finally {
                 Files.deleteIfExists(temp);
@@ -1504,6 +1549,9 @@ public final class TranscodeQueue {
                 return;
             }
             runState = record.runState() == null ? RunState.IDLE : record.runState();
+            // Queue files written before the pause reason existed read as a manual pause:
+            // the safe direction is "keep it paused" rather than resuming by surprise.
+            pauseReason = record.pauseReason() == null ? PAUSE_OPERATOR : record.pauseReason();
             jobs.clear();
             if (record.jobs() != null) {
                 jobs.addAll(record.jobs());
@@ -1525,11 +1573,18 @@ public final class TranscodeQueue {
                     job.endedAt = now;
                 }
             }
+            // A decision-pause with no parked job left cannot be honored: nothing owes a
+            // decision, so keeping it would silently strand everything queued behind it.
+            if (runState == RunState.PAUSED && PAUSE_DECISION.equals(pauseReason)
+                    && jobs.stream().noneMatch(job -> job.state == TranscodeJob.State.WAITING_DECISION)) {
+                runState = RunState.RUNNING;
+                pauseReason = PAUSE_OPERATOR;
+            }
         } catch (Exception e) {
             Logger.LOG.warning("Could not read the transcode queue " + queueFile, e);
         }
     }
 
-    private record QueueRecord(RunState runState, List<TranscodeJob> jobs) {
+    private record QueueRecord(RunState runState, List<TranscodeJob> jobs, String pauseReason) {
     }
 }

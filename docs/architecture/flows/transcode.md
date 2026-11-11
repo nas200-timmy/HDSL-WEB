@@ -114,6 +114,7 @@ flowchart LR
 - **改预设要显式重置**：任务保存的是提交时的预设快照，事后编辑预设不自动生效。`POST /queue/jobs/{id}/reset-preset` 替换快照、清空进度/日志/降级与决策状态、按新容器重新规划输出名（目录沿用任务的，旧产物保留，新名加序号）并回到 `queued`；工具任务（合并/混流/抽流）没有可替换的预设，会被拒绝。`可重置` 比 3FUI 宽一档：未开始的任务也允许换预设。
 - **队列是工作台，不是列表**：动词作用于**勾选集合**（`POST /queue/action` 逐条返回成败，部分失败仍 200），顺序是一等公民（`POST /queue/reorder` 要求全量 ids，运行中 / 暂停 / 待决定的任务位置钉死），**能力位由服务端下发**（`caps`）——前端自己推断状态会维护出一份必然漂移的状态机。页面订阅 `/ws` 的 `transcode:queue` 事件，1 秒轮询退成 30 秒兜底。
 - **失败分三档**（`transcode.failure_policy`）：`ask`（默认，等人决定）、`timeout-auto`（10 分钟没人管就自动降级，`failureTimeoutMinutes` 可调）、`full-auto`（立即降级）。降级动作可以只影响当前任务，也可以顺带把同编码器族的**排队**任务一起改；`stop` 会把队列停在 `PAUSED`，让人先看日志。
+- **暂停记住原因**：等决定造成的暂停会在最后一个待决定任务被移除 / 取消 / 换预设时自动解除，剩余排队任务继续跑；`队列暂停` 是人为决定，不会被自动解除。
 - **硬件失败先实测再报错**：能力探测走 `capabilities/probe`，用 1 帧真实编码试 QSV/VAAPI/NVENC，而不是只看 `-encoders` 列表；QSV 带 `-low_power 1`，VAAPI 注入设备参数。拿不到编码器就直接标不可用，不静默换成软件编码。
 - **队列也跑工具**：合并 / 混流 / 抽流通过 `submitCommand` 入同一个队列，拿到同样的日志、进度、取消与 `.part` 改名；质量评测（PSNR / SSIM / XPSNR / VMAF，VMAF 需要 `libvmaf`）在 `tools/quality` 下单独起 job，逐帧曲线由前端画。
 - **ffmpeg 由面板自己装**：`FfmpegInstaller` 支持静态包（校验 SHA-256，可读 `.sha256` / `SHA256SUMS` 侧车）、apt / dnf / zypper、源码 `configure && make`，产物落在 `<data>/transcode/tools/ffmpeg/current`；装完 `runtime.refresh()` 重新探测，不需要重启面板。

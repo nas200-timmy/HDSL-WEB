@@ -55,6 +55,21 @@ export function QueuePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
   const runState = snapshot?.runState ?? "idle";
   const nextQueued = jobs.find((job) => job.state === "queued") ?? null;
 
+  /// Why the selected job cannot move by `delta`, or null when it can. The server pins
+  /// running / paused / waiting-for-decision jobs to their slot, so a swap with such a
+  /// neighbour would be refused as a whole — better to disable that direction here and
+  /// say why than to let the click fail with a 409.
+  const moveBlocker = (delta: number): string | null => {
+    if (!onlySelected) return "只选一个任务才能调整顺序";
+    if (!onlySelected.caps.reorder) return "正在执行 / 等待决定的任务不能移动";
+    const from = jobs.findIndex((job) => job.id === onlySelected.id);
+    const to = from + delta;
+    if (to < 0) return "已经在最前面";
+    if (to >= jobs.length) return "已经在最后面";
+    if (!jobs[to].caps.reorder) return "不能跨过正在执行 / 等待决定的任务";
+    return null;
+  };
+
   const stats = useMemo(() => ({
     running: jobs.filter((job) => job.state === "running" || job.state === "paused").length,
     queued: jobs.filter((job) => job.state === "queued").length,
@@ -135,11 +150,10 @@ export function QueuePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
   };
 
   const move = async (delta: number) => {
-    if (selectedIds.length !== 1 || !snapshot) return;
+    if (!snapshot || moveBlocker(delta) != null) return;
     const ids = jobs.map((job) => job.id);
     const from = ids.indexOf(selectedIds[0]);
     const to = from + delta;
-    if (from < 0 || to < 0 || to >= ids.length) return;
     [ids[from], ids[to]] = [ids[to], ids[from]];
     setBusy(true);
     try {
@@ -388,7 +402,8 @@ export function QueuePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
             total={jobs.length}
             selectedCount={selectedIds.length}
             finishedCount={finishedCount}
-            canMove={onlySelected != null && onlySelected.caps.reorder}
+            moveUpBlocker={moveBlocker(-1)}
+            moveDownBlocker={moveBlocker(1)}
             busy={busy}
             onQueueAction={(action) => void queueAction(action)}
             onBatch={(action) => void batch(action)}
