@@ -216,7 +216,7 @@ quality / 404）。**Docker 镜像未实际构建**（本机没有 docker）。
 4. **硬件编码未实测**：VAAPI/QSV/NVENC 只做了能力探测和 1 帧接口；QSV 的已知平台故障仍以
    实测为准。
 5. **VMAF 未实测**：本机 ffmpeg 没有 libvmaf；代码路径和解析已有，但没跑过。
-6. **架构图未补**：`docs/architecture/flows/transcode.md` 按“先改代码，再改图”待补。
+6. **架构图已补**：`docs/architecture/flows/transcode.md` 及 `context` / `full` / `backend` 已按落地代码更新（2026-11-11）。
 7. **已合并到本地 `main`，未 push**：合并点 `33032362a`，`main` 领先 `origin/main` 57 个提交；
    等容器/人肉测试通过后再推 GitHub。
 

@@ -316,8 +316,8 @@ web/transcode/
 ### 文档
 
 - `docs/transcode.md`：本文档。
-- `docs/architecture/flows/transcode.md`：Mermaid 流程图（启用门、入队、失败决策、降级、队列自治），**在代码落地后**按仓库约定「先改代码，再改图」补充。
-- `docs/architecture/README.md`、`context.md`、`full.md`：代码落地后补充转码模块、`/home/hdsl/video`、`/data/transcode`、端口/进程边界。
+- `docs/architecture/flows/transcode.md`：Mermaid 流程图（启用门、入队、失败决策、降级、队列自治）；已随模块落地补齐。
+- `docs/architecture/README.md`、`context.md`、`full.md`、`backend.md`：已补转码模块、`/home/hdsl/video`、`<data>/transcode`、进程与依赖边界。
 - `README.md`：功能实现后更新功能速览、快速开始、媒体根、硬件、GPU 章节。
 
 ## Verification

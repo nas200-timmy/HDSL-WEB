@@ -76,6 +76,9 @@ sequenceDiagram
   | `/api/zcode/*`、`/api/brands/*`、`/api/tasks*` | `instances` |
   | `/api/plugins/*`、`/api/packs/*` | `plugins` |
   | `/api/accounts*`、`/api/models*`、`/api/settings*`、`/api/network*`、`/api/node*`、`/api/vendors*`、`/api/wallpapers*` | `config` |
+  | `/api/transcode/media/*` | `transcode-raw`（能枚举磁盘、拿原始 argv） |
+  | 其余 `/api/transcode/*` | `transcode`（队列、预设、工具、质量评测） |
+  | `/api/transcode/feature*`、`/api/transcode/settings*`、`/api/transcode/runtime/*` | 无 → 拒绝（开关功能和无人值守策略只归操作员） |
   | 未列到的**非** `GET/HEAD` 路由（如 `POST /api/developer/*`、`/api/exports/*`、`/api/dsh/*` 的写操作） | 无 → 拒绝 |
 
 - **`/i/*` 与 `/ws/*` 对 Agent 关闭**：这两类是浏览器通道（反代页面、事件流），`required` 对它们返回 `null`。唯一的终端通道是上面那条 ticket 路由。

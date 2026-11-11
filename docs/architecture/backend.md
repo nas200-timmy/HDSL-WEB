@@ -24,6 +24,7 @@ flowchart LR
     terminal["terminal<br/>含 pty 子包"]
     proxy["proxy"]
     task["task"]
+    transcode["transcode<br/>FeatureState · Queue · CommandBuilder<br/>Presets · Tools · Quality<br/>Runtime · Installer"]
   end
 
   subgraph shared["共享 / 遗留"]
@@ -54,6 +55,7 @@ flowchart LR
   server --> proxy
   server --> task
   server --> terminal
+  server --> transcode
   server --> tls
   server --> ws
   server --> event
@@ -70,6 +72,7 @@ flowchart LR
   http --> brand
   http --> task
   http --> terminal
+  http --> transcode
   http --> config
   http --> event
   http --> logs
@@ -147,6 +150,12 @@ flowchart LR
   task --> dsh
   task --> event
 
+  transcode --> auth
+  transcode --> developer
+  transcode --> config
+  transcode --> event
+  transcode --> audit
+
   setting --> brand
   setting --> dsh
   dsh --> setting
@@ -176,6 +185,7 @@ flowchart LR
   terminal -.->|"Json / 错误契约"| http
   proxy -.->|"Json / 错误契约"| http
   system -.->|"Json / 错误契约"| http
+  transcode -.->|"Json / 错误契约"| http
 ```
 
 ## 层的意图
@@ -189,20 +199,23 @@ flowchart LR
 | 终端 | `terminal`（含 `pty`） | TUI 适配、PTY、ticket、终端管理器 |
 | 反代 | `proxy` | `/i/*` HTTP/WS 中继、目标端口解析 |
 | 任务 | `task` | 长任务、进度、取消、审批 |
+| 转码 | `transcode` | 功能门与须知、ffmpeg 定位/探测/安装、媒体浏览、预设与命令生成、服务端队列与失败降级、工具与质量评测。子包按职责分：`queue` / `preset` / `command` / `runtime` / `tools` / `quality` / `media` |
 | 共享 / 遗留 | `setting` | `LauncherSettings`、`SettingsManager`、`GameDirectory`、`DshInstanceRepository`——HMCL 遗留，被 dsh 与品牌两侧共用 |
-| 基础设施 | `config`、`event`、`audit`、`logs`、`system`、`tls`、`ws`、`node`、`emergency`、`acp` | 配置、事件、审计、日志、指标、TLS、WebSocket、Node 消费者视图、急停、ACP |
+| 基础设施 | `config`、`event`、`audit`、`logs`、`system`、`tls`、`ws`、`node`、`emergency`、`acp` | 配置、事件、审计、日志、指标（含 GPU）、TLS、WebSocket、Node 消费者视图、急停、ACP |
 
-两个容易看错的地方：
+几个容易看错的地方：
 
 - **`node` 不是托管管理器。** `web/node/NodeEnvironment` 只回答“哪个实例 / 品牌实例 / ZCode 构建用哪个 Node”，是 Node 页的只读视图；下载与版本管理在 `dsh/NodeRuntimeManager`。这也是 `node → brand` 那条边存在的原因。
 - **`dsh` 不在 `web` 包下**，但它是 Web 面板的领域层，不是“第三方库”。改实例生命周期、端口池、Node 解析，先看 `org.jackhuang.hmcl.dsh`，不要从 `web/instance` 找。
+- **`transcode` 不碰任何实例运行时。** 它只在 `config` / `event` / `audit` 和 `http.Json` 上做自己的事：队列在 JVM 内，`ffmpeg` 是它拉起的普通子进程，媒体文件不在 `/data`。这也是“功能关闭时当它不存在”能成立的原因——关掉之后没有别的包依赖它的状态。
 - `desktop`（Windows 打开资源管理器 / 记事本）只被 `brand` 和 `http` 引用，太小，没有单独画成一个包。
 
 ## 已知回边
 
 这些回边是有意的，不要为了“消除循环”做大规模重构：
 
-- `http ↔ auth / developer / brand / minecraft / zcode / terminal / proxy / system`：Servlet 调领域，领域也用 `http.Json`、`HostHeaders`、错误契约。图中虚线就是这一类“共享类型”依赖，不是业务回调。
+- `http ↔ auth / developer / brand / minecraft / zcode / terminal / proxy / system / transcode`：Servlet 调领域，领域也用 `http.Json`、`HostHeaders`、错误契约。图中虚线就是这一类“共享类型”依赖，不是业务回调。
+- `transcode → auth / developer`：只出现在 `TranscodeApiServlet`——启用要开发者提权与 HTTPS，任务路由要会话 / Agent scope；队列与领域对象本身不读身份。
 - `setting ↔ dsh`：`DshInstanceRepository` 把 dsh 实例落盘，dsh 又读 `LauncherSettings`；`setting → brand` 同理，品牌实例的落盘索引也在那里。
 - `terminal → brand / minecraft / instance / dsh`：TUI 适配器必须知道对应实例的 HOME、workspace、启动参数。
 - `proxy → brand / dsh / zcode`：反代要先解析目标端口，不能只依赖一个通用接口。**`proxy` 不认识 `instance`**——dsh 的目标解析走 `DshProcessManager`。
