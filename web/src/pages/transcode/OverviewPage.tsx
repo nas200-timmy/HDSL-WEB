@@ -4,10 +4,11 @@ import { errMsg } from "../../utils";
 import { pct, stateLabel, HelpNote } from "./common";
 
 const COMMON_ENCODERS = [
-  "libx264", "h264_nvenc", "h264_qsv", "h264_vaapi",
-  "libx265", "hevc_nvenc", "hevc_qsv", "hevc_vaapi",
+  "libx264", "h264_nvenc", "h264_qsv", "h264_vaapi", "h264_amf", "h264_d3d12va", "h264_vulkan",
+  "libx265", "hevc_nvenc", "hevc_qsv", "hevc_vaapi", "hevc_amf", "hevc_d3d12va", "hevc_vulkan",
   "libvpx-vp9", "vp9_qsv", "vp9_vaapi",
   "libaom-av1", "libsvtav1", "librav1e", "av1_nvenc", "av1_qsv", "av1_vaapi",
+  "av1_amf", "av1_d3d12va", "av1_vulkan",
   "aac",
 ];
 

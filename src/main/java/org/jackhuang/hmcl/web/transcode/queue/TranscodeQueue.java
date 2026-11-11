@@ -880,6 +880,9 @@ public final class TranscodeQueue {
             case "h264_nvenc" -> "libx264";
             case "hevc_nvenc" -> "libx265";
             case "av1_nvenc" -> "libsvtav1";
+            case "h264_amf", "h264_d3d12va", "h264_vulkan" -> "libx264";
+            case "hevc_amf", "hevc_d3d12va", "hevc_vulkan" -> "libx265";
+            case "av1_amf", "av1_d3d12va", "av1_vulkan" -> "libsvtav1";
             default -> null;
         };
     }

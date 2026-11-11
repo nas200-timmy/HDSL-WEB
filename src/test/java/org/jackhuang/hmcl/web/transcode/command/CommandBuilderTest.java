@@ -258,4 +258,62 @@ class CommandBuilderTest {
         assertTrue(!aomCommand.contains("-frames:v"));
     }
 
+    @Test
+    void windowsEncodersUseTheirOwnQualityAndUsageFlags(@TempDir Path dir) {
+        TranscodePreset amf = preset();
+        amf.videoEncoder = "h264_amf";
+        amf.qualityMode = "cqp";
+        amf.qualityValue = "24";
+        amf.preset = "quality";
+        amf.profile = "main";
+        amf.tune = "transcoding";
+        amf.pixelFormat = "nv12";
+        String amfCommand = joined(CommandBuilder.build(amf, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(amfCommand.contains("-c:v h264_amf"));
+        assertTrue(amfCommand.contains("-quality quality"));
+        assertTrue(amfCommand.contains("-profile:v main"));
+        assertTrue(amfCommand.contains("-usage transcoding"));
+        assertTrue(amfCommand.contains("-rc cqp"));
+        assertTrue(amfCommand.contains("-qp 24"));
+        assertTrue(amfCommand.contains("-pix_fmt nv12"));
+        assertTrue(!amfCommand.contains("-preset quality"));
+        assertTrue(!amfCommand.contains("-tune"));
+
+        TranscodePreset amfBitrate = preset();
+        amfBitrate.videoEncoder = "hevc_amf";
+        amfBitrate.qualityMode = "bitrate";
+        amfBitrate.qualityValue = "2500k";
+        String amfBitrateCommand = joined(CommandBuilder.build(amfBitrate, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(amfBitrateCommand.contains("-rc cbr"));
+        assertTrue(amfBitrateCommand.contains("-b:v 2500k"));
+
+        TranscodePreset d3d12 = preset();
+        d3d12.videoEncoder = "av1_d3d12va";
+        d3d12.qualityMode = "cqp";
+        d3d12.qualityValue = "28";
+        d3d12.preset = "whatever";
+        d3d12.tune = "hq";
+        d3d12.pixelFormat = "d3d12";
+        String d3d12Command = joined(CommandBuilder.build(d3d12, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(d3d12Command.contains("-rc_mode CQP"));
+        assertTrue(d3d12Command.contains("-qp 28"));
+        assertTrue(d3d12Command.contains("-pix_fmt d3d12"));
+        assertTrue(!d3d12Command.contains("-preset"));
+        assertTrue(!d3d12Command.contains("-tune"));
+        assertTrue(!d3d12Command.contains("-usage"));
+
+        TranscodePreset vulkan = preset();
+        vulkan.videoEncoder = "hevc_vulkan";
+        vulkan.qualityMode = "cqp";
+        vulkan.qualityValue = "30";
+        vulkan.preset = "5";
+        vulkan.tune = "hq";
+        vulkan.pixelFormat = "vulkan";
+        String vulkanCommand = joined(CommandBuilder.build(vulkan, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(vulkanCommand.contains("-quality 5"));
+        assertTrue(vulkanCommand.contains("-tune hq"));
+        assertTrue(vulkanCommand.contains("-qp 30"));
+        assertTrue(vulkanCommand.contains("-pix_fmt vulkan"));
+    }
+
 }

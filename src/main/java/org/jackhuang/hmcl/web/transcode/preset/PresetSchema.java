@@ -78,9 +78,12 @@ public final class PresetSchema {
                         videoEncoderGroups(hint(select("videoEncoder", "视频编码器", "libx264",
                                 "copy", "none",
                                 "libx264", "h264_nvenc", "h264_qsv", "h264_vaapi",
+                                "h264_amf", "h264_d3d12va", "h264_vulkan",
                                 "libx265", "hevc_nvenc", "hevc_qsv", "hevc_vaapi",
+                                "hevc_amf", "hevc_d3d12va", "hevc_vulkan",
                                 "libvpx-vp9", "vp9_qsv", "vp9_vaapi",
-                                "libaom-av1", "libsvtav1", "librav1e", "av1_nvenc", "av1_qsv", "av1_vaapi"),
+                                "libaom-av1", "libsvtav1", "librav1e", "av1_nvenc", "av1_qsv", "av1_vaapi",
+                                "av1_amf", "av1_d3d12va", "av1_vulkan"),
                                 "copy 不重编码；x264 兼容性最好；x265 同画质更小；VAAPI/QSV 走核显",
                                 "copy", "直接复制视频流，不重编码",
                                 "none", "丢弃视频（纯音频输出）",
@@ -100,7 +103,16 @@ public final class PresetSchema {
                                 "h264_qsv", "Intel QSV H.264",
                                 "hevc_qsv", "Intel QSV H.265（部分平台不可用）",
                                 "vp9_qsv", "Intel QSV VP9",
-                                "av1_qsv", "Intel QSV AV1（Arc 起）")),
+                                "av1_qsv", "Intel QSV AV1（Arc 起）",
+                                "h264_amf", "AMD AMF H.264（Windows）",
+                                "hevc_amf", "AMD AMF H.265（Windows）",
+                                "av1_amf", "AMD AMF AV1（Windows，RDNA3 起）",
+                                "h264_d3d12va", "Windows D3D12VA H.264（需较新 ffmpeg）",
+                                "hevc_d3d12va", "Windows D3D12VA H.265（需较新 ffmpeg）",
+                                "av1_d3d12va", "Windows D3D12VA AV1（多数构建尚未支持）",
+                                "h264_vulkan", "Vulkan H.264（实验性，需可用 Vulkan 设备）",
+                                "hevc_vulkan", "Vulkan H.265（实验性，需可用 Vulkan 设备）",
+                                "av1_vulkan", "Vulkan AV1（实验性，需可用 Vulkan 设备）")),
                         important(),
                         qualityModeGroups(hint(select("qualityMode", "质量模式", "crf", "crf", "cqp", "bitrate"),
                                 "crf 恒定质量（软件编码推荐）；cqp 固定质量（硬件）；bitrate 固定码率",
@@ -116,7 +128,8 @@ public final class PresetSchema {
                                 "", "ultrafast", "superfast", "veryfast", "faster", "fast",
                                 "medium", "slow", "slower", "veryslow"),
                                 "软件编码用 ultrafast…veryslow；VP9/AV1 用 0–8；NVENC 用 p1–p7；"
-                                        + "QSV 用 veryfast…veryslow；VAAPI 用 0–8（越大越快）",
+                                        + "QSV 用 veryfast…veryslow；VAAPI 用 0–8（越大越快）；"
+                                        + "AMF 用 quality/balanced/speed；Vulkan 用 5（最慢）~ 0（最快）",
                                 "", "自动（由编码器决定）",
                                 "ultrafast", "最快，体积最大",
                                 "superfast", "很快，体积偏大",
@@ -447,6 +460,8 @@ public final class PresetSchema {
     private static final String[] SVT_SPEED = {"", "0", "1", "2", "3", "4", "5", "6", "7",
             "8", "9", "10", "11", "12", "13"};
     private static final String[] RAV1E_SPEED = {"", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"};
+    private static final String[] AMF_QUALITY = {"", "quality", "high_quality", "balanced", "speed"};
+    private static final String[] VULKAN_QUALITY = {"", "5", "4", "3", "2", "1", "0"};
 
     /// 速度档随编码器家族变化：x264/x265 命名档，VP9/AV1 与 VAAPI 数值档，NVENC p1–p7，QSV 命名档。
     private static JsonObject speedPresets(JsonObject field) {
@@ -467,6 +482,15 @@ public final class PresetSchema {
         putGroup(field, "vaapiAv1");
         putGroup(field, "av1svt", SVT_SPEED);
         putGroup(field, "av1rav1e", RAV1E_SPEED);
+        putGroup(field, "amfH264", AMF_QUALITY);
+        putGroup(field, "amfHevc", AMF_QUALITY);
+        putGroup(field, "amfAv1", AMF_QUALITY);
+        putGroup(field, "d3d12vaH264");
+        putGroup(field, "d3d12vaHevc");
+        putGroup(field, "d3d12vaAv1");
+        putGroup(field, "vulkanH264", VULKAN_QUALITY);
+        putGroup(field, "vulkanHevc", VULKAN_QUALITY);
+        putGroup(field, "vulkanAv1", VULKAN_QUALITY);
         return field;
     }
 
@@ -489,6 +513,15 @@ public final class PresetSchema {
         putGroup(field, "vaapiAv1", "cqp", "bitrate");
         putGroup(field, "av1svt", "crf", "bitrate");
         putGroup(field, "av1rav1e", "crf", "bitrate");
+        putGroup(field, "amfH264", "cqp", "bitrate");
+        putGroup(field, "amfHevc", "cqp", "bitrate");
+        putGroup(field, "amfAv1", "cqp", "bitrate");
+        putGroup(field, "d3d12vaH264", "cqp", "bitrate");
+        putGroup(field, "d3d12vaHevc", "cqp", "bitrate");
+        putGroup(field, "d3d12vaAv1", "cqp", "bitrate");
+        putGroup(field, "vulkanH264", "cqp", "bitrate");
+        putGroup(field, "vulkanHevc", "cqp", "bitrate");
+        putGroup(field, "vulkanAv1", "cqp", "bitrate");
         return field;
     }
 
@@ -510,6 +543,15 @@ public final class PresetSchema {
         putGroup(field, "vaapiAv1", "");
         putGroup(field, "av1svt", "");
         putGroup(field, "av1rav1e", "");
+        putGroup(field, "amfH264", "", "main", "high", "constrained_baseline", "constrained_high");
+        putGroup(field, "amfHevc", "", "main", "main10");
+        putGroup(field, "amfAv1", "", "main");
+        putGroup(field, "d3d12vaH264", "", "main", "high", "high10");
+        putGroup(field, "d3d12vaHevc", "", "main", "main10");
+        putGroup(field, "d3d12vaAv1", "", "main", "high", "professional");
+        putGroup(field, "vulkanH264", "", "constrained_baseline", "main", "high", "high444p");
+        putGroup(field, "vulkanHevc", "", "main", "main10", "rext");
+        putGroup(field, "vulkanAv1", "", "main", "high", "professional");
         return field;
     }
 
@@ -532,6 +574,18 @@ public final class PresetSchema {
         putGroup(field, "vaapiAv1");
         putGroup(field, "av1svt");
         putGroup(field, "av1rav1e");
+        putGroup(field, "amfH264", "", "transcoding", "ultralowlatency", "lowlatency", "webcam",
+                "high_quality", "lowlatency_high_quality");
+        putGroup(field, "amfHevc", "", "transcoding", "ultralowlatency", "lowlatency", "webcam",
+                "high_quality", "lowlatency_high_quality");
+        putGroup(field, "amfAv1", "", "transcoding", "ultralowlatency", "lowlatency",
+                "high_quality", "lowlatency_high_quality");
+        putGroup(field, "d3d12vaH264");
+        putGroup(field, "d3d12vaHevc");
+        putGroup(field, "d3d12vaAv1");
+        putGroup(field, "vulkanH264", "", "default", "hq", "ll", "ull", "lossless");
+        putGroup(field, "vulkanHevc", "", "default", "hq", "ll", "ull", "lossless");
+        putGroup(field, "vulkanAv1", "", "default", "hq", "ll", "ull", "lossless");
         return field;
     }
 
@@ -557,6 +611,18 @@ public final class PresetSchema {
         putGroup(field, "vaapiAv1", "", "nv12", "p010le");
         putGroup(field, "av1svt", "", "yuv420p", "yuv420p10le");
         putGroup(field, "av1rav1e", "", "yuv420p", "yuv420p10le", "yuv444p", "yuv444p10le");
+        putGroup(field, "amfH264", "", "nv12", "yuv420p", "d3d11", "dxva2_vld", "p010le", "amf",
+                "bgr0", "rgb0", "bgra", "argb", "rgba", "x2bgr10le", "rgbaf16le");
+        putGroup(field, "amfHevc", "", "nv12", "yuv420p", "d3d11", "dxva2_vld", "p010le", "amf",
+                "bgr0", "rgb0", "bgra", "argb", "rgba", "x2bgr10le", "rgbaf16le");
+        putGroup(field, "amfAv1", "", "nv12", "yuv420p", "d3d11", "dxva2_vld", "p010le", "amf",
+                "bgr0", "rgb0", "bgra", "argb", "rgba", "x2bgr10le", "rgbaf16le");
+        putGroup(field, "d3d12vaH264", "", "d3d12");
+        putGroup(field, "d3d12vaHevc", "", "d3d12");
+        putGroup(field, "d3d12vaAv1", "", "d3d12");
+        putGroup(field, "vulkanH264", "", "vulkan");
+        putGroup(field, "vulkanHevc", "", "vulkan");
+        putGroup(field, "vulkanAv1", "", "vulkan");
         return field;
     }
 
@@ -564,9 +630,12 @@ public final class PresetSchema {
     private static JsonObject videoEncoderGroups(JsonObject field) {
         String[] all = {"copy", "none",
                 "libx264", "h264_nvenc", "h264_qsv", "h264_vaapi",
+                "h264_amf", "h264_d3d12va", "h264_vulkan",
                 "libx265", "hevc_nvenc", "hevc_qsv", "hevc_vaapi",
+                "hevc_amf", "hevc_d3d12va", "hevc_vulkan",
                 "libvpx-vp9", "vp9_qsv", "vp9_vaapi",
-                "libaom-av1", "libsvtav1", "librav1e", "av1_nvenc", "av1_qsv", "av1_vaapi"};
+                "libaom-av1", "libsvtav1", "librav1e", "av1_nvenc", "av1_qsv", "av1_vaapi",
+                "av1_amf", "av1_d3d12va", "av1_vulkan"};
         putGroup(field, "mkv", all);
         putGroup(field, "mp4", all);
         putGroup(field, "mov", all);
@@ -575,7 +644,8 @@ public final class PresetSchema {
         putGroup(field, "m4a", "none");
         putGroup(field, "webm", "none",
                 "libvpx-vp9", "vp9_qsv", "vp9_vaapi",
-                "libaom-av1", "libsvtav1", "librav1e", "av1_nvenc", "av1_qsv", "av1_vaapi");
+                "libaom-av1", "libsvtav1", "librav1e", "av1_nvenc", "av1_qsv", "av1_vaapi",
+                "av1_amf", "av1_d3d12va", "av1_vulkan");
         return field;
     }
 

@@ -40,6 +40,15 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
     hevc_qsv: "H.265（QSV）",
     vp9_qsv: "VP9（QSV）",
     av1_qsv: "AV1（QSV）",
+    h264_amf: "H.264（AMF）",
+    hevc_amf: "H.265（AMF）",
+    av1_amf: "AV1（AMF）",
+    h264_d3d12va: "H.264（D3D12VA）",
+    hevc_d3d12va: "H.265（D3D12VA）",
+    av1_d3d12va: "AV1（D3D12VA）",
+    h264_vulkan: "H.264（Vulkan）",
+    hevc_vulkan: "H.265（Vulkan）",
+    av1_vulkan: "AV1（Vulkan）",
   },
   qualityMode: {
     crf: "CRF 恒定质量",
@@ -64,6 +73,10 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
     p5: "P5（慢）",
     p6: "P6（更慢）",
     p7: "P7（最慢）",
+    high_quality: "高质量优先",
+    quality: "质量优先",
+    balanced: "平衡",
+    speed: "速度优先",
     "0": "0（最慢，最好）",
     "1": "1（更慢）",
     "2": "2（慢）",
@@ -203,11 +216,14 @@ const SUBTITLE_BURN_FIELDS = new Set(["subtitleFile", "subtitleFont", "subtitleF
 const NO_TUNE_FAMILIES = new Set([
   "qsvH264", "qsvHevc", "vaapiH264", "vaapiHevc",
   "qsvVp9", "qsvAv1", "vaapiVp9", "vaapiAv1", "av1svt", "av1rav1e",
+  "d3d12vaH264", "d3d12vaHevc", "d3d12vaAv1",
 ]);
 const PROFILELESS_FAMILIES = new Set([
   "vp9", "nvencAv1", "qsvVp9", "qsvAv1", "vaapiVp9", "vaapiAv1", "av1svt", "av1rav1e",
 ]);
-const NO_SPEED_FAMILIES = new Set(["vaapiVp9", "vaapiAv1"]);
+const NO_SPEED_FAMILIES = new Set([
+  "vaapiVp9", "vaapiAv1", "d3d12vaH264", "d3d12vaHevc", "d3d12vaAv1",
+]);
 const RESTRICTIVE_ATTACHMENT_CONTAINERS = new Set(["mp4", "mov", "avi", "ts", "m4a"]);
 
 /// 编码器家族：决定速度档、profile、tune、像素格式，键与后端 PresetSchema 的 optionGroups 一致。
@@ -230,6 +246,15 @@ export function encoderFamily(encoder: string): string {
     case "hevc_qsv": return "qsvHevc";
     case "vp9_qsv": return "qsvVp9";
     case "av1_qsv": return "qsvAv1";
+    case "h264_amf": return "amfH264";
+    case "hevc_amf": return "amfHevc";
+    case "av1_amf": return "amfAv1";
+    case "h264_d3d12va": return "d3d12vaH264";
+    case "hevc_d3d12va": return "d3d12vaHevc";
+    case "av1_d3d12va": return "d3d12vaAv1";
+    case "h264_vulkan": return "vulkanH264";
+    case "hevc_vulkan": return "vulkanHevc";
+    case "av1_vulkan": return "vulkanAv1";
     default: return "x264";
   }
 }
@@ -262,6 +287,15 @@ const SPEED_PRESETS: Record<string, { values: string[]; fallback: string }> = {
     fallback: "8",
   },
   av1rav1e: { values: ["", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"], fallback: "6" },
+  amfH264: { values: ["", "quality", "high_quality", "balanced", "speed"], fallback: "quality" },
+  amfHevc: { values: ["", "quality", "high_quality", "balanced", "speed"], fallback: "quality" },
+  amfAv1: { values: ["", "quality", "high_quality", "balanced", "speed"], fallback: "high_quality" },
+  d3d12vaH264: { values: [], fallback: "" },
+  d3d12vaHevc: { values: [], fallback: "" },
+  d3d12vaAv1: { values: [], fallback: "" },
+  vulkanH264: { values: ["", "5", "4", "3", "2", "1", "0"], fallback: "" },
+  vulkanHevc: { values: ["", "5", "4", "3", "2", "1", "0"], fallback: "" },
+  vulkanAv1: { values: ["", "5", "4", "3", "2", "1", "0"], fallback: "" },
 };
 
 /// 当前编码器可用的速度档；schema 的 optionGroups 是权威列表，拿不到时退回本地映射。

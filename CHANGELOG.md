@@ -52,6 +52,9 @@
   VAAPI VP9/AV1 不生成它们没有的 `-quality`，rav1e 用 `-speed`/`-qp` 而不是通用的
   `-preset`/`-crf`。
 - 修复 `libaom-av1` 被误判成图片编码器的问题：此前选它会强制单帧并丢掉音轨。
+- 增加 Windows 侧硬件编码器：AMD AMF（H.264/H.265/AV1）、D3D12VA（H.264/H.265/AV1）与
+  Vulkan（H.264/H.265/AV1）。AMF 的速度档走 `-quality`、场景优化走 `-usage`，D3D12VA 用
+  `-rc_mode`，不会像普通硬件编码器那样误发 `-preset`/`-tune`；降级链回落到 x264/x265/SVT-AV1。
 - 后端：视频 `copy` 时不再输出 `-vf` 与色彩标记，避免生成 ffmpeg 直接报错的命令。
 - 参数面板改成三栏工作台：预设列表（单击应用）/ 分区导航 / 字段区 + 右侧参数总览与实时命令行；
   字段旁直接显示一行说明，下拉逐项解释（schema 新增 `hint` / `optionHints` / `important`）。

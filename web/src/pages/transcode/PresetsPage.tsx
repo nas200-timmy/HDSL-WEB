@@ -158,7 +158,7 @@ export function PresetsPage() {
       if (id === "videoEncoder") {
         const encoder = String(value);
         const image = /^(mjpeg|png|webp|libwebp|bmp|tiff|gif|avif|jxl|libjxl|jpegxl)$/.test(encoder);
-        const hardware = /_vaapi|_qsv|_nvenc/.test(encoder);
+        const hardware = /_vaapi|_qsv|_nvenc|_amf|_d3d12va|_vulkan/.test(encoder);
         if (image) {
           next.audioMode = "none";
           next.subtitleMode = "none";
@@ -966,13 +966,18 @@ function Field({
     ? []
     : groupOptions ?? (field.id === "preset" ? speedPresetOptions(field.options, encoder) : field.options ?? []);
   // 质量值的名字随模式变化，避免 CRF/CQP/码率共用一个含糊的标签。
-  const label = field.id === "qualityValue"
-    ? qualityMode === "bitrate"
-      ? "目标码率（如 2500k / 5M）"
-      : qualityMode === "cqp"
-        ? "CQP 值（越小越好）"
-        : "CRF 值（越小越清晰）"
-    : field.label;
+  const qualityKnob = encoder.endsWith("_amf") || encoder.endsWith("_vulkan");
+  const label = field.id === "preset" && qualityKnob
+    ? "编码速度档（-quality）"
+    : field.id === "tune" && encoder.endsWith("_amf")
+      ? "场景优化（-usage）"
+      : field.id === "qualityValue"
+        ? qualityMode === "bitrate"
+          ? "目标码率（如 2500k / 5M）"
+          : qualityMode === "cqp"
+            ? "CQP 值（越小越好）"
+            : "CRF 值（越小越清晰）"
+        : field.label;
   return (
     <div className={`tc-field${field.important ? " important" : ""}${reason ? " inactive" : ""}`}>
       <span className="tc-field-label">

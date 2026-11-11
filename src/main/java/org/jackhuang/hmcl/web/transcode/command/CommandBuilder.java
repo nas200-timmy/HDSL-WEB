@@ -138,6 +138,10 @@ public final class CommandBuilder {
                         // rav1e 的速度档是 `-speed`（0 最慢 ~ 10 最快），没有 -preset。
                         args.add("-speed");
                         args.add(preset.preset);
+                    } else if (video.endsWith("_amf") || video.endsWith("_vulkan")) {
+                        // AMF 与 Vulkan 也用 `-quality` 做速度档，取值分别见各自的 schema。
+                        args.add("-quality");
+                        args.add(preset.preset);
                     } else if (video.endsWith("_vaapi")) {
                         // VAAPI 的 H.264/H.265 有 `-quality`；VP9/AV1 VAAPI 没有这个旋钮。
                         if ("h264_vaapi".equals(video) || "hevc_vaapi".equals(video)) {
@@ -157,8 +161,9 @@ public final class CommandBuilder {
                     args.add("-level");
                     args.add(preset.level);
                 }
-                if (!blank(preset.tune)) {
-                    args.add("-tune");
+                if (!blank(preset.tune) && !video.endsWith("_d3d12va")) {
+                    // AMF 没有 -tune，场景优化是 -usage；D3D12VA 两者都没有。
+                    args.add(video.endsWith("_amf") ? "-usage" : "-tune");
                     args.add(preset.tune);
                 }
                 if (!blank(preset.pixelFormat)) {
@@ -366,6 +371,13 @@ public final class CommandBuilder {
     private static void addQuality(List<String> args, TranscodePreset preset, String encoder) {
         String mode = preset.qualityMode == null ? "crf" : preset.qualityMode;
         if ("bitrate".equals(mode)) {
+            if (encoder.endsWith("_amf")) {
+                args.add("-rc");
+                args.add("cbr");
+            } else if (encoder.endsWith("_d3d12va")) {
+                args.add("-rc_mode");
+                args.add("CBR");
+            }
             args.add("-b:v");
             args.add(preset.qualityValue);
         } else if (encoder.contains("_qsv")) {
@@ -387,6 +399,13 @@ public final class CommandBuilder {
             args.add("-qp");
             args.add(preset.qualityValue);
         } else if ("cqp".equals(mode)) {
+            if (encoder.endsWith("_amf")) {
+                args.add("-rc");
+                args.add("cqp");
+            } else if (encoder.endsWith("_d3d12va")) {
+                args.add("-rc_mode");
+                args.add("CQP");
+            }
             args.add("-qp");
             args.add(preset.qualityValue);
         } else {
