@@ -94,10 +94,11 @@ public final class PresetSchema {
                         hint(text("qualityValue", "质量值 / 码率", "20"),
                                 "x264/x265 CRF 常用 18–28；硬件 CQP 常用 20–28；bitrate 写 2500k 或 5M"),
                         important(),
-                        hint(select("preset", "编码速度档 preset", "medium",
+                        speedPresets(hint(select("preset", "编码速度档 preset", "medium",
                                 "", "ultrafast", "superfast", "veryfast", "faster", "fast",
                                 "medium", "slow", "slower", "veryslow"),
-                                "软件编码的速度/压缩档；越慢同画质越小。硬件编码不支持时会被自动清空",
+                                "软件编码用 ultrafast…veryslow；NVENC 用 p1–p7；QSV 用 veryfast…veryslow；"
+                                        + "H.264 VAAPI 用 quality 0–8（越大越快）。越慢同画质越小",
                                 "", "自动（由编码器决定）",
                                 "ultrafast", "最快，体积最大",
                                 "superfast", "很快，体积偏大",
@@ -107,7 +108,23 @@ public final class PresetSchema {
                                 "medium", "默认平衡",
                                 "slow", "更小体积，更慢",
                                 "slower", "更小体积，明显更慢",
-                                "veryslow", "最慢，压缩最好"),
+                                "veryslow", "最慢，压缩最好",
+                                "p1", "NVENC 最快，质量最低",
+                                "p2", "NVENC 更快，质量更低",
+                                "p3", "NVENC 快，质量偏低",
+                                "p4", "NVENC 平衡（默认）",
+                                "p5", "NVENC 慢，质量好",
+                                "p6", "NVENC 更慢，质量更好",
+                                "p7", "NVENC 最慢，质量最好",
+                                "0", "VAAPI 最慢，质量最好",
+                                "1", "VAAPI 更慢，质量更好",
+                                "2", "VAAPI 慢，质量偏上",
+                                "3", "VAAPI 略慢于平衡",
+                                "4", "VAAPI 平衡",
+                                "5", "VAAPI 略快于平衡",
+                                "6", "VAAPI 快，质量偏低",
+                                "7", "VAAPI 更快，质量更低",
+                                "8", "VAAPI 最快，质量最低")),
                         hint(text("profile", "编码 profile（档次）", ""), "留空自动；H.264 常用 high，H.265 常用 main"),
                         hint(text("level", "编码 level（级别）", ""), "留空自动；设备兼容问题时可指定 4.1/5.1"),
                         hint(text("tune", "画面调优 tune", ""), "留空自动；x264 可用 film/animation/grain"),
@@ -311,6 +328,29 @@ public final class PresetSchema {
         JsonObject field = base(id, label, "switch");
         field.addProperty("default", value);
         return field;
+    }
+
+    /// The speed control is encoder-specific, so the schema carries one option list per
+    /// encoder family: software x264/x265, NVENC (p1–p7), QSV (named presets), and the
+    /// numeric `-quality` level of H.264 VAAPI. HEVC VAAPI has no such control.
+    private static JsonObject speedPresets(JsonObject field) {
+        JsonObject groups = new JsonObject();
+        groups.add("software", strings("", "ultrafast", "superfast", "veryfast", "faster", "fast",
+                "medium", "slow", "slower", "veryslow"));
+        groups.add("nvenc", strings("", "p1", "p2", "p3", "p4", "p5", "p6", "p7"));
+        groups.add("qsv", strings("", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"));
+        groups.add("vaapi", strings("", "0", "1", "2", "3", "4", "5", "6", "7", "8"));
+        groups.add("vaapiHevc", new JsonArray());
+        field.add("optionGroups", groups);
+        return field;
+    }
+
+    private static JsonArray strings(String... values) {
+        JsonArray array = new JsonArray();
+        for (String value : values) {
+            array.add(value);
+        }
+        return array;
     }
 
     private static JsonObject hint(JsonObject field, String hint, String... optionHints) {

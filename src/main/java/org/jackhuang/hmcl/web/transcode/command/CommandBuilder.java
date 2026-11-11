@@ -108,9 +108,15 @@ public final class CommandBuilder {
                     args.add("-low_power");
                     args.add("1");
                 }
-                if (softwareEncoder(video) && !blank(preset.preset)) {
-                    args.add("-preset");
-                    args.add(preset.preset);
+                if (!blank(preset.preset)) {
+                    if (softwareEncoder(video) || video.endsWith("_nvenc") || video.endsWith("_qsv")) {
+                        args.add("-preset");
+                        args.add(preset.preset);
+                    } else if ("h264_vaapi".equals(video)) {
+                        // VAAPI's speed control is `-quality` (larger = faster), not `-preset`.
+                        args.add("-quality");
+                        args.add(preset.preset);
+                    }
                 }
                 if (!blank(preset.profile)) {
                     args.add("-profile:v");
@@ -277,17 +283,22 @@ public final class CommandBuilder {
         if ("bitrate".equals(mode)) {
             args.add("-b:v");
             args.add(preset.qualityValue);
-        } else if ("cqp".equals(mode)) {
-            args.add("-qp");
-            args.add(preset.qualityValue);
-        } else if (encoder.contains("_nvenc")) {
-            args.add("-cq");
+        } else if (encoder.contains("_qsv")) {
+            // QSV has no -qp; its constant-quality knob is -global_quality.
+            args.add("-global_quality");
             args.add(preset.qualityValue);
         } else if (encoder.contains("_vaapi")) {
             args.add("-qp");
             args.add(preset.qualityValue);
-        } else if (encoder.contains("_qsv")) {
-            args.add("-global_quality");
+        } else if (encoder.contains("_nvenc")) {
+            if ("cqp".equals(mode)) {
+                args.add("-qp");
+            } else {
+                args.add("-cq");
+            }
+            args.add(preset.qualityValue);
+        } else if ("cqp".equals(mode)) {
+            args.add("-qp");
             args.add(preset.qualityValue);
         } else {
             args.add("-crf");

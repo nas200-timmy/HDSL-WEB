@@ -14,7 +14,14 @@ import { errMsg } from "../../utils";
 import { Dialog } from "../../components/Dialog";
 import { ContentCopyIcon, RefreshIcon, SearchIcon } from "../../components/icons";
 import { HelpNote } from "./common";
-import { inactiveReason, valueLabel, valueTip } from "./labels";
+import {
+  inactiveReason,
+  remapSpeedPreset,
+  speedGroup,
+  speedPresetOptions,
+  valueLabel,
+  valueTip,
+} from "./labels";
 
 /**
  * 参数面板工作台。
@@ -151,13 +158,20 @@ export function PresetsPage() {
           next.subtitleMode = "none";
           next.copyAttachments = false;
           next.copyChapters = false;
+          next.preset = "";
         } else if (hardware) {
           next.qualityMode = next.qualityMode === "bitrate" ? "bitrate" : "cqp";
-          next.preset = "";
+          // 速度档随编码器家族切换：NVENC p1–p7、QSV 命名档、H.264 VAAPI 数值档。
+          next.preset = remapSpeedPreset(encoder, next.preset);
           next.profile = "";
           next.tune = "";
-        } else if (next.qualityMode !== "bitrate") {
-          next.qualityMode = "crf";
+        } else {
+          if (next.qualityMode !== "bitrate") {
+            next.qualityMode = "crf";
+          }
+          next.preset = encoder === "copy" || encoder === "none"
+            ? ""
+            : remapSpeedPreset(encoder, next.preset);
         }
       }
       return next;
@@ -734,6 +748,7 @@ export function PresetsPage() {
                       value={draft[field.id] ?? field.default}
                       changed={changedFields.has(field.id)}
                       disabled={entry?.builtin === true}
+                      encoder={String(draft.videoEncoder ?? "")}
                       inactiveReason={inactiveReason(field.id, draft)}
                       onChange={(value) => update(field.id, value)}
                     />
@@ -866,6 +881,7 @@ function Field({
   value,
   changed,
   disabled,
+  encoder,
   inactiveReason,
   onChange,
 }: {
@@ -873,6 +889,7 @@ function Field({
   value: unknown;
   changed: boolean;
   disabled: boolean;
+  encoder: string;
   inactiveReason?: string;
   onChange: (value: unknown) => void;
 }) {
@@ -882,6 +899,12 @@ function Field({
   const reason = inactiveReason ?? "";
   const controlDisabled = disabled || reason !== "";
   const hint = reason || (field.type === "select" ? optionHint ?? field.hint : field.hint);
+  // 速度档随编码器变化：优先用 schema 的 optionGroups，旧后端没有该字段时退回本地映射。
+  const selectOptions = field.type !== "select"
+    ? []
+    : field.id !== "preset"
+      ? field.options ?? []
+      : field.optionGroups?.[speedGroup(encoder)] ?? speedPresetOptions(field.options, encoder);
   return (
     <div className={`tc-field${field.important ? " important" : ""}${reason ? " inactive" : ""}`}>
       <span className="tc-field-label">
@@ -917,7 +940,7 @@ function Field({
         <ParamSelect
           fieldId={field.id}
           value={String(value ?? "")}
-          options={field.options ?? []}
+          options={selectOptions}
           hints={field.optionHints}
           disabled={controlDisabled}
           onChange={onChange}

@@ -1130,6 +1130,9 @@ export interface TranscodeSchemaField {
   type: "text" | "textarea" | "select" | "switch";
   default: string | boolean;
   options?: string[];
+  /// Encoder-specific option lists for the speed control
+  /// (`software` / `nvenc` / `qsv` / `vaapi` / `vaapiHevc`).
+  optionGroups?: Record<string, string[]>;
   /// One-line explanation under the control (the web port of 3FUI's field description).
   hint?: string;
   /// Per-option explanations for a select, keyed by option value.
