@@ -156,6 +156,10 @@ ARG DEBIAN_FRONTEND=noninteractive
 #
 #   docker build --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn .
 #
+# 用 **http://**：debian:trixie-slim 这类底座在第一次 `apt-get update` 时还没有
+# `ca-certificates`，此时 https 镜像站会直接报 CERTIFICATE_VERIFY_FAILED。装完
+# ca-certificates 之后再换 https 才行；最省事的是 apt 这一段始终用 http。
+#
 # 只处理 Debian/Ubuntu；Fedora/openSUSE 的分支不动（各自的 repo 文件里主机名不统一，
 # 猜错比不改更糟）。
 ARG APT_MIRROR=
@@ -271,12 +275,21 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       debian|ubuntu) \
         apt-get update; \
         apt-get install -y --no-install-recommends \
-          7zip build-essential busybox-static bzip2 ca-certificates cargo curl \
-          ffmpeg git golang-go less libatomic1 libavcodec-extra nano \
+          7zip build-essential busybox-static bzip2 ca-certificates ca-certificates-java \
+          cargo curl ffmpeg git golang-go less libatomic1 libavcodec-extra nano \
           openjdk-21-jdk-headless openjdk-25-jdk-headless openssh-client openssh-server \
           pkg-config procps \
           python-is-python3 python3 rsync rustc sshpass tini unzip vim-tiny \
           wget xz-utils zip zstd; \
+        # Java 的出站 HTTPS 用的是 JDK 自己的 cacerts，不是 OpenSSL 的 bundle。\
+        # Debian 的 openjdk-* 已经依赖 ca-certificates-java，这里再显式装一次并\
+        # 断言 postinst 真的生成了 truststore；缺了的话 models.dev / registry\
+        # 都会在运行期才报 PKIX，构建期先拦住。\
+        test -s /etc/ssl/certs/java/cacerts || { \
+          echo "HDSL-web: Java truststore /etc/ssl/certs/java/cacerts is missing;" >&2; \
+          echo "HDSL-web: install ca-certificates-java or Java HTTPS will fail (PKIX)." >&2; \
+          exit 1; \
+        }; \
         ;; \
       fedora) \
         dnf install -y --setopt=install_weak_deps=False \
@@ -305,6 +318,21 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     esac; \
     ln -sf "$(command -v tini)" /usr/local/bin/tini; \
     /usr/local/bin/tini --version
+
+# VAAPI/QSV user-space drivers: ffmpeg can encode through them without this, but the
+# device nodes alone are not enough (`libva` talks to the driver). Optional on purpose:
+# a base/repository that cannot supply a package must not fail the whole image, and a
+# machine without /dev/dri simply reports hardware encoding as unavailable.
+RUN set -eux; \
+    . /etc/os-release; \
+    case "$ID" in \
+      debian|ubuntu) \
+        apt-get update; \
+        apt-get install -y --no-install-recommends \
+          libva2 libva-drm2 intel-media-va-driver mesa-va-drivers libvpl2 vainfo \
+          || echo "HDSL-web: VAAPI/QSV user-space drivers unavailable; hardware encoding will report unavailable" >&2 ;; \
+      *) : ;; \
+    esac
 
 # 默认 JVM 钉在 21：面板自己、以及 1.16 那批老版本 MC，都是按 21 实测过的组合。
 # 装 25 会把 update-alternatives 的默认值抢过去（它只按版本号排序），所以这里显式
@@ -439,7 +467,7 @@ ARG HDSL_AGENT_UID=1000
 RUN set -eux; \
     groupadd --gid "${HDSL_AGENT_UID}" hdsl; \
     useradd --uid "${HDSL_AGENT_UID}" --gid "${HDSL_AGENT_UID}" --create-home --home-dir /home/hdsl --shell /bin/bash hdsl; \
-    mkdir -p /app /data "${COREPACK_HOME}" /home/hdsl/.config/pnpm /home/hdsl/workspace /home/hdsl/mc; \
+    mkdir -p /app /data "${COREPACK_HOME}" /home/hdsl/.config/pnpm /home/hdsl/workspace /home/hdsl/mc /home/hdsl/video; \
     printf 'storeDir: %s\n' "/data/pnpm-store" > /home/hdsl/.config/pnpm/config.yaml; \
     chown -R hdsl:hdsl /data /home/hdsl
 
@@ -481,6 +509,18 @@ RUN printf '%s\n' \
       '}' \
       'umask 002' \
       'if [ "$(id -u)" = "0" ]; then' \
+      '  # Hardware encoding runs as uid 1000 after setpriv --init-groups; the render' \
+      '  # group must exist in /etc/group for that reset to keep it. Auto-detect the' \
+      '  # device GID so a compose file only has to pass the device through.' \
+      '  render_gid="${HDSL_RENDER_GID:-}"' \
+      '  if [ -z "$render_gid" ] && [ -e /dev/dri/renderD128 ]; then' \
+      '    render_gid=$(stat -c %g /dev/dri/renderD128 2>/dev/null || true)' \
+      '  fi' \
+      '  if [ -n "$render_gid" ]; then' \
+      '    group_name=$(getent group "$render_gid" | cut -d: -f1)' \
+      '    if [ -z "$group_name" ]; then groupadd -g "$render_gid" hdsl-render 2>/dev/null || true; group_name=hdsl-render; fi' \
+      '    usermod -aG "$group_name" hdsl 2>/dev/null || true' \
+      '  fi' \
       '  # The volume belongs to the agent first, then the four secret paths are' \
       '  # carved back out of it. Doing it in this order is what keeps the model' \
       '  # working as new directories appear: anything the panel creates under' \
@@ -495,6 +535,7 @@ RUN printf '%s\n' \
       '  # a host directory with somebody else uid would otherwise stay unwritable.' \
       '  fix_owner /home/hdsl/workspace ${HDSL_AGENT_UID}:${HDSL_AGENT_UID} 2775' \
       '  fix_owner /home/hdsl/mc ${HDSL_AGENT_UID}:${HDSL_AGENT_UID} 2775' \
+      '  fix_owner /home/hdsl/video ${HDSL_AGENT_UID}:${HDSL_AGENT_UID} 2775' \
       '  # Create them here: the panel would otherwise create auth/ and logs/ itself,' \
       '  # after this script has run, and a directory created inside the volume' \
       '  # inherits 1000 + setgid + the 002 umask — group-writable until the *next*' \

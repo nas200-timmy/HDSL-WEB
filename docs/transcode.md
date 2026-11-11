@@ -1,6 +1,6 @@
 # 转码模块（设计稿 / 实施计划）
 
-> 状态：设计已定，**代码尚未开始**。首个交付物是本文档；实现等维护者明确指令后再动工。
+> 状态：已实现并持续补齐；本文件保留设计与取舍，最新落地范围见下节「实现状态」。
 >
 > 行为参考：FFmpegFreeUI `6.3.0`（上游）；linux-3fui-wedui `19f4a87`。上游后续变更不自动跟随，按需评估。
 >
@@ -9,6 +9,40 @@
 >
 > 相关约定：功能默认关闭，关闭时与 MC 一样「当它不存在」；UI 只用面板现有 HMCL/Monet 风格；
 > 队列在服务端运行，浏览器只是观察窗。
+
+## 实现状态（2026-11-11）
+
+已落地并能通过 `scripts/transcode-smoke.py`：
+
+- 功能门（`feature.json`、关闭即 404、开发者密码启用）、`transcode:` 配置。
+- ffmpeg/ffprobe 定位与能力探测、媒体根浏览、ffprobe 媒体信息。
+- 预设存储/内置预设/命令生成/预览，前端六页（概览/准备文件/编码队列/预设/工具/设置）。
+- 服务端队列、真实 ffmpeg 执行、进度、日志、暂停/恢复、输出 `.part` 原子改名。
+- 失败决策三档、QSV→VAAPI→CPU 降级链、失败弹窗与「应用队列」。
+- 合并/混流/抽流工具入队；质量评测 PSNR/SSIM/XPSNR/VMAF 与逐帧曲线。
+- GPU 监控（NVIDIA/AMD/Intel sysfs，任务管理器式四图，多卡下拉选择）。
+- 元数据/章节/附件、滤镜选择器、自定义参数编辑器、`.3fui` 双向尽力映射。
+- ffmpeg 静态包 / apt-dnf / 源码编译的在线安装 UI（SHA-256、进度、日志、取消）。
+- 失败策略持久化（写回 server.yaml）与超时链路测试。
+- 3FUI 防呆：图片编码器跳过音/字幕、QSV `-low_power 1`、VAAPI 自动注入、
+  容器兼容提醒、编码器切换清理 preset/profile/tune、1 帧实测、任务 argv 展示。
+- Agent scope `transcode` / `transcode-raw`；容器媒体根、`/dev/dri`/NVIDIA 直通参数与冒烟脚本。
+- 2026-11-11 补齐：编码器按 `ffmpeg -encoders` 置灰；滤镜顺序改为裁剪/反交错在缩放前；
+  质量模式支持 none/VBR/CBR 与 minrate/maxrate/bufsize；字幕支持 convert（mov_text/ASS/SRT/WebVTT）；
+  流控制支持保留其它视频/音频/字幕轨并按索引单独编码；后端在保存/预览/提交前校验编码器与质量、
+  容器与编码器、MP4 字幕格式、流控制组合；MP4/AVI/TS/WebM 装不下的附件/章节直接跳过。
+- 准备文件支持按文件夹递归加入准备列表并批量入队；准备列表用 `/api/transcode/plan` 显示
+  服务器上的绝对输出路径（与真正入队共用命名/防撞逻辑），输出目录留空 = 源文件旁边。
+
+尚未完成（后续提交）：
+
+- Windows 的 AMD/Intel GPU 进程表与 Intel 整卡利用率（Linux sysfs/NVIDIA 已有；
+  Windows 目前只有 nvidia-smi 摘要，性能页的显卡下拉已支持多卡）。
+- Windows PDH 每进程 GPU 引擎计数的解析与前端进程表。
+- 3FUI 防呆尚未完全搬：容器兼容现在是“继续/取消”确认 + 后端自动跳过不兼容项，还没有
+  “改 MKV / 丢弃不兼容项 / 取消”三选；编码器参数已做组合校验，但 profile/tune/pix_fmt 的
+  逐项枚举仍未全部覆盖；编码器故障探测仍是失败后决策，不是启动探测/任务前检查/stderr 三层自动；
+  Agent 写操作确认卡与工具目录、应急上传三重校验仍未做。
 
 ## Context
 

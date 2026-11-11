@@ -225,6 +225,11 @@ public final class ServerConfig {
     /// until the owner enables it; these knobs only bound what may be created
     /// once it is on.
     public final McConfig mc = new McConfig();
+
+    /// `transcode:` — runtime knobs for the transcode module. Whether the feature
+    /// exists at all is **not** here: it is a runtime decision stored in
+    /// `<data>/transcode/feature.json`.
+    public final TranscodeConfig transcode = new TranscodeConfig();
     public static final class McConfig {
         /// First port the auto-allocator may hand out (`mc.port_start`).
         public volatile int portStart = 25565;
@@ -241,6 +246,38 @@ public final class ServerConfig {
         /// the image and compose file mount so a container rebuild keeps the
         /// worlds. `HDSL_MC_DIR` overrides both.
         public volatile String dir = "";
+    }
+
+    /// Transcode runtime settings (`transcode:` in `server.yaml`).
+    ///
+    /// The feature switch is **not** one of these fields: it lives in
+    /// `<data>/transcode/feature.json` and is changed in the panel (with the
+    /// developer password), so a copied `server.yaml` cannot silently turn the
+    /// surface on. These are the limits that stay deployment-controlled.
+    public static final class TranscodeConfig {
+        /// Media root (`transcode.media_root`, `HDSL_MEDIA_ROOT`); empty means
+        /// `<data>/video` for a bare deployment. The container image points it at
+        /// `/home/hdsl/video`.
+        public volatile String mediaRoot = "";
+
+        /// ffmpeg executable (`transcode.ffmpeg_path`, `HDSL_FFMPEG_PATH`); empty
+        /// means resolve from `PATH` and then from `<data>/transcode/tools/ffmpeg`.
+        public volatile String ffmpegPath = "";
+
+        /// How many jobs may run at once (`transcode.max_concurrent`, default 1).
+        public volatile int maxConcurrent = 1;
+
+        /// How many jobs may wait (`transcode.max_queue`, default 20).
+        public volatile int maxQueue = 20;
+
+        /// Failure policy wire name: `ask`, `timeout-auto` or `full-auto`.
+        public volatile String failurePolicy = "ask";
+
+        /// Minutes before an unanswered failure decision is handled.
+        public volatile int failureTimeoutMinutes = 10;
+
+        /// Whether pending jobs resume after a panel restart.
+        public volatile boolean autoResume = true;
     }
 
     /// `logs:` — how long the panel keeps its own files. The window may only be set

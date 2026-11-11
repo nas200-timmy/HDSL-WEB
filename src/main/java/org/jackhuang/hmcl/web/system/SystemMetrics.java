@@ -72,6 +72,7 @@ public final class SystemMetrics {
     /// The Windows readers, or `null` everywhere else (and when JNA cannot
     /// reach the native libraries — the page then hides those cards).
     private final @Nullable WindowsMetrics windows;
+    private final GpuReader gpuReader;
     private final Path procRoot;
     private final Path sysBlockRoot;
     private final OperatingSystemMXBean os;
@@ -122,6 +123,7 @@ public final class SystemMetrics {
         this.sysBlockRoot = sysBlockRoot;
         this.hostInfo = hostInfo;
         this.windows = "windows".equals(hostInfo.os()) ? WindowsMetrics.create() : null;
+        this.gpuReader = GpuReaders.create(hostInfo);
         this.os = (OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
     }
 
@@ -308,17 +310,24 @@ public final class SystemMetrics {
 
         SystemSnapshot.Panel panel = panel();
 
+        List<SystemSnapshot.Gpu> gpus;
+        try {
+            gpus = gpuReader.read();
+        } catch (RuntimeException e) {
+            gpus = List.of();
+        }
         SystemSnapshot snapshot = new SystemSnapshot(
                 at.toString(),
                 interval,
                 new SystemSnapshot.Host(hostInfo.os(), hostInfo.environment()),
-                new SystemSnapshot.Capabilities(cores.length > 0, !disks.isEmpty(), !networks.isEmpty(), false),
+                new SystemSnapshot.Capabilities(cores.length > 0, !disks.isEmpty(), !networks.isEmpty(),
+                        gpuReader.available()),
                 new SystemSnapshot.Cpu(cpuLoad, coreCount, limits.cpuQuotaCores(), cores, loadAverage),
                 memory,
                 disks,
                 mounts,
                 networks,
-                List.of(),
+                gpus,
                 panel);
 
         previousCpu = cpuTimes;

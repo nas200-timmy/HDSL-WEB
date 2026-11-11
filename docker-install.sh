@@ -71,6 +71,10 @@ WORKSPACE=""
 WORKSPACE_SET=0      # 交互里明确选了「不挂」时置 1，避免被状态文件里的旧值顶掉
 MC=""
 MC_SET=0
+VIDEO=""
+VIDEO_SET=0
+HW=""
+HW_SET=0
 MC_PORTS=""          # 25565 / 25565-25575 / 25565,25566；空 = 不把 MC 端口映射到宿主
 MC_PORTS_SET=0       # 命令行或交互里明确给过
 DOCTOR=0             # --doctor：只体检，不构建、不起容器、不写状态
@@ -95,6 +99,11 @@ usage() {
   --mc <路径|volume:名称|none>    MC 服务器数据挂到 /home/hdsl/mc
                                   （默认 volume:hdsl-mc；none = 不挂，重建容器会丢存档）
   --no-mc                         同 --mc none
+  --video <路径|volume:名称|none> 转码媒体库挂到 /home/hdsl/video
+                                  （默认 volume:hdsl-video；NAS 建议指到真实视频目录）
+  --no-video                      同 --video none
+  --hw <auto|vaapi|nvidia|none>   硬件编码直通（默认 auto：有 /dev/dri 挂 VAAPI/QSV，
+                                  nvidia-container-toolkit 可用时挂 --gpus all）
   --mc-ports <规格|none>          把 MC 游戏端口映射到宿主：`25565`、`25565-25575`、
                                   `25565,25566`（最多 128 个）。默认 `none`：不对外开服。
                                   交互运行时会在「配置」里问一次，回车 = 不开。
@@ -156,6 +165,9 @@ while [ "$#" -gt 0 ]; do
         --no-workspace) WORKSPACE=""; WORKSPACE_SET=1; shift ;;
         --mc) need_value "$@"; MC="$2"; MC_SET=1; shift 2 ;;
         --no-mc) MC=""; MC_SET=1; shift ;;
+        --video) need_value "$@"; VIDEO="$2"; VIDEO_SET=1; shift 2 ;;
+        --no-video) VIDEO=""; VIDEO_SET=1; shift ;;
+        --hw) need_value "$@"; HW="$2"; HW_SET=1; shift 2 ;;
         --mc-ports) need_value "$@"; MC_PORTS="$2"; MC_PORTS_SET=1; shift 2 ;;
         --no-mc-ports) MC_PORTS=""; MC_PORTS_SET=1; shift ;;
         --port) need_value "$@"; PORT="$2"; shift 2 ;;
@@ -798,6 +810,8 @@ load_state() {
     PREV_DATA=${INSTALL_DATA:-}
     PREV_WORKSPACE=${INSTALL_WORKSPACE:-}
     PREV_MC=${INSTALL_MC:-}
+    PREV_VIDEO=${INSTALL_VIDEO:-}
+    PREV_HW=${INSTALL_HW:-}
     PREV_MC_PORTS=${INSTALL_MC_PORTS:-}
     PREV_MIRROR=${INSTALL_MIRROR:-}
     PREV_RELEASE=${INSTALL_RELEASE:-}
@@ -815,6 +829,8 @@ save_state() {
         printf 'INSTALL_DATA=%q\n' "$DATA"
         printf 'INSTALL_WORKSPACE=%q\n' "$WORKSPACE"
         printf 'INSTALL_MC=%q\n' "$MC"
+        printf 'INSTALL_VIDEO=%q\n' "$VIDEO"
+        printf 'INSTALL_HW=%q\n' "$HW"
         printf 'INSTALL_MC_PORTS=%q\n' "$MC_PORTS"
         printf 'INSTALL_MIRROR=%q\n' "$MIRROR_MODE"
         printf 'INSTALL_RELEASE=%q\n' "$([ "$RELEASE" = 1 ] && echo yes || echo no)"
@@ -834,6 +850,7 @@ save_env() {
         umask 077
         {
             printf 'HDSL_PORT=%s\n' "$PORT"
+            printf 'HDSL_MEDIA_ROOT=%s\n' "/home/hdsl/video"
             printf 'NPM_CONFIG_REGISTRY=%s\n' "$NPM_REGISTRY"
             printf 'JAVA_OPTS=%s\n' "$JAVA_OPTS"
             if [ -n "$PASSWORD" ]; then
@@ -995,6 +1012,11 @@ ensure_owner() {   # 宿主目录：只建出来，属主交给容器入口去�
     mkdir -p "$path"
 }
 
+nvidia_docker_ready() {
+    command -v nvidia-smi >/dev/null 2>&1 || return 1
+    docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'
+}
+
 run_container() {
     local mounts=()
     case "$DATA" in
@@ -1013,6 +1035,33 @@ run_container() {
             *)        ensure_owner "$MC"; mounts+=(-v "$MC:/home/hdsl/mc") ;;
         esac
     fi
+    if [ -n "$VIDEO" ] && [ "$VIDEO" != none ]; then
+        case "$VIDEO" in
+            volume:*) mounts+=(-v "${VIDEO#volume:}:/home/hdsl/video") ;;
+            *)        ensure_owner "$VIDEO"; mounts+=(-v "$VIDEO:/home/hdsl/video") ;;
+        esac
+    fi
+
+    # Hardware encoding: only add flags the host can actually satisfy. A
+    # `--device /dev/dri` on a machine without it makes Docker refuse to start
+    # the container, which is worse than falling back to CPU.
+    local hw_args=()
+    case "$HW" in
+        auto)
+            if [ -e /dev/dri ]; then hw_args+=(--device /dev/dri); fi
+            if nvidia_docker_ready; then hw_args+=(--gpus all); fi
+            ;;
+        vaapi)
+            if [ -e /dev/dri ]; then hw_args+=(--device /dev/dri)
+            else say "  [·] 没有 /dev/dri：VAAPI/QSV 直通跳过"; fi
+            ;;
+        nvidia)
+            if nvidia_docker_ready; then hw_args+=(--gpus all)
+            else say "  [·] nvidia-container-toolkit 不可用：NVENC 直通跳过"; fi
+            ;;
+        none|"") ;;
+        *) die "未知的 --hw 值：$HW（auto / vaapi / nvidia / none）" ;;
+    esac
 
     step "启动容器：$NAME"
     # MC 端口一行一个 `-p 宿主:容器`，两边同号：容器里的服务端监听的就是实例的
@@ -1030,6 +1079,7 @@ run_container() {
         ${mc_mappings[@]+"${mc_mappings[@]}"}
         --env-file "$ENV_FILE"
         "${mounts[@]}"
+        ${hw_args[@]+"${hw_args[@]}"}
         "$IMAGE")
 
     if [ "$DRY_RUN" = 1 ]; then
@@ -1249,6 +1299,12 @@ fi
 if [ "$MC_SET" = 0 ] && [ -z "$MC" ]; then
     MC="${PREV_MC:-volume:hdsl-mc}"
 fi
+if [ "$VIDEO_SET" = 0 ] && [ -z "$VIDEO" ]; then
+    VIDEO="${PREV_VIDEO:-volume:hdsl-video}"
+fi
+if [ "$HW_SET" = 0 ] && [ -z "$HW" ]; then
+    HW="${PREV_HW:-auto}"
+fi
 if [ "$MC_PORTS_SET" = 0 ]; then
     # 默认不映射：开服是暴露面，不能因为重跑一次脚本就悄悄多开一组端口。
     MC_PORTS="${PREV_MC_PORTS:-}"
@@ -1266,6 +1322,8 @@ NAME=$(ask "容器名" "$NAME")
 DATA=$(ask "面板数据（/data；宿主路径或 volume:名称）" "$DATA")
 WORKSPACE=$(ask "工作区（挂到 /home/hdsl/workspace；留空或 none = 不挂，重建即丢）" "$WORKSPACE")
 MC=$(ask "MC 服务器数据（挂到 /home/hdsl/mc；volume:名称 或宿主路径；none = 不挂）" "$MC")
+VIDEO=$(ask "转码媒体库（挂到 /home/hdsl/video；volume:名称或宿主路径；none = 不挂）" "$VIDEO")
+HW=$(ask "硬件编码直通（auto / vaapi / nvidia / none）" "$HW")
 say "  MC 端口：容器里的服务端要局域网能连，就得在这里映射到宿主。"
 say "  格式 25565 / 25565-25575 / 25565,25566；留空 = 不对外开服（默认）。"
 MC_PORTS=$(ask "MC 游戏端口（映射到宿主）" "$MC_PORTS")
@@ -1460,6 +1518,15 @@ if [ -n "$MC" ]; then
 else
     say "  MC 服务器数据：不挂（容器内，重建容器会丢存档）"
 fi
+if [ -n "$VIDEO" ] && [ "$VIDEO" != none ]; then
+    case "$VIDEO" in
+        volume:*) say "  转码媒体库：命名卷 ${VIDEO#volume:} → /home/hdsl/video" ;;
+        *) say "  转码媒体库：$VIDEO → /home/hdsl/video" ;;
+    esac
+else
+    say "  转码媒体库：不挂（容器内，重建容器会丢）"
+fi
+say "  硬件编码直通：$HW"
 say "  端口：${BIND}:${PORT} → 容器 ${PORT}"
 say "  MC 端口：$(mc_ports_summary)"
 say "  底座：$BASE_IMAGE（$BASE_CODE）"
@@ -1582,6 +1649,15 @@ if [ -n "$MC" ]; then
 else
     say "  MC 数据：没挂（存档在容器内，重建容器会丢）"
 fi
+if [ -n "$VIDEO" ] && [ "$VIDEO" != none ]; then
+    case "$VIDEO" in
+        volume:*) say "  媒体库：卷 ${VIDEO#volume:} → /home/hdsl/video" ;;
+        *) say "  媒体库：$VIDEO → /home/hdsl/video" ;;
+    esac
+else
+    say "  媒体库：没挂（容器内，重建容器会丢）"
+fi
+say "  硬件编码：$HW"
 say "  MC 端口：$(mc_ports_summary)"
 if [ -n "$MC_PORT_LIST" ]; then
     say "            （宿主与容器同号；实例的 server-port 要与之一致，多实例就多开几个）"

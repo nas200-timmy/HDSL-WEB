@@ -2,6 +2,187 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 — 2026-11-10 · 转码模块（web-shell 分支）
+
+> **尚未合并 `main`，也未发布**。以下改动只在本地 `web-shell`；按约定等容器/人肉测试
+> 通过后再合并。交接细节见 [`docs/session-handoff-2026-11-10.md`](docs/session-handoff-2026-11-10.md)。
+
+**参数工作台与队列（2026-11-11，UI 第二轮）**
+
+- 取值不再直接暴露裸 ffmpeg 名：参数总览、预设预览、准备页摘要和队列详情都显示中文短名
+  （如 `libx264` → H.264 软件编码（x264）、`copy` → 保留原音轨），悬停可看原始取值与完整说明。
+- 下拉框改成仿 3FUI 的浮层列表：每一项是「中文名 + 原始取值 + 一行解释」，收起后显示中文名；
+  键盘 ↑↓/回车/Esc 可用。字段名旁新增 ⓘ 悬停浮窗，显示这一项的完整说明。
+- 下拉列表单行铺开、不再内部滚动；选项过多时自动分栏，硬件编码器（NVENC/VAAPI/QSV）全部可见。
+- 硬件编码器补上速度档，并随编码器自动切换：NVENC `p1–p7`（默认 p4）、QSV `veryfast–veryslow`
+  （默认 medium）、H.264 VAAPI `-quality 0–8`（越大越快）；HEVC VAAPI 没有速度控制，字段置灰并说明。
+  切换编码器时旧的档位会映射到新家族的默认值，不再一律清空。
+- 编码器/容器联动补齐（对齐 3FUI 的参数数据库）：
+  - 编码速度档按编码器家族切换：x264/x265 命名档、VP9/AV1 数值档（`-cpu-used`）、NVENC p1–p7、
+    QSV 命名档、VAAPI 0–8；VP9/AV1 不再错误地拿到 `-preset`。
+  - 质量模式随编码器变化：软件保留 CRF/CQP/码率，硬件只留 CQP/码率，VP9/AV1 只留 CRF/码率；
+    切到固定码率时质量值自动换成 `2500k`，切回质量模式时换成 `20`。
+  - `profile` / `tune` / `pixelFormat` 从手填改成下拉，选项按编码器家族给出（VP9 无 profile、
+    QSV/VAAPI 无 tune、VAAPI 只列 nv12/p010le 等）；切编码器时清掉新编码器不接受的旧值。
+  - 音频编码器按容器过滤（WebM 只能 Opus，MP4/MOV/M4A 不能 FLAC/Opus）；切容器时自动换成兼容值。
+  - 视频编码器按容器过滤（WebM 只留 VP9/AV1，M4A 只留“丢弃视频”）；切容器时自动换编码器并清空
+    不再适用的像素格式/profile/tune。
+  - 质量值标签随模式变成「CRF 值 / CQP 值 / 目标码率」；指定像素格式后 10-bit 开关置灰，
+    自动命名不是“追加后缀”时后缀输入置灰，字幕/音频 map 在不需要时置灰，受限容器的附件选项置灰并自动关闭。
+- 后端：硬件编码器现在真正输出 `-preset`（NVENC/QSV）与 `-quality`（H.264 VAAPI）；
+  QSV 的恒定质量改用 `-global_quality`，不再生成它不认识的 `-qp`。
+- 依赖项自动变灰并说明原因：视频「直接复制/丢弃」时质量、编码档位、画面、色彩等参数不可调；
+  音频非 `encode` 时编码器/码率/声道/采样率不可调；字幕非 `burn` 时字体/字号/字幕文件不可调。
+- 移植 FFmpegFreeUI / 3FUI 的常用参数页：
+  - 剪辑区间：开始/结束时间，后端生成 `-ss`/`-to`（输入侧定位）。
+  - 画面增强：降噪（hqdn3d/nlmeans/atadenoise/bm3d）、锐化（cas/unsharp）、去色带、
+    简易调色（brightness/contrast/saturation/gamma），参数留空用 ffmpeg 默认；降噪/锐化/
+    去色带的参数框只在启用后可用。
+  - 音频处理：音量（倍数或 dB）、EBU R128 响度标准化（I/TP/LRA）；只在音频重新编码时可用。
+  - 字幕烧录：字体/字号/额外 `force_style` 现在真正写进 filter；字幕文件按媒体根解析成绝对路径，
+    不再因为面板 cwd 不同而找不到文件。
+  - 元数据：新增“额外元数据（每行 key=value）”，可写任意 ffmpeg metadata 键。
+- 后端：`CommandBuilder` 增加 `-af`（音量/loudnorm）、画面增强滤镜链、trim 输入参数与额外元数据。
+- 两遍编码（x264/x265 + 固定码率）：参数面板新增「两遍编码」开关，第一遍只分析、第二遍出片；
+  队列按两遍执行并把进度折算成 0–100%，passlog 在成功/失败/取消后清理。不支持的编码器或
+  CRF/CQP 组合会在保存、预览和提交任务时直接拒绝，不会跑到一半才失败。
+- 补齐编码器：NVENC AV1、QSV VP9/AV1、VAAPI VP9/AV1，以及软件 AV1 的 SVT-AV1 与 rav1e；
+  WebM 容器现在也能选 VP9/AV1 的硬件编码器。下拉列表按 H.264 / H.265 / VP9 / AV1 分组，
+  同格式的软件与硬件编码器排在一起。速度档、profile、tune、像素格式按编码器家族联动，
+  VAAPI VP9/AV1 不生成它们没有的 `-quality`，rav1e 用 `-speed`/`-qp` 而不是通用的
+  `-preset`/`-crf`。
+- 修复 `libaom-av1` 被误判成图片编码器的问题：此前选它会强制单帧并丢掉音轨。
+- 增加 Windows 侧硬件编码器：AMD AMF（H.264/H.265/AV1）、D3D12VA（H.264/H.265/AV1）与
+  Vulkan（H.264/H.265/AV1）。AMF 的速度档走 `-quality`、场景优化走 `-usage`，D3D12VA 用
+  `-rc_mode`，不会像普通硬件编码器那样误发 `-preset`/`-tune`；降级链回落到 x264/x265/SVT-AV1。
+- 编码器下拉按当前 ffmpeg 的 `-encoders` 置灰：构建里没有的编码器显示为「不可用」，不再等到
+  提交后才报错。
+- 质量页补 VBR/CBR 与 `none`：可填 `minrate` / `maxrate` / `bufsize`；旧的 `bitrate` 保留兼容。
+- 字幕新增「转换格式」：MKV 可转 ASS/SRT/WebVTT，MP4/MOV 自动用 mov_text；不再只能 copy 或烧录。
+- 流控制支持「保留其它视频/音频/字幕轨」：map 全部轨道，只对索引指定的那条重新编码/转换，
+  其余直接 copy；默认行为仍是全部保留、音频/字幕 copy。
+- 滤镜顺序修正：裁剪和反交错移到缩放之前，裁剪坐标按源画面计算。
+- 后端在保存、预览、提交前校验编码器与质量模式、容器与编码器、MP4 字幕格式、流控制组合；
+  MP4/AVI/TS/WebM 等装不下的附件/章节会直接跳过，不再让 ffmpeg 跑到一半才失败。
+- 准备文件支持按文件夹递归加入准备列表并批量入队；准备列表逐项显示服务器上的绝对输出路径，
+  输出目录留空 = 每个源文件旁边，填相对路径 = 统一写到媒体根下的该子目录。
+- 准备页改为「待转码列表」：加入的文件/文件夹只是暂存，点「加入队列」才按当前预设提交；
+  输出目录新增目录选择器，可明确选「源目录」或媒体根下任意文件夹，并实时显示绝对路径。
+- 后端：视频 `copy` 时不再输出 `-vf` 与色彩标记，避免生成 ffmpeg 直接报错的命令。
+- 参数面板改成三栏工作台：预设列表（单击应用）/ 分区导航 / 字段区 + 右侧参数总览与实时命令行；
+  字段旁直接显示一行说明，下拉逐项解释（schema 新增 `hint` / `optionHints` / `important`）。
+- `/api/transcode/preview` 允许不带输入文件，用 `<输入文件>` / `<输出文件>` 占位生成；
+  参数面板改完 600ms 自动刷新命令行，不必先选片。
+- 参数总览把容器/编码器/质量/音频/字幕/命名集中显示，并把「MP4 装不下字幕/附件」「烧录字幕缺文件」
+  「硬件编码器带软件 preset」等常见错误就地列成可点击的警告。
+- 队列页补当前/下一个徽标、行内进度与速度/大小、任务详情 + 实时输出尾巴、日志对话框
+  （全部 / 只看错误）、复制输出路径与命令行；失败任务仍走降级/停止决策卡。
+- 概览页补 4 步新手流程与内置预设快捷入口；准备文件页记住上次预设并自动预览命令。
+- 预设不再占一列常驻侧栏：「预设管理」收进纵向导航，单击只预览、双击或「应用」才读进参数面板。
+- ffprobe 媒体信息独立成「媒体信息」子页：封装信息（容器/时长/大小/总码率）+ 流信息表
+  （类型/编码/规格/帧率/码率/语言·标题）+ 可折叠的原始 JSON；工具页只留合并/混流/抽流/质量评测。
+- 补页级与分区级说明（默认展开，可折叠）：参数面板、预设管理、队列决策、准备文件、
+  媒体信息列、工具用法与设置项含义；schema 的分区新增 `hint`，字段 `hint/optionHints` 一起渲染。
+- 参数总览只显示总览与警告，字段按分区进入（新增「全部参数」兜底）；预设管理页不再显示
+  当前预设的编辑框，命令行统一收到右栏「预设命令行」，避免同一页两个命令行。
+
+**功能门：默认关闭，关闭即不存在**
+
+- 转码状态存 `<data>/transcode/feature.json`，`server.yaml` 的 `transcode:` 只放运行参数；
+  关闭时 `/api/transcode/*` 除 `feature/terms/enable/decline` 外一律 404，导航不出现。
+- 启用要求开发者密码 + HTTPS + 须知确认；记录条款版本/哈希/接受人/来源/UA。
+- 急停联动：暂停队列并终止 ffmpeg 子进程。
+
+**服务端队列与失败策略**
+
+- `TranscodeQueue` 在服务端调度：第一次显式开始后自动补位，关网页/断 WS 不影响；
+  `.part` → 原子改名，stderr/进度/日志持久化；暂停/恢复走 SIGSTOP/SIGCONT。
+- 失败三档：`ask`（默认）/ `timeout-auto` / `full-auto`；硬件失败按 QSV→VAAPI→CPU
+  降级，每任务最多一次；运行中任务不会被自动重启。
+- `/queue/jobs/{id}/decision` 支持停止/仅此任务降级/降级并应用队列/完全自动化；
+  策略可写回 `server.yaml`，重启仍生效。
+
+**预设、命令与互通**
+
+- 面板自己的 schema（容器/视频/画面/音频/字幕/元数据/章节/附件/滤镜/自定义参数），
+  命令生成只产出 argv，不拼 shell；内置预设只读，用户预设原子写。
+- 元数据、附件复制、章节文件、滤镜选择器、自定义参数编辑器；`.3fui` 双向尽力映射，
+  支持导入/导出。
+- 图片编码器强制跳过音/字幕；QSV 自动 `-low_power 1`；VAAPI 注入设备与 hwupload；
+  切硬件编码器清理软件 preset/profile/tune。
+
+**工具与质量评测**
+
+- 合并（concat+copy）、混流（多输入 `-map`）、抽流（单流 copy）复用队列的日志/进度/取消。
+- PSNR/SSIM/XPSNR/VMAF 后台评测，逐帧 stats 曲线、平均值、取消；`inf` 封顶 100，
+  没有 `libvmaf` 时 VMAF 由后端拒绝。
+
+**GPU 监控**
+
+- 性能页 GPU tab 增加任务管理器式四图（总利用率/编码/解码/显存）与多卡下拉。
+- Linux：NVIDIA `nvidia-smi`、AMD sysfs+hwmon、Intel sysfs；macOS 不可用。
+- Windows 目前只有 nvidia-smi 摘要；AMD/Intel 的 PDH 每进程 GPU 引擎计数仍未做。
+
+**容器、媒体根与 ffmpeg 安装**
+
+- 容器媒体根固定 `/home/hdsl/video`（`HDSL_VIDEO_DIR` 决定宿主挂载）；入口校正 uid 1000，
+  并按 `/dev/dri/renderD128` 的 GID 给 `hdsl` 加组；compose/安装脚本增加
+  `--video` / `--hw auto|vaapi|nvidia|none`。
+- 设置页可在线安装 ffmpeg：静态包（https + 必填 SHA-256）、apt-get/dnf/zypper、
+  源码编译；任务有进度/日志/取消，下载拒绝私网/环回。
+- **Docker apt 注意**：`debian:trixie-slim` 第一次 `apt-get update` 时没有
+  `ca-certificates`，`APT_MIRROR=https://…` 会证书校验失败；apt 这一段用 `http://`。
+- **Java truststore 显式化**：镜像显式安装 `ca-certificates-java` 并断言
+  `/etc/ssl/certs/java/cacerts` 存在；它和 apt 的系统 CA 是两套东西，缺了会在运行期
+  报 PKIX。
+
+**Agent**
+
+- 新增 `transcode` / `transcode-raw` scope；媒体根浏览要求 raw，其余转码操作要求 transcode。
+- `/api/transcode/feature*`、`/settings*`、`/runtime/*` 对 agent 始终关闭：启用/关功能、
+  改失败策略、装运行时是操作员动作。
+
+**防呆（补 3FUI §7 的一部分）**
+
+- 入队前检查编码器/容器；限制性容器 + 保留字幕/附件/章节时提醒改 MKV。
+- 设置页“测试 1 帧”真实跑 testsrc→null，区分“ffmpeg 列出”与“本机驱动能编”。
+- 队列显示任务实际 argv；原子写、队列持久化、媒体根路径限制沿用。
+- 未全搬：容器兼容三选、编码器参数值逐项校验、三层故障探测、Agent 写确认、
+  应急上传三重校验。详见交接文档。
+
+**界面修订（真实测试反馈）**
+
+- “预设”页面改为 **参数面板**：左参数集、中分区字段（两列）、右粘性
+  命令行预览；准备页不再默认选中第一个内置预设，避免一进来就无声地
+  用 h264-quality。
+- GPU 性能页改成四个紧凑指标卡 + 2×2 折线图；没有数据时也保留空网格，
+  不再整块替换成“没有 GPU”。Linux 加 DRM 回退：vendor 读不到给 unknown
+  卡、只有 renderD* 时也列、/dev/dri 已挂载但 sysfs 不可读时给占位卡。
+- ffmpeg 安装页增加常用来源预设（Linux 源码/静态包、Windows、macOS），
+  SHA-256 可留空自动读侧车，读不到才要求手填。
+
+**测试容器反馈后的修复**
+
+- **P0 输出覆盖**：同输入同预设连续提交时，三个任务都拿到同一个输出名，
+  最后只剩最后一个产物。现在队列在**提交时**预留输出路径（`reservedOutputs`），
+  `CommandBuilder.outputPath` 同时避开“已存在”和“已预留”；工具任务同样
+  用 `uniqueOutput()` 避让；加载队列时从非终态任务重建预留集合，完成/失败/
+  取消/停止时释放，retry 重新预留。
+- **P1 无音轨误判**：视频预设 + 无音轨输入原本会被 `validOutput` 判成
+  “ffmpeg 没有产出”。现在只有输入本身有音频时，音频 copy/encode 预设才要求
+  输出有音频；错误文案区分空文件/无视频流/纯音频预设/音频缺失。测试覆盖
+  视频-only 源与 h264-quality。
+- 真实 1080p HEVC 10bit + FLAC 25:45 测试：mp4-h264 预设约 5 分 08 秒
+  （5.04×），426 MB → 360 MB，SSIM All 0.978 / PSNR 平均 29.6 dB。
+
+**验证**
+
+- `./gradlew test` 全量绿；`npm run typecheck` / `npm run build` 绿；
+  `./gradlew shadowJar` 成功。
+- `python3 scripts/transcode-smoke.py` 13 项全 PASS（真实 ffmpeg：capabilities / media /
+  presets / preview / submit / encode / log / extract / quality / 404）。
+- 本机无 Docker，镜像未实际构建；`docker-install.sh` 只做了语法检查。
+
 ## v0.6.82 — 2026-11-10 · 创建实例先选品牌；GitHub 版本目录缓存与配额
 
 **第三方核心下载：慢源自动换、删除实例不再留下孤儿任务**

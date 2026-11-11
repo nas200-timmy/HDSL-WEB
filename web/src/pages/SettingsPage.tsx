@@ -1888,6 +1888,8 @@ const AGENT_SCOPE_LABEL: Record<string, string> = {
   instances: "创建/删除实例",
   config: "面板配置",
   plugins: "安装插件",
+  transcode: "转码队列",
+  "transcode-raw": "转码原始文件",
 };
 
 const AGENT_SCOPE_HINT: Record<string, string> = {
@@ -1898,6 +1900,8 @@ const AGENT_SCOPE_HINT: Record<string, string> = {
   instances: "创建、删除、启停其它实例",
   config: "账号、模型、TLS、网络",
   plugins: "装/卸插件与整合包",
+  transcode: "队列、预设、启停与日志；不能启用/关闭功能",
+  "transcode-raw": "浏览媒体根、原始参数与破坏性文件操作",
 };
 
 /// 距离某个 ISO 时间还有多少秒。

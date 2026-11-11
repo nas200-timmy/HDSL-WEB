@@ -77,9 +77,14 @@ public final class AgentScopes {
     public static final String CONFIG = "config";
     /// Installing or removing plugins, packs and skills.
     public static final String PLUGINS = "plugins";
+    /// The transcode queue, presets and job control.
+    public static final String TRANSCODE = "transcode";
+    /// Raw command arguments, media browsing and destructive file operations.
+    public static final String TRANSCODE_RAW = "transcode-raw";
 
     /// Every class a grant may name, in the order the panel presents them.
-    public static final Set<String> KNOWN = Set.of(READ, MC, MC_CONSOLE, SYSTEM, INSTANCES, CONFIG, PLUGINS);
+    public static final Set<String> KNOWN = Set.of(
+            READ, MC, MC_CONSOLE, SYSTEM, INSTANCES, CONFIG, PLUGINS, TRANSCODE, TRANSCODE_RAW);
 
     /// What a grant holds when the operator ticks nothing: reading the panel,
     /// and nothing that changes it.
@@ -118,6 +123,17 @@ public final class AgentScopes {
             return true;
         }
         if (route.startsWith("/api/auth/")) {
+            return true;
+        }
+        // Enabling or disabling the surface is an operator decision (it needs the
+        // developer password), and an agent never gets to make it.
+        if (route.startsWith("/api/transcode/feature")) {
+            return true;
+        }
+        // Settings are an operator decision; an agent may run jobs, not change
+        // the unattended failure policy behind the operator's back.
+        if (route.startsWith("/api/transcode/settings")
+                || route.startsWith("/api/transcode/runtime/")) {
             return true;
         }
         if (route.startsWith("/api/exports")) {
@@ -174,6 +190,12 @@ public final class AgentScopes {
         // inherit them by accident.
         if (path.startsWith("/api/system/") || path.equals("/api/system")) {
             return SYSTEM;
+        }
+        if (path.startsWith("/api/transcode/")) {
+            if (path.startsWith("/api/transcode/media/")) {
+                return TRANSCODE_RAW;
+            }
+            return TRANSCODE;
         }
         if ("GET".equals(method) || "HEAD".equals(method)) {
             return READ;

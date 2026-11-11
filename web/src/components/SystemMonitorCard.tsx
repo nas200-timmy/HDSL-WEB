@@ -163,14 +163,14 @@ function LineChart({ series, height = 120, max, format }: {
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       context.clearRect(0, 0, width, height);
 
-      const points = series.flatMap((item) => item.points);
-      if (points.length < 2) {
-        return;
-      }
-      const minT = Math.min(...points.map((point) => point.t));
-      const maxT = Math.max(...points.map((point) => point.t));
+      const points = series.flatMap((item) => item.points)
+        .filter((point) => Number.isFinite(point.t) && Number.isFinite(point.v));
+      const minT = points.length > 0 ? Math.min(...points.map((point) => point.t)) : 0;
+      const maxT = points.length > 0 ? Math.max(...points.map((point) => point.t)) : 1;
       const spanT = Math.max(1, maxT - minT);
-      const ceiling = max ?? niceMax(Math.max(...points.map((point) => point.v), 0));
+      const ceiling = max ?? (points.length > 0
+        ? niceMax(Math.max(...points.map((point) => point.v), 0))
+        : 100);
       const padLeft = 6;
       const padRight = 6;
       const padTop = 8;
@@ -193,6 +193,9 @@ function LineChart({ series, height = 120, max, format }: {
       context.fillText(format ? format(ceiling) : ceiling.toFixed(0), padLeft + 2, padTop + 9);
       context.fillText("0", padLeft + 2, padTop + plotHeight - 2);
 
+      if (points.length < 2) {
+        return;
+      }
       for (const item of series) {
         const available = item.points.filter((point) => point.v >= 0);
         if (available.length < 2) continue;
@@ -306,6 +309,7 @@ export function SystemMonitorCard() {
   const [tab, setTab] = useState<PerfTab>("overview");
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null);
   const [history, setHistory] = useState<SystemSnapshot[]>([]);
+  const [gpuIndex, setGpuIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [intervalMs, setIntervalMs] = useState(2000);
   const [paused, setPaused] = useState(false);
@@ -378,6 +382,24 @@ export function SystemMonitorCard() {
     }
     return { cpu, memory, read, write, rx, tx };
   }, [history]);
+
+  const gpuPoints = useMemo(() => {
+    const utilization: Point[] = [];
+    const encoder: Point[] = [];
+    const decoder: Point[] = [];
+    const memory: Point[] = [];
+    for (const sample of history.slice(-60)) {
+      const gpu = sample.gpus[gpuIndex] ?? sample.gpus[0];
+      if (!gpu) continue;
+      const t = Date.parse(sample.at);
+      if (!Number.isFinite(t)) continue;
+      if (gpu.utilization >= 0) utilization.push({ t, v: gpu.utilization });
+      if ((gpu.encoderUtilization ?? -1) >= 0) encoder.push({ t, v: gpu.encoderUtilization! });
+      if ((gpu.decoderUtilization ?? -1) >= 0) decoder.push({ t, v: gpu.decoderUtilization! });
+      if (gpu.memoryUsedBytes >= 0) memory.push({ t, v: gpu.memoryUsedBytes });
+    }
+    return { utilization, encoder, decoder, memory };
+  }, [history, gpuIndex]);
 
   const memoryMax = useMemo(() => {
     let max = 0;
@@ -656,30 +678,80 @@ export function SystemMonitorCard() {
               </div>
             )}
 
-            {activeTab === "gpu" && (
-              <div className="perf-layout">
-                <div className="perf-main">
-                  {snapshot.gpus.length === 0 ? (
-                    <div className="comp-row">
-                      <span className="comp-label">GPU</span>
-                      <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                        当前构建未启用 GPU 采集（预留）。检测到显卡后这里会显示利用率、显存与温度。
-                      </span>
-                    </div>
-                  ) : (
-                    snapshot.gpus.map((gpu) => (
-                      <div key={gpu.index}>
-                        <div className="perf-big">{pct(gpu.utilization)}</div>
-                        <div className="perf-label">
-                          {gpu.name} · 显存 {fmtBytes(gpu.memoryUsedBytes)} / {fmtBytes(gpu.memoryTotalBytes)} ·{" "}
-                          {gpu.temperatureC.toFixed(0)}°C
-                        </div>
-                      </div>
-                    ))
-                  )}
+            {activeTab === "gpu" && (() => {
+              const gpu = snapshot.gpus[Math.min(gpuIndex, Math.max(0, snapshot.gpus.length - 1))];
+              const metric = (label: string, value: string) => (
+                <div className="card" style={{ padding: "8px 10px", minWidth: 0 }}>
+                  <div className="perf-label">{label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 600, lineHeight: 1.3 }}>{value}</div>
                 </div>
-              </div>
-            )}
+              );
+              return (
+                <div className="perf-layout">
+                  <div className="perf-main">
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 2px 8px", flexWrap: "wrap" }}>
+                      <span className="perf-label">显卡</span>
+                      {snapshot.gpus.length > 0 ? (
+                        <select
+                          className="input"
+                          style={{ width: "auto", minWidth: 180 }}
+                          value={Math.min(gpuIndex, snapshot.gpus.length - 1)}
+                          onChange={(e) => setGpuIndex(Number(e.target.value) || 0)}
+                        >
+                          {snapshot.gpus.map((entry, index) => (
+                            <option key={entry.index} value={index}>
+                              {index}: {entry.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                          未读到 GPU；Linux 需要 /sys/class/drm + /dev/dri，Windows 目前只支持 nvidia-smi。
+                        </span>
+                      )}
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8 }}>
+                      {metric("GPU 利用率", gpu ? pct(gpu.utilization) : "—")}
+                      {metric("编码单元", gpu ? pct(gpu.encoderUtilization ?? -1) : "—")}
+                      {metric("解码单元", gpu ? pct(gpu.decoderUtilization ?? -1) : "—")}
+                      {metric("显存", gpu ? `${fmtBytes(gpu.memoryUsedBytes)} / ${fmtBytes(gpu.memoryTotalBytes)}` : "—")}
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, paddingTop: 10 }}>
+                      <div>
+                        <div className="perf-label">GPU 利用率</div>
+                        <LineChart series={[{ label: "GPU", color: COLOR_CPU, points: gpuPoints.utilization }]}
+                                   height={110} max={1} format={pct} />
+                      </div>
+                      <div>
+                        <div className="perf-label">编码单元</div>
+                        <LineChart series={[{ label: "编码", color: COLOR_READ, points: gpuPoints.encoder }]}
+                                   height={110} max={1} format={pct} />
+                      </div>
+                      <div>
+                        <div className="perf-label">解码单元</div>
+                        <LineChart series={[{ label: "解码", color: COLOR_WRITE, points: gpuPoints.decoder }]}
+                                   height={110} max={1} format={pct} />
+                      </div>
+                      <div>
+                        <div className="perf-label">显存使用</div>
+                        <LineChart series={[{ label: "显存", color: COLOR_MEMORY, points: gpuPoints.memory }]}
+                                   height={110} format={fmtBytes} />
+                      </div>
+                    </div>
+
+                    {gpu && (
+                      <div className="perf-label" style={{ paddingTop: 8 }}>
+                        {gpu.name} · {gpu.vendor || "GPU"} · {gpu.backend || ""} ·{" "}
+                        {gpu.temperatureC >= 0 ? `${gpu.temperatureC.toFixed(0)}°C` : "温度 —"} ·{" "}
+                        {(gpu.powerW ?? -1) >= 0 ? `${gpu.powerW!.toFixed(0)} W` : "功耗 —"}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
 
             {activeTab === "disk" && (
               <div className="perf-layout">

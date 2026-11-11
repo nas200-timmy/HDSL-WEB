@@ -4,6 +4,7 @@ import { useMobileLayout } from "../hooks";
 import { BRAND_LABEL, useLaunchEntry, type LaunchEntry } from "../launchEntry";
 import { I18N } from "../i18n";
 import { closeSidebar, logout, useAppState } from "../store";
+import { useTranscodeFeature } from "../transcodeFeature";
 import type { Instance } from "../types";
 import { normState } from "../utils";
 import { BrandIcon } from "./BrandIcon";
@@ -13,6 +14,7 @@ import {
   LogoutIcon,
   PersonIcon,
   SettingsIcon,
+  TuneIcon,
 } from "./icons";
 
 /** 实例图标：icon 字段是可访问 URL 时显示图片，否则用 dsh 的品牌标志（DeepSeek 鲸鱼）。 */
@@ -47,6 +49,7 @@ export function MainSideBar() {
   const mobile = useMobileLayout();
 
   const account = s.accounts && s.accounts.length > 0 ? s.accounts[0] : null;
+  const transcode = useTranscodeFeature();
   // 全局只有一个"当前实例"：dsh 与品牌实例共用 selection。没有选择时退回
   // 第一个运行中的 dsh，保持老行为。
   const entry = useLaunchEntry();
@@ -158,6 +161,24 @@ export function MainSideBar() {
           <span className="side-title">{I18N["download"]}</span>
         </span>
       </button>
+
+      {transcode?.enabled && (
+        <>
+          <div className="side-category">媒体</div>
+          <button
+            className={`side-item ripple-host${location.pathname.startsWith("/transcode") ? " selected" : ""}`}
+            onClick={go("/transcode")}
+          >
+            <span className="side-graphic">
+              <TuneIcon size={20} />
+            </span>
+            <span className="side-text">
+              <span className="side-title">转码</span>
+              <span className="side-subtitle">批量编码</span>
+            </span>
+          </button>
+        </>
+      )}
 
       <div className="side-category">{I18N["settings.launcher.general"]}</div>
       <button

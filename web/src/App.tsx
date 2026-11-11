@@ -19,11 +19,13 @@ import { MainPage } from "./pages/MainPage";
 import { McInstancePage } from "./pages/McInstancePage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
+import { TranscodePage } from "./pages/TranscodePage";
 import { bootstrap, useAppState } from "./store";
 import { refreshWallpapers, useWallpaperUrl } from "./wallpaper";
 import { api } from "./api";
 import { requestDeveloperPassword } from "./elevation";
 import { refreshServerVersion } from "./version";
+import { refreshTranscodeFeature } from "./transcodeFeature";
 
 function SplashScreen() {
   return (
@@ -98,6 +100,7 @@ function Shell() {
   const wallpaperUrl = useWallpaperUrl();
   useEffect(() => {
     void refreshWallpapers();
+    void refreshTranscodeFeature();
   }, []);
   return (
     <Decorator>
@@ -311,6 +314,7 @@ export default function App() {
             <Route path="/install/modpack" element={<InstallModpackWizard />} />
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/transcode" element={<TranscodePage />} />
             {/* 旧版路径兼容 */}
             <Route path="/packs" element={<Navigate to="/download?tab=modpack" replace />} />
             <Route path="/plugins" element={<Navigate to="/download?tab=plugin" replace />} />
