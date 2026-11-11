@@ -92,9 +92,15 @@ export function probeSummary(probe: Record<string, unknown> | null): string {
 export function MediaBrowserPanel({
   selected,
   onSelect,
+  onAddFile,
+  onAddFolder,
+  onAddCurrentFolder,
 }: {
   selected?: string;
   onSelect: (entry: TranscodeMediaEntry) => void;
+  onAddFile?: (entry: TranscodeMediaEntry) => void;
+  onAddFolder?: (entry: TranscodeMediaEntry) => void;
+  onAddCurrentFolder?: (path: string) => void;
 }) {
   const [path, setPath] = useState("");
   const [listing, setListing] = useState<TranscodeMediaListing | null>(null);
@@ -135,6 +141,11 @@ export function MediaBrowserPanel({
         <span className="mono" style={{ flex: 1, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis" }}>
           {path || "媒体根"}
         </span>
+        {onAddCurrentFolder && (
+          <button className="btn btn-text" disabled={loading} onClick={() => onAddCurrentFolder(path)}>
+            添加当前文件夹
+          </button>
+        )}
         <button className="icon-btn on-variant" title="刷新" onClick={() => void load(path)}>
           <RefreshIcon size={18} />
         </button>
@@ -168,6 +179,30 @@ export function MediaBrowserPanel({
                   {entry.directory ? "目录" : `${entry.kind} · ${fmtBytes(entry.size)}`}
                 </span>
               </span>
+              {!entry.directory && onAddFile && (
+                <button
+                  className="btn btn-text"
+                  style={{ padding: "2px 6px", fontSize: 11 }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onAddFile(entry);
+                  }}
+                >
+                  加入
+                </button>
+              )}
+              {entry.directory && onAddFolder && (
+                <button
+                  className="btn btn-text"
+                  style={{ padding: "2px 6px", fontSize: 11 }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onAddFolder(entry);
+                  }}
+                >
+                  添加
+                </button>
+              )}
               {entry.directory && <ArrowForwardIcon size={16} />}
             </div>
           );

@@ -22,12 +22,17 @@ import org.jackhuang.hmcl.web.transcode.runtime.TranscodeRuntime;
 import org.jetbrains.annotations.NotNullByDefault;
 
 import java.io.IOException;
+import java.nio.file.FileVisitOption;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -85,6 +90,66 @@ public final class MediaBrowser {
         int from = Math.min(entries.size(), index * size);
         int to = Math.min(entries.size(), from + size);
         return new Listing(relativeOf(base, directory), from, entries.size(), List.copyOf(entries.subList(from, to)));
+    }
+
+    /// Recursively lists video/audio files below a directory, for "add folder" in the
+    /// preparation list. Hidden directories, recycle bins and symlinks escaping the root
+    /// are skipped. `limit` caps the result so one huge library does not freeze the page.
+    public Scan scan(Path root, String relative, boolean recursive, int limit) throws IOException {
+        Path base = realRoot(root);
+        Path directory = resolve(base, relative);
+        if (!Files.isDirectory(directory)) {
+            throw new IOException("not a directory: " + relative);
+        }
+        int max = Math.max(1, Math.min(5000, limit));
+        List<Entry> entries = new ArrayList<>();
+        boolean[] truncated = {false};
+        int depth = recursive ? Integer.MAX_VALUE : 1;
+        Files.walkFileTree(directory, EnumSet.noneOf(FileVisitOption.class), depth,
+                new SimpleFileVisitor<>() {
+                    @Override
+                    public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                        if (!dir.equals(directory)) {
+                            String name = dir.getFileName().toString();
+                            if (name.startsWith(".") || "@eaDir".equals(name) || "#recycle".equals(name)) {
+                                return FileVisitResult.SKIP_SUBTREE;
+                            }
+                        }
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                        if (!attrs.isRegularFile()) {
+                            return FileVisitResult.CONTINUE;
+                        }
+                        String name = file.getFileName().toString();
+                        if (name.startsWith(".")) {
+                            return FileVisitResult.CONTINUE;
+                        }
+                        String kind = kind(name);
+                        if (!"video".equals(kind) && !"audio".equals(kind)) {
+                            return FileVisitResult.CONTINUE;
+                        }
+                        if (entries.size() >= max) {
+                            truncated[0] = true;
+                            return FileVisitResult.TERMINATE;
+                        }
+                        try {
+                            Path real = file.toRealPath();
+                            if (!real.startsWith(base)) {
+                                return FileVisitResult.CONTINUE;
+                            }
+                            entries.add(new Entry(name, relativeOf(base, real), false, safeSize(real),
+                                    safeModified(real).toInstant().toString(), kind));
+                        } catch (IOException ignored) {
+                            // A disappearing file is not a reason to fail the whole scan.
+                        }
+                        return FileVisitResult.CONTINUE;
+                    }
+                });
+        entries.sort(Comparator.comparing(Entry::path, String.CASE_INSENSITIVE_ORDER));
+        return new Scan(relativeOf(base, directory), entries.size(), truncated[0], List.copyOf(entries));
     }
 
     /// Probes one file and returns ffprobe's JSON, with the relative path attached.
@@ -197,5 +262,9 @@ public final class MediaBrowser {
 
     /// One page plus the directory it describes.
     public record Listing(String path, int offset, int total, List<Entry> entries) {
+    }
+
+    /// Flattened media files under one directory (the "add folder" result).
+    public record Scan(String path, int total, boolean truncated, List<Entry> entries) {
     }
 }

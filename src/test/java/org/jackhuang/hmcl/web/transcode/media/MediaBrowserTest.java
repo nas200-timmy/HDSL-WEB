@@ -74,6 +74,35 @@ class MediaBrowserTest {
     }
 
     @Test
+    void scanCollectsMediaRecursivelyAndSkipsNoise(@TempDir Path dir) throws Exception {
+        Path root = Files.createDirectory(dir.resolve("media"));
+        Files.writeString(root.resolve("a.mkv"), "x");
+        Files.writeString(root.resolve("cover.jpg"), "x");
+        Files.writeString(root.resolve("notes.txt"), "x");
+        Path sub = Files.createDirectory(root.resolve("sub"));
+        Files.writeString(sub.resolve("b.mp4"), "x");
+        Files.writeString(sub.resolve("c.srt"), "x");
+        Path hidden = Files.createDirectory(root.resolve(".hidden"));
+        Files.writeString(hidden.resolve("d.mkv"), "x");
+
+        MediaBrowser browser = browser(root);
+        var recursive = browser.scan(root, "", true, 100);
+        assertEquals(2, recursive.entries().size());
+        assertTrue(recursive.entries().stream().anyMatch(e -> e.path().equals("a.mkv")));
+        assertTrue(recursive.entries().stream().anyMatch(e -> e.path().equals("sub/b.mp4")));
+        assertTrue(recursive.entries().stream().noneMatch(e -> e.path().contains(".hidden")));
+        assertTrue(recursive.entries().stream().noneMatch(e -> e.kind().equals("other")));
+
+        var topOnly = browser.scan(root, "", false, 100);
+        assertEquals(1, topOnly.entries().size());
+        assertEquals("a.mkv", topOnly.entries().get(0).path());
+
+        var truncated = browser.scan(root, "", true, 1);
+        assertEquals(1, truncated.entries().size());
+        assertTrue(truncated.truncated());
+    }
+
+    @Test
     void refusesToEscapeTheRoot(@TempDir Path dir) throws Exception {
         Path root = Files.createDirectory(dir.resolve("media"));
         Files.writeString(dir.resolve("outside.txt"), "x");

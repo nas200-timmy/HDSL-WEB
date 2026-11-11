@@ -49,7 +49,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 
 /// The transcode feature's own REST surface. At this stage it only owns the
@@ -104,6 +106,10 @@ public final class TranscodeApiServlet extends HttpServlet {
             mediaProbe(request, response);
             return;
         }
+        if ("/media/scan".equals(path)) {
+            mediaScan(request, response);
+            return;
+        }
         if ("/presets".equals(path)) {
             presets(response);
             return;
@@ -144,6 +150,7 @@ public final class TranscodeApiServlet extends HttpServlet {
             case "/feature/disable" -> disable(request, response);
             case "/presets" -> savePreset(request, response);
             case "/preview" -> preview(request, response);
+            case "/plan" -> plan(request, response);
             case "/presets/import" -> importPreset(request, response);
             case "/queue/start" -> {
                 module.queue().startQueue();
@@ -347,6 +354,17 @@ public final class TranscodeApiServlet extends HttpServlet {
         }
     }
 
+    private void mediaScan(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String relative = request.getParameter("path");
+        boolean recursive = !"0".equals(request.getParameter("recursive"));
+        int limit = intParameter(request, "limit", 2000);
+        try {
+            Json.write(response, module.media().scan(module.mediaRoot(), relative, recursive, limit));
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
+    }
+
     private static int intParameter(HttpServletRequest request, String name, int fallback) {
         String value = request.getParameter(name);
         if (value == null || value.isBlank()) {
@@ -512,6 +530,58 @@ public final class TranscodeApiServlet extends HttpServlet {
                     ? CommandBuilder.display(args)
                     : "# 第一遍（分析）\n" + CommandBuilder.display(passes.get(0))
                             + "\n\n# 第二遍（出片）\n" + CommandBuilder.display(passes.get(1)));
+            Json.write(response, result);
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    /// Plans output paths for a batch without submitting anything. The preparation list
+    /// uses it to show the exact file the server will write, including collision suffixes.
+    private void plan(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        try {
+            TranscodePreset preset = resolvePreset(body);
+            preset.validate();
+            Path mediaRoot = module.mediaRoot();
+            String requestedDir = stringField(body, "outputDir");
+            Path outputDir = requestedDir == null || requestedDir.isBlank()
+                    ? null : module.media().resolveForWrite(mediaRoot, requestedDir);
+            Set<Path> reserved = new LinkedHashSet<>();
+            JsonArray items = new JsonArray();
+            JsonArray inputs = body.has("inputs") && body.get("inputs").isJsonArray()
+                    ? body.getAsJsonArray("inputs") : new JsonArray();
+            for (var element : inputs) {
+                if (!element.isJsonPrimitive()) {
+                    continue;
+                }
+                String relative = element.getAsString();
+                JsonObject item = new JsonObject();
+                item.addProperty("input", relative);
+                try {
+                    Path input = module.media().resolve(mediaRoot, relative);
+                    Path directory = outputDir == null ? input.getParent() : outputDir;
+                    Path output = CommandBuilder.outputPath(preset, input, directory, reserved);
+                    reserved.add(output);
+                    item.addProperty("inputAbsolute", input.toString());
+                    item.addProperty("output", mediaRoot.relativize(output).toString().replace('\\', '/'));
+                    item.addProperty("outputAbsolute", output.toString());
+                    item.addProperty("exists", Files.exists(output));
+                } catch (IOException | IllegalArgumentException e) {
+                    item.addProperty("error", e.getMessage());
+                }
+                items.add(item);
+            }
+            JsonObject result = new JsonObject();
+            result.addProperty("mediaRoot", mediaRoot.toString());
+            result.addProperty("outputDir", outputDir == null ? "" : outputDir.toString());
+            result.add("items", items);
             Json.write(response, result);
         } catch (IllegalArgumentException e) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());

@@ -974,6 +974,12 @@ export const api = {
       ),
     mediaProbe: (path: string) =>
       request<Record<string, unknown>>(`/api/transcode/media/probe?path=${encodeURIComponent(path)}`),
+    mediaScan: (path = "", recursive = true, limit = 2000) =>
+      request<TranscodeMediaScan>(
+        `/api/transcode/media/scan?path=${encodeURIComponent(path)}&recursive=${recursive ? 1 : 0}&limit=${limit}`,
+      ),
+    plan: (body: { preset?: TranscodePreset; presetId?: string; inputs: string[]; outputDir?: string }) =>
+      request<TranscodePlan>("/api/transcode/plan", jsonInit("POST", body)),
     presets: () => request<{ presets: TranscodePresetSummary[] }>("/api/transcode/presets"),
     preset: (id: string) =>
       request<TranscodePresetEntry>(`/api/transcode/presets/${encodeURIComponent(id)}`),
@@ -1107,6 +1113,28 @@ export interface TranscodeMediaListing {
   offset: number;
   total: number;
   entries: TranscodeMediaEntry[];
+}
+
+export interface TranscodeMediaScan {
+  path: string;
+  total: number;
+  truncated: boolean;
+  entries: TranscodeMediaEntry[];
+}
+
+export interface TranscodePlanItem {
+  input: string;
+  inputAbsolute?: string;
+  output?: string;
+  outputAbsolute?: string;
+  exists?: boolean;
+  error?: string;
+}
+
+export interface TranscodePlan {
+  mediaRoot: string;
+  outputDir: string;
+  items: TranscodePlanItem[];
 }
 
 export interface TranscodePresetSummary {
