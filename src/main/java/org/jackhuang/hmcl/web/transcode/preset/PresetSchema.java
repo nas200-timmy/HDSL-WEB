@@ -76,11 +76,11 @@ public final class PresetSchema {
         sections.add(section("编码器与质量", "先选编码器，再定质量。软件编码用 CRF（越小越清晰），硬件编码用 CQP；preset 只对软件编码有效。", new JsonArray[]{
                 fields(
                         videoEncoderGroups(hint(select("videoEncoder", "视频编码器", "libx264",
-                                "copy", "none", "libx264", "libx265", "libvpx-vp9", "libaom-av1",
-                                "libsvtav1", "librav1e",
-                                "h264_nvenc", "hevc_nvenc", "av1_nvenc",
-                                "h264_vaapi", "hevc_vaapi", "vp9_vaapi", "av1_vaapi",
-                                "h264_qsv", "hevc_qsv", "vp9_qsv", "av1_qsv"),
+                                "copy", "none",
+                                "libx264", "h264_nvenc", "h264_qsv", "h264_vaapi",
+                                "libx265", "hevc_nvenc", "hevc_qsv", "hevc_vaapi",
+                                "libvpx-vp9", "vp9_qsv", "vp9_vaapi",
+                                "libaom-av1", "libsvtav1", "librav1e", "av1_nvenc", "av1_qsv", "av1_vaapi"),
                                 "copy 不重编码；x264 兼容性最好；x265 同画质更小；VAAPI/QSV 走核显",
                                 "copy", "直接复制视频流，不重编码",
                                 "none", "丢弃视频（纯音频输出）",
@@ -562,19 +562,20 @@ public final class PresetSchema {
 
     /// 容器约束视频编码器：WebM 只装 VP9/AV1，M4A 是纯音频容器。
     private static JsonObject videoEncoderGroups(JsonObject field) {
-        String[] all = {"copy", "none", "libx264", "libx265", "libvpx-vp9", "libaom-av1",
-                "libsvtav1", "librav1e",
-                "h264_nvenc", "hevc_nvenc", "av1_nvenc",
-                "h264_vaapi", "hevc_vaapi", "vp9_vaapi", "av1_vaapi",
-                "h264_qsv", "hevc_qsv", "vp9_qsv", "av1_qsv"};
+        String[] all = {"copy", "none",
+                "libx264", "h264_nvenc", "h264_qsv", "h264_vaapi",
+                "libx265", "hevc_nvenc", "hevc_qsv", "hevc_vaapi",
+                "libvpx-vp9", "vp9_qsv", "vp9_vaapi",
+                "libaom-av1", "libsvtav1", "librav1e", "av1_nvenc", "av1_qsv", "av1_vaapi"};
         putGroup(field, "mkv", all);
         putGroup(field, "mp4", all);
         putGroup(field, "mov", all);
         putGroup(field, "avi", all);
         putGroup(field, "ts", all);
         putGroup(field, "m4a", "none");
-        putGroup(field, "webm", "none", "libvpx-vp9", "libaom-av1", "libsvtav1", "librav1e",
-                "vp9_qsv", "vp9_vaapi", "av1_qsv", "av1_vaapi", "av1_nvenc");
+        putGroup(field, "webm", "none",
+                "libvpx-vp9", "vp9_qsv", "vp9_vaapi",
+                "libaom-av1", "libsvtav1", "librav1e", "av1_nvenc", "av1_qsv", "av1_vaapi");
         return field;
     }
 

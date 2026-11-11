@@ -47,7 +47,8 @@
   队列按两遍执行并把进度折算成 0–100%，passlog 在成功/失败/取消后清理。不支持的编码器或
   CRF/CQP 组合会在保存、预览和提交任务时直接拒绝，不会跑到一半才失败。
 - 补齐编码器：NVENC AV1、QSV VP9/AV1、VAAPI VP9/AV1，以及软件 AV1 的 SVT-AV1 与 rav1e；
-  WebM 容器现在也能选 VP9/AV1 的硬件编码器。速度档、profile、tune、像素格式按编码器家族联动，
+  WebM 容器现在也能选 VP9/AV1 的硬件编码器。下拉列表按 H.264 / H.265 / VP9 / AV1 分组，
+  同格式的软件与硬件编码器排在一起。速度档、profile、tune、像素格式按编码器家族联动，
   VAAPI VP9/AV1 不生成它们没有的 `-quality`，rav1e 用 `-speed`/`-qp` 而不是通用的
   `-preset`/`-crf`。
 - 修复 `libaom-av1` 被误判成图片编码器的问题：此前选它会强制单帧并丢掉音轨。
