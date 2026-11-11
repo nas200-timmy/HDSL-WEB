@@ -57,11 +57,35 @@ public final class PresetTransfer {
         preset.videoEncoder = nonBlank(text(source, "视频参数_编码器_具体编码"), preset.videoEncoder);
         preset.preset = nonBlank(text(source, "视频参数_编码器_编码预设"), preset.preset);
         preset.profile = text(source, "视频参数_编码器_配置文件");
+        preset.tune = text(source, "视频参数_编码器_场景优化");
+        preset.pixelFormat = text(source, "视频参数_色彩管理_像素格式");
         preset.threads = text(source, "视频参数_编码器_threads");
         preset.width = text(source, "视频参数_分辨率自动计算_宽度");
         preset.height = text(source, "视频参数_分辨率自动计算_高度");
         preset.fps = text(source, "视频参数_帧速率");
         preset.crop = text(source, "视频参数_分辨率_裁剪滤镜参数");
+
+        String control = text(source, "视频参数_比特率_控制方式").trim();
+        String qualityValue = text(source, "视频参数_质量控制_值").trim();
+        String bitrate = text(source, "视频参数_比特率_基础").trim();
+        if (!qualityValue.isBlank()) {
+            preset.qualityValue = qualityValue;
+        } else if (!bitrate.isBlank()) {
+            preset.qualityValue = bitrate;
+        }
+        switch (control.toUpperCase(java.util.Locale.ROOT)) {
+            case "CRF" -> preset.qualityMode = "crf";
+            case "CQP" -> preset.qualityMode = "cqp";
+            case "VBR", "VBR HQ" -> preset.qualityMode = "vbr";
+            case "CBR" -> preset.qualityMode = "cbr";
+            default -> {
+                // 3FUI 没写控制方式时，按编码器是否硬件选择合法的默认值。
+                preset.qualityMode = hardwareEncoder(preset.videoEncoder) ? "cqp" : "crf";
+            }
+        }
+        preset.bitrateMin = text(source, "视频参数_比特率_最低值");
+        preset.bitrateMax = text(source, "视频参数_比特率_最高值");
+        preset.bitrateBuf = text(source, "视频参数_比特率_缓冲区");
 
         preset.audioEncoder = nonBlank(text(source, "音频参数_编码器_代号"), preset.audioEncoder);
         preset.audioBitrate = nonBlank(text(source, "音频参数_比特率"), preset.audioBitrate);
@@ -118,6 +142,22 @@ public final class PresetTransfer {
         object.addProperty("视频参数_编码器_具体编码", preset.videoEncoder);
         object.addProperty("视频参数_编码器_编码预设", preset.preset);
         object.addProperty("视频参数_编码器_配置文件", preset.profile);
+        object.addProperty("视频参数_编码器_场景优化", preset.tune);
+        object.addProperty("视频参数_色彩管理_像素格式", preset.pixelFormat);
+        object.addProperty("视频参数_比特率_控制方式", switch (preset.qualityMode) {
+            case "cqp" -> "CQP";
+            case "vbr" -> "VBR";
+            case "cbr" -> "CBR";
+            case "bitrate" -> "CBR";
+            case "none" -> "";
+            default -> "CRF";
+        });
+        object.addProperty("视频参数_质量控制_值", preset.qualityValue);
+        object.addProperty("视频参数_比特率_基础",
+                java.util.List.of("bitrate", "vbr", "cbr").contains(preset.qualityMode) ? preset.qualityValue : "");
+        object.addProperty("视频参数_比特率_最低值", preset.bitrateMin);
+        object.addProperty("视频参数_比特率_最高值", preset.bitrateMax);
+        object.addProperty("视频参数_比特率_缓冲区", preset.bitrateBuf);
         object.addProperty("视频参数_编码器_threads", preset.threads);
         object.addProperty("视频参数_分辨率自动计算_宽度", preset.width);
         object.addProperty("视频参数_分辨率自动计算_高度", preset.height);
@@ -150,6 +190,12 @@ public final class PresetTransfer {
         item.addProperty("字段", key);
         item.addProperty("值", value);
         array.add(item);
+    }
+
+    private static boolean hardwareEncoder(String encoder) {
+        return encoder != null && (encoder.endsWith("_nvenc") || encoder.endsWith("_qsv")
+                || encoder.endsWith("_vaapi") || encoder.endsWith("_amf")
+                || encoder.endsWith("_d3d12va") || encoder.endsWith("_vulkan"));
     }
 
     private static String text(JsonObject object, String key) {
