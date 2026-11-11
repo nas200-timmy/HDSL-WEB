@@ -1220,6 +1220,17 @@
   outline-offset: -1px;
 }
 
+.tc-select-option.unavailable {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tc-select-note {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--monet-error, #b3261e);
+}
+
 .tc-select-option-label {
   flex: 0 1 42%;
   min-width: 0;

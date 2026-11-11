@@ -109,7 +109,7 @@ public final class TranscodeApiServlet extends HttpServlet {
             return;
         }
         if ("/presets/schema".equals(path)) {
-            Json.write(response, PresetSchema.json());
+            Json.write(response, PresetSchema.json(module.runtime().info().encoders()));
             return;
         }
         if (path.startsWith("/presets/")) {

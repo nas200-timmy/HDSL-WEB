@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.transcode.preset;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.jetbrains.annotations.NotNullByDefault;
 
@@ -38,6 +39,12 @@ public final class PresetSchema {
     }
 
     public static JsonObject json() {
+        return json(null);
+    }
+
+    /// `availableEncoders` comes from `ffmpeg -encoders`; the schema marks the rest as
+    /// unavailable so the form can gray them out instead of failing after submit.
+    public static JsonObject json(java.util.Collection<String> availableEncoders) {
         JsonObject root = new JsonObject();
         root.addProperty("version", 2);
         JsonArray sections = new JsonArray();
@@ -114,13 +121,23 @@ public final class PresetSchema {
                                 "hevc_vulkan", "Vulkan H.265（实验性，需可用 Vulkan 设备）",
                                 "av1_vulkan", "Vulkan AV1（实验性，需可用 Vulkan 设备）")),
                         important(),
-                        qualityModeGroups(hint(select("qualityMode", "质量模式", "crf", "crf", "cqp", "bitrate"),
-                                "crf 恒定质量（软件编码推荐）；cqp 固定质量（硬件）；bitrate 固定码率",
-                                "crf", "恒定质量，越小越清晰（推荐）",
+                        qualityModeGroups(hint(select("qualityMode", "质量模式", "crf",
+                                "crf", "cqp", "vbr", "cbr", "bitrate", "none"),
+                                "crf 恒定质量；cqp 固定 QP；vbr/cbr 固定目标码率；none 不加质量参数",
+                                "crf", "恒定质量，越小越清晰（软件编码推荐）",
                                 "cqp", "固定质量/QP，硬件编码常用",
-                                "bitrate", "固定码率，按目标体积/带宽")),
+                                "vbr", "可变码率：按目标码率浮动，画质优先",
+                                "cbr", "固定码率：码率最稳，同体积画质更差",
+                                "bitrate", "兼容旧预设：只写 -b:v",
+                                "none", "不输出质量参数，交给编码器默认")),
                         hint(text("qualityValue", "质量值 / 码率", "20"),
-                                "x264/x265 CRF 常用 18–28；硬件 CQP 常用 20–28；bitrate 写 2500k 或 5M"),
+                                "CRF/CQP 写数字（x264/x265 常用 18–28）；VBR/CBR 写 2500k 或 5M"),
+                        hint(text("bitrateMin", "最低码率 minrate", ""),
+                                "仅 VBR/CBR 生效，可留空；例 1500k"),
+                        hint(text("bitrateMax", "最高码率 maxrate", ""),
+                                "仅 VBR/CBR 生效，可留空；例 4000k"),
+                        hint(text("bitrateBuf", "码率缓冲 bufsize", ""),
+                                "仅 VBR/CBR 生效，可留空；常用 2 倍最高码率"),
                         hint(booleanField("twoPass", "两遍编码", false),
                                 "只支持 x264/x265 + 固定码率；第一遍分析、第二遍出片，更接近目标体积"),
                         important(),
@@ -221,7 +238,11 @@ public final class PresetSchema {
                         hint(text("gop", "关键帧间隔 GOP", ""), "留空由编码器决定；按秒算可填 250（约 10 秒 @25fps）"),
                         hint(text("threads", "线程数", ""), "留空自动；限制 CPU 占用时可填 4/6"),
                         hint(text("videoMap", "视频流选择 map", "0:v:0?"),
-                                "0:v:0? 第一条视频；0:v? 保留全部视频流（copy 时常用）")
+                                "0:v:0? 第一条视频；0:v? 保留全部视频流（copy 时常用）"),
+                        hint(booleanField("videoKeepOthers", "保留其它视频流", false),
+                                "map 全部视频流，只重编码索引指定的那条，其余直接 copy"),
+                        hint(text("videoStreamIndex", "要重编码的视频流索引", "0"),
+                                "从 0 开始；仅在「保留其它视频流」开启时生效")
                 )
         }));
 
@@ -329,6 +350,10 @@ public final class PresetSchema {
                         hint(text("audioSampleRate", "采样率", ""), "留空跟随源；常用 48000"),
                         hint(text("audioMap", "音频流选择 map", "0:a?"),
                                 "0:a? 全部音轨；只要第一条写 0:a:0?"),
+                        hint(booleanField("audioKeepOthers", "保留其它音轨", false),
+                                "map 全部音轨，只重编码索引指定的那条，其余直接 copy"),
+                        hint(text("audioStreamIndex", "要重编码的音轨索引", "0"),
+                                "从 0 开始；仅在「保留其它音轨」开启时生效"),
                         hint(text("audioVolume", "音量（倍数或 dB）", ""),
                                 "只在重新编码时生效；例 1.0 原样、0.8 减小、-3dB 降低 3 dB"),
                         hint(booleanField("loudnormEnabled", "响度标准化", false),
@@ -342,13 +367,22 @@ public final class PresetSchema {
                 )
         }));
 
-        sections.add(section("字幕", "copy 保留字幕轨；burn 烧进画面（需要字体）；none 丢弃。", new JsonArray[]{
+        sections.add(section("字幕", "copy 保留字幕轨；convert 转字幕格式；burn 烧进画面（需要字体）；none 丢弃。",
+                new JsonArray[]{
                 fields(
-                        hint(select("subtitleMode", "字幕模式", "copy", "copy", "burn", "none"),
-                                "copy 原样保留字幕轨；burn 烧进画面；none 丢弃",
+                        hint(select("subtitleMode", "字幕模式", "copy", "copy", "convert", "burn", "none"),
+                                "copy 原样保留；convert 转格式（MP4 常用 mov_text）；burn 烧进画面；none 丢弃",
                                 "copy", "保留字幕轨，不烧录（推荐）",
+                                "convert", "转换字幕编码，MP4 里 ASS/PGS 先转 mov_text",
                                 "burn", "烧录到画面，兼容一切播放器",
                                 "none", "丢弃字幕"),
+                        hint(select("subtitleCodec", "转换目标格式", "mov_text",
+                                "mov_text", "ass", "srt", "webvtt"),
+                                "仅在 convert 时生效；MP4/MOV 只能 mov_text",
+                                "mov_text", "MP4/MOV 字幕，兼容性最好",
+                                "ass", "保留样式，MKV 常用",
+                                "srt", "纯文本字幕",
+                                "webvtt", "WebVTT，Web 播放常用"),
                         important(),
                         hint(text("subtitleFile", "烧录字幕文件（相对媒体根）", ""),
                                 "只在 burn 时使用；ASS/SRT 都行，中文字体缺失会显示方块"),
@@ -356,7 +390,12 @@ public final class PresetSchema {
                         hint(text("subtitleFontSize", "字号", ""), "burn 时生效，例 24"),
                         hint(text("subtitleStyle", "额外字幕样式", ""),
                                 "force_style 片段，例 Bold=1,Outline=1；留空只改字体/字号"),
-                        hint(text("subtitleMap", "字幕流选择 map", "0:s?"), "0:s? 全部字幕；0:s:0? 第一条")
+                        hint(text("subtitleMap", "字幕流选择 map", "0:s?"),
+                                "0:s? 全部字幕；0:s:0? 第一条"),
+                        hint(booleanField("subtitleKeepOthers", "保留其它字幕轨", false),
+                                "map 全部字幕，只转换索引指定的那条，其余直接 copy"),
+                        hint(text("subtitleStreamIndex", "要转换的字幕流索引", "0"),
+                                "从 0 开始；仅在「保留其它字幕轨」开启时生效")
                 )
         }));
 
@@ -387,7 +426,33 @@ public final class PresetSchema {
         }));
 
         root.add("sections", sections);
+        if (availableEncoders != null) {
+            markUnavailableEncoders(sections, availableEncoders);
+        }
         return root;
+    }
+
+    private static void markUnavailableEncoders(JsonArray sections, java.util.Collection<String> available) {
+        for (JsonElement sectionElement : sections) {
+            JsonObject section = sectionElement.getAsJsonObject();
+            if (!section.has("fields")) {
+                continue;
+            }
+            for (JsonElement fieldElement : section.getAsJsonArray("fields")) {
+                JsonObject field = fieldElement.getAsJsonObject();
+                if (!"videoEncoder".equals(field.get("id").getAsString())) {
+                    continue;
+                }
+                JsonArray unavailable = new JsonArray();
+                for (JsonElement option : field.getAsJsonArray("options")) {
+                    String name = option.getAsString();
+                    if (!"copy".equals(name) && !"none".equals(name) && !available.contains(name)) {
+                        unavailable.add(name);
+                    }
+                }
+                field.add("unavailable", unavailable);
+            }
+        }
     }
 
     private static JsonObject section(String title, String hint, JsonArray[] groups) {
@@ -496,32 +561,35 @@ public final class PresetSchema {
 
     /// CRF 只有软件编码器支持；硬件编码器用 CQP + 固定码率。
     private static JsonObject qualityModeGroups(JsonObject field) {
-        putGroup(field, "x264", "crf", "cqp", "bitrate");
-        putGroup(field, "x265", "crf", "cqp", "bitrate");
-        putGroup(field, "vp9", "crf", "bitrate");
-        putGroup(field, "av1", "crf", "bitrate");
-        putGroup(field, "nvencH264", "cqp", "bitrate");
-        putGroup(field, "nvencHevc", "cqp", "bitrate");
-        putGroup(field, "qsvH264", "cqp", "bitrate");
-        putGroup(field, "qsvHevc", "cqp", "bitrate");
-        putGroup(field, "vaapiH264", "cqp", "bitrate");
-        putGroup(field, "vaapiHevc", "cqp", "bitrate");
-        putGroup(field, "nvencAv1", "cqp", "bitrate");
-        putGroup(field, "qsvVp9", "cqp", "bitrate");
-        putGroup(field, "qsvAv1", "cqp", "bitrate");
-        putGroup(field, "vaapiVp9", "cqp", "bitrate");
-        putGroup(field, "vaapiAv1", "cqp", "bitrate");
-        putGroup(field, "av1svt", "crf", "bitrate");
-        putGroup(field, "av1rav1e", "crf", "bitrate");
-        putGroup(field, "amfH264", "cqp", "bitrate");
-        putGroup(field, "amfHevc", "cqp", "bitrate");
-        putGroup(field, "amfAv1", "cqp", "bitrate");
-        putGroup(field, "d3d12vaH264", "cqp", "bitrate");
-        putGroup(field, "d3d12vaHevc", "cqp", "bitrate");
-        putGroup(field, "d3d12vaAv1", "cqp", "bitrate");
-        putGroup(field, "vulkanH264", "cqp", "bitrate");
-        putGroup(field, "vulkanHevc", "cqp", "bitrate");
-        putGroup(field, "vulkanAv1", "cqp", "bitrate");
+        String[] software = {"crf", "cqp", "bitrate", "vbr", "cbr", "none"};
+        String[] softwareAv1Vp9 = {"crf", "bitrate", "vbr", "cbr", "none"};
+        String[] hardware = {"cqp", "bitrate", "vbr", "cbr", "none"};
+        putGroup(field, "x264", software);
+        putGroup(field, "x265", software);
+        putGroup(field, "vp9", softwareAv1Vp9);
+        putGroup(field, "av1", softwareAv1Vp9);
+        putGroup(field, "nvencH264", hardware);
+        putGroup(field, "nvencHevc", hardware);
+        putGroup(field, "qsvH264", hardware);
+        putGroup(field, "qsvHevc", hardware);
+        putGroup(field, "vaapiH264", hardware);
+        putGroup(field, "vaapiHevc", hardware);
+        putGroup(field, "nvencAv1", hardware);
+        putGroup(field, "qsvVp9", hardware);
+        putGroup(field, "qsvAv1", hardware);
+        putGroup(field, "vaapiVp9", hardware);
+        putGroup(field, "vaapiAv1", hardware);
+        putGroup(field, "av1svt", softwareAv1Vp9);
+        putGroup(field, "av1rav1e", softwareAv1Vp9);
+        putGroup(field, "amfH264", hardware);
+        putGroup(field, "amfHevc", hardware);
+        putGroup(field, "amfAv1", hardware);
+        putGroup(field, "d3d12vaH264", hardware);
+        putGroup(field, "d3d12vaHevc", hardware);
+        putGroup(field, "d3d12vaAv1", hardware);
+        putGroup(field, "vulkanH264", hardware);
+        putGroup(field, "vulkanHevc", hardware);
+        putGroup(field, "vulkanAv1", hardware);
         return field;
     }
 

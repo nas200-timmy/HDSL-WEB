@@ -98,17 +98,25 @@ public final class CommandBuilder {
             args.add("-vn");
         } else {
             args.add("-map");
-            args.add(preset.videoMap == null || preset.videoMap.isBlank() ? "0:v:0?" : preset.videoMap);
+            String videoMap = preset.videoKeepOthers ? "0:v?"
+                    : preset.videoMap == null || preset.videoMap.isBlank() ? "0:v:0?" : preset.videoMap;
+            args.add(videoMap);
         }
         if (!image && !"none".equals(preset.audioMode)) {
             args.add("-map");
-            args.add(preset.audioMap == null || preset.audioMap.isBlank() ? "0:a?" : preset.audioMap);
+            String audioMap = preset.audioKeepOthers ? "0:a?"
+                    : preset.audioMap == null || preset.audioMap.isBlank() ? "0:a?" : preset.audioMap;
+            args.add(audioMap);
         }
-        if (!image && "copy".equals(preset.subtitleMode)) {
+        if (!image && ("copy".equals(preset.subtitleMode) || "convert".equals(preset.subtitleMode))) {
             args.add("-map");
-            args.add(preset.subtitleMap == null || preset.subtitleMap.isBlank() ? "0:s?" : preset.subtitleMap);
+            String subtitleMap = preset.subtitleKeepOthers ? "0:s?"
+                    : preset.subtitleMap == null || preset.subtitleMap.isBlank() ? "0:s?" : preset.subtitleMap;
+            args.add(subtitleMap);
         }
-        if (!image && preset.copyAttachments && pass != 1) {
+        boolean keepAttachments = !image && preset.copyAttachments
+                && supportsAttachments(preset.container) && pass != 1;
+        if (keepAttachments) {
             args.add("-map");
             args.add("0:t?");
         }
@@ -122,8 +130,15 @@ public final class CommandBuilder {
                 args.add("-c:v");
                 args.add("copy");
             } else {
-                args.add("-c:v");
-                args.add(video);
+                if (preset.videoKeepOthers) {
+                    args.add("-c:v");
+                    args.add("copy");
+                    args.add("-c:v:" + preset.videoStreamIndex);
+                    args.add(video);
+                } else {
+                    args.add("-c:v");
+                    args.add(video);
+                }
                 addQuality(args, preset, video);
                 if (video.endsWith("_qsv") && !preset.videoArgs.contains("-low_power")) {
                     args.add("-low_power");
@@ -183,7 +198,11 @@ public final class CommandBuilder {
                 }
             }
             if (!copyVideo && !filters.isEmpty()) {
-                args.add("-vf");
+                if (preset.videoKeepOthers) {
+                    args.add("-filter:v:" + preset.videoStreamIndex);
+                } else {
+                    args.add("-vf");
+                }
                 args.add(String.join(",", filters));
             }
             if (!copyVideo) {
@@ -217,8 +236,15 @@ public final class CommandBuilder {
                 args.add("copy");
             }
             default -> {
-                args.add("-c:a");
-                args.add(preset.audioEncoder);
+                if (preset.audioKeepOthers) {
+                    args.add("-c:a");
+                    args.add("copy");
+                    args.add("-c:a:" + preset.audioStreamIndex);
+                    args.add(preset.audioEncoder);
+                } else {
+                    args.add("-c:a");
+                    args.add(preset.audioEncoder);
+                }
                 if (!blank(preset.audioBitrate)) {
                     args.add("-b:a");
                     args.add(preset.audioBitrate);
@@ -238,7 +264,11 @@ public final class CommandBuilder {
         if (!image && "encode".equals(preset.audioMode)) {
             List<String> audioFilters = audioFilters(preset);
             if (!audioFilters.isEmpty()) {
-                args.add("-af");
+                if (preset.audioKeepOthers) {
+                    args.add("-filter:a:" + preset.audioStreamIndex);
+                } else {
+                    args.add("-af");
+                }
                 args.add(String.join(",", audioFilters));
             }
         }
@@ -250,12 +280,23 @@ public final class CommandBuilder {
                     args.add("-c:s");
                     args.add("copy");
                 }
+                case "convert" -> {
+                    if (preset.subtitleKeepOthers) {
+                        args.add("-c:s");
+                        args.add("copy");
+                        args.add("-c:s:" + preset.subtitleStreamIndex);
+                        args.add(preset.subtitleCodec);
+                    } else {
+                        args.add("-c:s");
+                        args.add(preset.subtitleCodec);
+                    }
+                }
                 default -> {
                     // `burn` is handled in filters(); no subtitle stream is copied.
                 }
             }
             args.addAll(preset.subtitleArgs);
-            if (preset.copyAttachments) {
+            if (keepAttachments) {
                 args.add("-c:t");
                 args.add("copy");
             }
@@ -290,7 +331,7 @@ public final class CommandBuilder {
         }
         metadata(args, preset);
         args.add("-map_chapters");
-        if (image) {
+        if (image || !supportsChapters(preset.container)) {
             args.add("-1");
         } else if (chapters != null) {
             args.add("1");
@@ -370,35 +411,27 @@ public final class CommandBuilder {
 
     private static void addQuality(List<String> args, TranscodePreset preset, String encoder) {
         String mode = preset.qualityMode == null ? "crf" : preset.qualityMode;
-        if ("bitrate".equals(mode)) {
+        if ("none".equals(mode)) {
+            return;
+        }
+        if (List.of("bitrate", "vbr", "cbr").contains(mode)) {
             if (encoder.endsWith("_amf")) {
                 args.add("-rc");
-                args.add("cbr");
+                args.add("cbr".equals(mode) || "bitrate".equals(mode) ? "cbr" : "vbr");
             } else if (encoder.endsWith("_d3d12va")) {
                 args.add("-rc_mode");
-                args.add("CBR");
+                args.add("cbr".equals(mode) || "bitrate".equals(mode) ? "CBR" : "VBR");
             }
             args.add("-b:v");
             args.add(preset.qualityValue);
-        } else if (encoder.contains("_qsv")) {
-            // QSV has no -qp; its constant-quality knob is -global_quality.
-            args.add("-global_quality");
-            args.add(preset.qualityValue);
-        } else if (encoder.contains("_vaapi")) {
-            args.add("-qp");
-            args.add(preset.qualityValue);
-        } else if (encoder.contains("_nvenc")) {
-            if ("cqp".equals(mode)) {
-                args.add("-qp");
-            } else {
-                args.add("-cq");
+            if (!"bitrate".equals(mode)) {
+                addIfPresent(args, "-minrate", preset.bitrateMin);
+                addIfPresent(args, "-maxrate", preset.bitrateMax);
+                addIfPresent(args, "-bufsize", preset.bitrateBuf);
             }
-            args.add(preset.qualityValue);
-        } else if ("librav1e".equals(encoder)) {
-            // rav1e 没有 -crf，恒定质量走 -qp。
-            args.add("-qp");
-            args.add(preset.qualityValue);
-        } else if ("cqp".equals(mode)) {
+            return;
+        }
+        if ("cqp".equals(mode)) {
             if (encoder.endsWith("_amf")) {
                 args.add("-rc");
                 args.add("cqp");
@@ -406,25 +439,58 @@ public final class CommandBuilder {
                 args.add("-rc_mode");
                 args.add("CQP");
             }
-            args.add("-qp");
+            args.add(encoder.endsWith("_qsv") ? "-global_quality" : "-qp");
             args.add(preset.qualityValue);
+            return;
+        }
+        // CRF / constant quality.
+        if (encoder.endsWith("_qsv")) {
+            args.add("-global_quality");
+        } else if (encoder.endsWith("_vaapi")) {
+            args.add("-qp");
+        } else if (encoder.endsWith("_nvenc")) {
+            args.add("-cq");
+        } else if ("librav1e".equals(encoder)) {
+            // rav1e 没有 -crf，恒定质量走 -qp。
+            args.add("-qp");
         } else {
             args.add("-crf");
-            args.add(preset.qualityValue);
         }
+        args.add(preset.qualityValue);
+    }
+
+    private static void addIfPresent(List<String> args, String option, String value) {
+        if (value != null && !value.isBlank()) {
+            args.add(option);
+            args.add(value);
+        }
+    }
+
+    private static boolean supportsAttachments(String container) {
+        return container != null && !List.of("mp4", "mov", "avi", "ts", "m4a")
+                .contains(container.toLowerCase(java.util.Locale.ROOT));
+    }
+
+    private static boolean supportsChapters(String container) {
+        return container != null && List.of("mkv", "mp4", "mov", "m4a")
+                .contains(container.toLowerCase(java.util.Locale.ROOT));
     }
 
     private static List<String> filters(TranscodePreset preset, boolean vaapi, Path subtitle) {
         List<String> filters = new ArrayList<>();
+        // 裁剪与反交错都在缩放之前：裁剪坐标按源画面算，反交错在原始分辨率上效果最好。
+        if (!blank(preset.crop)) {
+            filters.add("crop=" + preset.crop);
+        }
+        if ("yadif".equals(preset.deinterlace)) {
+            filters.add("yadif");
+        }
         if (!blank(preset.width) || !blank(preset.height)) {
             filters.add("scale=" + (blank(preset.width) ? "-2" : preset.width)
                     + ":" + (blank(preset.height) ? "-2" : preset.height));
         }
         if (!blank(preset.fps)) {
             filters.add("fps=" + preset.fps);
-        }
-        if (!blank(preset.crop)) {
-            filters.add("crop=" + preset.crop);
         }
         switch (preset.rotate == null ? "" : preset.rotate) {
             case "90" -> filters.add("transpose=1");
@@ -435,9 +501,6 @@ public final class CommandBuilder {
             case "270" -> filters.add("transpose=2");
             default -> {
             }
-        }
-        if ("yadif".equals(preset.deinterlace)) {
-            filters.add("yadif");
         }
         // 画面增强：降噪 → 锐化 → 去色带 → 简易调色（与 FFmpegFreeUI 的参数顺序一致）。
         if (!blank(preset.denoise)) {

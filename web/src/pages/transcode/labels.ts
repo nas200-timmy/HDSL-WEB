@@ -53,7 +53,22 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
   qualityMode: {
     crf: "CRF 恒定质量",
     cqp: "CQP 固定质量",
-    bitrate: "固定码率",
+    bitrate: "固定码率（旧）",
+    vbr: "VBR 可变码率",
+    cbr: "CBR 固定码率",
+    none: "不指定质量",
+  },
+  subtitleMode: {
+    copy: "保留字幕轨",
+    convert: "转换字幕格式",
+    burn: "烧录到画面",
+    none: "丢弃字幕",
+  },
+  subtitleCodec: {
+    mov_text: "mov_text（MP4）",
+    ass: "ASS",
+    srt: "SRT",
+    webvtt: "WebVTT",
   },
   preset: {
     "": "自动",
@@ -157,11 +172,6 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
     ac3: "AC-3",
     eac3: "E-AC-3",
   },
-  subtitleMode: {
-    copy: "保留字幕轨",
-    burn: "烧录进画面",
-    none: "丢弃字幕",
-  },
   denoise: {
     "": "不降噪",
     hqdn3d: "hqdn3d 时空降噪",
@@ -201,7 +211,7 @@ export function valueTip(
 
 // 依赖别的选项才有意义的字段：视频不重新编码时，画面/质量/编码档位全部不生效。
 const VIDEO_ENCODER_FIELDS = new Set([
-  "qualityMode", "qualityValue", "preset", "profile", "level", "tune",
+  "qualityMode", "qualityValue", "bitrateMin", "bitrateMax", "bitrateBuf", "preset", "profile", "level", "tune",
   "pixelFormat", "tenBit", "gop", "threads",
   "width", "height", "fps", "crop", "rotate", "deinterlace", "filterGraph",
   "colorPrimaries", "colorTransfer", "colorMatrix", "colorRange",
@@ -211,6 +221,7 @@ const VIDEO_ENCODER_FIELDS = new Set([
 const AUDIO_ENCODE_FIELDS = new Set([
   "audioEncoder", "audioBitrate", "audioChannels", "audioSampleRate",
   "audioVolume", "loudnormEnabled", "loudnormI", "loudnormTP", "loudnormLRA",
+  "audioStreamIndex",
 ]);
 const SUBTITLE_BURN_FIELDS = new Set(["subtitleFile", "subtitleFont", "subtitleFontSize", "subtitleStyle"]);
 const NO_TUNE_FAMILIES = new Set([
@@ -327,6 +338,31 @@ export function inactiveReason(fieldId: string, preset: TranscodePreset): string
   }
   if (fieldId === "profile" && PROFILELESS_FAMILIES.has(family)) {
     return "此编码器没有 profile 选项";
+  }
+  if (["bitrateMin", "bitrateMax", "bitrateBuf"].includes(fieldId)
+      && !["vbr", "cbr"].includes(String(preset.qualityMode ?? "crf"))) {
+    return "仅 VBR/CBR 生效";
+  }
+  if (fieldId === "qualityValue" && String(preset.qualityMode ?? "crf") === "none") {
+    return "已选「不指定质量」";
+  }
+  if (fieldId === "subtitleCodec" && String(preset.subtitleMode ?? "copy") !== "convert") {
+    return "字幕未转换，此项不生效";
+  }
+  if (fieldId === "videoStreamIndex" && preset.videoKeepOthers !== true) {
+    return "未开启「保留其它视频流」";
+  }
+  if (fieldId === "audioStreamIndex" && preset.audioKeepOthers !== true) {
+    return "未开启「保留其它音轨」";
+  }
+  if (fieldId === "audioKeepOthers" && String(preset.audioMode ?? "copy") !== "encode") {
+    return "音频未重新编码，此项不生效";
+  }
+  if (fieldId === "subtitleStreamIndex" && preset.subtitleKeepOthers !== true) {
+    return "未开启「保留其它字幕轨」";
+  }
+  if (fieldId === "videoKeepOthers" && (encoder === "copy" || encoder === "none")) {
+    return "不重新编码视频，此项不生效";
   }
   if (fieldId === "denoiseParams" && String(preset.denoise ?? "") === "") {
     return "未选择降噪方式";

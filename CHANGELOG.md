@@ -55,6 +55,15 @@
 - 增加 Windows 侧硬件编码器：AMD AMF（H.264/H.265/AV1）、D3D12VA（H.264/H.265/AV1）与
   Vulkan（H.264/H.265/AV1）。AMF 的速度档走 `-quality`、场景优化走 `-usage`，D3D12VA 用
   `-rc_mode`，不会像普通硬件编码器那样误发 `-preset`/`-tune`；降级链回落到 x264/x265/SVT-AV1。
+- 编码器下拉按当前 ffmpeg 的 `-encoders` 置灰：构建里没有的编码器显示为「不可用」，不再等到
+  提交后才报错。
+- 质量页补 VBR/CBR 与 `none`：可填 `minrate` / `maxrate` / `bufsize`；旧的 `bitrate` 保留兼容。
+- 字幕新增「转换格式」：MKV 可转 ASS/SRT/WebVTT，MP4/MOV 自动用 mov_text；不再只能 copy 或烧录。
+- 流控制支持「保留其它视频/音频/字幕轨」：map 全部轨道，只对索引指定的那条重新编码/转换，
+  其余直接 copy；默认行为仍是全部保留、音频/字幕 copy。
+- 滤镜顺序修正：裁剪和反交错移到缩放之前，裁剪坐标按源画面计算。
+- 后端在保存、预览、提交前校验编码器与质量模式、容器与编码器、MP4 字幕格式、流控制组合；
+  MP4/AVI/TS/WebM 等装不下的附件/章节会直接跳过，不再让 ffmpeg 跑到一半才失败。
 - 后端：视频 `copy` 时不再输出 `-vf` 与色彩标记，避免生成 ffmpeg 直接报错的命令。
 - 参数面板改成三栏工作台：预设列表（单击应用）/ 分区导航 / 字段区 + 右侧参数总览与实时命令行；
   字段旁直接显示一行说明，下拉逐项解释（schema 新增 `hint` / `optionHints` / `important`）。

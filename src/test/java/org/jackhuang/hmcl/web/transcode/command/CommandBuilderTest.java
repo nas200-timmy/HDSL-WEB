@@ -316,4 +316,140 @@ class CommandBuilderTest {
         assertTrue(vulkanCommand.contains("-pix_fmt vulkan"));
     }
 
+    @Test
+    void filterOrderPutsCropAndDeinterlaceBeforeScale(@TempDir Path dir) {
+        TranscodePreset preset = preset();
+        preset.crop = "640:360:0:0";
+        preset.deinterlace = "yadif";
+        preset.width = "1280";
+        String command = joined(CommandBuilder.build(preset, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        int crop = command.indexOf("crop=640:360:0:0");
+        int deinterlace = command.indexOf("yadif");
+        int scale = command.indexOf("scale=1280:-2");
+        assertTrue(crop >= 0 && deinterlace >= 0 && scale >= 0);
+        assertTrue(crop < scale);
+        assertTrue(deinterlace < scale);
+    }
+
+    @Test
+    void vbrAndCbrEmitBitrateBoundsAndNoneEmitsNoQualityFlag(@TempDir Path dir) {
+        TranscodePreset vbr = preset();
+        vbr.qualityMode = "vbr";
+        vbr.qualityValue = "2500k";
+        vbr.bitrateMax = "3500k";
+        vbr.bitrateBuf = "7000k";
+        String vbrCommand = joined(CommandBuilder.build(vbr, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(vbrCommand.contains("-b:v 2500k"));
+        assertTrue(vbrCommand.contains("-maxrate 3500k"));
+        assertTrue(vbrCommand.contains("-bufsize 7000k"));
+        assertTrue(!vbrCommand.contains("-crf"));
+
+        TranscodePreset cbr = preset();
+        cbr.videoEncoder = "libx264";
+        cbr.qualityMode = "cbr";
+        cbr.qualityValue = "3000k";
+        cbr.bitrateMin = "3000k";
+        cbr.bitrateMax = "3000k";
+        String cbrCommand = joined(CommandBuilder.build(cbr, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(cbrCommand.contains("-minrate 3000k"));
+        assertTrue(cbrCommand.contains("-maxrate 3000k"));
+
+        TranscodePreset none = preset();
+        none.qualityMode = "none";
+        String noneCommand = joined(CommandBuilder.build(none, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(!noneCommand.contains("-crf"));
+        assertTrue(!noneCommand.contains("-b:v"));
+        assertTrue(!noneCommand.contains("-qp"));
+    }
+
+    @Test
+    void subtitleConversionAndKeepOthersUsePerStreamCodecs(@TempDir Path dir) {
+        TranscodePreset convert = preset();
+        convert.container = "mp4";
+        convert.subtitleMode = "convert";
+        convert.subtitleCodec = "mov_text";
+        String convertCommand = joined(CommandBuilder.build(convert, dir.resolve("in.mkv"), dir.resolve("out.mp4")));
+        assertTrue(convertCommand.contains("-map 0:s?"));
+        assertTrue(convertCommand.contains("-c:s mov_text"));
+        assertTrue(!convertCommand.contains("-c:s copy"));
+
+        TranscodePreset keep = preset();
+        keep.subtitleMode = "convert";
+        keep.subtitleCodec = "ass";
+        keep.subtitleKeepOthers = true;
+        keep.subtitleStreamIndex = 2;
+        String keepCommand = joined(CommandBuilder.build(keep, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(keepCommand.contains("-c:s copy"));
+        assertTrue(keepCommand.contains("-c:s:2 ass"));
+    }
+
+    @Test
+    void streamControlKeepsOtherTracksAndEncodesOnlyTheSelectedOnes(@TempDir Path dir) {
+        TranscodePreset preset = preset();
+        preset.videoKeepOthers = true;
+        preset.videoStreamIndex = 1;
+        preset.width = "1280";
+        preset.audioMode = "encode";
+        preset.audioEncoder = "aac";
+        preset.audioBitrate = "192k";
+        preset.audioKeepOthers = true;
+        preset.audioStreamIndex = 0;
+        preset.audioVolume = "-3dB";
+        preset.subtitleMode = "convert";
+        preset.subtitleCodec = "ass";
+        preset.subtitleKeepOthers = true;
+        preset.subtitleStreamIndex = 2;
+        String command = joined(CommandBuilder.build(preset, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+        assertTrue(command.contains("-map 0:v?"));
+        assertTrue(command.contains("-map 0:a?"));
+        assertTrue(command.contains("-map 0:s?"));
+        assertTrue(command.contains("-c:v copy"));
+        assertTrue(command.contains("-c:v:1 libx264"));
+        assertTrue(command.contains("-filter:v:1 scale=1280:-2"));
+        assertTrue(command.contains("-c:a copy"));
+        assertTrue(command.contains("-c:a:0 aac"));
+        assertTrue(command.contains("-b:a 192k"));
+        assertTrue(command.contains("-filter:a:0 volume=-3dB"));
+        assertTrue(command.contains("-c:s copy"));
+        assertTrue(command.contains("-c:s:2 ass"));
+    }
+
+    @Test
+    void validationRejectsIncompatibleCombinations(@TempDir Path dir) {
+        TranscodePreset hardwareCrf = preset();
+        hardwareCrf.videoEncoder = "hevc_nvenc";
+        hardwareCrf.qualityMode = "crf";
+        assertThrows(IllegalArgumentException.class,
+                () -> CommandBuilder.build(hardwareCrf, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+
+        TranscodePreset webmH264 = preset();
+        webmH264.container = "webm";
+        assertThrows(IllegalArgumentException.class,
+                () -> CommandBuilder.build(webmH264, dir.resolve("in.mkv"), dir.resolve("out.webm")));
+
+        TranscodePreset m4aVideo = preset();
+        m4aVideo.container = "m4a";
+        assertThrows(IllegalArgumentException.class,
+                () -> CommandBuilder.build(m4aVideo, dir.resolve("in.mkv"), dir.resolve("out.m4a")));
+
+        TranscodePreset badSubtitle = preset();
+        badSubtitle.container = "mp4";
+        badSubtitle.subtitleMode = "convert";
+        badSubtitle.subtitleCodec = "ass";
+        assertThrows(IllegalArgumentException.class,
+                () -> CommandBuilder.build(badSubtitle, dir.resolve("in.mkv"), dir.resolve("out.mp4")));
+
+        TranscodePreset copyKeep = preset();
+        copyKeep.videoEncoder = "copy";
+        copyKeep.videoKeepOthers = true;
+        assertThrows(IllegalArgumentException.class,
+                () -> CommandBuilder.build(copyKeep, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+
+        TranscodePreset badBitrate = preset();
+        badBitrate.qualityMode = "vbr";
+        badBitrate.qualityValue = "not-a-bitrate";
+        assertThrows(IllegalArgumentException.class,
+                () -> CommandBuilder.build(badBitrate, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+    }
+
 }

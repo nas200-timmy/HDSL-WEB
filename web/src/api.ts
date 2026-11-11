@@ -1139,6 +1139,8 @@ export interface TranscodeSchemaField {
   optionHints?: Record<string, string>;
   /// Fields the overview and the beginner flow read first.
   important?: boolean;
+  /// Encoder values the current ffmpeg does not list; the form grays them out.
+  unavailable?: string[];
 }
 
 export interface TranscodeSchemaSection {

@@ -167,11 +167,14 @@ export function PresetsPage() {
           next.preset = "";
         } else if (encoder === "copy" || encoder === "none") {
           next.preset = "";
+          next.videoKeepOthers = false;
         } else {
           const family = encoderFamily(encoder);
           next.preset = remapSpeedPreset(encoder, next.preset);
-          // CRF 只给软件编码；硬件统一用 CQP，固定码率两种都保留。
-          next.qualityMode = next.qualityMode === "bitrate" ? "bitrate" : hardware ? "cqp" : "crf";
+          // CRF 只给软件编码；硬件统一用 CQP；码率族（bitrate/vbr/cbr）与 none 对所有编码器保留。
+          next.qualityMode = ["bitrate", "vbr", "cbr", "none"].includes(String(next.qualityMode))
+            ? next.qualityMode
+            : hardware ? "cqp" : "crf";
           for (const fieldId of ["pixelFormat", "profile", "tune"]) {
             const allowed = allowedValues(fieldId, family);
             if (allowed && next[fieldId] !== "" && !allowed.includes(String(next[fieldId]))) {
@@ -201,6 +204,20 @@ export function PresetsPage() {
         if (["mp4", "mov", "avi", "ts", "m4a"].includes(container)) {
           next.copyAttachments = false;
         }
+        if (["mp4", "mov"].includes(container) && next.subtitleMode === "convert") {
+          next.subtitleCodec = "mov_text";
+        }
+      }
+
+      if (id === "subtitleMode" && String(value) === "convert") {
+        const container = String(next.container ?? "").toLowerCase();
+        next.subtitleCodec = ["mp4", "mov"].includes(container) ? "mov_text" : "ass";
+      }
+      if (id === "subtitleMode" && String(value) === "burn") {
+        next.subtitleKeepOthers = false;
+      }
+      if (id === "audioMode" && String(value) !== "encode") {
+        next.audioKeepOthers = false;
       }
 
       // 质量模式换挡时把值也换成对应形态：码率 ↔ 质量值。
@@ -208,16 +225,17 @@ export function PresetsPage() {
         const mode = String(value);
         const currentValue = String(next.qualityValue ?? "");
         const bitrateLike = /^\d+(?:\.\d+)?[kKmM]$/.test(currentValue);
-        if (mode === "bitrate" && !bitrateLike) {
+        const bitrateMode = ["bitrate", "vbr", "cbr"].includes(mode);
+        if (bitrateMode && !bitrateLike) {
           next.qualityValue = "2500k";
-        } else if (mode !== "bitrate" && bitrateLike) {
+        } else if (!bitrateMode && mode !== "none" && bitrateLike) {
           next.qualityValue = "20";
         }
       }
 
-      // 两遍编码只对 x264/x265 + 固定码率生效；换到不支持的组合时自动关闭。
+      // 两遍编码只对 x264/x265 + 码率模式生效；换到不支持的组合时自动关闭。
       const twoPassEncoder = next.videoEncoder === "libx264" || next.videoEncoder === "libx265";
-      if (next.twoPass && !(twoPassEncoder && next.qualityMode === "bitrate")) {
+      if (next.twoPass && !(twoPassEncoder && ["bitrate", "vbr", "cbr"].includes(String(next.qualityMode)))) {
         next.twoPass = false;
       }
 
@@ -972,11 +990,13 @@ function Field({
     : field.id === "tune" && encoder.endsWith("_amf")
       ? "场景优化（-usage）"
       : field.id === "qualityValue"
-        ? qualityMode === "bitrate"
+        ? ["bitrate", "vbr", "cbr"].includes(qualityMode)
           ? "目标码率（如 2500k / 5M）"
-          : qualityMode === "cqp"
-            ? "CQP 值（越小越好）"
-            : "CRF 值（越小越清晰）"
+          : qualityMode === "none"
+            ? "质量值（不生效）"
+            : qualityMode === "cqp"
+              ? "CQP 值（越小越好）"
+              : "CRF 值（越小越清晰）"
         : field.label;
   return (
     <div className={`tc-field${field.important ? " important" : ""}${reason ? " inactive" : ""}`}>
@@ -1015,6 +1035,7 @@ function Field({
           value={String(value ?? "")}
           options={selectOptions}
           hints={field.optionHints}
+          unavailable={field.unavailable}
           disabled={controlDisabled}
           onChange={onChange}
         />
@@ -1040,6 +1061,7 @@ function ParamSelect({
   value,
   options,
   hints,
+  unavailable,
   disabled,
   onChange,
 }: {
@@ -1047,9 +1069,11 @@ function ParamSelect({
   value: string;
   options: string[];
   hints?: Record<string, string>;
+  unavailable?: string[];
   disabled: boolean;
   onChange: (value: string) => void;
 }) {
+  const unavailableSet = new Set(unavailable ?? []);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [box, setBox] = useState<{ left: number; top: number; width: number; columns: number; rows: number } | null>(null);
@@ -1104,9 +1128,18 @@ function ParamSelect({
 
   const choose = (index: number) => {
     const next = options[index];
-    if (next !== undefined && next !== value) onChange(next);
+    if (next !== undefined && !unavailableSet.has(next) && next !== value) onChange(next);
     setOpen(false);
     trigger.current?.focus();
+  };
+
+  const moveActive = (direction: 1 | -1) => {
+    setActive((index) => {
+      for (let next = index + direction; next >= 0 && next < options.length; next += direction) {
+        if (!unavailableSet.has(options[next])) return next;
+      }
+      return index;
+    });
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
@@ -1122,10 +1155,10 @@ function ParamSelect({
       setOpen(false);
     } else if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActive((index) => Math.min(options.length - 1, index + 1));
+      moveActive(1);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      setActive((index) => Math.max(0, index - 1));
+      moveActive(-1);
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       choose(active);
@@ -1146,7 +1179,10 @@ function ParamSelect({
         onClick={() => (open ? setOpen(false) : openList())}
         onKeyDown={onKeyDown}
       >
-        <span className="tc-select-current">{valueLabel(fieldId, value)}</span>
+        <span className="tc-select-current">
+          {valueLabel(fieldId, value)}
+          {unavailableSet.has(value) && <span className="tc-select-note">不可用</span>}
+        </span>
         <span className="tc-select-caret" aria-hidden="true" />
       </button>
       {open && box && createPortal(
@@ -1162,20 +1198,24 @@ function ParamSelect({
             gridTemplateRows: `repeat(${box.rows}, auto)`,
           }}
         >
-          {options.map((option, index) => (
+          {options.map((option, index) => {
+            const off = unavailableSet.has(option);
+            return (
             <div
               key={option === "" ? "（默认）" : option}
               role="option"
               aria-selected={option === value}
-              className={`tc-select-option${option === value ? " selected" : ""}${index === active ? " active" : ""}`}
+              aria-disabled={off}
+              className={`tc-select-option${option === value ? " selected" : ""}${index === active ? " active" : ""}${off ? " unavailable" : ""}`}
               onPointerEnter={() => setActive(index)}
               onClick={() => choose(index)}
             >
               <span className="tc-select-option-label">{valueLabel(fieldId, option)}</span>
               {hints?.[option] && <span className="tc-select-option-hint">{hints[option]}</span>}
-              <span className="mono tc-select-option-value">{option === "" ? "空" : option}</span>
+              <span className="mono tc-select-option-value">{off ? "不可用" : option === "" ? "空" : option}</span>
             </div>
-          ))}
+            );
+          })}
         </div>,
         document.body,
       )}
