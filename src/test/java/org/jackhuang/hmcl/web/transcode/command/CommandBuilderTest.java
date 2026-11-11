@@ -164,4 +164,41 @@ class CommandBuilderTest {
         assertTrue(!command.contains("-map 0:t?"));
     }
 
+    @Test
+    void twoPassBuildsAnalysisAndEncodePasses(@TempDir Path dir) {
+        TranscodePreset preset = preset();
+        preset.qualityMode = "bitrate";
+        preset.qualityValue = "2500k";
+        preset.twoPass = true;
+        Path output = dir.resolve("out.mkv");
+        List<List<String>> passes = CommandBuilder.buildPasses(preset, dir.resolve("in.mkv"), output);
+        assertEquals(2, passes.size());
+        String first = joined(passes.get(0));
+        String second = joined(passes.get(1));
+        assertTrue(first.contains("-pass 1"));
+        assertTrue(first.contains("-passlogfile " + output + ".pass"));
+        assertTrue(first.contains("-f null -"));
+        assertTrue(!first.contains("-movflags"));
+        assertTrue(!first.endsWith(output.toString()));
+        assertTrue(second.contains("-pass 2"));
+        assertTrue(second.endsWith(output.toString()));
+        assertTrue(!second.contains("-f null"));
+    }
+
+    @Test
+    void twoPassRejectsUnsupportedEncoderOrQualityMode(@TempDir Path dir) {
+        TranscodePreset crf = preset();
+        crf.twoPass = true;
+        assertThrows(IllegalArgumentException.class,
+                () -> CommandBuilder.buildPasses(crf, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+
+        TranscodePreset hardware = preset();
+        hardware.twoPass = true;
+        hardware.qualityMode = "bitrate";
+        hardware.qualityValue = "2500k";
+        hardware.videoEncoder = "hevc_nvenc";
+        assertThrows(IllegalArgumentException.class,
+                () -> CommandBuilder.buildPasses(hardware, dir.resolve("in.mkv"), dir.resolve("out.mkv")));
+    }
+
 }

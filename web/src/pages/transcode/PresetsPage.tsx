@@ -215,6 +215,12 @@ export function PresetsPage() {
         }
       }
 
+      // 两遍编码只对 x264/x265 + 固定码率生效；换到不支持的组合时自动关闭。
+      const twoPassEncoder = next.videoEncoder === "libx264" || next.videoEncoder === "libx265";
+      if (next.twoPass && !(twoPassEncoder && next.qualityMode === "bitrate")) {
+        next.twoPass = false;
+      }
+
       return next;
     });
   };

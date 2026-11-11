@@ -43,6 +43,7 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -194,7 +195,7 @@ public final class TranscodeQueue {
                 ? null : module.media().resolve(mediaRoot, preset.chaptersFile);
         Path subtitle = preset.subtitleFile == null || preset.subtitleFile.isBlank()
                 ? null : module.media().resolve(mediaRoot, preset.subtitleFile);
-        CommandBuilder.build(preset, inputPath, directory.resolve("preview.mkv"), chapters, subtitle);
+        CommandBuilder.buildPasses(preset, inputPath, directory.resolve("preview.mkv"), chapters, subtitle);
 
         TranscodeJob job = new TranscodeJob();
         job.id = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
@@ -505,40 +506,49 @@ public final class TranscodeQueue {
                     ? null : module.media().resolve(mediaRoot, job.preset.chaptersFile);
             Path subtitle = job.preset.subtitleFile == null || job.preset.subtitleFile.isBlank()
                     ? null : module.media().resolve(mediaRoot, job.preset.subtitleFile);
-            List<String> args = job.tool.isBlank()
-                    ? CommandBuilder.build(job.preset, input, part, chapters, subtitle)
-                    : toolArgs(job.command, part);
-            List<String> command = new ArrayList<>(args.size() + 1);
-            command.add(info.ffmpeg().toString());
-            command.addAll(args);
-            job.command = List.copyOf(command);
+            List<List<String>> passes = job.tool.isBlank()
+                    ? CommandBuilder.buildPasses(job.preset, input, part, chapters, subtitle)
+                    : List.of(toolArgs(job.command, part));
 
             Path log = Path.of(job.logFile == null ? logsDir.resolve(job.id + ".log").toString() : job.logFile);
             Files.createDirectories(log.getParent());
-            Files.writeString(log, "# " + CommandBuilder.display(command) + "\n", StandardCharsets.UTF_8);
-            ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command));
-            builder.redirectError(ProcessBuilder.Redirect.appendTo(log.toFile()));
-            Process process = builder.start();
-            job.process = process;
-            publishJob(job);
+            Files.writeString(log, "", StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            for (int passIndex = 0; passIndex < passes.size(); passIndex++) {
+                List<String> pass = passes.get(passIndex);
+                List<String> command = new ArrayList<>(pass.size() + 1);
+                command.add(info.ffmpeg().toString());
+                command.addAll(pass);
+                job.command = List.copyOf(command);
+                String passLabel = passes.size() > 1 ? "pass " + (passIndex + 1) + "/" + passes.size() + ": " : "";
+                Files.writeString(log, "# " + passLabel + CommandBuilder.display(command) + "\n",
+                        StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+                ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command));
+                builder.redirectError(ProcessBuilder.Redirect.appendTo(log.toFile()));
+                Process process = builder.start();
+                job.process = process;
+                publishJob(job);
 
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    updateProgress(job, line);
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        updateProgress(job, line, passIndex, passes.size());
+                    }
+                }
+                int code = process.waitFor();
+                job.process = null;
+                if (job.state == TranscodeJob.State.CANCELLED) {
+                    Files.deleteIfExists(part);
+                    cleanupPassLog(part);
+                    return;
+                }
+                if (code != 0) {
+                    handleFailure(job, "ffmpeg exited with code " + code + tail(log), part);
+                    return;
                 }
             }
-            int code = process.waitFor();
-            job.process = null;
-            if (job.state == TranscodeJob.State.CANCELLED) {
-                Files.deleteIfExists(part);
-                return;
-            }
-            if (code != 0) {
-                handleFailure(job, "ffmpeg exited with code " + code + tail(log), part);
-                return;
-            }
+            cleanupPassLog(part);
             String invalid = job.tool.isBlank()
                     ? invalidOutputReason(part, job.preset, input)
                     : invalidAnyOutputReason(part);
@@ -569,7 +579,22 @@ public final class TranscodeQueue {
         }
     }
 
-    private void updateProgress(TranscodeJob job, String line) {
+    private static void cleanupPassLog(Path part) {
+        Path parent = part.getParent();
+        if (parent == null) {
+            return;
+        }
+        String prefix = part.getFileName().toString() + ".pass";
+        try (var stream = Files.newDirectoryStream(parent, prefix + "*")) {
+            for (Path file : stream) {
+                Files.deleteIfExists(file);
+            }
+        } catch (IOException ignored) {
+            // A leftover pass log is harmless; the next job overwrites it.
+        }
+    }
+
+    private void updateProgress(TranscodeJob job, String line, int passIndex, int passCount) {
         int equals = line.indexOf('=');
         if (equals <= 0) {
             return;
@@ -581,7 +606,8 @@ public final class TranscodeQueue {
                 case "out_time_us" -> {
                     job.outTimeMs = Long.parseLong(value) / 1000;
                     if (job.durationMs > 0) {
-                        job.fraction = Math.min(1, (double) job.outTimeMs / job.durationMs);
+                        double passFraction = Math.min(1, (double) job.outTimeMs / job.durationMs);
+                        job.fraction = Math.min(1, (passIndex + passFraction) / Math.max(1, passCount));
                     }
                 }
                 case "speed" -> job.speed = parseSpeed(value);
@@ -591,7 +617,7 @@ public final class TranscodeQueue {
                 case "frame" -> job.frame = Integer.parseInt(value);
                 case "progress" -> {
                     if ("end".equals(value)) {
-                        job.fraction = 1;
+                        job.fraction = Math.min(1, (double) (passIndex + 1) / Math.max(1, passCount));
                         job.message = "finalizing";
                     }
                 }
@@ -652,6 +678,7 @@ public final class TranscodeQueue {
                 Files.deleteIfExists(part);
             } catch (IOException ignored) {
             }
+            cleanupPassLog(part);
         }
         String fallback = fallbackEncoder(job.preset.videoEncoder);
         if (fallback != null && !job.fallbackAttempted) {
@@ -864,6 +891,7 @@ public final class TranscodeQueue {
                 Files.deleteIfExists(part);
             } catch (IOException ignored) {
             }
+            cleanupPassLog(part);
         }
         appendLog(job, "\n# FAILED: " + message + "\n");
         publishJob(job);

@@ -52,6 +52,12 @@ public final class CommandBuilder {
     /// The same, with an optional subtitle file resolved under the media root. The panel
     /// otherwise has no cwd that would make a relative subtitle path work.
     public static List<String> build(TranscodePreset preset, Path input, Path output, Path chapters, Path subtitle) {
+        return build(preset, input, output, chapters, subtitle, 0, null);
+    }
+
+    /// `pass` is 1 or 2 for two-pass encoding, 0 for a single-pass job.
+    private static List<String> build(TranscodePreset preset, Path input, Path output, Path chapters,
+                                      Path subtitle, int pass, Path passLog) {
         preset.validate();
         List<String> args = new ArrayList<>();
         args.add("-hide_banner");
@@ -102,7 +108,7 @@ public final class CommandBuilder {
             args.add("-map");
             args.add(preset.subtitleMap == null || preset.subtitleMap.isBlank() ? "0:s?" : preset.subtitleMap);
         }
-        if (!image && preset.copyAttachments) {
+        if (!image && preset.copyAttachments && pass != 1) {
             args.add("-map");
             args.add("0:t?");
         }
@@ -244,6 +250,26 @@ public final class CommandBuilder {
             }
         }
 
+        if (pass == 1) {
+            // 第一遍只分析：音频/字幕/数据流不写入，也不带 -movflags 等输出格式参数。
+            args.add("-an");
+            args.add("-sn");
+            args.add("-dn");
+            args.add("-pass");
+            args.add("1");
+            args.add("-passlogfile");
+            args.add(passLog.toString());
+            args.add("-f");
+            args.add("null");
+            args.add("-");
+            return List.copyOf(args);
+        }
+        if (pass == 2) {
+            args.add("-pass");
+            args.add("2");
+            args.add("-passlogfile");
+            args.add(passLog.toString());
+        }
         if (preset.copyMetadata) {
             args.add("-map_metadata");
             args.add("0");
@@ -274,6 +300,24 @@ public final class CommandBuilder {
     }
 
     /// A shell-quoted display form for the preview card. It is **not** executed.
+    public static List<List<String>> buildPasses(TranscodePreset preset, Path input, Path output) {
+        return buildPasses(preset, input, output, null, null);
+    }
+
+    /// 两遍编码：第一遍只分析（`-f null`），第二遍才写文件。返回 1 或 2 条命令。
+    /// 仅支持 x264/x265 + 固定码率；其它组合在 `TranscodePreset.validate()` 里就拒绝，
+    /// 因此提交任务时不会接受一个跑到一半才失败的预设。
+    public static List<List<String>> buildPasses(TranscodePreset preset, Path input, Path output,
+                                                 Path chapters, Path subtitle) {
+        if (!preset.twoPass) {
+            return List.of(build(preset, input, output, chapters, subtitle, 0, null));
+        }
+        Path passLog = output.resolveSibling(output.getFileName() + ".pass");
+        return List.of(
+                build(preset, input, output, chapters, subtitle, 1, passLog),
+                build(preset, input, output, chapters, subtitle, 2, passLog));
+    }
+
     public static String display(List<String> args) {
         StringBuilder result = new StringBuilder();
         for (String arg : args) {

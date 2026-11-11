@@ -51,6 +51,8 @@ public final class TranscodePreset {
     /// `crf`, `cqp` or `bitrate`.
     public String qualityMode = "crf";
     public String qualityValue = "20";
+    /// Two-pass encode (x264/x265 + bitrate mode): analyze, then encode.
+    public boolean twoPass = false;
     public String preset = "medium";
     public String profile = "";
     public String level = "";
@@ -160,6 +162,10 @@ public final class TranscodePreset {
         }
         if (!List.of("suffix", "timestamp", "none").contains(outputNaming)) {
             throw new IllegalArgumentException("outputNaming must be suffix, timestamp or none");
+        }
+        if (twoPass && (!("libx264".equals(videoEncoder) || "libx265".equals(videoEncoder))
+                || !"bitrate".equals(qualityMode))) {
+            throw new IllegalArgumentException("two-pass encoding requires libx264/libx265 with bitrate mode");
         }
         if (tenBit && pixelFormat.isBlank()) {
             pixelFormat = "yuv420p10le";

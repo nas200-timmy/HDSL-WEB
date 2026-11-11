@@ -100,6 +100,8 @@ public final class PresetSchema {
                                 "bitrate", "固定码率，按目标体积/带宽")),
                         hint(text("qualityValue", "质量值 / 码率", "20"),
                                 "x264/x265 CRF 常用 18–28；硬件 CQP 常用 20–28；bitrate 写 2500k 或 5M"),
+                        hint(booleanField("twoPass", "两遍编码", false),
+                                "只支持 x264/x265 + 固定码率；第一遍分析、第二遍出片，更接近目标体积"),
                         important(),
                         speedPresets(hint(select("preset", "编码速度档 preset", "medium",
                                 "", "ultrafast", "superfast", "veryfast", "faster", "fast",

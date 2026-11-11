@@ -500,14 +500,18 @@ public final class TranscodeApiServlet extends HttpServlet {
                 subtitle = preset.subtitleFile == null || preset.subtitleFile.isBlank()
                         ? null : module.media().resolve(module.mediaRoot(), preset.subtitleFile);
             }
-            var args = CommandBuilder.build(preset, input, output, chapters, subtitle);
+            List<List<String>> passes = CommandBuilder.buildPasses(preset, input, output, chapters, subtitle);
+            List<String> args = passes.get(passes.size() - 1);
             JsonArray array = new JsonArray();
             args.forEach(array::add);
             JsonObject result = new JsonObject();
             result.addProperty("input", placeholder ? "<输入文件>" : input.toString());
             result.addProperty("output", placeholder ? "<输出文件>" : output.toString());
             result.add("args", array);
-            result.addProperty("command", CommandBuilder.display(args));
+            result.addProperty("command", passes.size() == 1
+                    ? CommandBuilder.display(args)
+                    : "# 第一遍（分析）\n" + CommandBuilder.display(passes.get(0))
+                            + "\n\n# 第二遍（出片）\n" + CommandBuilder.display(passes.get(1)));
             Json.write(response, result);
         } catch (IllegalArgumentException e) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());

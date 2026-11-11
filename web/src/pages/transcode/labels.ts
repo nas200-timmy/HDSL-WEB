@@ -296,5 +296,9 @@ export function inactiveReason(fieldId: string, preset: TranscodePreset): string
   if (String(preset.subtitleMode ?? "copy") !== "burn" && SUBTITLE_BURN_FIELDS.has(fieldId)) {
     return "字幕未烧录，此项不生效";
   }
+  if (fieldId === "twoPass"
+      && !((encoder === "libx264" || encoder === "libx265") && String(preset.qualityMode ?? "") === "bitrate")) {
+    return "仅 x264/x265 + 固定码率支持两遍编码";
+  }
   return "";
 }
