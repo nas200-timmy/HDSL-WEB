@@ -3,6 +3,7 @@ import { api, type TranscodeMediaEntry, type TranscodePreset, type TranscodePres
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
 import { MediaBrowserPanel, fmtBytes, probeSummary, HelpNote } from "./common";
+import { DirectoryPicker } from "./DirectoryPicker";
 import { valueLabel } from "./labels";
 
 type StagedItem = {
@@ -26,6 +27,7 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
   const [plan, setPlan] = useState<TranscodePlan | null>(null);
   const [mediaRoot, setMediaRoot] = useState("");
   const [scanning, setScanning] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   useEffect(() => {
     if (!presetId) {
@@ -263,9 +265,12 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
     setStaged((previous) => previous.filter((item) => item.entry.path !== path));
   };
 
-  const outputLocation = outputDir.trim()
-    ? (plan?.outputDir || `${mediaRoot}/${outputDir.trim()}`.replace(/\/+/g, "/"))
-    : "每个源文件旁边（见下方准备列表）";
+  const outputSelection = outputDir.trim();
+  const outputLocation = outputSelection === "."
+    ? (plan?.outputDir || mediaRoot)
+    : outputSelection
+      ? (plan?.outputDir || `${mediaRoot}/${outputSelection}`.replace(/\/+/g, "/"))
+      : "每个源文件旁边（见下方准备列表）";
 
   return (
     <div style={{ display: "grid", gap: 8 }}>
@@ -351,14 +356,26 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
                   <span className="tag plain">字幕 {valueLabel("subtitleMode", presetDetail.subtitleMode)}</span>
                 </div>
               )}
-              <label style={{ fontSize: 12 }}>输出目录（相对媒体根；空 = 源目录）</label>
-              <input
-                className="input"
-                value={outputDir}
-                disabled={busy}
-                placeholder="例如 转码输出；留空 = 每个源文件旁边"
-                onChange={(e) => setOutputDir(e.target.value)}
-              />
+              <label style={{ fontSize: 12 }}>输出目录</label>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input
+                  className="input"
+                  style={{ flex: 1, minWidth: 0 }}
+                  value={outputDir}
+                  disabled={busy}
+                  placeholder="留空 = 每个源文件旁边"
+                  onChange={(e) => setOutputDir(e.target.value)}
+                />
+                <button className="btn btn-text" disabled={busy} onClick={() => setPickerOpen(true)}>
+                  选择目录
+                </button>
+                <button className="btn btn-text" disabled={busy || outputDir === ""} onClick={() => setOutputDir("")}>
+                  源目录
+                </button>
+              </div>
+              <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", overflowWrap: "anywhere" }}>
+                当前：{outputLocation}
+              </span>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", paddingTop: 4 }}>
                 <button className="btn btn-text" disabled={busy} onClick={() => onOpenTab("presets")}>
                   打开参数面板
@@ -408,7 +425,7 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
 
       <div className="card">
         <div className="tc-card-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          准备列表（{staged.length}）
+          待转码列表（{staged.length}）
           <span style={{ flex: 1 }} />
           {scanning && <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>扫描中…</span>}
           <button className="btn btn-text" disabled={busy || staged.length === 0} onClick={() => setStaged([])}>
@@ -417,6 +434,9 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
           <button className="btn btn-raised" disabled={busy || staged.length === 0 || !presetId} onClick={() => void enqueueAll()}>
             {busy ? "提交中…" : `加入队列（${staged.length}）`}
           </button>
+        </div>
+        <div style={{ padding: "0 10px 6px", fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+          这里只是暂存：点「加入队列」才会带着当前预设提交并开始转码。
         </div>
         <div className="comp-row">
           <span className="comp-label">输出位置</span>
@@ -458,6 +478,17 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
           </div>
         )}
       </div>
+
+      <DirectoryPicker
+        open={pickerOpen}
+        initial={outputDir}
+        mediaRoot={mediaRoot}
+        onClose={() => setPickerOpen(false)}
+        onSelect={(path) => {
+          setOutputDir(path);
+          setPickerOpen(false);
+        }}
+      />
     </div>
   );
 }
