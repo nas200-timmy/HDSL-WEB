@@ -242,6 +242,26 @@
   outline: 1px solid var(--monet-primary-fixed-dim);
 }
 
+/* 依赖别的选项才有意义的字段：整块压暗，仍然能看见值，但不能改 */
+.tc-field.inactive > .tc-field-label,
+.tc-field.inactive > .input,
+.tc-field.inactive > textarea,
+.tc-field.inactive > .tc-select-trigger,
+.tc-field.inactive > .tc-switch {
+  opacity: 0.5;
+}
+
+.tc-field.inactive > .tc-field-label,
+.tc-field.inactive > .input,
+.tc-field.inactive > textarea,
+.tc-field.inactive > .tc-select-trigger,
+.tc-field.inactive > .tc-switch,
+.tc-field.inactive input,
+.tc-field.inactive textarea,
+.tc-field.inactive .tc-select-trigger {
+  cursor: not-allowed;
+}
+
 .tc-field-label {
   display: flex;
   align-items: center;
@@ -1171,8 +1191,9 @@
 .tc-select-panel {
   position: fixed;
   z-index: 1200;
-  max-height: 340px;
-  overflow: auto;
+  display: grid;
+  grid-auto-flow: column;
+  gap: 0 4px;
   padding: 4px;
   border-radius: 6px;
   border: 1px solid var(--monet-outline);
@@ -1181,11 +1202,13 @@
 }
 
 .tc-select-option {
-  display: grid;
-  gap: 2px;
-  padding: 6px 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 8px;
   border-radius: 4px;
   cursor: pointer;
+  overflow: hidden;
 }
 
 .tc-select-option.active {
@@ -1197,14 +1220,12 @@
   outline-offset: -1px;
 }
 
-.tc-select-option-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  justify-content: space-between;
-}
-
 .tc-select-option-label {
+  flex: 0 1 42%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 550;
   color: var(--monet-on-surface);
@@ -1217,6 +1238,11 @@
 }
 
 .tc-select-option-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   line-height: 1.4;
   color: var(--monet-on-surface-variant);

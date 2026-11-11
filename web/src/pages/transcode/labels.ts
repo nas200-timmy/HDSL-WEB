@@ -1,4 +1,4 @@
-import type { TranscodeSchema } from "../../api";
+import type { TranscodePreset, TranscodeSchema } from "../../api";
 
 /**
  * 预设里保存的是 ffmpeg 的原始取值（libx264 / crf / copy …）。
@@ -21,22 +21,22 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
     none: "不追加",
   },
   videoEncoder: {
-    copy: "直接复制（不重编码）",
+    copy: "直接复制",
     none: "丢弃视频",
-    libx264: "H.264 软件编码（x264）",
-    libx265: "H.265 软件编码（x265）",
-    "libvpx-vp9": "VP9 软件编码",
-    "libaom-av1": "AV1 软件编码（aom）",
-    h264_nvenc: "H.264 硬件编码（NVIDIA）",
-    hevc_nvenc: "H.265 硬件编码（NVIDIA）",
-    h264_vaapi: "H.264 硬件编码（VAAPI）",
-    hevc_vaapi: "H.265 硬件编码（VAAPI）",
-    h264_qsv: "H.264 硬件编码（Intel QSV）",
-    hevc_qsv: "H.265 硬件编码（Intel QSV）",
+    libx264: "H.264（x264）",
+    libx265: "H.265（x265）",
+    "libvpx-vp9": "VP9（libvpx）",
+    "libaom-av1": "AV1（aom）",
+    h264_nvenc: "H.264（NVENC）",
+    hevc_nvenc: "H.265（NVENC）",
+    h264_vaapi: "H.264（VAAPI）",
+    hevc_vaapi: "H.265（VAAPI）",
+    h264_qsv: "H.264（QSV）",
+    hevc_qsv: "H.265（QSV）",
   },
   qualityMode: {
-    crf: "恒定质量 CRF",
-    cqp: "固定 QP CQP",
+    crf: "CRF 恒定质量",
+    cqp: "CQP 固定 QP",
     bitrate: "固定码率",
   },
   preset: {
@@ -139,4 +139,34 @@ export function valueTip(
   const description = field?.optionHints?.[raw] ?? extraHint ?? field?.hint ?? "";
   const head = raw === "" ? "（未设置，使用默认值）" : `原始取值 ${raw}`;
   return description ? `${head}\n${description}` : head;
+}
+
+// 依赖别的选项才有意义的字段：视频不重新编码时，画面/质量/编码档位全部不生效。
+const VIDEO_ENCODER_FIELDS = new Set([
+  "qualityMode", "qualityValue", "preset", "profile", "level", "tune",
+  "pixelFormat", "tenBit", "gop", "threads",
+  "width", "height", "fps", "crop", "rotate", "deinterlace", "filterGraph",
+  "colorPrimaries", "colorTransfer", "colorMatrix", "colorRange",
+]);
+const HARDWARE_IGNORED_FIELDS = new Set(["preset", "profile", "tune"]);
+const AUDIO_ENCODE_FIELDS = new Set(["audioEncoder", "audioBitrate", "audioChannels", "audioSampleRate"]);
+const SUBTITLE_BURN_FIELDS = new Set(["subtitleFile", "subtitleFont", "subtitleFontSize"]);
+
+/// 返回空串表示可编辑；否则是「为什么变灰」的说明，同时显示在字段下方。
+export function inactiveReason(fieldId: string, preset: TranscodePreset): string {
+  const encoder = String(preset.videoEncoder ?? "");
+  const hardware = /_vaapi|_qsv|_nvenc/.test(encoder);
+  if ((encoder === "copy" || encoder === "none") && VIDEO_ENCODER_FIELDS.has(fieldId)) {
+    return encoder === "none" ? "视频已丢弃，此项不生效" : "不重新编码，此项不生效";
+  }
+  if (hardware && HARDWARE_IGNORED_FIELDS.has(fieldId)) {
+    return "硬件编码忽略此项";
+  }
+  if (String(preset.audioMode ?? "copy") !== "encode" && AUDIO_ENCODE_FIELDS.has(fieldId)) {
+    return "音频未重新编码，此项不生效";
+  }
+  if (String(preset.subtitleMode ?? "copy") !== "burn" && SUBTITLE_BURN_FIELDS.has(fieldId)) {
+    return "字幕未烧录，此项不生效";
+  }
+  return "";
 }

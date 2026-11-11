@@ -14,7 +14,7 @@ import { errMsg } from "../../utils";
 import { Dialog } from "../../components/Dialog";
 import { ContentCopyIcon, RefreshIcon, SearchIcon } from "../../components/icons";
 import { HelpNote } from "./common";
-import { valueLabel, valueTip } from "./labels";
+import { inactiveReason, valueLabel, valueTip } from "./labels";
 
 /**
  * 参数面板工作台。
@@ -314,6 +314,8 @@ export function PresetsPage() {
 
   const overview = useMemo(() => {
     const qualityValue = String(draft.qualityValue ?? "").trim();
+    const encoder = String(draft.videoEncoder ?? "");
+    const noReencode = encoder === "copy" || encoder === "none";
     return [
       {
         label: "视频",
@@ -323,9 +325,11 @@ export function PresetsPage() {
       },
       {
         label: "质量",
-        value: `${valueLabel("qualityMode", draft.qualityMode)} ${qualityValue}`.trim(),
+        value: noReencode ? "不适用（不重编码）" : `${valueLabel("qualityMode", draft.qualityMode)} ${qualityValue}`.trim(),
         field: "qualityValue",
-        tip: `${valueTip(schema, "qualityMode", draft.qualityMode)}\n质量值：${qualityValue || "（未填）"}`,
+        tip: noReencode
+          ? `视频编码器是「${valueLabel("videoEncoder", encoder)}」，质量参数不会写进命令`
+          : `${valueTip(schema, "qualityMode", draft.qualityMode)}\n质量值：${qualityValue || "（未填）"}`,
       },
       {
         label: "容器",
@@ -730,6 +734,7 @@ export function PresetsPage() {
                       value={draft[field.id] ?? field.default}
                       changed={changedFields.has(field.id)}
                       disabled={entry?.builtin === true}
+                      inactiveReason={inactiveReason(field.id, draft)}
                       onChange={(value) => update(field.id, value)}
                     />
                   ))}
@@ -861,20 +866,24 @@ function Field({
   value,
   changed,
   disabled,
+  inactiveReason,
   onChange,
 }: {
   field: TranscodeSchemaField;
   value: unknown;
   changed: boolean;
   disabled: boolean;
+  inactiveReason?: string;
   onChange: (value: unknown) => void;
 }) {
   const optionHint = field.type === "select"
     ? field.optionHints?.[String(value ?? "")]
     : undefined;
-  const hint = field.type === "select" ? optionHint ?? field.hint : field.hint;
+  const reason = inactiveReason ?? "";
+  const controlDisabled = disabled || reason !== "";
+  const hint = reason || (field.type === "select" ? optionHint ?? field.hint : field.hint);
   return (
-    <div className={`tc-field${field.important ? " important" : ""}`}>
+    <div className={`tc-field${field.important ? " important" : ""}${reason ? " inactive" : ""}`}>
       <span className="tc-field-label">
         {field.label}
         {field.hint && (
@@ -890,7 +899,7 @@ function Field({
           <input
             type="checkbox"
             checked={value === true}
-            disabled={disabled}
+            disabled={controlDisabled}
             onChange={(e) => onChange(e.target.checked)}
           />
           <span>{value === true ? "开启" : "关闭"}</span>
@@ -900,7 +909,7 @@ function Field({
           className="input"
           rows={3}
           value={String(value ?? "")}
-          disabled={disabled}
+          disabled={controlDisabled}
           placeholder={field.hint}
           onChange={(e) => onChange(e.target.value)}
         />
@@ -910,18 +919,18 @@ function Field({
           value={String(value ?? "")}
           options={field.options ?? []}
           hints={field.optionHints}
-          disabled={disabled}
+          disabled={controlDisabled}
           onChange={onChange}
         />
       ) : (
         <input
           className="input"
           value={String(value ?? "")}
-          disabled={disabled}
+          disabled={controlDisabled}
           onChange={(e) => onChange(e.target.value)}
         />
       )}
-      {hint && <span className="tc-field-hint">{hint}</span>}
+      {hint && <span className={`tc-field-hint${reason ? " inactive" : ""}`}>{hint}</span>}
     </div>
   );
 }
@@ -947,7 +956,7 @@ function ParamSelect({
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
-  const [box, setBox] = useState<{ left: number; top: number; width: number } | null>(null);
+  const [box, setBox] = useState<{ left: number; top: number; width: number; columns: number; rows: number } | null>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
 
@@ -955,13 +964,20 @@ function ParamSelect({
     const element = trigger.current;
     if (!element) return;
     const rect = element.getBoundingClientRect();
-    const width = Math.max(rect.width, 300);
-    const height = Math.min(340, options.length * 52 + 10);
+    // 单行一项：中文名 + 说明 + 原始取值。内容太高时自动分栏，面板本身不滚动。
+    const rowHeight = 30;
+    const maxHeight = window.innerHeight - 16;
+    const rowsPerColumn = Math.max(1, Math.floor((maxHeight - 8) / rowHeight));
+    const columns = Math.max(1, Math.ceil(options.length / rowsPerColumn));
+    const rows = Math.ceil(options.length / columns);
+    const width = Math.min(window.innerWidth - 16, Math.max(rect.width, columns > 1 ? 620 : 480));
+    const height = rows * rowHeight + 8;
     let left = rect.left;
     if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
     let top = rect.bottom + 4;
-    if (top + height > window.innerHeight - 8) top = Math.max(8, rect.top - height - 4);
-    setBox({ left, top, width });
+    if (top + height > window.innerHeight - 8) top = rect.top - height - 4;
+    if (top < 8) top = 8;
+    setBox({ left, top, width, columns, rows });
   };
 
   const openList = () => {
@@ -1040,9 +1056,15 @@ function ParamSelect({
       {open && box && createPortal(
         <div
           ref={panel}
-          className="tc-select-panel scroll-hover"
+          className="tc-select-panel"
           role="listbox"
-          style={{ left: box.left, top: box.top, width: box.width }}
+          style={{
+            left: box.left,
+            top: box.top,
+            width: box.width,
+            gridTemplateColumns: `repeat(${box.columns}, minmax(0, 1fr))`,
+            gridTemplateRows: `repeat(${box.rows}, auto)`,
+          }}
         >
           {options.map((option, index) => (
             <div
@@ -1053,11 +1075,9 @@ function ParamSelect({
               onPointerEnter={() => setActive(index)}
               onClick={() => choose(index)}
             >
-              <span className="tc-select-option-head">
-                <span className="tc-select-option-label">{valueLabel(fieldId, option)}</span>
-                <span className="mono tc-select-option-value">{option === "" ? "空" : option}</span>
-              </span>
+              <span className="tc-select-option-label">{valueLabel(fieldId, option)}</span>
               {hints?.[option] && <span className="tc-select-option-hint">{hints[option]}</span>}
+              <span className="mono tc-select-option-value">{option === "" ? "空" : option}</span>
             </div>
           ))}
         </div>,

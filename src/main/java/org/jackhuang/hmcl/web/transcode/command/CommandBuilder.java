@@ -140,25 +140,27 @@ public final class CommandBuilder {
                     args.add(preset.threads);
                 }
             }
-            if (!filters.isEmpty()) {
+            if (!copyVideo && !filters.isEmpty()) {
                 args.add("-vf");
                 args.add(String.join(",", filters));
             }
-            if (!blank(preset.colorPrimaries)) {
-                args.add("-color_primaries");
-                args.add(preset.colorPrimaries);
-            }
-            if (!blank(preset.colorTransfer)) {
-                args.add("-color_trc");
-                args.add(preset.colorTransfer);
-            }
-            if (!blank(preset.colorMatrix)) {
-                args.add("-colorspace");
-                args.add(preset.colorMatrix);
-            }
-            if (!blank(preset.colorRange)) {
-                args.add("-color_range");
-                args.add(preset.colorRange);
+            if (!copyVideo) {
+                if (!blank(preset.colorPrimaries)) {
+                    args.add("-color_primaries");
+                    args.add(preset.colorPrimaries);
+                }
+                if (!blank(preset.colorTransfer)) {
+                    args.add("-color_trc");
+                    args.add(preset.colorTransfer);
+                }
+                if (!blank(preset.colorMatrix)) {
+                    args.add("-colorspace");
+                    args.add(preset.colorMatrix);
+                }
+                if (!blank(preset.colorRange)) {
+                    args.add("-color_range");
+                    args.add(preset.colorRange);
+                }
             }
             args.addAll(preset.videoArgs);
         }
