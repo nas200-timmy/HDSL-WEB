@@ -96,7 +96,7 @@ func Explain(err error) (int, string) {
 		// the panel's own sentence says which page.
 		return ExitPolicy, shorten(message)
 	case panel.Status(err) == 404:
-		return ExitTransport, "找不到该实例：dsh 实例直接写 id，品牌实例（kimi/opencode/claude-web/pi-web）要加 --brand；" +
+		return ExitTransport, "找不到该实例：dsh 实例直接写 id，品牌实例（kimi/opencode/claude-web/hermes/pi-web/zcode）要加 --brand；" +
 			"不带 --instance 运行可以列出全部实例"
 	}
 	return ExitCodeFor(panel.Classify(err)), shorten(message)

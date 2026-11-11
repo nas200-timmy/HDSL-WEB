@@ -45,7 +45,7 @@ hdsl-tui --brand kimi --instance kimi-1 https://panel.example.com
 | 选项 | 说明 |
 |---|---|
 | `--instance <id>` | 登录后直接进入该实例的终端（菜单仍可用） |
-| `--brand <name>` | `kimi` / `opencode` / `claude-web` / `pi-web` / `zcode`，默认走 dsh 实例 |
+| `--brand <name>` | `kimi` / `opencode` / `claude-web` / `hermes` / `pi-web` / `zcode`，默认走 dsh 实例 |
 | `--resume <sessionId>` | 附着到该 harness 会话（kimi / opencode 的会话恢复） |
 | `--kernel <name>` | Claude Web 的内核：`community`（社区引擎）或 `official`（官方 Claude Code）；不给就在菜单里选 |
 | `--user <name>` | 面板用户名，默认 `admin`；给了就不再提示 |

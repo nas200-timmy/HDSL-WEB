@@ -16,19 +16,22 @@ type group struct {
 	Items []panel.Instance
 }
 
-// brandOrder is the menu order of the instance surfaces: the three brand
-// categories, then ZCode — an experimental category with its own endpoints
-// (`/api/zcode/*`), but the same instance and terminal contract.
+// brandOrder is the menu order of the instance surfaces: the brand categories
+// that have a terminal, then ZCode — an experimental category with its own
+// endpoints (`/api/zcode/*`), but the same instance and terminal contract.
 //
 // Octop is deliberately absent: it has no terminal, so a client whose only job
 // is attaching to one would be offering a dead end. Its instances stay on the
-// web page.
-var brandOrder = []string{"kimi", "opencode", "claude-web", "pi-web", "zcode"}
+// web page. Hermes is listed because it does ship a TUI (`hermes --tui`), even
+// though that TUI cannot run next to the brand's web mode.
+var brandOrder = []string{"kimi", "opencode", "claude-web", "hermes", "pi-web", "zcode"}
 
 func brandTitle(brand string) string {
 	switch brand {
 	case "zcode":
 		return "ZCode 实例（实验）"
+	case "hermes":
+		return "Hermes 实例（实验）"
 	case "pi-web":
 		return "PI WEB 实例（实验）"
 	default:

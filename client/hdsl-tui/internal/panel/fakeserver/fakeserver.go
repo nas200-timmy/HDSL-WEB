@@ -101,6 +101,7 @@ func New() *Server {
 			"kimi":       {{"id": "kimi-1", "name": "kimi-one", "state": "stopped"}},
 			"opencode":   {},
 			"claude-web": {{"id": "cw-1", "name": "claude-web", "state": "stopped"}},
+			"hermes":     {{"id": "hm-1", "name": "hermes", "state": "stopped"}},
 			"pi-web":     {{"id": "pi-1", "name": "pi-web", "state": "stopped"}},
 		},
 		exact: map[string]http.HandlerFunc{},
