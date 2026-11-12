@@ -1105,6 +1105,23 @@ public final class ChatStore implements AutoCloseable {
         return result;
     }
 
+    /// 所有仍被附件记录引用的磁盘路径（原文件与抽取文本）。
+    public synchronized List<String> attachmentFilePaths() throws SQLException {
+        List<String> result = new ArrayList<>();
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery(
+                     "SELECT path, extracted_text_path FROM chat_attachment")) {
+            while (rs.next()) {
+                result.add(rs.getString(1));
+                String text = rs.getString(2);
+                if (text != null) {
+                    result.add(text);
+                }
+            }
+        }
+        return result;
+    }
+
     public synchronized Connection connection() {
         return connection;
     }
