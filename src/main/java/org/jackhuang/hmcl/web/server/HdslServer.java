@@ -74,6 +74,8 @@ import org.jackhuang.hmcl.web.tls.CertificateManager;
 import org.jackhuang.hmcl.web.ws.WsGateway;
 import org.jackhuang.hmcl.web.brand.BrandApiServlet;
 import org.jackhuang.hmcl.web.brand.BrandCatalog;
+import org.jackhuang.hmcl.web.chat.ChatApiServlet;
+import org.jackhuang.hmcl.web.chat.ChatModule;
 import org.jackhuang.hmcl.web.zcode.ZcodeApiServlet;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -127,6 +129,8 @@ public final class HdslServer {
     /// TUI from the panel.
     private final org.jackhuang.hmcl.web.terminal.TerminalManager terminals;
     private final org.jackhuang.hmcl.web.minecraft.McRuntime mcRuntime;
+    /// 面板聊天（docs/chat.md）：SQLite 会话库、turn 管理器与备份调度。
+    private final ChatModule chat;
     /// The machine's own readings (docs/web-shell.md §通用 → 系统资源). One
     /// sampler for every viewer; it runs in two gears and never faster than a
     /// second.
@@ -142,6 +146,7 @@ public final class HdslServer {
                        org.jackhuang.hmcl.web.terminal.TerminalManager terminals,
                        org.jackhuang.hmcl.web.minecraft.McRuntime mcRuntime,
                        org.jackhuang.hmcl.web.system.SystemMetrics systemMetrics,
+                       ChatModule chat,
                        Logger logger, AtomicLong startedAtMillis) {
         this.server = server;
         this.baseHttpConfig = baseHttpConfig;
@@ -153,6 +158,7 @@ public final class HdslServer {
         this.terminals = terminals;
         this.mcRuntime = mcRuntime;
         this.systemMetrics = systemMetrics;
+        this.chat = chat;
         this.logger = logger;
         this.startedAtMillis = startedAtMillis;
     }
@@ -323,6 +329,11 @@ public final class HdslServer {
             return live != null && live.tlsActive();
         };
 
+        // Panel chat (docs/chat.md): SQLite under <data>/chat, one maintenance
+        // thread, and the turn manager behind /api/chat/*. It is built after
+        // the session gate and elevation store because its servlet needs both.
+        ChatModule chat = ChatModule.create(config, eventBus);
+
         ServletContextHandler context = new ServletContextHandler();
         context.setContextPath("/");
         context.addFilter(authFilter, "/api/*", EnumSet.of(DispatcherType.REQUEST));
@@ -359,6 +370,12 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new ExportsApiServlet(config)), "/api/exports/*");
         context.addServlet(new ServletHolder(new DoctorApiServlet()), "/api/doctor");
         context.addServlet(new ServletHolder(new AccountsApiServlet(eventBus)), "/api/accounts/*");
+        // Panel chat: REST commands/history/upload; token deltas ride /ws.
+        ServletHolder chatHolder = new ServletHolder(new ChatApiServlet(
+                chat.service(), config, authService, developerElevation, tlsActive));
+        chatHolder.getRegistration().setMultipartConfig(new jakarta.servlet.MultipartConfigElement(
+                uploadStaging.toString(), 60L * 1024 * 1024, 65L * 1024 * 1024, 1024 * 1024));
+        context.addServlet(chatHolder, "/api/chat/*");
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
         context.addServlet(new ServletHolder(new ZcodeApiServlet(config, terminals, terminalTickets,
@@ -564,7 +581,8 @@ public final class HdslServer {
         org.jackhuang.hmcl.web.http.HostHeaderSupport.verify();
 
         HdslServer built = new HdslServer(server, httpConfig, mainConnector, redirectConnector, ssl,
-                proxyWebSocketClient, acpSessions, terminals, mcRuntime, systemMetrics, logger, startedAtMillis);
+                proxyWebSocketClient, acpSessions, terminals, mcRuntime, systemMetrics, chat,
+                logger, startedAtMillis);
         self.set(built);
         return built;
     }
@@ -960,6 +978,7 @@ public final class HdslServer {
         // manager takes their process groups with it.
         terminals.close();
         acpSessions.closeAll();
+        chat.close();
         systemMetrics.close();
         server.stop();
         proxyWebSocketClient.stop();
