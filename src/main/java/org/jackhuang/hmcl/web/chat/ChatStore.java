@@ -779,6 +779,7 @@ public final class ChatStore implements AutoCloseable {
                     return;
                 }
                 int value = rs.getInt(1);
+                deleteAttachmentsFrom(sessionId, value, false);
                 try (PreparedStatement delete = connection.prepareStatement("""
                         DELETE FROM chat_node WHERE session_id=? AND ordinal>?
                         """)) {
@@ -801,6 +802,7 @@ public final class ChatStore implements AutoCloseable {
                     return;
                 }
                 int value = rs.getInt(1);
+                deleteAttachmentsFrom(sessionId, value, true);
                 try (PreparedStatement delete = connection.prepareStatement(
                         "DELETE FROM chat_node WHERE session_id=? AND ordinal>=?")) {
                     delete.setString(1, sessionId);
@@ -810,6 +812,20 @@ public final class ChatStore implements AutoCloseable {
             }
         }
         touchSession(sessionId);
+    }
+
+    /// 删除节点前先清掉它们的附件记录；磁盘文件由调用方 [ChatAttachments#pruneOrphans] 清。
+    private void deleteAttachmentsFrom(String sessionId, int ordinal, boolean inclusive)
+            throws SQLException {
+        String operator = inclusive ? ">=" : ">";
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM chat_attachment WHERE message_id IN ("
+                        + "SELECT m.id FROM chat_message m JOIN chat_node n ON n.id=m.node_id "
+                        + "WHERE n.session_id=? AND n.ordinal " + operator + " ?)")) {
+            statement.setString(1, sessionId);
+            statement.setInt(2, ordinal);
+            statement.executeUpdate();
+        }
     }
 
     /// 上下文：每个节点取 active variant，按 ordinal 排列。

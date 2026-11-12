@@ -33,6 +33,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -83,6 +84,9 @@ public final class ChatTurnManager {
     private final Map<String, ActiveTurn> bySession = new ConcurrentHashMap<>();
     private final Map<String, ActiveTurn> byId = new ConcurrentHashMap<>();
     private final Map<String, RecentTurn> recent = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicLong dailyTokens =
+            new java.util.concurrent.atomic.AtomicLong();
+    private volatile LocalDate dailyDate = LocalDate.now();
     private volatile ChatSettings.Settings settings;
 
     public ChatTurnManager(ChatStore store, ChatAttachments attachments, EventBus bus,
@@ -124,9 +128,11 @@ public final class ChatTurnManager {
             if (bySession.containsKey(sessionId)) {
                 throw new ChatException(409, "chat_busy", "this session is already streaming; stop it first");
             }
+            checkDailyLimit();
             Resolved resolved = resolve(session, model, account);
             List<String> ids = new ArrayList<>(attachmentIds);
             String content = text == null ? "" : text;
+            String titleSource = content;
             if (content.isBlank() && ids.isEmpty()) {
                 throw new ChatException(400, "empty_message", "a message needs text or an attachment");
             }
@@ -149,7 +155,7 @@ public final class ChatTurnManager {
                 throw new ChatException(500, "store_error", "could not store the message");
             }
             if (isUntitled(session.title())) {
-                store.updateSession(sessionId, titleOf(content, ids), null, null);
+                store.updateSession(sessionId, titleOf(titleSource, ids), null, null);
             }
             ChatStore.Node assistantNode = store.beginAssistantNode(sessionId, resolved.model());
             ChatStore.Message assistantMessage = assistantNode.active();
@@ -186,6 +192,7 @@ public final class ChatTurnManager {
             if (bySession.containsKey(sessionId)) {
                 throw new ChatException(409, "chat_busy", "this session is already streaming; stop it first");
             }
+            checkDailyLimit();
             ChatStore.Node target = findNode(store.context(sessionId), nodeId);
             if (target == null) {
                 throw new ChatException(404, "node_not_found", "node not found");
@@ -205,6 +212,7 @@ public final class ChatTurnManager {
                 context = contextBefore(sessionId, target.id());
             } else if ("truncate_after".equals(mode)) {
                 store.truncateAfter(sessionId, target.id());
+                attachments.pruneOrphans();
                 if ("assistant".equals(target.role())) {
                     ChatStore.Message variant = store.addVariant(target.id(), "", "", "streaming",
                             resolved.model(), null);
@@ -254,6 +262,7 @@ public final class ChatTurnManager {
             if (bySession.containsKey(sessionId)) {
                 throw new ChatException(409, "chat_busy", "this session is already streaming; stop it first");
             }
+            checkDailyLimit();
             ChatStore.Node target = findNode(store.context(sessionId), nodeId);
             if (target == null) {
                 throw new ChatException(404, "node_not_found", "node not found");
@@ -268,6 +277,7 @@ public final class ChatTurnManager {
             Resolved resolved = resolve(session, null, null);
             store.updateMessage(message.id(), text, "", "done", message.usageJson(), true);
             store.truncateAfter(sessionId, nodeId);
+            attachments.pruneOrphans();
             ChatStore.Node assistantNode = store.beginAssistantNode(sessionId, resolved.model());
             ChatStore.Message assistantMessage = assistantNode.active();
             if (assistantMessage == null) {
@@ -544,7 +554,7 @@ public final class ChatTurnManager {
             return new ChatProtocol.Attachment(attachment.name(), attachment.mime(), "document",
                     attachment.size(), Path.of(attachment.path()), text);
         }
-        return new ChatProtocol.Attachment(attachment.name(), attachment.mime(), kind,
+        return new ChatProtocol.Attachment(attachment.name(), attachment.mime(), "text",
                 attachment.size(), Path.of(attachment.path()), text);
     }
 
@@ -618,16 +628,22 @@ public final class ChatTurnManager {
     }
 
     private void usage(ActiveTurn turn, int input, int output) {
+        int added;
         synchronized (turn.lock) {
             if (turn.finished) {
                 return;
             }
+            added = Math.max(0, input - turn.inputTokens) + Math.max(0, output - turn.outputTokens);
             if (input > 0) {
                 turn.inputTokens = input;
             }
             if (output > 0) {
                 turn.outputTokens = output;
             }
+        }
+        if (added > 0) {
+            rollDailyBudget();
+            dailyTokens.addAndGet(added);
         }
         JsonObject event = event("chat-usage", turn);
         event.addProperty("input", turn.inputTokens);
@@ -814,6 +830,27 @@ public final class ChatTurnManager {
     private void pruneRecent() {
         long cutoff = System.currentTimeMillis() - 10 * 60 * 1000;
         recent.entrySet().removeIf(entry -> entry.getValue().at() < cutoff);
+    }
+
+    private void checkDailyLimit() throws ChatException {
+        rollDailyBudget();
+        int limit = settings.dailyTokenLimit();
+        if (limit > 0 && dailyTokens.get() >= limit) {
+            throw new ChatException(429, "daily_limit",
+                    "the chat token budget for today is used up; raise it in chat settings");
+        }
+    }
+
+    private void rollDailyBudget() {
+        LocalDate today = LocalDate.now();
+        if (!today.equals(dailyDate)) {
+            synchronized (this) {
+                if (!today.equals(dailyDate)) {
+                    dailyDate = today;
+                    dailyTokens.set(0);
+                }
+            }
+        }
     }
 
     private static @Nullable String firstNonBlank(String... values) {

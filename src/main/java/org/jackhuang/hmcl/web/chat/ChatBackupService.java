@@ -63,8 +63,11 @@ public final class ChatBackupService {
 
     public BackupEntry backupNow(ChatSettings.Settings settings) throws IOException, SQLException {
         Path root = resolve(settings.backupDir());
+        boolean created = !Files.exists(root);
         Files.createDirectories(root);
-        setPrivate(root);
+        if (created) {
+            setPrivate(root);
+        }
         String name = "chat-backup-" + LocalDateTime.now().format(STAMP);
         Path target = root.resolve(name);
         int suffix = 1;

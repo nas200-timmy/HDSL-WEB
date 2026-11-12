@@ -5,6 +5,37 @@ import type { ChatAttachment, ChatModelInfo } from "../../types";
 
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
+/** 大图在浏览器里压到最长边 2048、JPEG 0.85；GIF 与不支持 canvas 的环境原样上传。 */
+async function prepareImage(file: File): Promise<File> {
+  if (!file.type.startsWith("image/") || file.type === "image/gif"
+      || typeof createImageBitmap !== "function") {
+    return file;
+  }
+  try {
+    const bitmap = await createImageBitmap(file);
+    const max = 2048;
+    if (bitmap.width <= max && bitmap.height <= max && file.size <= 2 * 1024 * 1024) {
+      bitmap.close?.();
+      return file;
+    }
+    const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return file;
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close?.();
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.85));
+    if (!blob) return file;
+    const stem = file.name.replace(/\.[^.]+$/, "") || "image";
+    return new File([blob], stem + ".jpg", { type: "image/jpeg" });
+  } catch {
+    return file;
+  }
+}
+
 /** 输入区：多行、附件、模型选择、发送/停止一体。 */
 export function Composer({
   draft, onDraft, onSend, onStop, streaming, disabled,
@@ -41,7 +72,7 @@ export function Composer({
     area.style.height = Math.min(240, Math.max(44, area.scrollHeight)) + "px";
   }, [draft]);
 
-  const addFiles = (files: FileList | File[] | null) => {
+  const addFiles = async (files: FileList | File[] | null) => {
     if (!files) return;
     for (const file of Array.from(files)) {
       if (pending.length >= 8) {
@@ -61,7 +92,7 @@ export function Composer({
         toast("error", `${file.name} 超过 ${image ? 20 : 50} MB`);
         continue;
       }
-      onUpload(file);
+      onUpload(await prepareImage(file));
     }
   };
 
@@ -76,7 +107,7 @@ export function Composer({
       onDrop={(event) => {
         event.preventDefault();
         setDragging(false);
-        addFiles(event.dataTransfer.files);
+        void addFiles(event.dataTransfer.files);
       }}
     >
       {pending.length > 0 && (
@@ -115,7 +146,7 @@ export function Composer({
           const files = Array.from(event.clipboardData.files);
           if (files.length > 0) {
             event.preventDefault();
-            addFiles(files);
+            void addFiles(files);
           }
         }}
         onCompositionStart={() => setComposing(true)}
@@ -144,7 +175,7 @@ export function Composer({
           multiple
           accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.json,.log,.yml,.yaml,.xml,.mp3,.wav,.mp4,.webm"
           onChange={(event) => {
-            addFiles(event.target.files);
+            void addFiles(event.target.files);
             event.target.value = "";
           }}
         />

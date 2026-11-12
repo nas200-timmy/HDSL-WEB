@@ -101,7 +101,6 @@ public final class AnthropicProtocol implements ChatProtocol {
                 .timeout(Duration.ofMinutes(10))
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
-                .header("anthropic-version", "2023-06-01")
                 .header("User-Agent", org.jackhuang.hmcl.Metadata.NAME + "/" + org.jackhuang.hmcl.Metadata.VERSION)
                 .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8));
         ChatEndpoints.applyAuth(builder, profile);

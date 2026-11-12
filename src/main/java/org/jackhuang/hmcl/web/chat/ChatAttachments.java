@@ -131,7 +131,7 @@ public final class ChatAttachments {
             if (("image".equals(kind) || "document".equals(kind)) && extension.isEmpty()) {
                 throw new Refused("refused_type: the file has no extension, cannot verify it");
             }
-            if ("image".equals(kind)) {
+            if ("image".equals(kind) && !"webp".equals(extension)) {
                 validateImage(temp);
                 sanitizeImage(temp, extension);
             }
@@ -367,6 +367,9 @@ public final class ChatAttachments {
     // ----------------------------------------------------------- extraction --
 
     private String extract(Path path, String extension, String kind) throws Exception {
+        if (Set.of("docx", "pptx", "xlsx").contains(extension)) {
+            checkZipBomb(path);
+        }
         Future<String> future = extractor.submit(() -> {
             try {
                 return switch (extension) {
@@ -396,6 +399,34 @@ public final class ChatAttachments {
         } catch (TimeoutException e) {
             future.cancel(true);
             throw new IOException("text extraction timed out");
+        }
+    }
+
+    /// OOXML 是 zip：拒绝展开后超过 200 MB、单条目超过 50 MB 或条目数过万的包。
+    private static void checkZipBomb(Path path) throws IOException {
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(path.toFile())) {
+            long total = 0;
+            int entries = 0;
+            var iterator = zip.entries();
+            while (iterator.hasMoreElements()) {
+                var entry = iterator.nextElement();
+                if (++entries > 20_000) {
+                    throw new IOException("document has too many entries");
+                }
+                if (entry.getSize() > 50L * 1024 * 1024) {
+                    throw new IOException("document contains an entry larger than 50 MB");
+                }
+                if (entry.getSize() > 0) {
+                    total += entry.getSize();
+                    if (total > 200L * 1024 * 1024) {
+                        throw new IOException("document expands to more than 200 MB");
+                    }
+                }
+            }
+            long compressed = Math.max(1, Files.size(path));
+            if (total / compressed > 200) {
+                throw new IOException("document has an unreasonable compression ratio");
+            }
         }
     }
 

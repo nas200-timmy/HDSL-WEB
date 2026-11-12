@@ -5,7 +5,7 @@ import { AddIcon, MenuIcon, SettingsIcon } from "../components/icons";
 import { useMobileLayout } from "../hooks";
 import { toast } from "../store";
 import type {
-  ChatAssistant, ChatAttachment, ChatModelInfo, ChatSession, ChatSessionSummary, WsEvent,
+  ChatAssistant, ChatAttachment, ChatModelInfo, ChatSession, ChatSessionSummary, ChatTurnOutcome, WsEvent,
 } from "../types";
 import { errMsg } from "../utils";
 import { ws } from "../ws";
@@ -288,6 +288,24 @@ export function ChatPage() {
     el.scrollTop = el.scrollHeight;
   }, [session?.nodes.length, live?.text, live?.reasoning]);
 
+  // 断线或漏帧的兜底：流式中每 3 秒拉一次快照；服务端说已结束就收掉本地的流。
+  useEffect(() => {
+    if (!live || !sessionId) return;
+    const timer = window.setInterval(() => {
+      void (async () => {
+        try {
+          const next = await api.chat.session(sessionId);
+          if (sessionIdRef.current !== sessionId) return;
+          setSession(next);
+          if (!next.streaming && liveRef.current) setLive(null);
+        } catch {
+          // The next tick will try again.
+        }
+      })();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [live?.turnId, sessionId]);
+
   const ensureSession = async (): Promise<ChatSession> => {
     if (session) return session;
     const created = await api.chat.createSession({
@@ -295,6 +313,9 @@ export function ChatPage() {
       model: model ?? undefined,
       account: currentAssistant?.account ?? undefined,
     });
+    // Subscribe before the first send: the kickoff/started frames can race the
+    // React effect that normally installs the topic.
+    ws.addTopics(["chat", `chat:${created.id}`]);
     applySession(created);
     setSessions((previous) => [{
       id: created.id, assistantId: created.assistantId, title: created.title,
@@ -302,6 +323,22 @@ export function ChatPage() {
       updatedAt: created.updatedAt, messageCount: created.nodes.length, lastMessage: null,
     }, ...previous]);
     return created;
+  };
+
+  const adoptOutcome = async (targetId: string, outcome: ChatTurnOutcome) => {
+    const next = await api.chat.session(targetId);
+    if (sessionIdRef.current === targetId || sessionIdRef.current === null) setSession(next);
+    if (next.model) setModel((previous) => previous ?? next.model);
+    if (next.account && models.length === 0) void loadModels(next.account, next.model);
+    const messageId = outcome.assistantMessage?.id;
+    const message = next.nodes.flatMap((node) => node.variants).find((item) => item.id === messageId);
+    if (message && message.status !== "streaming") {
+      setLive(null);
+      return;
+    }
+    setLive((previous) => previous && previous.turnId === outcome.turnId
+      ? { ...previous, messageId }
+      : { turnId: outcome.turnId, messageId, text: "", reasoning: "", status: "streaming" });
   };
 
   const send = async () => {
@@ -318,15 +355,7 @@ export function ChatPage() {
       });
       setDraft("");
       setPending([]);
-      setLive({
-        turnId: outcome.turnId,
-        messageId: outcome.assistantMessage?.id,
-        text: "",
-        reasoning: "",
-        status: "streaming",
-      });
-      const next = await api.chat.session(target.id);
-      if (sessionIdRef.current === target.id) setSession(next);
+      await adoptOutcome(target.id, outcome);
       void loadSessions(assistantId);
     } catch (error) {
       toast("error", `发送失败：${errMsg(error)}`);
@@ -363,8 +392,7 @@ export function ChatPage() {
     setBusy(true);
     try {
       const outcome = await api.chat.regenerate(session.id, { nodeId, mode, requestId: requestId() });
-      setLive({ turnId: outcome.turnId, messageId: outcome.assistantMessage?.id, text: "", reasoning: "", status: "streaming" });
-      setSession(await api.chat.session(session.id));
+      await adoptOutcome(session.id, outcome);
       void loadSessions(assistantId);
     } catch (error) {
       toast("error", `重新生成失败：${errMsg(error)}`);
@@ -381,8 +409,7 @@ export function ChatPage() {
         nodeId: editTarget.nodeId, text: editTarget.text, requestId: requestId(),
       });
       setEditTarget(null);
-      setLive({ turnId: outcome.turnId, messageId: outcome.assistantMessage?.id, text: "", reasoning: "", status: "streaming" });
-      setSession(await api.chat.session(session.id));
+      await adoptOutcome(session.id, outcome);
     } catch (error) {
       toast("error", `编辑失败：${errMsg(error)}`);
     } finally {
@@ -422,6 +449,9 @@ export function ChatPage() {
         model: model ?? currentAssistant.model ?? undefined,
         account: currentAssistant.account ?? undefined,
       });
+      setDraft("");
+      setPending([]);
+      setLive(null);
       applySession(created);
       await loadSessions(currentAssistant.id);
       setSidebarOpen(false);
@@ -459,6 +489,8 @@ export function ChatPage() {
         setSessionId(null);
         setSession(null);
         setLive(null);
+        setDraft("");
+        setPending([]);
       }
     } catch (error) {
       toast("error", `删除失败：${errMsg(error)}`);
@@ -500,6 +532,8 @@ export function ChatPage() {
           onSelect={(id) => {
             setSessionId(id);
             setLive(null);
+            setDraft("");
+            setPending([]);
             setSidebarOpen(false);
           }}
           onNew={() => void newSession()}

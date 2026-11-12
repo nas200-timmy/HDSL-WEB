@@ -366,14 +366,29 @@ public final class ChatService {
             if (!account.carriesAKey()) {
                 continue;
             }
-            JsonObject json = ChatEndpoints.profileJson(store, account, settings);
-            ChatEndpoints.Profile profile = ChatEndpoints.profile(store, account.key());
-            if (profile != null) {
-                JsonArray models = new JsonArray();
-                for (String model : profile.models()) {
-                    models.add(modelJson(account.key(), model, profile.protocol()));
+            JsonObject json;
+            try {
+                json = ChatEndpoints.profileJson(store, account, settings);
+                ChatEndpoints.Profile profile = ChatEndpoints.profile(store, account.key());
+                if (profile != null) {
+                    JsonArray models = new JsonArray();
+                    for (String model : profile.models()) {
+                        models.add(modelJson(account.key(), model, profile.protocol()));
+                    }
+                    if (models.isEmpty() && account.model() != null && !account.model().isBlank()) {
+                        models.add(modelJson(account.key(), account.model(), profile.protocol()));
+                    }
+                    json.add("modelList", models);
                 }
-                json.add("modelList", models);
+            } catch (IllegalArgumentException e) {
+                json = new JsonObject();
+                json.addProperty("name", account.key());
+                json.addProperty("vendor", account.vendorId());
+                json.addProperty("label", account.label() == null ? account.key() : account.label());
+                json.addProperty("endpoint", account.endpoint());
+                json.addProperty("protocol", ChatEndpoints.defaultProtocol(account));
+                json.addProperty("configured", false);
+                json.addProperty("error", e.getMessage());
             }
             result.add(json);
         }

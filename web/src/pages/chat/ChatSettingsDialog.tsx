@@ -283,6 +283,11 @@ export function ChatSettingsDialog({
               <input className="input" type="number" min={500} value={settings.longTextTokens}
                 onChange={(event) => patch("longTextTokens", Number(event.target.value))} />
             </label>
+            <label className="form-row">
+              <span className="form-label">每日 token 上限（0 = 不限制）</span>
+              <input className="input" type="number" min={0} value={settings.dailyTokenLimit}
+                onChange={(event) => patch("dailyTokenLimit", Number(event.target.value))} />
+            </label>
           </div>
 
           <div className="chat-settings-section">

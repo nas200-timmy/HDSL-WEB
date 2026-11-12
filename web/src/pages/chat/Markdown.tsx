@@ -23,9 +23,10 @@ function CodeBlock({ node, children }: { node?: any; children?: ReactNode }) {
   const [wrap, setWrap] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const raw = hastText(node).replace(/\n$/, "");
-  const classes = Array.isArray(node?.properties?.className)
-    ? node.properties.className.join(" ")
-    : typeof node?.properties?.className === "string" ? node.properties.className : "";
+  const codeNode = node?.children?.find((child: any) => child.tagName === "code") ?? node;
+  const classes = Array.isArray(codeNode?.properties?.className)
+    ? codeNode.properties.className.join(" ")
+    : typeof codeNode?.properties?.className === "string" ? codeNode.properties.className : "";
   const language = /language-([\w+-]+)/.exec(classes)?.[1] ?? "";
   const long = raw.split("\n").length > 32;
 
