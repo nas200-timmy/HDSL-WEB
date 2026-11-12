@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
 import {
@@ -15,7 +16,6 @@ import type {
 import { errMsg } from "../utils";
 import { ws } from "../ws";
 import { AssistantDialog, AssistantManagerDialog } from "./chat/AssistantDialog";
-import { ChatSettingsDialog } from "./chat/ChatSettingsDialog";
 import { ChatSidebar, RenameSessionDialog } from "./chat/ChatSidebar";
 import { Composer } from "./chat/Composer";
 import { Markdown } from "./chat/Markdown";
@@ -67,6 +67,7 @@ function LiveBubble({ assistant, text, reasoning }: { assistant: ChatAssistant |
 /** 面板聊天页（docs/chat.md §2/§12）。 */
 export function ChatPage() {
   const mobile = useMobileLayout();
+  const navigate = useNavigate();
   const [assistants, setAssistants] = useState<ChatAssistant[]>([]);
   const [assistantId, setAssistantId] = useState("default");
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
@@ -86,7 +87,6 @@ export function ChatPage() {
   const [editTarget, setEditTarget] = useState<{ nodeId: string; text: string } | null>(null);
   const [assistantDialog, setAssistantDialog] = useState<{ assistant: ChatAssistant | null } | null>(null);
   const [managerOpen, setManagerOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmRegenerate, setConfirmRegenerate] = useState<{ nodeId: string; mode: "in_place" | "truncate_after" } | null>(null);
   const [loadingChat, setLoadingChat] = useState(true);
   const [needsElevation, setNeedsElevation] = useState(false);
@@ -592,7 +592,7 @@ export function ChatPage() {
           assistantId={assistantId}
           onAssistant={switchAssistant}
           onManageAssistants={openManager}
-          onSettings={() => setSettingsOpen(true)}
+          onSettings={() => navigate("/chat/settings")}
           sessions={sessions}
           sessionId={sessionId}
           onSelect={(id) => {
@@ -620,8 +620,8 @@ export function ChatPage() {
           <div className="chat-header-title">
             <div className="chat-header-name">{session?.title || currentAssistant?.name || "聊天"}</div>
             <div className="chat-header-sub">
-              {currentAssistant?.name ?? "默认助手"}
-              {model ? ` · ${model}` : ""}
+              <span>{currentAssistant?.name ?? "默认助手"}</span>
+              {model && <span className="chat-header-model">{model}</span>}
               {live ? " · 正在生成" : ""}
             </div>
           </div>
@@ -630,7 +630,7 @@ export function ChatPage() {
             <AddIcon size={16} />
             新会话
           </button>
-          <button className="tool-btn ripple-host" onClick={() => setSettingsOpen(true)} title="聊天设置">
+          <button className="tool-btn ripple-host" onClick={() => navigate("/chat/settings")} title="聊天设置">
             <SettingsIcon size={20} />
           </button>
           {session && (
@@ -893,11 +893,6 @@ export function ChatPage() {
         }}
       />
 
-      <ChatSettingsDialog
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        onSaved={() => undefined}
-      />
     </div>
   );
 }

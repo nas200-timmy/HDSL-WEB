@@ -76,6 +76,7 @@ export function MessageItem({
       <div className="chat-msg-body">
         <div className={`chat-msg-meta${isUser ? " user" : ""}`}>
           {!isUser && <span className="chat-msg-name">{assistant.name}</span>}
+          {!isUser && message.model && <span className="chat-msg-model">{message.model}</span>}
           {streaming && <span className="chat-streaming-pill"><span className="chat-streaming-dot" />生成中</span>}
           <span className="chat-msg-time">{time}</span>
         </div>

@@ -642,6 +642,13 @@ public final class ChatEndpoints {
         json.addProperty("vendor", account.vendorId());
         json.addProperty("label", account.label() == null ? account.key() : account.label());
         json.addProperty("endpoint", account.endpoint());
+        json.add("model", account.model() == null
+                ? com.google.gson.JsonNull.INSTANCE
+                : new com.google.gson.JsonPrimitive(account.model()));
+        String key = account.apiKey() == null ? "" : account.apiKey().trim();
+        json.add("maskedKey", key.isEmpty()
+                ? com.google.gson.JsonNull.INSTANCE
+                : new com.google.gson.JsonPrimitive(key.substring(0, Math.min(8, key.length())) + "…"));
         if (profile == null) {
             json.addProperty("protocol", defaultProtocol(account));
             json.addProperty("configured", false);

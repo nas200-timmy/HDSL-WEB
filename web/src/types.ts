@@ -1137,6 +1137,8 @@ export interface ChatAccountProfile {
   vendor: string;
   label: string;
   endpoint: string | null;
+  model?: string | null;
+  maskedKey?: string | null;
   protocol: string;
   base?: string;
   modelsPath?: string;
