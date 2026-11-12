@@ -62,6 +62,13 @@ dependencies {
     // only native bridge in this build.
     implementation(libs.jna)
 
+    // Panel chat (docs/chat.md): SQLite is the store; PDFBox and POI only
+    // extract text out of uploaded documents. They never execute content.
+    implementation(libs.sqlite.jdbc)
+    implementation(libs.pdfbox)
+    implementation(libs.poi.ooxml)
+    implementation(libs.poi.scratchpad)
+
     // Jetty speaks slf4j; this binding forwards it to java.util.logging, the
     // same sink HDSL-web's own logging story is built on. Server code itself
     // logs through org.jackhuang.hmcl.util.logging.Logger, never slf4j.

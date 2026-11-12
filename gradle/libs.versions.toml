@@ -24,6 +24,10 @@ slf4j = "2.0.20"
 # Dual-licensed LGPL-2.1 / Apache-2.0; this build relies on the Apache-2.0 arm,
 # which is GPL-3.0 compatible.
 jna = "5.19.1"
+# 聊天模块（docs/chat.md）：SQLite 是会话与消息的唯一持久化；PDFBox / POI 只做附件文本抽取。
+sqlite-jdbc = "3.54.1.0"
+pdfbox = "3.0.5"
+poi = "5.4.1"
 
 [libraries]
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
@@ -52,6 +56,10 @@ bcpkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycast
 slf4j-jdk14 = { module = "org.slf4j:slf4j-jdk14", version.ref = "slf4j" }
 # The web terminal's PTY glue (docs/web-shell.md). Apache-2.0 arm only.
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
+pdfbox = { module = "org.apache.pdfbox:pdfbox", version.ref = "pdfbox" }
+poi-ooxml = { module = "org.apache.poi:poi-ooxml", version.ref = "poi" }
+poi-scratchpad = { module = "org.apache.poi:poi-scratchpad", version.ref = "poi" }
 
 [plugins]
 shadow = { id = "com.gradleup.shadow", version = "9.6.1" }
