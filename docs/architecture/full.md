@@ -9,7 +9,7 @@ flowchart LR
   subgraph client["客户端"]
     direction TB
     spa["React SPA<br/>web/src"]
-    pages["实例页面<br/>dsh · 品牌 · MC · 转码"]
+    pages["页面<br/>实例 · dsh · 品牌 · MC · 转码 · 聊天"]
     wsclient["WebSocket 客户端"]
   end
 
@@ -28,13 +28,14 @@ flowchart LR
 
   subgraph apilayer["API 层"]
     direction TB
-    api["System · Auth · Instances · Versions<br/>Tasks · Node · Plugins · Dsh<br/>Packs · Exports · Doctor · Accounts<br/>Vendors · Models · ZCode · Brands<br/>Developer · Settings · Network<br/>Wallpapers · MC · Transcode"]
+    api["System · Auth · Instances · Versions<br/>Tasks · Node · Plugins · Dsh<br/>Packs · Exports · Doctor · Accounts<br/>Vendors · Models · ZCode · Brands<br/>Developer · Settings · Network<br/>Wallpapers · MC · Transcode · Chat"]
   end
 
   subgraph services["控制面服务"]
     direction TB
     task["TaskService<br/>安装 / 下载 / 构建任务"]
     tx["TranscodeModule<br/>FeatureState · Queue · Presets<br/>Tools · Quality · Installer"]
+    chat["ChatModule<br/>Store · TurnManager · Attachments<br/>EndpointResolver · Backup"]
     event["EventBus"]
     audit["AuditLog"]
     authsvc["AuthService / UserStore<br/>LoginThrottle"]
@@ -78,6 +79,8 @@ flowchart LR
     mcd["minecraft/<br/>cores · java · versions · backups<br/>sources.json · eula.json"]
     mcr["MC 存档根<br/>$HOME/mc 或 HDSL_MC_DIR / mc.dir"]
     txd["transcode/<br/>feature.json · queue.json<br/>presets/ · logs/ · tools/"]
+    chatd["chat/<br/>chat.db · files/"]
+    backupd["backup/<br/>chat-backup-*/"]
     media["媒体根（不在 /data）<br/>HDSL_MEDIA_ROOT / transcode.media_root<br/>容器 /home/hdsl/video"]
     other["packs/ · plugins/ · exports/<br/>wallpapers/ · tmp/"]
   end
@@ -112,6 +115,7 @@ flowchart LR
 
   api --> task
   api --> tx
+  api --> chat
   api --> authsvc
   api --> elev
   api --> brandrt
@@ -134,6 +138,9 @@ flowchart LR
   txrt --> ffmpegp
   tx --> txd
   txrt --> ffmpegdl
+  chat --> chatd
+  chat --> backupd
+  chat --> event
   sysm -->|"sysfs / nvidia-smi"| gpu
 
   event --> wsgw
@@ -180,6 +187,8 @@ flowchart LR
   data --> brandsd
   data --> mcd
   data --> txd
+  data --> chatd
+  data --> backupd
   data --> other
 ```
 
@@ -204,6 +213,7 @@ flowchart LR
 | `/api/wallpapers/*` | `WallpaperApiServlet` | 壁纸 |
 | `/api/mc/*` | `McApiServlet` | MC 实例、核心、Java、插件、世界、备份、控制台（受 `McFeatureFilter` 保护） |
 | `/api/transcode/*` | `TranscodeApiServlet` | 功能门、媒体浏览、预设/参数集、队列与任务、工具、质量评测、ffmpeg 安装（受 `TranscodeFeatureFilter` 保护） |
+| `/api/chat/*` | `ChatApiServlet` | 会话/助手、发送/编辑/重生成/停止、附件、模型服务/能力/probe、设置与备份；对 agent 票全关 |
 | `/i/{id}/*` | `InstanceProxyServlet` | dsh / 品牌 / ZCode 的 HTTP + WebSocket 反代 |
 | `/ws/*`、`/ws/terminal/*` | `WsGateway`、`TerminalWebSocket` | 事件流、终端 PTY |
 | `/` | `StaticServlet` | React SPA |
@@ -219,6 +229,7 @@ flowchart LR
 | `/i/{id}/` | 反代 | 只代理 dsh、品牌、ZCode；MC 不走这里 |
 | `/ws/terminal/{ticket}` | 终端 | 一次性 ticket 换取 PTY 连接 |
 | — | 转码 | 不监听端口：队列在面板 JVM 内，由它拉起 `ffmpeg` / `ffprobe` 子进程 |
+| — | 聊天 | 不监听端口：REST + 既有 `/ws`；SQLite 在 `<data>/chat/`，备份在 `/data/backup/` |
 
 ## 数据布局
 
@@ -248,6 +259,8 @@ flowchart LR
   minecraft --> sources["sources.json"]
   minecraft --> eula["eula.json"]
   data --> tx["transcode/"]
+  data --> chatd2["chat/<br/>chat.db · files/"]
+  data --> backupd2["backup/<br/>chat-backup-*/"]
   tx --> txfeature["feature.json"]
   tx --> txqueue["queue.json"]
   tx --> txpresets["presets/"]
@@ -269,6 +282,7 @@ flowchart LR
 - `tcfilter` 是转码的同一道口径：关闭时除 `feature` / `terms` / `enable` / `decline` 外一律 404。启用要 HTTPS + 开发者密码 + 须知，状态落在 `<data>/transcode/feature.json`，不写 `server.yaml`。
 - `tx` 是自成一体的模块：队列、预设、工具、质量评测、ffmpeg 安装都挂在同一个 `TranscodeModule` 下，**不依赖** `dsh` / `brand` / `minecraft` 的运行时；`txrt` 负责定位与探测 ffmpeg，队列派发 `ffmpegp`。
 - `ffmpegp` 是面板拉起的外部进程，不是受管实例：读写 `media`，日志写 `<data>/transcode/logs/`，输出先落 `.part` 再原子改名；硬件失败走 `flows/transcode.md` 里的决策与降级链。
+- `chat` 是面板自己的功能，不绑定实例：SQLite 在 `<data>/chat/`，附件按 sha256 去重；token 流走既有 `/ws` 的 `chat:<sessionId>`，命令走 REST。它只依赖账户记录里的 key/base/model，不改主界面账户页；设置/备份/probe 要求开发者提权。见 `flows/chat.md`。
 - `sysm` 的 GPU 数据来自 `/sys/class/drm` 与 `nvidia-smi`，读不到就返回空列表——图上的 `gpu` 是宿主驱动，不是网络依赖。
 - `/ws/terminal/{ticket}` 在 `AuthFilter` 里是一条公开路径，但它自己就是门：握手时校验一次性 ticket **且** 校验签发票据的会话 Cookie 或 Agent 授权（见 `flows/auth.md`）。
 - `/data` 是面板的持久化边界（含 `transcode/`）；媒体根与 MC 存档根都可能不在 `/data` 下——前者看 `HDSL_MEDIA_ROOT` / `transcode.media_root`，后者看 `mc.dir` / `HDSL_MC_DIR`（后者优先）/ `$HOME/mc`。

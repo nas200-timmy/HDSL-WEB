@@ -1,6 +1,6 @@
 # 面板聊天（Panel Chat）设计稿
 
-状态：Draft v2，已按审批意见更新  
+状态：Implemented v1（2026-11-12，`web-shell`），设计稿按落地实现回写  
 日期：2026-11-12  
 范围：HDSL-web 面板内的纯聊天页；不接 NextChat，不引入桌面壳。
 
@@ -45,12 +45,12 @@
 
 ### 2.2 消息
 
-- 用户消息右侧气泡，助手消息左侧；是否显示助手气泡可配置，默认显示。
-- 消息内容用 Markdown 渲染；代码块顶部「语言 + 复制」，长代码可展开/折叠。
-- 图片显示缩略图，点击放大；文件显示 chip（文件名 + 类型图标）。
+- 用户消息靠右、助手消息靠左；助手气泡固定显示。
+- 消息内容用 Markdown 渲染；代码块顶部「语言 + 复制 + 下载」，长代码可展开/折叠。
+- 图片显示缩略图，点击在新标签打开；文件显示 chip（文件名 + 类型图标）。
 - 思考内容折叠在「思考」块里；工具调用不在 v1 出现。
-- 消息底部操作栏：复制、重新生成（两种模式）、编辑（仅用户消息）、分支 `‹ 1/3 ›`、删除、更多。
-- 操作栏在消息完成后淡入；流式中不显示编辑/删除。
+- 消息底部操作栏常驻：复制、重新生成（两种模式）、编辑（仅用户消息）、分支 `‹ 1/3 ›`、删除、更多。
+- 流式中隐藏编辑/删除/重新生成，只保留流式内容。
 - 「重新生成」是一个 split menu：
   - **重新生成当前回复**：给当前助手节点加 variant，保留后续消息；提示「后续消息仍基于旧回复」。
   - **从这里重新生成（丢弃后续）**：删除当前节点之后的所有节点，再生成。
@@ -64,7 +64,7 @@
 | 流式追加 | 新词/新块 `opacity 0→1` + `translateY(2px)→0` | 120–160ms ease-out |
 | 末尾光标 | 细竖线 1s 闪烁，完成后消失 | 1s |
 | 气泡增长 | 内容自然撑开，内部块淡入；Web 不硬 animate height | 120–180ms |
-| 操作栏 | 完成后 fade + 4px 上移 | 120ms |
+| 操作栏 | 完成后常驻；hover 加深，不做位移 | 120ms |
 | 思考/附件 | 展开收起 150–200ms；上传中 shimmer | 150ms |
 | 停止 | 发送↔停止形态/颜色过渡，不旋转 | 100ms |
 
@@ -213,7 +213,7 @@ interface ChatProtocol {
 
 ```text
 chat_session
-  id, title, model, created_at, updated_at
+  id, assistant_id, title, model, account_name, created_at, updated_at
 
 chat_node
   id, session_id, ordinal, role, active_variant_id, created_at
@@ -227,7 +227,16 @@ chat_attachment
   extracted_text_path, extract_status, created_at
 
 chat_account_profile
+  account_name, protocol, base_override, models_path, chat_path,
+  auth_style, extra_headers_json, models_json, models_fetched_at,
+  last_probe_json, updated_at
+
 chat_model_capability
+  account_name, model, vision, files, reasoning, tools,
+  max_context, max_output, source, updated_at
+
+chat_setting
+  key, value
 ```
 
 - 一个会话就是按 `ordinal` 排列的节点列表。
@@ -329,11 +338,12 @@ idle -> streaming -> done
 
 | 协议 | 图片 | 文件 |
 |---|---|---|
-| openai-completions | `image_url` data URL | 通常不支持文件，发抽取文本 |
-| anthropic-messages | `image` block | `document` block（PDF/文本）；Office 发抽取文本 |
+| openai-completions | `image_url` data URL | 默认发抽取文本；模型能力打开「原生文件（PDF）」后发 `file` part（`file_data` + `filename`） |
+| anthropic-messages | `image` block | PDF 发 `document` block；Office 发抽取文本 |
 | openai-responses（后续） | `input_image` | `input_file` |
 
-- 模型 `files=false` 时：发送抽取文本的前 N 字 + 明确「已截断，完整内容见附件」。
+- 模型 `files=false` 时：发送抽取文本；单附件超过 30k 字符会截断并附「完整内容见附件」。
+- `files=true` 表示**允许原生文件块**，不是“能读文件”：Anthropic PDF 默认可原生；OpenAI 兼容服务默认关闭，避免网关不支持时 400，用户可在模型能力里单独打开。
 - 转不了或超限就在发送前报错，不要发出去等 400。
 - 抽取文本也计入上下文预算。
 
@@ -361,7 +371,8 @@ record ModelCapabilities(
 ```
 
 - 存储：`chat_model_capability`，按 `account_name + model` 唯一。
-- 来源优先级：用户手动覆盖 > vendor 预设 > models.dev 目录 > unknown。
+- 来源优先级：用户手动覆盖 > vendor 预设 > 内置常见模型表 > unknown。
+- `files` 在实现里表示**原生文件块**（PDF）：Anthropic 默认开；OpenAI/Gemini/Qwen/GLM/Kimi 默认关，关闭时走文本抽取。
 - **能力设置入口在聊天页的模型菜单**，不在主界面账户页；避免和 dsh 共用账户时互相影响。
 - UI：模型菜单显示「图片 / 文件 / 思考 / 工具」开关和上下文/输出上限；可「恢复默认」。
 - 模型选择器显示徽章；不支持时禁用对应附件入口，或提示会走文本抽取。
@@ -371,7 +382,7 @@ record ModelCapabilities(
 ## 10. 后端接口
 
 ```text
-GET    /api/chat/sessions
+GET    /api/chat/sessions?assistant={id}
 POST   /api/chat/sessions
 GET    /api/chat/sessions/{id}
 PATCH  /api/chat/sessions/{id}
@@ -380,24 +391,39 @@ DELETE /api/chat/sessions/{id}
 POST   /api/chat/sessions/{id}/messages      send
 POST   /api/chat/sessions/{id}/regenerate    nodeId + mode
 POST   /api/chat/sessions/{id}/edit          nodeId + text
+DELETE /api/chat/sessions/{id}/nodes/{nodeId}
+POST   /api/chat/sessions/{id}/nodes/{nodeId}/variant
 POST   /api/chat/turns/{turnId}/cancel
 
-POST   /api/chat/attachments
+GET    /api/chat/assistants
+POST   /api/chat/assistants
+PATCH  /api/chat/assistants/{id}
+DELETE /api/chat/assistants/{id}
+POST   /api/chat/assistants/{id}/duplicate
+
+POST   /api/chat/attachments?sessionId={id}
 GET    /api/chat/attachments/{id}
 
-GET    /api/chat/settings
-PATCH  /api/chat/settings
+GET    /api/chat/accounts
+PATCH  /api/chat/accounts/{name}
+POST   /api/chat/accounts/{name}/capabilities
 POST   /api/chat/accounts/{name}/probe
 POST   /api/chat/accounts/{name}/models/refresh
 GET    /api/chat/models?account={name}
+
+GET    /api/chat/settings
+PATCH  /api/chat/settings
 POST   /api/chat/backup
 GET    /api/chat/backups
 ```
 
 - 发送/编辑/重新生成返回 `{turnId, userMessage, assistantMessage}`；流通过 WS 推。
 - 客户端带 `requestId`，服务端做幂等；网络重试不重复插入用户消息。
-- 设置包含：retention、backup、private endpoints、默认模型、能力覆盖。
-- 权限：普通聊天只要求面板 session；`/api/chat/settings`、`/api/chat/backup`、`/api/chat/accounts/*/probe` 额外要求 developer elevation；所有 `/api/chat/*` 对 agent ticket 关闭（见 13.1）。
+- 设置包含：retention、backup、private endpoints、默认账户/模型；模型能力覆盖走
+  `/api/chat/accounts/{name}/capabilities`。
+- 权限：普通聊天只要求面板 session；`/api/chat/settings`、`/api/chat/backup`、
+  `/api/chat/accounts/*`（PATCH/capabilities/probe/refresh）额外要求 developer elevation；
+  所有 `/api/chat/*` 对 agent ticket 关闭（见 13.1）。
 
 ## 11. WS 协议
 
@@ -424,27 +450,23 @@ chat-error         { sessionId, turnId, code, message, retryable }
 ```text
 web/src/pages/ChatPage.tsx
 web/src/pages/chat/
-  SessionList.tsx
-  ChatView.tsx
-  MessageItem.tsx
-  MessageActions.tsx
-  BranchSelector.tsx
-  Composer.tsx
-  AttachmentPicker.tsx
-  ModelPicker.tsx
-  ChatSettingsDialog.tsx
-  Markdown.tsx
-  CodeBlock.tsx
+  ChatSidebar.tsx       会话列表/助手切换/搜索/分组
+  MessageItem.tsx       消息、variant、两种重生成、常驻操作栏
+  Composer.tsx          输入区、附件、能力徽章、发送/停止
+  ModelPicker.tsx       跨服务模型弹层（搜索/分组/能力）
+  ChatSettingsPage.tsx  独立二级页（模型服务/默认模型/数据/网络）
+  AssistantDialog.tsx   助手管理
+  Markdown.tsx          GFM + sanitize + highlight + CodeBlock
 ```
 
-- 路由：`web/src/App.tsx` 增加 `/chat`；侧栏 `SideBar.tsx` 增加入口。
+- 路由：`web/src/App.tsx` 增加 `/chat` 与 `/chat/settings`；侧栏 `SideBar.tsx` 增加入口。
 - 状态：页面级 reducer + hooks；不新增 Zustand/Redux。
 - 复用：`Dialog`、`Snackbar`、`PopupMenu`、`icons`、`textBoxStyle`、`ws`。
 
 ### 12.2 Markdown
 
 - `react-markdown` + `remark-gfm` + `rehype-sanitize` + `rehype-highlight`。
-- 自定义 `CodeBlock`：语言标签、复制、下载、行号开关、换行开关；复制原始文本（strip ANSI）。
+- 自定义 `CodeBlock`：语言标签、复制、下载、换行开关、长代码折叠；复制原始文本（strip ANSI）。
 - 流式：30–60ms 合并 delta；未闭合围栏临时补闭合；代码块闭合后再高亮；已完成消息 `memo`。
 - 可选 KaTeX；Mermaid 延后且延迟加载。
 - 不启用 raw HTML；链接只允许 `http/https/mailto`，加 `rel="noopener noreferrer"`。
@@ -457,12 +479,16 @@ web/src/pages/chat/
 - 显示当前模型能力徽章；不支持图片时禁用图片入口，不支持文件时提示走文本抽取。
 - 滚动：用户贴底才自动跟随；上翻时暂停。
 
-### 12.4 聊天设置
+### 12.4 聊天设置（独立二级页 `/chat/settings`）
 
-- 模型与端点：每个账户的 protocol、base、chat/models path、测试连接、拉模型。
-- 模型能力：vision/files/reasoning/tools、上下文/输出上限、恢复默认。
-- 数据：保留策略、备份目录/时间/保留份数、立即备份、备份列表。
-- 网络：允许私网端点（默认开）/ strict allowlist。
+- **模型服务**：服务列表（搜索/状态/模型数）、添加供应商（内置目录 + 自定义）、
+  API Key/地址/协议/paths、测试连接、拉取模型、模型列表（搜索/默认星标/能力徽章/
+  能力覆盖）。
+- **默认模型**：默认账户与默认模型。
+- **数据与备份**：保留策略、长文本阈值、每日 token 上限、备份开关/时间/份数/目录、
+  立即备份、备份列表。
+- **网络**：允许私网端点（默认开）/ strict allowlist。
+- 模型选择在输入区按服务分组，选中时同时切换会话的 `account` 与 `model`。
 - 这些设置只影响聊天，不写回主界面账户页。
 
 ## 13. 安全
@@ -482,10 +508,10 @@ web/src/pages/chat/
 **v1 决策：聊天是人类操作员的表面，不是 agent API。**
 
 - 所有 `/api/chat/*` 只接受面板 session cookie，走现有 `AuthFilter`；不接受 bearer agent ticket。
-- 必须把 `/api/chat/` 加进 `AgentScopes.forbidden()`，且要放在 `GET -> READ` 快捷判断之前。否则 `required()` 会把 `GET /api/chat/sessions` 当成 `read`，任何默认 `read` 票都能读聊天历史。
-- `POST /api/chat/*` 目前会因为“没有 agent scope”被拒，但这是偶然行为，不能当契约；显式 `forbidden` 才是。
+- 已把 `/api/chat/` 加进 `AgentScopes.forbidden()`，并让 `required()` 对聊天返回 `null`；两条都在 `GET -> READ` 快捷判断之前。否则 `GET /api/chat/sessions` 会被当成 `read`，任何默认 `read` 票都能读聊天历史。
+- 不依赖“`POST` 没有 agent scope”这种偶然行为；显式 `forbidden` 是契约。
 - `/ws` 本来就是浏览器通道：`required()` 对非 `/api/*` 返回 `null`，agent 拿不到 `chat:<id>` 的流；保持现状。
-- 聊天设置、备份、endpoint/key 相关操作（`/api/chat/settings`、`/api/chat/backup`、`/api/chat/accounts/*/probe`）除 session 外，建议要求 developer elevation，复用现有 `DeveloperElevation`：它们能改 endpoint、导出/恢复全部聊天。
+- 聊天设置、备份、endpoint/key 相关操作（`/api/chat/settings`、`/api/chat/backup`、`/api/chat/accounts/*`）除 session 外，已要求 developer elevation，复用现有 `DeveloperElevation`：它们能改 endpoint、导出/恢复全部聊天。
 - 附件下载同样只接受 session，不能通过 agent ticket 拉取。
 - v1 **不新增 agent scope**。如果未来确实要让 agent 使用聊天：
   - 新增独立 `chat` scope，且不要放进 `DEFAULT`；
@@ -518,11 +544,13 @@ web/src/pages/chat/
 
 ## 16. 实施阶段
 
-1. **Phase 0 聊天设置地基**：`chat_account_profile` / `chat_model_capability`、EndpointProfile、probe、模型缓存、聊天设置 UI。
-2. **Phase 1 后端聊天**：SQLite + ChatStore + TurnManager + openai-completions + anthropic-messages + REST + `/ws` 事件；纯文本 UI。
-3. **Phase 2 聊天体验**：Markdown/代码块、停止、两种重生成、编辑、分支、会话列表、动效、保留设置。
-4. **Phase 3 附件与能力**：图片、PDF/Office/文本抽取、长文本附件、能力开关、备份。
-5. **Phase 4 扩展**：openai-responses、音频/视频能力、fork、搜索；工具/控制仍不做。
+> 实现状态（2026-11-12）：Phase 0/1/2/3 已完成；Phase 4 未做。
+
+1. **Phase 0 聊天设置地基**：已完成。
+2. **Phase 1 后端聊天**：已完成。
+3. **Phase 2 聊天体验**：已完成（Markdown/代码块、停止、两种重生成、编辑、分支、会话列表、动效、保留设置）。
+4. **Phase 3 附件与能力**：已完成（图片、PDF/Office/文本抽取、长文本附件、能力开关、备份、跨服务模型选择）。
+5. **Phase 4 扩展**：未做（openai-responses、音频/视频能力、fork、搜索；工具/控制仍不做）。
 
 ## 17. 已确认决策
 
@@ -539,14 +567,14 @@ web/src/pages/chat/
 11. **权限**：聊天是人类操作员表面；`/api/chat/` 对 agent ticket 关闭，v1 不新增 agent scope；设置/备份要求 developer elevation。
 12. **实例隔离**：v1 不做。聊天是面板级功能，不绑定实例；单用户下实例隔离既不增加安全边界，又会把会话生命周期、备份和 UI 复杂化。只有以后聊天能读实例工作区/日志或按实例分权限时，再加 `scope=instance` 的独立模式。
 
-## 18. 剩余待定（不阻塞动工）
+## 18. 实现时采用的默认（原“剩余待定”已关闭）
 
-1. 保留策略的默认选项集：30/90/180/365 天是否够，是否要自定义天数。
-2. 备份默认时间 03:17、保留 7 份是否合适。
-3. `.doc/.ppt/.xls` 旧格式是否都支持，还是只支持 OOXML（`.docx/.pptx/.xlsx`）。
-4. 音频/视频 v1 只保存不送模型，是否接受。
-5. 模型能力默认值来源：只靠 vendor 预设 + models.dev，还是给常见模型内置一份表。
-6. 未来是否给 agent 开放独立 `chat` scope（默认不开放；开放时拆 read/write 并加限额）。
+1. 保留策略：永久 / 30 / 90 / 180 / 365 天 / 自定义天数。
+2. 备份默认 03:17、保留 7 份，可在设置页改。
+3. `.doc/.ppt/.xls` 旧格式支持（POI scratchpad）；宏文档仍拒绝。
+4. 音频/视频只保存不送模型；发送时明确报错/提示。
+5. 能力默认值：用户手动覆盖 > vendor 预设 > 内置常见模型表 > unknown。
+6. v1 不新增 agent `chat` scope；`/api/chat/*` 对 agent ticket 全关。
 
 ## 19. 助手（Assistant）与角色隔离
 
@@ -617,3 +645,26 @@ POST   /api/chat/sessions               // body 带 assistantId
 - Phase 0/1：`chat_assistant` 表、默认助手种子、会话 `assistant_id`、CRUD API。
 - Phase 2：侧栏切换器、助手编辑对话框、按助手过滤会话。
 - Phase 3/4：常用短语、开场白增强、角色卡导入导出（如果确实需要）。
+
+## 20. 实现记录（2026-11-12）
+
+- 分支：`web-shell`；未合入 `main`，未推送。
+- 主要提交：
+  - `82815c238` 存储、端点解析与两种协议适配
+  - `244eea39b` 附件落盘、MIME 嗅探与文本抽取
+  - `9da754812` 会话 API、turn 状态机与 agent 权限边界
+  - `15c2a7c78` 聊天页、Markdown 与助手/设置界面
+  - `9d3e5ddae` 默认账户兜底、probe 缓存与端到端 turn 测试
+  - `d300c8e65` 流式竞态、附件清理与图片压缩
+  - `a806c8b8c` 视觉、提权态与代码块修复
+  - `1db4814d7` 独立设置页与模型服务管理、消息左右对齐
+  - `71636e843` 跨服务模型选择、模型服务入口与原生文件开关
+- 后端入口：`src/main/java/org/jackhuang/hmcl/web/chat/`；前端入口：
+  `web/src/pages/ChatPage.tsx`、`web/src/pages/chat/`。
+- 验证：`./gradlew test` 全绿；`npm run typecheck` / `build` / `compat` 绿；
+  `shadowJar` 成功；本地 Playwright 在 1440×900 与 390×844 下检查聊天页、
+  模型弹层、设置页与能力弹窗。
+- 线上状态：面板 0.6.85 仍服务旧前端资源，需重新构建/重启容器；未在本仓库
+  执行部署，也未写入任何真实 key/口令。
+- 已知未做：模型服务 ON/OFF 开关、模型家族分组、原生 OpenAI PDF 的真实网关
+  联调、备份恢复 UI、音频/视频原生输入、fork/搜索。

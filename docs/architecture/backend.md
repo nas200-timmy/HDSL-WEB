@@ -25,6 +25,7 @@ flowchart LR
     proxy["proxy"]
     task["task"]
     transcode["transcode<br/>FeatureState · Queue · CommandBuilder<br/>Presets · Tools · Quality<br/>Runtime · Installer"]
+    chat["chat<br/>ChatStore · TurnManager<br/>Attachments · Endpoints · Backup"]
   end
 
   subgraph shared["共享 / 遗留"]
@@ -56,6 +57,7 @@ flowchart LR
   server --> task
   server --> terminal
   server --> transcode
+  server --> chat
   server --> tls
   server --> ws
   server --> event
@@ -73,6 +75,7 @@ flowchart LR
   http --> task
   http --> terminal
   http --> transcode
+  http --> chat
   http --> config
   http --> event
   http --> logs
@@ -186,6 +189,9 @@ flowchart LR
   proxy -.->|"Json / 错误契约"| http
   system -.->|"Json / 错误契约"| http
   transcode -.->|"Json / 错误契约"| http
+  chat -.->|"Json / 错误契约"| http
+  chat --> setting
+  chat --> event
 ```
 
 ## 层的意图
@@ -200,6 +206,7 @@ flowchart LR
 | 反代 | `proxy` | `/i/*` HTTP/WS 中继、目标端口解析 |
 | 任务 | `task` | 长任务、进度、取消、审批 |
 | 转码 | `transcode` | 功能门与须知、ffmpeg 定位/探测/安装、媒体浏览、预设与命令生成、服务端队列与失败降级、工具与质量评测。子包按职责分：`queue` / `preset` / `command` / `runtime` / `tools` / `quality` / `media` |
+| 聊天 | `chat` | SQLite 会话/助手/附件、turn 状态机、OpenAI/Anthropic 协议、端点解析与 probe、能力覆盖、备份与保留。只依赖 `config`/`event`/`http.Json`/`setting` 的账户记录，不碰实例运行时 |
 | 共享 / 遗留 | `setting` | `LauncherSettings`、`SettingsManager`、`GameDirectory`、`DshInstanceRepository`——HMCL 遗留，被 dsh 与品牌两侧共用 |
 | 基础设施 | `config`、`event`、`audit`、`logs`、`system`、`tls`、`ws`、`node`、`emergency`、`acp` | 配置、事件、审计、日志、指标（含 GPU）、TLS、WebSocket、Node 消费者视图、急停、ACP |
 
