@@ -353,6 +353,15 @@ public final class ChatTurnManager {
         }
         String account = firstNonBlank(bodyAccount, session.accountName(), assistant.accountName(),
                 settings.defaultAccount());
+        if (account == null) {
+            // 单用户面板的常见起点：没有给助手指定账户时，用第一个带 key 的账户。
+            for (DshAccount candidate : ChatEndpoints.accounts()) {
+                if (candidate.carriesAKey()) {
+                    account = candidate.key();
+                    break;
+                }
+            }
+        }
         String model = firstNonBlank(bodyModel, session.model(), assistant.model(), settings.defaultModel());
         if (account == null) {
             throw new ChatException(400, "no_account",

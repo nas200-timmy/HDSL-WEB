@@ -418,6 +418,16 @@ public final class ChatEndpoints {
         probeJson.addProperty("modelsOk", modelsOk);
         probeJson.addProperty("latencyMs", latency);
         probeJson.addProperty("at", System.currentTimeMillis());
+        com.google.gson.JsonArray probeModels = new com.google.gson.JsonArray();
+        models.forEach(probeModels::add);
+        probeJson.add("models", probeModels);
+        com.google.gson.JsonArray probeWarnings = new com.google.gson.JsonArray();
+        warnings.forEach(probeWarnings::add);
+        probeJson.add("warnings", probeWarnings);
+        JsonObject resolved = new JsonObject();
+        resolved.addProperty("modelsUrl", profile.modelsUri().toString());
+        resolved.addProperty("chatUrl", profile.chatUri().toString());
+        probeJson.add("resolved", resolved);
         if (error != null) {
             probeJson.addProperty("error", error);
         }
