@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Dialog } from "../../components/Dialog";
 import { PopupItem, PopupMenu, PopupSep } from "../../components/PopupMenu";
-import { AddIcon, DeleteIcon, EditIcon, MoreVertIcon, SettingsIcon } from "../../components/icons";
+import { AddIcon, DeleteIcon, EditIcon, MoreVertIcon, PersonIcon, SearchIcon, SettingsIcon } from "../../components/icons";
 import type { ChatAssistant, ChatSessionSummary } from "../../types";
 
 function ago(at: number): string {
@@ -21,15 +21,26 @@ function preview(text: string | null): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 60);
 }
 
-/** 聊天侧栏：助手切换器 + 当前助手的会话列表。 */
+function groupOf(at: number): string {
+  if (!at) return "更早";
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (at >= start) return "今天";
+  if (at >= start - 86400000) return "昨天";
+  if (at >= start - 7 * 86400000) return "7 天内";
+  return "更早";
+}
+
+/** 聊天侧栏：助手切换器 + 搜索 + 按日期分组的会话列表。 */
 export function ChatSidebar({
-  assistants, assistantId, onAssistant, onManageAssistants,
+  assistants, assistantId, onAssistant, onManageAssistants, onSettings,
   sessions, sessionId, onSelect, onNew, onRename, onDelete, onClose,
 }: {
   assistants: ChatAssistant[];
   assistantId: string;
   onAssistant: (id: string) => void;
   onManageAssistants: () => void;
+  onSettings: () => void;
   sessions: ChatSessionSummary[];
   sessionId: string | null;
   onSelect: (id: string) => void;
@@ -41,7 +52,21 @@ export function ChatSidebar({
   const assistant = assistants.find((item) => item.id === assistantId) ?? assistants[0] ?? null;
   const [assistantMenu, setAssistantMenu] = useState<HTMLElement | null>(null);
   const [sessionMenu, setSessionMenu] = useState<{ anchor: HTMLElement; session: ChatSessionSummary } | null>(null);
+  const [query, setQuery] = useState("");
   const menuRef = useRef<HTMLButtonElement | null>(null);
+
+  const visible = query.trim()
+    ? sessions.filter((session) =>
+        (session.title + " " + (session.lastMessage ?? "")).toLowerCase()
+          .includes(query.trim().toLowerCase()))
+    : sessions;
+  const groups: { label: string; items: ChatSessionSummary[] }[] = [];
+  for (const session of visible) {
+    const label = groupOf(session.updatedAt);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(session);
+    else groups.push({ label, items: [session] });
+  }
 
   const pick = (id: string) => {
     onSelect(id);
@@ -52,51 +77,74 @@ export function ChatSidebar({
     <aside className="chat-sidebar">
       <div className="chat-sidebar-head">
         <button ref={menuRef} className="chat-assistant-switch ripple-host" onClick={() => setAssistantMenu(menuRef.current)}>
-          <span className="chat-avatar">{assistant?.avatar || "💬"}</span>
+          <span className="chat-avatar-ring">
+            <span className="chat-avatar">{assistant?.avatar || "💬"}</span>
+          </span>
           <span className="chat-assistant-text">
             <span className="chat-assistant-name">{assistant?.name ?? "默认助手"}</span>
-            <span className="chat-assistant-sub">{assistant?.description || "当前助手"}</span>
+            <span className="chat-assistant-sub">{assistant?.description || "点击切换助手"}</span>
           </span>
           <span className="chat-caret">▾</span>
         </button>
-        <button className="tool-btn ripple-host" onClick={onNew} title="新建会话">
-          <AddIcon size={20} />
+      </div>
+
+      <div className="chat-sidebar-actions">
+        <button className="chat-new-btn ripple-host" onClick={onNew}>
+          <AddIcon size={18} />
+          新建会话
         </button>
+        <label className="chat-search">
+          <SearchIcon size={14} />
+          <input
+            value={query}
+            placeholder="搜索会话"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
       </div>
 
       <div className="chat-session-list scroll">
-        {sessions.length === 0 ? (
-          <div className="chat-session-empty">这个助手还没有会话。发送第一条消息就会出现在这里。</div>
+        {groups.length === 0 ? (
+          <div className="chat-session-empty">
+            <span className="chat-session-empty-icon">💬</span>
+            <span>{query ? "没有匹配的会话" : "这个助手还没有会话"}</span>
+            {!query && <span className="chat-session-empty-hint">发送第一条消息，或点上面的「新建会话」。</span>}
+          </div>
         ) : (
-          sessions.map((session) => (
-            <div
-              key={session.id}
-              className={`chat-session-item${session.id === sessionId ? " selected" : ""}`}
-              onClick={() => pick(session.id)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  pick(session.id);
-                }
-              }}
-            >
-              <div className="chat-session-main">
-                <div className="chat-session-title">{session.title || "新会话"}</div>
-                <div className="chat-session-preview">{preview(session.lastMessage)}</div>
-              </div>
-              <span className="chat-session-meta">{ago(session.updatedAt)}</span>
-              <button
-                className="chat-session-more"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setSessionMenu({ anchor: event.currentTarget, session });
-                }}
-                title="更多"
-              >
-                <MoreVertIcon size={16} />
-              </button>
+          groups.map((group) => (
+            <div key={group.label} className="chat-session-group">
+              <div className="chat-session-group-title">{group.label}</div>
+              {group.items.map((session) => (
+                <div
+                  key={session.id}
+                  className={`chat-session-item${session.id === sessionId ? " selected" : ""}`}
+                  onClick={() => pick(session.id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      pick(session.id);
+                    }
+                  }}
+                >
+                  <div className="chat-session-main">
+                    <div className="chat-session-title">{session.title || "新会话"}</div>
+                    <div className="chat-session-preview">{preview(session.lastMessage)}</div>
+                  </div>
+                  <span className="chat-session-meta">{ago(session.updatedAt)}</span>
+                  <button
+                    className="chat-session-more"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSessionMenu({ anchor: event.currentTarget, session });
+                    }}
+                    title="更多"
+                  >
+                    <MoreVertIcon size={16} />
+                  </button>
+                </div>
+              ))}
             </div>
           ))
         )}
@@ -104,8 +152,12 @@ export function ChatSidebar({
 
       <div className="chat-sidebar-foot">
         <button className="chat-foot-btn ripple-host" onClick={onManageAssistants}>
-          <SettingsIcon size={16} />
+          <PersonIcon size={16} />
           管理助手
+        </button>
+        <button className="chat-foot-btn ripple-host" onClick={onSettings}>
+          <SettingsIcon size={16} />
+          聊天设置
         </button>
       </div>
 

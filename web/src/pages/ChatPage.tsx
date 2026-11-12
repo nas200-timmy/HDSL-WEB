@@ -1,7 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
-import { AddIcon, MenuIcon, SettingsIcon } from "../components/icons";
+import {
+  AddIcon, ArchiveIcon, DeleteIcon, DeployedCodeIcon, EditIcon, FormatListBulletedIcon,
+  LockIcon, MenuIcon, MoreVertIcon, SettingsIcon,
+} from "../components/icons";
+import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
+import { isElevationRequired, requestDeveloperPassword } from "../elevation";
 import { useMobileLayout } from "../hooks";
 import { toast } from "../store";
 import type {
@@ -15,6 +20,15 @@ import { ChatSidebar, RenameSessionDialog } from "./chat/ChatSidebar";
 import { Composer } from "./chat/Composer";
 import { Markdown } from "./chat/Markdown";
 import { MessageItem } from "./chat/MessageItem";
+
+function dayLabel(at: number): string {
+  const date = new Date(at);
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (at >= start) return "今天";
+  if (at >= start - 86400000) return "昨天";
+  return date.toLocaleDateString();
+}
 
 function requestId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -74,6 +88,11 @@ export function ChatPage() {
   const [managerOpen, setManagerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmRegenerate, setConfirmRegenerate] = useState<{ nodeId: string; mode: "in_place" | "truncate_after" } | null>(null);
+  const [loadingChat, setLoadingChat] = useState(true);
+  const [needsElevation, setNeedsElevation] = useState(false);
+  const [elevating, setElevating] = useState(false);
+  const [focusSignal, setFocusSignal] = useState(0);
+  const [sessionMenu, setSessionMenu] = useState<HTMLElement | null>(null);
 
   const sessionIdRef = useRef<string | null>(null);
   const assistantIdRef = useRef("default");
@@ -111,6 +130,7 @@ export function ChatPage() {
   const applySession = (next: ChatSession) => {
     setSession(next);
     setSessionId(next.id);
+    if (next.assistantId) setAssistantId(next.assistantId);
     const preferred = next.model ?? currentAssistant?.model ?? null;
     setModel(preferred);
     void loadModels(next.account ?? currentAssistant?.account ?? null, preferred);
@@ -125,7 +145,8 @@ export function ChatPage() {
       const next = await api.chat.session(id);
       if (sessionIdRef.current === id) setSession(next);
       return next;
-    } catch {
+    } catch (error) {
+      if (isElevationRequired(error)) setNeedsElevation(true);
       return null;
     }
   };
@@ -134,9 +155,11 @@ export function ChatPage() {
     try {
       const result = await api.chat.sessions(id);
       setSessions(result.sessions);
+      setNeedsElevation(false);
       return result.sessions;
-    } catch {
+    } catch (error) {
       setSessions([]);
+      if (isElevationRequired(error)) setNeedsElevation(true);
       return [];
     }
   };
@@ -151,7 +174,8 @@ export function ChatPage() {
       }
       return result.assistants;
     } catch (error) {
-      toast("error", `读取助手失败：${errMsg(error)}`);
+      if (isElevationRequired(error)) setNeedsElevation(true);
+      else toast("error", `读取助手失败：${errMsg(error)}`);
       return [];
     }
   };
@@ -174,6 +198,7 @@ export function ChatPage() {
           // The session may have been deleted; fall through to the list.
         }
       }
+      setLoadingChat(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -341,6 +366,46 @@ export function ChatPage() {
       : { turnId: outcome.turnId, messageId, text: "", reasoning: "", status: "streaming" });
   };
 
+  const reportError = (error: unknown, prefix: string) => {
+    if (isElevationRequired(error)) {
+      setNeedsElevation(true);
+      return;
+    }
+    toast("error", `${prefix}：${errMsg(error)}`);
+  };
+
+  const elevate = async () => {
+    setElevating(true);
+    try {
+      if (await requestDeveloperPassword()) {
+        setNeedsElevation(false);
+        await loadAssistants();
+        await loadSessions(assistantIdRef.current);
+      }
+    } finally {
+      setElevating(false);
+    }
+  };
+
+  const suggestions = currentAssistant?.quickPhrases?.length
+    ? currentAssistant.quickPhrases.slice(0, 4).map((phrase) => ({
+        icon: <FormatListBulletedIcon size={18} />,
+        title: phrase,
+        subtitle: "常用短语",
+        prompt: phrase,
+      }))
+    : [
+        { icon: <DeployedCodeIcon size={18} />, title: "解释一段代码", subtitle: "贴代码，我来讲清楚", prompt: "请解释下面这段代码：\n" },
+        { icon: <EditIcon size={18} />, title: "改写一段文字", subtitle: "更清楚、更简短", prompt: "请把下面这段文字改得更清楚：\n" },
+        { icon: <FormatListBulletedIcon size={18} />, title: "列一个计划", subtitle: "把目标拆成步骤", prompt: "帮我为下面这件事列一个可执行的计划：\n" },
+        { icon: <ArchiveIcon size={18} />, title: "总结一份文档", subtitle: "PDF / Office 也行", prompt: "请总结这份文档的要点：\n" },
+      ];
+
+  const pickSuggestion = (prompt: string) => {
+    setDraft(prompt);
+    setFocusSignal((value) => value + 1);
+  };
+
   const send = async () => {
     const text = draft.trim();
     if (!text && pending.length === 0) return;
@@ -358,7 +423,7 @@ export function ChatPage() {
       await adoptOutcome(target.id, outcome);
       void loadSessions(assistantId);
     } catch (error) {
-      toast("error", `发送失败：${errMsg(error)}`);
+      reportError(error, "发送失败");
     } finally {
       setBusy(false);
     }
@@ -380,7 +445,7 @@ export function ChatPage() {
       const attachment = await api.chat.uploadAttachment(target.id, file);
       setPending((previous) => [...previous, attachment]);
     } catch (error) {
-      toast("error", `上传失败：${errMsg(error)}`);
+      reportError(error, "上传失败");
     } finally {
       setUploading(false);
     }
@@ -395,7 +460,7 @@ export function ChatPage() {
       await adoptOutcome(session.id, outcome);
       void loadSessions(assistantId);
     } catch (error) {
-      toast("error", `重新生成失败：${errMsg(error)}`);
+      reportError(error, "重新生成失败");
     } finally {
       setBusy(false);
     }
@@ -411,7 +476,7 @@ export function ChatPage() {
       setEditTarget(null);
       await adoptOutcome(session.id, outcome);
     } catch (error) {
-      toast("error", `编辑失败：${errMsg(error)}`);
+      reportError(error, "编辑失败");
     } finally {
       setBusy(false);
     }
@@ -527,6 +592,7 @@ export function ChatPage() {
           assistantId={assistantId}
           onAssistant={switchAssistant}
           onManageAssistants={openManager}
+          onSettings={() => setSettingsOpen(true)}
           sessions={sessions}
           sessionId={sessionId}
           onSelect={(id) => {
@@ -550,33 +616,115 @@ export function ChatPage() {
               <MenuIcon size={20} />
             </button>
           )}
+          {currentAssistant && <span className="chat-header-avatar">{currentAssistant.avatar || "💬"}</span>}
           <div className="chat-header-title">
             <div className="chat-header-name">{session?.title || currentAssistant?.name || "聊天"}</div>
             <div className="chat-header-sub">
-              {currentAssistant?.avatar} {currentAssistant?.name ?? "默认助手"}
+              {currentAssistant?.name ?? "默认助手"}
               {model ? ` · ${model}` : ""}
+              {live ? " · 正在生成" : ""}
             </div>
           </div>
           <span className="spacer" />
+          <button className="chat-header-new ripple-host" onClick={() => void newSession()} title="新建会话">
+            <AddIcon size={16} />
+            新会话
+          </button>
           <button className="tool-btn ripple-host" onClick={() => setSettingsOpen(true)} title="聊天设置">
             <SettingsIcon size={20} />
           </button>
-          <button className="tool-btn ripple-host" onClick={() => void newSession()} title="新建会话">
-            <AddIcon size={20} />
-          </button>
+          {session && (
+            <button
+              className="tool-btn ripple-host"
+              onClick={(event) => setSessionMenu(event.currentTarget)}
+              title="会话操作"
+            >
+              <MoreVertIcon size={20} />
+            </button>
+          )}
         </div>
 
-        {!session ? (
-          <div className="chat-welcome">
-            <div className="chat-welcome-inner">
-              <div className="chat-welcome-avatar">{currentAssistant?.avatar || "💬"}</div>
-              <h1>{currentAssistant?.name ?? "默认助手"}</h1>
-              <p>{currentAssistant?.description || "发一条消息开始新会话"}</p>
+        <PopupMenu open={sessionMenu !== null} anchor={sessionMenu} onClose={() => setSessionMenu(null)}>
+          <PopupItem
+            icon={<EditIcon size={16} />}
+            onClick={() => {
+              const summary = sessions.find((item) => item.id === sessionId);
+              if (summary) setRenameTarget(summary);
+              setSessionMenu(null);
+            }}
+          >
+            重命名会话
+          </PopupItem>
+          <PopupSep />
+          <PopupItem
+            icon={<DeleteIcon size={16} />}
+            danger
+            onClick={() => {
+              const summary = sessions.find((item) => item.id === sessionId);
+              if (summary) setDeleteSessionTarget(summary);
+              setSessionMenu(null);
+            }}
+          >
+            删除会话
+          </PopupItem>
+        </PopupMenu>
+
+        {needsElevation ? (
+          <div className="chat-elevation">
+            <div className="chat-elevation-card">
+              <span className="chat-elevation-icon"><LockIcon size={26} /></span>
+              <h2>聊天接口需要开发者提权</h2>
+              <p>
+                当前开发者守卫是「全部 API」档：未提权时助手、会话与消息都会被拒绝。
+                输入开发者密码后重试，本页不会保存密码。
+              </p>
+              <button className="btn btn-raised ripple-host" disabled={elevating} onClick={() => void elevate()}>
+                {elevating ? "提权中…" : "输入开发者密码"}
+              </button>
+            </div>
+          </div>
+        ) : loadingChat ? (
+          <div className="chat-loading">
+            <span className="spinner" />
+            <span>正在加载聊天…</span>
+          </div>
+        ) : !session ? (
+          <div className="chat-welcome scroll">
+            <div className="chat-welcome-card">
+              <div className="chat-welcome-hero">
+                <div className="chat-welcome-avatar-ring">
+                  <span className="chat-welcome-avatar">{currentAssistant?.avatar || "💬"}</span>
+                </div>
+                <div className="chat-welcome-copy">
+                  <h1>{currentAssistant?.name ?? "默认助手"}</h1>
+                  <p>{currentAssistant?.description || "发一条消息，开始这段对话。"}</p>
+                  <div className="chat-welcome-chips">
+                    <span className="chat-chip">{assistant?.id === "default" ? "默认助手" : "助手"}</span>
+                    <span className="chat-chip">{model || "未选模型"}</span>
+                    {currentAssistant?.openingMessage && <span className="chat-chip">有开场白</span>}
+                  </div>
+                </div>
+              </div>
               {currentAssistant?.openingMessage && (
                 <div className="chat-welcome-opening">
                   <Markdown content={currentAssistant.openingMessage} />
                 </div>
               )}
+              <div className="chat-welcome-label">可以这样开始</div>
+              <div className="chat-suggestions">
+                {suggestions.map((suggestion) => (
+                  <button
+                    key={suggestion.title}
+                    className="chat-suggestion ripple-host"
+                    onClick={() => pickSuggestion(suggestion.prompt)}
+                  >
+                    <span className="chat-suggestion-icon">{suggestion.icon}</span>
+                    <span className="chat-suggestion-title">{suggestion.title}</span>
+                    <span className="chat-suggestion-sub">{suggestion.subtitle}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="chat-welcome-hint">Enter 发送 · Shift+Enter 换行 · 支持图片、PDF、Office 与长文本附件</div>
             </div>
           </div>
         ) : (
@@ -588,54 +736,65 @@ export function ChatPage() {
               atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
             }}
           >
-            {session.nodes.map((node) => {
-              const isLive = live !== null && node.id === liveNodeId;
-              return (
-                <MessageItem
-                  key={node.id}
-                  node={node}
-                  assistant={currentAssistant ?? { name: "助手", avatar: "💬" }}
-                  streaming={isLive}
-                  liveContent={isLive ? live?.text : undefined}
-                  liveReasoning={isLive ? live?.reasoning : undefined}
-                  onRegenerate={(nodeId, mode) => setConfirmRegenerate({ nodeId, mode })}
-                  onEdit={(nodeId, text) => setEditTarget({ nodeId, text })}
-                  onDelete={(nodeId) => setDeleteNodeTarget(nodeId)}
-                  onSwitchVariant={(nodeId, messageId) => void switchVariant(nodeId, messageId)}
-                />
-              );
-            })}
+            {(() => {
+              let previousDay = "";
+              return session.nodes.map((node) => {
+                const label = dayLabel(node.createdAt);
+                const showDay = label !== previousDay;
+                previousDay = label;
+                const isLive = live !== null && node.id === liveNodeId;
+                return (
+                  <Fragment key={node.id}>
+                    {showDay && <div className="chat-day"><span>{label}</span></div>}
+                    <MessageItem
+                      node={node}
+                      assistant={currentAssistant ?? { name: "助手", avatar: "💬" }}
+                      streaming={isLive}
+                      liveContent={isLive ? live?.text : undefined}
+                      liveReasoning={isLive ? live?.reasoning : undefined}
+                      onRegenerate={(nodeId, mode) => setConfirmRegenerate({ nodeId, mode })}
+                      onEdit={(nodeId, text) => setEditTarget({ nodeId, text })}
+                      onDelete={(nodeId) => setDeleteNodeTarget(nodeId)}
+                      onSwitchVariant={(nodeId, messageId) => void switchVariant(nodeId, messageId)}
+                    />
+                  </Fragment>
+                );
+              });
+            })()}
             {live && !liveAttached && (
               <LiveBubble assistant={currentAssistant} text={live.text} reasoning={live.reasoning} />
             )}
           </div>
         )}
 
-        <div className="chat-composer-wrap">
-          <Composer
-            draft={draft}
-            onDraft={setDraft}
-            onSend={() => void send()}
-            onStop={() => void stop()}
-            streaming={live !== null}
-            disabled={!canSend}
-            models={models}
-            model={model}
-            onModel={(value) => {
-              setModel(value);
-              if (session) {
-                void api.chat.updateSession(session.id, { model: value })
-                  .then((next) => setSession((current) => current ? { ...current, model: next.model } : current))
-                  .catch(() => undefined);
-              }
-            }}
-            pending={pending}
-            onUpload={(file) => void upload(file)}
-            onRemove={(id) => setPending((previous) => previous.filter((item) => item.id !== id))}
-            uploading={uploading}
-            quickPhrases={currentAssistant?.quickPhrases ?? []}
-          />
-        </div>
+        {!needsElevation && !loadingChat && (
+          <div className="chat-composer-wrap">
+            <Composer
+              draft={draft}
+              onDraft={setDraft}
+              onSend={() => void send()}
+              onStop={() => void stop()}
+              streaming={live !== null}
+              disabled={!canSend}
+              models={models}
+              model={model}
+              onModel={(value) => {
+                setModel(value);
+                if (session) {
+                  void api.chat.updateSession(session.id, { model: value })
+                    .then((next) => setSession((current) => current ? { ...current, model: next.model } : current))
+                    .catch(() => undefined);
+                }
+              }}
+              pending={pending}
+              onUpload={(file) => void upload(file)}
+              onRemove={(id) => setPending((previous) => previous.filter((item) => item.id !== id))}
+              uploading={uploading}
+              quickPhrases={currentAssistant?.quickPhrases ?? []}
+              focusSignal={focusSignal}
+            />
+          </div>
+        )}
       </div>
 
       <RenameSessionDialog

@@ -40,7 +40,7 @@ async function prepareImage(file: File): Promise<File> {
 export function Composer({
   draft, onDraft, onSend, onStop, streaming, disabled,
   models, model, onModel, pending, onUpload, onRemove, uploading,
-  quickPhrases,
+  quickPhrases, focusSignal,
 }: {
   draft: string;
   onDraft: (value: string) => void;
@@ -56,6 +56,7 @@ export function Composer({
   onRemove: (id: string) => void;
   uploading: boolean;
   quickPhrases: string[];
+  focusSignal?: number;
 }) {
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -71,6 +72,10 @@ export function Composer({
     area.style.height = "0px";
     area.style.height = Math.min(240, Math.max(44, area.scrollHeight)) + "px";
   }, [draft]);
+
+  useEffect(() => {
+    if (focusSignal) areaRef.current?.focus();
+  }, [focusSignal]);
 
   const addFiles = async (files: FileList | File[] | null) => {
     if (!files) return;
@@ -110,6 +115,7 @@ export function Composer({
         void addFiles(event.dataTransfer.files);
       }}
     >
+      {dragging && <div className="chat-drop-hint">松开上传附件</div>}
       {pending.length > 0 && (
         <div className="chat-pending">
           {pending.map((attachment) => (
@@ -180,9 +186,17 @@ export function Composer({
           }}
         />
         {uploading && <span className="chat-uploading">上传中…</span>}
+        {draft.length > 4000 && <span className="chat-charcount">{draft.length.toLocaleString()} 字</span>}
 
         <span className="spacer" />
 
+        {current && (
+          <span className="chat-caps">
+            {current.capabilities.vision && <span className="chat-cap" title="支持图片">图</span>}
+            {current.capabilities.files && <span className="chat-cap" title="支持原生文件">文</span>}
+            {current.capabilities.reasoning && <span className="chat-cap" title="支持思考">思</span>}
+          </span>
+        )}
         <label className="chat-model-pick" title={current ? `上下文 ${current.capabilities.maxContext} · 输出 ${current.capabilities.maxOutput}` : "选择模型"}>
           <select
             value={model ?? ""}

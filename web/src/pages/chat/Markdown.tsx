@@ -67,7 +67,7 @@ function CodeBlock({ node, children }: { node?: any; children?: ReactNode }) {
         </button>
       </div>
       <pre className={`chat-code-body${wrap ? " wrap" : ""}${long && !expanded ? " collapsed" : ""}`}>
-        <code className={`hljs${language ? " language-" + language : ""}`}>{children}</code>
+        {children}
       </pre>
       {long && (
         <button className="chat-code-more" onClick={() => setExpanded((value) => !value)}>

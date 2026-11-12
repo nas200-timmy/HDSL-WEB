@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { PopupItem, PopupMenu, PopupSep } from "../../components/PopupMenu";
-import { ContentCopyIcon, DeleteIcon, EditIcon, MoreVertIcon, RefreshIcon } from "../../components/icons";
+import { ContentCopyIcon, DeleteIcon, EditIcon, MoreVertIcon, PersonIcon, RefreshIcon } from "../../components/icons";
 import type { ChatAttachment, ChatMessage, ChatNode } from "../../types";
 import { api } from "../../api";
 import { Markdown } from "./Markdown";
@@ -55,6 +55,7 @@ export function MessageItem({
   const isUser = node.role === "user";
   const index = node.variants.findIndex((item) => item.id === message.id);
   const canSwitch = node.variants.length > 1;
+  const time = new Date(node.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
   const copy = async () => {
     try {
@@ -71,8 +72,13 @@ export function MessageItem({
   return (
     <div className={`chat-msg ${isUser ? "user" : "assistant"}`} data-node={node.id}>
       {!isUser && <div className="chat-msg-avatar">{assistant.avatar || "💬"}</div>}
+      {isUser && <div className="chat-msg-avatar user"><PersonIcon size={16} /></div>}
       <div className="chat-msg-body">
-        {!isUser && <div className="chat-msg-name">{assistant.name}</div>}
+        <div className={`chat-msg-meta${isUser ? " user" : ""}`}>
+          {!isUser && <span className="chat-msg-name">{assistant.name}</span>}
+          {streaming && <span className="chat-streaming-pill"><span className="chat-streaming-dot" />生成中</span>}
+          <span className="chat-msg-time">{time}</span>
+        </div>
         {reasoning && (
           <details className="chat-reasoning" open={streaming}>
             <summary>思考</summary>
@@ -120,7 +126,16 @@ export function MessageItem({
                 >›</button>
               </span>
             )}
-            <button className="chat-action" onClick={() => void copy()}>
+            {!isUser && (
+              <button
+                className="chat-action"
+                onClick={() => onRegenerate(node.id, "in_place")}
+                title="重新生成当前回复"
+              >
+                <RefreshIcon size={14} />
+              </button>
+            )}
+            <button className="chat-action" onClick={() => void copy()} title="复制">
               <ContentCopyIcon size={14} />
               {copied ? "已复制" : "复制"}
             </button>
