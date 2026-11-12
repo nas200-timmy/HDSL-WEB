@@ -561,7 +561,15 @@ export type WsEvent =
   | { type: "acp-ready"; instance: string; session: string; protocolVersion?: number }
   | { type: "acp-error"; instance: string; error: string }
   | { type: "acp-update"; instance: string; session: string; update: AcpSessionUpdate }
-  | { type: "acp-finished"; instance: string; session: string; stopReason?: string };
+  | { type: "acp-finished"; instance: string; session: string; stopReason?: string }
+  // 面板聊天（docs/chat.md §11）：只推事件，命令走 REST。
+  | { type: "chat-turn-started"; sessionId: string; turnId: string; messageId: string; nodeId: string; attemptNo: number }
+  | { type: "chat-delta"; sessionId: string; turnId: string; seq: number; text: string }
+  | { type: "chat-reasoning"; sessionId: string; turnId: string; seq: number; text: string }
+  | { type: "chat-usage"; sessionId: string; turnId: string; input: number; output: number }
+  | { type: "chat-turn-finished"; sessionId: string; turnId: string; messageId: string; status: string; finishReason: string; input?: number; output?: number }
+  | { type: "chat-error"; sessionId: string; turnId: string; code: string; message: string; retryable: boolean }
+  | { type: "chat-sessions-changed" | "chat-assistants-changed" | "chat-settings-changed" | "chat-backups-changed"; sessionId?: string };
 
 // ---------- 第三方品牌实例（kimi / opencode / claude-web，REST 挂 /api/brands/<brand>/*） ----------
 
@@ -1028,4 +1036,166 @@ export interface SystemStorage {
   mount: StorageMount;
   /** 上一次真正遍历的时间（ISO）；缓存命中时不变 */
   computedAt: string;
+}
+
+// ---------- 面板聊天（docs/chat.md） ----------
+
+export interface ChatAssistant {
+  id: string;
+  name: string;
+  avatar: string;
+  description: string;
+  systemPrompt: string;
+  openingMessage: string;
+  account: string | null;
+  model: string | null;
+  temperature: number | null;
+  maxTokens: number | null;
+  reasoningLevel: string | null;
+  quickPhrases: string[];
+  builtin: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ChatSessionSummary {
+  id: string;
+  assistantId: string;
+  title: string;
+  model: string | null;
+  account: string | null;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+  lastMessage: string | null;
+}
+
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  mime: string;
+  kind: "image" | "document" | "text" | "audio" | "video" | string;
+  size: number;
+  extractStatus: "pending" | "done" | "failed" | "skipped" | string;
+  extractError?: string | null;
+  url: string;
+  preview?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  nodeId: string;
+  variantIndex: number;
+  content: string;
+  reasoning: string;
+  status: "streaming" | "done" | "stopped" | "error" | "interrupted" | string;
+  model: string | null;
+  createdAt: number;
+  editedAt: number | null;
+  usage?: { input?: number; output?: number };
+  attachments: ChatAttachment[];
+}
+
+export interface ChatNode {
+  id: string;
+  ordinal: number;
+  role: "user" | "assistant";
+  activeVariantId: string | null;
+  createdAt: number;
+  variants: ChatMessage[];
+}
+
+export interface ChatSession {
+  id: string;
+  assistantId: string;
+  title: string;
+  model: string | null;
+  account: string | null;
+  createdAt: number;
+  updatedAt: number;
+  streaming: boolean;
+  nodes: ChatNode[];
+}
+
+export interface ChatModelCapabilities {
+  vision: boolean;
+  files: boolean;
+  reasoning: boolean;
+  tools: boolean;
+  maxContext: number;
+  maxOutput: number;
+  source: string;
+}
+
+export interface ChatModelInfo {
+  id: string;
+  capabilities: ChatModelCapabilities;
+}
+
+export interface ChatAccountProfile {
+  name: string;
+  vendor: string;
+  label: string;
+  endpoint: string | null;
+  protocol: string;
+  base?: string;
+  modelsPath?: string;
+  chatPath?: string;
+  authStyle?: string;
+  configured?: boolean;
+  resolved?: { modelsUrl: string; chatUrl: string };
+  models?: string[];
+  modelList?: ChatModelInfo[];
+  modelsFetchedAt?: number;
+  lastProbe?: ChatProbe & { at?: number };
+  extraHeaders?: Record<string, string>;
+}
+
+export interface ChatProbe {
+  reachable: boolean;
+  tlsOk: boolean;
+  authOk: boolean;
+  modelsOk: boolean;
+  models: string[];
+  latencyMs: number;
+  resolved: { modelsUrl: string; chatUrl: string };
+  warnings: string[];
+  error: string | null;
+}
+
+export interface ChatBackup {
+  name: string;
+  path: string;
+  createdAt: number;
+  bytes: number;
+  sessions: number;
+  messages: number;
+  attachments: number;
+  complete: boolean;
+  error?: string | null;
+}
+
+export interface ChatSettings {
+  retention: "forever" | "30d" | "90d" | "180d" | "365d" | "custom";
+  retentionDays: number;
+  backupEnabled: boolean;
+  backupTime: string;
+  backupKeep: number;
+  backupDir: string;
+  privateEndpoints: "allow" | "strict";
+  privateAllowlist: string[];
+  longTextTokens: number;
+  dailyTokenLimit: number;
+  streamFlushMs: number;
+  defaultAccount: string | null;
+  defaultModel: string | null;
+  retentionOptions: string[];
+  backups: ChatBackup[];
+}
+
+export interface ChatTurnOutcome {
+  turnId: string;
+  assistantNodeId?: string;
+  userMessage?: ChatMessage;
+  assistantMessage?: ChatMessage;
 }

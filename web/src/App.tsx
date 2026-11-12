@@ -8,6 +8,7 @@ import { OfflineBanner } from "./components/OfflineBanner";
 import { SnackbarHost } from "./components/Snackbar";
 import { ElevationHost } from "./components/ElevationDialog";
 import { AccountsPage } from "./pages/AccountsPage";
+import { ChatPage } from "./pages/ChatPage";
 import { DownloadPage } from "./pages/DownloadPage";
 import { InstallInstanceWizard } from "./pages/InstallInstanceWizard";
 import { NewInstancePage } from "./pages/NewInstancePage";
@@ -315,6 +316,7 @@ export default function App() {
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/transcode" element={<TranscodePage />} />
+            <Route path="/chat" element={<ChatPage />} />
             {/* 旧版路径兼容 */}
             <Route path="/packs" element={<Navigate to="/download?tab=modpack" replace />} />
             <Route path="/plugins" element={<Navigate to="/download?tab=plugin" replace />} />

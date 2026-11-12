@@ -2,6 +2,29 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 — 面板聊天
+
+> 场景：不想为了和模型说几句话再开一个网页聊天；面板里就有账户与 key，缺的只是一个
+> 会流式输出、能保留历史、能按助手隔离提示词的聊天页。设计见 [docs/chat.md](docs/chat.md)。
+
+- **聊天页**：主侧栏新增「聊天」，`/chat`；左侧助手切换器 + 会话列表，右侧消息流与输入区。
+  默认助手不可删；用户可新建助手，各自持有系统提示词、开场白、默认账户/模型与常用短语，
+  会话按助手过滤，切换助手从新会话开始。
+- **流式输出**：命令走 REST，token 走既有 `/ws` 的 `chat:<sessionId>` topic；支持停止、
+  两种重新生成（只重生成当前回复 / 丢弃后续）、编辑用户消息、variant 分支切换、删除节点。
+- **协议**：首批 `openai-completions` 与 `anthropic-messages`；端点路径是数据（内置默认表 +
+  聊天设置覆盖），不运行时猜 `base + /v1/chat/completions`；支持 probe 分阶段检查、拉模型、
+  手动能力覆盖（图片/文件/思考/工具/上下文/输出）。
+- **附件**：图片、PDF、DOC/DOCX、PPT/PPTX、XLS/XLSX、文本；PDFBox/POI 抽文本，图片校验并
+  重编码去 EXIF；宏文档、SVG/HTML/可执行文件拒绝；长文本超阈值自动转 `.txt` 附件。
+- **存储**：`<data>/chat/chat.db`（SQLite，WAL），附件按 sha256 去重；保留策略默认永久，
+  可设 30/90/180/365/自定义天；备份到 `/data/backup/chat-backup-<时间>/`，含 db 快照、
+  附件与 manifest，默认每天 03:17、保留 7 份。
+- **权限**：所有 `/api/chat/*` 对 agent ticket 关闭（放在 `GET → READ` 之前）；设置、备份、
+  端点探测与能力覆盖要求开发者提权；聊天不接工具，模型无法触发面板操作。
+- 验证：`gradlew test` 全绿（新增 SQLite/SSE/路径/权限与一次真实 SSE turn 的端到端用例）；
+  `npm run typecheck`、`npm run build`、`npm run compat` 绿。
+
 ## 未发布 — 编码队列的任务管理
 
 > 场景：转码跑起来发现效果不对，点「停止」后记录还留在列表里；去参数面板调好参数另存预设，

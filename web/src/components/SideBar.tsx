@@ -9,6 +9,7 @@ import type { Instance } from "../types";
 import { normState } from "../utils";
 import { BrandIcon } from "./BrandIcon";
 import {
+  ChatIcon,
   DownloadIcon,
   FormatListBulletedIcon,
   LogoutIcon,
@@ -106,6 +107,20 @@ export function MainSideBar() {
           <span className="side-subtitle">
             {account ? account.vendor : I18N["dsh.account.none.hint"]}
           </span>
+        </span>
+      </button>
+
+      <div className="side-category">聊天</div>
+      <button
+        className={`side-item ripple-host${selected("/chat") ? " selected" : ""}`}
+        onClick={go("/chat")}
+      >
+        <span className="side-graphic">
+          <ChatIcon size={20} />
+        </span>
+        <span className="side-text">
+          <span className="side-title">聊天</span>
+          <span className="side-subtitle">与模型对话</span>
         </span>
       </button>
 
