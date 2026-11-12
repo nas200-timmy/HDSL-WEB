@@ -23,6 +23,7 @@ import org.jackhuang.hmcl.web.developer.AgentScopes;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -101,6 +102,10 @@ class ChatContractTest {
         assertEquals(true, ChatCapabilities.knownModel("deepseek-reasoner").reasoning());
         assertEquals(false, ChatCapabilities.knownModel("deepseek-chat").vision());
         assertEquals(true, ChatCapabilities.knownModel("gpt-4o").vision());
+        // Native file blocks are opt-in for OpenAI-compatible services; Anthropic
+        // PDF documents are the one place the protocol itself defines them.
+        assertFalse(ChatCapabilities.knownModel("gpt-4o").files());
+        assertEquals(true, ChatCapabilities.knownModel("claude-sonnet-4-20250514").files());
         assertEquals(true, ChatCapabilities.knownModel("qwen2.5-vl-72b").vision());
     }
 }

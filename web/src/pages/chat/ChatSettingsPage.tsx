@@ -205,6 +205,12 @@ function ProvidersPanel({
   const [probeBusy, setProbeBusy] = useState(false);
 
   useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("add") === "1") {
+      setAddOpen(true);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!account && accounts.length > 0) setSelectedName(accounts[0].name);
   }, [accounts, account]);
 
@@ -355,8 +361,8 @@ function ProvidersPanel({
                 <span className="chat-provider-sub">{item.vendor} · {modelCount(item)} 个模型</span>
               </span>
               <span
-                className={`chat-provider-dot${item.configured && modelCount(item) > 0 ? " ok" : item.configured ? " warn" : ""}`}
-                title={item.configured ? "已配置" : "未配置"}
+                className={`chat-provider-dot${item.configured || modelCount(item) > 0 ? " ok" : " warn"}`}
+                title={item.configured || modelCount(item) > 0 ? "可用" : "还没有模型列表"}
               />
             </button>
           ))}
@@ -396,7 +402,9 @@ function ProvidersPanel({
                 </label>
                 <label className="form-row">
                   <span className="form-label">API 密钥（留空保持不变）</span>
-                  <input className="input" type="password" placeholder={account.lastProbe ? "已保存" : "sk-…"} value={form.apiKey}
+                  <input className="input" type="password"
+                    placeholder={account.maskedKey ? `已保存 ${account.maskedKey}` : "sk-…"}
+                    value={form.apiKey}
                     onChange={(event) => setForm((current) => ({ ...current, apiKey: event.target.value }))} autoComplete="off" />
                 </label>
                 <label className="form-row">
@@ -478,7 +486,7 @@ function ProvidersPanel({
                       <span className="chat-model-id" title={item.id}>{item.id}</span>
                       <span className="chat-model-caps">
                         {caps.vision && <span className="chat-cap" title="图片">图</span>}
-                        {caps.files && <span className="chat-cap" title="文件">文</span>}
+                        {caps.files && <span className="chat-cap" title="原生文件（PDF）">文</span>}
                         {caps.reasoning && <span className="chat-cap" title="思考">思</span>}
                         {caps.tools && <span className="chat-cap" title="工具">工</span>}
                       </span>
@@ -730,7 +738,7 @@ function CapabilityDialog({
           <label className="chat-capability-toggle" key={key}>
             <input type="checkbox" checked={caps[key]}
               onChange={() => setCaps({ ...caps, [key]: !caps[key] })} />
-            <span>{key === "vision" ? "图片" : key === "files" ? "文件" : key === "reasoning" ? "思考" : "工具（仅标记）"}</span>
+            <span>{key === "vision" ? "图片" : key === "files" ? "原生文件（PDF）" : key === "reasoning" ? "思考" : "工具（仅标记）"}</span>
           </label>
         ))}
       </div>
@@ -747,6 +755,7 @@ function CapabilityDialog({
         </label>
       </div>
       <div className="chat-capability-source">当前来源：{caps.source}</div>
+      <div className="hint">「原生文件」只在服务端支持 file/document 块时建议打开；关闭后 PDF/Office 以抽取文本发送。</div>
       <div className="dialog-actions">
         <button className="btn btn-text dim" disabled={busy} onClick={onClose}>取消</button>
         <button className="btn btn-text dim" disabled={busy} onClick={() => void save(true)}>恢复默认</button>

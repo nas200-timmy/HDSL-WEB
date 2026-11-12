@@ -547,12 +547,16 @@ public final class ChatTurnManager {
                     "audio and video attachments are stored but not sent to the model in v1");
         }
         String text = attachments.loadText(attachment);
-        boolean nativeDocument = resolved.protocol.supportsDocuments()
-                && resolved.capability.files()
-                && "application/pdf".equals(attachment.mime());
+        boolean nativeDocument = resolved.capability.files()
+                && "application/pdf".equals(attachment.mime())
+                && (resolved.protocol.supportsDocuments()
+                    || ChatEndpoints.OPENAI_COMPLETIONS.equals(resolved.protocol.id()));
         if (nativeDocument) {
             return new ChatProtocol.Attachment(attachment.name(), attachment.mime(), "document",
                     attachment.size(), Path.of(attachment.path()), text);
+        }
+        if (!resolved.capability.files() && text != null && text.length() > 30_000) {
+            text = text.substring(0, 30_000) + "\n\n[附件内容已截断，完整内容见附件]";
         }
         return new ChatProtocol.Attachment(attachment.name(), attachment.mime(), "text",
                 attachment.size(), Path.of(attachment.path()), text);

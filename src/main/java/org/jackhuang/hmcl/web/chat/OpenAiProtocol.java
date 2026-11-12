@@ -114,6 +114,16 @@ public final class OpenAiProtocol implements ChatProtocol {
                 url.addProperty("url", "data:" + attachment.mime() + ";base64," + data);
                 image.add("image_url", url);
                 images.add(image);
+            } else if ("document".equals(attachment.kind())) {
+                byte[] bytes = Files.readAllBytes(attachment.path());
+                JsonObject part = new JsonObject();
+                part.addProperty("type", "file");
+                JsonObject file = new JsonObject();
+                file.addProperty("filename", attachment.name());
+                file.addProperty("file_data", "data:" + attachment.mime() + ";base64,"
+                        + Base64.getEncoder().encodeToString(bytes));
+                part.add("file", file);
+                images.add(part);
             } else {
                 appendText(text, attachment);
             }

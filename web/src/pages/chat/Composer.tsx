@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowForwardIcon, CloseIcon } from "../../components/icons";
+import { ArrowForwardIcon, AttachFileIcon, CloseIcon } from "../../components/icons";
 import { toast } from "../../store";
-import type { ChatAttachment, ChatModelInfo } from "../../types";
+import type { ChatAttachment } from "../../types";
+import { api } from "../../api";
+import { ModelPicker, type ModelGroup } from "./ModelPicker";
 
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
@@ -39,7 +41,7 @@ async function prepareImage(file: File): Promise<File> {
 /** 输入区：多行、附件、模型选择、发送/停止一体。 */
 export function Composer({
   draft, onDraft, onSend, onStop, streaming, disabled,
-  models, model, onModel, pending, onUpload, onRemove, uploading,
+  groups, account, model, onPick, onManage, onAdd, pending, onUpload, onRemove, uploading,
   quickPhrases, focusSignal,
 }: {
   draft: string;
@@ -48,9 +50,12 @@ export function Composer({
   onStop: () => void;
   streaming: boolean;
   disabled: boolean;
-  models: ChatModelInfo[];
+  groups: ModelGroup[];
+  account: string | null;
   model: string | null;
-  onModel: (model: string) => void;
+  onPick: (account: string, model: string) => void;
+  onManage: () => void;
+  onAdd: () => void;
   pending: ChatAttachment[];
   onUpload: (file: File) => void;
   onRemove: (id: string) => void;
@@ -62,7 +67,10 @@ export function Composer({
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [composing, setComposing] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const current = models.find((item) => item.id === model) ?? null;
+  const currentGroup = groups.find((group) => group.name === account) ?? null;
+  const current = currentGroup?.models.find((item) => item.id === model)
+    ?? groups.flatMap((group) => group.models).find((item) => item.id === model)
+    ?? null;
   const canVision = current?.capabilities.vision ?? true;
   const canFiles = current?.capabilities.files ?? true;
 
@@ -90,7 +98,7 @@ export function Composer({
         continue;
       }
       if (!image && !canFiles) {
-        toast("info", "当前模型不支持原生文件，Office/PDF 会以抽取文本发送");
+        toast("info", "当前模型未开启原生文件，PDF/Office 会以抽取文本发送");
       }
       const limit = image ? 20 * 1024 * 1024 : 50 * 1024 * 1024;
       if (file.size > limit) {
@@ -120,8 +128,15 @@ export function Composer({
         <div className="chat-pending">
           {pending.map((attachment) => (
             <span className="chat-pending-chip" key={attachment.id}>
-              <span className="chat-pending-kind">{attachment.kind === "image" ? "IMG" : attachment.kind.toUpperCase()}</span>
+              {attachment.kind === "image" ? (
+                <img className="chat-pending-thumb" src={api.chat.attachmentUrl(attachment.id)} alt={attachment.name} />
+              ) : (
+                <span className="chat-pending-kind">{attachment.kind === "document" ? "DOC" : attachment.kind.toUpperCase()}</span>
+              )}
               <span className="chat-pending-name">{attachment.name}</span>
+              {attachment.extractStatus === "failed" && (
+                <span className="chat-pending-warn" title={attachment.extractError ?? "文本抽取失败"}>!</span>
+              )}
               <button className="chat-pending-remove" onClick={() => onRemove(attachment.id)} title="移除">
                 <CloseIcon size={12} />
               </button>
@@ -170,9 +185,9 @@ export function Composer({
           className="chat-tool ripple-host"
           onClick={() => fileRef.current?.click()}
           disabled={disabled || uploading}
-          title="添加附件"
+          title="添加图片 / PDF / Office / 文本"
         >
-          +
+          <AttachFileIcon size={18} />
         </button>
         <input
           ref={fileRef}
@@ -193,26 +208,19 @@ export function Composer({
         {current && (
           <span className="chat-caps">
             {current.capabilities.vision && <span className="chat-cap" title="支持图片">图</span>}
-            {current.capabilities.files && <span className="chat-cap" title="支持原生文件">文</span>}
+            {current.capabilities.files && <span className="chat-cap" title="支持原生文件（PDF）">文</span>}
             {current.capabilities.reasoning && <span className="chat-cap" title="支持思考">思</span>}
           </span>
         )}
-        <label className="chat-model-pick" title={current ? `上下文 ${current.capabilities.maxContext} · 输出 ${current.capabilities.maxOutput}` : "选择模型"}>
-          <select
-            value={model ?? ""}
-            onChange={(event) => onModel(event.target.value)}
-            disabled={disabled || streaming || models.length === 0}
-          >
-            {models.length === 0 && <option value={model ?? ""}>{model ?? "没有可用模型"}</option>}
-            {models.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.id}
-                {item.capabilities.vision ? " · 图" : ""}
-                {item.capabilities.reasoning ? " · 思" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
+        <ModelPicker
+          groups={groups}
+          account={account}
+          model={model}
+          disabled={disabled || streaming}
+          onPick={onPick}
+          onManage={onManage}
+          onAdd={onAdd}
+        />
 
         {streaming ? (
           <button className="chat-send stop" onClick={onStop} title="停止生成">

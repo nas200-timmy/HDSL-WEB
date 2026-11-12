@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
@@ -11,7 +11,8 @@ import { isElevationRequired, requestDeveloperPassword } from "../elevation";
 import { useMobileLayout } from "../hooks";
 import { toast } from "../store";
 import type {
-  ChatAssistant, ChatAttachment, ChatModelInfo, ChatSession, ChatSessionSummary, ChatTurnOutcome, WsEvent,
+  ChatAccountProfile, ChatAssistant, ChatAttachment, ChatSession,
+  ChatSessionSummary, ChatTurnOutcome, WsEvent,
 } from "../types";
 import { errMsg } from "../utils";
 import { ws } from "../ws";
@@ -20,6 +21,7 @@ import { ChatSidebar, RenameSessionDialog } from "./chat/ChatSidebar";
 import { Composer } from "./chat/Composer";
 import { Markdown } from "./chat/Markdown";
 import { MessageItem } from "./chat/MessageItem";
+import type { ModelGroup } from "./chat/ModelPicker";
 
 function dayLabel(at: number): string {
   const date = new Date(at);
@@ -76,7 +78,8 @@ export function ChatPage() {
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<ChatAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [models, setModels] = useState<ChatModelInfo[]>([]);
+  const [chatAccounts, setChatAccounts] = useState<ChatAccountProfile[]>([]);
+  const [sessionAccount, setSessionAccount] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -109,21 +112,16 @@ export function ChatPage() {
   const currentAssistant = assistant;
   const canSend = !busy && !!currentAssistant;
 
-  const loadModels = async (account: string | null, preferred: string | null) => {
-    if (!account) {
-      setModels([]);
-      setModel(preferred);
-      return;
-    }
+  const loadChatAccounts = async () => {
     try {
-      const result = await api.chat.models(account);
-      setModels(result.models);
-      if (preferred && result.models.some((item) => item.id === preferred)) setModel(preferred);
-      else if (result.models.length > 0) setModel(result.models[0].id);
-      else setModel(preferred);
-    } catch {
-      setModels([]);
-      setModel(preferred);
+      const result = await api.chat.accounts();
+      setChatAccounts(result.accounts);
+      setSessionAccount((previous) => previous ?? result.accounts[0]?.name ?? null);
+      return result.accounts;
+    } catch (error) {
+      if (isElevationRequired(error)) setNeedsElevation(true);
+      else toast("error", `读取模型服务失败：${errMsg(error)}`);
+      return [] as ChatAccountProfile[];
     }
   };
 
@@ -131,9 +129,8 @@ export function ChatPage() {
     setSession(next);
     setSessionId(next.id);
     if (next.assistantId) setAssistantId(next.assistantId);
-    const preferred = next.model ?? currentAssistant?.model ?? null;
-    setModel(preferred);
-    void loadModels(next.account ?? currentAssistant?.account ?? null, preferred);
+    setSessionAccount((previous) => next.account ?? currentAssistant?.account ?? previous ?? null);
+    setModel(next.model ?? currentAssistant?.model ?? null);
     requestAnimationFrame(() => {
       const el = scrollRef.current;
       if (el) el.scrollTop = el.scrollHeight;
@@ -183,11 +180,12 @@ export function ChatPage() {
   useEffect(() => {
     void (async () => {
       const list = await loadAssistants();
+      const accounts = await loadChatAccounts();
       const first = list.find((item) => item.id === "default") ?? list[0] ?? null;
       if (first) {
         setAssistantId(first.id);
-        setModel(first.model);
-        if (first.account) void loadModels(first.account, first.model);
+        setSessionAccount(first.account ?? accounts[0]?.name ?? null);
+        setModel(first.model ?? accounts.find((item) => item.name === (first.account ?? accounts[0]?.name))?.model ?? null);
       }
       const params = new URLSearchParams(window.location.search);
       const requested = params.get("session");
@@ -213,8 +211,8 @@ export function ChatPage() {
       }
       if (!sessionId && !session) {
         const current = assistants.find((item) => item.id === assistantId);
-        setModel(current?.model ?? null);
-        if (current?.account) void loadModels(current.account, current.model);
+        setSessionAccount(current?.account ?? chatAccounts[0]?.name ?? null);
+        setModel(current?.model ?? chatAccounts.find((item) => item.name === current?.account)?.model ?? null);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -336,7 +334,7 @@ export function ChatPage() {
     const created = await api.chat.createSession({
       assistantId,
       model: model ?? undefined,
-      account: currentAssistant?.account ?? undefined,
+      account: sessionAccount ?? currentAssistant?.account ?? undefined,
     });
     // Subscribe before the first send: the kickoff/started frames can race the
     // React effect that normally installs the topic.
@@ -354,7 +352,8 @@ export function ChatPage() {
     const next = await api.chat.session(targetId);
     if (sessionIdRef.current === targetId || sessionIdRef.current === null) setSession(next);
     if (next.model) setModel((previous) => previous ?? next.model);
-    if (next.account && models.length === 0) void loadModels(next.account, next.model);
+    if (next.account) setSessionAccount(next.account);
+    if (chatAccounts.length === 0) void loadChatAccounts();
     const messageId = outcome.assistantMessage?.id;
     const message = next.nodes.flatMap((node) => node.variants).find((item) => item.id === messageId);
     if (message && message.status !== "streaming") {
@@ -379,11 +378,58 @@ export function ChatPage() {
     try {
       if (await requestDeveloperPassword()) {
         setNeedsElevation(false);
+        await loadChatAccounts();
         await loadAssistants();
         await loadSessions(assistantIdRef.current);
       }
     } finally {
       setElevating(false);
+    }
+  };
+
+  const modelGroups = useMemo<ModelGroup[]>(() => {
+    const groups: ModelGroup[] = chatAccounts
+      .map((account) => ({
+        name: account.name,
+        label: account.label || account.name,
+        vendor: account.vendor,
+        models: account.modelList?.length
+          ? account.modelList
+          : (account.models ?? []).map((id) => ({
+              id,
+              capabilities: {
+                vision: false, files: false, reasoning: false, tools: false,
+                maxContext: 32768, maxOutput: 4096, source: "unknown",
+              },
+            })),
+      }))
+      .filter((group) => group.models.length > 0);
+    if (model && !groups.some((group) => group.models.some((item) => item.id === model))) {
+      groups.push({
+        name: sessionAccount ?? "",
+        label: "当前服务",
+        vendor: "",
+        models: [{
+          id: model,
+          capabilities: {
+            vision: false, files: false, reasoning: false, tools: false,
+            maxContext: 32768, maxOutput: 4096, source: "unknown",
+          },
+        }],
+      });
+    }
+    return groups;
+  }, [chatAccounts, model, sessionAccount]);
+
+  const pickModel = async (accountName: string, modelId: string) => {
+    setSessionAccount(accountName);
+    setModel(modelId);
+    if (!session) return;
+    try {
+      const next = await api.chat.updateSession(session.id, { account: accountName, model: modelId });
+      setSession(next);
+    } catch (error) {
+      reportError(error, "切换模型失败");
     }
   };
 
@@ -416,6 +462,7 @@ export function ChatPage() {
         text,
         attachments: pending.map((item) => item.id),
         model: model ?? undefined,
+        account: sessionAccount ?? undefined,
         requestId: requestId(),
       });
       setDraft("");
@@ -573,6 +620,7 @@ export function ChatPage() {
     setLive(null);
     setDraft("");
     setPending([]);
+    setSessionAccount(next?.account ?? chatAccounts[0]?.name ?? null);
     setModel(next?.model ?? null);
     setSidebarOpen(false);
   };
@@ -776,16 +824,12 @@ export function ChatPage() {
               onStop={() => void stop()}
               streaming={live !== null}
               disabled={!canSend}
-              models={models}
+              groups={modelGroups}
+              account={sessionAccount}
               model={model}
-              onModel={(value) => {
-                setModel(value);
-                if (session) {
-                  void api.chat.updateSession(session.id, { model: value })
-                    .then((next) => setSession((current) => current ? { ...current, model: next.model } : current))
-                    .catch(() => undefined);
-                }
-              }}
+              onPick={(accountName, modelId) => void pickModel(accountName, modelId)}
+              onManage={() => navigate("/chat/settings")}
+              onAdd={() => navigate("/chat/settings?add=1")}
               pending={pending}
               onUpload={(file) => void upload(file)}
               onRemove={(id) => setPending((previous) => previous.filter((item) => item.id !== id))}

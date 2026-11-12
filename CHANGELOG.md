@@ -19,6 +19,12 @@
 - **协议**：首批 `openai-completions` 与 `anthropic-messages`；端点路径是数据（内置默认表 +
   聊天设置覆盖），不运行时猜 `base + /v1/chat/completions`；支持 probe 分阶段检查、拉模型、
   手动能力覆盖（图片/文件/思考/工具/上下文/输出）。
+- **模型选择**：输入区的模型按钮按服务分组，列出所有已配置服务的模型（可搜索、带能力
+  徽章），选中时同时切换会话的 `account` 与 `model`；底部可直接「添加 / 管理模型服务」。
+- **文件**：图片走原生 image block；Anthropic 的 PDF 走原生 document；OpenAI 兼容服务在
+  模型能力里打开「原生文件（PDF）」后走 `file` part，否则 PDF/Office 走抽取文本（单附件
+  超 3 万字符会截断并提示）。Office 的 docx/pptx/xlsx 目前没有可移植的原生块，仍以抽取
+  文本发送；音频/视频只保存不送模型。
 - **附件**：图片、PDF、DOC/DOCX、PPT/PPTX、XLS/XLSX、文本；PDFBox/POI 抽文本，图片校验并
   重编码去 EXIF；宏文档、SVG/HTML/可执行文件拒绝；长文本超阈值自动转 `.txt` 附件。
 - **存储**：`<data>/chat/chat.db`（SQLite，WAL），附件按 sha256 去重；保留策略默认永久，

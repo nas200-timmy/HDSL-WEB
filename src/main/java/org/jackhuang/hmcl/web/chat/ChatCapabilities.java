@@ -86,7 +86,7 @@ public final class ChatCapabilities {
         }
         if (id.startsWith("gpt-4o") || id.startsWith("gpt-4.1") || id.startsWith("gpt-5")
                 || id.startsWith("chatgpt-4o")) {
-            return new Capabilities(true, true, id.startsWith("gpt-5"), true, 128_000, 16_384, "builtin");
+            return new Capabilities(true, false, id.startsWith("gpt-5"), true, 128_000, 16_384, "builtin");
         }
         if (id.startsWith("o1") || id.startsWith("o3") || id.startsWith("o4")) {
             return new Capabilities(true, false, true, true, 200_000, 100_000, "builtin");
@@ -98,11 +98,11 @@ public final class ChatCapabilities {
             return new Capabilities(false, false, false, true, 128_000, 8_192, "builtin");
         }
         if (id.startsWith("gemini")) {
-            return new Capabilities(true, true, id.contains("2.5") || id.contains("thinking"),
+            return new Capabilities(true, false, id.contains("2.5") || id.contains("thinking"),
                     true, 1_000_000, 65_536, "builtin");
         }
         if (id.contains("qwen") && (id.contains("vl") || id.contains("omni"))) {
-            return new Capabilities(true, true, true, true, 128_000, 16_384, "builtin");
+            return new Capabilities(true, false, true, true, 128_000, 16_384, "builtin");
         }
         if (id.contains("qwen3") || id.contains("qwq")) {
             return new Capabilities(false, false, true, true, 128_000, 32_768, "builtin");
@@ -111,7 +111,7 @@ public final class ChatCapabilities {
             return new Capabilities(false, false, false, true, 128_000, 8_192, "builtin");
         }
         if (id.contains("glm-4v") || id.contains("glm-4.5v") || id.contains("glm-4.6v")) {
-            return new Capabilities(true, true, true, true, 128_000, 16_384, "builtin");
+            return new Capabilities(true, false, true, true, 128_000, 16_384, "builtin");
         }
         if (id.contains("glm")) {
             return new Capabilities(false, false, id.contains("glm-4.5") || id.contains("glm-4.6"),
@@ -120,7 +120,7 @@ public final class ChatCapabilities {
         if (id.contains("kimi") || id.contains("moonshot")) {
             boolean vision = id.contains("vision") || id.contains("latest");
             boolean reasoning = id.contains("thinking") || id.contains("k2");
-            return new Capabilities(vision, vision, reasoning, true, 256_000, 16_384, "builtin");
+            return new Capabilities(vision, false, reasoning, true, 256_000, 16_384, "builtin");
         }
         if (id.contains("llama") || id.contains("mistral") || id.contains("mixtral")) {
             boolean vision = id.contains("vision") || id.contains("pixtral");
