@@ -22,6 +22,7 @@ import { Composer } from "./chat/Composer";
 import { Markdown } from "./chat/Markdown";
 import { MessageItem } from "./chat/MessageItem";
 import { AvatarView } from "./chat/AvatarView";
+import { ContextMeter } from "./chat/ContextMeter";
 import type { ModelGroup } from "./chat/ModelPicker";
 
 function dayLabel(at: number): string {
@@ -89,6 +90,7 @@ export function ChatPage() {
   const [model, setModel] = useState<string | null>(null);
   const [reasoningLevel, setReasoningLevel] = useState("");
   const [profile, setProfile] = useState<{ name: string; avatar: string | null }>({ name: "", avatar: null });
+  const [liveUsage, setLiveUsage] = useState<{ sessionId: string; input: number; output: number } | null>(null);
   const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -292,6 +294,10 @@ export function ChatPage() {
           : { turnId: event.turnId, messageId: event.messageId, text: "", reasoning: "", status: "streaming" });
         return;
       }
+      if (event.type === "chat-usage") {
+        setLiveUsage({ sessionId: event.sessionId, input: event.input, output: event.output });
+        return;
+      }
       if (event.type === "chat-delta" || event.type === "chat-reasoning") {
         if (finishedTurns.current.has(event.turnId)) return;
         setLive((previous) => {
@@ -447,6 +453,40 @@ export function ChatPage() {
     }
     return groups;
   }, [chatAccounts, model, sessionAccount]);
+
+  const currentCaps = useMemo(() => {
+    for (const group of modelGroups) {
+      for (const item of group.models) {
+        if (item.id === model) return item.capabilities;
+      }
+    }
+    return null;
+  }, [modelGroups, model]);
+
+  const contextUsage = useMemo(() => {
+    let sessionInput = 0;
+    let sessionOutput = 0;
+    let last: { input: number; output: number } | null = null;
+    for (const node of session?.nodes ?? []) {
+      if (node.role !== "assistant") continue;
+      const message = node.variants.find((item) => item.id === node.activeVariantId)
+        ?? node.variants[node.variants.length - 1];
+      if (!message?.usage) continue;
+      const input = message.usage.input ?? 0;
+      const output = message.usage.output ?? 0;
+      sessionInput += input;
+      sessionOutput += output;
+      last = { input, output };
+    }
+    const live = liveUsage && session?.id === liveUsage.sessionId ? liveUsage : null;
+    const used = live?.input ?? last?.input ?? null;
+    return {
+      used: used && used > 0 ? used : null,
+      lastOutput: live?.output ?? last?.output ?? null,
+      sessionInput,
+      sessionOutput,
+    };
+  }, [session, liveUsage]);
 
   const pickModel = async (accountName: string, modelId: string) => {
     setSessionAccount(accountName);
@@ -742,6 +782,14 @@ export function ChatPage() {
               {live ? " · 正在生成" : ""}
             </div>
           </div>
+          <ContextMeter
+            used={contextUsage.used}
+            max={currentCaps?.maxContext ?? 0}
+            lastOutput={contextUsage.lastOutput}
+            sessionInput={contextUsage.sessionInput}
+            sessionOutput={contextUsage.sessionOutput}
+            disabled={!session}
+          />
           <span className="spacer" />
           <button className="chat-header-new ripple-host" onClick={() => void newSession()} title="新建会话">
             <AddIcon size={16} />

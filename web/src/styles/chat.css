@@ -2950,3 +2950,115 @@
 .chat-edit-banner-close:hover {
   background: var(--monet-on-surface-variant-transparent-38);
 }
+
+/* ---------------- 上下文占用环 ---------------- */
+
+.context-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 2px 7px 2px 4px;
+  border-radius: 14px;
+  background: var(--monet-surface-container-high);
+  color: var(--monet-on-surface-variant);
+  transition: background 120ms var(--ease);
+}
+
+.context-meter:hover:not(:disabled) {
+  background: var(--monet-on-surface-variant-transparent-38);
+}
+
+.context-meter:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.context-meter svg {
+  display: block;
+  flex: none;
+}
+
+.context-meter-track {
+  stroke: var(--monet-outline-variant);
+}
+
+.context-meter-value {
+  stroke: var(--monet-primary);
+  transition: stroke-dashoffset 320ms var(--ease), stroke 200ms var(--ease);
+}
+
+.context-meter.warn .context-meter-value {
+  stroke: #e3a008;
+}
+
+.context-meter.danger .context-meter-value {
+  stroke: var(--monet-error);
+}
+
+.context-meter-text {
+  font-size: 10px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 760px) {
+  .context-meter-text {
+    font-size: 9px;
+  }
+}
+
+.chat-context-popup {
+  width: 258px;
+  padding: 10px 12px;
+}
+
+.chat-context-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.chat-context-percent {
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-context-percent.warn {
+  color: #e3a008;
+}
+
+.chat-context-percent.danger {
+  color: var(--monet-error);
+}
+
+.chat-context-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 0;
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+}
+
+.chat-context-row span:last-child {
+  color: var(--monet-on-surface);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-context-sep {
+  height: 1px;
+  margin: 6px 0;
+  background: var(--monet-outline-variant);
+}
+
+.chat-context-hint {
+  margin-top: 8px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--monet-on-surface-variant);
+}
