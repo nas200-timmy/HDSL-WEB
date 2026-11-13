@@ -39,6 +39,7 @@ class ChatSearchServiceTest {
     void clear() {
         System.clearProperty("hdsl.search.bocha");
         System.clearProperty("hdsl.search.deepseek");
+        System.clearProperty("hdsl.fetch.deepseek");
     }
 
     @Test
@@ -227,6 +228,36 @@ class ChatSearchServiceTest {
         assertTrue(block.contains("2. B"));
         assertTrue(block.contains("https://a.example"));
         assertTrue(block.length() < 8_000);
+    }
+
+    @Test
+    void deepSeekFetchReturnsPageText() throws Exception {
+        HttpServer server = server(exchange -> {
+            String json = "{\"title\":\"Example\",\"content\":\"这是正文内容。\"}";
+            exchange.sendResponseHeaders(200, json.getBytes(StandardCharsets.UTF_8).length);
+            exchange.getResponseBody().write(json.getBytes(StandardCharsets.UTF_8));
+            exchange.close();
+        });
+        System.setProperty("hdsl.fetch.deepseek", url(server, "/fetch"));
+        String result = new ChatSearchService()
+                .scrape(settings("deepseek", "k"), "https://example.com/a");
+        assertTrue(result.contains("这是正文内容"));
+        assertTrue(result.contains("Example"));
+    }
+
+    @Test
+    void bochaRefusesToScrape() throws Exception {
+        ChatException error = assertThrows(ChatException.class,
+                () -> new ChatSearchService().scrape(settings("bocha", "k"),
+                        "https://example.com/a"));
+        assertEquals("scrape_not_supported", error.code());
+    }
+
+    @Test
+    void scrapeRejectsNonHttpUrls() throws Exception {
+        ChatException error = assertThrows(ChatException.class,
+                () -> new ChatSearchService().scrape(settings("deepseek", "k"), "file:///etc/passwd"));
+        assertEquals("bad_url", error.code());
     }
 
     private static ChatSettings.Settings settings(String provider, String key) throws Exception {

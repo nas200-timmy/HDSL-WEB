@@ -37,7 +37,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/// `web_search` 工具在两种协议上的下发与解析（docs/chat.md §12.5）。
+/// `search_web` 工具在两种协议上的下发与解析（docs/chat.md §12.5）。
 class ChatToolCallTest {
 
     @Test
@@ -47,16 +47,16 @@ class ChatToolCallTest {
                 List.of(
                         new ChatProtocol.ChatMessage("user", "现在几点", List.of()),
                         new ChatProtocol.ChatMessage("assistant", "我查一下", List.of(),
-                                List.of(new ChatProtocol.ToolCall("call_1", "web_search",
+                                List.of(new ChatProtocol.ToolCall("call_1", "search_web",
                                         "{\"query\":\"现在几点\"}")), null),
                         new ChatProtocol.ChatMessage("tool", "{\"hits\":[]}", List.of(),
                                 List.of(), "call_1")),
-                0.2, 512, null, null, List.of(ChatSearchService.TOOL));
+                0.2, 512, null, null, List.of(new ChatProtocol.ToolSpec("search_web", "test", ChatSearchService.searchSchema("bocha"))));
         JsonObject body = capture(new OpenAiProtocol(), ChatEndpoints.OPENAI_COMPLETIONS, request);
 
         JsonObject tool = body.getAsJsonArray("tools").get(0).getAsJsonObject();
         assertEquals("function", tool.get("type").getAsString());
-        assertEquals("web_search", tool.getAsJsonObject("function").get("name").getAsString());
+        assertEquals("search_web", tool.getAsJsonObject("function").get("name").getAsString());
         assertEquals("object", tool.getAsJsonObject("function").getAsJsonObject("parameters")
                 .get("type").getAsString());
 
@@ -66,7 +66,7 @@ class ChatToolCallTest {
         JsonObject call = assistant.getAsJsonArray("tool_calls").get(0).getAsJsonObject();
         assertEquals("call_1", call.get("id").getAsString());
         assertEquals("function", call.get("type").getAsString());
-        assertEquals("web_search", call.getAsJsonObject("function").get("name").getAsString());
+        assertEquals("search_web", call.getAsJsonObject("function").get("name").getAsString());
 
         JsonObject result = messages.get(3).getAsJsonObject();
         assertEquals("tool", result.get("role").getAsString());
@@ -80,7 +80,7 @@ class ChatToolCallTest {
                 data: {"choices":[{"delta":{"content":"我查一下"}}]}
 
                 data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_9",\
-                "function":{"name":"web_search","arguments":"{\\"query\\":"}}]}}]}
+                "function":{"name":"search_web","arguments":"{\\"query\\":"}}]}}]}
 
                 data: {"choices":[{"delta":{"tool_calls":[{"index":0,\
                 "function":{"arguments":"\\"今天天气\\"}"}}]}}]}
@@ -96,7 +96,7 @@ class ChatToolCallTest {
 
         assertEquals("我查一下", sink.text.toString());
         assertEquals(List.of("call_9"), sink.ids);
-        assertEquals(List.of("web_search"), sink.names);
+        assertEquals(List.of("search_web"), sink.names);
         assertEquals(List.of("{\"query\":\"今天天气\"}"), sink.arguments);
         assertEquals("tool_calls", sink.doneReason);
     }
@@ -108,15 +108,15 @@ class ChatToolCallTest {
                 List.of(
                         new ChatProtocol.ChatMessage("user", "现在几点", List.of()),
                         new ChatProtocol.ChatMessage("assistant", "我查一下", List.of(),
-                                List.of(new ChatProtocol.ToolCall("toolu_1", "web_search",
+                                List.of(new ChatProtocol.ToolCall("toolu_1", "search_web",
                                         "{\"query\":\"现在几点\"}")), null),
                         new ChatProtocol.ChatMessage("tool", "{\"hits\":[]}", List.of(),
                                 List.of(), "toolu_1")),
-                null, 512, null, null, List.of(ChatSearchService.TOOL));
+                null, 512, null, null, List.of(new ChatProtocol.ToolSpec("search_web", "test", ChatSearchService.searchSchema("bocha"))));
         JsonObject body = capture(new AnthropicProtocol(), ChatEndpoints.ANTHROPIC_MESSAGES, request);
 
         JsonObject tool = body.getAsJsonArray("tools").get(0).getAsJsonObject();
-        assertEquals("web_search", tool.get("name").getAsString());
+        assertEquals("search_web", tool.get("name").getAsString());
         assertEquals("object", tool.getAsJsonObject("input_schema").get("type").getAsString());
 
         JsonArray messages = body.getAsJsonArray("messages");
@@ -138,7 +138,7 @@ class ChatToolCallTest {
         String sse = """
                 event: content_block_start
                 data: {"index":1,"content_block":{"type":"tool_use","id":"toolu_9",\
-                "name":"web_search","input":{}}}
+                "name":"search_web","input":{}}}
 
                 event: content_block_delta
                 data: {"index":1,"delta":{"type":"input_json_delta",\
@@ -153,7 +153,7 @@ class ChatToolCallTest {
                 new ByteArrayInputStream(sse.getBytes(StandardCharsets.UTF_8)), sink);
 
         assertEquals(List.of("toolu_9"), sink.ids);
-        assertEquals(List.of("web_search"), sink.names);
+        assertEquals(List.of("search_web"), sink.names);
         assertEquals(List.of("{\"query\":\"天气\"}"), sink.arguments);
         assertEquals("stop", sink.doneReason);
     }
@@ -162,18 +162,55 @@ class ChatToolCallTest {
     void declarationSaysWhetherSearchIsAvailable() {
         String enabled = ChatSearchService.declaration("bocha", true, true, true, true);
         assertTrue(enabled.contains("博查"));
-        assertTrue(enabled.contains("web_search"));
+        assertTrue(enabled.contains("search_web"));
         assertTrue(enabled.contains("预先检索"));
 
         String off = ChatSearchService.declaration("bocha", true, false, false, false);
         assertTrue(off.contains("没有开启"));
-        assertTrue(!off.contains("web_search 工具"), "关闭时不该教模型调用工具");
+        assertTrue(!off.contains("search_web 工具"), "关闭时不该教模型调用工具");
 
         String presearched = ChatSearchService.declaration("bocha", true, true, false, true);
         assertTrue(presearched.contains("已经替用户检索"));
 
         String missing = ChatSearchService.declaration("bocha", false, false, false, false);
         assertTrue(missing.contains("没有配置"));
+    }
+
+    @Test
+    void toolSetDegradesToSearchOnly() {
+        assertEquals(List.of("search_web"),
+                ChatSearchService.tools(settings("bocha")).stream()
+                        .map(ChatProtocol.ToolSpec::name).toList());
+        assertEquals(List.of("search_web", "scrape_web"),
+                ChatSearchService.tools(settings("deepseek")).stream()
+                        .map(ChatProtocol.ToolSpec::name).toList());
+    }
+
+    @Test
+    void searchResultCarriesStableIdsAndRetrievalTime() {
+        ChatSearchService.Result result = new ChatSearchService.Result("q", "bocha",
+                List.of(new ChatSearchService.Hit("T", "https://example.com/a", "text", "Site",
+                        "2026-01-01")));
+        String text = ChatSearchService.toolResult(result);
+        JsonObject json = JsonParser.parseString(text.substring(text.indexOf('{'))).getAsJsonObject();
+        JsonObject item = json.getAsJsonArray("items").get(0).getAsJsonObject();
+        assertEquals(ChatSearchService.shortId("https://example.com/a"),
+                item.get("id").getAsString());
+        assertEquals(1, item.get("index").getAsInt());
+        assertEquals("2026-01-01", item.get("publishedDate").getAsString());
+        assertTrue(json.has("retrievedAt"));
+    }
+
+    @Test
+    void bochaHasNoScrapeTool() {
+        assertEquals(false, ChatSearchService.scrapeSupported("bocha"));
+        assertEquals(true, ChatSearchService.scrapeSupported("deepseek"));
+        assertEquals(true, ChatSearchService.scrapeSupported("exa"));
+    }
+
+    private static ChatSettings.Settings settings(String provider) {
+        return new ChatSettings.Settings("forever", 0, true, "03:17", 7, "/tmp", "allow",
+                List.of(), 4000, 0, 40, null, null, provider, Map.of(), 5, true);
     }
 
     private static JsonObject capture(ChatProtocol protocol, String protocolId,

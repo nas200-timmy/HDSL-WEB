@@ -92,12 +92,25 @@ const sanitizeSchema = {
 };
 
 /** GFM + sanitize + highlight。不启用 raw HTML。 */
-function MarkdownImpl({ content, streaming }: { content: string; streaming?: boolean }) {
+function MarkdownImpl({ content, streaming, citations }: {
+  content: string;
+  streaming?: boolean;
+  /** 引用短 id → 原页面 URL；模型写 [citation,domain](id) 时用它换成真链接。 */
+  citations?: Record<string, string>;
+}) {
   let text = content ?? "";
   if (streaming) {
     // 未闭合的围栏临时补上，避免流式时整段代码被当成普通段落抖动。
     const fences = (text.match(/^```/gm) ?? []).length;
     if (fences % 2 === 1) text += "\n```";
+  }
+  if (citations && Object.keys(citations).length > 0) {
+    // rehype-sanitize 只放行 http/https/mailto，短 id 会被当成非法协议删掉，
+    // 所以先在这里换成真实 URL。
+    text = text.replace(/\[citation,([^\]]+)\]\(([0-9a-f]{6})\)/g, (_, domain, id) => {
+      const url = citations[id];
+      return url ? `[${domain}](${url})` : `[${domain}]`;
+    });
   }
   return (
     <div className="chat-markdown">

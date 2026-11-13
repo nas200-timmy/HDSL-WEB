@@ -49,7 +49,7 @@ export function MessageItem({
   editingNodeId?: string | null;
   liveContent?: string;
   liveReasoning?: string;
-  liveTool?: { query: string; provider: string; status: string; hits: number };
+  liveTool?: { tool?: string; query: string; provider: string; status: string; hits: number };
   streaming?: boolean;
   onRegenerate: (nodeId: string, mode: "in_place" | "truncate_after") => void;
   onEdit: (nodeId: string, text: string) => void;
@@ -67,6 +67,16 @@ export function MessageItem({
   const reasoning = streaming && liveReasoning !== undefined ? liveReasoning : (message?.reasoning ?? "");
   const toolRounds = streaming ? [] : (message?.tools ?? []);
   const runningTool = streaming ? liveTool : undefined;
+  // 模型引用写的是短 id，渲染前换成真实 URL；否则会被 sanitize 当成非法协议删掉。
+  const citations: Record<string, string> = {};
+  for (const round of message?.tools ?? []) {
+    for (const hit of round.hits ?? []) {
+      if (hit.id) citations[hit.id] = hit.url;
+    }
+  }
+  for (const hit of message?.sources ?? []) {
+    if (hit.id) citations[hit.id] = hit.url;
+  }
   const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
@@ -141,7 +151,7 @@ export function MessageItem({
         )}
         {content ? (
           <div className="chat-bubble">
-            <Markdown content={content} streaming={streaming} />
+            <Markdown content={content} streaming={streaming} citations={citations} />
             {streaming && <span className="chat-cursor" />}
           </div>
         ) : streaming ? (
@@ -187,12 +197,15 @@ export function MessageItem({
             ))}
             {runningTool && (
               <div className={`chat-tool-chip ${runningTool.status}`}>
-                <span className="chat-tool-icon">{runningTool.status === "running" ? "…" : "🔍"}</span>
+                <span className="chat-tool-icon">{runningTool.status === "running"
+                  ? "…" : runningTool.tool === "scrape" ? "📄" : "🔍"}</span>
                 <span className="chat-tool-query">{runningTool.query}</span>
                 <span className="chat-tool-meta">
-                  {runningTool.status === "running" ? "正在搜索"
-                    : runningTool.status === "failed" ? "搜索失败"
-                    : `${providerLabel(runningTool.provider)} · ${runningTool.hits} 条`}
+                  {runningTool.status === "running"
+                    ? (runningTool.tool === "scrape" ? "正在读取网页" : "正在搜索")
+                    : runningTool.status === "failed"
+                      ? (runningTool.tool === "scrape" ? "读取失败" : "搜索失败")
+                      : `${providerLabel(runningTool.provider)} · ${runningTool.hits} 条`}
                 </span>
               </div>
             )}

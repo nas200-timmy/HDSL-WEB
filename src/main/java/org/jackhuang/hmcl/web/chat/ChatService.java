@@ -718,6 +718,7 @@ public final class ChatService {
         json.addProperty("catalogUpdatedAt", ChatModelCatalog.updatedAt());
         json.addProperty("searchProvider", current.searchProvider());
         json.addProperty("searchMaxResults", current.searchMaxResults());
+        json.addProperty("persistToolTrail", current.persistToolTrail());
         addNullable(json, "searchKeyMasked", maskKey(current.searchKey(current.searchProvider())));
         addNullable(json, "defaultAccount", current.defaultAccount());
         addNullable(json, "defaultModel", current.defaultModel());

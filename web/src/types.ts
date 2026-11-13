@@ -567,7 +567,7 @@ export type WsEvent =
   | { type: "chat-delta"; sessionId: string; turnId: string; seq: number; text: string }
   | { type: "chat-reasoning"; sessionId: string; turnId: string; seq: number; text: string }
   | { type: "chat-usage"; sessionId: string; turnId: string; input: number; output: number }
-  | { type: "chat-tool"; sessionId: string; turnId: string; query: string; status: "running" | "done" | "failed" | string; provider?: string; hits?: number; sources?: ChatSearchResult }
+  | { type: "chat-tool"; sessionId: string; turnId: string; tool?: "search" | "scrape" | string; query: string; status: "running" | "done" | "failed" | string; provider?: string; hits?: number; sources?: ChatSearchResult }
   | { type: "chat-turn-finished"; sessionId: string; turnId: string; messageId: string; status: string; finishReason: string; input?: number; output?: number }
   | { type: "chat-error"; sessionId: string; turnId: string; code: string; message: string; retryable: boolean }
   | { type: "chat-sessions-changed" | "chat-assistants-changed" | "chat-settings-changed" | "chat-backups-changed"; sessionId?: string };
@@ -1136,6 +1136,8 @@ export interface ChatReasoningMode {
 }
 
 export interface ChatSearchHit {
+  /** 短哈希，模型引用时写 [citation,domain](id) */
+  id?: string;
   title: string;
   url: string;
   snippet?: string;
@@ -1252,6 +1254,8 @@ export interface ChatSettings {
   searchProvider?: "bocha" | "deepseek" | "zhipu" | "tavily" | "brave" | "exa";
   searchMaxResults?: number;
   searchKeyMasked?: string | null;
+  /** 把搜索/抓取的完整链路存进消息，追问时模型能回看 */
+  persistToolTrail?: boolean;
 }
 
 /** POST /api/chat/accounts/{name}/chat-test 的结果（会消耗少量 token）。 */

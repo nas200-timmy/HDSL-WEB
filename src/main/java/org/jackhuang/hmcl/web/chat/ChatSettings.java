@@ -60,7 +60,9 @@ public final class ChatSettings {
             @Nullable String defaultModel,
             String searchProvider,
             java.util.Map<String, String> searchKeys,
-            int searchMaxResults) {
+            int searchMaxResults,
+            /// 把这一轮的搜索/抓正文链路存进会话，追问时模型能看到上一轮搜过什么。
+            boolean persistToolTrail) {
 
         /// 某个服务商的 key；没有配置返回 null。
         public @Nullable String searchKey(String provider) {
@@ -91,7 +93,7 @@ public final class ChatSettings {
             return new Settings(retention, retentionDays, backupEnabled, backupTime, backupKeep, dir,
                     privateEndpoints, privateAllowlist, longTextTokens, dailyTokenLimit,
                     streamFlushMs, defaultAccount, defaultModel, searchProvider, searchKeys,
-                    searchMaxResults);
+                    searchMaxResults, persistToolTrail);
         }
     }
 
@@ -104,7 +106,7 @@ public final class ChatSettings {
             backup = dataDir.resolve("backup");
         }
         return new Settings("forever", 0, true, "03:17", 7, backup.toString(), "allow",
-                List.of(), 4000, 0, 40, null, null, "bocha", java.util.Map.of(), 5);
+                List.of(), 4000, 0, 40, null, null, "bocha", java.util.Map.of(), 5, true);
     }
 
     public static Settings load(ChatStore store, Path dataDir) throws SQLException {
@@ -169,7 +171,8 @@ public final class ChatSettings {
                     nullableString(json, "defaultModel"),
                     searchProvider,
                     searchKeys,
-                    intValue(json, "searchMaxResults", defaults.searchMaxResults())), defaults);
+                    intValue(json, "searchMaxResults", defaults.searchMaxResults()),
+                    bool(json, "persistToolTrail", defaults.persistToolTrail())), defaults);
         } catch (RuntimeException e) {
             return defaults;
         }
@@ -240,11 +243,14 @@ public final class ChatSettings {
         }
         int searchMaxResults = body.has("searchMaxResults")
                 ? intValue(body, "searchMaxResults", current.searchMaxResults()) : current.searchMaxResults();
+        boolean persistToolTrail = body.has("persistToolTrail")
+                ? bool(body, "persistToolTrail", current.persistToolTrail())
+                : current.persistToolTrail();
         return sanitize(new Settings(retention, retentionDays, backupEnabled, backupTime, backupKeep,
                 backupDir, privateMode, allowlist, longTextTokens, dailyTokenLimit, streamFlushMs,
                 defaultAccount, defaultModel,
                 searchProvider == null ? current.searchProvider() : searchProvider,
-                searchKeys, searchMaxResults), defaults);
+                searchKeys, searchMaxResults, persistToolTrail), defaults);
     }
 
     private static Settings sanitize(Settings value, Settings defaults) {
@@ -272,7 +278,8 @@ public final class ChatSettings {
                 value.backupEnabled(), time, keep, dir, value.privateEndpoints(),
                 value.privateAllowlist(), longText, daily, flush,
                 blankToNull(value.defaultAccount()), blankToNull(value.defaultModel()),
-                provider, java.util.Map.copyOf(value.searchKeys()), maxResults);
+                provider, java.util.Map.copyOf(value.searchKeys()), maxResults,
+                value.persistToolTrail());
     }
 
     public static void save(ChatStore store, Settings settings) throws SQLException {
@@ -299,6 +306,7 @@ public final class ChatSettings {
         settings.searchKeys().forEach(searchKeys::addProperty);
         json.add("searchKeys", searchKeys);
         json.addProperty("searchMaxResults", settings.searchMaxResults());
+        json.addProperty("persistToolTrail", settings.persistToolTrail());
         store.putSetting(KEY, json.toString());
     }
 

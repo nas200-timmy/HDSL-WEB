@@ -41,7 +41,7 @@ function requestId(): string {
 }
 
 /** 流式气泡：会话还没刷新到新节点时先画在列表末尾。 */
-function LiveBubble({ assistant, text, reasoning, tool }: { assistant: ChatAssistant | null; text: string; reasoning: string; tool?: { query: string; provider: string; status: string; hits: number } }) {
+function LiveBubble({ assistant, text, reasoning, tool }: { assistant: ChatAssistant | null; text: string; reasoning: string; tool?: { tool?: string; query: string; provider: string; status: string; hits: number } }) {
   return (
     <div className="chat-msg assistant">
       <div className="chat-msg-avatar"><AvatarView value={assistant?.avatar} /></div>
@@ -70,12 +70,15 @@ function LiveBubble({ assistant, text, reasoning, tool }: { assistant: ChatAssis
         {tool && (
           <div className="chat-tools">
             <div className={`chat-tool-chip ${tool.status}`}>
-              <span className="chat-tool-icon">{tool.status === "running" ? "…" : "🔍"}</span>
+              <span className="chat-tool-icon">{tool.status === "running"
+                ? "…" : tool.tool === "scrape" ? "📄" : "🔍"}</span>
               <span className="chat-tool-query">{tool.query}</span>
               <span className="chat-tool-meta">
-                {tool.status === "running" ? "正在搜索"
-                  : tool.status === "failed" ? "搜索失败"
-                  : `${tool.hits} 条结果`}
+                {tool.status === "running"
+                  ? (tool.tool === "scrape" ? "正在读取网页" : "正在搜索")
+                  : tool.status === "failed"
+                    ? (tool.tool === "scrape" ? "读取失败" : "搜索失败")
+                    : `${tool.hits} 条结果`}
               </span>
             </div>
           </div>
@@ -106,7 +109,7 @@ export function ChatPage() {
   const [liveUsage, setLiveUsage] = useState<{ sessionId: string; input: number; output: number } | null>(null);
   const [searchEnabled, setSearchEnabled] = useState(false);
   const [searchStatus, setSearchStatus] = useState<{ configured: boolean } | null>(null);
-  const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string; tool?: { query: string; provider: string; status: string; hits: number } } | null>(null);
+  const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string; tool?: { tool?: string; query: string; provider: string; status: string; hits: number } } | null>(null);
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ChatSessionSummary | null>(null);
@@ -323,7 +326,7 @@ export function ChatPage() {
         setLive((previous) => {
           if (previous && previous.turnId !== event.turnId) return previous;
           const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming" };
-          return { ...base, tool: { query: event.query, provider: event.provider ?? "", status: event.status, hits: event.hits ?? 0 } };
+          return { ...base, tool: { tool: event.tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: event.hits ?? 0 } };
         });
         return;
       }

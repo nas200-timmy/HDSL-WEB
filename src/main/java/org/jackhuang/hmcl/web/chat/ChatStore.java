@@ -48,7 +48,7 @@ import java.util.UUID;
 @NotNullByDefault
 public final class ChatStore implements AutoCloseable {
 
-    private static final int SCHEMA_VERSION = 2;
+    private static final int SCHEMA_VERSION = 3;
     private static final String DEFAULT_ASSISTANT_ID = "default";
 
     private final Path root;
@@ -210,6 +210,10 @@ public final class ChatStore implements AutoCloseable {
             if (version < 2) {
                 // 会话级的思考挡位：NULL = 跟随助手默认；空串/off = 明确关掉
                 statement.execute("ALTER TABLE chat_session ADD COLUMN reasoning_level TEXT");
+            }
+            if (version < 3) {
+                // 这一轮的完整工具链路（text / tool_calls / tool）。NULL = 老消息或用户关掉了保留。
+                statement.execute("ALTER TABLE chat_message ADD COLUMN parts_json TEXT");
             }
             statement.execute("PRAGMA user_version=" + SCHEMA_VERSION);
             connection.commit();
@@ -777,6 +781,27 @@ public final class ChatStore implements AutoCloseable {
             statement.setLong(6, System.currentTimeMillis());
             statement.setString(7, messageId);
             statement.executeUpdate();
+        }
+    }
+
+    /// 这一轮的完整工具链路（text / tool_calls / tool）。只在用户打开「保留检索记录」时写。
+    public synchronized void updateParts(String messageId, @Nullable String partsJson)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "UPDATE chat_message SET parts_json=? WHERE id=?")) {
+            statement.setString(1, partsJson);
+            statement.setString(2, messageId);
+            statement.executeUpdate();
+        }
+    }
+
+    public synchronized @Nullable String partsJson(String messageId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT parts_json FROM chat_message WHERE id=?")) {
+            statement.setString(1, messageId);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next() ? rs.getString("parts_json") : null;
+            }
         }
     }
 

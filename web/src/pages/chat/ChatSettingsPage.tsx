@@ -271,6 +271,7 @@ function SearchPanel({
   const [provider, setProvider] = useState<string>(settings.searchProvider ?? "bocha");
   const [key, setKey] = useState("");
   const [maxResults, setMaxResults] = useState(settings.searchMaxResults ?? 5);
+  const [persistTrail, setPersistTrail] = useState(settings.persistToolTrail ?? true);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [testing, setTesting] = useState(false);
@@ -282,6 +283,7 @@ function SearchPanel({
       const body: Record<string, unknown> = {
         searchProvider: provider,
         searchMaxResults: maxResults,
+        persistToolTrail: persistTrail,
       };
       if (key.trim()) body.searchApiKey = key.trim();
       const next = await run(() => api.chat.updateSettings(body));
@@ -327,9 +329,11 @@ function SearchPanel({
     <div className="chat-settings-card">
       <div className="chat-settings-card-title">联网搜索</div>
       <div className="hint">
-        模型声明支持工具时会拿到一个只读的 <code>web_search</code>，自己决定搜什么、搜几次
-        （每轮最多 3 次）；模型不会用工具时，面板在发送前替它搜一次。结果都作为不可信资料
-        交给模型，并要求用 [1][2] 标注来源。按次计费，同一句话 1 小时内不会重复计费。
+        模型声明支持工具时会拿到只读的 <code>search_web</code>（DeepSeek / Exa 还会多一个
+        <code>scrape_web</code> 抓正文），自己决定搜什么、搜几次（每轮最多 3 次）；
+        模型不会用工具时，面板在发送前替它搜一次。结果都作为不可信资料交给模型，
+        并要求用 <code>[citation,domain](id)</code> 标注来源。按次计费，同一句话
+        1 小时内不会重复计费。
       </div>
       <div className="chat-settings-form-grid">
         <label className="form-row">
@@ -373,6 +377,18 @@ function SearchPanel({
       <div className="hint">
         DeepSeek Search 可以直接留空——会回落到面板里 DeepSeek 账户的 key（同一个 key 两边通用）。
         博查需要填自己的 key。
+      </div>
+      <label className="form-row">
+        <span className="form-label">保留检索记录</span>
+        <input
+          type="checkbox"
+          checked={persistTrail}
+          onChange={(event) => setPersistTrail(event.target.checked)}
+        />
+      </label>
+      <div className="hint">
+        开启时把每次搜索/抓取的完整链路存进这条消息，追问时模型能看到上一轮搜过什么；
+        代价是数据库和上下文都会变大。关闭后只保留最终回答。
       </div>
       <div className="chat-provider-actions">
         <button className="btn btn-raised" disabled={busy} onClick={() => void save()}>
