@@ -106,8 +106,22 @@ public record DshVendor(
         if (id == null) {
             return null;
         }
+        String trimmed = id.trim();
         for (DshVendor vendor : offered()) {
-            if (vendor.id.equalsIgnoreCase(id.trim())) {
+            if (vendor.id.equalsIgnoreCase(trimmed)) {
+                return vendor;
+            }
+        }
+        // The catalogue ships suppliers the launcher does not offer as cards but can still
+        // route (xiaomi and the token-plan entries, for instance). The providers list hands
+        // them out as `known`, so account creation has to resolve them here as well —
+        // otherwise picking one fails with "pass `endpoint` to add a supplier by address".
+        for (DshVendor vendor : catalogue()) {
+            // Only the catalogue entries the launcher can actually route: some lines have no
+            // address or no protocol on purpose (per-region or per-account suppliers), and the
+            // providers list hands those out as unknown so the person types an address.
+            if (vendor.id.equalsIgnoreCase(trimmed)
+                    && !vendor.api().isBlank() && vendor.hasBaseUrl()) {
                 return vendor;
             }
         }

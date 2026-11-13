@@ -85,6 +85,11 @@
   真的正文和思考都空时提示「端点没按流式回内容」，而不是直接判失败。
 - **欢迎页换挡位没反应**：没有会话时「思考·…」只改本地状态，之前直接 return，看着像点不动。
   现在欢迎页会立刻更新，并在第一次发送创建会话时把挡位带进去（`reasoningLevel`）。
+- **添加供应商报 `unknown vendor`**：`/api/models/providers` 会把 catalogue 里能路由的供应商
+  （`xiaomi` 等）标成 known，前端因此不再让用户填地址；但账户创建只查 `offered()`，于是选小米
+  就会得到 `unknown vendor \`xiaomi\`; pass \`endpoint\` to add a supplier by address`。
+  现在 `DshVendor.byId` 也认 catalogue 中**有地址且有协议**的条目（没有地址/协议的仍要求手填），
+  账户地址回落到供应商自己的 baseUrl。新增用例覆盖这个路径。
 - **权限**：所有 `/api/chat/*` 对 agent ticket 关闭（放在 `GET → READ` 之前）；设置、备份、
   端点探测与能力覆盖要求开发者提权；聊天不接工具，模型无法触发面板操作。
 - 验证：`gradlew test` 全绿（新增 SQLite/SSE/路径/权限与一次真实 SSE turn 的端到端用例）；
