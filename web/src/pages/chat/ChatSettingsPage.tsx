@@ -9,8 +9,8 @@ import {
 import { isElevationRequired, requestDeveloperPassword } from "../../elevation";
 import { toast } from "../../store";
 import type {
-  ChatAccountProfile, ChatBackup, ChatModelInfo, ChatProbe, ChatSettings,
-  CreateAccountBody, ModelProvider,
+  ChatAccountProfile, ChatBackup, ChatChatTest, ChatModelInfo, ChatProbe, ChatSettings,
+  ChatVisionTest, CreateAccountBody, ModelProvider,
 } from "../../types";
 import { errMsg } from "../../utils";
 import { ModelCaps, capabilitySourceLabel } from "./ModelCaps";
@@ -151,6 +151,7 @@ export function ChatSettingsPage() {
           ) : tab === "providers" ? (
             <ProvidersPanel
               accounts={accounts}
+              settings={settings}
               run={run}
               reloadAccounts={reloadAccounts}
             />
@@ -181,9 +182,10 @@ export function ChatSettingsPage() {
 }
 
 function ProvidersPanel({
-  accounts, run, reloadAccounts,
+  accounts, settings, run, reloadAccounts,
 }: {
   accounts: ChatAccountProfile[];
+  settings: ChatSettings;
   run: Run;
   reloadAccounts: (select?: string) => Promise<ChatAccountProfile[]>;
 }) {
@@ -204,6 +206,8 @@ function ProvidersPanel({
   const [probe, setProbe] = useState<ChatProbe | null>(null);
   const [busy, setBusy] = useState(false);
   const [probeBusy, setProbeBusy] = useState(false);
+  const [chatTest, setChatTest] = useState<ChatChatTest | null>(null);
+  const [chatTestBusy, setChatTestBusy] = useState(false);
 
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get("add") === "1") {
@@ -292,6 +296,19 @@ function ProvidersPanel({
     }
   };
 
+  const runChatTest = async () => {
+    if (!account) return;
+    setChatTestBusy(true);
+    setChatTest(null);
+    try {
+      setChatTest(await run(() => api.chat.chatTest(account.name, account.model)));
+    } catch (error) {
+      toast("error", `对话测试失败：${errMsg(error)}`);
+    } finally {
+      setChatTestBusy(false);
+    }
+  };
+
   const refreshModels = async () => {
     if (!account) return;
     setBusy(true);
@@ -336,6 +353,12 @@ function ProvidersPanel({
     setModels((current) => current.map((item) => item.id === next.id ? next : item));
     setCapabilityTarget(null);
     void reloadAccounts(account?.name);
+  };
+
+  /// 识图实测写库后只刷新这一行，不关弹窗——用户得看见判定和模型的原话。
+  const refreshCapability = (next: ChatModelInfo) => {
+    setModels((current) => current.map((item) => item.id === next.id ? next : item));
+    setCapabilityTarget(next);
   };
 
   return (
@@ -435,6 +458,10 @@ function ProvidersPanel({
                 <button className="btn btn-outline" disabled={probeBusy} onClick={() => void runProbe()}>
                   {probeBusy ? "测试中…" : "测试连接"}
                 </button>
+                <button className="btn btn-outline" disabled={chatTestBusy} onClick={() => void runChatTest()}
+                  title="真的发一条「只回复 OK」，验证 key 与 chat path；消耗少量 token">
+                  {chatTestBusy ? "对话测试中…" : "测试对话"}
+                </button>
                 <button className="btn btn-outline" disabled={busy} onClick={() => void refreshModels()}>
                   <RefreshIcon size={14} />
                   拉取模型
@@ -451,6 +478,23 @@ function ProvidersPanel({
                     <span className={probe.tlsOk ? "ok" : "no"}>tls</span>
                     <span className={probe.authOk ? "ok" : "no"}>auth</span>
                     <span className={probe.modelsOk ? "ok" : "no"}>models</span>
+                  </div>
+                </div>
+              )}
+              {chatTest && (
+                <div className={`chat-probe ${chatTest.ok ? "good" : "bad"}`}>
+                  <div>
+                    {chatTest.ok ? <CheckCircleIcon size={14} /> : <ErrorIcon size={14} />}
+                    <span>
+                      {chatTest.ok
+                        ? `对话正常 · ${chatTest.latencyMs} ms · ${chatTest.model} 回复「${chatTest.answer || "（空）"}」`
+                        : `对话失败 · ${chatTest.model}：${chatTest.error ?? "未知错误"}${chatTest.status ? `（HTTP ${chatTest.status}）` : ""}`}
+                    </span>
+                  </div>
+                  <div className="chat-probe-stages">
+                    <span className="ok">chat</span>
+                    {chatTest.status != null && <span className={chatTest.status < 300 ? "ok" : "no"}>HTTP {chatTest.status}</span>}
+                    <span className="warn">消耗少量 token</span>
                   </div>
                 </div>
               )}
@@ -472,6 +516,8 @@ function ProvidersPanel({
               <div className="chat-model-note">
                 能力默认按模型名自动识别（内置模型表）；识别不到时标「能力未识别」并全部关闭，
                 点每行的「能力」可手动覆盖，覆盖一直有效直到「恢复默认」。
+                {settings.catalogModels ? ` 模型目录（models.dev）已加载 ${settings.catalogModels} 个模型。` :
+                  " 还没拉取 models.dev 目录，能力判断只用内置表（不影响使用）。"}
               </div>
               <div className="chat-model-list">
                 {visibleModels.length === 0 ? (
@@ -521,6 +567,7 @@ function ProvidersPanel({
         run={run}
         onClose={() => setCapabilityTarget(null)}
         onSaved={applyCapability}
+        onUpdated={refreshCapability}
       />
       <ConfirmDialog
         open={deleteTarget !== null}
@@ -693,7 +740,7 @@ function AddProviderDialog({
 }
 
 function CapabilityDialog({
-  open, account, model, run, onClose, onSaved,
+  open, account, model, run, onClose, onSaved, onUpdated,
 }: {
   open: boolean;
   account: ChatAccountProfile | null;
@@ -701,15 +748,42 @@ function CapabilityDialog({
   run: Run;
   onClose: () => void;
   onSaved: (model: ChatModelInfo) => void;
+  onUpdated: (model: ChatModelInfo) => void;
 }) {
   const [caps, setCaps] = useState(model?.capabilities ?? null);
   const [busy, setBusy] = useState(false);
+  const [visionBusy, setVisionBusy] = useState(false);
+  const [visionTest, setVisionTest] = useState<ChatVisionTest | null>(null);
 
+  // 只在这个模型换了的时候重置；实测写库会更新 model 的引用，但 id 不变，
+  // 结果面板要留着给用户看。
   useEffect(() => {
     setCaps(model?.capabilities ?? null);
-  }, [model]);
+    setVisionTest(null);
+  }, [model?.id]);
 
   if (!model || !caps || !account) return null;
+
+  const probeVision = async () => {
+    setVisionBusy(true);
+    setVisionTest(null);
+    try {
+      const result = await run(() => api.chat.visionTest(account.name, model.id));
+      setVisionTest(result);
+      if (result.saved) {
+        const list = await api.chat.models(account.name);
+        const updated = list.models.find((item) => item.id === model.id);
+        if (updated) {
+          setCaps(updated.capabilities);
+          onUpdated(updated);
+        }
+      }
+    } catch (error) {
+      toast("error", `识图测试失败：${errMsg(error)}`);
+    } finally {
+      setVisionBusy(false);
+    }
+  };
 
   const save = async (reset: boolean) => {
     setBusy(true);
@@ -762,8 +836,40 @@ function CapabilityDialog({
         {caps.source === "builtin" && " · 按模型名从内置模型表自动判断，不用手改"}
         {caps.source === "unknown" && " · 模型名没匹配到内置表，能力默认全关，可在这里手动打开"}
         {caps.source === "manual" && " · 你手动改过的值会一直覆盖自动判断，直到「恢复默认」"}
+        {caps.source === "probe" && " · 用内置图片实测得出的结论，压过自动判断，直到「恢复默认」"}
+        {caps.source === "catalog" && " · 来自 models.dev 模型目录（联网缓存）"}
       </div>
       <div className="hint">「原生文件」只在服务端支持 file/document 块时建议打开；关闭后 PDF/Office 以抽取文本发送。</div>
+      <div className="chat-vision-test">
+        <div className="chat-vision-test-head">
+          <span>识图测试</span>
+          <span className="spacer" />
+          <button className="btn btn-outline" disabled={visionBusy || busy} onClick={() => void probeVision()}>
+            {visionBusy ? "测试中…" : "发一张图试试"}
+          </button>
+        </div>
+        <div className="hint">
+          发一张内置的测试图（上面是数字 {visionTest?.expected ?? "7314"}）给这个模型，最多消耗 24 个输出 token。
+          读出数字 = 支持，明确说看不到 = 不支持，答非所问 = 存疑（不写库）。
+        </div>
+        {visionTest && (
+          <div className={`chat-vision-result ${visionTest.verdict}`}>
+            <div>
+              {visionTest.verdict === "supported" ? <CheckCircleIcon size={14} />
+                : visionTest.verdict === "unsupported" ? <ErrorIcon size={14} /> : <LockIcon size={14} />}
+              <span>
+                {visionTest.verdict === "supported" ? `确认支持图片 · ${visionTest.latencyMs} ms · 已写入能力（来源：识图实测）`
+                  : visionTest.verdict === "unsupported" ? `不支持图片 · ${visionTest.latencyMs} ms · 已写入能力（来源：识图实测）`
+                  : visionTest.verdict === "uncertain" ? `存疑 · 返回内容里没有 ${visionTest.expected}，没写库，按需手动改`
+                  : `测试失败${visionTest.status ? `（HTTP ${visionTest.status}）` : ""}：${visionTest.error ?? "未知错误"}`}
+              </span>
+            </div>
+            {visionTest.answer && (
+              <div className="chat-vision-answer">模型回答：{visionTest.answer}</div>
+            )}
+          </div>
+        )}
+      </div>
       <div className="dialog-actions">
         <button className="btn btn-text dim" disabled={busy} onClick={onClose}>取消</button>
         <button className="btn btn-text dim" disabled={busy} onClick={() => void save(true)}>恢复默认</button>

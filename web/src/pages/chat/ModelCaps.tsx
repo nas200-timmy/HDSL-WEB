@@ -4,6 +4,8 @@ import type { ChatModelCapabilities } from "../../types";
 export function capabilitySourceLabel(source?: string | null): string {
   switch (source) {
     case "builtin": return "内置识别";
+    case "catalog": return "模型目录";
+    case "probe": return "识图实测";
     case "vendor": return "供应商预设";
     case "manual": return "手动覆盖";
     case "unknown": return "未识别";

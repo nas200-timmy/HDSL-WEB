@@ -40,24 +40,35 @@ public final class ChatCapabilities {
     public static Capabilities resolve(ChatStore store, String accountName, String model,
                                        String protocol) throws SQLException {
         String cleaned = model == null ? "" : model.trim();
-        ChatStore.Capability manual = store.capability(accountName, cleaned);
-        if (manual != null && "manual".equals(manual.source())) {
-            return new Capabilities(manual.vision(), manual.files(), manual.reasoning(),
-                    manual.tools(), manual.maxContext(), manual.maxOutput(), "manual");
+        ChatStore.Capability saved = store.capability(accountName, cleaned);
+        // 手动覆盖与「识图实测」都是用户/真实调用得出的结论，压过一切推断。
+        if (saved != null && "manual".equals(saved.source())) {
+            return of(saved);
+        }
+        if (saved != null && "probe".equals(saved.source())) {
+            return of(saved);
         }
         Capabilities preset = preset(protocol, cleaned);
         if (preset != null) {
             return preset;
         }
+        Capabilities catalog = ChatModelCatalog.resolve(cleaned);
+        if (catalog != null) {
+            return catalog;
+        }
         Capabilities known = knownModel(cleaned);
         if (known != null) {
             return known;
         }
-        if (manual != null) {
-            return new Capabilities(manual.vision(), manual.files(), manual.reasoning(),
-                    manual.tools(), manual.maxContext(), manual.maxOutput(), manual.source());
+        if (saved != null) {
+            return of(saved);
         }
         return new Capabilities(false, false, false, false, 32_768, 4_096, "unknown");
+    }
+
+    private static Capabilities of(ChatStore.Capability saved) {
+        return new Capabilities(saved.vision(), saved.files(), saved.reasoning(),
+                saved.tools(), saved.maxContext(), saved.maxOutput(), saved.source());
     }
 
     private static Capabilities preset(String protocol, String model) {

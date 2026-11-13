@@ -63,6 +63,8 @@ import type {
   ChatAccountProfile,
   ChatModelInfo,
   ChatProbe,
+  ChatChatTest,
+  ChatVisionTest,
   ChatTurnOutcome,
 } from "./types";
 
@@ -1156,6 +1158,18 @@ export const api = {
       ),
     probe: (account: string) =>
       request<ChatProbe>(`/api/chat/accounts/${encodeURIComponent(account)}/probe`, jsonInit("POST", {})),
+    chatTest: (account: string, model?: string | null) =>
+      request<ChatChatTest>(
+        `/api/chat/accounts/${encodeURIComponent(account)}/chat-test`,
+        jsonInit("POST", model ? { model } : {}),
+        { timeoutMs: 130000 },
+      ),
+    visionTest: (account: string, model: string) =>
+      request<ChatVisionTest>(
+        `/api/chat/accounts/${encodeURIComponent(account)}/vision-test`,
+        jsonInit("POST", { model }),
+        { timeoutMs: 130000 },
+      ),
     refreshModels: (account: string) =>
       request<{ models: string[] }>(
         `/api/chat/accounts/${encodeURIComponent(account)}/models/refresh`,

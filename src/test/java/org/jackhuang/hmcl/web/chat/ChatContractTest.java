@@ -22,7 +22,14 @@ import org.jackhuang.hmcl.dsh.DshVendor;
 import org.jackhuang.hmcl.web.developer.AgentScopes;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -146,5 +153,49 @@ class ChatContractTest {
         assertTrue(ChatCapabilities.knownModel("deepseek-v4-flash-vision-exp").vision());
         assertTrue(ChatCapabilities.knownModel("claude-sonnet-4-5-20250929").reasoning());
         assertTrue(ChatCapabilities.knownModel("claude-sonnet-4-5-20250929").files());
+    }
+
+    @Test
+    void visionProbeVerdictsFollowThePictureAnswer() {
+        assertEquals("supported", ChatProbeService.verdict(200, "7314", null));
+        assertEquals("supported", ChatProbeService.verdict(200, "图上的数字是：7314", null));
+        assertEquals("unsupported",
+                ChatProbeService.verdict(400, "", "model does not support image input"));
+        assertEquals("unsupported", ChatProbeService.verdict(200, "抱歉，我无法查看图片。", null));
+        assertEquals("unsupported", ChatProbeService.verdict(200, "I can't see images.", null));
+        assertEquals("uncertain", ChatProbeService.verdict(200, "这是一张白底黑字的图。", null));
+        // 限流/超时是「这次没测成」，不能写成「不支持」
+        assertEquals("error", ChatProbeService.verdict(429, "", "rate limited"));
+        assertEquals("error", ChatProbeService.verdict(null, "", "connect timeout"));
+    }
+
+    @Test
+    void bundledVisionProbeImageIsAPng() throws IOException {
+        try (InputStream in = ChatProbeService.class.getResourceAsStream("vision-probe.png")) {
+            assertNotNull(in, "vision-probe.png 必须打进 jar");
+            assertArrayEquals(new byte[]{(byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A},
+                    in.readNBytes(8));
+        }
+    }
+
+    @Test
+    void modelCatalogReadsItsOwnCacheFormat() throws IOException {
+        Path dir = Files.createTempDirectory("hdsl-catalog");
+        Files.writeString(dir.resolve("models.dev.json"), """
+                {"updatedAt": 123, "models": {
+                  "qwen3.8-flash": {"vision": true, "tools": true, "reasoning": true, "context": 1000000, "output": 65536},
+                  "text-only-model": {"vision": false, "tools": false, "reasoning": false, "context": 8192, "output": 2048}
+                }}""");
+        ChatModelCatalog.install(dir);
+        assertEquals(2, ChatModelCatalog.size());
+        ChatCapabilities.Capabilities caps = ChatModelCatalog.resolve("qwen3.8-flash");
+        assertNotNull(caps);
+        assertTrue(caps.vision());
+        assertTrue(caps.reasoning());
+        assertEquals("catalog", caps.source());
+        assertEquals(1_000_000, caps.maxContext());
+        assertNull(ChatModelCatalog.resolve("not-in-the-catalog"));
+        // 目录是全局状态，测完清掉，别影响同 JVM 的其他用例
+        ChatModelCatalog.install(Files.createTempDirectory("hdsl-catalog-empty"));
     }
 }

@@ -2584,6 +2584,59 @@
   color: var(--monet-primary);
 }
 
+.chat-vision-test {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--monet-outline-variant);
+}
+
+.chat-vision-test-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.chat-vision-result {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.chat-vision-result > div {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.chat-vision-result.supported {
+  background: color-mix(in srgb, var(--monet-primary) 12%, transparent);
+  color: var(--monet-primary);
+}
+
+.chat-vision-result.unsupported,
+.chat-vision-result.error {
+  background: color-mix(in srgb, var(--monet-error) 10%, transparent);
+  color: var(--monet-error);
+}
+
+.chat-vision-result.uncertain {
+  background: color-mix(in srgb, var(--monet-secondary) 14%, transparent);
+  color: var(--monet-on-surface);
+}
+
+.chat-vision-answer {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed color-mix(in srgb, currentColor 25%, transparent);
+  opacity: 0.85;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .chat-model-note {
   padding: 0 10px 6px;
   font-size: 11px;

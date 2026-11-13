@@ -1193,6 +1193,34 @@ export interface ChatSettings {
   defaultModel: string | null;
   retentionOptions: string[];
   backups: ChatBackup[];
+  /** models.dev 目录里有多少个模型；0 = 还没拉取，能力判断回落到内置表 */
+  catalogModels?: number;
+  catalogUpdatedAt?: number;
+}
+
+/** POST /api/chat/accounts/{name}/chat-test 的结果（会消耗少量 token）。 */
+export interface ChatChatTest {
+  model: string;
+  ok: boolean;
+  latencyMs: number;
+  answer: string;
+  status?: number;
+  error?: string;
+}
+
+/** POST /api/chat/accounts/{name}/vision-test 的结果。 */
+export interface ChatVisionTest {
+  model: string;
+  /** supported = 读出图上的数字；unsupported = 明确拒收/说不看图；uncertain = 有回答但对不上 */
+  verdict: "supported" | "unsupported" | "uncertain" | "error";
+  supported: boolean;
+  latencyMs: number;
+  answer: string;
+  status?: number;
+  error?: string;
+  expected: string;
+  /** 判定确定时已写入能力库（source=probe） */
+  saved: boolean;
 }
 
 export interface ChatTurnOutcome {

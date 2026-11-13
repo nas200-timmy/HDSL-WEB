@@ -320,6 +320,29 @@ public final class ChatApiServlet extends HttpServlet {
                 Json.write(response, chat.probe(account));
                 return;
             }
+            if ("/chat-test".equals(action) && "POST".equals(method)) {
+                if (!requireElevation(request, response)) {
+                    return;
+                }
+                JsonObject body = readBody(request, response);
+                if (body != null) {
+                    Json.write(response, chat.chatTest(account, nullable(body, "model")));
+                }
+                return;
+            }
+            if ("/vision-test".equals(action) && "POST".equals(method)) {
+                if (!requireElevation(request, response)) {
+                    return;
+                }
+                JsonObject body = readBody(request, response);
+                String model = body == null ? null : nullable(body, "model");
+                if (model == null || model.isBlank()) {
+                    Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "model is required");
+                    return;
+                }
+                Json.write(response, chat.visionTest(account, model));
+                return;
+            }
             if ("/models/refresh".equals(action) && "POST".equals(method)) {
                 if (!requireElevation(request, response)) {
                     return;

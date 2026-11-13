@@ -376,7 +376,7 @@ record ModelCapabilities(
 ```
 
 - 存储：`chat_model_capability`，按 `account_name + model` 唯一。
-- 来源优先级：用户手动覆盖 > vendor 预设 > 内置模型表 > unknown。
+- 来源优先级：用户手动覆盖 > 识图实测 > vendor 预设 > models.dev 目录 > 内置模型表 > unknown。
 - 内置模型表（`ChatModelRules`）：按模型 id 的**词元序列**匹配，不是子串。
   `qwen3.8-flash` → `qwen 3 . 8 - flash`，`tokens("qwen","3","8")` 命中；
   `qwen3-8b` 里的 `8b` 是参数量，会被跳过，不会误判成 3.8。
@@ -388,9 +388,21 @@ record ModelCapabilities(
   不靠猜——猜错会直接变成 400。
 - `files` 在实现里表示**原生文件块**（PDF）：Anthropic 默认开；OpenAI/Gemini/Qwen/GLM/Kimi 默认关，关闭时走文本抽取。
 - **能力设置入口在聊天页的模型菜单**，不在主界面账户页；避免和 dsh 共用账户时互相影响。
-- UI：模型列表逐行显示「图片 / 文件 / 思考 / 工具」文字徽章和来源（内置识别 / 供应商预设 /
-  手动覆盖 / 未识别）；模型选择器的每条模型也带同一套徽章，认不出来时显示
-  「能力未识别」。能力弹窗打开开关和上下文/输出上限，可「恢复默认」。
+- UI：模型列表逐行显示「图片 / 文件 / 思考 / 工具」文字徽章和来源（内置识别 / 模型目录 /
+  识图实测 / 供应商预设 / 手动覆盖 / 未识别）；模型选择器的每条模型也带同一套徽章，
+  认不出来时显示「能力未识别」。能力弹窗打开开关和上下文/输出上限，可「恢复默认」。
+- **实测**（`ChatProbeService`）：能力弹窗里的「识图测试」把 jar 内置的
+  `vision-probe.png`（白底黑字 `7314`）发给模型，`max_tokens=24`，用一句
+  「只回复你看到的数字」问它。读对了 = `supported`（vision=true）；4xx 且报错提到
+  image/vision，或者正文明确说看不到图 = `unsupported`（vision=false）；其余 =
+  `uncertain`（不写库，交给人）。只有确定结论才写 `source=probe`，因为写错一次
+  下一轮发图就是 400。限流/超时（429/5xx/网络）归 `error`，不动库。
+- **模型目录**（`ChatModelCatalog`）：`https://models.dev/api.json` 的精简缓存
+  `<data>/chat/models.dev.json`（约 450 KB、4000+ 型号）。启动 1 分钟后检查一次，
+  之后每天检查，缓存不到 7 天才重新下载；拉不到就保持旧缓存，再没有就回落到内置表。
+  同一 id 在多个供应商下的能力按多数票，上下文/输出取最小正值（按最大值算会把
+  超长上下文发出去换 400）。目录只补 `vision/reasoning/tools/context/output`，
+  不涉及原生文件块。
 - 当前消息带图但模型没有图片能力时返回 422（提示换模型）；历史图片只省略，不阻塞整轮。
 - `reasoning=true` 时折叠显示思考；不要在下一轮无条件回传 reasoning。
 - `tools` 只做字段，v1 不展示工具 UI。
@@ -424,6 +436,8 @@ GET    /api/chat/accounts
 PATCH  /api/chat/accounts/{name}
 POST   /api/chat/accounts/{name}/capabilities
 POST   /api/chat/accounts/{name}/probe
+POST   /api/chat/accounts/{name}/chat-test      真发一条「只回复 OK」，消耗少量 token
+POST   /api/chat/accounts/{name}/vision-test    发内置 7314 图片，判定识图能力
 POST   /api/chat/accounts/{name}/models/refresh
 GET    /api/chat/models?account={name}
 
@@ -501,8 +515,9 @@ web/src/pages/chat/
 ### 12.4 聊天设置（独立二级页 `/chat/settings`）
 
 - **模型服务**：服务列表（搜索/状态/模型数）、添加供应商（内置目录 + 自定义）、
-  API Key/地址/协议/paths、测试连接、拉取模型、模型列表（搜索/默认星标/能力徽章/
-  能力覆盖）。
+  API Key/地址/协议/paths、测试连接、**测试对话**（真发一条「只回复 OK」，验证 key
+  与 chat path，消耗少量 token）、拉取模型、模型列表（搜索/默认星标/能力徽章/来源/
+  能力覆盖）。能力弹窗里另有「识图测试」，判定结果直接写库并刷新该行。
 - **默认模型**：默认账户与默认模型。
 - **数据与备份**：保留策略、长文本阈值、每日 token 上限、备份开关/时间/份数/目录、
   立即备份、备份列表。

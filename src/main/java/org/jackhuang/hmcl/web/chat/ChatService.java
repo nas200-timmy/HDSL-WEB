@@ -54,6 +54,7 @@ public final class ChatService {
     private final ChatAttachments attachments;
     private final ChatTurnManager turns;
     private final ChatBackupService backups;
+    private final ChatProbeService probes;
     private final EventBus bus;
     private final Path dataDir;
     private final ScheduledExecutorService scheduler =
@@ -65,6 +66,7 @@ public final class ChatService {
     private volatile ChatSettings.Settings settings;
     private volatile ScheduledFuture<?> backupTask;
     private volatile ScheduledFuture<?> retentionTask;
+    private volatile ScheduledFuture<?> catalogTask;
 
     public ChatService(ChatStore store, EventBus bus, Path dataDir)
             throws SQLException {
@@ -75,7 +77,10 @@ public final class ChatService {
         this.settings = ChatSettings.load(store, dataDir);
         this.turns = new ChatTurnManager(store, attachments, bus, settings);
         this.backups = new ChatBackupService(store, dataDir);
+        this.probes = new ChatProbeService(store, dataDir);
+        ChatModelCatalog.install(dataDir.resolve("chat"));
         schedule();
+        scheduleCatalog();
     }
 
     public ChatStore store() {
@@ -505,6 +510,18 @@ public final class ChatService {
         }
     }
 
+    /// 真的跑一轮对话（消耗少量 token），验证 key 与 chat path。
+    public JsonObject chatTest(String accountName, String model)
+            throws ChatException, SQLException, IOException {
+        return probes.chatTest(accountName, model, settings);
+    }
+
+    /// 发一张内置图片让模型读数字，确认它到底会不会看图。
+    public JsonObject visionTest(String accountName, String model)
+            throws ChatException, SQLException, IOException {
+        return probes.visionTest(accountName, model, settings);
+    }
+
     public List<String> refreshModels(String accountName) throws ChatException, SQLException, IOException {
         try {
             return ChatEndpoints.refreshModels(store, accountName, settings);
@@ -531,6 +548,8 @@ public final class ChatService {
         json.addProperty("longTextTokens", current.longTextTokens());
         json.addProperty("dailyTokenLimit", current.dailyTokenLimit());
         json.addProperty("streamFlushMs", current.streamFlushMs());
+        json.addProperty("catalogModels", ChatModelCatalog.size());
+        json.addProperty("catalogUpdatedAt", ChatModelCatalog.updatedAt());
         addNullable(json, "defaultAccount", current.defaultAccount());
         addNullable(json, "defaultModel", current.defaultModel());
         JsonArray retentionOptions = new JsonArray();
@@ -632,6 +651,19 @@ public final class ChatService {
         }, delayUntil(LocalTime.of(3, 47)), TimeUnit.MILLISECONDS);
     }
 
+    /// models.dev 目录：启动 1 分钟后检查一次（没有缓存就拉），之后每天检查，
+    /// 缓存不到 7 天不会重复下载。拉不到就保持现状，能力判断回落到内置规则表。
+    private void scheduleCatalog() {
+        cancel(catalogTask);
+        catalogTask = scheduler.scheduleWithFixedDelay(() -> {
+            try {
+                ChatModelCatalog.refreshIfStale(Duration.ofDays(7));
+            } catch (RuntimeException e) {
+                org.jackhuang.hmcl.util.logging.Logger.LOG.warning("models.dev refresh failed", e);
+            }
+        }, 1, 24 * 60, TimeUnit.MINUTES);
+    }
+
     private static long delayUntil(LocalTime time) {
         ZonedDateTime now = ZonedDateTime.now();
         ZonedDateTime next = now.with(time);
@@ -677,6 +709,7 @@ public final class ChatService {
     public void close() {
         cancel(backupTask);
         cancel(retentionTask);
+        cancel(catalogTask);
         scheduler.shutdownNow();
         turns.close();
         attachments.close();
