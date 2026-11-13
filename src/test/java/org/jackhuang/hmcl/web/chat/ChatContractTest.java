@@ -97,6 +97,16 @@ class ChatContractTest {
     }
 
     @Test
+    void nonVisionModelsOmitHistoricalImagesButStillRefuseTheCurrentOne() {
+        assertTrue(ChatTurnManager.omitHistoricalAttachment("image", false, false));
+        assertFalse(ChatTurnManager.omitHistoricalAttachment("image", false, true));
+        assertFalse(ChatTurnManager.omitHistoricalAttachment("image", true, false));
+        assertTrue(ChatTurnManager.omitHistoricalAttachment("audio", true, false));
+        assertFalse(ChatTurnManager.omitHistoricalAttachment("audio", true, true));
+        assertFalse(ChatTurnManager.omitHistoricalAttachment("document", false, false));
+    }
+
+    @Test
     void capabilityTableIsConservativeAndOverridable() {
         assertEquals(true, ChatCapabilities.knownModel("claude-sonnet-4-20250514").vision());
         assertEquals(true, ChatCapabilities.knownModel("deepseek-reasoner").reasoning());

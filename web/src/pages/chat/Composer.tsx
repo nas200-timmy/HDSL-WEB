@@ -42,7 +42,7 @@ async function prepareImage(file: File): Promise<File> {
 export function Composer({
   draft, onDraft, onSend, onStop, streaming, disabled,
   groups, account, model, onPick, onManage, onAdd, pending, onUpload, onRemove, uploading,
-  quickPhrases, focusSignal,
+  quickPhrases, focusSignal, historyImages,
 }: {
   draft: string;
   onDraft: (value: string) => void;
@@ -62,6 +62,7 @@ export function Composer({
   uploading: boolean;
   quickPhrases: string[];
   focusSignal?: number;
+  historyImages: number;
 }) {
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -73,6 +74,7 @@ export function Composer({
     ?? null;
   const canVision = current?.capabilities.vision ?? true;
   const canFiles = current?.capabilities.files ?? true;
+  const pendingImages = pending.filter((item) => item.kind === "image").length;
 
   useEffect(() => {
     const area = areaRef.current;
@@ -123,6 +125,13 @@ export function Composer({
         void addFiles(event.dataTransfer.files);
       }}
     >
+      {!canVision && (pendingImages > 0 || historyImages > 0) && (
+        <div className="chat-composer-note">
+          {pendingImages > 0
+            ? `当前模型不支持图片：待发送的 ${pendingImages} 张图片请移除或换模型。`
+            : `当前模型不支持图片：上文中的 ${historyImages} 张图片会被省略，只发送文字。`}
+        </div>
+      )}
       {dragging && <div className="chat-drop-hint">松开上传附件</div>}
       {pending.length > 0 && (
         <div className="chat-pending">

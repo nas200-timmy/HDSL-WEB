@@ -504,7 +504,8 @@ public final class ChatTurnManager {
     private List<ChatProtocol.ChatMessage> messages(List<ChatStore.Node> nodes, Resolved resolved)
             throws SQLException, ChatException, IOException {
         List<ChatProtocol.ChatMessage> messages = new ArrayList<>();
-        for (ChatStore.Node node : nodes) {
+        for (int index = 0; index < nodes.size(); index++) {
+            ChatStore.Node node = nodes.get(index);
             ChatStore.Message message = node.active();
             if (message == null) {
                 continue;
@@ -513,20 +514,50 @@ public final class ChatTurnManager {
                     && (message.content() == null || message.content().isBlank())) {
                 continue;
             }
+            boolean current = index == nodes.size() - 1;
+            StringBuilder text = new StringBuilder(message.content() == null ? "" : message.content());
             List<ChatProtocol.Attachment> attachments = new ArrayList<>();
             for (ChatStore.Attachment attachment : message.attachments()) {
-                attachments.add(toProtocolAttachment(attachment, resolved));
+                String kind = attachment.kind() == null ? "text" : attachment.kind();
+                if (omitHistoricalAttachment(kind, resolved.capability.vision(), current)) {
+                    appendOmittedNote(text, attachment, kind);
+                } else {
+                    attachments.add(toProtocolAttachment(attachment, resolved));
+                }
             }
-            String text = message.content() == null ? "" : message.content();
-            if (text.isBlank() && attachments.isEmpty()) {
+            if (text.isEmpty() && attachments.isEmpty()) {
                 continue;
             }
-            messages.add(new ChatProtocol.ChatMessage(node.role(), text, attachments));
+            messages.add(new ChatProtocol.ChatMessage(node.role(), text.toString(), attachments));
         }
         if (messages.isEmpty()) {
             messages.add(new ChatProtocol.ChatMessage("user", "", List.of()));
         }
         return truncate(messages, resolved.capability);
+    }
+
+    /// 历史消息里模型读不了的附件直接省略，避免“换了个纯文本模型就整轮发不出去”。
+    /// 当前这条消息的图片仍然报错，让用户明确知道是这一条的图片没被发送。
+    static boolean omitHistoricalAttachment(String kind, boolean vision, boolean current) {
+        if (current) {
+            return false;
+        }
+        if ("image".equals(kind)) {
+            return !vision;
+        }
+        return "audio".equals(kind) || "video".equals(kind);
+    }
+
+    private static void appendOmittedNote(StringBuilder text, ChatStore.Attachment attachment,
+                                          String kind) {
+        if (!text.isEmpty()) {
+            text.append("\n\n");
+        }
+        text.append("[附件: ").append(attachment.name()).append(
+                "image".equals(kind)
+                        ? "（历史图片，当前模型不支持图片，已省略）"
+                        : "（历史音视频，v1 不发送，已省略）");
+        text.append("]");
     }
 
     private ChatProtocol.Attachment toProtocolAttachment(ChatStore.Attachment attachment,
@@ -536,8 +567,9 @@ public final class ChatTurnManager {
         if ("image".equals(kind)) {
             if (!resolved.capability.vision()) {
                 throw new ChatException(422, "model_no_vision",
-                        "model " + resolved.model() + " does not accept images; disable the image"
-                                + " attachment or switch models");
+                        "当前消息包含图片，但模型 " + resolved.model()
+                                + " 没有声明图片能力；请移除这张图片或切换支持图片的模型"
+                                + "（历史图片会自动省略，不会卡住整轮）");
             }
             return new ChatProtocol.Attachment(attachment.name(), attachment.mime(), kind,
                     attachment.size(), Path.of(attachment.path()), null);

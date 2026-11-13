@@ -2571,3 +2571,13 @@
   font-weight: 700;
   font-size: 11px;
 }
+
+.chat-composer-note {
+  margin-bottom: 6px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--monet-error) 10%, transparent);
+  color: var(--monet-error);
+  font-size: 11px;
+  line-height: 1.5;
+}

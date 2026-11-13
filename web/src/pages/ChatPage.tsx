@@ -391,6 +391,17 @@ export function ChatPage() {
     }
   };
 
+  const historyImageCount = useMemo(() => {
+    let count = 0;
+    for (const node of session?.nodes ?? []) {
+      const message = node.variants.find((item) => item.id === node.activeVariantId)
+        ?? node.variants[node.variants.length - 1];
+      if (!message) continue;
+      count += message.attachments.filter((item) => item.kind === "image").length;
+    }
+    return count;
+  }, [session]);
+
   const modelGroups = useMemo<ModelGroup[]>(() => {
     const groups: ModelGroup[] = chatAccounts
       .map((account) => ({
@@ -840,6 +851,7 @@ export function ChatPage() {
               uploading={uploading}
               quickPhrases={currentAssistant?.quickPhrases ?? []}
               focusSignal={focusSignal}
+              historyImages={historyImageCount}
             />
           </div>
         )}
