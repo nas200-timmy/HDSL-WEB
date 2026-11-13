@@ -11,7 +11,18 @@ export interface LaunchEntry {
   name: string;
   /** 已归一化（大写）：RUNNING / STARTING / STOPPED … */
   state: string;
-  kind: "dsh" | "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "pi-web" | "zcode";
+  kind:
+    | "dsh"
+    | "kimi"
+    | "opencode"
+    | "claude-web"
+    | "octop"
+    | "hermes"
+    | "pi-web"
+    | "qwen"
+    | "mimo"
+    | "minimax"
+    | "zcode";
   /** kind = dsh 时的原始实例；品牌/zcode 实例为 null */
   dsh: Instance | null;
   /** 品牌/zcode 条目；dsh 实例为 null */
@@ -26,6 +37,9 @@ export const BRAND_LABEL: Record<string, string> = {
   octop: I18N["dsh.brand.octop"],
   hermes: I18N["dsh.brand.hermes.short"],
   "pi-web": I18N["dsh.brand.pi-web.short"],
+  qwen: I18N["dsh.brand.qwen.short"],
+  mimo: I18N["dsh.brand.mimo.short"],
+  minimax: I18N["dsh.brand.minimax.short"],
   zcode: I18N["dsh.brand.zcode"],
 };
 

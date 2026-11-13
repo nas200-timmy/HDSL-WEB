@@ -14,6 +14,9 @@ type group struct {
 	Brand string
 	Title string
 	Items []panel.Instance
+	// TUI is true for a terminal-only brand (Qwen Code / MiMo Code / MiniMax
+	// Code): there is no launch/stop and no web address, only the terminal.
+	TUI bool
 }
 
 // brandOrder is the menu order of the instance surfaces: the brand categories
@@ -24,7 +27,7 @@ type group struct {
 // is attaching to one would be offering a dead end. Its instances stay on the
 // web page. Hermes is listed because it does ship a TUI (`hermes --tui`), even
 // though that TUI cannot run next to the brand's web mode.
-var brandOrder = []string{"kimi", "opencode", "claude-web", "hermes", "pi-web", "zcode"}
+var brandOrder = []string{"kimi", "opencode", "claude-web", "hermes", "pi-web", "qwen", "mimo", "minimax", "zcode"}
 
 func brandTitle(brand string) string {
 	switch brand {
@@ -34,6 +37,12 @@ func brandTitle(brand string) string {
 		return "Hermes 实例（实验）"
 	case "pi-web":
 		return "PI WEB 实例（实验）"
+	case "qwen":
+		return "Qwen Code 实例（TUI）"
+	case "mimo":
+		return "MiMo Code 实例（TUI）"
+	case "minimax":
+		return "MiniMax Code 实例（TUI）"
 	default:
 		return brand + " 实例"
 	}
@@ -47,6 +56,16 @@ func (a *App) loadGroups(ctx context.Context) ([]group, bool) {
 		return nil, false
 	}
 	groups := []group{{Title: "DSH 实例", Items: instances}}
+	// Capabilities are optional: a panel older than TUI brands answers 404, and
+	// every brand it does know is a web brand.
+	kinds := map[string]string{}
+	if caps, err := a.client.BrandCapabilities(ctx); err == nil {
+		for _, c := range caps {
+			kinds[c.ID] = c.Kind
+		}
+	} else {
+		a.logf("读取品牌能力失败（按网页品牌处理）: %v", err)
+	}
 	for _, brand := range brandOrder {
 		items, err := a.client.BrandInstances(ctx, brand)
 		if err != nil {
@@ -54,7 +73,12 @@ func (a *App) loadGroups(ctx context.Context) ([]group, bool) {
 			a.logf("跳过 %s 实例列表: %v", brand, err)
 			continue
 		}
-		groups = append(groups, group{Brand: brand, Title: brandTitle(brand), Items: items})
+		groups = append(groups, group{
+			Brand: brand,
+			Title: brandTitle(brand),
+			Items: items,
+			TUI:   kinds[brand] == "tui",
+		})
 	}
 	return groups, true
 }
@@ -99,7 +123,7 @@ func (a *App) pickFromGroup(ctx context.Context, entry group) {
 		for _, instance := range entry.Items {
 			items = append(items, ui.Item{
 				Label: instanceLabel(instance),
-				Note:  fmt.Sprintf("%s · %s", stateText(instance.State), instance.ID),
+				Note:  fmt.Sprintf("%s · %s", stateTextFor(entry.TUI, instance.State), instance.ID),
 			})
 		}
 		items = append(items, ui.Item{Label: "刷新列表"})
@@ -177,28 +201,62 @@ func stateText(state string) string {
 	return state
 }
 
+// stateTextFor is stateText with the TUI brand's one different word: `created`
+// means "installed and idle", not "not started" — there is no web process to
+// start.
+func stateTextFor(tui bool, state string) string {
+	if tui && strings.EqualFold(state, "created") {
+		return "已安装"
+	}
+	return stateText(state)
+}
+
 // instanceActions is the per-instance menu. Attaching returns here, not to the
 // shell: the login and the panel connection survive an agent exit.
 func (a *App) instanceActions(ctx context.Context, entry group, instance panel.Instance) {
 	for {
 		running := runningState(instance.State)
-		items := []ui.Item{
-			{Label: "进入终端", Note: "attach"},
-			{Label: "启动实例", Note: stateText(instance.State), Disabled: running},
-			{Label: "停止实例", Note: stopNote(instance), Disabled: !running && !instance.TerminalOpen},
-			{Label: "停止正在运行的终端", Note: "只停终端，不停实例", Disabled: !instance.TerminalOpen},
-			{Label: "查看详情"},
-			{Label: "← 返回实例列表"},
+		var items []ui.Item
+		if entry.TUI {
+			// TUI brands have no web process: "launch" and "stop instance" would
+			// be requests the panel refuses with tui_only. The terminal is the
+			// only runtime surface.
+			items = []ui.Item{
+				{Label: "进入终端", Note: "attach"},
+				{Label: "停止正在运行的终端", Note: "只停终端", Disabled: !instance.TerminalOpen},
+				{Label: "查看详情"},
+				{Label: "← 返回实例列表"},
+			}
+		} else {
+			items = []ui.Item{
+				{Label: "进入终端", Note: "attach"},
+				{Label: "启动实例", Note: stateText(instance.State), Disabled: running},
+				{Label: "停止实例", Note: stopNote(instance), Disabled: !running && !instance.TerminalOpen},
+				{Label: "停止正在运行的终端", Note: "只停终端，不停实例", Disabled: !instance.TerminalOpen},
+				{Label: "查看详情"},
+				{Label: "← 返回实例列表"},
+			}
 		}
 
 		index, ok := a.menu(menuPage{
 			Title:    "实例：" + instanceLabel(instance),
-			Subtitle: fmt.Sprintf("%s · %s · %s", entry.Title, instance.ID, stateText(instance.State)),
+			Subtitle: fmt.Sprintf("%s · %s · %s", entry.Title, instance.ID, stateTextFor(entry.TUI, instance.State)),
 			Items:    items,
 			Hint:     "↑/↓ 选择    Enter 确定    Esc 返回    Ctrl-C 取消",
 		})
 		if !ok || index == len(items)-1 {
 			return
+		}
+		if entry.TUI {
+			switch index {
+			case 0:
+				a.attach(ctx, entry.Brand, instance)
+			case 1:
+				a.stopTerminal(ctx, entry.Brand, instance)
+			case 2:
+				a.instanceDetail(entry, instance)
+			}
+			continue
 		}
 		switch index {
 		case 0:
@@ -244,16 +302,21 @@ func (a *App) instanceDetail(entry group, instance panel.Instance) {
 		"ID：" + instance.ID,
 		"分类：" + entry.Title,
 		"品牌：" + brand,
-		"状态：" + stateText(instance.State),
+		"状态：" + stateTextFor(entry.TUI, instance.State),
+	}
+	if entry.TUI {
+		lines = append(lines, "形态：TUI（只有终端，没有网页进程）")
 	}
 	if instance.Version != "" {
 		lines = append(lines, "版本："+instance.Version)
 	}
-	if port := instance.PortOf(); port != 0 {
-		lines = append(lines, fmt.Sprintf("端口：%d", port))
-	}
-	if instance.URL != "" {
-		lines = append(lines, "地址："+instance.URL)
+	if !entry.TUI {
+		if port := instance.PortOf(); port != 0 {
+			lines = append(lines, fmt.Sprintf("端口：%d", port))
+		}
+		if instance.URL != "" {
+			lines = append(lines, "地址："+instance.URL)
+		}
 	}
 	if instance.Account != "" {
 		lines = append(lines, "账户："+instance.Account)

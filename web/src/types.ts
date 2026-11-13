@@ -574,7 +574,19 @@ export type WsEvent =
 
 // ---------- 第三方品牌实例（kimi / opencode / claude-web，REST 挂 /api/brands/<brand>/*） ----------
 
-export type BrandId = "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "pi-web";
+export type BrandId =
+  | "kimi"
+  | "opencode"
+  | "claude-web"
+  | "octop"
+  | "hermes"
+  | "pi-web"
+  | "qwen"
+  | "mimo"
+  | "minimax";
+
+/// 品牌实例的形态：网页进程 / 纯 TUI / 两者可选（PI WEB）。
+export type BrandKind = "web" | "tui" | "hybrid";
 
 /// 终端内核（只有 Claude Web 有不止一个：社区引擎 claude-web-engine 或官方
 /// Claude Code 二进制）。`available` 为假时 `detail` 说明缺什么。
@@ -660,6 +672,10 @@ export interface BrandCapabilities {
   platform: string;
   brands: {
     id: BrandId;
+    /** web / tui / hybrid：决定实例卡提供启动网页还是只提供终端 */
+    kind?: BrandKind;
+    web?: boolean;
+    terminal?: boolean;
     installable: boolean;
     reason?: string;
   }[];
@@ -700,6 +716,8 @@ export interface BrandInstance {
   brand: BrandId;
   name: string;
   version: string;
+  /** web / tui / hybrid；TUI 实例没有网页进程与端口 */
+  kind?: BrandKind;
   /** 仅 claude-web：ANTHROPIC_BASE_URL 覆盖；空/缺省表示用工具自己的默认端点 */
   baseUrl?: string | null;
   lastPort: number;
@@ -737,10 +755,22 @@ export interface InstancePlugins {
 /// 这是**唯一**的跨品牌实例状态源：BrandsView（品牌层）/ ZcodeSection / LaunchPane /
 /// MainPage 都从这里读，写入只发生在 refreshExternal。
 export interface ExternalInstance {
-  brand: "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "pi-web" | "zcode";
+  brand:
+    | "kimi"
+    | "opencode"
+    | "claude-web"
+    | "octop"
+    | "hermes"
+    | "pi-web"
+    | "qwen"
+    | "mimo"
+    | "minimax"
+    | "zcode";
   id: string;
   name: string;
   state: string;
+  /** web / tui / hybrid；缺省按 web 处理，兼容旧后端 */
+  kind?: BrandKind;
   url?: string;
   /** 最近一次启动播报的端口；0/缺省 = 未知（运行中浮层展示用） */
   port?: number;

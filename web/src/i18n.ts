@@ -326,6 +326,9 @@ export const I18N = {
   "dsh.brand.hermes": "Hermes Agent（实验）",
   "dsh.brand.octop": "Octop（实验）",
   "dsh.brand.pi-web": "PI WEB（实验）",
+  "dsh.brand.qwen": "Qwen Code",
+  "dsh.brand.mimo": "MiMo Code",
+  "dsh.brand.minimax": "MiniMax Code",
   "dsh.brand.zcode": "ZCode（实验）",
   // 「（实验）」是完整显示名的一部分（侧栏标题、第三方警示用），
   // 但实例名不该背这个尾巴（新建实例时预填的就是下面这几条短名）。
@@ -333,6 +336,13 @@ export const I18N = {
   "dsh.brand.claude-web.short": "Claude Web",
   "dsh.brand.hermes.short": "Hermes",
   "dsh.brand.pi-web.short": "PI WEB",
+  "dsh.brand.qwen.short": "Qwen Code",
+  "dsh.brand.mimo.short": "MiMo Code",
+  "dsh.brand.minimax.short": "MiniMax Code",
+  "dsh.brand.tui.section": "TUI 品牌实例",
+  "dsh.brand.tui.tag": "TUI",
+  "dsh.brand.state.installed": "已安装",
+  "dsh.brand.terminal.running": "终端运行中",
   // PI WEB：终端与网页共用同一个 agent 目录但各自跑会话，所以可以同时开；
   // 这里只描述"形态"与"版本锁"这两个决策，不做互斥确认。
   "dsh.brand.pi-web.mode": "运行形态",

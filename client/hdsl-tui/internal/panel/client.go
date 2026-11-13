@@ -359,6 +359,21 @@ func (c *Client) BrandInstances(ctx context.Context, brand string) ([]Instance, 
 	return c.instances(ctx, instancesPath(brand))
 }
 
+// BrandCapabilities lists every brand's shape. It is the one place the client
+// learns which surfaces are TUI-only, so the menu can hide launch/stop instead
+// of offering a request the panel will refuse.
+func (c *Client) BrandCapabilities(ctx context.Context) ([]BrandCapability, error) {
+	_, data, err := c.do(ctx, http.MethodGet, "/api/brands/capabilities", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var body brandCapabilities
+	if err := json.Unmarshal(data, &body); err != nil {
+		return nil, &TransportError{Op: "GET /api/brands/capabilities", Err: err}
+	}
+	return body.Brands, nil
+}
+
 // instancesPath maps a surface id to its list endpoint.
 func instancesPath(brand string) string {
 	switch brand {

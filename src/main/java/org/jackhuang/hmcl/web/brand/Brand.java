@@ -129,7 +129,25 @@ public enum Brand {
     /// every request is resolved once against `document.baseURI`, and routes
     /// live in the query string. A subpath mount therefore needs no HTML, shim
     /// or router patch — see [#relativeClient].
-    PI_WEB("pi-web", Source.NPM, "@chainingintention/pi-web-cn", "pi-web", false);
+    PI_WEB("pi-web", Source.NPM, "@chainingintention/pi-web-cn", "pi-web", false),
+
+    /// Qwen Code (Alibaba, npm package `@qwen-code/qwen-code`): a terminal
+    /// coding agent with a full-screen TUI. It also has a daemon mode
+    /// (`qwen serve`) that serves a Web Shell, but the panel treats it as a
+    /// **TUI brand**: the instance runs `qwen` in a PTY and has no web process,
+    /// no port and no `/i/<id>/` mount.
+    QWEN("qwen", Source.NPM, "@qwen-code/qwen-code", "qwen", false),
+
+    /// MiMo Code (Xiaomi, npm package `@mimo-ai/cli`): an OpenCode-derived
+    /// terminal agent. The published package is a small launcher that
+    /// downloads the platform binary on install/first run. Its `web` command
+    /// and embedded web UI are disabled upstream, so this is a TUI-only brand.
+    MIMO("mimo", Source.NPM, "@mimo-ai/cli", "mimo", false),
+
+    /// MiniMax Code (npm package `@minimax-ai/code`): a standalone TUI with
+    /// managed accounts, BYOK models, plugins and ACP. The public source has
+    /// no HTTP/web UI, so this is a TUI-only brand.
+    MINIMAX("minimax", Source.NPM, "@minimax-ai/code", "mcode", false);
 
     /// Where a brand's releases come from: an npm registry package, a GitHub
     /// repository's release tags (source zip over HTTPS, no git), or a GitHub
@@ -138,6 +156,18 @@ public enum Brand {
         NPM,
         GITHUB,
         GITHUB_RELEASE
+    }
+
+    /// The shape of a brand's instance, which decides what the panel offers:
+    /// a web process behind `/i/<id>/`, a terminal only, or both.
+    public enum Kind {
+        /// The instance runs the brand's web server; the terminal is optional.
+        WEB,
+        /// The instance is a PTY running the brand's TUI. There is no web
+        /// process, no port and no mount.
+        TUI,
+        /// The instance can be created either way (PI WEB today).
+        HYBRID
     }
 
     private final String id;
@@ -188,6 +218,57 @@ public enum Brand {
     /// Where this brand's releases come from.
     public Source source() {
         return source;
+    }
+
+    /// The shape of this brand's instances.
+    ///
+    /// TUI brands are the panel's second brand family: the instance is a PTY,
+    /// there is no web process to launch, and no `/i/<id>/` mount exists. The
+    /// API and the clients switch on this instead of hard-coding brand ids.
+    public Kind kind() {
+        return switch (this) {
+            case QWEN, MIMO, MINIMAX -> Kind.TUI;
+            case PI_WEB -> Kind.HYBRID;
+            default -> Kind.WEB;
+        };
+    }
+
+    /// Whether this brand's instances are terminal-only.
+    public boolean isTui() {
+        return kind() == Kind.TUI;
+    }
+
+    /// Whether an instance of this brand exposes a web process at all.
+    public boolean hasWeb() {
+        return kind() != Kind.TUI;
+    }
+
+    /// Whether this brand exposes an interactive terminal.
+    public boolean hasTerminal() {
+        return true;
+    }
+
+    /// Whether the installer should use a hoisted `node_modules` layout on
+    /// every platform.
+    ///
+    /// The panel already hoists on Windows. MiniMax Code ships a large
+    /// pre-bundled CLI with native optional dependencies and is the one brand
+    /// that resolves some of them from the hoisted tree; the isolated layout
+    /// works for the other npm brands and is left alone.
+    public boolean prefersHoistedNodeModules() {
+        return this == MINIMAX;
+    }
+
+    /// Whether the panel prefers the managed Node.js runtime for this brand's
+    /// install and TUI launch.
+    ///
+    /// TUI brands are the ones whose upstream engines range is narrow and
+    /// whose install is a plain `pnpm add`; running them on whatever `node`
+    /// happens to be on the host PATH is exactly the failure mode the managed
+    /// runtime exists to avoid. The launcher still falls back to PATH when no
+    /// managed runtime is installed.
+    public boolean prefersManagedNode() {
+        return isTui();
     }
 
     /// Whether releases come from a GitHub repository (source zip or a
@@ -349,11 +430,19 @@ public enum Brand {
     /// @param version the release version
     /// @return the range, or `null` when there is nothing to warn about
     public @Nullable String knownNodeRequirement(String version) {
-        if (this != HERMES || version == null || version.isBlank()) {
-            return null;
-        }
-        return org.jackhuang.hmcl.dsh.NodeSemver.satisfies(version, ">=" + HERMES_NODE_26_FROM)
-                ? ">=26" : null;
+        return switch (this) {
+            // Declared by the published packages. The installer/runtime picks a
+            // Node that satisfies these; the version picker can warn before an
+            // install even when the package is not on disk yet.
+            case QWEN -> ">=22.0.0";
+            case MIMO -> ">=20.10.0";
+            case MINIMAX -> ">=22.19.0 <23 || >=24.2.0 <27";
+            case HERMES -> version == null || version.isBlank()
+                    ? null
+                    : (org.jackhuang.hmcl.dsh.NodeSemver.satisfies(version, ">=" + HERMES_NODE_26_FROM)
+                            ? ">=26" : null);
+            default -> null;
+        };
     }
 
     /// Whether this brand offers a version in its picker.

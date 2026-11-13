@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { launchBrandInstance, stopBrandInstance } from "../actions";
 import { api } from "../api";
 import { withBase } from "../base";
+import { isTuiBrand } from "../brandKind";
 import { AdminCredentialsDialog } from "../components/AdminCredentialsDialog";
 import { CollapsibleNote } from "../components/CollapsibleNote";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
@@ -106,7 +107,22 @@ function nodeRangeLabel(range: string): string {
 /// 其余三个共用 /api/brands/<brand>/*。顺序 = 页签顺序，也是深链缺省时的挑选顺序。
 export type BrandKey = "zcode" | BrandId;
 
-export const BRAND_KEYS: BrandKey[] = ["zcode", "kimi", "opencode", "claude-web", "octop", "hermes", "pi-web"];
+export const BRAND_KEYS: BrandKey[] = [
+  "zcode",
+  "kimi",
+  "opencode",
+  "claude-web",
+  "octop",
+  "hermes",
+  "pi-web",
+  "qwen",
+  "mimo",
+  "minimax",
+];
+
+/// 纯 TUI 品牌：实例只有 PTY，没有启动/停止/打开网页，也没有端口。
+/// 页签行用一条分隔标签把它们与网页品牌分开。
+/// （品牌 id 集合见 `../brandKind`，网页与启动面板共用同一份判断。）
 
 const BRAND_TITLE: Record<BrandKey, string> = {
   zcode: I18N["dsh.brand.zcode"],
@@ -116,6 +132,9 @@ const BRAND_TITLE: Record<BrandKey, string> = {
   octop: I18N["dsh.brand.octop"],
   hermes: I18N["dsh.brand.hermes"],
   "pi-web": I18N["dsh.brand.pi-web"],
+  qwen: I18N["dsh.brand.qwen"],
+  mimo: I18N["dsh.brand.mimo"],
+  minimax: I18N["dsh.brand.minimax"],
 };
 
 /// 短名（不带「（实验）」后缀）：写进用户的实例名与「还没有 X 实例」这类句子里，
@@ -128,6 +147,9 @@ const BRAND_SHORT: Record<BrandKey, string> = {
   octop: I18N["dsh.brand.octop.short"],
   hermes: I18N["dsh.brand.hermes.short"],
   "pi-web": I18N["dsh.brand.pi-web.short"],
+  qwen: I18N["dsh.brand.qwen.short"],
+  mimo: I18N["dsh.brand.mimo.short"],
+  minimax: I18N["dsh.brand.minimax.short"],
 };
 
 export function isBrandKey(value: string | null | undefined): value is BrandKey {
@@ -197,42 +219,56 @@ export function BrandsView({
 
   const warning = I18N["dsh.brand.thirdparty.warning"].replace("%s", BRAND_TITLE[brand]);
 
+  const renderBrandTab = (k: BrandKey) => {
+    const count = s.external.filter((e) => e.brand === k).length;
+    const active = k === brand;
+    const capability = capabilities[k];
+    const blocked = capability?.installable === false;
+    return (
+      <button
+        key={k}
+        className="tool-btn ripple-host"
+        title={blocked ? capability?.reason : undefined}
+        style={
+          active
+            ? { background: "var(--monet-secondary-container)", color: "var(--monet-on-secondary-container)" }
+            : undefined
+        }
+        onClick={() => onSelect(k)}
+      >
+        <BrandIcon brand={k} size={mobile ? 14 : 16} />
+        {mobile ? BRAND_SHORT[k] : BRAND_TITLE[k]}
+        {isTuiBrand(k) && (
+          <span className="tag plain" style={{ marginLeft: mobile ? 2 : 4 }}>
+            {I18N["dsh.brand.tui.tag"]}
+          </span>
+        )}
+        {blocked && (
+          <span className="tag plain" style={{ marginLeft: mobile ? 2 : 4 }}>
+            不可用
+          </span>
+        )}
+        {count > 0 && (
+          <span className="tag plain" style={{ marginLeft: mobile ? 2 : 4 }}>
+            {count}
+          </span>
+        )}
+      </button>
+    );
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: mobile ? 6 : 8, flex: 1, minHeight: 0 }}>
       {/* 品牌页签行：带实例数（0 个就不显示标签），换页签只换下面这块内容 */}
       <div className="card toolbar-row brand-tabs" style={{ flexShrink: 0 }}>
-        {BRAND_KEYS.map((k) => {
-          const count = s.external.filter((e) => e.brand === k).length;
-          const active = k === brand;
-          const capability = capabilities[k];
-          const blocked = capability?.installable === false;
-          return (
-            <button
-              key={k}
-              className="tool-btn ripple-host"
-              title={blocked ? capability?.reason : undefined}
-              style={
-                active
-                  ? { background: "var(--monet-secondary-container)", color: "var(--monet-on-secondary-container)" }
-                  : undefined
-              }
-              onClick={() => onSelect(k)}
-            >
-              <BrandIcon brand={k} size={mobile ? 14 : 16} />
-              {mobile ? BRAND_SHORT[k] : BRAND_TITLE[k]}
-              {blocked && (
-                <span className="tag plain" style={{ marginLeft: mobile ? 2 : 4 }}>
-                  不可用
-                </span>
-              )}
-              {count > 0 && (
-                <span className="tag plain" style={{ marginLeft: mobile ? 2 : 4 }}>
-                  {count}
-                </span>
-              )}
-            </button>
-          );
-        })}
+        {BRAND_KEYS.filter((k) => !isTuiBrand(k)).map(renderBrandTab)}
+        <span
+          className="tag plain"
+          style={{ flex: "none", marginLeft: 4, marginRight: 2, whiteSpace: "nowrap" }}
+        >
+          {I18N["dsh.brand.tui.section"]}
+        </span>
+        {BRAND_KEYS.filter((k) => isTuiBrand(k)).map(renderBrandTab)}
       </div>
 
       {/* key=品牌：换品牌即重挂载（表单、折叠态、进场动画都跟着重置） */}
@@ -1280,6 +1316,7 @@ function InstancesCard({
   }, []);
 
   const shortName = BRAND_SHORT[brand];
+  const tuiBrand = isTuiBrand(brand);
   const instances = s.external.filter((e) => e.brand === brand);
   const installed = versions?.releases ?? [];
   const catalog = versions?.versions ?? [];
@@ -1551,7 +1588,8 @@ function InstancesCard({
   const pickVersion = async (inst: ExternalInstance, version: string) => {
     if (!version || version === inst.version) return;
     const isInstalled = installed.some((r) => r.version === version);
-    const running = inst.state === "running" || inst.state === "starting";
+    const running = inst.state === "running" || inst.state === "starting"
+      || (tuiBrand && !!inst.terminalOpen);
     if (!isInstalled || running) {
       setPending({ inst, version });
       return;
@@ -1566,6 +1604,15 @@ function InstancesCard({
     // 确认前读一次最新状态：弹窗期间它可能已经被启动/停掉了
     const cur = getState().external.find((e) => e.id === inst.id) ?? inst;
     if ((cur.state === "running" || cur.state === "starting") && !(await stopAndWait(inst.id))) return;
+    if (tuiBrand && cur.terminalOpen) {
+      try {
+        await api.closeBrandTerminal(brand, inst.id);
+        await refreshExternal();
+      } catch (e) {
+        toast("error", `停止终端失败：${errMsg(e)}`);
+        return;
+      }
+    }
     if (installed.some((r) => r.version === version)) await patchVersion(inst.id, version);
     else await installThenPatch(inst.id, version);
   };
@@ -1660,11 +1707,11 @@ function InstancesCard({
           </div>
         ) : (
           instances.map((inst, idx) => {
-            const running = inst.state === "running";
+            const running = !tuiBrand && inst.state === "running";
             const installing = rowInstall?.id === inst.id;
             const version = inst.version ?? "";
             const disabled = !!inst.disabled;
-            const terminalOnly = brand === "pi-web" && inst.webEnabled === false;
+            const terminalOnly = tuiBrand || (brand === "pi-web" && inst.webEnabled === false);
             const locked = brand === "pi-web" && !!inst.versionLocked;
             return (
               <div key={inst.id}>
@@ -1689,14 +1736,22 @@ function InstancesCard({
                             : undefined
                         }
                       >
-                        {stateText(inst.state)}
+                        {tuiBrand && inst.state === "created"
+                          ? I18N["dsh.brand.state.installed"]
+                          : stateText(inst.state)}
                         {inst.state === "starting" && startingSince[inst.id]
                           ? ` ${Math.max(0, Math.round((Date.now() - startingSince[inst.id]) / 1000))}s`
                           : ""}
                       </span>
                       {disabled && <span className="tag plain">策略禁用</span>}
-                      {terminalOnly && (
+                      {tuiBrand && (
+                        <span className="tag plain">{I18N["dsh.brand.tui.tag"]}</span>
+                      )}
+                      {!tuiBrand && terminalOnly && (
                         <span className="tag plain">{I18N["dsh.brand.pi-web.terminalOnly"]}</span>
+                      )}
+                      {inst.terminalOpen && (
+                        <span className="tag running">{I18N["dsh.brand.terminal.running"]}</span>
                       )}
                       {locked && (
                         <span className="tag plain">{I18N["dsh.brand.pi-web.versionLocked"]}</span>
@@ -1707,11 +1762,13 @@ function InstancesCard({
                     </span>
                     <span className="tlli-subtitle">
                       {inst.id} · {version}
-                      {running
-                        ? ` · ${I18N["dsh.instance.port"]} ${
-                            inst.port ? inst.port : I18N["dsh.instance.port.auto.none"]
-                          } · ${inst.url ?? withBase(`/i/${inst.id}/`)}`
-                        : ""}
+                      {tuiBrand
+                        ? ` · ${inst.terminalOpen ? I18N["dsh.brand.terminal.running"] : I18N["dsh.brand.tui.tag"]}`
+                        : running
+                          ? ` · ${I18N["dsh.instance.port"]} ${
+                              inst.port ? inst.port : I18N["dsh.instance.port.auto.none"]
+                            } · ${inst.url ?? withBase(`/i/${inst.id}/`)}`
+                          : ""}
                       {inst.state === "error" && inst.error ? ` · ${inst.error}` : ""}
                     </span>
                     {/* Hermes 的 gateway 是个 OpenAI 兼容服务：端点与 key 就在这一行下面，
@@ -1755,7 +1812,7 @@ function InstancesCard({
                     </select>
                     <button
                       className="icon-btn on-variant ripple-host"
-                      style={{ display: terminalOnly ? "none" : undefined }}
+                      style={{ display: tuiBrand ? "none" : undefined }}
                       title={running ? I18N["dsh.stop"] : I18N["dsh.launch"]}
                       // "停止"对策略禁用的实例仍然要能点：后端明确允许把被禁用的实例关掉，
                       // 否则政策切换（或面板外改了 policy.json）之后只能看着它跑。
@@ -2025,9 +2082,11 @@ function InstancesCard({
         title={I18N["dsh.brand.version.switch"]}
         message={
           pending &&
-          (installed.some((r) => r.version === pending.version)
-            ? I18N["dsh.brand.version.stop_and_switch"]
-            : I18N["dsh.brand.version.install_and_switch"].replace("%s", pending.version))
+          (tuiBrand && pending.inst.terminalOpen
+            ? "切换版本会先关闭该实例正在运行的终端，然后换到新版本。"
+            : installed.some((r) => r.version === pending.version)
+              ? I18N["dsh.brand.version.stop_and_switch"]
+              : I18N["dsh.brand.version.install_and_switch"].replace("%s", pending.version))
         }
         confirmLabel={I18N["button.ok"]}
         busy={busy}

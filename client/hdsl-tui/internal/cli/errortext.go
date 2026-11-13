@@ -27,6 +27,7 @@ var explanations = map[string]string{
 	"terminal_already_open":        "该实例已经有终端在运行；重新运行本命令会附着到它，不必另开",
 	"confirmation_required":        "这台面板运行在 Windows 上：终端只能在面板所在机器的桌面上打开，无法远程接入",
 	"brand_has_no_tui":             "该品牌没有交互式终端",
+	"tui_only":                     "这是 TUI 品牌实例：没有网页可启动，请直接进入终端",
 	"emergency_stop":               "面板处于紧急停机（E-Stop）：实例网页、终端与实例启动都被冻结，冷却结束或重启面板后才能恢复",
 	"estop_cooldown":               "紧急停机的冷却期还没结束：到点前谁都不能解除（重启面板进程或容器会清空）",
 }
@@ -96,7 +97,7 @@ func Explain(err error) (int, string) {
 		// the panel's own sentence says which page.
 		return ExitPolicy, shorten(message)
 	case panel.Status(err) == 404:
-		return ExitTransport, "找不到该实例：dsh 实例直接写 id，品牌实例（kimi/opencode/claude-web/hermes/pi-web/zcode）要加 --brand；" +
+		return ExitTransport, "找不到该实例：dsh 实例直接写 id，品牌实例（kimi/opencode/claude-web/hermes/pi-web/qwen/mimo/minimax/zcode）要加 --brand；" +
 			"不带 --instance 运行可以列出全部实例"
 	}
 	return ExitCodeFor(panel.Classify(err)), shorten(message)

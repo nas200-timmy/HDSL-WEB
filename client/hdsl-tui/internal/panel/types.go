@@ -58,6 +58,24 @@ type instanceList struct {
 	Instances []Instance `json:"instances"`
 }
 
+// BrandCapability is one entry of GET /api/brands/capabilities. Kind decides
+// whether the surface has a web mode ("web"), a terminal only ("tui"), or both
+// ("hybrid"). An older panel omits Kind and the client then treats the brand as
+// web — the only shape those panels shipped.
+type BrandCapability struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	Web         bool   `json:"web"`
+	Terminal    bool   `json:"terminal"`
+	Installable bool   `json:"installable"`
+	Reason      string `json:"reason"`
+}
+
+type brandCapabilities struct {
+	Platform string            `json:"platform"`
+	Brands   []BrandCapability `json:"brands"`
+}
+
 // Terminal is the body of POST .../terminal. Mode is "pty" (Ticket and WS are
 // set) or "desktop" (an older panel ran the console on the panel machine's own
 // desktop and had no PTY to attach to; Hint explains that to the user). Panels

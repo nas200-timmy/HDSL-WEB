@@ -264,8 +264,8 @@ function MobileHomeBrand({ entry }: { entry: LaunchEntry }) {
     window.open(openUrl, "_blank", "noopener");
   };
   const doAction = () => {
-    if (running) void stopBrandInstance(entry.kind as "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "zcode", entry.id);
-    else void launchBrandInstance(entry.kind as "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "zcode", { id: entry.id, name: entry.name });
+    if (running) void stopBrandInstance(entry.kind as "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "qwen" | "mimo" | "minimax" | "zcode", entry.id);
+    else void launchBrandInstance(entry.kind as "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "qwen" | "mimo" | "minimax" | "zcode", { id: entry.id, name: entry.name });
   };
   const copyUrl = () => {
     void navigator.clipboard.writeText(openUrl).then(
