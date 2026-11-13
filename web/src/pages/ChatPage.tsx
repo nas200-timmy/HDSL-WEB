@@ -46,10 +46,14 @@ function LiveBubble({ assistant, text, reasoning }: { assistant: ChatAssistant |
       <div className="chat-msg-body">
         <div className="chat-msg-name">{assistant?.name ?? "助手"}</div>
         {reasoning && (
-          <details className="chat-reasoning" open>
-            <summary>思考</summary>
+          <div className="chat-reasoning expanded">
+            <div className="chat-reasoning-head static">
+              <span className="chat-reasoning-title">思考</span>
+              <span className="chat-reasoning-count">{reasoning.length} 字</span>
+              <span className="chat-reasoning-toggle">生成中</span>
+            </div>
             <div className="chat-reasoning-body">{reasoning}</div>
-          </details>
+          </div>
         )}
         {text ? (
           <div className="chat-bubble">

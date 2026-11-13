@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PopupItem, PopupMenu, PopupSep } from "../../components/PopupMenu";
 import { ContentCopyIcon, DeleteIcon, EditIcon, MoreVertIcon, PersonIcon, RefreshIcon } from "../../components/icons";
 import type { ChatAttachment, ChatMessage, ChatNode } from "../../types";
@@ -47,11 +47,25 @@ export function MessageItem({
   const message = activeMessage(node);
   const [menu, setMenu] = useState<HTMLElement | null>(null);
   const [copied, setCopied] = useState(false);
+  const [reasoningExpanded, setReasoningExpanded] = useState(false);
   const moreRef = useRef<HTMLButtonElement | null>(null);
+  const reasoningRef = useRef<HTMLDivElement | null>(null);
+
+  const content = streaming && liveContent !== undefined ? liveContent : (message?.content ?? "");
+  const reasoning = streaming && liveReasoning !== undefined ? liveReasoning : (message?.reasoning ?? "");
+
+  useEffect(() => {
+    if (streaming) setReasoningExpanded(true);
+  }, [streaming]);
+
+  useEffect(() => {
+    if (streaming && reasoningExpanded && reasoningRef.current) {
+      reasoningRef.current.scrollTop = reasoningRef.current.scrollHeight;
+    }
+  }, [reasoning, streaming, reasoningExpanded]);
+
   if (!message) return null;
 
-  const content = streaming && liveContent !== undefined ? liveContent : message.content;
-  const reasoning = streaming && liveReasoning !== undefined ? liveReasoning : message.reasoning;
   const isUser = node.role === "user";
   const index = node.variants.findIndex((item) => item.id === message.id);
   const canSwitch = node.variants.length > 1;
@@ -81,10 +95,20 @@ export function MessageItem({
           <span className="chat-msg-time">{time}</span>
         </div>
         {reasoning && (
-          <details className="chat-reasoning" open={streaming}>
-            <summary>思考</summary>
-            <div className="chat-reasoning-body">{reasoning}</div>
-          </details>
+          <div className={`chat-reasoning${reasoningExpanded ? " expanded" : ""}`}>
+            <button
+              className="chat-reasoning-head"
+              onClick={() => setReasoningExpanded((value) => !value)}
+              aria-expanded={reasoningExpanded}
+            >
+              <span className="chat-reasoning-title">思考</span>
+              <span className="chat-reasoning-count">{reasoning.length} 字</span>
+              <span className="chat-reasoning-toggle">{reasoningExpanded ? "收起" : "展开"}</span>
+            </button>
+            {reasoningExpanded && (
+              <div className="chat-reasoning-body" ref={reasoningRef}>{reasoning}</div>
+            )}
+          </div>
         )}
         {message.attachments.length > 0 && (
           <div className="chat-attachments">
