@@ -376,11 +376,22 @@ record ModelCapabilities(
 ```
 
 - 存储：`chat_model_capability`，按 `account_name + model` 唯一。
-- 来源优先级：用户手动覆盖 > vendor 预设 > 内置常见模型表 > unknown。
+- 来源优先级：用户手动覆盖 > vendor 预设 > 内置模型表 > unknown。
+- 内置模型表（`ChatModelRules`）：按模型 id 的**词元序列**匹配，不是子串。
+  `qwen3.8-flash` → `qwen 3 . 8 - flash`，`tokens("qwen","3","8")` 命中；
+  `qwen3-8b` 里的 `8b` 是参数量，会被跳过，不会误判成 3.8。
+  匹配按命中词元数评分：具体型号（`qwen3.8-max`、`glm-5.3-flash`、`deepseek-v4.1-flash`）
+  压过家族通配（`qwen3.8`、`glm5`、`deepseek-v4`），同分规则取并集。
+  规则来自 RikkaHub `ModelRegistry` 的同款做法，覆盖 GPT / Gemini / Claude / DeepSeek /
+  Qwen / GLM / Kimi / 豆包 / Grok / MiniMax / MiMo / 混元 / 阶跃 / 商汤 等常见家族，
+  另有 `vision`/`vl`/`omni` 关键词兜底。认不出来的 id 仍是 `unknown`（能力全关），
+  不靠猜——猜错会直接变成 400。
 - `files` 在实现里表示**原生文件块**（PDF）：Anthropic 默认开；OpenAI/Gemini/Qwen/GLM/Kimi 默认关，关闭时走文本抽取。
 - **能力设置入口在聊天页的模型菜单**，不在主界面账户页；避免和 dsh 共用账户时互相影响。
-- UI：模型菜单显示「图片 / 文件 / 思考 / 工具」开关和上下文/输出上限；可「恢复默认」。
-- 模型选择器显示徽章；不支持时禁用对应附件入口，或提示会走文本抽取。
+- UI：模型列表逐行显示「图片 / 文件 / 思考 / 工具」文字徽章和来源（内置识别 / 供应商预设 /
+  手动覆盖 / 未识别）；模型选择器的每条模型也带同一套徽章，认不出来时显示
+  「能力未识别」。能力弹窗打开开关和上下文/输出上限，可「恢复默认」。
+- 当前消息带图但模型没有图片能力时返回 422（提示换模型）；历史图片只省略，不阻塞整轮。
 - `reasoning=true` 时折叠显示思考；不要在下一轮无条件回传 reasoning。
 - `tools` 只做字段，v1 不展示工具 UI。
 

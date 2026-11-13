@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PopupMenu } from "../../components/PopupMenu";
 import { AddIcon, CheckIcon, KeyboardArrowDownIcon, SearchIcon, SettingsIcon } from "../../components/icons";
 import type { ChatModelInfo } from "../../types";
+import { ModelCaps } from "./ModelCaps";
 
 export interface ModelGroup {
   name: string;
@@ -113,10 +114,7 @@ export function ModelPicker({
                   >
                     <span className="chat-model-popup-id">{item.id}</span>
                     <span className="chat-model-popup-caps">
-                      {item.capabilities.vision && <span className="chat-cap" title="图片">图</span>}
-                      {item.capabilities.files && <span className="chat-cap" title="原生文件（PDF）">文</span>}
-                      {item.capabilities.reasoning && <span className="chat-cap" title="思考">思</span>}
-                      {item.capabilities.tools && <span className="chat-cap" title="工具">工</span>}
+                      <ModelCaps caps={item.capabilities} />
                     </span>
                     {selected && <CheckIcon size={14} />}
                   </button>

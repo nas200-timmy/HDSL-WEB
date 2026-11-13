@@ -2390,6 +2390,11 @@
   .chat-model-context {
     display: none;
   }
+
+  /* 手机上把位置让给能力徽章：来源在「能力」弹窗里看 */
+  .chat-cap-source {
+    display: none;
+  }
 }
 
 /* ---------------- 模型选择器（按服务分组） ---------------- */
@@ -2530,6 +2535,60 @@
   display: flex;
   gap: 2px;
   flex: none;
+}
+
+/* 能力徽章：文字版，用于模型列表与选择器；.chat-cap 是输入区那种 18px 单字块 */
+.chat-caps-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.chat-cap-badge {
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 9px;
+  line-height: 16px;
+  white-space: nowrap;
+  background: var(--monet-surface-container-high);
+  color: var(--monet-on-surface-variant);
+}
+
+.chat-cap-badge.vision {
+  background: var(--monet-primary-container);
+  color: var(--monet-on-primary-container);
+}
+
+.chat-cap-badge.files {
+  background: var(--monet-secondary-container);
+  color: var(--monet-on-secondary-container);
+}
+
+.chat-cap-badge.reasoning {
+  background: color-mix(in srgb, var(--monet-secondary) 18%, transparent);
+  color: var(--monet-on-surface);
+}
+
+.chat-cap-badge.unknown {
+  background: var(--monet-error-container);
+  color: var(--monet-on-error-container);
+}
+
+.chat-cap-source {
+  font-size: 9px;
+  color: var(--monet-on-surface-variant);
+  white-space: nowrap;
+}
+
+.chat-cap-source.builtin {
+  color: var(--monet-primary);
+}
+
+.chat-model-note {
+  padding: 0 10px 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--monet-on-surface-variant);
 }
 
 .chat-model-popup-empty {

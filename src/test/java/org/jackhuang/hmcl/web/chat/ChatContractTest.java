@@ -118,4 +118,33 @@ class ChatContractTest {
         assertEquals(true, ChatCapabilities.knownModel("claude-sonnet-4-20250514").files());
         assertEquals(true, ChatCapabilities.knownModel("qwen2.5-vl-72b").vision());
     }
+
+    @Test
+    void capabilityRulesPickUpModelsThatDoReadImages() {
+        // 面板上真实挂着的模型：能识图的默认就要是 true，不该逼用户手改。
+        assertTrue(ChatCapabilities.knownModel("qwen3.8-flash").vision());
+        assertFalse(ChatCapabilities.knownModel("qwen3.8-max").vision());
+        assertFalse(ChatCapabilities.knownModel("glm-5.2").vision());
+        assertTrue(ChatCapabilities.knownModel("glm-5.3-flash").vision());
+        assertTrue(ChatCapabilities.knownModel("deepseek-v4.1-flash-1017").vision());
+        assertFalse(ChatCapabilities.knownModel("deepseek-v4-pro").vision());
+        assertTrue(ChatCapabilities.knownModel("deepseek-flash").vision());
+        assertTrue(ChatCapabilities.knownModel("kimi-k2.6").vision());
+        assertTrue(ChatCapabilities.knownModel("kimi-k3.1-pro-highspeed").vision());
+        assertFalse(ChatCapabilities.knownModel("kimi-k2").vision());
+        assertTrue(ChatCapabilities.knownModel("qwen3-omni").vision());
+        assertTrue(ChatCapabilities.knownModel("qwen3-vl-plus").vision());
+        assertTrue(ChatCapabilities.knownModel("doubao-1.6-vision").vision());
+        assertTrue(ChatCapabilities.knownModel("grok-4").vision());
+        assertTrue(ChatCapabilities.knownModel("gpt-5.4-mini").vision());
+        assertFalse(ChatCapabilities.knownModel("gpt-5-chat").vision());
+        // 8b 是参数量不是版本号：qwen3-8b 不能当成 qwen 3.8 吃图
+        assertFalse(ChatCapabilities.knownModel("qwen3-8b").vision());
+        // 认不出来的仍然留空，让用户覆盖，而不是瞎猜
+        assertNull(ChatCapabilities.knownModel("some-unknown-model"));
+        // 具体变体的分数更高时，家族通配不会把它带跑
+        assertTrue(ChatCapabilities.knownModel("deepseek-v4-flash-vision-exp").vision());
+        assertTrue(ChatCapabilities.knownModel("claude-sonnet-4-5-20250929").reasoning());
+        assertTrue(ChatCapabilities.knownModel("claude-sonnet-4-5-20250929").files());
+    }
 }

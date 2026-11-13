@@ -13,6 +13,7 @@ import type {
   CreateAccountBody, ModelProvider,
 } from "../../types";
 import { errMsg } from "../../utils";
+import { ModelCaps, capabilitySourceLabel } from "./ModelCaps";
 
 type Run = <T>(action: () => Promise<T>) => Promise<T>;
 type Tab = "providers" | "defaults" | "data" | "network";
@@ -468,6 +469,10 @@ function ProvidersPanel({
                   刷新
                 </button>
               </div>
+              <div className="chat-model-note">
+                能力默认按模型名自动识别（内置模型表）；识别不到时标「能力未识别」并全部关闭，
+                点每行的「能力」可手动覆盖，覆盖一直有效直到「恢复默认」。
+              </div>
               <div className="chat-model-list">
                 {visibleModels.length === 0 ? (
                   <div className="chat-provider-empty">这个服务还没有模型列表；点「拉取模型」或手填默认模型。</div>
@@ -484,11 +489,9 @@ function ProvidersPanel({
                         <StarIcon size={15} />
                       </button>
                       <span className="chat-model-id" title={item.id}>{item.id}</span>
-                      <span className="chat-model-caps">
-                        {caps.vision && <span className="chat-cap" title="图片">图</span>}
-                        {caps.files && <span className="chat-cap" title="原生文件（PDF）">文</span>}
-                        {caps.reasoning && <span className="chat-cap" title="思考">思</span>}
-                        {caps.tools && <span className="chat-cap" title="工具">工</span>}
+                      <span className="chat-model-caps"><ModelCaps caps={caps} /></span>
+                      <span className={`chat-cap-source ${caps.source}`} title="能力来源：内置识别按模型名自动判断，可随时手动覆盖">
+                        {capabilitySourceLabel(caps.source)}
                       </span>
                       <span className="chat-model-context">{Math.round(caps.maxContext / 1000)}K / {Math.round(caps.maxOutput / 1000)}K</span>
                       <button className="btn btn-text" onClick={() => setCapabilityTarget(item)}>能力</button>
@@ -754,7 +757,12 @@ function CapabilityDialog({
             onChange={(event) => setCaps({ ...caps, maxOutput: Number(event.target.value) })} />
         </label>
       </div>
-      <div className="chat-capability-source">当前来源：{caps.source}</div>
+      <div className="chat-capability-source">
+        当前来源：{capabilitySourceLabel(caps.source)}
+        {caps.source === "builtin" && " · 按模型名从内置模型表自动判断，不用手改"}
+        {caps.source === "unknown" && " · 模型名没匹配到内置表，能力默认全关，可在这里手动打开"}
+        {caps.source === "manual" && " · 你手动改过的值会一直覆盖自动判断，直到「恢复默认」"}
+      </div>
       <div className="hint">「原生文件」只在服务端支持 file/document 块时建议打开；关闭后 PDF/Office 以抽取文本发送。</div>
       <div className="dialog-actions">
         <button className="btn btn-text dim" disabled={busy} onClick={onClose}>取消</button>

@@ -21,7 +21,6 @@ import org.jackhuang.hmcl.dsh.DshAccount;
 import org.jetbrains.annotations.NotNullByDefault;
 
 import java.sql.SQLException;
-import java.util.Locale;
 
 /// 模型能力（docs/chat.md §9）。
 ///
@@ -71,66 +70,15 @@ public final class ChatCapabilities {
         return null;
     }
 
-    /// 内置的常见模型表。只放确定度高的判断：图片、原生文件、思考、上下文/输出上限。
-    /// 判断不出来的模型留给 `unknown`，由用户在聊天页覆盖，而不是猜一个错的能力。
+    /// 内置的常见模型表。判据在 [ChatModelRules]：按模型 id 的词元匹配，
+    /// 具体型号压过家族通配，认不出来的留给 `unknown` 由用户覆盖。
     static Capabilities knownModel(String model) {
-        String id = model.toLowerCase(Locale.ROOT);
-        if (id.isEmpty()) {
+        ChatModelRules.Result rule = ChatModelRules.resolve(model);
+        if (rule == null) {
             return null;
         }
-        if (id.contains("claude")) {
-            boolean reasoning = id.contains("3-7") || id.contains("4-") || id.contains("opus-4")
-                    || id.contains("sonnet-4") || id.contains("thinking");
-            return new Capabilities(true, true, reasoning, true, 200_000,
-                    reasoning ? 32_000 : 8_192, "builtin");
-        }
-        if (id.startsWith("gpt-4o") || id.startsWith("gpt-4.1") || id.startsWith("gpt-5")
-                || id.startsWith("chatgpt-4o")) {
-            return new Capabilities(true, false, id.startsWith("gpt-5"), true, 128_000, 16_384, "builtin");
-        }
-        if (id.startsWith("o1") || id.startsWith("o3") || id.startsWith("o4")) {
-            return new Capabilities(true, false, true, true, 200_000, 100_000, "builtin");
-        }
-        if (id.contains("deepseek-reasoner") || id.contains("deepseek-r1")) {
-            return new Capabilities(false, false, true, false, 128_000, 32_768, "builtin");
-        }
-        if (id.startsWith("deepseek")) {
-            return new Capabilities(false, false, false, true, 128_000, 8_192, "builtin");
-        }
-        if (id.startsWith("gemini")) {
-            return new Capabilities(true, false, id.contains("2.5") || id.contains("thinking"),
-                    true, 1_000_000, 65_536, "builtin");
-        }
-        if (id.contains("qwen") && (id.contains("vl") || id.contains("omni"))) {
-            return new Capabilities(true, false, true, true, 128_000, 16_384, "builtin");
-        }
-        if (id.contains("qwen3") || id.contains("qwq")) {
-            return new Capabilities(false, false, true, true, 128_000, 32_768, "builtin");
-        }
-        if (id.startsWith("qwen")) {
-            return new Capabilities(false, false, false, true, 128_000, 8_192, "builtin");
-        }
-        if (id.contains("glm-4v") || id.contains("glm-4.5v") || id.contains("glm-4.6v")) {
-            return new Capabilities(true, false, true, true, 128_000, 16_384, "builtin");
-        }
-        if (id.contains("glm")) {
-            return new Capabilities(false, false, id.contains("glm-4.5") || id.contains("glm-4.6"),
-                    true, 128_000, 16_384, "builtin");
-        }
-        if (id.contains("kimi") || id.contains("moonshot")) {
-            boolean vision = id.contains("vision") || id.contains("latest");
-            boolean reasoning = id.contains("thinking") || id.contains("k2");
-            return new Capabilities(vision, false, reasoning, true, 256_000, 16_384, "builtin");
-        }
-        if (id.contains("llama") || id.contains("mistral") || id.contains("mixtral")) {
-            boolean vision = id.contains("vision") || id.contains("pixtral");
-            return new Capabilities(vision, false, false, true, 128_000, 8_192, "builtin");
-        }
-        if (id.contains("grok")) {
-            boolean vision = id.contains("vision") || id.contains("2");
-            return new Capabilities(vision, false, id.contains("3"), true, 131_072, 16_384, "builtin");
-        }
-        return null;
+        return new Capabilities(rule.vision(), rule.files(), rule.reasoning(), rule.tools(),
+                rule.maxContext(), rule.maxOutput(), "builtin");
     }
 
     /// 供应商协议本身对附件的限制：OpenAI completions 没有原生文档块，Anthropic 有。
