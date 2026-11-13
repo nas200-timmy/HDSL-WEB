@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router-dom";
-import { isTuiBrand } from "./brandKind";
+import { isTuiBrand, setTuiBrands } from "./brandKind";
 import { ErrorIcon, InfoIcon } from "./components/icons";
 import { Decorator } from "./components/Decorator";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -273,6 +273,17 @@ export default function App() {
   // 登录后拉一次服务端版本（标题栏 "Hello DeepSeek! Launcher vX.Y.Z"）
   useEffect(() => {
     if (s.username) void refreshServerVersion();
+  }, [s.username]);
+
+  // 品牌形态以服务端 Brand.kind() 为准：首屏用 brandKind.ts 的兜底列表，
+  // 能力接口回来后替换，新增 TUI 品牌不需要再改前端。
+  useEffect(() => {
+    if (!s.username) return;
+    void api.brandCapabilities()
+      .then((caps) => setTuiBrands(caps.brands.filter((b) => b.kind === "tui").map((b) => b.id)))
+      .catch(() => {
+        // 能力查询失败时保留兜底列表，不影响页面本身。
+      });
   }, [s.username]);
 
   return (
