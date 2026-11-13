@@ -88,12 +88,12 @@ class PeerIdentityTest {
         }
     }
 
-    /// A terminal that stays alive long enough to be a root: `read line`
-    /// blocks until the session is terminated.
+    /// A terminal that stays alive long enough to be a root: `cat` blocks on
+    /// its input until the session is terminated.
     private static TerminalSession openProbe(TerminalManager terminals, String brand, String id)
             throws Exception {
         TerminalTarget target = new TerminalTarget(brand, id,
-                List.of("/bin/sh", "-c", "read line"), Path.of("/tmp"), ENV);
+                List.of("/bin/cat"), Path.of("/tmp"), ENV);
         return terminals.open(target, new PtySize(80, 24));
     }
 

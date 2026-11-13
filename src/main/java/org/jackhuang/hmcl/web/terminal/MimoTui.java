@@ -55,7 +55,11 @@ public final class MimoTui implements BrandTui {
         BrandTui.applyNode(environment, runtime);
 
         List<String> command;
-        if (Files.isRegularFile(binary)) {
+        // On Windows the launcher stages a copy of the binary outside the
+        // package before running it: a running PE locks its own file, which
+        // would block an upgrade or uninstall. Starting `vendor/mimo.exe` in
+        // place bypasses that, so Windows always goes through `mimo.js`.
+        if (OperatingSystem.CURRENT_OS != OperatingSystem.WINDOWS && Files.isRegularFile(binary)) {
             command = new ArrayList<>(List.of(binary.toString()));
         } else {
             Path launcher = packageRoot.resolve("mimo.js");

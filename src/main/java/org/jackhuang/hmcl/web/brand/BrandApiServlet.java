@@ -1092,6 +1092,13 @@ public final class BrandApiServlet extends HttpServlet {
                 throw new InstanceTerminal.Refused(409,
                         brand.sourceLabel() + " " + instance.version() + " is not installed");
             }
+            // The terminal runs as the agent (Privileges.asAgent), and the TUI
+            // creates its data directory under HOME on first launch. Hand the
+            // instance dirs over again before every attach: an instance created
+            // by an older build, or a home left root-owned by a failed setup,
+            // would otherwise make Qwen/MiMo/MiniMax write into a directory
+            // their uid cannot create or read.
+            BrandRuntime.handInstanceDirsToAgent(ref.manager(), instance);
             // The official kernel is refused outright in unsupported regions, and
             // Claude Code exits with "App unavailable in region" after a 403 the
             // user cannot act on. Ask the endpoint first and answer with a

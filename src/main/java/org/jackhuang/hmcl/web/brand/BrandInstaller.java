@@ -1091,7 +1091,12 @@ public final class BrandInstaller {
             throw new BrandException("Installing " + brand.npmPackage() + " was interrupted", e);
         }
 
-        if (!Files.exists(bin)) {
+        // The extensionless `.bin/<tool>` is a POSIX shim; on Windows the
+        // startable form is `<tool>.cmd` beside it. `Executables.resolve` knows
+        // both layouts, so a successful install is not reported as missing just
+        // because only the `.cmd` exists there.
+        if (!Files.exists(bin)
+                && org.jackhuang.hmcl.util.platform.Executables.resolve(bin.toString()).isEmpty()) {
             throw new BrandException(brand.npmPackage() + " " + version
                     + " installed without its executable (" + bin + "); the package's install scripts may have "
                     + "been skipped or failed — see " + log);
