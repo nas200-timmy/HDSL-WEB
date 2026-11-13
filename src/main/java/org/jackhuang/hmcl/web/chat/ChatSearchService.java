@@ -125,6 +125,10 @@ public final class ChatSearchService {
         }
         List<Hit> hits = switch (provider) {
             case "deepseek" -> deepseek(key, cleaned, limit);
+            case "zhipu" -> zhipu(key, cleaned, limit);
+            case "tavily" -> tavily(key, cleaned, limit);
+            case "brave" -> brave(key, cleaned, limit);
+            case "exa" -> exa(key, cleaned, limit);
             default -> bocha(key, cleaned, limit);
         };
         synchronized (cache) {
@@ -143,7 +147,7 @@ public final class ChatSearchService {
 
     /// 搜索 key：优先用设置里的；DeepSeek 可以留空，回落到面板里 DeepSeek 账户的 key。
     static @Nullable String resolveKey(ChatSettings.Settings settings, String provider) {
-        String key = settings.searchApiKey();
+        String key = settings.searchKey(provider);
         if (key != null && !key.isBlank()) {
             return key.trim();
         }
@@ -168,7 +172,7 @@ public final class ChatSearchService {
         body.addProperty("count", limit);
         body.addProperty("page", 1);
         body.addProperty("freshness", "noLimit");
-        JsonObject root = post(bochaUrl(), key, body, "博查");
+        JsonObject root = post(url("bocha"), key, body, "博查");
         JsonElement data = root.get("data");
         JsonElement pages = data != null && data.isJsonObject()
                 ? data.getAsJsonObject().get("webPages") : null;
@@ -197,7 +201,7 @@ public final class ChatSearchService {
         JsonObject body = new JsonObject();
         body.addProperty("query", query);
         body.addProperty("count", limit);
-        JsonObject root = post(deepseekUrl(), key, body, "DeepSeek");
+        JsonObject root = post(url("deepseek"), key, body, "DeepSeek");
         JsonElement results = root.get("results");
         List<Hit> hits = new ArrayList<>();
         if (results != null && results.isJsonArray()) {
@@ -219,14 +223,137 @@ public final class ChatSearchService {
     }
 
     /// 端点可以用系统属性覆盖，测试和自建反代都走这里。
-    static String bochaUrl() {
-        String value = System.getProperty("hdsl.search.bocha");
-        return value == null || value.isBlank() ? "https://api.bochaai.com/v1/web-search" : value.trim();
+    static String url(String provider) {
+        String value = System.getProperty("hdsl.search." + provider);
+        if (value != null && !value.isBlank()) {
+            return value.trim();
+        }
+        return switch (provider) {
+            case "deepseek" -> "https://api.deepseek.com/v1/tools/search";
+            case "zhipu" -> "https://open.bigmodel.cn/api/paas/v4/web_search";
+            case "tavily" -> "https://api.tavily.com/search";
+            case "brave" -> "https://api.search.brave.com/res/v1/web/search";
+            case "exa" -> "https://api.exa.ai/search";
+            default -> "https://api.bochaai.com/v1/web-search";
+        };
     }
 
-    static String deepseekUrl() {
-        String value = System.getProperty("hdsl.search.deepseek");
-        return value == null || value.isBlank() ? "https://api.deepseek.com/v1/tools/search" : value.trim();
+    private List<Hit> zhipu(String key, String query, int limit) throws ChatException {
+        JsonObject body = new JsonObject();
+        body.addProperty("search_engine", "search_pro");
+        body.addProperty("search_query", query);
+        body.addProperty("count", limit);
+        body.addProperty("search_recency_filter", "noLimit");
+        body.addProperty("content_size", "medium");
+        JsonObject root = post(url("zhipu"), key, body, "智谱");
+        JsonElement results = root.get("search_result");
+        List<Hit> hits = new ArrayList<>();
+        if (results != null && results.isJsonArray()) {
+            for (JsonElement element : results.getAsJsonArray()) {
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+                JsonObject item = element.getAsJsonObject();
+                String url = string(item, "link");
+                String title = string(item, "title");
+                if (url == null || url.isBlank() || title == null || title.isBlank()) {
+                    continue;
+                }
+                hits.add(new Hit(title, url, trim(string(item, "content"), MAX_SNIPPET_CHARS),
+                        string(item, "media"), string(item, "publish_date")));
+            }
+        }
+        return hits;
+    }
+
+    private List<Hit> tavily(String key, String query, int limit) throws ChatException {
+        JsonObject body = new JsonObject();
+        body.addProperty("query", query);
+        body.addProperty("max_results", limit);
+        body.addProperty("search_depth", "basic");
+        body.addProperty("include_answer", false);
+        JsonObject root = post(url("tavily"), key, body, "Tavily");
+        return genericResults(root, "results", "url", "title", "content", "published_date");
+    }
+
+    private List<Hit> exa(String key, String query, int limit) throws ChatException {
+        JsonObject body = new JsonObject();
+        body.addProperty("query", query);
+        body.addProperty("numResults", limit);
+        JsonObject contents = new JsonObject();
+        JsonObject text = new JsonObject();
+        text.addProperty("maxCharacters", MAX_SNIPPET_CHARS);
+        contents.add("text", text);
+        body.add("contents", contents);
+        JsonObject root = post(url("exa"), key, body, "Exa");
+        return genericResults(root, "results", "url", "title", "text", "publishedDate");
+    }
+
+    private List<Hit> brave(String key, String query, int limit) throws ChatException {
+        String endpoint = url("brave") + (url("brave").contains("?") ? "&" : "?")
+                + "q=" + java.net.URLEncoder.encode(query, StandardCharsets.UTF_8)
+                + "&count=" + limit;
+        HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
+                .timeout(TIMEOUT)
+                .header("Accept", "application/json")
+                .header("X-Subscription-Token", key)
+                .header("User-Agent", org.jackhuang.hmcl.Metadata.NAME + "/"
+                        + org.jackhuang.hmcl.Metadata.VERSION)
+                .GET()
+                .build();
+        JsonObject root = send(request, "Brave");
+        JsonElement web = root.get("web");
+        JsonElement results = web != null && web.isJsonObject() ? web.getAsJsonObject().get("results") : null;
+        List<Hit> hits = new ArrayList<>();
+        if (results != null && results.isJsonArray()) {
+            for (JsonElement element : results.getAsJsonArray()) {
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+                JsonObject item = element.getAsJsonObject();
+                String url = string(item, "url");
+                String title = string(item, "title");
+                if (url == null || url.isBlank() || title == null || title.isBlank()) {
+                    continue;
+                }
+                hits.add(new Hit(title, url, trim(string(item, "description"), MAX_SNIPPET_CHARS),
+                        hostOf(url), null));
+            }
+        }
+        return hits;
+    }
+
+    /// Tavily / Exa 的结果形状一样：results[] + 各自字段名。
+    private List<Hit> genericResults(JsonObject root, String listName, String urlField,
+                                     String titleField, String snippetField, String dateField) {
+        JsonElement results = root.get(listName);
+        List<Hit> hits = new ArrayList<>();
+        if (results == null || !results.isJsonArray()) {
+            return hits;
+        }
+        for (JsonElement element : results.getAsJsonArray()) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject item = element.getAsJsonObject();
+            String url = string(item, urlField);
+            String title = string(item, titleField);
+            if (url == null || url.isBlank() || title == null || title.isBlank()) {
+                continue;
+            }
+            hits.add(new Hit(title, url, trim(string(item, snippetField), MAX_SNIPPET_CHARS),
+                    hostOf(url), string(item, dateField)));
+        }
+        return hits;
+    }
+
+    private static @Nullable String hostOf(String url) {
+        try {
+            String host = URI.create(url).getHost();
+            return host == null ? null : host;
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private JsonObject post(String url, String key, JsonObject body, String label) throws ChatException {
@@ -239,6 +366,10 @@ public final class ChatSearchService {
                         + org.jackhuang.hmcl.Metadata.VERSION)
                 .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8))
                 .build();
+        return send(request, label);
+    }
+
+    private JsonObject send(HttpRequest request, String label) throws ChatException {
         HttpResponse<byte[]> response;
         try {
             response = client.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray())

@@ -1239,7 +1239,7 @@ export interface ChatSettings {
   /** models.dev 目录里有多少个模型；0 = 还没拉取，能力判断回落到内置表 */
   catalogModels?: number;
   catalogUpdatedAt?: number;
-  searchProvider?: "bocha" | "deepseek";
+  searchProvider?: "bocha" | "deepseek" | "zhipu" | "tavily" | "brave" | "exa";
   searchMaxResults?: number;
   searchKeyMasked?: string | null;
 }

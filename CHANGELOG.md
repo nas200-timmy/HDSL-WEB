@@ -119,9 +119,10 @@
   流式期间接 `chat-usage` 事件实时更新。输入按每轮完整上下文计费，累计输入接近账单口径，
   不等于当前占用；端点不回 usage 时显示「上下文 —」。
 - **联网搜索**：输入区放大镜按条开启。发送前先用搜索 API 查网页，结果作为**不可信资料**
-  拼进系统提示并要求 `[1][2]` 标注来源，回答下方渲染来源条。支持博查
-  （`api.bochaai.com/v1/web-search`）与 DeepSeek Search（`api.deepseek.com/v1/tools/search`，
-  key 可回落到 DeepSeek 账户的 key）；结果缓存 1 小时，失败不留半条消息，空结果不计费。
+  拼进系统提示并要求 `[1][2]` 标注来源，回答下方渲染来源条。支持博查、DeepSeek Search
+  （key 可回落到 DeepSeek 账户的 key）、智谱 Web Search、Tavily、Brave Search、Exa；
+  key 按服务商分开存，切换不互相覆盖；端点可用 `-Dhdsl.search.<provider>` 覆盖。结果缓存
+  1 小时，失败不留半条消息，空结果不计费。
   仍然**不做工具调用循环**，模型无法触发面板操作。设置页新增「联网搜索」：服务商、key、
   条数、测试搜索。
 - **权限**：所有 `/api/chat/*` 对 agent ticket 关闭（放在 `GET → READ` 之前）；设置、备份、

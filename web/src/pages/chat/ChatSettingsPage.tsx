@@ -268,8 +268,7 @@ function SearchPanel({
   run: Run;
   onSaved: (settings: ChatSettings) => void;
 }) {
-  const [provider, setProvider] = useState<"bocha" | "deepseek">(
-    (settings.searchProvider as "bocha" | "deepseek") ?? "bocha");
+  const [provider, setProvider] = useState<string>(settings.searchProvider ?? "bocha");
   const [key, setKey] = useState("");
   const [maxResults, setMaxResults] = useState(settings.searchMaxResults ?? 5);
   const [busy, setBusy] = useState(false);
@@ -337,10 +336,14 @@ function SearchPanel({
           <select
             className="input"
             value={provider}
-            onChange={(event) => setProvider(event.target.value as "bocha" | "deepseek")}
+            onChange={(event) => setProvider(event.target.value)}
           >
             <option value="bocha">博查 Bocha</option>
             <option value="deepseek">DeepSeek Search</option>
+            <option value="zhipu">智谱 Web Search</option>
+            <option value="tavily">Tavily</option>
+            <option value="brave">Brave Search</option>
+            <option value="exa">Exa</option>
           </select>
         </label>
         <label className="form-row">

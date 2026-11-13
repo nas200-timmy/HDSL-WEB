@@ -103,6 +103,96 @@ class ChatSearchServiceTest {
     }
 
     @Test
+    void zhipuTavilyExaAndBraveShapesAreNormalised() throws Exception {
+        HttpServer zhipu = server(exchange -> {
+            String json = """
+                    {"search_result":[{"title":"智谱结果","link":"https://example.com/z",
+                      "content":"智谱摘要","media":"搜狐","publish_date":"2025-05-23"}]}""";
+            exchange.sendResponseHeaders(200, json.getBytes(StandardCharsets.UTF_8).length);
+            exchange.getResponseBody().write(json.getBytes(StandardCharsets.UTF_8));
+            exchange.close();
+        });
+        System.setProperty("hdsl.search.zhipu", url(zhipu, "/search"));
+        try {
+            ChatSearchService.Hit hit = new ChatSearchService()
+                    .search(settings("zhipu", "zhipu-key"), "财经").hits().get(0);
+            assertEquals("智谱结果", hit.title());
+            assertEquals("https://example.com/z", hit.url());
+            assertEquals("搜狐", hit.site());
+        } finally {
+            zhipu.stop(0);
+        }
+
+        HttpServer tavily = server(exchange -> {
+            String json = """
+                    {"results":[{"title":"T","url":"https://example.com/t","content":"tavily 正文",
+                      "published_date":"2026-01-01"}]}""";
+            exchange.sendResponseHeaders(200, json.getBytes(StandardCharsets.UTF_8).length);
+            exchange.getResponseBody().write(json.getBytes(StandardCharsets.UTF_8));
+            exchange.close();
+        });
+        System.setProperty("hdsl.search.tavily", url(tavily, "/search"));
+        try {
+            assertEquals("tavily 正文", new ChatSearchService()
+                    .search(settings("tavily", "k"), "q").hits().get(0).snippet());
+        } finally {
+            tavily.stop(0);
+        }
+
+        HttpServer exa = server(exchange -> {
+            String json = """
+                    {"results":[{"title":"E","url":"https://example.com/e","text":"exa 正文",
+                      "publishedDate":"2026-01-02"}]}""";
+            exchange.sendResponseHeaders(200, json.getBytes(StandardCharsets.UTF_8).length);
+            exchange.getResponseBody().write(json.getBytes(StandardCharsets.UTF_8));
+            exchange.close();
+        });
+        System.setProperty("hdsl.search.exa", url(exa, "/search"));
+        try {
+            assertEquals("exa 正文", new ChatSearchService()
+                    .search(settings("exa", "k"), "q").hits().get(0).snippet());
+        } finally {
+            exa.stop(0);
+        }
+
+        HttpServer brave = server(exchange -> {
+            String json = """
+                    {"web":{"results":[{"title":"B","url":"https://example.com/b",
+                      "description":"brave 摘要"}]}}""";
+            exchange.sendResponseHeaders(200, json.getBytes(StandardCharsets.UTF_8).length);
+            exchange.getResponseBody().write(json.getBytes(StandardCharsets.UTF_8));
+            exchange.close();
+        });
+        System.setProperty("hdsl.search.brave", url(brave, "/search"));
+        try {
+            ChatSearchService.Hit hit = new ChatSearchService()
+                    .search(settings("brave", "k"), "q").hits().get(0);
+            assertEquals("brave 摘要", hit.snippet());
+            assertEquals("example.com", hit.site());
+        } finally {
+            brave.stop(0);
+        }
+    }
+
+    @Test
+    void keysAreKeptPerProvider() throws Exception {
+        java.nio.file.Path dir = Files.createTempDirectory("hdsl-search-keys");
+        ChatSettings.Settings defaults = ChatSettings.defaults(dir);
+        JsonObject bocha = new JsonObject();
+        bocha.addProperty("searchProvider", "bocha");
+        bocha.addProperty("searchApiKey", "bocha-key");
+        ChatSettings.Settings first = ChatSettings.merge(defaults, bocha, defaults);
+        assertEquals("bocha-key", first.searchKey("bocha"));
+
+        JsonObject zhipu = new JsonObject();
+        zhipu.addProperty("searchProvider", "zhipu");
+        zhipu.addProperty("searchApiKey", "zhipu-key");
+        ChatSettings.Settings second = ChatSettings.merge(first, zhipu, defaults);
+        assertEquals("zhipu-key", second.searchKey("zhipu"));
+        assertEquals("bocha-key", second.searchKey("bocha"), "切服务商不该覆盖另一家的 key");
+    }
+
+    @Test
     void blockedKeysAndEmptyResultsAreReported() throws Exception {
         HttpServer server = server(exchange -> {
             String json = "{\"error\":{\"message\":\"invalid api key\"}}";

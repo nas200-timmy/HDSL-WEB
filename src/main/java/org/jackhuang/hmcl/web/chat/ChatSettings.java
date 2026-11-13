@@ -59,8 +59,14 @@ public final class ChatSettings {
             @Nullable String defaultAccount,
             @Nullable String defaultModel,
             String searchProvider,
-            @Nullable String searchApiKey,
+            java.util.Map<String, String> searchKeys,
             int searchMaxResults) {
+
+        /// 某个服务商的 key；没有配置返回 null。
+        public @Nullable String searchKey(String provider) {
+            String value = searchKeys.get(provider);
+            return value == null || value.isBlank() ? null : value;
+        }
 
         public long retentionCutoffMillis() {
             return switch (retention) {
@@ -84,7 +90,7 @@ public final class ChatSettings {
         public Settings withBackupDir(String dir) {
             return new Settings(retention, retentionDays, backupEnabled, backupTime, backupKeep, dir,
                     privateEndpoints, privateAllowlist, longTextTokens, dailyTokenLimit,
-                    streamFlushMs, defaultAccount, defaultModel, searchProvider, searchApiKey,
+                    streamFlushMs, defaultAccount, defaultModel, searchProvider, searchKeys,
                     searchMaxResults);
         }
     }
@@ -98,7 +104,7 @@ public final class ChatSettings {
             backup = dataDir.resolve("backup");
         }
         return new Settings("forever", 0, true, "03:17", 7, backup.toString(), "allow",
-                List.of(), 4000, 0, 40, null, null, "bocha", null, 5);
+                List.of(), 4000, 0, 40, null, null, "bocha", java.util.Map.of(), 5);
     }
 
     public static Settings load(ChatStore store, Path dataDir) throws SQLException {
@@ -129,6 +135,24 @@ public final class ChatSettings {
                     }
                 }
             }
+            String searchProvider = string(json, "searchProvider", defaults.searchProvider());
+            java.util.Map<String, String> searchKeys = new java.util.LinkedHashMap<>();
+            JsonElement keysElement = json.get("searchKeys");
+            if (keysElement != null && keysElement.isJsonObject()) {
+                for (var entry : keysElement.getAsJsonObject().entrySet()) {
+                    if (entry.getValue().isJsonPrimitive()) {
+                        String value = entry.getValue().getAsString().trim();
+                        if (!value.isEmpty()) {
+                            searchKeys.put(entry.getKey().toLowerCase(java.util.Locale.ROOT), value);
+                        }
+                    }
+                }
+            }
+            // 旧格式只有一个 searchApiKey：认给它当时选中的服务商
+            String legacyKey = nullableString(json, "searchApiKey");
+            if (legacyKey != null) {
+                searchKeys.putIfAbsent(searchProvider, legacyKey);
+            }
             return sanitize(new Settings(
                     retention,
                     intValue(json, "retentionDays", defaults.retentionDays()),
@@ -143,8 +167,8 @@ public final class ChatSettings {
                     intValue(json, "streamFlushMs", defaults.streamFlushMs()),
                     nullableString(json, "defaultAccount"),
                     nullableString(json, "defaultModel"),
-                    string(json, "searchProvider", defaults.searchProvider()),
-                    nullableString(json, "searchApiKey"),
+                    searchProvider,
+                    searchKeys,
                     intValue(json, "searchMaxResults", defaults.searchMaxResults())), defaults);
         } catch (RuntimeException e) {
             return defaults;
@@ -203,11 +227,16 @@ public final class ChatSettings {
                 ? nullableString(body, "defaultModel") : current.defaultModel();
         String searchProvider = body.has("searchProvider")
                 ? string(body, "searchProvider", current.searchProvider()) : current.searchProvider();
-        // 留空 = 清除；不传 = 保持不变（前端「留空保持不变」的约定）
-        String searchApiKey = current.searchApiKey();
+        // key 按服务商分开存：切换服务商不会把另一家的 key 覆盖掉。
+        java.util.Map<String, String> searchKeys = new java.util.LinkedHashMap<>(current.searchKeys());
         if (body.has("searchApiKey")) {
             String value = nullableString(body, "searchApiKey");
-            searchApiKey = value;
+            if (value == null) {
+                searchKeys.remove(searchProvider == null ? current.searchProvider() : searchProvider);
+            } else {
+                searchKeys.put((searchProvider == null ? current.searchProvider() : searchProvider)
+                        .toLowerCase(java.util.Locale.ROOT), value);
+            }
         }
         int searchMaxResults = body.has("searchMaxResults")
                 ? intValue(body, "searchMaxResults", current.searchMaxResults()) : current.searchMaxResults();
@@ -215,7 +244,7 @@ public final class ChatSettings {
                 backupDir, privateMode, allowlist, longTextTokens, dailyTokenLimit, streamFlushMs,
                 defaultAccount, defaultModel,
                 searchProvider == null ? current.searchProvider() : searchProvider,
-                searchApiKey, searchMaxResults), defaults);
+                searchKeys, searchMaxResults), defaults);
     }
 
     private static Settings sanitize(Settings value, Settings defaults) {
@@ -234,7 +263,7 @@ public final class ChatSettings {
         String dir = value.backupDir() == null || value.backupDir().isBlank()
                 ? defaults.backupDir() : value.backupDir().trim();
         String provider = value.searchProvider();
-        if (!"bocha".equals(provider) && !"deepseek".equals(provider)) {
+        if (!java.util.Set.of("bocha", "deepseek", "zhipu", "tavily", "brave", "exa").contains(provider)) {
             provider = defaults.searchProvider();
         }
         int maxResults = value.searchMaxResults() < 1 ? defaults.searchMaxResults()
@@ -243,7 +272,7 @@ public final class ChatSettings {
                 value.backupEnabled(), time, keep, dir, value.privateEndpoints(),
                 value.privateAllowlist(), longText, daily, flush,
                 blankToNull(value.defaultAccount()), blankToNull(value.defaultModel()),
-                provider, blankToNull(value.searchApiKey()), maxResults);
+                provider, java.util.Map.copyOf(value.searchKeys()), maxResults);
     }
 
     public static void save(ChatStore store, Settings settings) throws SQLException {
@@ -266,8 +295,9 @@ public final class ChatSettings {
         json.add("defaultModel", settings.defaultModel() == null
                 ? com.google.gson.JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(settings.defaultModel()));
         json.addProperty("searchProvider", settings.searchProvider());
-        json.add("searchApiKey", settings.searchApiKey() == null
-                ? com.google.gson.JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(settings.searchApiKey()));
+        JsonObject searchKeys = new JsonObject();
+        settings.searchKeys().forEach(searchKeys::addProperty);
+        json.add("searchKeys", searchKeys);
         json.addProperty("searchMaxResults", settings.searchMaxResults());
         store.putSetting(KEY, json.toString());
     }

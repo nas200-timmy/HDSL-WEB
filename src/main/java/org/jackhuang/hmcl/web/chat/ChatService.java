@@ -718,7 +718,7 @@ public final class ChatService {
         json.addProperty("catalogUpdatedAt", ChatModelCatalog.updatedAt());
         json.addProperty("searchProvider", current.searchProvider());
         json.addProperty("searchMaxResults", current.searchMaxResults());
-        addNullable(json, "searchKeyMasked", maskKey(current.searchApiKey()));
+        addNullable(json, "searchKeyMasked", maskKey(current.searchKey(current.searchProvider())));
         addNullable(json, "defaultAccount", current.defaultAccount());
         addNullable(json, "defaultModel", current.defaultModel());
         JsonArray retentionOptions = new JsonArray();
@@ -739,7 +739,7 @@ public final class ChatService {
         json.addProperty("provider", provider);
         json.addProperty("configured", configured);
         json.addProperty("maxResults", current.searchMaxResults());
-        addNullable(json, "keyMasked", maskKey(current.searchApiKey()));
+        addNullable(json, "keyMasked", maskKey(current.searchKey(provider)));
         return json;
     }
 
