@@ -85,6 +85,7 @@ export function ChatPage() {
   const [chatAccounts, setChatAccounts] = useState<ChatAccountProfile[]>([]);
   const [sessionAccount, setSessionAccount] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
+  const [reasoningLevel, setReasoningLevel] = useState("");
   const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -135,6 +136,7 @@ export function ChatPage() {
     if (next.assistantId) setAssistantId(next.assistantId);
     setSessionAccount((previous) => next.account ?? currentAssistant?.account ?? previous ?? null);
     setModel(next.model ?? currentAssistant?.model ?? null);
+    setReasoningLevel(next.reasoningLevel ?? "");
     requestAnimationFrame(() => {
       const el = scrollRef.current;
       if (el) el.scrollTop = el.scrollHeight;
@@ -339,6 +341,7 @@ export function ChatPage() {
       assistantId,
       model: model ?? undefined,
       account: sessionAccount ?? currentAssistant?.account ?? undefined,
+      reasoningLevel: reasoningLevel || undefined,
     });
     // Subscribe before the first send: the kickoff/started frames can race the
     // React effect that normally installs the topic.
@@ -449,10 +452,14 @@ export function ChatPage() {
   };
 
   const pickReasoning = async (level: string) => {
+    // 还没有会话时（欢迎页）先记在本地：第一次发送会用 ensureSession 把它带进新会话，
+    // 不然点菜单看起来像没反应。
+    setReasoningLevel(level);
     if (!session) return;
     try {
       setSession(await api.chat.updateSession(session.id, { reasoningLevel: level }));
     } catch (error) {
+      setReasoningLevel(session.reasoningLevel ?? "");
       reportError(error, "切换思考挡位失败");
     }
   };
@@ -861,7 +868,7 @@ export function ChatPage() {
               quickPhrases={currentAssistant?.quickPhrases ?? []}
               focusSignal={focusSignal}
               historyImages={historyImageCount}
-              reasoningLevel={session?.reasoningLevel ?? ""}
+              reasoningLevel={reasoningLevel}
               onReasoningLevel={(level) => void pickReasoning(level)}
             />
           </div>

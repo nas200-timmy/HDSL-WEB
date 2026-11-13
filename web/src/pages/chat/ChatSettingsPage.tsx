@@ -486,9 +486,11 @@ function ProvidersPanel({
                   <div>
                     {chatTest.ok ? <CheckCircleIcon size={14} /> : <ErrorIcon size={14} />}
                     <span>
-                      {chatTest.ok
-                        ? `对话正常 · ${chatTest.latencyMs} ms · ${chatTest.model} 回复「${chatTest.answer || "（空）"}」`
-                        : `对话失败 · ${chatTest.model}：${chatTest.error ?? "未知错误"}${chatTest.status ? `（HTTP ${chatTest.status}）` : ""}`}
+                      {!chatTest.ok
+                        ? `对话失败 · ${chatTest.model}：${chatTest.error ?? "未知错误"}${chatTest.status ? `（HTTP ${chatTest.status}）` : ""}`
+                        : chatTest.empty
+                          ? `对话正常 · ${chatTest.latencyMs} ms · HTTP ${chatTest.status ?? 200}，但正文与思考都为空（端点没按流式回内容）`
+                          : `对话正常 · ${chatTest.latencyMs} ms · ${chatTest.model} 回复「${chatTest.answer || "（只有思考）"}」${chatTest.reasoningChars ? ` · 思考 ${chatTest.reasoningChars} 字` : ""}`}
                     </span>
                   </div>
                   <div className="chat-probe-stages">
@@ -849,7 +851,7 @@ function CapabilityDialog({
           </button>
         </div>
         <div className="hint">
-          发一张内置的测试图（上面是数字 {visionTest?.expected ?? "7314"}）给这个模型，最多消耗 24 个输出 token。
+          发一张内置的测试图（上面是数字 {visionTest?.expected ?? "7314"}）给这个模型，最多消耗 1024 个输出 token（思考模型要留出推理空间）。
           读出数字 = 支持，明确说看不到 = 不支持，答非所问 = 存疑（不写库）。
         </div>
         {visionTest && (
@@ -864,9 +866,10 @@ function CapabilityDialog({
                   : `测试失败${visionTest.status ? `（HTTP ${visionTest.status}）` : ""}：${visionTest.error ?? "未知错误"}`}
               </span>
             </div>
-            {visionTest.answer && (
-              <div className="chat-vision-answer">模型回答：{visionTest.answer}</div>
-            )}
+            <div className="chat-vision-answer">
+              模型回答：{visionTest.answer || (visionTest.reasoningChars ? "（只有思考输出，正文为空）" : "（空）")}
+              {visionTest.reasoningChars ? `　· 思考 ${visionTest.reasoningChars} 字` : ""}
+            </div>
           </div>
         )}
       </div>

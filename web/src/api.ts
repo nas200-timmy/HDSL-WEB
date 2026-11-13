@@ -1098,7 +1098,7 @@ export const api = {
       ),
     session: (id: string) =>
       request<ChatSession>(`/api/chat/sessions/${encodeURIComponent(id)}`),
-    createSession: (body: { assistantId?: string; title?: string; model?: string; account?: string }) =>
+    createSession: (body: { assistantId?: string; title?: string; model?: string; account?: string; reasoningLevel?: string }) =>
       request<ChatSession>("/api/chat/sessions", jsonInit("POST", body)),
     updateSession: (id: string, body: { title?: string; model?: string; account?: string; reasoningLevel?: string }) =>
       request<ChatSession>(`/api/chat/sessions/${encodeURIComponent(id)}`, jsonInit("PATCH", body)),

@@ -97,15 +97,19 @@ public final class ChatProbeService {
             throws ChatException, SQLException, IOException {
         String target = model != null && !model.isBlank() ? model.trim() : pickModel(profile);
         ChatProtocol protocol = protocol(profile);
+        // 8 个 token 对思考模型来说全花在 reasoning 上，正文必然为空；
+        // 64 够它想完再回一个 OK，同时仍然很便宜。
         ChatProtocol.ChatRequest request = new ChatProtocol.ChatRequest(target, null,
                 List.of(new ChatProtocol.ChatMessage("user", "只回复两个字母：OK", List.of())),
-                null, 8, null, null);
+                null, 64, null, null);
         Call call = call(protocol, profile, request);
         JsonObject json = new JsonObject();
         json.addProperty("model", target);
         json.addProperty("ok", call.error() == null);
         json.addProperty("latencyMs", call.latencyMs());
         json.addProperty("answer", call.answer());
+        json.addProperty("reasoningChars", call.reasoning().length());
+        json.addProperty("empty", call.answer().isBlank() && call.reasoning().isBlank());
         if (call.status() != null) {
             json.addProperty("status", call.status());
         }
@@ -128,9 +132,10 @@ public final class ChatProbeService {
         Path image = probeImage();
         ChatProtocol.Attachment attachment = new ChatProtocol.Attachment(
                 "vision-probe.png", "image/png", "image", Files.size(image), image, null);
+        // 识图测试也要给思考留空间：24 个 token 会被推理吃光，正文空 = 误判成「存疑」。
         ChatProtocol.ChatRequest request = new ChatProtocol.ChatRequest(model, null,
                 List.of(new ChatProtocol.ChatMessage("user", PROBE_PROMPT, List.of(attachment))),
-                null, 24, null, null);
+                null, 1_024, null, null);
         Call call = call(protocol, profile, request);
 
         String verdict = classify(call);
@@ -140,6 +145,7 @@ public final class ChatProbeService {
         json.addProperty("supported", "supported".equals(verdict));
         json.addProperty("latencyMs", call.latencyMs());
         json.addProperty("answer", call.answer());
+        json.addProperty("reasoningChars", call.reasoning().length());
         if (call.status() != null) {
             json.addProperty("status", call.status());
         }
@@ -162,7 +168,8 @@ public final class ChatProbeService {
     }
 
     private static String classify(Call call) {
-        return verdict(call.status(), call.answer(), call.error());
+        // 思考内容里读到了数字也算证据；模型可能只在 reasoning 里写答案。
+        return verdict(call.status(), call.answer() + " " + call.reasoning(), call.error());
     }
 
     /// 把一次识图调用归成 supported / unsupported / uncertain / error。
@@ -251,31 +258,31 @@ public final class ChatProbeService {
                     text = new String(body.readNBytes(8192), StandardCharsets.UTF_8)
                             .replaceAll("\\s+", " ").trim();
                 }
-                return new Call(status, "", truncate(text), System.currentTimeMillis() - start);
+                return new Call(status, "", truncate(text), System.currentTimeMillis() - start, "");
             }
             try (InputStream body = response.body()) {
                 protocol.read(body, sink);
             }
         } catch (TimeoutException e) {
             return new Call(null, sink.text(), "测试超时（120s），端点没有在时限内返回",
-                    System.currentTimeMillis() - start);
+                    System.currentTimeMillis() - start, sink.reasoning());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return new Call(null, sink.text(), "测试被打断", System.currentTimeMillis() - start);
+            return new Call(null, sink.text(), "测试被打断", System.currentTimeMillis() - start,
+                    sink.reasoning());
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() == null ? e : e.getCause();
             return new Call(null, sink.text(), "请求失败：" + message(cause),
-                    System.currentTimeMillis() - start);
+                    System.currentTimeMillis() - start, sink.reasoning());
         } catch (IOException e) {
             return new Call(status < 0 ? null : status, sink.text(), "读取响应失败：" + message(e),
-                    System.currentTimeMillis() - start);
+                    System.currentTimeMillis() - start, sink.reasoning());
         }
         long latency = System.currentTimeMillis() - start;
-        String error = sink.error;
-        if (error == null && sink.text().isBlank()) {
-            error = "端点返回了空内容（可能不支持流式响应）";
-        }
-        return new Call(status, sink.text(), error, latency);
+        // HTTP 2xx + 流读完就算联通；正文为空是「思考吃掉了 / 端点没按 SSE 回」，
+        // 由调用方展示成提示，而不是判成失败——deepseek 这类模型的 reasoning
+        // 本来就可能把很小的 max_tokens 用光。
+        return new Call(status, sink.text(), sink.error, latency, sink.reasoning());
     }
 
     private static String truncate(String text) {
@@ -307,13 +314,19 @@ public final class ChatProbeService {
     }
 
     /// 一次调用的结果。`error` 非空表示这次调用本身没成功（网络/HTTP/流错误）。
-    private record Call(@Nullable Integer status, String answer, @Nullable String error, long latencyMs) {
+    private record Call(@Nullable Integer status, String answer, @Nullable String error,
+                        long latencyMs, String reasoning) {
     }
 
     /// 把 SSE 的增量收成一段文本，最多留 [MAX_ANSWER] 个字符。
     private static final class Collector implements ChatProtocol.ChatEventSink {
         private final StringBuilder text = new StringBuilder();
+        private final StringBuilder thinking = new StringBuilder();
         private volatile @Nullable String error;
+
+        String reasoning() {
+            return thinking.toString();
+        }
 
         String text() {
             return text.toString();
@@ -328,7 +341,11 @@ public final class ChatProbeService {
 
         @Override
         public void reasoning(String delta) {
-            // 思考内容不参与判定
+            // 思考挡位高的模型可能只吐 reasoning；联网测试要把它算成「有输出」，
+            // 识图判定也可能在 reasoning 里读到图上的数字（最多留 8k 字）。
+            if (delta != null && thinking.length() < 8_192) {
+                thinking.append(delta);
+            }
         }
 
         @Override

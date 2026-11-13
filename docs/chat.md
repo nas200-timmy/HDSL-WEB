@@ -410,11 +410,13 @@ record ModelCapabilities(
   识图实测 / 供应商预设 / 手动覆盖 / 未识别）；模型选择器的每条模型也带同一套徽章，
   认不出来时显示「能力未识别」。能力弹窗打开开关和上下文/输出上限，可「恢复默认」。
 - **实测**（`ChatProbeService`）：能力弹窗里的「识图测试」把 jar 内置的
-  `vision-probe.png`（白底黑字 `7314`）发给模型，`max_tokens=24`，用一句
+  `vision-probe.png`（白底黑字 `7314`）发给模型，`max_tokens=1024`，用一句
   「只回复你看到的数字」问它。读对了 = `supported`（vision=true）；4xx 且报错提到
   image/vision，或者正文明确说看不到图 = `unsupported`（vision=false）；其余 =
   `uncertain`（不写库，交给人）。只有确定结论才写 `source=probe`，因为写错一次
   下一轮发图就是 400。限流/超时（429/5xx/网络）归 `error`，不动库。
+  思考模型可能只吐 `reasoning_content`：对话测试把它算作「联通（只有思考）」，识图判定
+  也会在思考内容里找数字，不会因为正文为空就误判。
 - **模型目录**（`ChatModelCatalog`）：`https://models.dev/api.json` 的精简缓存
   `<data>/chat/models.dev.json`（约 450 KB、4000+ 型号）。启动 1 分钟后检查一次，
   之后每天检查，缓存不到 7 天才重新下载；拉不到就保持旧缓存，再没有就回落到内置表。

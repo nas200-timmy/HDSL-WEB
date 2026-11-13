@@ -79,6 +79,12 @@
   模型误判成能关）。下发时按声明夹取：`reasoning_effort` 向邻近档靠，Anthropic 预算
   夹在 min/max 并保证 `max_tokens > budget`；`forced` 模型（DeepSeek reasoner）一个字段都不发。
   顺带修了 models.dev 刷新在慢网络下可能把维护线程拖住的问题：改成 ofByteArray + 90s 总时限。
+- **对话测试误判空响应**：思考模型会把很小的 `max_tokens` 全花在 reasoning 上，正文为空；
+  旧逻辑把「正文空」当成失败（`deepseek-flash` 就是这样报的）。现在对话测试的预算是 64、
+  识图测试是 1024，并统计 `reasoningChars`：只有思考也算联通，识图判定也会在思考里找数字。
+  真的正文和思考都空时提示「端点没按流式回内容」，而不是直接判失败。
+- **欢迎页换挡位没反应**：没有会话时「思考·…」只改本地状态，之前直接 return，看着像点不动。
+  现在欢迎页会立刻更新，并在第一次发送创建会话时把挡位带进去（`reasoningLevel`）。
 - **权限**：所有 `/api/chat/*` 对 agent ticket 关闭（放在 `GET → READ` 之前）；设置、备份、
   端点探测与能力覆盖要求开发者提权；聊天不接工具，模型无法触发面板操作。
 - 验证：`gradlew test` 全绿（新增 SQLite/SSE/路径/权限与一次真实 SSE turn 的端到端用例）；

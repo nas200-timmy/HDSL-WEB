@@ -1217,6 +1217,10 @@ export interface ChatChatTest {
   ok: boolean;
   latencyMs: number;
   answer: string;
+  /** 本次流里的思考字数：思考模型可能把很小的 max_tokens 全用在 reasoning 上 */
+  reasoningChars?: number;
+  /** 正文和思考都为空：HTTP 通了，但端点没给出内容 */
+  empty?: boolean;
   status?: number;
   error?: string;
 }
@@ -1224,6 +1228,7 @@ export interface ChatChatTest {
 /** POST /api/chat/accounts/{name}/vision-test 的结果。 */
 export interface ChatVisionTest {
   model: string;
+  reasoningChars?: number;
   /** supported = 读出图上的数字；unsupported = 明确拒收/说不看图；uncertain = 有回答但对不上 */
   verdict: "supported" | "unsupported" | "uncertain" | "error";
   supported: boolean;

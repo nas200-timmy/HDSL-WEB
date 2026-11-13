@@ -53,9 +53,12 @@ class ChatProbeTest {
                 exchange.close();
                 return;
             }
-            String content = "read".equals(mode) ? "7314" : "这是一张白纸。";
-            String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"" + content
-                    + "\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+            // thinking 模式只发 reasoning_content：思考模型把很小的 max_tokens 花光时就是这样
+            String delta = "thinking".equals(mode)
+                    ? "{\"reasoning_content\":\"图上的数字是 7314\"}"
+                    : "{\"content\":\"" + ("read".equals(mode) ? "7314" : "这是一张白纸。") + "\"}";
+            String sse = "data: {\"choices\":[{\"delta\":" + delta
+                    + ",\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
             byte[] out = sse.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
             exchange.sendResponseHeaders(200, out.length);
@@ -90,12 +93,22 @@ class ChatProbeTest {
             assertEquals("unsupported", rejected.get("verdict").getAsString());
             assertFalse(store.capability("probe-account", "probe-model").vision());
 
+            // 只有 reasoning 输出时：对话测试仍算联通，识图仍能从思考里读到数字
+            behavior.set("thinking");
+            JsonObject thinkingChat = probes.chatTest(profile, null);
+            assertTrue(thinkingChat.get("ok").getAsBoolean(), thinkingChat.toString());
+            assertFalse(thinkingChat.get("empty").getAsBoolean());
+            assertTrue(thinkingChat.get("reasoningChars").getAsInt() > 0);
+            JsonObject thinkingVision = probes.visionTest(profile, "probe-model");
+            assertEquals("supported", thinkingVision.get("verdict").getAsString());
+            assertTrue(store.capability("probe-account", "probe-model").vision());
+
             behavior.set("paper");
             JsonObject uncertain = probes.visionTest(profile, "probe-model");
             assertEquals("uncertain", uncertain.get("verdict").getAsString());
             assertFalse(uncertain.get("saved").getAsBoolean());
-            // 存疑不改库：库里的结论仍然是上一步的「不支持」
-            assertFalse(store.capability("probe-account", "probe-model").vision());
+            // 存疑不改库：库里的结论仍然是上一步的「支持」
+            assertTrue(store.capability("probe-account", "probe-model").vision());
         } finally {
             server.stop(0);
             store.close();

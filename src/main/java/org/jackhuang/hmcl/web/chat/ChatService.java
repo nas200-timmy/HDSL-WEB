@@ -245,6 +245,13 @@ public final class ChatService {
         String account = firstNonBlank(nullable(body, "account"), assistant.accountName(),
                 settings.defaultAccount());
         ChatStore.Session session = store.createSession(assistantId, title, model, account);
+        if (body.has("reasoningLevel")) {
+            String level = string(body, "reasoningLevel", "");
+            if (!level.isEmpty()) {
+                store.updateSession(session.id(), null, null, null, level);
+                session = store.session(session.id());
+            }
+        }
         if (assistant.openingMessage() != null && !assistant.openingMessage().isBlank()) {
             ChatStore.Node node = store.beginAssistantNode(session.id(), model);
             ChatStore.Message message = node.active();
