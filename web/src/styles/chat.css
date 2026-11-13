@@ -2643,6 +2643,21 @@
   color: var(--monet-primary);
 }
 
+.chat-directory-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 2px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--monet-on-surface-variant);
+}
+
+.chat-directory-note .btn {
+  margin-left: auto;
+  flex: none;
+}
+
 .chat-vision-test {
   margin-top: 10px;
   padding-top: 10px;

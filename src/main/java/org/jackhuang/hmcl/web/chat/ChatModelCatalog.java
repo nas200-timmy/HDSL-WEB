@@ -121,6 +121,7 @@ public final class ChatModelCatalog {
             HttpRequest request = HttpRequest.newBuilder(API)
                     .timeout(Duration.ofSeconds(60))
                     .header("Accept", "application/json")
+                    .header("Accept-Encoding", "gzip")
                     .header("User-Agent", org.jackhuang.hmcl.Metadata.NAME + "/" + org.jackhuang.hmcl.Metadata.VERSION)
                     .GET()
                     .build();
@@ -133,7 +134,17 @@ public final class ChatModelCatalog {
                 return false;
             }
             byte[] bytes = response.body();
-            if (bytes == null || bytes.length == 0 || bytes.length > MAX_BYTES) {
+            if (bytes == null || bytes.length == 0) {
+                return false;
+            }
+            String encoding = response.headers().firstValue("Content-Encoding").orElse("");
+            if (encoding.toLowerCase(Locale.ROOT).contains("gzip")) {
+                try (java.util.zip.GZIPInputStream gzip =
+                             new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(bytes))) {
+                    bytes = gzip.readNBytes(MAX_BYTES + 1);
+                }
+            }
+            if (bytes.length > MAX_BYTES) {
                 return false;
             }
             String text = new String(bytes, StandardCharsets.UTF_8);

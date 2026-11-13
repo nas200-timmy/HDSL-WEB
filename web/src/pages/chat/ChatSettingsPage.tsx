@@ -598,13 +598,30 @@ function AddProviderDialog({
   const [picked, setPicked] = useState<ModelProvider | "custom" | null>(null);
   const [form, setForm] = useState({ vendor: "", endpoint: "", apiKey: "", label: "", model: "" });
   const [busy, setBusy] = useState(false);
+  const [directory, setDirectory] = useState<{ fetchedAt: number | null; source: string } | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadProviders = async (refresh: boolean) => {
+    if (refresh) setRefreshing(true);
+    try {
+      const result = await api.modelProviders(refresh);
+      setProviders(result.providers);
+      setDirectory({ fetchedAt: result.fetchedAt, source: result.source });
+    } catch {
+      setProviders([]);
+      setDirectory(null);
+    } finally {
+      if (refresh) setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
     setPicked(null);
     setQuery("");
     setForm({ vendor: "", endpoint: "", apiKey: "", label: "", model: "" });
-    void api.modelProviders().then((result) => setProviders(result.providers)).catch(() => setProviders([]));
+    void loadProviders(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const visible = providers.filter((provider) => {
@@ -677,13 +694,24 @@ function AddProviderDialog({
             <SearchIcon size={14} />
             <input autoFocus value={query} placeholder="搜索供应商（名称 / id / 端点）" onChange={(event) => setQuery(event.target.value)} />
           </label>
+          <div className="chat-directory-note">
+            {directory?.fetchedAt
+              ? `模型目录：${new Date(directory.fetchedAt).toLocaleDateString()} 的快照（${directory.source}），卡片上的模型数只是参考，实际以「拉取模型」为准`
+              : "模型目录暂时没有拉到，正在用内置供应商表（卡片上的模型数为空）"}
+            <button className="btn btn-text" disabled={refreshing} onClick={() => void loadProviders(true)}>
+              {refreshing ? "刷新中…" : "刷新目录"}
+            </button>
+          </div>
           <div className="chat-provider-grid">
             {visible.map((provider) => (
               <button key={provider.id} className="chat-provider-choice" disabled={provider.protocol === null} onClick={() => pick(provider)}>
                 <span className="chat-provider-avatar">{provider.name.slice(0, 1).toUpperCase()}</span>
                 <span className="chat-provider-choice-text">
                   <span>{provider.name}</span>
-                  <span>{provider.protocol === null ? "协议不支持" : provider.endpoint ?? "需填写端点"}</span>
+                  <span>
+                    {provider.protocol === null ? "协议不支持"
+                      : `${provider.modelCount > 0 ? `${provider.modelCount} 个模型 · ` : ""}${provider.endpoint ?? "需填写端点"}`}
+                  </span>
                 </span>
                 {!provider.known && <span className="tag plain">目录</span>}
               </button>
