@@ -222,6 +222,7 @@ public final class ChatService {
         json.addProperty("title", session.title());
         addNullable(json, "model", session.model());
         addNullable(json, "account", session.accountName());
+        addNullable(json, "reasoningLevel", session.reasoningLevel());
         json.addProperty("createdAt", session.createdAt());
         json.addProperty("updatedAt", session.updatedAt());
         json.addProperty("streaming", turns.busy(id));
@@ -260,7 +261,8 @@ public final class ChatService {
         String title = body.has("title") ? string(body, "title", "") : null;
         String model = body.has("model") ? string(body, "model", "") : null;
         String account = body.has("account") ? string(body, "account", "") : null;
-        store.updateSession(id, title, model, account);
+        String reasoningLevel = body.has("reasoningLevel") ? string(body, "reasoningLevel", "") : null;
+        store.updateSession(id, title, model, account, reasoningLevel);
         broadcast("chat-sessions-changed", id);
         return sessionJson(id);
     }

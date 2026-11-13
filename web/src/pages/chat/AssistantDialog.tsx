@@ -233,9 +233,10 @@ export function AssistantDialog({
           <span className="form-label">思考强度</span>
           <select className="input" value={form.reasoningLevel} onChange={(event) => patch("reasoningLevel", event.target.value)}>
             <option value="">默认</option>
-            <option value="low">low</option>
-            <option value="medium">medium</option>
-            <option value="high">high</option>
+            <option value="off">关</option>
+            <option value="low">低</option>
+            <option value="medium">中</option>
+            <option value="high">高</option>
           </select>
         </label>
       </div>

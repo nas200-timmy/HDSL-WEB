@@ -205,6 +205,20 @@ interface ChatProtocol {
 - 请求默认 `followRedirects(NEVER)`，避免公网地址 302 到内网。
 - Java 17：`HttpClient` + 有界线程池；不使用虚拟线程。
 
+### 5.1 思考挡位
+
+会话级 `reasoning_level`（NULL = 跟随助手的 `reasoning_level`），输入区的「思考·默认/关/低/中/高」
+写它；只影响下一轮，不改历史。协议侧只在用户显式选过时下发：
+
+- OpenAI 兼容（默认）：`reasoning_effort = low|medium|high`；`off` 时不发，只有 `gpt-5*` 发 `none`。
+- 百炼/通义（base 含 `dashscope`/`aliyuncs`）：`enable_thinking` + `thinking_budget`
+  （low 1024 / medium 4096 / high 16384），`off` 显式 `enable_thinking=false`。
+- 智谱（base 含 `bigmodel`/`zhipu`）：`thinking = {"type": "enabled"|"disabled"}`。
+- DeepSeek：思考由模型名决定（reasoner / v4），不下发挡位参数。
+- Anthropic：`thinking = {"type":"enabled","budget_tokens"}`，仅 claude 3.7/4/5；
+  同时 `max_tokens > budget_tokens` 且**不带 temperature**（Anthropic 的限制）。
+- 认不出的端点只认 `reasoning_effort`，`off` 不乱发字段，避免 400。
+
 ## 6. SQLite 存储
 
 ### 6.1 模型
@@ -507,6 +521,8 @@ web/src/pages/chat/
 - 模型选择、附件、发送/停止一体；流式中发送变停止。
 - 图片粘贴/拖拽；Office/PDF/文本可拖入；长文本超过阈值自动转附件。
 - 显示当前模型能力徽章；不支持图片时禁用图片入口，不支持文件时提示走文本抽取。
+- 思考挡位：模型声明了 `reasoning` 或会话已设过时，输入区显示「思考·默认/关/低/中/高」，
+  选择写进会话（`reasoning_level`），刷新后保持。
 - 滚动：用户贴底才自动跟随；上翻时暂停。
 - 模型弹层（`PopupMenu`）：按 `visualViewport` 定位与限高，手机键盘弹出、地址栏收起
   导致视口变化时收进可见区域而不是被顶出屏幕或直接关闭；触屏上搜索框不自动聚焦，

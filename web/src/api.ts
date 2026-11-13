@@ -1100,7 +1100,7 @@ export const api = {
       request<ChatSession>(`/api/chat/sessions/${encodeURIComponent(id)}`),
     createSession: (body: { assistantId?: string; title?: string; model?: string; account?: string }) =>
       request<ChatSession>("/api/chat/sessions", jsonInit("POST", body)),
-    updateSession: (id: string, body: { title?: string; model?: string; account?: string }) =>
+    updateSession: (id: string, body: { title?: string; model?: string; account?: string; reasoningLevel?: string }) =>
       request<ChatSession>(`/api/chat/sessions/${encodeURIComponent(id)}`, jsonInit("PATCH", body)),
     deleteSession: (id: string) =>
       request<{ ok: boolean }>(`/api/chat/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),

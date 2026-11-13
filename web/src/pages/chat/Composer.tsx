@@ -4,6 +4,7 @@ import { toast } from "../../store";
 import type { ChatAttachment } from "../../types";
 import { api } from "../../api";
 import { ModelPicker, type ModelGroup } from "./ModelPicker";
+import { ThinkingPicker } from "./ThinkingPicker";
 
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
@@ -42,7 +43,7 @@ async function prepareImage(file: File): Promise<File> {
 export function Composer({
   draft, onDraft, onSend, onStop, streaming, disabled,
   groups, account, model, onPick, onManage, onAdd, pending, onUpload, onRemove, uploading,
-  quickPhrases, focusSignal, historyImages,
+  quickPhrases, focusSignal, historyImages, reasoningLevel, onReasoningLevel,
 }: {
   draft: string;
   onDraft: (value: string) => void;
@@ -63,6 +64,8 @@ export function Composer({
   quickPhrases: string[];
   focusSignal?: number;
   historyImages: number;
+  reasoningLevel: string;
+  onReasoningLevel: (level: string) => void;
 }) {
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -220,6 +223,13 @@ export function Composer({
             {current.capabilities.files && <span className="chat-cap" title="支持原生文件（PDF）">文</span>}
             {current.capabilities.reasoning && <span className="chat-cap" title="支持思考">思</span>}
           </span>
+        )}
+        {(current?.capabilities.reasoning || reasoningLevel !== "") && (
+          <ThinkingPicker
+            level={reasoningLevel}
+            disabled={disabled}
+            onPick={onReasoningLevel}
+          />
         )}
         <ModelPicker
           groups={groups}

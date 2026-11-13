@@ -22,12 +22,15 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpRequest;
 import java.nio.charset.StandardCharsets;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -53,12 +56,24 @@ public final class AnthropicProtocol implements ChatProtocol {
         JsonObject body = new JsonObject();
         body.addProperty("model", request.model());
         body.addProperty("stream", true);
-        body.addProperty("max_tokens", request.maxTokens() == null || request.maxTokens() <= 0
-                ? 4096 : request.maxTokens());
+        int maxTokens = request.maxTokens() == null || request.maxTokens() <= 0
+                ? 4096 : request.maxTokens();
+        // 思考挡位：只给支持 extended thinking 的 Claude（3.7 / 4 / 5）开，
+        // 而且要保证 max_tokens > budget_tokens；开了 thinking 就不能给 temperature。
+        boolean thinking = supportsThinking(request.model()) && levelOn(request.reasoningLevel());
+        int budget = thinking ? budget(request.reasoningLevel()) : 0;
+        if (thinking) {
+            maxTokens = Math.max(maxTokens, budget + 1_024);
+            JsonObject thinkingBody = new JsonObject();
+            thinkingBody.addProperty("type", "enabled");
+            thinkingBody.addProperty("budget_tokens", budget);
+            body.add("thinking", thinkingBody);
+        }
+        body.addProperty("max_tokens", maxTokens);
         if (request.system() != null && !request.system().isBlank()) {
             body.addProperty("system", request.system());
         }
-        if (request.temperature() != null) {
+        if (request.temperature() != null && !thinking) {
             body.addProperty("temperature", request.temperature());
         }
 
@@ -105,6 +120,39 @@ public final class AnthropicProtocol implements ChatProtocol {
                 .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8));
         ChatEndpoints.applyAuth(builder, profile);
         return builder.build();
+    }
+
+    /// claude-sonnet-4-5 / claude-3-7 这类写法里版本号不在固定位置，
+    /// 统一抓「claude 后面第一组数字」：>= 4 或 3.7+ 才认 extended thinking。
+    private static boolean supportsThinking(String model) {
+        String id = model == null ? "" : model.toLowerCase(java.util.Locale.ROOT);
+        if (id.contains("thinking")) {
+            return true;
+        }
+        Matcher matcher = Pattern.compile("claude[^0-9]*(\\d+)(?:[.-](\\d+))?").matcher(id);
+        if (!matcher.find()) {
+            return false;
+        }
+        int major = Integer.parseInt(matcher.group(1));
+        int minor = matcher.group(2) == null ? 0 : Integer.parseInt(matcher.group(2));
+        return major >= 4 || (major == 3 && minor >= 7);
+    }
+
+    private static boolean levelOn(@Nullable String level) {
+        if (level == null || level.isBlank()) {
+            return false;
+        }
+        String value = level.trim().toLowerCase(java.util.Locale.ROOT);
+        return !"off".equals(value) && !"none".equals(value);
+    }
+
+    private static int budget(@Nullable String level) {
+        String value = level == null ? "" : level.trim().toLowerCase(java.util.Locale.ROOT);
+        return switch (value) {
+            case "low" -> 1_024;
+            case "high", "max", "xhigh" -> 16_384;
+            default -> 4_096;
+        };
     }
 
     private static JsonArray content(ChatMessage message) throws IOException {

@@ -48,7 +48,7 @@ import java.util.UUID;
 @NotNullByDefault
 public final class ChatStore implements AutoCloseable {
 
-    private static final int SCHEMA_VERSION = 1;
+    private static final int SCHEMA_VERSION = 2;
     private static final String DEFAULT_ASSISTANT_ID = "default";
 
     private final Path root;
@@ -206,6 +206,10 @@ public final class ChatStore implements AutoCloseable {
                           key TEXT PRIMARY KEY,
                           value TEXT NOT NULL
                         )""");
+            }
+            if (version < 2) {
+                // 会话级的思考挡位：NULL = 跟随助手默认；空串/off = 明确关掉
+                statement.execute("ALTER TABLE chat_session ADD COLUMN reasoning_level TEXT");
             }
             statement.execute("PRAGMA user_version=" + SCHEMA_VERSION);
             connection.commit();
@@ -418,7 +422,8 @@ public final class ChatStore implements AutoCloseable {
 
     public record Session(
             String id, String assistantId, String title, @Nullable String model,
-            @Nullable String accountName, long createdAt, long updatedAt, List<Node> nodes) {
+            @Nullable String accountName, @Nullable String reasoningLevel,
+            long createdAt, long updatedAt, List<Node> nodes) {
     }
 
     public record Node(
@@ -489,6 +494,7 @@ public final class ChatStore implements AutoCloseable {
                 }
                 return new Session(rs.getString("id"), rs.getString("assistant_id"),
                         rs.getString("title"), rs.getString("model"), rs.getString("account_name"),
+                        rs.getString("reasoning_level"),
                         rs.getLong("created_at"), rs.getLong("updated_at"), nodes(id));
             }
         }
@@ -571,12 +577,13 @@ public final class ChatStore implements AutoCloseable {
             statement.setLong(7, now);
             statement.executeUpdate();
         }
-        return new Session(id, assistantId, title, model, accountName, now, now, List.of());
+        return new Session(id, assistantId, title, model, accountName, null, now, now, List.of());
     }
 
     public synchronized void updateSession(String id, @Nullable String title,
                                            @Nullable String model,
-                                           @Nullable String accountName) throws SQLException {
+                                           @Nullable String accountName,
+                                           @Nullable String reasoningLevel) throws SQLException {
         StringBuilder sql = new StringBuilder("UPDATE chat_session SET updated_at=?");
         List<Object> values = new ArrayList<>();
         values.add(System.currentTimeMillis());
@@ -591,6 +598,10 @@ public final class ChatStore implements AutoCloseable {
         if (accountName != null) {
             sql.append(", account_name=?");
             values.add(accountName.isEmpty() ? null : accountName);
+        }
+        if (reasoningLevel != null) {
+            sql.append(", reasoning_level=?");
+            values.add(reasoningLevel.isEmpty() ? null : reasoningLevel);
         }
         sql.append(" WHERE id=?");
         values.add(id);

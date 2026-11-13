@@ -155,7 +155,7 @@ public final class ChatTurnManager {
                 throw new ChatException(500, "store_error", "could not store the message");
             }
             if (isUntitled(session.title())) {
-                store.updateSession(sessionId, titleOf(titleSource, ids), null, null);
+                store.updateSession(sessionId, titleOf(titleSource, ids), null, null, null);
             }
             ChatStore.Node assistantNode = store.beginAssistantNode(sessionId, resolved.model());
             ChatStore.Message assistantMessage = assistantNode.active();
@@ -284,7 +284,7 @@ public final class ChatTurnManager {
                 throw new ChatException(500, "store_error", "could not start the reply");
             }
             if (isUntitled(session.title())) {
-                store.updateSession(sessionId, titleOf(text, List.of()), null, null);
+                store.updateSession(sessionId, titleOf(text, List.of()), null, null, null);
             }
             ActiveTurn turn = new ActiveTurn(sessionId, assistantNode.id(), assistantMessage.id(),
                     resolved, session.id(), 3);
@@ -409,7 +409,7 @@ public final class ChatTurnManager {
         ChatCapabilities.Capabilities capability =
                 ChatCapabilities.resolve(store, dshAccount.key(), model, profile.protocol());
         if (!model.equals(session.model()) || !dshAccount.key().equals(session.accountName())) {
-            store.updateSession(session.id(), null, model, dshAccount.key());
+            store.updateSession(session.id(), null, model, dshAccount.key(), null);
         }
         return new Resolved(model, dshAccount.key(), profile, protocol, capability);
     }
@@ -426,7 +426,11 @@ public final class ChatTurnManager {
         ChatStore.Assistant assistant = assistantOf(turn);
         turn.temperature = assistant == null ? null : assistant.temperature();
         turn.maxTokens = assistant == null ? null : assistant.maxTokens();
-        turn.reasoningLevel = assistant == null ? null : assistant.reasoningLevel();
+        // 会话级挡位优先：用户在输入区调过就按会话走，否则跟随助手默认
+        ChatStore.Session session = store.session(turn.sessionId);
+        String sessionLevel = session == null ? null : session.reasoningLevel();
+        turn.reasoningLevel = sessionLevel != null ? sessionLevel
+                : assistant == null ? null : assistant.reasoningLevel();
         bySession.put(turn.sessionId, turn);
         byId.put(turn.id, turn);
         publishStarted(turn);

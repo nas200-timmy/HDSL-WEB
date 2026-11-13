@@ -448,6 +448,15 @@ export function ChatPage() {
     }
   };
 
+  const pickReasoning = async (level: string) => {
+    if (!session) return;
+    try {
+      setSession(await api.chat.updateSession(session.id, { reasoningLevel: level }));
+    } catch (error) {
+      reportError(error, "切换思考挡位失败");
+    }
+  };
+
   const suggestions = currentAssistant?.quickPhrases?.length
     ? currentAssistant.quickPhrases.slice(0, 4).map((phrase) => ({
         icon: <FormatListBulletedIcon size={18} />,
@@ -852,6 +861,8 @@ export function ChatPage() {
               quickPhrases={currentAssistant?.quickPhrases ?? []}
               focusSignal={focusSignal}
               historyImages={historyImageCount}
+              reasoningLevel={session?.reasoningLevel ?? ""}
+              onReasoningLevel={(level) => void pickReasoning(level)}
             />
           </div>
         )}

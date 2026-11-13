@@ -22,6 +22,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -64,11 +65,7 @@ public final class OpenAiProtocol implements ChatProtocol {
                 body.addProperty("max_tokens", request.maxTokens());
             }
         }
-        if (request.reasoningLevel() != null && !request.reasoningLevel().isBlank()
-                && !"off".equalsIgnoreCase(request.reasoningLevel())
-                && !"none".equalsIgnoreCase(request.reasoningLevel())) {
-            body.addProperty("reasoning_effort", request.reasoningLevel());
-        }
+        applyReasoning(body, profile, request.model(), request.reasoningLevel());
 
         JsonArray messages = new JsonArray();
         if (request.system() != null && !request.system().isBlank()) {
@@ -93,6 +90,55 @@ public final class OpenAiProtocol implements ChatProtocol {
                 .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8));
         ChatEndpoints.applyAuth(builder, profile);
         return builder.build();
+    }
+
+    /// 思考挡位落到各家自己的参数上。只有用户显式选过才会走到这里；
+    /// 认不出的端点沿用 OpenAI 的 `reasoning_effort`，`off` 不乱发参数，
+    /// 免得把不认识的字段丢给中转站换一个 400。
+    private static void applyReasoning(JsonObject body, ChatEndpoints.Profile profile,
+                                       String model, @Nullable String level) {
+        if (level == null || level.isBlank()) {
+            return;
+        }
+        String normalized = level.trim().toLowerCase(java.util.Locale.ROOT);
+        boolean off = "off".equals(normalized) || "none".equals(normalized);
+        String base = profile.base() == null ? "" : profile.base().toLowerCase(java.util.Locale.ROOT);
+
+        // 阿里百炼 / 通义：enable_thinking + thinking_budget（compatible-mode 的扩展字段）
+        if (base.contains("dashscope") || base.contains("aliyuncs")) {
+            body.addProperty("enable_thinking", !off);
+            if (!off) {
+                body.addProperty("thinking_budget", budget(normalized));
+            }
+            return;
+        }
+        // 智谱：thinking.type（GLM-4.5 起的 OpenAI 兼容接口）
+        if (base.contains("bigmodel") || base.contains("zhipu")) {
+            JsonObject thinking = new JsonObject();
+            thinking.addProperty("type", off ? "disabled" : "enabled");
+            body.add("thinking", thinking);
+            return;
+        }
+        // DeepSeek 的思考由模型名决定（reasoner / v4），没有挡位参数
+        if (base.contains("api.deepseek.com")) {
+            return;
+        }
+        if (off) {
+            // 只有 gpt-5.1+ 认 none；其他模型干脆不发，让它按默认行为走
+            if (model != null && model.toLowerCase(java.util.Locale.ROOT).startsWith("gpt-5")) {
+                body.addProperty("reasoning_effort", "none");
+            }
+            return;
+        }
+        body.addProperty("reasoning_effort", normalized);
+    }
+
+    private static int budget(String level) {
+        return switch (level) {
+            case "low" -> 1_024;
+            case "high", "max", "xhigh" -> 16_384;
+            default -> 4_096;
+        };
     }
 
     private static boolean isReasoningModel(String model) {

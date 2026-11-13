@@ -2399,6 +2399,65 @@
 
 /* ---------------- 模型选择器（按服务分组） ---------------- */
 
+.chat-thinking-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  white-space: nowrap;
+  color: var(--monet-on-surface-variant);
+}
+
+.chat-thinking-button:hover:not(:disabled) {
+  background: var(--monet-on-surface-variant-transparent-38);
+  color: var(--monet-on-surface);
+}
+
+.chat-thinking-button.active {
+  color: var(--monet-primary);
+  background: color-mix(in srgb, var(--monet-primary) 10%, transparent);
+}
+
+.chat-thinking-button.muted {
+  color: var(--monet-outline);
+}
+
+.chat-thinking-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.chat-thinking-popup {
+  width: 240px;
+  padding: 4px;
+}
+
+.chat-thinking-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-thinking-name {
+  font-size: 12px;
+}
+
+.chat-thinking-hint {
+  font-size: 10px;
+  color: var(--monet-on-surface-variant);
+}
+
+@media (max-width: 760px) {
+  .chat-thinking-button {
+    padding: 2px 4px;
+    font-size: 9px;
+  }
+}
+
 .chat-model-button {
   display: inline-flex;
   align-items: center;

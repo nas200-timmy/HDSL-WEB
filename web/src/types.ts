@@ -1111,6 +1111,8 @@ export interface ChatSession {
   title: string;
   model: string | null;
   account: string | null;
+  /** 会话级思考挡位；null = 跟随助手默认 */
+  reasoningLevel?: string | null;
   createdAt: number;
   updatedAt: number;
   streaming: boolean;

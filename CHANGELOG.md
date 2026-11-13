@@ -65,6 +65,12 @@
   检查，缓存不足 7 天才重新拉；拉不到保持旧缓存，再没有就回到内置规则表。优先级：
   手动覆盖 > 识图实测 > 供应商预设 > 模型目录 > 内置规则 > unknown。同一型号在多个
   供应商下的能力按多数票，上下文/输出取最小正值（按最大值算会把超长上下文发出去）。
+- **思考挡位**：输入区新增「思考·默认 / 关 / 低 / 中 / 高」，写会话级 `reasoning_level`
+  （NULL = 跟随助手），刷新后保持。不选就不下发，选了才按厂商翻译：OpenAI 兼容
+  `reasoning_effort`；百炼 `enable_thinking` + `thinking_budget`；智谱 `thinking.type`；
+  Anthropic `thinking.budget_tokens`（并自动保证 `max_tokens > budget`、去掉 temperature）；
+  DeepSeek 不下发（由模型名决定）；认不出的端点 `off` 时不乱发字段，避免把不认识的参数
+  丢给中转站换 400。助手设置里的「思考强度」也补齐了「关」，并用中文档位。
 - **权限**：所有 `/api/chat/*` 对 agent ticket 关闭（放在 `GET → READ` 之前）；设置、备份、
   端点探测与能力覆盖要求开发者提权；聊天不接工具，模型无法触发面板操作。
 - 验证：`gradlew test` 全绿（新增 SQLite/SSE/路径/权限与一次真实 SSE turn 的端到端用例）；
