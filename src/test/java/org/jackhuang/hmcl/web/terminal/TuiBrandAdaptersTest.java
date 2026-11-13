@@ -115,12 +115,15 @@ class TuiBrandAdaptersTest {
     @Test
     void aShellIsRefusedAsTheTerminalRoot() {
         for (String shell : List.of("sh", "/bin/bash", "C:\\Windows\\System32\\cmd.exe",
-                "pwsh", "/usr/local/bin/agent.sh", "C:\\tools\\run.bat", "tool.cmd")) {
+                "C:\\Windows\\System32\\command.com", "pwsh",
+                "/usr/local/bin/agent.sh", "C:\\tools\\run.bat", "tool.cmd")) {
             assertTrue(TerminalTarget.isShell(shell), shell);
             assertThrows(IllegalArgumentException.class, () -> new TerminalTarget(
                     "qwen", "i1", List.of(shell), packageDir, Map.of()), shell);
         }
         assertFalse(TerminalTarget.isShell("/opt/node/bin/node"));
         assertFalse(TerminalTarget.isShell("C:\\node\\node.exe"));
+        // `.com` is a DOS executable suffix, not a shell; only command.com is.
+        assertFalse(TerminalTarget.isShell("C:\\tools\\native.com"));
     }
 }

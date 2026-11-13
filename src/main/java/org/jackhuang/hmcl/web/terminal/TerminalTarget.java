@@ -53,12 +53,15 @@ public record TerminalTarget(
     /// the Web Shell shows a `$` where the agent used to be.
     private static final Set<String> SHELL_NAMES = Set.of(
             "sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh",
-            "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe");
+            "cmd", "cmd.exe", "command.com",
+            "powershell", "powershell.exe", "pwsh", "pwsh.exe");
 
     /// Shell scripts, including the `.cmd` / `.bat` shims Windows would hand to
-    /// `cmd.exe` behind `CreateProcess`'s back.
+    /// `cmd.exe` behind `CreateProcess`'s back. `.com` is deliberately absent:
+    /// it is a DOS executable suffix, not a shell, and rejecting it would refuse
+    /// a legitimate native program; `command.com` is caught by name instead.
     private static final List<String> SHELL_SUFFIXES = List.of(
-            ".sh", ".bash", ".zsh", ".fish", ".cmd", ".bat", ".ps1", ".com");
+            ".sh", ".bash", ".zsh", ".fish", ".cmd", ".bat", ".ps1");
 
     public TerminalTarget {
         if (command.isEmpty()) {
