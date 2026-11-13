@@ -91,6 +91,8 @@ export function ChatPage() {
   const [reasoningLevel, setReasoningLevel] = useState("");
   const [profile, setProfile] = useState<{ name: string; avatar: string | null }>({ name: "", avatar: null });
   const [liveUsage, setLiveUsage] = useState<{ sessionId: string; input: number; output: number } | null>(null);
+  const [searchEnabled, setSearchEnabled] = useState(false);
+  const [searchStatus, setSearchStatus] = useState<{ configured: boolean } | null>(null);
   const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -210,6 +212,12 @@ export function ChatPage() {
       setLoadingChat(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    void api.chat.searchStatus()
+      .then((status) => setSearchStatus({ configured: status.configured }))
+      .catch(() => { /* 没配置就当关闭 */ });
   }, []);
 
   useEffect(() => {
@@ -549,6 +557,7 @@ export function ChatPage() {
         model: model ?? undefined,
         account: sessionAccount ?? undefined,
         requestId: requestId(),
+        search: searchEnabled,
       });
       setDraft("");
       setPending([]);
@@ -628,6 +637,14 @@ export function ChatPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const toggleSearch = () => {
+    if (!searchStatus?.configured) {
+      toast("info", "还没配置搜索 key：去「聊天设置 → 联网搜索」填一个");
+      return;
+    }
+    setSearchEnabled((value) => !value);
   };
 
   /// 长文本粘贴：包成 .txt 走附件上传，输入框只留一个附件条。
@@ -961,6 +978,9 @@ export function ChatPage() {
               onUploadText={(text) => void uploadText(text)}
               editing={editTarget !== null}
               onCancelEdit={cancelEdit}
+              searchEnabled={searchEnabled}
+              searchConfigured={searchStatus?.configured ?? false}
+              onToggleSearch={toggleSearch}
             />
           </div>
         )}

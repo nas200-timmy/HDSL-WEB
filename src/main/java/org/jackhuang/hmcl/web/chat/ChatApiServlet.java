@@ -153,9 +153,11 @@ public final class ChatApiServlet extends HttpServlet {
                 }
                 String text = string(body, "text", "");
                 List<String> attachments = strings(body, "attachments");
+                boolean search = body.has("search") && body.get("search").isJsonPrimitive()
+                        && body.get("search").getAsBoolean();
                 ChatTurnManager.Outcome outcome = chat.turns().send(sessionId, text, attachments,
                         nullable(body, "model"), nullable(body, "account"),
-                        nullable(body, "requestId"));
+                        nullable(body, "requestId"), search);
                 Json.write(response, outcomeJson(outcome));
                 return;
             }
@@ -240,6 +242,22 @@ public final class ChatApiServlet extends HttpServlet {
 
         if (route.startsWith("/attachments/") && "GET".equals(method)) {
             download(response, route.substring("/attachments/".length()));
+            return;
+        }
+
+        if ("/search/status".equals(route) && "GET".equals(method)) {
+            Json.write(response, chat.searchStatus());
+            return;
+        }
+
+        if ("/search/test".equals(route) && "POST".equals(method)) {
+            if (!requireElevation(request, response)) {
+                return;
+            }
+            JsonObject body = readBody(request, response);
+            if (body != null) {
+                Json.write(response, chat.searchTest(string(body, "query", "")));
+            }
             return;
         }
 

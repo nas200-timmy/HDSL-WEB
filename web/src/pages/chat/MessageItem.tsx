@@ -139,6 +139,24 @@ export function MessageItem({
             <span className="chat-dot" />
           </div>
         ) : null}
+        {!isUser && message.sources && message.sources.length > 0 && (
+          <div className="chat-sources">
+            {message.sources.map((source, sourceIndex) => (
+              <a
+                key={`${source.url}-${sourceIndex}`}
+                className="chat-source"
+                href={source.url}
+                target="_blank"
+                rel="noreferrer noopener"
+                title={source.title}
+              >
+                <span className="chat-source-index">{sourceIndex + 1}</span>
+                <span className="chat-source-title">{source.title}</span>
+                {source.site && <span className="chat-source-site">{source.site}</span>}
+              </a>
+            ))}
+          </div>
+        )}
         {message.status !== "done" && message.status !== "streaming" && (
           <div className={`chat-status ${message.status}`}>
             {message.status === "stopped" ? "已停止" : message.status === "interrupted" ? "上次输出被中断" : "生成失败"}

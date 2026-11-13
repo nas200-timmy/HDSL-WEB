@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowForwardIcon, AttachFileIcon, CloseIcon } from "../../components/icons";
+import { ArrowForwardIcon, AttachFileIcon, CloseIcon, SearchIcon } from "../../components/icons";
 import { toast } from "../../store";
 import type { ChatAttachment } from "../../types";
 import { api } from "../../api";
@@ -44,7 +44,7 @@ export function Composer({
   draft, onDraft, onSend, onStop, streaming, disabled,
   groups, account, model, onPick, onManage, onAdd, pending, onUpload, onRemove, uploading,
   quickPhrases, focusSignal, historyImages, reasoningLevel, onReasoningLevel,
-  onUploadText, editing, onCancelEdit,
+  onUploadText, editing, onCancelEdit, searchEnabled, searchConfigured, onToggleSearch,
 }: {
   draft: string;
   onDraft: (value: string) => void;
@@ -70,6 +70,9 @@ export function Composer({
   onUploadText: (text: string) => void;
   editing?: boolean;
   onCancelEdit?: () => void;
+  searchEnabled: boolean;
+  searchConfigured: boolean;
+  onToggleSearch: () => void;
 }) {
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -254,6 +257,16 @@ export function Composer({
             {current.capabilities.reasoning && <span className="chat-cap" title="支持思考">思</span>}
           </span>
         )}
+        <button
+          className={`chat-tool chat-search-toggle${searchEnabled ? " active" : ""}`}
+          onClick={onToggleSearch}
+          disabled={disabled}
+          title={searchConfigured
+            ? (searchEnabled ? "联网搜索已开启，点击关闭" : "联网搜索：先搜网页再回答")
+            : "还没配置搜索 key：聊天设置 → 联网搜索"}
+        >
+          <SearchIcon size={16} />
+        </button>
         {reasoningMode && reasoningMode.kind !== "none" && (
           <ThinkingPicker
             level={reasoningLevel}

@@ -61,6 +61,8 @@ public final class ChatTurnManager {
     private record RecentTurn(long at, Outcome outcome) {
     }
 
+    private final ChatSearchService searches = new ChatSearchService();
+
     private record Resolved(
             String model, String account, ChatEndpoints.Profile profile,
             ChatProtocol protocol, ChatCapabilities.Capabilities capability,
@@ -115,7 +117,7 @@ public final class ChatTurnManager {
 
     public Outcome send(String sessionId, String text, List<String> attachmentIds,
                         @Nullable String model, @Nullable String account,
-                        @Nullable String requestId)
+                        @Nullable String requestId, boolean search)
             throws ChatException, SQLException, IOException {
         ChatStore.Session session = requireSession(sessionId);
         String key = requestId == null || requestId.isBlank() ? null : sessionId + "|" + requestId;
@@ -150,6 +152,14 @@ public final class ChatTurnManager {
                 throw new ChatException(400, "too_many_attachments",
                         "at most " + ChatAttachments.MAX_PER_MESSAGE + " attachments per message");
             }
+            // 先搜后答：搜索失败就直接失败，不留半条消息；没搜到结果就照常回答。
+            ChatSearchService.Result searchResult = null;
+            if (search) {
+                searchResult = searches.search(settings, titleSource.isBlank() ? content : titleSource);
+                if (searchResult.hits().isEmpty()) {
+                    searchResult = null;
+                }
+            }
             ChatStore.Node userNode = store.appendUserNode(sessionId, content, resolved.model(), ids);
             ChatStore.Message userMessage = userNode.active();
             if (userMessage == null) {
@@ -165,6 +175,10 @@ public final class ChatTurnManager {
             }
             ActiveTurn turn = new ActiveTurn(sessionId, assistantNode.id(), assistantMessage.id(),
                     resolved, session.id(), 1);
+            if (searchResult != null) {
+                turn.searchBlock = ChatSearchService.systemBlock(searchResult);
+                turn.searchSourcesJson = searchResult.toJson().toString();
+            }
             register(turn, systemPrompt(session));
             start(turn, contextBefore(sessionId, assistantNode.id()));
             Outcome outcome = new Outcome(turn.id, userNode, userMessage, assistantNode, assistantMessage);
@@ -457,8 +471,12 @@ public final class ChatTurnManager {
     private void run(ActiveTurn turn, List<ChatStore.Node> context) {
         try {
             List<ChatProtocol.ChatMessage> messages = messages(context, turn.resolved);
+            String system = turn.systemPrompt;
+            if (turn.searchBlock != null) {
+                system = (system == null || system.isBlank() ? "" : system + "\n\n") + turn.searchBlock;
+            }
             ChatProtocol.ChatRequest request = new ChatProtocol.ChatRequest(
-                    turn.resolved.model(), turn.systemPrompt, messages, turn.temperature,
+                    turn.resolved.model(), system, messages, turn.temperature,
                     turn.maxTokens == null ? Math.min(turn.resolved.capability.maxOutput(), 8192)
                             : turn.maxTokens,
                     turn.reasoningLevel, turn.resolved.reasoning);
@@ -804,12 +822,15 @@ public final class ChatTurnManager {
     }
 
     private static @Nullable String usageJson(ActiveTurn turn) {
-        if (turn.inputTokens == 0 && turn.outputTokens == 0) {
+        if (turn.inputTokens == 0 && turn.outputTokens == 0 && turn.searchSourcesJson == null) {
             return null;
         }
         JsonObject usage = new JsonObject();
         usage.addProperty("input", turn.inputTokens);
         usage.addProperty("output", turn.outputTokens);
+        if (turn.searchSourcesJson != null) {
+            usage.add("search", com.google.gson.JsonParser.parseString(turn.searchSourcesJson));
+        }
         return usage.toString();
     }
 
@@ -939,6 +960,8 @@ public final class ChatTurnManager {
         volatile Double temperature;
         volatile Integer maxTokens;
         volatile String reasoningLevel;
+        volatile String searchBlock;
+        volatile String searchSourcesJson;
 
         ActiveTurn(String sessionId, String nodeId, String messageId, Resolved resolved,
                    String sessionKey, int attemptNo) {

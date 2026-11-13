@@ -716,6 +716,9 @@ public final class ChatService {
         json.addProperty("streamFlushMs", current.streamFlushMs());
         json.addProperty("catalogModels", ChatModelCatalog.size());
         json.addProperty("catalogUpdatedAt", ChatModelCatalog.updatedAt());
+        json.addProperty("searchProvider", current.searchProvider());
+        json.addProperty("searchMaxResults", current.searchMaxResults());
+        addNullable(json, "searchKeyMasked", maskKey(current.searchApiKey()));
         addNullable(json, "defaultAccount", current.defaultAccount());
         addNullable(json, "defaultModel", current.defaultModel());
         JsonArray retentionOptions = new JsonArray();
@@ -725,6 +728,26 @@ public final class ChatService {
         json.add("retentionOptions", retentionOptions);
         json.add("backups", backupsJson());
         return json;
+    }
+
+    /// 搜索配置状态（不需要提权）：前端用它决定搜索按钮能不能点。
+    public JsonObject searchStatus() throws SQLException {
+        ChatSettings.Settings current = settings;
+        String provider = current.searchProvider();
+        boolean configured = ChatSearchService.resolveKey(current, provider) != null;
+        JsonObject json = new JsonObject();
+        json.addProperty("provider", provider);
+        json.addProperty("configured", configured);
+        json.addProperty("maxResults", current.searchMaxResults());
+        addNullable(json, "keyMasked", maskKey(current.searchApiKey()));
+        return json;
+    }
+
+    /// 设置页的「测试搜索」：真跑一次，返回前几条结果。
+    public JsonObject searchTest(String query) throws ChatException {
+        ChatSearchService.Result result = new ChatSearchService()
+                .search(settings, query);
+        return result.toJson();
     }
 
     public JsonObject updateSettings(JsonObject body) throws ChatException, SQLException, IOException {
@@ -913,7 +936,17 @@ public final class ChatService {
                 ? JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(message.editedAt()));
         if (message.usageJson() != null) {
             try {
-                json.add("usage", JsonParser.parseString(message.usageJson()));
+                JsonObject usage = JsonParser.parseString(message.usageJson()).getAsJsonObject();
+                JsonElement search = usage.get("search");
+                if (search != null && search.isJsonObject()
+                        && search.getAsJsonObject().has("hits")) {
+                    json.add("sources", search.getAsJsonObject().get("hits"));
+                    JsonElement query = search.getAsJsonObject().get("query");
+                    if (query != null && query.isJsonPrimitive()) {
+                        json.addProperty("searchQuery", query.getAsString());
+                    }
+                }
+                json.add("usage", usage);
             } catch (RuntimeException ignored) {
                 // Ignore a malformed usage blob.
             }
@@ -975,6 +1008,18 @@ public final class ChatService {
         JsonElement element = body.get(name);
         return element != null && element.isJsonPrimitive() && element.getAsJsonPrimitive().isNumber()
                 ? element.getAsInt() : null;
+    }
+
+    /// 只回前后各四位，够确认「是不是这把 key」，又不会把 key 送给前端。
+    private static @Nullable String maskKey(@Nullable String key) {
+        if (key == null || key.isBlank()) {
+            return null;
+        }
+        String value = key.trim();
+        if (value.length() <= 8) {
+            return "…" + value.substring(Math.max(0, value.length() - 3));
+        }
+        return value.substring(0, 4) + "…" + value.substring(value.length() - 4);
     }
 
     private static void addNullable(JsonObject json, String name, @Nullable String value) {

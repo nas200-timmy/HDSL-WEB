@@ -57,7 +57,10 @@ public final class ChatSettings {
             int dailyTokenLimit,
             int streamFlushMs,
             @Nullable String defaultAccount,
-            @Nullable String defaultModel) {
+            @Nullable String defaultModel,
+            String searchProvider,
+            @Nullable String searchApiKey,
+            int searchMaxResults) {
 
         public long retentionCutoffMillis() {
             return switch (retention) {
@@ -81,7 +84,8 @@ public final class ChatSettings {
         public Settings withBackupDir(String dir) {
             return new Settings(retention, retentionDays, backupEnabled, backupTime, backupKeep, dir,
                     privateEndpoints, privateAllowlist, longTextTokens, dailyTokenLimit,
-                    streamFlushMs, defaultAccount, defaultModel);
+                    streamFlushMs, defaultAccount, defaultModel, searchProvider, searchApiKey,
+                    searchMaxResults);
         }
     }
 
@@ -94,7 +98,7 @@ public final class ChatSettings {
             backup = dataDir.resolve("backup");
         }
         return new Settings("forever", 0, true, "03:17", 7, backup.toString(), "allow",
-                List.of(), 4000, 0, 40, null, null);
+                List.of(), 4000, 0, 40, null, null, "bocha", null, 5);
     }
 
     public static Settings load(ChatStore store, Path dataDir) throws SQLException {
@@ -138,7 +142,10 @@ public final class ChatSettings {
                     intValue(json, "dailyTokenLimit", defaults.dailyTokenLimit()),
                     intValue(json, "streamFlushMs", defaults.streamFlushMs()),
                     nullableString(json, "defaultAccount"),
-                    nullableString(json, "defaultModel")), defaults);
+                    nullableString(json, "defaultModel"),
+                    string(json, "searchProvider", defaults.searchProvider()),
+                    nullableString(json, "searchApiKey"),
+                    intValue(json, "searchMaxResults", defaults.searchMaxResults())), defaults);
         } catch (RuntimeException e) {
             return defaults;
         }
@@ -194,9 +201,21 @@ public final class ChatSettings {
                 ? nullableString(body, "defaultAccount") : current.defaultAccount();
         String defaultModel = body.has("defaultModel")
                 ? nullableString(body, "defaultModel") : current.defaultModel();
+        String searchProvider = body.has("searchProvider")
+                ? string(body, "searchProvider", current.searchProvider()) : current.searchProvider();
+        // 留空 = 清除；不传 = 保持不变（前端「留空保持不变」的约定）
+        String searchApiKey = current.searchApiKey();
+        if (body.has("searchApiKey")) {
+            String value = nullableString(body, "searchApiKey");
+            searchApiKey = value;
+        }
+        int searchMaxResults = body.has("searchMaxResults")
+                ? intValue(body, "searchMaxResults", current.searchMaxResults()) : current.searchMaxResults();
         return sanitize(new Settings(retention, retentionDays, backupEnabled, backupTime, backupKeep,
                 backupDir, privateMode, allowlist, longTextTokens, dailyTokenLimit, streamFlushMs,
-                defaultAccount, defaultModel), defaults);
+                defaultAccount, defaultModel,
+                searchProvider == null ? current.searchProvider() : searchProvider,
+                searchApiKey, searchMaxResults), defaults);
     }
 
     private static Settings sanitize(Settings value, Settings defaults) {
@@ -214,10 +233,17 @@ public final class ChatSettings {
         }
         String dir = value.backupDir() == null || value.backupDir().isBlank()
                 ? defaults.backupDir() : value.backupDir().trim();
+        String provider = value.searchProvider();
+        if (!"bocha".equals(provider) && !"deepseek".equals(provider)) {
+            provider = defaults.searchProvider();
+        }
+        int maxResults = value.searchMaxResults() < 1 ? defaults.searchMaxResults()
+                : Math.min(value.searchMaxResults(), 10);
         return new Settings(value.retention(), Math.max(1, value.retentionDays()),
                 value.backupEnabled(), time, keep, dir, value.privateEndpoints(),
                 value.privateAllowlist(), longText, daily, flush,
-                blankToNull(value.defaultAccount()), blankToNull(value.defaultModel()));
+                blankToNull(value.defaultAccount()), blankToNull(value.defaultModel()),
+                provider, blankToNull(value.searchApiKey()), maxResults);
     }
 
     public static void save(ChatStore store, Settings settings) throws SQLException {
@@ -239,6 +265,10 @@ public final class ChatSettings {
                 ? com.google.gson.JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(settings.defaultAccount()));
         json.add("defaultModel", settings.defaultModel() == null
                 ? com.google.gson.JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(settings.defaultModel()));
+        json.addProperty("searchProvider", settings.searchProvider());
+        json.add("searchApiKey", settings.searchApiKey() == null
+                ? com.google.gson.JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(settings.searchApiKey()));
+        json.addProperty("searchMaxResults", settings.searchMaxResults());
         store.putSetting(KEY, json.toString());
     }
 

@@ -1093,6 +1093,9 @@ export interface ChatMessage {
   createdAt: number;
   editedAt: number | null;
   usage?: { input?: number; output?: number };
+  /** 这一轮联网搜索的来源（有搜索时才有） */
+  sources?: ChatSearchHit[];
+  searchQuery?: string;
   attachments: ChatAttachment[];
 }
 
@@ -1127,6 +1130,27 @@ export interface ChatReasoningMode {
   minBudget: number;
   maxBudget: number;
   source: string;
+}
+
+export interface ChatSearchHit {
+  title: string;
+  url: string;
+  snippet?: string;
+  site?: string;
+  publishedAt?: string;
+}
+
+export interface ChatSearchStatus {
+  provider: "bocha" | "deepseek" | string;
+  configured: boolean;
+  maxResults: number;
+  keyMasked?: string | null;
+}
+
+export interface ChatSearchResult {
+  query: string;
+  provider: string;
+  hits: ChatSearchHit[];
 }
 
 export interface ChatModelCapabilities {
@@ -1215,6 +1239,9 @@ export interface ChatSettings {
   /** models.dev 目录里有多少个模型；0 = 还没拉取，能力判断回落到内置表 */
   catalogModels?: number;
   catalogUpdatedAt?: number;
+  searchProvider?: "bocha" | "deepseek";
+  searchMaxResults?: number;
+  searchKeyMasked?: string | null;
 }
 
 /** POST /api/chat/accounts/{name}/chat-test 的结果（会消耗少量 token）。 */

@@ -10,7 +10,7 @@ import { isElevationRequired, requestDeveloperPassword } from "../../elevation";
 import { toast } from "../../store";
 import type {
   ChatAccountProfile, ChatBackup, ChatChatTest, ChatModelInfo, ChatProbe, ChatProfile,
-  ChatSettings, ChatVisionTest, CreateAccountBody, ModelProvider,
+  ChatSearchResult, ChatSettings, ChatVisionTest, CreateAccountBody, ModelProvider,
 } from "../../types";
 import { errMsg } from "../../utils";
 import { AvatarView } from "./AvatarView";
@@ -18,7 +18,7 @@ import { AvatarCropDialog } from "./AvatarCropDialog";
 import { ModelCaps, capabilitySourceLabel } from "./ModelCaps";
 
 type Run = <T>(action: () => Promise<T>) => Promise<T>;
-type Tab = "profile" | "providers" | "defaults" | "data" | "network";
+type Tab = "profile" | "providers" | "defaults" | "search" | "data" | "network";
 
 function bytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -122,6 +122,7 @@ export function ChatSettingsPage() {
             ["profile", "个人资料"],
             ["providers", "模型服务"],
             ["defaults", "默认模型"],
+            ["search", "联网搜索"],
             ["data", "数据与备份"],
             ["network", "网络"],
           ] as const).map(([key, label]) => (
@@ -170,6 +171,8 @@ export function ChatSettingsPage() {
               run={run}
               onSaved={setSettings}
             />
+          ) : tab === "search" ? (
+            <SearchPanel settings={settings} run={run} onSaved={setSettings} />
           ) : tab === "data" ? (
             <DataPanel
               settings={settings}
@@ -254,6 +257,158 @@ function ProfilePanel({
         onClose={() => setCropOpen(false)}
         onUploaded={(id) => setAvatar(`img:${id}`)}
       />
+    </div>
+  );
+}
+
+function SearchPanel({
+  settings, run, onSaved,
+}: {
+  settings: ChatSettings;
+  run: Run;
+  onSaved: (settings: ChatSettings) => void;
+}) {
+  const [provider, setProvider] = useState<"bocha" | "deepseek">(
+    (settings.searchProvider as "bocha" | "deepseek") ?? "bocha");
+  const [key, setKey] = useState("");
+  const [maxResults, setMaxResults] = useState(settings.searchMaxResults ?? 5);
+  const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<ChatSearchResult | null>(null);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const body: Record<string, unknown> = {
+        searchProvider: provider,
+        searchMaxResults: maxResults,
+      };
+      if (key.trim()) body.searchApiKey = key.trim();
+      const next = await run(() => api.chat.updateSettings(body));
+      onSaved(next);
+      setKey("");
+      toast("success", "搜索设置已保存");
+    } catch (error) {
+      toast("error", `保存失败：${errMsg(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearKey = async () => {
+    setBusy(true);
+    try {
+      onSaved(await run(() => api.chat.updateSettings({ searchApiKey: "" })));
+      toast("success", "已清除搜索 key");
+    } catch (error) {
+      toast("error", `清除失败：${errMsg(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const test = async () => {
+    if (!query.trim()) {
+      toast("error", "先填一个搜索词");
+      return;
+    }
+    setTesting(true);
+    setResult(null);
+    try {
+      setResult(await run(() => api.chat.searchTest(query.trim())));
+    } catch (error) {
+      toast("error", `搜索失败：${errMsg(error)}`);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div className="chat-settings-card">
+      <div className="chat-settings-card-title">联网搜索</div>
+      <div className="hint">
+        发送前先用搜索 API 查网页，把结果作为不可信资料交给模型，并让它用 [1][2] 标注来源。
+        按次计费，同一句话 1 小时内不会重复计费。
+      </div>
+      <div className="chat-settings-form-grid">
+        <label className="form-row">
+          <span className="form-label">服务商</span>
+          <select
+            className="input"
+            value={provider}
+            onChange={(event) => setProvider(event.target.value as "bocha" | "deepseek")}
+          >
+            <option value="bocha">博查 Bocha</option>
+            <option value="deepseek">DeepSeek Search</option>
+          </select>
+        </label>
+        <label className="form-row">
+          <span className="form-label">返回条数</span>
+          <input
+            className="input"
+            type="number"
+            min={1}
+            max={10}
+            value={maxResults}
+            onChange={(event) => setMaxResults(Number(event.target.value))}
+          />
+        </label>
+      </div>
+      <label className="form-row">
+        <span className="form-label">API 密钥（留空保持不变）</span>
+        <input
+          className="input"
+          type="password"
+          value={key}
+          placeholder={settings.searchKeyMasked ? `已保存 ${settings.searchKeyMasked}` : "填搜索服务的 key"}
+          onChange={(event) => setKey(event.target.value)}
+          autoComplete="off"
+        />
+      </label>
+      <div className="hint">
+        DeepSeek Search 可以直接留空——会回落到面板里 DeepSeek 账户的 key（同一个 key 两边通用）。
+        博查需要填自己的 key。
+      </div>
+      <div className="chat-provider-actions">
+        <button className="btn btn-raised" disabled={busy} onClick={() => void save()}>
+          {busy ? "保存中…" : "保存"}
+        </button>
+        <button className="btn btn-text dim" disabled={busy || !settings.searchKeyMasked}
+          onClick={() => void clearKey()}>
+          清除 key
+        </button>
+      </div>
+
+      <div className="chat-settings-card-title" style={{ marginTop: 18 }}>测试搜索</div>
+      <div className="chat-search-test">
+        <input
+          className="input"
+          value={query}
+          placeholder="输入一个搜索词，例如 DeepSeek V4 release"
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") void test(); }}
+        />
+        <button className="btn btn-outline" disabled={testing} onClick={() => void test()}>
+          {testing ? "搜索中…" : "搜一下"}
+        </button>
+      </div>
+      {result && (
+        <div className="chat-search-results">
+          {result.hits.length === 0 ? (
+            <div className="hint">这次没有结果（空结果不计费）。</div>
+          ) : result.hits.map((hit, index) => (
+            <a key={`${hit.url}-${index}`} className="chat-search-hit"
+              href={hit.url} target="_blank" rel="noreferrer noopener">
+              <span className="chat-source-index">{index + 1}</span>
+              <span className="chat-search-hit-text">
+                <span className="chat-search-hit-title">{hit.title}</span>
+                {hit.snippet && <span className="chat-search-hit-snippet">{hit.snippet}</span>}
+              </span>
+            </a>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -64,6 +64,8 @@ import type {
   ChatModelInfo,
   ChatProbe,
   ChatProfile,
+  ChatSearchStatus,
+  ChatSearchResult,
   ChatChatTest,
   ChatVisionTest,
   ChatTurnOutcome,
@@ -1106,7 +1108,7 @@ export const api = {
     deleteSession: (id: string) =>
       request<{ ok: boolean }>(`/api/chat/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
-    send: (id: string, body: { text: string; attachments?: string[]; model?: string; account?: string; requestId?: string }) =>
+    send: (id: string, body: { text: string; attachments?: string[]; model?: string; account?: string; requestId?: string; search?: boolean }) =>
       request<ChatTurnOutcome>(`/api/chat/sessions/${encodeURIComponent(id)}/messages`, jsonInit("POST", body)),
     regenerate: (id: string, body: { nodeId: string; mode: "in_place" | "truncate_after"; requestId?: string }) =>
       request<ChatTurnOutcome>(`/api/chat/sessions/${encodeURIComponent(id)}/regenerate`, jsonInit("POST", body)),
@@ -1136,6 +1138,9 @@ export const api = {
     },
     attachmentUrl: (id: string) => `api/chat/attachments/${encodeURIComponent(id)}`,
 
+    searchStatus: () => request<ChatSearchStatus>("/api/chat/search/status"),
+    searchTest: (query: string) =>
+      request<ChatSearchResult>("/api/chat/search/test", jsonInit("POST", { query }), { timeoutMs: 60000 }),
     profile: () => request<ChatProfile>("/api/chat/profile"),
     updateProfile: (body: { name?: string; avatar?: string | null }) =>
       request<ChatProfile>("/api/chat/profile", jsonInit("PUT", body)),
