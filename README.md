@@ -10,8 +10,10 @@
 把 [HDSL](https://github.com/MCXCC303/HDSL)（Hello DeepSeek! Launcher，桌面版）搬进浏览器的单容器版本。
 
 打开网页 → 登录 → 建实例 → 点「启动」，在同一个域名、端口与证书下用 agent 自己的界面。除 dsh 外，
-Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、ZCode 也能一起装；能开终端的实例都配一个**原地终端**。
+Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo Code、MiniMax Code、ZCode
+也能一起装；能开终端的实例都配一个**原地终端**。
 转码是同一容器里的另一件一等功能：默认关闭，开启后在面板里批量编码、硬件加速与 GPU 监控。
+面板还自带**聊天页**：多助手、流式输出、附件与联网搜索，账户与 key 直接复用面板里已有的。
 
 界面按桌面版复刻（HMCL 视觉语言、Material You 主题、同款图标与动画）：实例、版本、插件、账户、
 整合包、会话、技能、体检与 ACP 控制台都在。
@@ -36,12 +38,12 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、ZCode 也能一起
 - [常见问题](#常见问题)
 - [设计说明](docs/design-notes.md)
 - [转码模块（批量编码、硬件加速、GPU 监控）](docs/transcode.md)
-- [面板聊天（多助手、流式、附件与备份）](docs/chat.md)
+- [面板聊天（多助手、流式、附件、联网搜索）](docs/chat.md)
 - [许可](#许可)
 
 ## 亮点
 
-### 八种 Agent，一个面板，想换就换
+### 十一种 Agent，一个面板，想换就换
 
 | Agent | 网页入口 | 原地终端（Web Shell） |
 |---|---|---|
@@ -52,9 +54,12 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、ZCode 也能一起
 | Octop（自托管助手） | 它自己的网页 | 无（网页控制台） |
 | Hermes Agent（实验） | 它自己的网页 | 官方 TUI `hermes --tui`（与网页模式互斥） |
 | PI WEB（实验） | 它自己的网页，或纯终端实例 | 官方 TUI（终端为主） |
+| Qwen Code（TUI 品牌） | 无（纯终端） | 官方 TUI `qwen` |
+| MiMo Code（TUI 品牌） | 无（纯终端） | 官方 TUI（原生二进制 / Node 启动器） |
+| MiniMax Code（TUI 品牌） | 无（纯终端） | 官方 TUI `mcode` |
 | ZCode（实验性品类） | `zcode --web` | 官方 TUI（发行包不带参数就是它） |
 
-同一个品牌的版本装一次、所有实例共用；点一下就在实例之间切换，不用重装、不用换端口、不用记第二套地址。dsh 这边还完整搬来了桌面版的账户、插件、整合包、会话、技能、体检与 ACP 控制台。
+同一个品牌的版本装一次、所有实例共用；点一下就在实例之间切换，不用重装、不用换端口、不用记第二套地址。dsh 这边还完整搬来了桌面版的账户、插件、整合包、会话、技能、体检与 ACP 控制台。Qwen / MiMo / MiniMax 是**纯终端品牌**：实例就是一个 PTY，没有网页进程、端口与 `/i/<id>/` 挂载，启动/停止/打开网页会被明确拒绝。
 
 ### 同一个实例，网页和终端都行
 
@@ -93,9 +98,9 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、ZCode 也能一起
 | 运行前提 | JDK 17+；Node `^22.19.0 || >=24.0.0` 与 pnpm（dsh 由 pnpm 安装、由 node 运行） |
 | 手机 | 窄屏（≤760px）或矮屏（≤520px）自动切换移动版式：主导航收成抽屉、子侧栏变顶部标签条、启动面板变成贴底操作栏；可点区域 44px；支持「加到主屏幕」。见 [docs/ui-spec.md §14](docs/ui-spec.md) |
 | 账户 | 为供应商填一次 API Key；供应商与模型来自 [models.dev](https://models.dev)（200+ 家，选中即带出端点、协议与密钥变量），也可手输；目录不可达时退回内置供应商与手输。见 [docs/ui-spec.md §4](docs/ui-spec.md) |
-| 聊天 | 面板内的多助手聊天页：流式输出、停止、两种重新生成、跨服务模型选择、独立 `/chat/settings` 模型服务/备份设置、图片/PDF/Office 附件与长文本转附件、按助手隔离系统提示词；会话存 SQLite，可每日备份。不调用工具。见 [docs/chat.md](docs/chat.md) |
+| 聊天 | 面板内的多助手聊天页：流式输出、停止、两种重新生成、跨服务模型选择、独立 `/chat/settings` 模型服务/备份设置、图片/PDF/Office 附件与长文本转附件、按助手隔离系统提示词；会话存 SQLite，可每日备份。可选联网搜索（博查 / DeepSeek / 智谱 / Tavily / Brave / Exa），模型只会拿到只读的 `search_web` / `scrape_web`，不能触发面板操作。见 [docs/chat.md](docs/chat.md) |
 | 创建实例 | 创建即安装；未安装的实例点「启动」会先装再启；进度与失败原因都在面板上。见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md) |
-| 品牌实例 | 安装、版本共享与实验性边界见 [docs/brands.md](docs/brands.md)；Octop 见 [docs/octop.md](docs/octop.md)；ZCode 见 [docs/zcode-experimental.md](docs/zcode-experimental.md) |
+| 品牌实例 | 安装、版本共享与实验性边界见 [docs/brands.md](docs/brands.md)；Octop 见 [docs/octop.md](docs/octop.md)；ZCode 见 [docs/zcode-experimental.md](docs/zcode-experimental.md)。Qwen / MiMo / MiniMax 是纯终端品牌（无网页进程、端口与 `/i/` 挂载） |
 | Minecraft | 默认关闭的第三方功能；开关在「设置 → 品牌实例」，需开发者密码并阅读 Mojang EULA 与服务条款。存档在 `/home/hdsl/mc`，容器部署必须挂出来。见 [docs/minecraft.md](docs/minecraft.md) |
 | 转码 | 默认关闭的第三方功能；开关同样在「设置 → 品牌实例」，需开发者密码并阅读须知。服务端队列批量编码，硬件失败按 QSV → VAAPI → CPU 每次降一档（或完全自动化），参数面板对齐 3FUI。媒体根是 `/home/hdsl/video`，ffmpeg 支持静态包 / apt-dnf / 源码编译三种装法。见 [docs/transcode.md](docs/transcode.md) |
 | 下载源 | 设置页可选预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL；保存即生效。见 [docs/deployment.md](docs/deployment.md) |

@@ -352,6 +352,14 @@ docker compose start hdsl-web
 只要 `/data` 就够了：`server.yaml`、证书、账号哈希、全部实例、pnpm store、corepack 缓存都在里面。
 `/data/pnpm-store` 与 `/data/corepack` 可以还原后重建（重新下载），嫌大的话备份时排除它们。
 
+聊天也在这条边界里：`/data/chat/` 是 `chat.db`（SQLite）与按 sha256 去重的附件，`/data/backup/`
+是面板自己做的聊天备份（`chat-backup-<时间>/`，含 db 快照、附件与 manifest）。两者都随
+`/data` 一起拷走；如果聊天设置里把备份目录改到了别处，那个目录要单独备份。
+
+> 聊天数据里有供应商 API key 与全部会话，按敏感数据对待：目录是 0700，备份产物的属主要
+> 自己确认。只想恢复聊天时，可以停面板 → 用备份里的 `chat.db` + `files/` 替换
+> `/data/chat/` → 启动（schema 版本向前迁移，不做降级）。
+
 ### 恢复：空卷 + 解包 + 修属主
 
 ```bash
