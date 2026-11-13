@@ -313,6 +313,10 @@ idle -> streaming -> done
 
 - `POST /api/chat/attachments`（multipart）→ `{id, name, mime, size, sha256, kind}`。
 - 文件存 `<data>/chat/files/<sha256>`；去重；元数据入库。
+- `/api/chat/attachments` 在 `ApiGuardFilter.streamed()` 的放行名单里：它不适用
+  1 MiB JSON 上限，走 servlet 的 multipart 限制（单请求 60 MB、图片 20 MB、
+  文档 50 MB）；否则超过 1 MiB 的图片会在进入上传处理器前得到
+  `413 payload too large`。
 - 下载 `GET /api/chat/attachments/{id}`，校验会话归属。
 - 限制：单文件 50MB（Office/PDF）/ 20MB（图片）、单消息 8 个、会话配额；删会话清附件。
 - 图片前端 canvas 压到最长边 2048、JPEG/WebP 0.85；后端 `ImageIO` 校验/剥 EXIF。

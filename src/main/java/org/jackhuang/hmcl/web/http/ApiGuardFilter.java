@@ -99,6 +99,7 @@ public final class ApiGuardFilter implements Filter {
                 || path.startsWith("/api/wallpapers/")
                 || path.startsWith("/api/packs/")
                 || path.startsWith("/api/plugins/")
+                || path.startsWith("/api/chat/attachments")
                 || path.endsWith("/plugins/install")
                 || path.endsWith("/world/import")
                 || MC_FILE_UPLOAD.matcher(path).matches();
