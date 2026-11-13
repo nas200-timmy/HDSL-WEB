@@ -2,9 +2,15 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布 — 面板聊天
+## v0.6.85 — 2026-11-14 · 面板聊天、三个 TUI 品牌与终端加固
 
-> 已并入本地 `main`（合并点 `92034bd39`），**未 push、未发布**；发布时再写版本号与下载信息。
+> 这一版把面板从「管理实例」扩成「自己也能用」：内置聊天页（多助手、流式、附件、联网搜索），
+> 以及 Qwen Code / MiMo Code / MiniMax Code 三个纯终端品牌。聊天数据只在 `<data>/chat`；
+> 不支持 SQLite 原生库的平台会让聊天降级为 404，面板照常启动。
+>
+> 发布物注意：fat jar 从 33 MB 涨到 **69 MB**（SQLite 原生库 + PDFBox/POI），容器镜像同步变大；
+> 聊天备份包含 API key，按敏感数据对待。
+>
 > 场景：不想为了和模型说几句话再开一个网页聊天；面板里就有账户与 key，缺的只是一个
 > 会流式输出、能保留历史、能按助手隔离提示词的聊天页。设计见 [docs/chat.md](docs/chat.md)。
 
@@ -140,46 +146,60 @@
 - **权限**：所有 `/api/chat/*` 对 agent ticket 关闭（放在 `GET → READ` 之前）；设置、备份、
   端点探测与能力覆盖要求开发者提权；聊天只向模型暴露一个只读的 `web_search`，模型无法
   触发面板的其它操作。
-- 验证：`gradlew test` 全绿（新增 SQLite/SSE/路径/权限与一次真实 SSE turn 的端到端用例）；
-  `npm run typecheck`、`npm run build`、`npm run compat` 绿。
 
-## 未发布 — 编码队列的任务管理
+**三个 TUI 品牌（Qwen Code / MiMo Code / MiniMax Code）**
 
-> 场景：转码跑起来发现效果不对，点「停止」后记录还留在列表里；去参数面板调好参数另存预设，
-> 再回到队列让这条任务改用新预设重来，而不是用提交时的旧快照。行为对齐 3FUI 的
-> 停止 / 移除 / 重置与「只改任务预设快照」。
+- `Brand.Kind` 新增 `WEB / TUI / HYBRID`：TUI 品牌实例是 PTY，没有网页进程、端口和
+  `/i/<id>/` 挂载；`/api/brands/capabilities` 下发 `kind / web / terminal`，网页与终端客户端
+  都按它渲染，不再按品牌 id 猜。
+- 安装与启动优先面板托管的 Node（它们的 `engines.node` 很窄，宿主的旧 Node 会直接跑不起来）；
+  包里有 `engines.node` 以包为准，没有才用面板已知范围。Windows 上 MiMo 走 `mimo.js` 启动器，
+  避免直接执行 `vendor/mimo.exe` 锁住安装目录。
+- 每次 attach 前重新把实例 home / workspace 交给 agent uid，旧构建建的实例或被 root 持有的
+  home 也不会在不可写目录里跑 TUI。
+- 网页侧：品牌页、实例列表、启动面板、Go 客户端都识别 TUI 形态；实例卡只给「终端」，
+  「启动 / 停止 / 打开网页」按 `tui_only` 明确拒绝。
 
-- **移除任务**：`done` / `failed` / `cancelled` / `queued` 记录可逐项「移除」，顶部新增
-  「清除已完成」批量清理完成 / 失败 / 已取消。只删队列记录与它的日志，**不删磁盘上已生成的
-  输出文件**；运行 / 暂停 / 停止中的任务按钮置灰、必须先「停止」（后端同样拒绝，避免孤儿 ffmpeg）。
-- **停止**：每个非终态任务都有「停止」（原「取消」），包括排队中的任务；停止保留记录，方便改参数后重来。
-- **重置使用预设**：弹窗列出内置与用户自定义预设（含刚在参数面板另存的新预设），显示任务当前预设，
-  附「打开参数面板」入口。应用后替换任务的预设快照、清空进度/日志/失败决策、按新容器重排输出名
-  （目录沿用任务原来的输出目录），任务回到排队状态；队列正在运行时按既有调度自动开始。旧产物不被
-  覆盖，新文件自动加序号。可重置的范围比 3FUI 宽一档：未开始的任务也能换预设。
-  工具任务（合并/混流/抽流）没有可替换的预设，按钮置灰。
-- 后端：`TranscodeQueue` 新增 `remove` / `clearTerminal` / `resetPreset`，三处都同步维护
-  `reservedOutputs`、`decisionTimeouts`、`queue.json`、任务日志与事件；新增
-  `DELETE /api/transcode/queue/jobs/{id}`、`POST /api/transcode/queue/clear`、
-  `POST /api/transcode/queue/jobs/{id}/reset-preset`，写审计。权限沿用现有 `transcode` scope。
-- 顺手修掉两个与「停止 / 重试」相邻的旧问题：工具任务（合并/混流/抽流）点重试会被
-  `resetForRetry()` 清掉 `tool` 与 `command`，变成拿「提取 0:v:0 · x.mp4」这种标签当输入路径的
-  残缺转码任务；重试也不再盲目复用可能已被别的任务占用的输出名（改为重新规划，必要时加 `_1`）。
-  `cancel` 现在会一起取消决策超时并清空 `decisionDeadline`，停止一个「待决定」任务不再留下定时器。
-- 冒烟脚本补 `reset-preset` / `remove job` / `clear finished` 三段断言（含「clear 不删产物」）。
-- **队列工作台**：控制条独立成一条，放在使用说明下方、宽度与任务列表一致；开始 / 暂停 / 恢复 /
-  停止 / 移除 / 重置预设都作用于勾选集合，另有全选、选中错误、上移 / 下移与 `Enter`/`Delete`/`空格`
-  快捷键。行内只留「日志」，不再被五六个按钮挤掉任务名。
-- 能力位 `caps`：`snapshot`、单任务 GET 与 WS 事件统一下发
-  `start/pause/resume/stop/remove/reset/reorder`，前端删掉 `ACTIVE_STATES` 这类状态机副本。
-- 实时：队列页改订阅 `/ws` 的 `transcode:queue`（服务端一直在发，只是没人订阅），1 秒轮询降级为
-  30 秒兜底；日志尾读改成从文件末尾读 256KB 窗口，不再每次 `readAllLines` 整个文件。
-- 新接口：`POST /queue/jobs/{id}/start`（置顶 + 启动队列，仍受并发上限）、`POST /queue/action`
-  （批量动作，逐条返回成败）、`POST /queue/reorder`（全量顺序，运行中不可移动）、
-  `POST /queue/sync-preset`（只改未开始的任务，返回 updated / skipped 计数）。
-- 详情区补 ETA、每遍命令（`steps`）与编码器切换记录（`switchRecords`：时间、原→新、触发方式、原因）。
-- 修复：`resume()` 此前永远返回 false —— 守卫要求任务处于 `RUNNING`，而暂停后是 `PAUSED`，逐任务
-  恢复在代码里就不可能成功（前端也因此从未接出按钮）。
+**终端：不再回落到 shell**
+
+- `TerminalTarget` 构造时拒绝 `sh/bash/zsh/fish/dash/ksh/csh/tcsh`、`cmd/powershell/pwsh`
+  以及 `.sh/.bash/.zsh/.fish/.cmd/.bat/.ps1`；TUI 退出后不会再留下一个 `$` 提示符。
+- `.com` 按「DOS 原生可执行」放行（曾被误判成 shell，误伤合法程序），`command.com` 按名字拒绝。
+- PTY 始终以 argv 数组 spawn，不经过 shell；回归测试覆盖 shell 名、脚本后缀与原生 `.exe/.com`。
+
+**主侧栏与品牌导航**
+
+- 顺序改成「账户 → 游戏 → 聊天 → 媒体（转码启用时）→ 设置」；TUI 品牌在实例列表里有独立导航栏，
+  不再和网页品牌混在同一组。
+
+**合并前的守门修复**
+
+- NOTICE 补登 sqlite-jdbc（含公有领域 SQLite 原生库）、PDFBox、POI + XMLBeans、curvesapi、
+  SparseBitSet、commons-*、log4j-api 的许可证与来源。
+- SQLite 原生库按平台打包在 jar 内，首次连接时解压到 `java.io.tmpdir`；加载失败（不支持架构、
+  只读/noexec 的 tmpdir）会抛 `UnsatisfiedLinkError`，现在聊天模块降级为不注册 `/api/chat/*`
+  （404），面板其余部分照常启动，半开的 store 会被关闭。
+- 先搜后答移出 `ChatTurnManager` 的全局锁：一次慢搜索不再把其它会话的发送 / 重生成 / 编辑卡满
+  20 秒，搜索完成后重新校验 busy 与每日额度。
+- 前端 TUI 品牌列表改为登录后读 `/api/brands/capabilities`，硬编码列表只做首屏兜底。
+- CI 的 build 增加 `web-shell` 分支触发，后续开发分支推送即跑 JDK 17/21。
+
+**已知限制**
+
+- 模型服务的 ON/OFF 开关、模型家族分组、拖拽排序未做；当前是状态点 + 默认星标。
+- OpenAI 原生 PDF `file` part 默认关闭，需要「模型能力」里显式打开。
+- 备份恢复仍是手动流程（停面板 → 替换 `<data>/chat` → 启动迁移），没有 UI。
+- 每日 token 上限是进程内按自然日计数，重启归零，且依赖供应商返回 usage。
+- 音频 / 视频附件只保存、不送模型；`openai-responses`、fork、KaTeX/Mermaid 未做。
+- 自动降级每个转码任务只走一格；Windows 上仍只有 NVIDIA 的 GPU 摘要（AMD/Intel 进程表未做）。
+
+**验证**
+
+- `./gradlew test`：1483 个用例、0 失败（254 个测试类；新增聊天 SQLite/SSE/路径/权限、
+  真实 SSE turn、TUI 适配器与 shell 拒绝等用例）。
+- `python3 scripts/api-smoke.py`：39 项全 PASS（含聊天初始化、终端四道闸、品牌能力）。
+- `npm run typecheck` / `npm run build` / `npm run compat`：绿。
+- `./gradlew shadowJar -PreleaseVersion=0.6.85`：成功，jar 69 MB。
 
 ## v0.6.84 — 2026-11-11 · 转码队列工作台：勾选、批量、排序、实时推送
 
