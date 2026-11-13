@@ -65,7 +65,8 @@ public final class OpenAiProtocol implements ChatProtocol {
                 body.addProperty("max_tokens", request.maxTokens());
             }
         }
-        applyReasoning(body, profile, request.model(), request.reasoningLevel(), request.reasoning());
+        applyReasoning(body, vendorFamily(profile.base()), request.model(),
+                request.reasoningLevel(), request.reasoning());
 
         JsonArray messages = new JsonArray();
         if (request.system() != null && !request.system().isBlank()) {
@@ -95,9 +96,24 @@ public final class OpenAiProtocol implements ChatProtocol {
     /// 思考挡位落到各家自己的参数上。只有用户显式选过才会走到这里；
     /// 认不出的端点沿用 OpenAI 的 `reasoning_effort`，`off` 不乱发参数，
     /// 免得把不认识的字段丢给中转站换一个 400。
-    private static void applyReasoning(JsonObject body, ChatEndpoints.Profile profile,
-                                       String model, @Nullable String level,
-                                       @Nullable ChatCapabilities.ReasoningMode mode) {
+    /// 端点属于哪家的语法。只认地址里的关键字，认不出就是 generic。
+    static String vendorFamily(@Nullable String base) {
+        String value = base == null ? "" : base.toLowerCase(java.util.Locale.ROOT);
+        if (value.contains("dashscope") || value.contains("aliyuncs")) {
+            return "dashscope";
+        }
+        if (value.contains("bigmodel") || value.contains("zhipu")) {
+            return "zhipu";
+        }
+        if (value.contains("api.deepseek.com")) {
+            return "deepseek";
+        }
+        return "generic";
+    }
+
+    static void applyReasoning(JsonObject body, String family, String model,
+                               @Nullable String level,
+                               @Nullable ChatCapabilities.ReasoningMode mode) {
         if (level == null || level.isBlank()) {
             return;
         }
@@ -107,10 +123,9 @@ public final class OpenAiProtocol implements ChatProtocol {
         String normalized = level.trim().toLowerCase(java.util.Locale.ROOT);
         boolean off = "off".equals(normalized) || "none".equals(normalized);
         boolean canDisable = mode == null || mode.canDisable();
-        String base = profile.base() == null ? "" : profile.base().toLowerCase(java.util.Locale.ROOT);
 
         // 阿里百炼 / 通义：enable_thinking + thinking_budget（compatible-mode 的扩展字段）
-        if (base.contains("dashscope") || base.contains("aliyuncs")) {
+        if ("dashscope".equals(family)) {
             if (off) {
                 if (!canDisable) {
                     return;
@@ -123,7 +138,7 @@ public final class OpenAiProtocol implements ChatProtocol {
             return;
         }
         // 智谱：thinking.type（GLM-4.5 起的 OpenAI 兼容接口）
-        if (base.contains("bigmodel") || base.contains("zhipu")) {
+        if ("zhipu".equals(family)) {
             if (off && !canDisable) {
                 return;
             }
@@ -132,8 +147,20 @@ public final class OpenAiProtocol implements ChatProtocol {
             body.add("thinking", thinking);
             return;
         }
-        // DeepSeek 的思考由模型名决定（reasoner / v4），没有挡位参数
-        if (base.contains("api.deepseek.com")) {
+        // DeepSeek：reasoning_effort = none/low/high/max；medium/xhigh 按官方文档映射
+        if ("deepseek".equals(family)) {
+            if (off) {
+                if (!canDisable) {
+                    return;
+                }
+                body.addProperty("reasoning_effort", "none");
+                return;
+            }
+            String canonical = deepseekEffort(normalized);
+            if (mode != null && !mode.efforts().isEmpty() && !mode.efforts().contains(canonical)) {
+                canonical = mapEffort(mode, normalized);
+            }
+            body.addProperty("reasoning_effort", canonical);
             return;
         }
         if (off) {
@@ -147,6 +174,16 @@ public final class OpenAiProtocol implements ChatProtocol {
             return;
         }
         body.addProperty("reasoning_effort", mapEffort(mode, normalized));
+    }
+
+    /// DeepSeek 只认 none/low/high/max：minimal 归 low，medium 和 xhigh 归 high（官方映射）。
+    private static String deepseekEffort(String level) {
+        return switch (level) {
+            case "minimal", "low" -> "low";
+            case "medium", "high", "xhigh" -> "high";
+            case "max" -> "max";
+            default -> level;
+        };
     }
 
     private static boolean allowsEffort(@Nullable ChatCapabilities.ReasoningMode mode, String value) {

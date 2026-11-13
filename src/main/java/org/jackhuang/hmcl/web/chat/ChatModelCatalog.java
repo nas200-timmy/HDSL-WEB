@@ -84,6 +84,10 @@ public final class ChatModelCatalog {
         cacheDir = chatDir;
         Path file = chatDir.resolve(FILE_NAME);
         if (!Files.isRegularFile(file)) {
+            // 指向一个没有缓存的目录就是「没有目录」：旧索引必须清掉，
+            // 否则换数据目录之后还会拿着上一份快照回答。
+            index = Map.of();
+            updatedAt = 0;
             return;
         }
         try (InputStream in = Files.newInputStream(file)) {

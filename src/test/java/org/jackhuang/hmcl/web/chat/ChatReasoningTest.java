@@ -172,6 +172,61 @@ class ChatReasoningTest {
     }
 
     @Test
+    void deepseekGetsReasoningEffortInItsOwnVocabulary() {
+        ChatCapabilities.ReasoningMode mode = new ChatCapabilities.ReasoningMode(
+                "effort", true, List.of("none", "low", "high", "max"), 0, 0, "vendor");
+        for (String[] pair : new String[][]{
+                {"low", "low"}, {"medium", "high"}, {"high", "high"},
+                {"xhigh", "high"}, {"max", "max"}, {"minimal", "low"}}) {
+            JsonObject body = new JsonObject();
+            OpenAiProtocol.applyReasoning(body, "deepseek", "deepseek-v4.1-flash-1017", pair[0], mode);
+            assertEquals(pair[1], body.get("reasoning_effort").getAsString(), pair[0]);
+        }
+        JsonObject off = new JsonObject();
+        OpenAiProtocol.applyReasoning(off, "deepseek", "deepseek-v4.1-flash-1017", "off", mode);
+        assertEquals("none", off.get("reasoning_effort").getAsString());
+
+        // 老的 reasoner 是纯思考模型：怎么选都不发
+        JsonObject forced = new JsonObject();
+        OpenAiProtocol.applyReasoning(forced, "deepseek", "deepseek-reasoner", "high",
+                ChatCapabilities.ReasoningMode.FORCED);
+        assertFalse(forced.has("reasoning_effort"));
+
+        assertEquals("deepseek", OpenAiProtocol.vendorFamily("https://api.deepseek.com"));
+        assertEquals("dashscope", OpenAiProtocol.vendorFamily("https://dashscope.aliyuncs.com/compatible-mode/v1"));
+        assertEquals("generic", OpenAiProtocol.vendorFamily("http://127.0.0.1:3199/v1"));
+    }
+
+    @Test
+    void deepseekCanAlwaysBeTurnedOffEvenWhenTheDirectoryForgetsNone() throws Exception {
+        java.nio.file.Path dir = Files.createTempDirectory("hdsl-deepseek-catalog");
+        Files.writeString(dir.resolve("models.dev.json"), """
+                {"updatedAt": 1, "models": {
+                  "deepseek-v4.1-flash": {"vision": true, "tools": true, "reasoning": true,
+                              "context": 1000000, "output": 64000, "reasoningKind": "effort",
+                              "reasoningValues": ["low", "high", "max"]}
+                }}""");
+        ChatModelCatalog.install(dir);
+        try {
+            ChatCapabilities.ReasoningMode mode = ChatCapabilities.reasoningMode(
+                    new ChatCapabilities.Capabilities(true, false, true, true, 1_000_000, 64_000, "catalog"),
+                    ChatEndpoints.OPENAI_COMPLETIONS, "https://api.deepseek.com", "deepseek-v4.1-flash");
+            assertEquals("effort", mode.kind());
+            assertTrue(mode.canDisable(), "官方文档保证 reasoning_effort=none 能关思考");
+            assertTrue(mode.efforts().contains("none"));
+            assertTrue(mode.efforts().contains("max"));
+        } finally {
+            ChatModelCatalog.install(Files.createTempDirectory("hdsl-deepseek-empty"));
+        }
+
+        // 没有目录时也要给全四档，不然菜单只剩一个「关」
+        ChatCapabilities.ReasoningMode offline = ChatCapabilities.reasoningMode(
+                new ChatCapabilities.Capabilities(true, false, true, true, 1_000_000, 64_000, "builtin"),
+                ChatEndpoints.OPENAI_COMPLETIONS, "https://api.deepseek.com", "deepseek-v4.1-flash");
+        assertEquals(List.of("none", "low", "high", "max"), offline.efforts());
+    }
+
+    @Test
     void sessionLevelPersistsAndCanBeCleared() throws Exception {
         java.nio.file.Path dir = Files.createTempDirectory("hdsl-session-level");
         ChatStore store = new ChatStore(dir);

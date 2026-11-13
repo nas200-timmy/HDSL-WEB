@@ -98,6 +98,11 @@
 - **目录下载时限**：models.dev 的 api.json 压缩后约 460 KB，但慢网络实测只有个位数 KB/s，
   原来的 20s / 90s 总时限永远拉不完，快照就一直冻着。供应商目录与聊天能力缓存的总时限
   都放宽到 5 分钟（后台线程跑，不挡页面）。
+- **DeepSeek 的思考挡位**：之前把 `api.deepseek.com` 当成「思考由模型名决定」，一个参数都不发，
+  于是 deepseek-v4.1-flash 这类模型只能按默认（high）思考，token 哗哗流。官方文档其实认
+  `reasoning_effort = none/low/high/max`（minimal→low、medium/xhigh→high）。现在挡位菜单对它
+  开放：关 = `none`，低/中/高/极高 按官方词表映射；目录没写 `none` 也照样给「关」，因为文档
+  保证它存在。老的 `deepseek-reasoner` 仍是强制思考，不给选择器。
 - **权限**：所有 `/api/chat/*` 对 agent ticket 关闭（放在 `GET → READ` 之前）；设置、备份、
   端点探测与能力覆盖要求开发者提权；聊天不接工具，模型无法触发面板操作。
 - 验证：`gradlew test` 全绿（新增 SQLite/SSE/路径/权限与一次真实 SSE turn 的端到端用例）；

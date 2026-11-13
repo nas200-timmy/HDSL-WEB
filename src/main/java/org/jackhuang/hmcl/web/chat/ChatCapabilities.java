@@ -111,9 +111,20 @@ public final class ChatCapabilities {
             return new ReasoningMode("toggle", true, List.of(), 0, 0,
                     entry == null ? "vendor" : "catalog");
         }
-        // DeepSeek 的思考由模型名决定，挡位是装饰
+        // DeepSeek 官方接口认 reasoning_effort = none/low/high/max（medium/xhigh 会被它
+        // 自己映射成 low/high），所以挡位是真的能控；只有老的 reasoner 是纯思考模型。
         if (endpoint.contains("api.deepseek.com")) {
-            return ReasoningMode.FORCED;
+            if (id.contains("reasoner")) {
+                return ReasoningMode.FORCED;
+            }
+            List<String> values = declared.isEmpty()
+                    ? new java.util.ArrayList<>(List.of("none", "low", "high", "max"))
+                    : new java.util.ArrayList<>(declared);
+            if (!values.contains("none")) {
+                values.add(0, "none");
+            }
+            return new ReasoningMode("effort", true, List.copyOf(values),
+                    0, 0, entry == null ? "vendor" : "catalog");
         }
         // 百炼用 enable_thinking + thinking_budget；对用户仍然呈现强度档
         if (endpoint.contains("dashscope") || endpoint.contains("aliyuncs")) {
