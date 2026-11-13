@@ -78,10 +78,52 @@ public final class OpenAiProtocol implements ChatProtocol {
         for (ChatMessage message : request.messages()) {
             JsonObject row = new JsonObject();
             row.addProperty("role", message.role());
-            row.add("content", content(message));
+            if ("tool".equals(message.role())) {
+                row.addProperty("tool_call_id", message.toolCallId() == null ? "" : message.toolCallId());
+                row.add("content", new com.google.gson.JsonPrimitive(
+                        message.text() == null ? "" : message.text()));
+                messages.add(row);
+                continue;
+            }
+            if (message.hasToolCalls() && (message.text() == null || message.text().isEmpty())) {
+                // 只带工具调用、没有正文的 assistant 消息：content 必须是 null，
+                // 有些严格网关会拒绝空字符串。
+                row.add("content", com.google.gson.JsonNull.INSTANCE);
+            } else {
+                row.add("content", content(message));
+            }
+            if (message.hasToolCalls()) {
+                JsonArray calls = new JsonArray();
+                for (ToolCall call : message.toolCalls()) {
+                    JsonObject item = new JsonObject();
+                    item.addProperty("id", call.id());
+                    item.addProperty("type", "function");
+                    JsonObject function = new JsonObject();
+                    function.addProperty("name", call.name());
+                    function.addProperty("arguments",
+                            call.arguments() == null || call.arguments().isBlank() ? "{}" : call.arguments());
+                    item.add("function", function);
+                    calls.add(item);
+                }
+                row.add("tool_calls", calls);
+            }
             messages.add(row);
         }
         body.add("messages", messages);
+        if (request.hasTools()) {
+            JsonArray tools = new JsonArray();
+            for (ToolSpec spec : request.tools()) {
+                JsonObject tool = new JsonObject();
+                tool.addProperty("type", "function");
+                JsonObject function = new JsonObject();
+                function.addProperty("name", spec.name());
+                function.addProperty("description", spec.description());
+                function.add("parameters", JsonParser.parseString(spec.parametersJson()));
+                tool.add("function", function);
+                tools.add(tool);
+            }
+            body.add("tools", tools);
+        }
 
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(profile.chatUri().toString()))
                 .timeout(Duration.ofMinutes(10))
@@ -297,8 +339,10 @@ public final class OpenAiProtocol implements ChatProtocol {
     public void read(InputStream body, ChatEventSink sink) throws IOException {
         String[] finish = {null};
         boolean[] done = {false};
+        java.util.Map<Integer, ToolCallBuilder> pending = new java.util.LinkedHashMap<>();
         SseParser.parse(body, (event, data) -> {
             if ("[DONE]".equals(data.trim())) {
+                emitToolCalls(sink, pending);
                 sink.done(finish[0] == null ? "stop" : finish[0]);
                 done[0] = true;
                 return false;
@@ -355,12 +399,74 @@ public final class OpenAiProtocol implements ChatProtocol {
                 if (!content.isEmpty()) {
                     sink.text(content);
                 }
+                JsonElement toolCalls = d.get("tool_calls");
+                if (toolCalls != null && toolCalls.isJsonArray()) {
+                    for (JsonElement item : toolCalls.getAsJsonArray()) {
+                        if (!item.isJsonObject()) {
+                            continue;
+                        }
+                        JsonObject call = item.getAsJsonObject();
+                        int index = intOf(call, "index", 0);
+                        ToolCallBuilder builder = pending.computeIfAbsent(index,
+                                key -> new ToolCallBuilder());
+                        String id = primitiveOf(call.get("id"));
+                        if (!id.isEmpty()) {
+                            builder.id = id;
+                        }
+                        JsonObject function = objectOf(call.get("function"));
+                        if (function != null) {
+                            String name = primitiveOf(function.get("name"));
+                            if (!name.isEmpty()) {
+                                builder.name = name;
+                            }
+                            JsonElement arguments = function.get("arguments");
+                            if (arguments != null && arguments.isJsonPrimitive()) {
+                                builder.arguments.append(arguments.getAsString());
+                            }
+                        }
+                    }
+                }
             }
             return true;
         });
         if (!done[0]) {
+            emitToolCalls(sink, pending);
             sink.done(finish[0] == null ? "stop" : finish[0]);
         }
+    }
+
+    private static void emitToolCalls(ChatEventSink sink,
+                                      java.util.Map<Integer, ToolCallBuilder> pending) {
+        if (pending.isEmpty()) {
+            return;
+        }
+        java.util.List<ToolCall> calls = new java.util.ArrayList<>();
+        for (ToolCallBuilder builder : pending.values()) {
+            if (builder.name.isEmpty()) {
+                continue;
+            }
+            String arguments = builder.arguments.toString();
+            calls.add(new ToolCall(builder.id.isEmpty() ? "call_" + calls.size() : builder.id,
+                    builder.name, arguments.isBlank() ? "{}" : arguments));
+        }
+        pending.clear();
+        if (!calls.isEmpty()) {
+            sink.toolCalls(calls);
+        }
+    }
+
+    private static final class ToolCallBuilder {
+        String id = "";
+        String name = "";
+        final StringBuilder arguments = new StringBuilder();
+    }
+
+    private static JsonObject objectOf(JsonElement element) {
+        return element != null && element.isJsonObject() ? element.getAsJsonObject() : null;
+    }
+
+    private static String primitiveOf(JsonElement element) {
+        return element != null && element.isJsonPrimitive() ? element.getAsString() : "";
     }
 
     private static int intOf(JsonObject object, String name, int fallback) {

@@ -946,6 +946,10 @@ public final class ChatService {
                         json.addProperty("searchQuery", query.getAsString());
                     }
                 }
+                JsonElement tools = usage.get("tools");
+                if (tools != null && tools.isJsonArray() && !tools.getAsJsonArray().isEmpty()) {
+                    json.add("tools", tools);
+                }
                 json.add("usage", usage);
             } catch (RuntimeException ignored) {
                 // Ignore a malformed usage blob.

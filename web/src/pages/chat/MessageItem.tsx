@@ -30,9 +30,17 @@ function AttachmentChip({ attachment, onOpen }: { attachment: ChatAttachment; on
   );
 }
 
+function providerLabel(provider: string): string {
+  const names: Record<string, string> = {
+    bocha: "博查", deepseek: "DeepSeek 搜索", zhipu: "智谱搜索",
+    tavily: "Tavily", brave: "Brave", exa: "Exa",
+  };
+  return names[provider] ?? "搜索";
+}
+
 /** 一条消息（一个节点）。variant 切换、两种重生成、编辑与删除都在这里。 */
 export function MessageItem({
-  node, assistant, user, editingNodeId, liveContent, liveReasoning, streaming,
+  node, assistant, user, editingNodeId, liveContent, liveReasoning, liveTool, streaming,
   onRegenerate, onEdit, onDelete, onSwitchVariant,
 }: {
   node: ChatNode;
@@ -41,6 +49,7 @@ export function MessageItem({
   editingNodeId?: string | null;
   liveContent?: string;
   liveReasoning?: string;
+  liveTool?: { query: string; provider: string; status: string; hits: number };
   streaming?: boolean;
   onRegenerate: (nodeId: string, mode: "in_place" | "truncate_after") => void;
   onEdit: (nodeId: string, text: string) => void;
@@ -56,6 +65,9 @@ export function MessageItem({
 
   const content = streaming && liveContent !== undefined ? liveContent : (message?.content ?? "");
   const reasoning = streaming && liveReasoning !== undefined ? liveReasoning : (message?.reasoning ?? "");
+  const toolRounds = streaming ? [] : (message?.tools ?? []);
+  const runningTool = streaming ? liveTool : undefined;
+  const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     if (streaming) setReasoningExpanded(true);
@@ -139,6 +151,53 @@ export function MessageItem({
             <span className="chat-dot" />
           </div>
         ) : null}
+        {!isUser && (toolRounds.length > 0 || runningTool) && (
+          <div className="chat-tools">
+            {toolRounds.map((round, index) => (
+              <div className="chat-tool-round" key={`${round.query}-${index}`}>
+                <button
+                  className={`chat-tool-chip${expandedTools[index] ? " expanded" : ""}`}
+                  onClick={() => setExpandedTools((value) => ({ ...value, [index]: !value[index] }))}
+                  title="点击查看这次搜索的来源"
+                >
+                  <span className="chat-tool-icon">🔍</span>
+                  <span className="chat-tool-query">{round.query}</span>
+                  <span className="chat-tool-meta">{providerLabel(round.provider)} · {round.hits?.length ?? 0} 条</span>
+                  <span className="chat-tool-chevron">{expandedTools[index] ? "收起" : "展开"}</span>
+                </button>
+                {expandedTools[index] && round.hits?.length > 0 && (
+                  <div className="chat-sources">
+                    {round.hits.map((source, sourceIndex) => (
+                      <a
+                        key={`${source.url}-${sourceIndex}`}
+                        className="chat-source"
+                        href={source.url}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        title={source.title}
+                      >
+                        <span className="chat-source-index">{sourceIndex + 1}</span>
+                        <span className="chat-source-title">{source.title}</span>
+                        {source.site && <span className="chat-source-site">{source.site}</span>}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+            {runningTool && (
+              <div className={`chat-tool-chip ${runningTool.status}`}>
+                <span className="chat-tool-icon">{runningTool.status === "running" ? "…" : "🔍"}</span>
+                <span className="chat-tool-query">{runningTool.query}</span>
+                <span className="chat-tool-meta">
+                  {runningTool.status === "running" ? "正在搜索"
+                    : runningTool.status === "failed" ? "搜索失败"
+                    : `${providerLabel(runningTool.provider)} · ${runningTool.hits} 条`}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
         {!isUser && message.sources && message.sources.length > 0 && (
           <div className="chat-sources">
             {message.sources.map((source, sourceIndex) => (

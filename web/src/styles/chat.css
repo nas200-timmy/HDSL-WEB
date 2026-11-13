@@ -3176,3 +3176,68 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* 模型自己发起的 web_search：一轮一条，点开看来源。 */
+.chat-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  max-width: 100%;
+}
+
+.chat-tool-round {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 5px 10px;
+  border: 1px solid var(--monet-outline-variant, rgba(0, 0, 0, 0.12));
+  border-radius: 999px;
+  background: var(--monet-surface-container-high);
+  color: var(--monet-on-surface-variant);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.chat-tool-chip.running {
+  border-style: dashed;
+  cursor: default;
+}
+
+.chat-tool-chip.failed {
+  border-color: var(--monet-error, #c0392b);
+  color: var(--monet-error, #c0392b);
+}
+
+.chat-tool-icon {
+  width: 14px;
+  text-align: center;
+  flex: none;
+}
+
+.chat-tool-query {
+  color: var(--monet-on-surface);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 42ch;
+}
+
+.chat-tool-meta {
+  flex: none;
+}
+
+.chat-tool-chevron {
+  flex: none;
+  color: var(--monet-primary);
+}

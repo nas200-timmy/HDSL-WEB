@@ -262,7 +262,7 @@ export function Composer({
           onClick={onToggleSearch}
           disabled={disabled}
           title={searchConfigured
-            ? (searchEnabled ? "联网搜索已开启，点击关闭" : "联网搜索：先搜网页再回答")
+            ? (searchEnabled ? "联网搜索已开启，点击关闭" : "联网搜索：允许模型查网页")
             : "还没配置搜索 key：聊天设置 → 联网搜索"}
         >
           <SearchIcon size={16} />

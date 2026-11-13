@@ -327,8 +327,9 @@ function SearchPanel({
     <div className="chat-settings-card">
       <div className="chat-settings-card-title">联网搜索</div>
       <div className="hint">
-        发送前先用搜索 API 查网页，把结果作为不可信资料交给模型，并让它用 [1][2] 标注来源。
-        按次计费，同一句话 1 小时内不会重复计费。
+        模型声明支持工具时会拿到一个只读的 <code>web_search</code>，自己决定搜什么、搜几次
+        （每轮最多 3 次）；模型不会用工具时，面板在发送前替它搜一次。结果都作为不可信资料
+        交给模型，并要求用 [1][2] 标注来源。按次计费，同一句话 1 小时内不会重复计费。
       </div>
       <div className="chat-settings-form-grid">
         <label className="form-row">

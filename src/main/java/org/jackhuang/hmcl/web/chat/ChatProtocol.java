@@ -49,10 +49,41 @@ public interface ChatProtocol {
             Double temperature,
             Integer maxTokens,
             String reasoningLevel,
-            @Nullable ChatCapabilities.ReasoningMode reasoning) {
+            @Nullable ChatCapabilities.ReasoningMode reasoning,
+            List<ToolSpec> tools) {
+
+        public ChatRequest(String model, String system, List<ChatMessage> messages,
+                           Double temperature, Integer maxTokens, String reasoningLevel,
+                           @Nullable ChatCapabilities.ReasoningMode reasoning) {
+            this(model, system, messages, temperature, maxTokens, reasoningLevel, reasoning,
+                    List.of());
+        }
+
+        public boolean hasTools() {
+            return !tools.isEmpty();
+        }
     }
 
-    record ChatMessage(String role, String text, List<Attachment> attachments) {
+    /// 下发给模型的工具声明。`parametersJson` 是 JSON Schema 文本，由适配器转成
+    /// 各家自己的形状（OpenAI 的 `function.parameters`、Anthropic 的 `input_schema`）。
+    record ToolSpec(String name, String description, String parametersJson) {
+    }
+
+    /// 模型请求的一次工具调用。`arguments` 是模型给的原始 JSON 文本，可能不是合法 JSON，
+    /// 执行方自己兜底。
+    record ToolCall(String id, String name, String arguments) {
+    }
+
+    record ChatMessage(String role, String text, List<Attachment> attachments,
+                       List<ToolCall> toolCalls, @Nullable String toolCallId) {
+
+        public ChatMessage(String role, String text, List<Attachment> attachments) {
+            this(role, text, attachments, List.of(), null);
+        }
+
+        public boolean hasToolCalls() {
+            return !toolCalls.isEmpty();
+        }
     }
 
     /// 一条附件在发送时的形态。`text` 是抽取出来的文字（Office/PDF/长文本），
@@ -71,6 +102,10 @@ public interface ChatProtocol {
         void done(String finishReason);
 
         void error(String code, String message, boolean retryable);
+
+        /// 本轮结束时模型请求的工具调用。默认空实现，适配器之外没人需要关心。
+        default void toolCalls(List<ToolCall> calls) {
+        }
     }
 
     /// 把非 2xx 的应答体压成一句话；key 已经不在 URL 上，正文里的版本号之类不需要。

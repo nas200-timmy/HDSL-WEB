@@ -87,6 +87,9 @@ public final class ChatTurnManager {
     private final Map<String, ActiveTurn> bySession = new ConcurrentHashMap<>();
     private final Map<String, ActiveTurn> byId = new ConcurrentHashMap<>();
     private final Map<String, RecentTurn> recent = new ConcurrentHashMap<>();
+    /// 每个会话最近一次是否开着联网搜索：重新生成/编辑时沿用，免得「重新生成就不搜了」。
+    private final Map<String, Boolean> searchSessions = new ConcurrentHashMap<>();
+    private static final int MAX_TOOL_ROUNDS = 3;
     private final java.util.concurrent.atomic.AtomicLong dailyTokens =
             new java.util.concurrent.atomic.AtomicLong();
     private volatile LocalDate dailyDate = LocalDate.now();
@@ -152,9 +155,12 @@ public final class ChatTurnManager {
                 throw new ChatException(400, "too_many_attachments",
                         "at most " + ChatAttachments.MAX_PER_MESSAGE + " attachments per message");
             }
-            // 先搜后答：搜索失败就直接失败，不留半条消息；没搜到结果就照常回答。
+            // 先搜后答：只有模型不会用工具时才由面板代搜。会工具的模型交给它自己决定搜什么，
+            // 否则同一句话要花两份检索费。
+            boolean delegated = search && resolved.capability.tools()
+                    && ChatSearchService.configured(settings);
             ChatSearchService.Result searchResult = null;
-            if (search) {
+            if (search && !delegated) {
                 searchResult = searches.search(settings, titleSource.isBlank() ? content : titleSource);
                 if (searchResult.hits().isEmpty()) {
                     searchResult = null;
@@ -175,10 +181,13 @@ public final class ChatTurnManager {
             }
             ActiveTurn turn = new ActiveTurn(sessionId, assistantNode.id(), assistantMessage.id(),
                     resolved, session.id(), 1);
+            turn.searchEnabled = search;
+            turn.preSearched = searchResult != null;
             if (searchResult != null) {
                 turn.searchBlock = ChatSearchService.systemBlock(searchResult);
                 turn.searchSourcesJson = searchResult.toJson().toString();
             }
+            searchSessions.put(sessionId, search);
             register(turn, systemPrompt(session));
             start(turn, contextBefore(sessionId, assistantNode.id()));
             Outcome outcome = new Outcome(turn.id, userNode, userMessage, assistantNode, assistantMessage);
@@ -247,6 +256,7 @@ public final class ChatTurnManager {
             }
             ActiveTurn turn = new ActiveTurn(sessionId, assistantNode.id(), assistantMessage.id(),
                     resolved, session.id(), 2);
+            turn.searchEnabled = searchSessions.getOrDefault(sessionId, false);
             register(turn, systemPrompt(session));
             start(turn, context);
             Outcome outcome = new Outcome(turn.id, null, null, assistantNode, assistantMessage);
@@ -303,6 +313,7 @@ public final class ChatTurnManager {
             }
             ActiveTurn turn = new ActiveTurn(sessionId, assistantNode.id(), assistantMessage.id(),
                     resolved, session.id(), 3);
+            turn.searchEnabled = searchSessions.getOrDefault(sessionId, false);
             register(turn, systemPrompt(session));
             start(turn, store.context(sessionId));
             Outcome outcome = new Outcome(turn.id, null, message, assistantNode, assistantMessage);
@@ -440,6 +451,14 @@ public final class ChatTurnManager {
 
     private void register(ActiveTurn turn, String systemPrompt) throws SQLException {
         turn.systemPrompt = systemPrompt;
+        String provider = settings.searchProvider();
+        boolean configured = ChatSearchService.configured(settings);
+        // 工具只在这三个条件同时成立时下发：用户开了搜索、key 配好了、模型声明支持 tools。
+        // 少一个就退回「先搜后答」或纯文本，免得把不认识的字段丢给端点换 400。
+        turn.toolEnabled = turn.searchEnabled && configured && turn.resolved.capability.tools();
+        turn.tools = turn.toolEnabled ? List.of(ChatSearchService.TOOL) : List.of();
+        turn.declaration = ChatSearchService.declaration(provider, configured, turn.searchEnabled,
+                turn.toolEnabled, turn.preSearched);
         ChatStore.Assistant assistant = assistantOf(turn);
         turn.temperature = assistant == null ? null : assistant.temperature();
         turn.maxTokens = assistant == null ? null : assistant.maxTokens();
@@ -470,33 +489,69 @@ public final class ChatTurnManager {
 
     private void run(ActiveTurn turn, List<ChatStore.Node> context) {
         try {
-            List<ChatProtocol.ChatMessage> messages = messages(context, turn.resolved);
-            String system = turn.systemPrompt;
-            if (turn.searchBlock != null) {
-                system = (system == null || system.isBlank() ? "" : system + "\n\n") + turn.searchBlock;
+            List<ChatProtocol.ChatMessage> messages = new ArrayList<>(messages(context, turn.resolved));
+            String system = systemWithSearch(turn);
+            for (int round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+                ChatProtocol.ChatRequest request = new ChatProtocol.ChatRequest(
+                        turn.resolved.model(), system, messages, turn.temperature,
+                        turn.maxTokens == null ? Math.min(turn.resolved.capability.maxOutput(), 8192)
+                                : turn.maxTokens,
+                        turn.reasoningLevel, turn.resolved.reasoning, turn.tools);
+                HttpRequest httpRequest = turn.resolved.protocol.prepare(turn.resolved.profile, request);
+                HttpResponse<InputStream> response = client.send(httpRequest,
+                        HttpResponse.BodyHandlers.ofInputStream());
+                if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    if (response.statusCode() == 400 && !turn.tools.isEmpty()
+                            && !turn.toolDowngraded) {
+                        // 有些中转站不认识 tools 字段，直接回 400。降级成纯提示词再试一次，
+                        // 用户只会看到答案，不会因为「端点不认识工具」整轮失败。
+                        turn.toolDowngraded = true;
+                        turn.tools = List.of();
+                        turn.declaration = ChatSearchService.declaration(
+                                settings.searchProvider(), true, true, false, turn.preSearched);
+                        system = systemWithSearch(turn);
+                        try {
+                            response.body().close();
+                        } catch (IOException ignored) {
+                            // Nothing to release.
+                        }
+                        // 降级重试不占工具轮次：for 的 update 会把 round 加回去。
+                        round--;
+                        continue;
+                    }
+                    ChatProtocol.emitHttpError(response.statusCode(), response.body(), turn);
+                    return;
+                }
+                turn.upstream = response.body();
+                if (turn.cancelled) {
+                    finish(turn, "stopped", "cancelled");
+                    return;
+                }
+                turn.roundStart = turn.content.length();
+                turn.roundDone = false;
+                synchronized (turn.lock) {
+                    turn.pendingCalls = new ArrayList<>();
+                }
+                turn.resolved.protocol.read(turn.upstream, turn);
+                closeUpstream(turn);
+                if (turn.finished) {
+                    return;
+                }
+                if (turn.cancelled) {
+                    finish(turn, "stopped", "cancelled");
+                    return;
+                }
+                List<ChatProtocol.ToolCall> calls;
+                synchronized (turn.lock) {
+                    calls = List.copyOf(turn.pendingCalls);
+                }
+                if (calls.isEmpty() || turn.tools.isEmpty() || round >= MAX_TOOL_ROUNDS) {
+                    finish(turn, "done", turn.finishReason == null ? "stop" : turn.finishReason);
+                    return;
+                }
+                appendToolRound(turn, messages, calls);
             }
-            ChatProtocol.ChatRequest request = new ChatProtocol.ChatRequest(
-                    turn.resolved.model(), system, messages, turn.temperature,
-                    turn.maxTokens == null ? Math.min(turn.resolved.capability.maxOutput(), 8192)
-                            : turn.maxTokens,
-                    turn.reasoningLevel, turn.resolved.reasoning);
-            HttpRequest httpRequest = turn.resolved.protocol.prepare(turn.resolved.profile, request);
-            HttpResponse<InputStream> response = client.send(httpRequest,
-                    HttpResponse.BodyHandlers.ofInputStream());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                ChatProtocol.emitHttpError(response.statusCode(), response.body(), turn);
-                return;
-            }
-            turn.upstream = response.body();
-            if (turn.cancelled) {
-                finish(turn, "stopped", "cancelled");
-                return;
-            }
-            turn.resolved.protocol.read(turn.upstream, turn);
-            if (!turn.finished) {
-                finish(turn, turn.cancelled ? "stopped" : "done",
-                        turn.finishReason == null ? "stop" : turn.finishReason);
-            }
+            finish(turn, "done", "tool_rounds_exhausted");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             finish(turn, "stopped", "cancelled");
@@ -522,6 +577,103 @@ public final class ChatTurnManager {
                 }
             }
         }
+    }
+
+    /// 系统提示 = 助手自己的提示 + 搜索能力声明 + 预搜结果。三段都是可选的。
+    private static String systemWithSearch(ActiveTurn turn) {
+        StringBuilder system = new StringBuilder(turn.systemPrompt == null ? "" : turn.systemPrompt);
+        appendBlock(system, turn.declaration);
+        appendBlock(system, turn.searchBlock);
+        return system.toString();
+    }
+
+    private static void appendBlock(StringBuilder system, @Nullable String block) {
+        if (block == null || block.isBlank()) {
+            return;
+        }
+        if (!system.isEmpty()) {
+            system.append("\n\n");
+        }
+        system.append(block);
+    }
+
+    private static void closeUpstream(ActiveTurn turn) {
+        InputStream upstream = turn.upstream;
+        turn.upstream = null;
+        if (upstream != null) {
+            try {
+                upstream.close();
+            } catch (IOException ignored) {
+                // Done.
+            }
+        }
+    }
+
+    /// 把这一轮已经输出的文字作为 assistant 消息，连同模型的 tool_calls 一起回灌；
+    /// 工具结果紧跟着作为 tool 消息。这些只在内存里走，不写进会话历史。
+    private void appendToolRound(ActiveTurn turn, List<ChatProtocol.ChatMessage> messages,
+                                 List<ChatProtocol.ToolCall> calls) {
+        String text = turn.roundStart >= 0 && turn.roundStart <= turn.content.length()
+                ? turn.content.substring(turn.roundStart) : "";
+        messages.add(new ChatProtocol.ChatMessage("assistant", text, List.of(), calls, null));
+        for (ChatProtocol.ToolCall call : calls) {
+            String result = executeTool(turn, call);
+            messages.add(new ChatProtocol.ChatMessage("tool", result, List.of(), List.of(),
+                    call.id()));
+        }
+    }
+
+    private String executeTool(ActiveTurn turn, ChatProtocol.ToolCall call) {
+        if (!ChatSearchService.TOOL.name().equals(call.name())) {
+            return "未知工具：" + call.name() + "。本轮只有 web_search 可用。";
+        }
+        String query = queryOf(call.arguments());
+        if (query.isBlank()) {
+            return "缺少 query 参数；请用 {\"query\":\"搜索词\"} 重新调用。";
+        }
+        publishTool(turn, query, "running", null);
+        try {
+            ChatSearchService.Result result = searches.search(settings, query);
+            turn.toolRounds.add(result.toJson());
+            publishTool(turn, query, "done", result);
+            return ChatSearchService.toolResult(result);
+        } catch (ChatException e) {
+            publishTool(turn, query, "failed", null);
+            return "搜索失败：" + e.getMessage()
+                    + "。不要重复同一个查询；可以说明无法联网后直接回答。";
+        }
+    }
+
+    private static String queryOf(@Nullable String arguments) {
+        if (arguments == null || arguments.isBlank()) {
+            return "";
+        }
+        try {
+            com.google.gson.JsonElement parsed = com.google.gson.JsonParser.parseString(arguments);
+            if (parsed.isJsonObject()) {
+                com.google.gson.JsonElement query = parsed.getAsJsonObject().get("query");
+                if (query != null && query.isJsonPrimitive()) {
+                    return query.getAsString().trim();
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // Invalid JSON: fall through to the plain-text fallback.
+        }
+        // 有些模型会把参数包成 ```json ... ```，或者干脆给一段裸文本。
+        return arguments.replaceAll("(?s)```[a-zA-Z]*", "").replace("```", "").trim();
+    }
+
+    private void publishTool(ActiveTurn turn, String query, String status,
+                             @Nullable ChatSearchService.Result result) {
+        JsonObject event = event("chat-tool", turn);
+        event.addProperty("query", query);
+        event.addProperty("status", status);
+        event.addProperty("provider", result == null ? settings.searchProvider() : result.provider());
+        if (result != null) {
+            event.addProperty("hits", result.hits().size());
+            event.add("sources", result.toJson());
+        }
+        publish(turn.sessionId, event);
     }
 
     // ------------------------------------------------------------ messages --
@@ -712,9 +864,11 @@ public final class ChatTurnManager {
         publish(turn.sessionId, event);
     }
 
+    /// 协议层说「这一轮流完了」。有 tool_calls 时 run() 会接着发下一轮，
+    /// 所以这里只记状态，不落库。
     private void done(ActiveTurn turn, String reason) {
         turn.finishReason = reason;
-        finish(turn, turn.cancelled ? "stopped" : "done", reason);
+        turn.roundDone = true;
     }
 
     private void error(ActiveTurn turn, String code, String message, boolean retryable) {
@@ -822,7 +976,8 @@ public final class ChatTurnManager {
     }
 
     private static @Nullable String usageJson(ActiveTurn turn) {
-        if (turn.inputTokens == 0 && turn.outputTokens == 0 && turn.searchSourcesJson == null) {
+        if (turn.inputTokens == 0 && turn.outputTokens == 0 && turn.searchSourcesJson == null
+                && turn.toolRounds.isEmpty()) {
             return null;
         }
         JsonObject usage = new JsonObject();
@@ -830,6 +985,11 @@ public final class ChatTurnManager {
         usage.addProperty("output", turn.outputTokens);
         if (turn.searchSourcesJson != null) {
             usage.add("search", com.google.gson.JsonParser.parseString(turn.searchSourcesJson));
+        }
+        if (!turn.toolRounds.isEmpty()) {
+            com.google.gson.JsonArray tools = new com.google.gson.JsonArray();
+            turn.toolRounds.forEach(tools::add);
+            usage.add("tools", tools);
         }
         return usage.toString();
     }
@@ -962,6 +1122,16 @@ public final class ChatTurnManager {
         volatile String reasoningLevel;
         volatile String searchBlock;
         volatile String searchSourcesJson;
+        volatile boolean searchEnabled;
+        volatile boolean preSearched;
+        volatile boolean toolEnabled;
+        volatile boolean toolDowngraded;
+        volatile List<ChatProtocol.ToolSpec> tools = List.of();
+        volatile String declaration = "";
+        volatile List<ChatProtocol.ToolCall> pendingCalls = List.of();
+        volatile boolean roundDone;
+        volatile int roundStart;
+        final List<JsonObject> toolRounds = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         ActiveTurn(String sessionId, String nodeId, String messageId, Resolved resolved,
                    String sessionKey, int attemptNo) {
@@ -993,6 +1163,19 @@ public final class ChatTurnManager {
         @Override
         public void done(String reason) {
             ChatTurnManager.this.done(this, reason);
+        }
+
+        @Override
+        public void toolCalls(List<ChatProtocol.ToolCall> calls) {
+            if (calls == null || calls.isEmpty()) {
+                return;
+            }
+            synchronized (lock) {
+                if (finished || cancelled) {
+                    return;
+                }
+                pendingCalls.addAll(calls);
+            }
         }
 
         @Override

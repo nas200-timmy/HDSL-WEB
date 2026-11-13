@@ -41,7 +41,7 @@ function requestId(): string {
 }
 
 /** 流式气泡：会话还没刷新到新节点时先画在列表末尾。 */
-function LiveBubble({ assistant, text, reasoning }: { assistant: ChatAssistant | null; text: string; reasoning: string }) {
+function LiveBubble({ assistant, text, reasoning, tool }: { assistant: ChatAssistant | null; text: string; reasoning: string; tool?: { query: string; provider: string; status: string; hits: number } }) {
   return (
     <div className="chat-msg assistant">
       <div className="chat-msg-avatar"><AvatarView value={assistant?.avatar} /></div>
@@ -65,6 +65,19 @@ function LiveBubble({ assistant, text, reasoning }: { assistant: ChatAssistant |
         ) : (
           <div className="chat-bubble chat-thinking">
             <span className="chat-dot" /><span className="chat-dot" /><span className="chat-dot" />
+          </div>
+        )}
+        {tool && (
+          <div className="chat-tools">
+            <div className={`chat-tool-chip ${tool.status}`}>
+              <span className="chat-tool-icon">{tool.status === "running" ? "…" : "🔍"}</span>
+              <span className="chat-tool-query">{tool.query}</span>
+              <span className="chat-tool-meta">
+                {tool.status === "running" ? "正在搜索"
+                  : tool.status === "failed" ? "搜索失败"
+                  : `${tool.hits} 条结果`}
+              </span>
+            </div>
           </div>
         )}
       </div>
@@ -93,7 +106,7 @@ export function ChatPage() {
   const [liveUsage, setLiveUsage] = useState<{ sessionId: string; input: number; output: number } | null>(null);
   const [searchEnabled, setSearchEnabled] = useState(false);
   const [searchStatus, setSearchStatus] = useState<{ configured: boolean } | null>(null);
-  const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string } | null>(null);
+  const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string; tool?: { query: string; provider: string; status: string; hits: number } } | null>(null);
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ChatSessionSummary | null>(null);
@@ -304,6 +317,14 @@ export function ChatPage() {
       }
       if (event.type === "chat-usage") {
         setLiveUsage({ sessionId: event.sessionId, input: event.input, output: event.output });
+        return;
+      }
+      if (event.type === "chat-tool") {
+        setLive((previous) => {
+          if (previous && previous.turnId !== event.turnId) return previous;
+          const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming" };
+          return { ...base, tool: { query: event.query, provider: event.provider ?? "", status: event.status, hits: event.hits ?? 0 } };
+        });
         return;
       }
       if (event.type === "chat-delta" || event.type === "chat-reasoning") {
@@ -934,6 +955,7 @@ export function ChatPage() {
                       streaming={isLive}
                       liveContent={isLive ? live?.text : undefined}
                       liveReasoning={isLive ? live?.reasoning : undefined}
+                      liveTool={isLive ? live?.tool : undefined}
                       onRegenerate={(nodeId, mode) => setConfirmRegenerate({ nodeId, mode })}
                       onEdit={(nodeId, text) => startEdit(nodeId, text)}
                       onDelete={(nodeId) => setDeleteNodeTarget(nodeId)}
@@ -946,7 +968,7 @@ export function ChatPage() {
               });
             })()}
             {live && !liveAttached && (
-              <LiveBubble assistant={currentAssistant} text={live.text} reasoning={live.reasoning} />
+              <LiveBubble assistant={currentAssistant} text={live.text} reasoning={live.reasoning} tool={live.tool} />
             )}
           </div>
         )}

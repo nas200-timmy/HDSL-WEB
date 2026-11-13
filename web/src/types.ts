@@ -567,6 +567,7 @@ export type WsEvent =
   | { type: "chat-delta"; sessionId: string; turnId: string; seq: number; text: string }
   | { type: "chat-reasoning"; sessionId: string; turnId: string; seq: number; text: string }
   | { type: "chat-usage"; sessionId: string; turnId: string; input: number; output: number }
+  | { type: "chat-tool"; sessionId: string; turnId: string; query: string; status: "running" | "done" | "failed" | string; provider?: string; hits?: number; sources?: ChatSearchResult }
   | { type: "chat-turn-finished"; sessionId: string; turnId: string; messageId: string; status: string; finishReason: string; input?: number; output?: number }
   | { type: "chat-error"; sessionId: string; turnId: string; code: string; message: string; retryable: boolean }
   | { type: "chat-sessions-changed" | "chat-assistants-changed" | "chat-settings-changed" | "chat-backups-changed"; sessionId?: string };
@@ -1095,6 +1096,8 @@ export interface ChatMessage {
   usage?: { input?: number; output?: number };
   /** 这一轮联网搜索的来源（有搜索时才有） */
   sources?: ChatSearchHit[];
+  /** 模型自己调用 web_search 的每一轮（按时间顺序） */
+  tools?: ChatToolRound[];
   searchQuery?: string;
   attachments: ChatAttachment[];
 }
@@ -1148,6 +1151,13 @@ export interface ChatSearchStatus {
 }
 
 export interface ChatSearchResult {
+  query: string;
+  provider: string;
+  hits: ChatSearchHit[];
+}
+
+/** 模型自己发起的一次 web_search（每轮对话最多 3 次）。 */
+export interface ChatToolRound {
   query: string;
   provider: string;
   hits: ChatSearchHit[];

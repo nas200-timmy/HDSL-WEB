@@ -79,18 +79,19 @@ public final class AnthropicProtocol implements ChatProtocol {
             body.addProperty("temperature", request.temperature());
         }
 
-        // Anthropic 要求 user/assistant 交替，且第一条是 user。历史里空回复、
-        // 连续同角色都可能出现（停止、错误重试），这里合并/丢弃而不是把 400 丢给用户。
+        // 历史里空回复、连续同角色都可能出现（停止、错误重试），
+        // 这里合并/丢弃而不是把 400 丢给用户。
         List<ChatMessage> merged = new ArrayList<>();
         for (ChatMessage message : request.messages()) {
-            if ("assistant".equals(message.role())
+            if ("assistant".equals(message.role()) && !message.hasToolCalls()
                     && (message.text() == null || message.text().isBlank())) {
                 continue;
             }
             if (merged.isEmpty() && "assistant".equals(message.role())) {
                 continue;
             }
-            if (!merged.isEmpty() && merged.get(merged.size() - 1).role().equals(message.role())) {
+            if (!merged.isEmpty() && merged.get(merged.size() - 1).role().equals(message.role())
+                    && !message.hasToolCalls()) {
                 ChatMessage previous = merged.remove(merged.size() - 1);
                 List<Attachment> attachments = new ArrayList<>(previous.attachments());
                 attachments.addAll(message.attachments());
@@ -108,11 +109,24 @@ public final class AnthropicProtocol implements ChatProtocol {
         JsonArray messages = new JsonArray();
         for (ChatMessage message : merged) {
             JsonObject row = new JsonObject();
-            row.addProperty("role", message.role());
+            // Anthropic 没有 tool 角色：工具结果是一条 role=user、content 为
+            // tool_result 块的消息。
+            row.addProperty("role", "tool".equals(message.role()) ? "user" : message.role());
             row.add("content", content(message));
             messages.add(row);
         }
         body.add("messages", messages);
+        if (request.hasTools()) {
+            JsonArray tools = new JsonArray();
+            for (ToolSpec spec : request.tools()) {
+                JsonObject tool = new JsonObject();
+                tool.addProperty("name", spec.name());
+                tool.addProperty("description", spec.description());
+                tool.add("input_schema", JsonParser.parseString(spec.parametersJson()));
+                tools.add(tool);
+            }
+            body.add("tools", tools);
+        }
 
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(profile.chatUri().toString()))
                 .timeout(Duration.ofMinutes(10))
@@ -169,6 +183,15 @@ public final class AnthropicProtocol implements ChatProtocol {
 
     private static JsonArray content(ChatMessage message) throws IOException {
         JsonArray parts = new JsonArray();
+        if ("tool".equals(message.role())) {
+            JsonObject block = new JsonObject();
+            block.addProperty("type", "tool_result");
+            block.addProperty("tool_use_id",
+                    message.toolCallId() == null ? "" : message.toolCallId());
+            block.addProperty("content", message.text() == null ? "" : message.text());
+            parts.add(block);
+            return parts;
+        }
         StringBuilder text = new StringBuilder(message.text() == null ? "" : message.text());
         for (Attachment attachment : message.attachments()) {
             if ("image".equals(attachment.kind())) {
@@ -202,6 +225,14 @@ public final class AnthropicProtocol implements ChatProtocol {
             block.addProperty("text", text.toString());
             parts.add(block);
         }
+        for (ToolCall call : message.toolCalls()) {
+            JsonObject block = new JsonObject();
+            block.addProperty("type", "tool_use");
+            block.addProperty("id", call.id());
+            block.addProperty("name", call.name());
+            block.add("input", parseArguments(call.arguments()));
+            parts.add(block);
+        }
         if (parts.isEmpty()) {
             JsonObject block = new JsonObject();
             block.addProperty("type", "text");
@@ -211,10 +242,26 @@ public final class AnthropicProtocol implements ChatProtocol {
         return parts;
     }
 
+    /// tool_use 的 input 必须是对象；模型偶尔给出非法 JSON，退回空对象而不是让整轮 400。
+    private static JsonObject parseArguments(@Nullable String arguments) {
+        if (arguments != null && !arguments.isBlank()) {
+            try {
+                JsonElement parsed = JsonParser.parseString(arguments);
+                if (parsed.isJsonObject()) {
+                    return parsed.getAsJsonObject();
+                }
+            } catch (RuntimeException ignored) {
+                // Fall through to an empty object.
+            }
+        }
+        return new JsonObject();
+    }
+
     @Override
     public void read(InputStream body, ChatEventSink sink) throws IOException {
         String[] stop = {null};
         boolean[] done = {false};
+        java.util.Map<Integer, ToolCallBuilder> pending = new java.util.LinkedHashMap<>();
         SseParser.parse(body, (event, data) -> {
             if (data.isBlank()) {
                 return true;
@@ -260,6 +307,12 @@ public final class AnthropicProtocol implements ChatProtocol {
                         if (!thinking.isEmpty()) {
                             sink.reasoning(thinking);
                         }
+                    } else if ("input_json_delta".equals(deltaType)) {
+                        ToolCallBuilder builder = pending.get(intOf(json, "index", 0));
+                        String partial = stringOf(delta.get("partial_json"));
+                        if (builder != null && !partial.isEmpty()) {
+                            builder.arguments.append(partial);
+                        }
                     }
                 }
                 case "message_delta" -> {
@@ -279,6 +332,7 @@ public final class AnthropicProtocol implements ChatProtocol {
                     }
                 }
                 case "message_stop" -> {
+                    emitToolCalls(sink, pending);
                     sink.done(stop[0] == null ? "stop" : stop[0]);
                     done[0] = true;
                     return false;
@@ -293,8 +347,17 @@ public final class AnthropicProtocol implements ChatProtocol {
                     sink.error("provider_error", message, retryable);
                     return false;
                 }
-                case "ping", "content_block_start", "content_block_stop" -> {
+                case "ping", "content_block_stop" -> {
                     // Nothing to forward.
+                }
+                case "content_block_start" -> {
+                    JsonObject block = objectOf(json.get("content_block"));
+                    if (block != null && "tool_use".equals(stringOf(block.get("type")))) {
+                        ToolCallBuilder builder = new ToolCallBuilder();
+                        builder.id = stringOf(block.get("id"));
+                        builder.name = stringOf(block.get("name"));
+                        pending.put(intOf(json, "index", 0), builder);
+                    }
                 }
                 default -> {
                     // Unknown event types are ignored.
@@ -303,8 +366,35 @@ public final class AnthropicProtocol implements ChatProtocol {
             return true;
         });
         if (!done[0]) {
+            emitToolCalls(sink, pending);
             sink.done(stop[0] == null ? "stop" : stop[0]);
         }
+    }
+
+    private static void emitToolCalls(ChatEventSink sink,
+                                      java.util.Map<Integer, ToolCallBuilder> pending) {
+        if (pending.isEmpty()) {
+            return;
+        }
+        List<ToolCall> calls = new ArrayList<>();
+        for (ToolCallBuilder builder : pending.values()) {
+            if (builder.name.isEmpty()) {
+                continue;
+            }
+            String arguments = builder.arguments.toString();
+            calls.add(new ToolCall(builder.id.isEmpty() ? "toolu_" + calls.size() : builder.id,
+                    builder.name, arguments.isBlank() ? "{}" : arguments));
+        }
+        pending.clear();
+        if (!calls.isEmpty()) {
+            sink.toolCalls(calls);
+        }
+    }
+
+    private static final class ToolCallBuilder {
+        String id = "";
+        String name = "";
+        final StringBuilder arguments = new StringBuilder();
     }
 
     private static JsonObject objectOf(JsonElement element) {
