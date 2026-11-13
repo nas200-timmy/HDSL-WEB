@@ -131,15 +131,20 @@ public final class ChatTurnManager {
                 return previous.outcome();
             }
         }
+        Resolved resolved;
+        List<String> ids;
+        String content;
+        String titleSource;
+        boolean delegated;
         synchronized (this) {
             if (bySession.containsKey(sessionId)) {
                 throw new ChatException(409, "chat_busy", "this session is already streaming; stop it first");
             }
             checkDailyLimit();
-            Resolved resolved = resolve(session, model, account);
-            List<String> ids = new ArrayList<>(attachmentIds);
-            String content = text == null ? "" : text;
-            String titleSource = content;
+            resolved = resolve(session, model, account);
+            ids = new ArrayList<>(attachmentIds);
+            content = text == null ? "" : text;
+            titleSource = content;
             if (content.isBlank() && ids.isEmpty()) {
                 throw new ChatException(400, "empty_message", "a message needs text or an attachment");
             }
@@ -158,15 +163,26 @@ public final class ChatTurnManager {
             }
             // 先搜后答：只有模型不会用工具时才由面板代搜。会工具的模型交给它自己决定搜什么，
             // 否则同一句话要花两份检索费。
-            boolean delegated = search && resolved.capability.tools()
+            delegated = search && resolved.capability.tools()
                     && ChatSearchService.configured(settings);
-            ChatSearchService.Result searchResult = null;
-            if (search && !delegated) {
-                searchResult = searches.search(settings, titleSource.isBlank() ? content : titleSource);
-                if (searchResult.hits().isEmpty()) {
-                    searchResult = null;
-                }
+        }
+        // The provider call can take the whole search timeout, so it must not hold
+        // the manager lock: one slow provider would otherwise stall every other
+        // session's send / regenerate / edit for 20 seconds.
+        ChatSearchService.Result searchResult = null;
+        if (search && !delegated) {
+            searchResult = searches.search(settings, titleSource.isBlank() ? content : titleSource);
+            if (searchResult.hits().isEmpty()) {
+                searchResult = null;
             }
+        }
+        synchronized (this) {
+            // A second request may have won the race while the search was in
+            // flight, and the daily budget may have been spent by another turn.
+            if (bySession.containsKey(sessionId)) {
+                throw new ChatException(409, "chat_busy", "this session is already streaming; stop it first");
+            }
+            checkDailyLimit();
             ChatStore.Node userNode = store.appendUserNode(sessionId, content, resolved.model(), ids);
             ChatStore.Message userMessage = userNode.active();
             if (userMessage == null) {

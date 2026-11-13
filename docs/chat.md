@@ -225,6 +225,12 @@ interface ChatProtocol {
 
 ## 6. SQLite 存储
 
+`sqlite-jdbc` 的 native 库按平台打包在 jar 的 `org/sqlite/native/<os>/<arch>/` 下（Linux
+glibc/musl、macOS、Windows、FreeBSD），首次连接时解压到 `java.io.tmpdir` 再加载，
+`chat.db` 是首次连接时创建的，不需要外部 SQLite，也不需要预建库。如果加载失败
+（不支持的架构、只读或 noexec 的 tmpdir），面板**跳过聊天模块继续启动**，`/api/chat/*`
+按 404 处理，其它功能不受影响。
+
 ### 6.1 模型
 
 采用 RikkaHub 式「线性节点 + 每个节点多版本」，不做任意 parent_id 树：
@@ -637,7 +643,7 @@ web/src/pages/chat/
 - 速率限制：每会话并发 1、每用户每日 token 上限（可配置）。
 - 审计：记录 turn、模型、usage、错误；不记录 key。
 - 备份目录 0700；备份包含敏感内容，不自动外传。
-- 聊天页不持有面板写权限；v1 无工具，模型无法触发面板操作。
+- 聊天页不持有面板写权限；模型只有只读的 `search_web` / `scrape_web`（见 §12.5），不能触发任何面板操作。
 
 ### 13.1 权限与 agent 边界
 

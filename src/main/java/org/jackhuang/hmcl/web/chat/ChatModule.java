@@ -36,11 +36,17 @@ public final class ChatModule implements AutoCloseable {
     }
 
     public static ChatModule create(ServerConfig config, EventBus bus) {
+        ChatStore store = null;
         try {
-            ChatStore store = new ChatStore(config.dataDir);
+            store = new ChatStore(config.dataDir);
             ChatService service = new ChatService(store, bus, config.dataDir);
             return new ChatModule(store, service);
         } catch (SQLException | java.io.IOException e) {
+            // A half-open store keeps the WAL file handle; close it before the
+            // caller decides to run without chat.
+            if (store != null) {
+                store.close();
+            }
             throw new IllegalStateException("Cannot open the chat store under "
                     + config.dataDir.resolve("chat"), e);
         }
