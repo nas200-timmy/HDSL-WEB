@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router-dom";
+import { isTuiBrand, setTuiBrands } from "./brandKind";
 import { ErrorIcon, InfoIcon } from "./components/icons";
 import { Decorator } from "./components/Decorator";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -8,6 +9,8 @@ import { OfflineBanner } from "./components/OfflineBanner";
 import { SnackbarHost } from "./components/Snackbar";
 import { ElevationHost } from "./components/ElevationDialog";
 import { AccountsPage } from "./pages/AccountsPage";
+import { ChatPage } from "./pages/ChatPage";
+import { ChatSettingsPage } from "./pages/chat/ChatSettingsPage";
 import { DownloadPage } from "./pages/DownloadPage";
 import { InstallInstanceWizard } from "./pages/InstallInstanceWizard";
 import { NewInstancePage } from "./pages/NewInstancePage";
@@ -72,7 +75,8 @@ function RequireAuth() {
  *  （URL 换成 `/instances?view=brands&brand=…`，页面不跳第二层）。 */
 function BrandDeepLink() {
   const { brand } = useParams();
-  return <Navigate to={`/instances?view=brands&brand=${encodeURIComponent(brand ?? "")}`} replace />;
+  const encoded = encodeURIComponent(brand ?? "");
+  return <Navigate to={`/instances?view=${isTuiBrand(brand ?? "") ? "tui" : "brands"}&brand=${encoded}`} replace />;
 }
 
 /** 已登录区域：浏览器内窗口（Decorator）+ 路由动画容器。
@@ -271,6 +275,17 @@ export default function App() {
     if (s.username) void refreshServerVersion();
   }, [s.username]);
 
+  // 品牌形态以服务端 Brand.kind() 为准：首屏用 brandKind.ts 的兜底列表，
+  // 能力接口回来后替换，新增 TUI 品牌不需要再改前端。
+  useEffect(() => {
+    if (!s.username) return;
+    void api.brandCapabilities()
+      .then((caps) => setTuiBrands(caps.brands.filter((b) => b.kind === "tui").map((b) => b.id)))
+      .catch(() => {
+        // 能力查询失败时保留兜底列表，不影响页面本身。
+      });
+  }, [s.username]);
+
   return (
     <>
       <Routes>
@@ -315,6 +330,8 @@ export default function App() {
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/transcode" element={<TranscodePage />} />
+            <Route path="/chat" element={<ChatPage />} />
+            <Route path="/chat/settings" element={<ChatSettingsPage />} />
             {/* 旧版路径兼容 */}
             <Route path="/packs" element={<Navigate to="/download?tab=modpack" replace />} />
             <Route path="/plugins" element={<Navigate to="/download?tab=plugin" replace />} />

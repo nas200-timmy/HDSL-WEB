@@ -1,4 +1,5 @@
 import { useLocation, useNavigate, Navigate } from "react-router-dom";
+import { isTuiBrand } from "../brandKind";
 import { BrandIcon } from "../components/BrandIcon";
 import { I18N } from "../i18n";
 import type { BrandId } from "../types";
@@ -11,6 +12,9 @@ const BRANDS: { id: BrandId | "zcode"; title: string; description: string }[] = 
   { id: "octop", title: I18N["dsh.brand.octop"], description: "腾讯云 Octop：多用户 AI 助手面板，自带 Python 运行时。" },
   { id: "hermes", title: I18N["dsh.brand.hermes"], description: "Hermes Agent：带 OpenAI 兼容网关的网页仪表盘。" },
   { id: "pi-web", title: I18N["dsh.brand.pi-web"], description: "Pi Coding Agent 的网页版；终端为主，网页是添头。" },
+  { id: "qwen", title: I18N["dsh.brand.qwen"], description: "Qwen Code 的终端 TUI；面板负责安装与实例隔离，没有网页。" },
+  { id: "mimo", title: I18N["dsh.brand.mimo"], description: "MiMo Code 的终端 TUI；面板负责安装与实例隔离，没有网页。" },
+  { id: "minimax", title: I18N["dsh.brand.minimax"], description: "MiniMax Code 的终端 TUI；面板负责安装与实例隔离，没有网页。" },
   { id: "zcode", title: I18N["dsh.brand.zcode"], description: "实验品类：先进 ZCode 标签构建发行包，再创建实例。" },
 ];
 
@@ -66,7 +70,9 @@ export function NewInstancePage() {
             key={brand.id}
             className="card ripple-host"
             style={{ padding: 14, textAlign: "left", display: "grid", gap: 6 }}
-            onClick={() => nav(`/instances?view=brands&brand=${brand.id}&create=1`)}
+            onClick={() =>
+              nav(`/instances?view=${isTuiBrand(brand.id) ? "tui" : "brands"}&brand=${brand.id}&create=1`)
+            }
           >
             <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <BrandIcon brand={brand.id} size={28} />

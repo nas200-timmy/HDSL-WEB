@@ -182,6 +182,9 @@ public final class BrandApiServlet extends HttpServlet {
         for (Brand brand : Brand.values()) {
             JsonObject entry = new JsonObject();
             entry.addProperty("id", brand.id());
+            entry.addProperty("kind", brand.kind().name().toLowerCase(java.util.Locale.ROOT));
+            entry.addProperty("web", brand.hasWeb());
+            entry.addProperty("terminal", brand.hasTerminal());
             String reason = brand.notInstallableReason(OperatingSystem.CURRENT_OS);
             entry.addProperty("installable", reason == null);
             if (reason != null) {
@@ -445,6 +448,9 @@ public final class BrandApiServlet extends HttpServlet {
     /// Only PI WEB can answer `false`: a terminal-only release carries the Pi
     /// SDK and nothing else. Other brands' releases are their web app.
     private static boolean hasWeb(Brand brand, PathRef ref, String version) {
+        if (brand.isTui()) {
+            return false;
+        }
         if (brand != Brand.PI_WEB) {
             return true;
         }
@@ -686,12 +692,14 @@ public final class BrandApiServlet extends HttpServlet {
                     brand.sourceLabel() + " " + version + " is not installed");
             return;
         }
-        BrandInstance created = ref.manager().create(name, version);
-        boolean webEnabled = true;
-        if (body.has("webEnabled") && !body.get("webEnabled").isJsonNull()) {
+        // TUI brands never start a web process. The field is forced off (and
+        // stored off) rather than rejected, so a client that posts the default
+        // `webEnabled: true` still creates a usable terminal-only instance.
+        boolean webEnabled = !brand.isTui();
+        if (!brand.isTui() && body.has("webEnabled") && !body.get("webEnabled").isJsonNull()) {
             webEnabled = body.get("webEnabled").getAsBoolean();
         }
-        if (!webEnabled && !brand.supportsTerminalOnly()) {
+        if (!webEnabled && !brand.supportsTerminalOnly() && !brand.isTui()) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                     brand.id() + " instances always run their web mode");
             return;
@@ -702,6 +710,7 @@ public final class BrandApiServlet extends HttpServlet {
                             + "install the full pair before creating a web instance");
             return;
         }
+        BrandInstance created = ref.manager().create(name, version);
         if (!webEnabled) {
             created = created.withWebEnabled(false);
             ref.manager().update(created);
@@ -776,6 +785,11 @@ public final class BrandApiServlet extends HttpServlet {
                     "stop the instance before changing its version");
             return;
         }
+        if (touchesVersion && brand.isTui()) {
+            // A TUI instance has no web process to stop; the terminal is what
+            // holds the old release. Close it before the version record moves.
+            instanceTerminal.close(brand.id(), id);
+        }
         if (touchesVersion && instance.versionLockedOrDefault()) {
             String requested = stringField(body, "version");
             if (requested != null && !requested.isBlank() && !requested.trim().equals(instance.version())) {
@@ -794,7 +808,7 @@ public final class BrandApiServlet extends HttpServlet {
             }
             patched = patched.withVersionLocked(body.get("versionLocked").getAsBoolean());
         }
-        if (body.has("webEnabled")) {
+        if (body.has("webEnabled") && !brand.isTui()) {
             if (!brand.supportsTerminalOnly()) {
                 Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                         brand.id() + " instances always run their web mode");
@@ -905,6 +919,12 @@ public final class BrandApiServlet extends HttpServlet {
         BrandInstance instance = ref.manager().find(id);
         if (instance == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
+            return;
+        }
+        if (brand.isTui()) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "tui_only: " + brand.id()
+                            + " instances are terminal-only; open the terminal instead of launching a web process");
             return;
         }
         if (refuseDisabled(brand, id, response)) {
@@ -1072,6 +1092,13 @@ public final class BrandApiServlet extends HttpServlet {
                 throw new InstanceTerminal.Refused(409,
                         brand.sourceLabel() + " " + instance.version() + " is not installed");
             }
+            // The terminal runs as the agent (Privileges.asAgent), and the TUI
+            // creates its data directory under HOME on first launch. Hand the
+            // instance dirs over again before every attach: an instance created
+            // by an older build, or a home left root-owned by a failed setup,
+            // would otherwise make Qwen/MiMo/MiniMax write into a directory
+            // their uid cannot create or read.
+            BrandRuntime.handInstanceDirsToAgent(ref.manager(), instance);
             // The official kernel is refused outright in unsupported regions, and
             // Claude Code exits with "App unavailable in region" after a 403 the
             // user cannot act on. Ask the endpoint first and answer with a
@@ -1156,6 +1183,11 @@ public final class BrandApiServlet extends HttpServlet {
             return;
         }
         if (refuseDisabled(brand, id, response)) {
+            return;
+        }
+        if (brand.isTui()) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "tui_only: " + brand.id() + " instances have no web mode");
             return;
         }
         if (!BrandRuntime.isRunning(id)) {
@@ -1687,8 +1719,9 @@ public final class BrandApiServlet extends HttpServlet {
         body.addProperty("brand", instance.brand());
         body.addProperty("name", instance.name());
         body.addProperty("version", instance.version());
+        body.addProperty("kind", brand.kind().name().toLowerCase(java.util.Locale.ROOT));
+        body.addProperty("webEnabled", !brand.isTui() && instance.webEnabledOrDefault());
         if (brand == Brand.PI_WEB) {
-            body.addProperty("webEnabled", instance.webEnabledOrDefault());
             body.addProperty("versionLocked", instance.versionLockedOrDefault());
             String paired = brand.pairedSdkVersion(instance.version());
             body.addProperty("pairedSdk", paired == null ? "" : paired);

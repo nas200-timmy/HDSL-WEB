@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
+import { isTuiBrand } from "../brandKind";
 import { launchBrandInstance, launchInstance, openDsh, stopBrandInstance, stopInstance } from "../actions";
 import { LaunchPane } from "../components/LaunchPane";
 import { BRAND_LABEL, useLaunchEntry, type LaunchEntry } from "../launchEntry";
@@ -254,7 +255,7 @@ function MobileHomeBrand({ entry }: { entry: LaunchEntry }) {
   const busy = state === "STARTING" || state === "STOPPING";
   // ext.url 已由后端带挂载点前缀（REST 边界统一加 base），兜底路径才 withBase
   const openUrl = ext?.url ?? withBase(`/i/${entry.id}/`);
-  const manageTarget = `/instances?view=brands&brand=${entry.kind}`;
+  const manageTarget = `/instances?view=${isTuiBrand(entry.kind) ? "tui" : "brands"}&brand=${entry.kind}`;
 
   const doOpen = () => {
     if (entry.kind === "zcode") {
@@ -264,8 +265,8 @@ function MobileHomeBrand({ entry }: { entry: LaunchEntry }) {
     window.open(openUrl, "_blank", "noopener");
   };
   const doAction = () => {
-    if (running) void stopBrandInstance(entry.kind as "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "zcode", entry.id);
-    else void launchBrandInstance(entry.kind as "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "zcode", { id: entry.id, name: entry.name });
+    if (running) void stopBrandInstance(entry.kind as "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "qwen" | "mimo" | "minimax" | "zcode", entry.id);
+    else void launchBrandInstance(entry.kind as "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "qwen" | "mimo" | "minimax" | "zcode", { id: entry.id, name: entry.name });
   };
   const copyUrl = () => {
     void navigator.clipboard.writeText(openUrl).then(

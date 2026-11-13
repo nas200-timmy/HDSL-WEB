@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMobileLayout } from "../hooks";
+import { isTuiBrand } from "../brandKind";
 import { BRAND_LABEL, useLaunchEntry, type LaunchEntry } from "../launchEntry";
 import { I18N } from "../i18n";
 import { closeSidebar, logout, useAppState } from "../store";
@@ -9,6 +10,7 @@ import type { Instance } from "../types";
 import { normState } from "../utils";
 import { BrandIcon } from "./BrandIcon";
 import {
+  ChatIcon,
   DownloadIcon,
   FormatListBulletedIcon,
   LogoutIcon,
@@ -116,7 +118,7 @@ export function MainSideBar() {
           if (!current) return;
           goTo(current.kind === "dsh"
             ? `/instances/${current.id}`
-            : `/instances?view=brands&brand=${current.kind}`);
+            : `/instances?view=${isTuiBrand(current.kind) ? "tui" : "brands"}&brand=${current.kind}`);
         }}
       >
         {current?.kind === "dsh" && current.dsh ? (
@@ -159,6 +161,20 @@ export function MainSideBar() {
         </span>
         <span className="side-text">
           <span className="side-title">{I18N["download"]}</span>
+        </span>
+      </button>
+
+      <div className="side-category">聊天</div>
+      <button
+        className={`side-item ripple-host${selected("/chat") ? " selected" : ""}`}
+        onClick={go("/chat")}
+      >
+        <span className="side-graphic">
+          <ChatIcon size={20} />
+        </span>
+        <span className="side-text">
+          <span className="side-title">聊天</span>
+          <span className="side-subtitle">与模型对话</span>
         </span>
       </button>
 

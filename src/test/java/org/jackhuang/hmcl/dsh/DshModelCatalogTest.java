@@ -229,6 +229,37 @@ class DshModelCatalogTest {
         assertEquals(one, DshModelCatalog.cachedFile());
     }
 
+    @Test
+    void aGzippedDirectoryIsFetchedAndDecoded() throws Exception {
+        // 服务器上 api.json 默认 gzip 后约 460 KB，未压缩 6 MB。JDK 客户端既不会自己要
+        // gzip 也不会解，之前那条超时线（20s）在慢网络上永远拉不完；这条用例把
+        // 「要 gzip、解 gzip」钉住，免得哪天又退回明文下载。
+        byte[] gzipped;
+        try (java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+             java.util.zip.GZIPOutputStream gzip = new java.util.zip.GZIPOutputStream(buffer)) {
+            gzip.write(sampleText().getBytes(StandardCharsets.UTF_8));
+            gzip.finish();
+            gzipped = buffer.toByteArray();
+        }
+        com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+                .create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api.json", exchange -> {
+            exchange.getResponseHeaders().add("Content-Encoding", "gzip");
+            exchange.sendResponseHeaders(200, gzipped.length);
+            exchange.getResponseBody().write(gzipped);
+            exchange.close();
+        });
+        server.start();
+        try {
+            System.setProperty("hdsl.modelCatalog",
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/api.json");
+            DshModelCatalog.Catalog catalog = DshModelCatalog.fetch();
+            assertFalse(catalog.providers().isEmpty(), "the gzipped body must decode into suppliers");
+        } finally {
+            server.stop(0);
+        }
+    }
+
     /// Finds a supplier and fails with what was asked for rather than with a null pointer.
     private static String matchId(DshModelCatalog.Catalog catalog, @Nullable String vendorId,
                                   @Nullable String endpoint) {

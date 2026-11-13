@@ -125,6 +125,13 @@ public final class AgentScopes {
         if (route.startsWith("/api/auth/")) {
             return true;
         }
+        // Chat is a human surface (docs/chat.md §13.1): every route — including
+        // the reads — is closed to agent tickets. Without this line the
+        // `GET -> READ` shortcut below would hand the whole transcript to any
+        // default `read` grant.
+        if (route.equals("/api/chat") || route.startsWith("/api/chat/")) {
+            return true;
+        }
         // Enabling or disabling the surface is an operator decision (it needs the
         // developer password), and an agent never gets to make it.
         if (route.startsWith("/api/transcode/feature")) {
@@ -196,6 +203,12 @@ public final class AgentScopes {
                 return TRANSCODE_RAW;
             }
             return TRANSCODE;
+        }
+        // Defence in depth: the filter refuses chat routes in `forbidden`
+        // before `required` is consulted, but a direct caller of this method
+        // must not read `/api/chat/*` as the generic `read` class either.
+        if (path.equals("/api/chat") || path.startsWith("/api/chat/")) {
+            return null;
         }
         if ("GET".equals(method) || "HEAD".equals(method)) {
             return READ;

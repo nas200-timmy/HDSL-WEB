@@ -561,11 +561,32 @@ export type WsEvent =
   | { type: "acp-ready"; instance: string; session: string; protocolVersion?: number }
   | { type: "acp-error"; instance: string; error: string }
   | { type: "acp-update"; instance: string; session: string; update: AcpSessionUpdate }
-  | { type: "acp-finished"; instance: string; session: string; stopReason?: string };
+  | { type: "acp-finished"; instance: string; session: string; stopReason?: string }
+  // 面板聊天（docs/chat.md §11）：只推事件，命令走 REST。
+  | { type: "chat-turn-started"; sessionId: string; turnId: string; messageId: string; nodeId: string; attemptNo: number }
+  | { type: "chat-delta"; sessionId: string; turnId: string; seq: number; text: string }
+  | { type: "chat-reasoning"; sessionId: string; turnId: string; seq: number; text: string }
+  | { type: "chat-usage"; sessionId: string; turnId: string; input: number; output: number }
+  | { type: "chat-tool"; sessionId: string; turnId: string; tool?: "search" | "scrape" | string; query: string; status: "running" | "done" | "failed" | string; provider?: string; hits?: number; sources?: ChatSearchResult }
+  | { type: "chat-turn-finished"; sessionId: string; turnId: string; messageId: string; status: string; finishReason: string; input?: number; output?: number }
+  | { type: "chat-error"; sessionId: string; turnId: string; code: string; message: string; retryable: boolean }
+  | { type: "chat-sessions-changed" | "chat-assistants-changed" | "chat-settings-changed" | "chat-backups-changed"; sessionId?: string };
 
 // ---------- 第三方品牌实例（kimi / opencode / claude-web，REST 挂 /api/brands/<brand>/*） ----------
 
-export type BrandId = "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "pi-web";
+export type BrandId =
+  | "kimi"
+  | "opencode"
+  | "claude-web"
+  | "octop"
+  | "hermes"
+  | "pi-web"
+  | "qwen"
+  | "mimo"
+  | "minimax";
+
+/// 品牌实例的形态：网页进程 / 纯 TUI / 两者可选（PI WEB）。
+export type BrandKind = "web" | "tui" | "hybrid";
 
 /// 终端内核（只有 Claude Web 有不止一个：社区引擎 claude-web-engine 或官方
 /// Claude Code 二进制）。`available` 为假时 `detail` 说明缺什么。
@@ -651,6 +672,10 @@ export interface BrandCapabilities {
   platform: string;
   brands: {
     id: BrandId;
+    /** web / tui / hybrid：决定实例卡提供启动网页还是只提供终端 */
+    kind?: BrandKind;
+    web?: boolean;
+    terminal?: boolean;
     installable: boolean;
     reason?: string;
   }[];
@@ -691,6 +716,8 @@ export interface BrandInstance {
   brand: BrandId;
   name: string;
   version: string;
+  /** web / tui / hybrid；TUI 实例没有网页进程与端口 */
+  kind?: BrandKind;
   /** 仅 claude-web：ANTHROPIC_BASE_URL 覆盖；空/缺省表示用工具自己的默认端点 */
   baseUrl?: string | null;
   lastPort: number;
@@ -728,10 +755,22 @@ export interface InstancePlugins {
 /// 这是**唯一**的跨品牌实例状态源：BrandsView（品牌层）/ ZcodeSection / LaunchPane /
 /// MainPage 都从这里读，写入只发生在 refreshExternal。
 export interface ExternalInstance {
-  brand: "kimi" | "opencode" | "claude-web" | "octop" | "hermes" | "pi-web" | "zcode";
+  brand:
+    | "kimi"
+    | "opencode"
+    | "claude-web"
+    | "octop"
+    | "hermes"
+    | "pi-web"
+    | "qwen"
+    | "mimo"
+    | "minimax"
+    | "zcode";
   id: string;
   name: string;
   state: string;
+  /** web / tui / hybrid；缺省按 web 处理，兼容旧后端 */
+  kind?: BrandKind;
   url?: string;
   /** 最近一次启动播报的端口；0/缺省 = 未知（运行中浮层展示用） */
   port?: number;
@@ -1028,4 +1067,260 @@ export interface SystemStorage {
   mount: StorageMount;
   /** 上一次真正遍历的时间（ISO）；缓存命中时不变 */
   computedAt: string;
+}
+
+// ---------- 面板聊天（docs/chat.md） ----------
+
+export interface ChatAssistant {
+  id: string;
+  name: string;
+  avatar: string;
+  description: string;
+  systemPrompt: string;
+  openingMessage: string;
+  account: string | null;
+  model: string | null;
+  temperature: number | null;
+  maxTokens: number | null;
+  reasoningLevel: string | null;
+  quickPhrases: string[];
+  builtin: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ChatSessionSummary {
+  id: string;
+  assistantId: string;
+  title: string;
+  model: string | null;
+  account: string | null;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+  lastMessage: string | null;
+}
+
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  mime: string;
+  kind: "image" | "document" | "text" | "audio" | "video" | string;
+  size: number;
+  extractStatus: "pending" | "done" | "failed" | "skipped" | string;
+  extractError?: string | null;
+  url: string;
+  preview?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  nodeId: string;
+  variantIndex: number;
+  content: string;
+  reasoning: string;
+  status: "streaming" | "done" | "stopped" | "error" | "interrupted" | string;
+  model: string | null;
+  createdAt: number;
+  editedAt: number | null;
+  usage?: { input?: number; output?: number };
+  /** 这一轮联网搜索的来源（有搜索时才有） */
+  sources?: ChatSearchHit[];
+  /** 模型自己调用 web_search 的每一轮（按时间顺序） */
+  tools?: ChatToolRound[];
+  searchQuery?: string;
+  attachments: ChatAttachment[];
+}
+
+export interface ChatNode {
+  id: string;
+  ordinal: number;
+  role: "user" | "assistant";
+  activeVariantId: string | null;
+  createdAt: number;
+  variants: ChatMessage[];
+}
+
+export interface ChatSession {
+  id: string;
+  assistantId: string;
+  title: string;
+  model: string | null;
+  account: string | null;
+  /** 会话级思考挡位；null = 跟随助手默认 */
+  reasoningLevel?: string | null;
+  createdAt: number;
+  updatedAt: number;
+  streaming: boolean;
+  nodes: ChatNode[];
+}
+
+/** 模型怎么控思考：toggle=开关，effort=英文档位，budget=数字预算，forced=只能开，none=没声明 */
+export interface ChatReasoningMode {
+  kind: "none" | "toggle" | "effort" | "budget" | "forced";
+  canDisable: boolean;
+  efforts: string[];
+  minBudget: number;
+  maxBudget: number;
+  source: string;
+}
+
+export interface ChatSearchHit {
+  /** 短哈希，模型引用时写 [citation,domain](id) */
+  id?: string;
+  title: string;
+  url: string;
+  snippet?: string;
+  site?: string;
+  publishedAt?: string;
+}
+
+export interface ChatSearchStatus {
+  provider: "bocha" | "deepseek" | string;
+  configured: boolean;
+  maxResults: number;
+  keyMasked?: string | null;
+}
+
+export interface ChatSearchResult {
+  query: string;
+  provider: string;
+  hits: ChatSearchHit[];
+}
+
+/** 模型自己发起的一次 web_search（每轮对话最多 3 次）。 */
+export interface ChatToolRound {
+  query: string;
+  provider: string;
+  hits: ChatSearchHit[];
+}
+
+export interface ChatModelCapabilities {
+  vision: boolean;
+  files: boolean;
+  reasoning: boolean;
+  tools: boolean;
+  maxContext: number;
+  maxOutput: number;
+  source: string;
+  reasoningMode?: ChatReasoningMode;
+}
+
+/** 面板用户的聊天资料：名字 + 头像（`img:<id>` 或 null）。 */
+export interface ChatProfile {
+  name: string;
+  avatar: string | null;
+}
+
+export interface ChatModelInfo {
+  id: string;
+  capabilities: ChatModelCapabilities;
+}
+
+export interface ChatAccountProfile {
+  name: string;
+  vendor: string;
+  label: string;
+  endpoint: string | null;
+  model?: string | null;
+  maskedKey?: string | null;
+  protocol: string;
+  base?: string;
+  modelsPath?: string;
+  chatPath?: string;
+  authStyle?: string;
+  configured?: boolean;
+  resolved?: { modelsUrl: string; chatUrl: string };
+  models?: string[];
+  modelList?: ChatModelInfo[];
+  modelsFetchedAt?: number;
+  lastProbe?: ChatProbe & { at?: number };
+  extraHeaders?: Record<string, string>;
+}
+
+export interface ChatProbe {
+  reachable: boolean;
+  tlsOk: boolean;
+  authOk: boolean;
+  modelsOk: boolean;
+  models: string[];
+  latencyMs: number;
+  resolved: { modelsUrl: string; chatUrl: string };
+  warnings: string[];
+  error: string | null;
+}
+
+export interface ChatBackup {
+  name: string;
+  path: string;
+  createdAt: number;
+  bytes: number;
+  sessions: number;
+  messages: number;
+  attachments: number;
+  complete: boolean;
+  error?: string | null;
+}
+
+export interface ChatSettings {
+  retention: "forever" | "30d" | "90d" | "180d" | "365d" | "custom";
+  retentionDays: number;
+  backupEnabled: boolean;
+  backupTime: string;
+  backupKeep: number;
+  backupDir: string;
+  privateEndpoints: "allow" | "strict";
+  privateAllowlist: string[];
+  longTextTokens: number;
+  dailyTokenLimit: number;
+  streamFlushMs: number;
+  defaultAccount: string | null;
+  defaultModel: string | null;
+  retentionOptions: string[];
+  backups: ChatBackup[];
+  /** models.dev 目录里有多少个模型；0 = 还没拉取，能力判断回落到内置表 */
+  catalogModels?: number;
+  catalogUpdatedAt?: number;
+  searchProvider?: "bocha" | "deepseek" | "zhipu" | "tavily" | "brave" | "exa";
+  searchMaxResults?: number;
+  searchKeyMasked?: string | null;
+  /** 把搜索/抓取的完整链路存进消息，追问时模型能回看 */
+  persistToolTrail?: boolean;
+}
+
+/** POST /api/chat/accounts/{name}/chat-test 的结果（会消耗少量 token）。 */
+export interface ChatChatTest {
+  model: string;
+  ok: boolean;
+  latencyMs: number;
+  answer: string;
+  /** 本次流里的思考字数：思考模型可能把很小的 max_tokens 全用在 reasoning 上 */
+  reasoningChars?: number;
+  /** 正文和思考都为空：HTTP 通了，但端点没给出内容 */
+  empty?: boolean;
+  status?: number;
+  error?: string;
+}
+
+/** POST /api/chat/accounts/{name}/vision-test 的结果。 */
+export interface ChatVisionTest {
+  model: string;
+  reasoningChars?: number;
+  /** supported = 读出图上的数字；unsupported = 明确拒收/说不看图；uncertain = 有回答但对不上 */
+  verdict: "supported" | "unsupported" | "uncertain" | "error";
+  supported: boolean;
+  latencyMs: number;
+  answer: string;
+  status?: number;
+  error?: string;
+  expected: string;
+  /** 判定确定时已写入能力库（source=probe） */
+  saved: boolean;
+}
+
+export interface ChatTurnOutcome {
+  turnId: string;
+  assistantNodeId?: string;
+  userMessage?: ChatMessage;
+  assistantMessage?: ChatMessage;
 }

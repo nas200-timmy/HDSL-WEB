@@ -1008,7 +1008,13 @@ public final class BrandInstaller {
         // "A Node.js with pnpm" rather than "a Node.js": the install runs `pnpm add`, and a
         // PATH-probed runtime without one is how the managed runtime — installed *with*
         // pnpm — came to be ignored while every brand install failed on a bare `pnpm`.
-        DshNodeRuntime runtime = DshNodeRuntime.detectWithPnpm()
+        // TUI brands prefer that managed runtime so their narrow engines range cannot
+        // silently pick up an older host Node.
+        DshNodeRuntime runtime = (brand.prefersManagedNode()
+                ? DshNodeRuntime.detectManaged()
+                        .filter(DshNodeRuntime::canManagePlugins)
+                        .or(DshNodeRuntime::detectWithPnpm)
+                : DshNodeRuntime.detectWithPnpm())
                 .orElseThrow(() -> new BrandException("Node.js was not found on PATH and no panel-managed runtime "
                         + "is installed; installing " + brand.npmPackage() + " needs one. "
                         + "Open Settings -> Node.js for a one-click managed runtime, or install Node.js yourself."));
@@ -1050,7 +1056,8 @@ public final class BrandInstaller {
         // layout puts the dependencies in the project's `node_modules`, which is what
         // these tools were written against; POSIX keeps the isolated layout it had.
         if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
-                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS
+                || brand.prefersHoistedNodeModules()) {
             command.add("--config.node-linker=hoisted");
         }
         message.accept("Installing " + brand.npmPackage() + " " + version);
@@ -1084,7 +1091,12 @@ public final class BrandInstaller {
             throw new BrandException("Installing " + brand.npmPackage() + " was interrupted", e);
         }
 
-        if (!Files.exists(bin)) {
+        // The extensionless `.bin/<tool>` is a POSIX shim; on Windows the
+        // startable form is `<tool>.cmd` beside it. `Executables.resolve` knows
+        // both layouts, so a successful install is not reported as missing just
+        // because only the `.cmd` exists there.
+        if (!Files.exists(bin)
+                && org.jackhuang.hmcl.util.platform.Executables.resolve(bin.toString()).isEmpty()) {
             throw new BrandException(brand.npmPackage() + " " + version
                     + " installed without its executable (" + bin + "); the package's install scripts may have "
                     + "been skipped or failed — see " + log);

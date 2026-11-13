@@ -24,13 +24,21 @@ import {
   TerminalIcon,
 } from "../components/icons";
 import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
-import { BrandsView, fallbackBrand, isBrandKey, type BrandKey } from "../components/BrandsView";
+import {
+  BrandsView,
+  TuiBrandsView,
+  fallbackBrand,
+  fallbackTuiBrand,
+  isBrandKey,
+  isTuiBrandKey,
+  type BrandKey,
+} from "../components/BrandsView";
 import { McInstancesView } from "../components/McInstancesView";
 import { I18N } from "../i18n";
 import { refreshMcFeature, useMcFeature } from "../mcFeature";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
 import { getState, refreshExternal, refreshInstances, toast, useAppState } from "../store";
-import type { Instance } from "../types";
+import type { BrandId, Instance } from "../types";
 import { errMsg, normState } from "../utils";
 import { withBase } from "../base";
 
@@ -47,18 +55,25 @@ export function InstancesPage() {
   const mcEnabled = mcFeature?.enabled === true;
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // 视图与品牌都从查询串来：`?view=brands` 开品牌视图；带 `?brand=` 的旧链接
+  // 视图与品牌都从查询串来：`?view=brands` 开网页品牌视图；带 `?brand=` 的旧链接
   // （以及 /brands/<品牌> 的重定向）一律按品牌视图处理，不再跳第二层页面。
   const brandParam = searchParams.get("brand");
-  const brandView = searchParams.get("view") === "brands" || brandParam != null;
+  const viewParam = searchParams.get("view");
+  const brandView =
+    viewParam === "brands" || (viewParam == null && brandParam != null && !isTuiBrandKey(brandParam));
+  // TUI 品牌是独立的一栏：`?view=tui`，只装 Qwen / MiMo / MiniMax，
+  // 与原来的七个网页品牌（含 ZCode）彻底分开。没有 view 的旧 `?brand=qwen`
+  // 也按 TUI 视图处理。
+  const tuiView = viewParam === "tui" || (viewParam == null && isTuiBrandKey(brandParam));
   // MC 服务端也是这一层：`?view=mc` 把内容区换成 MC 实例列表（见 McInstancesView）。
   // 以前它是个独立页面（`/mc`），从实例列表点进去要"跳走再点返回"，和品牌实例割裂。
-  const mcView = searchParams.get("view") === "mc";
+  const mcView = viewParam === "mc";
   // 第三方核心是独立的一栏：和原版实例彻底分开，各自的列表、各自的向导、
   // 各自的全局设置（下载源）。开关在「设置 → 品牌实例 → 第三方核心」。
-  const mcThirdView = searchParams.get("view") === "mc-third";
+  const mcThirdView = viewParam === "mc-third";
   const mcThirdEnabled = mcFeature?.thirdParty === true;
   const activeBrand: BrandKey = isBrandKey(brandParam) ? brandParam : fallbackBrand(s.external);
+  const activeTuiBrand = isTuiBrandKey(brandParam) ? brandParam : fallbackTuiBrand(s.external);
 
   // 品牌视图缺省/非法品牌：等第一份跨品牌快照落地再落到「第一个有实例的品牌」，
   // 顺便把结果写进 URL（否则刷新一次又会跳回 zcode）
@@ -74,8 +89,17 @@ export function InstancesPage() {
       { replace: true },
     );
   }, [brandView, brandParam, externalLoaded, setSearchParams]);
+  useEffect(() => {
+    if (!tuiView || !externalLoaded || isTuiBrandKey(brandParam)) return;
+    setSearchParams(
+      { view: "tui", brand: fallbackTuiBrand(getState().external) },
+      { replace: true },
+    );
+  }, [tuiView, brandParam, externalLoaded, setSearchParams]);
 
   const showBrands = (brand: BrandKey) => setSearchParams({ view: "brands", brand });
+  const showTuiBrand = (brand: BrandId) => setSearchParams({ view: "tui", brand });
+  const showTui = () => setSearchParams({ view: "tui", brand: activeTuiBrand });
   const showMc = () => setSearchParams({ view: "mc" });
   const showMcThird = () => setSearchParams({ view: "mc-third" });
   const showDsh = () => setSearchParams({});
@@ -198,6 +222,20 @@ export function InstancesPage() {
             <span className="side-title">{I18N["dsh.brand.page.title"]}</span>
           </span>
         </button>
+        {/* TUI 品牌实例：与网页品牌并列的独立一栏，只装 Qwen / MiMo / MiniMax。
+            原来的「品牌实例」保持七个不变，这里不混进去。 */}
+        <button
+          className={`side-item ripple-host${tuiView ? " selected" : ""}`}
+          onClick={showTui}
+        >
+          <span className="side-graphic">
+            <TerminalIcon size={20} />
+          </span>
+          <span className="side-text">
+            <span className="side-title">{I18N["dsh.brand.tui.section"]}</span>
+            <span className="side-subtitle">Qwen / MiMo / MiniMax · TUI</span>
+          </span>
+        </button>
         {/* MC 服务端（第三方功能）：只有功能开启后才出现，而且挂在「品牌实例」
             这一层下面——它和品牌实例是同一类东西（面板托管的另一套进程），
             所以同样是原地切换（`?view=mc`），不是另一个页面。
@@ -271,6 +309,9 @@ export function InstancesPage() {
         ) : mcView ? (
           /* MC 原版服务端实例：同一页内的第三层视图 */
           <McInstancesView scope="vanilla" />
+        ) : tuiView ? (
+          /* TUI 品牌实例：独立一栏，只装 Qwen / MiMo / MiniMax */
+          <TuiBrandsView brand={activeTuiBrand} onSelect={showTuiBrand} />
         ) : brandView ? (
           /* 品牌实例视图：原地换内容（不跳页、不重挂载页面） */
           <BrandsView brand={activeBrand} onSelect={showBrands} />

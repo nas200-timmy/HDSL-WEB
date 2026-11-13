@@ -289,6 +289,13 @@ public final class BrandRuntime {
             STATES.put(refusedId, State.ERROR);
             return status(refusedId);
         }
+        if (brand.isTui()) {
+            String refusedId = instance.id();
+            String reason = "tui_only: " + brand.id() + " instances have no web process";
+            ERRORS.put(refusedId, reason);
+            STATES.put(refusedId, State.ERROR);
+            return status(refusedId);
+        }
         String id = instance.id();
         synchronized (lockFor(id)) {
             Process existing = PROCESSES.get(id);
@@ -795,6 +802,8 @@ public final class BrandRuntime {
                     "Hermes is launched through its generated wrapper; see hermesPlan");
             case PI_WEB -> throw new IOException(
                     "PI WEB is launched through its generated wrapper; see piWebPlan");
+            case QWEN, MIMO, MINIMAX -> throw new IOException(
+                    brand.id() + " is a TUI brand; it has no web process to launch");
             default -> throw new IOException("unknown brand " + brand);
         }
     }
@@ -1122,6 +1131,10 @@ public final class BrandRuntime {
             // answer that matters is its health endpoint plus the daemon socket;
             // the launch path polls those (see awaitPiWebReady).
             case PI_WEB -> NEVER_READY;
+            // TUI brands never reach this path: the API refuses to launch a web
+            // process for them. Keeping a never-matching pattern makes that
+            // explicit for the compiler and for a future caller.
+            case QWEN, MIMO, MINIMAX -> NEVER_READY;
         };
     }
 

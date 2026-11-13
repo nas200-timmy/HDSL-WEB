@@ -36,6 +36,7 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、ZCode 也能一起
 - [常见问题](#常见问题)
 - [设计说明](docs/design-notes.md)
 - [转码模块（批量编码、硬件加速、GPU 监控）](docs/transcode.md)
+- [面板聊天（多助手、流式、附件与备份）](docs/chat.md)
 - [许可](#许可)
 
 ## 亮点
@@ -92,6 +93,7 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、ZCode 也能一起
 | 运行前提 | JDK 17+；Node `^22.19.0 || >=24.0.0` 与 pnpm（dsh 由 pnpm 安装、由 node 运行） |
 | 手机 | 窄屏（≤760px）或矮屏（≤520px）自动切换移动版式：主导航收成抽屉、子侧栏变顶部标签条、启动面板变成贴底操作栏；可点区域 44px；支持「加到主屏幕」。见 [docs/ui-spec.md §14](docs/ui-spec.md) |
 | 账户 | 为供应商填一次 API Key；供应商与模型来自 [models.dev](https://models.dev)（200+ 家，选中即带出端点、协议与密钥变量），也可手输；目录不可达时退回内置供应商与手输。见 [docs/ui-spec.md §4](docs/ui-spec.md) |
+| 聊天 | 面板内的多助手聊天页：流式输出、停止、两种重新生成、跨服务模型选择、独立 `/chat/settings` 模型服务/备份设置、图片/PDF/Office 附件与长文本转附件、按助手隔离系统提示词；会话存 SQLite，可每日备份。不调用工具。见 [docs/chat.md](docs/chat.md) |
 | 创建实例 | 创建即安装；未安装的实例点「启动」会先装再启；进度与失败原因都在面板上。见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md) |
 | 品牌实例 | 安装、版本共享与实验性边界见 [docs/brands.md](docs/brands.md)；Octop 见 [docs/octop.md](docs/octop.md)；ZCode 见 [docs/zcode-experimental.md](docs/zcode-experimental.md) |
 | Minecraft | 默认关闭的第三方功能；开关在「设置 → 品牌实例」，需开发者密码并阅读 Mojang EULA 与服务条款。存档在 `/home/hdsl/mc`，容器部署必须挂出来。见 [docs/minecraft.md](docs/minecraft.md) |
@@ -475,6 +477,8 @@ Windows 上有两个目录，别混：
 | `/data/corepack/` | corepack 缓存（`COREPACK_HOME`） | 否 |
 | `/data/minecraft/` | MC 的版本缓存（`versions/`）与删除/导入前的安全备份（`backups/`）；世界本身在 `/home/hdsl/mc` | 备份是，缓存否 |
 | `/data/transcode/` | 转码自己的状态：`feature.json`（功能门）、`queue.json`、`presets/`、每个任务的日志、`tools/`（面板下载的 ffmpeg）；片源与产物在媒体根 | 预设是，其余可重建 |
+| `/data/chat/` | 面板聊天：`chat.db`（SQLite，会话/助手/附件元数据）与 `files/`（按 sha256 去重的附件与抽取文本） | 是 |
+| `/data/backup/` | 聊天备份 `chat-backup-<时间>/`（db 快照、附件、manifest）；目录与保留份数可在聊天设置里改 | 是 |
 
 工作区是 dsh 会话的「项目根」，不是面板放实例的目录。要持久化或让 dsh 直接编辑宿主机目录，
 取消 compose 里对应那行的注释：`- /srv/dsh-workspace:/home/hdsl/workspace`（让 uid/gid 1000

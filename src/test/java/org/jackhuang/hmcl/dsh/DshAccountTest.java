@@ -246,4 +246,21 @@ class DshAccountTest {
         assertEquals("deepseek", DshVendor.offered().get(0).id(),
                 "the harness's own vendor is the one the list leads with");
     }
+
+    @Test
+    void catalogueSuppliersAreAddressableWithoutAnEndpoint() {
+        // `/api/models/providers` 把 catalogue 里能路由的供应商也标成 known，前端因此不会再
+        // 让用户填地址。byId 必须也认这些 id，否则选小米就会得到
+        // “unknown vendor `xiaomi`; pass `endpoint` to add a supplier by address”。
+        DshVendor xiaomi = DshVendor.byId("xiaomi");
+        assertNotNull(xiaomi, "catalogue vendors are offered as known; byId has to find them");
+        assertEquals("openai-completions", xiaomi.api());
+        assertTrue(xiaomi.hasBaseUrl());
+        assertEquals(xiaomi, DshVendor.byId("  Xiaomi  "), "trimmed and without case");
+
+        DshAccount account = new DshAccount(DshAccount.AccountKind.THIRD_PARTY, "xiaomi",
+                "sk-test", null, null, null, null);
+        assertEquals("https://api.xiaomimimo.com/v1", account.endpoint(),
+                "an account made without an endpoint falls back to the vendor's own address");
+    }
 }

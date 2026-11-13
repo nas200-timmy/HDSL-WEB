@@ -232,13 +232,16 @@ export async function refreshZcode(showLoading = false): Promise<void> {
 /// 主页启动面板的实例选择菜单与主按钮动作用它。单个品牌失败不影响其它品牌；
 /// 静默失败（不弹 toast）——主页面 5 秒轮询一次，报错会刷爆通知。
 export async function refreshExternal(): Promise<void> {
-  const [kimi, opencode, claudeWeb, octop, hermes, piWeb, zcode] = await Promise.all([
+  const [kimi, opencode, claudeWeb, octop, hermes, piWeb, qwen, mimo, minimax, zcode] = await Promise.all([
     api.brandInstances("kimi").then((r) => r.instances).catch(() => null),
     api.brandInstances("opencode").then((r) => r.instances).catch(() => null),
     api.brandInstances("claude-web").then((r) => r.instances).catch(() => null),
     api.brandInstances("octop").then((r) => r.instances).catch(() => null),
     api.brandInstances("hermes").then((r) => r.instances).catch(() => null),
     api.brandInstances("pi-web").then((r) => r.instances).catch(() => null),
+    api.brandInstances("qwen").then((r) => r.instances).catch(() => null),
+    api.brandInstances("mimo").then((r) => r.instances).catch(() => null),
+    api.brandInstances("minimax").then((r) => r.instances).catch(() => null),
     api.zcodeInstances()
       .then((r) => ({ instances: r.instances, workspacesRoot: r.workspacesRoot }))
       .catch(() => null),
@@ -269,6 +272,19 @@ export async function refreshExternal(): Promise<void> {
       releaseWebAvailable: i.releaseWebAvailable, releasePtyAvailable: i.releasePtyAvailable,
       pairedSdk: i.pairedSdk,
     });
+  }
+  for (const [brand, list] of [
+    ["qwen", qwen],
+    ["mimo", mimo],
+    ["minimax", minimax],
+  ] as const) {
+    for (const i of list ?? []) {
+      external.push({
+        brand, id: i.id, name: i.name, state: i.state, version: i.version,
+        error: i.error, disabled: i.disabled, terminalOpen: i.terminalOpen,
+        kind: i.kind ?? "tui",
+      });
+    }
   }
   for (const i of zcode?.instances ?? []) {
     external.push({

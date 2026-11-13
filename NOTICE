@@ -210,6 +210,45 @@ it backs the PTY glue of the web terminal, and nothing else.
       MIT License.
       https://www.slf4j.org/license.html
 
+  SQLite JDBC (org.xerial:sqlite-jdbc)
+      Apache License 2.0.  The jar bundles the SQLite native libraries for
+      each supported platform (SQLite itself is in the public domain); they are
+      unpacked to a temporary directory when the driver first loads.
+      Copyright Xerial and contributors.
+      https://github.com/xerial/sqlite-jdbc
+
+  Apache PDFBox (org.apache.pdfbox:pdfbox, org.apache.pdfbox:fontbox,
+  org.apache.pdfbox:pdfbox-io)
+      Apache License 2.0.  Used only to extract text from uploaded PDF
+      attachments in the panel chat (docs/chat.md).
+      Copyright The Apache Software Foundation.
+      https://pdfbox.apache.org/
+
+  Apache POI (org.apache.poi:poi, org.apache.poi:poi-ooxml,
+  org.apache.poi:poi-ooxml-lite, org.apache.poi:poi-scratchpad) and
+  Apache XMLBeans (org.apache.xmlbeans:xmlbeans)
+      Apache License 2.0.  Used only to extract text from uploaded Office
+      attachments in the panel chat.
+      Copyright The Apache Software Foundation.
+      https://poi.apache.org/  https://xmlbeans.apache.org/
+
+  curvesapi (com.github.virtuald:curvesapi), pulled in by POI
+      BSD 3-Clause License.
+      https://github.com/virtuald/curvesapi
+
+  SparseBitSet (com.zaxxer:SparseBitSet), pulled in by POI
+      Apache License 2.0.
+      https://github.com/brettwooldridge/SparseBitSet
+
+  Apache Commons (commons-io:commons-io, commons-codec:commons-codec,
+  commons-compress:commons-compress, commons-collections4,
+  commons-lang3, commons-math3, commons-logging:commons-logging) and
+  Log4j API (org.apache.logging.log4j:log4j-api), pulled in by the chat
+  attachment extractors
+      Apache License 2.0.
+      Copyright The Apache Software Foundation.
+      https://commons.apache.org/  https://logging.apache.org/log4j/
+
   JetBrains annotations (org.jetbrains:annotations) and IntelliJ language
   annotations (org.intellij:annotations)
       Apache License 2.0.

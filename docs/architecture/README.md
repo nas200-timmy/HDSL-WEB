@@ -15,6 +15,7 @@
 | [flows/brand-launch.md](flows/brand-launch.md) | 流程 | 品牌实例启动、就绪探测、`/i/` 反代、终端 |
 | [flows/auth.md](flows/auth.md) | 流程 | 登录、开发者提权、Agent 票据、scope、自杀闸 |
 | [flows/transcode.md](flows/transcode.md) | 流程 | 转码启用、服务端队列、硬件失败决策与降级链 |
+| [flows/chat.md](flows/chat.md) | 流程 | 聊天 REST 命令、turn 线程、SSE、`/ws` 事件、附件与备份 |
 
 建议阅读顺序：`context` → `full` → 按需看一个 `flows`。`backend` 适合改代码前确认依赖方向。
 
@@ -23,6 +24,7 @@
 | 文档 | 状态 | 说明 |
 |---|---|---|
 | [../transcode.md](../transcode.md) | 已实现 | 转码模块的设计取舍与字段级细节；边界与流程见 [flows/transcode.md](flows/transcode.md) |
+| [../chat.md](../chat.md) | 已实现 | 面板聊天 v1 的设计取舍、数据/接口与实现记录；流程见 [flows/chat.md](flows/chat.md) |
 
 设计稿不画未落地的图；模块落地后补对应的 `flows/` 文档，并同步 `context.md` / `full.md`。
 

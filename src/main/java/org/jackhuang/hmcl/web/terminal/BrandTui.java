@@ -17,13 +17,19 @@
  */
 package org.jackhuang.hmcl.web.terminal;
 
+import org.jackhuang.hmcl.dsh.DshNodeRuntime;
+import org.jackhuang.hmcl.dsh.NodeSemver;
 import org.jackhuang.hmcl.web.brand.Brand;
+import org.jackhuang.hmcl.web.brand.BrandNodeRequirement;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /// Turns an installed brand package into the argv of its **interactive** TUI.
@@ -68,9 +74,73 @@ public interface BrandTui {
             case OPENCODE -> new OpencodeTui();
             case HERMES -> new HermesTui();
             case PI_WEB -> new PiTui();
+            case QWEN -> new QwenTui();
+            case MIMO -> new MimoTui();
+            case MINIMAX -> new MiniMaxTui();
             // dsh's TUI is a plugin and gets its adapter in a later stage.
             default -> null;
         };
+    }
+
+    /// The Node.js a brand's TUI should run on.
+    ///
+    /// TUI brands prefer the panel-managed runtime: their `engines.node`
+    /// ranges are narrow, and the host PATH routinely carries an older Node.
+    /// The installed package's own `package.json` is the first answer; the
+    /// panel's known range is the fallback for a release that declares none.
+    ///
+    /// @param packageDir the installed release directory
+    /// @param brand      the brand being launched
+    /// @return a usable runtime
+    /// @throws IOException when no Node.js exists at all
+    static DshNodeRuntime node(Path packageDir, Brand brand) throws IOException {
+        String range = nodeRange(packageDir, brand);
+        DshNodeRuntime managed = DshNodeRuntime.detectManaged().orElse(null);
+        DshNodeRuntime system = DshNodeRuntime.detect().orElse(null);
+        List<DshNodeRuntime> candidates = new ArrayList<>(2);
+        if (brand.prefersManagedNode()) {
+            candidates.add(managed);
+            candidates.add(system);
+        } else {
+            candidates.add(system);
+            candidates.add(managed);
+        }
+        for (DshNodeRuntime candidate : candidates) {
+            if (candidate == null) {
+                continue;
+            }
+            if (range == null || NodeSemver.satisfies(candidate.nodeVersion(), range)) {
+                return candidate;
+            }
+        }
+        if (managed != null) {
+            return managed;
+        }
+        if (system != null) {
+            return system;
+        }
+        throw new IOException("node is neither managed nor on PATH; install a Node runtime first");
+    }
+
+    /// The `engines.node` of an installed npm brand, or the panel's known
+    /// range when the release does not declare one.
+    static @Nullable String nodeRange(Path packageDir, Brand brand) {
+        String npm = brand.npmPackage();
+        if (npm != null) {
+            String declared = BrandNodeRequirement.ofDirectory(
+                    packageDir.resolve("node_modules").resolve(npm));
+            if (declared != null) {
+                return declared;
+            }
+        }
+        return brand.knownNodeRequirement(null);
+    }
+
+    /// Puts a runtime's `bin` directory ahead of the child's PATH so the agent
+    /// and every tool it spawns use the same Node.js.
+    static void applyNode(Map<String, String> environment, DshNodeRuntime runtime) {
+        environment.put("PATH", runtime.binDirectory() + File.pathSeparator
+                + environment.getOrDefault("PATH", ""));
     }
 
     /// The environment every brand TUI starts with: the panel's, with the

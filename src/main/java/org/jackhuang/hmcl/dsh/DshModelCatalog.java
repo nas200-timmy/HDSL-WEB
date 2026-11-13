@@ -63,8 +63,14 @@ public final class DshModelCatalog {
     /// Where the directory is published.
     public static final String DEFAULT_URL = "https://models.dev/api.json";
 
-    /// How long a request may take in total. The document is about five megabytes.
-    private static final Duration TIMEOUT = Duration.ofSeconds(20);
+    /// How long a request may take in total.
+    ///
+    /// The document is about six megabytes uncompressed and a little under 500 KB gzipped.
+    /// Twenty seconds was enough for a fast link and never for a slow one — on a line that
+    /// trickles at single-digit KB/s even the gzipped body needs minutes, and every refresh
+    /// timed out, so the snapshot silently aged for days. Gzip is asked for below, the limit
+    /// is five minutes, and the callers that can wait do so in the background.
+    private static final Duration TIMEOUT = Duration.ofSeconds(300);
 
     /// How long the connection may take to be established.
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(15);
@@ -432,6 +438,10 @@ public final class DshModelCatalog {
         HttpRequest request = HttpRequest.newBuilder(URI.create(url))
                 .timeout(TIMEOUT)
                 .header("Accept", "application/json")
+                // The JDK client neither asks for gzip nor unpacks it; doing both turns a
+                // six-megabyte document into ~460 KB, which is the difference between a refresh
+                // that finishes on a slow line and one that times out forever.
+                .header("Accept-Encoding", "gzip")
                 .header("User-Agent", USER_AGENT)
                 .GET()
                 .build();
@@ -444,9 +454,9 @@ public final class DshModelCatalog {
             // the response head in practice: a slow body can hang for minutes while the page's
             // own 30-second abort fires first. Waiting on the future bounds the whole exchange,
             // body included — which is the one a five-megabyte document actually spends time on.
-            java.util.concurrent.CompletableFuture<HttpResponse<String>> pending =
-                    client.sendAsync(request, HttpResponse.BodyHandlers.ofString());
-            HttpResponse<String> response;
+            java.util.concurrent.CompletableFuture<HttpResponse<byte[]>> pending =
+                    client.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray());
+            HttpResponse<byte[]> response;
             try {
                 response = pending.get(TIMEOUT.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
             } catch (java.util.concurrent.TimeoutException e) {
@@ -462,7 +472,18 @@ public final class DshModelCatalog {
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new IOException("HTTP " + response.statusCode());
             }
-            return response.body();
+            byte[] body = response.body();
+            String encoding = response.headers().firstValue("Content-Encoding").orElse("");
+            if (body != null && encoding.toLowerCase(java.util.Locale.ROOT).contains("gzip")) {
+                try (java.util.zip.GZIPInputStream gzip =
+                             new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(body))) {
+                    body = gzip.readAllBytes();
+                }
+            }
+            if (body == null) {
+                throw new IOException("empty body");
+            }
+            return new String(body, java.nio.charset.StandardCharsets.UTF_8);
         } finally {
             HttpClients.closeQuietly(client);
         }

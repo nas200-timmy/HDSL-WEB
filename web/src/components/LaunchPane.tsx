@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { launchBrandInstance, launchInstance, stopBrandInstance, stopInstance } from "../actions";
+import { isTuiBrand } from "../brandKind";
 import { I18N } from "../i18n";
 import { BRAND_LABEL, useLaunchEntry, type LaunchEntry } from "../launchEntry";
 import { setSelectedInstanceId, useSelectedInstanceId } from "../selection";
@@ -35,10 +36,15 @@ export function LaunchPane() {
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const current = useLaunchEntry();
   const running = current ? current.state === "RUNNING" : false;
+  const tui = current?.external ? isTuiBrand(current.external.brand) : false;
 
   const onAction = () => {
     if (!current) {
       nav("/download?tab=game");
+      return;
+    }
+    if (tui) {
+      toast("info", "这是 TUI 品牌实例：在「品牌实例」页点终端按钮打开它的 TUI");
       return;
     }
     if (current.kind === "dsh") {
@@ -59,9 +65,11 @@ export function LaunchPane() {
       <button className="launch-main ripple-host" onClick={onAction}>
         <span className="launch-action">
           {current
-            ? current.external?.brand === "pi-web" && current.external.webEnabled === false
-              ? I18N["dsh.brand.pi-web.terminalOnly"]
-              : actionLabel(current.state)
+            ? tui
+              ? I18N["terminal.open"]
+              : current.external?.brand === "pi-web" && current.external.webEnabled === false
+                ? I18N["dsh.brand.pi-web.terminalOnly"]
+                : actionLabel(current.state)
             : I18N["dsh.launch.no_instance"]}
         </span>
         <span className="launch-target">

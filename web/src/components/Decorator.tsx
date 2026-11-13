@@ -54,8 +54,11 @@ function parentLocation(pathname: string, search: string): string | null {
   if (pathname.startsWith("/brands")) {
     return "/instances";
   }
-  if (pathname === "/instances" && new URLSearchParams(search).get("view") === "brands") {
-    return "/instances";
+  if (pathname === "/instances") {
+    const view = new URLSearchParams(search).get("view");
+    if (view === "brands" || view === "tui" || view === "mc" || view === "mc-third") {
+      return "/instances";
+    }
   }
   const cut = pathname.lastIndexOf("/");
   return cut > 0 ? pathname.slice(0, cut) : "/";

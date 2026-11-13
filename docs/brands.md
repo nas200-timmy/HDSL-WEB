@@ -565,6 +565,29 @@ pi-web 的客户端用 `base: "./"` 构建，所有请求经 `appUrl.ts` 解析�
 - **`/i/<id>/` 未启动时 404**：品牌实例 id 只在面板进程内登记过才解析；磁盘上有、从未启动过的
   实例走品牌区 API 启动。
 
+## TUI 品牌实例（Qwen Code / MiMo Code / MiniMax Code）
+
+这三家是**纯 TUI 品牌**：`Brand.kind() == TUI`，实例只有一个 PTY，没有网页进程、没有端口、
+没有 `/i/<id>/` 挂载。实例列表左侧子侧栏新增**独立的一栏「TUI 品牌实例」**（`?view=tui`），
+只装 Qwen / MiMo / MiniMax；原来的「品牌实例」仍是七个网页品牌（含 ZCode），两者互不混排。
+实例卡只提供「进入终端 / 停终端 / 版本 / 安装日志 / 重命名 / 删除」，不再显示启动、停止、打开网页。
+
+| | Qwen Code | MiMo Code | MiniMax Code |
+|---|---|---|---|
+| npm 包 | `@qwen-code/qwen-code` | `@mimo-ai/cli` | `@minimax-ai/code` |
+| 入口 | `cli-entry.js` | `mimo.js`（或 `vendor/mimo`） | `cli.js` |
+| resume | `--resume <id>` | `--session <id>` | `--session <id>` |
+| 数据目录 | `QWEN_HOME` | `MIMOCODE_HOME` | `MINIMAX_DATA_DIR` |
+| Node 要求 | `>=22` | `>=20.10` | `>=22.19 <23 \|\| >=24.2 <27` |
+| 安装注意 | 纯 Node；保留 optional 平台包 | npm 包是 launcher，postinstall/首次运行从 FDS 下载二进制 | 体积大，`better-sqlite3` 需要 build script，POSIX 也走 hoisted |
+
+运行时统一走面板解析出的 Node（TUI 品牌优先托管运行时），并把它的 `bin` 前置到子进程
+`PATH`；实例 home 仍由面板创建并交给 agent，`home/` 与 `workspace/` 的隔离与网页品牌相同。
+安装仍是 `pnpm add`（带 `--config.dangerously-allow-all-builds=true`），不走 npm。
+
+启动接口对 TUI 品牌回 `409 tui_only`；Go 客户端按 `/api/brands/capabilities` 的 `kind`
+隐藏启动/停止，只留终端。网页端同样按这个能力位渲染，不靠品牌 id 硬编码。
+
 ## 相关代码
 
 - 后端：`src/main/java/org/jackhuang/hmcl/web/brand/`（`Brand` 描述符 + 插件能力位、`BrandCatalog`

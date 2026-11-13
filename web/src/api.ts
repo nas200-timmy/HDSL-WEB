@@ -54,6 +54,21 @@ import type {
   SystemStats,
   SystemStorage,
   PanelInfo,
+  ChatAssistant,
+  ChatSessionSummary,
+  ChatSession,
+  ChatAttachment,
+  ChatSettings,
+  ChatBackup,
+  ChatAccountProfile,
+  ChatModelInfo,
+  ChatProbe,
+  ChatProfile,
+  ChatSearchStatus,
+  ChatSearchResult,
+  ChatChatTest,
+  ChatVisionTest,
+  ChatTurnOutcome,
 } from "./types";
 
 export class ApiError extends Error {
@@ -1067,6 +1082,118 @@ export const api = {
     runtimeCancel: (id: string) =>
       request<TranscodeInstallJob>(`/api/transcode/runtime/install/${encodeURIComponent(id)}/cancel`,
         jsonInit("POST", {})),
+  },
+  // ---------- 面板聊天（docs/chat.md）：命令走 REST，流走 /ws ----------
+  chat: {
+    assistants: () => request<{ assistants: ChatAssistant[] }>("/api/chat/assistants"),
+    createAssistant: (body: Record<string, unknown>) =>
+      request<ChatAssistant>("/api/chat/assistants", jsonInit("POST", body)),
+    updateAssistant: (id: string, body: Record<string, unknown>) =>
+      request<ChatAssistant>(`/api/chat/assistants/${encodeURIComponent(id)}`, jsonInit("PATCH", body)),
+    deleteAssistant: (id: string) =>
+      request<{ ok: boolean }>(`/api/chat/assistants/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    duplicateAssistant: (id: string) =>
+      request<ChatAssistant>(`/api/chat/assistants/${encodeURIComponent(id)}/duplicate`, jsonInit("POST", {})),
+
+    sessions: (assistantId?: string) =>
+      request<{ sessions: ChatSessionSummary[] }>(
+        `/api/chat/sessions${assistantId ? `?assistant=${encodeURIComponent(assistantId)}` : ""}`,
+      ),
+    session: (id: string) =>
+      request<ChatSession>(`/api/chat/sessions/${encodeURIComponent(id)}`),
+    createSession: (body: { assistantId?: string; title?: string; model?: string; account?: string; reasoningLevel?: string }) =>
+      request<ChatSession>("/api/chat/sessions", jsonInit("POST", body)),
+    updateSession: (id: string, body: { title?: string; model?: string; account?: string; reasoningLevel?: string }) =>
+      request<ChatSession>(`/api/chat/sessions/${encodeURIComponent(id)}`, jsonInit("PATCH", body)),
+    deleteSession: (id: string) =>
+      request<{ ok: boolean }>(`/api/chat/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+    send: (id: string, body: { text: string; attachments?: string[]; model?: string; account?: string; requestId?: string; search?: boolean }) =>
+      request<ChatTurnOutcome>(`/api/chat/sessions/${encodeURIComponent(id)}/messages`, jsonInit("POST", body)),
+    regenerate: (id: string, body: { nodeId: string; mode: "in_place" | "truncate_after"; requestId?: string }) =>
+      request<ChatTurnOutcome>(`/api/chat/sessions/${encodeURIComponent(id)}/regenerate`, jsonInit("POST", body)),
+    edit: (id: string, body: { nodeId: string; text: string; requestId?: string }) =>
+      request<ChatTurnOutcome>(`/api/chat/sessions/${encodeURIComponent(id)}/edit`, jsonInit("POST", body)),
+    cancel: (turnId: string) =>
+      request<{ ok: boolean }>(`/api/chat/turns/${encodeURIComponent(turnId)}/cancel`, jsonInit("POST", {})),
+    deleteNode: (sessionId: string, nodeId: string) =>
+      request<ChatSession>(
+        `/api/chat/sessions/${encodeURIComponent(sessionId)}/nodes/${encodeURIComponent(nodeId)}`,
+        { method: "DELETE" },
+      ),
+    switchVariant: (sessionId: string, nodeId: string, messageId: string) =>
+      request<ChatSession>(
+        `/api/chat/sessions/${encodeURIComponent(sessionId)}/nodes/${encodeURIComponent(nodeId)}/variant`,
+        jsonInit("POST", { messageId }),
+      ),
+
+    uploadAttachment: (sessionId: string, file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return request<ChatAttachment>(
+        `/api/chat/attachments?sessionId=${encodeURIComponent(sessionId)}`,
+        { method: "POST", body: fd },
+        { timeoutMs: 120000 },
+      );
+    },
+    attachmentUrl: (id: string) => `api/chat/attachments/${encodeURIComponent(id)}`,
+
+    searchStatus: () => request<ChatSearchStatus>("/api/chat/search/status"),
+    searchTest: (query: string) =>
+      request<ChatSearchResult>("/api/chat/search/test", jsonInit("POST", { query }), { timeoutMs: 60000 }),
+    profile: () => request<ChatProfile>("/api/chat/profile"),
+    updateProfile: (body: { name?: string; avatar?: string | null }) =>
+      request<ChatProfile>("/api/chat/profile", jsonInit("PUT", body)),
+    uploadAvatar: (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return request<{ id: string; url: string }>(
+        "/api/chat/avatars",
+        { method: "POST", body: fd },
+        { timeoutMs: 60000 },
+      );
+    },
+    avatarUrl: (id: string) => `api/chat/avatars/${encodeURIComponent(id)}`,
+    settings: () => request<ChatSettings>("/api/chat/settings"),
+    updateSettings: (body: Record<string, unknown>) =>
+      request<ChatSettings>("/api/chat/settings", jsonInit("PATCH", body)),
+    backups: () => request<{ backups: ChatBackup[] }>("/api/chat/backups"),
+    backupNow: () => request<ChatBackup>("/api/chat/backup", jsonInit("POST", {})),
+
+    accounts: () => request<{ accounts: ChatAccountProfile[] }>("/api/chat/accounts"),
+    models: (account: string) =>
+      request<{ account: string; protocol: string; models: ChatModelInfo[] }>(
+        `/api/chat/models?account=${encodeURIComponent(account)}`,
+      ),
+    saveAccountProfile: (account: string, body: Record<string, unknown>) =>
+      request<ChatAccountProfile>(
+        `/api/chat/accounts/${encodeURIComponent(account)}`,
+        jsonInit("PATCH", body),
+      ),
+    saveCapability: (account: string, body: Record<string, unknown>) =>
+      request<ChatModelInfo>(
+        `/api/chat/accounts/${encodeURIComponent(account)}/capabilities`,
+        jsonInit("POST", body),
+      ),
+    probe: (account: string) =>
+      request<ChatProbe>(`/api/chat/accounts/${encodeURIComponent(account)}/probe`, jsonInit("POST", {})),
+    chatTest: (account: string, model?: string | null) =>
+      request<ChatChatTest>(
+        `/api/chat/accounts/${encodeURIComponent(account)}/chat-test`,
+        jsonInit("POST", model ? { model } : {}),
+        { timeoutMs: 130000 },
+      ),
+    visionTest: (account: string, model: string) =>
+      request<ChatVisionTest>(
+        `/api/chat/accounts/${encodeURIComponent(account)}/vision-test`,
+        jsonInit("POST", { model }),
+        { timeoutMs: 130000 },
+      ),
+    refreshModels: (account: string) =>
+      request<{ models: string[] }>(
+        `/api/chat/accounts/${encodeURIComponent(account)}/models/refresh`,
+        jsonInit("POST", {}),
+      ),
   },
 };
 
