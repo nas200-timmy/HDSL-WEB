@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PopupMenu } from "../../components/PopupMenu";
 import { AddIcon, CheckIcon, KeyboardArrowDownIcon, SearchIcon, SettingsIcon } from "../../components/icons";
 import type { ChatModelInfo } from "../../types";
@@ -25,6 +25,19 @@ export function ModelPicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const anchor = useRef<HTMLButtonElement | null>(null);
+  const search = useRef<HTMLInputElement | null>(null);
+
+  // 触屏上不自动聚焦搜索框：否则一点「切换模型」就弹出输入法，键盘又把列表顶掉。
+  useEffect(() => {
+    if (!open) {
+      setQuery("");
+      return;
+    }
+    if (!window.matchMedia("(pointer: fine)").matches) return;
+    // 弹层首帧是 visibility:hidden（等定位），hidden 元素 focus 会被忽略
+    const frame = requestAnimationFrame(() => requestAnimationFrame(() => search.current?.focus()));
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
 
   const currentGroup = groups.find((group) => group.name === account) ?? null;
   const current = currentGroup?.models.find((item) => item.id === model)
@@ -47,7 +60,11 @@ export function ModelPicker({
         ref={anchor}
         className="chat-model-button"
         disabled={disabled}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          // 输入框还留着焦点时，弹层里的搜索框会连带唤起键盘；先收起输入法。
+          if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+          setOpen((value) => !value);
+        }}
         title={current ? `${current.id} · 上下文 ${current.capabilities.maxContext}` : "选择模型"}
       >
         <span className="chat-model-button-main">
@@ -66,7 +83,7 @@ export function ModelPicker({
         <div className="chat-model-popup-head">
           <SearchIcon size={14} />
           <input
-            autoFocus
+            ref={search}
             value={query}
             placeholder="搜索模型或服务"
             onChange={(event) => setQuery(event.target.value)}
