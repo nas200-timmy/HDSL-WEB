@@ -44,6 +44,7 @@ export function Composer({
   draft, onDraft, onSend, onStop, streaming, disabled,
   groups, account, model, onPick, onManage, onAdd, pending, onUpload, onRemove, uploading,
   quickPhrases, focusSignal, historyImages, reasoningLevel, onReasoningLevel,
+  onUploadText, editing, onCancelEdit,
 }: {
   draft: string;
   onDraft: (value: string) => void;
@@ -66,6 +67,9 @@ export function Composer({
   historyImages: number;
   reasoningLevel: string;
   onReasoningLevel: (level: string) => void;
+  onUploadText: (text: string) => void;
+  editing?: boolean;
+  onCancelEdit?: () => void;
 }) {
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -133,6 +137,15 @@ export function Composer({
         void addFiles(event.dataTransfer.files);
       }}
     >
+      {editing && (
+        <div className="chat-edit-banner">
+          <span className="chat-edit-banner-title">编辑中</span>
+          <span className="chat-edit-banner-hint">保存后会重新生成这条消息之后的回复</span>
+          <button className="chat-edit-banner-close" onClick={onCancelEdit} title="退出编辑">
+            <CloseIcon size={14} />
+          </button>
+        </div>
+      )}
       {!canVision && (pendingImages > 0 || historyImages > 0) && (
         <div className="chat-composer-note">
           {pendingImages > 0
@@ -177,7 +190,7 @@ export function Composer({
         className="chat-input"
         value={draft}
         rows={1}
-        placeholder="发消息…（Enter 发送，Shift+Enter 换行）"
+        placeholder={editing ? "编辑这条消息…（Enter 保存，Esc 取消）" : "发消息…（Enter 发送，Shift+Enter 换行）"}
         disabled={disabled}
         onChange={(event) => onDraft(event.target.value)}
         onPaste={(event) => {
@@ -185,11 +198,23 @@ export function Composer({
           if (files.length > 0) {
             event.preventDefault();
             void addFiles(files);
+            return;
+          }
+          // 长文本粘贴不该灌满输入框：超过 100 字直接转成 .txt 附件，模型看到的是附件
+          const text = event.clipboardData.getData("text/plain");
+          if (text.length > 100) {
+            event.preventDefault();
+            onUploadText(text);
           }
         }}
         onCompositionStart={() => setComposing(true)}
         onCompositionEnd={() => setComposing(false)}
         onKeyDown={(event) => {
+          if (event.key === "Escape" && editing) {
+            event.preventDefault();
+            onCancelEdit?.();
+            return;
+          }
           if (event.key === "Enter" && !event.shiftKey && !composing) {
             event.preventDefault();
             if (!streaming && !disabled) onSend();
@@ -256,7 +281,7 @@ export function Composer({
             className="chat-send"
             onClick={onSend}
             disabled={disabled || uploading || (!draft.trim() && pending.length === 0)}
-            title="发送"
+            title={editing ? "保存修改" : "发送"}
           >
             <ArrowForwardIcon size={20} />
           </button>

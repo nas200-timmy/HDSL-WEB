@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
-import { ConfirmDialog, Dialog } from "../components/Dialog";
+import { ConfirmDialog } from "../components/Dialog";
 import {
   AddIcon, ArchiveIcon, DeleteIcon, DeployedCodeIcon, EditIcon, FormatListBulletedIcon,
   LockIcon, MenuIcon, MoreVertIcon, SettingsIcon,
@@ -21,6 +21,7 @@ import { ChatSidebar, RenameSessionDialog } from "./chat/ChatSidebar";
 import { Composer } from "./chat/Composer";
 import { Markdown } from "./chat/Markdown";
 import { MessageItem } from "./chat/MessageItem";
+import { AvatarView } from "./chat/AvatarView";
 import type { ModelGroup } from "./chat/ModelPicker";
 
 function dayLabel(at: number): string {
@@ -42,7 +43,7 @@ function requestId(): string {
 function LiveBubble({ assistant, text, reasoning }: { assistant: ChatAssistant | null; text: string; reasoning: string }) {
   return (
     <div className="chat-msg assistant">
-      <div className="chat-msg-avatar">{assistant?.avatar || "💬"}</div>
+      <div className="chat-msg-avatar"><AvatarView value={assistant?.avatar} /></div>
       <div className="chat-msg-body">
         <div className="chat-msg-name">{assistant?.name ?? "助手"}</div>
         {reasoning && (
@@ -80,12 +81,14 @@ export function ChatPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [session, setSession] = useState<ChatSession | null>(null);
   const [draft, setDraft] = useState("");
+  const [draftBeforeEdit, setDraftBeforeEdit] = useState("");
   const [pending, setPending] = useState<ChatAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [chatAccounts, setChatAccounts] = useState<ChatAccountProfile[]>([]);
   const [sessionAccount, setSessionAccount] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [reasoningLevel, setReasoningLevel] = useState("");
+  const [profile, setProfile] = useState<{ name: string; avatar: string | null }>({ name: "", avatar: null });
   const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -205,6 +208,12 @@ export function ChatPage() {
       setLoadingChat(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    void api.chat.profile()
+      .then((next) => setProfile({ name: next.name, avatar: next.avatar }))
+      .catch(() => { /* 资料读不到就用登录名 */ });
   }, []);
 
   useEffect(() => {
@@ -484,6 +493,11 @@ export function ChatPage() {
   };
 
   const send = async () => {
+    // 编辑模式下的 Enter/发送按钮是「保存修改」，不是新消息
+    if (editTarget) {
+      await saveEdit();
+      return;
+    }
     const text = draft.trim();
     if (!text && pending.length === 0) return;
     setBusy(true);
@@ -544,20 +558,42 @@ export function ChatPage() {
     }
   };
 
+  const startEdit = (nodeId: string, text: string) => {
+    setDraftBeforeEdit(draft);
+    setEditTarget({ nodeId, text });
+    setDraft(text);
+    setFocusSignal((value) => value + 1);
+  };
+
+  const cancelEdit = () => {
+    setEditTarget(null);
+    setDraft(draftBeforeEdit);
+  };
+
   const saveEdit = async () => {
     if (!editTarget || !session) return;
+    const text = draft.trim();
+    if (!text) return;
     setBusy(true);
     try {
       const outcome = await api.chat.edit(session.id, {
-        nodeId: editTarget.nodeId, text: editTarget.text, requestId: requestId(),
+        nodeId: editTarget.nodeId, text, requestId: requestId(),
       });
       setEditTarget(null);
+      setDraft("");
+      setDraftBeforeEdit("");
       await adoptOutcome(session.id, outcome);
     } catch (error) {
       reportError(error, "编辑失败");
     } finally {
       setBusy(false);
     }
+  };
+
+  /// 长文本粘贴：包成 .txt 走附件上传，输入框只留一个附件条。
+  const uploadText = async (text: string) => {
+    const name = `粘贴文本-${text.length}字.txt`;
+    await upload(new File([text], name, { type: "text/plain" }));
   };
 
   const removeNode = async () => {
@@ -695,7 +731,9 @@ export function ChatPage() {
               <MenuIcon size={20} />
             </button>
           )}
-          {currentAssistant && <span className="chat-header-avatar">{currentAssistant.avatar || "💬"}</span>}
+          {currentAssistant && (
+            <span className="chat-header-avatar"><AvatarView value={currentAssistant.avatar} /></span>
+          )}
           <div className="chat-header-title">
             <div className="chat-header-name">{session?.title || currentAssistant?.name || "聊天"}</div>
             <div className="chat-header-sub">
@@ -772,7 +810,7 @@ export function ChatPage() {
             <div className="chat-welcome-card">
               <div className="chat-welcome-hero">
                 <div className="chat-welcome-avatar-ring">
-                  <span className="chat-welcome-avatar">{currentAssistant?.avatar || "💬"}</span>
+                  <span className="chat-welcome-avatar"><AvatarView value={currentAssistant?.avatar} /></span>
                 </div>
                 <div className="chat-welcome-copy">
                   <h1>{currentAssistant?.name ?? "默认助手"}</h1>
@@ -832,9 +870,11 @@ export function ChatPage() {
                       liveContent={isLive ? live?.text : undefined}
                       liveReasoning={isLive ? live?.reasoning : undefined}
                       onRegenerate={(nodeId, mode) => setConfirmRegenerate({ nodeId, mode })}
-                      onEdit={(nodeId, text) => setEditTarget({ nodeId, text })}
+                      onEdit={(nodeId, text) => startEdit(nodeId, text)}
                       onDelete={(nodeId) => setDeleteNodeTarget(nodeId)}
                       onSwitchVariant={(nodeId, messageId) => void switchVariant(nodeId, messageId)}
+                      user={profile}
+                      editingNodeId={editTarget?.nodeId ?? null}
                     />
                   </Fragment>
                 );
@@ -870,6 +910,9 @@ export function ChatPage() {
               historyImages={historyImageCount}
               reasoningLevel={reasoningLevel}
               onReasoningLevel={(level) => void pickReasoning(level)}
+              onUploadText={(text) => void uploadText(text)}
+              editing={editTarget !== null}
+              onCancelEdit={cancelEdit}
             />
           </div>
         )}
@@ -915,26 +958,6 @@ export function ChatPage() {
         onConfirm={() => confirmRegenerate && void regenerate(confirmRegenerate.nodeId, confirmRegenerate.mode)}
         onCancel={() => setConfirmRegenerate(null)}
       />
-
-      <Dialog
-        open={editTarget !== null}
-        title="编辑消息"
-        onClose={busy ? undefined : () => setEditTarget(null)}
-        wide
-      >
-        <textarea
-          className="input chat-prompt-area"
-          rows={8}
-          value={editTarget?.text ?? ""}
-          onChange={(event) => setEditTarget((current) => current ? { ...current, text: event.target.value } : current)}
-        />
-        <div className="dialog-actions">
-          <button className="btn btn-text dim" disabled={busy} onClick={() => setEditTarget(null)}>取消</button>
-          <button className="btn btn-text" disabled={busy || !editTarget?.text.trim()} onClick={() => void saveEdit()}>
-            {busy ? "保存中…" : "保存并重新生成"}
-          </button>
-        </div>
-      </Dialog>
 
       <AssistantManagerDialog
         open={managerOpen}

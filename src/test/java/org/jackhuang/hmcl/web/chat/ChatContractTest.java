@@ -45,7 +45,8 @@ class ChatContractTest {
             for (String path : new String[]{
                     "/api/chat", "/api/chat/", "/api/chat/sessions",
                     "/api/chat/sessions/a/messages", "/api/chat/settings",
-                    "/api/chat/attachments/a", "/api/chat/assistants"}) {
+                    "/api/chat/attachments/a", "/api/chat/assistants",
+                    "/api/chat/profile", "/api/chat/avatars", "/api/chat/avatars/a"}) {
                 assertTrue(AgentScopes.forbidden(method, path), method + " " + path);
             }
         }

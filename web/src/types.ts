@@ -1140,6 +1140,12 @@ export interface ChatModelCapabilities {
   reasoningMode?: ChatReasoningMode;
 }
 
+/** 面板用户的聊天资料：名字 + 头像（`img:<id>` 或 null）。 */
+export interface ChatProfile {
+  name: string;
+  avatar: string | null;
+}
+
 export interface ChatModelInfo {
   id: string;
   capabilities: ChatModelCapabilities;

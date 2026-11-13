@@ -4,6 +4,7 @@ import { ContentCopyIcon, DeleteIcon, EditIcon, MoreVertIcon, PersonIcon, Refres
 import type { ChatAttachment, ChatMessage, ChatNode } from "../../types";
 import { api } from "../../api";
 import { Markdown } from "./Markdown";
+import { AvatarView } from "./AvatarView";
 
 function activeMessage(node: ChatNode): ChatMessage | null {
   if (node.variants.length === 0) return null;
@@ -31,11 +32,13 @@ function AttachmentChip({ attachment, onOpen }: { attachment: ChatAttachment; on
 
 /** 一条消息（一个节点）。variant 切换、两种重生成、编辑与删除都在这里。 */
 export function MessageItem({
-  node, assistant, liveContent, liveReasoning, streaming,
+  node, assistant, user, editingNodeId, liveContent, liveReasoning, streaming,
   onRegenerate, onEdit, onDelete, onSwitchVariant,
 }: {
   node: ChatNode;
   assistant: { name: string; avatar: string };
+  user: { name: string; avatar: string | null };
+  editingNodeId?: string | null;
   liveContent?: string;
   liveReasoning?: string;
   streaming?: boolean;
@@ -84,11 +87,18 @@ export function MessageItem({
   const openAttachment = (url: string) => window.open(url, "_blank", "noopener,noreferrer");
 
   return (
-    <div className={`chat-msg ${isUser ? "user" : "assistant"}`} data-node={node.id}>
-      {!isUser && <div className="chat-msg-avatar">{assistant.avatar || "💬"}</div>}
-      {isUser && <div className="chat-msg-avatar user"><PersonIcon size={16} /></div>}
+    <div className={`chat-msg ${isUser ? "user" : "assistant"}${editingNodeId === node.id ? " editing" : ""}`} data-node={node.id}>
+      {!isUser && (
+        <div className="chat-msg-avatar"><AvatarView value={assistant.avatar} /></div>
+      )}
+      {isUser && (
+        <div className="chat-msg-avatar user">
+          {user?.avatar ? <AvatarView value={user.avatar} /> : <PersonIcon size={16} />}
+        </div>
+      )}
       <div className="chat-msg-body">
         <div className={`chat-msg-meta${isUser ? " user" : ""}`}>
+          {isUser && user?.name && <span className="chat-msg-name">{user.name}</span>}
           {!isUser && <span className="chat-msg-name">{assistant.name}</span>}
           {!isUser && message.model && <span className="chat-msg-model">{message.model}</span>}
           {streaming && <span className="chat-streaming-pill"><span className="chat-streaming-dot" />生成中</span>}

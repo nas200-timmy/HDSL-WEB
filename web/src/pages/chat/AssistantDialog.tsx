@@ -3,6 +3,8 @@ import { ConfirmDialog, Dialog } from "../../components/Dialog";
 import { DeleteIcon } from "../../components/icons";
 import { api } from "../../api";
 import { toast } from "../../store";
+import { AvatarView } from "./AvatarView";
+import { AvatarCropDialog } from "./AvatarCropDialog";
 import type { ChatAccountProfile, ChatAssistant } from "../../types";
 import { errMsg } from "../../utils";
 
@@ -34,6 +36,7 @@ export function AssistantDialog({
   const [accounts, setAccounts] = useState<ChatAccountProfile[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [cropOpen, setCropOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -150,10 +153,23 @@ export function AssistantDialog({
       }
     >
       <div className="chat-form-grid">
-        <label className="form-row">
+        <div className="form-row">
           <span className="form-label">头像</span>
-          <input className="input" value={form.avatar} maxLength={8} onChange={(event) => patch("avatar", event.target.value)} />
-        </label>
+          <div className="avatar-picker">
+            <span className="avatar-picker-preview"><AvatarView value={form.avatar} /></span>
+            <input
+              className="input"
+              value={form.avatar.startsWith("img:") ? "" : form.avatar}
+              maxLength={8}
+              placeholder={form.avatar.startsWith("img:") ? "已使用图片头像" : "emoji 或文字"}
+              onChange={(event) => patch("avatar", event.target.value)}
+            />
+            <button className="btn btn-text" type="button" onClick={() => setCropOpen(true)}>上传图片</button>
+            {form.avatar.startsWith("img:") && (
+              <button className="btn btn-text dim" type="button" onClick={() => patch("avatar", "💬")}>清除</button>
+            )}
+          </div>
+        </div>
         <label className="form-row">
           <span className="form-label">名称</span>
           <input className="input" value={form.name} onChange={(event) => patch("name", event.target.value)} />
@@ -245,6 +261,12 @@ export function AssistantDialog({
         <span className="form-label">常用短语（每行一条，可选）</span>
         <textarea className="input" rows={3} value={form.quickPhrases} onChange={(event) => patch("quickPhrases", event.target.value)} />
       </label>
+
+      <AvatarCropDialog
+        open={cropOpen}
+        onClose={() => setCropOpen(false)}
+        onUploaded={(id) => patch("avatar", `img:${id}`)}
+      />
     </Dialog>
   );
 }
@@ -300,7 +322,7 @@ export function AssistantManagerDialog({
         <div className="chat-assistant-list">
           {assistants.map((assistant) => (
             <div className="chat-assistant-row" key={assistant.id}>
-              <span className="chat-avatar">{assistant.avatar || "💬"}</span>
+              <span className="chat-avatar"><AvatarView value={assistant.avatar} /></span>
               <div className="chat-assistant-row-text">
                 <div>
                   {assistant.name}

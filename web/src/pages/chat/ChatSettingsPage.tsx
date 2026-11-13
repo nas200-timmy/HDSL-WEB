@@ -9,14 +9,16 @@ import {
 import { isElevationRequired, requestDeveloperPassword } from "../../elevation";
 import { toast } from "../../store";
 import type {
-  ChatAccountProfile, ChatBackup, ChatChatTest, ChatModelInfo, ChatProbe, ChatSettings,
-  ChatVisionTest, CreateAccountBody, ModelProvider,
+  ChatAccountProfile, ChatBackup, ChatChatTest, ChatModelInfo, ChatProbe, ChatProfile,
+  ChatSettings, ChatVisionTest, CreateAccountBody, ModelProvider,
 } from "../../types";
 import { errMsg } from "../../utils";
+import { AvatarView } from "./AvatarView";
+import { AvatarCropDialog } from "./AvatarCropDialog";
 import { ModelCaps, capabilitySourceLabel } from "./ModelCaps";
 
 type Run = <T>(action: () => Promise<T>) => Promise<T>;
-type Tab = "providers" | "defaults" | "data" | "network";
+type Tab = "profile" | "providers" | "defaults" | "data" | "network";
 
 function bytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -39,6 +41,7 @@ export function ChatSettingsPage() {
   const [tab, setTab] = useState<Tab>("providers");
   const [settings, setSettings] = useState<ChatSettings | null>(null);
   const [accounts, setAccounts] = useState<ChatAccountProfile[]>([]);
+  const [profile, setProfile] = useState<ChatProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [needsElevation, setNeedsElevation] = useState(false);
   const [elevating, setElevating] = useState(false);
@@ -60,8 +63,10 @@ export function ChatSettingsPage() {
     try {
       const nextSettings = await run(() => api.chat.settings());
       const accountResult = await run(() => api.chat.accounts());
+      const nextProfile = await api.chat.profile();
       setSettings(nextSettings);
       setAccounts(accountResult.accounts);
+      setProfile(nextProfile);
       setNeedsElevation(false);
       setLoadError(null);
     } catch (error) {
@@ -114,6 +119,7 @@ export function ChatSettingsPage() {
       <div className="chat-settings-layout">
         <nav className="chat-settings-nav">
           {([
+            ["profile", "个人资料"],
             ["providers", "模型服务"],
             ["defaults", "默认模型"],
             ["data", "数据与备份"],
@@ -148,6 +154,8 @@ export function ChatSettingsPage() {
             </div>
           ) : loading || !settings ? (
             <div className="chat-settings-loading"><span className="spinner" /> 读取中…</div>
+          ) : tab === "profile" ? (
+            <ProfilePanel profile={profile} onSaved={setProfile} />
           ) : tab === "providers" ? (
             <ProvidersPanel
               accounts={accounts}
@@ -177,6 +185,75 @@ export function ChatSettingsPage() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function ProfilePanel({
+  profile, onSaved,
+}: {
+  profile: ChatProfile | null;
+  onSaved: (profile: ChatProfile) => void;
+}) {
+  const [name, setName] = useState(profile?.name ?? "");
+  const [avatar, setAvatar] = useState<string | null>(profile?.avatar ?? null);
+  const [cropOpen, setCropOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setName(profile?.name ?? "");
+    setAvatar(profile?.avatar ?? null);
+  }, [profile]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const next = await api.chat.updateProfile({ name: name.trim(), avatar });
+      onSaved(next);
+      toast("success", "个人资料已保存");
+    } catch (error) {
+      toast("error", `保存失败：${errMsg(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="chat-settings-card">
+      <div className="chat-settings-card-title">个人资料</div>
+      <div className="profile-card">
+        <button className="profile-avatar" onClick={() => setCropOpen(true)} title="更换头像">
+          <AvatarView value={avatar} fallback="👤" />
+          <span className="profile-avatar-edit">更换</span>
+        </button>
+        <div className="profile-fields">
+          <label className="form-row">
+            <span className="form-label">显示名称</span>
+            <input
+              className="input"
+              value={name}
+              maxLength={32}
+              placeholder="留空则使用面板登录名"
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <div className="hint">
+            只影响聊天页显示的名字和头像，不改面板登录名。头像是 PNG / JPEG / WebP 静态图片，
+            上传后服务端会重新编码成 512×512 PNG。
+          </div>
+          <div className="profile-actions">
+            <button className="btn btn-text dim" onClick={() => setAvatar(null)}>清除头像</button>
+            <button className="btn btn-raised" disabled={busy} onClick={() => void save()}>
+              {busy ? "保存中…" : "保存"}
+            </button>
+          </div>
+        </div>
+      </div>
+      <AvatarCropDialog
+        open={cropOpen}
+        onClose={() => setCropOpen(false)}
+        onUploaded={(id) => setAvatar(`img:${id}`)}
+      />
     </div>
   );
 }

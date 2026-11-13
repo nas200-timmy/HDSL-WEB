@@ -201,6 +201,7 @@ class ApiGuardFilterTest {
         assertTrue(ApiGuardFilter.streamed("/api/mc/instances/abc/files/mods"));
         assertTrue(ApiGuardFilter.streamed("/api/mc/instances/abc/files/plugins"));
         assertTrue(ApiGuardFilter.streamed("/api/chat/attachments"));
+        assertTrue(ApiGuardFilter.streamed("/api/chat/avatars"));
     }
 
     @Test

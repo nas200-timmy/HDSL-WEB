@@ -1,3 +1,4 @@
+import { AvatarView } from "./AvatarView";
 import { useEffect, useRef, useState } from "react";
 import { Dialog } from "../../components/Dialog";
 import { PopupItem, PopupMenu, PopupSep } from "../../components/PopupMenu";
@@ -78,7 +79,7 @@ export function ChatSidebar({
       <div className="chat-sidebar-head">
         <button ref={menuRef} className="chat-assistant-switch ripple-host" onClick={() => setAssistantMenu(menuRef.current)}>
           <span className="chat-avatar-ring">
-            <span className="chat-avatar">{assistant?.avatar || "💬"}</span>
+            <span className="chat-avatar"><AvatarView value={assistant?.avatar} /></span>
           </span>
           <span className="chat-assistant-text">
             <span className="chat-assistant-name">{assistant?.name ?? "默认助手"}</span>

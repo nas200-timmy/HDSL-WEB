@@ -55,6 +55,7 @@ public final class ChatService {
     private final ChatTurnManager turns;
     private final ChatBackupService backups;
     private final ChatProbeService probes;
+    private final ChatAvatars avatars;
     private final EventBus bus;
     private final Path dataDir;
     private final ScheduledExecutorService scheduler =
@@ -78,6 +79,7 @@ public final class ChatService {
         this.turns = new ChatTurnManager(store, attachments, bus, settings);
         this.backups = new ChatBackupService(store, dataDir);
         this.probes = new ChatProbeService(store, dataDir);
+        this.avatars = new ChatAvatars(dataDir);
         ChatModelCatalog.install(dataDir.resolve("chat"));
         schedule();
         scheduleCatalog();
@@ -139,16 +141,144 @@ public final class ChatService {
         return json;
     }
 
+    private static final String PROFILE_KEY = "profile";
+    private static final String AVATAR_PREFIX = "img:";
+
+    /// 头像值只有两种：emoji 文本，或 `img:<id>`（指向 [ChatAvatars] 里那张重编码过的 PNG）。
+    private void requireAvatar(String avatar) throws ChatException {
+        if (avatar != null && avatar.startsWith(AVATAR_PREFIX)
+                && avatars.file(avatar.substring(AVATAR_PREFIX.length())) == null) {
+            throw new ChatException(400, "avatar_not_found", "头像图片不存在，请重新上传");
+        }
+    }
+
+    private String profileName() throws SQLException {
+        String raw = store.setting(PROFILE_KEY);
+        if (raw != null && !raw.isBlank()) {
+            try {
+                com.google.gson.JsonObject object =
+                        com.google.gson.JsonParser.parseString(raw).getAsJsonObject();
+                if (object.has("name") && object.get("name").isJsonPrimitive()) {
+                    String name = object.get("name").getAsString();
+                    if (!name.isBlank()) {
+                        return name;
+                    }
+                }
+            } catch (RuntimeException ignored) {
+                // 坏掉的资料按默认处理。
+            }
+        }
+        return "";
+    }
+
+    private @Nullable String profileAvatar() throws SQLException {
+        String raw = store.setting(PROFILE_KEY);
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            com.google.gson.JsonObject object =
+                    com.google.gson.JsonParser.parseString(raw).getAsJsonObject();
+            if (object.has("avatar") && object.get("avatar").isJsonPrimitive()) {
+                String avatar = object.get("avatar").getAsString();
+                return avatar.isBlank() ? null : avatar;
+            }
+        } catch (RuntimeException ignored) {
+            // 同上。
+        }
+        return null;
+    }
+
+    /// 当前用户的聊天资料。name 缺省就用面板登录名；avatar 可能为 null。
+    public JsonObject profile(String username) throws SQLException {
+        String name = profileName();
+        JsonObject json = new JsonObject();
+        json.addProperty("name", name.isBlank() ? username : name);
+        addNullable(json, "avatar", profileAvatar());
+        return json;
+    }
+
+    public JsonObject updateProfile(JsonObject body, String username) throws ChatException, SQLException {
+        String storedName = profileName();
+        String name = body.has("name") ? string(body, "name", "").trim() : storedName;
+        if (name.length() > 32) {
+            throw new ChatException(400, "invalid_name", "名字不能超过 32 个字符");
+        }
+        String avatar = body.has("avatar") ? nullable(body, "avatar") : profileAvatar();
+        if (avatar != null) {
+            avatar = avatar.trim();
+            if (avatar.isEmpty()) {
+                avatar = null;
+            }
+        }
+        requireAvatar(avatar);
+        JsonObject stored = new JsonObject();
+        stored.addProperty("name", name);
+        if (avatar == null) {
+            stored.add("avatar", com.google.gson.JsonNull.INSTANCE);
+        } else {
+            stored.addProperty("avatar", avatar);
+        }
+        store.putSetting(PROFILE_KEY, stored.toString());
+        pruneAvatars();
+        return profile(username);
+    }
+
+    public String uploadAvatar(jakarta.servlet.http.Part part)
+            throws ChatException, SQLException {
+        if (part == null || part.getSize() == 0) {
+            throw new ChatException(400, "file_required", "a file part is required");
+        }
+        if (part.getSize() > ChatAvatars.MAX_BYTES) {
+            throw new ChatException(413, "image_too_large", "头像不能超过 4 MB");
+        }
+        try (java.io.InputStream input = part.getInputStream()) {
+            byte[] bytes = input.readNBytes((int) ChatAvatars.MAX_BYTES + 1);
+            if (bytes.length > ChatAvatars.MAX_BYTES) {
+                throw new ChatException(413, "image_too_large", "头像不能超过 4 MB");
+            }
+            // 上传后先不清理：这张还没被资料/助手引用，按引用清理会把它当场删掉。
+            // 取消上传留下的文件会在下一次保存资料或助手时被顺手清走。
+            return avatars.save(bytes);
+        } catch (java.io.IOException e) {
+            throw new ChatException(400, "upload_failed", "读取上传失败：" + e.getMessage());
+        }
+    }
+
+    public @Nullable java.nio.file.Path avatarFile(String id) {
+        return avatars.file(id);
+    }
+
+    /// 只保留仍在引用的头像文件：资料里的一张 + 每个助手的 `img:<id>`。
+    private void pruneAvatars() throws SQLException {
+        java.util.Set<String> keep = new java.util.HashSet<>();
+        String profile = profileAvatar();
+        if (profile != null && profile.startsWith(AVATAR_PREFIX)) {
+            keep.add(profile.substring(AVATAR_PREFIX.length()));
+        }
+        for (ChatStore.Assistant assistant : store.assistants()) {
+            String avatar = assistant.avatar();
+            if (avatar != null && avatar.startsWith(AVATAR_PREFIX)) {
+                keep.add(avatar.substring(AVATAR_PREFIX.length()));
+            }
+        }
+        avatars.prune(keep);
+    }
+
     public ChatStore.Assistant createAssistant(JsonObject body) throws ChatException, SQLException {
         String name = required(body, "name", "name is required");
+        String avatar = string(body, "avatar", "💬");
+        requireAvatar(avatar);
         ChatStore.Assistant draft = new ChatStore.Assistant(null, name,
-                string(body, "avatar", "💬"), string(body, "description", ""),
+                avatar, string(body, "description", ""),
                 string(body, "systemPrompt", ""), string(body, "openingMessage", ""),
                 nullable(body, "account"), nullable(body, "model"),
                 doubleValue(body, "temperature"), intValue(body, "maxTokens"),
                 nullable(body, "reasoningLevel"), arrayJson(body, "quickPhrases"),
                 false, 0, 0);
-        return store.createAssistant(draft);
+        ChatStore.Assistant created = store.createAssistant(draft);
+        pruneAvatars();
+        return created;
     }
 
     public ChatStore.Assistant updateAssistant(String id, JsonObject body)
@@ -156,6 +286,9 @@ public final class ChatService {
         ChatStore.Assistant current = store.assistant(id);
         if (current == null) {
             throw new ChatException(404, "assistant_not_found", "assistant not found");
+        }
+        if (body.has("avatar")) {
+            requireAvatar(string(body, "avatar", current.avatar()));
         }
         ChatStore.Assistant updated = new ChatStore.Assistant(id,
                 body.has("name") ? string(body, "name", current.name()) : current.name(),
@@ -170,7 +303,9 @@ public final class ChatService {
                 body.has("reasoningLevel") ? nullable(body, "reasoningLevel") : current.reasoningLevel(),
                 body.has("quickPhrases") ? arrayJson(body, "quickPhrases") : current.quickPhrasesJson(),
                 current.builtin(), current.createdAt(), current.updatedAt());
-        return store.updateAssistant(updated);
+        ChatStore.Assistant saved = store.updateAssistant(updated);
+        pruneAvatars();
+        return saved;
     }
 
     public void deleteAssistant(String id) throws ChatException, SQLException {
@@ -182,6 +317,7 @@ public final class ChatService {
             throw new ChatException(409, "builtin_assistant", "the built-in assistant cannot be deleted");
         }
         store.deleteAssistant(id);
+        pruneAvatars();
         broadcast("chat-assistants-changed", null);
     }
 

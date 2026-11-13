@@ -63,6 +63,7 @@ import type {
   ChatAccountProfile,
   ChatModelInfo,
   ChatProbe,
+  ChatProfile,
   ChatChatTest,
   ChatVisionTest,
   ChatTurnOutcome,
@@ -1135,6 +1136,19 @@ export const api = {
     },
     attachmentUrl: (id: string) => `api/chat/attachments/${encodeURIComponent(id)}`,
 
+    profile: () => request<ChatProfile>("/api/chat/profile"),
+    updateProfile: (body: { name?: string; avatar?: string | null }) =>
+      request<ChatProfile>("/api/chat/profile", jsonInit("PUT", body)),
+    uploadAvatar: (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return request<{ id: string; url: string }>(
+        "/api/chat/avatars",
+        { method: "POST", body: fd },
+        { timeoutMs: 60000 },
+      );
+    },
+    avatarUrl: (id: string) => `api/chat/avatars/${encodeURIComponent(id)}`,
     settings: () => request<ChatSettings>("/api/chat/settings"),
     updateSettings: (body: Record<string, unknown>) =>
       request<ChatSettings>("/api/chat/settings", jsonInit("PATCH", body)),

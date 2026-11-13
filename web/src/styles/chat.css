@@ -353,7 +353,17 @@
 }
 
 .chat-msg.user .chat-msg-avatar {
-  display: none;
+  display: flex;
+  overflow: hidden;
+}
+
+/* 头像图片：所有容器（消息、侧栏、助手列表、资料页）共用 */
+.chat-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
 }
 
 .chat-msg-body {
@@ -1253,11 +1263,11 @@
   }
 
   .chat-msg.user .chat-msg-avatar {
-    display: none;
+    display: flex;
   }
 
   .chat-msg.user .chat-msg-body {
-    max-width: 92%;
+    max-width: calc(100% - 40px);
   }
 
   .chat-code,
@@ -1723,7 +1733,7 @@
 }
 
 .chat-msg.user .chat-msg-name {
-  display: none;
+  display: inline;
 }
 
 .chat-drop-hint {
@@ -1811,20 +1821,20 @@
   }
 
   .chat-msg.user .chat-msg-avatar {
-    display: none;
+    display: flex;
   }
 
   .chat-msg.user {
-    flex-direction: row;
-    justify-content: flex-end;
+    flex-direction: row-reverse;
   }
 
   .chat-msg.user .chat-msg-body {
-    max-width: 100%;
+    max-width: calc(100% - 40px);
   }
 
   .chat-msg.user .chat-bubble {
-    width: 100%;
+    width: auto;
+    max-width: 100%;
   }
 }
 
@@ -2768,4 +2778,175 @@
   color: var(--monet-error);
   font-size: 11px;
   line-height: 1.5;
+}
+
+
+/* ---------------- 头像与个人资料 ---------------- */
+
+.chat-msg.editing .chat-bubble {
+  outline: 2px solid var(--monet-primary);
+  outline-offset: 2px;
+}
+
+.profile-card {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 10px 4px 4px;
+}
+
+.profile-avatar {
+  width: 76px;
+  height: 76px;
+  flex: none;
+  border-radius: 50%;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--monet-primary-container);
+  color: var(--monet-on-primary-container);
+  font-size: 32px;
+}
+
+.profile-avatar-edit {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 1px 0;
+  font-size: 9px;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 120ms var(--ease);
+}
+
+.profile-avatar:hover .profile-avatar-edit,
+.profile-avatar:focus-visible .profile-avatar-edit {
+  opacity: 1;
+}
+
+.profile-fields {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.profile-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.avatar-crop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0 10px;
+}
+
+.avatar-crop-canvas {
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  touch-action: none;
+  cursor: grab;
+  background: var(--monet-surface-container-high);
+}
+
+.avatar-crop-canvas:active {
+  cursor: grabbing;
+}
+
+.avatar-crop-zoom {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  font-size: 12px;
+  color: var(--monet-on-surface-variant);
+}
+
+.avatar-crop-zoom input {
+  flex: 1;
+}
+
+.avatar-crop-empty {
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  border: 1px dashed var(--monet-outline);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--monet-on-surface-variant);
+  font-size: 13px;
+}
+
+.avatar-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.avatar-picker .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.avatar-picker-preview {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--monet-primary-container);
+  color: var(--monet-on-primary-container);
+  font-size: 18px;
+}
+
+.chat-edit-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--monet-primary) 10%, transparent);
+  color: var(--monet-primary);
+  font-size: 11px;
+}
+
+.chat-edit-banner-title {
+  font-weight: 600;
+}
+
+.chat-edit-banner-hint {
+  color: var(--monet-on-surface-variant);
+}
+
+.chat-edit-banner-close {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+}
+
+.chat-edit-banner-close:hover {
+  background: var(--monet-on-surface-variant-transparent-38);
 }

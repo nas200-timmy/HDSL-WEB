@@ -243,6 +243,46 @@ public final class ChatApiServlet extends HttpServlet {
             return;
         }
 
+        if ("/profile".equals(route)) {
+            if ("GET".equals(method)) {
+                Json.write(response, chat.profile(usernameOf(request)));
+                return;
+            }
+            if ("PUT".equals(method) || "PATCH".equals(method)) {
+                JsonObject body = readBody(request, response);
+                if (body != null) {
+                    Json.write(response, chat.updateProfile(body, usernameOf(request)));
+                }
+                return;
+            }
+            method(response, "GET, PUT");
+            return;
+        }
+
+        if ("/avatars".equals(route)) {
+            if (!"POST".equals(method)) {
+                method(response, "POST");
+                return;
+            }
+            Part part;
+            try {
+                part = request.getPart("file");
+            } catch (jakarta.servlet.ServletException e) {
+                throw new ChatException(400, "multipart_error", e.getMessage());
+            }
+            String id = chat.uploadAvatar(part);
+            JsonObject body = new JsonObject();
+            body.addProperty("id", id);
+            body.addProperty("url", "/api/chat/avatars/" + id);
+            Json.write(response, HttpServletResponse.SC_CREATED, body);
+            return;
+        }
+
+        if (route.startsWith("/avatars/") && "GET".equals(method)) {
+            serveAvatar(response, route.substring("/avatars/".length()));
+            return;
+        }
+
         if ("/settings".equals(route)) {
             if ("GET".equals(method)) {
                 if (!requireElevation(request, response)) {
@@ -418,6 +458,29 @@ public final class ChatApiServlet extends HttpServlet {
         }
 
         Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+    }
+
+    /// 头像文件：服务端重编码过的 PNG，文件名是内容哈希，可以长缓存。
+    private void serveAvatar(HttpServletResponse response, String id) throws IOException {
+        Path path = chat.avatarFile(id);
+        if (path == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "avatar not found");
+            return;
+        }
+        response.setStatus(200);
+        response.setContentType("image/png");
+        response.setHeader("X-Content-Type-Options", "nosniff");
+        response.setHeader("Cache-Control", "private, max-age=86400, immutable");
+        response.setHeader("Content-Security-Policy", "default-src 'none'");
+        try (InputStream input = Files.newInputStream(path)) {
+            input.transferTo(response.getOutputStream());
+        }
+    }
+
+    /// 当前登录用户；auth 关闭时面板只有一个 admin，和 `/api/auth/whoami` 保持一致。
+    private static String usernameOf(HttpServletRequest request) {
+        Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
+        return session instanceof AuthService.Session value ? value.username() : "admin";
     }
 
     private void download(HttpServletResponse response, String id) throws IOException, SQLException {
