@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.chat;
 
 import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -47,7 +48,8 @@ public interface ChatProtocol {
             List<ChatMessage> messages,
             Double temperature,
             Integer maxTokens,
-            String reasoningLevel) {
+            String reasoningLevel,
+            @Nullable ChatCapabilities.ReasoningMode reasoning) {
     }
 
     record ChatMessage(String role, String text, List<Attachment> attachments) {

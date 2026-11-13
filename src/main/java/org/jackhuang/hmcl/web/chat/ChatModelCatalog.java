@@ -56,7 +56,16 @@ public final class ChatModelCatalog {
     /// 下载上限：原文件约 6 MB，给一倍余量即可，防止被一个坏端点灌满磁盘。
     private static final int MAX_BYTES = 16 * 1024 * 1024;
 
-    record Entry(boolean vision, boolean tools, boolean reasoning, int maxContext, int maxOutput) {
+    /// 目录里每个模型的能力，外加它怎么控制思考（models.dev 的 `reasoning_options`）：
+    /// kind = `toggle`（只有开关）/ `effort`（low/medium/high…）/ `budget_tokens`（数字预算）/
+    /// `none`。values 是 effort 允许的词，min/max 是预算范围。
+    record Entry(boolean vision, boolean tools, boolean reasoning, int maxContext, int maxOutput,
+                 String reasoningKind, java.util.List<String> reasoningValues,
+                 int reasoningMin, int reasoningMax) {
+    }
+
+    record Reasoning(String kind, java.util.List<String> values, int min, int max) {
+        static final Reasoning NONE = new Reasoning("none", java.util.List.of(), 0, 0);
     }
 
     private static volatile Map<String, Entry> index = Map.of();
@@ -115,21 +124,19 @@ public final class ChatModelCatalog {
                     .header("User-Agent", org.jackhuang.hmcl.Metadata.NAME + "/" + org.jackhuang.hmcl.Metadata.VERSION)
                     .GET()
                     .build();
-            HttpResponse<InputStream> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            // 用 ofByteArray + 显式总时限：请求自带的 timeout 只保证响应头到达，
+            // 网络慢或对端卡住时读 body 会把这个维护线程钉死（备份也跟着停）。
+            HttpResponse<byte[]> response = CLIENT
+                    .sendAsync(request, HttpResponse.BodyHandlers.ofByteArray())
+                    .get(90, java.util.concurrent.TimeUnit.SECONDS);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                try (InputStream body = response.body()) {
-                    body.readNBytes(1024);
-                }
                 return false;
             }
-            String text;
-            try (InputStream body = response.body()) {
-                byte[] bytes = body.readNBytes(MAX_BYTES + 1);
-                if (bytes.length > MAX_BYTES) {
-                    return false;
-                }
-                text = new String(bytes, StandardCharsets.UTF_8);
+            byte[] bytes = response.body();
+            if (bytes == null || bytes.length == 0 || bytes.length > MAX_BYTES) {
+                return false;
             }
+            String text = new String(bytes, StandardCharsets.UTF_8);
             Map<String, Entry> parsed = parseApi(text);
             if (parsed.isEmpty()) {
                 return false;
@@ -138,12 +145,30 @@ public final class ChatModelCatalog {
             index = parsed;
             updatedAt = System.currentTimeMillis();
             return true;
-        } catch (IOException | RuntimeException | InterruptedException e) {
+        } catch (IOException | RuntimeException | InterruptedException
+                 | java.util.concurrent.ExecutionException
+                 | java.util.concurrent.TimeoutException e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
             return false;
         }
+    }
+
+    /// 目录条目（不转成能力，给思考挡位解析用）。
+    static @Nullable Entry entry(String model) {
+        String key = model == null ? "" : model.trim().toLowerCase(Locale.ROOT);
+        if (key.isEmpty() || index.isEmpty()) {
+            return null;
+        }
+        Entry entry = index.get(key);
+        if (entry == null) {
+            int slash = key.indexOf('/');
+            if (slash >= 0) {
+                entry = index.get(key.substring(slash + 1));
+            }
+        }
+        return entry;
     }
 
     /// 目录里查不到（或还没装）返回 null，交给内置规则表。
@@ -219,12 +244,13 @@ public final class ChatModelCatalog {
                     context = intOf(limit.getAsJsonObject().get("context"));
                     output = intOf(limit.getAsJsonObject().get("output"));
                 }
+                Reasoning reasoningMode = reasoningOptions(info);
                 votes.computeIfAbsent(model.getKey().toLowerCase(Locale.ROOT), key -> new Vote())
-                        .add(vision, tools, reasoning, context, output);
+                        .add(vision, tools, reasoning, context, output, reasoningMode);
                 JsonElement canonical = info.get("canonical_model_id");
                 if (canonical != null && canonical.isJsonPrimitive()) {
                     votes.computeIfAbsent(canonical.getAsString().toLowerCase(Locale.ROOT), key -> new Vote())
-                            .add(vision, tools, reasoning, context, output);
+                            .add(vision, tools, reasoning, context, output, reasoningMode);
                 }
             }
         }
@@ -244,9 +270,20 @@ public final class ChatModelCatalog {
                 continue;
             }
             JsonObject info = model.getValue().getAsJsonObject();
+            java.util.List<String> values = new java.util.ArrayList<>();
+            JsonElement valueList = info.get("reasoningValues");
+            if (valueList != null && valueList.isJsonArray()) {
+                for (JsonElement item : valueList.getAsJsonArray()) {
+                    if (item.isJsonPrimitive()) {
+                        values.add(item.getAsString());
+                    }
+                }
+            }
             result.put(model.getKey().toLowerCase(Locale.ROOT), new Entry(
                     bool(info, "vision"), bool(info, "tools"), bool(info, "reasoning"),
-                    intOf(info.get("context")), intOf(info.get("output"))));
+                    intOf(info.get("context")), intOf(info.get("output")),
+                    string(info, "reasoningKind", "none"), java.util.List.copyOf(values),
+                    intOf(info.get("reasoningMin")), intOf(info.get("reasoningMax"))));
         }
         return result;
     }
@@ -264,6 +301,18 @@ public final class ChatModelCatalog {
             row.addProperty("reasoning", entry.reasoning());
             row.addProperty("context", entry.maxContext());
             row.addProperty("output", entry.maxOutput());
+            row.addProperty("reasoningKind", entry.reasoningKind());
+            if (!entry.reasoningValues().isEmpty()) {
+                com.google.gson.JsonArray values = new com.google.gson.JsonArray();
+                entry.reasoningValues().forEach(values::add);
+                row.add("reasoningValues", values);
+            }
+            if (entry.reasoningMin() > 0) {
+                row.addProperty("reasoningMin", entry.reasoningMin());
+            }
+            if (entry.reasoningMax() > 0) {
+                row.addProperty("reasoningMax", entry.reasoningMax());
+            }
             modelsJson.add(id, row);
         });
         root.add("models", modelsJson);
@@ -271,6 +320,46 @@ public final class ChatModelCatalog {
         Path temp = dir.resolve(FILE_NAME + ".tmp");
         Files.writeString(temp, root.toString(), StandardCharsets.UTF_8);
         Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING);
+    }
+
+    /// models.dev 的 `reasoning_options`：可能给 effort 词表、budget_tokens 范围或 toggle。
+    private static Reasoning reasoningOptions(JsonObject info) {
+        JsonElement options = info.get("reasoning_options");
+        if (options == null || !options.isJsonArray()) {
+            return Reasoning.NONE;
+        }
+        Reasoning best = Reasoning.NONE;
+        for (JsonElement element : options.getAsJsonArray()) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject option = element.getAsJsonObject();
+            String type = string(option, "type", "");
+            if ("effort".equals(type)) {
+                java.util.List<String> values = new java.util.ArrayList<>();
+                JsonElement list = option.get("values");
+                if (list != null && list.isJsonArray()) {
+                    for (JsonElement item : list.getAsJsonArray()) {
+                        if (item.isJsonPrimitive()) {
+                            values.add(item.getAsString().toLowerCase(Locale.ROOT));
+                        }
+                    }
+                }
+                return new Reasoning("effort", java.util.List.copyOf(values), 0, 0);
+            }
+            if ("budget_tokens".equals(type)) {
+                best = new Reasoning("budget", java.util.List.of(),
+                        intOf(option.get("min")), intOf(option.get("max")));
+            } else if ("toggle".equals(type) && best.kind().equals("none")) {
+                best = new Reasoning("toggle", java.util.List.of(), 0, 0);
+            }
+        }
+        return best;
+    }
+
+    private static String string(JsonObject object, String name, String fallback) {
+        JsonElement element = object.get(name);
+        return element != null && element.isJsonPrimitive() ? element.getAsString() : fallback;
     }
 
     private static boolean bool(JsonObject object, String name) {
@@ -306,8 +395,11 @@ public final class ChatModelCatalog {
         private int reasoning;
         private int context;
         private int output;
+        private final java.util.Map<String, Integer> modeVotes = new java.util.HashMap<>();
+        private final java.util.Map<String, Reasoning> modes = new java.util.HashMap<>();
 
-        void add(boolean hasVision, boolean hasTools, boolean hasReasoning, int ctx, int out) {
+        void add(boolean hasVision, boolean hasTools, boolean hasReasoning, int ctx, int out,
+                 Reasoning mode) {
             total++;
             if (hasVision) {
                 vision++;
@@ -320,11 +412,38 @@ public final class ChatModelCatalog {
             }
             context = minPositive(context, ctx);
             output = minPositive(output, out);
+            if (!mode.kind().equals("none")) {
+                // 同一 id 在多个供应商下的声明可能不同（有的只给 high/max，有的给全套）。
+                // 取**出现最多**的那份，而不是并集：并集等于「哪家宽松就按哪家」，
+                // 会把 only-high 的模型误判成可以关、可以选低。
+                String key = mode.kind() + "|" + mode.values() + "|" + mode.min() + "|" + mode.max();
+                modeVotes.merge(key, 1, Integer::sum);
+                modes.put(key, mode);
+            }
         }
 
         Entry toEntry() {
+            Reasoning reasoningMode = dominantMode();
             return new Entry(vision * 2 > total, tools * 2 > total, reasoning * 2 > total,
-                    context > 0 ? context : 128_000, output > 0 ? output : 16_384);
+                    context > 0 ? context : 128_000, output > 0 ? output : 16_384,
+                    reasoningMode.kind(), reasoningMode.values(),
+                    reasoningMode.min(), reasoningMode.max());
+        }
+
+        private Reasoning dominantMode() {
+            Reasoning best = Reasoning.NONE;
+            int bestVotes = 0;
+            for (java.util.Map.Entry<String, Integer> entry : modeVotes.entrySet()) {
+                Reasoning candidate = modes.get(entry.getKey());
+                int votes = entry.getValue();
+                // 票数相同取更严格的一份（词表更短）
+                if (votes > bestVotes || (votes == bestVotes
+                        && candidate.values().size() < best.values().size())) {
+                    best = candidate;
+                    bestVotes = votes;
+                }
+            }
+            return best;
         }
 
         private static int minPositive(int current, int value) {

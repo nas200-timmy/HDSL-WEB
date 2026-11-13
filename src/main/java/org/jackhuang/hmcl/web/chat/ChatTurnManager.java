@@ -63,7 +63,8 @@ public final class ChatTurnManager {
 
     private record Resolved(
             String model, String account, ChatEndpoints.Profile profile,
-            ChatProtocol protocol, ChatCapabilities.Capabilities capability) {
+            ChatProtocol protocol, ChatCapabilities.Capabilities capability,
+            ChatCapabilities.ReasoningMode reasoning) {
     }
 
     private final ChatStore store;
@@ -411,7 +412,9 @@ public final class ChatTurnManager {
         if (!model.equals(session.model()) || !dshAccount.key().equals(session.accountName())) {
             store.updateSession(session.id(), null, model, dshAccount.key(), null);
         }
-        return new Resolved(model, dshAccount.key(), profile, protocol, capability);
+        ChatCapabilities.ReasoningMode reasoning = ChatCapabilities.reasoningMode(
+                capability, profile.protocol(), profile.base(), model);
+        return new Resolved(model, dshAccount.key(), profile, protocol, capability, reasoning);
     }
 
     private String systemPrompt(ChatStore.Session session) throws SQLException {
@@ -458,7 +461,7 @@ public final class ChatTurnManager {
                     turn.resolved.model(), turn.systemPrompt, messages, turn.temperature,
                     turn.maxTokens == null ? Math.min(turn.resolved.capability.maxOutput(), 8192)
                             : turn.maxTokens,
-                    turn.reasoningLevel);
+                    turn.reasoningLevel, turn.resolved.reasoning);
             HttpRequest httpRequest = turn.resolved.protocol.prepare(turn.resolved.profile, request);
             HttpResponse<InputStream> response = client.send(httpRequest,
                     HttpResponse.BodyHandlers.ofInputStream());

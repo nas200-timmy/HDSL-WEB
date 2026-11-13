@@ -93,6 +93,85 @@ class ChatReasoningTest {
     }
 
     @Test
+    void declaredEffortsAreClampedAndRespected() throws Exception {
+        ChatCapabilities.ReasoningMode onlyHigh = new ChatCapabilities.ReasoningMode(
+                "effort", false, List.of("high", "max"), 0, 0, "catalog");
+        // 声明里没有 medium/low：向邻近档靠，而不是照发一个模型不认的词
+        JsonObject medium = capture("v1", ChatEndpoints.OPENAI_COMPLETIONS, "glm-5.2",
+                "medium", null, 512, onlyHigh);
+        assertEquals("high", medium.get("reasoning_effort").getAsString());
+        // 声明不允许关：off 时一个字段都不发
+        JsonObject off = capture("v1", ChatEndpoints.OPENAI_COMPLETIONS, "glm-5.2",
+                "off", null, 512, onlyHigh);
+        assertFalse(off.has("reasoning_effort"));
+        // 声明里允许 none 才发 none
+        ChatCapabilities.ReasoningMode withNone = new ChatCapabilities.ReasoningMode(
+                "effort", true, List.of("none", "low", "high"), 0, 0, "catalog");
+        JsonObject none = capture("v1", ChatEndpoints.OPENAI_COMPLETIONS, "gpt-5.4",
+                "off", null, 512, withNone);
+        assertEquals("none", none.get("reasoning_effort").getAsString());
+        // forced 的模型（DeepSeek reasoner）怎么选都不发
+        JsonObject forced = capture("v1", ChatEndpoints.OPENAI_COMPLETIONS, "deepseek-reasoner",
+                "high", null, 512, ChatCapabilities.ReasoningMode.FORCED);
+        assertFalse(forced.has("reasoning_effort"));
+    }
+
+    @Test
+    void anthropicBudgetIsClampedToTheDeclaredRange() throws Exception {
+        ChatCapabilities.ReasoningMode narrow = new ChatCapabilities.ReasoningMode(
+                "budget", true, List.of(), 2_048, 8_192, "catalog");
+        JsonObject body = capture("v1", ChatEndpoints.ANTHROPIC_MESSAGES, "claude-sonnet-4-5",
+                "high", null, 2_000, narrow);
+        assertEquals(8_192, body.getAsJsonObject("thinking").get("budget_tokens").getAsInt());
+        assertTrue(body.get("max_tokens").getAsInt() > 8_192);
+    }
+
+    @Test
+    void reasoningModesFollowVendorSyntaxAndCatalogDeclaration() throws Exception {
+        java.nio.file.Path dir = Files.createTempDirectory("hdsl-reasoning-catalog");
+        Files.writeString(dir.resolve("models.dev.json"), """
+                {"updatedAt": 1, "models": {
+                  "glm-5.2": {"vision": false, "tools": true, "reasoning": true, "context": 128000,
+                              "output": 16384, "reasoningKind": "effort",
+                              "reasoningValues": ["high", "max"]},
+                  "claude-sonnet-4-5": {"vision": true, "tools": true, "reasoning": true,
+                              "context": 200000, "output": 32000, "reasoningKind": "budget",
+                              "reasoningMin": 2048, "reasoningMax": 8192}
+                }}""");
+        ChatModelCatalog.install(dir);
+        try {
+            ChatCapabilities.Capabilities reasoning = new ChatCapabilities.Capabilities(
+                    false, false, true, true, 128_000, 16_384, "catalog");
+            ChatCapabilities.ReasoningMode effortMode = ChatCapabilities.reasoningMode(
+                    reasoning, ChatEndpoints.OPENAI_COMPLETIONS, "http://127.0.0.1/v1", "glm-5.2");
+            assertEquals("effort", effortMode.kind());
+            assertFalse(effortMode.canDisable());
+            assertEquals(List.of("high", "max"), effortMode.efforts());
+
+            ChatCapabilities.ReasoningMode anthropic = ChatCapabilities.reasoningMode(
+                    reasoning, ChatEndpoints.ANTHROPIC_MESSAGES, "https://api.anthropic.com", "claude-sonnet-4-5");
+            assertEquals("budget", anthropic.kind());
+            assertEquals(2_048, anthropic.minBudget());
+            assertEquals(8_192, anthropic.maxBudget());
+
+            ChatCapabilities.ReasoningMode zhipu = ChatCapabilities.reasoningMode(
+                    reasoning, ChatEndpoints.OPENAI_COMPLETIONS, "https://open.bigmodel.cn/api/paas/v4", "glm-5.2");
+            assertEquals("toggle", zhipu.kind());
+
+            ChatCapabilities.ReasoningMode deepseek = ChatCapabilities.reasoningMode(
+                    reasoning, ChatEndpoints.OPENAI_COMPLETIONS, "https://api.deepseek.com", "deepseek-reasoner");
+            assertEquals("forced", deepseek.kind());
+
+            ChatCapabilities.ReasoningMode none = ChatCapabilities.reasoningMode(
+                    new ChatCapabilities.Capabilities(false, false, false, true, 32_768, 4_096, "unknown"),
+                    ChatEndpoints.OPENAI_COMPLETIONS, null, "plain-model");
+            assertEquals("none", none.kind());
+        } finally {
+            ChatModelCatalog.install(Files.createTempDirectory("hdsl-reasoning-empty"));
+        }
+    }
+
+    @Test
     void sessionLevelPersistsAndCanBeCleared() throws Exception {
         java.nio.file.Path dir = Files.createTempDirectory("hdsl-session-level");
         ChatStore store = new ChatStore(dir);
@@ -111,11 +190,17 @@ class ChatReasoningTest {
 
     private static JsonObject capture(String pathPrefix, String protocolId, String model,
                                       String level) throws Exception {
-        return capture(pathPrefix, protocolId, model, level, null, 512);
+        return capture(pathPrefix, protocolId, model, level, null, 512, null);
     }
 
     private static JsonObject capture(String pathPrefix, String protocolId, String model,
                                       String level, Double temperature, int maxTokens) throws Exception {
+        return capture(pathPrefix, protocolId, model, level, temperature, maxTokens, null);
+    }
+
+    private static JsonObject capture(String pathPrefix, String protocolId, String model,
+                                      String level, Double temperature, int maxTokens,
+                                      ChatCapabilities.ReasoningMode mode) throws Exception {
         AtomicReference<String> captured = new AtomicReference<>("");
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
@@ -137,7 +222,7 @@ class ChatReasoningTest {
             ChatProtocol.ChatRequest request = new ChatProtocol.ChatRequest(
                     model, null,
                     List.of(new ChatProtocol.ChatMessage("user", "hi", List.of())),
-                    temperature, maxTokens, level);
+                    temperature, maxTokens, level, mode);
             HttpClient.newHttpClient().send(protocol.prepare(profile, request),
                     HttpResponse.BodyHandlers.discarding());
             return JsonParser.parseString(captured.get()).getAsJsonObject();

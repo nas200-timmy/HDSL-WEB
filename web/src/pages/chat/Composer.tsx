@@ -76,6 +76,11 @@ export function Composer({
     ?? groups.flatMap((group) => group.models).find((item) => item.id === model)
     ?? null;
   const canVision = current?.capabilities.vision ?? true;
+  const reasoningMode = current?.capabilities.reasoningMode
+    ?? (current?.capabilities.reasoning
+      ? { kind: "effort" as const, canDisable: true, efforts: ["low", "medium", "high"],
+          minBudget: 0, maxBudget: 0, source: "builtin" }
+      : undefined);
   const canFiles = current?.capabilities.files ?? true;
   const pendingImages = pending.filter((item) => item.kind === "image").length;
 
@@ -224,9 +229,10 @@ export function Composer({
             {current.capabilities.reasoning && <span className="chat-cap" title="支持思考">思</span>}
           </span>
         )}
-        {(current?.capabilities.reasoning || reasoningLevel !== "") && (
+        {reasoningMode && reasoningMode.kind !== "none" && (
           <ThinkingPicker
             level={reasoningLevel}
+            mode={reasoningMode}
             disabled={disabled}
             onPick={onReasoningLevel}
           />

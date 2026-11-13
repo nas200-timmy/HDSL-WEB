@@ -60,8 +60,10 @@ public final class AnthropicProtocol implements ChatProtocol {
                 ? 4096 : request.maxTokens();
         // 思考挡位：只给支持 extended thinking 的 Claude（3.7 / 4 / 5）开，
         // 而且要保证 max_tokens > budget_tokens；开了 thinking 就不能给 temperature。
-        boolean thinking = supportsThinking(request.model()) && levelOn(request.reasoningLevel());
-        int budget = thinking ? budget(request.reasoningLevel()) : 0;
+        ChatCapabilities.ReasoningMode mode = request.reasoning();
+        boolean thinking = supportsThinking(request.model()) && levelOn(request.reasoningLevel())
+                && (mode == null || mode.usable());
+        int budget = thinking ? budget(request.reasoningLevel(), mode) : 0;
         if (thinking) {
             maxTokens = Math.max(maxTokens, budget + 1_024);
             JsonObject thinkingBody = new JsonObject();
@@ -146,13 +148,23 @@ public final class AnthropicProtocol implements ChatProtocol {
         return !"off".equals(value) && !"none".equals(value);
     }
 
-    private static int budget(@Nullable String level) {
+    private static int budget(@Nullable String level, @Nullable ChatCapabilities.ReasoningMode mode) {
         String value = level == null ? "" : level.trim().toLowerCase(java.util.Locale.ROOT);
-        return switch (value) {
+        int budget = switch (value) {
             case "low" -> 1_024;
-            case "high", "max", "xhigh" -> 16_384;
+            case "high" -> 16_384;
+            case "xhigh", "max" -> 32_768;
             default -> 4_096;
         };
+        if (mode != null) {
+            if (mode.minBudget() > 0) {
+                budget = Math.max(budget, mode.minBudget());
+            }
+            if (mode.maxBudget() > 0) {
+                budget = Math.min(budget, mode.maxBudget());
+            }
+        }
+        return budget;
     }
 
     private static JsonArray content(ChatMessage message) throws IOException {

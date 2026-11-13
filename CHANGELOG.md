@@ -71,6 +71,14 @@
   Anthropic `thinking.budget_tokens`（并自动保证 `max_tokens > budget`、去掉 temperature）；
   DeepSeek 不下发（由模型名决定）；认不出的端点 `off` 时不乱发字段，避免把不认识的参数
   丢给中转站换 400。助手设置里的「思考强度」也补齐了「关」，并用中文档位。
+- **思考挡位按模型声明生成**：models.dev 的 `reasoning_options` 现在会解析进缓存，
+  分 `toggle` / `effort`（英文档位）/ `budget_tokens`（数字，带 min/max）三种。
+  输入区菜单只显示模型真有的档：只声明 `high/max` 的模型（如 GLM-5.2）只剩「高 / 极高」，
+  没有「关」；声明 `toggle` 的只有「开 / 关」；`budget` 的选项里直接标出 tokens。
+  同一 id 在多个供应商下的声明取出现最多的那份，不再取并集（并集会把只能高强度的
+  模型误判成能关）。下发时按声明夹取：`reasoning_effort` 向邻近档靠，Anthropic 预算
+  夹在 min/max 并保证 `max_tokens > budget`；`forced` 模型（DeepSeek reasoner）一个字段都不发。
+  顺带修了 models.dev 刷新在慢网络下可能把维护线程拖住的问题：改成 ofByteArray + 90s 总时限。
 - **权限**：所有 `/api/chat/*` 对 agent ticket 关闭（放在 `GET → READ` 之前）；设置、备份、
   端点探测与能力覆盖要求开发者提权；聊天不接工具，模型无法触发面板操作。
 - 验证：`gradlew test` 全绿（新增 SQLite/SSE/路径/权限与一次真实 SSE turn 的端到端用例）；

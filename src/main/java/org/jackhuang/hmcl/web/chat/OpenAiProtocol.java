@@ -65,7 +65,7 @@ public final class OpenAiProtocol implements ChatProtocol {
                 body.addProperty("max_tokens", request.maxTokens());
             }
         }
-        applyReasoning(body, profile, request.model(), request.reasoningLevel());
+        applyReasoning(body, profile, request.model(), request.reasoningLevel(), request.reasoning());
 
         JsonArray messages = new JsonArray();
         if (request.system() != null && !request.system().isBlank()) {
@@ -96,24 +96,37 @@ public final class OpenAiProtocol implements ChatProtocol {
     /// 认不出的端点沿用 OpenAI 的 `reasoning_effort`，`off` 不乱发参数，
     /// 免得把不认识的字段丢给中转站换一个 400。
     private static void applyReasoning(JsonObject body, ChatEndpoints.Profile profile,
-                                       String model, @Nullable String level) {
+                                       String model, @Nullable String level,
+                                       @Nullable ChatCapabilities.ReasoningMode mode) {
         if (level == null || level.isBlank()) {
+            return;
+        }
+        if (mode != null && !mode.usable()) {
             return;
         }
         String normalized = level.trim().toLowerCase(java.util.Locale.ROOT);
         boolean off = "off".equals(normalized) || "none".equals(normalized);
+        boolean canDisable = mode == null || mode.canDisable();
         String base = profile.base() == null ? "" : profile.base().toLowerCase(java.util.Locale.ROOT);
 
         // 阿里百炼 / 通义：enable_thinking + thinking_budget（compatible-mode 的扩展字段）
         if (base.contains("dashscope") || base.contains("aliyuncs")) {
-            body.addProperty("enable_thinking", !off);
-            if (!off) {
-                body.addProperty("thinking_budget", budget(normalized));
+            if (off) {
+                if (!canDisable) {
+                    return;
+                }
+                body.addProperty("enable_thinking", false);
+                return;
             }
+            body.addProperty("enable_thinking", true);
+            body.addProperty("thinking_budget", budgetFor(normalized, mode));
             return;
         }
         // 智谱：thinking.type（GLM-4.5 起的 OpenAI 兼容接口）
         if (base.contains("bigmodel") || base.contains("zhipu")) {
+            if (off && !canDisable) {
+                return;
+            }
             JsonObject thinking = new JsonObject();
             thinking.addProperty("type", off ? "disabled" : "enabled");
             body.add("thinking", thinking);
@@ -124,21 +137,63 @@ public final class OpenAiProtocol implements ChatProtocol {
             return;
         }
         if (off) {
-            // 只有 gpt-5.1+ 认 none；其他模型干脆不发，让它按默认行为走
-            if (model != null && model.toLowerCase(java.util.Locale.ROOT).startsWith("gpt-5")) {
+            if (!canDisable) {
+                // 模型声明里没有「关」：宁可什么都不发，也不发一个会被拒的值
+                return;
+            }
+            if (allowsEffort(mode, "none")) {
                 body.addProperty("reasoning_effort", "none");
             }
             return;
         }
-        body.addProperty("reasoning_effort", normalized);
+        body.addProperty("reasoning_effort", mapEffort(mode, normalized));
     }
 
-    private static int budget(String level) {
+    private static boolean allowsEffort(@Nullable ChatCapabilities.ReasoningMode mode, String value) {
+        // 没声明（mode == null）时宁可少发：中转站不认识的字段会直接换 400
+        return mode != null && (mode.efforts().isEmpty() || mode.efforts().contains(value));
+    }
+
+    /// 把 UI 的四档映射到模型声明里真实存在的词。声明里没有中间档时向邻近档靠。
+    private static String mapEffort(@Nullable ChatCapabilities.ReasoningMode mode, String level) {
+        if (mode == null || mode.efforts().isEmpty()) {
+            return level;
+        }
+        for (String candidate : synonyms(level)) {
+            if (mode.efforts().contains(candidate)) {
+                return candidate;
+            }
+        }
+        return mode.efforts().get(mode.efforts().size() - 1);
+    }
+
+    private static java.util.List<String> synonyms(String level) {
         return switch (level) {
+            case "minimal" -> java.util.List.of("minimal", "low", "medium", "high");
+            case "low" -> java.util.List.of("low", "minimal", "medium", "high");
+            case "high" -> java.util.List.of("high", "medium", "xhigh", "max");
+            case "xhigh" -> java.util.List.of("xhigh", "max", "high");
+            default -> java.util.List.of("medium", "low", "high");
+        };
+    }
+
+    private static int budgetFor(@Nullable String level, @Nullable ChatCapabilities.ReasoningMode mode) {
+        String value = level == null ? "" : level.trim().toLowerCase(java.util.Locale.ROOT);
+        int budget = switch (value) {
             case "low" -> 1_024;
-            case "high", "max", "xhigh" -> 16_384;
+            case "high" -> 16_384;
+            case "xhigh", "max" -> 32_768;
             default -> 4_096;
         };
+        if (mode != null) {
+            if (mode.minBudget() > 0) {
+                budget = Math.max(budget, mode.minBudget());
+            }
+            if (mode.maxBudget() > 0) {
+                budget = Math.min(budget, mode.maxBudget());
+            }
+        }
+        return budget;
     }
 
     private static boolean isReasoningModel(String model) {

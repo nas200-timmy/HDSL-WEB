@@ -1119,6 +1119,16 @@ export interface ChatSession {
   nodes: ChatNode[];
 }
 
+/** 模型怎么控思考：toggle=开关，effort=英文档位，budget=数字预算，forced=只能开，none=没声明 */
+export interface ChatReasoningMode {
+  kind: "none" | "toggle" | "effort" | "budget" | "forced";
+  canDisable: boolean;
+  efforts: string[];
+  minBudget: number;
+  maxBudget: number;
+  source: string;
+}
+
 export interface ChatModelCapabilities {
   vision: boolean;
   files: boolean;
@@ -1127,6 +1137,7 @@ export interface ChatModelCapabilities {
   maxContext: number;
   maxOutput: number;
   source: string;
+  reasoningMode?: ChatReasoningMode;
 }
 
 export interface ChatModelInfo {

@@ -380,10 +380,11 @@ public final class ChatService {
                 if (profile != null) {
                     JsonArray models = new JsonArray();
                     for (String model : profile.models()) {
-                        models.add(modelJson(account.key(), model, profile.protocol()));
+                        models.add(modelJson(account.key(), model, profile.protocol(), profile.base()));
                     }
                     if (models.isEmpty() && account.model() != null && !account.model().isBlank()) {
-                        models.add(modelJson(account.key(), account.model(), profile.protocol()));
+                        models.add(modelJson(account.key(), account.model(), profile.protocol(),
+                                profile.base()));
                     }
                     json.add("modelList", models);
                 }
@@ -415,18 +416,24 @@ public final class ChatService {
         JsonArray models = new JsonArray();
         if (profile != null) {
             for (String model : profile.models()) {
-                models.add(modelJson(account.key(), model, profile.protocol()));
+                models.add(modelJson(account.key(), model, profile.protocol(), profile.base()));
             }
         }
         if (models.isEmpty() && account.model() != null && !account.model().isBlank()) {
             models.add(modelJson(account.key(), account.model(), profile == null
-                    ? ChatEndpoints.defaultProtocol(account) : profile.protocol()));
+                    ? ChatEndpoints.defaultProtocol(account) : profile.protocol(),
+                    profile == null ? null : profile.base()));
         }
         json.add("models", models);
         return json;
     }
 
     private JsonObject modelJson(String accountName, String model, String protocol) throws SQLException {
+        return modelJson(accountName, model, protocol, null);
+    }
+
+    private JsonObject modelJson(String accountName, String model, String protocol,
+                                 @Nullable String base) throws SQLException {
         ChatCapabilities.Capabilities capability =
                 ChatCapabilities.resolve(store, accountName, model, protocol);
         JsonObject json = new JsonObject();
@@ -439,6 +446,18 @@ public final class ChatService {
         caps.addProperty("maxContext", capability.maxContext());
         caps.addProperty("maxOutput", capability.maxOutput());
         caps.addProperty("source", capability.source());
+        ChatCapabilities.ReasoningMode reasoning =
+                ChatCapabilities.reasoningMode(capability, protocol, base, model);
+        JsonObject mode = new JsonObject();
+        mode.addProperty("kind", reasoning.kind());
+        mode.addProperty("canDisable", reasoning.canDisable());
+        JsonArray efforts = new JsonArray();
+        reasoning.efforts().forEach(efforts::add);
+        mode.add("efforts", efforts);
+        mode.addProperty("minBudget", reasoning.minBudget());
+        mode.addProperty("maxBudget", reasoning.maxBudget());
+        mode.addProperty("source", reasoning.source());
+        caps.add("reasoningMode", mode);
         json.add("capabilities", caps);
         return json;
     }
@@ -486,7 +505,8 @@ public final class ChatService {
             store.deleteCapability(account.key(), model);
             ChatEndpoints.Profile profile = ChatEndpoints.profile(store, account.key());
             return modelJson(account.key(), model, profile == null
-                    ? ChatEndpoints.defaultProtocol(account) : profile.protocol());
+                    ? ChatEndpoints.defaultProtocol(account) : profile.protocol(),
+                    profile == null ? null : profile.base());
         }
         ChatEndpoints.Profile profile = ChatEndpoints.profile(store, account.key());
         ChatCapabilities.Capabilities current = ChatCapabilities.resolve(store, account.key(), model,
@@ -501,7 +521,8 @@ public final class ChatService {
                 "manual", System.currentTimeMillis());
         store.saveCapability(capability);
         return modelJson(account.key(), model, profile == null
-                ? ChatEndpoints.defaultProtocol(account) : profile.protocol());
+                ? ChatEndpoints.defaultProtocol(account) : profile.protocol(),
+                profile == null ? null : profile.base());
     }
 
     public ChatEndpoints.Probe probe(String accountName) throws ChatException, SQLException, IOException {

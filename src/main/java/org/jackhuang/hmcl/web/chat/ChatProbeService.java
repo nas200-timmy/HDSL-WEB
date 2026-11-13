@@ -99,7 +99,7 @@ public final class ChatProbeService {
         ChatProtocol protocol = protocol(profile);
         ChatProtocol.ChatRequest request = new ChatProtocol.ChatRequest(target, null,
                 List.of(new ChatProtocol.ChatMessage("user", "只回复两个字母：OK", List.of())),
-                null, 8, null);
+                null, 8, null, null);
         Call call = call(protocol, profile, request);
         JsonObject json = new JsonObject();
         json.addProperty("model", target);
@@ -130,7 +130,7 @@ public final class ChatProbeService {
                 "vision-probe.png", "image/png", "image", Files.size(image), image, null);
         ChatProtocol.ChatRequest request = new ChatProtocol.ChatRequest(model, null,
                 List.of(new ChatProtocol.ChatMessage("user", PROBE_PROMPT, List.of(attachment))),
-                null, 24, null);
+                null, 24, null, null);
         Call call = call(protocol, profile, request);
 
         String verdict = classify(call);

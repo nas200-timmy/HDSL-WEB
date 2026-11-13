@@ -207,17 +207,21 @@ interface ChatProtocol {
 
 ### 5.1 思考挡位
 
-会话级 `reasoning_level`（NULL = 跟随助手的 `reasoning_level`），输入区的「思考·默认/关/低/中/高」
-写它；只影响下一轮，不改历史。协议侧只在用户显式选过时下发：
+会话级 `reasoning_level`（NULL = 跟随助手的 `reasoning_level`，等于「模型自己的默认」），
+输入区的「思考·…」写它；只影响下一轮，不改历史。**选项不是固定四档**，而是按模型声明生成：
 
-- OpenAI 兼容（默认）：`reasoning_effort = low|medium|high`；`off` 时不发，只有 `gpt-5*` 发 `none`。
-- 百炼/通义（base 含 `dashscope`/`aliyuncs`）：`enable_thinking` + `thinking_budget`
-  （low 1024 / medium 4096 / high 16384），`off` 显式 `enable_thinking=false`。
-- 智谱（base 含 `bigmodel`/`zhipu`）：`thinking = {"type": "enabled"|"disabled"}`。
-- DeepSeek：思考由模型名决定（reasoner / v4），不下发挡位参数。
-- Anthropic：`thinking = {"type":"enabled","budget_tokens"}`，仅 claude 3.7/4/5；
-  同时 `max_tokens > budget_tokens` 且**不带 temperature**（Anthropic 的限制）。
-- 认不出的端点只认 `reasoning_effort`，`off` 不乱发字段，避免 400。
+- 声明来源：models.dev 的 `reasoning_options`（本地缓存）优先，缺失时按家族兜底。
+  三种形态：`toggle`（只有开关）、`effort`（`none/minimal/low/medium/high/xhigh/max`
+  的子集）、`budget_tokens`（数字 + min/max）。同一模型在多个供应商下出现时取
+  **出现最多**的那份声明，而不是并集——并集会把「只能 high/max」的模型误判成能关、能选低。
+- 菜单映射：`off` → 关；`minimal|low` → 低；`medium` → 中；`high` → 高；`xhigh|max` → 极高；
+  声明里没有的档不显示；没有 `none` 且不允许关的模型（例如只声明 `high/max`）就只剩强度档，
+  UI 不会给「关」。`budget` 类型直接在选项里标出 tokens。
+- 下发（只在下过挡位时）：OpenAI 兼容 `reasoning_effort`，按声明向邻近档夹取；
+  百炼 `enable_thinking` + `thinking_budget`（低 1024 / 中 4096 / 高 16384 / 极高 32768，
+  再按声明 min/max 夹）；智谱 `thinking.type`；Anthropic `budget_tokens`（自动保证
+  `max_tokens > budget`、去掉 temperature）；DeepSeek 不下发；声明 `forced` 时一个字段都不发。
+- 认不出的端点：`off` 时不发任何字段，避免把不认识的参数丢给中转站换 400。
 
 ## 6. SQLite 存储
 
