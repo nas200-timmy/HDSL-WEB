@@ -103,10 +103,11 @@ function nodeRangeLabel(range: string): string {
   return range.startsWith(">=") ? `${range.slice(2).trim()}+` : range;
 }
 
-/// 四个品牌键：zcode 是实验品类（自己的 REST 族），
-/// 其余三个共用 /api/brands/<brand>/*。顺序 = 页签顺序，也是深链缺省时的挑选顺序。
+/// 品牌键：zcode 是实验品类（自己的 REST 族），其余共用 /api/brands/<brand>/*。
+/// `BrandKey` 保留全部 id；两个视图各自用下面的白名单，互不串门。
 export type BrandKey = "zcode" | BrandId;
 
+/// 原「品牌实例」栏：网页品牌（含 ZCode）。这七个保持原样。
 export const BRAND_KEYS: BrandKey[] = [
   "zcode",
   "kimi",
@@ -115,14 +116,10 @@ export const BRAND_KEYS: BrandKey[] = [
   "octop",
   "hermes",
   "pi-web",
-  "qwen",
-  "mimo",
-  "minimax",
 ];
 
-/// 纯 TUI 品牌：实例只有 PTY，没有启动/停止/打开网页，也没有端口。
-/// 页签行用一条分隔标签把它们与网页品牌分开。
-/// （品牌 id 集合见 `../brandKind`，网页与启动面板共用同一份判断。）
+/// 新的「TUI 品牌实例」栏：纯终端品牌，独立导航项、独立视图。
+export const TUI_BRAND_KEYS: BrandId[] = ["qwen", "mimo", "minimax"];
 
 const BRAND_TITLE: Record<BrandKey, string> = {
   zcode: I18N["dsh.brand.zcode"],
@@ -156,9 +153,19 @@ export function isBrandKey(value: string | null | undefined): value is BrandKey 
   return BRAND_KEYS.includes(value as BrandKey);
 }
 
+/// TUI 视图只接受这三个 id；`?view=tui&brand=kimi` 会落到 TUI fallback。
+export function isTuiBrandKey(value: string | null | undefined): value is BrandId {
+  return TUI_BRAND_KEYS.includes(value as BrandId);
+}
+
 /// 缺省/非法深链的落地品牌：第一个有实例的（顺序同页签），都没有才是 zcode
 export function fallbackBrand(external: ExternalInstance[]): BrandKey {
   return BRAND_KEYS.find((k) => external.some((e) => e.brand === k)) ?? "zcode";
+}
+
+/// TUI 视图的缺省品牌：第一个有实例的，都没有就 Qwen。
+export function fallbackTuiBrand(external: ExternalInstance[]): BrandId {
+  return TUI_BRAND_KEYS.find((k) => external.some((e) => e.brand === k)) ?? "qwen";
 }
 
 /// 等一拍：停止态与安装进度都是「隔一秒问一次」，用 await 写比嵌套 setTimeout 直白
@@ -238,11 +245,6 @@ export function BrandsView({
       >
         <BrandIcon brand={k} size={mobile ? 14 : 16} />
         {mobile ? BRAND_SHORT[k] : BRAND_TITLE[k]}
-        {isTuiBrand(k) && (
-          <span className="tag plain" style={{ marginLeft: mobile ? 2 : 4 }}>
-            {I18N["dsh.brand.tui.tag"]}
-          </span>
-        )}
         {blocked && (
           <span className="tag plain" style={{ marginLeft: mobile ? 2 : 4 }}>
             不可用
@@ -261,14 +263,7 @@ export function BrandsView({
     <div style={{ display: "flex", flexDirection: "column", gap: mobile ? 6 : 8, flex: 1, minHeight: 0 }}>
       {/* 品牌页签行：带实例数（0 个就不显示标签），换页签只换下面这块内容 */}
       <div className="card toolbar-row brand-tabs" style={{ flexShrink: 0 }}>
-        {BRAND_KEYS.filter((k) => !isTuiBrand(k)).map(renderBrandTab)}
-        <span
-          className="tag plain"
-          style={{ flex: "none", marginLeft: 4, marginRight: 2, whiteSpace: "nowrap" }}
-        >
-          {I18N["dsh.brand.tui.section"]}
-        </span>
-        {BRAND_KEYS.filter((k) => isTuiBrand(k)).map(renderBrandTab)}
+        {BRAND_KEYS.map(renderBrandTab)}
       </div>
 
       {/* key=品牌：换品牌即重挂载（表单、折叠态、进场动画都跟着重置） */}
@@ -302,6 +297,110 @@ export function BrandsView({
         ) : (
           <BrandPane brand={brand} />
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+ * TUI 品牌实例（Qwen Code / MiMo Code / MiniMax Code）：独立的一栏
+ * ------------------------------------------------------------------------- */
+
+/**
+ * TUI 品牌视图：与「品牌实例」并列的独立导航项，只装三个纯终端品牌。
+ * 复用同一个 BrandPane（版本卡 + 实例卡），但页签行只列这三个，原网页品牌
+ * 的视图完全不受影响。
+ */
+export function TuiBrandsView({
+  brand,
+  onSelect,
+}: {
+  brand: BrandId;
+  onSelect: (brand: BrandId) => void;
+}) {
+  const s = useAppState();
+  const mobile = useMobileLayout();
+  const [capabilities, setCapabilities] = useState<
+    Record<string, { installable: boolean; reason?: string }>
+  >({});
+
+  useEffect(() => {
+    void refreshExternal();
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    void api.brandCapabilities()
+      .then((answer) => {
+        if (!alive) return;
+        const next: Record<string, { installable: boolean; reason?: string }> = {};
+        for (const item of answer.brands) {
+          next[item.id] = { installable: item.installable, reason: item.reason };
+        }
+        setCapabilities(next);
+      })
+      .catch(() => {
+        // 能力查询失败不影响版本卡与创建表单；后端仍会拒绝不可用的安装。
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: mobile ? 6 : 8, flex: 1, minHeight: 0 }}>
+      <div className="card toolbar-row brand-tabs" style={{ flexShrink: 0 }}>
+        {TUI_BRAND_KEYS.map((k) => {
+          const count = s.external.filter((e) => e.brand === k).length;
+          const active = k === brand;
+          const capability = capabilities[k];
+          const blocked = capability?.installable === false;
+          return (
+            <button
+              key={k}
+              className="tool-btn ripple-host"
+              title={blocked ? capability?.reason : undefined}
+              style={
+                active
+                  ? { background: "var(--monet-secondary-container)", color: "var(--monet-on-secondary-container)" }
+                  : undefined
+              }
+              onClick={() => onSelect(k)}
+            >
+              <BrandIcon brand={k} size={mobile ? 14 : 16} />
+              {mobile ? BRAND_SHORT[k] : BRAND_TITLE[k]}
+              {blocked && (
+                <span className="tag plain" style={{ marginLeft: mobile ? 2 : 4 }}>
+                  不可用
+                </span>
+              )}
+              {count > 0 && (
+                <span className="tag plain" style={{ marginLeft: mobile ? 2 : 4 }}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      <div
+        key={brand}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          flex: 1,
+          minHeight: 0,
+          animation: "slide-up-fade-in 400ms var(--ease)",
+        }}
+      >
+        <div className="hint warning" style={{ flexShrink: 0, display: "grid", gap: 4 }}>
+          <CollapsibleNote summary={<span>{I18N["dsh.brand.tui.warning"]}</span>}>
+            <span>{I18N["dsh.brand.tui.warning"]}</span>
+          </CollapsibleNote>
+        </div>
+        <BrandPane brand={brand} />
       </div>
     </div>
   );

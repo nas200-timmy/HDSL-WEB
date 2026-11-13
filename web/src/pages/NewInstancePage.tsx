@@ -1,4 +1,5 @@
 import { useLocation, useNavigate, Navigate } from "react-router-dom";
+import { isTuiBrand } from "../brandKind";
 import { BrandIcon } from "../components/BrandIcon";
 import { I18N } from "../i18n";
 import type { BrandId } from "../types";
@@ -69,7 +70,9 @@ export function NewInstancePage() {
             key={brand.id}
             className="card ripple-host"
             style={{ padding: 14, textAlign: "left", display: "grid", gap: 6 }}
-            onClick={() => nav(`/instances?view=brands&brand=${brand.id}&create=1`)}
+            onClick={() =>
+              nav(`/instances?view=${isTuiBrand(brand.id) ? "tui" : "brands"}&brand=${brand.id}&create=1`)
+            }
           >
             <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <BrandIcon brand={brand.id} size={28} />

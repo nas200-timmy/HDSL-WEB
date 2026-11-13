@@ -341,6 +341,8 @@ export const I18N = {
   "dsh.brand.minimax.short": "MiniMax Code",
   "dsh.brand.tui.section": "TUI 品牌实例",
   "dsh.brand.tui.tag": "TUI",
+  "dsh.brand.tui.warning":
+    "这些是纯终端品牌：面板只负责安装、实例隔离和 PTY，没有网页模式、端口或反代地址。进入实例卡里的终端即可使用；退出 TUI 后不会落回 shell。",
   "dsh.brand.state.installed": "已安装",
   "dsh.brand.terminal.running": "终端运行中",
   // PI WEB：终端与网页共用同一个 agent 目录但各自跑会话，所以可以同时开；

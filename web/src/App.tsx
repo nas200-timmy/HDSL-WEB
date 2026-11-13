@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router-dom";
+import { isTuiBrand } from "./brandKind";
 import { ErrorIcon, InfoIcon } from "./components/icons";
 import { Decorator } from "./components/Decorator";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -74,7 +75,8 @@ function RequireAuth() {
  *  （URL 换成 `/instances?view=brands&brand=…`，页面不跳第二层）。 */
 function BrandDeepLink() {
   const { brand } = useParams();
-  return <Navigate to={`/instances?view=brands&brand=${encodeURIComponent(brand ?? "")}`} replace />;
+  const encoded = encodeURIComponent(brand ?? "");
+  return <Navigate to={`/instances?view=${isTuiBrand(brand ?? "") ? "tui" : "brands"}&brand=${encoded}`} replace />;
 }
 
 /** 已登录区域：浏览器内窗口（Decorator）+ 路由动画容器。
