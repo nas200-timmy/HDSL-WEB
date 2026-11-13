@@ -119,7 +119,7 @@ public final class ChatModelCatalog {
         }
         try {
             HttpRequest request = HttpRequest.newBuilder(API)
-                    .timeout(Duration.ofSeconds(60))
+                    .timeout(Duration.ofSeconds(300))
                     .header("Accept", "application/json")
                     .header("Accept-Encoding", "gzip")
                     .header("User-Agent", org.jackhuang.hmcl.Metadata.NAME + "/" + org.jackhuang.hmcl.Metadata.VERSION)
@@ -129,7 +129,7 @@ public final class ChatModelCatalog {
             // 网络慢或对端卡住时读 body 会把这个维护线程钉死（备份也跟着停）。
             HttpResponse<byte[]> response = CLIENT
                     .sendAsync(request, HttpResponse.BodyHandlers.ofByteArray())
-                    .get(90, java.util.concurrent.TimeUnit.SECONDS);
+                    .get(300, java.util.concurrent.TimeUnit.SECONDS);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 return false;
             }

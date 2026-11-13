@@ -66,10 +66,11 @@ public final class DshModelCatalog {
     /// How long a request may take in total.
     ///
     /// The document is about six megabytes uncompressed and a little under 500 KB gzipped.
-    /// Twenty seconds was enough for a fast link and never for a slow one — on a 50 KB/s
-    /// connection every refresh timed out and the snapshot silently aged for days. Gzip is
-    /// asked for below; the limit stays generous for the compressed body.
-    private static final Duration TIMEOUT = Duration.ofSeconds(120);
+    /// Twenty seconds was enough for a fast link and never for a slow one — on a line that
+    /// trickles at single-digit KB/s even the gzipped body needs minutes, and every refresh
+    /// timed out, so the snapshot silently aged for days. Gzip is asked for below, the limit
+    /// is five minutes, and the callers that can wait do so in the background.
+    private static final Duration TIMEOUT = Duration.ofSeconds(300);
 
     /// How long the connection may take to be established.
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(15);
