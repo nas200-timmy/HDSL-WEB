@@ -110,20 +110,6 @@ export function MainSideBar() {
         </span>
       </button>
 
-      <div className="side-category">聊天</div>
-      <button
-        className={`side-item ripple-host${selected("/chat") ? " selected" : ""}`}
-        onClick={go("/chat")}
-      >
-        <span className="side-graphic">
-          <ChatIcon size={20} />
-        </span>
-        <span className="side-text">
-          <span className="side-title">聊天</span>
-          <span className="side-subtitle">与模型对话</span>
-        </span>
-      </button>
-
       <div className="side-category">{I18N["instance"]}</div>
       <button
         className={`side-item ripple-host${currentSelected ? " selected" : ""}`}
@@ -174,6 +160,20 @@ export function MainSideBar() {
         </span>
         <span className="side-text">
           <span className="side-title">{I18N["download"]}</span>
+        </span>
+      </button>
+
+      <div className="side-category">聊天</div>
+      <button
+        className={`side-item ripple-host${selected("/chat") ? " selected" : ""}`}
+        onClick={go("/chat")}
+      >
+        <span className="side-graphic">
+          <ChatIcon size={20} />
+        </span>
+        <span className="side-text">
+          <span className="side-title">聊天</span>
+          <span className="side-subtitle">与模型对话</span>
         </span>
       </button>
 
