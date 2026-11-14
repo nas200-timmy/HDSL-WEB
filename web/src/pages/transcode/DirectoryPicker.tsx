@@ -75,14 +75,14 @@ export function DirectoryPicker({
       }
     >
       <div style={{ display: "grid", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <button className="btn btn-text" disabled={!path || loading} onClick={parent}>
             上级
           </button>
           <button className="btn btn-text" disabled={!path || loading} onClick={() => void load("")}>
             媒体根
           </button>
-          <span className="mono" style={{ flex: 1, minWidth: 0, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis" }}>
+          <span className="mono" style={{ flex: "1 1 100%", minWidth: 0, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis" }}>
             {absolute}
           </span>
         </div>

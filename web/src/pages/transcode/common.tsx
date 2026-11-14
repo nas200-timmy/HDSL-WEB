@@ -132,13 +132,13 @@ export function MediaBrowserPanel({
   };
 
   return (
-    <div className="card" style={{ padding: 0, display: "flex", flexDirection: "column", minHeight: 320 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px" }}>
+    <div className="card tc-media-browser" style={{ padding: 0, display: "flex", flexDirection: "column", minHeight: 320 }}>
+      <div className="tc-media-head" style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px" }}>
         <button className="btn btn-text" disabled={!path || loading} onClick={parent}>
           <ArrowBackIcon size={16} />
           上级
         </button>
-        <span className="mono" style={{ flex: 1, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis" }}>
+        <span className="mono tc-media-path" style={{ minWidth: 0, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {path || "媒体根"}
         </span>
         {onAddCurrentFolder && (

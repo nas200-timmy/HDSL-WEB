@@ -261,6 +261,15 @@ export function SubSideBar({
 }) {
   const mobile = useMobileLayout();
   const stripRef = useRef<HTMLElement | null>(null);
+  const activeRef = useRef<HTMLButtonElement | null>(null);
+
+  // 窄屏标签条是横向滚动的：切换 tab 后把当前项滚到中间，避免
+  // 「参数面板」这种第 4 个之后的项只露出半截。`block: nearest`
+  // 不改变页面纵向位置，只动这条横向滚动容器。
+  useEffect(() => {
+    if (!mobile) return;
+    activeRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
+  }, [activeKey, mobile]);
 
   // 窄屏的标签条是横向滚动的。触摸有浏览器原生滚动，鼠标没有：滚轮是纵向的，拖动又不会平移
   // 一个 div——所以在桌面窄窗（包括 DevTools 的设备模拟）里看着就是「滑不动」。这里只对鼠标
@@ -324,6 +333,7 @@ export function SubSideBar({
             return (
               <button
                 key={it.key}
+                ref={active ? activeRef : undefined}
                 className={`side-item ripple-host${active ? " selected" : ""}`}
                 onClick={() => onSelect?.(it.key)}
               >
