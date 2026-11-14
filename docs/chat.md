@@ -342,6 +342,9 @@ idle -> streaming -> done
   文档 50 MB）；否则超过 1 MiB 的图片会在进入上传处理器前得到
   `413 payload too large`。
 - 下载 `GET /api/chat/attachments/{id}`，校验会话归属。
+- 文本类附件（`text/*`、`application/json`、`application/xml`、`*+json`）在响应头里显式带
+  charset：按内容嗅探 UTF-8 / GB18030，避免中文 Windows 浏览器把 UTF-8 的粘贴文本按 GBK
+  猜成乱码，也兼容旧的 GBK 记事本文件。
 - 限制：单文件 50MB（Office/PDF）/ 20MB（图片）、单消息 8 个、会话配额；删会话清附件。
 - 图片前端 canvas 压到最长边 2048、JPEG/WebP 0.85；后端 `ImageIO` 校验/剥 EXIF。
 - 拒绝 SVG/HTML/可执行文件；MIME 用魔数嗅探，不只看扩展名。
@@ -378,9 +381,8 @@ idle -> streaming -> done
 
 ### 8.4 长文本自动附件
 
-- 阈值按估算 token，不按固定字符数：默认约 4k tokens。
-- 粘贴超阈值文本 → 保存为 `.txt` 附件 + 消息 chip。
-- 模型 `files=true`：发文件/文本 block；`files=false`：发送前 N 字 + 提示。
+- 粘贴**超过 1800 字符**的纯文本 → 保存为 `粘贴文本-N字.txt` 附件 + 消息 chip。
+- 1800 字符以内留在输入框里直接编辑；阈值太低会让正常长度的粘贴也被拆成附件，体验反而差。
 - 附件仍占上下文；超大文件的分块/检索不在 v1。
 
 ### 8.5 解析安全
@@ -811,7 +813,7 @@ POST   /api/chat/sessions               // body 带 assistantId
 - 已知未做：模型服务 ON/OFF 开关、模型家族分组、原生 OpenAI PDF 的真实网关
   联调、备份恢复 UI、音频/视频原生输入、fork/搜索。
 
-## 21. DeepSeek 官方预设助手（2026-11-14，v0.6.86 同版本重切）
+## 21. DeepSeek 官方预设助手（2026-11-14 起，v0.6.86 / v0.6.87）
 
 把 chat-demo 的协议行为拆进面板，不搬它的前端地基：Markdown、主题、会话、分支、备份仍用
 面板自己的实现。
@@ -849,7 +851,9 @@ POST   /api/chat/sessions               // body 带 assistantId
   `sources` / `tools` 字段，前端复用现有来源 chips。
 - 正文引用按 chat-demo 的 `[citation:N]` 标记追加；`Markdown.tsx` 用来源数组换成链接。
 - 每次发送在 user 消息上写 `latest_reminder`（日期、星期、地区、Web、语言，固定五段），
-  回放时按 `latest_reminder` 角色插在提问前；快照变化才重复插入。
+  回放时按 `latest_reminder` 角色插在提问前；快照变化才重复插入。语言只发服务端认识的名字
+  （`中文` / `English`），星期和地区跟随同一语种；回放旧快照时语言名不合法就按原日期重建，
+  否则旧 build 落库的 `Chinese` 会让老会话一直 400。
 - 服务端标题只在 `title_auto=1` 时写入；用户手动改名或本轮没拿到标题就关掉自动标题。
 - 图片走 `POST /anthropic/v1/files`，`file_id` 按附件缓存；文档仍走文本抽取，扩展模式
   不支持 document，先按文本发送。远程文件目前不做删除清理。

@@ -2,6 +2,40 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.6.87 — 2026-11-15 · latest_reminder、附件预览与终端兼容性修复
+
+> 修的是 v0.6.86 上线后真实踩到的三类问题：DeepSeek 官方助手在中文环境直接 400、长文本
+> 粘贴阈值过低、文本附件预览乱码；同时把进程内终端的版本闸门从「逐个枚举 rc」改成「放行整条
+> 0.2 线」，让 `dsh@next` 0.2.2-rc.3 能重新装上终端。
+
+### DeepSeek 官方助手
+
+- `latest_reminder` 的语言字段只发服务端接受的名字（`中文` / `English`），星期和地区跟随同一
+  语种。此前中文环境发送 `Chinese`，服务端按语言名白名单校验，整轮返回 400。
+- 回放历史时清洗旧快照：语言名不合法就按原日期重建。只改生成逻辑的话，数据库里已经存下的
+  `…,Web,Chinese` 会让老会话每次发送都继续 400。
+
+### 聊天附件与粘贴
+
+- 长文本转附件的阈值从 100 字提高到 **1800 字符**；100 字会把正常长度的粘贴也拆成附件。
+- 文本附件下载显式声明 charset，并按内容嗅探 UTF-8 / GB18030：中文 Windows 的浏览器不再把
+  UTF-8 粘贴文本按 GBK 猜成乱码，旧的 GBK 文本文件也能正常预览。图片、PDF 等二进制不加。
+
+### 进程内终端（dsh-inproc-tui 0.2.3）
+
+- 不再逐个枚举 dsh rc：插件 peer 改为 `^0.2.0-rc.1`，面板闸门改为
+  `>=0.2.0-rc.2 <0.3.0-0`。此前枚举到 `0.2.2-rc.1` 为止，`dsh@next`（0.2.2-rc.3）既被面板
+  判成不匹配，也会被 dsh 以 `incompatible` 拒绝安装。
+- 0.2.2-rc.3 实测：`file:` tarball 安装、PTY 启动、会话创建与 `/help` 正常。0.3 是新一条线，
+  接缝要重新验证，所以上限仍卡在 0.3 之前（用 `<0.3.0-0`，避免 `includePrerelease` 放进
+  `0.3.0-rc.1`）。
+- 测试：`DshTuiPluginsTest`、`DshPluginRequirementsTest` 覆盖整条 0.2 线与 `0.3.0-rc` 边界。
+
+### 验证
+
+- `./gradlew test` 全量通过；`npm run typecheck` / `npm run compat` / `npm run build` 通过。
+- 新增 `ChatAttachmentsTest`（编码嗅探）和 `ChatApiIntegrationTest` 的上传-下载 charset 断言。
+
 ## v0.6.86 — 2026-11-14 · FreeBSD 终端、平台声明与 DeepSeek 官方预设助手
 
 > FreeBSD 上面板能跑，但 PTY 终端一直是缺口；这一版在 **FreeBSD 15.1 真机**上补齐并验证，
@@ -11,7 +45,7 @@
 > 发布物：fat jar 仍是 69 MB（v0.6.85 起就没有再变大）；容器镜像同步更新。
 >
 > **2026-11-14 同版本重切**：在 FreeBSD 发布的基础上补入 DeepSeek 官方预设助手与官方搜索，
-> 覆盖原 v0.6.86 的 jar、Release 与容器；v0.6.87 不再发布。
+> 覆盖原 v0.6.86 的 jar、Release 与容器；当时未发布 v0.6.87，后续修复由下面的 v0.6.87 接续。
 
 ### DeepSeek 官方预设助手
 
