@@ -889,8 +889,6 @@ public final class ChatTurnManager {
         return truncate(messages, resolved.capability);
     }
 
-    /// 历史消息里模型读不了的附件直接省略，避免“换了个纯文本模型就整轮发不出去”。
-    /// 当前这条消息的图片仍然报错，让用户明确知道是这一条的图片没被发送。
     /// DeepSeek 官方预设的上下文：只回传正文与 read_link 的签名，搜索/思考不进历史。
     /// 时间快照按 `latest_reminder` 角色插在对应提问前。
     private List<ChatProtocol.ChatMessage> deepseekMessages(List<ChatStore.Node> nodes,
@@ -898,66 +896,80 @@ public final class ChatTurnManager {
             throws SQLException, ChatException, IOException {
         List<ChatProtocol.ChatMessage> messages = new ArrayList<>();
         String previousReminder = null;
-        for (ChatStore.Node node : nodes) {
+        for (int i = 0; i < nodes.size(); i++) {
+            ChatStore.Node node = nodes.get(i);
+            if (!"user".equals(node.role())) {
+                continue;
+            }
             ChatStore.Message message = node.active();
             if (message == null) {
                 continue;
             }
-            if ("user".equals(node.role())) {
-                String reminder = store.latestReminder(message.id());
-                if (reminder != null && !reminder.isBlank() && !reminder.equals(previousReminder)) {
-                    messages.add(new ChatProtocol.ChatMessage("latest_reminder", reminder,
-                            List.of()));
-                    previousReminder = reminder;
+            boolean current = i == nodes.size() - 1;
+            ChatProtocol.ChatMessage reply = null;
+            if (!current && i + 1 < nodes.size()
+                    && "assistant".equals(nodes.get(i + 1).role())) {
+                ChatStore.Message next = nodes.get(i + 1).active();
+                if (next != null) {
+                    reply = deepseekAssistant(next);
                 }
-                StringBuilder text = new StringBuilder(message.content() == null ? "" : message.content());
-                List<ChatProtocol.Attachment> attachments = new ArrayList<>();
-                for (ChatStore.Attachment attachment : message.attachments()) {
-                    String kind = attachment.kind() == null ? "text" : attachment.kind();
-                    if ("image".equals(kind)) {
-                        String remoteId = DeepseekFiles.ensure(store, resolved.profile, attachment);
+            }
+            // 失败/空回复的轮次不进上下文；当前这条提问永远保留。
+            if (!current && reply == null) {
+                continue;
+            }
+            String reminder = store.latestReminder(message.id());
+            if (reminder != null && !reminder.isBlank() && !reminder.equals(previousReminder)) {
+                messages.add(new ChatProtocol.ChatMessage("latest_reminder", reminder,
+                        List.of()));
+                previousReminder = reminder;
+            }
+            StringBuilder text = new StringBuilder(message.content() == null ? "" : message.content());
+            List<ChatProtocol.Attachment> attachments = new ArrayList<>();
+            for (ChatStore.Attachment attachment : message.attachments()) {
+                String kind = attachment.kind() == null ? "text" : attachment.kind();
+                if ("image".equals(kind)) {
+                    String remoteId = DeepseekFiles.ensure(store, resolved.profile, attachment);
+                    attachments.add(new ChatProtocol.Attachment(attachment.name(),
+                            attachment.mime(), kind, attachment.size(),
+                            Path.of(attachment.path()), null, remoteId));
+                } else {
+                    String extracted = attachmentText(attachment);
+                    if (extracted != null && !extracted.isBlank()) {
                         attachments.add(new ChatProtocol.Attachment(attachment.name(),
-                                attachment.mime(), kind, attachment.size(),
-                                Path.of(attachment.path()), null, remoteId));
-                    } else {
-                        String extracted = attachmentText(attachment);
-                        if (extracted != null && !extracted.isBlank()) {
-                            attachments.add(new ChatProtocol.Attachment(attachment.name(),
-                                    attachment.mime(), "text", attachment.size(),
-                                    Path.of(attachment.path()), extracted, null));
-                        }
+                                attachment.mime(), "text", attachment.size(),
+                                Path.of(attachment.path()), extracted, null));
                     }
                 }
-                if (text.isEmpty() && attachments.isEmpty()) {
-                    continue;
-                }
-                messages.add(new ChatProtocol.ChatMessage("user", text.toString(), attachments));
+            }
+            if (text.isEmpty() && attachments.isEmpty()) {
                 continue;
             }
-            if (!"assistant".equals(node.role())) {
-                continue;
-            }
-            if (!("done".equals(message.status()) || "stopped".equals(message.status()))) {
-                continue;
-            }
-            String blocksJson = store.blocksJson(message.id());
-            if (blocksJson == null || blocksJson.isBlank()) {
-                if (message.content() != null && !message.content().isBlank()) {
-                    messages.add(new ChatProtocol.ChatMessage("assistant", message.content(),
-                            List.of()));
-                }
-                continue;
-            }
-            List<JsonObject> blocks = replayBlocks(blocksJson);
-            if (!blocks.isEmpty()) {
-                messages.add(new ChatProtocol.ChatMessage("assistant", "", List.of(),
-                        List.of(), null, blocks));
+            messages.add(new ChatProtocol.ChatMessage("user", text.toString(), attachments));
+            if (reply != null) {
+                messages.add(reply);
+                i++;
             }
         }
         if (messages.isEmpty()) {
             messages.add(new ChatProtocol.ChatMessage("user", "", List.of()));
         }
         return messages;
+    }
+
+    private ChatProtocol.ChatMessage deepseekAssistant(ChatStore.Message message)
+            throws SQLException {
+        if (!("done".equals(message.status()) || "stopped".equals(message.status()))) {
+            return null;
+        }
+        String blocksJson = store.blocksJson(message.id());
+        if (blocksJson == null || blocksJson.isBlank()) {
+            return message.content() == null || message.content().isBlank()
+                    ? null : new ChatProtocol.ChatMessage("assistant", message.content(), List.of());
+        }
+        List<JsonObject> blocks = replayBlocks(blocksJson);
+        return blocks.isEmpty() ? null
+                : new ChatProtocol.ChatMessage("assistant", "", List.of(), List.of(), null, blocks);
     }
 
     /// 只保留能被服务端接受的块：正文（去引用标记）和带签名的 read_link。
@@ -1006,7 +1018,14 @@ public final class ChatTurnManager {
                 String kind = stringOf(block, "kind");
                 String id = stringOf(block, "id");
                 if ("read_link".equals(kind) && signed.contains(id)) {
-                    result.add(block);
+                    JsonObject copy = new JsonObject();
+                    copy.addProperty("type", "server_tool_use");
+                    copy.addProperty("id", id);
+                    copy.addProperty("name", stringOf(block, "name"));
+                    JsonElement input = block.get("input");
+                    copy.add("input", input == null ? new JsonObject() : input);
+                    copy.addProperty("kind", kind);
+                    result.add(copy);
                 }
             } else if ("web_fetch_tool_result".equals(type)) {
                 String kind = stringOf(block, "kind");
@@ -1027,6 +1046,8 @@ public final class ChatTurnManager {
         }
     }
 
+    /// 历史消息里模型读不了的附件直接省略，避免“换了个纯文本模型就整轮发不出去”。
+    /// 当前这条消息的图片仍然报错，让用户明确知道是这一条的图片没被发送。
     static boolean omitHistoricalAttachment(String kind, boolean vision, boolean current) {
         if (current) {
             return false;

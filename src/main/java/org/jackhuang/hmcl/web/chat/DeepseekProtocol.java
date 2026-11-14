@@ -181,10 +181,8 @@ public final class DeepseekProtocol implements ChatProtocol {
             }
         }
         if (parts.isEmpty()) {
-            JsonObject block = new JsonObject();
-            block.addProperty("type", "text");
-            block.addProperty("text", text.isEmpty() ? " " : text.toString());
-            return block;
+            // DeepSeek 的 messages[].content 只接受字符串或数组；纯文本用字符串。
+            return new com.google.gson.JsonPrimitive(text.isEmpty() ? " " : text.toString());
         }
         if (!text.isEmpty()) {
             JsonObject block = new JsonObject();

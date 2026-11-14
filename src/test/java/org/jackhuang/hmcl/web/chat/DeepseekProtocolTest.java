@@ -70,7 +70,8 @@ class DeepseekProtocolTest {
                             List.of()),
                     new ChatProtocol.ChatMessage("user", "hello", List.of()),
                     new ChatProtocol.ChatMessage("assistant", "", List.of(), List.of(), null,
-                            List.of(readLink))),
+                            List.of(readLink)),
+                    new ChatProtocol.ChatMessage("user", "again", List.of())),
                     null, null, null, null, List.of(), true, true);
             HttpRequest httpRequest = new DeepseekProtocol().prepare(profile, request);
             HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.discarding());
@@ -94,10 +95,14 @@ class DeepseekProtocolTest {
             JsonArray messages = body.getAsJsonArray("messages");
             assertEquals("latest_reminder", messages.get(0).getAsJsonObject().get("role").getAsString());
             assertEquals("user", messages.get(1).getAsJsonObject().get("role").getAsString());
+            assertTrue(messages.get(1).getAsJsonObject().get("content").isJsonPrimitive());
             JsonObject assistant = messages.get(2).getAsJsonObject();
             assertEquals("assistant", assistant.get("role").getAsString());
             assertEquals("server_tool_use",
                     assistant.getAsJsonArray("content").get(0).getAsJsonObject().get("type").getAsString());
+            JsonObject secondUser = messages.get(3).getAsJsonObject();
+            assertEquals("user", secondUser.get("role").getAsString());
+            assertTrue(secondUser.get("content").isJsonPrimitive());
         } finally {
             server.stop(0);
         }
