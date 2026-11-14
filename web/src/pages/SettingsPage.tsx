@@ -55,6 +55,7 @@ import type {
   DoctorReport,
   EmergencyStopPreview,
   PanelInfo,
+  PlatformCompatibility,
   Health,
   RegistrySettings,
   RegistryTestResult,
@@ -222,11 +223,24 @@ export function SettingsPage() {
 
 /* ---------------- 通用：服务器信息 + 账户会话 ---------------- */
 
+const PLATFORM_LEVEL_LABEL: Record<PlatformCompatibility["level"], string> = {
+  supported: "支持",
+  limited: "受限",
+  unsupported: "不支持",
+};
+
+const PLATFORM_LEVEL_TONE: Record<PlatformCompatibility["level"], string> = {
+  supported: "running",
+  limited: "warn",
+  unsupported: "failed",
+};
+
 function GeneralTab() {
   const s = useAppState();
   const nav = useNavigate();
   const [health, setHealth] = useState<Health | null>(null);
   const [panel, setPanel] = useState<PanelInfo | null>(null);
+  const [platform, setPlatform] = useState<PlatformCompatibility | null>(null);
   const [loadedAt, setLoadedAt] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -241,6 +255,8 @@ function GeneralTab() {
       setLoadedAt(Date.now());
       // 面板坐标是补充信息：拿不到也不该让整张卡变成错误。
       api.panelInfo().then(setPanel).catch(() => undefined);
+      // 平台声明同理：老面板没有这个端点（404）时保持空白。
+      api.platformCompatibility().then(setPlatform).catch(() => undefined);
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -330,6 +346,23 @@ function GeneralTab() {
                 {panel ? `Java ${panel.java}` : health.java ? `Java ${health.java}` : "—"}
               </span>
             </div>
+            <div className="comp-row">
+              <span className="comp-label">平台</span>
+              <span className="comp-value">
+                {platform ? (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <span className="mono" style={{ fontSize: 12 }}>
+                      {platform.os} {platform.version} · {platform.arch}
+                    </span>
+                    {platform.level !== "supported" && (
+                      <span className={`tag ${PLATFORM_LEVEL_TONE[platform.level]}`}>
+                        {PLATFORM_LEVEL_LABEL[platform.level]}
+                      </span>
+                    )}
+                  </span>
+                ) : "—"}
+              </span>
+            </div>
             <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 6 }}>
               <button className="btn btn-text ripple-host" disabled={loading} onClick={() => void load()}>
                 <RefreshIcon size={15} />
@@ -339,6 +372,36 @@ function GeneralTab() {
           </>
         ) : null}
       </div>
+
+      {platform && platform.level !== "supported" && (
+        <>
+          <div className="section-caption">
+            <InfoIcon size={16} />
+            平台兼容性
+          </div>
+          <div className="card">
+            <div className="comp-row" style={{ alignItems: "flex-start" }}>
+              <span className="comp-label">结论</span>
+              <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                {platform.summary}
+              </span>
+            </div>
+            {platform.items.map((item) => (
+              <div className="comp-row" key={item.id} style={{ alignItems: "flex-start" }}>
+                <span className="comp-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className={`tag ${PLATFORM_LEVEL_TONE[item.level]}`}>
+                    {PLATFORM_LEVEL_LABEL[item.level]}
+                  </span>
+                  {item.title}
+                </span>
+                <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                  {item.detail}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <SystemMonitorCard />
 

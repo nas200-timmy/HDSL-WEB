@@ -54,6 +54,7 @@ import type {
   SystemStats,
   SystemStorage,
   PanelInfo,
+  PlatformCompatibility,
   ChatAssistant,
   ChatSessionSummary,
   ChatSession,
@@ -143,6 +144,9 @@ export const api = {
     request<SystemStats>(`/api/system/stats${history > 0 ? `?history=${history}` : ""}`),
   /** 面板自己的坐标：监听地址、真实端口、数据目录、版本。 */
   panelInfo: () => request<PanelInfo>("/api/system/info"),
+
+  /** 平台能力与已知差异（FreeBSD 等未纳入发布验收的平台会在设置页展示）。 */
+  platformCompatibility: () => request<PlatformCompatibility>("/api/system/platform"),
   /** 数据目录占用；refresh=true 强制重新遍历（后端默认缓存 60 秒）。 */
   systemStorage: (refresh = false) =>
     request<SystemStorage>(`/api/system/storage${refresh ? "?refresh=1" : ""}`),

@@ -26,6 +26,9 @@
   二进制包，没有 FreeBSD 构建，安装会在 postinstall 失败；品牌页现在会提前说明。
 - **ZCode 在 FreeBSD 上直接拒绝构建**：构建会安装 Electron 桌面端，Electron 没有
   FreeBSD 构建；与其跑十分钟再死在 postinstall，不如一开始就说清楚。
+- **面板里能看到平台声明**：设置 → 通用新增「平台兼容性」（`GET /api/system/platform`），
+  显示内核版本、整体结论（支持 / 受限 / 不支持）和逐项差异；`procfs` 在运行时探测，
+  挂载了就不再报「系统指标为空」。只有未纳入发布验收的平台会展开这张卡。
 - 已知限制（写进 `docs/deployment.md §12`）：系统指标页大部分为空（依赖 `/proc`、`/sys`）、
   没有 GPU、uid 分离未实现、MC 控制台不是 PTY。
 

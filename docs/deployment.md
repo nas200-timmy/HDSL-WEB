@@ -1001,6 +1001,10 @@ CI 的构建矩阵里——属于「能用，但没纳入发布验收」的平�
 | 系统指标页 | 大部分为空：CPU / 磁盘 / 网络 / GPU 依赖 `/proc`、`/sys`，FreeBSD 默认不挂 procfs |
 | uid 分离 | 不支持（`Privileges` 只在 Linux/macOS 实现），面板与 agent 同用户 |
 
+这张表在面板里也有一份：**设置 → 通用 → 平台兼容性**（`GET /api/system/platform`），
+显示当前内核版本、整体结论和逐项差异；`procfs` 是否挂载会在运行时探测（挂了就不再报
+「系统指标为空」）。未纳入发布验收的平台（FreeBSD / UNKNOWN）才会展开这张卡。
+
 准备：
 
 ```sh

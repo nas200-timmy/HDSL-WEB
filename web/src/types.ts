@@ -1047,6 +1047,25 @@ export interface PanelInfo {
   startedAt: number;
 }
 
+/** GET /api/system/platform：当前平台能做什么、哪些是已知差异。 */
+export type PlatformLevel = "supported" | "limited" | "unsupported";
+
+export interface PlatformItem {
+  id: string;
+  level: PlatformLevel;
+  title: string;
+  detail: string;
+}
+
+export interface PlatformCompatibility {
+  os: string;
+  version: string;
+  arch: string;
+  level: PlatformLevel;
+  summary: string;
+  items: PlatformItem[];
+}
+
 /** GET /api/system/storage：数据目录按顶层子目录分桶的大小。 */
 export interface StorageBucket {
   name: string;
