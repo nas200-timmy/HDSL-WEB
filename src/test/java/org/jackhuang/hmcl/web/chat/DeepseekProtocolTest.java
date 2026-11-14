@@ -240,6 +240,18 @@ class DeepseekProtocolTest {
                 ChatTurnManager.latestReminder(Locale.US, LocalDate.of(2026, 11, 15)));
     }
 
+    @Test
+    void legacyReminderIsRewrittenBeforeReplay() {
+        assertEquals(
+                "2026-11-14,星期六,中国,Web,中文",
+                ChatTurnManager.replayableReminder(
+                        "2026-11-14,Saturday,China,Web,Chinese", Locale.SIMPLIFIED_CHINESE));
+        assertEquals(
+                "2026-11-14,Saturday,United States,Web,English",
+                ChatTurnManager.replayableReminder(
+                        "2026-11-14,Saturday,United States,Web,English", Locale.US));
+    }
+
     private static final class Sink implements ChatProtocol.ChatEventSink {
         final StringBuilder text = new StringBuilder();
         final StringBuilder reasoning = new StringBuilder();

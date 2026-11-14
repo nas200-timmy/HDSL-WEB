@@ -1051,7 +1051,7 @@ public final class ChatTurnManager {
             if (!current && reply == null) {
                 continue;
             }
-            String reminder = store.latestReminder(message.id());
+            String reminder = replayableReminder(store.latestReminder(message.id()));
             if (reminder != null && !reminder.isBlank() && !reminder.equals(previousReminder)) {
                 messages.add(new ChatProtocol.ChatMessage("latest_reminder", reminder,
                         List.of()));
@@ -1919,6 +1919,31 @@ public final class ChatTurnManager {
         String language = chinese ? "中文" : "English";
         // 官方格式固定五段：<date>,<weekday>,<location>,<platform>,<language>。
         return today + "," + weekday + "," + location + ",Web," + language;
+    }
+
+    /// 回放历史消息时用的快照。旧版本落库的是 `Chinese` 这类服务端不认的语言名，
+    /// 直接回放会让老会话继续 400；语言不合法就按原日期重建一条。
+    static String replayableReminder(@Nullable String reminder) {
+        return replayableReminder(reminder, Locale.getDefault());
+    }
+
+    static String replayableReminder(@Nullable String reminder, Locale locale) {
+        if (reminder == null || reminder.isBlank()) {
+            return reminder;
+        }
+        String[] fields = reminder.split(",", -1);
+        if (fields.length == 5) {
+            String language = fields[4].trim();
+            if ("中文".equals(language) || "English".equals(language)) {
+                return reminder;
+            }
+            try {
+                return latestReminder(locale, LocalDate.parse(fields[0].trim()));
+            } catch (RuntimeException ignored) {
+                // 快照本身损坏，退回当前时间。
+            }
+        }
+        return latestReminder(locale, LocalDate.now());
     }
 
     private static String titleOf(String text, List<String> attachmentIds) {
