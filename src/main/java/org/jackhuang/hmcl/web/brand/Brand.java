@@ -491,7 +491,16 @@ public enum Brand {
     /// @param os the platform the panel is running on
     /// @return whether an install is offered here
     public boolean installableOn(OperatingSystem os) {
-        return this != HERMES || os != OperatingSystem.WINDOWS;
+        if (this == HERMES) {
+            return os != OperatingSystem.WINDOWS;
+        }
+        // opencode's npm package is only a launcher: the real CLI arrives as a
+        // per-platform optionalDependency and upstream publishes no FreeBSD build,
+        // so its postinstall fails instead of falling back to a JS implementation.
+        if (this == OPENCODE) {
+            return os != OperatingSystem.FREEBSD;
+        }
+        return true;
     }
 
     /// Why [#installableOn] says no, or `null` when it says yes.
@@ -504,6 +513,10 @@ public enum Brand {
     public @Nullable String notInstallableReason(OperatingSystem os) {
         if (installableOn(os)) {
             return null;
+        }
+        if (this == OPENCODE && os == OperatingSystem.FREEBSD) {
+            return "opencode 没有 FreeBSD 构建：上游的可选依赖只有 Linux / macOS / Windows 的"
+                    + "二进制包，安装会在 postinstall 阶段直接失败。";
         }
         return "Hermes 只能在 Linux / macOS 上安装：它要从源码建一套 Python 环境，"
                 + "并且用一个 shell 脚本同时看住 gateway 与 dashboard 两个进程，"

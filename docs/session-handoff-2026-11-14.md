@@ -109,3 +109,18 @@ gh release create v0.6.85 -R nas200-timmy/HDSL-WEB \
   （依赖 `/proc`、`/sys`），没有抛异常；文档已写成已知限制。
 - **未做**：MC 控制台 PTY（需要真实服务端跑一轮）、uid 分离、`/proc` 指标替代实现。
   真机上 `claude-web` 实例仍在，浏览器点「终端」即可验证修复；本次没有猜/复用管理员口令。
+
+### 6.1 安装链路的三个上游问题（同日续查）
+
+真机上按用户提供的日志逐个复现，结论分开处理：
+
+| 包 | 现象 | 根因 | 处理 |
+|---|---|---|---|
+| dsh | `node-pty` 的 `gmake` 编译失败 | node-pty 1.2.0-beta.x 的 `pty.cc` 在非 Apple POSIX 路径调用 `pty_close_inherited_fds()`，但该函数只在 `#if defined(__linux__)` 下定义；beta.18 仍未修 | FreeBSD 上把 `node-pty` 钉到 1.1.0（能编译，spawn/onData/24×80 实测通过），写进 pnpm overrides |
+| opencode | postinstall 提示「手动装 opencode-freebsd-x64」 | 上游 1.19.5 的 optionalDependencies 只有 linux/darwin/windows，**没有 freebsd 包**（npm 404）；提示文案是误导 | `Brand.OPENCODE.installableOn(FREEBSD)=false`，品牌页直接给原因 |
+| ZCode | `packages/desktop postinstall` 下载 Electron 404 | Electron 没有 FreeBSD 构建，桌面端 postinstall 必然失败 | `ZcodeBuilder.start` 在 FreeBSD 上直接拒绝，避免十分钟后才失败 |
+
+验证：在 VM 上用与面板相同的 manifest 结构手工安装 dsh（overrides: node-pty 1.1.0），
+`pnpm install` 成功、`node-pty` 编译出 `pty.node`、`dsh --version` 输出 `0.2.2-rc.3`；
+用 dsh 自己的 subprocess-local 包 `require("node-pty")` 并 spawn `/bin/sh`，输出
+`pty-ok` / `24 80` / `exit=0`。代码侧用 `DshManifestTest` 固定「FreeBSD 才加 pin」。

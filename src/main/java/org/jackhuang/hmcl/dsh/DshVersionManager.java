@@ -253,6 +253,7 @@ public final class DshVersionManager {
         // `duplicated mapping key`. Building the answer once makes that unrepresentable.
         Map<String, String> overrides = mergeOverrides(appBoot,
                 heldDependencies(runtime, version, appBoot, policy));
+        applyPlatformOverrides(overrides, org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS);
 
         JsonObject manifest = new JsonObject();
         manifest.addProperty("private", true);
@@ -299,6 +300,25 @@ public final class DshVersionManager {
         overrides.put(APP_BOOT_PACKAGE, appBoot);
         held.forEach(overrides::putIfAbsent);
         return overrides;
+    }
+
+    /// Platform-specific pins for the install tree.
+    ///
+    /// `node-pty` 1.2.0-beta.x does not compile on FreeBSD: `pty.cc` calls
+    /// `pty_close_inherited_fds()` on every non-Apple POSIX platform but defines it
+    /// only under `__linux__`, so the native build dies with
+    /// `use of undeclared identifier`. 1.1.0 compiles there and the
+    /// `spawn` / `onData` / `resize` API the harness uses is unchanged — measured
+    /// on FreeBSD 15.1 (install, spawn, 24×80, exit code). Pinning one package is
+    /// narrower than telling a FreeBSD operator that dsh cannot be installed.
+    ///
+    /// @param overrides the map written to `pnpm-workspace.yaml`, mutated in place
+    /// @param os        the platform the install runs on
+    static void applyPlatformOverrides(Map<String, String> overrides,
+                                       org.jackhuang.hmcl.util.platform.OperatingSystem os) {
+        if (os == org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD) {
+            overrides.put("node-pty", "1.1.0");
+        }
     }
 
     /// Returns a value written so that YAML reads it back as the string it is.

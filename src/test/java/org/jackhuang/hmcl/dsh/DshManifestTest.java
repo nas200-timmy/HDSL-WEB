@@ -25,6 +25,8 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -253,5 +255,22 @@ class DshManifestTest {
                 "following upstream holds nothing");
         assertTrue(DshDependencyPolicy.LOCKED.pins("\u0040hellosz/dsh-pets"),
                 "the strictest policy holds everything declared");
+    }
+
+    /// FreeBSD gets one extra pin: node-pty's 1.2.0-beta line cannot be compiled
+    /// there (`pty_close_inherited_fds` is Linux-only but called on the BSD path),
+    /// while 1.1.0 compiles and keeps the API the harness uses. Other platforms
+    /// must not inherit the pin.
+    @Test
+    void freebsdPinsNodePtyButOtherPlatformsDoNot() {
+        Map<String, String> freebsd = new LinkedHashMap<>();
+        DshVersionManager.applyPlatformOverrides(freebsd,
+                org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD);
+        assertEquals("1.1.0", freebsd.get("node-pty"));
+
+        Map<String, String> linux = new LinkedHashMap<>();
+        DshVersionManager.applyPlatformOverrides(linux,
+                org.jackhuang.hmcl.util.platform.OperatingSystem.LINUX);
+        assertNull(linux.get("node-pty"), "Linux keeps the harness's own pin");
     }
 }
