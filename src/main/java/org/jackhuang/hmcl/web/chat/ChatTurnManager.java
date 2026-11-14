@@ -1750,12 +1750,23 @@ public final class ChatTurnManager {
     }
 
     /// DeepSeek 的 `latest_reminder` 快照：日期、星期、来源与界面语言。
-    private static String latestReminder() {
+    static String latestReminder() {
         LocalDate today = LocalDate.now();
+        Locale locale = Locale.getDefault();
         String weekday = today.getDayOfWeek().getDisplayName(
-                java.time.format.TextStyle.FULL, Locale.getDefault());
-        String language = Locale.getDefault().toLanguageTag();
-        return today + "," + weekday + ",Web," + language;
+                java.time.format.TextStyle.FULL, Locale.ENGLISH);
+        String location = locale.getDisplayCountry(Locale.ENGLISH);
+        if (location.isBlank()) {
+            location = "Unknown";
+        } else {
+            location = location.replace(',', ' ').trim();
+        }
+        String language = locale.getDisplayLanguage(Locale.ENGLISH);
+        if (language.isBlank()) {
+            language = "English";
+        }
+        // 官方格式固定五段：<date>,<weekday>,<location>,<platform>,<language>。
+        return today + "," + weekday + "," + location + ",Web," + language;
     }
 
     private static String titleOf(String text, List<String> attachmentIds) {

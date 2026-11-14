@@ -848,8 +848,8 @@ POST   /api/chat/sessions               // body 带 assistantId
 - `sources_json` 存展示用的来源与 `read_link` 轮次，`ChatService.messageJson()` 映射成现有的
   `sources` / `tools` 字段，前端复用现有来源 chips。
 - 正文引用按 chat-demo 的 `[citation:N]` 标记追加；`Markdown.tsx` 用来源数组换成链接。
-- 每次发送在 user 消息上写 `latest_reminder`（日期、星期、Web、语言），回放时按
-  `latest_reminder` 角色插在提问前；快照变化才重复插入。
+- 每次发送在 user 消息上写 `latest_reminder`（日期、星期、地区、Web、语言，固定五段），
+  回放时按 `latest_reminder` 角色插在提问前；快照变化才重复插入。
 - 服务端标题只在 `title_auto=1` 时写入；用户手动改名或本轮没拿到标题就关掉自动标题。
 - 图片走 `POST /anthropic/v1/files`，`file_id` 按附件缓存；文档仍走文本抽取，扩展模式
   不支持 document，先按文本发送。远程文件目前不做删除清理。

@@ -66,7 +66,7 @@ class DeepseekProtocolTest {
                      "kind":"read_link"}""").getAsJsonObject();
             ChatProtocol.ChatRequest request = new ChatProtocol.ChatRequest(
                     "deepseek-flash", "system", List.of(
-                    new ChatProtocol.ChatMessage("latest_reminder", "2026-11-14,星期五,Web,zh-CN",
+                    new ChatProtocol.ChatMessage("latest_reminder", "2026-11-14,Friday,China,Web,English",
                             List.of()),
                     new ChatProtocol.ChatMessage("user", "hello", List.of()),
                     new ChatProtocol.ChatMessage("assistant", "", List.of(), List.of(), null,
@@ -176,6 +176,18 @@ class DeepseekProtocolTest {
                 caps, ChatEndpoints.DEEPSEEK_ANTHROPIC, "https://api.deepseek.com", "deepseek-flash");
         assertEquals("toggle", mode.kind());
         assertTrue(mode.canDisable());
+    }
+
+    @Test
+    void latestReminderAlwaysHasFiveFields() {
+        String reminder = ChatTurnManager.latestReminder();
+        String[] fields = reminder.split(",", -1);
+        assertEquals(5, fields.length, reminder);
+        assertTrue(fields[0].matches("\\d{4}-\\d{2}-\\d{2}"), reminder);
+        assertFalse(fields[1].isBlank(), reminder);
+        assertFalse(fields[2].isBlank(), reminder);
+        assertEquals("Web", fields[3]);
+        assertFalse(fields[4].isBlank(), reminder);
     }
 
     private static final class Sink implements ChatProtocol.ChatEventSink {
