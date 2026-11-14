@@ -845,6 +845,18 @@
   transition: border-color 120ms var(--ease), box-shadow 120ms var(--ease);
 }
 
+/* 有会话时输入框跟着消息列走：消息是左对齐的（头像列 + 28px 内边距），
+   输入框却按整个聊天区居中会在宽屏上飘到右边。空态仍保持居中的欢迎布局
+   （docs/chat.md §2.1「居中欢迎语 + 输入框」）。 */
+.chat-composer-wrap--conversation {
+  padding: 8px 28px 12px;
+}
+
+.chat-composer-wrap--conversation .chat-composer {
+  max-width: 820px;
+  margin: 0;
+}
+
 .chat-composer:focus-within {
   border-color: var(--monet-primary);
   box-shadow: 0 0 0 1px var(--monet-primary-transparent-50);
@@ -1228,6 +1240,14 @@
 @media (max-width: 760px) {
   .chat-page {
     padding: 0;
+  }
+
+  .chat-composer-wrap--conversation {
+    padding: 8px 12px 12px;
+  }
+
+  .chat-composer-wrap--conversation .chat-composer {
+    max-width: 100%;
   }
 
   .chat-main {

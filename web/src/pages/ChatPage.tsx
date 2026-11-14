@@ -1057,7 +1057,7 @@ export function ChatPage() {
         )}
 
         {!needsElevation && !loadingChat && (
-          <div className="chat-composer-wrap">
+          <div className={`chat-composer-wrap${session ? " chat-composer-wrap--conversation" : ""}`}>
             {preset && !presetReady && (
               <div className="chat-composer-note">
                 这个角色固定使用 DeepSeek 官方协议：先在账户页添加一个 DeepSeek 账户。
