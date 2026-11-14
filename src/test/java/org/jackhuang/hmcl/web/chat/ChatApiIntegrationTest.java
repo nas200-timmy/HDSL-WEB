@@ -90,6 +90,43 @@ class ChatApiIntegrationTest {
         }
     }
 
+    @Test
+    void textAttachmentDownloadDeclaresItsCharset(@TempDir Path dataDir) throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+                config -> {
+                    config.auth.disabled = true;
+                    config.bindHost = "127.0.0.1";
+                })) {
+            JsonObject session = post(running, "/api/chat/sessions", new JsonObject());
+            String sessionId = session.get("id").getAsString();
+            String text = "粘贴的长文本：中文、emoji 🙂 和换行\n第二行";
+            String boundary = "----hdslTestBoundary";
+            String multipart = "--" + boundary + "\r\n"
+                    + "Content-Disposition: form-data; name=\"file\"; filename=\"pasted.txt\"\r\n"
+                    + "Content-Type: text/plain\r\n\r\n"
+                    + text + "\r\n--" + boundary + "--\r\n";
+            HttpRequest upload = HttpRequest.newBuilder(URI.create(running.baseUrl()
+                            + "/api/chat/attachments?sessionId=" + sessionId))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                    .POST(HttpRequest.BodyPublishers.ofString(multipart, StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<String> uploaded = TestSupport.client().send(upload,
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertEquals(201, uploaded.statusCode(), uploaded.body());
+            String id = JsonParser.parseString(uploaded.body()).getAsJsonObject().get("id").getAsString();
+
+            HttpRequest download = HttpRequest.newBuilder(URI.create(running.baseUrl()
+                    + "/api/chat/attachments/" + id)).GET().build();
+            HttpResponse<String> response = TestSupport.client().send(download,
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertEquals(200, response.statusCode());
+            String contentType = response.headers().firstValue("Content-Type").orElse("");
+            assertTrue(contentType.toLowerCase().contains("charset=utf-8"), contentType);
+            assertEquals(text, response.body());
+        }
+    }
+
     private static void stream(HttpExchange exchange) throws IOException {
         exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
         exchange.sendResponseHeaders(200, 0);

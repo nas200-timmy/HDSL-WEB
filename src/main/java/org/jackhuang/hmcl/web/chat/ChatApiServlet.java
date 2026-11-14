@@ -501,6 +501,14 @@ public final class ChatApiServlet extends HttpServlet {
         return session instanceof AuthService.Session value ? value.username() : "admin";
     }
 
+    /// 文本类附件要显式声明 UTF-8：中文 Windows 的浏览器在 `text/plain` 没有 charset 时
+    /// 会按 GBK 猜，UTF-8 的粘贴文本因此显示成乱码。
+    private static boolean textual(String mime) {
+        String lower = mime.toLowerCase(java.util.Locale.ROOT);
+        return lower.startsWith("text/") || "application/json".equals(lower)
+                || "application/xml".equals(lower) || lower.endsWith("+json");
+    }
+
     private void download(HttpServletResponse response, String id) throws IOException, SQLException {
         ChatStore.Attachment attachment = chat.attachment(id);
         if (attachment == null) {
@@ -513,7 +521,12 @@ public final class ChatApiServlet extends HttpServlet {
             return;
         }
         response.setStatus(200);
-        response.setContentType(attachment.mime());
+        if (textual(attachment.mime())) {
+            response.setContentType(attachment.mime() + "; charset="
+                    + ChatAttachments.sniffTextCharset(path).name());
+        } else {
+            response.setContentType(attachment.mime());
+        }
         response.setHeader("X-Content-Type-Options", "nosniff");
         response.setHeader("Cache-Control", "private, max-age=3600");
         String encoded = URLEncoder.encode(attachment.name(), StandardCharsets.UTF_8)

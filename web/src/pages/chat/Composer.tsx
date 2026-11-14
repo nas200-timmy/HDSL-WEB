@@ -206,9 +206,9 @@ export function Composer({
             void addFiles(files);
             return;
           }
-          // 长文本粘贴不该灌满输入框：超过 100 字直接转成 .txt 附件，模型看到的是附件
+          // 长文本粘贴不该灌满输入框：超过 1800 字直接转成 .txt 附件，模型看到的是附件
           const text = event.clipboardData.getData("text/plain");
-          if (text.length > 100) {
+          if (text.length > 1800) {
             event.preventDefault();
             onUploadText(text);
           }
