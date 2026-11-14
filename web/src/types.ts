@@ -566,6 +566,7 @@ export type WsEvent =
   | { type: "chat-turn-started"; sessionId: string; turnId: string; messageId: string; nodeId: string; attemptNo: number }
   | { type: "chat-delta"; sessionId: string; turnId: string; seq: number; text: string }
   | { type: "chat-reasoning"; sessionId: string; turnId: string; seq: number; text: string }
+  | { type: "chat-block"; sessionId: string; turnId: string; phase: "start" | "end"; blockType: string; seq: number }
   | { type: "chat-usage"; sessionId: string; turnId: string; input: number; output: number }
   | { type: "chat-tool"; sessionId: string; turnId: string; tool?: "search" | "scrape" | "read_link" | "deepseek_web_search" | string; query: string; status: "running" | "done" | "failed" | string; provider?: string; hits?: number; sources?: ChatSearchResult }
   | { type: "chat-sources"; sessionId: string; turnId: string; sources: ChatSearchHit[] }
@@ -1138,12 +1139,33 @@ export interface ChatAttachment {
   preview?: string;
 }
 
+/** DeepSeek 官方协议的原生内容块（按流顺序；思考、服务端工具、正文都在里面）。 */
+export interface ChatBlock {
+  type: string;
+  thinking?: string;
+  text?: string;
+  signature?: string;
+  id?: string;
+  name?: string;
+  kind?: string;
+  input?: {
+    action?: string;
+    query?: string;
+    queries?: string[];
+    url?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 export interface ChatMessage {
   id: string;
   nodeId: string;
   variantIndex: number;
   content: string;
   reasoning: string;
+  /** DeepSeek 预设才有：保留思考/搜索的原始顺序，前端据此分段渲染。 */
+  blocks?: ChatBlock[];
   status: "streaming" | "done" | "stopped" | "error" | "interrupted" | string;
   model: string | null;
   createdAt: number;

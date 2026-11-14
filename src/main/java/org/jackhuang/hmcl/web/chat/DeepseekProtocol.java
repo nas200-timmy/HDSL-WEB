@@ -313,6 +313,7 @@ public final class DeepseekProtocol implements ChatProtocol {
             case "text", "thinking" -> {
                 BlockBuilder builder = new BlockBuilder(type);
                 builders.put(index, builder);
+                sink.blockStart(block);
             }
             case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result" ->
                     sink.block(block);
@@ -372,7 +373,9 @@ public final class DeepseekProtocol implements ChatProtocol {
         if (builder == null) {
             return;
         }
-        sink.block(builder.toBlock());
+        JsonObject completed = builder.toBlock();
+        sink.blockEnd(completed);
+        sink.block(completed);
     }
 
     private static void flush(Map<Integer, BlockBuilder> builders, ChatEventSink sink) {

@@ -1251,6 +1251,20 @@ public final class ChatTurnManager {
         }
     }
 
+    /// DeepSeek 思考段边界：先把上一段已缓冲的思考 flush 出去，再通知前端。
+    /// 前端据此在“思考 → 搜索 → 思考”之间插入分段，而不是把所有思考拼成一段。
+    private void blockBoundary(ActiveTurn turn, String phase, JsonObject block) {
+        if (!"thinking".equals(stringOf(block, "type"))) {
+            return;
+        }
+        flush(turn, true);
+        JsonObject event = event("chat-block", turn);
+        event.addProperty("phase", phase);
+        event.addProperty("blockType", "thinking");
+        event.addProperty("seq", ++turn.seq);
+        publish(turn.sessionId, event);
+    }
+
     private void textBlock(ActiveTurn turn, JsonObject block) {
         JsonElement citations = block.get("citations");
         if (citations == null || !citations.isJsonArray() || citations.getAsJsonArray().isEmpty()) {
@@ -1924,6 +1938,16 @@ public final class ChatTurnManager {
         @Override
         public void block(JsonObject block) {
             ChatTurnManager.this.deepseekBlock(this, block);
+        }
+
+        @Override
+        public void blockStart(JsonObject block) {
+            ChatTurnManager.this.blockBoundary(this, "start", block);
+        }
+
+        @Override
+        public void blockEnd(JsonObject block) {
+            ChatTurnManager.this.blockBoundary(this, "end", block);
         }
 
         @Override

@@ -510,7 +510,8 @@ public final class ChatStore implements AutoCloseable {
     public record Message(
             String id, String nodeId, int variantIndex, String content, String reasoning,
             String status, @Nullable String model, @Nullable String usageJson,
-            long createdAt, @Nullable Long editedAt, List<Attachment> attachments) {
+            long createdAt, @Nullable Long editedAt, @Nullable String blocksJson,
+            List<Attachment> attachments) {
     }
 
     public record Attachment(
@@ -617,7 +618,8 @@ public final class ChatStore implements AutoCloseable {
                     messages.add(new Message(id, nodeId, rs.getInt("variant_index"),
                             rs.getString("content"), rs.getString("reasoning"), rs.getString("status"),
                             rs.getString("model"), rs.getString("usage_json"), rs.getLong("created_at"),
-                            nullableLong(rs, "edited_at"), attachmentsForMessage(id)));
+                            nullableLong(rs, "edited_at"), rs.getString("blocks_json"),
+                            attachmentsForMessage(id)));
                 }
             }
         }
@@ -780,7 +782,7 @@ public final class ChatStore implements AutoCloseable {
             statement.executeUpdate();
         }
         return new Message(id, nodeId, variantIndex, content, reasoning, status, model, usageJson,
-                createdAt, null, List.of());
+                createdAt, null, null, List.of());
     }
 
     private int nextVariant(String nodeId) throws SQLException {
@@ -813,7 +815,7 @@ public final class ChatStore implements AutoCloseable {
         touchSession(sessionId);
         return new Node(nodeId, sessionId, 0, "user", message.id(), now,
                 List.of(new Message(message.id(), nodeId, 0, content, "", "done", model, null,
-                        now, null, attachmentsForMessage(message.id()))));
+                        now, null, null, attachmentsForMessage(message.id()))));
     }
 
     /// 新建一个空的助手节点（状态 streaming），用于本轮生成。
@@ -856,7 +858,8 @@ public final class ChatStore implements AutoCloseable {
                 return new Message(messageId, rs.getString("node_id"), rs.getInt("variant_index"),
                         rs.getString("content"), rs.getString("reasoning"), rs.getString("status"),
                         rs.getString("model"), rs.getString("usage_json"), rs.getLong("created_at"),
-                        nullableLong(rs, "edited_at"), attachmentsForMessage(messageId));
+                        nullableLong(rs, "edited_at"), rs.getString("blocks_json"),
+                        attachmentsForMessage(messageId));
             }
         }
     }

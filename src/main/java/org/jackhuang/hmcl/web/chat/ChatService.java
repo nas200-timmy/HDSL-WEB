@@ -972,6 +972,16 @@ public final class ChatService {
         json.addProperty("variantIndex", message.variantIndex());
         json.addProperty("content", message.content() == null ? "" : message.content());
         json.addProperty("reasoning", message.reasoning() == null ? "" : message.reasoning());
+        if (message.blocksJson() != null && !message.blocksJson().isBlank()) {
+            try {
+                JsonElement blocks = JsonParser.parseString(message.blocksJson());
+                if (blocks.isJsonArray()) {
+                    json.add("blocks", blocks);
+                }
+            } catch (RuntimeException ignored) {
+                // A malformed blocks column must not take down the whole session response.
+            }
+        }
         json.addProperty("status", message.status());
         addNullable(json, "model", message.model());
         json.addProperty("createdAt", message.createdAt());

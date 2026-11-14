@@ -135,6 +135,14 @@ public interface ChatProtocol {
         default void block(JsonObject block) {
         }
 
+        /// 内容块的开始与结束。DeepSeek 用它们标记思考段的边界；
+        /// 前端据此把“思考 → 搜索 → 思考”画成多段，其他协议不调用。
+        default void blockStart(JsonObject block) {
+        }
+
+        default void blockEnd(JsonObject block) {
+        }
+
         /// 服务端生成的会话标题。
         default void title(String title) {
         }

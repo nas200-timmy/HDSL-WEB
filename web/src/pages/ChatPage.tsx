@@ -49,14 +49,49 @@ function isPresetAssistant(assistant: ChatAssistant | null | undefined): boolean
   return assistant?.preset === "deepseek-official";
 }
 
+type LiveBlock =
+  | { kind: "thinking"; text: string }
+  | { kind: "tool"; tool?: string; query: string; provider: string; status: string; hits: number };
+
 /** 流式气泡：会话还没刷新到新节点时先画在列表末尾。 */
-function LiveBubble({ assistant, text, reasoning, tool, sources }: { assistant: ChatAssistant | null; text: string; reasoning: string; tool?: { tool?: string; query: string; provider: string; status: string; hits: number }; sources?: ChatSearchHit[] }) {
+function LiveBubble({ assistant, text, reasoning, tool, sources, blocks }: { assistant: ChatAssistant | null; text: string; reasoning: string; tool?: { tool?: string; query: string; provider: string; status: string; hits: number }; sources?: ChatSearchHit[]; blocks?: LiveBlock[] }) {
+  const hasBlocks = !!blocks && blocks.length > 0;
   return (
     <div className="chat-msg assistant">
       <div className="chat-msg-avatar"><AvatarView value={assistant?.avatar} /></div>
       <div className="chat-msg-body">
         <div className="chat-msg-name">{assistant?.name ?? "助手"}</div>
-        {reasoning && (
+        {hasBlocks ? (
+          <div className="chat-block-timeline">
+            {blocks!.map((block, index) => block.kind === "thinking" ? (
+              block.text ? (
+                <div className="chat-reasoning expanded" key={`thinking-${index}`}>
+                  <div className="chat-reasoning-head static">
+                    <span className="chat-reasoning-title">思考</span>
+                    <span className="chat-reasoning-count">{block.text.length} 字</span>
+                    <span className="chat-reasoning-toggle">生成中</span>
+                  </div>
+                  <div className="chat-reasoning-body">{block.text}</div>
+                </div>
+              ) : null
+            ) : (
+              <div className="chat-tools" key={`tool-${index}`}>
+                <div className={`chat-tool-chip ${block.status}`}>
+                  <span className="chat-tool-icon">{block.status === "running"
+                    ? "…" : block.tool === "scrape" || block.tool === "read_link" ? "📄" : "🔍"}</span>
+                  <span className="chat-tool-query">{block.query}</span>
+                  <span className="chat-tool-meta">
+                    {block.status === "running"
+                      ? (block.tool === "scrape" || block.tool === "read_link" ? "正在读取网页" : "正在搜索")
+                      : block.status === "failed"
+                        ? (block.tool === "scrape" || block.tool === "read_link" ? "读取失败" : "搜索失败")
+                        : `${block.hits} 条结果`}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : reasoning && (
           <div className="chat-reasoning expanded">
             <div className="chat-reasoning-head static">
               <span className="chat-reasoning-title">思考</span>
@@ -76,17 +111,17 @@ function LiveBubble({ assistant, text, reasoning, tool, sources }: { assistant: 
             <span className="chat-dot" /><span className="chat-dot" /><span className="chat-dot" />
           </div>
         )}
-        {tool && (
+        {tool && !hasBlocks && (
           <div className="chat-tools">
             <div className={`chat-tool-chip ${tool.status}`}>
               <span className="chat-tool-icon">{tool.status === "running"
-                ? "…" : tool.tool === "scrape" ? "📄" : "🔍"}</span>
+                ? "…" : tool.tool === "scrape" || tool.tool === "read_link" ? "📄" : "🔍"}</span>
               <span className="chat-tool-query">{tool.query}</span>
               <span className="chat-tool-meta">
                 {tool.status === "running"
-                  ? (tool.tool === "scrape" ? "正在读取网页" : "正在搜索")
+                  ? (tool.tool === "scrape" || tool.tool === "read_link" ? "正在读取网页" : "正在搜索")
                   : tool.status === "failed"
-                    ? (tool.tool === "scrape" ? "读取失败" : "搜索失败")
+                    ? (tool.tool === "scrape" || tool.tool === "read_link" ? "读取失败" : "搜索失败")
                     : `${tool.hits} 条结果`}
               </span>
             </div>
@@ -95,6 +130,26 @@ function LiveBubble({ assistant, text, reasoning, tool, sources }: { assistant: 
       </div>
     </div>
   );
+}
+
+/** 同一次服务端工具从 running 到 done 只保留一个块；并行工具按 query 区分。 */
+function mergeLiveTool(blocks: LiveBlock[] | undefined, event: { tool?: string; query: string; provider?: string; status: string; hits?: number }): LiveBlock[] {
+  const next = [...(blocks ?? [])];
+  const tool = event.tool ?? "search";
+  if (event.status === "running") {
+    next.push({ kind: "tool", tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: 0 });
+    return next;
+  }
+  for (let i = next.length - 1; i >= 0; i--) {
+    const block = next[i];
+    if (block.kind === "tool" && block.status === "running"
+        && block.query === event.query && (block.tool ?? "search") === tool) {
+      next[i] = { ...block, status: event.status, hits: event.hits ?? 0 };
+      return next;
+    }
+  }
+  next.push({ kind: "tool", tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: event.hits ?? 0 });
+  return next;
 }
 
 /** 面板聊天页（docs/chat.md §2/§12）。 */
@@ -118,7 +173,7 @@ export function ChatPage() {
   const [liveUsage, setLiveUsage] = useState<{ sessionId: string; input: number; output: number } | null>(null);
   const [searchEnabled, setSearchEnabled] = useState(false);
   const [searchStatus, setSearchStatus] = useState<{ configured: boolean } | null>(null);
-  const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string; tool?: { tool?: string; query: string; provider: string; status: string; hits: number }; sources?: ChatSearchHit[] } | null>(null);
+  const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string; blocks?: LiveBlock[]; tool?: { tool?: string; query: string; provider: string; status: string; hits: number }; sources?: ChatSearchHit[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ChatSessionSummary | null>(null);
@@ -352,18 +407,32 @@ export function ChatPage() {
         finishedTurns.current.delete(event.turnId);
         setLive((previous) => previous && previous.turnId === event.turnId
           ? { ...previous, messageId: event.messageId }
-          : { turnId: event.turnId, messageId: event.messageId, text: "", reasoning: "", status: "streaming" });
+          : { turnId: event.turnId, messageId: event.messageId, text: "", reasoning: "", status: "streaming", blocks: [] });
         return;
       }
       if (event.type === "chat-usage") {
         setLiveUsage({ sessionId: event.sessionId, input: event.input, output: event.output });
         return;
       }
+      if (event.type === "chat-block") {
+        if (event.phase === "start" && event.blockType === "thinking") {
+          setLive((previous) => {
+            if (previous && previous.turnId !== event.turnId) return previous;
+            const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming", blocks: [] };
+            return { ...base, blocks: [...(base.blocks ?? []), { kind: "thinking", text: "" }] };
+          });
+        }
+        return;
+      }
       if (event.type === "chat-tool") {
         setLive((previous) => {
           if (previous && previous.turnId !== event.turnId) return previous;
-          const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming" };
-          return { ...base, tool: { tool: event.tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: event.hits ?? 0 } };
+          const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming", blocks: [] };
+          return {
+            ...base,
+            tool: { tool: event.tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: event.hits ?? 0 },
+            blocks: mergeLiveTool(base.blocks, event),
+          };
         });
         return;
       }
@@ -380,14 +449,30 @@ export function ChatPage() {
         void loadSessions(assistantIdRef.current);
         return;
       }
-      if (event.type === "chat-delta" || event.type === "chat-reasoning") {
+      if (event.type === "chat-reasoning") {
         if (finishedTurns.current.has(event.turnId)) return;
         setLive((previous) => {
           if (previous && previous.turnId !== event.turnId) return previous;
-          const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming" };
-          return event.type === "chat-delta"
-            ? { ...base, text: base.text + event.text }
-            : { ...base, reasoning: base.reasoning + event.text };
+          const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming", blocks: [] };
+          const blocks = [...(base.blocks ?? [])];
+          let index = blocks.length - 1;
+          while (index >= 0 && blocks[index].kind !== "thinking") index--;
+          if (index >= 0) {
+            const thinking = blocks[index] as Extract<LiveBlock, { kind: "thinking" }>;
+            blocks[index] = { ...thinking, text: thinking.text + event.text };
+          } else {
+            blocks.push({ kind: "thinking", text: event.text });
+          }
+          return { ...base, reasoning: base.reasoning + event.text, blocks };
+        });
+        return;
+      }
+      if (event.type === "chat-delta") {
+        if (finishedTurns.current.has(event.turnId)) return;
+        setLive((previous) => {
+          if (previous && previous.turnId !== event.turnId) return previous;
+          const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming", blocks: [] };
+          return { ...base, text: base.text + event.text };
         });
         return;
       }
@@ -1051,7 +1136,7 @@ export function ChatPage() {
               });
             })()}
             {live && !liveAttached && (
-              <LiveBubble assistant={currentAssistant} text={live.text} reasoning={live.reasoning} tool={live.tool} sources={live.sources} />
+              <LiveBubble assistant={currentAssistant} text={live.text} reasoning={live.reasoning} tool={live.tool} sources={live.sources} blocks={live.blocks} />
             )}
           </div>
         )}

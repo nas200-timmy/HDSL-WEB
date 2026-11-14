@@ -169,6 +169,44 @@ class DeepseekProtocolTest {
     }
 
     @Test
+    void thinkingSegmentsAreDelimitedAroundServerTools() throws Exception {
+        String stream = """
+                event: content_block_start
+                data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}
+
+                event: content_block_delta
+                data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"先想"}}
+
+                event: content_block_stop
+                data: {"type":"content_block_stop","index":0}
+
+                event: content_block_start
+                data: {"type":"content_block_start","index":1,"content_block":{"type":"server_tool_use","id":"s1","name":"deepseek_web_search","input":{"action":"search","queries":["q"]},"kind":"search"}}
+
+                event: content_block_start
+                data: {"type":"content_block_start","index":2,"content_block":{"type":"thinking","thinking":""}}
+
+                event: content_block_delta
+                data: {"type":"content_block_delta","index":2,"delta":{"type":"thinking_delta","thinking":"再想"}}
+
+                event: content_block_stop
+                data: {"type":"content_block_stop","index":2}
+
+                event: message_stop
+                data: {"type":"message_stop"}
+
+                """;
+
+        Sink sink = new Sink();
+        new DeepseekProtocol().read(
+                new ByteArrayInputStream(stream.getBytes(StandardCharsets.UTF_8)), sink);
+
+        assertEquals(List.of("thinking", "thinking"), sink.blockStarts);
+        assertEquals(List.of("thinking", "thinking"), sink.blockEnds);
+        assertEquals("先想再想", sink.reasoning.toString());
+    }
+
+    @Test
     void deepseekReasoningIsAToggle() {
         ChatCapabilities.Capabilities caps = new ChatCapabilities.Capabilities(
                 true, false, true, true, 1_000_000, 64_000, "vendor");
@@ -194,6 +232,8 @@ class DeepseekProtocolTest {
         final StringBuilder text = new StringBuilder();
         final StringBuilder reasoning = new StringBuilder();
         final List<com.google.gson.JsonElement> blocks = new ArrayList<>();
+        final List<String> blockStarts = new ArrayList<>();
+        final List<String> blockEnds = new ArrayList<>();
         String stopReason;
         String title;
         int input;
@@ -232,6 +272,16 @@ class DeepseekProtocolTest {
         @Override
         public void block(JsonObject block) {
             blocks.add(block);
+        }
+
+        @Override
+        public void blockStart(JsonObject block) {
+            blockStarts.add(block.get("type").getAsString());
+        }
+
+        @Override
+        public void blockEnd(JsonObject block) {
+            blockEnds.add(block.get("type").getAsString());
         }
 
         @Override
