@@ -2,35 +2,39 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## v0.6.87 — 2026-11-14 · DeepSeek 官方预设助手与官方搜索
-
-> 把 chat-demo 的协议行为拆进面板：新增内置「DeepSeek 官方」角色，固定 DeepSeek 官方
-> 协议（深度思考、官方联网搜索、读链接、来源引用），UI/Markdown/会话/分支仍用面板自己的。
-> 聊天设置新增开关，可隐藏这个预设；关闭不删数据。
-
-- 新协议 `deepseek-anthropic`：`/anthropic/v1/messages`，`thinking` 开关、服务端工具
-  `deepseek_web_search` / `deepseek_read_url`、`safety_check`、服务端标题与
-  `latest_reminder` 角色；搜索不再走面板的客户端工具链。
-- schema v4：助手 `preset/protocol`、会话 `title_auto`、消息 `blocks_json/sources_json/
-  latest_reminder`、附件 Files API 缓存字段。
-- 预设角色只接受 DeepSeek 账户与模型；没有账户时给出添加入口，后端硬拒绝跨供应商回退。
-- 聊天设置 → 预设助手：`deepseekPresetEnabled` 开关；关闭后隐藏预设及复制角色，
-  会话保留，新发送返回 `preset_disabled`。
-- 正文里的 `[citation:N]` 渲染成来源链接；来源复用现有 `sources` / `tools` 结构。
-- 图片走 Files API（`file_id` 缓存）；文档仍走文本抽取。
-- 手机端消息改为「头像列 + 气泡列」，会话输入框跟随消息列左对齐。
-- 真 key 已跑过请求校验阶段：根据服务端 422/400 反馈修正了 user `content` 形状与
-  `latest_reminder` 五段格式。
-- 测试：`DeepseekProtocolTest`、`ChatStoreTest`、`ChatSettingsTest` 覆盖协议形状、
-  schema v4 与开关。
-
-## v0.6.86 — 2026-11-14 · FreeBSD 交互式终端与平台声明；转码手机端布局
+## v0.6.86 — 2026-11-14 · FreeBSD 终端、平台声明与 DeepSeek 官方预设助手
 
 > FreeBSD 上面板能跑，但 PTY 终端一直是缺口；这一版在 **FreeBSD 15.1 真机**上补齐并验证，
 > 同时把「哪些平台/功能有已知差异」做成面板里的声明。dsh / opencode / ZCode 在 FreeBSD 上
 > 仍不可用（上游限制），面板会直接拒绝安装，而不是让人等到失败。
 >
 > 发布物：fat jar 仍是 69 MB（v0.6.85 起就没有再变大）；容器镜像同步更新。
+>
+> **2026-11-14 同版本重切**：在 FreeBSD 发布的基础上补入 DeepSeek 官方预设助手与官方搜索，
+> 覆盖原 v0.6.86 的 jar、Release 与容器；v0.6.87 不再发布。
+
+### DeepSeek 官方预设助手
+
+- 新协议 `deepseek-anthropic`：`/anthropic/v1/messages`，`thinking` 开关、服务端工具
+  `deepseek_web_search` / `deepseek_read_url`、`safety_check`、服务端标题与
+  `latest_reminder` 角色；搜索不再走面板的客户端工具链。
+- 内置「DeepSeek 官方」角色，复制出来的角色继承 preset/protocol；只接受 DeepSeek 账户与模型，
+  没有账户时给出添加入口，后端硬拒绝跨供应商回退。
+- 聊天设置 → 预设助手：`deepseekPresetEnabled` 开关；关闭后隐藏预设及复制角色，
+  会话保留，新发送返回 `preset_disabled`。
+- schema v4：助手 `preset/protocol`、会话 `title_auto`、消息 `blocks_json/sources_json/
+  latest_reminder`、附件 Files API 缓存字段。
+- 会话 API 暴露 `blocks_json`，前端按 thinking / server_tool_use 的原始顺序渲染多段思考与
+  搜索时间线；流式新增 `chat-block` 边界事件。
+- 正文里的 `[citation:N]` 渲染成来源链接；来源复用现有 `sources` / `tools` 结构。
+- 图片走 Files API（`file_id` 缓存）；文档仍走文本抽取。
+- 兼容 DeepSeek 在 OpenAI 协议下把工具调用写成 DSML 文本的情况：能解析就转成 ToolCall 并从
+  正文剥离；解析失败或工具被禁用时返回明确错误，不再保存空消息。
+- 真 key 已跑过请求校验阶段：根据服务端 422/400 反馈修正了 user `content` 形状、
+  `latest_reminder` 五段格式与 DSML 块匹配。
+- 手机端消息改为「头像列 + 气泡列」，会话输入框跟随消息列左对齐。
+
+### FreeBSD 终端与平台声明
 
 - `Pty.spawn` 增加 FreeBSD 分支，复用 `PosixPty`（`openpty` + `posix_spawn`），没有新增依赖：
   `openpty` 在 base 的 libutil，`posix_spawn` 与 `posix_spawn_file_actions_addchdir_np`

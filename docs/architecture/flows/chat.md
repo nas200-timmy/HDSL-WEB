@@ -105,7 +105,7 @@ flowchart LR
   gate -- 是 --> profile["deepseekProfile<br/>/anthropic/v1/messages"]
   profile --> body["thinking 开关 + 服务端工具<br/>+ safety_check + title"]
   body --> stream["SSE：server_tool_use /<br/>搜索结果 / 读链接 / 引用 / 标题"]
-  stream --> ws["chat-tool + chat-sources<br/>+ chat-title"]
+  stream --> ws["chat-block / chat-tool /<br/>chat-sources + chat-title"]
   stream --> store["blocks_json / sources_json /<br/>latest_reminder"]
 ```
 
@@ -113,4 +113,8 @@ flowchart LR
   与 key 对这条路径不生效。
 - 历史只回传正文与带签名的 `read_link`；搜索、思考不进上下文。图片走 Files API，
   文档仍按抽取文本发送。
+- 完成消息按 `blocks_json` 的原始顺序渲染多段思考与搜索卡片；流式用 `chat-block`
+  （`phase=start|end`）在思考与工具之间分段。
+- 默认助手（OpenAI 协议）遇到 DeepSeek 的 DSML 文本工具调用时，会解析成 `ToolCall`
+  并从正文剥离；解析失败或工具不可用时返回明确错误，不保存空消息。
 - 关闭开关只隐藏助手与会话，不删数据；后端仍会拒绝新 turn。

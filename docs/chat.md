@@ -811,7 +811,7 @@ POST   /api/chat/sessions               // body 带 assistantId
 - 已知未做：模型服务 ON/OFF 开关、模型家族分组、原生 OpenAI PDF 的真实网关
   联调、备份恢复 UI、音频/视频原生输入、fork/搜索。
 
-## 21. DeepSeek 官方预设助手（2026-11-14，web-shell）
+## 21. DeepSeek 官方预设助手（2026-11-14，v0.6.86 同版本重切）
 
 把 chat-demo 的协议行为拆进面板，不搬它的前端地基：Markdown、主题、会话、分支、备份仍用
 面板自己的实现。
@@ -854,9 +854,24 @@ POST   /api/chat/sessions               // body 带 assistantId
 - 图片走 `POST /anthropic/v1/files`，`file_id` 按附件缓存；文档仍走文本抽取，扩展模式
   不支持 document，先按文本发送。远程文件目前不做删除清理。
 
-### 21.4 验证
+### 21.4 按块时间线与 DSML 兼容
 
-- `DeepseekProtocolTest`：请求体、服务端工具、引用、思考签名、标题与 `latest_reminder`。
+- 会话 API 在消息里直接返回 `blocks_json`（`blocks` 字段）；完成的助手消息按
+  `thinking` / `server_tool_use` 的原始顺序渲染多段思考与搜索卡片，不再把整轮思考
+  拼成一段。
+- 流式新增 `chat-block` 事件：`phase=start|end`、`blockType=thinking`。前端在思考开始
+  时新建段落，服务端工具和下一段思考之间自然断开。
+- DeepSeek 在 OpenAI 兼容模式下偶尔把工具调用写成 DSML 文本。面板能解析就转成
+  `ToolCall` 并从正文剥离；解析失败、工具被禁用或工具轮次耗尽时返回明确错误，
+  不再把调用指令或空消息保存成答案。解析入口是 `ChatTurnManager.parseDsmlToolCalls` /
+  `dsmlCallsFromText`，有独立单测。
+
+### 21.5 验证
+
+- `DeepseekProtocolTest`：请求体、服务端工具、引用、思考签名、标题、五段
+  `latest_reminder` 与思考分段边界。
 - `ChatStoreTest`：预设种子、schema v4 侧数据、自动标题、Files API 缓存。
 - `ChatSettingsTest`：预设开关默认值、PATCH 与旧设置兼容。
-- 真 key 联调尚未执行；扩展字段以 chat-demo 的协议形状为准。
+- `ChatTurnManagerDsmlTest`：全角/ASCII DSML、未知工具、文本中夹完整块的提取。
+- 真 key 已跑过请求校验阶段；`user.content` 形状与 `latest_reminder` 五段格式就是按
+  服务端 422/400 反馈修正的。
