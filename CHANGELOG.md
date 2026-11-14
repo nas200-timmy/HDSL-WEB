@@ -2,7 +2,7 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布 — DeepSeek 官方预设助手（web-shell）
+## v0.6.87 — 2026-11-14 · DeepSeek 官方预设助手与官方搜索
 
 > 把 chat-demo 的协议行为拆进面板：新增内置「DeepSeek 官方」角色，固定 DeepSeek 官方
 > 协议（深度思考、官方联网搜索、读链接、来源引用），UI/Markdown/会话/分支仍用面板自己的。
@@ -18,8 +18,11 @@
   会话保留，新发送返回 `preset_disabled`。
 - 正文里的 `[citation:N]` 渲染成来源链接；来源复用现有 `sources` / `tools` 结构。
 - 图片走 Files API（`file_id` 缓存）；文档仍走文本抽取。
+- 手机端消息改为「头像列 + 气泡列」，会话输入框跟随消息列左对齐。
+- 真 key 已跑过请求校验阶段：根据服务端 422/400 反馈修正了 user `content` 形状与
+  `latest_reminder` 五段格式。
 - 测试：`DeepseekProtocolTest`、`ChatStoreTest`、`ChatSettingsTest` 覆盖协议形状、
-  schema v4 与开关；真 key 联调待做。
+  schema v4 与开关。
 
 ## v0.6.86 — 2026-11-14 · FreeBSD 交互式终端与平台声明；转码手机端布局
 
