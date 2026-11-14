@@ -95,7 +95,7 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo C
 | 项目 | 说明 |
 |---|---|
 | 交付 | 一个可执行 fat jar（`java -jar hdsl-web.jar`）和一个 Debian 容器镜像 |
-| 运行前提 | JDK 17+；Node `^22.19.0 || >=24.0.0` 与 pnpm（dsh 由 pnpm 安装、由 node 运行）。FreeBSD 用 `pkg install node npm` 的系统 Node（没有托管构建），交互式终端已支持，系统指标页大部分为空，见 [docs/deployment.md §12](docs/deployment.md) |
+| 运行前提 | JDK 17+；Node `^22.19.0 || >=24.0.0` 与 pnpm（dsh 由 pnpm 安装、由 node 运行）。FreeBSD 用 `pkg install node npm` 的系统 Node（没有托管构建），交互式终端已支持，但 **dsh 实例不可用**（上游 native addon 没有 FreeBSD 构建），系统指标页大部分为空，见 [docs/deployment.md §12](docs/deployment.md) |
 | 手机 | 窄屏（≤760px）或矮屏（≤520px）自动切换移动版式：主导航收成抽屉、子侧栏变顶部标签条、启动面板变成贴底操作栏；可点区域 44px；支持「加到主屏幕」。见 [docs/ui-spec.md §14](docs/ui-spec.md) |
 | 账户 | 为供应商填一次 API Key；供应商与模型来自 [models.dev](https://models.dev)（200+ 家，选中即带出端点、协议与密钥变量），也可手输；目录不可达时退回内置供应商与手输。见 [docs/ui-spec.md §4](docs/ui-spec.md) |
 | 聊天 | 面板内的多助手聊天页：流式输出、停止、两种重新生成、跨服务模型选择、独立 `/chat/settings` 模型服务/备份设置、图片/PDF/Office 附件与长文本转附件、按助手隔离系统提示词；会话存 SQLite，可每日备份。可选联网搜索（博查 / DeepSeek / 智谱 / Tavily / Brave / Exa），模型只会拿到只读的 `search_web` / `scrape_web`，不能触发面板操作。见 [docs/chat.md](docs/chat.md) |

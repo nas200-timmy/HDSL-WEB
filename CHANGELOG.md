@@ -18,10 +18,11 @@
   的系统 Node（品牌安装器本来就会回落到 PATH）。
 - Minecraft 控制台仍保持 pipe（日志 + 命令框）；启动横幅从「no PTY on this platform」
   改成「PTY console not enabled on this platform」，不再把策略说成平台能力。
-- **dsh 实例在 FreeBSD 上可用**：上游 `node-pty` 1.2.0-beta 线在 FreeBSD 编译失败
-  （`pty_close_inherited_fds` 只在 `__linux__` 下定义，却在 BSD 的 forkpty 路径上被调用）。
-  面板在 FreeBSD 上把 `node-pty` 钉到 1.1.0（API 未变，实测 spawn / onData / 24×80 正常），
-  写进 pnpm 的 overrides，其它平台不受影响。
+- **dsh 实例在 FreeBSD 上不可用（上游硬限制）**：`dsh-app-boot` 启动时会 require
+  `node-addon-require-builtin`，这个原生 addon 没有 FreeBSD 二进制；上游源码的
+  `platform.cc` 对 FreeBSD 返回 `UnsupportedContextReader`，所以自己编译也补不上。
+  0.2.x 全系（含 rc.1/rc.2/rc.3）都依赖它，面板现在在 FreeBSD 上直接拒绝安装，
+  不再下载一套永远起不来的依赖树。
 - **opencode 在 FreeBSD 上直接标为不可安装**：它只发布 Linux / macOS / Windows 的
   二进制包，没有 FreeBSD 构建，安装会在 postinstall 失败；品牌页现在会提前说明。
 - **ZCode 在 FreeBSD 上直接拒绝构建**：构建会安装 Electron 桌面端，Electron 没有

@@ -111,8 +111,10 @@ public final class PlatformCompatibility {
                 "登录、设置、实例管理、REST 与 WebSocket 正常。"));
         items.add(new Item("terminal", Level.SUPPORTED, "交互式终端（Web Shell）",
                 "PTY 走 openpty + posix_spawn，已在 FreeBSD 15.1 验证 openpty、resize、输入与退出码。"));
-        items.add(new Item("dsh", Level.SUPPORTED, "dsh 实例",
-                "安装时自动把 node-pty 钉到 1.1.0（上游 1.2 beta 在 FreeBSD 编译失败），无需手工处理。"));
+        items.add(new Item("dsh", Level.UNSUPPORTED, "dsh 实例",
+                "上游的 node-addon-require-builtin 原生模块没有 FreeBSD 构建，源码也没有 FreeBSD 的 "
+                        + "context reader；dsh-app-boot 在启动时强依赖它，所以 dsh 0.2.x 在 FreeBSD 上"
+                        + "无法启动。面板会直接拒绝安装，不再浪费时间下载一套跑不起来的依赖树。"));
         items.add(new Item("node", Level.LIMITED, "托管 Node",
                 "nodejs.org 不发布 FreeBSD 构建；请 pkg install node npm，面板会使用 PATH 里的 Node。"));
         items.add(new Item("opencode", Level.UNSUPPORTED, "opencode 品牌",
@@ -129,7 +131,8 @@ public final class PlatformCompatibility {
                 "Privileges 只在 Linux / macOS 实现；FreeBSD 上面板与 agent 以同一用户运行。"));
 
         return new Report(os.getCheckedName(), version, archName, Level.LIMITED,
-                "FreeBSD 是「可用但未纳入发布验收」的平台：下面是已知差异，其余功能正常。",
+                "FreeBSD 是「部分可用」的平台：面板、品牌实例与交互式终端正常；dsh 实例与"
+                        + "依赖 Electron 的 ZCode 不可用。",
                 List.copyOf(items));
     }
 }

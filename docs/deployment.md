@@ -994,7 +994,7 @@ CI 的构建矩阵里——属于「能用，但没纳入发布验收」的平�
 | 交互式终端（Web Shell） | **支持**：`Pty.spawn` 走 `PosixPty`（`openpty` + `posix_spawn`），真机验证 openpty / resize / stdin / 退出码 |
 | 转码 | 正常（ffmpeg 软件编码；没有 GPU 直通） |
 | 托管 Node | **不可用**：nodejs.org 不发布 FreeBSD 构建，面板会明确拒绝，不会下载 Linux ELF；用系统 Node |
-| dsh 实例 | 可安装：`node-pty` 的 1.2.0-beta 线在 FreeBSD 上编译不过（`pty_close_inherited_fds` 只有 Linux 定义），面板在 FreeBSD 上把 `node-pty` 钉到 1.1.0（API 相同，实测可 spawn） |
+| dsh 实例 | **不可用**：`node-addon-require-builtin` 原生模块没有 FreeBSD 构建，上游源码也没有 FreeBSD 的 context reader，而 `dsh-app-boot` 启动时强依赖它；面板会直接拒绝安装 |
 | opencode | **不可安装**：上游只发布 Linux / macOS / Windows 的二进制包，没有 FreeBSD 构建；品牌页会直接给出原因 |
 | ZCode | **不可构建**：构建要装 Electron 桌面端，而 Electron 没有 FreeBSD 构建；实验性品类在 FreeBSD 上直接拒绝 |
 | Minecraft 控制台 | pipe（日志 + 命令框），不是 PTY；启动横幅会写「PTY console not enabled」 |

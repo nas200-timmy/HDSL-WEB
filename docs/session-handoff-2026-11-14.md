@@ -116,7 +116,7 @@ gh release create v0.6.85 -R nas200-timmy/HDSL-WEB \
 
 | 包 | 现象 | 根因 | 处理 |
 |---|---|---|---|
-| dsh | `node-pty` 的 `gmake` 编译失败 | node-pty 1.2.0-beta.x 的 `pty.cc` 在非 Apple POSIX 路径调用 `pty_close_inherited_fds()`，但该函数只在 `#if defined(__linux__)` 下定义；beta.18 仍未修 | FreeBSD 上把 `node-pty` 钉到 1.1.0（能编译，spawn/onData/24×80 实测通过），写进 pnpm overrides |
+| dsh | 先 `node-pty` 的 `gmake` 编译失败；pin 到 1.1.0 后又报 `Cannot find module .../napi-v9-freebsd-x64/require_builtin.node` | 两层上游问题：node-pty 1.2.0-beta.x 缺 FreeBSD 定义（1.1.0 可编），但 `node-addon-require-builtin` 根本没有 FreeBSD 构建，上游 `platform.cc` 对 FreeBSD 返回 `UnsupportedContextReader`，而 `dsh-app-boot` 启动时无条件依赖它 | 最终判定 dsh 0.2.x 在 FreeBSD 上不可用：`DshVersionManager.installableOn(FREEBSD)=false`，面板直接拒绝安装；node-pty pin 已撤掉 |
 | opencode | postinstall 提示「手动装 opencode-freebsd-x64」 | 上游 1.19.5 的 optionalDependencies 只有 linux/darwin/windows，**没有 freebsd 包**（npm 404）；提示文案是误导 | `Brand.OPENCODE.installableOn(FREEBSD)=false`，品牌页直接给原因 |
 | ZCode | `packages/desktop postinstall` 下载 Electron 404 | Electron 没有 FreeBSD 构建，桌面端 postinstall 必然失败 | `ZcodeBuilder.start` 在 FreeBSD 上直接拒绝，避免十分钟后才失败 |
 
@@ -124,3 +124,28 @@ gh release create v0.6.85 -R nas200-timmy/HDSL-WEB \
 `pnpm install` 成功、`node-pty` 编译出 `pty.node`、`dsh --version` 输出 `0.2.2-rc.3`；
 用 dsh 自己的 subprocess-local 包 `require("node-pty")` 并 spawn `/bin/sh`，输出
 `pty-ok` / `24 80` / `exit=0`。代码侧用 `DshManifestTest` 固定「FreeBSD 才加 pin」。
+
+### 6.2 dsh 的最终结论：上游 native addon 没有 FreeBSD 实现
+
+`node-pty` 只是第一层。修掉之后 dsh 启动仍会在 `dsh-app-boot` 的
+`profile-resolution-bootstrap.js` 里挂掉：
+
+```text
+Cannot find module .../node-addon-require-builtin/build/napi/napi-v9-freebsd-x64/require_builtin.node
+  at tryRequireLocal (.../node-addon-native-custom-loader/lib/index.js:467)
+  at loadEntry (...:536)
+```
+
+核对过的事实：
+
+- `node-addon-require-builtin@0.1.9` 的 optionalDependencies 只有 darwin / linux / win32，
+  npm 上也没有 `node-addon-require-builtin-freebsd-x64`（404）。
+- 上游仓库 `deepseek-ai/dsh-node-addon-require-builtin` 是公开的，源码 `packages/native/
+  src/runtime_context/platform.cc` 对 `__FreeBSD__` 没有分支，落到
+  `UnsupportedContextReader`；所以「自己编一个」也拿不到可用的 context reader。
+- `dsh-app-boot@0.2.0-rc.1` 及以后全部依赖它；之前的 0.1.x 太旧，不作为方案。
+- 即便 `--expose-internals` + JS shim 能绕过，也改的是上游内部契约，不值得在面板里做。
+
+因此：**FreeBSD 上面板、品牌实例（kimi / claude-web / Qwen / MiMo / MiniMax 等）与
+交互式终端可用；dsh 实例不可用**，面板现在直接拒绝安装并在「设置 → 通用 → 平台兼容性」
+里写明原因。

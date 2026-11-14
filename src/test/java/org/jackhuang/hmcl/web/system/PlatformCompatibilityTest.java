@@ -57,7 +57,7 @@ class PlatformCompatibilityTest {
         // The terminal is the thing this platform *gained*, so it must not be
         // filed as a limitation.
         assertEquals(PlatformCompatibility.Level.SUPPORTED, item(report, "terminal").level());
-        assertEquals(PlatformCompatibility.Level.SUPPORTED, item(report, "dsh").level());
+        assertEquals(PlatformCompatibility.Level.UNSUPPORTED, item(report, "dsh").level());
         assertEquals(PlatformCompatibility.Level.LIMITED, item(report, "node").level());
         assertEquals(PlatformCompatibility.Level.UNSUPPORTED, item(report, "opencode").level());
         assertEquals(PlatformCompatibility.Level.UNSUPPORTED, item(report, "zcode").level());

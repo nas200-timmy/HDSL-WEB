@@ -25,8 +25,6 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.LinkedHashMap;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -257,20 +255,20 @@ class DshManifestTest {
                 "the strictest policy holds everything declared");
     }
 
-    /// FreeBSD gets one extra pin: node-pty's 1.2.0-beta line cannot be compiled
-    /// there (`pty_close_inherited_fds` is Linux-only but called on the BSD path),
-    /// while 1.1.0 compiles and keeps the API the harness uses. Other platforms
-    /// must not inherit the pin.
+    /// dsh cannot run on FreeBSD: its `node-addon-require-builtin` native addon has
+    /// no FreeBSD build, and `dsh-app-boot` calls it while installing the profile
+    /// resolver. The gate lives here rather than in the UI so every install path
+    /// (create, repair, version change) refuses before downloading a tree that can
+    /// never boot.
     @Test
-    void freebsdPinsNodePtyButOtherPlatformsDoNot() {
-        Map<String, String> freebsd = new LinkedHashMap<>();
-        DshVersionManager.applyPlatformOverrides(freebsd,
-                org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD);
-        assertEquals("1.1.0", freebsd.get("node-pty"));
-
-        Map<String, String> linux = new LinkedHashMap<>();
-        DshVersionManager.applyPlatformOverrides(linux,
-                org.jackhuang.hmcl.util.platform.OperatingSystem.LINUX);
-        assertNull(linux.get("node-pty"), "Linux keeps the harness's own pin");
+    void freebsdCannotRunDeepSeekHarness() {
+        assertFalse(DshVersionManager.installableOn(
+                org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD));
+        assertTrue(DshVersionManager.installableOn(
+                org.jackhuang.hmcl.util.platform.OperatingSystem.LINUX));
+        assertTrue(DshVersionManager.installableOn(
+                org.jackhuang.hmcl.util.platform.OperatingSystem.MACOS));
+        assertTrue(DshVersionManager.installableOn(
+                org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS));
     }
 }

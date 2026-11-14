@@ -231,6 +231,19 @@ public final class DshVersionManager {
         return releases;
     }
 
+    /// Whether DeepSeek Harness can run on a platform.
+    ///
+    /// FreeBSD is refused because of an upstream native dependency, not because of
+    /// anything in this class: `node-addon-require-builtin` ships no FreeBSD binary,
+    /// its source has no FreeBSD context reader, and `dsh-app-boot` calls it while
+    /// installing the profile resolver.
+    ///
+    /// @param os the platform the panel runs on
+    /// @return `false` on FreeBSD, `true` everywhere else
+    static boolean installableOn(org.jackhuang.hmcl.util.platform.OperatingSystem os) {
+        return os != org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD;
+    }
+
     /// Writes the manifest npm installs from.
     ///
     /// The launcher states its dependencies rather than letting npm pick them,
@@ -253,7 +266,6 @@ public final class DshVersionManager {
         // `duplicated mapping key`. Building the answer once makes that unrepresentable.
         Map<String, String> overrides = mergeOverrides(appBoot,
                 heldDependencies(runtime, version, appBoot, policy));
-        applyPlatformOverrides(overrides, org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS);
 
         JsonObject manifest = new JsonObject();
         manifest.addProperty("private", true);
@@ -300,25 +312,6 @@ public final class DshVersionManager {
         overrides.put(APP_BOOT_PACKAGE, appBoot);
         held.forEach(overrides::putIfAbsent);
         return overrides;
-    }
-
-    /// Platform-specific pins for the install tree.
-    ///
-    /// `node-pty` 1.2.0-beta.x does not compile on FreeBSD: `pty.cc` calls
-    /// `pty_close_inherited_fds()` on every non-Apple POSIX platform but defines it
-    /// only under `__linux__`, so the native build dies with
-    /// `use of undeclared identifier`. 1.1.0 compiles there and the
-    /// `spawn` / `onData` / `resize` API the harness uses is unchanged — measured
-    /// on FreeBSD 15.1 (install, spawn, 24×80, exit code). Pinning one package is
-    /// narrower than telling a FreeBSD operator that dsh cannot be installed.
-    ///
-    /// @param overrides the map written to `pnpm-workspace.yaml`, mutated in place
-    /// @param os        the platform the install runs on
-    static void applyPlatformOverrides(Map<String, String> overrides,
-                                       org.jackhuang.hmcl.util.platform.OperatingSystem os) {
-        if (os == org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD) {
-            overrides.put("node-pty", "1.1.0");
-        }
     }
 
     /// Returns a value written so that YAML reads it back as the string it is.
@@ -778,6 +771,19 @@ public final class DshVersionManager {
         Path target = instance.dshDirectory();
         Path flag = installingFlag(instance);
         Path previous = previousDirectory(instance);
+
+        // FreeBSD: dsh 0.2.x cannot boot there. Its `node-addon-require-builtin`
+        // native addon has no FreeBSD build, the addon's own platform reader
+        // answers "unsupported" for FreeBSD, and dsh-app-boot calls it
+        // unconditionally while installing the profile resolver — the process
+        // dies before the panel can talk to it. Failing here saves the download
+        // and a dependency tree that can never run.
+        if (!installableOn(org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS)) {
+            throw new DshException("DeepSeek Harness cannot run on FreeBSD: its "
+                    + "node-addon-require-builtin native addon has no FreeBSD build and "
+                    + "dsh-app-boot requires it at startup. Use a brand instance or "
+                    + "another host instead.");
+        }
 
         DshNodeRuntime runtime = requireRuntimeWithPnpm();
         requireSupportedNode(runtime);
