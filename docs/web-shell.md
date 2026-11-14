@@ -247,6 +247,9 @@ servlet，于是所有 `/i/*` 都回 `500 restricted header name: "Host"`；加 
 - Windows：`CreatePseudoConsole` + `CreateProcessW`（见 §7.1）。进程树靠 Job Object
   （`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）加 `CREATE_SUSPENDED` → 入 Job → `ResumeThread`；
   `Pty.spawn` 按平台分流，上层一行不用改。
+- FreeBSD：复用同一条 `PosixPty` 路径（`openpty` 在 base 的 libutil，`posix_spawn` 在 libc）。
+  两个平台常量不同：`F_DUPFD_CLOEXEC` = 17；`TIOCSWINSZ` 与 macOS 相同（`0x80087467`）。
+  已在 FreeBSD 15.1 真机验证 openpty、resize、stdin 与退出码。Minecraft 控制台仍走 pipe。
 
 ## 7. 实施阶段
 

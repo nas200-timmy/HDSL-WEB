@@ -90,3 +90,22 @@ gh release create v0.6.85 -R nas200-timmy/HDSL-WEB \
 - `Brand.hasTerminal()` 仍是恒 true；如果以后要按能力隐藏终端按钮，先修它再给前端用。
 - 每日 token 上限要做持久化账本时，`chat_setting` 已经能存 JSON，但计数需要新表。
 - 聊天备份恢复没有 UI；恢复时注意 schema 只向前迁移，不接受降级。
+## 6. FreeBSD 终端验证（同日，v0.6.85 之后）
+
+真机：FreeBSD 15.1-RELEASE-p6 amd64，openjdk21，2 核 4 GB；面板以 rc 服务跑在
+`/home/dev`（jar `/home/dev/hdsl-web.jar`，数据 `/home/dev/hdsl/data`，HTTPS 3080）。
+
+- **根因确认**：`Pty.spawn` 只分 LINUX/MACOS 与 WINDOWS，FreeBSD 落到 `PtyException`。
+  FreeBSD 本身有 PTY，是代码缺口。
+- **改动**：`Pty.spawn` 增加 FREEBSD；`PosixPty` 的 `F_DUPFD_CLOEXEC` 用 17，
+  `TIOCSWINSZ` 沿用 BSD 的 `0x80087467`；`NodeRuntimeManager.platformTag` 对 FreeBSD
+  明确拒绝（原先会落到 linux-x64，装一个跑不起来的 ELF）。
+- **验证方式**：打 dev jar → 用 `PtyProbe` 直接走 `Pty.spawn`（openpty + posix_spawn），
+  再跑 `PtyProbe2` 验证 resize / stdin / 退出码；随后把 jar 覆盖到服务、重启、健康检查。
+  实测输出：`probe-ok`、`24 80`、resize 后 `40 120`、`GOT:hello`、`exit=3`。
+- **服务的启动横幅**：仍显示 `minecraft: console pipe`（MC 控制台保持 pipe），文案已从
+  「no PTY on this platform」改成「PTY console not enabled on this platform」。
+- **系统指标**：`SystemMetrics` 在 FreeBSD 上 host=other、CPU 0.0、disks/network/gpu 为空
+  （依赖 `/proc`、`/sys`），没有抛异常；文档已写成已知限制。
+- **未做**：MC 控制台 PTY（需要真实服务端跑一轮）、uid 分离、`/proc` 指标替代实现。
+  真机上 `claude-web` 实例仍在，浏览器点「终端」即可验证修复；本次没有猜/复用管理员口令。
