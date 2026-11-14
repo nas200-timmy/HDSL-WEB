@@ -1254,6 +1254,12 @@
     border-radius: 0;
   }
 
+  /* 手机上不给消息列留 28px 的大边距：头像固定一列，气泡吃掉剩余宽度。 */
+  .chat-messages {
+    padding: 12px 8px 8px;
+    gap: 12px;
+  }
+
   .chat-sidebar-wrap {
     position: absolute;
     left: 0;
@@ -1275,19 +1281,48 @@
   }
 
   .chat-msg {
-    padding: 0 4px;
+    padding: 0;
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+  }
+
+  /* 用户消息保持头像在右，但同样是一列固定宽度；气泡只吃剩下的那一列。 */
+  .chat-msg.user {
+    grid-template-columns: minmax(0, 1fr) 30px;
+  }
+
+  .chat-msg-avatar {
+    grid-column: 1;
+    grid-row: 1;
+    margin-top: 18px;
   }
 
   .chat-msg-body {
-    max-width: calc(100% - 44px);
+    grid-column: 2;
+    grid-row: 1;
+    width: 100%;
+    max-width: none;
+    align-items: flex-start;
   }
 
   .chat-msg.user .chat-msg-avatar {
+    grid-column: 2;
     display: flex;
   }
 
   .chat-msg.user .chat-msg-body {
-    max-width: calc(100% - 40px);
+    grid-column: 1;
+    width: 100%;
+    max-width: none;
+    align-items: flex-end;
+  }
+
+  /* 手机上头像是一列固定宽度，气泡最多占满剩下的整列；短消息仍然按内容收缩。 */
+  .chat-bubble {
+    width: fit-content;
+    max-width: 100%;
   }
 
   .chat-code,
@@ -1842,14 +1877,6 @@
 
   .chat-msg.user .chat-msg-avatar {
     display: flex;
-  }
-
-  .chat-msg.user {
-    flex-direction: row-reverse;
-  }
-
-  .chat-msg.user .chat-msg-body {
-    max-width: calc(100% - 40px);
   }
 
   .chat-msg.user .chat-bubble {
