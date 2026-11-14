@@ -95,3 +95,22 @@ flowchart LR
   工具结果截断到 2000 字，上下文超预算时 tool 消息成对删除。
 - key 只在 Java 后端使用，设置页只回掩码；key 按服务商分开存，切换不互相覆盖。结果缓存
   1 小时，失败只影响这一轮工具调用。
+
+## DeepSeek 官方预设（可选）
+
+```mermaid
+flowchart LR
+  role["助手 preset=deepseek-official<br/>protocol=deepseek-anthropic"] --> gate{"设置开关开启？<br/>账户是 DeepSeek？"}
+  gate -- 否 --> reject["preset_disabled /<br/>no_deepseek_account"]
+  gate -- 是 --> profile["deepseekProfile<br/>/anthropic/v1/messages"]
+  profile --> body["thinking 开关 + 服务端工具<br/>+ safety_check + title"]
+  body --> stream["SSE：server_tool_use /<br/>搜索结果 / 读链接 / 引用 / 标题"]
+  stream --> ws["chat-tool + chat-sources<br/>+ chat-title"]
+  stream --> store["blocks_json / sources_json /<br/>latest_reminder"]
+```
+
+- 预设角色只走 DeepSeek 官方搜索与读链接，不进入上面的客户端工具链；面板搜索 provider
+  与 key 对这条路径不生效。
+- 历史只回传正文与带签名的 `read_link`；搜索、思考不进上下文。图片走 Files API，
+  文档仍按抽取文本发送。
+- 关闭开关只隐藏助手与会话，不删数据；后端仍会拒绝新 turn。

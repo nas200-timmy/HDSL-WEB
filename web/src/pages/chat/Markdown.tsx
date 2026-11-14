@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import rehypeHighlight from "rehype-highlight";
 import { ContentCopyIcon, DownloadIcon } from "../../components/icons";
+import type { ChatSearchHit } from "../../types";
 
 /** hast 节点的纯文本；rehype-highlight 之后代码块里是 span 数组，不能只看 children。 */
 function hastText(node: any): string {
@@ -92,17 +93,27 @@ const sanitizeSchema = {
 };
 
 /** GFM + sanitize + highlight。不启用 raw HTML。 */
-function MarkdownImpl({ content, streaming, citations }: {
+function MarkdownImpl({ content, streaming, citations, sources }: {
   content: string;
   streaming?: boolean;
   /** 引用短 id → 原页面 URL；模型写 [citation,domain](id) 时用它换成真链接。 */
   citations?: Record<string, string>;
+  /** DeepSeek 官方引用：正文里的 [citation:N] 按来源顺序换成链接。 */
+  sources?: ChatSearchHit[];
 }) {
   let text = content ?? "";
   if (streaming) {
     // 未闭合的围栏临时补上，避免流式时整段代码被当成普通段落抖动。
     const fences = (text.match(/^```/gm) ?? []).length;
     if (fences % 2 === 1) text += "\n```";
+  }
+  if (sources && sources.length > 0) {
+    text = text.replace(/\[citation:(\d+)\]/g, (_, raw) => {
+      const index = Number(raw) - 1;
+      const source = sources[index];
+      if (!source) return `[${raw}]`;
+      return `[${raw}](${source.url})`;
+    });
   }
   if (citations && Object.keys(citations).length > 0) {
     // rehype-sanitize 只放行 http/https/mailto，短 id 会被当成非法协议删掉，

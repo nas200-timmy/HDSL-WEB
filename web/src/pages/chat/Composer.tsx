@@ -45,6 +45,7 @@ export function Composer({
   groups, account, model, onPick, onManage, onAdd, pending, onUpload, onRemove, uploading,
   quickPhrases, focusSignal, historyImages, reasoningLevel, onReasoningLevel,
   onUploadText, editing, onCancelEdit, searchEnabled, searchConfigured, onToggleSearch,
+  searchOfficial,
 }: {
   draft: string;
   onDraft: (value: string) => void;
@@ -73,6 +74,8 @@ export function Composer({
   searchEnabled: boolean;
   searchConfigured: boolean;
   onToggleSearch: () => void;
+  /** DeepSeek 官方预设：搜索按钮走服务端工具，不读面板搜索 key。 */
+  searchOfficial?: boolean;
 }) {
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -262,8 +265,12 @@ export function Composer({
           onClick={onToggleSearch}
           disabled={disabled}
           title={searchConfigured
-            ? (searchEnabled ? "联网搜索已开启，点击关闭" : "联网搜索：允许模型查网页")
-            : "还没配置搜索 key：聊天设置 → 联网搜索"}
+            ? (searchOfficial
+                ? (searchEnabled ? "DeepSeek 官方联网搜索已开启，点击关闭" : "DeepSeek 官方联网搜索：由服务端检索并给出引用")
+                : (searchEnabled ? "联网搜索已开启，点击关闭" : "联网搜索：允许模型查网页"))
+            : (searchOfficial
+                ? "先在账户页添加一个 DeepSeek 账户"
+                : "还没配置搜索 key：聊天设置 → 联网搜索")}
         >
           <SearchIcon size={16} />
         </button>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { PopupItem, PopupMenu, PopupSep } from "../../components/PopupMenu";
 import { ContentCopyIcon, DeleteIcon, EditIcon, MoreVertIcon, PersonIcon, RefreshIcon } from "../../components/icons";
-import type { ChatAttachment, ChatMessage, ChatNode } from "../../types";
+import type { ChatAttachment, ChatBlock, ChatMessage, ChatNode } from "../../types";
 import { api } from "../../api";
 import { Markdown } from "./Markdown";
 import { AvatarView } from "./AvatarView";
@@ -36,6 +36,92 @@ function providerLabel(provider: string): string {
     tavily: "Tavily", brave: "Brave", exa: "Exa",
   };
   return names[provider] ?? "搜索";
+}
+
+function blockToolInfo(block: ChatBlock): { icon: string; text: string; detail: string } | null {
+  if (block.type !== "server_tool_use") return null;
+  const input = block.input ?? {};
+  const search = input.action === "search" || (block.name ?? "").includes("search");
+  if (search) {
+    const queries = input.queries?.length ? input.queries : input.query ? [input.query] : [];
+    return { icon: "🔍", text: queries.join(" / ") || "联网搜索", detail: "搜索" };
+  }
+  return { icon: "📄", text: input.url ?? "读取网页", detail: "读取" };
+}
+
+type TimelineItem =
+  | { kind: "thinking"; text: string }
+  | { kind: "tool"; icon: string; text: string; detail: string; count: number };
+
+function buildTimeline(blocks: ChatBlock[]): TimelineItem[] {
+  const items: TimelineItem[] = [];
+  let pending: Extract<TimelineItem, { kind: "tool" }> | null = null;
+  const flush = () => {
+    if (pending) {
+      items.push(pending);
+      pending = null;
+    }
+  };
+  for (const block of blocks) {
+    if (block.type === "thinking") {
+      const text = block.thinking ?? "";
+      if (text.trim()) {
+        flush();
+        items.push({ kind: "thinking", text });
+      }
+      continue;
+    }
+    const info = blockToolInfo(block);
+    if (!info) continue;
+    if (pending && pending.detail === info.detail) {
+      pending.count += 1;
+      if (info.detail === "搜索" && info.text && !pending.text.includes(info.text)) {
+        pending.text += pending.text ? ` / ${info.text}` : info.text;
+      }
+    } else {
+      flush();
+      pending = { kind: "tool", ...info, count: 1 };
+    }
+  }
+  flush();
+  return items;
+}
+
+function ReasoningSegment({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className={`chat-reasoning${expanded ? " expanded" : ""}`}>
+      <button
+        className="chat-reasoning-head"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+      >
+        <span className="chat-reasoning-title">思考</span>
+        <span className="chat-reasoning-count">{text.length} 字</span>
+        <span className="chat-reasoning-toggle">{expanded ? "收起" : "展开"}</span>
+      </button>
+      {expanded && <div className="chat-reasoning-body">{text}</div>}
+    </div>
+  );
+}
+
+function BlockTimeline({ blocks }: { blocks: ChatBlock[] }) {
+  const items = buildTimeline(blocks);
+  return (
+    <div className="chat-block-timeline">
+      {items.map((item, index) => item.kind === "thinking" ? (
+        <ReasoningSegment key={`thinking-${index}`} text={item.text} />
+      ) : (
+        <div className="chat-tools" key={`tool-${index}`}>
+          <div className="chat-tool-chip done">
+            <span className="chat-tool-icon">{item.icon}</span>
+            <span className="chat-tool-query">{item.text}</span>
+            <span className="chat-tool-meta">{item.detail}{item.count > 1 ? ` · ${item.count} 次` : ""}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /** 一条消息（一个节点）。variant 切换、两种重生成、编辑与删除都在这里。 */
@@ -92,6 +178,10 @@ export function MessageItem({
   if (!message) return null;
 
   const isUser = node.role === "user";
+  const thinkingBlocks = !isUser
+    ? (message.blocks ?? []).filter((block) => block.type === "thinking" && (block.thinking ?? "").trim())
+    : [];
+  const blockTimeline = thinkingBlocks.length > 1;
   const index = node.variants.findIndex((item) => item.id === message.id);
   const canSwitch = node.variants.length > 1;
   const time = new Date(node.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -126,7 +216,9 @@ export function MessageItem({
           {streaming && <span className="chat-streaming-pill"><span className="chat-streaming-dot" />生成中</span>}
           <span className="chat-msg-time">{time}</span>
         </div>
-        {reasoning && (
+        {blockTimeline ? (
+          <BlockTimeline blocks={message.blocks ?? []} />
+        ) : reasoning && (
           <div className={`chat-reasoning${reasoningExpanded ? " expanded" : ""}`}>
             <button
               className="chat-reasoning-head"
@@ -151,7 +243,7 @@ export function MessageItem({
         )}
         {content ? (
           <div className="chat-bubble">
-            <Markdown content={content} streaming={streaming} citations={citations} />
+            <Markdown content={content} streaming={streaming} citations={citations} sources={message.sources} />
             {streaming && <span className="chat-cursor" />}
           </div>
         ) : streaming ? (
@@ -161,7 +253,7 @@ export function MessageItem({
             <span className="chat-dot" />
           </div>
         ) : null}
-        {!isUser && (toolRounds.length > 0 || runningTool) && (
+        {!isUser && !blockTimeline && (toolRounds.length > 0 || runningTool) && (
           <div className="chat-tools">
             {toolRounds.map((round, index) => (
               <div className="chat-tool-round" key={`${round.query}-${index}`}>

@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.chat;
 
+import com.google.gson.JsonObject;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -50,13 +51,23 @@ public interface ChatProtocol {
             Integer maxTokens,
             String reasoningLevel,
             @Nullable ChatCapabilities.ReasoningMode reasoning,
-            List<ToolSpec> tools) {
+            List<ToolSpec> tools,
+            boolean searchEnabled,
+            boolean titleEnabled) {
 
         public ChatRequest(String model, String system, List<ChatMessage> messages,
                            Double temperature, Integer maxTokens, String reasoningLevel,
                            @Nullable ChatCapabilities.ReasoningMode reasoning) {
             this(model, system, messages, temperature, maxTokens, reasoningLevel, reasoning,
-                    List.of());
+                    List.of(), false, false);
+        }
+
+        public ChatRequest(String model, String system, List<ChatMessage> messages,
+                           Double temperature, Integer maxTokens, String reasoningLevel,
+                           @Nullable ChatCapabilities.ReasoningMode reasoning,
+                           List<ToolSpec> tools) {
+            this(model, system, messages, temperature, maxTokens, reasoningLevel, reasoning,
+                    tools, false, false);
         }
 
         public boolean hasTools() {
@@ -75,10 +86,16 @@ public interface ChatProtocol {
     }
 
     record ChatMessage(String role, String text, List<Attachment> attachments,
-                       List<ToolCall> toolCalls, @Nullable String toolCallId) {
+                       List<ToolCall> toolCalls, @Nullable String toolCallId,
+                       List<JsonObject> blocks) {
 
         public ChatMessage(String role, String text, List<Attachment> attachments) {
-            this(role, text, attachments, List.of(), null);
+            this(role, text, attachments, List.of(), null, List.of());
+        }
+
+        public ChatMessage(String role, String text, List<Attachment> attachments,
+                           List<ToolCall> toolCalls, @Nullable String toolCallId) {
+            this(role, text, attachments, toolCalls, toolCallId, List.of());
         }
 
         public boolean hasToolCalls() {
@@ -87,9 +104,15 @@ public interface ChatProtocol {
     }
 
     /// 一条附件在发送时的形态。`text` 是抽取出来的文字（Office/PDF/长文本），
-    /// `path` 是原文件（图片与原生 document 用）。
+    /// `path` 是原文件（图片与原生 document 用）；`remoteId` 是 DeepSeek Files API
+    /// 返回的 `file_id`，有它时图片按 file block 引用。
     record Attachment(
-            String name, String mime, String kind, long size, Path path, String text) {
+            String name, String mime, String kind, long size, Path path, String text,
+            @Nullable String remoteId) {
+
+        public Attachment(String name, String mime, String kind, long size, Path path, String text) {
+            this(name, mime, kind, size, path, text, null);
+        }
     }
 
     interface ChatEventSink {
@@ -105,6 +128,23 @@ public interface ChatProtocol {
 
         /// 本轮结束时模型请求的工具调用。默认空实现，适配器之外没人需要关心。
         default void toolCalls(List<ToolCall> calls) {
+        }
+
+        /// 一个完整的内容块。DeepSeek 的服务端工具、思考签名和正文引用都走这里；
+        /// 其他协议的适配器不会调用。
+        default void block(JsonObject block) {
+        }
+
+        /// 内容块的开始与结束。DeepSeek 用它们标记思考段的边界；
+        /// 前端据此把“思考 → 搜索 → 思考”画成多段，其他协议不调用。
+        default void blockStart(JsonObject block) {
+        }
+
+        default void blockEnd(JsonObject block) {
+        }
+
+        /// 服务端生成的会话标题。
+        default void title(String title) {
         }
     }
 

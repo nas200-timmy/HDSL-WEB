@@ -845,6 +845,18 @@
   transition: border-color 120ms var(--ease), box-shadow 120ms var(--ease);
 }
 
+/* 有会话时输入框跟着消息列走：消息是左对齐的（头像列 + 28px 内边距），
+   输入框却按整个聊天区居中会在宽屏上飘到右边。空态仍保持居中的欢迎布局
+   （docs/chat.md §2.1「居中欢迎语 + 输入框」）。 */
+.chat-composer-wrap--conversation {
+  padding: 8px 28px 12px;
+}
+
+.chat-composer-wrap--conversation .chat-composer {
+  max-width: 820px;
+  margin: 0;
+}
+
 .chat-composer:focus-within {
   border-color: var(--monet-primary);
   box-shadow: 0 0 0 1px var(--monet-primary-transparent-50);
@@ -1230,8 +1242,22 @@
     padding: 0;
   }
 
+  .chat-composer-wrap--conversation {
+    padding: 8px 12px 12px;
+  }
+
+  .chat-composer-wrap--conversation .chat-composer {
+    max-width: 100%;
+  }
+
   .chat-main {
     border-radius: 0;
+  }
+
+  /* 手机上不给消息列留 28px 的大边距：头像固定一列，气泡吃掉剩余宽度。 */
+  .chat-messages {
+    padding: 12px 8px 8px;
+    gap: 12px;
   }
 
   .chat-sidebar-wrap {
@@ -1255,19 +1281,48 @@
   }
 
   .chat-msg {
-    padding: 0 4px;
+    padding: 0;
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+  }
+
+  /* 用户消息保持头像在右，但同样是一列固定宽度；气泡只吃剩下的那一列。 */
+  .chat-msg.user {
+    grid-template-columns: minmax(0, 1fr) 30px;
+  }
+
+  .chat-msg-avatar {
+    grid-column: 1;
+    grid-row: 1;
+    margin-top: 18px;
   }
 
   .chat-msg-body {
-    max-width: calc(100% - 44px);
+    grid-column: 2;
+    grid-row: 1;
+    width: 100%;
+    max-width: none;
+    align-items: flex-start;
   }
 
   .chat-msg.user .chat-msg-avatar {
+    grid-column: 2;
     display: flex;
   }
 
   .chat-msg.user .chat-msg-body {
-    max-width: calc(100% - 40px);
+    grid-column: 1;
+    width: 100%;
+    max-width: none;
+    align-items: flex-end;
+  }
+
+  /* 手机上头像是一列固定宽度，气泡最多占满剩下的整列；短消息仍然按内容收缩。 */
+  .chat-bubble {
+    width: fit-content;
+    max-width: 100%;
   }
 
   .chat-code,
@@ -1822,14 +1877,6 @@
 
   .chat-msg.user .chat-msg-avatar {
     display: flex;
-  }
-
-  .chat-msg.user {
-    flex-direction: row-reverse;
-  }
-
-  .chat-msg.user .chat-msg-body {
-    max-width: calc(100% - 40px);
   }
 
   .chat-msg.user .chat-bubble {
@@ -3184,6 +3231,18 @@
   gap: 6px;
   margin-top: 6px;
   max-width: 100%;
+}
+
+/* DeepSeek 预设：思考段与服务端搜索按原始顺序交替排列。 */
+.chat-block-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chat-block-timeline .chat-tools {
+  margin-top: 0;
 }
 
 .chat-tool-round {

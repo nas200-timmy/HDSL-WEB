@@ -18,7 +18,7 @@ import { AvatarCropDialog } from "./AvatarCropDialog";
 import { ModelCaps, capabilitySourceLabel } from "./ModelCaps";
 
 type Run = <T>(action: () => Promise<T>) => Promise<T>;
-type Tab = "profile" | "providers" | "defaults" | "search" | "data" | "network";
+type Tab = "profile" | "providers" | "defaults" | "presets" | "search" | "data" | "network";
 
 function bytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -122,6 +122,7 @@ export function ChatSettingsPage() {
             ["profile", "个人资料"],
             ["providers", "模型服务"],
             ["defaults", "默认模型"],
+            ["presets", "预设助手"],
             ["search", "联网搜索"],
             ["data", "数据与备份"],
             ["network", "网络"],
@@ -171,6 +172,8 @@ export function ChatSettingsPage() {
               run={run}
               onSaved={setSettings}
             />
+          ) : tab === "presets" ? (
+            <PresetPanel settings={settings} accounts={accounts} run={run} onSaved={setSettings} />
           ) : tab === "search" ? (
             <SearchPanel settings={settings} run={run} onSaved={setSettings} />
           ) : tab === "data" ? (
@@ -328,6 +331,10 @@ function SearchPanel({
   return (
     <div className="chat-settings-card">
       <div className="chat-settings-card-title">联网搜索</div>
+      <p className="chat-settings-desc">
+        这里的服务商与 key 只用于普通助手。DeepSeek 官方预设角色使用 DeepSeek 服务端搜索，
+        不读取这里的设置。
+      </p>
       <div className="hint">
         模型声明支持工具时会拿到只读的 <code>search_web</code>（DeepSeek / Exa 还会多一个
         <code>scrape_web</code> 抓正文），自己决定搜什么、搜几次（每轮最多 3 次）；
@@ -1159,6 +1166,66 @@ function CapabilityDialog({
         <button className="btn btn-text" disabled={busy} onClick={() => void save(false)}>{busy ? "保存中…" : "保存"}</button>
       </div>
     </Dialog>
+  );
+}
+
+/** 预设助手：开关只控制内置与复制出来的 DeepSeek 角色，不删除已有会话。 */
+function PresetPanel({
+  settings, accounts, run, onSaved,
+}: {
+  settings: ChatSettings;
+  accounts: ChatAccountProfile[];
+  run: Run;
+  onSaved: (settings: ChatSettings) => void;
+}) {
+  const [enabled, setEnabled] = useState(settings.deepseekPresetEnabled ?? true);
+  const [busy, setBusy] = useState(false);
+  const deepseek = accounts.find((item) =>
+    item.vendor === "deepseek" || (item.endpoint ?? "").includes("deepseek.com")) ?? null;
+
+  const save = async (next: boolean) => {
+    setBusy(true);
+    try {
+      const saved = await run(() => api.chat.updateSettings({ deepseekPresetEnabled: next }));
+      setEnabled(saved.deepseekPresetEnabled ?? next);
+      onSaved(saved);
+      toast("success", next ? "DeepSeek 官方预设已启用" : "DeepSeek 官方预设已隐藏");
+    } catch (error) {
+      toast("error", `保存失败：${errMsg(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="chat-settings-card">
+      <div className="chat-settings-card-title">DeepSeek 官方预设助手</div>
+      <p className="chat-settings-desc">
+        启用后，角色列表会出现「DeepSeek 官方」。这个角色固定使用 DeepSeek 官方协议：
+        深度思考开关、官方联网搜索、读链接和来源引用；搜索不读取下面的服务商与 key。
+        关闭后助手和它的会话都不会删除，只是从列表里隐藏。
+      </p>
+      <div className="chat-settings-form-grid">
+        <label className="form-row" style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={busy}
+            onChange={(event) => {
+              const next = event.target.checked;
+              setEnabled(next);
+              void save(next);
+            }}
+          />
+          <span className="form-label" style={{ margin: 0 }}>在角色列表中启用</span>
+        </label>
+      </div>
+      <p className="chat-settings-desc" style={{ marginTop: 12 }}>
+        {deepseek
+          ? `已检测到 DeepSeek 账户：${deepseek.label || deepseek.name}${deepseek.maskedKey ? `（${deepseek.maskedKey}）` : ""}`
+          : "还没有检测到带 key 的 DeepSeek 账户。启用后角色仍会显示，但发送前需要先在账户页添加 DeepSeek 账户。"}
+      </p>
+    </div>
   );
 }
 

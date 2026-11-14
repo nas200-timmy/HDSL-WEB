@@ -82,7 +82,10 @@ export function ChatSidebar({
             <span className="chat-avatar"><AvatarView value={assistant?.avatar} /></span>
           </span>
           <span className="chat-assistant-text">
-            <span className="chat-assistant-name">{assistant?.name ?? "默认助手"}</span>
+            <span className="chat-assistant-name">
+              {assistant?.name ?? "默认助手"}
+              {assistant?.preset && <span className="tag plain" style={{ marginLeft: 6 }}>官方</span>}
+            </span>
             <span className="chat-assistant-sub">{assistant?.description || "点击切换助手"}</span>
           </span>
           <span className="chat-caret">▾</span>

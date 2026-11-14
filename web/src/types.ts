@@ -566,8 +566,11 @@ export type WsEvent =
   | { type: "chat-turn-started"; sessionId: string; turnId: string; messageId: string; nodeId: string; attemptNo: number }
   | { type: "chat-delta"; sessionId: string; turnId: string; seq: number; text: string }
   | { type: "chat-reasoning"; sessionId: string; turnId: string; seq: number; text: string }
+  | { type: "chat-block"; sessionId: string; turnId: string; phase: "start" | "end"; blockType: string; seq: number }
   | { type: "chat-usage"; sessionId: string; turnId: string; input: number; output: number }
-  | { type: "chat-tool"; sessionId: string; turnId: string; tool?: "search" | "scrape" | string; query: string; status: "running" | "done" | "failed" | string; provider?: string; hits?: number; sources?: ChatSearchResult }
+  | { type: "chat-tool"; sessionId: string; turnId: string; tool?: "search" | "scrape" | "read_link" | "deepseek_web_search" | string; query: string; status: "running" | "done" | "failed" | string; provider?: string; hits?: number; sources?: ChatSearchResult }
+  | { type: "chat-sources"; sessionId: string; turnId: string; sources: ChatSearchHit[] }
+  | { type: "chat-title"; sessionId: string; turnId: string; title: string }
   | { type: "chat-turn-finished"; sessionId: string; turnId: string; messageId: string; status: string; finishReason: string; input?: number; output?: number }
   | { type: "chat-error"; sessionId: string; turnId: string; code: string; message: string; retryable: boolean }
   | { type: "chat-sessions-changed" | "chat-assistants-changed" | "chat-settings-changed" | "chat-backups-changed"; sessionId?: string };
@@ -1104,6 +1107,10 @@ export interface ChatAssistant {
   reasoningLevel: string | null;
   quickPhrases: string[];
   builtin: boolean;
+  /** `deepseek-official` 表示内置预设；复制出来的角色也保留这个值。 */
+  preset?: string | null;
+  /** 预设固定的协议；普通助手为 null，跟随账户配置。 */
+  protocol?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -1132,12 +1139,33 @@ export interface ChatAttachment {
   preview?: string;
 }
 
+/** DeepSeek 官方协议的原生内容块（按流顺序；思考、服务端工具、正文都在里面）。 */
+export interface ChatBlock {
+  type: string;
+  thinking?: string;
+  text?: string;
+  signature?: string;
+  id?: string;
+  name?: string;
+  kind?: string;
+  input?: {
+    action?: string;
+    query?: string;
+    queries?: string[];
+    url?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 export interface ChatMessage {
   id: string;
   nodeId: string;
   variantIndex: number;
   content: string;
   reasoning: string;
+  /** DeepSeek 预设才有：保留思考/搜索的原始顺序，前端据此分段渲染。 */
+  blocks?: ChatBlock[];
   status: "streaming" | "done" | "stopped" | "error" | "interrupted" | string;
   model: string | null;
   createdAt: number;
@@ -1199,6 +1227,9 @@ export interface ChatSearchStatus {
   configured: boolean;
   maxResults: number;
   keyMasked?: string | null;
+  deepseekPresetEnabled?: boolean;
+  deepseekReady?: boolean;
+  deepseekAccount?: string | null;
 }
 
 export interface ChatSearchResult {
@@ -1305,6 +1336,8 @@ export interface ChatSettings {
   searchKeyMasked?: string | null;
   /** 把搜索/抓取的完整链路存进消息，追问时模型能回看 */
   persistToolTrail?: boolean;
+  /** 是否在角色列表里启用内置的 DeepSeek 官方预设助手 */
+  deepseekPresetEnabled?: boolean;
 }
 
 /** POST /api/chat/accounts/{name}/chat-test 的结果（会消耗少量 token）。 */

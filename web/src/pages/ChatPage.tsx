@@ -11,7 +11,7 @@ import { isElevationRequired, requestDeveloperPassword } from "../elevation";
 import { useMobileLayout } from "../hooks";
 import { toast } from "../store";
 import type {
-  ChatAccountProfile, ChatAssistant, ChatAttachment, ChatSession,
+  ChatAccountProfile, ChatAssistant, ChatAttachment, ChatSearchHit, ChatSession,
   ChatSessionSummary, ChatTurnOutcome, WsEvent,
 } from "../types";
 import { errMsg } from "../utils";
@@ -40,14 +40,58 @@ function requestId(): string {
     : `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+/** 面板账户列表里的 DeepSeek 账户：预设角色只认这一种。 */
+function isDeepSeekAccount(account: ChatAccountProfile): boolean {
+  return account.vendor === "deepseek" || (account.endpoint ?? "").includes("deepseek.com");
+}
+
+function isPresetAssistant(assistant: ChatAssistant | null | undefined): boolean {
+  return assistant?.preset === "deepseek-official";
+}
+
+type LiveBlock =
+  | { kind: "thinking"; text: string }
+  | { kind: "tool"; tool?: string; query: string; provider: string; status: string; hits: number };
+
 /** 流式气泡：会话还没刷新到新节点时先画在列表末尾。 */
-function LiveBubble({ assistant, text, reasoning, tool }: { assistant: ChatAssistant | null; text: string; reasoning: string; tool?: { tool?: string; query: string; provider: string; status: string; hits: number } }) {
+function LiveBubble({ assistant, text, reasoning, tool, sources, blocks }: { assistant: ChatAssistant | null; text: string; reasoning: string; tool?: { tool?: string; query: string; provider: string; status: string; hits: number }; sources?: ChatSearchHit[]; blocks?: LiveBlock[] }) {
+  const hasBlocks = !!blocks && blocks.length > 0;
   return (
     <div className="chat-msg assistant">
       <div className="chat-msg-avatar"><AvatarView value={assistant?.avatar} /></div>
       <div className="chat-msg-body">
         <div className="chat-msg-name">{assistant?.name ?? "助手"}</div>
-        {reasoning && (
+        {hasBlocks ? (
+          <div className="chat-block-timeline">
+            {blocks!.map((block, index) => block.kind === "thinking" ? (
+              block.text ? (
+                <div className="chat-reasoning expanded" key={`thinking-${index}`}>
+                  <div className="chat-reasoning-head static">
+                    <span className="chat-reasoning-title">思考</span>
+                    <span className="chat-reasoning-count">{block.text.length} 字</span>
+                    <span className="chat-reasoning-toggle">生成中</span>
+                  </div>
+                  <div className="chat-reasoning-body">{block.text}</div>
+                </div>
+              ) : null
+            ) : (
+              <div className="chat-tools" key={`tool-${index}`}>
+                <div className={`chat-tool-chip ${block.status}`}>
+                  <span className="chat-tool-icon">{block.status === "running"
+                    ? "…" : block.tool === "scrape" || block.tool === "read_link" ? "📄" : "🔍"}</span>
+                  <span className="chat-tool-query">{block.query}</span>
+                  <span className="chat-tool-meta">
+                    {block.status === "running"
+                      ? (block.tool === "scrape" || block.tool === "read_link" ? "正在读取网页" : "正在搜索")
+                      : block.status === "failed"
+                        ? (block.tool === "scrape" || block.tool === "read_link" ? "读取失败" : "搜索失败")
+                        : `${block.hits} 条结果`}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : reasoning && (
           <div className="chat-reasoning expanded">
             <div className="chat-reasoning-head static">
               <span className="chat-reasoning-title">思考</span>
@@ -59,7 +103,7 @@ function LiveBubble({ assistant, text, reasoning, tool }: { assistant: ChatAssis
         )}
         {text ? (
           <div className="chat-bubble">
-            <Markdown content={text} streaming />
+            <Markdown content={text} streaming sources={sources} />
             <span className="chat-cursor" />
           </div>
         ) : (
@@ -67,17 +111,17 @@ function LiveBubble({ assistant, text, reasoning, tool }: { assistant: ChatAssis
             <span className="chat-dot" /><span className="chat-dot" /><span className="chat-dot" />
           </div>
         )}
-        {tool && (
+        {tool && !hasBlocks && (
           <div className="chat-tools">
             <div className={`chat-tool-chip ${tool.status}`}>
               <span className="chat-tool-icon">{tool.status === "running"
-                ? "…" : tool.tool === "scrape" ? "📄" : "🔍"}</span>
+                ? "…" : tool.tool === "scrape" || tool.tool === "read_link" ? "📄" : "🔍"}</span>
               <span className="chat-tool-query">{tool.query}</span>
               <span className="chat-tool-meta">
                 {tool.status === "running"
-                  ? (tool.tool === "scrape" ? "正在读取网页" : "正在搜索")
+                  ? (tool.tool === "scrape" || tool.tool === "read_link" ? "正在读取网页" : "正在搜索")
                   : tool.status === "failed"
-                    ? (tool.tool === "scrape" ? "读取失败" : "搜索失败")
+                    ? (tool.tool === "scrape" || tool.tool === "read_link" ? "读取失败" : "搜索失败")
                     : `${tool.hits} 条结果`}
               </span>
             </div>
@@ -86,6 +130,26 @@ function LiveBubble({ assistant, text, reasoning, tool }: { assistant: ChatAssis
       </div>
     </div>
   );
+}
+
+/** 同一次服务端工具从 running 到 done 只保留一个块；并行工具按 query 区分。 */
+function mergeLiveTool(blocks: LiveBlock[] | undefined, event: { tool?: string; query: string; provider?: string; status: string; hits?: number }): LiveBlock[] {
+  const next = [...(blocks ?? [])];
+  const tool = event.tool ?? "search";
+  if (event.status === "running") {
+    next.push({ kind: "tool", tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: 0 });
+    return next;
+  }
+  for (let i = next.length - 1; i >= 0; i--) {
+    const block = next[i];
+    if (block.kind === "tool" && block.status === "running"
+        && block.query === event.query && (block.tool ?? "search") === tool) {
+      next[i] = { ...block, status: event.status, hits: event.hits ?? 0 };
+      return next;
+    }
+  }
+  next.push({ kind: "tool", tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: event.hits ?? 0 });
+  return next;
 }
 
 /** 面板聊天页（docs/chat.md §2/§12）。 */
@@ -109,7 +173,7 @@ export function ChatPage() {
   const [liveUsage, setLiveUsage] = useState<{ sessionId: string; input: number; output: number } | null>(null);
   const [searchEnabled, setSearchEnabled] = useState(false);
   const [searchStatus, setSearchStatus] = useState<{ configured: boolean } | null>(null);
-  const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string; tool?: { tool?: string; query: string; provider: string; status: string; hits: number } } | null>(null);
+  const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string; blocks?: LiveBlock[]; tool?: { tool?: string; query: string; provider: string; status: string; hits: number }; sources?: ChatSearchHit[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ChatSessionSummary | null>(null);
@@ -138,7 +202,19 @@ export function ChatPage() {
 
   const assistant = assistants.find((item) => item.id === assistantId) ?? assistants[0] ?? null;
   const currentAssistant = assistant;
-  const canSend = !busy && !!currentAssistant;
+  const preset = isPresetAssistant(currentAssistant);
+  const deepseekAccount = chatAccounts.find(isDeepSeekAccount) ?? null;
+  const presetReady = !preset || deepseekAccount !== null;
+  const searchConfigured = preset ? deepseekAccount !== null : (searchStatus?.configured ?? false);
+  const canSend = !busy && !!currentAssistant && presetReady;
+  const defaultAccountFor = (item: ChatAssistant | null | undefined) =>
+    isPresetAssistant(item)
+      ? (chatAccounts.find(isDeepSeekAccount)?.name ?? null)
+      : (item?.account ?? chatAccounts[0]?.name ?? null);
+  const defaultModelFor = (item: ChatAssistant | null | undefined, accountName: string | null) =>
+    item?.model ?? (isPresetAssistant(item)
+      ? "deepseek-flash"
+      : (chatAccounts.find((candidate) => candidate.name === accountName)?.model ?? null));
 
   const loadChatAccounts = async () => {
     try {
@@ -213,8 +289,13 @@ export function ChatPage() {
       const first = list.find((item) => item.id === "default") ?? list[0] ?? null;
       if (first) {
         setAssistantId(first.id);
-        setSessionAccount(first.account ?? accounts[0]?.name ?? null);
-        setModel(first.model ?? accounts.find((item) => item.name === (first.account ?? accounts[0]?.name))?.model ?? null);
+        const account = isPresetAssistant(first)
+          ? (accounts.find(isDeepSeekAccount)?.name ?? null)
+          : (first.account ?? accounts[0]?.name ?? null);
+        setSessionAccount(account);
+        setModel(first.model ?? (isPresetAssistant(first)
+          ? "deepseek-flash"
+          : accounts.find((item) => item.name === account)?.model ?? null));
       }
       const params = new URLSearchParams(window.location.search);
       const requested = params.get("session");
@@ -252,8 +333,9 @@ export function ChatPage() {
       }
       if (!sessionId && !session) {
         const current = assistants.find((item) => item.id === assistantId);
-        setSessionAccount(current?.account ?? chatAccounts[0]?.name ?? null);
-        setModel(current?.model ?? chatAccounts.find((item) => item.name === current?.account)?.model ?? null);
+        const account = defaultAccountFor(current);
+        setSessionAccount(account);
+        setModel(defaultModelFor(current, account));
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -301,6 +383,17 @@ export function ChatPage() {
         void loadAssistants();
         return;
       }
+      if (event.type === "accounts-changed") {
+        void loadChatAccounts();
+        return;
+      }
+      if (event.type === "chat-settings-changed") {
+        void api.chat.searchStatus()
+          .then((status) => setSearchStatus({ configured: status.configured }))
+          .catch(() => { /* keep the previous state */ });
+        void loadAssistants();
+        return;
+      }
       if (event.type === "chat-sessions-changed") {
         void loadSessions(assistantIdRef.current);
         if (event.sessionId && event.sessionId === current && !liveRef.current) {
@@ -308,36 +401,78 @@ export function ChatPage() {
         }
         return;
       }
-      if (event.type === "chat-settings-changed") return;
       if (!("sessionId" in event) || event.sessionId !== current) return;
 
       if (event.type === "chat-turn-started") {
         finishedTurns.current.delete(event.turnId);
         setLive((previous) => previous && previous.turnId === event.turnId
           ? { ...previous, messageId: event.messageId }
-          : { turnId: event.turnId, messageId: event.messageId, text: "", reasoning: "", status: "streaming" });
+          : { turnId: event.turnId, messageId: event.messageId, text: "", reasoning: "", status: "streaming", blocks: [] });
         return;
       }
       if (event.type === "chat-usage") {
         setLiveUsage({ sessionId: event.sessionId, input: event.input, output: event.output });
         return;
       }
+      if (event.type === "chat-block") {
+        if (event.phase === "start" && event.blockType === "thinking") {
+          setLive((previous) => {
+            if (previous && previous.turnId !== event.turnId) return previous;
+            const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming", blocks: [] };
+            return { ...base, blocks: [...(base.blocks ?? []), { kind: "thinking", text: "" }] };
+          });
+        }
+        return;
+      }
       if (event.type === "chat-tool") {
         setLive((previous) => {
           if (previous && previous.turnId !== event.turnId) return previous;
-          const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming" };
-          return { ...base, tool: { tool: event.tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: event.hits ?? 0 } };
+          const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming", blocks: [] };
+          return {
+            ...base,
+            tool: { tool: event.tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: event.hits ?? 0 },
+            blocks: mergeLiveTool(base.blocks, event),
+          };
         });
         return;
       }
-      if (event.type === "chat-delta" || event.type === "chat-reasoning") {
-        if (finishedTurns.current.has(event.turnId)) return;
+      if (event.type === "chat-sources") {
         setLive((previous) => {
           if (previous && previous.turnId !== event.turnId) return previous;
           const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming" };
-          return event.type === "chat-delta"
-            ? { ...base, text: base.text + event.text }
-            : { ...base, reasoning: base.reasoning + event.text };
+          return { ...base, sources: event.sources };
+        });
+        return;
+      }
+      if (event.type === "chat-title") {
+        void refreshSession(event.sessionId);
+        void loadSessions(assistantIdRef.current);
+        return;
+      }
+      if (event.type === "chat-reasoning") {
+        if (finishedTurns.current.has(event.turnId)) return;
+        setLive((previous) => {
+          if (previous && previous.turnId !== event.turnId) return previous;
+          const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming", blocks: [] };
+          const blocks = [...(base.blocks ?? [])];
+          let index = blocks.length - 1;
+          while (index >= 0 && blocks[index].kind !== "thinking") index--;
+          if (index >= 0) {
+            const thinking = blocks[index] as Extract<LiveBlock, { kind: "thinking" }>;
+            blocks[index] = { ...thinking, text: thinking.text + event.text };
+          } else {
+            blocks.push({ kind: "thinking", text: event.text });
+          }
+          return { ...base, reasoning: base.reasoning + event.text, blocks };
+        });
+        return;
+      }
+      if (event.type === "chat-delta") {
+        if (finishedTurns.current.has(event.turnId)) return;
+        setLive((previous) => {
+          if (previous && previous.turnId !== event.turnId) return previous;
+          const base = previous ?? { turnId: event.turnId, messageId: undefined, text: "", reasoning: "", status: "streaming", blocks: [] };
+          return { ...base, text: base.text + event.text };
         });
         return;
       }
@@ -453,38 +588,59 @@ export function ChatPage() {
   }, [session]);
 
   const modelGroups = useMemo<ModelGroup[]>(() => {
-    const groups: ModelGroup[] = chatAccounts
+    const sourceAccounts = preset ? chatAccounts.filter(isDeepSeekAccount) : chatAccounts;
+    const presetCaps = {
+      vision: true, files: false, reasoning: true, tools: true,
+      maxContext: 1_000_000, maxOutput: 64_000, source: "vendor",
+      reasoningMode: {
+        kind: "toggle" as const, canDisable: true, efforts: [],
+        minBudget: 0, maxBudget: 0, source: "vendor",
+      },
+    };
+    const groups: ModelGroup[] = sourceAccounts
       .map((account) => ({
         name: account.name,
         label: account.label || account.name,
         vendor: account.vendor,
         models: account.modelList?.length
-          ? account.modelList
+          ? account.modelList.map((item) => preset
+              ? { ...item, capabilities: { ...item.capabilities, ...presetCaps } }
+              : item)
           : (account.models ?? []).map((id) => ({
               id,
-              capabilities: {
+              capabilities: preset ? presetCaps : {
                 vision: false, files: false, reasoning: false, tools: false,
                 maxContext: 32768, maxOutput: 4096, source: "unknown",
               },
             })),
       }))
       .filter((group) => group.models.length > 0);
-    if (model && !groups.some((group) => group.models.some((item) => item.id === model))) {
+    if (preset && groups.length === 0 && sourceAccounts.length > 0) {
       groups.push({
-        name: sessionAccount ?? "",
-        label: "当前服务",
-        vendor: "",
-        models: [{
-          id: model,
-          capabilities: {
-            vision: false, files: false, reasoning: false, tools: false,
-            maxContext: 32768, maxOutput: 4096, source: "unknown",
-          },
-        }],
+        name: sourceAccounts[0].name,
+        label: sourceAccounts[0].label || sourceAccounts[0].name,
+        vendor: sourceAccounts[0].vendor,
+        models: [{ id: "deepseek-flash", capabilities: presetCaps }],
       });
     }
+    if (model && !groups.some((group) => group.models.some((item) => item.id === model))) {
+      if (!preset) {
+        groups.push({
+          name: sessionAccount ?? "",
+          label: "当前服务",
+          vendor: "",
+          models: [{
+            id: model,
+            capabilities: {
+              vision: false, files: false, reasoning: false, tools: false,
+              maxContext: 32768, maxOutput: 4096, source: "unknown",
+            },
+          }],
+        });
+      }
+    }
     return groups;
-  }, [chatAccounts, model, sessionAccount]);
+  }, [chatAccounts, model, sessionAccount, preset]);
 
   const currentCaps = useMemo(() => {
     for (const group of modelGroups) {
@@ -664,8 +820,10 @@ export function ChatPage() {
   };
 
   const toggleSearch = () => {
-    if (!searchStatus?.configured) {
-      toast("info", "还没配置搜索 key：去「聊天设置 → 联网搜索」填一个");
+    if (!searchConfigured) {
+      toast("info", preset
+        ? "这个角色使用 DeepSeek 官方搜索：先在账户页添加一个 DeepSeek 账户"
+        : "还没配置搜索 key：去「聊天设置 → 联网搜索」填一个");
       return;
     }
     setSearchEnabled((value) => !value);
@@ -768,8 +926,9 @@ export function ChatPage() {
     setLive(null);
     setDraft("");
     setPending([]);
-    setSessionAccount(next?.account ?? chatAccounts[0]?.name ?? null);
-    setModel(next?.model ?? null);
+    const account = defaultAccountFor(next);
+    setSessionAccount(account);
+    setModel(defaultModelFor(next, account));
     setSidebarOpen(false);
   };
 
@@ -916,6 +1075,12 @@ export function ChatPage() {
                   <Markdown content={currentAssistant.openingMessage} />
                 </div>
               )}
+              {preset && !presetReady && (
+                <div className="chat-composer-note">
+                  这个角色固定使用 DeepSeek 官方协议：先在账户页添加一个 DeepSeek 账户，再回来发消息。
+                  <button className="btn btn-text" onClick={() => navigate("/accounts")}>去添加账户</button>
+                </div>
+              )}
               <div className="chat-welcome-label">可以这样开始</div>
               <div className="chat-suggestions">
                 {suggestions.map((suggestion) => (
@@ -971,13 +1136,19 @@ export function ChatPage() {
               });
             })()}
             {live && !liveAttached && (
-              <LiveBubble assistant={currentAssistant} text={live.text} reasoning={live.reasoning} tool={live.tool} />
+              <LiveBubble assistant={currentAssistant} text={live.text} reasoning={live.reasoning} tool={live.tool} sources={live.sources} blocks={live.blocks} />
             )}
           </div>
         )}
 
         {!needsElevation && !loadingChat && (
-          <div className="chat-composer-wrap">
+          <div className={`chat-composer-wrap${session ? " chat-composer-wrap--conversation" : ""}`}>
+            {preset && !presetReady && (
+              <div className="chat-composer-note">
+                这个角色固定使用 DeepSeek 官方协议：先在账户页添加一个 DeepSeek 账户。
+                <button className="btn btn-text" onClick={() => navigate("/accounts")}>去添加账户</button>
+              </div>
+            )}
             <Composer
               draft={draft}
               onDraft={setDraft}
@@ -1004,8 +1175,9 @@ export function ChatPage() {
               editing={editTarget !== null}
               onCancelEdit={cancelEdit}
               searchEnabled={searchEnabled}
-              searchConfigured={searchStatus?.configured ?? false}
+              searchConfigured={searchConfigured}
               onToggleSearch={toggleSearch}
+              searchOfficial={preset}
             />
           </div>
         )}
