@@ -758,7 +758,7 @@ public final class ChatTurnManager {
         boolean hadCalls = !turn.pendingCalls.isEmpty();
         Matcher block = DSML_BLOCK.matcher(normalized);
         if (block.find()) {
-            List<ChatProtocol.ToolCall> calls = parseDsmlToolCalls(block.group(1), turn.tools);
+            List<ChatProtocol.ToolCall> calls = parseDsmlToolCalls(block.group(), turn.tools);
             if (!hadCalls && !calls.isEmpty()) {
                 turn.pendingCalls.addAll(calls);
             }
@@ -782,6 +782,13 @@ public final class ChatTurnManager {
 
     static String normalizeDsml(String text) {
         return text.replace('\uFF5C', '|');
+    }
+
+    /// 包内可见：从任意文本里提取完整的 DSML 调用块，便于回归测试覆盖外层匹配。
+    static List<ChatProtocol.ToolCall> dsmlCallsFromText(
+            String text, List<ChatProtocol.ToolSpec> tools) {
+        Matcher block = DSML_BLOCK.matcher(normalizeDsml(text));
+        return block.find() ? parseDsmlToolCalls(block.group(), tools) : List.of();
     }
 
     private static void replaceContent(ActiveTurn turn, String cleaned) {

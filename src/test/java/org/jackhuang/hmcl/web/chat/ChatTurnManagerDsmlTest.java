@@ -79,4 +79,22 @@ class ChatTurnManagerDsmlTest {
                 ChatTurnManager.normalizeDsml(text),
                 List.of(new ChatProtocol.ToolSpec("scrape_web", "", "{}"))).isEmpty());
     }
+
+    @Test
+    void extractsCallsFromWrappedText() {
+        String text = """
+                before
+                <|DSML| calls>
+                <|DSML| invoke name="search_web">
+                <|DSML| parameter name="query" string="true">wrapped</|DSML| parameter>
+                </|DSML| invoke>
+                </|DSML| calls>
+                after""";
+
+        List<ChatProtocol.ToolCall> calls =
+                ChatTurnManager.dsmlCallsFromText(text, List.of(SEARCH));
+        assertEquals(1, calls.size());
+        assertEquals("wrapped", JsonParser.parseString(calls.get(0).arguments())
+                .getAsJsonObject().get("query").getAsString());
+    }
 }
