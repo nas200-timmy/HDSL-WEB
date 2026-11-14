@@ -43,12 +43,13 @@ The panel does this for you from the instance's **安装** page: the tarball is
 inside the panel jar, so the install needs no registry. The panel then opens the
 terminal by booting this profile — a pure bundle has no executable of its own.
 
-**0.2.x only.** The bundle patch is written against the 0.2.x service seams, and
-the panel's catalogue pins this build to the harness lines it was actually run
-against; the peer ranges enumerate them (`0.2.0-rc.1` … `0.2.1-rc.3`, plus
-`0.2.2-rc.1`), so a line nobody ran the terminal against cannot pass the gate. An older
-instance gets `dsh-acp-tui` instead, which speaks ACP and is meant for exactly
-that case.
+**0.2.x only.** The bundle patch is written against the 0.2.x service seams, so
+the peer ranges name the whole line (`^0.2.0-rc.1`) rather than the rcs that
+happened to exist when this build was cut. dsh judges an installation with
+`includePrerelease`, so 0.2.1-rc.5 and 0.2.2-rc.3 pass that gate too; this build
+was re-run against 0.2.2-rc.3. 0.3 is a new line and needs a new verification.
+An older instance gets `dsh-acp-tui` instead, which speaks ACP and is meant for
+exactly that case.
 
 Both terminals may be installed side by side: this one is preferred while it fits the
 instance, and `dsh-acp-tui` waits as the fallback. When the instance's dsh version moves

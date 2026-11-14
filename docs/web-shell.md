@@ -387,7 +387,8 @@ ZCode 是唯一的例外：它的会话库跟 `homedir()` 走，而凭据与供�
     profile `dsh-inproc-tui`）。它是 mode bundle：清单里没有 bin，安装后 `dsh plugin add` 会把它
     加进该 profile 的 `dsh.profile.bundles`，面板按纯 bundle 的路径启动
     `node <bin.js> --profile dsh-inproc-tui`。它跑在 harness 进程里，所以有 token 级流式、审批
-    与追问、进程内模型切换；`requiresDsh = ">=0.2.0-rc.2"`（实测 0.2.0-rc.2 / 0.2.1-rc.3），
+    与追问、进程内模型切换；`requiresDsh = ">=0.2.0-rc.2 <0.3.0-0"`（实测 0.2.0-rc.2 / 0.2.1-rc.3 /
+    0.2.2-rc.3；范围内按整条 0.2 线放行，0.3 才要求重新验证），
     旧宿主由清单跳过、退回下面的 ACP 终端。渲染层与 ACP 终端共用 `plugins/shared`
     （打包时随 tarball 一起进入 `package/shared`）。
   - **面板自带的第一方终端（ACP，兼容备用）**：`plugins/dsh-acp-tui`（包名
