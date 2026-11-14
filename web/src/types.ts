@@ -1066,18 +1066,6 @@ export interface PlatformCompatibility {
   items: PlatformItem[];
 }
 
-/** GET /api/dsh/freebsd-addon：FreeBSD 实验性原生模块的构建状态。 */
-export interface FreeBsdAddonStatus {
-  applicable: boolean;
-  prepared: boolean;
-  state: "idle" | "running" | "done" | "failed";
-  message: string;
-  log: string;
-  error?: string;
-  commit: string;
-  sourceUrl: string;
-}
-
 /** GET /api/system/storage：数据目录按顶层子目录分桶的大小。 */
 export interface StorageBucket {
   name: string;

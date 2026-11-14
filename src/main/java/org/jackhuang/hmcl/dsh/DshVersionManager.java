@@ -241,18 +241,7 @@ public final class DshVersionManager {
     /// @param os the platform the panel runs on
     /// @return `false` on FreeBSD, `true` everywhere else
     static boolean installableOn(org.jackhuang.hmcl.util.platform.OperatingSystem os) {
-        return installableOn(os, DshFreeBsdAddon.prepared());
-    }
-
-    /// The same question with the native-addon decision passed in, so a test can
-    /// drive both branches without a FreeBSD host.
-    ///
-    /// @param os            the platform the panel runs on
-    /// @param addonPrepared whether the operator has built the missing addon
-    /// @return whether an install may proceed
-    static boolean installableOn(org.jackhuang.hmcl.util.platform.OperatingSystem os,
-                                 boolean addonPrepared) {
-        return os != org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD || addonPrepared;
+        return os != org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD;
     }
 
     /// Writes the manifest npm installs from.
@@ -905,17 +894,6 @@ public final class DshVersionManager {
         // the version kept aside for a rollback is no longer needed.
         FileUtils.deleteQuietly(flag);
         FileUtils.deleteQuietly(previous);
-
-        // The FreeBSD escape hatch: pnpm has just written a fresh node_modules,
-        // so the operator-built native addon has to be put back before the tree
-        // is used. A failure here is worth reporting — the install would look
-        // complete and dsh would still refuse to start.
-        try {
-            DshFreeBsdAddon.inject(target);
-        } catch (java.io.IOException e) {
-            throw new DshException("DSH " + version + " installed, but the FreeBSD native "
-                    + "addon could not be injected: " + e.getMessage(), e);
-        }
 
         LOG.info("Installed DSH " + version + " for " + instance.id() + " into " + target);
     }

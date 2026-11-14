@@ -380,8 +380,7 @@ public final class HdslServer {
         // The curated terminal-plugin list lives under its own prefix: it is not the
         // community catalogue (that is `/api/plugins/catalog`) and it has no
         // per-instance state of its own to hang off an instance path.
-        context.addServlet(new ServletHolder(new DshApiServlet(
-                config, authService, developerElevation, tlsActive)), "/api/dsh/*");
+        context.addServlet(new ServletHolder(new DshApiServlet()), "/api/dsh/*");
         ServletHolder packsHolder = new ServletHolder(new PacksApiServlet(runtime, taskService, config));
         packsHolder.getRegistration().setMultipartConfig(packMultipart);
         context.addServlet(packsHolder, "/api/packs/*");

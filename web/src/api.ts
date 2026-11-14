@@ -55,7 +55,6 @@ import type {
   SystemStorage,
   PanelInfo,
   PlatformCompatibility,
-  FreeBsdAddonStatus,
   ChatAssistant,
   ChatSessionSummary,
   ChatSession,
@@ -370,13 +369,6 @@ export const api = {
   // 自己的 profile —— 装进实例的 web profile 会和 dsh-web-app 撞在同一份 argv 上，实例就起不来了。
   // profile 由服务端按清单决定，请求里只说包名。
   tuiPlugins: () => request<{ plugins: TuiPluginItem[] }>("/api/dsh/tui-plugins"),
-  /**
-   * FreeBSD 实验开关：从源码构建 dsh 缺失的原生模块。
-   * 状态只读；构建需要开发者提权（它会在目标机上编译一段网络取来的代码）。
-   */
-  dshFreeBsdAddon: () => request<FreeBsdAddonStatus>("/api/dsh/freebsd-addon"),
-  buildDshFreeBsdAddon: () =>
-    request<FreeBsdAddonStatus>("/api/dsh/freebsd-addon/build", { method: "POST" }),
 
   instanceTuiPlugins: (id: string) =>
     request<{ plugins: TuiPluginState[] }>(`/api/instances/${id}/tui-plugins`),
