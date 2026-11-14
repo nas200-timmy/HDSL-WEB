@@ -106,6 +106,24 @@ class DshPluginRequirementsTest {
                 "and the numbers still have to be inside it");
     }
 
+    /// The in-process terminal declares `^0.2.0-rc.1` and the panel gates it with
+    /// `>=0.2.0-rc.2 <0.3.0-0`. Both must admit every 0.2.x prerelease — an enumerated
+    /// list is what left `dsh@next` without a terminal — and both must stop at 0.3.
+    @Test
+    void theInProcessTerminalsRangesSpanTheWholeZeroTwoLine() {
+        String peers = "^0.2.0-rc.1";
+        assertTrue(DshPluginRequirements.satisfies(peers, "0.2.0-rc.2"));
+        assertTrue(DshPluginRequirements.satisfies(peers, "0.2.1-rc.5"));
+        assertTrue(DshPluginRequirements.satisfies(peers, "0.2.2-rc.3"));
+        assertFalse(DshPluginRequirements.satisfies(peers, "0.3.0-rc.1"));
+
+        String gate = ">=0.2.0-rc.2 <0.3.0-0";
+        assertTrue(DshPluginRequirements.satisfies(gate, "0.2.1-rc.5"));
+        assertTrue(DshPluginRequirements.satisfies(gate, "0.2.2-rc.3"));
+        assertFalse(DshPluginRequirements.satisfies(gate, "0.2.0-rc.1"), "below the tested floor");
+        assertFalse(DshPluginRequirements.satisfies(gate, "0.3.0"));
+    }
+
     @Test
     void aPrereleaseIsOrderedByNameAndThenByNumber() {
         assertFalse(DshPluginRequirements.satisfies(">=0.1.0-rc.0", "0.1.0-alpha.1"),

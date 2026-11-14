@@ -554,6 +554,26 @@ public final class ChatAttachments {
         }
     }
 
+    /// 文本附件预览用：UTF-8 优先，其次 GB18030（中文 Windows 的常见编码）。
+    ///
+    /// 只读开头一段做判断，避免 50MB 的日志每预览一次就整个读进内存。
+    public static Charset sniffTextCharset(Path path) throws IOException {
+        byte[] sample;
+        try (InputStream input = Files.newInputStream(path)) {
+            sample = input.readNBytes(256 * 1024);
+        }
+        return isUtf8(sample) ? StandardCharsets.UTF_8 : Charset.forName("GB18030");
+    }
+
+    private static boolean isUtf8(byte[] bytes) {
+        java.nio.CharBuffer chars = java.nio.CharBuffer.allocate(bytes.length);
+        java.nio.charset.CoderResult result = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes), chars, false);
+        return !result.isError();
+    }
+
     // --------------------------------------------------------------- misc ----
 
     public @Nullable String loadText(ChatStore.Attachment attachment) {

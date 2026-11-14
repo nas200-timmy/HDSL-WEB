@@ -128,7 +128,7 @@ public final class DshTuiPlugins {
             new Entry(
                     "dsh-inproc-tui",
                     "@nas200-timmy/dsh-inproc-tui",
-                    "0.2.2",
+                    "0.2.3",
                     "DSH TUI（进程内）",
                     "https://github.com/nas200-timmy/HDSL-WEB",
                     "GPL-3.0-or-later",
@@ -138,25 +138,20 @@ public final class DshTuiPlugins {
                     null,
                     "dsh-inproc-tui",
                     // A bundle over dsh-base: it uses the 0.2.x agent/stream/approval seams
-                    // directly. Verified on 0.2.0-rc.2, 0.2.1-rc.3 and 0.2.2-rc.1 — the 0.2.0
-                    // line is where those seams first appear, so that is the floor.
+                    // directly, so 0.2.0-rc.2 is the floor and 0.3.0 is where those seams
+                    // have to be re-verified. Everything between is admitted on purpose:
+                    // the terminal was re-run on 0.2.2-rc.3, and an enumerated list of
+                    // exact prereleases only left the newest harness without a terminal
+                    // every time upstream cut a new rc (0.2.1-rc.4 / -rc.5 and 0.2.2-rc.2 /
+                    // -rc.3 all bounced off a gate that named the previous build).
                     //
-                    // The ceiling is the plugin's **own** `peerDependencies`, which enumerate
-                    // `@deepseek-ai/dsh-agent` 0.2.0-rc.1 … 0.2.1-rc.3 plus **0.2.2-rc.1** —
-                    // the version the 0.2.2 terminal was actually run against. Every other
-                    // 0.2.2 build (alpha.2, a later rc) is outside that list, and dsh itself
-                    // refuses the bundle there ("incompatible with dsh 0.2.2-alpha.2"), so the
-                    // panel must refuse it too rather than install a terminal the host skips.
-                    //
-                    // The bound used to be written `<0.2.2-0`, the semver idiom for "before
-                    // 0.2.2, prereleases included" — which also admits **0.2.1-rc.4 and
-                    // -rc.5**, and those are exactly what `dsh@latest` publishes. The result
-                    // was a panel that called the plugin "a fit", an install that dsh refused
-                    // (`incompatible with dsh 0.2.1-rc.5`) and rolled back, and a user with no
-                    // terminal on the newest harness. The ceiling now names the last peer the
-                    // plugin declares: a new rc needs a plugin build that was actually tested
-                    // against it, not a range that hopes.
-                    ">=0.2.0-rc.2 <0.2.1-rc.4 || 0.2.2-rc.1",
+                    // The plugin's own peers say the same (`^0.2.0-rc.1`, whose npm
+                    // expansion ends at `<0.3.0-0`), which matters: dsh judges an
+                    // installation by those peers with includePrerelease, so the range
+                    // and this gate agree instead of drifting apart. The upper bound is
+                    // `<0.3.0-0`, not `<0.3.0`: with includePrerelease the latter still
+                    // admits 0.3.0-rc.1.
+                    ">=0.2.0-rc.2 <0.3.0-0",
                     true,
                     "dsh-terminal",
                     true),

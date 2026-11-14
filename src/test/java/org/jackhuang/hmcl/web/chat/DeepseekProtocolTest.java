@@ -29,8 +29,10 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -226,6 +228,28 @@ class DeepseekProtocolTest {
         assertFalse(fields[2].isBlank(), reminder);
         assertEquals("Web", fields[3]);
         assertFalse(fields[4].isBlank(), reminder);
+    }
+
+    @Test
+    void latestReminderUsesTheLanguageNameTheServerAccepts() {
+        assertEquals(
+                "2026-11-15,星期日,中国,Web,中文",
+                ChatTurnManager.latestReminder(Locale.SIMPLIFIED_CHINESE, LocalDate.of(2026, 11, 15)));
+        assertEquals(
+                "2026-11-15,Sunday,United States,Web,English",
+                ChatTurnManager.latestReminder(Locale.US, LocalDate.of(2026, 11, 15)));
+    }
+
+    @Test
+    void legacyReminderIsRewrittenBeforeReplay() {
+        assertEquals(
+                "2026-11-14,星期六,中国,Web,中文",
+                ChatTurnManager.replayableReminder(
+                        "2026-11-14,Saturday,China,Web,Chinese", Locale.SIMPLIFIED_CHINESE));
+        assertEquals(
+                "2026-11-14,Saturday,United States,Web,English",
+                ChatTurnManager.replayableReminder(
+                        "2026-11-14,Saturday,United States,Web,English", Locale.US));
     }
 
     private static final class Sink implements ChatProtocol.ChatEventSink {
