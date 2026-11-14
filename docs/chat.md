@@ -810,3 +810,53 @@ POST   /api/chat/sessions               // body 带 assistantId
   执行部署，也未写入任何真实 key/口令。
 - 已知未做：模型服务 ON/OFF 开关、模型家族分组、原生 OpenAI PDF 的真实网关
   联调、备份恢复 UI、音频/视频原生输入、fork/搜索。
+
+## 21. DeepSeek 官方预设助手（2026-11-14，web-shell）
+
+把 chat-demo 的协议行为拆进面板，不搬它的前端地基：Markdown、主题、会话、分支、备份仍用
+面板自己的实现。
+
+### 21.1 角色与开关
+
+- 内置助手 `deepseek-official`，`preset=deepseek-official`、`protocol=deepseek-anthropic`；
+  复制出来的角色继承这两个字段，但不再带 `builtin`。
+- 预设角色只接受 DeepSeek 账户与 DeepSeek 模型；后端在 `ChatTurnManager.resolve()` 里硬校验，
+  不满足时分别返回 `preset_provider_mismatch` / `no_deepseek_account`。
+- 聊天设置 → 预设助手：`deepseekPresetEnabled` 控制是否在角色列表里显示。关闭只隐藏，
+  不删助手和会话；已有 turn 允许跑完，新发送返回 `preset_disabled`。
+- 没有 DeepSeek 账户时角色仍显示，欢迎页给出添加入口的引导。
+
+### 21.2 协议
+
+- `DeepseekProtocol`（`deepseek-anthropic`）：`{base}/anthropic/v1/messages`，
+  模型发现仍用 `{base}/models`，鉴权用账户 key（服务端注入，浏览器不落 key）。
+- 请求体按 chat-demo 的形状：`thinking: {type: enabled|disabled}`、服务端工具
+  `deepseek_web_search`（搜索开关打开时）+ `deepseek_read_url`（始终）、
+  `safety_check.level=high`、未命名会话才带 `title.enabled`；不带 `max_tokens`/`temperature`。
+- 流式解析：`server_tool_use`、`web_search_tool_result`、`web_fetch_tool_result`、
+  `citations_delta`、`signature_delta`、`message_delta.title`。
+- 搜索完全走官方服务端工具，不读 `ChatSettings.searchProvider/searchKeys`，也不跑
+  `ChatSearchService` 的预搜索或客户端 `search_web` / `scrape_web`。
+- 扩展字段返回 400 时降级一次：去掉搜索和标题重试，不静默换供应商。
+
+### 21.3 展示与存储
+
+- schema v4：`chat_assistant.preset/protocol`、`chat_session.title_auto`、
+  `chat_message.blocks_json/sources_json/latest_reminder`、
+  `chat_attachment.remote_file_id/remote_file_purpose/remote_uploaded_at`。
+- `blocks_json` 保留服务端原生块，历史只回传正文与带签名的 `read_link`；搜索/思考不回传。
+- `sources_json` 存展示用的来源与 `read_link` 轮次，`ChatService.messageJson()` 映射成现有的
+  `sources` / `tools` 字段，前端复用现有来源 chips。
+- 正文引用按 chat-demo 的 `[citation:N]` 标记追加；`Markdown.tsx` 用来源数组换成链接。
+- 每次发送在 user 消息上写 `latest_reminder`（日期、星期、Web、语言），回放时按
+  `latest_reminder` 角色插在提问前；快照变化才重复插入。
+- 服务端标题只在 `title_auto=1` 时写入；用户手动改名或本轮没拿到标题就关掉自动标题。
+- 图片走 `POST /anthropic/v1/files`，`file_id` 按附件缓存；文档仍走文本抽取，扩展模式
+  不支持 document，先按文本发送。远程文件目前不做删除清理。
+
+### 21.4 验证
+
+- `DeepseekProtocolTest`：请求体、服务端工具、引用、思考签名、标题与 `latest_reminder`。
+- `ChatStoreTest`：预设种子、schema v4 侧数据、自动标题、Files API 缓存。
+- `ChatSettingsTest`：预设开关默认值、PATCH 与旧设置兼容。
+- 真 key 联调尚未执行；扩展字段以 chat-demo 的协议形状为准。

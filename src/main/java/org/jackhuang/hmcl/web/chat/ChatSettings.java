@@ -62,7 +62,22 @@ public final class ChatSettings {
             java.util.Map<String, String> searchKeys,
             int searchMaxResults,
             /// 把这一轮的搜索/抓正文链路存进会话，追问时模型能看到上一轮搜过什么。
-            boolean persistToolTrail) {
+            boolean persistToolTrail,
+            /// 是否在角色列表里启用内置的 DeepSeek 官方预设助手。
+            boolean deepseekPresetEnabled) {
+
+        public Settings(String retention, int retentionDays, boolean backupEnabled,
+                        String backupTime, int backupKeep, String backupDir,
+                        String privateEndpoints, List<String> privateAllowlist,
+                        int longTextTokens, int dailyTokenLimit, int streamFlushMs,
+                        @Nullable String defaultAccount, @Nullable String defaultModel,
+                        String searchProvider, java.util.Map<String, String> searchKeys,
+                        int searchMaxResults, boolean persistToolTrail) {
+            this(retention, retentionDays, backupEnabled, backupTime, backupKeep, backupDir,
+                    privateEndpoints, privateAllowlist, longTextTokens, dailyTokenLimit,
+                    streamFlushMs, defaultAccount, defaultModel, searchProvider, searchKeys,
+                    searchMaxResults, persistToolTrail, true);
+        }
 
         /// 某个服务商的 key；没有配置返回 null。
         public @Nullable String searchKey(String provider) {
@@ -93,7 +108,7 @@ public final class ChatSettings {
             return new Settings(retention, retentionDays, backupEnabled, backupTime, backupKeep, dir,
                     privateEndpoints, privateAllowlist, longTextTokens, dailyTokenLimit,
                     streamFlushMs, defaultAccount, defaultModel, searchProvider, searchKeys,
-                    searchMaxResults, persistToolTrail);
+                    searchMaxResults, persistToolTrail, deepseekPresetEnabled);
         }
     }
 
@@ -106,7 +121,7 @@ public final class ChatSettings {
             backup = dataDir.resolve("backup");
         }
         return new Settings("forever", 0, true, "03:17", 7, backup.toString(), "allow",
-                List.of(), 4000, 0, 40, null, null, "bocha", java.util.Map.of(), 5, true);
+                List.of(), 4000, 0, 40, null, null, "bocha", java.util.Map.of(), 5, true, true);
     }
 
     public static Settings load(ChatStore store, Path dataDir) throws SQLException {
@@ -172,7 +187,8 @@ public final class ChatSettings {
                     searchProvider,
                     searchKeys,
                     intValue(json, "searchMaxResults", defaults.searchMaxResults()),
-                    bool(json, "persistToolTrail", defaults.persistToolTrail())), defaults);
+                    bool(json, "persistToolTrail", defaults.persistToolTrail()),
+                    bool(json, "deepseekPresetEnabled", defaults.deepseekPresetEnabled())), defaults);
         } catch (RuntimeException e) {
             return defaults;
         }
@@ -246,11 +262,14 @@ public final class ChatSettings {
         boolean persistToolTrail = body.has("persistToolTrail")
                 ? bool(body, "persistToolTrail", current.persistToolTrail())
                 : current.persistToolTrail();
+        boolean deepseekPresetEnabled = body.has("deepseekPresetEnabled")
+                ? bool(body, "deepseekPresetEnabled", current.deepseekPresetEnabled())
+                : current.deepseekPresetEnabled();
         return sanitize(new Settings(retention, retentionDays, backupEnabled, backupTime, backupKeep,
                 backupDir, privateMode, allowlist, longTextTokens, dailyTokenLimit, streamFlushMs,
                 defaultAccount, defaultModel,
                 searchProvider == null ? current.searchProvider() : searchProvider,
-                searchKeys, searchMaxResults, persistToolTrail), defaults);
+                searchKeys, searchMaxResults, persistToolTrail, deepseekPresetEnabled), defaults);
     }
 
     private static Settings sanitize(Settings value, Settings defaults) {
@@ -279,7 +298,7 @@ public final class ChatSettings {
                 value.privateAllowlist(), longText, daily, flush,
                 blankToNull(value.defaultAccount()), blankToNull(value.defaultModel()),
                 provider, java.util.Map.copyOf(value.searchKeys()), maxResults,
-                value.persistToolTrail());
+                value.persistToolTrail(), value.deepseekPresetEnabled());
     }
 
     public static void save(ChatStore store, Settings settings) throws SQLException {
@@ -307,6 +326,7 @@ public final class ChatSettings {
         json.add("searchKeys", searchKeys);
         json.addProperty("searchMaxResults", settings.searchMaxResults());
         json.addProperty("persistToolTrail", settings.persistToolTrail());
+        json.addProperty("deepseekPresetEnabled", settings.deepseekPresetEnabled());
         store.putSetting(KEY, json.toString());
     }
 

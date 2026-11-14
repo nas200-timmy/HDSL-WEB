@@ -2,6 +2,25 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 — DeepSeek 官方预设助手（web-shell）
+
+> 把 chat-demo 的协议行为拆进面板：新增内置「DeepSeek 官方」角色，固定 DeepSeek 官方
+> 协议（深度思考、官方联网搜索、读链接、来源引用），UI/Markdown/会话/分支仍用面板自己的。
+> 聊天设置新增开关，可隐藏这个预设；关闭不删数据。
+
+- 新协议 `deepseek-anthropic`：`/anthropic/v1/messages`，`thinking` 开关、服务端工具
+  `deepseek_web_search` / `deepseek_read_url`、`safety_check`、服务端标题与
+  `latest_reminder` 角色；搜索不再走面板的客户端工具链。
+- schema v4：助手 `preset/protocol`、会话 `title_auto`、消息 `blocks_json/sources_json/
+  latest_reminder`、附件 Files API 缓存字段。
+- 预设角色只接受 DeepSeek 账户与模型；没有账户时给出添加入口，后端硬拒绝跨供应商回退。
+- 聊天设置 → 预设助手：`deepseekPresetEnabled` 开关；关闭后隐藏预设及复制角色，
+  会话保留，新发送返回 `preset_disabled`。
+- 正文里的 `[citation:N]` 渲染成来源链接；来源复用现有 `sources` / `tools` 结构。
+- 图片走 Files API（`file_id` 缓存）；文档仍走文本抽取。
+- 测试：`DeepseekProtocolTest`、`ChatStoreTest`、`ChatSettingsTest` 覆盖协议形状、
+  schema v4 与开关；真 key 联调待做。
+
 ## v0.6.86 — 2026-11-14 · FreeBSD 交互式终端与平台声明；转码手机端布局
 
 > FreeBSD 上面板能跑，但 PTY 终端一直是缺口；这一版在 **FreeBSD 15.1 真机**上补齐并验证，

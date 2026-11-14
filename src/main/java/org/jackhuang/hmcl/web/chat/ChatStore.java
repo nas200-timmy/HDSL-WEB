@@ -48,7 +48,7 @@ import java.util.UUID;
 @NotNullByDefault
 public final class ChatStore implements AutoCloseable {
 
-    private static final int SCHEMA_VERSION = 3;
+    private static final int SCHEMA_VERSION = 4;
     private static final String DEFAULT_ASSISTANT_ID = "default";
 
     private final Path root;
@@ -70,6 +70,7 @@ public final class ChatStore implements AutoCloseable {
         }
         migrate();
         seedDefaultAssistant();
+        seedPresetAssistant();
         recoverStreaming();
     }
 
@@ -215,6 +216,20 @@ public final class ChatStore implements AutoCloseable {
                 // 这一轮的完整工具链路（text / tool_calls / tool）。NULL = 老消息或用户关掉了保留。
                 statement.execute("ALTER TABLE chat_message ADD COLUMN parts_json TEXT");
             }
+            if (version < 4) {
+                // DeepSeek 官方预设：助手固定协议，会话保留自动标题状态。
+                statement.execute("ALTER TABLE chat_assistant ADD COLUMN preset TEXT");
+                statement.execute("ALTER TABLE chat_assistant ADD COLUMN protocol TEXT");
+                statement.execute("ALTER TABLE chat_session ADD COLUMN title_auto INTEGER NOT NULL DEFAULT 1");
+                // 服务端工具的原生内容块、展示用来源，以及每轮注入的时间快照。
+                statement.execute("ALTER TABLE chat_message ADD COLUMN blocks_json TEXT");
+                statement.execute("ALTER TABLE chat_message ADD COLUMN sources_json TEXT");
+                statement.execute("ALTER TABLE chat_message ADD COLUMN latest_reminder TEXT");
+                // Files API 上传结果，按附件缓存，避免每轮重传同一张图。
+                statement.execute("ALTER TABLE chat_attachment ADD COLUMN remote_file_id TEXT");
+                statement.execute("ALTER TABLE chat_attachment ADD COLUMN remote_file_purpose TEXT");
+                statement.execute("ALTER TABLE chat_attachment ADD COLUMN remote_uploaded_at INTEGER");
+            }
             statement.execute("PRAGMA user_version=" + SCHEMA_VERSION);
             connection.commit();
         } catch (SQLException e) {
@@ -254,6 +269,30 @@ public final class ChatStore implements AutoCloseable {
         }
     }
 
+    /// DeepSeek 官方预设助手。固定协议由 `protocol` 字段携带；用户复制出来的角色
+    /// 继承同一对数，但不再带 builtin。
+    private void seedPresetAssistant() throws SQLException {
+        long now = System.currentTimeMillis();
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT OR IGNORE INTO chat_assistant
+                  (id, name, avatar, description, system_prompt, opening_message, account_name, model,
+                   temperature, max_tokens, reasoning_level, quick_phrases_json, is_builtin,
+                   created_at, updated_at, preset, protocol)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, '[]', 1, ?, ?, ?, ?)""")) {
+            statement.setString(1, "deepseek-official");
+            statement.setString(2, "DeepSeek 官方");
+            statement.setString(3, "🐋");
+            statement.setString(4, "DeepSeek 官方协议：深度思考、联网搜索、读链接与来源引用");
+            statement.setString(5, "该助手为DeepSeek，由深度求索公司创造。");
+            statement.setString(6, "你好，我是 DeepSeek。");
+            statement.setLong(7, now);
+            statement.setLong(8, now);
+            statement.setString(9, "deepseek-official");
+            statement.setString(10, ChatEndpoints.DEEPSEEK_ANTHROPIC);
+            statement.executeUpdate();
+        }
+    }
+
     /// 面板上次没有正常结束时留下的 `streaming` 消息，启动后一律改成 `interrupted`。
     /// 它们可以重新生成，但不能再被当成一个还在进行的 turn。
     private void recoverStreaming() throws SQLException {
@@ -273,12 +312,24 @@ public final class ChatStore implements AutoCloseable {
             @Nullable String accountName, @Nullable String model,
             @Nullable Double temperature, @Nullable Integer maxTokens,
             @Nullable String reasoningLevel, String quickPhrasesJson,
-            boolean builtin, long createdAt, long updatedAt) {
+            boolean builtin, long createdAt, long updatedAt,
+            @Nullable String preset, @Nullable String protocol) {
+
+        public Assistant(String id, String name, String avatar, String description,
+                         String systemPrompt, String openingMessage,
+                         @Nullable String accountName, @Nullable String model,
+                         @Nullable Double temperature, @Nullable Integer maxTokens,
+                         @Nullable String reasoningLevel, String quickPhrasesJson,
+                         boolean builtin, long createdAt, long updatedAt) {
+            this(id, name, avatar, description, systemPrompt, openingMessage, accountName, model,
+                    temperature, maxTokens, reasoningLevel, quickPhrasesJson, builtin,
+                    createdAt, updatedAt, null, null);
+        }
 
         public Assistant withId(String newId) {
             return new Assistant(newId, name, avatar, description, systemPrompt, openingMessage,
                     accountName, model, temperature, maxTokens, reasoningLevel, quickPhrasesJson,
-                    false, createdAt, updatedAt);
+                    false, createdAt, updatedAt, preset, protocol);
         }
     }
 
@@ -311,7 +362,8 @@ public final class ChatStore implements AutoCloseable {
                 rs.getString("account_name"), rs.getString("model"),
                 nullableDouble(rs, "temperature"), nullableInt(rs, "max_tokens"),
                 rs.getString("reasoning_level"), rs.getString("quick_phrases_json"),
-                rs.getInt("is_builtin") != 0, rs.getLong("created_at"), rs.getLong("updated_at"));
+                rs.getInt("is_builtin") != 0, rs.getLong("created_at"), rs.getLong("updated_at"),
+                rs.getString("preset"), rs.getString("protocol"));
     }
 
     public synchronized Assistant createAssistant(Assistant draft) throws SQLException {
@@ -321,12 +373,13 @@ public final class ChatStore implements AutoCloseable {
                 draft.name(), draft.avatar(), draft.description(), draft.systemPrompt(),
                 draft.openingMessage(), draft.accountName(), draft.model(), draft.temperature(),
                 draft.maxTokens(), draft.reasoningLevel(), draft.quickPhrasesJson(),
-                draft.builtin(), now, now);
+                draft.builtin(), now, now, draft.preset(), draft.protocol());
         try (PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO chat_assistant
                   (id, name, avatar, description, system_prompt, opening_message, account_name, model,
-                   temperature, max_tokens, reasoning_level, quick_phrases_json, is_builtin, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""")) {
+                   temperature, max_tokens, reasoning_level, quick_phrases_json, is_builtin,
+                   created_at, updated_at, preset, protocol)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""")) {
             bindAssistant(statement, assistant);
             statement.executeUpdate();
         }
@@ -351,6 +404,8 @@ public final class ChatStore implements AutoCloseable {
         statement.setInt(13, a.builtin() ? 1 : 0);
         statement.setLong(14, a.createdAt());
         statement.setLong(15, a.updatedAt());
+        statement.setString(16, a.preset());
+        statement.setString(17, a.protocol());
     }
 
     public synchronized Assistant updateAssistant(Assistant assistant) throws SQLException {
@@ -358,11 +413,13 @@ public final class ChatStore implements AutoCloseable {
                 assistant.description(), assistant.systemPrompt(), assistant.openingMessage(),
                 assistant.accountName(), assistant.model(), assistant.temperature(), assistant.maxTokens(),
                 assistant.reasoningLevel(), assistant.quickPhrasesJson(), assistant.builtin(),
-                assistant.createdAt(), System.currentTimeMillis());
+                assistant.createdAt(), System.currentTimeMillis(), assistant.preset(),
+                assistant.protocol());
         try (PreparedStatement statement = connection.prepareStatement("""
                 UPDATE chat_assistant SET name=?, avatar=?, description=?, system_prompt=?,
                   opening_message=?, account_name=?, model=?, temperature=?, max_tokens=?,
-                  reasoning_level=?, quick_phrases_json=?, updated_at=? WHERE id=?""")) {
+                  reasoning_level=?, quick_phrases_json=?, updated_at=?, preset=?, protocol=?
+                WHERE id=?""")) {
             statement.setString(1, updated.name());
             statement.setString(2, updated.avatar());
             statement.setString(3, updated.description());
@@ -377,7 +434,9 @@ public final class ChatStore implements AutoCloseable {
             statement.setString(10, updated.reasoningLevel());
             statement.setString(11, updated.quickPhrasesJson());
             statement.setLong(12, updated.updatedAt());
-            statement.setString(13, updated.id());
+            statement.setString(13, updated.preset());
+            statement.setString(14, updated.protocol());
+            statement.setString(15, updated.id());
             statement.executeUpdate();
         }
         return updated;
@@ -413,7 +472,8 @@ public final class ChatStore implements AutoCloseable {
         return createAssistant(new Assistant(UUID.randomUUID().toString(), source.name() + " 副本",
                 source.avatar(), source.description(), source.systemPrompt(), source.openingMessage(),
                 source.accountName(), source.model(), source.temperature(), source.maxTokens(),
-                source.reasoningLevel(), source.quickPhrasesJson(), false, 0, 0));
+                source.reasoningLevel(), source.quickPhrasesJson(), false, 0, 0,
+                source.preset(), source.protocol()));
     }
 
     // ------------------------------------------------------------ sessions --
@@ -626,6 +686,40 @@ public final class ChatStore implements AutoCloseable {
         }
     }
 
+    /// 标题是否仍由服务端自动生成；用户手动改名后置 false。
+    public synchronized boolean titleAuto(String id) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT title_auto FROM chat_session WHERE id=?")) {
+            statement.setString(1, id);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next() && rs.getInt(1) != 0;
+            }
+        }
+    }
+
+    public synchronized void setTitleAuto(String id, boolean auto) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "UPDATE chat_session SET title_auto=? WHERE id=?")) {
+            statement.setInt(1, auto ? 1 : 0);
+            statement.setString(2, id);
+            statement.executeUpdate();
+        }
+    }
+
+    /// 服务端标题只在会话还处于自动模式时写入，避免覆盖用户刚改的名字。
+    public synchronized void setTitleIfAuto(String id, String title) throws SQLException {
+        if (title == null || title.isBlank()) {
+            return;
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "UPDATE chat_session SET title=?, title_auto=0, updated_at=? WHERE id=? AND title_auto=1")) {
+            statement.setString(1, title.trim());
+            statement.setLong(2, System.currentTimeMillis());
+            statement.setString(3, id);
+            statement.executeUpdate();
+        }
+    }
+
     /// 删除会话，返回它的附件（调用方负责删除磁盘文件）。
     public synchronized List<Attachment> deleteSession(String id) throws SQLException {
         List<Attachment> attachments = attachmentsForSession(id);
@@ -805,6 +899,60 @@ public final class ChatStore implements AutoCloseable {
         }
     }
 
+    /// DeepSeek 官方协议的原生内容块（text / thinking / server tool / 结果）。
+    public synchronized void updateBlocks(String messageId, @Nullable String blocksJson)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "UPDATE chat_message SET blocks_json=? WHERE id=?")) {
+            statement.setString(1, blocksJson);
+            statement.setString(2, messageId);
+            statement.executeUpdate();
+        }
+    }
+
+    public synchronized @Nullable String blocksJson(String messageId) throws SQLException {
+        return stringColumn("blocks_json", messageId);
+    }
+
+    /// 展示用来源与工具轮次，形状与 `MessageItem` 现有的 `sources` / `tools` 对齐。
+    public synchronized void updateSources(String messageId, @Nullable String sourcesJson)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "UPDATE chat_message SET sources_json=? WHERE id=?")) {
+            statement.setString(1, sourcesJson);
+            statement.setString(2, messageId);
+            statement.executeUpdate();
+        }
+    }
+
+    public synchronized @Nullable String sourcesJson(String messageId) throws SQLException {
+        return stringColumn("sources_json", messageId);
+    }
+
+    public synchronized void updateLatestReminder(String messageId, @Nullable String reminder)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "UPDATE chat_message SET latest_reminder=? WHERE id=?")) {
+            statement.setString(1, reminder);
+            statement.setString(2, messageId);
+            statement.executeUpdate();
+        }
+    }
+
+    public synchronized @Nullable String latestReminder(String messageId) throws SQLException {
+        return stringColumn("latest_reminder", messageId);
+    }
+
+    private @Nullable String stringColumn(String column, String messageId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT " + column + " FROM chat_message WHERE id=?")) {
+            statement.setString(1, messageId);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next() ? rs.getString(column) : null;
+            }
+        }
+    }
+
     public synchronized void truncateAfter(String sessionId, String nodeId) throws SQLException {
         try (PreparedStatement ordinal = connection.prepareStatement(
                 "SELECT ordinal FROM chat_node WHERE id=? AND session_id=?")) {
@@ -961,6 +1109,28 @@ public final class ChatStore implements AutoCloseable {
             statement.setString(3, error);
             statement.setString(4, id);
             statement.executeUpdate();
+        }
+    }
+
+    public synchronized void setRemoteFile(String id, String fileId, @Nullable String purpose)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "UPDATE chat_attachment SET remote_file_id=?, remote_file_purpose=?, remote_uploaded_at=? WHERE id=?")) {
+            statement.setString(1, fileId);
+            statement.setString(2, purpose);
+            statement.setLong(3, System.currentTimeMillis());
+            statement.setString(4, id);
+            statement.executeUpdate();
+        }
+    }
+
+    public synchronized @Nullable String remoteFileId(String attachmentId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT remote_file_id FROM chat_attachment WHERE id=?")) {
+            statement.setString(1, attachmentId);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
+            }
         }
     }
 

@@ -56,6 +56,8 @@ public final class ChatEndpoints {
 
     public static final String OPENAI_COMPLETIONS = "openai-completions";
     public static final String ANTHROPIC_MESSAGES = "anthropic-messages";
+    /// DeepSeek 官方的 Anthropic 兼容扩展模式（服务端搜索 / 读链接 / 引用）。
+    public static final String DEEPSEEK_ANTHROPIC = "deepseek-anthropic";
 
     private static final Duration PROBE_TIMEOUT = Duration.ofSeconds(20);
     private static final String USER_AGENT = Metadata.NAME + "/" + Metadata.VERSION;
@@ -143,6 +145,26 @@ public final class ChatEndpoints {
         return new Profile(account.key(), protocol, base, modelsPath, chatPath, authStyle,
                 headers, models, saved == null ? null : saved.modelsFetchedAt(),
                 saved == null ? null : saved.lastProbeJson());
+    }
+
+    /// DeepSeek 官方预设使用的端点：复用账户的 base/key 与已有模型列表，但协议固定为
+    /// `deepseek-anthropic`，chat path 走 `/anthropic/v1/messages`。
+    public static Profile deepseekProfile(ChatStore store, DshAccount account) throws SQLException {
+        Profile normal = profile(store, account.key());
+        String base = normal != null && normal.base() != null && !normal.base().isBlank()
+                ? normal.base() : account.endpoint();
+        if (base == null || base.isBlank()) {
+            throw new IllegalArgumentException("account " + account.key() + " has no endpoint");
+        }
+        base = normalizeBase(base);
+        String modelsPath = normal != null && nonBlank(normal.modelsPath())
+                ? normal.modelsPath() : "/models";
+        return new Profile(account.key(), DEEPSEEK_ANTHROPIC, base, modelsPath,
+                "/anthropic/v1/messages", "bearer",
+                normal == null ? Map.of() : normal.extraHeaders(),
+                normal == null ? List.of() : normal.models(),
+                normal == null ? null : normal.modelsFetchedAt(),
+                normal == null ? null : normal.lastProbeJson());
     }
 
     /// 默认路径表。顺序：供应商特例 → 协议通用。返回 `{modelsPath, chatPath}`。

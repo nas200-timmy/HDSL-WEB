@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.chat;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.jackhuang.hmcl.dsh.DshAccount;
 import org.jackhuang.hmcl.web.event.EventBus;
@@ -26,6 +27,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -67,7 +69,7 @@ public final class ChatTurnManager {
     private record Resolved(
             String model, String account, ChatEndpoints.Profile profile,
             ChatProtocol protocol, ChatCapabilities.Capabilities capability,
-            ChatCapabilities.ReasoningMode reasoning) {
+            ChatCapabilities.ReasoningMode reasoning, boolean deepseek) {
     }
 
     private final ChatStore store;
@@ -75,7 +77,8 @@ public final class ChatTurnManager {
     private final EventBus bus;
     private final Map<String, ChatProtocol> protocols = Map.of(
             ChatEndpoints.OPENAI_COMPLETIONS, new OpenAiProtocol(),
-            ChatEndpoints.ANTHROPIC_MESSAGES, new AnthropicProtocol());
+            ChatEndpoints.ANTHROPIC_MESSAGES, new AnthropicProtocol(),
+            ChatEndpoints.DEEPSEEK_ANTHROPIC, new DeepseekProtocol());
     private final ExecutorService workers = Executors.newFixedThreadPool(4, runnable -> {
         Thread thread = new Thread(runnable, "chat-turn");
         thread.setDaemon(true);
@@ -163,8 +166,9 @@ public final class ChatTurnManager {
             }
             // 先搜后答：只有模型不会用工具时才由面板代搜。会工具的模型交给它自己决定搜什么，
             // 否则同一句话要花两份检索费。
-            delegated = search && resolved.capability.tools()
-                    && ChatSearchService.configured(settings);
+            delegated = resolved.deepseek()
+                    || (search && resolved.capability.tools()
+                        && ChatSearchService.configured(settings));
         }
         // The provider call can take the whole search timeout, so it must not hold
         // the manager lock: one slow provider would otherwise stall every other
@@ -188,7 +192,10 @@ public final class ChatTurnManager {
             if (userMessage == null) {
                 throw new ChatException(500, "store_error", "could not store the message");
             }
-            if (isUntitled(session.title())) {
+            if (resolved.deepseek()) {
+                store.updateLatestReminder(userMessage.id(), latestReminder());
+            }
+            if (isUntitled(session.title()) && store.titleAuto(sessionId)) {
                 store.updateSession(sessionId, titleOf(titleSource, ids), null, null, null);
             }
             ChatStore.Node assistantNode = store.beginAssistantNode(sessionId, resolved.model());
@@ -404,8 +411,23 @@ public final class ChatTurnManager {
         if (assistant == null) {
             throw new ChatException(409, "assistant_missing", "this session's assistant is gone");
         }
+        boolean deepseek = ChatEndpoints.DEEPSEEK_ANTHROPIC.equals(assistant.protocol());
+        if (deepseek && !settings.deepseekPresetEnabled()) {
+            throw new ChatException(409, "preset_disabled",
+                    "DeepSeek 官方预设助手已在聊天设置里关闭");
+        }
         String account = firstNonBlank(bodyAccount, session.accountName(), assistant.accountName(),
                 settings.defaultAccount());
+        if (deepseek) {
+            // 预设角色只认 DeepSeek 账户；没有就明确报错，不回落到其他供应商。
+            if (account == null || !isDeepseekAccount(account)) {
+                account = firstDeepseekAccount();
+            }
+            if (account == null) {
+                throw new ChatException(400, "no_deepseek_account",
+                        "这个助手固定使用 DeepSeek 官方协议，请先在账户页添加一个 DeepSeek 账户");
+            }
+        }
         if (account == null) {
             // 单用户面板的常见起点：没有给助手指定账户时，用第一个带 key 的账户。
             for (DshAccount candidate : ChatEndpoints.accounts()) {
@@ -415,7 +437,13 @@ public final class ChatTurnManager {
                 }
             }
         }
-        String model = firstNonBlank(bodyModel, session.model(), assistant.model(), settings.defaultModel());
+        String model;
+        if (deepseek) {
+            model = firstNonBlank(bodyModel, assistant.model(), "deepseek-flash");
+        } else {
+            model = firstNonBlank(bodyModel, session.model(), assistant.model(),
+                    settings.defaultModel());
+        }
         if (account == null) {
             throw new ChatException(400, "no_account",
                     "no account is configured for chat; add one on the accounts page first");
@@ -427,8 +455,12 @@ public final class ChatTurnManager {
         if (!dshAccount.carriesAKey()) {
             throw new ChatException(400, "account_has_no_key", "account " + account + " has no API key");
         }
+        if (deepseek && !isDeepseekAccount(dshAccount)) {
+            throw new ChatException(400, "preset_provider_mismatch",
+                    "这个助手只能使用 DeepSeek 账户和 DeepSeek 官方协议");
+        }
         if (model == null || model.isBlank()) {
-            model = dshAccount.modelOrDefault();
+            model = deepseek ? "deepseek-flash" : dshAccount.modelOrDefault();
         }
         if (model == null || model.isBlank()) {
             throw new ChatException(400, "no_model",
@@ -436,7 +468,8 @@ public final class ChatTurnManager {
         }
         ChatEndpoints.Profile profile;
         try {
-            profile = ChatEndpoints.profile(store, dshAccount.key());
+            profile = deepseek ? ChatEndpoints.deepseekProfile(store, dshAccount)
+                    : ChatEndpoints.profile(store, dshAccount.key());
             if (profile == null) {
                 throw new ChatException(500, "endpoint_error", "could not resolve the endpoint");
             }
@@ -456,7 +489,28 @@ public final class ChatTurnManager {
         }
         ChatCapabilities.ReasoningMode reasoning = ChatCapabilities.reasoningMode(
                 capability, profile.protocol(), profile.base(), model);
-        return new Resolved(model, dshAccount.key(), profile, protocol, capability, reasoning);
+        return new Resolved(model, dshAccount.key(), profile, protocol, capability, reasoning,
+                deepseek);
+    }
+
+    private static boolean isDeepseekAccount(DshAccount account) {
+        String vendor = account.vendorId() == null ? "" : account.vendorId();
+        String endpoint = account.endpoint() == null ? "" : account.endpoint();
+        return "deepseek".equalsIgnoreCase(vendor) || endpoint.contains("deepseek.com");
+    }
+
+    private static boolean isDeepseekAccount(String accountName) {
+        DshAccount account = ChatEndpoints.account(accountName);
+        return account != null && isDeepseekAccount(account);
+    }
+
+    private static @Nullable String firstDeepseekAccount() {
+        for (DshAccount account : ChatEndpoints.accounts()) {
+            if (account.carriesAKey() && isDeepseekAccount(account)) {
+                return account.key();
+            }
+        }
+        return null;
     }
 
     private String systemPrompt(ChatStore.Session session) throws SQLException {
@@ -470,12 +524,19 @@ public final class ChatTurnManager {
         turn.systemPrompt = systemPrompt;
         String provider = settings.searchProvider();
         boolean configured = ChatSearchService.configured(settings);
-        // 工具只在这三个条件同时成立时下发：用户开了搜索、key 配好了、模型声明支持 tools。
-        // 少一个就退回「先搜后答」或纯文本，免得把不认识的字段丢给端点换 400。
-        turn.toolEnabled = turn.searchEnabled && configured && turn.resolved.capability.tools();
-        turn.tools = turn.toolEnabled ? ChatSearchService.tools(settings) : List.of();
-        turn.declaration = ChatSearchService.declaration(provider, configured, turn.searchEnabled,
-                turn.toolEnabled, turn.preSearched);
+        if (turn.resolved.deepseek()) {
+            // 官方预设搜索/读链接由 DeepSeek 服务端执行，不走面板的客户端工具。
+            turn.toolEnabled = false;
+            turn.tools = List.of();
+            turn.declaration = "";
+        } else {
+            // 工具只在这三个条件同时成立时下发：用户开了搜索、key 配好了、模型声明支持 tools。
+            // 少一个就退回「先搜后答」或纯文本，免得把不认识的字段丢给端点换 400。
+            turn.toolEnabled = turn.searchEnabled && configured && turn.resolved.capability.tools();
+            turn.tools = turn.toolEnabled ? ChatSearchService.tools(settings) : List.of();
+            turn.declaration = ChatSearchService.declaration(provider, configured, turn.searchEnabled,
+                    turn.toolEnabled, turn.preSearched);
+        }
         ChatStore.Assistant assistant = assistantOf(turn);
         turn.temperature = assistant == null ? null : assistant.temperature();
         turn.maxTokens = assistant == null ? null : assistant.maxTokens();
@@ -484,6 +545,7 @@ public final class ChatTurnManager {
         String sessionLevel = session == null ? null : session.reasoningLevel();
         turn.reasoningLevel = sessionLevel != null ? sessionLevel
                 : assistant == null ? null : assistant.reasoningLevel();
+        turn.titleEnabled = turn.resolved.deepseek() && store.titleAuto(turn.sessionId);
         bySession.put(turn.sessionId, turn);
         byId.put(turn.id, turn);
         publishStarted(turn);
@@ -513,11 +575,27 @@ public final class ChatTurnManager {
                         turn.resolved.model(), system, messages, turn.temperature,
                         turn.maxTokens == null ? Math.min(turn.resolved.capability.maxOutput(), 8192)
                                 : turn.maxTokens,
-                        turn.reasoningLevel, turn.resolved.reasoning, turn.tools);
+                        turn.reasoningLevel, turn.resolved.reasoning, turn.tools,
+                        turn.searchEnabled, turn.titleEnabled);
                 HttpRequest httpRequest = turn.resolved.protocol.prepare(turn.resolved.profile, request);
                 HttpResponse<InputStream> response = client.send(httpRequest,
                         HttpResponse.BodyHandlers.ofInputStream());
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    if (response.statusCode() == 400 && turn.resolved.deepseek()
+                            && !turn.deepseekDowngraded) {
+                        // 扩展字段（搜索/标题）在个别 key 上不可用：先去搜索和标题重试一次，
+                        // 仍失败再把原始错误交给用户，不静默换成别的供应商。
+                        turn.deepseekDowngraded = true;
+                        turn.searchEnabled = false;
+                        turn.titleEnabled = false;
+                        try {
+                            response.body().close();
+                        } catch (IOException ignored) {
+                            // Nothing to release.
+                        }
+                        round--;
+                        continue;
+                    }
                     if (response.statusCode() == 400 && !turn.tools.isEmpty()
                             && !turn.toolDowngraded) {
                         // 有些中转站不认识 tools 字段，直接回 400。降级成纯提示词再试一次，
@@ -770,6 +848,9 @@ public final class ChatTurnManager {
 
     private List<ChatProtocol.ChatMessage> messages(List<ChatStore.Node> nodes, Resolved resolved)
             throws SQLException, ChatException, IOException {
+        if (resolved.deepseek()) {
+            return deepseekMessages(nodes, resolved);
+        }
         List<ChatProtocol.ChatMessage> messages = new ArrayList<>();
         for (int index = 0; index < nodes.size(); index++) {
             ChatStore.Node node = nodes.get(index);
@@ -810,6 +891,142 @@ public final class ChatTurnManager {
 
     /// 历史消息里模型读不了的附件直接省略，避免“换了个纯文本模型就整轮发不出去”。
     /// 当前这条消息的图片仍然报错，让用户明确知道是这一条的图片没被发送。
+    /// DeepSeek 官方预设的上下文：只回传正文与 read_link 的签名，搜索/思考不进历史。
+    /// 时间快照按 `latest_reminder` 角色插在对应提问前。
+    private List<ChatProtocol.ChatMessage> deepseekMessages(List<ChatStore.Node> nodes,
+                                                            Resolved resolved)
+            throws SQLException, ChatException, IOException {
+        List<ChatProtocol.ChatMessage> messages = new ArrayList<>();
+        String previousReminder = null;
+        for (ChatStore.Node node : nodes) {
+            ChatStore.Message message = node.active();
+            if (message == null) {
+                continue;
+            }
+            if ("user".equals(node.role())) {
+                String reminder = store.latestReminder(message.id());
+                if (reminder != null && !reminder.isBlank() && !reminder.equals(previousReminder)) {
+                    messages.add(new ChatProtocol.ChatMessage("latest_reminder", reminder,
+                            List.of()));
+                    previousReminder = reminder;
+                }
+                StringBuilder text = new StringBuilder(message.content() == null ? "" : message.content());
+                List<ChatProtocol.Attachment> attachments = new ArrayList<>();
+                for (ChatStore.Attachment attachment : message.attachments()) {
+                    String kind = attachment.kind() == null ? "text" : attachment.kind();
+                    if ("image".equals(kind)) {
+                        String remoteId = DeepseekFiles.ensure(store, resolved.profile, attachment);
+                        attachments.add(new ChatProtocol.Attachment(attachment.name(),
+                                attachment.mime(), kind, attachment.size(),
+                                Path.of(attachment.path()), null, remoteId));
+                    } else {
+                        String extracted = attachmentText(attachment);
+                        if (extracted != null && !extracted.isBlank()) {
+                            attachments.add(new ChatProtocol.Attachment(attachment.name(),
+                                    attachment.mime(), "text", attachment.size(),
+                                    Path.of(attachment.path()), extracted, null));
+                        }
+                    }
+                }
+                if (text.isEmpty() && attachments.isEmpty()) {
+                    continue;
+                }
+                messages.add(new ChatProtocol.ChatMessage("user", text.toString(), attachments));
+                continue;
+            }
+            if (!"assistant".equals(node.role())) {
+                continue;
+            }
+            if (!("done".equals(message.status()) || "stopped".equals(message.status()))) {
+                continue;
+            }
+            String blocksJson = store.blocksJson(message.id());
+            if (blocksJson == null || blocksJson.isBlank()) {
+                if (message.content() != null && !message.content().isBlank()) {
+                    messages.add(new ChatProtocol.ChatMessage("assistant", message.content(),
+                            List.of()));
+                }
+                continue;
+            }
+            List<JsonObject> blocks = replayBlocks(blocksJson);
+            if (!blocks.isEmpty()) {
+                messages.add(new ChatProtocol.ChatMessage("assistant", "", List.of(),
+                        List.of(), null, blocks));
+            }
+        }
+        if (messages.isEmpty()) {
+            messages.add(new ChatProtocol.ChatMessage("user", "", List.of()));
+        }
+        return messages;
+    }
+
+    /// 只保留能被服务端接受的块：正文（去引用标记）和带签名的 read_link。
+    private static List<JsonObject> replayBlocks(String blocksJson) {
+        JsonArray blocks;
+        try {
+            JsonElement parsed = com.google.gson.JsonParser.parseString(blocksJson);
+            if (!parsed.isJsonArray()) {
+                return List.of();
+            }
+            blocks = parsed.getAsJsonArray();
+        } catch (RuntimeException e) {
+            return List.of();
+        }
+        java.util.Set<String> signed = new java.util.HashSet<>();
+        for (JsonElement element : blocks) {
+            JsonObject block = objectOf(element);
+            if (block == null || !"web_fetch_tool_result".equals(stringOf(block, "type"))) {
+                continue;
+            }
+            String signature = stringOf(block, "signature");
+            if (!signature.isBlank()) {
+                String id = stringOf(block, "tool_use_id");
+                if (!id.isBlank()) {
+                    signed.add(id);
+                }
+            }
+        }
+        List<JsonObject> result = new ArrayList<>();
+        for (JsonElement element : blocks) {
+            JsonObject block = objectOf(element);
+            if (block == null) {
+                continue;
+            }
+            String type = stringOf(block, "type");
+            if ("text".equals(type)) {
+                String text = stringOf(block, "text")
+                        .replaceAll("\\[citation:\\d+\\]", "");
+                if (!text.isBlank()) {
+                    JsonObject copy = new JsonObject();
+                    copy.addProperty("type", "text");
+                    copy.addProperty("text", text);
+                    result.add(copy);
+                }
+            } else if ("server_tool_use".equals(type)) {
+                String kind = stringOf(block, "kind");
+                String id = stringOf(block, "id");
+                if ("read_link".equals(kind) && signed.contains(id)) {
+                    result.add(block);
+                }
+            } else if ("web_fetch_tool_result".equals(type)) {
+                String kind = stringOf(block, "kind");
+                String id = stringOf(block, "tool_use_id");
+                if ("read_link".equals(kind) && signed.contains(id)) {
+                    result.add(block);
+                }
+            }
+        }
+        return result;
+    }
+
+    private @Nullable String attachmentText(ChatStore.Attachment attachment) {
+        try {
+            return attachments.loadText(attachment);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     static boolean omitHistoricalAttachment(String kind, boolean vision, boolean current) {
         if (current) {
             return false;
@@ -990,6 +1207,259 @@ public final class ChatTurnManager {
 
     // --------------------------------------------------------------- sinks --
 
+    /// DeepSeek 内容块：正文/思考落块，服务端工具立刻转成 WS 事件与来源。
+    private void deepseekBlock(ActiveTurn turn, JsonObject block) {
+        if (block == null) {
+            return;
+        }
+        synchronized (turn.lock) {
+            if (turn.finished || turn.cancelled) {
+                return;
+            }
+            turn.blocks.add(block);
+        }
+        String type = stringOf(block, "type");
+        switch (type) {
+            case "text" -> textBlock(turn, block);
+            case "server_tool_use" -> serverToolUse(turn, block);
+            case "web_search_tool_result" -> searchResult(turn, block);
+            case "web_fetch_tool_result" -> fetchResult(turn, block);
+            default -> {
+                // Thinking blocks are already streamed; nothing else to emit.
+            }
+        }
+    }
+
+    private void textBlock(ActiveTurn turn, JsonObject block) {
+        JsonElement citations = block.get("citations");
+        if (citations == null || !citations.isJsonArray() || citations.getAsJsonArray().isEmpty()) {
+            return;
+        }
+        StringBuilder markers = new StringBuilder();
+        for (JsonElement element : citations.getAsJsonArray()) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject citation = element.getAsJsonObject();
+            String url = stringOf(citation, "url");
+            String title = stringOf(citation, "title");
+            if (url.isBlank()) {
+                continue;
+            }
+            int index = registerSource(turn, url, title, null, null, null, null);
+            markers.append("[citation:").append(index).append("]");
+        }
+        if (markers.isEmpty()) {
+            return;
+        }
+        // 先把已经缓冲的正文推给前端，引用角标必须排在它后面。
+        flush(turn, true);
+        synchronized (turn.lock) {
+            if (turn.finished || turn.cancelled) {
+                return;
+            }
+            turn.content.append(markers);
+        }
+        JsonObject event = event("chat-delta", turn);
+        event.addProperty("seq", ++turn.seq);
+        event.addProperty("text", markers.toString());
+        publish(turn.sessionId, event);
+        publishSources(turn);
+    }
+
+    private void serverToolUse(ActiveTurn turn, JsonObject block) {
+        String id = stringOf(block, "id");
+        String name = stringOf(block, "name");
+        JsonObject input = objectOf(block.get("input"));
+        String query = "";
+        String tool = "search";
+        if (input != null) {
+            if (input.has("query") && input.get("query").isJsonPrimitive()) {
+                query = input.get("query").getAsString();
+            } else if (input.has("queries") && input.get("queries").isJsonArray()) {
+                StringBuilder joined = new StringBuilder();
+                for (JsonElement element : input.getAsJsonArray("queries")) {
+                    if (element.isJsonPrimitive()) {
+                        if (!joined.isEmpty()) {
+                            joined.append(" / ");
+                        }
+                        joined.append(element.getAsString());
+                    }
+                }
+                query = joined.toString();
+            } else if (input.has("url") && input.get("url").isJsonPrimitive()) {
+                query = input.get("url").getAsString();
+            }
+        }
+        if (name.contains("read_url") || (input != null
+                && ("open_page".equals(stringOf(input, "action"))
+                    || "read_link".equals(stringOf(input, "action"))))
+                || "read_link".equals(stringOf(block, "kind"))) {
+            tool = "read_link";
+        }
+        if (!id.isBlank()) {
+            turn.serverQueries.put(id, query);
+        }
+        JsonObject event = event("chat-tool", turn);
+        event.addProperty("tool", tool);
+        event.addProperty("query", query);
+        event.addProperty("status", "running");
+        event.addProperty("provider", "deepseek");
+        publish(turn.sessionId, event);
+    }
+
+    private void searchResult(ActiveTurn turn, JsonObject block) {
+        String id = stringOf(block, "tool_use_id");
+        String kind = stringOf(block, "kind");
+        JsonArray hits = new JsonArray();
+        JsonElement content = block.get("content");
+        if (content != null && content.isJsonArray()) {
+            for (JsonElement element : content.getAsJsonArray()) {
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+                JsonObject item = element.getAsJsonObject();
+                if (!"web_search_result".equals(stringOf(item, "type"))) {
+                    continue;
+                }
+                String url = stringOf(item, "url");
+                String title = stringOf(item, "title");
+                String site = stringOf(item, "site_name");
+                String snippet = stringOf(item, "snippet");
+                String published = stringOf(item, "page_age");
+                String icon = stringOf(item, "site_icon");
+                int index = registerSource(turn, url, title, site, snippet, published, icon);
+                JsonObject hit = hit(url, title, site, snippet, published);
+                hit.addProperty("index", index);
+                hits.add(hit);
+            }
+        }
+        String query = turn.serverQueries.getOrDefault(id, "");
+        if (!hits.isEmpty()) {
+            JsonObject round = new JsonObject();
+            round.addProperty("query", query);
+            round.addProperty("provider", "deepseek");
+            round.add("hits", hits);
+            turn.sourceTools.add(round);
+        }
+        JsonObject event = event("chat-tool", turn);
+        event.addProperty("tool", "search");
+        event.addProperty("query", query);
+        event.addProperty("status", "done");
+        event.addProperty("provider", "deepseek");
+        event.addProperty("hits", hits.size());
+        JsonObject sources = new JsonObject();
+        sources.addProperty("query", query);
+        sources.addProperty("provider", "deepseek");
+        sources.add("hits", hits);
+        event.add("sources", sources);
+        publish(turn.sessionId, event);
+        publishSources(turn);
+    }
+
+    private void fetchResult(ActiveTurn turn, JsonObject block) {
+        String id = stringOf(block, "tool_use_id");
+        String kind = stringOf(block, "kind");
+        JsonObject content = objectOf(block.get("content"));
+        if (content == null || !"web_fetch_result".equals(stringOf(content, "type"))) {
+            return;
+        }
+        String url = stringOf(content, "url");
+        JsonObject document = objectOf(content.get("content"));
+        String title = document == null ? "" : stringOf(document, "title");
+        String published = stringOf(content, "published_at");
+        int index = registerSource(turn, url, title, null, null, published, null);
+        JsonObject hit = hit(url, title, null, null, published);
+        hit.addProperty("index", index);
+        JsonArray hits = new JsonArray();
+        hits.add(hit);
+        String query = turn.serverQueries.getOrDefault(id, url);
+        JsonObject round = new JsonObject();
+        round.addProperty("query", query);
+        round.addProperty("provider", "deepseek");
+        round.add("hits", hits);
+        turn.sourceTools.add(round);
+        JsonObject event = event("chat-tool", turn);
+        event.addProperty("tool", "read_link");
+        event.addProperty("query", query);
+        event.addProperty("status", "done");
+        event.addProperty("provider", "deepseek");
+        event.addProperty("hits", 1);
+        JsonObject sources = new JsonObject();
+        sources.addProperty("query", query);
+        sources.addProperty("provider", "deepseek");
+        sources.add("hits", hits);
+        event.add("sources", sources);
+        publish(turn.sessionId, event);
+        publishSources(turn);
+    }
+
+    private static JsonObject hit(String url, String title, @Nullable String site,
+                                  @Nullable String snippet, @Nullable String published) {
+        JsonObject hit = new JsonObject();
+        hit.addProperty("title", title == null || title.isBlank() ? url : title);
+        hit.addProperty("url", url);
+        if (site != null && !site.isBlank()) {
+            hit.addProperty("site", site);
+        }
+        if (snippet != null && !snippet.isBlank()) {
+            hit.addProperty("snippet", snippet);
+        }
+        if (published != null && !published.isBlank()) {
+            hit.addProperty("publishedAt", published);
+        }
+        return hit;
+    }
+
+    private int registerSource(ActiveTurn turn, String url, @Nullable String title,
+                               @Nullable String site, @Nullable String snippet,
+                               @Nullable String published, @Nullable String icon) {
+        if (url == null || url.isBlank()) {
+            return 0;
+        }
+        Integer existing = turn.sourceIndex.get(url);
+        if (existing != null) {
+            return existing;
+        }
+        int index = turn.sources.size() + 1;
+        JsonObject source = new JsonObject();
+        source.addProperty("index", index);
+        source.addProperty("url", url);
+        source.addProperty("title", title == null || title.isBlank() ? url : title);
+        if (site != null && !site.isBlank()) {
+            source.addProperty("site", site);
+        } else {
+            try {
+                source.addProperty("site", URI.create(url).getHost() == null
+                        ? "" : URI.create(url).getHost().replaceFirst("^www\\.", ""));
+            } catch (RuntimeException ignored) {
+                source.addProperty("site", "");
+            }
+        }
+        if (snippet != null && !snippet.isBlank()) {
+            source.addProperty("snippet", snippet);
+        }
+        if (published != null && !published.isBlank()) {
+            source.addProperty("publishedAt", published);
+        }
+        if (icon != null && !icon.isBlank()) {
+            source.addProperty("icon", icon);
+        }
+        turn.sources.add(source);
+        turn.sourceIndex.put(url, index);
+        return index;
+    }
+
+    private void publishSources(ActiveTurn turn) {
+        JsonObject event = event("chat-sources", turn);
+        event.add("sources", turn.sources.deepCopy());
+        publish(turn.sessionId, event);
+    }
+
+    private static JsonObject objectOf(@Nullable JsonElement element) {
+        return element != null && element.isJsonObject() ? element.getAsJsonObject() : null;
+    }
+
     private void text(ActiveTurn turn, String delta) {
         if (delta == null || delta.isEmpty()) {
             return;
@@ -1080,6 +1550,16 @@ public final class ChatTurnManager {
                 store.updateMessage(turn.messageId, turn.content.toString(), turn.reasoning.toString(),
                         status, usageJson(turn), false);
                 persistParts(turn);
+                persistDeepseek(turn);
+                if (turn.generatedTitle != null) {
+                    store.setTitleIfAuto(turn.sessionId, turn.generatedTitle);
+                    JsonObject titleEvent = event("chat-title", turn);
+                    titleEvent.addProperty("title", turn.generatedTitle);
+                    publish(turn.sessionId, titleEvent);
+                } else if (turn.titleEnabled) {
+                    // 这轮没拿到服务端标题就停止自动请求，避免以后每轮都带 title 字段。
+                    store.setTitleAuto(turn.sessionId, false);
+                }
                 store.touchSession(turn.sessionId);
             } catch (SQLException e) {
                 org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
@@ -1110,6 +1590,20 @@ public final class ChatTurnManager {
         JsonArray array = new JsonArray();
         all.forEach(array::add);
         store.updateParts(turn.messageId, array.toString());
+    }
+
+    /// DeepSeek 预设的原生块与来源；其他协议保持 NULL，避免给老消息塞空对象。
+    private void persistDeepseek(ActiveTurn turn) throws SQLException {
+        if (turn.blocks.isEmpty()) {
+            return;
+        }
+        store.updateBlocks(turn.messageId, turn.blocks.toString());
+        if (!turn.sources.isEmpty() || !turn.sourceTools.isEmpty()) {
+            JsonObject out = new JsonObject();
+            out.add("sources", turn.sources.deepCopy());
+            out.add("tools", turn.sourceTools.deepCopy());
+            store.updateSources(turn.messageId, out.toString());
+        }
     }
 
     private void flush(ActiveTurn turn, boolean force) {
@@ -1234,6 +1728,15 @@ public final class ChatTurnManager {
         return title == null || title.isBlank() || "新会话".equals(title);
     }
 
+    /// DeepSeek 的 `latest_reminder` 快照：日期、星期、来源与界面语言。
+    private static String latestReminder() {
+        LocalDate today = LocalDate.now();
+        String weekday = today.getDayOfWeek().getDisplayName(
+                java.time.format.TextStyle.FULL, Locale.getDefault());
+        String language = Locale.getDefault().toLanguageTag();
+        return today + "," + weekday + ",Web," + language;
+    }
+
     private static String titleOf(String text, List<String> attachmentIds) {
         String candidate = text == null ? "" : text.strip();
         if (candidate.isEmpty()) {
@@ -1322,6 +1825,9 @@ public final class ChatTurnManager {
         volatile boolean preSearched;
         volatile boolean toolEnabled;
         volatile boolean toolDowngraded;
+        volatile boolean titleEnabled;
+        volatile boolean deepseekDowngraded;
+        volatile String generatedTitle;
         volatile List<ChatProtocol.ToolSpec> tools = List.of();
         volatile String declaration = "";
         volatile List<ChatProtocol.ToolCall> pendingCalls = List.of();
@@ -1330,6 +1836,13 @@ public final class ChatTurnManager {
         final List<JsonObject> toolRounds = new java.util.concurrent.CopyOnWriteArrayList<>();
         /// 这一轮的完整链路：text / tool_calls / tool。仅在保留检索记录时非空。
         final List<JsonObject> parts = new java.util.ArrayList<>();
+        /// DeepSeek 原生内容块与展示来源；其他协议保持空。
+        final JsonArray blocks = new JsonArray();
+        final JsonArray sources = new JsonArray();
+        final JsonArray sourceTools = new JsonArray();
+        final Map<String, Integer> sourceIndex = new LinkedHashMap<>();
+        final Map<Integer, List<Integer>> blockCitations = new LinkedHashMap<>();
+        final Map<String, String> serverQueries = new LinkedHashMap<>();
 
         ActiveTurn(String sessionId, String nodeId, String messageId, Resolved resolved,
                    String sessionKey, int attemptNo) {
@@ -1373,6 +1886,18 @@ public final class ChatTurnManager {
                     return;
                 }
                 pendingCalls.addAll(calls);
+            }
+        }
+
+        @Override
+        public void block(JsonObject block) {
+            ChatTurnManager.this.deepseekBlock(this, block);
+        }
+
+        @Override
+        public void title(String title) {
+            if (title != null && !title.isBlank()) {
+                generatedTitle = title.trim();
             }
         }
 

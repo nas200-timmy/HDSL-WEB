@@ -108,6 +108,78 @@ class ChatStoreTest {
     }
 
     @Test
+    void seedsTheDeepSeekPresetWithItsProtocol(@TempDir Path data) throws Exception {
+        ChatStore store = new ChatStore(data);
+        try {
+            ChatStore.Assistant preset = store.assistant("deepseek-official");
+            assertNotNull(preset);
+            assertTrue(preset.builtin());
+            assertEquals("deepseek-official", preset.preset());
+            assertEquals(ChatEndpoints.DEEPSEEK_ANTHROPIC, preset.protocol());
+            assertEquals("DeepSeek 官方", preset.name());
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    void deepseekMessageSideDataRoundTrips(@TempDir Path data) throws Exception {
+        ChatStore store = new ChatStore(data);
+        try {
+            ChatStore.Session session = store.createSession("deepseek-official", "新会话", null, null);
+            ChatStore.Node user = store.appendUserNode(session.id(), "hello", null, List.of());
+            ChatStore.Message userMessage = user.active();
+            assertNotNull(userMessage);
+            store.updateLatestReminder(userMessage.id(), "2026-11-14,星期五,Web,zh-CN");
+
+            ChatStore.Node reply = store.beginAssistantNode(session.id(), "deepseek-flash");
+            ChatStore.Message assistant = reply.active();
+            assertNotNull(assistant);
+            store.updateBlocks(assistant.id(), "[{\"type\":\"text\",\"text\":\"hi\"}]");
+            store.updateSources(assistant.id(), "{\"sources\":[],\"tools\":[]}");
+
+            assertEquals("2026-11-14,星期五,Web,zh-CN", store.latestReminder(userMessage.id()));
+            assertEquals("[{\"type\":\"text\",\"text\":\"hi\"}]", store.blocksJson(assistant.id()));
+            assertEquals("{\"sources\":[],\"tools\":[]}", store.sourcesJson(assistant.id()));
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    void titleStopsBeingAutomaticAfterRenameOrGeneratedTitle(@TempDir Path data) throws Exception {
+        ChatStore store = new ChatStore(data);
+        try {
+            ChatStore.Session session = store.createSession("default", "新会话", null, null);
+            assertTrue(store.titleAuto(session.id()));
+            store.setTitleIfAuto(session.id(), "服务端标题");
+            assertEquals("服务端标题", store.session(session.id()).title());
+            assertFalse(store.titleAuto(session.id()));
+
+            ChatStore.Session second = store.createSession("default", "新会话", null, null);
+            store.setTitleAuto(second.id(), false);
+            assertFalse(store.titleAuto(second.id()));
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    void remoteFileIdIsCachedPerAttachment(@TempDir Path data) throws Exception {
+        ChatStore store = new ChatStore(data);
+        try {
+            ChatStore.Session session = store.createSession("deepseek-official", "t", null, null);
+            ChatStore.Attachment attachment = store.addAttachment(session.id(), null,
+                    "a.png", "image/png", "image", 3, "sha", "/tmp/a.png", null, "done", null);
+            assertNull(store.remoteFileId(attachment.id()));
+            store.setRemoteFile(attachment.id(), "file_123", null);
+            assertEquals("file_123", store.remoteFileId(attachment.id()));
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
     void reopeningKeepsTheDataAndInterruptsStreaming(@TempDir Path data) throws Exception {
         String sessionId;
         ChatStore store = new ChatStore(data);

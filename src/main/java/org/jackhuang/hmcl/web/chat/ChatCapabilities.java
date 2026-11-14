@@ -106,6 +106,11 @@ public final class ChatCapabilities {
                     Math.max(1_024, min), max > 0 ? Math.min(max, 32_768) : 32_768,
                     entry == null ? "vendor" : "catalog");
         }
+        // DeepSeek 官方扩展模式只认 thinking.type 开关，不暴露预算或 effort 挡位。
+        if (ChatEndpoints.DEEPSEEK_ANTHROPIC.equals(protocol)) {
+            return new ReasoningMode("toggle", true, List.of(), 0, 0,
+                    "vendor");
+        }
         // 智谱只认 thinking.type 开关
         if (endpoint.contains("bigmodel") || endpoint.contains("zhipu")) {
             return new ReasoningMode("toggle", true, List.of(), 0, 0,
@@ -168,6 +173,10 @@ public final class ChatCapabilities {
     }
 
     private static Capabilities preset(String protocol, String model) {
+        if (ChatEndpoints.DEEPSEEK_ANTHROPIC.equals(protocol)) {
+            // 官方扩展模式：图片走 Files API，文档按抽取文本发送；服务端工具可用。
+            return new Capabilities(true, false, true, true, 1_000_000, 64_000, "vendor");
+        }
         if ("anthropic-messages".equals(protocol)) {
             boolean reasoning = model.contains("claude-3-7") || model.contains("claude-4")
                     || model.contains("claude-sonnet-4") || model.contains("thinking");

@@ -114,6 +114,9 @@ public final class ChatService {
     public JsonArray assistants() throws SQLException {
         JsonArray result = new JsonArray();
         for (ChatStore.Assistant assistant : store.assistants()) {
+            if (assistant.preset() != null && !settings.deepseekPresetEnabled()) {
+                continue;
+            }
             result.add(assistantJson(assistant));
         }
         return result;
@@ -136,6 +139,8 @@ public final class ChatService {
         addNullable(json, "reasoningLevel", assistant.reasoningLevel());
         json.add("quickPhrases", parseArray(assistant.quickPhrasesJson()));
         json.addProperty("builtin", assistant.builtin());
+        addNullable(json, "preset", assistant.preset());
+        addNullable(json, "protocol", assistant.protocol());
         json.addProperty("createdAt", assistant.createdAt());
         json.addProperty("updatedAt", assistant.updatedAt());
         return json;
@@ -275,7 +280,7 @@ public final class ChatService {
                 nullable(body, "account"), nullable(body, "model"),
                 doubleValue(body, "temperature"), intValue(body, "maxTokens"),
                 nullable(body, "reasoningLevel"), arrayJson(body, "quickPhrases"),
-                false, 0, 0);
+                false, 0, 0, null, null);
         ChatStore.Assistant created = store.createAssistant(draft);
         pruneAvatars();
         return created;
@@ -302,7 +307,10 @@ public final class ChatService {
                 body.has("maxTokens") ? intValue(body, "maxTokens") : current.maxTokens(),
                 body.has("reasoningLevel") ? nullable(body, "reasoningLevel") : current.reasoningLevel(),
                 body.has("quickPhrases") ? arrayJson(body, "quickPhrases") : current.quickPhrasesJson(),
-                current.builtin(), current.createdAt(), current.updatedAt());
+                current.builtin(), current.createdAt(), current.updatedAt(),
+                current.preset(),
+                current.preset() != null && body.has("protocol")
+                        ? protocol(body) : current.protocol());
         ChatStore.Assistant saved = store.updateAssistant(updated);
         pruneAvatars();
         return saved;
@@ -334,6 +342,13 @@ public final class ChatService {
 
     public JsonArray sessions(@Nullable String assistantId) throws SQLException {
         JsonArray result = new JsonArray();
+        if (assistantId != null) {
+            ChatStore.Assistant assistant = store.assistant(assistantId);
+            if (assistant != null && assistant.preset() != null
+                    && !settings.deepseekPresetEnabled()) {
+                return result;
+            }
+        }
         for (ChatStore.SessionSummary summary : store.sessions(assistantId)) {
             JsonObject json = new JsonObject();
             json.addProperty("id", summary.id());
@@ -380,6 +395,10 @@ public final class ChatService {
         String model = firstNonBlank(nullable(body, "model"), assistant.model(), settings.defaultModel());
         String account = firstNonBlank(nullable(body, "account"), assistant.accountName(),
                 settings.defaultAccount());
+        if (assistant.preset() != null) {
+            account = deepseekAccount();
+            model = firstNonBlank(nullable(body, "model"), assistant.model(), "deepseek-flash");
+        }
         ChatStore.Session session = store.createSession(assistantId, title, model, account);
         if (body.has("reasoningLevel")) {
             String level = string(body, "reasoningLevel", "");
@@ -406,6 +425,9 @@ public final class ChatService {
         String account = body.has("account") ? string(body, "account", "") : null;
         String reasoningLevel = body.has("reasoningLevel") ? string(body, "reasoningLevel", "") : null;
         store.updateSession(id, title, model, account, reasoningLevel);
+        if (body.has("title")) {
+            store.setTitleAuto(id, false);
+        }
         broadcast("chat-sessions-changed", id);
         return sessionJson(id);
     }
@@ -719,6 +741,7 @@ public final class ChatService {
         json.addProperty("searchProvider", current.searchProvider());
         json.addProperty("searchMaxResults", current.searchMaxResults());
         json.addProperty("persistToolTrail", current.persistToolTrail());
+        json.addProperty("deepseekPresetEnabled", current.deepseekPresetEnabled());
         addNullable(json, "searchKeyMasked", maskKey(current.searchKey(current.searchProvider())));
         addNullable(json, "defaultAccount", current.defaultAccount());
         addNullable(json, "defaultModel", current.defaultModel());
@@ -741,7 +764,26 @@ public final class ChatService {
         json.addProperty("configured", configured);
         json.addProperty("maxResults", current.searchMaxResults());
         addNullable(json, "keyMasked", maskKey(current.searchKey(provider)));
+        json.addProperty("deepseekPresetEnabled", current.deepseekPresetEnabled());
+        String deepseek = deepseekAccount();
+        json.addProperty("deepseekReady", deepseek != null);
+        addNullable(json, "deepseekAccount", deepseek);
         return json;
+    }
+
+    /// 第一个带 key 的 DeepSeek 账户；预设角色用它，不依赖面板的搜索 provider。
+    public @Nullable String deepseekAccount() {
+        for (DshAccount account : ChatEndpoints.accounts()) {
+            if (!account.carriesAKey()) {
+                continue;
+            }
+            String vendor = account.vendorId() == null ? "" : account.vendorId();
+            String endpoint = account.endpoint() == null ? "" : account.endpoint();
+            if ("deepseek".equalsIgnoreCase(vendor) || endpoint.contains("deepseek.com")) {
+                return account.key();
+            }
+        }
+        return null;
     }
 
     /// 设置页的「测试搜索」：真跑一次，返回前几条结果。
@@ -956,6 +998,29 @@ public final class ChatService {
                 // Ignore a malformed usage blob.
             }
         }
+        if (message.id() != null) {
+            String rawSources;
+            try {
+                rawSources = store.sourcesJson(message.id());
+            } catch (SQLException e) {
+                rawSources = null;
+            }
+            if (rawSources != null) {
+                try {
+                    JsonObject sources = JsonParser.parseString(rawSources).getAsJsonObject();
+                JsonElement hits = sources.get("sources");
+                if (hits != null && hits.isJsonArray() && !hits.getAsJsonArray().isEmpty()) {
+                    json.add("sources", hits);
+                }
+                JsonElement tools = sources.get("tools");
+                if (tools != null && tools.isJsonArray() && !tools.getAsJsonArray().isEmpty()) {
+                    json.add("tools", tools);
+                }
+            } catch (RuntimeException ignored) {
+                    // Ignore a malformed sources blob.
+                }
+            }
+        }
         JsonArray attachments = new JsonArray();
         for (ChatStore.Attachment attachment : message.attachments()) {
             attachments.add(attachmentJson(attachment, false));
@@ -1038,5 +1103,20 @@ public final class ChatService {
             }
         }
         return null;
+    }
+
+    /// 助手可以固定协议；只接受 v1 认识的三种，空值表示跟随账户配置。
+    private static @Nullable String protocol(JsonObject body) throws ChatException {
+        String value = nullable(body, "protocol");
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim();
+        if (!ChatEndpoints.OPENAI_COMPLETIONS.equals(normalized)
+                && !ChatEndpoints.ANTHROPIC_MESSAGES.equals(normalized)
+                && !ChatEndpoints.DEEPSEEK_ANTHROPIC.equals(normalized)) {
+            throw new ChatException(400, "invalid_protocol", "unknown chat protocol: " + value);
+        }
+        return normalized;
     }
 }

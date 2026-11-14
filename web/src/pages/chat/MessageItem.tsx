@@ -151,7 +151,7 @@ export function MessageItem({
         )}
         {content ? (
           <div className="chat-bubble">
-            <Markdown content={content} streaming={streaming} citations={citations} />
+            <Markdown content={content} streaming={streaming} citations={citations} sources={message.sources} />
             {streaming && <span className="chat-cursor" />}
           </div>
         ) : streaming ? (

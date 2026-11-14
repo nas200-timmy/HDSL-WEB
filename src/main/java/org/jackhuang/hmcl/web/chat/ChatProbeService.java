@@ -75,7 +75,8 @@ public final class ChatProbeService {
     private final Path dataDir;
     private final Map<String, ChatProtocol> protocols = Map.of(
             ChatEndpoints.OPENAI_COMPLETIONS, new OpenAiProtocol(),
-            ChatEndpoints.ANTHROPIC_MESSAGES, new AnthropicProtocol());
+            ChatEndpoints.ANTHROPIC_MESSAGES, new AnthropicProtocol(),
+            ChatEndpoints.DEEPSEEK_ANTHROPIC, new DeepseekProtocol());
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(20))
             .followRedirects(HttpClient.Redirect.NEVER)

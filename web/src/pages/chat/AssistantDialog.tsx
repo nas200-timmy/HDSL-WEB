@@ -62,7 +62,11 @@ export function AssistantDialog({
   }, [open, assistant]);
 
   const patch = (key: keyof typeof EMPTY, value: string) => setForm((current) => ({ ...current, [key]: value }));
-  const selectedAccount = accounts.find((item) => item.name === form.account) ?? null;
+  const preset = assistant?.preset === "deepseek-official";
+  const visibleAccounts = preset
+    ? accounts.filter((item) => item.vendor === "deepseek" || (item.endpoint ?? "").includes("deepseek.com"))
+    : accounts;
+  const selectedAccount = visibleAccounts.find((item) => item.name === form.account) ?? null;
   const models = selectedAccount?.modelList ?? [];
 
   const save = async () => {
@@ -152,6 +156,12 @@ export function AssistantDialog({
         </div>
       }
     >
+      {preset && (
+        <p className="chat-settings-desc">
+          这是 DeepSeek 官方预设角色：固定使用 DeepSeek 官方协议（深度思考、官方联网搜索、读链接与来源引用），
+          只能选择 DeepSeek 账户；复制出来的角色也保持这个限制。
+        </p>
+      )}
       <div className="chat-form-grid">
         <div className="form-row">
           <span className="form-label">头像</span>
@@ -216,7 +226,7 @@ export function AssistantDialog({
             }}
           >
             <option value="">跟随聊天默认</option>
-            {accounts.map((account) => (
+            {visibleAccounts.map((account) => (
               <option key={account.name} value={account.name}>{account.label || account.name}</option>
             ))}
           </select>
@@ -301,6 +311,19 @@ export function AssistantManagerDialog({
     }
   };
 
+  const duplicate = async (assistant: ChatAssistant) => {
+    setBusy(true);
+    try {
+      await api.chat.duplicateAssistant(assistant.id);
+      toast("success", "已复制为一个新的 DeepSeek 角色");
+      onChanged();
+    } catch (error) {
+      toast("error", `复制失败：${errMsg(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
       <Dialog
@@ -327,6 +350,7 @@ export function AssistantManagerDialog({
                 <div>
                   {assistant.name}
                   {assistant.builtin && <span className="tag plain" style={{ marginLeft: 6 }}>内置</span>}
+                  {assistant.preset && <span className="tag plain" style={{ marginLeft: 6 }}>DeepSeek 官方</span>}
                 </div>
                 <div className="chat-assistant-row-sub">
                   {assistant.description || (assistant.systemPrompt ? "有系统提示词" : "没有系统提示词")}
@@ -334,6 +358,11 @@ export function AssistantManagerDialog({
                 </div>
               </div>
               <button className="btn btn-text" onClick={() => onEdit(assistant)}>编辑</button>
+              {assistant.preset && (
+                <button className="btn btn-text" disabled={busy} onClick={() => void duplicate(assistant)}>
+                  复制为角色
+                </button>
+              )}
               {!assistant.builtin && (
                 <button className="btn btn-text danger" onClick={() => setDeleteTarget(assistant)}>删除</button>
               )}
