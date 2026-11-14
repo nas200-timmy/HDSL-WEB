@@ -69,6 +69,10 @@ class NodeArtifactNamingTest {
                 () -> NodeRuntimeManager.platformTag(Platform.WINDOWS_X86));
         assertThrows(DshException.class,
                 () -> NodeRuntimeManager.platformTag(Platform.LINUX_RISCV64));
+        // FreeBSD used to fall into the `default` branch and hand out `linux-x64`,
+        // i.e. an ELF the system then could not exec. It must refuse instead.
+        assertThrows(DshException.class,
+                () -> NodeRuntimeManager.platformTag(Platform.FREEBSD_X86_64));
         assertThrows(DshException.class,
                 () -> NodeRuntimeManager.platformTag(
                         new Platform(OperatingSystem.MACOS, Architecture.X86)));

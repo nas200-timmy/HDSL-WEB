@@ -107,6 +107,14 @@ public final class NodeRuntimeManager {
                 default -> throw new DshException(
                         "Node.js publishes no build for " + platform.arch() + " on macOS");
             };
+            // FreeBSD is not "Linux with a different name": nodejs.org publishes no
+            // FreeBSD archive, so the old `default` branch would download a Linux ELF,
+            // unpack it, register it as installed and then fail to exec it. Refuse
+            // here instead, and point at the package that does work.
+            case FREEBSD -> throw new DshException(
+                    "Node.js publishes no FreeBSD build; install node and pnpm from"
+                            + " packages (pkg install node npm), and the panel will use them"
+                            + " from PATH instead of a managed runtime");
             default -> switch (platform.arch()) {
                 case X86_64 -> "linux-x64";
                 case ARM64 -> "linux-arm64";

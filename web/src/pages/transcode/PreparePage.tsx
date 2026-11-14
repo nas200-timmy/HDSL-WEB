@@ -275,7 +275,7 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
   return (
     <div style={{ display: "grid", gap: 8 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div style={{ flex: "2 1 420px", minWidth: 0, width: "100%" }}>
+        <div className="tc-prepare-main">
           <MediaBrowserPanel
             selected={selected?.path}
             onSelect={(entry) => void select(entry)}
@@ -288,7 +288,7 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
           />
         </div>
 
-        <div style={{ flex: "1 1 300px", minWidth: 0, display: "grid", gap: 8 }}>
+        <div className="tc-prepare-side">
           <HelpNote title="准备文件怎么用">
             <ul>
               <li>左边点文件「加入」，或点文件夹「添加」；也可以「添加当前文件夹」，会递归收集视频/音频。</li>
@@ -357,10 +357,10 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
                 </div>
               )}
               <label style={{ fontSize: 12 }}>输出目录</label>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                 <input
                   className="input"
-                  style={{ flex: 1, minWidth: 0 }}
+                  style={{ flex: "1 1 140px", minWidth: 0 }}
                   value={outputDir}
                   disabled={busy}
                   placeholder="留空 = 每个源文件旁边"
@@ -424,7 +424,10 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
       </div>
 
       <div className="card">
-        <div className="tc-card-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div
+          className="tc-card-title"
+          style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", rowGap: 6 }}
+        >
           待转码列表（{staged.length}）
           <span style={{ flex: 1 }} />
           {scanning && <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>扫描中…</span>}

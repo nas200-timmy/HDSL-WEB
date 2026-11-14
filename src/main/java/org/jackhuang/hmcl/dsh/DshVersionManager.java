@@ -231,6 +231,19 @@ public final class DshVersionManager {
         return releases;
     }
 
+    /// Whether DeepSeek Harness can run on a platform.
+    ///
+    /// FreeBSD is refused because of an upstream native dependency, not because of
+    /// anything in this class: `node-addon-require-builtin` ships no FreeBSD binary,
+    /// its source has no FreeBSD context reader, and `dsh-app-boot` calls it while
+    /// installing the profile resolver.
+    ///
+    /// @param os the platform the panel runs on
+    /// @return `false` on FreeBSD, `true` everywhere else
+    static boolean installableOn(org.jackhuang.hmcl.util.platform.OperatingSystem os) {
+        return os != org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD;
+    }
+
     /// Writes the manifest npm installs from.
     ///
     /// The launcher states its dependencies rather than letting npm pick them,
@@ -758,6 +771,19 @@ public final class DshVersionManager {
         Path target = instance.dshDirectory();
         Path flag = installingFlag(instance);
         Path previous = previousDirectory(instance);
+
+        // FreeBSD: dsh 0.2.x cannot boot there. Its `node-addon-require-builtin`
+        // native addon has no FreeBSD build, the addon's own platform reader
+        // answers "unsupported" for FreeBSD, and dsh-app-boot calls it
+        // unconditionally while installing the profile resolver — the process
+        // dies before the panel can talk to it. Failing here saves the download
+        // and a dependency tree that can never run.
+        if (!installableOn(org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS)) {
+            throw new DshException("DeepSeek Harness cannot run on FreeBSD: its "
+                    + "node-addon-require-builtin native addon has no FreeBSD build and "
+                    + "dsh-app-boot requires it at startup. Use a brand instance or "
+                    + "another host instead.");
+        }
 
         DshNodeRuntime runtime = requireRuntimeWithPnpm();
         requireSupportedNode(runtime);

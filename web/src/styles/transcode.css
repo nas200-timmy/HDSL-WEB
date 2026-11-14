@@ -1057,6 +1057,11 @@
   min-width: 0;
 }
 
+.tc-media-head .tc-media-path {
+  flex: 1;
+  min-width: 0;
+}
+
 .tc-media-grid {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
@@ -1378,4 +1383,210 @@
   font-size: 11px;
   line-height: 1.4;
   color: var(--monet-on-surface-variant);
+}
+
+/* ── 手机/窄屏：三栏工作台拆成单栏，表格行允许换行 ─────────────────── */
+
+/* PreparePage：两列在桌面按内容分配，窄屏由下面的媒体查询各占一整行。
+   放在这里而不是内联，是因为媒体查询需要覆盖 flex 值。 */
+.tc-prepare-main {
+  flex: 2 1 420px;
+  min-width: 0;
+  width: 100%;
+}
+
+.tc-prepare-side {
+  flex: 1 1 300px;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+@media (max-width: 760px), (max-height: 520px) {
+  .tc-prepare-main,
+  .tc-prepare-side {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  /* 参数面板：左栏改成横向 chip 条，编辑器与实时命令行上下堆叠 */
+  .tc-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tc-section-nav {
+    grid-column: auto;
+    grid-row: auto;
+    position: static;
+    flex-direction: row;
+    gap: 4px;
+    padding: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    touch-action: pan-x;
+    overscroll-behavior-x: contain;
+  }
+
+  .tc-section-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tc-nav-item {
+    flex: none;
+    white-space: nowrap;
+    min-height: 36px;
+    padding: 8px 12px;
+    border-radius: 18px;
+  }
+
+  .tc-nav-divider {
+    display: none;
+  }
+
+  .tc-editor {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .tc-editor-head {
+    position: static;
+  }
+
+  .tc-editor-title {
+    flex-wrap: wrap;
+  }
+
+  .tc-name {
+    max-width: none;
+    width: 100%;
+  }
+
+  .tc-inspector {
+    grid-column: auto;
+    position: static;
+  }
+
+  .tc-command-card {
+    max-height: none;
+  }
+
+  .tc-command {
+    max-height: 40vh;
+  }
+
+  .tc-fields-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tc-overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tc-manage-body {
+    grid-template-columns: 1fr;
+  }
+
+  .tc-manage-list {
+    max-height: 240px;
+    border-right: 0;
+    border-bottom: 1px solid var(--monet-outline-variant);
+    padding-right: 0;
+  }
+
+  .tc-card-title {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .tc-queue-body {
+    grid-template-columns: 1fr;
+  }
+
+  .tc-queue-detail {
+    position: static;
+    max-height: none;
+  }
+
+  .tc-queue-head {
+    align-items: flex-start;
+  }
+
+  .tc-queue-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .tc-queue-row {
+    grid-template-columns: 18px 34px minmax(0, 1fr);
+    gap: 6px 8px;
+    align-items: start;
+  }
+
+  .tc-queue-check {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .tc-seq {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .tc-queue-main {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .tc-queue-metrics {
+    grid-column: 3;
+    grid-row: 2;
+    grid-template-columns: repeat(3, auto);
+    gap: 0 10px;
+    text-align: left;
+  }
+
+  .tc-queue-row-actions {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    justify-content: flex-end;
+  }
+
+  .tc-detail-grid > span:nth-child(even) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .tc-media-grid {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .tc-media .tlli,
+  .tc-media-browser .tlli {
+    gap: 6px;
+  }
+
+  .tc-media .tlli .tlli-text,
+  .tc-media-browser .tlli .tlli-text {
+    padding-left: 0;
+  }
+
+  .tc-media-head {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .tc-media-head .tc-media-path {
+    flex: 1 1 100%;
+  }
+
+  /* 工具页的卡片在窄屏各占一行，别再挤成两列 */
+  .tc-tool-row {
+    flex-direction: column;
+  }
+
+  .tc-tool-card {
+    flex: 1 1 100% !important;
+    min-width: 0 !important;
+  }
 }

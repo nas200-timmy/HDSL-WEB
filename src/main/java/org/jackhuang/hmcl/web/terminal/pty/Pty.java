@@ -62,7 +62,8 @@ public interface Pty extends AutoCloseable {
     static Pty spawn(List<String> command, Path cwd, Map<String, String> environment, PtySize size)
             throws IOException {
         OperatingSystem os = OperatingSystem.CURRENT_OS;
-        if (os == OperatingSystem.LINUX || os == OperatingSystem.MACOS) {
+        if (os == OperatingSystem.LINUX || os == OperatingSystem.MACOS
+                || os == OperatingSystem.FREEBSD) {
             return PosixPty.spawn(command, cwd, environment, size);
         }
         if (os == OperatingSystem.WINDOWS) {

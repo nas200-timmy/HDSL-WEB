@@ -980,3 +980,78 @@ Windows 上注意：
   这里有边界。
 - 不做"给 agent 少一点权限但还能干活"的中间态：它要么能写自己的 home（那就一样能写面板数据，
   只要同 uid），要么根本跑不起来。
+
+## 12. FreeBSD（裸 jar，实验）
+
+面板是单 jar，FreeBSD 上用系统 JDK 21 + 系统 Node/pnpm 就能跑；没有官方容器镜像，也不在
+CI 的构建矩阵里——属于「能用，但没纳入发布验收」的平台。
+
+已验证（FreeBSD 15.1 + openjdk21，amd64）：
+
+| 能力 | 状态 |
+|---|---|
+| 面板、登录、设置、品牌列表 | 正常 |
+| 交互式终端（Web Shell） | **支持**：`Pty.spawn` 走 `PosixPty`（`openpty` + `posix_spawn`），真机验证 openpty / resize / stdin / 退出码 |
+| 转码 | 正常（ffmpeg 软件编码；没有 GPU 直通） |
+| 托管 Node | **不可用**：nodejs.org 不发布 FreeBSD 构建，面板会明确拒绝，不会下载 Linux ELF；用系统 Node |
+| dsh 实例 | **不可用**：`node-addon-require-builtin` 原生模块没有 FreeBSD 构建，上游源码也没有 FreeBSD 的 context reader，而 `dsh-app-boot` 启动时强依赖它；面板会直接拒绝安装 |
+| opencode | **不可安装**：上游只发布 Linux / macOS / Windows 的二进制包，没有 FreeBSD 构建；品牌页会直接给出原因 |
+| ZCode | **不可构建**：构建要装 Electron 桌面端，而 Electron 没有 FreeBSD 构建；实验性品类在 FreeBSD 上直接拒绝 |
+| Minecraft 控制台 | pipe（日志 + 命令框），不是 PTY；启动横幅会写「PTY console not enabled」 |
+| 系统指标页 | 大部分为空：CPU / 磁盘 / 网络 / GPU 依赖 `/proc`、`/sys`，FreeBSD 默认不挂 procfs |
+| uid 分离 | 不支持（`Privileges` 只在 Linux/macOS 实现），面板与 agent 同用户 |
+
+这张表在面板里也有一份：**设置 → 通用 → 平台兼容性**（`GET /api/system/platform`），
+显示当前内核版本、整体结论和逐项差异；`procfs` 是否挂载会在运行时探测（挂了就不再报
+「系统指标为空」）。未纳入发布验收的平台（FreeBSD / UNKNOWN）才会展开这张卡。
+
+准备：
+
+```sh
+pkg install openjdk21 node npm python3 ffmpeg gmake
+# node 版本由 ports 决定；pnpm 可用 corepack 或 npm i -g pnpm
+```
+
+开机自启可以用 rc.d，把下面这段存成 `/usr/local/etc/rc.d/hdsl_web`（`chmod +x`）：
+
+```sh
+#!/bin/sh
+# PROVIDE: hdsl_web
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+. /etc/rc.subr
+name=hdsl_web
+rcvar=hdsl_web_enable
+pidfile="/home/dev/hdsl/hdsl.pid"
+load_rc_config $name
+: ${hdsl_web_enable:="NO"}
+
+start_cmd="${name}_start"
+stop_cmd="${name}_stop"
+status_cmd="${name}_status"
+
+hdsl_web_start() {
+    /usr/bin/su dev -c "cd /home/dev && HOME=/home/dev \
+      PATH=/home/dev/hdsl/bin:/usr/local/bin:/usr/bin:/bin \
+      HDSL_DATA=/home/dev/hdsl/data HDSL_PORT=3080 \
+      nohup /usr/local/bin/java -jar /home/dev/hdsl-web.jar \
+      >> /home/dev/hdsl/hdsl.log 2>&1 & echo \$! > /home/dev/hdsl/hdsl.pid"
+}
+hdsl_web_stop() {
+    [ -s "${pidfile}" ] && kill "$(cat "${pidfile}")" 2>/dev/null
+    sleep 2
+    [ -s "${pidfile}" ] && kill -9 "$(cat "${pidfile}")" 2>/dev/null
+    rm -f "${pidfile}"
+}
+hdsl_web_status() {
+    if [ -s "${pidfile}" ] && kill -0 "$(cat "${pidfile}")" 2>/dev/null; then
+        echo "${name} is running as pid $(cat "${pidfile}")."
+    else
+        echo "${name} is not running."
+        return 1
+    fi
+}
+run_rc_command "$1"
+```
+
+升级：停服务 → 覆盖 `/home/dev/hdsl-web.jar` → 起服务。`/data` 不动。

@@ -89,8 +89,8 @@ export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
-        <div className="card" style={{ flex: "1 1 300px", minWidth: 280 }}>
+      <div className="tc-tool-row" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div className="card tc-tool-card" style={{ flex: "1 1 300px", minWidth: 280 }}>
           <div className="comp-row"><span className="comp-label">合并</span><span className="comp-value">concat · copy</span></div>
           <p className="tc-tool-desc">把多个完整文件按顺序拼成一个；编码/分辨率/音轨布局要一致，直接 copy 不重编码。</p>
           <div style={{ display: "grid", gap: 5, padding: "4px 8px 8px" }}>
@@ -105,7 +105,7 @@ export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
           </div>
         </div>
 
-        <div className="card" style={{ flex: "1 1 300px", minWidth: 280 }}>
+        <div className="card tc-tool-card" style={{ flex: "1 1 300px", minWidth: 280 }}>
           <div className="comp-row"><span className="comp-label">混流</span><span className="comp-value">多输入 · copy</span></div>
           <p className="tc-tool-desc">从多个文件各挑轨道重新封装；映射行里的第一个数字是输入文件下标。</p>
           <div style={{ display: "grid", gap: 5, padding: "4px 8px 8px" }}>
@@ -122,7 +122,7 @@ export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
           </div>
         </div>
 
-        <div className="card" style={{ flex: "1 1 300px", minWidth: 280 }}>
+        <div className="card tc-tool-card" style={{ flex: "1 1 300px", minWidth: 280 }}>
           <div className="comp-row"><span className="comp-label">抽流</span><span className="comp-value">单流 · copy</span></div>
           <p className="tc-tool-desc">从单个文件提取一条轨道；输出扩展名按编码自动选（h264→.h264、aac→.aac、srt→.srt）。</p>
           <div style={{ display: "grid", gap: 5, padding: "4px 8px 8px" }}>

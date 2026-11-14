@@ -154,6 +154,18 @@ def run(panel):
     status, body = call("GET", "/api/health")
     check("health", status == 200 and body.get("status") == "ok", (status, body))
 
+    # ---- 平台声明 --------------------------------------------------------
+    status, body = call("GET", "/api/system/platform")
+    level = body.get("level")
+    check("platform: os + level + items",
+          status == 200 and body.get("os") and level in ("supported", "limited", "unsupported")
+          and isinstance(body.get("items"), list), (status, body))
+    if level == "supported":
+        check("platform: a supported platform carries no gap notes", not body.get("items"), body.get("items"))
+    else:
+        check("platform: a non-supported platform names its gaps",
+              len(body.get("items") or []) >= 2, body.get("items"))
+
     # ---- 工具链 ----------------------------------------------------------
     status, body = call("GET", "/api/node")
     check("node: `system` is present even when null (a dropped key whitened the page)",

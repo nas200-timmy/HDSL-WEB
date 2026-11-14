@@ -254,4 +254,21 @@ class DshManifestTest {
         assertTrue(DshDependencyPolicy.LOCKED.pins("\u0040hellosz/dsh-pets"),
                 "the strictest policy holds everything declared");
     }
+
+    /// dsh cannot run on FreeBSD: its `node-addon-require-builtin` native addon has
+    /// no FreeBSD build, and `dsh-app-boot` calls it while installing the profile
+    /// resolver. The gate lives here rather than in the UI so every install path
+    /// (create, repair, version change) refuses before downloading a tree that can
+    /// never boot.
+    @Test
+    void freebsdCannotRunDeepSeekHarness() {
+        assertFalse(DshVersionManager.installableOn(
+                org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD));
+        assertTrue(DshVersionManager.installableOn(
+                org.jackhuang.hmcl.util.platform.OperatingSystem.LINUX));
+        assertTrue(DshVersionManager.installableOn(
+                org.jackhuang.hmcl.util.platform.OperatingSystem.MACOS));
+        assertTrue(DshVersionManager.installableOn(
+                org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS));
+    }
 }

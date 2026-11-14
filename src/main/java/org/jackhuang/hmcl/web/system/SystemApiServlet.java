@@ -111,6 +111,10 @@ public final class SystemApiServlet extends HttpServlet {
             storage(request, response);
             return;
         }
+        if ("/platform".equals(path)) {
+            Json.write(response, Json.GSON.toJsonTree(PlatformCompatibility.current()));
+            return;
+        }
         Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
     }
 

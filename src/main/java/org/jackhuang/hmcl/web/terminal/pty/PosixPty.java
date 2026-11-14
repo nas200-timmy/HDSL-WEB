@@ -119,16 +119,20 @@ final class PosixPty implements Pty {
 
     /// `F_DUPFD_CLOEXEC`: the same descriptor with `FD_CLOEXEC` already set, in
     /// one call. Its number is per-platform, like the other `fcntl` commands
-    /// here (Linux and Darwin disagree).
-    private static final int F_DUPFD_CLOEXEC =
-            OperatingSystem.CURRENT_OS == OperatingSystem.LINUX ? 1030 : 67;
+    /// here: Linux 1030, Darwin 67, FreeBSD 17 (`<sys/fcntl.h>`).
+    private static final int F_DUPFD_CLOEXEC = switch (OperatingSystem.CURRENT_OS) {
+        case LINUX -> 1030;
+        case FREEBSD -> 17;
+        // Darwin, and anything else that reaches this class through `Pty.spawn`.
+        default -> 67;
+    };
 
-    /// `TIOCSWINSZ`; the value is an ioctl request, and ioctl numbers differ
-    /// between the two POSIX platforms this build runs on.
+    /// `TIOCSWINSZ`; the value is an ioctl request. Linux has its own number;
+    /// the BSDs (macOS, FreeBSD) share `_IOW('t', 103, struct winsize)`.
     private static final long TIOCSWINSZ =
             OperatingSystem.CURRENT_OS == OperatingSystem.LINUX ? 0x5414L : 0x80087467L;
 
-    /// `SIGWINCH` is 28 on both Linux and macOS.
+    /// `SIGWINCH` is 28 on Linux, macOS and FreeBSD.
     private static final int SIGWINCH = 28;
 
     private final MasterFd master;
@@ -768,7 +772,8 @@ final class PosixPty implements Pty {
         }
     }
 
-    /// `openpty` lives in libutil on both glibc and macOS.
+    /// `openpty` lives in libutil on glibc, macOS and FreeBSD (`/usr/lib/libutil.so`
+    /// is part of the base system there).
     private interface LibUtil extends Library {
         LibUtil INSTANCE = Native.load("util", LibUtil.class);
 

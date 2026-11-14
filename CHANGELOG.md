@@ -2,6 +2,41 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## 未发布 — FreeBSD 交互式终端
+
+> FreeBSD 上面板能跑，但 PTY 终端一直是缺口（`terminal_failed: pseudo terminals are not
+> supported on FREEBSD yet`）。这次在 FreeBSD 15.1 真机上补齐并验证。
+
+- `Pty.spawn` 增加 FreeBSD 分支，复用 `PosixPty`（`openpty` + `posix_spawn`），没有新增依赖：
+  `openpty` 在 base 的 libutil，`posix_spawn` 与 `posix_spawn_file_actions_addchdir_np`
+  在 libc（FBSD_1.7）。
+- 两个平台常量：`F_DUPFD_CLOEXEC` FreeBSD = 17；`TIOCSWINSZ` 与 macOS 相同（`0x80087467`）。
+- 真机验证：openpty/spawn、`stty size`、`TIOCSWINSZ` resize（80×24 → 120×40）、stdin 回显、
+  退出码透传（`exit 3` → 3）全部通过；面板服务换 jar 重启后健康检查正常。
+- **托管 Node 不再装错**：`NodeRuntimeManager.platformTag` 原先对 FreeBSD 落到 `linux-x64`，
+  会下载一个跑不起来的 ELF 并登记为已安装。现在明确拒绝并提示用 `pkg install node npm`
+  的系统 Node（品牌安装器本来就会回落到 PATH）。
+- Minecraft 控制台仍保持 pipe（日志 + 命令框）；启动横幅从「no PTY on this platform」
+  改成「PTY console not enabled on this platform」，不再把策略说成平台能力。
+- **dsh 实例在 FreeBSD 上不可用（上游硬限制）**：`dsh-app-boot` 启动时会 require
+  `node-addon-require-builtin`，这个原生 addon 没有 FreeBSD 二进制；上游源码的
+  `platform.cc` 对 FreeBSD 返回 `UnsupportedContextReader`，所以自己编译也补不上。
+  0.2.x 全系（含 rc.1/rc.2/rc.3）都依赖它，面板现在在 FreeBSD 上直接拒绝安装，
+  不再下载一套永远起不来的依赖树。
+  试过「从源码构建 addon」这条最后手段：addon 能在 FreeBSD 上编出来并跑通，但
+  `dsh-session-persistence-jsonl` 的写租约调用 `node-addon-system/flock`，它在
+  FreeBSD 上**主动抛错**（`ERR_FLOCK_UNSUPPORTED_PLATFORM`），不是缺库。继续往下
+  就要拆 dsh 的锁语义，不做；该实验开关已撤除，只保留结论。
+- **opencode 在 FreeBSD 上直接标为不可安装**：它只发布 Linux / macOS / Windows 的
+  二进制包，没有 FreeBSD 构建，安装会在 postinstall 失败；品牌页现在会提前说明。
+- **ZCode 在 FreeBSD 上直接拒绝构建**：构建会安装 Electron 桌面端，Electron 没有
+  FreeBSD 构建；与其跑十分钟再死在 postinstall，不如一开始就说清楚。
+- **面板里能看到平台声明**：设置 → 通用新增「平台兼容性」（`GET /api/system/platform`），
+  显示内核版本、整体结论（支持 / 受限 / 不支持）和逐项差异；`procfs` 在运行时探测，
+  挂载了就不再报「系统指标为空」。只有未纳入发布验收的平台会展开这张卡。
+- 已知限制（写进 `docs/deployment.md §12`）：系统指标页大部分为空（依赖 `/proc`、`/sys`）、
+  没有 GPU、uid 分离未实现、MC 控制台不是 PTY。
+
 ## v0.6.85 — 2026-11-14 · 面板聊天、三个 TUI 品牌与终端加固
 
 > 这一版把面板从「管理实例」扩成「自己也能用」：内置聊天页（多助手、流式、附件、联网搜索），

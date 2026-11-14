@@ -90,3 +90,87 @@ gh release create v0.6.85 -R nas200-timmy/HDSL-WEB \
 - `Brand.hasTerminal()` 仍是恒 true；如果以后要按能力隐藏终端按钮，先修它再给前端用。
 - 每日 token 上限要做持久化账本时，`chat_setting` 已经能存 JSON，但计数需要新表。
 - 聊天备份恢复没有 UI；恢复时注意 schema 只向前迁移，不接受降级。
+## 6. FreeBSD 终端验证（同日，v0.6.85 之后）
+
+真机：FreeBSD 15.1-RELEASE-p6 amd64，openjdk21，2 核 4 GB；面板以 rc 服务跑在
+`/home/dev`（jar `/home/dev/hdsl-web.jar`，数据 `/home/dev/hdsl/data`，HTTPS 3080）。
+
+- **根因确认**：`Pty.spawn` 只分 LINUX/MACOS 与 WINDOWS，FreeBSD 落到 `PtyException`。
+  FreeBSD 本身有 PTY，是代码缺口。
+- **改动**：`Pty.spawn` 增加 FREEBSD；`PosixPty` 的 `F_DUPFD_CLOEXEC` 用 17，
+  `TIOCSWINSZ` 沿用 BSD 的 `0x80087467`；`NodeRuntimeManager.platformTag` 对 FreeBSD
+  明确拒绝（原先会落到 linux-x64，装一个跑不起来的 ELF）。
+- **验证方式**：打 dev jar → 用 `PtyProbe` 直接走 `Pty.spawn`（openpty + posix_spawn），
+  再跑 `PtyProbe2` 验证 resize / stdin / 退出码；随后把 jar 覆盖到服务、重启、健康检查。
+  实测输出：`probe-ok`、`24 80`、resize 后 `40 120`、`GOT:hello`、`exit=3`。
+- **服务的启动横幅**：仍显示 `minecraft: console pipe`（MC 控制台保持 pipe），文案已从
+  「no PTY on this platform」改成「PTY console not enabled on this platform」。
+- **系统指标**：`SystemMetrics` 在 FreeBSD 上 host=other、CPU 0.0、disks/network/gpu 为空
+  （依赖 `/proc`、`/sys`），没有抛异常；文档已写成已知限制。
+- **未做**：MC 控制台 PTY（需要真实服务端跑一轮）、uid 分离、`/proc` 指标替代实现。
+  真机上 `claude-web` 实例仍在，浏览器点「终端」即可验证修复；本次没有猜/复用管理员口令。
+
+### 6.1 安装链路的三个上游问题（同日续查）
+
+真机上按用户提供的日志逐个复现，结论分开处理：
+
+| 包 | 现象 | 根因 | 处理 |
+|---|---|---|---|
+| dsh | 先 `node-pty` 的 `gmake` 编译失败；pin 到 1.1.0 后又报 `Cannot find module .../napi-v9-freebsd-x64/require_builtin.node` | 两层上游问题：node-pty 1.2.0-beta.x 缺 FreeBSD 定义（1.1.0 可编），但 `node-addon-require-builtin` 根本没有 FreeBSD 构建，上游 `platform.cc` 对 FreeBSD 返回 `UnsupportedContextReader`，而 `dsh-app-boot` 启动时无条件依赖它 | 最终判定 dsh 0.2.x 在 FreeBSD 上不可用：`DshVersionManager.installableOn(FREEBSD)=false`，面板直接拒绝安装；node-pty pin 已撤掉 |
+| opencode | postinstall 提示「手动装 opencode-freebsd-x64」 | 上游 1.19.5 的 optionalDependencies 只有 linux/darwin/windows，**没有 freebsd 包**（npm 404）；提示文案是误导 | `Brand.OPENCODE.installableOn(FREEBSD)=false`，品牌页直接给原因 |
+| ZCode | `packages/desktop postinstall` 下载 Electron 404 | Electron 没有 FreeBSD 构建，桌面端 postinstall 必然失败 | `ZcodeBuilder.start` 在 FreeBSD 上直接拒绝，避免十分钟后才失败 |
+
+验证：在 VM 上用与面板相同的 manifest 结构手工安装 dsh（overrides: node-pty 1.1.0），
+`pnpm install` 成功、`node-pty` 编译出 `pty.node`、`dsh --version` 输出 `0.2.2-rc.3`；
+用 dsh 自己的 subprocess-local 包 `require("node-pty")` 并 spawn `/bin/sh`，输出
+`pty-ok` / `24 80` / `exit=0`。代码侧用 `DshManifestTest` 固定「FreeBSD 才加 pin」。
+
+### 6.2 dsh 的最终结论：上游 native addon 没有 FreeBSD 实现
+
+`node-pty` 只是第一层。修掉之后 dsh 启动仍会在 `dsh-app-boot` 的
+`profile-resolution-bootstrap.js` 里挂掉：
+
+```text
+Cannot find module .../node-addon-require-builtin/build/napi/napi-v9-freebsd-x64/require_builtin.node
+  at tryRequireLocal (.../node-addon-native-custom-loader/lib/index.js:467)
+  at loadEntry (...:536)
+```
+
+核对过的事实：
+
+- `node-addon-require-builtin@0.1.9` 的 optionalDependencies 只有 darwin / linux / win32，
+  npm 上也没有 `node-addon-require-builtin-freebsd-x64`（404）。
+- 上游仓库 `deepseek-ai/dsh-node-addon-require-builtin` 是公开的，源码 `packages/native/
+  src/runtime_context/platform.cc` 对 `__FreeBSD__` 没有分支，落到
+  `UnsupportedContextReader`；所以「自己编一个」也拿不到可用的 context reader。
+- `dsh-app-boot@0.2.0-rc.1` 及以后全部依赖它；之前的 0.1.x 太旧，不作为方案。
+- 即便 `--expose-internals` + JS shim 能绕过，也改的是上游内部契约，不值得在面板里做。
+
+因此：**FreeBSD 上面板、品牌实例（kimi / claude-web / Qwen / MiMo / MiniMax 等）与
+交互式终端可用；dsh 实例不可用**，面板现在直接拒绝安装并在「设置 → 通用 → 平台兼容性」
+里写明原因。
+
+### 6.4 为什么「从源码构建 addon」也救不了 dsh（已撤除）
+
+在 6.3 的基础上继续跑，addon 编译、注入都成功，dsh 也能启动并打印 web URL；但会话
+持久化初始化时抛出：
+
+```text
+flock is not supported on freebsd-x64
+  code: 'ERR_FLOCK_UNSUPPORTED_PLATFORM'
+```
+
+来源是 `@deepseek-ai/node-addon-system@0.1.2/lib/flock.js`：
+
+```js
+if (platform !== 'linux' && platform !== 'darwin') {
+  throw ... `flock is not supported on ${platform}-${arch}`
+}
+```
+
+调用方 `dsh-session-persistence-jsonl` 用它给会话文件加非阻塞 `flock` 写租约；代码把
+「平台不支持」和其他错误一起 rethrow，没有降级成无锁。继续往下只有两条路：改 dsh 的锁
+语义（no-op，破坏跨进程互斥），或再补一个 FreeBSD 的 system addon——两者都不值得。
+
+结论：**dsh 在 FreeBSD 上不可用是上游的多层主动拒绝**（native addon + flock 平台门），
+不是面板能补的缺口。已撤回实验构建器与 UI 卡片；平台声明、安装门与文档保留结论。

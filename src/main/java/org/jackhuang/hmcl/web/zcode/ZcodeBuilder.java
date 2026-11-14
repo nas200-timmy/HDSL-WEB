@@ -121,6 +121,15 @@ public final class ZcodeBuilder {
     /// @throws ZcodeException when the version is not a plausible ref name or a
     /// build is already running
     public static Status start(Settings settings, String version) throws ZcodeException {
+        // The monorepo's `packages/desktop` postinstall downloads an Electron
+        // runtime, and Electron publishes no FreeBSD build — the install step of
+        // the build ends there. Refusing up front is better than a ten-minute
+        // build that dies in a postinstall script.
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD) {
+            throw new ZcodeException("ZCode 构建会安装 Electron 桌面依赖，Electron 没有 FreeBSD 构建；"
+                    + "这个实验性品类在 FreeBSD 上暂不支持");
+        }
         String ref = version == null ? "" : version.trim();
         if (ref.isEmpty() || ref.length() > 64 || !ref.matches("[A-Za-z0-9._/-]+")) {
             throw new ZcodeException("version must be an upstream tag or branch name (letters, digits, . _ - /)");

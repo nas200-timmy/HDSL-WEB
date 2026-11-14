@@ -110,12 +110,20 @@ class BrandHermesTest {
                 assertTrue(Brand.HERMES.installableOn(os), os + " is supported");
                 assertNull(Brand.HERMES.notInstallableReason(os));
             }
-            // Every other brand installs everywhere: their installers are npm/portable archives.
+            // Every other brand installs everywhere — except the one upstream package
+            // that has no FreeBSD build (opencode's CLI is a per-platform binary).
             for (Brand other : Brand.values()) {
-                if (other != Brand.HERMES) {
-                    assertTrue(other.installableOn(os), other + " on " + os);
-                    assertNull(other.notInstallableReason(os));
+                if (other == Brand.HERMES) {
+                    continue;
                 }
+                if (other == Brand.OPENCODE
+                        && os == org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD) {
+                    assertFalse(other.installableOn(os), "no FreeBSD binary upstream");
+                    assertNotNull(other.notInstallableReason(os));
+                    continue;
+                }
+                assertTrue(other.installableOn(os), other + " on " + os);
+                assertNull(other.notInstallableReason(os));
             }
         }
     }
