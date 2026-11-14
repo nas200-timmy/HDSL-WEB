@@ -2,11 +2,13 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布 — FreeBSD 交互式终端
+## v0.6.86 — 2026-11-14 · FreeBSD 交互式终端与平台声明；转码手机端布局
 
-> **已并入本地 `main`（合并点 `14cc70579`），未 push、未发布。**
-> FreeBSD 上面板能跑，但 PTY 终端一直是缺口（`terminal_failed: pseudo terminals are not
-> supported on FREEBSD yet`）。这次在 FreeBSD 15.1 真机上补齐并验证。
+> FreeBSD 上面板能跑，但 PTY 终端一直是缺口；这一版在 **FreeBSD 15.1 真机**上补齐并验证，
+> 同时把「哪些平台/功能有已知差异」做成面板里的声明。dsh / opencode / ZCode 在 FreeBSD 上
+> 仍不可用（上游限制），面板会直接拒绝安装，而不是让人等到失败。
+>
+> 发布物：fat jar 仍是 69 MB（v0.6.85 起就没有再变大）；容器镜像同步更新。
 
 - `Pty.spawn` 增加 FreeBSD 分支，复用 `PosixPty`（`openpty` + `posix_spawn`），没有新增依赖：
   `openpty` 在 base 的 libutil，`posix_spawn` 与 `posix_spawn_file_actions_addchdir_np`
@@ -35,8 +37,20 @@
 - **面板里能看到平台声明**：设置 → 通用新增「平台兼容性」（`GET /api/system/platform`），
   显示内核版本、整体结论（支持 / 受限 / 不支持）和逐项差异；`procfs` 在运行时探测，
   挂载了就不再报「系统指标为空」。只有未纳入发布验收的平台会展开这张卡。
+**转码页面：手机端布局**
+
+- 参数面板在窄屏拆成单栏，左侧分区导航改成横向 chip 条，编辑器与实时命令行上下排列；
+  参数网格单列，预设管理列表改为上下布局。
+- 准备文件两列改整行堆叠，媒体浏览器路径与「添加当前文件夹」不再挤出屏幕；待转码列表
+  标题与操作按钮允许换行。
+- 队列任务行在窄屏重排为三行，详情卡移到列表下方；工具页卡片整行；目录选择器头部换行。
+- 子侧栏横向标签条在切换后自动把当前项滚到中间，不再只露出半截。
+
 - 已知限制（写进 `docs/deployment.md §12`）：系统指标页大部分为空（依赖 `/proc`、`/sys`）、
   没有 GPU、uid 分离未实现、MC 控制台不是 PTY。
+- 验证：`./gradlew test` 全绿（1486 用例）；`npm run typecheck` / `build` 通过；
+  `python3 scripts/api-smoke.py` 43/43；FreeBSD 15.1 真机验证终端、平台声明与
+  dsh 的拒绝路径。
 
 ## v0.6.85 — 2026-11-14 · 面板聊天、三个 TUI 品牌与终端加固
 
