@@ -20,6 +20,7 @@ package org.jackhuang.hmcl.web.chat;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.jackhuang.hmcl.dsh.DshAccount;
 import org.jackhuang.hmcl.web.event.EventBus;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -45,6 +46,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /// 每个会话同时只有一个 active turn（docs/chat.md §7）。
 ///
@@ -94,6 +97,18 @@ public final class ChatTurnManager {
     /// 每个会话最近一次是否开着联网搜索：重新生成/编辑时沿用，免得「重新生成就不搜了」。
     private final Map<String, Boolean> searchSessions = new ConcurrentHashMap<>();
     private static final int MAX_TOOL_ROUNDS = 3;
+    /// DeepSeek 在 OpenAI 兼容模式下偶尔把工具调用写成 DSML 文本，而不是 tool_calls JSON。
+    /// 这里做一个最小兼容：识别、转成 ToolCall、并从正文里删掉，避免把调用指令当答案存下来。
+    private static final Pattern DSML_START = Pattern.compile(
+            "<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*calls>");
+    private static final Pattern DSML_BLOCK = Pattern.compile(
+            "(?s)<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*calls>.*?</\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*calls>");
+    private static final Pattern DSML_INVOKE = Pattern.compile(
+            "(?s)<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*invoke\\s+name=\"([^\"]+)\"[^>]*>(.*?)"
+                    + "</\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*invoke>");
+    private static final Pattern DSML_PARAM = Pattern.compile(
+            "(?s)<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*parameter\\s+name=\"([^\"]+)\"([^>]*)>(.*?)"
+                    + "</\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*parameter>");
     private final java.util.concurrent.atomic.AtomicLong dailyTokens =
             new java.util.concurrent.atomic.AtomicLong();
     private volatile LocalDate dailyDate = LocalDate.now();
@@ -638,10 +653,38 @@ public final class ChatTurnManager {
                 }
                 List<ChatProtocol.ToolCall> calls;
                 synchronized (turn.lock) {
+                    recoverDsmlToolCalls(turn);
                     calls = List.copyOf(turn.pendingCalls);
                 }
-                if (calls.isEmpty() || turn.tools.isEmpty() || round >= MAX_TOOL_ROUNDS) {
-                    finish(turn, "done", turn.finishReason == null ? "stop" : turn.finishReason);
+                boolean empty = turn.content.toString().isBlank();
+                if (calls.isEmpty()) {
+                    if (empty) {
+                        error(turn, "empty_response",
+                                "模型没有返回可用的回答。请重试；如果使用了联网搜索，可改用 DeepSeek 官方预设。",
+                                true);
+                    } else {
+                        finish(turn, "done", turn.finishReason == null ? "stop" : turn.finishReason);
+                    }
+                    return;
+                }
+                if (turn.tools.isEmpty()) {
+                    if (empty) {
+                        error(turn, "unsupported_tool_call_format",
+                                "模型返回了面板无法执行的工具调用。请改用 DeepSeek 官方预设，或关闭联网搜索。",
+                                false);
+                    } else {
+                        finish(turn, "done", turn.finishReason == null ? "stop" : turn.finishReason);
+                    }
+                    return;
+                }
+                if (round >= MAX_TOOL_ROUNDS) {
+                    if (empty) {
+                        error(turn, "tool_rounds_exhausted",
+                                "联网搜索/工具调用达到上限，模型没有给出最终回答。请重试，或改用 DeepSeek 官方预设。",
+                                true);
+                    } else {
+                        finish(turn, "done", "tool_rounds_exhausted");
+                    }
                     return;
                 }
                 appendToolRound(turn, messages, calls);
@@ -702,6 +745,89 @@ public final class ChatTurnManager {
                 // Done.
             }
         }
+    }
+
+    /// DeepSeek 在 OpenAI 兼容模式下偶尔把工具调用写成 DSML 文本，而不是 tool_calls JSON。
+    /// 能解析就转成 ToolCall；同时把 DSML 从正文和待发缓冲里删掉，避免它被当成答案持久化。
+    private void recoverDsmlToolCalls(ActiveTurn turn) {
+        String raw = turn.content.toString();
+        if (!looksLikeDsml(raw)) {
+            return;
+        }
+        String normalized = normalizeDsml(raw);
+        boolean hadCalls = !turn.pendingCalls.isEmpty();
+        Matcher block = DSML_BLOCK.matcher(normalized);
+        if (block.find()) {
+            List<ChatProtocol.ToolCall> calls = parseDsmlToolCalls(block.group(1), turn.tools);
+            if (!hadCalls && !calls.isEmpty()) {
+                turn.pendingCalls.addAll(calls);
+            }
+            replaceContent(turn, raw.substring(0, block.start()) + raw.substring(block.end()));
+            return;
+        }
+        // 流被截断时可能没有闭合标签：从第一个开始标记起全部丢掉，至少不让正文长出尖括号。
+        Matcher start = DSML_START.matcher(normalized);
+        if (start.find()) {
+            replaceContent(turn, raw.substring(0, start.start()));
+        }
+    }
+
+    private static boolean looksLikeDsml(String text) {
+        if (text == null || !text.contains("DSML")) {
+            return false;
+        }
+        String normalized = normalizeDsml(text);
+        return normalized.contains("||DSML||") || normalized.contains("|DSML|");
+    }
+
+    static String normalizeDsml(String text) {
+        return text.replace('\uFF5C', '|');
+    }
+
+    private static void replaceContent(ActiveTurn turn, String cleaned) {
+        turn.content.setLength(0);
+        turn.content.append(cleaned);
+        // 已经吐给前端的 DSML 尾部不要再重复；最终落库的是清理后的正文。
+        turn.pendingText.setLength(0);
+    }
+
+    /// 包内可见，便于单测；只解析已经归一化成 ASCII 竖线的 DSML。
+    static List<ChatProtocol.ToolCall> parseDsmlToolCalls(
+            String block, List<ChatProtocol.ToolSpec> tools) {
+        if (tools.isEmpty()) {
+            return List.of();
+        }
+        java.util.Set<String> allowed = new java.util.HashSet<>();
+        for (ChatProtocol.ToolSpec tool : tools) {
+            allowed.add(tool.name());
+        }
+        List<ChatProtocol.ToolCall> calls = new ArrayList<>();
+        Matcher invoke = DSML_INVOKE.matcher(block);
+        while (invoke.find()) {
+            String name = invoke.group(1);
+            if (!allowed.contains(name)) {
+                continue;
+            }
+            JsonObject arguments = new JsonObject();
+            Matcher param = DSML_PARAM.matcher(invoke.group(2));
+            while (param.find()) {
+                String key = param.group(1);
+                String attrs = param.group(2);
+                String value = param.group(3);
+                if (attrs.contains("string=\"false\"")) {
+                    try {
+                        arguments.add(key, JsonParser.parseString(value));
+                    } catch (RuntimeException e) {
+                        arguments.addProperty(key, value);
+                    }
+                } else {
+                    arguments.addProperty(key, value);
+                }
+            }
+            calls.add(new ChatProtocol.ToolCall(
+                    "call_dsml_" + calls.size(), name, arguments.toString()));
+        }
+        return calls;
     }
 
     /// 把这一轮已经输出的文字作为 assistant 消息，连同模型的 tool_calls 一起回灌；
