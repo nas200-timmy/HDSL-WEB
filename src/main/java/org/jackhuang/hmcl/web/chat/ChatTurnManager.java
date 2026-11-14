@@ -1896,22 +1896,27 @@ public final class ChatTurnManager {
         return title == null || title.isBlank() || "新会话".equals(title);
     }
 
-    /// DeepSeek 的 `latest_reminder` 快照：日期、星期、来源与界面语言。
+    /// DeepSeek 的 `latest_reminder` 快照：日期、星期、地区与界面语言。
+    ///
+    /// 服务端按语言名校验，且只认 `中文` / `English` 这种名字；直接传
+    /// `Locale.getDisplayLanguage(Locale.ENGLISH)` 会得到 `Chinese` 并返回 400。
+    /// 星期和地区也要跟着语言走同一种语种（chat-demo 的 `latestReminder.ts`）。
     static String latestReminder() {
-        LocalDate today = LocalDate.now();
-        Locale locale = Locale.getDefault();
+        return latestReminder(Locale.getDefault(), LocalDate.now());
+    }
+
+    static String latestReminder(Locale locale, LocalDate today) {
+        boolean chinese = "zh".equals(locale.getLanguage());
+        Locale display = chinese ? Locale.SIMPLIFIED_CHINESE : Locale.ENGLISH;
         String weekday = today.getDayOfWeek().getDisplayName(
-                java.time.format.TextStyle.FULL, Locale.ENGLISH);
-        String location = locale.getDisplayCountry(Locale.ENGLISH);
+                java.time.format.TextStyle.FULL, display);
+        String location = locale.getDisplayCountry(display);
         if (location.isBlank()) {
-            location = "Unknown";
+            location = chinese ? "未知" : "Unknown";
         } else {
             location = location.replace(',', ' ').trim();
         }
-        String language = locale.getDisplayLanguage(Locale.ENGLISH);
-        if (language.isBlank()) {
-            language = "English";
-        }
+        String language = chinese ? "中文" : "English";
         // 官方格式固定五段：<date>,<weekday>,<location>,<platform>,<language>。
         return today + "," + weekday + "," + location + ",Web," + language;
     }
