@@ -4,6 +4,7 @@
 
 ## 未发布 — FreeBSD 交互式终端
 
+> **已并入本地 `main`（合并点 `14cc70579`），未 push、未发布。**
 > FreeBSD 上面板能跑，但 PTY 终端一直是缺口（`terminal_failed: pseudo terminals are not
 > supported on FREEBSD yet`）。这次在 FreeBSD 15.1 真机上补齐并验证。
 
