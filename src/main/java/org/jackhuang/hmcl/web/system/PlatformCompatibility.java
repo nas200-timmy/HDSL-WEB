@@ -112,9 +112,9 @@ public final class PlatformCompatibility {
         items.add(new Item("terminal", Level.SUPPORTED, "交互式终端（Web Shell）",
                 "PTY 走 openpty + posix_spawn，已在 FreeBSD 15.1 验证 openpty、resize、输入与退出码。"));
         items.add(new Item("dsh", Level.UNSUPPORTED, "dsh 实例",
-                "上游的 node-addon-require-builtin 原生模块没有 FreeBSD 构建，源码也没有 FreeBSD 的 "
-                        + "context reader；dsh-app-boot 在启动时强依赖它，所以 dsh 0.2.x 在 FreeBSD 上"
-                        + "无法启动。面板会直接拒绝安装，不再浪费时间下载一套跑不起来的依赖树。"));
+                "上游的 node-addon-require-builtin 原生模块没有 FreeBSD 构建，dsh-app-boot 启动时"
+                        + "强依赖它；即使绕过这一层，会话持久化用的 flock 也被上游明确拒绝"
+                        + "（ERR_FLOCK_UNSUPPORTED_PLATFORM）。面板直接拒绝安装。"));
         items.add(new Item("node", Level.LIMITED, "托管 Node",
                 "nodejs.org 不发布 FreeBSD 构建；请 pkg install node npm，面板会使用 PATH 里的 Node。"));
         items.add(new Item("opencode", Level.UNSUPPORTED, "opencode 品牌",

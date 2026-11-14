@@ -149,3 +149,28 @@ Cannot find module .../node-addon-require-builtin/build/napi/napi-v9-freebsd-x64
 因此：**FreeBSD 上面板、品牌实例（kimi / claude-web / Qwen / MiMo / MiniMax 等）与
 交互式终端可用；dsh 实例不可用**，面板现在直接拒绝安装并在「设置 → 通用 → 平台兼容性」
 里写明原因。
+
+### 6.4 为什么「从源码构建 addon」也救不了 dsh（已撤除）
+
+在 6.3 的基础上继续跑，addon 编译、注入都成功，dsh 也能启动并打印 web URL；但会话
+持久化初始化时抛出：
+
+```text
+flock is not supported on freebsd-x64
+  code: 'ERR_FLOCK_UNSUPPORTED_PLATFORM'
+```
+
+来源是 `@deepseek-ai/node-addon-system@0.1.2/lib/flock.js`：
+
+```js
+if (platform !== 'linux' && platform !== 'darwin') {
+  throw ... `flock is not supported on ${platform}-${arch}`
+}
+```
+
+调用方 `dsh-session-persistence-jsonl` 用它给会话文件加非阻塞 `flock` 写租约；代码把
+「平台不支持」和其他错误一起 rethrow，没有降级成无锁。继续往下只有两条路：改 dsh 的锁
+语义（no-op，破坏跨进程互斥），或再补一个 FreeBSD 的 system addon——两者都不值得。
+
+结论：**dsh 在 FreeBSD 上不可用是上游的多层主动拒绝**（native addon + flock 平台门），
+不是面板能补的缺口。已撤回实验构建器与 UI 卡片；平台声明、安装门与文档保留结论。

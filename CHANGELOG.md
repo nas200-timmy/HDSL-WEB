@@ -23,6 +23,10 @@
   `platform.cc` 对 FreeBSD 返回 `UnsupportedContextReader`，所以自己编译也补不上。
   0.2.x 全系（含 rc.1/rc.2/rc.3）都依赖它，面板现在在 FreeBSD 上直接拒绝安装，
   不再下载一套永远起不来的依赖树。
+  试过「从源码构建 addon」这条最后手段：addon 能在 FreeBSD 上编出来并跑通，但
+  `dsh-session-persistence-jsonl` 的写租约调用 `node-addon-system/flock`，它在
+  FreeBSD 上**主动抛错**（`ERR_FLOCK_UNSUPPORTED_PLATFORM`），不是缺库。继续往下
+  就要拆 dsh 的锁语义，不做；该实验开关已撤除，只保留结论。
 - **opencode 在 FreeBSD 上直接标为不可安装**：它只发布 Linux / macOS / Windows 的
   二进制包，没有 FreeBSD 构建，安装会在 postinstall 失败；品牌页现在会提前说明。
 - **ZCode 在 FreeBSD 上直接拒绝构建**：构建会安装 Electron 桌面端，Electron 没有
