@@ -154,6 +154,15 @@ def run(panel):
     status, body = call("GET", "/api/health")
     check("health", status == 200 and body.get("status") == "ok", (status, body))
 
+    # ---- dsh 的 FreeBSD 实验开关 ------------------------------------------
+    status, body = call("GET", "/api/dsh/freebsd-addon")
+    check("dsh: the freebsd addon status is readable",
+          status == 200 and isinstance(body.get("applicable"), bool)
+          and body.get("commit"), (status, body))
+    status, body = call("POST", "/api/dsh/freebsd-addon/build", {})
+    check("dsh: building that addon needs developer elevation",
+          status == 403, (status, body))
+
     # ---- 平台声明 --------------------------------------------------------
     status, body = call("GET", "/api/system/platform")
     level = body.get("level")

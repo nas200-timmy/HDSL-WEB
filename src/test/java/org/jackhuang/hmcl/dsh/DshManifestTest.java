@@ -261,14 +261,16 @@ class DshManifestTest {
     /// (create, repair, version change) refuses before downloading a tree that can
     /// never boot.
     @Test
-    void freebsdCannotRunDeepSeekHarness() {
-        assertFalse(DshVersionManager.installableOn(
-                org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD));
+    void freebsdNeedsTheNativeAddonBeforeAnInstall() {
+        var freebsd = org.jackhuang.hmcl.util.platform.OperatingSystem.FREEBSD;
+        var linux = org.jackhuang.hmcl.util.platform.OperatingSystem.LINUX;
+
+        assertFalse(DshVersionManager.installableOn(freebsd, false),
+                "without the operator-built addon, dsh cannot boot on FreeBSD");
+        assertTrue(DshVersionManager.installableOn(freebsd, true),
+                "the escape hatch: a prepared addon makes the install meaningful");
+        assertTrue(DshVersionManager.installableOn(linux, false));
         assertTrue(DshVersionManager.installableOn(
-                org.jackhuang.hmcl.util.platform.OperatingSystem.LINUX));
-        assertTrue(DshVersionManager.installableOn(
-                org.jackhuang.hmcl.util.platform.OperatingSystem.MACOS));
-        assertTrue(DshVersionManager.installableOn(
-                org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS));
+                org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS, false));
     }
 }

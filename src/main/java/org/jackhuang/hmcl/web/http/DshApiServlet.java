@@ -23,10 +23,16 @@ import com.google.gson.JsonObject;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.jackhuang.hmcl.dsh.DshFreeBsdAddon;
 import org.jackhuang.hmcl.dsh.DshTuiPlugins;
+import org.jackhuang.hmcl.web.auth.AuthFilter;
+import org.jackhuang.hmcl.web.auth.AuthService;
+import org.jackhuang.hmcl.web.config.ServerConfig;
+import org.jackhuang.hmcl.web.developer.DeveloperElevation;
 import org.jetbrains.annotations.NotNullByDefault;
 
 import java.io.IOException;
+import java.util.function.BooleanSupplier;
 
 /// The harness-level REST surface, mapped at `/api/dsh/*`:
 ///
@@ -44,6 +50,19 @@ import java.io.IOException;
 @NotNullByDefault
 public final class DshApiServlet extends HttpServlet {
 
+    private final ServerConfig config;
+    private final AuthService auth;
+    private final DeveloperElevation elevation;
+    private final BooleanSupplier tlsActive;
+
+    public DshApiServlet(ServerConfig config, AuthService auth,
+                         DeveloperElevation elevation, BooleanSupplier tlsActive) {
+        this.config = config;
+        this.auth = auth;
+        this.elevation = elevation;
+        this.tlsActive = tlsActive;
+    }
+
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String path = request.getPathInfo();
@@ -51,7 +70,55 @@ public final class DshApiServlet extends HttpServlet {
             tuiPlugins(response);
             return;
         }
+        if ("/freebsd-addon".equals(path)) {
+            // Status only. Building is a privileged action (it fetches and compiles
+            // code), so POST below is the one behind developer elevation.
+            Json.write(response, DshFreeBsdAddon.status());
+            return;
+        }
         Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+    }
+
+    @Override
+    protected void doPost(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String path = request.getPathInfo();
+        if ("/freebsd-addon/build".equals(path)) {
+            if (!requireElevation(request, response)) {
+                return;
+            }
+            DshFreeBsdAddon.start();
+            Json.write(response, DshFreeBsdAddon.status());
+            return;
+        }
+        Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+    }
+
+    /// Fetching and compiling native code is an operator decision: HTTPS plus the
+    /// developer password, the same gate the ffmpeg installer uses.
+    private boolean requireElevation(HttpServletRequest request, HttpServletResponse response)
+            throws IOException {
+        if (!RequestSecurity.isSecure(request, tlsActive.getAsBoolean(), config)) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "tls_required: this action is only accepted over HTTPS");
+            return false;
+        }
+        if (!AuthFilter.elevationSatisfied(request, elevation, keyOf(request), sessionAlive(request))) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "developer_elevation_required: elevate with the developer password first");
+            return false;
+        }
+        return true;
+    }
+
+    private static String keyOf(HttpServletRequest request) {
+        Object token = request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE);
+        return DeveloperElevation.key(token instanceof String value ? value : null,
+                request.getRemoteAddr());
+    }
+
+    private boolean sessionAlive(HttpServletRequest request) {
+        Object token = request.getAttribute(AuthFilter.SESSION_TOKEN_ATTRIBUTE);
+        return !(token instanceof String value) || value.isBlank() || auth.isAlive(value);
     }
 
     /// The curated list, as the interface needs it.

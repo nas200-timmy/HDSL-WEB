@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError, isNotImplemented, type NetworkTrust } from "../api";
+import { requestDeveloperPassword } from "../elevation";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
 import { BrandManagementPanel } from "../components/BrandManagementPanel";
 import { LegalCard } from "../components/LegalCard";
@@ -56,6 +57,7 @@ import type {
   EmergencyStopPreview,
   PanelInfo,
   PlatformCompatibility,
+  FreeBsdAddonStatus,
   Health,
   RegistrySettings,
   RegistryTestResult,
@@ -241,6 +243,9 @@ function GeneralTab() {
   const [health, setHealth] = useState<Health | null>(null);
   const [panel, setPanel] = useState<PanelInfo | null>(null);
   const [platform, setPlatform] = useState<PlatformCompatibility | null>(null);
+  const [addon, setAddon] = useState<FreeBsdAddonStatus | null>(null);
+  const [addonBusy, setAddonBusy] = useState(false);
+  const [addonError, setAddonError] = useState<string | null>(null);
   const [loadedAt, setLoadedAt] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -257,6 +262,8 @@ function GeneralTab() {
       api.panelInfo().then(setPanel).catch(() => undefined);
       // 平台声明同理：老面板没有这个端点（404）时保持空白。
       api.platformCompatibility().then(setPlatform).catch(() => undefined);
+      // FreeBSD 实验开关的状态；其它平台不请求。
+      api.dshFreeBsdAddon().then(setAddon).catch(() => undefined);
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -280,6 +287,39 @@ function GeneralTab() {
   const doLogout = async () => {
     await logout();
     nav("/login", { replace: true });
+  };
+
+  // 构建在服务端跑，前端每 2 秒拉一次状态；只有 FreeBSD 才轮询。
+  useEffect(() => {
+    if (!addon || addon.state !== "running") return;
+    const timer = window.setInterval(() => {
+      api.dshFreeBsdAddon().then(setAddon).catch(() => undefined);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [addon?.state]);
+
+  const buildAddon = async () => {
+    setAddonBusy(true);
+    setAddonError(null);
+    try {
+      setAddon(await api.buildDshFreeBsdAddon());
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 403
+          && /developer_elevation_required/.test(e.message)) {
+        const elevated = await requestDeveloperPassword();
+        if (elevated) {
+          try {
+            setAddon(await api.buildDshFreeBsdAddon());
+          } catch (retry) {
+            setAddonError(errMsg(retry));
+          }
+        }
+      } else {
+        setAddonError(errMsg(e));
+      }
+    } finally {
+      setAddonBusy(false);
+    }
   };
 
   return (
@@ -399,6 +439,61 @@ function GeneralTab() {
                 </span>
               </div>
             ))}
+          </div>
+        </>
+      )}
+
+      {platform?.os === "freebsd" && (
+        <>
+          <div className="section-caption">
+            <InfoIcon size={16} />
+            实验：从源码构建 dsh 原生模块
+          </div>
+          <div className="card">
+            <div className="comp-row" style={{ alignItems: "flex-start" }}>
+              <span className="comp-label">说明</span>
+              <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                dsh 依赖的 <span className="mono">node-addon-require-builtin</span> 没有 FreeBSD 构建。
+                这里是最后手段：拉取固定 commit 的源码（校验 SHA-256）→ 打两条 FreeBSD 分支 →
+                用 node-gyp 编译 → 放到面板缓存。成功后 dsh 才允许安装，安装时自动注入。
+                需要在目标机上编译，构建期间有明显的 CPU 占用。
+              </span>
+            </div>
+            <div className="comp-row">
+              <span className="comp-label">状态</span>
+              <span className="comp-value">
+                {addon
+                  ? `${addon.prepared ? "已构建" : addon.state === "running" ? "构建中" : addon.state === "failed" ? "失败" : "未构建"}${addon.message ? " · " + addon.message : ""}`
+                  : "—"}
+              </span>
+            </div>
+            {addonError && (
+              <div className="comp-row">
+                <span className="comp-label">错误</span>
+                <span className="comp-value" style={{ color: "var(--monet-error)", fontSize: 12 }}>{addonError}</span>
+              </div>
+            )}
+            <div className="comp-row" style={{ alignItems: "flex-start" }}>
+              <span className="comp-label">操作</span>
+              <span className="comp-value">
+                <button
+                  className="btn btn-outline ripple-host"
+                  disabled={addonBusy || addon?.state === "running" || addon?.prepared}
+                  onClick={() => void buildAddon()}
+                >
+                  {addon?.prepared ? "已构建" : addon?.state === "running" ? "构建中…" : "开始构建（需要开发者密码）"}
+                </button>
+              </span>
+            </div>
+            {addon?.log && (
+              <pre
+                className="mono"
+                style={{ margin: "8px 12px 12px", padding: 10, maxHeight: 220, overflow: "auto",
+                         background: "var(--monet-surface-container)", borderRadius: 8, fontSize: 11 }}
+              >
+                {addon.log}
+              </pre>
+            )}
           </div>
         </>
       )}

@@ -1005,6 +1005,29 @@ CI 的构建矩阵里——属于「能用，但没纳入发布验收」的平�
 显示当前内核版本、整体结论和逐项差异；`procfs` 是否挂载会在运行时探测（挂了就不再报
 「系统指标为空」）。未纳入发布验收的平台（FreeBSD / UNKNOWN）才会展开这张卡。
 
+### 12.1 最后手段：面板内「实验：从源码构建 dsh 原生模块」
+
+dsh 0.2.x 依赖的 `node-addon-require-builtin` 没有 FreeBSD 二进制，上游源码也没有
+FreeBSD 分支。但缺的只是两个 `#elif`（Linux x86-64 的实现本来就是
+`dlsym(RTLD_DEFAULT)` + SysV 调用，FreeBSD 同样成立），所以面板留了一个**显式**的
+实验开关，只在 FreeBSD x86-64 上出现在「设置 → 通用 → 平台兼容性」下方：
+
+- 点「开始构建」需要**开发者密码 + HTTPS**；它会在目标机上编译一段网络取来的代码，
+  构建期间有明显 CPU 占用。
+- 源码固定到 commit `a58d3599a2e551d7d706d1ff796c9fd4bbaff63c`，并校验 tarball 的
+  SHA-256（`286616f1…577948`）。上游改动必须显式改代码里的 pin，不会自动跟随。
+- 构建步骤：下载源码 → 校验 → 打两条 FreeBSD 分支 → `npm install node-addon-api` →
+  `node-gyp rebuild -Dnarb_backend=napi`（`CXXFLAGS=-DNARB_PRODUCT=1`）→ 产物放到
+  `<data>/hdsl/freebsd-addon/napi-v9-freebsd-x64/require_builtin.node`。
+- 构建成功后 `DshVersionManager` 才允许在 FreeBSD 上安装 dsh；每次安装结束会把产物
+  注入实例的依赖树（pnpm 会重写 `node_modules`，所以注入发生在安装之后）。
+- 失败会留在日志里；不会静默回落到「装好了但起不来」。
+
+已实测：FreeBSD 15.1 上构建成功、注入后 `dsh --profile web` 能起
+（`dsh web: http://127.0.0.1:3080/...`）。这仍是实验手段——dsh 升级、Node 升级或上游
+源码结构变化都可能让它失效，所以默认不建议开启；只有在确实需要 dsh 且能接受自己承担
+升级风险时再用。
+
 准备：
 
 ```sh

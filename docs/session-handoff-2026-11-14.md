@@ -149,3 +149,18 @@ Cannot find module .../node-addon-require-builtin/build/napi/napi-v9-freebsd-x64
 因此：**FreeBSD 上面板、品牌实例（kimi / claude-web / Qwen / MiMo / MiniMax 等）与
 交互式终端可用；dsh 实例不可用**，面板现在直接拒绝安装并在「设置 → 通用 → 平台兼容性」
 里写明原因。
+
+### 6.3 最后手段落地：从源码构建 dsh 原生模块（默认不用）
+
+按维护者决定：dsh 在 FreeBSD 上仍标为不可用，但面板提供一个**显式**的实验开关。
+
+- 源码固定 commit `a58d3599a2e551d7d706d1ff796c9fd4bbaff63c`，tarball SHA-256
+  `286616f15e4f12013988e45ad27a69b4968a9f059c8bd351e412505230577948`；改 pin 是显式动作。
+- 补丁只有两处：`runtime_context/platform.cc` 与 `runtime_probe/platform.cc` 各加一条
+  `#elif defined(__FreeBSD__) && defined(__x86_64__)`；Linux x86-64 的实现可以原样复用。
+- 构建：`npm install node-addon-api` + `node-gyp rebuild -Dnarb_backend=napi`
+  （`CXXFLAGS=-DNARB_PRODUCT=1`，否则 product 是 internal-loader，加载时校验不过）。
+- 验证（FreeBSD 15.1，面板 jar 内代码直接调用）：`DshFreeBsdAddon.start()` 从下载到编译
+  成功（state=done, prepared=true）；`inject()` 把 `require_builtin.node` 放进实例；
+  `dsh --profile web` 起来并打印 `dsh web: http://127.0.0.1:3080/...`。
+- 风险仍在：dsh/Node/上游源码变化都可能让它失效；默认不启用，文档写的是「最后手段」。
