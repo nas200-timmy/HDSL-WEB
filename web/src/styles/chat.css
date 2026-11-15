@@ -2223,10 +2223,11 @@
 
 .chat-provider-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   max-height: 48vh;
   overflow-y: auto;
+  overflow-x: hidden;
   margin-top: 8px;
 }
 
@@ -2234,6 +2235,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   padding: 8px;
   border-radius: 6px;
   border: 1px solid var(--monet-outline-variant);
@@ -2261,6 +2263,9 @@
 .chat-provider-choice-text span:first-child {
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-provider-choice-text span:last-child {

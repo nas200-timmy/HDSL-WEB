@@ -434,8 +434,11 @@ select.input {
   flex: 1;
   /* A flex child will not shrink below its content unless this is 0; without
      it a long dialog grows past `.dialog`'s max-height and the last rows are
-     simply cut off — the wizard's footer looked "covered" rather than scrolled. */
+     simply cut off — the wizard's footer looked "covered" rather than scrolled.
+     The horizontal counterpart kept wide grids from shrinking, which showed up
+     as a horizontally scrolled provider list. */
   min-height: 0;
+  min-width: 0;
 }
 
 /* jfx-layout-body：正文 pref 400 */
