@@ -26,8 +26,13 @@ function parseQuery(argumentsJson: string): string {
 
 function parseHits(content?: string): Source[] {
   if (!content) return [];
+  // tool content 前面有一句中文提示（“以下是「博查」返回的检索结果…”），
+  // 直接 JSON.parse 会失败；截第一个 { 到最后一个 } 再解析。
+  const start = content.indexOf("{");
+  const end = content.lastIndexOf("}");
+  if (start < 0 || end <= start) return [];
   try {
-    const data = JSON.parse(content) as { items?: Source[] };
+    const data = JSON.parse(content.slice(start, end + 1)) as { items?: Source[] };
     return Array.isArray(data.items) ? data.items : [];
   } catch {
     return [];
@@ -57,14 +62,15 @@ export function stepsFromParts(parts: ChatPart[]): TimelineStep[] {
     } else if (part.type === "tool") {
       const call = calls.get(part.id ?? "");
       if (!call) continue;
+      const sources = part.sources ?? parseHits(part.content);
       steps.push({
         kind: "tool",
         id: `s${index++}`,
         round: call.round,
         name: call.name,
         query: call.query || call.name,
-        hits: part.hits ?? 0,
-        sources: parseHits(part.content),
+        hits: part.hits && part.hits > 0 ? part.hits : sources.length,
+        sources,
       });
     }
   }

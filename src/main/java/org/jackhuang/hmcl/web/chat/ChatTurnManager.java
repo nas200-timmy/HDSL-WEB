@@ -1089,17 +1089,29 @@ public final class ChatTurnManager {
         part.addProperty("startedAt", startedAt);
         part.addProperty("endedAt", endedAt);
         part.addProperty("durationMs", Math.max(0, endedAt - startedAt));
-        part.addProperty("hits", toolHitCount(content));
+        JsonObject payload = toolPayload(content);
+        JsonElement items = payload == null ? null : payload.get("items");
+        if (items != null && items.isJsonArray()) {
+            part.addProperty("hits", items.getAsJsonArray().size());
+            part.add("sources", items);
+        } else {
+            part.addProperty("hits", 0);
+        }
         return part;
     }
 
-    private static int toolHitCount(String content) {
+    /// tool content 前面可能有一句中文提示（“以下是「博查」返回的检索结果…”），
+    /// 所以从第一个 `{` 到最后 `}` 截出 JSON，再解析 items。
+    private static @Nullable JsonObject toolPayload(String content) {
+        int start = content.indexOf('{');
+        int end = content.lastIndexOf('}');
+        if (start < 0 || end <= start) {
+            return null;
+        }
         try {
-            JsonObject object = JsonParser.parseString(content).getAsJsonObject();
-            JsonElement items = object.get("items");
-            return items != null && items.isJsonArray() ? items.getAsJsonArray().size() : 0;
+            return JsonParser.parseString(content.substring(start, end + 1)).getAsJsonObject();
         } catch (RuntimeException e) {
-            return 0;
+            return null;
         }
     }
 

@@ -1219,6 +1219,7 @@ export interface ChatPart {
   endedAt?: number;
   durationMs?: number;
   hits?: number;
+  sources?: { title?: string; url?: string; site?: string }[];
   calls?: { id: string; name: string; arguments: string }[];
 }
 
