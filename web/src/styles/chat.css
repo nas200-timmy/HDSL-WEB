@@ -365,7 +365,12 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
   color: var(--monet-primary);
+  font: inherit;
+  cursor: pointer;
   text-decoration: none;
 }
 
@@ -416,6 +421,38 @@
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.chat-preview-table-wrap {
+  overflow: auto;
+  max-height: 100%;
+  border: 1px solid var(--monet-outline-variant);
+  border-radius: 4px;
+}
+
+.chat-preview-table {
+  border-collapse: collapse;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.chat-preview-table th,
+.chat-preview-table td {
+  max-width: 240px;
+  padding: 3px 6px;
+  border: 1px solid var(--monet-outline-variant);
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-preview-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--monet-surface-container);
+  font-weight: 600;
 }
 
 .chat-preview-note {

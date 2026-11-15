@@ -1158,7 +1158,7 @@ export function ChatPage() {
             )}
             </div>
             {preview && (
-              <AttachmentPreview attachment={preview} onClose={() => setPreview(null)} />
+              <AttachmentPreview key={preview.id} attachment={preview} onClose={() => setPreview(null)} />
             )}
           </div>
         )}

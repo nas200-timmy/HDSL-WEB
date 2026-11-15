@@ -1,9 +1,90 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ChatAttachment } from "../../types";
 import { api } from "../../api";
 import { CloseIcon, DownloadIcon } from "../../components/icons";
 
 const PAGE_CHARS = 65536;
+const CSV_CHARS = 200_000;
+const CSV_MAX_ROWS = 200;
+const CSV_MAX_COLUMNS = 30;
+
+type CsvTable = { rows: string[][]; columns: number; truncated: boolean };
+
+function detectDelimiter(source: string): string {
+  const sample = source.slice(0, 4096);
+  const counts: Record<string, number> = { ",": 0, ";": 0, "\t": 0 };
+  let quoted = false;
+  for (const ch of sample) {
+    if (ch === "\"") {
+      quoted = !quoted;
+    } else if (!quoted && ch in counts) {
+      counts[ch] += 1;
+    }
+  }
+  const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  return best && best[1] > 0 ? best[0] : ",";
+}
+
+/** 只解析首屏：200 行 × 30 列，单元格 500 字符；引号、转义引号和字段内换行都按 RFC 4180 处理。 */
+function parseCsv(source: string): CsvTable {
+  const text = source.replace(/^\uFEFF/, "");
+  const delimiter = detectDelimiter(text);
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  let truncated = false;
+
+  const pushField = () => {
+    if (row.length < CSV_MAX_COLUMNS) {
+      row.push(field.length > 500 ? `${field.slice(0, 500)}…` : field);
+    } else {
+      truncated = true;
+    }
+    field = "";
+  };
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === "\"") {
+        if (text[i + 1] === "\"") {
+          field += "\"";
+          i += 1;
+        } else {
+          quoted = false;
+        }
+      } else {
+        field += ch;
+      }
+      continue;
+    }
+    if (ch === "\"") {
+      quoted = true;
+    } else if (ch === delimiter) {
+      pushField();
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") {
+        i += 1;
+      }
+      pushField();
+      rows.push(row);
+      row = [];
+      if (rows.length >= CSV_MAX_ROWS) {
+        truncated = true;
+        break;
+      }
+    } else {
+      field += ch;
+    }
+  }
+  if (!truncated && (field.length > 0 || row.length > 0)) {
+    pushField();
+    rows.push(row);
+  }
+  const columns = rows.reduce((max, cells) => Math.max(max, cells.length), 0);
+  return { rows, columns, truncated };
+}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -31,8 +112,12 @@ export function AttachmentPreview({
 }) {
   const isPdf = attachment.mime === "application/pdf";
   const textual = !isPdf && (attachment.kind === "text" || attachment.kind === "document");
+  const isCsv = attachment.kind === "text"
+    && (attachment.mime === "text/csv" || attachment.name.toLowerCase().endsWith(".csv"));
+  const pageSize = isCsv ? CSV_CHARS : PAGE_CHARS;
   const url = api.chat.attachmentUrl(attachment.id);
 
+  const [view, setView] = useState<"table" | "raw">("table");
   const [text, setText] = useState("");
   const [hasMore, setHasMore] = useState(false);
   const [nextOffset, setNextOffset] = useState(0);
@@ -57,7 +142,7 @@ export function AttachmentPreview({
     setCharset("");
     setError(null);
     setLoading(true);
-    api.chat.attachmentText(attachment.id, 0, PAGE_CHARS)
+    api.chat.attachmentText(attachment.id, 0, pageSize)
       .then((page) => {
         if (cancelled) return;
         setText(page.text);
@@ -74,13 +159,13 @@ export function AttachmentPreview({
     return () => {
       cancelled = true;
     };
-  }, [attachment.id, textual]);
+  }, [attachment.id, textual, pageSize]);
 
   const loadMore = async () => {
     if (loading || !hasMore) return;
     setLoading(true);
     try {
-      const page = await api.chat.attachmentText(attachment.id, nextOffset, PAGE_CHARS);
+      const page = await api.chat.attachmentText(attachment.id, nextOffset, pageSize);
       setText((current) => current + page.text);
       setHasMore(page.hasMore);
       setNextOffset(page.nextOffset);
@@ -91,6 +176,9 @@ export function AttachmentPreview({
       setLoading(false);
     }
   };
+
+  const csv = useMemo(() => (isCsv && text ? parseCsv(text) : null), [isCsv, text]);
+  const showTable = csv !== null && csv.columns > 1 && view === "table";
 
   return (
     <aside className="chat-preview" aria-label={`附件预览：${attachment.name}`}>
@@ -105,6 +193,14 @@ export function AttachmentPreview({
         <span>{formatSize(attachment.size)}</span>
         {charset && <span>{charset}</span>}
         <span className="spacer" />
+        {isCsv && csv !== null && csv.columns > 1 && (
+          <button
+            className="chat-preview-action"
+            onClick={() => setView(showTable ? "raw" : "table")}
+          >
+            {showTable ? "原始文本" : "表格"}
+          </button>
+        )}
         <a className="chat-preview-action" href={url} target="_blank" rel="noreferrer noopener">
           新标签页
         </a>
@@ -145,12 +241,36 @@ export function AttachmentPreview({
             )}
             {error ? (
               <div className="chat-preview-error">{error}</div>
+            ) : showTable && csv ? (
+              <>
+                <div className="chat-preview-table-wrap scroll">
+                  <table className="chat-preview-table">
+                    <thead>
+                      <tr>
+                        {csv.rows[0].map((cell, index) => <th key={index}>{cell}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {csv.rows.slice(1).map((cells, rowIndex) => (
+                        <tr key={rowIndex}>
+                          {Array.from({ length: csv.columns }, (_, columnIndex) => (
+                            <td key={columnIndex}>{cells[columnIndex] ?? ""}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {csv.truncated && (
+                  <div className="chat-preview-note">仅预览前 200 行；下载查看完整 CSV。</div>
+                )}
+              </>
             ) : (
               <pre className="chat-preview-text">
                 {text || (loading ? "读取中…" : "（空文件）")}
               </pre>
             )}
-            {hasMore && (
+            {!showTable && hasMore && (
               <button className="btn btn-outline" disabled={loading} onClick={() => void loadMore()}>
                 {loading ? "加载中…" : "加载更多"}
               </button>
