@@ -15,6 +15,12 @@ import (
 // bodies are one short sentence.
 const maxErrorBody = 64 << 10
 
+// maxSuccessBody caps a successful response. A chat transcript is the biggest
+// thing this client reads and it easily passes 64 KiB; the old code applied the
+// error cap to everything and turned a long session into "unexpected end of
+// JSON input".
+const maxSuccessBody = 64 << 20
+
 // Client talks to one panel. The session cookie lives here and nowhere else in
 // the HTTP layer: no jar, no argv. The UI decides whether to persist it (see
 // internal/store); this type only ever holds it in memory.
@@ -193,11 +199,23 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if method == "POST" {
 		c.captureCookie(response)
 	}
-	data, readErr := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
+	limit := int64(maxSuccessBody)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		limit = maxErrorBody
+	}
+	data, readErr := io.ReadAll(io.LimitReader(response.Body, limit))
 	if readErr != nil {
 		return response, nil, &TransportError{Op: method + " " + path, Err: readErr}
 	}
-	c.logf("< %d %s", response.StatusCode, strings.TrimSpace(string(data)))
+	if response.StatusCode >= 200 && response.StatusCode < 300 && int64(len(data)) >= limit {
+		return response, nil, &TransportError{Op: method + " " + path,
+			Err: fmt.Errorf("响应超过 %d 字节", limit)}
+	}
+	logged := data
+	if len(logged) > 512 {
+		logged = logged[:512]
+	}
+	c.logf("< %d %s", response.StatusCode, strings.TrimSpace(string(logged)))
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return response, data, apiErrorFrom(response.StatusCode, data)
 	}

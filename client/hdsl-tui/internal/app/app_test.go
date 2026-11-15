@@ -439,3 +439,38 @@ func TestAttachAsksTheStatusKernelThenTerminal(t *testing.T) {
 		t.Errorf("the password was asked for at %d although the panel said it was elevated", elevate)
 	}
 }
+
+func TestBrandSurfacesComeFromThePanelToo(t *testing.T) {
+	got := brandSurfaces([]panel.BrandCapability{
+		{ID: "kimi", Kind: "web"},
+		{ID: "newtui", Kind: "tui"},
+	})
+	if len(got) != len(brandOrder)+1 {
+		t.Fatalf("surfaces = %v", got)
+	}
+	if got[len(got)-1] != "newtui" {
+		t.Fatalf("unknown brand must follow the known ones: %v", got)
+	}
+	seen := map[string]int{}
+	for _, brand := range got {
+		seen[brand]++
+	}
+	if seen["kimi"] != 1 {
+		t.Fatalf("a known brand was listed twice: %v", got)
+	}
+}
+
+func TestBrandIsTUIFallsBackForOldPanels(t *testing.T) {
+	if !brandIsTUI(nil, "qwen") || !brandIsTUI(nil, "mimo") || !brandIsTUI(nil, "minimax") {
+		t.Fatal("the pure-TUI brands must stay TUI without capabilities")
+	}
+	if brandIsTUI(nil, "kimi") {
+		t.Fatal("kimi has a web process; it is not a pure TUI brand")
+	}
+	if !brandIsTUI(map[string]string{"newtui": "tui"}, "newtui") {
+		t.Fatal("the panel's capability must win")
+	}
+	if brandIsTUI(map[string]string{"qwen": "web"}, "qwen") {
+		t.Fatal("an explicit web capability must override the fallback")
+	}
+}

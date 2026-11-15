@@ -7,6 +7,19 @@
 > `hdsl-tui` 的主菜单第一项现在是聊天：单列消息流、贴底输入框、斜杠命令、Markdown、
 > 思考/搜索折叠，交互参考 Kimi Code / Qwen Code 这类终端 agent。服务端没有改动，
 > 面板 jar 与容器只跟版本号走。设计见 [docs/chat-tui.md](docs/chat-tui.md)。
+>
+> **2026-11-16 同版本重发（仅客户端）**：修长会话读取截断与品牌列表写死。面板 jar、
+> Release 里的 jar、容器镜像都不变；只替换 Release 里的 `hdsl-tui` 二进制与源码包。
+
+- 修复长会话打不开：`internal/panel` 的 HTTP 读取把**错误体**的 64 KiB 上限套到了所有
+  响应上，会话 JSON 超过 64 KiB 就被截断，解码报 `unexpected end of JSON input`。
+  成功响应改为 64 MiB 上限，超过时给出明确错误；`--verbose` 只打印响应前 512 字节。
+- 品牌实例列表不再写死：已知品牌保留手写顺序，`/api/brands/capabilities` 报出的新品牌
+  自动追加到菜单；能力接口缺失的旧面板用 `qwen/mimo/minimax` 的纯 TUI 兜底，
+  不再把它们当网页实例显示“启动/停止”。
+- 测试：>64 KiB 会话解码、品牌顺序与 TUI 兜底；`go test ./...` 通过。
+- 手工验收：数据库里放一个 460 KB 的会话，客户端聊天页正常打开；修复前同一会话报
+  `unexpected end of JSON input`。
 
 - 主菜单新增「聊天」；没有会话时选助手新建，有会话时打开最近更新的一条。
 - `internal/panel` 新增聊天 REST 方法（助手、会话、发送、停止、重新生成、编辑、标题、设置）。

@@ -29,6 +29,11 @@ type group struct {
 // though that TUI cannot run next to the brand's web mode.
 var brandOrder = []string{"kimi", "opencode", "claude-web", "hermes", "pi-web", "qwen", "mimo", "minimax", "zcode"}
 
+// pureTUIBrands is the fallback for panels older than the capabilities
+// endpoint: these ship only a terminal, so offering "start instance" would be
+// a request the panel refuses with tui_only.
+var pureTUIBrands = map[string]bool{"qwen": true, "mimo": true, "minimax": true}
+
 func brandTitle(brand string) string {
 	switch brand {
 	case "zcode":
@@ -59,28 +64,60 @@ func (a *App) loadGroups(ctx context.Context) ([]group, bool) {
 	// Capabilities are optional: a panel older than TUI brands answers 404, and
 	// every brand it does know is a web brand.
 	kinds := map[string]string{}
-	if caps, err := a.client.BrandCapabilities(ctx); err == nil {
-		for _, c := range caps {
+	var caps []panel.BrandCapability
+	if list, err := a.client.BrandCapabilities(ctx); err == nil {
+		caps = list
+		for _, c := range list {
 			kinds[c.ID] = c.Kind
 		}
 	} else {
 		a.logf("读取品牌能力失败（按网页品牌处理）: %v", err)
 	}
-	for _, brand := range brandOrder {
+	ordered := brandSurfaces(caps)
+	for _, brand := range ordered {
 		items, err := a.client.BrandInstances(ctx, brand)
 		if err != nil {
 			// A panel without that brand's directory is normal.
 			a.logf("跳过 %s 实例列表: %v", brand, err)
 			continue
 		}
+		tui := brandIsTUI(kinds, brand)
 		groups = append(groups, group{
 			Brand: brand,
 			Title: brandTitle(brand),
 			Items: items,
-			TUI:   kinds[brand] == "tui",
+			TUI:   tui,
 		})
 	}
 	return groups, true
+}
+
+// brandSurfaces merges the hand-written order with the brands the panel
+// reports. The server is the source of truth for existence: a panel update that
+// adds a TUI brand appears here without a client release, after the known ones.
+func brandSurfaces(caps []panel.BrandCapability) []string {
+	ordered := append([]string(nil), brandOrder...)
+	seen := map[string]bool{"": true, "dsh": true}
+	for _, brand := range ordered {
+		seen[brand] = true
+	}
+	for _, capability := range caps {
+		if !seen[capability.ID] {
+			seen[capability.ID] = true
+			ordered = append(ordered, capability.ID)
+		}
+	}
+	return ordered
+}
+
+// brandIsTUI reports whether a surface has no web process. The panel's
+// capability wins; the static list is the fallback for a panel older than the
+// capabilities endpoint.
+func brandIsTUI(kinds map[string]string, brand string) bool {
+	if kind, ok := kinds[brand]; ok {
+		return kind == "tui"
+	}
+	return pureTUIBrands[brand]
 }
 
 // pickInstance is the two-level picker: surface first, then the instances on
