@@ -11,7 +11,7 @@ import { isElevationRequired, requestDeveloperPassword } from "../elevation";
 import { useMobileLayout } from "../hooks";
 import { toast } from "../store";
 import type {
-  ChatAccountProfile, ChatAssistant, ChatAttachment, ChatSearchHit, ChatSession,
+  ChatAccountProfile, ChatAssistant, ChatAttachment, ChatSearchHit, ChatSearchStatus, ChatSession,
   ChatSessionSummary, ChatTurnOutcome, WsEvent,
 } from "../types";
 import { errMsg } from "../utils";
@@ -174,7 +174,14 @@ export function ChatPage() {
   const [profile, setProfile] = useState<{ name: string; avatar: string | null }>({ name: "", avatar: null });
   const [liveUsage, setLiveUsage] = useState<{ sessionId: string; input: number; output: number } | null>(null);
   const [searchEnabled, setSearchEnabled] = useState(false);
-  const [searchStatus, setSearchStatus] = useState<{ configured: boolean } | null>(null);
+  const [searchStatus, setSearchStatus] = useState<ChatSearchStatus | null>(null);
+  const [searchProvider, setSearchProvider] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem("chat.searchProvider");
+    } catch {
+      return null;
+    }
+  });
   const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string; blocks?: LiveBlock[]; tool?: { tool?: string; query: string; provider: string; status: string; hits: number }; sources?: ChatSearchHit[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -221,7 +228,37 @@ export function ChatPage() {
   const preset = isPresetAssistant(currentAssistant);
   const deepseekAccount = chatAccounts.find(isDeepSeekAccount) ?? null;
   const presetReady = !preset || deepseekAccount !== null;
-  const searchConfigured = preset ? deepseekAccount !== null : (searchStatus?.configured ?? false);
+  const searchProviderEntry = searchStatus?.providers?.find((item) => item.id === searchProvider);
+  const searchConfigured = preset
+    ? deepseekAccount !== null
+    : (searchProviderEntry?.configured ?? (searchStatus?.configured ?? false));
+  const searchProviderName = searchProviderEntry?.name
+    ?? searchStatus?.providers?.find((item) => item.id === searchStatus.provider)?.name;
+
+  const applySearchStatus = (status: ChatSearchStatus) => {
+    setSearchStatus(status);
+    setSearchProvider((current) => {
+      const entry = status.providers?.find((item) => item.id === current);
+      if (entry?.configured) return current;
+      const fallback = status.providers?.find((item) => item.id === status.provider && item.configured)
+        ?? status.providers?.find((item) => item.configured);
+      return fallback?.id ?? status.provider;
+    });
+  };
+
+  const pickSearch = (id: string | null) => {
+    if (id === null) {
+      setSearchEnabled(false);
+      return;
+    }
+    setSearchProvider(id);
+    setSearchEnabled(true);
+    try {
+      localStorage.setItem("chat.searchProvider", id);
+    } catch {
+      // 隐私模式禁用 localStorage 时只保留本次选择。
+    }
+  };
   const canSend = !busy && !!currentAssistant && presetReady;
   const defaultAccountFor = (item: ChatAssistant | null | undefined) =>
     isPresetAssistant(item)
@@ -329,7 +366,7 @@ export function ChatPage() {
 
   useEffect(() => {
     void api.chat.searchStatus()
-      .then((status) => setSearchStatus({ configured: status.configured }))
+      .then(applySearchStatus)
       .catch(() => { /* 没配置就当关闭 */ });
   }, []);
 
@@ -405,7 +442,7 @@ export function ChatPage() {
       }
       if (event.type === "chat-settings-changed") {
         void api.chat.searchStatus()
-          .then((status) => setSearchStatus({ configured: status.configured }))
+          .then(applySearchStatus)
           .catch(() => { /* keep the previous state */ });
         void loadAssistants();
         return;
@@ -754,6 +791,7 @@ export function ChatPage() {
         account: sessionAccount ?? undefined,
         requestId: requestId(),
         search: searchEnabled,
+        searchProvider: searchEnabled && !preset ? (searchProvider ?? undefined) : undefined,
       });
       setDraft("");
       setPending([]);
@@ -1200,6 +1238,10 @@ export function ChatPage() {
               searchConfigured={searchConfigured}
               onToggleSearch={toggleSearch}
               searchOfficial={preset}
+              searchProvider={searchProvider ?? undefined}
+              searchProviderName={searchProviderName}
+              searchProviders={searchStatus?.providers ?? []}
+              onPickSearch={pickSearch}
             />
           </div>
         )}

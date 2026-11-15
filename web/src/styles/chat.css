@@ -3368,6 +3368,15 @@
   background: color-mix(in srgb, var(--monet-primary) 14%, transparent);
 }
 
+.chat-search-label {
+  margin-left: 3px;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
 .chat-sources {
   display: flex;
   flex-direction: column;

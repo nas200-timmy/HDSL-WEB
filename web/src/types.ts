@@ -1273,6 +1273,12 @@ export interface ChatSearchHit {
   publishedAt?: string;
 }
 
+export interface ChatSearchProvider {
+  id: "bocha" | "deepseek" | "zhipu" | "tavily" | "brave" | "exa" | string;
+  name: string;
+  configured: boolean;
+}
+
 export interface ChatSearchStatus {
   provider: "bocha" | "deepseek" | string;
   configured: boolean;
@@ -1281,6 +1287,8 @@ export interface ChatSearchStatus {
   deepseekPresetEnabled?: boolean;
   deepseekReady?: boolean;
   deepseekAccount?: string | null;
+  /** 每个服务商是否已配置 key；聊天输入区的搜索菜单用它置灰。 */
+  providers?: ChatSearchProvider[];
 }
 
 export interface ChatSearchResult {

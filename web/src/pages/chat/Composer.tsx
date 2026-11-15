@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowForwardIcon, AttachFileIcon, CloseIcon, SearchIcon } from "../../components/icons";
+import { PopupItem, PopupMenu, PopupSep } from "../../components/PopupMenu";
 import { toast } from "../../store";
 import type { ChatAttachment } from "../../types";
 import { api } from "../../api";
@@ -45,7 +46,7 @@ export function Composer({
   groups, account, model, onPick, onManage, onAdd, pending, onUpload, onRemove, uploading,
   quickPhrases, focusSignal, historyImages, reasoningLevel, onReasoningLevel,
   onUploadText, editing, onCancelEdit, searchEnabled, searchConfigured, onToggleSearch,
-  searchOfficial,
+  searchOfficial, searchProvider, searchProviderName, searchProviders, onPickSearch,
 }: {
   draft: string;
   onDraft: (value: string) => void;
@@ -76,11 +77,17 @@ export function Composer({
   onToggleSearch: () => void;
   /** DeepSeek 官方预设：搜索按钮走服务端工具，不读面板搜索 key。 */
   searchOfficial?: boolean;
+  /** 本轮选中的搜索服务商；未启用时为空。 */
+  searchProvider?: string;
+  searchProviderName?: string;
+  searchProviders: { id: string; name: string; configured: boolean }[];
+  onPickSearch: (id: string | null) => void;
 }) {
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [composing, setComposing] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [searchMenu, setSearchMenu] = useState<HTMLElement | null>(null);
   const currentGroup = groups.find((group) => group.name === account) ?? null;
   const current = currentGroup?.models.find((item) => item.id === model)
     ?? groups.flatMap((group) => group.models).find((item) => item.id === model)
@@ -262,18 +269,56 @@ export function Composer({
         )}
         <button
           className={`chat-tool chat-search-toggle${searchEnabled ? " active" : ""}`}
-          onClick={onToggleSearch}
+          onClick={(event) => {
+            if (searchOfficial) {
+              onToggleSearch();
+              return;
+            }
+            setSearchMenu(event.currentTarget);
+          }}
           disabled={disabled}
-          title={searchConfigured
-            ? (searchOfficial
-                ? (searchEnabled ? "DeepSeek 官方联网搜索已开启，点击关闭" : "DeepSeek 官方联网搜索：由服务端检索并给出引用")
-                : (searchEnabled ? "联网搜索已开启，点击关闭" : "联网搜索：允许模型查网页"))
-            : (searchOfficial
-                ? "先在账户页添加一个 DeepSeek 账户"
-                : "还没配置搜索 key：聊天设置 → 联网搜索")}
+          title={searchOfficial
+            ? (searchEnabled
+                ? "DeepSeek 官方联网搜索已开启，点击关闭"
+                : "DeepSeek 官方联网搜索：由服务端检索并给出引用")
+            : searchEnabled
+              ? `当前搜索源：${searchProviderName ?? "搜索"}；点击更换或关闭`
+              : searchConfigured
+                ? "选择搜索源并开启联网搜索"
+                : "还没配置搜索 key：聊天设置 → 联网搜索"}
         >
           <SearchIcon size={16} />
+          {searchEnabled && !searchOfficial && (
+            <span className="chat-search-label">{searchProviderName ?? "搜索"}</span>
+          )}
         </button>
+        <PopupMenu open={searchMenu !== null} anchor={searchMenu} onClose={() => setSearchMenu(null)}>
+          <PopupItem
+            onClick={() => {
+              onPickSearch(null);
+              setSearchMenu(null);
+            }}
+          >
+            关闭联网搜索
+          </PopupItem>
+          <PopupSep />
+          {searchProviders.map((provider) => (
+            <PopupItem
+              key={provider.id}
+              onClick={() => {
+                if (!provider.configured) {
+                  toast("info", `${provider.name} 还没配置 key：聊天设置 → 联网搜索`);
+                  return;
+                }
+                onPickSearch(provider.id);
+                setSearchMenu(null);
+              }}
+            >
+              {provider.name}
+              {searchProvider === provider.id ? " · 使用中" : provider.configured ? "" : " · 未配置"}
+            </PopupItem>
+          ))}
+        </PopupMenu>
         {reasoningMode && reasoningMode.kind !== "none" && (
           <ThinkingPicker
             level={reasoningLevel}

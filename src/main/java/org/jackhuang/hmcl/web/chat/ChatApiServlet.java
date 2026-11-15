@@ -166,7 +166,8 @@ public final class ChatApiServlet extends HttpServlet {
                         ? chat.settings().agentChatMaxInputTokens() : 0;
                 ChatTurnManager.Outcome outcome = chat.turns().send(sessionId, text, attachments,
                         nullable(body, "model"), nullable(body, "account"),
-                        nullable(body, "requestId"), search, agentLimit);
+                        nullable(body, "requestId"), search, agentLimit,
+                        nullable(body, "searchProvider"));
                 Json.write(response, outcomeJson(outcome));
                 return;
             }

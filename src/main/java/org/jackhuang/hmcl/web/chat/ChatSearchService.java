@@ -149,10 +149,21 @@ public final class ChatSearchService {
         }
     }
 
+    /// 面板支持的搜索服务商；顺序就是聊天输入区菜单里的顺序。
+    public static final List<String> PROVIDERS =
+            List.of("bocha", "deepseek", "zhipu", "tavily", "brave", "exa");
+
+    public static boolean isKnownProvider(@Nullable String provider) {
+        return provider != null && PROVIDERS.contains(provider);
+    }
+
     /// 下发给模型的工具集。搜索永远有；抓正文只在当前服务商支持时才给，
     /// 这样只配一个博查 key 的用户仍然能正常用搜索，不会因为缺 scrape 而报错。
     public static List<ChatProtocol.ToolSpec> tools(ChatSettings.Settings settings) {
-        String provider = settings.searchProvider();
+        return tools(settings, settings.searchProvider());
+    }
+
+    public static List<ChatProtocol.ToolSpec> tools(ChatSettings.Settings settings, String provider) {
         List<ChatProtocol.ToolSpec> list = new ArrayList<>();
         list.add(new ChatProtocol.ToolSpec("search_web", searchDescription(provider),
                 searchSchema(provider)));
@@ -294,6 +305,11 @@ public final class ChatSearchService {
     }
 
     public Result search(ChatSettings.Settings settings, String query) throws ChatException {
+        return search(settings, settings.searchProvider(), query);
+    }
+
+    public Result search(ChatSettings.Settings settings, String provider, String query)
+            throws ChatException {
         String cleaned = query == null ? "" : query.trim();
         if (cleaned.isEmpty()) {
             throw new ChatException(400, "empty_query", "搜索词是空的");
@@ -301,7 +317,9 @@ public final class ChatSearchService {
         if (cleaned.length() > 128) {
             cleaned = cleaned.substring(0, 128);
         }
-        String provider = settings.searchProvider();
+        if (provider == null || provider.isBlank()) {
+            provider = settings.searchProvider();
+        }
         String key = resolveKey(settings, provider);
         if (key == null) {
             throw new ChatException(400, "search_not_configured",
@@ -340,11 +358,18 @@ public final class ChatSearchService {
     /// 抓正文。只有 [scrapeSupported] 的服务商才会下发 `scrape_web`；其它服务商返回 400，
     /// 但搜索本身不受影响。
     public String scrape(ChatSettings.Settings settings, String url) throws ChatException {
+        return scrape(settings, settings.searchProvider(), url);
+    }
+
+    public String scrape(ChatSettings.Settings settings, String provider, String url)
+            throws ChatException {
         String cleaned = url == null ? "" : url.trim();
         if (!cleaned.startsWith("http://") && !cleaned.startsWith("https://")) {
             throw new ChatException(400, "bad_url", "只支持 http/https 链接");
         }
-        String provider = settings.searchProvider();
+        if (provider == null || provider.isBlank()) {
+            provider = settings.searchProvider();
+        }
         String key = resolveKey(settings, provider);
         if (key == null) {
             throw new ChatException(400, "search_not_configured",
@@ -414,7 +439,11 @@ public final class ChatSearchService {
 
     /// 有没有可用的 key：设置里的，或 DeepSeek 账户回落的。
     static boolean configured(ChatSettings.Settings settings) {
-        return resolveKey(settings, settings.searchProvider()) != null;
+        return configured(settings, settings.searchProvider());
+    }
+
+    static boolean configured(ChatSettings.Settings settings, String provider) {
+        return isKnownProvider(provider) && resolveKey(settings, provider) != null;
     }
 
     /// 搜索 key：优先用设置里的；DeepSeek 可以留空，回落到面板里 DeepSeek 账户的 key。

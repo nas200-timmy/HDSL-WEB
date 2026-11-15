@@ -763,6 +763,15 @@ public final class ChatService {
         JsonObject json = new JsonObject();
         json.addProperty("provider", provider);
         json.addProperty("configured", configured);
+        JsonArray providers = new JsonArray();
+        for (String id : ChatSearchService.PROVIDERS) {
+            JsonObject item = new JsonObject();
+            item.addProperty("id", id);
+            item.addProperty("name", ChatSearchService.displayName(id));
+            item.addProperty("configured", ChatSearchService.configured(current, id));
+            providers.add(item);
+        }
+        json.add("providers", providers);
         json.addProperty("maxResults", current.searchMaxResults());
         addNullable(json, "keyMasked", maskKey(current.searchKey(provider)));
         json.addProperty("deepseekPresetEnabled", current.deepseekPresetEnabled());
