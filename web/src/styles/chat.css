@@ -973,7 +973,7 @@
   align-items: baseline;
   gap: 6px;
   width: 100%;
-  padding: 1px 0;
+  padding: 3px 0;
   border: 0;
   background: none;
   color: var(--monet-on-surface-variant);
@@ -1016,14 +1016,18 @@
 
 .chat-timeline-meta {
   flex: none;
+  margin-left: 8px;
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 10px;
   opacity: 0.75;
 }
 
 .chat-timeline-chevron {
   flex: none;
-  font-size: 10px;
+  width: 32px;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--monet-primary);
 }
 
