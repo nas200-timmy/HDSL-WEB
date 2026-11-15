@@ -2,9 +2,11 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## Unreleased · 聊天时间线、附件预览、搜索源选择与 ZCode 版本管理
+## v0.6.88 — 2026-11-15 · 聊天时间线、附件预览、搜索源选择与 ZCode 版本管理
 
-> 基于 `v0.6.87`（`dc37d78ca`）的 `web-shell`。这一轮提交不少是同一功能的连续迭代，
+> 聊天页把思考与搜索收进统一时间线（普通协议和流式也走），附件从“新标签页”换成侧栏预览，
+> 联网搜索可以按消息选服务商；ZCode 品牌补上版本目录、实例最低版本、credential-secret 与
+> 密钥轮换。发布物：fat jar 与容器镜像同步更新。这一轮提交里不少是同一功能的连续迭代，
 > 下面按**最终行为**归纳，不再按提交逐条记录。
 
 ### 聊天时间线
@@ -95,13 +97,17 @@
   跑搜索测试，但删除、设置、备份、账户、头像和助手的写操作仍对 agent 关闭。
 - 通用文案「游戏」统一改为「实例」。
 
-### 测试
+### 验证
 
-- `ChatApiIntegrationTest`：强制下载、Range 206、文本分页与 chat scope。
-- `ChatContractTest`：`/text` 的 `chat-read` scope。
-- `ZcodeCatalogTest` / `ZcodeCredentialsTest`：版本目录分类、下限与凭据格式闸门、
-  secret 生成 / 覆盖 / 轮换。
-- `ChatSettingsTest` / `ChatToolCallTest`：搜索源设置与伪工具调用解析。
+- `./gradlew test` 全量通过（JDK 17 / 21 由 CI 矩阵覆盖）；`npm run typecheck`、
+  `npm run compat`、`npm run build` 通过。
+- `scripts/api-smoke.py build/libs/hdsl-web-0.6.88.jar`：41/41。
+- 覆盖这些改动的用例：`ChatApiIntegrationTest`（强制下载、Range 206、文本分页、chat scope）、
+  `ChatContractTest`（`/text` 的 `chat-read` scope）、`ZcodeCatalogTest` /
+  `ZcodeCredentialsTest`（版本目录分类、下限与凭据格式闸门、secret 生成 / 覆盖 / 轮换）、
+  `ChatSettingsTest` / `ChatToolCallTest`（搜索源设置与伪工具调用解析）。
+- 已知边界：CSV 预览首屏 200 行 × 30 列，完整内容走下载；附件文本分页默认 64 Ki 字符；
+  ZCode 的版本下限是**按实例**的锁，新建实例仍可选旧版本。
 
 ## v0.6.87 — 2026-11-15 · latest_reminder、附件预览与终端兼容性修复
 

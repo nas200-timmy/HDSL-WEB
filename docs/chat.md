@@ -531,12 +531,30 @@ web/src/pages/ChatPage.tsx
 web/src/pages/chat/
   ChatSidebar.tsx       会话列表/助手切换/搜索/分组
   MessageItem.tsx       消息、variant、两种重生成、常驻操作栏
-  Composer.tsx          输入区、附件、能力徽章、发送/停止
+  Composer.tsx          输入区、附件、能力徽章、发送/停止、搜索源菜单
   ModelPicker.tsx       跨服务模型弹层（搜索/分组/能力）
-  ChatSettingsPage.tsx  独立二级页（模型服务/默认模型/数据/网络）
+  ChatSettingsPage.tsx  独立二级页（个人资料/模型/联网搜索/数据与备份/安全与网络）
+  Timeline.tsx          思考/搜索时间线（普通协议与流式共用）
+  AttachmentPreview.tsx 右侧附件预览栏（文本分页、CSV 表格、媒体原生渲染）
+  attachmentPreviewSetting.ts  附件预览开关（localStorage，默认开启）
   AssistantDialog.tsx   助手管理
   Markdown.tsx          GFM + sanitize + highlight + CodeBlock
 ```
+
+### 12.1.1 时间线与附件预览
+
+- `Timeline.tsx`：普通 OpenAI 协议把每轮 `thinking` / `tool_calls` / `tool` 折成步骤
+  （耗时、查询词、命中数、来源），所有步骤标题默认列出、正文各自折叠；流式时最后一段
+  思考默认展开。流式与历史消息共用同一组件，DeepSeek 官方协议继续用 `BlockTimeline`；
+  旧消息没有 `parts` 时回退到 `reasoning + tools`。
+- 展开/收起固定在行尾同一列，点击思考正文也能收起；消息宽度不随展开状态变化。
+- `AttachmentPreview.tsx`：点附件在右侧预览栏打开，窄屏为覆盖式抽屉；文本按 64 Ki 字符
+  分页调 `/text`，CSV 在预览层解析成表格（首屏 200 行 × 30 列），图片/音视频/PDF 用原生
+  渲染和 `Range` 拖动进度。
+- `attachmentPreviewSetting.ts`：开关是浏览器本地偏好（`localStorage`），默认开启；
+  关闭后回退到新标签页。
+- 搜索源选择在 `Composer`：放大镜展开服务商菜单（博查 / DeepSeek / 智谱 / Tavily /
+  Brave / Exa），选中项随消息以 `searchProvider` 发送；未配置 key 的服务商置灰。
 
 - 路由：`web/src/App.tsx` 增加 `/chat` 与 `/chat/settings`；侧栏 `SideBar.tsx` 增加入口。
 - 状态：页面级 reducer + hooks；不新增 Zustand/Redux。

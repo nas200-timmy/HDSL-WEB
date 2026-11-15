@@ -235,8 +235,10 @@ def run(panel):
     if zcode_id:
         status, body = call("POST", "/api/zcode/instances/%s/launch" % zcode_id)
         text = json.dumps(body, ensure_ascii=False)
+        # v0.6.88 起提示语会指明是哪个版本没构建；两种措辞都算“说清楚了”。
         check("zcode: launching without a distribution says so",
-              status in (400, 409) and "distribution" in text, (status, text))
+              status in (400, 409) and ("distribution" in text or "还没有构建" in text),
+              (status, text))
         status, _ = call("DELETE", "/api/zcode/instances/%s" % zcode_id)
         check("zcode: delete", status in (200, 204), status)
 
