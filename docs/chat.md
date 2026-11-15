@@ -899,6 +899,9 @@ POST   /api/chat/sessions               // body 带 assistantId
   保存成答案。工具轮次用完时先降级为「无工具、基于已有结果作答」，仍为空才报
   `tool_rounds_exhausted`。解析入口是 `ChatTurnManager.parseDsmlToolCalls` /
   `dsmlCallsFromText`，有独立单测。
+- 同类伪调用还有 `<search><query>…</query></search>`：`recoverXmlToolCalls` 会解析成
+  `search_web` 调用并剥离标签；没有闭合的截断块也按已出现的 `<query>` 处理。
+  入口是 `ChatTurnManager.xmlCallsFromText`，有单测。
 
 ### 21.5 验证
 

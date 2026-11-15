@@ -109,6 +109,12 @@ public final class ChatTurnManager {
     private static final Pattern DSML_PARAM = Pattern.compile(
             "(?s)<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*parameter\\s+name=\"([^\"]+)\"([^>]*)>(.*?)"
                     + "</\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*parameter>");
+    /// 有些模型会把工具调用写成 `<search><query>…</query></search>` 的伪 XML，而不是
+    /// tool_calls。和 DSML 一样当调用处理，至少不能把它原样展示成答案。
+    private static final Pattern XML_SEARCH_BLOCK = Pattern.compile(
+            "(?is)<search(?:\\s[^>]*)?>.*?</search>");
+    private static final Pattern XML_QUERY = Pattern.compile(
+            "(?is)<query(?:\\s[^>]*)?>(.*?)</query>");
     private final java.util.concurrent.atomic.AtomicLong dailyTokens =
             new java.util.concurrent.atomic.AtomicLong();
     private volatile LocalDate dailyDate = LocalDate.now();
@@ -735,6 +741,7 @@ public final class ChatTurnManager {
                 }
                 List<ChatProtocol.ToolCall> calls;
                 synchronized (turn.lock) {
+                    recoverXmlToolCalls(turn);
                     recoverDsmlToolCalls(turn);
                     calls = List.copyOf(turn.pendingCalls);
                 }
@@ -829,6 +836,70 @@ public final class ChatTurnManager {
                 // Done.
             }
         }
+    }
+
+    /// 模型偶尔把 search_web 写成 `<search><query>…</query></search>`。识别成调用并剥离；
+    /// 流被截断时也尽量把已经出现的 `<query>` 解析出来。
+    private void recoverXmlToolCalls(ActiveTurn turn) {
+        String raw = turn.content.toString();
+        if (raw == null || !raw.contains("<search")) {
+            return;
+        }
+        boolean hadCalls = !turn.pendingCalls.isEmpty();
+        List<ChatProtocol.ToolCall> calls = xmlCallsFromText(raw, turn.tools);
+        if (!hadCalls && !calls.isEmpty()) {
+            turn.pendingCalls.addAll(calls);
+        }
+        Matcher block = XML_SEARCH_BLOCK.matcher(raw);
+        StringBuilder cleaned = new StringBuilder();
+        int last = 0;
+        while (block.find()) {
+            cleaned.append(raw, last, block.start());
+            last = block.end();
+        }
+        cleaned.append(raw.substring(last));
+        if (last == 0) {
+            // 没有闭合块（被截断）：从第一个 <search 起整段丢掉。
+            int start = raw.indexOf("<search");
+            if (start >= 0) {
+                cleaned.setLength(0);
+                cleaned.append(raw, 0, start);
+            }
+        }
+        replaceContent(turn, cleaned.toString());
+    }
+
+    /// 包内可见，便于单测。
+    static List<ChatProtocol.ToolCall> xmlCallsFromText(
+            String text, List<ChatProtocol.ToolSpec> tools) {
+        if (text == null || !text.contains("<search")) {
+            return List.of();
+        }
+        if (tools.stream().noneMatch(tool -> "search_web".equals(tool.name()))) {
+            return List.of();
+        }
+        Matcher block = XML_SEARCH_BLOCK.matcher(text);
+        if (block.find()) {
+            return parseXmlQueries(block.group(0));
+        }
+        int start = text.indexOf("<search");
+        return start < 0 ? List.of() : parseXmlQueries(text.substring(start));
+    }
+
+    private static List<ChatProtocol.ToolCall> parseXmlQueries(String block) {
+        Matcher query = XML_QUERY.matcher(block);
+        List<ChatProtocol.ToolCall> calls = new ArrayList<>();
+        while (query.find() && calls.size() < 4) {
+            String text = query.group(1).trim();
+            if (text.isEmpty()) {
+                continue;
+            }
+            JsonObject arguments = new JsonObject();
+            arguments.addProperty("query", text.length() > 128 ? text.substring(0, 128) : text);
+            calls.add(new ChatProtocol.ToolCall(
+                    "call_xml_" + calls.size(), "search_web", arguments.toString()));
+        }
+        return calls;
     }
 
     /// DeepSeek 在 OpenAI 兼容模式下偶尔把工具调用写成 DSML 文本，而不是 tool_calls JSON。

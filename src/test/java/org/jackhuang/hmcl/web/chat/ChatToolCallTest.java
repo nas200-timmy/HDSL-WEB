@@ -186,6 +186,33 @@ class ChatToolCallTest {
     }
 
     @Test
+    void recoversXmlSearchToolCalls() {
+        String text = "好，那我去查。<search><query>Open WebUI extraction</query>"
+                + "<query>LibreChat parsing</query></search>";
+        List<ChatProtocol.ToolCall> calls = ChatTurnManager.xmlCallsFromText(
+                text, ChatSearchService.tools(settings("bocha")));
+        assertEquals(2, calls.size());
+        assertEquals("search_web", calls.get(0).name());
+        assertTrue(calls.get(0).arguments().contains("Open WebUI"));
+        assertTrue(calls.get(1).arguments().contains("LibreChat"));
+    }
+
+    @Test
+    void xmlSearchRecoveryHandlesTruncatedBlocks() {
+        String text = "<search><query>alpha</query><query>beta";
+        List<ChatProtocol.ToolCall> calls = ChatTurnManager.xmlCallsFromText(
+                text, ChatSearchService.tools(settings("bocha")));
+        assertEquals(1, calls.size());
+        assertTrue(calls.get(0).arguments().contains("alpha"));
+    }
+
+    @Test
+    void xmlSearchRecoveryNeedsTheTool() {
+        String text = "<search><query>alpha</query></search>";
+        assertEquals(List.of(), ChatTurnManager.xmlCallsFromText(text, List.of()));
+    }
+
+    @Test
     void toolSetDegradesToSearchOnly() {
         assertEquals(List.of("search_web"),
                 ChatSearchService.tools(settings("bocha")).stream()
