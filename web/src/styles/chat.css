@@ -561,9 +561,11 @@
 }
 
 /* 助手消息的宽度必须由容器决定，不能由内容撑开：否则展开思考后正文变长，
-   整个 body 变宽，行尾的「展开 / 收起」会跟着往右跑。 */
+   整个 body 变宽，行尾的「展开 / 收起」会跟着往右跑。
+   align-items: stretch 让时间线和气泡都用满 body 宽度，二者右边界对齐。 */
 .chat-msg.assistant .chat-msg-body {
   flex: 1;
+  align-items: stretch;
 }
 
 .chat-msg-name {
