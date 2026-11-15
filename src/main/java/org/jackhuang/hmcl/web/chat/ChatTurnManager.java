@@ -866,7 +866,12 @@ public final class ChatTurnManager {
         }
         boolean hadCalls = !turn.pendingCalls.isEmpty();
         List<ChatProtocol.ToolCall> calls = xmlCallsFromText(raw, turn.tools);
-        if (!hadCalls && !calls.isEmpty()) {
+        if (calls.isEmpty()) {
+            // 正文只是在讨论 <search> 标签（没有可解析的 <query>），
+            // 不能按伪调用处理，否则会把后面的整段回答截掉。
+            return;
+        }
+        if (!hadCalls) {
             turn.pendingCalls.addAll(calls);
         }
         Matcher block = XML_SEARCH_BLOCK.matcher(raw);

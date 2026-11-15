@@ -902,7 +902,8 @@ POST   /api/chat/sessions               // body 带 assistantId
   `dsmlCallsFromText`，有独立单测。
 - 同类伪调用还有 `<search><query>…</query></search>`：`recoverXmlToolCalls` 会解析成
   `search_web` 调用并剥离标签；没有闭合的截断块也按已出现的 `<query>` 处理。
-  入口是 `ChatTurnManager.xmlCallsFromText`，有单测。
+  只有能解析出 query 才动手——正文里只是讨论 `<search>` 标签时原样保留，
+  否则会把后面的回答整段截掉。入口是 `ChatTurnManager.xmlCallsFromText`，有单测。
 
 ### 21.5 验证
 

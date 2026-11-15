@@ -213,6 +213,13 @@ class ChatToolCallTest {
     }
 
     @Test
+    void xmlSearchRecoveryIgnoresPlainMentions() {
+        String text = "正文里提到 `<search>` 标签，但没有 query，不该当成调用";
+        assertEquals(List.of(), ChatTurnManager.xmlCallsFromText(
+                text, ChatSearchService.tools(settings("bocha"))));
+    }
+
+    @Test
     void toolSetDegradesToSearchOnly() {
         assertEquals(List.of("search_web"),
                 ChatSearchService.tools(settings("bocha")).stream()
