@@ -333,117 +333,123 @@ function SearchPanel({
   };
 
   return (
-    <div className="chat-settings-card">
-      <div className="chat-settings-card-title">联网搜索</div>
-      <p className="chat-settings-desc">
-        这里的服务商与 key 只用于普通助手。DeepSeek 官方预设角色使用 DeepSeek 服务端搜索，
-        不读取这里的设置。
-      </p>
-      <div className="hint">
-        模型声明支持工具时会拿到只读的 <code>search_web</code>（DeepSeek / Exa 还会多一个
-        <code>scrape_web</code> 抓正文），自己决定搜什么、搜几次（每轮最多 3 次）；
-        模型不会用工具时，面板在发送前替它搜一次。结果都作为不可信资料交给模型，
-        并要求用 <code>[citation,domain](id)</code> 标注来源。按次计费，同一句话
-        1 小时内不会重复计费。
-      </div>
-      <div className="chat-settings-form-grid">
+    <div className="chat-settings-stack">
+      <section className="chat-settings-card">
+        <div className="chat-settings-card-title">联网搜索</div>
+        <p className="chat-settings-desc">
+          这里的服务商与 key 只用于普通助手。DeepSeek 官方预设角色使用 DeepSeek 服务端搜索，
+          不读取这里的设置。
+        </p>
+        <div className="chat-settings-callout">
+          模型声明支持工具时会拿到只读的 <code>search_web</code>（DeepSeek / Exa 还会多一个
+          <code>scrape_web</code> 抓正文），自己决定搜什么、搜几次（每轮最多 3 次）；
+          模型不会用工具时，面板在发送前替它搜一次。结果都作为不可信资料交给模型，
+          并要求用 <code>[citation,domain](id)</code> 标注来源。按次计费，同一句话
+          1 小时内不会重复计费。
+        </div>
+        <div className="chat-settings-form-grid">
+          <label className="form-row">
+            <span className="form-label">服务商</span>
+            <select
+              className="input"
+              value={provider}
+              onChange={(event) => setProvider(event.target.value)}
+            >
+              <option value="bocha">博查 Bocha</option>
+              <option value="deepseek">DeepSeek Search</option>
+              <option value="zhipu">智谱 Web Search</option>
+              <option value="tavily">Tavily</option>
+              <option value="brave">Brave Search</option>
+              <option value="exa">Exa</option>
+            </select>
+          </label>
+          <label className="form-row">
+            <span className="form-label">返回条数</span>
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={10}
+              value={maxResults}
+              onChange={(event) => setMaxResults(Number(event.target.value))}
+            />
+          </label>
+        </div>
         <label className="form-row">
-          <span className="form-label">服务商</span>
-          <select
-            className="input"
-            value={provider}
-            onChange={(event) => setProvider(event.target.value)}
-          >
-            <option value="bocha">博查 Bocha</option>
-            <option value="deepseek">DeepSeek Search</option>
-            <option value="zhipu">智谱 Web Search</option>
-            <option value="tavily">Tavily</option>
-            <option value="brave">Brave Search</option>
-            <option value="exa">Exa</option>
-          </select>
-        </label>
-        <label className="form-row">
-          <span className="form-label">返回条数</span>
+          <span className="form-label">API 密钥（留空保持不变）</span>
           <input
             className="input"
-            type="number"
-            min={1}
-            max={10}
-            value={maxResults}
-            onChange={(event) => setMaxResults(Number(event.target.value))}
+            type="password"
+            value={key}
+            placeholder={settings.searchKeyMasked ? `已保存 ${settings.searchKeyMasked}` : "填搜索服务的 key"}
+            onChange={(event) => setKey(event.target.value)}
+            autoComplete="off"
           />
         </label>
-      </div>
-      <label className="form-row">
-        <span className="form-label">API 密钥（留空保持不变）</span>
-        <input
-          className="input"
-          type="password"
-          value={key}
-          placeholder={settings.searchKeyMasked ? `已保存 ${settings.searchKeyMasked}` : "填搜索服务的 key"}
-          onChange={(event) => setKey(event.target.value)}
-          autoComplete="off"
-        />
-      </label>
-      <div className="hint">
-        DeepSeek Search 可以直接留空——会回落到面板里 DeepSeek 账户的 key（同一个 key 两边通用）。
-        博查需要填自己的 key。
-      </div>
-      <div className="form-row" style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <span className="form-label">保留检索记录</span>
-        <button
-          type="button"
-          className={`switch ${persistTrail ? "on" : ""}`}
-          role="switch"
-          aria-checked={persistTrail}
-          aria-label="保留检索记录"
-          style={{ border: 0, padding: 0 }}
-          onClick={() => setPersistTrail(!persistTrail)}
-        />
-      </div>
-      <div className="hint">
-        开启时把每次搜索/抓取的完整链路存进这条消息，追问时模型能看到上一轮搜过什么；
-        代价是数据库和上下文都会变大。关闭后只保留最终回答。
-      </div>
-      <div className="chat-provider-actions">
-        <button className="btn btn-raised" disabled={busy} onClick={() => void save()}>
-          {busy ? "保存中…" : "保存"}
-        </button>
-        <button className="btn btn-text dim" disabled={busy || !settings.searchKeyMasked}
-          onClick={() => void clearKey()}>
-          清除 key
-        </button>
-      </div>
-
-      <div className="chat-settings-card-title" style={{ marginTop: 18 }}>测试搜索</div>
-      <div className="chat-search-test">
-        <input
-          className="input"
-          value={query}
-          placeholder="输入一个搜索词，例如 DeepSeek V4 release"
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Enter") void test(); }}
-        />
-        <button className="btn btn-outline" disabled={testing} onClick={() => void test()}>
-          {testing ? "搜索中…" : "搜一下"}
-        </button>
-      </div>
-      {result && (
-        <div className="chat-search-results">
-          {result.hits.length === 0 ? (
-            <div className="hint">这次没有结果（空结果不计费）。</div>
-          ) : result.hits.map((hit, index) => (
-            <a key={`${hit.url}-${index}`} className="chat-search-hit"
-              href={hit.url} target="_blank" rel="noreferrer noopener">
-              <span className="chat-source-index">{index + 1}</span>
-              <span className="chat-search-hit-text">
-                <span className="chat-search-hit-title">{hit.title}</span>
-                {hit.snippet && <span className="chat-search-hit-snippet">{hit.snippet}</span>}
-              </span>
-            </a>
-          ))}
+        <div className="chat-settings-hint">
+          DeepSeek Search 可以直接留空——会回落到面板里 DeepSeek 账户的 key（同一个 key 两边通用）。
+          博查需要填自己的 key。
         </div>
-      )}
+        <div className="chat-settings-toggle-row">
+          <div>
+            <div className="chat-settings-toggle-title">保留检索记录</div>
+            <div className="chat-settings-toggle-desc">
+              开启时把每次搜索/抓取的完整链路存进这条消息，追问时模型能看到上一轮搜过什么；
+              代价是数据库和上下文都会变大。关闭后只保留最终回答。
+            </div>
+          </div>
+          <button
+            type="button"
+            className={`switch ${persistTrail ? "on" : ""}`}
+            role="switch"
+            aria-checked={persistTrail}
+            aria-label="保留检索记录"
+            style={{ border: 0, padding: 0 }}
+            onClick={() => setPersistTrail(!persistTrail)}
+          />
+        </div>
+        <div className="chat-settings-actions">
+          <button className="btn btn-raised" disabled={busy} onClick={() => void save()}>
+            {busy ? "保存中…" : "保存"}
+          </button>
+          <button className="btn btn-text dim" disabled={busy || !settings.searchKeyMasked}
+            onClick={() => void clearKey()}>
+            清除 key
+          </button>
+        </div>
+      </section>
+
+      <section className="chat-settings-card">
+        <div className="chat-settings-card-title">测试搜索</div>
+        <div className="chat-search-test">
+          <input
+            className="input"
+            value={query}
+            placeholder="输入一个搜索词，例如 DeepSeek V4 release"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter") void test(); }}
+          />
+          <button className="btn btn-outline" disabled={testing} onClick={() => void test()}>
+            {testing ? "搜索中…" : "搜一下"}
+          </button>
+        </div>
+        {result && (
+          <div className="chat-search-results">
+            {result.hits.length === 0 ? (
+              <div className="hint">这次没有结果（空结果不计费）。</div>
+            ) : result.hits.map((hit, index) => (
+              <a key={`${hit.url}-${index}`} className="chat-search-hit"
+                href={hit.url} target="_blank" rel="noreferrer noopener">
+                <span className="chat-source-index">{index + 1}</span>
+                <span className="chat-search-hit-text">
+                  <span className="chat-search-hit-title">{hit.title}</span>
+                  {hit.snippet && <span className="chat-search-hit-snippet">{hit.snippet}</span>}
+                </span>
+              </a>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -1214,8 +1220,8 @@ function PresetPanel({
         关闭后助手和它的会话都不会删除，只是从列表里隐藏。
       </p>
       <div className="chat-settings-form-grid">
-        <div className="form-row" style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <span className="form-label" style={{ margin: 0 }}>在角色列表中启用</span>
+        <div className="chat-settings-toggle-row">
+          <div className="chat-settings-toggle-title">在角色列表中启用</div>
           <button
             type="button"
             className={`switch ${enabled ? "on" : ""}`}
@@ -1446,13 +1452,13 @@ function DataPanel({
     <div className="chat-settings-stack">
       <div className="chat-settings-card">
         <div className="chat-settings-card-title">附件预览</div>
-        <div className="form-row" style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <span className="form-label" style={{ fontSize: 13, color: "var(--monet-on-surface)" }}>
-            点附件时在聊天侧栏预览
-            <span className="chat-settings-note" style={{ display: "block", marginTop: 2 }}>
+        <div className="chat-settings-toggle-row">
+          <div>
+            <div className="chat-settings-toggle-title">点附件时在聊天侧栏预览</div>
+            <div className="chat-settings-toggle-desc">
               关闭后回退到新标签页；立即生效，仅本浏览器，默认开启。
-            </span>
-          </span>
+            </div>
+          </div>
           <button
             type="button"
             className={`switch switch-lg ${attachmentPreview ? "on" : ""}`}
