@@ -94,12 +94,26 @@ public final class ChatEndpoints {
     }
 
     public static @Nullable DshAccount account(String name) {
+        DshAccount byLabel = null;
+        int labelMatches = 0;
+        String wantedLabel = name;
+        int bar = name == null ? -1 : name.indexOf('|');
+        if (bar >= 0) {
+            wantedLabel = name.substring(bar + 1);
+        }
         for (DshAccount account : SettingsManager.settings().getAccounts()) {
             if (account.matchesKey(name)) {
                 return account;
             }
+            // 前端缓存的账户 key 可能带着旧的 vendor 前缀（例如
+            // alibaba-cn|alibaba-token-plan），而账户 label 仍然是 alibaba-token-plan。
+            // 只在 label 唯一时兜底，避免两家同名账户被误选。
+            if (account.label() != null && account.label().equals(wantedLabel)) {
+                byLabel = account;
+                labelMatches++;
+            }
         }
-        return null;
+        return labelMatches == 1 ? byLabel : null;
     }
 
     public static List<DshAccount> accounts() {
