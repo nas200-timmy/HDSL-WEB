@@ -46,6 +46,7 @@ class ChatContractTest {
         assertEquals(AgentScopes.CHAT_READ, AgentScopes.required("GET", "/api/chat/sessions"));
         assertEquals(AgentScopes.CHAT_READ, AgentScopes.required("GET", "/api/chat/assistants"));
         assertEquals(AgentScopes.CHAT_READ, AgentScopes.required("GET", "/api/chat/attachments/a"));
+        assertEquals(AgentScopes.CHAT_READ, AgentScopes.required("GET", "/api/chat/attachments/a/text"));
         assertEquals(AgentScopes.CHAT_WRITE, AgentScopes.required("POST", "/api/chat/sessions"));
         assertEquals(AgentScopes.CHAT_WRITE, AgentScopes.required("POST", "/api/chat/sessions/a/messages"));
         assertEquals(AgentScopes.CHAT_WRITE, AgentScopes.required("POST", "/api/chat/sessions/a/edit"));

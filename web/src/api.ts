@@ -60,6 +60,7 @@ import type {
   ChatSessionSummary,
   ChatSession,
   ChatAttachment,
+  ChatAttachmentText,
   ChatSettings,
   ChatBackup,
   ChatAccountProfile,
@@ -1152,7 +1153,15 @@ export const api = {
         { timeoutMs: 120000 },
       );
     },
-    attachmentUrl: (id: string) => `api/chat/attachments/${encodeURIComponent(id)}`,
+    attachmentUrl: (id: string) => `/api/chat/attachments/${encodeURIComponent(id)}`,
+    attachmentDownloadUrl: (id: string) =>
+      `/api/chat/attachments/${encodeURIComponent(id)}?download=1`,
+    attachmentText: (id: string, offset = 0, limit = 65536) =>
+      request<ChatAttachmentText>(
+        `/api/chat/attachments/${encodeURIComponent(id)}/text?offset=${offset}&limit=${limit}`,
+        undefined,
+        { timeoutMs: 60000 },
+      ),
 
     searchStatus: () => request<ChatSearchStatus>("/api/chat/search/status"),
     searchTest: (query: string) =>

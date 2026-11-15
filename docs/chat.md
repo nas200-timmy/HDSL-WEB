@@ -342,6 +342,13 @@ idle -> streaming -> done
   文档 50 MB）；否则超过 1 MiB 的图片会在进入上传处理器前得到
   `413 payload too large`。
 - 下载 `GET /api/chat/attachments/{id}`，校验会话归属。
+- `?download=1` 把 `Content-Disposition` 从 `inline` 切成 `attachment`；预览栏的下载按钮走它。
+- 支持单区间 `Range`（206 + `Content-Range`）：浏览器内置 PDF 查看器和 `<video>` 拖动进度
+  都依赖它；多区间只处理第一段，不可满足的区间回 416。
+- 文本预览 `GET /api/chat/attachments/{id}/text?offset=&limit=`：`text` 读原文件，
+  `document` 读抽取文本（响应里 `extracted=true`），其他类型 415；按字符分页
+  （默认 64 Ki 字符、上限 200 Ki），返回 `{text, offset, nextOffset, hasMore, charset}`。
+  这样 50 MB 的日志不会因为点一次预览就整段进内存。
 - 文本类附件（`text/*`、`application/json`、`application/xml`、`*+json`）在响应头里显式带
   charset：按内容嗅探 UTF-8 / GB18030，避免中文 Windows 浏览器把 UTF-8 的粘贴文本按 GBK
   猜成乱码，也兼容旧的 GBK 记事本文件。
@@ -391,6 +398,17 @@ idle -> streaming -> done
 - 拒绝宏文档；不执行任何嵌入对象/脚本。
 - 防 zip bomb、路径穿越、超大解压比。
 - 解析失败保留原文件，但消息标记「无法读取内容」，不阻塞发送其他文本。
+
+### 8.6 预览侧栏
+
+- 点消息里的图片/文件 chip → 聊天页右侧 `.chat-preview`，不再默认开新标签页。
+- 图片、音频、视频、PDF 用浏览器原生渲染；文本/Office 展示文本预览（Office 明确标注
+  「抽取文本，不是原版式」）；其他类型只给元信息和下载。
+- 文本按 64 Ki 字符分页加载，底部「加载更多」继续；切换会话清空预览；Esc 关闭。
+- 窄屏（≤900px）变成覆盖式抽屉，不挤压消息列。
+- 开关在「聊天设置 → 数据与备份 → 附件预览」，**默认开启**；关闭后回退到新标签页。
+  偏好存 `localStorage`（`chat.attachmentPreview`）：开发者守卫只放行部分 API 时
+  `/api/chat/settings` 需要提权，把纯 UI 偏好绑过去会让开关在普通聊天页读不到。
 
 ## 9. 模型能力
 

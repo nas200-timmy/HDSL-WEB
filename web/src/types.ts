@@ -1179,6 +1179,17 @@ export interface ChatAttachment {
   preview?: string;
 }
 
+/** GET /api/chat/attachments/{id}/text 的一页（按字符分页）。 */
+export interface ChatAttachmentText {
+  text: string;
+  offset: number;
+  nextOffset: number;
+  hasMore: boolean;
+  charset: string;
+  /** true = document 的抽取文本，不是原文件内容 */
+  extracted: boolean;
+}
+
 /** DeepSeek 官方协议的原生内容块（按流顺序；思考、服务端工具、正文都在里面）。 */
 export interface ChatBlock {
   type: string;

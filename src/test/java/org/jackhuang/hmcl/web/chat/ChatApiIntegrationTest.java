@@ -127,6 +127,90 @@ class ChatApiIntegrationTest {
         }
     }
 
+    @Test
+    void attachmentDownloadCanForceAttachmentDisposition(@TempDir Path dataDir) throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+                config -> {
+                    config.auth.disabled = true;
+                    config.bindHost = "127.0.0.1";
+                })) {
+            String id = uploadText(running, "hello 世界");
+            HttpRequest request = HttpRequest.newBuilder(URI.create(running.baseUrl()
+                            + "/api/chat/attachments/" + id + "?download=1"))
+                    .GET().build();
+            HttpResponse<String> response = TestSupport.client().send(request,
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertEquals(200, response.statusCode());
+            String disposition = response.headers().firstValue("Content-Disposition").orElse("");
+            assertTrue(disposition.startsWith("attachment;"), disposition);
+        }
+    }
+
+    @Test
+    void attachmentDownloadHonoursASingleByteRange(@TempDir Path dataDir) throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+                config -> {
+                    config.auth.disabled = true;
+                    config.bindHost = "127.0.0.1";
+                })) {
+            String id = uploadText(running, "0123456789");
+            HttpRequest request = HttpRequest.newBuilder(URI.create(running.baseUrl()
+                            + "/api/chat/attachments/" + id))
+                    .header("Range", "bytes=2-5")
+                    .GET().build();
+            HttpResponse<String> response = TestSupport.client().send(request,
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertEquals(206, response.statusCode());
+            assertEquals("2345", response.body());
+            assertEquals("bytes 2-5/10",
+                    response.headers().firstValue("Content-Range").orElse(""));
+            assertEquals("bytes", response.headers().firstValue("Accept-Ranges").orElse(""));
+        }
+    }
+
+    @Test
+    void attachmentTextEndpointPaginatesByCharacters(@TempDir Path dataDir) throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+                config -> {
+                    config.auth.disabled = true;
+                    config.bindHost = "127.0.0.1";
+                })) {
+            String id = uploadText(running, "ABCDEFGHIJ");
+            JsonObject first = get(running,
+                    "/api/chat/attachments/" + id + "/text?offset=2&limit=3");
+            assertEquals("CDE", first.get("text").getAsString());
+            assertEquals(5, first.get("nextOffset").getAsInt());
+            assertTrue(first.get("hasMore").getAsBoolean());
+
+            JsonObject last = get(running,
+                    "/api/chat/attachments/" + id + "/text?offset=8&limit=3");
+            assertEquals("IJ", last.get("text").getAsString());
+            assertEquals(10, last.get("nextOffset").getAsInt());
+            assertTrue(!last.get("hasMore").getAsBoolean());
+            assertEquals("UTF-8", last.get("charset").getAsString());
+        }
+    }
+
+    private static String uploadText(TestSupport.RunningServer running, String content) throws Exception {
+        JsonObject session = post(running, "/api/chat/sessions", new JsonObject());
+        String sessionId = session.get("id").getAsString();
+        String boundary = "----hdslTestBoundary";
+        String multipart = "--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"file\"; filename=\"pasted.txt\"\r\n"
+                + "Content-Type: text/plain\r\n\r\n"
+                + content + "\r\n--" + boundary + "--\r\n";
+        HttpRequest upload = HttpRequest.newBuilder(URI.create(running.baseUrl()
+                        + "/api/chat/attachments?sessionId=" + sessionId))
+                .timeout(Duration.ofSeconds(10))
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                .POST(HttpRequest.BodyPublishers.ofString(multipart, StandardCharsets.UTF_8))
+                .build();
+        HttpResponse<String> uploaded = TestSupport.client().send(upload,
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        assertEquals(201, uploaded.statusCode(), uploaded.body());
+        return JsonParser.parseString(uploaded.body()).getAsJsonObject().get("id").getAsString();
+    }
+
     private static void stream(HttpExchange exchange) throws IOException {
         exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
         exchange.sendResponseHeaders(200, 0);

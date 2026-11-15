@@ -11,17 +11,17 @@ function activeMessage(node: ChatNode): ChatMessage | null {
   return node.variants.find((item) => item.id === node.activeVariantId) ?? node.variants[node.variants.length - 1];
 }
 
-function AttachmentChip({ attachment, onOpen }: { attachment: ChatAttachment; onOpen: (url: string) => void }) {
+function AttachmentChip({ attachment, onOpen }: { attachment: ChatAttachment; onOpen: (attachment: ChatAttachment) => void }) {
   const url = api.chat.attachmentUrl(attachment.id);
   if (attachment.kind === "image") {
     return (
-      <button className="chat-attach-image" onClick={() => onOpen(url)} title={attachment.name}>
+      <button className="chat-attach-image" onClick={() => onOpen(attachment)} title={attachment.name}>
         <img src={url} alt={attachment.name} loading="lazy" />
       </button>
     );
   }
   return (
-    <button className="chat-attach-chip" onClick={() => onOpen(url)} title={attachment.name}>
+    <button className="chat-attach-chip" onClick={() => onOpen(attachment)} title={attachment.name}>
       <span className="chat-attach-kind">{attachment.kind === "document" ? "DOC" : attachment.kind.toUpperCase()}</span>
       <span className="chat-attach-name">{attachment.name}</span>
       <span className="chat-attach-size">{Math.max(1, Math.round(attachment.size / 1024))} KB</span>
@@ -127,7 +127,7 @@ function BlockTimeline({ blocks }: { blocks: ChatBlock[] }) {
 /** 一条消息（一个节点）。variant 切换、两种重生成、编辑与删除都在这里。 */
 export function MessageItem({
   node, assistant, user, editingNodeId, liveContent, liveReasoning, liveTool, streaming,
-  onRegenerate, onEdit, onDelete, onSwitchVariant,
+  onRegenerate, onEdit, onDelete, onSwitchVariant, onOpenAttachment,
 }: {
   node: ChatNode;
   assistant: { name: string; avatar: string };
@@ -141,6 +141,7 @@ export function MessageItem({
   onEdit: (nodeId: string, text: string) => void;
   onDelete: (nodeId: string) => void;
   onSwitchVariant: (nodeId: string, messageId: string) => void;
+  onOpenAttachment: (attachment: ChatAttachment) => void;
 }) {
   const message = activeMessage(node);
   const [menu, setMenu] = useState<HTMLElement | null>(null);
@@ -196,8 +197,6 @@ export function MessageItem({
     }
   };
 
-  const openAttachment = (url: string) => window.open(url, "_blank", "noopener,noreferrer");
-
   return (
     <div className={`chat-msg ${isUser ? "user" : "assistant"}${editingNodeId === node.id ? " editing" : ""}`} data-node={node.id}>
       {!isUser && (
@@ -237,7 +236,7 @@ export function MessageItem({
         {message.attachments.length > 0 && (
           <div className="chat-attachments">
             {message.attachments.map((attachment) => (
-              <AttachmentChip key={attachment.id} attachment={attachment} onOpen={openAttachment} />
+              <AttachmentChip key={attachment.id} attachment={attachment} onOpen={onOpenAttachment} />
             ))}
           </div>
         )}

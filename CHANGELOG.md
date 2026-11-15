@@ -6,6 +6,18 @@
 
 > 基于 v0.6.87（`dc37d78ca`）的 `web-shell` 开发分支。
 
+### 聊天附件预览
+
+- 聊天页新增右侧附件预览栏：图片/音频/视频/PDF 原生渲染，文本与 Office 抽取文本分页预览；
+  支持下载、「新标签页打开」、Esc 关闭，窄屏自动变成覆盖式抽屉。
+- `GET /api/chat/attachments/{id}` 新增 `?download=1` 与单区间 `Range`（206）：PDF 查看器和
+  视频拖动不再整段下载。
+- 新增 `GET /api/chat/attachments/{id}/text`：按字符分页读取文本或抽取文本，默认 64 Ki 字符。
+- 开关在「聊天设置 → 数据与备份 → 附件预览」，默认开启；关闭后保持原来的新标签页行为。
+  偏好存 `localStorage`，避免绑定需要开发者提权的 `/api/chat/settings`。
+- 测试：`ChatApiIntegrationTest` 覆盖强制下载、Range 206 与文本分页；`ChatContractTest`
+  覆盖 `/text` 的 `chat-read` scope。
+
 ## v0.6.87 — 2026-11-15 · latest_reminder、附件预览与终端兼容性修复
 
 > 修的是 v0.6.86 上线后真实踩到的三类问题：DeepSeek 官方助手在中文环境直接 400、长文本

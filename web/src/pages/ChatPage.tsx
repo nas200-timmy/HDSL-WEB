@@ -17,6 +17,8 @@ import type {
 import { errMsg } from "../utils";
 import { ws } from "../ws";
 import { AssistantDialog, AssistantManagerDialog } from "./chat/AssistantDialog";
+import { AttachmentPreview } from "./chat/AttachmentPreview";
+import { readAttachmentPreview } from "./chat/attachmentPreviewSetting";
 import { ChatSidebar, RenameSessionDialog } from "./chat/ChatSidebar";
 import { Composer } from "./chat/Composer";
 import { Markdown } from "./chat/Markdown";
@@ -188,6 +190,8 @@ export function ChatPage() {
   const [elevating, setElevating] = useState(false);
   const [focusSignal, setFocusSignal] = useState(0);
   const [sessionMenu, setSessionMenu] = useState<HTMLElement | null>(null);
+  const [preview, setPreview] = useState<ChatAttachment | null>(null);
+  const [previewEnabled] = useState(readAttachmentPreview);
 
   const sessionIdRef = useRef<string | null>(null);
   const assistantIdRef = useRef("default");
@@ -195,6 +199,18 @@ export function ChatPage() {
   const finishedTurns = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const atBottom = useRef(true);
+
+  useEffect(() => {
+    setPreview(null);
+  }, [sessionId]);
+
+  const openAttachment = (attachment: ChatAttachment) => {
+    if (previewEnabled) {
+      setPreview(attachment);
+    } else {
+      window.open(api.chat.attachmentUrl(attachment.id), "_blank", "noopener,noreferrer");
+    }
+  };
 
   sessionIdRef.current = sessionId;
   assistantIdRef.current = assistantId;
@@ -1099,8 +1115,9 @@ export function ChatPage() {
             </div>
           </div>
         ) : (
-          <div
-            className="chat-messages scroll"
+          <div className="chat-stage">
+            <div
+              className="chat-messages scroll"
             ref={scrollRef}
             onScroll={(event) => {
               const el = event.currentTarget;
@@ -1130,6 +1147,7 @@ export function ChatPage() {
                       onSwitchVariant={(nodeId, messageId) => void switchVariant(nodeId, messageId)}
                       user={profile}
                       editingNodeId={editTarget?.nodeId ?? null}
+                      onOpenAttachment={openAttachment}
                     />
                   </Fragment>
                 );
@@ -1137,6 +1155,10 @@ export function ChatPage() {
             })()}
             {live && !liveAttached && (
               <LiveBubble assistant={currentAssistant} text={live.text} reasoning={live.reasoning} tool={live.tool} sources={live.sources} blocks={live.blocks} />
+            )}
+            </div>
+            {preview && (
+              <AttachmentPreview attachment={preview} onClose={() => setPreview(null)} />
             )}
           </div>
         )}

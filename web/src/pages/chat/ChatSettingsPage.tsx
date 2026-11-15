@@ -13,6 +13,7 @@ import type {
   ChatSearchResult, ChatSettings, ChatVisionTest, CreateAccountBody, ModelProvider,
 } from "../../types";
 import { errMsg } from "../../utils";
+import { readAttachmentPreview, writeAttachmentPreview } from "./attachmentPreviewSetting";
 import { AvatarView } from "./AvatarView";
 import { AvatarCropDialog } from "./AvatarCropDialog";
 import { ModelCaps, capabilitySourceLabel } from "./ModelCaps";
@@ -1391,6 +1392,7 @@ function DataPanel({
 }) {
   const [form, setForm] = useState(settings);
   const [busy, setBusy] = useState(false);
+  const [attachmentPreview, setAttachmentPreview] = useState(readAttachmentPreview);
   useEffect(() => setForm(settings), [settings]);
 
   const patch = <K extends keyof ChatSettings>(key: K, value: ChatSettings[K]) =>
@@ -1434,6 +1436,23 @@ function DataPanel({
 
   return (
     <div className="chat-settings-stack">
+      <div className="chat-settings-card">
+        <div className="chat-settings-card-title">附件预览</div>
+        <label className="form-row">
+          <span className="form-label">点附件时在聊天侧栏预览（关闭后回退到新标签页）</span>
+          <input
+            type="checkbox"
+            checked={attachmentPreview}
+            onChange={(event) => {
+              const next = event.target.checked;
+              setAttachmentPreview(next);
+              writeAttachmentPreview(next);
+            }}
+          />
+        </label>
+        <div className="chat-settings-note">立即生效，仅本浏览器；默认开启。</div>
+      </div>
+
       <div className="chat-settings-card">
         <div className="chat-settings-card-title">保留策略</div>
         <div className="chat-settings-form-grid">

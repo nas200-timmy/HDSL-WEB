@@ -36,6 +36,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.Reader;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -251,7 +252,12 @@ public final class ChatApiServlet extends HttpServlet {
         }
 
         if (route.startsWith("/attachments/") && "GET".equals(method)) {
-            download(response, route.substring("/attachments/".length()));
+            String tail = route.substring("/attachments/".length());
+            if (tail.endsWith("/text")) {
+                attachmentText(request, response, tail.substring(0, tail.length() - "/text".length()));
+                return;
+            }
+            download(request, response, tail, "1".equals(request.getParameter("download")));
             return;
         }
 
@@ -521,7 +527,12 @@ public final class ChatApiServlet extends HttpServlet {
                 || "application/xml".equals(lower) || lower.endsWith("+json");
     }
 
-    private void download(HttpServletResponse response, String id) throws IOException, SQLException {
+    /// 附件预览/下载：`?download=1` 强制下载，其余保持 inline。
+    ///
+    /// 支持单区间 `Range`：浏览器内置 PDF 查看器和 `<video>` 拖动进度都依赖 206。
+    /// 多区间只处理第一段，不可满足的区间回 416。
+    private void download(HttpServletRequest request, HttpServletResponse response,
+                          String id, boolean asDownload) throws IOException, SQLException {
         ChatStore.Attachment attachment = chat.attachment(id);
         if (attachment == null) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "attachment not found");
@@ -532,7 +543,19 @@ public final class ChatApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "attachment file is missing");
             return;
         }
-        response.setStatus(200);
+        long size = Files.size(path);
+        ByteRange range;
+        try {
+            range = parseRange(request.getHeader("Range"), size);
+        } catch (RangeNotSatisfiable e) {
+            response.setStatus(HttpServletResponse.SC_REQUESTED_RANGE_NOT_SATISFIABLE);
+            response.setHeader("Content-Range", "bytes */" + size);
+            return;
+        }
+        long start = range == null ? 0 : range.start();
+        long length = range == null ? size : range.end() - range.start() + 1;
+
+        response.setStatus(range == null ? 200 : 206);
         if (textual(attachment.mime())) {
             response.setContentType(attachment.mime() + "; charset="
                     + ChatAttachments.sniffTextCharset(path).name());
@@ -540,13 +563,155 @@ public final class ChatApiServlet extends HttpServlet {
             response.setContentType(attachment.mime());
         }
         response.setHeader("X-Content-Type-Options", "nosniff");
+        response.setHeader("Accept-Ranges", "bytes");
         response.setHeader("Cache-Control", "private, max-age=3600");
+        response.setContentLengthLong(length);
+        if (range != null) {
+            response.setHeader("Content-Range", "bytes " + start + "-" + range.end() + "/" + size);
+        }
         String encoded = URLEncoder.encode(attachment.name(), StandardCharsets.UTF_8)
                 .replace("+", "%20");
-        response.setHeader("Content-Disposition", "inline; filename*=UTF-8''" + encoded);
+        response.setHeader("Content-Disposition",
+                (asDownload ? "attachment" : "inline") + "; filename*=UTF-8''" + encoded);
         try (InputStream input = Files.newInputStream(path)) {
-            input.transferTo(response.getOutputStream());
+            input.skipNBytes(start);
+            byte[] buffer = new byte[64 * 1024];
+            long remaining = length;
+            while (remaining > 0) {
+                int read = input.read(buffer, 0, (int) Math.min(buffer.length, remaining));
+                if (read < 0) {
+                    break;
+                }
+                response.getOutputStream().write(buffer, 0, read);
+                remaining -= read;
+            }
         }
+    }
+
+    /// 文本预览：只服务 text 与 document（读抽取文本），按字符分页，
+    /// 避免 50 MB 日志每预览一次就整个读进内存。
+    private void attachmentText(HttpServletRequest request, HttpServletResponse response, String id)
+            throws IOException, SQLException {
+        ChatStore.Attachment attachment = chat.attachment(id);
+        if (attachment == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "attachment not found");
+            return;
+        }
+        Path source;
+        java.nio.charset.Charset charset;
+        boolean extracted;
+        if ("document".equals(attachment.kind())) {
+            if (attachment.extractedTextPath() == null) {
+                Json.error(response, HttpServletResponse.SC_UNSUPPORTED_MEDIA_TYPE,
+                        "attachment_text_unavailable: this document has no extracted text");
+                return;
+            }
+            source = Path.of(attachment.extractedTextPath());
+            charset = StandardCharsets.UTF_8;
+            extracted = true;
+        } else if ("text".equals(attachment.kind())) {
+            source = Path.of(attachment.path());
+            charset = ChatAttachments.sniffTextCharset(source);
+            extracted = false;
+        } else {
+            Json.error(response, HttpServletResponse.SC_UNSUPPORTED_MEDIA_TYPE,
+                    "attachment_text_unavailable: only text and document attachments have a text view");
+            return;
+        }
+        if (!Files.isRegularFile(source)) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "attachment file is missing");
+            return;
+        }
+        int offset = intParameter(request, "offset", 0, 0, 10_000_000);
+        int limit = intParameter(request, "limit", 65_536, 1, 200_000);
+        StringBuilder text = new StringBuilder();
+        boolean hasMore;
+        try (Reader reader = Files.newBufferedReader(source, charset)) {
+            long skipped = 0;
+            while (skipped < offset) {
+                long step = reader.skip(offset - skipped);
+                if (step <= 0) {
+                    break;
+                }
+                skipped += step;
+            }
+            char[] buffer = new char[8192];
+            int want = limit;
+            while (want > 0) {
+                int read = reader.read(buffer, 0, Math.min(buffer.length, want));
+                if (read < 0) {
+                    break;
+                }
+                text.append(buffer, 0, read);
+                want -= read;
+            }
+            hasMore = want == 0 && reader.read() >= 0;
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty("text", text.toString());
+        body.addProperty("offset", offset);
+        body.addProperty("nextOffset", offset + text.length());
+        body.addProperty("hasMore", hasMore);
+        body.addProperty("charset", charset.name());
+        body.addProperty("extracted", extracted);
+        Json.write(response, body);
+    }
+
+    private static int intParameter(HttpServletRequest request, String name, int fallback, int min, int max) {
+        String raw = request.getParameter(name);
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Math.max(min, Math.min(max, Integer.parseInt(raw.trim())));
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    record ByteRange(long start, long end) {
+    }
+
+    static final class RangeNotSatisfiable extends Exception {
+    }
+
+    static @Nullable ByteRange parseRange(@Nullable String header, long size)
+            throws RangeNotSatisfiable {
+        if (header == null || !header.startsWith("bytes=") || size <= 0) {
+            return null;
+        }
+        String spec = header.substring("bytes=".length()).trim();
+        int comma = spec.indexOf(',');
+        if (comma >= 0) {
+            spec = spec.substring(0, comma).trim();
+        }
+        int dash = spec.indexOf('-');
+        if (dash < 0) {
+            throw new RangeNotSatisfiable();
+        }
+        String from = spec.substring(0, dash).trim();
+        String to = spec.substring(dash + 1).trim();
+        long start;
+        long end;
+        try {
+            if (from.isEmpty()) {
+                long suffix = Long.parseLong(to);
+                if (suffix <= 0) {
+                    throw new RangeNotSatisfiable();
+                }
+                start = Math.max(0, size - suffix);
+                end = size - 1;
+            } else {
+                start = Long.parseLong(from);
+                end = to.isEmpty() ? size - 1 : Long.parseLong(to);
+            }
+        } catch (NumberFormatException e) {
+            throw new RangeNotSatisfiable();
+        }
+        if (start < 0 || start >= size || start > end) {
+            throw new RangeNotSatisfiable();
+        }
+        return new ByteRange(start, Math.min(end, size - 1));
     }
 
     private static JsonObject outcomeJson(ChatTurnManager.Outcome outcome) {
