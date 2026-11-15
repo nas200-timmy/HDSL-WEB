@@ -105,4 +105,5 @@ Enter 发送 · Ctrl-J 换行 · Ctrl-O 展开 · Ctrl-B 会话 · Ctrl-C 停止
 - 附件上传/下载、图片预览；
 - 正文引用角标的点击（终端只显示链接文本）；
 - steer（服务端当前只暴露 followup/cancel，没有 REST steer）；
-- 长会话分页：`GET /api/chat/sessions/{id}` 仍一次返回全部消息，客户端只渲染最近的内容。
+- 长会话分页：`GET /api/chat/sessions/{id}` 仍一次返回全部消息（上限 64 MiB，超过会明确
+  报错），客户端只渲染最近的内容。

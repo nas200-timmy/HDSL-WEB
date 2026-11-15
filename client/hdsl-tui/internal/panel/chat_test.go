@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/nas200-timmy/HDSL-WEB/client/hdsl-tui/internal/panel"
@@ -89,5 +91,33 @@ func TestChatSettingsRefusalKeepsTheStatus(t *testing.T) {
 	var apiError *panel.APIError
 	if !errors.As(err, &apiError) || apiError.Status != http.StatusForbidden {
 		t.Fatalf("err = %v, want a 403 APIError", err)
+	}
+}
+
+func TestChatSessionReadsARealTranscriptSize(t *testing.T) {
+	// A long session used to be cut at the error-body cap (64 KiB), which the
+	// decoder reported as "unexpected end of JSON input".
+	content := strings.Repeat("这是一段很长的回答。", 8000)
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"id":"s1","nodes":[{"id":"n1","role":"assistant",
+			"activeVariantId":"m1","variants":[{"id":"m1","content":%s}]}]}`, encoded)
+	}))
+	defer server.Close()
+
+	client, err := panel.New(server.URL, server.Client(), nil)
+	if err != nil {
+		t.Fatalf("panel.New: %v", err)
+	}
+	session, err := client.ChatSession(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("ChatSession: %v", err)
+	}
+	message, ok := session.Nodes[0].Active()
+	if !ok || message.Content != content {
+		t.Fatalf("content length = %d, want %d", len(message.Content), len(content))
 	}
 }
