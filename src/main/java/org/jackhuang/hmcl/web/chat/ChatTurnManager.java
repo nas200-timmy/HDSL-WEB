@@ -732,14 +732,14 @@ public final class ChatTurnManager {
                     return;
                 }
                 if (round >= MAX_TOOL_ROUNDS) {
-                    if (empty) {
-                        error(turn, "tool_rounds_exhausted",
-                                "联网搜索/工具调用达到上限，模型没有给出最终回答。请重试，或改用 DeepSeek 官方预设。",
-                                true);
-                    } else {
-                        finish(turn, "done", "tool_rounds_exhausted");
-                    }
-                    return;
+                    // 工具预算用完：最后一轮不再下发 tools，逼模型基于已经拿到的结果
+                    // 写最终回答。直接报错会让用户丢掉前面检索到的内容，重试又从零开始。
+                    turn.tools = List.of();
+                    turn.declaration = ChatSearchService.exhaustedDeclaration(settings.searchProvider());
+                    system = systemWithSearch(turn);
+                    // 抵消 for 的 update：这一轮原样重发，只是不再带 tools。
+                    round--;
+                    continue;
                 }
                 appendToolRound(turn, messages, calls);
             }

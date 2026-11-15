@@ -177,6 +177,15 @@ class ChatToolCallTest {
     }
 
     @Test
+    void exhaustedDeclarationForbidsFurtherSearch() {
+        String text = ChatSearchService.exhaustedDeclaration("bocha");
+        assertTrue(text.contains("预算已经用完"));
+        assertTrue(text.contains("博查"));
+        assertTrue(text.contains("不要再请求搜索"));
+        assertTrue(text.contains("不要编造"));
+    }
+
+    @Test
     void toolSetDegradesToSearchOnly() {
         assertEquals(List.of("search_web"),
                 ChatSearchService.tools(settings("bocha")).stream()
