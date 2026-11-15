@@ -94,9 +94,12 @@
   `developer_guard.scope: instance`（见 §4.2）：实例网页与启动/停止/装包那一层会要求开发者密码；
 - 反过来，Linux/macOS 的 PTY 通道同样受这套入口约束：会话 + 提权 + 单实例单会话。
 
-> 这一节的门只覆盖**面板自己的终端**。品牌工具自带的终端（PI WEB 的浏览器终端）是另一条
-> 入口：它由该工具自己鉴权，不受这五道门约束。见 [`brands.md`](brands.md) 的「PI WEB」与
-> [`security.md`](security.md) §2.4。
+> 这一节的门只覆盖**面板自己的终端**（`POST /api/brands/{brand}/instances/{id}/terminal`
+> 及面板自己的 TUI）。品牌工具自带的终端（PI WEB 的浏览器终端、ZCode 的网页终端，以及以后
+> 任何带终端的品牌 UI）是另一条入口：它由该工具自己鉴权，不受这五道门约束；`/i/<id>/` 也
+> 不经过面板终端门。要门禁就把 `developer_guard.scope` 设为 `proxy`（§4.2）。见
+> [`brands.md`](brands.md) 的「PI WEB」、[`zcode-experimental.md`](zcode-experimental.md)
+> 与 [`security.md`](security.md) §2.4。
 
 ### 4.2 总开关与开发者模式
 
