@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PopupItem, PopupMenu, PopupSep } from "../../components/PopupMenu";
 import { ContentCopyIcon, DeleteIcon, EditIcon, MoreVertIcon, PersonIcon, RefreshIcon } from "../../components/icons";
 import type { ChatAttachment, ChatBlock, ChatMessage, ChatNode } from "../../types";
 import { api } from "../../api";
 import { Markdown } from "./Markdown";
 import { AvatarView } from "./AvatarView";
-import { Timeline } from "./Timeline";
+import { Timeline, stepsFromParts } from "./Timeline";
 
 function activeMessage(node: ChatNode): ChatMessage | null {
   if (node.variants.length === 0) return null;
@@ -184,6 +184,11 @@ export function MessageItem({
     }
   }, [reasoning, streaming, reasoningExpanded]);
 
+  const timelineSteps = useMemo(
+    () => stepsFromParts(message?.parts ?? []),
+    [message?.parts],
+  );
+
   if (!message) return null;
 
   const isUser = node.role === "user";
@@ -225,7 +230,7 @@ export function MessageItem({
           <span className="chat-msg-time">{time}</span>
         </div>
         {hasParts ? (
-          <Timeline parts={message.parts!} />
+          <Timeline steps={timelineSteps} />
         ) : blockTimeline ? (
           <BlockTimeline blocks={message.blocks ?? []} />
         ) : reasoning && (

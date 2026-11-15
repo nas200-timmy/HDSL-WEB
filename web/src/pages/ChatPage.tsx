@@ -23,6 +23,7 @@ import { ChatSidebar, RenameSessionDialog } from "./chat/ChatSidebar";
 import { Composer } from "./chat/Composer";
 import { Markdown } from "./chat/Markdown";
 import { MessageItem } from "./chat/MessageItem";
+import { Timeline, stepsFromLive } from "./chat/Timeline";
 import { AvatarView } from "./chat/AvatarView";
 import { ContextMeter } from "./chat/ContextMeter";
 import type { ModelGroup } from "./chat/ModelPicker";
@@ -64,35 +65,7 @@ function LiveBubble({ assistant, text, reasoning, tool, sources, blocks }: { ass
       <div className="chat-msg-body">
         <div className="chat-msg-name">{assistant?.name ?? "助手"}</div>
         {hasBlocks ? (
-          <div className="chat-block-timeline">
-            {blocks!.map((block, index) => block.kind === "thinking" ? (
-              block.text ? (
-                <div className="chat-reasoning expanded" key={`thinking-${index}`}>
-                  <div className="chat-reasoning-head static">
-                    <span className="chat-reasoning-title">思考</span>
-                    <span className="chat-reasoning-count">{block.text.length} 字</span>
-                    <span className="chat-reasoning-toggle">生成中</span>
-                  </div>
-                  <div className="chat-reasoning-body">{block.text}</div>
-                </div>
-              ) : null
-            ) : (
-              <div className="chat-tools" key={`tool-${index}`}>
-                <div className={`chat-tool-chip ${block.status}`}>
-                  <span className="chat-tool-icon">{block.status === "running"
-                    ? "…" : block.tool === "scrape" || block.tool === "read_link" ? "📄" : "🔍"}</span>
-                  <span className="chat-tool-query">{block.query}</span>
-                  <span className="chat-tool-meta">
-                    {block.status === "running"
-                      ? (block.tool === "scrape" || block.tool === "read_link" ? "正在读取网页" : "正在搜索")
-                      : block.status === "failed"
-                        ? (block.tool === "scrape" || block.tool === "read_link" ? "读取失败" : "搜索失败")
-                        : `${block.hits} 条结果`}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
+          <Timeline steps={stepsFromLive(blocks!)} />
         ) : reasoning && (
           <div className="chat-reasoning expanded">
             <div className="chat-reasoning-head static">
