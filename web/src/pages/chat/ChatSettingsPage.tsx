@@ -389,14 +389,18 @@ function SearchPanel({
         DeepSeek Search 可以直接留空——会回落到面板里 DeepSeek 账户的 key（同一个 key 两边通用）。
         博查需要填自己的 key。
       </div>
-      <label className="form-row">
+      <div className="form-row" style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <span className="form-label">保留检索记录</span>
-        <input
-          type="checkbox"
-          checked={persistTrail}
-          onChange={(event) => setPersistTrail(event.target.checked)}
+        <button
+          type="button"
+          className={`switch ${persistTrail ? "on" : ""}`}
+          role="switch"
+          aria-checked={persistTrail}
+          aria-label="保留检索记录"
+          style={{ border: 0, padding: 0 }}
+          onClick={() => setPersistTrail(!persistTrail)}
         />
-      </label>
+      </div>
       <div className="hint">
         开启时把每次搜索/抓取的完整链路存进这条消息，追问时模型能看到上一轮搜过什么；
         代价是数据库和上下文都会变大。关闭后只保留最终回答。
@@ -1210,19 +1214,23 @@ function PresetPanel({
         关闭后助手和它的会话都不会删除，只是从列表里隐藏。
       </p>
       <div className="chat-settings-form-grid">
-        <label className="form-row" style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-          <input
-            type="checkbox"
-            checked={enabled}
+        <div className="form-row" style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <span className="form-label" style={{ margin: 0 }}>在角色列表中启用</span>
+          <button
+            type="button"
+            className={`switch ${enabled ? "on" : ""}`}
+            role="switch"
+            aria-checked={enabled}
+            aria-label="在角色列表中启用"
             disabled={busy}
-            onChange={(event) => {
-              const next = event.target.checked;
+            style={{ border: 0, padding: 0, opacity: busy ? 0.5 : 1 }}
+            onClick={() => {
+              const next = !enabled;
               setEnabled(next);
               void save(next);
             }}
           />
-          <span className="form-label" style={{ margin: 0 }}>在角色列表中启用</span>
-        </label>
+        </div>
       </div>
       <p className="chat-settings-desc" style={{ marginTop: 12 }}>
         {deepseek
@@ -1438,19 +1446,27 @@ function DataPanel({
     <div className="chat-settings-stack">
       <div className="chat-settings-card">
         <div className="chat-settings-card-title">附件预览</div>
-        <label className="form-row">
-          <span className="form-label">点附件时在聊天侧栏预览（关闭后回退到新标签页）</span>
-          <input
-            type="checkbox"
-            checked={attachmentPreview}
-            onChange={(event) => {
-              const next = event.target.checked;
+        <div className="form-row" style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <span className="form-label" style={{ fontSize: 13, color: "var(--monet-on-surface)" }}>
+            点附件时在聊天侧栏预览
+            <span className="chat-settings-note" style={{ display: "block", marginTop: 2 }}>
+              关闭后回退到新标签页；立即生效，仅本浏览器，默认开启。
+            </span>
+          </span>
+          <button
+            type="button"
+            className={`switch switch-lg ${attachmentPreview ? "on" : ""}`}
+            role="switch"
+            aria-checked={attachmentPreview}
+            aria-label="点附件时在聊天侧栏预览"
+            style={{ border: 0, padding: 0 }}
+            onClick={() => {
+              const next = !attachmentPreview;
               setAttachmentPreview(next);
               writeAttachmentPreview(next);
             }}
           />
-        </label>
-        <div className="chat-settings-note">立即生效，仅本浏览器；默认开启。</div>
+        </div>
       </div>
 
       <div className="chat-settings-card">
@@ -1490,10 +1506,18 @@ function DataPanel({
       <div className="chat-settings-card">
         <div className="chat-settings-card-title">备份</div>
         <div className="chat-settings-form-grid three">
-          <label className="form-row">
+          <div className="form-row" style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <span className="form-label">每日备份</span>
-            <input type="checkbox" checked={form.backupEnabled} onChange={(event) => patch("backupEnabled", event.target.checked)} />
-          </label>
+            <button
+              type="button"
+              className={`switch ${form.backupEnabled ? "on" : ""}`}
+              role="switch"
+              aria-checked={form.backupEnabled}
+              aria-label="每日备份"
+              style={{ border: 0, padding: 0 }}
+              onClick={() => patch("backupEnabled", !form.backupEnabled)}
+            />
+          </div>
           <label className="form-row">
             <span className="form-label">时间</span>
             <input className="input" value={form.backupTime} placeholder="03:17" onChange={(event) => patch("backupTime", event.target.value)} />
