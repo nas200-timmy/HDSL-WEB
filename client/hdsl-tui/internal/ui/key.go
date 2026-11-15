@@ -39,6 +39,19 @@ const (
 	// KeyResize is not a key press: the window changed size and the screen
 	// should be redrawn.
 	KeyResize
+
+	// KeyNewline is Ctrl-J: insert a newline in a multi-line composer.
+	KeyNewline
+	// KeyHistoryPrev / KeyHistoryNext are Ctrl-P / Ctrl-N: walk the input
+	// history (the arrows belong to the composer's caret).
+	KeyHistoryPrev
+	KeyHistoryNext
+	// KeyExpand is Ctrl-O: expand or collapse the reasoning/tool timeline.
+	KeyExpand
+	// KeySessions is Ctrl-B: open the session list.
+	KeySessions
+	// KeyElevate is Ctrl-E: request developer elevation.
+	KeyElevate
 )
 
 // Event is one thing the screen has to react to.
@@ -73,8 +86,27 @@ func Decode(data []byte) ([]Event, []byte) {
 		case value == 0x15:
 			events = append(events, Event{Key: KeyClear})
 			index++
-		case value == '\r' || value == '\n':
+		case value == '\r':
 			events = append(events, Event{Key: KeyEnter})
+			index++
+		case value == '\n':
+			// Ctrl-J. A raw-mode Enter is CR; LF is the documented newline key.
+			events = append(events, Event{Key: KeyNewline})
+			index++
+		case value == 0x10:
+			events = append(events, Event{Key: KeyHistoryPrev})
+			index++
+		case value == 0x0e:
+			events = append(events, Event{Key: KeyHistoryNext})
+			index++
+		case value == 0x0f:
+			events = append(events, Event{Key: KeyExpand})
+			index++
+		case value == 0x02:
+			events = append(events, Event{Key: KeySessions})
+			index++
+		case value == 0x05:
+			events = append(events, Event{Key: KeyElevate})
 			index++
 		case value == '\t':
 			events = append(events, Event{Key: KeyTab})

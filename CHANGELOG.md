@@ -2,6 +2,27 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## Unreleased · 终端客户端聊天（P0 + P1）
+
+> `hdsl-tui` 的主菜单第一项现在是聊天：单列消息流、贴底输入框、斜杠命令、Markdown、
+> 思考/搜索折叠，交互参考 Kimi Code / Qwen Code 这类终端 agent。设计见
+> [docs/chat-tui.md](docs/chat-tui.md)。
+
+- 主菜单新增「聊天」；没有会话时选助手新建，有会话时打开最近更新的一条。
+- `internal/panel` 新增聊天 REST 方法（助手、会话、发送、停止、重新生成、编辑、标题、设置）。
+- 新增通用 `/ws` 网关客户端：cookie 握手、`subscribe`、心跳、事件通道；聊天订阅
+  `chat` 与 `chat:<id>`。
+- 新增 Markdown → ANSI 渲染器：标题、粗体、行内代码、代码块、列表、引用、链接、分隔线；
+  只改前景/属性、不动背景，`VisibleWidth` 已有的宽字符与 SGR 处理直接复用；控制字符会被丢弃。
+- 新增多行输入组件：光标、`Ctrl-J` 换行、`Ctrl-P/N` 历史、`↑/↓` 移动；`Enter` 发送。
+- 聊天页：流式增量、停止、思考/搜索折叠（`Ctrl-O`）、会话切换（`Ctrl-B`）、
+  斜杠命令（`/new /sessions /assistant /model /title /search /stop /regen /edit /copy /settings /status /help`）。
+- 提权：进入聊天时询问一次开发者密码；读取聊天设置（默认模型、搜索、每日限额）需要它，
+  聊天本身只需要登录。`Ctrl-E` 可随时重新提权。
+- 不做图片渲染与附件上传/下载；消息里的附件只显示文件名。
+- 测试：Markdown 渲染、输入组件、聊天 REST 往返、WebSocket 订阅与投递。
+- 手工验收：本地面板 + PTY 里打开聊天页，确认会话标题、输入框、发送请求与服务端错误回显。
+
 ## v0.6.89 — 2026-11-15 · 无 JavaScript 保底页与浏览器能力闸门
 
 > 这一版的主题是“极致兼容”：现代聊天页之外，再给 w3m / lynx 和 Windows 7 上的旧浏览器

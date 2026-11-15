@@ -726,6 +726,7 @@ func (a *App) mainMenu(ctx context.Context) (int, bool) {
 			Title:    "主菜单",
 			Subtitle: "已连接 " + a.server + "（面板 " + a.health.Version + "）",
 			Items: []ui.Item{
+				{Label: "聊天", Note: "面板聊天的终端界面"},
 				{Label: "选择实例并连接", Note: "进入 agent 的终端"},
 				{Label: "给 agent 签票", Note: "生成提示词并复制"},
 				{Label: "Minecraft 控制台", Note: "连接服务器自己的控制台"},
@@ -742,20 +743,22 @@ func (a *App) mainMenu(ctx context.Context) (int, bool) {
 		}
 		switch index {
 		case 0:
-			a.pickInstance(ctx)
+			a.chatEntry(ctx)
 		case 1:
-			a.mintAgentTicket(ctx)
+			a.pickInstance(ctx)
 		case 2:
-			a.mcConsole(ctx)
+			a.mintAgentTicket(ctx)
 		case 3:
-			a.elevate(ctx)
+			a.mcConsole(ctx)
 		case 4:
-			a.sessionInfo()
+			a.elevate(ctx)
 		case 5:
-			a.clearSavedLogin()
+			a.sessionInfo()
 		case 6:
-			return 0, true
+			a.clearSavedLogin()
 		case 7:
+			return 0, true
+		case 8:
 			return cli.ExitOK, false
 		}
 	}

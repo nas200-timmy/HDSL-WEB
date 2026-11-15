@@ -21,10 +21,15 @@ func TestDecodeArrowsAndEnter(t *testing.T) {
 		{"delete", "\x1b[3~", KeyDelete},
 		{"application cursor up", "\x1bOA", KeyUp},
 		{"enter cr", "\r", KeyEnter},
-		{"enter lf", "\n", KeyEnter},
+		{"ctrl-j newline", "\n", KeyNewline},
 		{"tab", "\t", KeyTab},
 		{"backspace del", "\x7f", KeyBackspace},
 		{"backspace bs", "\x08", KeyBackspace},
+		{"ctrl-p history", "\x10", KeyHistoryPrev},
+		{"ctrl-n history", "\x0e", KeyHistoryNext},
+		{"ctrl-o expand", "\x0f", KeyExpand},
+		{"ctrl-b sessions", "\x02", KeySessions},
+		{"ctrl-e elevate", "\x05", KeyElevate},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

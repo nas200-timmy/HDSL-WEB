@@ -289,7 +289,7 @@ plugins/                        # 第一方插件源码，一个目录一个 npm
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nas200-timmy/HDSL-WEB/main/scripts/install-hdsl-tui.sh | sh
-hdsl-tui            # 全屏菜单：选服务器 → 登录一次 → 选实例 → 进终端
+hdsl-tui            # 全屏菜单：选服务器 → 登录一次 → 进聊天或选实例进终端
 ```
 
 Windows 用 PowerShell 版的同一个脚本（`scripts/install-hdsl-tui.ps1`）。也可以直接从
@@ -303,6 +303,9 @@ Windows 用 PowerShell 版的同一个脚本（`scripts/install-hdsl-tui.ps1`）
 - 全屏菜单照 Debian 安装器做的：服务器列表 → 主菜单 → 分类 → 实例 → 动作，`Esc` 逐级返回。
   保存的服务器和登录会话记在 `~/.config/hdsl-tui/config.json`（`0600`），下次直接复用；
   开发者密码只在面板要求时问一次（30 分钟滑动）。
+- **聊天**：主菜单第一项。单列消息流 + 贴底输入框，Markdown 渲染，思考/搜索默认折成一行，
+  `Ctrl-O` 展开；`Ctrl-J` 换行、`Ctrl-C` 停止、`Ctrl-B` 会话列表、`/` 命令补全。
+  读聊天设置需要开发者提权，聊天本身只需要登录。见 [docs/chat-tui.md](docs/chat-tui.md)。
 - 断开用 `Ctrl-]` 再按 `q`，回到菜单而不是退出程序，agent 继续跑；再进一次接回同一个会话。
 - 脚本或无终端环境加 `--plain` 退回逐行问答界面。
 - Windows 客户端支持 Windows Terminal 与 conhost（自动打开 VT 处理与 UTF-8 代码页）；
