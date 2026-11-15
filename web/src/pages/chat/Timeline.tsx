@@ -146,12 +146,7 @@ export function Timeline({ steps, live = false }: { steps: TimelineStep[]; live?
             <div className="chat-timeline-main">
               <button
                 className="chat-timeline-head"
-                onClick={(event) => {
-                  // 双击的第二次 click 不再 toggle：否则第一下展开、第二下又收起，
-                  // 内容高度来回变化，按钮位置也跟着跳。
-                  if (event.detail > 1) return;
-                  toggle(step.id);
-                }}
+                onClick={() => toggle(step.id)}
               >
                 <span className="chat-timeline-title">
                   <strong>{label}</strong>
