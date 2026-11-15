@@ -37,7 +37,7 @@ import { DSH_RELEASES } from "../constants";
 
 type DownloadTab = "game" | "modpack" | "plugin" | "skill";
 
-/** 下载页（DownloadPage.java 结构）：NEW GAME（新实例/整合包）+ ADDONS（插件/技能包）。 */
+/** 下载页（DownloadPage.java 结构）：NEW INSTANCE（新实例/整合包）+ ADDONS（插件/技能包）。 */
 export function DownloadPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get("tab");

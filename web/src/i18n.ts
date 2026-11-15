@@ -8,7 +8,7 @@ export const I18N = {
   // ---- 主导航（MainPage.java） ----
   "dsh.account.list": "账户",
   "dsh.logout": "退出登录",
-  "instance": "游戏",
+  "instance": "实例",
   "settings.launcher.general": "通用",
   "dsh.instance.manage": "实例管理",
   "dsh.instance.list": "实例列表",
@@ -20,7 +20,7 @@ export const I18N = {
   "dsh.account.none.hint": "添加一个账号，启动时它会把这个供应商交给实例",
 
   // ---- 启动面板（MainPage.java / DshLaunchService） ----
-  "dsh.launch": "启动游戏",
+  "dsh.launch": "启动实例",
   "dsh.launch.running": "打开",
   "dsh.stop": "停止",
   "dsh.stopping": "停止中…",
@@ -28,7 +28,7 @@ export const I18N = {
   "dsh.launch.launching": "启动中…",
   "dsh.launch.failed": "启动失败",
   "dsh.launch.ready": "%s 已就绪",
-  "instance.launch.empty.installing": "安装游戏",
+  "instance.launch.empty.installing": "安装实例",
 
   // ---- 实例列表页（InstancesPage.java） ----
   "dsh.directory.add": "添加实例文件夹",
@@ -50,7 +50,7 @@ export const I18N = {
   "dsh.instance.duplicating": "正在复制实例 %s",
   "dsh.instance.duplicated": "已复制实例",
   "instance.manage.rename": "重命名",
-  "instance.manage.duplicate": "复制游戏实例",
+  "instance.manage.duplicate": "复制实例",
   "modpack.export": "导出整合包",
   "dsh.instance.count": "共 %d 个实例",
 
@@ -88,8 +88,8 @@ export const I18N = {
   "dsh.instance.open_logs": "打开日志文件夹",
 
   // ---- 下载页（DownloadPage.java） ----
-  "download.new_game": "新游戏",
-  "download.content": "游戏内容",
+  "download.new_game": "新实例",
+  "download.content": "实例扩展",
   "dsh.download.instance": "实例",
   "dsh.download.packs": "整合包",
   "dsh.download.plugins": "插件下载",
@@ -443,8 +443,8 @@ export const I18N = {
   // ---- 通用 ----
   "message.error": "错误",
   "button.remove.confirm": "你确定要删除吗？此操作无法撤销！",
-  "game.directory": "游戏文件夹路径",
-  "instance.empty.hint": "没有已安装的游戏。\n你可以切换其他游戏文件夹，或者点击此处进入游戏下载页面。",
+  "game.directory": "实例文件夹路径",
+  "instance.empty.hint": "没有已安装的实例。\n你可以切换其他实例文件夹，或者点击此处进入实例安装页面。",
   // ---- 终端（docs/web-shell.md） ----
   "terminal.title": "终端",
   "terminal.open": "终端",
