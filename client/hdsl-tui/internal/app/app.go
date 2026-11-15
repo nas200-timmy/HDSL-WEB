@@ -92,6 +92,11 @@ type App struct {
 	// say "已提权" instead of offering the password again.
 	elevatedUntil time.Time
 
+	// guardScope is the panel's developer_guard.scope (off/proxy/instance/all).
+	// At "all" every /api request needs the developer password, so the client
+	// must ask before it can even list chat sessions.
+	guardScope string
+
 	// quit is set when the context was cancelled while an agent was attached:
 	// the terminal is already back, so the app tears down at the next loop.
 	quit bool
@@ -630,6 +635,10 @@ func (a *App) serveServer(ctx context.Context, server string) (code int, back bo
 			return 0, true
 		}
 	}
+	// The developer guard's scope decides whether every /api call needs the
+	// developer password. Reading it needs no elevation, so it is safe to ask
+	// right after the session is established.
+	a.refreshDeveloper(ctx)
 
 	if a.opts.Instance != "" {
 		a.instanceDirect(ctx)
@@ -659,9 +668,53 @@ func (a *App) restoreSession(ctx context.Context, server string) bool {
 		a.save()
 		a.logf("保存的登录已失效，需要重新登录")
 		return false
+	} else if panel.Status(err) == http.StatusForbidden {
+		// At developer_guard.scope=all every API read is refused until the
+		// operator elevates. The cookie is fine: ask the developer status,
+		// which is on the guard's allowlist, and keep the session.
+		if status, statusErr := a.client.DeveloperStatus(ctx); statusErr == nil {
+			a.username = saved.Username
+			if a.username == "" {
+				a.username = a.cfg.UsernameFor(server)
+			}
+			a.guardScope = status.GuardScope
+			a.applyElevation(status)
+			a.cfg.Touch(server, a.username, time.Now())
+			a.save()
+			a.logf("保存的登录有效（开发者守卫 %s，聊天等 API 需要开发者密码）", status.GuardScope)
+			return true
+		}
+		return false
 	}
 	// A transport failure here is not proof the cookie is bad: keep it.
 	return false
+}
+
+// refreshDeveloper learns the guard scope and the current elevation window.
+// Both endpoints are on the guard's allowlist, so this works at scope=all.
+func (a *App) refreshDeveloper(ctx context.Context) {
+	if a.client == nil {
+		return
+	}
+	status, err := a.client.DeveloperStatus(ctx)
+	if err != nil {
+		return
+	}
+	a.guardScope = status.GuardScope
+	a.applyElevation(status)
+}
+
+func (a *App) applyElevation(status panel.DeveloperStatus) {
+	if !status.Elevated {
+		return
+	}
+	if status.ExpiresAt == "" {
+		a.elevatedUntil = time.Now().Add(30 * time.Minute)
+		return
+	}
+	if expiry, err := time.Parse(time.RFC3339, status.ExpiresAt); err == nil {
+		a.elevatedUntil = expiry
+	}
 }
 
 func (a *App) login(ctx context.Context, server string) bool {

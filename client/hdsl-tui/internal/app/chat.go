@@ -248,7 +248,7 @@ func (a *App) chatKey(ctx context.Context, client *panel.Client, st *chatState, 
 	case ui.KeyInterrupt:
 		if st.live && st.turnID != "" {
 			if err := client.ChatCancel(ctx, st.turnID); err != nil {
-				st.notice = "停止失败：" + explain(err)
+				a.chatFail(st, "停止失败：", err)
 			} else {
 				st.notice = "已请求停止"
 			}
@@ -268,7 +268,7 @@ func (a *App) chatKey(ctx context.Context, client *panel.Client, st *chatState, 
 		if ok && sessionID != "" {
 			session, err := client.ChatSession(ctx, sessionID)
 			if err != nil {
-				st.notice = "打不开会话：" + explain(err)
+				a.chatFail(st, "打不开会话：", err)
 				return chatStay, true
 			}
 			st.session = session
@@ -333,7 +333,7 @@ func (a *App) chatSend(ctx context.Context, client *panel.Client, st *chatState,
 	})
 	if err != nil {
 		st.live = false
-		st.lastError = explain(err)
+		a.chatFail(st, "", err)
 		return chatStay, true
 	}
 	st.turnID = result.TurnID
@@ -363,7 +363,7 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 		if ok && sessionID != "" && sessionID != st.session.ID {
 			session, err := client.ChatSession(ctx, sessionID)
 			if err != nil {
-				st.notice = "打不开会话：" + explain(err)
+				a.chatFail(st, "打不开会话：", err)
 				return chatStay, true
 			}
 			st.session = session
@@ -389,7 +389,7 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 		}
 		session, err := client.ChatCreateSession(ctx, assistantID)
 		if err != nil {
-			st.notice = "新建会话失败：" + explain(err)
+			a.chatFail(st, "新建会话失败：", err)
 			return chatStay, true
 		}
 		st.session = session
@@ -405,7 +405,7 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 		model := arg
 		session, err := client.ChatPatchSession(ctx, st.session.ID, panel.ChatSessionPatch{Model: &model})
 		if err != nil {
-			st.notice = "切换模型失败：" + explain(err)
+			a.chatFail(st, "切换模型失败：", err)
 			return chatStay, true
 		}
 		st.session = session
@@ -419,7 +419,7 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 		title := arg
 		session, err := client.ChatPatchSession(ctx, st.session.ID, panel.ChatSessionPatch{Title: &title})
 		if err != nil {
-			st.notice = "改标题失败：" + explain(err)
+			a.chatFail(st, "改标题失败：", err)
 			return chatStay, true
 		}
 		st.session = session
@@ -438,7 +438,7 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 			return chatStay, true
 		}
 		if err := client.ChatCancel(ctx, st.turnID); err != nil {
-			st.notice = "停止失败：" + explain(err)
+			a.chatFail(st, "停止失败：", err)
 		} else {
 			st.notice = "已请求停止"
 		}
@@ -455,7 +455,7 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 		result, err := client.ChatRegenerate(ctx, st.session.ID, node.ID, "in_place", st.search)
 		if err != nil {
 			st.live = false
-			st.notice = "重新生成失败：" + explain(err)
+			a.chatFail(st, "重新生成失败：", err)
 			return chatStay, true
 		}
 		st.turnID = result.TurnID
@@ -481,7 +481,7 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 		result, err := client.ChatEdit(ctx, st.session.ID, node.ID, text)
 		if err != nil {
 			st.live = false
-			st.notice = "编辑失败：" + explain(err)
+			a.chatFail(st, "编辑失败：", err)
 			return chatStay, true
 		}
 		st.turnID = result.TurnID
@@ -518,6 +518,22 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 	}
 	// Unknown slash command: send it as a message, like Kimi Code does.
 	return a.chatSend(ctx, client, st, text)
+}
+
+// chatFail puts a refusal in the status line, naming elevation when that is
+// what the panel actually wants.
+func (a *App) chatFail(st *chatState, prefix string, err error) {
+	if needsElevation(err) {
+		st.notice = "需要开发者提权：按 Ctrl-E"
+		return
+	}
+	st.notice = prefix + explain(err)
+}
+
+// chatNeedsGuardElevation reports whether the panel's developer guard gates
+// chat itself. Only scope=all does; instance/proxy scopes leave /api/chat open.
+func chatNeedsGuardElevation(scope string) bool {
+	return scope == "all"
 }
 
 func (a *App) chatHelp() {
@@ -974,13 +990,37 @@ func (a *App) chatEntry(ctx context.Context) {
 	if a.client == nil {
 		return
 	}
-	if !a.elevated() {
+	if chatNeedsGuardElevation(a.guardScope) {
+		// scope=all gates every /api request, so chat cannot even list
+		// sessions without the developer password. Ask first; declining
+		// means chat is unavailable, and saying so is kinder than a 403.
+		if !a.elevated() {
+			if !a.confirm("聊天需要开发者密码",
+				"面板的开发者守卫是 all 档：列会话、发消息都要开发者提权。现在输入开发者密码？") {
+				a.message("聊天需要开发者密码", "开发者守卫是 all 档，未提权时聊天 API 全部拒绝。")
+				return
+			}
+			a.elevate(ctx)
+			if !a.elevated() {
+				a.message("聊天需要开发者密码", "开发者守卫是 all 档，提权没有成功，聊天无法打开。")
+				return
+			}
+		}
+	} else if !a.elevated() {
 		if a.confirm("聊天设置需要提权",
 			"读取默认模型、搜索和每日限额需要开发者密码。现在提权？（跳过也能聊天，只是用会话自己的设置）") {
 			a.elevate(ctx)
 		}
 	}
 	sessions, err := a.client.ChatSessions(ctx, "")
+	if err != nil && needsElevation(err) {
+		if a.confirm("聊天需要开发者密码", "面板拒绝了请求，需要先开发者提权。现在输入开发者密码？") {
+			a.elevate(ctx)
+			if a.elevated() {
+				sessions, err = a.client.ChatSessions(ctx, "")
+			}
+		}
+	}
 	if err != nil {
 		a.message("会话列表读不到", explain(err))
 		return

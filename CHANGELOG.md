@@ -19,6 +19,9 @@
   斜杠命令（`/new /sessions /assistant /model /title /search /stop /regen /edit /copy /settings /status /help`）。
 - 提权：进入聊天时询问一次开发者密码；读取聊天设置（默认模型、搜索、每日限额）需要它，
   聊天本身只需要登录。`Ctrl-E` 可随时重新提权。
+- 识别开发者守卫 `all` 档：从 `/api/developer/status` 读到 `guardScope=all` 时，聊天 API
+  全部需要开发者密码，客户端在进入聊天前强制要求提权，拒绝就说明原因；会话恢复遇到 403
+  不再误判为登录失效（用白名单里的 developer status 确认 cookie 仍有效）。
 - 不做图片渲染与附件上传/下载；消息里的附件只显示文件名。
 - 测试：Markdown 渲染、输入组件、聊天 REST 往返、WebSocket 订阅与投递。
 - 手工验收：本地面板 + PTY 里打开聊天页，确认会话标题、输入框、发送请求与服务端错误回显。
