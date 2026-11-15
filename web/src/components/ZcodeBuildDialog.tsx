@@ -11,7 +11,9 @@ import { errMsg } from "../utils";
 /// 所以这里只做「开始 + 看日志」：状态与日志每 1.5 秒拉一次。
 export function ZcodeBuildButton() {
   const [open, setOpen] = useState(false);
-  const [version, setVersion] = useState("main");
+  // 空值而不是 "main"：Chrome 的 datalist 会按输入框当前值过滤，
+  // 预填 main 会让下拉只剩 main 一项，看起来像"选不了版本"。
+  const [version, setVersion] = useState("");
   const [status, setStatus] = useState<ZcodeBuildStatus | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [starting, setStarting] = useState(false);
@@ -85,7 +87,7 @@ export function ZcodeBuildButton() {
             className="input"
             list="zcode-build-versions"
             value={version}
-            placeholder="v3.14.3 或 main"
+            placeholder="选择或输入，例如 v3.17.2 / main"
             disabled={running}
             onChange={(e) => setVersion(e.target.value)}
           />
@@ -97,6 +99,25 @@ export function ZcodeBuildButton() {
             ))}
           </datalist>
         </div>
+        {catalog.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "2px 8px 4px" }}>
+            {catalog.slice(0, 10).map((entry) => (
+              <button
+                key={entry.ref}
+                type="button"
+                className={version === entry.ref ? "btn btn-raised" : "btn btn-outline"}
+                style={{ fontSize: 11, padding: "2px 8px" }}
+                disabled={running}
+                title={entry.ref}
+                onClick={() => setVersion(entry.ref)}
+              >
+                {entry.version}
+                {entry.channel === "main" ? " · 未发布" : entry.channel === "tag" ? " · 仅 tag" : ""}
+                {entry.installed ? " · 已装" : ""}
+              </button>
+            ))}
+          </div>
+        )}
         <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.7 }}>
           面板会下载 <code>zai-org/ZCode</code> 的源码、打上反代补丁（
           <code>base: "./"</code> + API/WS 前缀，共 5 处）、跑 <code>pnpm install</code> 与{" "}
