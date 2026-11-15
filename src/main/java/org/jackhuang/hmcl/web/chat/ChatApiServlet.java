@@ -48,8 +48,9 @@ import java.util.function.BooleanSupplier;
 /// `/api/chat/*`（docs/chat.md §10）。
 ///
 /// 会话、消息与附件走 REST；token 流走 `/ws` 的 `chat:<id>` topic，这里不发流。
-/// 所有 `/api/chat/*` 都对 agent ticket 关闭（见 [org.jackhuang.hmcl.web.developer.AgentScopes]）；
-/// 设置、备份、端点探测与能力覆盖另外要求开发者提权。
+/// agent ticket 按 `chat-read` / `chat-write` / `chat-search` 三个 scope 开放
+/// （见 [org.jackhuang.hmcl.web.developer.AgentScopes]）；设置、备份、端点探测与
+/// 能力覆盖仍然要求开发者提权，`chat-write` 的输入 token 上限由聊天设置控制。
 @NotNullByDefault
 public final class ChatApiServlet extends HttpServlet {
 
@@ -155,9 +156,16 @@ public final class ChatApiServlet extends HttpServlet {
                 List<String> attachments = strings(body, "attachments");
                 boolean search = body.has("search") && body.get("search").isJsonPrimitive()
                         && body.get("search").getAsBoolean();
+                if (search && !agentCanSearch(request)) {
+                    Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                            "agent_scope_denied: search requires the chat-search scope");
+                    return;
+                }
+                int agentLimit = AuthFilter.isAgent(request)
+                        ? chat.settings().agentChatMaxInputTokens() : 0;
                 ChatTurnManager.Outcome outcome = chat.turns().send(sessionId, text, attachments,
                         nullable(body, "model"), nullable(body, "account"),
-                        nullable(body, "requestId"), search);
+                        nullable(body, "requestId"), search, agentLimit);
                 Json.write(response, outcomeJson(outcome));
                 return;
             }
@@ -180,8 +188,10 @@ public final class ChatApiServlet extends HttpServlet {
                 }
                 String nodeId = required(body, "nodeId");
                 String text = string(body, "text", "");
+                int agentLimit = AuthFilter.isAgent(request)
+                        ? chat.settings().agentChatMaxInputTokens() : 0;
                 ChatTurnManager.Outcome outcome = chat.turns().edit(sessionId, nodeId, text,
-                        nullable(body, "requestId"));
+                        nullable(body, "requestId"), agentLimit);
                 Json.write(response, outcomeJson(outcome));
                 return;
             }
@@ -251,7 +261,9 @@ public final class ChatApiServlet extends HttpServlet {
         }
 
         if ("/search/test".equals(route) && "POST".equals(method)) {
-            if (!requireElevation(request, response)) {
+            // The agent scope `chat-search` is checked by AuthFilter; a human
+            // still needs the developer password for this provider-backed call.
+            if (!AuthFilter.isAgent(request) && !requireElevation(request, response)) {
                 return;
             }
             JsonObject body = readBody(request, response);
@@ -561,6 +573,18 @@ public final class ChatApiServlet extends HttpServlet {
         json.addProperty("status", message.status());
         json.addProperty("createdAt", message.createdAt());
         return json;
+    }
+
+    /// Search is a separate scope because it spends a provider quota; a
+    /// `chat-write` ticket alone may send plain messages but not turn search on.
+    private static boolean agentCanSearch(HttpServletRequest request) {
+        if (!AuthFilter.isAgent(request)) {
+            return true;
+        }
+        Object grant = request.getAttribute(AuthFilter.AGENT_GRANT_ATTRIBUTE);
+        return grant instanceof DeveloperElevation.AgentGrant value
+                && value.scopes().contains(
+                        org.jackhuang.hmcl.web.developer.AgentScopes.CHAT_SEARCH);
     }
 
     /// 设置、备份、端点探测与能力覆盖要求开发者提权。

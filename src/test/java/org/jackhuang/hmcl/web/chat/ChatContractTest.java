@@ -40,19 +40,25 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ChatContractTest {
 
     @Test
-    void agentTicketsCannotReachAnyChatRoute() {
-        for (String method : new String[]{"GET", "HEAD", "POST", "PATCH", "DELETE"}) {
-            for (String path : new String[]{
-                    "/api/chat", "/api/chat/", "/api/chat/sessions",
-                    "/api/chat/sessions/a/messages", "/api/chat/settings",
-                    "/api/chat/attachments/a", "/api/chat/assistants",
-                    "/api/chat/profile", "/api/chat/avatars", "/api/chat/avatars/a"}) {
-                assertTrue(AgentScopes.forbidden(method, path), method + " " + path);
-            }
-        }
-        // And the generic class table must not call a chat read "read".
-        assertNull(AgentScopes.required("GET", "/api/chat/sessions"));
-        assertNull(AgentScopes.required("POST", "/api/chat/sessions"));
+    void agentTicketsReachChatOnlyThroughChatScopes() {
+        // The chat surface is no longer blanket-forbidden; the scope table
+        // decides. Admin/config routes stay closed even to a chat grant.
+        assertEquals(AgentScopes.CHAT_READ, AgentScopes.required("GET", "/api/chat/sessions"));
+        assertEquals(AgentScopes.CHAT_READ, AgentScopes.required("GET", "/api/chat/assistants"));
+        assertEquals(AgentScopes.CHAT_READ, AgentScopes.required("GET", "/api/chat/attachments/a"));
+        assertEquals(AgentScopes.CHAT_WRITE, AgentScopes.required("POST", "/api/chat/sessions"));
+        assertEquals(AgentScopes.CHAT_WRITE, AgentScopes.required("POST", "/api/chat/sessions/a/messages"));
+        assertEquals(AgentScopes.CHAT_WRITE, AgentScopes.required("POST", "/api/chat/sessions/a/edit"));
+        assertEquals(AgentScopes.CHAT_WRITE, AgentScopes.required("POST", "/api/chat/turns/a/cancel"));
+        assertEquals(AgentScopes.CHAT_SEARCH, AgentScopes.required("GET", "/api/chat/search/status"));
+        assertEquals(AgentScopes.CHAT_SEARCH, AgentScopes.required("POST", "/api/chat/search/test"));
+
+        assertNull(AgentScopes.required("GET", "/api/chat"));
+        assertNull(AgentScopes.required("GET", "/api/chat/settings"));
+        assertNull(AgentScopes.required("POST", "/api/chat/settings"));
+        assertNull(AgentScopes.required("GET", "/api/chat/profile"));
+        assertNull(AgentScopes.required("POST", "/api/chat/assistants"));
+        assertNull(AgentScopes.required("DELETE", "/api/chat/sessions/a"));
         // Other routes still behave as before.
         assertEquals(AgentScopes.READ, AgentScopes.required("GET", "/api/instances"));
     }

@@ -1378,6 +1378,8 @@ export interface ChatSettings {
   persistToolTrail?: boolean;
   /** 是否在角色列表里启用内置的 DeepSeek 官方预设助手 */
   deepseekPresetEnabled?: boolean;
+  /** agent 票 chat-write 的单次输入 token 上限；0 = 不限制 */
+  agentChatMaxInputTokens?: number;
 }
 
 /** POST /api/chat/accounts/{name}/chat-test 的结果（会消耗少量 token）。 */

@@ -742,6 +742,7 @@ public final class ChatService {
         json.addProperty("searchMaxResults", current.searchMaxResults());
         json.addProperty("persistToolTrail", current.persistToolTrail());
         json.addProperty("deepseekPresetEnabled", current.deepseekPresetEnabled());
+        json.addProperty("agentChatMaxInputTokens", current.agentChatMaxInputTokens());
         addNullable(json, "searchKeyMasked", maskKey(current.searchKey(current.searchProvider())));
         addNullable(json, "defaultAccount", current.defaultAccount());
         addNullable(json, "defaultModel", current.defaultModel());

@@ -137,9 +137,41 @@ public final class ChatTurnManager {
 
     // --------------------------------------------------------------- send --
 
+    /// Rough input estimate: ~3 chars/token for text, the extracted text for
+    /// documents, and a fixed vision allowance per image. This is a guard, not
+    /// billing; the actual provider usage still comes from the stream.
+    private int estimateInputTokens(String text, List<String> attachmentIds)
+            throws SQLException, IOException {
+        int tokens = text == null ? 0 : Math.max(1, (text.length() + 2) / 3);
+        for (String id : attachmentIds) {
+            ChatStore.Attachment attachment = store.attachment(id);
+            if (attachment == null) {
+                continue;
+            }
+            String extracted = attachments.loadText(attachment);
+            if (extracted != null && !extracted.isBlank()) {
+                tokens += Math.max(1, (extracted.length() + 2) / 3);
+            } else if ("image".equals(attachment.kind())) {
+                tokens += 1000;
+            } else {
+                tokens += Math.max(1, (int) (attachment.size() / 3));
+            }
+        }
+        return tokens;
+    }
+
     public Outcome send(String sessionId, String text, List<String> attachmentIds,
                         @Nullable String model, @Nullable String account,
                         @Nullable String requestId, boolean search)
+            throws ChatException, SQLException, IOException {
+        return send(sessionId, text, attachmentIds, model, account, requestId, search, 0);
+    }
+
+    /// @param maxInputTokens 0 = no agent limit; otherwise an estimated input
+    ///                       cap applied before the user message is stored
+    public Outcome send(String sessionId, String text, List<String> attachmentIds,
+                        @Nullable String model, @Nullable String account,
+                        @Nullable String requestId, boolean search, int maxInputTokens)
             throws ChatException, SQLException, IOException {
         ChatStore.Session session = requireSession(sessionId);
         String key = requestId == null || requestId.isBlank() ? null : sessionId + "|" + requestId;
@@ -174,6 +206,14 @@ public final class ChatTurnManager {
             ids = maybeAttachLongText(sessionId, content, ids, resolved);
             if (ids.size() > originalCount) {
                 content = "（消息过长，已作为 .txt 附件发送）";
+            }
+            if (maxInputTokens > 0) {
+                int estimated = estimateInputTokens(content, ids);
+                if (estimated > maxInputTokens) {
+                    throw new ChatException(400, "agent_token_limit",
+                            "agent ticket input limit is " + maxInputTokens
+                                    + " tokens (estimated " + estimated + ")");
+                }
             }
             if (ids.size() > ChatAttachments.MAX_PER_MESSAGE) {
                 throw new ChatException(400, "too_many_attachments",
@@ -311,9 +351,23 @@ public final class ChatTurnManager {
 
     public Outcome edit(String sessionId, String nodeId, String text, @Nullable String requestId)
             throws ChatException, SQLException, IOException {
+        return edit(sessionId, nodeId, text, requestId, 0);
+    }
+
+    public Outcome edit(String sessionId, String nodeId, String text, @Nullable String requestId,
+                        int maxInputTokens)
+            throws ChatException, SQLException, IOException {
         ChatStore.Session session = requireSession(sessionId);
         if (text == null || text.isBlank()) {
             throw new ChatException(400, "empty_message", "the edited message is empty");
+        }
+        if (maxInputTokens > 0) {
+            int estimated = estimateInputTokens(text, List.of());
+            if (estimated > maxInputTokens) {
+                throw new ChatException(400, "agent_token_limit",
+                        "agent ticket input limit is " + maxInputTokens
+                                + " tokens (estimated " + estimated + ")");
+            }
         }
         String key = requestId == null || requestId.isBlank() ? null : sessionId + "|" + requestId;
         if (key != null) {

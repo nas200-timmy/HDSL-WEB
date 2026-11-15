@@ -18,7 +18,7 @@ import { AvatarCropDialog } from "./AvatarCropDialog";
 import { ModelCaps, capabilitySourceLabel } from "./ModelCaps";
 
 type Run = <T>(action: () => Promise<T>) => Promise<T>;
-type Tab = "profile" | "providers" | "defaults" | "presets" | "search" | "data" | "network";
+type Tab = "profile" | "providers" | "defaults" | "presets" | "search" | "agent" | "data" | "network";
 
 function bytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -124,6 +124,7 @@ export function ChatSettingsPage() {
             ["defaults", "默认模型"],
             ["presets", "预设助手"],
             ["search", "联网搜索"],
+            ["agent", "Agent 票"],
             ["data", "数据与备份"],
             ["network", "网络"],
           ] as const).map(([key, label]) => (
@@ -176,6 +177,8 @@ export function ChatSettingsPage() {
             <PresetPanel settings={settings} accounts={accounts} run={run} onSaved={setSettings} />
           ) : tab === "search" ? (
             <SearchPanel settings={settings} run={run} onSaved={setSettings} />
+          ) : tab === "agent" ? (
+            <AgentLimitPanel settings={settings} run={run} onSaved={setSettings} />
           ) : tab === "data" ? (
             <DataPanel
               settings={settings}
@@ -1305,6 +1308,75 @@ function DefaultsPanel({
       </div>
       <div className="chat-provider-actions">
         <button className="btn btn-raised" disabled={busy} onClick={() => void save()}>{busy ? "保存中…" : "保存"}</button>
+      </div>
+    </div>
+  );
+}
+
+const AGENT_TOKEN_MIN = 1_024;
+const AGENT_TOKEN_MAX = 131_072;
+
+/// 只作用于 agent 票的 chat-write 输入上限；人类聊天不受影响。
+function AgentLimitPanel({
+  settings, run, onSaved,
+}: {
+  settings: ChatSettings;
+  run: Run;
+  onSaved: (settings: ChatSettings) => void;
+}) {
+  const [value, setValue] = useState(settings.agentChatMaxInputTokens || 8192);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setValue(settings.agentChatMaxInputTokens || 8192);
+  }, [settings.agentChatMaxInputTokens]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const next = await run(() => api.chat.updateSettings({ agentChatMaxInputTokens: value }));
+      onSaved(next);
+      toast("success", "Agent 票输入上限已保存");
+    } catch (error) {
+      toast("error", `保存失败：${errMsg(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="chat-settings-card">
+      <div className="chat-settings-card-title">Agent 票限制</div>
+      <p className="chat-settings-desc">
+        只作用于持有 <code>chat-write</code> 的 agent 票；人类聊天不受影响。
+        超过上限的发送会在写入会话前被拒绝（按约 3 字符/token 估算，含文本与附件）。
+      </p>
+      <div className="form-row">
+        <span className="form-label">单次输入上限</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <input
+            type="range"
+            min={AGENT_TOKEN_MIN}
+            max={AGENT_TOKEN_MAX}
+            step={1024}
+            value={value}
+            disabled={busy}
+            onChange={(event) => setValue(Number(event.target.value))}
+            style={{ width: "100%" }}
+          />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            <span>最低 1K</span>
+            <span style={{ fontWeight: 600, color: "var(--monet-on-surface)" }}>
+              {Math.round(value / 1024)}K tokens
+            </span>
+            <span>最高 128K</span>
+          </div>
+        </div>
+      </div>
+      <div className="chat-provider-actions">
+        <button className="btn btn-raised" disabled={busy} onClick={() => void save()}>
+          {busy ? "保存中…" : "保存"}
+        </button>
       </div>
     </div>
   );
