@@ -339,6 +339,13 @@ public final class ZcodeApiServlet extends HttpServlet {
         return direct;
     }
 
+    /// The version of the distribution `current` resolves to, for instances
+    /// that still follow `current` (manifests written before version pinning).
+    private @Nullable String currentVersion() {
+        com.google.gson.JsonElement version = versionOf(packageDir());
+        return version != null && version.isJsonPrimitive() ? version.getAsString() : null;
+    }
+
     /// The distribution's version, from its `package.json`; `null` when the
     /// file is missing or unreadable.
     private static @Nullable com.google.gson.JsonElement versionOf(Path directory) {
@@ -836,9 +843,15 @@ public final class ZcodeApiServlet extends HttpServlet {
         body.add("minVersion", instance.minVersion() == null
                 ? JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(instance.minVersion()));
         body.addProperty("minVersionAt", instance.minVersionAt());
-        body.addProperty("credentialFormat", ZcodeCredentials.effectiveFormat(manager, instance));
+        String effectiveVersion = instance.version() == null || instance.version().isBlank()
+                ? currentVersion() : instance.version();
+        int effectiveFormat = ZcodeCredentials.effectiveFormat(manager, instance);
+        if (effectiveFormat == 0 && effectiveVersion != null) {
+            effectiveFormat = ZcodeCatalog.formatOf(effectiveVersion);
+        }
+        body.addProperty("credentialFormat", effectiveFormat);
         body.addProperty("requiresCredentialSecret",
-                ZcodeCatalog.formatOf(instance.version()) >= 2);
+                effectiveVersion != null && ZcodeCatalog.formatOf(effectiveVersion) >= 2);
         String fingerprint = ZcodeCredentials.fingerprint(manager, instance);
         body.add("keyFingerprint", fingerprint == null
                 ? JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(fingerprint));

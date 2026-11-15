@@ -41,6 +41,7 @@ import type {
   BrandVersions,
   ExternalInstance,
   InstancePlugins,
+  ZcodeCatalogEntry,
 } from "../types";
 import { errMsg, formatDateTime } from "../utils";
 
@@ -1230,7 +1231,37 @@ function VersionCard({
 function ZcodeVersionsCard() {
   const s = useAppState();
   const [open, setOpen] = useState(false);
+  const [catalog, setCatalog] = useState<ZcodeCatalogEntry[]>([]);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const dist = s.zcodeDist;
+
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    api.zcodeCatalog()
+      .then((result) => {
+        if (alive) {
+          setCatalog(result.entries);
+          setCatalogError(null);
+        }
+      })
+      .catch((error) => {
+        if (alive) setCatalogError(errMsg(error));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open]);
+
+  const refreshAll = () => {
+    void refreshZcode(true);
+    void api.zcodeCatalog(true)
+      .then((result) => {
+        setCatalog(result.entries);
+        setCatalogError(null);
+      })
+      .catch((error) => setCatalogError(errMsg(error)));
+  };
 
   return (
     <div className="card" style={{ flexShrink: 0, padding: 8 }}>
@@ -1275,7 +1306,7 @@ function ZcodeVersionsCard() {
           style={{ flex: "none" }}
           title={I18N["button.refresh"]}
           disabled={s.zcodeLoading}
-          onClick={() => void refreshZcode(true)}
+          onClick={refreshAll}
         >
           <RefreshIcon size={18} />
         </button>
@@ -1314,6 +1345,57 @@ function ZcodeVersionsCard() {
               <span className="empty-sub">
                 或用 HDSL_ZCODE_PACKAGE 指向别处；构建方法见 docs/zcode-experimental.md
               </span>
+            </div>
+          )}
+          <div className="divider" style={{ margin: "2px 0" }} />
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>上游版本</span>
+            <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+              正式版 / 仅 tag / 未发布 main；未安装的用「构建发行包」构建
+            </span>
+          </div>
+          {catalogError && <div className="form-error">{catalogError}</div>}
+          {catalog.length === 0 ? (
+            <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+              正在读取版本目录…
+            </div>
+          ) : (
+            <div style={{ border: "1px solid var(--monet-outline-variant)", borderRadius: 6, overflow: "hidden" }}>
+              {catalog.map((entry, index) => (
+                <div
+                  key={entry.ref}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 8, minWidth: 0,
+                    padding: "6px 8px",
+                    borderTop: index > 0 ? "1px solid var(--monet-outline-variant)" : undefined,
+                  }}
+                >
+                  <span className={`tag ${entry.channel === "main" ? "warn" : entry.channel === "release" ? "running" : "plain"}`} style={{ flex: "none" }}>
+                    {entry.channel === "main" ? "未发布" : entry.channel === "release" ? "正式版" : "仅 tag"}
+                  </span>
+                  <span style={{ fontSize: 12, fontWeight: 600, flex: "none" }}>{entry.version}</span>
+                  <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", flex: "none" }}>
+                    {entry.installed ? "已装"
+                      : entry.buildState === "building" ? "构建中"
+                        : entry.buildState === "failed" ? "构建失败"
+                          : "需构建"}
+                  </span>
+                  <span className={`tag ${entry.credentialFormat >= 2 ? "warn" : "plain"}`} style={{ flex: "none" }}>
+                    {entry.credentialFormat >= 2 ? "v2 · 需 secret" : "v1"}
+                  </span>
+                  {entry.notes && (
+                    <span
+                      title={entry.notes}
+                      style={{
+                        fontSize: 11, color: "var(--monet-on-surface-variant)", minWidth: 0,
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      }}
+                    >
+                      {entry.notes}
+                    </span>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>

@@ -10,6 +10,7 @@ import {
   EditIcon,
   ExtensionIcon,
   FormatListBulletedIcon,
+  LockIcon,
   MoreVertIcon,
   PublicIcon,
   RocketLaunchIcon,
@@ -421,8 +422,15 @@ export function ZcodeSection() {
                   </span>
                   <span className="tlli-subtitle" title={inst.workspacePath ?? undefined}>
                     {inst.id}
-                    {inst.version ? ` · 版本 ${inst.version}` : ""}
-                    {inst.credentialFormat ? ` · 凭据 v${inst.credentialFormat}` : ""}
+                    {(inst.version ?? s.zcodeDist?.version)
+                      ? ` · 版本 ${inst.version ?? `current (${s.zcodeDist?.version})`}`
+                      : ""}
+                    {inst.credentialFormat
+                      ? ` · 凭据 v${inst.credentialFormat}`
+                      : (inst.requiresCredentialSecret
+                        || (s.zcodeDist?.version && compareSemver(s.zcodeDist.version, "3.18.0") >= 0))
+                        ? " · 凭据 v2 · 需 secret"
+                        : ""}
                     {inst.keyFingerprint ? ` · key ${inst.keyFingerprint.slice(0, 8)}` : ""}
                     {inst.minVersion ? ` · 最低 ${inst.minVersion}` : ""}
                     {inst.workspacePath ? ` · 工作区 ${inst.workspacePath}` : ""}
@@ -454,6 +462,20 @@ export function ZcodeSection() {
                     onClick={() => void openInBrowser(inst)}
                   >
                     <PublicIcon size={18} />
+                  </button>
+                  <button
+                    className="icon-btn on-variant ripple-host"
+                    title={inst.state === "running" || inst.state === "starting"
+                      ? "先停止实例再更换密钥"
+                      : "更换密钥"}
+                    disabled={busy || inst.state === "running" || inst.state === "starting"}
+                    onClick={() => {
+                      setRotateSeed("");
+                      setRotateClearKey(true);
+                      setRotateTarget(inst);
+                    }}
+                  >
+                    <LockIcon size={18} />
                   </button>
                   <button
                     className="icon-btn on-variant ripple-host"
