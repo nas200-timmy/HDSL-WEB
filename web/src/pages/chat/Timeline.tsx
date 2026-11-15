@@ -73,7 +73,7 @@ export function stepsFromParts(parts: ChatPart[]): TimelineStep[] {
 
 export type LiveTimelineBlock =
   | { kind: "thinking"; text: string }
-  | { kind: "tool"; tool?: string; query: string; provider: string; status: string; hits: number };
+  | { kind: "tool"; tool?: string; query: string; provider: string; status: string; hits: number; thinkingMs?: number };
 
 /** 流式阶段只有 thinking/tool 事件，没有 parts；按“tool 之后的新思考”分轮。 */
 export function stepsFromLive(blocks: LiveTimelineBlock[]): TimelineStep[] {
@@ -81,19 +81,25 @@ export function stepsFromLive(blocks: LiveTimelineBlock[]): TimelineStep[] {
   let round = 0;
   let seenTool = false;
   let index = 0;
+  let lastThinking: TimelineStep | null = null;
   for (const block of blocks) {
     if (block.kind === "thinking") {
       if (seenTool) {
         round += 1;
         seenTool = false;
       }
-      steps.push({
+      const step: TimelineStep = {
         kind: "thinking",
         id: `t${index++}`,
         round,
         text: block.text,
-      });
+      };
+      steps.push(step);
+      lastThinking = step;
     } else {
+      if (lastThinking && lastThinking.durationMs == null && block.thinkingMs != null) {
+        lastThinking.durationMs = block.thinkingMs;
+      }
       seenTool = true;
       steps.push({
         kind: "tool",

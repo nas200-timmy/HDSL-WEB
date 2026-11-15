@@ -23,7 +23,7 @@ import { ChatSidebar, RenameSessionDialog } from "./chat/ChatSidebar";
 import { Composer } from "./chat/Composer";
 import { Markdown } from "./chat/Markdown";
 import { MessageItem } from "./chat/MessageItem";
-import { Timeline, stepsFromLive } from "./chat/Timeline";
+import { Timeline, stepsFromLive, type TimelineStep } from "./chat/Timeline";
 import { AvatarView } from "./chat/AvatarView";
 import { ContextMeter } from "./chat/ContextMeter";
 import type { ModelGroup } from "./chat/ModelPicker";
@@ -54,28 +54,29 @@ function isPresetAssistant(assistant: ChatAssistant | null | undefined): boolean
 
 type LiveBlock =
   | { kind: "thinking"; text: string }
-  | { kind: "tool"; tool?: string; query: string; provider: string; status: string; hits: number };
+  | { kind: "tool"; tool?: string; query: string; provider: string; status: string; hits: number; thinkingMs?: number };
 
 /** 流式气泡：会话还没刷新到新节点时先画在列表末尾。 */
 function LiveBubble({ assistant, text, reasoning, tool, sources, blocks }: { assistant: ChatAssistant | null; text: string; reasoning: string; tool?: { tool?: string; query: string; provider: string; status: string; hits: number }; sources?: ChatSearchHit[]; blocks?: LiveBlock[] }) {
-  const hasBlocks = !!blocks && blocks.length > 0;
+  const steps: TimelineStep[] = blocks?.length
+    ? stepsFromLive(blocks)
+    : [
+        ...(reasoning
+          ? [{ kind: "thinking" as const, id: "t0", round: 0, text: reasoning }]
+          : []),
+        ...(tool
+          ? [{
+              kind: "tool" as const, id: "s0", round: 0,
+              name: tool.tool ?? "search_web", query: tool.query, hits: tool.hits,
+            }]
+          : []),
+      ];
   return (
     <div className="chat-msg assistant">
       <div className="chat-msg-avatar"><AvatarView value={assistant?.avatar} /></div>
       <div className="chat-msg-body">
         <div className="chat-msg-name">{assistant?.name ?? "助手"}</div>
-        {hasBlocks ? (
-          <Timeline steps={stepsFromLive(blocks!)} />
-        ) : reasoning && (
-          <div className="chat-reasoning expanded">
-            <div className="chat-reasoning-head static">
-              <span className="chat-reasoning-title">思考</span>
-              <span className="chat-reasoning-count">{reasoning.length} 字</span>
-              <span className="chat-reasoning-toggle">生成中</span>
-            </div>
-            <div className="chat-reasoning-body">{reasoning}</div>
-          </div>
-        )}
+        {steps.length > 0 && <Timeline steps={steps} />}
         {text ? (
           <div className="chat-bubble">
             <Markdown content={text} streaming sources={sources} />
@@ -86,44 +87,31 @@ function LiveBubble({ assistant, text, reasoning, tool, sources, blocks }: { ass
             <span className="chat-dot" /><span className="chat-dot" /><span className="chat-dot" />
           </div>
         )}
-        {tool && !hasBlocks && (
-          <div className="chat-tools">
-            <div className={`chat-tool-chip ${tool.status}`}>
-              <span className="chat-tool-icon">{tool.status === "running"
-                ? "…" : tool.tool === "scrape" || tool.tool === "read_link" ? "📄" : "🔍"}</span>
-              <span className="chat-tool-query">{tool.query}</span>
-              <span className="chat-tool-meta">
-                {tool.status === "running"
-                  ? (tool.tool === "scrape" || tool.tool === "read_link" ? "正在读取网页" : "正在搜索")
-                  : tool.status === "failed"
-                    ? (tool.tool === "scrape" || tool.tool === "read_link" ? "读取失败" : "搜索失败")
-                    : `${tool.hits} 条结果`}
-              </span>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
 /** 同一次服务端工具从 running 到 done 只保留一个块；并行工具按 query 区分。 */
-function mergeLiveTool(blocks: LiveBlock[] | undefined, event: { tool?: string; query: string; provider?: string; status: string; hits?: number }): LiveBlock[] {
+function mergeLiveTool(blocks: LiveBlock[] | undefined, event: { tool?: string; query: string; provider?: string; status: string; hits?: number; thinkingMs?: number }): LiveBlock[] {
   const next = [...(blocks ?? [])];
   const tool = event.tool ?? "search";
   if (event.status === "running") {
-    next.push({ kind: "tool", tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: 0 });
+    next.push({
+      kind: "tool", tool, query: event.query, provider: event.provider ?? "",
+      status: event.status, hits: 0, thinkingMs: event.thinkingMs,
+    });
     return next;
   }
   for (let i = next.length - 1; i >= 0; i--) {
     const block = next[i];
     if (block.kind === "tool" && block.status === "running"
         && block.query === event.query && (block.tool ?? "search") === tool) {
-      next[i] = { ...block, status: event.status, hits: event.hits ?? 0 };
+      next[i] = { ...block, status: event.status, hits: event.hits ?? 0, thinkingMs: block.thinkingMs ?? event.thinkingMs };
       return next;
     }
   }
-  next.push({ kind: "tool", tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: event.hits ?? 0 });
+  next.push({ kind: "tool", tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: event.hits ?? 0, thinkingMs: event.thinkingMs });
   return next;
 }
 

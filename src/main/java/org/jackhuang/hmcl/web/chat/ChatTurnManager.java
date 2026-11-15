@@ -1182,6 +1182,11 @@ public final class ChatTurnManager {
         event.addProperty("tool", tool);
         event.addProperty("query", query);
         event.addProperty("status", status);
+        if ("running".equals(status)) {
+            // 本轮从请求开始到发起工具调用的墙钟时间，前端用它给思考段补耗时。
+            event.addProperty("thinkingMs",
+                    Math.max(0, System.currentTimeMillis() - turn.roundStartedAt));
+        }
         event.addProperty("provider", result == null ? settings.searchProvider() : result.provider());
         if (result != null) {
             event.addProperty("hits", result.hits().size());
