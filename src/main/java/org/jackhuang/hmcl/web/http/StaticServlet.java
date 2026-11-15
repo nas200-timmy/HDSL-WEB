@@ -106,9 +106,15 @@ public final class StaticServlet extends HttpServlet {
 
         response.setStatus(HttpServletResponse.SC_OK);
         response.setContentType(contentType(path));
-        // Phase 1 ships a hand-written placeholder shell; assets are rebuilt
-        // per deploy and must never be cached across versions.
-        response.setHeader("Cache-Control", "no-cache");
+        // 入口 HTML 必须每次重新拿，否则浏览器会一直用它缓存的那份、继续引用旧
+        // hash 的 JS，部署了新版本页面却还是旧 UI。带 hash 的 assets 反过来可以长缓存。
+        if (INDEX.equals(path)) {
+            response.setHeader("Cache-Control", "no-store");
+        } else if (path.startsWith("assets/")) {
+            response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        } else {
+            response.setHeader("Cache-Control", "no-cache");
+        }
         // M7 (glm-5.2): security headers for the panel's own responses.
         response.setHeader("X-Content-Type-Options", "nosniff");
         response.setHeader("X-Frame-Options", "DENY");
