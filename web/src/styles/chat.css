@@ -2289,7 +2289,7 @@
 .chat-providers {
   display: flex;
   gap: 14px;
-  min-height: 100%;
+  min-height: 0;
 }
 
 .chat-provider-list {

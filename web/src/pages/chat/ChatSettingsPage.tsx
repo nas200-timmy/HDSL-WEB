@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api";
 import { ConfirmDialog, Dialog } from "../../components/Dialog";
@@ -19,7 +19,7 @@ import { AvatarCropDialog } from "./AvatarCropDialog";
 import { ModelCaps, capabilitySourceLabel } from "./ModelCaps";
 
 type Run = <T>(action: () => Promise<T>) => Promise<T>;
-type Tab = "profile" | "providers" | "defaults" | "presets" | "search" | "agent" | "data" | "network";
+type Tab = "profile" | "models" | "search" | "data" | "security";
 
 function bytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -36,10 +36,11 @@ function modelCount(account: ChatAccountProfile): number {
   return account.modelList?.length ?? account.models?.length ?? 0;
 }
 
-/** 聊天设置：独立二级页（模型服务 / 默认模型 / 数据与备份 / 网络）。 */
+/** 聊天设置：独立二级页（个人资料 / 模型 / 联网搜索 / 数据与备份 / 安全与网络）。 */
 export function ChatSettingsPage() {
   const nav = useNavigate();
-  const [tab, setTab] = useState<Tab>("providers");
+  const [tab, setTab] = useState<Tab>("models");
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const [settings, setSettings] = useState<ChatSettings | null>(null);
   const [accounts, setAccounts] = useState<ChatAccountProfile[]>([]);
   const [profile, setProfile] = useState<ChatProfile | null>(null);
@@ -121,25 +122,25 @@ export function ChatSettingsPage() {
         <nav className="chat-settings-nav">
           {([
             ["profile", "个人资料"],
-            ["providers", "模型服务"],
-            ["defaults", "默认模型"],
-            ["presets", "预设助手"],
+            ["models", "模型"],
             ["search", "联网搜索"],
-            ["agent", "Agent 票"],
             ["data", "数据与备份"],
-            ["network", "网络"],
+            ["security", "安全与网络"],
           ] as const).map(([key, label]) => (
             <button
               key={key}
               className={`chat-settings-nav-item${tab === key ? " active" : ""}`}
-              onClick={() => setTab(key)}
+              onClick={() => {
+                setTab(key);
+                contentRef.current?.scrollTo({ top: 0 });
+              }}
             >
               {label}
             </button>
           ))}
         </nav>
 
-        <div className="chat-settings-content scroll">
+        <div className="chat-settings-content scroll" ref={contentRef}>
           {needsElevation ? (
             <div className="chat-elevation-card">
               <span className="chat-elevation-icon"><LockIcon size={26} /></span>
@@ -160,26 +161,27 @@ export function ChatSettingsPage() {
             <div className="chat-settings-loading"><span className="spinner" /> 读取中…</div>
           ) : tab === "profile" ? (
             <ProfilePanel profile={profile} onSaved={setProfile} />
-          ) : tab === "providers" ? (
-            <ProvidersPanel
-              accounts={accounts}
-              settings={settings}
-              run={run}
-              reloadAccounts={reloadAccounts}
-            />
-          ) : tab === "defaults" ? (
-            <DefaultsPanel
-              settings={settings}
-              accounts={accounts}
-              run={run}
-              onSaved={setSettings}
-            />
-          ) : tab === "presets" ? (
-            <PresetPanel settings={settings} accounts={accounts} run={run} onSaved={setSettings} />
+          ) : tab === "models" ? (
+            <div className="chat-settings-stack">
+              <section className="chat-settings-card">
+                <div className="chat-settings-card-title">模型服务</div>
+                <ProvidersPanel
+                  accounts={accounts}
+                  settings={settings}
+                  run={run}
+                  reloadAccounts={reloadAccounts}
+                />
+              </section>
+              <DefaultsPanel
+                settings={settings}
+                accounts={accounts}
+                run={run}
+                onSaved={setSettings}
+              />
+              <PresetPanel settings={settings} accounts={accounts} run={run} onSaved={setSettings} />
+            </div>
           ) : tab === "search" ? (
             <SearchPanel settings={settings} run={run} onSaved={setSettings} />
-          ) : tab === "agent" ? (
-            <AgentLimitPanel settings={settings} run={run} onSaved={setSettings} />
           ) : tab === "data" ? (
             <DataPanel
               settings={settings}
@@ -187,11 +189,14 @@ export function ChatSettingsPage() {
               onSaved={setSettings}
             />
           ) : (
-            <NetworkPanel
-              settings={settings}
-              run={run}
-              onSaved={setSettings}
-            />
+            <div className="chat-settings-stack">
+              <AgentLimitPanel settings={settings} run={run} onSaved={setSettings} />
+              <NetworkPanel
+                settings={settings}
+                run={run}
+                onSaved={setSettings}
+              />
+            </div>
           )}
         </div>
       </div>
