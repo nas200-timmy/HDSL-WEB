@@ -154,6 +154,15 @@ def run(panel):
     status, body = call("GET", "/api/health")
     check("health", status == 200 and body.get("status") == "ok", (status, body))
 
+    # ---- 无 JS 保底页 ----------------------------------------------------
+    status, body = call("GET", "/plain", raw=True)
+    check("plain: the no-JavaScript surface renders forms",
+          status == 200 and b"<h1>" in body and b"<form" in body, (status, body[:200]))
+    status, body = call("GET", "/plain/old", raw=True)
+    check("plain: the old-browser page explains the fallback",
+          status == 200 and "浏览器太旧".encode("utf-8") in body and b"/plain" in body,
+          (status, body[:200]))
+
     # ---- 平台声明 --------------------------------------------------------
     status, body = call("GET", "/api/system/platform")
     level = body.get("level")
