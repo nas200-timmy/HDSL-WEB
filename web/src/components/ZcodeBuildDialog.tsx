@@ -3,7 +3,7 @@ import { api } from "../api";
 import { Dialog } from "./Dialog";
 import { Package2Icon } from "./icons";
 import { refreshZcode, toast } from "../store";
-import type { ZcodeBuildStatus } from "../types";
+import type { ZcodeBuildStatus, ZcodeCatalogEntry } from "../types";
 import { errMsg } from "../utils";
 
 /// 构建 ZCode 发行包：面板下载源码 → 打反代补丁 → pnpm install → pnpm build:zcode
@@ -15,6 +15,22 @@ export function ZcodeBuildButton() {
   const [status, setStatus] = useState<ZcodeBuildStatus | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [starting, setStarting] = useState(false);
+  const [catalog, setCatalog] = useState<ZcodeCatalogEntry[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    api.zcodeCatalog()
+      .then((result) => {
+        if (alive) setCatalog(result.entries);
+      })
+      .catch(() => {
+        // The free-text input still works if GitHub is unreachable.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -67,11 +83,19 @@ export function ZcodeBuildButton() {
           <span className="form-label">上游版本</span>
           <input
             className="input"
+            list="zcode-build-versions"
             value={version}
             placeholder="v3.14.3 或 main"
             disabled={running}
             onChange={(e) => setVersion(e.target.value)}
           />
+          <datalist id="zcode-build-versions">
+            {catalog.map((entry) => (
+              <option key={entry.ref} value={entry.ref}>
+                {`${entry.version} · ${entry.channel === "main" ? "未发布" : entry.channel === "release" ? "正式版" : "仅 tag"} · ${entry.installed ? "已装" : "需构建"} · ${entry.credentialFormat >= 2 ? "v2" : "v1"}`}
+              </option>
+            ))}
+          </datalist>
         </div>
         <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.7 }}>
           面板会下载 <code>zai-org/ZCode</code> 的源码、打上反代补丁（

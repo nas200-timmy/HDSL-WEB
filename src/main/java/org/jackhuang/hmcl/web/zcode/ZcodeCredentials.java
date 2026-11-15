@@ -21,14 +21,20 @@ import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.PBEKeySpec;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.security.spec.InvalidKeySpecException;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.Map;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
@@ -119,23 +125,138 @@ final class ZcodeCredentials {
         }
 
         try {
-            Files.createDirectories(directory);
-            Path temporary = Files.createTempFile(directory, SECRET_FILE + ".", ".tmp");
-            try {
-                String value = Base64.getUrlEncoder().withoutPadding()
-                        .encodeToString(randomBytes());
-                Files.writeString(temporary, value, StandardCharsets.UTF_8,
-                        StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-                restrict(temporary);
-                Files.move(temporary, secret);
-                restrict(secret);
-            } finally {
-                Files.deleteIfExists(temporary);
-            }
+            writeSecret(directory, secret, randomBytes());
             LOG.info("Generated ZCode credential secret for instance " + instance.id());
         } catch (IOException e) {
             throw new ZcodeException(
                     "无法为 ZCode 实例生成 credential-secret: " + e.getMessage(), e);
+        }
+    }
+
+    /// Writes a seed-derived key exactly once. Used at creation time; replacing
+    /// an existing key must go through [#rotate] because the old ciphertext has
+    /// to be discarded with it.
+    static void writeSeed(ZcodeInstanceManager manager, ZcodeInstance instance,
+                          String seed) throws ZcodeException {
+        if (seed == null || seed.isBlank()) {
+            throw new ZcodeException("种子不能为空");
+        }
+        if (externalSecretConfigured()) {
+            throw new ZcodeException("当前进程已配置外部的 ZCODE_CREDENTIAL_SECRET[_FILE]；"
+                    + "面板不会另写 credential-secret，请在外部轮换密钥。");
+        }
+        Path directory = configDirectory(manager, instance);
+        Path secret = directory.resolve(SECRET_FILE);
+        if (Files.exists(secret)) {
+            throw new ZcodeException("该实例已有 credential-secret；更换密钥请使用重置流程。");
+        }
+        try {
+            Files.createDirectories(directory);
+            writeSecret(directory, secret, derive(seed, instance.id()));
+        } catch (IOException e) {
+            throw new ZcodeException("无法写入 credential-secret: " + e.getMessage(), e);
+        }
+        LOG.info("Wrote seed-derived ZCode credential secret for instance " + instance.id());
+    }
+
+    /// Rotates the key by discarding the encrypted credentials first. This is
+    /// intentionally not a decrypt/re-encrypt: the operator accepted that the
+    /// stored API key / login tokens must be entered again.
+    static void rotate(ZcodeInstanceManager manager, ZcodeInstance instance,
+                       @Nullable String seed, boolean clearProviderKey) throws ZcodeException {
+        if (externalSecretConfigured()) {
+            throw new ZcodeException("当前进程已配置外部的 ZCODE_CREDENTIAL_SECRET[_FILE]；"
+                    + "面板不管理这把密钥，请在外部轮换。");
+        }
+        Path directory = configDirectory(manager, instance);
+        try {
+            Files.deleteIfExists(directory.resolve(CREDENTIALS_FILE));
+            Files.deleteIfExists(directory.resolve(SOURCE_FILE));
+            Files.deleteIfExists(directory.resolve(SECRET_FILE));
+            if (clearProviderKey) {
+                Files.deleteIfExists(directory.resolve("provider_config.json"));
+            }
+        } catch (IOException e) {
+            throw new ZcodeException("无法清理旧 ZCode 凭据: " + e.getMessage(), e);
+        }
+        if (seed != null && !seed.isBlank()) {
+            writeSeed(manager, instance, seed);
+        } else {
+            ensure(manager, instance, null);
+        }
+        LOG.info("Rotated ZCode credential secret for instance " + instance.id());
+    }
+
+    /// The key fingerprint ZCode writes into `enc:v2:env:<fingerprint>:...`,
+    /// safe to show in the browser (it is SHA-256(SHA-256(secret))[0..24]).
+    static @Nullable String fingerprint(ZcodeInstanceManager manager, ZcodeInstance instance) {
+        Path secret = configDirectory(manager, instance).resolve(SECRET_FILE);
+        if (!Files.isRegularFile(secret)) {
+            return null;
+        }
+        try {
+            byte[] secretBytes = Files.readString(secret, StandardCharsets.UTF_8)
+                    .getBytes(StandardCharsets.UTF_8);
+            byte[] key = MessageDigest.getInstance("SHA-256").digest(secretBytes);
+            byte[] fingerprint = MessageDigest.getInstance("SHA-256").digest(key);
+            return HexFormat.of().formatHex(fingerprint).substring(0, 24);
+        } catch (IOException | NoSuchAlgorithmException e) {
+            return null;
+        }
+    }
+
+    /// Whether the instance's data already contains v2 ciphertext. Used to
+    /// infer the used credential format for manifests written before the field
+    /// existed; this is what stops a v2 instance from being moved to a v1
+    /// release.
+    static boolean hasV2Data(ZcodeInstanceManager manager, ZcodeInstance instance) {
+        Path credentials = configDirectory(manager, instance).resolve(CREDENTIALS_FILE);
+        if (!Files.isRegularFile(credentials)) {
+            return false;
+        }
+        try {
+            return Files.readString(credentials, StandardCharsets.UTF_8).contains("enc:v2:");
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    static int effectiveFormat(ZcodeInstanceManager manager, ZcodeInstance instance) {
+        if (instance.credentialFormat() > 0) {
+            return instance.credentialFormat();
+        }
+        if (hasV2Data(manager, instance)) {
+            return 2;
+        }
+        return ZcodeCatalog.formatOf(instance.version());
+    }
+
+    private static byte[] derive(String seed, String instanceId) throws ZcodeException {
+        PBEKeySpec spec = new PBEKeySpec(seed.toCharArray(),
+                ("zcode-credential:" + instanceId).getBytes(StandardCharsets.UTF_8),
+                210_000, 256);
+        try {
+            return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+                    .generateSecret(spec).getEncoded();
+        } catch (NoSuchAlgorithmException | InvalidKeySpecException e) {
+            throw new ZcodeException("无法从种子派生 ZCode 密钥: " + e.getMessage(), e);
+        } finally {
+            spec.clearPassword();
+        }
+    }
+
+    private static void writeSecret(Path directory, Path secret, byte[] key) throws IOException {
+        Files.createDirectories(directory);
+        Path temporary = Files.createTempFile(directory, SECRET_FILE + ".", ".tmp");
+        try {
+            String value = Base64.getUrlEncoder().withoutPadding().encodeToString(key);
+            Files.writeString(temporary, value, StandardCharsets.UTF_8,
+                    StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            restrict(temporary);
+            Files.move(temporary, secret);
+            restrict(secret);
+        } finally {
+            Files.deleteIfExists(temporary);
         }
     }
 
@@ -178,6 +299,10 @@ final class ZcodeCredentials {
         } catch (UnsupportedOperationException ignored) {
             // Non-POSIX filesystem; the data directory's own permissions apply.
         }
+    }
+
+    private static boolean externalSecretConfigured() {
+        return hasText(System.getenv(SECRET_ENV)) || hasText(System.getenv(SECRET_FILE_ENV));
     }
 
     private static boolean hasText(@Nullable String value) {

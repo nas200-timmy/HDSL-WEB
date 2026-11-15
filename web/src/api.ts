@@ -41,6 +41,7 @@ import type {
   WallpaperList,
   WorkspaceInfo,
   ZcodeBuildStatus,
+  ZcodeCatalog,
   ZcodeDistInfo,
   ZcodeInstance,
   ZcodeRelease,
@@ -540,13 +541,24 @@ export const api = {
   zcodeInstances: () =>
     request<{ instances: ZcodeInstance[]; workspacesRoot?: string }>("/api/zcode/instances"),
 
-  createZcodeInstance: (body: { name: string; baseUrl?: string; apiKey?: string; workspacePath?: string }) =>
+  createZcodeInstance: (body: { name: string; baseUrl?: string; apiKey?: string; workspacePath?: string; version?: string; seed?: string }) =>
     request<{ instance: ZcodeInstance }>("/api/zcode/instances", jsonInit("POST", body)),
 
-  patchZcodeInstance: (id: string, body: { name?: string; baseUrl?: string; apiKey?: string }) =>
+  patchZcodeInstance: (id: string, body: { name?: string; baseUrl?: string; apiKey?: string; version?: string }) =>
     request<{ instance: ZcodeInstance }>(
       `/api/zcode/instances/${encodeURIComponent(id)}`,
       jsonInit("PATCH", body),
+    ),
+
+  /** 上游版本目录：正式 release / 仅 tag / 未发布的 main，带本地构建与凭据状态。 */
+  zcodeCatalog: (refresh = false) =>
+    request<ZcodeCatalog>(`/api/zcode/catalog${refresh ? "?refresh=1" : ""}`),
+
+  /** 更换实例的 credential-secret；旧凭据会被丢弃，需要重新添加 Key/登录。 */
+  rotateZcodeKey: (id: string, body: { seed?: string; clearProviderKey?: boolean }) =>
+    request<{ instance: ZcodeInstance }>(
+      `/api/zcode/instances/${encodeURIComponent(id)}/rotate-key`,
+      jsonInit("POST", body),
     ),
 
   deleteZcodeInstance: (id: string) =>

@@ -777,8 +777,14 @@ export interface ExternalInstance {
   url?: string;
   /** 最近一次启动播报的端口；0/缺省 = 未知（运行中浮层展示用） */
   port?: number;
-  /** kimi/opencode 实例的版本号（zcode 无版本概念） */
+  /** 品牌实例的版本号；zcode 现在也 pin 一个上游 ref */
   version?: string;
+  /** 仅 zcode：降级下限与已使用的凭据格式 */
+  minVersion?: string | null;
+  minVersionAt?: number;
+  credentialFormat?: number;
+  requiresCredentialSecret?: boolean;
+  keyFingerprint?: string | null;
   /** 运行出错时的错误信息（state = error） */
   error?: string;
   /** 被单实例策略禁用 */
@@ -883,6 +889,17 @@ export interface ZcodeInstance {
   token: string;
   /** 最近一次启动时 ZCode 自选的端口；0 = 未知/未启动 */
   lastPort: number;
+  /** 实例 pin 的上游 ref；null = 历史兼容，跟随 current */
+  version: string | null;
+  /** 降级下限；null = 还没成功启动过 */
+  minVersion: string | null;
+  minVersionAt: number;
+  /** 已经使用过的凭据格式：1 legacy / 2 system credential storage / 0 unknown */
+  credentialFormat: number;
+  /** 当前 pin 的版本是否要求 credential-secret */
+  requiresCredentialSecret: boolean;
+  /** credential-secret 的 fingerprint，可在 UI 里显示；不返回密钥本身 */
+  keyFingerprint: string | null;
   createdAt: number;
   /** created | starting | running | stopped | error */
   state: string;
@@ -904,6 +921,29 @@ export interface ZcodeRelease {
   builtAt: number;
   /** 是否 `current` 指向它（启动用的就是它） */
   current: boolean;
+}
+
+/// 上游版本目录的一项（GET /api/zcode/catalog）。
+export interface ZcodeCatalogEntry {
+  ref: string;
+  version: string;
+  /** release | tag | main */
+  channel: string;
+  commit: string | null;
+  publishedAt: number | null;
+  /** 1 = legacy credentials, 2 = system credential storage */
+  credentialFormat: number;
+  requiresCredentialSecret: boolean;
+  installed: boolean;
+  /** installed | not-installed | building | failed */
+  buildState: string;
+  prerelease: boolean;
+  notes: string;
+}
+
+export interface ZcodeCatalog {
+  entries: ZcodeCatalogEntry[];
+  fetchedAt: number;
 }
 
 /// 面板内构建的状态（GET/POST /api/zcode/build）。

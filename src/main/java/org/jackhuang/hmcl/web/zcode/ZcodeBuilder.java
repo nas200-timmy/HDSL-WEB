@@ -316,7 +316,7 @@ public final class ZcodeBuilder {
                     "--base-url", "https://example.invalid/zcode/"), Duration.ofMinutes(90));
 
             step.set(0.93, "安装发行包");
-            installed = install(outDir, settings.root().resolve("releases"));
+            installed = install(outDir, settings.root().resolve("releases"), ref);
 
             // DONE is published by the finally block, after the scratch tree is gone:
             // a caller that sees DONE reads the directory immediately, and reporting
@@ -414,7 +414,7 @@ public final class ZcodeBuilder {
     /// `releases/<version>/` and points `current` at it.
     ///
     /// @return the installed version
-    private static String install(Path outDir, Path releases) throws ZcodeException {
+    private static String install(Path outDir, Path releases, String ref) throws ZcodeException {
         Path latest = outDir.resolve("latest.json");
         String version;
         Path tarball;
@@ -474,6 +474,16 @@ public final class ZcodeBuilder {
                         "could not apply the project-owner patch to the built release ("
                                 + target + ")");
             }
+            // The version catalog needs to know which upstream ref produced this
+            // build. `releases/<version>` is named after the package version, so a
+            // `main` build would otherwise lose the fact that it came from main.
+            JsonObject manifest = new JsonObject();
+            manifest.addProperty("ref", ref);
+            manifest.addProperty("version", version);
+            manifest.addProperty("builtAt", System.currentTimeMillis());
+            manifest.addProperty("credentialFormat", ZcodeCatalog.formatOf(ref));
+            Files.writeString(target.resolve("release.json"), manifest.toString(),
+                    StandardCharsets.UTF_8);
             // A pointer at the release just installed. Where the system permits a link
             // this is a link; where it does not — an ordinary Windows account without
             // Developer Mode — `Links` writes a pointer file instead, because the

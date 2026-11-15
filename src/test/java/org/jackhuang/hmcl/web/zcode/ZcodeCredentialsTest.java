@@ -39,7 +39,7 @@ class ZcodeCredentialsTest {
 
     private ZcodeInstance instance() {
         return new ZcodeInstance("test", "ZCode", root.resolve("ws").toString(),
-                null, null, "token", 0, 0L);
+                null, null, "token", 0, null, null, 0, 0, 0L);
     }
 
     private Path secret(ZcodeInstanceManager manager, ZcodeInstance instance) {
@@ -65,6 +65,20 @@ class ZcodeCredentialsTest {
             assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
                     Files.getPosixFilePermissions(secret));
         }
+    }
+
+    @Test
+    void seedDerivationIsStableAndRotateRewritesIt() throws Exception {
+        ZcodeInstanceManager manager = new ZcodeInstanceManager(root);
+        ZcodeInstance instance = instance();
+
+        ZcodeCredentials.writeSeed(manager, instance, "correct horse battery staple");
+        Path secret = secret(manager, instance);
+        String first = Files.readString(secret, StandardCharsets.UTF_8);
+
+        ZcodeCredentials.rotate(manager, instance, "correct horse battery staple", true);
+        assertEquals(first, Files.readString(secret, StandardCharsets.UTF_8));
+        assertTrue(ZcodeCredentials.fingerprint(manager, instance) != null);
     }
 
     @Test

@@ -224,6 +224,13 @@ public final class ZcodeInstanceManager {
     ///                        instance cannot be written
     public ZcodeInstance create(String name, @Nullable String baseUrl, @Nullable String apiKey,
                                @Nullable Path workspace) throws ZcodeException {
+        return create(name, baseUrl, apiKey, workspace, null);
+    }
+
+    /// Creates an instance pinned to an upstream ref. The floor and the used
+    /// credential format start empty: they move only after a successful launch.
+    public ZcodeInstance create(String name, @Nullable String baseUrl, @Nullable String apiKey,
+                               @Nullable Path workspace, @Nullable String version) throws ZcodeException {
         String normalized = name == null ? "" : name.trim();
         if (normalized.isEmpty()) {
             throw new ZcodeException("A ZCode instance needs a name");
@@ -243,7 +250,9 @@ public final class ZcodeInstanceManager {
         }
         ZcodeInstance instance = new ZcodeInstance(id, normalized,
                 workspacePath.toString(),
-                baseUrl, apiKey, newTokenLike(32), 0, System.currentTimeMillis());
+                baseUrl, apiKey, newTokenLike(32), 0,
+                version == null || version.isBlank() ? null : version.trim(),
+                null, 0, 0, System.currentTimeMillis());
 
         try {
             Files.createDirectories(dataDirectoryOf(directory));

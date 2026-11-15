@@ -53,6 +53,17 @@ public record ZcodeInstance(
         /// The port the process last announced on stdout; `0` before the first
         /// successful launch chose one.
         @SerializedName("lastPort") int lastPort,
+        /// The pinned upstream ref (`v3.17.2`, `main`), or `null` for the
+        /// historical "whatever `current` points at" behaviour.
+        @SerializedName("version") @Nullable String version,
+        /// The lowest ref this instance may switch back to after a successful
+        /// launch. Together with [minVersionAt] it implements the per-instance
+        /// downgrade lock without a global version floor.
+        @SerializedName("minVersion") @Nullable String minVersion,
+        @SerializedName("minVersionAt") long minVersionAt,
+        /// 1 = legacy credentials, 2 = system credential storage, 0 = unknown
+        /// (an instance manifest written before version pinning existed).
+        @SerializedName("credentialFormat") int credentialFormat,
         @SerializedName("createdAt") long createdAt) {
 
     /// The default provider endpoint the creation dialog pre-fills.
@@ -70,7 +81,8 @@ public record ZcodeInstance(
     /// @param newName the name
     /// @return the copy
     public ZcodeInstance withName(String newName) {
-        return new ZcodeInstance(id, newName, workspacePath, baseUrl, apiKey, token, lastPort, createdAt);
+        return new ZcodeInstance(id, newName, workspacePath, baseUrl, apiKey, token, lastPort,
+                version, minVersion, minVersionAt, credentialFormat, createdAt);
     }
 
     /// Returns a copy with different provider credentials.
@@ -79,7 +91,8 @@ public record ZcodeInstance(
     /// @param newApiKey  the API key, `null` to clear
     /// @return the copy
     public ZcodeInstance withCredentials(@Nullable String newBaseUrl, @Nullable String newApiKey) {
-        return new ZcodeInstance(id, name, workspacePath, newBaseUrl, newApiKey, token, lastPort, createdAt);
+        return new ZcodeInstance(id, name, workspacePath, newBaseUrl, newApiKey, token, lastPort,
+                version, minVersion, minVersionAt, credentialFormat, createdAt);
     }
 
     /// Returns a copy remembering the port the process announced.
@@ -87,6 +100,45 @@ public record ZcodeInstance(
     /// @param newLastPort the port
     /// @return the copy
     public ZcodeInstance withLastPort(int newLastPort) {
-        return new ZcodeInstance(id, name, workspacePath, baseUrl, apiKey, token, newLastPort, createdAt);
+        return new ZcodeInstance(id, name, workspacePath, baseUrl, apiKey, token, newLastPort,
+                version, minVersion, minVersionAt, credentialFormat, createdAt);
+    }
+
+    /// Returns a copy pinned to an upstream ref. The used credential format
+    /// stays as it was: only a successful launch proves that the instance's
+    /// data has been written in that format.
+    public ZcodeInstance withVersion(@Nullable String newVersion) {
+        return new ZcodeInstance(id, name, workspacePath, baseUrl, apiKey, token, lastPort,
+                newVersion, minVersion, minVersionAt, credentialFormat, createdAt);
+    }
+
+    /// Returns a copy with an explicit used credential format. Used when an
+    /// instance manifest predates the field but its data already contains v2
+    /// ciphertext.
+    public ZcodeInstance withCredentialFormat(int format) {
+        return new ZcodeInstance(id, name, workspacePath, baseUrl, apiKey, token, lastPort,
+                version, minVersion, minVersionAt, format, createdAt);
+    }
+
+    /// Returns a copy whose downgrade floor has moved to at least this ref.
+    ///
+    /// The floor only moves forward: a lower requested ref never lowers it.
+    public ZcodeInstance withFloor(@Nullable String floorVersion, long floorAt, int floorFormat) {
+        String nextVersion = minVersion;
+        long nextAt = minVersionAt;
+        int nextFormat = credentialFormat;
+        if (floorVersion != null && !floorVersion.isBlank()) {
+            if (nextVersion == null || nextVersion.isBlank()
+                    || ZcodeCatalog.compareSemver(floorVersion, nextVersion) >= 0
+                    || ZcodeCatalog.isMain(floorVersion)) {
+                nextVersion = floorVersion;
+                nextAt = floorAt;
+            }
+        }
+        if (floorFormat > nextFormat) {
+            nextFormat = floorFormat;
+        }
+        return new ZcodeInstance(id, name, workspacePath, baseUrl, apiKey, token, lastPort,
+                version, nextVersion, nextAt, nextFormat, createdAt);
     }
 }

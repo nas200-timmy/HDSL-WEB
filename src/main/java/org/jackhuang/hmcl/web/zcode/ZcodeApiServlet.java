@@ -152,6 +152,10 @@ public final class ZcodeApiServlet extends HttpServlet {
                 releases(response);
                 return;
             }
+            if (segments.length == 1 && "catalog".equals(segments[0]) && "GET".equals(request.getMethod())) {
+                catalog(request, response);
+                return;
+            }
             if (segments.length >= 1 && "build".equals(segments[0])) {
                 if (segments.length == 1) {
                     switch (request.getMethod()) {
@@ -211,6 +215,10 @@ public final class ZcodeApiServlet extends HttpServlet {
                     plugins(response, id);
                     return;
                 }
+                if (segments.length == 3 && "rotate-key".equals(segments[2]) && "POST".equals(request.getMethod())) {
+                    rotateKey(request, response, id);
+                    return;
+                }
             }
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
         } catch (ZcodeException e) {
@@ -246,6 +254,41 @@ public final class ZcodeApiServlet extends HttpServlet {
         Json.write(response, body);
     }
 
+    /// The upstream version catalog: official releases, tag-only tags, and the
+    /// unreleased `main` snapshot, annotated with local build and credential state.
+    private void catalog(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        ZcodeCatalog.Snapshot snapshot;
+        try {
+            snapshot = ZcodeCatalog.load(config.dataDir.resolve("zcode"),
+                    "1".equals(request.getParameter("refresh")));
+        } catch (ZcodeException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_GATEWAY, e.getMessage());
+            return;
+        }
+        JsonArray entries = new JsonArray();
+        for (ZcodeCatalog.Entry entry : snapshot.entries()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("ref", entry.ref());
+            item.addProperty("version", entry.version());
+            item.addProperty("channel", entry.channel());
+            item.add("commit", entry.commit() == null
+                    ? JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(entry.commit()));
+            item.add("publishedAt", entry.publishedAt() > 0
+                    ? new com.google.gson.JsonPrimitive(entry.publishedAt()) : JsonNull.INSTANCE);
+            item.addProperty("credentialFormat", entry.credentialFormat());
+            item.addProperty("requiresCredentialSecret", entry.requiresSecret());
+            item.addProperty("installed", entry.installed());
+            item.addProperty("buildState", entry.buildState());
+            item.addProperty("prerelease", entry.prerelease());
+            item.addProperty("notes", entry.notes());
+            entries.add(item);
+        }
+        JsonObject body = new JsonObject();
+        body.add("entries", entries);
+        body.addProperty("fetchedAt", snapshot.fetchedAt());
+        Json.write(response, body);
+    }
+
     /// The distribution directory: the `HDSL_ZCODE_PACKAGE` override, else the
     /// newest installed release (the `current` link the builder maintains, or
     /// whatever `releases/` holds), else where the next build would land.
@@ -255,6 +298,45 @@ public final class ZcodeApiServlet extends HttpServlet {
             return Path.of(configured).toAbsolutePath().normalize();
         }
         return ZcodeBuilder.currentPackage(config.dataDir.resolve("zcode"));
+    }
+
+    /// The package directory an instance is pinned to. A ref is mapped through
+    /// the release manifest written at build time, because releases are named
+    /// after the package version (`main` builds as `3.18.2`).
+    private Path packageDir(ZcodeInstance instance) {
+        String version = instance.version();
+        if (version == null || version.isBlank()) {
+            return packageDir();
+        }
+        Path root = config.dataDir.resolve("zcode");
+        Path direct = root.resolve("releases").resolve(version);
+        if (Files.isRegularFile(direct.resolve("bin/zcode.mjs"))) {
+            return direct;
+        }
+        String stripped = version.startsWith("v") || version.startsWith("V")
+                ? version.substring(1) : version;
+        Path byVersion = root.resolve("releases").resolve(stripped);
+        if (Files.isRegularFile(byVersion.resolve("bin/zcode.mjs"))) {
+            return byVersion;
+        }
+        for (ZcodeBuilder.Release release : ZcodeBuilder.releases(root)) {
+            Path directory = Path.of(release.path());
+            Path manifest = directory.resolve("release.json");
+            if (!Files.isRegularFile(manifest)) {
+                continue;
+            }
+            try {
+                com.google.gson.JsonObject parsed = com.google.gson.JsonParser.parseString(
+                        Files.readString(manifest)).getAsJsonObject();
+                if (parsed.has("ref") && parsed.get("ref").isJsonPrimitive()
+                        && version.equals(parsed.get("ref").getAsString())) {
+                    return directory;
+                }
+            } catch (Exception ignored) {
+                // A malformed manifest is not a match.
+            }
+        }
+        return direct;
     }
 
     /// The distribution's version, from its `package.json`; `null` when the
@@ -297,11 +379,40 @@ public final class ZcodeApiServlet extends HttpServlet {
         String baseUrl = stringField(body, "baseUrl");
         String apiKey = stringField(body, "apiKey");
         String workspace = stringField(body, "workspacePath");
+        String version = stringField(body, "version");
+        if (version != null && !version.isBlank()) {
+            try {
+                ZcodeCatalog.Snapshot snapshot = ZcodeCatalog.load(config.dataDir.resolve("zcode"), false);
+                ZcodeCatalog.Entry entry = snapshot.find(version);
+                if (entry == null || !entry.installed()) {
+                    Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                            "版本 " + version + " 还没有构建；先在版本卡里构建它");
+                    return;
+                }
+                version = entry.ref();
+            } catch (ZcodeException e) {
+                Json.error(response, HttpServletResponse.SC_BAD_GATEWAY, e.getMessage());
+                return;
+            }
+        }
         // A path the operator typed is taken as given: the instance works where they say,
         // not in a directory the panel made up for it.
         java.nio.file.Path workspacePath = workspace == null || workspace.isBlank()
                 ? null : java.nio.file.Path.of(workspace.trim());
-        ZcodeInstance created = manager.create(name, baseUrl, apiKey, workspacePath);
+        ZcodeInstance created = manager.create(name, baseUrl, apiKey, workspacePath, version);
+        String seed = stringField(body, "seed");
+        if (seed != null && !seed.isBlank()) {
+            try {
+                ZcodeCredentials.writeSeed(manager, created, seed);
+            } catch (ZcodeException e) {
+                try {
+                    manager.delete(created.id());
+                } catch (ZcodeException ignored) {
+                    // The original failure is the useful one.
+                }
+                throw e;
+            }
+        }
         Json.writePreservingNulls(response, HttpServletResponse.SC_CREATED,
                 Map.of("instance", instanceJson(created, request)));
     }
@@ -335,6 +446,36 @@ public final class ZcodeApiServlet extends HttpServlet {
         }
 
         ZcodeInstance patched = instance;
+        String version = stringField(body, "version");
+        if (version != null && !version.isBlank()) {
+            if (ZcodeRuntime.isRunning(id)) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT,
+                        "stop the ZCode instance before switching its version");
+                return;
+            }
+            try {
+                ZcodeCatalog.Snapshot snapshot = ZcodeCatalog.load(config.dataDir.resolve("zcode"), false);
+                ZcodeCatalog.Entry entry = snapshot.find(version);
+                if (entry == null || !entry.installed()) {
+                    Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                            "版本 " + version + " 还没有构建；先在版本卡里构建它");
+                    return;
+                }
+                ZcodeInstance effective = instance.credentialFormat() > 0
+                        ? instance
+                        : instance.withCredentialFormat(
+                                ZcodeCredentials.effectiveFormat(manager, instance));
+                String reason = ZcodeCatalog.downgradeReason(effective, entry);
+                if (reason != null) {
+                    Json.error(response, HttpServletResponse.SC_CONFLICT, reason);
+                    return;
+                }
+                patched = patched.withVersion(entry.ref());
+            } catch (ZcodeException e) {
+                Json.error(response, HttpServletResponse.SC_BAD_GATEWAY, e.getMessage());
+                return;
+            }
+        }
         String name = stringField(body, "name");
         if (name != null && !name.trim().isEmpty() && !name.trim().equals(instance.name())) {
             patched = patched.withName(name.trim());
@@ -351,6 +492,40 @@ public final class ZcodeApiServlet extends HttpServlet {
         // that renames the file simply stops reading what we write here.
         manager.writeProviderConfig(patched);
         Json.writePreservingNulls(response, Map.of("instance", instanceJson(patched, request)));
+    }
+
+    /// Replaces the instance's credential root key. This is a reset, not a
+    /// re-encryption: the old `credentials.json` is discarded, so the operator
+    /// must re-authenticate / re-enter the provider key.
+    private void rotateKey(HttpServletRequest request, HttpServletResponse response, String id)
+            throws IOException, ZcodeException {
+        ZcodeInstance instance = manager.find(id);
+        if (instance == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such ZCode instance");
+            return;
+        }
+        if (ZcodeRuntime.isRunning(id)) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT,
+                    "stop the ZCode instance before rotating its key");
+            return;
+        }
+        JsonObject body = body(request, response);
+        if (body == null) {
+            return;
+        }
+        String seed = stringField(body, "seed");
+        boolean clearProviderKey = body.has("clearProviderKey")
+                && body.get("clearProviderKey").isJsonPrimitive()
+                && body.get("clearProviderKey").getAsBoolean();
+        ZcodeCredentials.rotate(manager, instance, seed, clearProviderKey);
+        if (clearProviderKey) {
+            instance = instance.withCredentials(instance.baseUrl(), null);
+            manager.update(instance);
+        }
+        AuditLog.log(AuditLog.Channel.WEB, "zcode.instance.rotate_key", id,
+                AuthFilter.selfDirected(request, ZcodeTui.BRAND, id) ? "self_rotate" : "success",
+                actorOf(request), request.getRemoteAddr());
+        Json.writePreservingNulls(response, Map.of("instance", instanceJson(instance, request)));
     }
 
     private void deleteInstance(HttpServletRequest request, HttpServletResponse response, String id)
@@ -391,9 +566,11 @@ public final class ZcodeApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such ZCode instance");
             return;
         }
-        if (!Files.isRegularFile(packageDir().resolve("bin/zcode.mjs"))) {
+        Path launchDir = packageDir(instance);
+        if (!Files.isRegularFile(launchDir.resolve("bin/zcode.mjs"))) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "no ZCode distribution was found; place one at " + packageDir());
+                    "版本 " + (instance.version() == null ? "(current)" : instance.version())
+                            + " 还没有构建；先在版本卡里构建它（" + launchDir + "）");
             return;
         }
         // The TUI and the web process share the instance's data directory: the
@@ -415,7 +592,28 @@ public final class ZcodeApiServlet extends HttpServlet {
         environment.put("PATH", node.getParent() + java.io.File.pathSeparator
                 + environment.getOrDefault("PATH", ""));
         ZcodeRuntime.Status status = ZcodeRuntime.launch(
-                manager, instance, environment, node.toString(), packageDir());
+                manager, instance, environment, node.toString(), launchDir);
+        if (status.state() == ZcodeRuntime.State.RUNNING
+                && instance.version() != null && !instance.version().isBlank()) {
+            int format = ZcodeCatalog.formatOf(instance.version());
+            long at = System.currentTimeMillis();
+            try {
+                ZcodeCatalog.Entry entry = ZcodeCatalog.load(config.dataDir.resolve("zcode"), false)
+                        .find(instance.version());
+                if (entry != null && entry.publishedAt() > 0) {
+                    at = entry.publishedAt();
+                }
+            } catch (ZcodeException ignored) {
+                // The launch already succeeded; a catalog miss only makes the floor
+                // timestamp conservative.
+            }
+            try {
+                manager.update(instance.withFloor(instance.version(), at, format));
+            } catch (ZcodeException e) {
+                org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                        "Could not record the version floor for ZCode instance " + id, e);
+            }
+        }
         AuditLog.log(AuditLog.Channel.WEB, "zcode.instance.launch", id,
                 AuthFilter.selfDirected(request, ZcodeTui.BRAND, id) ? "self_launch" : "success",
                 actorOf(request), request.getRemoteAddr());
@@ -460,7 +658,7 @@ public final class ZcodeApiServlet extends HttpServlet {
         }
         try {
             instanceTerminal.authorize(request);
-            Path packageDir = packageDir();
+            Path packageDir = packageDir(instance);
             if (!Files.isRegularFile(packageDir.resolve("bin/zcode.mjs"))) {
                 throw new InstanceTerminal.Refused(409,
                         "terminal_failed: no ZCode distribution was found at " + packageDir
@@ -633,6 +831,17 @@ public final class ZcodeApiServlet extends HttpServlet {
             body.addProperty("token", instance.token());
         }
         body.addProperty("lastPort", instance.lastPort());
+        body.add("version", instance.version() == null
+                ? JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(instance.version()));
+        body.add("minVersion", instance.minVersion() == null
+                ? JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(instance.minVersion()));
+        body.addProperty("minVersionAt", instance.minVersionAt());
+        body.addProperty("credentialFormat", ZcodeCredentials.effectiveFormat(manager, instance));
+        body.addProperty("requiresCredentialSecret",
+                ZcodeCatalog.formatOf(instance.version()) >= 2);
+        String fingerprint = ZcodeCredentials.fingerprint(manager, instance);
+        body.add("keyFingerprint", fingerprint == null
+                ? JsonNull.INSTANCE : new com.google.gson.JsonPrimitive(fingerprint));
         body.addProperty("createdAt", instance.createdAt());
         body.addProperty("state", status.state().name().toLowerCase(java.util.Locale.ROOT));
         if (status.error() != null) {

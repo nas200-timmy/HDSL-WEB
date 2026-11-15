@@ -127,6 +127,41 @@ fetch、Z.ai OAuth 的 `tokenUrl`。上游把这些锚点挪走时构建会**明
 `Local:` 就绪行之后面板还会做一次 HTTP 探活；3.18.2 会在打印端口后才初始化 host
 services，失败时进程会退出，探活会把实例标为 error 并带上日志尾部，而不是先报 running。
 
+### 版本目录与实例下限
+
+`GET /api/zcode/catalog` 返回三类版本：
+
+- `release`：GitHub Releases（正式版；当前 v3.17.2 / v3.17.1 / v3.14.3）；
+- `tag`：有 tag 但没有 Release 的版本（如 v3.15.1）；
+- `main`：`main@<sha>`，未发布，不保证兼容。
+
+每一项带 `credentialFormat`（1 legacy / 2 system credential storage）、
+`requiresCredentialSecret`、`installed` 与 `buildState`。3.18.0 起是 v2；当前只有
+`main` 构建会触发。
+
+实例新增 `version` / `minVersion` / `minVersionAt` / `credentialFormat`：
+
+- 创建时可选一个已构建的 ref，或留空跟随 `current`；
+- 成功启动后，`minVersion` 前移到该版本，`credentialFormat` 记录已使用的格式；
+- 切换版本要求实例已停止、目标版本已构建，并通过两道闸：凭据格式不能倒退，
+  semver 不能低于 `minVersion`；从 `main` 回退到更早的正式版也会被拒绝。失败返回
+  `409`，前端把低于下限的项置灰并给出原因。
+- 这是**按实例**的锁：新实例仍可选旧版本。
+
+### 更换密钥
+
+创建实例时可选「自动生成」（默认）或「使用种子」；种子由面板用
+PBKDF2WithHmacSHA256（per-instance salt、210k 次）派生 32 字节写入 `credential-secret`。
+
+实例菜单里的「更换密钥」是可重复的 reset：
+
+- 要求实例已停止；
+- 删除 `credentials.json`、`credential-source`、旧 `credential-secret`；
+- 可选「同时清除已保存的 API Key」；
+- 写入新密钥（自动或种子派生），之后需要重新添加 API Key / 登录。
+
+旧密文不会重新加密；这是产品上明确接受的代价。会话、工作区和任务索引不受影响。
+
 ### 终端（TUI）
 
 - 发行包不带参数启动就是官方 TUI（`bin/zcode.mjs` 会 import `agent/zcode.cjs`，CLI 的
