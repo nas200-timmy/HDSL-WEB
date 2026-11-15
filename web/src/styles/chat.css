@@ -498,6 +498,8 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* 展开/收起时滚动条出现或消失会改变内容宽度，按钮会左右跳一格；预留槽位。 */
+  scrollbar-gutter: stable;
   padding: 20px 28px 8px;
   display: flex;
   flex-direction: column;
@@ -948,6 +950,8 @@
   margin: 0 0 8px;
   padding-left: 8px;
   border-left: 2px solid var(--monet-outline-variant);
+  /* 展开/收起时不要让浏览器做滚动锚定，否则标题行和按钮会跟着内容高度跳。 */
+  overflow-anchor: none;
 }
 
 .chat-timeline-more {
@@ -1024,9 +1028,9 @@
 
 .chat-timeline-chevron {
   flex: none;
-  width: 32px;
+  width: 34px;
   text-align: right;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--monet-primary);
 }

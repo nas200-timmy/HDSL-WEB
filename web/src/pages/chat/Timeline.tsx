@@ -144,7 +144,15 @@ export function Timeline({ steps, live = false }: { steps: TimelineStep[]; live?
         return (
           <div className={`chat-timeline-step ${step.kind}${isOpen ? " open" : ""}`} key={step.id}>
             <div className="chat-timeline-main">
-              <button className="chat-timeline-head" onClick={() => toggle(step.id)}>
+              <button
+                className="chat-timeline-head"
+                onClick={(event) => {
+                  // 双击的第二次 click 不再 toggle：否则第一下展开、第二下又收起，
+                  // 内容高度来回变化，按钮位置也跟着跳。
+                  if (event.detail > 1) return;
+                  toggle(step.id);
+                }}
+              >
                 <span className="chat-timeline-title">
                   <strong>{label}</strong>
                   {step.kind === "thinking"
@@ -157,7 +165,7 @@ export function Timeline({ steps, live = false }: { steps: TimelineStep[]; live?
                 <span className="chat-timeline-chevron">{isOpen ? "收起" : "展开"}</span>
               </button>
               {isOpen && step.kind === "thinking" && step.text && (
-                <div className="chat-timeline-body">{step.text}</div>
+                <div className="chat-timeline-body" onClick={() => toggle(step.id)}>{step.text}</div>
               )}
               {isOpen && step.kind === "tool" && sources.length > 0 && (
                 <div className="chat-sources chat-timeline-sources">
@@ -169,6 +177,7 @@ export function Timeline({ steps, live = false }: { steps: TimelineStep[]; live?
                       target="_blank"
                       rel="noreferrer noopener"
                       title={source.title}
+                      onClick={(event) => event.stopPropagation()}
                     >
                       <span className="chat-source-index">{index + 1}</span>
                       <span className="chat-source-title">{source.title ?? source.url}</span>
