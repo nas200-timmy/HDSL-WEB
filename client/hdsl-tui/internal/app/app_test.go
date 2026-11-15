@@ -99,6 +99,17 @@ func TestExplainMapsPanelCodesToAdvice(t *testing.T) {
 	}
 }
 
+func TestChatNeedsGuardElevation(t *testing.T) {
+	if !chatNeedsGuardElevation("all") {
+		t.Error("scope=all must require the developer password for chat")
+	}
+	for _, scope := range []string{"", "off", "proxy", "instance"} {
+		if chatNeedsGuardElevation(scope) {
+			t.Errorf("scope=%q must not gate /api/chat", scope)
+		}
+	}
+}
+
 func TestNeedsElevation(t *testing.T) {
 	required := &panel.APIError{Status: 403, Message: "developer_elevation_required: x", Code: "developer_elevation_required"}
 	if !needsElevation(required) {
