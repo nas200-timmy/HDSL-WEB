@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type { ChatPart } from "../../types";
 
 type Source = { title?: string; url?: string; site?: string };
@@ -124,36 +124,17 @@ function seconds(ms?: number): string {
   return `${Math.max(0, (ms ?? 0) / 1000).toFixed(1)} 秒`;
 }
 
-/** 默认只露最后一轮的搜索（以及其后的思考），更早的折成“再显示 N 步”。 */
+/** 所有步骤都列出来，默认折叠；流式时最后一段思考默认展开。 */
 export function Timeline({ steps, live = false }: { steps: TimelineStep[]; live?: boolean }) {
-  const [expandedAll, setExpandedAll] = useState(false);
   const [open, setOpen] = useState<Record<string, boolean>>({});
-  const visible = useMemo(() => {
-    if (expandedAll || steps.length === 0) return steps;
-    // 流式时保留最近几步，保证“思考中”的正文看得到，而不是被折叠条挡住。
-    if (live) return steps.slice(-4);
-    const lastRound = Math.max(...steps.map((step) => step.round));
-    const roundSteps = steps.filter((step) => step.round === lastRound);
-    const firstTool = roundSteps.findIndex((step) => step.kind === "tool");
-    return firstTool >= 0 ? roundSteps.slice(firstTool) : roundSteps.slice(-1);
-  }, [steps, expandedAll, live]);
   if (steps.length === 0) return null;
 
-  const hidden = steps.length - visible.length;
-  const lastVisible = visible[visible.length - 1];
+  const lastVisible = steps[steps.length - 1];
   const toggle = (id: string) => setOpen((current) => ({ ...current, [id]: !current[id] }));
 
   return (
     <div className="chat-timeline">
-      {hidden > 0 && (
-        <button className="chat-timeline-more" onClick={() => setExpandedAll(true)}>
-          再显示 {hidden} 步
-        </button>
-      )}
-      {expandedAll && steps.length > 2 && (
-        <button className="chat-timeline-more" onClick={() => setExpandedAll(false)}>收起</button>
-      )}
-      {visible.map((step) => {
+      {steps.map((step) => {
         const isLast = step === lastVisible;
         const isOpen = open[step.id] ?? (live && isLast && step.kind === "thinking");
         const sources = step.sources ?? [];
