@@ -118,8 +118,12 @@ function MarkdownImpl({ content, streaming, citations, sources }: {
   if (citations && Object.keys(citations).length > 0) {
     // rehype-sanitize 只放行 http/https/mailto，短 id 会被当成非法协议删掉，
     // 所以先在这里换成真实 URL。
-    text = text.replace(/\[citation,([^\]]+)\]\(([0-9a-f]{6})\)/g, (_, domain, id) => {
-      const url = citations[id];
+    // 模型不一定照抄短 id：也会写 index（1、2…）或直接把 URL 塞进括号。
+    text = text.replace(/\[citation,([^\]]+)\]\(([^)\s]+)\)/g, (_, domain, target) => {
+      if (/^https?:\/\//i.test(target)) {
+        return `[${domain}](${target})`;
+      }
+      const url = citations[target];
       return url ? `[${domain}](${url})` : `[${domain}]`;
     });
   }

@@ -156,13 +156,20 @@ export function MessageItem({
   const runningTool = streaming ? liveTool : undefined;
   // 模型引用写的是短 id，渲染前换成真实 URL；否则会被 sanitize 当成非法协议删掉。
   const citations: Record<string, string> = {};
+  let sourcePosition = 0;
+  for (const hit of message?.sources ?? []) {
+    sourcePosition += 1;
+    if (hit.id) citations[hit.id] = hit.url;
+    citations[String(sourcePosition)] = hit.url;
+  }
+  let toolPosition = 0;
   for (const round of message?.tools ?? []) {
     for (const hit of round.hits ?? []) {
+      toolPosition += 1;
       if (hit.id) citations[hit.id] = hit.url;
+      // 模型有时写 index（1、2…）而不是短 id；按展示顺序兜底。
+      citations[String(toolPosition)] = hit.url;
     }
-  }
-  for (const hit of message?.sources ?? []) {
-    if (hit.id) citations[hit.id] = hit.url;
   }
   const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>({});
 
