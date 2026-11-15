@@ -2,6 +2,10 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## Unreleased
+
+> 基于 v0.6.87（`dc37d78ca`）的 `web-shell` 开发分支。
+
 ## v0.6.87 — 2026-11-15 · latest_reminder、附件预览与终端兼容性修复
 
 > 修的是 v0.6.86 上线后真实踩到的三类问题：DeepSeek 官方助手在中文环境直接 400、长文本
