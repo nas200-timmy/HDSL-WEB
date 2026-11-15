@@ -1127,7 +1127,7 @@ export const api = {
 
     send: (id: string, body: { text: string; attachments?: string[]; model?: string; account?: string; requestId?: string; search?: boolean; searchProvider?: string }) =>
       request<ChatTurnOutcome>(`/api/chat/sessions/${encodeURIComponent(id)}/messages`, jsonInit("POST", body)),
-    regenerate: (id: string, body: { nodeId: string; mode: "in_place" | "truncate_after"; requestId?: string }) =>
+    regenerate: (id: string, body: { nodeId: string; mode: "in_place" | "truncate_after"; requestId?: string; search?: boolean; searchProvider?: string }) =>
       request<ChatTurnOutcome>(`/api/chat/sessions/${encodeURIComponent(id)}/regenerate`, jsonInit("POST", body)),
     edit: (id: string, body: { nodeId: string; text: string; requestId?: string }) =>
       request<ChatTurnOutcome>(`/api/chat/sessions/${encodeURIComponent(id)}/edit`, jsonInit("POST", body)),

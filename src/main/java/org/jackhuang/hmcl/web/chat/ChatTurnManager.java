@@ -166,6 +166,25 @@ public final class ChatTurnManager {
         return tokens;
     }
 
+    /// 本轮搜索服务商：显式传入优先，否则跟随聊天设置。开了搜索就要求服务商已知且有 key。
+    private String validatedProvider(@Nullable String requested, boolean search)
+            throws ChatException {
+        String provider = requested == null || requested.isBlank()
+                ? settings.searchProvider() : requested.trim();
+        if (search) {
+            if (!ChatSearchService.isKnownProvider(provider)) {
+                throw new ChatException(400, "search_provider_unknown",
+                        "unknown search provider: " + provider);
+            }
+            if (!ChatSearchService.configured(settings, provider)) {
+                throw new ChatException(400, "search_not_configured",
+                        "搜索服务商「" + ChatSearchService.displayName(provider)
+                                + "」还没有配置 key：到「聊天设置 → 联网搜索」填一个");
+            }
+        }
+        return provider;
+    }
+
     public Outcome send(String sessionId, String text, List<String> attachmentIds,
                         @Nullable String model, @Nullable String account,
                         @Nullable String requestId, boolean search)
@@ -190,19 +209,7 @@ public final class ChatTurnManager {
                         @Nullable String searchProvider)
             throws ChatException, SQLException, IOException {
         ChatStore.Session session = requireSession(sessionId);
-        String provider = searchProvider == null || searchProvider.isBlank()
-                ? settings.searchProvider() : searchProvider.trim();
-        if (search) {
-            if (!ChatSearchService.isKnownProvider(provider)) {
-                throw new ChatException(400, "search_provider_unknown",
-                        "unknown search provider: " + provider);
-            }
-            if (!ChatSearchService.configured(settings, provider)) {
-                throw new ChatException(400, "search_not_configured",
-                        "搜索服务商「" + ChatSearchService.displayName(provider)
-                                + "」还没有配置 key：到「聊天设置 → 联网搜索」填一个");
-            }
-        }
+        String provider = validatedProvider(searchProvider, search);
         String key = requestId == null || requestId.isBlank() ? null : sessionId + "|" + requestId;
         if (key != null) {
             RecentTurn previous = recent.get(key);
@@ -314,7 +321,17 @@ public final class ChatTurnManager {
     public Outcome regenerate(String sessionId, String nodeId, String mode,
                               @Nullable String requestId)
             throws ChatException, SQLException, IOException {
+        return regenerate(sessionId, nodeId, mode, requestId, null, null);
+    }
+
+    public Outcome regenerate(String sessionId, String nodeId, String mode,
+                              @Nullable String requestId, @Nullable Boolean search,
+                              @Nullable String searchProvider)
+            throws ChatException, SQLException, IOException {
         ChatStore.Session session = requireSession(sessionId);
+        boolean searchEnabled = search != null
+                ? search : searchSessions.getOrDefault(sessionId, false);
+        String provider = validatedProvider(searchProvider, searchEnabled);
         String key = requestId == null || requestId.isBlank() ? null : sessionId + "|" + requestId;
         if (key != null) {
             RecentTurn previous = recent.get(key);
@@ -366,7 +383,9 @@ public final class ChatTurnManager {
             }
             ActiveTurn turn = new ActiveTurn(sessionId, assistantNode.id(), assistantMessage.id(),
                     resolved, session.id(), 2);
-            turn.searchEnabled = searchSessions.getOrDefault(sessionId, false);
+            turn.searchEnabled = searchEnabled;
+            turn.searchProvider = searchEnabled ? provider : "";
+            searchSessions.put(sessionId, searchEnabled);
             register(turn, systemPrompt(session));
             start(turn, context);
             Outcome outcome = new Outcome(turn.id, null, null, assistantNode, assistantMessage);

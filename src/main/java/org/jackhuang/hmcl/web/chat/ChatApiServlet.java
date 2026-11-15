@@ -178,8 +178,10 @@ public final class ChatApiServlet extends HttpServlet {
                 }
                 String nodeId = required(body, "nodeId");
                 String mode = string(body, "mode", "truncate_after");
+                Boolean search = body.has("search") && body.get("search").isJsonPrimitive()
+                        ? body.get("search").getAsBoolean() : null;
                 ChatTurnManager.Outcome outcome = chat.turns().regenerate(sessionId, nodeId, mode,
-                        nullable(body, "requestId"));
+                        nullable(body, "requestId"), search, nullable(body, "searchProvider"));
                 Json.write(response, outcomeJson(outcome));
                 return;
             }

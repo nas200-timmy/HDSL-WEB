@@ -831,7 +831,13 @@ export function ChatPage() {
     if (!session) return;
     setBusy(true);
     try {
-      const outcome = await api.chat.regenerate(session.id, { nodeId, mode, requestId: requestId() });
+      const outcome = await api.chat.regenerate(session.id, {
+        nodeId,
+        mode,
+        requestId: requestId(),
+        search: searchEnabled,
+        searchProvider: searchEnabled && !preset ? (searchProvider ?? undefined) : undefined,
+      });
       await adoptOutcome(session.id, outcome);
       void loadSessions(assistantId);
     } catch (error) {
