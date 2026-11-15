@@ -36,6 +36,8 @@ type chatState struct {
 	liveText   string
 	liveThink  string
 	turnID     string
+	quitArmed  bool
+	quitAt     time.Time
 	notice     string
 	lastError  string
 	completion []string
@@ -239,12 +241,35 @@ func (a *App) chatEvent(ctx context.Context, client *panel.Client, st *chatState
 
 // chatKey handles one key press and returns what the loop should do.
 func (a *App) chatKey(ctx context.Context, client *panel.Client, st *chatState, event ui.Event) (chatAction, bool) {
+	if event.Key != ui.KeyInterrupt {
+		st.quitArmed = false
+	}
 	switch event.Key {
 	case ui.KeyResize:
 		st.renderCache = map[string][]string{}
 		return chatStay, true
 	case ui.KeyEsc:
+		// Kimi's Esc cancels first: stop the turn, close the completion; it
+		// backs out of chat only when there is nothing to cancel.
+		if st.live && st.turnID != "" {
+			if err := client.ChatCancel(ctx, st.turnID); err != nil {
+				a.chatFail(st, "停止失败：", err)
+			} else {
+				st.notice = "已请求停止"
+			}
+			return chatStay, true
+		}
+		if len(st.completion) > 0 {
+			st.completion = nil
+			return chatStay, true
+		}
 		return chatQuit, false
+	case ui.KeyEOF:
+		// Ctrl-D leaves like Kimi: only from an empty, idle composer.
+		if st.area.String() == "" && !st.live {
+			return chatQuit, false
+		}
+		return chatStay, true
 	case ui.KeyInterrupt:
 		if st.live && st.turnID != "" {
 			if err := client.ChatCancel(ctx, st.turnID); err != nil {
@@ -256,6 +281,13 @@ func (a *App) chatKey(ctx context.Context, client *panel.Client, st *chatState, 
 		}
 		if st.area.String() != "" {
 			st.area.Clear()
+			return chatStay, true
+		}
+		// Two presses to leave, like Kimi; one press is a hint, not a quit.
+		if !st.quitArmed || time.Since(st.quitAt) > 2*time.Second {
+			st.quitArmed = true
+			st.quitAt = time.Now()
+			st.notice = "再按一次 Ctrl-C 退出聊天（Ctrl-D 也可以）"
 			return chatStay, true
 		}
 		return chatQuit, false
@@ -355,9 +387,6 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 		return chatStay, true
 	case "/quit", "/exit":
 		return chatQuit, false
-	case "/clear":
-		st.renderCache = map[string][]string{}
-		return chatStay, true
 	case "/sessions", "/resume":
 		sessionID, ok := a.chatPickSession(ctx, client, st.session.ID)
 		if ok && sessionID != "" && sessionID != st.session.ID {
@@ -372,7 +401,7 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 			return chatSwitchSession, true
 		}
 		return chatStay, true
-	case "/new":
+	case "/new", "/clear":
 		session, ok := a.chatNewSession(ctx, client, st)
 		if ok {
 			st.session = session
@@ -411,7 +440,7 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 		st.session = session
 		st.notice = "模型已切换到 " + model
 		return chatStay, true
-	case "/title":
+	case "/title", "/rename":
 		if arg == "" {
 			st.notice = "当前标题：" + displayOr(st.session.Title, "（无）")
 			return chatStay, true
@@ -494,7 +523,7 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 			st.notice = "还没有可复制的回答"
 		}
 		return chatStay, true
-	case "/settings":
+	case "/settings", "/config":
 		if st.settings == nil {
 			st.notice = "聊天设置需要开发者提权（Ctrl-E）"
 			return chatStay, true

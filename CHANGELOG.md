@@ -17,6 +17,10 @@
 - 新增多行输入组件：光标、`Ctrl-J` 换行、`Ctrl-P/N` 历史、`↑/↓` 移动；`Enter` 发送。
 - 聊天页：流式增量、停止、思考/搜索折叠（`Ctrl-O`）、会话切换（`Ctrl-B`）、
   斜杠命令（`/new /sessions /assistant /model /title /search /stop /regen /edit /copy /settings /status /help`）。
+- 键位与命令对齐 Kimi Code 的习惯：`Ctrl-J` 换行、`Ctrl-O` 展开、`↑/↓` 在首/末行走历史、
+  `Ctrl-C` 停止/双击退出、`Ctrl-D` 退出、`Esc` 先取消再返回；命令补上别名
+  `/clear`（= /new）、`/resume`（= /sessions）、`/rename`（= /title）、
+  `/config`（= /settings）、`/h` `/?`（= /help）。
 - 提权：进入聊天时询问一次开发者密码；读取聊天设置（默认模型、搜索、每日限额）需要它，
   聊天本身只需要登录。`Ctrl-E` 可随时重新提权。
 - 识别开发者守卫 `all` 档：从 `/api/developer/status` 读到 `guardScope=all` 时，聊天 API

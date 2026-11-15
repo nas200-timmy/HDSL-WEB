@@ -89,9 +89,19 @@ func (t *TextArea) Handle(event Event) (submitted bool) {
 			t.Cursor++
 		}
 	case KeyUp:
-		t.moveLine(-1)
+		// Kimi's muscle memory: the arrows walk history at the edge of the
+		// buffer, and move the caret inside it.
+		if t.atFirstRow() {
+			t.walkHistory(-1)
+		} else {
+			t.moveLine(-1)
+		}
 	case KeyDown:
-		t.moveLine(1)
+		if t.atLastRow() {
+			t.walkHistory(1)
+		} else {
+			t.moveLine(1)
+		}
 	case KeyHome:
 		start, _ := t.lineAt(t.Cursor)
 		t.Cursor = start
@@ -226,6 +236,17 @@ func (t *TextArea) layout() layoutResult {
 	}
 	flush(len(t.Value))
 	return layoutResult{rows: rows}
+}
+
+func (t *TextArea) atFirstRow() bool {
+	index, _ := t.rowOf(t.layout(), t.Cursor)
+	return index == 0
+}
+
+func (t *TextArea) atLastRow() bool {
+	layout := t.layout()
+	index, _ := t.rowOf(layout, t.Cursor)
+	return index == len(layout.rows)-1
 }
 
 func (t *TextArea) rowOf(layout layoutResult, cursor int) (int, int) {

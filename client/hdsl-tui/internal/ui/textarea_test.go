@@ -52,6 +52,20 @@ func TestTextAreaHistory(t *testing.T) {
 	}
 }
 
+func TestTextAreaArrowsWalkHistoryAtTheEdges(t *testing.T) {
+	area := NewTextArea(40, 4)
+	area.AddHistory("older")
+	area.SetValue("draft")
+	area.Handle(Event{Key: KeyUp})
+	if area.String() != "older" {
+		t.Fatalf("up at the top row = %q, want history", area.String())
+	}
+	area.Handle(Event{Key: KeyDown})
+	if area.String() != "draft" {
+		t.Fatalf("down at the bottom row = %q, want the draft", area.String())
+	}
+}
+
 func TestTextAreaUpDownKeepsColumn(t *testing.T) {
 	area := NewTextArea(40, 3)
 	area.SetValue("abc\ndef")
