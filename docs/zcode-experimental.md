@@ -112,6 +112,21 @@ fetch、Z.ai OAuth 的 `tokenUrl`。上游把这些锚点挪走时构建会**明
 - 保存 API Key 时写入 `<实例>/data/.zcode/v2/provider_config.json`（ZCode 的个人供应商
   配置；条目 `providerId = hdsl-injected`，协议 `openai-chat-completions`）。
 
+### 3.18.x 的 credential-secret
+
+从 ZCode 3.18.0（当前 `main` 构建为 3.18.2）起，独立 server 在开放服务前要求一个
+32–4096 字节的根密钥；没有 Secret Service 的 headless 环境必须显式提供。面板会在
+`<instance>/data/.zcode/v2/credential-secret` 自动生成一次（0600，base64url，32 字节），
+已存在不覆盖；也可以通过进程环境里的 `ZCODE_CREDENTIAL_SECRET_FILE` 或
+`ZCODE_CREDENTIAL_SECRET` 指定外部密钥（二者不能同时设置）。
+
+如果实例已有 `enc:v2:` 密文但密钥缺失，面板不会生成替代密钥，而是拒绝启动并提示恢复
+原密钥或重置凭据。密钥丢失 = 加密凭据不可恢复，需要重新登录/重录 API Key；会话和工作区
+不受影响。
+
+`Local:` 就绪行之后面板还会做一次 HTTP 探活；3.18.2 会在打印端口后才初始化 host
+services，失败时进程会退出，探活会把实例标为 error 并带上日志尾部，而不是先报 running。
+
 ### 终端（TUI）
 
 - 发行包不带参数启动就是官方 TUI（`bin/zcode.mjs` 会 import `agent/zcode.cjs`，CLI 的

@@ -26,6 +26,8 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -79,6 +81,12 @@ public final class ZcodeRuntime {
 
     /// How long a launch waits for the readiness line before giving up.
     public static final int READY_TIMEOUT_SECONDS = 60;
+
+    /// The `Local:` line is printed before host services finish initializing.
+    /// After it arrives, wait for a real HTTP answer before declaring RUNNING.
+    private static final int HEALTH_WAIT_MILLIS = 10_000;
+    private static final int HEALTH_CONNECT_TIMEOUT_MILLIS = 250;
+    private static final int HEALTH_READ_TIMEOUT_MILLIS = 750;
 
     /// The readiness line's port: `Local:   http://127.0.0.1:<port>/`.
     private static final Pattern LOCAL_PORT =
@@ -197,6 +205,17 @@ public final class ZcodeRuntime {
             try {
                 Files.createDirectories(logFile.getParent());
                 Files.createDirectories(workspace);
+                // 3.18.x's standalone server refuses to open its services without
+                // a credential-secret. The panel is the deployment operator, so it
+                // provisions one per instance — unless the operator supplied an
+                // explicit env/file override.
+                try {
+                    ZcodeCredentials.ensure(manager, instance, envMap);
+                } catch (ZcodeException e) {
+                    STATES.put(id, State.ERROR);
+                    ERRORS.put(id, e.getMessage());
+                    return new Status(State.ERROR, e.getMessage());
+                }
                 // The workbench only has a workspace when the server owns its
                 // project store locally — see ZcodeServerPatch. The patch travels
                 // in every release this panel builds; a launch only reads it back,
@@ -251,6 +270,15 @@ public final class ZcodeRuntime {
 
             Integer port = awaitReady(id, process, ready);
             READY.remove(id);
+            if (port != null && !awaitHealthy(process, port)) {
+                String reason = "ZCode announced port " + port + " but did not become healthy"
+                        + logTail(logFile);
+                ERRORS.put(id, reason);
+                STATES.put(id, State.ERROR);
+                process.destroyForcibly();
+                PROCESSES.remove(id);
+                return new Status(State.ERROR, reason);
+            }
             if (port != null) {
                 PORTS.put(id, port);
                 ZcodeInstance updated = instance.withLastPort(port);
@@ -335,6 +363,54 @@ public final class ZcodeRuntime {
         ERRORS.put(id, "ZCode did not become ready within " + READY_TIMEOUT_SECONDS + " seconds");
         STATES.put(id, State.ERROR);
         return null;
+    }
+
+    /// A `Local:` line only means the CLI picked a port; 3.18.x prints it before
+    /// host services initialize, and can exit immediately afterwards. Treat a
+    /// real HTTP answer (any 2xx–4xx) as readiness, and fail fast if the process
+    /// dies in the meantime.
+    private static boolean awaitHealthy(Process process, int port) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(HEALTH_WAIT_MILLIS);
+        while (System.nanoTime() < deadline) {
+            if (!process.isAlive()) {
+                return false;
+            }
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) URI.create(
+                        "http://127.0.0.1:" + port + "/").toURL().openConnection();
+                connection.setConnectTimeout(HEALTH_CONNECT_TIMEOUT_MILLIS);
+                connection.setReadTimeout(HEALTH_READ_TIMEOUT_MILLIS);
+                connection.setRequestMethod("GET");
+                connection.setInstanceFollowRedirects(false);
+                int status = connection.getResponseCode();
+                if (status >= 200 && status < 500) {
+                    return true;
+                }
+            } catch (IOException ignored) {
+                // Not up yet; retry until the deadline.
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
+    }
+
+    private static String logTail(Path logFile) {
+        try {
+            List<String> tail = tail(logFile, TAIL_LINES);
+            return tail.isEmpty() ? "" : " — log tail: " + String.join(" | ", tail);
+        } catch (IOException e) {
+            return "";
+        }
     }
 
     /// Copies the process's merged output into its log file, watching every
