@@ -1023,20 +1023,30 @@ public final class ChatTurnManager {
                                  List<ChatProtocol.ToolCall> calls) {
         String text = turn.roundStart >= 0 && turn.roundStart <= turn.content.length()
                 ? turn.content.substring(turn.roundStart) : "";
+        long roundEndedAt = System.currentTimeMillis();
         messages.add(new ChatProtocol.ChatMessage("assistant", text, List.of(), calls, null));
         boolean persist = settings.persistToolTrail();
         if (persist) {
+            String thinking = turn.reasoning.length() > turn.reasoningStart
+                    ? turn.reasoning.substring(turn.reasoningStart) : "";
+            if (!thinking.isBlank()) {
+                turn.parts.add(thinkingPart(thinking, turn.roundStartedAt, roundEndedAt));
+            }
             turn.parts.add(textPart(text));
             turn.parts.add(callsPart(calls));
         }
         for (ChatProtocol.ToolCall call : calls) {
+            long startedAt = System.currentTimeMillis();
             String result = executeTool(turn, call);
+            long endedAt = System.currentTimeMillis();
             messages.add(new ChatProtocol.ChatMessage("tool", result, List.of(), List.of(),
                     call.id()));
             if (persist) {
-                turn.parts.add(toolPart(call.id(), result));
+                turn.parts.add(toolPart(call.id(), result, startedAt, endedAt));
             }
         }
+        turn.reasoningStart = turn.reasoning.length();
+        turn.roundStartedAt = System.currentTimeMillis();
     }
 
     private static JsonObject textPart(String text) {
@@ -1061,12 +1071,36 @@ public final class ChatTurnManager {
         return part;
     }
 
-    private static JsonObject toolPart(String id, String content) {
+    private static JsonObject thinkingPart(String text, long startedAt, long endedAt) {
+        JsonObject part = new JsonObject();
+        part.addProperty("type", "thinking");
+        part.addProperty("text", text);
+        part.addProperty("startedAt", startedAt);
+        part.addProperty("endedAt", endedAt);
+        part.addProperty("durationMs", Math.max(0, endedAt - startedAt));
+        return part;
+    }
+
+    private static JsonObject toolPart(String id, String content, long startedAt, long endedAt) {
         JsonObject part = new JsonObject();
         part.addProperty("type", "tool");
         part.addProperty("id", id);
         part.addProperty("content", content);
+        part.addProperty("startedAt", startedAt);
+        part.addProperty("endedAt", endedAt);
+        part.addProperty("durationMs", Math.max(0, endedAt - startedAt));
+        part.addProperty("hits", toolHitCount(content));
         return part;
+    }
+
+    private static int toolHitCount(String content) {
+        try {
+            JsonObject object = JsonParser.parseString(content).getAsJsonObject();
+            JsonElement items = object.get("items");
+            return items != null && items.isJsonArray() ? items.getAsJsonArray().size() : 0;
+        } catch (RuntimeException e) {
+            return 0;
+        }
     }
 
     private String executeTool(ActiveTurn turn, ChatProtocol.ToolCall call) {
@@ -1930,7 +1964,12 @@ public final class ChatTurnManager {
         }
         String tail = turn.roundStart >= 0 && turn.roundStart <= turn.content.length()
                 ? turn.content.substring(turn.roundStart) : "";
+        String tailThinking = turn.reasoning.length() > turn.reasoningStart
+                ? turn.reasoning.substring(turn.reasoningStart) : "";
         List<JsonObject> all = new ArrayList<>(turn.parts);
+        if (!tailThinking.isBlank()) {
+            all.add(thinkingPart(tailThinking, turn.roundStartedAt, System.currentTimeMillis()));
+        }
         if (!tail.isBlank()) {
             all.add(textPart(tail));
         }
@@ -2223,6 +2262,9 @@ public final class ChatTurnManager {
         volatile List<ChatProtocol.ToolCall> pendingCalls = List.of();
         volatile boolean roundDone;
         volatile int roundStart;
+        /// 时间线用：本轮开始的时刻，以及本轮思考从 reasoning 的哪个下标开始。
+        volatile long roundStartedAt = System.currentTimeMillis();
+        volatile int reasoningStart;
         final List<JsonObject> toolRounds = new java.util.concurrent.CopyOnWriteArrayList<>();
         /// 这一轮的完整链路：text / tool_calls / tool。仅在保留检索记录时非空。
         final List<JsonObject> parts = new java.util.ArrayList<>();

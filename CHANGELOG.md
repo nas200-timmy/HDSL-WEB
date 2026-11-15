@@ -13,6 +13,14 @@
 - 本轮选择随消息以 `searchProvider` 发送，覆盖聊天设置里的默认服务商；不传则跟随设置。
   后端校验服务商名和 key，未配置返回 400。
 
+### 思考与搜索时间线
+
+- 普通 OpenAI 协议按轮记录 `thinking` / `tool_calls` / `tool`，带 `durationMs` 和结果数；
+- 前端新增 `Timeline`：默认只露最后两步，其余折成「再显示 N 步」，点开后展开；
+  每个思考段可看推理正文，每个搜索段可看来源列表；正文始终在时间线下方；
+- 旧消息没有 `parts` 时回退到原来的 `reasoning + tools` 布局；DeepSeek 协议继续用
+  `BlockTimeline`。
+
 ### 引用渲染兼容
 
 - 模型写 `[citation,domain](1)` 或 `[citation,domain](https://…)` 时，前端也能换成链接；

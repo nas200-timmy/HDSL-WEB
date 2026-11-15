@@ -1209,6 +1209,19 @@ export interface ChatBlock {
   [key: string]: unknown;
 }
 
+/** 一轮里 thinking / tool_calls / tool 的时间线；普通协议用它分段渲染。 */
+export interface ChatPart {
+  type: "thinking" | "text" | "tool_calls" | "tool" | string;
+  text?: string;
+  id?: string;
+  content?: string;
+  startedAt?: number;
+  endedAt?: number;
+  durationMs?: number;
+  hits?: number;
+  calls?: { id: string; name: string; arguments: string }[];
+}
+
 export interface ChatMessage {
   id: string;
   nodeId: string;
@@ -1217,6 +1230,8 @@ export interface ChatMessage {
   reasoning: string;
   /** DeepSeek 预设才有：保留思考/搜索的原始顺序，前端据此分段渲染。 */
   blocks?: ChatBlock[];
+  /** 普通协议的时间线：thinking / tool_calls / tool，按顺序。 */
+  parts?: ChatPart[];
   status: "streaming" | "done" | "stopped" | "error" | "interrupted" | string;
   model: string | null;
   createdAt: number;

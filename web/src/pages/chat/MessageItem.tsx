@@ -5,6 +5,7 @@ import type { ChatAttachment, ChatBlock, ChatMessage, ChatNode } from "../../typ
 import { api } from "../../api";
 import { Markdown } from "./Markdown";
 import { AvatarView } from "./AvatarView";
+import { Timeline } from "./Timeline";
 
 function activeMessage(node: ChatNode): ChatMessage | null {
   if (node.variants.length === 0) return null;
@@ -190,6 +191,7 @@ export function MessageItem({
     ? (message.blocks ?? []).filter((block) => block.type === "thinking" && (block.thinking ?? "").trim())
     : [];
   const blockTimeline = thinkingBlocks.length > 1;
+  const hasParts = (message.parts?.length ?? 0) > 0;
   const index = node.variants.findIndex((item) => item.id === message.id);
   const canSwitch = node.variants.length > 1;
   const time = new Date(node.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -222,7 +224,9 @@ export function MessageItem({
           {streaming && <span className="chat-streaming-pill"><span className="chat-streaming-dot" />生成中</span>}
           <span className="chat-msg-time">{time}</span>
         </div>
-        {blockTimeline ? (
+        {hasParts ? (
+          <Timeline parts={message.parts!} />
+        ) : blockTimeline ? (
           <BlockTimeline blocks={message.blocks ?? []} />
         ) : reasoning && (
           <div className={`chat-reasoning${reasoningExpanded ? " expanded" : ""}`}>
@@ -259,7 +263,7 @@ export function MessageItem({
             <span className="chat-dot" />
           </div>
         ) : null}
-        {!isUser && !blockTimeline && (toolRounds.length > 0 || runningTool) && (
+        {!isUser && !blockTimeline && !hasParts && (toolRounds.length > 0 || runningTool) && (
           <div className="chat-tools">
             {toolRounds.map((round, index) => (
               <div className="chat-tool-round" key={`${round.query}-${index}`}>

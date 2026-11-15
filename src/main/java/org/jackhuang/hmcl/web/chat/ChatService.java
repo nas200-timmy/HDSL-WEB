@@ -992,6 +992,17 @@ public final class ChatService {
                 // A malformed blocks column must not take down the whole session response.
             }
         }
+        try {
+            String parts = store.partsJson(message.id());
+            if (parts != null && !parts.isBlank()) {
+                JsonElement parsed = JsonParser.parseString(parts);
+                if (parsed.isJsonArray()) {
+                    json.add("parts", parsed);
+                }
+            }
+        } catch (SQLException | RuntimeException ignored) {
+            // A malformed parts column must not take down the session response.
+        }
         json.addProperty("status", message.status());
         addNullable(json, "model", message.model());
         json.addProperty("createdAt", message.createdAt());
