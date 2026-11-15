@@ -2,10 +2,11 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## Unreleased · 无 JavaScript 保底页（`/plain`）
+## v0.6.89 — 2026-11-15 · 无 JavaScript 保底页与浏览器能力闸门
 
-> 给 w3m / lynx 和 Windows 7 上的旧浏览器留一条能用的路：不加载 SPA，也能登录、看会话、
-> 发消息、下载附件。设计见 [docs/plain-surface.md](docs/plain-surface.md)。
+> 这一版的主题是“极致兼容”：现代聊天页之外，再给 w3m / lynx 和 Windows 7 上的旧浏览器
+> 留一条能登录、看会话、发消息、下载附件的路。发布物：fat jar 与容器镜像同步更新。
+> 设计见 [docs/plain-surface.md](docs/plain-surface.md)。
 
 - 新增 `/plain` 纯文本界面：登录表单、会话列表、历史、发送、附件下载；发送后 303 回会话页，
   手动刷新或 `?auto=1` 的 5 秒 meta refresh 看结果。附件只给下载链接，P0 不做上传。
@@ -20,8 +21,14 @@
   两条路，附 Windows 7 的 Firefox ESR / Chrome 建议版本。
 - 页面不带脚本，动态内容全部转义；响应头带 `no-store`、`nosniff`、`X-Frame-Options: DENY`
   与 `default-src 'none'` 的 CSP。所有链接跟随 `HDSL_BASE_PATH`。
-- 测试：`PlainChatTest` 覆盖登录表单发 cookie、提醒页、入口闸门、表单发送与同一轮回复；
-  `api-smoke.py` 增加 `/plain` 与 `/plain/old` 两项。
+### 验证
+
+- `./gradlew test` 全量通过（1533 个用例）；`npm run typecheck` / `npm run compat` 通过。
+- `scripts/api-smoke.py build/libs/hdsl-web-0.6.89.jar`：43/43，新增 `/plain` 与
+  `/plain/old` 两项。
+- `PlainChatTest`：登录表单发 cookie、公开提醒页、SPA 入口带闸门、w3m/lynx/IE 的 302
+  与 Chrome 的 200、`/plain/new` → 表单发送 → 同一轮回复在页面出现。
+- 手工起 jar 用 curl 走通登录、新建会话、会话页与提醒页。
 
 ## v0.6.88 — 2026-11-15 · 聊天时间线、附件预览、搜索源选择与 ZCode 版本管理
 
