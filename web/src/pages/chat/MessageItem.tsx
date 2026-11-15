@@ -251,7 +251,7 @@ export function MessageItem({
           <span className="chat-msg-time">{time}</span>
         </div>
         {showTimeline ? (
-          <Timeline steps={timeline} />
+          <Timeline steps={timeline} live={!!streaming && !hasParts} />
         ) : blockTimeline ? (
           <BlockTimeline blocks={message.blocks ?? []} />
         ) : reasoning && (

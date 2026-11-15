@@ -76,7 +76,7 @@ function LiveBubble({ assistant, text, reasoning, tool, sources, blocks }: { ass
       <div className="chat-msg-avatar"><AvatarView value={assistant?.avatar} /></div>
       <div className="chat-msg-body">
         <div className="chat-msg-name">{assistant?.name ?? "助手"}</div>
-        {steps.length > 0 && <Timeline steps={steps} />}
+        {steps.length > 0 && <Timeline steps={steps} live />}
         {text ? (
           <div className="chat-bubble">
             <Markdown content={text} streaming sources={sources} />

@@ -944,14 +944,15 @@
 .chat-timeline {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin: 0 0 10px;
-  padding-left: 2px;
+  gap: 1px;
+  margin: 0 0 8px;
+  padding-left: 8px;
+  border-left: 2px solid var(--monet-outline-variant);
 }
 
 .chat-timeline-more {
   align-self: flex-start;
-  padding: 4px 0;
+  padding: 2px 0;
   border: 0;
   background: none;
   color: var(--monet-primary);
@@ -960,54 +961,29 @@
 }
 
 .chat-timeline-step {
-  position: relative;
-  display: flex;
-  gap: 8px;
-  padding: 4px 0;
-}
-
-.chat-timeline-step::before {
-  content: "";
-  position: absolute;
-  left: 8px;
-  top: 26px;
-  bottom: -4px;
-  width: 1px;
-  background: var(--monet-outline-variant);
-}
-
-.chat-timeline-step:last-child::before {
-  display: none;
-}
-
-.chat-timeline-icon {
-  flex: none;
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  border-radius: 50%;
-  background: var(--monet-surface-container);
+  padding: 1px 0;
 }
 
 .chat-timeline-main {
-  flex: 1;
   min-width: 0;
 }
 
 .chat-timeline-head {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: baseline;
+  gap: 6px;
   width: 100%;
-  padding: 2px 0;
+  padding: 1px 0;
   border: 0;
   background: none;
-  color: var(--monet-on-surface);
+  color: var(--monet-on-surface-variant);
   text-align: left;
   cursor: pointer;
+  font-size: 11px;
+}
+
+.chat-timeline-head:hover .chat-timeline-title {
+  color: var(--monet-on-surface);
 }
 
 .chat-timeline-title {
@@ -1017,35 +993,55 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
+  color: var(--monet-on-surface-variant);
+}
+
+.chat-timeline-title strong {
+  font-weight: 600;
+  color: var(--monet-on-surface);
+}
+
+.chat-timeline-title::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 4px;
+  font-size: 9px;
+  color: var(--monet-on-surface-variant);
+  transition: transform 120ms var(--ease);
+}
+
+.chat-timeline-step.open .chat-timeline-title::before {
+  transform: rotate(90deg);
 }
 
 .chat-timeline-meta {
   flex: none;
-  font-size: 10px;
-  color: var(--monet-on-surface-variant);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  opacity: 0.75;
 }
 
 .chat-timeline-chevron {
   flex: none;
   font-size: 10px;
-  color: var(--monet-on-surface-variant);
+  color: var(--monet-primary);
 }
 
 .chat-timeline-body {
   margin: 4px 0 2px;
-  padding: 8px 10px;
-  border-radius: 4px;
-  background: var(--monet-surface-container);
+  padding: 0;
+  background: none;
+  color: var(--monet-on-surface-variant);
   font-size: 12px;
-  line-height: 1.65;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 320px;
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
 }
 
 .chat-timeline-sources {
-  margin-top: 6px;
+  margin: 4px 0 2px;
 }
 
 .chat-reasoning {
