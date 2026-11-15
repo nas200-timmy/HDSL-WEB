@@ -2,11 +2,11 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## Unreleased · 终端客户端聊天（P0 + P1）
+## v0.6.90 — 2026-11-16 · 终端客户端聊天（P0 + P1）
 
 > `hdsl-tui` 的主菜单第一项现在是聊天：单列消息流、贴底输入框、斜杠命令、Markdown、
-> 思考/搜索折叠，交互参考 Kimi Code / Qwen Code 这类终端 agent。设计见
-> [docs/chat-tui.md](docs/chat-tui.md)。
+> 思考/搜索折叠，交互参考 Kimi Code / Qwen Code 这类终端 agent。服务端没有改动，
+> 面板 jar 与容器只跟版本号走。设计见 [docs/chat-tui.md](docs/chat-tui.md)。
 
 - 主菜单新增「聊天」；没有会话时选助手新建，有会话时打开最近更新的一条。
 - `internal/panel` 新增聊天 REST 方法（助手、会话、发送、停止、重新生成、编辑、标题、设置）。
@@ -14,7 +14,7 @@
   `chat` 与 `chat:<id>`。
 - 新增 Markdown → ANSI 渲染器：标题、粗体、行内代码、代码块、列表、引用、链接、分隔线；
   只改前景/属性、不动背景，`VisibleWidth` 已有的宽字符与 SGR 处理直接复用；控制字符会被丢弃。
-- 新增多行输入组件：光标、`Ctrl-J` 换行、`Ctrl-P/N` 历史、`↑/↓` 移动；`Enter` 发送。
+- 新增多行输入组件：光标、`Ctrl-J` 换行、`↑/↓` 在首/末行走历史、`Ctrl-P/N` 额外历史键；`Enter` 发送。
 - 聊天页：流式增量、停止、思考/搜索折叠（`Ctrl-O`）、会话切换（`Ctrl-B`）、
   斜杠命令（`/new /sessions /assistant /model /title /search /stop /regen /edit /copy /settings /status /help`）。
 - 键位与命令对齐 Kimi Code 的习惯：`Ctrl-J` 换行、`Ctrl-O` 展开、`↑/↓` 在首/末行走历史、
@@ -27,8 +27,14 @@
   全部需要开发者密码，客户端在进入聊天前强制要求提权，拒绝就说明原因；会话恢复遇到 403
   不再误判为登录失效（用白名单里的 developer status 确认 cookie 仍有效）。
 - 不做图片渲染与附件上传/下载；消息里的附件只显示文件名。
-- 测试：Markdown 渲染、输入组件、聊天 REST 往返、WebSocket 订阅与投递。
-- 手工验收：本地面板 + PTY 里打开聊天页，确认会话标题、输入框、发送请求与服务端错误回显。
+### 验证
+
+- `go test ./...`、`go vet ./internal/... ./cmd/...` 通过。
+- 新增测试：Markdown（样式/宽字符/代码块/控制字符）、TextArea（换行/光标/历史/
+  首末行箭头）、聊天 REST 往返、WebSocket 握手 cookie/订阅/投递、守卫 all 档判定。
+- 手工验收：本地面板 + PTY 打开聊天，确认会话标题、输入框、发送请求到达服务端与错误回显；
+  另用 `developer_guard.scope=all` + TLS 验证：恢复会话不再重问面板密码 → 进聊天 →
+  开发者密码 → 提权成功 → 会话列表/标题正常。
 
 ## v0.6.89 — 2026-11-15 · 无 JavaScript 保底页与浏览器能力闸门
 
