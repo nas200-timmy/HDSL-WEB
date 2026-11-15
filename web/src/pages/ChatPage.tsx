@@ -1146,6 +1146,7 @@ export function ChatPage() {
                       liveContent={isLive ? live?.text : undefined}
                       liveReasoning={isLive ? live?.reasoning : undefined}
                       liveTool={isLive ? live?.tool : undefined}
+                      liveBlocks={isLive ? live?.blocks : undefined}
                       onRegenerate={(nodeId, mode) => setConfirmRegenerate({ nodeId, mode })}
                       onEdit={(nodeId, text) => startEdit(nodeId, text)}
                       onDelete={(nodeId) => setDeleteNodeTarget(nodeId)}

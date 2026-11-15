@@ -5,7 +5,10 @@ import type { ChatAttachment, ChatBlock, ChatMessage, ChatNode } from "../../typ
 import { api } from "../../api";
 import { Markdown } from "./Markdown";
 import { AvatarView } from "./AvatarView";
-import { Timeline, stepsFromParts } from "./Timeline";
+import {
+  Timeline, stepsFromParts, stepsFromLive,
+  type LiveTimelineBlock, type TimelineStep,
+} from "./Timeline";
 
 function activeMessage(node: ChatNode): ChatMessage | null {
   if (node.variants.length === 0) return null;
@@ -127,7 +130,7 @@ function BlockTimeline({ blocks }: { blocks: ChatBlock[] }) {
 
 /** 一条消息（一个节点）。variant 切换、两种重生成、编辑与删除都在这里。 */
 export function MessageItem({
-  node, assistant, user, editingNodeId, liveContent, liveReasoning, liveTool, streaming,
+  node, assistant, user, editingNodeId, liveContent, liveReasoning, liveTool, liveBlocks, streaming,
   onRegenerate, onEdit, onDelete, onSwitchVariant, onOpenAttachment,
 }: {
   node: ChatNode;
@@ -137,6 +140,7 @@ export function MessageItem({
   liveContent?: string;
   liveReasoning?: string;
   liveTool?: { tool?: string; query: string; provider: string; status: string; hits: number };
+  liveBlocks?: LiveTimelineBlock[];
   streaming?: boolean;
   onRegenerate: (nodeId: string, mode: "in_place" | "truncate_after") => void;
   onEdit: (nodeId: string, text: string) => void;
@@ -188,6 +192,21 @@ export function MessageItem({
     () => stepsFromParts(message?.parts ?? []),
     [message?.parts],
   );
+  const liveSteps: TimelineStep[] = streaming
+    ? (liveBlocks && liveBlocks.length > 0
+        ? stepsFromLive(liveBlocks)
+        : [
+            ...(liveReasoning
+              ? [{ kind: "thinking" as const, id: "t-live", round: 0, text: liveReasoning }]
+              : []),
+            ...(liveTool
+              ? [{
+                  kind: "tool" as const, id: "s-live", round: 0,
+                  name: liveTool.tool ?? "search_web", query: liveTool.query, hits: liveTool.hits,
+                }]
+              : []),
+          ])
+    : [];
 
   if (!message) return null;
 
@@ -197,6 +216,8 @@ export function MessageItem({
     : [];
   const blockTimeline = thinkingBlocks.length > 1;
   const hasParts = (message.parts?.length ?? 0) > 0;
+  const showTimeline = hasParts || liveSteps.length > 0;
+  const timeline = hasParts ? timelineSteps : liveSteps;
   const index = node.variants.findIndex((item) => item.id === message.id);
   const canSwitch = node.variants.length > 1;
   const time = new Date(node.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -229,8 +250,8 @@ export function MessageItem({
           {streaming && <span className="chat-streaming-pill"><span className="chat-streaming-dot" />生成中</span>}
           <span className="chat-msg-time">{time}</span>
         </div>
-        {hasParts ? (
-          <Timeline steps={timelineSteps} />
+        {showTimeline ? (
+          <Timeline steps={timeline} />
         ) : blockTimeline ? (
           <BlockTimeline blocks={message.blocks ?? []} />
         ) : reasoning && (
@@ -268,7 +289,7 @@ export function MessageItem({
             <span className="chat-dot" />
           </div>
         ) : null}
-        {!isUser && !blockTimeline && !hasParts && (toolRounds.length > 0 || runningTool) && (
+        {!isUser && !blockTimeline && !showTimeline && (toolRounds.length > 0 || runningTool) && (
           <div className="chat-tools">
             {toolRounds.map((round, index) => (
               <div className="chat-tool-round" key={`${round.query}-${index}`}>

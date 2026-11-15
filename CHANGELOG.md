@@ -20,6 +20,9 @@
   点开后展开；每个思考段可看推理正文，每个搜索段可看来源列表；正文始终在时间线下方；
 - 流式阶段复用同一个 `Timeline`：思考/搜索一出现就分段折叠，不再是一整段思考
   突然停住再继续；
+- 流式消息已经落到 `session.nodes` 时由 `MessageItem` 渲染，现在它在 `streaming`
+  时也用 `liveBlocks` / `liveReasoning` / `liveTool` 构造时间线，不再回退到旧的
+  「思考 N 字」布局；
 - 旧消息没有 `parts` 时回退到原来的 `reasoning + tools` 布局；DeepSeek 协议继续用
   `BlockTimeline`。
 
