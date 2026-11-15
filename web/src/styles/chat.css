@@ -2121,6 +2121,9 @@
   min-height: 0;
   display: flex;
   gap: 10px;
+  width: 100%;
+  max-width: 1360px;
+  margin: 0 auto;
 }
 
 .chat-settings-nav {
@@ -2172,7 +2175,9 @@
 .chat-settings-content > .chat-settings-stack,
 .chat-settings-content > .chat-settings-card {
   width: 100%;
-  max-width: 940px;
+  max-width: 1080px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .chat-settings-card {
