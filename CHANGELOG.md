@@ -2,6 +2,107 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## Unreleased · 聊天时间线、附件预览、搜索源选择与 ZCode 版本管理
+
+> 基于 `v0.6.87`（`dc37d78ca`）的 `web-shell`。这一轮提交不少是同一功能的连续迭代，
+> 下面按**最终行为**归纳，不再按提交逐条记录。
+
+### 聊天时间线
+
+- 普通 OpenAI 协议也按轮记录思考与工具调用（`thinking` / `tool_calls` / `tool`，带耗时、
+  查询词、命中数和来源），前端用统一的 `Timeline` 渲染，DeepSeek 官方协议继续用
+  `BlockTimeline`。
+- 所有步骤标题默认列出、各自折叠；流式时最后一段思考默认展开。点开某一步才显示推理
+  正文或来源列表，正文始终在时间线下方。
+- 流式阶段与落库后的消息复用同一条时间线：思考/搜索一出现就分段，不再先显示「思考 N 字」
+  再整段跳成卡片；流式消息已落到 `session.nodes` 时也不会回退到旧布局。
+- 交互收敛：展开/收起固定在行尾同一列，按钮不再左右跳；点击思考正文也能收起；消息宽度
+  不随展开状态变化；标题行的双击保护去掉。
+- 旧消息没有 `parts` 时回退到原来的 `reasoning + tools` 布局。
+
+### 引用与正文
+
+- 引用同时支持 `[citation](6 位短 id)`、`[citation](1)` 数字索引和 `[citation](https://…)`
+  直接 URL；两个短 id 连写（`8e788c→9e788c`）时取第一个。
+- 模型只是在正文里讨论 `<search>` 标签、没有可解析的 `<query>` 时，不再从 `<search`
+  起把后面的回答整段截断。
+- 模型把 `search_web` 写成 `<search><query>…</query></search>` 时识别为伪工具调用并从
+  正文剥离；流被截断时也会解析已经出现的 query，不再把这类标签当答案展示。
+
+### 搜索
+
+- 输入区放大镜改成选源菜单：先选服务商（博查 / DeepSeek / 智谱 / Tavily / Brave / Exa），
+  选中后按钮才亮起并显示当前来源；未配置 key 的服务商置灰。选择随消息以 `searchProvider`
+  发送，覆盖聊天设置里的默认源，并记在 `localStorage`。
+- 重新生成（就地 / 截断后重发）使用当前搜索开关与来源，不再沿用会话上一次发送的设置。
+  之前打开搜索再点重新生成仍然不搜，因为发送记录里还是上一次的 `false`。
+- 工具轮次更耐用：连续调用到上限后不再直接报 `tool_rounds_exhausted`，而是最后一轮不下发
+  tools，附「预算已用完，请基于已有结果回答」再请求一次，避免丢掉已经检索到的内容。
+- 提示词改为「先搜一次，结果够就回答；最多补搜一次，不要重复 query；`scrape_web`
+  每轮最多一次」，不再鼓励模型并行多搜、连续三轮。
+- 搜索卡片能展开来源：工具结果前面有一句中文提示，之前直接 `JSON.parse` 全部失败；
+  后端改为截取首尾花括号解析 JSON，写入 `hits` / `sources`。
+- 账户 key 带旧 vendor 前缀（如 `alibaba-cn|alibaba-token-plan`）时按 label 唯一兜底，
+  避免旧缓存 key 找不到账户。
+
+### 附件预览
+
+- 聊天页新增右侧预览栏（窄屏为覆盖式抽屉）：图片、音频、视频、PDF 原生渲染，文本与
+  Office 抽取文本分页预览；支持下载、新标签页打开、Esc 关闭。
+- CSV 默认按表格渲染（RFC 4180 的引号、转义引号与字段内换行；自动识别 `,` `;` 制表符），
+  首屏 200 行 × 30 列，可切回原始文本；只在预览层解析，发送内容不变。
+- `GET /api/chat/attachments/{id}` 支持 `?download=1` 与单区间 `Range`（206），PDF 查看器
+  和视频拖动不再整段下载；新增 `GET …/text` 按字符分页读取文本或抽取文本（默认 64 Ki 字符，
+  `offset` / `limit` 可调）。
+- 开关在「聊天设置 → 数据与备份 → 附件预览」，默认开启；关闭后回到原来的新标签页行为。
+  偏好存 `localStorage`，不依赖需要开发者提权的设置接口。
+
+### 聊天设置
+
+- 导航从 7 个 tab 收到 5 个：个人资料 / 模型（模型服务 + 默认模型 + 预设助手）/
+  联网搜索 / 数据与备份 / 安全与网络；切换时内容区回到顶部。
+- 设置页恢复铺满整页：导航贴左、卡片用满内容区，只给说明文字限宽 76ch，长句不再横跨
+  整屏；内边距收紧到 16/18px。
+- 布尔项统一成开关（44×24、`role="switch"`）：附件预览、保留检索记录、DeepSeek 预设
+  助手、每日备份；模型能力矩阵仍用勾选框，因为那是多选列表。
+- 联网搜索拆成「联网搜索 / 测试搜索」两张卡片，工具说明改成浅色 callout，服务商与返回
+  条数两列对齐，API key 独占一行；供应商选择改为单列，收住窄屏横向溢出。
+
+### ZCode
+
+- 新增版本目录 `GET /api/zcode/catalog`：GitHub Release、只有 tag 没有 Release 的版本、
+  未发布的 `main@<sha>`，每项带凭据格式（v1 / v2）、是否需要 credential-secret、是否已构建、
+  是否已安装。
+- 实例新增 `version` / `minVersion` / `minVersionAt` / `credentialFormat`：创建时可指定
+  已构建的 ref 或跟随 `current`；成功启动后下限前移。切换版本要求实例已停止、目标已构建，
+  且不能低于下限或倒退凭据格式；低于下限的项在页面上置灰并给出原因，后端返回 409。
+- 3.18.x 的 credential-secret：面板自动生成一次 32 字节 base64url 根密钥（0600），已存在
+  不覆盖，也支持 `ZCODE_CREDENTIAL_SECRET(_FILE)` 指定外部密钥。已有 `enc:v2:` 密文但
+  密钥缺失时拒绝启动并提示恢复原密钥或重置凭据，而不是生成一个替代密钥。
+- 实例菜单新增「更换密钥」（reset）：要求实例已停止；删除旧 `credentials.json` /
+  `credential-source` / `credential-secret`，可自动生成或从种子派生，可选同时清除已保存
+  的 API Key。旧密文不重新加密，之后需要重新登录 / 重填 key。
+- 启动探活：`Local:` 就绪行之后再发一次 HTTP 请求，失败时把实例标为 error 并附日志尾部，
+  不会先报 running。
+- 构建对话框不再预填 `main`：Chrome 的 `<datalist>` 会按当前值过滤，预填后下拉只剩一项；
+  改为空值 + 前 10 个可点击版本按钮，标注未发布 / 仅 tag / 已装。
+
+### 其他
+
+- 入口 HTML 改为 `no-store`，带 hash 的 `assets/*` 改为长缓存 + `immutable`：部署新版本后
+  不会继续加载旧 bundle。
+- Agent 票新增 `chat-read` / `chat-write` / `chat-search` 三个 scope：可以读会话、发消息、
+  跑搜索测试，但删除、设置、备份、账户、头像和助手的写操作仍对 agent 关闭。
+- 通用文案「游戏」统一改为「实例」。
+
+### 测试
+
+- `ChatApiIntegrationTest`：强制下载、Range 206、文本分页与 chat scope。
+- `ChatContractTest`：`/text` 的 `chat-read` scope。
+- `ZcodeCatalogTest` / `ZcodeCredentialsTest`：版本目录分类、下限与凭据格式闸门、
+  secret 生成 / 覆盖 / 轮换。
+- `ChatSettingsTest` / `ChatToolCallTest`：搜索源设置与伪工具调用解析。
+
 ## v0.6.87 — 2026-11-15 · latest_reminder、附件预览与终端兼容性修复
 
 > 修的是 v0.6.86 上线后真实踩到的三类问题：DeepSeek 官方助手在中文环境直接 400、长文本

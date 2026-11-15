@@ -64,7 +64,9 @@ public final class ChatSettings {
             /// 把这一轮的搜索/抓正文链路存进会话，追问时模型能看到上一轮搜过什么。
             boolean persistToolTrail,
             /// 是否在角色列表里启用内置的 DeepSeek 官方预设助手。
-            boolean deepseekPresetEnabled) {
+            boolean deepseekPresetEnabled,
+            /// agent 票的 chat-write 单次输入上限（估算 token）；0 = 不限制。
+            int agentChatMaxInputTokens) {
 
         public Settings(String retention, int retentionDays, boolean backupEnabled,
                         String backupTime, int backupKeep, String backupDir,
@@ -76,7 +78,7 @@ public final class ChatSettings {
             this(retention, retentionDays, backupEnabled, backupTime, backupKeep, backupDir,
                     privateEndpoints, privateAllowlist, longTextTokens, dailyTokenLimit,
                     streamFlushMs, defaultAccount, defaultModel, searchProvider, searchKeys,
-                    searchMaxResults, persistToolTrail, true);
+                    searchMaxResults, persistToolTrail, true, 8192);
         }
 
         /// 某个服务商的 key；没有配置返回 null。
@@ -108,7 +110,8 @@ public final class ChatSettings {
             return new Settings(retention, retentionDays, backupEnabled, backupTime, backupKeep, dir,
                     privateEndpoints, privateAllowlist, longTextTokens, dailyTokenLimit,
                     streamFlushMs, defaultAccount, defaultModel, searchProvider, searchKeys,
-                    searchMaxResults, persistToolTrail, deepseekPresetEnabled);
+                    searchMaxResults, persistToolTrail, deepseekPresetEnabled,
+                    agentChatMaxInputTokens);
         }
     }
 
@@ -121,7 +124,7 @@ public final class ChatSettings {
             backup = dataDir.resolve("backup");
         }
         return new Settings("forever", 0, true, "03:17", 7, backup.toString(), "allow",
-                List.of(), 4000, 0, 40, null, null, "bocha", java.util.Map.of(), 5, true, true);
+                List.of(), 4000, 0, 40, null, null, "bocha", java.util.Map.of(), 5, true, true, 8192);
     }
 
     public static Settings load(ChatStore store, Path dataDir) throws SQLException {
@@ -188,7 +191,8 @@ public final class ChatSettings {
                     searchKeys,
                     intValue(json, "searchMaxResults", defaults.searchMaxResults()),
                     bool(json, "persistToolTrail", defaults.persistToolTrail()),
-                    bool(json, "deepseekPresetEnabled", defaults.deepseekPresetEnabled())), defaults);
+                    bool(json, "deepseekPresetEnabled", defaults.deepseekPresetEnabled()),
+                    intValue(json, "agentChatMaxInputTokens", defaults.agentChatMaxInputTokens())), defaults);
         } catch (RuntimeException e) {
             return defaults;
         }
@@ -265,11 +269,15 @@ public final class ChatSettings {
         boolean deepseekPresetEnabled = body.has("deepseekPresetEnabled")
                 ? bool(body, "deepseekPresetEnabled", current.deepseekPresetEnabled())
                 : current.deepseekPresetEnabled();
+        int agentChatMaxInputTokens = body.has("agentChatMaxInputTokens")
+                ? intValue(body, "agentChatMaxInputTokens", current.agentChatMaxInputTokens())
+                : current.agentChatMaxInputTokens();
         return sanitize(new Settings(retention, retentionDays, backupEnabled, backupTime, backupKeep,
                 backupDir, privateMode, allowlist, longTextTokens, dailyTokenLimit, streamFlushMs,
                 defaultAccount, defaultModel,
                 searchProvider == null ? current.searchProvider() : searchProvider,
-                searchKeys, searchMaxResults, persistToolTrail, deepseekPresetEnabled), defaults);
+                searchKeys, searchMaxResults, persistToolTrail, deepseekPresetEnabled,
+                agentChatMaxInputTokens), defaults);
     }
 
     private static Settings sanitize(Settings value, Settings defaults) {
@@ -293,12 +301,14 @@ public final class ChatSettings {
         }
         int maxResults = value.searchMaxResults() < 1 ? defaults.searchMaxResults()
                 : Math.min(value.searchMaxResults(), 10);
+        int agentTokens = value.agentChatMaxInputTokens() <= 0 ? 0
+                : Math.max(1024, Math.min(value.agentChatMaxInputTokens(), 131_072));
         return new Settings(value.retention(), Math.max(1, value.retentionDays()),
                 value.backupEnabled(), time, keep, dir, value.privateEndpoints(),
                 value.privateAllowlist(), longText, daily, flush,
                 blankToNull(value.defaultAccount()), blankToNull(value.defaultModel()),
                 provider, java.util.Map.copyOf(value.searchKeys()), maxResults,
-                value.persistToolTrail(), value.deepseekPresetEnabled());
+                value.persistToolTrail(), value.deepseekPresetEnabled(), agentTokens);
     }
 
     public static void save(ChatStore store, Settings settings) throws SQLException {
@@ -327,6 +337,7 @@ public final class ChatSettings {
         json.addProperty("searchMaxResults", settings.searchMaxResults());
         json.addProperty("persistToolTrail", settings.persistToolTrail());
         json.addProperty("deepseekPresetEnabled", settings.deepseekPresetEnabled());
+        json.addProperty("agentChatMaxInputTokens", settings.agentChatMaxInputTokens());
         store.putSetting(KEY, json.toString());
     }
 

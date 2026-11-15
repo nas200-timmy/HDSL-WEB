@@ -70,7 +70,7 @@ flowchart LR
 ```
 
 - 账户 key 仍只在 Java 后端使用；聊天页不返回明文 key。
-- `/api/chat/*` 对 agent ticket 全关；设置/备份/端点/能力覆盖要求开发者提权。
+- `/api/chat/*` 通过 `chat-read` / `chat-write` / `chat-search` 三个 opt-in scope 对 agent ticket 开放；设置/备份/端点/能力覆盖/删除仍要求开发者提权。
 - 聊天设置只写 `chat_account_profile` / `chat_model_capability` / `chat_setting`，不改主界面账户页。
 
 ## 联网搜索（可选）

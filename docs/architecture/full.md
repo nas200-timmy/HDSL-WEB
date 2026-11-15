@@ -213,7 +213,7 @@ flowchart LR
 | `/api/wallpapers/*` | `WallpaperApiServlet` | 壁纸 |
 | `/api/mc/*` | `McApiServlet` | MC 实例、核心、Java、插件、世界、备份、控制台（受 `McFeatureFilter` 保护） |
 | `/api/transcode/*` | `TranscodeApiServlet` | 功能门、媒体浏览、预设/参数集、队列与任务、工具、质量评测、ffmpeg 安装（受 `TranscodeFeatureFilter` 保护） |
-| `/api/chat/*` | `ChatApiServlet` | 会话/助手、发送/编辑/重生成/停止、附件、模型服务/能力/probe、设置与备份；对 agent 票全关 |
+| `/api/chat/*` | `ChatApiServlet` | 会话/助手、发送/编辑/重生成/停止、附件、模型服务/能力/probe、设置与备份；agent 票按 `chat-read` / `chat-write` / `chat-search` scope 开放，设置/备份/删除仍提权 |
 | `/i/{id}/*` | `InstanceProxyServlet` | dsh / 品牌 / ZCode 的 HTTP + WebSocket 反代 |
 | `/ws/*`、`/ws/terminal/*` | `WsGateway`、`TerminalWebSocket` | 事件流、终端 PTY |
 | `/` | `StaticServlet` | React SPA |

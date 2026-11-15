@@ -177,6 +177,49 @@ class ChatToolCallTest {
     }
 
     @Test
+    void exhaustedDeclarationForbidsFurtherSearch() {
+        String text = ChatSearchService.exhaustedDeclaration("bocha");
+        assertTrue(text.contains("预算已经用完"));
+        assertTrue(text.contains("博查"));
+        assertTrue(text.contains("不要再请求搜索"));
+        assertTrue(text.contains("不要编造"));
+    }
+
+    @Test
+    void recoversXmlSearchToolCalls() {
+        String text = "好，那我去查。<search><query>Open WebUI extraction</query>"
+                + "<query>LibreChat parsing</query></search>";
+        List<ChatProtocol.ToolCall> calls = ChatTurnManager.xmlCallsFromText(
+                text, ChatSearchService.tools(settings("bocha")));
+        assertEquals(2, calls.size());
+        assertEquals("search_web", calls.get(0).name());
+        assertTrue(calls.get(0).arguments().contains("Open WebUI"));
+        assertTrue(calls.get(1).arguments().contains("LibreChat"));
+    }
+
+    @Test
+    void xmlSearchRecoveryHandlesTruncatedBlocks() {
+        String text = "<search><query>alpha</query><query>beta";
+        List<ChatProtocol.ToolCall> calls = ChatTurnManager.xmlCallsFromText(
+                text, ChatSearchService.tools(settings("bocha")));
+        assertEquals(1, calls.size());
+        assertTrue(calls.get(0).arguments().contains("alpha"));
+    }
+
+    @Test
+    void xmlSearchRecoveryNeedsTheTool() {
+        String text = "<search><query>alpha</query></search>";
+        assertEquals(List.of(), ChatTurnManager.xmlCallsFromText(text, List.of()));
+    }
+
+    @Test
+    void xmlSearchRecoveryIgnoresPlainMentions() {
+        String text = "正文里提到 `<search>` 标签，但没有 query，不该当成调用";
+        assertEquals(List.of(), ChatTurnManager.xmlCallsFromText(
+                text, ChatSearchService.tools(settings("bocha"))));
+    }
+
+    @Test
     void toolSetDegradesToSearchOnly() {
         assertEquals(List.of("search_web"),
                 ChatSearchService.tools(settings("bocha")).stream()

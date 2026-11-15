@@ -290,7 +290,11 @@ export async function refreshExternal(): Promise<void> {
     external.push({
       brand: "zcode", id: i.id, name: i.name, state: i.state, port: i.lastPort,
       error: i.error ?? undefined, hasApiKey: i.hasApiKey, baseUrl: i.baseUrl ?? undefined,
-      workspacePath: i.workspacePath,
+      workspacePath: i.workspacePath, version: i.version ?? undefined,
+      minVersion: i.minVersion, minVersionAt: i.minVersionAt,
+      credentialFormat: i.credentialFormat,
+      requiresCredentialSecret: i.requiresCredentialSecret,
+      keyFingerprint: i.keyFingerprint,
     });
   }
   // 拿不到时保留上一次的根：一次失败不该把界面上的路径提示变成占位符

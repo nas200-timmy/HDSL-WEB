@@ -777,8 +777,14 @@ export interface ExternalInstance {
   url?: string;
   /** 最近一次启动播报的端口；0/缺省 = 未知（运行中浮层展示用） */
   port?: number;
-  /** kimi/opencode 实例的版本号（zcode 无版本概念） */
+  /** 品牌实例的版本号；zcode 现在也 pin 一个上游 ref */
   version?: string;
+  /** 仅 zcode：降级下限与已使用的凭据格式 */
+  minVersion?: string | null;
+  minVersionAt?: number;
+  credentialFormat?: number;
+  requiresCredentialSecret?: boolean;
+  keyFingerprint?: string | null;
   /** 运行出错时的错误信息（state = error） */
   error?: string;
   /** 被单实例策略禁用 */
@@ -883,6 +889,17 @@ export interface ZcodeInstance {
   token: string;
   /** 最近一次启动时 ZCode 自选的端口；0 = 未知/未启动 */
   lastPort: number;
+  /** 实例 pin 的上游 ref；null = 历史兼容，跟随 current */
+  version: string | null;
+  /** 降级下限；null = 还没成功启动过 */
+  minVersion: string | null;
+  minVersionAt: number;
+  /** 已经使用过的凭据格式：1 legacy / 2 system credential storage / 0 unknown */
+  credentialFormat: number;
+  /** 当前 pin 的版本是否要求 credential-secret */
+  requiresCredentialSecret: boolean;
+  /** credential-secret 的 fingerprint，可在 UI 里显示；不返回密钥本身 */
+  keyFingerprint: string | null;
   createdAt: number;
   /** created | starting | running | stopped | error */
   state: string;
@@ -904,6 +921,29 @@ export interface ZcodeRelease {
   builtAt: number;
   /** 是否 `current` 指向它（启动用的就是它） */
   current: boolean;
+}
+
+/// 上游版本目录的一项（GET /api/zcode/catalog）。
+export interface ZcodeCatalogEntry {
+  ref: string;
+  version: string;
+  /** release | tag | main */
+  channel: string;
+  commit: string | null;
+  publishedAt: number | null;
+  /** 1 = legacy credentials, 2 = system credential storage */
+  credentialFormat: number;
+  requiresCredentialSecret: boolean;
+  installed: boolean;
+  /** installed | not-installed | building | failed */
+  buildState: string;
+  prerelease: boolean;
+  notes: string;
+}
+
+export interface ZcodeCatalog {
+  entries: ZcodeCatalogEntry[];
+  fetchedAt: number;
 }
 
 /// 面板内构建的状态（GET/POST /api/zcode/build）。
@@ -1139,6 +1179,17 @@ export interface ChatAttachment {
   preview?: string;
 }
 
+/** GET /api/chat/attachments/{id}/text 的一页（按字符分页）。 */
+export interface ChatAttachmentText {
+  text: string;
+  offset: number;
+  nextOffset: number;
+  hasMore: boolean;
+  charset: string;
+  /** true = document 的抽取文本，不是原文件内容 */
+  extracted: boolean;
+}
+
 /** DeepSeek 官方协议的原生内容块（按流顺序；思考、服务端工具、正文都在里面）。 */
 export interface ChatBlock {
   type: string;
@@ -1158,6 +1209,20 @@ export interface ChatBlock {
   [key: string]: unknown;
 }
 
+/** 一轮里 thinking / tool_calls / tool 的时间线；普通协议用它分段渲染。 */
+export interface ChatPart {
+  type: "thinking" | "text" | "tool_calls" | "tool" | string;
+  text?: string;
+  id?: string;
+  content?: string;
+  startedAt?: number;
+  endedAt?: number;
+  durationMs?: number;
+  hits?: number;
+  sources?: { title?: string; url?: string; site?: string }[];
+  calls?: { id: string; name: string; arguments: string }[];
+}
+
 export interface ChatMessage {
   id: string;
   nodeId: string;
@@ -1166,6 +1231,8 @@ export interface ChatMessage {
   reasoning: string;
   /** DeepSeek 预设才有：保留思考/搜索的原始顺序，前端据此分段渲染。 */
   blocks?: ChatBlock[];
+  /** 普通协议的时间线：thinking / tool_calls / tool，按顺序。 */
+  parts?: ChatPart[];
   status: "streaming" | "done" | "stopped" | "error" | "interrupted" | string;
   model: string | null;
   createdAt: number;
@@ -1222,6 +1289,12 @@ export interface ChatSearchHit {
   publishedAt?: string;
 }
 
+export interface ChatSearchProvider {
+  id: "bocha" | "deepseek" | "zhipu" | "tavily" | "brave" | "exa" | string;
+  name: string;
+  configured: boolean;
+}
+
 export interface ChatSearchStatus {
   provider: "bocha" | "deepseek" | string;
   configured: boolean;
@@ -1230,6 +1303,8 @@ export interface ChatSearchStatus {
   deepseekPresetEnabled?: boolean;
   deepseekReady?: boolean;
   deepseekAccount?: string | null;
+  /** 每个服务商是否已配置 key；聊天输入区的搜索菜单用它置灰。 */
+  providers?: ChatSearchProvider[];
 }
 
 export interface ChatSearchResult {
@@ -1338,6 +1413,8 @@ export interface ChatSettings {
   persistToolTrail?: boolean;
   /** 是否在角色列表里启用内置的 DeepSeek 官方预设助手 */
   deepseekPresetEnabled?: boolean;
+  /** agent 票 chat-write 的单次输入 token 上限；0 = 不限制 */
+  agentChatMaxInputTokens?: number;
 }
 
 /** POST /api/chat/accounts/{name}/chat-test 的结果（会消耗少量 token）。 */

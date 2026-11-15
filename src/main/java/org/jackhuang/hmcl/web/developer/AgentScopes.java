@@ -81,10 +81,17 @@ public final class AgentScopes {
     public static final String TRANSCODE = "transcode";
     /// Raw command arguments, media browsing and destructive file operations.
     public static final String TRANSCODE_RAW = "transcode-raw";
+    /// Read chat assistants, sessions, messages and stored sources.
+    public static final String CHAT_READ = "chat-read";
+    /// Create sessions, send/edit/regenerate messages, cancel turns and upload attachments.
+    public static final String CHAT_WRITE = "chat-write";
+    /// Run a provider-backed search test / query.
+    public static final String CHAT_SEARCH = "chat-search";
 
     /// Every class a grant may name, in the order the panel presents them.
     public static final Set<String> KNOWN = Set.of(
-            READ, MC, MC_CONSOLE, SYSTEM, INSTANCES, CONFIG, PLUGINS, TRANSCODE, TRANSCODE_RAW);
+            READ, MC, MC_CONSOLE, SYSTEM, INSTANCES, CONFIG, PLUGINS, TRANSCODE, TRANSCODE_RAW,
+            CHAT_READ, CHAT_WRITE, CHAT_SEARCH);
 
     /// What a grant holds when the operator ticks nothing: reading the panel,
     /// and nothing that changes it.
@@ -123,13 +130,6 @@ public final class AgentScopes {
             return true;
         }
         if (route.startsWith("/api/auth/")) {
-            return true;
-        }
-        // Chat is a human surface (docs/chat.md §13.1): every route — including
-        // the reads — is closed to agent tickets. Without this line the
-        // `GET -> READ` shortcut below would hand the whole transcript to any
-        // default `read` grant.
-        if (route.equals("/api/chat") || route.startsWith("/api/chat/")) {
             return true;
         }
         // Enabling or disabling the surface is an operator decision (it needs the
@@ -204,11 +204,8 @@ public final class AgentScopes {
             }
             return TRANSCODE;
         }
-        // Defence in depth: the filter refuses chat routes in `forbidden`
-        // before `required` is consulted, but a direct caller of this method
-        // must not read `/api/chat/*` as the generic `read` class either.
         if (path.equals("/api/chat") || path.startsWith("/api/chat/")) {
-            return null;
+            return chatScope(method, path);
         }
         if ("GET".equals(method) || "HEAD".equals(method)) {
             return READ;
@@ -237,6 +234,37 @@ public final class AgentScopes {
         }
         if (path.startsWith("/api/tasks")) {
             return INSTANCES;
+        }
+        return null;
+    }
+
+    /// The scope a chat route needs. Admin/config routes stay closed to agent
+    /// tickets (they also require developer elevation in the servlet); deletes
+    /// are closed as well, so a `chat-write` ticket can speak but not erase.
+    private static @Nullable String chatScope(String method, String path) {
+        String route = stripTrailingSlash(path);
+        if (route.equals("/api/chat")) {
+            return null;
+        }
+        if (route.equals("/api/chat/settings") || route.startsWith("/api/chat/backup")
+                || route.startsWith("/api/chat/accounts") || route.startsWith("/api/chat/profile")
+                || route.startsWith("/api/chat/avatars")
+                || (route.startsWith("/api/chat/assistants") && !"GET".equals(method))) {
+            return null;
+        }
+        if (route.equals("/api/chat/search/status") || route.equals("/api/chat/search/test")) {
+            return CHAT_SEARCH;
+        }
+        if ("GET".equals(method) || "HEAD".equals(method)) {
+            return CHAT_READ;
+        }
+        if ("DELETE".equals(method)) {
+            return null;
+        }
+        if (route.equals("/api/chat/sessions") || route.startsWith("/api/chat/sessions/")
+                || route.startsWith("/api/chat/turns/")
+                || route.startsWith("/api/chat/attachments")) {
+            return CHAT_WRITE;
         }
         return null;
     }

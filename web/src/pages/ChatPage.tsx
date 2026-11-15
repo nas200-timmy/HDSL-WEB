@@ -11,16 +11,19 @@ import { isElevationRequired, requestDeveloperPassword } from "../elevation";
 import { useMobileLayout } from "../hooks";
 import { toast } from "../store";
 import type {
-  ChatAccountProfile, ChatAssistant, ChatAttachment, ChatSearchHit, ChatSession,
+  ChatAccountProfile, ChatAssistant, ChatAttachment, ChatSearchHit, ChatSearchStatus, ChatSession,
   ChatSessionSummary, ChatTurnOutcome, WsEvent,
 } from "../types";
 import { errMsg } from "../utils";
 import { ws } from "../ws";
 import { AssistantDialog, AssistantManagerDialog } from "./chat/AssistantDialog";
+import { AttachmentPreview } from "./chat/AttachmentPreview";
+import { readAttachmentPreview } from "./chat/attachmentPreviewSetting";
 import { ChatSidebar, RenameSessionDialog } from "./chat/ChatSidebar";
 import { Composer } from "./chat/Composer";
 import { Markdown } from "./chat/Markdown";
 import { MessageItem } from "./chat/MessageItem";
+import { Timeline, stepsFromLive, type TimelineStep } from "./chat/Timeline";
 import { AvatarView } from "./chat/AvatarView";
 import { ContextMeter } from "./chat/ContextMeter";
 import type { ModelGroup } from "./chat/ModelPicker";
@@ -51,56 +54,29 @@ function isPresetAssistant(assistant: ChatAssistant | null | undefined): boolean
 
 type LiveBlock =
   | { kind: "thinking"; text: string }
-  | { kind: "tool"; tool?: string; query: string; provider: string; status: string; hits: number };
+  | { kind: "tool"; tool?: string; query: string; provider: string; status: string; hits: number; thinkingMs?: number };
 
 /** 流式气泡：会话还没刷新到新节点时先画在列表末尾。 */
 function LiveBubble({ assistant, text, reasoning, tool, sources, blocks }: { assistant: ChatAssistant | null; text: string; reasoning: string; tool?: { tool?: string; query: string; provider: string; status: string; hits: number }; sources?: ChatSearchHit[]; blocks?: LiveBlock[] }) {
-  const hasBlocks = !!blocks && blocks.length > 0;
+  const steps: TimelineStep[] = blocks?.length
+    ? stepsFromLive(blocks)
+    : [
+        ...(reasoning
+          ? [{ kind: "thinking" as const, id: "t0", round: 0, text: reasoning }]
+          : []),
+        ...(tool
+          ? [{
+              kind: "tool" as const, id: "s0", round: 0,
+              name: tool.tool ?? "search_web", query: tool.query, hits: tool.hits,
+            }]
+          : []),
+      ];
   return (
     <div className="chat-msg assistant">
       <div className="chat-msg-avatar"><AvatarView value={assistant?.avatar} /></div>
       <div className="chat-msg-body">
         <div className="chat-msg-name">{assistant?.name ?? "助手"}</div>
-        {hasBlocks ? (
-          <div className="chat-block-timeline">
-            {blocks!.map((block, index) => block.kind === "thinking" ? (
-              block.text ? (
-                <div className="chat-reasoning expanded" key={`thinking-${index}`}>
-                  <div className="chat-reasoning-head static">
-                    <span className="chat-reasoning-title">思考</span>
-                    <span className="chat-reasoning-count">{block.text.length} 字</span>
-                    <span className="chat-reasoning-toggle">生成中</span>
-                  </div>
-                  <div className="chat-reasoning-body">{block.text}</div>
-                </div>
-              ) : null
-            ) : (
-              <div className="chat-tools" key={`tool-${index}`}>
-                <div className={`chat-tool-chip ${block.status}`}>
-                  <span className="chat-tool-icon">{block.status === "running"
-                    ? "…" : block.tool === "scrape" || block.tool === "read_link" ? "📄" : "🔍"}</span>
-                  <span className="chat-tool-query">{block.query}</span>
-                  <span className="chat-tool-meta">
-                    {block.status === "running"
-                      ? (block.tool === "scrape" || block.tool === "read_link" ? "正在读取网页" : "正在搜索")
-                      : block.status === "failed"
-                        ? (block.tool === "scrape" || block.tool === "read_link" ? "读取失败" : "搜索失败")
-                        : `${block.hits} 条结果`}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : reasoning && (
-          <div className="chat-reasoning expanded">
-            <div className="chat-reasoning-head static">
-              <span className="chat-reasoning-title">思考</span>
-              <span className="chat-reasoning-count">{reasoning.length} 字</span>
-              <span className="chat-reasoning-toggle">生成中</span>
-            </div>
-            <div className="chat-reasoning-body">{reasoning}</div>
-          </div>
-        )}
+        {steps.length > 0 && <Timeline steps={steps} live />}
         {text ? (
           <div className="chat-bubble">
             <Markdown content={text} streaming sources={sources} />
@@ -111,44 +87,31 @@ function LiveBubble({ assistant, text, reasoning, tool, sources, blocks }: { ass
             <span className="chat-dot" /><span className="chat-dot" /><span className="chat-dot" />
           </div>
         )}
-        {tool && !hasBlocks && (
-          <div className="chat-tools">
-            <div className={`chat-tool-chip ${tool.status}`}>
-              <span className="chat-tool-icon">{tool.status === "running"
-                ? "…" : tool.tool === "scrape" || tool.tool === "read_link" ? "📄" : "🔍"}</span>
-              <span className="chat-tool-query">{tool.query}</span>
-              <span className="chat-tool-meta">
-                {tool.status === "running"
-                  ? (tool.tool === "scrape" || tool.tool === "read_link" ? "正在读取网页" : "正在搜索")
-                  : tool.status === "failed"
-                    ? (tool.tool === "scrape" || tool.tool === "read_link" ? "读取失败" : "搜索失败")
-                    : `${tool.hits} 条结果`}
-              </span>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
 /** 同一次服务端工具从 running 到 done 只保留一个块；并行工具按 query 区分。 */
-function mergeLiveTool(blocks: LiveBlock[] | undefined, event: { tool?: string; query: string; provider?: string; status: string; hits?: number }): LiveBlock[] {
+function mergeLiveTool(blocks: LiveBlock[] | undefined, event: { tool?: string; query: string; provider?: string; status: string; hits?: number; thinkingMs?: number }): LiveBlock[] {
   const next = [...(blocks ?? [])];
   const tool = event.tool ?? "search";
   if (event.status === "running") {
-    next.push({ kind: "tool", tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: 0 });
+    next.push({
+      kind: "tool", tool, query: event.query, provider: event.provider ?? "",
+      status: event.status, hits: 0, thinkingMs: event.thinkingMs,
+    });
     return next;
   }
   for (let i = next.length - 1; i >= 0; i--) {
     const block = next[i];
     if (block.kind === "tool" && block.status === "running"
         && block.query === event.query && (block.tool ?? "search") === tool) {
-      next[i] = { ...block, status: event.status, hits: event.hits ?? 0 };
+      next[i] = { ...block, status: event.status, hits: event.hits ?? 0, thinkingMs: block.thinkingMs ?? event.thinkingMs };
       return next;
     }
   }
-  next.push({ kind: "tool", tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: event.hits ?? 0 });
+  next.push({ kind: "tool", tool, query: event.query, provider: event.provider ?? "", status: event.status, hits: event.hits ?? 0, thinkingMs: event.thinkingMs });
   return next;
 }
 
@@ -172,7 +135,14 @@ export function ChatPage() {
   const [profile, setProfile] = useState<{ name: string; avatar: string | null }>({ name: "", avatar: null });
   const [liveUsage, setLiveUsage] = useState<{ sessionId: string; input: number; output: number } | null>(null);
   const [searchEnabled, setSearchEnabled] = useState(false);
-  const [searchStatus, setSearchStatus] = useState<{ configured: boolean } | null>(null);
+  const [searchStatus, setSearchStatus] = useState<ChatSearchStatus | null>(null);
+  const [searchProvider, setSearchProvider] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem("chat.searchProvider");
+    } catch {
+      return null;
+    }
+  });
   const [live, setLive] = useState<{ turnId: string; messageId?: string; text: string; reasoning: string; status: string; blocks?: LiveBlock[]; tool?: { tool?: string; query: string; provider: string; status: string; hits: number }; sources?: ChatSearchHit[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -188,6 +158,8 @@ export function ChatPage() {
   const [elevating, setElevating] = useState(false);
   const [focusSignal, setFocusSignal] = useState(0);
   const [sessionMenu, setSessionMenu] = useState<HTMLElement | null>(null);
+  const [preview, setPreview] = useState<ChatAttachment | null>(null);
+  const [previewEnabled] = useState(readAttachmentPreview);
 
   const sessionIdRef = useRef<string | null>(null);
   const assistantIdRef = useRef("default");
@@ -195,6 +167,18 @@ export function ChatPage() {
   const finishedTurns = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const atBottom = useRef(true);
+
+  useEffect(() => {
+    setPreview(null);
+  }, [sessionId]);
+
+  const openAttachment = (attachment: ChatAttachment) => {
+    if (previewEnabled) {
+      setPreview(attachment);
+    } else {
+      window.open(api.chat.attachmentUrl(attachment.id), "_blank", "noopener,noreferrer");
+    }
+  };
 
   sessionIdRef.current = sessionId;
   assistantIdRef.current = assistantId;
@@ -205,7 +189,37 @@ export function ChatPage() {
   const preset = isPresetAssistant(currentAssistant);
   const deepseekAccount = chatAccounts.find(isDeepSeekAccount) ?? null;
   const presetReady = !preset || deepseekAccount !== null;
-  const searchConfigured = preset ? deepseekAccount !== null : (searchStatus?.configured ?? false);
+  const searchProviderEntry = searchStatus?.providers?.find((item) => item.id === searchProvider);
+  const searchConfigured = preset
+    ? deepseekAccount !== null
+    : (searchProviderEntry?.configured ?? (searchStatus?.configured ?? false));
+  const searchProviderName = searchProviderEntry?.name
+    ?? searchStatus?.providers?.find((item) => item.id === searchStatus.provider)?.name;
+
+  const applySearchStatus = (status: ChatSearchStatus) => {
+    setSearchStatus(status);
+    setSearchProvider((current) => {
+      const entry = status.providers?.find((item) => item.id === current);
+      if (entry?.configured) return current;
+      const fallback = status.providers?.find((item) => item.id === status.provider && item.configured)
+        ?? status.providers?.find((item) => item.configured);
+      return fallback?.id ?? status.provider;
+    });
+  };
+
+  const pickSearch = (id: string | null) => {
+    if (id === null) {
+      setSearchEnabled(false);
+      return;
+    }
+    setSearchProvider(id);
+    setSearchEnabled(true);
+    try {
+      localStorage.setItem("chat.searchProvider", id);
+    } catch {
+      // 隐私模式禁用 localStorage 时只保留本次选择。
+    }
+  };
   const canSend = !busy && !!currentAssistant && presetReady;
   const defaultAccountFor = (item: ChatAssistant | null | undefined) =>
     isPresetAssistant(item)
@@ -313,7 +327,7 @@ export function ChatPage() {
 
   useEffect(() => {
     void api.chat.searchStatus()
-      .then((status) => setSearchStatus({ configured: status.configured }))
+      .then(applySearchStatus)
       .catch(() => { /* 没配置就当关闭 */ });
   }, []);
 
@@ -389,7 +403,7 @@ export function ChatPage() {
       }
       if (event.type === "chat-settings-changed") {
         void api.chat.searchStatus()
-          .then((status) => setSearchStatus({ configured: status.configured }))
+          .then(applySearchStatus)
           .catch(() => { /* keep the previous state */ });
         void loadAssistants();
         return;
@@ -738,6 +752,7 @@ export function ChatPage() {
         account: sessionAccount ?? undefined,
         requestId: requestId(),
         search: searchEnabled,
+        searchProvider: searchEnabled && !preset ? (searchProvider ?? undefined) : undefined,
       });
       setDraft("");
       setPending([]);
@@ -777,7 +792,13 @@ export function ChatPage() {
     if (!session) return;
     setBusy(true);
     try {
-      const outcome = await api.chat.regenerate(session.id, { nodeId, mode, requestId: requestId() });
+      const outcome = await api.chat.regenerate(session.id, {
+        nodeId,
+        mode,
+        requestId: requestId(),
+        search: searchEnabled,
+        searchProvider: searchEnabled && !preset ? (searchProvider ?? undefined) : undefined,
+      });
       await adoptOutcome(session.id, outcome);
       void loadSessions(assistantId);
     } catch (error) {
@@ -1099,8 +1120,9 @@ export function ChatPage() {
             </div>
           </div>
         ) : (
-          <div
-            className="chat-messages scroll"
+          <div className="chat-stage">
+            <div
+              className="chat-messages scroll"
             ref={scrollRef}
             onScroll={(event) => {
               const el = event.currentTarget;
@@ -1124,12 +1146,14 @@ export function ChatPage() {
                       liveContent={isLive ? live?.text : undefined}
                       liveReasoning={isLive ? live?.reasoning : undefined}
                       liveTool={isLive ? live?.tool : undefined}
+                      liveBlocks={isLive ? live?.blocks : undefined}
                       onRegenerate={(nodeId, mode) => setConfirmRegenerate({ nodeId, mode })}
                       onEdit={(nodeId, text) => startEdit(nodeId, text)}
                       onDelete={(nodeId) => setDeleteNodeTarget(nodeId)}
                       onSwitchVariant={(nodeId, messageId) => void switchVariant(nodeId, messageId)}
                       user={profile}
                       editingNodeId={editTarget?.nodeId ?? null}
+                      onOpenAttachment={openAttachment}
                     />
                   </Fragment>
                 );
@@ -1137,6 +1161,10 @@ export function ChatPage() {
             })()}
             {live && !liveAttached && (
               <LiveBubble assistant={currentAssistant} text={live.text} reasoning={live.reasoning} tool={live.tool} sources={live.sources} blocks={live.blocks} />
+            )}
+            </div>
+            {preview && (
+              <AttachmentPreview key={preview.id} attachment={preview} onClose={() => setPreview(null)} />
             )}
           </div>
         )}
@@ -1178,6 +1206,10 @@ export function ChatPage() {
               searchConfigured={searchConfigured}
               onToggleSearch={toggleSearch}
               searchOfficial={preset}
+              searchProvider={searchProvider ?? undefined}
+              searchProviderName={searchProviderName}
+              searchProviders={searchStatus?.providers ?? []}
+              onPickSearch={pickSearch}
             />
           </div>
         )}

@@ -41,6 +41,7 @@ import type {
   WallpaperList,
   WorkspaceInfo,
   ZcodeBuildStatus,
+  ZcodeCatalog,
   ZcodeDistInfo,
   ZcodeInstance,
   ZcodeRelease,
@@ -59,6 +60,7 @@ import type {
   ChatSessionSummary,
   ChatSession,
   ChatAttachment,
+  ChatAttachmentText,
   ChatSettings,
   ChatBackup,
   ChatAccountProfile,
@@ -540,13 +542,24 @@ export const api = {
   zcodeInstances: () =>
     request<{ instances: ZcodeInstance[]; workspacesRoot?: string }>("/api/zcode/instances"),
 
-  createZcodeInstance: (body: { name: string; baseUrl?: string; apiKey?: string; workspacePath?: string }) =>
+  createZcodeInstance: (body: { name: string; baseUrl?: string; apiKey?: string; workspacePath?: string; version?: string; seed?: string }) =>
     request<{ instance: ZcodeInstance }>("/api/zcode/instances", jsonInit("POST", body)),
 
-  patchZcodeInstance: (id: string, body: { name?: string; baseUrl?: string; apiKey?: string }) =>
+  patchZcodeInstance: (id: string, body: { name?: string; baseUrl?: string; apiKey?: string; version?: string }) =>
     request<{ instance: ZcodeInstance }>(
       `/api/zcode/instances/${encodeURIComponent(id)}`,
       jsonInit("PATCH", body),
+    ),
+
+  /** 上游版本目录：正式 release / 仅 tag / 未发布的 main，带本地构建与凭据状态。 */
+  zcodeCatalog: (refresh = false) =>
+    request<ZcodeCatalog>(`/api/zcode/catalog${refresh ? "?refresh=1" : ""}`),
+
+  /** 更换实例的 credential-secret；旧凭据会被丢弃，需要重新添加 Key/登录。 */
+  rotateZcodeKey: (id: string, body: { seed?: string; clearProviderKey?: boolean }) =>
+    request<{ instance: ZcodeInstance }>(
+      `/api/zcode/instances/${encodeURIComponent(id)}/rotate-key`,
+      jsonInit("POST", body),
     ),
 
   deleteZcodeInstance: (id: string) =>
@@ -1112,9 +1125,9 @@ export const api = {
     deleteSession: (id: string) =>
       request<{ ok: boolean }>(`/api/chat/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
-    send: (id: string, body: { text: string; attachments?: string[]; model?: string; account?: string; requestId?: string; search?: boolean }) =>
+    send: (id: string, body: { text: string; attachments?: string[]; model?: string; account?: string; requestId?: string; search?: boolean; searchProvider?: string }) =>
       request<ChatTurnOutcome>(`/api/chat/sessions/${encodeURIComponent(id)}/messages`, jsonInit("POST", body)),
-    regenerate: (id: string, body: { nodeId: string; mode: "in_place" | "truncate_after"; requestId?: string }) =>
+    regenerate: (id: string, body: { nodeId: string; mode: "in_place" | "truncate_after"; requestId?: string; search?: boolean; searchProvider?: string }) =>
       request<ChatTurnOutcome>(`/api/chat/sessions/${encodeURIComponent(id)}/regenerate`, jsonInit("POST", body)),
     edit: (id: string, body: { nodeId: string; text: string; requestId?: string }) =>
       request<ChatTurnOutcome>(`/api/chat/sessions/${encodeURIComponent(id)}/edit`, jsonInit("POST", body)),
@@ -1140,7 +1153,15 @@ export const api = {
         { timeoutMs: 120000 },
       );
     },
-    attachmentUrl: (id: string) => `api/chat/attachments/${encodeURIComponent(id)}`,
+    attachmentUrl: (id: string) => `/api/chat/attachments/${encodeURIComponent(id)}`,
+    attachmentDownloadUrl: (id: string) =>
+      `/api/chat/attachments/${encodeURIComponent(id)}?download=1`,
+    attachmentText: (id: string, offset = 0, limit = 65536) =>
+      request<ChatAttachmentText>(
+        `/api/chat/attachments/${encodeURIComponent(id)}/text?offset=${offset}&limit=${limit}`,
+        undefined,
+        { timeoutMs: 60000 },
+      ),
 
     searchStatus: () => request<ChatSearchStatus>("/api/chat/search/status"),
     searchTest: (query: string) =>

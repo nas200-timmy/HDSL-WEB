@@ -77,17 +77,22 @@ agent 密码**不是**一条独立的路。用它换票之前，必须已经有�
 
 ## 3. 范围（scope）在服务端定，不在客户端里
 
-`AgentScopes` 把面板的接口分成七类：
+`AgentScopes` 把面板的接口分成十二类：
 
 | scope | 覆盖 |
 |---|---|
-| `read` | `/api/*` 的 GET（凭据类路由除外，见下） |
+| `read` | `/api/*` 的 GET（凭据类路由除外，见下）；**不含聊天** |
 | `mc` | `/api/mc/*` 的启停与控制台命令 |
 | `mc-console` | **只**多给一条：MC 服控制台的 PTY 票据（`POST .../console/ticket` → `/ws/terminal/{ticket}`） |
 | `system` | `/api/system/*`：宿主机 CPU/内存/磁盘/网络读数与数据目录占用 |
 | `instances` | 建/删/启停**别的**实例 |
 | `config` | 账号、模型、TLS、网络、Node 运行时、壁纸 |
 | `plugins` | 装/卸插件、整合包、技能 |
+| `transcode` | 转码队列、预设、启停与日志 |
+| `transcode-raw` | 媒体根浏览、原始参数、破坏性文件操作 |
+| `chat-read` | 助手、会话、消息、来源与附件下载 |
+| `chat-write` | 建会话、发/编辑/重生成/取消、附件；受 `agentChatMaxInputTokens` 上限 |
+| `chat-search` | 搜索状态/测试，以及发送时打开搜索；单独控制搜索成本 |
 
 `mc-console` 单独一类，是因为它不是"再发一条命令"：附着上去的是一条**双向的活终端**——历史、
 输出流、实时回显全都有。只勾 `mc` 时，agent 仍能启停、发 `console/input`、读日志，但拿不到

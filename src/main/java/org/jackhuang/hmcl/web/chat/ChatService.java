@@ -742,6 +742,7 @@ public final class ChatService {
         json.addProperty("searchMaxResults", current.searchMaxResults());
         json.addProperty("persistToolTrail", current.persistToolTrail());
         json.addProperty("deepseekPresetEnabled", current.deepseekPresetEnabled());
+        json.addProperty("agentChatMaxInputTokens", current.agentChatMaxInputTokens());
         addNullable(json, "searchKeyMasked", maskKey(current.searchKey(current.searchProvider())));
         addNullable(json, "defaultAccount", current.defaultAccount());
         addNullable(json, "defaultModel", current.defaultModel());
@@ -762,6 +763,15 @@ public final class ChatService {
         JsonObject json = new JsonObject();
         json.addProperty("provider", provider);
         json.addProperty("configured", configured);
+        JsonArray providers = new JsonArray();
+        for (String id : ChatSearchService.PROVIDERS) {
+            JsonObject item = new JsonObject();
+            item.addProperty("id", id);
+            item.addProperty("name", ChatSearchService.displayName(id));
+            item.addProperty("configured", ChatSearchService.configured(current, id));
+            providers.add(item);
+        }
+        json.add("providers", providers);
         json.addProperty("maxResults", current.searchMaxResults());
         addNullable(json, "keyMasked", maskKey(current.searchKey(provider)));
         json.addProperty("deepseekPresetEnabled", current.deepseekPresetEnabled());
@@ -981,6 +991,17 @@ public final class ChatService {
             } catch (RuntimeException ignored) {
                 // A malformed blocks column must not take down the whole session response.
             }
+        }
+        try {
+            String parts = store.partsJson(message.id());
+            if (parts != null && !parts.isBlank()) {
+                JsonElement parsed = JsonParser.parseString(parts);
+                if (parsed.isJsonArray()) {
+                    json.add("parts", parsed);
+                }
+            }
+        } catch (SQLException | RuntimeException ignored) {
+            // A malformed parts column must not take down the session response.
         }
         json.addProperty("status", message.status());
         addNullable(json, "model", message.model());

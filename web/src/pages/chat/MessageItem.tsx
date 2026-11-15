@@ -1,27 +1,31 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PopupItem, PopupMenu, PopupSep } from "../../components/PopupMenu";
 import { ContentCopyIcon, DeleteIcon, EditIcon, MoreVertIcon, PersonIcon, RefreshIcon } from "../../components/icons";
 import type { ChatAttachment, ChatBlock, ChatMessage, ChatNode } from "../../types";
 import { api } from "../../api";
 import { Markdown } from "./Markdown";
 import { AvatarView } from "./AvatarView";
+import {
+  Timeline, stepsFromParts, stepsFromLive,
+  type LiveTimelineBlock, type TimelineStep,
+} from "./Timeline";
 
 function activeMessage(node: ChatNode): ChatMessage | null {
   if (node.variants.length === 0) return null;
   return node.variants.find((item) => item.id === node.activeVariantId) ?? node.variants[node.variants.length - 1];
 }
 
-function AttachmentChip({ attachment, onOpen }: { attachment: ChatAttachment; onOpen: (url: string) => void }) {
+function AttachmentChip({ attachment, onOpen }: { attachment: ChatAttachment; onOpen: (attachment: ChatAttachment) => void }) {
   const url = api.chat.attachmentUrl(attachment.id);
   if (attachment.kind === "image") {
     return (
-      <button className="chat-attach-image" onClick={() => onOpen(url)} title={attachment.name}>
+      <button className="chat-attach-image" onClick={() => onOpen(attachment)} title={attachment.name}>
         <img src={url} alt={attachment.name} loading="lazy" />
       </button>
     );
   }
   return (
-    <button className="chat-attach-chip" onClick={() => onOpen(url)} title={attachment.name}>
+    <button className="chat-attach-chip" onClick={() => onOpen(attachment)} title={attachment.name}>
       <span className="chat-attach-kind">{attachment.kind === "document" ? "DOC" : attachment.kind.toUpperCase()}</span>
       <span className="chat-attach-name">{attachment.name}</span>
       <span className="chat-attach-size">{Math.max(1, Math.round(attachment.size / 1024))} KB</span>
@@ -126,8 +130,8 @@ function BlockTimeline({ blocks }: { blocks: ChatBlock[] }) {
 
 /** 一条消息（一个节点）。variant 切换、两种重生成、编辑与删除都在这里。 */
 export function MessageItem({
-  node, assistant, user, editingNodeId, liveContent, liveReasoning, liveTool, streaming,
-  onRegenerate, onEdit, onDelete, onSwitchVariant,
+  node, assistant, user, editingNodeId, liveContent, liveReasoning, liveTool, liveBlocks, streaming,
+  onRegenerate, onEdit, onDelete, onSwitchVariant, onOpenAttachment,
 }: {
   node: ChatNode;
   assistant: { name: string; avatar: string };
@@ -136,11 +140,13 @@ export function MessageItem({
   liveContent?: string;
   liveReasoning?: string;
   liveTool?: { tool?: string; query: string; provider: string; status: string; hits: number };
+  liveBlocks?: LiveTimelineBlock[];
   streaming?: boolean;
   onRegenerate: (nodeId: string, mode: "in_place" | "truncate_after") => void;
   onEdit: (nodeId: string, text: string) => void;
   onDelete: (nodeId: string) => void;
   onSwitchVariant: (nodeId: string, messageId: string) => void;
+  onOpenAttachment: (attachment: ChatAttachment) => void;
 }) {
   const message = activeMessage(node);
   const [menu, setMenu] = useState<HTMLElement | null>(null);
@@ -155,13 +161,20 @@ export function MessageItem({
   const runningTool = streaming ? liveTool : undefined;
   // 模型引用写的是短 id，渲染前换成真实 URL；否则会被 sanitize 当成非法协议删掉。
   const citations: Record<string, string> = {};
+  let sourcePosition = 0;
+  for (const hit of message?.sources ?? []) {
+    sourcePosition += 1;
+    if (hit.id) citations[hit.id] = hit.url;
+    citations[String(sourcePosition)] = hit.url;
+  }
+  let toolPosition = 0;
   for (const round of message?.tools ?? []) {
     for (const hit of round.hits ?? []) {
+      toolPosition += 1;
       if (hit.id) citations[hit.id] = hit.url;
+      // 模型有时写 index（1、2…）而不是短 id；按展示顺序兜底。
+      citations[String(toolPosition)] = hit.url;
     }
-  }
-  for (const hit of message?.sources ?? []) {
-    if (hit.id) citations[hit.id] = hit.url;
   }
   const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>({});
 
@@ -175,6 +188,26 @@ export function MessageItem({
     }
   }, [reasoning, streaming, reasoningExpanded]);
 
+  const timelineSteps = useMemo(
+    () => stepsFromParts(message?.parts ?? []),
+    [message?.parts],
+  );
+  const liveSteps: TimelineStep[] = streaming
+    ? (liveBlocks && liveBlocks.length > 0
+        ? stepsFromLive(liveBlocks)
+        : [
+            ...(liveReasoning
+              ? [{ kind: "thinking" as const, id: "t-live", round: 0, text: liveReasoning }]
+              : []),
+            ...(liveTool
+              ? [{
+                  kind: "tool" as const, id: "s-live", round: 0,
+                  name: liveTool.tool ?? "search_web", query: liveTool.query, hits: liveTool.hits,
+                }]
+              : []),
+          ])
+    : [];
+
   if (!message) return null;
 
   const isUser = node.role === "user";
@@ -182,6 +215,9 @@ export function MessageItem({
     ? (message.blocks ?? []).filter((block) => block.type === "thinking" && (block.thinking ?? "").trim())
     : [];
   const blockTimeline = thinkingBlocks.length > 1;
+  const hasParts = (message.parts?.length ?? 0) > 0;
+  const showTimeline = hasParts || liveSteps.length > 0;
+  const timeline = hasParts ? timelineSteps : liveSteps;
   const index = node.variants.findIndex((item) => item.id === message.id);
   const canSwitch = node.variants.length > 1;
   const time = new Date(node.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -195,8 +231,6 @@ export function MessageItem({
       // Clipboard unavailable; ignore.
     }
   };
-
-  const openAttachment = (url: string) => window.open(url, "_blank", "noopener,noreferrer");
 
   return (
     <div className={`chat-msg ${isUser ? "user" : "assistant"}${editingNodeId === node.id ? " editing" : ""}`} data-node={node.id}>
@@ -216,7 +250,9 @@ export function MessageItem({
           {streaming && <span className="chat-streaming-pill"><span className="chat-streaming-dot" />生成中</span>}
           <span className="chat-msg-time">{time}</span>
         </div>
-        {blockTimeline ? (
+        {showTimeline ? (
+          <Timeline steps={timeline} live={!!streaming && !hasParts} />
+        ) : blockTimeline ? (
           <BlockTimeline blocks={message.blocks ?? []} />
         ) : reasoning && (
           <div className={`chat-reasoning${reasoningExpanded ? " expanded" : ""}`}>
@@ -237,7 +273,7 @@ export function MessageItem({
         {message.attachments.length > 0 && (
           <div className="chat-attachments">
             {message.attachments.map((attachment) => (
-              <AttachmentChip key={attachment.id} attachment={attachment} onOpen={openAttachment} />
+              <AttachmentChip key={attachment.id} attachment={attachment} onOpen={onOpenAttachment} />
             ))}
           </div>
         )}
@@ -253,7 +289,7 @@ export function MessageItem({
             <span className="chat-dot" />
           </div>
         ) : null}
-        {!isUser && !blockTimeline && (toolRounds.length > 0 || runningTool) && (
+        {!isUser && !blockTimeline && !showTimeline && (toolRounds.length > 0 || runningTool) && (
           <div className="chat-tools">
             {toolRounds.map((round, index) => (
               <div className="chat-tool-round" key={`${round.query}-${index}`}>

@@ -277,6 +277,24 @@ select.input {
   background: var(--monet-on-primary);
 }
 
+/* 聊天设置这类宽卡片里用的大号开关：44×24，滑块 18px */
+.switch.switch-lg {
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+}
+
+.switch.switch-lg::after {
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+}
+
+.switch.switch-lg.on::after {
+  transform: translateX(20px);
+}
+
 /* ---------------- 进度条：track secondary-container、bar primary ---------------- */
 
 .progress {
@@ -434,8 +452,11 @@ select.input {
   flex: 1;
   /* A flex child will not shrink below its content unless this is 0; without
      it a long dialog grows past `.dialog`'s max-height and the last rows are
-     simply cut off — the wizard's footer looked "covered" rather than scrolled. */
+     simply cut off — the wizard's footer looked "covered" rather than scrolled.
+     The horizontal counterpart kept wide grids from shrinking, which showed up
+     as a horizontally scrolled provider list. */
   min-height: 0;
+  min-width: 0;
 }
 
 /* jfx-layout-body：正文 pref 400 */

@@ -39,7 +39,7 @@ export function InstanceGraphic({ inst, size = 32 }: { inst: Instance | null; si
 
 /**
  * 主导航侧栏（宽 200，MainPage 结构）：
- * 账户分区（账户卡片）/ 游戏分区（当前实例项、实例列表、下载）/ 通用分区（设置）。
+ * 账户分区（账户卡片）/ 实例分区（当前实例项、实例列表、下载）/ 通用分区（设置）。
  *
  * 移动版式下它变成抽屉：默认滑出屏幕外，由标题栏的汉堡按钮唤出（见 Decorator.tsx），
  * 点条目或点遮罩收起；开合状态在 store 的 sidebarOpen。

@@ -1953,6 +1953,9 @@ const AGENT_SCOPE_LABEL: Record<string, string> = {
   plugins: "安装插件",
   transcode: "转码队列",
   "transcode-raw": "转码原始文件",
+  "chat-read": "读取聊天",
+  "chat-write": "发送聊天",
+  "chat-search": "执行搜索",
 };
 
 const AGENT_SCOPE_HINT: Record<string, string> = {
@@ -1965,6 +1968,9 @@ const AGENT_SCOPE_HINT: Record<string, string> = {
   plugins: "装/卸插件与整合包",
   transcode: "队列、预设、启停与日志；不能启用/关闭功能",
   "transcode-raw": "浏览媒体根、原始参数与破坏性文件操作",
+  "chat-read": "助手、会话、消息与来源；不含设置和账户",
+  "chat-write": "建会话、发消息、编辑/重生成、取消与附件；受输入上限",
+  "chat-search": "触发搜索测试/检索；消耗搜索额度",
 };
 
 /// 距离某个 ISO 时间还有多少秒。

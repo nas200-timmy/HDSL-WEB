@@ -10,6 +10,7 @@ import {
   EditIcon,
   ExtensionIcon,
   FormatListBulletedIcon,
+  LockIcon,
   MoreVertIcon,
   PublicIcon,
   RocketLaunchIcon,
@@ -18,7 +19,7 @@ import {
 import { I18N } from "../i18n";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
 import { refreshExternal, refreshZcode, toast, useAppState } from "../store";
-import type { ExternalInstance, InstancePlugins } from "../types";
+import type { ExternalInstance, InstancePlugins, ZcodeCatalogEntry } from "../types";
 import { errMsg } from "../utils";
 import { TerminalWindow, type TerminalTargetInfo } from "./TerminalWindow";
 
@@ -38,6 +39,41 @@ const STATE_TAG: Record<string, string> = {
   error: "failed",
 };
 
+function compareSemver(left: string, right: string): number {
+  const core = (value: string) => value.replace(/^v/i, "").split("-")[0].split(".").map((part) => parseInt(part, 10) || 0);
+  const a = core(left);
+  const b = core(right);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) - (b[i] ?? 0);
+  }
+  return 0;
+}
+
+function catalogLabel(entry: ZcodeCatalogEntry): string {
+  const channel = entry.channel === "main" ? "未发布" : entry.channel === "release" ? "正式版" : "仅 tag";
+  const installed = entry.installed ? "已装" : "需构建";
+  const credential = entry.credentialFormat >= 2 ? "v2 需 secret" : "v1";
+  return `${entry.version} · ${channel} · ${installed} · ${credential}`;
+}
+
+function versionDisabled(entry: ZcodeCatalogEntry, instance: ExternalInstance | null): boolean {
+  if (!entry.installed) return true;
+  if (!instance) return false;
+  if (instance.version === entry.ref) return false;
+  if ((instance.credentialFormat ?? 0) > 0 && entry.credentialFormat < (instance.credentialFormat ?? 0)) {
+    return true;
+  }
+  if (instance.minVersion && instance.minVersion !== "main" && entry.channel !== "main"
+      && compareSemver(entry.version, instance.minVersion) < 0) {
+    return true;
+  }
+  if (instance.minVersion === "main" && entry.channel !== "main"
+      && ((entry.publishedAt ?? 0) <= 0 || (entry.publishedAt ?? 0) < (instance.minVersionAt ?? 0))) {
+    return true;
+  }
+  return false;
+}
+
 /// ZCode（实验性）：与 dsh 实例完全隔离的独立品牌分区。
 /// 纯实现性验证功能——不保证可用、不承诺兼容，定位与限制见 docs/zcode-experimental.md。
 ///
@@ -56,11 +92,47 @@ export function ZcodeSection() {
   const [pluginsTarget, setPluginsTarget] = useState<ExternalInstance | null>(null);
   const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; inst: ExternalInstance } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ name: "", baseUrl: DEFAULT_BASE_URL, apiKey: "", workspace: "" });
+  const [form, setForm] = useState({
+    name: "", baseUrl: DEFAULT_BASE_URL, apiKey: "", workspace: "",
+    version: "", useSeed: false, seed: "",
+  });
   const [formError, setFormError] = useState<string | null>(null);
+  const [catalog, setCatalog] = useState<ZcodeCatalogEntry[]>([]);
+  const [rotateTarget, setRotateTarget] = useState<ExternalInstance | null>(null);
+  const [rotateSeed, setRotateSeed] = useState("");
+  const [rotateClearKey, setRotateClearKey] = useState(true);
   const [terminalTarget, setTerminalTarget] = useState<TerminalTargetInfo | null>(null);
   /// Web Shell 总开关（开发者模式里控制）与 HTTPS 状态；任一不满足就不显示终端入口
   const [webShellEnabled, setWebShellEnabled] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api.zcodeCatalog()
+      .then((result) => {
+        if (alive) setCatalog(result.entries);
+      })
+      .catch(() => {
+        // A catalog failure must not hide the instance list; the version select stays empty.
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!createOpen && !editTarget) return;
+    let alive = true;
+    api.zcodeCatalog()
+      .then((result) => {
+        if (alive) setCatalog(result.entries);
+      })
+      .catch(() => {
+        // Keep the previous list; the select still works with it.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [createOpen, editTarget]);
 
   useEffect(() => {
     let alive = true;
@@ -110,6 +182,10 @@ export function ZcodeSection() {
       baseUrl: DEFAULT_BASE_URL,
       apiKey: "",
       workspace: "",
+      version: catalog.find((entry) => entry.installed && entry.channel === "release")?.ref
+        ?? catalog.find((entry) => entry.installed)?.ref ?? "",
+      useSeed: false,
+      seed: "",
     });
     setFormError(null);
     setCreateOpen(true);
@@ -121,6 +197,9 @@ export function ZcodeSection() {
       baseUrl: inst.baseUrl ?? DEFAULT_BASE_URL,
       apiKey: "",
       workspace: inst.workspacePath ?? "",
+      version: inst.version ?? "",
+      useSeed: false,
+      seed: "",
     });
     setFormError(null);
     setEditTarget(inst);
@@ -133,6 +212,10 @@ export function ZcodeSection() {
     }
     if (form.apiKey.trim() && !form.baseUrl.trim()) {
       setFormError("填写 API Key 时必须同时填写 API Base URL");
+      return false;
+    }
+    if (!editTarget && form.useSeed && !form.seed.trim()) {
+      setFormError("选择“使用种子”时必须填写种子");
       return false;
     }
     return true;
@@ -148,6 +231,8 @@ export function ZcodeSection() {
         apiKey: form.apiKey.trim() || undefined,
         // 空 = 面板在 zcode/workspaces 下自动建一个工作区
         workspacePath: form.workspace.trim() || undefined,
+        version: form.version || undefined,
+        seed: !editTarget && form.useSeed ? form.seed.trim() : undefined,
       });
       toast("success", `已创建，工作区：${r.instance.workspacePath}`);
       setCreateOpen(false);
@@ -168,6 +253,7 @@ export function ZcodeSection() {
         baseUrl: form.baseUrl.trim(),
         // 留空 = 不修改已保存的 Key（后端只在字段存在时覆盖）
         ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
+        ...(form.version && form.version !== (editTarget.version ?? "") ? { version: form.version } : {}),
       });
       toast("success", "已保存");
       setEditTarget(null);
@@ -246,6 +332,25 @@ export function ZcodeSection() {
     }
   };
 
+  const rotateKey = async () => {
+    if (!rotateTarget) return;
+    setBusy(true);
+    try {
+      await api.rotateZcodeKey(rotateTarget.id, {
+        seed: rotateSeed.trim() || undefined,
+        clearProviderKey: rotateClearKey,
+      });
+      toast("success", "密钥已更换；请重新添加 API Key / 登录");
+      setRotateTarget(null);
+      setRotateSeed("");
+      await refreshExternal();
+    } catch (e) {
+      toast("error", `更换密钥失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div
       className="card"
@@ -317,6 +422,17 @@ export function ZcodeSection() {
                   </span>
                   <span className="tlli-subtitle" title={inst.workspacePath ?? undefined}>
                     {inst.id}
+                    {(inst.version ?? s.zcodeDist?.version)
+                      ? ` · 版本 ${inst.version ?? `current (${s.zcodeDist?.version})`}`
+                      : ""}
+                    {inst.credentialFormat
+                      ? ` · 凭据 v${inst.credentialFormat}`
+                      : (inst.requiresCredentialSecret
+                        || (s.zcodeDist?.version && compareSemver(s.zcodeDist.version, "3.18.0") >= 0))
+                        ? " · 凭据 v2 · 需 secret"
+                        : ""}
+                    {inst.keyFingerprint ? ` · key ${inst.keyFingerprint.slice(0, 8)}` : ""}
+                    {inst.minVersion ? ` · 最低 ${inst.minVersion}` : ""}
                     {inst.workspacePath ? ` · 工作区 ${inst.workspacePath}` : ""}
                     {inst.state === "running" ? " · 经面板反代打开" : ""}
                     {inst.state === "error" && inst.error ? ` · ${inst.error}` : ""}
@@ -346,6 +462,20 @@ export function ZcodeSection() {
                     onClick={() => void openInBrowser(inst)}
                   >
                     <PublicIcon size={18} />
+                  </button>
+                  <button
+                    className="icon-btn on-variant ripple-host"
+                    title={inst.state === "running" || inst.state === "starting"
+                      ? "先停止实例再更换密钥"
+                      : "更换密钥"}
+                    disabled={busy || inst.state === "running" || inst.state === "starting"}
+                    onClick={() => {
+                      setRotateSeed("");
+                      setRotateClearKey(true);
+                      setRotateTarget(inst);
+                    }}
+                  >
+                    <LockIcon size={18} />
                   </button>
                   <button
                     className="icon-btn on-variant ripple-host"
@@ -389,6 +519,20 @@ export function ZcodeSection() {
           {I18N["dsh.brand.instance.plugins"]}
         </PopupItem>
         <PopupItem
+          icon={<EditIcon size={16} />}
+          onClick={() => {
+            const inst = menuAnchor?.inst;
+            setMenuAnchor(null);
+            if (inst) {
+              setRotateSeed("");
+              setRotateClearKey(true);
+              setRotateTarget(inst);
+            }
+          }}
+        >
+          更换密钥
+        </PopupItem>
+        <PopupItem
           icon={<FormatListBulletedIcon size={16} />}
           onClick={() => {
             const inst = menuAnchor?.inst;
@@ -427,6 +571,59 @@ export function ZcodeSection() {
             onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
           />
         </div>
+        <div className="form-row">
+          <span className="form-label">版本</span>
+          <select
+            className="input"
+            value={form.version}
+            onChange={(e) => setForm((f) => ({ ...f, version: e.target.value }))}
+          >
+            <option value="">跟随 current（历史兼容）</option>
+            {catalog.map((entry) => (
+              <option key={entry.ref} value={entry.ref} disabled={versionDisabled(entry, editTarget)}>
+                {catalogLabel(entry)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.6 }}>
+          只列已构建的版本；未构建的先去「版本」卡构建。实例用过更高版本后，低于下限的项会被禁用。
+        </p>
+        {!editTarget && (
+          <>
+            <div className="form-row">
+              <span className="form-label">密钥</span>
+              <label className="input-check">
+                <input
+                  type="radio"
+                  checked={!form.useSeed}
+                  onChange={() => setForm((f) => ({ ...f, useSeed: false }))}
+                />
+                自动生成（推荐）
+              </label>
+              <label className="input-check">
+                <input
+                  type="radio"
+                  checked={form.useSeed}
+                  onChange={() => setForm((f) => ({ ...f, useSeed: true }))}
+                />
+                使用种子
+              </label>
+            </div>
+            {form.useSeed && (
+              <div className="form-row">
+                <span className="form-label">种子</span>
+                <input
+                  className="input"
+                  type="password"
+                  placeholder="面板用 PBKDF2 派生 credential-secret；丢失后需重置凭据"
+                  value={form.seed}
+                  onChange={(e) => setForm((f) => ({ ...f, seed: e.target.value }))}
+                />
+              </div>
+            )}
+          </>
+        )}
         <div className="form-row">
           <span className="form-label">工作区</span>
           <input
@@ -505,6 +702,43 @@ export function ZcodeSection() {
 
       {/* 原地终端：与品牌实例共用 TerminalWindow，协议同为 docs/terminal-protocol.md 的 v1 */}
       <TerminalWindow target={terminalTarget} onClose={() => setTerminalTarget(null)} />
+
+      <Dialog
+        open={rotateTarget !== null}
+        title={`更换密钥 · ${rotateTarget?.name ?? ""}`}
+        onClose={() => setRotateTarget(null)}
+      >
+        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.7 }}>
+          旧 credential-secret 和已加密凭据会被丢弃，之后需要重新添加 API Key / 登录。
+          会话、工作区和任务索引不受影响。
+        </p>
+        <div className="form-row">
+          <span className="form-label">种子</span>
+          <input
+            className="input"
+            type="password"
+            placeholder="留空 = 自动生成；填写 = 用种子派生新密钥"
+            value={rotateSeed}
+            onChange={(e) => setRotateSeed(e.target.value)}
+          />
+        </div>
+        <label className="input-check">
+          <input
+            type="checkbox"
+            checked={rotateClearKey}
+            onChange={(e) => setRotateClearKey(e.target.checked)}
+          />
+          同时清除已保存的 API Key
+        </label>
+        <div className="dialog-actions">
+          <button className="btn btn-text dim" disabled={busy} onClick={() => setRotateTarget(null)}>
+            取消
+          </button>
+          <button className="btn btn-text" disabled={busy} onClick={() => void rotateKey()}>
+            更换
+          </button>
+        </div>
+      </Dialog>
 
       <ConfirmDialog
         open={deleteTarget !== null}

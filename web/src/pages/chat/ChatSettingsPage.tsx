@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api";
 import { ConfirmDialog, Dialog } from "../../components/Dialog";
@@ -13,12 +13,13 @@ import type {
   ChatSearchResult, ChatSettings, ChatVisionTest, CreateAccountBody, ModelProvider,
 } from "../../types";
 import { errMsg } from "../../utils";
+import { readAttachmentPreview, writeAttachmentPreview } from "./attachmentPreviewSetting";
 import { AvatarView } from "./AvatarView";
 import { AvatarCropDialog } from "./AvatarCropDialog";
 import { ModelCaps, capabilitySourceLabel } from "./ModelCaps";
 
 type Run = <T>(action: () => Promise<T>) => Promise<T>;
-type Tab = "profile" | "providers" | "defaults" | "presets" | "search" | "data" | "network";
+type Tab = "profile" | "models" | "search" | "data" | "security";
 
 function bytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -35,10 +36,11 @@ function modelCount(account: ChatAccountProfile): number {
   return account.modelList?.length ?? account.models?.length ?? 0;
 }
 
-/** 聊天设置：独立二级页（模型服务 / 默认模型 / 数据与备份 / 网络）。 */
+/** 聊天设置：独立二级页（个人资料 / 模型 / 联网搜索 / 数据与备份 / 安全与网络）。 */
 export function ChatSettingsPage() {
   const nav = useNavigate();
-  const [tab, setTab] = useState<Tab>("providers");
+  const [tab, setTab] = useState<Tab>("models");
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const [settings, setSettings] = useState<ChatSettings | null>(null);
   const [accounts, setAccounts] = useState<ChatAccountProfile[]>([]);
   const [profile, setProfile] = useState<ChatProfile | null>(null);
@@ -120,24 +122,25 @@ export function ChatSettingsPage() {
         <nav className="chat-settings-nav">
           {([
             ["profile", "个人资料"],
-            ["providers", "模型服务"],
-            ["defaults", "默认模型"],
-            ["presets", "预设助手"],
+            ["models", "模型"],
             ["search", "联网搜索"],
             ["data", "数据与备份"],
-            ["network", "网络"],
+            ["security", "安全与网络"],
           ] as const).map(([key, label]) => (
             <button
               key={key}
               className={`chat-settings-nav-item${tab === key ? " active" : ""}`}
-              onClick={() => setTab(key)}
+              onClick={() => {
+                setTab(key);
+                contentRef.current?.scrollTo({ top: 0 });
+              }}
             >
               {label}
             </button>
           ))}
         </nav>
 
-        <div className="chat-settings-content scroll">
+        <div className="chat-settings-content scroll" ref={contentRef}>
           {needsElevation ? (
             <div className="chat-elevation-card">
               <span className="chat-elevation-icon"><LockIcon size={26} /></span>
@@ -158,22 +161,25 @@ export function ChatSettingsPage() {
             <div className="chat-settings-loading"><span className="spinner" /> 读取中…</div>
           ) : tab === "profile" ? (
             <ProfilePanel profile={profile} onSaved={setProfile} />
-          ) : tab === "providers" ? (
-            <ProvidersPanel
-              accounts={accounts}
-              settings={settings}
-              run={run}
-              reloadAccounts={reloadAccounts}
-            />
-          ) : tab === "defaults" ? (
-            <DefaultsPanel
-              settings={settings}
-              accounts={accounts}
-              run={run}
-              onSaved={setSettings}
-            />
-          ) : tab === "presets" ? (
-            <PresetPanel settings={settings} accounts={accounts} run={run} onSaved={setSettings} />
+          ) : tab === "models" ? (
+            <div className="chat-settings-stack">
+              <section className="chat-settings-card">
+                <div className="chat-settings-card-title">模型服务</div>
+                <ProvidersPanel
+                  accounts={accounts}
+                  settings={settings}
+                  run={run}
+                  reloadAccounts={reloadAccounts}
+                />
+              </section>
+              <DefaultsPanel
+                settings={settings}
+                accounts={accounts}
+                run={run}
+                onSaved={setSettings}
+              />
+              <PresetPanel settings={settings} accounts={accounts} run={run} onSaved={setSettings} />
+            </div>
           ) : tab === "search" ? (
             <SearchPanel settings={settings} run={run} onSaved={setSettings} />
           ) : tab === "data" ? (
@@ -183,11 +189,14 @@ export function ChatSettingsPage() {
               onSaved={setSettings}
             />
           ) : (
-            <NetworkPanel
-              settings={settings}
-              run={run}
-              onSaved={setSettings}
-            />
+            <div className="chat-settings-stack">
+              <AgentLimitPanel settings={settings} run={run} onSaved={setSettings} />
+              <NetworkPanel
+                settings={settings}
+                run={run}
+                onSaved={setSettings}
+              />
+            </div>
           )}
         </div>
       </div>
@@ -329,113 +338,123 @@ function SearchPanel({
   };
 
   return (
-    <div className="chat-settings-card">
-      <div className="chat-settings-card-title">联网搜索</div>
-      <p className="chat-settings-desc">
-        这里的服务商与 key 只用于普通助手。DeepSeek 官方预设角色使用 DeepSeek 服务端搜索，
-        不读取这里的设置。
-      </p>
-      <div className="hint">
-        模型声明支持工具时会拿到只读的 <code>search_web</code>（DeepSeek / Exa 还会多一个
-        <code>scrape_web</code> 抓正文），自己决定搜什么、搜几次（每轮最多 3 次）；
-        模型不会用工具时，面板在发送前替它搜一次。结果都作为不可信资料交给模型，
-        并要求用 <code>[citation,domain](id)</code> 标注来源。按次计费，同一句话
-        1 小时内不会重复计费。
-      </div>
-      <div className="chat-settings-form-grid">
+    <div className="chat-settings-stack">
+      <section className="chat-settings-card">
+        <div className="chat-settings-card-title">联网搜索</div>
+        <p className="chat-settings-desc">
+          这里的服务商与 key 只用于普通助手。DeepSeek 官方预设角色使用 DeepSeek 服务端搜索，
+          不读取这里的设置。
+        </p>
+        <div className="chat-settings-callout">
+          模型声明支持工具时会拿到只读的 <code>search_web</code>（DeepSeek / Exa 还会多一个
+          <code>scrape_web</code> 抓正文），自己决定搜什么、搜几次（每轮最多 3 次）；
+          模型不会用工具时，面板在发送前替它搜一次。结果都作为不可信资料交给模型，
+          并要求用 <code>[citation,domain](id)</code> 标注来源。按次计费，同一句话
+          1 小时内不会重复计费。
+        </div>
+        <div className="chat-settings-form-grid">
+          <label className="form-row">
+            <span className="form-label">服务商</span>
+            <select
+              className="input"
+              value={provider}
+              onChange={(event) => setProvider(event.target.value)}
+            >
+              <option value="bocha">博查 Bocha</option>
+              <option value="deepseek">DeepSeek Search</option>
+              <option value="zhipu">智谱 Web Search</option>
+              <option value="tavily">Tavily</option>
+              <option value="brave">Brave Search</option>
+              <option value="exa">Exa</option>
+            </select>
+          </label>
+          <label className="form-row">
+            <span className="form-label">返回条数</span>
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={10}
+              value={maxResults}
+              onChange={(event) => setMaxResults(Number(event.target.value))}
+            />
+          </label>
+        </div>
         <label className="form-row">
-          <span className="form-label">服务商</span>
-          <select
-            className="input"
-            value={provider}
-            onChange={(event) => setProvider(event.target.value)}
-          >
-            <option value="bocha">博查 Bocha</option>
-            <option value="deepseek">DeepSeek Search</option>
-            <option value="zhipu">智谱 Web Search</option>
-            <option value="tavily">Tavily</option>
-            <option value="brave">Brave Search</option>
-            <option value="exa">Exa</option>
-          </select>
-        </label>
-        <label className="form-row">
-          <span className="form-label">返回条数</span>
+          <span className="form-label">API 密钥（留空保持不变）</span>
           <input
             className="input"
-            type="number"
-            min={1}
-            max={10}
-            value={maxResults}
-            onChange={(event) => setMaxResults(Number(event.target.value))}
+            type="password"
+            value={key}
+            placeholder={settings.searchKeyMasked ? `已保存 ${settings.searchKeyMasked}` : "填搜索服务的 key"}
+            onChange={(event) => setKey(event.target.value)}
+            autoComplete="off"
           />
         </label>
-      </div>
-      <label className="form-row">
-        <span className="form-label">API 密钥（留空保持不变）</span>
-        <input
-          className="input"
-          type="password"
-          value={key}
-          placeholder={settings.searchKeyMasked ? `已保存 ${settings.searchKeyMasked}` : "填搜索服务的 key"}
-          onChange={(event) => setKey(event.target.value)}
-          autoComplete="off"
-        />
-      </label>
-      <div className="hint">
-        DeepSeek Search 可以直接留空——会回落到面板里 DeepSeek 账户的 key（同一个 key 两边通用）。
-        博查需要填自己的 key。
-      </div>
-      <label className="form-row">
-        <span className="form-label">保留检索记录</span>
-        <input
-          type="checkbox"
-          checked={persistTrail}
-          onChange={(event) => setPersistTrail(event.target.checked)}
-        />
-      </label>
-      <div className="hint">
-        开启时把每次搜索/抓取的完整链路存进这条消息，追问时模型能看到上一轮搜过什么；
-        代价是数据库和上下文都会变大。关闭后只保留最终回答。
-      </div>
-      <div className="chat-provider-actions">
-        <button className="btn btn-raised" disabled={busy} onClick={() => void save()}>
-          {busy ? "保存中…" : "保存"}
-        </button>
-        <button className="btn btn-text dim" disabled={busy || !settings.searchKeyMasked}
-          onClick={() => void clearKey()}>
-          清除 key
-        </button>
-      </div>
-
-      <div className="chat-settings-card-title" style={{ marginTop: 18 }}>测试搜索</div>
-      <div className="chat-search-test">
-        <input
-          className="input"
-          value={query}
-          placeholder="输入一个搜索词，例如 DeepSeek V4 release"
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Enter") void test(); }}
-        />
-        <button className="btn btn-outline" disabled={testing} onClick={() => void test()}>
-          {testing ? "搜索中…" : "搜一下"}
-        </button>
-      </div>
-      {result && (
-        <div className="chat-search-results">
-          {result.hits.length === 0 ? (
-            <div className="hint">这次没有结果（空结果不计费）。</div>
-          ) : result.hits.map((hit, index) => (
-            <a key={`${hit.url}-${index}`} className="chat-search-hit"
-              href={hit.url} target="_blank" rel="noreferrer noopener">
-              <span className="chat-source-index">{index + 1}</span>
-              <span className="chat-search-hit-text">
-                <span className="chat-search-hit-title">{hit.title}</span>
-                {hit.snippet && <span className="chat-search-hit-snippet">{hit.snippet}</span>}
-              </span>
-            </a>
-          ))}
+        <div className="chat-settings-hint">
+          DeepSeek Search 可以直接留空——会回落到面板里 DeepSeek 账户的 key（同一个 key 两边通用）。
+          博查需要填自己的 key。
         </div>
-      )}
+        <div className="chat-settings-toggle-row">
+          <div>
+            <div className="chat-settings-toggle-title">保留检索记录</div>
+            <div className="chat-settings-toggle-desc">
+              开启时把每次搜索/抓取的完整链路存进这条消息，追问时模型能看到上一轮搜过什么；
+              代价是数据库和上下文都会变大。关闭后只保留最终回答。
+            </div>
+          </div>
+          <button
+            type="button"
+            className={`switch ${persistTrail ? "on" : ""}`}
+            role="switch"
+            aria-checked={persistTrail}
+            aria-label="保留检索记录"
+            style={{ border: 0, padding: 0 }}
+            onClick={() => setPersistTrail(!persistTrail)}
+          />
+        </div>
+        <div className="chat-settings-actions">
+          <button className="btn btn-raised" disabled={busy} onClick={() => void save()}>
+            {busy ? "保存中…" : "保存"}
+          </button>
+          <button className="btn btn-text dim" disabled={busy || !settings.searchKeyMasked}
+            onClick={() => void clearKey()}>
+            清除 key
+          </button>
+        </div>
+      </section>
+
+      <section className="chat-settings-card">
+        <div className="chat-settings-card-title">测试搜索</div>
+        <div className="chat-search-test">
+          <input
+            className="input"
+            value={query}
+            placeholder="输入一个搜索词，例如 DeepSeek V4 release"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter") void test(); }}
+          />
+          <button className="btn btn-outline" disabled={testing} onClick={() => void test()}>
+            {testing ? "搜索中…" : "搜一下"}
+          </button>
+        </div>
+        {result && (
+          <div className="chat-search-results">
+            {result.hits.length === 0 ? (
+              <div className="hint">这次没有结果（空结果不计费）。</div>
+            ) : result.hits.map((hit, index) => (
+              <a key={`${hit.url}-${index}`} className="chat-search-hit"
+                href={hit.url} target="_blank" rel="noreferrer noopener">
+                <span className="chat-source-index">{index + 1}</span>
+                <span className="chat-search-hit-text">
+                  <span className="chat-search-hit-title">{hit.title}</span>
+                  {hit.snippet && <span className="chat-search-hit-snippet">{hit.snippet}</span>}
+                </span>
+              </a>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -1206,19 +1225,23 @@ function PresetPanel({
         关闭后助手和它的会话都不会删除，只是从列表里隐藏。
       </p>
       <div className="chat-settings-form-grid">
-        <label className="form-row" style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-          <input
-            type="checkbox"
-            checked={enabled}
+        <div className="chat-settings-toggle-row">
+          <div className="chat-settings-toggle-title">在角色列表中启用</div>
+          <button
+            type="button"
+            className={`switch ${enabled ? "on" : ""}`}
+            role="switch"
+            aria-checked={enabled}
+            aria-label="在角色列表中启用"
             disabled={busy}
-            onChange={(event) => {
-              const next = event.target.checked;
+            style={{ border: 0, padding: 0, opacity: busy ? 0.5 : 1 }}
+            onClick={() => {
+              const next = !enabled;
               setEnabled(next);
               void save(next);
             }}
           />
-          <span className="form-label" style={{ margin: 0 }}>在角色列表中启用</span>
-        </label>
+        </div>
       </div>
       <p className="chat-settings-desc" style={{ marginTop: 12 }}>
         {deepseek
@@ -1310,6 +1333,75 @@ function DefaultsPanel({
   );
 }
 
+const AGENT_TOKEN_MIN = 1_024;
+const AGENT_TOKEN_MAX = 131_072;
+
+/// 只作用于 agent 票的 chat-write 输入上限；人类聊天不受影响。
+function AgentLimitPanel({
+  settings, run, onSaved,
+}: {
+  settings: ChatSettings;
+  run: Run;
+  onSaved: (settings: ChatSettings) => void;
+}) {
+  const [value, setValue] = useState(settings.agentChatMaxInputTokens || 8192);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setValue(settings.agentChatMaxInputTokens || 8192);
+  }, [settings.agentChatMaxInputTokens]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const next = await run(() => api.chat.updateSettings({ agentChatMaxInputTokens: value }));
+      onSaved(next);
+      toast("success", "Agent 票输入上限已保存");
+    } catch (error) {
+      toast("error", `保存失败：${errMsg(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="chat-settings-card">
+      <div className="chat-settings-card-title">Agent 票限制</div>
+      <p className="chat-settings-desc">
+        只作用于持有 <code>chat-write</code> 的 agent 票；人类聊天不受影响。
+        超过上限的发送会在写入会话前被拒绝（按约 3 字符/token 估算，含文本与附件）。
+      </p>
+      <div className="form-row">
+        <span className="form-label">单次输入上限</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <input
+            type="range"
+            min={AGENT_TOKEN_MIN}
+            max={AGENT_TOKEN_MAX}
+            step={1024}
+            value={value}
+            disabled={busy}
+            onChange={(event) => setValue(Number(event.target.value))}
+            style={{ width: "100%" }}
+          />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            <span>最低 1K</span>
+            <span style={{ fontWeight: 600, color: "var(--monet-on-surface)" }}>
+              {Math.round(value / 1024)}K tokens
+            </span>
+            <span>最高 128K</span>
+          </div>
+        </div>
+      </div>
+      <div className="chat-provider-actions">
+        <button className="btn btn-raised" disabled={busy} onClick={() => void save()}>
+          {busy ? "保存中…" : "保存"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function DataPanel({
   settings, run, onSaved,
 }: {
@@ -1319,6 +1411,7 @@ function DataPanel({
 }) {
   const [form, setForm] = useState(settings);
   const [busy, setBusy] = useState(false);
+  const [attachmentPreview, setAttachmentPreview] = useState(readAttachmentPreview);
   useEffect(() => setForm(settings), [settings]);
 
   const patch = <K extends keyof ChatSettings>(key: K, value: ChatSettings[K]) =>
@@ -1363,6 +1456,31 @@ function DataPanel({
   return (
     <div className="chat-settings-stack">
       <div className="chat-settings-card">
+        <div className="chat-settings-card-title">附件预览</div>
+        <div className="chat-settings-toggle-row">
+          <div>
+            <div className="chat-settings-toggle-title">点附件时在聊天侧栏预览</div>
+            <div className="chat-settings-toggle-desc">
+              关闭后回退到新标签页；立即生效，仅本浏览器，默认开启。
+            </div>
+          </div>
+          <button
+            type="button"
+            className={`switch switch-lg ${attachmentPreview ? "on" : ""}`}
+            role="switch"
+            aria-checked={attachmentPreview}
+            aria-label="点附件时在聊天侧栏预览"
+            style={{ border: 0, padding: 0 }}
+            onClick={() => {
+              const next = !attachmentPreview;
+              setAttachmentPreview(next);
+              writeAttachmentPreview(next);
+            }}
+          />
+        </div>
+      </div>
+
+      <div className="chat-settings-card">
         <div className="chat-settings-card-title">保留策略</div>
         <div className="chat-settings-form-grid">
           <label className="form-row">
@@ -1399,10 +1517,18 @@ function DataPanel({
       <div className="chat-settings-card">
         <div className="chat-settings-card-title">备份</div>
         <div className="chat-settings-form-grid three">
-          <label className="form-row">
+          <div className="form-row" style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <span className="form-label">每日备份</span>
-            <input type="checkbox" checked={form.backupEnabled} onChange={(event) => patch("backupEnabled", event.target.checked)} />
-          </label>
+            <button
+              type="button"
+              className={`switch ${form.backupEnabled ? "on" : ""}`}
+              role="switch"
+              aria-checked={form.backupEnabled}
+              aria-label="每日备份"
+              style={{ border: 0, padding: 0 }}
+              onClick={() => patch("backupEnabled", !form.backupEnabled)}
+            />
+          </div>
           <label className="form-row">
             <span className="form-label">时间</span>
             <input className="input" value={form.backupTime} placeholder="03:17" onChange={(event) => patch("backupTime", event.target.value)} />

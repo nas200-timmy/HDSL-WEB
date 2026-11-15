@@ -24,6 +24,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -51,5 +52,26 @@ class ChatSettingsTest {
         } finally {
             store.close();
         }
+    }
+
+    @Test
+    void agentChatLimitDefaultsAndClamps(@TempDir Path data) {
+        ChatSettings.Settings defaults = ChatSettings.defaults(data);
+        assertEquals(8192, defaults.agentChatMaxInputTokens());
+
+        ChatSettings.Settings custom = ChatSettings.merge(defaults,
+                JsonParser.parseString("{\"agentChatMaxInputTokens\":2048}").getAsJsonObject(),
+                defaults);
+        assertEquals(2048, custom.agentChatMaxInputTokens());
+
+        ChatSettings.Settings tooLow = ChatSettings.merge(defaults,
+                JsonParser.parseString("{\"agentChatMaxInputTokens\":1}").getAsJsonObject(),
+                defaults);
+        assertEquals(1024, tooLow.agentChatMaxInputTokens());
+
+        ChatSettings.Settings tooHigh = ChatSettings.merge(defaults,
+                JsonParser.parseString("{\"agentChatMaxInputTokens\":999999}").getAsJsonObject(),
+                defaults);
+        assertEquals(131072, tooHigh.agentChatMaxInputTokens());
     }
 }

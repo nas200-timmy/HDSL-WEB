@@ -149,10 +149,21 @@ public final class ChatSearchService {
         }
     }
 
+    /// 面板支持的搜索服务商；顺序就是聊天输入区菜单里的顺序。
+    public static final List<String> PROVIDERS =
+            List.of("bocha", "deepseek", "zhipu", "tavily", "brave", "exa");
+
+    public static boolean isKnownProvider(@Nullable String provider) {
+        return provider != null && PROVIDERS.contains(provider);
+    }
+
     /// 下发给模型的工具集。搜索永远有；抓正文只在当前服务商支持时才给，
     /// 这样只配一个博查 key 的用户仍然能正常用搜索，不会因为缺 scrape 而报错。
     public static List<ChatProtocol.ToolSpec> tools(ChatSettings.Settings settings) {
-        String provider = settings.searchProvider();
+        return tools(settings, settings.searchProvider());
+    }
+
+    public static List<ChatProtocol.ToolSpec> tools(ChatSettings.Settings settings, String provider) {
         List<ChatProtocol.ToolSpec> list = new ArrayList<>();
         list.add(new ChatProtocol.ToolSpec("search_web", searchDescription(provider),
                 searchSchema(provider)));
@@ -168,12 +179,14 @@ public final class ChatSearchService {
                 .append("Use this when the user asks for the latest news, current facts, or needs ")
                 .append("verification. Do not treat result order as proof of freshness. Prefer primary ")
                 .append("sources and inspect each result's title, URL, publication date, and content ")
-                .append("before making a current claim. If a date or primary source is missing, or ")
-                .append("sources conflict, run another focused search");
+                .append("before making a current claim. Start with one focused query. Run at most one ")
+                .append("more search only when the first returned nothing relevant or the question ")
+                .append("needs a different angle; never repeat the same query. Stop searching once you ")
+                .append("can answer");
         if (scrapeSupported(provider)) {
-            text.append(" or use scrape_web to verify the most relevant source");
+            text.append(", or use scrape_web once to verify the single most relevant source");
         }
-        text.append(" before answering. Generate focused keywords and run multiple searches if needed. ")
+        text.append(". ")
                 .append("Today is ").append(LocalDate.now()).append(".\n\n")
                 .append("Response format: retrievedAt is the local retrieval time, never a publication ")
                 .append("date; items[] carry id (short id), index, title, url, site, publishedDate ")
@@ -206,7 +219,7 @@ public final class ChatSearchService {
     static final String SCRAPE_DESCRIPTION = "Fetch the full text of a URL. Use this when the user "
             + "requests the content of a specific page, when search snippets are insufficient, or "
             + "when a current claim needs verification against a specific source. Avoid using it for "
-            + "common questions unless the user asks.";
+            + "common questions unless the user asks. Use at most once per turn.";
 
     static final String SCRAPE_SCHEMA = """
             {"type":"object","properties":{"url":{"type":"string",\
@@ -229,9 +242,11 @@ public final class ChatSearchService {
         text.append("。\n");
         if (toolEnabled) {
             text.append("本轮可用：需要最新信息、具体事实或用户要求查证时，直接调用 search_web 工具，")
-                    .append("不要凭记忆编造近期事件；结果会以 tool 消息返回给你。");
+                    .append("不要凭记忆编造近期事件；结果会以 tool 消息返回给你。")
+                    .append("工具轮次有限：先搜一次，结果够就直接回答；最多再补搜一次，")
+                    .append("不要反复换关键词，也不要为了凑来源连续搜索。");
             if (scrapeSupported(provider)) {
-                text.append("摘要不够、或要核实某条来源时，用 scrape_web 抓正文。");
+                text.append("摘要不够、或要核实某条来源时，用 scrape_web 抓正文，本轮最多抓一次。");
             }
             text.append("\n");
             if (presearched) {
@@ -250,6 +265,14 @@ public final class ChatSearchService {
                     .append("不要假装查过。\n");
         }
         return text.toString();
+    }
+
+    /// 工具轮次用完后的降级声明：不再下发 tools，让模型基于已返回的结果收尾。
+    static String exhaustedDeclaration(@Nullable String provider) {
+        return "[面板能力] 本轮的联网搜索工具预算已经用完，不能再调用 search_web 或 scrape_web"
+                + (provider == null || provider.isBlank() ? "" : "（当前服务商：" + displayName(provider) + "）")
+                + "。请直接基于对话里已经返回的搜索结果写最终回答；信息不足就说明不足，"
+                + "不要编造，也不要再请求搜索。";
     }
 
     static String displayName(String provider) {
@@ -282,6 +305,11 @@ public final class ChatSearchService {
     }
 
     public Result search(ChatSettings.Settings settings, String query) throws ChatException {
+        return search(settings, settings.searchProvider(), query);
+    }
+
+    public Result search(ChatSettings.Settings settings, String provider, String query)
+            throws ChatException {
         String cleaned = query == null ? "" : query.trim();
         if (cleaned.isEmpty()) {
             throw new ChatException(400, "empty_query", "搜索词是空的");
@@ -289,7 +317,9 @@ public final class ChatSearchService {
         if (cleaned.length() > 128) {
             cleaned = cleaned.substring(0, 128);
         }
-        String provider = settings.searchProvider();
+        if (provider == null || provider.isBlank()) {
+            provider = settings.searchProvider();
+        }
         String key = resolveKey(settings, provider);
         if (key == null) {
             throw new ChatException(400, "search_not_configured",
@@ -328,11 +358,18 @@ public final class ChatSearchService {
     /// 抓正文。只有 [scrapeSupported] 的服务商才会下发 `scrape_web`；其它服务商返回 400，
     /// 但搜索本身不受影响。
     public String scrape(ChatSettings.Settings settings, String url) throws ChatException {
+        return scrape(settings, settings.searchProvider(), url);
+    }
+
+    public String scrape(ChatSettings.Settings settings, String provider, String url)
+            throws ChatException {
         String cleaned = url == null ? "" : url.trim();
         if (!cleaned.startsWith("http://") && !cleaned.startsWith("https://")) {
             throw new ChatException(400, "bad_url", "只支持 http/https 链接");
         }
-        String provider = settings.searchProvider();
+        if (provider == null || provider.isBlank()) {
+            provider = settings.searchProvider();
+        }
         String key = resolveKey(settings, provider);
         if (key == null) {
             throw new ChatException(400, "search_not_configured",
@@ -402,7 +439,11 @@ public final class ChatSearchService {
 
     /// 有没有可用的 key：设置里的，或 DeepSeek 账户回落的。
     static boolean configured(ChatSettings.Settings settings) {
-        return resolveKey(settings, settings.searchProvider()) != null;
+        return configured(settings, settings.searchProvider());
+    }
+
+    static boolean configured(ChatSettings.Settings settings, String provider) {
+        return isKnownProvider(provider) && resolveKey(settings, provider) != null;
     }
 
     /// 搜索 key：优先用设置里的；DeepSeek 可以留空，回落到面板里 DeepSeek 账户的 key。
