@@ -2,6 +2,27 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## Unreleased · 无 JavaScript 保底页（`/plain`）
+
+> 给 w3m / lynx 和 Windows 7 上的旧浏览器留一条能用的路：不加载 SPA，也能登录、看会话、
+> 发消息、下载附件。设计见 [docs/plain-surface.md](docs/plain-surface.md)。
+
+- 新增 `/plain` 纯文本界面：登录表单、会话列表、历史、发送、附件下载；发送后 303 回会话页，
+  手动刷新或 `?auto=1` 的 5 秒 meta refresh 看结果。附件只给下载链接，P0 不做上传。
+- 登录复用 `AuthService` 与 `AuthFilter.sessionCookie`（`HttpOnly` + `SameSite=Strict`），
+  失败限流与审计同 `/api/auth/login`；所有 POST 校验 `Origin`/`Referer` 与 `Host` 一致。
+- 入口能力闸门：`web/index.html` 先跑一段 ES3 脚本，缺 `fetch` / `WebSocket` / `flex` 就跳
+  `/plain/old`，不再先下载 bundle 再白屏；`<noscript>` 直接去 `/plain`。
+- 服务端 UA 兜底：w3m / lynx / links 打开 `/` 时直接 302 到 `/plain`，`MSIE` / `Trident/`
+  302 到 `/plain/old`——IE ≤ 9 不解析 head 里的 `<noscript>`，只靠 meta refresh 不可靠；
+  body 里另有一个可见的纯文本版链接。其他浏览器仍走能力闸门，不被 UA 猜测误伤。
+- `/plain/old` 是友善提醒页：说明不是服务器故障，给出「继续用纯文本版」与「换现代浏览器」
+  两条路，附 Windows 7 的 Firefox ESR / Chrome 建议版本。
+- 页面不带脚本，动态内容全部转义；响应头带 `no-store`、`nosniff`、`X-Frame-Options: DENY`
+  与 `default-src 'none'` 的 CSP。所有链接跟随 `HDSL_BASE_PATH`。
+- 测试：`PlainChatTest` 覆盖登录表单发 cookie、提醒页、入口闸门、表单发送与同一轮回复；
+  `api-smoke.py` 增加 `/plain` 与 `/plain/old` 两项。
+
 ## v0.6.88 — 2026-11-15 · 聊天时间线、附件预览、搜索源选择与 ZCode 版本管理
 
 > 聊天页把思考与搜索收进统一时间线（普通协议和流式也走），附件从“新标签页”换成侧栏预览，

@@ -23,10 +23,27 @@
     <meta name="apple-mobile-web-app-title" content="HDSL 面板" />
     <link rel="manifest" href="/manifest.json" />
     <title>Hello DeepSeek! Launcher</title>
+    <!-- 能力闸门：现代聊天页要 fetch + WebSocket + flex。缺任何一项就直接去纯文本版，
+         不再先加载 2.8 MB 的 bundle 再白屏。脚本刻意写成 ES3 语法，IE6/IE11 也能执行。 -->
+    <script>
+      (function () {
+        var ok = window.fetch && window.WebSocket && window.Promise
+          && window.CSS && window.CSS.supports
+          && window.CSS.supports("display", "flex");
+        if (ok) return;
+        var base = document.getElementsByTagName("base")[0];
+        var href = base ? base.getAttribute("href") : "/";
+        if (!href) href = "/";
+        if (href.charAt(href.length - 1) !== "/") href += "/";
+        location.replace(href + "plain/old");
+      })();
+    </script>
+    <noscript><meta http-equiv="refresh" content="0;url=plain"></noscript>
     <link rel="icon" href="/assets-img/icon.png" />
     <link rel="apple-touch-icon" href="/assets-img/icon.png" />
   </head>
   <body>
+    <noscript><p><a href="plain">进入纯文本版（不需要 JavaScript）</a></p></noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

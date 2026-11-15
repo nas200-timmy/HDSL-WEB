@@ -76,6 +76,7 @@ import org.jackhuang.hmcl.web.brand.BrandApiServlet;
 import org.jackhuang.hmcl.web.brand.BrandCatalog;
 import org.jackhuang.hmcl.web.chat.ChatApiServlet;
 import org.jackhuang.hmcl.web.chat.ChatModule;
+import org.jackhuang.hmcl.web.plain.PlainChatServlet;
 import org.jackhuang.hmcl.web.zcode.ZcodeApiServlet;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -397,6 +398,12 @@ public final class HdslServer {
                     uploadStaging.toString(), 60L * 1024 * 1024, 65L * 1024 * 1024, 1024 * 1024));
             context.addServlet(chatHolder, "/api/chat/*");
         }
+        // The no-JavaScript surface (docs/plain-surface.md). Registered even when
+        // chat is unavailable: /plain/old is the landing page for browsers that
+        // cannot run the SPA, and it must answer on a degraded install too.
+        context.addServlet(new ServletHolder(new PlainChatServlet(
+                chat == null ? null : chat.service(), authService, authFilter,
+                config.auth.disabled, config.basePath)), "/plain/*");
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
         context.addServlet(new ServletHolder(new ZcodeApiServlet(config, terminals, terminalTickets,

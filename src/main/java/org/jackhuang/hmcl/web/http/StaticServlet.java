@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 import java.net.URLConnection;
+import java.util.Locale;
 import java.util.Map;
 
 /// Serves the SPA shell from the classpath `web/` directory (packaged from
@@ -104,6 +105,21 @@ public final class StaticServlet extends HttpServlet {
             return;
         }
 
+        // Text browsers and IE get the no-script surface at the HTTP level, so
+        // the fallback does not depend on a `<noscript>` meta refresh being
+        // honoured (IE <= 9 does not parse noscript in <head>). The inline gate
+        // in index.html still covers every other browser whose JavaScript is on
+        // but too old to run the SPA.
+        if (INDEX.equals(path)) {
+            String fallback = plainFallback(request.getHeader("User-Agent"));
+            if (fallback != null) {
+                response.setStatus(HttpServletResponse.SC_FOUND);
+                response.setHeader("Location", basePath + fallback);
+                response.setHeader("Cache-Control", "no-store");
+                return;
+            }
+        }
+
         response.setStatus(HttpServletResponse.SC_OK);
         response.setContentType(contentType(path));
         // 入口 HTML 必须每次重新拿，否则浏览器会一直用它缓存的那份、继续引用旧
@@ -130,6 +146,31 @@ public final class StaticServlet extends HttpServlet {
         try (InputStream in = connection.getInputStream()) {
             in.transferTo(response.getOutputStream());
         }
+    }
+
+    /// The no-script surface a user agent should be sent to instead of the SPA shell.
+    ///
+    /// Only the two families that cannot possibly run the bundle are named: text
+    /// browsers (go straight to `/plain`) and IE (go to the friendly notice, which
+    /// links to `/plain`). Everything else gets the shell and is judged by the
+    /// inline capability gate — a header-based guess must not redirect a browser
+    /// that could run the modern page.
+    ///
+    /// @param userAgent the request's `User-Agent`, or `null`
+    /// @return the path to redirect to, or `null` to serve the shell
+    private static @org.jetbrains.annotations.Nullable String plainFallback(@org.jetbrains.annotations.Nullable String userAgent) {
+        if (userAgent == null || userAgent.isBlank()) {
+            return null;
+        }
+        String ua = userAgent.toLowerCase(Locale.ROOT);
+        if (ua.contains("w3m") || ua.contains("lynx") || ua.contains("links (")
+                || ua.contains("elinks")) {
+            return "/plain";
+        }
+        if (ua.contains("msie") || ua.contains("trident/")) {
+            return "/plain/old";
+        }
+        return null;
     }
 
     /// The shell with the base-path machinery injected. Everything the SPA
