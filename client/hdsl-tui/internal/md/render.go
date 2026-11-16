@@ -16,16 +16,16 @@ import (
 const (
 	stylePlain = ""
 	styleBold  = "\x1b[1m"
-	styleDim   = "\x1b[90m"
+	styleDim   = "\x1b[36m"
 	styleCode  = "\x1b[7m"
-	styleLink  = "\x1b[36m"
+	styleLink  = "\x1b[1;36m"
 )
 
 const (
 	resetBold = "\x1b[22m"
-	resetDim  = "\x1b[30m"
+	resetDim  = "\x1b[37m"
 	resetCode = "\x1b[27m"
-	resetLink = "\x1b[30m"
+	resetLink = "\x1b[22m"
 )
 
 type span struct {

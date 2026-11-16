@@ -16,12 +16,12 @@ import (
 // header an inverse bar. Every row is painted with its own background so a
 // styled Markdown fragment cannot leak the terminal's default colours.
 const (
-	chatBody   = "\x1b[30;47m"
+	chatBody   = "\x1b[37;44m"
 	chatHeader = "\x1b[30;46m"
-	chatDim    = "\x1b[90m"
-	chatUser   = "\x1b[36m"
-	chatHelper = "\x1b[32m"
-	chatFg     = "\x1b[30m"
+	chatDim    = "\x1b[36m"
+	chatUser   = "\x1b[1;36m"
+	chatHelper = "\x1b[1;32m"
+	chatFg     = "\x1b[37m"
 )
 
 // chatState is everything one chat screen owns. It lives on the stack of
