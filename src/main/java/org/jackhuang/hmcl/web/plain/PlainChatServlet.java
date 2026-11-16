@@ -337,7 +337,7 @@ public final class PlainChatServlet extends HttpServlet {
                 .append("<input type=\"text\" name=\"username\" autocomplete=\"username\" size=\"32\"></label></div>\n")
                 .append("<div class=\"row\"><label>密码<br>")
                 .append("<input type=\"password\" name=\"password\" autocomplete=\"current-password\"></label></div>\n")
-                .append("<div class=\"row\"><button type=\"submit\">登录</button></div>\n")
+                .append("<div class=\"row\"><input type=\"submit\" value=\"登录\"></div>\n")
                 .append("</form>\n")
                 .append("<p class=\"muted\"><a href=\"").append(url("/")).append("\">用现代浏览器打开面板</a></p>\n");
         page(response, 200, "登录 · HDSL 纯文本版", null, shell(null, body.toString()), false);
@@ -380,7 +380,7 @@ public final class PlainChatServlet extends HttpServlet {
         if (sessions.isEmpty()) {
             body.append("<p class=\"muted\">还没有会话。先在下面新建一个。</p>\n");
         } else {
-            body.append("<table><tr><th>标题</th><th>更新时间</th><th>消息</th></tr>\n");
+            body.append("<table width=\"100%\"><tr><th width=\"60%\">标题</th><th width=\"25%\">更新时间</th><th width=\"15%\">消息</th></tr>\n");
             for (JsonElement element : sessions) {
                 JsonObject session = element.getAsJsonObject();
                 String id = string(session, "id");
@@ -413,7 +413,7 @@ public final class PlainChatServlet extends HttpServlet {
                     .append("</option>\n");
         }
         body.append("</select></label></div>\n")
-                .append("<div class=\"row\"><button type=\"submit\">创建并打开</button></div>\n")
+                .append("<div class=\"row\"><input type=\"submit\" value=\"创建并打开\"></div>\n")
                 .append("</form>\n");
         return body.toString();
     }
@@ -428,8 +428,8 @@ public final class PlainChatServlet extends HttpServlet {
         String rev = revOf(session.toString(), elev);
 
         StringBuilder content = new StringBuilder();
-        content.append("<div class=\"toolbar\"><a href=\"").append(url("/plain")).append("\">← 会话列表</a>")
-                .append("<a href=\"").append(url("/plain/s/" + sessionId)).append("\">刷新</a>")
+        content.append("<div class=\"toolbar\"><a href=\"").append(url("/plain")).append("\">← 会话列表</a> · ")
+                .append("<a href=\"").append(url("/plain/s/" + sessionId)).append("\">刷新</a> · ")
                 .append(auto
                         ? "<a href=\"" + url("/plain/s/" + sessionId) + "\">关闭自动刷新</a>"
                         : "<a href=\"" + url("/plain/s/" + sessionId) + "?auto=1\">自动刷新（"
@@ -533,7 +533,7 @@ public final class PlainChatServlet extends HttpServlet {
                 + "<form method=\"post\" action=\"" + url("/plain/s/" + sessionId + "/send") + "\">\n"
                 + "<textarea name=\"text\" rows=\"6\" cols=\"80\"></textarea>\n"
                 + "<input type=\"hidden\" name=\"auto\" value=\"1\">\n"
-                + "<div class=\"row\"><button type=\"submit\">发送</button> "
+                + "<div class=\"row\"><input type=\"submit\" value=\"发送\"> "
                 + "<span class=\"muted\">提交后会自动回到本页；回答生成中请刷新查看。</span></div>\n"
                 + "</form>\n"
                 + "<p><a id=\"bottom\" href=\"" + url("/plain/s/" + sessionId)
@@ -542,15 +542,17 @@ public final class PlainChatServlet extends HttpServlet {
 
     private String nav(HttpServletRequest request) {
         Instant expiry = elevation.expiryOf(elevKey(request), true);
-        return "<div class=\"navlist\"><strong>HDSL 纯文本版</strong>"
-                + "<a href=\"" + url("/plain") + "\">会话</a>"
-                + "<a href=\"" + url("/") + "\">完整面板</a>"
+        // <br> and submit inputs, not CSS: w3m and lynx ignore the stylesheet and
+        // would flow every link into one line. The expiry is left to the elevation
+        // page; a nav label that grows with the time squeezes the text column.
+        return "<div class=\"navlist\"><strong>HDSL 纯文本版</strong><br>\n"
+                + "<a href=\"" + url("/plain") + "\">会话</a><br>\n"
+                + "<a href=\"" + url("/") + "\">完整面板</a><br>\n"
                 + "<a href=\"" + url("/plain/elevate") + "\">"
-                + (expiry == null ? "提权"
-                        : "提权中 · 到 " + PlainHtml.time(expiry.toEpochMilli()))
-                + "</a>"
-                + "<form method=\"post\" action=\"" + url("/plain/logout") + "\">"
-                + "<button type=\"submit\">退出</button></form>"
+                + (expiry == null ? "提权" : "提权中")
+                + "</a><br>\n"
+                + "<form method=\"post\" action=\"" + url("/plain/logout")
+                + "\"><input type=\"submit\" value=\"退出\"></form>"
                 + "</div>\n";
     }
 
@@ -768,14 +770,14 @@ public final class PlainChatServlet extends HttpServlet {
                 content.append("<input type=\"hidden\" name=\"next\" value=\"").append(PlainHtml.escape(next))
                         .append("\">\n");
             }
-            content.append("<div class=\"row\"><button type=\"submit\">提权</button></div>\n")
+            content.append("<div class=\"row\"><input type=\"submit\" value=\"提权\"></div>\n")
                     .append("</form>\n");
         } else {
             content.append("<p>已提权，到 ").append(PlainHtml.time(expiry.toEpochMilli())).append("。</p>\n");
             content.append("<form method=\"post\" action=\"").append(url("/plain/elevate/extend"))
-                    .append("\" style=\"display:inline\"><button type=\"submit\">延长到 3 小时（仅一次）</button></form>\n");
+                    .append("\" style=\"display:inline\"><input type=\"submit\" value=\"延长到 3 小时（仅一次）\"></form>\n");
             content.append("<form method=\"post\" action=\"").append(url("/plain/elevate/stop"))
-                    .append("\" style=\"display:inline\"><button type=\"submit\">结束提权</button></form>\n");
+                    .append("\" style=\"display:inline\"><input type=\"submit\" value=\"结束提权\"></form>\n");
         }
         content.append("<p><a href=\"").append(next == null ? url("/plain") : next).append("\">返回</a></p>\n");
         page(response, 200, "开发者提权 · HDSL 纯文本版", null,
@@ -1020,9 +1022,9 @@ public final class PlainChatServlet extends HttpServlet {
     /// `null` nav and get the single content card.
     private static String shell(@Nullable String nav, String content) {
         StringBuilder out = new StringBuilder();
-        out.append("<table class=\"shell\" cellspacing=\"0\" cellpadding=\"0\"><tr>");
+        out.append("<table class=\"shell\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\"><tr>");
         if (nav != null) {
-            out.append("<td class=\"shell-nav\">").append(nav).append("</td>");
+            out.append("<td class=\"shell-nav\" width=\"14%\">").append(nav).append("</td>");
         }
         out.append("<td class=\"shell-main\">").append(content).append("</td>");
         out.append("</tr></table>\n");

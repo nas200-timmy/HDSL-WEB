@@ -100,6 +100,10 @@ class PlainLegacyTest {
             HttpResponse<String> unlocked = get(client, base + "/plain/s/" + sessionId, cookie);
             assertTrue(unlocked.body().contains("data-elev=\"ok\""), unlocked.body());
             assertTrue(unlocked.body().contains("name=\"text\""), unlocked.body());
+            // Text browsers ignore the stylesheet: the nav must break lines by
+            // markup alone, and submits must be inputs w3m/lynx know how to post.
+            assertTrue(unlocked.body().contains("会话</a><br>"), unlocked.body());
+            assertTrue(unlocked.body().contains("type=\"submit\" value=\"退出\""), unlocked.body());
 
             // The extension coupon is one-shot: the second stretch needs a fresh
             // password proof.

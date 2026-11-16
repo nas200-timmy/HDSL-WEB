@@ -65,7 +65,7 @@ td.shell-main {
 .navlist form {
   margin: 8px 0 0;
 }
-.navlist button {
+.navlist button, .navlist input[type="submit"] {
   width: 100%;
 }
 
@@ -159,7 +159,7 @@ textarea, input[type="text"], input[type="password"], select {
   background: #fff;
 }
 textarea { width: 98%; min-height: 6rem; }
-button {
+button, input[type="submit"] {
   font: inherit;
   background: #0b57d0;
   color: #fff;
@@ -168,7 +168,7 @@ button {
   padding: 6px 14px;
   cursor: pointer;
 }
-button:hover { background: #0a4ab8; }
+button:hover, input[type="submit"]:hover { background: #0a4ab8; }
 
 .muted { color: #5a6b7d; }
 .error { color: #a00; font-weight: 600; }
