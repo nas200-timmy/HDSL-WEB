@@ -40,6 +40,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -89,11 +90,23 @@ public final class MarkdownSsr {
     /// one long conversation start a process per message.
     private static final int WORKERS = 2;
 
+    /// Running + queued render tasks. A request that cannot get a slot skips
+    /// the prefetch; the next poll tries again, so a burst never grows an
+    /// unbounded queue of message contents.
+    private static final int MAX_TASKS = 32;
+
+    /// After a renderer failure (crash, timeout, oversize), skip the same
+    /// message for this long. Without it every 500 ms poll would respawn a
+    /// process for a permanently broken renderer.
+    private static final Duration FAILURE_COOLDOWN = Duration.ofMinutes(5);
+
     private final Path dataDir;
     private final Path cacheDir;
     private final AtomicReference<Optional<Path>> node = new AtomicReference<>();
     private final AtomicReference<Optional<Path>> script = new AtomicReference<>();
     private final Set<String> pending = ConcurrentHashMap.newKeySet();
+    private final java.util.Map<String, Long> failed = new ConcurrentHashMap<>();
+    private final Semaphore slots = new Semaphore(MAX_TASKS);
     private final AtomicBoolean nodeLogged = new AtomicBoolean();
     /// Created on first use: most servers never enable SSR, and an eager pair of
     /// pools per HdslServer would leave threads behind in every test and reload.
@@ -148,7 +161,15 @@ public final class MarkdownSsr {
             return;
         }
         String key = cache.getFileName().toString();
+        Long failedAt = failed.get(key);
+        if (failedAt != null && System.currentTimeMillis() - failedAt < FAILURE_COOLDOWN.toMillis()) {
+            return;
+        }
+        if (!slots.tryAcquire()) {
+            return;
+        }
         if (!pending.add(key)) {
+            slots.release();
             return;
         }
         workers().submit(() -> {
@@ -159,11 +180,16 @@ public final class MarkdownSsr {
                 String rendered = invoke(content);
                 if (rendered != null) {
                     writeCache(cache, rendered);
+                    failed.remove(key);
+                } else {
+                    failed.put(key, System.currentTimeMillis());
                 }
             } catch (IOException e) {
+                failed.put(key, System.currentTimeMillis());
                 LOG.warning("Plain markdown cache failed for " + messageId, e);
             } finally {
                 pending.remove(key);
+                slots.release();
             }
         });
     }
