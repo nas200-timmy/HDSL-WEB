@@ -2,21 +2,63 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## Unreleased · 纯文本版 SSR 可靠性
+## v0.6.91 — 2026-11-16 · 纯文本版增强、SSR 可靠性与终端聊天修复
 
-- Node 解析改为「面板托管运行时优先，PATH 兜底」：Windows 裸部署的
-  `<data>/hdsl/runtimes/*/node.exe` 不在 PATH，之前会静默退回 `<pre>`；现在托管运行时按
-  mtime 取最新并记录日志。
-- `/api/settings/plain` 增加 `ssrAvailable`，设置卡片显示「Markdown 预渲染：可用/不可用」，
-  不再静默降级。
-- 渲染改为异步：`ChatTurnManager` 在 turn 持久化后调用 finalizer，`MarkdownSsr.prefetch`
-  在后台池里渲染；`render()` 只读缓存，请求不再等待 Node。
+> `/plain` 从保底表单页升级成真正可用的 legacy 表面：fragment 长轮询、服务端 markdown、
+> 提权闸与 HMCL 外壳；同时把 SSR 和终端聊天里几处会误伤体验的问题修掉。
+> 设计见 [docs/plain-surface.md](docs/plain-surface.md) 与 [docs/chat-tui.md](docs/chat-tui.md)。
+
+### 纯文本版（legacy v1）
+
+- `plain.enhanced`（`server.yaml`，默认开）＋ `GET/PUT /api/settings/plain`（写要开发者
+  提权）＋ 设置 → 通用里的开关；下一次 `/plain` 请求立即生效。
+- 增强模式下会话列表与转录由 `/plain/f/...` fragment 提供，`?wait=1&rev=` 长轮询，
+  `poll.js`（ES5）换入新 fragment；发送区只在 markup 变化时替换，避免输入被刷掉。
+- HMCL 风格外壳：`web-legacy/legacy.css` + 默认壁纸；CSP 分“纯 HTML”与“轮询器”两档，
+  script-src 只允许 self；链接跟随 `HDSL_BASE_PATH`。
+- 发送与新建会话要求活跃的开发者提权：`/plain/elevate` 密码表单、一次性延期到 3 小时、
+  `stop` 结束；提权只走 HTTPS。未提权时发送区变成提示，fragment 带 `data-elev` 让轮询器停。
+  `auth.disabled`（仅回环）没有登录也就没有提权，按自身证明处理。
+- 服务端 markdown 用面板自己的前端渲染器（react-markdown + 同一份 sanitize schema +
+  rehype-highlight），与 SPA 同观感；代码块只保留语言标签，不渲染复制/下载按钮。
+
+### SSR 可靠性
+
+- Node 解析改为「面板托管运行时优先，PATH 兜底」：`<data>/hdsl/runtimes/*/node` 按
+  mtime 取最新，Windows 裸部署的托管 Node 不再因为不在 PATH 而静默退回 `<pre>`。
+- 渲染改为异步：`ChatTurnManager` 在 turn 持久化后触发 finalizer，`MarkdownSsr.prefetch`
+  在后台池里渲染；`render()` 只读缓存，请求不再为每条消息等待 Node 进程。
 - 进程并发上限 2；watchdog 在 10 秒后强杀渲染进程，修掉「先读 stdout 再 waitFor」导致的
-  无限阻塞（stdin 写入也在同一超时保护内）。
-- 测试：托管 Node 选择（最新、需可执行）、异步 SSR 等待渲染结果、`ssrAvailable` 字段；
-  `./gradlew test` 通过。
+  无限阻塞（stdin 写入也在同一超时保护内）；任何失败仍降级为转义 `<pre>`。
+- `GET /api/settings/plain` 返回 `ssrAvailable`，设置卡片显示「Markdown 预渲染：可用/不可用」，
+  不再静默降级。
 
-## v0.6.90 — 2026-11-16 · 终端客户端聊天（P0 + P1）
+### 终端客户端（`hdsl-tui`）
+
+- DeepSeek 预设的 `blocks` 时间线终于能渲染：思考可展开，服务端工具显示
+  「搜索：query · N 条」，来源按 `tool_use_id` 配对；之前只读 `parts`，Ctrl-O 没有任何
+  效果，思考与来源也完全不显示。
+- 命令反馈不再被补全遮住：Enter 执行后清空 completion，`/search` 先检查搜索配置与
+  DeepSeek 预设；补全列表补上 `/clear`、`/resume`、`/rename`、`/config` 等别名。
+- 聊天页改用客户端一致的蓝底；用户行 `❯` 青色、助手行 `●` 绿色，摘要行带 `▸/▾`。
+- 折叠状态默认露出最后两行思考，生成中标题带 `生成中 Ns`，长思考不再像卡住；
+  `Ctrl-O` 展开全文。
+
+### 安全
+
+- 修掉 `/plain/elevate` 的开放重定向：`next` 只接受 `<basePath>/plain` 前缀，其余回落
+  `/plain`；测试断言外部 `next` 的 Location 必须是 `/plain`。
+- 安全文档补充：品牌自带终端（PI WEB、ZCode）不受面板终端门约束。
+
+### 验证
+
+- `./gradlew test` 全量通过；`npm run typecheck` / `compat` / `build` 通过。
+- `scripts/api-smoke.py` 43/43。
+- 终端聊天：假 provider 每 0.3 秒发推理增量，PTY 确认中途出现「思考中」+ 思考行、
+  结束后只剩最终回答；DeepSeek blocks 会话确认 Ctrl-O 展开思考与来源。
+- 纯文本版：提权闸、fragment 版本推进、轮询踢出、SSR 与降级均有测试覆盖。
+
+## v0.6.90## v0.6.90 — 2026-11-16 · 终端客户端聊天（P0 + P1）
 
 > `hdsl-tui` 的主菜单第一项现在是聊天：单列消息流、贴底输入框、斜杠命令、Markdown、
 > 思考/搜索折叠，交互参考 Kimi Code / Qwen Code 这类终端 agent。服务端没有改动，
