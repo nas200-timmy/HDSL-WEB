@@ -662,7 +662,9 @@ public final class PlainChatServlet extends HttpServlet {
 
     private void handleElevate(HttpServletRequest request, HttpServletResponse response)
             throws IOException {
-        String next = trimToNull(request.getParameter("next"));
+        // Only a path inside this panel's plain surface is a valid return trip;
+        // a posted `next` must not turn the elevate form into an open redirect.
+        String next = safeNext(request.getParameter("next"));
         if (!sameOrigin(request)) {
             error(response, 403, "跨站表单被拒绝");
             return;
@@ -726,6 +728,19 @@ public final class PlainChatServlet extends HttpServlet {
         AuditLog.log(AuditLog.Channel.WEB, "developer.elevation", "extend", "success",
                 actor(request), request.getRemoteAddr());
         redirect(response, url("/plain/elevate"));
+    }
+
+    /// A return path that stays on this surface, or `null`.
+    private @Nullable String safeNext(@Nullable String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String value = raw.trim();
+        String prefix = basePath + "/plain";
+        if (!value.startsWith(prefix) || value.contains("\\")) {
+            return null;
+        }
+        return value;
     }
 
     /// The elevation page: status, the password form, the one-shot extension

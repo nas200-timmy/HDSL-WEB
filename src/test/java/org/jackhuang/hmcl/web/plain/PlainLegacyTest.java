@@ -84,6 +84,12 @@ class PlainLegacyTest {
 
             HttpResponse<String> wrong = postForm(client, base + "/plain/elevate",
                     "password=not-it", cookie);
+            HttpResponse<String> hijack = postForm(client, base + "/plain/elevate",
+                    "password=" + DEV + "&next="
+                            + URLEncoder.encode("https://evil.example/", StandardCharsets.UTF_8), cookie);
+            assertEquals(303, hijack.statusCode(), hijack.body());
+            assertEquals("/plain", hijack.headers().firstValue("Location").orElseThrow(),
+                    "an off-panel next must not become an open redirect");
             assertEquals(200, wrong.statusCode(), wrong.body());
             assertTrue(wrong.body().contains("不对"), wrong.body());
 
