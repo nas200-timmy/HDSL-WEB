@@ -497,3 +497,28 @@ func TestBlockTimelineHelpers(t *testing.T) {
 		t.Fatalf("tool url = %q", got)
 	}
 }
+
+func TestThinkingPreviewKeepsTheTail(t *testing.T) {
+	lines := thinkingPreview("第一行\n第二行\n第三行\n第四行", 40, 2)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %q", lines)
+	}
+	if !strings.Contains(lines[0], "第三行") || !strings.Contains(lines[1], "第四行") {
+		t.Fatalf("preview = %q", lines)
+	}
+	if strings.Contains(strings.Join(lines, ""), "第一行") {
+		t.Fatalf("preview kept the oldest line: %q", lines)
+	}
+}
+
+func TestThinkingPreviewWrapsLongText(t *testing.T) {
+	lines := thinkingPreview(strings.Repeat("很长", 50), 10, 2)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %d", len(lines))
+	}
+	for _, line := range lines {
+		if ui.VisibleWidth(strings.TrimPrefix(line, "\x1b[36m")) > 12 {
+			t.Fatalf("line is too wide: %q", line)
+		}
+	}
+}

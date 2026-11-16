@@ -36,16 +36,17 @@ type chatState struct {
 	scroll int
 	expand bool
 
-	live       bool
-	liveText   string
-	liveThink  string
-	turnID     string
-	quitArmed  bool
-	quitAt     time.Time
-	notice     string
-	lastError  string
-	completion []string
-	compIndex  int
+	live        bool
+	liveText    string
+	liveThink   string
+	turnID      string
+	turnStarted time.Time
+	quitArmed   bool
+	quitAt      time.Time
+	notice      string
+	lastError   string
+	completion  []string
+	compIndex   int
 
 	renderCache map[string][]string
 	renderWidth int
@@ -204,6 +205,9 @@ func (a *App) chatEvent(ctx context.Context, client *panel.Client, st *chatState
 		if event.TurnID != "" {
 			st.turnID = event.TurnID
 		}
+		if st.turnStarted.IsZero() {
+			st.turnStarted = time.Now()
+		}
 		st.live = true
 		st.liveText = ""
 		st.liveThink = ""
@@ -224,10 +228,12 @@ func (a *App) chatEvent(ctx context.Context, client *panel.Client, st *chatState
 	case "chat-error":
 		st.lastError = event.Message
 		st.live = false
+		st.turnStarted = time.Time{}
 		return true
 	case "chat-turn-finished":
 		st.live = false
 		st.turnID = ""
+		st.turnStarted = time.Time{}
 		if session, err := client.ChatSession(ctx, st.session.ID); err == nil {
 			st.session = session
 		}
@@ -384,6 +390,7 @@ func (a *App) chatSend(ctx context.Context, client *panel.Client, st *chatState,
 		return chatStay, true
 	}
 	st.turnID = result.TurnID
+	st.turnStarted = time.Now()
 	st.scroll = 0
 	if session, err := client.ChatSession(ctx, st.session.ID); err == nil {
 		st.session = session
@@ -717,6 +724,9 @@ func (a *App) drawChat(ctx context.Context, client *panel.Client, st *chatState)
 	header := " 聊天 · " + displayOr(st.session.Title, "新会话")
 	if st.live {
 		header += " · 生成中"
+		if !st.turnStarted.IsZero() {
+			header += fmt.Sprintf(" %ds", int(time.Since(st.turnStarted).Seconds()))
+		}
 	}
 	status := displayOr(st.session.Model, settingsModel(st.settings))
 	if st.search {
@@ -792,10 +802,17 @@ func (a *App) chatTranscript(st *chatState, width int) []string {
 	}
 	if st.live {
 		label := "助手 · 生成中"
+		if !st.turnStarted.IsZero() {
+			label += fmt.Sprintf(" %ds", int(time.Since(st.turnStarted).Seconds()))
+		}
 		if st.liveThink != "" {
 			lines = append(lines, chatDimLine(label+" · 思考中"))
 			if st.expand {
 				lines = append(lines, wrapPlain(st.liveThink, width)...)
+			} else {
+				// Kimi Code's trick: two lines of reasoning by default, so a
+				// long thinking phase never looks like a frozen screen.
+				lines = append(lines, thinkingPreview(st.liveThink, width, 2)...)
 			}
 		} else {
 			lines = append(lines, chatDimLine(label))
@@ -847,8 +864,12 @@ func (a *App) chatParts(st *chatState, message panel.ChatMessage, width int) []s
 				duration = fmt.Sprintf(" %.1fs", float64(part.DurationMs)/1000)
 			}
 			lines = append(lines, chatDimLine(arrow+"思考"+duration))
-			if st.expand && strings.TrimSpace(part.Text) != "" {
-				lines = append(lines, wrapPlain(part.Text, width)...)
+			if strings.TrimSpace(part.Text) != "" {
+				if st.expand {
+					lines = append(lines, wrapPlain(part.Text, width)...)
+				} else {
+					lines = append(lines, thinkingPreview(part.Text, width, 2)...)
+				}
 			}
 		case "tool":
 			call := calls[part.ID]
@@ -906,8 +927,12 @@ func (a *App) chatBlocks(st *chatState, message panel.ChatMessage, width int) []
 		switch block.Type {
 		case "thinking":
 			lines = append(lines, chatDimLine(arrow+"思考"))
-			if st.expand && strings.TrimSpace(block.Thinking) != "" {
-				lines = append(lines, wrapPlain(block.Thinking, width)...)
+			if strings.TrimSpace(block.Thinking) != "" {
+				if st.expand {
+					lines = append(lines, wrapPlain(block.Thinking, width)...)
+				} else {
+					lines = append(lines, thinkingPreview(block.Thinking, width, 2)...)
+				}
 			}
 		case "server_tool_use":
 			label := "搜索"
@@ -934,6 +959,28 @@ func (a *App) chatBlocks(st *chatState, message panel.ChatMessage, width int) []
 				}
 			}
 		}
+	}
+	return lines
+}
+
+// thinkingPreview is the collapsed reasoning: the last `limit` wrapped lines of
+// the text, indented, so a thinking phase visibly progresses without Ctrl-O.
+func thinkingPreview(text string, width, limit int) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	runes := []rune(text)
+	if len(runes) > 2000 {
+		runes = runes[len(runes)-2000:]
+	}
+	wrapped := wrapPlain(string(runes), maxInt(4, width-2))
+	if len(wrapped) > limit {
+		wrapped = wrapped[len(wrapped)-limit:]
+	}
+	lines := make([]string, 0, len(wrapped))
+	for _, line := range wrapped {
+		lines = append(lines, chatDimLine("  "+line))
 	}
 	return lines
 }
