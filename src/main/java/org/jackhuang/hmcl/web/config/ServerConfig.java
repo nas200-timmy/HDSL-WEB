@@ -312,4 +312,14 @@ public final class ServerConfig {
         /// `null` 表示严格校验——这是默认，也是没有记录时的意思。
         public volatile @Nullable Instant acceptUnverifiedUntil;
     }
+
+    /// The legacy no-JavaScript surface (`/plain`): a full citizen (fragment
+    /// long-polling, server-rendered markdown) or a plain degraded fallback of
+    /// forms and whole-page refreshes. Operators with no legacy clients at all
+    /// can turn the enhancement off and keep only the fallback.
+    public final PlainConfig plain = new PlainConfig();
+
+    public static final class PlainConfig {
+        public volatile boolean enhanced = true;
+    }
 }

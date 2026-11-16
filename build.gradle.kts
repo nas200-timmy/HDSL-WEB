@@ -231,8 +231,18 @@ val syncWebDist by tasks.registering(Sync::class) {
     into(layout.projectDirectory.dir("src/main/resources/web"))
 }
 
+// The legacy surface's server-side markdown renderer (web/scripts/render-markdown.mjs)
+// is bundled next to the SPA. Its absence is not fatal the way a missing dist is:
+// MarkdownSsr falls back to escaped <pre> when the bundle or Node is gone, so no
+// sentinel task guards it.
+val syncWebLegacySsr by tasks.registering(Sync::class) {
+    dependsOn(buildWeb)
+    from(webDir.dir("dist-ssr"))
+    into(layout.projectDirectory.dir("src/main/resources/web-legacy/ssr"))
+}
+
 tasks.named<ProcessResources>("processResources") {
-    dependsOn(syncWebDist)
+    dependsOn(syncWebDist, syncWebLegacySsr)
     // 发行物要自带许可证与声明：GPLv3 §4/§5 要求随二进制一并传递许可证并保留声明，
     // HMCL 的附加条款（§7(b)）要求保留其版权与修改声明。依赖的 META-INF 里只有
     // 各自的 licence，没有本项目这一份，所以从仓库根显式带进 jar。

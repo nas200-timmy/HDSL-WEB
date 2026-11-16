@@ -58,6 +58,7 @@ import org.jackhuang.hmcl.web.http.NodeApiServlet;
 import org.jackhuang.hmcl.web.http.ModelsApiServlet;
 import org.jackhuang.hmcl.web.http.BrandSettingsApiServlet;
 import org.jackhuang.hmcl.web.http.PacksApiServlet;
+import org.jackhuang.hmcl.web.http.PlainSettingsApiServlet;
 import org.jackhuang.hmcl.web.http.PluginsApiServlet;
 import org.jackhuang.hmcl.web.http.LogRetentionApiServlet;
 import org.jackhuang.hmcl.web.http.RegistrySettingsApiServlet;
@@ -403,7 +404,10 @@ public final class HdslServer {
         // cannot run the SPA, and it must answer on a degraded install too.
         context.addServlet(new ServletHolder(new PlainChatServlet(
                 chat == null ? null : chat.service(), authService, authFilter,
-                config.auth.disabled, config.basePath)), "/plain/*");
+                config.auth.disabled, config.basePath, developerAuth, developerElevation,
+                tlsActive, config,
+                new org.jackhuang.hmcl.web.plain.MarkdownSsr(
+                        config.dataDir.resolve("plain-md")))), "/plain/*");
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
         context.addServlet(new ServletHolder(new ZcodeApiServlet(config, terminals, terminalTickets,
@@ -424,6 +428,9 @@ public final class HdslServer {
         // 日志保留窗口。比 `/api/settings/*` 的 TLS 更长的前缀，Jetty 按最长匹配。
         context.addServlet(new ServletHolder(new LogRetentionApiServlet(
                 config, developerElevation, authService, tlsActive)), "/api/settings/logs/*");
+        // 纯文本版（legacy 表面）的增强开关，同一条最长前缀规则。
+        context.addServlet(new ServletHolder(new PlainSettingsApiServlet(
+                config, developerElevation, authService, tlsActive)), "/api/settings/plain");
         // The brand page's own data (sources + policy). Same reason for the longer prefix: the
         // `/api/settings/*` holder below is TLS, and Jetty matches the longest path spec.
         context.addServlet(new ServletHolder(new BrandSettingsApiServlet(

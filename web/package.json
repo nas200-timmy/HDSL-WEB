@@ -7,10 +7,11 @@
     "predev": "node scripts/sync-assets.mjs",
     "dev": "vite dev",
     "prebuild": "node scripts/sync-assets.mjs",
-    "build": "vite build",
+    "build": "vite build && npm run build:ssr",
+    "build:ssr": "esbuild scripts/render-markdown.mjs --bundle --platform=node --format=cjs --target=node18 --outfile=dist-ssr/render-markdown.cjs",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "compat": "node scripts/compat-check.mjs && es-check es2020 'dist/assets/*.js' --module"
+    "compat": "node scripts/compat-check.mjs && es-check es2020 'dist/assets/*.js' --module && es-check es5 ../src/main/resources/web-legacy/poll.js"
   },
   "browserslist": [
     "Firefox >= 115",

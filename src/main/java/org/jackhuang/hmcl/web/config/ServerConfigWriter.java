@@ -200,6 +200,30 @@ public final class ServerConfigWriter {
         writeAtomically(yamlFile, root);
     }
 
+    /// Records the legacy surface's enhancement switch in `server.yaml`
+    /// (`plain.enhanced`). Other keys in the section ride along untouched, the
+    /// same way [updateWebShell] treats `web_shell`.
+    ///
+    /// @param dataDir  the data directory `server.yaml` lives in
+    /// @param enhanced whether `/plain` serves fragments, the poller and
+    ///                 server-rendered markdown, or only the degraded fallback
+    public static void updatePlainEnhanced(Path dataDir, boolean enhanced) throws IOException {
+        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
+        Map<String, Object> root = readExisting(yamlFile);
+
+        Object current = root.get("plain");
+        Map<String, Object> section = new LinkedHashMap<>();
+        if (current instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                section.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        section.put("enhanced", enhanced);
+        root.put("plain", section);
+
+        writeAtomically(yamlFile, root);
+    }
+
     /// Reads the existing document, or an empty map when there is none.
     private static Map<String, Object> readExisting(Path yamlFile) throws IOException {
         Map<String, Object> root = new LinkedHashMap<>();

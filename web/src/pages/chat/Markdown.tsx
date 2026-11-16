@@ -1,18 +1,11 @@
 import { memo, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import rehypeSanitize from "rehype-sanitize";
 import rehypeHighlight from "rehype-highlight";
 import { ContentCopyIcon, DownloadIcon } from "../../components/icons";
 import type { ChatSearchHit } from "../../types";
-
-/** hast 节点的纯文本；rehype-highlight 之后代码块里是 span 数组，不能只看 children。 */
-function hastText(node: any): string {
-  if (!node) return "";
-  if (typeof node.value === "string") return node.value;
-  if (Array.isArray(node.children)) return node.children.map(hastText).join("");
-  return "";
-}
+import { hastText, languageOf, prepareText, sanitizeSchema } from "./markdown-schema";
 
 function stripAnsi(text: string): string {
   return text.replace(/\u001b\[[0-9;]*m/g, "");
@@ -24,11 +17,7 @@ function CodeBlock({ node, children }: { node?: any; children?: ReactNode }) {
   const [wrap, setWrap] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const raw = hastText(node).replace(/\n$/, "");
-  const codeNode = node?.children?.find((child: any) => child.tagName === "code") ?? node;
-  const classes = Array.isArray(codeNode?.properties?.className)
-    ? codeNode.properties.className.join(" ")
-    : typeof codeNode?.properties?.className === "string" ? codeNode.properties.className : "";
-  const language = /language-([\w+-]+)/.exec(classes)?.[1] ?? "";
+  const language = languageOf(node);
   const long = raw.split("\n").length > 32;
 
   const copy = async () => {
@@ -79,19 +68,6 @@ function CodeBlock({ node, children }: { node?: any; children?: ReactNode }) {
   );
 }
 
-const sanitizeSchema = {
-  ...defaultSchema,
-  attributes: {
-    ...defaultSchema.attributes,
-    span: [...(defaultSchema.attributes?.span ?? []), "className"],
-    code: [...(defaultSchema.attributes?.code ?? []), "className"],
-  },
-  protocols: {
-    ...defaultSchema.protocols,
-    href: ["http", "https", "mailto"],
-  },
-};
-
 /** GFM + sanitize + highlight。不启用 raw HTML。 */
 function MarkdownImpl({ content, streaming, citations, sources }: {
   content: string;
@@ -101,38 +77,7 @@ function MarkdownImpl({ content, streaming, citations, sources }: {
   /** DeepSeek 官方引用：正文里的 [citation:N] 按来源顺序换成链接。 */
   sources?: ChatSearchHit[];
 }) {
-  let text = content ?? "";
-  if (streaming) {
-    // 未闭合的围栏临时补上，避免流式时整段代码被当成普通段落抖动。
-    const fences = (text.match(/^```/gm) ?? []).length;
-    if (fences % 2 === 1) text += "\n```";
-  }
-  if (sources && sources.length > 0) {
-    text = text.replace(/\[citation:(\d+)\]/g, (_, raw) => {
-      const index = Number(raw) - 1;
-      const source = sources[index];
-      if (!source) return `[${raw}]`;
-      return `[${raw}](${source.url})`;
-    });
-  }
-  if (citations && Object.keys(citations).length > 0) {
-    // rehype-sanitize 只放行 http/https/mailto，短 id 会被当成非法协议删掉，
-    // 所以先在这里换成真实 URL。
-    // 模型不一定照抄短 id：也会写 index（1、2…）、直接把 URL 塞进括号，
-    // 或者把两个 id 连成「8e788c→9e788c」。三种都兜一下。
-    text = text.replace(/\[citation,([^\]]+)\]\(([^)\s]+)\)/g, (_, domain, target) => {
-      if (/^https?:\/\//i.test(target)) {
-        return `[${domain}](${target})`;
-      }
-      const direct = citations[target];
-      if (direct) {
-        return `[${domain}](${direct})`;
-      }
-      const hex = target.match(/[0-9a-f]{6}/i);
-      const url = hex ? citations[hex[0].toLowerCase()] : undefined;
-      return url ? `[${domain}](${url})` : `[${domain}]`;
-    });
-  }
+  const text = prepareText(content ?? "", { streaming, citations, sources });
   return (
     <div className="chat-markdown">
       <ReactMarkdown

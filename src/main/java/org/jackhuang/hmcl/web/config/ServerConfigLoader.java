@@ -178,10 +178,14 @@ public final class ServerConfigLoader {
         if (root.containsKey("network")) {
             applyNetwork(config, mapField(root, "network"));
         }
+        if (root.containsKey("plain")) {
+            applyPlain(config, mapField(root, "plain"));
+        }
         for (String key : root.keySet()) {
             switch (key) {
                 case "bind_host", "port", "public_base_url", "https", "auth", "web_shell",
-                        "developer_guard", "agent", "mc", "transcode", "logs", "network" -> {
+                        "developer_guard", "agent", "mc", "transcode", "logs", "network",
+                        "plain" -> {
                 }
                 default -> logger.warning(yamlFile + ": unknown key `" + key + "` ignored");
             }
@@ -192,6 +196,12 @@ public final class ServerConfigLoader {
     ///
     /// 写进来的必须是 ISO-8601 时刻；解析不了就拒绝启动，而不是悄悄当成"严格"或
     /// "永久"——两个方向都是安全上的错答案。
+    private static void applyPlain(ServerConfig config, Map<String, Object> section) {
+        if (section.containsKey("enhanced")) {
+            config.plain.enhanced = booleanField(section, "enhanced");
+        }
+    }
+
     private static void applyNetwork(ServerConfig config, Map<String, Object> section) {
         if (section.containsKey("accept_unverified_until")) {
             String raw = stringField(section, "accept_unverified_until");

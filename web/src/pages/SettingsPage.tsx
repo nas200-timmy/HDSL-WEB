@@ -8,6 +8,7 @@ import { McAboutCard } from "../components/McAboutCard";
 import { LogsCard } from "../components/LogsCard";
 import { SystemMonitorCard } from "../components/SystemMonitorCard";
 import { StorageCard } from "../components/StorageCard";
+import { PlainSurfaceCard } from "../components/PlainSurfaceCard";
 import { FileDropInput } from "../components/FileDropInput";
 import {
   AddIcon,
@@ -406,6 +407,8 @@ function GeneralTab() {
       <SystemMonitorCard />
 
       <StorageCard />
+
+      <PlainSurfaceCard />
 
       <div className="section-caption">
         <InfoIcon size={16} />

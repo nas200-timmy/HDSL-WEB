@@ -29,30 +29,16 @@ import java.util.Locale;
 ///
 /// Everything here is plain HTML 4-era markup: tables, forms, `<pre>`, links.
 /// No script, no flex, no custom elements, so a text browser (w3m, lynx) and an
-/// old graphical browser render the same page. The only visual sugar is a small
-/// inline stylesheet, which those browsers ignore.
+/// old graphical browser render the same page. All styling lives in
+/// `web-legacy/legacy.css`, which the servlet links on every page of this
+/// surface; keeping it out of the document means the stylesheet, not an inline
+/// block, decides the look.
 @NotNullByDefault
 final class PlainHtml {
 
     /// `MM-dd HH:mm` in the server's timezone; text browsers do not localise.
     private static final DateTimeFormatter TIME =
             DateTimeFormatter.ofPattern("MM-dd HH:mm", Locale.ROOT);
-
-    private static final String STYLE = """
-            body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;max-width:60rem;
-                 margin:0 auto;padding:1rem;line-height:1.5;color:#111}
-            a{color:#0b57d0}
-            table{border-collapse:collapse;width:100%}
-            th,td{border-bottom:1px solid #ddd;padding:.35rem .5rem;text-align:left;
-                  vertical-align:top}
-            pre.msg{white-space:pre-wrap;word-wrap:break-word;background:#f6f6f6;
-                    border:1px solid #ddd;padding:.75rem;margin:.25rem 0 .75rem}
-            textarea{width:100%;min-height:6rem;font:inherit}
-            .muted{color:#666}
-            .error{color:#a00;font-weight:600}
-            .row{display:block;margin:.5rem 0}
-            nav a{margin-right:1rem}
-            """;
 
     private PlainHtml() {
     }
@@ -103,7 +89,6 @@ final class PlainHtml {
                 + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
                 + "<title>" + escape(title) + "</title>\n"
                 + (headExtra == null ? "" : headExtra + "\n")
-                + "<style>" + STYLE + "</style>\n"
                 + "</head><body>\n"
                 + body
                 + "\n</body></html>\n";

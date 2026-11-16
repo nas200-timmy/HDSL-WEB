@@ -1,0 +1,195 @@
+/* HDSL-web legacy surface stylesheet — the HMCL look without flex or variables.
+ *
+ * IE11-safe on purpose: tables for layout (its flexbox is broken), solid and
+ * rgba() colors (no custom properties), border-radius / box-shadow / background-size
+ * (all IE9+). The wallpaper itself is injected inline by the servlet because its
+ * URL carries the mount point; this file only styles the shell that sits on it.
+ * w3m ignores all of it and renders the same markup as a readable text grid.
+ */
+body {
+  margin: 0;
+  padding: 0;
+  color: #1c2733;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  line-height: 1.5;
+  background-color: #202a36;
+}
+
+/* two-column shell: nav card + content card over the wallpaper */
+table.shell {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 12px;
+  table-layout: fixed;
+}
+td.shell-nav {
+  width: 11rem;
+  vertical-align: top;
+  background: #f4f7fb;
+  background: rgba(248, 251, 255, 0.93);
+  border: 1px solid #b9c6d6;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(10, 20, 35, 0.35);
+  padding: 10px;
+}
+td.shell-main {
+  vertical-align: top;
+  background: #fbfcfe;
+  background: rgba(251, 252, 254, 0.95);
+  border: 1px solid #b9c6d6;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(10, 20, 35, 0.35);
+  padding: 12px 18px 20px;
+}
+
+/* left navigation, HMCL's list style */
+.navlist strong {
+  display: block;
+  padding: 6px 8px 10px;
+  font-size: 1.05rem;
+  color: #202a36;
+  border-bottom: 2px solid #0b57d0;
+  margin-bottom: 6px;
+}
+.navlist a {
+  display: block;
+  padding: 6px 8px;
+  margin: 2px 0;
+  color: #0b57d0;
+  text-decoration: none;
+  border-radius: 6px;
+}
+.navlist a:hover {
+  background: #dce7f5;
+}
+.navlist form {
+  margin: 8px 0 0;
+}
+.navlist button {
+  width: 100%;
+}
+
+/* content */
+h1 {
+  font-size: 1.35rem;
+  color: #202a36;
+  border-bottom: 2px solid #0b57d0;
+  padding-bottom: 6px;
+  margin: 4px 0 12px;
+}
+h2 {
+  font-size: 1.1rem;
+  color: #202a36;
+  margin: 16px 0 8px;
+}
+a { color: #0b57d0; }
+.toolbar {
+  margin: 0 0 8px;
+}
+.toolbar a {
+  display: inline-block;
+  margin-right: 12px;
+  padding: 3px 10px;
+  border: 1px solid #b9c6d6;
+  border-radius: 6px;
+  background: #fff;
+  text-decoration: none;
+  font-size: .9rem;
+}
+.toolbar a:hover { background: #dce7f5; }
+
+/* data tables as cards */
+table:not(.shell) {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  background: #fff;
+  border: 1px solid #d4dde8;
+  border-radius: 8px;
+  overflow: hidden;
+}
+th, td {
+  padding: .4rem .6rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid #e3eaf2;
+}
+th {
+  background: #eef3f9;
+  color: #33475b;
+  font-weight: 600;
+}
+tr:last-child td { border-bottom: 0; }
+
+/* message and code cards */
+pre.msg, pre.chat-code-body {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  background: #fff;
+  border: 1px solid #d4dde8;
+  border-left: 4px solid #0b57d0;
+  border-radius: 6px;
+  padding: .6rem .8rem;
+  margin: .25rem 0 .75rem;
+}
+.chat-code { margin: .5rem 0; }
+.chat-code-head {
+  background: #eef3f9;
+  border: 1px solid #d4dde8;
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  padding: .2rem .6rem;
+  font-size: .85rem;
+  color: #5a6b7d;
+}
+.chat-code-head .chat-code-lang { font-weight: 600; }
+.chat-code-head .chat-code-lines { float: right; }
+.chat-code-body {
+  margin-top: 0;
+  border-radius: 0 0 6px 6px;
+  border-left-width: 1px;
+}
+
+/* forms */
+textarea, input[type="text"], input[type="password"], select {
+  font: inherit;
+  border: 1px solid #b9c6d6;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: #fff;
+}
+textarea { width: 98%; min-height: 6rem; }
+button {
+  font: inherit;
+  background: #0b57d0;
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+button:hover { background: #0a4ab8; }
+
+.muted { color: #5a6b7d; }
+.error { color: #a00; font-weight: 600; }
+.row { display: block; margin: .5rem 0; }
+
+/* server-rendered markdown */
+.legacy-md h1, .legacy-md h2, .legacy-md h3 { line-height: 1.25; }
+.legacy-md table { width: auto; }
+.legacy-md th, .legacy-md td { border: 1px solid #d4dde8; border-bottom: 1px solid #d4dde8; }
+.legacy-md blockquote {
+  margin: .5rem 0;
+  padding: .25rem .75rem;
+  border-left: 3px solid #b9c6d6;
+  color: #5a6b7d;
+}
+
+/* highlight.js token subset */
+.hljs-comment { color: #008000; }
+.hljs-keyword, .hljs-type { color: #0000ff; }
+.hljs-string, .hljs-regexp { color: #a31515; }
+.hljs-number, .hljs-literal { color: #098658; }
+.hljs-title, .hljs-function .hljs-title { color: #795e26; }
+.hljs-variable, .hljs-attr, .hljs-attribute { color: #001080; }
+.hljs-meta, .hljs-symbol, .hljs-bullet { color: #267f99; }
