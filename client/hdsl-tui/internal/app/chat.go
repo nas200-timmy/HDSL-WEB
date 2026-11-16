@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -18,6 +19,9 @@ const (
 	chatBody   = "\x1b[30;47m"
 	chatHeader = "\x1b[30;46m"
 	chatDim    = "\x1b[90m"
+	chatUser   = "\x1b[36m"
+	chatHelper = "\x1b[32m"
+	chatFg     = "\x1b[30m"
 )
 
 // chatState is everything one chat screen owns. It lives on the stack of
@@ -292,6 +296,10 @@ func (a *App) chatKey(ctx context.Context, client *panel.Client, st *chatState, 
 		}
 		return chatQuit, false
 	case ui.KeyExpand:
+		if !sessionHasTimeline(st.session) {
+			st.notice = "这条会话没有可展开的思考/搜索"
+			return chatStay, true
+		}
 		st.expand = !st.expand
 		st.renderCache = map[string][]string{}
 		return chatStay, true
@@ -331,6 +339,10 @@ func (a *App) chatKey(ctx context.Context, client *panel.Client, st *chatState, 
 		}
 		st.area.AddHistory(text)
 		st.area.Clear()
+		// The completion list sits above the status line; leaving it populated
+		// made a command's own answer ("已关闭联网搜索", "还没配置…") invisible.
+		st.completion = nil
+		st.compIndex = 0
 		if strings.HasPrefix(text, "/") {
 			return a.chatCommand(ctx, client, st, text)
 		}
@@ -349,6 +361,9 @@ func (a *App) chatKey(ctx context.Context, client *panel.Client, st *chatState, 
 	}
 	if strings.HasPrefix(st.area.String(), "/") {
 		st.completion = chatCompletions(st.area.String())
+		st.compIndex = 0
+	} else {
+		st.completion = nil
 		st.compIndex = 0
 	}
 	return chatStay, true
@@ -454,6 +469,19 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 		st.session = session
 		return chatStay, true
 	case "/search":
+		if assistantPreset(st, st.session.AssistantID) != "" {
+			st.notice = "这个助手用 DeepSeek 官方搜索，面板的搜索开关对它不生效"
+			return chatStay, true
+		}
+		status, err := client.ChatSearchStatus(ctx)
+		if err != nil {
+			a.chatFail(st, "读取搜索状态失败：", err)
+			return chatStay, true
+		}
+		if !status.Configured {
+			st.notice = "还没配置搜索服务商：聊天设置 → 联网搜索"
+			return chatStay, true
+		}
 		st.search = !st.search
 		if st.search {
 			st.notice = "本轮起开启联网搜索"
@@ -740,17 +768,17 @@ func (a *App) chatTranscript(st *chatState, width int) []string {
 			continue
 		}
 		if node.Role == "user" {
-			lines = append(lines, chatDimLine("你 · "+chatTime(message.CreatedAt)))
+			lines = append(lines, chatUser+"❯ 你 · "+chatTime(message.CreatedAt)+chatFg)
 			lines = append(lines, wrapPlain(message.Content, width)...)
 		} else {
-			label := "助手 · " + chatTime(message.CreatedAt)
+			label := chatHelper + "● 助手 · " + chatTime(message.CreatedAt)
 			if message.Status == "streaming" {
 				label += " · 生成中"
 			} else if message.Status == "error" {
 				label += " · 失败"
 			}
-			lines = append(lines, chatDimLine(label))
-			lines = append(lines, a.chatParts(st, message, width)...)
+			lines = append(lines, label+chatFg)
+			lines = append(lines, a.chatTimeline(st, message, width)...)
 			lines = append(lines, a.chatMarkdown(st, message.Content, width)...)
 			if len(message.Attachments) > 0 {
 				var names []string
@@ -781,11 +809,36 @@ func (a *App) chatTranscript(st *chatState, width int) []string {
 	return lines
 }
 
+// chatTimeline picks the stored timeline shape: OpenAI protocol messages keep
+// `parts`, the DeepSeek preset keeps `blocks`. Both render as the same kind of
+// one-line summary per step.
+func (a *App) chatTimeline(st *chatState, message panel.ChatMessage, width int) []string {
+	if len(message.Parts) > 0 {
+		return a.chatParts(st, message, width)
+	}
+	if len(message.Blocks) > 0 {
+		return a.chatBlocks(st, message, width)
+	}
+	return nil
+}
+
 // chatParts renders the stored reasoning/tool timeline as one summary line per
 // step; Ctrl-O expands the reasoning and source text.
 func (a *App) chatParts(st *chatState, message panel.ChatMessage, width int) []string {
+	calls := map[string]panel.ChatToolCall{}
+	for _, part := range message.Parts {
+		if part.Type == "tool_calls" {
+			for _, call := range part.Calls {
+				calls[call.ID] = call
+			}
+		}
+	}
 	var lines []string
 	seen := map[string]bool{}
+	arrow := "▸ "
+	if st.expand {
+		arrow = "▾ "
+	}
 	for _, part := range message.Parts {
 		switch part.Type {
 		case "thinking":
@@ -793,23 +846,32 @@ func (a *App) chatParts(st *chatState, message panel.ChatMessage, width int) []s
 			if part.DurationMs > 0 {
 				duration = fmt.Sprintf(" %.1fs", float64(part.DurationMs)/1000)
 			}
-			lines = append(lines, chatDimLine("思考"+duration))
+			lines = append(lines, chatDimLine(arrow+"思考"+duration))
 			if st.expand && strings.TrimSpace(part.Text) != "" {
 				lines = append(lines, wrapPlain(part.Text, width)...)
 			}
 		case "tool":
-			query := part.Query
-			if query == "" {
-				query = part.Name
+			call := calls[part.ID]
+			name := call.Name
+			if name == "" {
+				name = part.Name
 			}
+			query := queryOfArguments(call.Arguments)
 			if query == "" {
-				query = part.ID
+				query = part.Query
 			}
-			summary := "搜索：" + query
+			label := "搜索"
+			if strings.Contains(name, "scrape") || strings.Contains(name, "read_url") {
+				label = "读取网页"
+			}
+			summary := label
+			if query != "" {
+				summary += "：" + query
+			}
 			if part.Hits > 0 {
 				summary += fmt.Sprintf(" · %d 条", part.Hits)
 			}
-			lines = append(lines, chatDimLine(summary))
+			lines = append(lines, chatDimLine(arrow+summary))
 			if st.expand {
 				for _, source := range part.Sources {
 					if source.URL == "" || seen[source.URL] {
@@ -822,6 +884,133 @@ func (a *App) chatParts(st *chatState, message panel.ChatMessage, width int) []s
 		}
 	}
 	return lines
+}
+
+// chatBlocks renders the DeepSeek-protocol timeline: thinking blocks and the
+// server tools (deepseek_web_search / deepseek_read_url), whose results carry
+// the sources.
+func (a *App) chatBlocks(st *chatState, message panel.ChatMessage, width int) []string {
+	sources := map[string][]panel.ChatSource{}
+	for _, block := range message.Blocks {
+		if strings.HasSuffix(block.Type, "_tool_result") && block.ToolUseID != "" {
+			sources[block.ToolUseID] = blockSources(block.Content)
+		}
+	}
+	var lines []string
+	seen := map[string]bool{}
+	arrow := "▸ "
+	if st.expand {
+		arrow = "▾ "
+	}
+	for _, block := range message.Blocks {
+		switch block.Type {
+		case "thinking":
+			lines = append(lines, chatDimLine(arrow+"思考"))
+			if st.expand && strings.TrimSpace(block.Thinking) != "" {
+				lines = append(lines, wrapPlain(block.Thinking, width)...)
+			}
+		case "server_tool_use":
+			label := "搜索"
+			if strings.Contains(block.Name, "read_url") {
+				label = "读取网页"
+			}
+			query := blockQuery(block.Input)
+			got := sources[block.ID]
+			summary := label
+			if query != "" {
+				summary += "：" + query
+			}
+			if len(got) > 0 {
+				summary += fmt.Sprintf(" · %d 条", len(got))
+			}
+			lines = append(lines, chatDimLine(arrow+summary))
+			if st.expand {
+				for _, source := range got {
+					if source.URL == "" || seen[source.URL] {
+						continue
+					}
+					seen[source.URL] = true
+					lines = append(lines, chatDimLine("  "+md.LinkLine(source.Title, source.URL)))
+				}
+			}
+		}
+	}
+	return lines
+}
+
+func sessionHasTimeline(session panel.ChatSession) bool {
+	for _, node := range session.Nodes {
+		if message, ok := node.Active(); ok && (len(message.Parts) > 0 || len(message.Blocks) > 0) {
+			return true
+		}
+	}
+	return false
+}
+
+func assistantPreset(st *chatState, assistantID string) string {
+	for _, assistant := range st.assistants {
+		if assistant.ID == assistantID {
+			return assistant.Preset
+		}
+	}
+	return ""
+}
+
+func queryOfArguments(arguments string) string {
+	if strings.TrimSpace(arguments) == "" {
+		return ""
+	}
+	var value struct {
+		Query   string   `json:"query"`
+		Queries []string `json:"queries"`
+		URL     string   `json:"url"`
+	}
+	if err := json.Unmarshal([]byte(arguments), &value); err != nil {
+		return ""
+	}
+	if value.Query != "" {
+		return value.Query
+	}
+	if len(value.Queries) > 0 {
+		return strings.Join(value.Queries, " / ")
+	}
+	return value.URL
+}
+
+func blockQuery(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var value struct {
+		Query   string   `json:"query"`
+		Queries []string `json:"queries"`
+		URL     string   `json:"url"`
+	}
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	if value.Query != "" {
+		return value.Query
+	}
+	if len(value.Queries) > 0 {
+		return strings.Join(value.Queries, " / ")
+	}
+	return value.URL
+}
+
+func blockSources(raw json.RawMessage) []panel.ChatSource {
+	if len(raw) == 0 {
+		return nil
+	}
+	var list []panel.ChatSource
+	if err := json.Unmarshal(raw, &list); err == nil && len(list) > 0 {
+		return list
+	}
+	var one panel.ChatSource
+	if err := json.Unmarshal(raw, &one); err == nil && one.URL != "" {
+		return []panel.ChatSource{one}
+	}
+	return nil
 }
 
 func (a *App) chatMarkdown(st *chatState, text string, width int) []string {
@@ -842,9 +1031,9 @@ func (a *App) chatMarkdown(st *chatState, text string, width int) []string {
 
 func chatCompletions(value string) []string {
 	commands := []string{
-		"/help", "/new", "/sessions", "/assistant", "/model", "/title",
-		"/search", "/stop", "/regen", "/edit", "/copy", "/settings",
-		"/status", "/clear", "/quit",
+		"/help", "/h", "/?", "/new", "/clear", "/sessions", "/resume",
+		"/assistant", "/model", "/title", "/rename", "/search", "/stop",
+		"/regen", "/edit", "/copy", "/settings", "/config", "/status", "/quit",
 	}
 	var matches []string
 	for _, command := range commands {

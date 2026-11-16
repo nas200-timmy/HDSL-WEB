@@ -18,6 +18,8 @@ type ChatAssistant struct {
 	OpeningMessage string `json:"openingMessage"`
 	Account        string `json:"account"`
 	Model          string `json:"model"`
+	Preset         string `json:"preset"`
+	Protocol       string `json:"protocol"`
 }
 
 // ChatSessionSummary is one row of the session list.
@@ -83,8 +85,24 @@ type ChatMessage struct {
 	Model       string           `json:"model"`
 	CreatedAt   int64            `json:"createdAt"`
 	Parts       []ChatPart       `json:"parts"`
+	Blocks      []ChatBlock      `json:"blocks"`
 	Sources     []ChatSource     `json:"sources"`
 	Attachments []ChatAttachment `json:"attachments"`
+}
+
+// ChatBlock is one DeepSeek-protocol content block: thinking, server tool use,
+// tool result or text. The plain timeline renderer reads these when a message
+// has no `parts` (the DeepSeek preset stores blocks instead).
+type ChatBlock struct {
+	Type      string          `json:"type"`
+	Thinking  string          `json:"thinking"`
+	Text      string          `json:"text"`
+	Signature string          `json:"signature"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
 }
 
 // ChatNode is one turn: a user question or an assistant answer, with variants.

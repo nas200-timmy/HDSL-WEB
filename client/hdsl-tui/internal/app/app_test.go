@@ -474,3 +474,26 @@ func TestBrandIsTUIFallsBackForOldPanels(t *testing.T) {
 		t.Fatal("an explicit web capability must override the fallback")
 	}
 }
+
+func TestBlockTimelineHelpers(t *testing.T) {
+	if got := blockQuery([]byte(`{"query":"go tui"}`)); got != "go tui" {
+		t.Fatalf("query = %q", got)
+	}
+	if got := blockQuery([]byte(`{"queries":["a","b"]}`)); got != "a / b" {
+		t.Fatalf("queries = %q", got)
+	}
+	if got := blockQuery([]byte(`{"url":"https://example.com"}`)); got != "https://example.com" {
+		t.Fatalf("url = %q", got)
+	}
+	sources := blockSources([]byte(`[{"title":"a","url":"https://a.example"}]`))
+	if len(sources) != 1 || sources[0].URL != "https://a.example" {
+		t.Fatalf("sources = %+v", sources)
+	}
+	one := blockSources([]byte(`{"title":"b","url":"https://b.example"}`))
+	if len(one) != 1 || one[0].URL != "https://b.example" {
+		t.Fatalf("single source = %+v", one)
+	}
+	if got := queryOfArguments(`{"url":"https://c.example"}`); got != "https://c.example" {
+		t.Fatalf("tool url = %q", got)
+	}
+}
