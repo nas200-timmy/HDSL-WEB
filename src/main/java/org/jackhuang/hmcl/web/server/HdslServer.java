@@ -77,6 +77,7 @@ import org.jackhuang.hmcl.web.brand.BrandApiServlet;
 import org.jackhuang.hmcl.web.brand.BrandCatalog;
 import org.jackhuang.hmcl.web.chat.ChatApiServlet;
 import org.jackhuang.hmcl.web.chat.ChatModule;
+import org.jackhuang.hmcl.web.plain.MarkdownSsr;
 import org.jackhuang.hmcl.web.plain.PlainChatServlet;
 import org.jackhuang.hmcl.web.zcode.ZcodeApiServlet;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -402,12 +403,21 @@ public final class HdslServer {
         // The no-JavaScript surface (docs/plain-surface.md). Registered even when
         // chat is unavailable: /plain/old is the landing page for browsers that
         // cannot run the SPA, and it must answer on a degraded install too.
+        MarkdownSsr plainSsr = new MarkdownSsr(config.dataDir,
+                config.dataDir.resolve("plain-md"));
         context.addServlet(new ServletHolder(new PlainChatServlet(
                 chat == null ? null : chat.service(), authService, authFilter,
                 config.auth.disabled, config.basePath, developerAuth, developerElevation,
-                tlsActive, config,
-                new org.jackhuang.hmcl.web.plain.MarkdownSsr(
-                        config.dataDir.resolve("plain-md")))), "/plain/*");
+                tlsActive, config, plainSsr)), "/plain/*");
+        // Render the transcript while the turn is still fresh instead of making
+        // the first reader wait for one Node process per message.
+        if (chat != null) {
+            chat.service().turns().setMessageFinalizer((messageId, content) -> {
+                if (config.plain.enhanced) {
+                    plainSsr.prefetch(messageId, content);
+                }
+            });
+        }
         context.addServlet(new ServletHolder(new VendorsApiServlet()), "/api/vendors");
         context.addServlet(new ServletHolder(new ModelsApiServlet()), "/api/models/*");
         context.addServlet(new ServletHolder(new ZcodeApiServlet(config, terminals, terminalTickets,
@@ -430,7 +440,7 @@ public final class HdslServer {
                 config, developerElevation, authService, tlsActive)), "/api/settings/logs/*");
         // 纯文本版（legacy 表面）的增强开关，同一条最长前缀规则。
         context.addServlet(new ServletHolder(new PlainSettingsApiServlet(
-                config, developerElevation, authService, tlsActive)), "/api/settings/plain");
+                config, developerElevation, authService, tlsActive, plainSsr)), "/api/settings/plain");
         // The brand page's own data (sources + policy). Same reason for the longer prefix: the
         // `/api/settings/*` holder below is TLS, and Jetty matches the longest path spec.
         context.addServlet(new ServletHolder(new BrandSettingsApiServlet(

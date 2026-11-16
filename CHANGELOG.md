@@ -2,6 +2,20 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## Unreleased · 纯文本版 SSR 可靠性
+
+- Node 解析改为「面板托管运行时优先，PATH 兜底」：Windows 裸部署的
+  `<data>/hdsl/runtimes/*/node.exe` 不在 PATH，之前会静默退回 `<pre>`；现在托管运行时按
+  mtime 取最新并记录日志。
+- `/api/settings/plain` 增加 `ssrAvailable`，设置卡片显示「Markdown 预渲染：可用/不可用」，
+  不再静默降级。
+- 渲染改为异步：`ChatTurnManager` 在 turn 持久化后调用 finalizer，`MarkdownSsr.prefetch`
+  在后台池里渲染；`render()` 只读缓存，请求不再等待 Node。
+- 进程并发上限 2；watchdog 在 10 秒后强杀渲染进程，修掉「先读 stdout 再 waitFor」导致的
+  无限阻塞（stdin 写入也在同一超时保护内）。
+- 测试：托管 Node 选择（最新、需可执行）、异步 SSR 等待渲染结果、`ssrAvailable` 字段；
+  `./gradlew test` 通过。
+
 ## v0.6.90 — 2026-11-16 · 终端客户端聊天（P0 + P1）
 
 > `hdsl-tui` 的主菜单第一项现在是聊天：单列消息流、贴底输入框、斜杠命令、Markdown、

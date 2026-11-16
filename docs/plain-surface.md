@@ -117,14 +117,21 @@ legacy 表面不是白底裸表格：每个页面都是「壁纸 + 双栏表格�
 
 - `web/scripts/render-markdown.mjs` 在构建期被 esbuild 打成单文件
   （`web/dist-ssr/render-markdown.cjs`，gradle 同步进 `src/main/resources/web-legacy/ssr/`），
-  运行时由 `MarkdownSsr` 解包到 `<data>/plain-md/` 并用面板 PATH 上的 `node` 执行。
+  运行时由 `MarkdownSsr` 解包到 `<data>/plain-md/`，用 Node 执行：**优先面板自己托管的
+  运行时** `<data>/hdsl/runtimes/*/node`（按 mtime 取最新），找不到才回落到 PATH。
+  Windows 裸部署的托管 Node 不在 PATH，这条顺序是它也能预渲染的原因。
 - 渲染管线与 SPA 完全同源：react-markdown + remark-gfm + rehype-sanitize（共享
   `web/src/pages/chat/markdown-schema.ts` 的 schema 与 citation 变换）+ rehype-highlight；
   代码块只渲染语言标签，不渲染复制/下载/换行按钮（无 JS 环境无意义）。
 - 每条**定稿**的助手消息渲染一次，缓存为 `<data>/plain-md/<messageId>-<sha256(content)>.html`；
   regenerate / edit 改变内容哈希即 miss。流式中的消息仍按转义 `<pre>` 显示。
+  渲染是**异步**的：turn 结束的 finalizer 直接触发 prefetch，`render()` 只读缓存、不阻塞请求；
+  首次打开才会遇到的旧消息也会在后台补齐，下一次刷新换成渲染后的 HTML。
 - 任何失败（无 Node、无 bundle、渲染崩溃、10 秒超时、输出超 4 MB）都降级为转义 `<pre>`：
   legacy 表面不会因为“漂亮渲染失败”而丢掉消息。缓存超过 2000 个文件时按 mtime 清最旧。
+- 进程并发上限 2；每个进程由 watchdog 在 10 秒后强杀，stdout 读取不会再无限占住请求线程。
+- `GET /api/settings/plain` 返回 `ssrAvailable`，设置卡片显示「Markdown 预渲染：可用/不可用」，
+  没有 Node 时不再静默降级。
 
 ## 8. 聊天循环
 
@@ -149,7 +156,8 @@ legacy 表面不是白底裸表格：每个页面都是「壁纸 + 双栏表格�
 `PUT /api/settings/plain`，写要开发者提权）在两种形态间切换，立即生效、不用重启：
 
 - **开（默认）**：fragment 长轮询自动更新、ES5 轮询器、服务端预渲染 markdown——本文
-  第 5、6 节的全部能力；
+  第 5、6 节的全部能力；卡片同时显示预渲染是否真的可用（`ssrAvailable`），没有 Node 时
+  正文会退回 `<pre>`，但其余增强照常工作；
 - **关**：单纯降级页——表单 + 整页 meta 刷新、正文按转义 `<pre>`、`/plain/f/*` 回 404、
   所有页面回到 `default-src 'none'` 的严格 CSP。
 

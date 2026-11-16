@@ -213,11 +213,14 @@ class PlainLegacyTest {
                     running.baseUrl() + "/plain/s/" + sessionId + "/send",
                     "text=" + URLEncoder.encode("render me", StandardCharsets.UTF_8), null).statusCode());
 
-            String page = waitFor(TestSupport.client(), running.baseUrl(), sessionId,
-                    Duration.ofSeconds(15));
             boolean ssrShipped = MarkdownSsr.class.getResourceAsStream(
                     "/web-legacy/ssr/render-markdown.cjs") != null
                     && org.jackhuang.hmcl.util.platform.Executables.resolve("node").isPresent();
+            // Rendering is asynchronous (turn-finish prefetch): wait for the
+            // rendered fragment, not for the raw text that appears first.
+            String page = waitFor(TestSupport.client(), running.baseUrl(), sessionId,
+                    ssrShipped ? "<strong>render</strong>" : "**render**",
+                    Duration.ofSeconds(15));
             if (ssrShipped) {
                 assertTrue(page.contains("chat-markdown legacy-md"), page);
                 try (var cached = Files.list(dataDir.resolve("plain-md"))) {
@@ -243,6 +246,7 @@ class PlainLegacyTest {
             HttpResponse<String> initial = get(client, base + "/api/settings/plain", cookie);
             assertEquals(200, initial.statusCode(), initial.body());
             assertTrue(initial.body().contains("\"enhanced\":true"), initial.body());
+            assertTrue(initial.body().contains("\"ssrAvailable\":"), initial.body());
 
             // Flipping the surface an operator's old browsers rely on is an
             // operator decision: the password proof comes first.
@@ -338,17 +342,17 @@ class PlainLegacyTest {
     }
 
     private static String waitFor(HttpClient client, String base, String sessionId,
-                                  Duration timeout) throws Exception {
+                                  String needle, Duration timeout) throws Exception {
         long deadline = System.nanoTime() + timeout.toNanos();
         String last = "";
         while (System.nanoTime() < deadline) {
             last = get(client, base + "/plain/s/" + sessionId, null).body();
-            if (last.contains("**render**") || last.contains("<strong>render</strong>")) {
+            if (last.contains(needle)) {
                 return last;
             }
             Thread.sleep(200);
         }
-        throw new AssertionError("the answer never appeared; last page: " + last);
+        throw new AssertionError("the page never contained " + needle + "; last page: " + last);
     }
 
     private static HttpResponse<String> get(HttpClient client, String url, @org.jetbrains.annotations.Nullable String cookie)

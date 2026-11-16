@@ -120,6 +120,17 @@ public final class ChatTurnManager {
     private volatile LocalDate dailyDate = LocalDate.now();
     private volatile ChatSettings.Settings settings;
 
+    /// Called with (messageId, content) after a turn's final text is persisted.
+    /// The plain surface uses it to pre-render Markdown in the background; a
+    /// failing listener must never fail the turn.
+    private volatile @Nullable java.util.function.BiConsumer<String, String> messageFinalizer;
+
+    /// Installs the post-persist hook (see [messageFinalizer]).
+    public void setMessageFinalizer(
+            @Nullable java.util.function.BiConsumer<String, String> finalizer) {
+        this.messageFinalizer = finalizer;
+    }
+
     public ChatTurnManager(ChatStore store, ChatAttachments attachments, EventBus bus,
                            ChatSettings.Settings settings) {
         this.store = store;
@@ -1962,6 +1973,15 @@ public final class ChatTurnManager {
             } catch (SQLException e) {
                 org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
                         "Could not persist chat message " + turn.messageId, e);
+            }
+            java.util.function.BiConsumer<String, String> finalizer = messageFinalizer;
+            if (finalizer != null) {
+                try {
+                    finalizer.accept(turn.messageId, turn.content.toString());
+                } catch (RuntimeException e) {
+                    org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                            "Chat message finalizer failed for " + turn.messageId, e);
+                }
             }
             JsonObject event = event("chat-turn-finished", turn);
             event.addProperty("status", status);

@@ -747,9 +747,12 @@ export const api = {
     ),
   /** 纯文本版（legacy 表面）增强开关（设置 → 通用）。PUT 要开发者提权。 */
   plain: {
-    settings: () => request<{ enhanced: boolean }>("/api/settings/plain"),
+    settings: () => request<{ enhanced: boolean; ssrAvailable: boolean }>("/api/settings/plain"),
     setEnhanced: (enhanced: boolean) =>
-      request<{ enhanced: boolean }>("/api/settings/plain", jsonInit("PUT", { enhanced })),
+      request<{ enhanced: boolean; ssrAvailable: boolean }>(
+        "/api/settings/plain",
+        jsonInit("PUT", { enhanced }),
+      ),
   },
   /** 日志保留窗口（关于 → 日志）。PUT 要开发者提权，且只能往上调。 */
   panelLogs: {

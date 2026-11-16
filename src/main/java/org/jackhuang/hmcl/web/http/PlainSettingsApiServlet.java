@@ -57,13 +57,16 @@ public final class PlainSettingsApiServlet extends HttpServlet {
     private final DeveloperElevation elevation;
     private final AuthService auth;
     private final BooleanSupplier tlsActive;
+    private final org.jackhuang.hmcl.web.plain.MarkdownSsr ssr;
 
     public PlainSettingsApiServlet(ServerConfig config, DeveloperElevation elevation,
-                                   AuthService auth, BooleanSupplier tlsActive) {
+                                   AuthService auth, BooleanSupplier tlsActive,
+                                   org.jackhuang.hmcl.web.plain.MarkdownSsr ssr) {
         this.config = config;
         this.elevation = elevation;
         this.auth = auth;
         this.tlsActive = tlsActive;
+        this.ssr = ssr;
     }
 
     @Override
@@ -88,6 +91,10 @@ public final class PlainSettingsApiServlet extends HttpServlet {
     private JsonObject describe() {
         JsonObject body = new JsonObject();
         body.addProperty("enhanced", config.plain.enhanced);
+        // A silent <pre> fallback is the one thing an operator cannot see from
+        // the page; the switch card shows this so "enhanced but no markdown"
+        // has an explanation.
+        body.addProperty("ssrAvailable", ssr.available());
         return body;
     }
 
