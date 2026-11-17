@@ -71,4 +71,32 @@ class AliyunDnsProviderTest {
             server.stop(0);
         }
     }
+
+    @Test
+    void presentAcceptsTheAbsoluteNameAcme4jProduces() throws Exception {
+        List<String> queries = new ArrayList<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            queries.add(exchange.getRequestURI().getRawQuery());
+            String response = "{\"RecordId\":\"r1\"}";
+            byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            String base = "http://127.0.0.1:" + server.getAddress().getPort() + "/";
+            AliyunDnsProvider provider = new AliyunDnsProvider(
+                    "ak", "sk", "example.com", HttpClient.newHttpClient(), base);
+            // acme4j's Dns01Challenge.toRRName returns `_acme-challenge.example.com.`;
+            // AliDNS rejects that relative name with SubDomainInvalid.RR.
+            provider.present("_acme-challenge.example.com.", "txt-value");
+
+            assertTrue(queries.get(0).contains("RR=_acme-challenge"));
+        } finally {
+            server.stop(0);
+        }
+    }
 }

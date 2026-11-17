@@ -1935,18 +1935,140 @@ const ACME_STATE_LABEL: Record<string, string> = {
   error: "签发失败",
 };
 
-const ACME_PHASES = ["preparing", "order", "dns", "installing", "done"] as const;
-const ACME_PHASE_LABEL: Record<string, string> = {
-  preparing: "准备配置",
-  order: "创建订单",
-  dns: "等待 DNS / 验证",
-  installing: "安装证书",
-  done: "完成",
+/// 签发阶段：竖向步骤条（不是进度条）。阶段由服务端上报，失败时 phase 停在
+/// 出错的那一步，这里据此把对应步骤标红。
+const ACME_STEPS = [
+  { phase: "preparing", label: "准备配置", hint: "校验域名、CA 与 DNS 凭证" },
+  { phase: "order", label: "发送请求", hint: "向 CA 创建证书订单" },
+  { phase: "dns", label: "验证域名", hint: "写入 _acme-challenge TXT 记录，等待 CA 校验" },
+  { phase: "installing", label: "签发证书", hint: "下载证书并热加载到面板" },
+] as const;
+
+type AcmeStepState = "done" | "active" | "pending" | "error";
+
+function acmeStepStates(status: AcmeSettings["status"] | undefined, issuing: boolean): AcmeStepState[] {
+  const phase = status?.phase ?? "";
+  const finished = status?.state === "active" || phase === "done";
+  const failed = status?.state === "error";
+  const index = ACME_STEPS.findIndex((step) => step.phase === phase);
+  return ACME_STEPS.map((_, i) => {
+    if (finished) return "done";
+    if (failed) return index < 0 ? "pending" : i < index ? "done" : i === index ? "error" : "pending";
+    if (index < 0) return issuing ? (i === 0 ? "active" : "pending") : "pending";
+    if (i < index) return "done";
+    return i === index ? "active" : "pending";
+  });
+}
+
+/// 常见签发错误 → 一句人话。原文仍显示，这里只补“该去改什么”。
+function acmeErrorHint(message: string): string | null {
+  if (message.includes("SubDomainInvalid.RR")) {
+    return "DNS 厂商拒绝了记录名：zone 很可能填错了，应填主域名（如 example.com），不是 www. 开头的完整域名。";
+  }
+  if (message.includes("did not become visible")) {
+    return "TXT 记录还没在解析器里生效：确认域名的 DNS 托管在所选厂商、zone 正确；已写入的记录会被自动清理。";
+  }
+  if (message.includes("InvalidAccessKeyId") || message.includes("SignatureDoesNotMatch")) {
+    return "AccessKey 无效或权限不足：检查 AccessKey ID / Secret，并确认子账号有该域名的解析权限。";
+  }
+  if (message.includes("Forbidden.RAM") || message.includes("NoPermission")) {
+    return "这个 AccessKey 没有修改该域名解析记录的权限，请补授权。";
+  }
+  if (message.includes("is not implemented")) {
+    return "所选 DNS 厂商还没实现，请换一个已实现的厂商。";
+  }
+  if (message.includes("requires EAB")) {
+    return "这个 CA 需要 EAB：把 CA 给的 Key ID 和 HMAC 一起填上。";
+  }
+  if (message.includes("credential profile not found") || message.includes("is for provider")) {
+    return "凭证与所选厂商不匹配：换回该凭证的厂商，或新建一条凭证。";
+  }
+  if (message.includes("rate") || message.includes("too many")) {
+    return "CA 限流：等一段时间再试，或先用 staging 验证配置。";
+  }
+  return null;
+}
+
+
+/// 留空时输入框里的示例值，比“新建凭证请填写”更能说明该填什么。
+const DNS_FIELD_EXAMPLE: Record<string, string> = {
+  zone: "如 example.com（不要填 www.）",
+  zoneId: "如 Z1D633PJN98FT9",
+  region: "如 us-east-1",
+  server: "如 192.0.2.53",
+  apiUrl: "如 https://auth.acme-dns.io",
+  subdomain: "acme-dns 分配的子域名",
 };
 
-function acmePhaseIndex(phase: string | undefined): number {
-  const index = ACME_PHASES.indexOf((phase ?? "") as (typeof ACME_PHASES)[number]);
-  return index < 0 ? -1 : index;
+function AcmeStageList({ status, issuing }: { status: AcmeSettings["status"] | undefined; issuing: boolean }) {
+  const states = acmeStepStates(status, issuing);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", margin: "6px 0" }}>
+      {ACME_STEPS.map((step, i) => {
+        const state = states[i];
+        const last = i === ACME_STEPS.length - 1;
+        return (
+          <div key={step.phase} style={{ display: "flex", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 22 }}>
+              <span
+                style={{
+                  width: 20,
+                  height: 20,
+                  borderRadius: "50%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 12,
+                  lineHeight: 1,
+                  color: state === "pending" ? "var(--monet-on-surface-variant)" : "var(--monet-on-primary)",
+                  background: state === "done"
+                    ? "var(--monet-primary)"
+                    : state === "error"
+                      ? "var(--monet-error)"
+                      : "transparent",
+                  border: state === "active"
+                    ? "2px solid var(--monet-primary)"
+                    : state === "pending"
+                      ? "2px solid var(--monet-outline-variant)"
+                      : "none",
+                  boxSizing: "border-box",
+                }}
+              >
+                {state === "done" && "✓"}
+                {state === "error" && "!"}
+                {state === "active" && (
+                  <span className="spinner small" style={{ width: 14, height: 14, borderWidth: 2 }} />
+                )}
+              </span>
+              {!last && (
+                <span
+                  style={{
+                    width: 2,
+                    flex: 1,
+                    minHeight: 18,
+                    background: state === "done" ? "var(--monet-primary)" : "var(--monet-outline-variant)",
+                  }}
+                />
+              )}
+            </div>
+            <div style={{ paddingBottom: last ? 0 : 18, flex: 1 }}>
+              <div
+                style={{
+                  fontSize: 14,
+                  fontWeight: state === "active" ? 600 : 400,
+                  color: state === "error" ? "var(--monet-error)" : "var(--monet-on-surface)",
+                }}
+              >
+                {step.label}
+                {state === "error" && "（失败）"}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", marginTop: 2 }}>{step.hint}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 async function withElevation<T>(call: () => Promise<T>): Promise<T> {
@@ -2043,7 +2165,6 @@ function AcmeCard() {
     if (!selectedCredential) issueBlockers.push("还没有选择已保存的 DNS 凭证");
     if (providerMismatch) issueBlockers.push(`所选凭证属于 ${selectedCredential?.provider}，与当前厂商 ${provider} 不一致`);
   }
-  const phaseIndex = acmePhaseIndex(settings?.status?.phase);
   const issuing = settings?.status?.state === "issuing";
   const hasAcmeSource = settings?.status?.source === "acme";
 
@@ -2403,11 +2524,12 @@ function AcmeCard() {
                       placeholder={
                         selectedCredential
                           ? `已保存 ${maskedDns[field.key] ?? "••••"}（留空保留）`
-                          : "新建凭证请填写"
+                          : DNS_FIELD_EXAMPLE[field.key] ?? "新建凭证请填写"
                       }
                       autoComplete="off"
                       disabled={busy}
                     />
+                    {field.hint && <span className="form-hint">{field.hint}</span>}
                   </div>
                 ))}
               </div>
@@ -2486,34 +2608,44 @@ function AcmeCard() {
         onClose={() => { if (!issuing) setProgressOpen(false); }}
       >
         <div style={{ maxWidth: 560 }}>
-          <div style={{ display: "flex", gap: 6, margin: "8px 0" }}>
-            {ACME_PHASES.map((phase, index) => (
-              <div
-                key={phase}
-                title={ACME_PHASE_LABEL[phase]}
-                style={{
-                  flex: 1,
-                  height: 8,
-                  borderRadius: 4,
-                  background: index <= phaseIndex
-                    ? (settings?.status?.state === "error" ? "var(--monet-error)" : "var(--monet-primary)")
-                    : "var(--monet-surface-variant)",
-                }}
-              />
-            ))}
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-            <span>{ACME_PHASE_LABEL[settings?.status?.phase ?? ""] ?? "准备中"}</span>
-            <span>{phaseIndex >= 0 ? `${phaseIndex + 1}/${ACME_PHASES.length}` : ""}</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
-            {issuing && <span className="spinner" />}
-            <span>
-              {settings?.status?.state === "active" && "证书已安装并生效。"}
-              {settings?.status?.state === "error" && (settings.status.lastError ?? "签发失败。")}
-              {issuing && "正在等待 CA / DNS，页面会自动刷新。"}
-            </span>
-          </div>
+          <AcmeStageList status={settings?.status} issuing={issuing} />
+
+          {settings?.status?.state === "error" ? (
+            <div
+              style={{
+                marginTop: 10,
+                padding: "10px 12px",
+                border: "1px solid var(--monet-error)",
+                borderRadius: 6,
+                fontSize: 13,
+                lineHeight: 1.6,
+                color: "var(--monet-error)",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+            >
+              {settings.status.lastError ?? "签发失败，服务端没有给出原因。"}
+              {acmeErrorHint(settings.status.lastError ?? "") && (
+                <div style={{ marginTop: 6, color: "var(--monet-on-surface)" }}>
+                  {acmeErrorHint(settings.status.lastError ?? "")}
+                </div>
+              )}
+              <div style={{ marginTop: 6, fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                旧证书保持有效；改好上面的问题后再点「更新证书」重试。
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, fontSize: 13 }}>
+              {settings?.status?.state === "active" ? (
+                <span>证书已安装并生效。</span>
+              ) : (
+                <span style={{ color: "var(--monet-on-surface-variant)" }}>
+                  {issuing ? "正在等待 CA / DNS，页面会自动刷新。" : "尚未开始。"}
+                </span>
+              )}
+            </div>
+          )}
+
           {settings?.status?.state === "active" && settings.status.expires && (
             <p style={{ fontSize: 12 }}>新证书到期：{formatDateTime(settings.status.expires)}</p>
           )}

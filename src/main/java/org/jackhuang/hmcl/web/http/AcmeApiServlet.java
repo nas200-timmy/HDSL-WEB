@@ -167,6 +167,7 @@ public final class AcmeApiServlet extends HttpServlet {
                 f.addProperty("label", field.label());
                 f.addProperty("secret", field.secret());
                 f.addProperty("required", field.required());
+                f.addProperty("hint", field.hint());
                 fields.add(f);
             }
             row.add("fields", fields);

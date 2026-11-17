@@ -320,6 +320,10 @@ compose / 磁盘 / 面板端口 / MC 端口逐条列出来，缺什么就给这�
   `server.yaml`、不回显 API**；CA 的 EAB 也在这里。备份 `/data` 时它是敏感数据。
 - 建议先用 staging（`use_staging: true`）跑通，再切生产；`POST /api/settings/acme/issue`
   是异步的，立即返回，DNS-01 挑战在后台跑，状态看 `GET /api/settings/acme`。
+- DNS-01 会等 TXT 记录在解析器里可见（最多 3 分钟）。系统解析器 20 秒仍看不到时，
+  会用 223.5.5.5 / 1.1.1.1 / 8.8.8.8 复核——容器内置 DNS 与家用路由的负缓存是
+  “记录明明写进去了却一直说不可见”的常见原因。签发失败也会删掉自己写的 TXT；
+  只有 provider 拒绝删除时才需要去控制台手工清理。
 - 失败不会删旧证书：当前自签或已上传的证书继续服务，错误写进状态与审计；
   续期在到期前 `renew_before_days`（7–60）触发。
 - 签发结果在 `/data/certs/acme/fullchain.pem` 与 `privkey.pem`；加载/热切换走上传证书

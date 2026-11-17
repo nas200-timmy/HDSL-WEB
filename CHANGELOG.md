@@ -76,6 +76,13 @@
   HTTPS + 开发者提权，凭据还要面板密码二次确认。
 - 异步强制签发，失败保留旧证书；`renew_before_days` 7–60。覆盖 AcmeConfig、
   CredentialStore、ProviderRegistry、Service 与各 provider 的测试。
+- 修复真实签发失败：acme4j 给出的记录名是绝对名（`_acme-challenge.example.com.`），
+  阿里云直接回 `SubDomainInvalid.RR`；现在统一去掉结尾点。TXT 可见性检查移到
+  `present` 之后单独一步，超时也一定会删掉自己写的记录（之前会残留）。
+  系统 DNS 20 秒仍看不到时用 223.5.5.5 / 1.1.1.1 / 8.8.8.8 复核，避开容器 DNS
+  与家用路由的负缓存；staging 实测签发与清理通过。
+- 签发进度改成竖向阶段列表（准备配置 → 发送请求 → 验证域名 → 签发证书），当前阶段
+  转圈、失败阶段标红；失败时保留出错阶段并显示原始错误 + 中文处置建议。
 
 ### HTTP 安全
 

@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.acme;
 
 import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
 
 import javax.naming.NamingException;
 import javax.naming.directory.Attribute;
@@ -25,22 +26,52 @@ import javax.naming.directory.Attributes;
 import javax.naming.directory.InitialDirContext;
 import java.time.Duration;
 import java.util.Hashtable;
+import java.util.List;
 
-/// Waits for the ACME TXT record to become visible through the system DNS
-/// resolver. DNS propagation is the most common DNS-01 failure; a fixed sleep
-/// is not enough, and the CA's validation will fail if the record is not there.
+/// Waits for the ACME TXT record to become visible. DNS propagation is the
+/// most common DNS-01 failure; a fixed sleep is not enough, and the CA's
+/// validation will fail if the record is not there.
+///
+/// The system resolver is tried first, but it is not trusted blindly: inside a
+/// container it is usually Docker's embedded DNS, and on a home network it may
+/// be a Pi-hole or a router that negative-caches the name from before the
+/// record existed (`SERVFAIL` or "not found" for minutes). When the record is
+/// still missing after [FALLBACK_AFTER], public resolvers are asked as well —
+/// they are what the CA will roughly see too.
 @NotNullByDefault
 public final class DnsTxtResolver {
 
     private static final Duration POLL = Duration.ofSeconds(5);
+    private static final Duration FALLBACK_AFTER = Duration.ofSeconds(20);
+    private static final List<String> FALLBACK_RESOLVERS = List.of("223.5.5.5", "1.1.1.1", "8.8.8.8");
+
+    static {
+        // JNDI's DNS client reads these once: the defaults (15 s, 4 tries) let a
+        // dead resolver consume the whole propagation window on one lookup.
+        System.setProperty("com.sun.jndi.dns.timeout.initial", "3000");
+        System.setProperty("com.sun.jndi.dns.timeout.retries", "1");
+    }
 
     /// @return true when a TXT value equal to `expected` is visible before the
     ///         timeout; false otherwise
     public boolean await(String fqdn, String expected, Duration timeout) {
-        long deadline = System.nanoTime() + timeout.toNanos();
+        String name = stripTrailingDot(fqdn);
+        long start = System.nanoTime();
+        long deadline = start + timeout.toNanos();
+        long fallbackAt = start + FALLBACK_AFTER.toNanos();
         do {
-            if (visible(fqdn, expected)) {
+            if (visible(name, expected, null)) {
                 return true;
+            }
+            if (System.nanoTime() >= fallbackAt) {
+                for (String server : FALLBACK_RESOLVERS) {
+                    if (System.nanoTime() >= deadline) {
+                        return false;
+                    }
+                    if (visible(name, expected, server)) {
+                        return true;
+                    }
+                }
             }
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0) {
@@ -56,9 +87,16 @@ public final class DnsTxtResolver {
         return false;
     }
 
-    private boolean visible(String fqdn, String expected) {
+    static String stripTrailingDot(String name) {
+        return name.endsWith(".") ? name.substring(0, name.length() - 1) : name;
+    }
+
+    private boolean visible(String fqdn, String expected, @Nullable String server) {
         Hashtable<String, String> env = new Hashtable<>();
         env.put(javax.naming.Context.INITIAL_CONTEXT_FACTORY, "com.sun.jndi.dns.DnsContextFactory");
+        if (server != null) {
+            env.put(javax.naming.Context.PROVIDER_URL, "dns://" + server);
+        }
         InitialDirContext context = null;
         try {
             context = new InitialDirContext(env);

@@ -33,8 +33,30 @@ import java.util.Map;
 public final class AcmeDnsProviderRegistry {
 
     /// One credential field shown by the UI. `secret` fields are write-only.
-    public record Field(String key, String label, boolean secret, boolean required) {
+    /// `hint` is a one-line explanation rendered under the input; empty when
+    /// the label already says everything.
+    public record Field(String key, String label, boolean secret, boolean required, String hint) {
+        public Field(String key, String label, boolean secret, boolean required) {
+            this(key, label, secret, required, HINTS.getOrDefault(key, ""));
+        }
     }
+
+    /// Keyed by credential key: the same key means the same thing across
+    /// providers. Declared before `PROVIDERS` because that list is built with
+    /// the constructor above.
+    private static final Map<String, String> HINTS = Map.ofEntries(
+            Map.entry("zone",
+                    "填你在 DNS 服务商托管的主域名，如 example.com；不要填 www.example.com。"
+                            + "签发时面板会在它的 _acme-challenge 下自动写 TXT 记录。"
+                            + "Cloudflare 可留空，由面板自动探测。"),
+            Map.entry("zoneId", "Route 53 的 Hosted Zone ID，形如 Z1D633PJN98FT9。"),
+            Map.entry("region", "Route 53 区域，通常填 us-east-1。"),
+            Map.entry("apiToken", "建议只授予 DNS 记录编辑权限，不要用全局 Key。"),
+            Map.entry("accessKeyId", "建议使用只允许改 DNS 记录的子账号。"),
+            Map.entry("server", "支持 RFC 2136 的 DNS 服务器地址，如 192.0.2.53。"),
+            Map.entry("tsigName", "TSIG 密钥名，通常形如 key.example.com。"),
+            Map.entry("subdomain", "acme-dns 分配给你的子域名。"),
+            Map.entry("apiUrl", "acme-dns 服务地址，如 https://auth.acme-dns.io。"));
 
     public record Info(String id, String label, String group, boolean implemented,
                        List<Field> fields) {
@@ -43,18 +65,18 @@ public final class AcmeDnsProviderRegistry {
     private static final List<Info> PROVIDERS = List.of(
             new Info("cloudflare", "Cloudflare", "Tier 1", true, List.of(
                     new Field("apiToken", "API Token", true, true),
-                    new Field("zone", "Zone（可选，如 example.com）", false, false))),
+                    new Field("zone", "Zone（主域名，可留空）", false, false))),
             new Info("aliyun", "阿里云 DNS", "Tier 1", true, List.of(
                     new Field("accessKeyId", "AccessKey ID", false, true),
                     new Field("accessKeySecret", "AccessKey Secret", true, true),
-                    new Field("zone", "Zone（如 example.com）", false, true))),
+                    new Field("zone", "Zone（主域名）", false, true))),
             new Info("dnspod", "DNSPod / 腾讯云", "Tier 1", true, List.of(
                     new Field("token", "API Token", true, true),
-                    new Field("zone", "Zone（如 example.com）", false, true))),
+                    new Field("zone", "Zone（主域名）", false, true))),
             new Info("huawei", "华为云 DNS", "Tier 1", false, List.of(
                     new Field("accessKeyId", "AccessKey ID", false, true),
                     new Field("accessKeySecret", "AccessKey Secret", true, true),
-                    new Field("zone", "Zone（如 example.com）", false, true))),
+                    new Field("zone", "Zone（主域名）", false, true))),
             new Info("route53", "AWS Route 53", "Tier 2", false, List.of(
                     new Field("accessKeyId", "Access Key ID", false, true),
                     new Field("secretAccessKey", "Secret Access Key", true, true),
@@ -63,17 +85,17 @@ public final class AcmeDnsProviderRegistry {
             new Info("godaddy", "GoDaddy", "Tier 2", true, List.of(
                     new Field("apiKey", "API Key", true, true),
                     new Field("apiSecret", "API Secret", true, true),
-                    new Field("zone", "Zone（如 example.com）", false, true))),
+                    new Field("zone", "Zone（主域名）", false, true))),
             new Info("namecheap", "Namecheap", "Tier 2", false, List.of(
                     new Field("apiUser", "API User", false, true),
                     new Field("apiKey", "API Key", true, true),
                     new Field("username", "Username", false, true))),
             new Info("digitalocean", "DigitalOcean", "Tier 2", true, List.of(
                     new Field("token", "Personal Access Token", true, true),
-                    new Field("zone", "Zone（如 example.com）", false, true))),
+                    new Field("zone", "Zone（主域名）", false, true))),
             new Info("vultr", "Vultr", "Tier 2", true, List.of(
                     new Field("apiKey", "API Key", true, true),
-                    new Field("zone", "Zone（如 example.com）", false, true))),
+                    new Field("zone", "Zone（主域名）", false, true))),
             new Info("gandi", "Gandi", "Tier 3", false, List.of(
                     new Field("token", "Personal Access Token", true, true))),
             new Info("porkbun", "Porkbun", "Tier 3", false, List.of(
@@ -81,7 +103,7 @@ public final class AcmeDnsProviderRegistry {
                     new Field("secretApiKey", "Secret API Key", true, true))),
             new Info("rfc2136", "RFC 2136 / nsupdate", "Tier 3", false, List.of(
                     new Field("server", "DNS Server", false, true),
-                    new Field("zone", "Zone", false, true),
+                    new Field("zone", "Zone（主域名）", false, true),
                     new Field("tsigName", "TSIG Key Name", false, true),
                     new Field("tsigSecret", "TSIG Secret", true, true))),
             new Info("acme-dns", "acme-dns", "Tier 3", false, List.of(

@@ -299,7 +299,8 @@ public final class AcmeService implements AutoCloseable {
             logger.info("ACME certificate is active; next check at " + nextAttempt);
         } catch (Exception e) {
             state = State.ERROR;
-            phase = Phase.ERROR;
+            // `phase` stays at the stage that failed: the settings page renders
+            // it as the red step, which says more than a generic "error".
             lastError = redact(e.getMessage());
             int count = failures.incrementAndGet();
             Duration delay = switch (Math.min(count, 3)) {
@@ -360,10 +361,11 @@ public final class AcmeService implements AutoCloseable {
             public void present(String fqdn, String value) throws Exception {
                 phase = Phase.DNS;
                 provider.present(fqdn, value);
-                if (!resolver.await(fqdn, value, CHALLENGE_PROPAGATION)) {
-                    throw new AcmeDnsException("TXT record " + fqdn
-                            + " is not visible yet; check the DNS provider and retry");
-                }
+            }
+
+            @Override
+            public boolean awaitPropagation(String fqdn, String value) {
+                return resolver.await(fqdn, value, CHALLENGE_PROPAGATION);
             }
 
             @Override

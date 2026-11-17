@@ -216,6 +216,23 @@ class AcmeServiceTest {
     }
 
     @Test
+    void aFailedIssuanceKeepsTheStageThatFailed() throws Exception {
+        FakeClient client = new FakeClient();
+        client.fail = true;
+        AcmeService service = new AcmeService(config(30), credentials(), client,
+                new DnsTxtResolver(), new FakeSink(), Logger.LOG);
+
+        AcmeService.Status status = service.issueNow();
+
+        assertEquals(AcmeService.State.ERROR, status.state());
+        // The settings page renders this as the red step; collapsing it to
+        // Phase.ERROR would leave every step grey and the operator guessing.
+        assertEquals(AcmeService.Phase.ORDER, status.phase());
+        assertNotNull(status.lastError());
+        service.close();
+    }
+
+    @Test
     void disabledServiceDoesNothing() throws Exception {
         ServerConfig config = config(30);
         config.https.acme.enabled = false;

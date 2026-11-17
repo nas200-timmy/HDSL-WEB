@@ -916,6 +916,17 @@ select.input {
   gap: 4px;
 }
 
+/* 输入框下方的字段说明：带底色，避免被当成占位符忽略 */
+.form-hint {
+  display: block;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--monet-on-secondary-container);
+  background: var(--monet-secondary-container);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
 /* 设置页"小标题"：16px 帮助图标 + 文字，padding 8 0 0 0 */
 .section-caption {
   display: flex;

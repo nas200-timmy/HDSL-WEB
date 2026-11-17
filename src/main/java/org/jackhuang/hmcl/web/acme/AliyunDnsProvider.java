@@ -79,7 +79,7 @@ public final class AliyunDnsProvider implements AcmeDnsProvider {
                       HttpClient http, String base) {
         this.accessKeyId = accessKeyId;
         this.accessKeySecret = accessKeySecret;
-        this.zone = zone == null ? "" : zone.trim();
+        this.zone = zone == null ? "" : stripDot(zone.trim());
         this.http = http;
         this.base = base.endsWith("/") ? base : base + "/";
     }
@@ -137,12 +137,20 @@ public final class AliyunDnsProvider implements AcmeDnsProvider {
         }
     }
 
+    /// AliDNS wants the part left of the zone (`_acme-challenge`), not a full
+    /// name — and it rejects a trailing dot outright (`SubDomainInvalid.RR`),
+    /// which is why the name is normalized here as well as in the ACME client.
     private String relativeName(String fqdn) {
-        if (fqdn.equals(zone)) {
+        String name = stripDot(fqdn);
+        if (name.equals(zone)) {
             return "@";
         }
         String suffix = "." + zone;
-        return fqdn.endsWith(suffix) ? fqdn.substring(0, fqdn.length() - suffix.length()) : fqdn;
+        return name.endsWith(suffix) ? name.substring(0, name.length() - suffix.length()) : name;
+    }
+
+    private static String stripDot(String value) {
+        return value.endsWith(".") ? value.substring(0, value.length() - 1) : value;
     }
 
     private @Nullable String findRecordId(String fqdn, String value) throws AcmeDnsException {

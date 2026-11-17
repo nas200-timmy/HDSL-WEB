@@ -46,6 +46,15 @@ public interface AcmeClient {
     interface ChallengeHandler {
         void present(String fqdn, String value) throws Exception;
 
+        /// Called after [present] succeeded, before the challenge is triggered.
+        /// Returning false fails the authorization — and, because presentation
+        /// already happened, [cleanup] still runs. Do the propagation wait here
+        /// rather than inside [present]: a timeout inside `present` is invisible
+        /// to the caller and would leak the TXT record.
+        default boolean awaitPropagation(String fqdn, String value) {
+            return true;
+        }
+
         void cleanup(String fqdn, String value) throws Exception;
     }
 

@@ -286,6 +286,8 @@ export interface AcmeProviderField {
   label: string;
   secret: boolean;
   required: boolean;
+  /** 输入框下方的一行说明；旧后端不返回时为空。 */
+  hint?: string;
 }
 
 export interface AcmeProviderInfo {

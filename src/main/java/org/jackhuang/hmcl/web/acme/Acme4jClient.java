@@ -88,12 +88,21 @@ public final class Acme4jClient implements AcmeClient {
                         .orElseThrow(() -> new AcmeClientException(
                                 "the CA offered no DNS-01 challenge for "
                                         + authorization.getIdentifier().getDomain()));
-                String rrName = Dns01Challenge.toRRName(authorization.getIdentifier());
+                // acme4j returns an absolute name with a trailing dot
+                // (`_acme-challenge.example.com.`). Providers hand that name to
+                // DNS-control APIs, and several of them reject it: AliDNS answers
+                // `SubDomainInvalid.RR` and the authorization dies after the
+                // record was already written.
+                String rrName = withoutTrailingDot(Dns01Challenge.toRRName(authorization.getIdentifier()));
                 String digest = challenge.getDigest();
                 boolean presented = false;
                 try {
                     handler.present(rrName, digest);
                     presented = true;
+                    if (!handler.awaitPropagation(rrName, digest)) {
+                        throw new AcmeClientException("DNS-01 TXT record " + rrName
+                                + " did not become visible in time; check the DNS provider and retry");
+                    }
                     challenge.trigger();
                     Status status = challenge.waitForCompletion(CHALLENGE_TIMEOUT);
                     if (status != Status.VALID) {
@@ -150,6 +159,12 @@ public final class Acme4jClient implements AcmeClient {
         } catch (Exception e) {
             throw new AcmeClientException("ACME request failed: " + sanitize(e.getMessage()), e);
         }
+    }
+
+    /// Drops the root label acme4j appends, so the name matches what DNS APIs
+    /// expect. Package-private for the regression test.
+    static String withoutTrailingDot(String name) {
+        return name.endsWith(".") ? name.substring(0, name.length() - 1) : name;
     }
 
     private static String sanitize(@Nullable String message) {
