@@ -99,10 +99,12 @@ public final class ChatTurnManager {
     private static final int MAX_TOOL_ROUNDS = 3;
     /// DeepSeek 在 OpenAI 兼容模式下偶尔把工具调用写成 DSML 文本，而不是 tool_calls JSON。
     /// 这里做一个最小兼容：识别、转成 ToolCall、并从正文里删掉，避免把调用指令当答案存下来。
+    /// The tag is `calls` in DeepSeek's examples but `tool_calls` in what
+    /// MiMo/DeepSeek actually emit; both are the same construct.
     private static final Pattern DSML_START = Pattern.compile(
-            "<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*calls>");
+            "<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*(?:tool_)?calls>");
     private static final Pattern DSML_BLOCK = Pattern.compile(
-            "(?s)<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*calls>.*?</\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*calls>");
+            "(?s)<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*(?:tool_)?calls>.*?</\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*(?:tool_)?calls>");
     private static final Pattern DSML_INVOKE = Pattern.compile(
             "(?s)<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*invoke\\s+name=\"([^\"]+)\"[^>]*>(.*?)"
                     + "</\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*invoke>");
@@ -120,14 +122,19 @@ public final class ChatTurnManager {
     private volatile LocalDate dailyDate = LocalDate.now();
     private volatile ChatSettings.Settings settings;
 
-    /// Called with (messageId, content) after a turn's final text is persisted.
-    /// The plain surface uses it to pre-render Markdown in the background; a
-    /// failing listener must never fail the turn.
-    private volatile @Nullable java.util.function.BiConsumer<String, String> messageFinalizer;
+    /// Called after a turn's final text is persisted. The plain surface uses it
+    /// to pre-render Markdown in the background; a failing listener must never
+    /// fail the turn. Sources ride along because a render without them shows
+    /// `[citation:N]` markers literally.
+    @FunctionalInterface
+    public interface MessageFinalizer {
+        void accept(String messageId, String content, @Nullable String sourcesJson);
+    }
+
+    private volatile @Nullable MessageFinalizer messageFinalizer;
 
     /// Installs the post-persist hook (see [messageFinalizer]).
-    public void setMessageFinalizer(
-            @Nullable java.util.function.BiConsumer<String, String> finalizer) {
+    public void setMessageFinalizer(@Nullable MessageFinalizer finalizer) {
         this.messageFinalizer = finalizer;
     }
 
@@ -1974,10 +1981,16 @@ public final class ChatTurnManager {
                 org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
                         "Could not persist chat message " + turn.messageId, e);
             }
-            java.util.function.BiConsumer<String, String> finalizer = messageFinalizer;
+            MessageFinalizer finalizer = messageFinalizer;
             if (finalizer != null) {
                 try {
-                    finalizer.accept(turn.messageId, turn.content.toString());
+                    String sourcesJson = null;
+                    try {
+                        sourcesJson = store.sourcesJson(turn.messageId);
+                    } catch (SQLException ignored) {
+                        // The transcript still renders; citations just show as markers.
+                    }
+                    finalizer.accept(turn.messageId, turn.content.toString(), sourcesJson);
                 } catch (RuntimeException e) {
                     org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
                             "Chat message finalizer failed for " + turn.messageId, e);

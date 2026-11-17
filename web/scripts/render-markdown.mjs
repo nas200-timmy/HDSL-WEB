@@ -57,7 +57,20 @@ function readStdin() {
 // The bundle is CommonJS (react-dom/server is CJS and requires node builtins),
 // so top-level await is not available; chain instead.
 readStdin()
-  .then((content) => {
+  .then((raw) => {
+    // The panel sends {content, sources?}; sources are what turns [citation:N]
+    // markers into links, exactly as the SPA receives message.sources.
+    let content = raw;
+    let sources;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.content === "string") {
+        content = parsed.content;
+        if (Array.isArray(parsed.sources)) sources = parsed.sources;
+      }
+    } catch {
+      // Not an envelope (a bare markdown body): render it as-is.
+    }
     const html = renderToStaticMarkup(
       React.createElement(
         "div",
@@ -77,7 +90,7 @@ readStdin()
                 ),
             },
           },
-          prepareText(content, {}),
+          prepareText(content, { sources }),
         ),
       ),
     );

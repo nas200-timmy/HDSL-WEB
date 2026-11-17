@@ -412,9 +412,9 @@ public final class HdslServer {
         // Render the transcript while the turn is still fresh instead of making
         // the first reader wait for one Node process per message.
         if (chat != null) {
-            chat.service().turns().setMessageFinalizer((messageId, content) -> {
+            chat.service().turns().setMessageFinalizer((messageId, content, sourcesJson) -> {
                 if (config.plain.enhanced) {
-                    plainSsr.prefetch(messageId, content);
+                    plainSsr.prefetch(messageId, content, sourcesJson);
                 }
             });
         }

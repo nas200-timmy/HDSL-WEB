@@ -489,7 +489,11 @@ public final class PlainChatServlet extends HttpServlet {
                     .append(PlainHtml.time(longOf(message, "createdAt")))
                     .append(" · ").append(statusText(status, assistant)).append("</span></div>\n");
             if (assistant && "done".equals(status) && enhancedLegacy()) {
-                String rendered = ssr.render(string(message, "id"), content);
+                // Sources make [citation:N] into links; without them the renderer
+                // would leave the markers in the body.
+                String sourcesJson = message.has("sources") && message.get("sources").isJsonArray()
+                        ? message.getAsJsonArray("sources").toString() : null;
+                String rendered = ssr.render(string(message, "id"), content, sourcesJson);
                 if (rendered != null) {
                     body.append(rendered).append("\n");
                     continue;
