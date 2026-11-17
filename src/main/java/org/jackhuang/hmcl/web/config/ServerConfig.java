@@ -151,10 +151,51 @@ public final class ServerConfig {
         /// usable behind nginx/Caddy instead of reporting "not HTTPS".
         public boolean trustForwardedProto = false;
 
+        /// ACME automatic certificate settings; see [AcmeConfig]. Secrets
+        /// (DNS tokens, EAB keys) never live here — they are in
+        /// `<data>/auth/acme.json`.
+        public final AcmeConfig acme = new AcmeConfig();
+
         /// Whether a certificate file was explicitly configured (PKCS#12 or PEM).
         public boolean hasExplicitCertificate() {
             return !pkcs12File.isBlank() || (!certFile.isBlank() && !keyFile.isBlank());
         }
+    }
+
+    /// Automatic certificate issuance through ACME (`https.acme` in
+    /// `server.yaml`). The fields here are deliberately non-secret: the DNS
+    /// provider's token / AccessKey and the CA's EAB credentials are stored
+    /// separately, owner-only, and never echoed by the API.
+    public static final class AcmeConfig {
+        /// Whether ACME owns the certificate (issue + renew).
+        public volatile boolean enabled = false;
+
+        /// CA registry id (`letsencrypt`, `zerossl`, `google`, `custom`, ...).
+        public volatile String ca = "letsencrypt";
+
+        /// Explicit ACME directory URL; required for `ca=custom`, otherwise
+        /// the registry default is used.
+        public volatile String directoryUrl = "";
+
+        /// Contact email for the ACME account.
+        public volatile String email = "";
+
+        /// Names to include in the certificate. Empty means "derive the host
+        /// from `public_base_url`". Wildcards (`*.example.com`) are allowed;
+        /// DNS-01 is the only challenge this implementation supports.
+        public final java.util.List<String> domains = new java.util.ArrayList<>();
+
+        /// DNS provider registry id (see `AcmeDnsProviderRegistry`).
+        public volatile String provider = "cloudflare";
+
+        /// Renew when fewer than this many days remain.
+        public volatile int renewBeforeDays = 30;
+
+        /// Use the CA's staging directory when it has one (Let's Encrypt).
+        public volatile boolean useStaging = false;
+
+        /// The operator accepted the CA's subscriber agreement.
+        public volatile boolean acceptTerms = false;
     }
 
     public static final class AuthConfig {

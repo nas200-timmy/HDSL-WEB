@@ -105,6 +105,9 @@ public final class CertificateManager {
         PKCS12,
         /// A PEM certificate chain + private key from the config or an upload.
         PEM,
+        /// A certificate issued by the ACME service (Let's Encrypt or a
+        /// compatible CA) and stored under `<data>/certs/acme/`.
+        ACME,
         /// A self-signed certificate generated (or reused) by this manager.
         SELF_SIGNED,
     }
@@ -153,7 +156,7 @@ public final class CertificateManager {
     public static CertificateManager create(ServerConfig config, Logger logger) throws IOException {
         CertificateManager manager = new CertificateManager(
                 config.dataDir, config.https, config.publicBaseUrl, logger);
-        if (!config.https.enabled) {
+        if (!config.https.enabled && !config.https.acme.enabled) {
             manager.source = Source.NONE;
             return manager;
         }
@@ -169,6 +172,16 @@ public final class CertificateManager {
         if (!https.certFile.isBlank()) {
             loadPem(resolve(https.certFile), resolve(https.keyFile));
             return;
+        }
+        if (https.acme.enabled) {
+            Path acmeCert = acmeCertPath();
+            Path acmeKey = acmeKeyPath();
+            if (Files.exists(acmeCert) && Files.exists(acmeKey)) {
+                loadPem(acmeCert, acmeKey);
+                source = Source.ACME;
+                logger.info("Reusing the ACME certificate from " + acmeCert);
+                return;
+            }
         }
         Path certPath = selfSignedCertPath();
         Path keyPath = selfSignedKeyPath();
@@ -481,6 +494,35 @@ public final class CertificateManager {
         reloadFromUpload(certPem, keyPem);
         https.pkcs12File = "";
         https.pkcs12Password = "";
+    }
+
+    /// Installs an ACME-issued PEM pair as the current identity. The files are
+    /// already under `<data>/certs/acme/`; this method validates the pair and
+    /// switches the in-memory keystore, but does **not** touch `server.yaml`
+    /// (ACME ownership is already recorded there) and does not reload Jetty —
+    /// the caller does that through `HdslServer.reloadTls`/`enableTls`.
+    ///
+    /// @return what the new certificate says about itself
+    /// @throws IOException when the pair cannot be read or does not match
+    public synchronized Info installManaged(Path certPem, Path keyPem) throws IOException {
+        Path certPath = resolve(certPem);
+        Path keyPath = resolve(keyPem);
+        install(buildKeyStoreFromPem(certPath, keyPath), Source.ACME);
+        logger.info("Installed the ACME certificate from " + certPath);
+        Info loaded = info();
+        if (loaded == null) {
+            throw new IOException("the ACME certificate could not be loaded");
+        }
+        return loaded;
+    }
+
+    /// Where the ACME service writes its certificate chain and private key.
+    public Path acmeCertPath() {
+        return dataDir.resolve("certs").resolve("acme").resolve("fullchain.pem");
+    }
+
+    public Path acmeKeyPath() {
+        return dataDir.resolve("certs").resolve("acme").resolve("privkey.pem");
     }
 
     /// Makes a self-signed identity the one this manager serves: reuses the

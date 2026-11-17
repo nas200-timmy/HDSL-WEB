@@ -113,6 +113,7 @@ public final class TlsApiServlet extends HttpServlet {
             case SELF_SIGNED -> "self-signed";
             case PEM -> "uploaded";
             case PKCS12 -> "pkcs12";
+            case ACME -> "acme";
         });
         CertificateManager.Info info = certificates.info();
         if (info != null) {

@@ -69,6 +69,9 @@ dependencies {
     implementation(libs.poi.ooxml)
     implementation(libs.poi.scratchpad)
 
+    // ACME (Let's Encrypt and compatible CAs): DNS-01 issuance and renewal.
+    implementation(libs.acme4j.client)
+
     // Jetty speaks slf4j; this binding forwards it to java.util.logging, the
     // same sink HDSL-web's own logging story is built on. Server code itself
     // logs through org.jackhuang.hmcl.util.logging.Logger, never slf4j.

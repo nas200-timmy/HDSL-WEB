@@ -19,6 +19,10 @@ package org.jackhuang.hmcl.web;
 
 import org.jackhuang.hmcl.Metadata;
 import org.jackhuang.hmcl.util.logging.Logger;
+import org.jackhuang.hmcl.web.acme.Acme4jClient;
+import org.jackhuang.hmcl.web.acme.AcmeCredentialStore;
+import org.jackhuang.hmcl.web.acme.AcmeService;
+import org.jackhuang.hmcl.web.acme.DnsTxtResolver;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.auth.UserStore;
 import org.jackhuang.hmcl.web.config.ServerConfig;
@@ -176,9 +180,63 @@ public final class Main {
             CertificateManager certificates = CertificateManager.create(config, Logger.LOG);
             HdslServer server = HdslServer.build(config, auth, certificates, Logger.LOG);
 
+            AcmeService acme = null;
+            if (config.https.acme.enabled) {
+                try {
+                    AcmeCredentialStore acmeCredentials = AcmeCredentialStore.open(config.dataDir);
+                    acme = new AcmeService(config, acmeCredentials,
+                            new Acme4jClient(Logger.LOG), new DnsTxtResolver(),
+                            new AcmeService.CertificateSink() {
+                                @Override
+                                public CertificateManager.Source source() {
+                                    return certificates.getSource();
+                                }
+
+                                @Override
+                                public CertificateManager.Info info() {
+                                    return certificates.info();
+                                }
+
+                                @Override
+                                public void install(java.nio.file.Path certPem, java.nio.file.Path keyPem)
+                                        throws Exception {
+                                    certificates.installManaged(certPem, keyPem);
+                                }
+
+                                @Override
+                                public void reload() throws Exception {
+                                    HdslServer.TlsSwitch result = server.tlsActive()
+                                            ? server.reloadTls(certificates)
+                                            : server.enableTls(certificates);
+                                    if (!result.ok()) {
+                                        throw new IOException(result.error() == null
+                                                ? "TLS reload failed" : result.error());
+                                    }
+                                }
+
+                                @Override
+                                public boolean tlsActive() {
+                                    return server.tlsActive();
+                                }
+                            }, Logger.LOG);
+                } catch (IOException e) {
+                    Logger.LOG.warning("ACME is enabled but its credential store cannot be opened; "
+                            + "automatic certificate management is off", e);
+                }
+            }
+
             server.start();
-            printBanner(config, server, certificates, env);
-            server.join();
+            if (acme != null) {
+                acme.start();
+            }
+            try {
+                printBanner(config, server, certificates, env);
+                server.join();
+            } finally {
+                if (acme != null) {
+                    acme.close();
+                }
+            }
         } catch (ServerConfigLoader.ConfigException e) {
             System.err.println("Invalid configuration: " + e.getMessage());
             System.exit(1);
@@ -220,6 +278,7 @@ public final class Main {
             case NONE -> "not enabled";
             case PKCS12 -> "PKCS#12 keystore";
             case PEM -> "PEM certificate";
+            case ACME -> "ACME certificate (auto-renewed)";
             case SELF_SIGNED -> "self-signed (browsers will warn; configure https.cert_file/https.pkcs12_file to replace)";
         });
         if (!config.basePath.isEmpty()) {

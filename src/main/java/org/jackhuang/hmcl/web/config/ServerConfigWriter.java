@@ -224,6 +224,46 @@ public final class ServerConfigWriter {
         writeAtomically(yamlFile, root);
     }
 
+    /// Records the non-secret ACME settings in `server.yaml`'s `https.acme`
+    /// section. DNS tokens and EAB keys are deliberately absent: they live in
+    /// `<data>/auth/acme.json` and are written by [AcmeCredentialStore].
+    ///
+    /// @param dataDir the data directory `server.yaml` lives in
+    /// @param acme    the settings to persist
+    /// @throws IOException when the file cannot be read or written
+    public static void updateAcme(Path dataDir, ServerConfig.AcmeConfig acme) throws IOException {
+        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
+        Map<String, Object> root = readExisting(yamlFile);
+
+        Object httpsValue = root.get("https");
+        Map<String, Object> https = new LinkedHashMap<>();
+        if (httpsValue instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                https.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        Map<String, Object> section = new LinkedHashMap<>();
+        Object current = https.get("acme");
+        if (current instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                section.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        section.put("enabled", acme.enabled);
+        section.put("ca", acme.ca);
+        section.put("directory_url", acme.directoryUrl);
+        section.put("email", acme.email);
+        section.put("domains", new java.util.ArrayList<>(acme.domains));
+        section.put("provider", acme.provider);
+        section.put("renew_before_days", acme.renewBeforeDays);
+        section.put("use_staging", acme.useStaging);
+        section.put("accept_terms", acme.acceptTerms);
+        https.put("acme", section);
+        root.put("https", https);
+
+        writeAtomically(yamlFile, root);
+    }
+
     /// Reads the existing document, or an empty map when there is none.
     private static Map<String, Object> readExisting(Path yamlFile) throws IOException {
         Map<String, Object> root = new LinkedHashMap<>();

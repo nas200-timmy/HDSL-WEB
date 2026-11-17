@@ -18,6 +18,8 @@
 package org.jackhuang.hmcl.web.config;
 
 import org.jackhuang.hmcl.util.logging.Logger;
+import org.jackhuang.hmcl.web.acme.AcmeCa;
+import org.jackhuang.hmcl.web.acme.AcmeDnsProviderRegistry;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 import org.snakeyaml.engine.v2.api.Load;
@@ -28,11 +30,14 @@ import org.snakeyaml.engine.v2.exceptions.YamlEngineException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
+import java.net.URI;
 import java.net.UnknownHostException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /// Loads the server configuration from `$HDSL_DATA/server.yaml` and overlays
 /// the environment on top. Environment variables beat the file, which beats
@@ -417,6 +422,57 @@ public final class ServerConfigLoader {
         if (https.containsKey("trust_forwarded_proto")) {
             target.trustForwardedProto = booleanField(https, "trust_forwarded_proto");
         }
+        if (https.containsKey("acme")) {
+            applyAcme(target.acme, mapField(https, "acme"));
+        }
+    }
+
+    private static void applyAcme(ServerConfig.AcmeConfig target, Map<String, Object> acme) {
+        if (acme.containsKey("enabled")) {
+            target.enabled = booleanField(acme, "enabled");
+        }
+        if (acme.containsKey("ca")) {
+            target.ca = stringField(acme, "ca");
+        }
+        if (acme.containsKey("directory_url")) {
+            target.directoryUrl = stringField(acme, "directory_url");
+        }
+        if (acme.containsKey("email")) {
+            target.email = stringField(acme, "email");
+        }
+        if (acme.containsKey("domains")) {
+            Object value = acme.get("domains");
+            if (!(value instanceof java.util.List<?> list)) {
+                throw new ConfigException("https.acme.domains must be a list of DNS names");
+            }
+            target.domains.clear();
+            for (Object item : list) {
+                if (!(item instanceof String domain)) {
+                    throw new ConfigException("https.acme.domains must contain only strings");
+                }
+                target.domains.add(domain);
+            }
+        }
+        if (acme.containsKey("provider")) {
+            target.provider = stringField(acme, "provider");
+        }
+        if (acme.containsKey("renew_before_days")) {
+            target.renewBeforeDays = intField(acme, "renew_before_days");
+        }
+        if (acme.containsKey("use_staging")) {
+            target.useStaging = booleanField(acme, "use_staging");
+        }
+        if (acme.containsKey("accept_terms")) {
+            target.acceptTerms = booleanField(acme, "accept_terms");
+        }
+        for (String key : acme.keySet()) {
+            switch (key) {
+                case "enabled", "ca", "directory_url", "email", "domains",
+                        "provider", "renew_before_days", "use_staging", "accept_terms" -> {
+                }
+                default -> throw new ConfigException("https.acme: unknown key `" + key + "`");
+            }
+        }
     }
 
     private static void applyAuth(ServerConfig config, Map<String, Object> auth) {
@@ -598,6 +654,7 @@ public final class ServerConfigLoader {
         if (hasCert != hasKey) {
             throw new ConfigException("https.cert_file and https.key_file must be configured together (PEM certificate chain + private key)");
         }
+        validateAcme(config);
         if (config.auth.disabled && !isLoopback(config.bindHost)) {
             throw new ConfigException("auth.disabled is only allowed when the server binds a loopback address; bind_host is `"
                     + config.bindHost + "`");
@@ -621,6 +678,106 @@ public final class ServerConfigLoader {
             return true;
         } catch (UnknownHostException e) {
             return false;
+        }
+    }
+
+    /// ACME settings are validated even when disabled, so a typo in
+    /// `renew_before_days` or a planned-but-unimplemented provider fails at
+    /// boot instead of at the first renewal.
+    private static void validateAcme(ServerConfig config) {
+        ServerConfig.AcmeConfig acme = config.https.acme;
+        if (acme.renewBeforeDays < 7 || acme.renewBeforeDays > 60) {
+            throw new ConfigException("https.acme.renew_before_days must be between 7 and 60, got "
+                    + acme.renewBeforeDays);
+        }
+        if (!acme.enabled) {
+            return;
+        }
+        if (acme.email.isBlank() || !acme.email.contains("@")) {
+            throw new ConfigException("https.acme.email is required when ACME is enabled");
+        }
+        if (!acme.acceptTerms) {
+            throw new ConfigException("https.acme.accept_terms must be true before issuing a certificate");
+        }
+        AcmeCa.Info ca = AcmeCa.find(acme.ca);
+        if (ca == null) {
+            throw new ConfigException("https.acme.ca is unknown: `" + acme.ca + "`");
+        }
+        if (ca.custom() && acme.directoryUrl.isBlank()) {
+            throw new ConfigException("https.acme.ca=custom requires https.acme.directory_url");
+        }
+        AcmeDnsProviderRegistry.Info provider = AcmeDnsProviderRegistry.find(acme.provider);
+        if (provider == null) {
+            throw new ConfigException("https.acme.provider is unknown: `" + acme.provider + "`");
+        }
+        if (!provider.implemented()) {
+            throw new ConfigException("https.acme.provider `" + acme.provider
+                    + "` is not implemented in this build yet");
+        }
+
+        Set<String> domains = new LinkedHashSet<>();
+        for (String raw : acme.domains) {
+            if (raw == null) {
+                continue;
+            }
+            String domain = raw.trim().toLowerCase(java.util.Locale.ROOT);
+            if (domain.endsWith(".")) {
+                domain = domain.substring(0, domain.length() - 1);
+            }
+            if (!domain.isEmpty()) {
+                domains.add(domain);
+            }
+        }
+        if (domains.isEmpty()) {
+            String host = hostOf(config.publicBaseUrl);
+            if (host != null && !host.isBlank()) {
+                domains.add(host.toLowerCase(java.util.Locale.ROOT));
+            }
+        }
+        if (domains.isEmpty()) {
+            throw new ConfigException("https.acme.domains is empty and public_base_url has no host; "
+                    + "set at least one certificate name");
+        }
+        if (domains.size() > 20) {
+            throw new ConfigException("https.acme.domains supports at most 20 names, got " + domains.size());
+        }
+        for (String domain : domains) {
+            if (!isCertificateName(domain)) {
+                throw new ConfigException("https.acme.domains contains an invalid DNS name: `" + domain + "`");
+            }
+        }
+        acme.domains.clear();
+        acme.domains.addAll(domains);
+    }
+
+    /// `example.com`, `www.example.com`, `*.example.com` and punycode names
+    /// are accepted; IP literals and names without a dot are not.
+    private static boolean isCertificateName(String name) {
+        String base = name.startsWith("*.") ? name.substring(2) : name;
+        if (base.isEmpty() || base.contains(":") || base.contains("/")) {
+            return false;
+        }
+        if (!base.contains(".") || base.matches("\\d+(\\.\\d+)+")) {
+            return false;
+        }
+        for (String label : base.split("\\.", -1)) {
+            if (label.isEmpty() || label.length() > 63
+                    || !label.matches("[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static @Nullable String hostOf(@Nullable String url) {
+        if (url == null || url.isBlank()) {
+            return null;
+        }
+        try {
+            URI uri = URI.create(url.trim());
+            return uri.getHost();
+        } catch (IllegalArgumentException e) {
+            return null;
         }
     }
 
