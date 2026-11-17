@@ -418,6 +418,28 @@ public final class ChatService {
         return sessionJson(session.id());
     }
 
+    /// 分叉：整段会话（节点、variants、附件行）复制一份，默认落到同一个助手，
+    /// 也可以指定别的助手。原会话不动。流式生成中的会话不能分叉，否则复制到的
+    /// 是半截回答。
+    public JsonObject forkSession(String id, JsonObject body) throws ChatException, SQLException {
+        ChatStore.Session source = store.session(id);
+        if (source == null) {
+            throw new ChatException(404, "session_not_found", "session not found");
+        }
+        if (turns.busy(id)) {
+            throw new ChatException(409, "chat_busy",
+                    "stop the running reply before forking the session");
+        }
+        String assistantId = string(body, "assistantId", source.assistantId());
+        if (store.assistant(assistantId) == null) {
+            throw new ChatException(404, "assistant_not_found", "assistant not found");
+        }
+        String title = string(body, "title", source.title() + "（分叉）");
+        String newId = store.forkSession(id, assistantId, title);
+        broadcast("chat-sessions-changed", newId);
+        return sessionJson(newId);
+    }
+
     public JsonObject updateSession(String id, JsonObject body) throws ChatException, SQLException {
         requireSession(id);
         String title = body.has("title") ? string(body, "title", "") : null;

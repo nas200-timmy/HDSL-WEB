@@ -1127,6 +1127,9 @@ export const api = {
       ),
     session: (id: string) =>
       request<ChatSession>(`/api/chat/sessions/${encodeURIComponent(id)}`),
+    /** 整段会话分叉（复制），可指定目标助手；原会话不动。 */
+    forkSession: (id: string, body: { assistantId?: string; title?: string } = {}) =>
+      request<ChatSession>(`/api/chat/sessions/${encodeURIComponent(id)}/fork`, jsonInit("POST", body)),
     createSession: (body: { assistantId?: string; title?: string; model?: string; account?: string; reasoningLevel?: string }) =>
       request<ChatSession>("/api/chat/sessions", jsonInit("POST", body)),
     updateSession: (id: string, body: { title?: string; model?: string; account?: string; reasoningLevel?: string }) =>

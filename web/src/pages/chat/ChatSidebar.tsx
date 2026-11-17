@@ -253,3 +253,54 @@ export function RenameSessionDialog({
     </Dialog>
   );
 }
+/// 分叉会话：选目标助手 + 标题，复制整段会话（含变体与附件），原会话保持不动。
+export function ForkSessionDialog({
+  session, assistants, busy, onCancel, onConfirm,
+}: {
+  session: ChatSessionSummary | null;
+  assistants: ChatAssistant[];
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: (assistantId: string, title: string) => void;
+}) {
+  const [assistantId, setAssistantId] = useState("default");
+  const [title, setTitle] = useState("");
+  useEffect(() => {
+    if (session) {
+      setAssistantId(session.assistantId);
+      setTitle(`${session.title}（分叉）`);
+    }
+  }, [session]);
+  return (
+    <Dialog open={session !== null} title="分叉会话" onClose={busy ? undefined : onCancel}>
+      <p className="dialog-hint">
+        整段会话（消息、变体、附件）复制一份，原会话不动。
+      </p>
+      <label className="dialog-field">
+        <span>目标助手</span>
+        <select className="input" value={assistantId} onChange={(event) => setAssistantId(event.target.value)}>
+          {assistants.map((item) => (
+            <option key={item.id} value={item.id}>{item.name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="dialog-field">
+        <span>标题</span>
+        <input
+          className="input"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && title.trim()) onConfirm(assistantId, title.trim());
+          }}
+        />
+      </label>
+      <div className="dialog-actions">
+        <button className="btn btn-text dim" disabled={busy} onClick={onCancel}>取消</button>
+        <button className="btn btn-text" disabled={busy || !title.trim()} onClick={() => onConfirm(assistantId, title.trim())}>
+          {busy ? "分叉中…" : "分叉"}
+        </button>
+      </div>
+    </Dialog>
+  );
+}

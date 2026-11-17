@@ -460,12 +460,19 @@ record ModelCapabilities(
 
 ## 10. 后端接口
 
+> 分叉：`POST /api/chat/sessions/{id}/fork`，body `{assistantId?, title?}`。
+> 节点、变体（含 `active_variant_id` 映射）、附件行全部复制一份，默认落到原助手，
+> 可指定别的助手；标题默认「原标题（分叉）」。原会话不动，附件文件是内容寻址共享的
+> （`pruneOrphans` 以"仍被任何行引用"为准，删任一侧都不会剪掉另一侧的文件）。
+> 正在生成的会话拒绝分叉（409 `chat_busy`），避免复制到半截回答。
+
 ```text
 GET    /api/chat/sessions?assistant={id}
 POST   /api/chat/sessions
 GET    /api/chat/sessions/{id}
 PATCH  /api/chat/sessions/{id}
 DELETE /api/chat/sessions/{id}
+POST   /api/chat/sessions/{id}/fork          整段分叉（可换助手）
 
 POST   /api/chat/sessions/{id}/messages      send
 POST   /api/chat/sessions/{id}/regenerate    nodeId + mode

@@ -3,8 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { ConfirmDialog } from "../components/Dialog";
 import {
-  AddIcon, ArchiveIcon, DeleteIcon, DeployedCodeIcon, EditIcon, FormatListBulletedIcon,
-  LockIcon, MenuIcon, MoreVertIcon, SettingsIcon,
+  AddIcon, ArchiveIcon, ContentCopyIcon, DeleteIcon, DeployedCodeIcon, EditIcon,
+  FormatListBulletedIcon, LockIcon, MenuIcon, MoreVertIcon, SettingsIcon,
 } from "../components/icons";
 import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
 import { isElevationRequired, requestDeveloperPassword } from "../elevation";
@@ -19,7 +19,7 @@ import { ws } from "../ws";
 import { AssistantDialog, AssistantManagerDialog } from "./chat/AssistantDialog";
 import { AttachmentPreview } from "./chat/AttachmentPreview";
 import { readAttachmentPreview } from "./chat/attachmentPreviewSetting";
-import { ChatSidebar, RenameSessionDialog } from "./chat/ChatSidebar";
+import { ChatSidebar, ForkSessionDialog, RenameSessionDialog } from "./chat/ChatSidebar";
 import { Composer } from "./chat/Composer";
 import { Markdown } from "./chat/Markdown";
 import { MessageItem } from "./chat/MessageItem";
@@ -147,6 +147,7 @@ export function ChatPage() {
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ChatSessionSummary | null>(null);
+  const [forkTarget, setForkTarget] = useState<ChatSessionSummary | null>(null);
   const [deleteSessionTarget, setDeleteSessionTarget] = useState<ChatSessionSummary | null>(null);
   const [deleteNodeTarget, setDeleteNodeTarget] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<{ nodeId: string; text: string } | null>(null);
@@ -916,6 +917,32 @@ export function ChatPage() {
     }
   };
 
+  const forkSession = async (targetAssistantId: string, title: string) => {
+    if (!forkTarget) return;
+    setBusy(true);
+    try {
+      const created = await api.chat.forkSession(forkTarget.id, {
+        assistantId: targetAssistantId,
+        title,
+      });
+      ws.addTopics(["chat", `chat:${created.id}`]);
+      setSessions((previous) => [{
+        id: created.id, assistantId: created.assistantId, title: created.title,
+        model: created.model, account: created.account, createdAt: created.createdAt,
+        updatedAt: created.updatedAt, messageCount: created.nodes.length,
+        lastMessage: null,
+      }, ...previous]);
+      applySession(created);
+      setForkTarget(null);
+      const name = assistants.find((item) => item.id === targetAssistantId)?.name ?? targetAssistantId;
+      toast("success", `已分叉到「${name}」`);
+    } catch (error) {
+      toast("error", `分叉失败：${errMsg(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const deleteSession = async () => {
     if (!deleteSessionTarget) return;
     setBusy(true);
@@ -1040,6 +1067,16 @@ export function ChatPage() {
             }}
           >
             重命名会话
+          </PopupItem>
+          <PopupItem
+            icon={<ContentCopyIcon size={16} />}
+            onClick={() => {
+              const summary = sessions.find((item) => item.id === sessionId);
+              if (summary) setForkTarget(summary);
+              setSessionMenu(null);
+            }}
+          >
+            分叉会话…
           </PopupItem>
           <PopupSep />
           <PopupItem
@@ -1214,6 +1251,14 @@ export function ChatPage() {
           </div>
         )}
       </div>
+
+      <ForkSessionDialog
+        session={forkTarget}
+        assistants={assistants}
+        busy={busy}
+        onCancel={() => setForkTarget(null)}
+        onConfirm={(targetAssistantId, title) => void forkSession(targetAssistantId, title)}
+      />
 
       <RenameSessionDialog
         session={renameTarget}

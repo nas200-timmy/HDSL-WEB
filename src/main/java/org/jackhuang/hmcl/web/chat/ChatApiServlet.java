@@ -199,6 +199,14 @@ public final class ChatApiServlet extends HttpServlet {
                 Json.write(response, outcomeJson(outcome));
                 return;
             }
+            if ("/fork".equals(tail) && "POST".equals(method)) {
+                JsonObject body = readBody(request, response);
+                if (body != null) {
+                    Json.write(response, HttpServletResponse.SC_CREATED,
+                            chat.forkSession(sessionId, body));
+                }
+                return;
+            }
             if (tail.startsWith("/nodes/")) {
                 String nodeRest = tail.substring("/nodes/".length());
                 int nodeSlash = nodeRest.indexOf('/');

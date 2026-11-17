@@ -34,7 +34,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /// 聊天模块的 SQLite 存储（docs/chat.md §6）。
@@ -644,6 +646,163 @@ public final class ChatStore implements AutoCloseable {
             statement.executeUpdate();
         }
         return new Session(id, assistantId, title, model, accountName, null, now, now, List.of());
+    }
+
+    /// Forks a whole session — nodes, messages (with their variants) and
+    /// attachment rows — under another assistant. The attachment files are
+    /// content-addressed and shared: pruning keeps a file while any row names
+    /// it, so deleting either session cannot break the other.
+    ///
+    /// @param sourceId    the session to copy
+    /// @param assistantId the assistant the copy belongs to
+    /// @param title       the copy's title
+    /// @return the new session id
+    public synchronized String forkSession(String sourceId, String assistantId, String title)
+            throws SQLException {
+        long now = System.currentTimeMillis();
+        String newId = UUID.randomUUID().toString();
+        boolean autoCommit = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO chat_session
+                      (id, assistant_id, title, model, account_name, created_at, updated_at,
+                       reasoning_level, title_auto)
+                    SELECT ?, ?, ?, model, account_name, ?, ?, reasoning_level, 0
+                    FROM chat_session WHERE id=?""")) {
+                statement.setString(1, newId);
+                statement.setString(2, assistantId);
+                statement.setString(3, title);
+                statement.setLong(4, now);
+                statement.setLong(5, now);
+                statement.setString(6, sourceId);
+                if (statement.executeUpdate() == 0) {
+                    throw new SQLException("session " + sourceId + " disappeared during the fork");
+                }
+            }
+
+            record SourceNode(String id, int ordinal, String role, @Nullable String activeVariant) {
+            }
+            List<SourceNode> nodes = new ArrayList<>();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT id, ordinal, role, active_variant_id FROM chat_node
+                    WHERE session_id=? ORDER BY ordinal""")) {
+                statement.setString(1, sourceId);
+                try (ResultSet rs = statement.executeQuery()) {
+                    while (rs.next()) {
+                        nodes.add(new SourceNode(rs.getString(1), rs.getInt(2), rs.getString(3),
+                                rs.getString(4)));
+                    }
+                }
+            }
+
+            Map<String, String> messageIds = new HashMap<>();
+            for (SourceNode node : nodes) {
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "SELECT id FROM chat_message WHERE node_id=? ORDER BY variant_index")) {
+                    statement.setString(1, node.id());
+                    try (ResultSet rs = statement.executeQuery()) {
+                        while (rs.next()) {
+                            messageIds.put(rs.getString(1), UUID.randomUUID().toString());
+                        }
+                    }
+                }
+            }
+
+            for (SourceNode node : nodes) {
+                String nodeId = UUID.randomUUID().toString();
+                String active = node.activeVariant() == null ? null : messageIds.get(node.activeVariant());
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO chat_node (id, session_id, ordinal, role, active_variant_id, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)""")) {
+                    statement.setString(1, nodeId);
+                    statement.setString(2, newId);
+                    statement.setInt(3, node.ordinal());
+                    statement.setString(4, node.role());
+                    statement.setString(5, active);
+                    statement.setLong(6, now);
+                    statement.executeUpdate();
+                }
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT id, variant_index, content, reasoning, status, model, usage_json,
+                               created_at, edited_at, parts_json, blocks_json, sources_json,
+                               latest_reminder
+                        FROM chat_message WHERE node_id=? ORDER BY variant_index""")) {
+                    statement.setString(1, node.id());
+                    try (ResultSet rs = statement.executeQuery()) {
+                        while (rs.next()) {
+                            try (PreparedStatement insert = connection.prepareStatement("""
+                                    INSERT INTO chat_message
+                                      (id, node_id, variant_index, content, reasoning, status, model,
+                                       usage_json, created_at, edited_at, parts_json, blocks_json,
+                                       sources_json, latest_reminder)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""")) {
+                                insert.setString(1, messageIds.get(rs.getString(1)));
+                                insert.setString(2, nodeId);
+                                insert.setInt(3, rs.getInt(2));
+                                insert.setString(4, rs.getString(3));
+                                insert.setString(5, rs.getString(4));
+                                insert.setString(6, rs.getString(5));
+                                insert.setString(7, rs.getString(6));
+                                insert.setString(8, rs.getString(7));
+                                insert.setLong(9, rs.getLong(8));
+                                insert.setObject(10, rs.getObject(9));
+                                insert.setString(11, rs.getString(10));
+                                insert.setString(12, rs.getString(11));
+                                insert.setString(13, rs.getString(12));
+                                insert.setString(14, rs.getString(13));
+                                insert.executeUpdate();
+                            }
+                        }
+                    }
+                }
+            }
+
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT message_id, name, mime, kind, size, sha256, path, extracted_text_path,
+                           extract_status, extract_error, created_at, remote_file_id,
+                           remote_file_purpose, remote_uploaded_at
+                    FROM chat_attachment WHERE session_id=?""")) {
+                statement.setString(1, sourceId);
+                try (ResultSet rs = statement.executeQuery()) {
+                    while (rs.next()) {
+                        String messageId = rs.getString(1);
+                        try (PreparedStatement insert = connection.prepareStatement("""
+                                INSERT INTO chat_attachment
+                                  (id, session_id, message_id, name, mime, kind, size, sha256, path,
+                                   extracted_text_path, extract_status, extract_error, created_at,
+                                   remote_file_id, remote_file_purpose, remote_uploaded_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""")) {
+                            insert.setString(1, UUID.randomUUID().toString());
+                            insert.setString(2, newId);
+                            insert.setString(3, messageId == null ? null : messageIds.get(messageId));
+                            insert.setString(4, rs.getString(2));
+                            insert.setString(5, rs.getString(3));
+                            insert.setString(6, rs.getString(4));
+                            insert.setLong(7, rs.getLong(5));
+                            insert.setString(8, rs.getString(6));
+                            insert.setString(9, rs.getString(7));
+                            insert.setString(10, rs.getString(8));
+                            insert.setString(11, rs.getString(9));
+                            insert.setString(12, rs.getString(10));
+                            insert.setLong(13, rs.getLong(11));
+                            insert.setString(14, rs.getString(12));
+                            insert.setString(15, rs.getString(13));
+                            insert.setObject(16, rs.getObject(14));
+                            insert.executeUpdate();
+                        }
+                    }
+                }
+            }
+
+            connection.commit();
+            return newId;
+        } catch (SQLException | RuntimeException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            connection.setAutoCommit(autoCommit);
+        }
     }
 
     public synchronized void updateSession(String id, @Nullable String title,
