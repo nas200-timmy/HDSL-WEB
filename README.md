@@ -13,7 +13,7 @@
 Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo Code、MiniMax Code、ZCode
 也能一起装；能开终端的实例都配一个**原地终端**。
 转码是同一容器里的另一件一等功能：默认关闭，开启后在面板里批量编码、硬件加速与 GPU 监控。
-面板还自带**聊天页**：多助手、流式输出、附件与联网搜索，账户与 key 直接复用面板里已有的。
+面板还自带**聊天页**：多助手、流式输出、附件、联网搜索与会话导入/导出，账户与 key 直接复用面板里已有的。
 
 界面按桌面版复刻（HMCL 视觉语言、Material You 主题、同款图标与动画）：实例、版本、插件、账户、
 整合包、会话、技能、体检与 ACP 控制台都在。
@@ -98,8 +98,8 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo C
 | 运行前提 | JDK 17+；Node `^22.19.0 || >=24.0.0` 与 pnpm（dsh 由 pnpm 安装、由 node 运行）。FreeBSD 用 `pkg install node npm` 的系统 Node（没有托管构建），交互式终端已支持，但 **dsh 实例不可用**（上游 native addon 与 flock 两层拒绝），系统指标页大部分为空；设置 → 通用 → 平台兼容性会列出当前平台的已知差异，见 [docs/deployment.md §12](docs/deployment.md) |
 | 手机 | 窄屏（≤760px）或矮屏（≤520px）自动切换移动版式：主导航收成抽屉、子侧栏变顶部标签条、启动面板变成贴底操作栏；可点区域 44px；支持「加到主屏幕」。见 [docs/ui-spec.md §14](docs/ui-spec.md) |
 | 账户 | 为供应商填一次 API Key；供应商与模型来自 [models.dev](https://models.dev)（200+ 家，选中即带出端点、协议与密钥变量），也可手输；目录不可达时退回内置供应商与手输。见 [docs/ui-spec.md §4](docs/ui-spec.md) |
-| 聊天 | 面板内的多助手聊天页：流式输出、停止、两种重新生成、跨服务模型选择、按轮思考/搜索时间线（普通协议与流式也走）、右侧附件预览栏（图片/音视频/PDF 原生渲染，文本分页，CSV 表格）、图片/PDF/Office 附件与长文本转附件、按助手隔离系统提示词；会话存 SQLite，可每日备份。可选联网搜索（博查 / DeepSeek / 智谱 / Tavily / Brave / Exa），输入区可按消息选搜索源，模型只会拿到只读的 `search_web` / `scrape_web`，不能触发面板操作。独立 `/chat/settings` 收成 5 组：个人资料 / 模型 / 联网搜索 / 数据与备份 / 安全与网络。内置可开关的「DeepSeek 官方」预设角色：固定 DeepSeek 官方协议，使用官方联网搜索、读链接、来源引用、按块思考/搜索时间线与自动标题，不读面板搜索 provider；默认助手兼容 DeepSeek 的 DSML 文本工具调用。见 [docs/chat.md](docs/chat.md) |
-| 纯文本版 | 无 JavaScript 的 `/plain`：登录、会话列表、历史、发送、附件下载，提交后刷新看结果；w3m / lynx / 旧浏览器可用。现代界面在入口检测 fetch / WebSocket / flex，缺任何一项就跳到「浏览器太旧」提醒页，可一键进入纯文本版。见 [docs/plain-surface.md](docs/plain-surface.md) |
+| 聊天 | 面板内的多助手聊天页：流式输出、停止、两种重新生成、跨服务模型选择、按轮思考/搜索时间线（普通协议与流式也走）、右侧附件预览栏（图片/音视频/PDF 原生渲染，文本分页，CSV 表格）、图片/PDF/Office 附件与长文本转附件、按助手隔离系统提示词；会话存 SQLite，可每日备份。可选联网搜索（博查 / DeepSeek / 智谱 / Tavily / Brave / Exa），输入区可按消息选搜索源，模型只会拿到只读的 `search_web` / `scrape_web`，不能触发面板操作。独立 `/chat/settings` 收成 5 组：个人资料 / 模型 / 联网搜索 / 数据与备份 / 安全与网络。内置可开关的「DeepSeek 官方」预设角色：固定 DeepSeek 官方协议，使用官方联网搜索、读链接、来源引用、按块思考/搜索时间线与自动标题，不读面板搜索 provider；默认助手兼容 DeepSeek 的 DSML 文本工具调用。支持会话分叉、单会话导出与 DeepSeek 导出包导入，Markdown 支持 KaTeX 公式。见 [docs/chat.md](docs/chat.md) |
+| 纯文本版 | 无 JavaScript 的 `/plain`：登录、会话列表、历史、发送、附件下载与提权；增强模式下会话与正文长轮询更新，Markdown 与公式由服务端渲染，发送后不用整页刷新。w3m / lynx / IE11 可用。现代界面在入口检测 fetch / WebSocket / flex，缺任何一项就跳到「浏览器太旧」提醒页，可一键进入纯文本版。见 [docs/plain-surface.md](docs/plain-surface.md) |
 | 创建实例 | 创建即安装；未安装的实例点「启动」会先装再启；进度与失败原因都在面板上。见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md) |
 | 品牌实例 | 安装、版本共享与实验性边界见 [docs/brands.md](docs/brands.md)；Octop 见 [docs/octop.md](docs/octop.md)；ZCode 见 [docs/zcode-experimental.md](docs/zcode-experimental.md)（版本目录、按实例的最低版本/凭据格式闸门、3.18.x credential-secret 与密钥轮换）。Qwen / MiMo / MiniMax 是纯终端品牌（无网页进程、端口与 `/i/` 挂载） |
 | Minecraft | 默认关闭的第三方功能；开关在「设置 → 品牌实例」，需开发者密码并阅读 Mojang EULA 与服务条款。存档在 `/home/hdsl/mc`，容器部署必须挂出来。见 [docs/minecraft.md](docs/minecraft.md) |
@@ -304,7 +304,7 @@ Windows 用 PowerShell 版的同一个脚本（`scripts/install-hdsl-tui.ps1`）
   保存的服务器和登录会话记在 `~/.config/hdsl-tui/config.json`（`0600`），下次直接复用；
   开发者密码只在面板要求时问一次（30 分钟滑动）。
 - **聊天**：主菜单第一项。单列消息流 + 贴底输入框，Markdown 渲染，思考/搜索默认折成一行，
-  `Ctrl-O` 展开；`Ctrl-J` 换行、`Ctrl-C` 停止、`Ctrl-B` 会话列表、`/` 命令补全。
+  `Ctrl-O` 展开；`Ctrl-J` 换行、`Ctrl-C` 停止、`Ctrl-B` 会话列表、`/model` 切换模型、`/` 命令补全。
   读聊天设置需要开发者提权，聊天本身只需要登录。见 [docs/chat-tui.md](docs/chat-tui.md)。
 - 断开用 `Ctrl-]` 再按 `q`，回到菜单而不是退出程序，agent 继续跑；再进一次接回同一个会话。
 - 脚本或无终端环境加 `--plain` 退回逐行问答界面。
