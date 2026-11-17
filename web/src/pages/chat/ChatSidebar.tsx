@@ -180,7 +180,7 @@ export function ChatSidebar({
               onAssistant(item.id);
             }}
           >
-            <span className="chat-avatar small">{item.avatar || "💬"}</span>
+            <span className="chat-avatar small"><AvatarView value={item.avatar} /></span>
             <span style={{ flex: 1 }}>{item.name}</span>
             {item.id === assistantId && <span className="chat-check">✓</span>}
           </PopupItem>

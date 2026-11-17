@@ -67,6 +67,7 @@
   color: var(--monet-on-primary-container);
   font-size: 17px;
   line-height: 1;
+  overflow: hidden;
 }
 
 .chat-avatar.small {
