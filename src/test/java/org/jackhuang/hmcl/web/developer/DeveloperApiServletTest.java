@@ -236,22 +236,18 @@ class DeveloperApiServletTest {
             assertTrue(proxied.headers().firstValue("set-cookie").orElseThrow().contains("Secure"));
 
             // Without the header the panel honestly says "not HTTPS"; the
-            // developer password refuses to travel.
+            // developer password is still accepted as a second factor on a
+            // plain-HTTP panel.
             assertFalse(json(get(client, base + "/api/developer/status", cookie))
                     .get("https").getAsBoolean());
-            HttpResponse<String> refused = post(client, base + "/api/developer/password",
+            HttpResponse<String> allowedPlain = post(client, base + "/api/developer/password",
                     "{\"adminPassword\":\"" + PANEL_PASSWORD + "\",\"password\":\"" + DEV_PASSWORD
                             + "\",\"confirm\":\"" + DEV_PASSWORD + "\"}", cookie);
-            assertEquals(409, refused.statusCode(), refused.body());
-            assertTrue(refused.body().contains("tls_required"));
+            assertEquals(200, allowedPlain.statusCode(), allowedPlain.body());
 
-            // Behind the proxy (header present) the same call goes through.
+            // Behind the proxy (header present) status still reports HTTPS.
             assertTrue(json(getWithProto(client, base + "/api/developer/status", cookie, "https"))
                     .get("https").getAsBoolean());
-            HttpResponse<String> allowed = postWithProto(client, base + "/api/developer/password",
-                    "{\"adminPassword\":\"" + PANEL_PASSWORD + "\",\"password\":\"" + DEV_PASSWORD
-                            + "\",\"confirm\":\"" + DEV_PASSWORD + "\"}", cookie, "https");
-            assertEquals(200, allowed.statusCode(), allowed.body());
         }
     }
 

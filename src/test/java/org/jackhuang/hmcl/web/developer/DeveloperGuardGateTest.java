@@ -38,11 +38,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /// has to be on `/api/*` and `/i/*`, after the session gate, or the policy that
 /// [DeveloperGuardFilterTest] pins would never run.
 ///
-/// The panel in these tests is plain HTTP, and developer mode is HTTPS-only
-/// (docs/web-shell.md §4.3), so a gated request can never be satisfied: the
-/// answer is `tls_required` rather than `developer_elevation_required`. That is
-/// still the proof the gate fired — an ungated request reaches the servlet and
-/// gets an instance-level answer instead.
+/// The panel in these tests is plain HTTP. The developer password still acts
+/// as the second factor, so a gated request without elevation answers
+/// `developer_elevation_required` rather than `tls_required`. That is still the
+/// proof the gate fired — an ungated request reaches the servlet and gets an
+/// instance-level answer instead. Web Shell/terminal settings keep their own
+/// stricter TLS checks.
 class DeveloperGuardGateTest {
 
     @TempDir
@@ -95,13 +96,13 @@ class DeveloperGuardGateTest {
             assertEquals(403, page.statusCode());
             assertTrue(page.headers().firstValue("content-type").orElse("").contains("text/html"),
                     page.headers().toString());
-            assertTrue(page.body().contains("HTTPS"), "the page says why the gate cannot be satisfied");
+            assertTrue(page.body().contains("开发者密码"), "the page says why it is gated");
 
             // The instance's own fetch/XHR gets JSON, and the code names the
-            // transport policy (plain HTTP in this test).
+            // missing second factor (plain HTTP in this test).
             HttpResponse<String> api = send(running, "GET", "/i/whatever/api/foo");
             assertEquals(403, api.statusCode());
-            assertTrue(error(api).startsWith("tls_required"), error(api));
+            assertTrue(error(api).startsWith("developer_elevation_required"), error(api));
 
             // The instance list is not the proxy: it keeps working.
             assertEquals(200, send(running, "GET", "/api/instances").statusCode());
@@ -113,7 +114,7 @@ class DeveloperGuardGateTest {
         try (TestSupport.RunningServer running = start(DeveloperGuardScope.INSTANCE)) {
             HttpResponse<String> write = send(running, "POST", "/api/instances/no-such-instance/start");
             assertEquals(403, write.statusCode());
-            assertTrue(error(write).startsWith("tls_required"), error(write));
+            assertTrue(error(write).startsWith("developer_elevation_required"), error(write));
             // Reads stay open, which is what keeps the list usable behind the gate.
             assertEquals(200, send(running, "GET", "/api/instances").statusCode());
         }

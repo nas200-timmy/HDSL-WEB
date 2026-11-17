@@ -1179,6 +1179,14 @@ public final class DeveloperApiServlet extends HttpServlet {
     }
 
     private boolean requireTls(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String path = request.getPathInfo();
+        if (path != null && java.util.Set.of(
+                "/elevate", "/extend", "/revoke", "/password", "/password/clear").contains(path)) {
+            // The developer password is the second factor on a plain-HTTP
+            // panel too. The password field is encrypted by the SPA; curl can
+            // still send plaintext, exactly like the login endpoint.
+            return true;
+        }
         if (RequestSecurity.isSecure(request, tlsActive.getAsBoolean(), config)) {
             return true;
         }

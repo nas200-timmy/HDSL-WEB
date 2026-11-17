@@ -367,14 +367,6 @@ public final class HdslServer {
 
         ServletContextHandler context = new ServletContextHandler();
         context.setContextPath("/");
-        // Surfaces that cannot carry the per-request password/chat envelope
-        // are closed on a remote cleartext connection. Loopback stays
-        // available for local tests and SSH port forwarding.
-        org.jackhuang.hmcl.web.http.CleartextSurfaceFilter cleartextSurface =
-                new org.jackhuang.hmcl.web.http.CleartextSurfaceFilter(config, tlsActive);
-        context.addFilter(new FilterHolder(cleartextSurface), "/i/*", EnumSet.of(DispatcherType.REQUEST));
-        context.addFilter(new FilterHolder(cleartextSurface), "/plain/*", EnumSet.of(DispatcherType.REQUEST));
-        context.addFilter(new FilterHolder(cleartextSurface), "/ws/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(authFilter, "/api/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(authFilter, "/i/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(authFilter, "/ws/*", EnumSet.of(DispatcherType.REQUEST));

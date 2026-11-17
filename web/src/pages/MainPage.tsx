@@ -15,7 +15,7 @@ import { useMobileLayout, useTickingUptime } from "../hooks";
 import { I18N } from "../i18n";
 import { findTaskForInstance, getState, refreshExternal, refreshInstances, toast, useAppState } from "../store";
 import type { Instance } from "../types";
-import { formatUptime, normState, parsePortFromUrl } from "../utils";
+import { formatUptime, normState, parsePortFromUrl, confirmCleartextOpen } from "../utils";
 import { useWallpaperUrl } from "../wallpaper";
 import { withBase } from "../base";
 
@@ -109,6 +109,7 @@ function RunningPaneBrand({ entry }: { entry: LaunchEntry }) {
   const openUrl = ext?.url ?? withBase(`/i/${entry.id}/`);
 
   const doOpen = () => {
+    if (!confirmCleartextOpen()) return;
     if (entry.kind === "zcode") {
       void api.zcodeOpen(entry.id).then((r) => window.open(r.url, "_blank", "noopener"));  // r.url 已带挂载点前缀
       return;
@@ -258,6 +259,7 @@ function MobileHomeBrand({ entry }: { entry: LaunchEntry }) {
   const manageTarget = `/instances?view=${isTuiBrand(entry.kind) ? "tui" : "brands"}&brand=${entry.kind}`;
 
   const doOpen = () => {
+    if (!confirmCleartextOpen()) return;
     if (entry.kind === "zcode") {
       void api.zcodeOpen(entry.id).then((r) => window.open(r.url, "_blank", "noopener"));  // r.url 已带挂载点前缀
       return;

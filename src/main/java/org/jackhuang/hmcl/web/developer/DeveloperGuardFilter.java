@@ -134,16 +134,10 @@ public final class DeveloperGuardFilter implements Filter {
                     "The developer guard is on but no developer password is set.", false);
             return;
         }
-        // Elevation is only ever obtained over HTTPS (see DeveloperApiServlet),
-        // so on a plain-HTTP panel a gated request can never be satisfied. Say
-        // which policy refused it rather than asking for a password that cannot
-        // work.
-        if (!secure) {
-            refuse(answer, navigation, path, HttpServletResponse.SC_FORBIDDEN, "tls_required",
-                    "面板不在 HTTPS 下：开发者模式不可用。请先在「设置 → HTTPS 证书」里启用。",
-                    "The panel is not on HTTPS, so developer mode is unavailable.", false);
-            return;
-        }
+        // Elevation may be obtained over plain HTTP in this build: the
+        // developer password is the second factor, even though the transport
+        // is not private. Web Shell / agent-settings routes keep their own
+        // stricter TLS checks.
         if (elevation.require(key(http), sessionAlive(http)) || elevation.requireToken(bearerToken(http))) {
             chain.doFilter(request, response);
             return;

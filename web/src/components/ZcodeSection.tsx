@@ -20,7 +20,7 @@ import { I18N } from "../i18n";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
 import { refreshExternal, refreshZcode, toast, useAppState } from "../store";
 import type { ExternalInstance, InstancePlugins, ZcodeCatalogEntry } from "../types";
-import { errMsg } from "../utils";
+import { errMsg, confirmCleartextOpen } from "../utils";
 import { TerminalWindow, type TerminalTargetInfo } from "./TerminalWindow";
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
@@ -300,6 +300,7 @@ export function ZcodeSection() {
         if (!(await requestDeveloperPassword())) throw e;
         r = await api.zcodeOpen(inst.id);
       }
+      if (!confirmCleartextOpen()) return;
       window.open(r.url, "_blank", "noopener");  // r.url 已带挂载点前缀
     } catch (e) {
       toast("error", `打开失败：${errMsg(e)}`);

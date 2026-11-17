@@ -4,7 +4,7 @@ import { requestDeveloperPassword, isElevationRequired } from "./elevation";
 import { I18N } from "./i18n";
 import { patchInstanceLocal, refreshExternal, seedTasks, toast } from "./store";
 import type { Instance } from "./types";
-import { errMsg } from "./utils";
+import { errMsg, confirmCleartextOpen } from "./utils";
 
 /**
  * 跑一个可能被开发者守卫挡住的请求：被挡住时弹一次开发者密码框，成功后重试一次。
@@ -134,6 +134,10 @@ export async function launchBrandInstance(
         : (await withElevation(() => api.openBrand(brand, entry.id))).url;
     const popup = consumeLaunchPopup(entry.id);
     toast("success", I18N["dsh.launch.ready"].replace("%s", entry.name));
+    if (!confirmCleartextOpen()) {
+      if (popup && !popup.closed) popup.close();
+      return false;
+    }
     if (popup && !popup.closed) {
       popup.location.href = target;
     } else {

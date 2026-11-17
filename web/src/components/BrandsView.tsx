@@ -43,7 +43,7 @@ import type {
   InstancePlugins,
   ZcodeCatalogEntry,
 } from "../types";
-import { errMsg, formatDateTime } from "../utils";
+import { errMsg, formatDateTime, confirmCleartextOpen } from "../utils";
 
 /// 状态徽章：与 ZcodeSection 的 STATE_TEXT/STATE_TAG 同款（文案进 I18N 字典）
 const STATE_TEXT: Record<string, string> = {
@@ -1596,6 +1596,7 @@ function InstancesCard({
   const doOpen = (inst: ExternalInstance) => {
     // inst.url 已由后端带挂载点前缀（open/list 端点统一在 REST 边界加 base），
     // 直接打开；只有兜底构造的本地路径才需要 withBase。
+    if (!confirmCleartextOpen()) return;
     window.open(inst.url ?? withBase(`/i/${inst.id}/`), "_blank", "noopener");
   };
 

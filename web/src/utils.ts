@@ -215,3 +215,14 @@ export function registryError(value: string): string | null {
   if (u.search || u.hash) return "地址里不能带查询参数或 # 片段";
   return null;
 }
+
+/** 反代页面（/i/…）在裸 HTTP 下打开前的提醒。HTTPS 下直接放行。 */
+export function confirmCleartextOpen(): boolean {
+  if (window.location.protocol !== "http:") return true;
+  return window.confirm(
+    "当前面板是 HTTP。\n\n" +
+    "反代页面（/i/...）没有 TLS，页面内容、Cookie 和输入都可能被同一网络的人看到。" +
+    "开发者密码只能当第二道验证，不能替代加密。\n\n" +
+    "建议先用 HTTPS 或 SSH 隧道；仍要继续打开吗？",
+  );
+}
