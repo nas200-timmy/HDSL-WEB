@@ -71,7 +71,7 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo C
 - **每个实例一份自己的 `home` 与工作区**：dsh 是独立的 `DSH_HOME`，品牌实例把 `HOME`/`USERPROFILE` 指到实例目录——换实例就是换一套账号、配置和会话，彼此不串。
 - **实例自己的端口只在回环上**：dsh 实例在 3081–4081 里分配、终身绑定，品牌实例从 20000–60999 里挑一个；对外只有面板这一道门。agent 的凭据落在数据卷里的实例目录，不散在宿主。
 - **终端是一张一次性 ticket**（30 秒、绑定实例与会话）：关掉网页不影响 agent，面板退出才一起收掉。
-- **两层钥匙**：面板密码 + 开发者密码第二因子；Web Shell 只在 HTTPS 下开，也能整体关掉。
+- **两层钥匙**：面板密码 + 开发者密码第二因子；HTTPS 下是完整开发者模式，裸 HTTP 下只当第二道验证（远程强制 `guard=ALL`），Web Shell/终端仍只在 HTTPS 下开，也能整体关掉。
 - **备份只有一个目录**：配置、证书、账号、实例、`DSH_HOME`、pnpm store 全在 `/data` 下，拷走那一个卷就搬完了（工作区可以另挂宿主机目录）。
 
 ## 截图
@@ -98,6 +98,7 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo C
 | 运行前提 | JDK 17+；Node `^22.19.0 || >=24.0.0` 与 pnpm（dsh 由 pnpm 安装、由 node 运行）。FreeBSD 用 `pkg install node npm` 的系统 Node（没有托管构建），交互式终端已支持，但 **dsh 实例不可用**（上游 native addon 与 flock 两层拒绝），系统指标页大部分为空；设置 → 通用 → 平台兼容性会列出当前平台的已知差异，见 [docs/deployment.md §12](docs/deployment.md) |
 | 手机 | 窄屏（≤760px）或矮屏（≤520px）自动切换移动版式：主导航收成抽屉、子侧栏变顶部标签条、启动面板变成贴底操作栏；可点区域 44px；支持「加到主屏幕」。见 [docs/ui-spec.md §14](docs/ui-spec.md) |
 | 账户 | 为供应商填一次 API Key；供应商与模型来自 [models.dev](https://models.dev)（200+ 家，选中即带出端点、协议与密钥变量），也可手输；目录不可达时退回内置供应商与手输。见 [docs/ui-spec.md §4](docs/ui-spec.md) |
+| HTTPS / ACME | 自签、上传 PEM / PKCS#12、热重载；内置 ACME DNS-01 自动签发与续期（Cloudflare、阿里云、DNSPod、GoDaddy、DigitalOcean、Vultr），支持 staging、通配符与异步强制签发。DNS/CA 凭据存 `auth/acme.json`（0600），不进 `server.yaml`。见 [docs/deployment.md §2](docs/deployment.md) |
 | 聊天 | 面板内的多助手聊天页：流式输出、停止、两种重新生成、跨服务模型选择、按轮思考/搜索时间线（普通协议与流式也走）、右侧附件预览栏（图片/音视频/PDF 原生渲染，文本分页，CSV 表格）、图片/PDF/Office 附件与长文本转附件、按助手隔离系统提示词；会话存 SQLite，可每日备份。可选联网搜索（博查 / DeepSeek / 智谱 / Tavily / Brave / Exa），输入区可按消息选搜索源，模型只会拿到只读的 `search_web` / `scrape_web`，不能触发面板操作。独立 `/chat/settings` 收成 5 组：个人资料 / 模型 / 联网搜索 / 数据与备份 / 安全与网络。内置可开关的「DeepSeek 官方」预设角色：固定 DeepSeek 官方协议，使用官方联网搜索、读链接、来源引用、按块思考/搜索时间线与自动标题，不读面板搜索 provider；默认助手兼容 DeepSeek 的 DSML 文本工具调用。支持会话分叉、单会话导出与 DeepSeek 导出包导入，Markdown 支持 KaTeX 公式。见 [docs/chat.md](docs/chat.md) |
 | 纯文本版 | 无 JavaScript 的 `/plain`：登录、会话列表、历史、发送、附件下载与提权；增强模式下会话与正文长轮询更新，Markdown 与公式由服务端渲染，发送后不用整页刷新。w3m / lynx / IE11 可用。现代界面在入口检测 fetch / WebSocket / flex，缺任何一项就跳到「浏览器太旧」提醒页，可一键进入纯文本版。见 [docs/plain-surface.md](docs/plain-surface.md) |
 | 创建实例 | 创建即安装；未安装的实例点「启动」会先装再启；进度与失败原因都在面板上。见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md) |
@@ -105,7 +106,7 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo C
 | Minecraft | 默认关闭的第三方功能；开关在「设置 → 品牌实例」，需开发者密码并阅读 Mojang EULA 与服务条款。存档在 `/home/hdsl/mc`，容器部署必须挂出来。见 [docs/minecraft.md](docs/minecraft.md) |
 | 转码 | 默认关闭的第三方功能；开关同样在「设置 → 品牌实例」，需开发者密码并阅读须知。服务端队列批量编码，硬件失败按 QSV → VAAPI → CPU 每次降一档（或完全自动化），参数面板对齐 3FUI。媒体根是 `/home/hdsl/video`，ffmpeg 支持静态包 / apt-dnf / 源码编译三种装法。见 [docs/transcode.md](docs/transcode.md) |
 | 下载源 | 设置页可选预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL；保存即生效。见 [docs/deployment.md](docs/deployment.md) |
-| 安全 | 威胁模型、误配自查与免责统一在 [docs/security.md](docs/security.md) |
+| 安全 | 威胁模型、误配自查与免责统一在 [docs/security.md](docs/security.md)；裸 HTTP 的密码/聊天信封只防被动嗅探，`/plain` + IE11 是已知明文洞（§6.1） |
 | 从零重建 | [docs/build-from-scratch-prompt.md](docs/build-from-scratch-prompt.md) 是一份完整任务提示词，**只在新仓库用** |
 
 ## 架构
@@ -472,6 +473,7 @@ Windows 上有两个目录，别混：
 | `/data/server.yaml` | 声明式配置（监听、HTTPS、认证），可手写，也可由面板证书上传回写 | 是 |
 | `/data/certs/` | TLS 身份：上传的 `uploaded.pem`/`uploaded.key` 或 `uploaded.p12`；首启自签是 `self-signed.pem`/`self-signed-key.pem` | 是 |
 | `/data/auth/users.json` | 管理员账号的口令哈希 | 是 |
+| `/data/auth/developer.json`、`agent.json`、`acme.json` | 开发者口令、agent 口令、ACME DNS / CA 凭据（0600 root） | 是 |
 | `/data/logs/` | 服务端日志 | 否 |
 | `/data/tmp/` | 上传暂存（插件 `.tgz`、证书、整合包 `.dspack`） | 否 |
 | `/data/exports/` | 导出的整合包产物（`GET /api/exports` 列出的就是它） | 否 |
@@ -546,6 +548,12 @@ logs:
 
 面板里也能直接生成：设置 →「HTTPS 证书」→「生成并使用自签名证书」，同一端口立刻切到 HTTPS。
 它是临时方案——浏览器会提示证书不受信任，不能证明服务器身份，只适合内网或短期使用。
+
+面板也内置 **ACME DNS-01** 自动签发/续期：有公网域名和 DNS provider token 时，在
+「设置 → HTTPS 证书 → ACME」配置即可，不需要 certbot，也不需要开放 80 端口。支持
+Cloudflare / 阿里云 / DNSPod / GoDaddy / DigitalOcean / Vultr，建议先用 staging 跑通。
+DNS/CA 凭据存 `auth/acme.json`（0600），不进 `server.yaml`。详见
+[docs/deployment.md §2](docs/deployment.md)。
 
 ### 用 IP 直连是正常用法
 
@@ -652,8 +660,12 @@ https:
 - **登录失败有预算**：同一来源地址 5 分钟内错 15 次，第 16 次起拒绝 10 分钟（带 `Retry-After`），
   期间口令正确也进不来；来源取的是 TCP 对端地址（不信 `X-Forwarded-For`），所以面板在反代
   后面时这份预算是**所有访问者共用**的。
-- **开发者模式是第二把锁**：独立口令（`auth/developer.json`，0600），只在真 HTTPS 下可用，提权
+- **开发者模式是第二把锁**：独立口令（`auth/developer.json`，0600）。HTTPS 下是完整模式；
+  裸 HTTP 下只当第二道验证（远程强制 `guard=ALL`，Web Shell/终端仍要求 HTTPS）。提权
   30 分钟滑动；它守的是终端、E-Stop、守卫档位、装包这些"能执行代码"的动作。
+- **裸 HTTP 的应用层加密**：密码字段与 `/api/chat/*` 可走 X25519 + ChaCha20-Poly1305
+  信封，只防被动嗅探，不防主动 MITM；`/plain` + IE11 是已知明文洞。不要拿它替代 HTTPS，
+  见 [docs/security.md §6.1](docs/security.md)。
 - **agent 访问是另一把较小的钥匙**：agent 用自己的密码（`auth/agent.json`）走
   `POST /api/developer/agent-auth` 换票——免会话，但必须有人正在提权，票随提权一起失效。
   scope 五类（read / mc / instances / config / plugins），默认只读，未分类路由一律拒绝；

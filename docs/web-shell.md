@@ -170,17 +170,19 @@
 - **验证纪律**：E-Stop 只能在独立起的临时面板（临时 `HDSL_DATA`、`HDSL_PORT=0`）上按。生产面板里往往
   正跑着干活的 agent（包括用来修面板的那个），按下去会一起杀掉，而且一小时内回不来。
 
-### 4.3 开发者模式只在 HTTPS 下可用
+### 4.3 开发者模式：HTTPS 完整，HTTP 只有第二因子
 
-开发者模式、终端、守卫与紧急停机都只在面板**此刻真的在讲 TLS** 时可用（读的是主连接器，不是配置里的
-`https.enabled`）。裸 HTTP 部署就随它去：面板不会在那种状态下开开发者模式，也不会开守卫——没有 TLS 时
-"提权"本身就是明文传密码，与其给一把假锁，不如不给。这也意味着**裸 HTTP 下不存在"先提权再放行"这条路**，
-任何 `developer_guard.scope` 都只会让实例网页更难打开，而不会真正变安全。
+终端、agent 密码、guard/终端相关设置仍然只在面板**此刻真的在讲 TLS** 时可用（读主连接器，
+尊重 `https.trust_forwarded_proto`）。**但开发者密码本身在裸 HTTP 下可以作为第二因子**：
+可以设置/修改/提权/延长/停止，用它把 `/api/*` 和 `/i/*` 挡住；远程明文 HTTP 会强制
+`developer_guard.scope=ALL`，回环不强制（本地测试 / SSH 转发）。
 
-- HTTP 下进入「开发者模式」会弹出「当前环境不安全」的提示，并指引到「HTTPS 证书」；终端按钮在实例列表里
-  隐藏，直接调 `POST .../terminal` 返回 403 `insecure_transport`。
-- **开发者守卫与紧急停机同样只在 HTTPS 下可用**：它们都建立在提权之上，拿不到提权时 `/i/*` 的回答是
-  `tls_required`（提权页会说明"开发者模式不可用"），开发者页把两组控件变灰并写明原因。
+- HTTP 下终端按钮仍然隐藏，直接调 `POST .../terminal` 返回 403 `insecure_transport`；
+  agent 密码与 guard/终端设置也仍然返回 `tls_required`。
+- `/i/*` 与 `/plain` 不再因为“非 TLS 且非回环”而硬 403（11267），改为第二因子 + 风险提示；
+  `/plain` 本身是无 JS/旧浏览器表面，不是加密表面，详见 `security.md` §6.1。
+- **守卫在裸 HTTP 下有意义，但只是应用层第二道门**：远程 HTTP 强制 `ALL`，提权可以拿到；
+  会话 Cookie 仍是明文 Bearer，密码/聊天信封只防被动嗅探，不防主动 MITM。不要把它当传输安全。
 - 威胁模型与责任划分（哪些归面板、哪些归部署者）见 [`design-notes.md` §7](design-notes.md#7-安全模型)。
 - 没有证书时可以选择生成自签名证书：`POST /api/settings/tls/self-signed` 生成（或复用）
   `<data>/certs/self-signed*.pem`，把 `https.enabled` 写进 `server.yaml`，在同一端口热切换

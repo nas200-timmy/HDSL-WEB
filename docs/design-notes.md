@@ -82,6 +82,9 @@ README 只保留「用户需要知道的」。这里记录为什么这样做—�
 - 面板上传证书是热切换：HTTPS 用 `SslContextFactory.reload()`；HTTP 在运行时把明文连接器
   换成 TLS 连接器；运行时切换失败则回滚为明文并返回 `restartRequired: true`（选择已写入
   `server.yaml`，重启即生效）。
+- ACME（`https.acme`）是另一种证书来源：后台签发/续期，结果写
+  `certs/acme/fullchain.pem` + `privkey.pem`，走上传证书同一条加载/热切换路径；失败保留
+  旧证书，不会把正在服务的站点打空。详见 `deployment.md §2`。
 - 只认 TLS 的端口：把 `redirect_same_port` 设为 `false`；再开一个固定明文端口做跳转：
   `redirect_http: true` + `redirect_port`。
 
@@ -132,22 +135,23 @@ README 只保留「用户需要知道的」。这里记录为什么这样做—�
    冻结 1 小时（`/i/*`、实例写操作、终端一律 503）。状态只在内存，重启进程/容器即解除，
    这是唯一的物理恢复方式，也是刻意的选择（宿主机权限 = 恢复键）。
 
-### 7.4 明文 HTTP：随它去，但不给钥匙
+### 7.4 明文 HTTP：第二因子不是传输安全
 
-**开发者模式、终端、守卫、E-Stop 只在面板此刻真的在讲 TLS 时可用**（读主连接器状态，尊重
-`https.trust_forwarded_proto`）。裸 HTTP 部署随它去——那是部署者的选择，面板不为他兜底；但也
-不会在那种状态下把开发者模式打开：没有 TLS 时"提权"本身就是明文传密码，给一把假锁比不给更糟。
+HTTP 下没有 TLS，所以这里的定位是「把门加在应用层」，不是「把明文变成密文」。
 
-- HTTP 下开发者页只给提示与去「HTTPS 证书」的按钮；终端 open 返回 403 `insecure_transport`；
-  提权与守卫返回 409/403 `tls_required`；`/i/*` 的提权页直接说"面板不在 HTTPS 下，
-  开发者模式不可用"（不会渲染密码框，因为填了也没用）。
-- **守卫在裸 HTTP 下没有意义**：它不是"再加一道门"，而是"提权管到哪"；提权本身拿不到，
-  守卫只会把实例网页一起锁死。所以守卫与 E-Stop 的控件在 HTTP 下变灰并写明原因（不隐藏）。
-- 判断"是否 HTTPS"遵守 `https.trust_forwarded_proto`：反代终结 TLS 且发了
+- **开发者密码在 HTTP 下可以作为第二因子**：可以设置/修改/提权/延长/停止，用它把
+  `/api/*` 和 `/i/*` 挡住；**远程明文 HTTP 会强制 `developer_guard.scope=ALL`**，回环
+  不强制（本地测试 / SSH 转发）。
+- **Web Shell、实例终端、agent 密码、guard/终端设置仍然只在 HTTPS 下可用**；HTTP 下
+  终端按钮隐藏、对应接口 403。不要把它当成完整开发者模式。
+- **会话 Cookie 仍是明文 Bearer**（HTTP 下没有 `Secure`）。密码字段和 `/api/chat/*`
+  的 X25519 + ChaCha20-Poly1305 信封只防被动嗅探，不防主动 MITM、不防 JS/公钥被替换；
+  旧浏览器 / curl 仍可发明文。`/plain` + IE11 的明文洞见 `security.md` §6.1。
+- 判断「是否 HTTPS」遵守 `https.trust_forwarded_proto`：反代终结 TLS 且发了
   `X-Forwarded-Proto: https` 就按 HTTPS 算。这个信任是显式开关，默认关——直接能连到面板
   HTTP 端口的客户端可以自己写这个头，所以别在混合暴露的部署上打开它。
-- 想让面板在 HTTP 上可用又安全，正确做法是**给它 TLS**（自签证书、真证书、或反代终结 TLS），
-  不是放宽判定。
+- 想让面板在 HTTP 上可用又安全，正确做法仍然是**给它 TLS**（自签证书、真证书、ACME、
+  或反代终结 TLS），不是放宽判定。
 
 ### 7.4.1 出站 TLS：出错要说原因，放宽要人点头
 

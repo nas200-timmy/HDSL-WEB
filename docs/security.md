@@ -104,8 +104,8 @@ key 的价值）全是部署者的责任。
 
 ### 2.7 容器里的身份划分（v0.6.44 起）
 
-- **面板是 root**，`auth/`（含开发者口令哈希）、`certs/`（TLS 私钥）、`logs/`（审计）、
-  `server.yaml` 是 root `0700/0600`；
+- **面板是 root**，`auth/`（含开发者/agent 口令哈希与 ACME DNS/CA 凭据）、`certs/`
+  （TLS 私钥，含 ACME 证书）、`logs/`（审计）、`server.yaml` 是 root `0700/0600`；
 - **每个 agent 进程降权到 uid 1000**（`setpriv`，exec 原地替换，进程组与 PTY 会话不变）；
 - 所以 agent **读不到也改不了**面板的凭据，也 `kill` 不掉面板、ptrace 不了它；
 - **反方向的文件要交还**：pnpm 的 `~/.config/pnpm/config.yaml` 这类"面板写、agent 读"的配置

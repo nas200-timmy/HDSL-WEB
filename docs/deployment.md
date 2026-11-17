@@ -292,6 +292,8 @@ compose / 磁盘 / 面板端口 / MC 端口逐条列出来，缺什么就给这�
 | `/data/certs/self-signed.pem`、`self-signed-key.pem` | 首启自动生成（`https.enabled: true` 且未配证书） |
 | `/data/certs/uploaded.pem`、`uploaded.key` | 面板上传 PEM |
 | `/data/certs/uploaded.p12` | 面板上传 PKCS#12（**加载优先级最高**，会盖过 PEM） |
+| `/data/certs/acme/fullchain.pem`、`privkey.pem` | ACME 签发结果（自动续期） |
+| `/data/auth/acme.json` | DNS provider token / AccessKey 与 CA EAB 凭据（0600 root） |
 
 ### 面板上传：热切换，不重启
 
@@ -302,22 +304,55 @@ compose / 磁盘 / 面板端口 / MC 端口逐条列出来，缺什么就给这�
 3. 还是 HTTP → 运行时把明文连接器换成 TLS 连接器（同主机同端口）；
 4. 切换失败 → 回滚成明文，响应带 `restartRequired: true`；`server.yaml` 已经写好，**重启容器即生效**。
 
-### Let's Encrypt / 自动续期
+### ACME 自动签发与续期（DNS-01）
 
-HDSL-web 不做 ACME，续期要么交给外层代理（推荐：Caddy 自动续期，内层不配证书），
-要么把续期产物送进容器再重启：
+面板内置 ACME，默认关闭；启用后自己签发和续期，不需要 certbot，也不需要开放 80 端口。
 
-```bash
-# 宿主机上 certbot 续期后
-docker cp /etc/letsencrypt/live/dsh.example.com/fullchain.pem hdsl-web:/data/certs/uploaded.pem
-docker cp /etc/letsencrypt/live/dsh.example.com/privkey.pem  hdsl-web:/data/certs/uploaded.key
-# 让 HDSL-web 读取新文件：走面板上传（热重载）或直接重启
-docker compose restart hdsl-web
+- 入口：设置 →「HTTPS 证书」→ ACME，或直接写 `server.yaml` 的 `https.acme`。
+- 已实现的 DNS provider：Cloudflare、阿里云 DNS、DNSPod / 腾讯云、GoDaddy、
+  DigitalOcean、Vultr。华为云、Route 53、Namecheap、Gandi、Porkbun、RFC 2136、
+  acme-dns 出现在列表里但尚未实现，选了会 400。
+- CA：Let's Encrypt（含 staging）、ZeroSSL、Google Trust Services、Buypass、
+  HARICA、SSL.com、自定义 ACME 目录；通配符靠 DNS-01，必须用支持通配符的 CA。
+- 只支持 DNS-01：不需要公网 80/443 入站，但需要能出站访问 CA 与 DNS provider API，
+  并且域名在所选 provider 的 zone 里。`domains` 留空时从 `public_base_url` 取主机名。
+- 凭据：DNS token / AccessKey 存在 `<data>/auth/acme.json`（0600 root），**不进
+  `server.yaml`、不回显 API**；CA 的 EAB 也在这里。备份 `/data` 时它是敏感数据。
+- 建议先用 staging（`use_staging: true`）跑通，再切生产；`POST /api/settings/acme/issue`
+  是异步的，立即返回，DNS-01 挑战在后台跑，状态看 `GET /api/settings/acme`。
+- 失败不会删旧证书：当前自签或已上传的证书继续服务，错误写进状态与审计；
+  续期在到期前 `renew_before_days`（7–60）触发。
+- 签发结果在 `/data/certs/acme/fullchain.pem` 与 `privkey.pem`；加载/热切换走上传证书
+  同一条路径。写配置/凭据要求 HTTPS + 开发者提权；写凭据还要面板密码二次确认。
+  裸 HTTP 下 ACME 接口返回 `tls_required`。
+
+最小配置：
+
+```yaml
+https:
+  enabled: true
+  acme:
+    enabled: true
+    ca: letsencrypt
+    email: admin@example.com
+    domains: [dsh.example.com, "*.dsh.example.com"]
+    provider: cloudflare
+    renew_before_days: 30
+    use_staging: true
+    accept_terms: true
 ```
 
-> `docker cp` 写入的是 root 属主的文件；面板现在以 root 运行，读取没问题。
-> **不要**把 `/data/certs` chown 给 1000——那会把面板的私钥交给 agent（入口下次启动也会
-> 把它改回 root 0700）。走面板上传则完全不用操心权限。
+DNS token 通过面板写入（不要写进 YAML）：
+
+```bash
+# 登录、提权后
+curl -k -b cookie -X PUT https://panel/api/settings/acme/credentials \
+  -H 'Content-Type: application/json' \
+  -d '{"provider":"cloudflare","dns":{"apiToken":"…"},"panelPassword":"…"}'
+```
+
+> 仍然推荐外层反代终结 TLS 的部署；ACME 是给「面板自己对外」或「没有 Caddy」的场景。
+> 真实签发前先读 [`security.md` §6.1](security.md)：DNS token 泄漏等于域名被接管。
 
 ### 手工替换 + 重启
 

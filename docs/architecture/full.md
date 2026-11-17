@@ -36,6 +36,8 @@ flowchart LR
     task["TaskService<br/>安装 / 下载 / 构建任务"]
     tx["TranscodeModule<br/>FeatureState · Queue · Presets<br/>Tools · Quality · Installer"]
     chat["ChatModule<br/>Store · TurnManager · Attachments<br/>EndpointResolver · Backup"]
+    acme["AcmeService<br/>DNS-01 · Credentials · Renewal"]
+    crypto["PasswordCrypto / ChatCryptoService<br/>X25519 · HKDF · ChaCha20-Poly1305"]
     event["EventBus"]
     audit["AuditLog"]
     authsvc["AuthService / UserStore<br/>LoginThrottle"]
@@ -71,8 +73,8 @@ flowchart LR
   subgraph storage["持久化布局"]
     direction TB
     cfg["server.yaml<br/>设置"]
-    authd["auth/<br/>users · developer · agent"]
-    certs["certs/<br/>TLS"]
+    authd["auth/<br/>users · developer · agent · acme"]
+    certs["certs/<br/>TLS · acme/fullchain.pem · privkey.pem"]
     logs["logs/<br/>面板 · 审计"]
     hdsl["hdsl/<br/>launcher-settings · instances · homes<br/>runtimes · catalog · logs"]
     brandsd["brands/<brand>/<br/>releases · instances"]
@@ -116,6 +118,8 @@ flowchart LR
   api --> task
   api --> tx
   api --> chat
+  api --> acme
+  api --> crypto
   api --> authsvc
   api --> elev
   api --> brandrt

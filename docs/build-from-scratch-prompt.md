@@ -89,9 +89,10 @@ TypeScript（strict）+ Vite 6 + xterm 6 + `@material/material-color-utilities`�
   两条出路），默认严格，放宽必须由人逐字回传一句确认语、1–1440 分钟、写进 `server.yaml`、可撤销、
   进审计。窗口内也不是直接跳过：先按 `cacerts`、再按机器自己的根证书库校验，两张都不认才接受并记日志。
   **默认选最新稳定版 Node 的那个坑（§5.15）和这个坑是邻居**：都在"装东西"这条路上。
-- **开发者面只在 HTTPS 下可用**（读主连接器真实状态，尊重 `https.trust_forwarded_proto`）：
-  明文 HTTP 下开发者页只给提示与「去 HTTPS 证书」，终端 403 `insecure_transport`，提权/守卫
-  409/403 `tls_required`；`/i/*` 的拦截页说明"开发者模式不可用"。**不要**在 HTTP 上放开它。
+- **开发者面：HTTPS 是完整体，HTTP 只有第二因子**（读主连接器真实状态，尊重
+  `https.trust_forwarded_proto`）：HTTP 下可以设置/提权开发者密码，但终端仍 403
+  `insecure_transport`，agent 密码与 guard/终端设置仍要求 `tls_required`；远程明文 HTTP
+  强制 `developer_guard.scope=ALL`。密码字段/聊天信封只防被动嗅探，不能替代 TLS。
 
 ### 2.3 反代 `/i/<id>/`
 - 剥掉前缀、`Host` 原样透传（实例靠 `Origin == Host` 判同源）、hop-by-hop 头双向剥离、

@@ -2,14 +2,10 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
-## 未发布 — 安全文档
-
-- 补「IE11 + 裸 HTTP + `/plain`」的反面教材：明确它是已知且接受的明文洞，列出实际暴露面、
-  最低限度部署清单与收口方向；`/plain` 文档同步加安全边界提示。
-
-## v0.6.92 — 2026-11-17 · 会话分叉、导入导出与 legacy 表面调优
+## v0.6.92 — 2026-11-17 · 会话分叉、ACME 与 HTTP 安全
 
 > 聊天补上会话级操作（分叉、配置快照、导入/导出、公式），上下文截断改成显式报错；
+> 新增 ACME DNS-01 自动签发/续期与面板配置；裸 HTTP 的密码/聊天信封与开发者密码第二因子；
 > `/plain` 的 SSR 并发可配、登录卡与 HMCL 主题对齐，文本浏览器的布局写回标记。
 
 ### 聊天
@@ -70,10 +66,39 @@
 - 左侧分区导航去掉悬浮提示：它会在鼠标划过导航时盖住右侧的说明文字，实际很难读；
   分区提示仍然显示在内容区顶部（`tc-section-hint`），信息没有丢。
 
+### ACME（DNS-01）
+
+- 内置 ACME 自动签发/续期，默认关闭：`https.acme` 或 设置 → HTTPS 证书 → ACME。
+- 已实现 provider：Cloudflare、阿里云、DNSPod、GoDaddy、DigitalOcean、Vultr；
+  CA：Let's Encrypt（含 staging）、ZeroSSL、Google Trust Services、Buypass、HARICA、
+  SSL.com、自定义目录。只做 DNS-01，支持通配符，不需要 80 入站。
+- 凭据存 `auth/acme.json`（0600 root），不进 `server.yaml`、不回显 API；写配置/凭据要求
+  HTTPS + 开发者提权，凭据还要面板密码二次确认。
+- 异步强制签发，失败保留旧证书；`renew_before_days` 7–60。覆盖 AcmeConfig、
+  CredentialStore、ProviderRegistry、Service 与各 provider 的测试。
+
+### HTTP 安全
+
+- 密码字段信封：登录/改密/开发者提权用 X25519 + HKDF-SHA256 + ChaCha20-Poly1305，
+  服务端密钥每次启动轮换；明文仍兼容 curl / 旧客户端。
+- 聊天通道：`/api/chat/*` JSON 与 `chat:*` WS 帧可走 per-tab 握手加密；旧客户端继续明文。
+- 远程裸 HTTP 强制 `developer_guard=ALL`；开发者密码可在 HTTP 下设置/提权，但 Web Shell、
+  实例终端、agent 密码仍只认 HTTPS。
+- 安全冒烟：加密登录 → HTTP 提权 → ACME 门禁 → chat-key → 加密 chat GET/POST，
+  回环/远程/HTTPS 三种场景全过；`PasswordCrypto` / `ChatCryptoService` 单测覆盖。
+
+### 文档
+
+- `security.md` 补 §6.1「IE11 + 裸 HTTP + `/plain`」反面教材：实际暴露面、最低限度部署
+  清单与收口方向；`plain-surface.md` 顶部加安全边界提示；README 与 deployment 补 ACME、
+  HTTP 第二因子和 `auth/acme.json` 的说明。
+
 ### 验证
 
 - `./gradlew test` 1555 例、0 失败（27 跳过）；`npm run typecheck` / `compat` / `build` 通过，
   `go test ./...` 通过。
+- ACME、PasswordCrypto/ChatCryptoService 与 developer 门禁单测通过；`security-smoke`
+  在回环 HTTP、远程 HTTP、HTTPS 三种场景全过。
 - `scripts/api-smoke.py` 全 PASS。
 - 会话分叉、导入/导出往返、提示词快照、DSML 变体、legacy 模型切换与底部锚点均有单测覆盖。
 
