@@ -2,7 +2,7 @@ import { AvatarView } from "./AvatarView";
 import { useEffect, useRef, useState } from "react";
 import { Dialog } from "../../components/Dialog";
 import { PopupItem, PopupMenu, PopupSep } from "../../components/PopupMenu";
-import { AddIcon, DeleteIcon, EditIcon, MoreVertIcon, PersonIcon, SearchIcon, SettingsIcon } from "../../components/icons";
+import { AddIcon, ArchiveIcon, DeleteIcon, EditIcon, MoreVertIcon, PersonIcon, SearchIcon, SettingsIcon } from "../../components/icons";
 import type { ChatAssistant, ChatSessionSummary } from "../../types";
 
 function ago(at: number): string {
@@ -35,7 +35,7 @@ function groupOf(at: number): string {
 /** 聊天侧栏：助手切换器 + 搜索 + 按日期分组的会话列表。 */
 export function ChatSidebar({
   assistants, assistantId, onAssistant, onManageAssistants, onSettings,
-  sessions, sessionId, onSelect, onNew, onRename, onDelete, onClose,
+  sessions, sessionId, onSelect, onNew, onImport, onRename, onDelete, onClose,
 }: {
   assistants: ChatAssistant[];
   assistantId: string;
@@ -46,6 +46,7 @@ export function ChatSidebar({
   sessionId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
+  onImport: () => void;
   onRename: (session: ChatSessionSummary) => void;
   onDelete: (session: ChatSessionSummary) => void;
   onClose?: () => void;
@@ -96,6 +97,11 @@ export function ChatSidebar({
         <button className="chat-new-btn ripple-host" onClick={onNew}>
           <AddIcon size={18} />
           新建会话
+        </button>
+        <button className="chat-new-btn ripple-host" onClick={onImport}
+                title="导入会话（DeepSeek 导出包或 HDSL JSON）">
+          <ArchiveIcon size={18} />
+          导入会话
         </button>
         <label className="chat-search">
           <SearchIcon size={14} />
@@ -174,7 +180,7 @@ export function ChatSidebar({
               onAssistant(item.id);
             }}
           >
-            <span className="chat-avatar small">{item.avatar || "💬"}</span>
+            <span className="chat-avatar small"><AvatarView value={item.avatar} /></span>
             <span style={{ flex: 1 }}>{item.name}</span>
             {item.id === assistantId && <span className="chat-check">✓</span>}
           </PopupItem>
@@ -248,6 +254,57 @@ export function RenameSessionDialog({
         <button className="btn btn-text dim" disabled={busy} onClick={onCancel}>取消</button>
         <button className="btn btn-text" disabled={busy || !title.trim()} onClick={() => onConfirm(title.trim())}>
           {busy ? "保存中…" : "保存"}
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+/// 分叉会话：选目标助手 + 标题，复制整段会话（含变体与附件），原会话保持不动。
+export function ForkSessionDialog({
+  session, assistants, busy, onCancel, onConfirm,
+}: {
+  session: ChatSessionSummary | null;
+  assistants: ChatAssistant[];
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: (assistantId: string, title: string) => void;
+}) {
+  const [assistantId, setAssistantId] = useState("default");
+  const [title, setTitle] = useState("");
+  useEffect(() => {
+    if (session) {
+      setAssistantId(session.assistantId);
+      setTitle(`${session.title}（分叉）`);
+    }
+  }, [session]);
+  return (
+    <Dialog open={session !== null} title="分叉会话" onClose={busy ? undefined : onCancel}>
+      <p className="dialog-hint">
+        整段会话（消息、变体、附件）复制一份，原会话不动。
+      </p>
+      <label className="dialog-field">
+        <span>目标助手</span>
+        <select className="input" value={assistantId} onChange={(event) => setAssistantId(event.target.value)}>
+          {assistants.map((item) => (
+            <option key={item.id} value={item.id}>{item.name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="dialog-field">
+        <span>标题</span>
+        <input
+          className="input"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && title.trim()) onConfirm(assistantId, title.trim());
+          }}
+        />
+      </label>
+      <div className="dialog-actions">
+        <button className="btn btn-text dim" disabled={busy} onClick={onCancel}>取消</button>
+        <button className="btn btn-text" disabled={busy || !title.trim()} onClick={() => onConfirm(assistantId, title.trim())}>
+          {busy ? "分叉中…" : "分叉"}
         </button>
       </div>
     </Dialog>

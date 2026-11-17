@@ -399,7 +399,8 @@ public final class ChatService {
             account = deepseekAccount();
             model = firstNonBlank(nullable(body, "model"), assistant.model(), "deepseek-flash");
         }
-        ChatStore.Session session = store.createSession(assistantId, title, model, account);
+        ChatStore.Session session = store.createSession(assistantId, title, model, account,
+                assistant.systemPrompt());
         if (body.has("reasoningLevel")) {
             String level = string(body, "reasoningLevel", "");
             if (!level.isEmpty()) {
@@ -416,6 +417,71 @@ public final class ChatService {
         }
         broadcast("chat-sessions-changed", session.id());
         return sessionJson(session.id());
+    }
+
+    /// 导出一个会话的可移植 JSON（见 [ChatStore#exportJson]）。
+    public @Nullable JsonObject exportSession(String id) throws SQLException {
+        return store.exportJson(id);
+    }
+
+    /// 导入会话：DeepSeek 官方导出包（zip）或 HSDL 自己的单会话 JSON。
+    /// 解析与校验都在 [ChatArchive] 里，失败不会留下半截数据。
+    ///
+    /// @param file           上传的原始字节
+    /// @param assistantId    导入到哪个助手
+    /// @param titleOverride  覆盖每个会话的标题（可选）
+    public JsonObject importSessions(byte[] file, String assistantId, @Nullable String titleOverride)
+            throws ChatException, SQLException, java.io.IOException {
+        ChatStore.Assistant assistant = store.assistant(assistantId);
+        if (assistant == null) {
+            throw new ChatException(404, "assistant_not_found", "assistant not found");
+        }
+        ChatArchive.Parsed parsed = ChatArchive.parse(file);
+        JsonArray imported = new JsonArray();
+        for (ChatArchive.ImportedSession session : parsed.sessions()) {
+            String title = titleOverride == null || titleOverride.isBlank()
+                    ? session.title() : titleOverride;
+            String prompt = session.systemPrompt() != null
+                    ? session.systemPrompt() : assistant.systemPrompt();
+            String id = store.importSession(assistantId, title, prompt, session.nodes());
+            broadcast("chat-sessions-changed", id);
+            JsonObject item = new JsonObject();
+            item.addProperty("id", id);
+            item.addProperty("title", title);
+            item.addProperty("messages", session.nodes().size());
+            imported.add(item);
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty("format", parsed.format());
+        body.add("imported", imported);
+        JsonArray skipped = new JsonArray();
+        for (String reason : parsed.skipped()) {
+            skipped.add(reason);
+        }
+        body.add("skipped", skipped);
+        return body;
+    }
+
+    /// 分叉：整段会话（节点、variants、附件行）复制一份，默认落到同一个助手，
+    /// 也可以指定别的助手。原会话不动。流式生成中的会话不能分叉，否则复制到的
+    /// 是半截回答。
+    public JsonObject forkSession(String id, JsonObject body) throws ChatException, SQLException {
+        ChatStore.Session source = store.session(id);
+        if (source == null) {
+            throw new ChatException(404, "session_not_found", "session not found");
+        }
+        if (turns.busy(id)) {
+            throw new ChatException(409, "chat_busy",
+                    "stop the running reply before forking the session");
+        }
+        String assistantId = string(body, "assistantId", source.assistantId());
+        if (store.assistant(assistantId) == null) {
+            throw new ChatException(404, "assistant_not_found", "assistant not found");
+        }
+        String title = string(body, "title", source.title() + "（分叉）");
+        String newId = store.forkSession(id, assistantId, title);
+        broadcast("chat-sessions-changed", newId);
+        return sessionJson(newId);
     }
 
     public JsonObject updateSession(String id, JsonObject body) throws ChatException, SQLException {
@@ -668,6 +734,7 @@ public final class ChatService {
         String model = required(body, "model", "model is required");
         if (body.has("reset") && body.get("reset").getAsBoolean()) {
             store.deleteCapability(account.key(), model);
+            broadcast("accounts-changed", null);
             ChatEndpoints.Profile profile = ChatEndpoints.profile(store, account.key());
             return modelJson(account.key(), model, profile == null
                     ? ChatEndpoints.defaultProtocol(account) : profile.protocol(),
@@ -685,6 +752,7 @@ public final class ChatService {
                 body.has("maxOutput") ? body.get("maxOutput").getAsInt() : current.maxOutput(),
                 "manual", System.currentTimeMillis());
         store.saveCapability(capability);
+        broadcast("accounts-changed", null);
         return modelJson(account.key(), model, profile == null
                 ? ChatEndpoints.defaultProtocol(account) : profile.protocol(),
                 profile == null ? null : profile.base());
@@ -707,12 +775,17 @@ public final class ChatService {
     /// 发一张内置图片让模型读数字，确认它到底会不会看图。
     public JsonObject visionTest(String accountName, String model)
             throws ChatException, SQLException, IOException {
-        return probes.visionTest(accountName, model, settings);
+        JsonObject result = probes.visionTest(accountName, model, settings);
+        // 识图实测会写 capability（source=probe），占用环和模型徽章要跟着刷新。
+        broadcast("accounts-changed", null);
+        return result;
     }
 
     public List<String> refreshModels(String accountName) throws ChatException, SQLException, IOException {
         try {
-            return ChatEndpoints.refreshModels(store, accountName, settings);
+            List<String> models = ChatEndpoints.refreshModels(store, accountName, settings);
+            broadcast("accounts-changed", null);
+            return models;
         } catch (IllegalArgumentException e) {
             throw new ChatException(404, "account_not_found", e.getMessage());
         }

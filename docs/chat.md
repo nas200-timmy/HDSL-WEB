@@ -204,6 +204,9 @@ interface ChatProtocol {
 - v1 实现 `openai-completions` + `anthropic-messages`；`openai-responses` 放 Phase 4。
 - 共用 `SseParser`：`event:`、`data:`、`id:`、注释、空行分帧、多行 data、`[DONE]`、CRLF、行长度上限。
 - 错误映射：401/403 key 被拒；429 可重试；400 参数/上下文；5xx 可重试；SSE 内 `error` 事件不能当正常结束。
+  400/413 里能识别为上下文超限的（`maximum context length`、`prompt is too long`、
+  `context_length_exceeded` 等）统一归到 `context_exceeded`，前端据此给「新建会话 / 分支」的提示，
+  而不是一句泛泛的生成失败。
 - 请求默认 `followRedirects(NEVER)`，避免公网地址 302 到内网。
 - Java 17：`HttpClient` + 有界线程池；不使用虚拟线程。
 
@@ -458,7 +461,31 @@ record ModelCapabilities(
 - `reasoning=true` 时折叠显示思考；不要在下一轮无条件回传 reasoning。
 - `tools` 只做字段，v1 不展示工具 UI。
 
+## 9.5 渲染
+
+正文按 Markdown 渲染（GFM + 代码高亮）。公式用 remark-math + rehype-katex：
+`$…$` 与 `$$…$$` 都会渲染，点击已渲染的公式会把原始 TeX 复制到剪贴板
+（KaTeX 的 MathML `<annotation>` 就是源）。legacy 表面由同一套管线在服务端
+预渲染，样式与字体随 jar 发布。
+
 ## 10. 后端接口
+
+> 分叉：`POST /api/chat/sessions/{id}/fork`，body `{assistantId?, title?}`。
+> 节点、变体（含 `active_variant_id` 映射）、附件行全部复制一份，默认落到原助手，
+> 可指定别的助手；标题默认「原标题（分叉）」。原会话不动，附件文件是内容寻址共享的
+> （`pruneOrphans` 以"仍被任何行引用"为准，删任一侧都不会剪掉另一侧的文件）。
+> 正在生成的会话拒绝分叉（409 `chat_busy`），避免复制到半截回答。
+
+> 导入/导出：`GET .../export` 返回 `format: hdsl-chat-session` 的单会话信封；
+> `POST /api/chat/import` 认两种文件——DeepSeek 官方导出包（zip，`manifest.json`
+> 版本必须是 3，`chat_sessions/*.json` 按 `current_message_id` 回溯成线性对话）和
+> 上面那种 HSDL JSON。校验全部在上限内进行（32MB 文件、单条目 16MB、解压总量
+> 64MB、100 个会话、2000 条消息/会话、单段 2MB 正文），失败回 400 并带原因，
+> 不会留下半截会话。附件目前只导出元数据，不携带文件本体。
+
+> 会话配置快照：会话创建时把助手的 `systemPrompt` 冻结进
+> `chat_session.system_prompt`（schema v5）。之后改助手只影响新会话，老会话
+> 保持创建时的提示词；升级前的会话为 NULL，仍按助手现值回退。
 
 ```text
 GET    /api/chat/sessions?assistant={id}
@@ -466,6 +493,9 @@ POST   /api/chat/sessions
 GET    /api/chat/sessions/{id}
 PATCH  /api/chat/sessions/{id}
 DELETE /api/chat/sessions/{id}
+POST   /api/chat/sessions/{id}/fork          整段分叉（可换助手）
+GET    /api/chat/sessions/{id}/export        导出可移植 JSON（附件只带元数据）
+POST   /api/chat/import                      导入（multipart file，或直接请求体）
 
 POST   /api/chat/sessions/{id}/messages      send
 POST   /api/chat/sessions/{id}/regenerate    nodeId + mode
@@ -589,12 +619,19 @@ web/src/pages/chat/
 
 ### 12.3.0 上下文占用
 
-- 标题栏右侧有一个占用环 + `12.3K / 128K`：分子是**最近一次回复的 `input` tokens**
-  （系统提示 + 历史 + 附件抽取文本），分母是当前模型的 `maxContext`；≥80% 变黄、≥95% 变红。
-- 点开的浮窗里有：当前占用与百分比、本轮输出、会话累计输入/输出（都是千单位）。
+- 标题栏右侧是一个占用环 + `98K / 1M`：分子是**最近一次回复的 `input` tokens**
+  （系统提示 + 历史 + 附件），分母是当前模型的 `maxContext`；≥80% 变黄、≥95% 变红。
+  常驻标签只显示绝对数量，百分比放在浮窗里——避免用户一直盯着百分比。
+- 切换模型后分母立即按新模型的能力更新；能力未识别时显示「上限未知」，
+  可以在模型能力弹窗里手动填 `maxContext`，占用环才会准确。
+- 点开的浮窗里有：当前占用与百分比、剩余、本轮输出、**上下文构成**（系统提示 /
+  历史与提问 / 附件，按字符估算，图片按 1K/张）、上限来源、会话累计输入/输出。
 - 数据来自每条助手消息持久化的 `usage`；流式期间由 `chat-usage` WS 事件更新。
-- 说明：输入按每轮完整上下文计费，所以「会话累计输入」接近账单口径，**不等于**当前占用；
-  有的中转不回 usage 时显示 `上下文 —`，不自行估算。
+  服务商没有返回 `usage.input` 时，用估算总量并在数字前加 `≈`。
+- **不自动截断历史**：发出去的就是界面上看到的全部轮次。超过模型上限时由服务商报错，
+  后端归到 `context_exceeded`，聊天页给出「新建会话 / 知道了」的提示；用户按占用环
+  自己决定何时新建会话或从这里分支。这与 chat-demo 的行为一致，不做后台压缩或摘要。
+- 说明：输入按每轮完整上下文计费，所以「会话累计输入」接近账单口径，**不等于**当前占用。
 
 ### 12.3.1 头像与个人资料
 

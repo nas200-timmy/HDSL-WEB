@@ -60,6 +60,23 @@ class ConfigLoaderTest {
         assertEquals(168, config.auth.sessionTtlHours);
     }
 
+    @Test
+    void plainSsrWorkersDefaultToFourAndAreBounded() throws Exception {
+        assertEquals(4, load(Map.of()).plain.ssrWorkers);
+
+        Files.writeString(dataDir.resolve("server.yaml"), """
+                plain:
+                  ssr_workers: 6
+                """);
+        assertEquals(6, load(Map.of()).plain.ssrWorkers);
+
+        Files.writeString(dataDir.resolve("server.yaml"), """
+                plain:
+                  ssr_workers: 17
+                """);
+        assertThrows(ServerConfigLoader.ConfigException.class, () -> load(Map.of()));
+    }
+
     /// 非回环票的开关：yaml 能读、环境变量能覆盖，默认关。
     @Test
     void theAgentRemoteSessionSwitchIsRead() throws Exception {

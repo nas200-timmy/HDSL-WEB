@@ -99,10 +99,12 @@ public final class ChatTurnManager {
     private static final int MAX_TOOL_ROUNDS = 3;
     /// DeepSeek 在 OpenAI 兼容模式下偶尔把工具调用写成 DSML 文本，而不是 tool_calls JSON。
     /// 这里做一个最小兼容：识别、转成 ToolCall、并从正文里删掉，避免把调用指令当答案存下来。
+    /// The tag is `calls` in DeepSeek's examples but `tool_calls` in what
+    /// MiMo/DeepSeek actually emit; both are the same construct.
     private static final Pattern DSML_START = Pattern.compile(
-            "<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*calls>");
+            "<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*(?:tool_)?calls>");
     private static final Pattern DSML_BLOCK = Pattern.compile(
-            "(?s)<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*calls>.*?</\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*calls>");
+            "(?s)<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*(?:tool_)?calls>.*?</\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*(?:tool_)?calls>");
     private static final Pattern DSML_INVOKE = Pattern.compile(
             "(?s)<\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*invoke\\s+name=\"([^\"]+)\"[^>]*>(.*?)"
                     + "</\\|{1,2}\\s*DSML\\s*\\|{1,2}\\s*invoke>");
@@ -120,14 +122,19 @@ public final class ChatTurnManager {
     private volatile LocalDate dailyDate = LocalDate.now();
     private volatile ChatSettings.Settings settings;
 
-    /// Called with (messageId, content) after a turn's final text is persisted.
-    /// The plain surface uses it to pre-render Markdown in the background; a
-    /// failing listener must never fail the turn.
-    private volatile @Nullable java.util.function.BiConsumer<String, String> messageFinalizer;
+    /// Called after a turn's final text is persisted. The plain surface uses it
+    /// to pre-render Markdown in the background; a failing listener must never
+    /// fail the turn. Sources ride along because a render without them shows
+    /// `[citation:N]` markers literally.
+    @FunctionalInterface
+    public interface MessageFinalizer {
+        void accept(String messageId, String content, @Nullable String sourcesJson);
+    }
+
+    private volatile @Nullable MessageFinalizer messageFinalizer;
 
     /// Installs the post-persist hook (see [messageFinalizer]).
-    public void setMessageFinalizer(
-            @Nullable java.util.function.BiConsumer<String, String> finalizer) {
+    public void setMessageFinalizer(@Nullable MessageFinalizer finalizer) {
         this.messageFinalizer = finalizer;
     }
 
@@ -643,7 +650,13 @@ public final class ChatTurnManager {
         return null;
     }
 
+    /// The session's frozen prompt wins; sessions created before the snapshot
+    /// existed (or by an import that carried none) fall back to the assistant's
+    /// current text.
     private String systemPrompt(ChatStore.Session session) throws SQLException {
+        if (session.systemPrompt() != null) {
+            return session.systemPrompt();
+        }
         ChatStore.Assistant assistant = store.assistant(session.assistantId());
         return assistant == null ? "" : assistant.systemPrompt();
     }
@@ -708,6 +721,7 @@ public final class ChatTurnManager {
                                 : turn.maxTokens,
                         turn.reasoningLevel, turn.resolved.reasoning, turn.tools,
                         turn.searchEnabled, turn.titleEnabled);
+                turn.contextEstimate = ChatContextBudget.estimate(system, messages, turn.tools);
                 HttpRequest httpRequest = turn.resolved.protocol.prepare(turn.resolved.profile, request);
                 HttpResponse<InputStream> response = client.send(httpRequest,
                         HttpResponse.BodyHandlers.ofInputStream());
@@ -1220,6 +1234,28 @@ public final class ChatTurnManager {
 
     // ------------------------------------------------------------ messages --
 
+    /// 历史里的一条提问只有在下一节点有可用回答时才进上下文（与 chat-demo 的
+    /// `getContextRounds` 一致）。正文为空但保留了工具链路的回答也算可用。
+    private boolean hasUsableReplyAfter(List<ChatStore.Node> nodes, int index) throws SQLException {
+        if (index + 1 >= nodes.size()) {
+            return false;
+        }
+        ChatStore.Node next = nodes.get(index + 1);
+        if (!"assistant".equals(next.role())) {
+            return false;
+        }
+        ChatStore.Message reply = next.active();
+        if (reply == null
+                || !("done".equals(reply.status()) || "stopped".equals(reply.status()))) {
+            return false;
+        }
+        if (reply.content() != null && !reply.content().isBlank()) {
+            return true;
+        }
+        String parts = store.partsJson(reply.id());
+        return parts != null && !parts.isBlank();
+    }
+
     private List<ChatProtocol.ChatMessage> messages(List<ChatStore.Node> nodes, Resolved resolved)
             throws SQLException, ChatException, IOException {
         if (resolved.deepseek()) {
@@ -1232,6 +1268,17 @@ public final class ChatTurnManager {
             if (message == null) {
                 continue;
             }
+            boolean current = index == nodes.size() - 1;
+            // 失败/中断的回复不进上下文：官方客户端也只回传「有可用回答」的轮次，
+            // 否则模型会把自己上一轮的半截错误当成说过的话。没有可用回答的提问
+            // 也整轮跳过，避免历史里出现连续两条 user。
+            if ("user".equals(node.role()) && !current && !hasUsableReplyAfter(nodes, index)) {
+                continue;
+            }
+            if ("assistant".equals(node.role())
+                    && !("done".equals(message.status()) || "stopped".equals(message.status()))) {
+                continue;
+            }
             String recorded = store.partsJson(message.id());
             if (recorded != null && !recorded.isBlank()) {
                 appendRecordedParts(messages, recorded);
@@ -1241,7 +1288,6 @@ public final class ChatTurnManager {
                     && (message.content() == null || message.content().isBlank())) {
                 continue;
             }
-            boolean current = index == nodes.size() - 1;
             StringBuilder text = new StringBuilder(message.content() == null ? "" : message.content());
             List<ChatProtocol.Attachment> attachments = new ArrayList<>();
             for (ChatStore.Attachment attachment : message.attachments()) {
@@ -1260,7 +1306,7 @@ public final class ChatTurnManager {
         if (messages.isEmpty()) {
             messages.add(new ChatProtocol.ChatMessage("user", "", List.of()));
         }
-        return truncate(messages, resolved.capability);
+        return messages;
     }
 
     /// DeepSeek 官方预设的上下文：只回传正文与 read_link 的签名，搜索/思考不进历史。
@@ -1554,50 +1600,6 @@ public final class ChatTurnManager {
         }
         return new ChatProtocol.Attachment(attachment.name(), attachment.mime(), "text",
                 attachment.size(), Path.of(attachment.path()), text);
-    }
-
-    /// 按字符估算（约 3 字符/token）截断最旧的消息；最后一条永远保留，
-    /// 它自己超长时只截它。
-    private List<ChatProtocol.ChatMessage> truncate(List<ChatProtocol.ChatMessage> messages,
-                                                    ChatCapabilities.Capabilities capability) {
-        int budget = Math.max(4096, capability.maxContext() - Math.min(capability.maxOutput(), 8192) - 1024);
-        int budgetChars = budget * 3;
-        long total = 0;
-        for (ChatProtocol.ChatMessage message : messages) {
-            total += length(message);
-        }
-        while (total > budgetChars && messages.size() > 1) {
-            ChatProtocol.ChatMessage removed = messages.remove(0);
-            total -= length(removed);
-            // assistant(tool_calls) 和它后面的 tool 结果是一对，必须一起删；
-            // 留一条悬空的 tool 消息会被端点直接 400。
-            if (removed.hasToolCalls()) {
-                while (!messages.isEmpty() && "tool".equals(messages.get(0).role())) {
-                    total -= length(messages.remove(0));
-                }
-            }
-        }
-        if (!messages.isEmpty() && total > budgetChars) {
-            ChatProtocol.ChatMessage last = messages.get(messages.size() - 1);
-            String text = last.text() == null ? "" : last.text();
-            int allowed = Math.max(1000, budgetChars - (int) (total - text.length()));
-            if (text.length() > allowed) {
-                messages.set(messages.size() - 1, new ChatProtocol.ChatMessage(last.role(),
-                        text.substring(0, allowed) + "\n\n[内容过长，已截断]",
-                        last.attachments()));
-            }
-        }
-        return messages;
-    }
-
-    private static long length(ChatProtocol.ChatMessage message) {
-        long total = message.text() == null ? 0 : message.text().length();
-        for (ChatProtocol.Attachment attachment : message.attachments()) {
-            if (attachment.text() != null) {
-                total += attachment.text().length();
-            }
-        }
-        return total;
     }
 
     // --------------------------------------------------------------- sinks --
@@ -1920,6 +1922,10 @@ public final class ChatTurnManager {
         JsonObject event = event("chat-usage", turn);
         event.addProperty("input", turn.inputTokens);
         event.addProperty("output", turn.outputTokens);
+        JsonObject context = contextJson(turn);
+        if (context != null) {
+            event.add("context", context);
+        }
         publish(turn.sessionId, event);
     }
 
@@ -1936,9 +1942,17 @@ public final class ChatTurnManager {
                 return;
             }
         }
+        String text = message == null ? "" : message;
+        // SSE 里的错误帧和 HTTP 400 都可能表达「上下文满了」；统一成同一个 code，
+        // 前端据此显示「新建会话 / 分支」而不是一句泛泛的生成失败。
+        if ("context_exceeded".equals(code) || ChatProtocol.isContextOverflow(text)) {
+            code = "context_exceeded";
+            retryable = false;
+            text = ChatProtocol.contextOverflowMessage(text);
+        }
         JsonObject event = event("chat-error", turn);
         event.addProperty("code", code);
-        event.addProperty("message", message == null ? "" : message);
+        event.addProperty("message", text);
         event.addProperty("retryable", retryable);
         publish(turn.sessionId, event);
         finish(turn, "error", code);
@@ -1974,10 +1988,16 @@ public final class ChatTurnManager {
                 org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
                         "Could not persist chat message " + turn.messageId, e);
             }
-            java.util.function.BiConsumer<String, String> finalizer = messageFinalizer;
+            MessageFinalizer finalizer = messageFinalizer;
             if (finalizer != null) {
                 try {
-                    finalizer.accept(turn.messageId, turn.content.toString());
+                    String sourcesJson = null;
+                    try {
+                        sourcesJson = store.sourcesJson(turn.messageId);
+                    } catch (SQLException ignored) {
+                        // The transcript still renders; citations just show as markers.
+                    }
+                    finalizer.accept(turn.messageId, turn.content.toString(), sourcesJson);
                 } catch (RuntimeException e) {
                     org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
                             "Chat message finalizer failed for " + turn.messageId, e);
@@ -2089,13 +2109,17 @@ public final class ChatTurnManager {
     }
 
     private static @Nullable String usageJson(ActiveTurn turn) {
+        JsonObject context = contextJson(turn);
         if (turn.inputTokens == 0 && turn.outputTokens == 0 && turn.searchSourcesJson == null
-                && turn.toolRounds.isEmpty()) {
+                && turn.toolRounds.isEmpty() && context == null) {
             return null;
         }
         JsonObject usage = new JsonObject();
         usage.addProperty("input", turn.inputTokens);
         usage.addProperty("output", turn.outputTokens);
+        if (context != null) {
+            usage.add("context", context);
+        }
         if (turn.searchSourcesJson != null) {
             usage.add("search", com.google.gson.JsonParser.parseString(turn.searchSourcesJson));
         }
@@ -2105,6 +2129,26 @@ public final class ChatTurnManager {
             usage.add("tools", tools);
         }
         return usage.toString();
+    }
+
+    /// 上下文构成是估算值（见 [ChatContextBudget]），用于占用浮窗拆分；真正计费的
+    /// `input` 仍来自服务商。`max`/`source` 跟着这一轮解析出的能力走，前端切模型
+    /// 后即使还没发消息也能用当前模型的上限。
+    private static @Nullable JsonObject contextJson(ActiveTurn turn) {
+        ChatContextBudget.Estimate estimate = turn.contextEstimate;
+        if (estimate == null) {
+            return null;
+        }
+        JsonObject context = new JsonObject();
+        context.addProperty("system", estimate.system());
+        context.addProperty("history", estimate.history());
+        context.addProperty("attachments", estimate.attachments());
+        if (estimate.images() > 0) {
+            context.addProperty("images", estimate.images());
+        }
+        context.addProperty("max", turn.resolved.capability.maxContext());
+        context.addProperty("source", turn.resolved.capability.source());
+        return context;
     }
 
     // -------------------------------------------------------------- helpers --
@@ -2279,6 +2323,7 @@ public final class ChatTurnManager {
         volatile int seq;
         volatile int inputTokens;
         volatile int outputTokens;
+        volatile @Nullable ChatContextBudget.Estimate contextEstimate;
         volatile String systemPrompt = "";
         volatile Double temperature;
         volatile Integer maxTokens;

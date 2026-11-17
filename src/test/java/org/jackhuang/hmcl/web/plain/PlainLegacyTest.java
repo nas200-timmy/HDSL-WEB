@@ -100,6 +100,32 @@ class PlainLegacyTest {
             HttpResponse<String> unlocked = get(client, base + "/plain/s/" + sessionId, cookie);
             assertTrue(unlocked.body().contains("data-elev=\"ok\""), unlocked.body());
             assertTrue(unlocked.body().contains("name=\"text\""), unlocked.body());
+            // Text browsers ignore the stylesheet: the nav must break lines by
+            // markup alone, and submits must be inputs w3m/lynx know how to post.
+            assertTrue(unlocked.body().contains("会话</a><br>"), unlocked.body());
+            assertTrue(unlocked.body().contains("type=\"submit\" value=\"退出\""), unlocked.body());
+            // The legacy surface can also fork and export without the SPA.
+            assertTrue(unlocked.body().contains("导出</a>"), unlocked.body());
+            assertTrue(unlocked.body().contains("value=\"分叉\""), unlocked.body());
+            assertTrue(unlocked.body().contains("id=\"bottom\""), unlocked.body());
+            assertTrue(unlocked.body().contains("href=\"#bottom\""), unlocked.body());
+            assertTrue(unlocked.headers().firstValue("content-security-policy").orElseThrow()
+                    .contains("font-src 'self'"), "KaTeX fonts need font-src on enhanced pages");
+            HttpResponse<String> forked = postForm(client,
+                    base + "/plain/s/" + sessionId + "/fork", "", cookie);
+            assertEquals(303, forked.statusCode(), forked.body());
+            String forkedLocation = forked.headers().firstValue("Location").orElseThrow();
+            assertTrue(forkedLocation.startsWith("/plain/s/"), forkedLocation);
+            assertNotEquals("/plain/s/" + sessionId, forkedLocation);
+            assertEquals(200, get(client, base + forkedLocation, cookie).statusCode());
+            // Model switching is a plain form: IE11 and w3m both submit selects.
+            assertTrue(unlocked.body().contains("name=\"model\""), unlocked.body());
+            HttpResponse<String> switched = postForm(client,
+                    base + "/plain/s/" + sessionId + "/model", "model=fake-model-2", cookie);
+            assertEquals(303, switched.statusCode(), switched.body());
+            HttpResponse<String> afterSwitch = get(client, base + "/plain/s/" + sessionId, cookie);
+            assertTrue(afterSwitch.body().contains("option value=\"fake-model-2\" selected"),
+                    afterSwitch.body());
 
             // The extension coupon is one-shot: the second stretch needs a fresh
             // password proof.
@@ -175,7 +201,16 @@ class PlainLegacyTest {
             // The HMCL-style shell: wallpaper behind a two-column table card
             // layout, present on every page of the surface.
             assertTrue(enhanced.body().contains("background-image:url("), enhanced.body());
-            assertTrue(enhanced.body().contains("class=\"shell\""), enhanced.body());
+            assertTrue(enhanced.body().contains("class=\"shell"), enhanced.body());
+
+            // KaTeX's stylesheet and fonts ride in the jar; when the build had
+            // npm, the legacy surface serves them next to its own CSS.
+            if (PlainChatServlet.class.getResource("/web-legacy/katex/katex.min.css") != null) {
+                HttpResponse<String> katex = get(client, base + "/plain/katex/katex.min.css", null);
+                assertEquals(200, katex.statusCode(), katex.body().substring(0, Math.min(200, katex.body().length())));
+                assertTrue(katex.headers().firstValue("content-type").orElseThrow().contains("text/css"));
+                assertTrue(katex.body().contains(".katex"), "must be the KaTeX stylesheet");
+            }
         }
     }
 

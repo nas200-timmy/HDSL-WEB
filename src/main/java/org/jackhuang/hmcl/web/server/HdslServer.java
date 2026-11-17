@@ -404,7 +404,7 @@ public final class HdslServer {
         // chat is unavailable: /plain/old is the landing page for browsers that
         // cannot run the SPA, and it must answer on a degraded install too.
         MarkdownSsr plainSsr = new MarkdownSsr(config.dataDir,
-                config.dataDir.resolve("plain-md"));
+                config.dataDir.resolve("plain-md"), config.plain.ssrWorkers);
         context.addServlet(new ServletHolder(new PlainChatServlet(
                 chat == null ? null : chat.service(), authService, authFilter,
                 config.auth.disabled, config.basePath, developerAuth, developerElevation,
@@ -412,9 +412,9 @@ public final class HdslServer {
         // Render the transcript while the turn is still fresh instead of making
         // the first reader wait for one Node process per message.
         if (chat != null) {
-            chat.service().turns().setMessageFinalizer((messageId, content) -> {
+            chat.service().turns().setMessageFinalizer((messageId, content, sourcesJson) -> {
                 if (config.plain.enhanced) {
-                    plainSsr.prefetch(messageId, content);
+                    plainSsr.prefetch(messageId, content, sourcesJson);
                 }
             });
         }

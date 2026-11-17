@@ -495,9 +495,8 @@ export function PresetsPage() {
         {(schema?.sections ?? []).map((section) => (
           <div
             key={section.title}
-            className={`tc-nav-item${activeSection === section.title ? " selected" : ""}${section.hint ? " tc-tip" : ""}`}
+            className={`tc-nav-item${activeSection === section.title ? " selected" : ""}`}
             onClick={() => setActiveSection(section.title)}
-            data-tip={section.hint}
           >
             {section.title}
           </div>

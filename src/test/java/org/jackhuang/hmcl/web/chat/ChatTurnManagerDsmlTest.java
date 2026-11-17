@@ -97,4 +97,25 @@ class ChatTurnManagerDsmlTest {
         assertEquals("wrapped", JsonParser.parseString(calls.get(0).arguments())
                 .getAsJsonObject().get("query").getAsString());
     }
+
+    /// MiMo (and some DeepSeek streams) spell the tag `tool_calls`, not `calls`.
+    /// The matcher used to accept only the latter, so the raw XML was persisted
+    /// as the answer body — the "search text in the transcript" regression.
+    @Test
+    void extractsCallsFromTheToolCallsSpelling() {
+        String text = """
+                <｜｜DSML｜｜tool_calls>
+                <｜｜DSML｜｜invoke name="search_web">
+                <｜｜DSML｜｜parameter name="query" string="true">mimo tool_calls</｜｜DSML｜｜parameter>
+                </｜｜DSML｜｜invoke>
+                </｜｜DSML｜｜tool_calls>""";
+
+        List<ChatProtocol.ToolCall> calls =
+                ChatTurnManager.dsmlCallsFromText(text, List.of(SEARCH));
+
+        assertEquals(1, calls.size());
+        assertEquals("search_web", calls.get(0).name());
+        assertEquals("mimo tool_calls", JsonParser.parseString(calls.get(0).arguments())
+                .getAsJsonObject().get("query").getAsString());
+    }
 }

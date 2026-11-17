@@ -74,7 +74,7 @@ Enter 发送 · Ctrl-J 换行 · Ctrl-O 展开 · Ctrl-B 会话 · Ctrl-C 停止
 | `/new`（`/clear`） | 选助手新建会话 |
 | `/sessions`（`/resume`） | 会话列表 |
 | `/assistant` | 选助手并新建会话 |
-| `/model [id]` | 查看/切换当前会话模型 |
+| `/model [id]` | 不带参数打开模型选择弹窗（从账户模型列表里挑，标注当前与能力）；带 id 直接切换 |
 | `/title [text]`（`/rename`） | 查看/修改会话标题 |
 | `/search` | 开关本轮起生效的联网搜索 |
 | `/stop` | 停止正在生成的回答 |

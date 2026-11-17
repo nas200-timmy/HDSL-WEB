@@ -17,6 +17,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import rehypeHighlight from "rehype-highlight";
+import rehypeKatex from "rehype-katex";
+import remarkMath from "remark-math";
 import { hastText, languageOf, prepareText, sanitizeSchema } from "../src/pages/chat/markdown-schema";
 
 function CodeBlock({ node, children }) {
@@ -57,7 +59,20 @@ function readStdin() {
 // The bundle is CommonJS (react-dom/server is CJS and requires node builtins),
 // so top-level await is not available; chain instead.
 readStdin()
-  .then((content) => {
+  .then((raw) => {
+    // The panel sends {content, sources?}; sources are what turns [citation:N]
+    // markers into links, exactly as the SPA receives message.sources.
+    let content = raw;
+    let sources;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.content === "string") {
+        content = parsed.content;
+        if (Array.isArray(parsed.sources)) sources = parsed.sources;
+      }
+    } catch {
+      // Not an envelope (a bare markdown body): render it as-is.
+    }
     const html = renderToStaticMarkup(
       React.createElement(
         "div",
@@ -65,8 +80,8 @@ readStdin()
         React.createElement(
           ReactMarkdown,
           {
-            remarkPlugins: [remarkGfm],
-            rehypePlugins: [[rehypeSanitize, sanitizeSchema], rehypeHighlight],
+            remarkPlugins: [remarkGfm, remarkMath],
+            rehypePlugins: [[rehypeSanitize, sanitizeSchema], [rehypeKatex, { throwOnError: false }], rehypeHighlight],
             components: {
               pre: ({ node, children }) => React.createElement(CodeBlock, { node }, children),
               a: ({ href, children }) =>
@@ -77,7 +92,7 @@ readStdin()
                 ),
             },
           },
-          prepareText(content, {}),
+          prepareText(content, { sources }),
         ),
       ),
     );

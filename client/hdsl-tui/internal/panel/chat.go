@@ -207,6 +207,33 @@ func (c *Client) ChatAssistants(ctx context.Context) ([]ChatAssistant, error) {
 	return body.Assistants, nil
 }
 
+// ChatModel is one entry of GET /api/chat/models: the id to send plus the
+// capabilities the panel resolved for it.
+type ChatModel struct {
+	ID   string `json:"id"`
+	Caps struct {
+		Vision    bool `json:"vision"`
+		Files     bool `json:"files"`
+		Reasoning bool `json:"reasoning"`
+	} `json:"caps"`
+}
+
+// ChatModels lists the models an account offers.
+func (c *Client) ChatModels(ctx context.Context, account string) ([]ChatModel, error) {
+	query := url.Values{"account": {account}}
+	_, data, err := c.do(ctx, http.MethodGet, "/api/chat/models?"+query.Encode(), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var body struct {
+		Models []ChatModel `json:"models"`
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
+		return nil, err
+	}
+	return body.Models, nil
+}
+
 // ChatSessions lists summaries, optionally for one assistant.
 func (c *Client) ChatSessions(ctx context.Context, assistantID string) ([]ChatSessionSummary, error) {
 	query := url.Values{}

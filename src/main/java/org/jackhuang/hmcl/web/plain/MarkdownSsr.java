@@ -17,6 +17,9 @@
  */
 package org.jackhuang.hmcl.web.plain;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.jackhuang.hmcl.util.platform.Executables;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -86,9 +89,10 @@ public final class MarkdownSsr {
     /// Cached fragments beyond this count prune the oldest files.
     private static final int MAX_CACHE_FILES = 2000;
 
-    /// Two Node processes at a time: enough to fill a transcript without letting
-    /// one long conversation start a process per message.
-    private static final int WORKERS = 2;
+    /// A few Node processes at a time: enough to fill a transcript without
+    /// letting one long conversation start a process per message.
+    private static final int DEFAULT_WORKERS = 4;
+    private static final int MAX_WORKERS = 16;
 
     /// Running + queued render tasks. A request that cannot get a slot skips
     /// the prefetch; the next poll tries again, so a burst never grows an
@@ -102,6 +106,7 @@ public final class MarkdownSsr {
 
     private final Path dataDir;
     private final Path cacheDir;
+    private final int workerCount;
     private final AtomicReference<Optional<Path>> node = new AtomicReference<>();
     private final AtomicReference<Optional<Path>> script = new AtomicReference<>();
     private final Set<String> pending = ConcurrentHashMap.newKeySet();
@@ -114,8 +119,13 @@ public final class MarkdownSsr {
     private volatile @Nullable ScheduledExecutorService watchdog;
 
     public MarkdownSsr(Path dataDir, Path cacheDir) {
+        this(dataDir, cacheDir, DEFAULT_WORKERS);
+    }
+
+    public MarkdownSsr(Path dataDir, Path cacheDir, int workerCount) {
         this.dataDir = dataDir;
         this.cacheDir = cacheDir;
+        this.workerCount = Math.max(1, Math.min(MAX_WORKERS, workerCount));
     }
 
     /// Whether server-side rendering can run at all: a Node executable and the
@@ -128,14 +138,18 @@ public final class MarkdownSsr {
     /// The rendered HTML for one finalized message if it is already cached, or
     /// `null` after scheduling the miss. Never blocks on Node.
     ///
-    /// @param messageId the stored message id, used in the cache file name
-    /// @param content   the stored markdown text
+    /// @param messageId  the stored message id, used in the cache file name
+    /// @param content    the stored markdown text
+    /// @param sourcesJson the message's search hits (`[{index,url,…}]`), or
+    ///                    `null`; without them the renderer cannot turn
+    ///                    `[citation:N]` markers into links
     /// @return the rendered fragment, or `null`
-    public @Nullable String render(String messageId, String content) {
+    public @Nullable String render(String messageId, String content,
+                                   @Nullable String sourcesJson) {
         if (content == null || content.isBlank()) {
             return null;
         }
-        Path cache = cacheFile(messageId, content);
+        Path cache = cacheFile(messageId, content, sourcesJson);
         if (cache == null) {
             return null;
         }
@@ -146,17 +160,17 @@ public final class MarkdownSsr {
         } catch (IOException e) {
             LOG.warning("Plain markdown cache failed for " + messageId, e);
         }
-        prefetch(messageId, content);
+        prefetch(messageId, content, sourcesJson);
         return null;
     }
 
     /// Renders in the background unless the fragment is cached or already being
     /// rendered. Safe to call from a turn-finish callback and from a request.
-    public void prefetch(String messageId, String content) {
+    public void prefetch(String messageId, String content, @Nullable String sourcesJson) {
         if (content == null || content.isBlank() || !available()) {
             return;
         }
-        Path cache = cacheFile(messageId, content);
+        Path cache = cacheFile(messageId, content, sourcesJson);
         if (cache == null || Files.isRegularFile(cache)) {
             return;
         }
@@ -177,7 +191,7 @@ public final class MarkdownSsr {
                 if (Files.isRegularFile(cache)) {
                     return;
                 }
-                String rendered = invoke(content);
+                String rendered = invoke(content, sourcesJson);
                 if (rendered != null) {
                     writeCache(cache, rendered);
                     failed.remove(key);
@@ -196,13 +210,17 @@ public final class MarkdownSsr {
 
     /// `<cacheDir>/<messageId>-<sha256(content)>.html`, or `null` when the id
     /// carries characters that do not belong in a file name.
-    private @Nullable Path cacheFile(String messageId, String content) {
+    private @Nullable Path cacheFile(String messageId, String content,
+                                    @Nullable String sourcesJson) {
         if (messageId == null || !messageId.matches("[A-Za-z0-9_-]+")) {
             return null;
         }
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            String hash = HexFormat.of().formatHex(digest.digest(content.getBytes(StandardCharsets.UTF_8)));
+            // Sources are part of the key: the same text with citations and
+            // without them renders differently.
+            String material = content + "\u0000" + (sourcesJson == null ? "" : sourcesJson);
+            String hash = HexFormat.of().formatHex(digest.digest(material.getBytes(StandardCharsets.UTF_8)));
             return cacheDir.resolve(messageId + "-" + hash + ".html");
         } catch (NoSuchAlgorithmException e) {
             return null;
@@ -214,7 +232,7 @@ public final class MarkdownSsr {
     /// The watchdog kills the process if it is still alive after [TIMEOUT]; that
     /// closes both pipes, so a renderer that hangs before writing anything can
     /// no longer pin the worker (or the request that scheduled it).
-    private @Nullable String invoke(String content) {
+    private @Nullable String invoke(String content, @Nullable String sourcesJson) {
         Path nodeExecutable = nodeExecutable();
         Path scriptFile = scriptFile();
         if (nodeExecutable == null || scriptFile == null) {
@@ -233,7 +251,7 @@ public final class MarkdownSsr {
             }, TIMEOUT.toSeconds(), TimeUnit.SECONDS);
             try {
                 try (OutputStream stdin = process.getOutputStream()) {
-                    stdin.write(content.getBytes(StandardCharsets.UTF_8));
+                    stdin.write(envelope(content, sourcesJson).getBytes(StandardCharsets.UTF_8));
                 }
                 byte[] stdout;
                 try (InputStream out = process.getInputStream()) {
@@ -266,13 +284,31 @@ public final class MarkdownSsr {
         }
     }
 
+    /// The renderer's stdin: one JSON object, because citations need the hits
+    /// the SPA receives as `message.sources`.
+    static String envelope(String content, @Nullable String sourcesJson) {
+        JsonObject envelope = new JsonObject();
+        envelope.addProperty("content", content);
+        if (sourcesJson != null && !sourcesJson.isBlank()) {
+            try {
+                JsonElement parsed = JsonParser.parseString(sourcesJson);
+                if (parsed.isJsonArray()) {
+                    envelope.add("sources", parsed);
+                }
+            } catch (RuntimeException ignored) {
+                // A broken sources blob must not cost the message its render.
+            }
+        }
+        return envelope.toString();
+    }
+
     private ExecutorService workers() {
         ExecutorService current = workers;
         if (current == null) {
             synchronized (this) {
                 current = workers;
                 if (current == null) {
-                    current = Executors.newFixedThreadPool(WORKERS, runnable -> {
+                    current = Executors.newFixedThreadPool(workerCount, runnable -> {
                         Thread thread = new Thread(runnable, "plain-markdown");
                         thread.setDaemon(true);
                         return thread;

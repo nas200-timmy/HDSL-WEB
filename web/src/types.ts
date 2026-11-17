@@ -567,7 +567,7 @@ export type WsEvent =
   | { type: "chat-delta"; sessionId: string; turnId: string; seq: number; text: string }
   | { type: "chat-reasoning"; sessionId: string; turnId: string; seq: number; text: string }
   | { type: "chat-block"; sessionId: string; turnId: string; phase: "start" | "end"; blockType: string; seq: number }
-  | { type: "chat-usage"; sessionId: string; turnId: string; input: number; output: number }
+  | { type: "chat-usage"; sessionId: string; turnId: string; input: number; output: number; context?: ChatContextUsage }
   | { type: "chat-tool"; sessionId: string; turnId: string; tool?: "search" | "scrape" | "read_link" | "deepseek_web_search" | string; query: string; status: "running" | "done" | "failed" | string; provider?: string; hits?: number; sources?: ChatSearchResult }
   | { type: "chat-sources"; sessionId: string; turnId: string; sources: ChatSearchHit[] }
   | { type: "chat-title"; sessionId: string; turnId: string; title: string }
@@ -1223,6 +1223,17 @@ export interface ChatPart {
   calls?: { id: string; name: string; arguments: string }[];
 }
 
+/** 一次请求的上下文构成（服务端按字符估算；`input` 才是服务商报的实际值）。 */
+export interface ChatContextUsage {
+  system: number;
+  history: number;
+  attachments: number;
+  images?: number;
+  /** 这一轮解析出的模型上限与来源，切模型后前端可用当前能力覆盖。 */
+  max?: number;
+  source?: string;
+}
+
 export interface ChatMessage {
   id: string;
   nodeId: string;
@@ -1237,7 +1248,7 @@ export interface ChatMessage {
   model: string | null;
   createdAt: number;
   editedAt: number | null;
-  usage?: { input?: number; output?: number };
+  usage?: { input?: number; output?: number; context?: ChatContextUsage };
   /** 这一轮联网搜索的来源（有搜索时才有） */
   sources?: ChatSearchHit[];
   /** 模型自己调用 web_search 的每一轮（按时间顺序） */

@@ -321,5 +321,11 @@ public final class ServerConfig {
 
     public static final class PlainConfig {
         public volatile boolean enhanced = true;
+
+        /// Concurrent Node render processes. Each render spawns a short-lived
+        /// Node process; 2 was unnecessarily strict on an 8-core NAS, while the
+        /// old unbounded pool could spawn dozens. 4 is the default; operators can
+        /// tune it between 1 and 16 in `server.yaml` (`plain.ssr_workers`).
+        public volatile int ssrWorkers = 4;
     }
 }
