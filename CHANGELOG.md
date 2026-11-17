@@ -7,9 +7,9 @@
 - SSR 并发从写死 2 改为默认 4，并允许在 `server.yaml` 的 `plain.ssr_workers` 调到 1–16。
   每个渲染仍是短生命周期 Node 进程，watchdog 10 秒强杀；之前 2 个 worker 在长会话里
   预渲染偏慢，而旧实现的无界队列才是会打爆后端的原因。
-- IE11/legacy 外壳对齐 HMCL 蓝色主题的真实 token：`#4352A5` 主色、`#FBF8FF` surface、
-  `#D0D5FD` 选中/悬停、`#C6C5D3` 描边、`#1B1B21` 正文；补上输入框 focus 与按钮 active/
-  disabled 状态，字体改为 Microsoft YaHei UI / Segoe UI 字体栈。
+- IE11/legacy 外壳对齐 HDSL-web 自己的 `monet.css`（与桌面版 `blue.css` 同源）：`#4352A5`
+  主色、`#F5F2FA` 80% 卡片、4px 圆角、HDSL 字体栈、填充式输入框与 36px raised 按钮；
+  登录/错误页改成 420px 居中卡片，补上 focus/active/disabled 状态。
 
 ## v0.6.91 — 2026-11-16 · 纯文本版增强、SSR 可靠性与终端聊天修复
 

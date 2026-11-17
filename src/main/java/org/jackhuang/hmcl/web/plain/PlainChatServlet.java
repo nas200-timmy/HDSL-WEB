@@ -1148,10 +1148,17 @@ public final class PlainChatServlet extends HttpServlet {
     /// `null` nav and get the single content card.
     private static String shell(@Nullable String nav, String content) {
         StringBuilder out = new StringBuilder();
-        out.append("<table class=\"shell\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\"><tr>");
-        if (nav != null) {
-            out.append("<td class=\"shell-nav\" width=\"14%\">").append(nav).append("</td>");
+        if (nav == null) {
+            // Login, errors and the too-old notice: HDSL's login card is a compact
+            // centred panel, not a full-width content card.
+            out.append("<div class=\"shell-single\">");
+            out.append("<table class=\"shell shell-card\" width=\"420\" cellspacing=\"0\" cellpadding=\"0\" align=\"center\"><tr>");
+            out.append("<td class=\"shell-main\">").append(content).append("</td>");
+            out.append("</tr></table></div>\n");
+            return out.toString();
         }
+        out.append("<table class=\"shell\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\"><tr>");
+        out.append("<td class=\"shell-nav\" width=\"14%\">").append(nav).append("</td>");
         out.append("<td class=\"shell-main\">").append(content).append("</td>");
         out.append("</tr></table>\n");
         return out.toString();

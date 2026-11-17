@@ -201,7 +201,7 @@ class PlainLegacyTest {
             // The HMCL-style shell: wallpaper behind a two-column table card
             // layout, present on every page of the surface.
             assertTrue(enhanced.body().contains("background-image:url("), enhanced.body());
-            assertTrue(enhanced.body().contains("class=\"shell\""), enhanced.body());
+            assertTrue(enhanced.body().contains("class=\"shell"), enhanced.body());
 
             // KaTeX's stylesheet and fonts ride in the jar; when the build had
             // npm, the legacy surface serves them next to its own CSS.
