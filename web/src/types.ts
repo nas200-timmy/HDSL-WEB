@@ -298,6 +298,7 @@ export interface AcmeProviderInfo {
 
 export interface AcmeStatus {
   state: string;
+  phase: string;
   lastError: string | null;
   lastAttempt: string | null;
   nextAttempt: string | null;
@@ -322,6 +323,8 @@ export interface AcmeSettings {
   eabConfigured: boolean;
   credentialProvider: string | null;
   credentialsUpdatedAt: string | null;
+  maskedDns?: Record<string, string>;
+  maskedEab?: Record<string, string>;
   status?: AcmeStatus;
 }
 

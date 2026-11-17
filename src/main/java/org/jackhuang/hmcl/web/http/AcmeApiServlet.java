@@ -176,11 +176,33 @@ public final class AcmeApiServlet extends HttpServlet {
         body.addProperty("eabConfigured", credentials != null && credentials.eabConfigured());
         body.addProperty("credentialProvider", credentials == null ? null : credentials.provider());
         body.addProperty("credentialsUpdatedAt", credentials == null ? null : credentials.updatedAt());
+        JsonObject maskedDns = new JsonObject();
+        JsonObject maskedEab = new JsonObject();
+        if (credentials != null && credentials.configured()) {
+            AcmeDnsProviderRegistry.Info info = AcmeDnsProviderRegistry.find(credentials.provider());
+            if (info != null) {
+                for (AcmeDnsProviderRegistry.Field field : info.fields()) {
+                    String value = credentials.dnsCredentials().get(field.key());
+                    if (value != null && !value.isBlank()) {
+                        maskedDns.addProperty(field.key(), field.secret() ? mask(value) : value);
+                    }
+                }
+            }
+            if (credentials.eabConfigured()) {
+                String kid = credentials.eabCredentials().get("kid");
+                String hmac = credentials.eabCredentials().get("hmacKey");
+                if (kid != null) maskedEab.addProperty("kid", kid);
+                if (hmac != null) maskedEab.addProperty("hmacKey", mask(hmac));
+            }
+        }
+        body.add("maskedDns", maskedDns);
+        body.add("maskedEab", maskedEab);
 
         if (live != null) {
             AcmeService.Status status = live.status();
             JsonObject s = new JsonObject();
             s.addProperty("state", status.state().name().toLowerCase(java.util.Locale.ROOT));
+            s.addProperty("phase", status.phase().name().toLowerCase(java.util.Locale.ROOT));
             s.addProperty("lastError", status.lastError());
             s.addProperty("lastAttempt", status.lastAttempt() == null ? null : status.lastAttempt().toString());
             s.addProperty("nextAttempt", status.nextAttempt() == null ? null : status.nextAttempt().toString());
@@ -469,6 +491,7 @@ public final class AcmeApiServlet extends HttpServlet {
         answer.addProperty("ok", status.state() != AcmeService.State.ERROR);
         answer.addProperty("accepted", status.state() == AcmeService.State.ISSUING);
         answer.addProperty("state", status.state().name().toLowerCase(java.util.Locale.ROOT));
+        answer.addProperty("phase", status.phase().name().toLowerCase(java.util.Locale.ROOT));
         answer.addProperty("lastError", status.lastError());
         answer.addProperty("expires", status.expires() == null ? null : status.expires().toString());
         answer.addProperty("nextAttempt", status.nextAttempt() == null ? null : status.nextAttempt().toString());
@@ -541,6 +564,13 @@ public final class AcmeApiServlet extends HttpServlet {
     }
 
     // ---------------------------------------------------------------- helpers --
+
+    private static String mask(String value) {
+        if (value.length() <= 4) {
+            return "••••";
+        }
+        return "••••" + value.substring(value.length() - 4);
+    }
 
     private static JsonArray strings(List<String> values) {
         JsonArray array = new JsonArray();

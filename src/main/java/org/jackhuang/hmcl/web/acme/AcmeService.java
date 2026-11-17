@@ -66,7 +66,21 @@ public final class AcmeService implements AutoCloseable {
         ERROR
     }
 
-    public record Status(boolean enabled, State state,
+    /// Coarse issuance stages for the settings page's progress bar. The
+    /// service cannot see inside acme4j's account/order calls, but it can name
+    /// the phase the operator is waiting on.
+    public enum Phase {
+        DISABLED,
+        IDLE,
+        PREPARING,
+        ORDER,
+        DNS,
+        INSTALLING,
+        DONE,
+        ERROR
+    }
+
+    public record Status(boolean enabled, State state, Phase phase,
                          @Nullable String lastError,
                          @Nullable Instant lastAttempt,
                          @Nullable Instant nextAttempt,
@@ -113,6 +127,7 @@ public final class AcmeService implements AutoCloseable {
 
     private final Object lock = new Object();
     private State state = State.IDLE;
+    private Phase phase = Phase.IDLE;
     private @Nullable String lastError;
     private @Nullable Instant lastAttempt;
     private @Nullable Instant nextAttempt;
@@ -133,6 +148,7 @@ public final class AcmeService implements AutoCloseable {
         });
         if (!config.https.acme.enabled) {
             this.state = State.DISABLED;
+            this.phase = Phase.DISABLED;
         }
     }
 
@@ -144,6 +160,7 @@ public final class AcmeService implements AutoCloseable {
         synchronized (lock) {
             if (state == State.DISABLED) {
                 state = State.IDLE;
+                phase = Phase.IDLE;
             }
         }
         scheduler.schedule(this::safeCheck, INITIAL_DELAY.toMillis(), TimeUnit.MILLISECONDS);
@@ -155,6 +172,7 @@ public final class AcmeService implements AutoCloseable {
         stop();
         synchronized (lock) {
             state = State.DISABLED;
+            phase = Phase.DISABLED;
             lastError = null;
             nextAttempt = null;
         }
@@ -170,7 +188,7 @@ public final class AcmeService implements AutoCloseable {
     public Status status() {
         synchronized (lock) {
             CertificateManager.Info info = sink.info();
-            return new Status(config.https.acme.enabled, state, lastError, lastAttempt, nextAttempt,
+            return new Status(config.https.acme.enabled, state, phase, lastError, lastAttempt, nextAttempt,
                     info == null ? null : info.expires(),
                     sink.source().name().toLowerCase(java.util.Locale.ROOT),
                     List.copyOf(config.https.acme.domains),
@@ -198,6 +216,7 @@ public final class AcmeService implements AutoCloseable {
                 return status();
             }
             state = State.ISSUING;
+            phase = Phase.PREPARING;
             lastAttempt = Instant.now();
             lastError = null;
             scheduler.execute(() -> {
@@ -230,6 +249,7 @@ public final class AcmeService implements AutoCloseable {
                 Instant renewAt = info.expires().minus(Duration.ofDays(config.https.acme.renewBeforeDays));
                 if (now.isBefore(renewAt)) {
                     state = State.ACTIVE;
+                    phase = Phase.DONE;
                     lastError = null;
                     if (!sink.tlsActive()) {
                         try {
@@ -237,6 +257,7 @@ public final class AcmeService implements AutoCloseable {
                             logger.info("Activated the existing ACME certificate on this connector");
                         } catch (Exception e) {
                             state = State.ERROR;
+                            phase = Phase.ERROR;
                             lastError = redact(e.getMessage());
                             logger.warning("Could not activate the existing ACME certificate", e);
                         }
@@ -264,16 +285,19 @@ public final class AcmeService implements AutoCloseable {
 
     private Status issueLocked(Instant now) {
         state = State.ISSUING;
+        phase = Phase.PREPARING;
         lastAttempt = now;
         lastError = null;
         try {
             doIssue();
             state = State.ACTIVE;
+            phase = Phase.DONE;
             failures.set(0);
             nextAttempt = now.plus(CHECK_INTERVAL);
             logger.info("ACME certificate is active; next check at " + nextAttempt);
         } catch (Exception e) {
             state = State.ERROR;
+            phase = Phase.ERROR;
             lastError = redact(e.getMessage());
             int count = failures.incrementAndGet();
             Duration delay = switch (Math.min(count, 3)) {
@@ -318,9 +342,11 @@ public final class AcmeService implements AutoCloseable {
                 credentials.eabCredentials().get("hmacKey"),
                 accountKey);
 
+        phase = Phase.ORDER;
         AcmeClient.IssuedCertificate issued = client.issue(request, new AcmeClient.ChallengeHandler() {
             @Override
             public void present(String fqdn, String value) throws Exception {
+                phase = Phase.DNS;
                 provider.present(fqdn, value);
                 if (!resolver.await(fqdn, value, CHALLENGE_PROPAGATION)) {
                     throw new AcmeDnsException("TXT record " + fqdn
@@ -334,6 +360,7 @@ public final class AcmeService implements AutoCloseable {
             }
         });
 
+        phase = Phase.INSTALLING;
         Path certPath = config.dataDir.resolve("certs").resolve("acme").resolve("fullchain.pem");
         Path keyPath = config.dataDir.resolve("certs").resolve("acme").resolve("privkey.pem");
         writeSecret(certPath, issued.certificatePem());
