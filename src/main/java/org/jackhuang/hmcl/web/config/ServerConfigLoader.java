@@ -200,6 +200,13 @@ public final class ServerConfigLoader {
         if (section.containsKey("enhanced")) {
             config.plain.enhanced = booleanField(section, "enhanced");
         }
+        if (section.containsKey("ssr_workers")) {
+            int workers = intField(section, "ssr_workers");
+            if (workers < 1 || workers > 16) {
+                throw new ConfigException("plain.ssr_workers must be between 1 and 16, got " + workers);
+            }
+            config.plain.ssrWorkers = workers;
+        }
     }
 
     private static void applyNetwork(ServerConfig config, Map<String, Object> section) {

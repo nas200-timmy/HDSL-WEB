@@ -404,7 +404,7 @@ public final class HdslServer {
         // chat is unavailable: /plain/old is the landing page for browsers that
         // cannot run the SPA, and it must answer on a degraded install too.
         MarkdownSsr plainSsr = new MarkdownSsr(config.dataDir,
-                config.dataDir.resolve("plain-md"));
+                config.dataDir.resolve("plain-md"), config.plain.ssrWorkers);
         context.addServlet(new ServletHolder(new PlainChatServlet(
                 chat == null ? null : chat.service(), authService, authFilter,
                 config.auth.disabled, config.basePath, developerAuth, developerElevation,

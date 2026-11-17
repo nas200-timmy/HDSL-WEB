@@ -2,44 +2,46 @@
  *
  * IE11-safe on purpose: tables for layout (its flexbox is broken), solid and
  * rgba() colors (no custom properties), border-radius / box-shadow / background-size
- * (all IE9+). The wallpaper itself is injected inline by the servlet because its
- * URL carries the mount point; this file only styles the shell that sits on it.
+ * (all IE9+). The palette follows HMCL's blue theme tokens: primary #4352A5,
+ * surface #FBF8FF, on-surface #1B1B21, secondary-container #D0D5FD.
+ * The wallpaper itself is injected inline by the servlet because its URL
+ * carries the mount point; this file only styles the shell that sits on it.
  * w3m ignores all of it and renders the same markup as a readable text grid.
  */
 body {
   margin: 0;
   padding: 0;
-  color: #1c2733;
-  font-family: "Segoe UI", system-ui, sans-serif;
+  color: #1B1B21;
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", Tahoma, sans-serif;
   line-height: 1.5;
-  background-color: #202a36;
+  background-color: #1B1B21;
 }
 
 /* two-column shell: nav card + content card over the wallpaper */
 table.shell {
   width: 100%;
   border-collapse: separate;
-  border-spacing: 12px;
+  border-spacing: 14px;
   table-layout: fixed;
 }
 td.shell-nav {
   width: 11rem;
   vertical-align: top;
-  background: #f4f7fb;
-  background: rgba(248, 251, 255, 0.93);
-  border: 1px solid #b9c6d6;
-  border-radius: 10px;
-  box-shadow: 0 2px 10px rgba(10, 20, 35, 0.35);
+  background: #F5F2FA;
+  background: rgba(245, 242, 250, 0.94);
+  border: 1px solid #C6C5D3;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
   padding: 10px;
 }
 td.shell-main {
   vertical-align: top;
-  background: #fbfcfe;
-  background: rgba(251, 252, 254, 0.95);
-  border: 1px solid #b9c6d6;
-  border-radius: 10px;
-  box-shadow: 0 2px 10px rgba(10, 20, 35, 0.35);
-  padding: 12px 18px 20px;
+  background: #FBF8FF;
+  background: rgba(251, 248, 255, 0.95);
+  border: 1px solid #C6C5D3;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  padding: 14px 20px 22px;
 }
 
 /* left navigation, HMCL's list style */
@@ -47,20 +49,21 @@ td.shell-main {
   display: block;
   padding: 6px 8px 10px;
   font-size: 1.05rem;
-  color: #202a36;
-  border-bottom: 2px solid #0b57d0;
+  color: #1B1B21;
+  border-bottom: 2px solid #4352A5;
   margin-bottom: 6px;
 }
 .navlist a {
   display: block;
-  padding: 6px 8px;
+  padding: 7px 9px;
   margin: 2px 0;
-  color: #0b57d0;
+  color: #4352A5;
   text-decoration: none;
   border-radius: 6px;
 }
 .navlist a:hover {
-  background: #dce7f5;
+  background: #D0D5FD;
+  color: #1B1B21;
 }
 .navlist form {
   margin: 8px 0 0;
@@ -72,17 +75,18 @@ td.shell-main {
 /* content */
 h1 {
   font-size: 1.35rem;
-  color: #202a36;
-  border-bottom: 2px solid #0b57d0;
+  color: #1B1B21;
+  border-bottom: 2px solid #4352A5;
   padding-bottom: 6px;
   margin: 4px 0 12px;
 }
 h2 {
   font-size: 1.1rem;
-  color: #202a36;
+  color: #1B1B21;
   margin: 16px 0 8px;
 }
-a { color: #0b57d0; }
+a { color: #4352A5; }
+a:hover { color: #5C6BC0; }
 .toolbar {
   margin: 0 0 8px;
 }
@@ -90,13 +94,13 @@ a { color: #0b57d0; }
   display: inline-block;
   margin-right: 12px;
   padding: 3px 10px;
-  border: 1px solid #b9c6d6;
+  border: 1px solid #C6C5D3;
   border-radius: 6px;
-  background: #fff;
+  background: #FBF8FF;
   text-decoration: none;
   font-size: .9rem;
 }
-.toolbar a:hover { background: #dce7f5; }
+.toolbar a:hover { background: #D0D5FD; color: #1B1B21; }
 .toolbar form { display: inline; }
 .modelform { display: inline-block; margin: 0 0 10px; }
 .modelform select { max-width: 32rem; }
@@ -110,8 +114,8 @@ table:not(.shell) {
   border-collapse: separate;
   border-spacing: 0;
   width: 100%;
-  background: #fff;
-  border: 1px solid #d4dde8;
+  background: #FBF8FF;
+  border: 1px solid #C6C5D3;
   border-radius: 8px;
   overflow: hidden;
 }
@@ -119,11 +123,11 @@ th, td {
   padding: .4rem .6rem;
   text-align: left;
   vertical-align: top;
-  border-bottom: 1px solid #e3eaf2;
+  border-bottom: 1px solid #E3E1E9;
 }
 th {
-  background: #eef3f9;
-  color: #33475b;
+  background: #EFEDF5;
+  color: #1B1B21;
   font-weight: 600;
 }
 tr:last-child td { border-bottom: 0; }
@@ -132,22 +136,23 @@ tr:last-child td { border-bottom: 0; }
 pre.msg, pre.chat-code-body {
   white-space: pre-wrap;
   word-wrap: break-word;
-  background: #fff;
-  border: 1px solid #d4dde8;
-  border-left: 4px solid #0b57d0;
+  background: #FFFFFF;
+  border: 1px solid #C6C5D3;
+  border-left: 4px solid #4352A5;
   border-radius: 6px;
   padding: .6rem .8rem;
   margin: .25rem 0 .75rem;
+  color: #1B1B21;
 }
 .chat-code { margin: .5rem 0; }
 .chat-code-head {
-  background: #eef3f9;
-  border: 1px solid #d4dde8;
+  background: #EFEDF5;
+  border: 1px solid #C6C5D3;
   border-bottom: 0;
   border-radius: 6px 6px 0 0;
   padding: .2rem .6rem;
   font-size: .85rem;
-  color: #5a6b7d;
+  color: #454651;
 }
 .chat-code-head .chat-code-lang { font-weight: 600; }
 .chat-code-head .chat-code-lines { float: right; }
@@ -160,43 +165,54 @@ pre.msg, pre.chat-code-body {
 /* forms */
 textarea, input[type="text"], input[type="password"], select {
   font: inherit;
-  border: 1px solid #b9c6d6;
+  border: 1px solid #C6C5D3;
   border-radius: 6px;
   padding: 6px 8px;
-  background: #fff;
+  background: #FFFFFF;
+  color: #1B1B21;
+}
+textarea:focus, input[type="text"]:focus, input[type="password"]:focus, select:focus {
+  border-color: #4352A5;
+  outline: 1px solid #4352A5;
 }
 textarea { width: 98%; min-height: 6rem; }
 button, input[type="submit"] {
   font: inherit;
-  background: #0b57d0;
-  color: #fff;
+  background: #4352A5;
+  color: #FFFFFF;
   border: 0;
   border-radius: 6px;
   padding: 6px 14px;
   cursor: pointer;
 }
-button:hover, input[type="submit"]:hover { background: #0a4ab8; }
+button:hover, input[type="submit"]:hover { background: #5C6BC0; }
+button:active, input[type="submit"]:active { background: #2F3F92; }
+button:disabled, input[type="submit"]:disabled {
+  background: #C6C5D3;
+  color: #454651;
+  cursor: default;
+}
 
-.muted { color: #5a6b7d; }
-.error { color: #a00; font-weight: 600; }
+.muted { color: #454651; }
+.error { color: #BA1A1A; font-weight: 600; }
 .row { display: block; margin: .5rem 0; }
 
 /* server-rendered markdown */
 .legacy-md h1, .legacy-md h2, .legacy-md h3 { line-height: 1.25; }
 .legacy-md table { width: auto; }
-.legacy-md th, .legacy-md td { border: 1px solid #d4dde8; border-bottom: 1px solid #d4dde8; }
+.legacy-md th, .legacy-md td { border: 1px solid #C6C5D3; border-bottom: 1px solid #C6C5D3; }
 .legacy-md blockquote {
   margin: .5rem 0;
   padding: .25rem .75rem;
-  border-left: 3px solid #b9c6d6;
-  color: #5a6b7d;
+  border-left: 3px solid #C6C5D3;
+  color: #454651;
 }
 
 /* highlight.js token subset */
 .hljs-comment { color: #008000; }
-.hljs-keyword, .hljs-type { color: #0000ff; }
-.hljs-string, .hljs-regexp { color: #a31515; }
+.hljs-keyword, .hljs-type { color: #0000FF; }
+.hljs-string, .hljs-regexp { color: #A31515; }
 .hljs-number, .hljs-literal { color: #098658; }
-.hljs-title, .hljs-function .hljs-title { color: #795e26; }
+.hljs-title, .hljs-function .hljs-title { color: #795E26; }
 .hljs-variable, .hljs-attr, .hljs-attribute { color: #001080; }
-.hljs-meta, .hljs-symbol, .hljs-bullet { color: #267f99; }
+.hljs-meta, .hljs-symbol, .hljs-bullet { color: #267F99; }

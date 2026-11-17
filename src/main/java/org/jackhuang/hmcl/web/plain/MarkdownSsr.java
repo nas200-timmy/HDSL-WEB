@@ -89,9 +89,10 @@ public final class MarkdownSsr {
     /// Cached fragments beyond this count prune the oldest files.
     private static final int MAX_CACHE_FILES = 2000;
 
-    /// Two Node processes at a time: enough to fill a transcript without letting
-    /// one long conversation start a process per message.
-    private static final int WORKERS = 2;
+    /// A few Node processes at a time: enough to fill a transcript without
+    /// letting one long conversation start a process per message.
+    private static final int DEFAULT_WORKERS = 4;
+    private static final int MAX_WORKERS = 16;
 
     /// Running + queued render tasks. A request that cannot get a slot skips
     /// the prefetch; the next poll tries again, so a burst never grows an
@@ -105,6 +106,7 @@ public final class MarkdownSsr {
 
     private final Path dataDir;
     private final Path cacheDir;
+    private final int workerCount;
     private final AtomicReference<Optional<Path>> node = new AtomicReference<>();
     private final AtomicReference<Optional<Path>> script = new AtomicReference<>();
     private final Set<String> pending = ConcurrentHashMap.newKeySet();
@@ -117,8 +119,13 @@ public final class MarkdownSsr {
     private volatile @Nullable ScheduledExecutorService watchdog;
 
     public MarkdownSsr(Path dataDir, Path cacheDir) {
+        this(dataDir, cacheDir, DEFAULT_WORKERS);
+    }
+
+    public MarkdownSsr(Path dataDir, Path cacheDir, int workerCount) {
         this.dataDir = dataDir;
         this.cacheDir = cacheDir;
+        this.workerCount = Math.max(1, Math.min(MAX_WORKERS, workerCount));
     }
 
     /// Whether server-side rendering can run at all: a Node executable and the
@@ -301,7 +308,7 @@ public final class MarkdownSsr {
             synchronized (this) {
                 current = workers;
                 if (current == null) {
-                    current = Executors.newFixedThreadPool(WORKERS, runnable -> {
+                    current = Executors.newFixedThreadPool(workerCount, runnable -> {
                         Thread thread = new Thread(runnable, "plain-markdown");
                         thread.setDaemon(true);
                         return thread;
