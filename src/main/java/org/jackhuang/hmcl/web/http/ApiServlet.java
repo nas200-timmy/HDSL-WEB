@@ -28,6 +28,8 @@ import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.auth.LoginThrottle;
 import org.jackhuang.hmcl.web.auth.UserStore;
+import org.jackhuang.hmcl.web.crypto.PasswordCrypto;
+import org.jackhuang.hmcl.web.crypto.ChatCryptoService;
 import org.jackhuang.hmcl.web.terminal.TerminalWebSocket;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -36,6 +38,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.LongSupplier;
@@ -73,16 +76,21 @@ public final class ApiServlet extends HttpServlet {
     /// `AuthService.logout` 只删 session——不清这里，登出后 30 分钟内
     /// `/api/developer/agent-auth` 仍能凭 agent 密码发票。
     private final org.jackhuang.hmcl.web.developer.DeveloperElevation elevation;
+    private final PasswordCrypto passwordCrypto;
+    private final ChatCryptoService chatCrypto;
 
     public ApiServlet(AuthService authService, AuthFilter authFilter, boolean authDisabled,
                       String version, LongSupplier uptimeStartMillis,
-                      org.jackhuang.hmcl.web.developer.DeveloperElevation elevation) {
+                      org.jackhuang.hmcl.web.developer.DeveloperElevation elevation,
+                      PasswordCrypto passwordCrypto, ChatCryptoService chatCrypto) {
         this.authService = authService;
         this.authFilter = authFilter;
         this.authDisabled = authDisabled;
         this.version = version;
         this.uptimeStartMillis = uptimeStartMillis;
         this.elevation = elevation;
+        this.passwordCrypto = passwordCrypto;
+        this.chatCrypto = chatCrypto;
     }
 
     @Override
@@ -92,6 +100,10 @@ public final class ApiServlet extends HttpServlet {
 
         if ("/health".equals(path) && "GET".equals(method)) {
             health(response);
+        } else if ("/crypto/password-key".equals(path) && "GET".equals(method)) {
+            passwordKey(response);
+        } else if ("/crypto/chat-key".equals(path) && "POST".equals(method)) {
+            chatKey(request, response);
         } else if ("/auth/login".equals(path) && "POST".equals(method)) {
             login(request, response);
         } else if ("/auth/status".equals(path) && "GET".equals(method)) {
@@ -111,8 +123,40 @@ public final class ApiServlet extends HttpServlet {
         }
     }
 
-    private void health(HttpServletResponse response) throws IOException {
-        long uptimeSec = Math.max(0, (System.currentTimeMillis() - uptimeStartMillis.getAsLong()) / 1000);
+    private void passwordKey(HttpServletResponse response) throws IOException {
+        JsonObject descriptor = new JsonObject();
+        passwordCrypto.writeDescriptor(descriptor);
+        Json.write(response, descriptor);
+    }
+
+    private void chatKey(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JsonObject body;
+        try {
+            body = JsonParser.parseString(new String(request.getInputStream().readAllBytes(),
+                    StandardCharsets.UTF_8)).getAsJsonObject();
+        } catch (RuntimeException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        if (!body.has("clientPublicKey") || !body.get("clientPublicKey").isJsonPrimitive()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "clientPublicKey is required");
+            return;
+        }
+        try {
+            byte[] publicKey = Base64.getUrlDecoder().decode(body.get("clientPublicKey").getAsString());
+            ChatCryptoService.Descriptor descriptor = chatCrypto.start(publicKey);
+            JsonObject answer = new JsonObject();
+            answer.addProperty("channelId", descriptor.channelId());
+            answer.addProperty("serverPublicKey", Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(descriptor.serverPublicKey()));
+            answer.addProperty("expiresAt", descriptor.expiresAt().toString());
+            Json.write(response, answer);
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    private void health(HttpServletResponse response) throws IOException {        long uptimeSec = Math.max(0, (System.currentTimeMillis() - uptimeStartMillis.getAsLong()) / 1000);
         // `java` 是「关于」页要显示的运行时版本：面板自己跑在哪个 JDK 上，
         // 和实例用的 JDK 是两回事，混在一起会让人以为实例也换了运行时。
         // 只给大版本：`/api/health` 是免认证探针，把发行版与补丁号（`21.0.12.1+1-deb13u1`）
@@ -134,7 +178,13 @@ public final class ApiServlet extends HttpServlet {
             return;
         }
         String username = stringField(body, "username");
-        String password = stringField(body, "password");
+        String password;
+        try {
+            password = passwordCrypto.decode(body.get("password"));
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
         if (username == null || password == null) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "username and password are required");
             return;
@@ -202,7 +252,13 @@ public final class ApiServlet extends HttpServlet {
             return;
         }
         String username = stringField(body, "username");
-        String password = stringField(body, "password");
+        String password;
+        try {
+            password = passwordCrypto.decode(body.get("password"));
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
         if (!UserStore.isValidUsername(username) || !UserStore.isValidPassword(password)) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                     "username must be 1-32 characters without whitespace and password at least "
@@ -248,8 +304,15 @@ public final class ApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
             return;
         }
-        String currentPassword = stringField(body, "currentPassword");
-        String newPassword = stringField(body, "newPassword");
+        String currentPassword;
+        String newPassword;
+        try {
+            currentPassword = passwordCrypto.decode(body.get("currentPassword"));
+            newPassword = passwordCrypto.decode(body.get("newPassword"));
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
         if (currentPassword == null || newPassword == null) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "currentPassword and newPassword are required");
             return;

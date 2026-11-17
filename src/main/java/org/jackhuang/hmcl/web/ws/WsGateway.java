@@ -38,7 +38,7 @@ import org.jackhuang.hmcl.web.event.EventBus;
 import org.jackhuang.hmcl.web.http.Json;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
-
+import org.jackhuang.hmcl.web.crypto.ChatCryptoService;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -80,6 +80,7 @@ public final class WsGateway {
     /// The ACP console bridge, or `null` before assembly. A console message
     /// arriving without it is answered with `acp-error`.
     private static volatile @Nullable AcpSessionManager acpSessions;
+    private static volatile @Nullable org.jackhuang.hmcl.web.crypto.ChatCryptoService chatCrypto;
 
     /// Guards every mutation of the three subscription fields; the send
     /// callbacks themselves run on publisher threads and only read.
@@ -98,11 +99,13 @@ public final class WsGateway {
     /// @param disabledAuth whether authentication is switched off
     /// @param acp          the ACP console bridge, or `null` when there is none
     public static void install(EventBus eventBus, @Nullable AuthService auth, boolean disabledAuth,
-                               @Nullable AcpSessionManager acp) {
+                               @Nullable AcpSessionManager acp,
+                               @Nullable org.jackhuang.hmcl.web.crypto.ChatCryptoService chatCrypto) {
         bus = eventBus;
         authService = auth;
         authDisabled = disabledAuth;
         acpSessions = acp;
+        WsGateway.chatCrypto = chatCrypto;
     }
 
     @OnOpen
@@ -138,6 +141,7 @@ public final class WsGateway {
         switch (type == null ? "" : type) {
             case "subscribe" -> subscribe(session, topicsGiven ? topics : null);
             case "unsubscribe" -> unsubscribe(topicsGiven ? topics : null);
+            case "chat-hello" -> chatHello(session, object);
             case "acp-start", "acp-prompt", "acp-cancel", "acp-stop" ->
                     handleAcp(session, object, type);
             default -> send(session, error("unknown message type"));
@@ -181,6 +185,47 @@ public final class WsGateway {
         detach();
     }
 
+    /// Binds a chat-key channel to this WebSocket. Chat topics then arrive as
+    /// encrypted `{"type":"enc",...}` frames; other topics stay plaintext.
+    private static void chatHello(Session session, JsonObject object) {
+        String channelId = stringField(object, "channelId");
+        ChatCryptoService service = chatCrypto;
+        ChatCryptoService.Channel channel = service == null ? null : service.channel(channelId);
+        if (channel == null) {
+            send(session, error("chat_key_required"));
+            return;
+        }
+        session.getUserProperties().put("chat.channel", channel);
+        JsonObject ok = new JsonObject();
+        ok.addProperty("type", "chat-hello-ok");
+        send(session, ok);
+    }
+
+    /// Sends a topic event, encrypting `chat` / `chat:<id>` payloads when this
+    /// connection has completed `chat-hello`.
+    private static void sendTopic(Session session, String topic, JsonObject payload) {
+        ChatCryptoService service = chatCrypto;
+        Object bound = session.getUserProperties().get("chat.channel");
+        boolean chatTopic = topic.equals("chat") || topic.startsWith("chat:");
+        if (chatTopic) {
+            if (service == null || !(bound instanceof ChatCryptoService.Channel channel)) {
+                // A connection that has not completed chat-hello never sees
+                // chat content in cleartext; it can retry after binding.
+                return;
+            }
+            try {
+                JsonObject envelope = service.encrypt(channel, false,
+                        Json.GSON.toJson(payload).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                envelope.addProperty("type", "enc");
+                send(session, envelope);
+            } catch (RuntimeException e) {
+                send(session, error("chat encryption failed"));
+            }
+            return;
+        }
+        send(session, payload);
+    }
+
     /// Replaces the connection's subscriptions: `null` or an empty set means
     /// "everything" (and clears the exclusions), anything else is the exact
     /// topic set from now on.
@@ -192,7 +237,7 @@ public final class WsGateway {
                 return;
             }
             for (String topic : topics) {
-                byTopic.put(topic, bus.subscribe(topic, (ignored, payload) -> send(session, payload)));
+                byTopic.put(topic, bus.subscribe(topic, (ignored, payload) -> sendTopic(session, topic, payload)));
             }
         }
     }
@@ -201,7 +246,7 @@ public final class WsGateway {
     private EventBus.Subscription subscribeAll(Session session) {
         return bus.subscribe(EventBus.ALL_TOPIC, (topic, payload) -> {
             if (!excluded.contains(topic)) {
-                send(session, payload);
+                sendTopic(session, topic, payload);
             }
         });
     }

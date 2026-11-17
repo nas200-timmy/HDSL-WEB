@@ -75,6 +75,13 @@ import type {
   ChatVisionTest,
   ChatTurnOutcome,
 } from "./types";
+import { encryptPassword } from "./passwordCrypto";
+import {
+  ensureChatChannel,
+  chatChannelId,
+  encryptChatJson,
+  decryptChatJson,
+} from "./chatCrypto";
 
 export class ApiError extends Error {
   status: number;
@@ -101,6 +108,29 @@ export function setUnauthorizedHandler(fn: () => void): void {
 }
 
 async function request<T>(path: string, init?: RequestInit, opts?: { skipUnauthorizedRedirect?: boolean; timeoutMs?: number }): Promise<T> {
+  const normalizedPath = path.replace(/^\//, "");
+  const chat = normalizedPath.startsWith("api/chat/");
+  let requestInit = init;
+  let encryptedChat = false;
+
+  if (chat && !(init?.body instanceof FormData)) {
+    try {
+      await ensureChatChannel();
+      const channelId = chatChannelId();
+      if (!channelId) throw new Error("chat key is not ready");
+      const headers = new Headers(init?.headers);
+      headers.set("X-HDSL-Chat", channelId);
+      encryptedChat = true;
+      let body = init?.body;
+      if (typeof body === "string") {
+        body = encryptChatJson(body);
+      }
+      requestInit = { ...init, headers, body };
+    } catch (e) {
+      throw new ApiError(403, e instanceof Error ? e.message : "无法建立聊天加密通道");
+    }
+  }
+
   let res: Response;
   try {
     // 相对路径：由后端注入的 <base href> 解析——根挂载解析到 /api/…，
@@ -109,7 +139,7 @@ async function request<T>(path: string, init?: RequestInit, opts?: { skipUnautho
       credentials: "same-origin",
       cache: "no-store",
       signal: AbortSignal.timeout(opts?.timeoutMs ?? 30000),
-      ...init,
+      ...requestInit,
     });
   } catch (e) {
     if (e instanceof DOMException && e.name === "TimeoutError") {
@@ -121,7 +151,18 @@ async function request<T>(path: string, init?: RequestInit, opts?: { skipUnautho
   let body: unknown = null;
   if (res.status !== 204) {
     try {
-      body = await res.json();
+      const text = await res.text();
+      if (text) {
+        if (encryptedChat) {
+          try {
+            body = JSON.parse(decryptChatJson(text));
+          } catch {
+            body = JSON.parse(text);
+          }
+        } else {
+          body = JSON.parse(text);
+        }
+      }
     } catch {
       body = null;
     }
@@ -155,8 +196,11 @@ export const api = {
   systemStorage: (refresh = false) =>
     request<SystemStorage>(`/api/system/storage${refresh ? "?refresh=1" : ""}`),
 
-  login: (username: string, password: string) =>
-    request<{ ok: boolean; username: string }>("/api/auth/login", jsonInit("POST", { username, password })),
+  login: async (username: string, password: string) =>
+    request<{ ok: boolean; username: string }>(
+      "/api/auth/login",
+      jsonInit("POST", { username, password: await encryptPassword(password) }),
+    ),
 
   logout: () => request<unknown>("/api/auth/logout", { method: "POST" }),
 
@@ -166,12 +210,21 @@ export const api = {
   authStatus: () => request<{ setupRequired: boolean }>("/api/auth/status"),
 
   /** 创建第一个用户并自动登录（服务端在无用户时才接受；201 = 已下发会话） */
-  setup: (username: string, password: string) =>
-    request<{ ok: boolean; username: string }>("/api/auth/setup", jsonInit("POST", { username, password })),
+  setup: async (username: string, password: string) =>
+    request<{ ok: boolean; username: string }>(
+      "/api/auth/setup",
+      jsonInit("POST", { username, password: await encryptPassword(password) }),
+    ),
 
   /** 修改当前用户密码；成功后服务端会吊销本用户的其它会话 */
-  changePassword: (currentPassword: string, newPassword: string) =>
-    request<{ ok: boolean }>("/api/auth/password", jsonInit("POST", { currentPassword, newPassword })),
+  changePassword: async (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>(
+      "/api/auth/password",
+      jsonInit("POST", {
+        currentPassword: await encryptPassword(currentPassword),
+        newPassword: await encryptPassword(newPassword),
+      }),
+    ),
 
   /** 修改当前用户名；本设备的会话保留并切换到新名，其它会话被吊销 */
   changeUsername: (newUsername: string) =>
@@ -262,10 +315,10 @@ export const api = {
   revokeAgentGrant: (id: string) =>
     request<{ ok: boolean }>(`/api/developer/agent-grants/${encodeURIComponent(id)}`, { method: "DELETE" }),
   developerStatus: () => request<DeveloperStatus>("/api/developer/status"),
-  elevateDeveloper: (password: string) =>
+  elevateDeveloper: async (password: string) =>
     request<{ elevated: boolean; expiresAt: string; token?: string }>(
       "/api/developer/elevate",
-      jsonInit("POST", { password }),
+      jsonInit("POST", { password: await encryptPassword(password) }),
     ),
   /** 已提权的前提下把提权延长到 3 小时后；未提权时后端拒绝 */
   extendDeveloper: () =>
@@ -310,7 +363,7 @@ export const api = {
     }>("/api/developer/estop/engage", jsonInit("POST", { confirm: "ENGAGE-EMERGENCY-STOP", reason })),
   /** 紧急停机：冷却到点后才能解除（否则后端 409 带 remainingSeconds） */
   estopRelease: () => request<{ engaged: boolean }>("/api/developer/estop/release", { method: "POST" }),
-  setDeveloperPassword: (
+  setDeveloperPassword: async (
     adminPassword: string,
     password: string,
     confirm: string,
@@ -318,12 +371,18 @@ export const api = {
   ) =>
     request<{ ok: boolean; devPasswordSet: boolean }>(
       "/api/developer/password",
-      jsonInit("POST", { adminPassword, password, confirm, currentDevPassword }),
+      jsonInit("POST", {
+        adminPassword: await encryptPassword(adminPassword),
+        password: await encryptPassword(password),
+        confirm: await encryptPassword(confirm),
+        currentDevPassword: currentDevPassword == null
+          ? undefined : await encryptPassword(currentDevPassword),
+      }),
     ),
-  clearDeveloperPassword: (adminPassword: string) =>
+  clearDeveloperPassword: async (adminPassword: string) =>
     request<{ ok: boolean; devPasswordSet: boolean }>(
       "/api/developer/password/clear",
-      jsonInit("POST", { adminPassword }),
+      jsonInit("POST", { adminPassword: await encryptPassword(adminPassword) }),
     ),
 
 

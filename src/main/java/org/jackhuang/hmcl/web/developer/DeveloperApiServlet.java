@@ -28,6 +28,7 @@ import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.auth.LoginThrottle;
+import org.jackhuang.hmcl.web.crypto.PasswordCrypto;
 import org.jackhuang.hmcl.web.auth.UserStore;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.config.ServerConfigWriter;
@@ -91,13 +92,15 @@ public final class DeveloperApiServlet extends HttpServlet {
     /// reachable without a session, so it needs the same shape of limiter the
     /// sign-in gate uses.
     private final LoginThrottle agentPasswordThrottle = new LoginThrottle();
+    private final PasswordCrypto passwordCrypto;
 
     public DeveloperApiServlet(DeveloperAuth devAuth, DeveloperAuth agentAuth,
                                DeveloperElevation elevation,
                                AuthService auth, ServerConfig config, BooleanSupplier tlsActive,
                                EmergencyStop emergency, TerminalManager terminals, InstanceRuntime runtime,
                                org.jackhuang.hmcl.web.auth.PeerIdentity identity,
-                               java.util.function.IntSupplier panelPort) {
+                               java.util.function.IntSupplier panelPort,
+                               PasswordCrypto passwordCrypto) {
         this.devAuth = devAuth;
         this.agentAuth = agentAuth;
         this.elevation = elevation;
@@ -109,6 +112,7 @@ public final class DeveloperApiServlet extends HttpServlet {
         this.runtime = runtime;
         this.identity = identity;
         this.panelPort = panelPort;
+        this.passwordCrypto = passwordCrypto;
     }
 
     @Override
@@ -215,7 +219,18 @@ public final class DeveloperApiServlet extends HttpServlet {
         if (!requireTls(request, response)) {
             return;
         }
-        String password = stringField(readJson(request), "password");
+        JsonObject body = readJson(request);
+        if (body == null) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        String password;
+        try {
+            password = passwordCrypto.decode(body.get("password"));
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
         if (password == null) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "password is required");
             return;
@@ -244,14 +259,14 @@ public final class DeveloperApiServlet extends HttpServlet {
         }
         elevation.elevate(key);
         elevation.clearFailures(key);
-        JsonObject body = new JsonObject();
-        body.addProperty("elevated", true);
-        body.addProperty("expiresAt", now.plus(DeveloperElevation.TTL).toString());
+        JsonObject answer = new JsonObject();
+        answer.addProperty("elevated", true);
+        answer.addProperty("expiresAt", now.plus(DeveloperElevation.TTL).toString());
         // A bearer token for callers that cannot keep the session cookie: a host
         // script, an inspection agent, CI. Same TTL and sliding rules as the
         // cookie elevation, in memory only, and killed by a password change.
-        body.addProperty("token", elevation.mintToken());
-        Json.write(response, body);
+        answer.addProperty("token", elevation.mintToken());
+        Json.write(response, answer);
     }
 
     /// The developer page's 「延长提权」: an already-elevated session spends
@@ -829,10 +844,19 @@ public final class DeveloperApiServlet extends HttpServlet {
             return;
         }
         JsonObject body = readJson(request);
-        String adminPassword = stringField(body, "adminPassword");
-        String password = stringField(body, "password");
-        String confirm = stringField(body, "confirm");
-        String current = stringField(body, "currentDevPassword");
+        String adminPassword;
+        String password;
+        String confirm;
+        String current;
+        try {
+            adminPassword = decodePassword(body, "adminPassword");
+            password = decodePassword(body, "password");
+            confirm = decodePassword(body, "confirm");
+            current = decodePassword(body, "currentDevPassword");
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
         if (adminPassword == null || password == null || confirm == null) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                     "adminPassword, password and confirm are required");
@@ -874,7 +898,13 @@ public final class DeveloperApiServlet extends HttpServlet {
         if (!requireTls(request, response)) {
             return;
         }
-        String adminPassword = stringField(readJson(request), "adminPassword");
+        String adminPassword;
+        try {
+            adminPassword = decodePassword(readJson(request), "adminPassword");
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
         if (adminPassword == null) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "adminPassword is required");
             return;
@@ -1163,6 +1193,17 @@ public final class DeveloperApiServlet extends HttpServlet {
         } catch (RuntimeException e) {
             return null;
         }
+    }
+
+    /// Decodes one password field, answering `null` when the field is absent.
+    /// A plain string is accepted for curl; an encrypted object must be a
+    /// valid password envelope.
+    private @Nullable String decodePassword(@Nullable JsonObject body, String field) {
+        JsonElement element = body == null ? null : body.get(field);
+        if (element == null || element.isJsonNull()) {
+            return null;
+        }
+        return passwordCrypto.decode(element);
     }
 
     /// Reads a string field, and only a string. `{"password":{}}` used to reach

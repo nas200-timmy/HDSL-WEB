@@ -104,6 +104,9 @@ public enum DeveloperGuardScope {
         if (path.startsWith("/api/system/")) {
             return true;
         }
+        if (path.equals("/api/crypto/password-key")) {
+            return true;
+        }
         return path.equals("/api/health") || path.equals("/api/version") || path.equals("/api");
     }
 

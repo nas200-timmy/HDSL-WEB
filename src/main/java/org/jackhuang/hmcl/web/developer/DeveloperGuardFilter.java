@@ -114,6 +114,14 @@ public final class DeveloperGuardFilter implements Filter {
         }
 
         DeveloperGuardScope scope = config.developerGuard.scope;
+        boolean secure = RequestSecurity.isSecure(http, tlsActive.getAsBoolean(), config);
+        // A remote cleartext panel has no TLS to protect a stolen session, so
+        // the guard is forced to its highest scope. Loopback remains local
+        // (tests, SSH local forwarding).
+        if (!secure && !org.jackhuang.hmcl.web.auth.AuthFilter.isLoopback(http.getRemoteAddr())
+                && scope != DeveloperGuardScope.ALL) {
+            scope = DeveloperGuardScope.ALL;
+        }
         if (scope == DeveloperGuardScope.OFF || !gated(scope, path, method)) {
             chain.doFilter(request, response);
             return;
@@ -130,7 +138,7 @@ public final class DeveloperGuardFilter implements Filter {
         // so on a plain-HTTP panel a gated request can never be satisfied. Say
         // which policy refused it rather than asking for a password that cannot
         // work.
-        if (!RequestSecurity.isSecure(http, tlsActive.getAsBoolean(), config)) {
+        if (!secure) {
             refuse(answer, navigation, path, HttpServletResponse.SC_FORBIDDEN, "tls_required",
                     "面板不在 HTTPS 下：开发者模式不可用。请先在「设置 → HTTPS 证书」里启用。",
                     "The panel is not on HTTPS, so developer mode is unavailable.", false);

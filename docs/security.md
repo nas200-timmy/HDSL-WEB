@@ -249,6 +249,11 @@ SMB/NFS export、某些 Windows 共享卷同样如此）会把**共享属主**�
   TLS（Win7 上要启用 TLS 1.2），但**裸 HTTP 下没有任何传输安全**。w3m/lynx 只要链接的是
   OpenSSL/GnuTLS 的 HTTPS 就没问题；裸 HTTP 一样是明文。这个边界不补：坚持这种组合，等于
   主动把登录态、聊天内容和操作交给链路上的任何人。请用 HTTPS、SSH 隧道或 Tailscale。
+- **HTTP 下的密码/聊天加密只防被动嗅探。** 登录/改密/开发者提权的密码字段，以及
+  `/api/chat/*` JSON 和 `chat:*` WebSocket 帧，会由 X25519 + HKDF + ChaCha20-Poly1305
+  包裹；它不防主动 MITM、不防 JS 被替换、也不防首次公钥被替换。支持 ES2020 的浏览器
+  会用这层；旧浏览器/curl 仍可发明文（服务端为兼容而接受）。要真正的传输安全，
+  仍然必须用 HTTPS 或 SSH 隧道。
 - **没有独立的 CSRF token**：靠 `SameSite=Strict` + 写接口只收 JSON 请求体两层。够用，但不是
   硬保证。
 - **实例 token 在 URL 里**（`/i/<id>/?token=…`）：会出现在浏览器历史、某些反代访问日志里；

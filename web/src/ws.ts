@@ -1,5 +1,6 @@
 import type { WsEvent } from "./types";
 import { withBase } from "./base";
+import { ensureChatChannel, decryptChatEnvelope } from "./chatCrypto";
 
 // WebSocket 连接管理：登录后连接、断线 3s 起指数退避重连（上限 30s）、
 // 重连后自动重新订阅全部活跃 topic。握手带 cookie（浏览器默认同源行为）。
@@ -15,6 +16,27 @@ let retryDelay = RECONNECT_BASE_MS;
 let retryTimer: number | undefined;
 const topics = new Set<string>();
 const handlers = new Set<WsHandler>();
+let chatReady = false;
+
+function wantsChat(list: Iterable<string>): boolean {
+  for (const topic of list) {
+    if (topic === "chat" || topic.startsWith("chat:")) return true;
+  }
+  return false;
+}
+
+async function bindChat(sock: WebSocket): Promise<void> {
+  if (chatReady || !wantsChat(topics)) return;
+  try {
+    const channel = await ensureChatChannel();
+    if (sock.readyState !== WebSocket.OPEN) return;
+    sock.send(JSON.stringify({ type: "chat-hello", channelId: channel.channelId }));
+    chatReady = true;
+  } catch {
+    // The UI surfaces the error when the chat request itself fails; the
+    // socket stays usable for non-chat topics.
+  }
+}
 
 function sendSubscribe(list: string[]): void {
   if (!socket || socket.readyState !== WebSocket.OPEN || list.length === 0) return;
@@ -36,14 +58,23 @@ function open(): void {
 
   sock.onopen = () => {
     retryDelay = RECONNECT_BASE_MS;
-    sendSubscribe([...topics]);
+    if (wantsChat(topics)) {
+      void bindChat(sock).then(() => sendSubscribe([...topics]));
+    } else {
+      sendSubscribe([...topics]);
+    }
   };
 
   sock.onmessage = (e) => {
     if (typeof e.data !== "string") return;
     let evt: WsEvent;
     try {
-      evt = JSON.parse(e.data) as WsEvent;
+      const parsed = JSON.parse(e.data) as { type?: string; n?: string; ct?: string };
+      if (parsed && parsed.type === "enc") {
+        evt = JSON.parse(decryptChatEnvelope(parsed)) as WsEvent;
+      } else {
+        evt = parsed as WsEvent;
+      }
     } catch {
       return;
     }
@@ -54,6 +85,7 @@ function open(): void {
 
   sock.onclose = () => {
     if (socket === sock) socket = null;
+    chatReady = false;
     if (!shouldReconnect) return;
     retryTimer = window.setTimeout(open, retryDelay);
     retryDelay = Math.min(retryDelay * 2, RECONNECT_MAX_MS);
@@ -107,7 +139,13 @@ export const ws = {
         changed = true;
       }
     }
-    if (changed && socket?.readyState === WebSocket.OPEN) sendSubscribe([...topics]);
+    if (changed && socket?.readyState === WebSocket.OPEN) {
+      if (wantsChat(newTopics)) {
+        void bindChat(socket).then(() => sendSubscribe([...topics]));
+      } else {
+        sendSubscribe([...topics]);
+      }
+    }
   },
 
   removeTopics(removed: string[]): void {

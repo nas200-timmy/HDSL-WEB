@@ -69,6 +69,9 @@ public final class AuthFilter implements Filter {
     /// curl one-liner must be able to use the lesser secret, and it grants
     /// strictly less than this cookie ever would.
     public static final String AGENT_AUTH_PATH = "/api/developer/agent-auth";
+    /// Public: the login page needs the password-encryption key before it has
+    /// a session.
+    public static final String PASSWORD_KEY_PATH = "/api/crypto/password-key";
 
     private final AuthService authService;
     private final boolean authDisabled;
@@ -543,6 +546,7 @@ public final class AuthFilter implements Filter {
                 || ("POST".equals(method) && SETUP_PATH.equals(path))
                 || ("GET".equals(method) && HEALTH_PATH.equals(path))
                 || ("POST".equals(method) && AGENT_AUTH_PATH.equals(path))
+                || ("GET".equals(method) && PASSWORD_KEY_PATH.equals(path))
                 // The terminal socket authenticates itself at the handshake:
                 // a one-use ticket **plus** either the session cookie it was
                 // issued to or the agent grant it names (see

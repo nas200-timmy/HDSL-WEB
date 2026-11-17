@@ -79,6 +79,9 @@ import org.jackhuang.hmcl.web.brand.BrandCatalog;
 import org.jackhuang.hmcl.web.chat.ChatApiServlet;
 import org.jackhuang.hmcl.web.chat.ChatModule;
 import org.jackhuang.hmcl.web.acme.AcmeService;
+import org.jackhuang.hmcl.web.crypto.PasswordCrypto;
+import org.jackhuang.hmcl.web.crypto.ChatCryptoService;
+import org.jackhuang.hmcl.web.crypto.ChatCryptoFilter;
 import org.jackhuang.hmcl.web.plain.MarkdownSsr;
 import org.jackhuang.hmcl.web.plain.PlainChatServlet;
 import org.jackhuang.hmcl.web.zcode.ZcodeApiServlet;
@@ -252,6 +255,8 @@ public final class HdslServer {
                         || org.jackhuang.hmcl.web.http.RequestSecurity.forwardedHttps(request, config),
                 ttlSeconds, config.basePath, developerElevation, peerIdentity,
                 config.agent.remoteNeedsSession, config.agent.loopbackOnly);
+        PasswordCrypto passwordCrypto = new PasswordCrypto();
+        ChatCryptoService chatCrypto = new ChatCryptoService();
 
         // The Phase 2 services: the event bus every WebSocket payload flows
         // through, the task pool behind installs and launches, and the
@@ -271,7 +276,7 @@ public final class HdslServer {
         new org.jackhuang.hmcl.web.brand.BrandPolicy(config.dataDir).lockedSurvivors()
                 .forEach(org.jackhuang.hmcl.web.brand.BrandRuntime::setLockedSurvivor);
         AcpSessionManager acpSessions = new AcpSessionManager(eventBus);
-        WsGateway.install(eventBus, authService, config.auth.disabled, acpSessions);
+        WsGateway.install(eventBus, authService, config.auth.disabled, acpSessions, chatCrypto);
 
         // The web terminal (docs/web-shell.md): the agent TUI runs on a PTY
         // inside the panel; the browser is only a viewer. Tickets bridge the
@@ -362,6 +367,14 @@ public final class HdslServer {
 
         ServletContextHandler context = new ServletContextHandler();
         context.setContextPath("/");
+        // Surfaces that cannot carry the per-request password/chat envelope
+        // are closed on a remote cleartext connection. Loopback stays
+        // available for local tests and SSH port forwarding.
+        org.jackhuang.hmcl.web.http.CleartextSurfaceFilter cleartextSurface =
+                new org.jackhuang.hmcl.web.http.CleartextSurfaceFilter(config, tlsActive);
+        context.addFilter(new FilterHolder(cleartextSurface), "/i/*", EnumSet.of(DispatcherType.REQUEST));
+        context.addFilter(new FilterHolder(cleartextSurface), "/plain/*", EnumSet.of(DispatcherType.REQUEST));
+        context.addFilter(new FilterHolder(cleartextSurface), "/ws/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(authFilter, "/api/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(authFilter, "/i/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(authFilter, "/ws/*", EnumSet.of(DispatcherType.REQUEST));
@@ -373,11 +386,13 @@ public final class HdslServer {
                         config, developerAuth, developerElevation, authService, emergencyStop, tlsActive);
         context.addFilter(new FilterHolder(guardFilter), "/api/*", EnumSet.of(DispatcherType.REQUEST));
         context.addFilter(new FilterHolder(guardFilter), "/i/*", EnumSet.of(DispatcherType.REQUEST));
+        context.addFilter(new FilterHolder(new ChatCryptoFilter(chatCrypto)),
+                "/api/chat/*", EnumSet.of(DispatcherType.REQUEST));
         context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.system.SystemApiServlet(
                 systemMetrics, config, startedAtMillis::get, mainConnector::getLocalPort)), "/api/system/*");
         context.addServlet(new ServletHolder(new ApiServlet(
                 authService, authFilter, config.auth.disabled, Metadata.VERSION, startedAtMillis::get,
-                developerElevation)), "/api/*");
+                developerElevation, passwordCrypto, chatCrypto)), "/api/*");
         ServletHolder instancesHolder = new ServletHolder(new InstancesApiServlet(runtime, taskService, config, terminals, terminalTickets,
                 authService, developerAuth, developerElevation, tlsActive, emergencyStop));
         instancesHolder.getRegistration().setMultipartConfig(multipart);
@@ -433,7 +448,8 @@ public final class HdslServer {
                 authService, developerAuth, developerElevation, tlsActive, emergencyStop)), "/api/brands/*");
         context.addServlet(new ServletHolder(new org.jackhuang.hmcl.web.developer.DeveloperApiServlet(
                 developerAuth, agentAuth, developerElevation, authService, config, tlsActive,
-                emergencyStop, terminals, runtime, peerIdentity, mainConnector::getLocalPort)),
+                emergencyStop, terminals, runtime, peerIdentity, mainConnector::getLocalPort,
+                passwordCrypto)),
                 "/api/developer/*");
         // Registered before the `/api/settings/*` holder below and matched by its longer prefix:
         // the download source is a launcher setting, and TLS is the other thing this path serves.
