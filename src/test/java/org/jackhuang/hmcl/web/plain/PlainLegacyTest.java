@@ -107,6 +107,8 @@ class PlainLegacyTest {
             // The legacy surface can also fork and export without the SPA.
             assertTrue(unlocked.body().contains("导出</a>"), unlocked.body());
             assertTrue(unlocked.body().contains("value=\"分叉\""), unlocked.body());
+            assertTrue(unlocked.body().contains("id=\"bottom\""), unlocked.body());
+            assertTrue(unlocked.body().contains("href=\"#bottom\""), unlocked.body());
             assertTrue(unlocked.headers().firstValue("content-security-policy").orElseThrow()
                     .contains("font-src 'self'"), "KaTeX fonts need font-src on enhanced pages");
             HttpResponse<String> forked = postForm(client,
@@ -116,6 +118,14 @@ class PlainLegacyTest {
             assertTrue(forkedLocation.startsWith("/plain/s/"), forkedLocation);
             assertNotEquals("/plain/s/" + sessionId, forkedLocation);
             assertEquals(200, get(client, base + forkedLocation, cookie).statusCode());
+            // Model switching is a plain form: IE11 and w3m both submit selects.
+            assertTrue(unlocked.body().contains("name=\"model\""), unlocked.body());
+            HttpResponse<String> switched = postForm(client,
+                    base + "/plain/s/" + sessionId + "/model", "model=fake-model-2", cookie);
+            assertEquals(303, switched.statusCode(), switched.body());
+            HttpResponse<String> afterSwitch = get(client, base + "/plain/s/" + sessionId, cookie);
+            assertTrue(afterSwitch.body().contains("option value=\"fake-model-2\" selected"),
+                    afterSwitch.body());
 
             // The extension coupon is one-shot: the second stretch needs a fresh
             // password proof.

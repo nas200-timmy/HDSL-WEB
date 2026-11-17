@@ -252,10 +252,20 @@ export function ChatPage() {
     setSessionAccount((previous) => next.account ?? currentAssistant?.account ?? previous ?? null);
     setModel(next.model ?? currentAssistant?.model ?? null);
     setReasoningLevel(next.reasoningLevel ?? "");
-    requestAnimationFrame(() => {
+    // Opening a session must land at the newest message: the input is at the
+    // bottom, and a transcript that starts at the top hides it. Reset the
+    // "user scrolled up" flag, then scroll after layout (twice, because fonts
+    // and images can grow the transcript after the first frame).
+    atBottom.current = true;
+    const scrollToEnd = () => {
       const el = scrollRef.current;
       if (el) el.scrollTop = el.scrollHeight;
+    };
+    requestAnimationFrame(() => {
+      scrollToEnd();
+      requestAnimationFrame(scrollToEnd);
     });
+    window.setTimeout(scrollToEnd, 120);
   };
 
   const refreshSession = async (id: string) => {

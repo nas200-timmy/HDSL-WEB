@@ -312,6 +312,27 @@ public final class PlainChatServlet extends HttpServlet {
                 sessionPage(request, response, sessionId);
                 return;
             }
+            if ("/model".equals(action)) {
+                if (!post) {
+                    methodNotAllowed(response, "POST");
+                    return;
+                }
+                if (!sameOrigin(request)) {
+                    error(response, 403, "跨站表单被拒绝");
+                    return;
+                }
+                if (!chatGate(request, response, url("/plain/s/" + sessionId))) {
+                    return;
+                }
+                String model = trimToNull(request.getParameter("model"));
+                if (model != null) {
+                    JsonObject patch = new JsonObject();
+                    patch.addProperty("model", model);
+                    requireChat().updateSession(sessionId, patch);
+                }
+                redirect(response, url("/plain/s/" + sessionId));
+                return;
+            }
             if ("/fork".equals(action)) {
                 if (!post) {
                     methodNotAllowed(response, "POST");
@@ -325,7 +346,7 @@ public final class PlainChatServlet extends HttpServlet {
                     return;
                 }
                 JsonObject forked = requireChat().forkSession(sessionId, new JsonObject());
-                redirect(response, url("/plain/s/" + string(forked, "id")));
+                redirect(response, url("/plain/s/" + string(forked, "id") + "#bottom"));
                 return;
             }
             if ("/send".equals(action)) {
@@ -410,7 +431,7 @@ public final class PlainChatServlet extends HttpServlet {
                 JsonObject session = element.getAsJsonObject();
                 String id = string(session, "id");
                 String title = string(session, "title");
-                body.append("<tr><td><a href=\"").append(url("/plain/s/" + id)).append("\">")
+                body.append("<tr><td><a href=\"").append(url("/plain/s/" + id + "#bottom")).append("\">")
                         .append(PlainHtml.escape(title.isBlank() ? "新会话" : title)).append("</a></td>")
                         .append("<td>").append(PlainHtml.time(longOf(session, "updatedAt"))).append("</td>")
                         .append("<td>").append(longOf(session, "messageCount")).append("</td></tr>\n");
@@ -463,6 +484,7 @@ public final class PlainChatServlet extends HttpServlet {
                 .append("\">导出</a>")
                 .append(" · <form method=\"post\" action=\"").append(url("/plain/s/" + sessionId + "/fork"))
                 .append("\"><input type=\"submit\" value=\"分叉\"></form>")
+                .append(" · <a href=\"#bottom\">跳到末尾 ↓</a>")
                 .append("</div>\n");
 
         content.append("<h1>").append(PlainHtml.escape(string(session, "title"))).append("</h1>\n");
@@ -472,6 +494,7 @@ public final class PlainChatServlet extends HttpServlet {
                 .append(" · 助手 ").append(PlainHtml.escape(assistantName(string(session, "assistantId"))))
                 .append(streaming ? " · <strong>正在生成回答…</strong>" : "")
                 .append("</p>\n");
+        content.append(modelForm(session));
 
         if (error != null && !error.isBlank()) {
             content.append("<p class=\"error\">").append(PlainHtml.escape(errorText(error))).append("</p>\n");
@@ -491,6 +514,7 @@ public final class PlainChatServlet extends HttpServlet {
             content.append(sendForm(request, sessionId));
         }
 
+        content.append("<a id=\"bottom\"></a>\n");
         String head = streaming && auto
                 ? "<noscript><meta http-equiv=\"refresh\" content=\"" + AUTO_REFRESH_SECONDS + "\"></noscript>"
                 : null;
@@ -552,6 +576,73 @@ public final class PlainChatServlet extends HttpServlet {
             }
         }
         return body.toString();
+    }
+
+    /// The model picker: a plain form with a `<select>`, so IE11 and w3m both
+    /// can switch the session's model without any script.
+    private String modelForm(JsonObject session) throws SQLException {
+        String sessionId = string(session, "id");
+        String current = string(session, "model");
+        String account = string(session, "account");
+        JsonArray models = new JsonArray();
+        if (!account.isBlank()) {
+            try {
+                JsonElement list = requireChat().models(account).get("models");
+                if (list != null && list.isJsonArray()) {
+                    models = list.getAsJsonArray();
+                }
+            } catch (ChatException e) {
+                // The picker still shows the current model; a missing account
+                // list must not keep the composer from rendering.
+            }
+        }
+        StringBuilder out = new StringBuilder("<form method=\"post\" action=\"")
+                .append(url("/plain/s/" + sessionId + "/model"))
+                .append("\" class=\"modelform\"><label>模型 <select name=\"model\">");
+        if (current.isBlank() || models.isEmpty()) {
+            out.append("<option value=\"").append(PlainHtml.escape(current))
+                    .append("\" selected>")
+                    .append(PlainHtml.escape(current.isBlank() ? "默认" : current))
+                    .append("</option>");
+        }
+        for (JsonElement element : models) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject model = element.getAsJsonObject();
+            String id = string(model, "id");
+            if (id.isBlank()) {
+                continue;
+            }
+            out.append("<option value=\"").append(PlainHtml.escape(id)).append("\"")
+                    .append(id.equals(current) ? " selected" : "").append(">")
+                    .append(PlainHtml.escape(id)).append(capsLabel(model)).append("</option>");
+        }
+        out.append("</select></label> <input type=\"submit\" value=\"切换\"></form>\n");
+        return out.toString();
+    }
+
+    private static String capsLabel(JsonObject model) {
+        JsonElement caps = model.get("caps");
+        if (caps == null || !caps.isJsonObject()) {
+            return "";
+        }
+        JsonObject properties = caps.getAsJsonObject();
+        StringBuilder notes = new StringBuilder();
+        appendCap(notes, properties, "reasoning", "推理");
+        appendCap(notes, properties, "vision", "视觉");
+        appendCap(notes, properties, "files", "文件");
+        return notes.length() == 0 ? "" : "（" + notes + "）";
+    }
+
+    private static void appendCap(StringBuilder notes, JsonObject caps, String name, String label) {
+        JsonElement value = caps.get(name);
+        if (value != null && value.isJsonPrimitive() && value.getAsBoolean()) {
+            if (notes.length() > 0) {
+                notes.append("·");
+            }
+            notes.append(label);
+        }
     }
 
     /// The send form, or the elevation notice that replaces it. Kept in its own
@@ -657,7 +748,7 @@ public final class PlainChatServlet extends HttpServlet {
             throws IOException, SQLException, ChatException {
         String text = request.getParameter("text");
         if (text == null || text.isBlank()) {
-            redirect(response, url("/plain/s/" + sessionId + "?error=empty"));
+            redirect(response, url("/plain/s/" + sessionId + "?error=empty#bottom"));
             return;
         }
         if (text.length() > MAX_TEXT_CHARS) {
@@ -667,12 +758,12 @@ public final class PlainChatServlet extends HttpServlet {
             requireChat().turns().send(sessionId, text.strip(), List.of(), null, null, null, false);
         } catch (ChatException e) {
             if ("chat_busy".equals(e.code())) {
-                redirect(response, url("/plain/s/" + sessionId + "?error=busy"));
+                redirect(response, url("/plain/s/" + sessionId + "?error=busy#bottom"));
                 return;
             }
             throw e;
         }
-        redirect(response, url("/plain/s/" + sessionId + "?auto=1"));
+        redirect(response, url("/plain/s/" + sessionId + "?auto=1#bottom"));
     }
 
     // -------------------------------------------------------------- elevation --

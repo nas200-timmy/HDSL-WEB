@@ -98,6 +98,8 @@ a { color: #0b57d0; }
 }
 .toolbar a:hover { background: #dce7f5; }
 .toolbar form { display: inline; }
+.modelform { display: inline-block; margin: 0 0 10px; }
+.modelform select { max-width: 32rem; }
 .toolbar input[type="submit"] {
   padding: 3px 10px;
   font-size: .9rem;
