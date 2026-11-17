@@ -199,6 +199,17 @@ public final class ChatApiServlet extends HttpServlet {
                 Json.write(response, outcomeJson(outcome));
                 return;
             }
+            if ("/export".equals(tail) && "GET".equals(method)) {
+                JsonObject envelope = chat.exportSession(sessionId);
+                if (envelope == null) {
+                    Json.error(response, HttpServletResponse.SC_NOT_FOUND, "session not found");
+                    return;
+                }
+                response.setHeader("Content-Disposition",
+                        "attachment; filename=\"hdsl-session-" + sessionId + ".json\"");
+                Json.write(response, HttpServletResponse.SC_OK, envelope);
+                return;
+            }
             if ("/fork".equals(tail) && "POST".equals(method)) {
                 JsonObject body = readBody(request, response);
                 if (body != null) {
@@ -226,6 +237,11 @@ public final class ChatApiServlet extends HttpServlet {
                 }
             }
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+            return;
+        }
+
+        if ("/import".equals(route) && "POST".equals(method)) {
+            importSessions(request, response);
             return;
         }
 
@@ -723,6 +739,50 @@ public final class ChatApiServlet extends HttpServlet {
             throw new RangeNotSatisfiable();
         }
         return new ByteRange(start, Math.min(end, size - 1));
+    }
+
+    /// 导入入口：multipart 的 `file`，或直接的请求体（自动化脚本更方便）。
+    /// 解析失败回 400 并带上原因，成功回 201 + 每个会话的新 id。
+    private void importSessions(HttpServletRequest request, HttpServletResponse response)
+            throws IOException, SQLException, ChatException {
+        String assistantId = request.getParameter("assistantId");
+        if (assistantId == null || assistantId.isBlank()) {
+            assistantId = "default";
+        }
+        String title = request.getParameter("title");
+        byte[] file;
+        String contentType = request.getContentType() == null ? "" : request.getContentType();
+        if (contentType.startsWith("multipart/")) {
+            Part part;
+            try {
+                part = request.getPart("file");
+            } catch (jakarta.servlet.ServletException e) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "multipart 解析失败");
+                return;
+            }
+            if (part == null) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "缺少 file 字段");
+                return;
+            }
+            try (InputStream in = part.getInputStream()) {
+                file = in.readNBytes(ChatArchive.MAX_FILE_BYTES + 1);
+            }
+        } else {
+            try (InputStream in = request.getInputStream()) {
+                file = in.readNBytes(ChatArchive.MAX_FILE_BYTES + 1);
+            }
+        }
+        if (file.length > ChatArchive.MAX_FILE_BYTES) {
+            Json.error(response, HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE,
+                    "文件超过 " + (ChatArchive.MAX_FILE_BYTES / (1024 * 1024)) + " MB");
+            return;
+        }
+        try {
+            Json.write(response, HttpServletResponse.SC_CREATED,
+                    chat.importSessions(file, assistantId, title));
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        }
     }
 
     private static JsonObject outcomeJson(ChatTurnManager.Outcome outcome) {

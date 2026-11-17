@@ -3,8 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { ConfirmDialog } from "../components/Dialog";
 import {
-  AddIcon, ArchiveIcon, ContentCopyIcon, DeleteIcon, DeployedCodeIcon, EditIcon,
-  FormatListBulletedIcon, LockIcon, MenuIcon, MoreVertIcon, SettingsIcon,
+  AddIcon, ArchiveIcon, ContentCopyIcon, DeleteIcon, DeployedCodeIcon, DownloadIcon,
+  EditIcon, FormatListBulletedIcon, LockIcon, MenuIcon, MoreVertIcon, SettingsIcon,
 } from "../components/icons";
 import { PopupItem, PopupMenu, PopupSep } from "../components/PopupMenu";
 import { isElevationRequired, requestDeveloperPassword } from "../elevation";
@@ -148,6 +148,7 @@ export function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ChatSessionSummary | null>(null);
   const [forkTarget, setForkTarget] = useState<ChatSessionSummary | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const [deleteSessionTarget, setDeleteSessionTarget] = useState<ChatSessionSummary | null>(null);
   const [deleteNodeTarget, setDeleteNodeTarget] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<{ nodeId: string; text: string } | null>(null);
@@ -943,6 +944,44 @@ export function ChatPage() {
     }
   };
 
+  const handleImportFile = async (file: File) => {
+    setBusy(true);
+    try {
+      const result = await api.chat.importSessions(file, assistantId);
+      await loadSessions(assistantId);
+      const first = result.imported[0];
+      if (first) {
+        const importedSession = await api.chat.session(first.id);
+        ws.addTopics(["chat", `chat:${first.id}`]);
+        applySession(importedSession);
+      }
+      const skipped = result.skipped.length > 0 ? `，跳过 ${result.skipped.length} 个` : "";
+      toast("success", `导入了 ${result.imported.length} 个会话${skipped}`);
+    } catch (error) {
+      toast("error", `导入失败：${errMsg(error)}`);
+    } finally {
+      setBusy(false);
+      if (importInputRef.current) importInputRef.current.value = "";
+    }
+  };
+
+  const exportCurrentSession = async () => {
+    const summary = sessions.find((item) => item.id === sessionId);
+    if (!summary) return;
+    try {
+      const blob = await api.chat.exportSession(summary.id);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${summary.title || "会话"}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast("success", "已导出会话");
+    } catch (error) {
+      toast("error", `导出失败：${errMsg(error)}`);
+    }
+  };
+
   const deleteSession = async () => {
     if (!deleteSessionTarget) return;
     setBusy(true);
@@ -1006,6 +1045,7 @@ export function ChatPage() {
             setSidebarOpen(false);
           }}
           onNew={() => void newSession()}
+          onImport={() => importInputRef.current?.click()}
           onRename={setRenameTarget}
           onDelete={setDeleteSessionTarget}
           onClose={() => setSidebarOpen(false)}
@@ -1077,6 +1117,15 @@ export function ChatPage() {
             }}
           >
             分叉会话…
+          </PopupItem>
+          <PopupItem
+            icon={<DownloadIcon size={16} />}
+            onClick={() => {
+              void exportCurrentSession();
+              setSessionMenu(null);
+            }}
+          >
+            导出会话
           </PopupItem>
           <PopupSep />
           <PopupItem
@@ -1251,6 +1300,17 @@ export function ChatPage() {
           </div>
         )}
       </div>
+
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".zip,.json,application/zip,application/json"
+        style={{ display: "none" }}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void handleImportFile(file);
+        }}
+      />
 
       <ForkSessionDialog
         session={forkTarget}

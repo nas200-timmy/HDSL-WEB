@@ -1127,6 +1127,26 @@ export const api = {
       ),
     session: (id: string) =>
       request<ChatSession>(`/api/chat/sessions/${encodeURIComponent(id)}`),
+    /** 导入会话：DeepSeek 官方导出 zip 或 HSDL 单会话 JSON。校验在服务端。 */
+    importSessions: (file: File, assistantId: string, title?: string) => {
+      const form = new FormData();
+      form.append("file", file);
+      const query = new URLSearchParams({ assistantId });
+      if (title) query.set("title", title);
+      return request<{ format: string; imported: { id: string; title: string; messages: number }[]; skipped: string[] }>(
+        `api/chat/import?${query.toString()}`,
+        { method: "POST", body: form },
+      );
+    },
+    /** 导出会话：返回原始 JSON，由页面触发下载。 */
+    exportSession: async (id: string): Promise<Blob> => {
+      const res = await fetch(`api/chat/sessions/${encodeURIComponent(id)}/export`.replace(/^\//, ""), {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      if (!res.ok) throw new ApiError(res.status, "导出失败");
+      return res.blob();
+    },
     /** 整段会话分叉（复制），可指定目标助手；原会话不动。 */
     forkSession: (id: string, body: { assistantId?: string; title?: string } = {}) =>
       request<ChatSession>(`/api/chat/sessions/${encodeURIComponent(id)}/fork`, jsonInit("POST", body)),

@@ -399,7 +399,8 @@ public final class ChatService {
             account = deepseekAccount();
             model = firstNonBlank(nullable(body, "model"), assistant.model(), "deepseek-flash");
         }
-        ChatStore.Session session = store.createSession(assistantId, title, model, account);
+        ChatStore.Session session = store.createSession(assistantId, title, model, account,
+                assistant.systemPrompt());
         if (body.has("reasoningLevel")) {
             String level = string(body, "reasoningLevel", "");
             if (!level.isEmpty()) {
@@ -416,6 +417,49 @@ public final class ChatService {
         }
         broadcast("chat-sessions-changed", session.id());
         return sessionJson(session.id());
+    }
+
+    /// 导出一个会话的可移植 JSON（见 [ChatStore#exportJson]）。
+    public @Nullable JsonObject exportSession(String id) throws SQLException {
+        return store.exportJson(id);
+    }
+
+    /// 导入会话：DeepSeek 官方导出包（zip）或 HSDL 自己的单会话 JSON。
+    /// 解析与校验都在 [ChatArchive] 里，失败不会留下半截数据。
+    ///
+    /// @param file           上传的原始字节
+    /// @param assistantId    导入到哪个助手
+    /// @param titleOverride  覆盖每个会话的标题（可选）
+    public JsonObject importSessions(byte[] file, String assistantId, @Nullable String titleOverride)
+            throws ChatException, SQLException, java.io.IOException {
+        ChatStore.Assistant assistant = store.assistant(assistantId);
+        if (assistant == null) {
+            throw new ChatException(404, "assistant_not_found", "assistant not found");
+        }
+        ChatArchive.Parsed parsed = ChatArchive.parse(file);
+        JsonArray imported = new JsonArray();
+        for (ChatArchive.ImportedSession session : parsed.sessions()) {
+            String title = titleOverride == null || titleOverride.isBlank()
+                    ? session.title() : titleOverride;
+            String prompt = session.systemPrompt() != null
+                    ? session.systemPrompt() : assistant.systemPrompt();
+            String id = store.importSession(assistantId, title, prompt, session.nodes());
+            broadcast("chat-sessions-changed", id);
+            JsonObject item = new JsonObject();
+            item.addProperty("id", id);
+            item.addProperty("title", title);
+            item.addProperty("messages", session.nodes().size());
+            imported.add(item);
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty("format", parsed.format());
+        body.add("imported", imported);
+        JsonArray skipped = new JsonArray();
+        for (String reason : parsed.skipped()) {
+            skipped.add(reason);
+        }
+        body.add("skipped", skipped);
+        return body;
     }
 
     /// 分叉：整段会话（节点、variants、附件行）复制一份，默认落到同一个助手，

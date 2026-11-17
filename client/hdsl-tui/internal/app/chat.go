@@ -450,8 +450,11 @@ func (a *App) chatCommand(ctx context.Context, client *panel.Client, st *chatSta
 		return chatSwitchSession, true
 	case "/model":
 		if arg == "" {
-			st.notice = "当前模型：" + displayOr(st.session.Model, settingsModel(st.settings))
-			return chatStay, true
+			picked, ok := a.chatPickModel(ctx, client, st)
+			if !ok || picked == "" {
+				return chatStay, true
+			}
+			arg = picked
 		}
 		model := arg
 		session, err := client.ChatPatchSession(ctx, st.session.ID, panel.ChatSessionPatch{Model: &model})
@@ -640,6 +643,57 @@ func (a *App) chatPickSession(ctx context.Context, client *panel.Client, current
 		return "", false
 	}
 	return sessions[choice].ID, true
+}
+
+// chatPickModel opens the model picker for the session's account. `/model <id>`
+// still works without the menu; the menu is what makes the list discoverable.
+func (a *App) chatPickModel(ctx context.Context, client *panel.Client, st *chatState) (string, bool) {
+	account := st.session.Account
+	if account == "" {
+		a.message("当前会话没有账户", "先在网页版给会话或助手指定一个模型账户。")
+		return "", false
+	}
+	models, err := client.ChatModels(ctx, account)
+	if err != nil {
+		a.message("模型列表读不到", explain(err))
+		return "", false
+	}
+	if len(models) == 0 {
+		a.message("账户没有模型列表", "在网页版「聊天设置 → 账户」刷新一次模型。")
+		return "", false
+	}
+	current := displayOr(st.session.Model, settingsModel(st.settings))
+	items := make([]ui.Item, 0, len(models))
+	for _, model := range models {
+		label := model.ID
+		if model.ID == current {
+			label += "  (当前)"
+		}
+		items = append(items, ui.Item{Label: label, Note: modelNote(model)})
+	}
+	choice, ok := a.menu(menuPage{
+		Title:    "选择模型",
+		Subtitle: "Enter 切换    Esc 返回",
+		Items:    items,
+	})
+	if !ok {
+		return "", false
+	}
+	return models[choice].ID, true
+}
+
+func modelNote(model panel.ChatModel) string {
+	notes := make([]string, 0, 3)
+	if model.Caps.Reasoning {
+		notes = append(notes, "推理")
+	}
+	if model.Caps.Vision {
+		notes = append(notes, "视觉")
+	}
+	if model.Caps.Files {
+		notes = append(notes, "文件")
+	}
+	return strings.Join(notes, " · ")
 }
 
 func (a *App) chatPickAssistant(ctx context.Context, st *chatState) (string, bool) {

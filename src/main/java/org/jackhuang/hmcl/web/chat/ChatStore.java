@@ -17,6 +17,8 @@
  */
 package org.jackhuang.hmcl.web.chat;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -50,7 +52,7 @@ import java.util.UUID;
 @NotNullByDefault
 public final class ChatStore implements AutoCloseable {
 
-    private static final int SCHEMA_VERSION = 4;
+    private static final int SCHEMA_VERSION = 5;
     private static final String DEFAULT_ASSISTANT_ID = "default";
 
     private final Path root;
@@ -231,6 +233,11 @@ public final class ChatStore implements AutoCloseable {
                 statement.execute("ALTER TABLE chat_attachment ADD COLUMN remote_file_id TEXT");
                 statement.execute("ALTER TABLE chat_attachment ADD COLUMN remote_file_purpose TEXT");
                 statement.execute("ALTER TABLE chat_attachment ADD COLUMN remote_uploaded_at INTEGER");
+            }
+            if (version < 5) {
+                // 会话配置快照：助手提示词在首个消息时冻结，之后改助手不再追溯
+                // 影响老会话；NULL = 升级前的会话，按助手现值回退。
+                statement.execute("ALTER TABLE chat_session ADD COLUMN system_prompt TEXT");
             }
             statement.execute("PRAGMA user_version=" + SCHEMA_VERSION);
             connection.commit();
@@ -489,6 +496,7 @@ public final class ChatStore implements AutoCloseable {
     public record Session(
             String id, String assistantId, String title, @Nullable String model,
             @Nullable String accountName, @Nullable String reasoningLevel,
+            @Nullable String systemPrompt,
             long createdAt, long updatedAt, List<Node> nodes) {
     }
 
@@ -561,7 +569,7 @@ public final class ChatStore implements AutoCloseable {
                 }
                 return new Session(rs.getString("id"), rs.getString("assistant_id"),
                         rs.getString("title"), rs.getString("model"), rs.getString("account_name"),
-                        rs.getString("reasoning_level"),
+                        rs.getString("reasoning_level"), rs.getString("system_prompt"),
                         rs.getLong("created_at"), rs.getLong("updated_at"), nodes(id));
             }
         }
@@ -628,14 +636,25 @@ public final class ChatStore implements AutoCloseable {
         return messages;
     }
 
+    /// Compatibility overload: snapshots the assistant's current prompt.
     public synchronized Session createSession(String assistantId, String title,
                                               @Nullable String model,
                                               @Nullable String accountName) throws SQLException {
+        ChatStore.Assistant assistant = assistant(assistantId);
+        return createSession(assistantId, title, model, accountName,
+                assistant == null ? null : assistant.systemPrompt());
+    }
+
+    public synchronized Session createSession(String assistantId, String title,
+                                              @Nullable String model,
+                                              @Nullable String accountName,
+                                              @Nullable String systemPrompt) throws SQLException {
         long now = System.currentTimeMillis();
         String id = UUID.randomUUID().toString();
         try (PreparedStatement statement = connection.prepareStatement("""
-                INSERT INTO chat_session (id, assistant_id, title, model, account_name, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""")) {
+                INSERT INTO chat_session
+                  (id, assistant_id, title, model, account_name, created_at, updated_at, system_prompt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""")) {
             statement.setString(1, id);
             statement.setString(2, assistantId);
             statement.setString(3, title);
@@ -643,9 +662,197 @@ public final class ChatStore implements AutoCloseable {
             statement.setString(5, accountName);
             statement.setLong(6, now);
             statement.setLong(7, now);
+            statement.setString(8, systemPrompt);
             statement.executeUpdate();
         }
-        return new Session(id, assistantId, title, model, accountName, null, now, now, List.of());
+        return new Session(id, assistantId, title, model, accountName, null, systemPrompt,
+                now, now, List.of());
+    }
+
+    /// The portable form of one session (`format: hdsl-chat-session`, version 1).
+    /// Attachments appear as metadata only: the files are content-addressed and
+    /// stay on this panel.
+    ///
+    /// @return the envelope, or `null` when the session is gone
+    public synchronized @Nullable JsonObject exportJson(String sessionId) throws SQLException {
+        JsonObject root = new JsonObject();
+        root.addProperty("format", "hdsl-chat-session");
+        root.addProperty("version", 1);
+        root.addProperty("exportedAt", System.currentTimeMillis());
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT * FROM chat_session WHERE id=?")) {
+            statement.setString(1, sessionId);
+            try (ResultSet rs = statement.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                JsonObject session = new JsonObject();
+                addNullable(session, "title", rs.getString("title"));
+                addNullable(session, "assistantId", rs.getString("assistant_id"));
+                addNullable(session, "model", rs.getString("model"));
+                addNullable(session, "account", rs.getString("account_name"));
+                addNullable(session, "reasoningLevel", rs.getString("reasoning_level"));
+                addNullable(session, "systemPrompt", rs.getString("system_prompt"));
+                session.addProperty("createdAt", rs.getLong("created_at"));
+                session.addProperty("updatedAt", rs.getLong("updated_at"));
+                root.add("session", session);
+            }
+        }
+
+        record NodeRef(String id) {
+        }
+        List<NodeRef> refs = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT id, role FROM chat_node WHERE session_id=? ORDER BY ordinal")) {
+            statement.setString(1, sessionId);
+            try (ResultSet rs = statement.executeQuery()) {
+                while (rs.next()) {
+                    refs.add(new NodeRef(rs.getString(1) + "\u0000" + rs.getString(2)));
+                }
+            }
+        }
+
+        JsonArray nodes = new JsonArray();
+        for (NodeRef ref : refs) {
+            int split = ref.id().indexOf('\u0000');
+            String nodeId = ref.id().substring(0, split);
+            String role = ref.id().substring(split + 1);
+            JsonObject node = new JsonObject();
+            node.addProperty("role", role);
+            JsonArray variants = new JsonArray();
+            int activeIndex = 0;
+            String active = null;
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT active_variant_id FROM chat_node WHERE id=?")) {
+                statement.setString(1, nodeId);
+                try (ResultSet rs = statement.executeQuery()) {
+                    if (rs.next()) {
+                        active = rs.getString(1);
+                    }
+                }
+            }
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT id, variant_index, content, reasoning, status, model, usage_json,
+                           created_at, edited_at, parts_json, blocks_json, sources_json, latest_reminder
+                    FROM chat_message WHERE node_id=? ORDER BY variant_index""")) {
+                statement.setString(1, nodeId);
+                try (ResultSet rs = statement.executeQuery()) {
+                    while (rs.next()) {
+                        if (active != null && active.equals(rs.getString(1))) {
+                            activeIndex = variants.size();
+                        }
+                        JsonObject variant = new JsonObject();
+                        addNullable(variant, "content", rs.getString(3));
+                        addNullable(variant, "reasoning", rs.getString(4));
+                        addNullable(variant, "status", rs.getString(5));
+                        addNullable(variant, "model", rs.getString(6));
+                        addNullable(variant, "usageJson", rs.getString(7));
+                        variant.addProperty("createdAt", rs.getLong(8));
+                        Long edited = rs.getObject(9) == null ? null : rs.getLong(9);
+                        if (edited != null) {
+                            variant.addProperty("editedAt", edited);
+                        }
+                        addNullable(variant, "partsJson", rs.getString(10));
+                        addNullable(variant, "blocksJson", rs.getString(11));
+                        addNullable(variant, "sourcesJson", rs.getString(12));
+                        addNullable(variant, "latestReminder", rs.getString(13));
+                        variants.add(variant);
+                    }
+                }
+            }
+            node.add("variants", variants);
+            node.addProperty("activeVariantIndex", activeIndex);
+            nodes.add(node);
+        }
+        root.add("nodes", nodes);
+
+        JsonArray attachments = new JsonArray();
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT name, mime, kind, size, sha256 FROM chat_attachment WHERE session_id=?")) {
+            statement.setString(1, sessionId);
+            try (ResultSet rs = statement.executeQuery()) {
+                while (rs.next()) {
+                    JsonObject item = new JsonObject();
+                    item.addProperty("name", rs.getString(1));
+                    item.addProperty("mime", rs.getString(2));
+                    item.addProperty("kind", rs.getString(3));
+                    item.addProperty("size", rs.getLong(4));
+                    item.addProperty("sha256", rs.getString(5));
+                    attachments.add(item);
+                }
+            }
+        }
+        root.add("attachments", attachments);
+        return root;
+    }
+
+    /// Writes an imported session: one node per message, one variant each.
+    ///
+    /// @return the new session id
+    public synchronized String importSession(String assistantId, String title,
+                                             @Nullable String systemPrompt,
+                                             List<ChatArchive.ImportedNode> nodes)
+            throws SQLException {
+        long now = System.currentTimeMillis();
+        String id = UUID.randomUUID().toString();
+        boolean autoCommit = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO chat_session
+                      (id, assistant_id, title, model, account_name, created_at, updated_at,
+                       system_prompt, title_auto)
+                    VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, 0)""")) {
+                statement.setString(1, id);
+                statement.setString(2, assistantId);
+                statement.setString(3, title);
+                statement.setLong(4, now);
+                statement.setLong(5, now);
+                statement.setString(6, systemPrompt);
+                statement.executeUpdate();
+            }
+            int ordinal = 0;
+            for (ChatArchive.ImportedNode node : nodes) {
+                String nodeId = UUID.randomUUID().toString();
+                String messageId = UUID.randomUUID().toString();
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO chat_node (id, session_id, ordinal, role, active_variant_id, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)""")) {
+                    statement.setString(1, nodeId);
+                    statement.setString(2, id);
+                    statement.setInt(3, ordinal++);
+                    statement.setString(4, node.role());
+                    statement.setString(5, messageId);
+                    statement.setLong(6, node.createdAt());
+                    statement.executeUpdate();
+                }
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO chat_message
+                          (id, node_id, variant_index, content, reasoning, status, created_at)
+                        VALUES (?, ?, 0, ?, ?, ?, ?)""")) {
+                    statement.setString(1, messageId);
+                    statement.setString(2, nodeId);
+                    statement.setString(3, node.content());
+                    statement.setString(4, node.reasoning());
+                    statement.setString(5, node.status());
+                    statement.setLong(6, node.createdAt());
+                    statement.executeUpdate();
+                }
+            }
+            connection.commit();
+            return id;
+        } catch (SQLException | RuntimeException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            connection.setAutoCommit(autoCommit);
+        }
+    }
+
+    private static void addNullable(JsonObject object, String name, @Nullable String value) {
+        if (value != null) {
+            object.addProperty(name, value);
+        }
     }
 
     /// Forks a whole session — nodes, messages (with their variants) and
@@ -667,8 +874,8 @@ public final class ChatStore implements AutoCloseable {
             try (PreparedStatement statement = connection.prepareStatement("""
                     INSERT INTO chat_session
                       (id, assistant_id, title, model, account_name, created_at, updated_at,
-                       reasoning_level, title_auto)
-                    SELECT ?, ?, ?, model, account_name, ?, ?, reasoning_level, 0
+                       reasoning_level, title_auto, system_prompt)
+                    SELECT ?, ?, ?, model, account_name, ?, ?, reasoning_level, 0, system_prompt
                     FROM chat_session WHERE id=?""")) {
                 statement.setString(1, newId);
                 statement.setString(2, assistantId);

@@ -650,7 +650,13 @@ public final class ChatTurnManager {
         return null;
     }
 
+    /// The session's frozen prompt wins; sessions created before the snapshot
+    /// existed (or by an import that carried none) fall back to the assistant's
+    /// current text.
     private String systemPrompt(ChatStore.Session session) throws SQLException {
+        if (session.systemPrompt() != null) {
+            return session.systemPrompt();
+        }
         ChatStore.Assistant assistant = store.assistant(session.assistantId());
         return assistant == null ? "" : assistant.systemPrompt();
     }

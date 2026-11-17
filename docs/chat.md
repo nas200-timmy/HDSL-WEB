@@ -466,6 +466,17 @@ record ModelCapabilities(
 > （`pruneOrphans` 以"仍被任何行引用"为准，删任一侧都不会剪掉另一侧的文件）。
 > 正在生成的会话拒绝分叉（409 `chat_busy`），避免复制到半截回答。
 
+> 导入/导出：`GET .../export` 返回 `format: hdsl-chat-session` 的单会话信封；
+> `POST /api/chat/import` 认两种文件——DeepSeek 官方导出包（zip，`manifest.json`
+> 版本必须是 3，`chat_sessions/*.json` 按 `current_message_id` 回溯成线性对话）和
+> 上面那种 HSDL JSON。校验全部在上限内进行（32MB 文件、单条目 16MB、解压总量
+> 64MB、100 个会话、2000 条消息/会话、单段 2MB 正文），失败回 400 并带原因，
+> 不会留下半截会话。附件目前只导出元数据，不携带文件本体。
+
+> 会话配置快照：会话创建时把助手的 `systemPrompt` 冻结进
+> `chat_session.system_prompt`（schema v5）。之后改助手只影响新会话，老会话
+> 保持创建时的提示词；升级前的会话为 NULL，仍按助手现值回退。
+
 ```text
 GET    /api/chat/sessions?assistant={id}
 POST   /api/chat/sessions
@@ -473,6 +484,8 @@ GET    /api/chat/sessions/{id}
 PATCH  /api/chat/sessions/{id}
 DELETE /api/chat/sessions/{id}
 POST   /api/chat/sessions/{id}/fork          整段分叉（可换助手）
+GET    /api/chat/sessions/{id}/export        导出可移植 JSON（附件只带元数据）
+POST   /api/chat/import                      导入（multipart file，或直接请求体）
 
 POST   /api/chat/sessions/{id}/messages      send
 POST   /api/chat/sessions/{id}/regenerate    nodeId + mode
