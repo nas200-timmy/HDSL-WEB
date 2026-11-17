@@ -27,6 +27,7 @@ import java.net.http.HttpRequest;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 
 /// 协议适配的公共模型（docs/chat.md §5）。
 ///
@@ -162,7 +163,10 @@ public interface ChatProtocol {
         }
         String code;
         boolean retryable;
-        if (status == 401 || status == 403) {
+        if ((status == 400 || status == 413) && isContextOverflow(text)) {
+            code = "context_exceeded";
+            retryable = false;
+        } else if (status == 401 || status == 403) {
             code = "auth_failed";
             retryable = false;
         } else if (status == 429) {
@@ -178,8 +182,9 @@ public interface ChatProtocol {
             code = "bad_request";
             retryable = false;
         }
-        String message = "provider answered HTTP " + status
-                + (text.isEmpty() ? "" : ": " + text);
+        String message = code.equals("context_exceeded")
+                ? contextOverflowMessage(text)
+                : "provider answered HTTP " + status + (text.isEmpty() ? "" : ": " + text);
         return code + "\u0000" + retryable + "\u0000" + message;
     }
 
@@ -187,6 +192,40 @@ public interface ChatProtocol {
         String encoded = httpError(status, body);
         String[] parts = encoded.split("\u0000", 3);
         sink.error(parts[0], parts[2], Boolean.parseBoolean(parts[1]));
+    }
+
+    /// 服务商对「上下文超限」的措辞不统一。只认最常见的几种，宁可漏判也不要
+    /// 把普通的 400 误报成上下文满。
+    static boolean isContextOverflow(@Nullable String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        return lower.contains("context_length_exceeded")
+                || lower.contains("maximum context length")
+                || lower.contains("context length")
+                || lower.contains("context window")
+                || lower.contains("prompt is too long")
+                || lower.contains("input is too long")
+                || lower.contains("too many tokens")
+                || lower.contains("maximum number of tokens")
+                || lower.contains("request too large");
+    }
+
+    /// 面向用户的文案：说清楚「满了」和「下一步」，服务商原文附在后面便于排查。
+    static String contextOverflowMessage(@Nullable String detail) {
+        if (detail != null && detail.startsWith("上下文已满")) {
+            return detail;
+        }
+        String suffix = "";
+        if (detail != null && !detail.isBlank()) {
+            String trimmed = detail.strip();
+            if (trimmed.length() > 120) {
+                trimmed = trimmed.substring(0, 120) + "…";
+            }
+            suffix = "（" + trimmed + "）";
+        }
+        return "上下文已满：这轮请求超过了模型的上限，请新建会话或从这里分支后再试。" + suffix;
     }
 
     /// 提取 `error.message` / `message` / 字符串 `error`，给 SSE 内的错误事件用。

@@ -11,8 +11,8 @@ import { isElevationRequired, requestDeveloperPassword } from "../elevation";
 import { useMobileLayout } from "../hooks";
 import { toast } from "../store";
 import type {
-  ChatAccountProfile, ChatAssistant, ChatAttachment, ChatSearchHit, ChatSearchStatus, ChatSession,
-  ChatSessionSummary, ChatTurnOutcome, WsEvent,
+  ChatAccountProfile, ChatAssistant, ChatAttachment, ChatContextUsage, ChatSearchHit, ChatSearchStatus,
+  ChatSession, ChatSessionSummary, ChatTurnOutcome, WsEvent,
 } from "../types";
 import { errMsg } from "../utils";
 import { ws } from "../ws";
@@ -133,7 +133,8 @@ export function ChatPage() {
   const [model, setModel] = useState<string | null>(null);
   const [reasoningLevel, setReasoningLevel] = useState("");
   const [profile, setProfile] = useState<{ name: string; avatar: string | null }>({ name: "", avatar: null });
-  const [liveUsage, setLiveUsage] = useState<{ sessionId: string; input: number; output: number } | null>(null);
+  const [liveUsage, setLiveUsage] = useState<{ sessionId: string; input: number; output: number; context?: ChatContextUsage } | null>(null);
+  const [contextFull, setContextFull] = useState(false);
   const [searchEnabled, setSearchEnabled] = useState(false);
   const [searchStatus, setSearchStatus] = useState<ChatSearchStatus | null>(null);
   const [searchProvider, setSearchProvider] = useState<string | null>(() => {
@@ -431,13 +432,17 @@ export function ChatPage() {
 
       if (event.type === "chat-turn-started") {
         finishedTurns.current.delete(event.turnId);
+        setContextFull(false);
         setLive((previous) => previous && previous.turnId === event.turnId
           ? { ...previous, messageId: event.messageId }
           : { turnId: event.turnId, messageId: event.messageId, text: "", reasoning: "", status: "streaming", blocks: [] });
         return;
       }
       if (event.type === "chat-usage") {
-        setLiveUsage({ sessionId: event.sessionId, input: event.input, output: event.output });
+        setLiveUsage({
+          sessionId: event.sessionId, input: event.input, output: event.output,
+          context: event.context,
+        });
         return;
       }
       if (event.type === "chat-block") {
@@ -503,7 +508,12 @@ export function ChatPage() {
         return;
       }
       if (event.type === "chat-error") {
-        toast("error", `${event.code}: ${event.message}`);
+        if (event.code === "context_exceeded") {
+          setContextFull(true);
+          toast("error", "上下文已满：新建会话或从这里分支后可以继续。");
+        } else {
+          toast("error", `${event.code}: ${event.message}`);
+        }
         return;
       }
       if (event.type === "chat-turn-finished") {
@@ -650,20 +660,18 @@ export function ChatPage() {
       });
     }
     if (model && !groups.some((group) => group.models.some((item) => item.id === model))) {
-      if (!preset) {
-        groups.push({
-          name: sessionAccount ?? "",
-          label: "当前服务",
-          vendor: "",
-          models: [{
-            id: model,
-            capabilities: {
-              vision: false, files: false, reasoning: false, tools: false,
-              maxContext: 32768, maxOutput: 4096, source: "unknown",
-            },
-          }],
-        });
-      }
+      groups.push({
+        name: sessionAccount ?? "",
+        label: "当前服务",
+        vendor: preset ? "deepseek" : "",
+        models: [{
+          id: model,
+          capabilities: preset ? presetCaps : {
+            vision: false, files: false, reasoning: false, tools: false,
+            maxContext: 32768, maxOutput: 4096, source: "unknown",
+          },
+        }],
+      });
     }
     return groups;
   }, [chatAccounts, model, sessionAccount, preset]);
@@ -680,7 +688,7 @@ export function ChatPage() {
   const contextUsage = useMemo(() => {
     let sessionInput = 0;
     let sessionOutput = 0;
-    let last: { input: number; output: number } | null = null;
+    let last: { input: number; output: number; context?: ChatContextUsage } | null = null;
     for (const node of session?.nodes ?? []) {
       if (node.role !== "assistant") continue;
       const message = node.variants.find((item) => item.id === node.activeVariantId)
@@ -690,12 +698,23 @@ export function ChatPage() {
       const output = message.usage.output ?? 0;
       sessionInput += input;
       sessionOutput += output;
-      last = { input, output };
+      // 失败的消息也可能带着这一轮尝试过的上下文估算；它比上一轮成功用量更接近
+      // 用户刚看到的“满了”现场。
+      if (input > 0 || output > 0 || message.usage.context) {
+        last = { input, output, context: message.usage.context };
+      }
     }
     const live = liveUsage && session?.id === liveUsage.sessionId ? liveUsage : null;
-    const used = live?.input ?? last?.input ?? null;
+    const context = live?.context ?? last?.context ?? null;
+    const contextTotal = context ? context.system + context.history + context.attachments : null;
+    const reported = live?.input && live.input > 0
+      ? live.input
+      : last?.input && last.input > 0 ? last.input : null;
+    const used = reported ?? contextTotal;
     return {
       used: used && used > 0 ? used : null,
+      estimated: reported == null && contextTotal != null,
+      context,
       lastOutput: live?.output ?? last?.output ?? null,
       sessionInput,
       sessionOutput,
@@ -705,6 +724,7 @@ export function ChatPage() {
   const pickModel = async (accountName: string, modelId: string) => {
     setSessionAccount(accountName);
     setModel(modelId);
+    setContextFull(false);
     if (!session) return;
     try {
       const next = await api.chat.updateSession(session.id, { account: accountName, model: modelId });
@@ -903,6 +923,7 @@ export function ChatPage() {
       setDraft("");
       setPending([]);
       setLive(null);
+      setContextFull(false);
       applySession(created);
       await loadSessions(currentAssistant.id);
       setSidebarOpen(false);
@@ -1082,7 +1103,10 @@ export function ChatPage() {
           </div>
           <ContextMeter
             used={contextUsage.used}
-            max={currentCaps?.maxContext ?? 0}
+            max={currentCaps?.maxContext ?? contextUsage.context?.max ?? 0}
+            maxSource={currentCaps?.source ?? contextUsage.context?.source}
+            estimated={contextUsage.estimated}
+            context={contextUsage.context}
             lastOutput={contextUsage.lastOutput}
             sessionInput={contextUsage.sessionInput}
             sessionOutput={contextUsage.sessionOutput}
@@ -1271,6 +1295,15 @@ export function ChatPage() {
               <div className="chat-composer-note">
                 这个角色固定使用 DeepSeek 官方协议：先在账户页添加一个 DeepSeek 账户。
                 <button className="btn btn-text" onClick={() => navigate("/accounts")}>去添加账户</button>
+              </div>
+            )}
+            {contextFull && (
+              <div className="chat-composer-note chat-context-full">
+                <span>上下文已满，这轮没有发送。新建会话，或从消息菜单里「从这里重新生成」后继续。</span>
+                <span className="chat-context-full-actions">
+                  <button className="btn btn-text" onClick={() => void newSession()}>新建会话</button>
+                  <button className="btn btn-text" onClick={() => setContextFull(false)}>知道了</button>
+                </span>
               </div>
             )}
             <Composer

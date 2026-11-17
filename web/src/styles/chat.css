@@ -3480,6 +3480,31 @@
   color: var(--monet-on-surface-variant);
 }
 
+.chat-context-subhead {
+  margin: 2px 0 4px;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--monet-on-surface-variant);
+}
+
+.chat-context-full {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.chat-context-full-actions {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+}
+
+.chat-context-full-actions .btn {
+  font-size: 11px;
+}
+
 /* ---------------- 联网搜索 ---------------- */
 
 .chat-search-toggle.active {

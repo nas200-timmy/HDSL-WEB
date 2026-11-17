@@ -734,6 +734,7 @@ public final class ChatService {
         String model = required(body, "model", "model is required");
         if (body.has("reset") && body.get("reset").getAsBoolean()) {
             store.deleteCapability(account.key(), model);
+            broadcast("accounts-changed", null);
             ChatEndpoints.Profile profile = ChatEndpoints.profile(store, account.key());
             return modelJson(account.key(), model, profile == null
                     ? ChatEndpoints.defaultProtocol(account) : profile.protocol(),
@@ -751,6 +752,7 @@ public final class ChatService {
                 body.has("maxOutput") ? body.get("maxOutput").getAsInt() : current.maxOutput(),
                 "manual", System.currentTimeMillis());
         store.saveCapability(capability);
+        broadcast("accounts-changed", null);
         return modelJson(account.key(), model, profile == null
                 ? ChatEndpoints.defaultProtocol(account) : profile.protocol(),
                 profile == null ? null : profile.base());
@@ -773,12 +775,17 @@ public final class ChatService {
     /// 发一张内置图片让模型读数字，确认它到底会不会看图。
     public JsonObject visionTest(String accountName, String model)
             throws ChatException, SQLException, IOException {
-        return probes.visionTest(accountName, model, settings);
+        JsonObject result = probes.visionTest(accountName, model, settings);
+        // 识图实测会写 capability（source=probe），占用环和模型徽章要跟着刷新。
+        broadcast("accounts-changed", null);
+        return result;
     }
 
     public List<String> refreshModels(String accountName) throws ChatException, SQLException, IOException {
         try {
-            return ChatEndpoints.refreshModels(store, accountName, settings);
+            List<String> models = ChatEndpoints.refreshModels(store, accountName, settings);
+            broadcast("accounts-changed", null);
+            return models;
         } catch (IllegalArgumentException e) {
             throw new ChatException(404, "account_not_found", e.getMessage());
         }
