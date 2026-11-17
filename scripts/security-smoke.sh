@@ -33,6 +33,11 @@ if [[ ! -d "$ROOT/web/node_modules/@noble" ]]; then
 fi
 
 PORT="${HDSL_SMOKE_PORT:-39090}"
+HTTPS="${HDSL_SMOKE_HTTPS:-false}"
+SCHEME="http"
+if [[ "$HTTPS" == "true" ]]; then
+  SCHEME="https"
+fi
 DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/hdsl-security-smoke.XXXXXX")"
 LOG="$DATA_DIR/server.log"
 PID=""
@@ -60,12 +65,13 @@ HDSL_BIND_HOST=127.0.0.1 \
 HDSL_ADMIN_PASSWORD='smoke-admin-pass' \
 HDSL_HTTPS=false \
 HDSL_DEVELOPER_GUARD=all \
+HDSL_HTTPS="$HTTPS" \
 setsid java -jar "$JAR" >"$LOG" 2>&1 < /dev/null &
 PID=$!
 
-BASE="http://127.0.0.1:$PORT"
+BASE="$SCHEME://127.0.0.1:$PORT"
 for _ in $(seq 1 60); do
-  if curl -fsS --max-time 2 "$BASE/api/health" >/dev/null 2>&1; then
+  if curl -kfsS --max-time 2 "$BASE/api/health" >/dev/null 2>&1; then
     break
   fi
   if ! kill -0 "$PID" 2>/dev/null; then
@@ -75,12 +81,16 @@ for _ in $(seq 1 60); do
   fi
   sleep 1
 done
-if ! curl -fsS --max-time 2 "$BASE/api/health" >/dev/null 2>&1; then
+if ! curl -kfsS --max-time 2 "$BASE/api/health" >/dev/null 2>&1; then
   echo "server did not become healthy" >&2
   tail -40 "$LOG" >&2
   exit 1
 fi
 
 cd "$ROOT/web"
-node scripts/security-smoke.mjs "$BASE" 'smoke-admin-pass' 'smoke-dev-pass'
+if [[ "$HTTPS" == "true" ]]; then
+  NODE_TLS_REJECT_UNAUTHORIZED=0 node scripts/security-smoke.mjs "$BASE" 'smoke-admin-pass' 'smoke-dev-pass'
+else
+  node scripts/security-smoke.mjs "$BASE" 'smoke-admin-pass' 'smoke-dev-pass'
+fi
 echo "security smoke: PASS"

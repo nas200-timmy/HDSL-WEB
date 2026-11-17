@@ -255,6 +255,7 @@ public final class ServerConfigWriter {
         section.put("email", acme.email);
         section.put("domains", new java.util.ArrayList<>(acme.domains));
         section.put("provider", acme.provider);
+        section.put("credential_id", acme.credentialId);
         section.put("renew_before_days", acme.renewBeforeDays);
         section.put("use_staging", acme.useStaging);
         section.put("accept_terms", acme.acceptTerms);

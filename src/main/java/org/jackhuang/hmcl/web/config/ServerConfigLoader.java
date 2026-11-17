@@ -456,6 +456,9 @@ public final class ServerConfigLoader {
         if (acme.containsKey("provider")) {
             target.provider = stringField(acme, "provider");
         }
+        if (acme.containsKey("credential_id")) {
+            target.credentialId = stringField(acme, "credential_id");
+        }
         if (acme.containsKey("renew_before_days")) {
             target.renewBeforeDays = intField(acme, "renew_before_days");
         }
@@ -468,7 +471,7 @@ public final class ServerConfigLoader {
         for (String key : acme.keySet()) {
             switch (key) {
                 case "enabled", "ca", "directory_url", "email", "domains",
-                        "provider", "renew_before_days", "use_staging", "accept_terms" -> {
+                        "provider", "credential_id", "renew_before_days", "use_staging", "accept_terms" -> {
                 }
                 default -> throw new ConfigException("https.acme: unknown key `" + key + "`");
             }

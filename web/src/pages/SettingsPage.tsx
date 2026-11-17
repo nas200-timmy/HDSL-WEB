@@ -1970,6 +1970,8 @@ function AcmeCard() {
   const [email, setEmail] = useState("");
   const [domains, setDomains] = useState("");
   const [provider, setProvider] = useState("cloudflare");
+  const [credentialId, setCredentialId] = useState("");
+  const [credentialName, setCredentialName] = useState("");
   const [renewBeforeDays, setRenewBeforeDays] = useState(30);
   const [useStaging, setUseStaging] = useState(false);
   const [acceptTerms, setAcceptTerms] = useState(false);
@@ -1988,6 +1990,9 @@ function AcmeCard() {
     setEmail(value.email ?? "");
     setDomains((value.domains ?? []).join("\n"));
     setProvider(value.provider);
+    const fallback = value.credentials.find((item) => item.provider === value.provider);
+    setCredentialId(value.credentialId || fallback?.id || "");
+    setCredentialName("");
     setRenewBeforeDays(value.renewBeforeDays);
     setUseStaging(value.useStaging);
     setAcceptTerms(value.acceptTerms);
@@ -2023,16 +2028,20 @@ function AcmeCard() {
   const providerInfo = settings?.providers.find((item) => item.id === provider);
   const implementedProviders = (settings?.providers ?? []).filter((item) => item.implemented);
   const providerGroups = [...new Set(implementedProviders.map((item) => item.group))];
-  const savedProviderInfo = settings?.providers.find((item) => item.id === settings.credentialProvider);
-  const providerMismatch = !!settings?.credentialConfigured && settings.credentialProvider !== provider;
+  const profiles = settings?.credentials ?? [];
+  const selectedCredential = profiles.find((item) => item.id === credentialId) ?? null;
+  const savedProviderInfo = settings?.providers.find((item) => item.id === selectedCredential?.provider);
+  const providerMismatch = !!selectedCredential && selectedCredential.provider !== provider;
+  const maskedDns = selectedCredential?.maskedDns ?? settings?.maskedDns ?? {};
+  const maskedEab = selectedCredential?.maskedEab ?? settings?.maskedEab ?? {};
   const issueBlockers: string[] = [];
   if (settings) {
     if (!settings.enabled) issueBlockers.push("ACME 尚未启用（勾选后先保存配置）");
     if (!settings.domains.length) issueBlockers.push("还没有保存域名");
     if (!settings.email) issueBlockers.push("还没有保存邮箱");
     if (!settings.acceptTerms) issueBlockers.push("还没有同意 CA 条款");
-    if (!settings.credentialConfigured) issueBlockers.push("还没有保存 DNS 凭证");
-    if (providerMismatch) issueBlockers.push(`已保存凭证属于 ${settings.credentialProvider}，与当前厂商 ${provider} 不一致`);
+    if (!selectedCredential) issueBlockers.push("还没有选择已保存的 DNS 凭证");
+    if (providerMismatch) issueBlockers.push(`所选凭证属于 ${selectedCredential?.provider}，与当前厂商 ${provider} 不一致`);
   }
   const phaseIndex = acmePhaseIndex(settings?.status?.phase);
   const issuing = settings?.status?.state === "issuing";
@@ -2049,6 +2058,7 @@ function AcmeCard() {
         email,
         domains: domains.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
         provider,
+        credentialId,
         renewBeforeDays,
         useStaging,
         acceptTerms,
@@ -2070,7 +2080,9 @@ function AcmeCard() {
     setError(null);
     setBusy(true);
     try {
-      await withElevation(() => api.saveAcmeCredentials({
+      const saved = await withElevation(() => api.saveAcmeCredentials({
+        id: credentialId || undefined,
+        name: credentialName.trim() || provider,
         provider,
         dns,
         eab: caInfo?.requiresEab || eabKid || eabHmac
@@ -2078,6 +2090,22 @@ function AcmeCard() {
           : undefined,
         panelPassword,
       }));
+      setCredentialId(saved.id);
+      setCredentialName(saved.name);
+      // Persist the selection so the next issuance uses this profile.
+      const next = await withElevation(() => api.saveAcme({
+        enabled,
+        ca,
+        directoryUrl,
+        email,
+        domains: domains.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
+        provider,
+        credentialId: saved.id,
+        renewBeforeDays,
+        useStaging,
+        acceptTerms,
+      }));
+      apply(next);
       setPanelPassword("");
       toast("success", "DNS 凭证已保存");
       await load();
@@ -2132,7 +2160,20 @@ function AcmeCard() {
     setError(null);
     setBusy(true);
     try {
-      await withElevation(() => api.clearAcmeCredentials(panelPassword));
+      await withElevation(() => api.clearAcmeCredentials(panelPassword, credentialId || undefined));
+      const next = await withElevation(() => api.saveAcme({
+        enabled,
+        ca,
+        directoryUrl,
+        email,
+        domains: domains.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
+        provider,
+        credentialId: "",
+        renewBeforeDays,
+        useStaging,
+        acceptTerms,
+      }));
+      apply(next);
       setPanelPassword("");
       toast("success", "DNS 凭证已清除");
       await load();
@@ -2193,30 +2234,73 @@ function AcmeCard() {
               <div className="form-error">上次失败：{settings.status.lastError}</div>
             )}
 
-            {settings.credentialConfigured && (
+            {profiles.length > 0 && (
+              <div className="form-row" style={{ marginBottom: 0 }}>
+                <span className="form-label">使用哪个 DNS 凭证</span>
+                <select
+                  className="input"
+                  value={credentialId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setCredentialId(id);
+                    const profile = profiles.find((item) => item.id === id);
+                    if (profile) {
+                      setProvider(profile.provider);
+                      setCredentialName(profile.name);
+                      setDns({});
+                      setEabKid("");
+                      setEabHmac("");
+                    } else {
+                      setCredentialName("");
+                    }
+                  }}
+                  disabled={busy}
+                >
+                  <option value="">（新建凭证 / 不选择）</option>
+                  {profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name} · {profile.provider}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {selectedCredential && (
               <div style={{ padding: "8px 12px", border: "1px solid var(--monet-outline-variant)", borderRadius: 4, fontSize: 12, lineHeight: 1.8 }}>
-                <strong>已保存 DNS 凭证</strong>（{settings.credentialProvider ?? "未知 provider"}）
+                <strong>已保存 DNS 凭证</strong>（{selectedCredential.name} · {selectedCredential.provider}）
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 16px", marginTop: 4 }}>
-                  {Object.entries(settings.maskedDns ?? {}).map(([key, value]) => (
+                  {Object.entries(maskedDns).map(([key, value]) => (
                     <span key={key}>
                       {savedProviderInfo?.fields.find((f) => f.key === key)?.label ?? key}：
                       <code>{value}</code>
                     </span>
                   ))}
                 </div>
-                {settings.eabConfigured && (
+                {selectedCredential.eabConfigured && (
                   <div style={{ marginTop: 4 }}>
-                    EAB：kid <code>{settings.maskedEab?.kid ?? "已保存"}</code>，
-                    HMAC <code>{settings.maskedEab?.hmacKey ?? "已保存"}</code>
+                    EAB：kid <code>{maskedEab.kid ?? "已保存"}</code>，
+                    HMAC <code>{maskedEab.hmacKey ?? "已保存"}</code>
                   </div>
                 )}
                 {providerMismatch && (
                   <div className="form-error" style={{ marginTop: 4 }}>
-                    已保存凭证属于 {settings.credentialProvider}，当前选择的是 {provider}；保存新凭证前不能签发。
+                    该凭证属于 {selectedCredential.provider}，当前选择的是 {provider}；请改回厂商或新建凭证。
                   </div>
                 )}
               </div>
             )}
+
+            <div className="form-row" style={{ marginBottom: 0 }}>
+              <span className="form-label">凭证名称（保存时使用；留空用 provider 名）</span>
+              <input
+                className="input"
+                value={credentialName}
+                onChange={(e) => setCredentialName(e.target.value)}
+                placeholder="例如：Cloudflare 生产 / Aliyun 备用"
+                disabled={busy}
+              />
+            </div>
 
             <label className="input-check">
               <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
@@ -2303,7 +2387,7 @@ function AcmeCard() {
 
             <div style={{ borderTop: "1px solid var(--monet-outline-variant)", paddingTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                DNS 凭证 {settings.credentialConfigured ? `已配置（${settings.credentialProvider ?? "未知 provider"}）` : "未配置"}；
+                DNS 凭证 {selectedCredential ? `已选（${selectedCredential.name} · ${selectedCredential.provider}）` : profiles.length ? "已保存，但未选择" : "未配置"}；
                 凭证只写不读，留空的字段会保留原值。
                 {caInfo?.requiresEab && ` ${settings.eabConfigured ? "EAB 已配置。" : "该 CA 需要 EAB。"}`}
               </div>
@@ -2317,9 +2401,9 @@ function AcmeCard() {
                       value={dns[field.key] ?? ""}
                       onChange={(e) => setDns((prev) => ({ ...prev, [field.key]: e.target.value }))}
                       placeholder={
-                        settings.credentialConfigured && settings.credentialProvider === provider
-                          ? `已保存 ${settings.maskedDns?.[field.key] ?? "••••"}（留空保留）`
-                          : "留空保留已保存值"
+                        selectedCredential
+                          ? `已保存 ${maskedDns[field.key] ?? "••••"}（留空保留）`
+                          : "新建凭证请填写"
                       }
                       autoComplete="off"
                       disabled={busy}
@@ -2331,11 +2415,11 @@ function AcmeCard() {
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
                     <span className="form-label">EAB Key ID</span>
-                    <input className="input" value={eabKid} onChange={(e) => setEabKid(e.target.value)} placeholder={settings.eabConfigured ? `已保存 ${settings.maskedEab?.kid ?? "••••"}（留空保留）` : "留空保留已保存值"} autoComplete="off" disabled={busy} />
+                    <input className="input" value={eabKid} onChange={(e) => setEabKid(e.target.value)} placeholder={selectedCredential?.eabConfigured ? `已保存 ${maskedEab.kid ?? "••••"}（留空保留）` : "填写 EAB Key ID"} autoComplete="off" disabled={busy} />
                   </div>
                   <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
                     <span className="form-label">EAB HMAC Key</span>
-                    <input className="input" type="password" value={eabHmac} onChange={(e) => setEabHmac(e.target.value)} placeholder={settings.eabConfigured ? `已保存 ${settings.maskedEab?.hmacKey ?? "••••"}（留空保留）` : "留空保留已保存值"} autoComplete="off" disabled={busy} />
+                    <input className="input" type="password" value={eabHmac} onChange={(e) => setEabHmac(e.target.value)} placeholder={selectedCredential?.eabConfigured ? `已保存 ${maskedEab.hmacKey ?? "••••"}（留空保留）` : "填写 EAB HMAC Key"} autoComplete="off" disabled={busy} />
                   </div>
                 </div>
               )}
@@ -2347,8 +2431,8 @@ function AcmeCard() {
                 <button className="btn btn-raised ripple-host" disabled={busy} onClick={() => void doSaveCredentials()}>
                   保存 DNS 凭证
                 </button>
-                <button className="btn btn-outline ripple-host" disabled={busy || !settings.credentialConfigured} onClick={() => void doClearCredentials()}>
-                  清除 DNS 凭证
+                <button className="btn btn-outline ripple-host" disabled={busy || !selectedCredential} onClick={() => void doClearCredentials()}>
+                  删除所选凭证
                 </button>
               </div>
             </div>
@@ -2372,7 +2456,7 @@ function AcmeCard() {
             <div>域名：<code>{settings.domains.join("、") || "（未保存）"}</code></div>
             <div>邮箱：<code>{settings.email || "（未保存）"}</code></div>
             <div>DNS 厂商：<strong>{providerInfo?.label ?? settings.provider}</strong></div>
-            <div>DNS 凭证：{settings.credentialConfigured ? `已保存（${settings.credentialProvider}）` : "未保存"}</div>
+            <div>DNS 凭证：{selectedCredential ? `已选择（${selectedCredential.name}）` : profiles.length ? "未选择" : "未保存"}</div>
             <div>续期阈值：{settings.renewBeforeDays} 天；{settings.useStaging ? "staging" : "生产 CA"}</div>
           </div>
           {issueBlockers.length > 0 && (

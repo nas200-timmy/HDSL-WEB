@@ -469,10 +469,10 @@ public final class HdslServer {
             return live == null ? null : live.getAcmeService();
         };
         context.addServlet(new ServletHolder(new AcmeApiServlet(
-                config, acmeSupplier, authService, developerElevation, tlsActive)),
+                config, acmeSupplier, authService, developerElevation, tlsActive, passwordCrypto)),
                 "/api/settings/acme");
         context.addServlet(new ServletHolder(new AcmeApiServlet(
-                config, acmeSupplier, authService, developerElevation, tlsActive)),
+                config, acmeSupplier, authService, developerElevation, tlsActive, passwordCrypto)),
                 "/api/settings/acme/*");
         ServletHolder tlsHolder = new ServletHolder(new TlsApiServlet(config, certificates, self::get));
         tlsHolder.getRegistration().setMultipartConfig(multipart);

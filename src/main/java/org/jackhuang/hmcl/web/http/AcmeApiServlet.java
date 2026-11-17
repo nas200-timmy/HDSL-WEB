@@ -36,6 +36,7 @@ import org.jackhuang.hmcl.web.auth.UserStore;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.config.ServerConfigWriter;
 import org.jackhuang.hmcl.web.developer.DeveloperElevation;
+import org.jackhuang.hmcl.web.crypto.PasswordCrypto;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -66,15 +67,17 @@ public final class AcmeApiServlet extends HttpServlet {
     private final DeveloperElevation elevation;
     private final BooleanSupplier tlsActive;
     private final LoginThrottle panelPasswordThrottle = new LoginThrottle();
+    private final PasswordCrypto passwordCrypto;
 
     public AcmeApiServlet(ServerConfig config, Supplier<@Nullable AcmeService> service,
                           AuthService auth, DeveloperElevation elevation,
-                          BooleanSupplier tlsActive) {
+                          BooleanSupplier tlsActive, PasswordCrypto passwordCrypto) {
         this.config = config;
         this.service = service;
         this.auth = auth;
         this.elevation = elevation;
         this.tlsActive = tlsActive;
+        this.passwordCrypto = passwordCrypto;
     }
 
     @Override
@@ -172,31 +175,38 @@ public final class AcmeApiServlet extends HttpServlet {
         body.add("providers", providers);
 
         AcmeCredentialStore credentials = live == null ? null : live.credentials();
-        body.addProperty("credentialConfigured", credentials != null && credentials.configured());
-        body.addProperty("eabConfigured", credentials != null && credentials.eabConfigured());
-        body.addProperty("credentialProvider", credentials == null ? null : credentials.provider());
-        body.addProperty("credentialsUpdatedAt", credentials == null ? null : credentials.updatedAt());
-        JsonObject maskedDns = new JsonObject();
-        JsonObject maskedEab = new JsonObject();
-        if (credentials != null && credentials.configured()) {
-            AcmeDnsProviderRegistry.Info info = AcmeDnsProviderRegistry.find(credentials.provider());
-            if (info != null) {
-                for (AcmeDnsProviderRegistry.Field field : info.fields()) {
-                    String value = credentials.dnsCredentials().get(field.key());
-                    if (value != null && !value.isBlank()) {
-                        maskedDns.addProperty(field.key(), field.secret() ? mask(value) : value);
-                    }
-                }
-            }
-            if (credentials.eabConfigured()) {
-                String kid = credentials.eabCredentials().get("kid");
-                String hmac = credentials.eabCredentials().get("hmacKey");
-                if (kid != null) maskedEab.addProperty("kid", kid);
-                if (hmac != null) maskedEab.addProperty("hmacKey", mask(hmac));
+        AcmeCredentialStore.Credential selected = null;
+        if (credentials != null) {
+            selected = credentials.find(config.https.acme.credentialId);
+            if (selected == null) {
+                selected = credentials.findProvider(config.https.acme.provider);
             }
         }
-        body.add("maskedDns", maskedDns);
-        body.add("maskedEab", maskedEab);
+        body.addProperty("credentialId", config.https.acme.credentialId);
+        body.addProperty("credentialConfigured", credentials != null && credentials.configured());
+        body.addProperty("eabConfigured", selected != null && selected.eabConfigured());
+        body.addProperty("credentialProvider", selected == null ? null : selected.provider());
+        body.addProperty("credentialsUpdatedAt", selected == null ? null : selected.updatedAt());
+        body.add("maskedDns", selected == null ? new JsonObject()
+                : maskedDns(selected.provider(), selected.dns()));
+        body.add("maskedEab", selected == null ? new JsonObject()
+                : maskedEab(selected.eab()));
+
+        JsonArray profiles = new JsonArray();
+        if (credentials != null) {
+            for (AcmeCredentialStore.Credential credential : credentials.all()) {
+                JsonObject row = new JsonObject();
+                row.addProperty("id", credential.id());
+                row.addProperty("name", credential.name());
+                row.addProperty("provider", credential.provider());
+                row.addProperty("updatedAt", credential.updatedAt());
+                row.addProperty("eabConfigured", credential.eabConfigured());
+                row.add("maskedDns", maskedDns(credential.provider(), credential.dns()));
+                row.add("maskedEab", maskedEab(credential.eab()));
+                profiles.add(row);
+            }
+        }
+        body.add("credentials", profiles);
 
         if (live != null) {
             AcmeService.Status status = live.status();
@@ -229,6 +239,7 @@ public final class AcmeApiServlet extends HttpServlet {
         next.directoryUrl = string(body, "directoryUrl", config.https.acme.directoryUrl);
         next.email = string(body, "email", config.https.acme.email);
         next.provider = string(body, "provider", config.https.acme.provider);
+        next.credentialId = string(body, "credentialId", config.https.acme.credentialId);
         next.renewBeforeDays = integer(body, "renewBeforeDays", config.https.acme.renewBeforeDays);
         next.useStaging = bool(body, "useStaging", config.https.acme.useStaging);
         next.acceptTerms = bool(body, "acceptTerms", config.https.acme.acceptTerms);
@@ -257,6 +268,7 @@ public final class AcmeApiServlet extends HttpServlet {
         config.https.acme.directoryUrl = next.directoryUrl;
         config.https.acme.email = next.email;
         config.https.acme.provider = next.provider;
+        config.https.acme.credentialId = next.credentialId;
         config.https.acme.renewBeforeDays = next.renewBeforeDays;
         config.https.acme.useStaging = next.useStaging;
         config.https.acme.acceptTerms = next.acceptTerms;
@@ -339,7 +351,7 @@ public final class AcmeApiServlet extends HttpServlet {
         if (body == null) {
             return;
         }
-        if (!requirePanelPassword(request, response, string(body, "panelPassword", ""))) {
+        if (!requirePanelPassword(request, response, body.get("panelPassword"))) {
             return;
         }
         AcmeService live = service.get();
@@ -348,7 +360,15 @@ public final class AcmeApiServlet extends HttpServlet {
                     "ACME service is not available; check the data directory permissions");
             return;
         }
-        String provider = string(body, "provider", config.https.acme.provider);
+        AcmeCredentialStore stored = live.credentials();
+        String id = string(body, "id", "");
+        AcmeCredentialStore.Credential existing = stored.find(id);
+        if (!id.isBlank() && existing == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "credential profile not found");
+            return;
+        }
+        String provider = string(body, "provider", existing == null
+                ? config.https.acme.provider : existing.provider());
         AcmeDnsProviderRegistry.Info info = AcmeDnsProviderRegistry.find(provider);
         if (info == null || !info.implemented()) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
@@ -363,9 +383,8 @@ public final class AcmeApiServlet extends HttpServlet {
                 }
             }
         }
-        AcmeCredentialStore stored = live.credentials();
-        Map<String, String> existingDns = provider.equals(stored.provider())
-                ? stored.dnsCredentials() : Map.of();
+        Map<String, String> existingDns = existing != null && provider.equals(existing.provider())
+                ? existing.dns() : Map.of();
         for (AcmeDnsProviderRegistry.Field field : info.fields()) {
             String value = dns.get(field.key());
             if (value == null || value.isBlank()) {
@@ -389,25 +408,28 @@ public final class AcmeApiServlet extends HttpServlet {
                 }
             }
         }
-        if (eab.isEmpty() && stored.eabConfigured()) {
-            eab.putAll(stored.eabCredentials());
+        if (eab.isEmpty() && existing != null && existing.eabConfigured()) {
+            eab.putAll(existing.eab());
         }
         if (!eab.isEmpty() && (eab.get("kid") == null || eab.get("hmacKey") == null)) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
                     "EAB requires both kid and hmacKey");
             return;
         }
+        AcmeCredentialStore.Credential saved;
         try {
-            live.credentials().save(provider, dns, eab);
+            saved = live.credentials().upsert(id, string(body, "name", ""), provider, dns, eab);
         } catch (IOException e) {
             Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
                     "could not write the ACME credential store: " + e.getMessage());
             return;
         }
-        AuditLog.log(AuditLog.Channel.WEB, "acme.credentials.set", provider, "success",
-                actorOf(request), request.getRemoteAddr());
+        AuditLog.log(AuditLog.Channel.WEB, "acme.credentials.set", saved.id() + ":" + provider,
+                "success", actorOf(request), request.getRemoteAddr());
         JsonObject answer = new JsonObject();
         answer.addProperty("ok", true);
+        answer.addProperty("id", saved.id());
+        answer.addProperty("name", saved.name());
         answer.addProperty("credentialConfigured", true);
         answer.addProperty("eabConfigured", !eab.isEmpty());
         answer.addProperty("provider", provider);
@@ -422,7 +444,7 @@ public final class AcmeApiServlet extends HttpServlet {
         if (body == null) {
             return;
         }
-        if (!requirePanelPassword(request, response, string(body, "panelPassword", ""))) {
+        if (!requirePanelPassword(request, response, body.get("panelPassword"))) {
             return;
         }
         AcmeService live = service.get();
@@ -431,15 +453,22 @@ public final class AcmeApiServlet extends HttpServlet {
             return;
         }
         try {
-            live.credentials().clear();
+            String id = string(body, "id", "");
+            if (id.isBlank()) {
+                live.credentials().clear();
+            } else if (!live.credentials().delete(id)) {
+                Json.error(response, HttpServletResponse.SC_NOT_FOUND, "credential profile not found");
+                return;
+            }
         } catch (IOException e) {
             Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
                     "could not clear the ACME credential store: " + e.getMessage());
             return;
         }
-        AuditLog.log(AuditLog.Channel.WEB, "acme.credentials.clear", null, "success",
-                actorOf(request), request.getRemoteAddr());
-        Json.write(response, Map.of("ok", true, "credentialConfigured", false, "eabConfigured", false));
+        AuditLog.log(AuditLog.Channel.WEB, "acme.credentials.clear",
+                string(body, "id", ""), "success", actorOf(request), request.getRemoteAddr());
+        Json.write(response, Map.of("ok", true, "credentialConfigured", live.credentials().configured(),
+                "eabConfigured", live.credentials().eabConfigured()));
     }
 
     // ------------------------------------------------------------- operations --
@@ -519,7 +548,14 @@ public final class AcmeApiServlet extends HttpServlet {
     }
 
     private boolean requirePanelPassword(HttpServletRequest request, HttpServletResponse response,
-                                         String password) throws IOException {
+                                         JsonElement field) throws IOException {
+        String password;
+        try {
+            password = passwordCrypto.decode(field);
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return false;
+        }
         if (password == null || password.isBlank()) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "panelPassword is required");
             return false;
@@ -564,6 +600,32 @@ public final class AcmeApiServlet extends HttpServlet {
     }
 
     // ---------------------------------------------------------------- helpers --
+
+    private static JsonObject maskedDns(String provider, Map<String, String> dns) {
+        JsonObject masked = new JsonObject();
+        AcmeDnsProviderRegistry.Info info = AcmeDnsProviderRegistry.find(provider);
+        if (info == null || dns == null) {
+            return masked;
+        }
+        for (AcmeDnsProviderRegistry.Field field : info.fields()) {
+            String value = dns.get(field.key());
+            if (value != null && !value.isBlank()) {
+                masked.addProperty(field.key(), field.secret() ? mask(value) : value);
+            }
+        }
+        return masked;
+    }
+
+    private static JsonObject maskedEab(Map<String, String> eab) {
+        JsonObject masked = new JsonObject();
+        if (eab != null) {
+            String kid = eab.get("kid");
+            String hmac = eab.get("hmacKey");
+            if (kid != null) masked.addProperty("kid", kid);
+            if (hmac != null) masked.addProperty("hmacKey", mask(hmac));
+        }
+        return masked;
+    }
 
     private static String mask(String value) {
         if (value.length() <= 4) {

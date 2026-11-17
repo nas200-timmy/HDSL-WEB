@@ -188,6 +188,11 @@ public final class ServerConfig {
         /// DNS provider registry id (see `AcmeDnsProviderRegistry`).
         public volatile String provider = "cloudflare";
 
+        /// Which saved DNS/EAB credential profile to use (`https.acme.credential_id`).
+        /// Empty means "pick the first profile whose provider matches"; the
+        /// settings page sets it explicitly.
+        public volatile String credentialId = "";
+
         /// Renew when fewer than this many days remain.
         public volatile int renewBeforeDays = 30;
 

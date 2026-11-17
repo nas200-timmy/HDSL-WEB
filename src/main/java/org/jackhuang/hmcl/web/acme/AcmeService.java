@@ -88,7 +88,8 @@ public final class AcmeService implements AutoCloseable {
                          @Nullable String source,
                          List<String> domains,
                          String ca,
-                         String provider) {
+                         String provider,
+                         String credentialId) {
     }
 
     /// What the service may do to the live identity. The production
@@ -193,7 +194,8 @@ public final class AcmeService implements AutoCloseable {
                     sink.source().name().toLowerCase(java.util.Locale.ROOT),
                     List.copyOf(config.https.acme.domains),
                     config.https.acme.ca,
-                    config.https.acme.provider);
+                    config.https.acme.provider,
+                    config.https.acme.credentialId);
         }
     }
 
@@ -326,20 +328,30 @@ public final class AcmeService implements AutoCloseable {
         if (ca == null) {
             throw new AcmeClientException("unknown ACME CA: " + acme.ca);
         }
-        if (ca.requiresEab() && !credentials.eabConfigured()) {
+        AcmeCredentialStore.Credential credential = credentials.find(acme.credentialId);
+        if (credential == null && (acme.credentialId == null || acme.credentialId.isBlank())) {
+            credential = credentials.findProvider(acme.provider);
+        }
+        if (credential == null) {
+            throw new AcmeClientException("DNS credential profile not found"
+                    + (acme.credentialId == null || acme.credentialId.isBlank()
+                    ? "" : ": " + acme.credentialId));
+        }
+        if (!acme.provider.equals(credential.provider())) {
+            throw new AcmeClientException("DNS credential `" + credential.name()
+                    + "` is for provider `" + credential.provider()
+                    + "`, but the configuration uses `" + acme.provider + "`");
+        }
+        if (ca.requiresEab() && !credential.eabConfigured()) {
             throw new AcmeClientException("CA `" + ca.displayName() + "` requires EAB credentials");
         }
-        if (credentials.provider() == null || !credentials.provider().equals(acme.provider)) {
-            throw new AcmeClientException("DNS credentials are for provider `"
-                    + credentials.provider() + "`, but the configuration uses `" + acme.provider + "`");
-        }
         String directory = AcmeCa.directory(acme.ca, acme.directoryUrl, acme.useStaging);
-        AcmeDnsProvider provider = AcmeDnsProviderRegistry.create(acme.provider, credentials.dnsCredentials());
+        AcmeDnsProvider provider = AcmeDnsProviderRegistry.create(acme.provider, credential.dns());
         KeyPair accountKey = loadOrCreateAccountKey();
         AcmeClient.Request request = new AcmeClient.Request(
                 directory, acme.email, List.copyOf(acme.domains), acme.acceptTerms,
-                credentials.eabCredentials().get("kid"),
-                credentials.eabCredentials().get("hmacKey"),
+                credential.eab().get("kid"),
+                credential.eab().get("hmacKey"),
                 accountKey);
 
         phase = Phase.ORDER;
@@ -408,14 +420,16 @@ public final class AcmeService implements AutoCloseable {
             return "unknown error";
         }
         String redacted = message;
-        for (Map.Entry<String, String> entry : credentials.dnsCredentials().entrySet()) {
-            if (entry.getValue() != null && entry.getValue().length() >= 4) {
-                redacted = redacted.replace(entry.getValue(), "***");
+        for (AcmeCredentialStore.Credential credential : credentials.all()) {
+            for (Map.Entry<String, String> entry : credential.dns().entrySet()) {
+                if (entry.getValue() != null && entry.getValue().length() >= 4) {
+                    redacted = redacted.replace(entry.getValue(), "***");
+                }
             }
-        }
-        for (Map.Entry<String, String> entry : credentials.eabCredentials().entrySet()) {
-            if (entry.getValue() != null && entry.getValue().length() >= 4) {
-                redacted = redacted.replace(entry.getValue(), "***");
+            for (Map.Entry<String, String> entry : credential.eab().entrySet()) {
+                if (entry.getValue() != null && entry.getValue().length() >= 4) {
+                    redacted = redacted.replace(entry.getValue(), "***");
+                }
             }
         }
         return redacted.replace('\n', ' ').replace('\r', ' ');

@@ -44,6 +44,15 @@ cd web && npm install && cd ..
 - `/api/chat/assistants` 加密响应；
 - `POST /api/chat/sessions` 加密请求 + 加密响应。
 
+凭证 profile（多凭证/选择凭证）的写入要求 HTTPS，因此 HTTP 模式会跳过；跑完整版：
+
+```bash
+HDSL_SMOKE_HTTPS=true ./scripts/security-smoke.sh
+```
+
+HTTPS 模式使用自签证书，脚本会设置 `NODE_TLS_REJECT_UNAUTHORIZED=0`；它会额外验证：
+保存两个 DNS 凭证、切换 `credentialId`、脱敏 `maskedDns`。
+
 被强杀会留下一个 `build/libs/hdsl-web-*.jar` 进程；清理见下面 `api-smoke.py` 的说明。
 
 ## api-smoke.py

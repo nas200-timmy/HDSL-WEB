@@ -512,21 +512,22 @@ export const api = {
     email: string;
     domains: string[];
     provider: string;
+    credentialId?: string;
     renewBeforeDays: number;
     useStaging: boolean;
     acceptTerms: boolean;
   }) => request<AcmeSettings>("/api/settings/acme", jsonInit("PUT", body)),
 
-  saveAcmeCredentials: (body: AcmeCredentialInput) =>
-    request<{ ok: boolean; credentialConfigured: boolean; eabConfigured: boolean; provider: string }>(
+  saveAcmeCredentials: async (body: AcmeCredentialInput) =>
+    request<{ ok: boolean; id: string; name: string; credentialConfigured: boolean; eabConfigured: boolean; provider: string }>(
       "/api/settings/acme/credentials",
-      jsonInit("PUT", body),
+      jsonInit("PUT", { ...body, panelPassword: await encryptPassword(body.panelPassword) }),
     ),
 
-  clearAcmeCredentials: (panelPassword: string) =>
+  clearAcmeCredentials: async (panelPassword: string, id?: string) =>
     request<{ ok: boolean; credentialConfigured: boolean; eabConfigured: boolean }>(
       "/api/settings/acme/credentials",
-      jsonInit("DELETE", { panelPassword }),
+      jsonInit("DELETE", { panelPassword: await encryptPassword(panelPassword), id }),
     ),
 
   issueAcme: () =>

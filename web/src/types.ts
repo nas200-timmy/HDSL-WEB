@@ -306,6 +306,16 @@ export interface AcmeStatus {
   source: string | null;
 }
 
+export interface AcmeCredentialProfile {
+  id: string;
+  name: string;
+  provider: string;
+  updatedAt: string;
+  eabConfigured: boolean;
+  maskedDns: Record<string, string>;
+  maskedEab: Record<string, string>;
+}
+
 export interface AcmeSettings {
   available: boolean;
   enabled: boolean;
@@ -314,11 +324,13 @@ export interface AcmeSettings {
   email: string;
   domains: string[];
   provider: string;
+  credentialId: string;
   renewBeforeDays: number;
   useStaging: boolean;
   acceptTerms: boolean;
   cas: AcmeCaInfo[];
   providers: AcmeProviderInfo[];
+  credentials: AcmeCredentialProfile[];
   credentialConfigured: boolean;
   eabConfigured: boolean;
   credentialProvider: string | null;
@@ -329,6 +341,8 @@ export interface AcmeSettings {
 }
 
 export interface AcmeCredentialInput {
+  id?: string;
+  name: string;
   provider: string;
   dns: Record<string, string>;
   eab?: Record<string, string>;

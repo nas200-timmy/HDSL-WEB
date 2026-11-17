@@ -87,6 +87,40 @@ class AcmeCredentialStoreTest {
     }
 
     @Test
+    void multipleProfilesCanBeSelectedAndDeleted() throws Exception {
+        AcmeCredentialStore store = AcmeCredentialStore.open(dataDir);
+        AcmeCredentialStore.Credential first = store.upsert(null, "Cloudflare prod", "cloudflare",
+                Map.of("apiToken", "token-a"), Map.of());
+        AcmeCredentialStore.Credential second = store.upsert(null, "Aliyun backup", "aliyun",
+                Map.of("accessKeyId", "ak", "accessKeySecret", "sk", "zone", "example.com"), Map.of());
+        assertEquals(2, store.all().size());
+        assertEquals("token-a", store.find(first.id()).dns().get("apiToken"));
+        assertEquals("aliyun", store.findProvider("aliyun").provider());
+
+        AcmeCredentialStore.Credential updated = store.upsert(first.id(), "CF renamed", "cloudflare",
+                Map.of("apiToken", "token-b"), Map.of());
+        assertEquals("token-b", store.find(first.id()).dns().get("apiToken"));
+        assertEquals("CF renamed", updated.name());
+
+        assertTrue(store.delete(second.id()));
+        assertNull(store.find(second.id()));
+        assertEquals(1, store.all().size());
+    }
+
+    @Test
+    void oldSingleCredentialFileIsMigrated() throws Exception {
+        Path auth = Files.createDirectories(dataDir.resolve("auth"));
+        Files.writeString(auth.resolve(AcmeCredentialStore.FILE_NAME), """
+                {"provider":"cloudflare","updatedAt":"2026-01-01T00:00:00Z",
+                 "dns":{"apiToken":"legacy-token"}}
+                """);
+        AcmeCredentialStore store = AcmeCredentialStore.open(dataDir);
+        assertEquals(1, store.all().size());
+        assertEquals("default", store.find("default").id());
+        assertEquals("legacy-token", store.find("default").dns().get("apiToken"));
+    }
+
+    @Test
     void missingProviderOrDnsIsRejected() throws Exception {
         AcmeCredentialStore store = AcmeCredentialStore.open(dataDir);
         assertThrows(IllegalArgumentException.class, () -> store.save("", Map.of("x", "y"), Map.of()));

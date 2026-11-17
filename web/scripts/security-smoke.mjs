@@ -1,7 +1,7 @@
 // Headless security smoke test. Run through scripts/security-smoke.sh.
 //
 // It exercises the paths a browser uses but without a browser:
-//   encrypted login → set developer password over HTTP → elevate over HTTP →
+//   encrypted login → set developer password → elevate →
 //   gated ACME read → chat-key → encrypted chat GET/POST.
 import { x25519 } from "@noble/curves/ed25519";
 import { chacha20poly1305 } from "@noble/ciphers/chacha";
@@ -63,6 +63,17 @@ async function postJson(path, body, cookie) {
   });
 }
 
+async function putJson(path, body, cookie) {
+  return fetch(`${base}${path}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 const login = await postJson("/api/auth/login", {
   username: "admin",
   password: await encryptPassword(adminPassword),
@@ -76,7 +87,7 @@ const setDev = await postJson("/api/developer/password", {
   password: await encryptPassword(devPassword),
   confirm: await encryptPassword(devPassword),
 }, cookie);
-check(setDev.status === 200, "set developer password over HTTP", `${setDev.status} ${await setDev.clone().text()}`);
+check(setDev.status === 200, "set developer password", `${setDev.status} ${await setDev.clone().text()}`);
 
 const beforeElevationAfterSet = await fetch(`${base}/api/settings/acme`, { headers: { Cookie: cookie } });
 check(beforeElevationAfterSet.status === 403,
@@ -86,12 +97,54 @@ check(beforeElevationAfterSet.status === 403,
 const elevate = await postJson("/api/developer/elevate", {
   password: await encryptPassword(devPassword),
 }, cookie);
-check(elevate.status === 200, "elevate over HTTP", `${elevate.status} ${await elevate.clone().text()}`);
+check(elevate.status === 200, "elevate", `${elevate.status} ${await elevate.clone().text()}`);
 
 const acme = await fetch(`${base}/api/settings/acme`, { headers: { Cookie: cookie } });
 check(acme.status === 200, "gated ACME read after elevation", `${acme.status}`);
 const acmeBody = await json(acme);
 check(acmeBody.available === true, "ACME service is available");
+
+if (base.startsWith("https:")) {
+  const saveCredential = async (name, token) => {
+    const response = await putJson("/api/settings/acme/credentials", {
+      name,
+      provider: "cloudflare",
+      dns: { apiToken: token },
+      panelPassword: await encryptPassword(adminPassword),
+    }, cookie);
+    check(response.status === 200, `save credential ${name}`, `${response.status} ${await response.clone().text()}`);
+    return json(response);
+  };
+
+  const first = await saveCredential("smoke A", "token-aaaaaaaa");
+  const second = await saveCredential("smoke B", "token-bbbbbbbb");
+  const configBody = {
+    enabled: false,
+    ca: "letsencrypt",
+    email: "smoke@example.com",
+    domains: ["example.com"],
+    provider: "cloudflare",
+    credentialId: first.id,
+    renewBeforeDays: 30,
+    useStaging: true,
+    acceptTerms: true,
+  };
+  let selected = await putJson("/api/settings/acme", configBody, cookie);
+  check(selected.status === 200, "select credential A", `${selected.status}`);
+  let selectedBody = await json(selected);
+  check(selectedBody.credentialId === first.id, "config remembers credential A");
+  check(selectedBody.credentials.length >= 2, "multiple credential profiles are listed");
+  check(selectedBody.maskedDns.apiToken.endsWith("aaaa"), "credential A is masked");
+
+  configBody.credentialId = second.id;
+  selected = await putJson("/api/settings/acme", configBody, cookie);
+  check(selected.status === 200, "select credential B", `${selected.status}`);
+  selectedBody = await json(selected);
+  check(selectedBody.credentialId === second.id, "config remembers credential B");
+  check(selectedBody.maskedDns.apiToken.endsWith("bbbb"), "credential B is masked");
+} else {
+  console.log("skip: credential-profile selection requires HTTPS; rerun with HDSL_SMOKE_HTTPS=true");
+}
 
 const chatPrivate = crypto.getRandomValues(new Uint8Array(32));
 const chatPublic = x25519.getPublicKey(chatPrivate);
