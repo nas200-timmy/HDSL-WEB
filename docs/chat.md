@@ -458,6 +458,13 @@ record ModelCapabilities(
 - `reasoning=true` 时折叠显示思考；不要在下一轮无条件回传 reasoning。
 - `tools` 只做字段，v1 不展示工具 UI。
 
+## 9.5 渲染
+
+正文按 Markdown 渲染（GFM + 代码高亮）。公式用 remark-math + rehype-katex：
+`$…$` 与 `$$…$$` 都会渲染，点击已渲染的公式会把原始 TeX 复制到剪贴板
+（KaTeX 的 MathML `<annotation>` 就是源）。legacy 表面由同一套管线在服务端
+预渲染，样式与字体随 jar 发布。
+
 ## 10. 后端接口
 
 > 分叉：`POST /api/chat/sessions/{id}/fork`，body `{assistantId?, title?}`。

@@ -20,6 +20,9 @@ web/dist-ssr/
 # 构建产物：由 web/dist-ssr 经 syncWebLegacySsr 生成（legacy 表面的服务端 markdown 渲染器）
 /src/main/resources/web-legacy/ssr/
 
+# 构建产物：KaTeX 样式与字体（node_modules → jar）
+/src/main/resources/web-legacy/katex/
+
 # Gradle home (local cache, not source)
 .ghome/
 

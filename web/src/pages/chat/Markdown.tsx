@@ -1,11 +1,14 @@
-import { memo, useState, type ReactNode } from "react";
+import { memo, useState, type MouseEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import rehypeHighlight from "rehype-highlight";
+import rehypeKatex from "rehype-katex";
+import remarkMath from "remark-math";
 import { ContentCopyIcon, DownloadIcon } from "../../components/icons";
 import type { ChatSearchHit } from "../../types";
 import { hastText, languageOf, prepareText, sanitizeSchema } from "./markdown-schema";
+import { toast } from "../../store";
 
 function stripAnsi(text: string): string {
   return text.replace(/\u001b\[[0-9;]*m/g, "");
@@ -78,11 +81,24 @@ function MarkdownImpl({ content, streaming, citations, sources }: {
   sources?: ChatSearchHit[];
 }) {
   const text = prepareText(content ?? "", { streaming, citations, sources });
+  // Clicking a formula copies its TeX source: KaTeX renders MathML with an
+  // `application/x-tex` annotation, which selection/copy alone does not expose.
+  const onMathClick = (event: MouseEvent<HTMLDivElement>) => {
+    const formula = (event.target as HTMLElement).closest(".katex");
+    if (!formula) return;
+    const annotation = formula.querySelector('annotation[encoding="application/x-tex"]');
+    const tex = annotation?.textContent?.trim();
+    if (!tex) return;
+    void navigator.clipboard.writeText(tex).then(
+      () => toast("success", "已复制公式 TeX"),
+      () => undefined,
+    );
+  };
   return (
-    <div className="chat-markdown">
+    <div className="chat-markdown" onClick={onMathClick}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[[rehypeSanitize, sanitizeSchema] as any, rehypeHighlight]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[[rehypeSanitize, sanitizeSchema] as any, [rehypeKatex, { throwOnError: false }] as any, rehypeHighlight]}
         components={{
           pre: ({ node, children }) => <CodeBlock node={node}>{children}</CodeBlock>,
           a: ({ href, children }) => (

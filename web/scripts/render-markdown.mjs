@@ -17,6 +17,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import rehypeHighlight from "rehype-highlight";
+import rehypeKatex from "rehype-katex";
+import remarkMath from "remark-math";
 import { hastText, languageOf, prepareText, sanitizeSchema } from "../src/pages/chat/markdown-schema";
 
 function CodeBlock({ node, children }) {
@@ -78,8 +80,8 @@ readStdin()
         React.createElement(
           ReactMarkdown,
           {
-            remarkPlugins: [remarkGfm],
-            rehypePlugins: [[rehypeSanitize, sanitizeSchema], rehypeHighlight],
+            remarkPlugins: [remarkGfm, remarkMath],
+            rehypePlugins: [[rehypeSanitize, sanitizeSchema], [rehypeKatex, { throwOnError: false }], rehypeHighlight],
             components: {
               pre: ({ node, children }) => React.createElement(CodeBlock, { node }, children),
               a: ({ href, children }) =>

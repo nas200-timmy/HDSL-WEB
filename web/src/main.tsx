@@ -12,6 +12,7 @@ import "./styles/layout.css";
 import "./styles/transcode.css";
 import "./styles/chat.css";
 import "./styles/mobile.css";
+import "katex/dist/katex.min.css";
 
 // Monet 主题：启动时用种子 #5C6BC0 生成亮/暗两套 --monet-* 变量（FIDELITY · Spec 2025）
 initTheme();

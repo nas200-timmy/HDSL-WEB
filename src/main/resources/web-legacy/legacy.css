@@ -97,6 +97,11 @@ a { color: #0b57d0; }
   font-size: .9rem;
 }
 .toolbar a:hover { background: #dce7f5; }
+.toolbar form { display: inline; }
+.toolbar input[type="submit"] {
+  padding: 3px 10px;
+  font-size: .9rem;
+}
 
 /* data tables as cards */
 table:not(.shell) {

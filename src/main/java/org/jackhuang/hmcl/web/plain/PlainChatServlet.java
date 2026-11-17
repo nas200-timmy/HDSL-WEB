@@ -99,7 +99,7 @@ public final class PlainChatServlet extends HttpServlet {
     /// XHR to this origin, forms to this origin, and nothing else.
     private static final String CSP_ENHANCED =
             "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self';"
-                    + " connect-src 'self'; form-action 'self'; base-uri 'none'";
+                    + " font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'";
 
     /// The wallpaper the SPA wears by default (`DEFAULT_WALLPAPER` in
     /// `web/src/wallpaper.ts`), served statically from the jar. The legacy
@@ -183,6 +183,15 @@ public final class PlainChatServlet extends HttpServlet {
         }
         if ("/legacy.css".equals(path) && !post) {
             staticResource(response, "/web-legacy/legacy.css", "text/css; charset=UTF-8");
+            return;
+        }
+        if (path.startsWith("/katex/") && !post) {
+            String tail = path.substring("/katex/".length());
+            if (!tail.matches("[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*")) {
+                error(response, 404, "这个地址不存在");
+                return;
+            }
+            staticResource(response, "/web-legacy/katex/" + tail, katexContentType(tail));
             return;
         }
         if ("/login".equals(path)) {
@@ -301,6 +310,22 @@ public final class PlainChatServlet extends HttpServlet {
                     return;
                 }
                 sessionPage(request, response, sessionId);
+                return;
+            }
+            if ("/fork".equals(action)) {
+                if (!post) {
+                    methodNotAllowed(response, "POST");
+                    return;
+                }
+                if (!sameOrigin(request)) {
+                    error(response, 403, "跨站表单被拒绝");
+                    return;
+                }
+                if (!chatGate(request, response, url("/plain/s/" + sessionId))) {
+                    return;
+                }
+                JsonObject forked = requireChat().forkSession(sessionId, new JsonObject());
+                redirect(response, url("/plain/s/" + string(forked, "id")));
                 return;
             }
             if ("/send".equals(action)) {
@@ -434,6 +459,10 @@ public final class PlainChatServlet extends HttpServlet {
                         ? "<a href=\"" + url("/plain/s/" + sessionId) + "\">关闭自动刷新</a>"
                         : "<a href=\"" + url("/plain/s/" + sessionId) + "?auto=1\">自动刷新（"
                         + AUTO_REFRESH_SECONDS + " 秒）</a>")
+                .append(" · <a href=\"").append(url("/api/chat/sessions/" + sessionId + "/export"))
+                .append("\">导出</a>")
+                .append(" · <form method=\"post\" action=\"").append(url("/plain/s/" + sessionId + "/fork"))
+                .append("\"><input type=\"submit\" value=\"分叉\"></form>")
                 .append("</div>\n");
 
         content.append("<h1>").append(PlainHtml.escape(string(session, "title"))).append("</h1>\n");
@@ -1008,6 +1037,8 @@ public final class PlainChatServlet extends HttpServlet {
         // like the panel. The wallpaper rides along as an inline style because its
         // URL carries the mount point.
         String head = "<link rel=\"stylesheet\" href=\"" + url("/plain/legacy.css") + "\">\n"
+                + (on ? "<link rel=\"stylesheet\" href=\"" + url("/plain/katex/katex.min.css")
+                        + "\">\n" : "")
                 + "<style>body{background-color:#202a36;background-image:url('"
                 + url(WALLPAPER_PATH) + "');background-position:center center;"
                 + "background-size:cover;background-attachment:fixed;"
@@ -1039,6 +1070,22 @@ public final class PlainChatServlet extends HttpServlet {
     /// fallback; the operator flips it in 设置 → 通用 (`plain.enhanced`).
     private boolean enhancedLegacy() {
         return config.plain.enhanced;
+    }
+
+    private static String katexContentType(String tail) {
+        if (tail.endsWith(".css")) {
+            return "text/css; charset=UTF-8";
+        }
+        if (tail.endsWith(".woff2")) {
+            return "font/woff2";
+        }
+        if (tail.endsWith(".woff")) {
+            return "font/woff";
+        }
+        if (tail.endsWith(".ttf")) {
+            return "font/ttf";
+        }
+        return "application/octet-stream";
     }
 
     private void staticResource(HttpServletResponse response, String resource, String contentType)

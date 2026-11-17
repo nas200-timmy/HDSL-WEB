@@ -235,6 +235,16 @@ val syncWebDist by tasks.registering(Sync::class) {
 // is bundled next to the SPA. Its absence is not fatal the way a missing dist is:
 // MarkdownSsr falls back to escaped <pre> when the bundle or Node is gone, so no
 // sentinel task guards it.
+// KaTeX 的样式与字体跟着 legacy 表面走：IE11 用 woff、现代浏览器用 woff2，
+// 都是 jar 里的静态资源，服务端预渲染出来的公式不需要任何脚本。
+val syncKatexAssets by tasks.registering(Sync::class) {
+    dependsOn(buildWeb)
+    val katex = webDir.dir("node_modules/katex/dist")
+    from(katex.file("katex.min.css"))
+    from(katex.dir("fonts")) { into("fonts") }
+    into(layout.projectDirectory.dir("src/main/resources/web-legacy/katex"))
+}
+
 val syncWebLegacySsr by tasks.registering(Sync::class) {
     dependsOn(buildWeb)
     from(webDir.dir("dist-ssr"))
@@ -242,7 +252,7 @@ val syncWebLegacySsr by tasks.registering(Sync::class) {
 }
 
 tasks.named<ProcessResources>("processResources") {
-    dependsOn(syncWebDist, syncWebLegacySsr)
+    dependsOn(syncWebDist, syncWebLegacySsr, syncKatexAssets)
     // 发行物要自带许可证与声明：GPLv3 §4/§5 要求随二进制一并传递许可证并保留声明，
     // HMCL 的附加条款（§7(b)）要求保留其版权与修改声明。依赖的 META-INF 里只有
     // 各自的 licence，没有本项目这一份，所以从仓库根显式带进 jar。
