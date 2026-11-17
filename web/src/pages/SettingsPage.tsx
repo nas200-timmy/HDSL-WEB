@@ -36,6 +36,7 @@ import {
 } from "../components/icons";
 import { SubSideBar } from "../components/SideBar";
 import { McJavaRuntimeCard } from "../components/McJavaRuntimeCard";
+import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { I18N } from "../i18n";
 import { logout, setState, toast, useAppState } from "../store";
 import { bindSystemThemeListener, DEFAULT_SEED, resetSeed, setSeed, setThemeMode, useThemeMode, useThemeSeed, type ThemeMode } from "../theme";
@@ -50,6 +51,7 @@ import {
 import type {
   AgentGrantRow,
   AgentPasswordStatus,
+  AcmeSettings,
   DeveloperGuardScope,
   DeveloperStatus,
   DoctorCheck,
@@ -1892,6 +1894,7 @@ function TlsTab() {
           </>
         ) : null}
       </div>
+      <AcmeCard />
       <ConfirmDialog
         open={selfSignedConfirmOpen}
         title="生成并使用自签名证书？"
@@ -1919,6 +1922,401 @@ function TlsTab() {
         onConfirm={() => void doSelfSigned()}
       />
     </>
+  );
+}
+
+/* ---------------- ACME 自动证书 ---------------- */
+
+const ACME_STATE_LABEL: Record<string, string> = {
+  disabled: "未启用",
+  idle: "等待检查",
+  issuing: "正在签发",
+  active: "已生效",
+  error: "签发失败",
+};
+
+async function withElevation<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (e) {
+    if (!isElevationRequired(e)) throw e;
+    if (!(await requestDeveloperPassword())) throw e;
+    return await call();
+  }
+}
+
+function AcmeCard() {
+  const [settings, setSettings] = useState<AcmeSettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [ca, setCa] = useState("letsencrypt");
+  const [directoryUrl, setDirectoryUrl] = useState("");
+  const [email, setEmail] = useState("");
+  const [domains, setDomains] = useState("");
+  const [provider, setProvider] = useState("cloudflare");
+  const [renewBeforeDays, setRenewBeforeDays] = useState(30);
+  const [useStaging, setUseStaging] = useState(false);
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [dns, setDns] = useState<Record<string, string>>({});
+  const [eabKid, setEabKid] = useState("");
+  const [eabHmac, setEabHmac] = useState("");
+  const [panelPassword, setPanelPassword] = useState("");
+  const [issueConfirm, setIssueConfirm] = useState(false);
+
+  const apply = (value: AcmeSettings) => {
+    setSettings(value);
+    setEnabled(value.enabled);
+    setCa(value.ca);
+    setDirectoryUrl(value.directoryUrl ?? "");
+    setEmail(value.email ?? "");
+    setDomains((value.domains ?? []).join("\n"));
+    setProvider(value.provider);
+    setRenewBeforeDays(value.renewBeforeDays);
+    setUseStaging(value.useStaging);
+    setAcceptTerms(value.acceptTerms);
+    setDns({});
+    setEabKid("");
+    setEabHmac("");
+  };
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      apply(await api.getAcme());
+    } catch (e) {
+      setError(isNotImplemented(e) ? "后端尚未支持 ACME 设置" : errMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  // Issuance is asynchronous (DNS-01 can take minutes); poll while it runs.
+  useEffect(() => {
+    if (settings?.status?.state !== "issuing") return;
+    const timer = window.setInterval(() => void load(), 4000);
+    return () => window.clearInterval(timer);
+  }, [settings?.status?.state]);
+
+  const caInfo = settings?.cas.find((item) => item.id === ca);
+  const providerInfo = settings?.providers.find((item) => item.id === provider);
+  const implementedProviders = (settings?.providers ?? []).filter((item) => item.implemented);
+  const providerGroups = [...new Set(implementedProviders.map((item) => item.group))];
+
+  const doSave = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const next = await withElevation(() => api.saveAcme({
+        enabled,
+        ca,
+        directoryUrl,
+        email,
+        domains: domains.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
+        provider,
+        renewBeforeDays,
+        useStaging,
+        acceptTerms,
+      }));
+      apply(next);
+      toast("success", "ACME 配置已保存");
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doSaveCredentials = async () => {
+    if (!panelPassword) {
+      setError("保存 DNS 凭证需要输入面板密码");
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      await withElevation(() => api.saveAcmeCredentials({
+        provider,
+        dns,
+        eab: caInfo?.requiresEab || eabKid || eabHmac
+          ? { kid: eabKid, hmacKey: eabHmac }
+          : undefined,
+        panelPassword,
+      }));
+      setPanelPassword("");
+      toast("success", "DNS 凭证已保存");
+      await load();
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doIssue = async () => {
+    setIssueConfirm(false);
+    setError(null);
+    setBusy(true);
+    try {
+      const result = await withElevation(() => api.issueAcme());
+      if (result.state === "issuing") {
+        toast("info", "已开始签发；页面会自动刷新状态");
+      } else if (!result.ok) {
+        setError(result.lastError ?? "签发失败");
+        toast("error", "证书签发失败");
+      } else {
+        toast("success", "ACME 证书已更新");
+      }
+      await load();
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doDisable = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      apply(await withElevation(() => api.disableAcme()));
+      toast("info", "已停止 ACME 自动续期；当前证书保留");
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doClearCredentials = async () => {
+    if (!panelPassword) {
+      setError("清除 DNS 凭证需要输入面板密码");
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      await withElevation(() => api.clearAcmeCredentials(panelPassword));
+      setPanelPassword("");
+      toast("success", "DNS 凭证已清除");
+      await load();
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="section-caption">
+        <KeepIcon size={16} />
+        ACME 自动证书
+      </div>
+      <div className="card">
+        {loading && !settings ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 12 }}>
+            <span className="spinner" />
+            <span>正在读取 ACME 状态…</span>
+          </div>
+        ) : !settings ? (
+          <div style={{ padding: 12, color: "var(--monet-error)" }}>{error ?? "ACME 设置不可用"}</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+              ACME 配置需要 HTTPS（或可信反代 + <code>trust_forwarded_proto</code>）。
+              如果面板还在 HTTP，请先启用自签名证书，或用 SSH 隧道访问 localhost。
+            </div>
+            {!settings.available && (
+              <div style={{ padding: "8px 12px", border: "1px solid var(--monet-error)", borderRadius: 4, color: "var(--monet-error)", fontSize: 12 }}>
+                ACME 服务未初始化：检查数据目录权限，或查看面板日志。
+              </div>
+            )}
+            <div className="comp-row">
+              <span className="comp-label">状态</span>
+              <span className="comp-value">
+                <span className={`tag ${settings.status?.state === "active" ? "running" : settings.status?.state === "error" ? "warn" : "plain"}`}>
+                  {ACME_STATE_LABEL[settings.status?.state ?? "disabled"] ?? settings.status?.state ?? "未启用"}
+                </span>
+                {settings.status?.source && <span style={{ fontSize: 12 }}>来源 {settings.status.source}</span>}
+              </span>
+            </div>
+            {settings.status?.expires && (
+              <div className="comp-row">
+                <span className="comp-label">证书到期</span>
+                <span className="comp-value">{formatDateTime(settings.status.expires)}</span>
+              </div>
+            )}
+            {settings.status?.nextAttempt && (
+              <div className="comp-row">
+                <span className="comp-label">下次检查</span>
+                <span className="comp-value">{formatDateTime(settings.status.nextAttempt)}</span>
+              </div>
+            )}
+            {settings.status?.lastError && (
+              <div className="form-error">上次失败：{settings.status.lastError}</div>
+            )}
+
+            <label className="input-check">
+              <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
+              <span>启用 ACME 自动签发与续期</span>
+            </label>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <div className="form-row" style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
+                <span className="form-label">证书颁发机构（CA）</span>
+                <select className="input" value={ca} onChange={(e) => setCa(e.target.value)} disabled={busy}>
+                  {(settings.cas ?? []).map((item) => (
+                    <option key={item.id} value={item.id}>{item.displayName}</option>
+                  ))}
+                </select>
+                {caInfo?.rootHint && <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>{caInfo.rootHint}</span>}
+              </div>
+              <div className="form-row" style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
+                <span className="form-label">DNS 厂商</span>
+                <select
+                  className="input"
+                  value={provider}
+                  onChange={(e) => { setProvider(e.target.value); setDns({}); }}
+                  disabled={busy}
+                >
+                  {providerGroups.map((group) => (
+                    <optgroup key={group} label={group}>
+                      {implementedProviders.filter((item) => item.group === group).map((item) => (
+                        <option key={item.id} value={item.id}>{item.label}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {caInfo?.custom && (
+              <div className="form-row" style={{ marginBottom: 0 }}>
+                <span className="form-label">自定义 ACME 目录 URL</span>
+                <input className="input" value={directoryUrl} onChange={(e) => setDirectoryUrl(e.target.value)} placeholder="https://acme.example.com/directory" disabled={busy} />
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <div className="form-row" style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
+                <span className="form-label">邮箱</span>
+                <input className="input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ops@example.com" disabled={busy} />
+              </div>
+              <div className="form-row" style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
+                <span className="form-label">到期前多少天续期</span>
+                <input className="input" type="number" min={7} max={60} value={renewBeforeDays} onChange={(e) => setRenewBeforeDays(Number(e.target.value) || 30)} disabled={busy} />
+              </div>
+            </div>
+
+            <div className="form-row" style={{ marginBottom: 0 }}>
+              <span className="form-label">域名（每行一个，支持 *.example.com）</span>
+              <textarea className="input" rows={3} value={domains} onChange={(e) => setDomains(e.target.value)} placeholder={"example.com\n*.example.com"} disabled={busy} />
+            </div>
+
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+              <label className="input-check">
+                <input type="checkbox" checked={useStaging} onChange={(e) => setUseStaging(e.target.checked)} disabled={busy} />
+                <span>使用 staging（测试，浏览器不信任）</span>
+              </label>
+              <label className="input-check">
+                <input type="checkbox" checked={acceptTerms} onChange={(e) => setAcceptTerms(e.target.checked)} disabled={busy} />
+                <span>
+                  同意 CA 条款
+                  {caInfo?.termsUrl && <a href={caInfo.termsUrl} target="_blank" rel="noreferrer" style={{ marginLeft: 4 }}>条款</a>}
+                </span>
+              </label>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btn btn-raised ripple-host" disabled={busy} onClick={() => void doSave()}>
+                {busy ? "保存中…" : "保存配置"}
+              </button>
+              <button className="btn btn-outline ripple-host" disabled={busy || !enabled} onClick={() => setIssueConfirm(true)}>
+                强制刷新证书
+              </button>
+              <button className="btn btn-outline ripple-host" disabled={busy || !enabled} onClick={() => void doDisable()}>
+                停止自动续期
+              </button>
+            </div>
+
+            <div style={{ borderTop: "1px solid var(--monet-outline-variant)", paddingTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                DNS 凭证 {settings.credentialConfigured ? `已配置（${settings.credentialProvider ?? "未知 provider"}）` : "未配置"}；
+                凭证只写不读，留空的字段会保留原值。
+                {caInfo?.requiresEab && ` ${settings.eabConfigured ? "EAB 已配置。" : "该 CA 需要 EAB。"}`}
+              </div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {(providerInfo?.fields ?? []).map((field) => (
+                  <div className="form-row" key={field.key} style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
+                    <span className="form-label">{field.label}{field.required ? " *" : ""}</span>
+                    <input
+                      className="input"
+                      type={field.secret ? "password" : "text"}
+                      value={dns[field.key] ?? ""}
+                      onChange={(e) => setDns((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                      placeholder={settings.credentialConfigured ? "留空保留已保存值" : ""}
+                      autoComplete="off"
+                      disabled={busy}
+                    />
+                  </div>
+                ))}
+              </div>
+              {caInfo?.requiresEab && (
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
+                    <span className="form-label">EAB Key ID</span>
+                    <input className="input" value={eabKid} onChange={(e) => setEabKid(e.target.value)} placeholder="留空保留已保存值" autoComplete="off" disabled={busy} />
+                  </div>
+                  <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
+                    <span className="form-label">EAB HMAC Key</span>
+                    <input className="input" type="password" value={eabHmac} onChange={(e) => setEabHmac(e.target.value)} placeholder="留空保留已保存值" autoComplete="off" disabled={busy} />
+                  </div>
+                </div>
+              )}
+              <div className="form-row" style={{ marginBottom: 0 }}>
+                <span className="form-label">面板密码（保存/清除 DNS 凭证时确认）</span>
+                <input className="input" type="password" value={panelPassword} onChange={(e) => setPanelPassword(e.target.value)} autoComplete="off" disabled={busy} />
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="btn btn-raised ripple-host" disabled={busy} onClick={() => void doSaveCredentials()}>
+                  保存 DNS 凭证
+                </button>
+                <button className="btn btn-outline ripple-host" disabled={busy || !settings.credentialConfigured} onClick={() => void doClearCredentials()}>
+                  清除 DNS 凭证
+                </button>
+              </div>
+            </div>
+            {error && <div className="form-error">{error}</div>}
+          </div>
+        )}
+      </div>
+      <ConfirmDialog
+        open={issueConfirm}
+        title="强制刷新 ACME 证书？"
+        busy={busy}
+        confirmLabel={busy ? "签发中…" : "立即签发"}
+        cancelLabel="取消"
+        message={
+          <div style={{ lineHeight: 1.7 }}>
+            <p>会立即向 CA 发起一次签发请求，不等待到期窗口。</p>
+            <ul style={{ paddingLeft: 18, margin: "8px 0" }}>
+              <li>请确认 DNS 凭证和域名已经保存；</li>
+              <li>Let's Encrypt 有速率限制，频繁强制刷新可能被临时拒绝；</li>
+              <li>失败会保留当前证书。</li>
+            </ul>
+          </div>
+        }
+        onCancel={() => { if (!busy) setIssueConfirm(false); }}
+        onConfirm={() => void doIssue()}
+      />
+    </div>
   );
 }
 

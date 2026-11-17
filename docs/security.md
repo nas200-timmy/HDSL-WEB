@@ -243,6 +243,12 @@ SMB/NFS export、某些 Windows 共享卷同样如此）会把**共享属主**�
   额度按机器给、能撤销能轮换"来用。
 - **实例之间互相可写**（同 uid 1000）。
 - **Windows 没有 POSIX 0600 语义**：凭据文件可能被同机其他账户读到，按单用户机器对待。
+- **IE11 / 老浏览器 + 裸 HTTP：不提供应用层加密，也不打算补。** IE11 没有现代
+  WebCrypto/ECDHE/ChaCha20 那套（`msCrypto` 只有随机数，没有 `subtle`），裸 HTTP 下既没有
+  TLS 也没有可用的应用层通道；`/plain` 只是无 JS 表面，不是加密方案。IE11 本身并非不能走
+  TLS（Win7 上要启用 TLS 1.2），但**裸 HTTP 下没有任何传输安全**。w3m/lynx 只要链接的是
+  OpenSSL/GnuTLS 的 HTTPS 就没问题；裸 HTTP 一样是明文。这个边界不补：坚持这种组合，等于
+  主动把登录态、聊天内容和操作交给链路上的任何人。请用 HTTPS、SSH 隧道或 Tailscale。
 - **没有独立的 CSRF token**：靠 `SameSite=Strict` + 写接口只收 JSON 请求体两层。够用，但不是
   硬保证。
 - **实例 token 在 URL 里**（`/i/<id>/?token=…`）：会出现在浏览器历史、某些反代访问日志里；

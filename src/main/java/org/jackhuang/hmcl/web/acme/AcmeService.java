@@ -141,7 +141,29 @@ public final class AcmeService implements AutoCloseable {
         if (!config.https.acme.enabled || !started.compareAndSet(false, true)) {
             return;
         }
+        synchronized (lock) {
+            if (state == State.DISABLED) {
+                state = State.IDLE;
+            }
+        }
         scheduler.schedule(this::safeCheck, INITIAL_DELAY.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /// Stops future scheduling and reports the disabled state immediately, so
+    /// the settings page does not keep showing the last ACTIVE snapshot.
+    public void disable() {
+        stop();
+        synchronized (lock) {
+            state = State.DISABLED;
+            lastError = null;
+            nextAttempt = null;
+        }
+    }
+
+    /// Stops future scheduling. A pending one-shot may still run; it sees the
+    /// disabled switch and does not schedule another.
+    public void stop() {
+        started.set(false);
     }
 
     /// The current state, including the live certificate's expiry.
@@ -154,6 +176,40 @@ public final class AcmeService implements AutoCloseable {
                     List.copyOf(config.https.acme.domains),
                     config.https.acme.ca,
                     config.https.acme.provider);
+        }
+    }
+
+    /// The credential store, for the settings endpoint. Never expose its
+    /// contents through the API.
+    public AcmeCredentialStore credentials() {
+        return credentials;
+    }
+
+    /// Starts an issuance in the background and returns the current status.
+    /// The settings page uses this for "立即签发": the HTTP request must not
+    /// sit on a DNS-01 challenge for minutes.
+    public Status requestIssue() {
+        synchronized (lock) {
+            if (!config.https.acme.enabled) {
+                state = State.DISABLED;
+                return status();
+            }
+            if (state == State.ISSUING) {
+                return status();
+            }
+            state = State.ISSUING;
+            lastAttempt = Instant.now();
+            lastError = null;
+            scheduler.execute(() -> {
+                try {
+                    synchronized (lock) {
+                        issueLocked(Instant.now());
+                    }
+                } finally {
+                    scheduleNext();
+                }
+            });
+            return status();
         }
     }
 

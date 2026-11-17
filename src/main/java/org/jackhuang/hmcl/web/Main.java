@@ -181,49 +181,48 @@ public final class Main {
             HdslServer server = HdslServer.build(config, auth, certificates, Logger.LOG);
 
             AcmeService acme = null;
-            if (config.https.acme.enabled) {
-                try {
-                    AcmeCredentialStore acmeCredentials = AcmeCredentialStore.open(config.dataDir);
-                    acme = new AcmeService(config, acmeCredentials,
-                            new Acme4jClient(Logger.LOG), new DnsTxtResolver(),
-                            new AcmeService.CertificateSink() {
-                                @Override
-                                public CertificateManager.Source source() {
-                                    return certificates.getSource();
-                                }
+            try {
+                AcmeCredentialStore acmeCredentials = AcmeCredentialStore.open(config.dataDir);
+                acme = new AcmeService(config, acmeCredentials,
+                        new Acme4jClient(Logger.LOG), new DnsTxtResolver(),
+                        new AcmeService.CertificateSink() {
+                            @Override
+                            public CertificateManager.Source source() {
+                                return certificates.getSource();
+                            }
 
-                                @Override
-                                public CertificateManager.Info info() {
-                                    return certificates.info();
-                                }
+                            @Override
+                            public CertificateManager.Info info() {
+                                return certificates.info();
+                            }
 
-                                @Override
-                                public void install(java.nio.file.Path certPem, java.nio.file.Path keyPem)
-                                        throws Exception {
-                                    certificates.installManaged(certPem, keyPem);
-                                }
+                            @Override
+                            public void install(java.nio.file.Path certPem, java.nio.file.Path keyPem)
+                                    throws Exception {
+                                certificates.installManaged(certPem, keyPem);
+                            }
 
-                                @Override
-                                public void reload() throws Exception {
-                                    HdslServer.TlsSwitch result = server.tlsActive()
-                                            ? server.reloadTls(certificates)
-                                            : server.enableTls(certificates);
-                                    if (!result.ok()) {
-                                        throw new IOException(result.error() == null
-                                                ? "TLS reload failed" : result.error());
-                                    }
+                            @Override
+                            public void reload() throws Exception {
+                                HdslServer.TlsSwitch result = server.tlsActive()
+                                        ? server.reloadTls(certificates)
+                                        : server.enableTls(certificates);
+                                if (!result.ok()) {
+                                    throw new IOException(result.error() == null
+                                            ? "TLS reload failed" : result.error());
                                 }
+                            }
 
-                                @Override
-                                public boolean tlsActive() {
-                                    return server.tlsActive();
-                                }
-                            }, Logger.LOG);
-                } catch (IOException e) {
-                    Logger.LOG.warning("ACME is enabled but its credential store cannot be opened; "
-                            + "automatic certificate management is off", e);
-                }
+                            @Override
+                            public boolean tlsActive() {
+                                return server.tlsActive();
+                            }
+                        }, Logger.LOG);
+            } catch (IOException e) {
+                Logger.LOG.warning("ACME credential store cannot be opened; "
+                        + "the settings page will report ACME unavailable", e);
             }
+            server.setAcmeService(acme);
 
             server.start();
             if (acme != null) {

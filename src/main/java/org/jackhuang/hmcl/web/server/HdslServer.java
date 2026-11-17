@@ -61,6 +61,7 @@ import org.jackhuang.hmcl.web.http.PacksApiServlet;
 import org.jackhuang.hmcl.web.http.PlainSettingsApiServlet;
 import org.jackhuang.hmcl.web.http.PluginsApiServlet;
 import org.jackhuang.hmcl.web.http.LogRetentionApiServlet;
+import org.jackhuang.hmcl.web.http.AcmeApiServlet;
 import org.jackhuang.hmcl.web.http.RegistrySettingsApiServlet;
 import org.jackhuang.hmcl.web.http.StaticServlet;
 import org.jackhuang.hmcl.web.http.TasksApiServlet;
@@ -77,6 +78,7 @@ import org.jackhuang.hmcl.web.brand.BrandApiServlet;
 import org.jackhuang.hmcl.web.brand.BrandCatalog;
 import org.jackhuang.hmcl.web.chat.ChatApiServlet;
 import org.jackhuang.hmcl.web.chat.ChatModule;
+import org.jackhuang.hmcl.web.acme.AcmeService;
 import org.jackhuang.hmcl.web.plain.MarkdownSsr;
 import org.jackhuang.hmcl.web.plain.PlainChatServlet;
 import org.jackhuang.hmcl.web.zcode.ZcodeApiServlet;
@@ -137,6 +139,10 @@ public final class HdslServer {
     /// missing native library). Chat is the only feature whose storage is a
     /// native dependency; a panel that cannot chat must still boot.
     private final @Nullable ChatModule chat;
+    /// ACME issuance/renewal; set by `Main` after the server is built, before
+    /// `start()`, so the settings servlet and the renewal loop share one
+    /// instance. Null when the credential store could not be opened.
+    private volatile @Nullable AcmeService acmeService;
     /// The machine's own readings (docs/web-shell.md §通用 → 系统资源). One
     /// sampler for every viewer; it runs in two gears and never faster than a
     /// second.
@@ -445,6 +451,21 @@ public final class HdslServer {
         // `/api/settings/*` holder below is TLS, and Jetty matches the longest path spec.
         context.addServlet(new ServletHolder(new BrandSettingsApiServlet(
                 config, developerElevation, authService, tlsActive)), "/api/settings/brands/*");
+        // ACME settings: longer prefix than `/api/settings/*`, so this wins.
+        // The service is set by Main after build; before that mutations answer
+        // 503 rather than pretending ACME is available. Both the exact path
+        // and the sub-tree are mapped: `/api/settings/acme` (no slash) is what
+        // the SPA calls, while the sub-resources live below it.
+        java.util.function.Supplier<AcmeService> acmeSupplier = () -> {
+            HdslServer live = self.get();
+            return live == null ? null : live.getAcmeService();
+        };
+        context.addServlet(new ServletHolder(new AcmeApiServlet(
+                config, acmeSupplier, authService, developerElevation, tlsActive)),
+                "/api/settings/acme");
+        context.addServlet(new ServletHolder(new AcmeApiServlet(
+                config, acmeSupplier, authService, developerElevation, tlsActive)),
+                "/api/settings/acme/*");
         ServletHolder tlsHolder = new ServletHolder(new TlsApiServlet(config, certificates, self::get));
         tlsHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(tlsHolder, "/api/settings/*");
@@ -793,6 +814,16 @@ public final class HdslServer {
     /// hot-reload via `SslContextFactory.reload(...)`; empty when HTTP only.
     public Optional<SslContextFactory.Server> getSslContextFactory() {
         return Optional.ofNullable(sslContextFactory);
+    }
+
+    /// Wires the ACME service after `Main` has built it. Called before
+    /// `start()`, so the settings servlet never races an absent service.
+    public void setAcmeService(@Nullable AcmeService acmeService) {
+        this.acmeService = acmeService;
+    }
+
+    public @Nullable AcmeService getAcmeService() {
+        return acmeService;
     }
 
     /// The registry of running terminals — one per instance, and the panel is

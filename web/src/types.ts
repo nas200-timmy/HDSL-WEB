@@ -269,6 +269,69 @@ export interface TlsUploadResult {
   error?: string;
 }
 
+// ---------- ACME ----------
+
+export interface AcmeCaInfo {
+  id: string;
+  displayName: string;
+  requiresEab: boolean;
+  supportsWildcard: boolean;
+  termsUrl: string;
+  rootHint: string;
+  custom: boolean;
+}
+
+export interface AcmeProviderField {
+  key: string;
+  label: string;
+  secret: boolean;
+  required: boolean;
+}
+
+export interface AcmeProviderInfo {
+  id: string;
+  label: string;
+  group: string;
+  implemented: boolean;
+  fields: AcmeProviderField[];
+}
+
+export interface AcmeStatus {
+  state: string;
+  lastError: string | null;
+  lastAttempt: string | null;
+  nextAttempt: string | null;
+  expires: string | null;
+  source: string | null;
+}
+
+export interface AcmeSettings {
+  available: boolean;
+  enabled: boolean;
+  ca: string;
+  directoryUrl: string;
+  email: string;
+  domains: string[];
+  provider: string;
+  renewBeforeDays: number;
+  useStaging: boolean;
+  acceptTerms: boolean;
+  cas: AcmeCaInfo[];
+  providers: AcmeProviderInfo[];
+  credentialConfigured: boolean;
+  eabConfigured: boolean;
+  credentialProvider: string | null;
+  credentialsUpdatedAt: string | null;
+  status?: AcmeStatus;
+}
+
+export interface AcmeCredentialInput {
+  provider: string;
+  dns: Record<string, string>;
+  eab?: Record<string, string>;
+  panelPassword: string;
+}
+
 // ---------- Phase 3：下载源（npm registry） ----------
 
 /** 服务端下发的下载源预设；界面不硬编码这张表，直接渲染 */

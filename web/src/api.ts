@@ -34,6 +34,8 @@ import type {
   Task,
   TlsSettings,
   TlsUploadResult,
+  AcmeSettings,
+  AcmeCredentialInput,
   TuiPluginItem,
   TuiPluginState,
   VersionInfo,
@@ -439,6 +441,44 @@ export const api = {
       "/api/settings/tls/self-signed",
       { method: "POST" },
     ),
+
+  // ---------- ACME ----------
+
+  getAcme: () => request<AcmeSettings>("/api/settings/acme"),
+
+  saveAcme: (body: {
+    enabled: boolean;
+    ca: string;
+    directoryUrl: string;
+    email: string;
+    domains: string[];
+    provider: string;
+    renewBeforeDays: number;
+    useStaging: boolean;
+    acceptTerms: boolean;
+  }) => request<AcmeSettings>("/api/settings/acme", jsonInit("PUT", body)),
+
+  saveAcmeCredentials: (body: AcmeCredentialInput) =>
+    request<{ ok: boolean; credentialConfigured: boolean; eabConfigured: boolean; provider: string }>(
+      "/api/settings/acme/credentials",
+      jsonInit("PUT", body),
+    ),
+
+  clearAcmeCredentials: (panelPassword: string) =>
+    request<{ ok: boolean; credentialConfigured: boolean; eabConfigured: boolean }>(
+      "/api/settings/acme/credentials",
+      jsonInit("DELETE", { panelPassword }),
+    ),
+
+  issueAcme: () =>
+    request<{ ok: boolean; accepted?: boolean; state: string; lastError?: string | null; expires?: string | null; nextAttempt?: string | null }>(
+      "/api/settings/acme/issue",
+      { method: "POST" },
+      { timeoutMs: 5 * 60 * 1000 },
+    ),
+
+  disableAcme: () =>
+    request<AcmeSettings>("/api/settings/acme/disable", { method: "POST" }),
 
   // ---------- 下载源（npm registry） ----------
 
