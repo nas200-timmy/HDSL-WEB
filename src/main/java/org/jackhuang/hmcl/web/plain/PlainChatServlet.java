@@ -1152,7 +1152,7 @@ public final class PlainChatServlet extends HttpServlet {
             // Login, errors and the too-old notice: HDSL's login card is a compact
             // centred panel, not a full-width content card.
             out.append("<div class=\"shell-single\">");
-            out.append("<table class=\"shell shell-card\" width=\"420\" cellspacing=\"0\" cellpadding=\"0\" align=\"center\"><tr>");
+            out.append("<table class=\"shell shell-card\" width=\"420\" cellspacing=\"0\" cellpadding=\"0\"><tr>");
             out.append("<td class=\"shell-main\">").append(content).append("</td>");
             out.append("</tr></table></div>\n");
             return out.toString();
