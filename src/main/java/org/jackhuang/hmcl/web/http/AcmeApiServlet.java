@@ -63,6 +63,7 @@ public final class AcmeApiServlet extends HttpServlet {
 
     private final ServerConfig config;
     private final Supplier<@Nullable AcmeService> service;
+    private final Supplier<@Nullable AcmeCredentialStore> credentialStore;
     private final AuthService auth;
     private final DeveloperElevation elevation;
     private final BooleanSupplier tlsActive;
@@ -70,14 +71,27 @@ public final class AcmeApiServlet extends HttpServlet {
     private final PasswordCrypto passwordCrypto;
 
     public AcmeApiServlet(ServerConfig config, Supplier<@Nullable AcmeService> service,
+                          Supplier<@Nullable AcmeCredentialStore> credentialStore,
                           AuthService auth, DeveloperElevation elevation,
                           BooleanSupplier tlsActive, PasswordCrypto passwordCrypto) {
         this.config = config;
         this.service = service;
+        this.credentialStore = credentialStore;
         this.auth = auth;
         this.elevation = elevation;
         this.tlsActive = tlsActive;
         this.passwordCrypto = passwordCrypto;
+    }
+
+    /// Credentials live in their own store: the certificate registry needs
+    /// them even when the legacy single-certificate service is not running.
+    private @Nullable AcmeCredentialStore credentials() {
+        AcmeCredentialStore stored = credentialStore.get();
+        if (stored != null) {
+            return stored;
+        }
+        AcmeService live = service.get();
+        return live == null ? null : live.credentials();
     }
 
     @Override
@@ -175,7 +189,7 @@ public final class AcmeApiServlet extends HttpServlet {
         }
         body.add("providers", providers);
 
-        AcmeCredentialStore credentials = live == null ? null : live.credentials();
+        AcmeCredentialStore credentials = credentials();
         AcmeCredentialStore.Credential selected = null;
         if (credentials != null) {
             selected = credentials.find(config.https.acme.credentialId);
@@ -355,13 +369,12 @@ public final class AcmeApiServlet extends HttpServlet {
         if (!requirePanelPassword(request, response, body.get("panelPassword"))) {
             return;
         }
-        AcmeService live = service.get();
-        if (live == null) {
+        AcmeCredentialStore stored = credentials();
+        if (stored == null) {
             Json.error(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
-                    "ACME service is not available; check the data directory permissions");
+                    "ACME credential store is not available; check the data directory permissions");
             return;
         }
-        AcmeCredentialStore stored = live.credentials();
         String id = string(body, "id", "");
         AcmeCredentialStore.Credential existing = stored.find(id);
         if (!id.isBlank() && existing == null) {
@@ -419,7 +432,7 @@ public final class AcmeApiServlet extends HttpServlet {
         }
         AcmeCredentialStore.Credential saved;
         try {
-            saved = live.credentials().upsert(id, string(body, "name", ""), provider, dns, eab);
+            saved = stored.upsert(id, string(body, "name", ""), provider, dns, eab);
         } catch (IOException e) {
             Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
                     "could not write the ACME credential store: " + e.getMessage());
@@ -448,16 +461,16 @@ public final class AcmeApiServlet extends HttpServlet {
         if (!requirePanelPassword(request, response, body.get("panelPassword"))) {
             return;
         }
-        AcmeService live = service.get();
-        if (live == null) {
-            Json.error(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "ACME service is not available");
+        AcmeCredentialStore stored = credentials();
+        if (stored == null) {
+            Json.error(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "ACME credential store is not available");
             return;
         }
         try {
             String id = string(body, "id", "");
             if (id.isBlank()) {
-                live.credentials().clear();
-            } else if (!live.credentials().delete(id)) {
+                stored.clear();
+            } else if (!stored.delete(id)) {
                 Json.error(response, HttpServletResponse.SC_NOT_FOUND, "credential profile not found");
                 return;
             }
@@ -468,8 +481,8 @@ public final class AcmeApiServlet extends HttpServlet {
         }
         AuditLog.log(AuditLog.Channel.WEB, "acme.credentials.clear",
                 string(body, "id", ""), "success", actorOf(request), request.getRemoteAddr());
-        Json.write(response, Map.of("ok", true, "credentialConfigured", live.credentials().configured(),
-                "eabConfigured", live.credentials().eabConfigured()));
+        Json.write(response, Map.of("ok", true, "credentialConfigured", stored.configured(),
+                "eabConfigured", stored.eabConfigured()));
     }
 
     // ------------------------------------------------------------- operations --

@@ -47,6 +47,11 @@ public final class CertificateMigration {
     public static void runIfNeeded(ServerConfig config, CertificateStore store,
                                    AcmeCredentialStore credentials,
                                    CertificateManager certificates, Logger logger) {
+        try {
+            repairNames(store);
+        } catch (Exception e) {
+            logger.warning("Could not repair certificate names in the registry", e);
+        }
         if (!store.isEmpty() || store.isMigrated()) {
             return;
         }
@@ -225,6 +230,9 @@ public final class CertificateMigration {
         return builder.toString();
     }
 
+    /// CertificateManager reports SANs as `DNS:example.com` / `IP:…`. The
+    /// registry stores plain DNS names, so the prefix is stripped and IP SANs
+    /// are dropped (they are not certificate names for ACME).
     private static List<String> normalize(List<String> domains) {
         Set<String> unique = new LinkedHashSet<>();
         for (String raw : domains) {
@@ -232,14 +240,48 @@ public final class CertificateMigration {
                 continue;
             }
             String domain = raw.trim().toLowerCase(Locale.ROOT);
+            if (domain.startsWith("dns:")) {
+                domain = domain.substring(4);
+            } else if (domain.startsWith("ip:")) {
+                continue;
+            }
             if (domain.endsWith(".")) {
                 domain = domain.substring(0, domain.length() - 1);
             }
-            if (!domain.isEmpty()) {
+            if (!domain.isEmpty() && domain.contains(".")) {
                 unique.add(domain);
             }
         }
         return new ArrayList<>(unique);
+    }
+
+    /// Repairs entries created before SANs were normalized (`dns:example.com`
+    /// used to be written verbatim) and re-derives a broken apex. Runs on every
+    /// boot; a healthy registry is left untouched.
+    static void repairNames(CertificateStore store) throws IOException {
+        for (CertificateStore.Entry entry : store.all()) {
+            List<String> domains = normalize(entry.domains);
+            List<String> issued = normalize(entry.issuedDomains);
+            String apex = entry.apex;
+            if (apex == null || apex.isBlank() || apex.contains(":")) {
+                List<String> source = domains.isEmpty() ? issued : domains;
+                if (!source.isEmpty()) {
+                    apex = apexOf(source, null);
+                }
+            }
+            if (!domains.equals(entry.domains)
+                    || !issued.equals(entry.issuedDomains)
+                    || (apex != null && !apex.equals(entry.apex))) {
+                String target = apex;
+                store.update(entry.id, value -> {
+                    value.domains = new ArrayList<>(domains);
+                    value.issuedDomains = new ArrayList<>(issued);
+                    if (target != null) {
+                        value.apex = target;
+                    }
+                });
+            }
+        }
     }
 
 }

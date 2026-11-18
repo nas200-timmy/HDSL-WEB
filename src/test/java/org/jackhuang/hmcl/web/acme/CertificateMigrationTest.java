@@ -18,12 +18,17 @@
 package org.jackhuang.hmcl.web.acme;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class CertificateMigrationTest {
+
+    @TempDir
+    Path dataDir;
 
     @Test
     void apexPrefersTheCredentialZoneWhenItMatches() {
@@ -47,5 +52,17 @@ class CertificateMigrationTest {
     void apexFallsBackToTheLastTwoLabelsWithoutAZone() {
         assertEquals("example.com",
                 CertificateMigration.apexOf(List.of("panel.example.com"), null));
+    }
+
+    @Test
+    void repairsSanPrefixedNamesAndTheApex() throws Exception {
+        CertificateStore store = CertificateStore.open(dataDir);
+        CertificateStore.Entry entry = store.create("dns:example.com",
+                List.of("dns:example.com", "DNS:www.example.com"));
+        CertificateMigration.repairNames(store);
+
+        CertificateStore.Entry fixed = store.find(entry.id);
+        assertEquals("example.com", fixed.apex);
+        assertEquals(List.of("example.com", "www.example.com"), fixed.domains);
     }
 }

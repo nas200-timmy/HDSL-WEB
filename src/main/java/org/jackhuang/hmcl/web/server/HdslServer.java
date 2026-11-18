@@ -147,6 +147,10 @@ public final class HdslServer {
     /// `start()`, so the settings servlet and the renewal loop share one
     /// instance. Null when the credential store could not be opened.
     private volatile @Nullable AcmeService acmeService;
+    /// DNS/EAB credential profiles. Kept on the server (not only inside
+    /// [AcmeService]) because the certificate registry needs them even when the
+    /// legacy single-certificate service is not running.
+    private volatile @Nullable org.jackhuang.hmcl.web.acme.AcmeCredentialStore acmeCredentials;
     /// Certificate registry + its issuing service. `null` when the registry
     /// could not be opened (the legacy ACME path then stays in charge).
     private final @Nullable org.jackhuang.hmcl.web.acme.CertificateStore certificateStore;
@@ -481,11 +485,15 @@ public final class HdslServer {
             HdslServer live = self.get();
             return live == null ? null : live.getAcmeService();
         };
+        java.util.function.Supplier<org.jackhuang.hmcl.web.acme.AcmeCredentialStore> credentialSupplier = () -> {
+            HdslServer live = self.get();
+            return live == null ? null : live.getAcmeCredentials();
+        };
         context.addServlet(new ServletHolder(new AcmeApiServlet(
-                config, acmeSupplier, authService, developerElevation, tlsActive, passwordCrypto)),
+                config, acmeSupplier, credentialSupplier, authService, developerElevation, tlsActive, passwordCrypto)),
                 "/api/settings/acme");
         context.addServlet(new ServletHolder(new AcmeApiServlet(
-                config, acmeSupplier, authService, developerElevation, tlsActive, passwordCrypto)),
+                config, acmeSupplier, credentialSupplier, authService, developerElevation, tlsActive, passwordCrypto)),
                 "/api/settings/acme/*");
         if (certificateStore != null) {
             java.util.function.Supplier<org.jackhuang.hmcl.web.acme.CertificateService> certSupplier = () -> {
@@ -855,6 +863,14 @@ public final class HdslServer {
 
     public @Nullable AcmeService getAcmeService() {
         return acmeService;
+    }
+
+    public void setAcmeCredentials(@Nullable org.jackhuang.hmcl.web.acme.AcmeCredentialStore credentials) {
+        this.acmeCredentials = credentials;
+    }
+
+    public @Nullable org.jackhuang.hmcl.web.acme.AcmeCredentialStore getAcmeCredentials() {
+        return acmeCredentials;
     }
 
     /// Wires the per-certificate service after `Main` has opened the registry.

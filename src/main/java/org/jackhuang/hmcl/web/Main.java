@@ -264,6 +264,7 @@ public final class Main {
                             }, Logger.LOG);
             }
             server.setAcmeService(acme);
+            server.setAcmeCredentials(acmeCredentials);
 
             server.start();
             if (acme != null) {

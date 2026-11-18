@@ -1743,6 +1743,7 @@ function TlsTab() {
 
   return (
     <>
+      <AcmeCard />
       <div className="section-caption">
         <KeepIcon size={16} />
         手动上传证书
@@ -1897,7 +1898,6 @@ function TlsTab() {
           </>
         ) : null}
       </div>
-      <AcmeCard />
       <ConfirmDialog
         open={selfSignedConfirmOpen}
         title="生成并使用自签名证书？"
@@ -2135,6 +2135,7 @@ function AcmeCard() {
   const caInfo = cas.find((item) => item.id === ca);
   const providerInfo = meta?.providers.find((item) => item.id === provider);
   const selectedCredential = credentials.find((item) => item.id === credentialId) ?? null;
+  const activeEntry = certs?.entries.find((entry) => entry.active) ?? null;
   const selectedEntry = certs?.entries.find((entry) => entry.id === openId) ?? null;
   const editingUpload = !creating && selectedEntry?.source === "upload";
   const draftDomains = domains.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
@@ -2369,6 +2370,35 @@ function AcmeCard() {
             <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
               按主域名管理：一个主域名下可以有多张证书，默认一张 ACME 自动续期证书；
               子域名只是这张证书的成员，改完要重新签发才生效。证书操作需要 HTTPS。
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "6px 20px",
+                alignItems: "center",
+                padding: "10px 12px",
+                border: "1px solid var(--monet-outline-variant)",
+                borderRadius: 6,
+                fontSize: 13,
+              }}
+            >
+              {activeEntry ? (
+                <>
+                  <span>当前使用：<strong>{activeEntry.apex}</strong></span>
+                  <span>来源：{activeEntry.source === "acme" ? "ACME 自动续期" : "手动上传"}</span>
+                  <span>
+                    到期：{activeEntry.notAfter ? formatDateTime(activeEntry.notAfter) : "—"}
+                    {activeEntry.notAfter && `（剩 ${daysLeft(activeEntry.notAfter) ?? "?"} 天）`}
+                  </span>
+                  <span>{stateTag(activeEntry)}</span>
+                </>
+              ) : (
+                <span style={{ color: "var(--monet-on-surface-variant)" }}>
+                  当前没有受管证书，面板使用自签名证书。
+                </span>
+              )}
             </div>
 
             {certs.entries.length === 0 ? (
