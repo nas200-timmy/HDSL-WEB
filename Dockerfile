@@ -598,6 +598,16 @@ RUN printf '%s\n' \
       '  export COREPACK_NPM_REGISTRY' \
       'fi' \
       '' \
+      '# CVE-2026-114938 (Java4Shell): until the runtime JDK carries the fix,' \
+      '# keep HotSpot off the AVX-512 VBMI Base64 intrinsic on hosts that' \
+      '# expose it. -XX:UseAVX=2 is x86-only; the guard is skipped elsewhere' \
+      '# and can be disabled with HDSL_JAVA4SHELL_GUARD=0 after a JDK upgrade.' \
+      'if [ "${HDSL_JAVA4SHELL_GUARD:-1}" != "0" ] && [ "$(uname -m)" = "x86_64" ] && grep -qw avx512_vbmi /proc/cpuinfo 2>/dev/null; then' \
+      '  case " ${JAVA_OPTS:-} " in' \
+      '    *" -XX:UseAVX=0 "*|*" -XX:UseAVX=1 "*|*" -XX:UseAVX=2 "*) ;;' \
+      '    *) JAVA_OPTS="${JAVA_OPTS:-} -XX:UseAVX=2" ;;' \
+      '  esac' \
+      'fi' \
       '# Word splitting is the point: JAVA_OPTS is a list of JVM options.' \
       'exec java ${JAVA_OPTS:-} "$@"' \
       > /usr/local/bin/hdsl-entrypoint \
