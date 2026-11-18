@@ -2104,7 +2104,6 @@ async function withElevation<T>(call: () => Promise<T>): Promise<T> {
 function AcmeCard() {
   const [meta, setMeta] = useState<AcmeSettings | null>(null);
   const [certs, setCerts] = useState<CertificatesResponse | null>(null);
-  const [liveTls, setLiveTls] = useState<TlsSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -2114,6 +2113,7 @@ function AcmeCard() {
   const [apexLocked, setApexLocked] = useState(false);
   const [manualApex, setManualApex] = useState(false);
   const [apexDialog, setApexDialog] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // 证书草稿
   const [apex, setApex] = useState("");
@@ -2151,14 +2151,12 @@ function AcmeCard() {
   const load = async () => {
     setLoading(true);
     try {
-      const [settings, list, tls] = await Promise.all([
-        api.getAcme(),
-        api.getCertificates(),
-        api.getTls().catch(() => null),
-      ]);
+      const [settings, list] = await Promise.all([api.getAcme(), api.getCertificates()]);
       setMeta(settings);
       setCerts(list);
-      setLiveTls(tls);
+      setSelectedId((current) => current && list.entries.some((item) => item.id === current)
+        ? current
+        : list.entries.find((item) => item.active)?.id ?? list.entries[0]?.id ?? null);
     } catch (e) {
       setError(isNotImplemented(e) ? "后端尚未支持证书管理" : errMsg(e));
     } finally {
@@ -2202,6 +2200,7 @@ function AcmeCard() {
     .filter((value): value is string => !!value)
     .sort()[0];
   const issueEntry = certs?.entries.find((entry) => entry.id === issueId) ?? null;
+  const selectedCert = certs?.entries.find((entry) => entry.id === selectedId) ?? null;
   const apexEntries = apexDialog
     ? (certs?.entries ?? []).filter((entry) => entry.apex === apexDialog)
     : [];
@@ -2209,6 +2208,7 @@ function AcmeCard() {
   const openEditor = (entry: CertificateEntry) => {
     setCreating(false);
     setOpenId(entry.id);
+    setSelectedId(entry.id);
     setError(null);
     setApex(entry.apex);
     setDomains(entry.domains.join("\n"));
@@ -2563,20 +2563,6 @@ function AcmeCard() {
                   30 天内到期 <strong>{expiringSoon.length}</strong>
                 </span>
               </div>
-              <div style={{ fontSize: 12, lineHeight: 1.8, borderTop: "1px solid var(--monet-outline-variant)", paddingTop: 8 }}>
-                <div>
-                  当前连接：<strong>{liveTls?.https ? "HTTPS 已启用" : "HTTP 明文"}</strong>
-                  {liveTls?.source && liveTls.source !== "none"
-                    && ` · 来源 ${({ "self-signed": "自签名", uploaded: "上传", pkcs12: "上传（PKCS#12）", acme: "ACME 自动" } as Record<string, string>)[liveTls.source] ?? liveTls.source}`}
-                </div>
-                {liveTls?.subject && <div>Subject：<code>{liveTls.subject}</code></div>}
-                {liveTls?.issuer && <div>Issuer：{liveTls.issuer}</div>}
-                {liveTls?.sans?.length ? <div>SAN：<code>{liveTls.sans.join("、")}</code></div> : null}
-                {liveTls?.expires && <div>过期时间：{formatDateTime(String(liveTls.expires))}</div>}
-                {liveTls?.fingerprintSha256 && (
-                  <div style={{ wordBreak: "break-all" }}>SHA-256：<code>{liveTls.fingerprintSha256}</code></div>
-                )}
-              </div>
               <div style={{ fontSize: 13, lineHeight: 1.9 }}>
                 {activeEntries.length ? (
                   activeEntries.map((entry) => (
@@ -2638,6 +2624,7 @@ function AcmeCard() {
                       return (
                         <div
                           key={entry.id}
+                          onClick={() => setSelectedId(entry.id)}
                           style={{
                             display: "flex",
                             flexWrap: "wrap",
@@ -2646,6 +2633,8 @@ function AcmeCard() {
                             padding: "8px 12px 8px 26px",
                             borderTop: "1px solid var(--monet-outline-variant)",
                             fontSize: 13,
+                            cursor: "pointer",
+                            background: selectedId === entry.id ? "var(--monet-secondary-container)" : "transparent",
                           }}
                         >
                           <span style={{ minWidth: 54 }}>{entry.source === "acme" ? "ACME" : "上传"}</span>
@@ -2661,7 +2650,7 @@ function AcmeCard() {
                           <span style={{ flex: 1, minWidth: 220, fontSize: 12, color: "var(--monet-on-surface-variant)", wordBreak: "break-all" }}>
                             覆盖：{entry.domains.join("、")}
                           </span>
-                          <span style={{ display: "flex", gap: 4 }}>
+                          <span style={{ display: "flex", gap: 4 }} onClick={(e) => e.stopPropagation()}>
                             <button className="btn btn-text dim" disabled={busy} onClick={() => openEditor(entry)}>管理</button>
                             {entry.source === "acme" && (
                               <button className="btn btn-text dim" disabled={busy} onClick={() => { setIssueId(entry.id); setIssueStarted(false); }}>签发</button>
@@ -2678,6 +2667,34 @@ function AcmeCard() {
                     })}
                   </div>
                 ))}
+              </div>
+            )}
+
+            {selectedCert && (
+              <div style={{ border: "1px solid var(--monet-outline-variant)", borderRadius: 6, padding: "10px 12px", fontSize: 12, lineHeight: 1.9 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>这张证书 · {selectedCert.apex}</span>
+                  <span>{selectedCert.source === "acme" ? "ACME" : "上传"}</span>
+                  <span>{stateTag(selectedCert)}</span>
+                  <span style={{ flex: 1 }} />
+                  <button className="btn btn-text dim" disabled={busy} onClick={() => openEditor(selectedCert)}>管理</button>
+                  {selectedCert.source === "acme" && (
+                    <button className="btn btn-text dim" disabled={busy} onClick={() => { setIssueId(selectedCert.id); setIssueStarted(false); }}>签发</button>
+                  )}
+                  {!selectedCert.active && selectedCert.hasFiles && (
+                    <button className="btn btn-text dim" disabled={busy} onClick={() => void activateEntry(selectedCert)}>设为默认</button>
+                  )}
+                </div>
+                {selectedCert.subject && <div>Subject：<code>{selectedCert.subject}</code></div>}
+                {selectedCert.issuer && <div>Issuer：{selectedCert.issuer}</div>}
+                {selectedCert.sans?.length ? <div>SAN：<code>{selectedCert.sans.join("、")}</code></div> : null}
+                {selectedCert.notAfter && <div>过期时间：{formatDateTime(selectedCert.notAfter)}</div>}
+                {selectedCert.fingerprintSha256 && (
+                  <div style={{ wordBreak: "break-all" }}>SHA-256：<code>{selectedCert.fingerprintSha256}</code></div>
+                )}
+                {!selectedCert.subject && (
+                  <div style={{ color: "var(--monet-on-surface-variant)" }}>这张证书还没有文件（未签发或未上传）。</div>
+                )}
               </div>
             )}
 
@@ -2742,18 +2759,6 @@ function AcmeCard() {
 
             {openId && (creating || selectedEntry) && (
               <div style={{ borderTop: "1px solid var(--monet-outline-variant)", paddingTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-                {!creating && selectedEntry && (selectedEntry.subject || selectedEntry.fingerprintSha256) && (
-                  <div style={{ border: "1px solid var(--monet-outline-variant)", borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.8 }}>
-                    <div><strong>这张证书</strong></div>
-                    {selectedEntry.subject && <div>Subject：<code>{selectedEntry.subject}</code></div>}
-                    {selectedEntry.issuer && <div>Issuer：{selectedEntry.issuer}</div>}
-                    {selectedEntry.sans?.length ? <div>SAN：<code>{selectedEntry.sans.join("、")}</code></div> : null}
-                    {selectedEntry.notAfter && <div>到期：{formatDateTime(selectedEntry.notAfter)}</div>}
-                    {selectedEntry.fingerprintSha256 && (
-                      <div style={{ wordBreak: "break-all" }}>SHA-256：<code>{selectedEntry.fingerprintSha256}</code></div>
-                    )}
-                  </div>
-                )}
                 {sectionTitle(1, "证书需求", creating ? "主域名自动分析，只填完整域名" : `${selectedEntry!.apex} · 主域名由域名自动归组`)}
                 {creating ? (
                   apexLocked ? (
