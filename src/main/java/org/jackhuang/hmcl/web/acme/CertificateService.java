@@ -189,7 +189,10 @@ public final class CertificateService implements AutoCloseable {
             states.put(id, "error");
             phases.put(id, "error");
             int count = failures.computeIfAbsent(id, key -> new AtomicInteger()).incrementAndGet();
-            Duration delay = switch (Math.min(count, 3)) {
+            // A dropped connection is not a configuration mistake: retry soon
+            // instead of sitting out the hour-long backoff.
+            boolean network = message.contains("Network error");
+            Duration delay = network ? Duration.ofMinutes(5) : switch (Math.min(count, 3)) {
                 case 1 -> Duration.ofHours(1);
                 case 2 -> Duration.ofHours(6);
                 default -> Duration.ofHours(24);

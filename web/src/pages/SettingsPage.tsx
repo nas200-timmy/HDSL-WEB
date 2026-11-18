@@ -1964,6 +1964,9 @@ function acmeErrorHint(message: string): string | null {
   if (message.includes("did not become visible")) {
     return "TXT 记录还没在解析器里生效：确认域名的 DNS 托管在所选厂商、zone 正确；已写入的记录会被自动清理。";
   }
+  if (message.includes("Network error")) {
+    return "与 CA 的 HTTPS 连接在签发过程中断开了（常见于网络抖动、代理或防火墙）。轮询请求已经自动重试；仍失败可以点「重试签发」，旧的记录会自动清理。";
+  }
   if (message.includes("InvalidAccessKeyId") || message.includes("SignatureDoesNotMatch")) {
     return "AccessKey 无效或权限不足：检查 AccessKey ID / Secret，并确认子账号有该域名的解析权限。";
   }
@@ -3047,6 +3050,15 @@ function AcmeCard() {
                 {!issueStarted && issueEntry.status?.state !== "issuing" && (
                   <button className="btn btn-raised" disabled={busy} onClick={() => void startIssue(issueEntry.id)}>
                     确认并开始签发
+                  </button>
+                )}
+                {issueEntry.status?.state === "error" && (
+                  <button
+                    className="btn btn-raised"
+                    disabled={busy}
+                    onClick={() => { setIssueStarted(false); void startIssue(issueEntry.id); }}
+                  >
+                    重试签发
                   </button>
                 )}
                 <button

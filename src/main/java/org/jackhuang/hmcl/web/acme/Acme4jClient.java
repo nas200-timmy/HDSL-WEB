@@ -29,6 +29,7 @@ import org.shredzone.acme4j.Session;
 import org.shredzone.acme4j.Status;
 import org.shredzone.acme4j.challenge.Dns01Challenge;
 import org.shredzone.acme4j.exception.AcmeException;
+import org.shredzone.acme4j.exception.AcmeNetworkException;
 import org.shredzone.acme4j.util.KeyPairUtils;
 
 import java.io.StringWriter;
@@ -39,6 +40,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.Callable;
 
 /// acme4j-backed implementation. All cryptography and ACME wire handling stays
 /// in acme4j; this class only maps our request/record shape and guarantees
@@ -103,8 +106,8 @@ public final class Acme4jClient implements AcmeClient {
                         throw new AcmeClientException("DNS-01 TXT record " + rrName
                                 + " did not become visible in time; check the DNS provider and retry");
                     }
-                    challenge.trigger();
-                    Status status = challenge.waitForCompletion(CHALLENGE_TIMEOUT);
+                    triggerWithRetry(challenge);
+                    Status status = awaitChallenge(challenge, CHALLENGE_TIMEOUT);
                     if (status != Status.VALID) {
                         throw new AcmeClientException("DNS-01 validation for " + rrName
                                 + " ended in " + status);
@@ -121,13 +124,16 @@ public final class Acme4jClient implements AcmeClient {
                 }
             }
 
-            Status ready = order.waitUntilReady(ORDER_TIMEOUT);
+            Status ready = withNetworkRetry(() -> order.waitUntilReady(ORDER_TIMEOUT));
             if (ready != Status.READY) {
                 throw new AcmeClientException("the ACME order ended in " + ready + " before finalization");
             }
             KeyPair domainKey = KeyPairUtils.createKeyPair(2048);
-            order.execute(domainKey);
-            Status completed = order.waitForCompletion(ORDER_TIMEOUT);
+            withNetworkRetry(() -> {
+                order.execute(domainKey);
+                return null;
+            });
+            Status completed = withNetworkRetry(() -> order.waitForCompletion(ORDER_TIMEOUT));
             if (completed != Status.VALID) {
                 throw new AcmeClientException("the ACME order ended in " + completed + " after finalization");
             }
@@ -152,13 +158,102 @@ public final class Acme4jClient implements AcmeClient {
         } catch (AcmeClientException e) {
             throw e;
         } catch (AcmeException e) {
-            throw new AcmeClientException("ACME request failed: " + sanitize(e.getMessage()), e);
+            throw new AcmeClientException("ACME request failed: " + sanitize(describe(e)), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new AcmeClientException("ACME request was interrupted", e);
         } catch (Exception e) {
-            throw new AcmeClientException("ACME request failed: " + sanitize(e.getMessage()), e);
+            throw new AcmeClientException("ACME request failed: " + sanitize(describe(e)), e);
         }
+    }
+
+    /// Triggers the challenge, retrying transport failures. A dropped
+    /// keep-alive connection used to fail the whole issuance even though the
+    /// CA was reachable a second earlier.
+    private void triggerWithRetry(org.shredzone.acme4j.challenge.Challenge challenge)
+            throws AcmeException, InterruptedException {
+        int failures = 0;
+        while (true) {
+            try {
+                challenge.trigger();
+                return;
+            } catch (AcmeNetworkException e) {
+                if (++failures >= 3) {
+                    throw e;
+                }
+                Thread.sleep(2_000L * failures);
+            }
+        }
+    }
+
+    /// Polls the challenge ourselves instead of `waitForCompletion`: that call
+    /// aborts on the first dropped connection, which is exactly what a
+    /// long DNS-01 wait over a home/ISP link runs into. Transport failures are
+    /// retried; the overall deadline is unchanged.
+    private Status awaitChallenge(org.shredzone.acme4j.challenge.Challenge challenge, Duration timeout)
+            throws AcmeException, AcmeClientException, InterruptedException {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        int failures = 0;
+        while (System.nanoTime() < deadline) {
+            Status status = challenge.getStatus();
+            if (status != Status.PENDING && status != Status.PROCESSING) {
+                return status;
+            }
+            try {
+                Optional<Instant> retryAfter = challenge.fetch();
+                failures = 0;
+                long wait = retryAfter
+                        .map(at -> Math.max(1_000L, Duration.between(Instant.now(), at).toMillis()))
+                        .orElse(2_000L);
+                Thread.sleep(Math.min(wait, 10_000L));
+            } catch (AcmeNetworkException e) {
+                if (++failures > 5) {
+                    throw e;
+                }
+                logger.warning("Temporary ACME network error while polling; retrying: " + describe(e));
+                Thread.sleep(Math.min(2_000L * failures, 10_000L));
+            }
+        }
+        throw new AcmeClientException("DNS-01 challenge did not finish within "
+                + timeout.toMinutes() + " minutes (last status " + challenge.getStatus() + ")");
+    }
+
+    /// Retries idempotent order operations on transport failures.
+    private <T> T withNetworkRetry(Callable<T> action) throws AcmeException, AcmeClientException, InterruptedException {
+        int failures = 0;
+        while (true) {
+            try {
+                return action.call();
+            } catch (AcmeNetworkException e) {
+                if (++failures >= 3) {
+                    throw e;
+                }
+                Thread.sleep(2_000L * failures);
+            } catch (AcmeException | RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new AcmeClientException("ACME request failed: " + sanitize(describe(e)), e);
+            }
+        }
+    }
+
+    /// Message plus a short cause chain. acme4j only says "Network error";
+    /// the cause (refused, reset, timeout) is what the operator needs.
+    private static String describe(Throwable error) {
+        StringBuilder builder = new StringBuilder();
+        String message = error.getMessage();
+        builder.append(message == null || message.isBlank()
+                ? error.getClass().getSimpleName() : message);
+        Throwable cause = error.getCause();
+        for (int depth = 0; cause != null && depth < 3; depth++, cause = cause.getCause()) {
+            String detail = cause.getMessage();
+            builder.append(" [").append(cause.getClass().getSimpleName());
+            if (detail != null && !detail.isBlank()) {
+                builder.append(": ").append(detail);
+            }
+            builder.append(']');
+        }
+        return builder.toString();
     }
 
     /// Drops the root label acme4j appends, so the name matches what DNS APIs
