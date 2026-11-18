@@ -2160,6 +2160,7 @@ function AcmeCard() {
   const editingUpload = !creating && selectedEntry?.source === "upload";
   const draftDomains = domains.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
   const activeEntry = certs?.entries.find((entry) => entry.active) ?? null;
+  const activeEntries = certs?.entries.filter((entry) => entry.active) ?? [];
   const issueEntry = certs?.entries.find((entry) => entry.id === issueId) ?? null;
 
   const openEditor = (entry: CertificateEntry) => {
@@ -2266,7 +2267,7 @@ function AcmeCard() {
     try {
       await withElevation(() => api.activateCertificate(entry.id));
       await load();
-      toast("success", `已切换到 ${entry.apex}`);
+      toast("success", `已把 ${entry.apex} 的默认证书切换到这张`);
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -2374,7 +2375,7 @@ function AcmeCard() {
 
   const stateTag = (entry: CertificateEntry) => {
     if (entry.status?.state === "issuing") return <span className="tag warn">签发中</span>;
-    if (entry.active) return <span className="tag running">使用中</span>;
+    if (entry.active) return <span className="tag running">默认</span>;
     if (entry.status?.state === "error") return <span className="tag warn">上次失败</span>;
     if (entry.pending) return <span className="tag plain">待重新签发</span>;
     if (entry.source === "upload") return <span className="tag plain">备用（上传）</span>;
@@ -2462,13 +2463,16 @@ function AcmeCard() {
             >
               {activeEntry ? (
                 <>
-                  <span>当前使用：<strong>{activeEntry.apex}</strong></span>
-                  <span>来源：{activeEntry.source === "acme" ? "ACME 自动续期" : "手动上传"}</span>
-                  <span>
-                    到期：{activeEntry.notAfter ? formatDateTime(activeEntry.notAfter) : "—"}
-                    {activeEntry.notAfter && `（剩 ${daysLeft(activeEntry.notAfter) ?? "?"} 天）`}
-                  </span>
-                  <span>{stateTag(activeEntry)}</span>
+                  <span>已启用 {activeEntries.length} 个主域名，各自使用自己的证书：</span>
+                  {activeEntries.map((entry) => (
+                    <span key={entry.id}>
+                      <strong>{entry.apex}</strong>
+                      <span style={{ color: "var(--monet-on-surface-variant)" }}>
+                        （{entry.source === "acme" ? "ACME" : "上传"}
+                        {entry.notAfter ? `，剩 ${daysLeft(entry.notAfter) ?? "?"} 天` : ""}）
+                      </span>
+                    </span>
+                  ))}
                 </>
               ) : (
                 <span style={{ color: "var(--monet-on-surface-variant)" }}>
@@ -2485,10 +2489,22 @@ function AcmeCard() {
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {sortedGroups.map(([groupApex, list]) => (
                   <div key={groupApex} style={{ border: "1px solid var(--monet-outline-variant)", borderRadius: 6, overflow: "hidden" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", background: "var(--monet-surface-container-low)", fontSize: 13 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", background: "var(--monet-surface-container-low)", fontSize: 13, flexWrap: "wrap" }}>
                       <strong>{groupApex}</strong>
                       <span style={{ color: "var(--monet-on-surface-variant)" }}>{list.length} 张证书</span>
-                      {list.some((entry) => entry.active) && <span className="tag running">使用中</span>}
+                      {(() => {
+                        const preset = list.find((entry) => entry.active);
+                        return preset ? (
+                          <>
+                            <span className="tag running">默认</span>
+                            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                              {preset.source === "acme" ? "ACME" : "上传"} · {preset.notAfter ? formatDateTime(preset.notAfter) : "尚未签发"}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="tag plain">未设默认</span>
+                        );
+                      })()}
                     </div>
                     {list.map((entry) => {
                       const left = daysLeft(entry.notAfter);
@@ -2524,7 +2540,7 @@ function AcmeCard() {
                               <button className="btn btn-text dim" disabled={busy} onClick={() => { setIssueId(entry.id); setIssueStarted(false); }}>签发</button>
                             )}
                             {!entry.active && entry.hasFiles && (
-                              <button className="btn btn-text dim" disabled={busy} onClick={() => void activateEntry(entry)}>设为当前</button>
+                              <button className="btn btn-text dim" disabled={busy} onClick={() => void activateEntry(entry)}>设为默认</button>
                             )}
                             {!entry.active && (
                               <button className="btn btn-text dim" disabled={busy} onClick={() => void deleteEntry(entry)}>删除</button>
@@ -2820,7 +2836,7 @@ function AcmeCard() {
                   )}
                   {selectedEntry && !selectedEntry.active && selectedEntry.hasFiles && (
                     <button className="btn btn-outline ripple-host" disabled={busy} onClick={() => void activateEntry(selectedEntry)}>
-                      设为当前
+                      设为该主域名默认
                     </button>
                   )}
                   <button className="btn btn-text dim" disabled={busy} onClick={() => setOpenId(null)}>
@@ -3025,7 +3041,7 @@ function AcmeCard() {
                   )}
                   {issueEntry.status?.state === "active" && (
                     <div style={{ marginTop: 8, fontSize: 13, color: "var(--monet-primary)" }}>
-                      证书已签发并安装{issueEntry.active ? "，当前正在使用" : "（可在列表里设为当前）"}。
+                      证书已签发并安装{issueEntry.active ? "，已作为该主域名的默认证书" : "（可在列表里设为默认）"}。
                       {issueEntry.notAfter && ` 到期：${formatDateTime(issueEntry.notAfter)}。`}
                     </div>
                   )}

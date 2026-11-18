@@ -916,13 +916,16 @@ select.input {
   gap: 4px;
 }
 
-/* 输入框下方的字段说明：带底色，避免被当成占位符忽略 */
+/* 输入框下方的字段说明：带底色，避免被当成占位符忽略。
+   用中性容器色而不是 secondary-container：定制主题里 secondary 可能是红色，
+   说明文字会被误读成错误提示。 */
 .form-hint {
   display: block;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--monet-on-secondary-container);
-  background: var(--monet-secondary-container);
+  color: var(--monet-on-surface-variant);
+  background: var(--monet-surface-container-high);
+  border: 1px solid var(--monet-outline-variant);
   border-radius: 4px;
   padding: 4px 8px;
 }

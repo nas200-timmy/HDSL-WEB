@@ -37,6 +37,7 @@ import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -218,21 +219,14 @@ public final class CertificateService implements AutoCloseable {
         if (!Files.isRegularFile(cert) || !Files.isRegularFile(key)) {
             throw new IOException("this certificate has no files on disk yet; issue or import it first");
         }
-        CertificateManager.Info info = certificates.installPem(
-                cert, key, entry.source == CertificateStore.Source.ACME
-                        ? CertificateManager.Source.ACME
-                        : CertificateManager.Source.PEM);
-        HdslServer live = server.get();
-        if (live != null) {
-            HdslServer.TlsSwitch result = live.tlsActive()
-                    ? live.reloadTls(certificates)
-                    : live.enableTls(certificates);
-            if (!result.ok()) {
-                throw new IOException(result.error() == null ? "TLS reload failed" : result.error());
-            }
-        }
+        // `active` is per apex: each main domain serves its own certificate.
         store.setActive(id);
+        installActiveSet();
         states.put(id, "active");
+        CertificateManager.Info info = certificates.info();
+        if (info == null) {
+            throw new IOException("the certificate set could not be loaded");
+        }
         return info;
     }
 
@@ -330,17 +324,27 @@ public final class CertificateService implements AutoCloseable {
         writeSecret(key, issued.privateKeyPem());
         store.recordIssued(entry.id, issued.domains(), issued.notAfter(), null);
 
+        // First certificate of an apex becomes its default, so a freshly
+        // signed main domain is served without an extra click.
+        boolean hasDefault = store.all().stream()
+                .anyMatch(item -> item.apex.equals(entry.apex) && item.active);
+        if (!hasDefault) {
+            store.setActive(entry.id);
+        }
         CertificateStore.Entry refreshed = store.find(entry.id);
         if (refreshed != null && refreshed.active) {
-            installActive(refreshed);
+            installActiveSet();
         }
     }
 
-    private void installActive(CertificateStore.Entry entry) throws IOException {
-        certificates.installPem(store.certPath(entry.id), store.keyPath(entry.id),
-                entry.source == CertificateStore.Source.ACME
-                        ? CertificateManager.Source.ACME
-                        : CertificateManager.Source.PEM);
+    /// One active entry per apex. Rebuilds the connector's keystore from all of
+    /// them and hot-reloads, so each main domain answers with its own
+    /// certificate (SNI selection happens in JSSE).
+    private int installActiveSet() throws IOException {
+        int installed = installActiveSet(store, certificates, logger);
+        if (installed == 0) {
+            return 0;
+        }
         HdslServer live = server.get();
         if (live != null) {
             HdslServer.TlsSwitch result = live.tlsActive()
@@ -350,6 +354,29 @@ public final class CertificateService implements AutoCloseable {
                 throw new IOException(result.error() == null ? "TLS reload failed" : result.error());
             }
         }
+        return installed;
+    }
+
+    /// Boot-time variant: installs every active entry that has files on disk.
+    public static int installActiveSet(CertificateStore store, CertificateManager certificates,
+                                       Logger logger) throws IOException {
+        List<CertificateManager.ManagedCertificate> active = new ArrayList<>();
+        for (CertificateStore.Entry entry : store.all()) {
+            if (!entry.active) {
+                continue;
+            }
+            Path cert = store.certPath(entry.id);
+            Path key = store.keyPath(entry.id);
+            if (Files.isRegularFile(cert) && Files.isRegularFile(key)) {
+                active.add(new CertificateManager.ManagedCertificate("cert-" + entry.id, cert, key));
+            }
+        }
+        if (active.isEmpty()) {
+            return 0;
+        }
+        int count = certificates.installManagedSet(active);
+        logger.info("Serving " + count + " certificate(s) from the registry (one per main domain)");
+        return count;
     }
 
     /// Domains must belong to the entry's apex: `apex`, `sub.apex` or

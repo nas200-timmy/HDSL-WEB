@@ -195,20 +195,10 @@ public final class Main {
 
             if (certificateStore != null && acmeCredentials != null) {
                 CertificateMigration.runIfNeeded(config, certificateStore, acmeCredentials, certificates, Logger.LOG);
-                CertificateStore.Entry active = certificateStore.active();
-                if (active != null
-                        && java.nio.file.Files.isRegularFile(certificateStore.certPath(active.id))
-                        && java.nio.file.Files.isRegularFile(certificateStore.keyPath(active.id))) {
-                    try {
-                        certificates.installPem(certificateStore.certPath(active.id),
-                                certificateStore.keyPath(active.id),
-                                active.source == CertificateStore.Source.ACME
-                                        ? CertificateManager.Source.ACME
-                                        : CertificateManager.Source.PEM);
-                    } catch (IOException e) {
-                        Logger.LOG.warning("Could not load the active certificate `"
-                                + active.apex + "` from the registry", e);
-                    }
+                try {
+                    CertificateService.installActiveSet(certificateStore, certificates, Logger.LOG);
+                } catch (IOException e) {
+                    Logger.LOG.warning("Could not load the active certificates from the registry", e);
                 }
             }
 

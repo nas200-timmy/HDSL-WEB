@@ -162,14 +162,11 @@ public final class CertificateStore {
     /// no entry without an id/apex.
     private void normalize() {
         stored.certificates.removeIf(entry -> entry == null || entry.id == null || entry.apex == null);
-        Entry active = null;
+        // One default per apex; older files may carry several.
+        java.util.Set<String> seen = new java.util.HashSet<>();
         for (Entry entry : stored.certificates) {
-            if (entry.active) {
-                if (active == null) {
-                    active = entry;
-                } else {
-                    entry.active = false;
-                }
+            if (entry.active && !seen.add(entry.apex)) {
+                entry.active = false;
             }
         }
     }
@@ -249,13 +246,31 @@ public final class CertificateStore {
         save();
     }
 
-    /// Marks one entry as the identity to serve and clears the flag on the
-    /// rest. Callers still have to install the material and reload Jetty.
+    /// Marks one entry as the default **for its apex**: each main domain serves
+    /// its own certificate, so `active` is no longer a single global flag.
+    /// Callers still have to rebuild the keystore and reload Jetty.
     public synchronized void setActive(String id) throws IOException {
+        Entry target = raw(id);
+        if (target == null) {
+            return;
+        }
         for (Entry entry : stored.certificates) {
-            entry.active = id.equals(entry.id);
+            if (java.util.Objects.equals(entry.apex, target.apex)) {
+                entry.active = id.equals(entry.id);
+            }
         }
         save();
+    }
+
+    /// Every entry that is the default of its apex.
+    public synchronized List<Entry> activeEntries() {
+        List<Entry> result = new ArrayList<>();
+        for (Entry entry : stored.certificates) {
+            if (entry.active) {
+                result.add(entry.copy());
+            }
+        }
+        return result;
     }
 
     /// Persists the result of one issuance without touching the operator's

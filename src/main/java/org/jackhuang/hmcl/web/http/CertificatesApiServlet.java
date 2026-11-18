@@ -188,6 +188,12 @@ public final class CertificatesApiServlet extends HttpServlet {
             return;
         }
         CertificateStore.Entry entry = store.create(apex, domains);
+        boolean hasDefault = store.all().stream()
+                .anyMatch(item -> item.apex.equals(apex) && item.active);
+        if (!hasDefault) {
+            store.setActive(entry.id);
+            entry = store.find(entry.id);
+        }
         CertificateStore.Entry updated = store.update(entry.id, target -> apply(target, body));
         AuditLog.log(AuditLog.Channel.WEB, "certificate.create", apex, "success",
                 actorOf(request), request.getRemoteAddr());

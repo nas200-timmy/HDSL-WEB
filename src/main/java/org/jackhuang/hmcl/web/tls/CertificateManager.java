@@ -524,6 +524,47 @@ public final class CertificateManager {
         return loaded;
     }
 
+    /// A PEM pair to serve under a specific SNI alias.
+    public record ManagedCertificate(String alias, Path certPem, Path keyPem) {
+    }
+
+    /// Installs several certificates into one keystore so the connector can
+    /// answer different SNI hostnames with different identities. JSSE picks the
+    /// entry whose SAN matches the requested name; entries are otherwise
+    /// independent. The caller reloads Jetty afterwards.
+    public synchronized int installManagedSet(List<ManagedCertificate> certs) throws IOException {
+        if (certs.isEmpty()) {
+            throw new IOException("no certificates to install");
+        }
+        String password = newPassword();
+        try {
+            KeyStore combined = KeyStore.getInstance("JKS");
+            combined.load(null, password.toCharArray());
+            for (ManagedCertificate managed : certs) {
+                KeystoreMaterial material = buildKeyStoreFromPem(
+                        resolve(managed.certPem()), resolve(managed.keyPem()));
+                Key key = material.keyStore().getKey("server", material.password().toCharArray());
+                java.security.cert.Certificate[] chain =
+                        material.keyStore().getCertificateChain("server");
+                if (key == null || chain == null || chain.length == 0) {
+                    throw new IOException("no private key in " + managed.certPem());
+                }
+                combined.setKeyEntry(managed.alias(), key, password.toCharArray(), chain);
+            }
+            install(new KeystoreMaterial(combined, password), Source.ACME);
+            logger.info("Installed " + certs.size() + " certificate(s) for SNI selection");
+            Info loaded = info();
+            if (loaded == null) {
+                throw new IOException("the certificate set could not be loaded");
+            }
+            return certs.size();
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("could not build the SNI keystore: " + e.getMessage(), e);
+        }
+    }
+
     /// Exports the current identity as an unencrypted PEM pair. Used once when
     /// an existing PKCS#12/PEM deployment is migrated into the certificate
     /// registry: from then on the registry owns the files, not `server.yaml`.

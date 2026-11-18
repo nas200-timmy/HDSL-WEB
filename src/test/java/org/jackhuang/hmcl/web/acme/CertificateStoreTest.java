@@ -70,6 +70,20 @@ class CertificateStoreTest {
     }
 
     @Test
+    void everyApexHasItsOwnDefault() throws Exception {
+        CertificateStore store = CertificateStore.open(dataDir);
+        CertificateStore.Entry first = store.create("example.com", List.of("example.com"));
+        CertificateStore.Entry other = store.create("example.net", List.of("example.net"));
+
+        store.setActive(first.id);
+        store.setActive(other.id);
+
+        assertTrue(store.find(first.id).active, "a different apex must not clear this default");
+        assertTrue(store.find(other.id).active);
+        assertEquals(2, store.activeEntries().size());
+    }
+
+    @Test
     void migrationMarkerKeepsAnEmptyRegistryEmpty() throws Exception {
         CertificateStore store = CertificateStore.open(dataDir);
         assertFalse(store.isMigrated());
