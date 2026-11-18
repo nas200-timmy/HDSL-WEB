@@ -96,7 +96,7 @@ public final class CertificateMigration {
                 break;
             }
         }
-        String apex = existing != null ? existing.apex : apexOf(domains, null);
+        String apex = existing != null ? existing.apex : matchingApex(store, domains);
         CertificateStore.Entry entry = existing != null
                 ? existing
                 : store.create(apex, domains);
@@ -189,10 +189,31 @@ public final class CertificateMigration {
         return zone == null || zone.isBlank() ? null : zone.trim().toLowerCase(Locale.ROOT);
     }
 
+    /// Prefers the longest existing apex that covers every name, so an
+    /// uploaded `www.example.com` certificate joins the `example.com` group
+    /// instead of creating a second one.
+    static String matchingApex(CertificateStore store, List<String> domains) {
+        String best = null;
+        for (CertificateStore.Entry entry : store.all()) {
+            String candidate = entry.apex;
+            if (candidate == null || candidate.isBlank()) {
+                continue;
+            }
+            boolean covers = domains.stream().allMatch(domain -> {
+                String base = domain.startsWith("*.") ? domain.substring(2) : domain;
+                return base.equals(candidate) || base.endsWith("." + candidate);
+            });
+            if (covers && (best == null || candidate.length() > best.length())) {
+                best = candidate;
+            }
+        }
+        return best != null ? best : apexOf(domains, null);
+    }
+
     /// Longest suffix shared by every name, preferring the credential's zone
     /// when it matches. Wildcards contribute their parent (`*.example.com` →
     /// `example.com`).
-    static String apexOf(List<String> domains, @Nullable String zone) {
+    public static String apexOf(List<String> domains, @Nullable String zone) {
         List<String> bases = new ArrayList<>();
         for (String domain : domains) {
             bases.add(domain.startsWith("*.") ? domain.substring(2) : domain);

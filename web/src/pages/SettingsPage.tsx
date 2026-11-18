@@ -2093,7 +2093,6 @@ function AcmeCard() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [apexLocked, setApexLocked] = useState(false);
-  const [apexChoice, setApexChoice] = useState("__new");
   const [apexDialog, setApexDialog] = useState<string | null>(null);
 
   // 证书草稿
@@ -2188,18 +2187,12 @@ function AcmeCard() {
     setEnabled(entry.enabled);
   };
 
-  const certCredentialFor = (apexValue: string) => {
-    const entry = (certs?.entries ?? []).find((item) => item.apex === apexValue && item.credentialId);
-    return entry ? credentials.find((item) => item.id === entry.credentialId) ?? null : null;
-  };
-
   const openCreate = (apexTarget?: string) => {
     setCreating(true);
     setOpenId("__new__");
     setError(null);
     setApex(apexTarget ?? "");
     setApexLocked(!!apexTarget);
-    setApexChoice(apexTarget ?? "__new");
     setDomains("");
     setEmail(meta?.email ?? "");
     setCa(meta?.ca ?? "letsencrypt");
@@ -2211,12 +2204,33 @@ function AcmeCard() {
     setEnabled(true);
   };
 
-  const draftProblem = (): string | null => {
-    if (creating && (!apex.includes(".") || apex.includes(" "))) {
-      return "主域名要像 example.com 这样，带上后缀";
+  /// 与后端相同的归组规则：所有名字的最长公共后缀，至少两段。
+  const deriveApex = (names: string[]): string | null => {
+    const bases = names.map((name) => (name.startsWith("*.") ? name.slice(2) : name));
+    if (!bases.length) return null;
+    const first = bases[0].split(".");
+    let shared = bases.length === 1 ? Math.min(first.length, 2) : first.length;
+    for (const base of bases) {
+      const parts = base.split(".");
+      let count = 0;
+      while (count < shared && count < parts.length
+        && parts[parts.length - 1 - count] === first[first.length - 1 - count]) {
+        count++;
+      }
+      shared = count;
     }
+    if (shared < 2) return null;
+    return first.slice(first.length - shared).join(".");
+  };
+
+  const draftDomainsPreview = deriveApex(draftDomains);
+
+  const draftProblem = (): string | null => {
     if (!draftDomains.length) {
       return "至少填一个要签发的域名";
+    }
+    if (creating && !apexLocked && !draftDomainsPreview) {
+      return "这些域名不属于同一个主域名，请分开申请";
     }
     if (!editingUpload && !email.includes("@")) {
       return "邮箱要能收信：CA 用它做到期通知";
@@ -2648,49 +2662,18 @@ function AcmeCard() {
 
             {openId && (creating || selectedEntry) && (
               <div style={{ borderTop: "1px solid var(--monet-outline-variant)", paddingTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-                {sectionTitle(1, "证书需求", creating ? "先定主域名，再列子域名" : `${selectedEntry!.apex} · 主域名创建后不可改`)}
+                {sectionTitle(1, "证书需求", creating ? "主域名自动分析，只填完整域名" : `${selectedEntry!.apex} · 主域名由域名自动归组`)}
                 {creating ? (
-                  <>
-                    {!apexLocked && sortedGroups.length > 0 && (
-                      <div className="form-row" style={{ marginBottom: 0 }}>
-                        <span className="form-label">主域名</span>
-                        <select
-                          className="input"
-                          value={apexChoice}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            setApexChoice(value);
-                            if (value !== "__new") {
-                              setApex(value);
-                              const fallback = certCredentialFor(value);
-                              if (fallback) {
-                                setProvider(fallback.provider);
-                                setCredentialId(fallback.id);
-                              }
-                            } else {
-                              setApex("");
-                            }
-                          }}
-                          disabled={busy}
-                        >
-                          {sortedGroups.map(([value]) => (
-                            <option key={value} value={value}>{value}</option>
-                          ))}
-                          <option value="__new">＋ 新建主域名…</option>
-                        </select>
-                        <span className="form-hint">选已有主域名，就是给它再签一张证书（比如覆盖新的子域名）。</span>
-                      </div>
-                    )}
-                    {(apexLocked || apexChoice === "__new" || sortedGroups.length === 0) && (
-                      <div className="form-row" style={{ marginBottom: 0 }}>
-                        <span className="form-label">主域名 *</span>
-                        <input className="input" value={apex} onChange={(e) => setApex(e.target.value)} placeholder="example.com" disabled={busy || apexLocked} />
-                        <span className="form-hint">
-                          你在 DNS 服务商托管的那一级域名（zone）。所有域名成员都必须属于它；申请时会自动用它作为 DNS zone，不需要在凭证里再填。
-                        </span>
-                      </div>
-                    )}
-                  </>
+                  apexLocked ? (
+                    <div className="form-hint">
+                      归入主域名：<code>{apex}</code>（从主域名管理进入；同一主域名下的证书共用一个 DNS zone）
+                    </div>
+                  ) : (
+                    <div className="form-hint">
+                      主域名不用手填：按下面填写的完整域名自动分析归组，例如 <code>www.example.com</code> 归到
+                      <code>example.com</code>；不属于同一主域名的证书请分开申请。
+                    </div>
+                  )
                 ) : (
                   <div className="form-hint">主域名：<code>{selectedEntry!.apex}</code>（同一主域名下可以有多张证书）</div>
                 )}
@@ -2713,6 +2696,17 @@ function AcmeCard() {
                         每行一个，填要签发的完整域名。默认只签这里写下的名字：要 www 就写 www；
                         <code>*.example.com</code> 只覆盖一级子域，不含 example.com 本身。改完要重新签发才生效。
                       </span>
+                      {creating && (
+                        <span className="form-hint">
+                          {apexLocked
+                            ? <>归入主域名：<code>{apex}</code>（自动管理）</>
+                            : draftDomainsPreview
+                              ? <>将归入主域名：<code>{draftDomainsPreview}</code>（自动分析）</>
+                              : draftDomains.length
+                                ? "这些域名不属于同一个主域名，请分开申请。"
+                                : "填写完整域名后会自动分析主域名。"}
+                        </span>
+                      )}
                     </>
                   )}
                 </div>

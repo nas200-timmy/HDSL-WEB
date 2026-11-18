@@ -55,6 +55,14 @@ class CertificateMigrationTest {
     }
 
     @Test
+    void uploadJoinsAnExistingApex() throws Exception {
+        CertificateStore store = CertificateStore.open(dataDir);
+        store.create("example.com", List.of("example.com"));
+        assertEquals("example.com",
+                CertificateMigration.matchingApex(store, List.of("www.example.com")));
+    }
+
+    @Test
     void repairsSanPrefixedNamesAndTheApex() throws Exception {
         CertificateStore store = CertificateStore.open(dataDir);
         CertificateStore.Entry entry = store.create("dns:example.com",

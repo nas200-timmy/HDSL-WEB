@@ -180,16 +180,23 @@ public final class CertificatesApiServlet extends HttpServlet {
         if (body == null) {
             return;
         }
-        String apex = string(body, "apex", "").trim().toLowerCase(Locale.ROOT);
         List<String> domains = domains(body);
+        // The apex is a grouping key, not something the operator should type:
+        // derive it from the names. A cert spanning unrelated main domains is
+        // rejected by validateDomains() below.
+        String apex = string(body, "apex", "").trim().toLowerCase(Locale.ROOT);
+        if (apex.isBlank()) {
+            apex = org.jackhuang.hmcl.web.acme.CertificateMigration.apexOf(domains, null);
+        }
         String error = validate(apex, domains, body);
         if (error != null) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, error);
             return;
         }
         CertificateStore.Entry entry = store.create(apex, domains);
+        String groupApex = apex;
         boolean hasDefault = store.all().stream()
-                .anyMatch(item -> item.apex.equals(apex) && item.active);
+                .anyMatch(item -> item.apex.equals(groupApex) && item.active);
         if (!hasDefault) {
             store.setActive(entry.id);
             entry = store.find(entry.id);
