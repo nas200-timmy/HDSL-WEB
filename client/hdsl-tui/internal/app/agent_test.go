@@ -13,7 +13,7 @@ func TestAgentPromptUsesLoopbackAndCarriesTheTicket(t *testing.T) {
 		Scopes:    []string{"read", "mc"},
 		ExpiresAt: "2026-11-04T12:34:56Z",
 	}
-	prompt := agentPrompt("https://nas200.top:3080", ticket)
+	prompt := agentPrompt("https://panel.example.com:3080", ticket)
 	for _, want := range []string{
 		"https://127.0.0.1:3080",
 		"Bearer tok-123",
@@ -24,16 +24,16 @@ func TestAgentPromptUsesLoopbackAndCarriesTheTicket(t *testing.T) {
 			t.Errorf("prompt missing %q:\n%s", want, prompt)
 		}
 	}
-	if strings.Contains(prompt, "nas200.top") {
+	if strings.Contains(prompt, "panel.example.com") {
 		t.Errorf("prompt leaked the real host:\n%s", prompt)
 	}
 }
 
 func TestLoopbackPanelURL(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"https://nas200.top:3080", "https://127.0.0.1:3080"},
-		{"https://nas200.top", "https://127.0.0.1:3080"},
-		{"https://nas200.top:443", "https://127.0.0.1:3080"},
+		{"https://panel.example.com:3080", "https://127.0.0.1:3080"},
+		{"https://panel.example.com", "https://127.0.0.1:3080"},
+		{"https://panel.example.com:443", "https://127.0.0.1:3080"},
 		{"http://192.168.1.5:3081", "https://127.0.0.1:3081"},
 	}
 	for _, c := range cases {
