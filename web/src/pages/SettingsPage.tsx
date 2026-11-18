@@ -2104,6 +2104,7 @@ async function withElevation<T>(call: () => Promise<T>): Promise<T> {
 function AcmeCard() {
   const [meta, setMeta] = useState<AcmeSettings | null>(null);
   const [certs, setCerts] = useState<CertificatesResponse | null>(null);
+  const [liveTls, setLiveTls] = useState<TlsSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -2150,9 +2151,14 @@ function AcmeCard() {
   const load = async () => {
     setLoading(true);
     try {
-      const [settings, list] = await Promise.all([api.getAcme(), api.getCertificates()]);
+      const [settings, list, tls] = await Promise.all([
+        api.getAcme(),
+        api.getCertificates(),
+        api.getTls().catch(() => null),
+      ]);
       setMeta(settings);
       setCerts(list);
+      setLiveTls(tls);
     } catch (e) {
       setError(isNotImplemented(e) ? "后端尚未支持证书管理" : errMsg(e));
     } finally {
@@ -2557,6 +2563,20 @@ function AcmeCard() {
                   30 天内到期 <strong>{expiringSoon.length}</strong>
                 </span>
               </div>
+              <div style={{ fontSize: 12, lineHeight: 1.8, borderTop: "1px solid var(--monet-outline-variant)", paddingTop: 8 }}>
+                <div>
+                  当前连接：<strong>{liveTls?.https ? "HTTPS 已启用" : "HTTP 明文"}</strong>
+                  {liveTls?.source && liveTls.source !== "none"
+                    && ` · 来源 ${({ "self-signed": "自签名", uploaded: "上传", pkcs12: "上传（PKCS#12）", acme: "ACME 自动" } as Record<string, string>)[liveTls.source] ?? liveTls.source}`}
+                </div>
+                {liveTls?.subject && <div>Subject：<code>{liveTls.subject}</code></div>}
+                {liveTls?.issuer && <div>Issuer：{liveTls.issuer}</div>}
+                {liveTls?.sans?.length ? <div>SAN：<code>{liveTls.sans.join("、")}</code></div> : null}
+                {liveTls?.expires && <div>过期时间：{formatDateTime(String(liveTls.expires))}</div>}
+                {liveTls?.fingerprintSha256 && (
+                  <div style={{ wordBreak: "break-all" }}>SHA-256：<code>{liveTls.fingerprintSha256}</code></div>
+                )}
+              </div>
               <div style={{ fontSize: 13, lineHeight: 1.9 }}>
                 {activeEntries.length ? (
                   activeEntries.map((entry) => (
@@ -2722,6 +2742,18 @@ function AcmeCard() {
 
             {openId && (creating || selectedEntry) && (
               <div style={{ borderTop: "1px solid var(--monet-outline-variant)", paddingTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                {!creating && selectedEntry && (selectedEntry.subject || selectedEntry.fingerprintSha256) && (
+                  <div style={{ border: "1px solid var(--monet-outline-variant)", borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.8 }}>
+                    <div><strong>这张证书</strong></div>
+                    {selectedEntry.subject && <div>Subject：<code>{selectedEntry.subject}</code></div>}
+                    {selectedEntry.issuer && <div>Issuer：{selectedEntry.issuer}</div>}
+                    {selectedEntry.sans?.length ? <div>SAN：<code>{selectedEntry.sans.join("、")}</code></div> : null}
+                    {selectedEntry.notAfter && <div>到期：{formatDateTime(selectedEntry.notAfter)}</div>}
+                    {selectedEntry.fingerprintSha256 && (
+                      <div style={{ wordBreak: "break-all" }}>SHA-256：<code>{selectedEntry.fingerprintSha256}</code></div>
+                    )}
+                  </div>
+                )}
                 {sectionTitle(1, "证书需求", creating ? "主域名自动分析，只填完整域名" : `${selectedEntry!.apex} · 主域名由域名自动归组`)}
                 {creating ? (
                   apexLocked ? (

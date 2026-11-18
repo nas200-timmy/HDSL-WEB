@@ -390,6 +390,11 @@ export interface CertificateEntry {
   lastAttempt: string | null;
   updatedAt: string | null;
   hasFiles: boolean;
+  /** 从 certs/<id>/fullchain.pem 解析出的叶子证书信息（没有文件时缺省） */
+  subject?: string;
+  issuer?: string;
+  sans?: string[];
+  fingerprintSha256?: string;
   status?: CertificateStatus;
 }
 

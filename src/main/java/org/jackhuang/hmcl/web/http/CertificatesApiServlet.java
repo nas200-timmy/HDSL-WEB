@@ -40,6 +40,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -156,6 +157,27 @@ public final class CertificatesApiServlet extends HttpServlet {
         row.addProperty("updatedAt", entry.updatedAt);
         row.addProperty("hasFiles", Files.isRegularFile(store.certPath(entry.id))
                 && Files.isRegularFile(store.keyPath(entry.id)));
+        X509Certificate leaf = readLeaf(store.certPath(entry.id));
+        if (leaf != null) {
+            row.addProperty("subject", leaf.getSubjectX500Principal().getName());
+            row.addProperty("issuer", leaf.getIssuerX500Principal().getName());
+            JsonArray sans = new JsonArray();
+            try {
+                var names = leaf.getSubjectAlternativeNames();
+                if (names != null) {
+                    for (List<?> name : names) {
+                        if (Integer.valueOf(2).equals(name.get(0)) && name.get(1) instanceof String dns) {
+                            sans.add("DNS:" + dns);
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+                // A certificate without readable SANs still exposes the rest.
+            }
+            row.add("sans", sans);
+            row.addProperty("notAfter", leaf.getNotAfter().toInstant().toString());
+            row.addProperty("fingerprintSha256", sha256(leaf));
+        }
         if (live != null) {
             CertificateService.Status status = live.status(entry.id);
             JsonObject s = new JsonObject();
@@ -476,6 +498,32 @@ public final class CertificatesApiServlet extends HttpServlet {
         } catch (RuntimeException e) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "malformed JSON");
             return null;
+        }
+    }
+
+    private static @Nullable X509Certificate readLeaf(Path certPath) {
+        if (!Files.isRegularFile(certPath)) {
+            return null;
+        }
+        try (var in = Files.newInputStream(certPath)) {
+            return (X509Certificate) java.security.cert.CertificateFactory.getInstance("X.509")
+                    .generateCertificate(in);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String sha256(X509Certificate certificate) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(certificate.getEncoded());
+            StringBuilder hex = new StringBuilder();
+            for (byte value : digest) {
+                hex.append(String.format("%02x", value));
+            }
+            return hex.toString();
+        } catch (Exception e) {
+            return "";
         }
     }
 
