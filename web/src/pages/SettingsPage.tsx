@@ -1748,7 +1748,6 @@ function TlsTab() {
 
   return (
     <>
-      <AcmeCard />
       <div className="section-caption">
         <KeepIcon size={16} />
         手动上传证书
@@ -1917,6 +1916,7 @@ function TlsTab() {
           </>
         ) : null}
       </div>
+      <AcmeCard />
       <ConfirmDialog
         open={selfSignedConfirmOpen}
         title="生成并使用自签名证书？"
@@ -2183,8 +2183,18 @@ function AcmeCard() {
   const selectedEntry = certs?.entries.find((entry) => entry.id === openId) ?? null;
   const editingUpload = !creating && selectedEntry?.source === "upload";
   const draftDomains = domains.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
-  const activeEntry = certs?.entries.find((entry) => entry.active) ?? null;
   const activeEntries = certs?.entries.filter((entry) => entry.active) ?? [];
+  const expiringSoon = (certs?.entries ?? []).filter((entry) => {
+    const left = entry.notAfter ? Math.ceil((new Date(entry.notAfter).getTime() - Date.now()) / 86_400_000) : null;
+    return left !== null && left <= 30;
+  });
+  const lastAttemptEntry = [...(certs?.entries ?? [])]
+    .filter((entry) => entry.lastAttempt)
+    .sort((a, b) => (b.lastAttempt ?? "").localeCompare(a.lastAttempt ?? ""))[0];
+  const nextCheck = [...(certs?.entries ?? [])]
+    .map((entry) => entry.status?.nextAttempt)
+    .filter((value): value is string => !!value)
+    .sort()[0];
   const issueEntry = certs?.entries.find((entry) => entry.id === issueId) ?? null;
   const apexEntries = apexDialog
     ? (certs?.entries ?? []).filter((entry) => entry.apex === apexDialog)
@@ -2527,34 +2537,51 @@ function AcmeCard() {
 
             <div
               style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "6px 20px",
-                alignItems: "center",
-                padding: "10px 12px",
                 border: "1px solid var(--monet-outline-variant)",
                 borderRadius: 6,
-                fontSize: 13,
+                padding: "10px 12px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
               }}
             >
-              {activeEntry ? (
-                <>
-                  <span>已启用 {activeEntries.length} 个主域名，各自使用自己的证书：</span>
-                  {activeEntries.map((entry) => (
-                    <span key={entry.id}>
-                      <strong>{entry.apex}</strong>
-                      <span style={{ color: "var(--monet-on-surface-variant)" }}>
-                        （{entry.source === "acme" ? "ACME" : "上传"}
-                        {entry.notAfter ? `，剩 ${daysLeft(entry.notAfter) ?? "?"} 天` : ""}）
-                      </span>
-                    </span>
-                  ))}
-                </>
-              ) : (
-                <span style={{ color: "var(--monet-on-surface-variant)" }}>
-                  当前没有受管证书，面板使用自签名证书。
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <span style={{ fontSize: 14, fontWeight: 600 }}>总览</span>
+                <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>面板现在的证书状态</span>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 24px", fontSize: 13 }}>
+                <span>主域名 <strong>{sortedGroups.length}</strong></span>
+                <span>证书 <strong>{certs.entries.length}</strong></span>
+                <span>覆盖域名 <strong>{allNames.length}</strong></span>
+                <span style={{ color: expiringSoon.length ? "var(--monet-error)" : undefined }}>
+                  30 天内到期 <strong>{expiringSoon.length}</strong>
                 </span>
-              )}
+              </div>
+              <div style={{ fontSize: 13, lineHeight: 1.9 }}>
+                {activeEntries.length ? (
+                  activeEntries.map((entry) => (
+                    <div key={entry.id}>
+                      当前默认 · <strong>{entry.apex}</strong>：
+                      {entry.source === "acme" ? "ACME" : "上传"} ·{" "}
+                      {entry.notAfter
+                        ? `${formatDateTime(entry.notAfter)}（剩 ${daysLeft(entry.notAfter) ?? "?"} 天）`
+                        : "尚未签发"}{" "}
+                      {stateTag(entry)}
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ color: "var(--monet-on-surface-variant)" }}>
+                    当前没有受管证书，面板使用自签名证书。
+                  </div>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                最近一次签发：
+                {lastAttemptEntry?.lastAttempt
+                  ? `${formatDateTime(lastAttemptEntry.lastAttempt)} ${lastAttemptEntry.lastError ? "失败" : "成功"}（${lastAttemptEntry.apex}）`
+                  : "还没有记录"}
+                {nextCheck && ` · 下次自动检查：${formatDateTime(nextCheck)}`}
+              </div>
             </div>
 
             {sortedGroups.length === 0 ? (
