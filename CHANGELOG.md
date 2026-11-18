@@ -101,6 +101,8 @@
   避免定制主题下被误读成错误提示。
 - ACME 的单次 HTTP 超时从 acme4j 默认的 10 秒放宽到 60 秒，账号、订单、授权列表与证书
   下载也纳入网络重试；修复 `HttpTimeoutException: request timed out` 直接导致签发失败。
+- 防 staging 证书锁死面板：staging 签发的证书不再自动成为主域名默认，手动切换会二次确认；
+  列表用 `staging` 标签标出，文档补了局域网/注册表恢复办法。
 
 ### HTTP 安全
 

@@ -2265,6 +2265,11 @@ function AcmeCard() {
   };
 
   const activateEntry = async (entry: CertificateEntry) => {
+    if (entry.staging && !window.confirm(
+      "这是 staging 测试证书，浏览器不信任。设为默认后，浏览器会拦截面板，只能改用局域网地址或 SSH 隧道进来再切回去。仍要继续吗？",
+    )) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -2378,7 +2383,15 @@ function AcmeCard() {
 
   const stateTag = (entry: CertificateEntry) => {
     if (entry.status?.state === "issuing") return <span className="tag warn">签发中</span>;
-    if (entry.active) return <span className="tag running">默认</span>;
+    if (entry.active) {
+      return (
+        <>
+          <span className="tag running">默认</span>
+          {entry.staging && <span className="tag warn" style={{ marginLeft: 4 }}>staging</span>}
+        </>
+      );
+    }
+    if (entry.staging) return <span className="tag warn">staging</span>;
     if (entry.status?.state === "error") return <span className="tag warn">上次失败</span>;
     if (entry.pending) return <span className="tag plain">待重新签发</span>;
     if (entry.source === "upload") return <span className="tag plain">备用（上传）</span>;

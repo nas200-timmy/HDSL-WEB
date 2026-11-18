@@ -331,7 +331,9 @@ public final class CertificateService implements AutoCloseable {
         // signed main domain is served without an extra click.
         boolean hasDefault = store.all().stream()
                 .anyMatch(item -> item.apex.equals(entry.apex) && item.active);
-        if (!hasDefault) {
+        // A staging certificate is not trusted by browsers: never make it a
+        // default automatically, or the panel becomes unreachable.
+        if (!hasDefault && !entry.staging) {
             store.setActive(entry.id);
         }
         CertificateStore.Entry refreshed = store.find(entry.id);
