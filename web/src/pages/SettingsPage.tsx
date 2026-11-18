@@ -2114,6 +2114,8 @@ function AcmeCard() {
   const [manualApex, setManualApex] = useState(false);
   const [apexDialog, setApexDialog] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [confirmActivate, setConfirmActivate] = useState<CertificateEntry | null>(null);
+  const [confirmDeleteCert, setConfirmDeleteCert] = useState<CertificateEntry | null>(null);
 
   // 证书草稿
   const [apex, setApex] = useState("");
@@ -2340,12 +2342,7 @@ function AcmeCard() {
     }
   };
 
-  const activateEntry = async (entry: CertificateEntry) => {
-    if (entry.staging && !window.confirm(
-      "这是 staging 测试证书，浏览器不信任。设为默认后，浏览器会拦截面板，只能改用局域网地址或 SSH 隧道进来再切回去。仍要继续吗？",
-    )) {
-      return;
-    }
+  const doActivate = async (entry: CertificateEntry) => {
     setBusy(true);
     setError(null);
     try {
@@ -2359,16 +2356,26 @@ function AcmeCard() {
     }
   };
 
-  const deleteEntry = async (entry: CertificateEntry) => {
-    if (!window.confirm(`删除 ${entry.apex} 的这张证书？文件会一起删掉，但不影响当前已生效的证书。`)) {
+  /// staging 证书会让浏览器拦截面板，先走页面内确认框再切。
+  const activateEntry = (entry: CertificateEntry) => {
+    if (entry.staging) {
+      setApexDialog(null);
+      setConfirmActivate(entry);
       return;
     }
+    void doActivate(entry);
+  };
+
+  const doDelete = async (entry: CertificateEntry) => {
     setBusy(true);
     setError(null);
     try {
       await withElevation(() => api.deleteCertificate(entry.id));
       if (openId === entry.id) {
         setOpenId(null);
+      }
+      if (selectedId === entry.id) {
+        setSelectedId(null);
       }
       await load();
       toast("info", "证书已删除");
@@ -2377,6 +2384,11 @@ function AcmeCard() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const deleteEntry = (entry: CertificateEntry) => {
+    setApexDialog(null);
+    setConfirmDeleteCert(entry);
   };
 
   const openCredential = (mode: "new" | "edit", profile?: AcmeCredentialProfile) => {
@@ -3338,6 +3350,52 @@ function AcmeCard() {
           )}
         </div>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmActivate}
+        title="切换到 staging 测试证书？"
+        danger
+        busy={busy}
+        confirmLabel="仍然切换"
+        cancelLabel="取消"
+        onCancel={() => setConfirmActivate(null)}
+        onConfirm={() => {
+          const target = confirmActivate;
+          setConfirmActivate(null);
+          if (target) {
+            void doActivate(target);
+          }
+        }}
+        message={
+          <div style={{ lineHeight: 1.7 }}>
+            <p>这是 staging 测试证书，浏览器不信任。设为默认后，浏览器会拦截面板，只能改用局域网地址或 SSH 隧道进来再切回去。</p>
+            <p>当前已生效的证书不受影响，但切换后这个主域名会改用测试证书。</p>
+          </div>
+        }
+      />
+
+      <ConfirmDialog
+        open={!!confirmDeleteCert}
+        title="删除这张证书？"
+        danger
+        busy={busy}
+        confirmLabel="删除"
+        cancelLabel="取消"
+        onCancel={() => setConfirmDeleteCert(null)}
+        onConfirm={() => {
+          const target = confirmDeleteCert;
+          setConfirmDeleteCert(null);
+          if (target) {
+            void doDelete(target);
+          }
+        }}
+        message={
+          <div style={{ lineHeight: 1.7 }}>
+            <p>{confirmDeleteCert ? `将删除主域名 ${confirmDeleteCert.apex} 下的这张证书，磁盘文件一起删除。` : ""}</p>
+            <p>当前已生效的证书不受影响；如果它是该主域名的默认证书，需要先切换到别的证书才能删除。</p>
+          </div>
+        }
+      />
     </div>
   );
 }
