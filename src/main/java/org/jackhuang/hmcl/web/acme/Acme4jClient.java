@@ -65,6 +65,10 @@ public final class Acme4jClient implements AcmeClient {
         }
         try {
             Session session = new Session(URI.create(request.directoryUrl()));
+            // acme4j defaults to a 10 s timeout per request, which is too tight
+            // for a home/NAS uplink to Let's Encrypt: one slow poll aborts the
+            // whole issuance with `HttpTimeoutException`.
+            session.networkSettings().setTimeout(Duration.ofSeconds(60));
             session.setLocale(java.util.Locale.US);
 
             AccountBuilder builder = new AccountBuilder()
@@ -80,10 +84,11 @@ public final class Acme4jClient implements AcmeClient {
                     != (request.eabHmacKey() == null || request.eabHmacKey().isBlank())) {
                 throw new AcmeClientException("EAB requires both the key id and the HMAC key");
             }
-            Account account = builder.create(session);
+            Account account = withNetworkRetry(() -> builder.create(session));
 
-            Order order = account.newOrder().domains(request.domains()).create();
-            for (Authorization authorization : order.getAuthorizations()) {
+            Order order = withNetworkRetry(() ->
+                    account.newOrder().domains(request.domains()).create());
+            for (Authorization authorization : withNetworkRetry(order::getAuthorizations)) {
                 if (authorization.getStatus() == Status.VALID) {
                     continue;
                 }
@@ -142,7 +147,10 @@ public final class Acme4jClient implements AcmeClient {
             if (certificate == null) {
                 throw new AcmeClientException("the ACME order has no certificate");
             }
-            certificate.download();
+            withNetworkRetry(() -> {
+                certificate.download();
+                return null;
+            });
             X509Certificate leaf = certificate.getCertificate();
             StringWriter chain = new StringWriter();
             certificate.writeCertificate(chain);
