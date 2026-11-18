@@ -188,6 +188,23 @@ SMB/NFS export、某些 Windows 共享卷同样如此）会把**共享属主**�
   字段；网关拒绝（scope 与自杀闸）记 `agent.denied`（`self_refused` 等 outcome），护栏起
   作用与缺席都看得见；换票、吊销、停实例等都在 `audit-*.jsonl`。
 
+### 2.10 证书、ACME 凭据与 SNI
+
+- `/data/certs/registry.json`、`certs/<id>/privkey.pem`、`uploaded.*`、`self-signed*`
+  都是 TLS 身份；`certs/` 归 root `0700`，注册表与私钥 `0600`。备份 `/data` 时按敏感数据对待。
+- `/data/auth/acme.json`（0600 root）存 DNS provider token（Cloudflare API Token、阿里云
+  AccessKey、DNSPod/腾讯云、GoDaddy、DigitalOcean、Vultr）和 CA 的 EAB 凭据；不进
+  `server.yaml`，API 只回脱敏字段。**它等于域名控制权**：拿到 token 可以改 TXT、签发或
+  吊销证书。按最小权限创建（只给 Zone.DNS 编辑一类权限）、单独专用、可轮换。
+- ACME 只做出站：面板访问 CA 与 DNS provider API，**不开放 80/443 入站**。DNS-01 失败
+  会清理自己写的 TXT；只有 provider 拒绝删除时才需要去控制台手工清理。
+- 多主域名/SNI：`registry.json` 的 `active` 是**每个主域名各一张**，不再有「PKCS#12
+  静默优先」。迁移后旧文件保留，但不再参与选择；实际生效的证书以注册表为准。
+- staging 证书不被浏览器信任，不要设为默认；默认策略会阻止自动切换，手动切换二次确认。
+  锁死时用局域网地址切回可信证书，或停容器改 `certs/registry.json` 的 `active`。
+- 证书上传/签发/切换要求 HTTPS + 开发者提权；写 DNS 凭据还要面板密码二次确认；裸 HTTP
+  下这些接口返回 `tls_required`。
+
 ## 3. 面板不管的事
 
 - **网络边界**：它不替你选"要不要暴露到公网"。反代鉴权、IP 白名单、VPN 都得你自己配。
@@ -305,6 +322,26 @@ HTTP 第二因子取消了）；或者给它一个默认关闭的 `plain.allow_c
 显式承认风险。**产品上保留旧浏览器支持没问题，但安全文档不能把它说成安全。**
 
 ---
+
+### 6.2 Java4Shell（CVE-2026-114938）
+
+OpenJDK 的 AVX-512 VBMI Base64 解码 intrinsic 在特定畸形输入上会越界写堆内存。影响
+HotSpot 17.0.6+、21、25、27，且**只在 x86-64 且 CPU 暴露 `avx512_vbmi`**（Ice Lake /
+Sapphire Rapids、AMD Zen 4/5）时命中；ARM、老 Xeon、AMD Zen 4 以前的机器不在这条路径上。
+CVSS 3.1 为 8.1，公开触发串存在，截至 2026-11-18 没有公开的在野利用报告。
+
+面板自己的登录密码信封在**认证之前**就会 `Base64.getUrlDecoder().decode()` 解
+`clientPublicKey`/`nonce`/`ciphertext`；在受影响的 JDK + CPU 上，未认证请求可以进入这条
+路径。登录限流发生在解码之后，不能阻止解码本身。缓解顺序：
+
+1. 升级到 OpenJDK `21.0.13.1+`（17/25/27 对应 `.1` 构建）；
+2. 暂时升级不了时，在 x86-64 上给 JVM 加 `-XX:UseAVX=2`。容器入口在检测到
+   `avx512_vbmi` 时会自动加；可以用 `HDSL_JAVA4SHELL_GUARD=0` 关闭。裸 jar 需手动加；
+3. 检查：宿主机 `lscpu | grep -o avx512_vbmi`；运行中的容器
+   `jcmd 1 VM.flags | grep UseAVX` 应为 2。
+
+不要在生产面板上直接试公开 PoC；要验证就用临时数据目录、临时端口起一个实例。升级 JDK
+并确认补丁生效后，可以去掉 `UseAVX=2`（它会让 JVM 整体退回 AVX2）。
 
 ## 7. 免责
 

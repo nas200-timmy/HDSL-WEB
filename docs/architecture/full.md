@@ -74,7 +74,7 @@ flowchart LR
     direction TB
     cfg["server.yaml<br/>设置"]
     authd["auth/<br/>users · developer · agent · acme"]
-    certs["certs/<br/>TLS · acme/fullchain.pem · privkey.pem"]
+    certs["certs/<br/>registry.json · <id>/fullchain.pem · privkey.pem"]
     logs["logs/<br/>面板 · 审计"]
     hdsl["hdsl/<br/>launcher-settings · instances · homes<br/>runtimes · catalog · logs"]
     brandsd["brands/<brand>/<br/>releases · instances"]
@@ -213,6 +213,8 @@ flowchart LR
 | `/api/brands/*` | `BrandApiServlet` | 品牌安装、实例、日志、终端、反代入口 |
 | `/api/developer/*` | `DeveloperApiServlet` | 开发者提权、Agent 票据、E-Stop |
 | `/api/settings/*` | `TlsApiServlet`、registry / 日志保留 / 品牌源 | TLS、registry、品牌源、日志保留 |
+| `/api/settings/certificates/*` | `CertificatesApiServlet` | 按主域名管理证书：列表/创建/更新/删除、签发、切换 `active`、迁移状态 |
+| `/api/settings/acme/*` | `AcmeApiServlet` | 旧版 ACME 配置、DNS 凭据、异步签发入口（新界面走证书注册表） |
 | `/api/network/*` | `NetworkApiServlet` | 代理、超时、网络自检 |
 | `/api/wallpapers/*` | `WallpaperApiServlet` | 壁纸 |
 | `/api/mc/*` | `McApiServlet` | MC 实例、核心、Java、插件、世界、备份、控制台（受 `McFeatureFilter` 保护） |
@@ -245,6 +247,8 @@ flowchart LR
   auth --> dev["developer.json"]
   auth --> agent["agent.json"]
   data --> certs["certs/"]
+  certs --> certreg["registry.json<br/>主域名 · active · ACME 设置"]
+  certs --> certpem["<id>/<br/>fullchain.pem · privkey.pem"]
   data --> logs["logs/"]
   data --> hdsl["hdsl/"]
   hdsl --> launcher["launcher-settings.json"]

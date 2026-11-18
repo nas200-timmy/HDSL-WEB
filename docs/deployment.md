@@ -285,15 +285,20 @@ compose / 磁盘 / 面板端口 / MC 端口逐条列出来，缺什么就给这�
 
 ## 2. TLS 证书轮换
 
-证书相关的三个位置：
+证书与凭据的存放位置：
 
 | 文件 | 来源 |
 |---|---|
+| `/data/certs/registry.json` | 证书注册表：主域名分组、每张证书的 `active`、ACME 设置（0600） |
+| `/data/certs/<id>/fullchain.pem`、`privkey.pem` | 每张受管证书的 PEM 与私钥（0600） |
 | `/data/certs/self-signed.pem`、`self-signed-key.pem` | 首启自动生成（`https.enabled: true` 且未配证书） |
-| `/data/certs/uploaded.pem`、`uploaded.key` | 面板上传 PEM |
-| `/data/certs/uploaded.p12` | 面板上传 PKCS#12（**加载优先级最高**，会盖过 PEM） |
-| `/data/certs/acme/fullchain.pem`、`privkey.pem` | ACME 签发结果（自动续期） |
+| `/data/certs/uploaded.pem`、`uploaded.key` | 旧版上传的 PEM（仅在没有 registry 时沿用） |
+| `/data/certs/uploaded.p12` | 旧版上传的 PKCS#12（旧加载顺序里优先级最高，registry 接管后不再参与选择） |
+| `/data/certs/acme/fullchain.pem`、`privkey.pem` | 旧版 ACME 结果；升级迁移后保留，但不再自动续期 |
 | `/data/auth/acme.json` | DNS provider token / AccessKey 与 CA EAB 凭据（0600 root） |
+
+> v0.6.93 起，只要 `certs/registry.json` 存在，实际生效的证书就由注册表里的 `active`
+> 决定；旧的 `https.pkcs12_file` / `cert_file` / `https.acme` 只在迁移时读取。
 
 ### 面板上传：热切换，不重启
 
@@ -321,10 +326,10 @@ compose / 磁盘 / 面板端口 / MC 端口逐条列出来，缺什么就给这�
 - 建议先用 staging（`use_staging: true`）跑通，再切生产；`POST /api/settings/acme/issue`
   是异步的，立即返回，DNS-01 挑战在后台跑，状态看 `GET /api/settings/acme`。
 - 证书管理（设置 → HTTPS 证书 → 证书管理）按**主域名**分组：一个主域名下可以有多张证书，
-  默认一张 ACME 自动续期证书；子域名只是这张证书的成员，增删成员后要手动「保存并签发」才生效。
-  列表里能看到每张证书覆盖的域名、来源、到期和当前是否生效；上传的证书会作为同组的一张
-  「备用」出现，可以在列表里切成当前使用。注册表在 `<data>/certs/registry.json`（0600），
-  私钥在 `<data>/certs/<id>/privkey.pem`（0600）。
+  默认一张 ACME 自动续期证书；子域名只是这张证书的成员，增删后提示「待重新签发」，由用户
+  手动触发。列表里能看到每张证书覆盖的域名、来源、到期和当前是否生效；上传的证书会作为
+  同组的一张「备用」出现，可以在列表里切成当前使用。注册表在
+  `<data>/certs/registry.json`（0600），私钥在 `<data>/certs/<id>/privkey.pem`（0600）。
 - DNS 凭证只保存 Secret（AccessKey / Token），**不保存 zone**：签发时自动把证书的主域名
   当作 zone，同一个凭证可以服务多个主域名。凭据校验失败、修改权限不足的报错会直接显示
   在签发弹窗里。
@@ -342,8 +347,9 @@ compose / 磁盘 / 面板端口 / MC 端口逐条列出来，缺什么就给这�
   只有 provider 拒绝删除时才需要去控制台手工清理。
 - 失败不会删旧证书：当前自签或已上传的证书继续服务，错误写进状态与审计；
   续期在到期前 `renew_before_days`（7–60）触发。
-- 签发结果在 `/data/certs/acme/fullchain.pem` 与 `privkey.pem`；加载/热切换走上传证书
-  同一条路径。写配置/凭据要求 HTTPS + 开发者提权；写凭据还要面板密码二次确认。
+- 签发结果写入注册表对应的 `/data/certs/<id>/fullchain.pem` 与 `privkey.pem`；加载/
+  热切换走上传证书同一条路径。旧的 `/data/certs/acme/*` 只用于迁移兼容。
+  写配置/凭据要求 HTTPS + 开发者提权；写凭据还要面板密码二次确认。
   裸 HTTP 下 ACME 接口返回 `tls_required`。
 
 最小配置：
@@ -373,6 +379,43 @@ curl -k -b cookie -X PUT https://panel/api/settings/acme/credentials \
 
 > 仍然推荐外层反代终结 TLS 的部署；ACME 是给「面板自己对外」或「没有 Caddy」的场景。
 > 真实签发前先读 [`security.md` §6.1](security.md)：DNS token 泄漏等于域名被接管。
+
+### 证书管理：多主域名、多证书与 SNI（v0.6.93）
+
+「设置 → HTTPS 证书 → 证书管理」是这一版的主入口。它不再把证书当成一个全局开关：
+
+- **按主域名分组**：一个主域名（例如 `example.com`）下可以有多张证书——默认一张 ACME，
+  上传的 PEM/PKCS#12 作为同组备用。列表显示覆盖的域名、来源、到期、是否当前使用；
+  子域名只是成员，增删成员后提示「待重新签发」，由用户手动触发。
+- **每个主域名各选一张默认证书**：`certs/registry.json` 里的 `active` 是每个主域名各一份，
+  不再全局只有一张。多个主域名同时存在时，Jetty 按 SNI 返回各自的证书；首次签发的证书
+  自动成为该主域名的默认。
+- **申请与上传**：申请证书时按填写的完整域名自动归入主域名；上传已签发证书同样自动归组。
+  两者都支持手动指定主域名：已有就并入，新的就单独成组；手动指定覆盖不了证书里的域名时
+  退回自动分析。
+- **总览与详情**：顶部总览显示主域名/证书/覆盖域名数量、30 天内到期数量、每个主域名的
+  当前默认证书、最近一次签发结果与下次检查时间。点选某张证书，下方显示 Subject、Issuer、
+  SAN、到期时间与 SHA-256 指纹（从该证书自己的文件解析）。
+- **staging 保护**：staging 证书不会自动成为默认，手动切换会二次确认，列表标 `staging`。
+  万一已经切到 staging：用局域网地址进入切回可信证书；或停容器，把 `certs/registry.json`
+  里那张 staging 的 `"active"` 改成 `false`、可信那张改成 `true`，再启动。
+- **迁移**：升级时把 `https.acme` 变成一张 ACME 证书，把 `https.pkcs12_file` /
+  `cert_file` 导出成一张上传证书；迁移后旧文件保留，后续续期只由证书列表管理。
+- **数据**：注册表 `certs/registry.json`（0600）是唯一事实来源；每张证书的 PEM 与私钥在
+  `certs/<id>/`（0600）。备份 `/data` 时它们都是敏感数据。
+
+### 运行时 JDK 安全（Java4Shell / CVE-2026-114938）
+
+容器入口会在 **x86-64 且 CPU 暴露 `avx512_vbmi`** 时自动给 JVM 追加 `-XX:UseAVX=2`，
+绕开受影响的 AVX-512 VBMI Base64 intrinsic；非 x86 或没有该指令的主机不会加。该兜底
+不替代 JDK 补丁：
+
+- 修复版是 OpenJDK `21.0.13.1+`（以及 17/25/27 对应的 `.1` 构建）；升级后可用
+  `HDSL_JAVA4SHELL_GUARD=0` 关闭自动参数。
+- **裸 jar** 不在容器入口里，受影响的机器需要自己加 `-XX:UseAVX=2`，或换已修复的 JDK。
+- 核查：宿主机 `lscpu | grep -o avx512_vbmi`；容器内
+  `java -XX:+PrintFlagsFinal -version | grep UseAVX` 应为 2。
+- 细节与未认证解码路径见 [`security.md` §6.2](security.md)。
 
 ### 手工替换 + 重启
 
