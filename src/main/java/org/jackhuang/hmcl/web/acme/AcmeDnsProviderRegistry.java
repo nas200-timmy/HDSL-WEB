@@ -46,8 +46,7 @@ public final class AcmeDnsProviderRegistry {
     /// the constructor above.
     private static final Map<String, String> HINTS = Map.ofEntries(
             Map.entry("zone",
-                    "填你在 DNS 服务商托管的主域名，如 example.com；不要填 www.example.com。"
-                            + "签发时面板会在它的 _acme-challenge 下自动写 TXT 记录。"
+                    "不用在这里填：签发时会自动使用证书的主域名（zone）。"
                             + "Cloudflare 可留空，由面板自动探测。"),
             Map.entry("zoneId", "Route 53 的 Hosted Zone ID，形如 Z1D633PJN98FT9。"),
             Map.entry("region", "Route 53 区域，通常填 us-east-1。"),
@@ -65,18 +64,18 @@ public final class AcmeDnsProviderRegistry {
     private static final List<Info> PROVIDERS = List.of(
             new Info("cloudflare", "Cloudflare", "Tier 1", true, List.of(
                     new Field("apiToken", "API Token", true, true),
-                    new Field("zone", "Zone（主域名，可留空）", false, false))),
+                    new Field("zone", "Zone（由证书决定，可留空）", false, false))),
             new Info("aliyun", "阿里云 DNS", "Tier 1", true, List.of(
                     new Field("accessKeyId", "AccessKey ID", false, true),
                     new Field("accessKeySecret", "AccessKey Secret", true, true),
-                    new Field("zone", "Zone（主域名）", false, true))),
+                    new Field("zone", "Zone（由证书决定）", false, false))),
             new Info("dnspod", "DNSPod / 腾讯云", "Tier 1", true, List.of(
                     new Field("token", "API Token", true, true),
-                    new Field("zone", "Zone（主域名）", false, true))),
+                    new Field("zone", "Zone（由证书决定）", false, false))),
             new Info("huawei", "华为云 DNS", "Tier 1", false, List.of(
                     new Field("accessKeyId", "AccessKey ID", false, true),
                     new Field("accessKeySecret", "AccessKey Secret", true, true),
-                    new Field("zone", "Zone（主域名）", false, true))),
+                    new Field("zone", "Zone（由证书决定）", false, false))),
             new Info("route53", "AWS Route 53", "Tier 2", false, List.of(
                     new Field("accessKeyId", "Access Key ID", false, true),
                     new Field("secretAccessKey", "Secret Access Key", true, true),
@@ -85,17 +84,17 @@ public final class AcmeDnsProviderRegistry {
             new Info("godaddy", "GoDaddy", "Tier 2", true, List.of(
                     new Field("apiKey", "API Key", true, true),
                     new Field("apiSecret", "API Secret", true, true),
-                    new Field("zone", "Zone（主域名）", false, true))),
+                    new Field("zone", "Zone（由证书决定）", false, false))),
             new Info("namecheap", "Namecheap", "Tier 2", false, List.of(
                     new Field("apiUser", "API User", false, true),
                     new Field("apiKey", "API Key", true, true),
                     new Field("username", "Username", false, true))),
             new Info("digitalocean", "DigitalOcean", "Tier 2", true, List.of(
                     new Field("token", "Personal Access Token", true, true),
-                    new Field("zone", "Zone（主域名）", false, true))),
+                    new Field("zone", "Zone（由证书决定）", false, false))),
             new Info("vultr", "Vultr", "Tier 2", true, List.of(
                     new Field("apiKey", "API Key", true, true),
-                    new Field("zone", "Zone（主域名）", false, true))),
+                    new Field("zone", "Zone（由证书决定）", false, false))),
             new Info("gandi", "Gandi", "Tier 3", false, List.of(
                     new Field("token", "Personal Access Token", true, true))),
             new Info("porkbun", "Porkbun", "Tier 3", false, List.of(
@@ -103,7 +102,7 @@ public final class AcmeDnsProviderRegistry {
                     new Field("secretApiKey", "Secret API Key", true, true))),
             new Info("rfc2136", "RFC 2136 / nsupdate", "Tier 3", false, List.of(
                     new Field("server", "DNS Server", false, true),
-                    new Field("zone", "Zone（主域名）", false, true),
+                    new Field("zone", "Zone（由证书决定）", false, false),
                     new Field("tsigName", "TSIG Key Name", false, true),
                     new Field("tsigSecret", "TSIG Secret", true, true))),
             new Info("acme-dns", "acme-dns", "Tier 3", false, List.of(

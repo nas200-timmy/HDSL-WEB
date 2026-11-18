@@ -294,7 +294,12 @@ public final class CertificateService implements AutoCloseable {
         if (ca.requiresEab() && !credential.eabConfigured()) {
             throw new AcmeClientException("CA `" + ca.displayName() + "` requires EAB credentials");
         }
-        AcmeDnsProvider provider = AcmeDnsProviderRegistry.create(entry.provider, credential.dns());
+        // The zone is a property of the certificate, not of the credential
+        // profile: the same Aliyun key can serve several main domains. It is
+        // injected here so providers never have to store it with the secret.
+        Map<String, String> dns = new java.util.LinkedHashMap<>(credential.dns());
+        dns.put("zone", entry.apex);
+        AcmeDnsProvider provider = AcmeDnsProviderRegistry.create(entry.provider, dns);
         String directory = AcmeCa.directory(entry.ca, "", entry.staging);
 
         phases.put(entry.id, "order");

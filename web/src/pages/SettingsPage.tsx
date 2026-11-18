@@ -2092,6 +2092,9 @@ function AcmeCard() {
 
   const [openId, setOpenId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [apexLocked, setApexLocked] = useState(false);
+  const [apexChoice, setApexChoice] = useState("__new");
+  const [apexDialog, setApexDialog] = useState<string | null>(null);
 
   // 证书草稿
   const [apex, setApex] = useState("");
@@ -2165,6 +2168,9 @@ function AcmeCard() {
   const activeEntry = certs?.entries.find((entry) => entry.active) ?? null;
   const activeEntries = certs?.entries.filter((entry) => entry.active) ?? [];
   const issueEntry = certs?.entries.find((entry) => entry.id === issueId) ?? null;
+  const apexEntries = apexDialog
+    ? (certs?.entries ?? []).filter((entry) => entry.apex === apexDialog)
+    : [];
 
   const openEditor = (entry: CertificateEntry) => {
     setCreating(false);
@@ -2182,11 +2188,18 @@ function AcmeCard() {
     setEnabled(entry.enabled);
   };
 
-  const openCreate = () => {
+  const certCredentialFor = (apexValue: string) => {
+    const entry = (certs?.entries ?? []).find((item) => item.apex === apexValue && item.credentialId);
+    return entry ? credentials.find((item) => item.id === entry.credentialId) ?? null : null;
+  };
+
+  const openCreate = (apexTarget?: string) => {
     setCreating(true);
     setOpenId("__new__");
     setError(null);
-    setApex("");
+    setApex(apexTarget ?? "");
+    setApexLocked(!!apexTarget);
+    setApexChoice(apexTarget ?? "__new");
     setDomains("");
     setEmail(meta?.email ?? "");
     setCa(meta?.ca ?? "letsencrypt");
@@ -2521,6 +2534,10 @@ function AcmeCard() {
                           <span className="tag plain">未设默认</span>
                         );
                       })()}
+                      <span style={{ flex: 1 }} />
+                      <button className="btn btn-text dim" disabled={busy} onClick={() => setApexDialog(groupApex)}>
+                        管理
+                      </button>
                     </div>
                     {list.map((entry) => {
                       const left = daysLeft(entry.notAfter);
@@ -2571,8 +2588,8 @@ function AcmeCard() {
             )}
 
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn btn-raised ripple-host" disabled={busy} onClick={openCreate}>
-                新建证书组
+              <button className="btn btn-raised ripple-host" disabled={busy} onClick={() => openCreate()}>
+                {sortedGroups.length === 0 ? "添加主域名" : "申请证书"}
               </button>
             </div>
 
@@ -2633,19 +2650,53 @@ function AcmeCard() {
               <div style={{ borderTop: "1px solid var(--monet-outline-variant)", paddingTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
                 {sectionTitle(1, "证书需求", creating ? "先定主域名，再列子域名" : `${selectedEntry!.apex} · 主域名创建后不可改`)}
                 {creating ? (
-                  <div className="form-row" style={{ marginBottom: 0 }}>
-                    <span className="form-label">主域名 *</span>
-                    <input className="input" value={apex} onChange={(e) => setApex(e.target.value)} placeholder="example.com" disabled={busy} />
-                    <span className="form-hint">
-                      你在 DNS 服务商托管的那一级域名。所有子域名都必须属于它，凭证的 zone 也要填它。
-                    </span>
-                  </div>
+                  <>
+                    {!apexLocked && sortedGroups.length > 0 && (
+                      <div className="form-row" style={{ marginBottom: 0 }}>
+                        <span className="form-label">主域名</span>
+                        <select
+                          className="input"
+                          value={apexChoice}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setApexChoice(value);
+                            if (value !== "__new") {
+                              setApex(value);
+                              const fallback = certCredentialFor(value);
+                              if (fallback) {
+                                setProvider(fallback.provider);
+                                setCredentialId(fallback.id);
+                              }
+                            } else {
+                              setApex("");
+                            }
+                          }}
+                          disabled={busy}
+                        >
+                          {sortedGroups.map(([value]) => (
+                            <option key={value} value={value}>{value}</option>
+                          ))}
+                          <option value="__new">＋ 新建主域名…</option>
+                        </select>
+                        <span className="form-hint">选已有主域名，就是给它再签一张证书（比如覆盖新的子域名）。</span>
+                      </div>
+                    )}
+                    {(apexLocked || apexChoice === "__new" || sortedGroups.length === 0) && (
+                      <div className="form-row" style={{ marginBottom: 0 }}>
+                        <span className="form-label">主域名 *</span>
+                        <input className="input" value={apex} onChange={(e) => setApex(e.target.value)} placeholder="example.com" disabled={busy || apexLocked} />
+                        <span className="form-hint">
+                          你在 DNS 服务商托管的那一级域名（zone）。所有域名成员都必须属于它；申请时会自动用它作为 DNS zone，不需要在凭证里再填。
+                        </span>
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div className="form-hint">主域名：<code>{selectedEntry!.apex}</code>（同一主域名下可以有多张证书）</div>
                 )}
 
                 <div className="form-row" style={{ marginBottom: 0 }}>
-                  <span className="form-label">域名成员 {editingUpload ? "（上传证书不可编辑）" : "*"}</span>
+                  <span className="form-label">需要证书的完整域名 {editingUpload ? "（上传证书不可编辑）" : "*"}</span>
                   {editingUpload ? (
                     <div className="form-hint">{selectedEntry!.domains.join("、")}</div>
                   ) : (
@@ -2792,7 +2843,7 @@ function AcmeCard() {
                     {selectedCredential && (
                       <div className="form-hint" style={{ lineHeight: 1.9 }}>
                         已保存的值（只读）：
-                        {Object.entries(selectedCredential.maskedDns ?? {}).map(([key, value]) => (
+                        {Object.entries(selectedCredential.maskedDns ?? {}).filter(([key]) => key !== "zone").map(([key, value]) => (
                           <span key={key} style={{ marginRight: 12 }}>
                             {allProviders.find((item) => item.id === selectedCredential.provider)?.fields.find((f) => f.key === key)?.label ?? key}：<code>{value}</code>
                           </span>
@@ -2901,7 +2952,7 @@ function AcmeCard() {
                       <td style={{ padding: "8px" }}><strong>{profile.name}</strong></td>
                       <td style={{ padding: "8px" }}>{allProviders.find((item) => item.id === profile.provider)?.label ?? profile.provider}</td>
                       <td style={{ padding: "8px", fontSize: 12 }}>
-                        {Object.entries(profile.maskedDns ?? {}).map(([key, value]) => (
+                        {Object.entries(profile.maskedDns ?? {}).filter(([key]) => key !== "zone").map(([key, value]) => (
                           <div key={key}>
                             {fields.find((f) => f.key === key)?.label ?? key}：<code>{value}</code>
                           </div>
@@ -2935,6 +2986,62 @@ function AcmeCard() {
       </div>
 
       <Dialog
+        open={!!apexDialog}
+        title={apexDialog ? `${apexDialog} · 主域名管理` : "主域名管理"}
+        onClose={() => { if (!busy) setApexDialog(null); }}
+      >
+        <div style={{ maxWidth: 620, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ fontSize: 13, color: "var(--monet-on-surface-variant)" }}>
+            同一个主域名下的证书共用这个 DNS zone（{apexDialog}）。申请新证书时填写需要覆盖的完整域名即可，
+            不需要重复填 zone。
+          </div>
+          {apexEntries.length === 0 ? (
+            <div className="form-hint">这个主域名下还没有证书。</div>
+          ) : (
+            apexEntries.map((entry) => (
+              <div key={entry.id} style={{ border: "1px solid var(--monet-outline-variant)", borderRadius: 6, padding: "8px 10px", fontSize: 13 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", alignItems: "center" }}>
+                  <span>{entry.source === "acme" ? "ACME" : "上传"}</span>
+                  <span>{entry.notAfter ? formatDateTime(entry.notAfter) : "尚未签发"}</span>
+                  <span>{stateTag(entry)}</span>
+                  <span style={{ flex: 1 }} />
+                  {!entry.active && entry.hasFiles && (
+                    <button className="btn btn-text dim" disabled={busy} onClick={() => void activateEntry(entry)}>
+                      设为默认
+                    </button>
+                  )}
+                  {!entry.active && (
+                    <button className="btn btn-text dim" disabled={busy} onClick={() => void deleteEntry(entry)}>
+                      删除
+                    </button>
+                  )}
+                </div>
+                <div style={{ marginTop: 4, fontSize: 12, color: "var(--monet-on-surface-variant)", wordBreak: "break-all" }}>
+                  覆盖：{entry.domains.join("、")}
+                </div>
+              </div>
+            ))
+          )}
+          <div className="dialog-actions">
+            <button
+              className="btn btn-raised"
+              disabled={busy}
+              onClick={() => {
+                const target = apexDialog;
+                setApexDialog(null);
+                if (target) {
+                  openCreate(target);
+                }
+              }}
+            >
+              为该主域名申请证书
+            </button>
+            <button className="btn btn-text dim" disabled={busy} onClick={() => setApexDialog(null)}>关闭</button>
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog
         open={!!credDialog}
         title={credDialog?.mode === "edit" ? "编辑 DNS 凭证" : "新建 DNS 凭证"}
         onClose={() => { if (!busy) setCredDialog(null); }}
@@ -2957,6 +3064,9 @@ function AcmeCard() {
               ))}
             </select>
             <span className="form-hint">域名的 DNS 托管在哪家就选哪家；编辑时不能换厂商，换厂商请新建一条。</span>
+            <span className="form-hint">
+              Zone（主域名）不在这里填：申请证书时会自动使用证书的主域名，同一个凭证可以给多个主域名用。
+            </span>
           </div>
           <div className="form-row" style={{ marginBottom: 0 }}>
             <span className="form-label">凭证名称</span>
@@ -2964,7 +3074,7 @@ function AcmeCard() {
             <span className="form-hint">只用于面板里区分多条凭证。</span>
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {(credProviderInfo?.fields ?? []).map((field) => (
+            {(credProviderInfo?.fields ?? []).filter((field) => field.key !== "zone").map((field) => (
               <div className="form-row" key={field.key} style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
                 <span className="form-label">{field.label}{field.required ? " *" : ""}</span>
                 <input
