@@ -1630,6 +1630,7 @@ function TlsTab() {
   const [keyFile, setKeyFile] = useState<File | null>(null);
   const [p12File, setP12File] = useState<File | null>(null);
   const [p12Password, setP12Password] = useState("");
+  const [tlsApex, setTlsApex] = useState("");
   const [tlsFormError, setTlsFormError] = useState<string | null>(null);
   const [tlsBusy, setTlsBusy] = useState(false);
   const [redirectIn, setRedirectIn] = useState<number | null>(null);
@@ -1695,6 +1696,9 @@ function TlsTab() {
       fd.append("p12File", p12File);
       fd.append("password", p12Password);
     }
+    if (tlsApex.trim()) {
+      fd.append("apex", tlsApex.trim());
+    }
     setTlsFormError(null);
     setTlsBusy(true);
     try {
@@ -1710,7 +1714,7 @@ function TlsTab() {
         toast("info", "证书已保存，需重启容器后生效");
         void loadTls();
       } else {
-        toast("success", "证书已更新");
+        toast("success", r.apex ? `证书已更新，已归入主域名 ${r.apex}` : "证书已更新");
         void loadTls();
       }
     } catch (e) {
@@ -1885,6 +1889,20 @@ function TlsTab() {
                     </div>
                   </div>
                 )}
+                <div className="form-row" style={{ marginBottom: 0 }}>
+                  <span className="form-label">归入主域名（可选）</span>
+                  <input
+                    className="input"
+                    value={tlsApex}
+                    onChange={(e) => setTlsApex(e.target.value)}
+                    placeholder="留空自动分析，如 example.com"
+                    disabled={tlsBusy}
+                  />
+                  <span className="form-hint">
+                    上传已签发的证书时可以指定它归哪个主域名管理（填已有主域名就并入，填新的就单独成组）；
+                    留空则按证书里的域名自动分析。填了但覆盖不了证书里的域名时，会自动退回自动分析。
+                  </span>
+                </div>
                 {tlsFormError && <div className="form-error">{tlsFormError}</div>}
                 <div style={{ display: "flex", justifyContent: "flex-end" }}>
                   <button className="btn btn-raised ripple-host" disabled={tlsBusy} onClick={() => void doUploadTls()}>
@@ -2093,6 +2111,7 @@ function AcmeCard() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [apexLocked, setApexLocked] = useState(false);
+  const [manualApex, setManualApex] = useState(false);
   const [apexDialog, setApexDialog] = useState<string | null>(null);
 
   // 证书草稿
@@ -2193,6 +2212,7 @@ function AcmeCard() {
     setError(null);
     setApex(apexTarget ?? "");
     setApexLocked(!!apexTarget);
+    setManualApex(!!apexTarget);
     setDomains("");
     setEmail(meta?.email ?? "");
     setCa(meta?.ca ?? "letsencrypt");
@@ -2229,7 +2249,20 @@ function AcmeCard() {
     if (!draftDomains.length) {
       return "至少填一个要签发的域名";
     }
-    if (creating && !apexLocked && !draftDomainsPreview) {
+    if (creating && !apexLocked && manualApex) {
+      const target = apex.trim().toLowerCase();
+      if (!target.includes(".")) {
+        return "手动指定的主域名要像 example.com 这样，带上后缀";
+      }
+      const outside = draftDomains.some((domain) => {
+        const base = domain.startsWith("*.") ? domain.slice(2) : domain;
+        return base !== target && !base.endsWith("." + target);
+      });
+      if (outside) {
+        return "这些域名不属于手动指定的主域名，请改主域名或分开申请";
+      }
+    }
+    if (creating && !apexLocked && !manualApex && !draftDomainsPreview) {
       return "这些域名不属于同一个主域名，请分开申请";
     }
     if (!editingUpload && !email.includes("@")) {
@@ -2251,7 +2284,7 @@ function AcmeCard() {
     setBusy(true);
     try {
       const body: CertificateInput = {
-        apex: apex.trim().toLowerCase(),
+        apex: manualApex || apexLocked ? apex.trim().toLowerCase() : "",
         domains: draftDomains,
         ca,
         email: email.trim(),
@@ -2669,10 +2702,42 @@ function AcmeCard() {
                       归入主域名：<code>{apex}</code>（从主域名管理进入；同一主域名下的证书共用一个 DNS zone）
                     </div>
                   ) : (
-                    <div className="form-hint">
-                      主域名不用手填：按下面填写的完整域名自动分析归组，例如 <code>www.example.com</code> 归到
-                      <code>example.com</code>；不属于同一主域名的证书请分开申请。
-                    </div>
+                    <>
+                      <label className="input-check">
+                        <input
+                          type="checkbox"
+                          checked={manualApex}
+                          onChange={(e) => {
+                            setManualApex(e.target.checked);
+                            if (!e.target.checked) {
+                              setApex("");
+                            }
+                          }}
+                          disabled={busy}
+                        />
+                        <span>手动指定主域名（导入外部已签发的证书时用）</span>
+                      </label>
+                      {manualApex ? (
+                        <div className="form-row" style={{ marginBottom: 0 }}>
+                          <span className="form-label">主域名</span>
+                          <input
+                            className="input"
+                            value={apex}
+                            onChange={(e) => setApex(e.target.value)}
+                            placeholder="example.com"
+                            disabled={busy}
+                          />
+                          <span className="form-hint">
+                            证书会归到这个主域名下；域名成员必须都属于它。填已有主域名就并入，填新的就单独成组。
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="form-hint">
+                          主域名不用手填：按下面填写的完整域名自动分析归组，例如 <code>www.example.com</code> 归到
+                          <code>example.com</code>；不属于同一主域名的证书请分开申请。
+                        </div>
+                      )}
+                    </>
                   )
                 ) : (
                   <div className="form-hint">主域名：<code>{selectedEntry!.apex}</code>（同一主域名下可以有多张证书）</div>
@@ -2698,8 +2763,8 @@ function AcmeCard() {
                       </span>
                       {creating && (
                         <span className="form-hint">
-                          {apexLocked
-                            ? <>归入主域名：<code>{apex}</code>（自动管理）</>
+                          {apexLocked || manualApex
+                            ? <>归入主域名：<code>{apex || "（未填）"}</code>{apexLocked ? "（自动管理）" : "（手动指定）"}</>
                             : draftDomainsPreview
                               ? <>将归入主域名：<code>{draftDomainsPreview}</code>（自动分析）</>
                               : draftDomains.length

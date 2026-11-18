@@ -220,8 +220,13 @@ public final class TlsApiServlet extends HttpServlet {
             // Keep the certificate list in step with what is actually served.
             if (certificateStore != null) {
                 try {
-                    org.jackhuang.hmcl.web.acme.CertificateMigration
-                            .syncUploaded(certificateStore, certificates);
+                    org.jackhuang.hmcl.web.acme.CertificateStore.Entry imported =
+                            org.jackhuang.hmcl.web.acme.CertificateMigration
+                                    .syncUploaded(certificateStore, certificates, request.getParameter("apex"));
+                    if (imported != null) {
+                        body.addProperty("apex", imported.apex);
+                        body.addProperty("certificateId", imported.id);
+                    }
                 } catch (IOException e) {
                     org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
                             "The uploaded certificate is live but could not be added to the certificate list", e);

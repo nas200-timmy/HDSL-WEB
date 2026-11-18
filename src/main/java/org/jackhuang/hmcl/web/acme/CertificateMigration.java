@@ -79,6 +79,16 @@ public final class CertificateMigration {
     /// TLS settings endpoint after an upload, so both surfaces agree.
     public static @Nullable CertificateStore.Entry syncUploaded(
             CertificateStore store, CertificateManager certificates) throws IOException {
+        return syncUploaded(store, certificates, null);
+    }
+
+    /// Same, with an optional operator-chosen apex for the import. A paid
+    /// certificate can be filed under a specific main domain (existing or
+    /// brand-new) instead of guessing from its SANs; the override is only used
+    /// when it actually covers every name.
+    public static @Nullable CertificateStore.Entry syncUploaded(
+            CertificateStore store, CertificateManager certificates,
+            @Nullable String preferredApex) throws IOException {
         CertificateManager.Source source = certificates.getSource();
         if (source != CertificateManager.Source.PKCS12 && source != CertificateManager.Source.PEM) {
             return null;
@@ -96,7 +106,19 @@ public final class CertificateMigration {
                 break;
             }
         }
-        String apex = existing != null ? existing.apex : matchingApex(store, domains);
+        String apex;
+        if (existing != null) {
+            apex = existing.apex;
+        } else {
+            String preferred = preferredApex == null ? "" : preferredApex.trim().toLowerCase(Locale.ROOT);
+            if (!preferred.isEmpty() && coversAll(preferred, domains)) {
+                apex = preferred;
+            } else {
+                // Wrong choice would hide the certificate under a group it
+                // does not belong to; fall back to the derived apex.
+                apex = matchingApex(store, domains);
+            }
+        }
         CertificateStore.Entry entry = existing != null
                 ? existing
                 : store.create(apex, domains);
@@ -187,6 +209,16 @@ public final class CertificateMigration {
         }
         String zone = credential.dns().get("zone");
         return zone == null || zone.isBlank() ? null : zone.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static boolean coversAll(String apex, List<String> domains) {
+        for (String domain : domains) {
+            String base = domain.startsWith("*.") ? domain.substring(2) : domain;
+            if (!base.equals(apex) && !base.endsWith("." + apex)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /// Prefers the longest existing apex that covers every name, so an

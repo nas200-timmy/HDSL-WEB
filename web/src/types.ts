@@ -267,6 +267,9 @@ export interface TlsUploadResult {
   restartRequired?: boolean;
   https?: boolean;
   error?: string;
+  /** 上传成功后归入的主域名（由域名分析或手动指定） */
+  apex?: string;
+  certificateId?: string;
 }
 
 // ---------- ACME ----------
