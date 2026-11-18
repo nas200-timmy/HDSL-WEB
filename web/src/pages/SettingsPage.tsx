@@ -1982,6 +1982,9 @@ function acmeErrorHint(message: string): string | null {
   if (message.includes("credential profile not found") || message.includes("is for provider")) {
     return "凭证与所选厂商不匹配：换回该凭证的厂商，或新建一条凭证。";
   }
+  if (message.includes("too many certificates")) {
+    return "Let's Encrypt 对『完全相同的域名组合』每 7 天最多签 5 张（重复证书限制）。已签出的证书继续有效；只能等日志里的 retry after 之后重试，或给域名集合加/减一个名字（算新的组合），测试用 staging 不占正式额度。";
+  }
   if (message.includes("rate") || message.includes("too many")) {
     return "CA 限流：等一段时间再试，或先用 staging 验证配置。";
   }

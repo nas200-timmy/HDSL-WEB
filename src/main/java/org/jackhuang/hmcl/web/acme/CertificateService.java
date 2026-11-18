@@ -198,7 +198,10 @@ public final class CertificateService implements AutoCloseable {
                 case 2 -> Duration.ofHours(6);
                 default -> Duration.ofHours(24);
             };
-            nextAttempts.put(id, Instant.now().plus(delay));
+            // A CA rate limit states exactly when the next attempt may work;
+            // retrying before that only fills the log.
+            Instant retryAfter = retryAfter(message);
+            nextAttempts.put(id, retryAfter != null ? retryAfter : Instant.now().plus(delay));
             try {
                 store.recordError(id, message);
             } catch (IOException ignored) {
@@ -436,6 +439,25 @@ public final class CertificateService implements AutoCloseable {
         }
         try {
             return Instant.parse(value);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /// Let's Encrypt rate-limit messages carry `retry after YYYY-MM-DD HH:MM:SS UTC`.
+    static @Nullable Instant retryAfter(@Nullable String message) {
+        if (message == null) {
+            return null;
+        }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("retry after (\\d{4}-\\d{2}-\\d{2})[ T](\\d{2}:\\d{2}:\\d{2})")
+                .matcher(message);
+        if (!matcher.find()) {
+            return null;
+        }
+        try {
+            return java.time.LocalDateTime.parse(matcher.group(1) + "T" + matcher.group(2))
+                    .toInstant(java.time.ZoneOffset.UTC);
         } catch (RuntimeException e) {
             return null;
         }
