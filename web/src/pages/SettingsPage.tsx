@@ -52,6 +52,9 @@ import type {
   AgentGrantRow,
   AgentPasswordStatus,
   AcmeSettings,
+  CertificateEntry,
+  CertificateInput,
+  CertificatesResponse,
   DeveloperGuardScope,
   DeveloperStatus,
   DoctorCheck,
@@ -175,7 +178,7 @@ export function SettingsPage() {
               },
               {
                 key: "tls",
-                title: "HTTPS 证书",
+                title: "证书管理",
                 icon: <KeepIcon size={20} />,
               },
               {
@@ -1742,7 +1745,7 @@ function TlsTab() {
     <>
       <div className="section-caption">
         <KeepIcon size={16} />
-        HTTPS 证书
+        手动上传证书
       </div>
       <div className="card">
         {tlsLoading && !tls ? (
@@ -1925,15 +1928,7 @@ function TlsTab() {
   );
 }
 
-/* ---------------- ACME 自动证书 ---------------- */
-
-const ACME_STATE_LABEL: Record<string, string> = {
-  disabled: "未启用",
-  idle: "等待检查",
-  issuing: "正在签发",
-  active: "已生效",
-  error: "签发失败",
-};
+/* ---------------- 证书管理 ---------------- */
 
 /// 签发阶段：竖向步骤条（不是进度条）。阶段由服务端上报，失败时 phase 停在
 /// 出错的那一步，这里据此把对应步骤标红。
@@ -1946,7 +1941,7 @@ const ACME_STEPS = [
 
 type AcmeStepState = "done" | "active" | "pending" | "error";
 
-function acmeStepStates(status: AcmeSettings["status"] | undefined, issuing: boolean): AcmeStepState[] {
+function acmeStepStates(status: { state?: string; phase?: string } | undefined, issuing: boolean): AcmeStepState[] {
   const phase = status?.phase ?? "";
   const finished = status?.state === "active" || phase === "done";
   const failed = status?.state === "error";
@@ -2000,7 +1995,7 @@ const DNS_FIELD_EXAMPLE: Record<string, string> = {
   subdomain: "acme-dns 分配的子域名",
 };
 
-function AcmeStageList({ status, issuing }: { status: AcmeSettings["status"] | undefined; issuing: boolean }) {
+function AcmeStageList({ status, issuing }: { status: { state?: string; phase?: string } | undefined; issuing: boolean }) {
   const states = acmeStepStates(status, issuing);
   return (
     <div style={{ display: "flex", flexDirection: "column", margin: "6px 0" }}>
@@ -2082,54 +2077,40 @@ async function withElevation<T>(call: () => Promise<T>): Promise<T> {
 }
 
 function AcmeCard() {
-  const [settings, setSettings] = useState<AcmeSettings | null>(null);
+  const [meta, setMeta] = useState<AcmeSettings | null>(null);
+  const [certs, setCerts] = useState<CertificatesResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [enabled, setEnabled] = useState(false);
-  const [ca, setCa] = useState("letsencrypt");
-  const [directoryUrl, setDirectoryUrl] = useState("");
-  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [issueConfirm, setIssueConfirm] = useState<CertificateEntry | null>(null);
+
+  const [apex, setApex] = useState("");
   const [domains, setDomains] = useState("");
+  const [email, setEmail] = useState("");
+  const [ca, setCa] = useState("letsencrypt");
   const [provider, setProvider] = useState("cloudflare");
   const [credentialId, setCredentialId] = useState("");
-  const [credentialName, setCredentialName] = useState("");
   const [renewBeforeDays, setRenewBeforeDays] = useState(30);
-  const [useStaging, setUseStaging] = useState(false);
+  const [staging, setStaging] = useState(false);
   const [acceptTerms, setAcceptTerms] = useState(false);
+  const [enabled, setEnabled] = useState(true);
+  const [newCredential, setNewCredential] = useState(false);
   const [dns, setDns] = useState<Record<string, string>>({});
   const [eabKid, setEabKid] = useState("");
   const [eabHmac, setEabHmac] = useState("");
+  const [credentialName, setCredentialName] = useState("");
   const [panelPassword, setPanelPassword] = useState("");
-  const [issueConfirm, setIssueConfirm] = useState(false);
-  const [progressOpen, setProgressOpen] = useState(false);
-
-  const apply = (value: AcmeSettings) => {
-    setSettings(value);
-    setEnabled(value.enabled);
-    setCa(value.ca);
-    setDirectoryUrl(value.directoryUrl ?? "");
-    setEmail(value.email ?? "");
-    setDomains((value.domains ?? []).join("\n"));
-    setProvider(value.provider);
-    const fallback = value.credentials.find((item) => item.provider === value.provider);
-    setCredentialId(value.credentialId || fallback?.id || "");
-    setCredentialName("");
-    setRenewBeforeDays(value.renewBeforeDays);
-    setUseStaging(value.useStaging);
-    setAcceptTerms(value.acceptTerms);
-    setDns({});
-    setEabKid("");
-    setEabHmac("");
-  };
 
   const load = async () => {
     setLoading(true);
-    setError(null);
     try {
-      apply(await api.getAcme());
+      const [settings, list] = await Promise.all([api.getAcme(), api.getCertificates()]);
+      setMeta(settings);
+      setCerts(list);
     } catch (e) {
-      setError(isNotImplemented(e) ? "后端尚未支持 ACME 设置" : errMsg(e));
+      setError(isNotImplemented(e) ? "后端尚未支持证书管理" : errMsg(e));
     } finally {
       setLoading(false);
     }
@@ -2139,97 +2120,152 @@ function AcmeCard() {
     void load();
   }, []);
 
-  // Issuance is asynchronous (DNS-01 can take minutes); poll while it runs.
+  // 签发是异步的（DNS-01 可能几分钟），有 entry 在签发时就轮询列表。
+  const anyIssuing = certs?.entries.some((entry) => entry.status?.state === "issuing") ?? false;
   useEffect(() => {
-    if (settings?.status?.state !== "issuing") return;
+    if (!anyIssuing) return;
     const timer = window.setInterval(() => void load(), 4000);
     return () => window.clearInterval(timer);
-  }, [settings?.status?.state]);
+  }, [anyIssuing]);
 
-  const caInfo = settings?.cas.find((item) => item.id === ca);
-  const providerInfo = settings?.providers.find((item) => item.id === provider);
-  const implementedProviders = (settings?.providers ?? []).filter((item) => item.implemented);
-  const providerGroups = [...new Set(implementedProviders.map((item) => item.group))];
-  const profiles = settings?.credentials ?? [];
-  const selectedCredential = profiles.find((item) => item.id === credentialId) ?? null;
-  const savedProviderInfo = settings?.providers.find((item) => item.id === selectedCredential?.provider);
-  const providerMismatch = !!selectedCredential && selectedCredential.provider !== provider;
-  const maskedDns = selectedCredential?.maskedDns ?? settings?.maskedDns ?? {};
-  const maskedEab = selectedCredential?.maskedEab ?? settings?.maskedEab ?? {};
-  const issueBlockers: string[] = [];
-  if (settings) {
-    if (!settings.enabled) issueBlockers.push("ACME 尚未启用（勾选后先保存配置）");
-    if (!settings.domains.length) issueBlockers.push("还没有保存域名");
-    if (!settings.email) issueBlockers.push("还没有保存邮箱");
-    if (!settings.acceptTerms) issueBlockers.push("还没有同意 CA 条款");
-    if (!selectedCredential) issueBlockers.push("还没有选择已保存的 DNS 凭证");
-    if (providerMismatch) issueBlockers.push(`所选凭证属于 ${selectedCredential?.provider}，与当前厂商 ${provider} 不一致`);
-  }
-  const issuing = settings?.status?.state === "issuing";
-  const hasAcmeSource = settings?.status?.source === "acme";
+  const cas = meta?.cas ?? [];
+  const providers = (meta?.providers ?? []).filter((item) => item.implemented);
+  const providerGroups = [...new Set(providers.map((item) => item.group))];
+  const credentials = meta?.credentials ?? [];
+  const caInfo = cas.find((item) => item.id === ca);
+  const providerInfo = meta?.providers.find((item) => item.id === provider);
+  const selectedCredential = credentials.find((item) => item.id === credentialId) ?? null;
+  const selectedEntry = certs?.entries.find((entry) => entry.id === openId) ?? null;
+  const editingUpload = !creating && selectedEntry?.source === "upload";
+  const draftDomains = domains.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
 
-  const doSave = async () => {
+  const openEditor = (entry: CertificateEntry) => {
+    setCreating(false);
+    setOpenId(entry.id);
     setError(null);
-    setBusy(true);
-    try {
-      const next = await withElevation(() => api.saveAcme({
-        enabled,
-        ca,
-        directoryUrl,
-        email,
-        domains: domains.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
-        provider,
-        credentialId,
-        renewBeforeDays,
-        useStaging,
-        acceptTerms,
-      }));
-      apply(next);
-      toast("success", "ACME 配置已保存");
-    } catch (e) {
-      setError(errMsg(e));
-    } finally {
-      setBusy(false);
-    }
+    setApex(entry.apex);
+    setDomains(entry.domains.join("\n"));
+    setEmail(entry.email);
+    setCa(entry.ca);
+    setProvider(entry.provider);
+    setCredentialId(entry.credentialId);
+    setRenewBeforeDays(entry.renewBeforeDays);
+    setStaging(entry.staging);
+    setAcceptTerms(entry.acceptTerms);
+    setEnabled(entry.enabled);
+    setNewCredential(false);
+    setDns({});
+    setEabKid("");
+    setEabHmac("");
+    setCredentialName("");
+    setPanelPassword("");
   };
 
-  const doSaveCredentials = async () => {
+  const openCreate = () => {
+    setCreating(true);
+    setOpenId("__new__");
+    setError(null);
+    setApex("");
+    setDomains("");
+    setEmail(meta?.email ?? "");
+    setCa(meta?.ca ?? "letsencrypt");
+    setProvider(meta?.provider ?? providers[0]?.id ?? "cloudflare");
+    setCredentialId(credentials[0]?.id ?? "");
+    setRenewBeforeDays(meta?.renewBeforeDays ?? 30);
+    setStaging(false);
+    setAcceptTerms(false);
+    setEnabled(true);
+    setNewCredential(credentials.length === 0);
+    setDns({});
+    setEabKid("");
+    setEabHmac("");
+    setCredentialName("");
+    setPanelPassword("");
+  };
+
+  const draftProblem = (): string | null => {
+    if (creating && (!apex.includes(".") || apex.includes(" "))) {
+      return "主域名要像 example.com 这样，带上后缀";
+    }
+    if (!draftDomains.length) {
+      return "至少填一个要签发的域名";
+    }
+    if (!editingUpload && !email.includes("@")) {
+      return "邮箱要能收信：CA 用它做到期通知";
+    }
+    if (!editingUpload && newCredential && !credentialId) {
+      if (!Object.values(dns).some((value) => value.trim())) {
+        return "新建凭证要先点“保存凭证”，或改选一条已有凭证";
+      }
+    }
+    return null;
+  };
+
+  const persistCredential = async (): Promise<string | null> => {
     if (!panelPassword) {
       setError("保存 DNS 凭证需要输入面板密码");
+      return null;
+    }
+    const saved = await withElevation(() => api.saveAcmeCredentials({
+      name: credentialName.trim() || provider,
+      provider,
+      dns,
+      eab: caInfo?.requiresEab || eabKid || eabHmac
+        ? { kid: eabKid, hmacKey: eabHmac }
+        : undefined,
+      panelPassword,
+    }));
+    setPanelPassword("");
+    setNewCredential(false);
+    setCredentialId(saved.id);
+    setCredentialName(saved.name);
+    const settings = await api.getAcme();
+    setMeta(settings);
+    toast("success", "DNS 凭证已保存");
+    return saved.id;
+  };
+
+  const saveEntry = async (requestIssue: boolean) => {
+    const problem = draftProblem();
+    if (problem) {
+      setError(problem);
       return;
     }
     setError(null);
     setBusy(true);
     try {
-      const saved = await withElevation(() => api.saveAcmeCredentials({
-        id: credentialId || undefined,
-        name: credentialName.trim() || provider,
-        provider,
-        dns,
-        eab: caInfo?.requiresEab || eabKid || eabHmac
-          ? { kid: eabKid, hmacKey: eabHmac }
-          : undefined,
-        panelPassword,
-      }));
-      setCredentialId(saved.id);
-      setCredentialName(saved.name);
-      // Persist the selection so the next issuance uses this profile.
-      const next = await withElevation(() => api.saveAcme({
-        enabled,
+      let chosen = credentialId;
+      if (!editingUpload && newCredential && Object.values(dns).some((value) => value.trim())) {
+        const saved = await persistCredential();
+        if (!saved) {
+          return;
+        }
+        chosen = saved;
+      }
+      const body: CertificateInput = {
+        apex: apex.trim().toLowerCase(),
+        domains: draftDomains,
         ca,
-        directoryUrl,
-        email,
-        domains: domains.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
+        email: email.trim(),
         provider,
-        credentialId: saved.id,
+        credentialId: chosen,
         renewBeforeDays,
-        useStaging,
+        staging,
         acceptTerms,
-      }));
-      apply(next);
-      setPanelPassword("");
-      toast("success", "DNS 凭证已保存");
+        enabled,
+      };
+      const entry = creating
+        ? await withElevation(() => api.createCertificate(body))
+        : await withElevation(() => api.updateCertificate(openId ?? "", body));
+      setCreating(false);
+      setOpenId(entry.id);
       await load();
+      toast("success", "证书配置已保存");
+      if (requestIssue) {
+        await withElevation(() => api.issueCertificate(entry.id));
+        toast("info", "已开始签发，阶段会自动刷新");
+        await load();
+      }
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -2237,22 +2273,33 @@ function AcmeCard() {
     }
   };
 
-  const doIssue = async () => {
-    setIssueConfirm(false);
-    setProgressOpen(true);
-    setError(null);
+  const activateEntry = async (entry: CertificateEntry) => {
     setBusy(true);
+    setError(null);
     try {
-      const result = await withElevation(() => api.issueAcme());
-      if (result.state === "issuing") {
-        toast("info", "已开始签发；页面会自动刷新状态");
-      } else if (!result.ok) {
-        setError(result.lastError ?? "签发失败");
-        toast("error", "证书签发失败");
-      } else {
-        toast("success", "ACME 证书已更新");
+      await withElevation(() => api.activateCertificate(entry.id));
+      await load();
+      toast("success", `已切换到 ${entry.apex}`);
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteEntry = async (entry: CertificateEntry) => {
+    if (!window.confirm(`删除 ${entry.apex} 的这张证书？文件会一起删掉，但不影响当前已生效的证书。`)) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await withElevation(() => api.deleteCertificate(entry.id));
+      if (openId === entry.id) {
+        setOpenId(null);
       }
       await load();
+      toast("info", "证书已删除");
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -2260,403 +2307,491 @@ function AcmeCard() {
     }
   };
 
-  const doDisable = async () => {
-    setError(null);
-    setBusy(true);
-    try {
-      apply(await withElevation(() => api.disableAcme()));
-      toast("info", "已停止 ACME 自动续期；当前证书保留");
-    } catch (e) {
-      setError(errMsg(e));
-    } finally {
-      setBusy(false);
-    }
+  const daysLeft = (value: string | null): number | null => {
+    if (!value) return null;
+    const diff = new Date(value).getTime() - Date.now();
+    return Math.ceil(diff / 86_400_000);
   };
 
-  const doClearCredentials = async () => {
-    if (!panelPassword) {
-      setError("清除 DNS 凭证需要输入面板密码");
-      return;
-    }
-    setError(null);
-    setBusy(true);
-    try {
-      await withElevation(() => api.clearAcmeCredentials(panelPassword, credentialId || undefined));
-      const next = await withElevation(() => api.saveAcme({
-        enabled,
-        ca,
-        directoryUrl,
-        email,
-        domains: domains.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
-        provider,
-        credentialId: "",
-        renewBeforeDays,
-        useStaging,
-        acceptTerms,
-      }));
-      apply(next);
-      setPanelPassword("");
-      toast("success", "DNS 凭证已清除");
-      await load();
-    } catch (e) {
-      setError(errMsg(e));
-    } finally {
-      setBusy(false);
-    }
+  const stateTag = (entry: CertificateEntry) => {
+    if (entry.active) return <span className="tag running">使用中</span>;
+    if (entry.status?.state === "issuing") return <span className="tag warn">签发中</span>;
+    if (entry.status?.state === "error") return <span className="tag warn">上次失败</span>;
+    if (entry.pending) return <span className="tag plain">待重新签发</span>;
+    if (entry.source === "upload") return <span className="tag plain">上传</span>;
+    return <span className="tag plain">备用</span>;
   };
+
+  const sectionTitle = (index: number, title: string, hint: string) => (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "4px 0 2px" }}>
+      <span
+        style={{
+          width: 20,
+          height: 20,
+          borderRadius: "50%",
+          background: "var(--monet-primary-container)",
+          color: "var(--monet-on-primary-container)",
+          fontSize: 12,
+          fontWeight: 600,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {index}
+      </span>
+      <span style={{ fontSize: 14, fontWeight: 600 }}>{title}</span>
+      <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>{hint}</span>
+    </div>
+  );
 
   return (
     <div style={{ marginTop: 16 }}>
       <div className="section-caption">
         <KeepIcon size={16} />
-        ACME 自动证书
+        证书管理
       </div>
       <div className="card">
-        {loading && !settings ? (
+        {loading && !certs ? (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 12 }}>
             <span className="spinner" />
-            <span>正在读取 ACME 状态…</span>
+            <span>正在读取证书…</span>
           </div>
-        ) : !settings ? (
-          <div style={{ padding: 12, color: "var(--monet-error)" }}>{error ?? "ACME 设置不可用"}</div>
+        ) : !certs ? (
+          <div style={{ padding: 12, color: "var(--monet-error)" }}>{error ?? "证书服务不可用"}</div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-              ACME 配置需要 HTTPS（或可信反代 + <code>trust_forwarded_proto</code>）。
-              如果面板还在 HTTP，请先启用自签名证书，或用 SSH 隧道访问 localhost。
-            </div>
-            {!settings.available && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {!certs.available && (
               <div style={{ padding: "8px 12px", border: "1px solid var(--monet-error)", borderRadius: 4, color: "var(--monet-error)", fontSize: 12 }}>
-                ACME 服务未初始化：检查数据目录权限，或查看面板日志。
+                证书服务未初始化：检查数据目录权限，或查看面板日志。
               </div>
             )}
-            <div className="comp-row">
-              <span className="comp-label">状态</span>
-              <span className="comp-value">
-                <span className={`tag ${settings.status?.state === "active" ? "running" : settings.status?.state === "error" ? "warn" : "plain"}`}>
-                  {ACME_STATE_LABEL[settings.status?.state ?? "disabled"] ?? settings.status?.state ?? "未启用"}
-                </span>
-                {settings.status?.source && <span style={{ fontSize: 12 }}>来源 {settings.status.source}</span>}
-              </span>
+            <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+              按主域名管理：一个主域名下可以有多张证书，默认一张 ACME 自动续期证书；
+              子域名只是这张证书的成员，改完要重新签发才生效。证书操作需要 HTTPS。
             </div>
-            {settings.status?.expires && (
-              <div className="comp-row">
-                <span className="comp-label">证书到期</span>
-                <span className="comp-value">{formatDateTime(settings.status.expires)}</span>
+
+            {certs.entries.length === 0 ? (
+              <div style={{ padding: "10px 12px", border: "1px dashed var(--monet-outline-variant)", borderRadius: 6, fontSize: 13 }}>
+                还没有受管证书。先建一个主域名，填好域名与 DNS 凭证后再签发。
               </div>
-            )}
-            {settings.status?.nextAttempt && (
-              <div className="comp-row">
-                <span className="comp-label">下次检查</span>
-                <span className="comp-value">{formatDateTime(settings.status.nextAttempt)}</span>
-              </div>
-            )}
-            {settings.status?.lastError && (
-              <div className="form-error">上次失败：{settings.status.lastError}</div>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ color: "var(--monet-on-surface-variant)", textAlign: "left" }}>
+                    <th style={{ padding: "6px 8px", fontWeight: 500 }}>主域名</th>
+                    <th style={{ padding: "6px 8px", fontWeight: 500 }}>覆盖域名</th>
+                    <th style={{ padding: "6px 8px", fontWeight: 500 }}>来源</th>
+                    <th style={{ padding: "6px 8px", fontWeight: 500 }}>到期</th>
+                    <th style={{ padding: "6px 8px", fontWeight: 500 }}>状态</th>
+                    <th style={{ padding: "6px 8px", fontWeight: 500 }}>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {certs.entries.map((entry) => {
+                    const left = daysLeft(entry.notAfter);
+                    return (
+                      <tr key={entry.id} style={{ borderTop: "1px solid var(--monet-outline-variant)" }}>
+                        <td style={{ padding: "8px", verticalAlign: "top" }}>
+                          <strong>{entry.apex}</strong>
+                          {entry.active && <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>当前生效</div>}
+                        </td>
+                        <td style={{ padding: "8px", verticalAlign: "top" }}>
+                          <span>{entry.domains.join("、")}</span>
+                          {entry.pending && (
+                            <div style={{ fontSize: 11, color: "var(--monet-error)" }}>
+                              已保存的证书还是：{entry.issuedDomains.join("、") || "（无）"}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: "8px", verticalAlign: "top" }}>
+                          {entry.source === "acme" ? "ACME" : "上传"}
+                        </td>
+                        <td style={{ padding: "8px", verticalAlign: "top" }}>
+                          {entry.notAfter ? formatDateTime(entry.notAfter) : "—"}
+                          {left !== null && (
+                            <div style={{ fontSize: 11, color: left < 15 ? "var(--monet-error)" : "var(--monet-on-surface-variant)" }}>
+                              剩 {left} 天
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: "8px", verticalAlign: "top" }}>{stateTag(entry)}</td>
+                        <td style={{ padding: "8px", verticalAlign: "top" }}>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            <button className="btn btn-text dim" disabled={busy} onClick={() => openEditor(entry)}>
+                              管理
+                            </button>
+                            {!entry.active && entry.hasFiles && (
+                              <button className="btn btn-text dim" disabled={busy} onClick={() => void activateEntry(entry)}>
+                                设为当前
+                              </button>
+                            )}
+                            {entry.source === "acme" && (
+                              <button className="btn btn-text dim" disabled={busy} onClick={() => setIssueConfirm(entry)}>
+                                签发
+                              </button>
+                            )}
+                            {!entry.active && (
+                              <button className="btn btn-text dim" disabled={busy} onClick={() => void deleteEntry(entry)}>
+                                删除
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             )}
 
-            {profiles.length > 0 && (
-              <div className="form-row" style={{ marginBottom: 0 }}>
-                <span className="form-label">使用哪个 DNS 凭证</span>
-                <select
-                  className="input"
-                  value={credentialId}
-                  onChange={(e) => {
-                    const id = e.target.value;
-                    setCredentialId(id);
-                    const profile = profiles.find((item) => item.id === id);
-                    if (profile) {
-                      setProvider(profile.provider);
-                      setCredentialName(profile.name);
-                      setDns({});
-                      setEabKid("");
-                      setEabHmac("");
-                    } else {
-                      setCredentialName("");
-                    }
-                  }}
-                  disabled={busy}
-                >
-                  <option value="">（新建凭证 / 不选择）</option>
-                  {profiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.name} · {profile.provider}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-raised ripple-host" disabled={busy} onClick={openCreate}>
+                新建证书组
+              </button>
+            </div>
 
-            {selectedCredential && (
-              <div style={{ padding: "8px 12px", border: "1px solid var(--monet-outline-variant)", borderRadius: 4, fontSize: 12, lineHeight: 1.8 }}>
-                <strong>已保存 DNS 凭证</strong>（{selectedCredential.name} · {selectedCredential.provider}）
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 16px", marginTop: 4 }}>
-                  {Object.entries(maskedDns).map(([key, value]) => (
-                    <span key={key}>
-                      {savedProviderInfo?.fields.find((f) => f.key === key)?.label ?? key}：
-                      <code>{value}</code>
+            {openId && (creating || selectedEntry) && (
+              <div style={{ borderTop: "1px solid var(--monet-outline-variant)", paddingTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                {sectionTitle(1, "证书需求", creating ? "先定主域名，再列子域名" : `${selectedEntry!.apex} · 主域名创建后不可改`)}
+                {creating ? (
+                  <div className="form-row" style={{ marginBottom: 0 }}>
+                    <span className="form-label">主域名 *</span>
+                    <input className="input" value={apex} onChange={(e) => setApex(e.target.value)} placeholder="example.com" disabled={busy} />
+                    <span className="form-hint">
+                      你在 DNS 服务商托管的那一级域名。所有子域名都必须属于它，凭证的 zone 也要填它。
                     </span>
-                  ))}
+                  </div>
+                ) : (
+                  <div className="form-hint">主域名：<code>{selectedEntry!.apex}</code>（同一主域名下可以有多张证书）</div>
+                )}
+
+                <div className="form-row" style={{ marginBottom: 0 }}>
+                  <span className="form-label">域名成员 {editingUpload ? "（上传证书不可编辑）" : "*"}</span>
+                  {editingUpload ? (
+                    <div className="form-hint">{selectedEntry.domains.join("、")}</div>
+                  ) : (
+                    <>
+                      <textarea
+                        className="input"
+                        rows={3}
+                        value={domains}
+                        onChange={(e) => setDomains(e.target.value)}
+                        placeholder={"example.com\nwww.example.com\n*.example.com"}
+                        disabled={busy}
+                      />
+                      <span className="form-hint">
+                        每行一个，填要签发的完整域名。默认只签这里写下的名字：要 www 就写 www；
+                        <code>*.example.com</code> 只覆盖一级子域，不含 example.com 本身。改完要重新签发才生效。
+                      </span>
+                    </>
+                  )}
                 </div>
-                {selectedCredential.eabConfigured && (
-                  <div style={{ marginTop: 4 }}>
-                    EAB：kid <code>{maskedEab.kid ?? "已保存"}</code>，
-                    HMAC <code>{maskedEab.hmacKey ?? "已保存"}</code>
+
+                {!editingUpload && (
+                  <>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <div className="form-row" style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
+                        <span className="form-label">联系邮箱 *</span>
+                        <input className="input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ops@example.com" disabled={busy} />
+                        <span className="form-hint">CA 用它发送到期、吊销通知；不会写进证书。</span>
+                      </div>
+                      <div className="form-row" style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
+                        <span className="form-label">到期前多少天续期</span>
+                        <input className="input" type="number" min={7} max={60} value={renewBeforeDays} onChange={(e) => setRenewBeforeDays(Number(e.target.value) || 30)} disabled={busy} />
+                        <span className="form-hint">剩余天数低于这个值就自动续期，7–60，建议 30。</span>
+                      </div>
+                    </div>
+
+                    <div className="form-row" style={{ marginBottom: 0 }}>
+                      <span className="form-label">证书颁发机构（CA）</span>
+                      <select className="input" value={ca} onChange={(e) => setCa(e.target.value)} disabled={busy}>
+                        {cas.map((item) => (
+                          <option key={item.id} value={item.id}>{item.displayName}</option>
+                        ))}
+                      </select>
+                      <span className="form-hint">
+                        {caInfo?.rootHint ?? "默认 Let's Encrypt，免费且被主流浏览器信任。"}
+                        {caInfo?.requiresEab && " 这个 CA 还需要 EAB Key ID 与 HMAC（在 DNS 凭证那一步填）。"}
+                      </span>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                      <label className="input-check">
+                        <input type="checkbox" checked={staging} onChange={(e) => setStaging(e.target.checked)} disabled={busy} />
+                        <span>
+                          先用 staging 试跑
+                          <span style={{ display: "block", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                            测试证书，浏览器不信任；流程与生产一致，不消耗正式额度。
+                          </span>
+                        </span>
+                      </label>
+                      <label className="input-check">
+                        <input type="checkbox" checked={acceptTerms} onChange={(e) => setAcceptTerms(e.target.checked)} disabled={busy} />
+                        <span>同意 CA 条款</span>
+                      </label>
+                     </div>
+
+                    {sectionTitle(2, "DNS 凭证", "让面板有权写 _acme-challenge 记录")}
+                    <div className="form-row" style={{ marginBottom: 0 }}>
+                      <span className="form-label">DNS 厂商</span>
+                      <select
+                        className="input"
+                        value={provider}
+                        onChange={(e) => { setProvider(e.target.value); setDns({}); }}
+                        disabled={busy}
+                      >
+                        {providerGroups.map((group) => (
+                          <optgroup key={group} label={group}>
+                            {providers.filter((item) => item.group === group).map((item) => (
+                              <option key={item.id} value={item.id}>{item.label}</option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                      <span className="form-hint">域名的 DNS 托管在哪家就选哪家；面板要用它的 API 写 TXT 记录。</span>
+                    </div>
+
+                    {credentials.length > 0 && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <span className="form-label">用哪条凭证</span>
+                        {credentials.map((profile) => {
+                          const active = !newCredential && credentialId === profile.id;
+                          const zone = profile.maskedDns?.zone;
+                          return (
+                            <label
+                              key={profile.id}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 10,
+                                padding: "8px 10px",
+                                borderRadius: 6,
+                                cursor: busy ? "default" : "pointer",
+                                border: `1px solid ${active ? "var(--monet-primary)" : "var(--monet-outline-variant)"}`,
+                                background: active ? "var(--monet-secondary-container)" : "transparent",
+                              }}
+                            >
+                              <input
+                                type="radio"
+                                name={`credential-${openId}`}
+                                checked={active}
+                                disabled={busy}
+                                onChange={() => {
+                                  setNewCredential(false);
+                                  setCredentialId(profile.id);
+                                  setProvider(profile.provider);
+                                  setDns({});
+                                  setEabKid("");
+                                  setEabHmac("");
+                                }}
+                              />
+                              <span style={{ flex: 1 }}>
+                                <strong>{profile.name}</strong>
+                                <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}> · {profile.provider}</span>
+                                {zone && (
+                                  <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                                    {" "}· zone <code>{zone}</code>
+                                  </span>
+                                )}
+                              </span>
+                              {active && <span className="tag running">使用中</span>}
+                            </label>
+                          );
+                        })}
+                        <label
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10,
+                            padding: "8px 10px",
+                            borderRadius: 6,
+                            cursor: busy ? "default" : "pointer",
+                            border: `1px solid ${newCredential ? "var(--monet-primary)" : "var(--monet-outline-variant)"}`,
+                            background: newCredential ? "var(--monet-secondary-container)" : "transparent",
+                          }}
+                        >
+                          <input
+                            type="radio"
+                            name={`credential-${openId}`}
+                            checked={newCredential}
+                            disabled={busy}
+                            onChange={() => {
+                              setNewCredential(true);
+                              setCredentialId("");
+                              setDns({});
+                              setEabKid("");
+                              setEabHmac("");
+                            }}
+                          />
+                          <span style={{ flex: 1 }}>
+                            <strong>新建一条凭证</strong>
+                            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}> · 填下面的 AccessKey / Token</span>
+                          </span>
+                        </label>
+                      </div>
+                    )}
+
+                    {newCredential && (
+                      <>
+                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                          {(providerInfo?.fields ?? []).map((field) => (
+                            <div className="form-row" key={field.key} style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
+                              <span className="form-label">{field.label}{field.required ? " *" : ""}</span>
+                              <input
+                                className="input"
+                                type={field.secret ? "password" : "text"}
+                                value={dns[field.key] ?? ""}
+                                onChange={(e) => setDns((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                                placeholder={DNS_FIELD_EXAMPLE[field.key] ?? "填写"}
+                                autoComplete="off"
+                                disabled={busy}
+                              />
+                              {field.hint && <span className="form-hint">{field.hint}</span>}
+                            </div>
+                          ))}
+                        </div>
+                        {caInfo?.requiresEab && (
+                          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                            <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
+                              <span className="form-label">EAB Key ID</span>
+                              <input className="input" value={eabKid} onChange={(e) => setEabKid(e.target.value)} placeholder="填写 EAB Key ID" autoComplete="off" disabled={busy} />
+                            </div>
+                            <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
+                              <span className="form-label">EAB HMAC Key</span>
+                              <input className="input" type="password" value={eabHmac} onChange={(e) => setEabHmac(e.target.value)} placeholder="填写 EAB HMAC Key" autoComplete="off" disabled={busy} />
+                            </div>
+                          </div>
+                        )}
+                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                          <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
+                            <span className="form-label">凭证名称</span>
+                            <input className="input" value={credentialName} onChange={(e) => setCredentialName(e.target.value)} placeholder="如：阿里云 生产" disabled={busy} />
+                          </div>
+                          <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
+                            <span className="form-label">面板密码（保存凭证时确认）</span>
+                            <input className="input" type="password" value={panelPassword} onChange={(e) => setPanelPassword(e.target.value)} autoComplete="off" disabled={busy} />
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button className="btn btn-outline ripple-host" disabled={busy} onClick={() => { setError(null); void persistCredential().catch((e) => setError(errMsg(e))); }}>
+                            保存凭证
+                          </button>
+                        </div>
+                      </>
+                    )}
+
+                    {!newCredential && selectedCredential && (
+                      <div className="form-hint" style={{ lineHeight: 1.9 }}>
+                        已保存的值：
+                        {Object.entries(selectedCredential.maskedDns ?? {}).map(([key, value]) => (
+                          <span key={key} style={{ marginRight: 12 }}>
+                            {providerInfo?.fields.find((f) => f.key === key)?.label ?? key}：<code>{value}</code>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {sectionTitle(3, "签发", "核对后保存并签发；改域名要重新签发")}
+                    <div style={{ border: "1px solid var(--monet-outline-variant)", borderRadius: 6, padding: "10px 12px", fontSize: 13, lineHeight: 1.9 }}>
+                      <div>域名：<code>{draftDomains.join("、") || "（未填）"}</code></div>
+                      <div>CA：{caInfo?.displayName ?? ca}{staging ? "（staging 测试证书）" : "（生产证书）"}</div>
+                      <div>DNS 厂商：{providerInfo?.label ?? provider}</div>
+                      <div>DNS 凭证：{selectedCredential ? selectedCredential.name : newCredential ? "新建（未保存）" : "未选择"}</div>
+                      <div>续期：到期前 {renewBeforeDays} 天{enabled ? "" : " · 自动续期已停用"}</div>
+                    </div>
+                    <label className="input-check">
+                      <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
+                      <span>启用自动续期（关掉只保存配置，不再自动签）</span>
+                    </label>
+                    <div className="form-hint">
+                      签发会在 DNS 里临时写 <code>_acme-challenge</code> TXT 记录，验证后自动删除；失败会保留当前证书。
+                    </div>
+                  </>
+                )}
+
+                {editingUpload && (
+                  <div className="form-hint">
+                    上传的证书不会自动续期。想让它接管，需要另建一张 ACME 证书（同一主域名下允许并存）。
                   </div>
                 )}
-                {providerMismatch && (
-                  <div className="form-error" style={{ marginTop: 4 }}>
-                    该凭证属于 {selectedCredential.provider}，当前选择的是 {provider}；请改回厂商或新建凭证。
+
+                {selectedEntry?.status?.state === "error" && selectedEntry.lastError && (
+                  <div className="form-error" style={{ display: "block", lineHeight: 1.6 }}>
+                    {selectedEntry.lastError}
+                    {acmeErrorHint(selectedEntry.lastError) && (
+                      <div style={{ marginTop: 4 }}>{acmeErrorHint(selectedEntry.lastError)}</div>
+                    )}
                   </div>
                 )}
+                {(selectedEntry?.status?.state === "issuing" || selectedEntry?.status?.state === "error") && (
+                  <AcmeStageList status={selectedEntry?.status} issuing={selectedEntry?.status?.state === "issuing"} />
+                )}
+
+                {error && <div className="form-error">{error}</div>}
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {!editingUpload && (
+                    <>
+                      <button className="btn btn-outline ripple-host" disabled={busy} onClick={() => void saveEntry(false)}>
+                        保存配置
+                      </button>
+                      <button className="btn btn-raised ripple-host" disabled={busy} onClick={() => void saveEntry(true)}>
+                        保存并签发
+                      </button>
+                    </>
+                  )}
+                  {selectedEntry && !selectedEntry.active && selectedEntry.hasFiles && (
+                    <button className="btn btn-outline ripple-host" disabled={busy} onClick={() => void activateEntry(selectedEntry)}>
+                      设为当前
+                    </button>
+                  )}
+                  <button className="btn btn-text dim" disabled={busy} onClick={() => setOpenId(null)}>
+                    收起
+                  </button>
+                </div>
               </div>
             )}
 
-            <div className="form-row" style={{ marginBottom: 0 }}>
-              <span className="form-label">凭证名称（保存时使用；留空用 provider 名）</span>
-              <input
-                className="input"
-                value={credentialName}
-                onChange={(e) => setCredentialName(e.target.value)}
-                placeholder="例如：Cloudflare 生产 / Aliyun 备用"
-                disabled={busy}
-              />
-            </div>
-
-            <label className="input-check">
-              <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
-              <span>启用 ACME 自动签发与续期</span>
-            </label>
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <div className="form-row" style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
-                <span className="form-label">证书颁发机构（CA）</span>
-                <select className="input" value={ca} onChange={(e) => setCa(e.target.value)} disabled={busy}>
-                  {(settings.cas ?? []).map((item) => (
-                    <option key={item.id} value={item.id}>{item.displayName}</option>
-                  ))}
-                </select>
-                {caInfo?.rootHint && <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>{caInfo.rootHint}</span>}
-              </div>
-              <div className="form-row" style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
-                <span className="form-label">DNS 厂商</span>
-                <select
-                  className="input"
-                  value={provider}
-                  onChange={(e) => { setProvider(e.target.value); setDns({}); }}
-                  disabled={busy}
-                >
-                  {providerGroups.map((group) => (
-                    <optgroup key={group} label={group}>
-                      {implementedProviders.filter((item) => item.group === group).map((item) => (
-                        <option key={item.id} value={item.id}>{item.label}</option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {caInfo?.custom && (
-              <div className="form-row" style={{ marginBottom: 0 }}>
-                <span className="form-label">自定义 ACME 目录 URL</span>
-                <input className="input" value={directoryUrl} onChange={(e) => setDirectoryUrl(e.target.value)} placeholder="https://acme.example.com/directory" disabled={busy} />
-              </div>
-            )}
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <div className="form-row" style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
-                <span className="form-label">邮箱</span>
-                <input className="input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ops@example.com" disabled={busy} />
-              </div>
-              <div className="form-row" style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
-                <span className="form-label">到期前多少天续期</span>
-                <input className="input" type="number" min={7} max={60} value={renewBeforeDays} onChange={(e) => setRenewBeforeDays(Number(e.target.value) || 30)} disabled={busy} />
-              </div>
-            </div>
-
-            <div className="form-row" style={{ marginBottom: 0 }}>
-              <span className="form-label">域名（每行一个，支持 *.example.com）</span>
-              <textarea className="input" rows={3} value={domains} onChange={(e) => setDomains(e.target.value)} placeholder={"example.com\n*.example.com"} disabled={busy} />
-            </div>
-
-            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-              <label className="input-check">
-                <input type="checkbox" checked={useStaging} onChange={(e) => setUseStaging(e.target.checked)} disabled={busy} />
-                <span>使用 staging（测试，浏览器不信任）</span>
-              </label>
-              <label className="input-check">
-                <input type="checkbox" checked={acceptTerms} onChange={(e) => setAcceptTerms(e.target.checked)} disabled={busy} />
-                <span>
-                  同意 CA 条款
-                  {caInfo?.termsUrl && <a href={caInfo.termsUrl} target="_blank" rel="noreferrer" style={{ marginLeft: 4 }}>条款</a>}
-                </span>
-              </label>
-            </div>
-
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button className="btn btn-raised ripple-host" disabled={busy} onClick={() => void doSave()}>
-                {busy ? "保存中…" : "保存配置"}
-              </button>
-              <button className="btn btn-outline ripple-host" disabled={busy || !enabled || issuing} onClick={() => setIssueConfirm(true)}>
-                {hasAcmeSource ? "更新证书" : "首次签发证书"}
-              </button>
-              <button className="btn btn-outline ripple-host" disabled={busy || !enabled} onClick={() => void doDisable()}>
-                停止自动续期
-              </button>
-            </div>
-
-            <div style={{ borderTop: "1px solid var(--monet-outline-variant)", paddingTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                DNS 凭证 {selectedCredential ? `已选（${selectedCredential.name} · ${selectedCredential.provider}）` : profiles.length ? "已保存，但未选择" : "未配置"}；
-                凭证只写不读，留空的字段会保留原值。
-                {caInfo?.requiresEab && ` ${settings.eabConfigured ? "EAB 已配置。" : "该 CA 需要 EAB。"}`}
-              </div>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {(providerInfo?.fields ?? []).map((field) => (
-                  <div className="form-row" key={field.key} style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
-                    <span className="form-label">{field.label}{field.required ? " *" : ""}</span>
-                    <input
-                      className="input"
-                      type={field.secret ? "password" : "text"}
-                      value={dns[field.key] ?? ""}
-                      onChange={(e) => setDns((prev) => ({ ...prev, [field.key]: e.target.value }))}
-                      placeholder={
-                        selectedCredential
-                          ? `已保存 ${maskedDns[field.key] ?? "••••"}（留空保留）`
-                          : DNS_FIELD_EXAMPLE[field.key] ?? "新建凭证请填写"
-                      }
-                      autoComplete="off"
-                      disabled={busy}
-                    />
-                    {field.hint && <span className="form-hint">{field.hint}</span>}
-                  </div>
-                ))}
-              </div>
-              {caInfo?.requiresEab && (
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
-                    <span className="form-label">EAB Key ID</span>
-                    <input className="input" value={eabKid} onChange={(e) => setEabKid(e.target.value)} placeholder={selectedCredential?.eabConfigured ? `已保存 ${maskedEab.kid ?? "••••"}（留空保留）` : "填写 EAB Key ID"} autoComplete="off" disabled={busy} />
-                  </div>
-                  <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
-                    <span className="form-label">EAB HMAC Key</span>
-                    <input className="input" type="password" value={eabHmac} onChange={(e) => setEabHmac(e.target.value)} placeholder={selectedCredential?.eabConfigured ? `已保存 ${maskedEab.hmacKey ?? "••••"}（留空保留）` : "填写 EAB HMAC Key"} autoComplete="off" disabled={busy} />
-                  </div>
-                </div>
-              )}
-              <div className="form-row" style={{ marginBottom: 0 }}>
-                <span className="form-label">面板密码（保存/清除 DNS 凭证时确认）</span>
-                <input className="input" type="password" value={panelPassword} onChange={(e) => setPanelPassword(e.target.value)} autoComplete="off" disabled={busy} />
-              </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button className="btn btn-raised ripple-host" disabled={busy} onClick={() => void doSaveCredentials()}>
-                  保存 DNS 凭证
-                </button>
-                <button className="btn btn-outline ripple-host" disabled={busy || !selectedCredential} onClick={() => void doClearCredentials()}>
-                  删除所选凭证
-                </button>
-              </div>
-            </div>
-            {error && <div className="form-error">{error}</div>}
+            {error && !openId && <div className="form-error">{error}</div>}
           </div>
         )}
       </div>
-      {settings && (
-        <>
-        <Dialog
-          open={issueConfirm}
-          title={hasAcmeSource ? "更新 ACME 证书" : "首次签发 ACME 证书"}
-          onClose={() => { if (!busy) setIssueConfirm(false); }}
-        >
-        <div style={{ maxWidth: 560, lineHeight: 1.7 }}>
-          <p style={{ marginTop: 0 }}>
-            将使用下面这组已保存的配置向 CA 发起签发。确认后会显示阶段进度条。
-          </p>
-          <div style={{ padding: "8px 12px", background: "var(--monet-surface-variant)", borderRadius: 4, fontSize: 13 }}>
-            <div>CA：<strong>{caInfo?.displayName ?? settings.ca}</strong></div>
-            <div>域名：<code>{settings.domains.join("、") || "（未保存）"}</code></div>
-            <div>邮箱：<code>{settings.email || "（未保存）"}</code></div>
-            <div>DNS 厂商：<strong>{providerInfo?.label ?? settings.provider}</strong></div>
-            <div>DNS 凭证：{selectedCredential ? `已选择（${selectedCredential.name}）` : profiles.length ? "未选择" : "未保存"}</div>
-            <div>续期阈值：{settings.renewBeforeDays} 天；{settings.useStaging ? "staging" : "生产 CA"}</div>
-          </div>
-          {issueBlockers.length > 0 && (
-            <div className="form-error" style={{ marginTop: 8 }}>
-              还不能签发：
-              <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-                {issueBlockers.map((item) => <li key={item}>{item}</li>)}
-              </ul>
-            </div>
-          )}
-          <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-            Let's Encrypt 有速率限制；失败会保留当前证书。首次签发会在 DNS 中创建
-            <code>_acme-challenge</code> TXT 记录，验证完成后删除。
-          </p>
-          <div className="dialog-actions">
-            <button className="btn btn-text dim" disabled={busy} onClick={() => setIssueConfirm(false)}>取消</button>
-            <button className="btn btn-raised" disabled={busy || issueBlockers.length > 0} onClick={() => void doIssue()}>
-              {busy ? "提交中…" : "确认并开始签发"}
-            </button>
-          </div>
-        </div>
-      </Dialog>
 
-      <Dialog
-        open={progressOpen}
-        title={settings?.status?.state === "error" ? "ACME 签发失败" : "ACME 签发进度"}
-        onClose={() => { if (!issuing) setProgressOpen(false); }}
-      >
-        <div style={{ maxWidth: 560 }}>
-          <AcmeStageList status={settings?.status} issuing={issuing} />
-
-          {settings?.status?.state === "error" ? (
-            <div
-              style={{
-                marginTop: 10,
-                padding: "10px 12px",
-                border: "1px solid var(--monet-error)",
-                borderRadius: 6,
-                fontSize: 13,
-                lineHeight: 1.6,
-                color: "var(--monet-error)",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}
-            >
-              {settings.status.lastError ?? "签发失败，服务端没有给出原因。"}
-              {acmeErrorHint(settings.status.lastError ?? "") && (
-                <div style={{ marginTop: 6, color: "var(--monet-on-surface)" }}>
-                  {acmeErrorHint(settings.status.lastError ?? "")}
-                </div>
-              )}
-              <div style={{ marginTop: 6, fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                旧证书保持有效；改好上面的问题后再点「更新证书」重试。
-              </div>
+      {issueConfirm && (
+        <Dialog open title="签发证书" onClose={() => setIssueConfirm(null)}>
+          <div style={{ maxWidth: 520, lineHeight: 1.7 }}>
+            <p style={{ marginTop: 0 }}>将用下面的配置向 CA 发起签发，确认后显示阶段进度。</p>
+            <div style={{ padding: "8px 12px", background: "var(--monet-surface-variant)", borderRadius: 4, fontSize: 13 }}>
+              <div>主域名：<strong>{issueConfirm.apex}</strong></div>
+              <div>域名：<code>{issueConfirm.domains.join("、")}</code></div>
+              <div>CA：{cas.find((item) => item.id === issueConfirm.ca)?.displayName ?? issueConfirm.ca}{issueConfirm.staging ? "（staging）" : ""}</div>
+              <div>DNS 厂商：{issueConfirm.provider}</div>
+              <div>DNS 凭证：{credentials.find((item) => item.id === issueConfirm.credentialId)?.name ?? "未选择"}</div>
             </div>
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, fontSize: 13 }}>
-              {settings?.status?.state === "active" ? (
-                <span>证书已安装并生效。</span>
-              ) : (
-                <span style={{ color: "var(--monet-on-surface-variant)" }}>
-                  {issuing ? "正在等待 CA / DNS，页面会自动刷新。" : "尚未开始。"}
-                </span>
-              )}
+            <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+              Let's Encrypt 有速率限制；失败会保留当前证书。签发时会在 DNS 中临时创建
+              <code>_acme-challenge</code> TXT 记录，验证完成后删除。
+            </p>
+            <div className="dialog-actions">
+              <button className="btn btn-text dim" onClick={() => setIssueConfirm(null)}>取消</button>
+              <button
+                className="btn btn-raised"
+                disabled={busy}
+                onClick={() => {
+                  const entry = issueConfirm;
+                  setIssueConfirm(null);
+                  setOpenId(entry.id);
+                  void withElevation(() => api.issueCertificate(entry.id))
+                    .then(() => load())
+                    .catch((e) => setError(errMsg(e)));
+                }}
+              >
+                确认并开始签发
+              </button>
             </div>
-          )}
-
-          {settings?.status?.state === "active" && settings.status.expires && (
-            <p style={{ fontSize: 12 }}>新证书到期：{formatDateTime(settings.status.expires)}</p>
-          )}
-          <div className="dialog-actions">
-            <button className="btn btn-raised" disabled={issuing} onClick={() => setProgressOpen(false)}>
-              {issuing ? "签发中…" : "关闭"}
-            </button>
           </div>
-        </div>
-      </Dialog>
-        </>
+        </Dialog>
       )}
     </div>
   );

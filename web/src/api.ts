@@ -36,6 +36,9 @@ import type {
   TlsUploadResult,
   AcmeSettings,
   AcmeCredentialInput,
+  CertificateEntry,
+  CertificateInput,
+  CertificatesResponse,
   TuiPluginItem,
   TuiPluginState,
   VersionInfo,
@@ -539,6 +542,38 @@ export const api = {
 
   disableAcme: () =>
     request<AcmeSettings>("/api/settings/acme/disable", { method: "POST" }),
+
+  // ---------- 证书管理 ----------
+
+  getCertificates: () => request<CertificatesResponse>("/api/settings/certificates"),
+
+  createCertificate: (body: CertificateInput) =>
+    request<CertificateEntry>("/api/settings/certificates", jsonInit("POST", body)),
+
+  updateCertificate: (id: string, body: CertificateInput) =>
+    request<CertificateEntry>(
+      `/api/settings/certificates/${encodeURIComponent(id)}`,
+      jsonInit("PUT", body),
+    ),
+
+  deleteCertificate: (id: string) =>
+    request<CertificatesResponse>(
+      `/api/settings/certificates/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+
+  issueCertificate: (id: string) =>
+    request<{ id: string; state: string; phase: string; entries: CertificateEntry[] }>(
+      `/api/settings/certificates/${encodeURIComponent(id)}/issue`,
+      { method: "POST" },
+      { timeoutMs: 5 * 60 * 1000 },
+    ),
+
+  activateCertificate: (id: string) =>
+    request<CertificatesResponse>(
+      `/api/settings/certificates/${encodeURIComponent(id)}/activate`,
+      { method: "POST" },
+    ),
 
   // ---------- 下载源（npm registry） ----------
 

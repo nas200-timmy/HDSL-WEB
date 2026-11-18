@@ -66,12 +66,15 @@ public final class TlsApiServlet extends HttpServlet {
     private final ServerConfig config;
     private final @Nullable CertificateManager certificates;
     private final Supplier<@Nullable HdslServer> server;
+    private final @Nullable org.jackhuang.hmcl.web.acme.CertificateStore certificateStore;
 
     public TlsApiServlet(ServerConfig config, @Nullable CertificateManager certificates,
-                         Supplier<@Nullable HdslServer> server) {
+                         Supplier<@Nullable HdslServer> server,
+                         @Nullable org.jackhuang.hmcl.web.acme.CertificateStore certificateStore) {
         this.config = config;
         this.certificates = certificates;
         this.server = server;
+        this.certificateStore = certificateStore;
     }
 
     @Override
@@ -214,6 +217,16 @@ public final class TlsApiServlet extends HttpServlet {
         body.addProperty("restartRequired", result.restartRequired());
         if (result.ok()) {
             config.https.enabled = true;
+            // Keep the certificate list in step with what is actually served.
+            if (certificateStore != null) {
+                try {
+                    org.jackhuang.hmcl.web.acme.CertificateMigration
+                            .syncUploaded(certificateStore, certificates);
+                } catch (IOException e) {
+                    org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                            "The uploaded certificate is live but could not be added to the certificate list", e);
+                }
+            }
             body.addProperty("https", true);
             AuditLog.log(AuditLog.Channel.WEB, "tls.upload", isP12 ? "pkcs12" : "pem", "success",
                     actorOf(request), request.getRemoteAddr());

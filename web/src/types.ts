@@ -351,6 +351,64 @@ export interface AcmeCredentialInput {
   panelPassword: string;
 }
 
+// ---------- 证书管理（按主域名分组） ----------
+
+export interface CertificateStatus {
+  state: string;
+  phase: string;
+  lastError: string | null;
+  lastAttempt: string | null;
+  nextAttempt: string | null;
+  notAfter: string | null;
+}
+
+export interface CertificateEntry {
+  id: string;
+  /** 主域名，分组键；创建后不可改 */
+  apex: string;
+  /** 期望覆盖的域名 */
+  domains: string[];
+  /** 磁盘上那张证书实际覆盖的域名 */
+  issuedDomains: string[];
+  /** 期望与已签发不一致：需要重新签发 */
+  pending: boolean;
+  source: "acme" | "upload";
+  active: boolean;
+  enabled: boolean;
+  ca: string;
+  email: string;
+  provider: string;
+  credentialId: string;
+  renewBeforeDays: number;
+  staging: boolean;
+  acceptTerms: boolean;
+  notAfter: string | null;
+  lastError: string | null;
+  lastAttempt: string | null;
+  updatedAt: string | null;
+  hasFiles: boolean;
+  status?: CertificateStatus;
+}
+
+export interface CertificatesResponse {
+  available: boolean;
+  activeId: string | null;
+  entries: CertificateEntry[];
+}
+
+export interface CertificateInput {
+  apex?: string;
+  domains: string[];
+  ca: string;
+  email: string;
+  provider: string;
+  credentialId: string;
+  renewBeforeDays: number;
+  staging: boolean;
+  acceptTerms: boolean;
+  enabled: boolean;
+}
+
 // ---------- Phase 3：下载源（npm registry） ----------
 
 /** 服务端下发的下载源预设；界面不硬编码这张表，直接渲染 */

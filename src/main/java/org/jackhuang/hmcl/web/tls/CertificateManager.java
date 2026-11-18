@@ -60,6 +60,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
+import java.security.Key;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.KeyStore;
@@ -505,15 +506,67 @@ public final class CertificateManager {
     /// @return what the new certificate says about itself
     /// @throws IOException when the pair cannot be read or does not match
     public synchronized Info installManaged(Path certPem, Path keyPem) throws IOException {
+        return installPem(certPem, keyPem, Source.ACME);
+    }
+
+    /// Installs a PEM pair from the certificate registry, labelling where it
+    /// came from. Like [installManaged], it does not touch `server.yaml` and
+    /// does not reload Jetty — the caller decides when the connector switches.
+    public synchronized Info installPem(Path certPem, Path keyPem, Source source) throws IOException {
         Path certPath = resolve(certPem);
         Path keyPath = resolve(keyPem);
-        install(buildKeyStoreFromPem(certPath, keyPath), Source.ACME);
-        logger.info("Installed the ACME certificate from " + certPath);
+        install(buildKeyStoreFromPem(certPath, keyPath), source);
+        logger.info("Installed the " + source + " certificate from " + certPath);
         Info loaded = info();
         if (loaded == null) {
-            throw new IOException("the ACME certificate could not be loaded");
+            throw new IOException("the certificate could not be loaded");
         }
         return loaded;
+    }
+
+    /// Exports the current identity as an unencrypted PEM pair. Used once when
+    /// an existing PKCS#12/PEM deployment is migrated into the certificate
+    /// registry: from then on the registry owns the files, not `server.yaml`.
+    public synchronized void exportIdentityPem(Path certOut, Path keyOut) throws IOException {
+        KeyStore current = keyStore;
+        if (current == null) {
+            throw new IOException("no TLS identity is loaded");
+        }
+        try {
+            for (Enumeration<String> aliases = current.aliases(); aliases.hasMoreElements(); ) {
+                String alias = aliases.nextElement();
+                if (!current.isKeyEntry(alias)) {
+                    continue;
+                }
+                Key key = current.getKey(alias, keyStorePassword.toCharArray());
+                java.security.cert.Certificate[] chain = current.getCertificateChain(alias);
+                if (key == null || chain == null || chain.length == 0) {
+                    continue;
+                }
+                writePem(certOut, (Object[]) chain);
+                writePem(keyOut, key);
+                return;
+            }
+        } catch (java.security.GeneralSecurityException e) {
+            throw new IOException("the current identity cannot be exported: " + e.getMessage(), e);
+        }
+        throw new IOException("the current identity has no private key to export");
+    }
+
+    private static void writePem(Path path, Object... items) throws IOException {
+        Files.createDirectories(path.getParent());
+        try (var writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8);
+             JcaPEMWriter pem = new JcaPEMWriter(writer)) {
+            for (Object item : items) {
+                pem.writeObject(item);
+            }
+        }
+        try {
+            Files.setPosixFilePermissions(path, Set.of(
+                    PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
+        } catch (IOException | UnsupportedOperationException ignored) {
+            // Non-POSIX filesystems cannot express this.
+        }
     }
 
     /// Where the ACME service writes its certificate chain and private key.

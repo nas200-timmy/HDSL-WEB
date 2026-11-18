@@ -22,6 +22,9 @@ import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.web.acme.Acme4jClient;
 import org.jackhuang.hmcl.web.acme.AcmeCredentialStore;
 import org.jackhuang.hmcl.web.acme.AcmeService;
+import org.jackhuang.hmcl.web.acme.CertificateMigration;
+import org.jackhuang.hmcl.web.acme.CertificateService;
+import org.jackhuang.hmcl.web.acme.CertificateStore;
 import org.jackhuang.hmcl.web.acme.DnsTxtResolver;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.auth.UserStore;
@@ -178,49 +181,87 @@ public final class Main {
             UserStore users = UserStore.open(config.dataDir, env, Logger.LOG);
             AuthService auth = new AuthService(users, Duration.ofHours(config.auth.sessionTtlHours));
             CertificateManager certificates = CertificateManager.create(config, Logger.LOG);
-            HdslServer server = HdslServer.build(config, auth, certificates, Logger.LOG);
 
-            AcmeService acme = null;
+            CertificateStore certificateStore = null;
+            AcmeCredentialStore acmeCredentials = null;
             try {
-                AcmeCredentialStore acmeCredentials = AcmeCredentialStore.open(config.dataDir);
-                acme = new AcmeService(config, acmeCredentials,
-                        new Acme4jClient(Logger.LOG), new DnsTxtResolver(),
-                        new AcmeService.CertificateSink() {
-                            @Override
-                            public CertificateManager.Source source() {
-                                return certificates.getSource();
-                            }
-
-                            @Override
-                            public CertificateManager.Info info() {
-                                return certificates.info();
-                            }
-
-                            @Override
-                            public void install(java.nio.file.Path certPem, java.nio.file.Path keyPem)
-                                    throws Exception {
-                                certificates.installManaged(certPem, keyPem);
-                            }
-
-                            @Override
-                            public void reload() throws Exception {
-                                HdslServer.TlsSwitch result = server.tlsActive()
-                                        ? server.reloadTls(certificates)
-                                        : server.enableTls(certificates);
-                                if (!result.ok()) {
-                                    throw new IOException(result.error() == null
-                                            ? "TLS reload failed" : result.error());
-                                }
-                            }
-
-                            @Override
-                            public boolean tlsActive() {
-                                return server.tlsActive();
-                            }
-                        }, Logger.LOG);
+                certificateStore = CertificateStore.open(config.dataDir);
+                acmeCredentials = AcmeCredentialStore.open(config.dataDir);
             } catch (IOException e) {
-                Logger.LOG.warning("ACME credential store cannot be opened; "
-                        + "the settings page will report ACME unavailable", e);
+                Logger.LOG.warning("Certificate registry cannot be opened; the legacy ACME path stays in charge", e);
+                certificateStore = null;
+                acmeCredentials = null;
+            }
+
+            if (certificateStore != null && acmeCredentials != null) {
+                CertificateMigration.runIfNeeded(config, certificateStore, acmeCredentials, certificates, Logger.LOG);
+                CertificateStore.Entry active = certificateStore.active();
+                if (active != null
+                        && java.nio.file.Files.isRegularFile(certificateStore.certPath(active.id))
+                        && java.nio.file.Files.isRegularFile(certificateStore.keyPath(active.id))) {
+                    try {
+                        certificates.installPem(certificateStore.certPath(active.id),
+                                certificateStore.keyPath(active.id),
+                                active.source == CertificateStore.Source.ACME
+                                        ? CertificateManager.Source.ACME
+                                        : CertificateManager.Source.PEM);
+                    } catch (IOException e) {
+                        Logger.LOG.warning("Could not load the active certificate `"
+                                + active.apex + "` from the registry", e);
+                    }
+                }
+            }
+
+            HdslServer server = HdslServer.build(config, auth, certificates, Logger.LOG, certificateStore);
+
+            CertificateService certificateService = null;
+            if (certificateStore != null && acmeCredentials != null) {
+                certificateService = new CertificateService(config, certificateStore, acmeCredentials,
+                        new Acme4jClient(Logger.LOG), new DnsTxtResolver(), certificates,
+                        () -> server, Logger.LOG);
+                server.setCertificateService(certificateService);
+            }
+
+            // The legacy single-certificate service only runs when the
+            // registry is empty (no migration happened). Otherwise it would
+            // compete with the per-entry issuer for the same identity.
+            AcmeService acme = null;
+            if (certificateStore == null || certificateStore.isEmpty()) {
+                    acme = new AcmeService(config, acmeCredentials,
+                            new Acme4jClient(Logger.LOG), new DnsTxtResolver(),
+                            new AcmeService.CertificateSink() {
+                                @Override
+                                public CertificateManager.Source source() {
+                                    return certificates.getSource();
+                                }
+
+                                @Override
+                                public CertificateManager.Info info() {
+                                    return certificates.info();
+                                }
+
+                                @Override
+                                public void install(java.nio.file.Path certPem, java.nio.file.Path keyPem)
+                                        throws Exception {
+                                    certificates.installManaged(certPem, keyPem);
+                                }
+
+                                @Override
+                                public void reload() throws Exception {
+                                    HdslServer.TlsSwitch result = server.tlsActive()
+                                            ? server.reloadTls(certificates)
+                                            : server.enableTls(certificates);
+                                    if (!result.ok()) {
+                                        throw new IOException(result.error() == null
+                                                ? "TLS reload failed" : result.error());
+                                    }
+                                }
+
+                                @Override
+                                public boolean tlsActive() {
+                                    return server.tlsActive();
+                                }
+                            }, Logger.LOG);
             }
             server.setAcmeService(acme);
 
@@ -228,12 +269,18 @@ public final class Main {
             if (acme != null) {
                 acme.start();
             }
+            if (certificateService != null) {
+                certificateService.start();
+            }
             try {
                 printBanner(config, server, certificates, env);
                 server.join();
             } finally {
                 if (acme != null) {
                     acme.close();
+                }
+                if (certificateService != null) {
+                    certificateService.close();
                 }
             }
         } catch (ServerConfigLoader.ConfigException e) {

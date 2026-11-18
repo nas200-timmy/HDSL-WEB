@@ -65,6 +65,7 @@ import org.jackhuang.hmcl.web.http.AcmeApiServlet;
 import org.jackhuang.hmcl.web.http.RegistrySettingsApiServlet;
 import org.jackhuang.hmcl.web.http.StaticServlet;
 import org.jackhuang.hmcl.web.http.TasksApiServlet;
+import org.jackhuang.hmcl.web.http.CertificatesApiServlet;
 import org.jackhuang.hmcl.web.http.TlsApiServlet;
 import org.jackhuang.hmcl.web.http.VendorsApiServlet;
 import org.jackhuang.hmcl.web.http.VersionsApiServlet;
@@ -146,6 +147,10 @@ public final class HdslServer {
     /// `start()`, so the settings servlet and the renewal loop share one
     /// instance. Null when the credential store could not be opened.
     private volatile @Nullable AcmeService acmeService;
+    /// Certificate registry + its issuing service. `null` when the registry
+    /// could not be opened (the legacy ACME path then stays in charge).
+    private final @Nullable org.jackhuang.hmcl.web.acme.CertificateStore certificateStore;
+    private volatile @Nullable org.jackhuang.hmcl.web.acme.CertificateService certificateService;
     /// The machine's own readings (docs/web-shell.md §通用 → 系统资源). One
     /// sampler for every viewer; it runs in two gears and never faster than a
     /// second.
@@ -162,6 +167,7 @@ public final class HdslServer {
                        org.jackhuang.hmcl.web.minecraft.McRuntime mcRuntime,
                        org.jackhuang.hmcl.web.system.SystemMetrics systemMetrics,
                        @Nullable ChatModule chat,
+                       @Nullable org.jackhuang.hmcl.web.acme.CertificateStore certificateStore,
                        Logger logger, AtomicLong startedAtMillis) {
         this.server = server;
         this.baseHttpConfig = baseHttpConfig;
@@ -174,6 +180,7 @@ public final class HdslServer {
         this.mcRuntime = mcRuntime;
         this.systemMetrics = systemMetrics;
         this.chat = chat;
+        this.certificateStore = certificateStore;
         this.logger = logger;
         this.startedAtMillis = startedAtMillis;
     }
@@ -184,6 +191,12 @@ public final class HdslServer {
     ///                     off (then the config must say so too)
     public static HdslServer build(ServerConfig config, AuthService authService,
                                    @Nullable CertificateManager certificates, Logger logger) {
+        return build(config, authService, certificates, logger, null);
+    }
+
+    public static HdslServer build(ServerConfig config, AuthService authService,
+                                   @Nullable CertificateManager certificates, Logger logger,
+                                   @Nullable org.jackhuang.hmcl.web.acme.CertificateStore certificateStore) {
         AuditLog.init(config.dataDir.resolve("logs"));
         Server server = new Server();
         // The stop sequence is owned by our own shutdown hook (below); Jetty's
@@ -474,7 +487,17 @@ public final class HdslServer {
         context.addServlet(new ServletHolder(new AcmeApiServlet(
                 config, acmeSupplier, authService, developerElevation, tlsActive, passwordCrypto)),
                 "/api/settings/acme/*");
-        ServletHolder tlsHolder = new ServletHolder(new TlsApiServlet(config, certificates, self::get));
+        if (certificateStore != null) {
+            java.util.function.Supplier<org.jackhuang.hmcl.web.acme.CertificateService> certSupplier = () -> {
+                HdslServer live = self.get();
+                return live == null ? null : live.getCertificateService();
+            };
+            CertificatesApiServlet certificatesApi = new CertificatesApiServlet(
+                    config, certificateStore, certSupplier, authService, developerElevation, tlsActive);
+            context.addServlet(new ServletHolder(certificatesApi), "/api/settings/certificates");
+            context.addServlet(new ServletHolder(certificatesApi), "/api/settings/certificates/*");
+        }
+        ServletHolder tlsHolder = new ServletHolder(new TlsApiServlet(config, certificates, self::get, certificateStore));
         tlsHolder.getRegistration().setMultipartConfig(multipart);
         context.addServlet(tlsHolder, "/api/settings/*");
         // 壁纸：外观是用户自己的事，不需要开发者提权；会话门由 /api/* 的 AuthFilter 负责。
@@ -656,7 +679,7 @@ public final class HdslServer {
 
         HdslServer built = new HdslServer(server, httpConfig, mainConnector, redirectConnector, ssl,
                 proxyWebSocketClient, acpSessions, terminals, mcRuntime, systemMetrics, chat,
-                logger, startedAtMillis);
+                certificateStore, logger, startedAtMillis);
         self.set(built);
         return built;
     }
@@ -832,6 +855,15 @@ public final class HdslServer {
 
     public @Nullable AcmeService getAcmeService() {
         return acmeService;
+    }
+
+    /// Wires the per-certificate service after `Main` has opened the registry.
+    public void setCertificateService(@Nullable org.jackhuang.hmcl.web.acme.CertificateService service) {
+        this.certificateService = service;
+    }
+
+    public @Nullable org.jackhuang.hmcl.web.acme.CertificateService getCertificateService() {
+        return certificateService;
     }
 
     /// The registry of running terminals — one per instance, and the panel is
