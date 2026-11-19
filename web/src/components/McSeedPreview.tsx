@@ -59,9 +59,11 @@ export function McSeedPreview({
   useEffect(() => {
     api.mc
       .versions()
-      .then((catalog) =>
-        setVersions(catalog.versions.filter((entry) => entry.type === "release")),
-      )
+      .then((catalog) => {
+        const releases = catalog.versions.filter((entry) => entry.type === "release");
+        setVersions(releases);
+        setVersion((current) => current || releases[0]?.id || "");
+      })
       .catch(() => setVersions([]));
   }, []);
 
