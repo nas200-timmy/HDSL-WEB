@@ -17,6 +17,8 @@ type View = {
   seed: string;
   radius: number;
   partial: boolean;
+  /** `biome` 是稀疏采样的群系速览，图很小，由浏览器平滑放大。 */
+  mode: "detail" | "biome";
 };
 
 /**
@@ -43,6 +45,7 @@ export function McSeedPreview({
   const [version, setVersion] = useState(initialVersion);
   const [versions, setVersions] = useState<McVersion[]>([]);
   const [seed, setSeed] = useState(initialSeed);
+  const [mode, setMode] = useState<"detail" | "biome">("detail");
   const [radius, setRadius] = useState(512);
   const [caps, setCaps] = useState<McSeedPreviewCapabilities | null>(null);
   const [job, setJob] = useState<McSeedPreviewJob | null>(null);
@@ -97,7 +100,14 @@ export function McSeedPreview({
         if (jobRef.current !== id) return;
         setJob(next);
         if (next.state === "DONE") {
-          setView({ source: "job", id, seed: next.seed, radius: next.radius, partial: next.partial });
+          setView({
+            source: "job",
+            id,
+            seed: next.seed,
+            radius: next.radius,
+            partial: next.partial,
+            mode: next.mode === "biome" ? "biome" : "detail",
+          });
           try {
             setMeta(await api.mc.previewMeta(id));
           } catch {
@@ -133,7 +143,7 @@ export function McSeedPreview({
     setMeta(null);
     setJob(null);
     try {
-      const created = await api.mc.previewStart({ version: version.trim(), seed: trimmed, radius });
+      const created = await api.mc.previewStart({ version: version.trim(), seed: trimmed, radius, mode });
       jobRef.current = created.id;
       setJob(created);
     } catch (e) {
@@ -161,6 +171,7 @@ export function McSeedPreview({
       seed: entry.seed,
       radius: entry.radius,
       partial: entry.partial,
+      mode: entry.mode === "biome" ? "biome" : "detail",
     });
     setSeed(entry.seed);
     setVersion(entry.version);
@@ -225,6 +236,21 @@ export function McSeedPreview({
             onChange={(event) => setSeed(event.target.value)}
             placeholder="例如 123456789 或 我的世界"
           />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span className="dim" style={{ fontSize: 12 }}>类型</span>
+          <select
+            className="input"
+            value={mode}
+            onChange={(event) => {
+              const next = event.target.value as "detail" | "biome";
+              setMode(next);
+            }}
+            style={{ width: 130 }}
+          >
+            <option value="detail">详细地图</option>
+            <option value="biome">群系速览</option>
+          </select>
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span className="dim" style={{ fontSize: 12 }}>范围</span>
@@ -663,7 +689,13 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
             src={`${imageUrl}?v=${view.id}`}
             alt={`种子 ${view.seed} 的地图`}
             draggable={false}
-            style={{ width: "100%", height: "100%", display: "block", imageRendering: "pixelated" }}
+            style={{
+              width: "100%",
+              height: "100%",
+              display: "block",
+              // 速览图只有 64×64，平滑放大才像"群系地图"；详细图必须保持像素锐利。
+              imageRendering: view.mode === "biome" ? "auto" : "pixelated",
+            }}
           />
           <svg
             viewBox={`${-radius} ${-radius} ${size} ${size}`}

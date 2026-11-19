@@ -102,6 +102,11 @@ public final class RegionReader {
     /// @param toChunk         the highest chunk coordinate included
     /// @return the number of present chunks inside the square
     public static int countPresentChunks(Path regionDirectory, int fromChunk, int toChunk) {
+        return countPresentChunks(regionDirectory, fromChunk, toChunk, 1);
+    }
+
+    /// Counts the sample chunks: those on the `step` grid starting at `from`.
+    public static int countPresentChunks(Path regionDirectory, int fromChunk, int toChunk, int step) {
         if (!Files.isDirectory(regionDirectory)) {
             return 0;
         }
@@ -112,7 +117,7 @@ public final class RegionReader {
                 if (!name.startsWith("r.") || !name.endsWith(".mca")) {
                     continue;
                 }
-                total += countInFile(file, fromChunk, toChunk);
+                total += countInFile(file, fromChunk, toChunk, step);
             }
         } catch (IOException ignored) {
             // A region file being written can vanish between list and read;
@@ -121,7 +126,7 @@ public final class RegionReader {
         return total;
     }
 
-    private static int countInFile(Path file, int fromChunk, int toChunk) {
+    private static int countInFile(Path file, int fromChunk, int toChunk, int step) {
         String[] parts = file.getFileName().toString().substring(2, file.getFileName().toString().length() - 4)
                 .split("\\.");
         if (parts.length != 2) {
@@ -150,7 +155,9 @@ public final class RegionReader {
                 }
                 int chunkX = (regionX << 5) | (i & 31);
                 int chunkZ = (regionZ << 5) | (i >> 5);
-                if (chunkX >= fromChunk && chunkX <= toChunk && chunkZ >= fromChunk && chunkZ <= toChunk) {
+                if (chunkX >= fromChunk && chunkX <= toChunk && chunkZ >= fromChunk && chunkZ <= toChunk
+                        && Math.floorMod(chunkX - fromChunk, step) == 0
+                        && Math.floorMod(chunkZ - fromChunk, step) == 0) {
                     count++;
                 }
             }

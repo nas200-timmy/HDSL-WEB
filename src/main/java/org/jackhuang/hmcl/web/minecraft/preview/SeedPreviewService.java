@@ -255,12 +255,33 @@ public final class SeedPreviewService {
             }
 
             job.state(PreviewJob.State.RENDERING);
-            BufferedImage image = PreviewRenderer.render(chunks, spec);
+            int[] first = {spec.firstChunk()};
+            int step = spec.sampleStep();
+            String[][] samples = new String[0][];
+            BufferedImage image;
+            if (spec.mode() == PreviewSpec.Mode.BIOME) {
+                int cells = PreviewSpec.BIOME_SAMPLES;
+                samples = new String[cells][cells];
+                for (RegionReader.ChunkSummary chunk : chunks) {
+                    int i = Math.floorDiv(chunk.chunkX() - first[0], step);
+                    int j = Math.floorDiv(chunk.chunkZ() - first[0], step);
+                    if (i >= 0 && j >= 0 && i < cells && j < cells) {
+                        samples[j][i] = chunk.biomes()[0];
+                    }
+                }
+                image = PreviewRenderer.renderBiome(samples, spec);
+            } else {
+                image = PreviewRenderer.render(chunks, spec);
+            }
             Path directory = Files.createDirectories(cacheDirectory(spec));
             Path png = directory.resolve("preview.png");
             Path meta = directory.resolve("meta.json");
             ImageIO.write(image, "png", png.toFile());
-            writeMeta(meta, spec, chunks, !complete);
+            if (spec.mode() == PreviewSpec.Mode.BIOME) {
+                writeBiomeMeta(meta, spec, samples, !complete);
+            } else {
+                writeMeta(meta, spec, chunks, !complete);
+            }
             job.done(png, meta, !complete);
             trimCache();
         } catch (McException e) {
@@ -393,7 +414,7 @@ public final class SeedPreviewService {
     /// servers have no such command, so the panel writes one air block per
     /// chunk — `setblock` in an ungenerated chunk forces that chunk to load,
     /// which runs generation exactly like forceload does.
-    private void requestChunks(Process process, PreviewSpec spec) throws IOException {
+    private void requestChunks(Process process, PreviewSpec spec) throws IOException, InterruptedException {
         int first = spec.firstChunk();
         int last = spec.lastChunk();
         int side = spec.chunksPerSide();
@@ -403,6 +424,9 @@ public final class SeedPreviewService {
                 int z2 = Math.min(last, z + rows - 1);
                 send(process, "forceload add " + (first * 16) + " " + (z * 16)
                         + " " + (last * 16 + 15) + " " + (z2 * 16 + 15));
+                // One command can generate 256 chunks; a short pause between
+                // batches keeps a slow machine under the tick budget.
+                Thread.sleep(40);
             }
             return;
         }
@@ -415,7 +439,7 @@ public final class SeedPreviewService {
 
     private boolean waitForChunks(PreviewJob job, Path regionDirectory, PreviewSpec spec, Process process)
             throws InterruptedException {
-        long expected = spec.chunkCount();
+        long expected = spec.sampleCount();
         Instant deadline = Instant.now().plus(GENERATE_TIMEOUT);
         int stable = 0;
         int previous = 0;
@@ -457,7 +481,8 @@ public final class SeedPreviewService {
     }
 
     private int countInRange(Path regionDirectory, PreviewSpec spec) {
-        return RegionReader.countPresentChunks(regionDirectory, spec.firstChunk(), spec.lastChunk());
+        return RegionReader.countPresentChunks(regionDirectory, spec.firstChunk(), spec.lastChunk(),
+                spec.sampleStep());
     }
 
     private List<RegionReader.ChunkSummary> readChunks(Path regionDirectory, PreviewSpec spec)
@@ -509,6 +534,7 @@ public final class SeedPreviewService {
         body.addProperty("radius", spec.radiusBlocks());
         body.addProperty("biomeY", spec.biomeY());
         body.addProperty("chunks", chunks.size());
+        body.addProperty("mode", "detail");
         body.addProperty("partial", partial);
         body.addProperty("generatedAt", Instant.now().toString());
 
@@ -628,12 +654,59 @@ public final class SeedPreviewService {
         return '?';
     }
 
+    /// The overview's metadata: the same shape as the detail one, with the
+    /// sample grid standing in for the chunk list.
+    private void writeBiomeMeta(Path meta, PreviewSpec spec, String[][] samples, boolean partial)
+            throws IOException {
+        JsonObject body = new JsonObject();
+        body.addProperty("version", spec.version());
+        body.addProperty("seed", spec.seed());
+        body.addProperty("radius", spec.radiusBlocks());
+        body.addProperty("biomeY", spec.biomeY());
+        body.addProperty("mode", "biome");
+        body.addProperty("chunks", samples.length * samples.length);
+        body.addProperty("partial", partial);
+        body.addProperty("generatedAt", Instant.now().toString());
+        body.add("structureCounts", new JsonObject());
+        body.add("structures", new JsonArray());
+        body.add("slimeChunks", new JsonArray());
+
+        java.util.Map<String, Integer> counts = new java.util.LinkedHashMap<>();
+        char[][] ascii = new char[64][64];
+        for (char[] row : ascii) {
+            java.util.Arrays.fill(row, '?');
+        }
+        int cells = samples.length;
+        for (int j = 0; j < cells; j++) {
+            for (int i = 0; i < cells; i++) {
+                String biome = samples[j][i];
+                if (biome == null) {
+                    continue;
+                }
+                counts.merge(biome, 1, Integer::sum);
+                int gx = Math.min(63, i * 64 / cells);
+                int gz = Math.min(63, j * 64 / cells);
+                ascii[gz][gx] = biomeSymbol(biome);
+            }
+        }
+        JsonObject biomeJson = new JsonObject();
+        counts.forEach(biomeJson::addProperty);
+        body.add("biomeCounts", biomeJson);
+        JsonArray lines = new JsonArray();
+        for (char[] row : ascii) {
+            lines.add(new String(row));
+        }
+        body.add("ascii", lines);
+        Files.writeString(meta, body.toString(), StandardCharsets.UTF_8);
+    }
+
     private Path cacheDirectory(PreviewSpec spec) {
         return cacheRoot.resolve(spec.version()).resolve(seedHash(spec.seed()))
                 // The suffix is the renderer generation: an image drawn before
                 // the overlays moved to the browser must not be served as if it
                 // were the new one.
-                .resolve(spec.radiusBlocks() + "-" + spec.biomeY() + "-v7");
+                .resolve(spec.radiusBlocks() + "-" + spec.biomeY()
+                        + ("BIOME".equals(spec.mode().name()) ? "-biome" : "") + "-v7");
     }
 
     private static String seedHash(String seed) {
@@ -663,6 +736,7 @@ public final class SeedPreviewService {
                 enable-rcon=false
                 enable-query=false
                 allow-nether=false
+                max-tick-time=-1
                 motd=HDSL seed preview
                 server-port=%d
                 """.formatted(spec.seed().replace("\n", "").replace("\r", ""), port);
@@ -824,6 +898,7 @@ public final class SeedPreviewService {
             entry.addProperty("biomeY", biomeY);
             entry.addProperty("generatedAt", body.get("generatedAt").getAsString());
             entry.addProperty("partial", body.get("partial").getAsBoolean());
+            entry.addProperty("mode", body.has("mode") ? body.get("mode").getAsString() : "detail");
             entry.addProperty("bytes", Files.size(png));
             if (body.has("structures") && body.get("structures").isJsonArray()) {
                 entry.addProperty("structures", body.getAsJsonArray("structures").size());

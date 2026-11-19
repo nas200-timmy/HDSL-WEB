@@ -36,26 +36,72 @@ import org.jetbrains.annotations.NotNullByDefault;
 /// @param radiusBlocks the half width in blocks
 /// @param biomeY      the height the biome layer is sampled at
 @NotNullByDefault
-public record PreviewSpec(String version, String seed, int radiusBlocks, int biomeY) {
+public record PreviewSpec(String version, String seed, int radiusBlocks, int biomeY, Mode mode) {
+
+    /// How much truth the picture carries.
+    ///
+    /// [DETAIL] paints terrain: surface material, relief, coastline. [BIOME]
+    /// paints the same chunks as flat biome colours, which is the view a seed
+    /// map is usually read in. Both generate the same world — see
+    /// [#sampleStep()] for why the "biome map" cannot be cheaper.
+    public enum Mode {
+        DETAIL,
+        BIOME
+    }
+
+    /// The detail map's ceiling.
+    public static final int MAX_RADIUS = 1024;
+
+    public PreviewSpec(String version, String seed, int radiusBlocks, int biomeY) {
+        this(version, seed, radiusBlocks, biomeY, Mode.DETAIL);
+    }
 
     /// The smallest radius that still shows something useful.
     public static final int MIN_RADIUS = 64;
-    /// The largest radius the panel will generate; 1024 blocks is 128×128 chunks.
-    public static final int MAX_RADIUS = 1024;
+
     /// The slice a flat map is drawn from when the caller does not say.
     public static final int DEFAULT_BIOME_Y = 63;
     /// The longest seed the panel accepts, to keep the properties file bounded.
     public static final int MAX_SEED_LENGTH = 128;
+
+    /// Samples along one side, for the biome overview.
+    ///
+    /// The count is fixed, so the cost of an overview is fixed too: 64×64
+    /// chunks, roughly forty seconds whatever the radius. The radius only
+    /// decides how much ground each sample stands for.
+    public static final int BIOME_SAMPLES = 32;
 
     /// Chunks along one side of the rendered square.
     public int chunksPerSide() {
         return Math.max(1, radiusBlocks * 2 / 16);
     }
 
-    /// Pixels along one side: one per block. The biome layer is coarser, but
-    /// the heightmap is per block and that is what makes terrain readable.
+    /// Pixels along one side: one per block on the detail map, one per sample
+    /// on the overview (the browser scales it up smoothly).
     public int pixelsPerSide() {
-        return radiusBlocks * 2;
+        return mode == Mode.BIOME ? BIOME_SAMPLES : radiusBlocks * 2;
+    }
+
+    /// Chunks skipped between two samples.
+    ///
+    /// Always 1: measurements on a real server showed that generating scattered
+    /// chunks costs about four times a contiguous chunk (each isolated chunk
+    /// drags its neighbours through the early generation stages and then throws
+    /// that work away). Sparse sampling therefore loses to dense generation on
+    /// every axis, so the "biome overview" is a *rendering* of the same world,
+    /// not a cheaper way to obtain it.
+    public int sampleStep() {
+        return 1;
+    }
+
+    /// How many chunks the overview has to generate.
+    public int sampleCount() {
+        if (mode != Mode.BIOME) {
+            return chunkCount();
+        }
+        int step = sampleStep();
+        int perSide = (chunksPerSide() + step - 1) / step;
+        return perSide * perSide;
     }
 
     /// Chunks the preview has to generate.
@@ -76,6 +122,6 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
     /// A stable key for reuse: two requests with the same key produce the same
     /// picture, so the second one must not start another server.
     public String key() {
-        return version + "|" + seed + "|" + radiusBlocks + "|" + biomeY;
+        return version + "|" + seed + "|" + radiusBlocks + "|" + biomeY + "|" + mode;
     }
 }

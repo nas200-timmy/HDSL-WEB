@@ -1011,7 +1011,13 @@ export const api = {
         `/api/mc/preview/capabilities?version=${encodeURIComponent(version)}`,
       ),
     /** 起一次预览；同一个 (版本, 种子, 半径, 高度) 只会真跑一次。 */
-    previewStart: (body: { version: string; seed: string; radius: number; biomeY?: number }) =>
+    previewStart: (body: {
+      version: string;
+      seed: string;
+      radius: number;
+      biomeY?: number;
+      mode?: "detail" | "biome";
+    }) =>
       request<McSeedPreviewJob>("/api/mc/preview", jsonInit("POST", body)),
     previewJob: (id: string) =>
       request<McSeedPreviewJob>(`/api/mc/preview/${encodeURIComponent(id)}`),
@@ -1979,6 +1985,8 @@ export interface McSeedPreviewJob {
   seed: string;
   radius: number;
   biomeY: number;
+  /** 缺省是详细地图；`biome` 是稀疏采样的群系速览。 */
+  mode?: "detail" | "biome";
   createdAt: string;
   elapsedMs?: number;
   /** 剩余秒数的粗略估计，进度太小时不给。 */
@@ -1996,6 +2004,7 @@ export interface McSeedPreviewHistoryEntry {
   seed: string;
   radius: number;
   biomeY: number;
+  mode?: "detail" | "biome";
   generatedAt: string;
   partial: boolean;
   bytes: number;

@@ -149,6 +149,23 @@ public final class PreviewRenderer {
         return image;
     }
 
+    /// The biome overview: one pixel per sample chunk, scaled up by the browser.
+    ///
+    /// No relief and no materials here — the point is to answer "what is around
+    /// here" for a very large area, and at 128 blocks per sample the terrain
+    /// detail would be invented anyway.
+    public static BufferedImage renderBiome(String[][] grid, PreviewSpec spec) {
+        int side = grid.length;
+        BufferedImage image = new BufferedImage(side, side, BufferedImage.TYPE_INT_RGB);
+        for (int z = 0; z < side; z++) {
+            for (int x = 0; x < side; x++) {
+                String biome = grid[z][x];
+                image.setRGB(x, z, biome == null ? 0x101418 : BiomePalette.colorOf(biome));
+            }
+        }
+        return image;
+    }
+
     // ------------------------------------------------------------------ colour --
 
     private static boolean isWater(String biome) {
