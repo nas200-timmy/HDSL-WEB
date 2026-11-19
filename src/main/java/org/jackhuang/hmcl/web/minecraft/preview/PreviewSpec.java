@@ -35,8 +35,10 @@ import org.jetbrains.annotations.NotNullByDefault;
 /// @param seed        the world seed exactly as the player typed it
 /// @param radiusBlocks the half width in blocks
 /// @param biomeY      the height the biome layer is sampled at
+/// @param mode        whether to paint terrain or flat biome colours
+/// @param engine      which backend computes the picture
 @NotNullByDefault
-public record PreviewSpec(String version, String seed, int radiusBlocks, int biomeY, Mode mode) {
+public record PreviewSpec(String version, String seed, int radiusBlocks, int biomeY, Mode mode, Engine engine) {
 
     /// How much truth the picture carries.
     ///
@@ -49,11 +51,26 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
         BIOME
     }
 
+    /// Which implementation produces the preview.
+    ///
+    /// [JAVA] uses the cubiomes-based core and never starts a server. [SERVER]
+    /// boots the official jar and reads what it writes. JAVA currently only
+    /// supports [Mode#BIOME]; a DETAIL request with JAVA is rejected by the
+    /// servlet.
+    public enum Engine {
+        JAVA,
+        SERVER
+    }
+
     /// The detail map's ceiling.
     public static final int MAX_RADIUS = 1024;
 
+    public PreviewSpec(String version, String seed, int radiusBlocks, int biomeY, Mode mode) {
+        this(version, seed, radiusBlocks, biomeY, mode, mode == Mode.BIOME ? Engine.JAVA : Engine.SERVER);
+    }
+
     public PreviewSpec(String version, String seed, int radiusBlocks, int biomeY) {
-        this(version, seed, radiusBlocks, biomeY, Mode.DETAIL);
+        this(version, seed, radiusBlocks, biomeY, Mode.DETAIL, Engine.SERVER);
     }
 
     /// The smallest radius that still shows something useful.
@@ -122,6 +139,6 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
     /// A stable key for reuse: two requests with the same key produce the same
     /// picture, so the second one must not start another server.
     public String key() {
-        return version + "|" + seed + "|" + radiusBlocks + "|" + biomeY + "|" + mode;
+        return version + "|" + seed + "|" + radiusBlocks + "|" + biomeY + "|" + mode + "|" + engine;
     }
 }

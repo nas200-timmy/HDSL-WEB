@@ -1017,6 +1017,7 @@ export const api = {
       radius: number;
       biomeY?: number;
       mode?: "detail" | "biome";
+      engine?: "java" | "server";
     }) =>
       request<McSeedPreviewJob>("/api/mc/preview", jsonInit("POST", body)),
     previewJob: (id: string) =>
@@ -1992,6 +1993,8 @@ export interface McSeedPreviewJob {
   biomeY: number;
   /** 缺省是详细地图；`biome` 是稀疏采样的群系速览。 */
   mode?: "detail" | "biome";
+  /** 计算引擎：`java` 用 cubiomes 内核，`server` 起真服务端。 */
+  engine?: "java" | "server";
   createdAt: string;
   elapsedMs?: number;
   /** 剩余秒数的粗略估计，进度太小时不给。 */

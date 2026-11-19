@@ -46,7 +46,8 @@ export function McSeedPreview({
   const [version, setVersion] = useState(initialVersion);
   const [versions, setVersions] = useState<McVersion[]>([]);
   const [seed, setSeed] = useState(initialSeed);
-  const [mode, setMode] = useState<"detail" | "biome">("detail");
+  const [mode, setMode] = useState<"detail" | "biome">("biome");
+  const [engine, setEngine] = useState<"java" | "server">("java");
   const [radius, setRadius] = useState(512);
   const [caps, setCaps] = useState<McSeedPreviewCapabilities | null>(null);
   const [job, setJob] = useState<McSeedPreviewJob | null>(null);
@@ -148,7 +149,7 @@ export function McSeedPreview({
     setMeta(null);
     setJob(null);
     try {
-      const created = await api.mc.previewStart({ version: version.trim(), seed: trimmed, radius, mode });
+      const created = await api.mc.previewStart({ version: version.trim(), seed: trimmed, radius, mode, engine });
       jobRef.current = created.id;
       setJob(created);
     } catch (e) {
@@ -265,6 +266,22 @@ export function McSeedPreview({
           />
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span className="dim" style={{ fontSize: 12 }}>方案</span>
+          <select
+            className="input"
+            value={engine}
+            onChange={(event) => {
+              const next = event.target.value as "java" | "server";
+              setEngine(next);
+              if (next === "java") setMode("biome");
+            }}
+            style={{ width: 150 }}
+          >
+            <option value="java">Java 内核（秒出）</option>
+            <option value="server">MC 服务器（精准）</option>
+          </select>
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span className="dim" style={{ fontSize: 12 }}>类型</span>
           <select
             className="input"
@@ -272,11 +289,12 @@ export function McSeedPreview({
             onChange={(event) => {
               const next = event.target.value as "detail" | "biome";
               setMode(next);
+              if (next === "detail") setEngine("server");
             }}
             style={{ width: 130 }}
           >
-            <option value="detail">详细地图</option>
             <option value="biome">群系速览</option>
+            <option value="detail" disabled={engine === "java"}>详细地图</option>
           </select>
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -304,11 +322,19 @@ export function McSeedPreview({
 
       {caps && (
         <p className="dim" style={{ margin: 0, fontSize: 12 }}>
-          {caps.jarPresent ? "服务端 jar 已缓存" : "首次需要下载该版本的服务端 jar（约 50MB）"}
-          {" · "}
-          {caps.javaReady
-            ? `Java ${caps.javaRequired} 已就绪`
-            : `需要先安装 Java ${caps.javaRequired}（Minecraft → Java 运行时）`}
+          {engine === "java"
+            ? "Java 内核直接计算，无需启动服务端"
+            : caps.jarPresent
+              ? "服务端 jar 已缓存"
+              : "首次需要下载该版本的服务端 jar（约 50MB）"}
+          {engine === "server" && (
+            <>
+              {" · "}
+              {caps.javaReady
+                ? `Java ${caps.javaRequired} 已就绪`
+                : `需要先安装 Java ${caps.javaRequired}（Minecraft → Java 运行时）`}
+            </>
+          )}
         </p>
       )}
 

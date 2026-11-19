@@ -229,6 +229,8 @@ public final class PreviewJob {
         body.addProperty("seed", spec.seed());
         body.addProperty("radius", spec.radiusBlocks());
         body.addProperty("biomeY", spec.biomeY());
+        body.addProperty("mode", spec.mode().name().toLowerCase(java.util.Locale.ROOT));
+        body.addProperty("engine", spec.engine().name().toLowerCase(java.util.Locale.ROOT));
         body.addProperty("createdAt", createdAt.toString());
         if (finishedAt != null) {
             body.addProperty("elapsedMs", Duration.between(createdAt, finishedAt).toMillis());

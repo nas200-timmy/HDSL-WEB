@@ -375,13 +375,21 @@ public final class SeedPreviewService {
 
     private void run(PreviewJob job) {
         PreviewSpec spec = job.spec();
-        if (spec.mode() == PreviewSpec.Mode.BIOME && SeedMapBackend.supports(spec.version())) {
-            try {
-                runBiomeCore(job);
+        if (spec.engine() == PreviewSpec.Engine.JAVA) {
+            if (spec.mode() != PreviewSpec.Mode.BIOME) {
+                failOrCancel(job, "Java 内核只支持群系速览，详细地图请使用 MC 服务器方案");
                 return;
-            } catch (IOException | RuntimeException e) {
-                job.log("Java 群系内核失败，回退到服务端生成: " + e.getMessage());
-                // fall through to the real-server backend
+            }
+            if (SeedMapBackend.supports(spec.version())) {
+                try {
+                    runBiomeCore(job);
+                    return;
+                } catch (IOException | RuntimeException e) {
+                    job.log("Java 群系内核失败，回退到服务端生成: " + e.getMessage());
+                    // fall through to the real-server backend
+                }
+            } else {
+                job.log("该版本暂不支持 Java 内核，回退到服务端生成");
             }
         }
         Path work = null;
