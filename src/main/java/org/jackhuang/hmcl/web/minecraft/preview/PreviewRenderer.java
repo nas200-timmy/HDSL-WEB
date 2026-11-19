@@ -25,72 +25,136 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/// Turns parsed chunks into the picture the panel serves.
+/// Turns parsed chunks into a map that reads like a map.
 ///
-/// Four pixels per chunk is exactly the resolution of the biome data, so the
-/// image has no interpolated detail to lie about. The browser scales it up with
-/// `image-rendering: pixelated`.
+/// One pixel per block. The biome layer is only four blocks per cell, but the
+/// **heightmap is per block**, and height is what makes terrain legible: a
+/// hillshade from the north-west turns a flat field of colours into ridges and
+/// valleys, and the sea gets depth instead of one flat blue.
 ///
-/// Layers are composited in a fixed order — biome, slime, structures — so a
-/// structure marker is never hidden behind the slime tint.
+/// Everything here is composited in one pass over a height grid that spans the
+/// whole picture, so shading is continuous across chunk borders — the seams a
+/// per-chunk hillshade would leave are the most obvious "this is generated, not
+/// rendered" tell.
 @NotNullByDefault
 public final class PreviewRenderer {
 
+    /// Sea level; water is drawn by how far the floor sits below it.
+    private static final int SEA_LEVEL = 63;
     /// The tint painted over a slime chunk.
     private static final int SLIME_TINT = 0x59C46A;
-    /// How much of the tint is mixed in, out of 255.
-    private static final int SLIME_ALPHA = 110;
+    private static final int SLIME_ALPHA = 55;
+    /// Where the snow line starts and how quickly it takes over.
+    private static final int SNOW_LINE = 150;
+    /// Light direction: the north-west corner is brighter, as on every map.
+    private static final float SHADE_PER_BLOCK = 0.038f;
 
     private PreviewRenderer() {
     }
 
     /// Draws the map.
     ///
-    /// @param chunks    what {@link RegionReader} produced
-    /// @param spec      the request (it fixes size and centre)
-    /// @param slime     whether to overlay slime chunks
+    /// @param chunks     what {@link RegionReader} produced
+    /// @param spec       the request (it fixes size and centre)
+    /// @param slime      whether to overlay slime chunks
     /// @param structures whether to draw structure markers
     /// @return the image, never `null`
     public static BufferedImage render(List<RegionReader.ChunkSummary> chunks, PreviewSpec spec,
                                        boolean slime, boolean structures) {
         int side = spec.pixelsPerSide();
+        int radius = spec.radiusBlocks();
         BufferedImage image = new BufferedImage(side, side, BufferedImage.TYPE_INT_RGB);
-        int first = spec.firstChunk();
 
-        for (int y = 0; y < side; y++) {
-            for (int x = 0; x < side; x++) {
-                image.setRGB(x, y, 0x1B1B1F);
+        int[] heights = new int[side * side];
+        int[] base = new int[side * side];
+        boolean[] water = new boolean[side * side];
+        String[] surface = new String[side * side];
+        java.util.Arrays.fill(heights, SEA_LEVEL - 8);
+
+        for (RegionReader.ChunkSummary chunk : chunks) {
+            int baseX = chunk.chunkX() * 16 + radius;
+            int baseZ = chunk.chunkZ() * 16 + radius;
+            for (int z = 0; z < 16; z++) {
+                int pz = baseZ + z;
+                if (pz < 0 || pz >= side) {
+                    continue;
+                }
+                for (int x = 0; x < 16; x++) {
+                    int px = baseX + x;
+                    if (px < 0 || px >= side) {
+                        continue;
+                    }
+                    int index = pz * side + px;
+                    String biome = chunk.biomes()[(z >> 2) * 4 + (x >> 2)];
+                    base[index] = BiomePalette.colorOf(biome);
+                    water[index] = isWater(biome);
+                    int[] map = chunk.heights();
+                    heights[index] = map.length >= 256 ? map[z * 16 + x] : SEA_LEVEL;
+                    String[] blocks = chunk.blocks();
+                    surface[index] = blocks.length >= 256 ? blocks[z * 16 + x] : null;
+                }
             }
         }
 
-        Map<Long, RegionReader.ChunkSummary> byPosition = new HashMap<>();
-        for (RegionReader.ChunkSummary chunk : chunks) {
-            byPosition.put(key(chunk.chunkX(), chunk.chunkZ()), chunk);
-        }
+        // The raw heightmap includes leaves, snow layers and every one-block
+        // bump, which turns a hillshade into noise. A small blur keeps the shape
+        // of the land and drops the texture; water is still decided per block
+        // from the unblurred data.
+        int[] relief = boxBlur(boxBlur(heights, side, 6), side, 6);
 
-        // A text seed hashes to the same number the game derives; the server
-        // generates the world, this number only drives the slime overlay.
-        long seed = parseSeed(spec.seed());
-
-        for (int cz = first; cz <= spec.lastChunk(); cz++) {
-            for (int cx = first; cx <= spec.lastChunk(); cx++) {
-                RegionReader.ChunkSummary chunk = byPosition.get(key(cx, cz));
-                int px = (cx - first) * 4;
-                int pz = (cz - first) * 4;
-                if (chunk == null) {
-                    continue;
-                }
-                for (int z4 = 0; z4 < 4; z4++) {
-                    for (int x4 = 0; x4 < 4; x4++) {
-                        int rgb = BiomePalette.colorOf(chunk.biomes()[z4 * 4 + x4]);
-                        image.setRGB(px + x4, pz + z4, rgb);
+        for (int z = 0; z < side; z++) {
+            for (int x = 0; x < side; x++) {
+                int index = z * side + x;
+                int color;
+                if (water[index]) {
+                    int depth = Math.max(0, Math.min(48, SEA_LEVEL - heights[index]));
+                    color = waterColor(depth);
+                } else {
+                    String block = surface[index];
+                    color = block != null && !"unknown".equals(block)
+                            ? blockColor(block, base[index])
+                            : base[index];
+                    // With a real surface block the shading is only a hint: the
+                    // material already carries the colour, so a strong gradient
+                    // would put the noise back.
+                    float shade = shade(relief, side, x, z);
+                    color = scale(color, 1f + (shade - 1f) * (block != null ? 0.6f : 1f));
+                    int height = heights[index];
+                    if (height > SNOW_LINE && block == null) {
+                        float snow = Math.min(0.55f, (height - SNOW_LINE) / 50f);
+                        color = blend(color, 0xFFFFFF, (int) (snow * 255));
                     }
                 }
-                if (slime && SlimeChunks.isSlimeChunk(seed, cx, cz)) {
-                    for (int z4 = 0; z4 < 4; z4++) {
-                        for (int x4 = 0; x4 < 4; x4++) {
-                            image.setRGB(px + x4, pz + z4,
-                                    blend(image.getRGB(px + x4, pz + z4), SLIME_TINT, SLIME_ALPHA));
+                image.setRGB(x, z, color);
+            }
+        }
+
+        // A coast line is the single strongest "this is a map" cue: without it
+        // the sea simply stops, with it the continent has a shape.
+        for (int z = 0; z < side; z++) {
+            for (int x = 0; x < side; x++) {
+                int index = z * side + x;
+                if (water[index] || !touchesWater(water, side, x, z)) {
+                    continue;
+                }
+                image.setRGB(x, z, blend(image.getRGB(x, z), 0x18324F, 90));
+            }
+        }
+
+        if (slime) {
+            long seed = parseSeed(spec.seed());
+            for (RegionReader.ChunkSummary chunk : chunks) {
+                if (!SlimeChunks.isSlimeChunk(seed, chunk.chunkX(), chunk.chunkZ())) {
+                    continue;
+                }
+                int baseX = chunk.chunkX() * 16 + radius;
+                int baseZ = chunk.chunkZ() * 16 + radius;
+                for (int z = 0; z < 16; z++) {
+                    for (int x = 0; x < 16; x++) {
+                        int px = baseX + x;
+                        int pz = baseZ + z;
+                        if (px >= 0 && pz >= 0 && px < side && pz < side) {
+                            image.setRGB(px, pz, blend(image.getRGB(px, pz), SLIME_TINT, SLIME_ALPHA));
                         }
                     }
                 }
@@ -100,39 +164,112 @@ public final class PreviewRenderer {
         if (structures) {
             for (RegionReader.ChunkSummary chunk : chunks) {
                 for (RegionReader.StructureRef structure : chunk.structures()) {
-                    int px = (structure.chunkX() - first) * 4;
-                    int pz = (structure.chunkZ() - first) * 4;
-                    if (px < 0 || pz < 0 || px + 2 > side || pz + 2 > side) {
-                        continue;
-                    }
-                    int color = structureColor(structure.id());
-                    for (int dz = 0; dz < 2; dz++) {
-                        for (int dx = 0; dx < 2; dx++) {
-                            image.setRGB(px + 1 + dx, pz + 1 + dz, color);
-                        }
-                    }
+                    // The marker sits at the centre of the structure's own
+                    // chunk; the chunk that carries the reference is usually
+                    // the same one, and re-drawing is idempotent when it is not.
+                    drawMarker(image,
+                            structure.chunkX() * 16 + radius + 8,
+                            structure.chunkZ() * 16 + radius + 8,
+                            structureColor(structure.id()));
                 }
             }
         }
 
-        // The origin chunk is where a default world puts the player; a small
-        // white cross makes the centre of the picture identifiable.
-        int middle = (0 - first) * 4 + 1;
-        for (int i = -2; i <= 2; i++) {
-            setSafe(image, middle + i, middle, 0xFFFFFF);
-            setSafe(image, middle, middle + i, 0xFFFFFF);
-        }
+        drawGrid(image, side, radius);
+        drawOrigin(image, radius);
         return image;
     }
 
-    private static void setSafe(BufferedImage image, int x, int y, int rgb) {
-        if (x >= 0 && y >= 0 && x < image.getWidth() && y < image.getHeight()) {
-            image.setRGB(x, y, rgb);
-        }
+    // ------------------------------------------------------------------ colour --
+
+    private static boolean isWater(String biome) {
+        String name = biome.toLowerCase(Locale.ROOT);
+        return name.contains("ocean") || name.contains("river");
     }
 
-    private static long key(int chunkX, int chunkZ) {
-        return ((long) chunkX << 32) ^ (chunkZ & 0xFFFFFFFFL);
+    /// Deep water is darker and a little more saturated; shallow water is the
+    /// pale blue a beach expects.
+    private static int waterColor(int depth) {
+        float t = Math.min(1f, depth / 28f);
+        int r = (int) (74 - 46 * t);
+        int g = (int) (124 - 78 * t);
+        int b = (int) (184 - 64 * t);
+        return (r << 16) | (g << 8) | b;
+    }
+
+    /// Hillshade from a fixed north-west light. Flat ground is 1.0; a slope
+    /// facing the light brightens, one facing away darkens.
+    private static float shade(int[] heights, int side, int x, int z) {
+        int center = heights[z * side + x];
+        int left = at(heights, side, x - 2, z, center);
+        int right = at(heights, side, x + 2, z, center);
+        int up = at(heights, side, x, z - 2, center);
+        int down = at(heights, side, x, z + 2, center);
+        float dx = right - left;
+        float dz = down - up;
+        float value = 1f - (dx + dz) * SHADE_PER_BLOCK;
+        return Math.max(0.68f, Math.min(1.26f, value));
+    }
+
+    /// A separable box blur. Two passes at radius six remove the tree canopy
+    /// and leave landform: the hillshade should show where the hills are, not
+    /// where the oaks are.
+    private static int[] boxBlur(int[] source, int side, int radius) {
+        int[] horizontal = new int[source.length];
+        for (int z = 0; z < side; z++) {
+            int row = z * side;
+            for (int x = 0; x < side; x++) {
+                int sum = 0;
+                int count = 0;
+                for (int dx = -radius; dx <= radius; dx++) {
+                    int nx = x + dx;
+                    if (nx < 0 || nx >= side) {
+                        continue;
+                    }
+                    sum += source[row + nx];
+                    count++;
+                }
+                horizontal[row + x] = sum / Math.max(1, count);
+            }
+        }
+        int[] vertical = new int[source.length];
+        for (int x = 0; x < side; x++) {
+            for (int z = 0; z < side; z++) {
+                int sum = 0;
+                int count = 0;
+                for (int dz = -radius; dz <= radius; dz++) {
+                    int nz = z + dz;
+                    if (nz < 0 || nz >= side) {
+                        continue;
+                    }
+                    sum += horizontal[nz * side + x];
+                    count++;
+                }
+                vertical[z * side + x] = sum / Math.max(1, count);
+            }
+        }
+        return vertical;
+    }
+
+    private static boolean touchesWater(boolean[] water, int side, int x, int z) {
+        return (x > 0 && water[z * side + x - 1])
+                || (x + 1 < side && water[z * side + x + 1])
+                || (z > 0 && water[(z - 1) * side + x])
+                || (z + 1 < side && water[(z + 1) * side + x]);
+    }
+
+    private static int at(int[] heights, int side, int x, int z, int fallback) {
+        if (x < 0 || z < 0 || x >= side || z >= side) {
+            return fallback;
+        }
+        return heights[z * side + x];
+    }
+
+    private static int scale(int color, float factor) {
+        int r = Math.min(255, Math.max(0, (int) (((color >> 16) & 0xFF) * factor)));
+        int g = Math.min(255, Math.max(0, (int) (((color >> 8) & 0xFF) * factor)));
+        int b = Math.min(255, Math.max(0, (int) ((color & 0xFF) * factor)));
+        return (r << 16) | (g << 8) | b;
     }
 
     private static int blend(int base, int tint, int alpha) {
@@ -142,8 +279,121 @@ public final class PreviewRenderer {
         return (r << 16) | (g << 8) | b;
     }
 
-    /// Marker colour per structure family. The exact palette does not matter —
-    /// the legend in the UI maps the same ids — but it must be stable.
+    // --------------------------------------------------------------- overlays --
+
+    /// A four-pixel diamond with a one-pixel dark outline, so a marker reads on
+    /// both sand and water.
+    private static void drawMarker(BufferedImage image, int x, int z, int color) {
+        for (int dz = -2; dz <= 2; dz++) {
+            for (int dx = -2; dx <= 2; dx++) {
+                if (Math.abs(dx) + Math.abs(dz) > 2) {
+                    continue;
+                }
+                boolean edge = Math.abs(dx) + Math.abs(dz) == 2;
+                setSafe(image, x + dx, z + dz, edge ? 0x1A1A1A : color);
+            }
+        }
+    }
+
+    /// Every 64 blocks a hairline, every 256 a stronger one. Drawing the grid
+    /// into the image (instead of an HTML overlay) keeps it aligned with the
+    /// pixels when the browser scales the map.
+    private static void drawGrid(BufferedImage image, int side, int radius) {
+        for (int block = -radius; block <= radius; block += 64) {
+            int pixel = block + radius;
+            if (pixel < 0 || pixel >= side) {
+                continue;
+            }
+            boolean major = block % 256 == 0;
+            int color = major ? 0xFFFFFF : 0xBFD4E8;
+            int alpha = major ? 46 : 20;
+            for (int i = 0; i < side; i++) {
+                image.setRGB(pixel, i, blend(image.getRGB(pixel, i), color, alpha));
+                image.setRGB(i, pixel, blend(image.getRGB(i, pixel), color, alpha));
+            }
+        }
+    }
+
+    private static void drawOrigin(BufferedImage image, int radius) {
+        int center = radius;
+        for (int i = -6; i <= 6; i++) {
+            setSafe(image, center + i, center, 0xFFFFFF);
+            setSafe(image, center, center + i, 0xFFFFFF);
+        }
+        for (int i = -2; i <= 2; i++) {
+            setSafe(image, center + i, center, 0xE53935);
+            setSafe(image, center, center + i, 0xE53935);
+        }
+    }
+
+    private static void setSafe(BufferedImage image, int x, int y, int rgb) {
+        if (x >= 0 && y >= 0 && x < image.getWidth() && y < image.getHeight()) {
+            image.setRGB(x, y, rgb);
+        }
+    }
+
+    /// The map colour of a surface block.
+    ///
+    /// A map reads the *material*, not the height: grass is one green whether
+    /// it sits on a hill or in a dip. Falling back to the biome colour keeps
+    /// unknown blocks (datapacks, mods) from turning the map grey.
+    private static int blockColor(String block, int biomeColor) {
+        if (block.endsWith("_leaves") || block.equals("azalea_leaves") || block.equals("flowering_azalea_leaves")) {
+            return scale(biomeColor, 0.8f);
+        }
+        if (block.equals("grass_block") || block.equals("moss_block") || block.equals("short_grass")
+                || block.equals("tall_grass") || block.equals("fern") || block.equals("large_fern")
+                || block.equals("bush") || block.equals("sugar_cane") || block.equals("lily_pad")) {
+            return biomeColor;
+        }
+        if (block.equals("sand") || block.equals("sandstone") || block.equals("suspicious_sand")
+                || block.equals("smooth_sandstone") || block.equals("cut_sandstone")) {
+            return 0xE4D6A2;
+        }
+        if (block.equals("red_sand") || block.equals("red_sandstone") || block.contains("terracotta")
+                || block.equals("orange_terracotta")) {
+            return 0xBE6A3C;
+        }
+        if (block.equals("gravel") || block.equals("cobblestone") || block.equals("mossy_cobblestone")
+                || block.equals("andesite") || block.equals("tuff")) {
+            return 0x968F8B;
+        }
+        if (block.equals("clay")) {
+            return 0xA3ABB8;
+        }
+        if (block.equals("snow") || block.equals("snow_block") || block.equals("powder_snow")
+                || block.equals("ice") || block.equals("packed_ice") || block.equals("blue_ice")
+                || block.equals("frosted_ice")) {
+            return 0xF1F6FA;
+        }
+        if (block.equals("deepslate") || block.equals("cobbled_deepslate") || block.equals("basalt")
+                || block.equals("smooth_basalt") || block.equals("blackstone") || block.equals("sculk")
+                || block.equals("calcite") || block.equals("dripstone_block")) {
+            return 0x6E6E72;
+        }
+        if (block.equals("stone") || block.equals("granite") || block.equals("diorite")
+                || block.endsWith("_ore")) {
+            return 0x8C8C8C;
+        }
+        if (block.equals("mycelium") || block.equals("mushroom_stem") || block.equals("brown_mushroom_block")
+                || block.equals("red_mushroom_block")) {
+            return 0x8A6E8A;
+        }
+        if (block.equals("dirt") || block.equals("coarse_dirt") || block.equals("rooted_dirt")
+                || block.equals("podzol")) {
+            return 0x7A5A34;
+        }
+        if (block.equals("mud") || block.equals("muddy_mangrove_roots")) {
+            return 0x4A3E38;
+        }
+        if (block.equals("lava") || block.equals("magma_block")) {
+            return 0xD8581E;
+        }
+        return biomeColor;
+    }
+
+    /// Marker colour per structure family. The legend in the UI maps the same
+    /// ids, so the two must stay in step.
     static int structureColor(String id) {
         String normalised = id.toLowerCase(Locale.ROOT);
         return switch (normalised) {
@@ -166,9 +416,8 @@ public final class PreviewRenderer {
     /// The numeric seed the game derives from the text seed.
     ///
     /// Minecraft accepts any text: a number is used as-is, anything else is
-    /// hashed with `String.hashCode()` (the same value the game passes to the
-    /// generator). The panel never needs the hash to *generate* — the server
-    /// does that — only to draw the slime overlay.
+    /// hashed with `String.hashCode()`. The panel never needs the hash to
+    /// *generate* — the server does that — only to draw the slime overlay.
     static long parseSeed(String seed) {
         String trimmed = seed == null ? "" : seed.trim();
         if (trimmed.isEmpty()) {

@@ -191,21 +191,12 @@ export function McSeedPreview({ instance }: { instance: McInstance }) {
 
       {job?.state === "DONE" && job.imageReady && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <img
-            src={`${withBase(`/api/mc/preview/${job.id}.png`)}?v=${job.id}`}
-            alt={`种子 ${job.seed} 的地图`}
-            style={{
-              width: "100%",
-              maxWidth: 640,
-              imageRendering: "pixelated",
-              borderRadius: 6,
-              border: "1px solid rgba(127,127,127,.25)",
-            }}
-          />
+          <MapView job={job} />
           <p className="dim" style={{ margin: 0, fontSize: 12 }}>
             {job.partial ? "⚠ 生成超时，这张图不完整。" : "生成完成。"}
             {" "}
-            白色十字是 (0,0)。绿色叠加是史莱姆区块，彩色小方块是结构起点。
+            1 像素 = 1 格，网格 64 格，红白十字是 (0,0)。浅绿方块是史莱姆区块，菱形是结构起点。
+            鼠标移上去看坐标。
           </p>
           {structureRows.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, fontSize: 12 }}>
@@ -222,6 +213,62 @@ export function McSeedPreview({ instance }: { instance: McInstance }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * 地图本体 + 悬停坐标。
+ *
+ * 图是 1 像素 = 1 格，所以鼠标位置可以直接换算成方块坐标：这比在图里烧字更准，
+ * 也不会随缩放糊掉。
+ */
+function MapView({ job }: { job: McSeedPreviewJob }) {
+  const [hover, setHover] = useState<{ x: number; z: number } | null>(null);
+  const size = job.radius * 2;
+
+  return (
+    <div
+      style={{ position: "relative", width: "100%", maxWidth: 720, lineHeight: 0 }}
+      onMouseMove={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        const fx = (event.clientX - rect.left) / rect.width;
+        const fz = (event.clientY - rect.top) / rect.height;
+        setHover({
+          x: Math.round(fx * size - job.radius),
+          z: Math.round(fz * size - job.radius),
+        });
+      }}
+      onMouseLeave={() => setHover(null)}
+    >
+      <img
+        src={`${withBase(`/api/mc/preview/${job.id}.png`)}?v=${job.id}`}
+        alt={`种子 ${job.seed} 的地图`}
+        style={{
+          width: "100%",
+          display: "block",
+          imageRendering: "pixelated",
+          borderRadius: 6,
+          border: "1px solid rgba(127,127,127,.25)",
+        }}
+      />
+      <div
+        className="mono"
+        style={{
+          position: "absolute",
+          left: 8,
+          top: 8,
+          padding: "2px 8px",
+          borderRadius: 4,
+          fontSize: 12,
+          lineHeight: 1.6,
+          color: "#fff",
+          background: "rgba(0,0,0,.55)",
+          pointerEvents: "none",
+        }}
+      >
+        {hover ? `X ${hover.x}  Z ${hover.z}` : `种子 ${job.seed}`}
+      </div>
     </div>
   );
 }

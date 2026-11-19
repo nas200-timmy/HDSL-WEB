@@ -51,7 +51,7 @@ class SeedPreviewTest {
     void specTurnsRadiusIntoAWholeChunkSquare() {
         PreviewSpec spec = new PreviewSpec("1.21.4", "42", 512, 63);
         assertEquals(64, spec.chunksPerSide());
-        assertEquals(256, spec.pixelsPerSide());
+        assertEquals(1024, spec.pixelsPerSide());
         assertEquals(4096, spec.chunkCount());
         assertEquals(-32, spec.firstChunk());
         assertEquals(31, spec.lastChunk());

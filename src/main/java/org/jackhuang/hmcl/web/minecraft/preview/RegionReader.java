@@ -27,6 +27,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -64,8 +65,14 @@ public final class RegionReader {
     /// @param chunkX     chunk coordinate
     /// @param chunkZ     chunk coordinate
     /// @param biomes     sixteen names, indexed `z4 * 4 + x4` within the chunk
+    /// @param heights    sixteen surface heights, same indexing; empty when the
+    ///                   chunk carries no heightmap (very old worlds)
+    /// @param blocks     sixteen surface block names (`grass_block`), same
+    ///                   indexing; empty for versions whose block storage is
+    ///                   not paletted (1.12 and older)
     /// @param structures structure starts, possibly empty
-    public record ChunkSummary(int chunkX, int chunkZ, String[] biomes, List<StructureRef> structures) {
+    public record ChunkSummary(int chunkX, int chunkZ, String[] biomes, int[] heights,
+                               String[] blocks, List<StructureRef> structures) {
     }
 
     private static final int SECTOR = 4096;
@@ -213,7 +220,9 @@ public final class RegionReader {
         if (biomes == null) {
             return null;
         }
-        return new ChunkSummary(chunkX, chunkZ, biomes, structures(root, body));
+        int[] surface = heights(body);
+        return new ChunkSummary(chunkX, chunkZ, biomes, surface, surfaceBlocks(root, surface),
+                structures(root, body));
     }
 
     // ------------------------------------------------------------------ biomes --
@@ -344,6 +353,116 @@ public final class RegionReader {
             return index < ints.length ? ints[index] : 0;
         }
         return 0;
+    }
+
+    // ------------------------------------------------------------------ height --
+
+    /// The terrain surface of a 16×16 chunk, indexed `z * 16 + x`.
+    ///
+    /// Two layouts exist: 1.14 and later store named heightmaps as 9-bit packed
+    /// longs (`Heightmaps.MOTION_BLOCKING`), while 1.12 and older store a plain
+    /// `HeightMap` byte array. The packed values never straddle a long, which is
+    /// the same rule the biome palette follows.
+    private static int[] heights(Map<String, Object> body) {
+        Map<String, Object> maps = Nbt.compound(body.get("Heightmaps"));
+        if (maps != null) {
+            for (String name : List.of("MOTION_BLOCKING", "WORLD_SURFACE", "OCEAN_FLOOR")) {
+                if (maps.get(name) instanceof long[] packed) {
+                    return unpack9(packed);
+                }
+            }
+        }
+        Object legacy = body.get("HeightMap");
+        if (legacy instanceof byte[] bytes && bytes.length >= 256) {
+            int[] values = new int[256];
+            for (int i = 0; i < 256; i++) {
+                values[i] = bytes[i] & 0xFF;
+            }
+            return values;
+        }
+        if (legacy instanceof int[] ints && ints.length >= 256) {
+            return Arrays.copyOf(ints, 256);
+        }
+        return new int[0];
+    }
+
+    private static int[] unpack9(long[] packed) {
+        int[] values = new int[256];
+        int perLong = 64 / 9;
+        for (int i = 0; i < 256; i++) {
+            int word = i / perLong;
+            if (word >= packed.length) {
+                break;
+            }
+            values[i] = (int) ((packed[word] >>> ((i % perLong) * 9)) & 0x1FF);
+        }
+        return values;
+    }
+
+    // ------------------------------------------------------------------ blocks --
+
+    /// The top block of every column, from the 1.18+ paletted block storage.
+    ///
+    /// A seed map is read from the surface material, not the height: a forest
+    /// is one colour because the top block is leaves or grass everywhere, while
+    /// the height under it bumps by a block from tree to tree. Without this the
+    /// hillshade turns every canopy into noise.
+    ///
+    /// @return 256 names, or an empty array when the chunk is not paletted
+    private static String[] surfaceBlocks(Map<String, Object> root, int[] heights) {
+        List<?> sections = Nbt.list(root.get("sections"));
+        if (sections.isEmpty() || heights.length < 256) {
+            return new String[0];
+        }
+        Map<Integer, Map<String, Object>> bySection = new HashMap<>();
+        for (Object element : sections) {
+            Map<String, Object> section = Nbt.compound(element);
+            if (section != null) {
+                bySection.put(Nbt.integer(section.get("Y"), Integer.MIN_VALUE), section);
+            }
+        }
+        String[] blocks = new String[256];
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                int height = heights[z * 16 + x];
+                if (height < 0) {
+                    continue;
+                }
+                Map<String, Object> section = bySection.get(height >> 4);
+                if (section == null) {
+                    continue;
+                }
+                Map<String, Object> states = Nbt.compound(section.get("block_states"));
+                if (states == null) {
+                    continue;
+                }
+                List<?> palette = Nbt.list(states.get("palette"));
+                long[] data = states.get("data") instanceof long[] values ? values : new long[0];
+                int index = ((height & 15) * 16 + z) * 16 + x;
+                int paletteSize = Math.max(1, palette.size());
+                // Block containers start at four bits, unlike the one-bit biome
+                // containers.
+                int bits = Math.max(4, 32 - Integer.numberOfLeadingZeros(paletteSize - 1));
+                int perLong = 64 / bits;
+                int value = 0;
+                if (data.length > index / perLong) {
+                    value = (int) ((data[index / perLong] >>> ((index % perLong) * bits))
+                            & ((1L << bits) - 1));
+                }
+                blocks[z * 16 + x] = blockName(palette, value);
+            }
+        }
+        return blocks;
+    }
+
+    private static String blockName(List<?> palette, int index) {
+        if (index < 0 || index >= palette.size()) {
+            return "unknown";
+        }
+        if (palette.get(index) instanceof Map<?, ?> entry && entry.get("Name") instanceof String name) {
+            return normaliseBiome(name);
+        }
+        return "unknown";
     }
 
     // -------------------------------------------------------------- structures --

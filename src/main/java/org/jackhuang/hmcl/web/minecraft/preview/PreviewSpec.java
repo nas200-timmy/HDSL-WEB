@@ -52,9 +52,10 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
         return Math.max(1, radiusBlocks * 2 / 16);
     }
 
-    /// Pixels along one side: four per chunk.
+    /// Pixels along one side: one per block. The biome layer is coarser, but
+    /// the heightmap is per block and that is what makes terrain readable.
     public int pixelsPerSide() {
-        return chunksPerSide() * 4;
+        return radiusBlocks * 2;
     }
 
     /// Chunks the preview has to generate.
