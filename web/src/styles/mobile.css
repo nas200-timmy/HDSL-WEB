@@ -323,6 +323,21 @@
 
   .tlli {
     min-height: 42px;
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  /* 手机上标题允许折行（标签多的时候「名字 + 原版 + 官方 + 已停止」一行放不下），
+   * 副标题仍然单行省略，行高不会失控。 */
+  .tlli .tlli-title {
+    flex-wrap: wrap;
+    white-space: normal;
+    overflow: visible;
+  }
+
+  .tlli .tlli-text {
+    flex: 1 1 60%;
+    min-width: 0;
   }
 
   .popup-item {
@@ -371,10 +386,34 @@
     height: 20px;
   }
 
-  /* 顶部工具行在窄屏不再挤压换行，改为横向滑动 */
+  /* 顶部工具行在窄屏不再挤压换行，改为横向滑动。
+   * 关键在 `flex: 0 0 auto`：只设 overflow-x 是不够的——flex 项的自动最小宽度
+   * 会把它压到刚好放得下，于是按钮里的字竖着排（「刷新」「种子预览」都变成了
+   * 一列字），而且永远不溢出、滑不动。 */
   .toolbar-row {
     flex-wrap: nowrap;
     overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .toolbar-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .toolbar-row > * {
+    flex: 0 0 auto;
+  }
+
+  .toolbar-row .tool-btn {
+    white-space: nowrap;
+    min-height: 40px;
+    padding: 0 10px;
+  }
+
+  .toolbar-row > span {
+    white-space: nowrap;
   }
 
   .filter-bar .input {
