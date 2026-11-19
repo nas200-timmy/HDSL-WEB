@@ -216,7 +216,7 @@ public final class RegionReader {
         // 1.18 flattened the chunk: no `Level` wrapper. Older versions have it.
         Map<String, Object> level = Nbt.compound(root.get("Level"));
         Map<String, Object> body = level != null ? level : root;
-        String[] biomes = biomes(root, body, biomeY);
+        String[] biomes = biomes(root, body, biomeY, heights(body));
         if (biomes == null) {
             return null;
         }
@@ -227,22 +227,23 @@ public final class RegionReader {
 
     // ------------------------------------------------------------------ biomes --
 
-    private static @Nullable String[] biomes(Map<String, Object> root, Map<String, Object> body, int biomeY) {
+    private static @Nullable String[] biomes(Map<String, Object> root, Map<String, Object> body,
+                                             int biomeY, int[] heights) {
         Object legacy = body.get("Biomes");
         if (legacy instanceof byte[] bytes && bytes.length >= 256) {
             // One byte per block: the pre-1.13 two-dimensional array.
-            return fromDense(bytes, true, biomeY);
+            return fromDense(bytes, true, biomeY, heights);
         }
         if (legacy instanceof int[] ints && ints.length >= 256) {
             // 1.15 – 1.17 stores a 4×4×64 grid; 1.13 – 1.14 still one per block.
-            return fromDense(ints, ints.length < 1024, biomeY);
+            return fromDense(ints, ints.length < 1024, biomeY, heights);
         }
-        return fromSections(root, body, biomeY);
+        return fromSections(root, body, biomeY, heights);
     }
 
     /// The 2D and 3D legacy arrays. `perBlock` means 16×16 entries covering one
     /// block each; otherwise the array is a 4×4×64 grid of 4×4×4 cells.
-    private static String[] fromDense(@Nullable Object array, boolean perBlock, int biomeY) {
+    private static String[] fromDense(@Nullable Object array, boolean perBlock, int biomeY, int[] heights) {
         String[] biomes = new String[16];
         if (array == null) {
             return biomes;
@@ -258,9 +259,12 @@ public final class RegionReader {
             }
             return biomes;
         }
-        int y4 = Math.max(0, Math.min(63, biomeY >> 2));
         for (int z4 = 0; z4 < 4; z4++) {
             for (int x4 = 0; x4 < 4; x4++) {
+                // The slice that matters is the one at the surface, not a fixed
+                // height: a cave under a forest is not the forest's biome.
+                int height = cellHeight(heights, z4, x4, biomeY);
+                int y4 = Math.max(0, Math.min(63, height >> 2));
                 int index = y4 * 16 + z4 * 4 + x4;
                 biomes[z4 * 4 + x4] = legacyName(valueAt(array, index));
             }
@@ -273,44 +277,72 @@ public final class RegionReader {
         return name != null ? name : "unknown_" + id;
     }
 
-    private static String[] fromSections(Map<String, Object> root, Map<String, Object> body, int biomeY) {
-        int sectionIndex = biomeY >> 4;
-        int yInSection = (biomeY & 15) >> 2;
+    private static String[] fromSections(Map<String, Object> root, Map<String, Object> body,
+                                         int biomeY, int[] heights) {
+        Map<Integer, Map<String, Object>> sections = new HashMap<>();
         for (Object element : Nbt.list(root.get("sections"))) {
             Map<String, Object> section = Nbt.compound(element);
-            if (section == null || Nbt.integer(section.get("Y"), Integer.MIN_VALUE) != sectionIndex) {
-                continue;
+            if (section != null) {
+                sections.put(Nbt.integer(section.get("Y"), Integer.MIN_VALUE), section);
             }
-            Map<String, Object> container = Nbt.compound(section.get("biomes"));
-            if (container == null) {
-                continue;
-            }
-            String[] biomes = new String[16];
-            List<?> palette = Nbt.list(container.get("palette"));
-            long[] data = container.get("data") instanceof long[] values ? values : new long[0];
-            int paletteSize = Math.max(1, palette.size());
-            // Biome containers use a one-bit minimum (block containers use
-            // four); a single-palette section carries no data array at all.
-            int bits = Math.max(1, 32 - Integer.numberOfLeadingZeros(paletteSize - 1));
-            int perLong = 64 / bits;
-            for (int z4 = 0; z4 < 4; z4++) {
-                for (int x4 = 0; x4 < 4; x4++) {
-                    int index = yInSection * 16 + z4 * 4 + x4;
-                    int value = 0;
-                    int word = index / perLong;
-                    if (data.length > word) {
-                        long packed = data[word];
-                        int shift = (index % perLong) * bits;
-                        value = (int) ((packed >>> shift) & ((1L << bits) - 1));
-                    }
-                    biomes[z4 * 4 + x4] = paletteName(palette, value);
-                }
-            }
-            return biomes;
         }
-        // A chunk without that section (superflat, or a y outside the column)
-        // still renders, just as unknown, instead of disappearing from the map.
-        return null;
+        String[] biomes = new String[16];
+        boolean any = false;
+        for (int z4 = 0; z4 < 4; z4++) {
+            for (int x4 = 0; x4 < 4; x4++) {
+                // Sample at the surface of this 4×4 column. Sampling at a fixed
+                // height paints underground cave biomes over the forest above
+                // them, which is both wrong on the map and wrong in the report.
+                int height = cellHeight(heights, z4, x4, biomeY);
+                int sectionIndex = height >> 4;
+                int yInSection = (height & 15) >> 2;
+                Map<String, Object> section = sections.get(sectionIndex);
+                if (section == null) {
+                    biomes[z4 * 4 + x4] = "unknown";
+                    continue;
+                }
+                Map<String, Object> container = Nbt.compound(section.get("biomes"));
+                if (container == null) {
+                    biomes[z4 * 4 + x4] = "unknown";
+                    continue;
+                }
+                List<?> palette = Nbt.list(container.get("palette"));
+                long[] data = container.get("data") instanceof long[] values ? values : new long[0];
+                int paletteSize = Math.max(1, palette.size());
+                // Biome containers use a one-bit minimum (block containers use
+                // four); a single-palette section carries no data array at all.
+                int bits = Math.max(1, 32 - Integer.numberOfLeadingZeros(paletteSize - 1));
+                int perLong = 64 / bits;
+                int index = yInSection * 16 + z4 * 4 + x4;
+                int value = 0;
+                int word = index / perLong;
+                if (data.length > word) {
+                    long packed = data[word];
+                    int shift = (index % perLong) * bits;
+                    value = (int) ((packed >>> shift) & ((1L << bits) - 1));
+                }
+                biomes[z4 * 4 + x4] = paletteName(palette, value);
+                any = true;
+            }
+        }
+        // A chunk without any section at the sampled heights (superflat, or a y
+        // outside the column) still renders, just as unknown.
+        return any ? biomes : null;
+    }
+
+    /// The highest surface in one 4×4 cell, or the fallback when the chunk has
+    /// no heightmap.
+    private static int cellHeight(int[] heights, int z4, int x4, int fallback) {
+        if (heights.length < 256) {
+            return fallback;
+        }
+        int best = 0;
+        for (int dz = 0; dz < 4; dz++) {
+            for (int dx = 0; dx < 4; dx++) {
+                best = Math.max(best, heights[(z4 * 4 + dz) * 16 + x4 * 4 + dx]);
+            }
+        }
+        return best;
     }
 
     private static String paletteName(List<?> palette, int index) {

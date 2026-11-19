@@ -97,6 +97,10 @@ public final class SeedPreviewServlet extends HttpServlet {
             image(response, rest.substring(0, rest.length() - 4));
             return;
         }
+        if (rest.endsWith(".txt") && "GET".equals(method)) {
+            report(response, rest.substring(0, rest.length() - 4));
+            return;
+        }
         if (rest.endsWith(".json") && "GET".equals(method)) {
             meta(response, rest.substring(0, rest.length() - 5));
             return;
@@ -178,6 +182,7 @@ public final class SeedPreviewServlet extends HttpServlet {
         String id;
         boolean png = false;
         boolean json = false;
+        boolean text = false;
         if (rest.endsWith(".png")) {
             id = rest.substring(0, rest.length() - 4);
             png = true;
@@ -208,12 +213,14 @@ public final class SeedPreviewServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no cached preview " + id);
             return;
         }
-        Path file = directory.resolve(png ? "preview.png" : json ? "meta.json" : "meta.json");
+        Path file = directory.resolve(png ? "preview.png" : "meta.json");
         if (!Files.isRegularFile(file)) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no cached preview " + id);
             return;
         }
-        if (png) {
+        if (text) {
+            writeText(response, file);
+        } else if (png) {
             response.setStatus(HttpServletResponse.SC_OK);
             response.setContentType("image/png");
             response.setHeader("Cache-Control", "private, max-age=86400");
@@ -222,6 +229,30 @@ public final class SeedPreviewServlet extends HttpServlet {
         } else {
             Json.write(response, JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8)));
         }
+    }
+
+    /// The report for a finished job.
+    private void report(HttpServletResponse response, String id) throws IOException {
+        PreviewJob job = service.job(id);
+        Path meta = job == null ? null : job.meta();
+        if (meta == null || !Files.isRegularFile(meta)) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no report for " + id);
+            return;
+        }
+        writeText(response, meta);
+    }
+
+    /// `meta.json` in, a plain-text report out. The same converter serves a job
+    /// and a cached result: an agent should not have to care which one it has.
+    private static void writeText(HttpServletResponse response, Path meta) throws IOException {
+        JsonObject body = JsonParser.parseString(Files.readString(meta, StandardCharsets.UTF_8)).getAsJsonObject();
+        byte[] text = PreviewReport.render(body).getBytes(StandardCharsets.UTF_8);
+        response.setStatus(HttpServletResponse.SC_OK);
+        response.setContentType("text/plain; charset=utf-8");
+        response.setCharacterEncoding("UTF-8");
+        response.setHeader("Cache-Control", "private, max-age=86400");
+        response.setContentLength(text.length);
+        response.getOutputStream().write(text);
     }
 
     private void image(HttpServletResponse response, String id) throws IOException {

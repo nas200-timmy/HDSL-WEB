@@ -72,6 +72,34 @@ class SeedPreviewTest {
         assertTrue(slime > 700 && slime < 1300, "expected roughly 10%, saw " + slime);
     }
 
+    @Test
+    void reportIsLineOrientedAndCarriesCoordinates() {
+        com.google.gson.JsonObject meta = com.google.gson.JsonParser.parseString("""
+                {"version":"1.21","seed":"42","radius":256,"biomeY":63,
+                 "generatedAt":"2026-11-19T00:00:00Z","chunks":1024,"partial":false,
+                 "structureCounts":{"village_plains":2,"mineshaft":1},
+                 "structures":[
+                   {"id":"village_plains","x":16,"z":-32,"chunkX":1,"chunkZ":-2},
+                   {"id":"village_plains","x":48,"z":0,"chunkX":3,"chunkZ":0},
+                   {"id":"mineshaft","x":-16,"z":16,"chunkX":-1,"chunkZ":1}],
+                 "biomeCounts":{"plains":3,"ocean":1},
+                 "slimeChunks":[{"x":0,"z":0},{"x":1,"z":1}],
+                 "ascii":["..TT","..TT"]}
+                """).getAsJsonObject();
+
+        String text = PreviewReport.render(meta);
+        assertTrue(text.contains("seed: 42"));
+        assertTrue(text.contains("state: complete"));
+        assertTrue(text.contains("village_plains"));
+        assertTrue(text.contains("- 16, -32 (chunk 1, -2)"));
+        assertTrue(text.contains("- 48, 0 (chunk 3, 0)"));
+        // Percentages are computed against the biome cells, not the block area.
+        assertTrue(text.contains("plains 75.0%"));
+        assertTrue(text.contains("ocean 25.0%"));
+        assertTrue(text.contains("2 chunks"));
+        assertTrue(text.contains("..TT"));
+    }
+
     // --------------------------------------------------------------- fixtures --
 
     @Test

@@ -95,11 +95,66 @@
 | GET | `/api/mc/preview/{id}` | 状态、进度、日志尾部 |
 | GET | `/api/mc/preview/{id}.png` | 地图 |
 | GET | `/api/mc/preview/{id}.json` | 结构清单与统计 |
+| GET | `/api/mc/preview/{id}.txt` | **给 agent 的文本报告**（结构坐标、群系占比、字符地图） |
+| GET | `/api/mc/preview/history` | 最近 30 个结果 |
+| GET | `/api/mc/preview/history/{id}.png/.json/.txt` | 查看某个历史结果 |
+| DELETE | `/api/mc/preview/history/{id}` | 删除某个历史结果 |
 | DELETE | `/api/mc/preview/{id}` | 取消（会杀掉预览服务端） |
 
 挂在 `/api/mc/*` 之下，所以同时受 MC 功能开关与会话登录门保护。
 
-## 9. 失败与降级
+## 9. 给 agent 的文本视图
+
+图片对模型没用：它没法从 PNG 里读出"0,0 附近有没有村庄"，也不该为了问一句去拉
+几 MB 的位图。所以同一个 `meta.json` 还有一份纯文本渲染：
+
+```
+version: 1.21
+seed: 12345
+radius: 256 blocks (x/z from -256 to 255)
+state: complete
+
+## structures
+counts: ancient_city=1 mineshaft=9 ocean_ruin_cold=2 ruined_portal=1 shipwreck=2
+
+mineshaft
+- 24, -216 (chunk 1, -14)
+- 72, -8 (chunk 4, -1)
+
+## biomes
+ocean 66.7%
+dark_forest 15.8%
+...
+
+## slime chunks
+104 chunks
+
+## map
+T,,,,,,,.......~.~~~~~~~~~~~~~~TTTTTTTTTTTTTTTTTTTT********TTTTT
+...
+legend: . ocean  ~ river  , beach  " plains  T forest  ^ mountain
+        # desert  * snow  + swamp  % cave  & mushroom  ? other
+```
+
+- 每一行要么是 `key: value`，要么以 `- ` 开头 —— 人和解析器都能读。
+- 字符地图一格 16 格方块，够回答"沙漠在出生点南边"这种问题。
+- 群系按**地表**取样：洞穴群系不会盖在森林上面（这一点既影响图也影响报告）。
+- 同一套文本既服务已完成的作业（`{jobId}.txt`），也服务历史结果
+  （`history/{id}.txt`）——agent 不需要关心手里是哪一个。
+
+### 权限
+
+走既有的 agent scope，不新增类别：
+
+| 操作 | 需要的 scope |
+|---|---|
+| 列历史、读 `.txt` / `.json` / `.png` | `read` |
+| 发起预览、取消、删除结果 | `mc` |
+
+也就是说：只读的巡检 agent 能查"这个种子有没有海底神殿"，但不能让面板跑一次
+六分钟的生成；能跑生成的 agent 本来就已经能起停服务器。
+
+## 10. 失败与降级
 
 | 情况 | 表现 |
 |---|---|
@@ -109,7 +164,7 @@
 | 生成超时 | **出图**并标 `partial`，不报失败 |
 | 进程崩溃 | 失败，附日志尾部；临时目录清理 |
 
-## 10. 版权与红线
+## 11. 版权与红线
 
 - jar **运行时下载、只在用户自己的数据卷里**，面板不打包、不随镜像分发。
 - 生成出来的世界属于用户自己的实例，出图后删除，不进入任何发布物。

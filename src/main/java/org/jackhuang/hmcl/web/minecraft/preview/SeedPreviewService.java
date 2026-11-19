@@ -466,6 +466,39 @@ public final class SeedPreviewService {
         body.add("structureCounts", counts);
         body.add("structures", structures);
 
+        // The agent-facing view: counts and a 64×64 character map, so a model
+        // can answer "where is the desert" without decoding a PNG. One
+        // character is sixteen blocks.
+        java.util.Map<String, Integer> biomeCounts = new java.util.LinkedHashMap<>();
+        int grid = 64;
+        char[][] cells = new char[grid][grid];
+        for (char[] row : cells) {
+            java.util.Arrays.fill(row, '?');
+        }
+        int radius = spec.radiusBlocks();
+        int span = radius * 2;
+        for (RegionReader.ChunkSummary chunk : chunks) {
+            for (int z4 = 0; z4 < 4; z4++) {
+                for (int x4 = 0; x4 < 4; x4++) {
+                    String biome = chunk.biomes()[z4 * 4 + x4];
+                    biomeCounts.merge(biome, 1, Integer::sum);
+                    int blockX = chunk.chunkX() * 16 + x4 * 4 + 2;
+                    int blockZ = chunk.chunkZ() * 16 + z4 * 4 + 2;
+                    int gx = (int) Math.max(0, Math.min(grid - 1, (long) (blockX + radius) * grid / span));
+                    int gz = (int) Math.max(0, Math.min(grid - 1, (long) (blockZ + radius) * grid / span));
+                    cells[gz][gx] = biomeSymbol(biome);
+                }
+            }
+        }
+        JsonArray ascii = new JsonArray();
+        for (char[] row : cells) {
+            ascii.add(new String(row));
+        }
+        JsonObject biomeJson = new JsonObject();
+        biomeCounts.forEach(biomeJson::addProperty);
+        body.add("biomeCounts", biomeJson);
+        body.add("ascii", ascii);
+
         // Slime chunks are a pure function of the seed, so the browser can paint
         // them without another server run; sending the list keeps the formula in
         // one place.
@@ -483,6 +516,48 @@ public final class SeedPreviewService {
         }
         body.add("slimeChunks", slime);
         Files.writeString(meta, body.toString(), StandardCharsets.UTF_8);
+    }
+
+    /// One character per sixteen blocks. Materials, not heights: a model reads
+    /// "there is desert south of spawn" from `#`, and nothing from a shade.
+    private static char biomeSymbol(String biome) {
+        String name = biome.toLowerCase(Locale.ROOT);
+        if (name.contains("snow") || name.contains("ice") || name.contains("frozen")) {
+            return '*';
+        }
+        if (name.contains("ocean")) {
+            return '.';
+        }
+        if (name.contains("river")) {
+            return '~';
+        }
+        if (name.contains("beach") || name.contains("shore")) {
+            return ',';
+        }
+        if (name.contains("desert") || name.contains("badlands")) {
+            return '#';
+        }
+        if (name.contains("swamp") || name.contains("mangrove")) {
+            return '+';
+        }
+        if (name.contains("jungle") || name.contains("forest") || name.contains("taiga")
+                || name.contains("grove") || name.contains("cherry")) {
+            return 'T';
+        }
+        if (name.contains("peak") || name.contains("mountain") || name.contains("windswept")
+                || name.contains("stony") || name.contains("hill")) {
+            return '^';
+        }
+        if (name.contains("cave") || name.contains("deep_dark") || name.contains("dripstone")) {
+            return '%';
+        }
+        if (name.contains("mushroom")) {
+            return '&';
+        }
+        if (name.contains("plains") || name.contains("meadow") || name.contains("savanna")) {
+            return '"';
+        }
+        return '?';
     }
 
     private Path cacheDirectory(PreviewSpec spec) {
