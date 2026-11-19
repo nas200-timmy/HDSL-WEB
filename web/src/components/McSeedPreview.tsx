@@ -452,6 +452,8 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
   const [pinned, setPinned] = useState<{ x: number; z: number } | null>(null);
   const [layers, setLayers] = useState({ grid: true, slime: true, structures: true });
 
+  const zoomRef = useRef<(factor: number, mx: number, my: number) => void>(() => {});
+  const [dragging, setDragging] = useState(false);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const drag = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean } | null>(null);
   const pinch = useRef<{ d0: number; s0: number; mx: number; my: number; ox: number; oy: number } | null>(null);
@@ -477,10 +479,14 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
 
   const clampOffset = (value: { x: number; y: number }, next: number) => {
     const width = box || 1;
-    const min = -(next - 1) * width;
+    // 放大时夹在"图片始终铺满"的范围内；100% 时给一段越界余量，否则一拖就撞墙，
+    // 看起来像拖动功能坏了。
+    const margin = width * 0.25;
+    const min = -(next - 1) * width - margin;
+    const max = margin;
     return {
-      x: Math.min(0, Math.max(min, value.x)),
-      y: Math.min(0, Math.max(min, value.y)),
+      x: Math.min(max, Math.max(min, value.x)),
+      y: Math.min(max, Math.max(min, value.y)),
     };
   };
 
@@ -500,12 +506,23 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
     setScale(next);
   };
 
-  const onWheel = (event: React.WheelEvent) => {
-    event.preventDefault();
-    const rect = frameRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    zoomAt(event.deltaY < 0 ? 1.15 : 1 / 1.15, event.clientX - rect.left, event.clientY - rect.top);
-  };
+  // React 把 onWheel 绑成 passive 监听，里面调 preventDefault 是无效的——页面照样
+  // 跟着滚。只有原生 addEventListener + `{ passive: false }` 才能把滚轮留在图上。
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    const handler = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = frame.getBoundingClientRect();
+      zoomRef.current(event.deltaY < 0 ? 1.15 : 1 / 1.15, event.clientX - rect.left, event.clientY - rect.top);
+    };
+    frame.addEventListener("wheel", handler, { passive: false });
+    return () => frame.removeEventListener("wheel", handler);
+  }, []);
+
+  useEffect(() => {
+    zoomRef.current = zoomAt;
+  });
 
   const coordsAt = (clientX: number, clientY: number) => {
     const image = imageRef.current;
@@ -534,6 +551,7 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
       };
     } else if (pointers.current.size === 1) {
       drag.current = { x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y, moved: false };
+      setDragging(true);
     }
   };
 
@@ -573,6 +591,7 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
     pointers.current.delete(event.pointerId);
     if (pointers.current.size < 2) pinch.current = null;
     drag.current = null;
+    setDragging(false);
     if (wasClick) {
       const point = coordsAt(event.clientX, event.clientY);
       if (point) setPinned(point);
@@ -654,7 +673,32 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
 
       <div
         ref={frameRef}
-        onWheel={onWheel}
+        tabIndex={0}
+        onKeyDown={(event) => {
+          const step = 60;
+          if (event.key === "+" || event.key === "=") {
+            event.preventDefault();
+            zoomAt(1.2, box / 2, box / 2);
+          } else if (event.key === "-" || event.key === "_") {
+            event.preventDefault();
+            zoomAt(1 / 1.2, box / 2, box / 2);
+          } else if (event.key === "0") {
+            event.preventDefault();
+            reset();
+          } else if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            setOffset((o) => clampOffset({ x: o.x + step, y: o.y }, scale));
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            setOffset((o) => clampOffset({ x: o.x - step, y: o.y }, scale));
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setOffset((o) => clampOffset({ x: o.x, y: o.y + step }, scale));
+          } else if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setOffset((o) => clampOffset({ x: o.x, y: o.y - step }, scale));
+          }
+        }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -663,6 +707,7 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
           pointers.current.clear();
           drag.current = null;
           pinch.current = null;
+          setDragging(false);
           setHover(null);
         }}
         onDoubleClick={reset}
@@ -673,8 +718,10 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
           overflow: "hidden",
           borderRadius: 6,
           border: "1px solid rgba(127,127,127,.25)",
-          cursor: "crosshair",
+          cursor: dragging ? "grabbing" : "grab",
+          userSelect: "none",
           touchAction: "none",
+          outline: "none",
           background: "#141418",
         }}
       >
