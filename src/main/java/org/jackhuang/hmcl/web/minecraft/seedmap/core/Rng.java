@@ -93,12 +93,12 @@ final class Rng {
         final long b = 0x94d049bb133111ebL;
         long l = value ^ xh;
         long h = l + xl;
-        l = (l ^ (l >> 30)) * a;
-        h = (h ^ (h >> 30)) * a;
-        l = (l ^ (l >> 27)) * b;
-        h = (h ^ (h >> 27)) * b;
-        l = l ^ (l >> 31);
-        h = h ^ (h >> 31);
+        l = (l ^ (l >>> 30)) * a;
+        h = (h ^ (h >>> 30)) * a;
+        l = (l ^ (l >>> 27)) * b;
+        h = (h ^ (h >>> 27)) * b;
+        l = l ^ (l >>> 31);
+        h = h ^ (h >>> 31);
         xr[0] = l;
         xr[1] = h;
     }
@@ -115,8 +115,9 @@ final class Rng {
 
     static int xNextInt(long[] xr, int n) {
         long r = (xNextLong(xr) & 0xFFFFFFFFL) * n;
-        if ((int) r < n) {
-            while ((int) r < (~n + 1) % n) {
+        if ((r & 0xFFFFFFFFL) < n) {
+            long threshold = (~n + 1) % n;
+            while ((r & 0xFFFFFFFFL) < threshold) {
                 r = (xNextLong(xr) & 0xFFFFFFFFL) * n;
             }
         }

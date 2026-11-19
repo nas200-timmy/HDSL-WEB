@@ -65,7 +65,7 @@ public enum Version {
             case "1.16", "1.16.5" -> V1_16_5;
             case "1.18", "1.18.2" -> V1_18_2;
             case "1.20", "1.20.6" -> V1_20_6;
-            case "1.21", "1.21.1", "1.21.3", "1.21.4" -> V1_21_3;
+            case "1.21", "1.21.1", "1.21.2", "1.21.3", "1.21.4", "1.21.6", "1.21.10" -> V1_21_3;
             default -> throw new IllegalArgumentException("unsupported Minecraft version: " + raw);
         };
     }

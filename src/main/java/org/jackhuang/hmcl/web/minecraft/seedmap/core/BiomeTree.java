@@ -43,14 +43,14 @@ final class BiomeTree {
         } else {
             idx = getResultingNode(np, 0, 0, -1, 0);
         }
-        return (int) ((nodes[idx] >> 48) & 0xFF);
+        return (int) ((nodes[idx] >>> 48) & 0xFF);
     }
 
     private long getNpDist(long[] np, int idx) {
         long ds = 0;
         long node = nodes[idx];
         for (int i = 0; i < 6; i++) {
-            idx = (int) ((node >> 8 * i) & 0xFF);
+            idx = (int) ((node >>> 8 * i) & 0xFF);
             long a = np[i] - param[idx][1];
             long b = param[idx][0] - np[i];
             long d = a > 0 ? a : b > 0 ? b : 0;
@@ -71,15 +71,15 @@ final class BiomeTree {
         } while (idx + step >= nodes.length);
 
         long node = nodes[idx];
-        int inner = (int) (node >> 48);
+        int inner = (int) (node >>> 48);
         int leaf = alt;
 
         for (int i = 0; i < order; i++) {
             long dsInner = getNpDist(np, inner);
-            if (dsInner < ds) {
+            if (Long.compareUnsigned(dsInner, ds) < 0) {
                 int leaf2 = getResultingNode(np, inner, leaf, ds, depth);
                 long dsLeaf2 = inner == leaf2 ? dsInner : getNpDist(np, leaf2);
-                if (dsLeaf2 < ds) {
+                if (Long.compareUnsigned(dsLeaf2, ds) < 0) {
                     ds = dsLeaf2;
                     leaf = leaf2;
                 }
