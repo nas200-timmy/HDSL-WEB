@@ -270,6 +270,19 @@ export function InstancesPage() {
             </span>
           </button>
         )}
+        {/* 种子预览：挂在 MC 这一组下面，但它是独立页面——试种子不该先进某台
+            服务器的详情页。功能关闭时不出现，和上面两个入口一个口径。 */}
+        {mcEnabled && (
+          <button className="side-item ripple-host" onClick={() => nav("/mc/preview")}>
+            <span className="side-graphic">
+              <PublicIcon size={20} />
+            </span>
+            <span className="side-text">
+              <span className="side-title">种子预览</span>
+              <span className="side-subtitle">地图 · 结构 · 史莱姆区块</span>
+            </span>
+          </button>
+        )}
         <div className="sidebar-spacer" />
         <div className="side-actions">
             <button className="side-item ripple-host" onClick={() => nav("/instances/new")}>

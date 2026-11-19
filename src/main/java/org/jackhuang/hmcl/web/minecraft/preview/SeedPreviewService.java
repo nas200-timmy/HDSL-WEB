@@ -213,14 +213,15 @@ public final class SeedPreviewService {
             writeProperties(work, spec, freePort());
             Files.writeString(work.resolve("eula.txt"), "eula=true\n", StandardCharsets.UTF_8);
 
-            Process process = start(java, jar, work);
+            Process process = start(java, jar, work, required);
             job.attach(process);
             CountDownLatch ready = new CountDownLatch(1);
             pump(process, job, ready);
-            if (!ready.await(BOOT_TIMEOUT.toSeconds(), TimeUnit.SECONDS)) {
-                throw new McException("服务端没有在 " + BOOT_TIMEOUT.toMinutes() + " 分钟内启动完成。"
-                        + tail(job));
-            }
+            // Wait for `Done (`, but stop early when the process is already
+            // gone: a crash must be reported with its output, not as a timeout
+            // three minutes later and then a bare "Stream closed" on the first
+            // write.
+            awaitBoot(process, ready, job);
             if (job.cancelled()) {
                 job.markCancelled();
                 return;
@@ -286,13 +287,36 @@ public final class SeedPreviewService {
 
     // -------------------------------------------------------------- the server --
 
-    private Process start(Path java, Path jar, Path work) throws IOException {
+    /// Blocks until the server prints `Done (`, exits, or the boot deadline
+    /// passes — whichever comes first.
+    private void awaitBoot(Process process, CountDownLatch ready, PreviewJob job)
+            throws McException, InterruptedException {
+        long deadline = System.currentTimeMillis() + BOOT_TIMEOUT.toMillis();
+        while (ready.getCount() > 0 && System.currentTimeMillis() < deadline) {
+            if (!process.isAlive()) {
+                throw new McException("服务端启动后立即退出（exit " + process.exitValue() + "）。" + tail(job));
+            }
+            Thread.sleep(200);
+        }
+        if (!process.isAlive()) {
+            throw new McException("服务端启动后立即退出（exit " + process.exitValue() + "）。" + tail(job));
+        }
+        if (ready.getCount() > 0) {
+            throw new McException("服务端没有在 " + BOOT_TIMEOUT.toMinutes() + " 分钟内启动完成。" + tail(job));
+        }
+    }
+
+    private Process start(Path java, Path jar, Path work, int javaMajor) throws IOException {
         List<String> command = new ArrayList<>();
         command.add(java.toString());
         command.add("-Xmx1G");
         // Java4Shell: the hardware Base64 path is the vulnerable one, and a
-        // preview server has no reason to use it. Harmless on every version.
-        command.add("-XX:-UseBASE64Intrinsics");
+        // preview server has no reason to use it. The flag itself only exists
+        // from Java 9 — passing it to a Java 8 runtime is a hard startup error,
+        // which is exactly the class of 1.16.5 server this feature has to run.
+        if (javaMajor >= 9) {
+            command.add("-XX:-UseBASE64Intrinsics");
+        }
         command.add("-Dfile.encoding=UTF-8");
         command.add("-jar");
         command.add(jar.toString());
@@ -565,7 +589,7 @@ public final class SeedPreviewService {
                 // The suffix is the renderer generation: an image drawn before
                 // the overlays moved to the browser must not be served as if it
                 // were the new one.
-                .resolve(spec.radiusBlocks() + "-" + spec.biomeY() + "-v2");
+                .resolve(spec.radiusBlocks() + "-" + spec.biomeY() + "-v3");
     }
 
     private static String seedHash(String seed) {

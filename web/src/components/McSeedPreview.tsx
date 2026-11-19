@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
-  type McInstance,
   type McSeedPreviewCapabilities,
   type McSeedPreviewHistoryEntry,
   type McSeedPreviewJob,
@@ -33,10 +32,17 @@ type View = {
  * 跑过的结果留在服务端缓存里（最近 30 个），关掉页面再回来还在：试种子这件事
  * 本来就是来回比较，结果不能是"一转头就没了"。
  */
-export function McSeedPreview({ instance }: { instance: McInstance }) {
-  const [version, setVersion] = useState(instance.version);
+export function McSeedPreview({
+  initialVersion = "",
+  initialSeed = "",
+}: {
+  /** 从实例带进来的默认值；独立页面上可以留空。 */
+  initialVersion?: string;
+  initialSeed?: string;
+}) {
+  const [version, setVersion] = useState(initialVersion);
   const [versions, setVersions] = useState<McVersion[]>([]);
-  const [seed, setSeed] = useState(instance.seed ?? "");
+  const [seed, setSeed] = useState(initialSeed);
   const [radius, setRadius] = useState(512);
   const [caps, setCaps] = useState<McSeedPreviewCapabilities | null>(null);
   const [job, setJob] = useState<McSeedPreviewJob | null>(null);
@@ -55,6 +61,10 @@ export function McSeedPreview({ instance }: { instance: McInstance }) {
   }, []);
 
   useEffect(() => {
+    if (!version.trim()) {
+      setCaps(null);
+      return;
+    }
     let alive = true;
     api.mc
       .previewCapabilities(version)

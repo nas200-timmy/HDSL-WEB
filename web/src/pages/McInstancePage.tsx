@@ -446,7 +446,7 @@ export function McInstancePage() {
         {tab === "players" && <McPlayersPanel instance={instance} />}
         {tab === "files" && <McFilesPanel instance={instance} />}
         {tab === "world" && <McWorldPanel instance={instance} />}
-        {tab === "preview" && <McSeedPreview instance={instance} />}
+        {tab === "preview" && <McSeedPreview initialVersion={instance.version} initialSeed={instance.seed ?? ""} />}
         {tab === "logs" && <McLogsPanel instance={instance} />}
       </div>
 

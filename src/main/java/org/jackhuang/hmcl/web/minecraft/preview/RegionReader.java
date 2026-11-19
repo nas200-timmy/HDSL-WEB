@@ -222,7 +222,7 @@ public final class RegionReader {
         }
         int[] surface = heights(body);
         return new ChunkSummary(chunkX, chunkZ, biomes, surface, surfaceBlocks(root, surface),
-                structures(root, body));
+                structures(root, body, chunkX, chunkZ));
     }
 
     // ------------------------------------------------------------------ biomes --
@@ -499,7 +499,8 @@ public final class RegionReader {
 
     // -------------------------------------------------------------- structures --
 
-    private static List<StructureRef> structures(Map<String, Object> root, Map<String, Object> body) {
+    private static List<StructureRef> structures(Map<String, Object> root, Map<String, Object> body,
+                                                 int chunkX, int chunkZ) {
         Map<String, Object> structures = Nbt.compound(body.get("Structures"));
         if (structures == null) {
             structures = Nbt.compound(root.get("structures"));
@@ -507,25 +508,55 @@ public final class RegionReader {
         if (structures == null) {
             return List.of();
         }
+        // Two layouts have to be read together. 1.18+ writes real starts into
+        // `starts`; 1.13 – 1.17 mostly writes `{id: INVALID}` placeholders there
+        // and keeps the positions in `References`, where each structure maps to
+        // a LongArray of start chunk positions.
+        java.util.LinkedHashMap<String, StructureRef> found = new java.util.LinkedHashMap<>();
         Map<String, Object> starts = Nbt.compound(structures.get("Starts"));
         if (starts == null) {
             starts = Nbt.compound(structures.get("starts"));
         }
-        if (starts == null) {
-            return List.of();
-        }
-        List<StructureRef> refs = new ArrayList<>();
-        for (Map.Entry<String, Object> entry : starts.entrySet()) {
-            Map<String, Object> start = Nbt.compound(entry.getValue());
-            if (start == null) {
-                continue;
+        if (starts != null) {
+            for (Map.Entry<String, Object> entry : starts.entrySet()) {
+                Map<String, Object> start = Nbt.compound(entry.getValue());
+                if (start == null || !start.containsKey("ChunkX")) {
+                    // `{id: INVALID}` is a placeholder: the start lives in
+                    // another chunk and is reported through References.
+                    continue;
+                }
+                String id = start.get("id") instanceof String explicit ? explicit : entry.getKey();
+                if ("invalid".equalsIgnoreCase(id)) {
+                    // `StructureStart.INVALID` carries a 0,0 position: it means
+                    // "checked, nothing here", not a structure at spawn.
+                    continue;
+                }
+                int x = Nbt.integer(start.get("ChunkX"), 0);
+                int z = Nbt.integer(start.get("ChunkZ"), 0);
+                found.putIfAbsent(x + "," + z + "," + id, new StructureRef(normaliseStructure(id), x, z));
             }
-            String id = start.get("id") instanceof String explicit ? explicit : entry.getKey();
-            refs.add(new StructureRef(normaliseStructure(id),
-                    Nbt.integer(start.get("ChunkX"), 0),
-                    Nbt.integer(start.get("ChunkZ"), 0)));
         }
-        return refs;
+        Map<String, Object> references = Nbt.compound(structures.get("References"));
+        if (references != null) {
+            for (Map.Entry<String, Object> entry : references.entrySet()) {
+                if (!(entry.getValue() instanceof long[] positions)) {
+                    continue;
+                }
+                for (long packed : positions) {
+                    int x = (int) packed;
+                    int z = (int) (packed >> 32);
+                    // A reference list is repeated in every chunk the structure
+                    // touches; only the owning chunk reports it, so one start
+                    // yields one marker.
+                    if (x != chunkX || z != chunkZ) {
+                        continue;
+                    }
+                    found.putIfAbsent(x + "," + z + "," + entry.getKey(),
+                            new StructureRef(normaliseStructure(entry.getKey()), x, z));
+                }
+            }
+        }
+        return List.copyOf(found.values());
     }
 
     /// Legacy keys are capitalised (`Village`); modern ones are resource
