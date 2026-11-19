@@ -633,7 +633,7 @@ public final class SeedPreviewService {
                 // The suffix is the renderer generation: an image drawn before
                 // the overlays moved to the browser must not be served as if it
                 // were the new one.
-                .resolve(spec.radiusBlocks() + "-" + spec.biomeY() + "-v5");
+                .resolve(spec.radiusBlocks() + "-" + spec.biomeY() + "-v7");
     }
 
     private static String seedHash(String seed) {

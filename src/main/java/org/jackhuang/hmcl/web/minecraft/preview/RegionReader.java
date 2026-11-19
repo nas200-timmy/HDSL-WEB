@@ -418,15 +418,38 @@ public final class RegionReader {
         return new int[0];
     }
 
+    /// 256 nine-bit heights.
+    ///
+    /// 1.16 and later never let a value straddle two longs (37 longs for 256
+    /// values); 1.14 – 1.15 pack them compactly (36 longs, values crossing the
+    /// boundary). Reading a compact array as if it were plain corrupts a short
+    /// run of columns — which showed up as a dotted grid over every ocean.
     private static int[] unpack9(long[] packed) {
         int[] values = new int[256];
         int perLong = 64 / 9;
+        int plainLength = (256 + perLong - 1) / perLong;
+        int compactLength = (256 * 9 + 63) / 64;
+        boolean compact = packed.length == compactLength && compactLength != plainLength;
         for (int i = 0; i < 256; i++) {
-            int word = i / perLong;
-            if (word >= packed.length) {
-                break;
+            if (compact) {
+                long bit = (long) i * 9;
+                int word = (int) (bit >>> 6);
+                int offset = (int) (bit & 63);
+                if (word >= packed.length) {
+                    break;
+                }
+                long value = packed[word] >>> offset;
+                if (offset + 9 > 64 && word + 1 < packed.length) {
+                    value |= packed[word + 1] << (64 - offset);
+                }
+                values[i] = (int) (value & 0x1FF);
+            } else {
+                int word = i / perLong;
+                if (word >= packed.length) {
+                    break;
+                }
+                values[i] = (int) ((packed[word] >>> ((i % perLong) * 9)) & 0x1FF);
             }
-            values[i] = (int) ((packed[word] >>> ((i % perLong) * 9)) & 0x1FF);
         }
         return values;
     }
@@ -566,7 +589,11 @@ public final class RegionReader {
                 }
                 int x = Nbt.integer(start.get("ChunkX"), 0);
                 int z = Nbt.integer(start.get("ChunkZ"), 0);
-                found.putIfAbsent(x + "," + z + "," + id, new StructureRef(normaliseStructure(id), x, z));
+                // Key on the normalised id: the same structure is spelled
+                // `Village` in Starts and `minecraft:village` in References, and
+                // a raw key would count it twice.
+                String normalised = normaliseStructure(id);
+                found.putIfAbsent(x + "," + z + "," + normalised, new StructureRef(normalised, x, z));
             }
         }
         Map<String, Object> references = Nbt.compound(structures.get("References"));
@@ -584,8 +611,9 @@ public final class RegionReader {
                     if (x != chunkX || z != chunkZ) {
                         continue;
                     }
-                    found.putIfAbsent(x + "," + z + "," + entry.getKey(),
-                            new StructureRef(normaliseStructure(entry.getKey()), x, z));
+                    String normalised = normaliseStructure(entry.getKey());
+                    found.putIfAbsent(x + "," + z + "," + normalised,
+                            new StructureRef(normalised, x, z));
                 }
             }
         }
