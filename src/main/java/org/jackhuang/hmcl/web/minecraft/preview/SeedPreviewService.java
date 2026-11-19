@@ -25,6 +25,7 @@ import org.jackhuang.hmcl.web.minecraft.McInstanceManager;
 import org.jackhuang.hmcl.web.minecraft.McJavaRuntimes;
 import org.jackhuang.hmcl.web.minecraft.McPorts;
 import org.jackhuang.hmcl.web.minecraft.McVersions;
+import org.jackhuang.hmcl.web.minecraft.seedmap.adapter.SeedMapBackend;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -195,6 +196,10 @@ public final class SeedPreviewService {
 
     private void run(PreviewJob job) {
         PreviewSpec spec = job.spec();
+        if (spec.mode() == PreviewSpec.Mode.BIOME && SeedMapBackend.supports(spec.version())) {
+            runBiomeCore(job);
+            return;
+        }
         Path work = null;
         try {
             if (job.cancelled()) {
@@ -298,6 +303,28 @@ public final class SeedPreviewService {
                 process.destroyForcibly();
             }
             deleteTree(work);
+        }
+    }
+
+    private void runBiomeCore(PreviewJob job) {
+        PreviewSpec spec = job.spec();
+        try {
+            if (job.cancelled()) {
+                job.markCancelled();
+                return;
+            }
+            job.state(PreviewJob.State.RENDERING);
+            BufferedImage image = SeedMapBackend.renderBiome(spec);
+            Path directory = Files.createDirectories(cacheDirectory(spec));
+            Path png = directory.resolve("preview.png");
+            Path meta = directory.resolve("meta.json");
+            ImageIO.write(image, "png", png.toFile());
+            String[][] samples = new String[0][];
+            writeBiomeMeta(meta, spec, samples, false);
+            job.done(png, meta, false);
+            trimCache();
+        } catch (IOException | RuntimeException e) {
+            failOrCancel(job, e.getMessage() == null ? e.toString() : e.getMessage());
         }
     }
 
