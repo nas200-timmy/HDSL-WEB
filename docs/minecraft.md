@@ -1399,6 +1399,17 @@ fork 可能改文本却沿用 `termsVersion: 3`。三道防护：
   OpenJDK 只有 17/21/25）。
 - 下载后**先校验 SHA-256 再解包**（Temurin 用 Adoptium 给的，另外两家用厂商伴随文件里的），
   zip 与 tar.gz 都支持，先解到临时目录再原子落位；`HDSL_JAVA_API` 只覆盖 Temurin 的 API 基址。
+- **下载源**（`McJavaSources` + `McJavaSourcePicker`）：字节可以来自国内镜像，目录与校验和
+  始终是官方的。已验证的源：清华 TUNA（Temurin，文件名与 GitHub 一致）、华为云 `/openjdk/`
+  （OpenJDK GA，真实 gzip 字节；其 `/adoptium/` 路径是假的 SPA 页面，已排除）、每家各自的
+  官方源兜底；Microsoft 没有国内镜像，只有官方。选择方式是**下载前测速**：对每个候选源取
+  512 KiB 样本并校验 gzip/zip 魔数（防止"永远 200"的门户页），按实测速度选一家（镜像不比
+  最快源慢 15% 以上时优先镜像），结果缓存 6 小时、失败退避。安装只走选定的一家；字节与
+  官方校验和不一致时自动改用官方重试一次。`runtime.json` 记录 `source` / `mirrorUrl` /
+  `verifiedAgainst` 溯源；向导第 2 步有下载源下拉框（可指定单次安装的源，不改全局策略），
+  `GET/PUT /api/mc/java/sources`、`POST /api/mc/java/sources/probe` 暴露状态与测速，
+  `HDSL_JAVA_SOURCE=auto|official|<id>` 可进程级覆盖。测速串行、单源单请求，绝不在安装
+  中途并发探测。
 - **权限是显式设的，不是从归档里抄的**：解包用的是面板的 umask，`bin/java` 会落成 `0644`
   ——谁都执行不了，root 也不行（`execve` 至少要一个执行位）。安装完成后统一规范：
   目录 `0755`、`bin/*` 与 `lib/jspawnhelper` `0755`、其余 `0644`。属主**保持面板自己**，

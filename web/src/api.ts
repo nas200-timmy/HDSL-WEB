@@ -951,8 +951,13 @@ export const api = {
       params.set("catalog", withCatalogue ? "1" : "0");
       return request<McJavaRuntimesSnapshot>(`/api/mc/java/runtimes?${params.toString()}`);
     },
-    installJava: (feature: number, vendor = "temurin") =>
-      request<{ taskId: string }>("/api/mc/java/install", jsonInit("POST", { feature, vendor })),
+    installJava: (feature: number, vendor = "temurin", source?: string) =>
+      request<{ taskId: string }>("/api/mc/java/install", jsonInit("POST", { feature, vendor, source })),
+    javaSources: () => request<JavaSourcesInfo>("/api/mc/java/sources"),
+    setJavaSourcePolicy: (policy: string) =>
+      request<JavaSourcesInfo>("/api/mc/java/sources", jsonInit("PUT", { policy })),
+    probeJavaSources: (vendors?: string[]) =>
+      request<JavaSourcesInfo>("/api/mc/java/sources/probe", jsonInit("POST", vendors ? { vendors } : {})),
     removeJava: (feature: number) =>
       request<{ ok: boolean; removed: boolean }>(
         `/api/mc/java/${feature}/remove`, jsonInit("POST", {}),
@@ -1849,6 +1854,28 @@ export interface McModHit {
 }
 
 /** GET /api/mc/java/runtimes：面板托管的 JRE 与 Adoptium 可下载项。 */
+export interface JavaSourceRow {
+  id: string;
+  label: string;
+  host?: string;
+  vendors: string[];
+  ok?: boolean;
+  speedKBps?: number;
+  sampleBytes?: number;
+  durationMs?: number;
+  probedAt?: string;
+  failures?: number;
+  skipUntil?: string;
+  error?: string;
+}
+
+export interface JavaSourcesInfo {
+  policy: string;
+  envOverride?: string;
+  sources: JavaSourceRow[];
+  choices: Record<string, string>;
+}
+
 export interface McJavaRuntimesSnapshot {
   installed: { feature: number; path: string; vendor?: string; vendorLabel?: string;
     version?: string | null; bytes?: number }[];

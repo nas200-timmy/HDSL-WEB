@@ -1047,11 +1047,12 @@ public final class McApiServlet extends HttpServlet {
                     "unknown JDK vendor `" + vendorId + "`");
             return;
         }
+        String source = body == null ? null : stringField(body, "source");
         try {
             TaskService.Task task = tasks.submit("mc-java-install",
                     feature + "-" + vendor.id(), live -> {
                 live.update("Downloading " + vendor.label() + " " + feature, -1);
-                McJavaRuntimes.Installed installed = javaRuntimes.install(feature, vendor,
+                McJavaRuntimes.Installed installed = javaRuntimes.install(feature, vendor, source,
                         (copied, total) -> {
                     String progress = (copied / (1024 * 1024)) + " / "
                             + (total > 0 ? (total / (1024 * 1024)) + " MB" : "? MB");

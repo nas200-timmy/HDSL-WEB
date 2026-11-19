@@ -427,13 +427,28 @@ public final class McJavaRuntimes {
     /// @throws McException when the download, the hash check or the unpack fails
     public Installed install(int feature, Vendor vendor, @Nullable McVersions.Progress progress)
             throws McException {
+        return install(feature, vendor, null, progress);
+    }
+
+    /// The same, with a per-install source override: the wizard's dropdown can
+    /// pin one download to a specific source without changing the saved
+    /// policy. Unknown ids and ids that do not serve the vendor are ignored.
+    public Installed install(int feature, Vendor vendor, @Nullable String sourceId,
+                             @Nullable McVersions.Progress progress) throws McException {
         Release release = resolve(feature, vendor);
         // Pick where the bytes come from. The catalogue (version, size, and
         // the SHA-256 the download is verified against) is official regardless;
         // a source only rewrites the package URL.
         String primaryUrl = release.url();
         String primarySource = McJavaSources.OFFICIAL.id();
-        if (sourcePicker != null) {
+        McJavaSources.Source explicit = McJavaSources.byId(sourceId);
+        if (explicit != null && explicit.serves(vendor) && explicit != McJavaSources.OFFICIAL) {
+            String rewritten = McJavaSources.rewrite(explicit, release.url());
+            if (rewritten != null) {
+                primaryUrl = rewritten;
+                primarySource = explicit.id();
+            }
+        } else if (sourcePicker != null) {
             McJavaSourcePicker.Choice choice = sourcePicker.choose(vendor, release);
             if (choice.source() != McJavaSources.OFFICIAL) {
                 String rewritten = McJavaSources.rewrite(choice.source(), release.url());
