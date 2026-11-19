@@ -34,5 +34,13 @@ biome overview uses this core and therefore never starts a Minecraft server.
 ## Verification
 
 `SeedMapTest` covers deterministic biome lookups, area mapping, village and
-stronghold placement and slime-chunk maths. The L1 differential test against
-the C reference is the next milestone.
+stronghold placement and slime-chunk maths. Three differential verifiers are
+included:
+
+- `L1Verifier` compares against a native cubiomes build (`scripts/l1-cubiomes-ref.c`).
+- `L2Verifier` compares against the game's own `MultiNoiseBiomeSource` using
+  `scripts/L2BiomeProbe.java` inside an MCP-Reborn checkout.
+- `L3Verifier` starts a real server, reads generated chunks and compares every
+  biome sample.
+
+Known upstream deviations are tracked in `docs/seedmap-deviations.md`.
