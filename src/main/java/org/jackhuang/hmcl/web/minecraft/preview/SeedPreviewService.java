@@ -231,7 +231,7 @@ public final class SeedPreviewService {
 
             job.state(PreviewJob.State.GENERATING);
             requestChunks(process, spec);
-            Path regionDirectory = work.resolve("preview").resolve("region");
+            Path regionDirectory = regionDirectory(work);
             boolean complete = waitForChunks(job, regionDirectory, spec, process);
             if (job.cancelled()) {
                 job.markCancelled();
@@ -478,6 +478,45 @@ public final class SeedPreviewService {
             Thread.sleep(500);
         }
         return false;
+    }
+
+    /// Where the overworld chunks live.
+    ///
+    /// 1.21 and earlier keep them at `<world>/region`. The 26.x line moved every
+    /// dimension under `<world>/dimensions/minecraft/<dimension>/region`, so a
+    /// hard-coded path silently reads an empty directory and the preview reports
+    /// "no chunks generated".
+    private static Path regionDirectory(Path work) {
+        Path world = work.resolve("preview");
+        Path legacy = world.resolve("region");
+        if (Files.isDirectory(legacy)) {
+            return legacy;
+        }
+        Path modern = world.resolve("dimensions").resolve("minecraft")
+                .resolve("overworld").resolve("region");
+        if (Files.isDirectory(modern)) {
+            return modern;
+        }
+        // A future layout change should not break the feature outright: look for
+        // any region directory that actually holds region files.
+        try (Stream<Path> walk = Files.walk(world, 5)) {
+            return walk.filter(path -> path.getFileName() != null
+                            && "region".equals(path.getFileName().toString())
+                            && Files.isDirectory(path)
+                            && hasRegionFiles(path))
+                    .findFirst()
+                    .orElse(modern);
+        } catch (IOException e) {
+            return modern;
+        }
+    }
+
+    private static boolean hasRegionFiles(Path directory) {
+        try (Stream<Path> files = Files.list(directory)) {
+            return files.anyMatch(path -> path.getFileName().toString().endsWith(".mca"));
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     private int countInRange(Path regionDirectory, PreviewSpec spec) {
