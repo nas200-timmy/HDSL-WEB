@@ -72,9 +72,10 @@ export function McSeedPreviewPage() {
             <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <span className="dim" style={{ fontSize: 12 }}>从实例带入</span>
               <select
+                className="input"
                 value={picked}
                 onChange={(event) => choose(event.target.value)}
-                style={{ padding: "6px 8px", minWidth: 220 }}
+                style={{ minWidth: 220 }}
               >
                 {instances.map((instance) => (
                   <option key={instance.id} value={instance.id}>

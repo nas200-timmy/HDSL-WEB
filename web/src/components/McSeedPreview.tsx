@@ -202,9 +202,10 @@ export function McSeedPreview({
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span className="dim" style={{ fontSize: 12 }}>版本</span>
           <select
+            className="input"
             value={version}
             onChange={(event) => setVersion(event.target.value)}
-            style={{ width: 160, padding: "6px 8px" }}
+            style={{ width: 168 }}
           >
             {version && !versions.some((entry) => entry.id === version) && (
               <option value={version}>{version}</option>
@@ -219,19 +220,19 @@ export function McSeedPreview({
         <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: "1 1 220px" }}>
           <span className="dim" style={{ fontSize: 12 }}>种子（数字或文本）</span>
           <input
-            className="mono"
+            className="input mono"
             value={seed}
             onChange={(event) => setSeed(event.target.value)}
             placeholder="例如 123456789 或 我的世界"
-            style={{ padding: "6px 8px" }}
           />
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span className="dim" style={{ fontSize: 12 }}>范围</span>
           <select
+            className="input"
             value={radius}
             onChange={(event) => setRadius(Number(event.target.value))}
-            style={{ padding: "6px 8px" }}
+            style={{ width: 150 }}
           >
             <option value={256}>512 × 512 格</option>
             <option value={512}>1024 × 1024 格</option>
