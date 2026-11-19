@@ -250,7 +250,7 @@ public final class SeedPreviewService {
             }
 
             job.state(PreviewJob.State.RENDERING);
-            BufferedImage image = PreviewRenderer.render(chunks, spec, true, true);
+            BufferedImage image = PreviewRenderer.render(chunks, spec);
             Path directory = Files.createDirectories(cacheDirectory(spec));
             Path png = directory.resolve("preview.png");
             Path meta = directory.resolve("meta.json");
@@ -463,12 +463,32 @@ public final class SeedPreviewService {
         }
         body.add("structureCounts", counts);
         body.add("structures", structures);
+
+        // Slime chunks are a pure function of the seed, so the browser can paint
+        // them without another server run; sending the list keeps the formula in
+        // one place.
+        JsonArray slime = new JsonArray();
+        long seed = PreviewRenderer.parseSeed(spec.seed());
+        for (int cz = spec.firstChunk(); cz <= spec.lastChunk(); cz++) {
+            for (int cx = spec.firstChunk(); cx <= spec.lastChunk(); cx++) {
+                if (SlimeChunks.isSlimeChunk(seed, cx, cz)) {
+                    JsonObject entry = new JsonObject();
+                    entry.addProperty("x", cx);
+                    entry.addProperty("z", cz);
+                    slime.add(entry);
+                }
+            }
+        }
+        body.add("slimeChunks", slime);
         Files.writeString(meta, body.toString(), StandardCharsets.UTF_8);
     }
 
     private Path cacheDirectory(PreviewSpec spec) {
         return cacheRoot.resolve(spec.version()).resolve(seedHash(spec.seed()))
-                .resolve(spec.radiusBlocks() + "-" + spec.biomeY());
+                // The suffix is the renderer generation: an image drawn before
+                // the overlays moved to the browser must not be served as if it
+                // were the new one.
+                .resolve(spec.radiusBlocks() + "-" + spec.biomeY() + "-v2");
     }
 
     private static String seedHash(String seed) {

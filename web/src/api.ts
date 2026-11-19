@@ -1965,6 +1965,8 @@ export interface McSeedPreviewMeta {
   generatedAt: string;
   structureCounts: Record<string, number>;
   structures: { id: string; chunkX: number; chunkZ: number; x: number; z: number }[];
+  /** 史莱姆区块的区块坐标；0,0 是地图中心。 */
+  slimeChunks: { x: number; z: number }[];
 }
 
 export interface McBackup {

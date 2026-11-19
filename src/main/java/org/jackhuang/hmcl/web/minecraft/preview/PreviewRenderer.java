@@ -41,9 +41,6 @@ public final class PreviewRenderer {
 
     /// Sea level; water is drawn by how far the floor sits below it.
     private static final int SEA_LEVEL = 63;
-    /// The tint painted over a slime chunk.
-    private static final int SLIME_TINT = 0x59C46A;
-    private static final int SLIME_ALPHA = 55;
     /// Where the snow line starts and how quickly it takes over.
     private static final int SNOW_LINE = 150;
     /// Light direction: the north-west corner is brighter, as on every map.
@@ -56,11 +53,8 @@ public final class PreviewRenderer {
     ///
     /// @param chunks     what {@link RegionReader} produced
     /// @param spec       the request (it fixes size and centre)
-    /// @param slime      whether to overlay slime chunks
-    /// @param structures whether to draw structure markers
     /// @return the image, never `null`
-    public static BufferedImage render(List<RegionReader.ChunkSummary> chunks, PreviewSpec spec,
-                                       boolean slime, boolean structures) {
+    public static BufferedImage render(List<RegionReader.ChunkSummary> chunks, PreviewSpec spec) {
         int side = spec.pixelsPerSide();
         int radius = spec.radiusBlocks();
         BufferedImage image = new BufferedImage(side, side, BufferedImage.TYPE_INT_RGB);
@@ -141,41 +135,9 @@ public final class PreviewRenderer {
             }
         }
 
-        if (slime) {
-            long seed = parseSeed(spec.seed());
-            for (RegionReader.ChunkSummary chunk : chunks) {
-                if (!SlimeChunks.isSlimeChunk(seed, chunk.chunkX(), chunk.chunkZ())) {
-                    continue;
-                }
-                int baseX = chunk.chunkX() * 16 + radius;
-                int baseZ = chunk.chunkZ() * 16 + radius;
-                for (int z = 0; z < 16; z++) {
-                    for (int x = 0; x < 16; x++) {
-                        int px = baseX + x;
-                        int pz = baseZ + z;
-                        if (px >= 0 && pz >= 0 && px < side && pz < side) {
-                            image.setRGB(px, pz, blend(image.getRGB(px, pz), SLIME_TINT, SLIME_ALPHA));
-                        }
-                    }
-                }
-            }
-        }
-
-        if (structures) {
-            for (RegionReader.ChunkSummary chunk : chunks) {
-                for (RegionReader.StructureRef structure : chunk.structures()) {
-                    // The marker sits at the centre of the structure's own
-                    // chunk; the chunk that carries the reference is usually
-                    // the same one, and re-drawing is idempotent when it is not.
-                    drawMarker(image,
-                            structure.chunkX() * 16 + radius + 8,
-                            structure.chunkZ() * 16 + radius + 8,
-                            structureColor(structure.id()));
-                }
-            }
-        }
-
-        drawGrid(image, side, radius);
+        // Slime, structures and the grid are drawn by the browser: they are
+        // metadata, not terrain, and an HTML overlay makes a toggle instant
+        // instead of another six-minute world generation.
         drawOrigin(image, radius);
         return image;
     }
@@ -281,39 +243,6 @@ public final class PreviewRenderer {
 
     // --------------------------------------------------------------- overlays --
 
-    /// A four-pixel diamond with a one-pixel dark outline, so a marker reads on
-    /// both sand and water.
-    private static void drawMarker(BufferedImage image, int x, int z, int color) {
-        for (int dz = -2; dz <= 2; dz++) {
-            for (int dx = -2; dx <= 2; dx++) {
-                if (Math.abs(dx) + Math.abs(dz) > 2) {
-                    continue;
-                }
-                boolean edge = Math.abs(dx) + Math.abs(dz) == 2;
-                setSafe(image, x + dx, z + dz, edge ? 0x1A1A1A : color);
-            }
-        }
-    }
-
-    /// Every 64 blocks a hairline, every 256 a stronger one. Drawing the grid
-    /// into the image (instead of an HTML overlay) keeps it aligned with the
-    /// pixels when the browser scales the map.
-    private static void drawGrid(BufferedImage image, int side, int radius) {
-        for (int block = -radius; block <= radius; block += 64) {
-            int pixel = block + radius;
-            if (pixel < 0 || pixel >= side) {
-                continue;
-            }
-            boolean major = block % 256 == 0;
-            int color = major ? 0xFFFFFF : 0xBFD4E8;
-            int alpha = major ? 46 : 20;
-            for (int i = 0; i < side; i++) {
-                image.setRGB(pixel, i, blend(image.getRGB(pixel, i), color, alpha));
-                image.setRGB(i, pixel, blend(image.getRGB(i, pixel), color, alpha));
-            }
-        }
-    }
-
     private static void drawOrigin(BufferedImage image, int radius) {
         int center = radius;
         for (int i = -6; i <= 6; i++) {
@@ -390,27 +319,6 @@ public final class PreviewRenderer {
             return 0xD8581E;
         }
         return biomeColor;
-    }
-
-    /// Marker colour per structure family. The legend in the UI maps the same
-    /// ids, so the two must stay in step.
-    static int structureColor(String id) {
-        String normalised = id.toLowerCase(Locale.ROOT);
-        return switch (normalised) {
-            case "village", "village_plains", "village_desert", "village_savanna",
-                 "village_snowy", "village_taiga" -> 0xFFD54F;
-            case "monument", "ocean_monument" -> 0x4FC3F7;
-            case "mansion", "woodland_mansion" -> 0x8D6E63;
-            case "stronghold" -> 0xE0E0E0;
-            case "mineshaft", "mineshaft_mesa" -> 0xA1887F;
-            case "temple", "desert_pyramid", "jungle_pyramid", "igloo", "witch_hut",
-                 "swamp_hut", "ocean_ruin", "ocean_ruin_cold", "ocean_ruin_warm",
-                 "ruined_portal", "shipwreck", "shipwreck_beached", "buried_treasure",
-                 "pillager_outpost", "trail_ruins", "trial_chambers", "ancient_city" -> 0xE57373;
-            case "fortress", "nether_fortress", "bastion_remnant" -> 0xB71C1C;
-            case "end_city" -> 0xBA68C8;
-            default -> 0xF06292;
-        };
     }
 
     /// The numeric seed the game derives from the text seed.
