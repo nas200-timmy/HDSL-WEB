@@ -183,10 +183,19 @@ public final class McJavaRuntimes {
     private record Cached(List<Release> releases, Instant at) {
     }
 
+    /// Fetches a package's bytes. Production downloads over HTTP; unit tests
+    /// stub this to exercise the mirror → official fallback without network.
+    interface ByteFetcher {
+        void fetch(Release used, Path target, @Nullable McVersions.Progress progress)
+                throws McException;
+    }
+
     private final Path root;
+    private final @Nullable McJavaSourcePicker sourcePicker;
     private final URI api;
     private final URI foojay;
     private final HttpClient client;
+    ByteFetcher byteFetcher = this::download;
     private final Map<Vendor, Cached> caches = new java.util.concurrent.ConcurrentHashMap<>();
 
     /// The manager for `<data>/minecraft/java`.
@@ -211,6 +220,8 @@ public final class McJavaRuntimes {
     /// @param foojay the Foojay DisCo base
     public McJavaRuntimes(Path root, URI api, URI foojay) {
         this.root = root.toAbsolutePath().normalize();
+        Path parent = this.root.getParent();
+        this.sourcePicker = parent == null ? null : new McJavaSourcePicker(parent);
         this.api = api;
         this.foojay = foojay;
         // Adoptium answers with a 302 to `objects.githubusercontent.com` for
@@ -233,6 +244,21 @@ public final class McJavaRuntimes {
             }
         }
         return DEFAULT_API;
+    }
+
+    /// The download-source picker, or `null` when the runtime directory has
+    /// no parent (unit tests with relative paths).
+    public @Nullable McJavaSourcePicker sources() {
+        return sourcePicker;
+    }
+
+    private static String hostOf(String url) {
+        try {
+            String host = URI.create(url).getHost();
+            return host == null ? url : host;
+        } catch (IllegalArgumentException e) {
+            return url;
+        }
     }
 
     /// The directory the runtimes live in.
@@ -402,13 +428,28 @@ public final class McJavaRuntimes {
     public Installed install(int feature, Vendor vendor, @Nullable McVersions.Progress progress)
             throws McException {
         Release release = resolve(feature, vendor);
-        // Checked before a single byte is fetched: a panel that downloaded an
-        // Oracle JDK would be redistributing it, which its licence does not allow.
+        // Pick where the bytes come from. The catalogue (version, size, and
+        // the SHA-256 the download is verified against) is official regardless;
+        // a source only rewrites the package URL.
+        String primaryUrl = release.url();
+        String primarySource = McJavaSources.OFFICIAL.id();
+        if (sourcePicker != null) {
+            McJavaSourcePicker.Choice choice = sourcePicker.choose(vendor, release);
+            if (choice.source() != McJavaSources.OFFICIAL) {
+                String rewritten = McJavaSources.rewrite(choice.source(), release.url());
+                if (rewritten != null) {
+                    primaryUrl = rewritten;
+                    primarySource = choice.source().id();
+                }
+            }
+        }
+        // Checked before a single byte is fetched, against the URL actually
+        // used: a mirror that serves Oracle builds must not get around it.
         URI packageUri;
         try {
-            packageUri = URI.create(release.url());
+            packageUri = URI.create(primaryUrl);
         } catch (IllegalArgumentException e) {
-            throw new McException("the upstream package URL is not a URI: " + release.url(), e);
+            throw new McException("the package URL is not a URI: " + primaryUrl, e);
         }
         if (!isRedistributable(packageUri)) {
             throw new McException("refusing to download " + packageUri.getHost()
@@ -428,12 +469,58 @@ public final class McJavaRuntimes {
             // touched (the tree stays the panel's, like the Node runtimes).
             setMode(root, "rwxr-xr-x");
             packageFile = Files.createTempFile(root, "jdk-" + feature, ".part");
-            download(release, packageFile, progress);
-            String actual = sha256Of(packageFile);
-            if (!actual.equalsIgnoreCase(release.sha256())) {
-                throw new McException("the JDK " + feature + " download failed its SHA-256 check (expected "
-                        + release.sha256() + ", got " + actual + ")");
+            // One chosen source, one official retry. A truncated or tampered
+            // mirror file fails the official checksum and costs one extra
+            // attempt, never a wrong JDK.
+            List<String> attempts = new ArrayList<>();
+            attempts.add(primaryUrl);
+            if (!primaryUrl.equals(release.url())) {
+                attempts.add(release.url());
             }
+            McException downloadFailure = null;
+            String effectiveUrl = primaryUrl;
+            String effectiveSource = primarySource;
+            for (int attempt = 0; attempt < attempts.size(); attempt++) {
+                String url = attempts.get(attempt);
+                String attemptSource = url.equals(release.url())
+                        ? McJavaSources.OFFICIAL.id() : primarySource;
+                if (progress != null) {
+                    progress.stage(attempt == 0
+                            ? "Downloading from " + hostOf(url)
+                            : "镜像校验失败，改用官方源重试");
+                }
+                Release used = new Release(release.feature(), release.version(), url,
+                        release.sha256(), release.size(), release.vendor());
+                try {
+                    Files.deleteIfExists(packageFile);
+                    packageFile = Files.createTempFile(root, "jdk-" + feature, ".part");
+                    byteFetcher.fetch(used, packageFile, progress);
+                    String actual = sha256Of(packageFile);
+                    if (!actual.equalsIgnoreCase(used.sha256())) {
+                        throw new McException("the JDK " + feature + " download failed its SHA-256 check "
+                                + "against the official catalogue (expected " + used.sha256()
+                                + ", got " + actual + ")");
+                    }
+                    effectiveUrl = url;
+                    effectiveSource = attemptSource;
+                    downloadFailure = null;
+                    break;
+                } catch (McException e) {
+                    downloadFailure = e;
+                    LOG.warning("JDK " + feature + " from " + attemptSource + " failed: " + e.getMessage());
+                    if (sourcePicker != null) {
+                        sourcePicker.recordDownloadOutcome(attemptSource, false, e.getMessage());
+                    }
+                }
+            }
+            if (downloadFailure != null) {
+                throw downloadFailure;
+            }
+            if (sourcePicker != null) {
+                sourcePicker.recordDownloadOutcome(effectiveSource, true, null);
+            }
+            String installedUrl = effectiveUrl;
+            String installedSource = effectiveSource;
             staging = Files.createTempDirectory(root, "jdk-" + feature + ".tmp");
             unpack(packageFile, staging, release.url());
             Path executable = javaBinOf(staging);
@@ -455,9 +542,17 @@ public final class McJavaRuntimes {
             JsonObject record = new JsonObject();
             record.addProperty("feature", feature);
             record.addProperty("version", release.version());
-            record.addProperty("url", release.url());
+            record.addProperty("url", installedUrl);
             record.addProperty("sha256", release.sha256());
             record.addProperty("vendor", release.vendor().id());
+            // Provenance: where the bytes came from and what they were
+            // verified against, so the UI can show "清华镜像，与官方一致".
+            record.addProperty("source", installedSource);
+            if (!installedUrl.equals(release.url())) {
+                record.addProperty("mirrorUrl", installedUrl);
+            }
+            record.addProperty("verifiedAgainst", release.vendor() == Vendor.TEMURIN
+                    ? "adoptium-api" : "foojay-disco");
             record.addProperty("bytes", bytes);
             record.addProperty("installedAt", Instant.now().toString());
             JsonUtils.writeToJsonFile(target.resolve("runtime.json"), record);
