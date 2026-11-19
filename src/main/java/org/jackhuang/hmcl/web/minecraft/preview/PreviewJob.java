@@ -236,6 +236,10 @@ public final class PreviewJob {
         if (error != null) {
             body.addProperty("error", error);
         }
+        if (!finished() && percent > 3) {
+            long elapsed = Duration.between(createdAt, Instant.now()).toMillis();
+            body.addProperty("etaSeconds", Math.max(0, elapsed * (100 - percent) / percent / 1000));
+        }
         body.addProperty("imageReady", image != null);
         JsonArray lines = new JsonArray();
         for (String line : logLines()) {

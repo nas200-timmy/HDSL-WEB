@@ -230,7 +230,7 @@ public final class SeedPreviewService {
             job.state(PreviewJob.State.GENERATING);
             requestChunks(process, spec);
             Path regionDirectory = work.resolve("preview").resolve("region");
-            boolean complete = waitForChunks(job, regionDirectory, spec);
+            boolean complete = waitForChunks(job, regionDirectory, spec, process);
             if (job.cancelled()) {
                 job.markCancelled();
                 return;
@@ -381,15 +381,27 @@ public final class SeedPreviewService {
         }
     }
 
-    private boolean waitForChunks(PreviewJob job, Path regionDirectory, PreviewSpec spec)
+    private boolean waitForChunks(PreviewJob job, Path regionDirectory, PreviewSpec spec, Process process)
             throws InterruptedException {
         long expected = spec.chunkCount();
         Instant deadline = Instant.now().plus(GENERATE_TIMEOUT);
         int stable = 0;
         int previous = 0;
+        // Chunks are held in memory until the world is saved, so the region
+        // files stay empty and the bar would sit at zero for the whole run.
+        // A periodic flush turns generation into something the user can watch.
+        long lastFlush = System.currentTimeMillis();
         while (Instant.now().isBefore(deadline)) {
             if (job.cancelled()) {
                 return false;
+            }
+            if (System.currentTimeMillis() - lastFlush > 6000) {
+                try {
+                    send(process, supportsFlush(spec.version()) ? "save-all flush" : "save-all");
+                } catch (IOException e) {
+                    return false;
+                }
+                lastFlush = System.currentTimeMillis();
             }
             int present = countInRange(regionDirectory, spec);
             job.progress(present, expected);
@@ -589,7 +601,7 @@ public final class SeedPreviewService {
                 // The suffix is the renderer generation: an image drawn before
                 // the overlays moved to the browser must not be served as if it
                 // were the new one.
-                .resolve(spec.radiusBlocks() + "-" + spec.biomeY() + "-v3");
+                .resolve(spec.radiusBlocks() + "-" + spec.biomeY() + "-v4");
     }
 
     private static String seedHash(String seed) {

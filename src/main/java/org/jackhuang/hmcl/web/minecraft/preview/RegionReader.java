@@ -221,7 +221,7 @@ public final class RegionReader {
             return null;
         }
         int[] surface = heights(body);
-        return new ChunkSummary(chunkX, chunkZ, biomes, surface, surfaceBlocks(root, surface),
+        return new ChunkSummary(chunkX, chunkZ, biomes, surface, surfaceBlocks(root, body, surface),
                 structures(root, body, chunkX, chunkZ));
     }
 
@@ -441,8 +441,16 @@ public final class RegionReader {
     /// hillshade turns every canopy into noise.
     ///
     /// @return 256 names, or an empty array when the chunk is not paletted
-    private static String[] surfaceBlocks(Map<String, Object> root, int[] heights) {
+    private static String[] surfaceBlocks(Map<String, Object> root, Map<String, Object> body, int[] heights) {
+        // 1.18+ keeps the section list on the root and nests the container under
+        // `block_states`; 1.13 – 1.17 keeps it under `Level.Sections` with the
+        // palette and the packed data directly on the section.
         List<?> sections = Nbt.list(root.get("sections"));
+        boolean modern = true;
+        if (sections.isEmpty()) {
+            sections = Nbt.list(body.get("Sections"));
+            modern = false;
+        }
         if (sections.isEmpty() || heights.length < 256) {
             return new String[0];
         }
@@ -464,27 +472,52 @@ public final class RegionReader {
                 if (section == null) {
                     continue;
                 }
-                Map<String, Object> states = Nbt.compound(section.get("block_states"));
+                Map<String, Object> states = modern
+                        ? Nbt.compound(section.get("block_states"))
+                        : section;
                 if (states == null) {
                     continue;
                 }
-                List<?> palette = Nbt.list(states.get("palette"));
-                long[] data = states.get("data") instanceof long[] values ? values : new long[0];
+                List<?> palette = Nbt.list(modern ? states.get("palette") : states.get("Palette"));
+                long[] data = (modern ? states.get("data") : states.get("BlockStates")) instanceof long[] values
+                        ? values : new long[0];
                 int index = ((height & 15) * 16 + z) * 16 + x;
-                int paletteSize = Math.max(1, palette.size());
-                // Block containers start at four bits, unlike the one-bit biome
-                // containers.
-                int bits = Math.max(4, 32 - Integer.numberOfLeadingZeros(paletteSize - 1));
-                int perLong = 64 / bits;
-                int value = 0;
-                if (data.length > index / perLong) {
-                    value = (int) ((data[index / perLong] >>> ((index % perLong) * bits))
-                            & ((1L << bits) - 1));
-                }
-                blocks[z * 16 + x] = blockName(palette, value);
+                blocks[z * 16 + x] = blockName(palette, paletteIndex(palette, data, index));
             }
         }
         return blocks;
+    }
+
+    /// Decodes one cell of a paletted block container.
+    ///
+    /// 1.16 and later never let a value straddle two longs; 1.13 – 1.15 do. The
+    /// array length tells them apart: the compact layout is longer whenever the
+    /// bits per value do not divide 64.
+    private static int paletteIndex(List<?> palette, long[] data, int index) {
+        if (data.length == 0 || palette.isEmpty()) {
+            return 0;
+        }
+        int paletteSize = Math.max(1, palette.size());
+        int bits = Math.max(4, 32 - Integer.numberOfLeadingZeros(paletteSize - 1));
+        int perLong = 64 / bits;
+        int compactLength = (int) ((4096L * bits + 63) / 64);
+        int plainLength = (4096 + perLong - 1) / perLong;
+        if (64 % bits != 0 && data.length == compactLength && compactLength != plainLength) {
+            // Values may cross the long boundary: read bit by bit.
+            long bit = (long) index * bits;
+            int word = (int) (bit >>> 6);
+            int offset = (int) (bit & 63);
+            long value = data[word] >>> offset;
+            if (offset + bits > 64 && word + 1 < data.length) {
+                value |= data[word + 1] << (64 - offset);
+            }
+            return (int) (value & ((1L << bits) - 1));
+        }
+        int word = index / perLong;
+        if (word >= data.length) {
+            return 0;
+        }
+        return (int) ((data[word] >>> ((index % perLong) * bits)) & ((1L << bits) - 1));
     }
 
     private static String blockName(List<?> palette, int index) {

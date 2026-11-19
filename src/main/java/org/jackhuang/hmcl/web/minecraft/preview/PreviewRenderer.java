@@ -290,6 +290,9 @@ public final class PreviewRenderer {
         if (block.equals("clay")) {
             return 0xA3ABB8;
         }
+        if (block.equals("water") || block.equals("bubble_column")) {
+            return 0x4a7cb8;
+        }
         if (block.equals("snow") || block.equals("snow_block") || block.equals("powder_snow")
                 || block.equals("ice") || block.equals("packed_ice") || block.equals("blue_ice")
                 || block.equals("frosted_ice")) {

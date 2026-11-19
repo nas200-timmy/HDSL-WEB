@@ -1981,6 +1981,8 @@ export interface McSeedPreviewJob {
   biomeY: number;
   createdAt: string;
   elapsedMs?: number;
+  /** 剩余秒数的粗略估计，进度太小时不给。 */
+  etaSeconds?: number;
   error?: string;
   imageReady: boolean;
   /** 服务端最近几十行输出，失败时用来解释「为什么」。 */

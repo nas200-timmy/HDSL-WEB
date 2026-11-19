@@ -27,7 +27,7 @@ type View = {
  * 图上的一草一木都来自游戏本体，不会和实际开出来的世界有偏差。
  *
  * 地形烧成 PNG（那是重活，要生成世界）；网格、史莱姆区块、结构点都放在浏览器
- * 的 SVG 里——它们是元数据，切成开关不该再跑一次世界生成。
+ * 的 SVG 里——它们是元数据，切成开挂不该再跑一次世界生成。
  *
  * 跑过的结果留在服务端缓存里（最近 30 个），关掉页面再回来还在：试种子这件事
  * 本来就是来回比较，结果不能是"一转头就没了"。
@@ -56,7 +56,9 @@ export function McSeedPreview({
   useEffect(() => {
     api.mc
       .versions()
-      .then((catalog) => setVersions(catalog.versions))
+      .then((catalog) =>
+        setVersions(catalog.versions.filter((entry) => entry.type === "release")),
+      )
       .catch(() => setVersions([]));
   }, []);
 
@@ -193,25 +195,26 @@ export function McSeedPreview({
         <h3 style={{ margin: 0 }}>种子预览</h3>
         <p className="dim" style={{ margin: "4px 0 0", fontSize: 13 }}>
           用这台服自己的服务端 jar，在临时目录里生成一次世界再出图。世界用完即删，只留图片和结构清单。
-          跑过的结果留在缓存里（最近 {30} 个），关掉页面回来还在。
         </p>
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span className="dim" style={{ fontSize: 12 }}>版本</span>
-          <input
-            className="mono"
-            list="mc-preview-versions"
+          <select
             value={version}
             onChange={(event) => setVersion(event.target.value)}
-            style={{ width: 140, padding: "6px 8px" }}
-          />
-          <datalist id="mc-preview-versions">
+            style={{ width: 160, padding: "6px 8px" }}
+          >
+            {version && !versions.some((entry) => entry.id === version) && (
+              <option value={version}>{version}</option>
+            )}
             {versions.map((entry) => (
-              <option key={entry.id} value={entry.id} />
+              <option key={entry.id} value={entry.id}>
+                {entry.id}
+              </option>
             ))}
-          </datalist>
+          </select>
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: "1 1 220px" }}>
           <span className="dim" style={{ fontSize: 12 }}>种子（数字或文本）</span>
@@ -258,9 +261,12 @@ export function McSeedPreview({
       {running && job && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }} className="dim">
-            <span>{job.label}</span>
+            <span>
+              {job.label}
+              {job.etaSeconds !== undefined && job.percent > 3 ? ` · 约剩 ${job.etaSeconds} 秒` : ""}
+            </span>
             <span className="mono">
-              {job.chunksDone} / {job.chunksTotal} 区块
+              {job.chunksDone} / {job.chunksTotal} 区块 · {job.percent}%
             </span>
           </div>
           <div style={{ height: 6, background: "rgba(127,127,127,.25)", borderRadius: 3, overflow: "hidden" }}>
@@ -273,6 +279,28 @@ export function McSeedPreview({
               }}
             />
           </div>
+          {job.log.length > 0 && (
+            <details>
+              <summary className="dim" style={{ fontSize: 12, cursor: "pointer" }}>
+                服务端日志（最近 {job.log.length} 行）
+              </summary>
+              <pre
+                className="mono"
+                style={{
+                  maxHeight: 180,
+                  overflow: "auto",
+                  fontSize: 11,
+                  lineHeight: 1.5,
+                  background: "rgba(0,0,0,.25)",
+                  padding: 8,
+                  borderRadius: 4,
+                  margin: "6px 0 0",
+                }}
+              >
+                {job.log.join("\n")}
+              </pre>
+            </details>
+          )}
         </div>
       )}
 
@@ -285,8 +313,7 @@ export function McSeedPreview({
           <MapView view={view} meta={meta} />
           <p className="dim" style={{ margin: 0, fontSize: 12 }}>
             {view.partial ? "⚠ 生成超时，这张图不完整。" : "生成完成。"}
-            {" "}
-            1 像素 = 1 格。滚轮 / 双指缩放，拖动平移，双击复位，单击十字选点。
+            {" "}1 像素 = 1 格。滚轮 / 双指缩放，拖动平移，双击复位，单击选点。
           </p>
           {structureRows.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, fontSize: 12 }}>
@@ -372,19 +399,24 @@ function markerColor(id: string): string {
   return "#E57373";
 }
 
+/** 一组好看的比例尺长度（格）。 */
+const SCALE_STEPS = [16, 32, 64, 128, 256, 512, 1024];
+
 /**
  * 地图本体：PNG 地形 + SVG 覆盖层，缩放和平移都在一个 transform 里完成。
  *
  * 覆盖层画在方块坐标系里（viewBox 就是 ±radius），所以缩放时不用重新算任何
  * 东西；`vector-effect: non-scaling-stroke` 让线宽不跟着放大。
  *
- * 指针事件同时服务鼠标和触屏：一根手指拖动平移，两根手指捏合缩放，单击选点。
+ * 平移会夹在"图片始终铺满视口"的范围内——否则缩小后四边会露出底色，看起来
+ * 像地图缺了一块（第一版就是这样，被当成生成失败）。
  */
 function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null }) {
   const radius = view.radius;
   const size = radius * 2;
-  const containerRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
+  const [box, setBox] = useState(0);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [hover, setHover] = useState<{ x: number; z: number } | null>(null);
@@ -395,6 +427,16 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
   const drag = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean } | null>(null);
   const pinch = useRef<{ d0: number; s0: number; mx: number; my: number; ox: number; oy: number } | null>(null);
 
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    const update = () => setBox(frame.clientWidth);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, []);
+
   // A different picture means a different coordinate system: reset the viewport
   // so a new seed does not open somewhere off-screen.
   useEffect(() => {
@@ -404,27 +446,34 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
     setHover(null);
   }, [view.id]);
 
+  const clampOffset = (value: { x: number; y: number }, next: number) => {
+    const width = box || 1;
+    const min = -(next - 1) * width;
+    return {
+      x: Math.min(0, Math.max(min, value.x)),
+      y: Math.min(0, Math.max(min, value.y)),
+    };
+  };
+
   const reset = () => {
     setScale(1);
     setOffset({ x: 0, y: 0 });
-    setPinned(null);
   };
 
-  const clamp = (value: number) => Math.min(12, Math.max(1, value));
-
   const zoomAt = (factor: number, mx: number, my: number) => {
-    const next = clamp(scale * factor);
+    const next = Math.min(16, Math.max(1, scale * factor));
     if (next === scale) return;
-    setOffset({
+    const moved = {
       x: mx - ((mx - offset.x) * next) / scale,
       y: my - ((my - offset.y) * next) / scale,
-    });
+    };
+    setOffset(clampOffset(moved, next));
     setScale(next);
   };
 
   const onWheel = (event: React.WheelEvent) => {
     event.preventDefault();
-    const rect = containerRef.current?.getBoundingClientRect();
+    const rect = frameRef.current?.getBoundingClientRect();
     if (!rect) return;
     zoomAt(event.deltaY < 0 ? 1.15 : 1 / 1.15, event.clientX - rect.left, event.clientY - rect.top);
   };
@@ -432,7 +481,6 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
   const coordsAt = (clientX: number, clientY: number) => {
     const image = imageRef.current;
     if (!image) return null;
-    // The image is transformed, so its bounding box already reflects zoom/pan.
     const rect = image.getBoundingClientRect();
     const fx = (clientX - rect.left) / rect.width;
     const fz = (clientY - rect.top) / rect.height;
@@ -446,7 +494,7 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
     if (pointers.current.size === 2) {
       drag.current = null;
       const [a, b] = [...pointers.current.values()];
-      const rect = containerRef.current?.getBoundingClientRect();
+      const rect = frameRef.current?.getBoundingClientRect();
       pinch.current = {
         d0: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
         s0: scale,
@@ -468,12 +516,17 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
       const [a, b] = [...pointers.current.values()];
       const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
       const started = pinch.current;
-      const next = clamp((started.s0 * distance) / started.d0);
+      const next = Math.min(16, Math.max(1, (started.s0 * distance) / started.d0));
       setScale(next);
-      setOffset({
-        x: started.mx - ((started.mx - started.ox) * next) / started.s0,
-        y: started.my - ((started.my - started.oy) * next) / started.s0,
-      });
+      setOffset(
+        clampOffset(
+          {
+            x: started.mx - ((started.mx - started.ox) * next) / started.s0,
+            y: started.my - ((started.my - started.oy) * next) / started.s0,
+          },
+          next,
+        ),
+      );
       return;
     }
     const current = drag.current;
@@ -481,7 +534,7 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
       const dx = event.clientX - current.x;
       const dy = event.clientY - current.y;
       if (Math.abs(dx) + Math.abs(dy) > 3) current.moved = true;
-      setOffset({ x: current.ox + dx, y: current.oy + dy });
+      setOffset(clampOffset({ x: current.ox + dx, y: current.oy + dy }, scale));
     }
     setHover(coordsAt(event.clientX, event.clientY));
   };
@@ -498,17 +551,28 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
   };
 
   const lines = [];
+  const labels = [];
   if (layers.grid) {
     for (let block = -radius; block <= radius; block += 64) {
       const major = block % 256 === 0;
       const stroke = major ? "#ffffff" : "#bfd4e8";
-      const opacity = major ? 0.38 : 0.18;
+      const opacity = major ? 0.32 : 0.14;
       lines.push(
         <line key={`v${block}`} x1={block} y1={-radius} x2={block} y2={radius}
           stroke={stroke} strokeOpacity={opacity} strokeWidth={1} vectorEffect="non-scaling-stroke" />,
         <line key={`h${block}`} x1={-radius} y1={block} x2={radius} y2={block}
           stroke={stroke} strokeOpacity={opacity} strokeWidth={1} vectorEffect="non-scaling-stroke" />,
       );
+      if (major) {
+        // Lathe-style tick labels: the font is scaled down by the zoom so the
+        // text keeps the same size on screen whatever the viewport does.
+        labels.push(
+          <text key={`tx${block}`} x={block} y={-radius + 14 / scale} fontSize={11 / scale}
+            fill="#d6e4f0" fillOpacity={0.75} textAnchor="middle">{block}</text>,
+          <text key={`tz${block}`} x={-radius + 4 / scale} y={block + 4 / scale} fontSize={11 / scale}
+            fill="#d6e4f0" fillOpacity={0.75} textAnchor="start">{block}</text>,
+        );
+      }
     }
   }
 
@@ -517,6 +581,10 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
       ? `/api/mc/preview/${view.id}.png`
       : `/api/mc/preview/history/${view.id}.png`,
   );
+
+  const pxPerBlock = ((box || 1) * scale) / size;
+  const barBlocks = SCALE_STEPS.find((value) => value * pxPerBlock >= 56) ?? SCALE_STEPS[SCALE_STEPS.length - 1];
+  const barWidth = barBlocks * pxPerBlock;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -551,7 +619,7 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
       </div>
 
       <div
-        ref={containerRef}
+        ref={frameRef}
         onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -567,14 +635,13 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
         style={{
           position: "relative",
           width: "100%",
-          maxWidth: 720,
           aspectRatio: "1 / 1",
           overflow: "hidden",
           borderRadius: 6,
           border: "1px solid rgba(127,127,127,.25)",
           cursor: "crosshair",
           touchAction: "none",
-          background: "#1b1b1f",
+          background: "#141418",
         }}
       >
         <div
@@ -597,6 +664,7 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
             style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
           >
             {lines}
+            {labels}
             {layers.slime &&
               meta?.slimeChunks?.map((chunk) => (
                 <rect key={`s${chunk.x}:${chunk.z}`} x={chunk.x * 16} y={chunk.z * 16}
@@ -609,16 +677,14 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
                   vectorEffect="non-scaling-stroke"
                   transform={`rotate(45 ${structure.x} ${structure.z})`} />
               ))}
-            <line x1={-6} y1={0} x2={6} y2={0} stroke="#e53935" strokeWidth={2} vectorEffect="non-scaling-stroke" />
-            <line x1={0} y1={-6} x2={0} y2={6} stroke="#e53935" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+            <line x1={-8} y1={0} x2={8} y2={0} stroke="#e53935" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+            <line x1={0} y1={-8} x2={0} y2={8} stroke="#e53935" strokeWidth={2} vectorEffect="non-scaling-stroke" />
             {pinned && (
               <g>
-                <line x1={pinned.x - 12} y1={pinned.z} x2={pinned.x + 12} y2={pinned.z}
+                <line x1={pinned.x - 14 / scale} y1={pinned.z} x2={pinned.x + 14 / scale} y2={pinned.z}
                   stroke="#ffffff" strokeWidth={2} vectorEffect="non-scaling-stroke" />
-                <line x1={pinned.x} y1={pinned.z - 12} x2={pinned.x} y2={pinned.z + 12}
+                <line x1={pinned.x} y1={pinned.z - 14 / scale} x2={pinned.x} y2={pinned.z + 14 / scale}
                   stroke="#ffffff" strokeWidth={2} vectorEffect="non-scaling-stroke" />
-                <circle cx={pinned.x} cy={pinned.z} r={3} fill="none" stroke="#ffffff"
-                  strokeWidth={2} vectorEffect="non-scaling-stroke" />
               </g>
             )}
           </svg>
@@ -639,12 +705,44 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
             pointerEvents: "none",
           }}
         >
-          {pinned
-            ? `📍 X ${pinned.x}  Z ${pinned.z}`
-            : hover
-              ? `X ${hover.x}  Z ${hover.z}`
-              : `种子 ${view.seed}`}
+          {pinned ? `📍 X ${pinned.x}  Z ${pinned.z}` : hover ? `X ${hover.x}  Z ${hover.z}` : `种子 ${view.seed}`}
         </div>
+
+        {/* 比例尺：随缩放变化，像地图软件左下角那根 */}
+        <div style={{ position: "absolute", left: 10, bottom: 10, pointerEvents: "none", color: "#e8eef4", fontSize: 11 }}>
+          <div style={{ width: barWidth, height: 4, borderLeft: "1px solid #e8eef4", borderRight: "1px solid #e8eef4", borderBottom: "1px solid #e8eef4" }} />
+          <div className="mono" style={{ marginTop: 2, textShadow: "0 1px 2px rgba(0,0,0,.8)" }}>{barBlocks} 格</div>
+        </div>
+      </div>
+
+      {/* 坐标读数：固定在地图下面，像 CAD 的状态栏 */}
+      <div
+        className="mono"
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 16,
+          alignItems: "center",
+          fontSize: 12,
+          padding: "6px 10px",
+          borderRadius: 4,
+          background: "rgba(127,127,127,.10)",
+        }}
+      >
+        <span>X <b>{hover ? hover.x : pinned ? pinned.x : "—"}</b></span>
+        <span>Z <b>{hover ? hover.z : pinned ? pinned.z : "—"}</b></span>
+        <span className="dim">中心 (0, 0) · 范围 {size} 格</span>
+        <span style={{ flex: 1 }} />
+        {pinned && (
+          <button
+            className="btn btn-text"
+            style={{ padding: "0 6px" }}
+            onClick={() => void navigator.clipboard?.writeText(`${pinned.x} ${pinned.z}`)}
+          >
+            复制坐标
+          </button>
+        )}
+        <span className="dim">{Math.round(scale * 100)}% · {Math.round(pxPerBlock * 100) / 100} px/格</span>
       </div>
     </div>
   );
