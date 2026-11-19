@@ -616,6 +616,15 @@ public final class HdslServer {
                 config, mcFeature, mcInstances, mcRuntime, mcVersions, mcCores, mcJavaRuntimes,
                 mcBackups, taskService,
                 terminalTickets, authService, developerAuth, developerElevation, tlsActive, emergencyStop)), "/api/mc/*");
+        // 种子预览：起一个一次性服务端生成世界，读 region 出图。挂更长的路径前缀，
+        // 让它在 `/api/mc/*` 之前匹配（Servlet 规范里更长的路径优先），同时仍然经过
+        // 上面那条 McFeatureFilter。
+        org.jackhuang.hmcl.web.minecraft.preview.SeedPreviewService seedPreview =
+                new org.jackhuang.hmcl.web.minecraft.preview.SeedPreviewService(
+                        config, mcVersions, mcJavaRuntimes);
+        context.addServlet(new ServletHolder(
+                        new org.jackhuang.hmcl.web.minecraft.preview.SeedPreviewServlet(seedPreview)),
+                "/api/mc/preview/*");
 
         context.addServlet(new ServletHolder(new InstanceProxyServlet(taskService, config.basePath)), "/i/*");
         // A panel killed mid source-build leaves a half-built release next to a

@@ -1000,6 +1000,20 @@ export const api = {
       request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}`),
     instanceJava: (id: string) =>
       request<McInstanceJava>(`/api/mc/instances/${encodeURIComponent(id)}/java`),
+    /** 种子预览：这台版本的服务端 jar / Java 是否就绪（不触网）。 */
+    previewCapabilities: (version: string) =>
+      request<McSeedPreviewCapabilities>(
+        `/api/mc/preview/capabilities?version=${encodeURIComponent(version)}`,
+      ),
+    /** 起一次预览；同一个 (版本, 种子, 半径, 高度) 只会真跑一次。 */
+    previewStart: (body: { version: string; seed: string; radius: number; biomeY?: number }) =>
+      request<McSeedPreviewJob>("/api/mc/preview", jsonInit("POST", body)),
+    previewJob: (id: string) =>
+      request<McSeedPreviewJob>(`/api/mc/preview/${encodeURIComponent(id)}`),
+    previewCancel: (id: string) =>
+      request<{ ok: boolean }>(`/api/mc/preview/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    previewMeta: (id: string) =>
+      request<McSeedPreviewMeta>(`/api/mc/preview/${encodeURIComponent(id)}.json`),
     create: (body: {
       name: string;
       version: string;
@@ -1893,6 +1907,64 @@ export interface McInstanceJava {
   selected: string | null;
   effective: McJavaProbe;
   options: McJavaProbe[];
+}
+
+/** GET /api/mc/preview/capabilities：这个版本现在能不能预览。 */
+export interface McSeedPreviewCapabilities {
+  version: string;
+  /** `server.jar` 是否已在面板缓存里（不在就要先下载一次）。 */
+  jarPresent: boolean;
+  /** 这个版本需要的 Java 大版本。 */
+  javaRequired: number;
+  /** 面板里有没有装这个 Java。 */
+  javaReady: boolean;
+  /** 当前是否有预览在跑（全局单飞）。 */
+  running: boolean;
+}
+
+/** 一次种子预览的作业状态。 */
+export interface McSeedPreviewJob {
+  id: string;
+  state:
+    | "QUEUED"
+    | "RESOLVING"
+    | "STARTING"
+    | "GENERATING"
+    | "SAVING"
+    | "PARSING"
+    | "RENDERING"
+    | "DONE"
+    | "FAILED"
+    | "CANCELLED";
+  label: string;
+  percent: number;
+  chunksDone: number;
+  chunksTotal: number;
+  /** 超时收尾时仍有图，但不满整块。 */
+  partial: boolean;
+  version: string;
+  seed: string;
+  radius: number;
+  biomeY: number;
+  createdAt: string;
+  elapsedMs?: number;
+  error?: string;
+  imageReady: boolean;
+  /** 服务端最近几十行输出，失败时用来解释「为什么」。 */
+  log: string[];
+}
+
+/** 与图片一起缓存的元数据。 */
+export interface McSeedPreviewMeta {
+  version: string;
+  seed: string;
+  radius: number;
+  biomeY: number;
+  chunks: number;
+  partial: boolean;
+  generatedAt: string;
+  structureCounts: Record<string, number>;
+  structures: { id: string; chunkX: number; chunkZ: number; x: number; z: number }[];
 }
 
 export interface McBackup {

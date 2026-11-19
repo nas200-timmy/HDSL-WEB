@@ -14,6 +14,7 @@ import {
   McPropertiesPanel,
   McWorldPanel,
 } from "../components/McPanels";
+import { McSeedPreview } from "../components/McSeedPreview";
 import {
   ArrowBackIcon,
   CancelIcon,
@@ -31,7 +32,16 @@ import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { toast } from "../store";
 import { errMsg, mcCoreLabel, mcStateLabel } from "../utils";
 
-type McTab = "overview" | "console" | "settings" | "files" | "backups" | "players" | "world" | "logs";
+type McTab =
+  | "overview"
+  | "console"
+  | "settings"
+  | "files"
+  | "backups"
+  | "players"
+  | "world"
+  | "preview"
+  | "logs";
 
 const TABS: { key: McTab; title: string; icon: React.ReactNode; iconActive?: React.ReactNode }[] = [
   { key: "overview", title: "概览", icon: <SettingsFillIcon size={20} /> },
@@ -41,6 +51,7 @@ const TABS: { key: McTab; title: string; icon: React.ReactNode; iconActive?: Rea
   { key: "backups", title: "世界备份", icon: <InfoIcon size={20} /> },
   { key: "players", title: "玩家", icon: <PersonIcon size={20} /> },
   { key: "world", title: "世界", icon: <PublicIcon size={20} /> },
+  { key: "preview", title: "种子预览", icon: <PublicIcon size={20} /> },
   { key: "logs", title: "日志", icon: <InfoIcon size={20} /> },
 ];
 
@@ -435,6 +446,7 @@ export function McInstancePage() {
         {tab === "players" && <McPlayersPanel instance={instance} />}
         {tab === "files" && <McFilesPanel instance={instance} />}
         {tab === "world" && <McWorldPanel instance={instance} />}
+        {tab === "preview" && <McSeedPreview instance={instance} />}
         {tab === "logs" && <McLogsPanel instance={instance} />}
       </div>
 

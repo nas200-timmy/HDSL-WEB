@@ -169,6 +169,44 @@ public final class McVersions {
         return updated;
     }
 
+    /// The shared `server.jar` for a version, whether or not it exists yet.
+    ///
+    /// @param versionId the version id
+    /// @return `<versions>/<id>/server.jar`
+    public Path serverJar(String versionId) {
+        return versionsRoot.resolve(versionId).resolve(McInstanceManager.SERVER_JAR_NAME);
+    }
+
+    /// Whether the shared jar is already on disk.
+    ///
+    /// Cheap on purpose: the seed preview asks this before offering to download,
+    /// and that question must not touch the network.
+    ///
+    /// @param versionId the version id
+    /// @return `true` when a jar is cached for that version
+    public boolean hasServerJar(String versionId) {
+        return Files.isRegularFile(serverJar(versionId));
+    }
+
+    /// Makes sure the shared jar exists, downloading it when it does not.
+    ///
+    /// Unlike [#install] this needs no instance: the seed preview runs the jar
+    /// once in a throwaway directory, and a version that no instance uses still
+    /// has to be previewable.
+    ///
+    /// @param versionId the version id
+    /// @param progress  the download sink, or `null`
+    /// @return the jar's path
+    /// @throws McException when the manifest or the download fails
+    public Path ensureServerJar(String versionId, @Nullable Progress progress) throws McException {
+        ServerDownload download = resolve(versionId);
+        Path shared = serverJar(versionId);
+        if (!reusable(shared, download)) {
+            downloadAndVerify(download, shared, progress);
+        }
+        return shared;
+    }
+
     /// Download progress in bytes; `total` is `-1` when the manifest did not say.
     @FunctionalInterface
     public interface Progress {
