@@ -428,6 +428,51 @@
 }
 
 /* -------------------------------------------------------------------------
+ * 窄视口（含桌面浏览器的响应式模拟）：不依赖 `pointer` / `hover` 媒体特性。
+ * Firefox 的响应式模式默认**不模拟触摸**，`(hover: none) and (pointer: coarse)`
+ * 不成立——之前只写在触摸块里的规则在 390px 的模拟窗口里一条都没生效。
+ * ------------------------------------------------------------------------- */
+@media (max-width: 760px) {
+  .toolbar-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .toolbar-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .toolbar-row .tool-btn {
+    white-space: nowrap;
+    min-height: 40px;
+    padding: 0 10px;
+  }
+
+  .toolbar-row > span {
+    white-space: nowrap;
+  }
+
+  .tlli {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  .tlli .tlli-title {
+    flex-wrap: wrap;
+    white-space: normal;
+    overflow: visible;
+  }
+
+  .tlli .tlli-text {
+    flex: 1 1 60%;
+    min-width: 0;
+  }
+}
+
+/* -------------------------------------------------------------------------
  * 品牌实例：窄屏不要把标题、版本选择器和四个按钮挤成一片。
  * 手机上（以及窄窗口、触摸设备）把操作组折到第二行并按需横向滑动；
  * 标题/副标题允许多行，长 url 用 anywhere 断行，避免撑破卡片。
