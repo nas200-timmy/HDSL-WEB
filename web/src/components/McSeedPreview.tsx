@@ -400,8 +400,8 @@ function markerColor(id: string): string {
   return "#E57373";
 }
 
-/** 一组好看的比例尺长度（格）。 */
-const SCALE_STEPS = [16, 32, 64, 128, 256, 512, 1024];
+/** 比例尺候选长度（格）；按当前像素密度挑一根够长又不溢出容器的。 */
+const SCALE_STEPS = [4, 8, 16, 32, 64, 128, 256, 512];
 
 /**
  * 地图本体：PNG 地形 + SVG 覆盖层，缩放和平移都在一个 transform 里完成。
@@ -551,11 +551,17 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
     }
   };
 
+  // 网格随缩放换挡：放大到能看清区块时画 16 格（区块边界），再放大才画
+  // 4 格；缩小回去就只剩大尺度的线。固定间隔会让放大后满屏只有两三根线。
+  const pxPerBlock = ((box || 1) * scale) / size;
+  const gridStep = [4, 8, 16, 32, 64, 128, 256].find((value) => value * pxPerBlock >= 36) ?? 256;
+  const gridMajor = gridStep * 4;
+
   const lines = [];
   const labels = [];
   if (layers.grid) {
-    for (let block = -radius; block <= radius; block += 64) {
-      const major = block % 256 === 0;
+    for (let block = -radius; block <= radius; block += gridStep) {
+      const major = block % gridMajor === 0;
       const stroke = major ? "#ffffff" : "#bfd4e8";
       const opacity = major ? 0.32 : 0.14;
       lines.push(
@@ -565,8 +571,8 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
           stroke={stroke} strokeOpacity={opacity} strokeWidth={1} vectorEffect="non-scaling-stroke" />,
       );
       if (major) {
-        // Lathe-style tick labels: the font is scaled down by the zoom so the
-        // text keeps the same size on screen whatever the viewport does.
+        // Tick labels: the font is scaled down by the zoom so the text keeps
+        // the same size on screen whatever the viewport does.
         labels.push(
           <text key={`tx${block}`} x={block} y={-radius + 14 / scale} fontSize={11 / scale}
             fill="#d6e4f0" fillOpacity={0.75} textAnchor="middle">{block}</text>,
@@ -583,7 +589,6 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
       : `/api/mc/preview/history/${view.id}.png`,
   );
 
-  const pxPerBlock = ((box || 1) * scale) / size;
   const barBlocks = SCALE_STEPS.find((value) => value * pxPerBlock >= 56) ?? SCALE_STEPS[SCALE_STEPS.length - 1];
   const barWidth = barBlocks * pxPerBlock;
 
@@ -732,7 +737,9 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
       >
         <span>X <b>{hover ? hover.x : pinned ? pinned.x : "—"}</b></span>
         <span>Z <b>{hover ? hover.z : pinned ? pinned.z : "—"}</b></span>
-        <span className="dim">中心 (0, 0) · 范围 {size} 格</span>
+        <span className="dim">
+          中心 (0, 0) · 范围 {size} 格 · 网格 {gridStep} 格
+        </span>
         <span style={{ flex: 1 }} />
         {pinned && (
           <button

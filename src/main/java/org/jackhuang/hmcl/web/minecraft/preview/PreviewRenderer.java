@@ -63,6 +63,7 @@ public final class PreviewRenderer {
         int[] base = new int[side * side];
         boolean[] water = new boolean[side * side];
         String[] surface = new String[side * side];
+        String[] biomeNames = new String[side * side];
         java.util.Arrays.fill(heights, SEA_LEVEL - 8);
 
         for (RegionReader.ChunkSummary chunk : chunks) {
@@ -81,6 +82,7 @@ public final class PreviewRenderer {
                     int index = pz * side + px;
                     String biome = chunk.biomes()[(z >> 2) * 4 + (x >> 2)];
                     base[index] = BiomePalette.colorOf(biome);
+                    biomeNames[index] = biome;
                     water[index] = isWater(biome);
                     int[] map = chunk.heights();
                     heights[index] = map.length >= 256 ? map[z * 16 + x] : SEA_LEVEL;
@@ -94,25 +96,30 @@ public final class PreviewRenderer {
         // bump, which turns a hillshade into noise. A small blur keeps the shape
         // of the land and drops the texture; water is still decided per block
         // from the unblurred data.
-        int[] relief = boxBlur(boxBlur(heights, side, 6), side, 6);
+        // A 5×5 pass: single-block steps become a texture rather than confetti,
+        // while a hill still reads as a hill. Map renderers shade at roughly
+        // this scale; shading every block makes the whole map look embossed.
+        int[] relief = boxBlur(heights, side, 2);
 
         for (int z = 0; z < side; z++) {
             for (int x = 0; x < side; x++) {
                 int index = z * side + x;
                 int color;
-                if (water[index]) {
+                String surfaceBlock = surface[index];
+                boolean waterBlock = "water".equals(surfaceBlock) || "bubble_column".equals(surfaceBlock);
+                if (water[index] || waterBlock) {
                     int depth = Math.max(0, Math.min(48, SEA_LEVEL - heights[index]));
                     color = waterColor(depth);
                 } else {
-                    String block = surface[index];
+                    String block = surfaceBlock;
                     color = block != null && !"unknown".equals(block)
-                            ? blockColor(block, base[index])
+                            ? blockColor(block, biomeNames[index], base[index])
                             : base[index];
                     // With a real surface block the shading is only a hint: the
                     // material already carries the colour, so a strong gradient
                     // would put the noise back.
                     float shade = shade(relief, side, x, z);
-                    color = scale(color, 1f + (shade - 1f) * (block != null ? 0.6f : 1f));
+                    color = scale(color, 1f + (shade - 1f) * (block != null ? 0.4f : 1f));
                     int height = heights[index];
                     if (height > SNOW_LINE && block == null) {
                         float snow = Math.min(0.55f, (height - SNOW_LINE) / 50f);
@@ -263,63 +270,87 @@ public final class PreviewRenderer {
 
     /// The map colour of a surface block.
     ///
-    /// A map reads the *material*, not the height: grass is one green whether
-    /// it sits on a hill or in a dip. Falling back to the biome colour keeps
-    /// unknown blocks (datapacks, mods) from turning the map grey.
-    private static int blockColor(String block, int biomeColor) {
-        if (block.endsWith("_leaves") || block.equals("azalea_leaves") || block.equals("flowering_azalea_leaves")) {
-            return scale(biomeColor, 0.8f);
+    /// Every map renderer in this space (Dynmap, BlueMap, squaremap, the mods)
+    /// does the same thing: take the average colour of the block's top texture,
+    /// tint the two blocks that are tinted in game (grass and leaves) by the
+    /// biome, and leave stone, sand and snow alone. That is why a forest reads
+    /// as one green and a mountain as one grey — the material carries the
+    /// colour, not the height.
+    private static int blockColor(String block, String biome, int biomeColor) {
+        // Grass is the biome's grass colour, not the biome swatch: the two are
+        // close but a plains at dusk and a plains at noon are the same map.
+        if (block.equals("grass_block")) {
+            return BiomePalette.grassOf(biome);
         }
-        if (block.equals("grass_block") || block.equals("moss_block") || block.equals("short_grass")
-                || block.equals("tall_grass") || block.equals("fern") || block.equals("large_fern")
-                || block.equals("bush") || block.equals("sugar_cane") || block.equals("lily_pad")) {
-            return biomeColor;
-        }
-        if (block.equals("sand") || block.equals("sandstone") || block.equals("suspicious_sand")
-                || block.equals("smooth_sandstone") || block.equals("cut_sandstone")) {
-            return 0xE4D6A2;
-        }
-        if (block.equals("red_sand") || block.equals("red_sandstone") || block.contains("terracotta")
-                || block.equals("orange_terracotta")) {
-            return 0xBE6A3C;
-        }
-        if (block.equals("gravel") || block.equals("cobblestone") || block.equals("mossy_cobblestone")
-                || block.equals("andesite") || block.equals("tuff")) {
-            return 0x968F8B;
-        }
-        if (block.equals("clay")) {
-            return 0xA3ABB8;
+        if (block.endsWith("_leaves")) {
+            return BiomePalette.leavesOf(block, biome);
         }
         if (block.equals("water") || block.equals("bubble_column")) {
-            return 0x4a7cb8;
+            return 0x3F6FB5;
         }
-        if (block.equals("snow") || block.equals("snow_block") || block.equals("powder_snow")
-                || block.equals("ice") || block.equals("packed_ice") || block.equals("blue_ice")
-                || block.equals("frosted_ice")) {
-            return 0xF1F6FA;
+        if (block.equals("ice") || block.equals("frosted_ice")) {
+            return 0xA8CFE8;
         }
-        if (block.equals("deepslate") || block.equals("cobbled_deepslate") || block.equals("basalt")
-                || block.equals("smooth_basalt") || block.equals("blackstone") || block.equals("sculk")
-                || block.equals("calcite") || block.equals("dripstone_block")) {
-            return 0x6E6E72;
+        if (block.equals("packed_ice") || block.equals("blue_ice")) {
+            return 0x8FB8D6;
         }
-        if (block.equals("stone") || block.equals("granite") || block.equals("diorite")
-                || block.endsWith("_ore")) {
+        if (block.equals("snow") || block.equals("snow_block") || block.equals("powder_snow")) {
+            return 0xF2F6FA;
+        }
+        if (block.equals("sand") || block.equals("sandstone") || block.equals("suspicious_sand")
+                || block.equals("smooth_sandstone") || block.equals("cut_sandstone")
+                || block.equals("chiseled_sandstone")) {
+            return 0xE6D8A8;
+        }
+        if (block.equals("red_sand") || block.equals("red_sandstone")) {
+            return 0xC06A2E;
+        }
+        if (block.contains("terracotta")) {
+            return 0xB56B46;
+        }
+        if (block.equals("gravel") || block.equals("cobblestone") || block.equals("mossy_cobblestone")) {
+            return 0x8F8A86;
+        }
+        if (block.equals("clay")) {
+            return 0xA6AEB8;
+        }
+        if (block.equals("deepslate") || block.equals("cobbled_deepslate")) {
+            return 0x5E5E64;
+        }
+        if (block.equals("tuff") || block.equals("calcite") || block.equals("dripstone_block")
+                || block.equals("basalt") || block.equals("smooth_basalt") || block.equals("blackstone")) {
+            return 0x7A787C;
+        }
+        if (block.equals("stone") || block.equals("andesite") || block.equals("granite")
+                || block.equals("diorite") || block.equals("polished_andesite")
+                || block.endsWith("_ore") || block.equals("bedrock")) {
             return 0x8C8C8C;
         }
-        if (block.equals("mycelium") || block.equals("mushroom_stem") || block.equals("brown_mushroom_block")
-                || block.equals("red_mushroom_block")) {
-            return 0x8A6E8A;
-        }
         if (block.equals("dirt") || block.equals("coarse_dirt") || block.equals("rooted_dirt")
-                || block.equals("podzol")) {
+                || block.equals("podzol") || block.equals("farmland") || block.equals("dirt_path")) {
             return 0x7A5A34;
         }
-        if (block.equals("mud") || block.equals("muddy_mangrove_roots")) {
+        if (block.equals("mud") || block.equals("muddy_mangrove_roots") || block.equals("packed_mud")) {
             return 0x4A3E38;
+        }
+        if (block.equals("moss_block")) {
+            return 0x5E8C3E;
+        }
+        if (block.equals("mycelium") || block.equals("mushroom_stem")
+                || block.equals("brown_mushroom_block") || block.equals("red_mushroom_block")) {
+            return 0x8A6E8A;
         }
         if (block.equals("lava") || block.equals("magma_block")) {
             return 0xD8581E;
+        }
+        if (block.equals("sculk") || block.equals("sculk_catalyst") || block.equals("sculk_vein")) {
+            return 0x1E3A3A;
+        }
+        // Plants and logs sit on top of the terrain; they take the ground colour
+        // so a single tree does not turn into a brown speck.
+        if (block.endsWith("_log") || block.endsWith("_wood") || block.endsWith("_stem")
+                || block.endsWith("_hyphae") || block.equals("bamboo_block")) {
+            return scale(biomeColor, 0.85f);
         }
         return biomeColor;
     }

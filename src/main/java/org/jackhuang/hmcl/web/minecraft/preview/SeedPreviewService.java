@@ -132,7 +132,9 @@ public final class SeedPreviewService {
         body.addProperty("jarPresent", versions.hasServerJar(version));
         int required = McJavaRuntimes.recommendFor(version);
         body.addProperty("javaRequired", required);
-        body.addProperty("javaReady", javaRuntimes.findInstalled(required) != null);
+        Path java = javaFor(required);
+        body.addProperty("javaReady", java != null);
+        body.addProperty("javaPath", java == null ? "" : java.toString());
         body.addProperty("running", active.get() > 0);
         return body;
     }
@@ -202,10 +204,10 @@ public final class SeedPreviewService {
             job.state(PreviewJob.State.RESOLVING);
             Path jar = versions.ensureServerJar(spec.version(), null);
             int required = Math.max(8, McJavaRuntimes.recommendFor(spec.version()));
-            Path java = javaRuntimes.findInstalled(required);
+            Path java = javaFor(required);
             if (java == null) {
-                throw new McException("这个版本需要 Java " + required + "，面板里还没有。"
-                        + "请先在「Minecraft → Java 运行时」里安装它。");
+                throw new McException("这个版本需要 Java " + required + "。面板自带的 Java 太旧，"
+                        + "面板托管的运行时里也没有——请先在「Minecraft → Java 运行时」里安装它。");
             }
 
             job.state(PreviewJob.State.STARTING);
@@ -286,6 +288,36 @@ public final class SeedPreviewService {
     }
 
     // -------------------------------------------------------------- the server --
+
+    /// A JVM that can run a server of this feature release.
+    ///
+    /// Preference order: a runtime the panel installed for this version, then
+    /// the panel's own JVM when it is new enough. The second case matters: the
+    /// official image runs on Java 21, and requiring the operator to install a
+    /// second Java 21 just to preview a 1.21 world would be theatre.
+    private @Nullable Path javaFor(int required) {
+        Path installed = javaRuntimes.findInstalled(required);
+        if (installed != null) {
+            return installed;
+        }
+        String spec = System.getProperty("java.specification.version", "0");
+        int major;
+        try {
+            major = Integer.parseInt(spec.contains(".") ? spec.substring(spec.indexOf('.') + 1) : spec);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        if (major < required) {
+            return null;
+        }
+        String home = System.getProperty("java.home");
+        if (home == null || home.isBlank()) {
+            return null;
+        }
+        Path binary = Path.of(home, "bin", org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS ? "java.exe" : "java");
+        return Files.isRegularFile(binary) ? binary : null;
+    }
 
     /// Blocks until the server prints `Done (`, exits, or the boot deadline
     /// passes — whichever comes first.
@@ -601,7 +633,7 @@ public final class SeedPreviewService {
                 // The suffix is the renderer generation: an image drawn before
                 // the overlays moved to the browser must not be served as if it
                 // were the new one.
-                .resolve(spec.radiusBlocks() + "-" + spec.biomeY() + "-v4");
+                .resolve(spec.radiusBlocks() + "-" + spec.biomeY() + "-v5");
     }
 
     private static String seedHash(String seed) {

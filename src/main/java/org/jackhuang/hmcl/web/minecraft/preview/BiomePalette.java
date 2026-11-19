@@ -40,6 +40,11 @@ import java.util.Map;
 public final class BiomePalette {
 
     private static final Map<String, Integer> COLORS = new HashMap<>();
+    /// The in-game grass colour per biome (the colormap vanilla uses). Grass is
+    /// tinted by the game, so hard-coding one green would make every world look
+    /// like the same world.
+    private static final Map<String, Integer> GRASS = new HashMap<>();
+    private static final Map<String, Integer> LEAVES = new HashMap<>();
     private static final Map<Integer, String> LEGACY_IDS = new HashMap<>();
 
     private BiomePalette() {
@@ -68,6 +73,35 @@ public final class BiomePalette {
         return (r << 16) | (g << 8) | b;
     }
 
+    /// The grass colour of a biome, as the game paints it.
+    public static int grassOf(@Nullable String name) {
+        if (name == null || name.isBlank()) {
+            return 0x91BD59;
+        }
+        Integer known = GRASS.get(normalize(name));
+        return known != null ? known : 0x91BD59;
+    }
+
+    /// The colour of one leaf block: the species' own green, pulled slightly
+    /// toward the biome's grass colour so a whole forest still reads as a region.
+    public static int leavesOf(@Nullable String block, @Nullable String biome) {
+        if (block == null) {
+            return 0x3F7A2E;
+        }
+        String species = normalize(block).replace("_leaves", "");
+        Integer base = LEAVES.get(species);
+        int green = base != null ? base : 0x3F7A2E;
+        int tint = grassOf(biome);
+        return mix(green, tint, 82);
+    }
+
+    private static int mix(int left, int right, int weightOfRight) {
+        int r = (((left >> 16) & 0xFF) * (100 - weightOfRight) + ((right >> 16) & 0xFF) * weightOfRight) / 100;
+        int g = (((left >> 8) & 0xFF) * (100 - weightOfRight) + ((right >> 8) & 0xFF) * weightOfRight) / 100;
+        int b = ((left & 0xFF) * (100 - weightOfRight) + (right & 0xFF) * weightOfRight) / 100;
+        return (r << 16) | (g << 8) | b;
+    }
+
     /// The name for a legacy numeric biome id, or `null` when the id is not in
     /// the table.
     ///
@@ -90,6 +124,14 @@ public final class BiomePalette {
 
     private static void color(String name, int rgb) {
         COLORS.put(name, rgb);
+    }
+
+    private static void grass(String name, int rgb) {
+        GRASS.put(name, rgb);
+    }
+
+    private static void leaves(String species, int rgb) {
+        LEAVES.put(species, rgb);
     }
 
     private static void legacy(int id, String name) {
@@ -163,6 +205,54 @@ public final class BiomePalette {
         color("warped_forest", 0x2A6A5A);
         color("basalt_deltas", 0x4A4A4A);
         color("pale_garden", 0x6A7078);
+
+        // Grass, per biome (vanilla colormap).
+        grass("plains", 0x91BD59);
+        grass("sunflower_plains", 0x91BD59);
+        grass("meadow", 0x83BB6D);
+        grass("forest", 0x79C05A);
+        grass("flower_forest", 0x79C05A);
+        grass("birch_forest", 0x88BB67);
+        grass("old_growth_birch_forest", 0x88BB67);
+        grass("dark_forest", 0x507A32);
+        grass("taiga", 0x86B783);
+        grass("old_growth_pine_taiga", 0x68A464);
+        grass("old_growth_spruce_taiga", 0x68A464);
+        grass("snowy_taiga", 0x80B497);
+        grass("jungle", 0x59C93C);
+        grass("sparse_jungle", 0x64C73F);
+        grass("bamboo_jungle", 0x59C93C);
+        grass("savanna", 0xBFB755);
+        grass("windswept_savanna", 0xBFB755);
+        grass("desert", 0xBFB755);
+        grass("badlands", 0x90814D);
+        grass("eroded_badlands", 0x90814D);
+        grass("wooded_badlands", 0x90814D);
+        grass("swamp", 0x6A7039);
+        grass("mangrove_swamp", 0x6A7039);
+        grass("snowy_plains", 0x80B497);
+        grass("ice_spikes", 0x80B497);
+        grass("grove", 0x80B497);
+        grass("snowy_slopes", 0x80B497);
+        grass("cherry_grove", 0xB8D6A0);
+        grass("mushroom_fields", 0x55C93F);
+        grass("lush_caves", 0x59C93C);
+        grass("windswept_hills", 0x8AB689);
+        grass("windswept_forest", 0x8AB689);
+        grass("stony_peaks", 0x9ABE8A);
+
+        // Leaves, per species (average of the texture, like a map renderer).
+        leaves("oak", 0x3F7A2E);
+        leaves("birch", 0x6A9B4A);
+        leaves("spruce", 0x2E5A38);
+        leaves("jungle", 0x2F8F2A);
+        leaves("acacia", 0x6F8F3A);
+        leaves("dark_oak", 0x2A4F26);
+        leaves("mangrove", 0x3E7A44);
+        leaves("cherry", 0xE39BC0);
+        leaves("azalea", 0x4F7F3A);
+        leaves("flowering_azalea", 0x4F7F3A);
+        leaves("pale_oak", 0x8A9A8A);
 
         // The legacy registry ids, 1.12–1.17. Only the overworld matters for a
         // flat map, but the nether and end ids are here so a mis-set world type
