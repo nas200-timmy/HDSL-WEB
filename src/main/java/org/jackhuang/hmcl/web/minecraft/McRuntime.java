@@ -555,7 +555,11 @@ public final class McRuntime {
         if (!Files.isDirectory(root)) {
             return;
         }
-        try (var stream = Files.walk(root, depth)) {
+        // FOLLOW_LINKS: some images symlink the JDK directories under
+        // /usr/lib/jvm into /opt (java-21-openjdk-amd64 -> /opt/java/21), and a
+        // walk that does not follow them finds no `bin/java` at all. The depth
+        // cap keeps loops bounded; a looped link throws and is logged below.
+        try (var stream = Files.walk(root, depth, java.nio.file.FileVisitOption.FOLLOW_LINKS)) {
             stream.filter(McRuntime::isJavaExecutable).forEach(path -> found.add(path.toAbsolutePath()));
         } catch (IOException | RuntimeException e) {
             // An unreadable JVM directory is not worth failing a start over; the
