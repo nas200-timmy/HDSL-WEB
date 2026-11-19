@@ -197,8 +197,13 @@ public final class SeedPreviewService {
     private void run(PreviewJob job) {
         PreviewSpec spec = job.spec();
         if (spec.mode() == PreviewSpec.Mode.BIOME && SeedMapBackend.supports(spec.version())) {
-            runBiomeCore(job);
-            return;
+            try {
+                runBiomeCore(job);
+                return;
+            } catch (IOException | RuntimeException e) {
+                job.log("Java 群系内核失败，回退到服务端生成: " + e.getMessage());
+                // fall through to the real-server backend
+            }
         }
         Path work = null;
         try {
@@ -306,26 +311,22 @@ public final class SeedPreviewService {
         }
     }
 
-    private void runBiomeCore(PreviewJob job) {
+    private void runBiomeCore(PreviewJob job) throws IOException {
         PreviewSpec spec = job.spec();
-        try {
-            if (job.cancelled()) {
-                job.markCancelled();
-                return;
-            }
-            job.state(PreviewJob.State.RENDERING);
-            BufferedImage image = SeedMapBackend.renderBiome(spec);
-            Path directory = Files.createDirectories(cacheDirectory(spec));
-            Path png = directory.resolve("preview.png");
-            Path meta = directory.resolve("meta.json");
-            ImageIO.write(image, "png", png.toFile());
-            String[][] samples = new String[0][];
-            writeBiomeMeta(meta, spec, samples, false);
-            job.done(png, meta, false);
-            trimCache();
-        } catch (IOException | RuntimeException e) {
-            failOrCancel(job, e.getMessage() == null ? e.toString() : e.getMessage());
+        if (job.cancelled()) {
+            job.markCancelled();
+            return;
         }
+        job.state(PreviewJob.State.RENDERING);
+        BufferedImage image = SeedMapBackend.renderBiome(spec);
+        Path directory = Files.createDirectories(cacheDirectory(spec));
+        Path png = directory.resolve("preview.png");
+        Path meta = directory.resolve("meta.json");
+        ImageIO.write(image, "png", png.toFile());
+        String[][] samples = new String[0][];
+        writeBiomeMeta(meta, spec, samples, false);
+        job.done(png, meta, false);
+        trimCache();
     }
 
     private static void failOrCancel(PreviewJob job, String message) {

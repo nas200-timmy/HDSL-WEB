@@ -207,7 +207,7 @@ export function McSeedPreview({
       <div>
         <h3 style={{ margin: 0 }}>种子预览</h3>
         <p className="dim" style={{ margin: "4px 0 0", fontSize: 13 }}>
-          用这台服自己的服务端 jar，在临时目录里生成一次世界再出图。世界用完即删，只留图片和结构清单。
+          群系速览由 Java 内核直接计算，秒出；详细地图才启动一次性服务端生成。世界用完即删，只留图片和结构清单。
         </p>
       </div>
 
@@ -451,6 +451,8 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
   const [hover, setHover] = useState<{ x: number; z: number } | null>(null);
   const [pinned, setPinned] = useState<{ x: number; z: number } | null>(null);
   const [layers, setLayers] = useState({ grid: true, slime: true, structures: true });
+  const [fullscreen, setFullscreen] = useState(false);
+  const [jumpText, setJumpText] = useState("");
 
   const zoomRef = useRef<(factor: number, mx: number, my: number) => void>(() => {});
   const [dragging, setDragging] = useState(false);
@@ -493,6 +495,43 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
   const reset = () => {
     setScale(1);
     setOffset({ x: 0, y: 0 });
+  };
+
+  const imageUrl = withBase(
+    view.source === "job"
+      ? `/api/mc/preview/${view.id}.png`
+      : `/api/mc/preview/history/${view.id}.png`,
+  );
+
+  const jumpTo = () => {
+    const parts = jumpText.trim().split(/[\s,]+/);
+    if (parts.length < 2) return;
+    const x = Number(parts[0]);
+    const z = Number(parts[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    const target = { x, z };
+    setPinned(target);
+    // Centre the viewport on the target at a readable zoom.
+    const nextScale = Math.max(2, Math.min(8, scale));
+    const width = box || 1;
+    setScale(nextScale);
+    setOffset(
+      clampOffset(
+        {
+          x: width / 2 - ((target.x + radius) / size) * width * nextScale,
+          y: width / 2 - ((target.z + radius) / size) * width * nextScale,
+        },
+        nextScale,
+      ),
+    );
+    setJumpText("");
+  };
+
+  const download = () => {
+    const link = document.createElement("a");
+    link.href = imageUrl;
+    link.download = `seed-${view.seed}-${view.mode}-${radius * 2}.png`;
+    link.click();
   };
 
   const zoomAt = (factor: number, mx: number, my: number) => {
@@ -630,12 +669,6 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
     }
   }
 
-  const imageUrl = withBase(
-    view.source === "job"
-      ? `/api/mc/preview/${view.id}.png`
-      : `/api/mc/preview/history/${view.id}.png`,
-  );
-
   const barBlocks = SCALE_STEPS.find((value) => value * pxPerBlock >= 56) ?? SCALE_STEPS[SCALE_STEPS.length - 1];
   const barWidth = barBlocks * pxPerBlock;
 
@@ -660,12 +693,31 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
           结构
         </label>
         <span style={{ flex: 1 }} />
+        <input
+          className="input mono"
+          style={{ width: 130, padding: "2px 6px", fontSize: 12 }}
+          placeholder="X Z 跳转"
+          value={jumpText}
+          onChange={(e) => setJumpText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") jumpTo();
+          }}
+        />
+        <button className="btn btn-text" onClick={jumpTo} title="跳转到坐标">
+          跳转
+        </button>
         <span className="dim mono">{Math.round(scale * 100)}%</span>
         {pinned && (
           <button className="btn btn-text" onClick={() => setPinned(null)}>
             取消选点
           </button>
         )}
+        <button className="btn btn-text" onClick={download} title="下载 PNG">
+          下载
+        </button>
+        <button className="btn btn-text" onClick={() => setFullscreen(!fullscreen)}>
+          {fullscreen ? "退出全屏" : "全屏"}
+        </button>
         <button className="btn btn-text" onClick={reset}>
           复位
         </button>
@@ -685,6 +737,9 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
           } else if (event.key === "0") {
             event.preventDefault();
             reset();
+          } else if (event.key === "Escape" && fullscreen) {
+            event.preventDefault();
+            setFullscreen(false);
           } else if (event.key === "ArrowLeft") {
             event.preventDefault();
             setOffset((o) => clampOffset({ x: o.x + step, y: o.y }, scale));
@@ -712,11 +767,13 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
         }}
         onDoubleClick={reset}
         style={{
-          position: "relative",
+          position: fullscreen ? "fixed" : "relative",
+          inset: fullscreen ? 0 : undefined,
+          zIndex: fullscreen ? 1000 : undefined,
           width: "100%",
-          aspectRatio: "1 / 1",
+          aspectRatio: fullscreen ? undefined : "1 / 1",
           overflow: "hidden",
-          borderRadius: 6,
+          borderRadius: fullscreen ? 0 : 6,
           border: "1px solid rgba(127,127,127,.25)",
           cursor: dragging ? "grabbing" : "grab",
           userSelect: "none",
@@ -777,6 +834,15 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
           </svg>
         </div>
 
+        {fullscreen && (
+          <button
+            className="btn btn-raised"
+            style={{ position: "absolute", right: 12, top: 12, zIndex: 1001 }}
+            onClick={() => setFullscreen(false)}
+          >
+            退出全屏 (Esc)
+          </button>
+        )}
         <div
           className="mono"
           style={{
