@@ -251,7 +251,8 @@ public final class SeedPreviewService {
             job.state(PreviewJob.State.PARSING);
             List<RegionReader.ChunkSummary> chunks = readChunks(regionDirectory, spec);
             if (chunks.isEmpty()) {
-                throw new McException("服务端没有生成任何区块（" + present + " 个落盘），无法出图。");
+                throw new McException("服务端没有生成任何区块（" + present + " 个落盘），无法出图。"
+                        + tail(job));
             }
 
             job.state(PreviewJob.State.RENDERING);
@@ -419,14 +420,16 @@ public final class SeedPreviewService {
         int last = spec.lastChunk();
         int side = spec.chunksPerSide();
         if (supportsForceload(spec.version())) {
-            int rows = Math.max(1, 256 / side);
+            // Keep each command to ~64 chunks. A single `forceload` of 256
+            // chunks generates them on the server thread; on a version whose
+            // watchdog is still armed that is a 60-second tick, and the server
+            // kills itself before writing anything.
+            int rows = Math.max(1, 64 / side);
             for (int z = first; z <= last; z += rows) {
                 int z2 = Math.min(last, z + rows - 1);
                 send(process, "forceload add " + (first * 16) + " " + (z * 16)
                         + " " + (last * 16 + 15) + " " + (z2 * 16 + 15));
-                // One command can generate 256 chunks; a short pause between
-                // batches keeps a slow machine under the tick budget.
-                Thread.sleep(40);
+                Thread.sleep(120);
             }
             return;
         }
@@ -438,7 +441,7 @@ public final class SeedPreviewService {
     }
 
     private boolean waitForChunks(PreviewJob job, Path regionDirectory, PreviewSpec spec, Process process)
-            throws InterruptedException {
+            throws InterruptedException, McException {
         long expected = spec.sampleCount();
         Instant deadline = Instant.now().plus(GENERATE_TIMEOUT);
         int stable = 0;
@@ -458,6 +461,10 @@ public final class SeedPreviewService {
                     return false;
                 }
                 lastFlush = System.currentTimeMillis();
+            }
+            if (!process.isAlive()) {
+                // A crashed server must not masquerade as "nothing generated".
+                throw new McException("服务端中途退出（exit " + process.exitValue() + "）。" + tail(job));
             }
             int present = countInRange(regionDirectory, spec);
             job.progress(present, expected);
