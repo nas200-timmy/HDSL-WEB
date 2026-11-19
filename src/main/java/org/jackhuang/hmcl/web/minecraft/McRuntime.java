@@ -539,11 +539,11 @@ public final class McRuntime {
             case LINUX -> {
                 // <root>/<jdk>/bin/java — depth 3, counting the root as 0.
                 for (String root : List.of("/usr/lib/jvm", "/usr/lib64/jvm")) {
-                    collectJava(Path.of(root), 3, found);
+                    found.addAll(scanForJava(Path.of(root), 3));
                 }
             }
             // <root>/<jdk>/Contents/Home/bin/java
-            case MACOS -> collectJava(Path.of("/Library/Java/JavaVirtualMachines"), 5, found);
+            case MACOS -> found.addAll(scanForJava(Path.of("/Library/Java/JavaVirtualMachines"), 5));
             default -> {
             }
         }
@@ -551,14 +551,16 @@ public final class McRuntime {
         return List.copyOf(found);
     }
 
-    private static void collectJava(Path root, int depth, List<Path> found) {
+    /// Every `bin/java` under `root`, at most `depth` levels deep. Symlinked
+    /// directories are followed: some images symlink the JDK directories under
+    /// `/usr/lib/jvm` into `/opt` (`java-21-openjdk-amd64 -> /opt/java/21`), and
+    /// a walk that does not follow them finds no `bin/java` at all. The depth
+    /// cap keeps link loops bounded; a loop throws and is logged below.
+    static List<Path> scanForJava(Path root, int depth) {
+        List<Path> found = new ArrayList<>();
         if (!Files.isDirectory(root)) {
-            return;
+            return found;
         }
-        // FOLLOW_LINKS: some images symlink the JDK directories under
-        // /usr/lib/jvm into /opt (java-21-openjdk-amd64 -> /opt/java/21), and a
-        // walk that does not follow them finds no `bin/java` at all. The depth
-        // cap keeps loops bounded; a looped link throws and is logged below.
         try (var stream = Files.walk(root, depth, java.nio.file.FileVisitOption.FOLLOW_LINKS)) {
             stream.filter(McRuntime::isJavaExecutable).forEach(path -> found.add(path.toAbsolutePath()));
         } catch (IOException | RuntimeException e) {
@@ -566,6 +568,7 @@ public final class McRuntime {
             // panel's own java still works for everything that does not need 25.
             LOG.warning("Could not scan " + root + " for JDKs: " + e.getMessage());
         }
+        return found;
     }
 
     private static boolean isJavaExecutable(Path path) {

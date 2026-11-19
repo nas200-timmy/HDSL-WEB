@@ -336,6 +336,41 @@ class McRuntimeTest {
                 "a version that asks for 25 is not asking for 29");
     }
 
+    /// Symlinked JDK directories (the layout this very container uses:
+    /// `/usr/lib/jvm/java-21-openjdk-amd64 -> /opt/java/21`) must be followed,
+    /// depth limits must hold, and a stray `java` file outside `bin/` must not
+    /// be mistaken for a JDK.
+    @Test
+    void scanFollowsSymlinkedJdkDirectoriesAndHonoursDepth(@TempDir Path dir) throws Exception {
+        Path root = Files.createDirectories(dir.resolve("jvm"));
+        Path target = Files.createDirectories(dir.resolve("opt").resolve("jdk-target").resolve("bin"));
+        Files.writeString(target.resolve("java"), "#!/bin/sh\n");
+
+        Path link = root.resolve("java-21-openjdk-amd64");
+        try {
+            Files.createSymbolicLink(link, dir.resolve("opt").resolve("jdk-target"));
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            Assumptions.assumeTrue(false, "symlinks are not available here: " + e.getMessage());
+            return;
+        }
+        // Decoys: a plain `java` file outside bin/, and one past the depth cap.
+        Files.writeString(root.resolve("java"), "not a jdk");
+        Path deepBin = Files.createDirectories(root.resolve("a").resolve("b").resolve("c")
+                .resolve("d").resolve("bin"));
+        Files.writeString(deepBin.resolve("java"), "#!/bin/sh\n");
+
+        List<Path> found = McRuntime.scanForJava(root, 3);
+
+        Path expected = link.resolve("bin").resolve("java").toAbsolutePath();
+        assertTrue(found.contains(expected),
+                "the symlinked JDK must be found: " + found + " vs " + expected);
+        for (Path candidate : found) {
+            assertEquals("bin", candidate.getParent().getFileName().toString(),
+                    candidate.toString());
+        }
+        assertEquals(1, found.size(), "the decoys must be excluded: " + found);
+    }
+
     /// The scan against whatever this machine actually has. The depth is the part
     /// that can silently break: `/usr/lib/jvm/<jdk>/bin/java` is three levels
     /// below the root, and an off-by-one finds nothing and reports "no suitable
