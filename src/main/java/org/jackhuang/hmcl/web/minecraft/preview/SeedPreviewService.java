@@ -89,8 +89,10 @@ public final class SeedPreviewService {
     private static final Duration GENERATE_TIMEOUT = Duration.ofMinutes(6);
     /// How long `stop` may take to end the process.
     private static final Duration STOP_TIMEOUT = Duration.ofSeconds(90);
-    /// Upper bound for the picture cache.
-    private static final long CACHE_LIMIT_BYTES = 256L * 1024 * 1024;
+    /// How many finished previews are kept. A player trying seeds in a row
+    /// expects the last ones to still be there when they come back, so the
+    /// cache is counted in results, not megabytes.
+    public static final int MAX_HISTORY = 30;
     /// How many finished jobs are remembered for status polling.
     private static final int MAX_JOBS = 64;
 
@@ -571,32 +573,171 @@ public final class SeedPreviewService {
         }
     }
 
-    private void trimCache() {
-        try (Stream<Path> files = Files.walk(cacheRoot)) {
-            List<Path> images = files.filter(path -> path.getFileName().toString().equals("preview.png"))
-                    .sorted(Comparator.comparingLong(path -> {
-                        try {
-                            return Files.getLastModifiedTime(path).toMillis();
-                        } catch (IOException e) {
-                            return 0L;
-                        }
-                    }))
-                    .toList();
-            long total = 0;
-            for (Path image : images) {
-                total += Files.size(image);
-            }
-            for (Path image : images) {
-                if (total <= CACHE_LIMIT_BYTES) {
-                    break;
+    /// Every finished preview on disk, newest first.
+    ///
+    /// The list is built from the cache itself rather than an index file: the
+    /// PNG and its `meta.json` are the record, so a manually deleted file or a
+    /// half-written one simply does not appear.
+    public List<JsonObject> history() {
+        List<JsonObject> entries = new ArrayList<>();
+        try (Stream<Path> versions = Files.list(cacheRoot)) {
+            for (Path version : versions.filter(Files::isDirectory).toList()) {
+                if ("tmp".equals(version.getFileName().toString())) {
+                    continue;
                 }
-                long size = Files.size(image);
-                Files.deleteIfExists(image);
-                Files.deleteIfExists(image.resolveSibling("meta.json"));
-                total -= size;
+                try (Stream<Path> seeds = Files.list(version)) {
+                    for (Path seed : seeds.filter(Files::isDirectory).toList()) {
+                        try (Stream<Path> variants = Files.list(seed)) {
+                            for (Path variant : variants.filter(Files::isDirectory).toList()) {
+                                JsonObject entry = entryOf(variant);
+                                if (entry != null) {
+                                    entries.add(entry);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            return List.of();
+        }
+        entries.sort((left, right) -> right.get("generatedAt").getAsString()
+                .compareTo(left.get("generatedAt").getAsString()));
+        return entries.size() > MAX_HISTORY ? entries.subList(0, MAX_HISTORY) : entries;
+    }
+
+    /// The directory of one history entry, or `null` when it is gone.
+    public @Nullable Path cachedDirectory(String id) {
+        try (Stream<Path> versions = Files.list(cacheRoot)) {
+            for (Path version : versions.filter(Files::isDirectory).toList()) {
+                if ("tmp".equals(version.getFileName().toString())) {
+                    continue;
+                }
+                try (Stream<Path> seeds = Files.list(version)) {
+                    for (Path seed : seeds.filter(Files::isDirectory).toList()) {
+                        try (Stream<Path> variants = Files.list(seed)) {
+                            for (Path variant : variants.filter(Files::isDirectory).toList()) {
+                                JsonObject entry = entryOf(variant);
+                                if (entry != null && id.equals(entry.get("id").getAsString())) {
+                                    return variant;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         } catch (IOException ignored) {
-            // The cache is best-effort: a failed cleanup must not fail a preview.
+            // A cache that cannot be listed has no entries.
+        }
+        return null;
+    }
+
+    /// Removes one cached preview, images and all.
+    public boolean deleteCached(String id) {
+        Path directory = cachedDirectory(id);
+        if (directory == null) {
+            return false;
+        }
+        deleteTree(directory);
+        // An empty seed/version folder is litter; drop it too when possible.
+        try {
+            Path seed = directory.getParent();
+            if (seed != null && isEmpty(seed)) {
+                Files.deleteIfExists(seed);
+                Path version = seed.getParent();
+                if (version != null && isEmpty(version)) {
+                    Files.deleteIfExists(version);
+                }
+            }
+        } catch (IOException ignored) {
+        }
+        return true;
+    }
+
+    private static boolean isEmpty(Path directory) throws IOException {
+        try (Stream<Path> children = Files.list(directory)) {
+            return children.findAny().isEmpty();
+        }
+    }
+
+    private static @Nullable JsonObject entryOf(Path variant) {
+        Path meta = variant.resolve("meta.json");
+        Path png = variant.resolve("preview.png");
+        if (!Files.isRegularFile(meta) || !Files.isRegularFile(png)) {
+            return null;
+        }
+        try {
+            JsonObject body = com.google.gson.JsonParser.parseString(
+                    Files.readString(meta, StandardCharsets.UTF_8)).getAsJsonObject();
+            String version = body.get("version").getAsString();
+            String seed = body.get("seed").getAsString();
+            int radius = body.get("radius").getAsInt();
+            int biomeY = body.get("biomeY").getAsInt();
+            JsonObject entry = new JsonObject();
+            entry.addProperty("id", historyId(version, seed, radius, biomeY));
+            entry.addProperty("version", version);
+            entry.addProperty("seed", seed);
+            entry.addProperty("radius", radius);
+            entry.addProperty("biomeY", biomeY);
+            entry.addProperty("generatedAt", body.get("generatedAt").getAsString());
+            entry.addProperty("partial", body.get("partial").getAsBoolean());
+            entry.addProperty("bytes", Files.size(png));
+            if (body.has("structures") && body.get("structures").isJsonArray()) {
+                entry.addProperty("structures", body.getAsJsonArray("structures").size());
+            }
+            return entry;
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /// A stable handle for a cached result: the same four inputs always name the
+    /// same picture, so a bookmark or a page reload keeps working.
+    public static String historyId(String version, String seed, int radius, int biomeY) {
+        String key = version + "|" + seed + "|" + radius + "|" + biomeY;
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(key.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest, 0, 6);
+        } catch (NoSuchAlgorithmException e) {
+            return Integer.toHexString(key.hashCode());
+        }
+    }
+
+    /// Keeps the newest [#MAX_HISTORY] results. Old ones are deleted whole —
+    /// image and metadata together — so the cache never grows without a bound.
+    private void trimCache() {
+        List<Path> variants = new ArrayList<>();
+        try (Stream<Path> versions = Files.list(cacheRoot)) {
+            for (Path version : versions.filter(Files::isDirectory).toList()) {
+                if ("tmp".equals(version.getFileName().toString())) {
+                    continue;
+                }
+                try (Stream<Path> seeds = Files.list(version)) {
+                    for (Path seed : seeds.filter(Files::isDirectory).toList()) {
+                        try (Stream<Path> children = Files.list(seed)) {
+                            children.filter(Files::isDirectory).forEach(variants::add);
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            return;
+        }
+        if (variants.size() <= MAX_HISTORY) {
+            return;
+        }
+        variants.sort(Comparator.comparingLong(SeedPreviewService::lastModified).reversed());
+        for (int i = MAX_HISTORY; i < variants.size(); i++) {
+            deleteTree(variants.get(i));
+        }
+    }
+
+    private static long lastModified(Path path) {
+        try {
+            return Files.getLastModifiedTime(path).toMillis();
+        } catch (IOException e) {
+            return 0L;
         }
     }
 

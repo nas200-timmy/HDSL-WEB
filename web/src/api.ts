@@ -1014,6 +1014,12 @@ export const api = {
       request<{ ok: boolean }>(`/api/mc/preview/${encodeURIComponent(id)}`, { method: "DELETE" }),
     previewMeta: (id: string) =>
       request<McSeedPreviewMeta>(`/api/mc/preview/${encodeURIComponent(id)}.json`),
+    /** 已缓存的预览结果（最近 30 个），关掉页面也还在。 */
+    previewHistory: () => request<McSeedPreviewHistory>("/api/mc/preview/history"),
+    previewHistoryMeta: (id: string) =>
+      request<McSeedPreviewMeta>(`/api/mc/preview/history/${encodeURIComponent(id)}.json`),
+    previewHistoryDelete: (id: string) =>
+      request<{ ok: boolean }>(`/api/mc/preview/history/${encodeURIComponent(id)}`, { method: "DELETE" }),
     create: (body: {
       name: string;
       version: string;
@@ -1952,6 +1958,24 @@ export interface McSeedPreviewJob {
   imageReady: boolean;
   /** 服务端最近几十行输出，失败时用来解释「为什么」。 */
   log: string[];
+}
+
+/** 一条试过的种子。 */
+export interface McSeedPreviewHistoryEntry {
+  id: string;
+  version: string;
+  seed: string;
+  radius: number;
+  biomeY: number;
+  generatedAt: string;
+  partial: boolean;
+  bytes: number;
+  structures?: number;
+}
+
+export interface McSeedPreviewHistory {
+  limit: number;
+  entries: McSeedPreviewHistoryEntry[];
 }
 
 /** 与图片一起缓存的元数据。 */
