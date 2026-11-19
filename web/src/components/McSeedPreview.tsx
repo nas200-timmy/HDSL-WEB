@@ -5,6 +5,7 @@ import {
   type McSeedPreviewHistoryEntry,
   type McSeedPreviewJob,
   type McSeedPreviewMeta,
+  type McSeedPreviewStructures,
   type McVersion,
 } from "../api";
 import { withBase } from "../base";
@@ -54,6 +55,8 @@ export function McSeedPreview({
   const [history, setHistory] = useState<McSeedPreviewHistoryEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [exactStructures, setExactStructures] = useState<McSeedPreviewStructures | null>(null);
+  const [exactLoading, setExactLoading] = useState(false);
   const jobRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -198,6 +201,28 @@ export function McSeedPreview({
     }
   };
 
+  const fetchExactStructures = async () => {
+    if (!view) return;
+    setExactLoading(true);
+    setError(null);
+    try {
+      const result = await api.mc.previewStructures({
+        version: version.trim(),
+        seed: view.seed,
+        radius: view.radius,
+        exact: true,
+      });
+      setExactStructures(result);
+      if (result.exactError) {
+        setError(result.exactError);
+      }
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setExactLoading(false);
+    }
+  };
+
   const running = job !== null && !["DONE", "FAILED", "CANCELLED"].includes(job.state);
 
   const structureRows = meta ? Object.entries(meta.structureCounts).sort((a, b) => b[1] - a[1]) : [];
@@ -339,11 +364,27 @@ export function McSeedPreview({
 
       {view && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <MapView view={view} meta={meta} />
+          <MapView view={view} meta={meta} exactStructures={exactStructures} />
           <p className="dim" style={{ margin: 0, fontSize: 12 }}>
             {view.partial ? "⚠ 生成超时，这张图不完整。" : "生成完成。"}
             {" "}1 像素 = 1 格。滚轮 / 双指缩放，拖动平移，双击复位，单击选点。
           </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+            <button
+              className="btn btn-text"
+              disabled={exactLoading}
+              onClick={() => void fetchExactStructures()}
+              title="启动服务端执行 /locate，获取精确结构坐标"
+            >
+              {exactLoading ? "查询中…" : "精准结构"}
+            </button>
+            {exactStructures && (
+              <span className="dim" style={{ fontSize: 12 }}>
+                {exactStructures.exact ? "已用服务端校准" : "Java 内核估算"}
+                {" · "}{exactStructures.structures.length} 个结构
+              </span>
+            )}
+          </div>
           {structureRows.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, fontSize: 12 }}>
               {structureRows.map(([id, count]) => (
@@ -356,6 +397,20 @@ export function McSeedPreview({
                 </span>
               ))}
             </div>
+          )}
+          {exactStructures && exactStructures.structures.length > 0 && (
+            <details style={{ fontSize: 12 }}>
+              <summary className="dim" style={{ cursor: "pointer" }}>结构坐标清单</summary>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6, maxHeight: 180, overflow: "auto" }}>
+                {exactStructures.structures.map((s, i) => (
+                  <div key={i} className="mono" style={{ display: "flex", gap: 8, padding: "2px 4px" }}>
+                    <span style={{ minWidth: 140 }}>{s.id}</span>
+                    <span>X {s.x} Z {s.z}</span>
+                    {s.approximate && <span className="dim">约</span>}
+                  </div>
+                ))}
+              </div>
+            </details>
           )}
         </div>
       )}
@@ -440,7 +495,7 @@ const SCALE_STEPS = [4, 8, 16, 32, 64, 128, 256, 512];
  * 平移会夹在"图片始终铺满视口"的范围内——否则缩小后四边会露出底色，看起来
  * 像地图缺了一块（第一版就是这样，被当成生成失败）。
  */
-function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null }) {
+function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPreviewMeta | null; exactStructures: McSeedPreviewStructures | null }) {
   const radius = view.radius;
   const size = radius * 2;
   const frameRef = useRef<HTMLDivElement>(null);
@@ -815,11 +870,17 @@ function MapView({ view, meta }: { view: View; meta: McSeedPreviewMeta | null })
                   width={16} height={16} fill="#59c46a" fillOpacity={0.3} />
               ))}
             {layers.structures &&
-              meta?.structures?.map((structure, index) => (
-                <rect key={`m${index}`} x={structure.x - 2} y={structure.z - 2} width={4} height={4}
-                  fill={markerColor(structure.id)} stroke="#1a1a1a" strokeWidth={1}
-                  vectorEffect="non-scaling-stroke"
-                  transform={`rotate(45 ${structure.x} ${structure.z})`} />
+              (exactStructures?.structures ?? meta?.structures)?.map((structure, index) => (
+                <g key={`m${index}`}>
+                  <rect x={structure.x - 2} y={structure.z - 2} width={4} height={4}
+                    fill={markerColor(structure.id)} stroke="#1a1a1a" strokeWidth={1}
+                    vectorEffect="non-scaling-stroke"
+                    transform={`rotate(45 ${structure.x} ${structure.z})`} />
+                  {!structure.approximate && (
+                    <circle cx={structure.x} cy={structure.z} r={4}
+                      fill="none" stroke="#ffffff" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                  )}
+                </g>
               ))}
             <line x1={-8} y1={0} x2={8} y2={0} stroke="#e53935" strokeWidth={2} vectorEffect="non-scaling-stroke" />
             <line x1={0} y1={-8} x2={0} y2={8} stroke="#e53935" strokeWidth={2} vectorEffect="non-scaling-stroke" />

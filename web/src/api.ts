@@ -1031,6 +1031,11 @@ export const api = {
       request<McSeedPreviewMeta>(`/api/mc/preview/history/${encodeURIComponent(id)}.json`),
     previewHistoryDelete: (id: string) =>
       request<{ ok: boolean }>(`/api/mc/preview/history/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    /** 结构位置查询；exact=true 时起服务端跑 /locate 拿精确坐标。 */
+    previewStructures: (body: { version: string; seed: string; radius: number; type?: string; exact?: boolean }) =>
+      request<McSeedPreviewStructures>(
+        `/api/mc/preview/structures?version=${encodeURIComponent(body.version)}&seed=${encodeURIComponent(body.seed)}&radius=${body.radius}${body.type ? `&type=${encodeURIComponent(body.type)}` : ""}${body.exact ? "&exact=true" : ""}`,
+      ),
     create: (body: {
       name: string;
       version: string;
@@ -2026,9 +2031,19 @@ export interface McSeedPreviewMeta {
   partial: boolean;
   generatedAt: string;
   structureCounts: Record<string, number>;
-  structures: { id: string; chunkX: number; chunkZ: number; x: number; z: number }[];
+  structures: { id: string; chunkX: number; chunkZ: number; x: number; z: number; approximate?: boolean }[];
   /** 史莱姆区块的区块坐标；0,0 是地图中心。 */
   slimeChunks: { x: number; z: number }[];
+}
+
+/** GET /api/mc/preview/structures 的响应。 */
+export interface McSeedPreviewStructures {
+  version: string;
+  seed: string;
+  radius: number;
+  exact: boolean;
+  exactError?: string;
+  structures: { id: string; x: number; z: number; approximate: boolean }[];
 }
 
 export interface McBackup {

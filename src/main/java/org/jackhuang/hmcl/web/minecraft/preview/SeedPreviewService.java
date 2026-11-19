@@ -26,6 +26,11 @@ import org.jackhuang.hmcl.web.minecraft.McJavaRuntimes;
 import org.jackhuang.hmcl.web.minecraft.McPorts;
 import org.jackhuang.hmcl.web.minecraft.McVersions;
 import org.jackhuang.hmcl.web.minecraft.seedmap.adapter.SeedMapBackend;
+import org.jackhuang.hmcl.web.minecraft.seedmap.core.BlockPos;
+import org.jackhuang.hmcl.web.minecraft.seedmap.core.SeedMap;
+import org.jackhuang.hmcl.web.minecraft.seedmap.core.Structure;
+import org.jackhuang.hmcl.web.minecraft.seedmap.core.StructureType;
+import org.jackhuang.hmcl.web.minecraft.seedmap.core.Version;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -122,6 +127,180 @@ public final class SeedPreviewService {
     }
 
     // -------------------------------------------------------------------- API --
+
+    /// Structure positions for a seed. By default the Java core answers; with
+    /// `exact=true` the panel starts a real server and runs `/locate` to
+    /// confirm the nearest candidate of each type.
+    public JsonObject structures(String versionId, String seedText, int radius, String typeParam, boolean exact)
+            throws IOException, InterruptedException {
+        Version version = Version.parse(versionId);
+        long seed = PreviewRenderer.parseSeed(seedText);
+        SeedMap map = SeedMap.of(version, seed);
+        List<StructureType> types = new ArrayList<>();
+        if (typeParam != null && !typeParam.isBlank()) {
+            for (String name : typeParam.split(",")) {
+                types.add(StructureType.valueOf(name.trim().toUpperCase(Locale.ROOT).replace('-', '_')));
+            }
+        } else {
+            types.add(StructureType.VILLAGE);
+            types.add(StructureType.DESERT_PYRAMID);
+            types.add(StructureType.JUNGLE_TEMPLE);
+            types.add(StructureType.IGLOO);
+            types.add(StructureType.SWAMP_HUT);
+            types.add(StructureType.WOODLAND_MANSION);
+            types.add(StructureType.OCEAN_MONUMENT);
+            types.add(StructureType.OCEAN_RUIN);
+            types.add(StructureType.SHIPWRECK);
+            types.add(StructureType.RUINED_PORTAL);
+            types.add(StructureType.PILLAGER_OUTPOST);
+            types.add(StructureType.ANCIENT_CITY);
+            types.add(StructureType.TRIAL_CHAMBERS);
+        }
+
+        JsonObject body = new JsonObject();
+        body.addProperty("version", versionId);
+        body.addProperty("seed", seedText);
+        body.addProperty("radius", radius);
+        body.addProperty("exact", exact);
+        JsonArray out = new JsonArray();
+        for (StructureType type : types) {
+            List<Structure> found = map.structures(type, -radius, -radius, radius, radius);
+            for (Structure structure : found) {
+                JsonObject entry = new JsonObject();
+                entry.addProperty("id", type.key());
+                entry.addProperty("x", structure.pos().x());
+                entry.addProperty("z", structure.pos().z());
+                entry.addProperty("approximate", true);
+                out.add(entry);
+            }
+        }
+        body.add("structures", out);
+        if (exact) {
+            refineWithServer(body, versionId, seedText, radius, types);
+        }
+        return body;
+    }
+
+    private void refineWithServer(JsonObject body, String versionId, String seedText, int radius,
+                                  List<StructureType> types) throws IOException, InterruptedException {
+        Path work = null;
+        Process process = null;
+        try {
+            Path jar;
+            try {
+                jar = versions.ensureServerJar(versionId, null);
+            } catch (McException e) {
+                body.addProperty("exactError", e.getMessage());
+                return;
+            }
+            int required = Math.max(8, McJavaRuntimes.recommendFor(versionId));
+            Path java = javaFor(required);
+            if (java == null) {
+                body.addProperty("exactError", "需要 Java " + required);
+                return;
+            }
+            work = Files.createDirectories(tmpRoot.resolve("locate-" + UUID.randomUUID()));
+            writeProperties(work, new PreviewSpec(versionId, seedText, radius, 63, PreviewSpec.Mode.DETAIL), freePort());
+            Files.writeString(work.resolve("eula.txt"), "eula=true\n", StandardCharsets.UTF_8);
+            final Process server = start(java, jar, work, required);
+            process = server;
+            CountDownLatch ready = new CountDownLatch(1);
+            List<String> logs = new ArrayList<>();
+            Thread pump = new Thread(() -> {
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(server.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        logs.add(line);
+                        if (line.contains("Done (") || line.contains("Done in")) {
+                            ready.countDown();
+                        }
+                    }
+                } catch (IOException ignored) {
+                } finally {
+                    ready.countDown();
+                }
+            });
+            pump.setDaemon(true);
+            pump.start();
+            if (!ready.await(BOOT_TIMEOUT.toSeconds(), TimeUnit.SECONDS) || !process.isAlive()) {
+                body.addProperty("exactError", "服务端启动失败");
+                return;
+            }
+
+            JsonArray refined = new JsonArray();
+            for (StructureType type : types) {
+                String command = locateCommand(type, versionId);
+                if (command == null) {
+                    continue;
+                }
+                send(process, command);
+                // The locate answer arrives asynchronously; collect it from the
+                // log tail after a short wait.
+                Thread.sleep(300);
+                String answer = latestLocate(logs);
+                if (answer != null) {
+                    JsonObject entry = new JsonObject();
+                    entry.addProperty("id", type.key());
+                    entry.addProperty("x", parseLocateX(answer));
+                    entry.addProperty("z", parseLocateZ(answer));
+                    entry.addProperty("approximate", false);
+                    refined.add(entry);
+                }
+            }
+            body.add("structures", refined);
+            send(process, "stop");
+            process.waitFor(STOP_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
+            deleteTree(work);
+        }
+    }
+
+    private static @Nullable String locateCommand(StructureType type, String versionId) {
+        String name = switch (type) {
+            case VILLAGE -> "village";
+            case DESERT_PYRAMID -> "desert_pyramid";
+            case JUNGLE_TEMPLE -> "jungle_temple";
+            case IGLOO -> "igloo";
+            case SWAMP_HUT -> "swamp_hut";
+            case WOODLAND_MANSION -> "mansion";
+            case OCEAN_MONUMENT -> "monument";
+            case OCEAN_RUIN -> "ocean_ruin";
+            case SHIPWRECK -> "shipwreck";
+            case RUINED_PORTAL -> "ruined_portal";
+            case PILLAGER_OUTPOST -> "pillager_outpost";
+            case ANCIENT_CITY -> "ancient_city";
+            case TRIAL_CHAMBERS -> "trial_chambers";
+            default -> null;
+        };
+        return name == null ? null : "locate structure minecraft:" + name;
+    }
+
+    private static @Nullable String latestLocate(List<String> logs) {
+        for (int i = logs.size() - 1; i >= 0; i--) {
+            String line = logs.get(i);
+            if (line.contains("The nearest") && line.contains("is at")) {
+                return line;
+            }
+        }
+        return null;
+    }
+
+    private static int parseLocateX(String line) {
+        return parseCoordinate(line, "x");
+    }
+
+    private static int parseLocateZ(String line) {
+        return parseCoordinate(line, "z");
+    }
+
+    private static int parseCoordinate(String line, String axis) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(axis + "=(-?\\d+)").matcher(line);
+        return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
+    }
 
     /// Whether the panel can preview a version right now.
     ///
@@ -327,6 +506,41 @@ public final class SeedPreviewService {
         writeBiomeMeta(meta, spec, samples, false);
         job.done(png, meta, false);
         trimCache();
+    }
+
+    private void writeBiomeStructures(JsonObject body, PreviewSpec spec) {
+        Version version = Version.parse(spec.version());
+        long seed = PreviewRenderer.parseSeed(spec.seed());
+        SeedMap map = SeedMap.of(version, seed);
+        int radius = spec.radiusBlocks();
+        JsonObject counts = new JsonObject();
+        JsonArray structures = new JsonArray();
+        int markers = 0;
+        for (StructureType type : StructureType.values()) {
+            if (type == StructureType.STRONGHOLD || type == StructureType.MINESHAFT) {
+                continue;
+            }
+            List<Structure> found = map.structures(type, -radius, -radius, radius, radius);
+            if (!found.isEmpty()) {
+                counts.addProperty(type.key(), found.size());
+            }
+            for (Structure structure : found) {
+                if (markers >= 500) {
+                    break;
+                }
+                BlockPos pos = structure.pos();
+                JsonObject entry = new JsonObject();
+                entry.addProperty("id", type.key());
+                entry.addProperty("chunkX", pos.x() >> 4);
+                entry.addProperty("chunkZ", pos.z() >> 4);
+                entry.addProperty("x", pos.x());
+                entry.addProperty("z", pos.z());
+                structures.add(entry);
+                markers++;
+            }
+        }
+        body.add("structureCounts", counts);
+        body.add("structures", structures);
     }
 
     private static void failOrCancel(PreviewJob job, String message) {
@@ -741,8 +955,7 @@ public final class SeedPreviewService {
         body.addProperty("chunks", samples.length * samples.length);
         body.addProperty("partial", partial);
         body.addProperty("generatedAt", Instant.now().toString());
-        body.add("structureCounts", new JsonObject());
-        body.add("structures", new JsonArray());
+        writeBiomeStructures(body, spec);
         body.add("slimeChunks", new JsonArray());
 
         java.util.Map<String, Integer> counts = new java.util.LinkedHashMap<>();

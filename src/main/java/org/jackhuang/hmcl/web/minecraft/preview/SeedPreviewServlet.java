@@ -85,6 +85,10 @@ public final class SeedPreviewServlet extends HttpServlet {
             capabilities(request, response);
             return;
         }
+        if ("structures".equals(rest) && "GET".equals(method)) {
+            structures(request, response);
+            return;
+        }
         if ("history".equals(rest) && "GET".equals(method)) {
             history(response);
             return;
@@ -123,6 +127,38 @@ public final class SeedPreviewServlet extends HttpServlet {
             return;
         }
         Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "not supported");
+    }
+
+    private void structures(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String version = request.getParameter("version");
+        String seed = request.getParameter("seed");
+        if (version == null || !validVersion(version)) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "a Minecraft version id is required");
+            return;
+        }
+        if (seed == null || seed.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "seed is required");
+            return;
+        }
+        int radius = clamp(integer(request.getParameter("radius"), 512), PreviewSpec.MIN_RADIUS, PreviewSpec.MAX_RADIUS);
+        String typeParam = request.getParameter("type");
+        boolean exact = "true".equalsIgnoreCase(request.getParameter("exact"));
+        try {
+            JsonObject body = service.structures(version.trim(), seed.trim(), radius, typeParam, exact);
+            Json.write(response, body);
+        } catch (IllegalArgumentException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        } catch (Exception e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+        }
+    }
+
+    private static int integer(String value, int fallback) {
+        try {
+            return value == null ? fallback : Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 
     private void capabilities(HttpServletRequest request, HttpServletResponse response) throws IOException {
