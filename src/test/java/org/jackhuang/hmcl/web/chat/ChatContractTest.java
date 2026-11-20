@@ -138,7 +138,9 @@ class ChatContractTest {
     void capabilityRulesPickUpModelsThatDoReadImages() {
         // 面板上真实挂着的模型：能识图的默认就要是 true，不该逼用户手改。
         assertTrue(ChatCapabilities.knownModel("qwen3.8-flash").vision());
-        assertFalse(ChatCapabilities.knownModel("qwen3.8-max").vision());
+        assertTrue(ChatCapabilities.knownModel("qwen3.8-max").vision());
+        assertEquals(1_000_000, ChatCapabilities.knownModel("qwen3.8-max").maxContext());
+        assertEquals(131_072, ChatCapabilities.knownModel("qwen3.8-max").maxOutput());
         assertFalse(ChatCapabilities.knownModel("glm-5.2").vision());
         assertTrue(ChatCapabilities.knownModel("glm-5.3-flash").vision());
         assertTrue(ChatCapabilities.knownModel("deepseek-v4.1-flash-1017").vision());

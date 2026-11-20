@@ -5,8 +5,8 @@
 #
 # Most suppliers need no line at all. DshModelCatalog.match finds them by id, and the ones whose
 # ids differ but whose addresses agree — `fireworks` and `fireworks-ai`, `kimi-coding` and
-# `kimi-code-plan-cn`, `qwen-token-plan` and `alibaba-token-plan` — it finds by host. The three
-# below are the rest: models.dev publishes no address for them, or publishes another one.
+# `kimi-code-plan-cn` — it finds by host. The rest need a line: models.dev publishes no address
+# for them, publishes another one, or renamed a token-plan entry after the harness id.
 #
 # vercel-ai-gateway|vercel         the directory calls the gateway by its company's name
 # together|togetherai              the same, and it states no address of its own
@@ -15,3 +15,5 @@
 vercel-ai-gateway|vercel
 together|togetherai
 zai-coding-cn|zai-coding-plan
+qwen-token-plan|alibaba-token-plan
+qwen-token-plan-cn|alibaba-token-plan-cn

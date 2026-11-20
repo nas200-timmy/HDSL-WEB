@@ -251,6 +251,87 @@ public final class DshModelCatalog {
         return protocol != null && DshVendor.APIS.contains(protocol) ? protocol : null;
     }
 
+    /// A short list of real models for a built-in supplier, used when models.dev cannot be read.
+    ///
+    /// The directory is an optimisation, not a prerequisite: without it the account page must still
+    /// be able to offer `qwen3.8-max` instead of an empty text box. Only suppliers whose models are
+    /// stable enough to write down have a list here; everything else still accepts a typed id.
+    ///
+    /// @param vendorId the launcher's vendor id
+    /// @return the models in the order the page should show them; empty when none are kept
+    public static List<Model> builtinModels(@Nullable String vendorId) {
+        if (vendorId == null || vendorId.isBlank()) {
+            return List.of();
+        }
+        return builtinModels().getOrDefault(vendorId.trim().toLowerCase(Locale.ROOT), List.of());
+    }
+
+    private static volatile @Nullable Map<String, List<Model>> BUILTIN_MODELS;
+
+    private static Map<String, List<Model>> builtinModels() {
+        Map<String, List<Model>> kept = BUILTIN_MODELS;
+        if (kept != null) {
+            return kept;
+        }
+        synchronized (DshModelCatalog.class) {
+            if (BUILTIN_MODELS == null) {
+                BUILTIN_MODELS = readBuiltinModels();
+            }
+            return BUILTIN_MODELS;
+        }
+    }
+
+    /// Reads `assets/builtin-models.txt`: `vendor|id|name|context|output|vision|reasoning|tools`.
+    ///
+    /// A line that cannot be read is skipped, exactly as a provider catalogue line is: one typo must
+    /// cost one model, not the model picker.
+    private static Map<String, List<Model>> readBuiltinModels() {
+        Map<String, List<Model>> models = new LinkedHashMap<>();
+        try (java.io.InputStream stream = DshModelCatalog.class
+                .getResourceAsStream("/assets/builtin-models.txt")) {
+            if (stream == null) {
+                LOG.warning("No built-in model list in the jar; suppliers will have no fallback models");
+                return Map.of();
+            }
+            for (String line : new String(stream.readAllBytes(), StandardCharsets.UTF_8).split("\n")) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    continue;
+                }
+                String[] parts = trimmed.split("\\|", -1);
+                if (parts.length != 8 || parts[0].isBlank() || parts[1].isBlank()) {
+                    continue;
+                }
+                Integer context = integerOrNull(parts[3]);
+                Integer output = integerOrNull(parts[4]);
+                if (context == null || output == null) {
+                    continue;
+                }
+                boolean vision = Boolean.parseBoolean(parts[5]);
+                Model model = new Model(parts[1].trim(),
+                        parts[2].isBlank() ? parts[1].trim() : parts[2].trim(),
+                        context, output, Boolean.parseBoolean(parts[6]), List.of(),
+                        Boolean.parseBoolean(parts[7]), vision, null, null, null);
+                models.computeIfAbsent(parts[0].trim().toLowerCase(Locale.ROOT),
+                        ignored -> new ArrayList<>()).add(model);
+            }
+        } catch (IOException | RuntimeException e) {
+            LOG.warning("Could not read the built-in model list", e);
+            return Map.of();
+        }
+        Map<String, List<Model>> copy = new LinkedHashMap<>();
+        models.forEach((vendor, list) -> copy.put(vendor, List.copyOf(list)));
+        return Map.copyOf(copy);
+    }
+
+    private static @Nullable Integer integerOrNull(String value) {
+        try {
+            return Integer.valueOf(value.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     /// Finds the directory's entry for a supplier the launcher knows.
     ///
     /// Three questions, in the order that gets an answer right most often: the same id, an id the
