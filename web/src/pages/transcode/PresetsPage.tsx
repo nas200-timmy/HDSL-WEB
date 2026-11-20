@@ -13,7 +13,7 @@ import { toast } from "../../store";
 import { errMsg } from "../../utils";
 import { Dialog } from "../../components/Dialog";
 import { ContentCopyIcon, RefreshIcon, SearchIcon } from "../../components/icons";
-import { HelpNote } from "./common";
+import { HelpNote, ensureQueueRunning } from "./common";
 import { useTranscodeWorkspace } from "./TranscodeWorkspace";
 import {
   encoderFamily,
@@ -512,6 +512,11 @@ export function PresetsPage() {
     }
     setEnqueueBusy(false);
     if (added.length > 0) {
+      try {
+        await ensureQueueRunning();
+      } catch (e) {
+        toast("error", `任务已入队，但启动队列失败：${errMsg(e)}`);
+      }
       removeStaged(added);
       toast("success", `已加入 ${added.length} 个任务`);
     }

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { api, type TranscodeMediaEntry, type TranscodeMediaListing } from "../../api";
+import { api, type TranscodeMediaEntry, type TranscodeMediaListing, type TranscodeQueueSnapshot } from "../../api";
 import { errMsg } from "../../utils";
 import { ArrowBackIcon, ArrowForwardIcon, FolderIcon, FolderOpenIcon, RefreshIcon } from "../../components/icons";
 
@@ -14,6 +14,14 @@ export function HelpNote({ title = "使用说明", children }: { title?: string;
       <div className="tc-help-body">{children}</div>
     </details>
   );
+}
+
+/** 3FUI behavior: submitting into an idle queue starts it; a paused queue stays
+ *  paused because that pause is the operator's decision, not ours to clear. */
+export async function ensureQueueRunning(): Promise<TranscodeQueueSnapshot> {
+  const snapshot = await api.transcode.queue();
+  if (snapshot.runState === "idle") return api.transcode.startQueue();
+  return snapshot;
 }
 
 export function fmtBytes(bytes: number | null | undefined): string {

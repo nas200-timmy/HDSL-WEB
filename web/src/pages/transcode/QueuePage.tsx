@@ -340,7 +340,7 @@ export function QueuePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
   const resetTargetJob = resetTargets && resetTargets.length === 1
     ? jobs.find((job) => job.id === resetTargets[0]) ?? null
     : null;
-  const liveLine = latestLogLine(log);
+  const liveText = latestLogLine(log) || activeJob?.message || "";
 
   return (
     <div className="tc-queue">
@@ -501,10 +501,10 @@ export function QueuePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
         </aside>
       </div>
 
-      {liveLine && activeJob && (
+      {liveText && activeJob && (
         <button className="card tc-queue-live" title="点击打开完整日志" onClick={() => setLogDialog(activeJob.id)}>
           <span className="tc-queue-live-label">实时输出 · {activeJob.input}</span>
-          <span className="mono">{liveLine}</span>
+          <span className="mono">{liveText}</span>
         </button>
       )}
 

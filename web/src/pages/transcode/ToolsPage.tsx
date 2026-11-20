@@ -3,7 +3,7 @@ import { api, type TranscodeMediaEntry, type TranscodeQualityJob } from "../../a
 import { Dialog } from "../../components/Dialog";
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
-import { HelpNote } from "./common";
+import { HelpNote, ensureQueueRunning } from "./common";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { useTranscodeWorkspace } from "./TranscodeWorkspace";
 
@@ -331,6 +331,7 @@ export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
     setBusy(true);
     try {
       await api.transcode.toolsMerge(mergeFiles, mergeOutput.trim());
+      await ensureQueueRunning();
       toast("success", "合并任务已加入编码队列");
       onOpenTab("queue");
     } catch (e) {
@@ -390,6 +391,7 @@ export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
     setBusy(true);
     try {
       await api.transcode.toolsMux(muxRows.map((row) => row.path), maps, muxOutput.trim());
+      await ensureQueueRunning();
       toast("success", "混流任务已加入编码队列");
       onOpenTab("queue");
     } catch (e) {
@@ -455,6 +457,11 @@ export function ToolsPage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
     }
     setBusy(false);
     if (added.length > 0) {
+      try {
+        await ensureQueueRunning();
+      } catch (e) {
+        toast("error", `任务已入队，但启动队列失败：${errMsg(e)}`);
+      }
       toast("success", `已加入 ${added.length} 个抽流任务`);
       onOpenTab("queue");
     }

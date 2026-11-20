@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type TranscodeMediaEntry, type TranscodePreset, type TranscodePresetSummary, type TranscodePreview, type TranscodePlan } from "../../api";
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
-import { MediaBrowserPanel, fmtBytes, probeSummary, HelpNote } from "./common";
+import { MediaBrowserPanel, ensureQueueRunning, fmtBytes, probeSummary, HelpNote } from "./common";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { valueLabel } from "./labels";
 import { useTranscodeWorkspace } from "./TranscodeWorkspace";
@@ -219,6 +219,11 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
     }
     setBusy(false);
     if (added.length > 0) {
+      try {
+        await ensureQueueRunning();
+      } catch (e) {
+        toast("error", `任务已入队，但启动队列失败：${errMsg(e)}`);
+      }
       toast("success", `已加入 ${added.length} 个任务`);
       removeStaged(added);
       setPlan(null);
