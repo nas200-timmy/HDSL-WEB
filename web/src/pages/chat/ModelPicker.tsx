@@ -20,8 +20,10 @@ const EXPANDED_FAMILIES_KEY = "chat.modelPicker.expandedFamilies";
 const HIDDEN_KEY = "chat.modelPicker.hidden";
 
 const FAMILY_ORDER = [
-  "Qwen", "DeepSeek", "Kimi", "GLM", "MiniMax", "Claude", "Gemini", "OpenAI",
-  "Grok", "Llama", "Mistral", "Doubao", "豆包", "其他",
+  "Qwen", "DeepSeek", "Kimi", "GLM", "MiniMax", "混元", "豆包", "MiMo",
+  "StepFun", "LongCat", "Claude", "Gemini", "OpenAI", "Grok", "Llama",
+  "Mistral", "Cohere", "文心", "Yi", "Baichuan", "InternLM", "Pangu",
+  "SenseNova", "Spark", "其他",
 ];
 
 function readSet(key: string): Set<string> {
@@ -50,13 +52,27 @@ export function modelFamily(id: string): string {
   if (leaf.includes("kimi") || leaf.includes("moonshot")) return "Kimi";
   if (leaf.includes("glm") || leaf.includes("zhipu")) return "GLM";
   if (leaf.includes("minimax")) return "MiniMax";
+  if (leaf.includes("hunyuan") || /^hy[0-9]/.test(leaf)) return "混元";
+  if (leaf.includes("doubao")) return "豆包";
+  if (leaf.includes("mimo")) return "MiMo";
+  if (leaf.includes("step")) return "StepFun";
+  if (leaf.includes("longcat")) return "LongCat";
   if (leaf.includes("claude")) return "Claude";
   if (leaf.includes("gemini") || leaf.includes("gemma")) return "Gemini";
   if (/^(gpt|o[1-9]|chatgpt)/.test(leaf)) return "OpenAI";
   if (leaf.includes("grok")) return "Grok";
   if (leaf.includes("llama")) return "Llama";
-  if (leaf.includes("mistral") || leaf.includes("mixtral")) return "Mistral";
-  if (leaf.includes("doubao")) return "豆包";
+  if (leaf.includes("mistral") || leaf.includes("mixtral")
+      || leaf.includes("codestral") || leaf.includes("devstral")
+      || leaf.includes("magistral") || leaf.includes("pixtral")) return "Mistral";
+  if (leaf.includes("command") || leaf.includes("cohere")) return "Cohere";
+  if (leaf.includes("ernie") || leaf.includes("wenxin")) return "文心";
+  if (/^yi[-.]/.test(leaf)) return "Yi";
+  if (leaf.includes("baichuan")) return "Baichuan";
+  if (leaf.includes("internlm")) return "InternLM";
+  if (leaf.includes("pangu")) return "Pangu";
+  if (leaf.includes("sensenova") || leaf.includes("sensechat")) return "SenseNova";
+  if (leaf.includes("spark")) return "Spark";
   return "其他";
 }
 
