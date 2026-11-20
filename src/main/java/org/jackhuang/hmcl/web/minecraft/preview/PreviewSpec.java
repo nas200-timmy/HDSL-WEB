@@ -92,9 +92,18 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
     /// chunks, roughly forty seconds whatever the radius. The radius only
     /// decides how much ground each sample stands for.
     public static final int BIOME_SAMPLES = 32;
-    /// The Java core is cheap enough to sample four times as densely, which
-    /// keeps the picture sharp when the browser scales it up.
+    /// The Java core is cheap enough to sample densely. The side is chosen from
+    /// the requested area so small maps get one sample per two blocks while
+    /// huge maps stay under a practical pixel count.
+    public static final int JAVA_BIOME_SAMPLES_MIN = 128;
+    public static final int JAVA_BIOME_SAMPLES_MAX = 1024;
     public static final int JAVA_BIOME_SAMPLES = 128;
+
+    /// Samples per side for the Java overview of this request.
+    public int javaSamples() {
+        return Math.min(JAVA_BIOME_SAMPLES_MAX,
+                Math.max(JAVA_BIOME_SAMPLES_MIN, chunksPerSide() * 8));
+    }
 
     /// Chunks along one side of the rendered square.
     public int chunksPerSide() {

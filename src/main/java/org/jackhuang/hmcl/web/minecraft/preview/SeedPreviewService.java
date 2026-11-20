@@ -1041,7 +1041,7 @@ public final class SeedPreviewService {
                 // were the new one.
                 .resolve(spec.radiusBlocks() + "-" + spec.biomeY()
                         + ("BIOME".equals(spec.mode().name()) ? "-biome" : "")
-                        + (spec.engine() == PreviewSpec.Engine.JAVA ? "-java" : "") + "-v9");
+                        + (spec.engine() == PreviewSpec.Engine.JAVA ? "-java" : "") + "-v10");
     }
 
     private static String seedHash(String seed) {

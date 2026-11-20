@@ -1013,8 +1013,9 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
               width: "100%",
               height: "100%",
               display: "block",
-              // 速览图只有 64×64，平滑放大才像"群系地图"；详细图必须保持像素锐利。
-              imageRendering: view.mode === "biome" ? "auto" : "pixelated",
+              // 群系图是精确到方块边界的采样，放大时必须保持色块锐利；
+              // 平滑插值会让 590% 时变成一团渐变色。
+              imageRendering: "pixelated",
             }}
           />
           <svg
