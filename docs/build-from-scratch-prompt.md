@@ -40,11 +40,18 @@
    不开第三层页面；不可用功能一律变灰并写明原因。
 9. **面板自己的 agent 票**（§2.11）：给跑在面板里的 agent 一把限权的钥匙（只读列表 / 启停 / 终端 /
    MC 控制台等），与管理员会话、开发者密码都分开；带「自杀闸」。
+10. **种子地图内核**（§2.12）：把「给定种子、给定坐标，这里是什么群系、附近有什么结构」变成纯 Java
+    计算，不再启动 Minecraft 服务端。覆盖 1.12.2 到最新正式版，用三层差分验证卡住正确性。
+    这是一个**独立的、零依赖的子包**，可以脱离面板单独编译运行。
 
 技术栈固定为：**Java 17**（`options.release = 17`，允许用更高 JDK 编译，但**不得使用 JDK 18+ API**）、
-Gradle（shadow 插件打单 jar）、Jetty 12（ee10）、Gson、JNA（仅 PTY）；前端 React 18 + react-router 6 +
-TypeScript（strict）+ Vite 6 + xterm 6 + `@material/material-color-utilities`（Monet 取色）、`es-check`
-做语法下限检查；客户端 Go 1.24。**不引 UI 组件库、不引 CSS 框架**。许可证 GPL-3.0-or-later。
+Gradle（shadow 插件打单 jar）、Jetty 12（ee10）、Gson、JNA（仅 PTY）、SQLite JDBC（聊天存档）；
+前端 React 18 + react-router 6 + TypeScript（strict）+ Vite 6 + xterm 6 +
+`@material/material-color-utilities`（Monet 取色）、`es-check` 做语法下限检查；客户端 Go 1.24。
+**不引 UI 组件库、不引 CSS 框架**。许可证 GPL-3.0-or-later。
+
+种子地图内核**只从 MIT 的 cubiomes 移植算法**，不复制任何反编译的游戏源码；它只用 JDK 标准库，
+不 import 面板的任何类。这是全项目里唯一允许"看起来像另一个项目"的部分——§2.12 会说明为什么。
 
 ---
 
@@ -217,6 +224,70 @@ TypeScript（strict）+ Vite 6 + xterm 6 + `@material/material-color-utilities`�
 - 与开发者密码分开：开发者密码是**人**的第二把钥匙（§2.2），票是 agent 的限权钥匙，不要互相替代。
 - 审计里每条票操作都要有来源与 scope。
 
+### 2.12 种子地图内核（`minecraft/seedmap`）
+
+**为什么值得单独写一节。** "种子预览"最初是启动一次真服务端、生成区块、读区域文件再画图。它能给出
+绝对可信的结果，但单区块生成 15ms 到 0.9s，1024×1024 格要一分半到跑不完，8192×8192 直接二十分钟以上。
+地图软件之所以能瞬间铺开几万格，是因为它们**不生成世界**：只算生物群系归属和结构落点。把这件事做成
+纯 Java，是整个项目里工作量最大、也最容易被低估的一块。
+
+**结构（两个包，依赖方向单一）**
+
+```
+minecraft/seedmap/core/     零依赖：只用 JDK。不 import 面板任何类。
+  Version.java      版本分支（LEGACY / MODERN）
+  Biome.java        群系枚举（数字 id 与资源键）
+  Rng.java          Java Random + Xoroshiro128++
+  PerlinNoise / OctaveNoise / DoublePerlinNoise
+  BiomeNoise        1.18+ multi-noise（气候参数、spline、biome tree）
+  BiomeTree         biome tree 最近邻查询
+  BiomeTrees        从 classpath 资源加载生成的表
+  Layer / LayerStack / Layers / Layers2   1.12.2–1.16.5 层栈
+  Generator         按版本选 modern / legacy
+  Finder            结构落点、要塞环、史莱姆区块
+  SeedMap           唯一门面：biomeAt / mapBiomes / structures / strongholds
+
+minecraft/seedmap/adapter/  允许依赖面板：
+  SeedMapBackend    把 core 的结果翻成面板的 PNG / meta.json
+```
+
+**独立性的判据只有一条**：把 `core/` 拷出来，`javac` + 一个 `main` 就能出结果。不依赖 Web 框架、
+JSON 库、配置系统、日志实现。需要结构化输出时返回 record，由调用方决定怎么序列化。
+
+**版本矩阵**（设计稿钉死，1.12.2 是兼容下限，更早的不做）
+
+| 版本 | 分支 | 状态 |
+|---|---|---|
+| 1.12.2 / 1.14.4 / 1.16.5 | 旧层栈 | 已实现，L1 全绿 |
+| 1.18.2 / 1.20.6 / 1.21.x | multi-noise | 已实现，L1 全绿 |
+
+**结构与渲染**
+- `SeedMap.structures(type, x0, z0, x1, z1)` 返回村庄、神殿、女巫小屋、府邸、海底神殿、海底废墟、
+  沉船、废弃传送门、掠夺者前哨、远古城市、试炼密室等；`strongholds(n)` 返回要塞同心环。
+- 群系速览由 Java 内核直接出图，128×128 采样，秒级返回；详细地图仍走真服务端（需要地形高度与方块）。
+- 前端保留两个**独立**开关：方案（Java 内核 / MC 服务器）与类型（群系速览 / 详细地图）。选 Java 只
+  允许群系速览；选详细地图自动切 MC。
+- 结构标记按视口过滤并封顶 300 个，否则 16k×16k 的图会变成一片白点。Java 估算位置画菱形，服务端
+  校准过的画白圈。地图支持搜索结构、按类型筛选、测距、坐标跳转、全屏、下载 PNG。
+
+**三层验证（缺一不可，见 §4）**
+
+| 层 | 对照对象 | 验收 |
+|---|---|---|
+| L1 | Java ↔ cubiomes C | 差异 = 0，百万级采样点，边界密集 |
+| L2 | Java ↔ 游戏自带群系源 | 差异 = 0 或全部登记 |
+| L3 | Java ↔ 真服务端区块 | 差异 = 0 或全部登记 |
+
+不能消除的差异登记进 `docs/seedmap-deviations.md`，该版本标记为"实验性"。L1 比对程序只在测试环境编译，
+**不进发布物**；反编译的游戏源码只用于构造验证器，**只读、不复制、不入库**。
+
+**这个包最容易踩的坑**（§5.25–§5.29 详细写）
+- 旧层栈的随机数是 **32 位无符号**运算，Java 的 `int` 加法乘法要按位回绕，右移必须用 `>>>`；
+- `mapZoom` 调用 `select4` 前**只更新两次** cs，第三次更新在世界坐标的缩放循环里，多写一次就全错；
+- 层函数之间共享一块工作区，父层与子层的缓冲区大小要按层栈递归计算，不能只分配最终结果那么大；
+- biome tree 的表有几千个节点，直接写成 Java 数组字面量会撞 JVM 的 64KB 方法上限，必须拆资源文件；
+- 验证时对照程序自己也可能越界（C 的 `out[1]`），先保证两边缓冲区都合法，再谈谁对。
+
 ---
 
 ## 3. 对外契约（最小集，名字固定）
@@ -229,6 +300,7 @@ TypeScript（strict）+ Vite 6 + xterm 6 + `@material/material-color-utilities`�
 | 反代 | `/i/<id>/`、`/i/octop/`（可选固定别名） |
 | 终端 | `POST .../terminal` → `{mode,protocol,ticket,ws}`，`WSS /ws/terminal/<ticket>` |
 | 开发者 | `GET /api/developer/status`（含 `https`、`guardScope`、`estop`）、`POST .../elevate`（返回 `token`）、`.../extend`、`.../revoke`、`.../web-shell`、`.../guard`、`.../estop/preview|engage|release` |
+| 种子预览 | `POST /api/mc/preview` → `{id,state,...}`；`GET /api/mc/preview/<id>`；`GET /api/mc/preview/<id>.png|.json|.txt`；`/capabilities`、`/history`、`/history/<id>`；`GET /api/mc/preview/structures?version&seed&radius[&type][&exact]` |
 | 事件 | `WS /ws`：实例状态、任务进度、日志行、外部实例变化 |
 
 审计：`<data>/logs/audit-*.jsonl`，每行一条 JSON，含时间、channel、动作、对象、结果、操作者、来源地址。
@@ -252,7 +324,34 @@ node plugins/dsh-inproc-tui/scripts/check.mjs && node plugins/dsh-acp-tui/script
 # Go 客户端
 cd client/hdsl-tui && gofmt -l . | grep -v '^vendor/' ; go vet ./... ; go test ./...
 
-# 单 jar
+# 种子地图内核的单测（纯 JVM，不起服务端）
+./gradlew --no-daemon test --tests 'org.jackhuang.hmcl.web.minecraft.seedmap.core.*'
+```
+
+**种子地图的三层验证**（§2.12；L1/L2 几十秒，L3 是分钟级，按需跑）：
+
+```bash
+# L1：Java ↔ cubiomes C。先编一份 C 查询器（只在测试环境用，不进发布物）
+(cd /path/to/cubiomes && make release)
+gcc -O3 -I/path/to/cubiomes scripts/l1-cubiomes-ref.c \
+    /path/to/cubiomes/libcubiomes.a -lm -lpthread -o build/l1-cubiomes-ref
+java -cp build/classes/java/main:build/classes/java/test:build/resources/main \
+  org.jackhuang.hmcl.web.minecraft.seedmap.core.L1Verifier build/l1-cubiomes-ref
+# 断言：6 个版本（1.12.2/1.14.4/1.16.5/1.18.2/1.20.6/1.21.3）compared=900 mismatches=0
+
+# L2：Java ↔ 游戏自带群系源（需要一份反编译工程；scripts/L2BiomeProbe.java 放进去编译）
+#   先拿到运行 classpath，再跑比对器
+java -cp build/classes/java/main:build/classes/java/test:build/resources/main \
+  org.jackhuang.hmcl.web.minecraft.seedmap.core.L2Verifier /path/to/MCP-Reborn /tmp/l2-classpath.txt
+
+# L3：Java ↔ 真服务端区块（慢，覆盖少数种子）
+java -cp build/classes/java/main:build/classes/java/test:build/resources/main \
+  org.jackhuang.hmcl.web.minecraft.seedmap.core.L3Verifier \
+  /path/to/server.jar /path/to/java build/l3-work 1.21.2
+# 断言：差异 = 0，或每一条都登记在 docs/seedmap-deviations.md
+```
+
+**单 jar**
 flock /tmp/hdsl-gradle.lock ./gradlew --no-daemon shadowJar -PreleaseVersion=<版本>
 unzip -l build/libs/hdsl-web-<版本>.jar | grep -c first-party-plugins   # 必须是 2 个 tgz + index.json
 
@@ -602,6 +701,48 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
 - **验证**：新实例、被 `--help` 污染过的老实例各启动一次；容器里
   `docker exec -u 1000 <容器> sh /tmp/verify-privilege-split.sh` 全绿（含递归与 runtimes 两项）。
 
+### 5.25 旧层栈的随机数是 32 位无符号
+
+**现象**：旧版本群系一半对一半错，像某个随机分支走反了。
+**根因**：`cs` 在 C 里是 `uint32_t`，乘法加法都是模 2³² 回绕。Java 的 `int` 二进制行为与它一致，
+但**右移**不一致：C 的 `>>` 对无符号数是逻辑右移，Java 的 `>>` 是有符号右移。写成 `>>` 时，
+高位为 1 的 `cs` 会补 1，`& 1`、`& 3` 就取到了错误的值。
+**正确做法**：凡是 `cs` 参与的右移一律 `>>>`；字面量 `4150755663` 超过 `Integer.MAX_VALUE`，
+写成 `(int) 4150755663L`；`cs` 用 `int` 而不是 `long`，因为层栈的语义就是 32 位回绕。
+同理，`xNextInt` 里 `(uint32_t)r < n` 是无符号比较，Java 必须 `(r & 0xFFFFFFFFL) < n`。
+
+### 5.26 `mapZoom` 调用 `select4` 前只更新两次 cs
+
+**现象**：`zoom` 层输出错位，`buf` 里的值与 C 版只差一两个元素，但整张图全歪。
+**根因**：C 的 `mapZoom` 在 `buf[idx + newW] = select4(cs, st, ...)` 之前，`cs` **只**经历了
+`buf[idx]` 与 `buf[idx]` 两次更新；第三次更新发生在 `select4` 内部。Java 移植时多写了一次
+`cs *= ...; cs += st;`，于是 `select4` 收到的是第三次状态，`r` 从 3 变成 0，颜色全错位。
+**正确做法**：照抄 C 的更新次数。差分验证器里给每一层加"同输入同输出"的单测，比盯着代码看快。
+
+### 5.27 层函数共享工作区，缓冲区要按层栈递归算
+
+**现象**：单点查询越界，或父层输出被自己覆盖。
+**根因**：C 的 `genArea` 把一块大工作区交给整条层栈，父层与子层通过指针偏移共用；Java 若只给
+最终结果那么大的数组，父层一写就越界。
+**正确做法**：顶层分配一块带余量的工作区（按 `getMinLayerCacheSize` 的语义，至少 `(max+64)²×4`），
+层函数内部需要临时缓冲时用 `out.length` 而不是 `w*h`；`System.arraycopy` 的目标位置要按
+`(j + (z&1)) * newW + (x&1)` 算，不能默认从 0 开始。
+
+### 5.28 biome tree 的表不能写成 Java 数组字面量
+
+**现象**：`code too large`。
+**根因**：1.18+ 的 biome tree 每张表有八千到九千个 `long` 节点，直接写成 `static final long[]` 的
+初始化块会超过 JVM 单方法 64KB 上限。
+**正确做法**：用脚本把 C 头文件转成文本资源（`seedmap/btree*.txt`），运行时按行加载；
+转换脚本进 `scripts/`，表进 `src/main/resources/`，两边都可重复生成。
+
+### 5.29 验证器的对照程序也会越界
+
+**现象**：L1 报告大量"差异"，但两边单点都对。
+**根因**：自己写的 C 探针用 `int out[1]` 接收 `genArea` 的结果，父层写入时越界，读到的是垃圾。
+**正确做法**：C 探针必须用 `getMinLayerCacheSize` 分配缓冲区；先确认"对照程序自己是合法的"，
+再判断"被测程序和它不一致"。差分测试的第一条纪律是：**两边都不能有未定义行为**。
+
 ---
 
 ## 6. 人工验收清单（自动化测不到的部分）
@@ -633,6 +774,11 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
     （`setMaxIdleTimeout(0)`），只是提权可能过期、需要重新确认。
 14. **属主交接**：老实例（被旧面板写坏过的）启动一次后 `home` 整树归 agent；新实例从第一次启动起
     就不该出现 root 文件（§5.24）。
+15. **种子地图**：选 Java 内核 + 群系速览，1.12.2 与 1.21.3 各出一张图，确认秒级返回、颜色连续、
+    海洋/河流/山地能一眼分辨；切到 MC 服务器 + 详细地图，确认能出地形图。
+16. **结构覆盖**：群系速览的图上能看到村庄、神殿、府邸等标记；按类型筛选、搜索、测距、坐标跳转、
+    全屏、下载各点一次；点「精准结构」后标记变成白圈。
+17. **面积**：Java 方案拉到 16384×16384，确认不糊、不卡、结构不糊成一片白点。
 
 ---
 
@@ -653,3 +799,18 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
   隔着文件系统语义（ACL 存储）、入口的属主顺序、以及 `docker exec` 的默认用户。
 - 不要在 ACL 管理的存储上声称有隔离。**接受**是合法选择——只要在部署记录里写明"这台机器没有隔离"，
   而不是让文档和实际相反。
+- 不要把"跑真服务端"当成种子预览的唯一出路：群系速览必须优先走纯 Java 内核（§2.12），
+  服务端只用来出详细地形和校准结构。
+- 不要为了支持旧版本去启动服务端兜底：层栈移植本身是可行的，L1 能证明它对不对。
+- 不要把反编译的游戏源码复制进实现。它只用来构造 L2 验证器，**只读、不入库、不进发布物**。
+- 不要在种子地图内核里 import 面板的类。`core/` 抽出来必须能单独 `javac`。
+
+---
+
+## 8. 收尾时给接手者的三句话
+
+1. 这个项目的体量已经不能用"一个面板"概括：它是面板 + 反代 + PTY 终端 + 插件打包 + 两段身份 +
+   种子地图内核 + 三层差分验证，每一块都有独立的失败模式。
+2. 最贵的 bug 不在 UI，在**层栈与噪声的 32 位语义**、**进程与属主的交接**、**挂载点逃逸**这三类。
+   它们共同的特征是：静态检查全绿，单点测试全对，整张图/整个实例才露馅。
+3. 所以验收顺序永远是：**先让对照程序自己合法，再让两边同输入同输出，最后才让人去看图。**
