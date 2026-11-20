@@ -62,8 +62,13 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
         SERVER
     }
 
-    /// The detail map's ceiling.
-    public static final int MAX_RADIUS = 1024;
+    /// The detail map's ceiling when a real server generates it.
+    public static final int MAX_SERVER_RADIUS = 1024;
+    /// The Java core computes biomes without generating terrain, so it can
+    /// cover a much larger area in the same time.
+    public static final int MAX_JAVA_RADIUS = 8192;
+    /// Backwards-compatible alias for callers that predate the split.
+    public static final int MAX_RADIUS = MAX_SERVER_RADIUS;
 
     public PreviewSpec(String version, String seed, int radiusBlocks, int biomeY, Mode mode) {
         this(version, seed, radiusBlocks, biomeY, mode, mode == Mode.BIOME ? Engine.JAVA : Engine.SERVER);

@@ -308,6 +308,13 @@ export function McSeedPreview({
             <option value={256}>512 × 512 格</option>
             <option value={512}>1024 × 1024 格</option>
             <option value={1024}>2048 × 2048 格</option>
+            {engine === "java" && (
+              <>
+                <option value={2048}>4096 × 4096 格</option>
+                <option value={4096}>8192 × 8192 格</option>
+                <option value={8192}>16384 × 16384 格</option>
+              </>
+            )}
           </select>
         </label>
         <button className="btn btn-raised" disabled={busy || running} onClick={() => void start()}>
@@ -753,6 +760,18 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
   const barBlocks = SCALE_STEPS.find((value) => value * pxPerBlock >= 56) ?? SCALE_STEPS[SCALE_STEPS.length - 1];
   const barWidth = barBlocks * pxPerBlock;
 
+  // Only paint structures inside the current viewport, and thin them out when
+  // the whole region is visible. A 16k×16k Java map can carry thousands of
+  // markers; drawing them all at once turns the picture into white noise.
+  const visibleStructures = (exactStructures?.structures ?? meta?.structures)?.filter((s) => {
+    if (scale <= 1.5) return true;
+    const left = (-offset.x / scale / (box || 1)) * size - radius;
+    const top = (-offset.y / scale / (box || 1)) * size - radius;
+    const right = ((box - offset.x) / scale / (box || 1)) * size - radius;
+    const bottom = ((box - offset.y) / scale / (box || 1)) * size - radius;
+    return s.x >= left && s.x <= right && s.z >= top && s.z <= bottom;
+  }).slice(0, 300);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", fontSize: 12 }}>
@@ -896,7 +915,7 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
                   width={16} height={16} fill="#59c46a" fillOpacity={0.3} />
               ))}
             {layers.structures &&
-              (exactStructures?.structures ?? meta?.structures)?.map((structure, index) => (
+              visibleStructures?.map((structure, index) => (
                 <g key={`m${index}`}>
                   <rect x={structure.x - 2} y={structure.z - 2} width={4} height={4}
                     fill={markerColor(structure.id)} stroke="#1a1a1a" strokeWidth={1}
