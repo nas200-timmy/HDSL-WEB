@@ -528,12 +528,20 @@ public final class PlainChatServlet extends HttpServlet {
         StringBuilder body = new StringBuilder();
         JsonArray nodes = session.has("nodes") && session.getAsJsonArray("nodes") != null
                 ? session.getAsJsonArray("nodes") : new JsonArray();
+        boolean first = true;
         for (JsonElement element : nodes) {
             JsonObject node = element.getAsJsonObject();
             JsonObject message = activeVariant(node);
             if (message == null) {
                 continue;
             }
+            // A line between every message (not just between turns): in a text
+            // browser the labels alone are easy to lose, and in the graphical
+            // shell the message cards touch each other.
+            if (!first) {
+                body.append("<hr class=\"turn-sep\">\n");
+            }
+            first = false;
             boolean assistant = "assistant".equals(string(node, "role"));
             String status = string(message, "status");
             String content = string(message, "content");

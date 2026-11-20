@@ -219,6 +219,12 @@ button:disabled, input[type="submit"]:disabled {
 .muted { color: #454651; }
 .error { color: #BA1A1A; font-weight: 600; }
 .row { display: block; margin: .5rem 0; }
+hr.turn-sep {
+  border: 0;
+  border-top: 1px solid #C6C5D3;
+  height: 0;
+  margin: 1rem 0;
+}
 
 /* server-rendered markdown */
 .legacy-md h1, .legacy-md h2, .legacy-md h3 { line-height: 1.25; }

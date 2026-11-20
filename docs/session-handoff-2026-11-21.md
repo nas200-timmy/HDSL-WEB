@@ -5,9 +5,10 @@
 > 种子地图 / JDK 下载源 / 转码工作台 / 聊天模型树的范围、验证与发布前状态。
 >
 > **分支状态**：`main` 仍是 v0.6.93（`4dd8f13bd`），**没有合并**。`web-shell` 在 66 个
-> 功能提交之上加了本稿的发布说明提交；**未 push、未打 tag**。`container/web-shell` 和
-> `web-shell-before-msg-rewrite` 仍指向改写前的旧历史，`web-shell` 与它们是分叉状态；
-> 后续要推远端时需要用 `--force-with-lease`（或先确认远端可重写）。
+> 功能提交之上加了发布说明与 `/plain` 分隔线提交；**未 push 到 GitHub、未打 tag**。
+> 当前观察到的 `container/web-shell` 已到预发布说明提交 `19163f2d4d`，本稿的分隔线提交
+> 是本地领先的 1 个；`web-shell-before-msg-rewrite` 仍是改写前旧历史。`origin/web-shell`
+> 还停在 v0.6.92 的旧分支，推它前先确认要保留哪套历史。
 >
 > **隐私约定（继续遵守）**：真实域名、内网地址、宿主机路径、口令、真实 API Key、
 > DNS provider token 一律不写进仓库。
@@ -39,6 +40,8 @@
   搜索匹配 id/品牌/来源/vendor；家族识别覆盖云厂商模型超市；智谱搜索补必填项。
 - **账户 / 模型目录**：内置阿里云百炼 / 千问 / Token Plan；models.dev 源码归档解析，
   失败回源 api.json；百炼模型每 6 小时后台刷新。
+- **纯文本版**：用户与助手的每条消息之间加 `<hr class="turn-sep">`，w3m/lynx 是横线，
+  IE11/图形浏览器是浅灰线。
 - **界面**：手机工具栏竖排、地图工具栏拥挤、地图滚轮带页、第三方核心弹窗溢出等修复。
 
 ## 2. 验证
@@ -51,17 +54,18 @@
 - `scripts/api-smoke.py`：43/43 PASS；`scripts/security-smoke.sh`：PASS（加密登录、
   提权、ACME 门禁、chat 加密读写）。
 - jar：`/tmp/release-0.6.94/hdsl-web-0.6.94.jar`，sha256
-  `1486a1552a099b43bbf31391ea62c718d35b2bdbb1f928c577110ebac12a3cc4`。
+  `557e4b92cfa741943d05b49626d75b4cb3f732e909d9597f609e523ff16d43d7`。
 - 种子地图 L1/L3 验证器、`SeedPreviewTest`、`McJavaSource*Test`、`McJavaRuntimesTest`、
-  `ModelsDevArchiveTest` 已覆盖；没有新增真实 Minecraft 世界/真实 CA 联调。
+  `ModelsDevArchiveTest` 已覆盖；`PlainLegacyTest` 覆盖 `/plain` 的 `turn-sep`。
+  没有新增真实 Minecraft 世界/真实 CA 联调。
 
 ## 3. 发布前检查
 
-- 分支：`main` 不动；`web-shell` 上只新增发布说明提交；**不合并、不推送**。
+- 分支：`main` 不动；`web-shell` 上只新增发布说明与分隔线提交；**不合并、不推送**。
 - 版本：`CHANGELOG.md` v0.6.94；jar 用 `-PreleaseVersion=0.6.94`。
 - 产物：`/tmp/release-0.6.94/hdsl-web-0.6.94.jar` 与 `SHA256SUMS.txt`。
-- 远端：`container/web-shell` 仍是旧历史；如果之后要推，先决定是 force-push 还是重建
-  `web-shell` 的远端。
+- 远端：`container/web-shell` 当前在预发布说明提交；分隔线提交本地领先 1 个。
+  `origin/web-shell` 仍是 v0.6.92 的旧分支；要推 GitHub 前先决定保留哪套历史。
 - Dockerfile 仍钉在 Temurin 21.0.13+9 / 25.0.5+8，入口在 x86_64 上加
   `-XX:-UseBASE64Intrinsics`；修复版 Temurin 资产可用后再移除。
 
@@ -73,5 +77,5 @@
   压测。
 - 预览进程只在 Java 9+ 加 `-XX:-UseBASE64Intrinsics`；Java 8 的 1.16.5 预览不能加，
   否则 JVM 起不来。
-- `web-shell` 的 66 个提交已经重写过 message，旧历史只存在于备份 ref / 远端跟踪；
-  推远端前先确认要保留哪套历史。
+- `web-shell` 的 66 个提交已经重写过 message，旧历史只存在于备份 ref 与
+  `origin/web-shell` 的 v0.6.92 分支；推远端前先确认要保留哪套历史。

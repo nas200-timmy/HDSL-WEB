@@ -256,6 +256,7 @@ class PlainLegacyTest {
             String page = waitFor(TestSupport.client(), running.baseUrl(), sessionId,
                     ssrShipped ? "<strong>render</strong>" : "**render**",
                     Duration.ofSeconds(15));
+            assertTrue(page.contains("class=\"turn-sep\""), page);
             if (ssrShipped) {
                 assertTrue(page.contains("chat-markdown legacy-md"), page);
                 try (var cached = Files.list(dataDir.resolve("plain-md"))) {

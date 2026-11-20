@@ -78,6 +78,8 @@ legacy 表面不是白底裸表格：每个页面都是「壁纸 + 双栏表格�
   `<input type="submit">`（w3m/lynx 对 `<button>` 的提交支持不稳）、外壳与会话表带
   `width` 属性。w3m 里看到的是"左栏四行导航 + 右边列对齐的会话表"，不是一串挤在一起
   的链接。
+- 用户与助手的每条消息之间有一条 `<hr class="turn-sep">`：w3m/lynx 把它渲染成横线，
+  图形浏览器里是一条浅灰分隔线；长会话里即使不读颜色和标签，也能看出哪里换人说话。
 - CSP 因此放行 `img-src 'self'`（壁纸）与 `font-src 'self'`（KaTeX 字体），其余不变。
 - **公式**：服务端用与 SPA 相同的 remark-math + rehype-katex 预渲染，HTML+MathML
   一起下发；KaTeX 的样式与字体从 jar 里发（`/plain/katex/…`，IE11 走 woff，
