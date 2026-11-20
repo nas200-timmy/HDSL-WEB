@@ -516,7 +516,7 @@ function ModpackTab() {
         }}
       >
         {installTaskId ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 340 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
             <ProgressBar fraction={installTask?.fraction} />
             <div style={{ fontSize: 13 }}>
               {installTask?.message ?? "正在下载并安装整合包，完成后将自动跳转到新实例…"}

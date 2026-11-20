@@ -1476,12 +1476,12 @@
 
 .chat-form-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0 10px;
 }
 
 .chat-form-grid.three {
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .chat-form-hint {
@@ -2385,7 +2385,7 @@
 
 .chat-settings-form-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0 12px;
 }
 
@@ -2394,7 +2394,7 @@
 }
 
 .chat-settings-form-grid.three {
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .chat-provider-actions {

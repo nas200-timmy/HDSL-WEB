@@ -554,7 +554,7 @@ export function InstancePluginsPanel({ instance }: { instance: Instance }) {
         onClose={() => setInfoTarget(null)}
       >
         {infoTarget && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 320 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
             <div className="comp-row">
               <span className="comp-label">版本</span>
               <span className="comp-value">

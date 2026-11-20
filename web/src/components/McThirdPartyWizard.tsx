@@ -298,7 +298,7 @@ export function McThirdPartyWizard({
       }}
       closeOnBackdrop={!busy}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 460 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
         <div className="dim" style={{ fontSize: 12 }}>
           {step < 5 ? `第 ${step + 1} / 5 步` : "服务器已就绪"}
         </div>
@@ -452,7 +452,7 @@ export function McThirdPartyWizard({
                 </span>
               </div>
             </Field>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8 }}>
               <Field label="游戏端口" hint="客户端连这个">
                 <input
                   className="input"
