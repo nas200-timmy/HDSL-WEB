@@ -161,6 +161,12 @@ class PlainChatTest {
             // The composer is a plain form; a text browser can post it again.
             assertTrue(page.contains("name=\"text\""), page);
             assertTrue(page.contains("action=\"/plain/s/" + sessionId + "/send\""), page);
+            // The IE11 visual layer uses the same avatar/bubble model as the SPA,
+            // but real tables keep w3m's reading order and avoid broken flexbox.
+            assertTrue(page.contains("class=\"chat-line user\""), page);
+            assertTrue(page.contains("class=\"chat-line assistant\""), page);
+            assertTrue(page.contains("class=\"chat-bubble\""), page);
+            assertTrue(page.contains("class=\"chat-composer\""), page);
         } finally {
             SettingsManager.settings().getAccounts().remove(account);
             provider.stop(0);

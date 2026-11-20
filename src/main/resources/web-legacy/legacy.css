@@ -124,7 +124,7 @@ a:hover { color: #5C6BC0; }
 }
 
 /* data tables as cards */
-table:not(.shell):not(.shell-card) {
+table:not(.shell):not(.shell-card):not(.chat-line) {
   border-collapse: separate;
   border-spacing: 0;
   width: 100%;
@@ -245,3 +245,427 @@ hr.turn-sep {
 .hljs-title, .hljs-function .hljs-title { color: #795E26; }
 .hljs-variable, .hljs-attr, .hljs-attribute { color: #001080; }
 .hljs-meta, .hljs-symbol, .hljs-bullet { color: #267F99; }
+
+/* Chat layout: the same avatar + bubble silhouette as the SPA, expressed with
+ * real tables. Cell order, not flex-direction, puts the user on the right.
+ * Text browsers ignore this block and still read name -> body -> attachment. */
+
+table.shell {
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+td.shell-nav {
+  width: 220px;
+  padding: 10px;
+  background: rgba(245, 242, 250, 0.92);
+}
+
+td.shell-main {
+  padding: 16px 20px 20px;
+  background: rgba(245, 242, 250, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+}
+
+.legacy-brand {
+  padding: 4px 4px 12px;
+  border-bottom: 1px solid #C6C5D3;
+  margin-bottom: 8px;
+}
+
+.legacy-logo {
+  display: inline-block;
+  width: 32px;
+  height: 32px;
+  line-height: 32px;
+  text-align: center;
+  vertical-align: middle;
+  border-radius: 8px;
+  background: #4352A5;
+  color: #FFFFFF;
+  font-size: 20px;
+  font-weight: 700;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.legacy-brand-name {
+  display: inline-block;
+  vertical-align: middle;
+  padding-left: 8px;
+  color: #1B1B21;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.legacy-brand-name small {
+  display: block;
+  color: #454651;
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.nav-caption {
+  padding: 8px 8px 2px;
+  color: #77767E;
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+.navlist a {
+  padding: 8px 10px;
+}
+
+.nav-foot {
+  padding: 14px 8px 2px;
+  color: #77767E;
+  font-size: 10px;
+}
+
+/* Session header: title and current assistant/model, followed by two quiet
+ * action strips instead of one long dotted line of links. */
+.chat-head {
+  background: #FBF8FF;
+  border: 1px solid #E3E1E9;
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+
+.chat-heading-avatar {
+  display: inline-block;
+  width: 36px;
+  height: 36px;
+  line-height: 36px;
+  text-align: center;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: #5C6BC0;
+  color: #FFFFFF;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-heading-text {
+  display: inline-block;
+  vertical-align: middle;
+  padding-left: 10px;
+  max-width: 88%;
+}
+
+.chat-heading h1 {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.chat-heading p {
+  margin: 3px 0 0;
+  font-size: 11px;
+}
+
+.chat-toolbar {
+  padding: 4px 0 8px;
+  margin: 0;
+}
+
+.chat-toolbar a {
+  margin: 0 6px 4px 0;
+}
+
+.chat-toolbar input[type="submit"] {
+  height: 26px;
+  line-height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.chat-modelbar {
+  border-top: 1px solid #E3E1E9;
+  border-bottom: 1px solid #E3E1E9;
+  padding: 8px 0;
+  margin-bottom: 10px;
+}
+
+.chat-modelbar .modelform {
+  margin: 0;
+}
+
+.chat-modelbar select {
+  max-width: 420px;
+}
+
+/* One table per message. Generic data-table styling is excluded above by the
+ * chat-line class; these cells carry no row borders or default cell padding. */
+table.chat-line {
+  border: 0;
+  background: transparent;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 0 0 4px;
+}
+
+table.chat-line.user {
+  width: auto;
+  max-width: 88%;
+}
+
+.chat-line td {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.chat-avatar-cell {
+  width: 40px;
+  vertical-align: top;
+}
+
+.chat-avatar {
+  display: inline-block;
+  width: 30px;
+  height: 30px;
+  line-height: 30px;
+  text-align: center;
+  border-radius: 50%;
+  background: #DEE0FF;
+  color: #3E4A89;
+  font-size: 11px;
+  font-weight: 600;
+  margin-top: 18px;
+}
+
+.chat-line.user .chat-avatar {
+  background: #5C6BC0;
+  color: #FFFFFF;
+}
+
+.chat-msg-meta {
+  padding: 0 2px 4px;
+  color: #454651;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.chat-line.user .chat-msg-meta {
+  text-align: right;
+}
+
+.chat-msg-time {
+  color: #77767E;
+}
+
+.chat-status {
+  color: #77767E;
+}
+
+.chat-status.streaming {
+  color: #4352A5;
+  font-weight: 600;
+}
+
+.chat-status.error {
+  color: #BA1A1A;
+}
+
+.chat-bubble {
+  background: #FFFFFF;
+  border: 1px solid #E3E1E9;
+  border-radius: 4px 14px 14px 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.07);
+  padding: 10px 13px;
+  color: #1B1B21;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.chat-line.user .chat-bubble {
+  background: #5C6BC0;
+  border-color: #5C6BC0;
+  border-radius: 14px 4px 14px 14px;
+  color: #FFFFFF;
+}
+
+.chat-bubble pre.msg {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.chat-bubble .legacy-md > :first-child {
+  margin-top: 0;
+}
+
+.chat-bubble .legacy-md > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-bubble .legacy-md td {
+  border: 1px solid #C6C5D3;
+  padding: .4rem .6rem;
+}
+
+.chat-line.user .chat-bubble a {
+  color: #FFFFFF;
+  text-decoration: underline;
+}
+
+.chat-attachments {
+  border-top: 1px solid #E3E1E9;
+  margin-top: 8px;
+  padding-top: 6px;
+  font-size: 11px;
+}
+
+.chat-line.user .chat-attachments {
+  border-top-color: #8B96D1;
+}
+
+.chat-empty {
+  background: #FBF8FF;
+  border: 1px dashed #C6C5D3;
+  border-radius: 8px;
+  color: #454651;
+  text-align: center;
+  padding: 30px 16px;
+  line-height: 1.8;
+  margin: 12px 0;
+}
+
+/* The hr remains meaningful to w3m/lynx. In the graphical shell the avatar and
+ * bubble already provide the boundary, so only whitespace is needed. */
+hr.turn-sep {
+  border: 0;
+  height: 0;
+  margin: 14px 0;
+}
+
+.chat-composer {
+  background: #FFFFFF;
+  border: 1px solid #C6C5D3;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  padding: 10px 12px 8px;
+  margin-top: 12px;
+}
+
+.chat-composer-title {
+  color: #454651;
+  font-size: 11px;
+  font-weight: 600;
+  padding-bottom: 6px;
+}
+
+.chat-composer textarea {
+  width: 100%;
+  min-height: 76px;
+  box-sizing: border-box;
+  background: #F7F5FC;
+  border: 1px solid #E3E1E9;
+  border-radius: 6px;
+  font-weight: 400;
+  line-height: 1.55;
+}
+
+.chat-composer textarea:focus {
+  background: #FFFFFF;
+  border-color: #4352A5;
+}
+
+.chat-composer-bar {
+  padding-top: 8px;
+}
+
+.chat-composer-bar input[type="submit"] {
+  float: right;
+  min-width: 76px;
+}
+
+.chat-composer-hint {
+  color: #77767E;
+  font-size: 11px;
+  line-height: 36px;
+}
+
+.chat-composer-refresh {
+  clear: both;
+  text-align: right;
+  font-size: 11px;
+  padding-top: 2px;
+}
+
+@media (max-width: 760px) {
+  /* Stack only the outer shell. Message tables keep their avatar columns. */
+  table.shell,
+  table.shell > tbody,
+  table.shell > tbody > tr {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  table.shell > tbody > tr > td.shell-nav,
+  table.shell > tbody > tr > td.shell-main {
+    display: block;
+    width: auto;
+    max-width: none;
+    box-sizing: border-box;
+  }
+
+  td.shell-nav {
+    padding: 8px 10px;
+    margin-bottom: 8px;
+  }
+
+  .legacy-brand {
+    display: inline-block;
+    border: 0;
+    padding: 0 10px 0 0;
+    margin: 0;
+  }
+
+  .nav-caption,
+  .nav-foot,
+  .navlist br {
+    display: none;
+  }
+
+  .navlist a,
+  .navlist form {
+    display: inline-block;
+    margin: 2px 4px 2px 0;
+  }
+
+  .navlist input[type="submit"] {
+    width: auto;
+    height: 30px;
+    line-height: 30px;
+  }
+
+  td.shell-main {
+    padding: 10px;
+  }
+
+  .chat-heading-text {
+    max-width: 80%;
+    word-wrap: break-word;
+  }
+
+  table.chat-line.user {
+    width: auto;
+    max-width: 96%;
+  }
+
+  .chat-composer-hint {
+    line-height: 1.5;
+  }
+}

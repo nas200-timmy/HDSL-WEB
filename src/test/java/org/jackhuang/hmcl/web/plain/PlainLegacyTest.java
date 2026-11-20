@@ -102,7 +102,7 @@ class PlainLegacyTest {
             assertTrue(unlocked.body().contains("name=\"text\""), unlocked.body());
             // Text browsers ignore the stylesheet: the nav must break lines by
             // markup alone, and submits must be inputs w3m/lynx know how to post.
-            assertTrue(unlocked.body().contains("会话</a><br>"), unlocked.body());
+            assertTrue(unlocked.body().contains("会话列表</a><br>"), unlocked.body());
             assertTrue(unlocked.body().contains("type=\"submit\" value=\"退出\""), unlocked.body());
             // The legacy surface can also fork and export without the SPA.
             assertTrue(unlocked.body().contains("导出</a>"), unlocked.body());
@@ -192,6 +192,10 @@ class PlainLegacyTest {
             HttpResponse<String> css = get(client, base + "/plain/legacy.css", null);
             assertEquals(200, css.statusCode(), css.body());
             assertTrue(css.body().contains(".hljs-keyword"), css.body());
+            assertTrue(css.body().contains(".chat-line.user"), css.body());
+            assertTrue(css.body().contains(".chat-composer"), css.body());
+            assertFalse(css.body().contains("display: flex"), "IE11 layout must stay table-based");
+            assertFalse(css.body().contains("var(--"), "IE11 has no CSS custom properties");
 
             HttpResponse<String> enhanced = get(client, base + "/plain/old", null);
             String strict = enhanced.headers().firstValue("content-security-policy").orElseThrow();
