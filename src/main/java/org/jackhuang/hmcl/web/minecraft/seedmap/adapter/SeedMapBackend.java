@@ -37,6 +37,12 @@ public final class SeedMapBackend {
     public record Result(BufferedImage image, String[][] samples, SeedMap map) {
     }
 
+    /// Called once per finished row, so a large render still shows a live
+    /// progress bar instead of jumping from 0 to 100.
+    public interface Progress {
+        void update(long done, long total);
+    }
+
     public static boolean supports(String versionId) {
         try {
             Version.parse(versionId);
@@ -47,6 +53,10 @@ public final class SeedMapBackend {
     }
 
     public static Result render(PreviewSpec spec) {
+        return render(spec, null);
+    }
+
+    public static Result render(PreviewSpec spec, Progress progress) {
         Version version = Version.parse(spec.version());
         long seed = parseSeed(spec.seed());
         SeedMap map = SeedMap.of(version, seed);
@@ -56,6 +66,7 @@ public final class SeedMapBackend {
         int chunks = spec.chunksPerSide();
         int first = spec.firstChunk();
         double step = chunks / (double) cells;
+        long total = (long) cells * cells;
 
         for (int j = 0; j < cells; j++) {
             for (int i = 0; i < cells; i++) {
@@ -65,6 +76,9 @@ public final class SeedMapBackend {
                 int blockZ = chunkZ * 16 + 8;
                 Biome biome = map.biomeAt(blockX, spec.biomeY(), blockZ);
                 samples[j][i] = biome.key();
+            }
+            if (progress != null) {
+                progress.update((j + 1) * (long) cells, total);
             }
         }
         return new Result(PreviewRenderer.renderBiome(samples, spec), samples, map);

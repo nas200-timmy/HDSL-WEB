@@ -1018,7 +1018,7 @@ export const api = {
       biomeY?: number;
       mode?: "detail" | "biome";
       engine?: "java" | "server";
-      quality?: "standard" | "high";
+      quality?: "standard" | "high" | "ultra";
     }) =>
       request<McSeedPreviewJob>("/api/mc/preview", jsonInit("POST", body)),
     previewJob: (id: string) =>
@@ -1996,8 +1996,8 @@ export interface McSeedPreviewJob {
   mode?: "detail" | "biome";
   /** 计算引擎：`java` 用 cubiomes 内核，`server` 起真服务端。 */
   engine?: "java" | "server";
-  /** Java 引擎的采样密度：`high` 更清晰但更慢。 */
-  quality?: "standard" | "high";
+  /** Java 引擎的采样密度：`high` 更清晰但更慢，`ultra` 最清晰但最慢。 */
+  quality?: "standard" | "high" | "ultra";
   createdAt: string;
   elapsedMs?: number;
   /** 剩余秒数的粗略估计，进度太小时不给。 */
@@ -2016,6 +2016,8 @@ export interface McSeedPreviewHistoryEntry {
   radius: number;
   biomeY: number;
   mode?: "detail" | "biome";
+  engine?: "java" | "server";
+  quality?: "standard" | "high" | "ultra";
   generatedAt: string;
   partial: boolean;
   bytes: number;
@@ -2024,7 +2026,13 @@ export interface McSeedPreviewHistoryEntry {
 
 export interface McSeedPreviewHistory {
   limit: number;
-  entries: McSeedPreviewHistoryEntry[];
+  seeds: McSeedPreviewSeedGroup[];
+}
+
+/** 一个种子下缓存的全部变体（版本 / 引擎 / 分辨率 / 范围）。 */
+export interface McSeedPreviewSeedGroup {
+  seed: string;
+  variants: McSeedPreviewHistoryEntry[];
 }
 
 /** 与图片一起缓存的元数据。 */

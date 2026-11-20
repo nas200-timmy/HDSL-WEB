@@ -51,6 +51,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -533,7 +534,7 @@ public final class SeedPreviewService {
             return;
         }
         job.state(PreviewJob.State.RENDERING);
-        SeedMapBackend.Result result = SeedMapBackend.render(spec);
+        SeedMapBackend.Result result = SeedMapBackend.render(spec, job::renderProgress);
         Path directory = Files.createDirectories(cacheDirectory(spec));
         Path png = directory.resolve("preview.png");
         Path meta = directory.resolve("meta.json");
@@ -870,6 +871,8 @@ public final class SeedPreviewService {
         body.addProperty("biomeY", spec.biomeY());
         body.addProperty("chunks", chunks.size());
         body.addProperty("mode", "detail");
+        body.addProperty("engine", spec.engine().name().toLowerCase(Locale.ROOT));
+        body.addProperty("quality", spec.quality().name().toLowerCase(Locale.ROOT));
         body.addProperty("partial", partial);
         body.addProperty("generatedAt", Instant.now().toString());
 
@@ -999,6 +1002,8 @@ public final class SeedPreviewService {
         body.addProperty("radius", spec.radiusBlocks());
         body.addProperty("biomeY", spec.biomeY());
         body.addProperty("mode", "biome");
+        body.addProperty("engine", spec.engine().name().toLowerCase(Locale.ROOT));
+        body.addProperty("quality", spec.quality().name().toLowerCase(Locale.ROOT));
         body.addProperty("chunks", samples.length * samples.length);
         body.addProperty("partial", partial);
         body.addProperty("generatedAt", Instant.now().toString());
@@ -1042,7 +1047,7 @@ public final class SeedPreviewService {
                 .resolve(spec.radiusBlocks() + "-" + spec.biomeY()
                         + ("BIOME".equals(spec.mode().name()) ? "-biome" : "")
                         + (spec.engine() == PreviewSpec.Engine.JAVA ? "-java" : "")
-                        + (spec.quality() == PreviewSpec.Quality.HIGH ? "-hd" : "") + "-v10");
+                        + (spec.quality() == PreviewSpec.Quality.HIGH ? "-hd" : spec.quality() == PreviewSpec.Quality.ULTRA ? "-ultra" : "") + "-v10");
     }
 
     private static String seedHash(String seed) {
@@ -1126,11 +1131,13 @@ public final class SeedPreviewService {
         }
     }
 
-    /// Every finished preview on disk, newest first.
+    /// Every finished preview on disk, grouped by seed.
     ///
     /// The list is built from the cache itself rather than an index file: the
     /// PNG and its `meta.json` are the record, so a manually deleted file or a
-    /// half-written one simply does not appear.
+    /// half-written one simply does not appear. Results are grouped so the same
+    /// seed can be viewed in several versions, engines and resolutions; the cap
+    /// counts seeds, not individual pictures.
     public List<JsonObject> history() {
         List<JsonObject> entries = new ArrayList<>();
         try (Stream<Path> versions = Files.list(cacheRoot)) {
@@ -1154,9 +1161,46 @@ public final class SeedPreviewService {
         } catch (IOException e) {
             return List.of();
         }
+        // Group by seed, newest variant first inside each group.
+        Map<String, List<JsonObject>> bySeed = new LinkedHashMap<>();
         entries.sort((left, right) -> right.get("generatedAt").getAsString()
                 .compareTo(left.get("generatedAt").getAsString()));
-        return entries.size() > MAX_HISTORY ? entries.subList(0, MAX_HISTORY) : entries;
+        for (JsonObject entry : entries) {
+            bySeed.computeIfAbsent(entry.get("seed").getAsString(), k -> new ArrayList<>()).add(entry);
+        }
+        List<JsonObject> result = new ArrayList<>();
+        for (List<JsonObject> group : bySeed.values()) {
+            result.addAll(group);
+            if (result.size() >= MAX_HISTORY) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    /// The same history, shaped for the UI: one row per seed, with every cached
+    /// variant (version / engine / quality / radius) underneath.
+    public JsonObject historyGrouped() {
+        List<JsonObject> entries = history();
+        Map<String, List<JsonObject>> bySeed = new LinkedHashMap<>();
+        for (JsonObject entry : entries) {
+            bySeed.computeIfAbsent(entry.get("seed").getAsString(), k -> new ArrayList<>()).add(entry);
+        }
+        JsonArray seeds = new JsonArray();
+        for (Map.Entry<String, List<JsonObject>> group : bySeed.entrySet()) {
+            JsonObject seed = new JsonObject();
+            seed.addProperty("seed", group.getKey());
+            JsonArray variants = new JsonArray();
+            for (JsonObject variant : group.getValue()) {
+                variants.add(variant);
+            }
+            seed.add("variants", variants);
+            seeds.add(seed);
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty("limit", MAX_HISTORY);
+        body.add("seeds", seeds);
+        return body;
     }
 
     /// The directory of one history entry, or `null` when it is gone.
@@ -1227,7 +1271,8 @@ public final class SeedPreviewService {
             int radius = body.get("radius").getAsInt();
             int biomeY = body.get("biomeY").getAsInt();
             JsonObject entry = new JsonObject();
-            entry.addProperty("id", historyId(version, seed, radius, biomeY));
+            entry.addProperty("id", historyId(version, seed, radius, biomeY,
+                entry.get("engine").getAsString(), entry.get("quality").getAsString()));
             entry.addProperty("version", version);
             entry.addProperty("seed", seed);
             entry.addProperty("radius", radius);
@@ -1235,6 +1280,8 @@ public final class SeedPreviewService {
             entry.addProperty("generatedAt", body.get("generatedAt").getAsString());
             entry.addProperty("partial", body.get("partial").getAsBoolean());
             entry.addProperty("mode", body.has("mode") ? body.get("mode").getAsString() : "detail");
+            entry.addProperty("engine", body.has("engine") ? body.get("engine").getAsString() : "server");
+            entry.addProperty("quality", body.has("quality") ? body.get("quality").getAsString() : "standard");
             entry.addProperty("bytes", Files.size(png));
             if (body.has("structures") && body.get("structures").isJsonArray()) {
                 entry.addProperty("structures", body.getAsJsonArray("structures").size());
@@ -1247,8 +1294,8 @@ public final class SeedPreviewService {
 
     /// A stable handle for a cached result: the same four inputs always name the
     /// same picture, so a bookmark or a page reload keeps working.
-    public static String historyId(String version, String seed, int radius, int biomeY) {
-        String key = version + "|" + seed + "|" + radius + "|" + biomeY;
+    public static String historyId(String version, String seed, int radius, int biomeY, String engine, String quality) {
+        String key = version + "|" + seed + "|" + radius + "|" + biomeY + "|" + engine + "|" + quality;
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
                     .digest(key.getBytes(StandardCharsets.UTF_8));
@@ -1258,10 +1305,11 @@ public final class SeedPreviewService {
         }
     }
 
-    /// Keeps the newest [#MAX_HISTORY] results. Old ones are deleted whole —
-    /// image and metadata together — so the cache never grows without a bound.
+    /// Keeps the newest [#MAX_HISTORY] seeds, not pictures. A seed may keep every
+    /// cached variant (version / engine / quality / radius); only whole seeds
+    /// fall off the end. Image and metadata are deleted together.
     private void trimCache() {
-        List<Path> variants = new ArrayList<>();
+        Map<String, List<Path>> bySeed = new LinkedHashMap<>();
         try (Stream<Path> versions = Files.list(cacheRoot)) {
             for (Path version : versions.filter(Files::isDirectory).toList()) {
                 if ("tmp".equals(version.getFileName().toString())) {
@@ -1270,7 +1318,12 @@ public final class SeedPreviewService {
                 try (Stream<Path> seeds = Files.list(version)) {
                     for (Path seed : seeds.filter(Files::isDirectory).toList()) {
                         try (Stream<Path> children = Files.list(seed)) {
-                            children.filter(Files::isDirectory).forEach(variants::add);
+                            for (Path variant : children.filter(Files::isDirectory).toList()) {
+                                JsonObject entry = entryOf(variant);
+                                if (entry != null) {
+                                    bySeed.computeIfAbsent(entry.get("seed").getAsString(), k -> new ArrayList<>()).add(variant);
+                                }
+                            }
                         }
                     }
                 }
@@ -1278,13 +1331,25 @@ public final class SeedPreviewService {
         } catch (IOException e) {
             return;
         }
-        if (variants.size() <= MAX_HISTORY) {
+        if (bySeed.size() <= MAX_HISTORY) {
             return;
         }
-        variants.sort(Comparator.comparingLong(SeedPreviewService::lastModified).reversed());
-        for (int i = MAX_HISTORY; i < variants.size(); i++) {
-            deleteTree(variants.get(i));
+        // Rank each seed by its newest variant, then drop the oldest whole seeds.
+        List<Map.Entry<String, List<Path>>> groups = new ArrayList<>(bySeed.entrySet());
+        groups.sort((left, right) -> Long.compare(newest(right.getValue()), newest(left.getValue())));
+        for (int i = MAX_HISTORY; i < groups.size(); i++) {
+            for (Path variant : groups.get(i).getValue()) {
+                deleteTree(variant);
+            }
         }
+    }
+
+    private static long newest(List<Path> variants) {
+        long best = 0;
+        for (Path variant : variants) {
+            best = Math.max(best, lastModified(variant));
+        }
+        return best;
     }
 
     private static long lastModified(Path path) {

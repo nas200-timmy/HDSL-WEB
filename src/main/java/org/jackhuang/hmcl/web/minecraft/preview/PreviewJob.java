@@ -158,6 +158,14 @@ public final class PreviewJob {
         this.percent = (int) Math.min(74, 5 + done * 70 / Math.max(1, total));
     }
 
+    /// The Java overview has no generation phase; its whole work is rendering.
+    /// The bar therefore runs from 5 to 95 instead of the server-side 5 to 74.
+    public void renderProgress(long done, long total) {
+        this.chunksDone = done;
+        this.chunksTotal = Math.max(1, total);
+        this.percent = (int) Math.min(95, 5 + done * 90 / Math.max(1, total));
+    }
+
     public void attach(@Nullable Process process) {
         this.process = process;
     }

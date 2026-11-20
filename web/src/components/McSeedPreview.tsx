@@ -5,6 +5,7 @@ import {
   type McSeedPreviewHistoryEntry,
   type McSeedPreviewJob,
   type McSeedPreviewMeta,
+  type McSeedPreviewSeedGroup,
   type McSeedPreviewStructures,
   type McVersion,
 } from "../api";
@@ -48,12 +49,13 @@ export function McSeedPreview({
   const [seed, setSeed] = useState(initialSeed);
   const [mode, setMode] = useState<"detail" | "biome">("biome");
   const [engine, setEngine] = useState<"java" | "server">("java");
+  const [quality, setQuality] = useState<"high" | "ultra">("high");
   const [radius, setRadius] = useState(512);
   const [caps, setCaps] = useState<McSeedPreviewCapabilities | null>(null);
   const [job, setJob] = useState<McSeedPreviewJob | null>(null);
   const [view, setView] = useState<View | null>(null);
   const [meta, setMeta] = useState<McSeedPreviewMeta | null>(null);
-  const [history, setHistory] = useState<McSeedPreviewHistoryEntry[]>([]);
+  const [history, setHistory] = useState<McSeedPreviewSeedGroup[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exactStructures, setExactStructures] = useState<McSeedPreviewStructures | null>(null);
@@ -89,7 +91,7 @@ export function McSeedPreview({
   const refreshHistory = useCallback(async () => {
     try {
       const page = await api.mc.previewHistory();
-      setHistory(page.entries);
+      setHistory(page.seeds);
     } catch {
       // 历史读不到不影响正在看的图。
     }
@@ -137,7 +139,7 @@ export function McSeedPreview({
     return () => window.clearTimeout(timer);
   }, [job, poll]);
 
-  const start = async (quality: "standard" | "high" = "standard") => {
+  const start = async (quality: "standard" | "high" | "ultra" = "standard") => {
     const trimmed = seed.trim();
     if (!trimmed) {
       setError("先填一个种子");
@@ -321,14 +323,26 @@ export function McSeedPreview({
           {busy ? "提交中…" : "生成预览"}
         </button>
         {engine === "java" && (
-          <button
-            className="btn"
-            disabled={busy || running}
-            onClick={() => void start("high")}
-            title="最清晰的 Java 群系图：最大范围约需 15 秒"
-          >
-            高清生成
-          </button>
+          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <select
+              className="input"
+              value={quality}
+              onChange={(e) => setQuality(e.target.value as "high" | "ultra")}
+              style={{ width: 90, padding: "2px 4px", fontSize: 12 }}
+              title="高清采样分辨率"
+            >
+              <option value="high">2048</option>
+              <option value="ultra">4096</option>
+            </select>
+            <button
+              className="btn"
+              disabled={busy || running}
+              onClick={() => void start(quality)}
+              title="最高分辨率：最大范围约需 1 分钟"
+            >
+              高清生成
+            </button>
+          </div>
         )}
         {running && (
           <button className="btn btn-text" onClick={() => void cancel()}>
@@ -466,47 +480,55 @@ export function McSeedPreview({
               最近 {history.length} / {30} 个
             </span>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {history.map((entry) => {
-              const active = view?.source === "history" && view.id === entry.id;
-              return (
-                <div
-                  key={entry.id}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "4px 6px",
-                    borderRadius: 4,
-                    fontSize: 12,
-                    background: active ? "rgba(78,111,255,.14)" : "transparent",
-                  }}
-                >
-                  <button
-                    className="btn btn-text"
-                    style={{ padding: "0 4px", fontFamily: "inherit" }}
-                    title="查看这个种子"
-                    onClick={() => void openHistory(entry)}
-                  >
-                    <span className="mono">{entry.seed}</span>
-                  </button>
-                  <span className="dim mono">
-                    {entry.version} · {(entry.radius * 2).toLocaleString()} 格
-                  </span>
-                  <span className="dim" style={{ flex: 1, textAlign: "right" }}>
-                    {new Date(entry.generatedAt).toLocaleString()}
-                  </span>
-                  <button
-                    className="btn btn-text"
-                    style={{ padding: "0 6px", color: "#b3261e" }}
-                    title="删除这个结果"
-                    onClick={() => void removeHistory(entry)}
-                  >
-                    删除
-                  </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {history.map((group) => (
+              <div key={group.seed} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                  <span className="mono" style={{ fontWeight: 600 }}>{group.seed}</span>
+                  <span className="dim">{group.variants.length} 个结果</span>
                 </div>
-              );
-            })}
+                <div style={{ display: "flex", flexDirection: "column", gap: 2, marginLeft: 12 }}>
+                  {group.variants.map((entry) => {
+                    const active = view?.source === "history" && view.id === entry.id;
+                    const label = `${entry.version} · ${entry.engine === "java" ? "Java" : "MC"} · ${entry.quality === "high" ? "高清" : entry.quality === "ultra" ? "超清" : "标准"} · ${(entry.radius * 2).toLocaleString()} 格`;
+                    return (
+                      <div
+                        key={entry.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "2px 6px",
+                          borderRadius: 4,
+                          fontSize: 11,
+                          background: active ? "rgba(78,111,255,.14)" : "transparent",
+                        }}
+                      >
+                        <button
+                          className="btn btn-text"
+                          style={{ padding: "0 4px", fontFamily: "inherit" }}
+                          title="查看这个结果"
+                          onClick={() => void openHistory(entry)}
+                        >
+                          {label}
+                        </button>
+                        <span className="dim" style={{ flex: 1, textAlign: "right" }}>
+                          {new Date(entry.generatedAt).toLocaleString()}
+                        </span>
+                        <button
+                          className="btn btn-text"
+                          style={{ padding: "0 6px", color: "#b3261e" }}
+                          title="删除这个结果"
+                          onClick={() => void removeHistory(entry)}
+                        >
+                          删除
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -842,115 +864,6 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", fontSize: 12 }}>
-        <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <input type="checkbox" checked={layers.grid}
-            onChange={(e) => setLayers({ ...layers, grid: e.target.checked })} />
-          网格
-        </label>
-        <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <input type="checkbox" checked={layers.slime}
-            onChange={(e) => setLayers({ ...layers, slime: e.target.checked })} />
-          <span style={{ display: "inline-block", width: 10, height: 10, background: "#59c46a", opacity: 0.55 }} />
-          史莱姆区块
-        </label>
-        <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <input type="checkbox" checked={layers.structures}
-            onChange={(e) => setLayers({ ...layers, structures: e.target.checked })} />
-          <span style={{ display: "inline-block", width: 10, height: 10, background: "#FFD54F", borderRadius: 5 }} />
-          结构
-        </label>
-        {structureTypes.length > 0 && (
-          <details style={{ fontSize: 12 }}>
-            <summary className="dim" style={{ cursor: "pointer" }}>按类型筛选</summary>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4, maxHeight: 120, overflow: "auto" }}>
-              {structureTypes.map((id) => (
-                <label key={id} style={{ display: "flex", gap: 2, alignItems: "center", fontSize: 11 }}>
-                  <input
-                    type="checkbox"
-                    checked={structureFilter[id] !== false}
-                    onChange={(e) => setStructureFilter({ ...structureFilter, [id]: e.target.checked })}
-                  />
-                  {id}
-                </label>
-              ))}
-            </div>
-          </details>
-        )}
-        <span style={{ flex: 1 }} />
-        <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flex: "0 0 auto" }}>
-          <input
-            className="input mono"
-            style={{ width: 130, padding: "2px 6px", fontSize: 12 }}
-            placeholder="搜索结构"
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") searchStructures();
-            }}
-          />
-          <button className="btn btn-text" onClick={searchStructures} title="搜索结构">
-            搜索
-          </button>
-        </span>
-        {searchResults.length > 0 && (
-          <>
-            <button className="btn btn-text" onClick={() => nextResult(-1)} title="上一个结果">
-              ↑
-            </button>
-            <span className="dim mono">{searchIndex + 1}/{searchResults.length}</span>
-            <button className="btn btn-text" onClick={() => nextResult(1)} title="下一个结果">
-              ↓
-            </button>
-          </>
-        )}
-        <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flex: "0 0 auto" }}>
-          <input
-            className="input mono"
-            style={{ width: 130, padding: "2px 6px", fontSize: 12 }}
-            placeholder="X Z 跳转"
-            value={jumpText}
-            onChange={(e) => setJumpText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") jumpTo();
-            }}
-          />
-          <button className="btn btn-text" onClick={jumpTo} title="跳转到坐标">
-            跳转
-          </button>
-        </span>
-        <span className="dim mono">{Math.round(scale * 100)}%</span>
-        {pinned && (
-          <button className="btn btn-text" onClick={() => setPinned(null)}>
-            取消选点
-          </button>
-        )}
-        <button
-          className="btn btn-text"
-          onClick={() => {
-            setMeasuring(!measuring);
-            if (!measuring) setMeasure([]);
-          }}
-          title="测距：依次点击地图上的点"
-        >
-          {measuring ? "完成测距" : "测距"}
-        </button>
-        {measuring && measure.length > 0 && (
-          <button className="btn btn-text" onClick={() => setMeasure([])} title="清除测距点">
-            清除
-          </button>
-        )}
-        <button className="btn btn-text" onClick={download} title="下载 PNG">
-          下载
-        </button>
-        <button className="btn btn-text" onClick={() => setFullscreen(!fullscreen)}>
-          {fullscreen ? "退出全屏" : "全屏"}
-        </button>
-        <button className="btn btn-text" onClick={reset}>
-          复位
-        </button>
-      </div>
-
       <div
         ref={frameRef}
         tabIndex={0}
@@ -999,6 +912,8 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
           inset: fullscreen ? 0 : undefined,
           zIndex: fullscreen ? 1000 : undefined,
           width: "100%",
+          maxWidth: fullscreen ? undefined : "480px",
+          margin: fullscreen ? undefined : "0 auto",
           aspectRatio: fullscreen ? undefined : "1 / 1",
           overflow: "hidden",
           borderRadius: fullscreen ? 0 : 6,
@@ -1112,6 +1027,115 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
           <div style={{ width: barWidth, height: 4, borderLeft: "1px solid #e8eef4", borderRight: "1px solid #e8eef4", borderBottom: "1px solid #e8eef4" }} />
           <div className="mono" style={{ marginTop: 2, textShadow: "0 1px 2px rgba(0,0,0,.8)" }}>{barBlocks} 格</div>
         </div>
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", fontSize: 12 }}>
+        <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <input type="checkbox" checked={layers.grid}
+            onChange={(e) => setLayers({ ...layers, grid: e.target.checked })} />
+          网格
+        </label>
+        <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <input type="checkbox" checked={layers.slime}
+            onChange={(e) => setLayers({ ...layers, slime: e.target.checked })} />
+          <span style={{ display: "inline-block", width: 10, height: 10, background: "#59c46a", opacity: 0.55 }} />
+          史莱姆区块
+        </label>
+        <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <input type="checkbox" checked={layers.structures}
+            onChange={(e) => setLayers({ ...layers, structures: e.target.checked })} />
+          <span style={{ display: "inline-block", width: 10, height: 10, background: "#FFD54F", borderRadius: 5 }} />
+          结构
+        </label>
+        {structureTypes.length > 0 && (
+          <details style={{ fontSize: 12 }}>
+            <summary className="dim" style={{ cursor: "pointer" }}>按类型筛选</summary>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4, maxHeight: 120, overflow: "auto" }}>
+              {structureTypes.map((id) => (
+                <label key={id} style={{ display: "flex", gap: 2, alignItems: "center", fontSize: 11 }}>
+                  <input
+                    type="checkbox"
+                    checked={structureFilter[id] !== false}
+                    onChange={(e) => setStructureFilter({ ...structureFilter, [id]: e.target.checked })}
+                  />
+                  {id}
+                </label>
+              ))}
+            </div>
+          </details>
+        )}
+        <span style={{ flex: 1 }} />
+        <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flex: "0 0 auto" }}>
+          <input
+            className="input mono"
+            style={{ width: 130, padding: "2px 6px", fontSize: 12 }}
+            placeholder="搜索结构"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") searchStructures();
+            }}
+          />
+          <button className="btn btn-text" onClick={searchStructures} title="搜索结构">
+            搜索
+          </button>
+        </span>
+        {searchResults.length > 0 && (
+          <>
+            <button className="btn btn-text" onClick={() => nextResult(-1)} title="上一个结果">
+              ↑
+            </button>
+            <span className="dim mono">{searchIndex + 1}/{searchResults.length}</span>
+            <button className="btn btn-text" onClick={() => nextResult(1)} title="下一个结果">
+              ↓
+            </button>
+          </>
+        )}
+        <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flex: "0 0 auto" }}>
+          <input
+            className="input mono"
+            style={{ width: 130, padding: "2px 6px", fontSize: 12 }}
+            placeholder="X Z 跳转"
+            value={jumpText}
+            onChange={(e) => setJumpText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") jumpTo();
+            }}
+          />
+          <button className="btn btn-text" onClick={jumpTo} title="跳转到坐标">
+            跳转
+          </button>
+        </span>
+        <span className="dim mono">{Math.round(scale * 100)}%</span>
+        {pinned && (
+          <button className="btn btn-text" onClick={() => setPinned(null)}>
+            取消选点
+          </button>
+        )}
+        <button
+          className="btn btn-text"
+          onClick={() => {
+            setMeasuring(!measuring);
+            if (!measuring) setMeasure([]);
+          }}
+          title="测距：依次点击地图上的点"
+        >
+          {measuring ? "完成测距" : "测距"}
+        </button>
+        {measuring && measure.length > 0 && (
+          <button className="btn btn-text" onClick={() => setMeasure([])} title="清除测距点">
+            清除
+          </button>
+        )}
+        <button className="btn btn-text" onClick={download} title="下载 PNG">
+          下载
+        </button>
+        <button className="btn btn-text" onClick={() => setFullscreen(!fullscreen)}>
+          {fullscreen ? "退出全屏" : "全屏"}
+        </button>
+        <button className="btn btn-text" onClick={reset}>
+          复位
+        </button>
       </div>
 
       {/* 坐标读数：固定在地图下面，像 CAD 的状态栏 */}

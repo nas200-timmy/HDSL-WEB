@@ -199,8 +199,11 @@ public final class SeedPreviewServlet extends HttpServlet {
                 ? PreviewSpec.Mode.BIOME : PreviewSpec.Mode.DETAIL;
         PreviewSpec.Engine engine = "server".equalsIgnoreCase(string(body, "engine"))
                 ? PreviewSpec.Engine.SERVER : PreviewSpec.Engine.JAVA;
-        PreviewSpec.Quality quality = "high".equalsIgnoreCase(string(body, "quality"))
-                ? PreviewSpec.Quality.HIGH : PreviewSpec.Quality.STANDARD;
+        PreviewSpec.Quality quality = switch (string(body, "quality") == null ? "standard" : string(body, "quality").toLowerCase(Locale.ROOT)) {
+            case "high" -> PreviewSpec.Quality.HIGH;
+            case "ultra" -> PreviewSpec.Quality.ULTRA;
+            default -> PreviewSpec.Quality.STANDARD;
+        };
         if (engine == PreviewSpec.Engine.JAVA && mode != PreviewSpec.Mode.BIOME) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "Java 内核只支持群系速览");
             return;
@@ -212,17 +215,10 @@ public final class SeedPreviewServlet extends HttpServlet {
         Json.write(response, HttpServletResponse.SC_ACCEPTED, job.toJson());
     }
 
-    /// The results still on disk, newest first. This is what "试过的种子"
+    /// The results still on disk, grouped by seed. This is what "试过的种子"
     /// shows; it survives a page reload because it is the cache itself.
     private void history(HttpServletResponse response) throws IOException {
-        JsonObject body = new JsonObject();
-        body.addProperty("limit", SeedPreviewService.MAX_HISTORY);
-        com.google.gson.JsonArray entries = new com.google.gson.JsonArray();
-        for (JsonObject entry : service.history()) {
-            entries.add(entry);
-        }
-        body.add("entries", entries);
-        Json.write(response, body);
+        Json.write(response, service.historyGrouped());
     }
 
     private void historyEntry(HttpServletResponse response, String method, String rest) throws IOException {

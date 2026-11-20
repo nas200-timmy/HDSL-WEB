@@ -66,11 +66,13 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
     /// How many samples the Java overview spends on its picture.
     ///
     /// [STANDARD] caps the side at 1024, which stays around five seconds even
-    /// at the largest radius. [HIGH] doubles it to 2048: the picture is sharper
-    /// when zoomed in, at the cost of roughly fifteen seconds and a larger PNG.
+    /// at the largest radius. [HIGH] doubles it to 2048. [ULTRA] doubles it
+    /// again to 4096: the sharpest picture, at the cost of roughly a minute
+    /// and a much larger PNG. The operator picks the trade-off explicitly.
     public enum Quality {
         STANDARD,
-        HIGH
+        HIGH,
+        ULTRA
     }
 
     /// The detail map's ceiling when a real server generates it.
@@ -113,11 +115,16 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
     public static final int JAVA_BIOME_SAMPLES_MIN = 128;
     public static final int JAVA_BIOME_SAMPLES_MAX = 1024;
     public static final int JAVA_BIOME_SAMPLES_HIGH_MAX = 2048;
+    public static final int JAVA_BIOME_SAMPLES_ULTRA_MAX = 4096;
     public static final int JAVA_BIOME_SAMPLES = 128;
 
     /// Samples per side for the Java overview of this request.
     public int javaSamples() {
-        int max = quality == Quality.HIGH ? JAVA_BIOME_SAMPLES_HIGH_MAX : JAVA_BIOME_SAMPLES_MAX;
+        int max = switch (quality) {
+            case HIGH -> JAVA_BIOME_SAMPLES_HIGH_MAX;
+            case ULTRA -> JAVA_BIOME_SAMPLES_ULTRA_MAX;
+            case STANDARD -> JAVA_BIOME_SAMPLES_MAX;
+        };
         return Math.min(max, Math.max(JAVA_BIOME_SAMPLES_MIN, chunksPerSide() * 8));
     }
 
