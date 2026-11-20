@@ -539,8 +539,14 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
   const [hover, setHover] = useState<{ x: number; z: number } | null>(null);
   const [pinned, setPinned] = useState<{ x: number; z: number } | null>(null);
   const [layers, setLayers] = useState({ grid: true, slime: true, structures: true });
+  const [structureFilter, setStructureFilter] = useState<Record<string, boolean>>({});
   const [fullscreen, setFullscreen] = useState(false);
   const [jumpText, setJumpText] = useState("");
+  const [searchText, setSearchText] = useState("");
+  const [searchResults, setSearchResults] = useState<{ id: string; x: number; z: number }[]>([]);
+  const [searchIndex, setSearchIndex] = useState(-1);
+  const [measure, setMeasure] = useState<{ x: number; z: number }[]>([]);
+  const [measuring, setMeasuring] = useState(false);
 
   const zoomRef = useRef<(factor: number, mx: number, my: number) => void>(() => {});
   const [dragging, setDragging] = useState(false);
@@ -621,6 +627,52 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
     link.download = `seed-${view.seed}-${view.mode}-${radius * 2}.png`;
     link.click();
   };
+
+  const allStructures = (exactStructures?.structures ?? meta?.structures ?? []);
+  const structureTypes = [...new Set(allStructures.map((s) => s.id))].sort();
+  const filteredStructures = allStructures.filter((s) => structureFilter[s.id] !== false);
+
+  const searchStructures = () => {
+    const query = searchText.trim().toLowerCase();
+    if (!query) {
+      setSearchResults([]);
+      setSearchIndex(-1);
+      return;
+    }
+    const matches = allStructures.filter((s) => s.id.toLowerCase().includes(query));
+    setSearchResults(matches);
+    setSearchIndex(matches.length > 0 ? 0 : -1);
+    if (matches.length > 0) {
+      centreOn(matches[0]);
+    }
+  };
+
+  const centreOn = (target: { x: number; z: number }) => {
+    setPinned(target);
+    const nextScale = Math.max(2, Math.min(8, scale));
+    const width = box || 1;
+    setScale(nextScale);
+    setOffset(
+      clampOffset(
+        {
+          x: width / 2 - ((target.x + radius) / size) * width * nextScale,
+          y: width / 2 - ((target.z + radius) / size) * width * nextScale,
+        },
+        nextScale,
+      ),
+    );
+  };
+
+  const nextResult = (dir: number) => {
+    if (searchResults.length === 0) return;
+    const next = (searchIndex + dir + searchResults.length) % searchResults.length;
+    setSearchIndex(next);
+    centreOn(searchResults[next]);
+  };
+
+  const measureDistance = measure.length >= 2
+    ? Math.hypot(measure[measure.length - 1].x - measure[0].x, measure[measure.length - 1].z - measure[0].z)
+    : 0;
 
   const zoomAt = (factor: number, mx: number, my: number) => {
     const next = Math.min(16, Math.max(1, scale * factor));
@@ -721,7 +773,13 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
     setDragging(false);
     if (wasClick) {
       const point = coordsAt(event.clientX, event.clientY);
-      if (point) setPinned(point);
+      if (point) {
+        if (measuring) {
+          setMeasure((prev) => [...prev, point]);
+        } else {
+          setPinned(point);
+        }
+      }
     }
   };
 
@@ -763,7 +821,7 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
   // Only paint structures inside the current viewport, and thin them out when
   // the whole region is visible. A 16k×16k Java map can carry thousands of
   // markers; drawing them all at once turns the picture into white noise.
-  const visibleStructures = (exactStructures?.structures ?? meta?.structures)?.filter((s) => {
+  const visibleStructures = filteredStructures.filter((s) => {
     if (scale <= 1.5) return true;
     const left = (-offset.x / scale / (box || 1)) * size - radius;
     const top = (-offset.y / scale / (box || 1)) * size - radius;
@@ -792,7 +850,48 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
           <span style={{ display: "inline-block", width: 10, height: 10, background: "#FFD54F", borderRadius: 5 }} />
           结构
         </label>
+        {structureTypes.length > 0 && (
+          <details style={{ fontSize: 12 }}>
+            <summary className="dim" style={{ cursor: "pointer" }}>按类型筛选</summary>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4, maxHeight: 120, overflow: "auto" }}>
+              {structureTypes.map((id) => (
+                <label key={id} style={{ display: "flex", gap: 2, alignItems: "center", fontSize: 11 }}>
+                  <input
+                    type="checkbox"
+                    checked={structureFilter[id] !== false}
+                    onChange={(e) => setStructureFilter({ ...structureFilter, [id]: e.target.checked })}
+                  />
+                  {id}
+                </label>
+              ))}
+            </div>
+          </details>
+        )}
         <span style={{ flex: 1 }} />
+        <input
+          className="input mono"
+          style={{ width: 130, padding: "2px 6px", fontSize: 12 }}
+          placeholder="搜索结构"
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") searchStructures();
+          }}
+        />
+        <button className="btn btn-text" onClick={searchStructures} title="搜索结构">
+          搜索
+        </button>
+        {searchResults.length > 0 && (
+          <>
+            <button className="btn btn-text" onClick={() => nextResult(-1)} title="上一个结果">
+              ↑
+            </button>
+            <span className="dim mono">{searchIndex + 1}/{searchResults.length}</span>
+            <button className="btn btn-text" onClick={() => nextResult(1)} title="下一个结果">
+              ↓
+            </button>
+          </>
+        )}
         <input
           className="input mono"
           style={{ width: 130, padding: "2px 6px", fontSize: 12 }}
@@ -810,6 +909,21 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
         {pinned && (
           <button className="btn btn-text" onClick={() => setPinned(null)}>
             取消选点
+          </button>
+        )}
+        <button
+          className="btn btn-text"
+          onClick={() => {
+            setMeasuring(!measuring);
+            if (!measuring) setMeasure([]);
+          }}
+          title="测距：依次点击地图上的点"
+        >
+          {measuring ? "完成测距" : "测距"}
+        </button>
+        {measuring && measure.length > 0 && (
+          <button className="btn btn-text" onClick={() => setMeasure([])} title="清除测距点">
+            清除
           </button>
         )}
         <button className="btn btn-text" onClick={download} title="下载 PNG">
@@ -937,6 +1051,17 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
                   stroke="#ffffff" strokeWidth={2} vectorEffect="non-scaling-stroke" />
               </g>
             )}
+            {measure.length > 0 && (
+              <g>
+                <polyline
+                  points={measure.map((p) => `${p.x},${p.z}`).join(" ")}
+                  fill="none" stroke="#ffeb3b" strokeWidth={2} vectorEffect="non-scaling-stroke"
+                />
+                {measure.map((p, i) => (
+                  <circle key={i} cx={p.x} cy={p.z} r={3 / scale} fill="#ffeb3b" />
+                ))}
+              </g>
+            )}
           </svg>
         </div>
 
@@ -1002,6 +1127,9 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
           >
             复制坐标
           </button>
+        )}
+        {measure.length >= 2 && (
+          <span style={{ color: "#ffeb3b" }}>距离 {Math.round(measureDistance)} 格</span>
         )}
         <span className="dim">{Math.round(scale * 100)}% · {Math.round(pxPerBlock * 100) / 100} px/格</span>
       </div>
