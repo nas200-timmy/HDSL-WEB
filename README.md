@@ -37,6 +37,8 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo C
 - [构建与开发](#构建与开发)
 - [常见问题](#常见问题)
 - [设计说明](docs/design-notes.md)
+- [Minecraft 服务端](docs/minecraft.md) — 含 Java 运行时下载源
+- [种子预览](docs/seed-preview.md) · [种子地图内核](docs/seedmap.md)
 - [转码模块（批量编码、硬件加速、GPU 监控）](docs/transcode.md)
 - [面板聊天（多助手、流式、附件、联网搜索）](docs/chat.md)
 - [许可](#许可)
@@ -103,8 +105,9 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo C
 | 纯文本版 | 无 JavaScript 的 `/plain`：登录、会话列表、历史、发送、附件下载与提权；增强模式下会话与正文长轮询更新，Markdown 与公式由服务端渲染，发送后不用整页刷新。w3m / lynx / IE11 可用。现代界面在入口检测 fetch / WebSocket / flex，缺任何一项就跳到「浏览器太旧」提醒页，可一键进入纯文本版。见 [docs/plain-surface.md](docs/plain-surface.md) |
 | 创建实例 | 创建即安装；未安装的实例点「启动」会先装再启；进度与失败原因都在面板上。见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md) |
 | 品牌实例 | 安装、版本共享与实验性边界见 [docs/brands.md](docs/brands.md)；Octop 见 [docs/octop.md](docs/octop.md)；ZCode 见 [docs/zcode-experimental.md](docs/zcode-experimental.md)（版本目录、按实例的最低版本/凭据格式闸门、3.18.x credential-secret 与密钥轮换）。Qwen / MiMo / MiniMax 是纯终端品牌（无网页进程、端口与 `/i/` 挂载） |
-| Minecraft | 默认关闭的第三方功能；开关在「设置 → 品牌实例」，需开发者密码并阅读 Mojang EULA 与服务条款。存档在 `/home/hdsl/mc`，容器部署必须挂出来。见 [docs/minecraft.md](docs/minecraft.md) |
-| 转码 | 默认关闭的第三方功能；开关同样在「设置 → 品牌实例」，需开发者密码并阅读须知。服务端队列批量编码，硬件失败按 QSV → VAAPI → CPU 每次降一档（或完全自动化），参数面板对齐 3FUI。媒体根是 `/home/hdsl/video`，ffmpeg 支持静态包 / apt-dnf / 源码编译三种装法。见 [docs/transcode.md](docs/transcode.md) |
+| Minecraft | 默认关闭的第三方功能；开关在「设置 → 品牌实例」，需开发者密码并阅读 Mojang EULA 与服务条款。存档在 `/home/hdsl/mc`，容器部署必须挂出来。Java 运行时支持清华 TUNA / 华为云镜像下载，目录与 SHA-256 仍用官方值，下载前测速、校验不一致自动回官方。见 [docs/minecraft.md](docs/minecraft.md) |
+| 种子地图 | MC 实例页签或独立页面 `/mc/preview`：填版本 + 种子出群系/结构/史莱姆俯视图；Java 内核（cubiomes 移植，秒级大范围）与真服务端（逐格精确）两种引擎，1.12.2 到最新版；支持历史、缩放拖动、结构搜索/过滤/测距与 agent 文本报告。精度差异见 [docs/seedmap-deviations.md](docs/seedmap-deviations.md)。见 [docs/seed-preview.md](docs/seed-preview.md) / [docs/seedmap.md](docs/seedmap.md) |
+| 转码 | 默认关闭的第三方功能；开关同样在「设置 → 品牌实例」，需开发者密码并阅读须知。服务端队列批量编码，硬件失败按 QSV → VAAPI → CPU 每次降一档（或完全自动化），参数面板对齐 3FUI；准备文件是跨页工作区，工具改成批量工作台，队列带实时遥测与持续日志。媒体根是 `/home/hdsl/video`，ffmpeg 支持静态包 / apt-dnf / 源码编译三种装法。见 [docs/transcode.md](docs/transcode.md) |
 | 下载源 | 设置页可选预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL；保存即生效。见 [docs/deployment.md](docs/deployment.md) |
 | 安全 | 威胁模型、误配自查与免责统一在 [docs/security.md](docs/security.md)；裸 HTTP 的密码/聊天信封只防被动嗅探，`/plain` + IE11 是已知明文洞（§6.1） |
 | 从零重建 | [docs/build-from-scratch-prompt.md](docs/build-from-scratch-prompt.md) 是一份完整任务提示词，**只在新仓库用** |

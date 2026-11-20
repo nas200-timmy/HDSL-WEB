@@ -15,6 +15,10 @@
 > 启停）与 **Forge/NeoForge 安装器**（跑上游 installer，解析 `unix_args.txt` 启动）。
 > mrpack 整合包仍在后续。
 >
+> 2026-11-21 增量（v0.6.94）：种子预览与种子地图（Java 内核 + 真服务端两种引擎）见
+> [seed-preview.md](seed-preview.md) / [seedmap.md](seedmap.md)，精度差异见
+> [seedmap-deviations.md](seedmap-deviations.md)；JDK 下载源见 §19.3。
+>
 > 一句话：把 Minecraft 服务端当作**第三种 surface**接入面板，复用现有的实例模型、
 > 进程/终端、端口分配、任务与审计；游戏端口独立暴露，**默认关闭**，开启需提权与免责确认；
 > 关闭走「停止功能 → 确认关闭」两步，中间那一小时只活在内存里（重启即消失）。
