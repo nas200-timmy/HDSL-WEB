@@ -1010,7 +1010,8 @@ public final class SeedPreviewService {
                 // the overlays moved to the browser must not be served as if it
                 // were the new one.
                 .resolve(spec.radiusBlocks() + "-" + spec.biomeY()
-                        + ("BIOME".equals(spec.mode().name()) ? "-biome" : "") + "-v7");
+                        + ("BIOME".equals(spec.mode().name()) ? "-biome" : "")
+                        + (spec.engine() == PreviewSpec.Engine.JAVA ? "-java" : "") + "-v8");
     }
 
     private static String seedHash(String seed) {

@@ -92,6 +92,9 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
     /// chunks, roughly forty seconds whatever the radius. The radius only
     /// decides how much ground each sample stands for.
     public static final int BIOME_SAMPLES = 32;
+    /// The Java core is cheap enough to sample four times as densely, which
+    /// keeps the picture sharp when the browser scales it up.
+    public static final int JAVA_BIOME_SAMPLES = 128;
 
     /// Chunks along one side of the rendered square.
     public int chunksPerSide() {

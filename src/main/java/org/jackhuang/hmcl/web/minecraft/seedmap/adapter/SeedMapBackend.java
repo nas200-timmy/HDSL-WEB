@@ -46,7 +46,7 @@ public final class SeedMapBackend {
         long seed = parseSeed(spec.seed());
         SeedMap map = SeedMap.of(version, seed);
 
-        int cells = PreviewSpec.BIOME_SAMPLES;
+        int cells = PreviewSpec.JAVA_BIOME_SAMPLES;
         String[][] samples = new String[cells][cells];
         int chunks = spec.chunksPerSide();
         int first = spec.firstChunk();
