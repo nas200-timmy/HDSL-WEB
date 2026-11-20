@@ -117,8 +117,24 @@ export function McThirdPartySettings({
   };
 
   return (
-    <Dialog open={open} wide title="第三方核心 · 全局设置" onClose={onClose} closeOnBackdrop={!saving}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 14, minWidth: 520 }}>
+    <Dialog
+      open={open}
+      wide
+      title="第三方核心 · 全局设置"
+      onClose={onClose}
+      closeOnBackdrop={!saving}
+      footer={
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", width: "100%" }}>
+          <button className="btn btn-text" onClick={() => load()} disabled={loading || saving}>
+            <RefreshIcon size={16} /> 重新读取
+          </button>
+          <button className="btn btn-raised" onClick={() => void save()} disabled={saving || loading}>
+            {saving ? "保存中…" : "保存"}
+          </button>
+        </div>
+      }
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
         <div className="dim" style={{ fontSize: 12, lineHeight: 1.7 }}>
           下载源决定第三方核心从哪里拉取。顺序有意义：<b>第一个能应答的源获胜</b>；
           官方源始终保留在列表里，镜像用满配额会被跳过而不是硬撞。解析出来的下载地址会记在
@@ -264,15 +280,6 @@ export function McThirdPartySettings({
 
         <div className="dim" style={{ fontSize: 11 }}>
           请求 UA：<code>{snapshot?.userAgent ?? "HDSL-web (self-hosted panel)"}</code>
-        </div>
-
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button className="btn btn-text" onClick={() => load()} disabled={loading || saving}>
-            <RefreshIcon size={16} /> 重新读取
-          </button>
-          <button className="btn btn-raised" onClick={() => void save()} disabled={saving || loading}>
-            {saving ? "保存中…" : "保存"}
-          </button>
         </div>
       </div>
     </Dialog>
