@@ -6,9 +6,11 @@ copied out of the panel and compiled with nothing but the JDK.
 
 ## Supported versions
 
+- 1.12.2, 1.14.4, 1.16.5 (legacy layer stack)
 - 1.18.2, 1.20.6, 1.21.1, 1.21.3 (multi-noise)
-- Legacy layer stack (1.12.2, 1.14.4, 1.16.5) is scaffolded but not implemented
-  yet; calling it throws `UnsupportedOperationException`.
+
+All six release lines pass the L1 differential test against cubiomes with
+zero mismatches.
 
 ## Independent use
 

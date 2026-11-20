@@ -19,11 +19,12 @@ package org.jackhuang.hmcl.web.minecraft.seedmap.core;
 
 /// Per-seed biome generator.
 ///
-/// Modern versions (1.18+) use multi-noise directly. Legacy versions are not
-/// yet implemented and throw [UnsupportedOperationException] on use.
+/// Modern versions (1.18+) use multi-noise directly. Legacy versions use the
+/// layer stack ported from cubiomes.
 final class Generator {
     private final Version version;
     private final BiomeNoise biomeNoise;
+    private final LayerStack layerStack;
     private long seed;
     private long sha;
 
@@ -32,8 +33,11 @@ final class Generator {
         if (version.family() == Version.Family.MODERN) {
             this.biomeNoise = new BiomeNoise();
             this.biomeNoise.init(version);
+            this.layerStack = null;
         } else {
             this.biomeNoise = null;
+            this.layerStack = new LayerStack();
+            this.layerStack.setup(version, false);
         }
     }
 
@@ -42,6 +46,9 @@ final class Generator {
         this.sha = sha(seed);
         if (biomeNoise != null) {
             biomeNoise.setSeed(seed, false);
+        }
+        if (layerStack != null) {
+            layerStack.setSeed(seed);
         }
     }
 
@@ -54,31 +61,51 @@ final class Generator {
     }
 
     Biome biomeAt(int blockX, int blockY, int blockZ) {
-        if (biomeNoise == null) {
-            throw new UnsupportedOperationException("legacy layer stack not implemented yet: " + version.id());
+        if (biomeNoise != null) {
+            // Biome noise is sampled at scale 1:4; block coordinates are divided
+            // by four. The y coordinate is also divided by four, matching the
+            // chunk-section biome storage in 1.18+.
+            int id = biomeNoise.sample(null, blockX >> 2, blockY >> 2, blockZ >> 2, null, 0);
+            return Biome.byId(id);
         }
-        // Biome noise is sampled at scale 1:4; block coordinates are divided
-        // by four. The y coordinate is also divided by four, matching the
-        // chunk-section biome storage in 1.18+.
-        int id = biomeNoise.sample(null, blockX >> 2, blockY >> 2, blockZ >> 2, null, 0);
-        return Biome.byId(id);
+        if (layerStack != null) {
+            Biome[] area = mapBiomes(4, blockX >> 2, blockZ >> 2, 1, 1, blockY >> 2);
+            return area[0];
+        }
+        throw new IllegalStateException("no generator for " + version.id());
     }
 
     Biome[] mapBiomes(int scale, int x, int z, int width, int height, int y) {
-        if (biomeNoise == null) {
-            throw new UnsupportedOperationException("legacy layer stack not implemented yet: " + version.id());
-        }
         Biome[] out = new Biome[width * height];
-        long[] dat = new long[1];
-        for (int j = 0; j < height; j++) {
-            for (int i = 0; i < width; i++) {
-                int xi = (x + i) * scale + scale / 2;
-                int zj = (z + j) * scale + scale / 2;
-                int id = biomeNoise.sample(null, xi, y, zj, dat, 0);
-                out[j * width + i] = Biome.byId(id);
+        if (biomeNoise != null) {
+            long[] dat = new long[1];
+            for (int j = 0; j < height; j++) {
+                for (int i = 0; i < width; i++) {
+                    int xi = (x + i) * scale + scale / 2;
+                    int zj = (z + j) * scale + scale / 2;
+                    int id = biomeNoise.sample(null, xi, y, zj, dat, 0);
+                    out[j * width + i] = Biome.byId(id);
+                }
             }
+            return out;
         }
-        return out;
+        if (layerStack != null) {
+            Layer entry = switch (scale) {
+                case 1 -> layerStack.entry1;
+                case 4 -> layerStack.entry4;
+                case 16 -> layerStack.entry16;
+                case 64 -> layerStack.entry64;
+                case 256 -> layerStack.entry256;
+                default -> layerStack.entry4;
+            };
+            int[] ids = new int[width * height];
+            entry.genArea(ids, x, z, width, height);
+            for (int i = 0; i < ids.length; i++) {
+                out[i] = Biome.byId(ids[i]);
+            }
+            return out;
+        }
+        throw new IllegalStateException("no generator for " + version.id());
     }
 
     private static long sha(long seed) {

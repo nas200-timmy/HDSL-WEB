@@ -54,7 +54,7 @@ public final class L1Verifier {
     }
 
     public void run() throws IOException {
-        Version[] versions = {Version.V1_18_2, Version.V1_20_6, Version.V1_21_3};
+        Version[] versions = {Version.V1_12_2, Version.V1_14_4, Version.V1_16_5, Version.V1_18_2, Version.V1_20_6, Version.V1_21_3};
         Random random = new Random(20261119L);
         for (Version version : versions) {
             for (int i = 0; i < 3; i++) {
