@@ -899,14 +899,6 @@
   color: var(--monet-on-surface-variant);
 }
 
-.tc-tool-desc {
-  margin: 0;
-  padding: 0 8px 6px;
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--monet-on-surface-variant);
-}
-
 .tc-guide-steps {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -1603,14 +1595,9 @@
     flex: 1 1 100%;
   }
 
-  /* 工具页的卡片在窄屏各占一行，别再挤成两列 */
+  /* 工具页的清单行在窄屏换行，不再挤成多列 */
   .tc-tool-row {
-    flex-direction: column;
-  }
-
-  .tc-tool-card {
-    flex: 1 1 100% !important;
-    min-width: 0 !important;
+    flex-wrap: wrap;
   }
 }
 
@@ -1837,5 +1824,313 @@
 
   .tc-prepare-inspect {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 集成工具：四个标签页共享一套“清单 + 动作条 + 输出”版式。 */
+.tc-tools {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tc-tool-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+}
+
+.tc-tool-tab {
+  border: 0;
+  background: transparent;
+  color: var(--monet-on-surface-variant);
+  border-radius: 16px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tc-tool-tab:hover {
+  background: var(--monet-surface-container);
+  color: var(--monet-on-surface);
+}
+
+.tc-tool-tab.selected {
+  background: var(--monet-secondary-container);
+  color: var(--monet-on-secondary-container);
+}
+
+.tc-tool-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  min-width: 0;
+}
+
+.tc-tool-desc {
+  margin: 0;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--monet-on-surface-variant);
+}
+
+.tc-tool-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.tc-tool-list {
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--monet-outline);
+  border-radius: 4px;
+  padding: 4px;
+  max-height: 300px;
+  overflow: auto;
+  min-width: 0;
+}
+
+.tc-tool-list-tall {
+  max-height: 380px;
+}
+
+.tc-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.tc-tool-row.selected,
+.tc-mux-row.selected {
+  background: var(--monet-secondary-container);
+}
+
+.tc-tool-row:hover {
+  background: var(--monet-surface-container);
+}
+
+.tc-tool-order {
+  flex: none;
+  width: 22px;
+  color: var(--monet-on-surface-variant);
+  font-size: 11px;
+}
+
+.tc-tool-name {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tc-tool-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--monet-on-surface-variant);
+  font-size: 11px;
+}
+
+.tc-tool-empty {
+  padding: 14px 8px;
+  font-size: 12px;
+  color: var(--monet-on-surface-variant);
+}
+
+.tc-mux-row {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--monet-outline-variant);
+  border-radius: 4px;
+}
+
+.tc-mux-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tc-mux-fields {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tc-mux-fields label {
+  display: grid;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+  flex: 1 1 90px;
+  min-width: 0;
+}
+
+.tc-mux-fields input {
+  border: 1px solid var(--monet-outline);
+  border-radius: 4px;
+  background: var(--monet-surface-container);
+  color: var(--monet-on-surface);
+  padding: 4px 6px;
+  font-size: 11px;
+  min-width: 0;
+}
+
+.tc-tool-field {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.tc-tool-field-row {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tc-tool-field-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.tc-tool-inline {
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+  overflow-wrap: anywhere;
+}
+
+.tc-tool-group {
+  display: grid;
+  gap: 2px;
+}
+
+.tc-tool-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 2px;
+}
+
+.tc-tool-stream {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.tc-tool-stream:hover {
+  background: var(--monet-surface-container);
+}
+
+.tc-tool-dim {
+  color: var(--monet-on-surface-variant);
+  font-size: 11px;
+}
+
+.tc-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.tc-tool-metrics {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.tc-tool-submit {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.tc-quality-results {
+  display: grid;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--monet-outline-variant);
+  overflow-x: auto;
+}
+
+.tc-quality-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  min-width: 360px;
+}
+
+.tc-quality-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--monet-on-surface-variant);
+  font-weight: 500;
+  border-bottom: 1px solid var(--monet-outline-variant);
+}
+
+.tc-quality-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--monet-outline-variant);
+}
+
+.tc-quality-cell {
+  border: 0;
+  background: transparent;
+  color: var(--monet-on-surface);
+  font-family: var(--monet-mono, monospace);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.tc-quality-cell:disabled {
+  cursor: default;
+}
+
+.tc-quality-cell:not(:disabled):hover {
+  background: var(--monet-secondary-container);
+}
+
+@media (max-width: 760px), (max-height: 520px) {
+  .tc-tool-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .tc-tool-tab {
+    flex: none;
+  }
+
+  .tc-tool-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tc-mux-fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tc-tool-name {
+    max-width: 45%;
   }
 }
