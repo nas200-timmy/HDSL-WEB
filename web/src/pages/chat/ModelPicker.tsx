@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PopupMenu } from "../../components/PopupMenu";
-import { AddIcon, CheckIcon, KeyboardArrowDownIcon, SearchIcon, SettingsIcon } from "../../components/icons";
+import {
+  AddIcon, CheckIcon, FolderIcon, KeyboardArrowDownIcon, SearchIcon, SettingsIcon, StorageIcon,
+} from "../../components/icons";
 import type { ChatModelInfo } from "../../types";
 import { ModelCaps } from "./ModelCaps";
 
@@ -11,9 +13,10 @@ export interface ModelGroup {
   models: ChatModelInfo[];
 }
 
-/// The source and family are kept in localStorage: a 100-model Alibaba account otherwise turns
-/// this popup into a scroll marathon every time the page is opened.
-const COLLAPSED_KEY = "chat.modelPicker.collapsed";
+/// Expanded state is kept in localStorage: a 100-model Alibaba account otherwise turns this popup
+/// into a scroll marathon every time the page is opened. Empty means every branch is collapsed.
+const EXPANDED_SOURCES_KEY = "chat.modelPicker.expandedSources";
+const EXPANDED_FAMILIES_KEY = "chat.modelPicker.expandedFamilies";
 const HIDDEN_KEY = "chat.modelPicker.hidden";
 
 const FAMILY_ORDER = [
@@ -27,14 +30,6 @@ function readSet(key: string): Set<string> {
     return new Set(Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
   } catch {
     return new Set();
-  }
-}
-
-function hasStored(key: string): boolean {
-  try {
-    return localStorage.getItem(key) !== null;
-  } catch {
-    return false;
   }
 }
 
@@ -84,7 +79,11 @@ function familiesOf(group: ModelGroup): Array<{ name: string; models: ChatModelI
     });
 }
 
-/** 模型选择器：按来源 + 家族分组，可折叠、可隐藏来源、可搜索；选中后同时切换会话的 account/model。 */
+function familyKey(source: string, family: string): string {
+  return `${source}\u0000${family}`;
+}
+
+/** 模型选择器：资源管理器式树，来源（盘符）→ 品牌（文件夹）→ 模型（文件）。 */
 export function ModelPicker({
   groups, account, model, disabled, onPick, onManage, onAdd,
 }: {
@@ -98,28 +97,16 @@ export function ModelPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => readSet(COLLAPSED_KEY));
+  const [expandedSources, setExpandedSources] = useState<Set<string>>(() => readSet(EXPANDED_SOURCES_KEY));
+  const [expandedFamilies, setExpandedFamilies] = useState<Set<string>>(() => readSet(EXPANDED_FAMILIES_KEY));
   const [hidden, setHidden] = useState<Set<string>>(() => readSet(HIDDEN_KEY));
   const [showHidden, setShowHidden] = useState(false);
   const anchor = useRef<HTMLButtonElement | null>(null);
   const search = useRef<HTMLInputElement | null>(null);
-  const seeded = useRef(hasStored(COLLAPSED_KEY));
 
-  useEffect(() => {
-    if (seeded.current || groups.length === 0) return;
-    seeded.current = true;
-    // Every source starts collapsed, including the current one. The button already shows the
-    // selected model; opening the menu should be a source list, not 191 rows of scroll.
-    setCollapsed(new Set(groups.map((group) => group.name)));
-  }, [groups, account]);
-
-  useEffect(() => {
-    writeSet(COLLAPSED_KEY, collapsed);
-  }, [collapsed]);
-
-  useEffect(() => {
-    writeSet(HIDDEN_KEY, hidden);
-  }, [hidden]);
+  useEffect(() => writeSet(EXPANDED_SOURCES_KEY, expandedSources), [expandedSources]);
+  useEffect(() => writeSet(EXPANDED_FAMILIES_KEY, expandedFamilies), [expandedFamilies]);
+  useEffect(() => writeSet(HIDDEN_KEY, hidden), [hidden]);
 
   // 触屏上不自动聚焦搜索框：否则一点「切换模型」就弹出输入法，键盘又把列表顶掉。
   useEffect(() => {
@@ -132,6 +119,13 @@ export function ModelPicker({
     return () => cancelAnimationFrame(frame);
   }, [open]);
 
+  const layoutKey = useMemo(() => [
+    [...expandedSources].sort().join(","),
+    [...expandedFamilies].sort().join(","),
+    [...hidden].sort().join(","),
+    query,
+  ].join("|"), [expandedSources, expandedFamilies, hidden, query]);
+
   const currentGroup = groups.find((group) => group.name === account) ?? null;
   const current = currentGroup?.models.find((item) => item.id === model)
     ?? groups.flatMap((group) => group.models).find((item) => item.id === model)
@@ -141,31 +135,31 @@ export function ModelPicker({
   const filtered = useMemo(() => {
     return groups
       .map((group) => {
-        if (!q) return group;
-        if (group.label.toLowerCase().includes(q) || group.vendor.toLowerCase().includes(q)) {
-          return group;
-        }
+        const groupMatches = !q
+          || group.label.toLowerCase().includes(q)
+          || group.vendor.toLowerCase().includes(q);
         return {
-          ...group,
-          models: group.models.filter((item) =>
+          group,
+          groupMatches,
+          models: groupMatches ? group.models : group.models.filter((item) =>
             item.id.toLowerCase().includes(q)
             || modelFamily(item.id).toLowerCase().includes(q)),
         };
       })
-      .filter((group) => group.models.length > 0);
+      .filter((entry) => entry.models.length > 0);
   }, [groups, q]);
 
   const hiddenGroups = useMemo(
-    () => filtered.filter((group) => hidden.has(group.name)),
+    () => filtered.filter((entry) => hidden.has(entry.group.name)).map((entry) => entry.group),
     [filtered, hidden],
   );
-  const visibleGroups = useMemo(
-    () => filtered.filter((group) => !hidden.has(group.name)),
+  const visible = useMemo(
+    () => filtered.filter((entry) => !hidden.has(entry.group.name)),
     [filtered, hidden],
   );
 
-  const toggleCollapsed = (name: string) => {
-    setCollapsed((current) => {
+  const toggleSource = (name: string) => {
+    setExpandedSources((current) => {
       const next = new Set(current);
       if (next.has(name)) next.delete(name);
       else next.add(name);
@@ -173,9 +167,23 @@ export function ModelPicker({
     });
   };
 
+  const toggleFamily = (source: string, family: string) => {
+    const key = familyKey(source, family);
+    setExpandedFamilies((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
   const hide = (name: string) => {
     setHidden((current) => new Set(current).add(name));
-    setCollapsed((current) => new Set(current).add(name));
+    setExpandedSources((current) => {
+      const next = new Set(current);
+      next.delete(name);
+      return next;
+    });
   };
 
   const show = (name: string) => {
@@ -210,78 +218,100 @@ export function ModelPicker({
         anchor={anchor.current}
         onClose={() => setOpen(false)}
         className="chat-model-popup"
+        repositionKey={layoutKey}
       >
         <div className="chat-model-popup-head">
           <SearchIcon size={14} />
           <input
             ref={search}
             value={query}
-            placeholder="搜索模型、家族或服务"
+            placeholder="搜索模型、品牌或来源"
             onChange={(event) => setQuery(event.target.value)}
           />
         </div>
         <div className="chat-model-popup-list">
-          {visibleGroups.length === 0 ? (
+          {visible.length === 0 ? (
             <div className="chat-model-popup-empty">
               {groups.length === 0
                 ? "还没有可用的模型服务"
                 : hiddenGroups.length > 0 ? "匹配的来源都已隐藏" : "没有匹配的模型"}
             </div>
-          ) : visibleGroups.map((group) => {
-            const isCollapsed = !q && collapsed.has(group.name);
-            const families = familiesOf(group);
+          ) : visible.map(({ group, groupMatches, models }) => {
+            const source = group.name;
+            const families = familiesOf({ ...group, models });
+            const sourceOpen = q ? true : expandedSources.has(source);
+            const brandLevel = families.length > 1;
             return (
-              <div className="chat-model-popup-group" key={group.name}>
-                <div className="chat-model-popup-provider">
+              <div className="chat-model-popup-tree" key={source}>
+                <div className="chat-model-tree-row chat-model-tree-source">
                   <button
-                    className="chat-model-popup-provider-main"
-                    onClick={() => toggleCollapsed(group.name)}
-                    title={isCollapsed ? "展开这个来源" : "收起这个来源"}
+                    className="chat-model-tree-toggle"
+                    onClick={() => toggleSource(source)}
+                    title={sourceOpen ? "收起这个来源" : "展开这个来源"}
                   >
                     <KeyboardArrowDownIcon
                       size={14}
-                      className={`chat-model-popup-chevron${isCollapsed ? " collapsed" : ""}`}
+                      className={`chat-model-popup-chevron${sourceOpen ? "" : " collapsed"}`}
                     />
-                    <span className="chat-model-popup-provider-name">{group.label}</span>
-                    <span className="chat-model-popup-count">{group.models.length}</span>
+                    <StorageIcon size={15} />
+                    <span className="chat-model-tree-label">{group.label}</span>
+                    <span className="chat-model-popup-count">{models.length}</span>
                   </button>
                   <button
                     className="chat-model-popup-provider-hide"
-                    onClick={() => hide(group.name)}
+                    onClick={() => hide(source)}
                     title="隐藏这个来源"
                   >
                     隐藏
                   </button>
                 </div>
-                {!isCollapsed && families.map((family) => (
-                  <div key={family.name} className="chat-model-popup-family-block">
-                    {families.length > 1 && (
-                      <div className="chat-model-popup-family">
-                        <span>{family.name}</span>
-                        <span className="chat-model-popup-count">{family.models.length}</span>
-                      </div>
-                    )}
-                    {family.models.map((item) => {
-                      const selected = group.name === account && item.id === model;
-                      return (
+
+                {sourceOpen && (brandLevel ? families.map((family) => {
+                  const key = familyKey(source, family.name);
+                  const familyOpen = q ? (groupMatches ? false : true) : expandedFamilies.has(key);
+                  return (
+                    <div key={family.name} className="chat-model-popup-tree">
+                      <div className="chat-model-tree-row chat-model-tree-family">
                         <button
-                          key={`${group.name}\u0000${item.id}`}
-                          className={`chat-model-popup-item${selected ? " selected" : ""}`}
-                          onClick={() => {
-                            onPick(group.name, item.id);
+                          className="chat-model-tree-toggle"
+                          onClick={() => toggleFamily(source, family.name)}
+                          title={familyOpen ? "收起这个品牌" : "展开这个品牌"}
+                        >
+                          <KeyboardArrowDownIcon
+                            size={14}
+                            className={`chat-model-popup-chevron${familyOpen ? "" : " collapsed"}`}
+                          />
+                          <FolderIcon size={14} />
+                          <span className="chat-model-tree-label">{family.name}</span>
+                          <span className="chat-model-popup-count">{family.models.length}</span>
+                        </button>
+                      </div>
+                      {familyOpen && family.models.map((item) => (
+                        <ModelRow
+                          key={`${source}\u0000${item.id}`}
+                          item={item}
+                          selected={source === account && item.id === model}
+                          depth={3}
+                          onPick={() => {
+                            onPick(source, item.id);
                             setOpen(false);
                           }}
-                        >
-                          <span className="chat-model-popup-id">{item.id}</span>
-                          <span className="chat-model-popup-caps">
-                            <ModelCaps caps={item.capabilities} />
-                          </span>
-                          {selected && <CheckIcon size={14} />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                ))}
+                        />
+                      ))}
+                    </div>
+                  );
+                }) : models.map((item) => (
+                  <ModelRow
+                    key={`${source}\u0000${item.id}`}
+                    item={item}
+                    selected={source === account && item.id === model}
+                    depth={2}
+                    onPick={() => {
+                      onPick(source, item.id);
+                      setOpen(false);
+                    }}
+                  />
+                )))}
               </div>
             );
           })}
@@ -321,5 +351,27 @@ export function ModelPicker({
         </div>
       </PopupMenu>
     </>
+  );
+}
+
+function ModelRow({
+  item, selected, depth, onPick,
+}: {
+  item: ChatModelInfo;
+  selected: boolean;
+  depth: number;
+  onPick: () => void;
+}) {
+  return (
+    <button
+      className={`chat-model-popup-item chat-model-popup-file depth-${depth}${selected ? " selected" : ""}`}
+      onClick={onPick}
+    >
+      <span className="chat-model-popup-id">{item.id}</span>
+      <span className="chat-model-popup-caps">
+        <ModelCaps caps={item.capabilities} />
+      </span>
+      {selected && <CheckIcon size={14} />}
+    </button>
   );
 }
