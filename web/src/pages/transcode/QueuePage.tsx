@@ -9,7 +9,7 @@ import { Dialog } from "../../components/Dialog";
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
 import { RefreshIcon } from "../../components/icons";
-import { fmtBytes, fmtDuration, pct, stateLabel, stateTone, HelpNote } from "./common";
+import { fmtBytes, fmtDuration, jobEtaMs, latestLogLine, pct, stateLabel, stateTone, HelpNote } from "./common";
 import { valueLabel } from "./labels";
 import { useQueueStream } from "./queue/useQueueStream";
 import { QueueToolbar, type QueueBatchAction } from "./queue/QueueToolbar";
@@ -309,7 +309,11 @@ export function QueuePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
   };
 
   useEffect(() => {
-    if (logDialog) void pullDialogLog(logDialog);
+    if (!logDialog) return;
+    const pull = () => void pullDialogLog(logDialog);
+    pull();
+    const timer = window.setInterval(pull, 1500);
+    return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logDialog, logFilter]);
 
@@ -336,6 +340,7 @@ export function QueuePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
   const resetTargetJob = resetTargets && resetTargets.length === 1
     ? jobs.find((job) => job.id === resetTargets[0]) ?? null
     : null;
+  const liveLine = latestLogLine(log);
 
   return (
     <div className="tc-queue">
@@ -430,6 +435,7 @@ export function QueuePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
             {jobs.map((job) => {
               const badge = seqBadge(job);
               const index = queuedIndex(job);
+              const eta = jobEtaMs(job);
               return (
                 <div
                   key={job.id}
@@ -462,14 +468,17 @@ export function QueuePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
                     </span>
                   </span>
                   <span className="tc-queue-metrics mono">
-                    <span>{pct(job.fraction)}</span>
-                    <span>{job.speed > 0 ? `${job.speed.toFixed(1)}x` : "—"}</span>
-                    <span>{job.fps > 0 ? `${job.fps.toFixed(0)} fps` : "—"}</span>
-                    <span>{fmtDuration(job.outTimeMs)} / {fmtDuration(job.durationMs)}</span>
-                    <span>{fmtBytes(job.sizeBytes)}</span>
+                    <span title="进度">{pct(job.fraction)}</span>
+                    <span title="速度">{job.speed > 0 ? `${job.speed.toFixed(1)}x` : "—"}</span>
+                    <span title="帧率">{job.fps > 0 ? `${job.fps.toFixed(0)} fps` : "—"}</span>
+                    <span title="码率">{job.bitrate || "—"}</span>
+                    <span title="剩余时间">{eta == null ? "—" : fmtDuration(eta)}</span>
+                    <span title="已编码 / 总时长">{fmtDuration(job.outTimeMs)} / {fmtDuration(job.durationMs)}</span>
+                    <span title="输出大小">{fmtBytes(job.sizeBytes)}</span>
                   </span>
                   <span className="tc-queue-row-actions" onClick={(event) => event.stopPropagation()}>
                     <button className="btn btn-text" onClick={() => setLogDialog(job.id)}>日志</button>
+                    <button className="btn btn-text" onClick={() => copy((job.command ?? []).join(" "), "命令行")}>命令行</button>
                   </span>
                 </div>
               );
@@ -491,6 +500,13 @@ export function QueuePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
           )}
         </aside>
       </div>
+
+      {liveLine && activeJob && (
+        <button className="card tc-queue-live" title="点击打开完整日志" onClick={() => setLogDialog(activeJob.id)}>
+          <span className="tc-queue-live-label">实时输出 · {activeJob.input}</span>
+          <span className="mono">{liveLine}</span>
+        </button>
+      )}
 
       <Dialog
         open={resetTargets !== null}

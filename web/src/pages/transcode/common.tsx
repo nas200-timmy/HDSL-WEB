@@ -38,6 +38,30 @@ export function fmtDuration(ms: number | null | undefined): string {
     : `${m}:${String(s).padStart(2, "0")}`;
 }
 
+export function jobEtaMs(job: {
+  state: string;
+  fraction: number;
+  speed: number;
+  durationMs: number;
+  outTimeMs: number;
+  startedAt: number;
+}): number | null {
+  if (job.state !== "running") return null;
+  if (job.fraction > 0 && job.fraction < 1 && job.startedAt > 0) {
+    const elapsed = Date.now() - job.startedAt;
+    const estimate = elapsed * (1 - job.fraction) / job.fraction;
+    if (Number.isFinite(estimate) && estimate > 0) return estimate;
+  }
+  if (job.durationMs <= 0 || job.outTimeMs < 0 || job.speed <= 0) return null;
+  const remaining = (job.durationMs - job.outTimeMs) / job.speed;
+  return remaining > 0 ? remaining : null;
+}
+
+export function latestLogLine(log: string): string {
+  const lines = log.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return lines.length > 0 ? lines[lines.length - 1] : "";
+}
+
 export function pct(value: number): string {
   return value < 0 ? "—" : `${Math.round(value * 100)}%`;
 }
