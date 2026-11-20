@@ -4,12 +4,12 @@ import { errMsg } from "../../utils";
 import { ArrowBackIcon, ArrowForwardIcon, FolderIcon, FolderOpenIcon, RefreshIcon } from "../../components/icons";
 
 /**
- * 页级说明：默认折叠，标题一行，展开后是一段人话。
- * 3FUI 的每个子页都有这种说明；这里统一成一个组件，避免每页自己写样式。
+ * 页级说明：默认折叠，标题一行，展开后是一段人话；只解释不常用的细节，
+ * 不让大段说明挤掉文件列表和队列。
  */
 export function HelpNote({ title = "使用说明", children }: { title?: string; children: ReactNode }) {
   return (
-    <details className="tc-help" open>
+    <details className="tc-help">
       <summary>{title}</summary>
       <div className="tc-help-body">{children}</div>
     </details>
