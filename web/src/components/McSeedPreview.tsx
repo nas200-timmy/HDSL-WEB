@@ -303,7 +303,7 @@ export function McSeedPreview({
             className="input"
             value={radius}
             onChange={(event) => setRadius(Number(event.target.value))}
-            style={{ width: 150 }}
+            style={{ minWidth: 176, flex: "0 0 auto" }}
           >
             <option value={256}>512 × 512 格</option>
             <option value={512}>1024 × 1024 格</option>
@@ -878,19 +878,21 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
           </details>
         )}
         <span style={{ flex: 1 }} />
-        <input
-          className="input mono"
-          style={{ width: 130, padding: "2px 6px", fontSize: 12 }}
-          placeholder="搜索结构"
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") searchStructures();
-          }}
-        />
-        <button className="btn btn-text" onClick={searchStructures} title="搜索结构">
-          搜索
-        </button>
+        <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flex: "0 0 auto" }}>
+          <input
+            className="input mono"
+            style={{ width: 130, padding: "2px 6px", fontSize: 12 }}
+            placeholder="搜索结构"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") searchStructures();
+            }}
+          />
+          <button className="btn btn-text" onClick={searchStructures} title="搜索结构">
+            搜索
+          </button>
+        </span>
         {searchResults.length > 0 && (
           <>
             <button className="btn btn-text" onClick={() => nextResult(-1)} title="上一个结果">
@@ -902,19 +904,21 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
             </button>
           </>
         )}
-        <input
-          className="input mono"
-          style={{ width: 130, padding: "2px 6px", fontSize: 12 }}
-          placeholder="X Z 跳转"
-          value={jumpText}
-          onChange={(e) => setJumpText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") jumpTo();
-          }}
-        />
-        <button className="btn btn-text" onClick={jumpTo} title="跳转到坐标">
-          跳转
-        </button>
+        <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flex: "0 0 auto" }}>
+          <input
+            className="input mono"
+            style={{ width: 130, padding: "2px 6px", fontSize: 12 }}
+            placeholder="X Z 跳转"
+            value={jumpText}
+            onChange={(e) => setJumpText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") jumpTo();
+            }}
+          />
+          <button className="btn btn-text" onClick={jumpTo} title="跳转到坐标">
+            跳转
+          </button>
+        </span>
         <span className="dim mono">{Math.round(scale * 100)}%</span>
         {pinned && (
           <button className="btn btn-text" onClick={() => setPinned(null)}>
