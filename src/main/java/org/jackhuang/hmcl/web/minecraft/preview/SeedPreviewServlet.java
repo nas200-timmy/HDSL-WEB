@@ -199,6 +199,8 @@ public final class SeedPreviewServlet extends HttpServlet {
                 ? PreviewSpec.Mode.BIOME : PreviewSpec.Mode.DETAIL;
         PreviewSpec.Engine engine = "server".equalsIgnoreCase(string(body, "engine"))
                 ? PreviewSpec.Engine.SERVER : PreviewSpec.Engine.JAVA;
+        PreviewSpec.Quality quality = "high".equalsIgnoreCase(string(body, "quality"))
+                ? PreviewSpec.Quality.HIGH : PreviewSpec.Quality.STANDARD;
         if (engine == PreviewSpec.Engine.JAVA && mode != PreviewSpec.Mode.BIOME) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "Java 内核只支持群系速览");
             return;
@@ -206,7 +208,7 @@ public final class SeedPreviewServlet extends HttpServlet {
         int maxRadius = engine == PreviewSpec.Engine.JAVA ? PreviewSpec.MAX_JAVA_RADIUS : PreviewSpec.MAX_SERVER_RADIUS;
         int radius = clamp(integer(body, "radius", 512), PreviewSpec.MIN_RADIUS, maxRadius);
         int y = clamp(integer(body, "biomeY", PreviewSpec.DEFAULT_BIOME_Y), -64, 320);
-        PreviewJob job = service.submit(new PreviewSpec(version.trim(), seed.trim(), radius, y, mode, engine));
+        PreviewJob job = service.submit(new PreviewSpec(version.trim(), seed.trim(), radius, y, mode, engine, quality));
         Json.write(response, HttpServletResponse.SC_ACCEPTED, job.toJson());
     }
 

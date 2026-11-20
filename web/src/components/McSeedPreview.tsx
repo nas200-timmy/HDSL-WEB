@@ -137,7 +137,7 @@ export function McSeedPreview({
     return () => window.clearTimeout(timer);
   }, [job, poll]);
 
-  const start = async () => {
+  const start = async (quality: "standard" | "high" = "standard") => {
     const trimmed = seed.trim();
     if (!trimmed) {
       setError("先填一个种子");
@@ -149,7 +149,7 @@ export function McSeedPreview({
     setMeta(null);
     setJob(null);
     try {
-      const created = await api.mc.previewStart({ version: version.trim(), seed: trimmed, radius, mode, engine });
+      const created = await api.mc.previewStart({ version: version.trim(), seed: trimmed, radius, mode, engine, quality });
       jobRef.current = created.id;
       setJob(created);
     } catch (e) {
@@ -317,9 +317,19 @@ export function McSeedPreview({
             )}
           </select>
         </label>
-        <button className="btn btn-raised" disabled={busy || running} onClick={() => void start()}>
+        <button className="btn btn-raised" disabled={busy || running} onClick={() => void start("standard")}>
           {busy ? "提交中…" : "生成预览"}
         </button>
+        {engine === "java" && (
+          <button
+            className="btn"
+            disabled={busy || running}
+            onClick={() => void start("high")}
+            title="最清晰的 Java 群系图：最大范围约需 15 秒"
+          >
+            高清生成
+          </button>
+        )}
         {running && (
           <button className="btn btn-text" onClick={() => void cancel()}>
             取消

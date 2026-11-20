@@ -1018,6 +1018,7 @@ export const api = {
       biomeY?: number;
       mode?: "detail" | "biome";
       engine?: "java" | "server";
+      quality?: "standard" | "high";
     }) =>
       request<McSeedPreviewJob>("/api/mc/preview", jsonInit("POST", body)),
     previewJob: (id: string) =>
@@ -1995,6 +1996,8 @@ export interface McSeedPreviewJob {
   mode?: "detail" | "biome";
   /** 计算引擎：`java` 用 cubiomes 内核，`server` 起真服务端。 */
   engine?: "java" | "server";
+  /** Java 引擎的采样密度：`high` 更清晰但更慢。 */
+  quality?: "standard" | "high";
   createdAt: string;
   elapsedMs?: number;
   /** 剩余秒数的粗略估计，进度太小时不给。 */

@@ -38,7 +38,8 @@ import org.jetbrains.annotations.NotNullByDefault;
 /// @param mode        whether to paint terrain or flat biome colours
 /// @param engine      which backend computes the picture
 @NotNullByDefault
-public record PreviewSpec(String version, String seed, int radiusBlocks, int biomeY, Mode mode, Engine engine) {
+public record PreviewSpec(String version, String seed, int radiusBlocks, int biomeY, Mode mode, Engine engine,
+                          Quality quality) {
 
     /// How much truth the picture carries.
     ///
@@ -62,6 +63,16 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
         SERVER
     }
 
+    /// How many samples the Java overview spends on its picture.
+    ///
+    /// [STANDARD] caps the side at 1024, which stays around five seconds even
+    /// at the largest radius. [HIGH] doubles it to 2048: the picture is sharper
+    /// when zoomed in, at the cost of roughly fifteen seconds and a larger PNG.
+    public enum Quality {
+        STANDARD,
+        HIGH
+    }
+
     /// The detail map's ceiling when a real server generates it.
     public static final int MAX_SERVER_RADIUS = 1024;
     /// The Java core computes biomes without generating terrain, so it can
@@ -70,12 +81,16 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
     /// Backwards-compatible alias for callers that predate the split.
     public static final int MAX_RADIUS = MAX_SERVER_RADIUS;
 
+    public PreviewSpec(String version, String seed, int radiusBlocks, int biomeY, Mode mode, Engine engine) {
+        this(version, seed, radiusBlocks, biomeY, mode, engine, Quality.STANDARD);
+    }
+
     public PreviewSpec(String version, String seed, int radiusBlocks, int biomeY, Mode mode) {
-        this(version, seed, radiusBlocks, biomeY, mode, mode == Mode.BIOME ? Engine.JAVA : Engine.SERVER);
+        this(version, seed, radiusBlocks, biomeY, mode, mode == Mode.BIOME ? Engine.JAVA : Engine.SERVER, Quality.STANDARD);
     }
 
     public PreviewSpec(String version, String seed, int radiusBlocks, int biomeY) {
-        this(version, seed, radiusBlocks, biomeY, Mode.DETAIL, Engine.SERVER);
+        this(version, seed, radiusBlocks, biomeY, Mode.DETAIL, Engine.SERVER, Quality.STANDARD);
     }
 
     /// The smallest radius that still shows something useful.
@@ -97,12 +112,13 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
     /// huge maps stay under a practical pixel count.
     public static final int JAVA_BIOME_SAMPLES_MIN = 128;
     public static final int JAVA_BIOME_SAMPLES_MAX = 1024;
+    public static final int JAVA_BIOME_SAMPLES_HIGH_MAX = 2048;
     public static final int JAVA_BIOME_SAMPLES = 128;
 
     /// Samples per side for the Java overview of this request.
     public int javaSamples() {
-        return Math.min(JAVA_BIOME_SAMPLES_MAX,
-                Math.max(JAVA_BIOME_SAMPLES_MIN, chunksPerSide() * 8));
+        int max = quality == Quality.HIGH ? JAVA_BIOME_SAMPLES_HIGH_MAX : JAVA_BIOME_SAMPLES_MAX;
+        return Math.min(max, Math.max(JAVA_BIOME_SAMPLES_MIN, chunksPerSide() * 8));
     }
 
     /// Chunks along one side of the rendered square.
@@ -156,6 +172,6 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
     /// A stable key for reuse: two requests with the same key produce the same
     /// picture, so the second one must not start another server.
     public String key() {
-        return version + "|" + seed + "|" + radiusBlocks + "|" + biomeY + "|" + mode + "|" + engine;
+        return version + "|" + seed + "|" + radiusBlocks + "|" + biomeY + "|" + mode + "|" + engine + "|" + quality;
     }
 }
