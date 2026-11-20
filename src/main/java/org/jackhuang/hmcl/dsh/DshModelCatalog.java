@@ -198,7 +198,26 @@ public final class DshModelCatalog {
     /// @return the directory
     /// @throws DshException when it cannot be read or does not parse
     public static Catalog fetch() throws DshException {
-        String url = catalogUrl();
+        // The generated api.json is the preferred shape, but it is also the slow one on a limited
+        // network. Without an explicit override, try the source archive first: it is a 2.6 MB
+        // tarball whose TOML files contain the same providers and models, and it finishes in
+        // seconds where the JSON often times out. A caller holding `hdsl.modelCatalog` is a test
+        // or an operator pointing at a specific endpoint, so it always means JSON.
+        String configured = System.getProperty("hdsl.modelCatalog");
+        if (configured == null || configured.isBlank()) {
+            try {
+                Catalog archived = ModelsDevArchive.fetch();
+                if (!archived.providers().isEmpty()) {
+                    return archived;
+                }
+            } catch (DshException e) {
+                LOG.info("Model catalogue archive did not work, trying api.json: " + e.getMessage());
+            }
+        }
+        return fetchJson(catalogUrl());
+    }
+
+    private static Catalog fetchJson(String url) throws DshException {
         String body;
         try {
             body = download(url);
@@ -225,18 +244,17 @@ public final class DshModelCatalog {
     /// @return the directory, or `null` when there is no readable copy
     public static @Nullable Catalog readCached() {
         Path file = cachedFile();
-        try {
-            if (!Files.isRegularFile(file)) {
-                return null;
+        if (Files.isRegularFile(file)) {
+            try {
+                Catalog parsed = parse(Files.readString(file));
+                // The time of the copy, not of this call: what the interface shows is how old
+                // the models are, and a fallback served now was not fetched now.
+                return new Catalog(Files.getLastModifiedTime(file).toMillis(), parsed.providers());
+            } catch (IOException | RuntimeException e) {
+                LOG.info("Could not read the kept model catalogue at " + file, e);
             }
-            Catalog parsed = parse(Files.readString(file));
-            // The time of the copy, not of this call: what the interface shows is how old the
-            // models are, and a fallback served now was not fetched now.
-            return new Catalog(Files.getLastModifiedTime(file).toMillis(), parsed.providers());
-        } catch (IOException | RuntimeException e) {
-            LOG.info("Could not read the kept model catalogue at " + file, e);
-            return null;
         }
+        return ModelsDevArchive.readCached();
     }
 
     /// Reads the protocol a supplier published under an npm package speaks.

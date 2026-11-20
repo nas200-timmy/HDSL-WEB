@@ -40,7 +40,11 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -64,10 +68,19 @@ public final class ChatService {
                 thread.setDaemon(true);
                 return thread;
             });
+    /// Provider model lists are refreshed away from the maintenance thread: a slow endpoint must
+    /// not delay backups or retention, and two accounts should be able to refresh in parallel.
+    private final ExecutorService modelRefresh = Executors.newFixedThreadPool(2, runnable -> {
+        Thread thread = new Thread(runnable, "chat-model-refresh");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final Set<String> refreshingModels = ConcurrentHashMap.newKeySet();
     private volatile ChatSettings.Settings settings;
     private volatile ScheduledFuture<?> backupTask;
     private volatile ScheduledFuture<?> retentionTask;
     private volatile ScheduledFuture<?> catalogTask;
+    private volatile ScheduledFuture<?> providerModelsTask;
 
     public ChatService(ChatStore store, EventBus bus, Path dataDir)
             throws SQLException {
@@ -83,6 +96,7 @@ public final class ChatService {
         ChatModelCatalog.install(dataDir.resolve("chat"));
         schedule();
         scheduleCatalog();
+        scheduleProviderModels();
     }
 
     public ChatStore store() {
@@ -599,6 +613,9 @@ public final class ChatService {
     // -------------------------------------------------------- model/endpoint --
 
     public JsonArray accounts() throws SQLException {
+        // Alibaba changes its model list often. When a provider has no saved list yet, fetch one
+        // in the background now; the next accounts-changed event reloads the page with it.
+        refreshAlibabaModels(true);
         JsonArray result = new JsonArray();
         for (DshAccount account : ChatEndpoints.accounts()) {
             if (!account.carriesAKey()) {
@@ -979,6 +996,58 @@ public final class ChatService {
         }, 1, 24 * 60, TimeUnit.MINUTES);
     }
 
+    /// Alibaba publishes models far more often than the directory is refreshed. Six hours is
+    /// frequent enough to pick up a new qwen release without making the provider a polling target.
+    private void scheduleProviderModels() {
+        cancel(providerModelsTask);
+        providerModelsTask = scheduler.scheduleWithFixedDelay(
+                () -> refreshAlibabaModels(false), 1, 6 * 60, TimeUnit.MINUTES);
+    }
+
+    private void refreshAlibabaModels(boolean missingOnly) {
+        for (DshAccount account : ChatEndpoints.accounts()) {
+            if (!account.carriesAKey() || !isAlibaba(account.vendorId())) {
+                continue;
+            }
+            String key = account.key();
+            if (!refreshingModels.add(key)) {
+                continue;
+            }
+            modelRefresh.execute(() -> {
+                try {
+                    if (missingOnly) {
+                        ChatEndpoints.Profile profile = ChatEndpoints.profile(store, key);
+                        if (profile != null && !profile.models().isEmpty()) {
+                            return;
+                        }
+                    }
+                    List<String> models = ChatEndpoints.refreshModels(store, key, settings);
+                    if (!models.isEmpty()) {
+                        announceAccountsChanged();
+                    }
+                } catch (Exception e) {
+                    org.jackhuang.hmcl.util.logging.Logger.LOG.info(
+                            "Could not refresh models for " + key + ": " + e.getMessage());
+                } finally {
+                    refreshingModels.remove(key);
+                }
+            });
+        }
+    }
+
+    private static boolean isAlibaba(@Nullable String vendor) {
+        String id = vendor == null ? "" : vendor.toLowerCase(Locale.ROOT);
+        return id.equals("alibaba") || id.equals("alibaba-cn")
+                || id.startsWith("qwen-token-plan") || id.startsWith("alibaba-token-plan")
+                || id.startsWith("alibaba-coding-plan");
+    }
+
+    private void announceAccountsChanged() {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("type", "accounts-changed");
+        bus.publish("accounts", payload);
+    }
+
     private static long delayUntil(LocalTime time) {
         ZonedDateTime now = ZonedDateTime.now();
         ZonedDateTime next = now.with(time);
@@ -1025,7 +1094,9 @@ public final class ChatService {
         cancel(backupTask);
         cancel(retentionTask);
         cancel(catalogTask);
+        cancel(providerModelsTask);
         scheduler.shutdownNow();
+        modelRefresh.shutdownNow();
         turns.close();
         attachments.close();
         store.close();
