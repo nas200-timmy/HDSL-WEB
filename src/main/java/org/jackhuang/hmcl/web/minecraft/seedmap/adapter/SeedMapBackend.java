@@ -63,17 +63,19 @@ public final class SeedMapBackend {
 
         int cells = spec.javaSamples();
         String[][] samples = new String[cells][cells];
-        int chunks = spec.chunksPerSide();
-        int first = spec.firstChunk();
-        double step = chunks / (double) cells;
+        int radius = spec.radiusBlocks();
+        int side = radius * 2;
+        // Sample the biome grid directly, in blocks. Sampling one point per
+        // chunk and stretching it made the whole map 16 blocks per pixel no
+        // matter how many samples were asked for, which is why it never lined up
+        // with the one-pixel-per-block server render.
+        int step = Math.max(1, (int) Math.round(side / (double) cells));
         long total = (long) cells * cells;
 
         for (int j = 0; j < cells; j++) {
             for (int i = 0; i < cells; i++) {
-                int chunkX = first + (int) (i * step);
-                int chunkZ = first + (int) (j * step);
-                int blockX = chunkX * 16 + 8;
-                int blockZ = chunkZ * 16 + 8;
+                int blockX = -radius + i * step + step / 2;
+                int blockZ = -radius + j * step + step / 2;
                 Biome biome = map.biomeAt(blockX, spec.biomeY(), blockZ);
                 samples[j][i] = biome.key();
             }
