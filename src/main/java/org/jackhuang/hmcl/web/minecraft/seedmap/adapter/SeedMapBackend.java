@@ -17,7 +17,6 @@
  */
 package org.jackhuang.hmcl.web.minecraft.seedmap.adapter;
 
-import org.jackhuang.hmcl.web.minecraft.preview.BiomePalette;
 import org.jackhuang.hmcl.web.minecraft.preview.PreviewRenderer;
 import org.jackhuang.hmcl.web.minecraft.preview.PreviewSpec;
 import org.jackhuang.hmcl.web.minecraft.seedmap.core.Biome;
@@ -32,6 +31,12 @@ public final class SeedMapBackend {
     private SeedMapBackend() {
     }
 
+    /// What a render produces: the image, the sampled grid and the map itself,
+    /// so the caller can write metadata and structures without rebuilding the
+    /// generator.
+    public record Result(BufferedImage image, String[][] samples, SeedMap map) {
+    }
+
     public static boolean supports(String versionId) {
         try {
             Version.parse(versionId);
@@ -41,7 +46,7 @@ public final class SeedMapBackend {
         }
     }
 
-    public static BufferedImage renderBiome(PreviewSpec spec) {
+    public static Result render(PreviewSpec spec) {
         Version version = Version.parse(spec.version());
         long seed = parseSeed(spec.seed());
         SeedMap map = SeedMap.of(version, seed);
@@ -62,7 +67,11 @@ public final class SeedMapBackend {
                 samples[j][i] = biome.key();
             }
         }
-        return PreviewRenderer.renderBiome(samples, spec);
+        return new Result(PreviewRenderer.renderBiome(samples, spec), samples, map);
+    }
+
+    public static BufferedImage renderBiome(PreviewSpec spec) {
+        return render(spec).image();
     }
 
     private static long parseSeed(String text) {

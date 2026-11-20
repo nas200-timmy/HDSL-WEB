@@ -500,7 +500,11 @@ public final class SeedPreviewService {
             Path meta = directory.resolve("meta.json");
             ImageIO.write(image, "png", png.toFile());
             if (spec.mode() == PreviewSpec.Mode.BIOME) {
-                writeBiomeMeta(meta, spec, samples, !complete);
+                SeedMap map = null;
+                if (SeedMapBackend.supports(spec.version())) {
+                    map = SeedMap.of(Version.parse(spec.version()), PreviewRenderer.parseSeed(spec.seed()));
+                }
+                writeBiomeMeta(meta, spec, samples, map, !complete);
             } else {
                 writeMeta(meta, spec, chunks, !complete);
             }
@@ -529,25 +533,27 @@ public final class SeedPreviewService {
             return;
         }
         job.state(PreviewJob.State.RENDERING);
-        BufferedImage image = SeedMapBackend.renderBiome(spec);
+        SeedMapBackend.Result result = SeedMapBackend.render(spec);
         Path directory = Files.createDirectories(cacheDirectory(spec));
         Path png = directory.resolve("preview.png");
         Path meta = directory.resolve("meta.json");
-        ImageIO.write(image, "png", png.toFile());
-        String[][] samples = new String[0][];
-        writeBiomeMeta(meta, spec, samples, false);
+        ImageIO.write(result.image(), "png", png.toFile());
+        writeBiomeMeta(meta, spec, result.samples(), result.map(), false);
         job.done(png, meta, false);
         trimCache();
     }
 
-    private void writeBiomeStructures(JsonObject body, PreviewSpec spec) {
-        Version version = Version.parse(spec.version());
-        long seed = PreviewRenderer.parseSeed(spec.seed());
-        SeedMap map = SeedMap.of(version, seed);
+    private void writeBiomeStructures(JsonObject body, @Nullable SeedMap map, PreviewSpec spec) {
         int radius = spec.radiusBlocks();
         JsonObject counts = new JsonObject();
         JsonArray structures = new JsonArray();
+        if (map == null) {
+            body.add("structureCounts", counts);
+            body.add("structures", structures);
+            return;
+        }
         int markers = 0;
+        outer:
         for (StructureType type : StructureType.values()) {
             if (type == StructureType.STRONGHOLD || type == StructureType.MINESHAFT) {
                 continue;
@@ -558,7 +564,7 @@ public final class SeedPreviewService {
             }
             for (Structure structure : found) {
                 if (markers >= 500) {
-                    break;
+                    break outer;
                 }
                 BlockPos pos = structure.pos();
                 JsonObject entry = new JsonObject();
@@ -985,7 +991,7 @@ public final class SeedPreviewService {
 
     /// The overview's metadata: the same shape as the detail one, with the
     /// sample grid standing in for the chunk list.
-    private void writeBiomeMeta(Path meta, PreviewSpec spec, String[][] samples, boolean partial)
+    private void writeBiomeMeta(Path meta, PreviewSpec spec, String[][] samples, SeedMap map, boolean partial)
             throws IOException {
         JsonObject body = new JsonObject();
         body.addProperty("version", spec.version());
@@ -996,7 +1002,7 @@ public final class SeedPreviewService {
         body.addProperty("chunks", samples.length * samples.length);
         body.addProperty("partial", partial);
         body.addProperty("generatedAt", Instant.now().toString());
-        writeBiomeStructures(body, spec);
+        writeBiomeStructures(body, map, spec);
         body.add("slimeChunks", new JsonArray());
 
         java.util.Map<String, Integer> counts = new java.util.LinkedHashMap<>();
@@ -1035,7 +1041,7 @@ public final class SeedPreviewService {
                 // were the new one.
                 .resolve(spec.radiusBlocks() + "-" + spec.biomeY()
                         + ("BIOME".equals(spec.mode().name()) ? "-biome" : "")
-                        + (spec.engine() == PreviewSpec.Engine.JAVA ? "-java" : "") + "-v8");
+                        + (spec.engine() == PreviewSpec.Engine.JAVA ? "-java" : "") + "-v9");
     }
 
     private static String seedHash(String seed) {
