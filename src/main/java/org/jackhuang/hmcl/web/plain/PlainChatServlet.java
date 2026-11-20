@@ -330,7 +330,7 @@ public final class PlainChatServlet extends HttpServlet {
                     patch.addProperty("model", model);
                     requireChat().updateSession(sessionId, patch);
                 }
-                redirect(response, url("/plain/s/" + sessionId));
+                redirect(response, url("/plain/s/" + sessionId + "#bottom"));
                 return;
             }
             if ("/fork".equals(action)) {
@@ -685,7 +685,7 @@ public final class PlainChatServlet extends HttpServlet {
                 + "<div class=\"chat-composer-bar\"><input type=\"submit\" value=\"发送\"> "
                 + "<span class=\"chat-composer-hint\">提交后自动回到本页；生成中会自动刷新。</span></div>\n"
                 + "</form>\n"
-                + "<div class=\"chat-composer-refresh\"><a id=\"bottom\" href=\""
+                + "<div class=\"chat-composer-refresh\"><a href=\""
                 + url("/plain/s/" + sessionId) + "?auto=1\">刷新看结果</a></div>\n"
                 + "</div>\n";
     }
@@ -771,7 +771,7 @@ public final class PlainChatServlet extends HttpServlet {
         String assistantId = trimToNull(request.getParameter("assistantId"));
         body.addProperty("assistantId", assistantId == null ? "default" : assistantId);
         JsonObject session = service.createSession(body);
-        redirect(response, url("/plain/s/" + string(session, "id")));
+        redirect(response, url("/plain/s/" + string(session, "id") + "#bottom"));
     }
 
     private void send(HttpServletRequest request, HttpServletResponse response, String sessionId)

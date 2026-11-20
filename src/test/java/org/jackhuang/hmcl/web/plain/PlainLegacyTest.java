@@ -109,6 +109,8 @@ class PlainLegacyTest {
             assertTrue(unlocked.body().contains("value=\"分叉\""), unlocked.body());
             assertTrue(unlocked.body().contains("id=\"bottom\""), unlocked.body());
             assertTrue(unlocked.body().contains("href=\"#bottom\""), unlocked.body());
+            assertEquals(1, unlocked.body().split("id=\"bottom\"", -1).length - 1,
+                    "there must be one unambiguous bottom anchor");
             assertTrue(unlocked.headers().firstValue("content-security-policy").orElseThrow()
                     .contains("font-src 'self'"), "KaTeX fonts need font-src on enhanced pages");
             HttpResponse<String> forked = postForm(client,
@@ -123,6 +125,7 @@ class PlainLegacyTest {
             HttpResponse<String> switched = postForm(client,
                     base + "/plain/s/" + sessionId + "/model", "model=fake-model-2", cookie);
             assertEquals(303, switched.statusCode(), switched.body());
+            assertTrue(switched.headers().firstValue("Location").orElseThrow().endsWith("#bottom"));
             HttpResponse<String> afterSwitch = get(client, base + "/plain/s/" + sessionId, cookie);
             assertTrue(afterSwitch.body().contains("option value=\"fake-model-2\" selected"),
                     afterSwitch.body());
@@ -188,6 +191,8 @@ class PlainLegacyTest {
             assertTrue(poll.headers().firstValue("content-type").orElseThrow()
                     .contains("javascript"), poll.headers().toString());
             assertTrue(poll.body().contains("XMLHttpRequest"), poll.body());
+            assertTrue(poll.body().contains("win.scrollTo"), poll.body());
+            assertTrue(poll.body().contains("nearBottom"), poll.body());
 
             HttpResponse<String> css = get(client, base + "/plain/legacy.css", null);
             assertEquals(200, css.statusCode(), css.body());
@@ -237,7 +242,7 @@ class PlainLegacyTest {
                     running.baseUrl() + "/plain/new", "assistantId=default", null);
             assertEquals(303, created.statusCode(), created.body());
             String sessionId = created.headers().firstValue("Location").orElseThrow()
-                    .substring("/plain/s/".length());
+                    .substring("/plain/s/".length()).replace("#bottom", "");
             HttpRequest patch = HttpRequest.newBuilder(URI.create(
                             running.baseUrl() + "/api/chat/sessions/" + sessionId))
                     .timeout(Duration.ofSeconds(10))
