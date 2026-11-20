@@ -71,7 +71,7 @@ public final class L1Verifier {
                 .redirectErrorStream(true).start();
         try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
              BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            List<int[]> points = samplePoints(random, 50);
+            List<int[]> points = samplePoints(random, 1024);
             for (int[] point : points) {
                 writer.write(point[0] + " " + point[1] + " " + point[2] + "\n");
             }
@@ -96,19 +96,24 @@ public final class L1Verifier {
         }
     }
 
-    /// Random centres plus dense probes around the first biome boundary found
-    /// on each axis.
+    /// Contiguous patches, not isolated points.
+    ///
+    /// Random single points are the wrong shape for this comparison: a layer
+    /// bug that paints a hills variant over a whole region still has a good
+    /// chance of landing on a cell where both sides agree, so a few hundred
+    /// points can pass while a quarter of the map is wrong. Sampling 8×8
+    /// patches makes every disagreement show up as a run of mismatches.
     private List<int[]> samplePoints(Random random, int count) {
         List<int[]> out = new ArrayList<>();
-        for (int i = 0; i < count / 2; i++) {
-            out.add(new int[]{random.nextInt(2000) - 1000, random.nextInt(64), random.nextInt(2000) - 1000});
-        }
-        for (int i = out.size(); i < count; i++) {
+        int patch = 8;
+        while (out.size() < count) {
             int cx = random.nextInt(2000) - 1000;
             int cy = random.nextInt(64);
             int cz = random.nextInt(2000) - 1000;
-            for (int dx = -8; dx <= 8 && out.size() < count; dx++) {
-                out.add(new int[]{cx + dx, cy, cz});
+            for (int dz = 0; dz < patch && out.size() < count; dz++) {
+                for (int dx = 0; dx < patch && out.size() < count; dx++) {
+                    out.add(new int[]{cx + dx, cy, cz + dz});
+                }
             }
         }
         return out;
