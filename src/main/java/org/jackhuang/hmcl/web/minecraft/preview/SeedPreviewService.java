@@ -48,6 +48,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
@@ -205,7 +206,7 @@ public final class SeedPreviewService {
             final Process server = start(java, jar, work, required, radius);
             process = server;
             CountDownLatch ready = new CountDownLatch(1);
-            List<String> logs = new ArrayList<>();
+            List<String> logs = Collections.synchronizedList(new ArrayList<>());
             Thread pump = new Thread(() -> {
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(server.getInputStream(), StandardCharsets.UTF_8))) {
@@ -234,11 +235,21 @@ public final class SeedPreviewService {
                 if (command == null) {
                     continue;
                 }
+                int logMark = logs.size();
                 send(process, command);
-                // The locate answer arrives asynchronously; collect it from the
-                // log tail after a short wait.
-                Thread.sleep(300);
-                String answer = latestLocate(logs);
+                // The locate answer arrives asynchronously; poll the new tail
+                // until it says either "The nearest" or "There is no structure".
+                String answer = null;
+                for (int attempt = 0; attempt < 40; attempt++) {
+                    Thread.sleep(250);
+                    answer = latestLocate(logs, logMark);
+                    if (answer != null) {
+                        break;
+                    }
+                    if (hasNoStructure(logs, logMark)) {
+                        break;
+                    }
+                }
                 if (answer != null) {
                     JsonObject entry = new JsonObject();
                     entry.addProperty("id", type.key());
@@ -261,14 +272,14 @@ public final class SeedPreviewService {
 
     private static @Nullable String locateCommand(StructureType type, String versionId) {
         String name = switch (type) {
-            case VILLAGE -> "village";
+            case VILLAGE -> "village_plains";
             case DESERT_PYRAMID -> "desert_pyramid";
-            case JUNGLE_TEMPLE -> "jungle_temple";
+            case JUNGLE_TEMPLE -> "jungle_pyramid";
             case IGLOO -> "igloo";
             case SWAMP_HUT -> "swamp_hut";
             case WOODLAND_MANSION -> "mansion";
             case OCEAN_MONUMENT -> "monument";
-            case OCEAN_RUIN -> "ocean_ruin";
+            case OCEAN_RUIN -> "ocean_ruin_cold";
             case SHIPWRECK -> "shipwreck";
             case RUINED_PORTAL -> "ruined_portal";
             case PILLAGER_OUTPOST -> "pillager_outpost";
@@ -279,8 +290,8 @@ public final class SeedPreviewService {
         return name == null ? null : "locate structure minecraft:" + name;
     }
 
-    private static @Nullable String latestLocate(List<String> logs) {
-        for (int i = logs.size() - 1; i >= 0; i--) {
+    private static @Nullable String latestLocate(List<String> logs, int fromIndex) {
+        for (int i = logs.size() - 1; i >= fromIndex; i--) {
             String line = logs.get(i);
             if (line.contains("The nearest") && line.contains("is at")) {
                 return line;
@@ -289,17 +300,30 @@ public final class SeedPreviewService {
         return null;
     }
 
+    private static boolean hasNoStructure(List<String> logs, int fromIndex) {
+        for (int i = logs.size() - 1; i >= fromIndex; i--) {
+            if (logs.get(i).contains("There is no structure")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static int parseLocateX(String line) {
-        return parseCoordinate(line, "x");
+        return parseCoordinate(line, 0);
     }
 
     private static int parseLocateZ(String line) {
-        return parseCoordinate(line, "z");
+        return parseCoordinate(line, 2);
     }
 
-    private static int parseCoordinate(String line, String axis) {
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(axis + "=(-?\\d+)").matcher(line);
-        return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
+    private static int parseCoordinate(String line, int index) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\[(-?\\d+|~),\\s*(-?\\d+|~),\\s*(-?\\d+|~)\\]").matcher(line);
+        if (!matcher.find()) {
+            return 0;
+        }
+        String value = matcher.group(index + 1);
+        return "~".equals(value) ? 0 : Integer.parseInt(value);
     }
 
     /// Whether the panel can preview a version right now.
