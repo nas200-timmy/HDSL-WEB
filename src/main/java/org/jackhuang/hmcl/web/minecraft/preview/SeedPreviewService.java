@@ -202,7 +202,7 @@ public final class SeedPreviewService {
             work = Files.createDirectories(tmpRoot.resolve("locate-" + UUID.randomUUID()));
             writeProperties(work, new PreviewSpec(versionId, seedText, radius, 63, PreviewSpec.Mode.DETAIL), freePort());
             Files.writeString(work.resolve("eula.txt"), "eula=true\n", StandardCharsets.UTF_8);
-            final Process server = start(java, jar, work, required);
+            final Process server = start(java, jar, work, required, radius);
             process = server;
             CountDownLatch ready = new CountDownLatch(1);
             List<String> logs = new ArrayList<>();
@@ -412,7 +412,7 @@ public final class SeedPreviewService {
             writeProperties(work, spec, freePort());
             Files.writeString(work.resolve("eula.txt"), "eula=true\n", StandardCharsets.UTF_8);
 
-            Process process = start(java, jar, work, required);
+            Process process = start(java, jar, work, required, spec.radiusBlocks());
             job.attach(process);
             CountDownLatch ready = new CountDownLatch(1);
             pump(process, job, ready);
@@ -611,9 +611,18 @@ public final class SeedPreviewService {
     }
 
     private Process start(Path java, Path jar, Path work, int javaMajor) throws IOException {
+        return start(java, jar, work, javaMajor, PreviewSpec.MIN_RADIUS);
+    }
+
+    private Process start(Path java, Path jar, Path work, int javaMajor, int radius) throws IOException {
         List<String> command = new ArrayList<>();
         command.add(java.toString());
-        command.add("-Xmx1G");
+        // Generating thousands of chunks in one JVM needs more than the
+        // original 1G: a 2048×2048 preview can OOM before the first region is
+        // written. Scale with the requested area, capped so a huge request
+        // cannot starve the panel itself.
+        int memoryMb = Math.min(4096, Math.max(1024, radius * 4));
+        command.add("-Xmx" + memoryMb + "M");
         // Java4Shell: the hardware Base64 path is the vulnerable one, and a
         // preview server has no reason to use it. The flag itself only exists
         // from Java 9 — passing it to a Java 8 runtime is a hard startup error,
