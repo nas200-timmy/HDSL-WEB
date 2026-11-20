@@ -1270,9 +1270,10 @@ public final class SeedPreviewService {
             String seed = body.get("seed").getAsString();
             int radius = body.get("radius").getAsInt();
             int biomeY = body.get("biomeY").getAsInt();
+            String engine = body.has("engine") ? body.get("engine").getAsString() : "server";
+            String quality = body.has("quality") ? body.get("quality").getAsString() : "standard";
             JsonObject entry = new JsonObject();
-            entry.addProperty("id", historyId(version, seed, radius, biomeY,
-                entry.get("engine").getAsString(), entry.get("quality").getAsString()));
+            entry.addProperty("id", historyId(version, seed, radius, biomeY, engine, quality));
             entry.addProperty("version", version);
             entry.addProperty("seed", seed);
             entry.addProperty("radius", radius);
@@ -1280,8 +1281,8 @@ public final class SeedPreviewService {
             entry.addProperty("generatedAt", body.get("generatedAt").getAsString());
             entry.addProperty("partial", body.get("partial").getAsBoolean());
             entry.addProperty("mode", body.has("mode") ? body.get("mode").getAsString() : "detail");
-            entry.addProperty("engine", body.has("engine") ? body.get("engine").getAsString() : "server");
-            entry.addProperty("quality", body.has("quality") ? body.get("quality").getAsString() : "standard");
+            entry.addProperty("engine", engine);
+            entry.addProperty("quality", quality);
             entry.addProperty("bytes", Files.size(png));
             if (body.has("structures") && body.get("structures").isJsonArray()) {
                 entry.addProperty("structures", body.getAsJsonArray("structures").size());
