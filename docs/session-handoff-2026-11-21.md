@@ -4,11 +4,11 @@
 > [`2026-11-18`](session-handoff-2026-11-18.md) 的证书管理结论仍然有效；本稿只写这一批
 > 种子地图 / JDK 下载源 / 转码工作台 / 聊天模型树的范围、验证与发布前状态。
 >
-> **分支状态**：`main` 仍是 v0.6.93（`4dd8f13bd`），**没有合并**。`web-shell` 在 66 个
-> 功能提交之上加了发布说明与 `/plain` 分隔线提交；**未 push 到 GitHub、未打 tag**。
-> 当前观察到的 `container/web-shell` 已到预发布说明提交 `19163f2d4d`，本稿的分隔线提交
-> 是本地领先的 1 个；`web-shell-before-msg-rewrite` 仍是改写前旧历史。`origin/web-shell`
-> 还停在 v0.6.92 的旧分支，推它前先确认要保留哪套历史。
+> **分支状态**：`main` 的合并点是 `62802a1215 merge: web-shell → main（v0.6.94 …）`，
+> 用 `--no-ff` 保留，第一父 `4dd8f13bd`、第二父 `e731e587c9`；`web-shell` 停在
+> `e731e587c9`；`v0.6.94` tag 打在本稿所在提交。推送 `main`/tag 后 GitHub Release
+> 与容器由 CI 生成。`container/web-shell` 已到 `e731e587c9`；`web-shell-before-msg-rewrite`
+> 仍是改写前旧历史，`origin/web-shell` 还停在 v0.6.92 的旧分支。
 >
 > **隐私约定（继续遵守）**：真实域名、内网地址、宿主机路径、口令、真实 API Key、
 > DNS provider token 一律不写进仓库。
@@ -41,7 +41,8 @@
 - **账户 / 模型目录**：内置阿里云百炼 / 千问 / Token Plan；models.dev 源码归档解析，
   失败回源 api.json；百炼模型每 6 小时后台刷新。
 - **纯文本版**：用户与助手的每条消息之间加 `<hr class="turn-sep">`，w3m/lynx 是横线，
-  IE11/图形浏览器是浅灰线。
+  IE11/图形浏览器是浅灰线；会话页改成头像列 + 气泡 + 卡片输入区，进入会话可靠落底，
+  向上阅读时轮询不抢滚动。
 - **界面**：手机工具栏竖排、地图工具栏拥挤、地图滚轮带页、第三方核心弹窗溢出等修复。
 
 ## 2. 验证
@@ -54,18 +55,30 @@
 - `scripts/api-smoke.py`：43/43 PASS；`scripts/security-smoke.sh`：PASS（加密登录、
   提权、ACME 门禁、chat 加密读写）。
 - jar：`/tmp/release-0.6.94/hdsl-web-0.6.94.jar`，sha256
-  `557e4b92cfa741943d05b49626d75b4cb3f732e909d9597f609e523ff16d43d7`。
+  `c93a97043fa9fa8acf656ae5ed4abd8cba844e899f64a695e98a4bed21e83116`。
 - 种子地图 L1/L3 验证器、`SeedPreviewTest`、`McJavaSource*Test`、`McJavaRuntimesTest`、
   `ModelsDevArchiveTest` 已覆盖；`PlainLegacyTest` 覆盖 `/plain` 的 `turn-sep`。
   没有新增真实 Minecraft 世界/真实 CA 联调。
 
-## 3. 发布前检查
+## 3. 发布
 
-- 分支：`main` 不动；`web-shell` 上只新增发布说明与分隔线提交；**不合并、不推送**。
+- 分支：`main` 已有 `--no-ff` 合并点 `62802a1215`；`web-shell` 停在 `e731e587c9`。
 - 版本：`CHANGELOG.md` v0.6.94；jar 用 `-PreleaseVersion=0.6.94`。
 - 产物：`/tmp/release-0.6.94/hdsl-web-0.6.94.jar` 与 `SHA256SUMS.txt`。
-- 远端：`container/web-shell` 当前在预发布说明提交；分隔线提交本地领先 1 个。
-  `origin/web-shell` 仍是 v0.6.92 的旧分支；要推 GitHub 前先决定保留哪套历史。
+- 发布命令（本稿所在提交打 tag）：
+
+```bash
+git tag -a v0.6.94 -m "v0.6.94 — 种子地图、JDK 下载源与纯文本气泡"
+git -c credential.helper='!gh auth git-credential' \
+  push https://github.com/nas200-timmy/HDSL-WEB.git main v0.6.94
+gh release create v0.6.94 -R nas200-timmy/HDSL-WEB \
+  --title "v0.6.94 — 种子地图、JDK 下载源与纯文本气泡" \
+  --notes-file /tmp/release-0.6.94/notes.md \
+  /tmp/release-0.6.94/hdsl-web-0.6.94.jar /tmp/release-0.6.94/SHA256SUMS.txt
+```
+
+- `docker.yml` 由 tag 触发构建 `ghcr.io/nas200-timmy/hdsl-web:0.6.94`、`:0.6`、`:latest`；
+  `client.yml` 在 Release 后追加客户端二进制。
 - Dockerfile 仍钉在 Temurin 21.0.13+9 / 25.0.5+8，入口在 x86_64 上加
   `-XX:-UseBASE64Intrinsics`；修复版 Temurin 资产可用后再移除。
 
