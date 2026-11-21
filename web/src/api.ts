@@ -1018,7 +1018,7 @@ export const api = {
       biomeY?: number;
       mode?: "detail" | "biome";
       engine?: "java" | "server";
-      quality?: "standard" | "high" | "ultra";
+      quality?: "standard" | "high" | "ultra" | "extreme";
     }) =>
       request<McSeedPreviewJob>("/api/mc/preview", jsonInit("POST", body)),
     previewJob: (id: string) =>

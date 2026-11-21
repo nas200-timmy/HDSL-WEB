@@ -49,7 +49,7 @@ export function McSeedPreview({
   const [seed, setSeed] = useState(initialSeed);
   const [mode, setMode] = useState<"detail" | "biome">("biome");
   const [engine, setEngine] = useState<"java" | "server">("java");
-  const [quality, setQuality] = useState<"high" | "ultra">("high");
+  const [quality, setQuality] = useState<"high" | "ultra" | "extreme">("high");
   const [radius, setRadius] = useState(512);
   const [caps, setCaps] = useState<McSeedPreviewCapabilities | null>(null);
   const [job, setJob] = useState<McSeedPreviewJob | null>(null);
@@ -139,7 +139,7 @@ export function McSeedPreview({
     return () => window.clearTimeout(timer);
   }, [job, poll]);
 
-  const start = async (quality: "standard" | "high" | "ultra" = "standard") => {
+  const start = async (quality: "standard" | "high" | "ultra" | "extreme" = "standard") => {
     const trimmed = seed.trim();
     if (!trimmed) {
       setError("先填一个种子");
@@ -327,18 +327,21 @@ export function McSeedPreview({
             <select
               className="input"
               value={quality}
-              onChange={(e) => setQuality(e.target.value as "high" | "ultra")}
+              onChange={(e) => setQuality(e.target.value as "high" | "ultra" | "extreme")}
               style={{ width: 90, padding: "2px 4px", fontSize: 12 }}
-              title="高清采样分辨率"
+              title="采样分辨率（每边像素）。8192 极限档：最大范围下 1 采样=2 格，像素是超清的 4 倍"
             >
               <option value="high">2048</option>
               <option value="ultra">4096</option>
+              <option value="extreme">8192 极限</option>
             </select>
             <button
               className="btn"
               disabled={busy || running}
               onClick={() => void start(quality)}
-              title="最高分辨率：最大范围约需 1 分钟"
+              title={quality === "extreme"
+                ? "极限档：子进程渲染，最大范围约需数分钟，PNG 可达数十 MB"
+                : "最高分辨率：最大范围约需 1 分钟"}
             >
               高清生成
             </button>
@@ -490,7 +493,7 @@ export function McSeedPreview({
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, marginLeft: 12 }}>
                   {group.variants.map((entry) => {
                     const active = view?.source === "history" && view.id === entry.id;
-                    const label = `${entry.version} · ${entry.engine === "java" ? "Java" : "MC"} · ${entry.quality === "high" ? "高清" : entry.quality === "ultra" ? "超清" : "标准"} · ${(entry.radius * 2).toLocaleString()} 格`;
+                    const label = `${entry.version} · ${entry.engine === "java" ? "Java" : "MC"} · ${entry.quality === "extreme" ? "极限" : entry.quality === "high" ? "高清" : entry.quality === "ultra" ? "超清" : "标准"} · ${(entry.radius * 2).toLocaleString()} 格`;
                     return (
                       <div
                         key={entry.id}

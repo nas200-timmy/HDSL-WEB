@@ -95,6 +95,9 @@ public final class SeedPreviewService {
     /// marked partial, because a slow machine should get a picture and a
     /// warning rather than nothing.
     private static final Duration GENERATE_TIMEOUT = Duration.ofMinutes(6);
+    /// EXTREME renders trade minutes for pixels; half an hour is past any
+    /// realistic 8192² run and still lets a wedged child be reaped.
+    private static final Duration EXTREME_TIMEOUT = Duration.ofMinutes(30);
     /// How long `stop` may take to end the process.
     private static final Duration STOP_TIMEOUT = Duration.ofSeconds(90);
     /// How many finished previews are kept. A player trying seeds in a row
@@ -534,6 +537,12 @@ public final class SeedPreviewService {
             return;
         }
         job.state(PreviewJob.State.RENDERING);
+        if (spec.quality() == PreviewSpec.Quality.EXTREME) {
+            // 8192×8192 的采样网格（光引用就半个 GB）加同尺寸位图，远超面板
+            // 默认的 1G 堆——整个渲染放进子进程，面板 JVM 一片叶子都不多占。
+            runBiomeCoreExtreme(job, spec);
+            return;
+        }
         SeedMapBackend.Result result = SeedMapBackend.render(spec, job::renderProgress);
         Path directory = Files.createDirectories(cacheDirectory(spec));
         Path png = directory.resolve("preview.png");
@@ -544,7 +553,94 @@ public final class SeedPreviewService {
         trimCache();
     }
 
-    private void writeBiomeStructures(JsonObject body, @Nullable SeedMap map, PreviewSpec spec) {
+    /// The EXTREME tier, isolated: `java -Xmx3g -cp panel.jar PreviewRenderMain
+    /// …` does the sampling, picture and meta, so the panel's own (typically
+    /// 1 GB) heap never sees the 8192² grid. The child inherits the panel's
+    /// classpath, which is the jar path under every supported deployment.
+    private void runBiomeCoreExtreme(PreviewJob job, PreviewSpec spec) {
+        try {
+            runBiomeCoreExtremeInner(job, spec);
+        } catch (IOException e) {
+            // 不走 IOException 出口：那条路会"回退到服务端生成"，而 8192 半径的
+            // 真实世界生成是另一场灾难——极限档的失败就停在极限档。
+            failOrCancel(job, "无法启动极限渲染子进程：" + e.getMessage());
+        }
+    }
+
+    private void runBiomeCoreExtremeInner(PreviewJob job, PreviewSpec spec) throws IOException {
+        Path javaExe = javaFor(17);
+        if (javaExe == null) {
+            failOrCancel(job, "极限渲染需要一个 Java 17+ 来跑子进程，面板没有找到。");
+            return;
+        }
+        String classPath = System.getProperty("java.class.path", "");
+        Path jar = classPath.split(java.io.File.pathSeparator).length == 1
+                && Files.isRegularFile(Path.of(classPath)) ? Path.of(classPath) : null;
+        if (jar == null) {
+            failOrCancel(job, "极限渲染需要以 jar 方式部署的面板（子进程要复用同一份字节码），"
+                    + "当前 classpath 不是单个 jar");
+            return;
+        }
+        Path directory = Files.createDirectories(cacheDirectory(spec));
+        Path png = directory.resolve("preview.png");
+        Path meta = directory.resolve("meta.json");
+        Process process = new ProcessBuilder(
+                javaExe.toString(), "-Xmx3g", "-cp", jar.toString(), PreviewRenderMain.class.getName(),
+                spec.version(), spec.seed(), Integer.toString(spec.radiusBlocks()),
+                Integer.toString(spec.biomeY()), png.toString(), meta.toString())
+                .redirectErrorStream(true)
+                .start();
+        job.attach(process);
+        List<String> tail = new ArrayList<>();
+        long deadline = System.currentTimeMillis() + EXTREME_TIMEOUT.toMillis();
+        try (var reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(process.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (tail.size() >= 20) {
+                    tail.remove(0);
+                }
+                tail.add(line);
+                if (line.startsWith(PreviewRenderMain.PROGRESS_PREFIX)) {
+                    try {
+                        long done = Long.parseLong(line.substring(PreviewRenderMain.PROGRESS_PREFIX.length()));
+                        job.renderProgress(done, -1);
+                    } catch (RuntimeException ignored) {
+                        // A malformed progress line is not worth failing the job.
+                    }
+                }
+                if (System.currentTimeMillis() > deadline) {
+                    process.destroyForcibly();
+                    failOrCancel(job, "极限渲染超过 " + EXTREME_TIMEOUT.toMinutes()
+                            + " 分钟未完成，已终止。" + String.join(" | ", tail));
+                    return;
+                }
+                if (job.cancelled()) {
+                    process.destroyForcibly();
+                    job.markCancelled();
+                    return;
+                }
+            }
+            int exit = process.waitFor();
+            if (exit != 0) {
+                failOrCancel(job, "极限渲染子进程退出码 " + exit + "。" + String.join(" | ", tail));
+                return;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            process.destroyForcibly();
+            job.markCancelled();
+            return;
+        }
+        if (!Files.isRegularFile(png) || !Files.isRegularFile(meta)) {
+            failOrCancel(job, "极限渲染子进程没有产出图片或元数据。" + String.join(" | ", tail));
+            return;
+        }
+        job.done(png, meta, false);
+        trimCache();
+    }
+
+    static void writeBiomeStructures(JsonObject body, @Nullable SeedMap map, PreviewSpec spec) {
         int radius = spec.radiusBlocks();
         JsonObject counts = new JsonObject();
         JsonArray structures = new JsonArray();
@@ -994,7 +1090,7 @@ public final class SeedPreviewService {
 
     /// The overview's metadata: the same shape as the detail one, with the
     /// sample grid standing in for the chunk list.
-    private void writeBiomeMeta(Path meta, PreviewSpec spec, String[][] samples, SeedMap map, boolean partial)
+    static void writeBiomeMeta(Path meta, PreviewSpec spec, String[][] samples, SeedMap map, boolean partial)
             throws IOException {
         JsonObject body = new JsonObject();
         body.addProperty("version", spec.version());
@@ -1047,7 +1143,9 @@ public final class SeedPreviewService {
                 .resolve(spec.radiusBlocks() + "-" + spec.biomeY()
                         + ("BIOME".equals(spec.mode().name()) ? "-biome" : "")
                         + (spec.engine() == PreviewSpec.Engine.JAVA ? "-java" : "")
-                        + (spec.quality() == PreviewSpec.Quality.HIGH ? "-hd" : spec.quality() == PreviewSpec.Quality.ULTRA ? "-ultra" : "") + "-v10");
+                        + (spec.quality() == PreviewSpec.Quality.HIGH ? "-hd"
+                            : spec.quality() == PreviewSpec.Quality.ULTRA ? "-ultra"
+                            : spec.quality() == PreviewSpec.Quality.EXTREME ? "-extreme" : "") + "-v10");
     }
 
     private static String seedHash(String seed) {

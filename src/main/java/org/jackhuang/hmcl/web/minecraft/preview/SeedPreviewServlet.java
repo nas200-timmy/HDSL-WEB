@@ -202,6 +202,7 @@ public final class SeedPreviewServlet extends HttpServlet {
         PreviewSpec.Quality quality = switch (string(body, "quality") == null ? "standard" : string(body, "quality").toLowerCase(Locale.ROOT)) {
             case "high" -> PreviewSpec.Quality.HIGH;
             case "ultra" -> PreviewSpec.Quality.ULTRA;
+            case "extreme" -> PreviewSpec.Quality.EXTREME;
             default -> PreviewSpec.Quality.STANDARD;
         };
         if (engine == PreviewSpec.Engine.JAVA && mode != PreviewSpec.Mode.BIOME) {
