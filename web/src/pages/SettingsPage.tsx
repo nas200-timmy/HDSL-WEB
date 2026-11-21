@@ -3440,8 +3440,8 @@ const AGENT_SCOPE_LABEL: Record<string, string> = {
 };
 
 const AGENT_SCOPE_HINT: Record<string, string> = {
-  read: "查看实例、日志、任务列表",
-  mc: "启停服务器、发送控制台命令",
+  read: "查看面板实例、任务与设置类页面（MC 服务器详情归「Minecraft 服务器」类）",
+  mc: "MC 服务器的读与写：启停、控制台命令、实例/玩家/日志",
   "mc-console": "附着服务器 PTY 控制台，实时读写",
   system: "CPU、内存、磁盘、网络读数",
   instances: "创建、删除、启停其它实例",
