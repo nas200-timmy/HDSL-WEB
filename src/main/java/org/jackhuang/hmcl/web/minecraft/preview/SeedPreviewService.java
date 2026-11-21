@@ -365,6 +365,9 @@ public final class SeedPreviewService {
         body.addProperty("javaReady", java != null);
         body.addProperty("javaPath", java == null ? "" : java.toString());
         body.addProperty("running", active.get() > 0);
+        // 预计等待时间的分母：渲染机的核数（客户端 hardwareConcurrency 是浏览器
+        // 所在机器的，跟渲染发生在哪里毫无关系）。
+        body.addProperty("cores", Runtime.getRuntime().availableProcessors());
         return body;
     }
 

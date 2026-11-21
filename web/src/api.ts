@@ -1966,6 +1966,8 @@ export interface McSeedPreviewCapabilities {
   javaReady: boolean;
   /** 当前是否有预览在跑（全局单飞）。 */
   running: boolean;
+  /** 渲染机的可用核数，预计等待时间的分母。 */
+  cores?: number;
 }
 
 /** 一次种子预览的作业状态。 */

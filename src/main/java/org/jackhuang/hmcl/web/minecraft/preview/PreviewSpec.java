@@ -84,8 +84,11 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
     /// The detail map's ceiling when a real server generates it.
     public static final int MAX_SERVER_RADIUS = 1024;
     /// The Java core computes biomes without generating terrain, so it can
-    /// cover a much larger area in the same time.
-    public static final int MAX_JAVA_RADIUS = 8192;
+    /// cover a much larger area in the same time. The largest step (32768
+    /// blocks across) locks its sampling server-side: at that span the quality
+    /// choice is forced, because an 8192² grid over it would be a benchmark
+    /// run, not a preview.
+    public static final int MAX_JAVA_RADIUS = 16384;
     /// Backwards-compatible alias for callers that predate the split.
     public static final int MAX_RADIUS = MAX_SERVER_RADIUS;
 

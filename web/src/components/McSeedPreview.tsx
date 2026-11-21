@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   type McSeedPreviewCapabilities,
@@ -11,6 +11,33 @@ import {
 } from "../api";
 import { withBase } from "../base";
 import { errMsg } from "../utils";
+
+/** Java 内核的清晰度档位；采样上限与 PreviewSpec.Quality 一一对应。 */
+type PreviewQuality = "standard" | "high" | "ultra" | "extreme";
+
+/// 与 `PreviewSpec.javaSamples()` 同源：min(cap, max(128, radius))。
+/// 改后端采样公式时这里必须跟着改（PreviewSpecQualityTest 守着后端）。
+const QUALITY_TIERS: { id: PreviewQuality; cap: number; name: string }[] = [
+  { id: "standard", cap: 1024, name: "默认（快速）" },
+  { id: "high", cap: 2048, name: "高清" },
+  { id: "ultra", cap: 4096, name: "超清" },
+  { id: "extreme", cap: 8192, name: "极限" },
+];
+const qualityCap = (id: PreviewQuality) =>
+  QUALITY_TIERS.find((tier) => tier.id === id)?.cap ?? 1024;
+const samplesFor = (radius: number, cap: number) => Math.min(cap, Math.max(128, radius));
+
+/// 3.6µs/采样 是 ULTRA（4096² 约 1 分钟）实测的单核成本；并行收益按渲染机
+/// 核数折算（min(16, cores)），+30% 留给 PNG 编码与子进程启动。诚实声明：
+/// 共享宿主机、老版本层栈路径、冷 JVM 都会让它失真——仅供参考，不具合同效力。
+const estimateSeconds = (samples: number, cores?: number) => {
+  const workers = Math.min(16, Math.max(1, cores ?? 1));
+  return (samples * samples * 3.6e-6 * 1.3) / workers + 3;
+};
+const formatEta = (seconds: number) =>
+  seconds < 90 ? `约 ${Math.max(3, Math.round(seconds))} 秒` : `约 ${Math.round(seconds / 60)} 分钟`;
+const qualityLabel = (quality?: string) =>
+  quality === "extreme" ? "极限" : quality === "ultra" ? "超清" : quality === "high" ? "高清" : "标准";
 
 /** 正在看的是哪一张图：刚跑完的作业，还是历史里的一条。 */
 type View = {
@@ -49,7 +76,15 @@ export function McSeedPreview({
   const [seed, setSeed] = useState(initialSeed);
   const [mode, setMode] = useState<"detail" | "biome">("biome");
   const [engine, setEngine] = useState<"java" | "server">("java");
-  const [quality, setQuality] = useState<"high" | "ultra" | "extreme">("high");
+  const [quality, setQuality] = useState<PreviewQuality>("standard");
+  const [extremeConfirm, setExtremeConfirm] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState({
+    seed: "",
+    version: "",
+    engine: "",
+    quality: "",
+    radius: "",
+  });
   const [radius, setRadius] = useState(512);
   const [caps, setCaps] = useState<McSeedPreviewCapabilities | null>(null);
   const [job, setJob] = useState<McSeedPreviewJob | null>(null);
@@ -145,6 +180,7 @@ export function McSeedPreview({
       setError("先填一个种子");
       return;
     }
+    setExtremeConfirm(false);
     setBusy(true);
     setError(null);
     setView(null);
@@ -184,6 +220,11 @@ export function McSeedPreview({
     setSeed(entry.seed);
     setVersion(entry.version);
     setRadius(entry.radius);
+    setEngine(entry.engine === "server" ? "server" : "java");
+    if (entry.quality === "standard" || entry.quality === "high"
+        || entry.quality === "ultra" || entry.quality === "extreme") {
+      setQuality(entry.quality);
+    }
     try {
       setMeta(await api.mc.previewHistoryMeta(entry.id));
     } catch {
@@ -227,6 +268,36 @@ export function McSeedPreview({
   };
 
   const running = job !== null && !["DONE", "FAILED", "CANCELLED"].includes(job.state);
+
+  // 32768 跨度锁 2048 采样——与服务端强制一致（PreviewSpec.javaSamples 在
+  // 该半径下对 high 的 cap 正好 2048），锁定时清晰度下拉直接灰掉。
+  const javaQualityLocked = engine === "java" && radius > 8192;
+  const effectiveQuality: PreviewQuality = javaQualityLocked ? "high" : quality;
+  const currentSamples = samplesFor(radius, qualityCap(effectiveQuality));
+  const blocksPerSample = Math.max(1, Math.round((radius * 2) / currentSamples));
+  const currentEta = formatEta(estimateSeconds(currentSamples, caps?.cores));
+  // 某档与低一档算出的采样数相同 = 这个范围下它是摆设，灰掉并注明原因。
+  const tierRedundant = (id: PreviewQuality) => {
+    const index = QUALITY_TIERS.findIndex((tier) => tier.id === id);
+    if (index <= 0) return false;
+    return samplesFor(radius, QUALITY_TIERS[index].cap)
+        === samplesFor(radius, QUALITY_TIERS[index - 1].cap);
+  };
+
+  const flatHistory = useMemo(() => history.flatMap((group) => group.variants), [history]);
+  const historyChoices = useMemo(() => ({
+    version: [...new Set(flatHistory.map((entry) => entry.version))].sort(),
+    engine: [...new Set(flatHistory.map((entry) => entry.engine ?? "java"))].sort(),
+    quality: [...new Set(flatHistory.map((entry) => entry.quality ?? "standard"))].sort(),
+    radius: [...new Set(flatHistory.map((entry) => String(entry.radius)))].sort((a, b) => Number(a) - Number(b)),
+  }), [flatHistory]);
+  const filteredHistory = useMemo(() => flatHistory.filter((entry) =>
+    (!historyFilter.seed || entry.seed.includes(historyFilter.seed))
+    && (!historyFilter.version || entry.version === historyFilter.version)
+    && (!historyFilter.engine || (entry.engine ?? "java") === historyFilter.engine)
+    && (!historyFilter.quality || (entry.quality ?? "standard") === historyFilter.quality)
+    && (!historyFilter.radius || String(entry.radius) === historyFilter.radius)
+  ), [flatHistory, historyFilter]);
 
   const structureRows = meta ? Object.entries(meta.structureCounts).sort((a, b) => b[1] - a[1]) : [];
 
@@ -315,44 +386,91 @@ export function McSeedPreview({
                 <option value={2048}>4096 × 4096 格</option>
                 <option value={4096}>8192 × 8192 格</option>
                 <option value={8192}>16384 × 16384 格</option>
+                <option value={16384}>32768 × 32768 格（密度锁定）</option>
               </>
             )}
           </select>
         </label>
-        <button className="btn btn-raised" disabled={busy || running} onClick={() => void start("standard")}>
-          {busy ? "提交中…" : "生成预览"}
-        </button>
         {engine === "java" && (
-          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span className="dim" style={{ fontSize: 12 }}>
+              清晰度{javaQualityLocked ? "（32768 跨度固定）" : ""}
+            </span>
             <select
               className="input"
-              value={quality}
-              onChange={(e) => setQuality(e.target.value as "high" | "ultra" | "extreme")}
-              style={{ width: 90, padding: "2px 4px", fontSize: 12 }}
-              title="采样分辨率（每边像素）。8192 极限档：最大范围下 1 采样=2 格，像素是超清的 4 倍"
+              value={effectiveQuality}
+              disabled={javaQualityLocked}
+              onChange={(event) => setQuality(event.target.value as PreviewQuality)}
+              style={{ minWidth: 240 }}
+              title={javaQualityLocked
+                ? "32768 跨度固定 2048 采样（与原 16384 默认同地面密度）；放开选择就是把预览当跑分用"
+                : "采样越高图越细、越慢、PNG 越大；与低档结果相同的档位已灰掉"}
             >
-              <option value="high">2048</option>
-              <option value="ultra">4096</option>
-              <option value="extreme">8192 极限</option>
+              {QUALITY_TIERS.map((tier) => {
+                const samples = samplesFor(radius, tier.cap);
+                const per = Math.max(1, Math.round((radius * 2) / samples));
+                const redundant = tierRedundant(tier.id);
+                return (
+                  <option key={tier.id} value={tier.id} disabled={redundant}>
+                    {tier.name} · {samples} 采样 · 1 采样 ≈ {per} 格
+                    {redundant ? "（与低档相同）" : ""}
+                  </option>
+                );
+              })}
             </select>
-            <button
-              className="btn"
-              disabled={busy || running}
-              onClick={() => void start(quality)}
-              title={quality === "extreme"
-                ? "极限档：子进程渲染，最大范围约需数分钟，PNG 可达数十 MB"
-                : "最高分辨率：最大范围约需 1 分钟"}
-            >
-              高清生成
-            </button>
-          </div>
+          </label>
         )}
+        <button
+          className="btn btn-raised"
+          disabled={busy || running}
+          onClick={() => {
+            if (effectiveQuality === "extreme" && !extremeConfirm) {
+              setExtremeConfirm(true);
+              return;
+            }
+            void start(effectiveQuality);
+          }}
+        >
+          {busy ? "提交中…" : engine === "java" ? `生成预览（${currentEta}）` : "生成预览"}
+        </button>
         {running && (
           <button className="btn btn-text" onClick={() => void cancel()}>
             取消
           </button>
         )}
       </div>
+
+      {engine === "java" && (
+        <span className="dim" style={{ fontSize: 11 }}>
+          当前：{currentSamples.toLocaleString()} 采样 · 1 采样 ≈ {blocksPerSample} 格 ·
+          出图 {(radius * 2).toLocaleString()} × {(radius * 2).toLocaleString()} 格 ·
+          预计 {currentEta}（按服务器 {caps?.cores ?? "?"} 核估计，仅供参考）
+        </span>
+      )}
+
+      {extremeConfirm && (
+        <div className="hint warning" style={{ margin: 0, display: "grid", gap: 6 }}>
+          <b>极限档（{currentSamples} 采样）生成前确认</b>
+          <span>· 共 {(currentSamples * currentSamples).toLocaleString()} 次噪声求值，1 采样 ≈ {blocksPerSample} 格</span>
+          <span>· 预计 {currentEta}（按服务器 {caps?.cores ?? "?"} 核估计；共享宿主机/冷启动会更慢，上限见 HDSL_PREVIEW_EXTREME_TIMEOUT_MINUTES）</span>
+          <span>· 在独立子进程渲染（-Xmx3g），不占用面板自身的堆</span>
+          <span>· PNG 可达数十 MB；浏览器里拖动/缩放大图可能明显卡顿</span>
+          <span style={{ display: "flex", gap: 8 }}>
+            <button
+              className="btn btn-raised"
+              onClick={() => {
+                setExtremeConfirm(false);
+                void start("extreme");
+              }}
+            >
+              确认生成
+            </button>
+            <button className="btn btn-text" onClick={() => setExtremeConfirm(false)}>
+              取消
+            </button>
+          </span>
+        </div>
+      )}
 
       {caps && (
         <p className="dim" style={{ margin: 0, fontSize: 12 }}>
@@ -475,64 +593,88 @@ export function McSeedPreview({
         </div>
       )}
 
-      {history.length > 0 && (
+      {flatHistory.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <h4 style={{ margin: 0, fontSize: 13 }}>试过的种子</h4>
             <span className="dim" style={{ fontSize: 12 }}>
-              最近 {history.length} / {30} 个
+              {filteredHistory.length} / {flatHistory.length} 条（按列筛选）
             </span>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {history.map((group) => (
-              <div key={group.seed} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
-                  <span className="mono" style={{ fontWeight: 600 }}>{group.seed}</span>
-                  <span className="dim">{group.variants.length} 个结果</span>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 2, marginLeft: 12 }}>
-                  {group.variants.map((entry) => {
-                    const active = view?.source === "history" && view.id === entry.id;
-                    const label = `${entry.version} · ${entry.engine === "java" ? "Java" : "MC"} · ${entry.quality === "extreme" ? "极限" : entry.quality === "high" ? "高清" : entry.quality === "ultra" ? "超清" : "标准"} · ${(entry.radius * 2).toLocaleString()} 格`;
-                    return (
-                      <div
-                        key={entry.id}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          padding: "2px 6px",
-                          borderRadius: 4,
-                          fontSize: 11,
-                          background: active ? "rgba(78,111,255,.14)" : "transparent",
-                        }}
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr className="dim" style={{ textAlign: "left" }}>
+                <th>种子</th>
+                <th>版本</th>
+                <th>引擎</th>
+                <th>清晰度</th>
+                <th>范围</th>
+                <th>结构</th>
+                <th>时间</th>
+                <th></th>
+              </tr>
+              <tr>
+                <th style={{ paddingRight: 6 }}>
+                  <input
+                    className="input mono"
+                    value={historyFilter.seed}
+                    placeholder="筛选…"
+                    onChange={(e) => setHistoryFilter((f) => ({ ...f, seed: e.target.value }))}
+                    style={{ width: "100%", padding: "2px 6px", fontSize: 12 }}
+                  />
+                </th>
+                {(["version", "engine", "quality", "radius"] as const).map((key) => (
+                  <th key={key} style={{ paddingRight: 6 }}>
+                    <select
+                      className="input"
+                      value={historyFilter[key]}
+                      onChange={(e) => setHistoryFilter((f) => ({ ...f, [key]: e.target.value }))}
+                      style={{ width: "100%", padding: "2px 4px", fontSize: 12 }}
+                    >
+                      <option value="">全部</option>
+                      {historyChoices[key].map((value) => (
+                        <option key={value} value={value}>
+                          {key === "quality" ? qualityLabel(value)
+                            : key === "engine" ? (value === "java" ? "Java" : "MC")
+                            : key === "radius" ? `${(Number(value) * 2).toLocaleString()} 格`
+                            : value}
+                        </option>
+                      ))}
+                    </select>
+                  </th>
+                ))}
+                <th colSpan={3}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredHistory.map((entry) => {
+                const active = view?.source === "history" && view.id === entry.id;
+                return (
+                  <tr key={entry.id} style={{ background: active ? "rgba(78,111,255,.14)" : undefined }}>
+                    <td className="mono" style={{ padding: "2px 6px 2px 0" }}>{entry.seed}</td>
+                    <td>{entry.version}</td>
+                    <td>{entry.engine === "java" ? "Java" : "MC"}</td>
+                    <td>{qualityLabel(entry.quality)}</td>
+                    <td>{(entry.radius * 2).toLocaleString()} 格</td>
+                    <td className="dim">{entry.structures ?? "—"}</td>
+                    <td className="dim">{new Date(entry.generatedAt).toLocaleString()}</td>
+                    <td style={{ display: "flex", gap: 2 }}>
+                      <button className="btn btn-text" style={{ padding: "0 4px" }} onClick={() => void openHistory(entry)}>
+                        查看
+                      </button>
+                      <button
+                        className="btn btn-text"
+                        style={{ padding: "0 4px", color: "#b3261e" }}
+                        onClick={() => void removeHistory(entry)}
                       >
-                        <button
-                          className="btn btn-text"
-                          style={{ padding: "0 4px", fontFamily: "inherit" }}
-                          title="查看这个结果"
-                          onClick={() => void openHistory(entry)}
-                        >
-                          {label}
-                        </button>
-                        <span className="dim" style={{ flex: 1, textAlign: "right" }}>
-                          {new Date(entry.generatedAt).toLocaleString()}
-                        </span>
-                        <button
-                          className="btn btn-text"
-                          style={{ padding: "0 6px", color: "#b3261e" }}
-                          title="删除这个结果"
-                          onClick={() => void removeHistory(entry)}
-                        >
-                          删除
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
+                        删除
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
@@ -834,31 +976,39 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
   const gridStep = [4, 8, 16, 32, 64, 128, 256].find((value) => value * pxPerBlock >= 36) ?? 256;
   const gridMajor = gridStep * 4;
 
-  const lines = [];
-  const labels = [];
-  if (layers.grid) {
-    for (let block = -radius; block <= radius; block += gridStep) {
-      const major = block % gridMajor === 0;
-      const stroke = major ? "#ffffff" : "#bfd4e8";
-      const opacity = major ? 0.32 : 0.14;
-      lines.push(
-        <line key={`v${block}`} x1={block} y1={-radius} x2={block} y2={radius}
-          stroke={stroke} strokeOpacity={opacity} strokeWidth={1} vectorEffect="non-scaling-stroke" />,
-        <line key={`h${block}`} x1={-radius} y1={block} x2={radius} y2={block}
-          stroke={stroke} strokeOpacity={opacity} strokeWidth={1} vectorEffect="non-scaling-stroke" />,
-      );
-      if (major) {
-        // Tick labels: the font is scaled down by the zoom so the text keeps
-        // the same size on screen whatever the viewport does.
-        labels.push(
-          <text key={`tx${block}`} x={block} y={-radius + 14 / scale} fontSize={11 / scale}
-            fill="#d6e4f0" fillOpacity={0.75} textAnchor="middle">{block}</text>,
-          <text key={`tz${block}`} x={-radius + 4 / scale} y={block + 4 / scale} fontSize={11 / scale}
-            fill="#d6e4f0" fillOpacity={0.75} textAnchor="start">{block}</text>,
+  // 网格线只依赖网格开关与步进；标签额外依赖缩放（字号随缩放反向补偿）。
+  // 8192² 大图拖动时每次 pointermove 都重建数千个 SVG 节点是网页卡顿的
+  // 头号来源——memo 住，拖拽期间只更新 transform。
+  const gridLayer = useMemo(() => {
+    const lines = [];
+    const labels = [];
+    if (layers.grid) {
+      for (let block = -radius; block <= radius; block += gridStep) {
+        const major = block % gridMajor === 0;
+        const stroke = major ? "#ffffff" : "#bfd4e8";
+        const opacity = major ? 0.32 : 0.14;
+        lines.push(
+          <line key={`v${block}`} x1={block} y1={-radius} x2={block} y2={radius}
+            stroke={stroke} strokeOpacity={opacity} strokeWidth={1} vectorEffect="non-scaling-stroke" />,
+          <line key={`h${block}`} x1={-radius} y1={block} x2={radius} y2={block}
+            stroke={stroke} strokeOpacity={opacity} strokeWidth={1} vectorEffect="non-scaling-stroke" />,
         );
+        if (major) {
+          // Tick labels: the font is scaled down by the zoom so the text keeps
+          // the same size on screen whatever the viewport does.
+          labels.push(
+            <text key={`tx${block}`} x={block} y={-radius + 14 / scale} fontSize={11 / scale}
+              fill="#d6e4f0" fillOpacity={0.75} textAnchor="middle">{block}</text>,
+            <text key={`tz${block}`} x={-radius + 4 / scale} y={block + 4 / scale} fontSize={11 / scale}
+              fill="#d6e4f0" fillOpacity={0.75} textAnchor="start">{block}</text>,
+          );
+        }
       }
     }
-  }
+    return { lines, labels };
+  }, [layers.grid, gridStep, gridMajor, radius, scale]);
+  const lines = gridLayer.lines;
+  const labels = gridLayer.labels;
 
   const barBlocks = SCALE_STEPS.find((value) => value * pxPerBlock >= 56) ?? SCALE_STEPS[SCALE_STEPS.length - 1];
   const barWidth = barBlocks * pxPerBlock;
@@ -866,14 +1016,14 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
   // Only paint structures inside the current viewport, and thin them out when
   // the whole region is visible. A 16k×16k Java map can carry thousands of
   // markers; drawing them all at once turns the picture into white noise.
-  const visibleStructures = filteredStructures.filter((s) => {
+  const visibleStructures = useMemo(() => filteredStructures.filter((s) => {
     if (scale <= 1.5) return true;
     const left = (-offset.x / scale / (box || 1)) * size - radius;
     const top = (-offset.y / scale / (box || 1)) * size - radius;
     const right = ((box - offset.x) / scale / (box || 1)) * size - radius;
     const bottom = ((box - offset.y) / scale / (box || 1)) * size - radius;
     return s.x >= left && s.x <= right && s.z >= top && s.z <= bottom;
-  }).slice(0, 300);
+  }).slice(0, 300), [filteredStructures, scale, offset.x, offset.y, box, size, radius]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -944,6 +1094,7 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
             inset: 0,
             transformOrigin: "0 0",
             transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+            willChange: "transform",
           }}
         >
           <img
