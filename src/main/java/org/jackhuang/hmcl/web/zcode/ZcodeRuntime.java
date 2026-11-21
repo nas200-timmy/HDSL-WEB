@@ -251,6 +251,12 @@ public final class ZcodeRuntime {
                     // Node resolves `~` through USERPROFILE on Windows and ignores HOME.
                     builder.environment().put("USERPROFILE", home.toString());
                 }
+                // On Windows, spawning an agent goes through upstream's runtime-host
+                // helper exe, which `pnpm build:zcode` does not ship; the panel
+                // provisions it into the data directory (ZcodeWindowsRuntimeHost)
+                // and names that root here — candidate #3 of upstream's lookup.
+                // No asset, no injection: the behavior is exactly what it was.
+                builder.environment().putAll(ZcodeWindowsRuntimeHost.environment(manager.root()));
                 process = builder.start();
             } catch (IOException e) {
                 STATES.put(id, State.ERROR);

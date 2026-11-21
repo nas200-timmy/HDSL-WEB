@@ -315,6 +315,12 @@ public final class ZcodeBuilder {
                     "--out-dir", outDir.toString(),
                     "--base-url", "https://example.invalid/zcode/"), Duration.ofMinutes(90));
 
+            // Windows 起 agent 需要上游的 runtime host 帮手程序，而上游的 CLI 构建不
+            // 含它（它属于桌面/远程资产的打包步骤）。趁源码还在，用 mingw 补上——
+            // 缺工具链或编译失败都不阻断构建，见 ZcodeWindowsRuntimeHost。
+            step.set(0.90, "制备 Windows runtime host 资产");
+            ZcodeWindowsRuntimeHost.provision(sources, settings.root(), step::log);
+
             step.set(0.93, "安装发行包");
             installed = install(outDir, settings.root().resolve("releases"), ref);
 
@@ -674,10 +680,12 @@ public final class ZcodeBuilder {
     /// the expected `Unable to detect compiler type` in the log from a scare into a
     /// known skip.
     ///
-    /// The panel deliberately **does not download** a compiler: Microsoft ships
-    /// `cl.exe` only through the Visual Studio installer, where the minimal supported
-    /// set (VC++ tools + Windows SDK) is several GB and needs an administrator. A
-    /// build must not start a UAC prompt or a 3 GB download behind the operator's back.
+    /// The panel deliberately **does not download** MSVC: Microsoft ships `cl.exe`
+    /// only through the Visual Studio installer, where the minimal supported set
+    /// (VC++ tools + Windows SDK) is several GB and needs an administrator. The one
+    /// thing that does need a C++ toolchain — the Windows runtime-host helper —
+    /// instead compiles with a self-downloaded **MinGW** zip (a plain extraction,
+    /// no admin), see [ZcodeWindowsRuntimeHost].
     ///
     /// @param step the build step, for the log
     private static void reportCompiler(Step step) {

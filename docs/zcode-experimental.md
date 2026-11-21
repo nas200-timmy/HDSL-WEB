@@ -127,6 +127,26 @@ fetch、Z.ai OAuth 的 `tokenUrl`。上游把这些锚点挪走时构建会**明
 `Local:` 就绪行之后面板还会做一次 HTTP 探活；3.18.2 会在打印端口后才初始化 host
 services，失败时进程会退出，探活会把实例标为 error 并带上日志尾部，而不是先报 running。
 
+### Windows 起 agent 的 runtime host（2026-11 实测）
+
+ZCode 的 server 在 **Windows** 上拉起 agent 子进程时不走 `spawn`：它先找自己的帮手程序
+`zcode-runtime-host.exe`（Job Object 收尸 + 控制管道），找不到就抛
+`Windows runtime host is missing. Prepare the runtime assets before starting CLI.`。
+整条路径被 `process.platform === "win32"` 关着，Linux 面板永远见不到它；而上游的
+`pnpm build:zcode` 也不把这个 exe 打进发行包（它属于桌面/远程资产的打包步骤），所以
+Windows 裸部署一开 agent 就撞墙。
+
+面板在构建发行包时顺手补齐（`ZcodeWindowsRuntimeHost`）：趁源码还在盘上，用 MinGW 把
+`scripts/windows-runtime-host/` 下的两个 `.cpp` 按上游 CMakeLists 的等价参数
+（`-std=c++17 -municode -static`）编成 exe，落到 `<data>/zcode/assets/tools/runtime-host/`；
+实例启动时检测到资产就注入 `ZCODE_SERVER_RUNTIME_ROOT`（上游查找链的候选 3，不依赖
+Electron 布局与 cwd）。编译器解析顺序：`HDSL_ZCODE_MINGW` → 面板工具链缓存
+（`<data>/hdsl/toolchains/mingw`）→ PATH → 自动下载 llvm-mingw（可用
+`HDSL_ZCODE_MINGW_URL` 走镜像）。仍不是 MSVC：那是几个 GB 且要管理员的东西，面板不碰。
+
+制备失败不阻断构建——Web 和 TUI 照常，只是 Windows 起 agent 仍会报上游那条原文，和
+修复前的行为一致。
+
 ### 版本目录与实例下限
 
 `GET /api/zcode/catalog` 返回三类版本：
@@ -255,8 +275,8 @@ const projectStorageHostId = remoteHostIdFromWorkspaceIdentity(…)   →   cons
 ## 相关代码
 
 - 后端：`src/main/java/org/jackhuang/hmcl/web/zcode/`（`ZcodeApiServlet`、`ZcodeRuntime`、
-  `ZcodeInstanceManager`），挂在 `HdslServer` 的 `/api/zcode/*`（与其它 `/api/*` 一样过
-  会话门）。
+  `ZcodeInstanceManager`、`ZcodeWindowsRuntimeHost`），挂在 `HdslServer` 的 `/api/zcode/*`
+  （与其它 `/api/*` 一样过会话门）。
 - 终端：`web/terminal/ZcodeTui.java`（argv 与两条状态根）、`web/terminal/InstanceTerminal.java`
   （与 dsh、品牌共用的门禁/启动/ticket）。
 - 前端：`web/src/components/ZcodeSection.tsx`（实例页里的独立品牌分区，终端复用
