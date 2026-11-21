@@ -891,14 +891,13 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
   const coordsAt = (clientX: number, clientY: number) => {
     const image = imageRef.current;
     if (!image) return null;
+    // img 元素本身就是整张位图（显式 box×box 尺寸，见下方 style），
+    // getBoundingClientRect 已含变换——框内直接归一化，无需任何裁剪补偿。
     const rect = image.getBoundingClientRect();
-    // 帧是 16:9、位图是方形：object-fit cover 把位图按"宽铺满、上下对称裁掉"摆放，
-    // 裁掉的上边换算成变换后的像素就是 (宽-高)/2。位图自身始终是 宽×宽 的正方形。
-    const cropTop = (rect.width - rect.height) / 2;
     const bx = clientX - rect.left;
-    const by = clientY - rect.top + cropTop;
-    if (bx < 0 || by < 0 || bx > rect.width || by > rect.width) return null;
-    return { x: Math.round((bx / rect.width) * size - radius), z: Math.round((by / rect.width) * size - radius) };
+    const by = clientY - rect.top;
+    if (bx < 0 || by < 0 || bx > rect.width || by > rect.height) return null;
+    return { x: Math.round((bx / rect.width) * size - radius), z: Math.round((by / rect.height) * size - radius) };
   };
 
   const onPointerDown = (event: React.PointerEvent) => {
@@ -1103,12 +1102,16 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
             alt={`种子 ${view.seed} 的地图`}
             draggable={false}
             style={{
-              width: "100%",
-              height: "100%",
+              // 显式像素尺寸摆放，不用 object-fit：cover 会触发 Chrome 的
+              // "适配快照"光栅路径——pixelated 失效、缩放不再按原图重采样，
+              // 地图就成了"图片放大缩小器"。这里用与 cover 完全等价的几何
+              // （宽 = 帧宽，垂直居中、超出裁掉）走常规图片栅格，缩放随拖随锐。
+              position: "absolute",
+              left: 0,
+              top: (boxH - box) / 2,
+              width: box || "100%",
+              height: box || "100%",
               display: "block",
-              // 帧是 16:9、位图是方形：cover 让宽铺满、上下对称裁掉，绝不拉伸变形；
-              // 初始视图（缩放 1、无偏移）正好是世界的正中 16:9 地带。
-              objectFit: "cover",
               // 群系图是精确到方块边界的采样，放大时必须保持色块锐利；
               // 平滑插值会让 590% 时变成一团渐变色。
               imageRendering: "pixelated",
