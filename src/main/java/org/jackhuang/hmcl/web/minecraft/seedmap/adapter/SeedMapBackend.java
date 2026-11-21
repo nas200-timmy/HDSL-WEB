@@ -19,11 +19,16 @@ package org.jackhuang.hmcl.web.minecraft.seedmap.adapter;
 
 import org.jackhuang.hmcl.web.minecraft.preview.PreviewRenderer;
 import org.jackhuang.hmcl.web.minecraft.preview.PreviewSpec;
-import org.jackhuang.hmcl.web.minecraft.seedmap.core.Biome;
 import org.jackhuang.hmcl.web.minecraft.seedmap.core.SeedMap;
 import org.jackhuang.hmcl.web.minecraft.seedmap.core.Version;
+import org.jetbrains.annotations.Nullable;
 
 import java.awt.image.BufferedImage;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /// Renders a biome overview directly from the seed-map core, without starting
 /// a Minecraft server.
@@ -59,7 +64,6 @@ public final class SeedMapBackend {
     public static Result render(PreviewSpec spec, Progress progress) {
         Version version = Version.parse(spec.version());
         long seed = parseSeed(spec.seed());
-        SeedMap map = SeedMap.of(version, seed);
 
         int cells = spec.javaSamples();
         String[][] samples = new String[cells][cells];
@@ -72,18 +76,106 @@ public final class SeedMapBackend {
         int step = Math.max(1, (int) Math.round(side / (double) cells));
         long total = (long) cells * cells;
 
-        for (int j = 0; j < cells; j++) {
-            for (int i = 0; i < cells; i++) {
-                int blockX = -radius + i * step + step / 2;
-                int blockZ = -radius + j * step + step / 2;
-                Biome biome = map.biomeAt(blockX, spec.biomeY(), blockZ);
-                samples[j][i] = biome.key();
+        int workers = parallelWorkers(cells);
+        if (workers <= 1) {
+            // 小网格开池子不划算：一个线程从头刷到尾。
+            SeedMap map = SeedMap.of(version, seed);
+            for (int j = 0; j < cells; j++) {
+                for (int i = 0; i < cells; i++) {
+                    int blockX = -radius + i * step + step / 2;
+                    int blockZ = -radius + j * step + step / 2;
+                    samples[j][i] = map.biomeAt(blockX, spec.biomeY(), blockZ).key();
+                }
+                if (progress != null) {
+                    progress.update((j + 1) * (long) cells, total);
+                }
             }
-            if (progress != null) {
-                progress.update((j + 1) * (long) cells, total);
-            }
+        } else {
+            sampleParallel(version, seed, spec.biomeY(), samples, cells, radius, step, total,
+                    progress, workers);
         }
-        return new Result(PreviewRenderer.renderBiome(samples, spec), samples, map);
+        // The map handed back is for structure queries; any instance answers
+        // identically, so a fresh one keeps the parallel workers state-free.
+        return new Result(PreviewRenderer.renderBiome(samples, spec), samples,
+                SeedMap.of(version, seed));
+    }
+
+    /// Striped multi-threaded sampling: each worker builds its own SeedMap
+    /// (table construction is cheap against the sampling itself) and fills a
+    /// disjoint band of rows, which sidesteps every question about sharing the
+    /// legacy layer stack or the modern noise tables. The embarrassingly
+    /// parallel part is exactly the part that costs minutes: an EXTREME render
+    /// divides by the core count almost linearly, which also makes it a decent
+    /// unrigorous CPU benchmark.
+    private static void sampleParallel(Version version, long seed, int biomeY,
+                                       String[][] samples, int cells, int radius, int step,
+                                       long total, @Nullable Progress progress, int workers) {
+        AtomicLong done = new AtomicLong();
+        AtomicReference<RuntimeException> failure = new AtomicReference<>();
+        // More strips than workers so a fast thread can take over the tail of a
+        // slow one; rows are the natural stripe (contiguous, disjoint, simple).
+        int strips = workers * 4;
+        ExecutorService pool = Executors.newFixedThreadPool(workers, runnable -> {
+            Thread thread = new Thread(runnable, "seedmap-render");
+            thread.setDaemon(true);
+            return thread;
+        });
+        try {
+            for (int s = 0; s < strips; s++) {
+                int j0 = (int) ((long) cells * s / strips);
+                int j1 = (int) ((long) cells * (s + 1) / strips);
+                if (j0 >= j1) {
+                    continue;
+                }
+                pool.submit(() -> {
+                    try {
+                        SeedMap map = SeedMap.of(version, seed);
+                        for (int j = j0; j < j1; j++) {
+                            for (int i = 0; i < cells; i++) {
+                                int blockX = -radius + i * step + step / 2;
+                                int blockZ = -radius + j * step + step / 2;
+                                samples[j][i] = map.biomeAt(blockX, biomeY, blockZ).key();
+                            }
+                            if (progress != null) {
+                                progress.update(done.addAndGet(cells), total);
+                            }
+                        }
+                    } catch (RuntimeException e) {
+                        failure.compareAndSet(null, e);
+                    }
+                });
+            }
+            pool.shutdown();
+            while (true) {
+                try {
+                    if (pool.awaitTermination(1, TimeUnit.MINUTES)) {
+                        break;
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    pool.shutdownNow();
+                    throw new RuntimeException("sampling was interrupted", e);
+                }
+                if (failure.get() != null) {
+                    pool.shutdownNow();
+                    throw failure.get();
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        if (failure.get() != null) {
+            throw failure.get();
+        }
+    }
+
+    /// Small grids run serially; large ones fan out to every core the box has,
+    /// capped so a shared host is not fully monopolised by one preview.
+    static int parallelWorkers(int cells) {
+        if (cells < 512) {
+            return 1;
+        }
+        return Math.min(16, Math.max(1, Runtime.getRuntime().availableProcessors()));
     }
 
     public static BufferedImage renderBiome(PreviewSpec spec) {
