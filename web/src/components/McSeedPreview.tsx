@@ -76,7 +76,7 @@ export function McSeedPreview({
   const [seed, setSeed] = useState(initialSeed);
   const [mode, setMode] = useState<"detail" | "biome">("biome");
   const [engine, setEngine] = useState<"java" | "server">("java");
-  const [quality, setQuality] = useState<PreviewQuality>("standard");
+  const [quality, setQuality] = useState<PreviewQuality>("high");
   const [extremeConfirm, setExtremeConfirm] = useState(false);
   const [historyFilter, setHistoryFilter] = useState({
     seed: "",
@@ -455,6 +455,7 @@ export function McSeedPreview({
           <span>· 预计 {currentEta}（按服务器 {caps?.cores ?? "?"} 核估计；共享宿主机/冷启动会更慢，上限见 HDSL_PREVIEW_EXTREME_TIMEOUT_MINUTES）</span>
           <span>· 在独立子进程渲染（-Xmx3g），不占用面板自身的堆</span>
           <span>· PNG 可达数十 MB；浏览器里拖动/缩放大图可能明显卡顿</span>
+          <span>· 浏览器有 GPU 纹理上限（常见 4096/8192px），超限的大图缩放会发虚——最细细节请用"下载"拿原图本地看</span>
           <span style={{ display: "flex", gap: 8 }}>
             <button
               className="btn btn-raised"
@@ -1094,7 +1095,6 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
             inset: 0,
             transformOrigin: "0 0",
             transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
-            willChange: "transform",
           }}
         >
           <img
