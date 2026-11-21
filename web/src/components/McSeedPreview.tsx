@@ -566,6 +566,7 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
   const frameRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const [box, setBox] = useState(0);
+  const [boxH, setBoxH] = useState(0);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [hover, setHover] = useState<{ x: number; z: number } | null>(null);
@@ -589,7 +590,10 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
   useEffect(() => {
     const frame = frameRef.current;
     if (!frame) return;
-    const update = () => setBox(frame.clientWidth);
+    const update = () => {
+      setBox(frame.clientWidth);
+      setBoxH(frame.clientHeight);
+    };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(frame);
@@ -645,7 +649,9 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
       clampOffset(
         {
           x: width / 2 - ((target.x + radius) / size) * width * nextScale,
-          y: width / 2 - ((target.z + radius) / size) * width * nextScale,
+          // 16:9 帧：纵向中心是 boxH/2，且 cover 裁掉的 (box-boxH)/2 随缩放一起放大
+          y: boxH / 2 - ((target.z + radius) / size) * width * nextScale
+            + nextScale * ((width - boxH) / 2),
         },
         nextScale,
       ),
@@ -688,7 +694,8 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
       clampOffset(
         {
           x: width / 2 - ((target.x + radius) / size) * width * nextScale,
-          y: width / 2 - ((target.z + radius) / size) * width * nextScale,
+          y: boxH / 2 - ((target.z + radius) / size) * width * nextScale
+            + nextScale * ((width - boxH) / 2),
         },
         nextScale,
       ),
@@ -739,10 +746,13 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
     const image = imageRef.current;
     if (!image) return null;
     const rect = image.getBoundingClientRect();
-    const fx = (clientX - rect.left) / rect.width;
-    const fz = (clientY - rect.top) / rect.height;
-    if (fx < 0 || fz < 0 || fx > 1 || fz > 1) return null;
-    return { x: Math.round(fx * size - radius), z: Math.round(fz * size - radius) };
+    // 帧是 16:9、位图是方形：object-fit cover 把位图按"宽铺满、上下对称裁掉"摆放，
+    // 裁掉的上边换算成变换后的像素就是 (宽-高)/2。位图自身始终是 宽×宽 的正方形。
+    const cropTop = (rect.width - rect.height) / 2;
+    const bx = clientX - rect.left;
+    const by = clientY - rect.top + cropTop;
+    if (bx < 0 || by < 0 || bx > rect.width || by > rect.width) return null;
+    return { x: Math.round((bx / rect.width) * size - radius), z: Math.round((by / rect.width) * size - radius) };
   };
 
   const onPointerDown = (event: React.PointerEvent) => {
@@ -912,9 +922,9 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
           inset: fullscreen ? 0 : undefined,
           zIndex: fullscreen ? 1000 : undefined,
           width: "100%",
-          maxWidth: fullscreen ? undefined : "480px",
+          maxWidth: fullscreen ? undefined : "1080px",
           margin: fullscreen ? undefined : "0 auto",
-          aspectRatio: fullscreen ? undefined : "1 / 1",
+          aspectRatio: fullscreen ? undefined : "16 / 9",
           overflow: "hidden",
           borderRadius: fullscreen ? 0 : 6,
           border: "1px solid rgba(127,127,127,.25)",
@@ -942,6 +952,9 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
               width: "100%",
               height: "100%",
               display: "block",
+              // 帧是 16:9、位图是方形：cover 让宽铺满、上下对称裁掉，绝不拉伸变形；
+              // 初始视图（缩放 1、无偏移）正好是世界的正中 16:9 地带。
+              objectFit: "cover",
               // 群系图是精确到方块边界的采样，放大时必须保持色块锐利；
               // 平滑插值会让 590% 时变成一团渐变色。
               imageRendering: "pixelated",
@@ -949,6 +962,7 @@ function MapView({ view, meta, exactStructures }: { view: View; meta: McSeedPrev
           />
           <svg
             viewBox={`${-radius} ${-radius} ${size} ${size}`}
+            preserveAspectRatio="xMidYMid slice"
             style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
           >
             {lines}
