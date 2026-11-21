@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.minecraft.preview;
 
 import org.jackhuang.hmcl.web.minecraft.seedmap.adapter.SeedMapBackend;
+import org.jackhuang.hmcl.web.minecraft.seedmap.core.Version;
 
 import javax.imageio.ImageIO;
 import java.nio.file.Files;
@@ -38,6 +39,10 @@ public final class PreviewRenderMain {
 
     /// The parent parses lines starting with this prefix as progress updates.
     public static final String PROGRESS_PREFIX = "render-progress ";
+    /// `RATE_PREFIX + <samples/sec>` arrives once at the end; the parent folds it
+    /// into the job log, which is the seed of the CPU-benchmark idea and the
+    /// first thing to read when a render is suspiciously slow.
+    public static final String RATE_PREFIX = "render-rate ";
 
     private PreviewRenderMain() {
     }
@@ -55,8 +60,23 @@ public final class PreviewRenderMain {
         Files.createDirectories(png.getParent());
         Files.createDirectories(meta.getParent());
 
+        // 诊断先行：一次失败/变慢的运行，第一眼看这四项就够定位大半问题
+        // （是不是只分到单核、走了哪条引擎路径、目标规模对不对）。
+        Version version = Version.parse(spec.version());
+        System.out.println("render-start cells=" + spec.javaSamples()
+                + " radius=" + spec.radiusBlocks()
+                + " version=" + spec.version()
+                + " cores=" + Runtime.getRuntime().availableProcessors()
+                + " generator=" + (version.family() == Version.Family.MODERN ? "multinoise" : "layerstack"));
+
+        long startedAt = System.nanoTime();
         SeedMapBackend.Result result = SeedMapBackend.render(spec, (done, total) ->
                 System.out.println(PROGRESS_PREFIX + done));
+        double seconds = (System.nanoTime() - startedAt) / 1_000_000_000.0;
+        long total = (long) spec.javaSamples() * spec.javaSamples();
+        System.out.println(RATE_PREFIX + Math.round(total / seconds) + " 采样/秒"
+                + "（" + spec.javaSamples() + "²，" + Math.round(seconds) + " 秒，"
+                + Runtime.getRuntime().availableProcessors() + " 核）");
         ImageIO.write(result.image(), "png", png.toFile());
         SeedPreviewService.writeBiomeMeta(meta, spec, result.samples(), result.map(), false);
         System.out.println("render-done "

@@ -95,9 +95,30 @@ public final class SeedPreviewService {
     /// marked partial, because a slow machine should get a picture and a
     /// warning rather than nothing.
     private static final Duration GENERATE_TIMEOUT = Duration.ofMinutes(6);
-    /// EXTREME renders trade minutes for pixels; half an hour is past any
-    /// realistic 8192² run and still lets a wedged child be reaped.
-    private static final Duration EXTREME_TIMEOUT = Duration.ofMinutes(30);
+    /// EXTREME renders trade minutes for pixels; the default covers a slow
+    /// shared host at the largest radius with headroom, and operators with
+    /// patience (or a very small box) can raise it per-minute by environment.
+    private static final Duration EXTREME_TIMEOUT = extremeTimeout();
+
+    private static Duration extremeTimeout() {
+        String env = System.getenv("HDSL_PREVIEW_EXTREME_TIMEOUT_MINUTES");
+        if (env != null && !env.isBlank()) {
+            try {
+                int minutes = Integer.parseInt(env.trim());
+                if (minutes >= 1 && minutes <= 24 * 60) {
+                    return Duration.ofMinutes(minutes);
+                }
+                org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                        "Ignoring HDSL_PREVIEW_EXTREME_TIMEOUT_MINUTES=" + env
+                        + " (want 1..1440)");
+            } catch (NumberFormatException e) {
+                org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                        "Ignoring HDSL_PREVIEW_EXTREME_TIMEOUT_MINUTES=" + env
+                        + " (not a number)");
+            }
+        }
+        return Duration.ofMinutes(60);
+    }
     /// How long `stop` may take to end the process.
     private static final Duration STOP_TIMEOUT = Duration.ofSeconds(90);
     /// How many finished previews are kept. A player trying seeds in a row
@@ -600,18 +621,7 @@ public final class SeedPreviewService {
                 new java.io.InputStreamReader(process.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                if (tail.size() >= 20) {
-                    tail.remove(0);
-                }
-                tail.add(line);
-                if (line.startsWith(PreviewRenderMain.PROGRESS_PREFIX)) {
-                    try {
-                        long done = Long.parseLong(line.substring(PreviewRenderMain.PROGRESS_PREFIX.length()));
-                        job.renderProgress(done, totalSamples);
-                    } catch (RuntimeException ignored) {
-                        // A malformed progress line is not worth failing the job.
-                    }
-                }
+                // 刹车先踩再看内容：进度行占绝大多数，continue 不能跳过检查。
                 if (System.currentTimeMillis() > deadline) {
                     process.destroyForcibly();
                     failOrCancel(job, "极限渲染超过 " + EXTREME_TIMEOUT.toMinutes()
@@ -623,6 +633,25 @@ public final class SeedPreviewService {
                     job.markCancelled();
                     return;
                 }
+                if (line.startsWith(PreviewRenderMain.PROGRESS_PREFIX)) {
+                    try {
+                        long done = Long.parseLong(line.substring(PreviewRenderMain.PROGRESS_PREFIX.length()));
+                        job.renderProgress(done, totalSamples);
+                    } catch (RuntimeException ignored) {
+                        // A malformed progress line is not worth failing the job.
+                    }
+                    continue;
+                }
+                // 失败时要给的是"为什么"，不是 20 行进度刷屏——真正的输出和报错
+                // 才进 tail（进度行一秒几十条，会把有用信息全部顶出去）。
+                if (line.startsWith(PreviewRenderMain.RATE_PREFIX)) {
+                    job.log(line.substring(PreviewRenderMain.RATE_PREFIX.length()));
+                    continue;
+                }
+                if (tail.size() >= 20) {
+                    tail.remove(0);
+                }
+                tail.add(line);
             }
             int exit = process.waitFor();
             if (exit != 0) {
