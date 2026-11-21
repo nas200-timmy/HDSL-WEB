@@ -406,15 +406,17 @@ curl -k -b cookie -X PUT https://panel/api/settings/acme/credentials \
 
 ### 运行时 JDK 安全（Java4Shell / CVE-2026-114938）
 
-容器入口会在 **x86-64 且 CPU 暴露 `avx512_vbmi`** 时自动给 JVM 追加 `-XX:UseAVX=2`，
-绕开受影响的 AVX-512 VBMI Base64 intrinsic；非 x86 或没有该指令的主机不会加。该兜底
-不替代 JDK 补丁：
+容器入口会在 **x86-64** 上自动给 JVM 追加 `-XX:-UseBASE64Intrinsics`，直接关闭受影响的
+Base64 intrinsic，不依赖 CPU flags；非 x86 不加。该兜底不替代 JDK 补丁：
 
-- 修复版是 OpenJDK `21.0.13.1+`（以及 17/25/27 对应的 `.1` 构建）；升级后可用
+- 修复版是 OpenJDK `21.0.13.1+`（以及 17/25/27 对应的 `.1` 构建）。容器当前钉在
+  Temurin 21.0.13+9 / 25.0.5+8（修复版 Linux 资产尚未发布）；升级后可用
   `HDSL_JAVA4SHELL_GUARD=0` 关闭自动参数。
-- **裸 jar** 不在容器入口里，受影响的机器需要自己加 `-XX:UseAVX=2`，或换已修复的 JDK。
-- 核查：宿主机 `lscpu | grep -o avx512_vbmi`；容器内
-  `java -XX:+PrintFlagsFinal -version | grep UseAVX` 应为 2。
+- **裸 jar** 不在容器入口里，受影响的机器需要自己加 `-XX:-UseBASE64Intrinsics`
+  （Java 9+），或换已修复的 JDK。
+- 核查：容器内 `jcmd 1 VM.flags | grep UseBASE64` 应包含
+  `-XX:-UseBASE64Intrinsics`；裸 jar 再用 `lscpu | grep -o avx512_vbmi` 判断是否在
+  攻击面上。
 - 细节与未认证解码路径见 [`security.md` §6.2](security.md)。
 
 ### 手工替换 + 重启

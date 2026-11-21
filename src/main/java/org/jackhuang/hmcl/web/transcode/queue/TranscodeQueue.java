@@ -1034,6 +1034,14 @@ public final class TranscodeQueue {
         } catch (RuntimeException ignored) {
             // A malformed progress line is not a reason to fail a running job.
         }
+        if (job.state == TranscodeJob.State.RUNNING) {
+            StringBuilder live = new StringBuilder();
+            if (job.frame >= 0) live.append("frame=").append(job.frame).append(' ');
+            if (job.fps > 0) live.append("fps=").append(String.format(Locale.ROOT, "%.0f", job.fps)).append(' ');
+            if (job.speed > 0) live.append("speed=").append(String.format(Locale.ROOT, "%.2f", job.speed)).append("x ");
+            if (!job.bitrate.isBlank()) live.append("bitrate=").append(job.bitrate);
+            if (!live.isEmpty()) job.message = live.toString().trim();
+        }
         long now = System.currentTimeMillis();
         if (now - job.lastPublishAt >= 500) {
             job.lastPublishAt = now;

@@ -19,6 +19,7 @@ import { QueuePage } from "./transcode/QueuePage";
 import { PresetsPage } from "./transcode/PresetsPage";
 import { ToolsPage } from "./transcode/ToolsPage";
 import { TranscodeSettingsPage } from "./transcode/TranscodeSettingsPage";
+import { TranscodeWorkspaceProvider } from "./transcode/TranscodeWorkspace";
 
 type TranscodeTab = "overview" | "prepare" | "queue" | "presets" | "mediainfo" | "tools" | "settings";
 
@@ -59,7 +60,8 @@ export function TranscodePage() {
   if (!feature.enabled) return <Navigate to="/" replace />;
 
   return (
-    <div className="page-with-sidebar">
+    <TranscodeWorkspaceProvider>
+      <div className="page-with-sidebar">
       <SubSideBar
         activeKey={tab}
         onSelect={(key) => openTab(key)}
@@ -89,6 +91,7 @@ export function TranscodePage() {
         {tab === "tools" && <ToolsPage onOpenTab={openTab} />}
         {tab === "settings" && <TranscodeSettingsPage />}
       </div>
-    </div>
+      </div>
+    </TranscodeWorkspaceProvider>
   );
 }

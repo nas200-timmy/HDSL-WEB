@@ -330,7 +330,7 @@ public final class PlainChatServlet extends HttpServlet {
                     patch.addProperty("model", model);
                     requireChat().updateSession(sessionId, patch);
                 }
-                redirect(response, url("/plain/s/" + sessionId));
+                redirect(response, url("/plain/s/" + sessionId + "#bottom"));
                 return;
             }
             if ("/fork".equals(action)) {
@@ -474,27 +474,29 @@ public final class PlainChatServlet extends HttpServlet {
         String rev = revOf(session.toString(), elev);
 
         StringBuilder content = new StringBuilder();
-        content.append("<div class=\"toolbar\"><a href=\"").append(url("/plain")).append("\">← 会话列表</a> · ")
-                .append("<a href=\"").append(url("/plain/s/" + sessionId)).append("\">刷新</a> · ")
+        String assistant = assistantName(string(session, "assistantId"));
+        String model = string(session, "model");
+        content.append("<div class=\"chat-head\"><div class=\"chat-heading\">")
+                .append("<span class=\"chat-heading-avatar\">AI</span><div class=\"chat-heading-text\">")
+                .append("<h1>").append(PlainHtml.escape(string(session, "title"))).append("</h1>\n")
+                .append("<p class=\"muted\">")
+                .append(PlainHtml.escape(assistant))
+                .append(" · ").append(PlainHtml.escape(model.isBlank() ? "默认模型" : model))
+                .append(streaming ? " · <strong>正在生成回答…</strong>" : "")
+                .append("</p></div></div>\n");
+        content.append("<div class=\"toolbar chat-toolbar\"><a href=\"").append(url("/plain")).append("\">← 会话列表</a>")
+                .append("<a href=\"").append(url("/plain/s/" + sessionId)).append("\">刷新</a>")
                 .append(auto
                         ? "<a href=\"" + url("/plain/s/" + sessionId) + "\">关闭自动刷新</a>"
                         : "<a href=\"" + url("/plain/s/" + sessionId) + "?auto=1\">自动刷新（"
                         + AUTO_REFRESH_SECONDS + " 秒）</a>")
-                .append(" · <a href=\"").append(url("/api/chat/sessions/" + sessionId + "/export"))
+                .append("<a href=\"").append(url("/api/chat/sessions/" + sessionId + "/export"))
                 .append("\">导出</a>")
-                .append(" · <form method=\"post\" action=\"").append(url("/plain/s/" + sessionId + "/fork"))
+                .append("<form method=\"post\" action=\"").append(url("/plain/s/" + sessionId + "/fork"))
                 .append("\"><input type=\"submit\" value=\"分叉\"></form>")
-                .append(" · <a href=\"#bottom\">跳到末尾 ↓</a>")
+                .append("<a href=\"#bottom\">跳到末尾 ↓</a>")
                 .append("</div>\n");
-
-        content.append("<h1>").append(PlainHtml.escape(string(session, "title"))).append("</h1>\n");
-        String model = string(session, "model");
-        content.append("<p class=\"muted\">模型 ")
-                .append(PlainHtml.escape(model.isBlank() ? "默认" : model))
-                .append(" · 助手 ").append(PlainHtml.escape(assistantName(string(session, "assistantId"))))
-                .append(streaming ? " · <strong>正在生成回答…</strong>" : "")
-                .append("</p>\n");
-        content.append(modelForm(session));
+        content.append("<div class=\"chat-modelbar\">").append(modelForm(session)).append("</div>\n");
 
         if (error != null && !error.isBlank()) {
             content.append("<p class=\"error\">").append(PlainHtml.escape(errorText(error))).append("</p>\n");
@@ -522,60 +524,82 @@ public final class PlainChatServlet extends HttpServlet {
                 head, shell(nav(request), content.toString()), true);
     }
 
-    /// The transcript region: every node's active variant, markdown pre-rendered
-    /// server-side for finalized assistant replies.
+    /// The transcript region: every node's active variant. The two roles use the
+    /// same table-with-avatar shape as the SPA's message rows; a user row simply
+    /// puts the cells in the opposite order, so no flexbox is involved.
     private String transcript(JsonObject session) {
-        StringBuilder body = new StringBuilder();
+        StringBuilder body = new StringBuilder("<div class=\"chat-thread\">\n");
         JsonArray nodes = session.has("nodes") && session.getAsJsonArray("nodes") != null
                 ? session.getAsJsonArray("nodes") : new JsonArray();
+        boolean first = true;
         for (JsonElement element : nodes) {
             JsonObject node = element.getAsJsonObject();
             JsonObject message = activeVariant(node);
             if (message == null) {
                 continue;
             }
+            if (!first) {
+                body.append("<hr class=\"turn-sep\">\n");
+            }
+            first = false;
             boolean assistant = "assistant".equals(string(node, "role"));
             String status = string(message, "status");
             String content = string(message, "content");
-            body.append("<div class=\"row\"><strong>").append(assistant ? "助手" : "你")
-                    .append("</strong> <span class=\"muted\">")
-                    .append(PlainHtml.time(longOf(message, "createdAt")))
-                    .append(" · ").append(statusText(status, assistant)).append("</span></div>\n");
+            StringBuilder bubble = new StringBuilder();
             if (assistant && "done".equals(status) && enhancedLegacy()) {
-                // Sources make [citation:N] into links; without them the renderer
-                // would leave the markers in the body.
                 String sourcesJson = message.has("sources") && message.get("sources").isJsonArray()
                         ? message.getAsJsonArray("sources").toString() : null;
                 String rendered = ssr.render(string(message, "id"), content, sourcesJson);
                 if (rendered != null) {
-                    body.append(rendered).append("\n");
-                    continue;
+                    bubble.append(rendered).append("\n");
                 }
             }
-            if (content.isBlank() && "streaming".equals(status)) {
-                body.append("<pre class=\"msg\">（正在生成…）</pre>\n");
-            } else {
-                body.append("<pre class=\"msg\">").append(PlainHtml.escape(content)).append("</pre>\n");
+            if (bubble.length() == 0) {
+                if (content.isBlank() && "streaming".equals(status)) {
+                    bubble.append("<pre class=\"msg\">（正在生成…）</pre>\n");
+                } else {
+                    bubble.append("<pre class=\"msg\">").append(PlainHtml.escape(content)).append("</pre>\n");
+                }
             }
             JsonArray attachments = message.has("attachments")
                     && message.get("attachments").isJsonArray()
                     ? message.getAsJsonArray("attachments") : new JsonArray();
             if (!attachments.isEmpty()) {
-                body.append("<div>附件：");
+                bubble.append("<div class=\"chat-attachments\">附件：");
                 for (int i = 0; i < attachments.size(); i++) {
                     JsonObject attachment = attachments.get(i).getAsJsonObject();
                     String id = string(attachment, "id");
                     String name = string(attachment, "name");
                     if (i > 0) {
-                        body.append(" · ");
+                        bubble.append(" · ");
                     }
-                    body.append("<a href=\"").append(url("/api/chat/attachments/" + id))
+                    bubble.append("<a href=\"").append(url("/api/chat/attachments/" + id))
                             .append("\">").append(PlainHtml.escape(name)).append("</a>\n");
                 }
-                body.append("</div>\n");
+                bubble.append("</div>\n");
             }
+
+            String role = assistant ? "assistant" : "user";
+            String meta = "<div class=\"chat-msg-meta\"><strong>" + (assistant ? "助手" : "你")
+                    + "</strong> <span class=\"chat-msg-time\">"
+                    + PlainHtml.time(longOf(message, "createdAt")) + "</span>"
+                    + " <span class=\"chat-status " + PlainHtml.escape(status) + "\">"
+                    + statusText(status, assistant) + "</span></div>\n";
+            String messageCell = "<td class=\"chat-message-cell\">" + meta
+                    + "<div class=\"chat-bubble\">" + bubble + "</div></td>";
+            String avatarCell = "<td class=\"chat-avatar-cell\" width=\"40\"><span class=\"chat-avatar\">"
+                    + (assistant ? "AI" : "我") + "</span></td>";
+            body.append("<table class=\"chat-line ").append(role).append("\"")
+                    .append(assistant ? " width=\"100%\"" : " align=\"right\"")
+                    .append(" cellspacing=\"0\" cellpadding=\"0\"><tr>")
+                    .append(assistant ? avatarCell + messageCell : messageCell + avatarCell)
+                    .append("</tr></table>\n");
         }
-        return body.toString();
+        if (first) {
+            body.append("<div class=\"chat-empty\"><strong>开始一段新对话</strong><br>")
+                    .append("在下方输入第一条消息，发送后这里会出现你和助手的聊天气泡。</div>\n");
+        }
+        return body.append("</div>\n").toString();
     }
 
     /// The model picker: a plain form with a `<select>`, so IE11 and w3m both
@@ -653,15 +677,17 @@ public final class PlainChatServlet extends HttpServlet {
             return "<p class=\"muted\">发送消息需要先<a href=\"" + url("/plain/elevate")
                     + "\">开发者提权</a>。</p>\n";
         }
-        return "<h2>发送消息</h2>\n"
+        return "<div class=\"chat-composer\"><div class=\"chat-composer-title\">发送消息</div>\n"
                 + "<form method=\"post\" action=\"" + url("/plain/s/" + sessionId + "/send") + "\">\n"
-                + "<textarea name=\"text\" rows=\"6\" cols=\"80\"></textarea>\n"
+                + "<textarea name=\"text\" rows=\"4\" cols=\"80\""
+                + " placeholder=\"输入消息，发送后回答会出现在上方\"></textarea>\n"
                 + "<input type=\"hidden\" name=\"auto\" value=\"1\">\n"
-                + "<div class=\"row\"><input type=\"submit\" value=\"发送\"> "
-                + "<span class=\"muted\">提交后会自动回到本页；回答生成中请刷新查看。</span></div>\n"
+                + "<div class=\"chat-composer-bar\"><input type=\"submit\" value=\"发送\"> "
+                + "<span class=\"chat-composer-hint\">提交后自动回到本页；生成中会自动刷新。</span></div>\n"
                 + "</form>\n"
-                + "<p><a id=\"bottom\" href=\"" + url("/plain/s/" + sessionId)
-                + "?auto=1\">刷新看结果</a></p>\n";
+                + "<div class=\"chat-composer-refresh\"><a href=\""
+                + url("/plain/s/" + sessionId) + "?auto=1\">刷新看结果</a></div>\n"
+                + "</div>\n";
     }
 
     private String nav(HttpServletRequest request) {
@@ -669,14 +695,18 @@ public final class PlainChatServlet extends HttpServlet {
         // <br> and submit inputs, not CSS: w3m and lynx ignore the stylesheet and
         // would flow every link into one line. The expiry is left to the elevation
         // page; a nav label that grows with the time squeezes the text column.
-        return "<div class=\"navlist\"><strong>HDSL 纯文本版</strong><br>\n"
-                + "<a href=\"" + url("/plain") + "\">会话</a><br>\n"
+        return "<div class=\"navlist\"><div class=\"legacy-brand\"><span class=\"legacy-logo\">H</span>"
+                + "<span class=\"legacy-brand-name\">HDSL Chat<small>兼容模式</small></span></div><br>\n"
+                + "<div class=\"nav-caption\">聊天</div>\n"
+                + "<a href=\"" + url("/plain") + "\">会话列表</a><br>\n"
                 + "<a href=\"" + url("/") + "\">完整面板</a><br>\n"
+                + "<div class=\"nav-caption\">面板</div>\n"
                 + "<a href=\"" + url("/plain/elevate") + "\">"
-                + (expiry == null ? "提权" : "提权中")
+                + (expiry == null ? "开发者提权" : "提权中")
                 + "</a><br>\n"
                 + "<form method=\"post\" action=\"" + url("/plain/logout")
                 + "\"><input type=\"submit\" value=\"退出\"></form>"
+                + "<div class=\"nav-foot\">表单与轮询兼容模式</div>"
                 + "</div>\n";
     }
 
@@ -741,7 +771,7 @@ public final class PlainChatServlet extends HttpServlet {
         String assistantId = trimToNull(request.getParameter("assistantId"));
         body.addProperty("assistantId", assistantId == null ? "default" : assistantId);
         JsonObject session = service.createSession(body);
-        redirect(response, url("/plain/s/" + string(session, "id")));
+        redirect(response, url("/plain/s/" + string(session, "id") + "#bottom"));
     }
 
     private void send(HttpServletRequest request, HttpServletResponse response, String sessionId)

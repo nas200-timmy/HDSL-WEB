@@ -387,6 +387,46 @@ class ModelsApiTest {
         }
     }
 
+    @Test
+    void alibabaKeepsItsModelPickerWhenTheDirectoryIsUnreachable() throws Exception {
+        int dead = TestSupport.freePort();
+        System.setProperty("hdsl.modelCatalog", "http://127.0.0.1:" + dead + "/never-fetched.json");
+        try (TestSupport.RunningServer running = startServer()) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+
+            HttpResponse<String> list = get(client, base + "/api/models/providers");
+            assertEquals(200, list.statusCode(), list.body());
+            assertEquals("builtin", json(list).get("source").getAsString());
+            JsonArray providers = json(list).getAsJsonArray("providers");
+
+            JsonObject alibaba = find(providers, "alibaba");
+            assertNotNull(alibaba, "百炼 must be a first-class supplier: " + ids(providers));
+            assertTrue(alibaba.get("known").getAsBoolean());
+            assertEquals("阿里云百炼 · 千问（国际）", alibaba.get("name").getAsString());
+            assertEquals("openai-completions", alibaba.get("protocol").getAsString());
+            assertEquals("https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                    alibaba.get("endpoint").getAsString());
+            assertTrue(alibaba.get("modelCount").getAsInt() >= 10,
+                    "the fallback list must fill the model picker: " + alibaba);
+
+            JsonObject tokenPlan = find(providers, "qwen-token-plan");
+            assertNotNull(tokenPlan, "token plan must be offered without a directory");
+            assertTrue(tokenPlan.get("modelCount").getAsInt() >= 8);
+            assertNull(find(providers, "qwen-token-plan-individual"),
+                    "the catalogue alias for the same token-plan host must not become a second card");
+
+            HttpResponse<String> models = get(client, base + "/api/models/providers/alibaba");
+            assertEquals(200, models.statusCode(), models.body());
+            JsonArray entries = json(models).getAsJsonArray("models");
+            assertTrue(entries.size() >= 10, models.body());
+            JsonObject qwen = entries.get(0).getAsJsonObject();
+            assertEquals("qwen3.8-max", qwen.get("id").getAsString());
+            assertEquals(1_000_000, qwen.get("context").getAsInt());
+            assertTrue(qwen.get("reasoning").getAsBoolean());
+        }
+    }
+
     private static String ids(JsonArray providers) {
         List<String> ids = new ArrayList<>();
         for (int i = 0; i < providers.size(); i++) {

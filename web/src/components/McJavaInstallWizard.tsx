@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, type McJavaRuntimesSnapshot } from "../api";
+import { api, type JavaSourcesInfo, type McJavaRuntimesSnapshot } from "../api";
 import { Dialog } from "./Dialog";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { toast } from "../store";
@@ -87,20 +87,31 @@ export function McJavaInstallWizard({
   const [vendor, setVendor] = useState("temurin");
   const [busy, setBusy] = useState(false);
   const [taskId, setTaskId] = useState<string | null>(null);
+  const [sources, setSources] = useState<JavaSourcesInfo | null>(null);
+  const [sourceChoice, setSourceChoice] = useState("");
+  const [probing, setProbing] = useState(false);
   const [taskMsg, setTaskMsg] = useState("");
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
 
   const load = () => {
     setLoading(true);
-    void api.mc
-      .javaRuntimes(undefined, true)
-      .then((answer) => {
+    void Promise.all([api.mc.javaRuntimes(undefined, true), api.mc.javaSources()])
+      .then(([answer, sourceRows]) => {
         setSnapshot(answer);
+        setSources(sourceRows);
         setError("");
       })
       .catch((e) => setError(errMsg(e)))
       .finally(() => setLoading(false));
+  };
+
+  const probe = () => {
+    setProbing(true);
+    void elevated(() => api.mc.probeJavaSources([vendor]))
+      .then(setSources)
+      .catch((e) => setError(errMsg(e)))
+      .finally(() => setProbing(false));
   };
 
   useEffect(() => {
@@ -113,6 +124,7 @@ export function McJavaInstallWizard({
     setTaskMsg("");
     setDone(false);
     setError("");
+    setSourceChoice("");
     load();
   }, [open]);
 
@@ -167,7 +179,7 @@ export function McJavaInstallWizard({
     setBusy(true);
     setError("");
     try {
-      const answer = await elevated(() => api.mc.installJava(feature, vendor));
+      const answer = await elevated(() => api.mc.installJava(feature, vendor, sourceChoice || undefined));
       setTaskId(answer.taskId);
       setTaskMsg(`正在下载 ${vendorInfo.name} ${feature}…`);
       setStep(2);
@@ -351,6 +363,42 @@ export function McJavaInstallWizard({
                   ? `${chosen.version} · ${Math.round(chosen.size / 1024 / 1024)} MB`
                   : "等待目录…"}
               </span>
+              <label style={{ display: "grid", gap: 4, fontSize: 12 }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span>下载源（校验和始终与官方目录比对，字节不一致会自动改用官方重试）</span>
+                  <button
+                    type="button"
+                    className="btn btn-text"
+                    style={{ padding: "0 4px", fontSize: 11 }}
+                    disabled={busy || probing}
+                    onClick={probe}
+                  >
+                    {probing ? "测速中…" : "重新测速"}
+                  </button>
+                </span>
+                <select
+                  className="input"
+                  value={sourceChoice}
+                  onChange={(e) => setSourceChoice(e.target.value)}
+                  disabled={busy}
+                >
+                  <option value="">自动（按实测速度选择）</option>
+                  {(sources?.sources ?? [])
+                    .filter((row) => row.vendors.includes(vendor))
+                    .map((row) => {
+                      const measured = row.ok === true && row.speedKBps
+                        ? ` · 实测 ${(row.speedKBps / 1024).toFixed(1)} MB/s`
+                        : row.ok === false
+                          ? ` · 不可用${row.error ? `（${row.error}）` : ""}`
+                          : " · 未测速";
+                      return (
+                        <option key={row.id} value={row.id}>
+                          {row.label}{measured}
+                        </option>
+                      );
+                    })}
+                </select>
+              </label>
               <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
                 下载后先校验 SHA-256，再解包到 &lt;data&gt;/minecraft/java/{feature}/；
                 解包完成会统一设置执行位。

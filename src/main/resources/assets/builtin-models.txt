@@ -1,0 +1,60 @@
+# Built-in model fallbacks for the Alibaba / Qwen providers.
+# Used when models.dev is unreachable, so the account page still offers real model ids.
+# vendor|id|name|context|output|vision|reasoning|tools
+alibaba|qwen3.8-max|Qwen3.8 Max|1000000|131072|true|true|true
+alibaba|qwen3.8-max-0902|Qwen3.8 Max 0902|1000000|131072|true|true|true
+alibaba|qwen3.8-flash|Qwen3.8 Flash|1000000|131072|true|true|true
+alibaba|qwen3.8-omni-flash|Qwen3.8 Omni Flash|1000000|131072|true|true|true
+alibaba|qwen3.7-max|Qwen3.7 Max|1000000|131072|false|true|true
+alibaba|qwen3.7-plus|Qwen3.7 Plus|1000000|131072|true|true|true
+alibaba|qwen3.7-flash|Qwen3.7 Flash|1000000|131072|true|true|true
+alibaba|qwen3.6-max-preview|Qwen3.6 Max Preview|262144|65536|false|true|true
+alibaba|qwen3.6-plus|Qwen3.6 Plus|1000000|65536|true|true|true
+alibaba|qwen3.6-flash|Qwen3.6 Flash|1000000|65536|true|true|true
+alibaba|qwen3.5-plus|Qwen3.5 Plus|1000000|65536|true|true|true
+alibaba|qwen3.5-flash|Qwen3.5 Flash|1000000|65536|true|true|true
+alibaba|qwen3-max|Qwen3 Max|262144|65536|false|false|true
+alibaba|qwen3-coder-plus|Qwen3 Coder Plus|1048576|65536|false|false|true
+alibaba|qwen3-coder-flash|Qwen3 Coder Flash|1000000|65536|false|false|true
+alibaba|qwen3-vl-plus|Qwen3-VL Plus|262144|32768|true|true|true
+alibaba|qwen-vl-max|Qwen-VL Max|131072|8192|true|false|true
+alibaba|qwen-max|Qwen Max|32768|8192|false|false|true
+alibaba|qwen-plus|Qwen Plus|1000000|32768|false|true|true
+alibaba|qwen-turbo|Qwen Turbo|1000000|16384|false|true|true
+alibaba-cn|qwen3.8-max|Qwen3.8 Max|1000000|131072|true|true|true
+alibaba-cn|qwen3.8-max-0902|Qwen3.8 Max 0902|1000000|131072|true|true|true
+alibaba-cn|qwen3.8-flash|Qwen3.8 Flash|1000000|131072|true|true|true
+alibaba-cn|qwen3.8-omni-flash|Qwen3.8 Omni Flash|1000000|131072|true|true|true
+alibaba-cn|qwen3.7-max|Qwen3.7 Max|1000000|131072|false|true|true
+alibaba-cn|qwen3.7-plus|Qwen3.7 Plus|1000000|131072|true|true|true
+alibaba-cn|qwen3.7-flash|Qwen3.7 Flash|1000000|131072|true|true|true
+alibaba-cn|qwen3.6-max-preview|Qwen3.6 Max Preview|262144|65536|false|true|true
+alibaba-cn|qwen3.6-plus|Qwen3.6 Plus|1000000|65536|true|true|true
+alibaba-cn|qwen3.6-flash|Qwen3.6 Flash|1000000|65536|true|true|true
+alibaba-cn|qwen3.5-plus|Qwen3.5 Plus|1000000|65536|true|true|true
+alibaba-cn|qwen3.5-flash|Qwen3.5 Flash|1000000|65536|true|true|true
+alibaba-cn|qwen3-max|Qwen3 Max|262144|65536|false|false|true
+alibaba-cn|qwen3-coder-plus|Qwen3 Coder Plus|1048576|65536|false|false|true
+alibaba-cn|qwen3-coder-flash|Qwen3 Coder Flash|1000000|65536|false|false|true
+alibaba-cn|qwen3-vl-plus|Qwen3-VL Plus|262144|32768|true|true|true
+alibaba-cn|qwen-vl-max|Qwen-VL Max|131072|8192|true|false|true
+alibaba-cn|qwen-max|Qwen Max|32768|8192|false|false|true
+alibaba-cn|qwen-plus|Qwen Plus|1000000|32768|false|true|true
+alibaba-cn|qwen-turbo|Qwen Turbo|1000000|16384|false|true|true
+alibaba-cn|qwen-flash|Qwen Flash|1000000|32768|false|true|true
+qwen-token-plan|qwen3.8-max|Qwen3.8 Max|1000000|131072|true|true|true
+qwen-token-plan|qwen3.8-max-preview|Qwen3.8 Max Preview|1000000|131072|true|true|true
+qwen-token-plan|qwen3.8-flash|Qwen3.8 Flash|1000000|131072|true|true|true
+qwen-token-plan|qwen3.7-max|Qwen3.7 Max|1000000|131072|false|true|true
+qwen-token-plan|qwen3.7-plus|Qwen3.7 Plus|1000000|65536|true|true|true
+qwen-token-plan|qwen3.6-plus|Qwen3.6 Plus|1000000|65536|true|true|true
+qwen-token-plan|qwen3.6-flash|Qwen3.6 Flash|1000000|65536|true|true|true
+qwen-token-plan|qwen4-max-preview|Qwen4 Max Preview|1000000|393216|true|true|true
+qwen-token-plan-cn|qwen3.8-max|Qwen3.8 Max|1000000|131072|true|true|true
+qwen-token-plan-cn|qwen3.8-max-preview|Qwen3.8 Max Preview|1000000|131072|true|true|true
+qwen-token-plan-cn|qwen3.8-flash|Qwen3.8 Flash|1000000|131072|true|true|true
+qwen-token-plan-cn|qwen3.7-max|Qwen3.7 Max|1000000|131072|false|true|true
+qwen-token-plan-cn|qwen3.7-plus|Qwen3.7 Plus|1000000|65536|true|true|true
+qwen-token-plan-cn|qwen3.6-plus|Qwen3.6 Plus|1000000|65536|true|true|true
+qwen-token-plan-cn|qwen3.6-flash|Qwen3.6 Flash|1000000|65536|true|true|true
+qwen-token-plan-cn|qwen4-max-preview|Qwen4 Max Preview|1000000|393216|true|true|true

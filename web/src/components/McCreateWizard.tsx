@@ -202,7 +202,7 @@ export function McCreateWizard({
       }}
       closeOnBackdrop={!busy}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 420 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
         <div className="dim" style={{ fontSize: 12 }}>
           {step < 4 ? `第 ${step + 1} / 4 步` : "服务器已就绪"}
         </div>

@@ -6,6 +6,8 @@
  * (/plain/f/...) and swaps the regions in place: the transcript updates by
  * itself without a page reload, and the send form is replaced only when its
  * markup actually changed, so what is being typed survives every swap.
+ * Entering a transcript jumps to #bottom; a later update follows only when the
+ * reader was already near the bottom, so reading history is never interrupted.
  *
  * The kick-out signal: a page that started elevated (data-elev="ok") and
  * receives a fragment with data-elev="no" has just lost its developer
@@ -32,6 +34,37 @@
   var elevatedAtStart = seed.getAttribute("data-elev") === "ok";
   var stopped = false;
   var busy = false;
+  var transcript = byId("frag-transcript") !== null;
+
+  function scrollBottom() {
+    var root = doc.documentElement;
+    var body = doc.body;
+    var height = Math.max(body.scrollHeight, root.scrollHeight,
+      body.offsetHeight, root.offsetHeight);
+    win.scrollTo(0, height);
+  }
+
+  function nearBottom() {
+    var root = doc.documentElement;
+    var body = doc.body;
+    var top = win.pageYOffset || root.scrollTop || body.scrollTop || 0;
+    var viewport = win.innerHeight || root.clientHeight || body.clientHeight || 0;
+    var height = Math.max(body.scrollHeight, root.scrollHeight,
+      body.offsetHeight, root.offsetHeight);
+    return height - top - viewport < 120;
+  }
+
+  if (transcript) {
+    /* Entering a conversation always lands on the composer, even when cached
+     * images/Markdown have delayed the layout past the browser's #bottom jump. */
+    scrollBottom();
+    win.setTimeout(scrollBottom, 0);
+    if (win.addEventListener) {
+      win.addEventListener("load", scrollBottom, false);
+    } else if (win.attachEvent) {
+      win.attachEvent("onload", scrollBottom);
+    }
+  }
 
   function elementsOf(wrapper) {
     var out = [];
@@ -50,6 +83,8 @@
     wrapper.innerHTML = text;
     var parts = elementsOf(wrapper);
     var elev = null;
+    var follow = transcript && nearBottom();
+    var transcriptChanged = false;
     for (var i = 0; i < parts.length; i++) {
       var next = parts[i];
       if (!next.id) {
@@ -66,6 +101,12 @@
         continue;
       }
       target.parentNode.replaceChild(next, target);
+      if (next.id === "frag-transcript") {
+        transcriptChanged = true;
+      }
+    }
+    if (transcriptChanged && follow) {
+      scrollBottom();
     }
     if (elev === "no" && elevatedAtStart) {
       stopped = true;

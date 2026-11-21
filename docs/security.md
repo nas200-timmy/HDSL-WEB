@@ -335,13 +335,16 @@ CVSS 3.1 为 8.1，公开触发串存在，截至 2026-11-18 没有公开的在�
 路径。登录限流发生在解码之后，不能阻止解码本身。缓解顺序：
 
 1. 升级到 OpenJDK `21.0.13.1+`（17/25/27 对应 `.1` 构建）；
-2. 暂时升级不了时，在 x86-64 上给 JVM 加 `-XX:UseAVX=2`。容器入口在检测到
-   `avx512_vbmi` 时会自动加；可以用 `HDSL_JAVA4SHELL_GUARD=0` 关闭。裸 jar 需手动加；
-3. 检查：宿主机 `lscpu | grep -o avx512_vbmi`；运行中的容器
-   `jcmd 1 VM.flags | grep UseAVX` 应为 2。
+2. 暂时升级不了时：容器入口在 x86-64 上自动加 `-XX:-UseBASE64Intrinsics`，直接移除
+   受影响的 intrinsic，不依赖 CPU flags；`HDSL_JAVA4SHELL_GUARD=0` 可关闭。裸 jar
+   需要自己加 `-XX:-UseBASE64Intrinsics`（Java 9+）或换已修复的 JDK；
+3. 检查：运行中的容器 `jcmd 1 VM.flags | grep UseBASE64` 应包含
+   `-XX:-UseBASE64Intrinsics`；裸 jar 再用 `lscpu | grep -o avx512_vbmi` 判断是否在
+   攻击面上。
 
 不要在生产面板上直接试公开 PoC；要验证就用临时数据目录、临时端口起一个实例。升级 JDK
-并确认补丁生效后，可以去掉 `UseAVX=2`（它会让 JVM 整体退回 AVX2）。
+并确认补丁生效后，可以去掉 `-XX:-UseBASE64Intrinsics`（它会关闭硬件加速的 Base64
+解码；修复后的 JDK 不再需要）。
 
 ## 7. 免责
 

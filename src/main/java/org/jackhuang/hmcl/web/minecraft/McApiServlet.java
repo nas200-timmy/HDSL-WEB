@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.minecraft;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import jakarta.servlet.http.HttpServlet;
@@ -248,6 +249,18 @@ public final class McApiServlet extends HttpServlet {
             }
             if ("/java/install".equals(path) && "POST".equals(method)) {
                 installJava(request, response);
+                return;
+            }
+            if ("/java/sources".equals(path) && "GET".equals(method)) {
+                describeJavaSources(response);
+                return;
+            }
+            if ("/java/sources".equals(path) && "PUT".equals(method)) {
+                setJavaSourcePolicy(request, response);
+                return;
+            }
+            if ("/java/sources/probe".equals(path) && "POST".equals(method)) {
+                probeJavaSources(request, response);
                 return;
             }
             if (path.startsWith("/java/") && path.endsWith("/remove") && "POST".equals(method)) {
@@ -1034,11 +1047,12 @@ public final class McApiServlet extends HttpServlet {
                     "unknown JDK vendor `" + vendorId + "`");
             return;
         }
+        String source = body == null ? null : stringField(body, "source");
         try {
             TaskService.Task task = tasks.submit("mc-java-install",
                     feature + "-" + vendor.id(), live -> {
                 live.update("Downloading " + vendor.label() + " " + feature, -1);
-                McJavaRuntimes.Installed installed = javaRuntimes.install(feature, vendor,
+                McJavaRuntimes.Installed installed = javaRuntimes.install(feature, vendor, source,
                         (copied, total) -> {
                     String progress = (copied / (1024 * 1024)) + " / "
                             + (total > 0 ? (total / (1024 * 1024)) + " MB" : "? MB");
@@ -1054,6 +1068,76 @@ public final class McApiServlet extends HttpServlet {
         } catch (TaskService.InstanceBusyException e) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
         }
+    }
+
+    /// `GET /api/mc/java/sources` — the source list with probe results and the
+    /// current policy. Read-only; probing and policy changes are separate,
+    /// elevation-gated endpoints so merely opening the page costs nothing.
+    private void describeJavaSources(HttpServletResponse response) throws IOException {
+        McJavaSourcePicker picker = javaRuntimes.sources();
+        Json.write(response, picker == null ? new JsonObject() : picker.describe());
+    }
+
+    /// `PUT /api/mc/java/sources` — `{"policy": "auto"|"official"|"<source id>"}`.
+    private void setJavaSourcePolicy(HttpServletRequest request, HttpServletResponse response)
+            throws IOException {
+        if (!requireElevation(request, response)) {
+            return;
+        }
+        McJavaSourcePicker picker = javaRuntimes.sources();
+        if (picker == null) {
+            Json.error(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                    "the Java runtime directory is not initialized");
+            return;
+        }
+        JsonObject body = readJson(request);
+        String policy = body == null ? null : stringField(body, "policy");
+        picker.setPolicy(policy);
+        audit("mc.java.sources.policy", picker.policy(), "success", request);
+        Json.write(response, picker.describe());
+    }
+
+    /// `POST /api/mc/java/sources/probe` — re-sample every candidate source now.
+    /// Serialized inside the picker; the worst case is a few small range
+    /// requests, never a parallel hammering of the mirrors.
+    private void probeJavaSources(HttpServletRequest request, HttpServletResponse response)
+            throws IOException {
+        if (!requireElevation(request, response)) {
+            return;
+        }
+        McJavaSourcePicker picker = javaRuntimes.sources();
+        if (picker == null) {
+            Json.error(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                    "the Java runtime directory is not initialized");
+            return;
+        }
+        JsonObject body = readJson(request);
+        JsonArray wanted = body != null && body.has("vendors") && body.get("vendors").isJsonArray()
+                ? body.getAsJsonArray("vendors") : null;
+        for (McJavaRuntimes.Vendor vendor : McJavaRuntimes.Vendor.values()) {
+            if (wanted != null) {
+                boolean included = false;
+                for (JsonElement element : wanted) {
+                    if (element.isJsonPrimitive() && vendor.id().equals(element.getAsString())) {
+                        included = true;
+                        break;
+                    }
+                }
+                if (!included) {
+                    continue;
+                }
+            }
+            try {
+                List<McJavaRuntimes.Release> releases = javaRuntimes.available(vendor);
+                if (!releases.isEmpty()) {
+                    picker.probe(vendor, releases.get(0));
+                }
+            } catch (McException e) {
+                LOG.warning("Could not probe " + vendor.id() + ": " + e.getMessage());
+            }
+        }
+        audit("mc.java.sources.probe", null, "success", request);
+        Json.write(response, picker.describe());
     }
 
     private void removeJava(HttpServletRequest request, HttpServletResponse response, String path)

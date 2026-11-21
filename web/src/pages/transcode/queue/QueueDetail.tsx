@@ -1,6 +1,6 @@
 import type { TranscodeJob } from "../../../api";
 import { ContentCopyIcon } from "../../../components/icons";
-import { fmtBytes, fmtDuration, pct, stateLabel, stateTone } from "../common";
+import { fmtBytes, fmtDuration, jobEtaMs, pct, stateLabel, stateTone } from "../common";
 import { valueLabel } from "../labels";
 
 interface QueueDetailProps {
@@ -34,19 +34,10 @@ const TRIGGER_LABEL: Record<string, string> = {
   queue: "队列同步",
 };
 
-/// Remaining wall-clock time. Only meaningful while a speed sample exists: ffmpeg reports
-/// `speed=` a moment after the first progress line, and paused jobs report nothing new.
-function etaSeconds(job: TranscodeJob): number | null {
-  if (job.state !== "running") return null;
-  if (job.durationMs <= 0 || job.outTimeMs < 0 || job.speed <= 0) return null;
-  const remain = (job.durationMs - job.outTimeMs) / 1000 / job.speed;
-  return remain > 0 ? remain : null;
-}
-
 /// The right-hand pane: what this job is, how far it got, how it ran. Layout is the
-/// existing one plus three additions — ETA, the pass list and the encoder-switch log.
+/// existing one plus the ETA, pass list and encoder-switch log.
 export function QueueDetail({ job, log, onOpenLog, onCopy, onResetPreset }: QueueDetailProps) {
-  const eta = etaSeconds(job);
+  const eta = jobEtaMs(job);
   const steps = job.steps ?? [];
   const switches = job.switchRecords ?? [];
   return (
@@ -67,7 +58,7 @@ export function QueueDetail({ job, log, onOpenLog, onCopy, onResetPreset }: Queu
         <span className="mono">
           {pct(job.fraction)} · {job.speed > 0 ? `${job.speed.toFixed(1)}x` : "—"}
         </span>
-        <span>剩余</span><span className="mono">{eta == null ? "—" : fmtDuration(eta * 1000)}</span>
+        <span>剩余</span><span className="mono">{eta == null ? "—" : fmtDuration(eta)}</span>
         <span>帧</span><span className="mono">{job.frame >= 0 ? job.frame : "—"}</span>
         <span>码率</span><span className="mono">{job.bitrate || "—"}</span>
         <span>大小</span><span className="mono">{fmtBytes(job.sizeBytes)}</span>

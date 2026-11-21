@@ -198,7 +198,26 @@ public final class DshModelCatalog {
     /// @return the directory
     /// @throws DshException when it cannot be read or does not parse
     public static Catalog fetch() throws DshException {
-        String url = catalogUrl();
+        // The generated api.json is the preferred shape, but it is also the slow one on a limited
+        // network. Without an explicit override, try the source archive first: it is a 2.6 MB
+        // tarball whose TOML files contain the same providers and models, and it finishes in
+        // seconds where the JSON often times out. A caller holding `hdsl.modelCatalog` is a test
+        // or an operator pointing at a specific endpoint, so it always means JSON.
+        String configured = System.getProperty("hdsl.modelCatalog");
+        if (configured == null || configured.isBlank()) {
+            try {
+                Catalog archived = ModelsDevArchive.fetch();
+                if (!archived.providers().isEmpty()) {
+                    return archived;
+                }
+            } catch (DshException e) {
+                LOG.info("Model catalogue archive did not work, trying api.json: " + e.getMessage());
+            }
+        }
+        return fetchJson(catalogUrl());
+    }
+
+    private static Catalog fetchJson(String url) throws DshException {
         String body;
         try {
             body = download(url);
@@ -225,18 +244,17 @@ public final class DshModelCatalog {
     /// @return the directory, or `null` when there is no readable copy
     public static @Nullable Catalog readCached() {
         Path file = cachedFile();
-        try {
-            if (!Files.isRegularFile(file)) {
-                return null;
+        if (Files.isRegularFile(file)) {
+            try {
+                Catalog parsed = parse(Files.readString(file));
+                // The time of the copy, not of this call: what the interface shows is how old
+                // the models are, and a fallback served now was not fetched now.
+                return new Catalog(Files.getLastModifiedTime(file).toMillis(), parsed.providers());
+            } catch (IOException | RuntimeException e) {
+                LOG.info("Could not read the kept model catalogue at " + file, e);
             }
-            Catalog parsed = parse(Files.readString(file));
-            // The time of the copy, not of this call: what the interface shows is how old the
-            // models are, and a fallback served now was not fetched now.
-            return new Catalog(Files.getLastModifiedTime(file).toMillis(), parsed.providers());
-        } catch (IOException | RuntimeException e) {
-            LOG.info("Could not read the kept model catalogue at " + file, e);
-            return null;
         }
+        return ModelsDevArchive.readCached();
     }
 
     /// Reads the protocol a supplier published under an npm package speaks.
@@ -249,6 +267,87 @@ public final class DshModelCatalog {
         }
         String protocol = PROTOCOLS.get(npm.trim());
         return protocol != null && DshVendor.APIS.contains(protocol) ? protocol : null;
+    }
+
+    /// A short list of real models for a built-in supplier, used when models.dev cannot be read.
+    ///
+    /// The directory is an optimisation, not a prerequisite: without it the account page must still
+    /// be able to offer `qwen3.8-max` instead of an empty text box. Only suppliers whose models are
+    /// stable enough to write down have a list here; everything else still accepts a typed id.
+    ///
+    /// @param vendorId the launcher's vendor id
+    /// @return the models in the order the page should show them; empty when none are kept
+    public static List<Model> builtinModels(@Nullable String vendorId) {
+        if (vendorId == null || vendorId.isBlank()) {
+            return List.of();
+        }
+        return builtinModels().getOrDefault(vendorId.trim().toLowerCase(Locale.ROOT), List.of());
+    }
+
+    private static volatile @Nullable Map<String, List<Model>> BUILTIN_MODELS;
+
+    private static Map<String, List<Model>> builtinModels() {
+        Map<String, List<Model>> kept = BUILTIN_MODELS;
+        if (kept != null) {
+            return kept;
+        }
+        synchronized (DshModelCatalog.class) {
+            if (BUILTIN_MODELS == null) {
+                BUILTIN_MODELS = readBuiltinModels();
+            }
+            return BUILTIN_MODELS;
+        }
+    }
+
+    /// Reads `assets/builtin-models.txt`: `vendor|id|name|context|output|vision|reasoning|tools`.
+    ///
+    /// A line that cannot be read is skipped, exactly as a provider catalogue line is: one typo must
+    /// cost one model, not the model picker.
+    private static Map<String, List<Model>> readBuiltinModels() {
+        Map<String, List<Model>> models = new LinkedHashMap<>();
+        try (java.io.InputStream stream = DshModelCatalog.class
+                .getResourceAsStream("/assets/builtin-models.txt")) {
+            if (stream == null) {
+                LOG.warning("No built-in model list in the jar; suppliers will have no fallback models");
+                return Map.of();
+            }
+            for (String line : new String(stream.readAllBytes(), StandardCharsets.UTF_8).split("\n")) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    continue;
+                }
+                String[] parts = trimmed.split("\\|", -1);
+                if (parts.length != 8 || parts[0].isBlank() || parts[1].isBlank()) {
+                    continue;
+                }
+                Integer context = integerOrNull(parts[3]);
+                Integer output = integerOrNull(parts[4]);
+                if (context == null || output == null) {
+                    continue;
+                }
+                boolean vision = Boolean.parseBoolean(parts[5]);
+                Model model = new Model(parts[1].trim(),
+                        parts[2].isBlank() ? parts[1].trim() : parts[2].trim(),
+                        context, output, Boolean.parseBoolean(parts[6]), List.of(),
+                        Boolean.parseBoolean(parts[7]), vision, null, null, null);
+                models.computeIfAbsent(parts[0].trim().toLowerCase(Locale.ROOT),
+                        ignored -> new ArrayList<>()).add(model);
+            }
+        } catch (IOException | RuntimeException e) {
+            LOG.warning("Could not read the built-in model list", e);
+            return Map.of();
+        }
+        Map<String, List<Model>> copy = new LinkedHashMap<>();
+        models.forEach((vendor, list) -> copy.put(vendor, List.copyOf(list)));
+        return Map.copyOf(copy);
+    }
+
+    private static @Nullable Integer integerOrNull(String value) {
+        try {
+            return Integer.valueOf(value.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /// Finds the directory's entry for a supplier the launcher knows.

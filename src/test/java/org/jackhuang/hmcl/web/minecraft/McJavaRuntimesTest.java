@@ -17,6 +17,8 @@
  */
 package org.jackhuang.hmcl.web.minecraft;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -32,6 +34,7 @@ import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.ZipEntry;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -374,5 +377,108 @@ class McJavaRuntimesTest {
         McJavaRuntimes runtimes = new McJavaRuntimes(root);
         assertEquals(1, runtimes.listInstalled().size());
         assertEquals(21, runtimes.listInstalled().get(0).feature());
+    }
+
+    /// A fake Adoptium API whose package link lives on github.com, so that the
+    /// domestic-mirror rewrite actually engages (and points at TUNA, where the
+    /// injected ByteFetcher intercepts it — no real network anywhere).
+    private static HttpServer fakeAdoptiumOnGithub(byte[] pkg, String checksum) throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v3/info/available_releases", exchange -> respond(exchange,
+                "{\"available_releases\":[21]}".getBytes(StandardCharsets.UTF_8)));
+        server.createContext("/v3/assets/latest/21/hotspot", exchange -> respond(exchange,
+                ("""
+                        [{"version":{"semver":"21.0.5+11","major":21},
+                          "binary":{"package":{"link":"%s","checksum":"%s","size":%d}}}]
+                        """.formatted(
+                        "https://github.com/adoptium/temurin21-binaries/releases/download/"
+                                + "jdk-21.0.5%2B11/OpenJDK21U-jdk_x64_windows_hotspot_21.0.5_11.zip",
+                        checksum, pkg.length)).getBytes(StandardCharsets.UTF_8)));
+        server.start();
+        return server;
+    }
+
+    @Test
+    void fallsBackToOfficialOnceWhenTheMirrorFailsVerification(@TempDir Path dir) throws Exception {
+        byte[] good = zipJre("#!/bin/sh\nexit 0\n");
+        byte[] bad = "tampered bytes".getBytes(StandardCharsets.UTF_8);
+        HttpServer api = fakeAdoptiumOnGithub(good, sha256(good));
+        try {
+            String base = "http://127.0.0.1:" + api.getAddress().getPort();
+            McJavaRuntimes runtimes = new McJavaRuntimes(dir.resolve("java"), URI.create(base));
+            runtimes.sources().setPolicy("tuna-adoptium");
+            AtomicInteger mirrorFetches = new AtomicInteger();
+            runtimes.byteFetcher = (used, target, progress) -> {
+                try {
+                    if (used.url().startsWith("https://mirrors.tuna.tsinghua.edu.cn/")) {
+                        mirrorFetches.incrementAndGet();
+                        Files.write(target, bad);
+                    } else {
+                        Files.write(target, good);
+                    }
+                } catch (java.io.IOException e) {
+                    throw new McException("test stub: " + e.getMessage(), e);
+                }
+            };
+
+            McJavaRuntimes.Installed installed =
+                    runtimes.install(21, McJavaRuntimes.Vendor.TEMURIN, null);
+
+            assertEquals(1, mirrorFetches.get(), "the mirror is tried exactly once");
+            JsonObject record = JsonParser.parseString(Files.readString(
+                            installed.path().getParent().getParent().resolve("runtime.json"),
+                            StandardCharsets.UTF_8))
+                    .getAsJsonObject();
+            assertEquals("official", record.get("source").getAsString());
+            assertEquals("adoptium-api", record.get("verifiedAgainst").getAsString());
+            // The failed mirror is now in backoff for later choices.
+            JsonObject tuna = null;
+            for (var element : runtimes.sources().describe().getAsJsonArray("sources")) {
+                JsonObject row = element.getAsJsonObject();
+                if ("tuna-adoptium".equals(row.get("id").getAsString())) {
+                    tuna = row;
+                }
+            }
+            assertNotNull(tuna);
+            assertFalse(tuna.get("ok").getAsBoolean());
+            assertTrue(tuna.get("failures").getAsInt() >= 1);
+        } finally {
+            api.stop(0);
+        }
+    }
+
+    @Test
+    void aWorkingMirrorIsUsedAndItsProvenanceIsRecorded(@TempDir Path dir) throws Exception {
+        byte[] good = zipJre("#!/bin/sh\nexit 0\n");
+        HttpServer api = fakeAdoptiumOnGithub(good, sha256(good));
+        try {
+            String base = "http://127.0.0.1:" + api.getAddress().getPort();
+            McJavaRuntimes runtimes = new McJavaRuntimes(dir.resolve("java"), URI.create(base));
+            runtimes.sources().setPolicy("tuna-adoptium");
+            runtimes.byteFetcher = (used, target, progress) -> {
+                if (!used.url().startsWith("https://mirrors.tuna.tsinghua.edu.cn/")) {
+                    throw new IllegalStateException("the official URL must not be fetched");
+                }
+                try {
+                    Files.write(target, good);
+                } catch (java.io.IOException e) {
+                    throw new McException("test stub: " + e.getMessage(), e);
+                }
+            };
+
+            McJavaRuntimes.Installed installed =
+                    runtimes.install(21, McJavaRuntimes.Vendor.TEMURIN, null);
+
+            JsonObject record = JsonParser.parseString(Files.readString(
+                            installed.path().getParent().getParent().resolve("runtime.json"),
+                            StandardCharsets.UTF_8))
+                    .getAsJsonObject();
+            assertEquals("tuna-adoptium", record.get("source").getAsString());
+            assertTrue(record.get("mirrorUrl").getAsString()
+                    .startsWith("https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/"));
+            assertEquals("adoptium-api", record.get("verifiedAgainst").getAsString());
+        } finally {
+            api.stop(0);
+        }
     }
 }

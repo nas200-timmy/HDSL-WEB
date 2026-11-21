@@ -211,6 +211,28 @@ class DshModelCatalogTest {
     }
 
     @Test
+    void alibabaAndTokenPlanHaveModelsEvenWithoutTheDirectory() {
+        List<DshModelCatalog.Model> alibaba = DshModelCatalog.builtinModels("alibaba");
+        assertFalse(alibaba.isEmpty(), "百炼 must offer real ids without models.dev");
+        DshModelCatalog.Model max = alibaba.stream()
+                .filter(model -> model.id().equals("qwen3.8-max"))
+                .findFirst().orElseThrow();
+        assertEquals("Qwen3.8 Max", max.name());
+        assertEquals(1_000_000, max.context().intValue());
+        assertEquals(131_072, max.output().intValue());
+        assertTrue(max.reasoning());
+        assertTrue(max.toolCall());
+        assertTrue(max.attachment());
+
+        List<DshModelCatalog.Model> tokenPlan = DshModelCatalog.builtinModels("qwen-token-plan");
+        assertFalse(tokenPlan.isEmpty());
+        assertTrue(tokenPlan.stream().anyMatch(model -> model.id().equals("qwen3.8-max-preview")));
+        assertEquals(tokenPlan.size(), DshModelCatalog.builtinModels("qwen-token-plan-cn").size());
+        assertTrue(DshModelCatalog.builtinModels("no-such-vendor").isEmpty());
+        assertTrue(DshModelCatalog.builtinModels(null).isEmpty());
+    }
+
+    @Test
     void theKeptCopyIsNamedAfterTheAddressItWasReadFrom() {
         // Pointing the launcher at another directory must not overwrite the copy of this one, which
         // is what makes the two files differ.

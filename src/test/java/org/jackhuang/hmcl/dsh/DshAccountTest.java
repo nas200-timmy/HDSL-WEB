@@ -242,6 +242,29 @@ class DshAccountTest {
     }
 
     @Test
+    void alibabaAndItsTokenPlanAreFirstClassVendors() {
+        DshVendor alibaba = DshVendor.byId("alibaba");
+        assertNotNull(alibaba);
+        assertEquals("DASHSCOPE_API_KEY", alibaba.apiKeyEnv());
+        assertEquals("https://dashscope-intl.aliyuncs.com/compatible-mode/v1", alibaba.baseUrl());
+
+        DshVendor china = DshVendor.byId("alibaba-cn");
+        assertNotNull(china);
+        assertEquals("https://dashscope.aliyuncs.com/compatible-mode/v1", china.baseUrl());
+
+        DshVendor tokenPlan = DshVendor.byId("qwen-token-plan");
+        assertNotNull(tokenPlan);
+        assertEquals("QWEN_TOKEN_PLAN_API_KEY", tokenPlan.apiKeyEnv());
+        assertEquals("https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+                tokenPlan.baseUrl());
+
+        DshVendor tokenPlanCn = DshVendor.byId("qwen-token-plan-cn");
+        assertNotNull(tokenPlanCn);
+        assertEquals("https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+                tokenPlanCn.baseUrl());
+    }
+
+    @Test
     void theVendorsOwnVendorComesFirst() {
         assertEquals("deepseek", DshVendor.offered().get(0).id(),
                 "the harness's own vendor is the one the list leads with");

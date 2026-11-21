@@ -248,7 +248,7 @@ export function ExportInstanceModal({
       )}
 
       {phase === "running" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 340 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
           <ProgressBar fraction={task?.fraction} />
           <div style={{ fontSize: 13 }}>{task?.message ?? "正在打包实例数据…"}</div>
         </div>

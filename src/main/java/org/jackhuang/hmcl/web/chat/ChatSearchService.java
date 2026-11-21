@@ -314,12 +314,12 @@ public final class ChatSearchService {
         if (cleaned.isEmpty()) {
             throw new ChatException(400, "empty_query", "搜索词是空的");
         }
-        if (cleaned.length() > 128) {
-            cleaned = cleaned.substring(0, 128);
-        }
         if (provider == null || provider.isBlank()) {
             provider = settings.searchProvider();
         }
+        // DeepSeek accepts 1-128 characters, but Zhipu's web_search contract caps
+        // search_query at 70 and rejects anything longer.
+        cleaned = clip(cleaned, "zhipu".equals(provider) ? 70 : 128);
         String key = resolveKey(settings, provider);
         if (key == null) {
             throw new ChatException(400, "search_not_configured",
@@ -543,6 +543,9 @@ public final class ChatSearchService {
         JsonObject body = new JsonObject();
         body.addProperty("search_engine", "search_pro");
         body.addProperty("search_query", query);
+        // The official schema marks this field required (default false); leaving it out
+        // relies on an undocumented server-side default.
+        body.addProperty("search_intent", false);
         body.addProperty("count", limit);
         body.addProperty("search_recency_filter", "noLimit");
         body.addProperty("content_size", "medium");
@@ -753,6 +756,13 @@ public final class ChatSearchService {
         }
         String text = value.replaceAll("\\s+", " ").trim();
         return text.length() <= max ? text : text.substring(0, max) + "…";
+    }
+
+    private static String clip(String value, int maxChars) {
+        if (value.codePointCount(0, value.length()) <= maxChars) {
+            return value;
+        }
+        return value.substring(0, value.offsetByCodePoints(0, maxChars));
     }
 
     private static String message(Throwable error) {

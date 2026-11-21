@@ -156,6 +156,9 @@ def main() -> None:
         env["HDSL_DATA"] = str(data)
         env["HDSL_PORT"] = str(port)
         env["HDSL_BIND_HOST"] = "127.0.0.1"
+        # The container exports a global HDSL_MEDIA_ROOT; without this override the
+        # environment would win over the throwaway media root in server.yaml.
+        env["HDSL_MEDIA_ROOT"] = str(media)
         env.setdefault("JAVA_OPTS", "-Xmx512m")
         process = subprocess.Popen(
             [java, "-jar", str(jar)],

@@ -9,6 +9,7 @@ import {
   CloseIcon,
   DeployedCodeIcon,
   InfoIcon,
+  PublicIcon,
   RefreshIcon,
   RocketLaunchIcon,
   SearchIcon,
@@ -227,6 +228,14 @@ export function McInstancesView({ scope = "vanilla" }: { scope?: "vanilla" | "th
             {running > 0 ? ` · ${running} 个运行中` : ""}
           </span>
           <span className="spacer" />
+          <button
+            className="tool-btn ripple-host"
+            title="种子预览：生成一张地图看结构、群系与史莱姆区块"
+            onClick={() => nav("/mc/preview")}
+          >
+            <PublicIcon size={20} />
+            种子预览
+          </button>
           {instances.length > 0 && (
             <button
               className="tool-btn ripple-host"

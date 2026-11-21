@@ -14,6 +14,7 @@ import {
   McPropertiesPanel,
   McWorldPanel,
 } from "../components/McPanels";
+import { McSeedPreview } from "../components/McSeedPreview";
 import {
   ArrowBackIcon,
   CancelIcon,
@@ -31,7 +32,16 @@ import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { toast } from "../store";
 import { errMsg, mcCoreLabel, mcStateLabel } from "../utils";
 
-type McTab = "overview" | "console" | "settings" | "files" | "backups" | "players" | "world" | "logs";
+type McTab =
+  | "overview"
+  | "console"
+  | "settings"
+  | "files"
+  | "backups"
+  | "players"
+  | "world"
+  | "preview"
+  | "logs";
 
 const TABS: { key: McTab; title: string; icon: React.ReactNode; iconActive?: React.ReactNode }[] = [
   { key: "overview", title: "概览", icon: <SettingsFillIcon size={20} /> },
@@ -41,6 +51,7 @@ const TABS: { key: McTab; title: string; icon: React.ReactNode; iconActive?: Rea
   { key: "backups", title: "世界备份", icon: <InfoIcon size={20} /> },
   { key: "players", title: "玩家", icon: <PersonIcon size={20} /> },
   { key: "world", title: "世界", icon: <PublicIcon size={20} /> },
+  { key: "preview", title: "种子预览", icon: <PublicIcon size={20} /> },
   { key: "logs", title: "日志", icon: <InfoIcon size={20} /> },
 ];
 
@@ -364,26 +375,31 @@ export function McInstancePage() {
               <div className="comp-row">
                 <span className="comp-label">服务端版本</span>
                 <span className="comp-value">
+                  {/* 这一格显示的是"现在跑的是哪个版本"，不是"点这里下载"。
+                      以前用 placeholder 式的「装版本…」，看起来像还没有下载。 */}
                   <select
                     className="input"
-                    defaultValue=""
+                    value={instance.version}
                     disabled={busy || running || installTask !== null}
+                    title={running ? "先停服才能换版本" : "换版本会下载并校验，然后替换 server.jar"}
                     onChange={(e) => {
                       const choice = e.target.value;
-                      e.target.value = "";
-                      if (choice) void install(choice);
+                      if (choice && choice !== instance.version) void install(choice);
                     }}
-                    style={{ width: 150 }}
+                    style={{ width: 180 }}
                   >
-                    <option value="">装版本…</option>
+                    {!switchVersions.includes(instance.version) && (
+                      <option value={instance.version}>{instance.version}（当前）</option>
+                    )}
                     {switchVersions.map((entry) => (
-                      <option key={entry} value={entry}>{entry}</option>
+                      <option key={entry} value={entry}>
+                        {entry === instance.version ? `${entry}（当前）` : entry}
+                      </option>
                     ))}
                   </select>
                   <span className="dim" style={{ fontSize: 12 }}>
-                    {instance.core === "vanilla"
-                      ? "从 Mojang 官方下载并校验 SHA-1；停服才能换"
-                      : `从 ${mcCoreLabel(instance.core)} 上游下载并校验；停服才能换`}
+                    当前 {instance.version}
+                    {running ? " · 先停服才能换" : " · 换版本会重新下载并校验"}
                   </span>
                 </span>
               </div>
@@ -435,6 +451,7 @@ export function McInstancePage() {
         {tab === "players" && <McPlayersPanel instance={instance} />}
         {tab === "files" && <McFilesPanel instance={instance} />}
         {tab === "world" && <McWorldPanel instance={instance} />}
+        {tab === "preview" && <McSeedPreview initialVersion={instance.version} initialSeed={instance.seed ?? ""} />}
         {tab === "logs" && <McLogsPanel instance={instance} />}
       </div>
 

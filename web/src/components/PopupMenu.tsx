@@ -9,6 +9,8 @@ export interface PopupMenuProps {
   children: ReactNode;
   /** 追加在 .popup-menu 上的类名（宽度约束一类的场景） */
   className?: string;
+  /** 内容高度变化时重新定位（折叠/展开、筛选后的列表都靠它）。 */
+  repositionKey?: unknown;
 }
 
 interface PopupBox {
@@ -24,7 +26,7 @@ interface PopupBox {
  * 定位按「可见视口」（visualViewport）计算：手机键盘弹出时视口会缩小，
  * 菜单会跟着重新收进可见区域，而不是被键盘顶出屏幕或被 resize 关掉。
  */
-export function PopupMenu({ open, anchor, onClose, children, className }: PopupMenuProps) {
+export function PopupMenu({ open, anchor, onClose, children, className, repositionKey }: PopupMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<PopupBox | null>(null);
 
@@ -78,7 +80,7 @@ export function PopupMenu({ open, anchor, onClose, children, className }: PopupM
     // 首帧高度未知（visibility:hidden 也在文档流里，量得到），再补一帧适配异步内容
     const frame = requestAnimationFrame(place);
     return () => cancelAnimationFrame(frame);
-  }, [open, place]);
+  }, [open, place, repositionKey]);
 
   useEffect(() => {
     if (!open) return;

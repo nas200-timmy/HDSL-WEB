@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.chat;
 
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -29,6 +30,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -39,6 +41,10 @@ class ChatSearchServiceTest {
     void clear() {
         System.clearProperty("hdsl.search.bocha");
         System.clearProperty("hdsl.search.deepseek");
+        System.clearProperty("hdsl.search.zhipu");
+        System.clearProperty("hdsl.search.tavily");
+        System.clearProperty("hdsl.search.brave");
+        System.clearProperty("hdsl.search.exa");
         System.clearProperty("hdsl.fetch.deepseek");
     }
 
@@ -172,6 +178,35 @@ class ChatSearchServiceTest {
             assertEquals("example.com", hit.site());
         } finally {
             brave.stop(0);
+        }
+    }
+
+    @Test
+    void zhipuQueryIsClippedAndRequiredIntentIsSent() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>("");
+        HttpServer server = server(exchange -> {
+            body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            String json = """
+                    {"search_result":[{"title":"智谱结果","link":"https://example.com/z",
+                      "content":"智谱摘要","media":"搜狐","publish_date":"2025-05-23"}]}""";
+            exchange.sendResponseHeaders(200, json.getBytes(StandardCharsets.UTF_8).length);
+            exchange.getResponseBody().write(json.getBytes(StandardCharsets.UTF_8));
+            exchange.close();
+        });
+        System.setProperty("hdsl.search.zhipu", url(server, "/search"));
+        try {
+            String query = "财经新闻".repeat(20);
+            ChatSearchService.Result result = new ChatSearchService()
+                    .search(settings("zhipu", "zhipu-key"), query);
+            JsonObject request = JsonParser.parseString(body.get()).getAsJsonObject();
+            assertEquals("search_pro", request.get("search_engine").getAsString());
+            assertTrue(request.has("search_intent"), "search_intent is required by Zhipu's schema");
+            assertFalse(request.get("search_intent").getAsBoolean());
+            assertEquals(70, request.get("search_query").getAsString().codePointCount(0,
+                    request.get("search_query").getAsString().length()));
+            assertEquals(70, result.query().codePointCount(0, result.query().length()));
+        } finally {
+            server.stop(0);
         }
     }
 

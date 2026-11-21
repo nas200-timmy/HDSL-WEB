@@ -455,6 +455,14 @@ button.titlebar-icon:hover {
   flex-wrap: wrap;
 }
 
+/* 工具行里的控件保持自然宽度。
+ * 不写这条时，flex 项会被 `flex-shrink: 1` 压到 **min-content**——对中文按钮来说
+ * 就是"一个字宽"，于是「刷新」竖着排成一个方块。这和是不是触摸设备无关，
+ * 窄窗口的桌面浏览器一样会中招，所以放在基础样式里，而不是移动端媒体查询里。 */
+.toolbar-row > * {
+  flex: 0 0 auto;
+}
+
 .toolbar-row .spacer {
   flex: 1;
 }

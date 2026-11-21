@@ -459,6 +459,25 @@ select.input {
   min-width: 0;
 }
 
+/* 弹窗正文里的直接子块和表单控件都必须能跟着弹窗收缩。grid/flex 的
+   min-width:auto 会让 select、textarea 的内禀宽度把正文顶出弹窗，表现为
+   底部横向滚动条和左右被裁切的表单——助手编辑器就是被 3 列网格顶开的。 */
+.dialog-body > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.dialog-body .form-row {
+  min-width: 0;
+}
+
+.dialog-body .form-row > .input,
+.dialog-body .form-row > textarea,
+.dialog-body .form-row > select {
+  width: 100%;
+  max-width: 100%;
+}
+
 /* jfx-layout-body：正文 pref 400 */
 .dialog:not(.wide) .dialog-body {
   max-width: 400px;
@@ -502,6 +521,8 @@ select.input {
   align-items: center;
   gap: 4px;
   padding-top: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 /* ---------------- 弹出菜单（jfx-popup）：bg surface、圆角 4 ---------------- */

@@ -161,11 +161,8 @@ public final class ModelsApiServlet extends HttpServlet {
             return;
         }
         JsonArray models = new JsonArray();
-        DshModelCatalog.Provider matched = found.matched();
-        if (matched != null) {
-            for (DshModelCatalog.Model model : matched.models()) {
-                models.add(modelJson(model));
-            }
+        for (DshModelCatalog.Model model : found.models()) {
+            models.add(modelJson(model));
         }
         JsonObject body = new JsonObject();
         body.add("vendor", found.toJson());
@@ -306,10 +303,12 @@ public final class ModelsApiServlet extends HttpServlet {
             if (matched != null) {
                 claimed.add(matched.id().toLowerCase(Locale.ROOT));
             }
+            List<DshModelCatalog.Model> fallback =
+                    matched == null ? DshModelCatalog.builtinModels(vendor.id()) : List.of();
             entries.add(new Supplier(vendor.id(), vendor.displayName(), vendor.baseUrl(), vendor.apiKeyEnv(),
                     protocol, "dsh", matched == null ? null : matched.npm(),
                     true, custom, vendor.preferred(), matched == null ? null : matched.doc(),
-                    matched == null ? null : matched.id(), matched));
+                    matched == null ? null : matched.id(), matched, fallback));
         }
 
         for (DshModelCatalog.Provider provider : catalog.providers()) {
@@ -320,7 +319,7 @@ public final class ModelsApiServlet extends HttpServlet {
             entries.add(new Supplier(provider.id(), provider.name(), provider.endpoint(),
                     DshVendor.keyVariableOf(provider.id()), protocol,
                     protocol == null ? null : "directory", provider.npm(), false, false, false,
-                    provider.doc(), provider.id(), provider));
+                    provider.doc(), provider.id(), provider, List.of()));
         }
 
         entries.sort(Comparator.comparingInt(Supplier::rank)
@@ -339,13 +338,30 @@ public final class ModelsApiServlet extends HttpServlet {
     private static List<DshVendor> knownVendors(LauncherSettings settings) {
         List<DshVendor> known = new ArrayList<>(DshVendor.offered());
         Set<String> ids = new LinkedHashSet<>();
+        Set<String> hosts = new LinkedHashSet<>();
         for (DshVendor vendor : known) {
             ids.add(vendor.id().toLowerCase(Locale.ROOT));
+            String host = DshVendor.hostOf(vendor.baseUrl());
+            if (host != null) {
+                hosts.add(host);
+            }
         }
         for (DshVendor vendor : DshVendor.catalogue()) {
-            if (ids.add(vendor.id().toLowerCase(Locale.ROOT))) {
-                known.add(vendor);
+            if (!ids.add(vendor.id().toLowerCase(Locale.ROOT))) {
+                continue;
             }
+            // The harness catalogue carries several aliases for one address (for example
+            // qwen-token-plan and qwen-token-plan-individual). The offered entry is the one with
+            // the name and model fallback this page knows, so an alias for the same host would
+            // only be a second card that opens the same account.
+            String host = DshVendor.hostOf(vendor.baseUrl());
+            if (host != null && hosts.contains(host)) {
+                continue;
+            }
+            if (host != null) {
+                hosts.add(host);
+            }
+            known.add(vendor);
         }
         for (DshVendor vendor : settings.getCustomVendors()) {
             if (ids.add(vendor.id().toLowerCase(Locale.ROOT))) {
@@ -401,7 +417,17 @@ public final class ModelsApiServlet extends HttpServlet {
             boolean preferred,
             @Nullable String doc,
             @Nullable String catalogId,
-            @Nullable DshModelCatalog.Provider matched) {
+            @Nullable DshModelCatalog.Provider matched,
+            List<DshModelCatalog.Model> fallbackModels) {
+
+        /// What the page offers in the model picker: the directory when it answered, and the
+        /// built-in list when it did not.
+        List<DshModelCatalog.Model> models() {
+            if (matched != null && !matched.models().isEmpty()) {
+                return matched.models();
+            }
+            return fallbackModels;
+        }
 
         int rank() {
             return preferred ? 0 : known ? 1 : 2;
@@ -418,7 +444,7 @@ public final class ModelsApiServlet extends HttpServlet {
             addText(json, "npm", npm);
             addText(json, "doc", doc);
             addText(json, "catalogId", catalogId);
-            json.addProperty("modelCount", matched == null ? 0 : matched.models().size());
+            json.addProperty("modelCount", models().size());
             json.addProperty("known", known);
             json.addProperty("custom", custom);
             json.addProperty("preferred", preferred);

@@ -155,8 +155,10 @@ class LogRetentionTest {
         Files.setLastModifiedTime(file, FileTime.fromMillis(millis));
     }
 
+    /// Age files against the frozen `noon()` clock, not `Instant.now()`: the
+    /// test is deterministic no matter which real day it runs on.
     private static long daysAgo(long days) {
-        return Instant.now().minusSeconds(TimeUnit.DAYS.toSeconds(days)).toEpochMilli();
+        return noon().minusSeconds(TimeUnit.DAYS.toSeconds(days)).toEpochMilli();
     }
 
     private static Instant noon() {

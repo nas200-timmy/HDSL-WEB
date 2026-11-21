@@ -13,7 +13,8 @@ import { toast } from "../../store";
 import { errMsg } from "../../utils";
 import { Dialog } from "../../components/Dialog";
 import { ContentCopyIcon, RefreshIcon, SearchIcon } from "../../components/icons";
-import { HelpNote } from "./common";
+import { HelpNote, ensureQueueRunning } from "./common";
+import { useTranscodeWorkspace } from "./TranscodeWorkspace";
 import {
   encoderFamily,
   inactiveReason,
@@ -37,12 +38,19 @@ const RESTRICTIVE_CONTAINERS = ["mp4", "mov", "avi", "flv", "ts", "m2ts", "m4v"]
 
 export function PresetsPage() {
   const nav = useNavigate();
+  const {
+    staged,
+    outputDir,
+    removeStaged,
+    setPresetId,
+  } = useTranscodeWorkspace();
   const [summaries, setSummaries] = useState<TranscodePresetSummary[]>([]);
   const [schema, setSchema] = useState<TranscodeSchema | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [entry, setEntry] = useState<TranscodePresetEntry | null>(null);
   const [draft, setDraft] = useState<TranscodePreset>({});
   const [busy, setBusy] = useState(false);
+  const [enqueueBusy, setEnqueueBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [presetSearch, setPresetSearch] = useState("");
@@ -95,7 +103,7 @@ export function PresetsPage() {
       setEntry(answer);
       setDraft({ ...answer.preset });
       setDirty(false);
-      sessionStorage.setItem("transcode.presetId", id);
+      setPresetId(id);
     } catch (e) {
       setError(errMsg(e));
     }
@@ -252,7 +260,7 @@ export function PresetsPage() {
       setDraft({ ...saved.preset });
       setDirty(false);
       setSelectedId(saved.id);
-      sessionStorage.setItem("transcode.presetId", saved.id);
+      setPresetId(saved.id);
       await loadList(saved.id);
       toast("success", "预设已保存");
     } catch (e) {
@@ -295,7 +303,7 @@ export function PresetsPage() {
       setEntry(null);
       setDraft(baseDraft);
       setDirty(false);
-      sessionStorage.removeItem("transcode.presetId");
+      setPresetId("");
       await loadList();
     } catch (e) {
       toast("error", errMsg(e));
@@ -472,6 +480,53 @@ export function PresetsPage() {
   const shownError = managing ? managedError : previewError;
   const shownBusy = managing ? false : previewBusy;
 
+  const enqueueDraft = async () => {
+    if (staged.length === 0 || enqueueBusy) return;
+    if (!draft.container || !draft.videoEncoder || !draft.qualityMode || !draft.qualityValue) {
+      setActiveSection(null);
+      toast("error", "先补齐输出容器、视频编码器、质量模式和质量值");
+      return;
+    }
+    const container = String(draft.container).toLowerCase();
+    const keepsTracks = draft.subtitleMode === "copy"
+      || draft.copyAttachments === true
+      || draft.copyChapters === true;
+    if (RESTRICTIVE_CONTAINERS.includes(container) && keepsTracks && !window.confirm(
+      `当前容器 ${container.toUpperCase()} 可能装不下全部字幕/附件/章节。仍然继续入队吗？`,
+    )) return;
+
+    setEnqueueBusy(true);
+    const added: string[] = [];
+    const failures: string[] = [];
+    for (const item of staged) {
+      try {
+        await api.transcode.submitJob({
+          input: item.entry.path,
+          preset: draft,
+          outputDir: outputDir.trim() || undefined,
+        });
+        added.push(item.entry.path);
+      } catch (e) {
+        failures.push(`${item.entry.name}: ${errMsg(e)}`);
+      }
+    }
+    setEnqueueBusy(false);
+    if (added.length > 0) {
+      try {
+        await ensureQueueRunning();
+      } catch (e) {
+        toast("error", `任务已入队，但启动队列失败：${errMsg(e)}`);
+      }
+      removeStaged(added);
+      toast("success", `已加入 ${added.length} 个任务`);
+    }
+    if (failures.length > 0) {
+      setError(failures.slice(0, 3).join("\n"));
+      toast("error", `${failures.length} 个文件未加入，仍保留在准备列表`);
+    }
+    if (added.length > 0) nav("/transcode?tab=queue");
+  };
+
   return (
     <div className="tc-workbench">
       {/* ── 纵向导航（预设管理是其中一项，不是常驻侧栏）───────────────── */}
@@ -566,7 +621,7 @@ export function PresetsPage() {
                     setDraft(baseDraft);
                     setDirty(false);
                     setActiveSection(null);
-                    sessionStorage.removeItem("transcode.presetId");
+                    setPresetId("");
                   }}
                 >
                   新建
@@ -621,6 +676,14 @@ export function PresetsPage() {
                   <input type="checkbox" checked={onlyChanged} onChange={(e) => setOnlyChanged(e.target.checked)} />
                   只看已改
                 </label>
+                <button
+                  className="btn btn-raised"
+                  disabled={enqueueBusy || staged.length === 0}
+                  title={staged.length === 0 ? "先在准备文件里添加媒体" : "用当前参数快照批量入队，不要求先保存预设"}
+                  onClick={() => void enqueueDraft()}
+                >
+                  {enqueueBusy ? "入队中…" : `加入编码队列（${staged.length}）`}
+                </button>
               </>
             )}
           </div>
@@ -637,6 +700,7 @@ export function PresetsPage() {
             <li>换视频编码器或输出容器后，速度档、质量模式、profile/tune/像素格式、音频/视频编码器会自动换成可用值；不适用的字段会变灰。</li>
             <li>控件下方的灰字解释当前选中的值；参数总览和预设预览的每个值也可以悬停查看原始取值与含义。</li>
             <li>「只看已改」只显示与基线不同的字段；「搜索参数」按名称/当前值过滤。</li>
+            <li>「加入编码队列」使用当前参数快照处理准备列表，<b>不要求先保存预设</b>；失败的文件会留在准备列表。</li>
           </ul>
         </HelpNote>
 

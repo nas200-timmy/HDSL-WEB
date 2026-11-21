@@ -1,19 +1,27 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { api, type TranscodeMediaEntry, type TranscodeMediaListing } from "../../api";
+import { api, type TranscodeMediaEntry, type TranscodeMediaListing, type TranscodeQueueSnapshot } from "../../api";
 import { errMsg } from "../../utils";
 import { ArrowBackIcon, ArrowForwardIcon, FolderIcon, FolderOpenIcon, RefreshIcon } from "../../components/icons";
 
 /**
- * 页级说明：默认折叠，标题一行，展开后是一段人话。
- * 3FUI 的每个子页都有这种说明；这里统一成一个组件，避免每页自己写样式。
+ * 页级说明：默认折叠，标题一行，展开后是一段人话；只解释不常用的细节，
+ * 不让大段说明挤掉文件列表和队列。
  */
 export function HelpNote({ title = "使用说明", children }: { title?: string; children: ReactNode }) {
   return (
-    <details className="tc-help" open>
+    <details className="tc-help">
       <summary>{title}</summary>
       <div className="tc-help-body">{children}</div>
     </details>
   );
+}
+
+/** 3FUI behavior: submitting into an idle queue starts it; a paused queue stays
+ *  paused because that pause is the operator's decision, not ours to clear. */
+export async function ensureQueueRunning(): Promise<TranscodeQueueSnapshot> {
+  const snapshot = await api.transcode.queue();
+  if (snapshot.runState === "idle") return api.transcode.startQueue();
+  return snapshot;
 }
 
 export function fmtBytes(bytes: number | null | undefined): string {
@@ -36,6 +44,30 @@ export function fmtDuration(ms: number | null | undefined): string {
   const s = total % 60;
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
     : `${m}:${String(s).padStart(2, "0")}`;
+}
+
+export function jobEtaMs(job: {
+  state: string;
+  fraction: number;
+  speed: number;
+  durationMs: number;
+  outTimeMs: number;
+  startedAt: number;
+}): number | null {
+  if (job.state !== "running") return null;
+  if (job.fraction > 0 && job.fraction < 1 && job.startedAt > 0) {
+    const elapsed = Date.now() - job.startedAt;
+    const estimate = elapsed * (1 - job.fraction) / job.fraction;
+    if (Number.isFinite(estimate) && estimate > 0) return estimate;
+  }
+  if (job.durationMs <= 0 || job.outTimeMs < 0 || job.speed <= 0) return null;
+  const remaining = (job.durationMs - job.outTimeMs) / job.speed;
+  return remaining > 0 ? remaining : null;
+}
+
+export function latestLogLine(log: string): string {
+  const lines = log.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return lines.length > 0 ? lines[lines.length - 1] : "";
 }
 
 export function pct(value: number): string {

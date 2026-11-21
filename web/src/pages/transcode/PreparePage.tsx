@@ -2,32 +2,45 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type TranscodeMediaEntry, type TranscodePreset, type TranscodePresetSummary, type TranscodePreview, type TranscodePlan } from "../../api";
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
-import { MediaBrowserPanel, fmtBytes, probeSummary, HelpNote } from "./common";
+import { MediaBrowserPanel, ensureQueueRunning, fmtBytes, probeSummary, HelpNote } from "./common";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { valueLabel } from "./labels";
+import { useTranscodeWorkspace } from "./TranscodeWorkspace";
 
-type StagedItem = {
-  entry: TranscodeMediaEntry;
-  output?: string;
-  outputAbsolute?: string;
-  error?: string;
-};
+type SortBy = "name" | "size" | "ext";
+
+function extension(path: string): string {
+  const name = path.split("/").pop() ?? path;
+  const dot = name.lastIndexOf(".");
+  return dot < 0 ? "" : name.slice(dot + 1).toUpperCase();
+}
 
 export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
+  const {
+    staged,
+    setStaged,
+    clearStaged,
+    presetId,
+    setPresetId,
+    outputDir,
+    setOutputDir,
+    addEntries,
+    removeStaged,
+  } = useTranscodeWorkspace();
   const [presets, setPresets] = useState<TranscodePresetSummary[]>([]);
-  const [presetId, setPresetId] = useState(() => sessionStorage.getItem("transcode.presetId") ?? "");
   const [selected, setSelected] = useState<TranscodeMediaEntry | null>(null);
   const [probe, setProbe] = useState<Record<string, unknown> | null>(null);
-  const [outputDir, setOutputDir] = useState("");
   const [preview, setPreview] = useState<TranscodePreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [presetDetail, setPresetDetail] = useState<TranscodePreset | null>(null);
-  const [staged, setStaged] = useState<StagedItem[]>([]);
   const [plan, setPlan] = useState<TranscodePlan | null>(null);
   const [mediaRoot, setMediaRoot] = useState("");
   const [scanning, setScanning] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [sortBy, setSortBy] = useState<SortBy>("name");
 
   useEffect(() => {
     if (!presetId) {
@@ -35,8 +48,8 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
       return;
     }
     let cancelled = false;
-    void api.transcode.preset(presetId).then((entry) => {
-      if (!cancelled) setPresetDetail(entry.preset);
+    void api.transcode.preset(presetId).then((answer) => {
+      if (!cancelled) setPresetDetail(answer.preset);
     }).catch(() => {
       if (!cancelled) setPresetDetail(null);
     });
@@ -46,21 +59,21 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
   }, [presetId]);
 
   useEffect(() => {
-    void api.transcode
-      .presets()
-      .then((answer) => {
-        setPresets(answer.presets);
-        // No auto-selection: opening the page must not silently enqueue with the
-        // first built-in preset. The operator picks a starting point explicitly.
-      })
+    void api.transcode.presets()
+      .then((answer) => setPresets(answer.presets))
       .catch((e) => setError(errMsg(e)));
-    void api.transcode
-      .capabilities()
+    void api.transcode.capabilities()
       .then((capabilities) => setMediaRoot(capabilities.mediaRoot))
-      .catch(() => {
-        // The media root is a display aid; plan/submit will report real errors.
-      });
+      .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    setChecked((current) => {
+      const paths = new Set(staged.map((item) => item.entry.path));
+      const next = new Set([...current].filter((path) => paths.has(path)));
+      return next.size === current.size ? current : next;
+    });
+  }, [staged]);
 
   const select = async (entry: TranscodeMediaEntry) => {
     setSelected(entry);
@@ -70,7 +83,7 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
     try {
       setProbe(await api.transcode.mediaProbe(entry.path));
     } catch {
-      // The probe is a convenience; submission has its own validation.
+      // Probing is a convenience; preview and submission still validate the file.
     }
   };
 
@@ -89,26 +102,12 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
       || presetDetail.copyAttachments === true
       || presetDetail.copyChapters === true;
     if (restrictive.includes(container) && keepsTracks) {
-      const proceed = window.confirm(
+      return window.confirm(
         `当前容器 ${container.toUpperCase()} 可能装不下全部字幕/附件/章节。\n` +
-        `建议把预设容器改成 MKV。仍然继续入队吗？`,
+        "建议把预设容器改成 MKV。仍然继续入队吗？",
       );
-      if (!proceed) return false;
     }
     return true;
-  };
-
-  const addEntries = (entries: TranscodeMediaEntry[]) => {
-    setStaged((previous) => {
-      const seen = new Set(previous.map((item) => item.entry.path));
-      const next = [...previous];
-      for (const entry of entries) {
-        if (entry.directory || seen.has(entry.path)) continue;
-        seen.add(entry.path);
-        next.push({ entry });
-      }
-      return next;
-    });
   };
 
   const addFolderPath = async (folder: string) => {
@@ -134,9 +133,19 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
   };
 
   const stagedKey = useMemo(() => staged.map((item) => item.entry.path).join("\n"), [staged]);
+  const sortedStaged = useMemo(() => {
+    const list = [...staged];
+    if (sortBy === "name") {
+      list.sort((a, b) => a.entry.name.localeCompare(b.entry.name, "zh-CN"));
+    } else if (sortBy === "size") {
+      list.sort((a, b) => b.entry.size - a.entry.size);
+    } else {
+      list.sort((a, b) => extension(a.entry.path).localeCompare(extension(b.entry.path)));
+    }
+    return list;
+  }, [staged, sortBy]);
 
-  // 输出路径由服务端规划：与真正入队时使用同一套命名/防撞逻辑，这样列表里显示的
-  // 就是容器里实际会写出的绝对路径，而不是前端猜的。
+  // Plan with the same server-side naming/collision logic used at submission time.
   useEffect(() => {
     if (!presetDetail || staged.length === 0) {
       setPlan(null);
@@ -144,25 +153,22 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
     }
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void api.transcode
-        .plan({
-          preset: presetDetail,
-          inputs: staged.map((item) => item.entry.path),
-          outputDir: outputDir.trim() || undefined,
-        })
-        .then((answer) => {
-          if (cancelled) return;
-          setPlan(answer);
-          setStaged((previous) => previous.map((item) => {
-            const hit = answer.items.find((candidate) => candidate.input === item.entry.path);
-            return hit
-              ? { ...item, output: hit.output, outputAbsolute: hit.outputAbsolute, error: hit.error }
-              : item;
-          }));
-        })
-        .catch((e) => {
-          if (!cancelled) setError(errMsg(e));
-        });
+      void api.transcode.plan({
+        preset: presetDetail,
+        inputs: staged.map((item) => item.entry.path),
+        outputDir: outputDir.trim() || undefined,
+      }).then((answer) => {
+        if (cancelled) return;
+        setPlan(answer);
+        setStaged(staged.map((item) => {
+          const hit = answer.items.find((candidate) => candidate.input === item.entry.path);
+          return hit
+            ? { ...item, output: hit.output, outputAbsolute: hit.outputAbsolute, error: hit.error }
+            : item;
+        }));
+      }).catch((e) => {
+        if (!cancelled) setError(errMsg(e));
+      });
     }, 400);
     return () => {
       cancelled = true;
@@ -170,24 +176,6 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
     };
   }, [stagedKey, presetDetail, outputDir]);
 
-  const previewCommand = async () => {
-    if (!selected || !presetDetail || !checkFoolproof()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      setPreview(await api.transcode.preview({
-        preset: presetDetail,
-        input: selected.path,
-        outputDir: outputDir.trim() || undefined,
-      }));
-    } catch (e) {
-      setError(errMsg(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // 选中文件 + 预设后自动预览命令（600ms 防抖）：3FUI 的自检入口，不用先点按钮。
   useEffect(() => {
     if (!selected || !presetDetail) {
       setPreview(null);
@@ -195,14 +183,15 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
     }
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void api.transcode
-        .preview({ preset: presetDetail, input: selected.path, outputDir: outputDir.trim() || undefined })
-        .then((answer) => {
-          if (!cancelled) setPreview(answer);
-        })
-        .catch(() => {
-          if (!cancelled) setPreview(null);
-        });
+      void api.transcode.preview({
+        preset: presetDetail,
+        input: selected.path,
+        outputDir: outputDir.trim() || undefined,
+      }).then((answer) => {
+        if (!cancelled) setPreview(answer);
+      }).catch(() => {
+        if (!cancelled) setPreview(null);
+      });
     }, 600);
     return () => {
       cancelled = true;
@@ -210,59 +199,49 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
     };
   }, [selected, presetDetail, outputDir]);
 
-  const enqueue = async () => {
-    if (!selected || !presetId || !checkFoolproof()) return;
+  const enqueue = async (items = staged) => {
+    if (items.length === 0 || !presetId || !checkFoolproof()) return;
     setBusy(true);
     setError(null);
-    try {
-      await api.transcode.submitJob({
-        input: selected.path,
-        presetId,
-        outputDir: outputDir.trim() || undefined,
-      });
-      toast("success", "已加入编码队列");
-      onOpenTab("queue");
-    } catch (e) {
-      setError(errMsg(e));
-      toast("error", errMsg(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const enqueueAll = async () => {
-    if (staged.length === 0 || !presetId || !checkFoolproof()) return;
-    setBusy(true);
-    setError(null);
-    let added = 0;
+    const added: string[] = [];
     const failures: string[] = [];
-    for (const item of staged) {
+    for (const item of items) {
       try {
         await api.transcode.submitJob({
           input: item.entry.path,
           presetId,
           outputDir: outputDir.trim() || undefined,
         });
-        added++;
+        added.push(item.entry.path);
       } catch (e) {
         failures.push(`${item.entry.name}: ${errMsg(e)}`);
       }
     }
     setBusy(false);
-    if (added > 0) {
-      toast("success", `已加入 ${added} 个任务`);
-      setStaged([]);
+    if (added.length > 0) {
+      try {
+        await ensureQueueRunning();
+      } catch (e) {
+        toast("error", `任务已入队，但启动队列失败：${errMsg(e)}`);
+      }
+      toast("success", `已加入 ${added.length} 个任务`);
+      removeStaged(added);
       setPlan(null);
       onOpenTab("queue");
     }
     if (failures.length > 0) {
       setError(failures.slice(0, 3).join("\n") + (failures.length > 3 ? `\n…还有 ${failures.length - 3} 个` : ""));
-      toast("error", `${failures.length} 个文件未加入，见右侧错误`);
+      toast("error", `${failures.length} 个文件未加入，仍保留在准备列表`);
     }
   };
 
-  const removeStaged = (path: string) => {
-    setStaged((previous) => previous.filter((item) => item.entry.path !== path));
+  const toggleChecked = (path: string) => {
+    setChecked((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
   };
 
   const outputSelection = outputDir.trim();
@@ -270,217 +249,160 @@ export function PreparePage({ onOpenTab }: { onOpenTab: (tab: string) => void })
     ? (plan?.outputDir || mediaRoot)
     : outputSelection
       ? (plan?.outputDir || `${mediaRoot}/${outputSelection}`.replace(/\/+/g, "/"))
-      : "每个源文件旁边（见下方准备列表）";
+      : "每个源文件旁边";
+  const allChecked = staged.length > 0 && checked.size === staged.length;
 
   return (
-    <div style={{ display: "grid", gap: 8 }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div className="tc-prepare-main">
-          <MediaBrowserPanel
-            selected={selected?.path}
-            onSelect={(entry) => void select(entry)}
-            onAddFile={(entry) => {
-              addEntries([entry]);
-              void select(entry);
-            }}
-            onAddFolder={(entry) => void addFolderPath(entry.path)}
-            onAddCurrentFolder={(path) => void addFolderPath(path)}
-          />
-        </div>
-
-        <div className="tc-prepare-side">
-          <HelpNote title="准备文件怎么用">
-            <ul>
-              <li>左边点文件「加入」，或点文件夹「添加」；也可以「添加当前文件夹」，会递归收集视频/音频。</li>
-              <li>准备列表支持一次加入多个文件，最后一个「加入队列」会全部提交。</li>
-              <li>「输出目录」留空 = 输出到每个源文件旁边；填相对路径 = 统一输出到媒体根下的这个目录。</li>
-              <li>准备列表里显示的是服务器上的绝对输出路径；容器里看到的路径就是它，不会写到别处。</li>
-              <li>预设来自「参数面板 → 保存为预设」；内置预设只读，需要改就用另存为。</li>
-            </ul>
-          </HelpNote>
-          <div className="card">
-            <div className="comp-row">
-              <span className="comp-label">已选文件</span>
-              <span className="comp-value mono" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
-                {selected ? selected.path : "从左侧选择"}
-              </span>
-            </div>
-            {selected && (
-              <div className="comp-row">
-                <span className="comp-label">信息</span>
-                <span className="comp-value" style={{ fontSize: 12 }}>
-                  {probe ? probeSummary(probe) : "—"} · {fmtBytes(selected.size)}
-                </span>
-              </div>
-            )}
-            <div className="comp-row">
-              <span className="comp-label">媒体根</span>
-              <span className="comp-value mono" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
-                {mediaRoot || "—"}
-              </span>
-            </div>
-            <div className="comp-row">
-              <span className="comp-label">输出位置</span>
-              <span className="comp-value mono" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
-                {outputLocation}
-              </span>
-            </div>
-            <div style={{ padding: "4px 8px 8px", display: "grid", gap: 6 }}>
-              <label style={{ fontSize: 12 }}>预设</label>
-              <select
-                className="input"
-                value={presetId}
-                disabled={busy || presets.length === 0}
-                onChange={(e) => {
-                  setPresetId(e.target.value);
-                  if (e.target.value) sessionStorage.setItem("transcode.presetId", e.target.value);
-                }}
-              >
-                <option value="">选择参数面板 / 预设…</option>
-                {presets.map((preset) => (
-                  <option key={preset.id} value={preset.id}>
-                    {preset.name}{preset.builtin ? "" : "（自定义）"}
-                  </option>
-                ))}
-              </select>
-              {presetDetail && (
-                <div className="tc-prepare-summary">
-                  <span className="tag plain" title={String(presetDetail.videoEncoder ?? "")}>
-                    {valueLabel("videoEncoder", presetDetail.videoEncoder)}
-                  </span>
-                  <span className="tag plain">{valueLabel("container", presetDetail.container)}</span>
-                  <span className="tag plain" title={String(presetDetail.qualityMode ?? "")}>
-                    {valueLabel("qualityMode", presetDetail.qualityMode)} {String(presetDetail.qualityValue ?? "")}
-                  </span>
-                  <span className="tag plain">音频 {valueLabel("audioMode", presetDetail.audioMode)}</span>
-                  <span className="tag plain">字幕 {valueLabel("subtitleMode", presetDetail.subtitleMode)}</span>
-                </div>
-              )}
-              <label style={{ fontSize: 12 }}>输出目录</label>
-              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                <input
-                  className="input"
-                  style={{ flex: "1 1 140px", minWidth: 0 }}
-                  value={outputDir}
-                  disabled={busy}
-                  placeholder="留空 = 每个源文件旁边"
-                  onChange={(e) => setOutputDir(e.target.value)}
-                />
-                <button className="btn btn-text" disabled={busy} onClick={() => setPickerOpen(true)}>
-                  选择目录
-                </button>
-                <button className="btn btn-text" disabled={busy || outputDir === ""} onClick={() => setOutputDir("")}>
-                  源目录
-                </button>
-              </div>
-              <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", overflowWrap: "anywhere" }}>
-                当前：{outputLocation}
-              </span>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", paddingTop: 4 }}>
-                <button className="btn btn-text" disabled={busy} onClick={() => onOpenTab("presets")}>
-                  打开参数面板
-                </button>
-                <button className="btn btn-text" disabled={busy || !selected || !presetId} onClick={() => void previewCommand()}>
-                  预览命令
-                </button>
-                <button className="btn btn-raised" disabled={busy || !selected || !presetId} onClick={() => void enqueue()}>
-                  {busy ? "处理中…" : "仅加入当前文件"}
-                </button>
-              </div>
-            </div>
-            {error && (
-              <div style={{ padding: "0 8px 8px", fontSize: 12, color: "var(--monet-error)", whiteSpace: "pre-wrap" }}>
-                {error}
-              </div>
-            )}
-          </div>
-
-          {preview && (
-            <div className="card">
-              <div className="comp-row">
-                <span className="comp-label">输出</span>
-                <span className="comp-value mono" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
-                  {preview.output}
-                </span>
-              </div>
-              <pre
-                style={{
-                  margin: "4px 8px 8px",
-                  padding: 8,
-                  maxHeight: 220,
-                  overflow: "auto",
-                  fontSize: 11,
-                  lineHeight: 1.5,
-                  background: "var(--monet-surface-container-low)",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-all",
-                }}
-              >
-                {preview.command}
-              </pre>
-            </div>
-          )}
-        </div>
+    <div className="tc-prepare">
+      <div className="card tc-prepare-toolbar">
+        <button
+          className="btn btn-raised"
+          disabled={busy || staged.length === 0 || !presetId}
+          onClick={() => void enqueue()}
+        >
+          {busy ? "提交中…" : `加入编码队列（${staged.length}）`}
+        </button>
+        <button className={`btn ${browserOpen ? "btn-raised" : "btn-text"}`} onClick={() => setBrowserOpen(!browserOpen)}>
+          {browserOpen ? "收起文件浏览" : "添加文件"}
+        </button>
+        <button className="btn btn-text" disabled={scanning} onClick={() => void addFolderPath("")}>
+          {scanning ? "扫描中…" : "添加媒体根及子目录"}
+        </button>
+        <button
+          className="btn btn-text"
+          disabled={checked.size === 0}
+          onClick={() => {
+            removeStaged([...checked]);
+            setChecked(new Set());
+          }}
+        >
+          移除选中{checked.size > 0 ? `（${checked.size}）` : ""}
+        </button>
+        <button className="btn btn-text" disabled={staged.length === 0} onClick={clearStaged}>移除全部</button>
+        <span style={{ flex: 1 }} />
+        <select className="input tc-prepare-sort" value={sortBy} onChange={(e) => setSortBy(e.target.value as SortBy)}>
+          <option value="name">排序：文件名</option>
+          <option value="size">排序：大小</option>
+          <option value="ext">排序：后缀</option>
+        </select>
       </div>
 
-      <div className="card">
-        <div
-          className="tc-card-title"
-          style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", rowGap: 6 }}
-        >
-          待转码列表（{staged.length}）
-          <span style={{ flex: 1 }} />
-          {scanning && <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>扫描中…</span>}
-          <button className="btn btn-text" disabled={busy || staged.length === 0} onClick={() => setStaged([])}>
-            清空
-          </button>
-          <button className="btn btn-raised" disabled={busy || staged.length === 0 || !presetId} onClick={() => void enqueueAll()}>
-            {busy ? "提交中…" : `加入队列（${staged.length}）`}
-          </button>
-        </div>
-        <div style={{ padding: "0 10px 6px", fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
-          这里只是暂存：点「加入队列」才会带着当前预设提交并开始转码。
-        </div>
-        <div className="comp-row">
-          <span className="comp-label">输出位置</span>
-          <span className="comp-value mono" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
-            {outputLocation}
+      {browserOpen && (
+        <MediaBrowserPanel
+          selected={selected?.path}
+          onSelect={(entry) => void select(entry)}
+          onAddFile={(entry) => {
+            addEntries([entry]);
+            void select(entry);
+          }}
+          onAddFolder={(entry) => void addFolderPath(entry.path)}
+          onAddCurrentFolder={(path) => void addFolderPath(path)}
+        />
+      )}
+
+      <div className="card tc-prepare-config">
+        <label>
+          <span>当前预设</span>
+          <select className="input" value={presetId} disabled={busy || presets.length === 0} onChange={(e) => setPresetId(e.target.value)}>
+            <option value="">选择预设…</option>
+            {presets.map((preset) => (
+              <option key={preset.id} value={preset.id}>{preset.name}{preset.builtin ? "" : "（自定义）"}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>输出目录（相对媒体根）</span>
+          <span className="tc-prepare-output">
+            <input className="input" value={outputDir} disabled={busy} placeholder="留空 = 源文件旁边" onChange={(e) => setOutputDir(e.target.value)} />
+            <button className="btn btn-text" disabled={busy} onClick={() => setPickerOpen(true)}>选择</button>
           </span>
+        </label>
+        <div className="tc-prepare-config-side">
+          <button className="btn btn-text" onClick={() => onOpenTab("presets")}>参数面板</button>
+          <button className="btn btn-text" disabled={busy || outputDir === ""} onClick={() => setOutputDir("")}>源目录</button>
+        </div>
+        {presetDetail && (
+          <div className="tc-prepare-summary">
+            <span className="tag plain">{valueLabel("videoEncoder", presetDetail.videoEncoder)}</span>
+            <span className="tag plain">{valueLabel("container", presetDetail.container)}</span>
+            <span className="tag plain">{valueLabel("qualityMode", presetDetail.qualityMode)} {String(presetDetail.qualityValue ?? "")}</span>
+            <span className="tag plain">音频 {valueLabel("audioMode", presetDetail.audioMode)}</span>
+            <span className="tag plain">字幕 {valueLabel("subtitleMode", presetDetail.subtitleMode)}</span>
+          </div>
+        )}
+        <div className="tc-prepare-location">输出到：<span className="mono">{outputLocation}</span></div>
+      </div>
+
+      {error && <div className="card tc-error">{error}</div>}
+
+      <div className="card tc-stage-card">
+        <div className="tc-stage-head">
+          <b>待转码文件</b>
+          <span>{staged.length} 个 · 切换页面不会清空</span>
         </div>
         {staged.length === 0 ? (
-          <div className="empty-state" style={{ padding: 18 }}>
-            <span>在左侧点文件「加入」或文件夹「添加」，也可以「添加当前文件夹」</span>
+          <div className="empty-state tc-stage-empty">
+            <span>还没有准备文件</span>
+            <span className="empty-sub">点上方「添加文件」逐个选择，或递归添加整个媒体目录</span>
           </div>
         ) : (
-          <div className="list-body scroll-hover" style={{ maxHeight: 320 }}>
-            {staged.map((item) => (
-              <div
-                key={item.entry.path}
-                className="tlli"
-                style={{ padding: "7px 10px", alignItems: "flex-start", cursor: "default" }}
-              >
-                <span className="tlli-text" style={{ minWidth: 0 }}>
-                  <span className="tlli-title">{item.entry.name}</span>
-                  <span className="tlli-subtitle mono">{item.entry.path} · {fmtBytes(item.entry.size)}</span>
-                  <span className="tlli-subtitle" style={{ overflowWrap: "anywhere" }}>
-                    输出：
-                    <span className="mono" style={{ color: item.error ? "var(--monet-error)" : undefined }}>
-                      {item.error ? item.error : item.outputAbsolute || "计算中…"}
-                    </span>
-                  </span>
-                </span>
-                <button
-                  className="btn btn-text"
-                  style={{ padding: "2px 6px", fontSize: 11 }}
-                  onClick={() => removeStaged(item.entry.path)}
-                >
-                  移除
-                </button>
-              </div>
-            ))}
+          <div className="tc-stage-scroll">
+            <table className="tc-stage-table">
+              <thead>
+                <tr>
+                  <th><input type="checkbox" checked={allChecked} onChange={() => setChecked(allChecked ? new Set() : new Set(staged.map((item) => item.entry.path)))} /></th>
+                  <th>文件名</th>
+                  <th>路径</th>
+                  <th>后缀</th>
+                  <th>大小</th>
+                  <th>输出文件</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {sortedStaged.map((item) => (
+                  <tr key={item.entry.path} className={selected?.path === item.entry.path ? "selected" : ""}>
+                    <td><input type="checkbox" checked={checked.has(item.entry.path)} onChange={() => toggleChecked(item.entry.path)} /></td>
+                    <td className="tc-stage-name" onClick={() => void select(item.entry)}>{item.entry.name}</td>
+                    <td className="mono tc-stage-path" onClick={() => void select(item.entry)}>{item.entry.path}</td>
+                    <td className="mono">{extension(item.entry.path)}</td>
+                    <td className="mono">{fmtBytes(item.entry.size)}</td>
+                    <td className={`mono tc-stage-output${item.error ? " error" : ""}`}>{item.error || item.outputAbsolute || "计算中…"}</td>
+                    <td><button className="btn btn-text" onClick={() => removeStaged([item.entry.path])}>移除</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
+
+      {selected && (
+        <div className="tc-prepare-inspect">
+          <div className="card">
+            <div className="tc-card-title">{selected.name}</div>
+            <div className="tc-prepare-selected-path mono">{selected.path}</div>
+            <div className="tc-prepare-probe">{probe ? probeSummary(probe) : "正在读取媒体信息…"} · {fmtBytes(selected.size)}</div>
+            {selected && staged.some((item) => item.entry.path === selected.path) && (
+              <button className="btn btn-text" disabled={busy || !presetId} onClick={() => void enqueue(staged.filter((item) => item.entry.path === selected.path))}>
+                仅加入这个文件
+              </button>
+            )}
+          </div>
+          <div className="card tc-prepare-command-card">
+            <div className="tc-card-title">实际命令行预览</div>
+            <pre className="tc-prepare-command">{preview?.command || "选择预设后自动生成；这里只预览，不执行"}</pre>
+          </div>
+        </div>
+      )}
+
+      <HelpNote title="准备文件说明">
+        <ul>
+          <li>准备列表、当前预设和输出目录在整个转码工作区共享；去参数页调整后可以直接在那里入队。</li>
+          <li>输出目录留空时写到每个源文件旁边；同名文件由服务端自动加序号，不覆盖已有文件。</li>
+          <li>列表中的输出路径由服务端预先计算；入队失败的文件会留在列表里，不会被误清空。</li>
+        </ul>
+      </HelpNote>
 
       <DirectoryPicker
         open={pickerOpen}

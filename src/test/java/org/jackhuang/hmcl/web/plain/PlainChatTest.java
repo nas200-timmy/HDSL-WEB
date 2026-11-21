@@ -145,7 +145,8 @@ class PlainChatTest {
             assertEquals(303, created.statusCode(), created.body());
             String location = created.headers().firstValue("Location").orElseThrow();
             assertTrue(location.startsWith("/plain/s/"), location);
-            String sessionId = location.substring("/plain/s/".length());
+            assertTrue(location.endsWith("#bottom"), location);
+            String sessionId = location.substring("/plain/s/".length()).replace("#bottom", "");
             // Pin the session to the fake account: other test classes share the
             // SettingsManager, and a default account from one of them would send
             // this turn to a different endpoint.
@@ -154,6 +155,7 @@ class PlainChatTest {
             HttpResponse<String> sent = postForm(running, "/plain/s/" + sessionId + "/send",
                     "text=" + URLEncoder.encode("hello", StandardCharsets.UTF_8) + "&auto=1");
             assertEquals(303, sent.statusCode(), sent.body());
+            assertTrue(sent.headers().firstValue("Location").orElseThrow().endsWith("?auto=1#bottom"));
 
             String page = waitFor(running, sessionId, "hello there", Duration.ofSeconds(15));
             assertTrue(page.contains("助手"), page);
@@ -161,6 +163,13 @@ class PlainChatTest {
             // The composer is a plain form; a text browser can post it again.
             assertTrue(page.contains("name=\"text\""), page);
             assertTrue(page.contains("action=\"/plain/s/" + sessionId + "/send\""), page);
+            // The IE11 visual layer uses the same avatar/bubble model as the SPA,
+            // but real tables keep w3m's reading order and avoid broken flexbox.
+            assertTrue(page.contains("class=\"chat-line user\""), page);
+            assertTrue(page.contains("class=\"chat-line assistant\""), page);
+            assertTrue(page.contains("class=\"chat-bubble\""), page);
+            assertTrue(page.contains("class=\"chat-composer\""), page);
+            assertTrue(page.contains("class=\"turn-sep\""), page);
         } finally {
             SettingsManager.settings().getAccounts().remove(account);
             provider.stop(0);

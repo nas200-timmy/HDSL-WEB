@@ -37,6 +37,8 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo C
 - [构建与开发](#构建与开发)
 - [常见问题](#常见问题)
 - [设计说明](docs/design-notes.md)
+- [Minecraft 服务端](docs/minecraft.md) — 含 Java 运行时下载源
+- [种子预览](docs/seed-preview.md) · [种子地图内核](docs/seedmap.md)
 - [转码模块（批量编码、硬件加速、GPU 监控）](docs/transcode.md)
 - [面板聊天（多助手、流式、附件、联网搜索）](docs/chat.md)
 - [许可](#许可)
@@ -97,14 +99,15 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo C
 | 交付 | 一个可执行 fat jar（`java -jar hdsl-web.jar`）和一个 Debian 容器镜像 |
 | 运行前提 | JDK 17+；Node `^22.19.0 || >=24.0.0` 与 pnpm（dsh 由 pnpm 安装、由 node 运行）。FreeBSD 用 `pkg install node npm` 的系统 Node（没有托管构建），交互式终端已支持，但 **dsh 实例不可用**（上游 native addon 与 flock 两层拒绝），系统指标页大部分为空；设置 → 通用 → 平台兼容性会列出当前平台的已知差异，见 [docs/deployment.md §12](docs/deployment.md) |
 | 手机 | 窄屏（≤760px）或矮屏（≤520px）自动切换移动版式：主导航收成抽屉、子侧栏变顶部标签条、启动面板变成贴底操作栏；可点区域 44px；支持「加到主屏幕」。见 [docs/ui-spec.md §14](docs/ui-spec.md) |
-| 账户 | 为供应商填一次 API Key；供应商与模型来自 [models.dev](https://models.dev)（200+ 家，选中即带出端点、协议与密钥变量），也可手输；目录不可达时退回内置供应商与手输。见 [docs/ui-spec.md §4](docs/ui-spec.md) |
+| 账户 | 为供应商填一次 API Key；供应商与模型来自 [models.dev](https://models.dev)（200+ 家，选中即带出端点、协议与密钥变量），也可手输。阿里云百炼 / 千问与阿里云 Token Plan 是内置一等供应商：不依赖 models.dev 也带端点、协议和模型清单；其模型列表在账户页打开时补拉、并每 6 小时自动刷新。目录优先从 models.dev 的 GitHub 源码归档解析（比 api.json 快一个数量级），归档不可用再回源 api.json；都不可达时退回内置供应商与手输。见 [docs/ui-spec.md §4](docs/ui-spec.md) |
 | HTTPS / 证书管理 | 自签、上传 PEM / PKCS#12、热重载；按主域名分组管理多张证书与 SNI；内置 ACME DNS-01 自动签发与续期（Cloudflare、阿里云、DNSPod、GoDaddy、DigitalOcean、Vultr），支持 staging、通配符、旧配置迁移与独立 DNS 凭据。DNS/CA 凭据存 `auth/acme.json`（0600），证书注册表存 `certs/registry.json`（0600），都不进 `server.yaml`。见 [docs/deployment.md §2](docs/deployment.md) |
-| 聊天 | 面板内的多助手聊天页：流式输出、停止、两种重新生成、跨服务模型选择、按轮思考/搜索时间线（普通协议与流式也走）、右侧附件预览栏（图片/音视频/PDF 原生渲染，文本分页，CSV 表格）、图片/PDF/Office 附件与长文本转附件、按助手隔离系统提示词；会话存 SQLite，可每日备份。可选联网搜索（博查 / DeepSeek / 智谱 / Tavily / Brave / Exa），输入区可按消息选搜索源，模型只会拿到只读的 `search_web` / `scrape_web`，不能触发面板操作。独立 `/chat/settings` 收成 5 组：个人资料 / 模型 / 联网搜索 / 数据与备份 / 安全与网络。内置可开关的「DeepSeek 官方」预设角色：固定 DeepSeek 官方协议，使用官方联网搜索、读链接、来源引用、按块思考/搜索时间线与自动标题，不读面板搜索 provider；默认助手兼容 DeepSeek 的 DSML 文本工具调用。支持会话分叉、单会话导出与 DeepSeek 导出包导入，Markdown 支持 KaTeX 公式。见 [docs/chat.md](docs/chat.md) |
+| 聊天 | 面板内的多助手聊天页：流式输出、停止、两种重新生成、跨服务模型选择（资源管理器式的来源→品牌→模型树：阿里云百炼是盘符，Qwen / DeepSeek / Kimi / GLM / 混元 / 豆包 / MiMo / StepFun 等是文件夹；来源可折叠、可隐藏并记住状态）、按轮思考/搜索时间线（普通协议与流式也走）、右侧附件预览栏（图片/音视频/PDF 原生渲染，文本分页，CSV 表格）、图片/PDF/Office 附件与长文本转附件、按助手隔离系统提示词；会话存 SQLite，可每日备份。可选联网搜索（博查 / DeepSeek / 智谱 / Tavily / Brave / Exa），输入区可按消息选搜索源，模型只会拿到只读的 `search_web` / `scrape_web`，不能触发面板操作。独立 `/chat/settings` 收成 5 组：个人资料 / 模型 / 联网搜索 / 数据与备份 / 安全与网络。内置可开关的「DeepSeek 官方」预设角色：固定 DeepSeek 官方协议，使用官方联网搜索、读链接、来源引用、按块思考/搜索时间线与自动标题，不读面板搜索 provider；默认助手兼容 DeepSeek 的 DSML 文本工具调用。支持会话分叉、单会话导出与 DeepSeek 导出包导入，Markdown 支持 KaTeX 公式。见 [docs/chat.md](docs/chat.md) |
 | 纯文本版 | 无 JavaScript 的 `/plain`：登录、会话列表、历史、发送、附件下载与提权；增强模式下会话与正文长轮询更新，Markdown 与公式由服务端渲染，发送后不用整页刷新。w3m / lynx / IE11 可用。现代界面在入口检测 fetch / WebSocket / flex，缺任何一项就跳到「浏览器太旧」提醒页，可一键进入纯文本版。见 [docs/plain-surface.md](docs/plain-surface.md) |
 | 创建实例 | 创建即安装；未安装的实例点「启动」会先装再启；进度与失败原因都在面板上。见 [docs/launcher-orchestration.md](docs/launcher-orchestration.md) |
 | 品牌实例 | 安装、版本共享与实验性边界见 [docs/brands.md](docs/brands.md)；Octop 见 [docs/octop.md](docs/octop.md)；ZCode 见 [docs/zcode-experimental.md](docs/zcode-experimental.md)（版本目录、按实例的最低版本/凭据格式闸门、3.18.x credential-secret 与密钥轮换）。Qwen / MiMo / MiniMax 是纯终端品牌（无网页进程、端口与 `/i/` 挂载） |
-| Minecraft | 默认关闭的第三方功能；开关在「设置 → 品牌实例」，需开发者密码并阅读 Mojang EULA 与服务条款。存档在 `/home/hdsl/mc`，容器部署必须挂出来。见 [docs/minecraft.md](docs/minecraft.md) |
-| 转码 | 默认关闭的第三方功能；开关同样在「设置 → 品牌实例」，需开发者密码并阅读须知。服务端队列批量编码，硬件失败按 QSV → VAAPI → CPU 每次降一档（或完全自动化），参数面板对齐 3FUI。媒体根是 `/home/hdsl/video`，ffmpeg 支持静态包 / apt-dnf / 源码编译三种装法。见 [docs/transcode.md](docs/transcode.md) |
+| Minecraft | 默认关闭的第三方功能；开关在「设置 → 品牌实例」，需开发者密码并阅读 Mojang EULA 与服务条款。存档在 `/home/hdsl/mc`，容器部署必须挂出来。Java 运行时支持清华 TUNA / 华为云镜像下载，目录与 SHA-256 仍用官方值，下载前测速、校验不一致自动回官方。见 [docs/minecraft.md](docs/minecraft.md) |
+| 种子地图 | MC 实例页签或独立页面 `/mc/preview`：填版本 + 种子出群系/结构/史莱姆俯视图；Java 内核（cubiomes 移植，秒级大范围）与真服务端（逐格精确）两种引擎，1.12.2 到最新版；支持历史、缩放拖动、结构搜索/过滤/测距与 agent 文本报告。精度差异见 [docs/seedmap-deviations.md](docs/seedmap-deviations.md)。见 [docs/seed-preview.md](docs/seed-preview.md) / [docs/seedmap.md](docs/seedmap.md) |
+| 转码 | 默认关闭的第三方功能；开关同样在「设置 → 品牌实例」，需开发者密码并阅读须知。服务端队列批量编码，硬件失败按 QSV → VAAPI → CPU 每次降一档（或完全自动化），参数面板对齐 3FUI；准备文件是跨页工作区，工具改成批量工作台，队列带实时遥测与持续日志。媒体根是 `/home/hdsl/video`，ffmpeg 支持静态包 / apt-dnf / 源码编译三种装法。见 [docs/transcode.md](docs/transcode.md) |
 | 下载源 | 设置页可选预设镜像（npmmirror / 中科大 / 腾讯云 / 华为云 / 官方）或手填 URL；保存即生效。见 [docs/deployment.md](docs/deployment.md) |
 | 安全 | 威胁模型、误配自查与免责统一在 [docs/security.md](docs/security.md)；裸 HTTP 的密码/聊天信封只防被动嗅探，`/plain` + IE11 是已知明文洞（§6.1） |
 | 从零重建 | [docs/build-from-scratch-prompt.md](docs/build-from-scratch-prompt.md) 是一份完整任务提示词，**只在新仓库用** |

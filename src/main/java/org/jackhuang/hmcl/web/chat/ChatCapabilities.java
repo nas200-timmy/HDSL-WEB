@@ -133,7 +133,7 @@ public final class ChatCapabilities {
         }
         // 百炼用 enable_thinking + thinking_budget；对用户仍然呈现强度档
         if (endpoint.contains("dashscope") || endpoint.contains("aliyuncs")) {
-            List<String> values = declared.isEmpty() ? List.of("low", "medium", "high") : declared;
+            List<String> values = declared.isEmpty() ? List.of("low", "medium", "high", "xhigh") : declared;
             return new ReasoningMode("effort", true, values, 0, 0,
                     entry == null ? "vendor" : "catalog");
         }

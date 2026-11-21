@@ -951,8 +951,13 @@ export const api = {
       params.set("catalog", withCatalogue ? "1" : "0");
       return request<McJavaRuntimesSnapshot>(`/api/mc/java/runtimes?${params.toString()}`);
     },
-    installJava: (feature: number, vendor = "temurin") =>
-      request<{ taskId: string }>("/api/mc/java/install", jsonInit("POST", { feature, vendor })),
+    installJava: (feature: number, vendor = "temurin", source?: string) =>
+      request<{ taskId: string }>("/api/mc/java/install", jsonInit("POST", { feature, vendor, source })),
+    javaSources: () => request<JavaSourcesInfo>("/api/mc/java/sources"),
+    setJavaSourcePolicy: (policy: string) =>
+      request<JavaSourcesInfo>("/api/mc/java/sources", jsonInit("PUT", { policy })),
+    probeJavaSources: (vendors?: string[]) =>
+      request<JavaSourcesInfo>("/api/mc/java/sources/probe", jsonInit("POST", vendors ? { vendors } : {})),
     removeJava: (feature: number) =>
       request<{ ok: boolean; removed: boolean }>(
         `/api/mc/java/${feature}/remove`, jsonInit("POST", {}),
@@ -1000,6 +1005,39 @@ export const api = {
       request<McInstance>(`/api/mc/instances/${encodeURIComponent(id)}`),
     instanceJava: (id: string) =>
       request<McInstanceJava>(`/api/mc/instances/${encodeURIComponent(id)}/java`),
+    /** 种子预览：这台版本的服务端 jar / Java 是否就绪（不触网）。 */
+    previewCapabilities: (version: string) =>
+      request<McSeedPreviewCapabilities>(
+        `/api/mc/preview/capabilities?version=${encodeURIComponent(version)}`,
+      ),
+    /** 起一次预览；同一个 (版本, 种子, 半径, 高度) 只会真跑一次。 */
+    previewStart: (body: {
+      version: string;
+      seed: string;
+      radius: number;
+      biomeY?: number;
+      mode?: "detail" | "biome";
+      engine?: "java" | "server";
+      quality?: "standard" | "high" | "ultra";
+    }) =>
+      request<McSeedPreviewJob>("/api/mc/preview", jsonInit("POST", body)),
+    previewJob: (id: string) =>
+      request<McSeedPreviewJob>(`/api/mc/preview/${encodeURIComponent(id)}`),
+    previewCancel: (id: string) =>
+      request<{ ok: boolean }>(`/api/mc/preview/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    previewMeta: (id: string) =>
+      request<McSeedPreviewMeta>(`/api/mc/preview/${encodeURIComponent(id)}.json`),
+    /** 已缓存的预览结果（最近 30 个），关掉页面也还在。 */
+    previewHistory: () => request<McSeedPreviewHistory>("/api/mc/preview/history"),
+    previewHistoryMeta: (id: string) =>
+      request<McSeedPreviewMeta>(`/api/mc/preview/history/${encodeURIComponent(id)}.json`),
+    previewHistoryDelete: (id: string) =>
+      request<{ ok: boolean }>(`/api/mc/preview/history/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    /** 结构位置查询；exact=true 时起服务端跑 /locate 拿精确坐标。 */
+    previewStructures: (body: { version: string; seed: string; radius: number; type?: string; exact?: boolean }) =>
+      request<McSeedPreviewStructures>(
+        `/api/mc/preview/structures?version=${encodeURIComponent(body.version)}&seed=${encodeURIComponent(body.seed)}&radius=${body.radius}${body.type ? `&type=${encodeURIComponent(body.type)}` : ""}${body.exact ? "&exact=true" : ""}`,
+      ),
     create: (body: {
       name: string;
       version: string;
@@ -1829,6 +1867,28 @@ export interface McModHit {
 }
 
 /** GET /api/mc/java/runtimes：面板托管的 JRE 与 Adoptium 可下载项。 */
+export interface JavaSourceRow {
+  id: string;
+  label: string;
+  host?: string;
+  vendors: string[];
+  ok?: boolean;
+  speedKBps?: number;
+  sampleBytes?: number;
+  durationMs?: number;
+  probedAt?: string;
+  failures?: number;
+  skipUntil?: string;
+  error?: string;
+}
+
+export interface JavaSourcesInfo {
+  policy: string;
+  envOverride?: string;
+  sources: JavaSourceRow[];
+  choices: Record<string, string>;
+}
+
 export interface McJavaRuntimesSnapshot {
   installed: { feature: number; path: string; vendor?: string; vendorLabel?: string;
     version?: string | null; bytes?: number }[];
@@ -1893,6 +1953,111 @@ export interface McInstanceJava {
   selected: string | null;
   effective: McJavaProbe;
   options: McJavaProbe[];
+}
+
+/** GET /api/mc/preview/capabilities：这个版本现在能不能预览。 */
+export interface McSeedPreviewCapabilities {
+  version: string;
+  /** `server.jar` 是否已在面板缓存里（不在就要先下载一次）。 */
+  jarPresent: boolean;
+  /** 这个版本需要的 Java 大版本。 */
+  javaRequired: number;
+  /** 面板里有没有装这个 Java。 */
+  javaReady: boolean;
+  /** 当前是否有预览在跑（全局单飞）。 */
+  running: boolean;
+}
+
+/** 一次种子预览的作业状态。 */
+export interface McSeedPreviewJob {
+  id: string;
+  state:
+    | "QUEUED"
+    | "RESOLVING"
+    | "STARTING"
+    | "GENERATING"
+    | "SAVING"
+    | "PARSING"
+    | "RENDERING"
+    | "DONE"
+    | "FAILED"
+    | "CANCELLED";
+  label: string;
+  percent: number;
+  chunksDone: number;
+  chunksTotal: number;
+  /** 超时收尾时仍有图，但不满整块。 */
+  partial: boolean;
+  version: string;
+  seed: string;
+  radius: number;
+  biomeY: number;
+  /** 缺省是详细地图；`biome` 是稀疏采样的群系速览。 */
+  mode?: "detail" | "biome";
+  /** 计算引擎：`java` 用 cubiomes 内核，`server` 起真服务端。 */
+  engine?: "java" | "server";
+  /** Java 引擎的采样密度：`high` 更清晰但更慢，`ultra` 最清晰但最慢。 */
+  quality?: "standard" | "high" | "ultra";
+  createdAt: string;
+  elapsedMs?: number;
+  /** 剩余秒数的粗略估计，进度太小时不给。 */
+  etaSeconds?: number;
+  error?: string;
+  imageReady: boolean;
+  /** 服务端最近几十行输出，失败时用来解释「为什么」。 */
+  log: string[];
+}
+
+/** 一条试过的种子。 */
+export interface McSeedPreviewHistoryEntry {
+  id: string;
+  version: string;
+  seed: string;
+  radius: number;
+  biomeY: number;
+  mode?: "detail" | "biome";
+  engine?: "java" | "server";
+  quality?: "standard" | "high" | "ultra";
+  generatedAt: string;
+  partial: boolean;
+  bytes: number;
+  structures?: number;
+}
+
+export interface McSeedPreviewHistory {
+  limit: number;
+  seeds: McSeedPreviewSeedGroup[];
+}
+
+/** 一个种子下缓存的全部变体（版本 / 引擎 / 分辨率 / 范围）。 */
+export interface McSeedPreviewSeedGroup {
+  seed: string;
+  variants: McSeedPreviewHistoryEntry[];
+}
+
+/** 与图片一起缓存的元数据。 */
+export interface McSeedPreviewMeta {
+  version: string;
+  seed: string;
+  radius: number;
+  biomeY: number;
+  chunks: number;
+  partial: boolean;
+  generatedAt: string;
+  structureCounts: Record<string, number>;
+  structures: { id: string; chunkX: number; chunkZ: number; x: number; z: number; approximate?: boolean }[];
+  /** 史莱姆区块的区块坐标；0,0 是地图中心。 */
+  slimeChunks: { x: number; z: number }[];
+}
+
+/** GET /api/mc/preview/structures 的响应。 */
+export interface McSeedPreviewStructures {
+  version: string;
+  seed: string;
+  radius: number;
+  exact: boolean;
+  exactError?: string;
+  structures: { id: string; x: number; z: number; approximate: boolean }[];
 }
 
 export interface McBackup {

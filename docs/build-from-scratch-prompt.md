@@ -1,54 +1,239 @@
-# 从零重建 HDSL-web：给模型的任务提示词
+# 从零重建 HDSL-web：任务提示词
 
-> ## ⚠️ 只给"从零新建的项目"用
+> **这是一段提示词，不是手册。**
 >
-> **如果你是在已有的 HDSL-web 仓库里接手工作，不要按本文重建。** 代码已经在这里了，照本文动手
-> 只会覆盖真实实现、丢掉这些修复的来龙去脉。那种情况请读：
->
-> - [`CHANGELOG.md`](../CHANGELOG.md) 最近一节 —— 当前状态与最近一轮改动；
-> - 最新的 `session-handoff-*.md` —— 接手时的现场、发版流程、踩过的坑；
-> - [`plan.md`](plan.md) —— 原始设计；
-> - 各模块文档（`web-shell.md`、`brands.md`、`octop.md`、`deployment.md`、`design-notes.md`、
->   `panel-agent.md`、`system-monitor.md`）与施工图 [`ui-spec.md`](ui-spec.md)。
->
-> 本文的唯一用途：**仓库被清空、或换一个模型从空目录重写时**，把「要求」和「坑」一次性交代清楚。
-> 判断标准很简单——你所在的目录里已经有 `src/`、`web/`、`plugins/` 了吗？有，就关掉本文。
-
-> 这份文件本身就是一段提示词：把下面「任务」整段交给一个模型，它可以不知道本项目的历史，只凭它
-> 从空仓库把项目建出来。写的是**要求与坑**，不是实现讲解——实现方式可以不同，坑不能踩第二遍。
-> 维护约定：每修一个"只有跑起来才看得见"的问题，就往 §5 加一条，并写清「现象 / 根因 / 正确做法」。
+> - 开工前读 §1–§6，够用了。附录是查的，不是读的。
+> - **附录 C（35 条坑）开工前不要读**。做到对应模块时再翻——提前读只会占满注意力，
+>   然后在真正需要它的时候想不起来。
+> - 只适用于**空目录**。目录里已经有 `src/`、`web/`、`plugins/` 的话，关掉本文，
+>   去看 `CHANGELOG.md` 最近一节和最新的 `session-handoff-*.md`。
 
 ---
 
-## 任务
+## 1. 任务
 
-从**空仓库**开始，实现 **HDSL-web**：一个把 DeepSeek Harness（简称 dsh）以及若干第三方 AI 客户端
-**以 web 面板的形式管起来**的自托管服务。它必须做到：
+从空仓库实现 **HDSL-web**：把 DeepSeek Harness（下称 dsh）和若干第三方 AI 客户端
+以 Web 面板的形式管起来的自托管服务；外加一个把 Minecraft 种子查询做成纯计算的子包。
 
-1. 一条命令产出**单个可执行 jar**（`java -jar hdsl-web.jar`），面板自带前端静态资源、自带两个第一方
-   TUI 插件包，**离线可用**：目标机器上没有 npm、没有 registry 也能装。
-2. 能把若干「实例」跑起来并反代它们：每个实例是一份独立的 home，只监听回环，浏览器经面板的
-   `/i/<id>/` 访问；面板负责会话鉴权、`Host` 透传、Cookie 路径隔离、WebSocket 中继、页面挂载点改写。
-3. 提供**网页终端**：在浏览器里跑实例自己的 TUI（PTY 在服务端，浏览器只是查看器），带开发者密码二次确认。
-4. 提供一套**品牌目录**（dsh / Kimi Code / OpenCode / Claude Web / ZCode / Octop），每个品牌的安装、
-   版本选择、启动、策略、终端入口都要能用。
-5. 提供**开发者模式**：开发者密码 + 限时提权；可选的作用域守卫（反代 / 实例写操作 / 全部写操作）与
-   **紧急停机**（E-Stop）。
-6. 产出一个 Go 客户端（`client/hdsl-tui`），能在服务器上交互式挑实例、开终端，5 平台交叉编译。
-7. 全套文档：部署、协议、设计笔记、安全模型、会话交接稿，中文，与实现一致。
-8. **前端界面是桌面版的像素级复刻**（§2.10）：桌面与手机都能用；品牌实例在实例列表页**原地切换**，
-   不开第三层页面；不可用功能一律变灰并写明原因。
-9. **面板自己的 agent 票**（§2.11）：给跑在面板里的 agent 一把限权的钥匙（只读列表 / 启停 / 终端 /
-   MC 控制台等），与管理员会话、开发者密码都分开；带「自杀闸」。
+三条硬边界，破了任何一条都不是这个项目：
 
-技术栈固定为：**Java 17**（`options.release = 17`，允许用更高 JDK 编译，但**不得使用 JDK 18+ API**）、
-Gradle（shadow 插件打单 jar）、Jetty 12（ee10）、Gson、JNA（仅 PTY）；前端 React 18 + react-router 6 +
-TypeScript（strict）+ Vite 6 + xterm 6 + `@material/material-color-utilities`（Monet 取色）、`es-check`
-做语法下限检查；客户端 Go 1.24。**不引 UI 组件库、不引 CSS 框架**。许可证 GPL-3.0-or-later。
+1. **单 jar、离线可用**。一条命令产出 `hdsl-web.jar`，前端静态资源与两个第一方插件包
+   都在里面，目标机器没有 npm、没有 registry 也能装。
+2. **不用 UI 组件库、不用 CSS 框架**；Java 17 release 编译；GPL-3.0-or-later。
+3. **种子地图内核零依赖**、可脱离面板单独编译运行（它只用 JDK 标准库）。
+
+其余约束见附录 A.1，对外契约见附录 A.2——那两节是"名字固定、不能改"的部分。
+
+## 2. 架构：先立地基，再接线
+
+这个项目里真正需要"设计"的只有一层地基。后面所有功能都是往地基上接线——
+**地基不牢，每加一个功能就要改一次结构，返工就是这么来的。**
+
+### 2.0 地基（六件事，做完才算能开工）
+
+| 地基 | 内容 | 谁在复用 |
+|---|---|---|
+| 实例模型 | id / home / 端口 / 状态机 / 日志 / 安装产物 | 品牌、MC、以及"从实例带入"的功能 |
+| 生命周期 | 安装 → 启动 → 停止 → 强杀 → 崩溃退避重启 | 所有实例类型 |
+| 反代 `/i/<id>/` | 剥前缀、Host 透传、Cookie Path 改写、页面挂载点改写、WS 中继 | 所有自带网页的实例 |
+| Web Shell | 服务端 PTY + 一次性 ticket + 终端 WS | dsh、品牌、MC 控制台 |
+| 事件总线 | **一个 `/ws`、多个 topic**；进度/流式/状态都走它 | 聊天、任务条、终端、系统状态 |
+| 身份 | 登录会话 + 开发者提权 + agent 票（scope） | 所有写操作 |
+
+**一条纪律：新功能只能往这六件上接，不许另开一套。**
+
+- 聊天不是新写推送，是往事件总线加 `chat:<id>` topic；
+- 品牌不是新写安装流程，是往实例模型里加一份「来源描述」；
+- MC 控制台不是新写终端，是复用 Web Shell 的 PTY；
+- 新页面不是新开连接，是订阅已有的 topic。
+
+判断一个改动是否"接对了"：**它有没有新增一套平行机制？** 有，就是接错了。
+
+### 2.1 服务与静态资源
+一个 Jetty 服务，默认 3080。`/` 出 SPA、`/api/*` 是 REST、`/ws` 是事件流、
+`/i/<id>/` 是反代、`/ws/terminal/<ticket>` 是终端。支持子路径部署（挂载点由服务端
+注入 `<base href>`），前端不得写死根路径。
+
+### 2.2 认证与提权
+单管理员。密码 PBKDF2WithHmacSHA256、每用户独立盐、21 万次迭代。会话是
+`HttpOnly` + `SameSite=Strict` 的 cookie（HTTPS 下加 `Secure`），滑动过期。
+另有**开发者密码**：独立于登录密码，换限时提权，管终端、agent 凭据、危险设置。
+
+### 2.3 反代 `/i/<id>/`
+剥前缀、`Host` 原样透传（实例靠它判同源）、hop-by-hop 头双向剥离、
+`Set-Cookie` 的 `Path=/` 改写成 `/i/<id>/`（多实例同名 cookie 不互相覆盖）。
+页面还要注入 `<base href>` 并改写根路径资源引用，WebSocket 一并中继。
+**这是最容易被低估的一件地基**：它决定了后面每接入一个自带网页的工具要花多久。
+
+### 2.4 网页终端
+服务端起 PTY，浏览器只是查看器。POSIX 用 `posix_spawn`（不经 shell）；Windows 用
+ConPTY，更早的系统明确拒绝而不是回落到桌面窗口。连接用一次性 ticket。
+终端是**一条 WebSocket + 一个 ticket**，不要为它另开鉴权体系。
+
+### 2.5 第一方 TUI 插件
+两个 npm 包，要能被 `dsh plugin add file:<tarball>` 离线装进实例：
+**进程内版**（peer 依赖 harness 包）与 **ACP 版**（独立进程）。零运行时依赖。
+它们是**构建产物**，不是服务；打包进 jar 即可，不参与运行时结构。
+
+### 2.6 品牌目录（接线示范）
+五个品牌（Kimi Code、OpenCode、Claude Web、Octop、Hermes）加 dsh、ZCode 两个家族。
+每个品牌在代码里应该只是**一份描述**：来源类型（npm / GitHub Release / 源码构建）、
+包名或仓库、版本发现方式、启动命令、端口探测、网页根路径、可用的终端类型。
+
+> **验收标准**：加一个新品牌，只允许新增一个描述文件 + 必要时一个小适配器，
+> 不允许改实例模型、反代、终端、事件总线中的任何一行。改了就说明抽象没立住。
+
+### 2.7 开发者守卫与紧急停机
+守卫 `scope = off | proxy | instance | all`，逐级包含；默认 `off`。它是**门**不是
+断路器：只挡新请求，不杀正在跑的进程。
+E-Stop 是断路器：三步确认（含手打短语），原子地冻结一切并杀掉所有实例进程树，
+解除要冷却一小时，状态只存在内存里。
+两者都只读写**身份**与**生命周期**两块地基，不碰别的。
+
+### 2.8 Go 客户端
+`client/hdsl-tui`：登录、开发者提权、实例列表、开终端（WS + 本地渲染输入框）。
+5 平台交叉编译，CI 挂到 Release。它**只是另一个 API/WS 消费者**——如果它需要
+服务端为它加接口，说明 API 有缺口，回去补 API，而不是给它开后门。
+
+### 2.9 配置与部署
+`server.yaml` 所有键可选，非法值启动即失败并指出字段；环境变量优先级高于文件。
+覆盖：绑定与端口、公开地址、HTTPS（证书/重定向/反代信任）、认证、Web Shell、
+开发者守卫、agent、MC、转码、日志。
+
+### 2.10 前端界面
+不是"够用的管理后台"，是桌面版的像素级复刻。颜色只走 CSS 变量，`root.css` 是唯一
+色源（Monet 从壁纸取色，含深浅色）。见 §4 的 UI 大纲。
+前端同样只消费 API 与 `/ws`，**不假设任何后端内部结构**。
+
+### 2.11 面板 agent 的票
+让跑在面板里的 agent 能查实例、必要时启停，而不把管理员会话交给它。agent 密码
+换票，票带十二类 scope，**权限在服务端判定**，客户端传什么不算数。带"自杀闸"：
+不许停掉自己所在的实例、不给自己开终端。它复用**身份**这块地基，不新建鉴权路径。
+
+### 2.12 种子地图内核（旁路）
+把"给定种子、给定坐标，这里是什么群系、附近有什么结构"变成纯计算，不再启动
+Minecraft 服务端。覆盖 1.12.2 到最新正式版，用三层差分验证卡住正确性（附录 B.1）。
+
+**它是全项目唯一的旁路**：零依赖、可独立编译，不 import 面板任何类，也不接事件
+总线。面板通过一个适配层调用它——这是刻意的不对称，因为它要能被单独拿走。
+
+
+## 3. 技术栈大纲
+
+| 层 | 选型 | 约束 |
+|---|---|---|
+| 语言 | Java 17 | `options.release = 17`；可用更高 JDK 编译，**不得使用 JDK 18+ API** |
+| 构建 | Gradle + shadow | 单 jar；插件 tarball 与前端产物打进去 |
+| HTTP | Jetty 12（ee10） | 不用 Spring；Servlet + 少量 Filter |
+| JSON | Gson | 不引 Jackson |
+| SQLite | sqlite-jdbc | 只有聊天存档用 |
+| PTY | JNA | 仅此一处用 JNA |
+| 前端 | React 18 + react-router 6 + TypeScript(strict) + Vite 6 | 不引 UI 库、不引 CSS 框架 |
+| 终端前端 | xterm 6 | 注意打包器的压缩配置（附录 C） |
+| 取色 | `@material/material-color-utilities` | Monet 主题 |
+| 语法下限 | `es-check es2020` | 构建后必须过 |
+| 客户端 | Go 1.24 | 5 平台交叉编译 |
+| 许可证 | GPL-3.0-or-later | 每个源文件带头 |
+
+## 4. UI 大纲
+
+### 4.1 信息架构
+
+```
+顶部：品牌栏（红色，左侧返回、标题、右侧账户菜单）
+左侧主导航：实例列表 · 聊天 · 下载与安装 · 账号 · 设置
+
+实例列表页内部还有一层侧栏：
+  ├ DSH 实例
+  ├ 第三方品牌 ── 品牌实例 / TUI 品牌实例
+  └ MC ── 原版服务器实例 / 第三方服务器实例 / 种子预览
+
+聊天页：会话侧栏（助手切换 + 搜索 + 按日期分组）+ 消息流 + 输入区
+设置页：通用 / Node.js / Java 运行时 / 外观 / 下载源 / 品牌实例 / 证书管理 /
+        开发者模式 / 环境体检 / 关于
+```
+
+**切换方式是原地切换，不开第三层页面。** 实例列表的三种视图共用同一个 URL
+（`?view=`），侧栏高亮跟着变。
+
+### 4.2 页面清单
+
+| 页面 | 目的 | 主要区块 | 空态 |
+|---|---|---|---|
+| 登录 / 首次设置 | 进得来 | 单卡片表单、错误就地显示 | 首次进是"创建管理员" |
+| 实例列表 | 找到并进入实例 | 二级侧栏 + 工具栏（刷新/搜索/全局设置/新建）+ 卡片列表 | 一句话 + "新建实例" |
+| 实例详情 | 管一台 dsh/品牌实例 | 左侧操作区（启停）+ 页签（概览/插件/终端/日志/设置） | 各自页签内说明 |
+| MC 实例详情 | 管一台 MC 服务端 | 页签：概览/控制台/服务端设置/插件模组/世界备份/玩家/世界/种子预览/日志 | 同上 |
+| 种子预览 | 看一个种子的世界 | 表单（版本/种子/类型/范围）+ 地图 + 结构统计 + 历史 | "填个种子试试" |
+| 聊天 | 和模型对话 | 会话侧栏 + 消息流 + 输入区（附件/模型/思考档） | "发第一条消息" |
+| 设置（十组） | 改全局配置 | 左侧分组 + 右侧表单行 | 每组自己说明 |
+| 下载与安装 | 装实例/整合包 | 页签 + 卡片网格 | 无版本时提示联网 |
+| 账号 | 管 AI 供应商账号 | 列表 + 新增/编辑弹层 | "添加一个账号" |
+
+每个页面都必须有：**加载态**（骨架或"正在读取…"）、**错误态**（就地文字，不弹
+原生框）、**空态**（一句话 + 一个动作）。
+
+### 4.3 视觉规则
+
+- **颜色只用变量**。`root.css` 是唯一色源，取自壁纸的 Monet 主题；组件里出现
+  十六进制色值就算不合格（图表除外）。
+- 尺寸、圆角、字号、间距一律按 `ui-spec.md`；不要凭手感加魔法值。
+- 图标统一 20px，按钮高 36/40，卡片之间 8px 栅格。
+- 危险操作（删除、强杀、E-Stop）用页面内确认框，不用 `confirm()`。
+- 不可用功能**变灰并写明原因**，不要隐藏——用户要知道"为什么不能点"。
+
+### 4.4 移动端
+
+- 断点 **760px**。布局规则用**宽度**触发，不要挂在 `pointer`/`hover` 上：桌面浏览器
+  的响应式模式默认不模拟触摸，`(hover: none) and (pointer: coarse)` 不成立。
+- 二级侧栏在窄屏变成**横向可滑动的页签行**；工具栏同样横向滚动。
+- flex 行里的按钮必须 `flex: 0 0 auto`，否则会被压到 min-content——中文按钮会变成
+  一列竖排字。
+- 触摸目标 ≥ 40px；输入框字号 16px（iOS 聚焦不缩放页面）。
+- 宽表格在手机上是卡片，不是横向滚动。
+
+### 4.5 交互通则
+
+- 长任务（安装、生成、导入）走**任务条**：进度、可取消、失败就地展示原因。
+- 所有异步操作要有"进行中"状态，禁止连点。
+- 错误文案分两层：人话在前，错误码在后；不要把堆栈丢给用户。
+- 同一操作不要有两种入口的两种行为。
+
+## 5. 实现顺序
+
+四个阶段。**前一阶段不过，不要开下一阶段。**
+
+| 阶段 | 做什么 | 退出条件 |
+|---|---|---|
+| **A 地基** | 2.0 的六件事 + dsh 实例端到端 + 单 jar 打包 | 一条命令起服；能登录；`/i/<不存在>/` 是 404 不是 500；终端能开能关；`/ws` 能收到一条真实事件 |
+| **B 地基验收** | 接入**第二个**实例类型（选一个品牌，或 MC 服务端），**不允许改地基** | 新类型只新增描述与适配；实例模型/反代/终端/事件总线零改动 |
+| **C 接线** | 品牌注册表补齐、聊天（只加 topic）、agent 票、完整 SPA、Go 客户端 | 五品牌能装能起；聊天复用 `/ws` 不新开连接；附录 B.2 人工清单过 |
+| **D 内核** | seedmap core + 三层验证 + 适配层 | L1 六版本差异 0；L2 差异已登记；L3 抽样 0 |
+
+**B 是这套架构的真正验收。** 标准很硬：如果为了接入第二个类型不得不改地基，
+说明地基抽象错了——回去改地基，不要在新类型里打补丁。B 过了，后面每加一个品牌、
+每加一个功能都是接线，成本应该只是一份描述 + 一点适配。
+
+**D 不许提前。** 前三个阶段都不依赖它，它也不该拖慢前三个阶段。
+
+
+## 6. 完成定义
+
+以下全部成立才算做完：
+
+- 附录 B.1 的每条构建与验证命令都绿；
+- 附录 B.2 的人工清单逐条过；
+- 文档与实现一致（改了什么就改文档）；
+- 没有 `TODO`、`FIXME`、注释掉的死代码；
+- `git log` 是一条条能读懂的提交，不是"wip"。
 
 ---
 
-## 1. 硬约束（违反任何一条都算不合格）
+## 附录 A 约束与契约
+
+> 名字固定、不能改的部分。开工前扫一眼，别背。
+
+### A.1 硬约束（违反任何一条都算不合格）
 
 - **单 jar**：`shadowJar` 产物包含 `web/` 构建出的静态资源与 `plugins/` 打出的 npm tarball；不含任何
   需要联网下载的运行时依赖。
@@ -65,161 +250,7 @@ TypeScript（strict）+ Vite 6 + xterm 6 + `@material/material-color-utilities`�
 
 ---
 
-## 2. 功能清单与验收点
-
-### 2.1 服务与静态资源
-- 一个 Jetty 服务，端口默认 3080；`/` 出 SPA（`<base href>` 由服务端按挂载点注入），`/api/*` REST，
-  `/ws` 事件流，`/i/<id>/` 反代，`/ws/terminal/<ticket>` 终端。
-- 支持子路径部署（`HDSL_BASE_PATH=/hdsl`）：所有前端资源与 API 路径都要跟着走；`<base href>`、
-  运行时注入的 `window.__HDSL_BASE__`、WebSocket URL 都必须带挂载点。
-- 首次启动无用户时提供 `POST /api/auth/setup`；`HDSL_ADMIN_PASSWORD` 可用于首启建号。
-
-### 2.2 认证与提权
-- 单管理员；PBKDF2WithHmacSHA256，per-user 盐，21 万次迭代；`users.json` 0600。
-- 会话 = `HttpOnly` + `SameSite=Strict` cookie（HTTPS 下加 `Secure`），`Path` 跟挂载点走，
-  滑动过期（默认 168h）；改密码/改用户名让同用户其它会话立即失效。
-- `auth.disabled: true` 仅当绑定回环时允许。
-- **开发者密码**（第二把钥匙，`developer.json` 0600）：会话级提权 30 分钟滑动、可延长一次到 3 小时、
-  按 **session token** 记账（不是用户名）、10 分钟内 3 次错误锁 10 分钟；`POST /api/developer/elevate`
-  响应里额外返回一个 32 字节 **bearer token**（内存、同 TTL、改密码即失效），供无法持 cookie 的脚本
-  用 `Authorization: Bearer` 调接口。
-- **出站 TLS 的信任窗口**（`/api/network/trust`）：面板自己连 npm/GitHub 时，机器上的 TLS 检查代理
-  （杀毒、网关、FastGithub 一类）会用自己的根证书签名，`cacerts` 不认——浏览器打得开、面板报
-  `PKIX path building failed`，而用户看到的是"版本列表是空的"。所以：失败要说人话（谁签的、为什么、
-  两条出路），默认严格，放宽必须由人逐字回传一句确认语、1–1440 分钟、写进 `server.yaml`、可撤销、
-  进审计。窗口内也不是直接跳过：先按 `cacerts`、再按机器自己的根证书库校验，两张都不认才接受并记日志。
-  **默认选最新稳定版 Node 的那个坑（§5.15）和这个坑是邻居**：都在"装东西"这条路上。
-- **开发者面：HTTPS 是完整体，HTTP 只有第二因子**（读主连接器真实状态，尊重
-  `https.trust_forwarded_proto`）：HTTP 下可以设置/提权开发者密码，但终端仍 403
-  `insecure_transport`，agent 密码与 guard/终端设置仍要求 `tls_required`；远程明文 HTTP
-  强制 `developer_guard.scope=ALL`。密码字段/聊天信封只防被动嗅探，不能替代 TLS。
-
-### 2.3 反代 `/i/<id>/`
-- 剥掉前缀、`Host` 原样透传（实例靠 `Origin == Host` 判同源）、hop-by-hop 头双向剥离、
-  `Set-Cookie` 的 `Path=/` 改写成 `/i/<id>/`（多实例同名 cookie 不互相覆盖）。
-- 页面改写：注入 `<base href>`、把根路径资源引用改到挂载点、给按 `location.pathname` 路由的客户端
-  注入 router shim；**CSP 严格的实例不能用内联脚本**，脚本要以同源 `<script src>` 提供。
-- WebSocket 中继：`/i/*` 的升级请求要在 WebSocket 层处理（servlet 过滤器看不到升级），
-  逐字转发 cookie/headers，双向 relay，消息上限要调高（一条会话历史就能超过 64 KiB）。
-- `GET /i/<id>`（无斜杠）301 到 `/i/<id>/`；未运行 502、不存在 404，错误体是 JSON。
-- 只对 gzip/deflate 做解压改写：遇到 br/zstd 要么把上行 `Accept-Encoding` 归一成 `identity`，
-  要么干脆不改写原样透传，**不要**把压缩字节当文本处理。
-
-### 2.4 网页终端
-- POSIX 用 `posix_spawn` 起 PTY（不经 shell），子进程自己的进程组；Windows 从 10 1809 起用
-  `CreatePseudoConsole` 起同样的浏览器 PTY（更早的系统明确 409 拒绝，不回落桌面窗口）。
-- 一次性 ticket（32 字节随机、30 秒 TTL、绑定会话与实例）桥接「POST 开终端」与「WS 挂载」；
-  每实例至多一个终端；`setMaxIdleTimeout(0)`（用户发呆时不能被踢）。
-- 退出顺序：关输入 → 有界 drain → 关 master → `SIGKILL` 进程组；面板退出时全关。
-- 浏览器侧 xterm 6：CJK 等宽字体栈、整帧与光标都没变时**一个字节都不写**、组词期间缓冲输出
-  （见 §5.4）。
-
-### 2.5 第一方 TUI 插件（`plugins/`）
-- 两个包，各是一个 npm 包（`package.json` + `files` 白名单），要能被 `dsh plugin add file:<tarball>`
-  离线装进实例：**进程内版**叠在 dsh 之上（peer 依赖 harness 包，运行时动态 import）与 **ACP 版**
-  （独立进程，零依赖）。两者的能力差异要在 UI 与文档里说清（ACP 没有命令运行时）。
-- 版本号与后端里的清单（`DshTuiPlugins.ENTRIES`）保持一致；**内容变了但版本没变也要能被发现**——
-  面板按安装包摘要判断"有新版本"，记录在 `<实例 home>/.hdsl-web/first-party-installs.json`。
-- 半安装态（目录在、文件不在）要显示"安装未完成"并给「重新安装」，不能显示成已安装。
-- 终端内的交互约定：审批对话框四选项（数字 1-4）、`/` 命令菜单画在输入框**下方**、Tab 补全、
-  `ctrl+j` 换行、`ctrl+s` 插话、`shift+tab` 计划模式、状态栏（模型 · 档位 · 计划 · cwd · 会话 · 上下文）。
-
-### 2.6 品牌目录
-- **五个品牌**（Kimi Code、OpenCode、Claude Web、Octop、Hermes）加 **dsh** 与 **ZCode** 两个独立实例
-  家族；安装源分四种：npm（Kimi、OpenCode）、GitHub Release（Octop）、GitHub 源码构建（Claude Web、
-  Hermes）、自建分发（ZCode）。dsh 自己也是 GitHub Release 安装。
-- Claude Web 有两个特殊处：官方内核在**不受支持地区会被 Anthropic 直接 403**（要给出人话提示并允许
-  改走社区引擎），以及实例级 `ANTHROPIC_BASE_URL` 覆盖（网关/中转，界面里能改）。
-  每个品牌的：版本目录、安装（含进度与日志）、启动/停止、端口分配（回环）、策略、终端入口、页面反代。
-- **安装目录必须有完成标记**：安装成功后写 marker（Octop 是 `octop-install.json`），只有带 marker
-  的目录才算"已安装"；`*.previous` 这类暂存名不是版本（§5.7）。
-- **运行中的版本不能重装**（任何安装路径都要 409）。
-- Octop 额外两条：portable 包 + 本地源码编译（Linux）；前端要注入挂载点补丁（见 `docs/octop.md`）。
-- 品牌策略（开发者模式）：单实例（其余灰掉、数据保留，**停止仍允许**）、固定反代 `/i/octop/`
-  （开启后「打开」按钮与 open 接口都要返回这个固定路径）、源码编译开关。策略存
-  `<data>/brands/policy.json`。
-- **图标**：只用许可清晰的标志文件（本项目自己的 `NOTICE` 里有逐个来源）。**商标不随代码许可授予**：
-  上游是 MIT 不等于可以用它的 logo；没有明确授权就用中性图标 + 文字标签。
-
-### 2.7 开发者守卫与紧急停机
-- 守卫 `developer_guard.scope = off | proxy | instance | all`（默认 off，存 `server.yaml`，
-  环境变量 `HDSL_DEVELOPER_GUARD`）。逐级包含：`proxy` 管 `/i/*`（HTTP + WS）；`instance` 再加实例族
-  的写操作（`/api/instances|brands|zcode|packs|settings|node` 的 POST/PUT/PATCH/DELETE）；
-  `all` 再加实例族之外的写操作。
-- **三档都不拦读**：前端要靠 `/api/*` 的 GET 渲染，拦了只会让面板看起来"刚装好、什么都没有"。
-- 守卫是**门禁不是断路器**：只挡新请求，已加载的页面、已附着的终端、正在跑的 agent 都不动。
-- 守卫挡住操作时，前端要**弹开发者密码框**并重试一次，而不是甩一句错误；`/i/*` 的拦截页也要带密码表单
-  （传输策略拒绝时不给表单，因为填了也没用）。
-- **紧急停机**：三次确认（先 `GET /api/developer/estop/preview` 列出会杀掉哪些实例/终端）→
-  `POST .../engage` 先翻转状态、再关所有终端、再强杀所有实例的整棵进程树（先收集 descendants，再
-  `destroyForcibly`，**不跑用户配置的 post-exit 脚本**）；之后 `/i/*`、实例写操作、终端一律 503，
-  登录/健康检查/开发者页/只读列表与日志/`/ws` 照常。冷却 1 小时，未到点 409 `estop_cooldown`。
-  **状态只在内存**：重启进程/容器即解除（唯一的物理恢复方式）。重复按下不重置计时。
-
-### 2.8 Go 客户端（`client/hdsl-tui`）
-- 登录（保存会话、401 自动清）、开发者提权、实例列表、终端（WS + 本地渲染输入框）、
-  错误码 → 可执行文案的映射；5 平台交叉编译，CI 把二进制挂到 Release。
-
-### 2.9 配置与部署
-- `server.yaml` 全部键可选，非法值启动失败并指出字段；环境变量优先级高于文件。至少包含：
-  `bind_host`、`port`、`public_base_url`、`https.*`（cert/key/pkcs12/redirect/trust_forwarded_proto）、
-  `auth.*`、`web_shell.enabled`、`developer_guard.scope`、`zcode.*`。
-- HTTPS：支持 PEM / PKCS#12 / 自签生成 / 运行时热切换；`redirect_http`、`redirect_same_port`；
-  反代终结 TLS 时用 `https.trust_forwarded_proto` 显式打开信任。
-- Dockerfile：多阶段（node 构建 SPA → gradle 打 jar → runtime），tini 转信号，健康检查打 `/api/health`。
-  **runtime 阶段的底座是构建参数**（`HDSL_BASE`，默认 `debian:trixie-slim`，也可 Fedora / openSUSE），
-  包管理器按 `/etc/os-release` 分派；`tini` 软链到 `/usr/local/bin/tini`（openSUSE 在 `/usr/sbin`）；
-  架构用 `uname -m` 判断而不是 `dpkg`；ffmpeg 的 x264/x265 断言由 `HDSL_ENCODERS=required|optional`
-  控制（非 Debian 底座只有专利-free 构建，必须只告警）。细节见 `docs/deployment.md §4.1`。
-- **容器里的身份是两段**：面板 root（持有 `auth/`、`certs/`、`logs/`、`server.yaml`），agent 进程用
-  `setpriv` 降到 uid 1000；入口负责属主校正与 `umask 002`。裸部署没有这一层。见 §5.9。
-- 仓库自带 `docker-install.sh`（原地构建向导：数据/工作区/MC 目录、端口、镜像源、`--base`），
-  它**不整卷 chown**（那会把秘密交回去），属主交给容器入口。
-- 裸部署（systemd）文档：`HOME` 与 `HDSL_DATA` 必须指向服务用户可写的目录。
-
-### 2.10 前端界面（SPA）
-
-界面不是"够用的管理后台"，是**桌面版 HDSL 的像素级复刻**：同一套装饰边框、左侧导航、内页骨架、
-配色与字号。施工图纸是 [`ui-spec.md`](ui-spec.md)，颜色 / 间距 / 字号以它为准。
-
-- **颜色只走变量**：`root.css` 是唯一色源（Monet 从壁纸取色 + 深浅色），组件里**不许写死色值**。
-- **页面清单**（每个都要有加载 / 空 / 错误三态）：主页（当前实例 + 启动面板）、实例列表、实例详情
-  （启动 / 浏览 / 管理三组）、品牌实例层、下载页、设置页、账户页、新建实例向导、性能页。
-- **品牌层是实例列表页的一个视图，不是第三层页面**：点品牌**原地**把 `/instances` 换成品牌卡片，
-  不新增路由层级；只有进入某个实例详情才用路由。手机端靠这条活命，三层返回没人受得了。
-- **不可用要变灰，不许隐藏**（§1 已列为硬约束）：置灰的按钮旁边写「为什么 + 去哪儿解决」，例如
-  「需要 HTTPS → 去证书页」。开发者面在明文 HTTP 下整页只给提示与「去 HTTPS」入口。
-- **危险动作的视觉要分开**：停止实例是**红色药丸**按钮；删除、紧急停机各要二次 / 三次确认；终端的
-  「关闭」与「停止实例」是两个动作，文案不许混。
-- **终端**（xterm 6）：CJK 等宽字体栈；整帧未变不写字节、组词期间缓冲（§5.4）；工具栏显示「已接收
-  N KB」；WS 断开要有可见原因与重连；后端 409 的原文要展示，不许留白屏。
-- **手机版式**（两处判定必须逐字一致：`styles/mobile.css` 与 `hooks.ts`）：
-  `(max-width: 760px), (max-height: 520px)` 是布局断点，`(hover: none) and (pointer: coarse)` 是触摸
-  优化——两者独立。侧栏变抽屉、子侧栏变横向标签条、启动面板变贴底操作栏、`100dvh` +
-  `env(safe-area-inset-*)`、可点区域 44px、输入框 16px（iOS 聚焦不缩放）。桌面端样式**零变化**。
-- **构建**：`base` 必须是 `"/"`（相对 base 会让 `/instances/x` 刷新白屏）；`minify` 必须为 `false`
-  （§5.4.2）；`npm run compat` 跑 `es-check` ES2020，防止写出旧浏览器打不开的语法。
-- **图标与法务**：品牌 logo 只在「许可证 + 商标」都允许时使用，来源逐个记进 `NOTICE`；上游是 MIT
-  **不等于**可以用它的 logo，没有明确授权就用中性图形 + 文字标签。
-- **文案**：中文优先、动词开头、短句；API 错误统一 `{"error":"<code>: <照着做的一句话>"}`，前端按
-  `<code>` 前缀分流（如 `tls_required` → 弹 HTTPS 提示），不要把后端英文原话直接甩给用户。
-- **验收**：改版前后各留一张截图（`docs/screenshots/`）；真机至少过一遍 §6 的界面四条。
-
-### 2.11 面板 agent 的票（`panel-agent`）
-
-- 目的：让跑在面板里的 agent 能查实例、必要时启停，而**不把管理员会话**交给它。
-- 两把锁：agent 密码换票；票带 scope（只读列表 / 启停 / 开终端 / MC 控制台 / 聊天读写信 / 搜索等**十二类**），scope 在
-  **服务端**定，客户端传什么都不算数。agent 密码只在需要写的那几档有效。
-- 票默认只认**本机回环**来源；非回环要显式打开，并要求已登录会话。
-- **自杀闸**：票不许对「自己所在的那个实例」做停 / 删 / 开终端；判定靠**内核身份推导**
-  （socket inode → 持有进程 → 父链），不靠 agent 自报。dsh / 品牌 / ZCode 三个家族与 launch 路径
-  都要覆盖——漏一条就是「agent 把面板里自己在跑的实例停掉」。
-- 与开发者密码分开：开发者密码是**人**的第二把钥匙（§2.2），票是 agent 的限权钥匙，不要互相替代。
-- 审计里每条票操作都要有来源与 scope。
-
----
-
-## 3. 对外契约（最小集，名字固定）
+### A.2 对外契约（最小集，名字固定）
 
 | 面 | 契约 |
 |---|---|
@@ -229,6 +260,7 @@ TypeScript（strict）+ Vite 6 + xterm 6 + `@material/material-color-utilities`�
 | 反代 | `/i/<id>/`、`/i/octop/`（可选固定别名） |
 | 终端 | `POST .../terminal` → `{mode,protocol,ticket,ws}`，`WSS /ws/terminal/<ticket>` |
 | 开发者 | `GET /api/developer/status`（含 `https`、`guardScope`、`estop`）、`POST .../elevate`（返回 `token`）、`.../extend`、`.../revoke`、`.../web-shell`、`.../guard`、`.../estop/preview|engage|release` |
+| 种子预览 | `POST /api/mc/preview` → `{id,state,...}`；`GET /api/mc/preview/<id>`；`GET /api/mc/preview/<id>.png|.json|.txt`；`/capabilities`、`/history`、`/history/<id>`；`GET /api/mc/preview/structures?version&seed&radius[&type][&exact]` |
 | 事件 | `WS /ws`：实例状态、任务进度、日志行、外部实例变化 |
 
 审计：`<data>/logs/audit-*.jsonl`，每行一条 JSON，含时间、channel、动作、对象、结果、操作者、来源地址。
@@ -236,7 +268,11 @@ TypeScript（strict）+ Vite 6 + xterm 6 + `@material/material-color-utilities`�
 
 ---
 
-## 4. 构建与验证（缺一不可）
+---
+
+## 附录 B 验收
+
+### B.1 自动化：构建与验证（缺一不可）
 
 ```bash
 # 后端 + 两个插件（用 flock 串行，避免并发 Gradle 争锁）
@@ -252,7 +288,34 @@ node plugins/dsh-inproc-tui/scripts/check.mjs && node plugins/dsh-acp-tui/script
 # Go 客户端
 cd client/hdsl-tui && gofmt -l . | grep -v '^vendor/' ; go vet ./... ; go test ./...
 
-# 单 jar
+# 种子地图内核的单测（纯 JVM，不起服务端）
+./gradlew --no-daemon test --tests 'org.jackhuang.hmcl.web.minecraft.seedmap.core.*'
+```
+
+**种子地图的三层验证**（§2.12；L1/L2 几十秒，L3 是分钟级，按需跑）：
+
+```bash
+# L1：Java ↔ cubiomes C。先编一份 C 查询器（只在测试环境用，不进发布物）
+(cd /path/to/cubiomes && make release)
+gcc -O3 -I/path/to/cubiomes scripts/l1-cubiomes-ref.c \
+    /path/to/cubiomes/libcubiomes.a -lm -lpthread -o build/l1-cubiomes-ref
+java -cp build/classes/java/main:build/classes/java/test:build/resources/main \
+  org.jackhuang.hmcl.web.minecraft.seedmap.core.L1Verifier build/l1-cubiomes-ref
+# 断言：6 个版本（1.12.2/1.14.4/1.16.5/1.18.2/1.20.6/1.21.3）compared=900 mismatches=0
+
+# L2：Java ↔ 游戏自带群系源（需要一份反编译工程；scripts/L2BiomeProbe.java 放进去编译）
+#   先拿到运行 classpath，再跑比对器
+java -cp build/classes/java/main:build/classes/java/test:build/resources/main \
+  org.jackhuang.hmcl.web.minecraft.seedmap.core.L2Verifier /path/to/MCP-Reborn /tmp/l2-classpath.txt
+
+# L3：Java ↔ 真服务端区块（慢，覆盖少数种子）
+java -cp build/classes/java/main:build/classes/java/test:build/resources/main \
+  org.jackhuang.hmcl.web.minecraft.seedmap.core.L3Verifier \
+  /path/to/server.jar /path/to/java build/l3-work 1.21.2
+# 断言：差异 = 0，或每一条都登记在 docs/seedmap-deviations.md
+```
+
+**单 jar**
 flock /tmp/hdsl-gradle.lock ./gradlew --no-daemon shadowJar -PreleaseVersion=<版本>
 unzip -l build/libs/hdsl-web-<版本>.jar | grep -c first-party-plugins   # 必须是 2 个 tgz + index.json
 
@@ -292,7 +355,50 @@ HTTP），把"一个人会点到的路径"念一遍——`/api/node` 的字段�
 
 ---
 
-## 5. 已知的坑（照抄，别重新发现一遍）
+### B.2 人工验收清单（自动化测不到的部分）
+
+1. 独立数据目录起一个面板（**不要**在生产面板上试 E-Stop），装一个实例，打开页面、登录、发一条消息。
+2. 网页终端：中文输入法连续输入、粘贴多行、`ctrl+o` 展开、终端退出后重连。
+3. 手机：品牌实例列表可竖向滚动、行内按钮可横向滑动、长 url 不撑破卡片。
+4. 反代：子路径部署（`HDSL_BASE_PATH`）下页面与 WebSocket 都通。
+5. 开发者模式：提权 → 开守卫（proxy / instance / all 各试一次）→ 读仍然可用、写被要求密码 →
+   E-Stop 三次确认 → 冷却期内解除被拒 → 重启面板后解除。
+6. 品牌安装：portable 与源码构建各一次；中途杀面板，确认重启后会自动恢复/清理半安装。
+7. **容器的身份划分**：`docker cp scripts/verify-privilege-split.sh <容器>:/tmp/` 之后
+   `docker exec -u 1000 <容器> sh /tmp/verify-privilege-split.sh` ——
+   `auth/`、`logs/` 读写都被拒，实例目录与 pnpm store 可写。**注意 `docker exec` 默认用户不再是
+   agent**，不写 `-u 1000` 等于用 root 去验"agent 能不能写"，什么都验不出来。
+8. **ACL 存储**：`docker logs <容器> | grep "does not enforce mode bits"`。有输出就说明这台机器的
+   文件系统不认 mode 位（QNAP trimacl 一类），隔离在本机不成立——**写进部署记录，别对外声称有**。
+9. **从"单 uid"升级到"两段身份"**：用老卷起一次新镜像，确认入口把 `/data` 校正到 agent、把
+   `auth/`/`certs/`/`logs/`/`server.yaml` 收回 root，且实例仍能启动、终端能开（默认 workspace
+   必须是 `/home/hdsl/workspace` 或显式设了 `HDSL_WORKSPACE`）。
+10. **PTY 身份**：`ps -o uid= -p <tui pid>` 应是 agent uid，不是 0。终端里跑起来的 agent 也碰不到
+   面板的凭据，这是 §5.9 的验收面。
+11. **agent 侧的 pnpm**：`docker exec -u 1000 <容器> pnpm --version` 与 `pnpm config get registry`
+   都要正常返回；`ls -l /home/hdsl/.config/pnpm/config.yaml` 的属主应是 agent uid 而不是 root。
+   这一条不查，坏掉的形态是"面板一切正常，所有安装 `EACCES`"（§5.23）。
+12. **界面**：品牌层在 `/instances` 原地切换（不跳第三层）；停止是红色药丸；开发者面在 HTTP 下只给
+    提示 + 「去 HTTPS」；手机竖屏与横屏（844×390）各看一眼：抽屉、标签条、贴底操作栏。
+13. **终端时长**：提权 30 分钟滑动——连续操作时不会中途被踢；放着不动半小时回来，终端仍在
+    （`setMaxIdleTimeout(0)`），只是提权可能过期、需要重新确认。
+14. **属主交接**：老实例（被旧面板写坏过的）启动一次后 `home` 整树归 agent；新实例从第一次启动起
+    就不该出现 root 文件（§5.24）。
+15. **种子地图**：选 Java 内核 + 群系速览，1.12.2 与 1.21.3 各出一张图，确认秒级返回、颜色连续、
+    海洋/河流/山地能一眼分辨；切到 MC 服务器 + 详细地图，确认能出地形图。
+16. **结构覆盖**：群系速览的图上能看到村庄、神殿、府邸等标记；按类型筛选、搜索、测距、坐标跳转、
+    全屏、下载各点一次；点「精准结构」后标记变成白圈。
+17. **面积**：Java 方案拉到 16384×16384，确认不糊、不卡、结构不糊成一片白点。
+
+---
+
+---
+
+## 附录 C 已知的坑
+
+> 做到对应模块再读。提前读完只会记住「很复杂」这三个字。
+
+共 35 条，编号沿用 §5.x —— 正文里的交叉引用（如「见 §5.20」）用的就是这个编号。
 
 ### 5.1 `Host` 透传的属性只能在第一个 HttpClient 之前设
 - **现象**：一切正常启动，但所有 `/i/*` 回 `500 java.lang.IllegalArgumentException: restricted header name: "Host"`；
@@ -602,41 +708,55 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
 - **验证**：新实例、被 `--help` 污染过的老实例各启动一次；容器里
   `docker exec -u 1000 <容器> sh /tmp/verify-privilege-split.sh` 全绿（含递归与 runtimes 两项）。
 
+### 5.25 旧层栈的随机数是 32 位无符号
+
+**现象**：旧版本群系一半对一半错，像某个随机分支走反了。
+**根因**：`cs` 在 C 里是 `uint32_t`，乘法加法都是模 2³² 回绕。Java 的 `int` 二进制行为与它一致，
+但**右移**不一致：C 的 `>>` 对无符号数是逻辑右移，Java 的 `>>` 是有符号右移。写成 `>>` 时，
+高位为 1 的 `cs` 会补 1，`& 1`、`& 3` 就取到了错误的值。
+**正确做法**：凡是 `cs` 参与的右移一律 `>>>`；字面量 `4150755663` 超过 `Integer.MAX_VALUE`，
+写成 `(int) 4150755663L`；`cs` 用 `int` 而不是 `long`，因为层栈的语义就是 32 位回绕。
+同理，`xNextInt` 里 `(uint32_t)r < n` 是无符号比较，Java 必须 `(r & 0xFFFFFFFFL) < n`。
+
+### 5.26 `mapZoom` 调用 `select4` 前只更新两次 cs
+
+**现象**：`zoom` 层输出错位，`buf` 里的值与 C 版只差一两个元素，但整张图全歪。
+**根因**：C 的 `mapZoom` 在 `buf[idx + newW] = select4(cs, st, ...)` 之前，`cs` **只**经历了
+`buf[idx]` 与 `buf[idx]` 两次更新；第三次更新发生在 `select4` 内部。Java 移植时多写了一次
+`cs *= ...; cs += st;`，于是 `select4` 收到的是第三次状态，`r` 从 3 变成 0，颜色全错位。
+**正确做法**：照抄 C 的更新次数。差分验证器里给每一层加"同输入同输出"的单测，比盯着代码看快。
+
+### 5.27 层函数共享工作区，缓冲区要按层栈递归算
+
+**现象**：单点查询越界，或父层输出被自己覆盖。
+**根因**：C 的 `genArea` 把一块大工作区交给整条层栈，父层与子层通过指针偏移共用；Java 若只给
+最终结果那么大的数组，父层一写就越界。
+**正确做法**：顶层分配一块带余量的工作区（按 `getMinLayerCacheSize` 的语义，至少 `(max+64)²×4`），
+层函数内部需要临时缓冲时用 `out.length` 而不是 `w*h`；`System.arraycopy` 的目标位置要按
+`(j + (z&1)) * newW + (x&1)` 算，不能默认从 0 开始。
+
+### 5.28 biome tree 的表不能写成 Java 数组字面量
+
+**现象**：`code too large`。
+**根因**：1.18+ 的 biome tree 每张表有八千到九千个 `long` 节点，直接写成 `static final long[]` 的
+初始化块会超过 JVM 单方法 64KB 上限。
+**正确做法**：用脚本把 C 头文件转成文本资源（`seedmap/btree*.txt`），运行时按行加载；
+转换脚本进 `scripts/`，表进 `src/main/resources/`，两边都可重复生成。
+
+### 5.29 验证器的对照程序也会越界
+
+**现象**：L1 报告大量"差异"，但两边单点都对。
+**根因**：自己写的 C 探针用 `int out[1]` 接收 `genArea` 的结果，父层写入时越界，读到的是垃圾。
+**正确做法**：C 探针必须用 `getMinLayerCacheSize` 分配缓冲区；先确认"对照程序自己是合法的"，
+再判断"被测程序和它不一致"。差分测试的第一条纪律是：**两边都不能有未定义行为**。
+
 ---
 
-## 6. 人工验收清单（自动化测不到的部分）
-
-1. 独立数据目录起一个面板（**不要**在生产面板上试 E-Stop），装一个实例，打开页面、登录、发一条消息。
-2. 网页终端：中文输入法连续输入、粘贴多行、`ctrl+o` 展开、终端退出后重连。
-3. 手机：品牌实例列表可竖向滚动、行内按钮可横向滑动、长 url 不撑破卡片。
-4. 反代：子路径部署（`HDSL_BASE_PATH`）下页面与 WebSocket 都通。
-5. 开发者模式：提权 → 开守卫（proxy / instance / all 各试一次）→ 读仍然可用、写被要求密码 →
-   E-Stop 三次确认 → 冷却期内解除被拒 → 重启面板后解除。
-6. 品牌安装：portable 与源码构建各一次；中途杀面板，确认重启后会自动恢复/清理半安装。
-7. **容器的身份划分**：`docker cp scripts/verify-privilege-split.sh <容器>:/tmp/` 之后
-   `docker exec -u 1000 <容器> sh /tmp/verify-privilege-split.sh` ——
-   `auth/`、`logs/` 读写都被拒，实例目录与 pnpm store 可写。**注意 `docker exec` 默认用户不再是
-   agent**，不写 `-u 1000` 等于用 root 去验"agent 能不能写"，什么都验不出来。
-8. **ACL 存储**：`docker logs <容器> | grep "does not enforce mode bits"`。有输出就说明这台机器的
-   文件系统不认 mode 位（QNAP trimacl 一类），隔离在本机不成立——**写进部署记录，别对外声称有**。
-9. **从"单 uid"升级到"两段身份"**：用老卷起一次新镜像，确认入口把 `/data` 校正到 agent、把
-   `auth/`/`certs/`/`logs/`/`server.yaml` 收回 root，且实例仍能启动、终端能开（默认 workspace
-   必须是 `/home/hdsl/workspace` 或显式设了 `HDSL_WORKSPACE`）。
-10. **PTY 身份**：`ps -o uid= -p <tui pid>` 应是 agent uid，不是 0。终端里跑起来的 agent 也碰不到
-   面板的凭据，这是 §5.9 的验收面。
-11. **agent 侧的 pnpm**：`docker exec -u 1000 <容器> pnpm --version` 与 `pnpm config get registry`
-   都要正常返回；`ls -l /home/hdsl/.config/pnpm/config.yaml` 的属主应是 agent uid 而不是 root。
-   这一条不查，坏掉的形态是"面板一切正常，所有安装 `EACCES`"（§5.23）。
-12. **界面**：品牌层在 `/instances` 原地切换（不跳第三层）；停止是红色药丸；开发者面在 HTTP 下只给
-    提示 + 「去 HTTPS」；手机竖屏与横屏（844×390）各看一眼：抽屉、标签条、贴底操作栏。
-13. **终端时长**：提权 30 分钟滑动——连续操作时不会中途被踢；放着不动半小时回来，终端仍在
-    （`setMaxIdleTimeout(0)`），只是提权可能过期、需要重新确认。
-14. **属主交接**：老实例（被旧面板写坏过的）启动一次后 `home` 整树归 agent；新实例从第一次启动起
-    就不该出现 root 文件（§5.24）。
-
 ---
 
-## 7. 明确不要做的事
+## 附录 D 不做的事
+
+### D.1 明确不要做的事
 
 - 不要在 HTTP 上放开开发者模式（没有 TLS 时"提权"就是明文传密码）。
 - 不要给进程内检查加"哈希文件保护"之类的假防线（§5.9）。
@@ -653,3 +773,21 @@ uid 1000 能穿过 `0700`；`chmod`/`chown` 照样"成功"、`stat` 照样显示
   隔着文件系统语义（ACL 存储）、入口的属主顺序、以及 `docker exec` 的默认用户。
 - 不要在 ACL 管理的存储上声称有隔离。**接受**是合法选择——只要在部署记录里写明"这台机器没有隔离"，
   而不是让文档和实际相反。
+- 不要把"跑真服务端"当成种子预览的唯一出路：群系速览必须优先走纯 Java 内核（§2.12），
+  服务端只用来出详细地形和校准结构。
+- 不要为了支持旧版本去启动服务端兜底：层栈移植本身是可行的，L1 能证明它对不对。
+- 不要把反编译的游戏源码复制进实现。它只用来构造 L2 验证器，**只读、不入库、不进发布物**。
+- 不要在种子地图内核里 import 面板的类。`core/` 抽出来必须能单独 `javac`。
+
+---
+
+---
+
+## 收尾：给接手者的三句话
+
+1. 这个项目的体量已经不能用"一个面板"概括：它是面板 + 反代 + PTY 终端 + 插件打包 +
+   两段身份 + 种子地图内核 + 三层差分验证，每一块都有独立的失败模式。
+2. 最贵的 bug 不在 UI，在**层栈与噪声的 32 位语义**、**进程与属主的交接**、
+   **挂载点逃逸**这三类。它们共同的特征是：静态检查全绿，单点测试全对，
+   整张图/整个实例才露馅。
+3. 所以验收顺序永远是：**先让对照程序自己合法，再让两边同输入同输出，最后才让人去看图。**

@@ -564,7 +564,7 @@ web/src/pages/chat/
   ChatSidebar.tsx       会话列表/助手切换/搜索/分组
   MessageItem.tsx       消息、variant、两种重生成、常驻操作栏
   Composer.tsx          输入区、附件、能力徽章、发送/停止、搜索源菜单
-  ModelPicker.tsx       跨服务模型弹层（搜索/分组/能力）
+  ModelPicker.tsx       跨服务模型弹层（来源→品牌→模型树，折叠/隐藏/搜索/能力）
   ChatSettingsPage.tsx  独立二级页（个人资料/模型/联网搜索/数据与备份/安全与网络）
   Timeline.tsx          思考/搜索时间线（普通协议与流式共用）
   AttachmentPreview.tsx 右侧附件预览栏（文本分页、CSV 表格、媒体原生渲染）
@@ -616,6 +616,13 @@ web/src/pages/chat/
 - 模型弹层（`PopupMenu`）：按 `visualViewport` 定位与限高，手机键盘弹出、地址栏收起
   导致视口变化时收进可见区域而不是被顶出屏幕或直接关闭；触屏上搜索框不自动聚焦，
   点模型按钮会先收起输入法。
+- 模型弹层是**资源管理器式三级树**：来源（账户）→ 品牌（家族）→ 模型。来源和品牌
+  默认折叠；来源右侧「隐藏」把它移出主树，底部集中恢复；折叠与隐藏状态分开存
+  `localStorage`。搜索同时匹配模型 id、品牌、来源名和 vendor；有搜索词时自动展开命中
+  的来源，来源名命中时品牌仍折叠。展开/筛选改变高度后弹层会重新测量定位。
+- 家族分组覆盖云厂商模型超市里的混元、MiMo、StepFun、LongCat、文心、Cohere、Yi、
+  Baichuan、InternLM、Pangu、SenseNova、Spark，以及 Mistral 的 codestral / devstral /
+  magistral / pixtral；来源本身只有一个品牌时不额外套空文件夹。
 
 ### 12.3.0 上下文占用
 
@@ -662,7 +669,8 @@ web/src/pages/chat/
 - **数据与备份**：保留策略、长文本阈值、每日 token 上限、备份开关/时间/份数/目录、
   立即备份、备份列表。
 - **网络**：允许私网端点（默认开）/ strict allowlist。
-- 模型选择在输入区按服务分组，选中时同时切换会话的 `account` 与 `model`。
+- 模型选择在输入区按「来源 → 品牌 → 模型」分组，选中时同时切换会话的 `account` 与
+  `model`；来源和品牌的折叠/隐藏状态是浏览器本地偏好，不写回会话。
 - 这些设置只影响聊天，不写回主界面账户页。
 
 ### 12.5 联网搜索
@@ -897,8 +905,8 @@ POST   /api/chat/sessions               // body 带 assistantId
   模型弹层、设置页与能力弹窗。
 - 线上状态：面板 0.6.85 仍服务旧前端资源，需重新构建/重启容器；未在本仓库
   执行部署，也未写入任何真实 key/口令。
-- 已知未做：模型服务 ON/OFF 开关、模型家族分组、原生 OpenAI PDF 的真实网关
-  联调、备份恢复 UI、音频/视频原生输入、fork/搜索。
+- 已知未做：模型服务 ON/OFF 开关、原生 OpenAI PDF 的真实网关联调、备份恢复 UI、
+  音频/视频原生输入。
 
 ## 21. DeepSeek 官方预设助手（2026-11-14 起，v0.6.86 / v0.6.87）
 

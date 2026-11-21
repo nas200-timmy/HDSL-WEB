@@ -102,13 +102,15 @@ class PlainLegacyTest {
             assertTrue(unlocked.body().contains("name=\"text\""), unlocked.body());
             // Text browsers ignore the stylesheet: the nav must break lines by
             // markup alone, and submits must be inputs w3m/lynx know how to post.
-            assertTrue(unlocked.body().contains("会话</a><br>"), unlocked.body());
+            assertTrue(unlocked.body().contains("会话列表</a><br>"), unlocked.body());
             assertTrue(unlocked.body().contains("type=\"submit\" value=\"退出\""), unlocked.body());
             // The legacy surface can also fork and export without the SPA.
             assertTrue(unlocked.body().contains("导出</a>"), unlocked.body());
             assertTrue(unlocked.body().contains("value=\"分叉\""), unlocked.body());
             assertTrue(unlocked.body().contains("id=\"bottom\""), unlocked.body());
             assertTrue(unlocked.body().contains("href=\"#bottom\""), unlocked.body());
+            assertEquals(1, unlocked.body().split("id=\"bottom\"", -1).length - 1,
+                    "there must be one unambiguous bottom anchor");
             assertTrue(unlocked.headers().firstValue("content-security-policy").orElseThrow()
                     .contains("font-src 'self'"), "KaTeX fonts need font-src on enhanced pages");
             HttpResponse<String> forked = postForm(client,
@@ -123,6 +125,7 @@ class PlainLegacyTest {
             HttpResponse<String> switched = postForm(client,
                     base + "/plain/s/" + sessionId + "/model", "model=fake-model-2", cookie);
             assertEquals(303, switched.statusCode(), switched.body());
+            assertTrue(switched.headers().firstValue("Location").orElseThrow().endsWith("#bottom"));
             HttpResponse<String> afterSwitch = get(client, base + "/plain/s/" + sessionId, cookie);
             assertTrue(afterSwitch.body().contains("option value=\"fake-model-2\" selected"),
                     afterSwitch.body());
@@ -188,10 +191,16 @@ class PlainLegacyTest {
             assertTrue(poll.headers().firstValue("content-type").orElseThrow()
                     .contains("javascript"), poll.headers().toString());
             assertTrue(poll.body().contains("XMLHttpRequest"), poll.body());
+            assertTrue(poll.body().contains("win.scrollTo"), poll.body());
+            assertTrue(poll.body().contains("nearBottom"), poll.body());
 
             HttpResponse<String> css = get(client, base + "/plain/legacy.css", null);
             assertEquals(200, css.statusCode(), css.body());
             assertTrue(css.body().contains(".hljs-keyword"), css.body());
+            assertTrue(css.body().contains(".chat-line.user"), css.body());
+            assertTrue(css.body().contains(".chat-composer"), css.body());
+            assertFalse(css.body().contains("display: flex"), "IE11 layout must stay table-based");
+            assertFalse(css.body().contains("var(--"), "IE11 has no CSS custom properties");
 
             HttpResponse<String> enhanced = get(client, base + "/plain/old", null);
             String strict = enhanced.headers().firstValue("content-security-policy").orElseThrow();
@@ -233,7 +242,7 @@ class PlainLegacyTest {
                     running.baseUrl() + "/plain/new", "assistantId=default", null);
             assertEquals(303, created.statusCode(), created.body());
             String sessionId = created.headers().firstValue("Location").orElseThrow()
-                    .substring("/plain/s/".length());
+                    .substring("/plain/s/".length()).replace("#bottom", "");
             HttpRequest patch = HttpRequest.newBuilder(URI.create(
                             running.baseUrl() + "/api/chat/sessions/" + sessionId))
                     .timeout(Duration.ofSeconds(10))
@@ -256,6 +265,7 @@ class PlainLegacyTest {
             String page = waitFor(TestSupport.client(), running.baseUrl(), sessionId,
                     ssrShipped ? "<strong>render</strong>" : "**render**",
                     Duration.ofSeconds(15));
+            assertTrue(page.contains("class=\"turn-sep\""), page);
             if (ssrShipped) {
                 assertTrue(page.contains("chat-markdown legacy-md"), page);
                 try (var cached = Files.list(dataDir.resolve("plain-md"))) {

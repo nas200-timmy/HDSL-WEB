@@ -670,11 +670,34 @@
 
 .tc-queue-metrics {
   display: grid;
-  grid-template-columns: repeat(2, auto);
-  gap: 0 8px;
+  grid-template-columns: repeat(4, auto);
+  gap: 0 10px;
   font-size: 10.5px;
   color: var(--monet-on-surface-variant);
   text-align: right;
+}
+
+.tc-queue-live {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tc-queue-live-label {
+  color: var(--monet-on-surface-variant);
+  flex: none;
+}
+
+.tc-queue-live .mono {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tc-queue-row-actions {
@@ -871,14 +894,6 @@
 
 .tc-manage-hint {
   padding: 8px 10px 0;
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--monet-on-surface-variant);
-}
-
-.tc-tool-desc {
-  margin: 0;
-  padding: 0 8px 6px;
   font-size: 11.5px;
   line-height: 1.5;
   color: var(--monet-on-surface-variant);
@@ -1580,13 +1595,542 @@
     flex: 1 1 100%;
   }
 
-  /* 工具页的卡片在窄屏各占一行，别再挤成两列 */
+  /* 工具页的清单行在窄屏换行，不再挤成多列 */
   .tc-tool-row {
-    flex-direction: column;
+    flex-wrap: wrap;
+  }
+}
+
+/* 准备文件：与 3FUI 一致的主清单，浏览器只在添加文件时展开。 */
+.tc-prepare {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tc-prepare-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+}
+
+.tc-prepare-toolbar .btn {
+  min-height: 30px;
+}
+
+.tc-prepare-sort {
+  width: auto;
+  min-width: 130px;
+  min-height: 30px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+.tc-prepare-config {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(240px, 1.4fr) auto;
+  gap: 8px 12px;
+  align-items: end;
+  padding: 10px;
+}
+
+.tc-prepare-config > label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.tc-prepare-output {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tc-prepare-output .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.tc-prepare-config-side {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.tc-prepare-summary,
+.tc-prepare-location {
+  grid-column: 1 / -1;
+}
+
+.tc-prepare-location {
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+  overflow-wrap: anywhere;
+}
+
+.tc-stage-card {
+  padding: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tc-stage-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--monet-outline-variant);
+  font-size: 12px;
+}
+
+.tc-stage-head span {
+  color: var(--monet-on-surface-variant);
+  font-size: 11px;
+}
+
+.tc-stage-empty {
+  min-height: 150px;
+}
+
+.tc-stage-scroll {
+  overflow: auto;
+  max-height: min(52vh, 560px);
+}
+
+.tc-stage-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+}
+
+.tc-stage-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 7px 8px;
+  background: var(--monet-surface-container-high);
+  color: var(--monet-on-surface-variant);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.tc-stage-table td {
+  padding: 7px 8px;
+  border-top: 1px solid var(--monet-outline-variant);
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tc-stage-table tr:hover td,
+.tc-stage-table tr.selected td {
+  background: var(--monet-surface-container);
+}
+
+.tc-stage-table th:nth-child(1),
+.tc-stage-table td:nth-child(1) { width: 34px; }
+.tc-stage-table th:nth-child(2),
+.tc-stage-table td:nth-child(2) { width: 22%; }
+.tc-stage-table th:nth-child(4),
+.tc-stage-table td:nth-child(4) { width: 62px; }
+.tc-stage-table th:nth-child(5),
+.tc-stage-table td:nth-child(5) { width: 82px; }
+.tc-stage-table th:nth-child(6),
+.tc-stage-table td:nth-child(6) { width: 28%; }
+.tc-stage-table th:nth-child(7),
+.tc-stage-table td:nth-child(7) { width: 58px; }
+
+.tc-stage-name {
+  cursor: pointer;
+  font-weight: 550;
+}
+
+.tc-stage-path,
+.tc-stage-output {
+  color: var(--monet-on-surface-variant);
+  font-size: 11px;
+}
+
+.tc-stage-output.error {
+  color: var(--monet-error);
+  white-space: normal;
+}
+
+.tc-prepare-inspect {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(300px, 1.2fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.tc-prepare-selected-path,
+.tc-prepare-probe {
+  padding: 4px 10px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.tc-prepare-selected-path,
+.tc-prepare-probe {
+  color: var(--monet-on-surface-variant);
+}
+
+.tc-prepare-command {
+  margin: 0;
+  padding: 4px 10px 10px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+@media (max-width: 760px), (max-height: 520px) {
+  .tc-prepare-toolbar {
+    align-items: stretch;
   }
 
-  .tc-tool-card {
-    flex: 1 1 100% !important;
-    min-width: 0 !important;
+  .tc-prepare-sort {
+    flex: 1 1 140px;
+  }
+
+  .tc-prepare-config {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .tc-prepare-config-side,
+  .tc-prepare-summary,
+  .tc-prepare-location {
+    grid-column: auto;
+  }
+
+  .tc-stage-table {
+    min-width: 760px;
+  }
+
+  .tc-queue-metrics {
+    grid-template-columns: repeat(3, auto);
+    text-align: left;
+    gap: 0 10px;
+  }
+
+  .tc-prepare-inspect {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 集成工具：四个标签页共享一套“清单 + 动作条 + 输出”版式。 */
+.tc-tools {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tc-tool-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+}
+
+.tc-tool-tab {
+  border: 0;
+  background: transparent;
+  color: var(--monet-on-surface-variant);
+  border-radius: 16px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tc-tool-tab:hover {
+  background: var(--monet-surface-container);
+  color: var(--monet-on-surface);
+}
+
+.tc-tool-tab.selected {
+  background: var(--monet-secondary-container);
+  color: var(--monet-on-secondary-container);
+}
+
+.tc-tool-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  min-width: 0;
+}
+
+.tc-tool-desc {
+  margin: 0;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--monet-on-surface-variant);
+}
+
+.tc-tool-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.tc-tool-list {
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--monet-outline);
+  border-radius: 4px;
+  padding: 4px;
+  max-height: 300px;
+  overflow: auto;
+  min-width: 0;
+}
+
+.tc-tool-list-tall {
+  max-height: 380px;
+}
+
+.tc-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.tc-tool-row.selected,
+.tc-mux-row.selected {
+  background: var(--monet-secondary-container);
+}
+
+.tc-tool-row:hover {
+  background: var(--monet-surface-container);
+}
+
+.tc-tool-order {
+  flex: none;
+  width: 22px;
+  color: var(--monet-on-surface-variant);
+  font-size: 11px;
+}
+
+.tc-tool-name {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tc-tool-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--monet-on-surface-variant);
+  font-size: 11px;
+}
+
+.tc-tool-empty {
+  padding: 14px 8px;
+  font-size: 12px;
+  color: var(--monet-on-surface-variant);
+}
+
+.tc-mux-row {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--monet-outline-variant);
+  border-radius: 4px;
+}
+
+.tc-mux-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tc-mux-fields {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tc-mux-fields label {
+  display: grid;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+  flex: 1 1 90px;
+  min-width: 0;
+}
+
+.tc-mux-fields input {
+  border: 1px solid var(--monet-outline);
+  border-radius: 4px;
+  background: var(--monet-surface-container);
+  color: var(--monet-on-surface);
+  padding: 4px 6px;
+  font-size: 11px;
+  min-width: 0;
+}
+
+.tc-tool-field {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.tc-tool-field-row {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tc-tool-field-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.tc-tool-inline {
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+  overflow-wrap: anywhere;
+}
+
+.tc-tool-group {
+  display: grid;
+  gap: 2px;
+}
+
+.tc-tool-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 2px;
+}
+
+.tc-tool-stream {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.tc-tool-stream:hover {
+  background: var(--monet-surface-container);
+}
+
+.tc-tool-dim {
+  color: var(--monet-on-surface-variant);
+  font-size: 11px;
+}
+
+.tc-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.tc-tool-metrics {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.tc-tool-submit {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.tc-quality-results {
+  display: grid;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--monet-outline-variant);
+  overflow-x: auto;
+}
+
+.tc-quality-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  min-width: 360px;
+}
+
+.tc-quality-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--monet-on-surface-variant);
+  font-weight: 500;
+  border-bottom: 1px solid var(--monet-outline-variant);
+}
+
+.tc-quality-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--monet-outline-variant);
+}
+
+.tc-quality-cell {
+  border: 0;
+  background: transparent;
+  color: var(--monet-on-surface);
+  font-family: var(--monet-mono, monospace);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.tc-quality-cell:disabled {
+  cursor: default;
+}
+
+.tc-quality-cell:not(:disabled):hover {
+  background: var(--monet-secondary-container);
+}
+
+@media (max-width: 760px), (max-height: 520px) {
+  .tc-tool-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .tc-tool-tab {
+    flex: none;
+  }
+
+  .tc-tool-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tc-mux-fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tc-tool-name {
+    max-width: 45%;
   }
 }
