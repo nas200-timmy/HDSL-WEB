@@ -380,7 +380,7 @@ export function McSeedPreview({
               {job.etaSeconds !== undefined && job.percent > 3 ? ` · 约剩 ${job.etaSeconds} 秒` : ""}
             </span>
             <span className="mono">
-              {job.chunksDone} / {job.chunksTotal} 区块 · {job.percent}%
+              {job.chunksDone.toLocaleString()} / {job.chunksTotal.toLocaleString()} {job.engine === "java" ? "采样" : "区块"} · {job.percent}%
             </span>
           </div>
           <div style={{ height: 6, background: "rgba(127,127,127,.25)", borderRadius: 3, overflow: "hidden" }}>

@@ -591,6 +591,9 @@ public final class SeedPreviewService {
                 .redirectErrorStream(true)
                 .start();
         job.attach(process);
+        // 子进程报的是"已完成采样数"，总数是采样/边的平方——少传一个，进度条
+        // 就会显示成 5349376 / 1（-1 被 Math.max(1,…) 抬成 1），百分比当场爆表。
+        long totalSamples = (long) spec.javaSamples() * spec.javaSamples();
         List<String> tail = new ArrayList<>();
         long deadline = System.currentTimeMillis() + EXTREME_TIMEOUT.toMillis();
         try (var reader = new java.io.BufferedReader(
@@ -604,7 +607,7 @@ public final class SeedPreviewService {
                 if (line.startsWith(PreviewRenderMain.PROGRESS_PREFIX)) {
                     try {
                         long done = Long.parseLong(line.substring(PreviewRenderMain.PROGRESS_PREFIX.length()));
-                        job.renderProgress(done, -1);
+                        job.renderProgress(done, totalSamples);
                     } catch (RuntimeException ignored) {
                         // A malformed progress line is not worth failing the job.
                     }
