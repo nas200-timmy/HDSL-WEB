@@ -1043,6 +1043,12 @@ public final class InstanceProxyServlet extends HttpServlet {
             ROUTER_BUNDLES.put(mount, src + "|mount");
             return RouterShim.MOUNT;
         }
+        if (unrecognized == RouterShim.NONE) {
+            // 老 Kimi 回旧行为是预期；但 2.7.x 若改了路由读法形状，会静默退回旧行为
+            // （点会话跳面板根）。留一行日志，升级后一眼能定位。
+            org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                    "Router bundle at " + src + " has no recognisable path read; serving it without a router shim");
+        }
         ROUTER_BUNDLES.put(mount, src + "|" + (unrecognized == RouterShim.NONE ? "none" : "root"));
         return unrecognized;
     }
@@ -1396,9 +1402,19 @@ public final class InstanceProxyServlet extends HttpServlet {
             else if(name.indexOf("octop.")===0)name=name.slice(6);
             return prefix+name};
             const get=Storage.prototype.getItem,set=Storage.prototype.setItem,del=Storage.prototype.removeItem;
+            const rawKey=Storage.prototype.key;
+            const rawLength=Object.getOwnPropertyDescriptor(Storage.prototype,"length").get;
+            const scopedKeys=(self)=>{const out=[];const n=rawLength.call(self);
+            for(let i=0;i<n;i++){const k=rawKey.call(self,i);
+            if(typeof k==="string"&&k.indexOf(prefix)===0)out.push(k)}return out};
             Storage.prototype.getItem=function(k){return get.call(this,strip(k))};
             Storage.prototype.setItem=function(k,v){return set.call(this,strip(k),v)};
             Storage.prototype.removeItem=function(k){return del.call(this,strip(k))};
+            // clear() 只清本实例的键：否则 A 登出会把同 origin 的 B、C 一起清空。
+            Storage.prototype.clear=function(){scopedKeys(this).forEach(k=>del.call(this,k))};
+            // key()/length 也只枚举本实例，别实例的键名（auth_token 等）不外泄。
+            Storage.prototype.key=function(i){const keys=scopedKeys(this);return i<keys.length?keys[i]:null};
+            Object.defineProperty(Storage.prototype,"length",{configurable:true,get:function(){return scopedKeys(this).length}});
             })()
             """;
 

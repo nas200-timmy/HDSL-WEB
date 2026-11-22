@@ -75,6 +75,11 @@ src/main/resources/octop/octop-dashboard-<version>.zip
 原样放行，不会被二次加前缀。多实例共用 origin 时，登录 A 不会踢掉 B，A 的待发送消息也不会
 在 B 里被发出去。
 
+`clear()` 只清本实例的键（A 登出不会清空 B），`key()` / `length` 也只枚举本实例。剩下的边界：
+`Object.keys(localStorage)` 这类**自有键枚举**拦不住（JS 层面无法代理），以及 IndexedDB /
+CacheStorage 不在覆盖范围内——上游的鉴权与待发送消息都走 Web Storage，这两条目前不构成问题，
+但如果上游哪天把 token 挪进 IndexedDB，这一层要重新评估。
+
 ## 登录密码（面板里就能管）
 
 Octop 的管理员账号是它自己的一层，和面板账号无关。面板现在提供一个入口：

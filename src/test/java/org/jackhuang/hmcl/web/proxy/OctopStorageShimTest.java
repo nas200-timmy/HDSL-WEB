@@ -35,6 +35,12 @@ class OctopStorageShimTest {
         assertTrue(rewritten.contains("Storage.prototype.setItem"), "存储写路径被分区");
         assertTrue(rewritten.contains("Storage.prototype.getItem"), "存储读路径被分区");
         assertTrue(rewritten.contains("Storage.prototype.removeItem"), "存储删路径被分区");
+        assertTrue(rewritten.contains("Storage.prototype.clear=function()"),
+                "clear() 只能清本实例，不能把同 origin 的其它实例一起清空");
+        assertTrue(rewritten.contains("Storage.prototype.key=function(i)"),
+                "key() 只枚举本实例的键");
+        assertTrue(rewritten.contains("Object.defineProperty(Storage.prototype,\"length\""),
+                "length 只统计本实例的键");
         assertTrue(rewritten.contains("const prefix=\"octop:\"+mount+\":\""), "分区前缀来自挂载");
     }
 
