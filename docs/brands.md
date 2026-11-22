@@ -279,7 +279,8 @@ write 也停在 `/`），应用照常可用，代价是地址栏回到 `/`、刷
 一处 `window.location.pathname`），写是 `history.pushState(null,"","/sessions/<id>")`。不注入时，
 点一下会话地址栏就变成面板根路径的 `/sessions/<id>`，`/i/<id>/` 整个不显示。面板按品牌打开
 router shim，探针除了 OpenCode 的 Solid 表达式，还认这种"全文件唯一一处归一化调用"的形状：
-认得出就给这处读法打 `__hdslUnmount` 补丁、走 MOUNT；多处出现或认不出仍回 ROOT，不猜。
+认得出就给这处读法打 `__hdslUnmount` 补丁、走 MOUNT；多处出现或认不出则**退回旧版行为**
+（不注入这段脚本，老版本 Kimi 照常按子路径工作），不猜，也不强迫老客户端走 ROOT。
 
 ## 实例模型：页面、版本与插件通道
 

@@ -52,9 +52,9 @@ class ClientAddressesTest {
         assertEquals("1.2.3.4", ClientAddresses.resolve("127.0.0.1", "1.2.3.4", LOCAL_PROXY));
         // 客户端伪造的左半段被丢弃：可信反代之后的第一跳才是它真正看见的对端。
         assertEquals("198.51.100.9",
-                ClientAddresses.resolve("127.0.0.1", "6.6.6.6, 198.51.100.9", LOCAL_PROXY));
+                ClientAddresses.resolve("127.0.0.1", "192.0.2.1, 198.51.100.9", LOCAL_PROXY));
         assertEquals("198.51.100.9",
-                ClientAddresses.resolve("127.0.0.1", "6.6.6.6, 198.51.100.9, 127.0.0.1", LOCAL_PROXY));
+                ClientAddresses.resolve("127.0.0.1", "192.0.2.1, 198.51.100.9, 127.0.0.1", LOCAL_PROXY));
     }
 
     @Test
@@ -79,7 +79,7 @@ class ClientAddressesTest {
     /// 一次 DNS 查询，也不会被当成可信地址。
     @Test
     void hostnamesAndGarbageAreNotResolvedAsClients() {
-        assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", "evil.example.com", LOCAL_PROXY));
+        assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", "host.example.invalid", LOCAL_PROXY));
         assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", "1.2.3.4, not-an-ip", LOCAL_PROXY));
         assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", "999.1.1.1", LOCAL_PROXY));
         assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", "1.2.3.4.5", LOCAL_PROXY));

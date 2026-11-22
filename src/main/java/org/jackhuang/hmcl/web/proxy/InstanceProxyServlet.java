@@ -373,7 +373,8 @@ public final class InstanceProxyServlet extends HttpServlet {
         int upstreamPort = port;
         upstream.answer().whenCompleteAsync(
                 (answer, error) -> pump(response, async, upstream, mount, browserMount, brandClient, octopClient,
-                        zcodeClient, routerClient, prefixClient, upstreamPort, answer, error),
+                        zcodeClient, routerClient, prefixClient, unrecognizedRouterShim(brand),
+                        upstreamPort, answer, error),
                 tasks.executor());
     }
 
@@ -419,7 +420,7 @@ public final class InstanceProxyServlet extends HttpServlet {
     ///                      URLs, redirect Locations, cookie paths)
     private static void pump(HttpServletResponse response, AsyncContext async, Upstream upstream, String mount,
                              String browserMount, boolean brandClient, boolean octopClient, boolean zcodeClient,
-                             boolean routerClient, boolean prefixClient,
+                             boolean routerClient, boolean prefixClient, RouterShim unrecognized,
                              int port, @Nullable HttpResponse<InputStream> result, @Nullable Throwable error) {
         try {
             if (error != null || result == null) {
@@ -457,7 +458,8 @@ public final class InstanceProxyServlet extends HttpServlet {
                     out.write((octopClient
                                     ? rewriteOctopPage(html, browserMount)
                                     : rewritePage(html, browserMount,
-                                            routerClient ? routerShimFor(port, mount, html) : RouterShim.NONE,
+                                            routerClient ? routerShimFor(port, mount, html, unrecognized)
+                                                    : RouterShim.NONE,
                                             brandClient))
                             .getBytes(StandardCharsets.UTF_8));
                     out.flush();
@@ -1018,17 +1020,36 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// fails says no: losing the address bar is recoverable, a page whose shim
     /// does not match its bundle is not.
     private static RouterShim routerShimFor(int port, String mount, String html) {
+        return routerShimFor(port, mount, html, RouterShim.ROOT);
+    }
+
+    /// @param unrecognized 认不出客户端的路由读法时退回哪一种：OpenCode 回 ROOT
+    ///                      （地址还给面板根），Kimi 回 NONE（**旧版行为**——老
+    ///                      Kimi 本来就认子路径，不需要也不能被这段脚本打扰）。
+    private static RouterShim routerShimFor(int port, String mount, String html, RouterShim unrecognized) {
         String src = entryScriptSrc(html);
         if (src == null) {
-            return RouterShim.ROOT;
+            return unrecognized;
         }
         String remembered = ROUTER_BUNDLES.get(mount);
         if (remembered != null && remembered.startsWith(src + "|")) {
-            return remembered.endsWith("|mount") ? RouterShim.MOUNT : RouterShim.ROOT;
+            if (remembered.endsWith("|mount")) {
+                return RouterShim.MOUNT;
+            }
+            return remembered.endsWith("|none") ? RouterShim.NONE : RouterShim.ROOT;
         }
         boolean patchable = probeRouterBundle(port, src);
-        ROUTER_BUNDLES.put(mount, src + "|" + (patchable ? "mount" : "root"));
-        return patchable ? RouterShim.MOUNT : RouterShim.ROOT;
+        if (patchable) {
+            ROUTER_BUNDLES.put(mount, src + "|mount");
+            return RouterShim.MOUNT;
+        }
+        ROUTER_BUNDLES.put(mount, src + "|" + (unrecognized == RouterShim.NONE ? "none" : "root"));
+        return unrecognized;
+    }
+
+    /// 认不出路由读法时的降级：Kimi 回旧版行为，其余（OpenCode）回面板根。
+    static RouterShim unrecognizedRouterShim(org.jackhuang.hmcl.web.brand.Brand brand) {
+        return brand == org.jackhuang.hmcl.web.brand.Brand.KIMI ? RouterShim.NONE : RouterShim.ROOT;
     }
 
     /// @return the path of the client's entry script as the instance serves it,

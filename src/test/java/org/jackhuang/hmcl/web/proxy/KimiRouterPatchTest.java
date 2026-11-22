@@ -43,6 +43,16 @@ class KimiRouterPatchTest {
     }
 
     @Test
+    void anUnrecognisedKimiBundleKeepsTheOldBehaviour() {
+        assertEquals(InstanceProxyServlet.RouterShim.NONE,
+                InstanceProxyServlet.unrecognizedRouterShim(org.jackhuang.hmcl.web.brand.Brand.KIMI),
+                "老版本 Kimi 认子路径，认不出新读法时必须回到不注入的旧行为");
+        assertEquals(InstanceProxyServlet.RouterShim.ROOT,
+                InstanceProxyServlet.unrecognizedRouterShim(org.jackhuang.hmcl.web.brand.Brand.OPENCODE),
+                "OpenCode 认不出时仍然回面板根");
+    }
+
+    @Test
     void theSingleNormalizerCallIsRecognisedAndUnmounted() {
         assertTrue(InstanceProxyServlet.hasRouterPathRead(KIMI_BUNDLE));
         String patched = new String(
