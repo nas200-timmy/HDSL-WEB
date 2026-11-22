@@ -73,4 +73,23 @@ class ClientAddressesTest {
     void aMissingPeerIsUnknownRatherThanNull() {
         assertEquals("unknown", ClientAddresses.resolve(null, "1.2.3.4", NONE));
     }
+
+    /// 转发项必须是 IP 字面量：主机名会被退回去，绝不为它做 DNS 解析。
+    /// Windows 裸部署没有反代可依赖时，这条保证客户端塞进来的垃圾不会变成
+    /// 一次 DNS 查询，也不会被当成可信地址。
+    @Test
+    void hostnamesAndGarbageAreNotResolvedAsClients() {
+        assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", "evil.example.com", LOCAL_PROXY));
+        assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", "1.2.3.4, not-an-ip", LOCAL_PROXY));
+        assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", "999.1.1.1", LOCAL_PROXY));
+        assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", "1.2.3.4.5", LOCAL_PROXY));
+    }
+
+    @Test
+    void ipLiteralsIncludingIpv6AreAccepted() {
+        assertEquals("2001:db8::1", ClientAddresses.resolve("127.0.0.1", "2001:db8::1", LOCAL_PROXY));
+        assertEquals("::ffff:203.0.113.7",
+                ClientAddresses.resolve("127.0.0.1", "::ffff:203.0.113.7", LOCAL_PROXY));
+        assertEquals("203.0.113.7", ClientAddresses.resolve("127.0.0.1", " 203.0.113.7 ", LOCAL_PROXY));
+    }
 }

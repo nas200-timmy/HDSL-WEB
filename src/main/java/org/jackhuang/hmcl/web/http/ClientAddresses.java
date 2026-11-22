@@ -85,11 +85,51 @@ public final class ClientAddresses {
         }
         for (int i = hops.size() - 1; i >= 0; i--) {
             if (!trustedProxies.contains(hops.get(i))) {
-                return hops.get(i);
+                String client = hops.get(i);
+                // 只接受 IP 字面量：`AuthFilter.isLoopback` 走 `InetAddress.getByName`，
+                // 一个像主机名的转发项会在 Windows/裸部署上触发 DNS 查询（慢、且把
+                // 客户端可控的字符串发给 DNS）。转发链说得不清不楚时，退回连接对端，
+                // 不做域名解析，也不替它猜。
+                return ipLiteral(client) ? client : peer;
             }
         }
         // Every hop is a trusted proxy: the leftmost is the furthest away from
         // this panel that the chain still names, which is the best answer left.
         return hops.isEmpty() ? peer : hops.get(0);
+    }
+
+    /// IPv4 四段或 IPv6 字面量，**不做 DNS**——这是这个类唯一的格式判据。
+    private static boolean ipLiteral(String value) {
+        if (value.isEmpty() || value.length() > 64) {
+            return false;
+        }
+        if (value.indexOf(':') >= 0) {
+            for (int i = 0; i < value.length(); i++) {
+                char c = value.charAt(i);
+                boolean hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+                if (!hex && c != ':' && c != '.') {
+                    return false;
+                }
+            }
+            return true;
+        }
+        String[] parts = value.split("\\.", -1);
+        if (parts.length != 4) {
+            return false;
+        }
+        for (String part : parts) {
+            if (part.isEmpty() || part.length() > 3) {
+                return false;
+            }
+            for (int i = 0; i < part.length(); i++) {
+                if (!Character.isDigit(part.charAt(i))) {
+                    return false;
+                }
+            }
+            if (Integer.parseInt(part) > 255) {
+                return false;
+            }
+        }
+        return true;
     }
 }
