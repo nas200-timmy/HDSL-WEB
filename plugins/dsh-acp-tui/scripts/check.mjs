@@ -10,6 +10,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { fileURLToPath } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -76,7 +77,7 @@ for (const [subpath, target] of Object.entries(manifest.exports ?? {})) {
   if (!existsSync(staged)) failures.push(`exports["${subpath}"] points at ${target}, which is not present when staged`)
 }
 
-const i18n = await import(join(sharedRoot, 'i18n.js'))
+const i18n = await import(pathToFileURL(join(sharedRoot, 'i18n.js')).href)
 const english = Object.keys(i18n.TABLES.en)
 const chinese = Object.keys(i18n.TABLES.zh)
 for (const key of english) {
