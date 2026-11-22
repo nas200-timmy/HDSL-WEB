@@ -173,7 +173,8 @@ public final class BrandRuntime {
     private static final Map<String, Object> LOCKS = new ConcurrentHashMap<>();
     private static final Map<String, Integer> PORTS = new ConcurrentHashMap<>();
     private static final Random RANDOM = new Random();
-    private static final BrandPortReservations PORT_RESERVATIONS = new BrandPortReservations();
+    private static final org.jackhuang.hmcl.web.instance.PortReservations PORT_RESERVATIONS =
+            new org.jackhuang.hmcl.web.instance.PortReservations();
 
     /// How long `octop init` may take before the instance is declared broken.
     private static final int OCTOP_INIT_TIMEOUT_SECONDS = 120;
@@ -832,7 +833,7 @@ public final class BrandRuntime {
     ///
     /// 先在本进程的预留表里原子占位，再去 `isFree()`：并发启动时，两个实例不会
     /// 因为"同时看到同一个端口空闲"而拿到同一个号。预留只覆盖分配到绑定的窗口，
-    /// 超时自动过期，见 [BrandPortReservations]。
+    /// 超时自动过期，见 [org.jackhuang.hmcl.web.instance.PortReservations]。
     static int allocatePort() throws IOException {
         for (int attempt = 0; attempt < ALLOC_ATTEMPTS; attempt++) {
             int candidate = ALLOC_RANGE_START + RANDOM.nextInt(ALLOC_RANGE_END - ALLOC_RANGE_START + 1);

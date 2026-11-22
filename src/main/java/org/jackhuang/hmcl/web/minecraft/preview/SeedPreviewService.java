@@ -1217,18 +1217,30 @@ public final class SeedPreviewService {
         Files.writeString(work.resolve("server.properties"), properties, StandardCharsets.UTF_8);
     }
 
+    private static final org.jackhuang.hmcl.web.instance.PortReservations PORT_RESERVATIONS =
+            new org.jackhuang.hmcl.web.instance.PortReservations();
+
+    /// 与品牌实例同一套预留：先在本进程占位，再把号交给稍后启动的预览服务器，
+    /// 避免两个预览任务在"查到空闲"和"真正绑定"之间拿到同一个端口。
     private static int freePort() {
-        try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
-            return socket.getLocalPort();
-        } catch (IOException e) {
-            int fallback = 25565;
-            for (int port = McPorts.MIN_PORT; port < McPorts.MAX_PORT; port++) {
-                if (McPorts.isFree(port)) {
-                    return port;
+        for (int attempt = 0; attempt < 16; attempt++) {
+            try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
+                int candidate = socket.getLocalPort();
+                if (PORT_RESERVATIONS.tryReserve(candidate)) {
+                    return candidate;
                 }
+            } catch (IOException e) {
+                break;
             }
-            return fallback;
         }
+        int fallback = 25565;
+        for (int port = McPorts.MIN_PORT; port < McPorts.MAX_PORT; port++) {
+            if (McPorts.isFree(port) && PORT_RESERVATIONS.tryReserve(port)) {
+                return port;
+            }
+        }
+        PORT_RESERVATIONS.tryReserve(fallback);
+        return fallback;
     }
 
     /// `save-all flush` arrived with 1.13; older servers only know `save-all`.

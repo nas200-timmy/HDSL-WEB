@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-package org.jackhuang.hmcl.web.brand;
+package org.jackhuang.hmcl.web.instance;
 
 import java.time.Duration;
 import java.util.Map;
@@ -33,7 +33,7 @@ import java.util.function.LongSupplier;
 /// 挡住了后来的分配，所以预留只需要覆盖"分配 → 绑定"这一小段，不需要挂在进程
 /// 生命周期上：超过 [DEFAULT_TTL_NANOS] 的预留自动过期，启动失败留下的残留不会
 /// 永久占用号段。
-final class BrandPortReservations {
+public final class PortReservations {
 
     static final long DEFAULT_TTL_NANOS = Duration.ofMinutes(5).toNanos();
 
@@ -41,28 +41,28 @@ final class BrandPortReservations {
     private final long ttlNanos;
     private final LongSupplier clock;
 
-    BrandPortReservations() {
+    public PortReservations() {
         this(DEFAULT_TTL_NANOS, System::nanoTime);
     }
 
-    BrandPortReservations(long ttlNanos, LongSupplier clock) {
+    public PortReservations(long ttlNanos, LongSupplier clock) {
         this.ttlNanos = ttlNanos;
         this.clock = clock;
     }
 
     /// 占位成功返回 `true`；这个号已被别人预留（且未过期）返回 `false`。
-    boolean tryReserve(int port) {
+    public boolean tryReserve(int port) {
         evictExpired();
         return reserved.putIfAbsent(port, clock.getAsLong()) == null;
     }
 
     /// 释放一个预留（分配后检查发现不能用时调用）。
-    void release(int port) {
+    public void release(int port) {
         reserved.remove(port);
     }
 
     /// 当前还在有效期内的预留数（测试与诊断用）。
-    int size() {
+    public int size() {
         evictExpired();
         return reserved.size();
     }
