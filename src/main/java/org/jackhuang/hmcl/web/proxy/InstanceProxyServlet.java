@@ -827,6 +827,14 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// would drop the mount from the address it rewrites).
     private static final String ROUTER_PATH_READ = "window.location.pathname.replace(";
 
+    /// Kimi Code 2.7 的路由读法不是 Solid 那行，而是 `f3()` 里的
+    /// `return{pathname:kAe(window.location.pathname)}`：一个归一化函数包住整个
+    /// bundle 里**唯一**的 `window.location.pathname`。标识符每次构建都变，所以按
+    /// 形状匹配，并且只在全文件恰好一处时动手——多处出现说明这不是那处路由读，
+    /// 猜错比不猜更糟（见 hasRouterPathRead 的"两次等于没有"）。
+    private static final Pattern GENERIC_ROUTER_PATH_READ = Pattern.compile(
+            "([A-Za-z_$][A-Za-z0-9_$]*)\\(window\\.location\\.pathname\\)");
+
     /// The same expression with the mount taken off it, so that under `/i/<id>/`
     /// the client matches the routes it would match at the origin root. The
     /// global is looked up rather than called outright: the bundle is served
@@ -902,7 +910,13 @@ public final class InstanceProxyServlet extends HttpServlet {
         // still match.
         String text = new String(script, StandardCharsets.ISO_8859_1);
         if (hasRouterPathRead(text)) {
-            text = text.replace(ROUTER_PATH_READ, ROUTER_PATH_READ_PATCHED);
+            if (text.contains(ROUTER_PATH_READ)) {
+                text = text.replace(ROUTER_PATH_READ, ROUTER_PATH_READ_PATCHED);
+            } else {
+                text = GENERIC_ROUTER_PATH_READ.matcher(text).replaceFirst(match -> match.group(1)
+                        + "(window.__hdslUnmount?window.__hdslUnmount(window.location.pathname)"
+                        + ":window.location.pathname)");
+            }
         }
 
         text = text.replace(ASSET_ROOT_REFERENCE, "\"" + mount + "assets/");
@@ -976,7 +990,16 @@ public final class InstanceProxyServlet extends HttpServlet {
     ///         down with it.
     static boolean hasRouterPathRead(String script) {
         int at = script.indexOf(ROUTER_PATH_READ);
-        return at >= 0 && script.indexOf(ROUTER_PATH_READ, at + 1) < 0;
+        if (at >= 0) {
+            return script.indexOf(ROUTER_PATH_READ, at + 1) < 0;
+        }
+        // 没有 Solid 那行时，只认"全文件恰好一处 `xxx(window.location.pathname)`"
+        // （Kimi Code 2.7 的 `f3()`）。一处以上无法判断哪处是路由读，交给 ROOT。
+        int first = script.indexOf("window.location.pathname");
+        if (first < 0 || script.indexOf("window.location.pathname", first + 1) >= 0) {
+            return false;
+        }
+        return GENERIC_ROUTER_PATH_READ.matcher(script).find();
     }
 
     /// The same question over the bytes the probe read.

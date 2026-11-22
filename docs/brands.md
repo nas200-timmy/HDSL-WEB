@@ -274,7 +274,12 @@ write 也停在 `/`），应用照常可用，代价是地址栏回到 `/`、刷
 「地址还给面板根」。真正的上限由读取时的 16 MB 兜着：真的超了就**整份原样发出**——不打补丁，也
 **不截断**（半截 JS 一行都跑不起来）。
 
-Kimi Code 的客户端认子路径，不需要这段脚本（实验证明：注入反而会与它自己的路由打架，故按品牌开关）。
+**Kimi Code 2.7 起也需要这段脚本**（此前版本认子路径、注入反而打架）：2.7 的 web 端改为按
+`location.pathname` 路由——读是 `return{pathname:kAe(window.location.pathname)}`（整个 bundle 唯一
+一处 `window.location.pathname`），写是 `history.pushState(null,"","/sessions/<id>")`。不注入时，
+点一下会话地址栏就变成面板根路径的 `/sessions/<id>`，`/i/<id>/` 整个不显示。面板按品牌打开
+router shim，探针除了 OpenCode 的 Solid 表达式，还认这种"全文件唯一一处归一化调用"的形状：
+认得出就给这处读法打 `__hdslUnmount` 补丁、走 MOUNT；多处出现或认不出仍回 ROOT，不猜。
 
 ## 实例模型：页面、版本与插件通道
 
