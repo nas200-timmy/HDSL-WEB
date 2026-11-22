@@ -818,25 +818,77 @@ public final class BrandCatalog {
         }
     }
 
-    /// Numeric component-wise ordering, newest first.
+    /// Component-wise ordering, newest first: numeric prefix, then the suffix.
+    ///
+    /// Octop publishes beta tags (`1.0.3b7`) whose numeric prefix ties with
+    /// `1.0.3b1`; a plain integer compare would call them equal and leave the
+    /// "latest" answer to whatever order GitHub happened to return. The suffix is
+    /// compared naturally (`b7` > `b1`), and a release outranks its own beta
+    /// (`1.0.2` > `1.0.2b9`).
     private static final Comparator<String> NEWEST_FIRST = (left, right) -> {
         String[] a = left.split("\\.");
         String[] b = right.split("\\.");
         for (int i = 0; i < Math.max(a.length, b.length); i++) {
-            int x = i < a.length ? parsePart(a[i]) : 0;
-            int y = i < b.length ? parsePart(b[i]) : 0;
-            if (x != y) {
-                return Integer.compare(y, x);
+            int cmp = comparePart(i < a.length ? a[i] : "0", i < b.length ? b[i] : "0");
+            if (cmp != 0) {
+                return -cmp;
             }
         }
-        return right.compareTo(left);
+        return 0;
     };
 
-    private static int parsePart(String part) {
-        try {
-            return Integer.parseInt(part.replaceAll("[^0-9].*$", ""));
-        } catch (NumberFormatException e) {
-            return 0;
+    private static int comparePart(String left, String right) {
+        int li = 0;
+        while (li < left.length() && Character.isDigit(left.charAt(li))) {
+            li++;
         }
+        int ri = 0;
+        while (ri < right.length() && Character.isDigit(right.charAt(ri))) {
+            ri++;
+        }
+        int ln = li == 0 ? 0 : Integer.parseInt(left.substring(0, li));
+        int rn = ri == 0 ? 0 : Integer.parseInt(right.substring(0, ri));
+        if (ln != rn) {
+            return Integer.compare(ln, rn);
+        }
+        String ls = left.substring(li);
+        String rs = right.substring(ri);
+        if (ls.isEmpty() || rs.isEmpty()) {
+            return ls.isEmpty() && rs.isEmpty() ? 0 : ls.isEmpty() ? 1 : -1;
+        }
+        return compareSuffix(ls, rs);
+    }
+
+    /// Natural order for beta suffixes: letter runs compare by character, digit
+    /// runs by value (`b10` > `b9`).
+    private static int compareSuffix(String left, String right) {
+        int i = 0;
+        int j = 0;
+        while (i < left.length() && j < right.length()) {
+            char lc = left.charAt(i);
+            char rc = right.charAt(j);
+            if (Character.isDigit(lc) && Character.isDigit(rc)) {
+                int si = i;
+                int sj = j;
+                while (i < left.length() && Character.isDigit(left.charAt(i))) {
+                    i++;
+                }
+                while (j < right.length() && Character.isDigit(right.charAt(j))) {
+                    j++;
+                }
+                int x = Integer.parseInt(left.substring(si, i));
+                int y = Integer.parseInt(right.substring(sj, j));
+                if (x != y) {
+                    return Integer.compare(x, y);
+                }
+            } else {
+                if (lc != rc) {
+                    return Character.compare(lc, rc);
+                }
+                i++;
+                j++;
+            }
+        }
+        return Integer.compare(left.length() - i, right.length() - j);
     }
 }

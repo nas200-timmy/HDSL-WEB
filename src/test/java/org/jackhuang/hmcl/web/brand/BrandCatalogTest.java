@@ -99,6 +99,21 @@ class BrandCatalogTest {
         assertEquals("0.10.0", snapshot.latest());
     }
 
+    /// Octop 的 beta 后缀不能靠 GitHub 返回顺序：`1.0.3b7` 必须稳定排在
+    /// `1.0.3b1` 前面，发布版 `1.0.2` 也必须新于自己的 beta `1.0.2b9`。
+    @Test
+    void octopBetaSuffixesOrderNewestFirstRegardlessOfApiOrder() {
+        String body = """
+                [{"name":"v1.0.3b1"},{"name":"v1.0.3b7"},
+                 {"name":"v1.0.2"},{"name":"v1.0.2b9"}]""";
+
+        BrandCatalog.Snapshot snapshot = BrandCatalog.parseGitHubTags(body, "v",
+                Brand.OCTOP::isReleaseVersion);
+
+        assertEquals("1.0.3b7", snapshot.latest());
+        assertEquals(List.of("1.0.3b7", "1.0.3b1", "1.0.2", "1.0.2b9"), snapshot.versions());
+    }
+
     @Test
     void githubTagsWithoutACleanTagYieldAnEmptySnapshot() {
         assertTrue(BrandCatalog.parseGitHubTags("[{\"name\":\"nightly\"}]").versions().isEmpty());
