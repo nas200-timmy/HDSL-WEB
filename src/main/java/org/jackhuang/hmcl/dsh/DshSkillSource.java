@@ -497,7 +497,10 @@ public final class DshSkillSource {
                         continue;
                     }
                     report.accept(relative);
-                    Path target = pack.resolve(relative);
+                    Path target = org.jackhuang.hmcl.util.io.SafePaths.resolveArchiveEntry(pack, relative);
+                    if (target == null) {
+                        continue;
+                    }
                     Files.createDirectories(target.getParent());
                     Files.copy(zip, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                     files++;
