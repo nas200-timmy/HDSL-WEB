@@ -587,7 +587,7 @@ public final class DeveloperApiServlet extends HttpServlet {
                             + "stops working when that elevation ends");
             return;
         }
-        String address = request.getRemoteAddr();
+        String address = org.jackhuang.hmcl.web.http.ClientAddresses.remote(request, config.network.trustedProxies);
         // The default posture: a ticket is for a tool beside the panel. A
         // remote caller asking for one would only get a credential the reuse
         // gate refuses later, so say it here.
@@ -1152,7 +1152,7 @@ public final class DeveloperApiServlet extends HttpServlet {
     /// refusal itself.
     private boolean confirmPanelPassword(HttpServletRequest request, HttpServletResponse response,
                                          UserStore users, String adminPassword) throws IOException {
-        String address = request.getRemoteAddr();
+        String address = org.jackhuang.hmcl.web.http.ClientAddresses.remote(request, config.network.trustedProxies);
         String key = address == null || address.isBlank() ? "unknown" : address;
         Instant now = Instant.now();
         if (adminPasswordThrottle.isBlocked(key, now)) {

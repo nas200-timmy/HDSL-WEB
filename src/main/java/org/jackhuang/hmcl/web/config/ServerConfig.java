@@ -357,6 +357,16 @@ public final class ServerConfig {
         /// 授权到什么时候为止（`network.accept_unverified_until`，ISO-8601）。
         /// `null` 表示严格校验——这是默认，也是没有记录时的意思。
         public volatile @Nullable Instant acceptUnverifiedUntil;
+
+        /// 允许替客户端地址作证的反代地址（`network.trusted_proxies`，精确 IP，
+        /// 逗号分隔或 YAML 列表；`HDSL_TRUSTED_PROXIES`）。默认空：谁也不信，
+        /// 一切安全判定都看连接对端。
+        ///
+        /// 只有面板**只**经这些反代暴露时才该配置。配上之后，来自这些地址的
+        /// `X-Forwarded-For` 才会被采纳，agent 的 loopback 限制、开发者守卫的
+        /// 明文升级、登录节流才按真实客户端而不是按 `127.0.0.1` 判定。
+        /// 直接暴露面板时**不要**配置——客户端可以自己写这个头。
+        public volatile java.util.Set<String> trustedProxies = java.util.Set.of();
     }
 
     /// The legacy no-JavaScript surface (`/plain`): a full citizen (fragment

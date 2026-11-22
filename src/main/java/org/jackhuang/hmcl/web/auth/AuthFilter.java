@@ -89,6 +89,10 @@ public final class AuthFilter implements Filter {
     private final boolean agentRemoteNeedsSession;
     /// 票是否只认本机回环（默认是）。比上一条更严：非回环一律拒，不看会话。
     private final boolean agentLoopbackOnly;
+
+    /// 允许替客户端地址作证的反代（`network.trusted_proxies`）。默认空：判定只看
+    /// 连接对端。见 [org.jackhuang.hmcl.web.http.ClientAddresses]。
+    private final java.util.function.Supplier<java.util.Set<String>> trustedProxies;
     /// 会话 Cookie 的 Path：根挂载是 `/`，子路径挂载是挂载点本身。
     /// 同一个域名下挂两个面板（`/a/`、`/b/`）时，Path=/ 的同名 Cookie 会互相覆盖，
     /// 表现为「登录 A 之后 B 掉线」。
@@ -119,6 +123,18 @@ public final class AuthFilter implements Filter {
                       PeerIdentity identity,
                       boolean agentRemoteNeedsSession,
                       boolean agentLoopbackOnly) {
+        this(authService, authDisabled, secureRequest, ttlSeconds, basePath, elevation, identity,
+                agentRemoteNeedsSession, agentLoopbackOnly, java.util.Set::of);
+    }
+
+    public AuthFilter(AuthService authService, boolean authDisabled,
+                      java.util.function.Predicate<HttpServletRequest> secureRequest, int ttlSeconds,
+                      String basePath,
+                      org.jackhuang.hmcl.web.developer.DeveloperElevation elevation,
+                      PeerIdentity identity,
+                      boolean agentRemoteNeedsSession,
+                      boolean agentLoopbackOnly,
+                      java.util.function.Supplier<java.util.Set<String>> trustedProxies) {
         this.authService = authService;
         this.authDisabled = authDisabled;
         this.secureRequest = secureRequest;
@@ -128,6 +144,19 @@ public final class AuthFilter implements Filter {
         this.identity = identity;
         this.agentRemoteNeedsSession = agentRemoteNeedsSession;
         this.agentLoopbackOnly = agentLoopbackOnly;
+        this.trustedProxies = trustedProxies;
+    }
+
+    /// 这次请求的客户端地址：配置了可信反代时才采纳 `X-Forwarded-For`，否则就是
+    /// 连接对端。登录节流、agent 的来源限制都按它判，不按 `127.0.0.1` 这个
+    /// 反代自己的地址判。
+    public String clientAddress(HttpServletRequest request) {
+        return org.jackhuang.hmcl.web.http.ClientAddresses.remote(request, trustedProxies.get());
+    }
+
+    /// 客户端（而不是反代）是否在本机。
+    public boolean isLoopbackClient(HttpServletRequest request) {
+        return isLoopback(clientAddress(request));
     }
 
     /// The request path as this panel's routes are written.
@@ -236,7 +265,7 @@ public final class AuthFilter implements Filter {
         String method = req.getMethod();
         String path = pathOf(req);
         if (!remoteGrantAllowed(req, grant)) {
-            boolean loopbackRule = agentLoopbackOnly && !isLoopback(req.getRemoteAddr());
+            boolean loopbackRule = agentLoopbackOnly && !isLoopbackClient(req);
             auditDenied(req, path, grant, loopbackRule ? "loopback_only" : "remote_session_required", null);
             Json.error(resp, HttpServletResponse.SC_FORBIDDEN, loopbackRule
                     ? "agent_loopback_only: this ticket is only usable from the panel's loopback;"
@@ -420,7 +449,7 @@ public final class AuthFilter implements Filter {
     private boolean remoteGrantAllowed(HttpServletRequest request,
                                        org.jackhuang.hmcl.web.developer.DeveloperElevation.AgentGrant grant) {
         return grantUsable(agentLoopbackOnly, agentRemoteNeedsSession,
-                isLoopback(request.getRemoteAddr()),
+                isLoopbackClient(request),
                 grant.mintedBy() == org.jackhuang.hmcl.web.developer.DeveloperElevation.MintedBy.SESSION,
                 hasLiveSession(request));
     }

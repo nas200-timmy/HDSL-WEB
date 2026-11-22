@@ -77,6 +77,31 @@ class ConfigLoaderTest {
         assertThrows(ServerConfigLoader.ConfigException.class, () -> load(Map.of()));
     }
 
+    /// 可信反代：默认谁也不信；yaml 列表与逗号串都能读；环境变量可覆盖。
+    @Test
+    void trustedProxiesDefaultToEmptyAndParseBothShapes() throws Exception {
+        assertTrue(load(Map.of()).network.trustedProxies.isEmpty(),
+                "默认不信任何反代，X-Forwarded-For 一律不采纳");
+
+        Files.writeString(dataDir.resolve("server.yaml"), """
+                network:
+                  trusted_proxies: ["127.0.0.1", "::1"]
+                """);
+        assertEquals(java.util.Set.of("127.0.0.1", "::1"), load(Map.of()).network.trustedProxies);
+
+        Files.writeString(dataDir.resolve("server.yaml"), """
+                network:
+                  trusted_proxies: "127.0.0.1, 10.0.0.2"
+                """);
+        assertEquals(java.util.Set.of("127.0.0.1", "10.0.0.2"), load(Map.of()).network.trustedProxies);
+
+        assertEquals(java.util.Set.of("192.168.1.10"),
+                load(Map.of("HDSL_TRUSTED_PROXIES", "192.168.1.10")).network.trustedProxies);
+
+        assertTrue(load(Map.of("HDSL_TRUSTED_PROXIES", "")).network.trustedProxies.isEmpty(),
+                "空的环境变量等于没配置，不是'信任一个空地址'");
+    }
+
     /// 非回环票的开关：yaml 能读、环境变量能覆盖，默认关。
     @Test
     void theAgentRemoteSessionSwitchIsRead() throws Exception {

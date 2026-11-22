@@ -118,7 +118,7 @@ public final class DeveloperGuardFilter implements Filter {
         // A remote cleartext panel has no TLS to protect a stolen session, so
         // the guard is forced to its highest scope. Loopback remains local
         // (tests, SSH local forwarding).
-        if (!secure && !org.jackhuang.hmcl.web.auth.AuthFilter.isLoopback(http.getRemoteAddr())
+        if (!secure && !org.jackhuang.hmcl.web.http.ClientAddresses.isLoopback(http, config.network.trustedProxies)
                 && scope != DeveloperGuardScope.ALL) {
             scope = DeveloperGuardScope.ALL;
         }
