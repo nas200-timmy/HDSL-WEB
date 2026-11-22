@@ -64,7 +64,14 @@ HDSL-web 用它给自签证书加 SAN，并在启动 dsh 实例时传 `--trusted
 https:
   enabled: false              # 证书在 nginx，面板不碰
   trust_forwarded_proto: true # 让面板认 X-Forwarded-Proto: https
+network:
+  trusted_proxies: ["127.0.0.1", "::1"] # 同机反代：安全判定按真实客户端，而不是按 127.0.0.1
 ```
+
+`network.trusted_proxies` 只管**客户端地址**，与 `trust_forwarded_proto` 管**协议**是两件事。
+不配它，反代后所有外部请求在面板眼里都是本机：agent 的 loopback 限制失效、开发者守卫的
+明文升级不触发、登录节流变成全站共享预算。只在面板确实只经这些反代暴露时配置；
+直连暴露时配置它反而会让客户端伪造 `X-Forwarded-For` 绕过限制。
 
 nginx，**根路径挂载**：
 

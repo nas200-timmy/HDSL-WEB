@@ -43,6 +43,10 @@ import java.util.Map;
 /// header a proxy would be recognised by (`X-Forwarded-For`) is one a client can write itself, and
 /// trusting it would let a single attacker both evade this and spend everybody else's budget.
 ///
+/// 装了同机反代又想按真实客户端分桶，把反代地址写进 `network.trusted_proxies`
+/// （见 [org.jackhuang.hmcl.web.http.ClientAddresses]）：只有名单内的反代能为客户端作证，
+/// 否则维持上面的共享预算，不让客户端自己填来源地址。
+///
 /// A refused address is refused *before* the password is checked. Checking it is the expensive half —
 /// a PBKDF2 derivation at the iteration count this panel uses — and spending that is exactly what an
 /// attacker is trying to do.
