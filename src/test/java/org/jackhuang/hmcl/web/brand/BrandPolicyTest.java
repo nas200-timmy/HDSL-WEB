@@ -61,6 +61,25 @@ class BrandPolicyTest {
         assertFalse(policy.disabled(Brand.KIMI, "other"));
     }
 
+    /// survivor 被删掉之后，旧 id 不再匹配任何实例；不能因此把整个品牌锁死。
+    @Test
+    void aMissingSurvivorIsAdoptedInsteadOfDisablingEverything(@TempDir Path dataDir) throws Exception {
+        BrandPolicy policy = new BrandPolicy(dataDir);
+        policy.set(Brand.OCTOP, new BrandPolicy.Entry(true, "gone", false, false, null));
+        assertTrue(policy.disabled(Brand.OCTOP, "a"), "修复前一切都被禁用");
+
+        BrandPolicy.Entry healed = policy.reconcile(Brand.OCTOP, java.util.List.of("a", "b"));
+        assertEquals("a", healed.survivor());
+        assertEquals("a", policy.get(Brand.OCTOP).survivor(), "修复要落盘，动作闸门才放行");
+        assertFalse(policy.disabled(Brand.OCTOP, "a"));
+        assertTrue(policy.disabled(Brand.OCTOP, "b"), "单实例语义保留：其余仍禁用");
+
+        // 已经在列表里的 survivor 不动。
+        assertEquals("a", policy.reconcile(Brand.OCTOP, java.util.List.of("b", "a")).survivor());
+        // 没有任何实例时也不凭空造一个。
+        assertEquals("a", policy.reconcile(Brand.OCTOP, java.util.List.of()).survivor());
+    }
+
     @Test
     void lockedRouteRequiresSingleInstanceAndASurvivor(@TempDir Path dataDir) {
         BrandPolicy policy = new BrandPolicy(dataDir);

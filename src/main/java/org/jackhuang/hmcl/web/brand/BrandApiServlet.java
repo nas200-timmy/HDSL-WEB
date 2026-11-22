@@ -643,8 +643,11 @@ public final class BrandApiServlet extends HttpServlet {
     private void listInstances(Brand brand, PathRef ref, HttpServletRequest request,
                                HttpServletResponse response) throws IOException {
         JsonArray instances = new JsonArray();
-        for (BrandInstance instance : ref.manager().list()) {
-            instances.add(instanceJson(brand, instance, request));
+        java.util.List<BrandInstance> list = ref.manager().list();
+        BrandPolicy.Entry policyEntry = policy.reconcile(brand,
+                list.stream().map(BrandInstance::id).toList());
+        for (BrandInstance instance : list) {
+            instances.add(instanceJson(brand, instance, request, policyEntry));
         }
         JsonObject body = new JsonObject();
         body.add("instances", instances);
@@ -1713,6 +1716,11 @@ public final class BrandApiServlet extends HttpServlet {
     // --------------------------------------------------------------- response --
 
     private JsonObject instanceJson(Brand brand, BrandInstance instance, HttpServletRequest request) {
+        return instanceJson(brand, instance, request, policy.get(brand));
+    }
+
+    private JsonObject instanceJson(Brand brand, BrandInstance instance, HttpServletRequest request,
+                                    BrandPolicy.Entry policyEntry) {
         BrandRuntime.Status status = BrandRuntime.status(instance.id());
         JsonObject body = new JsonObject();
         body.addProperty("id", instance.id());
@@ -1754,7 +1762,8 @@ public final class BrandApiServlet extends HttpServlet {
         body.addProperty("lastPort", instance.lastPort());
         body.addProperty("createdAt", instance.createdAt());
         body.addProperty("state", status.state().name().toLowerCase(java.util.Locale.ROOT));
-        body.addProperty("disabled", policy.disabled(brand, instance.id()));
+        body.addProperty("disabled",
+                policyEntry.singleInstance() && !instance.id().equals(policyEntry.survivor()));
         // Hermes' web mode and its terminal are exclusive; the UI asks before a
         // click ends the other mode, so it needs the server's answer (a browser
         // that never opened a terminal still has to know one is running).
