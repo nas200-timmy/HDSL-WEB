@@ -27,6 +27,7 @@ import org.jetbrains.annotations.Nullable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -295,7 +296,11 @@ public final class ZcodeWindowsRuntimeHost {
                     return hit;
                 }
             }
-        } catch (IOException e) {
+        } catch (IOException | UncheckedIOException | SecurityException e) {
+            // PATH 里常有当前账号读不了的目录（Windows 上是
+            // C:\Windows\System32\Com\dmp 这类），而 Files.walk 的失败是在
+            // 流迭代时以 UncheckedIOException 抛出的——只 catch IOException
+            // 会让一个无关目录把整个 ZCode runtime 制备打死。
             LOG.debug("Could not search " + directory + " for a mingw compiler: " + e.getMessage());
         }
         return Optional.empty();
