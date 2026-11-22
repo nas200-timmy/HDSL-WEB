@@ -1553,15 +1553,39 @@ public final class BrandApiServlet extends HttpServlet {
         }
     }
 
-    /// Runs `octop user passwd <username> --password <pw>` with the instance's own environment.
+    /// Sets the password of `username`, creating the admin if the instance has no user yet.
+    ///
+    /// A fresh Octop writes an empty `users` table until its first-run wizard finishes.
+    /// The panel used to run `user passwd` unconditionally, which fails with
+    /// `error: user not found: admin` and leaves the page with no way to set a first
+    /// password. Creating the admin through Octop's own CLI is the same door the wizard
+    /// uses, and keeps the panel's "reset" button meaningful on a never-opened instance.
     private static void resetOctopPassword(BrandInstance instance, Path brandRoot, Path home,
                                            String username, String password) throws IOException {
         Path packageDir = BrandInstaller.packageDir(Brand.OCTOP, brandRoot, instance.version());
         if (packageDir == null) {
             throw new IOException("Octop " + instance.version() + " is not installed");
         }
+        try {
+            runOctop(packageDir, home, List.of("user", "passwd", username, "--password", password));
+        } catch (IOException e) {
+            if (!isUnknownUser(e.getMessage())) {
+                throw e;
+            }
+            runOctop(packageDir, home,
+                    List.of("user", "create", username, "--password", password, "--role", "admin"));
+        }
+    }
+
+    /// Whether Octop's CLI answered that the named user does not exist.
+    static boolean isUnknownUser(@Nullable String message) {
+        return message != null && message.toLowerCase(java.util.Locale.ROOT).contains("user not found");
+    }
+
+    /// Runs one Octop CLI invocation with the instance's own environment.
+    private static String runOctop(Path packageDir, Path home, List<String> args) throws IOException {
         List<String> command = new java.util.ArrayList<>(octopCommand(packageDir));
-        command.addAll(List.of("user", "passwd", username, "--password", password));
+        command.addAll(args);
 
         // As the instance's uid: Octop rewrites its own store, and a root-owned
         // file there is one the instance can no longer maintain.
@@ -1594,21 +1618,22 @@ public final class BrandApiServlet extends HttpServlet {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             process.destroyForcibly();
-            throw new IOException("octop user passwd was interrupted", e);
+            throw new IOException("octop " + String.join(" ", args) + " was interrupted", e);
         }
         if (!finished) {
             process.descendants().forEach(java.lang.ProcessHandle::destroyForcibly);
             process.destroyForcibly();
-            throw new IOException("octop user passwd timed out");
+            throw new IOException("octop " + String.join(" ", args) + " timed out");
         }
         String text;
         synchronized (output) {
             text = output.toString().trim();
         }
         if (process.exitValue() != 0) {
-            throw new IOException("octop user passwd failed (exit " + process.exitValue() + "): "
-                    + (text.isEmpty() ? "no output" : text));
+            throw new IOException("octop " + String.join(" ", args) + " failed (exit "
+                    + process.exitValue() + "): " + (text.isEmpty() ? "no output" : text));
         }
+        return text;
     }
 
     /// How to invoke Octop's CLI inside an installed release: the source build has an entry point, the
