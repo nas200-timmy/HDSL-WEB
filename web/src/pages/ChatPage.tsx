@@ -1117,18 +1117,26 @@ export function ChatPage() {
             <AddIcon size={16} />
             新会话
           </button>
-          <button className="tool-btn ripple-host" onClick={() => navigate("/chat/settings")} title="聊天设置">
-            <SettingsIcon size={20} />
-          </button>
-          {session && (
+          <span className="chat-header-actions">
             <button
-              className="tool-btn ripple-host"
-              onClick={(event) => setSessionMenu(event.currentTarget)}
-              title="会话操作"
+              className="tool-btn chat-header-action ripple-host"
+              aria-label="聊天设置"
+              onClick={() => navigate("/chat/settings")}
+              title="聊天设置"
             >
-              <MoreVertIcon size={20} />
+              <SettingsIcon size={20} />
             </button>
-          )}
+            {session && (
+              <button
+                className="tool-btn chat-header-action ripple-host"
+                aria-label="会话操作"
+                onClick={(event) => setSessionMenu(event.currentTarget)}
+                title="会话操作"
+              >
+                <MoreVertIcon size={20} />
+              </button>
+            )}
+          </span>
         </div>
 
         <PopupMenu open={sessionMenu !== null} anchor={sessionMenu} onClose={() => setSessionMenu(null)}>
