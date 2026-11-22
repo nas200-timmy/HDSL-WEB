@@ -72,12 +72,7 @@ public final class ClientAddresses {
     public static String resolve(@Nullable String remoteAddr, @Nullable String forwardedFor,
                                  Set<String> trustedProxies) {
         String peer = remoteAddr == null || remoteAddr.isBlank() ? "unknown" : normalizeIp(remoteAddr.trim());
-        // 集合与 hop 用同一个规范化函数：配置写 `::1`、Jetty 报 `0:0:0:0:0:0:0:1`
-        // 也必须匹配上，否则可信反代会被误判成客户端。
-        java.util.Set<String> trusted = trustedProxies.isEmpty() ? trustedProxies
-                : trustedProxies.stream().map(ClientAddresses::normalizeIp)
-                        .collect(java.util.stream.Collectors.toSet());
-        if (trusted.isEmpty() || !trusted.contains(peer)
+        if (trustedProxies.isEmpty() || !isTrusted(peer, trustedProxies)
                 || forwardedFor == null || forwardedFor.isBlank()) {
             return peer;
         }
@@ -90,7 +85,7 @@ public final class ClientAddresses {
         }
         for (int i = hops.size() - 1; i >= 0; i--) {
             String hop = normalizeIp(hops.get(i));
-            if (!trusted.contains(hop)) {
+            if (!isTrusted(hop, trustedProxies)) {
                 // 只接受 IP 字面量：`AuthFilter.isLoopback` 走 `InetAddress.getByName`，
                 // 一个像主机名的转发项会在 Windows/裸部署上触发 DNS 查询（慢、且把
                 // 客户端可控的字符串发给 DNS）。
@@ -118,6 +113,20 @@ public final class ClientAddresses {
         } catch (java.net.UnknownHostException e) {
             return value;
         }
+    }
+
+    /// 某个地址是否属于可信反代：两边都先规范化，IPv6 的全角/压缩写法都算数。
+    public static boolean isTrusted(@Nullable String address, Set<String> trustedProxies) {
+        if (address == null || address.isBlank()) {
+            return false;
+        }
+        String normalized = normalizeIp(address.trim());
+        for (String trusted : trustedProxies) {
+            if (normalizeIp(trusted).equals(normalized)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// IPv4 四段或 IPv6 字面量，**不做 DNS**——这是这个类唯一的格式判据。
