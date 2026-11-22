@@ -41,7 +41,7 @@ src/main/resources/octop/octop-dashboard-<version>.zip
 
 1. 构建用相对 base，代理在 `index.html` 注入 `<base href="${basePath}/i/<token>/">`
    和 `window.__OCTOP_BASE__`；
-2. `auth_token`、`octop:active-agent` 等 localStorage key 按挂载点命名空间化；
+2. 所有 localStorage / sessionStorage key 按挂载点命名空间化（见下「存储命名空间」）；
 3. **所有 URL 走 `publicUrl()` / `getApiUrl()` / `getWsUrl()`**：这三张门是唯一会读挂载点的地方。
 
 ### 挂载点不变量（一次查完，别再一个个补）
@@ -62,6 +62,18 @@ src/main/resources/octop/octop-dashboard-<version>.zip
 
 补丁源码在 `integrations/octop/patches/`（见该目录 README），构建产物就是上面的
 `octop-dashboard-<version>.zip`。
+
+### 存储命名空间（不再逐键补）
+
+`auth_token` 当时只分区了最疼的几个键，但上游还有几十个未分区键：`pendingChatMessage`
+（A 写的待发送消息会在 B 的聊天页被发出去）、`setup-jwt` / `wizard-token`（setup 凭据）、
+`terminal-sessions` / `remote-browser:session-id`（远程会话）、`connector-oauth`，以及一堆
+布局偏好。逐键打补丁一定漏，而且上游每新增一个键就漏一次。所以代理在 `index.html` 里紧接着
+`__OCTOP_BASE__` 再注入一小段脚本，在 `Storage.prototype` 的 `getItem` / `setItem` /
+`removeItem` 上统一加 `octop:<mount>:` 前缀：**localStorage 和 sessionStorage 的所有键
+（包括以后新增的）都按实例隔离**；已经是 `octop:<mount>:` 开头的（0001 补丁里的 scopedKey）
+原样放行，不会被二次加前缀。多实例共用 origin 时，登录 A 不会踢掉 B，A 的待发送消息也不会
+在 B 里被发出去。
 
 ## 登录密码（面板里就能管）
 

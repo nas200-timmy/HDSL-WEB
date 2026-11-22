@@ -1376,10 +1376,37 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// references resolve from deep links (`/i/<token>/agents/...`), and the
     /// global is what the patched `publicUrl`/router reads. No runtime shim and
     /// no chunk rewriting: the bundle already builds mount-aware URLs.
+    /// Octop 的存储命名空间：上游按单租户设计，`localStorage`/`sessionStorage` 里
+    /// 几十个键都不分实例——`auth_token`（串登录）、`pendingChatMessage`（A 写的
+    /// 消息在 B 里被发出去）、`setup-jwt`/`wizard-token`（setup 凭据）、
+    /// `terminal-sessions`/`remote-browser:session-id`（远程会话）全在同源下互相
+    /// 覆盖。逐键打补丁必然漏，而且上游每次新增一个键就漏一次，所以在
+    /// `Storage.prototype` 上统一加挂载前缀：两个存储对象、所有键、包括以后新增
+    /// 的，一次全覆盖。已经是 `octop:<mount>:` 开头的（0001 的 scopedKey）原样放行，
+    /// 不会被二次加前缀。
+    private static final String OCTOP_STORAGE_SHIM = """
+            (()=>{
+            if(window.__octopStorageScoped)return;window.__octopStorageScoped=true;
+            const mount=window.__OCTOP_BASE__||"/";
+            const prefix="octop:"+mount+":";
+            const strip=(key)=>{if(typeof key!=="string")return key;
+            if(key.indexOf(prefix)===0)return key;
+            let name=key;
+            if(name.indexOf("octop:")===0)name=name.slice(6);
+            else if(name.indexOf("octop.")===0)name=name.slice(6);
+            return prefix+name};
+            const get=Storage.prototype.getItem,set=Storage.prototype.setItem,del=Storage.prototype.removeItem;
+            Storage.prototype.getItem=function(k){return get.call(this,strip(k))};
+            Storage.prototype.setItem=function(k,v){return set.call(this,strip(k),v)};
+            Storage.prototype.removeItem=function(k){return del.call(this,strip(k))};
+            })()
+            """;
+
     static String rewriteOctopPage(String html, String mount) {
         String escaped = mount.replace("\\", "\\\\").replace("\"", "\\\"");
         String injection = "<base href=\"" + mount + "\">"
-                + "<script>window.__OCTOP_BASE__=\"" + escaped + "\";</script>";
+                + "<script>window.__OCTOP_BASE__=\"" + escaped + "\";\n"
+                + OCTOP_STORAGE_SHIM + "</script>";
         String withoutBase = html.replaceAll("(?is)<base\\s[^>]*>", "");
         int head = indexOfIgnoreCase(withoutBase, "<head>");
         String rewritten;
