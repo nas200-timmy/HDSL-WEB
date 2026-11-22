@@ -74,21 +74,33 @@ class ClientAddressesTest {
         assertEquals("unknown", ClientAddresses.resolve(null, "1.2.3.4", NONE));
     }
 
-    /// 转发项必须是 IP 字面量：主机名会被退回去，绝不为它做 DNS 解析。
-    /// Windows 裸部署没有反代可依赖时，这条保证客户端塞进来的垃圾不会变成
-    /// 一次 DNS 查询，也不会被当成可信地址。
+    /// 转发项必须是 IP 字面量，畸形时按外部来源（fail-closed），而不是退回
+    /// `127.0.0.1` 这个反代自己的地址——否则同机反代下外部请求会被当本机放行。
     @Test
     void hostnamesAndGarbageAreNotResolvedAsClients() {
-        assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", "host.example.invalid", LOCAL_PROXY));
-        assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", "1.2.3.4, not-an-ip", LOCAL_PROXY));
-        assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", "999.1.1.1", LOCAL_PROXY));
-        assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", "1.2.3.4.5", LOCAL_PROXY));
+        assertEquals("unknown", ClientAddresses.resolve("127.0.0.1", "host.example.invalid", LOCAL_PROXY));
+        assertEquals("unknown", ClientAddresses.resolve("127.0.0.1", "1.2.3.4, not-an-ip", LOCAL_PROXY));
+        assertEquals("unknown", ClientAddresses.resolve("127.0.0.1", "999.1.1.1", LOCAL_PROXY));
+        assertEquals("unknown", ClientAddresses.resolve("127.0.0.1", "1.2.3.4.5", LOCAL_PROXY));
+        // 没有转发头仍是直连的本机语义，不属于畸形。
+        assertEquals("127.0.0.1", ClientAddresses.resolve("127.0.0.1", null, LOCAL_PROXY));
+    }
+
+    @Test
+    void ipv6SpellingsAreNormalisedBeforeMatching() {
+        // Jetty 报全角形式，配置写压缩形式，也必须算同一个反代。
+        assertEquals("203.0.113.7",
+                ClientAddresses.resolve("0:0:0:0:0:0:0:1", "203.0.113.7", LOCAL_PROXY));
+        assertEquals(ClientAddresses.normalizeIp("0:0:0:0:0:0:0:1"), ClientAddresses.normalizeIp("::1"));
+        assertEquals(ClientAddresses.normalizeIp("2001:db8::1"),
+                ClientAddresses.normalizeIp("2001:0db8:0000:0000:0000:0000:0000:0001"));
     }
 
     @Test
     void ipLiteralsIncludingIpv6AreAccepted() {
-        assertEquals("2001:db8::1", ClientAddresses.resolve("127.0.0.1", "2001:db8::1", LOCAL_PROXY));
-        assertEquals("::ffff:203.0.113.7",
+        assertEquals(ClientAddresses.normalizeIp("2001:db8::1"),
+                ClientAddresses.resolve("127.0.0.1", "2001:db8::1", LOCAL_PROXY));
+        assertEquals(ClientAddresses.normalizeIp("::ffff:203.0.113.7"),
                 ClientAddresses.resolve("127.0.0.1", "::ffff:203.0.113.7", LOCAL_PROXY));
         assertEquals("203.0.113.7", ClientAddresses.resolve("127.0.0.1", " 203.0.113.7 ", LOCAL_PROXY));
     }

@@ -232,7 +232,16 @@ public final class ServerConfigLoader {
             }
         }
         addresses.removeIf(String::isBlank);
-        return java.util.Collections.unmodifiableSet(addresses);
+        java.util.LinkedHashSet<String> normalized = new java.util.LinkedHashSet<>();
+        for (String address : addresses) {
+            // 只收 IP 字面量，且规范化写法：配 `::1` 而 Jetty 报 `0:0:0:0:0:0:0:1`
+            // 也必须算同一个反代，否则这条配置会静默失效。
+            if (!org.jackhuang.hmcl.web.http.ClientAddresses.ipLiteral(address)) {
+                throw new ConfigException("network.trusted_proxies: not an IP address: `" + address + "`");
+            }
+            normalized.add(org.jackhuang.hmcl.web.http.ClientAddresses.normalizeIp(address));
+        }
+        return java.util.Collections.unmodifiableSet(normalized);
     }
 
     private static void applyNetwork(ServerConfig config, Map<String, Object> section) {

@@ -71,8 +71,13 @@ public final class ClientAddresses {
     /// @return the address to decide on, never `null`
     public static String resolve(@Nullable String remoteAddr, @Nullable String forwardedFor,
                                  Set<String> trustedProxies) {
-        String peer = remoteAddr == null || remoteAddr.isBlank() ? "unknown" : remoteAddr.trim();
-        if (trustedProxies.isEmpty() || !trustedProxies.contains(peer)
+        String peer = remoteAddr == null || remoteAddr.isBlank() ? "unknown" : normalizeIp(remoteAddr.trim());
+        // 集合与 hop 用同一个规范化函数：配置写 `::1`、Jetty 报 `0:0:0:0:0:0:0:1`
+        // 也必须匹配上，否则可信反代会被误判成客户端。
+        java.util.Set<String> trusted = trustedProxies.isEmpty() ? trustedProxies
+                : trustedProxies.stream().map(ClientAddresses::normalizeIp)
+                        .collect(java.util.stream.Collectors.toSet());
+        if (trusted.isEmpty() || !trusted.contains(peer)
                 || forwardedFor == null || forwardedFor.isBlank()) {
             return peer;
         }
@@ -84,22 +89,39 @@ public final class ClientAddresses {
             }
         }
         for (int i = hops.size() - 1; i >= 0; i--) {
-            if (!trustedProxies.contains(hops.get(i))) {
-                String client = hops.get(i);
+            String hop = normalizeIp(hops.get(i));
+            if (!trusted.contains(hop)) {
                 // 只接受 IP 字面量：`AuthFilter.isLoopback` 走 `InetAddress.getByName`，
                 // 一个像主机名的转发项会在 Windows/裸部署上触发 DNS 查询（慢、且把
-                // 客户端可控的字符串发给 DNS）。转发链说得不清不楚时，退回连接对端，
-                // 不做域名解析，也不替它猜。
-                return ipLiteral(client) ? client : peer;
+                // 客户端可控的字符串发给 DNS）。
+                //
+                // 转发项畸形时**不能退回连接对端**：同机反代的对端就是 127.0.0.1，
+                // 退回等于把外部请求当本机放行（agent 票、开发者守卫、节流全放宽）。
+                // 说不清来源就按外部处理（fail-closed），不是按本机。
+                return ipLiteral(hop) ? hop : "unknown";
             }
         }
         // Every hop is a trusted proxy: the leftmost is the furthest away from
         // this panel that the chain still names, which is the best answer left.
-        return hops.isEmpty() ? peer : hops.get(0);
+        return hops.isEmpty() ? peer : normalizeIp(hops.get(0));
+    }
+
+    /// 把 IP 字面量规范化成统一写法（`0:0:0:0:0:0:0:1` → `::1`），让
+    /// `trusted_proxies` 的精确匹配不被 IPv6 的多种写法绕过。只对字面量调用
+    /// `InetAddress`——字面量不会触发 DNS。
+    public static String normalizeIp(String value) {
+        if (!ipLiteral(value)) {
+            return value;
+        }
+        try {
+            return java.net.InetAddress.getByName(value).getHostAddress();
+        } catch (java.net.UnknownHostException e) {
+            return value;
+        }
     }
 
     /// IPv4 四段或 IPv6 字面量，**不做 DNS**——这是这个类唯一的格式判据。
-    private static boolean ipLiteral(String value) {
+    public static boolean ipLiteral(String value) {
         if (value.isEmpty() || value.length() > 64) {
             return false;
         }

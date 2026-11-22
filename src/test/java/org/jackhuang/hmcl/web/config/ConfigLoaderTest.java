@@ -87,7 +87,9 @@ class ConfigLoaderTest {
                 network:
                   trusted_proxies: ["127.0.0.1", "::1"]
                 """);
-        assertEquals(java.util.Set.of("127.0.0.1", "::1"), load(Map.of()).network.trustedProxies);
+        assertEquals(java.util.Set.of("127.0.0.1",
+                org.jackhuang.hmcl.web.http.ClientAddresses.normalizeIp("::1")),
+                load(Map.of()).network.trustedProxies);
 
         Files.writeString(dataDir.resolve("server.yaml"), """
                 network:
@@ -100,6 +102,15 @@ class ConfigLoaderTest {
 
         assertTrue(load(Map.of("HDSL_TRUSTED_PROXIES", "")).network.trustedProxies.isEmpty(),
                 "空的环境变量等于没配置，不是'信任一个空地址'");
+    }
+
+    /// 可信反代条目必须是 IP 字面量，且按统一写法规范化，否则配置会静默失效。
+    @Test
+    void trustedProxiesAreValidatedAndNormalised() {
+        assertEquals(java.util.Set.of(org.jackhuang.hmcl.web.http.ClientAddresses.normalizeIp("::1")),
+                load(Map.of("HDSL_TRUSTED_PROXIES", "0:0:0:0:0:0:0:1")).network.trustedProxies);
+        assertThrows(ServerConfigLoader.ConfigException.class,
+                () -> load(Map.of("HDSL_TRUSTED_PROXIES", "proxy.example.invalid")));
     }
 
     /// 非回环票的开关：yaml 能读、环境变量能覆盖，默认关。
