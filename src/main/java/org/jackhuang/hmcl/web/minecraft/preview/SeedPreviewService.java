@@ -1239,8 +1239,12 @@ public final class SeedPreviewService {
                 return port;
             }
         }
-        PORT_RESERVATIONS.tryReserve(fallback);
-        return fallback;
+        // 兜底也要拿到预留：预留失败说明这个号刚被另一个预览任务占位，照返 25565
+        // 就是两个预览抢同一个端口——宁可让任务失败并说明原因。
+        if (PORT_RESERVATIONS.tryReserve(fallback)) {
+            return fallback;
+        }
+        throw new IllegalStateException("no free port for the seed preview (including fallback " + fallback + ")");
     }
 
     /// `save-all flush` arrived with 1.13; older servers only know `save-all`.
