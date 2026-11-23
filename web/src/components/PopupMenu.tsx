@@ -39,21 +39,15 @@ export function PopupMenu({ open, anchor, onClose, children, className, repositi
     const vw = vv?.width ?? window.innerWidth;
     const vh = vv?.height ?? window.innerHeight;
     const a = anchor.getBoundingClientRect();
-    // 量「不受上限约束」的原始尺寸：先临时去掉 inline 上限，否则键盘弹出后
-    // 收过一次的尺寸会被当成自然高度，键盘收起也不会再长回去。offset* 忽略
-    // 入场动画的 transform，避免 0.9 倍缩放的瞬间被当成真实大小。
-    const prevHeight = el.style.maxHeight;
-    const prevWidth = el.style.maxWidth;
-    el.style.maxHeight = "1000px";
-    el.style.maxWidth = "none";
-    const naturalWidth = el.offsetWidth;
-    const naturalHeight = el.offsetHeight;
-    el.style.maxHeight = prevHeight;
-    el.style.maxWidth = prevWidth;
+    // scroll* 就是内容的自然尺寸，不受 max-height / max-width 截断影响。
+    // 旧实现为了量尺寸把 maxHeight 临时改成 1000px：列表内容因此整套展开、
+    // 浏览器重新布局时把菜单自己的 scrollTop 夹回 0 —— 实例列表一滚就弹回顶部。
+    const naturalWidth = Math.max(el.scrollWidth, el.offsetWidth);
+    const naturalHeight = el.scrollHeight;
 
     const maxWidth = Math.max(160, vw - 16);
     const width = Math.min(naturalWidth || maxWidth, maxWidth);
-    const left = Math.min(Math.max(a.left, ox + 8), Math.max(ox + 8, ox + vw - 8 - width));
+    const left = Math.round(Math.min(Math.max(a.left, ox + 8), Math.max(ox + 8, ox + vw - 8 - width)));
 
     const below = oy + vh - 8 - (a.bottom + 2);
     const above = a.top - 2 - (oy + 8);
@@ -63,14 +57,20 @@ export function PopupMenu({ open, anchor, onClose, children, className, repositi
     // naturalHeight 为 0 时永远不翻，菜单于是被底部按钮压住（最后一个实例点不到）。
     const upwards = above > below;
     const top = upwards ? a.top - 2 - height : a.bottom + 2;
-    const maxHeight = Math.max(160, upwards ? above : below);
+    const maxHeight = Math.round(Math.max(160, upwards ? above : below));
 
-    setBox({
+    const next: PopupBox = {
       left,
-      top: Math.min(Math.max(top, oy + 8), Math.max(oy + 8, oy + vh - 8 - height)),
+      top: Math.round(Math.min(Math.max(top, oy + 8), Math.max(oy + 8, oy + vh - 8 - height))),
       maxHeight,
-      maxWidth,
-    });
+      maxWidth: Math.round(maxWidth),
+    };
+    setBox((previous) => previous
+      && previous.left === next.left
+      && previous.top === next.top
+      && previous.maxHeight === next.maxHeight
+      && previous.maxWidth === next.maxWidth
+      ? previous : next);
   }, [anchor]);
 
   useLayoutEffect(() => {
@@ -82,9 +82,19 @@ export function PopupMenu({ open, anchor, onClose, children, className, repositi
     // 首帧高度未知（visibility:hidden 也在文档流里，量得到），再补一帧适配异步内容
     const frame = requestAnimationFrame(place);
     return () => cancelAnimationFrame(frame);
-    // children 也列入依赖：实例列表是异步到达的，首次 naturalHeight 为 0 时
-    // top 会停在锚点顶，之后内容变高又向下压住底部按钮。高度已知后必须重算。
-  }, [open, place, repositionKey, children]);
+    // 只跟 explicit 的 repositionKey 走：children 每次渲染都是新元素，
+    // 放进依赖等于每次父组件重渲染都重新定位（列表跟着抖）。
+    // 异步到达的内容由下面的 ResizeObserver 兜底。
+  }, [open, place, repositionKey]);
+
+  useEffect(() => {
+    if (!open) return;
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => place());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [open, place, repositionKey]);
 
   useEffect(() => {
     if (!open) return;
@@ -99,17 +109,22 @@ export function PopupMenu({ open, anchor, onClose, children, className, repositi
       if (e.key === "Escape") onClose();
     };
     const onViewport = () => place();
+    // 菜单自己的滚动（实例列表）不算视口变化：跟随它会导致每次滚动都重排。
+    const onScroll = (e: Event) => {
+      if (e.target instanceof Node && ref.current?.contains(e.target)) return;
+      place();
+    };
     window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("keydown", onKey);
     window.addEventListener("resize", onViewport);
-    window.addEventListener("scroll", onViewport, true);
+    window.addEventListener("scroll", onScroll, true);
     window.visualViewport?.addEventListener("resize", onViewport);
     window.visualViewport?.addEventListener("scroll", onViewport);
     return () => {
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", onViewport);
-      window.removeEventListener("scroll", onViewport, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.visualViewport?.removeEventListener("resize", onViewport);
       window.visualViewport?.removeEventListener("scroll", onViewport);
     };
