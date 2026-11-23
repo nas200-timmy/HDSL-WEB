@@ -506,7 +506,9 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  scroll-behavior: smooth;
+  /* 自动跟滚不能用 smooth：每个流式 delta 都重新起一段动画，页面就成了
+     一直在上下跳。跟滚改成瞬时，用户手动滚仍可保持自然。 */
+  scroll-behavior: auto;
 }
 
 .chat-msg {
