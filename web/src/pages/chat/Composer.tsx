@@ -236,106 +236,114 @@ export function Composer({
       />
 
       <div className="chat-composer-bar">
-        <button
-          className="chat-tool ripple-host"
-          onClick={() => fileRef.current?.click()}
-          disabled={disabled || uploading}
-          title="添加图片 / PDF / Office / 文本"
-        >
-          <AttachFileIcon size={18} />
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          hidden
-          multiple
-          accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.json,.log,.yml,.yaml,.xml,.mp3,.wav,.mp4,.webm"
-          onChange={(event) => {
-            void addFiles(event.target.files);
-            event.target.value = "";
-          }}
-        />
-        {uploading && <span className="chat-uploading">上传中…</span>}
-        {draft.length > 4000 && <span className="chat-charcount">{draft.length.toLocaleString()} 字</span>}
-
-        <span className="spacer" />
-
-        {current && (
-          <span className="chat-caps">
-            {current.capabilities.vision && <span className="chat-cap" title="支持图片">图</span>}
-            {current.capabilities.files && <span className="chat-cap" title="支持原生文件（PDF）">文</span>}
-            {current.capabilities.reasoning && <span className="chat-cap" title="支持思考">思</span>}
-          </span>
-        )}
-        <button
-          className={`chat-tool chat-search-toggle${searchEnabled ? " active" : ""}`}
-          onClick={(event) => {
-            if (searchOfficial) {
-              onToggleSearch();
-              return;
-            }
-            setSearchMenu(event.currentTarget);
-          }}
-          disabled={disabled}
-          title={searchOfficial
-            ? (searchEnabled
-                ? "DeepSeek 官方联网搜索已开启，点击关闭"
-                : "DeepSeek 官方联网搜索：由服务端检索并给出引用")
-            : searchEnabled
-              ? `当前搜索源：${searchProviderName ?? "搜索"}；点击更换或关闭`
-              : searchConfigured
-                ? "选择搜索源并开启联网搜索"
-                : "还没配置搜索 key：聊天设置 → 联网搜索"}
-        >
-          <SearchIcon size={16} />
-          {searchEnabled && !searchOfficial && (
-            <span className="chat-search-label">{searchProviderName ?? "搜索"}</span>
-          )}
-        </button>
-        <PopupMenu open={searchMenu !== null} anchor={searchMenu} onClose={() => setSearchMenu(null)}>
-          <PopupItem
-            onClick={() => {
-              onPickSearch(null);
-              setSearchMenu(null);
-            }}
+        <div className="chat-bar-main">
+          <button
+            className="chat-tool ripple-host"
+            onClick={() => fileRef.current?.click()}
+            disabled={disabled || uploading}
+            title="添加图片 / PDF / Office / 文本"
           >
-            关闭联网搜索
-          </PopupItem>
-          <PopupSep />
-          {searchProviders.map((provider) => (
+            <AttachFileIcon size={18} />
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            hidden
+            multiple
+            accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.json,.log,.yml,.yaml,.xml,.mp3,.wav,.mp4,.webm"
+            onChange={(event) => {
+              void addFiles(event.target.files);
+              event.target.value = "";
+            }}
+          />
+
+          {/* 状态成组：上传中/字数/能力徽章当作一个整体换行，不跟按钮逐个拆散。 */}
+          <span className="chat-bar-status">
+            {uploading && <span className="chat-uploading">上传中…</span>}
+            {draft.length > 4000 && <span className="chat-charcount">{draft.length.toLocaleString()} 字</span>}
+            {current && (
+              <span className="chat-caps">
+                {current.capabilities.vision && <span className="chat-cap" title="支持图片">图</span>}
+                {current.capabilities.files && <span className="chat-cap" title="支持原生文件（PDF）">文</span>}
+                {current.capabilities.reasoning && <span className="chat-cap" title="支持思考">思</span>}
+              </span>
+            )}
+          </span>
+
+          <button
+            className={`chat-tool chat-search-toggle${searchEnabled ? " active" : ""}`}
+            onClick={(event) => {
+              if (searchOfficial) {
+                onToggleSearch();
+                return;
+              }
+              setSearchMenu(event.currentTarget);
+            }}
+            disabled={disabled}
+            title={searchOfficial
+              ? (searchEnabled
+                  ? "DeepSeek 官方联网搜索已开启，点击关闭"
+                  : "DeepSeek 官方联网搜索：由服务端检索并给出引用")
+              : searchEnabled
+                ? `当前搜索源：${searchProviderName ?? "搜索"}；点击更换或关闭`
+                : searchConfigured
+                  ? "选择搜索源并开启联网搜索"
+                  : "还没配置搜索 key：聊天设置 → 联网搜索"}
+          >
+            <SearchIcon size={16} />
+            {searchEnabled && !searchOfficial && (
+              <span className="chat-search-label">{searchProviderName ?? "搜索"}</span>
+            )}
+          </button>
+          <PopupMenu open={searchMenu !== null} anchor={searchMenu} onClose={() => setSearchMenu(null)}>
             <PopupItem
-              key={provider.id}
               onClick={() => {
-                if (!provider.configured) {
-                  toast("info", `${provider.name} 还没配置 key：聊天设置 → 联网搜索`);
-                  return;
-                }
-                onPickSearch(provider.id);
+                onPickSearch(null);
                 setSearchMenu(null);
               }}
             >
-              {provider.name}
-              {searchProvider === provider.id ? " · 使用中" : provider.configured ? "" : " · 未配置"}
+              关闭联网搜索
             </PopupItem>
-          ))}
-        </PopupMenu>
-        {reasoningMode && reasoningMode.kind !== "none" && (
-          <ThinkingPicker
-            level={reasoningLevel}
-            mode={reasoningMode}
-            disabled={disabled}
-            onPick={onReasoningLevel}
-          />
-        )}
-        <ModelPicker
-          groups={groups}
-          account={account}
-          model={model}
-          disabled={disabled || streaming}
-          onPick={onPick}
-          onManage={onManage}
-          onAdd={onAdd}
-        />
+            <PopupSep />
+            {searchProviders.map((provider) => (
+              <PopupItem
+                key={provider.id}
+                onClick={() => {
+                  if (!provider.configured) {
+                    toast("info", `${provider.name} 还没配置 key：聊天设置 → 联网搜索`);
+                    return;
+                  }
+                  onPickSearch(provider.id);
+                  setSearchMenu(null);
+                }}
+              >
+                {provider.name}
+                {searchProvider === provider.id ? " · 使用中" : provider.configured ? "" : " · 未配置"}
+              </PopupItem>
+            ))}
+          </PopupMenu>
+          {/* 思考档位和模型是「状态展示」，窄屏上整行铺开（见 mobile.css），
+              不和图标按钮挤在同一行。 */}
+          <span className="chat-bar-picks">
+            {reasoningMode && reasoningMode.kind !== "none" && (
+              <ThinkingPicker
+                level={reasoningLevel}
+                mode={reasoningMode}
+                disabled={disabled}
+                onPick={onReasoningLevel}
+              />
+            )}
+            <ModelPicker
+              groups={groups}
+              account={account}
+              model={model}
+              disabled={disabled || streaming}
+              onPick={onPick}
+              onManage={onManage}
+              onAdd={onAdd}
+            />
+          </span>
+        </div>
 
         {streaming ? (
           <button className="chat-send stop" onClick={onStop} title="停止生成">

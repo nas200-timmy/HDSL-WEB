@@ -479,9 +479,10 @@
     justify-content: flex-end;
   }
 
-  /* 聊天输入栏：模型名再长也只占能放下的宽度，发送键留在视口内。 */
-  .chat-composer-bar {
-    row-gap: 6px;
+  /* 聊天输入栏：模型名再长也只占能放下的宽度，发送键固定在右下角。 */
+  .chat-bar-picks {
+    flex: 1 1 100%;
+    min-width: 0;
   }
 
   .chat-composer-bar .chat-model-button {
