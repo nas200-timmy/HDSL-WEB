@@ -601,3 +601,58 @@
     padding: 0 3px;
   }
 }
+
+/* 部署检查：手机上是首页第一块内容，不做浮层，避免盖住启动按钮 */
+@media (max-width: 760px) {
+  .mobile-column {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .mobile-column > .mobile-home {
+    flex: none;
+  }
+
+  .setup-card,
+  .setup-collapsed {
+    position: static;
+    width: auto;
+    max-width: none;
+    max-height: none;
+    margin: 6px 6px 0;
+    box-shadow: none;
+  }
+
+  .setup-collapsed {
+    width: calc(100% - 12px);
+    justify-content: flex-start;
+  }
+
+  .setup-card {
+    padding: 10px 12px;
+  }
+
+  /* 触屏上的操作按钮别缩到点不到；放不下就落到说明下面一行 */
+  .setup-item {
+    flex-wrap: wrap;
+  }
+
+  .setup-item-text {
+    flex: 1 1 calc(100% - 24px);
+  }
+
+  .setup-item > .setup-action,
+  .setup-item > .setup-action-pair {
+    margin-left: 24px;
+  }
+
+  .setup-action,
+  .setup-action-pair .btn {
+    height: 32px;
+    font-size: 12px;
+    padding: 0 10px;
+  }
+}

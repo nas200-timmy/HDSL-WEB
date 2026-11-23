@@ -4,6 +4,7 @@ import { api } from "../api";
 import { isTuiBrand } from "../brandKind";
 import { launchBrandInstance, launchInstance, openDsh, stopBrandInstance, stopInstance } from "../actions";
 import { LaunchPane } from "../components/LaunchPane";
+import { SetupCard } from "../components/SetupCard";
 import { BRAND_LABEL, useLaunchEntry, type LaunchEntry } from "../launchEntry";
 import { BrandIcon } from "../components/BrandIcon";
 import { LogView } from "../components/LogView";
@@ -237,7 +238,14 @@ export function MainPage() {
     <div className="main-page">
       <MainSideBar />
       <div className="wallpaper-bg" style={{ backgroundImage: `url(${wallpaperUrl})` }} />
-      {mobile && card}
+      {mobile ? (
+        <div className="mobile-column">
+          <SetupCard />
+          {card}
+        </div>
+      ) : (
+        <SetupCard />
+      )}
       <LaunchPane />
       {showProgress && overlayInst && <LaunchProgress inst={overlayInst} />}
       {showRunning && overlayInst && <RunningPane inst={overlayInst} />}

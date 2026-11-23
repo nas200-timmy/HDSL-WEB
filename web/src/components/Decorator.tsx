@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams, useSearchParams } from "react-rout
 import { useMobileLayout } from "../hooks";
 import { I18N } from "../i18n";
 import { closeSidebar, toggleSidebar, useAppState } from "../store";
+import { refreshSetupStatus, useSetupHidden, useSetupStatus } from "../setup";
 import { useServerVersion } from "../version";
 import { ArrowBackIcon, HomeIcon, MenuIcon } from "./icons";
 
@@ -82,6 +83,14 @@ export function Decorator({ children }: { children: ReactNode }) {
   const title = useWindowTitle();
   const mobile = useMobileLayout();
 
+  const setup = useSetupStatus();
+  const setupHidden = useSetupHidden();
+  const setupBad = setup ? setup.items.filter((item) => item.tone === "bad").length : 0;
+
+  useEffect(() => {
+    if (mobile) void refreshSetupStatus();
+  }, [mobile]);
+
   const parent = parentLocation(location.pathname, location.search);
   const isWizard = WIZARD_PATHS.some((w) => location.pathname.startsWith(w));
   const hasMainNav = location.pathname === "/";
@@ -103,6 +112,7 @@ export function Decorator({ children }: { children: ReactNode }) {
               onClick={() => toggleSidebar()}
             >
               <MenuIcon size={20} />
+              {!setupHidden && setupBad > 0 && <span className="side-dot" aria-hidden="true" />}
             </button>
           )}
           {/* 返回 = 上一级界面（见 parentLocation），不是 history.back()：

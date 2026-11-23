@@ -978,7 +978,7 @@ RestrictSUIDSGID=yes
 
 | 依赖 | 谁需要它 | 缺了会怎样 |
 |---|---|---|
-| `node` `^22.19.0 \|\| >=24.0.0` | 装 dsh 版本、插件、品牌工具、ZCode 构建 | 创建实例时安装任务失败，错误里写的是「Node.js was not found on PATH and no panel-managed runtime is installed」；**版本不够**时是另一条：安装会先被拒，启动则报「outside the supported range」，品牌工具会在自己的 ESM loader 里崩（`node:zlib has no export named createZstdDecompress`）——分发版仓库的 `nodejs` 包常常就是 18/20，这两条报错都不会主动点出"版本"这个词，面板启动横幅会 |
+| `node` `^22.19.0 \|\| >=24.0.0` | 装 dsh 版本、插件、品牌工具、ZCode 构建 | 面板在创建实例 / 开始安装之前就会预检，直接回 `409 node_missing`（首页「部署检查」卡片也会标出来）；绕过预检时安装任务会失败，错误里写的是「Node.js was not found on PATH and no panel-managed runtime is installed」；**版本不够**时是另一条：安装会先被拒，启动则报「outside the supported range」，品牌工具会在自己的 ESM loader 里崩（`node:zlib has no export named createZstdDecompress`）——分发版仓库的 `nodejs` 包常常就是 18/20，这两条报错都不会主动点出"版本"这个词，面板启动横幅会 |
 | `pnpm` | `pnpm install` / `pnpm add`，插件管理也转发给它 | 任务失败在 `pnpm` 这一步；`npm` 单独存在没用 |
 
 **三条路，按省事排序：**
@@ -992,6 +992,11 @@ RestrictSUIDSGID=yes
    注意 Debian/Ubuntu 仓库里的 node 常常偏旧，低于 22.19 时 dsh 会拒绝安装，
    这时回到第 1 条更省事。
 3. **容器**：官方镜像里已经带好 Node 22 + pnpm，见 README「方式一」。
+
+**首页的「部署检查」卡片**把首次部署要过的四关摆在一起：Node.js（含 pnpm）、npm 下载源、
+HTTPS 证书、开发者密码。状态全部来自服务端实时探测，不是让人自己打勾；点「一键安装」会走
+上面第 1 条，装完自动刷新。卡片可以收成一行，也可以从侧栏的「部署检查」再打开；
+「设置 → 通用」里的开关只控制显示，**不控制硬拦**——缺 Node 时创建/启动实例仍会被挡住。
 
 **"系统里有 node" 不等于 "能装东西"。** 装 dsh 版本、改启动库、装插件、装品牌工具走的都是
 `pnpm`，所以这几条路径挑工具链时会**优先挑带 pnpm 的那个**：`PATH` 上的 node 有 pnpm 就用它，

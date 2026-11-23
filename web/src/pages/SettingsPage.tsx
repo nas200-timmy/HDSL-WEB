@@ -37,6 +37,7 @@ import {
 import { SubSideBar } from "../components/SideBar";
 import { McJavaRuntimeCard } from "../components/McJavaRuntimeCard";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
+import { refreshSetupStatus, setSetupHidden, setupSummary, useSetupHidden, useSetupStatus } from "../setup";
 import { I18N } from "../i18n";
 import { logout, setState, toast, useAppState } from "../store";
 import { bindSystemThemeListener, DEFAULT_SEED, resetSeed, setSeed, setThemeMode, useThemeMode, useThemeSeed, type ThemeMode } from "../theme";
@@ -242,6 +243,44 @@ const PLATFORM_LEVEL_TONE: Record<PlatformCompatibility["level"], string> = {
   unsupported: "failed",
 };
 
+/** 通用页里的部署检查开关：只控制显示，不控制检测与硬拦。 */
+function SetupCheckCard() {
+  const hidden = useSetupHidden();
+  const status = useSetupStatus();
+  return (
+    <>
+      <div className="section-caption">
+        <InfoIcon size={16} />
+        首次使用
+      </div>
+      <div className="card">
+        <div className="comp-row">
+          <span className="comp-label">显示部署检查</span>
+          <span className="comp-value">
+            <label className="input-check">
+              <input
+                type="checkbox"
+                checked={!hidden}
+                onChange={(event) => setSetupHidden(!event.target.checked)}
+              />
+              <span>首页状态卡片和侧栏入口（硬拦不受影响）</span>
+            </label>
+          </span>
+        </div>
+        <div className="comp-row">
+          <span className="comp-label">检查结果</span>
+          <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            {status ? setupSummary(status) : "读取中…"}
+          </span>
+          <button className="btn btn-text" style={{ height: 28 }} onClick={() => void refreshSetupStatus(true)}>
+            重新检查
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function GeneralTab() {
   const s = useAppState();
   const nav = useNavigate();
@@ -409,6 +448,8 @@ function GeneralTab() {
           </div>
         </>
       )}
+
+      <SetupCheckCard />
 
       <SystemMonitorCard />
 
