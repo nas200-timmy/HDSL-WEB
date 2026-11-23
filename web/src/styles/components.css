@@ -538,6 +538,12 @@ select.input {
   animation: dialog-in 150ms var(--ease);
   max-height: 70vh;
   overflow-y: auto;
+  /* 实例多的时候直接滚：鼠标滚轮、触摸拖动都作用在菜单上，不带着页面一起滚。 */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: var(--monet-outline) transparent;
 }
 
 .popup-item {
