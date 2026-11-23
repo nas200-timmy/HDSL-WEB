@@ -487,6 +487,14 @@
   .chat-composer-bar .chat-model-button {
     max-width: 170px;
   }
+
+  /* 代码块在窄屏默认换行：pre 只给横向滚动在手机上等于整行被切掉。
+     桌面端保留原样，「换行 / 不换行」按钮仍可手动覆盖。 */
+  .chat-code-body {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
 }
 
 /* -------------------------------------------------------------------------

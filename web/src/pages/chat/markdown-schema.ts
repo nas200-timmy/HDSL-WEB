@@ -37,10 +37,11 @@ export function prepareText(
   },
 ): string {
   let text = content ?? "";
-  if (options?.streaming) {
-    const fences = (text.match(/^```/gm) ?? []).length;
-    if (fences % 2 === 1) text += "\n```";
-  }
+  // 不只在 streaming 时配平：模型收尾也可能留下奇数个围栏。按 CommonMark，未闭合
+  // 的 fenced block 会一直吃到文末，于是 ##、**、列表全变成字面代码。渲染前统一
+  // 补一个虚拟闭合，避免后半条消息被整个吞进代码块。
+  const fences = (text.match(/^```/gm) ?? []).length;
+  if (fences % 2 === 1) text += "\n```";
   const sources = options?.sources;
   if (sources && sources.length > 0) {
     text = text.replace(/\[citation:(\d+)\]/g, (_, raw) => {
