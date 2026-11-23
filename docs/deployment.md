@@ -316,6 +316,37 @@ compose / 磁盘 / 面板端口 / MC 端口逐条列出来，缺什么就给这�
 3. 还是 HTTP → 运行时把明文连接器换成 TLS 连接器（同主机同端口）；
 4. 切换失败 → 回滚成明文，响应带 `restartRequired: true`；`server.yaml` 已经写好，**重启容器即生效**。
 
+### 明文第一次启用 TLS 的 bootstrap 例外
+
+**面板还是明文 HTTP、且从未启用 TLS 时，证书路由不要求开发者第二因子。** 这是刻意保留
+的出口，不是漏配：提权（设置/确认开发者密码）只在 HTTPS 下接受，而启用 HTTPS 又要先过
+开发者门；已设开发者密码的远程明文面板还会被强制提升到 `developer_guard=ALL`。没有这个
+例外，第一次启用 TLS 就会被死锁。带着登录会话，明文下可以：
+
+- `GET /api/settings/tls`、`/api/settings/certificates`、`/api/settings/acme`、
+  `/api/settings/dns-credentials*` 读取证书与 ACME 状态；
+- `POST /api/settings/tls`（PEM / PKCS#12）或 `POST /api/settings/tls/self-signed`
+  上传/生成证书并当场切到 HTTPS。
+
+代价：**明文暴露给不可信网络时，这些路由只受登录会话保护，不受开发者第二因子保护**；
+证书注册表与 ACME 凭据的写入仍会因明文被 servlet 以 `tls_required` 拒绝，但读取与 TLS
+上传/自签不受第二因子保护。完整契约见
+[security.md §2.10](security.md#210-证书acme-凭据与-sni)。启用 HTTPS 后例外自动失效。
+
+可执行验收（用临时面板；`<jar>` 换成 `build/libs/hdsl-web-0.6.95.jar`）：
+
+```bash
+# 明文 + 已设开发者密码 + developer_guard=all：
+# 未提权的 ACME 读取被允许，且不影响其它 gated 设置（仍 403）
+HDSL_SMOKE_HTTPS=false ./scripts/security-smoke.sh <jar>   # 期望 PASS
+
+# 启用 TLS 后：同一读取在未提权时必须 403，且凭证写入走完整 HTTPS 门禁
+HDSL_SMOKE_HTTPS=true ./scripts/security-smoke.sh <jar>    # 期望 PASS
+```
+
+脚本会断言明文分支的这条 `200` 与 HTTPS 分支的 `403`；两者的差别就是 bootstrap 例外
+生效与失效的分界。
+
 ### ACME 自动签发与续期（DNS-01）
 
 面板内置 ACME，默认关闭；启用后自己签发和续期，不需要 certbot，也不需要开放 80 端口。

@@ -1489,7 +1489,7 @@ public final class BrandApiServlet extends HttpServlet {
     /// Verifies the panel password, with the same per-address throttle the developer page uses.
     private boolean confirmPanelPassword(HttpServletRequest request, HttpServletResponse response,
                                          String adminPassword) throws IOException {
-        String address = request.getRemoteAddr();
+        String address = org.jackhuang.hmcl.web.http.ClientAddresses.remote(request, config.network.trustedProxies);
         String key = address == null || address.isBlank() ? "unknown" : address;
         java.time.Instant now = java.time.Instant.now();
         if (adminPasswordThrottle.isBlocked(key, now)) {

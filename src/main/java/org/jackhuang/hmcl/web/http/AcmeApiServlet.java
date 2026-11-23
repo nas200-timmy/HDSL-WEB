@@ -574,7 +574,7 @@ public final class AcmeApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "panelPassword is required");
             return false;
         }
-        String address = request.getRemoteAddr();
+        String address = ClientAddresses.remote(request, config.network.trustedProxies);
         String key = address == null || address.isBlank() ? "unknown" : address;
         Instant now = Instant.now();
         if (panelPasswordThrottle.isBlocked(key, now)) {

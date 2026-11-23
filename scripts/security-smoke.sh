@@ -9,8 +9,12 @@
 # The script starts a throwaway panel on 127.0.0.1 with HDSL_HTTPS=false and
 # HDSL_DEVELOPER_GUARD=all, then runs web/scripts/security-smoke.mjs:
 #   - encrypted login
-#   - encrypted developer-password set + elevate
-#   - gated ACME settings read after elevation
+#   - encrypted developer-password set
+#   - cleartext TLS bootstrap exception: gated ACME read is allowed before
+#     elevation while TLS has never been enabled (docs/security.md §2.10),
+#     but other gated settings stay refused; with HDSL_SMOKE_HTTPS=true the
+#     ACME read must be refused instead
+#   - elevate + gated ACME settings read after elevation
 #   - chat-key handshake
 #   - encrypted GET and POST /api/chat/*
 #

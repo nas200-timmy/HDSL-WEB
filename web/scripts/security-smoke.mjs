@@ -1,8 +1,12 @@
 // Headless security smoke test. Run through scripts/security-smoke.sh.
 //
 // It exercises the paths a browser uses but without a browser:
-//   encrypted login → set developer password → elevate →
-//   gated ACME read → chat-key → encrypted chat GET/POST.
+//   encrypted login → set developer password → gated ACME read →
+//   elevate → ACME after elevation → chat-key → encrypted chat GET/POST.
+//
+// Over cleartext the ACME read before elevation is expected to pass: that is
+// the TLS bootstrap exception described in docs/security.md §2.10. Over HTTPS
+// it must be refused.
 import { x25519 } from "@noble/curves/ed25519";
 import { chacha20poly1305 } from "@noble/ciphers/chacha";
 import { hkdf } from "@noble/hashes/hkdf";
@@ -90,9 +94,29 @@ const setDev = await postJson("/api/developer/password", {
 check(setDev.status === 200, "set developer password", `${setDev.status} ${await setDev.clone().text()}`);
 
 const beforeElevationAfterSet = await fetch(`${base}/api/settings/acme`, { headers: { Cookie: cookie } });
-check(beforeElevationAfterSet.status === 403,
-  "gated ACME read is refused without elevation after the password exists",
-  `${beforeElevationAfterSet.status}`);
+if (base.startsWith("https:")) {
+  // With TLS on, the normal developer guard applies: every gated route needs
+  // the second factor, certificate management included.
+  check(beforeElevationAfterSet.status === 403,
+    "gated ACME read is refused without elevation after the password exists",
+    `${beforeElevationAfterSet.status}`);
+} else {
+  // Cleartext TLS bootstrap exception (docs/security.md §2.10): while the panel
+  // is plain HTTP and TLS has never been enabled, the certificate/ACME/DNS
+  // credential routes stay reachable with only the panel session, so HTTPS can
+  // be configured before the forced-ALL guard would lock it behind a password
+  // that itself requires HTTPS. This is an accepted risk, not a missing check.
+  check(beforeElevationAfterSet.status === 200,
+    "cleartext TLS bootstrap exception allows the gated ACME read",
+    `${beforeElevationAfterSet.status}`);
+}
+
+// The exception is deliberately narrow: another gated settings route must still
+// answer 403 before elevation, in both modes.
+const nonBootstrapGated = await fetch(`${base}/api/settings/registry/`, { headers: { Cookie: cookie } });
+check(nonBootstrapGated.status === 403,
+  "certificate bootstrap exception does not widen to other gated settings",
+  `${nonBootstrapGated.status}`);
 
 const elevate = await postJson("/api/developer/elevate", {
   password: await encryptPassword(devPassword),

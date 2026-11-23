@@ -73,7 +73,7 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo C
 - **每个实例一份自己的 `home` 与工作区**：dsh 是独立的 `DSH_HOME`，品牌实例把 `HOME`/`USERPROFILE` 指到实例目录——换实例就是换一套账号、配置和会话，彼此不串。
 - **实例自己的端口只在回环上**：dsh 实例在 3081–4081 里分配、终身绑定，品牌实例从 20000–60999 里挑一个；对外只有面板这一道门。agent 的凭据落在数据卷里的实例目录，不散在宿主。
 - **终端是一张一次性 ticket**（30 秒、绑定实例与会话）：关掉网页不影响 agent，面板退出才一起收掉。
-- **两层钥匙**：面板密码 + 开发者密码第二因子；HTTPS 下是完整开发者模式，裸 HTTP 下只当第二道验证（远程强制 `guard=ALL`），Web Shell/终端仍只在 HTTPS 下开，也能整体关掉。
+- **两层钥匙**：面板密码 + 开发者密码第二因子；HTTPS 下是完整开发者模式，裸 HTTP 下只当第二道验证——**已设置开发者密码**时远程明文会被强制提升到 `guard=ALL`（还没设密码时不提升，避免首次部署被锁死），且明文下证书/ACME/DNS 凭据路由有 TLS bootstrap 例外；Web Shell/终端仍只在 HTTPS 下开，也能整体关掉。见 [docs/security.md §2.10](docs/security.md)。
 - **备份只有一个目录**：配置、证书、账号、实例、`DSH_HOME`、pnpm store 全在 `/data` 下，拷走那一个卷就搬完了（工作区可以另挂宿主机目录）。
 
 ## 截图
@@ -579,12 +579,14 @@ DNS/CA 凭据存 `auth/acme.json`（0600），不进 `server.yaml`。详见
 | `HDSL_BASE_PATH` | 空 | 面板被反代在子路径下时的挂载前缀（如 `/panel`）。反代须剥前缀，见[反向代理](#反向代理) |
 | `HDSL_HTTPS` | `false` | 只接受 `true`/`false`；等价于 `https.enabled` |
 | `HDSL_TRUST_FORWARDED_PROTO` | `false` | 只接受 `true`/`false`；等价于 `https.trust_forwarded_proto`。反代终结 TLS 时打开，`X-Forwarded-Proto: https` 才算 HTTPS（前提：面板只能经反代访问） |
+| `HDSL_TRUSTED_PROXIES` | 空 | 等价于 `network.trusted_proxies`：允许替客户端地址作证的反代 IP（逗号分隔）。默认谁也不信；配置后安全判定按 `X-Forwarded-For` 解析真实客户端，只在面板确实只经这些反代暴露时设置 |
 | `HDSL_WEB_SHELL_ENABLED` | `true` | 实例终端（Web Shell）总开关；等价于 `server.yaml` 的 `web_shell.enabled`。关掉后终端按钮隐藏、打开接口返回 403。设置页「开发者模式」也能改 |
 | `HDSL_ADMIN_PASSWORD` | 空 | 仅首次启动且数据目录里没有用户时，用它创建 `admin` 账号；已存在账号时忽略 |
 | `NPM_CONFIG_REGISTRY` | `https://registry.npmjs.org/` | 下载源的回退值；面板设置优先。面板里改完立即生效，改环境变量要重启容器 |
 | `JAVA_OPTS` | 空 | 追加到 `java` 命令行的 JVM 参数，例如 `-Xmx2g` |
 | `PNPM_STORE_DIR` | `/data/pnpm-store` | pnpm 共享仓库位置（入口脚本会写进 pnpm 配置）；一般不用改 |
 | `HDSL_WORKSPACE` | 空 | dsh 工作区路径。不设时用 `$HOME/workspace`（镜像内 `/home/hdsl/workspace`）；新建实例默认用它 |
+| `HDSL_PREVIEW_EXTREME_TIMEOUT_MINUTES` | `60` | 种子预览「极限」档子进程的超时（分钟，1..1440）。极限档 8192² 采样在独立 JVM 里渲染，调大它换时间；见 [docs/seed-preview.md](docs/seed-preview.md) |
 | `HDSL_ZCODE_PACKAGE` | 空 | 实验性 ZCode 的发行包目录（需含 `bin/zcode.mjs`）；不设时找 `<数据目录>/zcode/current/`。见 [docs/zcode-experimental.md](docs/zcode-experimental.md) |
 | `HDSL_ZCODE_NODE` | 空 | 跑 ZCode 用的 node：命令名（按 `PATH` 查找）或绝对路径；不设时用 PATH 上的 `node` |
 
@@ -661,17 +663,24 @@ https:
   不含数据的 SPA 外壳，其余 `/api/*`、`/ws`、`/i/*` 都要会话。口令用 PBKDF2WithHmacSHA256
   （per-user 盐、21 万次迭代），文件 0600；改口令或改用户名会踢掉该用户的其它会话。
 - **登录失败有预算**：同一来源地址 5 分钟内错 15 次，第 16 次起拒绝 10 分钟（带 `Retry-After`），
-  期间口令正确也进不来；来源取的是 TCP 对端地址（不信 `X-Forwarded-For`），所以面板在反代
-  后面时这份预算是**所有访问者共用**的。
+  期间口令正确也进不来。来源地址默认取 TCP 对端，不信任任何转发头；只有把反代地址写进
+  `network.trusted_proxies`（或 `HDSL_TRUSTED_PROXIES`）后，来自这些反代的
+  `X-Forwarded-For` 才被采信。没配时面板在反代后面，这份预算是**所有访问者共用**的；
+  配了却又允许直连，等于让客户端自报地址绕过预算。
 - **开发者模式是第二把锁**：独立口令（`auth/developer.json`，0600）。HTTPS 下是完整模式；
-  裸 HTTP 下只当第二道验证（远程强制 `guard=ALL`，Web Shell/终端仍要求 HTTPS）。提权
-  30 分钟滑动；它守的是终端、E-Stop、守卫档位、装包这些"能执行代码"的动作。
+  裸 HTTP 下只当第二道验证（**已设置开发者密码**时远程强制 `guard=ALL`；还没设密码时
+  不提升，否则首次部署会被自己的守卫锁死），Web Shell/终端仍要求 HTTPS。**明文且尚未
+  启用 TLS 时，证书/ACME/DNS 凭据路由有一条例外**：只要求登录会话，不受开发者第二因子
+  保护，用于先配好证书再启用 HTTPS；把面板以明文暴露给不可信网络即接受该风险，启用
+  HTTPS 后恢复正常门禁。见 [docs/security.md §2.10](docs/security.md)。提权 30 分钟滑动；
+  它守的是终端、E-Stop、守卫档位、装包这些"能执行代码"的动作。
 - **裸 HTTP 的应用层加密**：密码字段与 `/api/chat/*` 可走 X25519 + ChaCha20-Poly1305
   信封，只防被动嗅探，不防主动 MITM；`/plain` + IE11 是已知明文洞。不要拿它替代 HTTPS，
   见 [docs/security.md §6.1](docs/security.md)。
 - **agent 访问是另一把较小的钥匙**：agent 用自己的密码（`auth/agent.json`）走
   `POST /api/developer/agent-auth` 换票——免会话，但必须有人正在提权，票随提权一起失效。
-  scope 五类（read / mc / instances / config / plugins），默认只读，未分类路由一律拒绝；
+  scope 十二类（read / mc / mc-console / system / instances / config / plugins / transcode /
+  transcode-raw / chat-read / chat-write / chat-search），默认只读，未分类路由一律拒绝；
   `/i/*`、`/ws/*` 与凭据类路由对票永不开放。**自杀闸靠内核身份**：面板从请求连接反查
   `/proc` 推导调用者住在哪个实例，三个家族（dsh / 品牌 / ZCode）的停 / 删 / 开终端 /
   launch 打到自己一律 `409` 并写明原因；推导不出又未绑定的票，致命操作一律拒绝。在实例

@@ -11,7 +11,7 @@ cd web && npm install        # 本机第一次（build.gradle.kts 发现 npm 就
 | 脚本 | 验什么 | 需要什么 | 典型耗时 |
 | --- | --- | --- | --- |
 | `api-smoke.py` | **接口层冒烟（39 项）**：自己起一个临时面板（临时数据目录、随机端口、HTTP），把"一个人会点到的路径"逐个念一遍——`/api/node` 的字段、品牌版本（或它为什么为空）、doctor、出站证书的一次性授权、ZCode 工作区、dsh 半安装的拒绝、终端四道闸、静态资源。**不点浏览器、不装包**，十几秒跑完 | 只需一个 jar（`./gradlew shadowJar`） | 约 10 秒 |
-| `security-smoke.sh` | **HTTP 安全冒烟**：临时面板、`HDSL_HTTPS=false`、`developer_guard=all`；加密登录 → HTTP 设置/提权开发者密码 → 未提权拒绝/提权后放行 ACME → chat-key → 加密 chat GET/POST | jar、`web/node_modules`（`npm install`） | 约 5 秒 |
+| `security-smoke.sh` | **HTTP 安全冒烟**：临时面板、`HDSL_HTTPS=false`、`developer_guard=all`；加密登录 → 设置开发者密码 → 明文 TLS bootstrap 例外下的 ACME 读取放行 / 其它 gated 设置拒绝 → 提权 → ACME → chat-key → 加密 chat GET/POST；`HDSL_SMOKE_HTTPS=true` 时改为断言未提权 ACME 读取 403，并额外验证凭证 profile 写入 | jar、`web/node_modules`（`npm install`） | 约 5 秒 |
 | `mobile-acceptance.py` | 移动端信息架构 + 桌面版式回归（headless Chromium） | python playwright + chromium、一个可登录的实例、当前工作区的 `web/dist` | 半分钟起（不设实例 id 时） |
 | `e2e-real.sh` | 真实 npm 安装 dsh → 启动 → 反代访问 → 停止后 `/i/<id>/` 消失 | 网络（npm registry）、jar | 几分钟 |
 | `e2e-phase4.sh` | Phase 4 全链路：体检 / 整合包市场 / 安装 / 会话·技能·工作区 / 导出并下载 / 反代 / ACP 控制台 | 网络、jar、**热过的 pnpm 缓存** | 几分钟 |
@@ -39,7 +39,9 @@ cd web && npm install && cd ..
 
 - 加密登录；
 - HTTP 下设置开发者密码并提权；
-- 未提权时 ACME 读接口 403，提权后 200；
+- 明文分支：未提权时 ACME 读接口 **200**（TLS bootstrap 例外，见
+  [docs/security.md §2.10](../docs/security.md)），但其它 gated 设置仍 403；提权后 ACME 200；
+- HTTPS 分支：未提权时 ACME 读接口 **403**，提权后 200；
 - chat-key 握手；
 - `/api/chat/assistants` 加密响应；
 - `POST /api/chat/sessions` 加密请求 + 加密响应。
