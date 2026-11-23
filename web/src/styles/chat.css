@@ -1178,7 +1178,8 @@
   color: var(--monet-on-surface);
   font-size: 13px;
   line-height: 1.55;
-  min-height: 44px;
+  /* 默认给足高度：交互区两行时，输入区不至于显得被挤扁。 */
+  min-height: 56px;
   max-height: 240px;
   padding: 2px 4px;
 }
@@ -1594,6 +1595,11 @@
   .chat-messages {
     padding: 12px 8px 8px;
     gap: 12px;
+  }
+
+  /* 手机屏窄：交互区经常要两行，输入区给到约三行的高度，整体比例才不显得头重脚轻。 */
+  .chat-input {
+    min-height: 72px;
   }
 
   .chat-sidebar-wrap {
