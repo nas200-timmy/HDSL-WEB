@@ -322,8 +322,7 @@ export function Composer({
               </PopupItem>
             ))}
           </PopupMenu>
-          {/* 思考档位和模型是「状态展示」，窄屏上整行铺开（见 mobile.css），
-              不和图标按钮挤在同一行。 */}
+          {/* 思考档位和模型作为一组换行：放得下就跟着图标一行，放不下整组落到下一行。 */}
           <span className="chat-bar-picks">
             {reasoningMode && reasoningMode.kind !== "none" && (
               <ThinkingPicker

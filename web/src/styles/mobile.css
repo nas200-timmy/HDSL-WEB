@@ -480,13 +480,8 @@
   }
 
   /* 聊天输入栏：模型名再长也只占能放下的宽度，发送键固定在右下角。 */
-  .chat-bar-picks {
-    flex: 1 1 100%;
-    min-width: 0;
-  }
-
   .chat-composer-bar .chat-model-button {
-    max-width: 170px;
+    max-width: 140px;
   }
 
   /* 代码块在窄屏默认换行：pre 只给横向滚动在手机上等于整行被切掉。

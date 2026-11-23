@@ -1221,8 +1221,6 @@
   flex-wrap: wrap;
   gap: 4px 6px;
   min-width: 0;
-  /* 桌面上让思考/模型贴着发送键一侧，左侧留给图标和状态。 */
-  margin-left: auto;
 }
 
 .chat-tool {
