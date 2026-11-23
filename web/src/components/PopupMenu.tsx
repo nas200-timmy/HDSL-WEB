@@ -82,7 +82,9 @@ export function PopupMenu({ open, anchor, onClose, children, className, repositi
     // 首帧高度未知（visibility:hidden 也在文档流里，量得到），再补一帧适配异步内容
     const frame = requestAnimationFrame(place);
     return () => cancelAnimationFrame(frame);
-  }, [open, place, repositionKey]);
+    // children 也列入依赖：实例列表是异步到达的，首次 naturalHeight 为 0 时
+    // top 会停在锚点顶，之后内容变高又向下压住底部按钮。高度已知后必须重算。
+  }, [open, place, repositionKey, children]);
 
   useEffect(() => {
     if (!open) return;
