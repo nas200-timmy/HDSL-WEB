@@ -31,7 +31,7 @@
 ```
 
 - `/exit`、进程退出、崩溃 → 清屏关窗，恢复之前的 web 模式。
-- 关窗 / 刷新 / 断网 → 只 detach，进程继续跑；重新打开即 attach 并回放最近输出。
+- 关窗 / 刷新 / 断网 → 只 detach，进程继续跑；重新打开即 attach 并回放最近 256 KB 输出。
   退出登录同样**只掐断这个会话挂着的终端连接**（1008 `logged out`）——已建立的 WS 不
   再复查会话，不掐的话登出后的浏览器还留着一条活动的终端通道；PTY 与 agent 不受影响。
 - 底栏「停止」= 紧急杀进程（复用实例停止机制），不是关窗。
@@ -45,6 +45,19 @@
   对话框，验证接上即可。
 - 不做空闲超时；终端一直挂着不自动回收。终端 WebSocket 显式 `setMaxIdleTimeout(0)`——Jetty 默认的
   30 秒曾把静默终端以 `1001 Connection Idle Timeout` 关掉，看起来就像"终端自己断了"（v0.5.81 修）。
+
+### 3.1 常见错误
+
+| 现象 | 原因与处理 |
+|---|---|
+| 实例行没有终端按钮 | Web Shell 开关被关掉，或者面板不在 HTTPS 下（含反代未开 `https.trust_forwarded_proto`） |
+| `insecure_transport` | 面板此刻不在讲 TLS：去「设置 → HTTPS 证书」上传证书或生成自签证书，反代拓扑则打开 `https.trust_forwarded_proto` |
+| `web_shell_disabled` | 到「设置 → 开发者模式」把总开关打开 |
+| `developer_password_not_set` | 还没有开发者密码；终端窗口或开发者模式页会引导设置 |
+| `developer_elevation_required` | 提权过期（30 分钟滑动），重新输入开发者密码 |
+| `terminal_already_open` | 该实例已有一个终端（单实例单会话），先去那个窗口里操作或停止 |
+| 关掉网页后 agent 还在跑 | 设计行为：关窗只 detach。要真正结束用 `/exit`、底栏「停止」，或退出面板进程 |
+| `terminal_unsupported_platform` | Windows build < 17763 或缺少 ConPTY；错误里带实际 build 号，不回落桌面窗口 |
 
 ## 4. 安全不变量
 

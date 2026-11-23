@@ -26,6 +26,7 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo C
 - [截图](#截图)
 - [功能速览](#功能速览)
 - [架构](#架构)
+- [构建 jar 产物](#构建-jar-产物)
 - [实例终端（Web Shell）](#实例终端web-shell)
 - [快速开始](#快速开始) — Release / Docker Compose / 裸 `java -jar`
 - [首次登录与初始化引导](#首次登录与初始化引导)
@@ -47,7 +48,7 @@ Kimi Code、OpenCode、Claude Web、Octop、Hermes、PI WEB、Qwen Code、MiMo C
 
 ### 十一种 Agent，一个面板，想换就换
 
-| Agent | 网页入口 | 原地终端（Web Shell） |
+| Agent | 网页入口 | 终端 |
 |---|---|---|
 | DeepSeek Harness（`dsh`） | dsh 自己的网页 | `dsh tui [--resume]` |
 | Kimi Code | `kimi web` | 官方 TUI |
@@ -145,192 +146,59 @@ OpenCode、Claude Web 与 ZCode 同理——各有自己的网页进程，用同
 > 架构图见 [docs/architecture/](docs/architecture/README.md)：`context.md` 是系统上下文，
 > `full.md` 是全量模块与数据布局，`flows/` 是 MC 安装、品牌启动、认证三条关键时序。
 
-## 实例终端（Web Shell）
+## 构建 jar 产物
 
-实例行上的「终端」按钮就地打开该实例的原生 TUI：Kimi Code、OpenCode、ZCode（实验性
-品类，`node <发行包>/bin/zcode.mjs`，不带 `--web` 就是官方 TUI）、Claude Web（它的内核
-就是 Claude Code CLI，见下），以及 dsh 的 `dsh tui [--resume]`。终端跑在面板进程里、
-走现有 WebSocket——**不新增端口，也不需要反向代理**。这是面板里唯一的终端入口。
+前提：JDK 17+；PATH 上有 npm（Gradle 会把 `web/` 的 SPA 打进 jar）。首次编译前先装一次前端依赖。
 
-Claude Web 有两个内核可以选：**社区引擎**（`claude-web-engine`，网页里配置的第三方/中转
-供应商只对它生效）和**官方 Claude Code**（只认 Anthropic 账号）。点终端时先过开发者密码，
-再让你选内核，然后才进终端；只装了一个内核时不会多问这一步。选了没装的那个会明确报错，
-不会偷偷换成另一个。
+Linux / macOS：
 
-两者最终都连 Anthropic：面板在**不受支持地区**（含中国大陆）访问 `api.anthropic.com` 会被
-直接拒绝（403）。所以 Claude Web 实例的菜单里有一个**「Anthropic 端点…」**，可以给这个实例填
-`ANTHROPIC_BASE_URL`（网页模式与终端共用；留空即恢复默认），选官方内核时面板还会先探一次端点，
-把 403 变成一句人话而不是一个起不来的终端。细节与合规提示见
-[docs/brands.md §Claude Web：官方内核与 ANTHROPIC_BASE_URL](docs/brands.md)。
-
-和「打开」按钮的区别：打开是在新标签页用该实例的网页模式；终端是在当前页面覆盖一层真终端，
-直接操作 agent 自己的交互界面。
-
-### 打开前需要什么
-
-| 前提 | 说明 |
-|---|---|
-| **HTTPS** | 面板此刻必须真的在讲 TLS，或者你打开了 `https.trust_forwarded_proto` 并由反代终结 TLS。HTTP 下终端按钮不显示，接口返回 403 `insecure_transport` |
-| **开发者密码** | 独立的第二因子，和面板密码分开。在「设置 → 开发者模式」里设置（需要面板密码确认），打开终端时验证一次 |
-| **Web Shell 开关** | 默认开启。设置 →「开发者模式」里可以整体关闭，见下文 |
-| **实例已就绪** | dsh 实例要先装好 dsh；品牌实例要先装好对应版本 |
-
-第一次点「终端」时如果还没设过开发者密码，会先弹设置表单（面板密码 + 新密码 + 确认，
-至少 8 位、不能与面板密码相同）；之后每次打开先弹一次密码框，验证通过才换成终端窗口——
-不会先给你一个空终端再在里面要密码。验证状态 **30 分钟滑动有效**，期间重复打开不用再输。
-
-### 用起来是什么样
-
-- **以实例为单位**：终端用的是该实例自己的 home、账号与模型路由。TUI 里能 resume 的会话，
-  和网页模式看到的是同一份数据；不会出现「换了个终端就找不到会话」。
-- **会话常驻**：关窗、刷新页面、切走只算 detach，agent 继续跑；再点「终端」接回同一个会话，
-  并回放最近 256 KB 输出。
-- **同一实例单会话**：一个实例同时只允许一个终端；第二个窗口返回 409 `terminal_already_open`，
-  请先在已打开的窗口里操作或停止它。
-- **打开终端会先停网页模式**：两者共用同一个 `DSH_HOME`，同时跑会互相抢 agent 的状态。想回到
-  网页模式，关掉终端后点实例行上的「启动」即可。
-- **什么时候才真的结束**：在 TUI 里 `/exit`、点底栏「停止」、停止或删除品牌实例，或者面板
-  进程退出。其中 agent 自己退出后，窗口还会显示退出码；关掉窗口不会留下任何可交互的 shell。
-- **不是通用 shell**：PTY 里运行的只有该品牌的 TUI 进程，没有登录 shell、没有自由命令、文件
-  上传下载或端口转发。agent 退出后会话即被移除，attach 会返回 410。
-
-### 安全前提（请当真）
-
-终端入口会启动一个能执行 agent 的进程，屏幕上还能交互——**效果上等价于远程代码执行**。
-因此：
-
-- 除了面板会话，还要开发者密码提权；Windows 桌面启动额外要求字面确认；
-- 只在 HTTPS 下开放；HTTP 下前端不给按钮、后端直接拒绝；
-- 设置 →「开发者模式」里有一个 **Web Shell 总开关**：关掉后实例列表不再显示终端按钮，
-  两个 terminal 接口返回 403 `web_shell_disabled`。已经打开的终端不受影响，可以从它自己的
-  窗口停止。开关本身也要开发者密码提权 + HTTPS 才会被接受；
-- 面板只应监听回环或可信网络。要暴露公网，必须在网络层再加保护（反代鉴权 / VPN / 白名单），
-  或者干脆关掉这个开关。「有没有桌面」不是安全边界；
-- 审计里会记下终端的打开（成功/失败）、agent 退出和强制停止（`terminal.*`、
-  `desktop.reveal`），不记录屏幕内容。
-
-威胁模型与不变量（不经过 shell 启动、进程树隔离、先关 master 再杀树）见
-[docs/web-shell.md §4](docs/web-shell.md)。
-
-### Windows：终端也是浏览器 PTY（ConPTY）
-
-Win10 1809（build 17763）起，Windows 面板的「终端」和 Linux 一样是浏览器里的真终端：
-后端用系统自带的 `CreatePseudoConsole` 起一个伪控制台，xterm 直接连。不随包发任何二进制，
-**服务形态（session 0）也能用**——终端不再需要桌面。
-
-- 更早的 Windows（Win7/8.1，以及 1809 之前的 Win10）没有这个 API：终端接口返回 409
-  `terminal_unsupported_platform`，文案里带这台机器的实际 build 号，**不回落任何桌面窗口**。
-  `hdsl-web -doctor` 与启动横幅都会先打印一行 `terminal : ConPTY (… build …)` 或
-  `unsupported: needs build 17763, this is <n>`；
-- 启动的永远是适配器解析出来的程序（`node.exe` + 入口 JS，或品牌自己的 exe），
-  **不经过 `cmd`**：`.cmd`/`.bat`/`.ps1`/`.com` 会被拒绝——Windows 会悄悄把它们交给
-  `cmd.exe`，那等于在链路里塞回一个 shell；
-- 整棵进程树归 Job Object，终端结束（`/exit`、底栏停止、E-Stop、面板进程被强杀）时一起消失。
-
-同一类「桌面快捷操作」还有两个，在实例菜单里：
-
-- **打开文件夹** → `explorer.exe <实例 home 或工作区>`；
-- **打开日志** → `notepad.exe <实例日志文件>`。
-
-路径由服务端按实例记录算出来，只接受这几个目标名，前端传不了任意路径。这两个仍然需要
-交互桌面：以服务方式运行（session 0）时返回 409，而不是悄悄开一个看不见的窗口。
-
-### 设置与开关
-
-「设置 → 开发者模式」本身也要开发者密码（和打开终端是同一个，30 分钟滑动）。里面有三件事：
-
-- **Web Shell 总开关**：写 `server.yaml` 的 `web_shell.enabled`，也可用
-  `HDSL_WEB_SHELL_ENABLED` 覆盖；同步生效，不需要重启；
-- **修改开发者密码**：当前开发者密码 + 面板密码确认；成功后所有提权立即失效；
-- **HTTPS 检查**：HTTP 下这一页会直接弹「当前环境不安全」并给出两条路——去「HTTPS 证书」上传
-  证书，或生成自签名证书继续（浏览器会告警）。
-
-### 面板自带的终端：`plugins/` 与两个第一方 TUI
-
-dsh 的终端界面一直都是插件（dsh 自己只有 WEB / HEADLESS / ACP / SDK 四种面），所以面板
-自己带了两个：一个进程内、一个走 ACP。它们和其它插件一样装进**自己的 profile**，但
-**不发 npm**——构建时被打成 npm 布局的 tarball 塞进 jar，装的时候由面板从本地文件安装，
-所以离线也能装。
-
-```sh
-plugins/                        # 第一方插件源码，一个目录一个 npm 包
-  README.md                     # 契约：自带、离线可建、只依赖 harness
-  shared/                       # 两个终端共用的渲染/输入/组件层
-  dsh-inproc-tui/               # 进程内终端（mode bundle，dsh 0.2.x）
-  dsh-acp-tui/                  # ACP 终端（独立程序，0.1.2 起）
+```bash
+cd web && npm install && cd ..
+./gradlew shadowJar
+# → build/libs/hdsl-web-0.1.0-dev.jar
+# 正式版本号：./gradlew shadowJar -PreleaseVersion=0.6.95
 ```
 
-- **`dsh-inproc-tui`（进程内）**：**mode bundle**，叠在 `dsh-base` 上、跑在 harness 进程里，
-  所以有真·逐字流式、思考增量、`approval/request` 审批与 `user-questions/request` 追问、
-  进程内模型切换和压缩。代价是只认 **0.2.x** 的服务接缝（`requiresDsh >=0.2.0-rc.2 <0.3.0-0`，
-  实测 0.2.0-rc.2、0.2.1-rc.3 与 0.2.2-rc.3 都能跑；范围内不再逐个枚举 rc）。面板用
-  `dsh --profile dsh-inproc-tui` 启动它。
-- **`dsh-acp-tui`（兼容备用）**：**独立程序**，不 import 任何 harness 包，用 ACP v1 与
-  `dsh --profile acp` 通信，因此从 **0.1.2-rc.1** 起都能跑；面板用
-  `node …/bin/dsh-acp-tui.js` 启动它。它是**绝对的兼容选项**：实例升级、降级都拿它兜底。
-- **两个可以同时装，但只有一个在跑**：清单顺序是偏好——0.2.x 上先用进程内那个，ACP 那个
-  待命（列表里标「备用」）；实例版本一变、进程内那个不再匹配，ACP 版自动接管。这正是
-  "同实例版本蹦迪"时想要的：装一次退路，不用跟着版本反复装卸。
-- **一条安装规则**：低版本实例装不了要求更高版本的插件——列表里保留该行、写明缺什么，
-  安装按钮灰掉、服务端也 409。两个第一方终端**不互斥**，可以都装。
-- **界面是 kimi-code 那一路的**：☾ 头、记录区（用户消息 / 思考 / 工具卡片 / markdown 回答）、
-  底部输入框、状态栏（模型 · 推理强度 · 工作目录 · git 分支 · 上下文占用）、`/model` 与
-  `/resume` 选择器、权限对话框、`ctrl+o` 展开工具输出。
-- **构建**：`./gradlew packageFirstPartyPlugins` 产出 `build/first-party-plugins/*.tgz` 与
-  `index.json`，`processResources` 自动把它们放进 jar；`./gradlew check` 会跑插件的离线检查
-  与单元测试（机器上没有 Node 时跳过，和 SPA 构建同一套策略）。
+Windows（PowerShell）：
 
-新增第一方插件只需在 `plugins/` 下放一个目录（见 [plugins/README.md](plugins/README.md)），
-构建会自动打包；若是终端界面，再在 `DshTuiPlugins.ENTRIES` 里登记一行（`bundled = true`）。
+```powershell
+cd web; npm install; cd ..
+.\gradlew.bat shadowJar
+# → build\libs\hdsl-web-0.1.0-dev.jar
+```
 
-### 在终端里用：hdsl-tui
+产物是自包含的 fat jar：SPA、第一方插件与默认配置都在里面，`java -jar` 直接跑，不依赖外置静态文件。
+测试、前端开发服务器与容器构建见[构建与开发](#构建与开发)。
 
-浏览器之外还有一个终端客户端 `hdsl-tui`：适合手机 SSH、服务器 console、没有图形界面
-的环境。它只调用面板现有的 REST 与 WebSocket（`docs/terminal-protocol.md`），不新增端口，
-也不需要反向代理。
+## 实例终端（Web Shell）
 
-一键安装（Linux / macOS）：
+实例行上的「终端」按钮就地打开该实例的原生 TUI——Kimi Code、OpenCode、ZCode、Claude Web，以及
+dsh 的 `dsh tui [--resume]`。终端跑在面板自己的 WebSocket 上：**不新增端口，也不需要反向代理**。
+
+- **同一个实例，网页和终端互通**：共用一份 `home` 与会话。关窗、刷新只算 detach，agent 继续跑，
+  再点「终端」回放最近 256 KB 输出。
+- **以实例为单位**：一个实例同时只允许一个终端；打开终端会先停掉它的网页模式，避免抢 agent 状态。
+- **不是通用 shell**：PTY 里只有该品牌的 TUI 进程，没有登录 shell、文件上传或端口转发。
+
+前提三条：面板真的在讲 HTTPS（或反代终结 TLS 且开了 `https.trust_forwarded_proto`）、已设开发者密码
+（30 分钟滑动提权）、Web Shell 总开关开着（设置 → 开发者模式）。HTTP 下按钮不显示，接口返回
+403 `insecure_transport`。
+
+Windows 10 1809 起用系统自带 ConPTY，同样是浏览器里的真终端，服务形态（session 0）也能用；
+更早的系统返回 409 并带实际 build 号，不回落桌面窗口。
+
+> 终端入口等价于远程代码执行：只应在回环或可信网络上开放；要暴露公网，必须在网络层再加一道保护
+> （反代鉴权 / VPN / 白名单），或者关掉开关。威胁模型、PTY 实现与验收见
+> [docs/web-shell.md](docs/web-shell.md)。
+
+浏览器之外还有第一方客户端 `hdsl-tui`（linux / darwin / windows，amd64 / arm64），随每版 Release
+发布，适合手机 SSH 与无图形环境：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nas200-timmy/HDSL-WEB/main/scripts/install-hdsl-tui.sh | sh
-hdsl-tui            # 全屏菜单：选服务器 → 登录一次 → 进聊天或选实例进终端
 ```
 
-Windows 用 PowerShell 版的同一个脚本（`scripts/install-hdsl-tui.ps1`）。也可以直接从
-[Releases](https://github.com/nas200-timmy/HDSL-WEB/releases) 下载
-`hdsl-tui-<版本>-<os>-<arch>[.exe]`（linux / darwin / windows，amd64 / arm64），
-用 `SHA256SUMS-client.txt` 校验。
-
-- 客户端与面板**同版本号发布**；`hdsl-tui --version` 打印自己的版本与协议号。
-- 依赖源码随仓库提交（`vendor/`），`install-hdsl-tui.sh --build` 可以在没有预编译产物时
-  用本机 Go 离线编译。
-- 全屏菜单照 Debian 安装器做的：服务器列表 → 主菜单 → 分类 → 实例 → 动作，`Esc` 逐级返回。
-  保存的服务器和登录会话记在 `~/.config/hdsl-tui/config.json`（`0600`），下次直接复用；
-  开发者密码只在面板要求时问一次（30 分钟滑动）。
-- **聊天**：主菜单第一项。单列消息流 + 贴底输入框，Markdown 渲染，思考/搜索默认折成一行，
-  `Ctrl-O` 展开；`Ctrl-J` 换行、`Ctrl-C` 停止、`Ctrl-B` 会话列表、`/model` 切换模型、`/` 命令补全。
-  读聊天设置需要开发者提权，聊天本身只需要登录。见 [docs/chat-tui.md](docs/chat-tui.md)。
-- 断开用 `Ctrl-]` 再按 `q`，回到菜单而不是退出程序，agent 继续跑；再进一次接回同一个会话。
-- 脚本或无终端环境加 `--plain` 退回逐行问答界面。
-- Windows 客户端支持 Windows Terminal 与 conhost（自动打开 VT 处理与 UTF-8 代码页）；
-  **Windows 面板**仍只有桌面控制台，客户端会打印服务端给的提示后退出。
-
-### 常见错误
-
-| 现象 | 原因与处理 |
-|---|---|
-| 实例行没有终端按钮 | Web Shell 开关被关掉了，或者面板不在 HTTPS 下（含反代未开 `trust_forwarded_proto`） |
-| 打开时提示需要 HTTPS（`insecure_transport`） | 去「设置 → HTTPS 证书」上传证书，或生成自签名证书；反代拓扑打开 `https.trust_forwarded_proto` |
-| `web_shell_disabled` | 到「设置 → 开发者模式」把总开关打开 |
-| `developer_password_not_set` | 先设置开发者密码（终端窗口或开发者模式页都会引导） |
-| `developer_elevation_required` | 提权过期了，重新输入开发者密码 |
-| `terminal_already_open` | 该实例已有一个终端，先去那个窗口里操作或停止 |
-| 关掉网页后 agent 还在跑 | 这是设计行为：关窗只 detach。要真正结束请用 `/exit`、底栏「停止」，或退出面板进程 |
-| Windows 点终端返回 409 | build 低于 17763（Win7/8.1/早期 Win10），或该系统没有 ConPTY；错误里带实际 build 号 |
-| 命令行客户端报 `mode=desktop` | 那台面板是旧版本（Windows 桌面终端时代）；升级面板后终端回到浏览器 |
-
-更细的架构、PTY 实现与验收标准见 [docs/web-shell.md](docs/web-shell.md)；
-客户端安装、退出码与 Windows 细节见 [client/README.md](client/README.md)。
+安装、退出码与 Windows 细节见 [client/README.md](client/README.md)。
 
 ## 快速开始
 
@@ -399,6 +267,7 @@ docker compose up -d --build
 
 前提：JDK 17+、Node `^22.19.0 || >=24.0.0`、pnpm（`corepack enable pnpm`，或 `npm i -g pnpm`）。
 Node 版本范围是 dsh 自己的 `engines` 要求；pnpm 既是 dsh 的安装器，也是插件管理的转发目标。
+jar 的构建见[构建 jar 产物](#构建-jar-产物)。
 
 > **只有 JDK 和 jar 也能跑起来**，但装 dsh 版本/插件/品牌工具之前必须先有 Node 与 pnpm，
 > 否则创建实例只会得到一句安装失败。两条路：
@@ -410,17 +279,7 @@ Node 版本范围是 dsh 自己的 `engines` 要求；pnpm 既是 dsh 的安装�
 > 面板启动时也会在控制台把这条打印出来（`runtime: node MISSING, pnpm MISSING`），`docker logs`
 > 里同样能看到。
 
-Windows 同样可用：面板认得出系统装的 Node.js（`node.exe` / `npm.cmd` / `pnpm.cmd`）、能装 dsh
-版本与插件、能装品牌工具、能一键装托管 Node 运行时、能在面板内构建 ZCode。实例终端在
-Win10 1809 起走 ConPTY（浏览器里的真终端，服务形态也可用）；更早的系统返回 409 并带 build 号。
-「打开文件夹/日志」这类桌面操作仍需交互桌面（session 0 返回 409）。会话租约观察仍不支持。
-NTFS 也没有 `0600` 语义（见
-[安全说明](#安全说明)）。逐条实测与限制见 [docs/windows-bare-deploy.md](docs/windows-bare-deploy.md)。
-
 ```bash
-./gradlew shadowJar
-# 产出 build/libs/hdsl-web-<版本>.jar
-
 HDSL_DATA="$PWD/data" \
 HDSL_PORT=3080 \
 HDSL_ADMIN_PASSWORD='换成一个强口令' \
@@ -429,8 +288,6 @@ HDSL_ADMIN_PASSWORD='换成一个强口令' \
 
 ```powershell
 # Windows（PowerShell）
-.\gradlew.bat shadowJar
-
 $env:HDSL_DATA = "$PWD\data"
 $env:HDSL_PORT = "3080"
 $env:HDSL_ADMIN_PASSWORD = "换成一个强口令"
@@ -445,7 +302,8 @@ Windows 上有两个目录，别混：
   在这里。裸部署建议显式设一个绝对路径。
 
 不用环境变量也行：`hdsl-web` 会读 `$HDSL_DATA/server.yaml`（默认 `./data`），没有配置文件就用
-内置默认值。`java -jar … -version` 只打印版本号后退出。
+内置默认值。`java -jar … -version` 只打印版本号后退出。Windows 裸部署的实测限制见
+[docs/windows-bare-deploy.md](docs/windows-bare-deploy.md)。
 
 ### 首次登录与初始化引导
 
@@ -709,10 +567,6 @@ https:
 # 只跑测试
 ./gradlew test
 
-# 单个 jar（SPA 会被打进 jar）
-./gradlew shadowJar
-# → build/libs/hdsl-web-<版本>.jar（版本由 -PreleaseVersion=1.2.3 决定，缺省 0.1.0-dev）
-
 # 前端开发服务器（默认 5173，把 /api /ws /i 代理到 127.0.0.1:3080）
 cd web && npm install && npm run dev
 cd web && npm run build
@@ -725,9 +579,8 @@ docker compose up -d
 bash scripts/e2e-real.sh
 ```
 
-第一次 `./gradlew build` / `shadowJar` 之前先 `cd web && npm install`：只要 PATH 上有 npm，
-Gradle 就会执行 `npm run build`，没有 `node_modules` 会失败。Docker 构建不需要——镜像的
-build 阶段故意不带 npm，SPA 由单独的 web 阶段产出后拷进去。
+打包单个 jar 见上文[构建 jar 产物](#构建-jar-产物)；第一次构建前都要先 `cd web && npm install`。
+Docker 构建不需要——镜像的 build 阶段故意不带 npm，SPA 由单独的 web 阶段产出后拷进去。
 
 `scripts/e2e-real.sh` 会真的访问 npm registry、装一个 dsh 版本并启动，耗时几分钟，需要网络。
 `scripts/` 下还有什么、各自验什么、怎么跑，见 [scripts/README.md](scripts/README.md)。
