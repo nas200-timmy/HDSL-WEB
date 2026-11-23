@@ -23,7 +23,7 @@ export function ZcodeBuildButton() {
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    api.zcodeCatalog()
+    api.zcodeCatalog(true)
       .then((result) => {
         if (alive) setCatalog(result.entries);
       })

@@ -31,7 +31,7 @@ import {
   TerminalIcon,
 } from "../components/icons";
 import { useMobileLayout } from "../hooks";
-import { WINDOWS_TESTED_ZCODE, isNewerThanWindowsTested, isWindowsTestedZcode } from "../zcodeVersion";
+import { WINDOWS_TESTED_ZCODE, compareZcodeVersion, isNewerThanWindowsTested, isWindowsTestedZcode } from "../zcodeVersion";
 import { isNodeMissing, requestNodeInstall, requireNode } from "../setupGate";
 import { I18N } from "../i18n";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
@@ -1395,6 +1395,9 @@ function ZcodeVersionsCard() {
                   )}
                   {!isWindowsTestedZcode(entry.version) && isNewerThanWindowsTested(entry.version) && (
                     <span className="tag warn" style={{ flex: "none" }}>需补丁</span>
+                  )}
+                  {dist?.present && dist.version && compareZcodeVersion(entry.version, dist.version) === 0 && (
+                    <span className="tag running" style={{ flex: "none" }}>当前构建</span>
                   )}
                   <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", flex: "none" }}>
                     {entry.installed ? "已装"
