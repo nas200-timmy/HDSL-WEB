@@ -170,6 +170,7 @@ export function ChatPage() {
   const finishedTurns = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const atBottom = useRef(true);
+  const followRef = useRef(true);
 
   useEffect(() => {
     setPreview(null);
@@ -522,6 +523,10 @@ export function ChatPage() {
           finishedTurns.current = new Set(Array.from(finishedTurns.current).slice(-20));
         }
         setLive(null);
+        // 完成时才落到尾巴：生成中用户上翻不会被拽回，完成时则应停在最新输出处，
+        // 而不是被留在这一轮的头顶。
+        const el = scrollRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
         void refreshSession(event.sessionId);
         void loadSessions(assistantIdRef.current);
       }
@@ -531,7 +536,7 @@ export function ChatPage() {
 
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el || !atBottom.current) return;
+    if (!el || !followRef.current || !atBottom.current) return;
     // 合并一帧内的多次滚动请求：流式 delta 密集时不再每帧都 scrollTop=scrollHeight。
     const frame = requestAnimationFrame(() => {
       el.scrollTop = el.scrollHeight;
@@ -1259,6 +1264,7 @@ export function ChatPage() {
             onScroll={(event) => {
               const el = event.currentTarget;
               atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              followRef.current = atBottom.current;
             }}
           >
             {(() => {

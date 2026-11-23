@@ -182,6 +182,11 @@ export function MessageItem({
     if (streaming) setReasoningExpanded(true);
   }, [streaming]);
 
+  // 收尾时自动把 thinking 折起来，不然正文结束后还摊着一大段。
+  useEffect(() => {
+    if (!streaming) setReasoningExpanded(false);
+  }, [streaming]);
+
   useEffect(() => {
     if (streaming && reasoningExpanded && reasoningRef.current) {
       reasoningRef.current.scrollTop = reasoningRef.current.scrollHeight;
