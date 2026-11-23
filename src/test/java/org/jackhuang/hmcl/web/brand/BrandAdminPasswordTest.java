@@ -19,7 +19,9 @@ package org.jackhuang.hmcl.web.brand;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// A never-opened Octop has an empty `users` table; `user passwd` answers "user not
@@ -32,6 +34,18 @@ class BrandAdminPasswordTest {
         assertTrue(BrandApiServlet.isUnknownUser(
                 "octop user passwd failed (exit 1): error: user not found: admin"));
         assertTrue(BrandApiServlet.isUnknownUser("ERROR: User not found"));
+    }
+
+    @Test
+    void theWizardPasswordIsReadEvenWithoutTheOtherCredentialFiles(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path home) throws Exception {
+        java.nio.file.Files.writeString(home.resolve("octop-login.txt"), "wizard-pass-123\n");
+        assertEquals("wizard-pass-123", BrandApiServlet.wizardPassword(home));
+
+        java.nio.file.Files.writeString(home.resolve("octop-login.txt"), "  \n");
+        assertNull(BrandApiServlet.wizardPassword(home), "空文件不算有启动密码");
+
+        assertNull(BrandApiServlet.wizardPassword(home.resolve("missing")), "没有文件时返回 null");
     }
 
     @Test

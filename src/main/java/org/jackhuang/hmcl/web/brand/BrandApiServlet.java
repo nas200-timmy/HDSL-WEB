@@ -1374,14 +1374,14 @@ public final class BrandApiServlet extends HttpServlet {
                 password = line.substring("password:".length()).trim();
             }
         }
-        if (wizard && password == null) {
-            // Older entrypoints put the wizard password in its own file instead of the hint block.
-            List<String> wizardFile = readCredentialFile(home.resolve("octop-login.txt"));
-            if (!wizardFile.isEmpty()) {
-                String first = wizardFile.get(0).trim();
-                if (!first.isEmpty()) {
-                    password = first;
-                }
+        if (password == null) {
+            // 只留下 octop-login.txt 的实例（没有 credential.txt / octop-admin.txt）：
+            // 它的第一行就是 Octop 初始化向导要的“启动密码”。以前只在 wizard=true 时
+            // 才读这个文件，而 wizard 恰恰要由那两个文件里的提示行来置位——结果这类
+            // 实例在面板上永远显示不出启动密码，用户卡死在向导第一步。
+            password = wizardPassword(home);
+            if (password != null) {
+                wizard = true;
             }
         }
         if (password == null) {
@@ -1700,6 +1700,16 @@ public final class BrandApiServlet extends HttpServlet {
             Thread.currentThread().interrupt();
         }
         return null;
+    }
+
+    /// Octop 的启动向导密码（`octop-login.txt` 第一行），文件不存在或为空时 `null`。
+    static @Nullable String wizardPassword(Path home) {
+        List<String> lines = readCredentialFile(home.resolve("octop-login.txt"));
+        if (lines.isEmpty()) {
+            return null;
+        }
+        String first = lines.get(0).trim();
+        return first.isEmpty() ? null : first;
     }
 
     /// A 16-character password with letters and digits, for the "reset" without a typed value.
