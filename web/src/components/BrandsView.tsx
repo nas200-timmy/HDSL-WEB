@@ -31,6 +31,7 @@ import {
   TerminalIcon,
 } from "../components/icons";
 import { useMobileLayout } from "../hooks";
+import { WINDOWS_TESTED_ZCODE, isNewerThanWindowsTested, isWindowsTestedZcode } from "../zcodeVersion";
 import { isNodeMissing, requestNodeInstall, requireNode } from "../setupGate";
 import { I18N } from "../i18n";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
@@ -1333,6 +1334,7 @@ function ZcodeVersionsCard() {
       {!open && (
         <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", paddingTop: 2 }}>
           {I18N["dsh.brand.version.shared"]}
+          <span style={{ marginLeft: 6 }}>· Windows 实测稳定 {WINDOWS_TESTED_ZCODE}</span>
         </div>
       )}
 
@@ -1364,6 +1366,10 @@ function ZcodeVersionsCard() {
               正式版 / 仅 tag / 未发布 main；未安装的用「构建发行包」构建
             </span>
           </div>
+          <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+            Windows 上最后完整实测稳定的是 <b>{WINDOWS_TESTED_ZCODE}</b>；更新的上游版本改过构建产物，
+            需要面板跟着补丁，未重测前请当实验性看。
+          </div>
           {catalogError && <div className="form-error">{catalogError}</div>}
           {catalog.length === 0 ? (
             <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
@@ -1384,6 +1390,12 @@ function ZcodeVersionsCard() {
                     {entry.channel === "main" ? "未发布" : entry.channel === "release" ? "正式版" : "仅 tag"}
                   </span>
                   <span style={{ fontSize: 12, fontWeight: 600, flex: "none" }}>{entry.version}</span>
+                  {isWindowsTestedZcode(entry.version) && (
+                    <span className="tag running" style={{ flex: "none" }}>Windows 实测</span>
+                  )}
+                  {!isWindowsTestedZcode(entry.version) && isNewerThanWindowsTested(entry.version) && (
+                    <span className="tag warn" style={{ flex: "none" }}>需补丁</span>
+                  )}
                   <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", flex: "none" }}>
                     {entry.installed ? "已装"
                       : entry.buildState === "building" ? "构建中"

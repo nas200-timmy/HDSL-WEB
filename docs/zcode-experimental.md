@@ -155,6 +155,12 @@ Electron 布局与 cwd）。编译器解析顺序：`HDSL_ZCODE_MINGW` → 面�
 - `tag`：有 tag 但没有 Release 的版本（如 v3.15.1）；
 - `main`：`main@<sha>`，未发布，不保证兼容。
 
+**Windows 实测基线是 v3.17.2。** 这是最后一次把构建、反代、工作区、项目、会话与 agent
+完整跑通的版本；之后的版本（3.18+ / 4.x）上游改过构建产物——例如
+`server/entry-http.js` 里项目 owner 的表达式——面板的 distro patch 要跟着更新锚点，
+没重测前不保证工作区/项目功能。构建器在锚点缺失时会**明确失败**而不是装一个残缺的
+workbench；把版本退回 v3.17.2 可以先恢复可用。
+
 每一项带 `credentialFormat`（1 legacy / 2 system credential storage）、
 `requiresCredentialSecret`、`installed` 与 `buildState`。3.18.0 起是 v2；当前只有
 `main` 构建会触发。
