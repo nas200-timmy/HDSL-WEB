@@ -174,14 +174,15 @@
 
 终端、agent 密码、guard/终端相关设置仍然只在面板**此刻真的在讲 TLS** 时可用（读主连接器，
 尊重 `https.trust_forwarded_proto`）。**但开发者密码本身在裸 HTTP 下可以作为第二因子**：
-可以设置/修改/提权/延长/停止，用它把 `/api/*` 和 `/i/*` 挡住；远程明文 HTTP 会强制
-`developer_guard.scope=ALL`，回环不强制（本地测试 / SSH 转发）。
+可以设置/修改/提权/延长/停止，用它把 `/api/*` 和 `/i/*` 挡住；远程明文 HTTP 在
+**已经设置开发者密码**时强制 `developer_guard.scope=ALL`，回环不强制（本地测试 / SSH 转发）。
+还没设密码时不强制：否则首次部署连设置页和证书页都进不去，等于把面板锁死。
 
 - HTTP 下终端按钮仍然隐藏，直接调 `POST .../terminal` 返回 403 `insecure_transport`；
   agent 密码与 guard/终端设置也仍然返回 `tls_required`。
 - `/i/*` 与 `/plain` 不再因为“非 TLS 且非回环”而硬 403（11267），改为第二因子 + 风险提示；
   `/plain` 本身是无 JS/旧浏览器表面，不是加密表面，详见 `security.md` §6.1。
-- **守卫在裸 HTTP 下有意义，但只是应用层第二道门**：远程 HTTP 强制 `ALL`，提权可以拿到；
+- **守卫在裸 HTTP 下有意义，但只是应用层第二道门**：远程 HTTP 在已有密码时强制 `ALL`，提权可以拿到；
   会话 Cookie 仍是明文 Bearer，密码/聊天信封只防被动嗅探，不防主动 MITM。不要把它当传输安全。
 - 威胁模型与责任划分（哪些归面板、哪些归部署者）见 [`design-notes.md` §7](design-notes.md#7-安全模型)。
 - 没有证书时可以选择生成自签名证书：`POST /api/settings/tls/self-signed` 生成（或复用）

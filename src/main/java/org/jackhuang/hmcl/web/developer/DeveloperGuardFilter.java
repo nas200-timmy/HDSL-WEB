@@ -113,15 +113,10 @@ public final class DeveloperGuardFilter implements Filter {
             return;
         }
 
-        DeveloperGuardScope scope = config.developerGuard.scope;
         boolean secure = RequestSecurity.isSecure(http, tlsActive.getAsBoolean(), config);
-        // A remote cleartext panel has no TLS to protect a stolen session, so
-        // the guard is forced to its highest scope. Loopback remains local
-        // (tests, SSH local forwarding).
-        if (!secure && !org.jackhuang.hmcl.web.http.ClientAddresses.isLoopback(http, config.network.trustedProxies)
-                && scope != DeveloperGuardScope.ALL) {
-            scope = DeveloperGuardScope.ALL;
-        }
+        boolean loopback = org.jackhuang.hmcl.web.http.ClientAddresses.isLoopback(http, config.network.trustedProxies);
+        DeveloperGuardScope scope = effectiveScope(
+                config.developerGuard.scope, secure, loopback, devAuth.isSet());
         // The way out of the chicken-and-egg: a cleartext panel that has not
         // enabled TLS yet needs certificate management to get TLS, and that
         // management is what the forced-ALL promotion would block. Only the
@@ -153,6 +148,28 @@ public final class DeveloperGuardFilter implements Filter {
                 "需要开发者密码",
                 "Enter the developer password to open this instance.",
                 true);
+    }
+
+    /// The scope this request is actually policed at.
+    ///
+    /// A remote cleartext panel has no TLS to protect a stolen session, so the
+    /// guard is forced to its highest scope — **but only when a developer
+    /// password exists**. Without one the forced scope would lock every API
+    /// (settings, TLS, Node) behind a password nobody can set from a page the
+    /// same guard is blocking; a fresh LAN deployment would be unusable. Once
+    /// the password is set, the promotion applies and elevation is possible.
+    ///
+    /// @param configured the operator's `developer_guard.scope`
+    /// @param secure     whether this request is protected by TLS (directly or via a trusted proxy)
+    /// @param loopback   whether the client is on the panel's own host
+    /// @param hasPassword whether a developer password exists
+    /// @return the scope to apply
+    static DeveloperGuardScope effectiveScope(DeveloperGuardScope configured, boolean secure,
+                                              boolean loopback, boolean hasPassword) {
+        if (!secure && !loopback && hasPassword && configured != DeveloperGuardScope.ALL) {
+            return DeveloperGuardScope.ALL;
+        }
+        return configured;
     }
 
     /// Certificate management, which a cleartext panel must reach to stop being
