@@ -851,10 +851,11 @@ export const api = {
     request<{ taskId: string }>("/api/node/install", jsonInit("POST", body)),
   nodeUninstall: (version: string) =>
     request<{ ok: boolean }>("/api/node/uninstall", jsonInit("POST", { version })),
-  /** 预检一个选择：下拉框在应用前拿它显示「会解析到哪个版本、是否满足」。 */
-  nodeResolve: (selector: string, brand?: string) =>
+  /** 预检一个选择：下拉框在应用前拿它显示「会解析到哪个版本、是否满足」。
+   *  `needsPnpm` 为 true 时按安装器的要求判断——有 node 没 pnpm 算不可用。 */
+  nodeResolve: (selector: string, brand?: string, needsPnpm?: boolean) =>
     request<import("./types").NodeResolution>(
-      `/api/node/resolve?selector=${encodeURIComponent(selector)}${brand ? `&brand=${encodeURIComponent(brand)}` : ""}`,
+      `/api/node/resolve?selector=${encodeURIComponent(selector)}${brand ? `&brand=${encodeURIComponent(brand)}` : ""}${needsPnpm ? "&pnpm=1" : ""}`,
     ),
   /** 全局默认选择。 */
   nodeDefault: (selection: string) =>

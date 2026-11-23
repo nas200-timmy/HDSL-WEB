@@ -132,8 +132,13 @@ public final class NodeApiServlet extends HttpServlet {
                     "unknown_selector: " + selector);
             return;
         }
+        // `?pnpm=1` asks the same question the installer will ask: a runtime
+        // without pnpm cannot install dsh, even when its Node version is fine.
+        // Without the flag the dropdown keeps its old answer (version only).
+        String pnpmFlag = request.getParameter("pnpm");
+        boolean needsPnpm = "1".equals(pnpmFlag) || "true".equalsIgnoreCase(pnpmFlag);
         NodeSelection.Resolution resolution = NodeSelection.resolve(
-                selection, environment.fallbackFor(request.getParameter("brand")), false);
+                selection, environment.fallbackFor(request.getParameter("brand")), needsPnpm);
         JsonObject body = new JsonObject();
         body.addProperty("selector", selector);
         if (resolution.version() == null) {
@@ -143,6 +148,8 @@ public final class NodeApiServlet extends HttpServlet {
         }
         body.addProperty("source", resolution.source().name().toLowerCase(Locale.ROOT));
         body.addProperty("compatible", resolution.compatible());
+        body.addProperty("needsPnpm", needsPnpm);
+        body.addProperty("pnpm", resolution.runtime() != null && resolution.runtime().canManagePlugins());
         body.addProperty("reason", resolution.reason());
         Json.writePreservingNulls(response, body);
     }

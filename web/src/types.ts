@@ -43,6 +43,10 @@ export interface NodeResolution {
   version: string | null;
   source: "system" | "managed" | "channel" | "exact" | "none";
   compatible: boolean;
+  /** 请求里是否按「安装需要 pnpm」判断（`?pnpm=1`） */
+  needsPnpm?: boolean;
+  /** 解析到的运行时有没有 pnpm；旧后端不返回时按未知处理 */
+  pnpm?: boolean;
   reason: string;
 }
 

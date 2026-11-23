@@ -193,7 +193,7 @@ const REGISTRY_LABEL: Record<string, string> = {
 
 async function probe(): Promise<SetupStatus> {
   const [node, registry, tls, developer, panel] = await Promise.allSettled([
-    api.nodeResolve("auto"),
+    api.nodeResolve("auto", undefined, true),
     api.getRegistry(),
     api.getTls(),
     api.developerStatus(),
@@ -250,10 +250,18 @@ function nodeItemOf(resolved: NodeResolution | null, error: string | null): Setu
   if (!resolved) {
     return { id: "node", tone: "warn", unknown: true, title: "Node.js", detail: error ?? "状态读取失败" };
   }
-  if (resolved.compatible && resolved.version) {
+  if (resolved.compatible && resolved.version && resolved.pnpm !== false) {
     const where = resolved.source === "managed" || resolved.source === "channel" || resolved.source === "exact"
       ? "面板托管" : "系统 PATH";
     return { id: "node", tone: "ok", title: "Node.js", detail: `${resolved.version} · ${where}` };
+  }
+  if (resolved.version && resolved.pnpm === false) {
+    return {
+      id: "node",
+      tone: "bad",
+      title: "Node.js",
+      detail: `${resolved.version} 缺少 pnpm；安装 dsh 需要它，点「一键安装」会装一个自带 pnpm 的托管运行时`,
+    };
   }
   return {
     id: "node",
