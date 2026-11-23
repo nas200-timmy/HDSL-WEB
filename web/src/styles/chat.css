@@ -1184,6 +1184,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
 }
 
 .chat-tool {
@@ -2891,6 +2892,8 @@
   align-items: center;
   gap: 4px;
   max-width: 270px;
+  min-width: 0;
+  flex: 0 1 auto;
   padding: 3px 6px;
   border-radius: 4px;
   color: var(--monet-on-surface-variant);
@@ -2915,7 +2918,7 @@
 }
 
 .chat-model-button-label {
-  max-width: 220px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2923,7 +2926,7 @@
 }
 
 .chat-model-button-provider {
-  max-width: 220px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
