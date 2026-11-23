@@ -444,6 +444,8 @@ button.titlebar-icon:hover {
   align-items: center;
   gap: 4px;
   flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* 工具栏行 */

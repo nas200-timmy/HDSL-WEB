@@ -887,15 +887,15 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
             return;
         }
-        if (refuseDisabled(brand, id, response)) {
-            return;
-        }
+        // 删除是被禁用实例唯一允许的变更操作：它本来就因为不是 survivor 而被策略挡住，
+        // 正该允许删掉。删完让 reconcile 收养下一个，避免 survivor 消失后整品牌锁死。
         if (BrandRuntime.isRunning(id)) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "stop the instance before deleting it");
             return;
         }
         instanceTerminal.close(brand.id(), id);
         ref.manager().delete(id);
+        policy.reconcile(brand, ref.manager().list().stream().map(BrandInstance::id).toList());
         AuditLog.log(AuditLog.Channel.WEB, "brand.instance.delete", brand.id() + "/" + id,
                 AuthFilter.selfDirected(request, brand.id(), id) ? "self_delete" : "success",
                 actorOf(request), request.getRemoteAddr());
