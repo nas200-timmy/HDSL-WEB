@@ -178,8 +178,10 @@ export function MessageItem({
   }
   const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>({});
 
-  // 不再默认展开 thinking：它和正文常常是同一份大纲，两个同时摊开时读起来像
-  // 同一段被画了两遍。想看的人点「思考」自己展开。
+  useEffect(() => {
+    if (streaming) setReasoningExpanded(true);
+  }, [streaming]);
+
   useEffect(() => {
     if (streaming && reasoningExpanded && reasoningRef.current) {
       reasoningRef.current.scrollTop = reasoningRef.current.scrollHeight;
