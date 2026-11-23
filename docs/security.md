@@ -63,9 +63,10 @@ key 的价值）全是部署者的责任。
   否则设置、证书、Node 全被一把还不存在的密码锁住，新部署无法配置）；
   但 **Web Shell、实例终端、agent 密码、guard/终端相关设置仍然只在 HTTPS 下可用**。
   裸 HTTP 下终端按钮隐藏、对应接口 403；不要把它当成完整开发者模式。
-- **例外：明文且尚未启用 TLS 时，证书管理路由不要求开发者第二因子**，用于打破
-  「设开发者密码要 HTTPS、启 HTTPS 要开发者密码」的死锁。范围、代价与恢复条件见
-  [§2.10](#210-证书acme-凭据与-sni)。
+- **例外：当前连接器不是 TLS（TLS 未生效）时，证书管理路由不要求开发者第二因子。**
+  这是为了让明文面板能先配置证书/CA、完成第一次 TLS 启用而刻意保留的便利取舍；
+  提权本身在明文下可用，不需要先启用 HTTPS。范围、代价与
+  恢复条件见 [§2.10](#210-证书acme-凭据与-sni)。
 - **口令存在独立的 `auth/developer.json`（0600）**，与登录口令分开：偷到登录态不等于能开终端。
 - **提权是会话级的**：默认 30 分钟滑动（`DeveloperElevation.TTL`，可一次延长到 3 小时）；
   10 分钟内错 3 次，这个「会话 + 地址」就被锁 10 分钟。
@@ -215,20 +216,26 @@ SMB/NFS export、某些 Windows 共享卷同样如此）会把**共享属主**�
   静默优先」。迁移后旧文件保留，但不再参与选择；实际生效的证书以注册表为准。
 - staging 证书不被浏览器信任，不要设为默认；默认策略会阻止自动切换，手动切换二次确认。
   锁死时用局域网地址切回可信证书，或停容器改 `certs/registry.json` 的 `active`。
-- **明文下的证书引导例外（TLS bootstrap）。** 面板还是明文 HTTP、且从未启用 TLS 时，
-  `DeveloperGuardFilter` 对 `/api/settings/{tls,certificates,acme,dns-credentials}*`
-  **不做开发者第二因子检查**：带登录会话就能读这些设置，并可用 `POST /api/settings/tls`
-  上传证书或 `POST /api/settings/tls/self-signed` 生成自签证书，把面板切到 HTTPS。
-  没有这个例外会死锁：提权（设置/确认开发者密码）只在 HTTPS 下接受，而启用 HTTPS 又要
-  先过开发者门；已设开发者密码的远程明文面板还会被强制提升到 `developer_guard=ALL`。
-  **代价是明确的**：明文暴露给不可信网络时，这些证书/ACME/DNS 凭据路由只受登录会话
-  保护，不受开发者第二因子保护；任何拿到会话的人都能读这些设置，并能上传/切换面板
-  自己的证书或生成自签证书（也就是改变面板的 TLS 身份）。证书注册表与 ACME 凭据的
-  **写入**在 servlet 层仍要求 HTTPS（`tls_required`），但那是传输层检查，不是第二因子。
-  把面板以明文暴露给不可信网络，等于接受该风险；启用 HTTPS 后豁免立即失效，完整门禁
-  恢复。
-- 证书注册表上传/签发/切换与 ACME 凭据写入要求 HTTPS + 开发者提权；写 DNS 凭据还要
-  面板密码二次确认；裸 HTTP 下这些写入返回 `tls_required`。
+- **明文下的证书引导例外（TLS bootstrap）。** 当前连接器不是 TLS（TLS 未生效），且请求
+  也没有可信反代声明 HTTPS 时，`DeveloperGuardFilter` 对
+  `/api/settings/{tls,certificates,acme,dns-credentials}*` **不做开发者第二因子检查**：
+  带登录会话就能读这些设置，并可用 `POST /api/settings/tls` 上传证书或
+  `POST /api/settings/tls/self-signed` 生成自签证书，把面板切到 HTTPS。这是为了在明文
+  面板上先配置证书/CA、完成第一次 TLS 启用的**便利取舍**，并非必需——明文下
+  `POST /api/developer/password` 与 `/api/developer/elevate` 本身就可直接使用
+  （见 `DeveloperApiServlet.requireTls`）。
+  **代价是明确的**：明文暴露给不可信网络时，这些证书/ACME/DNS 凭据路由只要求登录
+  会话，不再要求开发者第二因子；任何拿到会话的人都能读这些设置，并能通过
+  `POST /api/settings/tls` / `POST /api/settings/tls/self-signed` 改变面板的 TLS
+  身份。接口层面并不一致：`POST /api/settings/tls` 与 `/tls/self-signed` 在明文下
+  可用；`/api/settings/certificates*` 的上传/签发/切换，以及 ACME 配置/凭据写入
+  （`PUT /api/settings/acme`、`/credentials`、`/issue` 等）仍被 servlet 以
+  `tls_required` 拒绝——那是传输层检查，不是第二因子。把面板以明文暴露给不可信
+  网络，等于接受该风险；启用 TLS 后豁免立即失效，完整门禁恢复。若不需要这个便利，
+  也可以恢复无条件提权（移除该豁免）。
+- `POST /api/settings/tls` 与 `/tls/self-signed` 在明文下可用；`/api/settings/certificates*`
+  的上传/签发/切换、ACME 配置与凭据写入要求 HTTPS + 开发者提权；写 DNS 凭据还要面板
+  密码二次确认；裸 HTTP 下这些写入返回 `tls_required`。
 
 ## 3. 面板不管的事
 

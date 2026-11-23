@@ -318,20 +318,22 @@ compose / 磁盘 / 面板端口 / MC 端口逐条列出来，缺什么就给这�
 
 ### 明文第一次启用 TLS 的 bootstrap 例外
 
-**面板还是明文 HTTP、且从未启用 TLS 时，证书路由不要求开发者第二因子。** 这是刻意保留
-的出口，不是漏配：提权（设置/确认开发者密码）只在 HTTPS 下接受，而启用 HTTPS 又要先过
-开发者门；已设开发者密码的远程明文面板还会被强制提升到 `developer_guard=ALL`。没有这个
-例外，第一次启用 TLS 就会被死锁。带着登录会话，明文下可以：
+**当前连接器不是 TLS（TLS 未生效）时，证书路由不要求开发者第二因子。** 这是为了在明文
+面板上先配置证书/CA、完成第一次 TLS 启用而刻意保留的**便利取舍**，不是因为提权离不开
+HTTPS——明文下 `POST /api/developer/password` 与 `/api/developer/elevate` 都可直接
+使用。带着登录会话，明文下可以：
 
 - `GET /api/settings/tls`、`/api/settings/certificates`、`/api/settings/acme`、
   `/api/settings/dns-credentials*` 读取证书与 ACME 状态；
 - `POST /api/settings/tls`（PEM / PKCS#12）或 `POST /api/settings/tls/self-signed`
   上传/生成证书并当场切到 HTTPS。
 
-代价：**明文暴露给不可信网络时，这些路由只受登录会话保护，不受开发者第二因子保护**；
-证书注册表与 ACME 凭据的写入仍会因明文被 servlet 以 `tls_required` 拒绝，但读取与 TLS
-上传/自签不受第二因子保护。完整契约见
+代价：**明文暴露给不可信网络时，这些路由只要求登录会话，不再要求开发者第二因子**。
+接口层面并不一致：`/api/settings/certificates*` 的上传/签发/切换与 ACME 配置/凭据写入
+仍会因明文被 servlet 以 `tls_required` 拒绝，但读取与 `POST /api/settings/tls` /
+`/tls/self-signed` 不受第二因子保护。完整契约见
 [security.md §2.10](security.md#210-证书acme-凭据与-sni)。启用 HTTPS 后例外自动失效。
+若不需要这个便利，也可以恢复无条件提权（移除该豁免）。
 
 可执行验收（用临时面板；`<jar>` 换成 `build/libs/hdsl-web-0.6.95.jar`）：
 

@@ -2,10 +2,12 @@
 
 ## 状态
 
-- 分支 `main`，HEAD `52baf7b19956681802388bc5f2514aadfeb9c1b5`。
+- 分支 `main`，本稿所在提交（v0.6.95 发布前的文档修正提交）。
 - 这是 v0.6.94 之后 60 个非合并提交的 `--no-ff` 合并（合并对象共 61 个）。
 - **尚未推送、尚未打 `v0.6.95` tag、尚未发布 Release / 容器**；本轮只做本地提交。
 - 工作区在发布审计时是干净的；本轮改动见下面的「本轮改动」。
+
+合并点：
 
 ```
 52baf7b199 merge: web-shell → main（部署预检、反代真实客户端与种子预览极限档）
@@ -17,9 +19,11 @@
 `/api/settings/{tls,certificates,acme,dns-credentials}*` 整族（读也绕过开发者第二因子）
 定为 P0。
 
-**维护者决定：保留，不收窄。** 理由：收紧会造成死锁——设置/确认开发者密码的提权只在
-HTTPS 下接受，而启用 HTTPS 又要先过开发者门；已设开发者密码的远程明文面板还会被强制
-提升到 `developer_guard=ALL`。可以接受放弃明文 HTTP 下这部分安全性。
+**维护者决定：保留，不收窄。** 理由：这是为了让明文面板先配置证书/CA、完成第一次
+TLS 启用的**便利取舍**，并非必需——明文下 `POST /api/developer/password` 与
+`POST /api/developer/elevate` 本身就可直接使用（`DeveloperApiServlet.requireTls`
+对这两条路径放行）。可以接受放弃明文 HTTP 下这部分安全性：明文下这些证书/ACME/DNS
+凭据路由只要求登录会话，不再要求开发者第二因子；启用 TLS 后恢复完整门禁。
 
 本轮把该行为写成明确的安全契约，而不是修改代码：
 
@@ -43,10 +47,13 @@ HTTPS 下接受，而启用 HTTPS 又要先过开发者门；已设开发者密�
     同样改用真实客户端地址。
 - `CHANGELOG.md`：新增 v0.6.95（8 个主题），并修掉 `v0.6.90## v0.6.90` 重复标题。
 - 本文件。
+- 后续文档复审：把 bootstrap 理由从错误的「必须先启用 HTTPS」改为「明文配置证书的便利取舍」，
+  澄清 `POST /api/settings/tls` 与 `/api/settings/certificates*` 的接口差异，并修正
+  品牌端口与种子预览端口预留表的表述。
 
 ## 验证（实际执行）
 
-> 跑完后回填；以下命令均在仓库根目录执行。
+以下命令均在仓库根目录执行。
 
 - `./gradlew test --rerun-tasks`：**1687 例、0 失败、27 跳过**（2m34s）。
 - `cd web && npm run typecheck && npm run build && npm run compat`：通过
