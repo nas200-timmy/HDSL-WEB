@@ -1302,7 +1302,7 @@ select.input {
   transition: width 200ms var(--ease);
 }
 
-/* ---------------- 部署检查（首次部署的卡片 + 徽标） ---------------- */
+/* ---------------- 部署检查（首次部署的卡片） ---------------- */
 
 .setup-card {
   position: absolute;
@@ -1563,30 +1563,49 @@ select.input {
   margin-top: 8px;
 }
 
+.setup-foot-links {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
 .setup-foot .btn {
   font-size: 11px;
   height: 26px;
   padding: 0 6px;
 }
 
-/* 侧栏徽标 */
-.side-badge {
-  margin-left: auto;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--monet-error);
-  color: var(--monet-on-error);
-  font-size: 10px;
-  line-height: 16px;
-  text-align: center;
-  flex: none;
+/* 首次部署：冷启动时卡片里的"你需要做的" */
+.setup-next {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--monet-surface-container);
 }
 
-.side-badge.warn {
-  background: var(--monet-tertiary);
-  color: var(--monet-on-tertiary);
+.setup-next-title {
+  font-weight: 600;
+  color: var(--monet-on-surface);
+  margin-bottom: 4px;
+}
+
+.setup-next-hint {
+  margin: 0 0 8px;
+  color: var(--monet-on-surface-variant);
+  line-height: 1.55;
+}
+
+.setup-next-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.setup-next-actions .btn {
+  font-size: 11px;
+  height: 28px;
+  padding: 0 8px;
 }
 
 /* 手机顶部菜单按钮上的小点 */

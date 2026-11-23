@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import {
-  installManagedNode, refreshSetupStatus, setSetupCollapsed, setSetupHidden,
-  setupSummary, useSetupCollapsed, useSetupHidden, useSetupStatus,
+  installManagedNode, markSetupSeen, refreshSetupStatus, setSetupCollapsed, setSetupHidden,
+  setupSeen, setupSummary, useSetupCollapsed, useSetupHidden, useSetupStatus,
   type SetupItem,
 } from "../setup";
 import { toast } from "../store";
 import { errMsg } from "../utils";
-import { CheckCircleIcon, ErrorIcon, InfoIcon, RefreshIcon, StyleIcon, WarningIcon } from "./icons";
+import { CheckCircleIcon, ErrorIcon, InfoIcon, RefreshIcon, SettingsIcon, StyleIcon, WarningIcon } from "./icons";
 
 /** 首次部署的检查卡：状态来自服务端，动作直达设置页或就地完成。
  *  桌面叠在壁纸左上（避开右下角的启动面板），手机作为首页的第一块内容。 */
@@ -22,6 +22,8 @@ export function SetupCard() {
   const [showIntro, setShowIntro] = useState(false);
   // 全部就绪时默认只留一行；点开是本次会话的临时展开，不覆盖"收起"的记忆。
   const [forceExpanded, setForceExpanded] = useState(false);
+  // 首次部署：即使四项都已经配好，也必须把卡片摊开一次，顺带说明下一步做什么。
+  const [firstRun, setFirstRun] = useState(() => !setupSeen());
 
   useEffect(() => {
     void refreshSetupStatus();
@@ -39,11 +41,15 @@ export function SetupCard() {
   // 下载源只是建议：官方源能用，只是国内慢。它不该让卡片一直摊着。
   const hasIssue = status.items.some((item) => item.id !== "registry" && item.tone !== "ok");
 
-  if (!forceExpanded && (collapsed || !hasIssue)) {
+  if (!forceExpanded && !firstRun && (collapsed || !hasIssue)) {
     return (
       <button
         className={`setup-collapsed tone-${worst}`}
-        onClick={() => setForceExpanded(true)}
+        onClick={() => {
+          setFirstRun(false);
+          markSetupSeen();
+          setForceExpanded(true);
+        }}
         title="展开部署检查"
       >
         <span className="setup-dot" />
@@ -145,8 +151,21 @@ export function SetupCard() {
           </button>
           <button
             className="setup-icon-btn"
+            title="设置"
+            onClick={() => {
+              markSetupSeen();
+              setFirstRun(false);
+              navigate("/settings?tab=general");
+            }}
+          >
+            <SettingsIcon size={15} />
+          </button>
+          <button
+            className="setup-icon-btn"
             title="收成一行"
             onClick={() => {
+              markSetupSeen();
+              setFirstRun(false);
               setSetupCollapsed(true);
               setForceExpanded(false);
             }}
@@ -178,6 +197,56 @@ export function SetupCard() {
           </li>
         ))}
       </ul>
+
+      {firstRun && (
+        <div className="setup-next">
+          <div className="setup-next-title">你需要做的</div>
+          {status.ready ? (
+            <>
+              <p className="setup-next-hint">
+                配置已经齐了。先建一个实例跑起来，剩下的账号和外观可以随时再改。
+              </p>
+              <div className="setup-next-actions">
+                <button
+                  className="btn btn-raised"
+                  onClick={() => {
+                    markSetupSeen();
+                    setFirstRun(false);
+                    navigate("/instances/new");
+                  }}
+                >
+                  新建实例
+                </button>
+                <button
+                  className="btn btn-text"
+                  onClick={() => {
+                    markSetupSeen();
+                    setFirstRun(false);
+                    navigate("/accounts");
+                  }}
+                >
+                  添加账号
+                </button>
+                <button
+                  className="btn btn-text"
+                  onClick={() => {
+                    markSetupSeen();
+                    setFirstRun(false);
+                    navigate("/settings?tab=appearance");
+                  }}
+                >
+                  换个外观
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="setup-next-hint">
+              先处理上面标红的项（缺什么点什么），全部通过后再新建实例。
+              标「建议」的可以以后再调，不影响启动。
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="setup-intro">
         <button className="setup-intro-toggle" onClick={() => setShowIntro((value) => !value)}>
@@ -217,13 +286,21 @@ export function SetupCard() {
       </div>
 
       <div className="setup-foot">
-        <button className="btn btn-text" onClick={() => navigate("/settings?tab=appearance")}>
-          <StyleIcon size={15} />
-          换个外观
-        </button>
+        <span className="setup-foot-links">
+          <button className="btn btn-text" onClick={() => navigate("/settings?tab=appearance")}>
+            <StyleIcon size={15} />
+            换个外观
+          </button>
+          <button className="btn btn-text" onClick={() => navigate("/settings?tab=general")}>
+            <SettingsIcon size={15} />
+            设置
+          </button>
+        </span>
         <button
           className="btn btn-text dim"
           onClick={() => {
+            markSetupSeen();
+            setFirstRun(false);
             setSetupHidden(true);
             toast("info", "已隐藏。可以在 设置 → 通用 里重新打开");
           }}

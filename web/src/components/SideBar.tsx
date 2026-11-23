@@ -5,13 +5,11 @@ import { isTuiBrand } from "../brandKind";
 import { BRAND_LABEL, useLaunchEntry, type LaunchEntry } from "../launchEntry";
 import { I18N } from "../i18n";
 import { closeSidebar, logout, useAppState } from "../store";
-import { refreshSetupStatus, setSetupCollapsed, setupSummary, useSetupHidden, useSetupStatus } from "../setup";
 import { useTranscodeFeature } from "../transcodeFeature";
 import type { Instance } from "../types";
 import { normState } from "../utils";
 import { BrandIcon } from "./BrandIcon";
 import {
-  CheckCircleIcon,
   ChatIcon,
   DownloadIcon,
   FormatListBulletedIcon,
@@ -56,14 +54,6 @@ export function MainSideBar() {
   const transcode = useTranscodeFeature();
   // 全局只有一个"当前实例"：dsh 与品牌实例共用 selection。没有选择时退回
   // 第一个运行中的 dsh，保持老行为。
-  const setup = useSetupStatus();
-  const setupHidden = useSetupHidden();
-  const setupBad = setup ? setup.items.filter((item) => item.tone === "bad").length : 0;
-
-  useEffect(() => {
-    void refreshSetupStatus();
-  }, []);
-
   const entry = useLaunchEntry();
   const fallback = useMemo<LaunchEntry | null>(() => {
     const running = s.instances.find((i) => normState(i.state) === "RUNNING");
@@ -207,26 +197,6 @@ export function MainSideBar() {
       )}
 
       <div className="side-category">{I18N["settings.launcher.general"]}</div>
-      {!setupHidden && (
-        <button
-          className={`side-item ripple-host${selected("/") ? " selected" : ""}`}
-          onClick={() => {
-            setSetupCollapsed(false);
-            goTo("/");
-          }}
-        >
-          <span className="side-graphic">
-            <CheckCircleIcon size={20} />
-          </span>
-          <span className="side-text">
-            <span className="side-title">部署检查</span>
-            <span className="side-subtitle">
-              {setup ? setupSummary(setup).replace("部署检查 · ", "") : "检查中…"}
-            </span>
-          </span>
-          {setupBad > 0 && <span className="side-badge">{setupBad}</span>}
-        </button>
-      )}
       <button
         className={`side-item ripple-host${selected("/settings") ? " selected" : ""}`}
         onClick={go("/settings")}

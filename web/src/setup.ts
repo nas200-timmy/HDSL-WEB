@@ -44,6 +44,7 @@ export interface SetupStatus {
 
 const HIDDEN_KEY = "hdsl.setup.hidden";
 const COLLAPSED_KEY = "hdsl.setup.collapsed";
+const SEEN_KEY = "hdsl.setup.seen";
 
 // ---------------------------------------------------------------- 设备偏好 --
 
@@ -98,6 +99,15 @@ export function useSetupHidden(): boolean {
 
 export function useSetupCollapsed(): boolean {
   return useSyncExternalStore(subscribePrefs, setupCollapsed, () => true);
+}
+
+/** 这台设备是否已经见过首次部署卡片；没见过时无论状态如何都展开。 */
+export function setupSeen(): boolean {
+  return readFlag(SEEN_KEY);
+}
+
+export function markSetupSeen(): void {
+  writeFlag(SEEN_KEY, true);
 }
 
 // ------------------------------------------------------------------ 状态 --
