@@ -6,6 +6,7 @@ import { HOME_MODES } from "../constants";
 import { loadVersions, toast, useAppState } from "../store";
 import type { VersionInfo } from "../types";
 import { channelLabel, errMsg, formatDateTime } from "../utils";
+import { isNodeMissing, requestNodeInstall, requireNode } from "../setupGate";
 import { CloseIcon, ErrorIcon, RefreshIcon } from "../components/icons";
 import { VersionListIcon } from "../components/VersionListIcon";
 
@@ -95,6 +96,10 @@ export function InstallInstanceWizard() {
     }
     if (!selected) return;
     setBusy(true);
+    if (!(await requireNode())) {
+      setBusy(false);
+      return;
+    }
     try {
       const r = await api.createInstance({
         name: trimmed,
@@ -111,6 +116,11 @@ export function InstallInstanceWizard() {
       );
       nav(`/instances/${r.instance.id}`, { replace: true });
     } catch (e) {
+      if (isNodeMissing(e) && await requestNodeInstall()) {
+        setBusy(false);
+        await submit();
+        return;
+      }
       toast("error", `创建失败：${errMsg(e)}`);
       setBusy(false);
     }

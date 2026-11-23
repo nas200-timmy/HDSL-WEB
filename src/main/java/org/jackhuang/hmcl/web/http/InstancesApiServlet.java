@@ -58,6 +58,7 @@ import org.jackhuang.hmcl.web.terminal.TerminalTickets;
 import org.jackhuang.hmcl.web.terminal.pty.PtySize;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.instance.InstanceRuntime;
+import org.jackhuang.hmcl.web.node.NodePreflight;
 import org.jackhuang.hmcl.web.task.TaskService;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -236,6 +237,17 @@ public final class InstancesApiServlet extends HttpServlet {
             return;
         }
 
+        boolean autoInstall = !Boolean.FALSE.equals(boolField(body, "autoInstall"));
+        if (autoInstall) {
+            String missing = NodePreflight.missingReason(null);
+            if (missing != null) {
+                // Create-and-install is one click for the user; refusing here keeps
+                // that click from leaving a half-made instance behind.
+                Json.error(response, HttpServletResponse.SC_CONFLICT, NodePreflight.message(missing));
+                return;
+            }
+        }
+
         Path workspace = resolveDirectory(body).directory();
 
         String id = uniqueId(name);
@@ -270,7 +282,7 @@ public final class InstancesApiServlet extends HttpServlet {
         // the install starts here instead of waiting for a second click on the
         // detail page. The instance already exists when this runs, so a failure
         // leaves it in place with the reason on its detail page.
-        if (!Boolean.FALSE.equals(boolField(body, "autoInstall"))) {
+        if (autoInstall) {
             try {
                 TaskService.Task task = submitInstall(instance, version, null);
                 created.addProperty("installTaskId", task.id());
@@ -499,6 +511,11 @@ public final class InstancesApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "已安装该版本");
             return;
         }
+        String missing = NodePreflight.missingReason(instance.nodeRuntimeOrDefault());
+        if (missing != null) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, NodePreflight.message(missing));
+            return;
+        }
         try {
             TaskService.Task task = submitInstall(instance, version, null);
             JsonObject result = new JsonObject();
@@ -685,6 +702,11 @@ public final class InstancesApiServlet extends HttpServlet {
             }
             if (state.equals("INSTALLING")) {
                 Json.error(response, HttpServletResponse.SC_CONFLICT, "install in progress");
+                return;
+            }
+            String missing = NodePreflight.missingReason(instance.nodeRuntimeOrDefault());
+            if (missing != null) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, NodePreflight.message(missing));
                 return;
             }
             // Launcher behaviour: "start this" on a version that is not here

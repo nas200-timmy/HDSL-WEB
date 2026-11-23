@@ -30,6 +30,7 @@ import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.http.Json;
+import org.jackhuang.hmcl.web.node.NodePreflight;
 import org.jackhuang.hmcl.web.task.TaskService;
 import org.jackhuang.hmcl.web.terminal.BrandTui;
 import org.jackhuang.hmcl.web.terminal.TerminalManager;
@@ -550,6 +551,15 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_CONFLICT,
                     "an install for " + brand.id() + " is already running (" + info.message() + ")");
             return;
+        }
+        // The prebuilt portable release (Octop) carries its own runtime; only the
+        // npm / GitHub-source installs need Node.js beforehand.
+        if (brand.source() != Brand.Source.GITHUB_RELEASE) {
+            String missing = NodePreflight.missingBrandReason(brand.source() == Brand.Source.NPM);
+            if (missing != null) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, NodePreflight.message(missing));
+                return;
+            }
         }
         TaskService.Task task = tasks.submit("install", brand.id(), live -> {
             BrandInstaller.Progress progress = new BrandInstaller.Progress() {

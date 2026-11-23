@@ -31,6 +31,7 @@ import {
   TerminalIcon,
 } from "../components/icons";
 import { useMobileLayout } from "../hooks";
+import { isNodeMissing, requestNodeInstall, requireNode } from "../setupGate";
 import { I18N } from "../i18n";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
 import { getState, refreshExternal, refreshZcode, toast, useAppState } from "../store";
@@ -673,6 +674,10 @@ function VersionCard({
   const doInstall = async (mode?: "full" | "terminal-only") => {
     if (!selected) return;
     setBusy(true);
+    if (!(await requireNode())) {
+      setBusy(false);
+      return;
+    }
     try {
       const started = Date.now();
       const accepted = await api.brandInstall(brand, selected, mode);
@@ -681,6 +686,11 @@ function VersionCard({
       setInstallStartedAt(started);
       setInstallStatus({ state: "running", message: "已提交，正在准备…", fraction: 0 });
     } catch (e) {
+      if (isNodeMissing(e) && await requestNodeInstall()) {
+        setBusy(false);
+        await doInstall(mode);
+        return;
+      }
       // 409（同品牌已有安装在进行）也走这里：把后端给的原因原样带出来
       toast("error", `安装失败：${errMsg(e)}`);
     } finally {
@@ -1720,6 +1730,7 @@ function InstancesCard({
 
   /// 装好指定版本再切过去：安装期间该行副标题位置显示进度，装完才 PATCH
   const installThenPatch = async (id: string, version: string) => {
+    if (!(await requireNode())) return;
     setRowInstall({ id, version, status: null });
     try {
       await api.brandInstall(brand, version);
@@ -1727,6 +1738,11 @@ function InstancesCard({
       // 409（同品牌已有安装在进行）等：把后端给的原因原样带出来，实例版本不动。
       // 同一个版本的重复请求后端会直接接上那个任务（202），走不到这里；能到这里说明
       // 正在装的是**另一个**版本，等它结束再切比排两个编译更靠谱。
+      if (isNodeMissing(e) && await requestNodeInstall()) {
+        setRowInstall(null);
+        await installThenPatch(id, version);
+        return;
+      }
       const raw = errMsg(e);
       toast(
         "error",
