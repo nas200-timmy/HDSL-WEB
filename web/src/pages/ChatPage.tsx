@@ -532,7 +532,11 @@ export function ChatPage() {
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !atBottom.current) return;
-    el.scrollTop = el.scrollHeight;
+    // 合并一帧内的多次滚动请求：流式 delta 密集时不再每帧都 scrollTop=scrollHeight。
+    const frame = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [session?.nodes.length, live?.text, live?.reasoning]);
 
   // 断线或漏帧的兜底：流式中每 3 秒拉一次快照；服务端说已结束就收掉本地的流。

@@ -58,8 +58,10 @@ export function PopupMenu({ open, anchor, onClose, children, className, repositi
     const below = oy + vh - 8 - (a.bottom + 2);
     const above = a.top - 2 - (oy + 8);
     const height = Math.min(naturalHeight || 0, Math.max(160, Math.max(above, below)));
-    // 默认向下；只有下面放不下、上面更宽裕时才翻上去（输入区在底部时的常见情况）
-    const upwards = below < (naturalHeight || 0) && above > below;
+    // 按空间而不是按内容高度决定翻向：下方空间比上方小就翻上去。
+    // 旧条件还要 `below < naturalHeight`，而实例列表是异步到达的，首次测量
+    // naturalHeight 为 0 时永远不翻，菜单于是被底部按钮压住（最后一个实例点不到）。
+    const upwards = above > below;
     const top = upwards ? a.top - 2 - height : a.bottom + 2;
     const maxHeight = Math.max(160, upwards ? above : below);
 

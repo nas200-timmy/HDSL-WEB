@@ -499,6 +499,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-anchor: none;
   /* 展开/收起时滚动条出现或消失会改变内容宽度，按钮会左右跳一格；预留槽位。 */
   scrollbar-gutter: stable;
   padding: 20px 28px 8px;
