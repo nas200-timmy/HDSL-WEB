@@ -523,10 +523,12 @@ export function ChatPage() {
           finishedTurns.current = new Set(Array.from(finishedTurns.current).slice(-20));
         }
         setLive(null);
-        // 完成时才落到尾巴：生成中用户上翻不会被拽回，完成时则应停在最新输出处，
-        // 而不是被留在这一轮的头顶。
+        // 完成时是否落尾取决于你在哪：本来就在末尾就跟到最新输出；你在读前面的对话，
+        // 就不动你的位置，不被拉回尾巴。
         const el = scrollRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
+        if (el && followRef.current && atBottom.current) {
+          el.scrollTop = el.scrollHeight;
+        }
         void refreshSession(event.sessionId);
         void loadSessions(assistantIdRef.current);
       }
