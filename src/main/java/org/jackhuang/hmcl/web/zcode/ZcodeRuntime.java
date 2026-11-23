@@ -256,7 +256,11 @@ public final class ZcodeRuntime {
                 // provisions it into the data directory (ZcodeWindowsRuntimeHost)
                 // and names that root here — candidate #3 of upstream's lookup.
                 // No asset, no injection: the behavior is exactly what it was.
-                builder.environment().putAll(ZcodeWindowsRuntimeHost.environment(manager.root()));
+                // The runtime host is staged under `<data>/zcode/assets` by the
+                // builder; the manager's own root is `<data>/zcode/instances` (it
+                // was passed that path), so asking it for assets put upstream's
+                // candidate #3 one level too deep and the helper was never found.
+                builder.environment().putAll(ZcodeWindowsRuntimeHost.environment(manager.dataRoot()));
                 process = builder.start();
             } catch (IOException e) {
                 STATES.put(id, State.ERROR);

@@ -40,6 +40,7 @@ server.listen(wanted, "127.0.0.1", () => {
         argv: args,
         dataBaseDir: process.env.ZCODE_DATA_BASE_DIR || null,
         home: process.env.HOME || null,
+        runtimeRoot: process.env.ZCODE_SERVER_RUNTIME_ROOT || null,
       }) + "\n",
     );
   }
