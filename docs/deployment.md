@@ -323,8 +323,8 @@ compose / 磁盘 / 面板端口 / MC 端口逐条列出来，缺什么就给这�
 HTTPS——明文下 `POST /api/developer/password` 与 `/api/developer/elevate` 都可直接
 使用。带着登录会话，明文下可以：
 
-- `GET /api/settings/tls`、`/api/settings/certificates`、`/api/settings/acme`、
-  `/api/settings/dns-credentials*` 读取证书与 ACME 状态；
+- `GET /api/settings/tls`、`/api/settings/certificates`、`/api/settings/acme` 读取证书与 ACME 状态
+  （过滤器豁免名单里另有 `dns-credentials`，但当前没有对应路由）；
 - `POST /api/settings/tls`（PEM / PKCS#12）或 `POST /api/settings/tls/self-signed`
   上传/生成证书并当场切到 HTTPS。
 

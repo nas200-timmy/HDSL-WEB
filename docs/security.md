@@ -218,7 +218,8 @@ SMB/NFS export、某些 Windows 共享卷同样如此）会把**共享属主**�
   锁死时用局域网地址切回可信证书，或停容器改 `certs/registry.json` 的 `active`。
 - **明文下的证书引导例外（TLS bootstrap）。** 当前连接器不是 TLS（TLS 未生效），且请求
   也没有可信反代声明 HTTPS 时，`DeveloperGuardFilter` 对
-  `/api/settings/{tls,certificates,acme,dns-credentials}*` **不做开发者第二因子检查**：
+  `/api/settings/{tls,certificates,acme}*` **不做开发者第二因子检查**（豁免名单里另有
+  `dns-credentials`，当前无对应路由）：
   带登录会话就能读这些设置，并可用 `POST /api/settings/tls` 上传证书或
   `POST /api/settings/tls/self-signed` 生成自签证书，把面板切到 HTTPS。这是为了在明文
   面板上先配置证书/CA、完成第一次 TLS 启用的**便利取舍**，并非必需——明文下
